@@ -11,6 +11,10 @@ func (a *Bytes) Reset() {
 	a.Data = a.Data[:0]
 }
 
+func (a *Bytes) Set(aidx int64, b *Bytes, bidx int64) int {
+	return -1
+}
+
 func (a *Bytes) Append(vs [][]byte) error {
 	o := uint32(len(a.Data))
 	for _, v := range vs {
