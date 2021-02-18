@@ -1,0 +1,56 @@
+#include "textflag.h"
+
+// func fSumAvx(x []float64) float64
+TEXT ·fSumAvx(SB), NOSPLIT, $0-32
+	MOVQ   x_base+0(FP), AX
+	MOVQ   x_len+8(FP), CX
+	VXORPD Y0, Y0, Y0
+	VXORPD Y1, Y1, Y1
+	VXORPD Y2, Y2, Y2
+	VXORPD Y3, Y3, Y3
+	VXORPD Y4, Y4, Y4
+	VXORPD Y5, Y5, Y5
+	VXORPD Y6, Y6, Y6
+	VXORPD Y7, Y7, Y7
+	VXORPD Y8, Y8, Y8
+
+loop:
+	CMPQ   CX, $0x00000020
+	JL     tailloop
+	VADDPD (AX), Y1, Y1
+	VADDPD 32(AX), Y2, Y2
+	VADDPD 64(AX), Y3, Y3
+	VADDPD 96(AX), Y4, Y4
+	VADDPD 128(AX), Y5, Y5
+	VADDPD 160(AX), Y6, Y6
+	VADDPD 192(AX), Y7, Y7
+	VADDPD 224(AX), Y8, Y8
+	ADDQ   $0x00000100, AX
+	SUBQ   $0x00000020, CX
+	JMP    loop
+
+tailloop:
+	CMPQ   CX, $0x00000004
+	JL     done
+	VADDPD (AX), Y0, Y0
+	ADDQ   $0x00000020, AX
+	SUBQ   $0x00000004, CX
+	JMP    tailloop
+
+done:
+	VADDPD       Y1, Y0, Y0
+	VADDPD       Y2, Y0, Y0
+	VADDPD       Y3, Y0, Y0
+	VADDPD       Y4, Y0, Y0
+	VADDPD       Y5, Y0, Y0
+	VADDPD       Y6, Y0, Y0
+	VADDPD       Y7, Y0, Y0
+	VADDPD       Y8, Y0, Y0
+	VXORPD       X1, X1, X1
+	VXORPD       X2, X2, X2
+	VEXTRACTF128 $0x00, Y0, X1
+	VEXTRACTF128 $0x01, Y0, X2
+	ADDPD        X1, X2
+	HADDPD       X2, X2
+	MOVSD        X2, ret+24(FP)
+	RET
