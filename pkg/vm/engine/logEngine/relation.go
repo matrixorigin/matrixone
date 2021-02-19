@@ -3,10 +3,8 @@ package logEngine
 import (
 	"fmt"
 	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/mempool"
 	"matrixbase/pkg/vm/engine"
 	"matrixbase/pkg/vm/metadata"
-	"matrixbase/pkg/vm/op"
 )
 
 func (r *Relation) ID() string {
@@ -55,10 +53,6 @@ func (r *Relation) Scheduling(ns metadata.Nodes) []*engine.Unit {
 
 func (r *Relation) Write(_ *batch.Batch) error {
 	return nil
-}
-
-func (r *Relation) Read(_ op.OP, _ *mempool.Mempool) (*batch.Batch, error) {
-	return nil, nil
 }
 
 func (r *Relation) AddAttribute(_ metadata.Attribute) error {

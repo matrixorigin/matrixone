@@ -2,9 +2,7 @@ package engine
 
 import (
 	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/mempool"
 	"matrixbase/pkg/vm/metadata"
-	"matrixbase/pkg/vm/op"
 	"matrixbase/pkg/vm/process"
 )
 
@@ -30,7 +28,6 @@ type Relation interface {
 	Scheduling(metadata.Nodes) []*Unit
 
 	Write(*batch.Batch) error
-	Read(op.OP, *mempool.Mempool) (*batch.Batch, error)
 
 	AddAttribute(metadata.Attribute) error
 	DelAttribute(metadata.Attribute) error
@@ -38,12 +35,11 @@ type Relation interface {
 
 type Node interface {
 	Support(int) bool // supported relational algebra
-	Read(op.OP) (*batch.Batch, error)
 }
 
 type Segment interface {
 	ID() string
-	Read([]string, *mempool.Mempool) (*batch.Batch, error)
+	Read([]string, *process.Process) (*batch.Batch, error)
 }
 
 type Engine interface {

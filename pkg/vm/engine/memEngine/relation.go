@@ -5,11 +5,9 @@ import (
 	"matrixbase/pkg/compress"
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/mempool"
 	"matrixbase/pkg/vm/engine"
 	"matrixbase/pkg/vm/engine/memEngine/segment"
 	"matrixbase/pkg/vm/metadata"
-	"matrixbase/pkg/vm/op"
 	"matrixbase/pkg/vm/process"
 
 	"github.com/pierrec/lz4"
@@ -73,18 +71,6 @@ func (r *relation) Write(bat *batch.Batch) error {
 		}
 	}
 	return nil
-}
-
-func (r *relation) Read(o op.OP, mp *mempool.Mempool) (*batch.Batch, error) {
-	var attrs []string
-	{
-		as := o.Attributes()
-		attrs = make([]string, len(as))
-		for i, a := range as {
-			attrs[i] = a.Name
-		}
-	}
-	return o.Read(attrs, mp)
 }
 
 func (r *relation) AddAttribute(_ metadata.Attribute) error {

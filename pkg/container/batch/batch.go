@@ -6,7 +6,7 @@ import (
 	"matrixbase/pkg/compress"
 	"matrixbase/pkg/container/vector"
 	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/mempool"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 )
 
@@ -17,7 +17,7 @@ func New(attrs []string) *Batch {
 	}
 }
 
-func (bat *Batch) GetVector(name string, mp *mempool.Mempool, proc *process.Process) (*vector.Vector, error) {
+func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector, error) {
 	for i, attr := range bat.Attrs {
 		if attr != name {
 			continue
@@ -37,17 +37,17 @@ func (bat *Batch) GetVector(name string, mp *mempool.Mempool, proc *process.Proc
 			var err error
 
 			n := int(encoding.DecodeInt32(data[len(data)-4:]))
-			buf := mp.Alloc(n)
+			buf := proc.Mp.Alloc(n)
 			if buf, err = compress.Decompress(data[mempool.CountSize:len(data)-4], buf[mempool.CountSize:], bat.Is[i].Alg); err != nil {
-				mp.Free(buf)
-				mp.Free(data)
+				proc.Mp.Free(buf)
+				proc.Mp.Free(data)
 				return nil, err
 			}
-			mp.Free(data)
+			proc.Mp.Free(data)
 			data = buf[:mempool.CountSize+n]
 		}
 		if err := bat.Vecs[i].Read(data, proc); err != nil {
-			mp.Free(data)
+			proc.Mp.Free(data)
 			return nil, err
 		}
 		return bat.Vecs[i], nil
@@ -55,9 +55,9 @@ func (bat *Batch) GetVector(name string, mp *mempool.Mempool, proc *process.Proc
 	return nil, fmt.Errorf("attribute '%s' not exist", name)
 }
 
-func (bat *Batch) Free(p *process.Process, mp *mempool.Mempool) {
+func (bat *Batch) Free(proc *process.Process) {
 	for _, vec := range bat.Vecs {
-		vec.Free(p, mp)
+		vec.Free(proc)
 	}
 }
 

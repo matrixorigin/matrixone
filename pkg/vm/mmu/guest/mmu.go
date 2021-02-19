@@ -13,10 +13,6 @@ func New(limit int64, mmu *host.Mmu) *Mmu {
 	}
 }
 
-func (m *Mmu) Destroy() {
-	m.Mmu.Free(m.size)
-}
-
 func (m *Mmu) Size() int64 {
 	return atomic.LoadInt64(&m.size)
 }

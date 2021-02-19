@@ -1,15 +1,15 @@
 package worker
 
 import (
-	"matrixbase/pkg/mempool"
-	"matrixbase/pkg/routines/task"
+	"matrixbase/pkg/vm/process"
+	"matrixbase/pkg/vm/routines/task"
 )
 
-func New(mp *mempool.Mempool) Worker {
+func New(proc *process.Process) Worker {
 	return &worker{
-		mp: mp,
-		ch: make(chan struct{}),
-		ts: make(chan task.Task),
+		proc: proc,
+		ch:   make(chan struct{}),
+		ts:   make(chan task.Task),
 	}
 }
 
@@ -20,7 +20,7 @@ func (w *worker) Run() {
 			w.ch <- struct{}{}
 			return
 		case t := <-w.ts:
-			t.Stop(t.Execute(w.mp))
+			t.Stop(t.Execute(w.proc))
 		}
 	}
 }

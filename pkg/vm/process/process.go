@@ -1,15 +1,15 @@
 package process
 
-import "matrixbase/pkg/vm/mmu/guest"
+import (
+	"matrixbase/pkg/vm/mempool"
+	"matrixbase/pkg/vm/mmu/guest"
+)
 
-func New(gm *guest.Mmu) *Process {
+func New(gm *guest.Mmu, mp *mempool.Mempool) *Process {
 	return &Process{
 		Gm: gm,
+		Mp: mp,
 	}
-}
-
-func (p *Process) Destroy() {
-	p.Gm.Destroy()
 }
 
 func (p *Process) Size() int64 {

@@ -1,10 +1,10 @@
 package task
 
-import "matrixbase/pkg/mempool"
+import "matrixbase/pkg/vm/process"
 
 type Task interface {
 	Stop(TaskResult)
-	Execute(*mempool.Mempool) TaskResult
+	Execute(*process.Process) TaskResult
 }
 
 type TaskResult interface {

@@ -3,7 +3,6 @@ package segment
 import (
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/mempool"
 	"matrixbase/pkg/vm/engine/logEngine/kv"
 	"matrixbase/pkg/vm/metadata"
 	"matrixbase/pkg/vm/process"
@@ -21,16 +20,16 @@ func (s *Segment) ID() string {
 	return s.id
 }
 
-func (s *Segment) Read(attrs []string, mp *mempool.Mempool) (*batch.Batch, error) {
+func (s *Segment) Read(attrs []string, proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(attrs)
 	bat.Is = make([]batch.Info, len(attrs))
 	for i, attr := range attrs {
 		md := s.mp[attr]
-		data, ap, id, err := s.db.Get(s.id+"."+attr, mp)
+		data, ap, id, err := s.db.Get(s.id+"."+attr, proc.Mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				bat.Is[i].Wg.Wait()
-				bat.Vecs[j].Free(s.proc, mp)
+				bat.Vecs[j].Free(s.proc)
 			}
 			return nil, err
 		}
