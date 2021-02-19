@@ -1,21 +1,21 @@
 package routines
 
 import (
-	"matrixbase/pkg/mempool"
-	"matrixbase/pkg/routines/task"
-	"matrixbase/pkg/routines/worker"
+	"matrixbase/pkg/vm/process"
+	"matrixbase/pkg/vm/routines/task"
+	"matrixbase/pkg/vm/routines/worker"
 	"sync"
 	"sync/atomic"
 )
 
-func New(num int, ms []*mempool.Mempool) Routines {
+func New(num int, procs []*process.Process) Routines {
 	r := &routines{
 		num: uint64(num),
 		ch:  make(chan struct{}),
 		ws:  make([]worker.Worker, num),
 	}
 	for i := 0; i < num; i++ {
-		r.ws[i] = worker.New(ms[i])
+		r.ws[i] = worker.New(procs[i])
 	}
 	return r
 }

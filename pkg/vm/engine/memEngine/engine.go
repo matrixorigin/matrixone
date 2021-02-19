@@ -2,10 +2,10 @@ package memEngine
 
 import (
 	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/mempool"
 	"matrixbase/pkg/vm/engine"
 	"matrixbase/pkg/vm/engine/memEngine/kv"
 	"matrixbase/pkg/vm/engine/memEngine/meta"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/metadata"
 )
 

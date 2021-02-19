@@ -6,7 +6,7 @@ import (
 	"matrixbase/pkg/container/nulls"
 	"matrixbase/pkg/container/types"
 	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/mempool"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 )
 
@@ -77,9 +77,9 @@ func (v *Vector) Reset() {
 	}
 }
 
-func (v *Vector) Free(p *process.Process, mp *mempool.Mempool) {
+func (v *Vector) Free(p *process.Process) {
 	if v.Data != nil {
-		mp.Free(v.Data)
+		p.Mp.Free(v.Data)
 		if encoding.DecodeUint64(v.Data[:mempool.CountSize]) == 0 {
 			p.Free(int64(cap(v.Data)))
 		}

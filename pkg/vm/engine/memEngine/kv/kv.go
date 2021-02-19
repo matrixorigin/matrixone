@@ -1,6 +1,6 @@
 package kv
 
-import "matrixbase/pkg/mempool"
+import "matrixbase/pkg/vm/mempool"
 
 func New() *KV {
 	return &KV{make(map[string][]byte)}

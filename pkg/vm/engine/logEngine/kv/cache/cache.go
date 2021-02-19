@@ -4,7 +4,7 @@ import (
 	"container/list"
 	"io/ioutil"
 	"matrixbase/pkg/logger"
-	"matrixbase/pkg/mempool"
+	"matrixbase/pkg/vm/mempool"
 	"os"
 	"path"
 

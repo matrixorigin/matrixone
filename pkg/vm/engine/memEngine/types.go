@@ -1,9 +1,9 @@
 package memEngine
 
 import (
-	"matrixbase/pkg/mempool"
 	"matrixbase/pkg/vm/engine/memEngine/kv"
 	"matrixbase/pkg/vm/engine/memEngine/meta"
+	"matrixbase/pkg/vm/mempool"
 )
 
 // standalone memory engine

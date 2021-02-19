@@ -6,8 +6,8 @@ import (
 	"matrixbase/pkg/container/types"
 	"matrixbase/pkg/container/vector"
 	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/mempool"
 	"matrixbase/pkg/vm/engine/memEngine/kv"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/metadata"
 	"matrixbase/pkg/vm/process"
 )
@@ -24,14 +24,14 @@ func (s *Segment) ID() string {
 	return s.id
 }
 
-func (s *Segment) Read(attrs []string, mp *mempool.Mempool) (*batch.Batch, error) {
+func (s *Segment) Read(attrs []string, proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(attrs)
 	for i, attr := range attrs {
 		md := s.mp[attr]
-		vec, err := s.read(s.id+"."+attr, md.Alg, md.Type, mp)
+		vec, err := s.read(s.id+"."+attr, md.Alg, md.Type, proc.Mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
-				bat.Vecs[j].Free(s.proc, mp)
+				bat.Vecs[j].Free(s.proc)
 			}
 			return nil, err
 		}
