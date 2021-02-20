@@ -22,10 +22,12 @@ const (
 	SemiJoin
 	InnerJoin
 	NaturalJoin
+	Output
 )
 
 type Instruction struct {
-	Op int
+	Op  int
+	Arg interface{}
 }
 
 type Instructions []Instruction

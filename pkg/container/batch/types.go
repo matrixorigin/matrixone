@@ -8,6 +8,7 @@ import (
 
 type Info struct {
 	Alg int
+	Ref uint64
 	Wg  *WaitGroup
 }
 

@@ -20,7 +20,7 @@ func (s *Segment) ID() string {
 	return s.id
 }
 
-func (s *Segment) Read(attrs []string, proc *process.Process) (*batch.Batch, error) {
+func (s *Segment) Read(cs []uint64, attrs []string, proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(attrs)
 	bat.Is = make([]batch.Info, len(attrs))
 	for i, attr := range attrs {
@@ -37,6 +37,7 @@ func (s *Segment) Read(attrs []string, proc *process.Process) (*batch.Batch, err
 		vec.Data = data
 		bat.Vecs[i] = vec
 		bat.Is[i] = batch.Info{
+			Ref: cs[i],
 			Alg: md.Alg,
 			Wg:  &batch.WaitGroup{ap, id},
 		}

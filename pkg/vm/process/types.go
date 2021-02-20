@@ -13,7 +13,12 @@ type Process interface {
 }
 */
 
+type Register struct {
+	Ax interface{}
+}
+
 type Process struct {
-	Gm *guest.Mmu
-	Mp *mempool.Mempool
+	Reg Register
+	Gm  *guest.Mmu
+	Mp  *mempool.Mempool
 }
