@@ -9,4 +9,5 @@ require (
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pilosa/pilosa v1.4.0
 	github.com/traetox/goaio v0.0.0-20171005222435-46641abceb17
+	golang.org/x/text v0.3.3
 )

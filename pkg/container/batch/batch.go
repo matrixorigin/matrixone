@@ -50,6 +50,7 @@ func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector,
 			proc.Mp.Free(data)
 			return nil, err
 		}
+		copy(data, encoding.EncodeUint64(bat.Is[i].Ref))
 		return bat.Vecs[i], nil
 	}
 	return nil, fmt.Errorf("attribute '%s' not exist", name)

@@ -22,10 +22,10 @@ func makeFbuffer(l int) []float64 {
 }
 
 func TestF64Plus(t *testing.T) {
-	xs := makeFbuffer(100)
-	res := make([]float64, 50)
-	fmt.Printf("sum: %v\n", f64PlusAvx(xs[:50], xs[50:], res))
-	fmt.Printf("pure sum: %v\n", f64PlusPure(xs[:50], xs[50:], res))
+	xs := makeFbuffer(13)
+	res := make([]float64, 13)
+	fmt.Printf("sum:\n\t%v\n", f64PlusAvx(xs, xs, res))
+	fmt.Printf("pure sum:\n\t%v\n", f64PlusPure(xs, xs, res))
 }
 
 func TestI64Plus(t *testing.T) {

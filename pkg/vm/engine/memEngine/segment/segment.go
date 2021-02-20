@@ -24,17 +24,19 @@ func (s *Segment) ID() string {
 	return s.id
 }
 
-func (s *Segment) Read(attrs []string, proc *process.Process) (*batch.Batch, error) {
+func (s *Segment) Read(cs []uint64, attrs []string, proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(attrs)
 	for i, attr := range attrs {
 		md := s.mp[attr]
 		vec, err := s.read(s.id+"."+attr, md.Alg, md.Type, proc.Mp)
 		if err != nil {
 			for j := 0; j < i; j++ {
+				copy(bat.Vecs[j].Data, mempool.OneCount)
 				bat.Vecs[j].Free(s.proc)
 			}
 			return nil, err
 		}
+		copy(vec.Data, encoding.EncodeUint64(cs[i]))
 		bat.Vecs[i] = vec
 	}
 	return bat, nil
