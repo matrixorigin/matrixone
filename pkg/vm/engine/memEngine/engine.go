@@ -7,10 +7,13 @@ import (
 	"matrixbase/pkg/vm/engine/memEngine/meta"
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/metadata"
+	"matrixbase/pkg/vm/mmu/guest"
+	"matrixbase/pkg/vm/mmu/host"
+	"matrixbase/pkg/vm/process"
 )
 
 func New(db *kv.KV) *memEngine {
-	return &memEngine{db, mempool.New(4<<20, 16)}
+	return &memEngine{db, process.New(guest.New(1<<20, host.New(1<<20)), mempool.New(1<<32, 16))}
 }
 
 func (e *memEngine) Delete(name string) error {
@@ -36,11 +39,11 @@ func (e *memEngine) Relations() []engine.Relation {
 func (e *memEngine) Relation(name string) (engine.Relation, error) {
 	var md meta.Metadata
 
-	data, err := e.db.Get(name, e.mp)
+	data, err := e.db.Get(name, e.proc)
 	if err != nil {
 		return nil, err
 	}
-	defer e.mp.Free(data)
+	defer e.proc.Free(data)
 	if err := encoding.Decode(data[mempool.CountSize:], &md); err != nil {
 		return nil, err
 	}

@@ -6,41 +6,98 @@ import (
 	"matrixbase/pkg/container/nulls"
 	"matrixbase/pkg/container/types"
 	"matrixbase/pkg/encoding"
+	"matrixbase/pkg/vectorize/shuffle"
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
+	"reflect"
+	"strconv"
+	"unsafe"
 )
 
-var ConstTrue, ConstFalse *Vector
-
-func init() {
-	ConstTrue = &Vector{Typ: types.T_bool, Col: []bool{true}, Nsp: &nulls.Nulls{}}
-	ConstFalse = &Vector{Typ: types.T_bool, Col: []bool{false}, Nsp: &nulls.Nulls{}}
-}
-
-func New(typ types.T) *Vector {
-	switch typ {
-	case types.T_int:
+func New(typ types.Type) *Vector {
+	switch typ.Oid {
+	case types.T_int8:
+		return &Vector{
+			Typ: typ,
+			Col: []int8{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_int16:
+		return &Vector{
+			Typ: typ,
+			Col: []int32{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_int32:
 		return &Vector{
 			Typ: typ,
 			Col: []int64{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_int64:
+		return &Vector{
+			Typ: typ,
+			Col: []int64{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_uint8:
+		return &Vector{
+			Typ: typ,
+			Col: []uint8{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_uint16:
+		return &Vector{
+			Typ: typ,
+			Col: []uint16{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_uint32:
+		return &Vector{
+			Typ: typ,
+			Col: []uint32{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_uint64:
+		return &Vector{
+			Typ: typ,
+			Col: []uint64{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_decimal:
+		return &Vector{
+			Typ: typ,
+			Col: []types.Decimal{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_float32:
+		return &Vector{
+			Typ: typ,
+			Col: []float32{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_float64:
+		return &Vector{
+			Typ: typ,
+			Col: []float64{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_date:
+		return &Vector{
+			Typ: typ,
+			Col: []types.Date{},
+			Nsp: &nulls.Nulls{},
+		}
+	case types.T_datetime:
+		return &Vector{
+			Typ: typ,
+			Col: []types.Datetime{},
 			Nsp: &nulls.Nulls{},
 		}
 	case types.T_sel:
 		return &Vector{
 			Typ: typ,
 			Col: []int64{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_bool:
-		return &Vector{
-			Typ: typ,
-			Col: []bool{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_float:
-		return &Vector{
-			Typ: typ,
-			Col: []float64{},
 			Nsp: &nulls.Nulls{},
 		}
 	case types.T_tuple:
@@ -49,40 +106,28 @@ func New(typ types.T) *Vector {
 			Nsp: &nulls.Nulls{},
 			Col: [][]interface{}{},
 		}
-	case types.T_bytes, types.T_json:
+	case types.T_char, types.T_varchar, types.T_json:
 		return &Vector{
 			Typ: typ,
-			Col: &Bytes{},
+			Col: &types.Bytes{},
 			Nsp: &nulls.Nulls{},
 		}
-	default:
-		panic(fmt.Errorf("unsupport type %s", typ))
 	}
+	return nil
 }
 
 func (v *Vector) Reset() {
-	switch v.Typ {
-	case types.T_int:
-		v.Col = v.Col.([]int64)[:0]
-	case types.T_bool:
-		v.Col = v.Col.([]bool)[:0]
-	case types.T_float:
-		v.Col = v.Col.([]float64)[:0]
-	case types.T_bytes, types.T_json:
-		v.Col.(*Bytes).Reset()
-	case types.T_tuple:
-		v.Col = v.Col.([][]interface{})[:0]
+	switch v.Typ.Oid {
+	case types.T_char, types.T_varchar, types.T_json:
+		v.Col.(*types.Bytes).Reset()
 	default:
-		panic(fmt.Errorf("unsupport type %s", v.Typ))
+		*(*int)(unsafe.Pointer(uintptr(unsafe.Pointer(&v.Col)) + uintptr(strconv.IntSize>>3))) = 0
 	}
 }
 
 func (v *Vector) Free(p *process.Process) {
 	if v.Data != nil {
-		p.Mp.Free(v.Data)
-		if encoding.DecodeUint64(v.Data[:mempool.CountSize]) == 0 {
-			p.Free(int64(cap(v.Data)))
-		}
+		p.Free(v.Data)
 	}
 }
 
@@ -90,179 +135,204 @@ func (v *Vector) SetCol(col interface{}) {
 	v.Col = col
 }
 
-func (v *Vector) Bools() []bool {
-	if v.Col == nil {
-		return []bool{}
-	}
-	return v.Col.([]bool)
-}
-
-func (v *Vector) Ints() []int64 {
-	if v.Col == nil {
-		return []int64{}
-	}
-	return v.Col.([]int64)
-}
-
-func (v *Vector) Sels() []int64 {
-	if v.Col == nil {
-		return []int64{}
-	}
-	return v.Col.([]int64)
-}
-
-func (v *Vector) Floats() []float64 {
-	if v.Col == nil {
-		return []float64{}
-	}
-	return v.Col.([]float64)
-}
-
-func (v *Vector) Bytes() *Bytes {
-	return v.Col.(*Bytes)
-}
-
-func (v *Vector) Tuples() [][]interface{} {
-	if v.Col == nil {
-		return [][]interface{}{}
-	}
-	return v.Col.([][]interface{})
-}
-
 func (v *Vector) Length() int {
-	switch v.Typ {
-	case types.T_int:
-		return len(v.Col.([]int64))
-	case types.T_sel:
-		return len(v.Col.([]int64))
-	case types.T_bool:
-		return len(v.Col.([]bool))
-	case types.T_float:
-		return len(v.Col.([]float64))
-	case types.T_bytes, types.T_json:
-		return len(v.Col.(*Bytes).Os)
-	case types.T_tuple:
-		return len(v.Col.([][]interface{}))
+	switch v.Typ.Oid {
+	case types.T_char, types.T_varchar, types.T_json:
+		return len(v.Col.(*types.Bytes).Os)
 	default:
-		panic(fmt.Errorf("unsupport type %s", v.Typ))
+		hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v.Col))
+		return hp.Len
 	}
 }
 
 func (v *Vector) Window(start, end int) *Vector {
-	switch v.Typ {
-	case types.T_int:
+	switch v.Typ.Oid {
+	case types.T_char, types.T_varchar, types.T_json:
 		return &Vector{
 			Typ: v.Typ,
-			Col: v.Col.([]int64)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
-	case types.T_bool:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]bool)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
-	case types.T_float:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]float64)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
-	case types.T_bytes, types.T_json:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.(*Bytes).Window(start, end),
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
-	case types.T_tuple:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([][]interface{})[start:end],
+			Col: v.Col.(*types.Bytes).Window(start, end),
 			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
 		}
 	default:
-		panic(fmt.Errorf("unsupport type %s", v.Typ))
+		col := v.Col
+		ptr := unsafe.Pointer(&col)
+		data := *(*uintptr)(unsafe.Pointer(uintptr(ptr)))
+		*(*uintptr)(unsafe.Pointer(uintptr(ptr))) = data + uintptr(v.Typ.Size)*uintptr(start)
+		*(*int)(unsafe.Pointer(uintptr(ptr) + uintptr(strconv.IntSize>>3))) = end - start + 1
+		return &Vector{
+			Typ: v.Typ,
+			Col: col,
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
 	}
 }
 
 func (v *Vector) Append(arg interface{}) error {
-	switch v.Typ {
-	case types.T_int:
-		col := v.Col.([]int64)
-		col = append(col, arg.([]int64)...)
-		v.Col = col
-	case types.T_bool:
-		col := v.Col.([]bool)
-		col = append(col, arg.([]bool)...)
-		v.Col = col
-	case types.T_float:
-		col := v.Col.([]float64)
-		col = append(col, arg.([]float64)...)
-		v.Col = col
-	case types.T_bytes, types.T_json:
-		return v.Col.(*Bytes).Append(arg.([][]byte))
+	switch v.Typ.Oid {
+	case types.T_int8:
+		v.Col = append(v.Col.([]int8), arg.([]int8)...)
+	case types.T_int16:
+		v.Col = append(v.Col.([]int16), arg.([]int16)...)
+	case types.T_int32:
+		v.Col = append(v.Col.([]int32), arg.([]int32)...)
+	case types.T_int64:
+		v.Col = append(v.Col.([]int64), arg.([]int64)...)
+	case types.T_uint8:
+		v.Col = append(v.Col.([]uint8), arg.([]uint8)...)
+	case types.T_uint16:
+		v.Col = append(v.Col.([]uint16), arg.([]uint16)...)
+	case types.T_uint32:
+		v.Col = append(v.Col.([]uint32), arg.([]uint32)...)
+	case types.T_uint64:
+		v.Col = append(v.Col.([]uint64), arg.([]uint64)...)
+	case types.T_decimal:
+		v.Col = append(v.Col.([]types.Decimal), arg.([]types.Decimal)...)
+	case types.T_float32:
+		v.Col = append(v.Col.([]float32), arg.([]float32)...)
+	case types.T_float64:
+		v.Col = append(v.Col.([]float64), arg.([]float64)...)
+	case types.T_date:
+		v.Col = append(v.Col.([]types.Date), arg.([]types.Date)...)
+	case types.T_datetime:
+		v.Col = append(v.Col.([]types.Datetime), arg.([]types.Datetime)...)
+	case types.T_sel:
+		v.Col = append(v.Col.([]int64), arg.([]int64)...)
 	case types.T_tuple:
-		col := v.Col.([][]interface{})
-		col = append(col, arg.([][]interface{})...)
-		v.Col = col
-	default:
-		return fmt.Errorf("unsupport type %s", v.Typ)
+		v.Col = append(v.Col.([][]interface{}), arg.([][]interface{})...)
+	case types.T_char, types.T_varchar, types.T_json:
+		return v.Col.(*types.Bytes).Append(arg.([][]byte))
 	}
 	return nil
 }
 
-func (v *Vector) Filter(sels []int64) *Vector {
-	switch v.Typ {
-	case types.T_int:
+func (v *Vector) Shuffle(sels []int64) *Vector {
+	switch v.Typ.Oid {
+	case types.T_int8:
+		vs := v.Col.([]int8)
+		shuffle.I8Shuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_int16:
+		vs := v.Col.([]int16)
+		shuffle.I16Shuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_int32:
+		vs := v.Col.([]int32)
+		shuffle.I32Shuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_int64:
 		vs := v.Col.([]int64)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
+		shuffle.I64Shuffle(vs, sels)
+		v.Col = vs
 		v.Nsp = v.Nsp.Filter(sels)
-	case types.T_bool:
-		vs := v.Col.([]bool)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
+	case types.T_uint8:
+		vs := v.Col.([]uint8)
+		shuffle.Ui8Shuffle(vs, sels)
+		v.Col = vs
 		v.Nsp = v.Nsp.Filter(sels)
-	case types.T_float:
+	case types.T_uint16:
+		vs := v.Col.([]uint16)
+		shuffle.Ui16Shuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_uint32:
+		vs := v.Col.([]uint32)
+		shuffle.Ui32Shuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_uint64:
+		vs := v.Col.([]uint64)
+		shuffle.Ui64Shuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_decimal:
+		vs := v.Col.([]types.Decimal)
+		shuffle.DecimalShuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_float32:
+		vs := v.Col.([]float32)
+		shuffle.Float32Shuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_float64:
 		vs := v.Col.([]float64)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
+		shuffle.Float64Shuffle(vs, sels)
+		v.Col = vs
 		v.Nsp = v.Nsp.Filter(sels)
-	case types.T_bytes, types.T_json:
-		col := v.Col.(*Bytes)
-		os, ns := col.Os, col.Ns
-		for i, sel := range sels {
-			os[i] = os[sel]
-			ns[i] = ns[sel]
-		}
-		col.Os = os[:len(sels)]
-		col.Ns = ns[:len(sels)]
+	case types.T_date:
+		vs := v.Col.([]types.Date)
+		shuffle.DateShuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_datetime:
+		vs := v.Col.([]types.Datetime)
+		shuffle.DatetimeShuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
+	case types.T_sel:
+		vs := v.Col.([]int64)
+		shuffle.I64Shuffle(vs, sels)
+		v.Col = vs
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_tuple:
 		vs := v.Col.([][]interface{})
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
+		shuffle.TupleShuffle(vs, sels)
+		v.Col = vs
 		v.Nsp = v.Nsp.Filter(sels)
-	default:
-		panic(fmt.Errorf("unsupport type %s", v.Typ))
+	case types.T_char, types.T_varchar, types.T_json:
+		vs := v.Col.(*types.Bytes)
+		shuffle.SShuffle(vs, sels)
+		v.Col = vs
+		v.Nsp = v.Nsp.Filter(sels)
 	}
-	return v
+	return nil
 }
 
 func (v *Vector) Show() ([]byte, error) {
 	var buf bytes.Buffer
 
-	switch v.Typ {
-	case types.T_int:
-		buf.WriteByte(byte(v.Typ))
+	switch v.Typ.Oid {
+	case types.T_int8:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeInt8Slice(v.Col.([]int8)))
+		return buf.Bytes(), nil
+	case types.T_int16:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeInt16Slice(v.Col.([]int16)))
+		return buf.Bytes(), nil
+	case types.T_int32:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeInt32Slice(v.Col.([]int32)))
+		return buf.Bytes(), nil
+	case types.T_int64:
+		buf.Write(encoding.EncodeType(v.Typ))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return nil, err
@@ -273,8 +343,8 @@ func (v *Vector) Show() ([]byte, error) {
 		}
 		buf.Write(encoding.EncodeInt64Slice(v.Col.([]int64)))
 		return buf.Bytes(), nil
-	case types.T_bool:
-		buf.WriteByte(byte(v.Typ))
+	case types.T_uint8:
+		buf.Write(encoding.EncodeType(v.Typ))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return nil, err
@@ -283,10 +353,70 @@ func (v *Vector) Show() ([]byte, error) {
 		if len(nb) > 0 {
 			buf.Write(nb)
 		}
-		buf.Write(encoding.EncodeBoolSlice(v.Col.([]bool)))
+		buf.Write(encoding.EncodeUint8Slice(v.Col.([]uint8)))
 		return buf.Bytes(), nil
-	case types.T_float:
-		buf.WriteByte(byte(v.Typ))
+	case types.T_uint16:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeUint16Slice(v.Col.([]uint16)))
+		return buf.Bytes(), nil
+	case types.T_uint32:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeUint32Slice(v.Col.([]uint32)))
+		return buf.Bytes(), nil
+	case types.T_uint64:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeUint64Slice(v.Col.([]uint64)))
+		return buf.Bytes(), nil
+	case types.T_decimal:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeDecimalSlice(v.Col.([]types.Decimal)))
+		return buf.Bytes(), nil
+	case types.T_float32:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeFloat32Slice(v.Col.([]float32)))
+		return buf.Bytes(), nil
+	case types.T_float64:
+		buf.Write(encoding.EncodeType(v.Typ))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return nil, err
@@ -297,8 +427,8 @@ func (v *Vector) Show() ([]byte, error) {
 		}
 		buf.Write(encoding.EncodeFloat64Slice(v.Col.([]float64)))
 		return buf.Bytes(), nil
-	case types.T_bytes, types.T_json:
-		buf.WriteByte(byte(v.Typ))
+	case types.T_date:
+		buf.Write(encoding.EncodeType(v.Typ))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return nil, err
@@ -307,7 +437,43 @@ func (v *Vector) Show() ([]byte, error) {
 		if len(nb) > 0 {
 			buf.Write(nb)
 		}
-		Col := v.Col.(*Bytes)
+		buf.Write(encoding.EncodeDateSlice(v.Col.([]types.Date)))
+		return buf.Bytes(), nil
+	case types.T_datetime:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeDatetimeSlice(v.Col.([]types.Datetime)))
+		return buf.Bytes(), nil
+	case types.T_sel:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		buf.Write(encoding.EncodeInt64Slice(v.Col.([]int64)))
+		return buf.Bytes(), nil
+	case types.T_char, types.T_varchar, types.T_json:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		Col := v.Col.(*types.Bytes)
 		cnt := int32(len(Col.Os))
 		buf.Write(encoding.EncodeInt32(cnt))
 		if cnt == 0 {
@@ -317,55 +483,164 @@ func (v *Vector) Show() ([]byte, error) {
 		buf.Write(Col.Data)
 		return buf.Bytes(), nil
 	default:
-		return nil, fmt.Errorf("unsupport encoding type %s", v.Typ)
+		return nil, fmt.Errorf("unsupport encoding type %s", v.Typ.Oid)
 	}
 }
 
-func (v *Vector) Read(data []byte, p *process.Process) error {
-	if err := p.Alloc(int64(cap(data))); err != nil {
-		return err
-	}
+func (v *Vector) Read(data []byte) error {
 	v.Data = data
 	data = data[mempool.CountSize:]
-	switch typ := types.T(data[0]); typ {
-	case types.T_int:
-		size := encoding.DecodeUint32(data[1:])
+	typ := encoding.DecodeType(data[:encoding.TypeSize])
+	data = data[encoding.TypeSize:]
+	switch typ.Oid {
+	case types.T_int8:
+		size := encoding.DecodeUint32(data)
 		if size == 0 {
-			v.Col = encoding.DecodeInt64Slice(data[5:])
+			v.Col = encoding.DecodeInt8Slice(data[4:])
 		} else {
-			data = data[5:]
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeInt8Slice(data[size:])
+		}
+	case types.T_int16:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeInt16Slice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeInt16Slice(data[size:])
+		}
+	case types.T_int32:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeInt32Slice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeInt32Slice(data[size:])
+		}
+	case types.T_int64:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeInt64Slice(data[4:])
+		} else {
+			data = data[4:]
 			if err := v.Nsp.Read(data[:size]); err != nil {
 				return err
 			}
 			v.Col = encoding.DecodeInt64Slice(data[size:])
 		}
-	case types.T_bool:
-		size := encoding.DecodeUint32(data[1:])
+	case types.T_uint8:
+		size := encoding.DecodeUint32(data)
 		if size == 0 {
-			v.Col = encoding.DecodeBoolSlice(data[5:])
+			v.Col = encoding.DecodeUint8Slice(data[4:])
 		} else {
-			data = data[5:]
+			data = data[4:]
 			if err := v.Nsp.Read(data[:size]); err != nil {
 				return err
 			}
-			v.Col = encoding.DecodeBoolSlice(data[size:])
+			v.Col = encoding.DecodeUint8Slice(data[size:])
 		}
-	case types.T_float:
-		size := encoding.DecodeUint32(data[1:])
+	case types.T_uint16:
+		size := encoding.DecodeUint32(data)
 		if size == 0 {
-			v.Col = encoding.DecodeFloat64Slice(data[5:])
+			v.Col = encoding.DecodeUint16Slice(data[4:])
 		} else {
-			data = data[5:]
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeUint16Slice(data[size:])
+		}
+	case types.T_uint32:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeUint32Slice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeUint32Slice(data[size:])
+		}
+	case types.T_uint64:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeUint64Slice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeUint64Slice(data[size:])
+		}
+	case types.T_decimal:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeDecimalSlice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeDecimalSlice(data[size:])
+		}
+	case types.T_float32:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeFloat32Slice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeFloat32Slice(data[size:])
+		}
+	case types.T_float64:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeFloat64Slice(data[4:])
+		} else {
+			data = data[4:]
 			if err := v.Nsp.Read(data[:size]); err != nil {
 				return err
 			}
 			v.Col = encoding.DecodeFloat64Slice(data[size:])
 		}
-	case types.T_bytes, types.T_json:
-		Col := v.Col.(*Bytes)
+	case types.T_date:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeDateSlice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeDateSlice(data[size:])
+		}
+	case types.T_datetime:
+		size := encoding.DecodeUint32(data)
+		if size == 0 {
+			v.Col = encoding.DecodeDatetimeSlice(data[4:])
+		} else {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			v.Col = encoding.DecodeDatetimeSlice(data[size:])
+		}
+	case types.T_char, types.T_varchar, types.T_json:
+		Col := v.Col.(*types.Bytes)
 		Col.Reset()
-		size := encoding.DecodeUint32(data[1:])
-		data = data[5:]
+		size := encoding.DecodeUint32(data)
+		data = data[4:]
 		if size > 0 {
 			if err := v.Nsp.Read(data[:size]); err != nil {
 				return err
@@ -378,7 +653,7 @@ func (v *Vector) Read(data []byte, p *process.Process) error {
 		}
 		data = data[4:]
 		Col.Os = make([]uint32, cnt)
-		Col.Ns = encoding.DecodeUint32Slice(data[: 4*cnt : 4*cnt])
+		Col.Ns = encoding.DecodeUint32Slice(data[:4*cnt])
 		Col.Data = data[4*cnt:]
 		{
 			o := uint32(0)
@@ -387,15 +662,40 @@ func (v *Vector) Read(data []byte, p *process.Process) error {
 				o += n
 			}
 		}
-	default:
-		return fmt.Errorf("unsupport decoding type %s", typ)
 	}
 	return nil
 }
 
 func (v *Vector) String() string {
-	switch v.Typ {
-	case types.T_int:
+	switch v.Typ.Oid {
+	case types.T_int8:
+		col := v.Col.([]int8)
+		if len(col) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_int16:
+		col := v.Col.([]int16)
+		if len(col) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_int32:
+		col := v.Col.([]int32)
+		if len(col) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_int64:
 		col := v.Col.([]int64)
 		if len(col) == 1 {
 			if v.Nsp.Contains(0) {
@@ -404,8 +704,8 @@ func (v *Vector) String() string {
 				return fmt.Sprintf("%v", col[0])
 			}
 		}
-	case types.T_bool:
-		col := v.Col.([]bool)
+	case types.T_uint8:
+		col := v.Col.([]uint8)
 		if len(col) == 1 {
 			if v.Nsp.Contains(0) {
 				fmt.Print("null")
@@ -413,7 +713,52 @@ func (v *Vector) String() string {
 				return fmt.Sprintf("%v", col[0])
 			}
 		}
-	case types.T_float:
+	case types.T_uint16:
+		col := v.Col.([]uint16)
+		if len(col) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_uint32:
+		col := v.Col.([]uint32)
+		if len(col) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_uint64:
+		col := v.Col.([]uint64)
+		if len(col) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_decimal:
+		col := v.Col.([]types.Decimal)
+		if len(col) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_float32:
+		col := v.Col.([]float32)
+		if len(col) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_float64:
 		col := v.Col.([]float64)
 		if len(col) == 1 {
 			if v.Nsp.Contains(0) {
@@ -422,22 +767,31 @@ func (v *Vector) String() string {
 				return fmt.Sprintf("%v", col[0])
 			}
 		}
-	case types.T_bytes:
-		col := v.Col.(*Bytes)
-		if len(col.Os) == 1 {
+	case types.T_date:
+		col := v.Col.([]types.Date)
+		if len(col) == 1 {
 			if v.Nsp.Contains(0) {
 				fmt.Print("null")
 			} else {
-				return fmt.Sprintf("%s", col.Data[:col.Ns[0]])
+				return fmt.Sprintf("%v", col[0])
 			}
 		}
-	case types.T_json:
-		col := v.Col.(*Bytes)
-		if len(col.Os) == 1 {
+	case types.T_datetime:
+		col := v.Col.([]types.Datetime)
+		if len(col) == 1 {
 			if v.Nsp.Contains(0) {
 				fmt.Print("null")
 			} else {
-				return fmt.Sprintf("%s", col.Data[:col.Ns[0]])
+				return fmt.Sprintf("%v", col[0])
+			}
+		}
+	case types.T_sel:
+		col := v.Col.([]int64)
+		if len(col) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%v", col[0])
 			}
 		}
 	case types.T_tuple:
@@ -449,6 +803,16 @@ func (v *Vector) String() string {
 				return fmt.Sprintf("%v", col[0])
 			}
 		}
+	case types.T_char, types.T_varchar, types.T_json:
+		col := v.Col.(*types.Bytes)
+		if len(col.Os) == 1 {
+			if v.Nsp.Contains(0) {
+				fmt.Print("null")
+			} else {
+				return fmt.Sprintf("%s", col.Data[:col.Ns[0]])
+			}
+		}
+
 	}
 	return fmt.Sprintf("%v-%s", v.Col, v.Nsp)
 }

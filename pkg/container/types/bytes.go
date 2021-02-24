@@ -1,8 +1,7 @@
-package vector
+package types
 
 import (
 	"bytes"
-	"unsafe"
 )
 
 func (a *Bytes) Reset() {
@@ -15,6 +14,14 @@ func (a *Bytes) Set(aidx int64, b *Bytes, bidx int64) int {
 	return -1
 }
 
+func (a *Bytes) Window(start, end int) *Bytes {
+	return &Bytes{
+		Data: a.Data,
+		Os:   a.Os[start:end],
+		Ns:   a.Ns[start:end],
+	}
+}
+
 func (a *Bytes) Append(vs [][]byte) error {
 	o := uint32(len(a.Data))
 	for _, v := range vs {
@@ -24,14 +31,6 @@ func (a *Bytes) Append(vs [][]byte) error {
 		a.Ns = append(a.Ns, uint32(len(v)))
 	}
 	return nil
-}
-
-func (a *Bytes) Window(start, end int) *Bytes {
-	return &Bytes{
-		Data: a.Data,
-		Os:   a.Os[start:end],
-		Ns:   a.Ns[start:end],
-	}
 }
 
 func (a *Bytes) String() string {
@@ -47,15 +46,4 @@ func (a *Bytes) String() string {
 	}
 	buf.WriteByte(']')
 	return buf.String()
-}
-
-func (a *Bytes) ToStrings() []string {
-	var tm []byte
-
-	rs := make([]string, len(a.Os))
-	for i, o := range a.Os {
-		tm = a.Data[o : o+a.Ns[i]]
-		rs[i] = *(*string)(unsafe.Pointer(&tm))
-	}
-	return rs
 }

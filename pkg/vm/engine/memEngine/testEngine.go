@@ -18,9 +18,21 @@ func NewTestEngine() engine.Engine {
 		var attrs []metadata.Attribute
 
 		{
-			attrs = append(attrs, metadata.Attribute{compress.Lz4, types.T_bytes, "orderId"})
-			attrs = append(attrs, metadata.Attribute{compress.Lz4, types.T_bytes, "uid"})
-			attrs = append(attrs, metadata.Attribute{compress.Lz4, types.T_float, "price"})
+			attrs = append(attrs, metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "orderId",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			})
+			attrs = append(attrs, metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "uid",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			})
+			attrs = append(attrs, metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "price",
+				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
+			})
 		}
 		if err := e.Create("test", attrs); err != nil {
 			log.Fatal(err)
@@ -34,7 +46,7 @@ func NewTestEngine() engine.Engine {
 		bat := batch.New([]string{"orderId", "uid", "price"})
 		{
 			{
-				vec := vector.New(types.T_bytes)
+				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
 				vs := make([][]byte, 10)
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i))
@@ -45,7 +57,7 @@ func NewTestEngine() engine.Engine {
 				bat.Vecs[0] = vec
 			}
 			{
-				vec := vector.New(types.T_bytes)
+				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
 				vs := make([][]byte, 10)
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i%4))
@@ -56,7 +68,7 @@ func NewTestEngine() engine.Engine {
 				bat.Vecs[1] = vec
 			}
 			{
-				vec := vector.New(types.T_float)
+				vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
 				vs := make([]float64, 10)
 				for i := 0; i < 10; i++ {
 					vs[i] = float64(i)
@@ -66,7 +78,6 @@ func NewTestEngine() engine.Engine {
 				}
 				bat.Vecs[2] = vec
 			}
-
 		}
 		if err := r.Write(bat); err != nil {
 			log.Fatal(err)
@@ -75,7 +86,7 @@ func NewTestEngine() engine.Engine {
 	{
 		bat := batch.New([]string{"orderId", "uid", "price"})
 		{
-			vec := vector.New(types.T_bytes)
+			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
 			vs := make([][]byte, 10)
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i))
@@ -86,7 +97,7 @@ func NewTestEngine() engine.Engine {
 			bat.Vecs[0] = vec
 		}
 		{
-			vec := vector.New(types.T_bytes)
+			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
 			vs := make([][]byte, 10)
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i%4))
@@ -97,7 +108,7 @@ func NewTestEngine() engine.Engine {
 			bat.Vecs[1] = vec
 		}
 		{
-			vec := vector.New(types.T_float)
+			vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
 			vs := make([]float64, 10)
 			for i := 10; i < 20; i++ {
 				vs[i-10] = float64(i)

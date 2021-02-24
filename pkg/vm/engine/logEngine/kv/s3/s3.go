@@ -3,7 +3,7 @@ package s3
 import (
 	"bytes"
 	"encoding/gob"
-	"matrixbase/pkg/vm/mempool"
+	"matrixbase/pkg/vm/process"
 	"os"
 	"path"
 
@@ -56,7 +56,7 @@ func (a *KV) Set(k string, v []byte) error {
 	return err
 }
 
-func (a *KV) Get(k string, mp *mempool.Mempool) ([]byte, *aio.AIO, aio.RequestId, error) {
+func (a *KV) Get(k string, proc *process.Process) ([]byte, *aio.AIO, aio.RequestId, error) {
 	name := path.Join(a.cfg.Path, k)
 	fp, err := os.Create(name)
 	if err != nil {
@@ -70,10 +70,10 @@ func (a *KV) Get(k string, mp *mempool.Mempool) ([]byte, *aio.AIO, aio.RequestId
 		return nil, nil, 0, err
 	}
 	fp.Close()
-	return readFile(name, mp)
+	return readFile(name, proc)
 }
 
-func readFile(name string, mp *mempool.Mempool) ([]byte, *aio.AIO, aio.RequestId, error) {
+func readFile(name string, proc *process.Process) ([]byte, *aio.AIO, aio.RequestId, error) {
 	a, err := aio.NewAIO(name, os.O_RDONLY, 0666)
 	if err != nil {
 		return nil, nil, 0, err
@@ -82,8 +82,11 @@ func readFile(name string, mp *mempool.Mempool) ([]byte, *aio.AIO, aio.RequestId
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	size := int(fi.Size())
-	data := mp.Alloc(size)
+	size := fi.Size()
+	data, err := proc.Alloc(size)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	id, err := a.ReadAt(data, 0)
 	if err != nil {
 		a.Close()

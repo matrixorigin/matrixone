@@ -25,7 +25,7 @@ func (s *Segment) Read(cs []uint64, attrs []string, proc *process.Process) (*bat
 	bat.Is = make([]batch.Info, len(attrs))
 	for i, attr := range attrs {
 		md := s.mp[attr]
-		data, ap, id, err := s.db.Get(s.id+"."+attr, proc.Mp)
+		data, ap, id, err := s.db.Get(s.id+"."+attr, proc)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				bat.Is[i].Wg.Wait()

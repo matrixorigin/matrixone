@@ -38,11 +38,11 @@ func (m *Mempool) Alloc(size int) []byte {
 	return data
 }
 
-func (m *Mempool) Free(data []byte) {
+func (m *Mempool) Free(data []byte) bool {
 	count := encoding.DecodeUint64(data[:8])
 	copy(data, encoding.EncodeUint64(count-1))
 	if count > 1 {
-		return
+		return false
 	}
 	size := cap(data)
 	if size <= m.maxSize {
@@ -51,8 +51,9 @@ func (m *Mempool) Free(data []byte) {
 				if len(b.slots) < b.nslot {
 					b.slots = append(b.slots, data)
 				}
-				return
+				return true
 			}
 		}
 	}
+	return true
 }

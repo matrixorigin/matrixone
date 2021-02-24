@@ -46,7 +46,7 @@ func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector,
 			proc.Mp.Free(data)
 			data = buf[:mempool.CountSize+n]
 		}
-		if err := bat.Vecs[i].Read(data, proc); err != nil {
+		if err := bat.Vecs[i].Read(data); err != nil {
 			proc.Mp.Free(data)
 			return nil, err
 		}
