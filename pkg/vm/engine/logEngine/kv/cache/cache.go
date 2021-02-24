@@ -4,7 +4,7 @@ import (
 	"container/list"
 	"io/ioutil"
 	"matrixbase/pkg/logger"
-	"matrixbase/pkg/vm/mempool"
+	"matrixbase/pkg/vm/process"
 	"os"
 	"path"
 
@@ -64,9 +64,9 @@ func (c *Cache) Set(k string, s int64) error {
 	return err
 }
 
-func (c *Cache) Get(k string, mp *mempool.Mempool) ([]byte, *aio.AIO, aio.RequestId, bool, error) {
+func (c *Cache) Get(k string, proc *process.Process) ([]byte, *aio.AIO, aio.RequestId, bool, error) {
 	c.RLock()
-	v, a, id, ok, err := c.get(k, mp)
+	v, a, id, ok, err := c.get(k, proc)
 	c.RUnlock()
 	return v, a, id, ok, err
 }
@@ -81,10 +81,10 @@ func (c *Cache) del(k string) error {
 	return nil
 }
 
-func (c *Cache) get(k string, mp *mempool.Mempool) ([]byte, *aio.AIO, aio.RequestId, bool, error) {
+func (c *Cache) get(k string, proc *process.Process) ([]byte, *aio.AIO, aio.RequestId, bool, error) {
 	if e, ok := c.mp[k]; ok {
 		c.lt.MoveToFront(e)
-		data, a, id, err := readFile(path.Join(c.path, k), mp)
+		data, a, id, err := readFile(path.Join(c.path, k), proc)
 		return data, a, id, true, err
 
 	}
@@ -123,7 +123,7 @@ func (c *Cache) reduce() {
 	}
 }
 
-func readFile(name string, mp *mempool.Mempool) ([]byte, *aio.AIO, aio.RequestId, error) {
+func readFile(name string, proc *process.Process) ([]byte, *aio.AIO, aio.RequestId, error) {
 	a, err := aio.NewAIO(name, os.O_RDONLY, 0666)
 	if err != nil {
 		return nil, nil, 0, err
@@ -132,8 +132,11 @@ func readFile(name string, mp *mempool.Mempool) ([]byte, *aio.AIO, aio.RequestId
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	size := int(fi.Size())
-	data := mp.Alloc(size)
+	size := fi.Size()
+	data, err := proc.Alloc(size)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	id, err := a.ReadAt(data, 0)
 	if err != nil {
 		a.Close()

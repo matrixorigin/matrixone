@@ -28,7 +28,7 @@ func (s *Segment) Read(cs []uint64, attrs []string, proc *process.Process) (*bat
 	bat := batch.New(attrs)
 	for i, attr := range attrs {
 		md := s.mp[attr]
-		vec, err := s.read(s.id+"."+attr, md.Alg, md.Type, proc.Mp)
+		vec, err := s.read(s.id+"."+attr, md.Alg, md.Type, proc)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				copy(bat.Vecs[j].Data, mempool.OneCount)
@@ -42,24 +42,28 @@ func (s *Segment) Read(cs []uint64, attrs []string, proc *process.Process) (*bat
 	return bat, nil
 }
 
-func (s *Segment) read(id string, alg int, typ types.T, mp *mempool.Mempool) (*vector.Vector, error) {
-	data, err := s.db.Get(id, mp)
+func (s *Segment) read(id string, alg int, typ types.Type, proc *process.Process) (*vector.Vector, error) {
+	data, err := s.db.Get(id, proc)
 	if err != nil {
 		return nil, err
 	}
 	if alg == compress.Lz4 {
 		n := int(encoding.DecodeInt32(data[len(data)-4:]))
-		buf := mp.Alloc(n)
+		buf, err := proc.Alloc(int64(n))
+		if err != nil {
+			proc.Free(data)
+			return nil, err
+		}
 		if _, err := compress.Decompress(data[mempool.CountSize:len(data)-4], buf[mempool.CountSize:], alg); err != nil {
-			mp.Free(data)
+			proc.Free(data)
 			return nil, err
 		}
 		data = buf[:mempool.CountSize+n]
-		mp.Free(data)
+		proc.Free(data)
 	}
 	vec := vector.New(typ)
-	if err := vec.Read(data, s.proc); err != nil {
-		mp.Free(data)
+	if err := vec.Read(data); err != nil {
+		proc.Free(data)
 		return nil, err
 	}
 	return vec, nil

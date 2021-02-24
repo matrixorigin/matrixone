@@ -3,7 +3,7 @@ package kv
 import (
 	"matrixbase/pkg/vm/engine/logEngine/kv/cache"
 	"matrixbase/pkg/vm/engine/logEngine/kv/s3"
-	"matrixbase/pkg/vm/mempool"
+	"matrixbase/pkg/vm/process"
 
 	aio "github.com/traetox/goaio"
 )
@@ -32,11 +32,11 @@ func (a *KV) Set(k string, v []byte) error {
 	return a.re.Set(k, v)
 }
 
-func (a *KV) Get(k string, mp *mempool.Mempool) ([]byte, *aio.AIO, aio.RequestId, error) {
-	if v, ap, id, ok, err := a.kc.Get(k, mp); ok {
+func (a *KV) Get(k string, proc *process.Process) ([]byte, *aio.AIO, aio.RequestId, error) {
+	if v, ap, id, ok, err := a.kc.Get(k, proc); ok {
 		return v, ap, id, err
 	}
-	v, ap, id, err := a.re.Get(k, mp)
+	v, ap, id, err := a.re.Get(k, proc)
 	if err != nil {
 		return nil, nil, 0, err
 	}

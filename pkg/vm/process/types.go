@@ -8,8 +8,10 @@ import (
 /*
 type Process interface {
 	Size() int64
-	Free(int64)
-	Alloc(int64) error
+	HostSize() int64
+
+	Free([]byte)
+	Alloc(int64) ([]byte, error)
 }
 */
 

@@ -20,10 +20,10 @@ func TestProjection(t *testing.T) {
 
 	proc := process.New(guest.New(1<<20, host.New(1<<20)), mempool.New(1<<32, 8))
 	{
-		ins = append(ins, vm.Instruction{vm.Projection, projection.Argument{[]string{"uid"}}})
+		ins = append(ins, vm.Instruction{vm.Projection, projection.Argument{[]string{"uid", "price"}}})
 		ins = append(ins, vm.Instruction{vm.Output, nil})
 	}
-	p := pipeline.New([]uint64{1}, []string{"uid"}, ins)
+	p := pipeline.New([]uint64{1, 1}, []string{"uid", "price"}, ins)
 	p.Run(segments(proc), proc)
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
 }

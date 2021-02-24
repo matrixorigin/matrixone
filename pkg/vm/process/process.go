@@ -20,10 +20,17 @@ func (p *Process) HostSize() int64 {
 	return p.Gm.HostSize()
 }
 
-func (p *Process) Free(size int64) {
-	p.Gm.Free(size)
+func (p *Process) Free(data []byte) {
+	if p.Mp.Free(data) {
+		p.Gm.Free(int64(cap(data)))
+	}
 }
 
-func (p *Process) Alloc(size int64) error {
-	return p.Gm.Alloc(size)
+func (p *Process) Alloc(size int64) ([]byte, error) {
+	data := p.Mp.Alloc(int(size))
+	if err := p.Gm.Alloc(int64(cap(data))); err != nil {
+		p.Mp.Free(data)
+		return nil, err
+	}
+	return data, nil
 }

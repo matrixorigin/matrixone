@@ -10,7 +10,7 @@ type Node struct {
 }
 
 type Attribute struct {
-	Alg  int     // compression algorithm
-	Type types.T // type of attribute
-	Name string  // name of attribute
+	Alg  int        // compression algorithm
+	Name string     // name of attribute
+	Type types.Type // type of attribute
 }
