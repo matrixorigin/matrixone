@@ -18,8 +18,9 @@ type WaitGroup struct {
 }
 
 type Batch struct {
-	Is    []Info
-	Sels  []int64
-	Attrs []string
-	Vecs  []*vector.Vector
+	Is       []Info
+	SelsData []byte
+	Sels     []int64
+	Attrs    []string
+	Vecs     []*vector.Vector
 }

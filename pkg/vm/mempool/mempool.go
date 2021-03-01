@@ -16,6 +16,11 @@ func New(maxSize, factor int) *Mempool {
 	return m
 }
 
+func (m *Mempool) Inc(data []byte) {
+	count := encoding.DecodeUint64(data[:8])
+	copy(data, encoding.EncodeUint64(count+1))
+}
+
 func (m *Mempool) Alloc(size int) []byte {
 	size = ((size + PageSize - 1 + CountSize) >> 10) << 10
 	if size <= m.maxSize {

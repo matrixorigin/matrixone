@@ -1,8 +1,8 @@
-package projection
+package restrict
 
 import "matrixbase/pkg/sql/colexec/extend"
 
 type Argument struct {
 	Attrs []string
-	Es    []extend.Extend
+	E     extend.Extend
 }

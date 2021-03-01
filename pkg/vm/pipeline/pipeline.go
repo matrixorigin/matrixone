@@ -15,6 +15,9 @@ func New(cs []uint64, attrs []string, ins vm.Instructions) *Pipeline {
 }
 
 func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, error) {
+	if err := vm.Prepare(p.ins, proc); err != nil {
+		return false, err
+	}
 	for _, seg := range segs {
 		bat, err := seg.Read(p.cs, p.attrs, proc)
 		if err != nil {
