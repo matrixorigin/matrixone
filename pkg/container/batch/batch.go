@@ -57,6 +57,9 @@ func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector,
 }
 
 func (bat *Batch) Free(proc *process.Process) {
+	if bat.SelsData != nil {
+		proc.Free(bat.SelsData)
+	}
 	for _, vec := range bat.Vecs {
 		vec.Free(proc)
 	}

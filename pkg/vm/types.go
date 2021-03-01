@@ -11,7 +11,6 @@ const (
 	Restrict
 	Summarize
 	Projection
-	ExtendProjection
 	SetUnion
 	SetIntersect
 	SetDifference

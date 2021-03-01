@@ -90,6 +90,10 @@ var Types map[string]T = map[string]T{
 	"json": T_json,
 }
 
+func (t Type) String() string {
+	return t.Oid.String()
+}
+
 func (t T) String() string {
 	switch t {
 	case T_int8:
