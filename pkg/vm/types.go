@@ -4,7 +4,6 @@ const (
 	Nub = iota
 	Top
 	Limit
-	Merge
 	Group
 	Order
 	Transfer
@@ -22,6 +21,7 @@ const (
 	InnerJoin
 	NaturalJoin
 	Output
+	MergeSummarize
 )
 
 type Instruction struct {

@@ -13,7 +13,6 @@ func Prepare(ins Instructions, proc *process.Process) error {
 		case Nub:
 		case Top:
 		case Limit:
-		case Merge:
 		case Group:
 		case Order:
 		case Transfer:
@@ -40,6 +39,7 @@ func Prepare(ins Instructions, proc *process.Process) error {
 	}
 	return nil
 }
+
 func Run(ins Instructions, proc *process.Process) (bool, error) {
 	var end bool
 	var err error
@@ -49,7 +49,6 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 		case Nub:
 		case Top:
 		case Limit:
-		case Merge:
 		case Group:
 		case Order:
 		case Transfer:
