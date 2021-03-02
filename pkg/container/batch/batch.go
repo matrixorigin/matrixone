@@ -17,6 +17,14 @@ func New(attrs []string) *Batch {
 	}
 }
 
+func (bat *Batch) Length(proc *process.Process) (int, error) {
+	vec, err := bat.GetVector(bat.Attrs[0], proc)
+	if err != nil {
+		return -1, err
+	}
+	return vec.Length(), nil
+}
+
 func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector, error) {
 	for i, attr := range bat.Attrs {
 		if attr != name {

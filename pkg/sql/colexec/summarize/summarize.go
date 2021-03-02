@@ -29,6 +29,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 		rbat.Vecs[i], err = e.Agg.Eval(proc)
 		if err != nil {
+			rbat.Vecs = rbat.Vecs[:i]
+			rbat.Free(proc)
 			return false, err
 		}
 	}

@@ -18,6 +18,7 @@ type Process interface {
 type Register struct {
 	Ax interface{}
 	Ts []interface{}
+	Cs []chan interface{}
 }
 
 type Process struct {
