@@ -4,6 +4,7 @@ import (
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/vm/process"
+	"matrixbase/pkg/vm/register"
 )
 
 func Prepare(_ *process.Process, _ interface{}) error {
@@ -22,6 +23,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 		n.Seen = newSeen
 		proc.Reg.Ax = bat
+		register.FreeRegisters(proc)
 		return false, nil
 	}
 	length, err := bat.Length(proc)
@@ -41,6 +43,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	n.Seen = newSeen
 	proc.Reg.Ax = bat
+	register.FreeRegisters(proc)
 	return false, nil
 }
 
