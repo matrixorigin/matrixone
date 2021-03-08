@@ -291,6 +291,10 @@ func (v *Vector) Shuffle(sels []int64) *Vector {
 	return nil
 }
 
+func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
+	return nil
+}
+
 func (v *Vector) Show() ([]byte, error) {
 	var buf bytes.Buffer
 

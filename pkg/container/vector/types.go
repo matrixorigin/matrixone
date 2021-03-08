@@ -20,6 +20,8 @@ type Vector interface {
 
     Shuffle([]int64) Vector
 
+	UnionOne(Vector, int64) error
+
     Read([]byte) error
     Show() ([]byte, error)
 
