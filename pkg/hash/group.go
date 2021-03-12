@@ -361,12 +361,12 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 			case lnull && !rnull: // null is not value
 				vs := vec.Col.(*types.Bytes)
 				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Data[gvs.Os[g.Sel] : gvs.Os[g.Sel]+gvs.Ns[g.Sel]]
+				gv := gvs.Get(int(g.Sel))
 				for i, sel := range sels {
 					if vec.Nsp.Contains(uint64(sel)) {
 						diffs[i] = true
 					} else {
-						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Data[vs.Os[sel]:vs.Os[sel]+vs.Ns[sel]]) != 0)
+						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
 					}
 				}
 			case !lnull && rnull: // null is not value
@@ -376,9 +376,9 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 			default:
 				vs := vec.Col.(*types.Bytes)
 				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Data[gvs.Os[g.Sel] : gvs.Os[g.Sel]+gvs.Ns[g.Sel]]
+				gv := gvs.Get(int(g.Sel))
 				for i, sel := range sels {
-					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Data[vs.Os[sel]:vs.Os[sel]+vs.Ns[sel]]) != 0)
+					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
 				}
 			}
 		case types.T_json:
@@ -395,12 +395,12 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 			case lnull && !rnull: // null is not value
 				vs := vec.Col.(*types.Bytes)
 				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Data[gvs.Os[g.Sel] : gvs.Os[g.Sel]+gvs.Ns[g.Sel]]
+				gv := gvs.Get(int(g.Sel))
 				for i, sel := range sels {
 					if vec.Nsp.Contains(uint64(sel)) {
 						diffs[i] = true
 					} else {
-						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Data[vs.Os[sel]:vs.Os[sel]+vs.Ns[sel]]) != 0)
+						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
 					}
 				}
 			case !lnull && rnull: // null is not value
@@ -410,9 +410,9 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 			default:
 				vs := vec.Col.(*types.Bytes)
 				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Data[gvs.Os[g.Sel] : gvs.Os[g.Sel]+gvs.Ns[g.Sel]]
+				gv := gvs.Get(int(g.Sel))
 				for i, sel := range sels {
-					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Data[vs.Os[sel]:vs.Os[sel]+vs.Ns[sel]]) != 0)
+					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
 				}
 			}
 		}

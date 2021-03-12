@@ -2,10 +2,10 @@ package bytes
 
 import (
 	"matrixbase/pkg/container/nulls"
-	"matrixbase/pkg/container/vector"
+	"matrixbase/pkg/container/types"
 )
 
 type compare struct {
 	ns []*nulls.Nulls
-	vs []*vector.Bytes
+	vs []*types.Bytes
 }

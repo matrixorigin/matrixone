@@ -49,9 +49,9 @@ type Type struct {
 }
 
 type Bytes struct {
-	Data []byte
-	Os   []uint32
-	Ns   []uint32
+	Data    []byte
+	Offsets []uint32
+	Lengths []uint32
 }
 
 type Date struct {

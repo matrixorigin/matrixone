@@ -138,7 +138,7 @@ func (v *Vector) SetCol(col interface{}) {
 func (v *Vector) Length() int {
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
-		return len(v.Col.(*types.Bytes).Os)
+		return len(v.Col.(*types.Bytes).Offsets)
 	default:
 		hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v.Col))
 		return hp.Len
@@ -478,12 +478,12 @@ func (v *Vector) Show() ([]byte, error) {
 			buf.Write(nb)
 		}
 		Col := v.Col.(*types.Bytes)
-		cnt := int32(len(Col.Os))
+		cnt := int32(len(Col.Offsets))
 		buf.Write(encoding.EncodeInt32(cnt))
 		if cnt == 0 {
 			return buf.Bytes(), nil
 		}
-		buf.Write(encoding.EncodeUint32Slice(Col.Ns))
+		buf.Write(encoding.EncodeUint32Slice(Col.Lengths))
 		buf.Write(Col.Data)
 		return buf.Bytes(), nil
 	default:
@@ -656,13 +656,13 @@ func (v *Vector) Read(data []byte) error {
 			break
 		}
 		data = data[4:]
-		Col.Os = make([]uint32, cnt)
-		Col.Ns = encoding.DecodeUint32Slice(data[:4*cnt])
+		Col.Offsets = make([]uint32, cnt)
+		Col.Lengths = encoding.DecodeUint32Slice(data[:4*cnt])
 		Col.Data = data[4*cnt:]
 		{
 			o := uint32(0)
-			for i, n := range Col.Ns {
-				Col.Os[i] = o
+			for i, n := range Col.Lengths {
+				Col.Offsets[i] = o
 				o += n
 			}
 		}
@@ -809,11 +809,11 @@ func (v *Vector) String() string {
 		}
 	case types.T_char, types.T_varchar, types.T_json:
 		col := v.Col.(*types.Bytes)
-		if len(col.Os) == 1 {
+		if len(col.Offsets) == 1 {
 			if v.Nsp.Contains(0) {
 				fmt.Print("null")
 			} else {
-				return fmt.Sprintf("%s", col.Data[:col.Ns[0]])
+				return fmt.Sprintf("%s", col.Data[:col.Lengths[0]])
 			}
 		}
 
