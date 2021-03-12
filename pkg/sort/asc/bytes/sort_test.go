@@ -32,11 +32,11 @@ func TestSort(t *testing.T) {
 	vs := generate()
 	fmt.Printf("%s\n", vs)
 	{
-		col := vs.Col.(*vector.Bytes)
-		Sort(&vector.Bytes{
-			Data: col.Data,
-			Ns:   col.Ns,
-			Os:   col.Os[2:],
+		col := vs.Col.(*types.Bytes)
+		Sort(&types.Bytes{
+			Data:    col.Data,
+			Lengths: col.Lengths,
+			Offsets: col.Offsets[2:],
 		})
 	}
 	fmt.Printf("\n")

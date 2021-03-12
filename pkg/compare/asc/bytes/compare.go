@@ -9,7 +9,7 @@ import (
 
 func New() *compare {
 	return &compare{
-		vs: make([]*vector.Bytes, 2),
+		vs: make([]*types.Bytes, 2),
 		ns: make([]*nulls.Nulls, 2),
 	}
 }
@@ -27,7 +27,7 @@ func (c *compare) Set(idx int, v *vector.Vector) {
 	c.vs[idx] = v.Bytes()
 }
 
-func (c *compare) Copy(vecSrc, vecDst int, src, dst int64) int {
+func (c *compare) Copy(vecSrc, vecDst int, src, dst int) int {
 	if c.ns[vecSrc].Any() && c.ns[vecSrc].Contains(uint64(src)) {
 		c.ns[vecDst].Add(uint64(dst))
 		return 0
@@ -38,7 +38,7 @@ func (c *compare) Copy(vecSrc, vecDst int, src, dst int64) int {
 	return 0
 }
 
-func (c *compare) Compare(veci, vecj int, vi, vj int64) int {
+func (c *compare) Compare(veci, vecj int, vi, vj int) int {
 	x, y := c.vs[veci], c.vs[vecj]
-	return bytes.Compare(x.Data[x.Os[vi]:x.Os[vi]+x.Ns[vi]], y.Data[y.Os[vj]:y.Os[vj]+y.Ns[vj]])
+	return bytes.Compare(x.Get(vi), y.Get(vj))
 }
