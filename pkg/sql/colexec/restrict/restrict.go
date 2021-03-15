@@ -21,10 +21,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	bat.SelsData = vec.Data
 	bat.Sels = vec.Col.([]int64)
-	for _, attr := range n.Attrs {
-		vec, _ := bat.GetVector(attr, proc)
-		vec.Free(proc)
-	}
+	bat.Reduce(n.Attrs, proc)
 	proc.Reg.Ax = bat
 	register.FreeRegisters(proc)
 	return false, nil
