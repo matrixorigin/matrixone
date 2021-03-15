@@ -28,7 +28,6 @@ func (a *Attribute) Eval(bat *batch.Batch, proc *process.Process) (*vector.Vecto
 	if err != nil {
 		return nil, 0, err
 	}
-	proc.Mp.Inc(vec.Data)
 	return vec, a.Type, nil
 }
 

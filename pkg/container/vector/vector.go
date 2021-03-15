@@ -127,7 +127,9 @@ func (v *Vector) Reset() {
 
 func (v *Vector) Free(p *process.Process) {
 	if v.Data != nil {
-		p.Free(v.Data)
+		if p.Free(v.Data) {
+			v.Data = nil
+		}
 	}
 }
 

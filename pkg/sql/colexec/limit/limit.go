@@ -16,7 +16,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.Ax.(*batch.Batch)
 	if length := len(bat.Sels); length > 0 {
 		newSeen := n.Seen + length
-		if newSeen > n.Seen { // limit - seen
+		if newSeen >= n.Limit { // limit - seen
 			bat.Sels = bat.Sels[:n.Limit-n.Seen]
 			proc.Reg.Ax = bat
 			return true, nil
@@ -31,7 +31,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, err
 	}
 	newSeen := n.Seen + length
-	if newSeen > n.Seen { // limit - seen
+	if newSeen >= n.Limit { // limit - seen
 		data, sels, err := newSels(int64(n.Limit-n.Seen), proc)
 		if err != nil {
 			return true, err

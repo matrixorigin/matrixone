@@ -23,9 +23,9 @@ type Relation interface {
 	Segments() []string
 	Attribute() []metadata.Attribute
 
-	Segment(string, *process.Process) Segment
-
 	Scheduling(metadata.Nodes) []*Unit
+
+	Segment(string, *process.Process) Segment
 
 	Write(*batch.Batch) error
 

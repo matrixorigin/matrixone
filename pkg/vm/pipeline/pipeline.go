@@ -25,6 +25,7 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 		}
 		proc.Reg.Ax = bat
 		if end, err := vm.Run(p.ins, proc); err != nil || end {
+			bat.Clean(proc)
 			return end, err
 		}
 	}

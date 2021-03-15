@@ -20,10 +20,12 @@ func (p *Process) HostSize() int64 {
 	return p.Gm.HostSize()
 }
 
-func (p *Process) Free(data []byte) {
-	if p.Mp.Free(data) {
+func (p *Process) Free(data []byte) bool {
+	end := p.Mp.Free(data)
+	if end {
 		p.Gm.Free(int64(cap(data)))
 	}
+	return end
 }
 
 func (p *Process) Alloc(size int64) ([]byte, error) {

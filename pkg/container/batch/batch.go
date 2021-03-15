@@ -30,14 +30,12 @@ func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector,
 		if attr != name {
 			continue
 		}
-		if bat.Is == nil {
+		if len(bat.Is) <= i || bat.Is[i].Wg == nil {
 			return bat.Vecs[i], nil
 		}
 		// io wait
-		if bat.Is[i].Wg != nil {
-			if err := bat.Is[i].Wg.Wait(); err != nil {
-				return nil, err
-			}
+		if err := bat.Is[i].Wg.Wait(); err != nil {
+			return nil, err
 		}
 		data := bat.Vecs[i].Data
 		// decompress
@@ -48,28 +46,76 @@ func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector,
 			buf := proc.Mp.Alloc(n)
 			if buf, err = compress.Decompress(data[mempool.CountSize:len(data)-4], buf[mempool.CountSize:], bat.Is[i].Alg); err != nil {
 				proc.Mp.Free(buf)
-				proc.Mp.Free(data)
 				return nil, err
 			}
 			proc.Mp.Free(data)
 			data = buf[:mempool.CountSize+n]
+			bat.Vecs[i].Data = data
 		}
 		if err := bat.Vecs[i].Read(data); err != nil {
-			proc.Mp.Free(data)
 			return nil, err
 		}
 		copy(data, encoding.EncodeUint64(bat.Is[i].Ref))
+		bat.Is[i].Wg = nil
 		return bat.Vecs[i], nil
 	}
 	return nil, fmt.Errorf("attribute '%s' not exist", name)
 }
 
+func (bat *Batch) WaitIo() {
+	for _, i := range bat.Is {
+		if i.Wg != nil {
+			i.Wg.Wait()
+			i.Wg = nil
+		}
+	}
+}
+
 func (bat *Batch) Free(proc *process.Process) {
+	bat.WaitIo()
 	if bat.SelsData != nil {
 		proc.Free(bat.SelsData)
+		bat.Sels = nil
+		bat.SelsData = nil
 	}
 	for _, vec := range bat.Vecs {
 		vec.Free(proc)
+	}
+}
+
+func (bat *Batch) Clean(proc *process.Process) {
+	bat.WaitIo()
+	if bat.SelsData != nil {
+		proc.Free(bat.SelsData)
+		bat.Sels = nil
+		bat.SelsData = nil
+	}
+	for _, vec := range bat.Vecs {
+		if vec.Data != nil {
+			count := encoding.DecodeUint64(vec.Data[:8])
+			if count > 0 {
+				copy(vec.Data, mempool.OneCount)
+				proc.Mp.Free(vec.Data)
+				proc.Gm.Free(int64(cap(vec.Data)))
+			}
+			vec.Data = nil
+		}
+	}
+}
+
+func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
+	for _, attr := range attrs {
+		for i := range bat.Attrs {
+			if bat.Attrs[i] != attr {
+				continue
+			}
+			bat.Vecs[i].Free(proc)
+			if bat.Vecs[i].Data == nil {
+				bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
+				bat.Attrs = append(bat.Attrs[:i], bat.Attrs[i+1:]...)
+			}
+			break
+		}
 	}
 }
 
