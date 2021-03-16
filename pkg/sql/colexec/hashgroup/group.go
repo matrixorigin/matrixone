@@ -92,10 +92,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 func (ctr *Container) clean(vecs []*vector.Vector, proc *process.Process) {
 	for _, gs := range ctr.groups {
 		for _, g := range gs {
-			if g.Data != nil {
-				proc.Free(g.Data)
-			}
-			g.Data = nil
+			g.Free(proc)
 		}
 	}
 	for _, vec := range vecs {
@@ -163,7 +160,7 @@ func (ctr *Container) batchGroup(vecs, uvecs []*vector.Vector, proc *process.Pro
 		for k, vec := range vecs {
 			uvecs[k] = vec.Window(i, i+length)
 		}
-		if err := ctr.unitGroup(length, nil, uvecs, proc); err != nil {
+		if err := ctr.unitGroup(i, length, nil, uvecs, proc); err != nil {
 			return err
 		}
 	}
@@ -176,20 +173,20 @@ func (ctr *Container) batchGroupSels(sels []int64, vecs []*vector.Vector, proc *
 		if length > UnitLimit {
 			length = UnitLimit
 		}
-		if err := ctr.unitGroup(length, sels[i:i+length], vecs, proc); err != nil {
+		if err := ctr.unitGroup(0, length, sels[i:i+length], vecs, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *Container) unitGroup(count int, sels []int64, vecs []*vector.Vector, proc *process.Process) error {
+func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vector.Vector, proc *process.Process) error {
 	var err error
 
 	{
 		copy(ctr.hashs[:count], OneUint64s[:count])
 		if len(sels) == 0 {
-			ctr.fillHash(count, vecs)
+			ctr.fillHash(start, count, vecs)
 		} else {
 			ctr.fillHashSels(count, sels, vecs)
 		}
@@ -225,7 +222,7 @@ func (ctr *Container) unitGroup(count int, sels []int64, vecs []*vector.Vector, 
 	return nil
 }
 
-func (ctr *Container) fillHash(count int, vecs []*vector.Vector) {
+func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
 		hash.Rehash(count, ctr.hashs, vec)
@@ -238,7 +235,7 @@ func (ctr *Container) fillHash(count int, vecs []*vector.Vector) {
 			ctr.slots.Set(h, slot)
 			nextslot++
 		}
-		ctr.sels[slot] = append(ctr.sels[slot], int64(i))
+		ctr.sels[slot] = append(ctr.sels[slot], int64(i+start))
 	}
 }
 
