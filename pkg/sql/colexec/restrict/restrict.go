@@ -7,13 +7,13 @@ import (
 )
 
 func Prepare(_ *process.Process, arg interface{}) error {
-	n := arg.(Argument)
+	n := arg.(*Argument)
 	n.Attrs = n.E.Attributes()
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(Argument)
+	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
 	vec, _, err := n.E.Eval(bat, proc)
 	if err != nil {

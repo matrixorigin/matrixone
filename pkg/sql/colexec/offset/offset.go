@@ -1,4 +1,4 @@
-package limit
+package offset
 
 import (
 	"matrixbase/pkg/container/batch"
@@ -15,16 +15,22 @@ func Prepare(_ *process.Process, _ interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
-	if length := uint64(len(bat.Sels)); length > 0 {
-		newSeen := n.Seen + length
-		if newSeen >= n.Limit { // limit - seen
-			bat.Sels = bat.Sels[:n.Limit-n.Seen]
-			proc.Reg.Ax = bat
-			register.FreeRegisters(proc)
-			return true, nil
-		}
-		n.Seen = newSeen
+	if n.Seen > n.Offset {
 		proc.Reg.Ax = bat
+		register.FreeRegisters(proc)
+		return false, nil
+	}
+	if length := uint64(len(bat.Sels)); length > 0 {
+		if n.Seen+length > n.Offset {
+			bat.Sels = bat.Sels[n.Offset-n.Seen:]
+			proc.Reg.Ax = bat
+			n.Seen += length
+			register.FreeRegisters(proc)
+			return false, nil
+		}
+		n.Seen += length
+		bat.Clean(proc)
+		proc.Reg.Ax = batch.New(nil)
 		register.FreeRegisters(proc)
 		return false, nil
 	}
@@ -33,33 +39,34 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		clean(bat, proc)
 		return false, err
 	}
-	newSeen := n.Seen + uint64(length)
-	if newSeen >= n.Limit { // limit - seen
-		data, sels, err := newSels(int64(n.Limit-n.Seen), proc)
+	if n.Seen+uint64(length) > n.Offset {
+		data, sels, err := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen), proc)
 		if err != nil {
 			clean(bat, proc)
 			return true, err
 		}
+		n.Seen += uint64(length)
 		bat.Sels = sels
 		bat.SelsData = data
 		proc.Reg.Ax = bat
 		register.FreeRegisters(proc)
-		return true, nil
+		return false, nil
 	}
-	n.Seen = newSeen
-	proc.Reg.Ax = bat
+	n.Seen += uint64(length)
+	bat.Clean(proc)
+	proc.Reg.Ax = batch.New(nil)
 	register.FreeRegisters(proc)
 	return false, nil
 }
 
-func newSels(count int64, proc *process.Process) ([]byte, []int64, error) {
+func newSels(start, count int64, proc *process.Process) ([]byte, []int64, error) {
 	data, err := proc.Alloc(count * 8)
 	if err != nil {
 		return nil, nil, err
 	}
 	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
 	for i := int64(0); i < count; i++ {
-		sels[i] = i
+		sels[i] = start + i
 	}
 	return data, sels[:count], nil
 }

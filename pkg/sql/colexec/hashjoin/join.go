@@ -13,7 +13,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 
 // R ⨝ S, S is the small relation
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(Argument)
+	n := arg.(*Argument)
 	ctr := &n.Ctr
 	if err := ctr.build(n.Sattrs, n.Distinct, proc); err != nil {
 		return false, err
