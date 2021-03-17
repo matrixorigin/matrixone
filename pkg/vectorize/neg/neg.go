@@ -1,19 +1,16 @@
 package neg
 
 import (
-	"bytes"
-	"matrixbase/pkg/container/types"
-
-	"golang.org/x/sys/cpu
+	"golang.org/x/sys/cpu"
 )
 
 var (
-    int8Neg func([]int8, []int8) []int8
-    int16Neg func([]int16, []int16) []int16
-    int32Neg func([]int32, []int32) []int32
-    int64Neg func([]int64, []int64) []int64
-    float32Neg func([]float32, []float32) []float32
-    float64Neg func([]float64, []float64) []float64
+	int8Neg    func([]int8, []int8) []int8
+	int16Neg   func([]int16, []int16) []int16
+	int32Neg   func([]int32, []int32) []int32
+	int64Neg   func([]int64, []int64) []int64
+	float32Neg func([]float32, []float32) []float32
+	float64Neg func([]float64, []float64) []float64
 )
 
 func init() {
@@ -52,21 +49,21 @@ func int8NegPure(xs, rs []int8) []int8 {
 	return rs
 }
 
-func int8NegAvx2(xs []int8) []int8 {
-    const regItems int = 32 / 1
+func int8NegAvx2(xs, rs []int8) []int8 {
+	const regItems int = 32 / 1
 	n := len(xs) / regItems
 	int8NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
-func int8NegAvx512(xs []int8) []int8 {
-    const regItems int = 64 / 1
+func int8NegAvx512(xs, rs []int8) []int8 {
+	const regItems int = 64 / 1
 	n := len(xs) / regItems
 	int8NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -83,21 +80,21 @@ func int16NegPure(xs, rs []int16) []int16 {
 	return rs
 }
 
-func int16NegAvx2(xs []int16) []int16 {
-    const regItems int = 32 / 2
+func int16NegAvx2(xs, rs []int16) []int16 {
+	const regItems int = 32 / 2
 	n := len(xs) / regItems
 	int16NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
-func int16NegAvx512(xs []int16) []int16 {
-    const regItems int = 64 / 2
+func int16NegAvx512(xs, rs []int16) []int16 {
+	const regItems int = 64 / 2
 	n := len(xs) / regItems
 	int16NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -114,21 +111,21 @@ func int32NegPure(xs, rs []int32) []int32 {
 	return rs
 }
 
-func int32NegAvx2(xs []int32) []int32 {
-    const regItems int = 32 / 4
+func int32NegAvx2(xs, rs []int32) []int32 {
+	const regItems int = 32 / 4
 	n := len(xs) / regItems
 	int32NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
-func int32NegAvx512(xs []int32) []int32 {
-    const regItems int = 64 / 4
+func int32NegAvx512(xs, rs []int32) []int32 {
+	const regItems int = 64 / 4
 	n := len(xs) / regItems
 	int32NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -145,21 +142,21 @@ func int64NegPure(xs, rs []int64) []int64 {
 	return rs
 }
 
-func int64NegAvx2(xs []int64) []int64 {
-    const regItems int = 32 / 8
+func int64NegAvx2(xs, rs []int64) []int64 {
+	const regItems int = 32 / 8
 	n := len(xs) / regItems
 	int64NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
-func int64NegAvx512(xs []int64) []int64 {
-    const regItems int = 64 / 8
+func int64NegAvx512(xs, rs []int64) []int64 {
+	const regItems int = 64 / 8
 	n := len(xs) / regItems
 	int64NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -176,21 +173,21 @@ func float32NegPure(xs, rs []float32) []float32 {
 	return rs
 }
 
-func float32NegAvx2(xs []float32) []float32 {
-    const regItems int = 32 / 4
+func float32NegAvx2(xs, rs []float32) []float32 {
+	const regItems int = 32 / 4
 	n := len(xs) / regItems
 	float32NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
-func float32NegAvx512(xs []float32) []float32 {
-    const regItems int = 64 / 4
+func float32NegAvx512(xs, rs []float32) []float32 {
+	const regItems int = 64 / 4
 	n := len(xs) / regItems
 	float32NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -207,21 +204,21 @@ func float64NegPure(xs, rs []float64) []float64 {
 	return rs
 }
 
-func float64NegAvx2(xs []float64) []float64 {
-    const regItems int = 32 / 8
+func float64NegAvx2(xs, rs []float64) []float64 {
+	const regItems int = 32 / 8
 	n := len(xs) / regItems
 	float64NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
-func float64NegAvx512(xs []float64) []float64 {
-    const regItems int = 64 / 8
+func float64NegAvx512(xs, rs []float64) []float64 {
+	const regItems int = 64 / 8
 	n := len(xs) / regItems
 	float64NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
