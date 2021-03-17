@@ -22,6 +22,9 @@ func TestProjection(t *testing.T) {
 
 	proc := process.New(guest.New(1<<20, host.New(1<<20)), mempool.New(1<<32, 8))
 	{
+		proc.Refer = make(map[string]uint64)
+	}
+	{
 		var es []extend.Extend
 
 		{
@@ -29,6 +32,9 @@ func TestProjection(t *testing.T) {
 		}
 		ins = append(ins, vm.Instruction{vm.Projection, projection.Argument{[]string{"uid"}, es}})
 		ins = append(ins, vm.Instruction{vm.Output, nil})
+		{
+			proc.Refer["uid"] = 1
+		}
 	}
 	p := pipeline.New([]uint64{1, 1}, []string{"uid", "orderId"}, ins)
 	p.Run(segments(proc), proc)

@@ -48,29 +48,24 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.Ax.(*batch.Batch)
 	ctr := &n.Ctr
 	gvecs := make([]*vector.Vector, len(n.Gs))
-	if err := ctr.prefetch(n.Gs, bat, gvecs, proc); err != nil {
+	if err := bat.Prefetch(n.Gs, gvecs, proc); err != nil {
+		ctr.clean(bat, proc)
 		return false, err
 	}
 	if len(bat.Sels) > 0 {
 		if err := ctr.batchGroupSels(bat.Sels, gvecs, proc); err != nil {
-			ctr.clean(gvecs, proc)
+			ctr.clean(bat, proc)
 			return false, err
 		}
 	} else {
-		uvecs := make([]*vector.Vector, len(n.Gs))
-		if err := ctr.batchGroup(gvecs, uvecs, proc); err != nil {
-			ctr.clean(gvecs, proc)
+		if err := ctr.batchGroup(gvecs, proc); err != nil {
+			ctr.clean(bat, proc)
 			return false, err
 		}
 	}
-	{
-		for _, vec := range gvecs {
-			vec.Free(proc)
-		}
-	}
 	vecs := make([]*vector.Vector, len(n.Es))
-	if err := ctr.prefetch(n.Attrs, bat, vecs, proc); err != nil {
-		ctr.clean(nil, proc)
+	if err := bat.Prefetch(n.Attrs, vecs, proc); err != nil {
+		ctr.clean(bat, proc)
 		return false, err
 	}
 	rbat := batch.New(n.Rattrs)
@@ -80,24 +75,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 	}
 	if err := ctr.eval(ctr.vecs[0].Length(), n.Es, vecs, rbat.Vecs, proc); err != nil {
-		ctr.clean(vecs, proc)
+		ctr.clean(bat, proc)
 		return false, err
 	}
-	ctr.clean(vecs, proc)
+	ctr.vecs = nil
+	ctr.clean(bat, proc)
 	proc.Reg.Ax = rbat
 	register.FreeRegisters(proc)
 	return false, nil
-}
-
-func (ctr *Container) clean(vecs []*vector.Vector, proc *process.Process) {
-	for _, gs := range ctr.groups {
-		for _, g := range gs {
-			g.Free(proc)
-		}
-	}
-	for _, vec := range vecs {
-		vec.Free(proc)
-	}
 }
 
 func (ctr *Container) eval(length int, es []aggregation.Extend, vecs, rvecs []*vector.Vector, proc *process.Process) error {
@@ -115,18 +100,19 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, vecs, rvecs []*v
 				for _, g := range gs {
 					e.Agg.Reset()
 					if err := e.Agg.Fill(g.Sels, vecs[i]); err != nil {
+						proc.Free(data)
 						return err
 					}
 					v, err := e.Agg.Eval(proc)
 					if err != nil {
+						proc.Free(data)
 						return err
 					}
 					vs[g.Sel] = v.Col.([]int8)[0]
 					if v.Nsp.Contains(0) {
 						vec.Nsp.Add(uint64(g.Sel))
 					}
-					proc.Free(g.Data)
-					g.Data = nil
+					v.Free(proc)
 				}
 			}
 			rvecs[i] = vec
@@ -137,30 +123,13 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, vecs, rvecs []*v
 	return nil
 }
 
-func (ctr *Container) prefetch(attrs []string, bat *batch.Batch, vecs []*vector.Vector, proc *process.Process) error {
-	var err error
-
-	for i, attr := range attrs {
-		if vecs[i], err = bat.GetVector(attr, proc); err != nil {
-			for j := 0; j < i; j++ {
-				vecs[j].Free(proc)
-			}
-			return err
-		}
-	}
-	return nil
-}
-
-func (ctr *Container) batchGroup(vecs, uvecs []*vector.Vector, proc *process.Process) error {
+func (ctr *Container) batchGroup(vecs []*vector.Vector, proc *process.Process) error {
 	for i, j := 0, vecs[0].Length(); i < j; i += UnitLimit {
 		length := j - i
 		if length > UnitLimit {
 			length = UnitLimit
 		}
-		for k, vec := range vecs {
-			uvecs[k] = vec.Window(i, i+length)
-		}
-		if err := ctr.unitGroup(i, length, nil, uvecs, proc); err != nil {
+		if err := ctr.unitGroup(i, length, nil, vecs, proc); err != nil {
 			return err
 		}
 	}
@@ -253,5 +222,18 @@ func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vecto
 			nextslot++
 		}
 		ctr.sels[slot] = append(ctr.sels[slot], sels[i])
+	}
+}
+
+func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
+	bat.Clean(proc)
+	fastmap.Pool.Put(ctr.slots)
+	for _, vec := range ctr.vecs {
+		vec.Free(proc)
+	}
+	for _, gs := range ctr.groups {
+		for _, g := range gs {
+			g.Free(proc)
+		}
 	}
 }

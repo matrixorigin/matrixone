@@ -19,6 +19,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		if newSeen >= n.Limit { // limit - seen
 			bat.Sels = bat.Sels[:n.Limit-n.Seen]
 			proc.Reg.Ax = bat
+			register.FreeRegisters(proc)
 			return true, nil
 		}
 		n.Seen = newSeen
@@ -28,17 +29,20 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	length, err := bat.Length(proc)
 	if err != nil {
+		clean(bat, proc)
 		return false, err
 	}
 	newSeen := n.Seen + length
 	if newSeen >= n.Limit { // limit - seen
 		data, sels, err := newSels(int64(n.Limit-n.Seen), proc)
 		if err != nil {
+			clean(bat, proc)
 			return true, err
 		}
 		bat.Sels = sels
 		bat.SelsData = data
 		proc.Reg.Ax = bat
+		register.FreeRegisters(proc)
 		return true, nil
 	}
 	n.Seen = newSeen
@@ -57,4 +61,9 @@ func newSels(count int64, proc *process.Process) ([]byte, []int64, error) {
 		sels[i] = i
 	}
 	return data, sels, nil
+}
+
+func clean(bat *batch.Batch, proc *process.Process) {
+	bat.Clean(proc)
+	register.FreeRegisters(proc)
 }

@@ -33,6 +33,7 @@ type Field struct {
 type Argument struct {
 	Limit int64
 	Fs    []Field
+	Attrs []string
 	Ctr   Container
 }
 

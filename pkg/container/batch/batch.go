@@ -17,12 +17,35 @@ func New(attrs []string) *Batch {
 	}
 }
 
+func (bat *Batch) Reorder(attrs []string) {
+	for i, name := range attrs {
+		for j, attr := range bat.Attrs {
+			if name == attr {
+				bat.Is[i], bat.Is[j] = bat.Is[j], bat.Is[i]
+				bat.Vecs[i], bat.Vecs[j] = bat.Vecs[j], bat.Vecs[i]
+				bat.Attrs[i], bat.Attrs[j] = bat.Attrs[j], bat.Attrs[i]
+			}
+		}
+	}
+}
+
 func (bat *Batch) Length(proc *process.Process) (int, error) {
 	vec, err := bat.GetVector(bat.Attrs[0], proc)
 	if err != nil {
 		return -1, err
 	}
 	return vec.Length(), nil
+}
+
+func (bat *Batch) Prefetch(attrs []string, vecs []*vector.Vector, proc *process.Process) error {
+	var err error
+
+	for i, attr := range attrs {
+		if vecs[i], err = bat.GetVector(attr, proc); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector, error) {
@@ -71,6 +94,7 @@ func (bat *Batch) WaitIo() {
 	}
 }
 
+/*
 func (bat *Batch) Free(proc *process.Process) {
 	bat.WaitIo()
 	if bat.SelsData != nil {
@@ -82,6 +106,7 @@ func (bat *Batch) Free(proc *process.Process) {
 		vec.Free(proc)
 	}
 }
+*/
 
 func (bat *Batch) Clean(proc *process.Process) {
 	bat.WaitIo()
@@ -92,13 +117,8 @@ func (bat *Batch) Clean(proc *process.Process) {
 	}
 	for _, vec := range bat.Vecs {
 		if vec.Data != nil {
-			count := encoding.DecodeUint64(vec.Data[:8])
-			if count > 0 {
-				copy(vec.Data, mempool.OneCount)
-				proc.Mp.Free(vec.Data)
-				proc.Gm.Free(int64(cap(vec.Data)))
-			}
-			vec.Data = nil
+			copy(vec.Data, mempool.OneCount)
+			vec.Free(proc)
 		}
 	}
 }
@@ -111,6 +131,9 @@ func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
 			}
 			bat.Vecs[i].Free(proc)
 			if bat.Vecs[i].Data == nil {
+				if len(bat.Is) > i {
+					bat.Is = append(bat.Is[:i], bat.Is[i+1:]...)
+				}
 				bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
 				bat.Attrs = append(bat.Attrs[:i], bat.Attrs[i+1:]...)
 			}

@@ -22,7 +22,8 @@ type Register struct {
 }
 
 type Process struct {
-	Reg Register
-	Gm  *guest.Mmu
-	Mp  *mempool.Mempool
+	Reg   Register
+	Gm    *guest.Mmu
+	Mp    *mempool.Mempool
+	Refer map[string]uint64
 }
