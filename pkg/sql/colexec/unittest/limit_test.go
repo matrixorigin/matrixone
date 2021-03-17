@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"matrixbase/pkg/container/types"
 	"matrixbase/pkg/sql/colexec/extend"
+	"matrixbase/pkg/sql/colexec/limit"
 	"matrixbase/pkg/sql/colexec/projection"
 	"matrixbase/pkg/vm"
 	"matrixbase/pkg/vm/mempool"
@@ -14,7 +15,7 @@ import (
 	"testing"
 )
 
-func TestProjection(t *testing.T) {
+func TestLimit(t *testing.T) {
 	var ins vm.Instructions
 
 	proc := process.New(guest.New(1<<20, host.New(1<<20)), mempool.New(1<<32, 8))
@@ -28,12 +29,15 @@ func TestProjection(t *testing.T) {
 			es = append(es, &extend.Attribute{"uid", types.T_varchar})
 		}
 		ins = append(ins, vm.Instruction{vm.Projection, projection.Argument{[]string{"uid"}, es}})
-		ins = append(ins, vm.Instruction{vm.Output, nil})
 		{
 			proc.Refer["uid"] = 1
 		}
 	}
-	fmt.Printf("projection\n")
+	{
+		ins = append(ins, vm.Instruction{vm.Limit, &limit.Argument{Limit: 1}})
+		ins = append(ins, vm.Instruction{vm.Output, nil})
+	}
+	fmt.Printf("limit\n")
 	p := pipeline.New([]uint64{1, 1}, []string{"uid", "orderId"}, ins)
 	p.Run(segments(proc), proc)
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())

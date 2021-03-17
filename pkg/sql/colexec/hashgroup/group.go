@@ -9,6 +9,7 @@ import (
 	"matrixbase/pkg/hash"
 	"matrixbase/pkg/intmap/fastmap"
 	"matrixbase/pkg/sql/colexec/aggregation"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
@@ -22,7 +23,7 @@ func init() {
 }
 
 func Prepare(proc *process.Process, arg interface{}) error {
-	n := arg.(Argument)
+	n := arg.(*Argument)
 	n.Attrs = make([]string, len(n.Es))
 	for i, e := range n.Es {
 		n.Attrs[i] = e.Name
@@ -44,7 +45,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(Argument)
+	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
 	ctr := &n.Ctr
 	gvecs := make([]*vector.Vector, len(n.Gs))
@@ -95,7 +96,7 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, vecs, rvecs []*v
 				return err
 			}
 			vec := vector.New(types.Type{types.T_int8, 1, 1, 0})
-			vs := encoding.DecodeInt8Slice(data)
+			vs := encoding.DecodeInt8Slice(data[mempool.CountSize:])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					e.Agg.Reset()
@@ -116,6 +117,7 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, vecs, rvecs []*v
 				}
 			}
 			rvecs[i] = vec
+			copy(vec.Data, encoding.EncodeUint64(1+proc.Refer[e.Alias]))
 		default:
 			return fmt.Errorf("unsupport type %s", typ)
 		}

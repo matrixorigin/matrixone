@@ -8,7 +8,7 @@ import (
 )
 
 func Prepare(proc *process.Process, arg interface{}) error {
-	n := arg.(Argument)
+	n := arg.(*Argument)
 	n.Attrs = make([]string, len(n.Es))
 	for i, e := range n.Es {
 		n.Attrs[i] = e.Alias
@@ -17,7 +17,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(Argument)
+	n := arg.(*Argument)
 	for i, c := range proc.Reg.Cs {
 		v := <-c
 		if v == nil {

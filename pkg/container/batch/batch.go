@@ -145,6 +145,9 @@ func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
 
+	if len(bat.Sels) > 0 {
+		fmt.Printf("%v\n", bat.Sels)
+	}
 	for i, attr := range bat.Attrs {
 		buf.WriteString(fmt.Sprintf("%s\n", attr))
 		buf.WriteString(fmt.Sprintf("\t%s\n", bat.Vecs[i]))

@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"matrixbase/pkg/sql/colexec/limit"
+	"matrixbase/pkg/sql/colexec/offset"
 	"matrixbase/pkg/sql/colexec/output"
 	"matrixbase/pkg/sql/colexec/projection"
 	"matrixbase/pkg/sql/colexec/restrict"
@@ -13,8 +15,15 @@ func Prepare(ins Instructions, proc *process.Process) error {
 		case Nub:
 		case Top:
 		case Limit:
+			if err := limit.Prepare(proc, in.Arg); err != nil {
+				return err
+			}
 		case Group:
 		case Order:
+		case Offset:
+			if err := offset.Prepare(proc, in.Arg); err != nil {
+				return err
+			}
 		case Transfer:
 		case Restrict:
 			if err := restrict.Prepare(proc, in.Arg); err != nil {
@@ -41,6 +50,7 @@ func Prepare(ins Instructions, proc *process.Process) error {
 }
 
 func Run(ins Instructions, proc *process.Process) (bool, error) {
+	var ok bool
 	var end bool
 	var err error
 
@@ -49,14 +59,17 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 		case Nub:
 		case Top:
 		case Limit:
+			ok, err = limit.Call(proc, in.Arg)
 		case Group:
 		case Order:
+		case Offset:
+			ok, err = offset.Call(proc, in.Arg)
 		case Transfer:
 		case Restrict:
-			end, err = restrict.Call(proc, in.Arg)
+			ok, err = restrict.Call(proc, in.Arg)
 		case Summarize:
 		case Projection:
-			end, err = projection.Call(proc, in.Arg)
+			ok, err = projection.Call(proc, in.Arg)
 		case SetUnion:
 		case SetIntersect:
 		case SetDifference:
@@ -68,14 +81,14 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 		case InnerJoin:
 		case NaturalJoin:
 		case Output:
-			end, err = output.Call(proc, in.Arg)
+			ok, err = output.Call(proc, in.Arg)
 		}
 		if err != nil {
 			return false, err
 		}
-		if end {
-			return true, nil
+		if ok {
+			end = true
 		}
 	}
-	return false, nil
+	return end, nil
 }

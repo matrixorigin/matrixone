@@ -6,6 +6,7 @@ const (
 	Limit
 	Group
 	Order
+	Offset
 	Transfer
 	Restrict
 	Summarize

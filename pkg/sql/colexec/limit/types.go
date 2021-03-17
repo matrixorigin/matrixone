@@ -1,6 +1,6 @@
 package limit
 
 type Argument struct {
-	Seen  int // seen is the number of tuples seen so far
-	Limit int
+	Seen  uint64 // seen is the number of tuples seen so far
+	Limit uint64
 }

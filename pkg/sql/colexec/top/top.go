@@ -6,12 +6,13 @@ import (
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/container/vector"
 	"matrixbase/pkg/encoding"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
 
 func Prepare(proc *process.Process, arg interface{}) error {
-	n := arg.(Argument)
+	n := arg.(*Argument)
 	{
 		n.Attrs = make([]string, len(n.Fs))
 		for i, f := range n.Fs {
@@ -23,7 +24,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		if err != nil {
 			return err
 		}
-		sels := encoding.DecodeInt64Slice(data)
+		sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
 		for i := int64(0); i < n.Limit; i++ {
 			sels[i] = i
 		}
@@ -54,7 +55,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		clean(&n.Ctr, bat, proc)
 		return false, err
 	}
-	sels := encoding.DecodeInt64Slice(data)
+	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
 	for i, j := 0, len(n.Ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(&n.Ctr).(int64)
 	}
