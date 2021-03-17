@@ -1,109 +1,228 @@
 package neg
 
-import "matrixbase/pkg/container/types"
+import (
+	"bytes"
+	"matrixbase/pkg/container/types"
+
+	"golang.org/x/sys/cpu
+)
 
 var (
-	i8Neg  func([]int8, []int8) []int8
-	i16Neg func([]int16, []int16) []int16
-	i32Neg func([]int32, []int32) []int32
-	i64Neg func([]int64, []int64) []int64
-
-	u8Neg  func([]uint8, []uint8) []uint8
-	u16Neg func([]uint16, []uint16) []uint16
-	u32Neg func([]uint32, []uint32) []uint32
-	u64Neg func([]uint64, []uint64) []uint64
-
-	f32Neg func([]float32, []float32) []float32
-	f64Neg func([]float64, []float64) []float64
-
-	decimalNeg func([]types.Decimal, []types.Decimal) []types.Decimal
-
-	dateNeg     func([]types.Date, []types.Date) []types.Date
-	datetimeNeg func([]types.Datetime, []types.Datetime) []types.Datetime
+    int8Neg func([]int8, []int8) []int8
+    int16Neg func([]int16, []int16) []int16
+    int32Neg func([]int32, []int32) []int32
+    int64Neg func([]int64, []int64) []int64
+    float32Neg func([]float32, []float32) []float32
+    float64Neg func([]float64, []float64) []float64
 )
 
 func init() {
-	i8Neg = i8NegPure
-	i16Neg = i16NegPure
-	i32Neg = i32NegPure
-	i64Neg = i64NegPure
-
-	f32Neg = f32NegPure
-	f64Neg = f64NegPure
-
-	decimalNeg = decimalNegPure
+	if cpu.X86.HasAVX512 {
+		int8Neg = int8NegAvx512
+		int16Neg = int16NegAvx512
+		int32Neg = int32NegAvx512
+		int64Neg = int64NegAvx512
+		float32Neg = float32NegAvx512
+		float64Neg = float64NegAvx512
+	} else if cpu.X86.HasAVX2 {
+		int8Neg = int8NegAvx2
+		int16Neg = int16NegAvx2
+		int32Neg = int32NegAvx2
+		int64Neg = int64NegAvx2
+		float32Neg = float32NegAvx2
+		float64Neg = float64NegAvx2
+	} else {
+		int8Neg = int8NegPure
+		int16Neg = int16NegPure
+		int32Neg = int32NegPure
+		int64Neg = int64NegPure
+		float32Neg = float32NegPure
+		float64Neg = float64NegPure
+	}
 }
 
-func I8Neg(xs, rs []int8) []int8 {
-	return i8Neg(xs, rs)
+func Int8Neg(xs, rs []int8) []int8 {
+	return int8Neg(xs, rs)
 }
 
-func I16Neg(xs, rs []int16) []int16 {
-	return i16Neg(xs, rs)
-}
-
-func I32Neg(xs, rs []int32) []int32 {
-	return i32Neg(xs, rs)
-}
-
-func I64Neg(xs, rs []int64) []int64 {
-	return i64Neg(xs, rs)
-}
-
-func F32Neg(xs, rs []float32) []float32 {
-	return f32Neg(xs, rs)
-}
-
-func F64Neg(xs, rs []float64) []float64 {
-	return f64Neg(xs, rs)
-}
-
-func DecimalNeg(xs, rs []types.Decimal) []types.Decimal {
-	return decimalNegPure(xs, rs)
-}
-
-func i8NegPure(xs, rs []int8) []int8 {
+func int8NegPure(xs, rs []int8) []int8 {
 	for i, x := range xs {
 		rs[i] = -x
 	}
 	return rs
 }
 
-func i16NegPure(xs, rs []int16) []int16 {
+func int8NegAvx2(xs []int8) []int8 {
+    const regItems int = 32 / 1
+	n := len(xs) / regItems
+	int8NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func int8NegAvx512(xs []int8) []int8 {
+    const regItems int = 64 / 1
+	n := len(xs) / regItems
+	int8NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func Int16Neg(xs, rs []int16) []int16 {
+	return int16Neg(xs, rs)
+}
+
+func int16NegPure(xs, rs []int16) []int16 {
 	for i, x := range xs {
 		rs[i] = -x
 	}
 	return rs
 }
 
-func i32NegPure(xs, rs []int32) []int32 {
+func int16NegAvx2(xs []int16) []int16 {
+    const regItems int = 32 / 2
+	n := len(xs) / regItems
+	int16NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func int16NegAvx512(xs []int16) []int16 {
+    const regItems int = 64 / 2
+	n := len(xs) / regItems
+	int16NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func Int32Neg(xs, rs []int32) []int32 {
+	return int32Neg(xs, rs)
+}
+
+func int32NegPure(xs, rs []int32) []int32 {
 	for i, x := range xs {
 		rs[i] = -x
 	}
 	return rs
 }
 
-func i64NegPure(xs, rs []int64) []int64 {
+func int32NegAvx2(xs []int32) []int32 {
+    const regItems int = 32 / 4
+	n := len(xs) / regItems
+	int32NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func int32NegAvx512(xs []int32) []int32 {
+    const regItems int = 64 / 4
+	n := len(xs) / regItems
+	int32NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func Int64Neg(xs, rs []int64) []int64 {
+	return int64Neg(xs, rs)
+}
+
+func int64NegPure(xs, rs []int64) []int64 {
 	for i, x := range xs {
 		rs[i] = -x
 	}
 	return rs
 }
 
-func f32NegPure(xs, rs []float32) []float32 {
+func int64NegAvx2(xs []int64) []int64 {
+    const regItems int = 32 / 8
+	n := len(xs) / regItems
+	int64NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func int64NegAvx512(xs []int64) []int64 {
+    const regItems int = 64 / 8
+	n := len(xs) / regItems
+	int64NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func Float32Neg(xs, rs []float32) []float32 {
+	return float32Neg(xs, rs)
+}
+
+func float32NegPure(xs, rs []float32) []float32 {
 	for i, x := range xs {
 		rs[i] = -x
 	}
 	return rs
 }
 
-func f64NegPure(xs, rs []float64) []float64 {
+func float32NegAvx2(xs []float32) []float32 {
+    const regItems int = 32 / 4
+	n := len(xs) / regItems
+	float32NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func float32NegAvx512(xs []float32) []float32 {
+    const regItems int = 64 / 4
+	n := len(xs) / regItems
+	float32NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func Float64Neg(xs, rs []float64) []float64 {
+	return float64Neg(xs, rs)
+}
+
+func float64NegPure(xs, rs []float64) []float64 {
 	for i, x := range xs {
 		rs[i] = -x
 	}
 	return rs
 }
 
-func decimalNegPure(xs, rs []types.Decimal) []types.Decimal {
+func float64NegAvx2(xs []float64) []float64 {
+    const regItems int = 32 / 8
+	n := len(xs) / regItems
+	float64NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
+	return rs
+}
+
+func float64NegAvx512(xs []float64) []float64 {
+    const regItems int = 64 / 8
+	n := len(xs) / regItems
+	float64NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
+	for i, j := n * regItems, len(xs); i < j; i++ {
+		rs[i] = -xs[i]
+	}
 	return rs
 }
