@@ -12,17 +12,25 @@ import (
 
 func Prepare(proc *process.Process, arg interface{}) error {
 	n := arg.(Argument)
-	data, err := proc.Alloc(n.Limit * 8)
-	if err != nil {
-		return err
+	{
+		n.Attrs = make([]string, len(n.Fs))
+		for i, f := range n.Fs {
+			n.Attrs[i] = f.Attr
+		}
 	}
-	sels := encoding.DecodeInt64Slice(data)
-	for i := int64(0); i < n.Limit; i++ {
-		sels[i] = i
+	{
+		data, err := proc.Alloc(n.Limit * 8)
+		if err != nil {
+			return err
+		}
+		sels := encoding.DecodeInt64Slice(data)
+		for i := int64(0); i < n.Limit; i++ {
+			sels[i] = i
+		}
+		n.Ctr.sels = sels
+		n.Ctr.selsData = data
 	}
 	n.Ctr.n = len(n.Fs)
-	n.Ctr.sels = sels
-	n.Ctr.selsData = data
 	n.Ctr.vecs = make([]*vector.Vector, len(n.Fs))
 	n.Ctr.cmps = make([]compare.Compare, len(n.Fs))
 	for i, f := range n.Fs {
@@ -36,22 +44,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 
 	n := arg.(Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
-	for i, f := range n.Fs {
-		n.Ctr.vecs[i], err = bat.GetVector(f.Attr, proc)
-		if err != nil {
-			for j := 0; j < i; j++ {
-				n.Ctr.vecs[i].Free(proc)
-			}
-			return false, err
-		}
+	if err = bat.Prefetch(n.Attrs, n.Ctr.vecs, proc); err != nil {
+		clean(&n.Ctr, bat, proc)
+		return false, err
 	}
-	processBatch(bat, n)
+	processBatch(n, bat)
 	data, err := proc.Alloc(int64(len(n.Ctr.sels)) * 8)
 	if err != nil {
-		for _, vec := range n.Ctr.vecs {
-			vec.Free(proc)
-		}
-		proc.Free(n.Ctr.selsData)
+		clean(&n.Ctr, bat, proc)
 		return false, err
 	}
 	sels := encoding.DecodeInt64Slice(data)
@@ -63,12 +63,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	bat.Sels = sels
 	bat.SelsData = data
+	bat.Reduce(n.Attrs, proc)
 	proc.Reg.Ax = bat
 	register.FreeRegisters(proc)
 	return false, nil
 }
 
-func processBatch(bat *batch.Batch, n Argument) {
+func processBatch(n Argument, bat *batch.Batch) {
 	if length := int64(len(bat.Sels)); length > 0 {
 		if length < n.Limit {
 			for i := int64(0); i < length; i++ {
@@ -103,4 +104,14 @@ func processBatch(bat *batch.Batch, n Argument) {
 		}
 		heap.Fix(&n.Ctr, 0)
 	}
+}
+
+func clean(ctr *Container, bat *batch.Batch, proc *process.Process) {
+	if ctr.selsData != nil {
+		proc.Free(ctr.selsData)
+		ctr.sels = nil
+		ctr.selsData = nil
+	}
+	bat.Clean(proc)
+	register.FreeRegisters(proc)
 }

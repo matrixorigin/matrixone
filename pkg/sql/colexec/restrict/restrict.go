@@ -17,6 +17,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.Ax.(*batch.Batch)
 	vec, _, err := n.E.Eval(bat, proc)
 	if err != nil {
+		clean(bat, proc)
 		return false, err
 	}
 	bat.SelsData = vec.Data
@@ -25,4 +26,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	proc.Reg.Ax = bat
 	register.FreeRegisters(proc)
 	return false, nil
+}
+
+func clean(bat *batch.Batch, proc *process.Process) {
+	bat.Clean(proc)
+	register.FreeRegisters(proc)
 }

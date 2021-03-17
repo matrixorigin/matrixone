@@ -2,6 +2,7 @@ package mergesum
 
 import (
 	"matrixbase/pkg/container/batch"
+	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
@@ -33,21 +34,26 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				return false, err
 			}
 		}
-		bat.Free(proc)
+		bat.Clean(proc)
 	}
-	rbat := batch.New(n.Attrs)
+	bat := batch.New(n.Attrs)
 	{
 		var err error
 		for i, e := range n.Es {
-			rbat.Vecs[i], err = e.Agg.Eval(proc)
-			if err != nil {
-				rbat.Vecs = rbat.Vecs[:i]
-				rbat.Free(proc)
+			if bat.Vecs[i], err = e.Agg.Eval(proc); err != nil {
+				bat.Vecs = bat.Vecs[:i]
+				clean(bat, proc)
 				return false, err
 			}
+			copy(bat.Vecs[i].Data, encoding.EncodeUint64(1+proc.Refer[n.Attrs[i]]))
 		}
 	}
-	proc.Reg.Ax = rbat
+	proc.Reg.Ax = bat
 	register.FreeRegisters(proc)
 	return false, nil
+}
+
+func clean(bat *batch.Batch, proc *process.Process) {
+	bat.Clean(proc)
+	register.FreeRegisters(proc)
 }

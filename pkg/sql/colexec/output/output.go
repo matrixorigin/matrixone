@@ -9,6 +9,6 @@ import (
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat := proc.Reg.Ax.(*batch.Batch)
 	fmt.Printf("%s\n", bat)
-	bat.Free(proc)
+	bat.Clean(proc)
 	return false, nil
 }
