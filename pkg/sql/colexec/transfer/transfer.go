@@ -12,7 +12,9 @@ func Prepare(_ *process.Process, _ interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
-	n.Ch <- bat
+	if bat != nil {
+		n.Ch <- bat
+	}
 	n.Ch <- nil
 	return false, nil
 }

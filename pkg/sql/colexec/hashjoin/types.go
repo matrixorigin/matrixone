@@ -17,12 +17,20 @@ var (
 )
 
 type Container struct {
-	diffs  []bool
-	matchs []int64
-	hashs  []uint64
-	sels   [][]int64                    // sels
-	slots  *fastmap.Map                 // hash code -> sels index
-	bats   []*batch.Batch               // s relation
+	builded    bool
+	diffs      []bool
+	matchs     []int64
+	hashs      []uint64
+	sels       [][]int64      // sels
+	slots      *fastmap.Map   // hash code -> sels index
+	bats       []*batch.Batch // s relation
+	probeState struct {
+		size  int
+		limit int
+		start int
+		end   int
+		bat   *batch.Batch
+	}
 	groups map[uint64][]*hash.JoinGroup // hash code -> join list
 }
 
