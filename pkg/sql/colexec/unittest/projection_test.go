@@ -27,14 +27,11 @@ func TestProjection(t *testing.T) {
 		{
 			es = append(es, &extend.Attribute{"uid", types.T_varchar})
 		}
-		ins = append(ins, vm.Instruction{vm.Projection, projection.Argument{[]string{"uid"}, es}})
+		ins = append(ins, vm.Instruction{vm.Projection, &projection.Argument{[]string{"uid"}, es}})
 		ins = append(ins, vm.Instruction{vm.Output, nil})
-		{
-			proc.Refer["uid"] = 1
-		}
 	}
-	fmt.Printf("projection\n")
 	p := pipeline.New([]uint64{1, 1}, []string{"uid", "orderId"}, ins)
+	fmt.Printf("%s\n", p)
 	p.Run(segments(proc), proc)
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
 }

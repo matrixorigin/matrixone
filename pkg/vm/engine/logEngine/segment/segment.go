@@ -21,7 +21,7 @@ func (s *Segment) ID() string {
 }
 
 func (s *Segment) Read(cs []uint64, attrs []string, proc *process.Process) (*batch.Batch, error) {
-	bat := batch.New(attrs)
+	bat := batch.New(true, attrs)
 	bat.Is = make([]batch.Info, len(attrs))
 	for i, attr := range attrs {
 		md := s.mp[attr]

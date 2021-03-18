@@ -25,7 +25,7 @@ func (s *Segment) ID() string {
 }
 
 func (s *Segment) Read(cs []uint64, attrs []string, proc *process.Process) (*batch.Batch, error) {
-	bat := batch.New(attrs)
+	bat := batch.New(true, attrs)
 	for i, attr := range attrs {
 		md := s.mp[attr]
 		vec, err := s.read(s.id+"."+attr, md.Alg, md.Type, proc)
@@ -58,8 +58,8 @@ func (s *Segment) read(id string, alg int, typ types.Type, proc *process.Process
 			proc.Free(data)
 			return nil, err
 		}
-		data = buf[:mempool.CountSize+n]
 		proc.Free(data)
+		data = buf[:mempool.CountSize+n]
 	}
 	vec := vector.New(typ)
 	if err := vec.Read(data); err != nil {

@@ -1,6 +1,28 @@
 package mempool
 
-import "matrixbase/pkg/encoding"
+import (
+	"matrixbase/pkg/encoding"
+)
+
+func init() {
+	var PageOffsets = map[int]int{
+		0:  2,
+		1:  4,
+		2:  8,
+		3:  16,
+		4:  32,
+		5:  64,
+		6:  128,
+		7:  256,
+		8:  512,
+		9:  1024,
+		10: 2048,
+		11: 4096,
+		12: 8192,
+		13: 16384,
+	}
+	PageOffset = PageOffsets[PageSize]
+}
 
 var OneCount = []byte{1, 0, 0, 0, 0, 0, 0, 0}
 
@@ -16,13 +38,8 @@ func New(maxSize, factor int) *Mempool {
 	return m
 }
 
-func (m *Mempool) Inc(data []byte) {
-	count := encoding.DecodeUint64(data[:8])
-	copy(data, encoding.EncodeUint64(count+1))
-}
-
 func (m *Mempool) Alloc(size int) []byte {
-	size = ((size + PageSize - 1 + CountSize) >> 10) << 10
+	size = ((size + PageSize - 1 + CountSize) >> PageOffset) << PageOffset
 	if size <= m.maxSize {
 		for _, b := range m.buckets {
 			if b.size >= size {

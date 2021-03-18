@@ -2,9 +2,10 @@ package unittest
 
 import (
 	"fmt"
+	"log"
 	"matrixbase/pkg/container/types"
 	"matrixbase/pkg/sql/colexec/extend"
-	"matrixbase/pkg/sql/colexec/offset"
+	"matrixbase/pkg/sql/colexec/extend/overload"
 	"matrixbase/pkg/sql/colexec/projection"
 	"matrixbase/pkg/vm"
 	"matrixbase/pkg/vm/mempool"
@@ -15,7 +16,7 @@ import (
 	"testing"
 )
 
-func TestOffset(t *testing.T) {
+func TestExtendProjection(t *testing.T) {
 	var ins vm.Instructions
 
 	proc := process.New(guest.New(1<<20, host.New(1<<20)), mempool.New(1<<32, 8))
@@ -26,16 +27,16 @@ func TestOffset(t *testing.T) {
 		var es []extend.Extend
 
 		{
-			es = append(es, &extend.Attribute{"uid", types.T_varchar})
+			es = append(es, &extend.UnaryExtend{overload.UnaryMinus, &extend.Attribute{"price", types.T_float64}})
 		}
-		ins = append(ins, vm.Instruction{vm.Projection, &projection.Argument{[]string{"uid"}, es}})
-	}
-	{
-		ins = append(ins, vm.Instruction{vm.Offset, &offset.Argument{Offset: 19}})
+		ins = append(ins, vm.Instruction{vm.Projection, &projection.Argument{[]string{"neg"}, es}})
 		ins = append(ins, vm.Instruction{vm.Output, nil})
+		proc.Refer["neg"] = 1
 	}
-	p := pipeline.New([]uint64{1, 1}, []string{"uid", "orderId"}, ins)
+	p := pipeline.New([]uint64{1}, []string{"price"}, ins)
 	fmt.Printf("%s\n", p)
-	p.Run(segments(proc), proc)
+	if _, err := p.Run(segments(proc), proc); err != nil {
+		log.Fatal(err)
+	}
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
 }

@@ -39,7 +39,7 @@ type Node interface {
 
 type Segment interface {
 	ID() string
-	Read([]uint64, []string, *process.Process) (*batch.Batch, error)
+	Read([]uint64, []string, *process.Process) (*batch.Batch, error) // read only arguments
 }
 
 type Engine interface {

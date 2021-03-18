@@ -18,6 +18,7 @@ type WaitGroup struct {
 }
 
 type Batch struct {
+	Ro       bool // true: attrs is read only
 	Is       []Info
 	SelsData []byte
 	Sels     []int64

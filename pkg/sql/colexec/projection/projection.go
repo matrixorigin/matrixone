@@ -1,11 +1,24 @@
 package projection
 
 import (
+	"bytes"
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
+
+func String(arg interface{}, buf *bytes.Buffer) {
+	n := arg.(*Argument)
+	buf.WriteString("π(")
+	for i, e := range n.Es {
+		if i > 0 {
+			buf.WriteString(",")
+		}
+		buf.WriteString(e.String())
+	}
+	buf.WriteString(")")
+}
 
 func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
@@ -15,7 +28,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	var err error
 
 	n := arg.(*Argument)
-	rbat := batch.New(n.Attrs)
+	rbat := batch.New(true, n.Attrs)
 	bat := proc.Reg.Ax.(*batch.Batch)
 	for i := range n.Attrs {
 		if rbat.Vecs[i], _, err = n.Es[i].Eval(bat, proc); err != nil {
@@ -23,7 +36,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			clean(bat, rbat, proc)
 			return false, err
 		}
-		copy(rbat.Vecs[i].Data, encoding.EncodeUint64(1+proc.Refer[n.Attrs[i]]))
+		if count, ok := proc.Refer[n.Attrs[i]]; ok {
+			copy(rbat.Vecs[i].Data, encoding.EncodeUint64(count))
+		} else {
+			count = encoding.DecodeUint64(rbat.Vecs[i].Data)
+			copy(rbat.Vecs[i].Data, encoding.EncodeUint64(1+count))
+		}
 	}
 	{
 		for _, e := range n.Es {
