@@ -1,12 +1,19 @@
 package offset
 
 import (
+	"bytes"
+	"fmt"
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
+
+func String(arg interface{}, buf *bytes.Buffer) {
+	n := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("offset(%v)", n.Offset))
+}
 
 func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
@@ -30,7 +37,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 		n.Seen += length
 		bat.Clean(proc)
-		proc.Reg.Ax = batch.New(nil)
+		proc.Reg.Ax = batch.New(true, nil)
 		register.FreeRegisters(proc)
 		return false, nil
 	}
@@ -54,7 +61,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	n.Seen += uint64(length)
 	bat.Clean(proc)
-	proc.Reg.Ax = batch.New(nil)
+	proc.Reg.Ax = batch.New(true, nil)
 	register.FreeRegisters(proc)
 	return false, nil
 }

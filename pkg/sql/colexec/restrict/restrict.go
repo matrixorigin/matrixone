@@ -1,10 +1,17 @@
 package restrict
 
 import (
+	"bytes"
+	"fmt"
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
+
+func String(arg interface{}, buf *bytes.Buffer) {
+	n := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("σ(%s)", n.E))
+}
 
 func Prepare(_ *process.Process, arg interface{}) error {
 	n := arg.(*Argument)

@@ -1,12 +1,19 @@
 package limit
 
 import (
+	"bytes"
+	"fmt"
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
+
+func String(arg interface{}, buf *bytes.Buffer) {
+	n := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("limit(%v)", n.Limit))
+}
 
 func Prepare(_ *process.Process, _ interface{}) error {
 	return nil

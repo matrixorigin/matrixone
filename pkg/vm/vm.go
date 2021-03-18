@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bytes"
 	"matrixbase/pkg/sql/colexec/limit"
 	"matrixbase/pkg/sql/colexec/offset"
 	"matrixbase/pkg/sql/colexec/output"
@@ -8,6 +9,42 @@ import (
 	"matrixbase/pkg/sql/colexec/restrict"
 	"matrixbase/pkg/vm/process"
 )
+
+func String(ins Instructions, buf *bytes.Buffer) {
+	for i, in := range ins {
+		if i > 0 {
+			buf.WriteString(" -> ")
+		}
+		switch in.Op {
+		case Nub:
+		case Top:
+		case Limit:
+			limit.String(in.Arg, buf)
+		case Group:
+		case Order:
+		case Offset:
+			offset.String(in.Arg, buf)
+		case Transfer:
+		case Restrict:
+			restrict.String(in.Arg, buf)
+		case Summarize:
+		case Projection:
+			projection.String(in.Arg, buf)
+		case SetUnion:
+		case SetIntersect:
+		case SetDifference:
+		case MultisetUnion:
+		case MultisetIntersect:
+		case MultisetDifference:
+		case EqJoin:
+		case SemiJoin:
+		case InnerJoin:
+		case NaturalJoin:
+		case Output:
+			output.String(in.Arg, buf)
+		}
+	}
+}
 
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
@@ -44,6 +81,10 @@ func Prepare(ins Instructions, proc *process.Process) error {
 		case SemiJoin:
 		case InnerJoin:
 		case NaturalJoin:
+		case Output:
+			if err := output.Prepare(proc, in.Arg); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

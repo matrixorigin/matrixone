@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"bytes"
 	"matrixbase/pkg/vm"
 	"matrixbase/pkg/vm/engine"
 	"matrixbase/pkg/vm/process"
@@ -12,6 +13,13 @@ func New(cs []uint64, attrs []string, ins vm.Instructions) *Pipeline {
 		ins:   ins,
 		attrs: attrs,
 	}
+}
+
+func (p *Pipeline) String() string {
+	var buf bytes.Buffer
+
+	vm.String(p.ins, &buf)
+	return buf.String()
 }
 
 func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, error) {

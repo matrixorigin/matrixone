@@ -10,14 +10,18 @@ import (
 	"matrixbase/pkg/vm/process"
 )
 
-func New(attrs []string) *Batch {
+func New(ro bool, attrs []string) *Batch {
 	return &Batch{
+		Ro:    ro,
 		Attrs: attrs,
 		Vecs:  make([]*vector.Vector, len(attrs)),
 	}
 }
 
 func (bat *Batch) Reorder(attrs []string) {
+	if bat.Ro {
+		bat.Cow()
+	}
 	for i, name := range attrs {
 		for j, attr := range bat.Attrs {
 			if name == attr {
@@ -94,20 +98,6 @@ func (bat *Batch) WaitIo() {
 	}
 }
 
-/*
-func (bat *Batch) Free(proc *process.Process) {
-	bat.WaitIo()
-	if bat.SelsData != nil {
-		proc.Free(bat.SelsData)
-		bat.Sels = nil
-		bat.SelsData = nil
-	}
-	for _, vec := range bat.Vecs {
-		vec.Free(proc)
-	}
-}
-*/
-
 func (bat *Batch) Clean(proc *process.Process) {
 	bat.WaitIo()
 	if bat.SelsData != nil {
@@ -124,6 +114,9 @@ func (bat *Batch) Clean(proc *process.Process) {
 }
 
 func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
+	if bat.Ro {
+		bat.Cow()
+	}
 	for _, attr := range attrs {
 		for i := range bat.Attrs {
 			if bat.Attrs[i] != attr {
@@ -140,6 +133,15 @@ func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
 			break
 		}
 	}
+}
+
+func (bat *Batch) Cow() {
+	attrs := make([]string, len(bat.Attrs))
+	for i, attr := range bat.Attrs {
+		attrs[i] = attr
+	}
+	bat.Ro = false
+	bat.Attrs = attrs
 }
 
 func (bat *Batch) String() string {

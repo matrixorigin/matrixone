@@ -18,7 +18,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
-	rbat := batch.New(n.Attrs)
+	rbat := batch.New(true, n.Attrs)
 	bat := proc.Reg.Ax.(*batch.Batch)
 	for i, e := range n.Es {
 		vec, err := bat.GetVector(e.Name, proc)

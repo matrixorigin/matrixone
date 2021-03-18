@@ -69,7 +69,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		ctr.clean(bat, proc)
 		return false, err
 	}
-	rbat := batch.New(n.Rattrs)
+	rbat := batch.New(true, n.Rattrs)
 	{
 		for i := 0; i < len(n.Gs); i++ {
 			rbat.Vecs[i+len(n.Es)] = ctr.vecs[i]

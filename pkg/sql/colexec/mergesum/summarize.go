@@ -36,7 +36,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 		bat.Clean(proc)
 	}
-	bat := batch.New(n.Attrs)
+	bat := batch.New(true, n.Attrs)
 	{
 		var err error
 		for i, e := range n.Es {

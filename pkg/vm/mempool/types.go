@@ -1,9 +1,13 @@
 package mempool
 
+import "matrixbase/pkg/internal/cpu"
+
 const (
 	CountSize = 8
-	PageSize  = 1024
+	PageSize  = cpu.CacheLinePadSize
 )
+
+var PageOffset int
 
 type Mempool struct {
 	maxSize int

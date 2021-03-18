@@ -43,7 +43,7 @@ func NewTestEngine() engine.Engine {
 		log.Fatal(err)
 	}
 	{
-		bat := batch.New([]string{"orderId", "uid", "price"})
+		bat := batch.New(true, []string{"orderId", "uid", "price"})
 		{
 			{
 				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
@@ -84,7 +84,7 @@ func NewTestEngine() engine.Engine {
 		}
 	}
 	{
-		bat := batch.New([]string{"orderId", "uid", "price"})
+		bat := batch.New(true, []string{"orderId", "uid", "price"})
 		{
 			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
 			vs := make([][]byte, 10)
