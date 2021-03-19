@@ -7,9 +7,9 @@ import (
 	"matrixbase/pkg/vm/process"
 )
 
-func segments(proc *process.Process) []engine.Segment {
+func segments(name string, proc *process.Process) []engine.Segment {
 	e := memEngine.NewTestEngine()
-	r, err := e.Relation("test")
+	r, err := e.Relation(name)
 	if err != nil {
 		log.Fatal(err)
 	}

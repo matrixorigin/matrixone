@@ -35,7 +35,7 @@ func TestExtendProjection(t *testing.T) {
 	}
 	p := pipeline.New([]uint64{1}, []string{"price"}, ins)
 	fmt.Printf("%s\n", p)
-	if _, err := p.Run(segments(proc), proc); err != nil {
+	if _, err := p.Run(segments("R", proc), proc); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())

@@ -14,13 +14,13 @@ const (
 	SetUnion
 	SetIntersect
 	SetDifference
-	MultisetUnion
-	MultisetIntersect
-	MultisetDifference
-	EqJoin
-	SemiJoin
-	InnerJoin
-	NaturalJoin
+	SetFullJoin
+	SetLeftJoin
+	SetSemiJoin
+	SetInnerJoin
+	SetRightJoin
+	SetNaturalJoin
+	SetSemiDifference // unsuitable name is anti join
 	Output
 	MergeSummarize
 )

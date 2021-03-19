@@ -20,6 +20,9 @@ func Prepare(_ *process.Process, arg interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
+	if proc.Reg.Ax == nil {
+		return false, nil
+	}
 	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
 	vec, _, err := n.E.Eval(bat, proc)

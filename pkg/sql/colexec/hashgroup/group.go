@@ -35,6 +35,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	copy(n.Rattrs[len(n.Es):], n.Gs)
 	n.Ctr = Container{
 		diffs:  make([]bool, UnitLimit),
+		matchs: make([]int64, UnitLimit),
 		hashs:  make([]uint64, UnitLimit),
 		sels:   make([][]int64, UnitLimit),
 		groups: make(map[uint64][]*hash.Group),
@@ -187,6 +188,7 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 				}
 				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 			}
+			ctr.sels[ctr.slots.Vs[i][j]] = ctr.sels[ctr.slots.Vs[i][j]][:0]
 		}
 	}
 	ctr.slots.Reset()
@@ -238,4 +240,5 @@ func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
 			g.Free(proc)
 		}
 	}
+	register.FreeRegisters(proc)
 }

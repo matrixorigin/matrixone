@@ -3,6 +3,7 @@ package process
 import (
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/mmu/guest"
+	"sync"
 )
 
 /*
@@ -15,10 +16,15 @@ type Process interface {
 }
 */
 
+type WaitRegister struct {
+	Wg *sync.WaitGroup
+	Ch chan interface{}
+}
+
 type Register struct {
 	Ax interface{}
 	Ts []interface{}
-	Cs []chan interface{}
+	Ws []*WaitRegister
 }
 
 type Process struct {

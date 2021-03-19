@@ -118,7 +118,7 @@ func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
 		bat.Cow()
 	}
 	for _, attr := range attrs {
-		for i := range bat.Attrs {
+		for i := 0; i < len(bat.Attrs); i++ {
 			if bat.Attrs[i] != attr {
 				continue
 			}
@@ -129,6 +129,7 @@ func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
 				}
 				bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
 				bat.Attrs = append(bat.Attrs[:i], bat.Attrs[i+1:]...)
+				i--
 			}
 			break
 		}

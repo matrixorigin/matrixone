@@ -18,10 +18,13 @@ func Prepare(proc *process.Process, arg interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
-	for i, c := range proc.Reg.Cs {
-		v := <-c
+	for i := 0; i < len(proc.Reg.Ws); i++ {
+		reg := proc.Reg.Ws[i]
+		v := <-reg.Ch
 		if v == nil {
-			proc.Reg.Cs = append(proc.Reg.Cs[:i], proc.Reg.Cs[i:]...)
+			reg.Wg.Done()
+			proc.Reg.Ws = append(proc.Reg.Ws[:i], proc.Reg.Ws[i:]...)
+			i--
 			continue
 		}
 		bat := v.(*batch.Batch)
@@ -34,6 +37,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				return false, err
 			}
 		}
+		reg.Wg.Done()
 		bat.Clean(proc)
 	}
 	bat := batch.New(true, n.Attrs)
