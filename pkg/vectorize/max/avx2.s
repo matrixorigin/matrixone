@@ -149,18 +149,15 @@ int32MaxDone:
 // func uint8MaxAvx2Asm(x []uint8, r []uint8)
 // Requires: AVX, AVX2, SSE2
 TEXT ·uint8MaxAvx2Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0x0000000000000000, BX
-	MOVQ         BX, X0
-	VPBROADCASTB X0, Y0
-	VMOVDQU      Y0, Y1
-	VMOVDQU      Y0, Y2
-	VMOVDQU      Y0, Y3
-	VMOVDQU      Y0, Y4
-	VMOVDQU      Y0, Y5
-	VMOVDQU      Y0, Y0
+	MOVQ  x_base+0(FP), AX
+	MOVQ  r_base+24(FP), CX
+	MOVQ  x_len+8(FP), DX
+	VPXOR Y0, Y0, Y0
+	VPXOR Y1, Y1, Y1
+	VPXOR Y2, Y2, Y2
+	VPXOR Y3, Y3, Y3
+	VPXOR Y4, Y4, Y4
+	VPXOR Y5, Y5, Y5
 
 uint8MaxBlockLoop:
 	CMPQ    DX, $0x000000c0
@@ -197,18 +194,15 @@ uint8MaxDone:
 // func uint16MaxAvx2Asm(x []uint16, r []uint16)
 // Requires: AVX, AVX2, SSE2, SSE4.1
 TEXT ·uint16MaxAvx2Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0x0000000000000000, BX
-	MOVQ         BX, X0
-	VPBROADCASTW X0, Y0
-	VMOVDQU      Y0, Y1
-	VMOVDQU      Y0, Y2
-	VMOVDQU      Y0, Y3
-	VMOVDQU      Y0, Y4
-	VMOVDQU      Y0, Y5
-	VMOVDQU      Y0, Y0
+	MOVQ  x_base+0(FP), AX
+	MOVQ  r_base+24(FP), CX
+	MOVQ  x_len+8(FP), DX
+	VPXOR Y0, Y0, Y0
+	VPXOR Y1, Y1, Y1
+	VPXOR Y2, Y2, Y2
+	VPXOR Y3, Y3, Y3
+	VPXOR Y4, Y4, Y4
+	VPXOR Y5, Y5, Y5
 
 uint16MaxBlockLoop:
 	CMPQ    DX, $0x00000060
@@ -245,18 +239,15 @@ uint16MaxDone:
 // func uint32MaxAvx2Asm(x []uint32, r []uint32)
 // Requires: AVX, AVX2, SSE2, SSE4.1
 TEXT ·uint32MaxAvx2Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0x0000000000000000, BX
-	MOVQ         BX, X0
-	VPBROADCASTD X0, Y0
-	VMOVDQU      Y0, Y1
-	VMOVDQU      Y0, Y2
-	VMOVDQU      Y0, Y3
-	VMOVDQU      Y0, Y4
-	VMOVDQU      Y0, Y5
-	VMOVDQU      Y0, Y0
+	MOVQ  x_base+0(FP), AX
+	MOVQ  r_base+24(FP), CX
+	MOVQ  x_len+8(FP), DX
+	VPXOR Y0, Y0, Y0
+	VPXOR Y1, Y1, Y1
+	VPXOR Y2, Y2, Y2
+	VPXOR Y3, Y3, Y3
+	VPXOR Y4, Y4, Y4
+	VPXOR Y5, Y5, Y5
 
 uint32MaxBlockLoop:
 	CMPQ    DX, $0x00000030

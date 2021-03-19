@@ -277,24 +277,21 @@ int64MinDone:
 // func uint8MinAvx512Asm(x []uint8, r []uint8)
 // Requires: AVX, AVX2, AVX512BW, AVX512F, SSE2
 TEXT ·uint8MinAvx512Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0xffffffffffffffff, BX
-	MOVQ         BX, X0
-	VPBROADCASTB X0, Z0
-	VMOVDQU64    Z0, Z1
-	VMOVDQU64    Z0, Z2
-	VMOVDQU64    Z0, Z3
-	VMOVDQU64    Z0, Z4
-	VMOVDQU64    Z0, Z5
-	VMOVDQU64    Z0, Z6
-	VMOVDQU64    Z0, Z7
-	VMOVDQU64    Z0, Z8
-	VMOVDQU64    Z0, Z9
-	VMOVDQU64    Z0, Z10
-	VMOVDQU64    Z0, Z11
-	VMOVDQU64    Z0, Z0
+	MOVQ     x_base+0(FP), AX
+	MOVQ     r_base+24(FP), CX
+	MOVQ     x_len+8(FP), DX
+	VPCMPEQQ Z0, Z0, Z0
+	VPCMPEQQ Z1, Z1, Z1
+	VPCMPEQQ Z2, Z2, Z2
+	VPCMPEQQ Z3, Z3, Z3
+	VPCMPEQQ Z4, Z4, Z4
+	VPCMPEQQ Z5, Z5, Z5
+	VPCMPEQQ Z6, Z6, Z6
+	VPCMPEQQ Z7, Z7, Z7
+	VPCMPEQQ Z8, Z8, Z8
+	VPCMPEQQ Z9, Z9, Z9
+	VPCMPEQQ Z10, Z10, Z10
+	VPCMPEQQ Z11, Z11, Z11
 
 uint8MinBlockLoop:
 	CMPQ    DX, $0x00000300
@@ -345,24 +342,21 @@ uint8MinDone:
 // func uint16MinAvx512Asm(x []uint16, r []uint16)
 // Requires: AVX, AVX2, AVX512BW, AVX512F, SSE2, SSE4.1
 TEXT ·uint16MinAvx512Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0xffffffffffffffff, BX
-	MOVQ         BX, X0
-	VPBROADCASTW X0, Z0
-	VMOVDQU64    Z0, Z1
-	VMOVDQU64    Z0, Z2
-	VMOVDQU64    Z0, Z3
-	VMOVDQU64    Z0, Z4
-	VMOVDQU64    Z0, Z5
-	VMOVDQU64    Z0, Z6
-	VMOVDQU64    Z0, Z7
-	VMOVDQU64    Z0, Z8
-	VMOVDQU64    Z0, Z9
-	VMOVDQU64    Z0, Z10
-	VMOVDQU64    Z0, Z11
-	VMOVDQU64    Z0, Z0
+	MOVQ     x_base+0(FP), AX
+	MOVQ     r_base+24(FP), CX
+	MOVQ     x_len+8(FP), DX
+	VPCMPEQQ Z0, Z0, Z0
+	VPCMPEQQ Z1, Z1, Z1
+	VPCMPEQQ Z2, Z2, Z2
+	VPCMPEQQ Z3, Z3, Z3
+	VPCMPEQQ Z4, Z4, Z4
+	VPCMPEQQ Z5, Z5, Z5
+	VPCMPEQQ Z6, Z6, Z6
+	VPCMPEQQ Z7, Z7, Z7
+	VPCMPEQQ Z8, Z8, Z8
+	VPCMPEQQ Z9, Z9, Z9
+	VPCMPEQQ Z10, Z10, Z10
+	VPCMPEQQ Z11, Z11, Z11
 
 uint16MinBlockLoop:
 	CMPQ    DX, $0x00000180
@@ -413,24 +407,21 @@ uint16MinDone:
 // func uint32MinAvx512Asm(x []uint32, r []uint32)
 // Requires: AVX, AVX2, AVX512F, SSE2, SSE4.1
 TEXT ·uint32MinAvx512Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0xffffffffffffffff, BX
-	MOVQ         BX, X0
-	VPBROADCASTD X0, Z0
-	VMOVDQU64    Z0, Z1
-	VMOVDQU64    Z0, Z2
-	VMOVDQU64    Z0, Z3
-	VMOVDQU64    Z0, Z4
-	VMOVDQU64    Z0, Z5
-	VMOVDQU64    Z0, Z6
-	VMOVDQU64    Z0, Z7
-	VMOVDQU64    Z0, Z8
-	VMOVDQU64    Z0, Z9
-	VMOVDQU64    Z0, Z10
-	VMOVDQU64    Z0, Z11
-	VMOVDQU64    Z0, Z0
+	MOVQ     x_base+0(FP), AX
+	MOVQ     r_base+24(FP), CX
+	MOVQ     x_len+8(FP), DX
+	VPCMPEQQ Z0, Z0, Z0
+	VPCMPEQQ Z1, Z1, Z1
+	VPCMPEQQ Z2, Z2, Z2
+	VPCMPEQQ Z3, Z3, Z3
+	VPCMPEQQ Z4, Z4, Z4
+	VPCMPEQQ Z5, Z5, Z5
+	VPCMPEQQ Z6, Z6, Z6
+	VPCMPEQQ Z7, Z7, Z7
+	VPCMPEQQ Z8, Z8, Z8
+	VPCMPEQQ Z9, Z9, Z9
+	VPCMPEQQ Z10, Z10, Z10
+	VPCMPEQQ Z11, Z11, Z11
 
 uint32MinBlockLoop:
 	CMPQ    DX, $0x000000c0
@@ -481,24 +472,21 @@ uint32MinDone:
 // func uint64MinAvx512Asm(x []uint64, r []uint64)
 // Requires: AVX, AVX512F, AVX512VL, SSE2
 TEXT ·uint64MinAvx512Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0xffffffffffffffff, BX
-	MOVQ         BX, X0
-	VPBROADCASTQ X0, Z0
-	VMOVDQU64    Z0, Z1
-	VMOVDQU64    Z0, Z2
-	VMOVDQU64    Z0, Z3
-	VMOVDQU64    Z0, Z4
-	VMOVDQU64    Z0, Z5
-	VMOVDQU64    Z0, Z6
-	VMOVDQU64    Z0, Z7
-	VMOVDQU64    Z0, Z8
-	VMOVDQU64    Z0, Z9
-	VMOVDQU64    Z0, Z10
-	VMOVDQU64    Z0, Z11
-	VMOVDQU64    Z0, Z0
+	MOVQ     x_base+0(FP), AX
+	MOVQ     r_base+24(FP), CX
+	MOVQ     x_len+8(FP), DX
+	VPCMPEQQ Z0, Z0, Z0
+	VPCMPEQQ Z1, Z1, Z1
+	VPCMPEQQ Z2, Z2, Z2
+	VPCMPEQQ Z3, Z3, Z3
+	VPCMPEQQ Z4, Z4, Z4
+	VPCMPEQQ Z5, Z5, Z5
+	VPCMPEQQ Z6, Z6, Z6
+	VPCMPEQQ Z7, Z7, Z7
+	VPCMPEQQ Z8, Z8, Z8
+	VPCMPEQQ Z9, Z9, Z9
+	VPCMPEQQ Z10, Z10, Z10
+	VPCMPEQQ Z11, Z11, Z11
 
 uint64MinBlockLoop:
 	CMPQ    DX, $0x00000060
