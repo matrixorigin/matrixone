@@ -83,6 +83,61 @@ TEXT ·int8SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 int8SubScalarBlockLoop:
 	CMPQ      BX, $0x00000300
 	JL        int8SubScalarTailLoop
+	VPSUBB    (CX), Z0, Z1
+	VPSUBB    64(CX), Z0, Z2
+	VPSUBB    128(CX), Z0, Z3
+	VPSUBB    192(CX), Z0, Z4
+	VPSUBB    256(CX), Z0, Z5
+	VPSUBB    320(CX), Z0, Z6
+	VPSUBB    384(CX), Z0, Z7
+	VPSUBB    448(CX), Z0, Z8
+	VPSUBB    512(CX), Z0, Z9
+	VPSUBB    576(CX), Z0, Z10
+	VPSUBB    640(CX), Z0, Z11
+	VPSUBB    704(CX), Z0, Z12
+	VMOVDQU32 Z1, (DX)
+	VMOVDQU32 Z2, 64(DX)
+	VMOVDQU32 Z3, 128(DX)
+	VMOVDQU32 Z4, 192(DX)
+	VMOVDQU32 Z5, 256(DX)
+	VMOVDQU32 Z6, 320(DX)
+	VMOVDQU32 Z7, 384(DX)
+	VMOVDQU32 Z8, 448(DX)
+	VMOVDQU32 Z9, 512(DX)
+	VMOVDQU32 Z10, 576(DX)
+	VMOVDQU32 Z11, 640(DX)
+	VMOVDQU32 Z12, 704(DX)
+	ADDQ      $0x00000300, CX
+	ADDQ      $0x00000300, DX
+	SUBQ      $0x00000300, BX
+	JMP       int8SubScalarBlockLoop
+
+int8SubScalarTailLoop:
+	CMPQ      BX, $0x00000040
+	JL        int8SubScalarDone
+	VPSUBB    (CX), Z0, Z1
+	VMOVDQU32 Z1, (DX)
+	ADDQ      $0x00000040, CX
+	ADDQ      $0x00000040, DX
+	SUBQ      $0x00000040, BX
+	JMP       int8SubScalarTailLoop
+
+int8SubScalarDone:
+	RET
+
+// func int8SubByScalarAvx512Asm(x int8, y []int8, r []int8)
+// Requires: AVX512BW, AVX512F, SSE2
+TEXT ·int8SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVBLSX      x+0(FP), AX
+	MOVQ         y_base+8(FP), CX
+	MOVQ         r_base+32(FP), DX
+	MOVQ         y_len+16(FP), BX
+	MOVD         AX, X0
+	VPBROADCASTB X0, Z0
+
+int8SubByScalarBlockLoop:
+	CMPQ      BX, $0x00000300
+	JL        int8SubByScalarTailLoop
 	VMOVDQU32 (CX), Z1
 	VMOVDQU32 64(CX), Z2
 	VMOVDQU32 128(CX), Z3
@@ -122,68 +177,13 @@ int8SubScalarBlockLoop:
 	ADDQ      $0x00000300, CX
 	ADDQ      $0x00000300, DX
 	SUBQ      $0x00000300, BX
-	JMP       int8SubScalarBlockLoop
-
-int8SubScalarTailLoop:
-	CMPQ      BX, $0x00000040
-	JL        int8SubScalarDone
-	VMOVDQU32 (CX), Z1
-	VPSUBB    Z0, Z1, Z1
-	VMOVDQU32 Z1, (DX)
-	ADDQ      $0x00000040, CX
-	ADDQ      $0x00000040, DX
-	SUBQ      $0x00000040, BX
-	JMP       int8SubScalarTailLoop
-
-int8SubScalarDone:
-	RET
-
-// func int8SubByScalarAvx512Asm(x int8, y []int8, r []int8)
-// Requires: AVX512BW, AVX512F, SSE2
-TEXT ·int8SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVBLSX      x+0(FP), AX
-	MOVQ         y_base+8(FP), CX
-	MOVQ         r_base+32(FP), DX
-	MOVQ         y_len+16(FP), BX
-	MOVD         AX, X0
-	VPBROADCASTB X0, Z0
-
-int8SubByScalarBlockLoop:
-	CMPQ      BX, $0x00000300
-	JL        int8SubByScalarTailLoop
-	VPSUBB    (CX), Z0, Z1
-	VPSUBB    64(CX), Z0, Z2
-	VPSUBB    128(CX), Z0, Z3
-	VPSUBB    192(CX), Z0, Z4
-	VPSUBB    256(CX), Z0, Z5
-	VPSUBB    320(CX), Z0, Z6
-	VPSUBB    384(CX), Z0, Z7
-	VPSUBB    448(CX), Z0, Z8
-	VPSUBB    512(CX), Z0, Z9
-	VPSUBB    576(CX), Z0, Z10
-	VPSUBB    640(CX), Z0, Z11
-	VPSUBB    704(CX), Z0, Z12
-	VMOVDQU32 Z1, (DX)
-	VMOVDQU32 Z2, 64(DX)
-	VMOVDQU32 Z3, 128(DX)
-	VMOVDQU32 Z4, 192(DX)
-	VMOVDQU32 Z5, 256(DX)
-	VMOVDQU32 Z6, 320(DX)
-	VMOVDQU32 Z7, 384(DX)
-	VMOVDQU32 Z8, 448(DX)
-	VMOVDQU32 Z9, 512(DX)
-	VMOVDQU32 Z10, 576(DX)
-	VMOVDQU32 Z11, 640(DX)
-	VMOVDQU32 Z12, 704(DX)
-	ADDQ      $0x00000300, CX
-	ADDQ      $0x00000300, DX
-	SUBQ      $0x00000300, BX
 	JMP       int8SubByScalarBlockLoop
 
 int8SubByScalarTailLoop:
 	CMPQ      BX, $0x00000040
 	JL        int8SubByScalarDone
-	VPSUBB    (CX), Z0, Z1
+	VMOVDQU32 (CX), Z1
+	VPSUBB    Z0, Z1, Z1
 	VMOVDQU32 Z1, (DX)
 	ADDQ      $0x00000040, CX
 	ADDQ      $0x00000040, DX
@@ -274,6 +274,61 @@ TEXT ·int16SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 int16SubScalarBlockLoop:
 	CMPQ      BX, $0x00000180
 	JL        int16SubScalarTailLoop
+	VPSUBW    (CX), Z0, Z1
+	VPSUBW    64(CX), Z0, Z2
+	VPSUBW    128(CX), Z0, Z3
+	VPSUBW    192(CX), Z0, Z4
+	VPSUBW    256(CX), Z0, Z5
+	VPSUBW    320(CX), Z0, Z6
+	VPSUBW    384(CX), Z0, Z7
+	VPSUBW    448(CX), Z0, Z8
+	VPSUBW    512(CX), Z0, Z9
+	VPSUBW    576(CX), Z0, Z10
+	VPSUBW    640(CX), Z0, Z11
+	VPSUBW    704(CX), Z0, Z12
+	VMOVDQU32 Z1, (DX)
+	VMOVDQU32 Z2, 64(DX)
+	VMOVDQU32 Z3, 128(DX)
+	VMOVDQU32 Z4, 192(DX)
+	VMOVDQU32 Z5, 256(DX)
+	VMOVDQU32 Z6, 320(DX)
+	VMOVDQU32 Z7, 384(DX)
+	VMOVDQU32 Z8, 448(DX)
+	VMOVDQU32 Z9, 512(DX)
+	VMOVDQU32 Z10, 576(DX)
+	VMOVDQU32 Z11, 640(DX)
+	VMOVDQU32 Z12, 704(DX)
+	ADDQ      $0x00000300, CX
+	ADDQ      $0x00000300, DX
+	SUBQ      $0x00000180, BX
+	JMP       int16SubScalarBlockLoop
+
+int16SubScalarTailLoop:
+	CMPQ      BX, $0x00000020
+	JL        int16SubScalarDone
+	VPSUBW    (CX), Z0, Z1
+	VMOVDQU32 Z1, (DX)
+	ADDQ      $0x00000040, CX
+	ADDQ      $0x00000040, DX
+	SUBQ      $0x00000020, BX
+	JMP       int16SubScalarTailLoop
+
+int16SubScalarDone:
+	RET
+
+// func int16SubByScalarAvx512Asm(x int16, y []int16, r []int16)
+// Requires: AVX512BW, AVX512F, SSE2
+TEXT ·int16SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVWLSX      x+0(FP), AX
+	MOVQ         y_base+8(FP), CX
+	MOVQ         r_base+32(FP), DX
+	MOVQ         y_len+16(FP), BX
+	MOVD         AX, X0
+	VPBROADCASTW X0, Z0
+
+int16SubByScalarBlockLoop:
+	CMPQ      BX, $0x00000180
+	JL        int16SubByScalarTailLoop
 	VMOVDQU32 (CX), Z1
 	VMOVDQU32 64(CX), Z2
 	VMOVDQU32 128(CX), Z3
@@ -313,68 +368,13 @@ int16SubScalarBlockLoop:
 	ADDQ      $0x00000300, CX
 	ADDQ      $0x00000300, DX
 	SUBQ      $0x00000180, BX
-	JMP       int16SubScalarBlockLoop
-
-int16SubScalarTailLoop:
-	CMPQ      BX, $0x00000020
-	JL        int16SubScalarDone
-	VMOVDQU32 (CX), Z1
-	VPSUBW    Z0, Z1, Z1
-	VMOVDQU32 Z1, (DX)
-	ADDQ      $0x00000040, CX
-	ADDQ      $0x00000040, DX
-	SUBQ      $0x00000020, BX
-	JMP       int16SubScalarTailLoop
-
-int16SubScalarDone:
-	RET
-
-// func int16SubByScalarAvx512Asm(x int16, y []int16, r []int16)
-// Requires: AVX512BW, AVX512F, SSE2
-TEXT ·int16SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVWLSX      x+0(FP), AX
-	MOVQ         y_base+8(FP), CX
-	MOVQ         r_base+32(FP), DX
-	MOVQ         y_len+16(FP), BX
-	MOVD         AX, X0
-	VPBROADCASTW X0, Z0
-
-int16SubByScalarBlockLoop:
-	CMPQ      BX, $0x00000180
-	JL        int16SubByScalarTailLoop
-	VPSUBW    (CX), Z0, Z1
-	VPSUBW    64(CX), Z0, Z2
-	VPSUBW    128(CX), Z0, Z3
-	VPSUBW    192(CX), Z0, Z4
-	VPSUBW    256(CX), Z0, Z5
-	VPSUBW    320(CX), Z0, Z6
-	VPSUBW    384(CX), Z0, Z7
-	VPSUBW    448(CX), Z0, Z8
-	VPSUBW    512(CX), Z0, Z9
-	VPSUBW    576(CX), Z0, Z10
-	VPSUBW    640(CX), Z0, Z11
-	VPSUBW    704(CX), Z0, Z12
-	VMOVDQU32 Z1, (DX)
-	VMOVDQU32 Z2, 64(DX)
-	VMOVDQU32 Z3, 128(DX)
-	VMOVDQU32 Z4, 192(DX)
-	VMOVDQU32 Z5, 256(DX)
-	VMOVDQU32 Z6, 320(DX)
-	VMOVDQU32 Z7, 384(DX)
-	VMOVDQU32 Z8, 448(DX)
-	VMOVDQU32 Z9, 512(DX)
-	VMOVDQU32 Z10, 576(DX)
-	VMOVDQU32 Z11, 640(DX)
-	VMOVDQU32 Z12, 704(DX)
-	ADDQ      $0x00000300, CX
-	ADDQ      $0x00000300, DX
-	SUBQ      $0x00000180, BX
 	JMP       int16SubByScalarBlockLoop
 
 int16SubByScalarTailLoop:
 	CMPQ      BX, $0x00000020
 	JL        int16SubByScalarDone
-	VPSUBW    (CX), Z0, Z1
+	VMOVDQU32 (CX), Z1
+	VPSUBW    Z0, Z1, Z1
 	VMOVDQU32 Z1, (DX)
 	ADDQ      $0x00000040, CX
 	ADDQ      $0x00000040, DX
@@ -465,6 +465,61 @@ TEXT ·int32SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 int32SubScalarBlockLoop:
 	CMPQ      BX, $0x000000c0
 	JL        int32SubScalarTailLoop
+	VPSUBD    (CX), Z0, Z1
+	VPSUBD    64(CX), Z0, Z2
+	VPSUBD    128(CX), Z0, Z3
+	VPSUBD    192(CX), Z0, Z4
+	VPSUBD    256(CX), Z0, Z5
+	VPSUBD    320(CX), Z0, Z6
+	VPSUBD    384(CX), Z0, Z7
+	VPSUBD    448(CX), Z0, Z8
+	VPSUBD    512(CX), Z0, Z9
+	VPSUBD    576(CX), Z0, Z10
+	VPSUBD    640(CX), Z0, Z11
+	VPSUBD    704(CX), Z0, Z12
+	VMOVDQU32 Z1, (DX)
+	VMOVDQU32 Z2, 64(DX)
+	VMOVDQU32 Z3, 128(DX)
+	VMOVDQU32 Z4, 192(DX)
+	VMOVDQU32 Z5, 256(DX)
+	VMOVDQU32 Z6, 320(DX)
+	VMOVDQU32 Z7, 384(DX)
+	VMOVDQU32 Z8, 448(DX)
+	VMOVDQU32 Z9, 512(DX)
+	VMOVDQU32 Z10, 576(DX)
+	VMOVDQU32 Z11, 640(DX)
+	VMOVDQU32 Z12, 704(DX)
+	ADDQ      $0x00000300, CX
+	ADDQ      $0x00000300, DX
+	SUBQ      $0x000000c0, BX
+	JMP       int32SubScalarBlockLoop
+
+int32SubScalarTailLoop:
+	CMPQ      BX, $0x00000010
+	JL        int32SubScalarDone
+	VPSUBD    (CX), Z0, Z1
+	VMOVDQU32 Z1, (DX)
+	ADDQ      $0x00000040, CX
+	ADDQ      $0x00000040, DX
+	SUBQ      $0x00000010, BX
+	JMP       int32SubScalarTailLoop
+
+int32SubScalarDone:
+	RET
+
+// func int32SubByScalarAvx512Asm(x int32, y []int32, r []int32)
+// Requires: AVX512F, SSE2
+TEXT ·int32SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVL         x+0(FP), AX
+	MOVQ         y_base+8(FP), CX
+	MOVQ         r_base+32(FP), DX
+	MOVQ         y_len+16(FP), BX
+	MOVD         AX, X0
+	VPBROADCASTD X0, Z0
+
+int32SubByScalarBlockLoop:
+	CMPQ      BX, $0x000000c0
+	JL        int32SubByScalarTailLoop
 	VMOVDQU32 (CX), Z1
 	VMOVDQU32 64(CX), Z2
 	VMOVDQU32 128(CX), Z3
@@ -504,68 +559,13 @@ int32SubScalarBlockLoop:
 	ADDQ      $0x00000300, CX
 	ADDQ      $0x00000300, DX
 	SUBQ      $0x000000c0, BX
-	JMP       int32SubScalarBlockLoop
-
-int32SubScalarTailLoop:
-	CMPQ      BX, $0x00000010
-	JL        int32SubScalarDone
-	VMOVDQU32 (CX), Z1
-	VPSUBD    Z0, Z1, Z1
-	VMOVDQU32 Z1, (DX)
-	ADDQ      $0x00000040, CX
-	ADDQ      $0x00000040, DX
-	SUBQ      $0x00000010, BX
-	JMP       int32SubScalarTailLoop
-
-int32SubScalarDone:
-	RET
-
-// func int32SubByScalarAvx512Asm(x int32, y []int32, r []int32)
-// Requires: AVX512F, SSE2
-TEXT ·int32SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVL         x+0(FP), AX
-	MOVQ         y_base+8(FP), CX
-	MOVQ         r_base+32(FP), DX
-	MOVQ         y_len+16(FP), BX
-	MOVD         AX, X0
-	VPBROADCASTD X0, Z0
-
-int32SubByScalarBlockLoop:
-	CMPQ      BX, $0x000000c0
-	JL        int32SubByScalarTailLoop
-	VPSUBD    (CX), Z0, Z1
-	VPSUBD    64(CX), Z0, Z2
-	VPSUBD    128(CX), Z0, Z3
-	VPSUBD    192(CX), Z0, Z4
-	VPSUBD    256(CX), Z0, Z5
-	VPSUBD    320(CX), Z0, Z6
-	VPSUBD    384(CX), Z0, Z7
-	VPSUBD    448(CX), Z0, Z8
-	VPSUBD    512(CX), Z0, Z9
-	VPSUBD    576(CX), Z0, Z10
-	VPSUBD    640(CX), Z0, Z11
-	VPSUBD    704(CX), Z0, Z12
-	VMOVDQU32 Z1, (DX)
-	VMOVDQU32 Z2, 64(DX)
-	VMOVDQU32 Z3, 128(DX)
-	VMOVDQU32 Z4, 192(DX)
-	VMOVDQU32 Z5, 256(DX)
-	VMOVDQU32 Z6, 320(DX)
-	VMOVDQU32 Z7, 384(DX)
-	VMOVDQU32 Z8, 448(DX)
-	VMOVDQU32 Z9, 512(DX)
-	VMOVDQU32 Z10, 576(DX)
-	VMOVDQU32 Z11, 640(DX)
-	VMOVDQU32 Z12, 704(DX)
-	ADDQ      $0x00000300, CX
-	ADDQ      $0x00000300, DX
-	SUBQ      $0x000000c0, BX
 	JMP       int32SubByScalarBlockLoop
 
 int32SubByScalarTailLoop:
 	CMPQ      BX, $0x00000010
 	JL        int32SubByScalarDone
-	VPSUBD    (CX), Z0, Z1
+	VMOVDQU32 (CX), Z1
+	VPSUBD    Z0, Z1, Z1
 	VMOVDQU32 Z1, (DX)
 	ADDQ      $0x00000040, CX
 	ADDQ      $0x00000040, DX
@@ -656,6 +656,61 @@ TEXT ·int64SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 int64SubScalarBlockLoop:
 	CMPQ      BX, $0x00000060
 	JL        int64SubScalarTailLoop
+	VPSUBQ    (CX), Z0, Z1
+	VPSUBQ    64(CX), Z0, Z2
+	VPSUBQ    128(CX), Z0, Z3
+	VPSUBQ    192(CX), Z0, Z4
+	VPSUBQ    256(CX), Z0, Z5
+	VPSUBQ    320(CX), Z0, Z6
+	VPSUBQ    384(CX), Z0, Z7
+	VPSUBQ    448(CX), Z0, Z8
+	VPSUBQ    512(CX), Z0, Z9
+	VPSUBQ    576(CX), Z0, Z10
+	VPSUBQ    640(CX), Z0, Z11
+	VPSUBQ    704(CX), Z0, Z12
+	VMOVDQU32 Z1, (DX)
+	VMOVDQU32 Z2, 64(DX)
+	VMOVDQU32 Z3, 128(DX)
+	VMOVDQU32 Z4, 192(DX)
+	VMOVDQU32 Z5, 256(DX)
+	VMOVDQU32 Z6, 320(DX)
+	VMOVDQU32 Z7, 384(DX)
+	VMOVDQU32 Z8, 448(DX)
+	VMOVDQU32 Z9, 512(DX)
+	VMOVDQU32 Z10, 576(DX)
+	VMOVDQU32 Z11, 640(DX)
+	VMOVDQU32 Z12, 704(DX)
+	ADDQ      $0x00000300, CX
+	ADDQ      $0x00000300, DX
+	SUBQ      $0x00000060, BX
+	JMP       int64SubScalarBlockLoop
+
+int64SubScalarTailLoop:
+	CMPQ      BX, $0x00000008
+	JL        int64SubScalarDone
+	VPSUBQ    (CX), Z0, Z1
+	VMOVDQU32 Z1, (DX)
+	ADDQ      $0x00000040, CX
+	ADDQ      $0x00000040, DX
+	SUBQ      $0x00000008, BX
+	JMP       int64SubScalarTailLoop
+
+int64SubScalarDone:
+	RET
+
+// func int64SubByScalarAvx512Asm(x int64, y []int64, r []int64)
+// Requires: AVX512F, SSE2
+TEXT ·int64SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVQ         x+0(FP), AX
+	MOVQ         y_base+8(FP), CX
+	MOVQ         r_base+32(FP), DX
+	MOVQ         y_len+16(FP), BX
+	MOVQ         AX, X0
+	VPBROADCASTQ X0, Z0
+
+int64SubByScalarBlockLoop:
+	CMPQ      BX, $0x00000060
+	JL        int64SubByScalarTailLoop
 	VMOVDQU32 (CX), Z1
 	VMOVDQU32 64(CX), Z2
 	VMOVDQU32 128(CX), Z3
@@ -695,68 +750,13 @@ int64SubScalarBlockLoop:
 	ADDQ      $0x00000300, CX
 	ADDQ      $0x00000300, DX
 	SUBQ      $0x00000060, BX
-	JMP       int64SubScalarBlockLoop
-
-int64SubScalarTailLoop:
-	CMPQ      BX, $0x00000008
-	JL        int64SubScalarDone
-	VMOVDQU32 (CX), Z1
-	VPSUBQ    Z0, Z1, Z1
-	VMOVDQU32 Z1, (DX)
-	ADDQ      $0x00000040, CX
-	ADDQ      $0x00000040, DX
-	SUBQ      $0x00000008, BX
-	JMP       int64SubScalarTailLoop
-
-int64SubScalarDone:
-	RET
-
-// func int64SubByScalarAvx512Asm(x int64, y []int64, r []int64)
-// Requires: AVX512F, SSE2
-TEXT ·int64SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVQ         x+0(FP), AX
-	MOVQ         y_base+8(FP), CX
-	MOVQ         r_base+32(FP), DX
-	MOVQ         y_len+16(FP), BX
-	MOVQ         AX, X0
-	VPBROADCASTQ X0, Z0
-
-int64SubByScalarBlockLoop:
-	CMPQ      BX, $0x00000060
-	JL        int64SubByScalarTailLoop
-	VPSUBQ    (CX), Z0, Z1
-	VPSUBQ    64(CX), Z0, Z2
-	VPSUBQ    128(CX), Z0, Z3
-	VPSUBQ    192(CX), Z0, Z4
-	VPSUBQ    256(CX), Z0, Z5
-	VPSUBQ    320(CX), Z0, Z6
-	VPSUBQ    384(CX), Z0, Z7
-	VPSUBQ    448(CX), Z0, Z8
-	VPSUBQ    512(CX), Z0, Z9
-	VPSUBQ    576(CX), Z0, Z10
-	VPSUBQ    640(CX), Z0, Z11
-	VPSUBQ    704(CX), Z0, Z12
-	VMOVDQU32 Z1, (DX)
-	VMOVDQU32 Z2, 64(DX)
-	VMOVDQU32 Z3, 128(DX)
-	VMOVDQU32 Z4, 192(DX)
-	VMOVDQU32 Z5, 256(DX)
-	VMOVDQU32 Z6, 320(DX)
-	VMOVDQU32 Z7, 384(DX)
-	VMOVDQU32 Z8, 448(DX)
-	VMOVDQU32 Z9, 512(DX)
-	VMOVDQU32 Z10, 576(DX)
-	VMOVDQU32 Z11, 640(DX)
-	VMOVDQU32 Z12, 704(DX)
-	ADDQ      $0x00000300, CX
-	ADDQ      $0x00000300, DX
-	SUBQ      $0x00000060, BX
 	JMP       int64SubByScalarBlockLoop
 
 int64SubByScalarTailLoop:
 	CMPQ      BX, $0x00000008
 	JL        int64SubByScalarDone
-	VPSUBQ    (CX), Z0, Z1
+	VMOVDQU32 (CX), Z1
+	VPSUBQ    Z0, Z1, Z1
 	VMOVDQU32 Z1, (DX)
 	ADDQ      $0x00000040, CX
 	ADDQ      $0x00000040, DX
@@ -847,6 +847,61 @@ TEXT ·uint8SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 uint8SubScalarBlockLoop:
 	CMPQ      BX, $0x00000300
 	JL        uint8SubScalarTailLoop
+	VPSUBB    (CX), Z0, Z1
+	VPSUBB    64(CX), Z0, Z2
+	VPSUBB    128(CX), Z0, Z3
+	VPSUBB    192(CX), Z0, Z4
+	VPSUBB    256(CX), Z0, Z5
+	VPSUBB    320(CX), Z0, Z6
+	VPSUBB    384(CX), Z0, Z7
+	VPSUBB    448(CX), Z0, Z8
+	VPSUBB    512(CX), Z0, Z9
+	VPSUBB    576(CX), Z0, Z10
+	VPSUBB    640(CX), Z0, Z11
+	VPSUBB    704(CX), Z0, Z12
+	VMOVDQU32 Z1, (DX)
+	VMOVDQU32 Z2, 64(DX)
+	VMOVDQU32 Z3, 128(DX)
+	VMOVDQU32 Z4, 192(DX)
+	VMOVDQU32 Z5, 256(DX)
+	VMOVDQU32 Z6, 320(DX)
+	VMOVDQU32 Z7, 384(DX)
+	VMOVDQU32 Z8, 448(DX)
+	VMOVDQU32 Z9, 512(DX)
+	VMOVDQU32 Z10, 576(DX)
+	VMOVDQU32 Z11, 640(DX)
+	VMOVDQU32 Z12, 704(DX)
+	ADDQ      $0x00000300, CX
+	ADDQ      $0x00000300, DX
+	SUBQ      $0x00000300, BX
+	JMP       uint8SubScalarBlockLoop
+
+uint8SubScalarTailLoop:
+	CMPQ      BX, $0x00000040
+	JL        uint8SubScalarDone
+	VPSUBB    (CX), Z0, Z1
+	VMOVDQU32 Z1, (DX)
+	ADDQ      $0x00000040, CX
+	ADDQ      $0x00000040, DX
+	SUBQ      $0x00000040, BX
+	JMP       uint8SubScalarTailLoop
+
+uint8SubScalarDone:
+	RET
+
+// func uint8SubByScalarAvx512Asm(x uint8, y []uint8, r []uint8)
+// Requires: AVX512BW, AVX512F, SSE2
+TEXT ·uint8SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVBLZX      x+0(FP), AX
+	MOVQ         y_base+8(FP), CX
+	MOVQ         r_base+32(FP), DX
+	MOVQ         y_len+16(FP), BX
+	MOVD         AX, X0
+	VPBROADCASTB X0, Z0
+
+uint8SubByScalarBlockLoop:
+	CMPQ      BX, $0x00000300
+	JL        uint8SubByScalarTailLoop
 	VMOVDQU32 (CX), Z1
 	VMOVDQU32 64(CX), Z2
 	VMOVDQU32 128(CX), Z3
@@ -886,68 +941,13 @@ uint8SubScalarBlockLoop:
 	ADDQ      $0x00000300, CX
 	ADDQ      $0x00000300, DX
 	SUBQ      $0x00000300, BX
-	JMP       uint8SubScalarBlockLoop
-
-uint8SubScalarTailLoop:
-	CMPQ      BX, $0x00000040
-	JL        uint8SubScalarDone
-	VMOVDQU32 (CX), Z1
-	VPSUBB    Z0, Z1, Z1
-	VMOVDQU32 Z1, (DX)
-	ADDQ      $0x00000040, CX
-	ADDQ      $0x00000040, DX
-	SUBQ      $0x00000040, BX
-	JMP       uint8SubScalarTailLoop
-
-uint8SubScalarDone:
-	RET
-
-// func uint8SubByScalarAvx512Asm(x uint8, y []uint8, r []uint8)
-// Requires: AVX512BW, AVX512F, SSE2
-TEXT ·uint8SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVBLZX      x+0(FP), AX
-	MOVQ         y_base+8(FP), CX
-	MOVQ         r_base+32(FP), DX
-	MOVQ         y_len+16(FP), BX
-	MOVD         AX, X0
-	VPBROADCASTB X0, Z0
-
-uint8SubByScalarBlockLoop:
-	CMPQ      BX, $0x00000300
-	JL        uint8SubByScalarTailLoop
-	VPSUBB    (CX), Z0, Z1
-	VPSUBB    64(CX), Z0, Z2
-	VPSUBB    128(CX), Z0, Z3
-	VPSUBB    192(CX), Z0, Z4
-	VPSUBB    256(CX), Z0, Z5
-	VPSUBB    320(CX), Z0, Z6
-	VPSUBB    384(CX), Z0, Z7
-	VPSUBB    448(CX), Z0, Z8
-	VPSUBB    512(CX), Z0, Z9
-	VPSUBB    576(CX), Z0, Z10
-	VPSUBB    640(CX), Z0, Z11
-	VPSUBB    704(CX), Z0, Z12
-	VMOVDQU32 Z1, (DX)
-	VMOVDQU32 Z2, 64(DX)
-	VMOVDQU32 Z3, 128(DX)
-	VMOVDQU32 Z4, 192(DX)
-	VMOVDQU32 Z5, 256(DX)
-	VMOVDQU32 Z6, 320(DX)
-	VMOVDQU32 Z7, 384(DX)
-	VMOVDQU32 Z8, 448(DX)
-	VMOVDQU32 Z9, 512(DX)
-	VMOVDQU32 Z10, 576(DX)
-	VMOVDQU32 Z11, 640(DX)
-	VMOVDQU32 Z12, 704(DX)
-	ADDQ      $0x00000300, CX
-	ADDQ      $0x00000300, DX
-	SUBQ      $0x00000300, BX
 	JMP       uint8SubByScalarBlockLoop
 
 uint8SubByScalarTailLoop:
 	CMPQ      BX, $0x00000040
 	JL        uint8SubByScalarDone
-	VPSUBB    (CX), Z0, Z1
+	VMOVDQU32 (CX), Z1
+	VPSUBB    Z0, Z1, Z1
 	VMOVDQU32 Z1, (DX)
 	ADDQ      $0x00000040, CX
 	ADDQ      $0x00000040, DX
@@ -1038,6 +1038,61 @@ TEXT ·uint16SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 uint16SubScalarBlockLoop:
 	CMPQ      BX, $0x00000180
 	JL        uint16SubScalarTailLoop
+	VPSUBW    (CX), Z0, Z1
+	VPSUBW    64(CX), Z0, Z2
+	VPSUBW    128(CX), Z0, Z3
+	VPSUBW    192(CX), Z0, Z4
+	VPSUBW    256(CX), Z0, Z5
+	VPSUBW    320(CX), Z0, Z6
+	VPSUBW    384(CX), Z0, Z7
+	VPSUBW    448(CX), Z0, Z8
+	VPSUBW    512(CX), Z0, Z9
+	VPSUBW    576(CX), Z0, Z10
+	VPSUBW    640(CX), Z0, Z11
+	VPSUBW    704(CX), Z0, Z12
+	VMOVDQU32 Z1, (DX)
+	VMOVDQU32 Z2, 64(DX)
+	VMOVDQU32 Z3, 128(DX)
+	VMOVDQU32 Z4, 192(DX)
+	VMOVDQU32 Z5, 256(DX)
+	VMOVDQU32 Z6, 320(DX)
+	VMOVDQU32 Z7, 384(DX)
+	VMOVDQU32 Z8, 448(DX)
+	VMOVDQU32 Z9, 512(DX)
+	VMOVDQU32 Z10, 576(DX)
+	VMOVDQU32 Z11, 640(DX)
+	VMOVDQU32 Z12, 704(DX)
+	ADDQ      $0x00000300, CX
+	ADDQ      $0x00000300, DX
+	SUBQ      $0x00000180, BX
+	JMP       uint16SubScalarBlockLoop
+
+uint16SubScalarTailLoop:
+	CMPQ      BX, $0x00000020
+	JL        uint16SubScalarDone
+	VPSUBW    (CX), Z0, Z1
+	VMOVDQU32 Z1, (DX)
+	ADDQ      $0x00000040, CX
+	ADDQ      $0x00000040, DX
+	SUBQ      $0x00000020, BX
+	JMP       uint16SubScalarTailLoop
+
+uint16SubScalarDone:
+	RET
+
+// func uint16SubByScalarAvx512Asm(x uint16, y []uint16, r []uint16)
+// Requires: AVX512BW, AVX512F, SSE2
+TEXT ·uint16SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVWLZX      x+0(FP), AX
+	MOVQ         y_base+8(FP), CX
+	MOVQ         r_base+32(FP), DX
+	MOVQ         y_len+16(FP), BX
+	MOVD         AX, X0
+	VPBROADCASTW X0, Z0
+
+uint16SubByScalarBlockLoop:
+	CMPQ      BX, $0x00000180
+	JL        uint16SubByScalarTailLoop
 	VMOVDQU32 (CX), Z1
 	VMOVDQU32 64(CX), Z2
 	VMOVDQU32 128(CX), Z3
@@ -1077,68 +1132,13 @@ uint16SubScalarBlockLoop:
 	ADDQ      $0x00000300, CX
 	ADDQ      $0x00000300, DX
 	SUBQ      $0x00000180, BX
-	JMP       uint16SubScalarBlockLoop
-
-uint16SubScalarTailLoop:
-	CMPQ      BX, $0x00000020
-	JL        uint16SubScalarDone
-	VMOVDQU32 (CX), Z1
-	VPSUBW    Z0, Z1, Z1
-	VMOVDQU32 Z1, (DX)
-	ADDQ      $0x00000040, CX
-	ADDQ      $0x00000040, DX
-	SUBQ      $0x00000020, BX
-	JMP       uint16SubScalarTailLoop
-
-uint16SubScalarDone:
-	RET
-
-// func uint16SubByScalarAvx512Asm(x uint16, y []uint16, r []uint16)
-// Requires: AVX512BW, AVX512F, SSE2
-TEXT ·uint16SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVWLZX      x+0(FP), AX
-	MOVQ         y_base+8(FP), CX
-	MOVQ         r_base+32(FP), DX
-	MOVQ         y_len+16(FP), BX
-	MOVD         AX, X0
-	VPBROADCASTW X0, Z0
-
-uint16SubByScalarBlockLoop:
-	CMPQ      BX, $0x00000180
-	JL        uint16SubByScalarTailLoop
-	VPSUBW    (CX), Z0, Z1
-	VPSUBW    64(CX), Z0, Z2
-	VPSUBW    128(CX), Z0, Z3
-	VPSUBW    192(CX), Z0, Z4
-	VPSUBW    256(CX), Z0, Z5
-	VPSUBW    320(CX), Z0, Z6
-	VPSUBW    384(CX), Z0, Z7
-	VPSUBW    448(CX), Z0, Z8
-	VPSUBW    512(CX), Z0, Z9
-	VPSUBW    576(CX), Z0, Z10
-	VPSUBW    640(CX), Z0, Z11
-	VPSUBW    704(CX), Z0, Z12
-	VMOVDQU32 Z1, (DX)
-	VMOVDQU32 Z2, 64(DX)
-	VMOVDQU32 Z3, 128(DX)
-	VMOVDQU32 Z4, 192(DX)
-	VMOVDQU32 Z5, 256(DX)
-	VMOVDQU32 Z6, 320(DX)
-	VMOVDQU32 Z7, 384(DX)
-	VMOVDQU32 Z8, 448(DX)
-	VMOVDQU32 Z9, 512(DX)
-	VMOVDQU32 Z10, 576(DX)
-	VMOVDQU32 Z11, 640(DX)
-	VMOVDQU32 Z12, 704(DX)
-	ADDQ      $0x00000300, CX
-	ADDQ      $0x00000300, DX
-	SUBQ      $0x00000180, BX
 	JMP       uint16SubByScalarBlockLoop
 
 uint16SubByScalarTailLoop:
 	CMPQ      BX, $0x00000020
 	JL        uint16SubByScalarDone
-	VPSUBW    (CX), Z0, Z1
+	VMOVDQU32 (CX), Z1
+	VPSUBW    Z0, Z1, Z1
 	VMOVDQU32 Z1, (DX)
 	ADDQ      $0x00000040, CX
 	ADDQ      $0x00000040, DX
@@ -1229,6 +1229,61 @@ TEXT ·uint32SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 uint32SubScalarBlockLoop:
 	CMPQ      BX, $0x000000c0
 	JL        uint32SubScalarTailLoop
+	VPSUBD    (CX), Z0, Z1
+	VPSUBD    64(CX), Z0, Z2
+	VPSUBD    128(CX), Z0, Z3
+	VPSUBD    192(CX), Z0, Z4
+	VPSUBD    256(CX), Z0, Z5
+	VPSUBD    320(CX), Z0, Z6
+	VPSUBD    384(CX), Z0, Z7
+	VPSUBD    448(CX), Z0, Z8
+	VPSUBD    512(CX), Z0, Z9
+	VPSUBD    576(CX), Z0, Z10
+	VPSUBD    640(CX), Z0, Z11
+	VPSUBD    704(CX), Z0, Z12
+	VMOVDQU32 Z1, (DX)
+	VMOVDQU32 Z2, 64(DX)
+	VMOVDQU32 Z3, 128(DX)
+	VMOVDQU32 Z4, 192(DX)
+	VMOVDQU32 Z5, 256(DX)
+	VMOVDQU32 Z6, 320(DX)
+	VMOVDQU32 Z7, 384(DX)
+	VMOVDQU32 Z8, 448(DX)
+	VMOVDQU32 Z9, 512(DX)
+	VMOVDQU32 Z10, 576(DX)
+	VMOVDQU32 Z11, 640(DX)
+	VMOVDQU32 Z12, 704(DX)
+	ADDQ      $0x00000300, CX
+	ADDQ      $0x00000300, DX
+	SUBQ      $0x000000c0, BX
+	JMP       uint32SubScalarBlockLoop
+
+uint32SubScalarTailLoop:
+	CMPQ      BX, $0x00000010
+	JL        uint32SubScalarDone
+	VPSUBD    (CX), Z0, Z1
+	VMOVDQU32 Z1, (DX)
+	ADDQ      $0x00000040, CX
+	ADDQ      $0x00000040, DX
+	SUBQ      $0x00000010, BX
+	JMP       uint32SubScalarTailLoop
+
+uint32SubScalarDone:
+	RET
+
+// func uint32SubByScalarAvx512Asm(x uint32, y []uint32, r []uint32)
+// Requires: AVX512F, SSE2
+TEXT ·uint32SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVL         x+0(FP), AX
+	MOVQ         y_base+8(FP), CX
+	MOVQ         r_base+32(FP), DX
+	MOVQ         y_len+16(FP), BX
+	MOVD         AX, X0
+	VPBROADCASTD X0, Z0
+
+uint32SubByScalarBlockLoop:
+	CMPQ      BX, $0x000000c0
+	JL        uint32SubByScalarTailLoop
 	VMOVDQU32 (CX), Z1
 	VMOVDQU32 64(CX), Z2
 	VMOVDQU32 128(CX), Z3
@@ -1268,68 +1323,13 @@ uint32SubScalarBlockLoop:
 	ADDQ      $0x00000300, CX
 	ADDQ      $0x00000300, DX
 	SUBQ      $0x000000c0, BX
-	JMP       uint32SubScalarBlockLoop
-
-uint32SubScalarTailLoop:
-	CMPQ      BX, $0x00000010
-	JL        uint32SubScalarDone
-	VMOVDQU32 (CX), Z1
-	VPSUBD    Z0, Z1, Z1
-	VMOVDQU32 Z1, (DX)
-	ADDQ      $0x00000040, CX
-	ADDQ      $0x00000040, DX
-	SUBQ      $0x00000010, BX
-	JMP       uint32SubScalarTailLoop
-
-uint32SubScalarDone:
-	RET
-
-// func uint32SubByScalarAvx512Asm(x uint32, y []uint32, r []uint32)
-// Requires: AVX512F, SSE2
-TEXT ·uint32SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVL         x+0(FP), AX
-	MOVQ         y_base+8(FP), CX
-	MOVQ         r_base+32(FP), DX
-	MOVQ         y_len+16(FP), BX
-	MOVD         AX, X0
-	VPBROADCASTD X0, Z0
-
-uint32SubByScalarBlockLoop:
-	CMPQ      BX, $0x000000c0
-	JL        uint32SubByScalarTailLoop
-	VPSUBD    (CX), Z0, Z1
-	VPSUBD    64(CX), Z0, Z2
-	VPSUBD    128(CX), Z0, Z3
-	VPSUBD    192(CX), Z0, Z4
-	VPSUBD    256(CX), Z0, Z5
-	VPSUBD    320(CX), Z0, Z6
-	VPSUBD    384(CX), Z0, Z7
-	VPSUBD    448(CX), Z0, Z8
-	VPSUBD    512(CX), Z0, Z9
-	VPSUBD    576(CX), Z0, Z10
-	VPSUBD    640(CX), Z0, Z11
-	VPSUBD    704(CX), Z0, Z12
-	VMOVDQU32 Z1, (DX)
-	VMOVDQU32 Z2, 64(DX)
-	VMOVDQU32 Z3, 128(DX)
-	VMOVDQU32 Z4, 192(DX)
-	VMOVDQU32 Z5, 256(DX)
-	VMOVDQU32 Z6, 320(DX)
-	VMOVDQU32 Z7, 384(DX)
-	VMOVDQU32 Z8, 448(DX)
-	VMOVDQU32 Z9, 512(DX)
-	VMOVDQU32 Z10, 576(DX)
-	VMOVDQU32 Z11, 640(DX)
-	VMOVDQU32 Z12, 704(DX)
-	ADDQ      $0x00000300, CX
-	ADDQ      $0x00000300, DX
-	SUBQ      $0x000000c0, BX
 	JMP       uint32SubByScalarBlockLoop
 
 uint32SubByScalarTailLoop:
 	CMPQ      BX, $0x00000010
 	JL        uint32SubByScalarDone
-	VPSUBD    (CX), Z0, Z1
+	VMOVDQU32 (CX), Z1
+	VPSUBD    Z0, Z1, Z1
 	VMOVDQU32 Z1, (DX)
 	ADDQ      $0x00000040, CX
 	ADDQ      $0x00000040, DX
@@ -1420,6 +1420,61 @@ TEXT ·uint64SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 uint64SubScalarBlockLoop:
 	CMPQ      BX, $0x00000060
 	JL        uint64SubScalarTailLoop
+	VPSUBQ    (CX), Z0, Z1
+	VPSUBQ    64(CX), Z0, Z2
+	VPSUBQ    128(CX), Z0, Z3
+	VPSUBQ    192(CX), Z0, Z4
+	VPSUBQ    256(CX), Z0, Z5
+	VPSUBQ    320(CX), Z0, Z6
+	VPSUBQ    384(CX), Z0, Z7
+	VPSUBQ    448(CX), Z0, Z8
+	VPSUBQ    512(CX), Z0, Z9
+	VPSUBQ    576(CX), Z0, Z10
+	VPSUBQ    640(CX), Z0, Z11
+	VPSUBQ    704(CX), Z0, Z12
+	VMOVDQU32 Z1, (DX)
+	VMOVDQU32 Z2, 64(DX)
+	VMOVDQU32 Z3, 128(DX)
+	VMOVDQU32 Z4, 192(DX)
+	VMOVDQU32 Z5, 256(DX)
+	VMOVDQU32 Z6, 320(DX)
+	VMOVDQU32 Z7, 384(DX)
+	VMOVDQU32 Z8, 448(DX)
+	VMOVDQU32 Z9, 512(DX)
+	VMOVDQU32 Z10, 576(DX)
+	VMOVDQU32 Z11, 640(DX)
+	VMOVDQU32 Z12, 704(DX)
+	ADDQ      $0x00000300, CX
+	ADDQ      $0x00000300, DX
+	SUBQ      $0x00000060, BX
+	JMP       uint64SubScalarBlockLoop
+
+uint64SubScalarTailLoop:
+	CMPQ      BX, $0x00000008
+	JL        uint64SubScalarDone
+	VPSUBQ    (CX), Z0, Z1
+	VMOVDQU32 Z1, (DX)
+	ADDQ      $0x00000040, CX
+	ADDQ      $0x00000040, DX
+	SUBQ      $0x00000008, BX
+	JMP       uint64SubScalarTailLoop
+
+uint64SubScalarDone:
+	RET
+
+// func uint64SubByScalarAvx512Asm(x uint64, y []uint64, r []uint64)
+// Requires: AVX512F, SSE2
+TEXT ·uint64SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVQ         x+0(FP), AX
+	MOVQ         y_base+8(FP), CX
+	MOVQ         r_base+32(FP), DX
+	MOVQ         y_len+16(FP), BX
+	MOVQ         AX, X0
+	VPBROADCASTQ X0, Z0
+
+uint64SubByScalarBlockLoop:
+	CMPQ      BX, $0x00000060
+	JL        uint64SubByScalarTailLoop
 	VMOVDQU32 (CX), Z1
 	VMOVDQU32 64(CX), Z2
 	VMOVDQU32 128(CX), Z3
@@ -1459,68 +1514,13 @@ uint64SubScalarBlockLoop:
 	ADDQ      $0x00000300, CX
 	ADDQ      $0x00000300, DX
 	SUBQ      $0x00000060, BX
-	JMP       uint64SubScalarBlockLoop
-
-uint64SubScalarTailLoop:
-	CMPQ      BX, $0x00000008
-	JL        uint64SubScalarDone
-	VMOVDQU32 (CX), Z1
-	VPSUBQ    Z0, Z1, Z1
-	VMOVDQU32 Z1, (DX)
-	ADDQ      $0x00000040, CX
-	ADDQ      $0x00000040, DX
-	SUBQ      $0x00000008, BX
-	JMP       uint64SubScalarTailLoop
-
-uint64SubScalarDone:
-	RET
-
-// func uint64SubByScalarAvx512Asm(x uint64, y []uint64, r []uint64)
-// Requires: AVX512F, SSE2
-TEXT ·uint64SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVQ         x+0(FP), AX
-	MOVQ         y_base+8(FP), CX
-	MOVQ         r_base+32(FP), DX
-	MOVQ         y_len+16(FP), BX
-	MOVQ         AX, X0
-	VPBROADCASTQ X0, Z0
-
-uint64SubByScalarBlockLoop:
-	CMPQ      BX, $0x00000060
-	JL        uint64SubByScalarTailLoop
-	VPSUBQ    (CX), Z0, Z1
-	VPSUBQ    64(CX), Z0, Z2
-	VPSUBQ    128(CX), Z0, Z3
-	VPSUBQ    192(CX), Z0, Z4
-	VPSUBQ    256(CX), Z0, Z5
-	VPSUBQ    320(CX), Z0, Z6
-	VPSUBQ    384(CX), Z0, Z7
-	VPSUBQ    448(CX), Z0, Z8
-	VPSUBQ    512(CX), Z0, Z9
-	VPSUBQ    576(CX), Z0, Z10
-	VPSUBQ    640(CX), Z0, Z11
-	VPSUBQ    704(CX), Z0, Z12
-	VMOVDQU32 Z1, (DX)
-	VMOVDQU32 Z2, 64(DX)
-	VMOVDQU32 Z3, 128(DX)
-	VMOVDQU32 Z4, 192(DX)
-	VMOVDQU32 Z5, 256(DX)
-	VMOVDQU32 Z6, 320(DX)
-	VMOVDQU32 Z7, 384(DX)
-	VMOVDQU32 Z8, 448(DX)
-	VMOVDQU32 Z9, 512(DX)
-	VMOVDQU32 Z10, 576(DX)
-	VMOVDQU32 Z11, 640(DX)
-	VMOVDQU32 Z12, 704(DX)
-	ADDQ      $0x00000300, CX
-	ADDQ      $0x00000300, DX
-	SUBQ      $0x00000060, BX
 	JMP       uint64SubByScalarBlockLoop
 
 uint64SubByScalarTailLoop:
 	CMPQ      BX, $0x00000008
 	JL        uint64SubByScalarDone
-	VPSUBQ    (CX), Z0, Z1
+	VMOVDQU32 (CX), Z1
+	VPSUBQ    Z0, Z1, Z1
 	VMOVDQU32 Z1, (DX)
 	ADDQ      $0x00000040, CX
 	ADDQ      $0x00000040, DX
@@ -1610,6 +1610,60 @@ TEXT ·float32SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 float32SubScalarBlockLoop:
 	CMPQ    DX, $0x000000c0
 	JL      float32SubScalarTailLoop
+	VSUBPS  (AX), Z0, Z1
+	VSUBPS  64(AX), Z0, Z2
+	VSUBPS  128(AX), Z0, Z3
+	VSUBPS  192(AX), Z0, Z4
+	VSUBPS  256(AX), Z0, Z5
+	VSUBPS  320(AX), Z0, Z6
+	VSUBPS  384(AX), Z0, Z7
+	VSUBPS  448(AX), Z0, Z8
+	VSUBPS  512(AX), Z0, Z9
+	VSUBPS  576(AX), Z0, Z10
+	VSUBPS  640(AX), Z0, Z11
+	VSUBPS  704(AX), Z0, Z12
+	VMOVUPS Z1, (CX)
+	VMOVUPS Z2, 64(CX)
+	VMOVUPS Z3, 128(CX)
+	VMOVUPS Z4, 192(CX)
+	VMOVUPS Z5, 256(CX)
+	VMOVUPS Z6, 320(CX)
+	VMOVUPS Z7, 384(CX)
+	VMOVUPS Z8, 448(CX)
+	VMOVUPS Z9, 512(CX)
+	VMOVUPS Z10, 576(CX)
+	VMOVUPS Z11, 640(CX)
+	VMOVUPS Z12, 704(CX)
+	ADDQ    $0x00000300, AX
+	ADDQ    $0x00000300, CX
+	SUBQ    $0x000000c0, DX
+	JMP     float32SubScalarBlockLoop
+
+float32SubScalarTailLoop:
+	CMPQ    DX, $0x00000010
+	JL      float32SubScalarDone
+	VSUBPS  (AX), Z0, Z1
+	VMOVUPS Z1, (CX)
+	ADDQ    $0x00000040, AX
+	ADDQ    $0x00000040, CX
+	SUBQ    $0x00000010, DX
+	JMP     float32SubScalarTailLoop
+
+float32SubScalarDone:
+	RET
+
+// func float32SubByScalarAvx512Asm(x float32, y []float32, r []float32)
+// Requires: AVX512F, SSE
+TEXT ·float32SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVSS        x+0(FP), X0
+	MOVQ         y_base+8(FP), AX
+	MOVQ         r_base+32(FP), CX
+	MOVQ         y_len+16(FP), DX
+	VBROADCASTSS X0, Z0
+
+float32SubByScalarBlockLoop:
+	CMPQ    DX, $0x000000c0
+	JL      float32SubByScalarTailLoop
 	VMOVUPS (AX), Z1
 	VMOVUPS 64(AX), Z2
 	VMOVUPS 128(AX), Z3
@@ -1649,67 +1703,13 @@ float32SubScalarBlockLoop:
 	ADDQ    $0x00000300, AX
 	ADDQ    $0x00000300, CX
 	SUBQ    $0x000000c0, DX
-	JMP     float32SubScalarBlockLoop
-
-float32SubScalarTailLoop:
-	CMPQ    DX, $0x00000010
-	JL      float32SubScalarDone
-	VMOVUPS (AX), Z1
-	VSUBPS  Z0, Z1, Z1
-	VMOVUPS Z1, (CX)
-	ADDQ    $0x00000040, AX
-	ADDQ    $0x00000040, CX
-	SUBQ    $0x00000010, DX
-	JMP     float32SubScalarTailLoop
-
-float32SubScalarDone:
-	RET
-
-// func float32SubByScalarAvx512Asm(x float32, y []float32, r []float32)
-// Requires: AVX512F, SSE
-TEXT ·float32SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVSS        x+0(FP), X0
-	MOVQ         y_base+8(FP), AX
-	MOVQ         r_base+32(FP), CX
-	MOVQ         y_len+16(FP), DX
-	VBROADCASTSS X0, Z0
-
-float32SubByScalarBlockLoop:
-	CMPQ    DX, $0x000000c0
-	JL      float32SubByScalarTailLoop
-	VSUBPS  (AX), Z0, Z1
-	VSUBPS  64(AX), Z0, Z2
-	VSUBPS  128(AX), Z0, Z3
-	VSUBPS  192(AX), Z0, Z4
-	VSUBPS  256(AX), Z0, Z5
-	VSUBPS  320(AX), Z0, Z6
-	VSUBPS  384(AX), Z0, Z7
-	VSUBPS  448(AX), Z0, Z8
-	VSUBPS  512(AX), Z0, Z9
-	VSUBPS  576(AX), Z0, Z10
-	VSUBPS  640(AX), Z0, Z11
-	VSUBPS  704(AX), Z0, Z12
-	VMOVUPS Z1, (CX)
-	VMOVUPS Z2, 64(CX)
-	VMOVUPS Z3, 128(CX)
-	VMOVUPS Z4, 192(CX)
-	VMOVUPS Z5, 256(CX)
-	VMOVUPS Z6, 320(CX)
-	VMOVUPS Z7, 384(CX)
-	VMOVUPS Z8, 448(CX)
-	VMOVUPS Z9, 512(CX)
-	VMOVUPS Z10, 576(CX)
-	VMOVUPS Z11, 640(CX)
-	VMOVUPS Z12, 704(CX)
-	ADDQ    $0x00000300, AX
-	ADDQ    $0x00000300, CX
-	SUBQ    $0x000000c0, DX
 	JMP     float32SubByScalarBlockLoop
 
 float32SubByScalarTailLoop:
 	CMPQ    DX, $0x00000010
 	JL      float32SubByScalarDone
-	VSUBPS  (AX), Z0, Z1
+	VMOVUPS (AX), Z1
+	VSUBPS  Z0, Z1, Z1
 	VMOVUPS Z1, (CX)
 	ADDQ    $0x00000040, AX
 	ADDQ    $0x00000040, CX
@@ -1799,6 +1799,60 @@ TEXT ·float64SubScalarAvx512Asm(SB), NOSPLIT, $0-56
 float64SubScalarBlockLoop:
 	CMPQ    DX, $0x00000060
 	JL      float64SubScalarTailLoop
+	VSUBPD  (AX), Z0, Z1
+	VSUBPD  64(AX), Z0, Z2
+	VSUBPD  128(AX), Z0, Z3
+	VSUBPD  192(AX), Z0, Z4
+	VSUBPD  256(AX), Z0, Z5
+	VSUBPD  320(AX), Z0, Z6
+	VSUBPD  384(AX), Z0, Z7
+	VSUBPD  448(AX), Z0, Z8
+	VSUBPD  512(AX), Z0, Z9
+	VSUBPD  576(AX), Z0, Z10
+	VSUBPD  640(AX), Z0, Z11
+	VSUBPD  704(AX), Z0, Z12
+	VMOVUPD Z1, (CX)
+	VMOVUPD Z2, 64(CX)
+	VMOVUPD Z3, 128(CX)
+	VMOVUPD Z4, 192(CX)
+	VMOVUPD Z5, 256(CX)
+	VMOVUPD Z6, 320(CX)
+	VMOVUPD Z7, 384(CX)
+	VMOVUPD Z8, 448(CX)
+	VMOVUPD Z9, 512(CX)
+	VMOVUPD Z10, 576(CX)
+	VMOVUPD Z11, 640(CX)
+	VMOVUPD Z12, 704(CX)
+	ADDQ    $0x00000300, AX
+	ADDQ    $0x00000300, CX
+	SUBQ    $0x00000060, DX
+	JMP     float64SubScalarBlockLoop
+
+float64SubScalarTailLoop:
+	CMPQ    DX, $0x00000008
+	JL      float64SubScalarDone
+	VSUBPD  (AX), Z0, Z1
+	VMOVUPD Z1, (CX)
+	ADDQ    $0x00000040, AX
+	ADDQ    $0x00000040, CX
+	SUBQ    $0x00000008, DX
+	JMP     float64SubScalarTailLoop
+
+float64SubScalarDone:
+	RET
+
+// func float64SubByScalarAvx512Asm(x float64, y []float64, r []float64)
+// Requires: AVX512F, SSE2
+TEXT ·float64SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
+	MOVSD        x+0(FP), X0
+	MOVQ         y_base+8(FP), AX
+	MOVQ         r_base+32(FP), CX
+	MOVQ         y_len+16(FP), DX
+	VBROADCASTSD X0, Z0
+
+float64SubByScalarBlockLoop:
+	CMPQ    DX, $0x00000060
+	JL      float64SubByScalarTailLoop
 	VMOVUPD (AX), Z1
 	VMOVUPD 64(AX), Z2
 	VMOVUPD 128(AX), Z3
@@ -1838,67 +1892,13 @@ float64SubScalarBlockLoop:
 	ADDQ    $0x00000300, AX
 	ADDQ    $0x00000300, CX
 	SUBQ    $0x00000060, DX
-	JMP     float64SubScalarBlockLoop
-
-float64SubScalarTailLoop:
-	CMPQ    DX, $0x00000008
-	JL      float64SubScalarDone
-	VMOVUPD (AX), Z1
-	VSUBPD  Z0, Z1, Z1
-	VMOVUPD Z1, (CX)
-	ADDQ    $0x00000040, AX
-	ADDQ    $0x00000040, CX
-	SUBQ    $0x00000008, DX
-	JMP     float64SubScalarTailLoop
-
-float64SubScalarDone:
-	RET
-
-// func float64SubByScalarAvx512Asm(x float64, y []float64, r []float64)
-// Requires: AVX512F, SSE2
-TEXT ·float64SubByScalarAvx512Asm(SB), NOSPLIT, $0-56
-	MOVSD        x+0(FP), X0
-	MOVQ         y_base+8(FP), AX
-	MOVQ         r_base+32(FP), CX
-	MOVQ         y_len+16(FP), DX
-	VBROADCASTSD X0, Z0
-
-float64SubByScalarBlockLoop:
-	CMPQ    DX, $0x00000060
-	JL      float64SubByScalarTailLoop
-	VSUBPD  (AX), Z0, Z1
-	VSUBPD  64(AX), Z0, Z2
-	VSUBPD  128(AX), Z0, Z3
-	VSUBPD  192(AX), Z0, Z4
-	VSUBPD  256(AX), Z0, Z5
-	VSUBPD  320(AX), Z0, Z6
-	VSUBPD  384(AX), Z0, Z7
-	VSUBPD  448(AX), Z0, Z8
-	VSUBPD  512(AX), Z0, Z9
-	VSUBPD  576(AX), Z0, Z10
-	VSUBPD  640(AX), Z0, Z11
-	VSUBPD  704(AX), Z0, Z12
-	VMOVUPD Z1, (CX)
-	VMOVUPD Z2, 64(CX)
-	VMOVUPD Z3, 128(CX)
-	VMOVUPD Z4, 192(CX)
-	VMOVUPD Z5, 256(CX)
-	VMOVUPD Z6, 320(CX)
-	VMOVUPD Z7, 384(CX)
-	VMOVUPD Z8, 448(CX)
-	VMOVUPD Z9, 512(CX)
-	VMOVUPD Z10, 576(CX)
-	VMOVUPD Z11, 640(CX)
-	VMOVUPD Z12, 704(CX)
-	ADDQ    $0x00000300, AX
-	ADDQ    $0x00000300, CX
-	SUBQ    $0x00000060, DX
 	JMP     float64SubByScalarBlockLoop
 
 float64SubByScalarTailLoop:
 	CMPQ    DX, $0x00000008
 	JL      float64SubByScalarDone
-	VSUBPD  (AX), Z0, Z1
+	VMOVUPD (AX), Z1
+	VSUBPD  Z0, Z1, Z1
 	VMOVUPD Z1, (CX)
 	ADDQ    $0x00000040, AX
 	ADDQ    $0x00000040, CX

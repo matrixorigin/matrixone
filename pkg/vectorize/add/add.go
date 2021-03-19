@@ -3,172 +3,172 @@ package add
 import "golang.org/x/sys/cpu"
 
 var (
-    int8Add func([]int8, []int8, []int8) []int8
-    int8AddSels func([]int8, []int8, []int8, []int64) []int8
-    int8AddScalar func(int8, []int8, []int8) []int8
-    int8AddScalarSels func(int8, []int8, []int8, []int64) []int8
-    int16Add func([]int16, []int16, []int16) []int16
-    int16AddSels func([]int16, []int16, []int16, []int64) []int16
-    int16AddScalar func(int16, []int16, []int16) []int16
-    int16AddScalarSels func(int16, []int16, []int16, []int64) []int16
-    int32Add func([]int32, []int32, []int32) []int32
-    int32AddSels func([]int32, []int32, []int32, []int64) []int32
-    int32AddScalar func(int32, []int32, []int32) []int32
-    int32AddScalarSels func(int32, []int32, []int32, []int64) []int32
-    int64Add func([]int64, []int64, []int64) []int64
-    int64AddSels func([]int64, []int64, []int64, []int64) []int64
-    int64AddScalar func(int64, []int64, []int64) []int64
-    int64AddScalarSels func(int64, []int64, []int64, []int64) []int64
-    uint8Add func([]uint8, []uint8, []uint8) []uint8
-    uint8AddSels func([]uint8, []uint8, []uint8, []int64) []uint8
-    uint8AddScalar func(uint8, []uint8, []uint8) []uint8
-    uint8AddScalarSels func(uint8, []uint8, []uint8, []int64) []uint8
-    uint16Add func([]uint16, []uint16, []uint16) []uint16
-    uint16AddSels func([]uint16, []uint16, []uint16, []int64) []uint16
-    uint16AddScalar func(uint16, []uint16, []uint16) []uint16
-    uint16AddScalarSels func(uint16, []uint16, []uint16, []int64) []uint16
-    uint32Add func([]uint32, []uint32, []uint32) []uint32
-    uint32AddSels func([]uint32, []uint32, []uint32, []int64) []uint32
-    uint32AddScalar func(uint32, []uint32, []uint32) []uint32
-    uint32AddScalarSels func(uint32, []uint32, []uint32, []int64) []uint32
-    uint64Add func([]uint64, []uint64, []uint64) []uint64
-    uint64AddSels func([]uint64, []uint64, []uint64, []int64) []uint64
-    uint64AddScalar func(uint64, []uint64, []uint64) []uint64
-    uint64AddScalarSels func(uint64, []uint64, []uint64, []int64) []uint64
-    float32Add func([]float32, []float32, []float32) []float32
-    float32AddSels func([]float32, []float32, []float32, []int64) []float32
-    float32AddScalar func(float32, []float32, []float32) []float32
-    float32AddScalarSels func(float32, []float32, []float32, []int64) []float32
-    float64Add func([]float64, []float64, []float64) []float64
-    float64AddSels func([]float64, []float64, []float64, []int64) []float64
-    float64AddScalar func(float64, []float64, []float64) []float64
-    float64AddScalarSels func(float64, []float64, []float64, []int64) []float64
+	int8Add              func([]int8, []int8, []int8) []int8
+	int8AddSels          func([]int8, []int8, []int8, []int64) []int8
+	int8AddScalar        func(int8, []int8, []int8) []int8
+	int8AddScalarSels    func(int8, []int8, []int8, []int64) []int8
+	int16Add             func([]int16, []int16, []int16) []int16
+	int16AddSels         func([]int16, []int16, []int16, []int64) []int16
+	int16AddScalar       func(int16, []int16, []int16) []int16
+	int16AddScalarSels   func(int16, []int16, []int16, []int64) []int16
+	int32Add             func([]int32, []int32, []int32) []int32
+	int32AddSels         func([]int32, []int32, []int32, []int64) []int32
+	int32AddScalar       func(int32, []int32, []int32) []int32
+	int32AddScalarSels   func(int32, []int32, []int32, []int64) []int32
+	int64Add             func([]int64, []int64, []int64) []int64
+	int64AddSels         func([]int64, []int64, []int64, []int64) []int64
+	int64AddScalar       func(int64, []int64, []int64) []int64
+	int64AddScalarSels   func(int64, []int64, []int64, []int64) []int64
+	uint8Add             func([]uint8, []uint8, []uint8) []uint8
+	uint8AddSels         func([]uint8, []uint8, []uint8, []int64) []uint8
+	uint8AddScalar       func(uint8, []uint8, []uint8) []uint8
+	uint8AddScalarSels   func(uint8, []uint8, []uint8, []int64) []uint8
+	uint16Add            func([]uint16, []uint16, []uint16) []uint16
+	uint16AddSels        func([]uint16, []uint16, []uint16, []int64) []uint16
+	uint16AddScalar      func(uint16, []uint16, []uint16) []uint16
+	uint16AddScalarSels  func(uint16, []uint16, []uint16, []int64) []uint16
+	uint32Add            func([]uint32, []uint32, []uint32) []uint32
+	uint32AddSels        func([]uint32, []uint32, []uint32, []int64) []uint32
+	uint32AddScalar      func(uint32, []uint32, []uint32) []uint32
+	uint32AddScalarSels  func(uint32, []uint32, []uint32, []int64) []uint32
+	uint64Add            func([]uint64, []uint64, []uint64) []uint64
+	uint64AddSels        func([]uint64, []uint64, []uint64, []int64) []uint64
+	uint64AddScalar      func(uint64, []uint64, []uint64) []uint64
+	uint64AddScalarSels  func(uint64, []uint64, []uint64, []int64) []uint64
+	float32Add           func([]float32, []float32, []float32) []float32
+	float32AddSels       func([]float32, []float32, []float32, []int64) []float32
+	float32AddScalar     func(float32, []float32, []float32) []float32
+	float32AddScalarSels func(float32, []float32, []float32, []int64) []float32
+	float64Add           func([]float64, []float64, []float64) []float64
+	float64AddSels       func([]float64, []float64, []float64, []int64) []float64
+	float64AddScalar     func(float64, []float64, []float64) []float64
+	float64AddScalarSels func(float64, []float64, []float64, []int64) []float64
 )
 
 func init() {
 	if cpu.X86.HasAVX512 {
-        int8Add = int8AddAvx512
-        //int8AddSels = int8AddSelsAvx512
-        int8AddScalar = int8AddScalarAvx512
-        //int8AddScalarSels = int8AddScalarSelsAvx512
-        int16Add = int16AddAvx512
-        //int16AddSels = int16AddSelsAvx512
-        int16AddScalar = int16AddScalarAvx512
-        //int16AddScalarSels = int16AddScalarSelsAvx512
-        int32Add = int32AddAvx512
-        //int32AddSels = int32AddSelsAvx512
-        int32AddScalar = int32AddScalarAvx512
-        //int32AddScalarSels = int32AddScalarSelsAvx512
-        int64Add = int64AddAvx512
-        //int64AddSels = int64AddSelsAvx512
-        int64AddScalar = int64AddScalarAvx512
-        //int64AddScalarSels = int64AddScalarSelsAvx512
-        uint8Add = uint8AddAvx512
-        //uint8AddSels = uint8AddSelsAvx512
-        uint8AddScalar = uint8AddScalarAvx512
-        //uint8AddScalarSels = uint8AddScalarSelsAvx512
-        uint16Add = uint16AddAvx512
-        //uint16AddSels = uint16AddSelsAvx512
-        uint16AddScalar = uint16AddScalarAvx512
-        //uint16AddScalarSels = uint16AddScalarSelsAvx512
-        uint32Add = uint32AddAvx512
-        //uint32AddSels = uint32AddSelsAvx512
-        uint32AddScalar = uint32AddScalarAvx512
-        //uint32AddScalarSels = uint32AddScalarSelsAvx512
-        uint64Add = uint64AddAvx512
-        //uint64AddSels = uint64AddSelsAvx512
-        uint64AddScalar = uint64AddScalarAvx512
-        //uint64AddScalarSels = uint64AddScalarSelsAvx512
-        float32Add = float32AddAvx512
-        //float32AddSels = float32AddSelsAvx512
-        float32AddScalar = float32AddScalarAvx512
-        //float32AddScalarSels = float32AddScalarSelsAvx512
-        float64Add = float64AddAvx512
-        //float64AddSels = float64AddSelsAvx512
-        float64AddScalar = float64AddScalarAvx512
-        //float64AddScalarSels = float64AddScalarSelsAvx512
+		int8Add = int8AddAvx512
+		//int8AddSels = int8AddSelsAvx512
+		int8AddScalar = int8AddScalarAvx512
+		//int8AddScalarSels = int8AddScalarSelsAvx512
+		int16Add = int16AddAvx512
+		//int16AddSels = int16AddSelsAvx512
+		int16AddScalar = int16AddScalarAvx512
+		//int16AddScalarSels = int16AddScalarSelsAvx512
+		int32Add = int32AddAvx512
+		//int32AddSels = int32AddSelsAvx512
+		int32AddScalar = int32AddScalarAvx512
+		//int32AddScalarSels = int32AddScalarSelsAvx512
+		int64Add = int64AddAvx512
+		//int64AddSels = int64AddSelsAvx512
+		int64AddScalar = int64AddScalarAvx512
+		//int64AddScalarSels = int64AddScalarSelsAvx512
+		uint8Add = uint8AddAvx512
+		//uint8AddSels = uint8AddSelsAvx512
+		uint8AddScalar = uint8AddScalarAvx512
+		//uint8AddScalarSels = uint8AddScalarSelsAvx512
+		uint16Add = uint16AddAvx512
+		//uint16AddSels = uint16AddSelsAvx512
+		uint16AddScalar = uint16AddScalarAvx512
+		//uint16AddScalarSels = uint16AddScalarSelsAvx512
+		uint32Add = uint32AddAvx512
+		//uint32AddSels = uint32AddSelsAvx512
+		uint32AddScalar = uint32AddScalarAvx512
+		//uint32AddScalarSels = uint32AddScalarSelsAvx512
+		uint64Add = uint64AddAvx512
+		//uint64AddSels = uint64AddSelsAvx512
+		uint64AddScalar = uint64AddScalarAvx512
+		//uint64AddScalarSels = uint64AddScalarSelsAvx512
+		float32Add = float32AddAvx512
+		//float32AddSels = float32AddSelsAvx512
+		float32AddScalar = float32AddScalarAvx512
+		//float32AddScalarSels = float32AddScalarSelsAvx512
+		float64Add = float64AddAvx512
+		//float64AddSels = float64AddSelsAvx512
+		float64AddScalar = float64AddScalarAvx512
+		//float64AddScalarSels = float64AddScalarSelsAvx512
 	} else if cpu.X86.HasAVX2 {
-        int8Add = int8AddAvx2
-        //int8AddSels = int8AddSelsAvx2
-        int8AddScalar = int8AddScalarAvx2
-        //int8AddScalarSels = int8AddScalarSelsAvx2
-        int16Add = int16AddAvx2
-        //int16AddSels = int16AddSelsAvx2
-        int16AddScalar = int16AddScalarAvx2
-        //int16AddScalarSels = int16AddScalarSelsAvx2
-        int32Add = int32AddAvx2
-        //int32AddSels = int32AddSelsAvx2
-        int32AddScalar = int32AddScalarAvx2
-        //int32AddScalarSels = int32AddScalarSelsAvx2
-        int64Add = int64AddAvx2
-        //int64AddSels = int64AddSelsAvx2
-        int64AddScalar = int64AddScalarAvx2
-        //int64AddScalarSels = int64AddScalarSelsAvx2
-        uint8Add = uint8AddAvx2
-        //uint8AddSels = uint8AddSelsAvx2
-        uint8AddScalar = uint8AddScalarAvx2
-        //uint8AddScalarSels = uint8AddScalarSelsAvx2
-        uint16Add = uint16AddAvx2
-        //uint16AddSels = uint16AddSelsAvx2
-        uint16AddScalar = uint16AddScalarAvx2
-        //uint16AddScalarSels = uint16AddScalarSelsAvx2
-        uint32Add = uint32AddAvx2
-        //uint32AddSels = uint32AddSelsAvx2
-        uint32AddScalar = uint32AddScalarAvx2
-        //uint32AddScalarSels = uint32AddScalarSelsAvx2
-        uint64Add = uint64AddAvx2
-        //uint64AddSels = uint64AddSelsAvx2
-        uint64AddScalar = uint64AddScalarAvx2
-        //uint64AddScalarSels = uint64AddScalarSelsAvx2
-        float32Add = float32AddAvx2
-        //float32AddSels = float32AddSelsAvx2
-        float32AddScalar = float32AddScalarAvx2
-        //float32AddScalarSels = float32AddScalarSelsAvx2
-        float64Add = float64AddAvx2
-        //float64AddSels = float64AddSelsAvx2
-        float64AddScalar = float64AddScalarAvx2
-        //float64AddScalarSels = float64AddScalarSelsAvx2
+		int8Add = int8AddAvx2
+		//int8AddSels = int8AddSelsAvx2
+		int8AddScalar = int8AddScalarAvx2
+		//int8AddScalarSels = int8AddScalarSelsAvx2
+		int16Add = int16AddAvx2
+		//int16AddSels = int16AddSelsAvx2
+		int16AddScalar = int16AddScalarAvx2
+		//int16AddScalarSels = int16AddScalarSelsAvx2
+		int32Add = int32AddAvx2
+		//int32AddSels = int32AddSelsAvx2
+		int32AddScalar = int32AddScalarAvx2
+		//int32AddScalarSels = int32AddScalarSelsAvx2
+		int64Add = int64AddAvx2
+		//int64AddSels = int64AddSelsAvx2
+		int64AddScalar = int64AddScalarAvx2
+		//int64AddScalarSels = int64AddScalarSelsAvx2
+		uint8Add = uint8AddAvx2
+		//uint8AddSels = uint8AddSelsAvx2
+		uint8AddScalar = uint8AddScalarAvx2
+		//uint8AddScalarSels = uint8AddScalarSelsAvx2
+		uint16Add = uint16AddAvx2
+		//uint16AddSels = uint16AddSelsAvx2
+		uint16AddScalar = uint16AddScalarAvx2
+		//uint16AddScalarSels = uint16AddScalarSelsAvx2
+		uint32Add = uint32AddAvx2
+		//uint32AddSels = uint32AddSelsAvx2
+		uint32AddScalar = uint32AddScalarAvx2
+		//uint32AddScalarSels = uint32AddScalarSelsAvx2
+		uint64Add = uint64AddAvx2
+		//uint64AddSels = uint64AddSelsAvx2
+		uint64AddScalar = uint64AddScalarAvx2
+		//uint64AddScalarSels = uint64AddScalarSelsAvx2
+		float32Add = float32AddAvx2
+		//float32AddSels = float32AddSelsAvx2
+		float32AddScalar = float32AddScalarAvx2
+		//float32AddScalarSels = float32AddScalarSelsAvx2
+		float64Add = float64AddAvx2
+		//float64AddSels = float64AddSelsAvx2
+		float64AddScalar = float64AddScalarAvx2
+		//float64AddScalarSels = float64AddScalarSelsAvx2
 	} else {
-        int8Add = int8AddPure
-        //int8AddSels = int8AddSelsPure
-        int8AddScalar = int8AddScalarPure
-        //int8AddScalarSels = int8AddScalarSelsPure
-        int16Add = int16AddPure
-        //int16AddSels = int16AddSelsPure
-        int16AddScalar = int16AddScalarPure
-        //int16AddScalarSels = int16AddScalarSelsPure
-        int32Add = int32AddPure
-        //int32AddSels = int32AddSelsPure
-        int32AddScalar = int32AddScalarPure
-        //int32AddScalarSels = int32AddScalarSelsPure
-        int64Add = int64AddPure
-        //int64AddSels = int64AddSelsPure
-        int64AddScalar = int64AddScalarPure
-        //int64AddScalarSels = int64AddScalarSelsPure
-        uint8Add = uint8AddPure
-        //uint8AddSels = uint8AddSelsPure
-        uint8AddScalar = uint8AddScalarPure
-        //uint8AddScalarSels = uint8AddScalarSelsPure
-        uint16Add = uint16AddPure
-        //uint16AddSels = uint16AddSelsPure
-        uint16AddScalar = uint16AddScalarPure
-        //uint16AddScalarSels = uint16AddScalarSelsPure
-        uint32Add = uint32AddPure
-        //uint32AddSels = uint32AddSelsPure
-        uint32AddScalar = uint32AddScalarPure
-        //uint32AddScalarSels = uint32AddScalarSelsPure
-        uint64Add = uint64AddPure
-        //uint64AddSels = uint64AddSelsPure
-        uint64AddScalar = uint64AddScalarPure
-        //uint64AddScalarSels = uint64AddScalarSelsPure
-        float32Add = float32AddPure
-        //float32AddSels = float32AddSelsPure
-        float32AddScalar = float32AddScalarPure
-        //float32AddScalarSels = float32AddScalarSelsPure
-        float64Add = float64AddPure
-        //float64AddSels = float64AddSelsPure
-        float64AddScalar = float64AddScalarPure
-        //float64AddScalarSels = float64AddScalarSelsPure
+		int8Add = int8AddPure
+		//int8AddSels = int8AddSelsPure
+		int8AddScalar = int8AddScalarPure
+		//int8AddScalarSels = int8AddScalarSelsPure
+		int16Add = int16AddPure
+		//int16AddSels = int16AddSelsPure
+		int16AddScalar = int16AddScalarPure
+		//int16AddScalarSels = int16AddScalarSelsPure
+		int32Add = int32AddPure
+		//int32AddSels = int32AddSelsPure
+		int32AddScalar = int32AddScalarPure
+		//int32AddScalarSels = int32AddScalarSelsPure
+		int64Add = int64AddPure
+		//int64AddSels = int64AddSelsPure
+		int64AddScalar = int64AddScalarPure
+		//int64AddScalarSels = int64AddScalarSelsPure
+		uint8Add = uint8AddPure
+		//uint8AddSels = uint8AddSelsPure
+		uint8AddScalar = uint8AddScalarPure
+		//uint8AddScalarSels = uint8AddScalarSelsPure
+		uint16Add = uint16AddPure
+		//uint16AddSels = uint16AddSelsPure
+		uint16AddScalar = uint16AddScalarPure
+		//uint16AddScalarSels = uint16AddScalarSelsPure
+		uint32Add = uint32AddPure
+		//uint32AddSels = uint32AddSelsPure
+		uint32AddScalar = uint32AddScalarPure
+		//uint32AddScalarSels = uint32AddScalarSelsPure
+		uint64Add = uint64AddPure
+		//uint64AddSels = uint64AddSelsPure
+		uint64AddScalar = uint64AddScalarPure
+		//uint64AddScalarSels = uint64AddScalarSelsPure
+		float32Add = float32AddPure
+		//float32AddSels = float32AddSelsPure
+		float32AddScalar = float32AddScalarPure
+		//float32AddScalarSels = float32AddScalarSelsPure
+		float64Add = float64AddPure
+		//float64AddSels = float64AddSelsPure
+		float64AddScalar = float64AddScalarPure
+		//float64AddScalarSels = float64AddScalarSelsPure
 	}
 	int8AddSels = int8AddSelsPure
 	int8AddScalarSels = int8AddScalarSelsPure
@@ -204,20 +204,20 @@ func int8AddPure(xs, ys, rs []int8) []int8 {
 }
 
 func int8AddAvx2(xs, ys, rs []int8) []int8 {
-    const regItems = 32 / 1
+	const regItems = 32 / 1
 	n := len(xs) / regItems
 	int8AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func int8AddAvx512(xs, ys, rs []int8) []int8 {
-    const regItems = 64 / 1
+	const regItems = 64 / 1
 	n := len(xs) / regItems
 	int8AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -266,20 +266,20 @@ func int8AddScalarPure(x int8, ys, rs []int8) []int8 {
 }
 
 func int8AddScalarAvx2(x int8, ys, rs []int8) []int8 {
-    const regItems = 32 / 1
+	const regItems = 32 / 1
 	n := len(ys) / regItems
 	int8AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func int8AddScalarAvx512(x int8, ys, rs []int8) []int8 {
-    const regItems = 64 / 1
+	const regItems = 64 / 1
 	n := len(ys) / regItems
 	int8AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
@@ -328,20 +328,20 @@ func int16AddPure(xs, ys, rs []int16) []int16 {
 }
 
 func int16AddAvx2(xs, ys, rs []int16) []int16 {
-    const regItems = 32 / 2
+	const regItems = 32 / 2
 	n := len(xs) / regItems
 	int16AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func int16AddAvx512(xs, ys, rs []int16) []int16 {
-    const regItems = 64 / 2
+	const regItems = 64 / 2
 	n := len(xs) / regItems
 	int16AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -390,20 +390,20 @@ func int16AddScalarPure(x int16, ys, rs []int16) []int16 {
 }
 
 func int16AddScalarAvx2(x int16, ys, rs []int16) []int16 {
-    const regItems = 32 / 2
+	const regItems = 32 / 2
 	n := len(ys) / regItems
 	int16AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func int16AddScalarAvx512(x int16, ys, rs []int16) []int16 {
-    const regItems = 64 / 2
+	const regItems = 64 / 2
 	n := len(ys) / regItems
 	int16AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
@@ -452,20 +452,20 @@ func int32AddPure(xs, ys, rs []int32) []int32 {
 }
 
 func int32AddAvx2(xs, ys, rs []int32) []int32 {
-    const regItems = 32 / 4
+	const regItems = 32 / 4
 	n := len(xs) / regItems
 	int32AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func int32AddAvx512(xs, ys, rs []int32) []int32 {
-    const regItems = 64 / 4
+	const regItems = 64 / 4
 	n := len(xs) / regItems
 	int32AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -514,20 +514,20 @@ func int32AddScalarPure(x int32, ys, rs []int32) []int32 {
 }
 
 func int32AddScalarAvx2(x int32, ys, rs []int32) []int32 {
-    const regItems = 32 / 4
+	const regItems = 32 / 4
 	n := len(ys) / regItems
 	int32AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func int32AddScalarAvx512(x int32, ys, rs []int32) []int32 {
-    const regItems = 64 / 4
+	const regItems = 64 / 4
 	n := len(ys) / regItems
 	int32AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
@@ -576,20 +576,20 @@ func int64AddPure(xs, ys, rs []int64) []int64 {
 }
 
 func int64AddAvx2(xs, ys, rs []int64) []int64 {
-    const regItems = 32 / 8
+	const regItems = 32 / 8
 	n := len(xs) / regItems
 	int64AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func int64AddAvx512(xs, ys, rs []int64) []int64 {
-    const regItems = 64 / 8
+	const regItems = 64 / 8
 	n := len(xs) / regItems
 	int64AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -638,20 +638,20 @@ func int64AddScalarPure(x int64, ys, rs []int64) []int64 {
 }
 
 func int64AddScalarAvx2(x int64, ys, rs []int64) []int64 {
-    const regItems = 32 / 8
+	const regItems = 32 / 8
 	n := len(ys) / regItems
 	int64AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func int64AddScalarAvx512(x int64, ys, rs []int64) []int64 {
-    const regItems = 64 / 8
+	const regItems = 64 / 8
 	n := len(ys) / regItems
 	int64AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
@@ -700,20 +700,20 @@ func uint8AddPure(xs, ys, rs []uint8) []uint8 {
 }
 
 func uint8AddAvx2(xs, ys, rs []uint8) []uint8 {
-    const regItems = 32 / 1
+	const regItems = 32 / 1
 	n := len(xs) / regItems
 	uint8AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func uint8AddAvx512(xs, ys, rs []uint8) []uint8 {
-    const regItems = 64 / 1
+	const regItems = 64 / 1
 	n := len(xs) / regItems
 	uint8AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -762,20 +762,20 @@ func uint8AddScalarPure(x uint8, ys, rs []uint8) []uint8 {
 }
 
 func uint8AddScalarAvx2(x uint8, ys, rs []uint8) []uint8 {
-    const regItems = 32 / 1
+	const regItems = 32 / 1
 	n := len(ys) / regItems
 	uint8AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func uint8AddScalarAvx512(x uint8, ys, rs []uint8) []uint8 {
-    const regItems = 64 / 1
+	const regItems = 64 / 1
 	n := len(ys) / regItems
 	uint8AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
@@ -824,20 +824,20 @@ func uint16AddPure(xs, ys, rs []uint16) []uint16 {
 }
 
 func uint16AddAvx2(xs, ys, rs []uint16) []uint16 {
-    const regItems = 32 / 2
+	const regItems = 32 / 2
 	n := len(xs) / regItems
 	uint16AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func uint16AddAvx512(xs, ys, rs []uint16) []uint16 {
-    const regItems = 64 / 2
+	const regItems = 64 / 2
 	n := len(xs) / regItems
 	uint16AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -886,20 +886,20 @@ func uint16AddScalarPure(x uint16, ys, rs []uint16) []uint16 {
 }
 
 func uint16AddScalarAvx2(x uint16, ys, rs []uint16) []uint16 {
-    const regItems = 32 / 2
+	const regItems = 32 / 2
 	n := len(ys) / regItems
 	uint16AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func uint16AddScalarAvx512(x uint16, ys, rs []uint16) []uint16 {
-    const regItems = 64 / 2
+	const regItems = 64 / 2
 	n := len(ys) / regItems
 	uint16AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
@@ -948,20 +948,20 @@ func uint32AddPure(xs, ys, rs []uint32) []uint32 {
 }
 
 func uint32AddAvx2(xs, ys, rs []uint32) []uint32 {
-    const regItems = 32 / 4
+	const regItems = 32 / 4
 	n := len(xs) / regItems
 	uint32AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func uint32AddAvx512(xs, ys, rs []uint32) []uint32 {
-    const regItems = 64 / 4
+	const regItems = 64 / 4
 	n := len(xs) / regItems
 	uint32AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -1010,20 +1010,20 @@ func uint32AddScalarPure(x uint32, ys, rs []uint32) []uint32 {
 }
 
 func uint32AddScalarAvx2(x uint32, ys, rs []uint32) []uint32 {
-    const regItems = 32 / 4
+	const regItems = 32 / 4
 	n := len(ys) / regItems
 	uint32AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func uint32AddScalarAvx512(x uint32, ys, rs []uint32) []uint32 {
-    const regItems = 64 / 4
+	const regItems = 64 / 4
 	n := len(ys) / regItems
 	uint32AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
@@ -1072,20 +1072,20 @@ func uint64AddPure(xs, ys, rs []uint64) []uint64 {
 }
 
 func uint64AddAvx2(xs, ys, rs []uint64) []uint64 {
-    const regItems = 32 / 8
+	const regItems = 32 / 8
 	n := len(xs) / regItems
 	uint64AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func uint64AddAvx512(xs, ys, rs []uint64) []uint64 {
-    const regItems = 64 / 8
+	const regItems = 64 / 8
 	n := len(xs) / regItems
 	uint64AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -1134,20 +1134,20 @@ func uint64AddScalarPure(x uint64, ys, rs []uint64) []uint64 {
 }
 
 func uint64AddScalarAvx2(x uint64, ys, rs []uint64) []uint64 {
-    const regItems = 32 / 8
+	const regItems = 32 / 8
 	n := len(ys) / regItems
 	uint64AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func uint64AddScalarAvx512(x uint64, ys, rs []uint64) []uint64 {
-    const regItems = 64 / 8
+	const regItems = 64 / 8
 	n := len(ys) / regItems
 	uint64AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
@@ -1196,20 +1196,20 @@ func float32AddPure(xs, ys, rs []float32) []float32 {
 }
 
 func float32AddAvx2(xs, ys, rs []float32) []float32 {
-    const regItems = 32 / 4
+	const regItems = 32 / 4
 	n := len(xs) / regItems
 	float32AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func float32AddAvx512(xs, ys, rs []float32) []float32 {
-    const regItems = 64 / 4
+	const regItems = 64 / 4
 	n := len(xs) / regItems
 	float32AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -1258,20 +1258,20 @@ func float32AddScalarPure(x float32, ys, rs []float32) []float32 {
 }
 
 func float32AddScalarAvx2(x float32, ys, rs []float32) []float32 {
-    const regItems = 32 / 4
+	const regItems = 32 / 4
 	n := len(ys) / regItems
 	float32AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func float32AddScalarAvx512(x float32, ys, rs []float32) []float32 {
-    const regItems = 64 / 4
+	const regItems = 64 / 4
 	n := len(ys) / regItems
 	float32AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
@@ -1320,20 +1320,20 @@ func float64AddPure(xs, ys, rs []float64) []float64 {
 }
 
 func float64AddAvx2(xs, ys, rs []float64) []float64 {
-    const regItems = 32 / 8
+	const regItems = 32 / 8
 	n := len(xs) / regItems
 	float64AddAvx2Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
 }
 
 func float64AddAvx512(xs, ys, rs []float64) []float64 {
-    const regItems = 64 / 8
+	const regItems = 64 / 8
 	n := len(xs) / regItems
 	float64AddAvx512Asm(xs[:n*regItems], ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(xs); i < j; i++ {
 		rs[i] = xs[i] + ys[i]
 	}
 	return rs
@@ -1382,20 +1382,20 @@ func float64AddScalarPure(x float64, ys, rs []float64) []float64 {
 }
 
 func float64AddScalarAvx2(x float64, ys, rs []float64) []float64 {
-    const regItems = 32 / 8
+	const regItems = 32 / 8
 	n := len(ys) / regItems
 	float64AddScalarAvx2Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
 func float64AddScalarAvx512(x float64, ys, rs []float64) []float64 {
-    const regItems = 64 / 8
+	const regItems = 64 / 8
 	n := len(ys) / regItems
 	float64AddScalarAvx512Asm(x, ys[:n*regItems], rs[:n*regItems])
-	for i, j := n * regItems, len(xs); i < j; i++ {
+	for i, j := n*regItems, len(ys); i < j; i++ {
 		rs[i] = x + ys[i]
 	}
 	return rs
