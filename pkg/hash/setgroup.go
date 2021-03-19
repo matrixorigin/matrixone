@@ -5,30 +5,21 @@ import (
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/container/types"
 	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/vm/process"
 )
 
-func NewJoinGroup(idx, sel int64) *JoinGroup {
-	return &JoinGroup{
+func NewSetGroup(idx, sel int64) *SetGroup {
+	return &SetGroup{
 		Idx: idx,
 		Sel: sel,
 	}
 }
 
-func (g *JoinGroup) Free(proc *process.Process) {
-	if g.Data != nil {
-		proc.Free(g.Data)
-		g.Data = nil
-	}
-	if g.Idata != nil {
-		proc.Free(g.Idata)
-		g.Idata = nil
-	}
+func (g *SetGroup) Free(_ *process.Process) {
 }
 
-func (g *JoinGroup) Probe(sels, matched []int64, vecs []*vector.Vector,
-	bats []*batch.Batch, diffs []bool, proc *process.Process) ([]int64, []int64, error) {
+func (g *SetGroup) Probe(sels, matched []int64, vecs []*vector.Vector,
+	bats []*batch.Batch, diffs []bool, proc *process.Process) (int64, []int64, error) {
 	for i, vec := range vecs {
 		switch vec.Typ.Oid {
 		case types.T_int8:
@@ -426,21 +417,23 @@ func (g *JoinGroup) Probe(sels, matched []int64, vecs []*vector.Vector,
 		}
 	}
 	n := len(sels)
-	remaining := sels[:0]
 	matched = matched[:0]
+	remaining := sels[:0]
 	for i := 0; i < n; i++ {
 		if diffs[i] {
 			remaining = append(remaining, sels[i])
-		} else {
+		} else if len(matched) == 0 {
 			matched = append(matched, sels[i])
 		}
 	}
-	return matched, remaining, nil
+	if len(matched) == 0 {
+		return -1, remaining, nil
+	}
+	return matched[0], remaining, nil
 }
 
-func (g *JoinGroup) Fill(distinct bool, sels, matched []int64, vecs []*vector.Vector,
+func (g *SetGroup) Fill(sels, matched []int64, vecs []*vector.Vector,
 	bats []*batch.Batch, diffs []bool, proc *process.Process) ([]int64, error) {
-	idx := int64(len(bats) - 1)
 	for i, vec := range vecs {
 		switch vec.Typ.Oid {
 		case types.T_int8:
@@ -839,76 +832,9 @@ func (g *JoinGroup) Fill(distinct bool, sels, matched []int64, vecs []*vector.Ve
 	}
 	n := len(sels)
 	remaining := sels[:0]
-	if !distinct {
-		matched = matched[:0]
-		for i := 0; i < n; i++ {
-			if diffs[i] {
-				remaining = append(remaining, sels[i])
-			} else {
-				matched = append(matched, sels[i])
-			}
-		}
-		if len(matched) > 0 {
-			length := len(g.Sels) + len(matched)
-			if cap(g.Sels) < length {
-				data, err := proc.Alloc(int64(length) * 8)
-				if err != nil {
-					return nil, err
-				}
-				idata, err := proc.Alloc(int64(length) * 8)
-				if err != nil {
-					proc.Free(data)
-					return nil, err
-				}
-				copy(data, g.Data)
-				copy(idata, g.Idata)
-				proc.Free(g.Data)
-				proc.Free(g.Idata)
-				g.Is = encoding.DecodeInt64Slice(idata)
-				g.Sels = encoding.DecodeInt64Slice(data)
-				g.Data = data[:length]
-				g.Sels = g.Sels[:length]
-				g.Is = g.Is[:length]
-				g.Idata = idata[:length]
-			}
-			for _ = range matched {
-				g.Is = append(g.Is, idx)
-			}
-			g.Sels = append(g.Sels, matched...)
-		}
-	} else {
-		if len(g.Sels) > 0 {
-			for i := 0; i < n; i++ {
-				if diffs[i] {
-					remaining = append(remaining, sels[i])
-				}
-			}
-		} else {
-			matched = matched[:0]
-			for i := 0; i < n; i++ {
-				if diffs[i] {
-					remaining = append(remaining, sels[i])
-				} else if len(matched) == 0 {
-					matched = append(matched, sels[i])
-				}
-			}
-			if len(matched) > 0 && cap(g.Sels) == 0 {
-				data, err := proc.Alloc(8)
-				if err != nil {
-					return nil, err
-				}
-				idata, err := proc.Alloc(8)
-				if err != nil {
-					proc.Free(data)
-					return nil, err
-				}
-				g.Data = data
-				g.Idata = idata
-				g.Is = encoding.DecodeInt64Slice(idata)
-				g.Sels = encoding.DecodeInt64Slice(data)
-				g.Is[0] = idx
-				g.Sels[0] = matched[0]
-			}
+	for i := 0; i < n; i++ {
+		if diffs[i] {
+			remaining = append(remaining, sels[i])
 		}
 	}
 	return remaining, nil

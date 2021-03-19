@@ -15,6 +15,12 @@ func New(cs []uint64, attrs []string, ins vm.Instructions) *Pipeline {
 	}
 }
 
+func NewMerge(ins vm.Instructions) *Pipeline {
+	return &Pipeline{
+		ins: ins,
+	}
+}
+
 func (p *Pipeline) String() string {
 	var buf bytes.Buffer
 
@@ -24,6 +30,7 @@ func (p *Pipeline) String() string {
 
 func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, error) {
 	if err := vm.Prepare(p.ins, proc); err != nil {
+		vm.Clean(p.ins, proc)
 		return false, err
 	}
 	for _, seg := range segs {
@@ -32,6 +39,25 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 			return false, err
 		}
 		proc.Reg.Ax = bat
+		if end, err := vm.Run(p.ins, proc); err != nil || end {
+			return end, err
+		}
+	}
+	{
+		proc.Reg.Ax = nil
+		if end, err := vm.Run(p.ins, proc); err != nil || end {
+			return end, err
+		}
+	}
+	return false, nil
+}
+
+func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
+	if err := vm.Prepare(p.ins, proc); err != nil {
+		vm.Clean(p.ins, proc)
+		return false, err
+	}
+	for {
 		if end, err := vm.Run(p.ins, proc); err != nil || end {
 			return end, err
 		}

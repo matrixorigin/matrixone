@@ -43,6 +43,9 @@ func Prepare(proc *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	var err error
 
+	if proc.Reg.Ax == nil {
+		return false, nil
+	}
 	n := arg.(Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
 	if err = bat.Prefetch(n.Attrs, n.Ctr.vecs, proc); err != nil {

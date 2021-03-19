@@ -36,6 +36,6 @@ func TestOffset(t *testing.T) {
 	}
 	p := pipeline.New([]uint64{1, 1}, []string{"uid", "orderId"}, ins)
 	fmt.Printf("%s\n", p)
-	p.Run(segments(proc), proc)
+	p.Run(segments("R", proc), proc)
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
 }

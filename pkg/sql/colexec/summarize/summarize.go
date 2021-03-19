@@ -17,6 +17,9 @@ func Prepare(proc *process.Process, arg interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
+	if proc.Reg.Ax == nil {
+		return false, nil
+	}
 	n := arg.(*Argument)
 	rbat := batch.New(true, n.Attrs)
 	bat := proc.Reg.Ax.(*batch.Batch)

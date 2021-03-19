@@ -6,11 +6,7 @@ type Group struct {
 	Sels []int64
 }
 
-type JoinGroup struct {
-	Idx   int64
-	Sel   int64
-	Data  []byte
-	Idata []byte
-	Is    []int64
-	Sels  []int64
+type SetGroup struct {
+	Idx int64
+	Sel int64
 }
