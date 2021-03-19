@@ -149,18 +149,15 @@ int32MinDone:
 // func uint8MinAvx2Asm(x []uint8, r []uint8)
 // Requires: AVX, AVX2, SSE2
 TEXT ·uint8MinAvx2Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0xffffffffffffffff, BX
-	MOVQ         BX, X0
-	VPBROADCASTB X0, Y0
-	VMOVDQU      Y0, Y1
-	VMOVDQU      Y0, Y2
-	VMOVDQU      Y0, Y3
-	VMOVDQU      Y0, Y4
-	VMOVDQU      Y0, Y5
-	VMOVDQU      Y0, Y0
+	MOVQ     x_base+0(FP), AX
+	MOVQ     r_base+24(FP), CX
+	MOVQ     x_len+8(FP), DX
+	VPCMPEQQ Y0, Y0, Y0
+	VPCMPEQQ Y1, Y1, Y1
+	VPCMPEQQ Y2, Y2, Y2
+	VPCMPEQQ Y3, Y3, Y3
+	VPCMPEQQ Y4, Y4, Y4
+	VPCMPEQQ Y5, Y5, Y5
 
 uint8MinBlockLoop:
 	CMPQ    DX, $0x000000c0
@@ -197,18 +194,15 @@ uint8MinDone:
 // func uint16MinAvx2Asm(x []uint16, r []uint16)
 // Requires: AVX, AVX2, SSE2, SSE4.1
 TEXT ·uint16MinAvx2Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0xffffffffffffffff, BX
-	MOVQ         BX, X0
-	VPBROADCASTW X0, Y0
-	VMOVDQU      Y0, Y1
-	VMOVDQU      Y0, Y2
-	VMOVDQU      Y0, Y3
-	VMOVDQU      Y0, Y4
-	VMOVDQU      Y0, Y5
-	VMOVDQU      Y0, Y0
+	MOVQ     x_base+0(FP), AX
+	MOVQ     r_base+24(FP), CX
+	MOVQ     x_len+8(FP), DX
+	VPCMPEQQ Y0, Y0, Y0
+	VPCMPEQQ Y1, Y1, Y1
+	VPCMPEQQ Y2, Y2, Y2
+	VPCMPEQQ Y3, Y3, Y3
+	VPCMPEQQ Y4, Y4, Y4
+	VPCMPEQQ Y5, Y5, Y5
 
 uint16MinBlockLoop:
 	CMPQ    DX, $0x00000060
@@ -245,18 +239,15 @@ uint16MinDone:
 // func uint32MinAvx2Asm(x []uint32, r []uint32)
 // Requires: AVX, AVX2, SSE2, SSE4.1
 TEXT ·uint32MinAvx2Asm(SB), NOSPLIT, $0-48
-	MOVQ         x_base+0(FP), AX
-	MOVQ         r_base+24(FP), CX
-	MOVQ         x_len+8(FP), DX
-	MOVQ         $0xffffffffffffffff, BX
-	MOVQ         BX, X0
-	VPBROADCASTD X0, Y0
-	VMOVDQU      Y0, Y1
-	VMOVDQU      Y0, Y2
-	VMOVDQU      Y0, Y3
-	VMOVDQU      Y0, Y4
-	VMOVDQU      Y0, Y5
-	VMOVDQU      Y0, Y0
+	MOVQ     x_base+0(FP), AX
+	MOVQ     r_base+24(FP), CX
+	MOVQ     x_len+8(FP), DX
+	VPCMPEQQ Y0, Y0, Y0
+	VPCMPEQQ Y1, Y1, Y1
+	VPCMPEQQ Y2, Y2, Y2
+	VPCMPEQQ Y3, Y3, Y3
+	VPCMPEQQ Y4, Y4, Y4
+	VPCMPEQQ Y5, Y5, Y5
 
 uint32MinBlockLoop:
 	CMPQ    DX, $0x00000030
