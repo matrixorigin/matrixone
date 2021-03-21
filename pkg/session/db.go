@@ -18,9 +18,9 @@
 package session
 
 import (
-	"github.com/pingcap/parser"
-	"github.com/pingcap/parser/ast"
 	"matrixbase/pkg/errno"
+	"matrixbase/pkg/parser"
+	"matrixbase/pkg/parser/ast"
 	"matrixbase/pkg/sessionctx"
 	"matrixbase/pkg/util/dbterror"
 )

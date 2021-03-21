@@ -18,9 +18,9 @@ import (
 	"sync/atomic"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/parser/charset"
-	"github.com/pingcap/parser/mysql"
-	"github.com/pingcap/parser/terror"
+	"matrixbase/pkg/parser/charset"
+	"matrixbase/pkg/parser/mysql"
+	"matrixbase/pkg/parser/terror"
 	"matrixbase/pkg/util/dbterror"
 	// "matrixbase/pkg/util/stringutil"
 	// "github.com/pingcap/tidb/util/logutil"

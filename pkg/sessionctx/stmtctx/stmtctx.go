@@ -20,10 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/parser"
-	"github.com/pingcap/parser/model"
-	"github.com/pingcap/parser/mysql"
 	"go.uber.org/zap"
+	"matrixbase/pkg/parser"
+	"matrixbase/pkg/parser/model"
+	"matrixbase/pkg/parser/mysql"
 )
 
 const (

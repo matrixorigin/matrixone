@@ -20,9 +20,9 @@ import (
 	"strings"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/parser/ast"
-	"github.com/pingcap/parser/format"
-	"github.com/pingcap/parser/mysql"
+	"matrixbase/pkg/parser/ast"
+	"matrixbase/pkg/parser/format"
+	"matrixbase/pkg/parser/mysql"
 	"matrixbase/pkg/types"
 	"matrixbase/pkg/util/hack"
 )

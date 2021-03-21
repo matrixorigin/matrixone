@@ -16,13 +16,13 @@ import (
 
 	"github.com/pingcap/errors"
 
-	"github.com/pingcap/parser/auth"
-	"github.com/pingcap/parser/mysql"
-	"github.com/pingcap/parser/terror"
 	log "github.com/sirupsen/logrus"
 	"go.uber.org/zap"
 	"matrixbase/pkg/config"
 	"matrixbase/pkg/errno"
+	"matrixbase/pkg/parser/auth"
+	"matrixbase/pkg/parser/mysql"
+	"matrixbase/pkg/parser/terror"
 	"matrixbase/pkg/sessionctx/variable"
 	"matrixbase/pkg/util/arena"
 	"matrixbase/pkg/util/hack"

@@ -19,9 +19,9 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/log"
-	"github.com/pingcap/parser/mysql"
-	"github.com/pingcap/parser/terror"
 	"go.uber.org/zap"
+	"matrixbase/pkg/parser/mysql"
+	"matrixbase/pkg/parser/terror"
 )
 
 // RoundMode is the type for round mode.

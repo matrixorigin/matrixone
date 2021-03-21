@@ -24,8 +24,8 @@ import (
 	"unicode"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/parser/mysql"
-	"github.com/pingcap/parser/terror"
+	"matrixbase/pkg/parser/mysql"
+	"matrixbase/pkg/parser/terror"
 	// "github.com/pingcap/tidb/util/logutil"
 	"matrixbase/pkg/sessionctx/stmtctx"
 	tidbMath "matrixbase/pkg/util/math"

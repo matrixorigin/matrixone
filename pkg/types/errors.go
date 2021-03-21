@@ -14,8 +14,8 @@
 package types
 
 import (
-	parser_types "github.com/pingcap/parser/types"
 	mysql "matrixbase/pkg/errno"
+	parser_types "matrixbase/pkg/parser/types"
 	"matrixbase/pkg/util/dbterror"
 )
 

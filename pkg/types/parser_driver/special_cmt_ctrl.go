@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"github.com/pingcap/parser"
+	"matrixbase/pkg/parser"
 )
 
 // To add new features that needs to be downgrade-compatible,

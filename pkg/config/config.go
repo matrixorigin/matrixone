@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 
 	"github.com/BurntSushi/toml"
-	"github.com/pingcap/parser/mysql"
+	"matrixbase/pkg/parser/mysql"
 )
 
 // Config number limitations

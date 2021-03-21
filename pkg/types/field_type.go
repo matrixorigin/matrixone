@@ -16,9 +16,9 @@ package types
 import (
 	"strconv"
 
-	"github.com/pingcap/parser/charset"
-	"github.com/pingcap/parser/mysql"
-	ast "github.com/pingcap/parser/types"
+	"matrixbase/pkg/parser/charset"
+	"matrixbase/pkg/parser/mysql"
+	ast "matrixbase/pkg/parser/types"
 	"matrixbase/pkg/types/json"
 	"matrixbase/pkg/util/collate"
 	utilMath "matrixbase/pkg/util/math"

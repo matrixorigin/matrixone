@@ -16,8 +16,8 @@ package parser
 import (
 	"strings"
 
-	"github.com/pingcap/parser/ast"
-	"github.com/pingcap/parser/format"
+	"matrixbase/pkg/parser/ast"
+	"matrixbase/pkg/parser/format"
 	// "github.com/pingcap/tidb/util/logutil"
 	// "go.uber.org/zap"
 )

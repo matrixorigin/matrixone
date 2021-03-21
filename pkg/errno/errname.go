@@ -1,6 +1,6 @@
 package errno
 
-import "github.com/pingcap/parser/mysql"
+import "matrixbase/pkg/parser/mysql"
 
 // MySQLErrName maps error code to MySQL error messages.
 // Note: all ErrMessage to be added should be considered about the log redaction

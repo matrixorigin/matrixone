@@ -16,7 +16,7 @@ package chunk
 import (
 	"strconv"
 
-	"github.com/pingcap/parser/mysql"
+	"matrixbase/pkg/parser/mysql"
 	"matrixbase/pkg/types"
 	"matrixbase/pkg/types/json"
 )

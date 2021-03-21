@@ -26,7 +26,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/parser/terror"
+	"matrixbase/pkg/parser/terror"
 	"matrixbase/pkg/util/hack"
 )
 

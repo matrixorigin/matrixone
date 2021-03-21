@@ -23,7 +23,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/errors"
-	"github.com/pingcap/parser/mysql"
+	"matrixbase/pkg/parser/mysql"
 	"matrixbase/pkg/sessionctx/stmtctx"
 	"matrixbase/pkg/types/json"
 	"matrixbase/pkg/util/hack"

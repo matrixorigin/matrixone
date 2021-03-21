@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/pingcap/parser/mysql"
+	"matrixbase/pkg/parser/mysql"
 )
 
 const defaultWriterSize = 16 * 1024

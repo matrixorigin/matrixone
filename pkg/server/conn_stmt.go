@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 
-	"github.com/pingcap/parser/mysql"
+	"matrixbase/pkg/parser/mysql"
 )
 
 func (cc *clientConn) handleStmtPrepare(ctx context.Context, sql string) error {

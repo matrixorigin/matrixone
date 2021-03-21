@@ -1,8 +1,8 @@
 package dbterror
 
 import (
-	"github.com/pingcap/parser/terror"
 	"matrixbase/pkg/errno"
+	"matrixbase/pkg/parser/terror"
 )
 
 // ErrClass represents a class of errors.

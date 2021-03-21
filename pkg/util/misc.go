@@ -4,10 +4,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"github.com/pingcap/errors"
-	"github.com/pingcap/parser"
-	"github.com/pingcap/parser/terror"
 	"io/ioutil"
 	"matrixbase/pkg/config"
+	"matrixbase/pkg/parser"
+	"matrixbase/pkg/parser/terror"
 )
 
 const (
