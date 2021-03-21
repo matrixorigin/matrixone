@@ -50,7 +50,7 @@ func newClientConn(s *Server) *clientConn {
 // clientConn represents a connection between server and client, it maintains connection specific state,
 // handles client query.
 type clientConn struct {
-	pkt          *chunkIO            // a helper to read and write data in packet format.
+	pkt          *packetIO           // a helper to read and write data in packet format.
 	bufReader    *bufferedConnReader // a buffered-read net.Conn or buffered-read tls.Conn.
 	tlsConn      *tls.Conn           // TLS connection, nil if not TLS.
 	server       *Server             // a reference of server instance.
@@ -965,7 +965,7 @@ func (cc *clientConn) handleFieldList(ctx context.Context, sql string) (err erro
 func (cc *clientConn) setConn(conn net.Conn) {
 	cc.bufReader = newBufferedConnReader(conn)
 	if cc.pkt == nil {
-		cc.pkt = newChunkIO(cc.bufReader)
+		cc.pkt = newPacketIO(cc.bufReader)
 	} else {
 		// Preserve current sequence number.
 		cc.pkt.setBufReader(cc.bufReader)
