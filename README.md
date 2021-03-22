@@ -1,1 +1,1 @@
-MatrixBase is an open-source OLAP database.
+MatrixBase is an open-source distributed OLAP database.
