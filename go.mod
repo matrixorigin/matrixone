@@ -3,14 +3,29 @@ module matrixbase
 go 1.15
 
 require (
+	github.com/BurntSushi/toml v0.3.1
 	github.com/aws/aws-sdk-go v1.37.14
-	github.com/klauspost/compress v1.11.7
+	github.com/blacktear23/go-proxyprotocol v0.0.0-20180807104634-af7a81e8dd0d
+	github.com/cznic/golex v0.0.0-20181122101858-9c343928389c // indirect
+	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
+	github.com/cznic/parser v0.0.0-20160622100904-31edd927e5b1
+	github.com/cznic/sortutil v0.0.0-20181122101858-f5f958428db8
+	github.com/cznic/strutil v0.0.0-20171016134553-529a34b1c186
+	github.com/cznic/y v0.0.0-20170802143616-045f81c6662a
 	github.com/frankban/quicktest v1.11.3 // indirect
+	github.com/go-sql-driver/mysql v1.5.0
+	github.com/klauspost/compress v1.11.7 // indirect
 	github.com/mmcloughlin/avo v0.0.0-20210120082657-d60cc025fc3c // indirect
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pilosa/pilosa v1.4.0
+	github.com/pingcap/check v0.0.0-20190102082844-67f458068fc8
+	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
+	github.com/pingcap/log v0.0.0-20200511115504-543df19646ad
+	github.com/sirupsen/logrus v1.2.0
 	github.com/traetox/goaio v0.0.0-20171005222435-46641abceb17
+	go.uber.org/zap v1.15.0
 	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9 // indirect
 	golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f
+	golang.org/x/text v0.3.3
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 )

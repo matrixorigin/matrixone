@@ -1,0 +1,430 @@
+package server
+
+import (
+	"context"
+	"crypto/tls"
+	"fmt"
+	"github.com/blacktear23/go-proxyprotocol"
+	"github.com/pingcap/errors"
+	"io"
+	"math/rand"
+	"matrixbase/pkg/config"
+	"matrixbase/pkg/errno"
+	"matrixbase/pkg/parser/mysql"
+	"matrixbase/pkg/parser/terror"
+	"matrixbase/pkg/sessionctx/variable"
+	_ "matrixbase/pkg/types/parser_driver"
+	"matrixbase/pkg/util"
+	"matrixbase/pkg/util/dbterror"
+	"net"
+	"os"
+	"os/user"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unsafe"
+)
+
+var (
+	serverPID int
+	osUser    string
+)
+
+func init() {
+	serverPID = os.Getpid()
+	currentUser, err := user.Current()
+	if err != nil {
+		osUser = ""
+	} else {
+		osUser = currentUser.Name
+	}
+}
+
+// DefaultCapability is the capability of the server when it is created using the default configuration.
+// When server is configured with SSL, the server will have extra capabilities compared to DefaultCapability.
+const defaultCapability = mysql.ClientLongPassword | mysql.ClientLongFlag |
+	mysql.ClientConnectWithDB | mysql.ClientProtocol41 |
+	mysql.ClientTransactions | mysql.ClientSecureConnection | mysql.ClientFoundRows |
+	mysql.ClientMultiStatements | mysql.ClientMultiResults | mysql.ClientLocalFiles |
+	mysql.ClientConnectAtts | mysql.ClientPluginAuth | mysql.ClientInteractive
+
+// Server is the MySQL protocol server
+type Server struct {
+	cfg          *config.Config
+	tlsConfig    unsafe.Pointer // *tls.Config
+	driver       IDriver
+	listener     net.Listener
+	socket       net.Listener
+	rwlock       sync.RWMutex
+	clients      map[uint64]*clientConn
+	capability   uint32
+	globalConnID util.GlobalConnID
+
+	statusAddr     string
+	statusListener net.Listener
+	inShutdownMode bool
+}
+
+var (
+	errUnknownFieldType        = dbterror.ClassServer.NewStd(errno.ErrUnknownFieldType)
+	errInvalidSequence         = dbterror.ClassServer.NewStd(errno.ErrInvalidSequence)
+	errInvalidType             = dbterror.ClassServer.NewStd(errno.ErrInvalidType)
+	errNotAllowedCommand       = dbterror.ClassServer.NewStd(errno.ErrNotAllowedCommand)
+	errAccessDenied            = dbterror.ClassServer.NewStd(errno.ErrAccessDenied)
+	errConCount                = dbterror.ClassServer.NewStd(errno.ErrConCount)
+	errSecureTransportRequired = dbterror.ClassServer.NewStd(errno.ErrSecureTransportRequired)
+	errMultiStatementDisabled  = dbterror.ClassServer.NewStd(errno.ErrMultiStatementDisabled)
+)
+
+func NewServer(cfg *config.Config, driver IDriver) (*Server, error) {
+	s := &Server{
+		cfg:          cfg,
+		driver:       driver,
+		clients:      make(map[uint64]*clientConn),
+		globalConnID: util.GlobalConnID{ServerID: 0, Is64bits: true},
+	}
+
+	tlsConfig, err := util.LoadTLSCertificates(s.cfg.Security.SSLCA, s.cfg.Security.SSLKey, s.cfg.Security.SSLCert)
+	if err != nil {
+		// logutil.BgLogger().Error("secure connection cert/key/ca load fail", zap.Error(err))
+	}
+
+	if tlsConfig != nil {
+		setSSLVariable(s.cfg.Security.SSLCA, s.cfg.Security.SSLKey, s.cfg.Security.SSLCert)
+		atomic.StorePointer(&s.tlsConfig, unsafe.Pointer(tlsConfig))
+		// logutil.BgLogger().Info("mysql protocol server secure connection is enabled", zap.Bool("client verification enabled", len(variable.GetSysVar("ssl_ca").Value) > 0))
+	} else if cfg.Security.RequireSecureTransport {
+		return nil, errSecureTransportRequired.FastGenByArgs()
+	}
+
+	// TODO
+	// setSystemTimeZoneVariable()
+
+	s.capability = defaultCapability
+	if s.tlsConfig != nil {
+		s.capability |= mysql.ClientSSL
+	}
+
+	if s.cfg.Host != "" && (s.cfg.Port != 0) {
+		addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
+		tcpProto := "tcp"
+		if s.cfg.EnableTCP4Only {
+			tcpProto = "tcp4"
+		}
+		if s.listener, err = net.Listen(tcpProto, addr); err == nil {
+			// logutil.BgLogger().Info("server is running MySQL protocol", zap.String("addr", addr))
+			if cfg.Socket != "" {
+				if s.socket, err = net.Listen("unix", s.cfg.Socket); err == nil {
+					// logutil.BgLogger().Info("server redirecting", zap.String("from", s.cfg.Socket), zap.String("to", addr))
+					go s.forwardUnixSocketToTCP()
+				}
+			}
+		}
+	} else if cfg.Socket != "" {
+		if s.listener, err = net.Listen("unix", cfg.Socket); err == nil {
+			// logutil.BgLogger().Info("server is running MySQL protocol", zap.String("socket", cfg.Socket))
+		}
+	} else {
+		err = errors.New("Server not configured to listen on either -socket or -host and -port")
+	}
+
+	if cfg.ProxyProtocol.Networks != "" {
+		pplistener, errProxy := proxyprotocol.NewListener(s.listener, cfg.ProxyProtocol.Networks,
+			int(cfg.ProxyProtocol.HeaderTimeout))
+		if errProxy != nil {
+			// logutil.BgLogger().Error("ProxyProtocol networks parameter invalid")
+			return nil, errors.Trace(errProxy)
+		}
+		// logutil.BgLogger().Info("server is running MySQL protocol (through PROXY protocol)", zap.String("host", s.cfg.Host))
+		s.listener = pplistener
+	}
+
+	if err != nil {
+		return nil, errors.Trace(err)
+	}
+
+	// Init rand seed for randomBuf()
+	rand.Seed(time.Now().UTC().UnixNano())
+	return s, nil
+}
+
+func setSSLVariable(ca, key, cert string) {
+	variable.SetSysVar("have_openssl", "YES")
+	variable.SetSysVar("have_ssl", "YES")
+	variable.SetSysVar("ssl_cert", cert)
+	variable.SetSysVar("ssl_key", key)
+	variable.SetSysVar("ssl_ca", ca)
+}
+
+func (s *Server) checkConnectionCount() error {
+	// When the value of MaxServerConnections is 0, the number of connections is unlimited.
+	if int(s.cfg.MaxServerConnections) == 0 {
+		return nil
+	}
+
+	s.rwlock.RLock()
+	conns := len(s.clients)
+	s.rwlock.RUnlock()
+
+	if conns >= int(s.cfg.MaxServerConnections) {
+		// logutil.BgLogger().Error("too many connections",
+		// 	zap.Uint32("max connections", s.cfg.MaxServerConnections), zap.Error(errConCount))
+		return errConCount
+	}
+	return nil
+}
+
+// Kill implements the SessionManager interface.
+func (s *Server) Kill(connectionID uint64, query bool) {
+	// logutil.BgLogger().Info("kill", zap.Uint64("connID", connectionID), zap.Bool("query", query))
+
+	s.rwlock.RLock()
+	defer s.rwlock.RUnlock()
+	conn, ok := s.clients[connectionID]
+	if !ok {
+		return
+	}
+
+	if !query {
+		// Mark the client connection status as WaitShutdown, when clientConn.Run detect
+		// this, it will end the dispatch loop and exit.
+		atomic.StoreInt32(&conn.status, connStatusWaitShutdown)
+	}
+	killConn(conn)
+}
+
+// UpdateTLSConfig implements the SessionManager interface.
+func (s *Server) UpdateTLSConfig(cfg *tls.Config) {
+	atomic.StorePointer(&s.tlsConfig, unsafe.Pointer(cfg))
+}
+
+func (s *Server) getTLSConfig() *tls.Config {
+	return (*tls.Config)(atomic.LoadPointer(&s.tlsConfig))
+}
+
+// ConnectionCount gets current connection count.
+func (s *Server) ConnectionCount() int {
+	s.rwlock.RLock()
+	cnt := len(s.clients)
+	s.rwlock.RUnlock()
+	return cnt
+}
+
+func killConn(conn *clientConn) {
+	sessVars := conn.ctx.GetSessionVars()
+	atomic.StoreUint32(&sessVars.Killed, 1)
+	conn.mu.RLock()
+	cancelFunc := conn.mu.cancelFunc
+	conn.mu.RUnlock()
+	if cancelFunc != nil {
+		cancelFunc()
+	}
+}
+
+// KillAllConnections kills all connections when server is not gracefully shutdown.
+func (s *Server) KillAllConnections() {
+	// logutil.BgLogger().Info("[server] kill all connections.")
+
+	s.rwlock.RLock()
+	defer s.rwlock.RUnlock()
+	for _, conn := range s.clients {
+		atomic.StoreInt32(&conn.status, connStatusShutdown)
+		if err := conn.closeWithoutLock(); err != nil {
+			terror.Log(err)
+		}
+		killConn(conn)
+	}
+}
+
+// Run runs the server.
+func (s *Server) Run() error {
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			if opErr, ok := err.(*net.OpError); ok {
+				if opErr.Err.Error() == "use of closed network connection" {
+					return nil
+				}
+			}
+
+			// If we got PROXY protocol error, we should continue accept.
+			if proxyprotocol.IsProxyProtocolError(err) {
+				// logutil.BgLogger().Error("PROXY protocol failed", zap.Error(err))
+				continue
+			}
+
+			// logutil.BgLogger().Error("accept failed", zap.Error(err))
+			return errors.Trace(err)
+		}
+
+		clientConn := s.newConn(conn)
+
+		go s.onConn(clientConn)
+	}
+}
+
+var gracefulCloseConnectionsTimeout = 15 * time.Second
+
+// TryGracefulDown will try to gracefully close all connection first with timeout. if timeout, will close all connection directly.
+func (s *Server) TryGracefulDown() {
+	ctx, cancel := context.WithTimeout(context.Background(), gracefulCloseConnectionsTimeout)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		s.GracefulDown(ctx, done)
+	}()
+	select {
+	case <-ctx.Done():
+		s.KillAllConnections()
+	case <-done:
+		return
+	}
+}
+
+func (s *Server) kickIdleConnection() {
+	var conns []*clientConn
+	s.rwlock.RLock()
+	for _, cc := range s.clients {
+		if cc.ShutdownOrNotify() {
+			// Shutdowned conn will be closed by us, and notified conn will exist themselves.
+			conns = append(conns, cc)
+		}
+	}
+	s.rwlock.RUnlock()
+
+	for _, cc := range conns {
+		err := cc.Close()
+		if err != nil {
+			// logutil.BgLogger().Error("close connection", zap.Error(err))
+		}
+	}
+}
+
+// GracefulDown waits all clients to close.
+func (s *Server) GracefulDown(ctx context.Context, done chan struct{}) {
+	// logutil.Logger(ctx).Info("[server] graceful shutdown.")
+
+	count := s.ConnectionCount()
+	for i := 0; count > 0; i++ {
+		s.kickIdleConnection()
+
+		count = s.ConnectionCount()
+		if count == 0 {
+			break
+		}
+		// Print information for every 30s.
+		if i%30 == 0 {
+			// logutil.Logger(ctx).Info("graceful shutdown...", zap.Int("conn count", count))
+		}
+		ticker := time.After(time.Second)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker:
+		}
+	}
+	close(done)
+}
+
+func (s *Server) isUnixSocket() bool {
+	return s.cfg.Socket != ""
+}
+
+func (s *Server) forwardUnixSocketToTCP() {
+	addr := fmt.Sprintf("%s:%d", s.cfg.Host, s.cfg.Port)
+	for {
+		if s.listener == nil {
+			return // server shutdown has started
+		}
+		if uconn, err := s.socket.Accept(); err == nil {
+			// logutil.BgLogger().Info("server socket forwarding", zap.String("from", s.cfg.Socket), zap.String("to", addr))
+			go s.handleForwardedConnection(uconn, addr)
+		} else if s.listener != nil {
+			// logutil.BgLogger().Error("server failed to forward", zap.String("from", s.cfg.Socket), zap.String("to", addr), zap.Error(err))
+		}
+	}
+}
+
+func (s *Server) handleForwardedConnection(uconn net.Conn, addr string) {
+	defer terror.Call(uconn.Close)
+	if tconn, err := net.Dial("tcp", addr); err == nil {
+		go func() {
+			if _, err := io.Copy(uconn, tconn); err != nil {
+				// logutil.BgLogger().Warn("copy server to socket failed", zap.Error(err))
+			}
+		}()
+		if _, err := io.Copy(tconn, uconn); err != nil {
+			// logutil.BgLogger().Warn("socket forward copy failed", zap.Error(err))
+		}
+	} else {
+		// logutil.BgLogger().Warn("socket forward failed: could not connect", zap.String("addr", addr), zap.Error(err))
+	}
+}
+
+func (s *Server) startShutdown() {
+	s.rwlock.RLock()
+	// logutil.BgLogger().Info("setting tidb-server to report unhealthy (shutting-down)")
+	s.inShutdownMode = true
+	s.rwlock.RUnlock()
+	// give the load balancer a chance to receive a few unhealthy health reports
+	// before acquiring the s.rwlock and blocking connections.
+	waitTime := time.Duration(s.cfg.GracefulWaitBeforeShutdown) * time.Second
+	if waitTime > 0 {
+		// logutil.BgLogger().Info("waiting for stray connections before starting shutdown process", zap.Duration("waitTime", waitTime))
+		time.Sleep(waitTime)
+	}
+}
+
+// Close closes the server.
+func (s *Server) Close() {
+	s.startShutdown()
+	s.rwlock.Lock() // prevent new connections
+	defer s.rwlock.Unlock()
+
+	if s.listener != nil {
+		err := s.listener.Close()
+		terror.Log(errors.Trace(err))
+		s.listener = nil
+	}
+	if s.socket != nil {
+		err := s.socket.Close()
+		terror.Log(errors.Trace(err))
+		s.socket = nil
+	}
+}
+
+// newConn creates a new *clientConn from a net.Conn.
+// It allocates a connection ID and random salt data for authentication.
+func (s *Server) newConn(conn net.Conn) *clientConn {
+	cc := newClientConn(s)
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		if err := tcpConn.SetKeepAlive(s.cfg.Performance.TCPKeepAlive); err != nil {
+			// logutil.BgLogger().Error("failed to set tcp keep alive option", zap.Error(err))
+		}
+	}
+	cc.setConn(conn)
+	salt := make([]byte, 20)
+	rand.Read(salt)
+	cc.salt = salt
+	return cc
+}
+
+// onConn runs in its own goroutine, handles queries from this connection.
+func (s *Server) onConn(conn *clientConn) {
+	ctx := context.Background()
+	if err := conn.handshake(ctx); err != nil {
+		err = conn.Close()
+		terror.Log(errors.Trace(err))
+		return
+	}
+	// logutil.Logger(ctx).Debug("new connection", zap.String("remoteAddr", conn.bufReadConn.RemoteAddr().String()))
+
+	defer func() {
+		// logutil.Logger(ctx).Debug("connection closed")
+	}()
+	s.rwlock.Lock()
+	s.clients[conn.connectionID] = conn
+	s.rwlock.Unlock()
+
+	conn.Run(ctx)
+}
