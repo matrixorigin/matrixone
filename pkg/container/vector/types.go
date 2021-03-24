@@ -29,7 +29,14 @@ type Vector interface {
 }
 */
 
+/*
+ * origin true:
+ * 				count || type || bitmap size || bitmap || vector
+ * origin false:
+ *  			count || vector
+ */
 type Vector struct {
+	Or   bool   // true: origin
 	Data []byte // raw data
 	Typ  types.Type
 	Col  interface{}
