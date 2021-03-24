@@ -3,15 +3,16 @@ package register
 import (
 	"matrixbase/pkg/container/types"
 	"matrixbase/pkg/container/vector"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 )
 
 func Get(proc *process.Process, size int64, typ types.Type) (*vector.Vector, error) {
 	for i, t := range proc.Reg.Ts {
 		v := t.(*vector.Vector)
-		if int64(cap(v.Data)) == size {
+		if int64(cap(v.Data[mempool.CountSize:])) >= size {
 			vec := vector.New(typ)
-			vec.Data = v.Data[:size]
+			vec.Data = v.Data
 			proc.Reg.Ts = append(proc.Reg.Ts[:i], proc.Reg.Ts[i+1:])
 			return vec, nil
 		}

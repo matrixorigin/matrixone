@@ -25,7 +25,9 @@ func (bat *Batch) Reorder(attrs []string) {
 	for i, name := range attrs {
 		for j, attr := range bat.Attrs {
 			if name == attr {
-				bat.Is[i], bat.Is[j] = bat.Is[j], bat.Is[i]
+				if len(bat.Is) > j {
+					bat.Is[i], bat.Is[j] = bat.Is[j], bat.Is[i]
+				}
 				bat.Vecs[i], bat.Vecs[j] = bat.Vecs[j], bat.Vecs[i]
 				bat.Attrs[i], bat.Attrs[j] = bat.Attrs[j], bat.Attrs[i]
 			}

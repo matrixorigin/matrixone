@@ -10,6 +10,8 @@ Please mark all change in change log and use the issue from GitHub
 
 ## Feature
 
+    * Add set natural join
+
 ## Task
 
 -   [#4 More documents are needed in Github REPO](https://github.com/matrixorigin/matrixbase/issues/4) 
