@@ -2,6 +2,7 @@ package vector
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"matrixbase/pkg/container/nulls"
 	"matrixbase/pkg/container/types"
@@ -294,6 +295,295 @@ func (v *Vector) Shuffle(sels []int64) *Vector {
 }
 
 func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
+	if v.Or {
+		return errors.New("unionone operation cannot be performed for origin vector")
+	}
+	switch v.Typ.Oid {
+	case types.T_int8:
+		vs := w.Col.([]int8)
+		col := v.Col.([]int8)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < len(vs)+1 {
+				data, err := proc.Alloc(int64(len(vs) + 1))
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeInt8Slice(data[mempool.CountSize : mempool.CountSize+len(col)])
+				v.Data = data
+				col = v.Col.([]int8)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_int16:
+		vs := w.Col.([]int16)
+		col := v.Col.([]int16)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*2 {
+				data, err := proc.Alloc(int64(len(vs)+1) * 2)
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeInt16Slice(data[mempool.CountSize : mempool.CountSize+len(col)*2])
+				v.Data = data
+				col = v.Col.([]int16)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_int32:
+		vs := w.Col.([]int32)
+		col := v.Col.([]int32)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*4 {
+				data, err := proc.Alloc(int64(len(vs)+1) * 4)
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeInt32Slice(data[mempool.CountSize : mempool.CountSize+len(col)*4])
+				v.Data = data
+				col = v.Col.([]int32)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_int64:
+		vs := w.Col.([]int64)
+		col := v.Col.([]int64)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*8 {
+				data, err := proc.Alloc(int64(len(vs)+1) * 8)
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+len(col)*8])
+				v.Data = data
+				col = v.Col.([]int64)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_uint8:
+		vs := w.Col.([]uint8)
+		col := v.Col.([]uint8)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1) {
+				data, err := proc.Alloc(int64(len(vs) + 1))
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeUint8Slice(data[mempool.CountSize : mempool.CountSize+len(col)])
+				v.Data = data
+				col = v.Col.([]uint8)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_uint16:
+		vs := w.Col.([]uint16)
+		col := v.Col.([]uint16)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*2 {
+				data, err := proc.Alloc(int64(len(vs)+1) * 2)
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeUint16Slice(data[mempool.CountSize : mempool.CountSize+len(col)*2])
+				v.Data = data
+				col = v.Col.([]uint16)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_uint32:
+		vs := w.Col.([]uint32)
+		col := v.Col.([]uint32)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*4 {
+				data, err := proc.Alloc(int64(len(vs)+1) * 4)
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeUint32Slice(data[mempool.CountSize : mempool.CountSize+len(col)*4])
+				v.Data = data
+				col = v.Col.([]uint32)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_uint64:
+		vs := w.Col.([]uint64)
+		col := v.Col.([]uint64)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*8 {
+				data, err := proc.Alloc(int64(len(vs)+1) * 8)
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeInt16Slice(data[mempool.CountSize : mempool.CountSize+len(col)*8])
+				v.Data = data
+				col = v.Col.([]uint64)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_decimal:
+		vs := w.Col.([]types.Decimal)
+		col := v.Col.([]types.Decimal)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*encoding.DecimalSize {
+				data, err := proc.Alloc(int64((len(vs) + 1) * encoding.DecimalSize))
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeDecimalSlice(data[mempool.CountSize : mempool.CountSize+len(col)*encoding.DecimalSize])
+				v.Data = data
+				col = v.Col.([]types.Decimal)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_float32:
+		vs := w.Col.([]float32)
+		col := v.Col.([]float32)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*4 {
+				data, err := proc.Alloc(int64(len(vs)+1) * 4)
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeFloat32Slice(data[mempool.CountSize : mempool.CountSize+len(col)*4])
+				v.Data = data
+				col = v.Col.([]float32)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_float64:
+		vs := w.Col.([]float64)
+		col := v.Col.([]float64)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*8 {
+				data, err := proc.Alloc(int64(len(vs)+1) * 8)
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeFloat64Slice(data[mempool.CountSize : mempool.CountSize+len(col)*8])
+				v.Data = data
+				col = v.Col.([]float64)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_date:
+		vs := w.Col.([]types.Date)
+		col := v.Col.([]types.Date)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*encoding.DateSize {
+				data, err := proc.Alloc(int64((len(vs) + 1) * encoding.DateSize))
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeDateSlice(data[mempool.CountSize : mempool.CountSize+len(col)*encoding.DateSize])
+				v.Data = data
+				col = v.Col.([]types.Date)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_datetime:
+		vs := w.Col.([]types.Datetime)
+		col := v.Col.([]types.Datetime)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*encoding.DatetimeSize {
+				data, err := proc.Alloc(int64((len(vs) + 1) * encoding.DatetimeSize))
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				v.Col = encoding.DecodeDecimalSlice(data[mempool.CountSize : mempool.CountSize+len(col)*encoding.DatetimeSize])
+				v.Data = data
+				col = v.Col.([]types.Datetime)
+			}
+		}
+		v.Col = append(col, vs[sel])
+	case types.T_tuple:
+		vs, ws := v.Col.([][]interface{}), w.Col.([][]interface{})
+		vs = append(vs, ws[sel])
+		v.Col = vs
+	case types.T_char, types.T_varchar, types.T_json:
+		vs := w.Col.(*types.Bytes)
+		from := vs.Data[vs.Offsets[sel] : vs.Offsets[sel]+vs.Lengths[sel]]
+		col := v.Col.(*types.Bytes)
+		{
+			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < len(col.Data)+len(from) {
+				data, err := proc.Alloc(int64((len(col.Data) + len(from))))
+				if err != nil {
+					return err
+				}
+				if v.Data != nil {
+					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					proc.Free(v.Data)
+				}
+				data = data[:mempool.CountSize+len(col.Data)]
+				v.Data = data
+				col.Data = data[mempool.CountSize:]
+
+			}
+		}
+		col.Lengths = append(col.Lengths, uint32(len(from)))
+		{
+			n := len(col.Offsets)
+			if n > 0 {
+				col.Offsets = append(col.Offsets, col.Offsets[n-1]+col.Lengths[n-1])
+			} else {
+				col.Offsets = append(col.Offsets, 0)
+			}
+		}
+		col.Data = append(col.Data, from...)
+	}
+	if w.Nsp.Any() && w.Nsp.Contains(uint64(sel)) {
+		v.Nsp.Add(uint64(v.Length()))
+	}
 	return nil
 }
 
@@ -498,6 +788,8 @@ func (v *Vector) Read(data []byte) error {
 	data = data[mempool.CountSize:]
 	typ := encoding.DecodeType(data[:encoding.TypeSize])
 	data = data[encoding.TypeSize:]
+	v.Typ = typ
+	v.Or = true
 	switch typ.Oid {
 	case types.T_int8:
 		size := encoding.DecodeUint32(data)

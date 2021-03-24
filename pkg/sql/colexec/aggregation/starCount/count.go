@@ -31,7 +31,10 @@ func (a *count) Fill(sels []int64, vec *vector.Vector) error {
 }
 
 func (a *count) Eval(proc *process.Process) (*vector.Vector, error) {
-	data := proc.Mp.Alloc(8)
+	data, err := proc.Alloc(8)
+	if err != nil {
+		return nil, err
+	}
 	vec := vector.New(types.Type{types.T_int64, 8, 8, 0})
 	copy(data[mempool.CountSize:], encoding.EncodeInt64(a.cnt))
 	vec.Data = data

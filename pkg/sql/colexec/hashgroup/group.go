@@ -89,8 +89,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 
 func (ctr *Container) eval(length int, es []aggregation.Extend, vecs, rvecs []*vector.Vector, proc *process.Process) error {
 	for i, e := range es {
-		typ := aggregation.ReturnType(e.Op, e.Typ)
-		switch typ {
+		switch typ := aggregation.ReturnType(e.Op, e.Typ); typ {
 		case types.T_int8:
 			data, err := proc.Alloc(int64(length))
 			if err != nil {

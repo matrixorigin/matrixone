@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"matrixbase/pkg/sql/colexec/hashset/intersect"
+	"matrixbase/pkg/sql/colexec/hashset/natural"
 	"matrixbase/pkg/sql/colexec/limit"
 	"matrixbase/pkg/sql/colexec/offset"
 	"matrixbase/pkg/sql/colexec/output"
@@ -37,6 +38,8 @@ func String(ins Instructions, buf *bytes.Buffer) {
 		case SetIntersect:
 			intersect.String(in.Arg, buf)
 		case SetDifference:
+		case SetNaturalJoin:
+			natural.String(in.Arg, buf)
 		case Output:
 			output.String(in.Arg, buf)
 		}
@@ -98,6 +101,10 @@ func Prepare(ins Instructions, proc *process.Process) error {
 				return err
 			}
 		case SetDifference:
+		case SetNaturalJoin:
+			if err := natural.Prepare(proc, in.Arg); err != nil {
+				return err
+			}
 		case Output:
 			if err := output.Prepare(proc, in.Arg); err != nil {
 				return err
@@ -133,6 +140,8 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 		case SetIntersect:
 			ok, err = intersect.Call(proc, in.Arg)
 		case SetDifference:
+		case SetNaturalJoin:
+			ok, err = natural.Call(proc, in.Arg)
 		case Output:
 			ok, err = output.Call(proc, in.Arg)
 		}
