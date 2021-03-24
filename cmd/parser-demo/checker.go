@@ -1,8 +1,8 @@
 package main
 
 import (
+	"github.com/pingcap/parser/ast"
 	log "github.com/sirupsen/logrus"
-	"matrixbase/pkg/parser/ast"
 )
 
 type checker struct {
@@ -20,7 +20,7 @@ func getDBFromResultNode(pos int, resultNode ast.ResultSetNode) []string {
 		return getDBFromResultNode(pos, node.Source)
 	case *ast.TableName:
 		log.Infof("[%d] GRN-TableName: %v", pos, node.Name)
-		dbLables = append(dbLables, node.DBInfo.Name.O)
+		// dbLables = append(dbLables, node.DBInfo.Name.O)
 	case *ast.Join:
 		iter := func(x ast.ResultSetNode) {
 			if x != nil {
