@@ -1,3 +1,7 @@
 go.sum
 .idea/
 *.swp
+bin/
+y.go
+*.output
+coverage.txt
