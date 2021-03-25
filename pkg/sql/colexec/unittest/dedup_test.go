@@ -2,7 +2,8 @@ package unittest
 
 import (
 	"fmt"
-	"matrixbase/pkg/sql/colexec/hashset/natural"
+	"matrixbase/pkg/sql/colexec/dedup"
+	"matrixbase/pkg/sql/colexec/mergededup"
 	"matrixbase/pkg/sql/colexec/transfer"
 	"matrixbase/pkg/vm"
 	"matrixbase/pkg/vm/mempool"
@@ -14,7 +15,7 @@ import (
 	"testing"
 )
 
-func TestNaturalJoin(t *testing.T) {
+func TestDedup(t *testing.T) {
 	var wg sync.WaitGroup
 	var ins vm.Instructions
 
@@ -38,15 +39,17 @@ func TestNaturalJoin(t *testing.T) {
 		{
 			rproc.Refer = make(map[string]uint64)
 		}
+		rins = append(rins, vm.Instruction{vm.Dedup, &dedup.Argument{Attrs: []string{"uid"}}})
 		rins = append(rins, vm.Instruction{vm.Transfer, &transfer.Argument{Mmu: gm, Reg: proc.Reg.Ws[0]}})
 		rp := pipeline.New([]uint64{1, 1, 1}, []string{"orderId", "uid", "price"}, rins)
 		wg.Add(1)
 		go func() {
-			fmt.Printf("R: %s\n", rp)
-			rp.Run(segments("R", rproc), rproc)
-			fmt.Printf("R - guest: %v, host: %v\n", rproc.Size(), rproc.HostSize())
+			fmt.Printf("S[segment 0]: %s\n", rp)
+			rp.Run(segments("S", rproc)[:1], rproc)
+			fmt.Printf("S[segment 0] - guest: %v, host: %v\n", rproc.Size(), rproc.HostSize())
 			wg.Done()
 		}()
+
 	}
 	{
 		var sins vm.Instructions
@@ -55,18 +58,19 @@ func TestNaturalJoin(t *testing.T) {
 		{
 			sproc.Refer = make(map[string]uint64)
 		}
+		sins = append(sins, vm.Instruction{vm.Dedup, &dedup.Argument{Attrs: []string{"uid"}}})
 		sins = append(sins, vm.Instruction{vm.Transfer, &transfer.Argument{Mmu: gm, Reg: proc.Reg.Ws[1]}})
 		sp := pipeline.New([]uint64{1, 1, 1}, []string{"uid", "price", "orderId"}, sins)
 		wg.Add(1)
 		go func() {
-			fmt.Printf("S: %s\n", sp)
-			sp.Run(segments("S", sproc), sproc)
-			fmt.Printf("S - guest: %v, host: %v\n", sproc.Size(), sproc.HostSize())
+			fmt.Printf("S[segment 1]: %s\n", sp)
+			sp.Run(segments("S", sproc)[1:2], sproc)
+			fmt.Printf("S[segment 1] - guest: %v, host: %v\n", sproc.Size(), sproc.HostSize())
 			wg.Done()
 		}()
 	}
 	{
-		ins = append(ins, vm.Instruction{vm.SetNaturalJoin, &natural.Argument{R: "R", S: "S", Attrs: []string{"uid"}}})
+		ins = append(ins, vm.Instruction{vm.MergeDedup, &mergededup.Argument{Attrs: []string{"uid"}}})
 		ins = append(ins, vm.Instruction{vm.Output, nil})
 	}
 	p := pipeline.NewMerge(ins)

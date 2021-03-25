@@ -1,8 +1,8 @@
 package vm
 
 const (
-	Nub = iota
-	Top
+	Top = iota
+	Dedup
 	Limit
 	Group
 	Order
@@ -22,6 +22,7 @@ const (
 	SetNaturalJoin
 	SetSemiDifference // unsuitable name is anti join
 	Output
+	MergeDedup
 	MergeSummarize
 )
 

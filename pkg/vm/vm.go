@@ -2,9 +2,11 @@ package vm
 
 import (
 	"bytes"
+	"matrixbase/pkg/sql/colexec/dedup"
 	"matrixbase/pkg/sql/colexec/hashset/intersect"
 	"matrixbase/pkg/sql/colexec/hashset/natural"
 	"matrixbase/pkg/sql/colexec/limit"
+	"matrixbase/pkg/sql/colexec/mergededup"
 	"matrixbase/pkg/sql/colexec/offset"
 	"matrixbase/pkg/sql/colexec/output"
 	"matrixbase/pkg/sql/colexec/projection"
@@ -19,8 +21,9 @@ func String(ins Instructions, buf *bytes.Buffer) {
 			buf.WriteString(" -> ")
 		}
 		switch in.Op {
-		case Nub:
 		case Top:
+		case Dedup:
+			dedup.String(in.Arg, buf)
 		case Limit:
 			limit.String(in.Arg, buf)
 		case Group:
@@ -42,6 +45,8 @@ func String(ins Instructions, buf *bytes.Buffer) {
 			natural.String(in.Arg, buf)
 		case Output:
 			output.String(in.Arg, buf)
+		case MergeDedup:
+			mergededup.String(in.Arg, buf)
 		}
 	}
 }
@@ -49,8 +54,8 @@ func String(ins Instructions, buf *bytes.Buffer) {
 func Clean(ins Instructions, proc *process.Process) {
 	for _, in := range ins {
 		switch in.Op {
-		case Nub:
 		case Top:
+		case Dedup:
 		case Limit:
 		case Group:
 		case Order:
@@ -70,8 +75,11 @@ func Clean(ins Instructions, proc *process.Process) {
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
 		switch in.Op {
-		case Nub:
 		case Top:
+		case Dedup:
+			if err := dedup.Prepare(proc, in.Arg); err != nil {
+				return err
+			}
 		case Limit:
 			if err := limit.Prepare(proc, in.Arg); err != nil {
 				return err
@@ -109,6 +117,10 @@ func Prepare(ins Instructions, proc *process.Process) error {
 			if err := output.Prepare(proc, in.Arg); err != nil {
 				return err
 			}
+		case MergeDedup:
+			if err := mergededup.Prepare(proc, in.Arg); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -121,8 +133,9 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 
 	for _, in := range ins {
 		switch in.Op {
-		case Nub:
 		case Top:
+		case Dedup:
+			ok, err = dedup.Call(proc, in.Arg)
 		case Limit:
 			ok, err = limit.Call(proc, in.Arg)
 		case Group:
@@ -144,6 +157,8 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 			ok, err = natural.Call(proc, in.Arg)
 		case Output:
 			ok, err = output.Call(proc, in.Arg)
+		case MergeDedup:
+			ok, err = mergededup.Call(proc, in.Arg)
 		}
 		if err != nil {
 			return false, err

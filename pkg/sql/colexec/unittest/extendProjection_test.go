@@ -39,4 +39,5 @@ func TestExtendProjection(t *testing.T) {
 		log.Fatal(err)
 	}
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
+	fmt.Printf("************\n")
 }
