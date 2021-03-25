@@ -38,4 +38,5 @@ func TestLimit(t *testing.T) {
 	fmt.Printf("%s\n", p)
 	p.Run(segments("R", proc), proc)
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
+	fmt.Printf("************\n")
 }

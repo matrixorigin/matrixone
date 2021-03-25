@@ -10,3 +10,7 @@ type SetGroup struct {
 	Idx int64
 	Sel int64
 }
+
+type DedupGroup struct {
+	Sel int64
+}

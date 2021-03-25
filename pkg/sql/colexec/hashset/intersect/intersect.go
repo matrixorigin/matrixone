@@ -2,11 +2,13 @@ package intersect
 
 import (
 	"bytes"
+	"fmt"
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/container/vector"
 	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/hash"
 	"matrixbase/pkg/intmap/fastmap"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
@@ -20,7 +22,8 @@ func init() {
 }
 
 func String(arg interface{}, buf *bytes.Buffer) {
-	buf.WriteString("R ∩  S")
+	n := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("%s ∩  %s", n.R, n.S))
 }
 
 func Prepare(proc *process.Process, arg interface{}) error {
@@ -42,7 +45,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	ctr := &n.Ctr
 	if !ctr.builded {
 		if err := ctr.build(proc); err != nil {
-			return false, err
+			return true, err
 		}
 		ctr.builded = true
 	}
@@ -83,42 +86,52 @@ func (ctr *Container) build(proc *process.Process) error {
 }
 
 func (ctr *Container) probe(proc *process.Process) (bool, error) {
-	reg := proc.Reg.Ws[0]
-	defer reg.Wg.Done()
-	v := <-reg.Ch
-	if v == nil {
-		proc.Reg.Ax = nil
-		ctr.clean(nil, proc)
-		return true, nil
-	}
-	bat := v.(*batch.Batch)
-	if len(ctr.groups) == 0 {
-		reg.Ch = nil
-		proc.Reg.Ax = nil
-		ctr.clean(bat, proc)
-		return true, nil
-	}
-	if len(bat.Sels) == 0 {
-		if err := ctr.probeBatch(bat.Vecs, proc); err != nil {
-			ctr.clean(bat, proc)
-			return false, err
+	for {
+		reg := proc.Reg.Ws[0]
+		v := <-reg.Ch
+		if v == nil {
+			reg.Wg.Done()
+			proc.Reg.Ax = nil
+			ctr.clean(nil, proc)
+			return true, nil
 		}
-		bat.Sels = ctr.probeState.sels
-		bat.SelsData = ctr.probeState.data
-		ctr.probeState.sels = nil
-		ctr.probeState.data = nil
-		proc.Reg.Ax = bat
-	} else {
-		if err := ctr.probeBatchSels(bat.Sels, bat.Vecs, proc); err != nil {
+		bat := v.(*batch.Batch)
+		if len(ctr.groups) == 0 {
+			reg.Wg.Done()
+			reg.Ch = nil
+			proc.Reg.Ax = nil
 			ctr.clean(bat, proc)
-			return false, err
+			return true, nil
 		}
-		bat.Sels, ctr.probeState.sels = ctr.probeState.sels, bat.Sels
-		bat.SelsData, ctr.probeState.data = ctr.probeState.data, bat.SelsData
-		ctr.probeState.sels = ctr.probeState.sels[:0] // reset
+		if len(bat.Sels) == 0 {
+			if err := ctr.probeBatch(bat.Vecs, proc); err != nil {
+				reg.Wg.Done()
+				ctr.clean(bat, proc)
+				return true, err
+			}
+			bat.Sels = ctr.probeState.sels
+			bat.SelsData = ctr.probeState.data
+			ctr.probeState.sels = nil
+			ctr.probeState.data = nil
+		} else {
+			if err := ctr.probeBatchSels(bat.Sels, bat.Vecs, proc); err != nil {
+				reg.Wg.Done()
+				ctr.clean(bat, proc)
+				return true, err
+			}
+			bat.Sels, ctr.probeState.sels = ctr.probeState.sels, bat.Sels
+			bat.SelsData, ctr.probeState.data = ctr.probeState.data, bat.SelsData
+			ctr.probeState.sels = ctr.probeState.sels[:0] // reset
+		}
+		if len(bat.Sels) == 0 {
+			reg.Wg.Done()
+			bat.Clean(proc)
+			continue
+		}
+		reg.Wg.Done()
 		proc.Reg.Ax = bat
+		return false, nil
 	}
-	return false, nil
 }
 
 func (ctr *Container) buildBatch(vecs []*vector.Vector, proc *process.Process) error {
@@ -176,7 +189,7 @@ func (ctr *Container) buildUnit(start, count int, sels []int64,
 			for len(remaining) > 0 {
 				g := hash.NewSetGroup(int64(len(ctr.bats)-1), int64(remaining[0]))
 				ctr.groups[h] = append(ctr.groups[h], g)
-				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
+				if remaining, err = g.Fill(remaining[1:], ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
 					return err
 				}
 				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
@@ -249,7 +262,7 @@ func (ctr *Container) probeUnit(start, count int, sels []int64,
 								if err != nil {
 									return err
 								}
-								newsels := encoding.DecodeInt64Slice(data)
+								newsels := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+8*8])
 								ctr.probeState.data = data
 								ctr.probeState.sels = newsels[:0]
 							} else if n == len(ctr.probeState.sels) {
@@ -262,7 +275,7 @@ func (ctr *Container) probeUnit(start, count int, sels []int64,
 								if err != nil {
 									return err
 								}
-								newsels := encoding.DecodeInt64Slice(data)
+								newsels := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+n*8])
 								copy(newsels, ctr.probeState.sels)
 								ctr.probeState.sels = newsels[:n]
 								proc.Free(ctr.probeState.data)
