@@ -11,6 +11,7 @@ Please mark all change in change log and use the issue from GitHub
 ## Feature
 
     * Add set natural join
+    * Add dedup
 
 ## Task
 

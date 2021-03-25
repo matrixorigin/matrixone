@@ -4,25 +4,17 @@ import (
 	"bytes"
 	"matrixbase/pkg/container/types"
 	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 )
 
-func NewGroup(sel int64) *Group {
-	return &Group{
-		Sel: sel,
-	}
+func NewDedupGroup(sel int64) *DedupGroup {
+	return &DedupGroup{sel}
 }
 
-func (g *Group) Free(proc *process.Process) {
-	if g.Data != nil {
-		proc.Free(g.Data)
-		g.Data = nil
-	}
+func (g *DedupGroup) Free(_ *process.Process) {
 }
 
-func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs []bool, proc *process.Process) ([]int64, error) {
+func (g *DedupGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs []bool, proc *process.Process) ([]int64, error) {
 	for i, vec := range vecs {
 		switch vec.Typ.Oid {
 		case types.T_int8:
@@ -420,31 +412,11 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 		}
 	}
 	n := len(sels)
-	matched = matched[:0]
 	remaining := sels[:0]
 	for i := 0; i < n; i++ {
 		if diffs[i] {
 			remaining = append(remaining, sels[i])
-		} else {
-			matched = append(matched, sels[i])
 		}
-	}
-	if len(matched) > 0 {
-		length := len(g.Sels) + len(matched)
-		if cap(g.Sels) < length {
-			data, err := proc.Alloc(int64(length) * 8)
-			if err != nil {
-				return nil, err
-			}
-			if g.Data != nil {
-				copy(data[mempool.CountSize:], g.Data[mempool.CountSize:])
-				proc.Free(g.Data)
-			}
-			g.Sels = encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+length*8])
-			g.Data = data[mempool.CountSize : mempool.CountSize+length*8]
-			g.Sels = g.Sels[:length]
-		}
-		g.Sels = append(g.Sels, matched...)
 	}
 	return remaining, nil
 }

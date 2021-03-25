@@ -31,5 +31,7 @@ type Container struct {
 }
 
 type Argument struct {
+	R   string
+	S   string
 	Ctr Container
 }

@@ -2,6 +2,7 @@ package natural
 
 import (
 	"bytes"
+	"fmt"
 	"matrixbase/pkg/container/batch"
 	"matrixbase/pkg/container/vector"
 	"matrixbase/pkg/hash"
@@ -19,7 +20,8 @@ func init() {
 }
 
 func String(arg interface{}, buf *bytes.Buffer) {
-	buf.WriteString("R ⨝ S")
+	n := arg.(*Argument)
+	buf.WriteString(fmt.Sprintf("%s ⨝ %s", n.R, n.S))
 }
 
 func Prepare(proc *process.Process, arg interface{}) error {
@@ -41,7 +43,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	ctr := &n.Ctr
 	if !ctr.builded {
 		if err := ctr.build(n.Attrs, proc); err != nil {
-			return false, err
+			return true, err
 		}
 		ctr.builded = true
 	}
@@ -130,13 +132,13 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 	if len(bat.Sels) == 0 {
 		if err := ctr.probeBatch(bat, bat.Vecs[:len(attrs)], proc); err != nil {
 			ctr.clean(bat, proc)
-			return false, err
+			return true, err
 		}
 		proc.Reg.Ax = ctr.probeState.bat
 	} else {
 		if err := ctr.probeBatchSels(bat.Sels, bat, bat.Vecs[:len(attrs)], proc); err != nil {
 			ctr.clean(bat, proc)
-			return false, err
+			return true, err
 		}
 		proc.Reg.Ax = ctr.probeState.bat
 	}
@@ -200,7 +202,7 @@ func (ctr *Container) buildUnit(start, count int, sels []int64,
 			for len(remaining) > 0 {
 				g := hash.NewSetGroup(int64(len(ctr.bats)-1), int64(remaining[0]))
 				ctr.groups[h] = append(ctr.groups[h], g)
-				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
+				if remaining, err = g.Fill(remaining[1:], ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
 					return err
 				}
 				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])

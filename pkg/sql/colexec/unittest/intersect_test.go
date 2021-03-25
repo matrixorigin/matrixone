@@ -19,7 +19,8 @@ func TestIntersect(t *testing.T) {
 	var ins vm.Instructions
 
 	hm := host.New(1 << 20)
-	proc := process.New(guest.New(1<<20, hm), mempool.New(1<<32, 8))
+	gm := guest.New(1<<20, hm)
+	proc := process.New(gm, mempool.New(1<<32, 8))
 	{
 		proc.Refer = make(map[string]uint64)
 		proc.Reg.Ws = make([]*process.WaitRegister, 2)
@@ -37,7 +38,7 @@ func TestIntersect(t *testing.T) {
 		{
 			rproc.Refer = make(map[string]uint64)
 		}
-		rins = append(rins, vm.Instruction{vm.Transfer, &transfer.Argument{proc.Reg.Ws[0]}})
+		rins = append(rins, vm.Instruction{vm.Transfer, &transfer.Argument{Mmu: gm, Reg: proc.Reg.Ws[0]}})
 		rp := pipeline.New([]uint64{1}, []string{"orderId"}, rins)
 		wg.Add(1)
 		go func() {
@@ -54,7 +55,7 @@ func TestIntersect(t *testing.T) {
 		{
 			sproc.Refer = make(map[string]uint64)
 		}
-		sins = append(sins, vm.Instruction{vm.Transfer, &transfer.Argument{proc.Reg.Ws[1]}})
+		sins = append(sins, vm.Instruction{vm.Transfer, &transfer.Argument{Mmu: gm, Reg: proc.Reg.Ws[1]}})
 		sp := pipeline.New([]uint64{1}, []string{"orderId"}, sins)
 		wg.Add(1)
 		go func() {
@@ -65,7 +66,7 @@ func TestIntersect(t *testing.T) {
 		}()
 	}
 	{
-		ins = append(ins, vm.Instruction{vm.SetIntersect, &intersect.Argument{}})
+		ins = append(ins, vm.Instruction{vm.SetIntersect, &intersect.Argument{R: "R", S: "S"}})
 		ins = append(ins, vm.Instruction{vm.Output, nil})
 	}
 	p := pipeline.NewMerge(ins)
@@ -73,4 +74,5 @@ func TestIntersect(t *testing.T) {
 	p.RunMerge(proc)
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
 	wg.Wait()
+	fmt.Printf("************\n")
 }
