@@ -10,10 +10,6 @@ func (a *Bytes) Reset() {
 	a.Data = a.Data[:0]
 }
 
-func (a *Bytes) Set(aidx int64, b *Bytes, bidx int64) int {
-	return -1
-}
-
 func (a *Bytes) Window(start, end int) *Bytes {
 	return &Bytes{
 		Data:    a.Data,
