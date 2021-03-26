@@ -294,6 +294,34 @@ func (v *Vector) Shuffle(sels []int64) *Vector {
 	return nil
 }
 
+// v[vi] = w[wi]
+func (v *Vector) Copy(w *Vector, vi, wi int64, proc *process.Process) error {
+	vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
+	data := ws.Data[ws.Offsets[wi] : ws.Offsets[wi]+ws.Lengths[wi]]
+	if vs.Lengths[vi] >= ws.Lengths[wi] {
+		vs.Lengths[vi] = ws.Lengths[wi]
+		copy(vs.Data[vs.Offsets[vi]:int(vs.Offsets[vi])+len(data)], data)
+		return nil
+	}
+	diff := ws.Lengths[wi] - vs.Lengths[vi]
+	buf, err := proc.Alloc(int64(len(vs.Data) + int(diff)))
+	if err != nil {
+		return err
+	}
+	copy(buf[mempool.CountSize:], vs.Data[:vs.Offsets[vi]])
+	copy(buf[mempool.CountSize+vs.Offsets[vi]:], data)
+	o := vs.Offsets[vi] + vs.Lengths[vi]
+	copy(buf[mempool.CountSize+o+diff:], vs.Data[o:])
+	proc.Free(v.Data)
+	v.Data = buf
+	vs.Data = buf[mempool.CountSize : mempool.CountSize+len(vs.Data)+int(diff)]
+	vs.Lengths[vi] = ws.Lengths[wi]
+	for i, j := vi+1, int64(len(vs.Offsets)); i < j; i++ {
+		vs.Offsets[i] += diff
+	}
+	return nil
+}
+
 func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 	if v.Or {
 		return errors.New("unionone operation cannot be performed for origin vector")
