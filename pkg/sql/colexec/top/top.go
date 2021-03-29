@@ -1,22 +1,36 @@
 package top
 
 import (
+	"bytes"
 	"container/heap"
+	"fmt"
 	"matrixbase/pkg/compare"
 	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/container/vector"
 	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
 
+func String(arg interface{}, buf *bytes.Buffer) {
+	n := arg.(*Argument)
+	buf.WriteString("τ([")
+	for i, f := range n.Fs {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(f.String())
+	}
+	buf.WriteString(fmt.Sprintf("], %v)", n.Limit))
+}
+
 func Prepare(proc *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
+	ctr := &n.Ctr
 	{
-		n.Attrs = make([]string, len(n.Fs))
+		ctr.attrs = make([]string, len(n.Fs))
 		for i, f := range n.Fs {
-			n.Attrs[i] = f.Attr
+			ctr.attrs[i] = f.Attr
 		}
 	}
 	{
@@ -28,15 +42,11 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		for i := int64(0); i < n.Limit; i++ {
 			sels[i] = i
 		}
-		n.Ctr.sels = sels
-		n.Ctr.selsData = data
+		n.Ctr.data = data
+		n.Ctr.sels = sels[:n.Limit]
 	}
 	n.Ctr.n = len(n.Fs)
-	n.Ctr.vecs = make([]*vector.Vector, len(n.Fs))
 	n.Ctr.cmps = make([]compare.Compare, len(n.Fs))
-	for i, f := range n.Fs {
-		n.Ctr.cmps[i] = compare.New(f.Oid, f.Type == Descending)
-	}
 	return nil
 }
 
@@ -46,76 +56,90 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}
-	n := arg.(Argument)
+	n := arg.(*Argument)
+	ctr := &n.Ctr
 	bat := proc.Reg.Ax.(*batch.Batch)
-	if err = bat.Prefetch(n.Attrs, n.Ctr.vecs, proc); err != nil {
-		clean(&n.Ctr, bat, proc)
+	bat.Reorder(ctr.attrs)
+	{
+		for i, f := range n.Fs {
+			n.Ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, f.Type == Descending)
+		}
+	}
+	if err = bat.Prefetch(ctr.attrs, bat.Vecs, proc); err != nil {
+		ctr.clean(bat, proc)
 		return false, err
 	}
-	processBatch(n, bat)
-	data, err := proc.Alloc(int64(len(n.Ctr.sels)) * 8)
+	ctr.processBatch(n.Limit, bat)
+	data, err := proc.Alloc(int64(len(ctr.sels) * 8))
 	if err != nil {
-		clean(&n.Ctr, bat, proc)
+		ctr.clean(bat, proc)
 		return false, err
 	}
 	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
-	for i, j := 0, len(n.Ctr.sels); i < j; i++ {
-		sels[len(sels)-1-i] = heap.Pop(&n.Ctr).(int64)
+	sels = sels[:len(ctr.sels)]
+	for i, j := 0, len(ctr.sels); i < j; i++ {
+		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
 	if len(bat.Sels) > 0 {
 		proc.Free(bat.SelsData)
 	}
 	bat.Sels = sels
 	bat.SelsData = data
-	bat.Reduce(n.Attrs, proc)
 	proc.Reg.Ax = bat
+	ctr.clean(nil, proc)
 	register.FreeRegisters(proc)
 	return false, nil
 }
 
-func processBatch(n Argument, bat *batch.Batch) {
+func (ctr *Container) processBatch(limit int64, bat *batch.Batch) {
+	for i, cmp := range ctr.cmps {
+		cmp.Set(0, bat.Vecs[i])
+		cmp.Set(1, bat.Vecs[i])
+	}
 	if length := int64(len(bat.Sels)); length > 0 {
-		if length < n.Limit {
+		if length < limit {
 			for i := int64(0); i < length; i++ {
-				n.Ctr.sels[i] = bat.Sels[i]
+				ctr.sels[i] = bat.Sels[i]
 			}
-			n.Ctr.sels = n.Ctr.sels[:length]
-			heap.Init(&n.Ctr)
+			ctr.sels = ctr.sels[:length]
+			heap.Init(ctr)
 			return
 		}
-		for i := int64(0); i < n.Limit; i++ {
-			n.Ctr.sels[i] = bat.Sels[i]
+		for i := int64(0); i < limit; i++ {
+			ctr.sels[i] = bat.Sels[i]
 		}
-		heap.Init(&n.Ctr)
-		for i, j := n.Limit, length; i < j; i++ {
-			if n.Ctr.compare(bat.Sels[i], n.Ctr.sels[0]) < 0 {
-				n.Ctr.sels[0] = bat.Sels[i]
+		heap.Init(ctr)
+		for i, j := limit, length; i < j; i++ {
+			if ctr.compare(bat.Sels[i], ctr.sels[0]) < 0 {
+				ctr.sels[0] = bat.Sels[i]
 			}
-			heap.Fix(&n.Ctr, 0)
+			heap.Fix(ctr, 0)
 		}
 		return
 	}
-	length := int64(n.Ctr.vecs[0].Length())
-	if length < n.Limit {
-		n.Ctr.sels = n.Ctr.sels[:length]
-		heap.Init(&n.Ctr)
+	length := int64(bat.Vecs[0].Length())
+	if length < limit {
+		ctr.sels = ctr.sels[:length]
+		heap.Init(ctr)
 		return
 	}
-	heap.Init(&n.Ctr)
-	for i, j := n.Limit, length; i < j; i++ {
-		if n.Ctr.compare(i, n.Ctr.sels[0]) < 0 {
-			n.Ctr.sels[0] = i
+	heap.Init(ctr)
+	for i, j := limit, length; i < j; i++ {
+		if ctr.compare(i, ctr.sels[0]) < 0 {
+			ctr.sels[0] = i
 		}
-		heap.Fix(&n.Ctr, 0)
+		heap.Fix(ctr, 0)
 	}
 }
 
-func clean(ctr *Container, bat *batch.Batch, proc *process.Process) {
-	if ctr.selsData != nil {
-		proc.Free(ctr.selsData)
-		ctr.sels = nil
-		ctr.selsData = nil
+func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
+	if bat != nil {
+		bat.Clean(proc)
 	}
-	bat.Clean(proc)
+	if ctr.data != nil {
+		proc.Free(ctr.data)
+		ctr.data = nil
+		ctr.sels = nil
+	}
 	register.FreeRegisters(proc)
 }

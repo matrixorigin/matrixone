@@ -122,7 +122,7 @@ func (v *Vector) Reset() {
 	case types.T_char, types.T_varchar, types.T_json:
 		v.Col.(*types.Bytes).Reset()
 	default:
-		*(*int)(unsafe.Pointer(uintptr(unsafe.Pointer(&v.Col)) + uintptr(strconv.IntSize>>3))) = 0
+		*(*int)(unsafe.Pointer(uintptr((*(*emptyInterface)(unsafe.Pointer(&v.Col))).word) + uintptr(strconv.IntSize>>3))) = 0
 	}
 }
 
@@ -143,7 +143,7 @@ func (v *Vector) Length() int {
 	case types.T_char, types.T_varchar, types.T_json:
 		return len(v.Col.(*types.Bytes).Offsets)
 	default:
-		hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v.Col))
+		hp := *(*reflect.SliceHeader)((*(*emptyInterface)(unsafe.Pointer(&v.Col))).word)
 		return hp.Len
 	}
 }
@@ -158,10 +158,10 @@ func (v *Vector) Window(start, end int) *Vector {
 		}
 	default:
 		col := v.Col
-		ptr := unsafe.Pointer(&col)
+		ptr := (*(*emptyInterface)(unsafe.Pointer(&col))).word
 		data := *(*uintptr)(unsafe.Pointer(uintptr(ptr)))
 		*(*uintptr)(unsafe.Pointer(uintptr(ptr))) = data + uintptr(v.Typ.Size)*uintptr(start)
-		*(*int)(unsafe.Pointer(uintptr(ptr) + uintptr(strconv.IntSize>>3))) = end - start + 1
+		*(*int)(unsafe.Pointer(uintptr(ptr) + uintptr(strconv.IntSize>>3))) = end - start
 		return &Vector{
 			Typ: v.Typ,
 			Col: col,
@@ -308,6 +308,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, proc *process.Process) error {
 	if err != nil {
 		return err
 	}
+	copy(buf[:mempool.CountSize], v.Data[:mempool.CountSize])
 	copy(buf[mempool.CountSize:], vs.Data[:vs.Offsets[vi]])
 	copy(buf[mempool.CountSize+vs.Offsets[vi]:], data)
 	o := vs.Offsets[vi] + vs.Lengths[vi]
@@ -337,8 +338,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeInt8Slice(data[mempool.CountSize : mempool.CountSize+len(col)])
 				v.Data = data
@@ -356,8 +359,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeInt16Slice(data[mempool.CountSize : mempool.CountSize+len(col)*2])
 				v.Data = data
@@ -375,8 +380,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeInt32Slice(data[mempool.CountSize : mempool.CountSize+len(col)*4])
 				v.Data = data
@@ -413,8 +420,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeUint8Slice(data[mempool.CountSize : mempool.CountSize+len(col)])
 				v.Data = data
@@ -432,8 +441,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeUint16Slice(data[mempool.CountSize : mempool.CountSize+len(col)*2])
 				v.Data = data
@@ -451,8 +462,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeUint32Slice(data[mempool.CountSize : mempool.CountSize+len(col)*4])
 				v.Data = data
@@ -470,8 +483,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeInt16Slice(data[mempool.CountSize : mempool.CountSize+len(col)*8])
 				v.Data = data
@@ -489,8 +504,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeDecimalSlice(data[mempool.CountSize : mempool.CountSize+len(col)*encoding.DecimalSize])
 				v.Data = data
@@ -508,8 +525,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeFloat32Slice(data[mempool.CountSize : mempool.CountSize+len(col)*4])
 				v.Data = data
@@ -527,8 +546,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeFloat64Slice(data[mempool.CountSize : mempool.CountSize+len(col)*8])
 				v.Data = data
@@ -546,8 +567,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeDateSlice(data[mempool.CountSize : mempool.CountSize+len(col)*encoding.DateSize])
 				v.Data = data
@@ -565,8 +588,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				v.Col = encoding.DecodeDecimalSlice(data[mempool.CountSize : mempool.CountSize+len(col)*encoding.DatetimeSize])
 				v.Data = data
@@ -589,13 +614,14 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 					return err
 				}
 				if v.Data != nil {
-					copy(data[mempool.CountSize:], v.Data[mempool.CountSize:])
+					copy(data, v.Data)
 					proc.Free(v.Data)
+				} else {
+					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
 				data = data[:mempool.CountSize+len(col.Data)]
 				v.Data = data
 				col.Data = data[mempool.CountSize:]
-
 			}
 		}
 		col.Lengths = append(col.Lengths, uint32(len(from)))
