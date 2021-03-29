@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"matrixbase/pkg/container/types"
+	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/mmu/guest"
 	"matrixbase/pkg/vm/mmu/host"
@@ -23,6 +24,7 @@ func TestVector(t *testing.T) {
 		if err := v.Append(vs); err != nil {
 			log.Fatal(err)
 		}
+		v.Data = encoding.EncodeInt64(1)
 	}
 	hm := host.New(1 << 20)
 	gm := guest.New(1<<20, hm)
