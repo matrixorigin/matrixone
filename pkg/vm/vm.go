@@ -7,10 +7,12 @@ import (
 	"matrixbase/pkg/sql/colexec/hashset/natural"
 	"matrixbase/pkg/sql/colexec/limit"
 	"matrixbase/pkg/sql/colexec/mergededup"
+	"matrixbase/pkg/sql/colexec/mergetop"
 	"matrixbase/pkg/sql/colexec/offset"
 	"matrixbase/pkg/sql/colexec/output"
 	"matrixbase/pkg/sql/colexec/projection"
 	"matrixbase/pkg/sql/colexec/restrict"
+	"matrixbase/pkg/sql/colexec/top"
 	"matrixbase/pkg/sql/colexec/transfer"
 	"matrixbase/pkg/vm/process"
 )
@@ -22,6 +24,7 @@ func String(ins Instructions, buf *bytes.Buffer) {
 		}
 		switch in.Op {
 		case Top:
+			top.String(in.Arg, buf)
 		case Dedup:
 			dedup.String(in.Arg, buf)
 		case Limit:
@@ -45,6 +48,8 @@ func String(ins Instructions, buf *bytes.Buffer) {
 			natural.String(in.Arg, buf)
 		case Output:
 			output.String(in.Arg, buf)
+		case MergeTop:
+			mergetop.String(in.Arg, buf)
 		case MergeDedup:
 			mergededup.String(in.Arg, buf)
 		}
@@ -76,6 +81,9 @@ func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
 		switch in.Op {
 		case Top:
+			if err := top.Prepare(proc, in.Arg); err != nil {
+				return err
+			}
 		case Dedup:
 			if err := dedup.Prepare(proc, in.Arg); err != nil {
 				return err
@@ -117,6 +125,10 @@ func Prepare(ins Instructions, proc *process.Process) error {
 			if err := output.Prepare(proc, in.Arg); err != nil {
 				return err
 			}
+		case MergeTop:
+			if err := mergetop.Prepare(proc, in.Arg); err != nil {
+				return err
+			}
 		case MergeDedup:
 			if err := mergededup.Prepare(proc, in.Arg); err != nil {
 				return err
@@ -134,6 +146,7 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 	for _, in := range ins {
 		switch in.Op {
 		case Top:
+			ok, err = top.Call(proc, in.Arg)
 		case Dedup:
 			ok, err = dedup.Call(proc, in.Arg)
 		case Limit:
@@ -157,6 +170,8 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 			ok, err = natural.Call(proc, in.Arg)
 		case Output:
 			ok, err = output.Call(proc, in.Arg)
+		case MergeTop:
+			ok, err = mergetop.Call(proc, in.Arg)
 		case MergeDedup:
 			ok, err = mergededup.Call(proc, in.Arg)
 		}

@@ -3,6 +3,7 @@ package vector
 import (
 	"matrixbase/pkg/container/nulls"
 	"matrixbase/pkg/container/types"
+	"unsafe"
 )
 
 /*
@@ -41,4 +42,10 @@ type Vector struct {
 	Typ  types.Type
 	Col  interface{}
 	Nsp  *nulls.Nulls
+}
+
+// emptyInterface is the header for an interface{} value.
+type emptyInterface struct {
+	_    *int
+	word unsafe.Pointer
 }
