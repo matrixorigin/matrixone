@@ -52,7 +52,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	return ctr.probe(proc)
 }
 
-// R ∩ S - s is the smaller relation
+// R ∩  S - s is the smaller relation
 func (ctr *Container) build(proc *process.Process) error {
 	var err error
 
