@@ -21,6 +21,7 @@ const (
 	SetRightJoin
 	SetNaturalJoin
 	SetSemiDifference // unsuitable name is anti join
+	BagUnion
 	Output
 	MergeTop
 	MergeDedup
