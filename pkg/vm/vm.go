@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"matrixbase/pkg/sql/colexec/dedup"
+	bnatural "matrixbase/pkg/sql/colexec/hashbag/natural"
 	bunion "matrixbase/pkg/sql/colexec/hashbag/union"
 	"matrixbase/pkg/sql/colexec/hashset/inner"
 	"matrixbase/pkg/sql/colexec/hashset/intersect"
@@ -52,6 +53,8 @@ func String(ins Instructions, buf *bytes.Buffer) {
 			natural.String(in.Arg, buf)
 		case BagUnion:
 			bunion.String(in.Arg, buf)
+		case BagNaturalJoin:
+			bnatural.String(in.Arg, buf)
 		case Output:
 			output.String(in.Arg, buf)
 		case MergeTop:
@@ -135,6 +138,10 @@ func Prepare(ins Instructions, proc *process.Process) error {
 			if err := bunion.Prepare(proc, in.Arg); err != nil {
 				return err
 			}
+		case BagNaturalJoin:
+			if err := bnatural.Prepare(proc, in.Arg); err != nil {
+				return err
+			}
 		case Output:
 			if err := output.Prepare(proc, in.Arg); err != nil {
 				return err
@@ -186,6 +193,8 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 			ok, err = natural.Call(proc, in.Arg)
 		case BagUnion:
 			ok, err = bunion.Call(proc, in.Arg)
+		case BagNaturalJoin:
+			ok, err = bnatural.Call(proc, in.Arg)
 		case Output:
 			ok, err = output.Call(proc, in.Arg)
 		case MergeTop:

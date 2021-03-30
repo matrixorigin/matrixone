@@ -288,8 +288,8 @@ func (ctr *Container) probeUnit(start, count int, sels []int64, bat *batch.Batch
 					}
 					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 				}
-				ctr.sels[ctr.slots.Vs[i][j]] = ctr.sels[ctr.slots.Vs[i][j]][:0]
 			}
+			ctr.sels[ctr.slots.Vs[i][j]] = ctr.sels[ctr.slots.Vs[i][j]][:0]
 		}
 	}
 	ctr.slots.Reset()
