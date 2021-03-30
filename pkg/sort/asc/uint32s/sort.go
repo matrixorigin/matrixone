@@ -2,16 +2,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:generate go run genzfunc.go
-
 // Package sort provides primitives for sorting slices and user-defined
 // collections.
-package floats
+package uint32s
 
 // Sort sorts data.
 // It makes one call to data.Len to determine n, and O(n*log(n)) calls to
 // data.Less and data.Swap. The sort is not guaranteed to be stable.
-func Sort(vs []float64, os []int64) {
+func Sort(vs []uint32, os []int64) {
 	n := len(os)
 	quickSort(vs, os, 0, n, maxDepth(n))
 }
@@ -26,7 +24,7 @@ func maxDepth(n int) int {
 	return depth * 2
 }
 
-func quickSort(vs []float64, os []int64, a, b, maxDepth int) {
+func quickSort(vs []uint32, os []int64, a, b, maxDepth int) {
 	for b-a > 12 { // Use ShellSort for slices <= 12 elements
 		if maxDepth == 0 {
 			heapSort(vs, os, a, b)
@@ -57,7 +55,7 @@ func quickSort(vs []float64, os []int64, a, b, maxDepth int) {
 }
 
 // Insertion sort
-func insertionSort(vs []float64, os []int64, a, b int) {
+func insertionSort(vs []uint32, os []int64, a, b int) {
 	for i := a + 1; i < b; i++ {
 		for j := i; j > a && vs[os[j]] < vs[os[j-1]]; j-- {
 			os[j], os[j-1] = os[j-1], os[j]
@@ -67,7 +65,7 @@ func insertionSort(vs []float64, os []int64, a, b int) {
 
 // siftDown implements the heap property on data[lo, hi).
 // first is an offset into the array where the root of the heap lies.
-func siftDown(vs []float64, os []int64, lo, hi, first int) {
+func siftDown(vs []uint32, os []int64, lo, hi, first int) {
 	root := lo
 	for {
 		child := 2*root + 1
@@ -85,7 +83,7 @@ func siftDown(vs []float64, os []int64, lo, hi, first int) {
 	}
 }
 
-func heapSort(vs []float64, os []int64, a, b int) {
+func heapSort(vs []uint32, os []int64, a, b int) {
 	first := a
 	lo := 0
 	hi := b - a
@@ -106,7 +104,7 @@ func heapSort(vs []float64, os []int64, a, b int) {
 // ``Engineering a Sort Function,'' SP&E November 1993.
 
 // medianOfThree moves the median of the three values data[m0], data[m1], data[m2] into data[m1].
-func medianOfThree(vs []float64, os []int64, m1, m0, m2 int) {
+func medianOfThree(vs []uint32, os []int64, m1, m0, m2 int) {
 	// sort 3 elements
 	if vs[os[m1]] < vs[os[m0]] {
 		os[m1], os[m0] = os[m0], os[m1]
@@ -122,13 +120,13 @@ func medianOfThree(vs []float64, os []int64, m1, m0, m2 int) {
 	// now data[m0] <= data[m1] <= data[m2]
 }
 
-func swapRange(vs []float64, os []int64, a, b, n int) {
+func swapRange(vs []uint32, os []int64, a, b, n int) {
 	for i := 0; i < n; i++ {
 		os[a+i], os[b+i] = os[b+i], os[a+i]
 	}
 }
 
-func doPivot(vs []float64, os []int64, lo, hi int) (midlo, midhi int) {
+func doPivot(vs []uint32, os []int64, lo, hi int) (midlo, midhi int) {
 	m := int(uint(lo+hi) >> 1) // Written like this to avoid integer overflow.
 	if hi-lo > 40 {
 		// Tukey's ``Ninther,'' median of three medians of three.

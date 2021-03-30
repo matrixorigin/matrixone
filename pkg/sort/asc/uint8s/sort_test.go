@@ -1,4 +1,4 @@
-package floats
+package uint8s
 
 import (
 	"fmt"
@@ -7,17 +7,17 @@ import (
 )
 
 const (
-	Num  = 10
-	Frac = 100
+	Num   = 10
+	Limit = 100
 )
 
-func generate() ([]float64, []int64) {
+func generate() ([]uint8, []int64) {
 	os := make([]int64, Num)
-	xs := make([]float64, Num)
+	xs := make([]uint8, Num)
 	{
 		for i := 0; i < Num; i++ {
 			os[i] = int64(i)
-			xs[i] = rand.Float64() * Frac
+			xs[i] = uint8(rand.Int63() % Limit)
 		}
 	}
 	return xs, os

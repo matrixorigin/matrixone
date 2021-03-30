@@ -1,4 +1,4 @@
-package bytes
+package varchar
 
 import (
 	"fmt"
@@ -21,7 +21,7 @@ func generate() *vector.Vector {
 			vs[i] = []byte(fmt.Sprintf("%v", rand.Int63()%Limit))
 		}
 	}
-	vec := vector.New(types.T_bytes)
+	vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
 	if err := vec.Append(vs); err != nil {
 		log.Fatal(err)
 	}

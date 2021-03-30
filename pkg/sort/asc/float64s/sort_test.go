@@ -1,4 +1,4 @@
-package ints
+package float64s
 
 import (
 	"fmt"
@@ -7,17 +7,17 @@ import (
 )
 
 const (
-	Num   = 10
-	Limit = 100
+	Num  = 10
+	Frac = 100
 )
 
-func generate() ([]int64, []int64) {
+func generate() ([]float64, []int64) {
 	os := make([]int64, Num)
-	xs := make([]int64, Num)
+	xs := make([]float64, Num)
 	{
 		for i := 0; i < Num; i++ {
 			os[i] = int64(i)
-			xs[i] = rand.Int63() % Limit
+			xs[i] = rand.Float64() * Frac
 		}
 	}
 	return xs, os
