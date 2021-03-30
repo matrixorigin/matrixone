@@ -440,7 +440,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				copy(data[mempool.CountSize:], g.Data[mempool.CountSize:])
 				proc.Free(g.Data)
 			}
-			g.Sels = encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+length*8])
+			g.Sels = encoding.DecodeInt64Slice(data[mempool.CountSize:])
 			g.Data = data[mempool.CountSize : mempool.CountSize+length*8]
 			g.Sels = g.Sels[:length]
 		}
