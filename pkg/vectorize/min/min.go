@@ -128,17 +128,16 @@ func int8MinPure(xs []int8) int8 {
 }
 
 func int8MinAvx2(xs []int8) int8 {
-	const regItems int = 32 / 1
-	n := len(xs) / regItems
+	n := len(xs) / 16
 	var rs [16]int8
-	int8MinAvx2Asm(xs[:n*regItems], rs[:])
+	int8MinAvx2Asm(xs[:n*16], rs[:])
 	res := rs[0]
 	for i := 1; i < 16; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*16, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -147,17 +146,16 @@ func int8MinAvx2(xs []int8) int8 {
 }
 
 func int8MinAvx512(xs []int8) int8 {
-	const regItems int = 64 / 1
-	n := len(xs) / regItems
+	n := len(xs) / 16
 	var rs [16]int8
-	int8MinAvx512Asm(xs[:n*regItems], rs[:])
+	int8MinAvx512Asm(xs[:n*16], rs[:])
 	res := rs[0]
 	for i := 1; i < 16; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*16, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -195,17 +193,16 @@ func int16MinPure(xs []int16) int16 {
 }
 
 func int16MinAvx2(xs []int16) int16 {
-	const regItems int = 32 / 2
-	n := len(xs) / regItems
+	n := len(xs) / 8
 	var rs [8]int16
-	int16MinAvx2Asm(xs[:n*regItems], rs[:])
+	int16MinAvx2Asm(xs[:n*8], rs[:])
 	res := rs[0]
 	for i := 1; i < 8; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*8, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -214,17 +211,16 @@ func int16MinAvx2(xs []int16) int16 {
 }
 
 func int16MinAvx512(xs []int16) int16 {
-	const regItems int = 64 / 2
-	n := len(xs) / regItems
+	n := len(xs) / 8
 	var rs [8]int16
-	int16MinAvx512Asm(xs[:n*regItems], rs[:])
+	int16MinAvx512Asm(xs[:n*8], rs[:])
 	res := rs[0]
 	for i := 1; i < 8; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*8, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -262,17 +258,16 @@ func int32MinPure(xs []int32) int32 {
 }
 
 func int32MinAvx2(xs []int32) int32 {
-	const regItems int = 32 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]int32
-	int32MinAvx2Asm(xs[:n*regItems], rs[:])
+	int32MinAvx2Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -281,17 +276,16 @@ func int32MinAvx2(xs []int32) int32 {
 }
 
 func int32MinAvx512(xs []int32) int32 {
-	const regItems int = 64 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]int32
-	int32MinAvx512Asm(xs[:n*regItems], rs[:])
+	int32MinAvx512Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -329,17 +323,16 @@ func int64MinPure(xs []int64) int64 {
 }
 
 func int64MinAvx512(xs []int64) int64 {
-	const regItems int = 64 / 8
-	n := len(xs) / regItems
+	n := len(xs) / 2
 	var rs [2]int64
-	int64MinAvx512Asm(xs[:n*regItems], rs[:])
+	int64MinAvx512Asm(xs[:n*2], rs[:])
 	res := rs[0]
 	for i := 1; i < 2; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*2, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -377,17 +370,16 @@ func uint8MinPure(xs []uint8) uint8 {
 }
 
 func uint8MinAvx2(xs []uint8) uint8 {
-	const regItems int = 32 / 1
-	n := len(xs) / regItems
+	n := len(xs) / 16
 	var rs [16]uint8
-	uint8MinAvx2Asm(xs[:n*regItems], rs[:])
+	uint8MinAvx2Asm(xs[:n*16], rs[:])
 	res := rs[0]
 	for i := 1; i < 16; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*16, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -396,17 +388,16 @@ func uint8MinAvx2(xs []uint8) uint8 {
 }
 
 func uint8MinAvx512(xs []uint8) uint8 {
-	const regItems int = 64 / 1
-	n := len(xs) / regItems
+	n := len(xs) / 16
 	var rs [16]uint8
-	uint8MinAvx512Asm(xs[:n*regItems], rs[:])
+	uint8MinAvx512Asm(xs[:n*16], rs[:])
 	res := rs[0]
 	for i := 1; i < 16; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*16, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -444,17 +435,16 @@ func uint16MinPure(xs []uint16) uint16 {
 }
 
 func uint16MinAvx2(xs []uint16) uint16 {
-	const regItems int = 32 / 2
-	n := len(xs) / regItems
+	n := len(xs) / 8
 	var rs [8]uint16
-	uint16MinAvx2Asm(xs[:n*regItems], rs[:])
+	uint16MinAvx2Asm(xs[:n*8], rs[:])
 	res := rs[0]
 	for i := 1; i < 8; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*8, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -463,17 +453,16 @@ func uint16MinAvx2(xs []uint16) uint16 {
 }
 
 func uint16MinAvx512(xs []uint16) uint16 {
-	const regItems int = 64 / 2
-	n := len(xs) / regItems
+	n := len(xs) / 8
 	var rs [8]uint16
-	uint16MinAvx512Asm(xs[:n*regItems], rs[:])
+	uint16MinAvx512Asm(xs[:n*8], rs[:])
 	res := rs[0]
 	for i := 1; i < 8; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*8, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -511,17 +500,16 @@ func uint32MinPure(xs []uint32) uint32 {
 }
 
 func uint32MinAvx2(xs []uint32) uint32 {
-	const regItems int = 32 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]uint32
-	uint32MinAvx2Asm(xs[:n*regItems], rs[:])
+	uint32MinAvx2Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -530,17 +518,16 @@ func uint32MinAvx2(xs []uint32) uint32 {
 }
 
 func uint32MinAvx512(xs []uint32) uint32 {
-	const regItems int = 64 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]uint32
-	uint32MinAvx512Asm(xs[:n*regItems], rs[:])
+	uint32MinAvx512Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -578,17 +565,16 @@ func uint64MinPure(xs []uint64) uint64 {
 }
 
 func uint64MinAvx512(xs []uint64) uint64 {
-	const regItems int = 64 / 8
-	n := len(xs) / regItems
+	n := len(xs) / 2
 	var rs [2]uint64
-	uint64MinAvx512Asm(xs[:n*regItems], rs[:])
+	uint64MinAvx512Asm(xs[:n*2], rs[:])
 	res := rs[0]
 	for i := 1; i < 2; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*2, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -626,17 +612,16 @@ func float32MinPure(xs []float32) float32 {
 }
 
 func float32MinAvx2(xs []float32) float32 {
-	const regItems int = 32 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]float32
-	float32MinAvx2Asm(xs[:n*regItems], rs[:])
+	float32MinAvx2Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -645,17 +630,16 @@ func float32MinAvx2(xs []float32) float32 {
 }
 
 func float32MinAvx512(xs []float32) float32 {
-	const regItems int = 64 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]float32
-	float32MinAvx512Asm(xs[:n*regItems], rs[:])
+	float32MinAvx512Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -693,17 +677,16 @@ func float64MinPure(xs []float64) float64 {
 }
 
 func float64MinAvx2(xs []float64) float64 {
-	const regItems int = 32 / 8
-	n := len(xs) / regItems
+	n := len(xs) / 2
 	var rs [2]float64
-	float64MinAvx2Asm(xs[:n*regItems], rs[:])
+	float64MinAvx2Asm(xs[:n*2], rs[:])
 	res := rs[0]
 	for i := 1; i < 2; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*2, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
@@ -712,17 +695,16 @@ func float64MinAvx2(xs []float64) float64 {
 }
 
 func float64MinAvx512(xs []float64) float64 {
-	const regItems int = 64 / 8
-	n := len(xs) / regItems
+	n := len(xs) / 2
 	var rs [2]float64
-	float64MinAvx512Asm(xs[:n*regItems], rs[:])
+	float64MinAvx512Asm(xs[:n*2], rs[:])
 	res := rs[0]
 	for i := 1; i < 2; i++ {
 		if rs[i] < res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*2, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
