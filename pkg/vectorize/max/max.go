@@ -128,17 +128,16 @@ func int8MaxPure(xs []int8) int8 {
 }
 
 func int8MaxAvx2(xs []int8) int8 {
-	const regItems int = 32 / 1
-	n := len(xs) / regItems
+	n := len(xs) / 16
 	var rs [16]int8
-	int8MaxAvx2Asm(xs[:n*regItems], rs[:])
+	int8MaxAvx2Asm(xs[:n*16], rs[:])
 	res := rs[0]
 	for i := 1; i < 16; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*16, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -147,17 +146,16 @@ func int8MaxAvx2(xs []int8) int8 {
 }
 
 func int8MaxAvx512(xs []int8) int8 {
-	const regItems int = 64 / 1
-	n := len(xs) / regItems
+	n := len(xs) / 16
 	var rs [16]int8
-	int8MaxAvx512Asm(xs[:n*regItems], rs[:])
+	int8MaxAvx512Asm(xs[:n*16], rs[:])
 	res := rs[0]
 	for i := 1; i < 16; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*16, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -195,17 +193,16 @@ func int16MaxPure(xs []int16) int16 {
 }
 
 func int16MaxAvx2(xs []int16) int16 {
-	const regItems int = 32 / 2
-	n := len(xs) / regItems
+	n := len(xs) / 8
 	var rs [8]int16
-	int16MaxAvx2Asm(xs[:n*regItems], rs[:])
+	int16MaxAvx2Asm(xs[:n*8], rs[:])
 	res := rs[0]
 	for i := 1; i < 8; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*8, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -214,17 +211,16 @@ func int16MaxAvx2(xs []int16) int16 {
 }
 
 func int16MaxAvx512(xs []int16) int16 {
-	const regItems int = 64 / 2
-	n := len(xs) / regItems
+	n := len(xs) / 8
 	var rs [8]int16
-	int16MaxAvx512Asm(xs[:n*regItems], rs[:])
+	int16MaxAvx512Asm(xs[:n*8], rs[:])
 	res := rs[0]
 	for i := 1; i < 8; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*8, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -262,17 +258,16 @@ func int32MaxPure(xs []int32) int32 {
 }
 
 func int32MaxAvx2(xs []int32) int32 {
-	const regItems int = 32 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]int32
-	int32MaxAvx2Asm(xs[:n*regItems], rs[:])
+	int32MaxAvx2Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -281,17 +276,16 @@ func int32MaxAvx2(xs []int32) int32 {
 }
 
 func int32MaxAvx512(xs []int32) int32 {
-	const regItems int = 64 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]int32
-	int32MaxAvx512Asm(xs[:n*regItems], rs[:])
+	int32MaxAvx512Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -329,17 +323,16 @@ func int64MaxPure(xs []int64) int64 {
 }
 
 func int64MaxAvx512(xs []int64) int64 {
-	const regItems int = 64 / 8
-	n := len(xs) / regItems
+	n := len(xs) / 2
 	var rs [2]int64
-	int64MaxAvx512Asm(xs[:n*regItems], rs[:])
+	int64MaxAvx512Asm(xs[:n*2], rs[:])
 	res := rs[0]
 	for i := 1; i < 2; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*2, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -377,17 +370,16 @@ func uint8MaxPure(xs []uint8) uint8 {
 }
 
 func uint8MaxAvx2(xs []uint8) uint8 {
-	const regItems int = 32 / 1
-	n := len(xs) / regItems
+	n := len(xs) / 16
 	var rs [16]uint8
-	uint8MaxAvx2Asm(xs[:n*regItems], rs[:])
+	uint8MaxAvx2Asm(xs[:n*16], rs[:])
 	res := rs[0]
 	for i := 1; i < 16; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*16, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -396,17 +388,16 @@ func uint8MaxAvx2(xs []uint8) uint8 {
 }
 
 func uint8MaxAvx512(xs []uint8) uint8 {
-	const regItems int = 64 / 1
-	n := len(xs) / regItems
+	n := len(xs) / 16
 	var rs [16]uint8
-	uint8MaxAvx512Asm(xs[:n*regItems], rs[:])
+	uint8MaxAvx512Asm(xs[:n*16], rs[:])
 	res := rs[0]
 	for i := 1; i < 16; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*16, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -444,17 +435,16 @@ func uint16MaxPure(xs []uint16) uint16 {
 }
 
 func uint16MaxAvx2(xs []uint16) uint16 {
-	const regItems int = 32 / 2
-	n := len(xs) / regItems
+	n := len(xs) / 8
 	var rs [8]uint16
-	uint16MaxAvx2Asm(xs[:n*regItems], rs[:])
+	uint16MaxAvx2Asm(xs[:n*8], rs[:])
 	res := rs[0]
 	for i := 1; i < 8; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*8, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -463,17 +453,16 @@ func uint16MaxAvx2(xs []uint16) uint16 {
 }
 
 func uint16MaxAvx512(xs []uint16) uint16 {
-	const regItems int = 64 / 2
-	n := len(xs) / regItems
+	n := len(xs) / 8
 	var rs [8]uint16
-	uint16MaxAvx512Asm(xs[:n*regItems], rs[:])
+	uint16MaxAvx512Asm(xs[:n*8], rs[:])
 	res := rs[0]
 	for i := 1; i < 8; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*8, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -511,17 +500,16 @@ func uint32MaxPure(xs []uint32) uint32 {
 }
 
 func uint32MaxAvx2(xs []uint32) uint32 {
-	const regItems int = 32 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]uint32
-	uint32MaxAvx2Asm(xs[:n*regItems], rs[:])
+	uint32MaxAvx2Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -530,17 +518,16 @@ func uint32MaxAvx2(xs []uint32) uint32 {
 }
 
 func uint32MaxAvx512(xs []uint32) uint32 {
-	const regItems int = 64 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]uint32
-	uint32MaxAvx512Asm(xs[:n*regItems], rs[:])
+	uint32MaxAvx512Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -578,17 +565,16 @@ func uint64MaxPure(xs []uint64) uint64 {
 }
 
 func uint64MaxAvx512(xs []uint64) uint64 {
-	const regItems int = 64 / 8
-	n := len(xs) / regItems
+	n := len(xs) / 2
 	var rs [2]uint64
-	uint64MaxAvx512Asm(xs[:n*regItems], rs[:])
+	uint64MaxAvx512Asm(xs[:n*2], rs[:])
 	res := rs[0]
 	for i := 1; i < 2; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*2, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -626,17 +612,16 @@ func float32MaxPure(xs []float32) float32 {
 }
 
 func float32MaxAvx2(xs []float32) float32 {
-	const regItems int = 32 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]float32
-	float32MaxAvx2Asm(xs[:n*regItems], rs[:])
+	float32MaxAvx2Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -645,17 +630,16 @@ func float32MaxAvx2(xs []float32) float32 {
 }
 
 func float32MaxAvx512(xs []float32) float32 {
-	const regItems int = 64 / 4
-	n := len(xs) / regItems
+	n := len(xs) / 4
 	var rs [4]float32
-	float32MaxAvx512Asm(xs[:n*regItems], rs[:])
+	float32MaxAvx512Asm(xs[:n*4], rs[:])
 	res := rs[0]
 	for i := 1; i < 4; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*4, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -693,17 +677,16 @@ func float64MaxPure(xs []float64) float64 {
 }
 
 func float64MaxAvx2(xs []float64) float64 {
-	const regItems int = 32 / 8
-	n := len(xs) / regItems
+	n := len(xs) / 2
 	var rs [2]float64
-	float64MaxAvx2Asm(xs[:n*regItems], rs[:])
+	float64MaxAvx2Asm(xs[:n*2], rs[:])
 	res := rs[0]
 	for i := 1; i < 2; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*2, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
@@ -712,17 +695,16 @@ func float64MaxAvx2(xs []float64) float64 {
 }
 
 func float64MaxAvx512(xs []float64) float64 {
-	const regItems int = 64 / 8
-	n := len(xs) / regItems
+	n := len(xs) / 2
 	var rs [2]float64
-	float64MaxAvx512Asm(xs[:n*regItems], rs[:])
+	float64MaxAvx512Asm(xs[:n*2], rs[:])
 	res := rs[0]
 	for i := 1; i < 2; i++ {
 		if rs[i] > res {
 			res = rs[i]
 		}
 	}
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	for i, j := n*2, len(xs); i < j; i++ {
 		if xs[i] > res {
 			res = xs[i]
 		}
