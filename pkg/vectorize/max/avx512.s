@@ -124,10 +124,11 @@ int8MaxDone:
 	VPMAXSB       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMAXSB       Y1, Y0, Y0
-	SUBQ          $0x00000020, DX
-	JB            int8MaxDone1
+	CMPQ          DX, $0x00000020
+	JL            int8MaxDone1
 	VPMAXSB       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000020, DX
 
 int8MaxDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -263,10 +264,11 @@ int16MaxDone:
 	VPMAXSW       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMAXSW       Y1, Y0, Y0
-	SUBQ          $0x00000010, DX
-	JB            int16MaxDone1
+	CMPQ          DX, $0x00000010
+	JL            int16MaxDone1
 	VPMAXSW       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000010, DX
 
 int16MaxDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -402,10 +404,11 @@ int32MaxDone:
 	VPMAXSD       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMAXSD       Y1, Y0, Y0
-	SUBQ          $0x00000008, DX
-	JB            int32MaxDone1
+	CMPQ          DX, $0x00000008
+	JL            int32MaxDone1
 	VPMAXSD       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000008, DX
 
 int32MaxDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -541,10 +544,11 @@ int64MaxDone:
 	VPMAXSQ       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMAXSQ       Y1, Y0, Y0
-	SUBQ          $0x00000004, DX
-	JB            int64MaxDone1
+	CMPQ          DX, $0x00000004
+	JL            int64MaxDone1
 	VPMAXSQ       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000004, DX
 
 int64MaxDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -678,10 +682,11 @@ uint8MaxDone:
 	VPMAXUB       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMAXUB       Y1, Y0, Y0
-	SUBQ          $0x00000020, DX
-	JB            uint8MaxDone1
+	CMPQ          DX, $0x00000020
+	JL            uint8MaxDone1
 	VPMAXUB       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000020, DX
 
 uint8MaxDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -815,10 +820,11 @@ uint16MaxDone:
 	VPMAXUW       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMAXUW       Y1, Y0, Y0
-	SUBQ          $0x00000010, DX
-	JB            uint16MaxDone1
+	CMPQ          DX, $0x00000010
+	JL            uint16MaxDone1
 	VPMAXUW       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000010, DX
 
 uint16MaxDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -952,10 +958,11 @@ uint32MaxDone:
 	VPMAXUD       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMAXUD       Y1, Y0, Y0
-	SUBQ          $0x00000008, DX
-	JB            uint32MaxDone1
+	CMPQ          DX, $0x00000008
+	JL            uint32MaxDone1
 	VPMAXUD       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000008, DX
 
 uint32MaxDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -1089,10 +1096,11 @@ uint64MaxDone:
 	VPMAXUQ       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMAXUQ       Y1, Y0, Y0
-	SUBQ          $0x00000004, DX
-	JB            uint64MaxDone1
+	CMPQ          DX, $0x00000004
+	JL            uint64MaxDone1
 	VPMAXUQ       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000004, DX
 
 uint64MaxDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -1228,10 +1236,11 @@ float32MaxDone:
 	VMAXPS        Z0, Z31, Z0
 	VEXTRACTF32X8 $0x01, Z0, Y1
 	VMAXPS        Y1, Y0, Y0
-	SUBQ          $0x00000008, DX
-	JB            float32MaxDone1
+	CMPQ          DX, $0x00000008
+	JL            float32MaxDone1
 	VMAXPS        (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000008, DX
 
 float32MaxDone1:
 	VEXTRACTF128 $0x01, Y0, X1
@@ -1367,10 +1376,11 @@ float64MaxDone:
 	VMAXPD        Z0, Z31, Z0
 	VEXTRACTF64X4 $0x01, Z0, Y1
 	VMAXPD        Y1, Y0, Y0
-	SUBQ          $0x00000004, DX
-	JB            float64MaxDone1
+	CMPQ          DX, $0x00000004
+	JL            float64MaxDone1
 	VMAXPD        (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000004, DX
 
 float64MaxDone1:
 	VEXTRACTF128 $0x01, Y0, X1
