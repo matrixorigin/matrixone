@@ -124,10 +124,11 @@ int8MinDone:
 	VPMINSB       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMINSB       Y1, Y0, Y0
-	SUBQ          $0x00000020, DX
-	JB            int8MinDone1
+	CMPQ          DX, $0x00000020
+	JL            int8MinDone1
 	VPMINSB       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000020, DX
 
 int8MinDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -263,10 +264,11 @@ int16MinDone:
 	VPMINSW       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMINSW       Y1, Y0, Y0
-	SUBQ          $0x00000010, DX
-	JB            int16MinDone1
+	CMPQ          DX, $0x00000010
+	JL            int16MinDone1
 	VPMINSW       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000010, DX
 
 int16MinDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -402,10 +404,11 @@ int32MinDone:
 	VPMINSD       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMINSD       Y1, Y0, Y0
-	SUBQ          $0x00000008, DX
-	JB            int32MinDone1
+	CMPQ          DX, $0x00000008
+	JL            int32MinDone1
 	VPMINSD       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000008, DX
 
 int32MinDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -541,10 +544,11 @@ int64MinDone:
 	VPMINSQ       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMINSQ       Y1, Y0, Y0
-	SUBQ          $0x00000004, DX
-	JB            int64MinDone1
+	CMPQ          DX, $0x00000004
+	JL            int64MinDone1
 	VPMINSQ       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000004, DX
 
 int64MinDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -678,10 +682,11 @@ uint8MinDone:
 	VPMINUB       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMINUB       Y1, Y0, Y0
-	SUBQ          $0x00000020, DX
-	JB            uint8MinDone1
+	CMPQ          DX, $0x00000020
+	JL            uint8MinDone1
 	VPMINUB       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000020, DX
 
 uint8MinDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -815,10 +820,11 @@ uint16MinDone:
 	VPMINUW       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMINUW       Y1, Y0, Y0
-	SUBQ          $0x00000010, DX
-	JB            uint16MinDone1
+	CMPQ          DX, $0x00000010
+	JL            uint16MinDone1
 	VPMINUW       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000010, DX
 
 uint16MinDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -952,10 +958,11 @@ uint32MinDone:
 	VPMINUD       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMINUD       Y1, Y0, Y0
-	SUBQ          $0x00000008, DX
-	JB            uint32MinDone1
+	CMPQ          DX, $0x00000008
+	JL            uint32MinDone1
 	VPMINUD       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000008, DX
 
 uint32MinDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -1089,10 +1096,11 @@ uint64MinDone:
 	VPMINUQ       Z0, Z31, Z0
 	VEXTRACTI64X4 $0x01, Z0, Y1
 	VPMINUQ       Y1, Y0, Y0
-	SUBQ          $0x00000004, DX
-	JB            uint64MinDone1
+	CMPQ          DX, $0x00000004
+	JL            uint64MinDone1
 	VPMINUQ       (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000004, DX
 
 uint64MinDone1:
 	VEXTRACTI128 $0x01, Y0, X1
@@ -1228,10 +1236,11 @@ float32MinDone:
 	VMINPS        Z0, Z31, Z0
 	VEXTRACTF32X8 $0x01, Z0, Y1
 	VMINPS        Y1, Y0, Y0
-	SUBQ          $0x00000008, DX
-	JB            float32MinDone1
+	CMPQ          DX, $0x00000008
+	JL            float32MinDone1
 	VMINPS        (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000008, DX
 
 float32MinDone1:
 	VEXTRACTF128 $0x01, Y0, X1
@@ -1367,10 +1376,11 @@ float64MinDone:
 	VMINPD        Z0, Z31, Z0
 	VEXTRACTF64X4 $0x01, Z0, Y1
 	VMINPD        Y1, Y0, Y0
-	SUBQ          $0x00000004, DX
-	JB            float64MinDone1
+	CMPQ          DX, $0x00000004
+	JL            float64MinDone1
 	VMINPD        (AX), Y0, Y0
 	ADDQ          $0x00000020, AX
+	SUBQ          $0x00000004, DX
 
 float64MinDone1:
 	VEXTRACTF128 $0x01, Y0, X1

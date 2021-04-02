@@ -11,7 +11,7 @@ var (
 )
 
 func init() {
-	if cpu.X86.HasAVX2 {
+	if cpu.X86.HasAVX512 {
 		strLength = strLengthAvx512
 	} else if cpu.X86.HasAVX2 {
 		strLength = strLengthAvx2
@@ -25,22 +25,12 @@ func StrLength(xs *types.Bytes, rs []int64) []int64 {
 }
 
 func strLengthAvx2(xs *types.Bytes, rs []int64) []int64 {
-	lengths := xs.Lengths
-	n := len(lengths) / 4
-	strLengthAvx2Asm(lengths, rs)
-	for i, j := n*4, len(lengths); i < j; i++ {
-		rs[i] = int64(lengths[i])
-	}
+	strLengthAvx2Asm(xs.Lengths, rs)
 	return rs
 }
 
 func strLengthAvx512(xs *types.Bytes, rs []int64) []int64 {
-	lengths := xs.Lengths
-	n := len(lengths) / 8
-	strLengthAvx512Asm(lengths, rs)
-	for i, j := n*8, len(lengths); i < j; i++ {
-		rs[i] = int64(lengths[i])
-	}
+	strLengthAvx512Asm(xs.Lengths, rs)
 	return rs
 }
 
