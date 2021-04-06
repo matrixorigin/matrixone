@@ -38,6 +38,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
 	bat := proc.Reg.Ax.(*batch.Batch)
+	if bat.Attrs == nil {
+		return false, nil
+	}
 	ctr.bat = batch.New(true, ctr.attrs)
 	if err := ctr.processBatch(bat, n.Es, proc); err != nil {
 		ctr.clean(bat, proc)

@@ -32,6 +32,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
+	if bat.Attrs == nil {
+		return false, nil
+	}
 	rbat := batch.New(true, n.Attrs)
 	for i := range n.Attrs {
 		if rbat.Vecs[i], _, err = n.Es[i].Eval(bat, proc); err != nil {

@@ -49,6 +49,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				continue
 			}
 			bat := v.(*batch.Batch)
+			if bat.Attrs == nil {
+				reg.Wg.Done()
+				continue
+			}
 			if err := ctr.processBatch(bat, n.Es, proc); err != nil {
 				reg.Wg.Done()
 				ctr.clean(bat, proc)

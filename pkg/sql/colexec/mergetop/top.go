@@ -67,6 +67,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				continue
 			}
 			bat := v.(*batch.Batch)
+			if bat.Attrs == nil {
+				reg.Wg.Done()
+				continue
+			}
 			if ctr.bat == nil {
 				bat.Reorder(ctr.attrs)
 			} else {
