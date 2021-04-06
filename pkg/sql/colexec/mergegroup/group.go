@@ -159,6 +159,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			reg.Wg.Done()
 		}
 	}
+	if ctr.vecs[0] == nil {
+		proc.Reg.Ax = nil
+		return true, nil
+	}
 	vecs, err := ctr.eval(ctr.vecs[0].Length(), n.Es, proc)
 	if err != nil {
 		ctr.clean(nil, proc)
