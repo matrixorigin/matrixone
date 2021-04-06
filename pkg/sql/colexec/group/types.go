@@ -1,4 +1,4 @@
-package hashgroup
+package group
 
 import (
 	"matrixbase/pkg/container/vector"
@@ -17,8 +17,11 @@ var (
 )
 
 type Container struct {
+	is     []int // index list
 	diffs  []bool
 	matchs []int64
+	attrs  []string
+	rattrs []string
 	hashs  []uint64
 	sels   [][]int64    // sels
 	slots  *fastmap.Map // hash code -> sels index
@@ -27,9 +30,7 @@ type Container struct {
 }
 
 type Argument struct {
-	Gs     []string
-	Attrs  []string
-	Rattrs []string
-	Ctr    Container
-	Es     []aggregation.Extend
+	Gs  []string
+	Ctr Container
+	Es  []aggregation.Extend
 }

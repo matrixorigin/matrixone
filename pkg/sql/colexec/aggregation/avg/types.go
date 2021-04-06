@@ -1,16 +1,27 @@
 package avg
 
-type int64Avg struct {
-	v   int64
+import "matrixbase/pkg/container/types"
+
+type intAvg struct {
 	cnt int64
+	sum int64
+	typ types.Type
 }
 
-type float64Avg struct {
+type uintAvg struct {
 	cnt int64
-	v   float64
+	sum uint64
+	typ types.Type
+}
+
+type floatAvg struct {
+	cnt int64
+	sum float64
+	typ types.Type
 }
 
 type sumCountAvg struct {
-	v   float64
-	cnt float64
+	cnt int64
+	sum float64
+	typ types.Type
 }

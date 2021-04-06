@@ -26,6 +26,7 @@ const (
 	Output
 	MergeTop
 	MergeDedup
+	MergeGroup
 	MergeSummarize
 )
 

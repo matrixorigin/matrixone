@@ -36,7 +36,7 @@ const (
 
 	// system family
 	T_sel   = 200 //selection
-	T_tuple = 201 // immutable
+	T_tuple = 201 // immutable, size = 24
 )
 
 type T uint8

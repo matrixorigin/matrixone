@@ -7,6 +7,7 @@ import (
 	"matrixbase/pkg/container/vector"
 	"matrixbase/pkg/hash"
 	"matrixbase/pkg/intmap/fastmap"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
@@ -267,16 +268,30 @@ func (ctr *Container) probeUnit(start, count int, sels []int64, bat *batch.Batch
 						}
 						{
 							for i, vec := range bat.Vecs {
-								if err := ctr.probeState.bat.Vecs[i].UnionOne(vec, sel, proc); err != nil {
-									return err
+								if ctr.probeState.bat.Vecs[i].Data == nil {
+									if err := ctr.probeState.bat.Vecs[i].UnionOne(vec, sel, proc); err != nil {
+										return err
+									}
+									copy(ctr.probeState.bat.Vecs[i].Data[:mempool.CountSize], vec.Data[:mempool.CountSize])
+								} else {
+									if err := ctr.probeState.bat.Vecs[i].UnionOne(vec, sel, proc); err != nil {
+										return err
+									}
 								}
 							}
 						}
 						{
 							k := len(bat.Vecs)
 							for _, vec := range ctr.bats[g.Idx].Vecs {
-								if err := ctr.probeState.bat.Vecs[k].UnionOne(vec, g.Sel, proc); err != nil {
-									return err
+								if ctr.probeState.bat.Vecs[k].Data == nil {
+									if err := ctr.probeState.bat.Vecs[k].UnionOne(vec, g.Sel, proc); err != nil {
+										return err
+									}
+									copy(ctr.probeState.bat.Vecs[k].Data[:mempool.CountSize], vec.Data[:mempool.CountSize])
+								} else {
+									if err := ctr.probeState.bat.Vecs[k].UnionOne(vec, g.Sel, proc); err != nil {
+										return err
+									}
 								}
 								k++
 							}
@@ -310,9 +325,18 @@ func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 }
 
 func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vector) {
-	ctr.hashs = ctr.hashs[:count]
+	var cnt int64
+
+	{
+		for i, sel := range sels {
+			if i == 0 || sel > cnt {
+				cnt = sel
+			}
+		}
+	}
+	ctr.hashs = ctr.hashs[:cnt+1]
 	for _, vec := range vecs {
-		hash.RehashSels(count, sels, ctr.hashs, vec)
+		hash.RehashSels(sels[:count], ctr.hashs, vec)
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

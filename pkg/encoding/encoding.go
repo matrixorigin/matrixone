@@ -42,6 +42,24 @@ func DecodeType(v []byte) types.Type {
 	return *(*types.Type)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeInt8(v int8) []byte {
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 1, Cap: 1}
+	return *(*[]byte)(unsafe.Pointer(&hp))
+}
+
+func DecodeInt8(v []byte) int8 {
+	return *(*int8)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeUint8(v uint8) []byte {
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 1, Cap: 1}
+	return *(*[]byte)(unsafe.Pointer(&hp))
+}
+
+func DecodeUint8(v []byte) uint8 {
+	return *(*uint8)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeInt16(v int16) []byte {
 	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 2, Cap: 2}
 	return *(*[]byte)(unsafe.Pointer(&hp))
@@ -94,6 +112,24 @@ func EncodeUint64(v uint64) []byte {
 
 func DecodeUint64(v []byte) uint64 {
 	return *(*uint64)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeFloat32(v float32) []byte {
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
+	return *(*[]byte)(unsafe.Pointer(&hp))
+}
+
+func DecodeFloat32(v []byte) float32 {
+	return *(*float32)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeFloat64(v float64) []byte {
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
+	return *(*[]byte)(unsafe.Pointer(&hp))
+}
+
+func DecodeFloat64(v []byte) float64 {
+	return *(*float64)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeInt8Slice(v []int8) []byte {

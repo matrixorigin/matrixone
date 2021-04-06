@@ -10,7 +10,6 @@ import (
 	"matrixbase/pkg/intmap/fastmap"
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
-	"matrixbase/pkg/vm/register"
 )
 
 func init() {
@@ -34,18 +33,22 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		hashs:  make([]uint64, UnitLimit),
 		sels:   make([][]int64, UnitLimit),
 		slots:  fastmap.Pool.Get().(*fastmap.Map),
-		groups: make(map[uint64][]*hash.DedupGroup),
 	}
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
+	ctr := &n.Ctr
 	if proc.Reg.Ax == nil {
+		ctr.clean(nil, proc)
 		return false, nil
 	}
 	bat := proc.Reg.Ax.(*batch.Batch)
-	ctr := &n.Ctr
+	if bat.Attrs == nil {
+		return false, nil
+	}
+	ctr.groups = make(map[uint64][]*hash.DedupGroup)
 	vecs := make([]*vector.Vector, len(n.Attrs))
 	if err := bat.Prefetch(n.Attrs, vecs, proc); err != nil {
 		ctr.clean(bat, proc)
@@ -69,7 +72,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	ctr.dedupState.sels = nil
 	ctr.dedupState.data = nil
 	proc.Reg.Ax = bat
-	ctr.clean(nil, proc)
 	return false, nil
 }
 
@@ -173,9 +175,18 @@ func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 }
 
 func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vector) {
-	ctr.hashs = ctr.hashs[:count]
+	var cnt int64
+
+	{
+		for i, sel := range sels {
+			if i == 0 || sel > cnt {
+				cnt = sel
+			}
+		}
+	}
+	ctr.hashs = ctr.hashs[:cnt+1]
 	for _, vec := range vecs {
-		hash.RehashSels(count, sels, ctr.hashs, vec)
+		hash.RehashSels(sels[:count], ctr.hashs, vec)
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {
@@ -197,5 +208,4 @@ func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
 		proc.Free(ctr.dedupState.data)
 	}
 	fastmap.Pool.Put(ctr.slots)
-	register.FreeRegisters(proc)
 }

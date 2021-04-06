@@ -134,6 +134,15 @@ func (v *Vector) Free(p *process.Process) {
 	}
 }
 
+func (v *Vector) Clean(p *process.Process) {
+	if v.Data != nil {
+		copy(v.Data, mempool.OneCount)
+		if p.Free(v.Data) {
+			v.Data = nil
+		}
+	}
+}
+
 func (v *Vector) SetCol(col interface{}) {
 	v.Col = col
 }

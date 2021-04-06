@@ -23,8 +23,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}
-	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
+	if bat.Attrs == nil {
+		return false, nil
+	}
+	n := arg.(*Argument)
 	if length := uint64(len(bat.Sels)); length > 0 {
 		newSeen := n.Seen + length
 		if newSeen >= n.Limit { // limit - seen
