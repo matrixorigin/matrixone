@@ -2,7 +2,7 @@ package unittest
 
 import (
 	"fmt"
-	"matrixbase/pkg/sql/colexec/hashset/intersect"
+	"matrixbase/pkg/sql/colexec/set/intersect"
 	"matrixbase/pkg/sql/colexec/transfer"
 	"matrixbase/pkg/vm"
 	"matrixbase/pkg/vm/mempool"

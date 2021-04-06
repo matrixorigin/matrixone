@@ -7,6 +7,7 @@ import (
 	"matrixbase/pkg/container/vector"
 	"matrixbase/pkg/hash"
 	"matrixbase/pkg/intmap/fastmap"
+	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
 	"matrixbase/pkg/vm/register"
 )
@@ -54,8 +55,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				continue
 			}
 			bat := v.(*batch.Batch)
-			bat.Reorder(n.Attrs)
-			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
+			if ctr.attrs == nil {
+				bat.Reorder(n.Attrs)
+				ctr.attrs = make([]string, len(bat.Attrs))
+				for i, attr := range bat.Attrs {
+					ctr.attrs[i] = attr
+				}
+			} else {
+				bat.Reorder(ctr.attrs)
+			}
+			if err := bat.Prefetch(ctr.attrs, bat.Vecs, proc); err != nil {
 				reg.Wg.Done()
 				ctr.clean(bat, proc)
 				return true, err
@@ -143,15 +152,25 @@ func (ctr *Container) unitDedup(start int, count int, sels []int64, bat *batch.B
 			for len(remaining) > 0 {
 				g := hash.NewDedupGroup(int64(remaining[0]))
 				for i, vec := range bat.Vecs {
-					if err := ctr.bat.Vecs[i].UnionOne(vec, remaining[0], proc); err != nil {
-						return err
+					if ctr.bat.Vecs[i].Data == nil {
+						if err := ctr.bat.Vecs[i].UnionOne(vec, remaining[0], proc); err != nil {
+							return err
+						}
+						copy(ctr.bat.Vecs[i].Data[:mempool.CountSize], vec.Data[:mempool.CountSize])
+					} else {
+						if err := ctr.bat.Vecs[i].UnionOne(vec, remaining[0], proc); err != nil {
+							return err
+						}
 					}
 				}
 				ctr.groups[h] = append(ctr.groups[h], g)
-				if remaining, err = g.Fill(remaining[1:], ctr.matchs, vecs, bat.Vecs, ctr.diffs, proc); err != nil {
-					return err
+				remaining = remaining[1:]
+				if len(remaining) > 0 {
+					if remaining, err = g.Fill(remaining, ctr.matchs, vecs, bat.Vecs, ctr.diffs, proc); err != nil {
+						return err
+					}
+					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 				}
-				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 			}
 			ctr.sels[ctr.slots.Vs[i][j]] = ctr.sels[ctr.slots.Vs[i][j]][:0]
 		}
@@ -178,9 +197,18 @@ func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 }
 
 func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vector) {
-	ctr.hashs = ctr.hashs[:count]
+	var cnt int64
+
+	{
+		for i, sel := range sels {
+			if i == 0 || sel > cnt {
+				cnt = sel
+			}
+		}
+	}
+	ctr.hashs = ctr.hashs[:cnt+1]
 	for _, vec := range vecs {
-		hash.RehashSels(count, sels, ctr.hashs, vec)
+		hash.RehashSels(sels[:count], ctr.hashs, vec)
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

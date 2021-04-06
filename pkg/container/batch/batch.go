@@ -108,10 +108,7 @@ func (bat *Batch) Clean(proc *process.Process) {
 		bat.SelsData = nil
 	}
 	for _, vec := range bat.Vecs {
-		if vec.Data != nil {
-			copy(vec.Data, mempool.OneCount)
-			vec.Free(proc)
-		}
+		vec.Clean(proc)
 	}
 }
 

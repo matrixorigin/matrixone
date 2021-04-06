@@ -19,6 +19,7 @@ type Container struct {
 	diffs  []bool
 	matchs []int64
 	hashs  []uint64
+	attrs  []string
 	sels   [][]int64    // sels
 	slots  *fastmap.Map // hash code -> sels index
 	bat    *batch.Batch

@@ -23,8 +23,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}
-	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
+	if bat.Attrs == nil {
+		return false, nil
+	}
+	n := arg.(*Argument)
 	if n.Seen > n.Offset {
 		proc.Reg.Ax = bat
 		register.FreeRegisters(proc)
@@ -41,7 +44,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		n.Seen += length
 		bat.Clean(proc)
 		proc.Reg.Ax = batch.New(true, nil)
-		register.FreeRegisters(proc)
 		return false, nil
 	}
 	length, err := bat.Length(proc)
@@ -53,19 +55,17 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		data, sels, err := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen), proc)
 		if err != nil {
 			clean(bat, proc)
-			return true, err
+			return false, err
 		}
 		n.Seen += uint64(length)
 		bat.Sels = sels
 		bat.SelsData = data
 		proc.Reg.Ax = bat
-		register.FreeRegisters(proc)
 		return false, nil
 	}
 	n.Seen += uint64(length)
 	bat.Clean(proc)
 	proc.Reg.Ax = batch.New(true, nil)
-	register.FreeRegisters(proc)
 	return false, nil
 }
 
@@ -83,5 +83,4 @@ func newSels(start, count int64, proc *process.Process) ([]byte, []int64, error)
 
 func clean(bat *batch.Batch, proc *process.Process) {
 	bat.Clean(proc)
-	register.FreeRegisters(proc)
 }

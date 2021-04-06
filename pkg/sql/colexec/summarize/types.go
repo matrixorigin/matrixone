@@ -1,8 +1,16 @@
 package summarize
 
-import "matrixbase/pkg/sql/colexec/aggregation"
+import (
+	"matrixbase/pkg/container/batch"
+	"matrixbase/pkg/sql/colexec/aggregation"
+)
+
+type Container struct {
+	attrs []string
+	bat   *batch.Batch
+}
 
 type Argument struct {
-	Attrs []string
-	Es    []aggregation.Extend
+	Ctr Container
+	Es  []aggregation.Extend
 }

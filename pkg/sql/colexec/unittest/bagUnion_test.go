@@ -2,7 +2,7 @@ package unittest
 
 import (
 	"fmt"
-	bunion "matrixbase/pkg/sql/colexec/hashbag/union"
+	bunion "matrixbase/pkg/sql/colexec/bag/union"
 	"matrixbase/pkg/sql/colexec/transfer"
 	"matrixbase/pkg/vm"
 	"matrixbase/pkg/vm/mempool"
