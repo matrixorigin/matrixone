@@ -2,6 +2,7 @@ package vm
 
 import (
 	"bytes"
+	binner "matrixbase/pkg/sql/colexec/bag/inner"
 	bnatural "matrixbase/pkg/sql/colexec/bag/natural"
 	bunion "matrixbase/pkg/sql/colexec/bag/union"
 	"matrixbase/pkg/sql/colexec/dedup"
@@ -46,6 +47,7 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	SetNaturalJoin:    natural.String,
 	SetSemiDifference: nil,
 	BagUnion:          bunion.String,
+	BagInnerJoin:      binner.String,
 	BagNaturalJoin:    bnatural.String,
 	Output:            output.String,
 	MergeTop:          mergetop.String,
@@ -76,6 +78,7 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	SetNaturalJoin:    natural.Prepare,
 	SetSemiDifference: nil,
 	BagUnion:          bunion.Prepare,
+	BagInnerJoin:      binner.Prepare,
 	BagNaturalJoin:    bnatural.Prepare,
 	Output:            output.Prepare,
 	MergeTop:          mergetop.Prepare,
@@ -106,6 +109,7 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	SetNaturalJoin:    natural.Call,
 	SetSemiDifference: nil,
 	BagUnion:          bunion.Call,
+	BagInnerJoin:      binner.Call,
 	BagNaturalJoin:    bnatural.Call,
 	Output:            output.Call,
 	MergeTop:          mergetop.Call,

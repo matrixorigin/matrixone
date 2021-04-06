@@ -25,6 +25,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
+	if bat.Attrs == nil {
+		return false, nil
+	}
 	vec, _, err := n.E.Eval(bat, proc)
 	if err != nil {
 		clean(bat, proc)

@@ -59,9 +59,14 @@ func (ctr *Container) build(attrs []string, proc *process.Process) error {
 	for {
 		v := <-reg.Ch
 		if v == nil {
+			reg.Wg.Done()
 			break
 		}
 		bat := v.(*batch.Batch)
+		if bat.Attrs == nil {
+			reg.Wg.Done()
+			continue
+		}
 		bat.Reorder(attrs)
 		if err = bat.Prefetch(attrs, bat.Vecs, proc); err != nil {
 			ctr.clean(bat, proc)
@@ -84,64 +89,77 @@ func (ctr *Container) build(attrs []string, proc *process.Process) error {
 		}
 		reg.Wg.Done()
 	}
-	reg.Wg.Done()
 	return nil
 }
 
 func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.Process) (bool, error) {
-	reg := proc.Reg.Ws[0]
-	defer reg.Wg.Done()
-	v := <-reg.Ch
-	if v == nil {
-		proc.Reg.Ax = nil
-		ctr.clean(nil, proc)
-		return true, nil
-	}
-	bat := v.(*batch.Batch)
-	if len(ctr.groups) == 0 {
-		reg.Ch = nil
-		proc.Reg.Ax = nil
-		ctr.clean(bat, proc)
-		return true, nil
-	}
-	bat.Reorder(attrs)
-	if len(ctr.attrs) == 0 {
-		ctr.attrs = make([]string, 0, len(bat.Attrs)+len(ctr.bats[0].Attrs))
-		for _, attr := range bat.Attrs {
-			ctr.attrs = append(ctr.attrs, rName+"."+attr)
+	for {
+		reg := proc.Reg.Ws[0]
+		v := <-reg.Ch
+		if v == nil {
+			reg.Wg.Done()
+			proc.Reg.Ax = nil
+			ctr.clean(nil, proc)
+			return true, nil
 		}
-		for _, attr := range ctr.bats[0].Attrs {
-			ctr.attrs = append(ctr.attrs, sName+"."+attr)
+		bat := v.(*batch.Batch)
+		if bat.Attrs == nil {
+			reg.Wg.Done()
+			continue
 		}
-	}
-	ctr.probeState.bat = batch.New(true, ctr.attrs)
-	{
-		i := 0
-		for _, vec := range bat.Vecs {
-			ctr.probeState.bat.Vecs[i] = vector.New(vec.Typ)
-			i++
-		}
-		for _, vec := range ctr.bats[0].Vecs {
-			ctr.probeState.bat.Vecs[i] = vector.New(vec.Typ)
-			i++
-		}
-	}
-	if len(bat.Sels) == 0 {
-		if err := ctr.probeBatch(bat, bat.Vecs[:len(attrs)], proc); err != nil {
+		if len(ctr.groups) == 0 {
+			reg.Ch = nil
+			reg.Wg.Done()
+			proc.Reg.Ax = nil
 			ctr.clean(bat, proc)
-			return true, err
+			return true, nil
 		}
-		proc.Reg.Ax = ctr.probeState.bat
-	} else {
-		if err := ctr.probeBatchSels(bat.Sels, bat, bat.Vecs[:len(attrs)], proc); err != nil {
-			ctr.clean(bat, proc)
-			return true, err
+		bat.Reorder(attrs)
+		if len(ctr.attrs) == 0 {
+			ctr.attrs = make([]string, 0, len(bat.Attrs)+len(ctr.bats[0].Attrs))
+			for _, attr := range bat.Attrs {
+				ctr.attrs = append(ctr.attrs, rName+"."+attr)
+			}
+			for _, attr := range ctr.bats[0].Attrs {
+				ctr.attrs = append(ctr.attrs, sName+"."+attr)
+			}
 		}
+		ctr.probeState.bat = batch.New(true, ctr.attrs)
+		{
+			i := 0
+			for _, vec := range bat.Vecs {
+				ctr.probeState.bat.Vecs[i] = vector.New(vec.Typ)
+				i++
+			}
+			for _, vec := range ctr.bats[0].Vecs {
+				ctr.probeState.bat.Vecs[i] = vector.New(vec.Typ)
+				i++
+			}
+		}
+		if len(bat.Sels) == 0 {
+			if err := ctr.probeBatch(bat, bat.Vecs[:len(attrs)], proc); err != nil {
+				reg.Wg.Done()
+				ctr.clean(bat, proc)
+				return true, err
+			}
+		} else {
+			if err := ctr.probeBatchSels(bat.Sels, bat, bat.Vecs[:len(attrs)], proc); err != nil {
+				reg.Wg.Done()
+				ctr.clean(bat, proc)
+				return true, err
+			}
+		}
+		if ctr.probeState.bat.Vecs[0] == nil {
+			reg.Wg.Done()
+			bat.Clean(proc)
+			continue
+		}
+		reg.Wg.Done()
+		bat.Clean(proc)
 		proc.Reg.Ax = ctr.probeState.bat
+		ctr.probeState.bat = nil
+		return false, nil
 	}
-	bat.Clean(proc)
-	ctr.probeState.bat = nil
-	return false, nil
 }
 
 func (ctr *Container) buildBatch(vecs []*vector.Vector, proc *process.Process) error {
