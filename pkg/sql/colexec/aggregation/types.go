@@ -32,13 +32,14 @@ type Extend struct {
 	Op    int
 	Name  string
 	Alias string
-	Typ   types.T
 	Agg   Aggregation
 }
 
 type Aggregation interface {
 	Reset()
+	Type() types.Type
 	Dup() Aggregation
+	Eval() interface{}
 	Fill([]int64, *vector.Vector) error
-	Eval(*process.Process) (*vector.Vector, error)
+	EvalCopy(*process.Process) (*vector.Vector, error)
 }

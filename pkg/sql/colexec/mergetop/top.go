@@ -136,8 +136,15 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		}
 		for i := int64(0); i < start; i++ {
 			for j, vec := range ctr.bat.Vecs {
-				if err := vec.UnionOne(bat.Vecs[j], int64(i), proc); err != nil {
-					return err
+				if vec.Data == nil {
+					if err := vec.UnionOne(bat.Vecs[j], int64(i), proc); err != nil {
+						return err
+					}
+					copy(vec.Data[:mempool.CountSize], bat.Vecs[j].Data[:mempool.CountSize])
+				} else {
+					if err := vec.UnionOne(bat.Vecs[j], int64(i), proc); err != nil {
+						return err
+					}
 				}
 			}
 			ctr.sels = append(ctr.sels, n)
@@ -180,8 +187,15 @@ func (ctr *Container) processBatchSels(limit int64, bat *batch.Batch, proc *proc
 		}
 		for i := int64(0); i < start; i++ {
 			for j, vec := range ctr.bat.Vecs {
-				if err := vec.UnionOne(bat.Vecs[j], bat.Sels[i], proc); err != nil {
-					return err
+				if vec.Data == nil {
+					if err := vec.UnionOne(bat.Vecs[j], bat.Sels[i], proc); err != nil {
+						return err
+					}
+					copy(vec.Data[:mempool.CountSize], bat.Vecs[j].Data[:mempool.CountSize])
+				} else {
+					if err := vec.UnionOne(bat.Vecs[j], bat.Sels[i], proc); err != nil {
+						return err
+					}
 				}
 			}
 			ctr.sels = append(ctr.sels, n)

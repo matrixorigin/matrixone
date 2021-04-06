@@ -84,91 +84,77 @@ func Rehash(count int, hs []uint64, vec *vector.Vector) {
 	}
 }
 
-func RehashSels(count int, sels []int64, hs []uint64, vec *vector.Vector) {
+func RehashSels(sels []int64, hs []uint64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_int8:
 		vs := vec.Col.([]int8)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = hs[sel]*31 + uint64(vs[sel])
 		}
 	case types.T_int16:
 		vs := vec.Col.([]int16)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash16(noescape(unsafe.Pointer(&vs[sel])), uintptr(hs[sel])))
 		}
 	case types.T_int32:
 		vs := vec.Col.([]int32)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash32(noescape(unsafe.Pointer(&vs[sel])), uintptr(hs[sel])))
 		}
 	case types.T_int64:
 		vs := vec.Col.([]int64)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash64(noescape(unsafe.Pointer(&vs[sel])), uintptr(hs[sel])))
 		}
 	case types.T_uint8:
 		vs := vec.Col.([]uint8)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = hs[sel]*31 + uint64(vs[sel])
 		}
 	case types.T_uint16:
 		vs := vec.Col.([]uint16)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash16(noescape(unsafe.Pointer(&vs[sel])), uintptr(hs[sel])))
 		}
 	case types.T_uint32:
 		vs := vec.Col.([]uint32)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash32(noescape(unsafe.Pointer(&vs[sel])), uintptr(hs[sel])))
 		}
 	case types.T_uint64:
 		vs := vec.Col.([]uint64)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash64(noescape(unsafe.Pointer(&vs[sel])), uintptr(hs[sel])))
 		}
 	case types.T_decimal:
 		vs := vec.Col.([]types.Decimal)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash(unsafe.Pointer(&vs[sel]), uintptr(hs[sel]), uintptr(encoding.DecimalSize)))
 		}
 	case types.T_float32:
 		vs := vec.Col.([]float32)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(F32hash(noescape(unsafe.Pointer(&vs[sel])), uintptr(hs[sel])))
 		}
 	case types.T_float64:
 		vs := vec.Col.([]float64)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(F64hash(noescape(unsafe.Pointer(&vs[sel])), uintptr(hs[sel])))
 		}
 	case types.T_date:
 		vs := vec.Col.([]types.Date)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash(unsafe.Pointer(&vs[sel]), uintptr(hs[sel]), uintptr(encoding.DateSize)))
 		}
 	case types.T_datetime:
 		vs := vec.Col.([]types.Datetime)
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash(unsafe.Pointer(&vs[sel]), uintptr(hs[sel]), uintptr(encoding.DatetimeSize)))
 		}
 	case types.T_char, types.T_varchar, types.T_json:
 		vs := vec.Col.(*types.Bytes)
 		hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vs.Data))
-		for i := 0; i < count; i++ {
-			sel := sels[i]
+		for _, sel := range sels {
 			hs[sel] = uint64(Memhash(noescape(unsafe.Pointer(hp.Data+uintptr(vs.Offsets[sel]))), uintptr(hs[sel]), uintptr(vs.Lengths[sel])))
 		}
 	}

@@ -1,9 +1,11 @@
 package hash
 
+import "matrixbase/pkg/sql/colexec/aggregation"
+
 type Group struct {
+	Is   []int
 	Sel  int64
-	Data []byte
-	Sels []int64
+	Aggs []aggregation.Aggregation
 }
 
 type SetGroup struct {

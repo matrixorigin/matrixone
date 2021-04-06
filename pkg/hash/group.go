@@ -4,29 +4,30 @@ import (
 	"bytes"
 	"matrixbase/pkg/container/types"
 	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/vm/mempool"
+	"matrixbase/pkg/sql/colexec/aggregation"
 	"matrixbase/pkg/vm/process"
 )
 
-func NewGroup(sel int64) *Group {
+func NewGroup(sel int64, is []int, es []aggregation.Extend) *Group {
+	aggs := make([]aggregation.Aggregation, len(es))
+	for i, e := range es {
+		aggs[i] = e.Agg.Dup()
+	}
 	return &Group{
-		Sel: sel,
+		Is:   is,
+		Sel:  sel,
+		Aggs: aggs,
 	}
 }
 
-func (g *Group) Free(proc *process.Process) {
-	if g.Data != nil {
-		proc.Free(g.Data)
-		g.Data = nil
-	}
+func (g *Group) Free(_ *process.Process) {
 }
 
 func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs []bool, proc *process.Process) ([]int64, error) {
-	for i, vec := range vecs {
-		switch vec.Typ.Oid {
+	for i, gvec := range gvecs {
+		switch gvec.Typ.Oid {
 		case types.T_int8:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -58,7 +59,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_int16:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -90,7 +91,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_int32:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -122,7 +123,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_int64:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -154,7 +155,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_uint8:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -186,7 +187,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_uint16:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -218,7 +219,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_uint32:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -250,7 +251,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_uint64:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -282,7 +283,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_float32:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -314,7 +315,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_float64:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -350,7 +351,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 		case types.T_datetime:
 		case types.T_char:
 		case types.T_varchar:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -384,7 +385,7 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 				}
 			}
 		case types.T_json:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -430,21 +431,9 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 		}
 	}
 	if len(matched) > 0 {
-		length := len(g.Sels) + len(matched)
-		if cap(g.Sels) < length {
-			data, err := proc.Alloc(int64(length) * 8)
-			if err != nil {
-				return nil, err
-			}
-			if g.Data != nil {
-				copy(data[mempool.CountSize:], g.Data[mempool.CountSize:])
-				proc.Free(g.Data)
-			}
-			g.Sels = encoding.DecodeInt64Slice(data[mempool.CountSize:])
-			g.Data = data[mempool.CountSize : mempool.CountSize+length*8]
-			g.Sels = g.Sels[:length]
+		for i, agg := range g.Aggs {
+			agg.Fill(matched, vecs[g.Is[i]])
 		}
-		g.Sels = append(g.Sels, matched...)
 	}
 	return remaining, nil
 }

@@ -9,7 +9,6 @@ import (
 	"matrixbase/pkg/encoding"
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/process"
-	"matrixbase/pkg/vm/register"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -33,20 +32,9 @@ func Prepare(proc *process.Process, arg interface{}) error {
 			ctr.attrs[i] = f.Attr
 		}
 	}
-	{
-		data, err := proc.Alloc(n.Limit * 8)
-		if err != nil {
-			return err
-		}
-		sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
-		for i := int64(0); i < n.Limit; i++ {
-			sels[i] = i
-		}
-		n.Ctr.data = data
-		n.Ctr.sels = sels[:n.Limit]
-	}
-	n.Ctr.n = len(n.Fs)
-	n.Ctr.cmps = make([]compare.Compare, len(n.Fs))
+	ctr.n = len(n.Fs)
+	ctr.sels = make([]int64, n.Limit)
+	ctr.cmps = make([]compare.Compare, len(n.Fs))
 	return nil
 }
 
@@ -56,23 +44,32 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}
+	bat := proc.Reg.Ax.(*batch.Batch)
+	if bat.Attrs == nil {
+		return false, nil
+	}
 	n := arg.(*Argument)
 	ctr := &n.Ctr
-	bat := proc.Reg.Ax.(*batch.Batch)
 	bat.Reorder(ctr.attrs)
 	{
-		for i, f := range n.Fs {
-			n.Ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, f.Type == Descending)
+		ctr.sels = ctr.sels[:n.Limit]
+		for i := int64(0); i < n.Limit; i++ {
+			ctr.sels[i] = i
+		}
+		if ctr.cmps[0] == nil {
+			for i, f := range n.Fs {
+				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, f.Type == Descending)
+			}
 		}
 	}
 	if err = bat.Prefetch(ctr.attrs, bat.Vecs, proc); err != nil {
-		ctr.clean(bat, proc)
+		bat.Clean(proc)
 		return false, err
 	}
 	ctr.processBatch(n.Limit, bat)
 	data, err := proc.Alloc(int64(len(ctr.sels) * 8))
 	if err != nil {
-		ctr.clean(bat, proc)
+		bat.Clean(proc)
 		return false, err
 	}
 	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
@@ -86,8 +83,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat.Sels = sels
 	bat.SelsData = data
 	proc.Reg.Ax = bat
-	ctr.clean(nil, proc)
-	register.FreeRegisters(proc)
 	return false, nil
 }
 
@@ -130,16 +125,4 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch) {
 		}
 		heap.Fix(ctr, 0)
 	}
-}
-
-func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
-	if bat != nil {
-		bat.Clean(proc)
-	}
-	if ctr.data != nil {
-		proc.Free(ctr.data)
-		ctr.data = nil
-		ctr.sels = nil
-	}
-	register.FreeRegisters(proc)
 }

@@ -17,7 +17,6 @@ const (
 
 type Container struct {
 	n     int // number of attributes involved in sorting
-	data  []byte
 	sels  []int64
 	attrs []string
 	cmps  []compare.Compare
