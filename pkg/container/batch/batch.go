@@ -108,7 +108,9 @@ func (bat *Batch) Clean(proc *process.Process) {
 		bat.SelsData = nil
 	}
 	for _, vec := range bat.Vecs {
-		vec.Clean(proc)
+		if vec != nil {
+			vec.Clean(proc)
+		}
 	}
 }
 

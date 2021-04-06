@@ -19,6 +19,7 @@ import (
 	"matrixbase/pkg/sql/colexec/set/inner"
 	"matrixbase/pkg/sql/colexec/set/intersect"
 	"matrixbase/pkg/sql/colexec/set/natural"
+	"matrixbase/pkg/sql/colexec/shuffle"
 	"matrixbase/pkg/sql/colexec/summarize"
 	"matrixbase/pkg/sql/colexec/top"
 	"matrixbase/pkg/sql/colexec/transfer"
@@ -50,6 +51,7 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	BagInnerJoin:      binner.String,
 	BagNaturalJoin:    bnatural.String,
 	Output:            output.String,
+	Shuffle:           shuffle.String,
 	MergeTop:          mergetop.String,
 	MergeDedup:        mergededup.String,
 	MergeGroup:        mergegroup.String,
@@ -81,6 +83,7 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	BagInnerJoin:      binner.Prepare,
 	BagNaturalJoin:    bnatural.Prepare,
 	Output:            output.Prepare,
+	Shuffle:           shuffle.Prepare,
 	MergeTop:          mergetop.Prepare,
 	MergeDedup:        mergededup.Prepare,
 	MergeGroup:        mergegroup.Prepare,
@@ -112,6 +115,7 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	BagInnerJoin:      binner.Call,
 	BagNaturalJoin:    bnatural.Call,
 	Output:            output.Call,
+	Shuffle:           shuffle.Call,
 	MergeTop:          mergetop.Call,
 	MergeDedup:        mergededup.Call,
 	MergeGroup:        mergegroup.Call,

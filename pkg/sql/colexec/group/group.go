@@ -480,10 +480,14 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 				g := hash.NewGroup(int64(ctr.vecs[0].Length()), ctr.is, es)
 				for i, vec := range ctr.vecs {
 					if vec.Data == nil {
-						vec.UnionOne(vecs[i], remaining[0], proc)
+						if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+							return err
+						}
 						copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
 					} else {
-						vec.UnionOne(vecs[i], remaining[0], proc)
+						if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+							return err
+						}
 					}
 				}
 				ctr.groups[h] = append(ctr.groups[h], g)
