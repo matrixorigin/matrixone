@@ -25,6 +25,7 @@ const (
 	BagInnerJoin
 	BagNaturalJoin
 	Output
+	Shuffle
 	MergeTop
 	MergeDedup
 	MergeGroup
