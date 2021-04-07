@@ -1,4 +1,4 @@
-package shuffle
+package exchange
 
 import (
 	"matrixbase/pkg/container/batch"
