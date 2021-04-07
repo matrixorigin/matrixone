@@ -104,8 +104,8 @@ func (ctr *Container) probe(proc *process.Process) (bool, error) {
 			continue
 		}
 		if len(ctr.groups) == 0 {
-			reg.Wg.Done()
 			reg.Ch = nil
+			reg.Wg.Done()
 			proc.Reg.Ax = nil
 			ctr.clean(bat, proc)
 			return true, nil
@@ -366,5 +366,4 @@ func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
 			g.Free(proc)
 		}
 	}
-
 }

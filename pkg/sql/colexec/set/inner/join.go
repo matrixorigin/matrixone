@@ -283,6 +283,8 @@ func (ctr *Container) probeUnit(start, count int, sels []int64, bat *batch.Batch
 						k--
 						if len(gs) == 0 {
 							delete(ctr.groups, h)
+						} else {
+							ctr.groups[h] = gs
 						}
 						{
 							for i, vec := range bat.Vecs {

@@ -29,7 +29,10 @@ func (p *Pipeline) String() string {
 }
 
 func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, error) {
-	if err := vm.Prepare(p.ins, proc); err != nil {
+	var end bool
+	var err error
+
+	if err = vm.Prepare(p.ins, proc); err != nil {
 		vm.Clean(p.ins, proc)
 		return false, err
 	}
@@ -39,17 +42,18 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 			return false, err
 		}
 		proc.Reg.Ax = bat
-		if end, err := vm.Run(p.ins, proc); err != nil || end {
+		if end, err = vm.Run(p.ins, proc); err != nil {
 			return end, err
+		}
+		if end {
+			break
 		}
 	}
 	{
 		proc.Reg.Ax = nil
-		if end, err := vm.Run(p.ins, proc); err != nil || end {
-			return end, err
-		}
+		_, err = vm.Run(p.ins, proc)
 	}
-	return false, nil
+	return end, err
 }
 
 func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
