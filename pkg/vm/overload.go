@@ -2,6 +2,8 @@ package vm
 
 import (
 	"bytes"
+	bdifference "matrixbase/pkg/sql/colexec/bag/difference"
+	bdifferenceR "matrixbase/pkg/sql/colexec/bag/differenceR"
 	binner "matrixbase/pkg/sql/colexec/bag/inner"
 	bintersect "matrixbase/pkg/sql/colexec/bag/intersect"
 	bnatural "matrixbase/pkg/sql/colexec/bag/natural"
@@ -50,6 +52,8 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	SetSemiDifference: nil,
 	BagUnion:          bunion.String,
 	BagIntersect:      bintersect.String,
+	BagDifference:     bdifference.String,
+	BagDifferenceR:    bdifferenceR.String,
 	BagInnerJoin:      binner.String,
 	BagNaturalJoin:    bnatural.String,
 	Output:            output.String,
@@ -83,6 +87,8 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	SetSemiDifference: nil,
 	BagUnion:          bunion.Prepare,
 	BagIntersect:      bintersect.Prepare,
+	BagDifference:     bdifference.Prepare,
+	BagDifferenceR:    bdifferenceR.Prepare,
 	BagInnerJoin:      binner.Prepare,
 	BagNaturalJoin:    bnatural.Prepare,
 	Output:            output.Prepare,
@@ -116,6 +122,8 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	SetSemiDifference: nil,
 	BagUnion:          bunion.Call,
 	BagIntersect:      bintersect.Call,
+	BagDifference:     bdifference.Call,
+	BagDifferenceR:    bdifferenceR.Call,
 	BagInnerJoin:      binner.Call,
 	BagNaturalJoin:    bnatural.Call,
 	Output:            output.Call,

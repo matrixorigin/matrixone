@@ -23,6 +23,8 @@ const (
 	SetSemiDifference // unsuitable name is anti join
 	BagUnion
 	BagIntersect
+	BagDifference
+	BagDifferenceR
 	BagInnerJoin
 	BagNaturalJoin
 	Output
