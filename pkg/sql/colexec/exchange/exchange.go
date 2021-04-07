@@ -1,4 +1,4 @@
-package shuffle
+package exchange
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ func init() {
 
 func String(arg interface{}, buf *bytes.Buffer) {
 	n := arg.(*Argument)
-	buf.WriteString("shuffle(")
+	buf.WriteString("≺(")
 	for i, attr := range n.Attrs {
 		if i > 0 {
 			buf.WriteString(", ")
@@ -68,12 +68,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 	if len(bat.Sels) > 0 {
-		if err := ctr.batchShuffleSels(bat.Sels, bat, bat.Vecs[:len(n.Attrs)], proc); err != nil {
+		if err := ctr.batchExchangeSels(bat.Sels, bat, bat.Vecs[:len(n.Attrs)], proc); err != nil {
 			ctr.clean(bat, proc)
 			return false, nil
 		}
 	} else {
-		if err := ctr.batchShuffle(bat, bat.Vecs[:len(n.Attrs)], proc); err != nil {
+		if err := ctr.batchExchange(bat, bat.Vecs[:len(n.Attrs)], proc); err != nil {
 			ctr.clean(bat, proc)
 			return false, nil
 		}
@@ -96,33 +96,33 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	return false, nil
 }
 
-func (ctr *Container) batchShuffle(bat *batch.Batch, vecs []*vector.Vector, proc *process.Process) error {
+func (ctr *Container) batchExchange(bat *batch.Batch, vecs []*vector.Vector, proc *process.Process) error {
 	for i, j := 0, vecs[0].Length(); i < j; i += UnitLimit {
 		length := j - i
 		if length > UnitLimit {
 			length = UnitLimit
 		}
-		if err := ctr.unitShuffle(i, length, nil, bat, vecs, proc); err != nil {
+		if err := ctr.unitExchange(i, length, nil, bat, vecs, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *Container) batchShuffleSels(sels []int64, bat *batch.Batch, vecs []*vector.Vector, proc *process.Process) error {
+func (ctr *Container) batchExchangeSels(sels []int64, bat *batch.Batch, vecs []*vector.Vector, proc *process.Process) error {
 	for i, j := 0, len(sels); i < j; i += UnitLimit {
 		length := j - i
 		if length > UnitLimit {
 			length = UnitLimit
 		}
-		if err := ctr.unitShuffle(0, length, sels[i:i+length], bat, vecs, proc); err != nil {
+		if err := ctr.unitExchange(0, length, sels[i:i+length], bat, vecs, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *Container) unitShuffle(start int, count int, sels []int64, bat *batch.Batch, vecs []*vector.Vector, proc *process.Process) error {
+func (ctr *Container) unitExchange(start int, count int, sels []int64, bat *batch.Batch, vecs []*vector.Vector, proc *process.Process) error {
 	{
 		copy(ctr.hashs[:count], OneUint64s[:count])
 		if len(sels) == 0 {

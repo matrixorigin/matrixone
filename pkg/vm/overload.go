@@ -3,9 +3,11 @@ package vm
 import (
 	"bytes"
 	binner "matrixbase/pkg/sql/colexec/bag/inner"
+	bintersect "matrixbase/pkg/sql/colexec/bag/intersect"
 	bnatural "matrixbase/pkg/sql/colexec/bag/natural"
 	bunion "matrixbase/pkg/sql/colexec/bag/union"
 	"matrixbase/pkg/sql/colexec/dedup"
+	"matrixbase/pkg/sql/colexec/exchange"
 	"matrixbase/pkg/sql/colexec/group"
 	"matrixbase/pkg/sql/colexec/limit"
 	"matrixbase/pkg/sql/colexec/mergededup"
@@ -19,7 +21,6 @@ import (
 	"matrixbase/pkg/sql/colexec/set/inner"
 	"matrixbase/pkg/sql/colexec/set/intersect"
 	"matrixbase/pkg/sql/colexec/set/natural"
-	"matrixbase/pkg/sql/colexec/shuffle"
 	"matrixbase/pkg/sql/colexec/summarize"
 	"matrixbase/pkg/sql/colexec/top"
 	"matrixbase/pkg/sql/colexec/transfer"
@@ -48,10 +49,11 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	SetNaturalJoin:    natural.String,
 	SetSemiDifference: nil,
 	BagUnion:          bunion.String,
+	BagIntersect:      bintersect.String,
 	BagInnerJoin:      binner.String,
 	BagNaturalJoin:    bnatural.String,
 	Output:            output.String,
-	Shuffle:           shuffle.String,
+	Exchange:          exchange.String,
 	MergeTop:          mergetop.String,
 	MergeDedup:        mergededup.String,
 	MergeGroup:        mergegroup.String,
@@ -80,10 +82,11 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	SetNaturalJoin:    natural.Prepare,
 	SetSemiDifference: nil,
 	BagUnion:          bunion.Prepare,
+	BagIntersect:      bintersect.Prepare,
 	BagInnerJoin:      binner.Prepare,
 	BagNaturalJoin:    bnatural.Prepare,
 	Output:            output.Prepare,
-	Shuffle:           shuffle.Prepare,
+	Exchange:          exchange.Prepare,
 	MergeTop:          mergetop.Prepare,
 	MergeDedup:        mergededup.Prepare,
 	MergeGroup:        mergegroup.Prepare,
@@ -112,10 +115,11 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	SetNaturalJoin:    natural.Call,
 	SetSemiDifference: nil,
 	BagUnion:          bunion.Call,
+	BagIntersect:      bintersect.Call,
 	BagInnerJoin:      binner.Call,
 	BagNaturalJoin:    bnatural.Call,
 	Output:            output.Call,
-	Shuffle:           shuffle.Call,
+	Exchange:          exchange.Call,
 	MergeTop:          mergetop.Call,
 	MergeDedup:        mergededup.Call,
 	MergeGroup:        mergegroup.Call,
