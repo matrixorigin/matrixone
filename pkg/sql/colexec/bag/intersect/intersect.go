@@ -33,7 +33,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		matchs:  make([]int64, UnitLimit),
 		hashs:   make([]uint64, UnitLimit),
 		sels:    make([][]int64, UnitLimit),
-		groups:  make(map[uint64][]*hash.SetGroup),
+		groups:  make(map[uint64][]*hash.BagGroup),
 		slots:   fastmap.Pool.Get().(*fastmap.Map),
 	}
 	return nil
@@ -191,12 +191,12 @@ func (ctr *Container) buildUnit(start, count int, sels []int64,
 					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 				}
 			} else {
-				ctr.groups[h] = make([]*hash.SetGroup, 0, 8)
+				ctr.groups[h] = make([]*hash.BagGroup, 0, 8)
 			}
 			for len(remaining) > 0 {
-				g := hash.NewSetGroup(int64(len(ctr.bats)-1), int64(remaining[0]))
+				g := hash.NewBagGroup(int64(len(ctr.bats)-1), int64(remaining[0]))
 				ctr.groups[h] = append(ctr.groups[h], g)
-				if remaining, err = g.Fill(remaining[1:], ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
+				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
 					return err
 				}
 				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
@@ -236,8 +236,8 @@ func (ctr *Container) probeBatchSels(sels []int64, vecs []*vector.Vector, proc *
 
 func (ctr *Container) probeUnit(start, count int, sels []int64,
 	vecs []*vector.Vector, proc *process.Process) error {
-	var sel int64
 	var err error
+	var matchs []int64
 
 	{
 		copy(ctr.hashs[:count], OneUint64s[:count])
@@ -254,43 +254,47 @@ func (ctr *Container) probeUnit(start, count int, sels []int64,
 			if gs, ok := ctr.groups[h]; ok {
 				for k := 0; k < len(gs); k++ {
 					g := gs[k]
-					if sel, remaining, err = g.Probe(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
+					if matchs, remaining, err = g.Probe(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
 						return err
 					}
-					if sel >= 0 {
+					for len(matchs) > 0 && len(g.Is) > 0 {
+						if n := cap(ctr.probeState.sels); n == 0 {
+							data, err := proc.Alloc(int64(8 * 8))
+							if err != nil {
+								return err
+							}
+							newsels := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+8*8])
+							ctr.probeState.data = data
+							ctr.probeState.sels = newsels[:0]
+						} else if n == len(ctr.probeState.sels) {
+							if n < 1024 {
+								n *= 2
+							} else {
+								n += n / 4
+							}
+							data, err := proc.Alloc(int64(n * 8))
+							if err != nil {
+								return err
+							}
+							newsels := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+n*8])
+							copy(newsels, ctr.probeState.sels)
+							ctr.probeState.sels = newsels[:n]
+							proc.Free(ctr.probeState.data)
+							ctr.probeState.data = data
+						}
+						ctr.probeState.sels = append(ctr.probeState.sels, matchs[0])
+						matchs = matchs[1:]
+						g.Is = g.Is[1:]
+						g.Sels = g.Sels[1:]
+					}
+					if len(g.Is) == 0 {
+						g.Free(proc)
 						gs = append(gs[:k], gs[k+1:]...)
 						k--
 						if len(gs) == 0 {
 							delete(ctr.groups, h)
 						} else {
 							ctr.groups[h] = gs
-						}
-						{
-							if n := cap(ctr.probeState.sels); n == 0 {
-								data, err := proc.Alloc(int64(8 * 8))
-								if err != nil {
-									return err
-								}
-								newsels := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+8*8])
-								ctr.probeState.data = data
-								ctr.probeState.sels = newsels[:0]
-							} else if n == len(ctr.probeState.sels) {
-								if n < 1024 {
-									n *= 2
-								} else {
-									n += n / 4
-								}
-								data, err := proc.Alloc(int64(n * 8))
-								if err != nil {
-									return err
-								}
-								newsels := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+n*8])
-								copy(newsels, ctr.probeState.sels)
-								ctr.probeState.sels = newsels[:n]
-								proc.Free(ctr.probeState.data)
-								ctr.probeState.data = data
-							}
-							ctr.probeState.sels = append(ctr.probeState.sels, sel)
 						}
 					}
 					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
@@ -357,4 +361,10 @@ func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
 	for _, bat := range ctr.bats {
 		bat.Clean(proc)
 	}
+	for _, gs := range ctr.groups {
+		for _, g := range gs {
+			g.Free(proc)
+		}
+	}
+
 }

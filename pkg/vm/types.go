@@ -22,10 +22,11 @@ const (
 	SetNaturalJoin
 	SetSemiDifference // unsuitable name is anti join
 	BagUnion
+	BagIntersect
 	BagInnerJoin
 	BagNaturalJoin
 	Output
-	Shuffle
+	Exchange
 	MergeTop
 	MergeDedup
 	MergeGroup

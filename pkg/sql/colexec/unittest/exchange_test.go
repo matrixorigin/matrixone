@@ -3,8 +3,8 @@ package unittest
 import (
 	"fmt"
 	"matrixbase/pkg/sql/colexec/aggregation"
+	"matrixbase/pkg/sql/colexec/exchange"
 	"matrixbase/pkg/sql/colexec/mergegroup"
-	"matrixbase/pkg/sql/colexec/shuffle"
 	"matrixbase/pkg/vm"
 	"matrixbase/pkg/vm/mempool"
 	"matrixbase/pkg/vm/mmu/guest"
@@ -106,10 +106,10 @@ func TestShuffle(t *testing.T) {
 	{
 		proc.Refer = make(map[string]uint64)
 	}
-	ins = append(ins, vm.Instruction{vm.Shuffle, &shuffle.Argument{Attrs: []string{"uid"}, Ms: ms, Ws: ws}})
+	ins = append(ins, vm.Instruction{vm.Exchange, &exchange.Argument{Attrs: []string{"uid"}, Ms: ms, Ws: ws}})
 	p := pipeline.New([]uint64{1, 1, 2}, []string{"orderId", "price", "uid"}, ins)
-	fmt.Printf("shuffle - %s\n", p)
+	fmt.Printf("%s\n", p)
 	p.Run(segments("S", proc), proc)
-	fmt.Printf("shuffle - guest: %v, host: %v\n", proc.Size(), proc.HostSize())
+	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
 	wg.Wait()
 }
