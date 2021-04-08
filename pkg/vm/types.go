@@ -14,6 +14,7 @@ const (
 	SetUnion
 	SetIntersect
 	SetDifference
+	SetDifferenceR
 	SetFullJoin
 	SetLeftJoin
 	SetSemiJoin

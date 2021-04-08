@@ -1,4 +1,4 @@
-package differenceR
+package difference
 
 import (
 	"bytes"
@@ -28,13 +28,12 @@ func String(arg interface{}, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
 	n.Ctr = Container{
-		probed:  false,
 		builded: false,
 		diffs:   make([]bool, UnitLimit),
 		matchs:  make([]int64, UnitLimit),
 		hashs:   make([]uint64, UnitLimit),
 		sels:    make([][]int64, UnitLimit),
-		groups:  make(map[uint64][]*hash.BagGroup),
+		groups:  make(map[uint64][]*hash.SetGroup),
 		slots:   fastmap.Pool.Get().(*fastmap.Map),
 	}
 	return nil
@@ -52,11 +51,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	return ctr.probe(proc)
 }
 
-// S - R - s is the smaller relation
+// R - S - S is the smaller relation
 func (ctr *Container) build(proc *process.Process) error {
 	var err error
 
-	reg := proc.Reg.Ws[0]
+	reg := proc.Reg.Ws[1]
 	for {
 		v := <-reg.Ch
 		if v == nil {
@@ -73,7 +72,6 @@ func (ctr *Container) build(proc *process.Process) error {
 			return err
 		}
 		ctr.bats = append(ctr.bats, bat)
-		ctr.state.gs = append(ctr.state.gs, make([]*hash.BagGroup, 0, 8))
 		if len(bat.Sels) == 0 {
 			if err = ctr.buildBatch(bat.Vecs, proc); err != nil {
 				reg.Wg.Done()
@@ -91,74 +89,54 @@ func (ctr *Container) build(proc *process.Process) error {
 }
 
 func (ctr *Container) probe(proc *process.Process) (bool, error) {
-	if !ctr.probed {
-		reg := proc.Reg.Ws[1]
-		for {
-			v := <-reg.Ch
-			if v == nil {
-				reg.Wg.Done()
-				break
-			}
-			bat := v.(*batch.Batch)
-			if bat.Attrs == nil {
-				reg.Wg.Done()
-				continue
-			}
-			if len(ctr.groups) == 0 {
-				reg.Ch = nil
-				reg.Wg.Done()
-				break
-			}
-			if len(bat.Sels) == 0 {
-				if err := ctr.probeBatch(bat.Vecs, proc); err != nil {
-					reg.Wg.Done()
-					ctr.clean(bat, proc)
-					return true, err
-				}
-			} else {
-				if err := ctr.probeBatchSels(bat.Sels, bat.Vecs, proc); err != nil {
-					reg.Wg.Done()
-					ctr.clean(bat, proc)
-					return true, err
-				}
-			}
-			reg.Wg.Done()
-			bat.Clean(proc)
-		}
-		ctr.probed = true
-	}
 	for {
-		if len(ctr.bats) == 0 {
+		reg := proc.Reg.Ws[0]
+		v := <-reg.Ch
+		if v == nil {
+			reg.Wg.Done()
 			proc.Reg.Ax = nil
 			ctr.clean(nil, proc)
 			return true, nil
 		}
-		bat := ctr.bats[0]
-		for _, g := range ctr.state.gs[0] {
-			if g.Sdata != nil {
-				if err := ctr.expan(len(g.Sels), proc); err != nil {
-					ctr.clean(nil, proc)
-					return true, err
-				}
-				ctr.state.sels = append(ctr.state.sels, g.Sels...)
-			}
-		}
-		if len(ctr.state.sels) == 0 {
-			bat.Clean(proc)
-			ctr.bats = ctr.bats[1:]
-			ctr.state.gs = ctr.state.gs[1:]
+		bat := v.(*batch.Batch)
+		if bat.Attrs == nil {
+			reg.Wg.Done()
 			continue
 		}
-		if bat.SelsData != nil {
-			proc.Free(bat.SelsData)
+		if len(ctr.groups) == 0 {
+			reg.Ch = nil
+			reg.Wg.Done()
+			proc.Reg.Ax = nil
+			ctr.clean(bat, proc)
+			return true, nil
 		}
-		bat.Sels = ctr.state.sels
-		bat.SelsData = ctr.state.data
-		ctr.state.sels = nil
-		ctr.state.data = nil
+		if len(bat.Sels) == 0 {
+			if err := ctr.probeBatch(bat.Vecs, proc); err != nil {
+				reg.Wg.Done()
+				ctr.clean(bat, proc)
+				return true, err
+			}
+			bat.Sels = ctr.probeState.sels
+			bat.SelsData = ctr.probeState.data
+			ctr.probeState.sels = nil
+			ctr.probeState.data = nil
+		} else {
+			if err := ctr.probeBatchSels(bat.Sels, bat.Vecs, proc); err != nil {
+				reg.Wg.Done()
+				ctr.clean(bat, proc)
+				return true, err
+			}
+			bat.Sels, ctr.probeState.sels = ctr.probeState.sels, bat.Sels
+			bat.SelsData, ctr.probeState.data = ctr.probeState.data, bat.SelsData
+			ctr.probeState.sels = ctr.probeState.sels[:0] // reset
+		}
+		if len(bat.Sels) == 0 {
+			reg.Wg.Done()
+			bat.Clean(proc)
+			continue
+		}
+		reg.Wg.Done()
 		proc.Reg.Ax = bat
-		ctr.bats = ctr.bats[1:]
-		ctr.state.gs = ctr.state.gs[1:]
 		return false, nil
 	}
 }
@@ -213,11 +191,10 @@ func (ctr *Container) buildUnit(start, count int, sels []int64,
 					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 				}
 			} else {
-				ctr.groups[h] = make([]*hash.BagGroup, 0, 8)
+				ctr.groups[h] = make([]*hash.SetGroup, 0, 8)
 			}
 			for len(remaining) > 0 {
-				g := hash.NewBagGroup(int64(len(ctr.bats)-1), int64(remaining[0]))
-				ctr.state.gs[len(ctr.bats)-1] = append(ctr.state.gs[len(ctr.bats)-1], g)
+				g := hash.NewSetGroup(int64(len(ctr.bats)-1), int64(remaining[0]))
 				ctr.groups[h] = append(ctr.groups[h], g)
 				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
 					return err
@@ -260,7 +237,6 @@ func (ctr *Container) probeBatchSels(sels []int64, vecs []*vector.Vector, proc *
 func (ctr *Container) probeUnit(start, count int, sels []int64,
 	vecs []*vector.Vector, proc *process.Process) error {
 	var err error
-	var matchs []int64
 
 	{
 		copy(ctr.hashs[:count], OneUint64s[:count])
@@ -277,30 +253,19 @@ func (ctr *Container) probeUnit(start, count int, sels []int64,
 			if gs, ok := ctr.groups[h]; ok {
 				for k := 0; k < len(gs); k++ {
 					g := gs[k]
-					if matchs, remaining, err = g.Probe(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
+					if _, remaining, err = g.Probe(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
 						return err
-					}
-					if len(matchs) > len(g.Is) {
-						g.Is = g.Is[:0]
-						g.Sels = g.Sels[:0]
-					} else {
-						g.Is = g.Is[len(matchs):]
-						g.Sels = g.Sels[len(matchs):]
-					}
-					if len(g.Is) == 0 {
-						g.Free(proc)
-						gs = append(gs[:k], gs[k+1:]...)
-						k--
-						if len(gs) == 0 {
-							delete(ctr.groups, h)
-						} else {
-							ctr.groups[h] = gs
-						}
 					}
 					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 				}
 			}
 			ctr.sels[ctr.slots.Vs[i][j]] = ctr.sels[ctr.slots.Vs[i][j]][:0]
+			if n := len(remaining); n > 0 { // output
+				if err := ctr.expan(n, proc); err != nil {
+					return err
+				}
+				ctr.probeState.sels = append(ctr.probeState.sels, remaining...)
+			}
 		}
 	}
 	ctr.slots.Reset()
@@ -308,8 +273,8 @@ func (ctr *Container) probeUnit(start, count int, sels []int64,
 }
 
 func (ctr *Container) expan(cnt int, proc *process.Process) error {
-	n := int64(cap(ctr.state.sels))
-	size := int64(len(ctr.state.sels) + cnt)
+	n := int64(cap(ctr.probeState.sels))
+	size := int64(len(ctr.probeState.sels) + cnt)
 	if n >= size {
 		return nil
 	}
@@ -319,8 +284,8 @@ func (ctr *Container) expan(cnt int, proc *process.Process) error {
 			return err
 		}
 		newsels := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+size*8])
-		ctr.state.data = data
-		ctr.state.sels = newsels[:0]
+		ctr.probeState.data = data
+		ctr.probeState.sels = newsels[:0]
 		return nil
 	}
 	newcap := n
@@ -328,7 +293,7 @@ func (ctr *Container) expan(cnt int, proc *process.Process) error {
 	if size > doublecap {
 		newcap = size
 	} else {
-		if len(ctr.state.sels) < 1024 {
+		if len(ctr.probeState.sels) < 1024 {
 			newcap = size
 		} else {
 			for 0 < newcap && newcap < size {
@@ -344,10 +309,10 @@ func (ctr *Container) expan(cnt int, proc *process.Process) error {
 		return err
 	}
 	newsels := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+newcap*8])
-	copy(newsels, ctr.state.sels)
-	ctr.state.sels = newsels[:size-int64(cnt)]
-	proc.Free(ctr.state.data)
-	ctr.state.data = data
+	copy(newsels, ctr.probeState.sels)
+	ctr.probeState.sels = newsels[:size-int64(cnt)]
+	proc.Free(ctr.probeState.data)
+	ctr.probeState.data = data
 	return nil
 }
 
@@ -399,15 +364,10 @@ func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
 		bat.Clean(proc)
 	}
 	fastmap.Pool.Put(ctr.slots)
-	if data := ctr.state.data; data != nil {
+	if data := ctr.probeState.data; data != nil {
 		proc.Free(data)
 	}
 	for _, bat := range ctr.bats {
 		bat.Clean(proc)
-	}
-	for _, gs := range ctr.groups {
-		for _, g := range gs {
-			g.Free(proc)
-		}
 	}
 }
