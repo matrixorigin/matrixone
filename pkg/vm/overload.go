@@ -25,6 +25,7 @@ import (
 	"matrixbase/pkg/sql/colexec/set/inner"
 	"matrixbase/pkg/sql/colexec/set/intersect"
 	"matrixbase/pkg/sql/colexec/set/natural"
+	"matrixbase/pkg/sql/colexec/set/union"
 	"matrixbase/pkg/sql/colexec/summarize"
 	"matrixbase/pkg/sql/colexec/top"
 	"matrixbase/pkg/sql/colexec/transfer"
@@ -42,7 +43,7 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	Restrict:          restrict.String,
 	Summarize:         summarize.String,
 	Projection:        projection.String,
-	SetUnion:          nil,
+	SetUnion:          union.String,
 	SetIntersect:      intersect.String,
 	SetDifference:     difference.String,
 	SetDifferenceR:    differenceR.String,
@@ -78,7 +79,7 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	Restrict:          restrict.Prepare,
 	Summarize:         summarize.Prepare,
 	Projection:        projection.Prepare,
-	SetUnion:          nil,
+	SetUnion:          union.Prepare,
 	SetIntersect:      intersect.Prepare,
 	SetDifference:     difference.Prepare,
 	SetDifferenceR:    differenceR.Prepare,
@@ -114,7 +115,7 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	Restrict:          restrict.Call,
 	Summarize:         summarize.Call,
 	Projection:        projection.Call,
-	SetUnion:          nil,
+	SetUnion:          union.Call,
 	SetIntersect:      intersect.Call,
 	SetDifference:     difference.Call,
 	SetDifferenceR:    differenceR.Call,
