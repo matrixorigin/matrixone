@@ -20,6 +20,8 @@ import (
 	"matrixbase/pkg/sql/colexec/output"
 	"matrixbase/pkg/sql/colexec/projection"
 	"matrixbase/pkg/sql/colexec/restrict"
+	"matrixbase/pkg/sql/colexec/set/difference"
+	"matrixbase/pkg/sql/colexec/set/differenceR"
 	"matrixbase/pkg/sql/colexec/set/inner"
 	"matrixbase/pkg/sql/colexec/set/intersect"
 	"matrixbase/pkg/sql/colexec/set/natural"
@@ -42,7 +44,8 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	Projection:        projection.String,
 	SetUnion:          nil,
 	SetIntersect:      intersect.String,
-	SetDifference:     nil,
+	SetDifference:     difference.String,
+	SetDifferenceR:    differenceR.String,
 	SetFullJoin:       nil,
 	SetLeftJoin:       nil,
 	SetSemiJoin:       nil,
@@ -77,7 +80,8 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	Projection:        projection.Prepare,
 	SetUnion:          nil,
 	SetIntersect:      intersect.Prepare,
-	SetDifference:     nil,
+	SetDifference:     difference.Prepare,
+	SetDifferenceR:    differenceR.Prepare,
 	SetFullJoin:       nil,
 	SetLeftJoin:       nil,
 	SetSemiJoin:       nil,
@@ -112,7 +116,8 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	Projection:        projection.Call,
 	SetUnion:          nil,
 	SetIntersect:      intersect.Call,
-	SetDifference:     nil,
+	SetDifference:     difference.Call,
+	SetDifferenceR:    differenceR.Call,
 	SetFullJoin:       nil,
 	SetLeftJoin:       nil,
 	SetSemiJoin:       nil,
