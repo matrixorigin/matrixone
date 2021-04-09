@@ -1,7 +1,7 @@
 package aggregation
 
 import (
-	"matrixbase/pkg/container/types"
+	"matrixone/pkg/container/types"
 )
 
 var sumReturnTypes = map[types.T]types.Type{

@@ -1,8 +1,8 @@
 package process
 
 import (
-	"matrixbase/pkg/vm/mempool"
-	"matrixbase/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/mmu/guest"
 	"sync"
 )
 

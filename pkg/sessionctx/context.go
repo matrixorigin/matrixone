@@ -3,8 +3,8 @@ package sessionctx
 import (
 	"fmt"
 
-	"matrixbase/pkg/sessionctx/variable"
-	"matrixbase/pkg/util"
+	"matrixone/pkg/sessionctx/variable"
+	"matrixone/pkg/util"
 )
 
 // Context is an interface for transaction and executive args environment.

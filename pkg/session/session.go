@@ -10,9 +10,9 @@ import (
 	"github.com/pingcap/parser/charset"
 	"github.com/pingcap/parser/model"
 	"github.com/pingcap/parser/terror"
-	"matrixbase/pkg/sessionctx"
-	"matrixbase/pkg/sessionctx/variable"
-	"matrixbase/pkg/util"
+	"matrixone/pkg/sessionctx"
+	"matrixone/pkg/sessionctx/variable"
+	"matrixone/pkg/util"
 	"sync"
 	"sync/atomic"
 )

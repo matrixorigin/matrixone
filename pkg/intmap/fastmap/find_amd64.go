@@ -1,6 +1,6 @@
 package fastmap
 
-import "matrixbase/pkg/internal/cpu"
+import "matrixone/pkg/internal/cpu"
 
 func findAvx([]uint64, uint64) int
 

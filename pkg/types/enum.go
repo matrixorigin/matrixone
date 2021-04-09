@@ -17,8 +17,8 @@ import (
 	"strconv"
 
 	"github.com/pingcap/errors"
-	"matrixbase/pkg/util/collate"
-	"matrixbase/pkg/util/stringutil"
+	"matrixone/pkg/util/collate"
+	"matrixone/pkg/util/stringutil"
 )
 
 // Enum is for MySQL enum type.

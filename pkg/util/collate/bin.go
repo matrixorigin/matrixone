@@ -14,7 +14,7 @@
 package collate
 
 import (
-	"matrixbase/pkg/util/stringutil"
+	"matrixone/pkg/util/stringutil"
 	"strings"
 )
 

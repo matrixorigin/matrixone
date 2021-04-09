@@ -24,9 +24,9 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser/mysql"
-	"matrixbase/pkg/sessionctx/stmtctx"
-	"matrixbase/pkg/types/json"
-	"matrixbase/pkg/util/hack"
+	"matrixone/pkg/sessionctx/stmtctx"
+	"matrixone/pkg/types/json"
+	"matrixone/pkg/util/hack"
 )
 
 func truncateStr(str string, flen int) string {

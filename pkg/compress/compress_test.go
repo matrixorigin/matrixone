@@ -3,7 +3,7 @@ package compress
 import (
 	"fmt"
 	"log"
-	"matrixbase/pkg/encoding"
+	"matrixone/pkg/encoding"
 	"testing"
 
 	"github.com/pierrec/lz4"

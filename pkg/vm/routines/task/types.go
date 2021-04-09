@@ -1,6 +1,6 @@
 package task
 
-import "matrixbase/pkg/vm/process"
+import "matrixone/pkg/vm/process"
 
 type Task interface {
 	Stop(TaskResult)

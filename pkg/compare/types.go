@@ -1,8 +1,8 @@
 package compare
 
 import (
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/process"
 )
 
 type Compare interface {

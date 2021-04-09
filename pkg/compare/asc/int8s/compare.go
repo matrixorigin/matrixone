@@ -1,9 +1,9 @@
 package int8s
 
 import (
-	"matrixbase/pkg/container/nulls"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/nulls"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/process"
 )
 
 func New() *compare {

@@ -1,6 +1,6 @@
 package max
 
-import "matrixbase/pkg/container/types"
+import "matrixone/pkg/container/types"
 
 type int8Max struct {
 	v   int8

@@ -1,8 +1,8 @@
 package logEngine
 
 import (
-	"matrixbase/pkg/vm/engine/logEngine/meta"
-	"matrixbase/pkg/vm/engine/logEngine/meta/client"
+	"matrixone/pkg/vm/engine/logEngine/meta"
+	"matrixone/pkg/vm/engine/logEngine/meta/client"
 )
 
 type LogEngine struct {

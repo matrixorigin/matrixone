@@ -6,8 +6,8 @@ import (
 
 	"github.com/cznic/mathutil"
 	"github.com/pingcap/errors"
-	"matrixbase/pkg/types"
-	"matrixbase/pkg/types/json"
+	"matrixone/pkg/types"
+	"matrixone/pkg/types/json"
 )
 
 var msgErrSelNotNil = "The selection vector of Chunk is not nil. Please file a bug to the TiDB Team"

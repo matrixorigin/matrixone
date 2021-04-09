@@ -1,8 +1,8 @@
 package guest
 
 import (
-	"matrixbase/pkg/vm/mmu"
-	"matrixbase/pkg/vm/mmu/host"
+	"matrixone/pkg/vm/mmu"
+	"matrixone/pkg/vm/mmu/host"
 	"sync/atomic"
 )
 

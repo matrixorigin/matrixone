@@ -17,8 +17,8 @@ import (
 	"strconv"
 
 	"github.com/pingcap/parser/mysql"
-	"matrixbase/pkg/types"
-	"matrixbase/pkg/types/json"
+	"matrixone/pkg/types"
+	"matrixone/pkg/types/json"
 )
 
 // Row represents a row of data, can be used to access values.

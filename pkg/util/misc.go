@@ -7,7 +7,7 @@ import (
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/terror"
 	"io/ioutil"
-	"matrixbase/pkg/config"
+	"matrixone/pkg/config"
 )
 
 const (

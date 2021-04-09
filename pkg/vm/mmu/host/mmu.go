@@ -1,7 +1,7 @@
 package host
 
 import (
-	"matrixbase/pkg/vm/mmu"
+	"matrixone/pkg/vm/mmu"
 	"sync/atomic"
 )
 

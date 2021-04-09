@@ -1,7 +1,7 @@
 package server
 
 import (
-	"matrixbase/pkg/vm/engine/logEngine/meta"
+	"matrixone/pkg/vm/engine/logEngine/meta"
 	"time"
 )
 

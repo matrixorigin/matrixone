@@ -9,7 +9,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser/mysql"
-	"matrixbase/pkg/util/hack"
+	"matrixone/pkg/util/hack"
 )
 
 // ErrSyntax indicates that a value does not have the right syntax for the target type.

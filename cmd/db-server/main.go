@@ -5,9 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"github.com/pingcap/parser/terror"
-	"matrixbase/pkg/config"
-	"matrixbase/pkg/server"
-	"matrixbase/pkg/util/signal"
+	"matrixone/pkg/config"
+	"matrixone/pkg/server"
+	"matrixone/pkg/util/signal"
 	"os"
 )
 

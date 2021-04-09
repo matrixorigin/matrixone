@@ -2,8 +2,8 @@ package transfer
 
 import (
 	"bytes"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/process"
 )
 
 func String(_ interface{}, buf *bytes.Buffer) {
