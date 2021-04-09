@@ -1,6 +1,6 @@
 package hash
 
-import "matrixbase/pkg/sql/colexec/aggregation"
+import "matrixone/pkg/sql/colexec/aggregation"
 
 type Group struct {
 	Is   []int

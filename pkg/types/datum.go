@@ -28,9 +28,9 @@ import (
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/parser/terror"
 	"github.com/pingcap/parser/types"
-	"matrixbase/pkg/sessionctx/stmtctx"
-	"matrixbase/pkg/types/json"
-	"matrixbase/pkg/util/hack"
+	"matrixone/pkg/sessionctx/stmtctx"
+	"matrixone/pkg/types/json"
+	"matrixone/pkg/util/hack"
 )
 
 // Kind constants.

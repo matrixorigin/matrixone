@@ -1,8 +1,8 @@
 package kv
 
 import (
-	"matrixbase/pkg/vm/engine/logEngine/kv/cache"
-	"matrixbase/pkg/vm/engine/logEngine/kv/s3"
+	"matrixone/pkg/vm/engine/logEngine/kv/cache"
+	"matrixone/pkg/vm/engine/logEngine/kv/s3"
 )
 
 type KV struct {

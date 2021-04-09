@@ -3,11 +3,11 @@ package batch
 import (
 	"bytes"
 	"fmt"
-	"matrixbase/pkg/compress"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/vm/mempool"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/compress"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/process"
 )
 
 func New(ro bool, attrs []string) *Batch {

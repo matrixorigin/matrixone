@@ -1,8 +1,8 @@
 package worker
 
 import (
-	"matrixbase/pkg/vm/process"
-	"matrixbase/pkg/vm/routines/task"
+	"matrixone/pkg/vm/process"
+	"matrixone/pkg/vm/routines/task"
 )
 
 func New(proc *process.Process) Worker {

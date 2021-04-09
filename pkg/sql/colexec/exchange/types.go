@@ -1,10 +1,10 @@
 package exchange
 
 import (
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/intmap/fastmap"
-	"matrixbase/pkg/vm/mmu/guest"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/intmap/fastmap"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/process"
 )
 
 const (

@@ -2,12 +2,12 @@ package hash
 
 import (
 	"bytes"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/container/types"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/vm/mempool"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/process"
 )
 
 func NewBagGroup(idx, sel int64) *BagGroup {

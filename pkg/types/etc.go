@@ -26,7 +26,7 @@ import (
 	"github.com/pingcap/parser/opcode"
 	"github.com/pingcap/parser/terror"
 	ast "github.com/pingcap/parser/types"
-	"matrixbase/pkg/util/collate"
+	"matrixone/pkg/util/collate"
 )
 
 // IsTypeBlob returns a boolean indicating whether the tp is a blob type.

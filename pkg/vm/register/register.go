@@ -1,10 +1,10 @@
 package register
 
 import (
-	"matrixbase/pkg/container/types"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/vm/mempool"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/process"
 )
 
 func Get(proc *process.Process, size int64, typ types.Type) (*vector.Vector, error) {

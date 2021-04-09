@@ -1,9 +1,9 @@
 package intersect
 
 import (
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/hash"
-	"matrixbase/pkg/intmap/fastmap"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/hash"
+	"matrixone/pkg/intmap/fastmap"
 )
 
 const (

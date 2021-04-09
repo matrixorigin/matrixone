@@ -1,6 +1,6 @@
 package meta
 
-import "matrixbase/pkg/vm/metadata"
+import "matrixone/pkg/vm/metadata"
 
 type Metadata struct {
 	Segs  int64

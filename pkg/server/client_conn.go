@@ -21,11 +21,11 @@ import (
 	"github.com/pingcap/parser/terror"
 	log "github.com/sirupsen/logrus"
 	"go.uber.org/zap"
-	"matrixbase/pkg/config"
-	"matrixbase/pkg/errno"
-	"matrixbase/pkg/sessionctx/variable"
-	"matrixbase/pkg/util/arena"
-	"matrixbase/pkg/util/hack"
+	"matrixone/pkg/config"
+	"matrixone/pkg/errno"
+	"matrixone/pkg/sessionctx/variable"
+	"matrixone/pkg/util/arena"
+	"matrixone/pkg/util/hack"
 )
 
 const (

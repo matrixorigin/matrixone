@@ -1,9 +1,9 @@
 package segment
 
 import (
-	"matrixbase/pkg/vm/engine/memEngine/kv"
-	"matrixbase/pkg/vm/metadata"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/vm/engine/memEngine/kv"
+	"matrixone/pkg/vm/metadata"
+	"matrixone/pkg/vm/process"
 )
 
 type Segment struct {

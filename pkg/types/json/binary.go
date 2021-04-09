@@ -27,7 +27,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/pingcap/parser/terror"
-	"matrixbase/pkg/util/hack"
+	"matrixone/pkg/util/hack"
 )
 
 /*

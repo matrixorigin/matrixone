@@ -3,11 +3,11 @@ package summarize
 import (
 	"bytes"
 	"fmt"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/sql/colexec/aggregation"
-	"matrixbase/pkg/sql/colexec/aggregation/aggfunc"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/encoding"
+	"matrixone/pkg/sql/colexec/aggregation"
+	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
+	"matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

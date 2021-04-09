@@ -1,8 +1,8 @@
 package vector
 
 import (
-	"matrixbase/pkg/container/nulls"
-	"matrixbase/pkg/container/types"
+	"matrixone/pkg/container/nulls"
+	"matrixone/pkg/container/types"
 	"unsafe"
 )
 

@@ -1,8 +1,8 @@
 package routines
 
 import (
-	"matrixbase/pkg/vm/routines/task"
-	"matrixbase/pkg/vm/routines/worker"
+	"matrixone/pkg/vm/routines/task"
+	"matrixone/pkg/vm/routines/worker"
 )
 
 type Routines interface {

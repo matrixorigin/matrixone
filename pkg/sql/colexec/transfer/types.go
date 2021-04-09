@@ -1,8 +1,8 @@
 package transfer
 
 import (
-	"matrixbase/pkg/vm/mmu/guest"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/process"
 )
 
 type Argument struct {

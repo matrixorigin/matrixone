@@ -1,6 +1,6 @@
 package mempool
 
-import "matrixbase/pkg/internal/cpu"
+import "matrixone/pkg/internal/cpu"
 
 const (
 	CountSize = 8

@@ -3,11 +3,11 @@ package limit
 import (
 	"bytes"
 	"fmt"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/vm/mempool"
-	"matrixbase/pkg/vm/process"
-	"matrixbase/pkg/vm/register"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/encoding"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/process"
+	"matrixone/pkg/vm/register"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

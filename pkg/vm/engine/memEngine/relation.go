@@ -2,13 +2,13 @@ package memEngine
 
 import (
 	"fmt"
-	"matrixbase/pkg/compress"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/vm/engine"
-	"matrixbase/pkg/vm/engine/memEngine/segment"
-	"matrixbase/pkg/vm/metadata"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/compress"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/encoding"
+	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/memEngine/segment"
+	"matrixone/pkg/vm/metadata"
+	"matrixone/pkg/vm/process"
 
 	"github.com/pierrec/lz4"
 )

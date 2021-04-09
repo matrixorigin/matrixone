@@ -1,11 +1,11 @@
 package segment
 
 import (
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/vm/engine/logEngine/kv"
-	"matrixbase/pkg/vm/metadata"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/engine/logEngine/kv"
+	"matrixone/pkg/vm/metadata"
+	"matrixone/pkg/vm/process"
 )
 
 func New(id string, db *kv.KV, proc *process.Process, attrs []metadata.Attribute) *Segment {

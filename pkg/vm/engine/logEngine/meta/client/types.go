@@ -1,7 +1,7 @@
 package client
 
 import (
-	"matrixbase/pkg/vm/engine/logEngine/meta"
+	"matrixone/pkg/vm/engine/logEngine/meta"
 	"net/rpc"
 	"time"
 )

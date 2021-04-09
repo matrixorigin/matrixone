@@ -1,8 +1,8 @@
 package dedup
 
 import (
-	"matrixbase/pkg/hash"
-	"matrixbase/pkg/intmap/fastmap"
+	"matrixone/pkg/hash"
+	"matrixone/pkg/intmap/fastmap"
 )
 
 const (

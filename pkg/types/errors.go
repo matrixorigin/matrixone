@@ -15,8 +15,8 @@ package types
 
 import (
 	parser_types "github.com/pingcap/parser/types"
-	mysql "matrixbase/pkg/errno"
-	"matrixbase/pkg/util/dbterror"
+	mysql "matrixone/pkg/errno"
+	"matrixone/pkg/util/dbterror"
 )
 
 // const strings for ErrWrongValue

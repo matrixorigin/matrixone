@@ -27,9 +27,9 @@ import (
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/parser/terror"
 	// "github.com/pingcap/tidb/util/logutil"
-	"matrixbase/pkg/sessionctx/stmtctx"
-	tidbMath "matrixbase/pkg/util/math"
-	"matrixbase/pkg/util/parser"
+	"matrixone/pkg/sessionctx/stmtctx"
+	tidbMath "matrixone/pkg/util/math"
+	"matrixone/pkg/util/parser"
 )
 
 // Time format without fractional seconds precision.

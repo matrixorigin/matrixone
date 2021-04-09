@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
-	"matrixbase/pkg/container/types"
-	"matrixbase/pkg/container/vector"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
 	"testing"
 )
 

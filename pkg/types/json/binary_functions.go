@@ -23,8 +23,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/pingcap/errors"
-	"matrixbase/pkg/util/hack"
-	"matrixbase/pkg/util/stringutil"
+	"matrixone/pkg/util/hack"
+	"matrixone/pkg/util/stringutil"
 )
 
 // Type returns type of BinaryJSON as string.

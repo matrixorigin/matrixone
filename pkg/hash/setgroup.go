@@ -2,10 +2,10 @@ package hash
 
 import (
 	"bytes"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/container/types"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/process"
 )
 
 func NewSetGroup(idx, sel int64) *SetGroup {

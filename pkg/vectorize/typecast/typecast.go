@@ -1,6 +1,6 @@
 package typecast
 
-import "matrixbase/pkg/container/types"
+import "matrixone/pkg/container/types"
 
 var (
 	i8ToI8       func([]int8, []int8) []int8

@@ -23,8 +23,8 @@ import (
 	"github.com/pingcap/parser/ast"
 	"github.com/pingcap/parser/format"
 	"github.com/pingcap/parser/mysql"
-	"matrixbase/pkg/types"
-	"matrixbase/pkg/util/hack"
+	"matrixone/pkg/types"
+	"matrixone/pkg/util/hack"
 )
 
 // The purpose of driver package is to decompose the dependency of the parser and

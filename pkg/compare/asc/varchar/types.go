@@ -1,7 +1,7 @@
 package varchar
 
 import (
-	"matrixbase/pkg/container/vector"
+	"matrixone/pkg/container/vector"
 )
 
 type compare struct {

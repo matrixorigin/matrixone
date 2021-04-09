@@ -1,11 +1,11 @@
 package sum
 
 import (
-	"matrixbase/pkg/container/types"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/sql/colexec/aggregation"
-	"matrixbase/pkg/vectorize/sum"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/sql/colexec/aggregation"
+	"matrixone/pkg/vectorize/sum"
+	"matrixone/pkg/vm/process"
 )
 
 func NewIntSumCount(typ types.Type) *intSumCount {

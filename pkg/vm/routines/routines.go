@@ -1,9 +1,9 @@
 package routines
 
 import (
-	"matrixbase/pkg/vm/process"
-	"matrixbase/pkg/vm/routines/task"
-	"matrixbase/pkg/vm/routines/worker"
+	"matrixone/pkg/vm/process"
+	"matrixone/pkg/vm/routines/task"
+	"matrixone/pkg/vm/routines/worker"
 	"sync"
 	"sync/atomic"
 )

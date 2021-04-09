@@ -1,8 +1,8 @@
 package mergesum
 
 import (
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/sql/colexec/aggregation"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/sql/colexec/aggregation"
 )
 
 type Container struct {

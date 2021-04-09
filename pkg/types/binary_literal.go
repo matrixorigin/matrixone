@@ -23,7 +23,7 @@ import (
 	"strings"
 
 	"github.com/pingcap/errors"
-	"matrixbase/pkg/sessionctx/stmtctx"
+	"matrixone/pkg/sessionctx/stmtctx"
 )
 
 // BinaryLiteral is the internal type for storing bit / hex literal type.
