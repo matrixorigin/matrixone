@@ -4,7 +4,7 @@ import (
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
 	log "github.com/sirupsen/logrus"
-	_ "matrixbase/pkg/types/parser_driver"
+	_ "matrixone/pkg/types/parser_driver"
 )
 
 func parse(sql string) ([]ast.StmtNode, error) {

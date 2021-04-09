@@ -1,6 +1,6 @@
 package shuffle
 
-import "matrixbase/pkg/container/types"
+import "matrixone/pkg/container/types"
 
 var (
 	i8Shuffle  func([]int8, []int64) []int8

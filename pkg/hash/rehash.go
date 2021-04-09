@@ -1,9 +1,9 @@
 package hash
 
 import (
-	"matrixbase/pkg/container/types"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/encoding"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
 	"reflect"
 	"unsafe"
 )

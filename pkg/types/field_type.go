@@ -19,9 +19,9 @@ import (
 	"github.com/pingcap/parser/charset"
 	"github.com/pingcap/parser/mysql"
 	ast "github.com/pingcap/parser/types"
-	"matrixbase/pkg/types/json"
-	"matrixbase/pkg/util/collate"
-	utilMath "matrixbase/pkg/util/math"
+	"matrixone/pkg/types/json"
+	"matrixone/pkg/util/collate"
+	utilMath "matrixone/pkg/util/math"
 )
 
 // UnspecifiedLength is unspecified length.

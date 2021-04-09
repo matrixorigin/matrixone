@@ -1,6 +1,6 @@
 package sum
 
-import "matrixbase/pkg/container/types"
+import "matrixone/pkg/container/types"
 
 type intSum struct {
 	cnt int64

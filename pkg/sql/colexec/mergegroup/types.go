@@ -1,10 +1,10 @@
 package mergegroup
 
 import (
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/hash"
-	"matrixbase/pkg/intmap/fastmap"
-	"matrixbase/pkg/sql/colexec/aggregation"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/hash"
+	"matrixone/pkg/intmap/fastmap"
+	"matrixone/pkg/sql/colexec/aggregation"
 )
 
 const (

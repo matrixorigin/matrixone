@@ -2,7 +2,7 @@ package cache
 
 import (
 	"container/list"
-	"matrixbase/pkg/logger"
+	"matrixone/pkg/logger"
 	"sync"
 )
 

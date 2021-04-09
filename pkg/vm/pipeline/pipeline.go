@@ -2,9 +2,9 @@ package pipeline
 
 import (
 	"bytes"
-	"matrixbase/pkg/vm"
-	"matrixbase/pkg/vm/engine"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/vm"
+	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/process"
 )
 
 func New(cs []uint64, attrs []string, ins vm.Instructions) *Pipeline {

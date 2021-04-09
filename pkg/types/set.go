@@ -18,8 +18,8 @@ import (
 	"strings"
 
 	"github.com/pingcap/errors"
-	"matrixbase/pkg/util/collate"
-	"matrixbase/pkg/util/stringutil"
+	"matrixone/pkg/util/collate"
+	"matrixone/pkg/util/stringutil"
 )
 
 var zeroSet = Set{Name: "", Value: 0}

@@ -1,8 +1,8 @@
 package variable
 
 import (
-	mysql "matrixbase/pkg/errno"
-	"matrixbase/pkg/util/dbterror"
+	mysql "matrixone/pkg/errno"
+	"matrixone/pkg/util/dbterror"
 )
 
 // Error instances.

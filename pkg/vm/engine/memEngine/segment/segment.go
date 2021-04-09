@@ -1,15 +1,15 @@
 package segment
 
 import (
-	"matrixbase/pkg/compress"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/container/types"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/vm/engine/memEngine/kv"
-	"matrixbase/pkg/vm/mempool"
-	"matrixbase/pkg/vm/metadata"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/compress"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
+	"matrixone/pkg/vm/engine/memEngine/kv"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/metadata"
+	"matrixone/pkg/vm/process"
 )
 
 func New(id string, db *kv.KV, proc *process.Process, attrs []metadata.Attribute) *Segment {

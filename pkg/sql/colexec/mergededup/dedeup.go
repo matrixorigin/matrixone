@@ -3,13 +3,13 @@ package mergededup
 import (
 	"bytes"
 	"fmt"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/hash"
-	"matrixbase/pkg/intmap/fastmap"
-	"matrixbase/pkg/vm/mempool"
-	"matrixbase/pkg/vm/process"
-	"matrixbase/pkg/vm/register"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/hash"
+	"matrixone/pkg/intmap/fastmap"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/process"
+	"matrixone/pkg/vm/register"
 )
 
 func init() {

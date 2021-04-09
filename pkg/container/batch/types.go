@@ -1,7 +1,7 @@
 package batch
 
 import (
-	"matrixbase/pkg/container/vector"
+	"matrixone/pkg/container/vector"
 
 	aio "github.com/traetox/goaio"
 )

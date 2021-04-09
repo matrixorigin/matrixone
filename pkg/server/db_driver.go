@@ -2,8 +2,8 @@ package server
 
 import (
 	"crypto/tls"
-	"matrixbase/pkg/session"
-	"matrixbase/pkg/sessionctx/stmtctx"
+	"matrixone/pkg/session"
+	"matrixone/pkg/sessionctx/stmtctx"
 )
 
 type DBDriver struct {

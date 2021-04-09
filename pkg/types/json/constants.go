@@ -17,8 +17,8 @@ import (
 	"encoding/binary"
 	"unicode/utf8"
 
-	mysql "matrixbase/pkg/errno"
-	"matrixbase/pkg/util/dbterror"
+	mysql "matrixone/pkg/errno"
+	"matrixone/pkg/util/dbterror"
 )
 
 // TypeCode indicates JSON type.

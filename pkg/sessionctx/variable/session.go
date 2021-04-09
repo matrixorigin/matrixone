@@ -7,7 +7,7 @@ import (
 	"github.com/pingcap/parser/auth"
 	"github.com/pingcap/parser/charset"
 	"github.com/pingcap/parser/mysql"
-	"matrixbase/pkg/sessionctx/stmtctx"
+	"matrixone/pkg/sessionctx/stmtctx"
 	"strconv"
 	"time"
 )

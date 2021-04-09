@@ -1,6 +1,6 @@
 package meta
 
-import "matrixbase/pkg/vm/metadata"
+import "matrixone/pkg/vm/metadata"
 
 type Metadata struct {
 	Part    int32 // 1, 2, 3, 4... -  max part == max segment row count

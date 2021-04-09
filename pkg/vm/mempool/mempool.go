@@ -1,7 +1,7 @@
 package mempool
 
 import (
-	"matrixbase/pkg/encoding"
+	"matrixone/pkg/encoding"
 )
 
 func init() {

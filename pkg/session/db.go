@@ -20,9 +20,9 @@ package session
 import (
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
-	"matrixbase/pkg/errno"
-	"matrixbase/pkg/sessionctx"
-	"matrixbase/pkg/util/dbterror"
+	"matrixone/pkg/errno"
+	"matrixone/pkg/sessionctx"
+	"matrixone/pkg/util/dbterror"
 )
 
 // Parse parses a query string to raw ast.StmtNode.

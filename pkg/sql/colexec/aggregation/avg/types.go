@@ -1,6 +1,6 @@
 package avg
 
-import "matrixbase/pkg/container/types"
+import "matrixone/pkg/container/types"
 
 type intAvg struct {
 	cnt int64

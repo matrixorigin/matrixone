@@ -21,8 +21,8 @@ import (
 	"github.com/pingcap/parser/charset"
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/parser/terror"
-	"matrixbase/pkg/util/dbterror"
-	// "matrixbase/pkg/util/stringutil"
+	"matrixone/pkg/util/dbterror"
+	// "matrixone/pkg/util/stringutil"
 	// "github.com/pingcap/tidb/util/logutil"
 	// "go.uber.org/zap"
 )

@@ -1,9 +1,9 @@
 package aggregation
 
 import (
-	"matrixbase/pkg/container/types"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/process"
 )
 
 const (

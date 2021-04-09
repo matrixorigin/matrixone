@@ -3,8 +3,8 @@ package output
 import (
 	"bytes"
 	"fmt"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

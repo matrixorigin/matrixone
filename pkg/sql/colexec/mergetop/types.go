@@ -2,8 +2,8 @@ package mergetop
 
 import (
 	"fmt"
-	"matrixbase/pkg/compare"
-	"matrixbase/pkg/container/batch"
+	"matrixone/pkg/compare"
+	"matrixone/pkg/container/batch"
 )
 
 // Direction for ordering results.

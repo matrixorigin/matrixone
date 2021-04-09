@@ -1,8 +1,8 @@
 package uint64s
 
 import (
-	"matrixbase/pkg/container/nulls"
-	"matrixbase/pkg/container/vector"
+	"matrixone/pkg/container/nulls"
+	"matrixone/pkg/container/vector"
 )
 
 type compare struct {

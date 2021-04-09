@@ -2,7 +2,7 @@ package vm
 
 import (
 	"bytes"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/vm/process"
 )
 
 func String(ins Instructions, buf *bytes.Buffer) {

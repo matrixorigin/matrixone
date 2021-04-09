@@ -1,7 +1,7 @@
 package pipeline
 
 import (
-	"matrixbase/pkg/vm"
+	"matrixone/pkg/vm"
 )
 
 type Pipeline struct {

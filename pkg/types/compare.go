@@ -17,7 +17,7 @@ import (
 	"math"
 	"time"
 
-	"matrixbase/pkg/util/collate"
+	"matrixone/pkg/util/collate"
 )
 
 // CompareInt64 returns an integer comparing the int64 x to y.

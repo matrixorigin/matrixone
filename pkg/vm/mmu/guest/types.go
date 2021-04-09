@@ -1,6 +1,6 @@
 package guest
 
-import "matrixbase/pkg/vm/mmu/host"
+import "matrixone/pkg/vm/mmu/host"
 
 type Mmu struct {
 	size  int64

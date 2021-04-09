@@ -2,7 +2,7 @@ package dbterror
 
 import (
 	"github.com/pingcap/parser/terror"
-	"matrixbase/pkg/errno"
+	"matrixone/pkg/errno"
 )
 
 // ErrClass represents a class of errors.

@@ -3,9 +3,9 @@ package restrict
 import (
 	"bytes"
 	"fmt"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/vm/process"
-	"matrixbase/pkg/vm/register"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/process"
+	"matrixone/pkg/vm/register"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

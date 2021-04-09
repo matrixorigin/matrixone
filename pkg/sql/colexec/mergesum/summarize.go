@@ -3,12 +3,12 @@ package mergesum
 import (
 	"bytes"
 	"fmt"
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/encoding"
-	"matrixbase/pkg/sql/colexec/aggregation"
-	"matrixbase/pkg/sql/colexec/aggregation/aggfunc"
-	"matrixbase/pkg/vm/process"
-	"matrixbase/pkg/vm/register"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/encoding"
+	"matrixone/pkg/sql/colexec/aggregation"
+	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
+	"matrixone/pkg/vm/process"
+	"matrixone/pkg/vm/register"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

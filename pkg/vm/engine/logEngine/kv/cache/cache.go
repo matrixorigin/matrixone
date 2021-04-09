@@ -3,8 +3,8 @@ package cache
 import (
 	"container/list"
 	"io/ioutil"
-	"matrixbase/pkg/logger"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/logger"
+	"matrixone/pkg/vm/process"
 	"os"
 	"path"
 

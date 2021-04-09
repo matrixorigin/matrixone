@@ -1,9 +1,9 @@
 package logEngine
 
 import (
-	"matrixbase/pkg/vm/engine"
-	"matrixbase/pkg/vm/engine/logEngine/meta/client"
-	"matrixbase/pkg/vm/metadata"
+	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/logEngine/meta/client"
+	"matrixone/pkg/vm/metadata"
 )
 
 func New(cli client.Client) *LogEngine {

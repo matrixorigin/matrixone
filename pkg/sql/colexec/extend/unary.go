@@ -1,11 +1,11 @@
 package extend
 
 import (
-	"matrixbase/pkg/container/batch"
-	"matrixbase/pkg/container/types"
-	"matrixbase/pkg/container/vector"
-	"matrixbase/pkg/sql/colexec/extend/overload"
-	"matrixbase/pkg/vm/process"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/sql/colexec/extend/overload"
+	"matrixone/pkg/vm/process"
 )
 
 func (e *UnaryExtend) IsLogical() bool {
