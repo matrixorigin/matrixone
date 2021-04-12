@@ -1,4 +1,4 @@
-module matrixbase
+module matrixone
 
 go 1.15
 

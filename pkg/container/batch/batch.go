@@ -2,7 +2,9 @@ package batch
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
@@ -71,15 +73,30 @@ func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector,
 		if bat.Is[i].Alg == compress.Lz4 {
 			var err error
 
+			{
+				if sum := crc32.Checksum(data[mempool.CountSize:len(data)-4], crc32.IEEETable); sum != encoding.DecodeUint32(data[len(data)-4:]) {
+					return nil, errors.New("checksum mismatch")
+				}
+				data = data[:len(data)-4]
+			}
 			n := int(encoding.DecodeInt32(data[len(data)-4:]))
-			buf := proc.Mp.Alloc(n)
-			if buf, err = compress.Decompress(data[mempool.CountSize:len(data)-4], buf[mempool.CountSize:], bat.Is[i].Alg); err != nil {
-				proc.Mp.Free(buf)
+			buf, err := proc.Alloc(int64(n))
+			if err != nil {
 				return nil, err
 			}
-			proc.Mp.Free(data)
+			tm, err := compress.Decompress(data[mempool.CountSize:len(data)-4], buf[mempool.CountSize:], bat.Is[i].Alg)
+			if err != nil {
+				proc.Free(buf)
+				return nil, err
+			}
+			buf = buf[:mempool.CountSize+len(tm)]
+			proc.Free(data)
 			data = buf[:mempool.CountSize+n]
 			bat.Vecs[i].Data = data
+		} else {
+			if crc32.Checksum(data[mempool.CountSize:len(data)-4], crc32.IEEETable) != encoding.DecodeUint32(data[len(data)-4:]) {
+				return nil, errors.New("checksum mismatch")
+			}
 		}
 		if err := bat.Vecs[i].Read(data); err != nil {
 			return nil, err

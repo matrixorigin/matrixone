@@ -94,6 +94,10 @@ func (t Type) String() string {
 	return t.Oid.String()
 }
 
+func (a Type) Eq(b Type) bool {
+	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Precision == b.Width
+}
+
 func (t T) String() string {
 	switch t {
 	case T_int8:
