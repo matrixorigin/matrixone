@@ -5,7 +5,8 @@ import (
 )
 
 var Algorithms map[string]int = map[string]int{
-	"lz4": Lz4,
+	"lz4":  Lz4,
+	"none": None,
 }
 
 func Compress(src, dst []byte, typ int) ([]byte, error) {
