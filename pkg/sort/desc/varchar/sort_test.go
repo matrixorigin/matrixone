@@ -1,4 +1,4 @@
-package bytes
+package varchar
 
 import (
 	"fmt"
@@ -21,7 +21,7 @@ func generate() *vector.Vector {
 			vs[i] = []byte(fmt.Sprintf("%v", rand.Int63()%Limit))
 		}
 	}
-	vec := vector.New(types.T_bytes)
+	vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
 	if err := vec.Append(vs); err != nil {
 		log.Fatal(err)
 	}
@@ -29,16 +29,20 @@ func generate() *vector.Vector {
 }
 
 func TestSort(t *testing.T) {
-	vs := generate()
-	fmt.Printf("%s\n", vs)
+	vec := generate()
+	os := make([]int64, Num)
+	vs := vec.Col.(*types.Bytes)
 	{
-		col := vs.Col.(*types.Bytes)
-		Sort(&types.Bytes{
-			Data:    col.Data,
-			Lengths: col.Lengths,
-			Offsets: col.Offsets[:Num-2],
-		})
+		for i := 0; i < Num; i++ {
+			os[i] = int64(i)
+		}
 	}
+	for i, o := range os {
+		fmt.Printf("[%v] = %s\n", i, vs.Get(o))
+	}
+	Sort(vs, os[2:])
 	fmt.Printf("\n")
-	fmt.Printf("%s\n", vs)
+	for i, o := range os {
+		fmt.Printf("[%v] = %s\n", i, vs.Get(o))
+	}
 }

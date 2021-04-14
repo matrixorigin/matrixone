@@ -29,12 +29,12 @@ func (a *Bytes) Append(vs [][]byte) error {
 	return nil
 }
 
-func (a *Bytes) Get(n int) []byte {
+func (a *Bytes) Get(n int64) []byte {
 	offset := a.Offsets[n]
 	return a.Data[offset : offset+a.Lengths[n]]
 }
 
-func (a *Bytes) Swap(i, j int) {
+func (a *Bytes) Swap(i, j int64) {
 	a.Offsets[i], a.Offsets[j] = a.Offsets[j], a.Offsets[i]
 	a.Lengths[i], a.Lengths[j] = a.Lengths[j], a.Lengths[i]
 }
