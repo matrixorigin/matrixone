@@ -17,6 +17,7 @@ import (
 	"matrixone/pkg/sql/colexec/mergesum"
 	"matrixone/pkg/sql/colexec/mergetop"
 	"matrixone/pkg/sql/colexec/offset"
+	"matrixone/pkg/sql/colexec/order"
 	"matrixone/pkg/sql/colexec/output"
 	"matrixone/pkg/sql/colexec/projection"
 	"matrixone/pkg/sql/colexec/restrict"
@@ -37,7 +38,7 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	Dedup:             dedup.String,
 	Limit:             limit.String,
 	Group:             group.String,
-	Order:             nil,
+	Order:             order.String,
 	Offset:            offset.String,
 	Transfer:          transfer.String,
 	Restrict:          restrict.String,
@@ -73,7 +74,7 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	Dedup:             dedup.Prepare,
 	Limit:             limit.Prepare,
 	Group:             group.Prepare,
-	Order:             nil,
+	Order:             order.Prepare,
 	Offset:            offset.Prepare,
 	Transfer:          transfer.Prepare,
 	Restrict:          restrict.Prepare,
@@ -109,7 +110,7 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	Dedup:             dedup.Call,
 	Limit:             limit.Call,
 	Group:             group.Call,
-	Order:             nil,
+	Order:             order.Call,
 	Offset:            offset.Call,
 	Transfer:          transfer.Call,
 	Restrict:          restrict.Call,
