@@ -113,7 +113,7 @@ func medianOfThree(vs []int32, os []int64, m1, m0, m2 int) {
 	if vs[os[m2]] < vs[os[m1]] {
 		os[m2], os[m1] = os[m1], os[m2]
 		// data[m0] <= data[m2] && data[m1] < data[m2]
-		if vs[m1] < vs[m0] {
+		if vs[os[m1]] < vs[os[m0]] {
 			os[m1], os[m0] = os[m0], os[m1]
 		}
 	}
@@ -147,7 +147,7 @@ func doPivot(vs []int32, os []int64, lo, hi int) (midlo, midhi int) {
 	pivot := lo
 	a, c := lo+1, hi-1
 
-	for ; a < c && vs[a] < vs[pivot]; a++ {
+	for ; a < c && vs[os[a]] < vs[os[pivot]]; a++ {
 	}
 	b := a
 	for {

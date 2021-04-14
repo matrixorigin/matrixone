@@ -32,5 +32,5 @@ func (c *compare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Process
 
 func (c *compare) Compare(veci, vecj int, vi, vj int64) int {
 	x, y := c.vs[veci].Col.(*types.Bytes), c.vs[vecj].Col.(*types.Bytes)
-	return bytes.Compare(x.Get(int(vi)), y.Get(int(vj)))
+	return bytes.Compare(x.Get(vi), y.Get(vj))
 }
