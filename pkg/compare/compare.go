@@ -78,7 +78,7 @@ func New(typ types.T, desc bool) Compare {
 			return dfloat64s.New()
 		}
 		return afloat64s.New()
-	case types.T_varchar:
+	case types.T_char, types.T_json, types.T_varchar:
 		if desc {
 			return dvarchar.New()
 		}
