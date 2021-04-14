@@ -734,7 +734,7 @@ func StrMax(xs *types.Bytes) []byte {
 func strMaxPure(xs *types.Bytes) []byte {
 	res := xs.Get(0)
 	for i, n := 0, len(xs.Offsets); i < n; i++ {
-		x := xs.Get(i)
+		x := xs.Get(int64(i))
 		if bytes.Compare(x, res) > 0 {
 			res = x
 		}
@@ -747,9 +747,9 @@ func StrMaxSels(xs *types.Bytes, sels []int64) []byte {
 }
 
 func strMaxSelsPure(xs *types.Bytes, sels []int64) []byte {
-	res := xs.Get(int(sels[0]))
+	res := xs.Get(sels[0])
 	for _, sel := range sels {
-		x := xs.Get(int(sel))
+		x := xs.Get(sel)
 		if bytes.Compare(x, res) > 0 {
 			res = x
 		}

@@ -1,4 +1,4 @@
-package floats
+package float64s
 
 import (
 	"fmt"
@@ -28,7 +28,7 @@ func TestSort(t *testing.T) {
 	for i, o := range os {
 		fmt.Printf("[%v] = %v\n", i, vs[o])
 	}
-	Sort(vs, os[:Num-2])
+	Sort(vs, os[2:])
 	fmt.Printf("\n")
 	for i, o := range os {
 		fmt.Printf("[%v] = %v\n", i, vs[o])

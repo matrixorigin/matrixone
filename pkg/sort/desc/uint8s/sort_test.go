@@ -1,23 +1,23 @@
-package bools
+package uint8s
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 )
 
 const (
-	Num = 10
+	Num   = 10
+	Limit = 100
 )
 
-func generate() ([]bool, []int64) {
+func generate() ([]uint8, []int64) {
 	os := make([]int64, Num)
-	xs := make([]bool, Num)
+	xs := make([]uint8, Num)
 	{
 		for i := 0; i < Num; i++ {
 			os[i] = int64(i)
-			if i%2 == 0 {
-				xs[i] = true
-			}
+			xs[i] = uint8(rand.Int63() % Limit)
 		}
 	}
 	return xs, os
@@ -28,7 +28,7 @@ func TestSort(t *testing.T) {
 	for i, o := range os {
 		fmt.Printf("[%v] = %v\n", i, vs[o])
 	}
-	Sort(vs, os[:Num-2])
+	Sort(vs, os[2:])
 	fmt.Printf("\n")
 	for i, o := range os {
 		fmt.Printf("[%v] = %v\n", i, vs[o])

@@ -355,8 +355,7 @@ func (g *BagGroup) Probe(sels, matched []int64, vecs []*vector.Vector,
 		case types.T_decimal:
 		case types.T_date:
 		case types.T_datetime:
-		case types.T_char:
-		case types.T_varchar:
+		case types.T_char, types.T_json, types.T_varchar:
 			gvec := bats[g.Idx].Vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
@@ -370,12 +369,12 @@ func (g *BagGroup) Probe(sels, matched []int64, vecs []*vector.Vector,
 			case lnull && !rnull: // null is not value
 				vs := vec.Col.(*types.Bytes)
 				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Get(int(g.Sel))
+				gv := gvs.Get(g.Sel)
 				for i, sel := range sels {
 					if vec.Nsp.Contains(uint64(sel)) {
 						diffs[i] = true
 					} else {
-						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
+						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(sel)) != 0)
 					}
 				}
 			case !lnull && rnull: // null is not value
@@ -385,43 +384,9 @@ func (g *BagGroup) Probe(sels, matched []int64, vecs []*vector.Vector,
 			default:
 				vs := vec.Col.(*types.Bytes)
 				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Get(int(g.Sel))
+				gv := gvs.Get(g.Sel)
 				for i, sel := range sels {
-					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
-				}
-			}
-		case types.T_json:
-			gvec := bats[g.Idx].Vecs[i]
-			lnull := vec.Nsp.Any()
-			rnull := gvec.Nsp.Contains(uint64(g.Sel))
-			switch {
-			case lnull && rnull:
-				for i, sel := range sels {
-					if !vec.Nsp.Contains(uint64(sel)) { // only null eq null
-						diffs[i] = true
-					}
-				}
-			case lnull && !rnull: // null is not value
-				vs := vec.Col.(*types.Bytes)
-				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Get(int(g.Sel))
-				for i, sel := range sels {
-					if vec.Nsp.Contains(uint64(sel)) {
-						diffs[i] = true
-					} else {
-						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
-					}
-				}
-			case !lnull && rnull: // null is not value
-				for i := range sels {
-					diffs[i] = true
-				}
-			default:
-				vs := vec.Col.(*types.Bytes)
-				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Get(int(g.Sel))
-				for i, sel := range sels {
-					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
+					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(sel)) != 0)
 				}
 			}
 		}
@@ -766,8 +731,7 @@ func (g *BagGroup) Fill(sels, matched []int64, vecs []*vector.Vector,
 		case types.T_decimal:
 		case types.T_date:
 		case types.T_datetime:
-		case types.T_char:
-		case types.T_varchar:
+		case types.T_char, types.T_json, types.T_varchar:
 			gvec := bats[g.Idx].Vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
@@ -781,12 +745,12 @@ func (g *BagGroup) Fill(sels, matched []int64, vecs []*vector.Vector,
 			case lnull && !rnull: // null is not value
 				vs := vec.Col.(*types.Bytes)
 				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Get(int(g.Sel))
+				gv := gvs.Get(g.Sel)
 				for i, sel := range sels {
 					if vec.Nsp.Contains(uint64(sel)) {
 						diffs[i] = true
 					} else {
-						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
+						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(sel)) != 0)
 					}
 				}
 			case !lnull && rnull: // null is not value
@@ -796,43 +760,9 @@ func (g *BagGroup) Fill(sels, matched []int64, vecs []*vector.Vector,
 			default:
 				vs := vec.Col.(*types.Bytes)
 				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Get(int(g.Sel))
+				gv := gvs.Get(g.Sel)
 				for i, sel := range sels {
-					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
-				}
-			}
-		case types.T_json:
-			gvec := bats[g.Idx].Vecs[i]
-			lnull := vec.Nsp.Any()
-			rnull := gvec.Nsp.Contains(uint64(g.Sel))
-			switch {
-			case lnull && rnull:
-				for i, sel := range sels {
-					if !vec.Nsp.Contains(uint64(sel)) { // only null eq null
-						diffs[i] = true
-					}
-				}
-			case lnull && !rnull: // null is not value
-				vs := vec.Col.(*types.Bytes)
-				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Get(int(g.Sel))
-				for i, sel := range sels {
-					if vec.Nsp.Contains(uint64(sel)) {
-						diffs[i] = true
-					} else {
-						diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
-					}
-				}
-			case !lnull && rnull: // null is not value
-				for i := range sels {
-					diffs[i] = true
-				}
-			default:
-				vs := vec.Col.(*types.Bytes)
-				gvs := gvec.Col.(*types.Bytes)
-				gv := gvs.Get(int(g.Sel))
-				for i, sel := range sels {
-					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(int(sel))) != 0)
+					diffs[i] = diffs[i] || (bytes.Compare(gv, vs.Get(sel)) != 0)
 				}
 			}
 		}
