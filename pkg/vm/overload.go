@@ -14,6 +14,7 @@ import (
 	"matrixone/pkg/sql/colexec/limit"
 	"matrixone/pkg/sql/colexec/mergededup"
 	"matrixone/pkg/sql/colexec/mergegroup"
+	"matrixone/pkg/sql/colexec/mergeorder"
 	"matrixone/pkg/sql/colexec/mergesum"
 	"matrixone/pkg/sql/colexec/mergetop"
 	"matrixone/pkg/sql/colexec/offset"
@@ -65,6 +66,7 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	Exchange:          exchange.String,
 	MergeTop:          mergetop.String,
 	MergeDedup:        mergededup.String,
+	MergeOrder:        mergeorder.String,
 	MergeGroup:        mergegroup.String,
 	MergeSummarize:    mergesum.String,
 }
@@ -101,6 +103,7 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	Exchange:          exchange.Prepare,
 	MergeTop:          mergetop.Prepare,
 	MergeDedup:        mergededup.Prepare,
+	MergeOrder:        mergeorder.Prepare,
 	MergeGroup:        mergegroup.Prepare,
 	MergeSummarize:    mergesum.Prepare,
 }
@@ -137,6 +140,7 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	Exchange:          exchange.Call,
 	MergeTop:          mergetop.Call,
 	MergeDedup:        mergededup.Call,
+	MergeOrder:        mergeorder.Call,
 	MergeGroup:        mergegroup.Call,
 	MergeSummarize:    mergesum.Call,
 }

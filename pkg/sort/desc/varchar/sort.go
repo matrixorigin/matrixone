@@ -51,7 +51,7 @@ func quickSort(vs *types.Bytes, os []int64, a, b, maxDepth int) {
 		// Do ShellSort pass with gap 6
 		// It could be written in this simplified form cause b-a <= 12
 		for i := a + 6; i < b; i++ {
-			if bytes.Compare(vs.Get(os[i]), vs.Get(os[i-6])) < 0 {
+			if bytes.Compare(vs.Get(os[i]), vs.Get(os[i-6])) >= 0 {
 				os[i], os[i-6] = os[i-6], os[i]
 			}
 		}
@@ -62,7 +62,7 @@ func quickSort(vs *types.Bytes, os []int64, a, b, maxDepth int) {
 // Insertion sort
 func insertionSort(vs *types.Bytes, os []int64, a, b int) {
 	for i := a + 1; i < b; i++ {
-		for j := i; j > a && bytes.Compare(vs.Get(os[j]), vs.Get(os[j-1])) < 0; j-- {
+		for j := i; j > a && bytes.Compare(vs.Get(os[j]), vs.Get(os[j-1])) >= 0; j-- {
 			os[j], os[j-1] = os[j-1], os[j]
 		}
 	}
@@ -77,10 +77,10 @@ func siftDown(vs *types.Bytes, os []int64, lo, hi, first int) {
 		if child >= hi {
 			break
 		}
-		if child+1 < hi && bytes.Compare(vs.Get(os[first+child]), vs.Get(os[first+child+1])) < 0 {
+		if child+1 < hi && bytes.Compare(vs.Get(os[first+child]), vs.Get(os[first+child+1])) >= 0 {
 			child++
 		}
-		if bytes.Compare(vs.Get(os[first+root]), vs.Get(os[first+child])) >= 0 {
+		if bytes.Compare(vs.Get(os[first+root]), vs.Get(os[first+child])) < 0 {
 			return
 		}
 		os[first+root], os[first+child] = os[first+child], os[first+root]
@@ -111,14 +111,14 @@ func heapSort(vs *types.Bytes, os []int64, a, b int) {
 // medianOfThree moves the median of the three values data[m0], data[m1], data[m2] into data[m1].
 func medianOfThree(vs *types.Bytes, os []int64, m1, m0, m2 int) {
 	// sort 3 elements
-	if bytes.Compare(vs.Get(os[m1]), vs.Get(os[m0])) < 0 {
+	if bytes.Compare(vs.Get(os[m1]), vs.Get(os[m0])) >= 0 {
 		os[m1], os[m0] = os[m0], os[m1]
 	}
 	// data[m0] <= data[m1]
-	if bytes.Compare(vs.Get(os[m2]), vs.Get(os[m1])) < 0 {
+	if bytes.Compare(vs.Get(os[m2]), vs.Get(os[m1])) >= 0 {
 		os[m2], os[m1] = os[m1], os[m2]
 		// data[m0] <= data[m2] && data[m1] < data[m2]
-		if bytes.Compare(vs.Get(os[m1]), vs.Get(os[m0])) < 0 {
+		if bytes.Compare(vs.Get(os[m1]), vs.Get(os[m0])) >= 0 {
 			os[m1], os[m0] = os[m0], os[m1]
 		}
 	}
@@ -152,13 +152,13 @@ func doPivot(vs *types.Bytes, os []int64, lo, hi int) (midlo, midhi int) {
 	pivot := lo
 	a, c := lo+1, hi-1
 
-	for ; a < c && bytes.Compare(vs.Get(os[a]), vs.Get(os[pivot])) < 0; a++ {
+	for ; a < c && bytes.Compare(vs.Get(os[a]), vs.Get(os[pivot])) >= 0; a++ {
 	}
 	b := a
 	for {
-		for ; b < c && bytes.Compare(vs.Get(os[pivot]), vs.Get(os[b])) >= 0; b++ { // data[b] <= pivot
+		for ; b < c && bytes.Compare(vs.Get(os[pivot]), vs.Get(os[b])) < 0; b++ { // data[b] <= pivot
 		}
-		for ; b < c && bytes.Compare(vs.Get(os[pivot]), vs.Get(os[c-1])) < 0; c-- { // data[c-1] > pivot
+		for ; b < c && bytes.Compare(vs.Get(os[pivot]), vs.Get(os[c-1])) >= 0; c-- { // data[c-1] > pivot
 		}
 		if b >= c {
 			break
@@ -174,19 +174,19 @@ func doPivot(vs *types.Bytes, os []int64, lo, hi int) (midlo, midhi int) {
 	if !protect && hi-c < (hi-lo)/4 {
 		// Lets test some points for equality to pivot
 		dups := 0
-		if bytes.Compare(vs.Get(os[pivot]), vs.Get(os[hi-1])) >= 0 { // data[hi-1] = pivot
+		if bytes.Compare(vs.Get(os[pivot]), vs.Get(os[hi-1])) < 0 { // data[hi-1] = pivot
 			os[c], os[hi-1] = os[hi-1], os[c]
 			c++
 			dups++
 		}
-		if bytes.Compare(vs.Get(os[b-1]), vs.Get(os[pivot])) >= 0 { // data[b-1] = pivot
+		if bytes.Compare(vs.Get(os[b-1]), vs.Get(os[pivot])) < 0 { // data[b-1] = pivot
 			b--
 			dups++
 		}
 		// m-lo = (hi-lo)/2 > 6
 		// b-lo > (hi-lo)*3/4-1 > 8
 		// ==> m < b ==> data[m] <= pivot
-		if bytes.Compare(vs.Get(os[m]), vs.Get(os[pivot])) >= 0 { // data[m] = pivot
+		if bytes.Compare(vs.Get(os[m]), vs.Get(os[pivot])) < 0 { // data[m] = pivot
 			os[m], os[b-1] = os[b-1], os[m]
 			b--
 			dups++
@@ -200,9 +200,9 @@ func doPivot(vs *types.Bytes, os []int64, lo, hi int) (midlo, midhi int) {
 		//	data[a <= i < b] unexamined
 		//	data[b <= i < c] = pivot
 		for {
-			for ; a < b && bytes.Compare(vs.Get(os[b-1]), vs.Get(os[pivot])) >= 0; b-- { // data[b] == pivot
+			for ; a < b && bytes.Compare(vs.Get(os[b-1]), vs.Get(os[pivot])) < 0; b-- { // data[b] == pivot
 			}
-			for ; a < b && bytes.Compare(vs.Get(os[a]), vs.Get(os[pivot])) < 0; a++ { // data[a] < pivot
+			for ; a < b && bytes.Compare(vs.Get(os[a]), vs.Get(os[pivot])) >= 0; a++ { // data[a] < pivot
 			}
 			if a >= b {
 				break

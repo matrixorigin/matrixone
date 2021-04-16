@@ -28,11 +28,13 @@ type Register struct {
 }
 
 type Limitation struct {
-	Size      int64 // memory threshold
-	BatchSize int64 // limit size for batch
+	Size          int64 // memory threshold
+	BatchRows     int64 // max rows for batch
+	PartitionRows int64 // max rows for partition
 }
 
 type Process struct {
+	Id    string // query id
 	Reg   Register
 	Lim   Limitation
 	Gm    *guest.Mmu

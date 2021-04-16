@@ -8,6 +8,7 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/spillEngine/segment"
+	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"path"
@@ -46,7 +47,7 @@ func (r *relation) Segment(id string, proc *process.Process) engine.Segment {
 func (r *relation) Write(bat *batch.Batch) error {
 	seg := key(int(r.md.Segs), r.id)
 	if n := len(bat.Sels); n > 0 {
-		if err := r.db.Set(seg, bat.SelsData[:n*8]); err != nil {
+		if err := r.db.Set(seg, bat.SelsData[mempool.CountSize:mempool.CountSize+n*8]); err != nil {
 			return err
 		}
 	}
