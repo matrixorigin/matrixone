@@ -32,6 +32,7 @@ const (
 	Exchange
 	MergeTop
 	MergeDedup
+	MergeOrder
 	MergeGroup
 	MergeSummarize
 )
