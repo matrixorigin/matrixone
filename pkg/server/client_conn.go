@@ -307,7 +307,7 @@ func parseHandshakeResponseHeader(ctx context.Context, packet *handshakeResponse
 	// Ensure there are enough data to read:
 	// http://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::SSLRequest
 	if len(data) < 4+4+1+23 {
-		log.Errorf("got malformed handshake response %v %v", zap.ByteString("packetData", data))
+		log.Errorf("got malformed handshake response %v %v", zap.ByteString("packetData", data),nil)
 		return 0, mysql.ErrMalformPacket
 	}
 
@@ -619,11 +619,14 @@ func (cc *clientConn) Run(ctx context.Context) {
 			if terror.ErrorNotEqual(err, io.EOF) {
 				if netErr, isNetErr := err.(net.Error); isNetErr && netErr.Timeout() {
 					idleTime := time.Since(start)
+					idleTime +=1
+					/*
 					log.Infof("read packet timeout, close this connection",
 						zap.Duration("idle", idleTime),
 						zap.Uint64("waitTimeout", waitTimeout),
 						zap.Error(err),
 					)
+					*/
 				} else {
 					// errStack := errors.ErrorStack(err)
 					// if !strings.Contains(errStack, "use of closed network connection") {
@@ -644,10 +647,10 @@ func (cc *clientConn) Run(ctx context.Context) {
 			if terror.ErrorEqual(err, io.EOF) {
 				return
 			} else if terror.ErrResultUndetermined.Equal(err) {
-				log.Errorf("result undetermined, close this connection", zap.Error(err))
+				//log.Errorf("result undetermined, close this connection %v", zap.Error(err))
 				return
 			} else if terror.ErrCritical.Equal(err) {
-				log.Fatalf("critical error, stop the server", zap.Error(err))
+				//log.Fatalf("critical error, stop the server", zap.Error(err))
 			}
 			// logutil.Logger(ctx).Info("command dispatched failed",
 			// 	zap.String("connInfo", cc.String()),

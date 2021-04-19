@@ -8,8 +8,7 @@ require (
 	github.com/blacktear23/go-proxyprotocol v0.0.0-20180807104634-af7a81e8dd0d
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/frankban/quicktest v1.11.3 // indirect
-	github.com/go-sql-driver/mysql v1.5.0 // indirect
-	github.com/klauspost/compress v1.11.7 // indirect
+	github.com/google/uuid v1.2.0
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pilosa/pilosa v1.4.0
 	github.com/pingcap/check v0.0.0-20190102082844-67f458068fc8
@@ -20,6 +19,5 @@ require (
 	github.com/traetox/goaio v0.0.0-20171005222435-46641abceb17
 	go.uber.org/zap v1.15.0
 	golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f
-	golang.org/x/text v0.3.3 // indirect
 	golang.org/x/tools v0.0.0-20201105001634-bc3cf281b174 // indirect
 )
