@@ -23,6 +23,10 @@ type IOPackage interface {
 	//close the connection
 	Close()
 
+	//the byte order
+	//true - littleEndian; false - littleEndian
+	IsLittleEndian() bool
+
 	//write an uint8 into the buffer at the position
 	//return the position + 1
 	WriteUint8([]byte,int,uint8)int
@@ -63,16 +67,23 @@ type IOPackageImpl struct {
 	bufferWriter *bufio.Writer
 	readBufferSize int
 	writeBufferSize int
+	//true - littleEndian; false - littleEndian
+	endian bool
 }
 
-func NewIOPackage(in net.Conn, readBufferSize,writeBufferSize int) *IOPackageImpl{
+func NewIOPackage(in net.Conn, readBufferSize,writeBufferSize int,littleEndian bool) *IOPackageImpl{
 	return &IOPackageImpl{
 		tcp : in,
 		readBufferSize: readBufferSize,
 		writeBufferSize: writeBufferSize,
 		bufferReader : bufio.NewReaderSize(in,readBufferSize),
 		bufferWriter: bufio.NewWriterSize(in,writeBufferSize),
+		endian: littleEndian,
 	}
+}
+
+func (bio *IOPackageImpl) IsLittleEndian() bool {
+	return bio.endian
 }
 
 func (bio *IOPackageImpl) ReadPacket(count int) ([]byte, error) {
@@ -108,17 +119,29 @@ func (bio *IOPackageImpl) WriteUint8(data []byte,pos int,value uint8) int  {
 }
 
 func (bio *IOPackageImpl) WriteUint16(data []byte, pos int, value uint16) int {
-	binary.LittleEndian.PutUint16(data[pos:],value)
+	if bio.endian{
+		binary.LittleEndian.PutUint16(data[pos:],value)
+	}else{
+		binary.BigEndian.PutUint16(data[pos:],value)
+	}
 	return pos + 2
 }
 
 func (bio *IOPackageImpl) WriteUint32(data []byte, pos int, value uint32) int {
-	binary.LittleEndian.PutUint32(data[pos:],value)
+	if bio.endian{
+		binary.LittleEndian.PutUint32(data[pos:],value)
+	}else{
+		binary.BigEndian.PutUint32(data[pos:],value)
+	}
 	return pos + 4
 }
 
 func (bio *IOPackageImpl) WriteUint64(data []byte, pos int, value uint64) int {
-	binary.LittleEndian.PutUint64(data[pos:],value)
+	if bio.endian{
+		binary.LittleEndian.PutUint64(data[pos:],value)
+	}else {
+		binary.BigEndian.PutUint64(data[pos:],value)
+	}
 	return pos + 8
 }
 
@@ -133,20 +156,32 @@ func (bio *IOPackageImpl) ReadUint16(data []byte,pos int)(uint16,int,bool)  {
 	if pos + 1 >= len(data){
 		return 0,0,false
 	}
-	return binary.LittleEndian.Uint16(data[pos : pos+2]),pos + 2,true
+	if bio.endian {
+		return binary.LittleEndian.Uint16(data[pos : pos+2]), pos + 2, true
+	}else{
+		return binary.BigEndian.Uint16(data[pos : pos+2]), pos + 2, true
+	}
 }
 
 func (bio *IOPackageImpl) ReadUint32(data []byte, pos int) (uint32, int, bool) {
 	if pos+3 >= len(data) {
 		return 0, 0, false
 	}
-	return binary.LittleEndian.Uint32(data[pos:pos+4]),pos+4,true
+	if bio.endian{
+		return binary.LittleEndian.Uint32(data[pos:pos+4]),pos+4,true
+	}else{
+		return binary.BigEndian.Uint32(data[pos:pos+4]),pos+4,true
+	}
 }
 
 func (bio *IOPackageImpl) ReadUint64(data []byte, pos int) (uint64, int, bool) {
 	if pos+7 >= len(data) {
 		return 0, 0, false
 	}
-	return binary.LittleEndian.Uint64(data[pos:pos+8]),pos+8,true
+	if bio.endian{
+		return binary.LittleEndian.Uint64(data[pos:pos+8]),pos+8,true
+	}else{
+		return binary.BigEndian.Uint64(data[pos:pos+8]),pos+8,true
+	}
 }
 
