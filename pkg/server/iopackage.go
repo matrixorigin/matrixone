@@ -8,7 +8,8 @@ import (
 	"net"
 )
 
-const BufferSize = 256
+const defaultReadBufferSize int = 512
+const defaultWriteBufferSize int = 512
 
 type IOPackage interface {
 	//read a packet with size from the connection
@@ -22,6 +23,9 @@ type IOPackage interface {
 
 	//close the connection
 	Close()
+
+	//get address Host:Port of the client
+	Peer()(string,string)
 
 	//the byte order
 	//true - littleEndian; false - littleEndian
@@ -42,6 +46,22 @@ type IOPackage interface {
 	//write an uint64 with little endian into the buffer at the position
 	//return the position + 8
 	WriteUint64([]byte,int,uint64)int
+
+	//append an uint8 to the buffer
+	//return the buffer
+	AppendUint8([]byte,uint8)[]byte
+
+	//append an uint16 to the buffer
+	//return the buffer
+	AppendUint16([]byte,uint16)[]byte
+
+	//append an uint32 to the buffer
+	//return the buffer
+	AppendUint32([]byte,uint32)[]byte
+
+	//append an uint64 to the buffer
+	//return the buffer
+	AppendUint64([]byte,uint64)[]byte
 
 	//read an uint8 with little endian from the buffer at the position
 	//return uint8 value ; pos+1 ; true - decoded successfully or false - failed
@@ -113,6 +133,16 @@ func (bio *IOPackageImpl) Close() {
 	bio.tcp.Close()
 }
 
+func (bio *IOPackageImpl) Peer() (string, string) {
+	addr := bio.tcp.RemoteAddr().String()
+	host,port,err := net.SplitHostPort(addr)
+	if err != nil{
+		fmt.Printf("get peer host:port failed. error:%v ",err)
+		return "failed", "0"
+	}
+	return host,port
+}
+
 func (bio *IOPackageImpl) WriteUint8(data []byte,pos int,value uint8) int  {
 	data[pos] = value
 	return pos + 1
@@ -143,6 +173,28 @@ func (bio *IOPackageImpl) WriteUint64(data []byte, pos int, value uint64) int {
 		binary.BigEndian.PutUint64(data[pos:],value)
 	}
 	return pos + 8
+}
+
+func (bio *IOPackageImpl) AppendUint8(data []byte,value uint8)[]byte{
+	return append(data,value)
+}
+
+func (bio *IOPackageImpl) AppendUint16(data []byte,value uint16)[]byte{
+	tmp := make([]byte,2)
+	bio.WriteUint16(tmp,0,value)
+	return append(data,tmp...)
+}
+
+func (bio *IOPackageImpl) AppendUint32(data []byte,value uint32)[]byte{
+	tmp := make([]byte,4)
+	bio.WriteUint32(tmp,0,value)
+	return append(data,tmp...)
+}
+
+func (bio *IOPackageImpl) AppendUint64(data []byte,value uint64)[]byte{
+	tmp := make([]byte,8)
+	bio.WriteUint64(tmp,0,value)
+	return append(data,tmp...)
 }
 
 func (bio *IOPackageImpl) ReadUint8(data []byte, pos int) (uint8, int, bool) {
