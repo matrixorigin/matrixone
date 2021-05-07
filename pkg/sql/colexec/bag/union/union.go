@@ -26,6 +26,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		reg := proc.Reg.Ws[0]
 		v := <-reg.Ch
 		if v == nil {
+			reg.Ch = nil
 			reg.Wg.Done()
 			proc.Reg.Ws = proc.Reg.Ws[1:]
 			continue

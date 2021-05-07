@@ -14,8 +14,36 @@ const (
 	MetaKey = "meta"
 )
 
-func New(path string, db *kv.KV) *spillEngine {
-	return &spillEngine{db: db, path: path}
+func New(path string, db engine.DB) (*spillEngine, error) {
+	cdb, err := kv.New(path)
+	if err != nil {
+		return nil, err
+	}
+	return &spillEngine{db: db, cdb: cdb, path: path}, nil
+}
+
+func (e *spillEngine) Close() error {
+	return e.db.Close()
+}
+
+func (e *spillEngine) Del(k []byte) error {
+	return e.db.Del(k)
+}
+
+func (e *spillEngine) Set(k, v []byte) error {
+	return e.db.Set(k, v)
+}
+
+func (e *spillEngine) Get(k []byte) ([]byte, error) {
+	return e.db.Get(k)
+}
+
+func (e *spillEngine) NewBatch() (engine.Batch, error) {
+	return e.db.NewBatch()
+}
+
+func (e *spillEngine) NewIterator(prefix []byte) (engine.Iterator, error) {
+	return e.db.NewIterator(prefix)
 }
 
 func (e *spillEngine) Delete(name string) error {
@@ -34,7 +62,7 @@ func (e *spillEngine) Create(name string, attrs []metadata.Attribute) error {
 	if err := os.Mkdir(dir, os.FileMode(0775)); err != nil {
 		return err
 	}
-	if err := e.db.Set(path.Join(name, MetaKey), data); err != nil {
+	if err := e.cdb.Set(path.Join(name, MetaKey), data); err != nil {
 		os.RemoveAll(path.Join(e.path, name))
 		return err
 	}
@@ -48,7 +76,7 @@ func (e *spillEngine) Relations() []engine.Relation {
 func (e *spillEngine) Relation(name string) (engine.Relation, error) {
 	var md meta.Metadata
 
-	data, err := e.db.GetCopy(path.Join(name, MetaKey))
+	data, err := e.cdb.GetCopy(path.Join(name, MetaKey))
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +93,6 @@ func (e *spillEngine) Relation(name string) (engine.Relation, error) {
 		md: md,
 		mp: mp,
 		id: name,
-		db: e.db,
+		db: e.cdb,
 	}, nil
 }

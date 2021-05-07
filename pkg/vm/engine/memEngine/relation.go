@@ -21,6 +21,10 @@ func (r *relation) Rows() int64 {
 	return r.md.Rows
 }
 
+func (r *relation) Size(_ string) int64 {
+	return 0
+}
+
 func (r *relation) Segment(id string, proc *process.Process) engine.Segment {
 	return segment.New(id, r.db, proc, r.md.Attrs)
 }

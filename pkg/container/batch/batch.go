@@ -2,13 +2,8 @@ package batch
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"hash/crc32"
-	"matrixone/pkg/compress"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -61,64 +56,21 @@ func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector,
 		if attr != name {
 			continue
 		}
-		if len(bat.Is) <= i || bat.Is[i].Wg == nil {
+		if len(bat.Is) <= i || bat.Is[i].R == nil {
 			return bat.Vecs[i], nil
 		}
-		// io wait
-		if err := bat.Is[i].Wg.Wait(); err != nil {
+		vec, err := bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc)
+		if err != nil {
 			return nil, err
 		}
-		data := bat.Vecs[i].Data
-		// decompress
-		if bat.Is[i].Alg == compress.Lz4 {
-			var err error
-
-			{
-				if sum := crc32.Checksum(data[mempool.CountSize:len(data)-4], crc32.IEEETable); sum != encoding.DecodeUint32(data[len(data)-4:]) {
-					return nil, errors.New("checksum mismatch")
-				}
-				data = data[:len(data)-4]
-			}
-			n := int(encoding.DecodeInt32(data[len(data)-4:]))
-			buf, err := proc.Alloc(int64(n))
-			if err != nil {
-				return nil, err
-			}
-			tm, err := compress.Decompress(data[mempool.CountSize:len(data)-4], buf[mempool.CountSize:], bat.Is[i].Alg)
-			if err != nil {
-				proc.Free(buf)
-				return nil, err
-			}
-			buf = buf[:mempool.CountSize+len(tm)]
-			proc.Free(data)
-			data = buf[:mempool.CountSize+n]
-			bat.Vecs[i].Data = data
-		} else {
-			if crc32.Checksum(data[mempool.CountSize:len(data)-4], crc32.IEEETable) != encoding.DecodeUint32(data[len(data)-4:]) {
-				return nil, errors.New("checksum mismatch")
-			}
-		}
-		if err := bat.Vecs[i].Read(data); err != nil {
-			return nil, err
-		}
-		copy(data, encoding.EncodeUint64(bat.Is[i].Ref))
-		bat.Is[i].Wg = nil
+		bat.Is[i].R = nil
+		bat.Vecs[i] = vec
 		return bat.Vecs[i], nil
 	}
 	return nil, fmt.Errorf("attribute '%s' not exist", name)
 }
 
-func (bat *Batch) WaitIo() {
-	for _, i := range bat.Is {
-		if i.Wg != nil {
-			i.Wg.Wait()
-			i.Wg = nil
-		}
-	}
-}
-
 func (bat *Batch) Clean(proc *process.Process) {
-	bat.WaitIo()
 	if bat.SelsData != nil {
 		proc.Free(bat.SelsData)
 		bat.Sels = nil
@@ -174,10 +126,4 @@ func (bat *Batch) String() string {
 		buf.WriteString(fmt.Sprintf("\t%s\n", bat.Vecs[i]))
 	}
 	return buf.String()
-}
-
-func (w *WaitGroup) Wait() error {
-	_, err := w.Ap.WaitFor(w.Id)
-	w.Ap.Close()
-	return err
 }

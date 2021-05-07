@@ -1,10 +1,17 @@
 package mergegroup
 
 import (
-	"matrixone/pkg/container/vector"
+	"matrixone/pkg/container/block"
 	"matrixone/pkg/hash"
 	"matrixone/pkg/intmap/fastmap"
 	"matrixone/pkg/sql/colexec/aggregation"
+	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/metadata"
+)
+
+const (
+	Build = iota
+	Eval
 )
 
 const (
@@ -17,20 +24,33 @@ var (
 )
 
 type Container struct {
-	is     []int // index list
-	diffs  []bool
-	matchs []int64
-	attrs  []string
-	rattrs []string
-	hashs  []uint64
-	sels   [][]int64    // sels
-	slots  *fastmap.Map // hash code -> sels index
-	vecs   []*vector.Vector
-	groups map[uint64][]*hash.Group // hash code -> group list
+	state   int
+	spilled bool
+	rows    int64
+	is      []int // index list
+	diffs   []bool
+	matchs  []int64
+	attrs   []string
+	rattrs  []string
+	hashs   []uint64
+	sels    [][]int64    // sels
+	slots   *fastmap.Map // hash code -> sels index
+	bat     *block.Block
+	bats    []*block.Block
+	groups  map[uint64][]*hash.Group // hash code -> group list
+	spill   struct {
+		id    string
+		cs    []uint64
+		attrs []string
+		r     engine.Relation
+		e     engine.SpillEngine
+		md    []metadata.Attribute
+	}
 }
 
 type Argument struct {
 	Gs  []string
 	Ctr Container
+	E   engine.SpillEngine
 	Es  []aggregation.Extend
 }

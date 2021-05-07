@@ -10,7 +10,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
-	"matrixone/pkg/vm/register"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -61,13 +60,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			reg := proc.Reg.Ws[i]
 			v := <-reg.Ch
 			if v == nil {
+				reg.Ch = nil
 				reg.Wg.Done()
 				proc.Reg.Ws = append(proc.Reg.Ws[:i], proc.Reg.Ws[i+1:]...)
 				i--
 				continue
 			}
 			bat := v.(*batch.Batch)
-			if bat.Attrs == nil {
+			if bat == nil || bat.Attrs == nil {
 				reg.Wg.Done()
 				continue
 			}
@@ -77,6 +77,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				bat.Reorder(ctr.bat.Attrs)
 			}
 			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
+				reg.Ch = nil
 				reg.Wg.Done()
 				ctr.clean(bat, proc)
 				return true, err
@@ -96,12 +97,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			if len(bat.Sels) == 0 {
 				if err := ctr.processBatch(n.Limit, bat, proc); err != nil {
+					reg.Ch = nil
 					reg.Wg.Done()
 					ctr.clean(bat, proc)
 					return true, err
 				}
 			} else {
 				if err := ctr.processBatchSels(n.Limit, bat, proc); err != nil {
+					reg.Ch = nil
 					reg.Wg.Done()
 					ctr.clean(bat, proc)
 					return true, err
@@ -110,6 +113,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			bat.Clean(proc)
 			reg.Wg.Done()
 		}
+	}
+	if int64(len(ctr.sels)) < n.Limit {
+		for i, cmp := range ctr.cmps {
+			cmp.Set(0, ctr.bat.Vecs[i])
+		}
+		heap.Init(ctr)
 	}
 	for i, cmp := range ctr.cmps {
 		ctr.bat.Vecs[i] = cmp.Vector()
@@ -166,6 +175,7 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 	}
 	for i, cmp := range ctr.cmps {
 		cmp.Set(1, bat.Vecs[i])
+		cmp.Set(0, ctr.bat.Vecs[i])
 	}
 	for i, j := start, length; i < j; i++ {
 		if ctr.compare(1, 0, i, ctr.sels[0]) < 0 {
@@ -217,6 +227,7 @@ func (ctr *Container) processBatchSels(limit int64, bat *batch.Batch, proc *proc
 	}
 	for i, cmp := range ctr.cmps {
 		cmp.Set(1, bat.Vecs[i])
+		cmp.Set(0, ctr.bat.Vecs[i])
 	}
 	for i, j := start, length; i < j; i++ {
 		sel := bat.Sels[i]
@@ -244,5 +255,26 @@ func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
 		ctr.data = nil
 		ctr.sels = nil
 	}
-	register.FreeRegisters(proc)
+	{
+		for _, reg := range proc.Reg.Ws {
+			if reg.Ch != nil {
+				v := <-reg.Ch
+				switch {
+				case v == nil:
+					reg.Ch = nil
+					reg.Wg.Done()
+				default:
+					bat := v.(*batch.Batch)
+					if bat == nil || bat.Attrs == nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+					} else {
+						bat.Clean(proc)
+						reg.Ch = nil
+						reg.Wg.Done()
+					}
+				}
+			}
+		}
+	}
 }

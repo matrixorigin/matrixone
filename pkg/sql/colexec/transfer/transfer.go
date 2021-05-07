@@ -19,8 +19,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	reg := n.Reg
 	if reg.Ch == nil {
 		if proc.Reg.Ax != nil {
-			bat := proc.Reg.Ax.(*batch.Batch)
-			bat.Clean(proc)
+			if bat := proc.Reg.Ax.(*batch.Batch); bat != nil {
+				bat.Clean(proc)
+			}
 		}
 		return true, nil
 	}
