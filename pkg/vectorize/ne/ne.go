@@ -6,50 +6,50 @@ import (
 )
 
 var (
-    int8Ne func([]int8, []int8, []int64) []int64
-    int8NeSels func([]int8, []int8, []int64, []int64) []int64
-    int8NeScalar func(int8, []int8, []int64) []int64
-    int8NeScalarSels func(int8, []int8, []int64, []int64) []int64
-    int16Ne func([]int16, []int16, []int64) []int64
-    int16NeSels func([]int16, []int16, []int64, []int64) []int64
-    int16NeScalar func(int16, []int16, []int64) []int64
-    int16NeScalarSels func(int16, []int16, []int64, []int64) []int64
-    int32Ne func([]int32, []int32, []int64) []int64
-    int32NeSels func([]int32, []int32, []int64, []int64) []int64
-    int32NeScalar func(int32, []int32, []int64) []int64
-    int32NeScalarSels func(int32, []int32, []int64, []int64) []int64
-    int64Ne func([]int64, []int64, []int64) []int64
-    int64NeSels func([]int64, []int64, []int64, []int64) []int64
-    int64NeScalar func(int64, []int64, []int64) []int64
-    int64NeScalarSels func(int64, []int64, []int64, []int64) []int64
-    uint8Ne func([]uint8, []uint8, []int64) []int64
-    uint8NeSels func([]uint8, []uint8, []int64, []int64) []int64
-    uint8NeScalar func(uint8, []uint8, []int64) []int64
-    uint8NeScalarSels func(uint8, []uint8, []int64, []int64) []int64
-    uint16Ne func([]uint16, []uint16, []int64) []int64
-    uint16NeSels func([]uint16, []uint16, []int64, []int64) []int64
-    uint16NeScalar func(uint16, []uint16, []int64) []int64
-    uint16NeScalarSels func(uint16, []uint16, []int64, []int64) []int64
-    uint32Ne func([]uint32, []uint32, []int64) []int64
-    uint32NeSels func([]uint32, []uint32, []int64, []int64) []int64
-    uint32NeScalar func(uint32, []uint32, []int64) []int64
-    uint32NeScalarSels func(uint32, []uint32, []int64, []int64) []int64
-    uint64Ne func([]uint64, []uint64, []int64) []int64
-    uint64NeSels func([]uint64, []uint64, []int64, []int64) []int64
-    uint64NeScalar func(uint64, []uint64, []int64) []int64
-    uint64NeScalarSels func(uint64, []uint64, []int64, []int64) []int64
-    float32Ne func([]float32, []float32, []int64) []int64
-    float32NeSels func([]float32, []float32, []int64, []int64) []int64
-    float32NeScalar func(float32, []float32, []int64) []int64
-    float32NeScalarSels func(float32, []float32, []int64, []int64) []int64
-    float64Ne func([]float64, []float64, []int64) []int64
-    float64NeSels func([]float64, []float64, []int64, []int64) []int64
-    float64NeScalar func(float64, []float64, []int64) []int64
-    float64NeScalarSels func(float64, []float64, []int64, []int64) []int64
-    strNe func(*types.Bytes, *types.Bytes, []int64) []int64
-    strNeSels func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
-    strNeScalar func([]byte, *types.Bytes, []int64) []int64
-    strNeScalarSels func([]byte, *types.Bytes, []int64, []int64) []int64
+	int8Ne              func([]int8, []int8, []int64) []int64
+	int8NeSels          func([]int8, []int8, []int64, []int64) []int64
+	int8NeScalar        func(int8, []int8, []int64) []int64
+	int8NeScalarSels    func(int8, []int8, []int64, []int64) []int64
+	int16Ne             func([]int16, []int16, []int64) []int64
+	int16NeSels         func([]int16, []int16, []int64, []int64) []int64
+	int16NeScalar       func(int16, []int16, []int64) []int64
+	int16NeScalarSels   func(int16, []int16, []int64, []int64) []int64
+	int32Ne             func([]int32, []int32, []int64) []int64
+	int32NeSels         func([]int32, []int32, []int64, []int64) []int64
+	int32NeScalar       func(int32, []int32, []int64) []int64
+	int32NeScalarSels   func(int32, []int32, []int64, []int64) []int64
+	int64Ne             func([]int64, []int64, []int64) []int64
+	int64NeSels         func([]int64, []int64, []int64, []int64) []int64
+	int64NeScalar       func(int64, []int64, []int64) []int64
+	int64NeScalarSels   func(int64, []int64, []int64, []int64) []int64
+	uint8Ne             func([]uint8, []uint8, []int64) []int64
+	uint8NeSels         func([]uint8, []uint8, []int64, []int64) []int64
+	uint8NeScalar       func(uint8, []uint8, []int64) []int64
+	uint8NeScalarSels   func(uint8, []uint8, []int64, []int64) []int64
+	uint16Ne            func([]uint16, []uint16, []int64) []int64
+	uint16NeSels        func([]uint16, []uint16, []int64, []int64) []int64
+	uint16NeScalar      func(uint16, []uint16, []int64) []int64
+	uint16NeScalarSels  func(uint16, []uint16, []int64, []int64) []int64
+	uint32Ne            func([]uint32, []uint32, []int64) []int64
+	uint32NeSels        func([]uint32, []uint32, []int64, []int64) []int64
+	uint32NeScalar      func(uint32, []uint32, []int64) []int64
+	uint32NeScalarSels  func(uint32, []uint32, []int64, []int64) []int64
+	uint64Ne            func([]uint64, []uint64, []int64) []int64
+	uint64NeSels        func([]uint64, []uint64, []int64, []int64) []int64
+	uint64NeScalar      func(uint64, []uint64, []int64) []int64
+	uint64NeScalarSels  func(uint64, []uint64, []int64, []int64) []int64
+	float32Ne           func([]float32, []float32, []int64) []int64
+	float32NeSels       func([]float32, []float32, []int64, []int64) []int64
+	float32NeScalar     func(float32, []float32, []int64) []int64
+	float32NeScalarSels func(float32, []float32, []int64, []int64) []int64
+	float64Ne           func([]float64, []float64, []int64) []int64
+	float64NeSels       func([]float64, []float64, []int64, []int64) []int64
+	float64NeScalar     func(float64, []float64, []int64) []int64
+	float64NeScalarSels func(float64, []float64, []int64, []int64) []int64
+	strNe               func(*types.Bytes, *types.Bytes, []int64) []int64
+	strNeSels           func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
+	strNeScalar         func([]byte, *types.Bytes, []int64) []int64
+	strNeScalarSels     func([]byte, *types.Bytes, []int64, []int64) []int64
 )
 
 func init() {
@@ -111,7 +111,7 @@ func int8NePure(xs, ys []int8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8NeSels(xs, ys []int8, rs, sels []int64) []int64 {
@@ -126,7 +126,7 @@ func int8NeSelsPure(xs, ys []int8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8NeScalar(x int8, ys []int8, rs []int64) []int64 {
@@ -141,7 +141,7 @@ func int8NeScalarPure(x int8, ys []int8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8NeScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
@@ -156,7 +156,7 @@ func int8NeScalarSelsPure(x int8, ys []int8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16Ne(xs, ys []int16, rs []int64) []int64 {
@@ -171,7 +171,7 @@ func int16NePure(xs, ys []int16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16NeSels(xs, ys []int16, rs, sels []int64) []int64 {
@@ -186,7 +186,7 @@ func int16NeSelsPure(xs, ys []int16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16NeScalar(x int16, ys []int16, rs []int64) []int64 {
@@ -201,7 +201,7 @@ func int16NeScalarPure(x int16, ys []int16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16NeScalarSels(x int16, ys []int16, rs, sels []int64) []int64 {
@@ -216,7 +216,7 @@ func int16NeScalarSelsPure(x int16, ys []int16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32Ne(xs, ys []int32, rs []int64) []int64 {
@@ -231,7 +231,7 @@ func int32NePure(xs, ys []int32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32NeSels(xs, ys []int32, rs, sels []int64) []int64 {
@@ -246,7 +246,7 @@ func int32NeSelsPure(xs, ys []int32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32NeScalar(x int32, ys []int32, rs []int64) []int64 {
@@ -261,7 +261,7 @@ func int32NeScalarPure(x int32, ys []int32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32NeScalarSels(x int32, ys []int32, rs, sels []int64) []int64 {
@@ -276,7 +276,7 @@ func int32NeScalarSelsPure(x int32, ys []int32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64Ne(xs, ys []int64, rs []int64) []int64 {
@@ -291,7 +291,7 @@ func int64NePure(xs, ys []int64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64NeSels(xs, ys []int64, rs, sels []int64) []int64 {
@@ -306,7 +306,7 @@ func int64NeSelsPure(xs, ys []int64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64NeScalar(x int64, ys []int64, rs []int64) []int64 {
@@ -321,7 +321,7 @@ func int64NeScalarPure(x int64, ys []int64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64NeScalarSels(x int64, ys []int64, rs, sels []int64) []int64 {
@@ -336,7 +336,7 @@ func int64NeScalarSelsPure(x int64, ys []int64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8Ne(xs, ys []uint8, rs []int64) []int64 {
@@ -351,7 +351,7 @@ func uint8NePure(xs, ys []uint8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8NeSels(xs, ys []uint8, rs, sels []int64) []int64 {
@@ -366,7 +366,7 @@ func uint8NeSelsPure(xs, ys []uint8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8NeScalar(x uint8, ys []uint8, rs []int64) []int64 {
@@ -381,7 +381,7 @@ func uint8NeScalarPure(x uint8, ys []uint8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8NeScalarSels(x uint8, ys []uint8, rs, sels []int64) []int64 {
@@ -396,7 +396,7 @@ func uint8NeScalarSelsPure(x uint8, ys []uint8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16Ne(xs, ys []uint16, rs []int64) []int64 {
@@ -411,7 +411,7 @@ func uint16NePure(xs, ys []uint16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16NeSels(xs, ys []uint16, rs, sels []int64) []int64 {
@@ -426,7 +426,7 @@ func uint16NeSelsPure(xs, ys []uint16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16NeScalar(x uint16, ys []uint16, rs []int64) []int64 {
@@ -441,7 +441,7 @@ func uint16NeScalarPure(x uint16, ys []uint16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16NeScalarSels(x uint16, ys []uint16, rs, sels []int64) []int64 {
@@ -456,7 +456,7 @@ func uint16NeScalarSelsPure(x uint16, ys []uint16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32Ne(xs, ys []uint32, rs []int64) []int64 {
@@ -471,7 +471,7 @@ func uint32NePure(xs, ys []uint32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32NeSels(xs, ys []uint32, rs, sels []int64) []int64 {
@@ -486,7 +486,7 @@ func uint32NeSelsPure(xs, ys []uint32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32NeScalar(x uint32, ys []uint32, rs []int64) []int64 {
@@ -501,7 +501,7 @@ func uint32NeScalarPure(x uint32, ys []uint32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32NeScalarSels(x uint32, ys []uint32, rs, sels []int64) []int64 {
@@ -516,7 +516,7 @@ func uint32NeScalarSelsPure(x uint32, ys []uint32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64Ne(xs, ys []uint64, rs []int64) []int64 {
@@ -531,7 +531,7 @@ func uint64NePure(xs, ys []uint64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64NeSels(xs, ys []uint64, rs, sels []int64) []int64 {
@@ -546,7 +546,7 @@ func uint64NeSelsPure(xs, ys []uint64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64NeScalar(x uint64, ys []uint64, rs []int64) []int64 {
@@ -561,7 +561,7 @@ func uint64NeScalarPure(x uint64, ys []uint64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64NeScalarSels(x uint64, ys []uint64, rs, sels []int64) []int64 {
@@ -576,7 +576,7 @@ func uint64NeScalarSelsPure(x uint64, ys []uint64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32Ne(xs, ys []float32, rs []int64) []int64 {
@@ -591,7 +591,7 @@ func float32NePure(xs, ys []float32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32NeSels(xs, ys []float32, rs, sels []int64) []int64 {
@@ -606,7 +606,7 @@ func float32NeSelsPure(xs, ys []float32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32NeScalar(x float32, ys []float32, rs []int64) []int64 {
@@ -621,7 +621,7 @@ func float32NeScalarPure(x float32, ys []float32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32NeScalarSels(x float32, ys []float32, rs, sels []int64) []int64 {
@@ -636,7 +636,7 @@ func float32NeScalarSelsPure(x float32, ys []float32, rs, sels []int64) []int64 
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64Ne(xs, ys []float64, rs []int64) []int64 {
@@ -651,7 +651,7 @@ func float64NePure(xs, ys []float64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64NeSels(xs, ys []float64, rs, sels []int64) []int64 {
@@ -666,7 +666,7 @@ func float64NeSelsPure(xs, ys []float64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64NeScalar(x float64, ys []float64, rs []int64) []int64 {
@@ -681,7 +681,7 @@ func float64NeScalarPure(x float64, ys []float64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64NeScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
@@ -696,7 +696,7 @@ func float64NeScalarSelsPure(x float64, ys []float64, rs, sels []int64) []int64 
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrNe(xs, ys *types.Bytes, rs []int64) []int64 {
@@ -706,12 +706,12 @@ func StrNe(xs, ys *types.Bytes, rs []int64) []int64 {
 func strNePure(xs, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(xs.Offsets); i < n; i++ {
-		if bytes.Compare(xs.Get(i), ys.Get(i)) != 0 {
+		if bytes.Compare(xs.Get(int64(i)), ys.Get(int64(i))) != 0 {
 			rs[rsi] = int64(i)
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrNeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
@@ -721,12 +721,12 @@ func StrNeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 func strNeSelsPure(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if bytes.Compare(xs.Get(int(sel)), ys.Get(int(sel))) != 0 {
+		if bytes.Compare(xs.Get(sel), ys.Get(sel)) != 0 {
 			rs[rsi] = sel
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrNeScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
@@ -736,12 +736,12 @@ func StrNeScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
 func strNeScalarPure(x []byte, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(ys.Offsets); i < n; i++ {
-		if bytes.Compare(x, ys.Get(i)) != 0 {
+		if bytes.Compare(x, ys.Get(int64(i))) != 0 {
 			rs[rsi] = int64(i)
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrNeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
@@ -751,10 +751,10 @@ func StrNeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 func strNeScalarSelsPure(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if bytes.Compare(x, ys.Get(int(sel))) != 0 {
+		if bytes.Compare(x, ys.Get(sel)) != 0 {
 			rs[rsi] = sel
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }

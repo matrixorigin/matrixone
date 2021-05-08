@@ -111,7 +111,7 @@ func int8LtPure(xs, ys []int8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8LtSels(xs, ys []int8, rs, sels []int64) []int64 {
@@ -126,7 +126,7 @@ func int8LtSelsPure(xs, ys []int8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8LtScalar(x int8, ys []int8, rs []int64) []int64 {
@@ -141,7 +141,7 @@ func int8LtScalarPure(x int8, ys []int8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8LtScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
@@ -156,7 +156,7 @@ func int8LtScalarSelsPure(x int8, ys []int8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16Lt(xs, ys []int16, rs []int64) []int64 {
@@ -171,7 +171,7 @@ func int16LtPure(xs, ys []int16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16LtSels(xs, ys []int16, rs, sels []int64) []int64 {
@@ -186,7 +186,7 @@ func int16LtSelsPure(xs, ys []int16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16LtScalar(x int16, ys []int16, rs []int64) []int64 {
@@ -201,7 +201,7 @@ func int16LtScalarPure(x int16, ys []int16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16LtScalarSels(x int16, ys []int16, rs, sels []int64) []int64 {
@@ -216,7 +216,7 @@ func int16LtScalarSelsPure(x int16, ys []int16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32Lt(xs, ys []int32, rs []int64) []int64 {
@@ -231,7 +231,7 @@ func int32LtPure(xs, ys []int32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32LtSels(xs, ys []int32, rs, sels []int64) []int64 {
@@ -246,7 +246,7 @@ func int32LtSelsPure(xs, ys []int32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32LtScalar(x int32, ys []int32, rs []int64) []int64 {
@@ -261,7 +261,7 @@ func int32LtScalarPure(x int32, ys []int32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32LtScalarSels(x int32, ys []int32, rs, sels []int64) []int64 {
@@ -276,7 +276,7 @@ func int32LtScalarSelsPure(x int32, ys []int32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64Lt(xs, ys []int64, rs []int64) []int64 {
@@ -291,7 +291,7 @@ func int64LtPure(xs, ys []int64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64LtSels(xs, ys []int64, rs, sels []int64) []int64 {
@@ -306,7 +306,7 @@ func int64LtSelsPure(xs, ys []int64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64LtScalar(x int64, ys []int64, rs []int64) []int64 {
@@ -321,7 +321,7 @@ func int64LtScalarPure(x int64, ys []int64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64LtScalarSels(x int64, ys []int64, rs, sels []int64) []int64 {
@@ -336,7 +336,7 @@ func int64LtScalarSelsPure(x int64, ys []int64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8Lt(xs, ys []uint8, rs []int64) []int64 {
@@ -351,7 +351,7 @@ func uint8LtPure(xs, ys []uint8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8LtSels(xs, ys []uint8, rs, sels []int64) []int64 {
@@ -366,7 +366,7 @@ func uint8LtSelsPure(xs, ys []uint8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8LtScalar(x uint8, ys []uint8, rs []int64) []int64 {
@@ -381,7 +381,7 @@ func uint8LtScalarPure(x uint8, ys []uint8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8LtScalarSels(x uint8, ys []uint8, rs, sels []int64) []int64 {
@@ -396,7 +396,7 @@ func uint8LtScalarSelsPure(x uint8, ys []uint8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16Lt(xs, ys []uint16, rs []int64) []int64 {
@@ -411,7 +411,7 @@ func uint16LtPure(xs, ys []uint16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16LtSels(xs, ys []uint16, rs, sels []int64) []int64 {
@@ -426,7 +426,7 @@ func uint16LtSelsPure(xs, ys []uint16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16LtScalar(x uint16, ys []uint16, rs []int64) []int64 {
@@ -441,7 +441,7 @@ func uint16LtScalarPure(x uint16, ys []uint16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16LtScalarSels(x uint16, ys []uint16, rs, sels []int64) []int64 {
@@ -456,7 +456,7 @@ func uint16LtScalarSelsPure(x uint16, ys []uint16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32Lt(xs, ys []uint32, rs []int64) []int64 {
@@ -471,7 +471,7 @@ func uint32LtPure(xs, ys []uint32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32LtSels(xs, ys []uint32, rs, sels []int64) []int64 {
@@ -486,7 +486,7 @@ func uint32LtSelsPure(xs, ys []uint32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32LtScalar(x uint32, ys []uint32, rs []int64) []int64 {
@@ -501,7 +501,7 @@ func uint32LtScalarPure(x uint32, ys []uint32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32LtScalarSels(x uint32, ys []uint32, rs, sels []int64) []int64 {
@@ -516,7 +516,7 @@ func uint32LtScalarSelsPure(x uint32, ys []uint32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64Lt(xs, ys []uint64, rs []int64) []int64 {
@@ -531,7 +531,7 @@ func uint64LtPure(xs, ys []uint64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64LtSels(xs, ys []uint64, rs, sels []int64) []int64 {
@@ -546,7 +546,7 @@ func uint64LtSelsPure(xs, ys []uint64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64LtScalar(x uint64, ys []uint64, rs []int64) []int64 {
@@ -561,7 +561,7 @@ func uint64LtScalarPure(x uint64, ys []uint64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64LtScalarSels(x uint64, ys []uint64, rs, sels []int64) []int64 {
@@ -576,7 +576,7 @@ func uint64LtScalarSelsPure(x uint64, ys []uint64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32Lt(xs, ys []float32, rs []int64) []int64 {
@@ -591,7 +591,7 @@ func float32LtPure(xs, ys []float32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32LtSels(xs, ys []float32, rs, sels []int64) []int64 {
@@ -606,7 +606,7 @@ func float32LtSelsPure(xs, ys []float32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32LtScalar(x float32, ys []float32, rs []int64) []int64 {
@@ -621,7 +621,7 @@ func float32LtScalarPure(x float32, ys []float32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32LtScalarSels(x float32, ys []float32, rs, sels []int64) []int64 {
@@ -636,7 +636,7 @@ func float32LtScalarSelsPure(x float32, ys []float32, rs, sels []int64) []int64 
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64Lt(xs, ys []float64, rs []int64) []int64 {
@@ -651,7 +651,7 @@ func float64LtPure(xs, ys []float64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64LtSels(xs, ys []float64, rs, sels []int64) []int64 {
@@ -666,7 +666,7 @@ func float64LtSelsPure(xs, ys []float64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64LtScalar(x float64, ys []float64, rs []int64) []int64 {
@@ -681,7 +681,7 @@ func float64LtScalarPure(x float64, ys []float64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64LtScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
@@ -696,7 +696,7 @@ func float64LtScalarSelsPure(x float64, ys []float64, rs, sels []int64) []int64 
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrLt(xs, ys *types.Bytes, rs []int64) []int64 {
@@ -706,12 +706,12 @@ func StrLt(xs, ys *types.Bytes, rs []int64) []int64 {
 func strLtPure(xs, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(xs.Offsets); i < n; i++ {
-		if bytes.Compare(xs.Get(i), ys.Get(i)) < 0 {
+		if bytes.Compare(xs.Get(int64(i)), ys.Get(int64(i))) < 0 {
 			rs[rsi] = int64(i)
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrLtSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
@@ -721,12 +721,12 @@ func StrLtSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 func strLtSelsPure(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if bytes.Compare(xs.Get(int(sel)), ys.Get(int(sel))) < 0 {
+		if bytes.Compare(xs.Get(sel), ys.Get(sel)) < 0 {
 			rs[rsi] = sel
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrLtScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
@@ -736,12 +736,12 @@ func StrLtScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
 func strLtScalarPure(x []byte, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(ys.Offsets); i < n; i++ {
-		if bytes.Compare(x, ys.Get(i)) < 0 {
+		if bytes.Compare(x, ys.Get(int64(i))) < 0 {
 			rs[rsi] = int64(i)
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrLtScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
@@ -751,10 +751,10 @@ func StrLtScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 func strLtScalarSelsPure(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if bytes.Compare(x, ys.Get(int(sel))) < 0 {
+		if bytes.Compare(x, ys.Get(sel)) < 0 {
 			rs[rsi] = sel
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
