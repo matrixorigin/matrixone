@@ -10,10 +10,10 @@ import (
 
 const (
 	Build = iota
-	Emit
+	Eval
 	Merge
-	MergeEmit
-	EmitPrepare
+	MergeEval
+	EvalPrepare
 )
 
 // Direction for ordering results.
@@ -57,7 +57,7 @@ type Container struct {
 		id    string
 		cs    []uint64
 		attrs []string
-		e     engine.Engine
+		e     engine.SpillEngine
 		md    []metadata.Attribute
 	}
 }
@@ -70,7 +70,7 @@ type Field struct {
 type Argument struct {
 	Fs  []Field
 	Ctr Container
-	E   engine.Engine
+	E   engine.SpillEngine
 }
 
 var directionName = [...]string{
