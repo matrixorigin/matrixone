@@ -1,928 +1,3245 @@
 package typecast
 
-import "matrixone/pkg/container/types"
+import (
+	"matrixone/pkg/container/types"
+	"strconv"
 
-var (
-	i8ToI8       func([]int8, []int8) []int8
-	i16ToI8      func([]int16, []int8) []int8
-	i32ToI8      func([]int32, []int8) []int8
-	i64ToI8      func([]int64, []int8) []int8
-	u8ToI8       func([]uint8, []int8) []int8
-	u16ToI8      func([]uint16, []int8) []int8
-	u32ToI8      func([]uint32, []int8) []int8
-	u64ToI8      func([]uint64, []int8) []int8
-	f32ToI8      func([]float32, []int8) []int8
-	f64ToI8      func([]float64, []int8) []int8
-	dateToI8     func([]types.Date, []int8) []int8
-	decimalToI8  func([]types.Decimal, []int8) []int8
-	dateTimeToI8 func([]types.Datetime, []int8) []int8
-	bytesToI8    func(*types.Bytes, []int8) []int8
-
-	i8ToI16       func([]int8, []int16) []int16
-	i16ToI16      func([]int16, []int16) []int16
-	i32ToI16      func([]int32, []int16) []int16
-	i64ToI16      func([]int64, []int16) []int16
-	u8ToI16       func([]uint8, []int16) []int16
-	u16ToI16      func([]uint16, []int16) []int16
-	u32ToI16      func([]uint32, []int16) []int16
-	u64ToI16      func([]uint64, []int16) []int16
-	f32ToI16      func([]float32, []int16) []int16
-	f64ToI16      func([]float64, []int16) []int16
-	dateToI16     func([]types.Date, []int16) []int16
-	decimalToI16  func([]types.Decimal, []int16) []int16
-	dateTimeToI16 func([]types.Datetime, []int16) []int16
-	bytesToI16    func(*types.Bytes, []int16) []int16
-
-	i8ToI32       func([]int8, []int32) []int32
-	i16ToI32      func([]int16, []int32) []int32
-	i32ToI32      func([]int32, []int32) []int32
-	i64ToI32      func([]int64, []int32) []int32
-	u8ToI32       func([]uint8, []int32) []int32
-	u16ToI32      func([]uint16, []int32) []int32
-	u32ToI32      func([]uint32, []int32) []int32
-	u64ToI32      func([]uint64, []int32) []int32
-	f32ToI32      func([]float32, []int32) []int32
-	f64ToI32      func([]float64, []int32) []int32
-	dateToI32     func([]types.Date, []int32) []int32
-	decimalToI32  func([]types.Decimal, []int32) []int32
-	dateTimeToI32 func([]types.Datetime, []int32) []int32
-	bytesToI32    func(*types.Bytes, []int32) []int32
-
-	i8ToI64       func([]int8, []int64) []int64
-	i16ToI64      func([]int16, []int64) []int64
-	i32ToI64      func([]int32, []int64) []int64
-	i64ToI64      func([]int64, []int64) []int64
-	u8ToI64       func([]uint8, []int64) []int64
-	u16ToI64      func([]uint16, []int64) []int64
-	u32ToI64      func([]uint32, []int64) []int64
-	u64ToI64      func([]uint64, []int64) []int64
-	f32ToI64      func([]float32, []int64) []int64
-	f64ToI64      func([]float64, []int64) []int64
-	dateToI64     func([]types.Date, []int64) []int64
-	decimalToI64  func([]types.Decimal, []int64) []int64
-	dateTimeToI64 func([]types.Datetime, []int64) []int64
-	bytesToI64    func(*types.Bytes, []int64) []int64
-
-	i8ToU8       func([]int8, []uint8) []uint8
-	i16ToU8      func([]int16, []uint8) []uint8
-	i32ToU8      func([]int32, []uint8) []uint8
-	i64ToU8      func([]int64, []uint8) []uint8
-	u8ToU8       func([]uint8, []uint8) []uint8
-	u16ToU8      func([]uint16, []uint8) []uint8
-	u32ToU8      func([]uint32, []uint8) []uint8
-	u64ToU8      func([]uint64, []uint8) []uint8
-	f32ToU8      func([]float32, []uint8) []uint8
-	f64ToU8      func([]float64, []uint8) []uint8
-	dateToU8     func([]types.Date, []uint8) []uint8
-	decimalToU8  func([]types.Decimal, []uint8) []uint8
-	dateTimeToU8 func([]types.Datetime, []uint8) []uint8
-	bytesToU8    func(*types.Bytes, []uint8) []uint8
-
-	i8ToU16       func([]int8, []uint16) []uint16
-	i16ToU16      func([]int16, []uint16) []uint16
-	i32ToU16      func([]int32, []uint16) []uint16
-	i64ToU16      func([]int64, []uint16) []uint16
-	u8ToU16       func([]uint8, []uint16) []uint16
-	u16ToU16      func([]uint16, []uint16) []uint16
-	u32ToU16      func([]uint32, []uint16) []uint16
-	u64ToU16      func([]uint64, []uint16) []uint16
-	f32ToU16      func([]float32, []uint16) []uint16
-	f64ToU16      func([]float64, []uint16) []uint16
-	dateToU16     func([]types.Date, []uint16) []uint16
-	decimalToU16  func([]types.Decimal, []uint16) []uint16
-	dateTimeToU16 func([]types.Datetime, []uint16) []uint16
-	bytesToU16    func(*types.Bytes, []uint16) []uint16
-
-	i8ToU32       func([]int8, []uint32) []uint32
-	i16ToU32      func([]int16, []uint32) []uint32
-	i32ToU32      func([]int32, []uint32) []uint32
-	i64ToU32      func([]int64, []uint32) []uint32
-	u8ToU32       func([]uint8, []uint32) []uint32
-	u16ToU32      func([]uint16, []uint32) []uint32
-	u32ToU32      func([]uint32, []uint32) []uint32
-	u64ToU32      func([]uint64, []uint32) []uint32
-	f32ToU32      func([]float32, []uint32) []uint32
-	f64ToU32      func([]float64, []uint32) []uint32
-	dateToU32     func([]types.Date, []uint32) []uint32
-	decimalToU32  func([]types.Decimal, []uint32) []uint32
-	dateTimeToU32 func([]types.Datetime, []uint32) []uint32
-	bytesToU32    func(*types.Bytes, []uint32) []uint32
-
-	i8ToU64       func([]int8, []uint64) []uint64
-	i16ToU64      func([]int16, []uint64) []uint64
-	i32ToU64      func([]int32, []uint64) []uint64
-	i64ToU64      func([]int64, []uint64) []uint64
-	u8ToU64       func([]uint8, []uint64) []uint64
-	u16ToU64      func([]uint16, []uint64) []uint64
-	u32ToU64      func([]uint32, []uint64) []uint64
-	u64ToU64      func([]uint64, []uint64) []uint64
-	f32ToU64      func([]float32, []uint64) []uint64
-	f64ToU64      func([]float64, []uint64) []uint64
-	dateToU64     func([]types.Date, []uint64) []uint64
-	decimalToU64  func([]types.Decimal, []uint64) []uint64
-	dateTimeToU64 func([]types.Datetime, []uint64) []uint64
-	bytesToU64    func(*types.Bytes, []uint64) []uint64
-
-	i8ToF32       func([]int8, []float32) []float32
-	i16ToF32      func([]int16, []float32) []float32
-	i32ToF32      func([]int32, []float32) []float32
-	i64ToF32      func([]int64, []float32) []float32
-	u8ToF32       func([]uint8, []float32) []float32
-	u16ToF32      func([]uint16, []float32) []float32
-	u32ToF32      func([]uint32, []float32) []float32
-	u64ToF32      func([]uint64, []float32) []float32
-	f32ToF32      func([]float32, []float32) []float32
-	f64ToF32      func([]float64, []float32) []float32
-	dateToF32     func([]types.Date, []float32) []float32
-	decimalToF32  func([]types.Decimal, []float32) []float32
-	dateTimeToF32 func([]types.Datetime, []float32) []float32
-	bytesToF32    func(*types.Bytes, []float32) []float32
-
-	i8ToF64       func([]int8, []float64) []float64
-	i16ToF64      func([]int16, []float64) []float64
-	i32ToF64      func([]int32, []float64) []float64
-	i64ToF64      func([]int64, []float64) []float64
-	u8ToF64       func([]uint8, []float64) []float64
-	u16ToF64      func([]uint16, []float64) []float64
-	u32ToF64      func([]uint32, []float64) []float64
-	u64ToF64      func([]uint64, []float64) []float64
-	f32ToF64      func([]float32, []float64) []float64
-	f64ToF64      func([]float64, []float64) []float64
-	dateToF64     func([]types.Date, []float64) []float64
-	decimalToF64  func([]types.Decimal, []float64) []float64
-	dateTimeToF64 func([]types.Datetime, []float64) []float64
-	bytesToF64    func(*types.Bytes, []float64) []float64
-
-	i8ToDate       func([]int8, []types.Date) []types.Date
-	i16ToDate      func([]int16, []types.Date) []types.Date
-	i32ToDate      func([]int32, []types.Date) []types.Date
-	i64ToDate      func([]int64, []types.Date) []types.Date
-	u8ToDate       func([]uint8, []types.Date) []types.Date
-	u16ToDate      func([]uint16, []types.Date) []types.Date
-	u32ToDate      func([]uint32, []types.Date) []types.Date
-	u64ToDate      func([]uint64, []types.Date) []types.Date
-	f32ToDate      func([]float32, []types.Date) []types.Date
-	f64ToDate      func([]float64, []types.Date) []types.Date
-	dateToDate     func([]types.Date, []types.Date) []types.Date
-	decimalToDate  func([]types.Decimal, []types.Date) []types.Date
-	dateTimeToDate func([]types.Datetime, []types.Date) []types.Date
-	bytesToDate    func(*types.Bytes, []types.Date) []types.Date
-
-	i8ToDatetime       func([]int8, []types.Datetime) []types.Datetime
-	i16ToDatetime      func([]int16, []types.Datetime) []types.Datetime
-	i32ToDatetime      func([]int32, []types.Datetime) []types.Datetime
-	i64ToDatetime      func([]int64, []types.Datetime) []types.Datetime
-	u8ToDatetime       func([]uint8, []types.Datetime) []types.Datetime
-	u16ToDatetime      func([]uint16, []types.Datetime) []types.Datetime
-	u32ToDatetime      func([]uint32, []types.Datetime) []types.Datetime
-	u64ToDatetime      func([]uint64, []types.Datetime) []types.Datetime
-	f32ToDatetime      func([]float32, []types.Datetime) []types.Datetime
-	f64ToDatetime      func([]float64, []types.Datetime) []types.Datetime
-	dateToDatetime     func([]types.Date, []types.Datetime) []types.Datetime
-	decimalToDatetime  func([]types.Decimal, []types.Datetime) []types.Datetime
-	dateTimeToDatetime func([]types.Datetime, []types.Datetime) []types.Datetime
-	bytesToDatetime    func(*types.Bytes, []types.Datetime) []types.Datetime
-
-	i8ToBytes       func([]int8, *types.Bytes) *types.Bytes
-	i16ToBytes      func([]int16, *types.Bytes) *types.Bytes
-	i32ToBytes      func([]int32, *types.Bytes) *types.Bytes
-	i64ToBytes      func([]int64, *types.Bytes) *types.Bytes
-	u8ToBytes       func([]uint8, *types.Bytes) *types.Bytes
-	u16ToBytes      func([]uint16, *types.Bytes) *types.Bytes
-	u32ToBytes      func([]uint32, *types.Bytes) *types.Bytes
-	u64ToBytes      func([]uint64, *types.Bytes) *types.Bytes
-	f32ToBytes      func([]float32, *types.Bytes) *types.Bytes
-	f64ToBytes      func([]float64, *types.Bytes) *types.Bytes
-	dateToBytes     func([]types.Date, *types.Bytes) *types.Bytes
-	decimalToBytes  func([]types.Decimal, *types.Bytes) *types.Bytes
-	dateTimeToBytes func([]types.Datetime, *types.Bytes) *types.Bytes
-	bytesToBytes    func(*types.Bytes, *types.Bytes) *types.Bytes
+	"golang.org/x/sys/cpu"
 )
 
-func I8ToI8(xs []int8, rs []int8) []int8 {
-	return rs
-}
-
-func I16ToI8(xs []int16, rs []int8) []int8 {
-	return rs
-}
-
-func I32ToI8(xs []int32, rs []int8) []int8 {
-	return rs
-}
-
-func I64ToI8(xs []int64, rs []int8) []int8 {
-	return rs
-}
-
-func U8ToI8(xs []uint8, rs []int8) []int8 {
-	return rs
-}
-
-func U16ToI8(xs []uint16, rs []int8) []int8 {
-	return rs
-}
-
-func U32ToI8(xs []uint32, rs []int8) []int8 {
-	return rs
-}
-
-func U64ToI8(xs []uint64, rs []int8) []int8 {
-	return rs
-}
-
-func F32ToI8(xs []float32, rs []int8) []int8 {
-	return rs
-}
-
-func F64ToI8(xs []float64, rs []int8) []int8 {
-	return rs
-}
-
-func DateToI8(xs []types.Date, rs []int8) []int8 {
-	return rs
-}
-
-func DatetimeToI8(xs []types.Datetime, rs []int8) []int8 {
-	return rs
-}
-
-func DecimalToI8(xs []types.Decimal, rs []int8) []int8 {
-	return rs
-}
-
-func BytesToI8(xs *types.Bytes, rs []int8) []int8 {
-	return rs
-}
-
-func I8ToI16(xs []int8, rs []int16) []int16 {
-	return rs
-}
-
-func I16ToI16(xs []int16, rs []int16) []int16 {
-	return rs
-}
-
-func I32ToI16(xs []int32, rs []int16) []int16 {
-	return rs
-}
-
-func I64ToI16(xs []int64, rs []int16) []int16 {
-	return rs
-}
-
-func U8ToI16(xs []uint8, rs []int16) []int16 {
-	return rs
-}
-
-func U16ToI16(xs []uint16, rs []int16) []int16 {
-	return rs
-}
-
-func U32ToI16(xs []uint32, rs []int16) []int16 {
-	return rs
-}
-
-func U64ToI16(xs []uint64, rs []int16) []int16 {
-	return rs
-}
-
-func F32ToI16(xs []float32, rs []int16) []int16 {
-	return rs
-}
-
-func F64ToI16(xs []float64, rs []int16) []int16 {
-	return rs
-}
-
-func DateToI16(xs []types.Date, rs []int16) []int16 {
-	return rs
-}
-
-func DatetimeToI16(xs []types.Datetime, rs []int16) []int16 {
-	return rs
-}
-
-func DecimalToI16(xs []types.Decimal, rs []int16) []int16 {
-	return rs
-}
-
-func BytesToI16(xs *types.Bytes, rs []int16) []int16 {
-	return rs
-}
-
-func I8ToI32(xs []int8, rs []int32) []int32 {
-	return rs
-}
-
-func I16ToI32(xs []int16, rs []int32) []int32 {
-	return rs
-}
-
-func I32ToI32(xs []int32, rs []int32) []int32 {
-	return rs
-}
-
-func I64ToI32(xs []int64, rs []int32) []int32 {
-	return rs
-}
-
-func U8ToI32(xs []uint8, rs []int32) []int32 {
-	return rs
-}
-
-func U16ToI32(xs []uint16, rs []int32) []int32 {
-	return rs
-}
-
-func U32ToI32(xs []uint32, rs []int32) []int32 {
-	return rs
-}
-
-func U64ToI32(xs []uint64, rs []int32) []int32 {
-	return rs
-}
-
-func F32ToI32(xs []float32, rs []int32) []int32 {
-	return rs
-}
-
-func F64ToI32(xs []float64, rs []int32) []int32 {
-	return rs
-}
-
-func DateToI32(xs []types.Date, rs []int32) []int32 {
-	return rs
-}
-
-func DatetimeToI32(xs []types.Datetime, rs []int32) []int32 {
-	return rs
-}
-
-func DecimalToI32(xs []types.Decimal, rs []int32) []int32 {
-	return rs
-}
-
-func BytesToI32(xs *types.Bytes, rs []int32) []int32 {
-	return rs
-}
-
-func I8ToI64(xs []int8, rs []int64) []int64 {
-	return rs
-}
-
-func I16ToI64(xs []int16, rs []int64) []int64 {
-	return rs
-}
-
-func I32ToI64(xs []int32, rs []int64) []int64 {
-	return rs
-}
-
-func I64ToI64(xs []int64, rs []int64) []int64 {
-	return rs
-}
-
-func U8ToI64(xs []uint8, rs []int64) []int64 {
-	return rs
-}
-
-func U16ToI64(xs []uint16, rs []int64) []int64 {
-	return rs
-}
-
-func U32ToI64(xs []uint32, rs []int64) []int64 {
-	return rs
-}
-
-func U64ToI64(xs []uint64, rs []int64) []int64 {
-	return rs
-}
-
-func F32ToI64(xs []float32, rs []int64) []int64 {
-	return rs
-}
-
-func F64ToI64(xs []float64, rs []int64) []int64 {
-	return rs
-}
-
-func DateToI64(xs []types.Date, rs []int64) []int64 {
-	return rs
-}
-
-func DatetimeToI64(xs []types.Datetime, rs []int64) []int64 {
-	return rs
-}
-
-func DecimalToI64(xs []types.Decimal, rs []int64) []int64 {
-	return rs
-}
-
-func BytesToI64(xs *types.Bytes, rs []int64) []int64 {
-	return rs
-}
-
-func I8ToU8(xs []int8, rs []uint8) []uint8 {
-	return rs
-}
-
-func I16ToU8(xs []int16, rs []uint8) []uint8 {
-	return rs
-}
-
-func I32ToU8(xs []int32, rs []uint8) []uint8 {
-	return rs
-}
-
-func I64ToU8(xs []int64, rs []uint8) []uint8 {
-	return rs
-}
-
-func U8ToU8(xs []uint8, rs []uint8) []uint8 {
-	return rs
-}
-
-func U16ToU8(xs []uint16, rs []uint8) []uint8 {
-	return rs
-}
-
-func U32ToU8(xs []uint32, rs []uint8) []uint8 {
-	return rs
-}
-
-func U64ToU8(xs []uint64, rs []uint8) []uint8 {
-	return rs
-}
-
-func F32ToU8(xs []float32, rs []uint8) []uint8 {
-	return rs
-}
-
-func F64ToU8(xs []float64, rs []uint8) []uint8 {
-	return rs
-}
-
-func DateToU8(xs []types.Date, rs []uint8) []uint8 {
-	return rs
-}
-
-func DatetimeToU8(xs []types.Datetime, rs []uint8) []uint8 {
-	return rs
-}
-
-func DecimalToU8(xs []types.Decimal, rs []uint8) []uint8 {
-	return rs
-}
-
-func BytesToU8(xs *types.Bytes, rs []uint8) []uint8 {
-	return rs
-}
-
-func I8ToU16(xs []int8, rs []uint16) []uint16 {
-	return rs
-}
-
-func I16ToU16(xs []int16, rs []uint16) []uint16 {
-	return rs
-}
-
-func I32ToU16(xs []int32, rs []uint16) []uint16 {
-	return rs
-}
-
-func I64ToU16(xs []int64, rs []uint16) []uint16 {
-	return rs
-}
-
-func U8ToU16(xs []uint8, rs []uint16) []uint16 {
-	return rs
-}
-
-func U16ToU16(xs []uint16, rs []uint16) []uint16 {
-	return rs
-}
-
-func U32ToU16(xs []uint32, rs []uint16) []uint16 {
-	return rs
-}
-
-func U64ToU16(xs []uint64, rs []uint16) []uint16 {
-	return rs
-}
-
-func F32ToU16(xs []float32, rs []uint16) []uint16 {
-	return rs
-}
-
-func F64ToU16(xs []float64, rs []uint16) []uint16 {
-	return rs
-}
-
-func DateToU16(xs []types.Date, rs []uint16) []uint16 {
-	return rs
-}
-
-func DatetimeToU16(xs []types.Datetime, rs []uint16) []uint16 {
-	return rs
-}
-
-func DecimalToU16(xs []types.Decimal, rs []uint16) []uint16 {
-	return rs
-}
-
-func BytesToU16(xs *types.Bytes, rs []uint16) []uint16 {
-	return rs
-}
-
-func I8ToU32(xs []int8, rs []uint32) []uint32 {
-	return rs
-}
-
-func I16ToU32(xs []int16, rs []uint32) []uint32 {
-	return rs
-}
-
-func I32ToU32(xs []int32, rs []uint32) []uint32 {
-	return rs
-}
-
-func I64ToU32(xs []int64, rs []uint32) []uint32 {
-	return rs
-}
-
-func U8ToU32(xs []uint8, rs []uint32) []uint32 {
-	return rs
-}
-
-func U16ToU32(xs []uint16, rs []uint32) []uint32 {
-	return rs
-}
-
-func U32ToU32(xs []uint32, rs []uint32) []uint32 {
-	return rs
-}
-
-func U64ToU32(xs []uint64, rs []uint32) []uint32 {
-	return rs
-}
-
-func F32ToU32(xs []float32, rs []uint32) []uint32 {
-	return rs
-}
-
-func F64ToU32(xs []float64, rs []uint32) []uint32 {
-	return rs
-}
-
-func DateToU32(xs []types.Date, rs []uint32) []uint32 {
-	return rs
-}
-
-func DatetimeToU32(xs []types.Datetime, rs []uint32) []uint32 {
-	return rs
-}
-
-func DecimalToU32(xs []types.Decimal, rs []uint32) []uint32 {
-	return rs
-}
-
-func BytesToU32(xs *types.Bytes, rs []uint32) []uint32 {
-	return rs
-}
-
-func I8ToU64(xs []int8, rs []uint64) []uint64 {
-	return rs
-}
-
-func I16ToU64(xs []int16, rs []uint64) []uint64 {
-	return rs
-}
-
-func I32ToU64(xs []int32, rs []uint64) []uint64 {
-	return rs
-}
-
-func I64ToU64(xs []int64, rs []uint64) []uint64 {
-	return rs
-}
-
-func U8ToU64(xs []uint8, rs []uint64) []uint64 {
-	return rs
-}
-
-func U16ToU64(xs []uint16, rs []uint64) []uint64 {
-	return rs
-}
-
-func U32ToU64(xs []uint32, rs []uint64) []uint64 {
-	return rs
-}
-
-func U64ToU64(xs []uint64, rs []uint64) []uint64 {
-	return rs
-}
-
-func F32ToU64(xs []float32, rs []uint64) []uint64 {
-	return rs
-}
-
-func F64ToU64(xs []float64, rs []uint64) []uint64 {
-	return rs
-}
-
-func DateToU64(xs []types.Date, rs []uint64) []uint64 {
-	return rs
-}
-
-func DatetimeToU64(xs []types.Datetime, rs []uint64) []uint64 {
-	return rs
-}
-
-func DecimalToU64(xs []types.Decimal, rs []uint64) []uint64 {
-	return rs
-}
-
-func BytesToU64(xs *types.Bytes, rs []uint64) []uint64 {
-	return rs
-}
-
-func I8ToF32(xs []int8, rs []float32) []float32 {
-	return rs
-}
-
-func I16ToF32(xs []int16, rs []float32) []float32 {
-	return rs
-}
-
-func I32ToF32(xs []int32, rs []float32) []float32 {
-	return rs
-}
-
-func I64ToF32(xs []int64, rs []float32) []float32 {
-	return rs
-}
-
-func U8ToF32(xs []uint8, rs []float32) []float32 {
-	return rs
-}
-
-func U16ToF32(xs []uint16, rs []float32) []float32 {
-	return rs
-}
-
-func U32ToF32(xs []uint32, rs []float32) []float32 {
-	return rs
-}
-
-func U64ToF32(xs []uint64, rs []float32) []float32 {
-	return rs
-}
-
-func F32ToF32(xs []float32, rs []float32) []float32 {
-	return rs
-}
-
-func F64ToF32(xs []float64, rs []float32) []float32 {
-	return rs
-}
-
-func DateToF32(xs []types.Date, rs []float32) []float32 {
-	return rs
-}
-
-func DatetimeToF32(xs []types.Datetime, rs []float32) []float32 {
-	return rs
-}
-
-func DecimalToF32(xs []types.Decimal, rs []float32) []float32 {
-	return rs
-}
-
-func BytesToF32(xs *types.Bytes, rs []float32) []float32 {
-	return rs
-}
-
-func I8ToF64(xs []int8, rs []float64) []float64 {
-	return rs
-}
-
-func I16ToF64(xs []int16, rs []float64) []float64 {
-	return rs
-}
-
-func I32ToF64(xs []int32, rs []float64) []float64 {
-	return rs
-}
-
-func I64ToF64(xs []int64, rs []float64) []float64 {
-	return rs
-}
-
-func U8ToF64(xs []uint8, rs []float64) []float64 {
-	return rs
-}
-
-func U16ToF64(xs []uint16, rs []float64) []float64 {
-	return rs
-}
-
-func U32ToF64(xs []uint32, rs []float64) []float64 {
-	return rs
-}
-
-func U64ToF64(xs []uint64, rs []float64) []float64 {
-	return rs
-}
-
-func F32ToF64(xs []float32, rs []float64) []float64 {
-	return rs
-}
-
-func F64ToF64(xs []float64, rs []float64) []float64 {
-	return rs
-}
-
-func DateToF64(xs []types.Date, rs []float64) []float64 {
-	return rs
-}
-
-func DatetimeToF64(xs []types.Datetime, rs []float64) []float64 {
-	return rs
-}
-
-func DecimalToF64(xs []types.Decimal, rs []float64) []float64 {
-	return rs
-}
-
-func BytesToF64(xs *types.Bytes, rs []float64) []float64 {
-	return rs
-}
-
-func I8ToDate(xs []int8, rs []types.Date) []types.Date {
-	return rs
-}
-
-func I16ToDate(xs []int16, rs []types.Date) []types.Date {
-	return rs
-}
-
-func I32ToDate(xs []int32, rs []types.Date) []types.Date {
-	return rs
-}
-
-func I64ToDate(xs []int64, rs []types.Date) []types.Date {
-	return rs
-}
-
-func U8ToDate(xs []uint8, rs []types.Date) []types.Date {
-	return rs
-}
-
-func U16ToDate(xs []uint16, rs []types.Date) []types.Date {
-	return rs
-}
-
-func U32ToDate(xs []uint32, rs []types.Date) []types.Date {
-	return rs
-}
-
-func U64ToDate(xs []uint64, rs []types.Date) []types.Date {
-	return rs
-}
-
-func F32ToDate(xs []float32, rs []types.Date) []types.Date {
-	return rs
-}
-
-func F64ToDate(xs []float64, rs []types.Date) []types.Date {
-	return rs
-}
-
-func DateToDate(xs []types.Date, rs []types.Date) []types.Date {
-	return rs
-}
-
-func DatetimeToDate(xs []types.Datetime, rs []types.Date) []types.Date {
-	return rs
-}
-
-func DecimalToDate(xs []types.Decimal, rs []types.Date) []types.Date {
-	return rs
-}
-
-func BytesToDate(xs *types.Bytes, rs []types.Date) []types.Date {
-	return rs
-}
-
-func I8ToDatetime(xs []int8, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func I16ToDatetime(xs []int16, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func I32ToDatetime(xs []int32, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func I64ToDatetime(xs []int64, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func U8ToDatetime(xs []uint8, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func U16ToDatetime(xs []uint16, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func U32ToDatetime(xs []uint32, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func U64ToDatetime(xs []uint64, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func F32ToDatetime(xs []float32, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func F64ToDatetime(xs []float64, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func DateToDatetime(xs []types.Date, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func DatetimeToDatetime(xs []types.Datetime, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func DecimalToDatetime(xs []types.Decimal, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func BytesToDatetime(xs *types.Bytes, rs []types.Datetime) []types.Datetime {
-	return rs
-}
-
-func I8ToBytes(xs []int8, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func I16ToBytes(xs []int16, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func I32ToBytes(xs []int32, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func I64ToBytes(xs []int64, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func U8ToBytes(xs []uint8, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func U16ToBytes(xs []uint16, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func U32ToBytes(xs []uint32, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func U64ToBytes(xs []uint64, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func F32ToBytes(xs []float32, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func F64ToBytes(xs []float64, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func DateToBytes(xs []types.Date, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func DatetimeToBytes(xs []types.Datetime, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func DecimalToBytes(xs []types.Decimal, rs *types.Bytes) *types.Bytes {
-	return rs
-}
-
-func BytesToBytes(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
-	return rs
+var (
+	int16ToInt8   func([]int16, []int8) ([]int8, error)
+	int32ToInt8   func([]int32, []int8) ([]int8, error)
+	int64ToInt8   func([]int64, []int8) ([]int8, error)
+	uint8ToInt8   func([]uint8, []int8) ([]int8, error)
+	uint16ToInt8  func([]uint16, []int8) ([]int8, error)
+	uint32ToInt8  func([]uint32, []int8) ([]int8, error)
+	uint64ToInt8  func([]uint64, []int8) ([]int8, error)
+	float32ToInt8 func([]float32, []int8) ([]int8, error)
+	float64ToInt8 func([]float64, []int8) ([]int8, error)
+
+	int8ToInt16    func([]int8, []int16) ([]int16, error)
+	int32ToInt16   func([]int32, []int16) ([]int16, error)
+	int64ToInt16   func([]int64, []int16) ([]int16, error)
+	uint8ToInt16   func([]uint8, []int16) ([]int16, error)
+	uint16ToInt16  func([]uint16, []int16) ([]int16, error)
+	uint32ToInt16  func([]uint32, []int16) ([]int16, error)
+	uint64ToInt16  func([]uint64, []int16) ([]int16, error)
+	float32ToInt16 func([]float32, []int16) ([]int16, error)
+	float64ToInt16 func([]float64, []int16) ([]int16, error)
+
+	int8ToInt32    func([]int8, []int32) ([]int32, error)
+	int16ToInt32   func([]int16, []int32) ([]int32, error)
+	int64ToInt32   func([]int64, []int32) ([]int32, error)
+	uint8ToInt32   func([]uint8, []int32) ([]int32, error)
+	uint16ToInt32  func([]uint16, []int32) ([]int32, error)
+	uint32ToInt32  func([]uint32, []int32) ([]int32, error)
+	uint64ToInt32  func([]uint64, []int32) ([]int32, error)
+	float32ToInt32 func([]float32, []int32) ([]int32, error)
+	float64ToInt32 func([]float64, []int32) ([]int32, error)
+
+	int8ToInt64    func([]int8, []int64) ([]int64, error)
+	int16ToInt64   func([]int16, []int64) ([]int64, error)
+	int32ToInt64   func([]int32, []int64) ([]int64, error)
+	uint8ToInt64   func([]uint8, []int64) ([]int64, error)
+	uint16ToInt64  func([]uint16, []int64) ([]int64, error)
+	uint32ToInt64  func([]uint32, []int64) ([]int64, error)
+	uint64ToInt64  func([]uint64, []int64) ([]int64, error)
+	float32ToInt64 func([]float32, []int64) ([]int64, error)
+	float64ToInt64 func([]float64, []int64) ([]int64, error)
+
+	int8ToUint8    func([]int8, []uint8) ([]uint8, error)
+	int16ToUint8   func([]int16, []uint8) ([]uint8, error)
+	int32ToUint8   func([]int32, []uint8) ([]uint8, error)
+	int64ToUint8   func([]int64, []uint8) ([]uint8, error)
+	uint16ToUint8  func([]uint16, []uint8) ([]uint8, error)
+	uint32ToUint8  func([]uint32, []uint8) ([]uint8, error)
+	uint64ToUint8  func([]uint64, []uint8) ([]uint8, error)
+	float32ToUint8 func([]float32, []uint8) ([]uint8, error)
+	float64ToUint8 func([]float64, []uint8) ([]uint8, error)
+
+	int8ToUint16    func([]int8, []uint16) ([]uint16, error)
+	int16ToUint16   func([]int16, []uint16) ([]uint16, error)
+	int32ToUint16   func([]int32, []uint16) ([]uint16, error)
+	int64ToUint16   func([]int64, []uint16) ([]uint16, error)
+	uint8ToUint16   func([]uint8, []uint16) ([]uint16, error)
+	uint32ToUint16  func([]uint32, []uint16) ([]uint16, error)
+	uint64ToUint16  func([]uint64, []uint16) ([]uint16, error)
+	float32ToUint16 func([]float32, []uint16) ([]uint16, error)
+	float64ToUint16 func([]float64, []uint16) ([]uint16, error)
+
+	int8ToUint32    func([]int8, []uint32) ([]uint32, error)
+	int16ToUint32   func([]int16, []uint32) ([]uint32, error)
+	int32ToUint32   func([]int32, []uint32) ([]uint32, error)
+	int64ToUint32   func([]int64, []uint32) ([]uint32, error)
+	uint8ToUint32   func([]uint8, []uint32) ([]uint32, error)
+	uint16ToUint32  func([]uint16, []uint32) ([]uint32, error)
+	uint64ToUint32  func([]uint64, []uint32) ([]uint32, error)
+	float32ToUint32 func([]float32, []uint32) ([]uint32, error)
+	float64ToUint32 func([]float64, []uint32) ([]uint32, error)
+
+	int8ToUint64    func([]int8, []uint64) ([]uint64, error)
+	int16ToUint64   func([]int16, []uint64) ([]uint64, error)
+	int32ToUint64   func([]int32, []uint64) ([]uint64, error)
+	int64ToUint64   func([]int64, []uint64) ([]uint64, error)
+	uint8ToUint64   func([]uint8, []uint64) ([]uint64, error)
+	uint16ToUint64  func([]uint16, []uint64) ([]uint64, error)
+	uint32ToUint64  func([]uint32, []uint64) ([]uint64, error)
+	float32ToUint64 func([]float32, []uint64) ([]uint64, error)
+	float64ToUint64 func([]float64, []uint64) ([]uint64, error)
+
+	int8ToFloat32    func([]int8, []float32) ([]float32, error)
+	int16ToFloat32   func([]int16, []float32) ([]float32, error)
+	int32ToFloat32   func([]int32, []float32) ([]float32, error)
+	int64ToFloat32   func([]int64, []float32) ([]float32, error)
+	uint8ToFloat32   func([]uint8, []float32) ([]float32, error)
+	uint16ToFloat32  func([]uint16, []float32) ([]float32, error)
+	uint32ToFloat32  func([]uint32, []float32) ([]float32, error)
+	uint64ToFloat32  func([]uint64, []float32) ([]float32, error)
+	float64ToFloat32 func([]float64, []float32) ([]float32, error)
+
+	int8ToFloat64    func([]int8, []float64) ([]float64, error)
+	int16ToFloat64   func([]int16, []float64) ([]float64, error)
+	int32ToFloat64   func([]int32, []float64) ([]float64, error)
+	int64ToFloat64   func([]int64, []float64) ([]float64, error)
+	uint8ToFloat64   func([]uint8, []float64) ([]float64, error)
+	uint16ToFloat64  func([]uint16, []float64) ([]float64, error)
+	uint32ToFloat64  func([]uint32, []float64) ([]float64, error)
+	uint64ToFloat64  func([]uint64, []float64) ([]float64, error)
+	float32ToFloat64 func([]float32, []float64) ([]float64, error)
+
+	bytesToInt8    func(*types.Bytes, []int8) ([]int8, error)
+	int8ToBytes    func([]int8, *types.Bytes) (*types.Bytes, error)
+	bytesToInt16   func(*types.Bytes, []int16) ([]int16, error)
+	int16ToBytes   func([]int16, *types.Bytes) (*types.Bytes, error)
+	bytesToInt32   func(*types.Bytes, []int32) ([]int32, error)
+	int32ToBytes   func([]int32, *types.Bytes) (*types.Bytes, error)
+	bytesToInt64   func(*types.Bytes, []int64) ([]int64, error)
+	int64ToBytes   func([]int64, *types.Bytes) (*types.Bytes, error)
+	bytesToUint8   func(*types.Bytes, []uint8) ([]uint8, error)
+	uint8ToBytes   func([]uint8, *types.Bytes) (*types.Bytes, error)
+	bytesToUint16  func(*types.Bytes, []uint16) ([]uint16, error)
+	uint16ToBytes  func([]uint16, *types.Bytes) (*types.Bytes, error)
+	bytesToUint32  func(*types.Bytes, []uint32) ([]uint32, error)
+	uint32ToBytes  func([]uint32, *types.Bytes) (*types.Bytes, error)
+	bytesToUint64  func(*types.Bytes, []uint64) ([]uint64, error)
+	uint64ToBytes  func([]uint64, *types.Bytes) (*types.Bytes, error)
+	bytesToFloat32 func(*types.Bytes, []float32) ([]float32, error)
+	float32ToBytes func([]float32, *types.Bytes) (*types.Bytes, error)
+	bytesToFloat64 func(*types.Bytes, []float64) ([]float64, error)
+	float64ToBytes func([]float64, *types.Bytes) (*types.Bytes, error)
+)
+
+func init() {
+	if cpu.X86.HasAVX512 {
+		int16ToInt8 = int16ToInt8Pure
+		int32ToInt8 = int32ToInt8Pure
+		int64ToInt8 = int64ToInt8Pure
+		uint8ToInt8 = uint8ToInt8Pure
+		uint16ToInt8 = uint16ToInt8Pure
+		uint32ToInt8 = uint32ToInt8Pure
+		uint64ToInt8 = uint64ToInt8Pure
+		float32ToInt8 = float32ToInt8Pure
+		float64ToInt8 = float64ToInt8Pure
+
+		int8ToInt16 = int8ToInt16Pure
+		int32ToInt16 = int32ToInt16Pure
+		int64ToInt16 = int64ToInt16Pure
+		uint8ToInt16 = uint8ToInt16Pure
+		uint16ToInt16 = uint16ToInt16Pure
+		uint32ToInt16 = uint32ToInt16Pure
+		uint64ToInt16 = uint64ToInt16Pure
+		float32ToInt16 = float32ToInt16Pure
+		float64ToInt16 = float64ToInt16Pure
+
+		int8ToInt32 = int8ToInt32Pure
+		int16ToInt32 = int16ToInt32Pure
+		int64ToInt32 = int64ToInt32Pure
+		uint8ToInt32 = uint8ToInt32Pure
+		uint16ToInt32 = uint16ToInt32Pure
+		uint32ToInt32 = uint32ToInt32Pure
+		uint64ToInt32 = uint64ToInt32Pure
+		float32ToInt32 = float32ToInt32Pure
+		float64ToInt32 = float64ToInt32Pure
+
+		int8ToInt64 = int8ToInt64Pure
+		int16ToInt64 = int16ToInt64Pure
+		int32ToInt64 = int32ToInt64Pure
+		uint8ToInt64 = uint8ToInt64Pure
+		uint16ToInt64 = uint16ToInt64Pure
+		uint32ToInt64 = uint32ToInt64Pure
+		uint64ToInt64 = uint64ToInt64Pure
+		float32ToInt64 = float32ToInt64Pure
+		float64ToInt64 = float64ToInt64Pure
+
+		int8ToUint8 = int8ToUint8Pure
+		int16ToUint8 = int16ToUint8Pure
+		int32ToUint8 = int32ToUint8Pure
+		int64ToUint8 = int64ToUint8Pure
+		uint16ToUint8 = uint16ToUint8Pure
+		uint32ToUint8 = uint32ToUint8Pure
+		uint64ToUint8 = uint64ToUint8Pure
+		float32ToUint8 = float32ToUint8Pure
+		float64ToUint8 = float64ToUint8Pure
+
+		int8ToUint16 = int8ToUint16Pure
+		int16ToUint16 = int16ToUint16Pure
+		int32ToUint16 = int32ToUint16Pure
+		int64ToUint16 = int64ToUint16Pure
+		uint8ToUint16 = uint8ToUint16Pure
+		uint32ToUint16 = uint32ToUint16Pure
+		uint64ToUint16 = uint64ToUint16Pure
+		float32ToUint16 = float32ToUint16Pure
+		float64ToUint16 = float64ToUint16Pure
+
+		int8ToUint32 = int8ToUint32Pure
+		int16ToUint32 = int16ToUint32Pure
+		int32ToUint32 = int32ToUint32Pure
+		int64ToUint32 = int64ToUint32Pure
+		uint8ToUint32 = uint8ToUint32Pure
+		uint16ToUint32 = uint16ToUint32Pure
+		uint64ToUint32 = uint64ToUint32Pure
+		float32ToUint32 = float32ToUint32Pure
+		float64ToUint32 = float64ToUint32Pure
+
+		int8ToUint64 = int8ToUint64Pure
+		int16ToUint64 = int16ToUint64Pure
+		int32ToUint64 = int32ToUint64Pure
+		int64ToUint64 = int64ToUint64Pure
+		uint8ToUint64 = uint8ToUint64Pure
+		uint16ToUint64 = uint16ToUint64Pure
+		uint32ToUint64 = uint32ToUint64Pure
+		float32ToUint64 = float32ToUint64Pure
+		float64ToUint64 = float64ToUint64Pure
+
+		int8ToFloat32 = int8ToFloat32Pure
+		int16ToFloat32 = int16ToFloat32Pure
+		int32ToFloat32 = int32ToFloat32Pure
+		int64ToFloat32 = int64ToFloat32Pure
+		uint8ToFloat32 = uint8ToFloat32Pure
+		uint16ToFloat32 = uint16ToFloat32Pure
+		uint32ToFloat32 = uint32ToFloat32Pure
+		uint64ToFloat32 = uint64ToFloat32Pure
+		float64ToFloat32 = float64ToFloat32Pure
+
+		int8ToFloat64 = int8ToFloat64Pure
+		int16ToFloat64 = int16ToFloat64Pure
+		int32ToFloat64 = int32ToFloat64Pure
+		int64ToFloat64 = int64ToFloat64Pure
+		uint8ToFloat64 = uint8ToFloat64Pure
+		uint16ToFloat64 = uint16ToFloat64Pure
+		uint32ToFloat64 = uint32ToFloat64Pure
+		uint64ToFloat64 = uint64ToFloat64Pure
+		float32ToFloat64 = float32ToFloat64Pure
+
+	} else if cpu.X86.HasAVX2 {
+		int16ToInt8 = int16ToInt8Pure
+		int32ToInt8 = int32ToInt8Pure
+		int64ToInt8 = int64ToInt8Pure
+		uint8ToInt8 = uint8ToInt8Pure
+		uint16ToInt8 = uint16ToInt8Pure
+		uint32ToInt8 = uint32ToInt8Pure
+		uint64ToInt8 = uint64ToInt8Pure
+		float32ToInt8 = float32ToInt8Pure
+		float64ToInt8 = float64ToInt8Pure
+
+		int8ToInt16 = int8ToInt16Pure
+		int32ToInt16 = int32ToInt16Pure
+		int64ToInt16 = int64ToInt16Pure
+		uint8ToInt16 = uint8ToInt16Pure
+		uint16ToInt16 = uint16ToInt16Pure
+		uint32ToInt16 = uint32ToInt16Pure
+		uint64ToInt16 = uint64ToInt16Pure
+		float32ToInt16 = float32ToInt16Pure
+		float64ToInt16 = float64ToInt16Pure
+
+		int8ToInt32 = int8ToInt32Pure
+		int16ToInt32 = int16ToInt32Pure
+		int64ToInt32 = int64ToInt32Pure
+		uint8ToInt32 = uint8ToInt32Pure
+		uint16ToInt32 = uint16ToInt32Pure
+		uint32ToInt32 = uint32ToInt32Pure
+		uint64ToInt32 = uint64ToInt32Pure
+		float32ToInt32 = float32ToInt32Pure
+		float64ToInt32 = float64ToInt32Pure
+
+		int8ToInt64 = int8ToInt64Pure
+		int16ToInt64 = int16ToInt64Pure
+		int32ToInt64 = int32ToInt64Pure
+		uint8ToInt64 = uint8ToInt64Pure
+		uint16ToInt64 = uint16ToInt64Pure
+		uint32ToInt64 = uint32ToInt64Pure
+		uint64ToInt64 = uint64ToInt64Pure
+		float32ToInt64 = float32ToInt64Pure
+		float64ToInt64 = float64ToInt64Pure
+
+		int8ToUint8 = int8ToUint8Pure
+		int16ToUint8 = int16ToUint8Pure
+		int32ToUint8 = int32ToUint8Pure
+		int64ToUint8 = int64ToUint8Pure
+		uint16ToUint8 = uint16ToUint8Pure
+		uint32ToUint8 = uint32ToUint8Pure
+		uint64ToUint8 = uint64ToUint8Pure
+		float32ToUint8 = float32ToUint8Pure
+		float64ToUint8 = float64ToUint8Pure
+
+		int8ToUint16 = int8ToUint16Pure
+		int16ToUint16 = int16ToUint16Pure
+		int32ToUint16 = int32ToUint16Pure
+		int64ToUint16 = int64ToUint16Pure
+		uint8ToUint16 = uint8ToUint16Pure
+		uint32ToUint16 = uint32ToUint16Pure
+		uint64ToUint16 = uint64ToUint16Pure
+		float32ToUint16 = float32ToUint16Pure
+		float64ToUint16 = float64ToUint16Pure
+
+		int8ToUint32 = int8ToUint32Pure
+		int16ToUint32 = int16ToUint32Pure
+		int32ToUint32 = int32ToUint32Pure
+		int64ToUint32 = int64ToUint32Pure
+		uint8ToUint32 = uint8ToUint32Pure
+		uint16ToUint32 = uint16ToUint32Pure
+		uint64ToUint32 = uint64ToUint32Pure
+		float32ToUint32 = float32ToUint32Pure
+		float64ToUint32 = float64ToUint32Pure
+
+		int8ToUint64 = int8ToUint64Pure
+		int16ToUint64 = int16ToUint64Pure
+		int32ToUint64 = int32ToUint64Pure
+		int64ToUint64 = int64ToUint64Pure
+		uint8ToUint64 = uint8ToUint64Pure
+		uint16ToUint64 = uint16ToUint64Pure
+		uint32ToUint64 = uint32ToUint64Pure
+		float32ToUint64 = float32ToUint64Pure
+		float64ToUint64 = float64ToUint64Pure
+
+		int8ToFloat32 = int8ToFloat32Pure
+		int16ToFloat32 = int16ToFloat32Pure
+		int32ToFloat32 = int32ToFloat32Pure
+		int64ToFloat32 = int64ToFloat32Pure
+		uint8ToFloat32 = uint8ToFloat32Pure
+		uint16ToFloat32 = uint16ToFloat32Pure
+		uint32ToFloat32 = uint32ToFloat32Pure
+		uint64ToFloat32 = uint64ToFloat32Pure
+		float64ToFloat32 = float64ToFloat32Pure
+
+		int8ToFloat64 = int8ToFloat64Pure
+		int16ToFloat64 = int16ToFloat64Pure
+		int32ToFloat64 = int32ToFloat64Pure
+		int64ToFloat64 = int64ToFloat64Pure
+		uint8ToFloat64 = uint8ToFloat64Pure
+		uint16ToFloat64 = uint16ToFloat64Pure
+		uint32ToFloat64 = uint32ToFloat64Pure
+		uint64ToFloat64 = uint64ToFloat64Pure
+		float32ToFloat64 = float32ToFloat64Pure
+
+	} else {
+		int16ToInt8 = int16ToInt8Pure
+		int32ToInt8 = int32ToInt8Pure
+		int64ToInt8 = int64ToInt8Pure
+		uint8ToInt8 = uint8ToInt8Pure
+		uint16ToInt8 = uint16ToInt8Pure
+		uint32ToInt8 = uint32ToInt8Pure
+		uint64ToInt8 = uint64ToInt8Pure
+		float32ToInt8 = float32ToInt8Pure
+		float64ToInt8 = float64ToInt8Pure
+
+		int8ToInt16 = int8ToInt16Pure
+		int32ToInt16 = int32ToInt16Pure
+		int64ToInt16 = int64ToInt16Pure
+		uint8ToInt16 = uint8ToInt16Pure
+		uint16ToInt16 = uint16ToInt16Pure
+		uint32ToInt16 = uint32ToInt16Pure
+		uint64ToInt16 = uint64ToInt16Pure
+		float32ToInt16 = float32ToInt16Pure
+		float64ToInt16 = float64ToInt16Pure
+
+		int8ToInt32 = int8ToInt32Pure
+		int16ToInt32 = int16ToInt32Pure
+		int64ToInt32 = int64ToInt32Pure
+		uint8ToInt32 = uint8ToInt32Pure
+		uint16ToInt32 = uint16ToInt32Pure
+		uint32ToInt32 = uint32ToInt32Pure
+		uint64ToInt32 = uint64ToInt32Pure
+		float32ToInt32 = float32ToInt32Pure
+		float64ToInt32 = float64ToInt32Pure
+
+		int8ToInt64 = int8ToInt64Pure
+		int16ToInt64 = int16ToInt64Pure
+		int32ToInt64 = int32ToInt64Pure
+		uint8ToInt64 = uint8ToInt64Pure
+		uint16ToInt64 = uint16ToInt64Pure
+		uint32ToInt64 = uint32ToInt64Pure
+		uint64ToInt64 = uint64ToInt64Pure
+		float32ToInt64 = float32ToInt64Pure
+		float64ToInt64 = float64ToInt64Pure
+
+		int8ToUint8 = int8ToUint8Pure
+		int16ToUint8 = int16ToUint8Pure
+		int32ToUint8 = int32ToUint8Pure
+		int64ToUint8 = int64ToUint8Pure
+		uint16ToUint8 = uint16ToUint8Pure
+		uint32ToUint8 = uint32ToUint8Pure
+		uint64ToUint8 = uint64ToUint8Pure
+		float32ToUint8 = float32ToUint8Pure
+		float64ToUint8 = float64ToUint8Pure
+
+		int8ToUint16 = int8ToUint16Pure
+		int16ToUint16 = int16ToUint16Pure
+		int32ToUint16 = int32ToUint16Pure
+		int64ToUint16 = int64ToUint16Pure
+		uint8ToUint16 = uint8ToUint16Pure
+		uint32ToUint16 = uint32ToUint16Pure
+		uint64ToUint16 = uint64ToUint16Pure
+		float32ToUint16 = float32ToUint16Pure
+		float64ToUint16 = float64ToUint16Pure
+
+		int8ToUint32 = int8ToUint32Pure
+		int16ToUint32 = int16ToUint32Pure
+		int32ToUint32 = int32ToUint32Pure
+		int64ToUint32 = int64ToUint32Pure
+		uint8ToUint32 = uint8ToUint32Pure
+		uint16ToUint32 = uint16ToUint32Pure
+		uint64ToUint32 = uint64ToUint32Pure
+		float32ToUint32 = float32ToUint32Pure
+		float64ToUint32 = float64ToUint32Pure
+
+		int8ToUint64 = int8ToUint64Pure
+		int16ToUint64 = int16ToUint64Pure
+		int32ToUint64 = int32ToUint64Pure
+		int64ToUint64 = int64ToUint64Pure
+		uint8ToUint64 = uint8ToUint64Pure
+		uint16ToUint64 = uint16ToUint64Pure
+		uint32ToUint64 = uint32ToUint64Pure
+		float32ToUint64 = float32ToUint64Pure
+		float64ToUint64 = float64ToUint64Pure
+
+		int8ToFloat32 = int8ToFloat32Pure
+		int16ToFloat32 = int16ToFloat32Pure
+		int32ToFloat32 = int32ToFloat32Pure
+		int64ToFloat32 = int64ToFloat32Pure
+		uint8ToFloat32 = uint8ToFloat32Pure
+		uint16ToFloat32 = uint16ToFloat32Pure
+		uint32ToFloat32 = uint32ToFloat32Pure
+		uint64ToFloat32 = uint64ToFloat32Pure
+		float64ToFloat32 = float64ToFloat32Pure
+
+		int8ToFloat64 = int8ToFloat64Pure
+		int16ToFloat64 = int16ToFloat64Pure
+		int32ToFloat64 = int32ToFloat64Pure
+		int64ToFloat64 = int64ToFloat64Pure
+		uint8ToFloat64 = uint8ToFloat64Pure
+		uint16ToFloat64 = uint16ToFloat64Pure
+		uint32ToFloat64 = uint32ToFloat64Pure
+		uint64ToFloat64 = uint64ToFloat64Pure
+		float32ToFloat64 = float32ToFloat64Pure
+
+	}
+
+	bytesToInt8 = bytesToInt8Pure
+	int8ToBytes = int8ToBytesPure
+	bytesToInt16 = bytesToInt16Pure
+	int16ToBytes = int16ToBytesPure
+	bytesToInt32 = bytesToInt32Pure
+	int32ToBytes = int32ToBytesPure
+	bytesToInt64 = bytesToInt64Pure
+	int64ToBytes = int64ToBytesPure
+	bytesToUint8 = bytesToUint8Pure
+	uint8ToBytes = uint8ToBytesPure
+	bytesToUint16 = bytesToUint16Pure
+	uint16ToBytes = uint16ToBytesPure
+	bytesToUint32 = bytesToUint32Pure
+	uint32ToBytes = uint32ToBytesPure
+	bytesToUint64 = bytesToUint64Pure
+	uint64ToBytes = uint64ToBytesPure
+	bytesToFloat32 = bytesToFloat32Pure
+	float32ToBytes = float32ToBytesPure
+	bytesToFloat64 = bytesToFloat64Pure
+	float64ToBytes = float64ToBytesPure
+}
+
+func Int16ToInt8(xs []int16, rs []int8) ([]int8, error) {
+	return int16ToInt8(xs, rs)
+}
+
+func int16ToInt8Pure(xs []int16, rs []int8) ([]int8, error) {
+	for i, x := range xs {
+		rs[i] = int8(x)
+	}
+	return rs, nil
+}
+
+/*
+func int16ToInt8Avx512(xs []int16, rs []int8) ([]int8, error) {
+	n := len(xs) / 8
+	int16ToInt8Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int32ToInt8(xs []int32, rs []int8) ([]int8, error) {
+	return int32ToInt8(xs, rs)
+}
+
+func int32ToInt8Pure(xs []int32, rs []int8) ([]int8, error) {
+	for i, x := range xs {
+		rs[i] = int8(x)
+	}
+	return rs, nil
+}
+
+/*
+func int32ToInt8Avx512(xs []int32, rs []int8) ([]int8, error) {
+	n := len(xs) / 4
+	int32ToInt8Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int64ToInt8(xs []int64, rs []int8) ([]int8, error) {
+	return int64ToInt8(xs, rs)
+}
+
+func int64ToInt8Pure(xs []int64, rs []int8) ([]int8, error) {
+	for i, x := range xs {
+		rs[i] = int8(x)
+	}
+	return rs, nil
+}
+
+/*
+func int64ToInt8Avx512(xs []int64, rs []int8) ([]int8, error) {
+	n := len(xs) / 2
+	int64ToInt8Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint8ToInt8(xs []uint8, rs []int8) ([]int8, error) {
+	return uint8ToInt8(xs, rs)
+}
+
+func uint8ToInt8Pure(xs []uint8, rs []int8) ([]int8, error) {
+	for i, x := range xs {
+		rs[i] = int8(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint8ToInt8Avx2(xs []uint8, rs []int8) ([]int8, error) {
+	n := len(xs) / 16
+	uint8ToInt8Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 16, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+
+func uint8ToInt8Avx512(xs []uint8, rs []int8) ([]int8, error) {
+	n := len(xs) / 16
+	uint8ToInt8Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 16, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint16ToInt8(xs []uint16, rs []int8) ([]int8, error) {
+	return uint16ToInt8(xs, rs)
+}
+
+func uint16ToInt8Pure(xs []uint16, rs []int8) ([]int8, error) {
+	for i, x := range xs {
+		rs[i] = int8(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint16ToInt8Avx512(xs []uint16, rs []int8) ([]int8, error) {
+	n := len(xs) / 8
+	uint16ToInt8Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint32ToInt8(xs []uint32, rs []int8) ([]int8, error) {
+	return uint32ToInt8(xs, rs)
+}
+
+func uint32ToInt8Pure(xs []uint32, rs []int8) ([]int8, error) {
+	for i, x := range xs {
+		rs[i] = int8(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint32ToInt8Avx512(xs []uint32, rs []int8) ([]int8, error) {
+	n := len(xs) / 4
+	uint32ToInt8Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint64ToInt8(xs []uint64, rs []int8) ([]int8, error) {
+	return uint64ToInt8(xs, rs)
+}
+
+func uint64ToInt8Pure(xs []uint64, rs []int8) ([]int8, error) {
+	for i, x := range xs {
+		rs[i] = int8(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint64ToInt8Avx512(xs []uint64, rs []int8) ([]int8, error) {
+	n := len(xs) / 2
+	uint64ToInt8Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float32ToInt8(xs []float32, rs []int8) ([]int8, error) {
+	return float32ToInt8(xs, rs)
+}
+
+func float32ToInt8Pure(xs []float32, rs []int8) ([]int8, error) {
+	for i, x := range xs {
+		rs[i] = int8(x)
+	}
+	return rs, nil
+}
+
+/*
+func float32ToInt8Avx512(xs []float32, rs []int8) ([]int8, error) {
+	n := len(xs) / 4
+	float32ToInt8Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float64ToInt8(xs []float64, rs []int8) ([]int8, error) {
+	return float64ToInt8(xs, rs)
+}
+
+func float64ToInt8Pure(xs []float64, rs []int8) ([]int8, error) {
+	for i, x := range xs {
+		rs[i] = int8(x)
+	}
+	return rs, nil
+}
+
+/*
+func float64ToInt8Avx512(xs []float64, rs []int8) ([]int8, error) {
+	n := len(xs) / 2
+	float64ToInt8Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int8ToInt16(xs []int8, rs []int16) ([]int16, error) {
+	return int8ToInt16(xs, rs)
+}
+
+func int8ToInt16Pure(xs []int8, rs []int16) ([]int16, error) {
+	for i, x := range xs {
+		rs[i] = int16(x)
+	}
+	return rs, nil
+}
+
+/*
+func int8ToInt16Avx2(xs []int8, rs []int16) ([]int16, error) {
+	n := len(xs) / 8
+	int8ToInt16Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+
+func int8ToInt16Avx512(xs []int8, rs []int16) ([]int16, error) {
+	n := len(xs) / 8
+	int8ToInt16Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int32ToInt16(xs []int32, rs []int16) ([]int16, error) {
+	return int32ToInt16(xs, rs)
+}
+
+func int32ToInt16Pure(xs []int32, rs []int16) ([]int16, error) {
+	for i, x := range xs {
+		rs[i] = int16(x)
+	}
+	return rs, nil
+}
+
+/*
+func int32ToInt16Avx512(xs []int32, rs []int16) ([]int16, error) {
+	n := len(xs) / 4
+	int32ToInt16Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int64ToInt16(xs []int64, rs []int16) ([]int16, error) {
+	return int64ToInt16(xs, rs)
+}
+
+func int64ToInt16Pure(xs []int64, rs []int16) ([]int16, error) {
+	for i, x := range xs {
+		rs[i] = int16(x)
+	}
+	return rs, nil
+}
+
+/*
+func int64ToInt16Avx512(xs []int64, rs []int16) ([]int16, error) {
+	n := len(xs) / 2
+	int64ToInt16Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint8ToInt16(xs []uint8, rs []int16) ([]int16, error) {
+	return uint8ToInt16(xs, rs)
+}
+
+func uint8ToInt16Pure(xs []uint8, rs []int16) ([]int16, error) {
+	for i, x := range xs {
+		rs[i] = int16(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint8ToInt16Avx2(xs []uint8, rs []int16) ([]int16, error) {
+	n := len(xs) / 8
+	uint8ToInt16Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+
+func uint8ToInt16Avx512(xs []uint8, rs []int16) ([]int16, error) {
+	n := len(xs) / 8
+	uint8ToInt16Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint16ToInt16(xs []uint16, rs []int16) ([]int16, error) {
+	return uint16ToInt16(xs, rs)
+}
+
+func uint16ToInt16Pure(xs []uint16, rs []int16) ([]int16, error) {
+	for i, x := range xs {
+		rs[i] = int16(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint16ToInt16Avx2(xs []uint16, rs []int16) ([]int16, error) {
+	n := len(xs) / 8
+	uint16ToInt16Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+
+func uint16ToInt16Avx512(xs []uint16, rs []int16) ([]int16, error) {
+	n := len(xs) / 8
+	uint16ToInt16Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint32ToInt16(xs []uint32, rs []int16) ([]int16, error) {
+	return uint32ToInt16(xs, rs)
+}
+
+func uint32ToInt16Pure(xs []uint32, rs []int16) ([]int16, error) {
+	for i, x := range xs {
+		rs[i] = int16(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint32ToInt16Avx512(xs []uint32, rs []int16) ([]int16, error) {
+	n := len(xs) / 4
+	uint32ToInt16Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint64ToInt16(xs []uint64, rs []int16) ([]int16, error) {
+	return uint64ToInt16(xs, rs)
+}
+
+func uint64ToInt16Pure(xs []uint64, rs []int16) ([]int16, error) {
+	for i, x := range xs {
+		rs[i] = int16(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint64ToInt16Avx512(xs []uint64, rs []int16) ([]int16, error) {
+	n := len(xs) / 2
+	uint64ToInt16Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float32ToInt16(xs []float32, rs []int16) ([]int16, error) {
+	return float32ToInt16(xs, rs)
+}
+
+func float32ToInt16Pure(xs []float32, rs []int16) ([]int16, error) {
+	for i, x := range xs {
+		rs[i] = int16(x)
+	}
+	return rs, nil
+}
+
+/*
+func float32ToInt16Avx512(xs []float32, rs []int16) ([]int16, error) {
+	n := len(xs) / 4
+	float32ToInt16Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float64ToInt16(xs []float64, rs []int16) ([]int16, error) {
+	return float64ToInt16(xs, rs)
+}
+
+func float64ToInt16Pure(xs []float64, rs []int16) ([]int16, error) {
+	for i, x := range xs {
+		rs[i] = int16(x)
+	}
+	return rs, nil
+}
+
+/*
+func float64ToInt16Avx512(xs []float64, rs []int16) ([]int16, error) {
+	n := len(xs) / 2
+	float64ToInt16Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int8ToInt32(xs []int8, rs []int32) ([]int32, error) {
+	return int8ToInt32(xs, rs)
+}
+
+func int8ToInt32Pure(xs []int8, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		rs[i] = int32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int8ToInt32Avx2(xs []int8, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	int8ToInt32Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+
+func int8ToInt32Avx512(xs []int8, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	int8ToInt32Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int16ToInt32(xs []int16, rs []int32) ([]int32, error) {
+	return int16ToInt32(xs, rs)
+}
+
+func int16ToInt32Pure(xs []int16, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		rs[i] = int32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int16ToInt32Avx2(xs []int16, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	int16ToInt32Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+
+func int16ToInt32Avx512(xs []int16, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	int16ToInt32Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int64ToInt32(xs []int64, rs []int32) ([]int32, error) {
+	return int64ToInt32(xs, rs)
+}
+
+func int64ToInt32Pure(xs []int64, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		rs[i] = int32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int64ToInt32Avx512(xs []int64, rs []int32) ([]int32, error) {
+	n := len(xs) / 2
+	int64ToInt32Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint8ToInt32(xs []uint8, rs []int32) ([]int32, error) {
+	return uint8ToInt32(xs, rs)
+}
+
+func uint8ToInt32Pure(xs []uint8, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		rs[i] = int32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint8ToInt32Avx2(xs []uint8, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	uint8ToInt32Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+
+func uint8ToInt32Avx512(xs []uint8, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	uint8ToInt32Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint16ToInt32(xs []uint16, rs []int32) ([]int32, error) {
+	return uint16ToInt32(xs, rs)
+}
+
+func uint16ToInt32Pure(xs []uint16, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		rs[i] = int32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint16ToInt32Avx2(xs []uint16, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	uint16ToInt32Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+
+func uint16ToInt32Avx512(xs []uint16, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	uint16ToInt32Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint32ToInt32(xs []uint32, rs []int32) ([]int32, error) {
+	return uint32ToInt32(xs, rs)
+}
+
+func uint32ToInt32Pure(xs []uint32, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		rs[i] = int32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint32ToInt32Avx2(xs []uint32, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	uint32ToInt32Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+
+func uint32ToInt32Avx512(xs []uint32, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	uint32ToInt32Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint64ToInt32(xs []uint64, rs []int32) ([]int32, error) {
+	return uint64ToInt32(xs, rs)
+}
+
+func uint64ToInt32Pure(xs []uint64, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		rs[i] = int32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint64ToInt32Avx512(xs []uint64, rs []int32) ([]int32, error) {
+	n := len(xs) / 2
+	uint64ToInt32Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float32ToInt32(xs []float32, rs []int32) ([]int32, error) {
+	return float32ToInt32(xs, rs)
+}
+
+func float32ToInt32Pure(xs []float32, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		rs[i] = int32(x)
+	}
+	return rs, nil
+}
+
+/*
+func float32ToInt32Avx2(xs []float32, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	float32ToInt32Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+
+func float32ToInt32Avx512(xs []float32, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	float32ToInt32Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float64ToInt32(xs []float64, rs []int32) ([]int32, error) {
+	return float64ToInt32(xs, rs)
+}
+
+func float64ToInt32Pure(xs []float64, rs []int32) ([]int32, error) {
+	for i, x := range xs {
+		rs[i] = int32(x)
+	}
+	return rs, nil
+}
+
+/*
+func float64ToInt32Avx2(xs []float64, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	float64ToInt32Avx2Asm(xs[:n*2], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+
+func float64ToInt32Avx512(xs []float64, rs []int32) ([]int32, error) {
+	n := len(xs) / 4
+	float64ToInt32Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = int32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int8ToInt64(xs []int8, rs []int64) ([]int64, error) {
+	return int8ToInt64(xs, rs)
+}
+
+func int8ToInt64Pure(xs []int8, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		rs[i] = int64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int8ToInt64Avx2(xs []int8, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	int8ToInt64Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+
+func int8ToInt64Avx512(xs []int8, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	int8ToInt64Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int16ToInt64(xs []int16, rs []int64) ([]int64, error) {
+	return int16ToInt64(xs, rs)
+}
+
+func int16ToInt64Pure(xs []int16, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		rs[i] = int64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int16ToInt64Avx2(xs []int16, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	int16ToInt64Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+
+func int16ToInt64Avx512(xs []int16, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	int16ToInt64Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int32ToInt64(xs []int32, rs []int64) ([]int64, error) {
+	return int32ToInt64(xs, rs)
+}
+
+func int32ToInt64Pure(xs []int32, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		rs[i] = int64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int32ToInt64Avx2(xs []int32, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	int32ToInt64Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+
+func int32ToInt64Avx512(xs []int32, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	int32ToInt64Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint8ToInt64(xs []uint8, rs []int64) ([]int64, error) {
+	return uint8ToInt64(xs, rs)
+}
+
+func uint8ToInt64Pure(xs []uint8, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		rs[i] = int64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint8ToInt64Avx2(xs []uint8, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	uint8ToInt64Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint8ToInt64Avx512(xs []uint8, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	uint8ToInt64Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint16ToInt64(xs []uint16, rs []int64) ([]int64, error) {
+	return uint16ToInt64(xs, rs)
+}
+
+func uint16ToInt64Pure(xs []uint16, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		rs[i] = int64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint16ToInt64Avx2(xs []uint16, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	uint16ToInt64Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint16ToInt64Avx512(xs []uint16, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	uint16ToInt64Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint32ToInt64(xs []uint32, rs []int64) ([]int64, error) {
+	return uint32ToInt64(xs, rs)
+}
+
+func uint32ToInt64Pure(xs []uint32, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		rs[i] = int64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint32ToInt64Avx2(xs []uint32, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	uint32ToInt64Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint32ToInt64Avx512(xs []uint32, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	uint32ToInt64Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
+	return uint64ToInt64(xs, rs)
+}
+
+func uint64ToInt64Pure(xs []uint64, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		rs[i] = int64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint64ToInt64Avx2(xs []uint64, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	uint64ToInt64Avx2Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint64ToInt64Avx512(xs []uint64, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	uint64ToInt64Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float32ToInt64(xs []float32, rs []int64) ([]int64, error) {
+	return float32ToInt64(xs, rs)
+}
+
+func float32ToInt64Pure(xs []float32, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		rs[i] = int64(x)
+	}
+	return rs, nil
+}
+
+/*
+func float32ToInt64Avx2(xs []float32, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	float32ToInt64Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+
+func float32ToInt64Avx512(xs []float32, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	float32ToInt64Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float64ToInt64(xs []float64, rs []int64) ([]int64, error) {
+	return float64ToInt64(xs, rs)
+}
+
+func float64ToInt64Pure(xs []float64, rs []int64) ([]int64, error) {
+	for i, x := range xs {
+		rs[i] = int64(x)
+	}
+	return rs, nil
+}
+
+/*
+func float64ToInt64Avx2(xs []float64, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	float64ToInt64Avx2Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+
+func float64ToInt64Avx512(xs []float64, rs []int64) ([]int64, error) {
+	n := len(xs) / 2
+	float64ToInt64Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = int64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int8ToUint8(xs []int8, rs []uint8) ([]uint8, error) {
+	return int8ToUint8(xs, rs)
+}
+
+func int8ToUint8Pure(xs []int8, rs []uint8) ([]uint8, error) {
+	for i, x := range xs {
+		rs[i] = uint8(x)
+	}
+	return rs, nil
+}
+
+/*
+func int8ToUint8Avx2(xs []int8, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 16
+	int8ToUint8Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 16, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+
+func int8ToUint8Avx512(xs []int8, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 16
+	int8ToUint8Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 16, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int16ToUint8(xs []int16, rs []uint8) ([]uint8, error) {
+	return int16ToUint8(xs, rs)
+}
+
+func int16ToUint8Pure(xs []int16, rs []uint8) ([]uint8, error) {
+	for i, x := range xs {
+		rs[i] = uint8(x)
+	}
+	return rs, nil
+}
+
+/*
+func int16ToUint8Avx512(xs []int16, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 8
+	int16ToUint8Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int32ToUint8(xs []int32, rs []uint8) ([]uint8, error) {
+	return int32ToUint8(xs, rs)
+}
+
+func int32ToUint8Pure(xs []int32, rs []uint8) ([]uint8, error) {
+	for i, x := range xs {
+		rs[i] = uint8(x)
+	}
+	return rs, nil
+}
+
+/*
+func int32ToUint8Avx512(xs []int32, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 4
+	int32ToUint8Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int64ToUint8(xs []int64, rs []uint8) ([]uint8, error) {
+	return int64ToUint8(xs, rs)
+}
+
+func int64ToUint8Pure(xs []int64, rs []uint8) ([]uint8, error) {
+	for i, x := range xs {
+		rs[i] = uint8(x)
+	}
+	return rs, nil
+}
+
+/*
+func int64ToUint8Avx512(xs []int64, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 2
+	int64ToUint8Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint16ToUint8(xs []uint16, rs []uint8) ([]uint8, error) {
+	return uint16ToUint8(xs, rs)
+}
+
+func uint16ToUint8Pure(xs []uint16, rs []uint8) ([]uint8, error) {
+	for i, x := range xs {
+		rs[i] = uint8(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint16ToUint8Avx512(xs []uint16, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 8
+	uint16ToUint8Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint32ToUint8(xs []uint32, rs []uint8) ([]uint8, error) {
+	return uint32ToUint8(xs, rs)
+}
+
+func uint32ToUint8Pure(xs []uint32, rs []uint8) ([]uint8, error) {
+	for i, x := range xs {
+		rs[i] = uint8(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint32ToUint8Avx512(xs []uint32, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 4
+	uint32ToUint8Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint64ToUint8(xs []uint64, rs []uint8) ([]uint8, error) {
+	return uint64ToUint8(xs, rs)
+}
+
+func uint64ToUint8Pure(xs []uint64, rs []uint8) ([]uint8, error) {
+	for i, x := range xs {
+		rs[i] = uint8(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint64ToUint8Avx512(xs []uint64, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 2
+	uint64ToUint8Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float32ToUint8(xs []float32, rs []uint8) ([]uint8, error) {
+	return float32ToUint8(xs, rs)
+}
+
+func float32ToUint8Pure(xs []float32, rs []uint8) ([]uint8, error) {
+	for i, x := range xs {
+		rs[i] = uint8(x)
+	}
+	return rs, nil
+}
+
+/*
+func float32ToUint8Avx512(xs []float32, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 4
+	float32ToUint8Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float64ToUint8(xs []float64, rs []uint8) ([]uint8, error) {
+	return float64ToUint8(xs, rs)
+}
+
+func float64ToUint8Pure(xs []float64, rs []uint8) ([]uint8, error) {
+	for i, x := range xs {
+		rs[i] = uint8(x)
+	}
+	return rs, nil
+}
+
+/*
+func float64ToUint8Avx512(xs []float64, rs []uint8) ([]uint8, error) {
+	n := len(xs) / 2
+	float64ToUint8Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint8(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int8ToUint16(xs []int8, rs []uint16) ([]uint16, error) {
+	return int8ToUint16(xs, rs)
+}
+
+func int8ToUint16Pure(xs []int8, rs []uint16) ([]uint16, error) {
+	for i, x := range xs {
+		rs[i] = uint16(x)
+	}
+	return rs, nil
+}
+
+/*
+func int8ToUint16Avx2(xs []int8, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 8
+	int8ToUint16Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+
+func int8ToUint16Avx512(xs []int8, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 8
+	int8ToUint16Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int16ToUint16(xs []int16, rs []uint16) ([]uint16, error) {
+	return int16ToUint16(xs, rs)
+}
+
+func int16ToUint16Pure(xs []int16, rs []uint16) ([]uint16, error) {
+	for i, x := range xs {
+		rs[i] = uint16(x)
+	}
+	return rs, nil
+}
+
+/*
+func int16ToUint16Avx2(xs []int16, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 8
+	int16ToUint16Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+
+func int16ToUint16Avx512(xs []int16, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 8
+	int16ToUint16Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int32ToUint16(xs []int32, rs []uint16) ([]uint16, error) {
+	return int32ToUint16(xs, rs)
+}
+
+func int32ToUint16Pure(xs []int32, rs []uint16) ([]uint16, error) {
+	for i, x := range xs {
+		rs[i] = uint16(x)
+	}
+	return rs, nil
+}
+
+/*
+func int32ToUint16Avx512(xs []int32, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 4
+	int32ToUint16Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int64ToUint16(xs []int64, rs []uint16) ([]uint16, error) {
+	return int64ToUint16(xs, rs)
+}
+
+func int64ToUint16Pure(xs []int64, rs []uint16) ([]uint16, error) {
+	for i, x := range xs {
+		rs[i] = uint16(x)
+	}
+	return rs, nil
+}
+
+/*
+func int64ToUint16Avx512(xs []int64, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 2
+	int64ToUint16Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint8ToUint16(xs []uint8, rs []uint16) ([]uint16, error) {
+	return uint8ToUint16(xs, rs)
+}
+
+func uint8ToUint16Pure(xs []uint8, rs []uint16) ([]uint16, error) {
+	for i, x := range xs {
+		rs[i] = uint16(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint8ToUint16Avx2(xs []uint8, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 8
+	uint8ToUint16Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+
+func uint8ToUint16Avx512(xs []uint8, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 8
+	uint8ToUint16Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 8, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint32ToUint16(xs []uint32, rs []uint16) ([]uint16, error) {
+	return uint32ToUint16(xs, rs)
+}
+
+func uint32ToUint16Pure(xs []uint32, rs []uint16) ([]uint16, error) {
+	for i, x := range xs {
+		rs[i] = uint16(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint32ToUint16Avx512(xs []uint32, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 4
+	uint32ToUint16Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint64ToUint16(xs []uint64, rs []uint16) ([]uint16, error) {
+	return uint64ToUint16(xs, rs)
+}
+
+func uint64ToUint16Pure(xs []uint64, rs []uint16) ([]uint16, error) {
+	for i, x := range xs {
+		rs[i] = uint16(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint64ToUint16Avx512(xs []uint64, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 2
+	uint64ToUint16Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float32ToUint16(xs []float32, rs []uint16) ([]uint16, error) {
+	return float32ToUint16(xs, rs)
+}
+
+func float32ToUint16Pure(xs []float32, rs []uint16) ([]uint16, error) {
+	for i, x := range xs {
+		rs[i] = uint16(x)
+	}
+	return rs, nil
+}
+
+/*
+func float32ToUint16Avx512(xs []float32, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 4
+	float32ToUint16Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float64ToUint16(xs []float64, rs []uint16) ([]uint16, error) {
+	return float64ToUint16(xs, rs)
+}
+
+func float64ToUint16Pure(xs []float64, rs []uint16) ([]uint16, error) {
+	for i, x := range xs {
+		rs[i] = uint16(x)
+	}
+	return rs, nil
+}
+
+/*
+func float64ToUint16Avx512(xs []float64, rs []uint16) ([]uint16, error) {
+	n := len(xs) / 2
+	float64ToUint16Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint16(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int8ToUint32(xs []int8, rs []uint32) ([]uint32, error) {
+	return int8ToUint32(xs, rs)
+}
+
+func int8ToUint32Pure(xs []int8, rs []uint32) ([]uint32, error) {
+	for i, x := range xs {
+		rs[i] = uint32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int8ToUint32Avx2(xs []int8, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	int8ToUint32Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+
+func int8ToUint32Avx512(xs []int8, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	int8ToUint32Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int16ToUint32(xs []int16, rs []uint32) ([]uint32, error) {
+	return int16ToUint32(xs, rs)
+}
+
+func int16ToUint32Pure(xs []int16, rs []uint32) ([]uint32, error) {
+	for i, x := range xs {
+		rs[i] = uint32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int16ToUint32Avx2(xs []int16, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	int16ToUint32Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+
+func int16ToUint32Avx512(xs []int16, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	int16ToUint32Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int32ToUint32(xs []int32, rs []uint32) ([]uint32, error) {
+	return int32ToUint32(xs, rs)
+}
+
+func int32ToUint32Pure(xs []int32, rs []uint32) ([]uint32, error) {
+	for i, x := range xs {
+		rs[i] = uint32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int32ToUint32Avx2(xs []int32, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	int32ToUint32Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+
+func int32ToUint32Avx512(xs []int32, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	int32ToUint32Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int64ToUint32(xs []int64, rs []uint32) ([]uint32, error) {
+	return int64ToUint32(xs, rs)
+}
+
+func int64ToUint32Pure(xs []int64, rs []uint32) ([]uint32, error) {
+	for i, x := range xs {
+		rs[i] = uint32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int64ToUint32Avx512(xs []int64, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 2
+	int64ToUint32Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint8ToUint32(xs []uint8, rs []uint32) ([]uint32, error) {
+	return uint8ToUint32(xs, rs)
+}
+
+func uint8ToUint32Pure(xs []uint8, rs []uint32) ([]uint32, error) {
+	for i, x := range xs {
+		rs[i] = uint32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint8ToUint32Avx2(xs []uint8, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	uint8ToUint32Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+
+func uint8ToUint32Avx512(xs []uint8, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	uint8ToUint32Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint16ToUint32(xs []uint16, rs []uint32) ([]uint32, error) {
+	return uint16ToUint32(xs, rs)
+}
+
+func uint16ToUint32Pure(xs []uint16, rs []uint32) ([]uint32, error) {
+	for i, x := range xs {
+		rs[i] = uint32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint16ToUint32Avx2(xs []uint16, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	uint16ToUint32Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+
+func uint16ToUint32Avx512(xs []uint16, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	uint16ToUint32Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint64ToUint32(xs []uint64, rs []uint32) ([]uint32, error) {
+	return uint64ToUint32(xs, rs)
+}
+
+func uint64ToUint32Pure(xs []uint64, rs []uint32) ([]uint32, error) {
+	for i, x := range xs {
+		rs[i] = uint32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint64ToUint32Avx512(xs []uint64, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 2
+	uint64ToUint32Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float32ToUint32(xs []float32, rs []uint32) ([]uint32, error) {
+	return float32ToUint32(xs, rs)
+}
+
+func float32ToUint32Pure(xs []float32, rs []uint32) ([]uint32, error) {
+	for i, x := range xs {
+		rs[i] = uint32(x)
+	}
+	return rs, nil
+}
+
+/*
+func float32ToUint32Avx2(xs []float32, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	float32ToUint32Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+
+func float32ToUint32Avx512(xs []float32, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	float32ToUint32Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float64ToUint32(xs []float64, rs []uint32) ([]uint32, error) {
+	return float64ToUint32(xs, rs)
+}
+
+func float64ToUint32Pure(xs []float64, rs []uint32) ([]uint32, error) {
+	for i, x := range xs {
+		rs[i] = uint32(x)
+	}
+	return rs, nil
+}
+
+/*
+func float64ToUint32Avx2(xs []float64, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	float64ToUint32Avx2Asm(xs[:n*2], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+
+func float64ToUint32Avx512(xs []float64, rs []uint32) ([]uint32, error) {
+	n := len(xs) / 4
+	float64ToUint32Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = uint32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int8ToUint64(xs []int8, rs []uint64) ([]uint64, error) {
+	return int8ToUint64(xs, rs)
+}
+
+func int8ToUint64Pure(xs []int8, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		rs[i] = uint64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int8ToUint64Avx2(xs []int8, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	int8ToUint64Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+
+func int8ToUint64Avx512(xs []int8, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	int8ToUint64Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int16ToUint64(xs []int16, rs []uint64) ([]uint64, error) {
+	return int16ToUint64(xs, rs)
+}
+
+func int16ToUint64Pure(xs []int16, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		rs[i] = uint64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int16ToUint64Avx2(xs []int16, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	int16ToUint64Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+
+func int16ToUint64Avx512(xs []int16, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	int16ToUint64Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int32ToUint64(xs []int32, rs []uint64) ([]uint64, error) {
+	return int32ToUint64(xs, rs)
+}
+
+func int32ToUint64Pure(xs []int32, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		rs[i] = uint64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int32ToUint64Avx2(xs []int32, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	int32ToUint64Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+
+func int32ToUint64Avx512(xs []int32, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	int32ToUint64Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
+	return int64ToUint64(xs, rs)
+}
+
+func int64ToUint64Pure(xs []int64, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		rs[i] = uint64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int64ToUint64Avx2(xs []int64, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	int64ToUint64Avx2Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+
+func int64ToUint64Avx512(xs []int64, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	int64ToUint64Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint8ToUint64(xs []uint8, rs []uint64) ([]uint64, error) {
+	return uint8ToUint64(xs, rs)
+}
+
+func uint8ToUint64Pure(xs []uint8, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		rs[i] = uint64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint8ToUint64Avx2(xs []uint8, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	uint8ToUint64Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint8ToUint64Avx512(xs []uint8, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	uint8ToUint64Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint16ToUint64(xs []uint16, rs []uint64) ([]uint64, error) {
+	return uint16ToUint64(xs, rs)
+}
+
+func uint16ToUint64Pure(xs []uint16, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		rs[i] = uint64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint16ToUint64Avx2(xs []uint16, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	uint16ToUint64Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint16ToUint64Avx512(xs []uint16, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	uint16ToUint64Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint32ToUint64(xs []uint32, rs []uint64) ([]uint64, error) {
+	return uint32ToUint64(xs, rs)
+}
+
+func uint32ToUint64Pure(xs []uint32, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		rs[i] = uint64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint32ToUint64Avx2(xs []uint32, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	uint32ToUint64Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint32ToUint64Avx512(xs []uint32, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	uint32ToUint64Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float32ToUint64(xs []float32, rs []uint64) ([]uint64, error) {
+	return float32ToUint64(xs, rs)
+}
+
+func float32ToUint64Pure(xs []float32, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		rs[i] = uint64(x)
+	}
+	return rs, nil
+}
+
+/*
+func float32ToUint64Avx2(xs []float32, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	float32ToUint64Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+
+func float32ToUint64Avx512(xs []float32, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	float32ToUint64Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float64ToUint64(xs []float64, rs []uint64) ([]uint64, error) {
+	return float64ToUint64(xs, rs)
+}
+
+func float64ToUint64Pure(xs []float64, rs []uint64) ([]uint64, error) {
+	for i, x := range xs {
+		rs[i] = uint64(x)
+	}
+	return rs, nil
+}
+
+/*
+func float64ToUint64Avx2(xs []float64, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	float64ToUint64Avx2Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+
+func float64ToUint64Avx512(xs []float64, rs []uint64) ([]uint64, error) {
+	n := len(xs) / 2
+	float64ToUint64Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = uint64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int8ToFloat32(xs []int8, rs []float32) ([]float32, error) {
+	return int8ToFloat32(xs, rs)
+}
+
+func int8ToFloat32Pure(xs []int8, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		rs[i] = float32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int8ToFloat32Avx2(xs []int8, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	int8ToFloat32Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+
+func int8ToFloat32Avx512(xs []int8, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	int8ToFloat32Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int16ToFloat32(xs []int16, rs []float32) ([]float32, error) {
+	return int16ToFloat32(xs, rs)
+}
+
+func int16ToFloat32Pure(xs []int16, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		rs[i] = float32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int16ToFloat32Avx2(xs []int16, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	int16ToFloat32Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+
+func int16ToFloat32Avx512(xs []int16, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	int16ToFloat32Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int32ToFloat32(xs []int32, rs []float32) ([]float32, error) {
+	return int32ToFloat32(xs, rs)
+}
+
+func int32ToFloat32Pure(xs []int32, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		rs[i] = float32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int32ToFloat32Avx2(xs []int32, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	int32ToFloat32Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+
+func int32ToFloat32Avx512(xs []int32, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	int32ToFloat32Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int64ToFloat32(xs []int64, rs []float32) ([]float32, error) {
+	return int64ToFloat32(xs, rs)
+}
+
+func int64ToFloat32Pure(xs []int64, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		rs[i] = float32(x)
+	}
+	return rs, nil
+}
+
+/*
+func int64ToFloat32Avx512(xs []int64, rs []float32) ([]float32, error) {
+	n := len(xs) / 2
+	int64ToFloat32Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint8ToFloat32(xs []uint8, rs []float32) ([]float32, error) {
+	return uint8ToFloat32(xs, rs)
+}
+
+func uint8ToFloat32Pure(xs []uint8, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		rs[i] = float32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint8ToFloat32Avx2(xs []uint8, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	uint8ToFloat32Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+
+func uint8ToFloat32Avx512(xs []uint8, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	uint8ToFloat32Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint16ToFloat32(xs []uint16, rs []float32) ([]float32, error) {
+	return uint16ToFloat32(xs, rs)
+}
+
+func uint16ToFloat32Pure(xs []uint16, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		rs[i] = float32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint16ToFloat32Avx2(xs []uint16, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	uint16ToFloat32Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+
+func uint16ToFloat32Avx512(xs []uint16, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	uint16ToFloat32Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint32ToFloat32(xs []uint32, rs []float32) ([]float32, error) {
+	return uint32ToFloat32(xs, rs)
+}
+
+func uint32ToFloat32Pure(xs []uint32, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		rs[i] = float32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint32ToFloat32Avx2(xs []uint32, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	uint32ToFloat32Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+
+func uint32ToFloat32Avx512(xs []uint32, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	uint32ToFloat32Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint64ToFloat32(xs []uint64, rs []float32) ([]float32, error) {
+	return uint64ToFloat32(xs, rs)
+}
+
+func uint64ToFloat32Pure(xs []uint64, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		rs[i] = float32(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint64ToFloat32Avx512(xs []uint64, rs []float32) ([]float32, error) {
+	n := len(xs) / 2
+	uint64ToFloat32Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float64ToFloat32(xs []float64, rs []float32) ([]float32, error) {
+	return float64ToFloat32(xs, rs)
+}
+
+func float64ToFloat32Pure(xs []float64, rs []float32) ([]float32, error) {
+	for i, x := range xs {
+		rs[i] = float32(x)
+	}
+	return rs, nil
+}
+
+/*
+func float64ToFloat32Avx2(xs []float64, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	float64ToFloat32Avx2Asm(xs[:n*2], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+
+func float64ToFloat32Avx512(xs []float64, rs []float32) ([]float32, error) {
+	n := len(xs) / 4
+	float64ToFloat32Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 4, len(xs); i < j; i++ {
+		rs[i] = float32(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int8ToFloat64(xs []int8, rs []float64) ([]float64, error) {
+	return int8ToFloat64(xs, rs)
+}
+
+func int8ToFloat64Pure(xs []int8, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		rs[i] = float64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int8ToFloat64Avx2(xs []int8, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	int8ToFloat64Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+
+func int8ToFloat64Avx512(xs []int8, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	int8ToFloat64Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int16ToFloat64(xs []int16, rs []float64) ([]float64, error) {
+	return int16ToFloat64(xs, rs)
+}
+
+func int16ToFloat64Pure(xs []int16, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		rs[i] = float64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int16ToFloat64Avx2(xs []int16, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	int16ToFloat64Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+
+func int16ToFloat64Avx512(xs []int16, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	int16ToFloat64Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int32ToFloat64(xs []int32, rs []float64) ([]float64, error) {
+	return int32ToFloat64(xs, rs)
+}
+
+func int32ToFloat64Pure(xs []int32, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		rs[i] = float64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int32ToFloat64Avx2(xs []int32, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	int32ToFloat64Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+
+func int32ToFloat64Avx512(xs []int32, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	int32ToFloat64Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Int64ToFloat64(xs []int64, rs []float64) ([]float64, error) {
+	return int64ToFloat64(xs, rs)
+}
+
+func int64ToFloat64Pure(xs []int64, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		rs[i] = float64(x)
+	}
+	return rs, nil
+}
+
+/*
+func int64ToFloat64Avx512(xs []int64, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	int64ToFloat64Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint8ToFloat64(xs []uint8, rs []float64) ([]float64, error) {
+	return uint8ToFloat64(xs, rs)
+}
+
+func uint8ToFloat64Pure(xs []uint8, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		rs[i] = float64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint8ToFloat64Avx2(xs []uint8, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	uint8ToFloat64Avx2Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint8ToFloat64Avx512(xs []uint8, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	uint8ToFloat64Avx512Asm(xs[:n*16], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint16ToFloat64(xs []uint16, rs []float64) ([]float64, error) {
+	return uint16ToFloat64(xs, rs)
+}
+
+func uint16ToFloat64Pure(xs []uint16, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		rs[i] = float64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint16ToFloat64Avx2(xs []uint16, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	uint16ToFloat64Avx2Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint16ToFloat64Avx512(xs []uint16, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	uint16ToFloat64Avx512Asm(xs[:n*8], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint32ToFloat64(xs []uint32, rs []float64) ([]float64, error) {
+	return uint32ToFloat64(xs, rs)
+}
+
+func uint32ToFloat64Pure(xs []uint32, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		rs[i] = float64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint32ToFloat64Avx2(xs []uint32, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	uint32ToFloat64Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+
+func uint32ToFloat64Avx512(xs []uint32, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	uint32ToFloat64Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Uint64ToFloat64(xs []uint64, rs []float64) ([]float64, error) {
+	return uint64ToFloat64(xs, rs)
+}
+
+func uint64ToFloat64Pure(xs []uint64, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		rs[i] = float64(x)
+	}
+	return rs, nil
+}
+
+/*
+func uint64ToFloat64Avx512(xs []uint64, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	uint64ToFloat64Avx512Asm(xs[:n*2], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func Float32ToFloat64(xs []float32, rs []float64) ([]float64, error) {
+	return float32ToFloat64(xs, rs)
+}
+
+func float32ToFloat64Pure(xs []float32, rs []float64) ([]float64, error) {
+	for i, x := range xs {
+		rs[i] = float64(x)
+	}
+	return rs, nil
+}
+
+/*
+func float32ToFloat64Avx2(xs []float32, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	float32ToFloat64Avx2Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+
+func float32ToFloat64Avx512(xs []float32, rs []float64) ([]float64, error) {
+	n := len(xs) / 2
+	float32ToFloat64Avx512Asm(xs[:n*4], rs)
+	for i, j := n * 2, len(xs); i < j; i++ {
+		rs[i] = float64(xs[i])
+	}
+	return rs, nil
+}
+*/
+
+func BytesToInt8(xs *types.Bytes, rs []int8) ([]int8, error) {
+	return bytesToInt8(xs, rs)
+}
+
+func bytesToInt8Pure(xs *types.Bytes, rs []int8) ([]int8, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseInt(s, 10, 8)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = int8(val)
+	}
+	return rs, nil
+}
+
+func Int8ToBytes(xs []int8, rs *types.Bytes) (*types.Bytes, error) {
+	return int8ToBytes(xs, rs)
+}
+
+func int8ToBytesPure(xs []int8, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendInt(rs.Data, int64(x), 10)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func BytesToInt16(xs *types.Bytes, rs []int16) ([]int16, error) {
+	return bytesToInt16(xs, rs)
+}
+
+func bytesToInt16Pure(xs *types.Bytes, rs []int16) ([]int16, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseInt(s, 10, 16)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = int16(val)
+	}
+	return rs, nil
+}
+
+func Int16ToBytes(xs []int16, rs *types.Bytes) (*types.Bytes, error) {
+	return int16ToBytes(xs, rs)
+}
+
+func int16ToBytesPure(xs []int16, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendInt(rs.Data, int64(x), 10)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func BytesToInt32(xs *types.Bytes, rs []int32) ([]int32, error) {
+	return bytesToInt32(xs, rs)
+}
+
+func bytesToInt32Pure(xs *types.Bytes, rs []int32) ([]int32, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseInt(s, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = int32(val)
+	}
+	return rs, nil
+}
+
+func Int32ToBytes(xs []int32, rs *types.Bytes) (*types.Bytes, error) {
+	return int32ToBytes(xs, rs)
+}
+
+func int32ToBytesPure(xs []int32, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendInt(rs.Data, int64(x), 10)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func BytesToInt64(xs *types.Bytes, rs []int64) ([]int64, error) {
+	return bytesToInt64(xs, rs)
+}
+
+func bytesToInt64Pure(xs *types.Bytes, rs []int64) ([]int64, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = int64(val)
+	}
+	return rs, nil
+}
+
+func Int64ToBytes(xs []int64, rs *types.Bytes) (*types.Bytes, error) {
+	return int64ToBytes(xs, rs)
+}
+
+func int64ToBytesPure(xs []int64, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendInt(rs.Data, x, 10)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func BytesToUint8(xs *types.Bytes, rs []uint8) ([]uint8, error) {
+	return bytesToUint8(xs, rs)
+}
+
+func bytesToUint8Pure(xs *types.Bytes, rs []uint8) ([]uint8, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseInt(s, 10, 8)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = uint8(val)
+	}
+	return rs, nil
+}
+
+func Uint8ToBytes(xs []uint8, rs *types.Bytes) (*types.Bytes, error) {
+	return uint8ToBytes(xs, rs)
+}
+
+func uint8ToBytesPure(xs []uint8, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendInt(rs.Data, int64(x), 10)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func BytesToUint16(xs *types.Bytes, rs []uint16) ([]uint16, error) {
+	return bytesToUint16(xs, rs)
+}
+
+func bytesToUint16Pure(xs *types.Bytes, rs []uint16) ([]uint16, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseInt(s, 10, 16)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = uint16(val)
+	}
+	return rs, nil
+}
+
+func Uint16ToBytes(xs []uint16, rs *types.Bytes) (*types.Bytes, error) {
+	return uint16ToBytes(xs, rs)
+}
+
+func uint16ToBytesPure(xs []uint16, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendInt(rs.Data, int64(x), 10)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func BytesToUint32(xs *types.Bytes, rs []uint32) ([]uint32, error) {
+	return bytesToUint32(xs, rs)
+}
+
+func bytesToUint32Pure(xs *types.Bytes, rs []uint32) ([]uint32, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseInt(s, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = uint32(val)
+	}
+	return rs, nil
+}
+
+func Uint32ToBytes(xs []uint32, rs *types.Bytes) (*types.Bytes, error) {
+	return uint32ToBytes(xs, rs)
+}
+
+func uint32ToBytesPure(xs []uint32, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendInt(rs.Data, int64(x), 10)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func BytesToUint64(xs *types.Bytes, rs []uint64) ([]uint64, error) {
+	return bytesToUint64(xs, rs)
+}
+
+func bytesToUint64Pure(xs *types.Bytes, rs []uint64) ([]uint64, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = uint64(val)
+	}
+	return rs, nil
+}
+
+func Uint64ToBytes(xs []uint64, rs *types.Bytes) (*types.Bytes, error) {
+	return uint64ToBytes(xs, rs)
+}
+
+func uint64ToBytesPure(xs []uint64, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendInt(rs.Data, int64(x), 10)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func BytesToFloat32(xs *types.Bytes, rs []float32) ([]float32, error) {
+	return bytesToFloat32(xs, rs)
+}
+
+func bytesToFloat32Pure(xs *types.Bytes, rs []float32) ([]float32, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseFloat(s, 32)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = float32(val)
+	}
+	return rs, nil
+}
+
+func Float32ToBytes(xs []float32, rs *types.Bytes) (*types.Bytes, error) {
+	return float32ToBytes(xs, rs)
+}
+
+func float32ToBytesPure(xs []float32, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendFloat(rs.Data, float64(x), 'G', -1, 32)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
+}
+
+func BytesToFloat64(xs *types.Bytes, rs []float64) ([]float64, error) {
+	return bytesToFloat64(xs, rs)
+}
+
+func bytesToFloat64Pure(xs *types.Bytes, rs []float64) ([]float64, error) {
+	for i, o := range xs.Offsets {
+		s := string(xs.Data[o : o+xs.Lengths[i]])
+		val, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = float64(val)
+	}
+	return rs, nil
+}
+
+func Float64ToBytes(xs []float64, rs *types.Bytes) (*types.Bytes, error) {
+	return float64ToBytes(xs, rs)
+}
+
+func float64ToBytesPure(xs []float64, rs *types.Bytes) (*types.Bytes, error) {
+	oldLen := uint32(0)
+	for _, x := range xs {
+		rs.Data = strconv.AppendFloat(rs.Data, x, 'G', -1, 64)
+		newLen := uint32(len(rs.Data))
+		rs.Offsets = append(rs.Offsets, oldLen)
+		rs.Lengths = append(rs.Lengths, newLen-oldLen)
+		oldLen = newLen
+	}
+	return rs, nil
 }
