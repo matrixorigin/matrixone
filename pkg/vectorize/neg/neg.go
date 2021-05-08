@@ -50,20 +50,18 @@ func int8NegPure(xs, rs []int8) []int8 {
 }
 
 func int8NegAvx2(xs, rs []int8) []int8 {
-	const regItems int = 32 / 1
-	n := len(xs) / regItems
-	int8NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 16
+	int8NegAvx2Asm(xs[:n*16], rs[:n*16])
+	for i, j := n*16, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
 func int8NegAvx512(xs, rs []int8) []int8 {
-	const regItems int = 64 / 1
-	n := len(xs) / regItems
-	int8NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 16
+	int8NegAvx512Asm(xs[:n*16], rs[:n*16])
+	for i, j := n*16, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -81,20 +79,18 @@ func int16NegPure(xs, rs []int16) []int16 {
 }
 
 func int16NegAvx2(xs, rs []int16) []int16 {
-	const regItems int = 32 / 2
-	n := len(xs) / regItems
-	int16NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 8
+	int16NegAvx2Asm(xs[:n*8], rs[:n*8])
+	for i, j := n*8, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
 func int16NegAvx512(xs, rs []int16) []int16 {
-	const regItems int = 64 / 2
-	n := len(xs) / regItems
-	int16NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 8
+	int16NegAvx512Asm(xs[:n*8], rs[:n*8])
+	for i, j := n*8, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -112,20 +108,18 @@ func int32NegPure(xs, rs []int32) []int32 {
 }
 
 func int32NegAvx2(xs, rs []int32) []int32 {
-	const regItems int = 32 / 4
-	n := len(xs) / regItems
-	int32NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 4
+	int32NegAvx2Asm(xs[:n*4], rs[:n*4])
+	for i, j := n*4, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
 func int32NegAvx512(xs, rs []int32) []int32 {
-	const regItems int = 64 / 4
-	n := len(xs) / regItems
-	int32NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 4
+	int32NegAvx512Asm(xs[:n*4], rs[:n*4])
+	for i, j := n*4, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -143,20 +137,18 @@ func int64NegPure(xs, rs []int64) []int64 {
 }
 
 func int64NegAvx2(xs, rs []int64) []int64 {
-	const regItems int = 32 / 8
-	n := len(xs) / regItems
-	int64NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 2
+	int64NegAvx2Asm(xs[:n*2], rs[:n*2])
+	for i, j := n*2, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
 func int64NegAvx512(xs, rs []int64) []int64 {
-	const regItems int = 64 / 8
-	n := len(xs) / regItems
-	int64NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 2
+	int64NegAvx512Asm(xs[:n*2], rs[:n*2])
+	for i, j := n*2, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -174,20 +166,18 @@ func float32NegPure(xs, rs []float32) []float32 {
 }
 
 func float32NegAvx2(xs, rs []float32) []float32 {
-	const regItems int = 32 / 4
-	n := len(xs) / regItems
-	float32NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 4
+	float32NegAvx2Asm(xs[:n*4], rs[:n*4])
+	for i, j := n*4, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
 func float32NegAvx512(xs, rs []float32) []float32 {
-	const regItems int = 64 / 4
-	n := len(xs) / regItems
-	float32NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 4
+	float32NegAvx512Asm(xs[:n*4], rs[:n*4])
+	for i, j := n*4, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
@@ -205,20 +195,18 @@ func float64NegPure(xs, rs []float64) []float64 {
 }
 
 func float64NegAvx2(xs, rs []float64) []float64 {
-	const regItems int = 32 / 8
-	n := len(xs) / regItems
-	float64NegAvx2Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 2
+	float64NegAvx2Asm(xs[:n*2], rs[:n*2])
+	for i, j := n*2, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
 }
 
 func float64NegAvx512(xs, rs []float64) []float64 {
-	const regItems int = 64 / 8
-	n := len(xs) / regItems
-	float64NegAvx512Asm(xs[:n*regItems], rs[:n*regItems])
-	for i, j := n*regItems, len(xs); i < j; i++ {
+	n := len(xs) / 2
+	float64NegAvx512Asm(xs[:n*2], rs[:n*2])
+	for i, j := n*2, len(xs); i < j; i++ {
 		rs[i] = -xs[i]
 	}
 	return rs
