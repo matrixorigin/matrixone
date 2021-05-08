@@ -6,50 +6,50 @@ import (
 )
 
 var (
-    int8Ge func([]int8, []int8, []int64) []int64
-    int8GeSels func([]int8, []int8, []int64, []int64) []int64
-    int8GeScalar func(int8, []int8, []int64) []int64
-    int8GeScalarSels func(int8, []int8, []int64, []int64) []int64
-    int16Ge func([]int16, []int16, []int64) []int64
-    int16GeSels func([]int16, []int16, []int64, []int64) []int64
-    int16GeScalar func(int16, []int16, []int64) []int64
-    int16GeScalarSels func(int16, []int16, []int64, []int64) []int64
-    int32Ge func([]int32, []int32, []int64) []int64
-    int32GeSels func([]int32, []int32, []int64, []int64) []int64
-    int32GeScalar func(int32, []int32, []int64) []int64
-    int32GeScalarSels func(int32, []int32, []int64, []int64) []int64
-    int64Ge func([]int64, []int64, []int64) []int64
-    int64GeSels func([]int64, []int64, []int64, []int64) []int64
-    int64GeScalar func(int64, []int64, []int64) []int64
-    int64GeScalarSels func(int64, []int64, []int64, []int64) []int64
-    uint8Ge func([]uint8, []uint8, []int64) []int64
-    uint8GeSels func([]uint8, []uint8, []int64, []int64) []int64
-    uint8GeScalar func(uint8, []uint8, []int64) []int64
-    uint8GeScalarSels func(uint8, []uint8, []int64, []int64) []int64
-    uint16Ge func([]uint16, []uint16, []int64) []int64
-    uint16GeSels func([]uint16, []uint16, []int64, []int64) []int64
-    uint16GeScalar func(uint16, []uint16, []int64) []int64
-    uint16GeScalarSels func(uint16, []uint16, []int64, []int64) []int64
-    uint32Ge func([]uint32, []uint32, []int64) []int64
-    uint32GeSels func([]uint32, []uint32, []int64, []int64) []int64
-    uint32GeScalar func(uint32, []uint32, []int64) []int64
-    uint32GeScalarSels func(uint32, []uint32, []int64, []int64) []int64
-    uint64Ge func([]uint64, []uint64, []int64) []int64
-    uint64GeSels func([]uint64, []uint64, []int64, []int64) []int64
-    uint64GeScalar func(uint64, []uint64, []int64) []int64
-    uint64GeScalarSels func(uint64, []uint64, []int64, []int64) []int64
-    float32Ge func([]float32, []float32, []int64) []int64
-    float32GeSels func([]float32, []float32, []int64, []int64) []int64
-    float32GeScalar func(float32, []float32, []int64) []int64
-    float32GeScalarSels func(float32, []float32, []int64, []int64) []int64
-    float64Ge func([]float64, []float64, []int64) []int64
-    float64GeSels func([]float64, []float64, []int64, []int64) []int64
-    float64GeScalar func(float64, []float64, []int64) []int64
-    float64GeScalarSels func(float64, []float64, []int64, []int64) []int64
-    strGe func(*types.Bytes, *types.Bytes, []int64) []int64
-    strGeSels func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
-    strGeScalar func([]byte, *types.Bytes, []int64) []int64
-    strGeScalarSels func([]byte, *types.Bytes, []int64, []int64) []int64
+	int8Ge              func([]int8, []int8, []int64) []int64
+	int8GeSels          func([]int8, []int8, []int64, []int64) []int64
+	int8GeScalar        func(int8, []int8, []int64) []int64
+	int8GeScalarSels    func(int8, []int8, []int64, []int64) []int64
+	int16Ge             func([]int16, []int16, []int64) []int64
+	int16GeSels         func([]int16, []int16, []int64, []int64) []int64
+	int16GeScalar       func(int16, []int16, []int64) []int64
+	int16GeScalarSels   func(int16, []int16, []int64, []int64) []int64
+	int32Ge             func([]int32, []int32, []int64) []int64
+	int32GeSels         func([]int32, []int32, []int64, []int64) []int64
+	int32GeScalar       func(int32, []int32, []int64) []int64
+	int32GeScalarSels   func(int32, []int32, []int64, []int64) []int64
+	int64Ge             func([]int64, []int64, []int64) []int64
+	int64GeSels         func([]int64, []int64, []int64, []int64) []int64
+	int64GeScalar       func(int64, []int64, []int64) []int64
+	int64GeScalarSels   func(int64, []int64, []int64, []int64) []int64
+	uint8Ge             func([]uint8, []uint8, []int64) []int64
+	uint8GeSels         func([]uint8, []uint8, []int64, []int64) []int64
+	uint8GeScalar       func(uint8, []uint8, []int64) []int64
+	uint8GeScalarSels   func(uint8, []uint8, []int64, []int64) []int64
+	uint16Ge            func([]uint16, []uint16, []int64) []int64
+	uint16GeSels        func([]uint16, []uint16, []int64, []int64) []int64
+	uint16GeScalar      func(uint16, []uint16, []int64) []int64
+	uint16GeScalarSels  func(uint16, []uint16, []int64, []int64) []int64
+	uint32Ge            func([]uint32, []uint32, []int64) []int64
+	uint32GeSels        func([]uint32, []uint32, []int64, []int64) []int64
+	uint32GeScalar      func(uint32, []uint32, []int64) []int64
+	uint32GeScalarSels  func(uint32, []uint32, []int64, []int64) []int64
+	uint64Ge            func([]uint64, []uint64, []int64) []int64
+	uint64GeSels        func([]uint64, []uint64, []int64, []int64) []int64
+	uint64GeScalar      func(uint64, []uint64, []int64) []int64
+	uint64GeScalarSels  func(uint64, []uint64, []int64, []int64) []int64
+	float32Ge           func([]float32, []float32, []int64) []int64
+	float32GeSels       func([]float32, []float32, []int64, []int64) []int64
+	float32GeScalar     func(float32, []float32, []int64) []int64
+	float32GeScalarSels func(float32, []float32, []int64, []int64) []int64
+	float64Ge           func([]float64, []float64, []int64) []int64
+	float64GeSels       func([]float64, []float64, []int64, []int64) []int64
+	float64GeScalar     func(float64, []float64, []int64) []int64
+	float64GeScalarSels func(float64, []float64, []int64, []int64) []int64
+	strGe               func(*types.Bytes, *types.Bytes, []int64) []int64
+	strGeSels           func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
+	strGeScalar         func([]byte, *types.Bytes, []int64) []int64
+	strGeScalarSels     func([]byte, *types.Bytes, []int64, []int64) []int64
 )
 
 func init() {
@@ -111,7 +111,7 @@ func int8GePure(xs, ys []int8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8GeSels(xs, ys []int8, rs, sels []int64) []int64 {
@@ -126,7 +126,7 @@ func int8GeSelsPure(xs, ys []int8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8GeScalar(x int8, ys []int8, rs []int64) []int64 {
@@ -141,7 +141,7 @@ func int8GeScalarPure(x int8, ys []int8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8GeScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
@@ -156,7 +156,7 @@ func int8GeScalarSelsPure(x int8, ys []int8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16Ge(xs, ys []int16, rs []int64) []int64 {
@@ -171,7 +171,7 @@ func int16GePure(xs, ys []int16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16GeSels(xs, ys []int16, rs, sels []int64) []int64 {
@@ -186,7 +186,7 @@ func int16GeSelsPure(xs, ys []int16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16GeScalar(x int16, ys []int16, rs []int64) []int64 {
@@ -201,7 +201,7 @@ func int16GeScalarPure(x int16, ys []int16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16GeScalarSels(x int16, ys []int16, rs, sels []int64) []int64 {
@@ -216,7 +216,7 @@ func int16GeScalarSelsPure(x int16, ys []int16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32Ge(xs, ys []int32, rs []int64) []int64 {
@@ -231,7 +231,7 @@ func int32GePure(xs, ys []int32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32GeSels(xs, ys []int32, rs, sels []int64) []int64 {
@@ -246,7 +246,7 @@ func int32GeSelsPure(xs, ys []int32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32GeScalar(x int32, ys []int32, rs []int64) []int64 {
@@ -261,7 +261,7 @@ func int32GeScalarPure(x int32, ys []int32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32GeScalarSels(x int32, ys []int32, rs, sels []int64) []int64 {
@@ -276,7 +276,7 @@ func int32GeScalarSelsPure(x int32, ys []int32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64Ge(xs, ys []int64, rs []int64) []int64 {
@@ -291,7 +291,7 @@ func int64GePure(xs, ys []int64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64GeSels(xs, ys []int64, rs, sels []int64) []int64 {
@@ -306,7 +306,7 @@ func int64GeSelsPure(xs, ys []int64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64GeScalar(x int64, ys []int64, rs []int64) []int64 {
@@ -321,7 +321,7 @@ func int64GeScalarPure(x int64, ys []int64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64GeScalarSels(x int64, ys []int64, rs, sels []int64) []int64 {
@@ -336,7 +336,7 @@ func int64GeScalarSelsPure(x int64, ys []int64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8Ge(xs, ys []uint8, rs []int64) []int64 {
@@ -351,7 +351,7 @@ func uint8GePure(xs, ys []uint8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8GeSels(xs, ys []uint8, rs, sels []int64) []int64 {
@@ -366,7 +366,7 @@ func uint8GeSelsPure(xs, ys []uint8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8GeScalar(x uint8, ys []uint8, rs []int64) []int64 {
@@ -381,7 +381,7 @@ func uint8GeScalarPure(x uint8, ys []uint8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8GeScalarSels(x uint8, ys []uint8, rs, sels []int64) []int64 {
@@ -396,7 +396,7 @@ func uint8GeScalarSelsPure(x uint8, ys []uint8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16Ge(xs, ys []uint16, rs []int64) []int64 {
@@ -411,7 +411,7 @@ func uint16GePure(xs, ys []uint16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16GeSels(xs, ys []uint16, rs, sels []int64) []int64 {
@@ -426,7 +426,7 @@ func uint16GeSelsPure(xs, ys []uint16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16GeScalar(x uint16, ys []uint16, rs []int64) []int64 {
@@ -441,7 +441,7 @@ func uint16GeScalarPure(x uint16, ys []uint16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16GeScalarSels(x uint16, ys []uint16, rs, sels []int64) []int64 {
@@ -456,7 +456,7 @@ func uint16GeScalarSelsPure(x uint16, ys []uint16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32Ge(xs, ys []uint32, rs []int64) []int64 {
@@ -471,7 +471,7 @@ func uint32GePure(xs, ys []uint32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32GeSels(xs, ys []uint32, rs, sels []int64) []int64 {
@@ -486,7 +486,7 @@ func uint32GeSelsPure(xs, ys []uint32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32GeScalar(x uint32, ys []uint32, rs []int64) []int64 {
@@ -501,7 +501,7 @@ func uint32GeScalarPure(x uint32, ys []uint32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32GeScalarSels(x uint32, ys []uint32, rs, sels []int64) []int64 {
@@ -516,7 +516,7 @@ func uint32GeScalarSelsPure(x uint32, ys []uint32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64Ge(xs, ys []uint64, rs []int64) []int64 {
@@ -531,7 +531,7 @@ func uint64GePure(xs, ys []uint64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64GeSels(xs, ys []uint64, rs, sels []int64) []int64 {
@@ -546,7 +546,7 @@ func uint64GeSelsPure(xs, ys []uint64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64GeScalar(x uint64, ys []uint64, rs []int64) []int64 {
@@ -561,7 +561,7 @@ func uint64GeScalarPure(x uint64, ys []uint64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64GeScalarSels(x uint64, ys []uint64, rs, sels []int64) []int64 {
@@ -576,7 +576,7 @@ func uint64GeScalarSelsPure(x uint64, ys []uint64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32Ge(xs, ys []float32, rs []int64) []int64 {
@@ -591,7 +591,7 @@ func float32GePure(xs, ys []float32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32GeSels(xs, ys []float32, rs, sels []int64) []int64 {
@@ -606,7 +606,7 @@ func float32GeSelsPure(xs, ys []float32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32GeScalar(x float32, ys []float32, rs []int64) []int64 {
@@ -621,7 +621,7 @@ func float32GeScalarPure(x float32, ys []float32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32GeScalarSels(x float32, ys []float32, rs, sels []int64) []int64 {
@@ -636,7 +636,7 @@ func float32GeScalarSelsPure(x float32, ys []float32, rs, sels []int64) []int64 
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64Ge(xs, ys []float64, rs []int64) []int64 {
@@ -651,7 +651,7 @@ func float64GePure(xs, ys []float64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64GeSels(xs, ys []float64, rs, sels []int64) []int64 {
@@ -666,7 +666,7 @@ func float64GeSelsPure(xs, ys []float64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64GeScalar(x float64, ys []float64, rs []int64) []int64 {
@@ -681,7 +681,7 @@ func float64GeScalarPure(x float64, ys []float64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64GeScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
@@ -696,7 +696,7 @@ func float64GeScalarSelsPure(x float64, ys []float64, rs, sels []int64) []int64 
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrGe(xs, ys *types.Bytes, rs []int64) []int64 {
@@ -706,12 +706,12 @@ func StrGe(xs, ys *types.Bytes, rs []int64) []int64 {
 func strGePure(xs, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(xs.Offsets); i < n; i++ {
-		if bytes.Compare(xs.Get(i), ys.Get(i)) >= 0 {
+		if bytes.Compare(xs.Get(int64(i)), ys.Get(int64(i))) >= 0 {
 			rs[rsi] = int64(i)
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrGeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
@@ -721,12 +721,12 @@ func StrGeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 func strGeSelsPure(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if bytes.Compare(xs.Get(int(sel)), ys.Get(int(sel))) >= 0 {
+		if bytes.Compare(xs.Get(sel), ys.Get(sel)) >= 0 {
 			rs[rsi] = sel
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrGeScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
@@ -736,12 +736,12 @@ func StrGeScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
 func strGeScalarPure(x []byte, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(ys.Offsets); i < n; i++ {
-		if bytes.Compare(x, ys.Get(i)) >= 0 {
+		if bytes.Compare(x, ys.Get(int64(i))) >= 0 {
 			rs[rsi] = int64(i)
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrGeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
@@ -751,10 +751,10 @@ func StrGeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 func strGeScalarSelsPure(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if bytes.Compare(x, ys.Get(int(sel))) >= 0 {
+		if bytes.Compare(x, ys.Get(sel)) >= 0 {
 			rs[rsi] = sel
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
