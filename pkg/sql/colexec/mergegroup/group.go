@@ -3,7 +3,9 @@ package mergegroup
 import (
 	"bytes"
 	"fmt"
+	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/block"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
@@ -12,7 +14,10 @@ import (
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
 	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
+
+	"github.com/google/uuid"
 )
 
 func init() {
@@ -74,9 +79,15 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		hashs:  make([]uint64, UnitLimit),
 		sels:   make([][]int64, UnitLimit),
 		groups: make(map[uint64][]*hash.Group),
-		vecs:   make([]*vector.Vector, len(n.Gs)),
 		slots:  fastmap.Pool.Get().(*fastmap.Map),
 	}
+	ctr := &n.Ctr
+	uuid, err := uuid.NewUUID()
+	if err != nil {
+		fastmap.Pool.Put(ctr.slots)
+		return err
+	}
+	ctr.spill.id = fmt.Sprintf("%s.%v", proc.Id, uuid)
 	return nil
 }
 
@@ -84,106 +95,55 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
 	for {
-		if len(proc.Reg.Ws) == 0 {
-			break
-		}
-		for i := 0; i < len(proc.Reg.Ws); i++ {
-			reg := proc.Reg.Ws[i]
-			v := <-reg.Ch
-			if v == nil {
-				reg.Wg.Done()
-				proc.Reg.Ws = append(proc.Reg.Ws[:i], proc.Reg.Ws[i+1:]...)
-				i--
-				continue
-			}
-			bat := v.(*batch.Batch)
-			if bat.Attrs == nil {
-				reg.Wg.Done()
-				continue
-			}
-			bat.Reorder(ctr.attrs)
-			if err := bat.Prefetch(ctr.attrs, bat.Vecs[:len(ctr.attrs)], proc); err != nil {
-				ctr.clean(bat, proc)
+		switch ctr.state {
+		case Build:
+			ctr.spill.e = n.E
+			if err := ctr.build(n, proc); err != nil {
+				ctr.clean(proc)
 				return true, err
 			}
-			{
-				if ctr.vecs[0] == nil {
-					for i := range ctr.vecs {
-						ctr.vecs[i] = vector.New(bat.Vecs[i].Typ)
-					}
-				}
-				if n.Es[0].Agg == nil {
-					for i, e := range n.Es {
-						if e.Agg == nil {
-							switch e.Op {
-							case aggregation.Avg:
-								e.Agg = aggfunc.NewAvg(bat.Vecs[ctr.is[i]].Typ)
-							case aggregation.Max:
-								e.Agg = aggfunc.NewMax(bat.Vecs[ctr.is[i]].Typ)
-							case aggregation.Min:
-								e.Agg = aggfunc.NewMin(bat.Vecs[ctr.is[i]].Typ)
-							case aggregation.Sum:
-								e.Agg = aggfunc.NewSum(bat.Vecs[ctr.is[i]].Typ)
-							case aggregation.Count:
-								e.Agg = aggfunc.NewCount(bat.Vecs[ctr.is[i]].Typ)
-							case aggregation.StarCount:
-								e.Agg = aggfunc.NewStarCount(bat.Vecs[ctr.is[i]].Typ)
-							case aggregation.SumCount:
-								e.Agg = aggfunc.NewSumCount(bat.Vecs[ctr.is[i]].Typ)
-							default:
-								ctr.clean(bat, proc)
-								return true, fmt.Errorf("unsupport aggregation operator '%v'", e.Op)
-							}
-
-							if e.Agg == nil {
-								ctr.clean(bat, proc)
-								return true, fmt.Errorf("unsupport sumcount aggregation operator '%v' for %s", e.Op, bat.Vecs[i+len(n.Gs)].Typ)
-							}
-							n.Es[i].Agg = e.Agg
-						}
-					}
-				}
+			ctr.rows = 0
+			ctr.state = Eval
+		case Eval:
+			if len(ctr.bats) == 0 {
+				ctr.clean(proc)
+				return true, nil
 			}
-			if len(bat.Sels) > 0 {
-				if err := ctr.batchGroupSels(bat.Sels, bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
-					ctr.clean(bat, proc)
-					return true, err
-				}
-			} else {
-				if err := ctr.batchGroup(bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
-					ctr.clean(bat, proc)
-					return true, err
-				}
+			bat, err := ctr.bats[0].GetBatch(proc)
+			if err != nil {
+				ctr.clean(proc)
+				return true, err
 			}
-			bat.Clean(proc)
-			reg.Wg.Done()
-		}
-	}
-	if ctr.vecs[0] == nil {
-		proc.Reg.Ax = nil
-		return true, nil
-	}
-	vecs, err := ctr.eval(ctr.vecs[0].Length(), n.Es, proc)
-	if err != nil {
-		ctr.clean(nil, proc)
-		return true, err
-	}
-	bat := &batch.Batch{
-		Ro:    true,
-		Attrs: ctr.rattrs,
-		Vecs:  append(ctr.vecs, vecs...),
-	}
-	bat.Reduce(n.Gs, proc)
-	proc.Reg.Ax = bat
-	{
-		for i := range ctr.vecs {
-			ctr.vecs[i] = nil
+			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
+				ctr.clean(proc)
+				return true, err
+			}
+			vecs, err := ctr.eval(ctr.rows, bat.Vecs[0].Length(), n.Es, proc)
+			if err != nil {
+				ctr.clean(proc)
+				return true, err
+			}
+			rbat := &batch.Batch{
+				Ro:    true,
+				Attrs: ctr.attrs,
+				Vecs:  append(bat.Vecs, vecs...),
+			}
+			ctr.rows++
+			rbat.Reduce(n.Gs, proc)
+			proc.Reg.Ax = rbat
+			ctr.bat.Bat = nil
+			ctr.bats = ctr.bats[1:]
+			if len(ctr.bats) == 0 {
+				ctr.clean(proc)
+				return true, nil
+			}
+			return false, nil
 		}
 	}
 	return true, nil
 }
 
-func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Process) ([]*vector.Vector, error) {
+func (ctr *Container) eval(idx int64, length int, es []aggregation.Extend, proc *process.Process) ([]*vector.Vector, error) {
 	vecs := make([]*vector.Vector, len(es))
 	for i, e := range es {
 		typ := e.Agg.Type()
@@ -200,10 +160,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeInt8Slice(data[mempool.CountSize : mempool.CountSize+length])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(int8)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(int8)
+						}
 					}
 				}
 			}
@@ -220,10 +182,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeInt16Slice(data[mempool.CountSize : mempool.CountSize+length*2])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(int16)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(int16)
+						}
 					}
 				}
 			}
@@ -240,10 +204,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeInt32Slice(data[mempool.CountSize : mempool.CountSize+length*4])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(int32)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(int32)
+						}
 					}
 				}
 			}
@@ -260,10 +226,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+length*8])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(int64)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(int64)
+						}
 					}
 				}
 			}
@@ -280,10 +248,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeUint8Slice(data[mempool.CountSize : mempool.CountSize+length])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(uint8)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(uint8)
+						}
 					}
 				}
 			}
@@ -300,10 +270,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeUint16Slice(data[mempool.CountSize : mempool.CountSize+length*2])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(uint16)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(uint16)
+						}
 					}
 				}
 			}
@@ -320,10 +292,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeUint32Slice(data[mempool.CountSize : mempool.CountSize+length*4])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(uint32)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(uint32)
+						}
 					}
 				}
 			}
@@ -340,10 +314,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeUint64Slice(data[mempool.CountSize : mempool.CountSize+length*8])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(uint64)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(uint64)
+						}
 					}
 				}
 			}
@@ -360,10 +336,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeFloat32Slice(data[mempool.CountSize : mempool.CountSize+length*4])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(float32)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(float32)
+						}
 					}
 				}
 			}
@@ -380,10 +358,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := encoding.DecodeFloat64Slice(data[mempool.CountSize : mempool.CountSize+length*8])
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.(float64)
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.(float64)
+						}
 					}
 				}
 			}
@@ -394,11 +374,13 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := make([][]byte, length)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.([]byte)
-						size += len(vs[g.Sel])
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.([]byte)
+							size += len(vs[g.Sel])
+						}
 					}
 				}
 			}
@@ -428,10 +410,12 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 			vs := make([][]interface{}, length)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
-					if v := g.Aggs[i].Eval(); v == nil {
-						vecs[i].Nsp.Add(uint64(g.Sel))
-					} else {
-						vs[g.Sel] = v.([]interface{})
+					if g.Idx == idx {
+						if v := g.Aggs[i].Eval(); v == nil {
+							vecs[i].Nsp.Add(uint64(g.Sel))
+						} else {
+							vs[g.Sel] = v.([]interface{})
+						}
 					}
 				}
 			}
@@ -442,6 +426,126 @@ func (ctr *Container) eval(length int, es []aggregation.Extend, proc *process.Pr
 		copy(vecs[i].Data, encoding.EncodeUint64(proc.Refer[e.Alias]))
 	}
 	return vecs, nil
+}
+
+func (ctr *Container) build(n *Argument, proc *process.Process) error {
+	for {
+		if len(proc.Reg.Ws) == 0 {
+			break
+		}
+		for i := 0; i < len(proc.Reg.Ws); i++ {
+			reg := proc.Reg.Ws[i]
+			v := <-reg.Ch
+			if v == nil {
+				reg.Ch = nil
+				reg.Wg.Done()
+				proc.Reg.Ws = append(proc.Reg.Ws[:i], proc.Reg.Ws[i+1:]...)
+				i--
+				continue
+			}
+			bat := v.(*batch.Batch)
+			if bat == nil || bat.Attrs == nil {
+				reg.Wg.Done()
+				continue
+			}
+			bat.Reorder(ctr.attrs)
+			if err := bat.Prefetch(ctr.attrs, bat.Vecs[:len(ctr.attrs)], proc); err != nil {
+				reg.Ch = nil
+				reg.Wg.Done()
+				bat.Clean(proc)
+				return err
+			}
+			if ctr.spill.attrs == nil {
+				ctr.spill.attrs = ctr.attrs[:len(n.Gs)]
+				ctr.spill.cs = make([]uint64, len(ctr.spill.attrs))
+				ctr.spill.md = make([]metadata.Attribute, len(ctr.spill.attrs))
+				for i, attr := range ctr.spill.attrs {
+					vec, err := bat.GetVector(attr, proc)
+					if err != nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+						bat.Clean(proc)
+						return err
+					}
+					ctr.spill.md[i] = metadata.Attribute{
+						Name: attr,
+						Type: vec.Typ,
+						Alg:  compress.Lz4,
+					}
+					ctr.spill.cs[i] = encoding.DecodeUint64(vec.Data[:mempool.CountSize])
+				}
+				for i, e := range n.Es {
+					vec, err := bat.GetVector(ctr.attrs[ctr.is[i]], proc)
+					if err != nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+						bat.Clean(proc)
+						return err
+					}
+					if e.Agg == nil {
+						switch e.Op {
+						case aggregation.Avg:
+							e.Agg = aggfunc.NewAvg(vec.Typ)
+						case aggregation.Max:
+							e.Agg = aggfunc.NewMax(vec.Typ)
+						case aggregation.Min:
+							e.Agg = aggfunc.NewMin(vec.Typ)
+						case aggregation.Sum:
+							e.Agg = aggfunc.NewSum(vec.Typ)
+						case aggregation.Count:
+							e.Agg = aggfunc.NewCount(vec.Typ)
+						case aggregation.StarCount:
+							e.Agg = aggfunc.NewStarCount(vec.Typ)
+						case aggregation.SumCount:
+							e.Agg = aggfunc.NewSumCount(vec.Typ)
+						default:
+							reg.Ch = nil
+							reg.Wg.Done()
+							bat.Clean(proc)
+							return fmt.Errorf("unsupport aggregation operator '%v'", e.Op)
+						}
+
+						if e.Agg == nil {
+							reg.Ch = nil
+							reg.Wg.Done()
+							bat.Clean(proc)
+							return fmt.Errorf("unsupport sumcount aggregation operator '%v' for %s", e.Op, bat.Vecs[i+len(n.Gs)].Typ)
+						}
+						n.Es[i].Agg = e.Agg
+					}
+				}
+			}
+			if ctr.bat == nil {
+				ctr.bat = &block.Block{
+					Cs:    ctr.spill.cs,
+					Attrs: ctr.spill.attrs,
+					Bat:   batch.New(true, ctr.spill.attrs),
+				}
+				for i := range ctr.bat.Bat.Vecs {
+					ctr.bat.Bat.Vecs[i] = vector.New(ctr.spill.md[i].Type)
+				}
+				ctr.bats = append(ctr.bats, ctr.bat)
+			}
+			if len(bat.Sels) > 0 {
+				if err := ctr.batchGroupSels(bat.Sels, bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
+					reg.Ch = nil
+					reg.Wg.Done()
+					bat.Clean(proc)
+					return err
+				}
+			} else {
+				if err := ctr.batchGroup(bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
+					reg.Ch = nil
+					reg.Wg.Done()
+					bat.Clean(proc)
+					return err
+				}
+			}
+			reg.Wg.Done()
+			bat.Clean(proc)
+		}
+	}
+	return nil
 }
 
 func (ctr *Container) batchGroup(vecs []*vector.Vector, es []aggregation.Extend, proc *process.Process) error {
@@ -476,9 +580,9 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 	{
 		copy(ctr.hashs[:count], OneUint64s[:count])
 		if len(sels) == 0 {
-			ctr.fillHash(start, count, vecs[:len(ctr.vecs)])
+			ctr.fillHash(start, count, vecs[:len(ctr.spill.attrs)])
 		} else {
-			ctr.fillHashSels(count, sels, vecs[:len(ctr.vecs)])
+			ctr.fillHashSels(count, sels, vecs[:len(ctr.spill.attrs)])
 		}
 	}
 	copy(ctr.diffs[:count], ZeroBools[:count])
@@ -487,7 +591,7 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 			remaining := ctr.sels[ctr.slots.Vs[i][j]]
 			if gs, ok := ctr.groups[h]; ok {
 				for _, g := range gs {
-					if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.vecs, ctr.diffs, proc); err != nil {
+					if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
 						return err
 					}
 					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
@@ -496,8 +600,8 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 				ctr.groups[h] = make([]*hash.Group, 0, 8)
 			}
 			for len(remaining) > 0 {
-				g := hash.NewGroup(int64(ctr.vecs[0].Length()), ctr.is, es)
-				for i, vec := range ctr.vecs {
+				g := hash.NewGroup(int64(len(ctr.bats)-1), ctr.rows, ctr.is, es)
+				for i, vec := range ctr.bat.Bat.Vecs {
 					if vec.Data == nil {
 						if err := vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
 							return err
@@ -509,16 +613,66 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 						}
 					}
 				}
+				ctr.rows++
 				ctr.groups[h] = append(ctr.groups[h], g)
-				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.vecs, ctr.diffs, proc); err != nil {
+				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
 					return err
 				}
 				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
+				if proc.Size() > proc.Lim.Size { // spill
+					if !ctr.spilled {
+						if err := ctr.newSpill(proc); err != nil {
+							return err
+						}
+						for i, blk := range ctr.bats {
+							if err := ctr.spill.r.Write(blk.Bat); err != nil {
+								return err
+							}
+							blk.R = ctr.spill.r
+							blk.Seg = ctr.spill.r.Segments()[i]
+							blk.Bat.Clean(proc)
+							blk.Bat = nil
+						}
+						ctr.spilled = true
+					} else {
+						if err := ctr.spill.r.Write(ctr.bat.Bat); err != nil {
+							return err
+						}
+						ctr.bat.R = ctr.spill.r
+						ctr.bat.Seg = ctr.spill.r.Segments()[len(ctr.bats)-1]
+						ctr.bat.Bat.Clean(proc)
+						ctr.bat.Bat = nil
+					}
+					ctr.bat = &block.Block{
+						R:     ctr.spill.r,
+						Cs:    ctr.spill.cs,
+						Attrs: ctr.spill.attrs,
+						Bat:   batch.New(true, ctr.spill.attrs),
+					}
+					for i := range ctr.bat.Bat.Vecs {
+						ctr.bat.Bat.Vecs[i] = vector.New(ctr.spill.md[i].Type)
+					}
+					ctr.bats = append(ctr.bats, ctr.bat)
+					ctr.rows = 0
+				}
 			}
 			ctr.sels[ctr.slots.Vs[i][j]] = ctr.sels[ctr.slots.Vs[i][j]][:0]
 		}
 	}
 	ctr.slots.Reset()
+	return nil
+}
+
+func (ctr *Container) newSpill(proc *process.Process) error {
+	if err := ctr.spill.e.Create(ctr.spill.id, ctr.spill.md); err != nil {
+		return err
+	}
+	r, err := ctr.spill.e.Relation(ctr.spill.id)
+	if err != nil {
+		ctr.spill.e.Delete(ctr.spill.id)
+		return err
+	}
+	ctr.spill.r = r
 	return nil
 }
 
@@ -565,14 +719,37 @@ func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vecto
 	}
 }
 
-func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
-	if bat != nil {
-		bat.Clean(proc)
-	}
+func (ctr *Container) clean(proc *process.Process) {
 	fastmap.Pool.Put(ctr.slots)
-	for _, vec := range ctr.vecs {
-		if vec != nil {
-			vec.Clean(proc)
+	for _, blk := range ctr.bats {
+		if blk.Bat != nil {
+			blk.Bat.Clean(proc)
+			blk.Bat = nil
+		}
+	}
+	if ctr.spill.r != nil {
+		ctr.spill.e.Delete(ctr.spill.id)
+	}
+	{
+		for _, reg := range proc.Reg.Ws {
+			if reg.Ch != nil {
+				v := <-reg.Ch
+				switch {
+				case v == nil:
+					reg.Ch = nil
+					reg.Wg.Done()
+				default:
+					bat := v.(*batch.Batch)
+					if bat == nil || bat.Attrs == nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+					} else {
+						bat.Clean(proc)
+						reg.Ch = nil
+						reg.Wg.Done()
+					}
+				}
+			}
 		}
 	}
 }

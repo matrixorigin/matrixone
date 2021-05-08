@@ -2,19 +2,17 @@ package batch
 
 import (
 	"matrixone/pkg/container/vector"
-
-	aio "github.com/traetox/goaio"
+	"matrixone/pkg/vm/process"
 )
 
-type Info struct {
-	Alg int
-	Ref uint64
-	Wg  *WaitGroup
+type Reader interface {
+	Read(int64, uint64, string, *process.Process) (*vector.Vector, error)
 }
 
-type WaitGroup struct {
-	Ap *aio.AIO
-	Id aio.RequestId
+type Info struct {
+	Len int64
+	Ref uint64
+	R   Reader
 }
 
 type Batch struct {

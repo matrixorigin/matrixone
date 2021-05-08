@@ -30,6 +30,7 @@ type Register struct {
 type Limitation struct {
 	Size          int64 // memory threshold
 	BatchRows     int64 // max rows for batch
+	BatchSize     int64 // max size for batch
 	PartitionRows int64 // max rows for partition
 }
 
