@@ -1078,5 +1078,14 @@ func resultsetHandler(in net.Conn){
 
 func TestMysqlResultSet(t *testing.T){
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
+	//pwd: mysql-server-mysql-8.0.23/mysql-test
+	//with mysqltest: mysqltest --test-file=t/1st.test --result-file=r/1st.result --user=dump -p111 -P 6001 --host=127.0.0.1
+
+	//test:
+	//./mysql-test-run 1st --extern user=root --extern port=3306 --extern host=127.0.0.1
+	//  mysql5.7 failed
+	//	mysql-8.0.23 success
+	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
+	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
 	echoServer(resultsetHandler)
 }

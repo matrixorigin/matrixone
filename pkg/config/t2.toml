@@ -1,0 +1,12 @@
+parameter-struct-name = "AllParameters"
+config-struct-name = "configuration"
+
+[[parameter]]
+name = "autocommit~"
+scope = ["global","session"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["true"]
+comment = "autocommit"
+update-mode = "dynamic"

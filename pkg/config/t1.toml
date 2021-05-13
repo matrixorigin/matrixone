@@ -1,0 +1,22 @@
+parameter-struct-name = "AllParameters"
+config-struct-name = "configuration"
+
+[[parameter]]
+name = "autocommit"
+scope = ["global","session"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["true"]
+comment = "autocommit"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "backlog"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["2","1","65535"]
+comment = "back-log"
+update-mode = "fix"
