@@ -31,7 +31,8 @@ var (
 
 func createServer() {
 	//cfg := config.GetGlobalConfig()
-	svr = server.NewServer(serverAddress)
+	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
+	svr = server.NewServer(address)
 }
 
 func runServer() {
@@ -58,8 +59,14 @@ func cleanup() {
 }
 
 func main() {
+	if len(os.Args) < 2{
+		fmt.Printf("Usage: %s configFile")
+		os.Exit(-1)
+	}
 	flag.Parse()
 	config.InitializeConfig(*configPath, *configCheck, *configStrict, reloadConfig, overrideConfig)
+	config.GlobalSystemVariables.LoadInitialValues()
+	config.LoadvarsConfigFromFile(os.Args[1],&config.GlobalSystemVariables)
 	createServer()
 	registerSignalHandlers()
 	runServer()

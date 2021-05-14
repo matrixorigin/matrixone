@@ -1,5 +1,7 @@
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 [[parameter]]
 name = "autocommit~"

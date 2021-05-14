@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"math/rand"
+	"matrixone/pkg/config"
 	"strconv"
 	"time"
 )
@@ -422,8 +423,8 @@ func (mcp *MysqlClientProtocol) authenticateUser(authResponse []byte) error {
 
 	//TODO:get the user's password
 	var psw []byte
-	if mcp.username == dumpUser{//the user dump for test
-		psw = []byte(dumpPassword)
+	if mcp.username == config.GlobalSystemVariables.GetDumpuser(){//the user dump for test
+		psw = []byte(config.GlobalSystemVariables.GetDumppassword())
 	}
 
 	//TO Check password

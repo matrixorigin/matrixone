@@ -5,7 +5,6 @@ go 1.15
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/aws/aws-sdk-go v1.37.14
-	github.com/blacktear23/go-proxyprotocol v0.0.0-20180807104634-af7a81e8dd0d
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/google/uuid v1.2.0

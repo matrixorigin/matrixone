@@ -5,6 +5,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -99,11 +100,22 @@ type parameter struct {
 
 type parameters struct{
 	//the name of parameter data structure
+	//the parameter structure can be exported.
+	//the first character must be capital.
 	ParameterStructName string	`toml:"parameter-struct-name"`
 
 	//the name of configuration data structure
+	//the configuration structure is an internal structure that will not be exported.
+	//the first character should not be capital.
 	ConfigurationStructName string `toml:"config-struct-name"`
 
+	//the name of operation file which contains all interface code for operating parameters
+	//without ".go"
+	OperationFileName string `toml:"operation-file-name"`
+
+	//the name of configuration file which contains all auto generated parameters.
+	//without ".toml"
+	ConfigurationFileName string `toml:"config-file-name"`
 
 	//the array of parameters
 	Parameter []parameter
@@ -139,13 +151,23 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 	}
 
 	//check parameter-struct-name
-	if !isGoStructAndInterfaceIdentifier(params.ParameterStructName){
+	if !isExportedGoIdentifier(params.ParameterStructName){
 		return fmt.Errorf("ParameterStructName [%s] is not a valid identifier name within ascii characters",params.ParameterStructName)
 	}
 
 	//check config-struct-name
-	if !isGoStructAndInterfaceIdentifier(params.ConfigurationStructName){
+	if !isGoIdentifier(params.ConfigurationStructName){
 		return fmt.Errorf("ConfigurationStructName [%s] is not a valid identifier name within ascii characters",params.ConfigurationStructName)
+	}
+
+	//check parameter operation file name
+	if !isGoStructAndInterfaceIdentifier(params.OperationFileName){
+		return fmt.Errorf("OperationFileName [%s] is not a valid identifier name within ascii characters",params.OperationFileName)
+	}
+
+	//check parameter configuration file name
+	if !isGoStructAndInterfaceIdentifier(params.ConfigurationFileName){
+		return fmt.Errorf("ConfigurationFileName [%s] is not a valid identifier name within ascii characters",params.ConfigurationFileName)
 	}
 
 	//check parameter
@@ -181,6 +203,31 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 
 	//parameter name dedup
 	var dedup = make(map[string]bool)
+
+	if _,ok := dedup[params.ParameterStructName];!ok{
+		dedup[params.ParameterStructName] = true
+	}else{
+		return fmt.Errorf("has duplicate parameter struct name %s.",params.ParameterStructName)
+	}
+
+	if _,ok := dedup[params.ConfigurationStructName];!ok{
+		dedup[params.ConfigurationStructName] = true
+	}else{
+		return fmt.Errorf("has duplicate configuration struct name %s.",params.ConfigurationStructName)
+	}
+
+	if _,ok := dedup[params.OperationFileName];!ok{
+		dedup[params.OperationFileName] = true
+	}else{
+		return fmt.Errorf("has duplicate operation file name %s.",params.OperationFileName)
+	}
+
+	if _,ok := dedup[params.ConfigurationFileName];!ok{
+		dedup[params.ConfigurationFileName] = true
+	}else{
+		return fmt.Errorf("has duplicate configuration file name %s.",params.ConfigurationFileName)
+	}
+
 	for _,p := range params.Parameter{
 		if _,ok := dedup[p.Name];!ok{
 			dedup[p.Name] = true
@@ -205,6 +252,13 @@ check the x is a valid low case ascii character
 */
 func isLowCaseAsciiChar(x byte)bool{
 	return x >='a' && x <='z' || x == '_'
+}
+
+/**
+check the x is a valid low case ascii character
+*/
+func isUpCaseAsciiChar(x byte)bool{
+	return x >='A' && x <='Z'
 }
 
 /**
@@ -240,6 +294,38 @@ func isGoIdentifier(s string) bool {
 
 	//the first character is a low case ascii character.
 	if ! isLowCaseAsciiChar(s[0]){
+		return false
+	}
+
+	//the rest should ascii character | ascii digit | _
+	for i := 1 ; i < len(s);i++{
+		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])){
+			return false
+		}
+	}
+
+	return true
+}
+
+/**
+check if the string can be a valid identifier in Golang.
+
+In our context, the identifier can be defined as follow:
+identifier = up-case-letter { letter | digit }
+up-case-letter = "A" ... "Z"
+letter     = "a" ... "z" | "A" ... "Z" | "_"
+digit      = "0" ... "9"
+
+here,the letter just has the ascii characters.
+So,it's the subset of the identifier in Golang.
+*/
+func isExportedGoIdentifier(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+
+	//the first character is a low case ascii character.
+	if ! isUpCaseAsciiChar(s[0]){
 		return false
 	}
 
@@ -612,7 +698,7 @@ import (
 )
 
 //all parameters in the system
-type AllParameters struct{
+type {{.ParameterStructName}} struct{
 	//read and write lock
 	rwlock	sync.RWMutex
 {{range .Parameter}}
@@ -624,10 +710,10 @@ type AllParameters struct{
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
-}//end AllParameters
+}//end {{.ParameterStructName}}
 
 //all parameters can be set in the configuration file.
-type configuration struct{
+type {{.ConfigurationStructName}} struct{
 	//read and write lock
 	rwlock	sync.RWMutex
 
@@ -643,13 +729,13 @@ type configuration struct{
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
-}//end configuration
+}//end {{.ConfigurationStructName}}
 
 /**
 prepare something before anything else.
 it is unsafe in multi-thread environment.
 */
-func (ap *AllParameters) prepareAnything(){
+func (ap *{{.ParameterStructName}}) prepareAnything(){
 	if ap.name2definition == nil {
 		ap.name2definition = make(map[string]string)
 	}
@@ -658,7 +744,7 @@ func (ap *AllParameters) prepareAnything(){
 /**
 set parameter and its string of the definition.
 */
-func (ap *AllParameters) PrepareDefinition(){
+func (ap *{{.ParameterStructName}}) PrepareDefinition(){
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 
@@ -673,7 +759,7 @@ func (ap *AllParameters) PrepareDefinition(){
 /**
 get the definition of the parameter.
 */
-func (ap *AllParameters) GetDefinition(name string)(string,error){
+func (ap *{{.ParameterStructName}}) GetDefinition(name string)(string,error){
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	ap.prepareAnything()
@@ -687,7 +773,7 @@ func (ap *AllParameters) GetDefinition(name string)(string,error){
 /**
 check if there is the parameter
 */
-func (ap *AllParameters) HasParameter(name string)bool{
+func (ap *{{.ParameterStructName}}) HasParameter(name string)bool{
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	ap.prepareAnything()
@@ -701,7 +787,7 @@ func (ap *AllParameters) HasParameter(name string)bool{
 /**
 Load the initial values of all parameters.
 */
-func (ap *AllParameters) LoadInitialValues()error{
+func (ap *{{.ParameterStructName}}) LoadInitialValues()error{
 	ap.PrepareDefinition()
 	var err error
 	{{range .Parameter}}
@@ -752,34 +838,39 @@ func (ap *AllParameters) LoadInitialValues()error{
 	return nil
 }
 
-{{range .Parameter}}
+{{with $Params := .}}
+{{range $Params.Parameter}}
 /**
 Get the value of the parameter {{.Name}}
 */
-func (ap *AllParameters) Get{{.CapitalName}}() {{.DataType}} {
+func (ap * {{$Params.ParameterStructName}} ) Get{{.CapitalName}}() {{.DataType}} {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	return ap.{{.Name}}
 }
 {{end}}
+{{end}}
 
 
-{{range .Parameter}}
+{{with $Params := .}}
+{{range $Params.Parameter}}
 {{ if ne .UpdateMode "fix"}}
 /**
 Set the value of the parameter {{.Name}}
 */
-func (ap *AllParameters) Set{{.CapitalName}}(value {{.DataType}})error {
+func (ap * {{$Params.ParameterStructName}} ) Set{{.CapitalName}}(value {{.DataType}})error {
 	return  ap.set{{.CapitalName}}(value)
 }
 {{end}}
 {{end}}
+{{end}}
 
-{{range .Parameter}}
+{{with $Params := .}}
+{{range $Params.Parameter}}
 /**
 Set the value of the parameter {{.Name}}
 */
-func (ap *AllParameters) set{{.CapitalName}}(value {{.DataType}})error {
+func (ap * {{$Params.ParameterStructName}} ) set{{.CapitalName}}(value {{.DataType}})error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 
@@ -874,12 +965,13 @@ func (ap *AllParameters) set{{.CapitalName}}(value {{.DataType}})error {
 	return nil
 }
 {{end}}
+{{end}}
 
 /**
 prepare something before anything else.
 it is unsafe in multi-thread environment.
 */
-func (config *configuration) prepareAnything(){
+func (config *{{.ConfigurationStructName}}) prepareAnything(){
 	if config.name2updatedFlags == nil {
 		config.name2updatedFlags = make(map[string]bool)
 	}
@@ -888,7 +980,7 @@ func (config *configuration) prepareAnything(){
 /**
 reset update flags of configuration items
 */
-func (config *configuration) resetUpdatedFlags(){
+func (config *{{.ConfigurationStructName}}) resetUpdatedFlags(){
 	config.rwlock.Lock()
 	defer config.rwlock.Unlock()
 	config.prepareAnything()
@@ -902,7 +994,7 @@ func (config *configuration) resetUpdatedFlags(){
 /**
 set update flag of configuration item
 */
-func (config *configuration) setUpdatedFlag(name string,updated bool){
+func (config *{{.ConfigurationStructName}}) setUpdatedFlag(name string,updated bool){
 	config.rwlock.Lock()
 	defer config.rwlock.Unlock()
 	config.prepareAnything()
@@ -912,7 +1004,7 @@ func (config *configuration) setUpdatedFlag(name string,updated bool){
 /**
 get update flag of configuration item
 */
-func (config *configuration) getUpdatedFlag(name string)bool{
+func (config *{{.ConfigurationStructName}}) getUpdatedFlag(name string)bool{
 	config.rwlock.RLock()
 	defer config.rwlock.RUnlock()
 	config.prepareAnything()
@@ -922,7 +1014,7 @@ func (config *configuration) getUpdatedFlag(name string)bool{
 /**
 Load parameters' values in the configuration string.
 */
-func (config *configuration) LoadConfigurationFromString(input string) error {
+func (config *{{.ConfigurationStructName}}) LoadConfigurationFromString(input string) error {
 	config.resetUpdatedFlags()
 
 	metadata, err := toml.Decode(input, config);
@@ -946,25 +1038,31 @@ func (config *configuration) LoadConfigurationFromString(input string) error {
 /**
 Load parameters' values in the configuration file.
 */
-func (config *configuration) LoadConfigurationFromFile(filename string) error {
-	pfile,err :=os.Open(filename)
-	if err != nil{
-		return err
-	}
-	defer pfile.Close()
+func (config *{{.ConfigurationStructName}}) LoadConfigurationFromFile(fname string) error {
+	config.resetUpdatedFlags()
 
-	fbytes,err := ioutil.ReadAll(pfile)
-	if err != nil{
+	metadata, err := toml.DecodeFile(fname, config);
+	if err != nil {
 		return err
+	}else if failed := metadata.Undecoded() ; len(failed) > 0 {
+		var failedItems []string
+		for _, item := range failed {
+			failedItems = append(failedItems, item.String())
+		}
+		return fmt.Errorf("decode failed %s. error:%v",failedItems,err)
 	}
 
-	return config.LoadConfigurationFromString(string(fbytes))
+	for _,k := range metadata.Keys(){
+		config.setUpdatedFlag(k[0],true)
+	}
+
+	return nil
 }
 
 /**
 Update parameters' values with configuration.
 */
-func (ap *AllParameters) UpdateParametersWithConfiguration(config *configuration)error{
+func (ap * {{.ParameterStructName}} ) UpdateParametersWithConfiguration(config *{{.ConfigurationStructName}})error{
 	var err error
 	{{range .Parameter}}
 	{{ if ne .UpdateMode "fix"}}
@@ -975,6 +1073,22 @@ func (ap *AllParameters) UpdateParametersWithConfiguration(config *configuration
 	}
 	{{end}}
 	{{end}}
+	return nil
+}
+
+/**
+Load configuration from file into {{.ConfigurationStructName}}.
+Then update items into {{.ParameterStructName}}
+*/
+func Load{{.ConfigurationStructName}}FromFile(filename string,params *{{.ParameterStructName}}) error{
+	config := &{{.ConfigurationStructName}}{}
+	if err := config.LoadConfigurationFromFile(filename); err != nil{
+		return err
+	}
+
+	if err := params.UpdateParametersWithConfiguration(config); err != nil{
+		return err
+	}
 	return nil
 }
 `
@@ -1010,32 +1124,164 @@ var defaultConfigurationTemplate=`
 {{end}}
 `
 
+var defaultOperationTestTemplate=`
+// Code generated by tool; DO NOT EDIT.
+package config
+
+import (
+	"sync"
+	"testing"
+)
+
+func Test{{.ParameterStructName}}_LoadInitialValues(t *testing.T) {
+	ap := &{{.ParameterStructName}}{}
+	if err :=ap.LoadInitialValues(); err!=nil{
+		t.Errorf("LoadInitialValues failed. error:%v",err)
+	}
+}
+
+func is{{.ConfigurationStructName}}Equal(c1,c2 {{.ConfigurationStructName}}) bool {
+
+{{range .Parameter}}
+{{ if ne .UpdateMode "fix"}}
+	if c1.{{.CapitalName}} != c2.{{.CapitalName}} {
+		return false
+	}
+{{end}}
+{{end}}
+
+	return true
+}
+
+func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T) {
+	t1 := `+"`"+`
+{{range $index,$param := .Parameter}}
+{{ if ne .UpdateMode "fix"}}
+	{{- with $count := len .Values -}}
+		{{- if ne 0 $count -}}
+			{{- if eq $param.DataType "string" -}}
+				{{- $param.Name -}} = "{{- index $param.Values 0 -}}"
+			{{- else -}}
+				{{- $param.Name -}} = {{- index $param.Values 0 -}}
+			{{- end -}}
+		{{- end -}}
+	{{- else -}}
+		{{- if eq $param.DataType "string" -}}
+			{{- $param.Name -}} = ""
+		{{- else if eq $param.DataType "bool" -}}
+			{{- $param.Name -}} = false
+		{{- else if eq $param.DataType "int64" -}}
+			{{- $param.Name -}} = 0
+		{{- else if eq $param.DataType "float64" -}}
+			{{- $param.Name -}} = 0.0
+		{{- end -}}
+	{{- end -}}
+{{end}}
+{{end}}		
+`+"`"+`
+	t1_config:={{.ConfigurationStructName}}{
+		rwlock:            sync.RWMutex{},
+
+{{range $index,$param := .Parameter}}
+{{ if ne .UpdateMode "fix"}}
+	{{- with $count := len .Values -}}
+		{{- if ne 0 $count -}}
+			{{- if eq $param.DataType "string" -}}
+				{{- $param.CapitalName -}} : "{{- index $param.Values 0 -}}" ,
+			{{- else -}}
+				{{- $param.CapitalName -}} : {{- index $param.Values 0 -}} ,
+			{{- end -}}
+		{{- end -}}
+	{{- else -}}
+		{{- if eq $param.DataType "string" -}}
+			{{- $param.CapitalName -}} : "" ,
+		{{- else if eq $param.DataType "bool" -}}
+			{{- $param.CapitalName -}} : false ,
+		{{- else if eq $param.DataType "int64" -}}
+			{{- $param.CapitalName -}} : 0 ,
+		{{- else if eq $param.DataType "float64" -}}
+			{{- $param.CapitalName -}} : 0.0 ,
+		{{- end -}}
+	{{- end -}}
+{{end}}
+{{end}}	
+
+		name2updatedFlags: nil,
+	}
+
+	type args struct {
+		input string
+		config {{.ConfigurationStructName}}
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+		wantErr2 bool
+		wantErr3 bool
+	}{
+		{"t1",args{t1,t1_config},false,false,false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ap := &{{.ParameterStructName}}{}
+			if err := ap.LoadInitialValues(); err != nil{
+				t.Errorf("LoadInitialValues failed.error %v",err)
+			}
+			config := &{{.ConfigurationStructName}}{}
+			if err := config.LoadConfigurationFromString(tt.args.input); (err != nil) != tt.wantErr {
+				t.Errorf("LoadConfigurationFromString() error = %v, wantErr %v", err, tt.wantErr)
+			}else if err != nil{
+				return
+			}
+
+			if err := ap.UpdateParametersWithConfiguration(config); (err != nil) != tt.wantErr2{
+				t.Errorf("UpdateParametersWithConfiguration failed. error:%v",err)
+			}
+
+			if ( is{{.ConfigurationStructName}}Equal(*config,tt.args.config) != true ) != tt.wantErr3{
+				t.Errorf("Configuration are not equal. %v vs %v ",*config,tt.args.config)
+				return
+			}
+		})
+	}
+}
+`
+
 /**
 Analyse the template files.
 Generate configuration file, operation interfaces.
 */
 type ConfigurationFileGenerator interface {
-	Generate(string)error
+	/**
+	Input: parameter definition file name
+	Output:
+		1. operation interface and code for parameters
+		2. configuraion file for parameters
+	 */
+	Generate() error
 }
 
 type ConfigurationFileGeneratorImpl struct {
 	//the name of the parameter definition
 	parameterDefinitionFileName string
 
-	//the name of file has operation interface and code without the suffix ".go"
-	parameterOperationFileName string
-
-	//the name of configuration file without the suffix ".toml"
-	configurationFileName string
-
-	//the template string for the parameter operation interfaces and classes.
+	//the template string for the auto generated parameter operation interfaces and classes.
 	parameterTemplate string
 
-	//the template string for initial configuration file.
+	//the template string for the auto generated initial configuration file.
 	configurationTemplate string
+
+	//the template string for the auto generated parameter operation interfaces test cases.
+	parameterTestCasesTemplate string
 }
 
-func (cfgi *ConfigurationFileGeneratorImpl) Generate(string)error {
+func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
+	defDir, err := filepath.Abs(filepath.Dir(cfgi.parameterDefinitionFileName))
+	if err != nil {
+		return fmt.Errorf("Get the directory of parameter defintion file failed.error:%v",err)
+	}
+
 	params := &parameters{}
 	if err := params.LoadParametersDefinitionFromFile(cfgi.parameterDefinitionFileName); err != nil {
 		return fmt.Errorf("LoadParametersDefinitionFromFile failed.error:%v",err)
@@ -1046,7 +1292,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate(string)error {
 		return fmt.Errorf("Make parameter template failed. error:%v",err)
 	}
 
-	f, err := os.Create(cfgi.parameterOperationFileName)
+	f, err := os.Create(defDir+"/"+params.OperationFileName+".go")
 	if err != nil{
 		return err
 	}
@@ -1062,7 +1308,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate(string)error {
 		return err
 	}
 
-	tomlf,err := os.Create(cfgi.configurationFileName)
+	tomlf,err := os.Create(defDir+"/"+params.ConfigurationFileName+".toml")
 	if err!= nil{
 		return err
 	}
@@ -1073,15 +1319,30 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate(string)error {
 		return err
 	}
 
+	testCasesTmpl,err := template.New("MakeTestCasesTemplate").Parse(cfgi.parameterTestCasesTemplate)
+	if err != nil {
+		return err
+	}
+
+	testCasesf,err := os.Create(defDir+"/"+params.OperationFileName+"_test.go")
+	if err!= nil{
+		return err
+	}
+	defer testCasesf.Close()
+
+	err = testCasesTmpl.Execute(testCasesf,params)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func NewConfigurationFileGenerator(defFileName string)ConfigurationFileGenerator{
 	return &ConfigurationFileGeneratorImpl{
 		parameterDefinitionFileName: defFileName,
-		parameterOperationFileName: "parameters.go",
-		configurationFileName: "config.toml",
 		parameterTemplate: defaultParameterTempate,
 		configurationTemplate: defaultConfigurationTemplate,
+		parameterTestCasesTemplate: defaultOperationTestTemplate,
 	}
 }
