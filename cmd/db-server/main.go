@@ -1,10 +1,8 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
-	"github.com/pingcap/parser/terror"
 	"matrixone/pkg/config"
 	"matrixone/pkg/server"
 	"matrixone/pkg/util/signal"
@@ -16,6 +14,7 @@ const (
 	nmConfig       = "config"
 	nmConfigCheck  = "config-check"
 	nmConfigStrict = "config-strict"
+	serverAddress  = "localhost:6001"
 )
 
 var (
@@ -26,28 +25,25 @@ var (
 )
 
 var (
-	svr      *server.Server
+	svr      server.Server
 	graceful bool
 )
 
 func createServer() {
-	cfg := config.GetGlobalConfig()
-	driver := server.NewDBDriver()
-	var err error
-	svr, err = server.NewServer(cfg, driver)
-	terror.MustNil(err)
+	//cfg := config.GetGlobalConfig()
+	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
+	svr = server.NewServer(address)
 }
 
 func runServer() {
-	err := svr.Run()
-	terror.MustNil(err)
+	svr.Loop()
 }
 
 func serverShutdown(isgraceful bool) {
 	if isgraceful {
 		graceful = true
 	}
-	svr.Close()
+	svr.Quit()
 }
 
 func registerSignalHandlers() {
@@ -56,15 +52,21 @@ func registerSignalHandlers() {
 
 func cleanup() {
 	if graceful {
-		svr.GracefulDown(context.Background(), nil)
+		//svr.GracefulDown(context.Background(), nil)
 	} else {
-		svr.TryGracefulDown()
+		//svr.TryGracefulDown()
 	}
 }
 
 func main() {
+	if len(os.Args) < 2{
+		fmt.Printf("Usage: %s configFile")
+		os.Exit(-1)
+	}
 	flag.Parse()
 	config.InitializeConfig(*configPath, *configCheck, *configStrict, reloadConfig, overrideConfig)
+	config.GlobalSystemVariables.LoadInitialValues()
+	config.LoadvarsConfigFromFile(os.Args[1],&config.GlobalSystemVariables)
 	createServer()
 	registerSignalHandlers()
 	runServer()

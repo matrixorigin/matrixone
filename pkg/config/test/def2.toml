@@ -1,0 +1,78 @@
+parameter-struct-name = "Variables"
+config-struct-name = "vconfig"
+
+#without ".go"
+operation-file-name = "variables"
+
+#without ".toml"
+config-file-name = "varconfig"
+
+[[parameter]]
+name = "autoload"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = []
+comment = "autoload something"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "rootname"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["root"]
+comment = "root name"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "rootpassword"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = [""]
+comment = "root password"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "dumpuser"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["dump"]
+comment = "dump user name"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "dumppassword"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["111"]
+comment = "dump user password"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "port"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["9000"]
+comment = "port"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "ip"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["localhost","127.0.0.1"]
+comment = "listening ip"
+update-mode = "dynamic"

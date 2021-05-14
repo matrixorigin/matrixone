@@ -26,6 +26,8 @@ import (
 	"github.com/pingcap/parser/mysql"
 )
 
+var GlobalSystemVariables SystemVariables
+
 // Config number limitations
 const (
 	// DefPort is the default port
