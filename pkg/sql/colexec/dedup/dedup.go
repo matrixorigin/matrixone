@@ -45,7 +45,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 	bat := proc.Reg.Ax.(*batch.Batch)
-	if bat.Attrs == nil {
+	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
 	ctr.groups = make(map[uint64][]*hash.DedupGroup)

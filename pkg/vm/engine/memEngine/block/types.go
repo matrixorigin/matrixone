@@ -1,12 +1,12 @@
-package segment
+package block
 
 import (
-	"matrixone/pkg/vm/engine/logEngine/kv"
+	"matrixone/pkg/vm/engine/memEngine/kv"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 )
 
-type Segment struct {
+type Block struct {
 	id   string
 	db   *kv.KV
 	proc *process.Process

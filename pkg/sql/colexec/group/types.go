@@ -1,10 +1,15 @@
 package group
 
 import (
-	"matrixone/pkg/container/vector"
+	"matrixone/pkg/container/block"
 	"matrixone/pkg/hash"
 	"matrixone/pkg/intmap/fastmap"
 	"matrixone/pkg/sql/colexec/aggregation"
+)
+
+const (
+	Build = iota
+	Eval
 )
 
 const (
@@ -17,7 +22,9 @@ var (
 )
 
 type Container struct {
+	n      int
 	is     []int // index list
+	rows   int64
 	diffs  []bool
 	matchs []int64
 	attrs  []string
@@ -25,7 +32,8 @@ type Container struct {
 	hashs  []uint64
 	sels   [][]int64    // sels
 	slots  *fastmap.Map // hash code -> sels index
-	vecs   []*vector.Vector
+	bat    *block.Block
+	bats   []*block.Block
 	groups map[uint64][]*hash.Group // hash code -> group list
 }
 

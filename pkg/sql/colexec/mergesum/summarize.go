@@ -43,17 +43,19 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			reg := proc.Reg.Ws[i]
 			v := <-reg.Ch
 			if v == nil {
+				reg.Ch = nil
 				reg.Wg.Done()
 				proc.Reg.Ws = append(proc.Reg.Ws[:i], proc.Reg.Ws[i+1:]...)
 				i--
 				continue
 			}
 			bat := v.(*batch.Batch)
-			if bat.Attrs == nil {
+			if bat == nil || bat.Attrs == nil {
 				reg.Wg.Done()
 				continue
 			}
 			if err := ctr.processBatch(bat, n.Es, proc); err != nil {
+				reg.Ch = nil
 				reg.Wg.Done()
 				ctr.clean(bat, proc)
 				return true, err
@@ -137,5 +139,26 @@ func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc)
 	}
-	register.FreeRegisters(proc)
+	{
+		for _, reg := range proc.Reg.Ws {
+			if reg.Ch != nil {
+				v := <-reg.Ch
+				switch {
+				case v == nil:
+					reg.Ch = nil
+					reg.Wg.Done()
+				default:
+					bat := v.(*batch.Batch)
+					if bat == nil || bat.Attrs == nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+					} else {
+						bat.Clean(proc)
+						reg.Ch = nil
+						reg.Wg.Done()
+					}
+				}
+			}
+		}
+	}
 }

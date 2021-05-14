@@ -1,11 +1,9 @@
 package segment
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
+	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/spillEngine/block"
 	"matrixone/pkg/vm/engine/spillEngine/kv"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 )
@@ -18,42 +16,30 @@ func (s *Segment) ID() string {
 	return s.id
 }
 
-func (s *Segment) Read(cs []uint64, attrs []string, proc *process.Process) (*batch.Batch, error) {
-	bat := batch.New(true, attrs)
-	bat.Is = make([]batch.Info, len(attrs))
-	{
-		data, err := s.db.GetCopy(s.id)
-		if err != nil {
-			return nil, err
-		}
-		if data != nil {
-			buf, err := proc.Alloc(int64(len(data)))
-			if err != nil {
-				return nil, err
-			}
-			copy(buf[mempool.CountSize:], data)
-			bat.SelsData = buf
-			bat.Sels = encoding.DecodeInt64Slice(buf[mempool.CountSize : mempool.CountSize+len(data)])
-		}
-	}
-	for i, attr := range attrs {
-		md := s.mp[attr]
-		data, ap, id, err := s.db.Get(s.id+"."+attr, proc)
-		if err != nil {
-			for j := 0; j < i; j++ {
-				bat.Is[i].Wg.Wait()
-				bat.Vecs[j].Free(s.proc)
-			}
-			return nil, err
-		}
-		vec := vector.New(md.Type)
-		vec.Data = data
-		bat.Vecs[i] = vec
-		bat.Is[i] = batch.Info{
-			Ref: cs[i],
-			Alg: md.Alg,
-			Wg:  &batch.WaitGroup{ap, id},
-		}
-	}
-	return bat, nil
+func (s *Segment) Rows() int64 {
+	return 0
+}
+
+func (s *Segment) Size(attr string) int64 {
+	return block.New(s.id, s.db, s.proc, s.mp).Size(attr)
+}
+
+func (s *Segment) Blocks() []string {
+	return []string{s.id}
+}
+
+func (s *Segment) Block(id string, proc *process.Process) engine.Block {
+	return block.New(id, s.db, proc, s.mp)
+}
+
+func (s *Segment) NewFilter() engine.Filter {
+	return nil
+}
+
+func (s *Segment) NewSummarizer() engine.Summarizer {
+	return nil
+}
+
+func (s *Segment) NewSparseFilter() engine.SparseFilter {
+	return nil
 }

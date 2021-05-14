@@ -51,12 +51,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				return true, err
 			}
 			if len(ctr.ptns) == 0 {
-				ctr.state = EmitPrepare
+				ctr.state = EvalPrepare
 			} else {
 				ctr.state = Merge
 			}
-		case Emit:
-			if err := ctr.emit(proc); err != nil {
+		case Eval:
+			if err := ctr.eval(proc); err != nil {
 				return true, err
 			}
 			ctr.bat.Reduce(ctr.attrs, proc)
@@ -72,9 +72,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				ctr.clean(proc)
 				return true, err
 			}
-			ctr.state = MergeEmit
-		case MergeEmit:
-			if err := ctr.mergeemit(proc); err != nil {
+			ctr.state = MergeEval
+		case MergeEval:
+			if err := ctr.mergeeval(proc); err != nil {
 				ctr.clean(proc)
 				return true, err
 			}
@@ -86,7 +86,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				return true, nil
 			}
 			return false, nil
-		case EmitPrepare:
+		case EvalPrepare:
 			for _, bat := range ctr.ptn.bats {
 				if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
 					ctr.clean(proc)
@@ -108,7 +108,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 					ptn.lens[i] = int64(n)
 				}
 			}
-			ctr.state = Emit
+			ctr.state = Eval
 		}
 	}
 	return false, nil
@@ -123,13 +123,14 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 			reg := proc.Reg.Ws[i]
 			v := <-reg.Ch
 			if v == nil {
+				reg.Ch = nil
 				reg.Wg.Done()
 				proc.Reg.Ws = append(proc.Reg.Ws[:i], proc.Reg.Ws[i+1:]...)
 				i--
 				continue
 			}
 			bat := v.(*batch.Batch)
-			if bat.Attrs == nil {
+			if bat == nil || bat.Attrs == nil {
 				reg.Wg.Done()
 				continue
 			}
@@ -152,6 +153,8 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				for i, attr := range bat.Attrs {
 					vec, err := bat.GetVector(attr, proc)
 					if err != nil {
+						reg.Ch = nil
+						reg.Wg.Done()
 						bat.Clean(proc)
 						return err
 					}
@@ -168,11 +171,10 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 			if ctr.ptn == nil {
 				ctr.ptn = &partition{cmps: ctr.cmps}
 			}
-			if n := len(bat.Sels); n > 0 {
-				ctr.ptn.rows += int64(n)
-			} else {
+			{
 				n, err := bat.Length(proc)
 				if err != nil {
+					reg.Ch = nil
 					reg.Wg.Done()
 					bat.Clean(proc)
 					return err
@@ -181,18 +183,21 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 			}
 			if ctr.ptn.rows > proc.Lim.PartitionRows {
 				if err := ctr.newSpill(ctr.ptn, proc); err != nil {
+					reg.Ch = nil
 					reg.Wg.Done()
 					bat.Clean(proc)
 					return err
 				}
 				for i, pbat := range ctr.ptn.bats {
 					if err := pbat.Prefetch(pbat.Attrs, pbat.Vecs, proc); err != nil {
+						reg.Ch = nil
 						reg.Wg.Done()
 						bat.Clean(proc)
 						ctr.ptn.bats = ctr.ptn.bats[i:]
 						return err
 					}
 					if err := ctr.ptn.r.Write(pbat); err != nil {
+						reg.Ch = nil
 						reg.Wg.Done()
 						bat.Clean(proc)
 						ctr.ptn.bats = ctr.ptn.bats[i:]
@@ -201,7 +206,14 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 					pbat.Clean(proc)
 				}
 				ctr.ptn.bats = nil
+				if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
+					reg.Ch = nil
+					reg.Wg.Done()
+					bat.Clean(proc)
+					return err
+				}
 				if err := ctr.ptn.r.Write(bat); err != nil {
+					reg.Ch = nil
 					reg.Wg.Done()
 					bat.Clean(proc)
 					return err
@@ -234,7 +246,7 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *Container) emit(proc *process.Process) error {
+func (ctr *Container) eval(proc *process.Process) error {
 	if ctr.ptn.heap == nil {
 		ctr.ptn.heap = make([]int, len(ctr.ptn.bats))
 		for i := range ctr.ptn.bats {
@@ -291,7 +303,7 @@ func (ctr *Container) merge(proc *process.Process) error {
 	return nil
 }
 
-func (ctr *Container) mergeemit(proc *process.Process) error {
+func (ctr *Container) mergeeval(proc *process.Process) error {
 	if ctr.heap == nil {
 		ctr.heap = make([]int, len(ctr.ptns))
 		for i := range ctr.heap {
@@ -378,7 +390,8 @@ func (ctr *Container) load(ptn *partition, proc *process.Process) error {
 		ptn.bat = nil
 		return nil
 	}
-	bat, err := ptn.r.Segment(ptn.segs[0], proc).Read(ctr.spill.cs, ctr.spill.attrs, proc)
+	seg := ptn.r.Segment(ptn.segs[0], proc)
+	bat, err := seg.Block(seg.Blocks()[0], proc).Prefetch(ctr.spill.cs, ctr.spill.attrs, proc)
 	if err != nil {
 		return err
 	}
@@ -394,9 +407,10 @@ func (ctr *Container) load(ptn *partition, proc *process.Process) error {
 func (ctr *Container) loads(ptn *partition, proc *process.Process) error {
 	if ptn.bats == nil {
 		ptn.bats = make([]*batch.Batch, 0, len(ptn.segs))
-		segs := ptn.r.Segments()
-		for _, seg := range segs {
-			bat, err := ptn.r.Segment(seg, proc).Read(ctr.spill.cs, ctr.spill.attrs, proc)
+		ids := ptn.r.Segments()
+		for _, id := range ids {
+			seg := ptn.r.Segment(id, proc)
+			bat, err := seg.Block(seg.Blocks()[0], proc).Prefetch(ctr.spill.cs, ctr.spill.attrs, proc)
 			if err != nil {
 				return err
 			}
@@ -479,6 +493,28 @@ func (ctr *Container) clean(proc *process.Process) {
 		}
 		if ptn.r != nil {
 			ctr.spill.e.Delete(pkey(ctr.spill.id, i))
+		}
+	}
+	{
+		for _, reg := range proc.Reg.Ws {
+			if reg.Ch != nil {
+				v := <-reg.Ch
+				switch {
+				case v == nil:
+					reg.Ch = nil
+					reg.Wg.Done()
+				default:
+					bat := v.(*batch.Batch)
+					if bat == nil || bat.Attrs == nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+					} else {
+						bat.Clean(proc)
+						reg.Ch = nil
+						reg.Wg.Done()
+					}
+				}
+			}
 		}
 	}
 }

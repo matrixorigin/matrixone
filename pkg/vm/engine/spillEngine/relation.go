@@ -24,6 +24,10 @@ func (r *relation) Rows() int64 {
 	return r.md.Rows
 }
 
+func (s *relation) Size(_ string) int64 {
+	return 0
+}
+
 func (r *relation) Segments() []string {
 	segs := make([]string, r.md.Segs)
 	for i := range segs {

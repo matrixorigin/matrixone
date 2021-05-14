@@ -497,7 +497,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				} else {
 					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 				}
-				v.Col = encoding.DecodeInt16Slice(data[mempool.CountSize : mempool.CountSize+len(col)*8])
+				v.Col = encoding.DecodeUint64Slice(data[mempool.CountSize : mempool.CountSize+len(col)*8])
 				v.Data = data
 				col = v.Col.([]uint64)
 			}
@@ -841,6 +841,22 @@ func (v *Vector) Show() ([]byte, error) {
 		buf.Write(encoding.EncodeUint32Slice(Col.Lengths))
 		buf.Write(Col.Data)
 		return buf.Bytes(), nil
+	case types.T_tuple:
+		buf.Write(encoding.EncodeType(v.Typ))
+		nb, err := v.Nsp.Show()
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(nb))))
+		if len(nb) > 0 {
+			buf.Write(nb)
+		}
+		data, err := encoding.Encode(v.Col.([][]interface{}))
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(data)
+		return buf.Bytes(), nil
 	default:
 		return nil, fmt.Errorf("unsupport encoding type %s", v.Typ.Oid)
 	}
@@ -1023,6 +1039,24 @@ func (v *Vector) Read(data []byte) error {
 				o += n
 			}
 		}
+	case types.T_tuple:
+		col := v.Col.([][]interface{})
+		size := encoding.DecodeUint32(data)
+		data = data[4:]
+		if size > 0 {
+			if err := v.Nsp.Read(data[:size]); err != nil {
+				return err
+			}
+			data = data[size:]
+		}
+		cnt := encoding.DecodeInt32(data)
+		if cnt == 0 {
+			break
+		}
+		if err := encoding.Decode(data, &col); err != nil {
+			return err
+		}
+		v.Col = col
 	}
 	return nil
 }

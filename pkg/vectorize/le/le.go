@@ -6,50 +6,50 @@ import (
 )
 
 var (
-    int8Le func([]int8, []int8, []int64) []int64
-    int8LeSels func([]int8, []int8, []int64, []int64) []int64
-    int8LeScalar func(int8, []int8, []int64) []int64
-    int8LeScalarSels func(int8, []int8, []int64, []int64) []int64
-    int16Le func([]int16, []int16, []int64) []int64
-    int16LeSels func([]int16, []int16, []int64, []int64) []int64
-    int16LeScalar func(int16, []int16, []int64) []int64
-    int16LeScalarSels func(int16, []int16, []int64, []int64) []int64
-    int32Le func([]int32, []int32, []int64) []int64
-    int32LeSels func([]int32, []int32, []int64, []int64) []int64
-    int32LeScalar func(int32, []int32, []int64) []int64
-    int32LeScalarSels func(int32, []int32, []int64, []int64) []int64
-    int64Le func([]int64, []int64, []int64) []int64
-    int64LeSels func([]int64, []int64, []int64, []int64) []int64
-    int64LeScalar func(int64, []int64, []int64) []int64
-    int64LeScalarSels func(int64, []int64, []int64, []int64) []int64
-    uint8Le func([]uint8, []uint8, []int64) []int64
-    uint8LeSels func([]uint8, []uint8, []int64, []int64) []int64
-    uint8LeScalar func(uint8, []uint8, []int64) []int64
-    uint8LeScalarSels func(uint8, []uint8, []int64, []int64) []int64
-    uint16Le func([]uint16, []uint16, []int64) []int64
-    uint16LeSels func([]uint16, []uint16, []int64, []int64) []int64
-    uint16LeScalar func(uint16, []uint16, []int64) []int64
-    uint16LeScalarSels func(uint16, []uint16, []int64, []int64) []int64
-    uint32Le func([]uint32, []uint32, []int64) []int64
-    uint32LeSels func([]uint32, []uint32, []int64, []int64) []int64
-    uint32LeScalar func(uint32, []uint32, []int64) []int64
-    uint32LeScalarSels func(uint32, []uint32, []int64, []int64) []int64
-    uint64Le func([]uint64, []uint64, []int64) []int64
-    uint64LeSels func([]uint64, []uint64, []int64, []int64) []int64
-    uint64LeScalar func(uint64, []uint64, []int64) []int64
-    uint64LeScalarSels func(uint64, []uint64, []int64, []int64) []int64
-    float32Le func([]float32, []float32, []int64) []int64
-    float32LeSels func([]float32, []float32, []int64, []int64) []int64
-    float32LeScalar func(float32, []float32, []int64) []int64
-    float32LeScalarSels func(float32, []float32, []int64, []int64) []int64
-    float64Le func([]float64, []float64, []int64) []int64
-    float64LeSels func([]float64, []float64, []int64, []int64) []int64
-    float64LeScalar func(float64, []float64, []int64) []int64
-    float64LeScalarSels func(float64, []float64, []int64, []int64) []int64
-    strLe func(*types.Bytes, *types.Bytes, []int64) []int64
-    strLeSels func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
-    strLeScalar func([]byte, *types.Bytes, []int64) []int64
-    strLeScalarSels func([]byte, *types.Bytes, []int64, []int64) []int64
+	int8Le              func([]int8, []int8, []int64) []int64
+	int8LeSels          func([]int8, []int8, []int64, []int64) []int64
+	int8LeScalar        func(int8, []int8, []int64) []int64
+	int8LeScalarSels    func(int8, []int8, []int64, []int64) []int64
+	int16Le             func([]int16, []int16, []int64) []int64
+	int16LeSels         func([]int16, []int16, []int64, []int64) []int64
+	int16LeScalar       func(int16, []int16, []int64) []int64
+	int16LeScalarSels   func(int16, []int16, []int64, []int64) []int64
+	int32Le             func([]int32, []int32, []int64) []int64
+	int32LeSels         func([]int32, []int32, []int64, []int64) []int64
+	int32LeScalar       func(int32, []int32, []int64) []int64
+	int32LeScalarSels   func(int32, []int32, []int64, []int64) []int64
+	int64Le             func([]int64, []int64, []int64) []int64
+	int64LeSels         func([]int64, []int64, []int64, []int64) []int64
+	int64LeScalar       func(int64, []int64, []int64) []int64
+	int64LeScalarSels   func(int64, []int64, []int64, []int64) []int64
+	uint8Le             func([]uint8, []uint8, []int64) []int64
+	uint8LeSels         func([]uint8, []uint8, []int64, []int64) []int64
+	uint8LeScalar       func(uint8, []uint8, []int64) []int64
+	uint8LeScalarSels   func(uint8, []uint8, []int64, []int64) []int64
+	uint16Le            func([]uint16, []uint16, []int64) []int64
+	uint16LeSels        func([]uint16, []uint16, []int64, []int64) []int64
+	uint16LeScalar      func(uint16, []uint16, []int64) []int64
+	uint16LeScalarSels  func(uint16, []uint16, []int64, []int64) []int64
+	uint32Le            func([]uint32, []uint32, []int64) []int64
+	uint32LeSels        func([]uint32, []uint32, []int64, []int64) []int64
+	uint32LeScalar      func(uint32, []uint32, []int64) []int64
+	uint32LeScalarSels  func(uint32, []uint32, []int64, []int64) []int64
+	uint64Le            func([]uint64, []uint64, []int64) []int64
+	uint64LeSels        func([]uint64, []uint64, []int64, []int64) []int64
+	uint64LeScalar      func(uint64, []uint64, []int64) []int64
+	uint64LeScalarSels  func(uint64, []uint64, []int64, []int64) []int64
+	float32Le           func([]float32, []float32, []int64) []int64
+	float32LeSels       func([]float32, []float32, []int64, []int64) []int64
+	float32LeScalar     func(float32, []float32, []int64) []int64
+	float32LeScalarSels func(float32, []float32, []int64, []int64) []int64
+	float64Le           func([]float64, []float64, []int64) []int64
+	float64LeSels       func([]float64, []float64, []int64, []int64) []int64
+	float64LeScalar     func(float64, []float64, []int64) []int64
+	float64LeScalarSels func(float64, []float64, []int64, []int64) []int64
+	strLe               func(*types.Bytes, *types.Bytes, []int64) []int64
+	strLeSels           func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
+	strLeScalar         func([]byte, *types.Bytes, []int64) []int64
+	strLeScalarSels     func([]byte, *types.Bytes, []int64, []int64) []int64
 )
 
 func init() {
@@ -111,7 +111,7 @@ func int8LePure(xs, ys []int8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8LeSels(xs, ys []int8, rs, sels []int64) []int64 {
@@ -126,7 +126,7 @@ func int8LeSelsPure(xs, ys []int8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8LeScalar(x int8, ys []int8, rs []int64) []int64 {
@@ -141,7 +141,7 @@ func int8LeScalarPure(x int8, ys []int8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int8LeScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
@@ -156,7 +156,7 @@ func int8LeScalarSelsPure(x int8, ys []int8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16Le(xs, ys []int16, rs []int64) []int64 {
@@ -171,7 +171,7 @@ func int16LePure(xs, ys []int16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16LeSels(xs, ys []int16, rs, sels []int64) []int64 {
@@ -186,7 +186,7 @@ func int16LeSelsPure(xs, ys []int16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16LeScalar(x int16, ys []int16, rs []int64) []int64 {
@@ -201,7 +201,7 @@ func int16LeScalarPure(x int16, ys []int16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int16LeScalarSels(x int16, ys []int16, rs, sels []int64) []int64 {
@@ -216,7 +216,7 @@ func int16LeScalarSelsPure(x int16, ys []int16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32Le(xs, ys []int32, rs []int64) []int64 {
@@ -231,7 +231,7 @@ func int32LePure(xs, ys []int32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32LeSels(xs, ys []int32, rs, sels []int64) []int64 {
@@ -246,7 +246,7 @@ func int32LeSelsPure(xs, ys []int32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32LeScalar(x int32, ys []int32, rs []int64) []int64 {
@@ -261,7 +261,7 @@ func int32LeScalarPure(x int32, ys []int32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int32LeScalarSels(x int32, ys []int32, rs, sels []int64) []int64 {
@@ -276,7 +276,7 @@ func int32LeScalarSelsPure(x int32, ys []int32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64Le(xs, ys []int64, rs []int64) []int64 {
@@ -291,7 +291,7 @@ func int64LePure(xs, ys []int64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64LeSels(xs, ys []int64, rs, sels []int64) []int64 {
@@ -306,7 +306,7 @@ func int64LeSelsPure(xs, ys []int64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64LeScalar(x int64, ys []int64, rs []int64) []int64 {
@@ -321,7 +321,7 @@ func int64LeScalarPure(x int64, ys []int64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Int64LeScalarSels(x int64, ys []int64, rs, sels []int64) []int64 {
@@ -336,7 +336,7 @@ func int64LeScalarSelsPure(x int64, ys []int64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8Le(xs, ys []uint8, rs []int64) []int64 {
@@ -351,7 +351,7 @@ func uint8LePure(xs, ys []uint8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8LeSels(xs, ys []uint8, rs, sels []int64) []int64 {
@@ -366,7 +366,7 @@ func uint8LeSelsPure(xs, ys []uint8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8LeScalar(x uint8, ys []uint8, rs []int64) []int64 {
@@ -381,7 +381,7 @@ func uint8LeScalarPure(x uint8, ys []uint8, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint8LeScalarSels(x uint8, ys []uint8, rs, sels []int64) []int64 {
@@ -396,7 +396,7 @@ func uint8LeScalarSelsPure(x uint8, ys []uint8, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16Le(xs, ys []uint16, rs []int64) []int64 {
@@ -411,7 +411,7 @@ func uint16LePure(xs, ys []uint16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16LeSels(xs, ys []uint16, rs, sels []int64) []int64 {
@@ -426,7 +426,7 @@ func uint16LeSelsPure(xs, ys []uint16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16LeScalar(x uint16, ys []uint16, rs []int64) []int64 {
@@ -441,7 +441,7 @@ func uint16LeScalarPure(x uint16, ys []uint16, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint16LeScalarSels(x uint16, ys []uint16, rs, sels []int64) []int64 {
@@ -456,7 +456,7 @@ func uint16LeScalarSelsPure(x uint16, ys []uint16, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32Le(xs, ys []uint32, rs []int64) []int64 {
@@ -471,7 +471,7 @@ func uint32LePure(xs, ys []uint32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32LeSels(xs, ys []uint32, rs, sels []int64) []int64 {
@@ -486,7 +486,7 @@ func uint32LeSelsPure(xs, ys []uint32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32LeScalar(x uint32, ys []uint32, rs []int64) []int64 {
@@ -501,7 +501,7 @@ func uint32LeScalarPure(x uint32, ys []uint32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint32LeScalarSels(x uint32, ys []uint32, rs, sels []int64) []int64 {
@@ -516,7 +516,7 @@ func uint32LeScalarSelsPure(x uint32, ys []uint32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64Le(xs, ys []uint64, rs []int64) []int64 {
@@ -531,7 +531,7 @@ func uint64LePure(xs, ys []uint64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64LeSels(xs, ys []uint64, rs, sels []int64) []int64 {
@@ -546,7 +546,7 @@ func uint64LeSelsPure(xs, ys []uint64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64LeScalar(x uint64, ys []uint64, rs []int64) []int64 {
@@ -561,7 +561,7 @@ func uint64LeScalarPure(x uint64, ys []uint64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Uint64LeScalarSels(x uint64, ys []uint64, rs, sels []int64) []int64 {
@@ -576,7 +576,7 @@ func uint64LeScalarSelsPure(x uint64, ys []uint64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32Le(xs, ys []float32, rs []int64) []int64 {
@@ -591,7 +591,7 @@ func float32LePure(xs, ys []float32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32LeSels(xs, ys []float32, rs, sels []int64) []int64 {
@@ -606,7 +606,7 @@ func float32LeSelsPure(xs, ys []float32, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32LeScalar(x float32, ys []float32, rs []int64) []int64 {
@@ -621,7 +621,7 @@ func float32LeScalarPure(x float32, ys []float32, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float32LeScalarSels(x float32, ys []float32, rs, sels []int64) []int64 {
@@ -636,7 +636,7 @@ func float32LeScalarSelsPure(x float32, ys []float32, rs, sels []int64) []int64 
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64Le(xs, ys []float64, rs []int64) []int64 {
@@ -651,7 +651,7 @@ func float64LePure(xs, ys []float64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64LeSels(xs, ys []float64, rs, sels []int64) []int64 {
@@ -666,7 +666,7 @@ func float64LeSelsPure(xs, ys []float64, rs, sels []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64LeScalar(x float64, ys []float64, rs []int64) []int64 {
@@ -681,7 +681,7 @@ func float64LeScalarPure(x float64, ys []float64, rs []int64) []int64 {
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func Float64LeScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
@@ -696,7 +696,7 @@ func float64LeScalarSelsPure(x float64, ys []float64, rs, sels []int64) []int64 
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrLe(xs, ys *types.Bytes, rs []int64) []int64 {
@@ -706,12 +706,12 @@ func StrLe(xs, ys *types.Bytes, rs []int64) []int64 {
 func strLePure(xs, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(xs.Offsets); i < n; i++ {
-		if bytes.Compare(xs.Get(i), ys.Get(i)) <= 0 {
+		if bytes.Compare(xs.Get(int64(i)), ys.Get(int64(i))) <= 0 {
 			rs[rsi] = int64(i)
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrLeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
@@ -721,12 +721,12 @@ func StrLeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 func strLeSelsPure(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if bytes.Compare(xs.Get(int(sel)), ys.Get(int(sel))) <= 0 {
+		if bytes.Compare(xs.Get(sel), ys.Get(sel)) <= 0 {
 			rs[rsi] = sel
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrLeScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
@@ -736,12 +736,12 @@ func StrLeScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
 func strLeScalarPure(x []byte, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(ys.Offsets); i < n; i++ {
-		if bytes.Compare(x, ys.Get(i)) <= 0 {
+		if bytes.Compare(x, ys.Get(int64(i))) <= 0 {
 			rs[rsi] = int64(i)
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
 
 func StrLeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
@@ -751,10 +751,10 @@ func StrLeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 func strLeScalarSelsPure(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
-		if bytes.Compare(x, ys.Get(int(sel))) <= 0 {
+		if bytes.Compare(x, ys.Get(sel)) <= 0 {
 			rs[rsi] = sel
 			rsi++
 		}
 	}
-	return rs
+	return rs[:rsi]
 }
