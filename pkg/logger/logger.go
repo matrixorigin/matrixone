@@ -44,114 +44,114 @@ func (l *logger) SetDepth(depth int) {
 }
 
 func (l *logger) Debug(v ...interface{}) {
-	if l.level >= DEBUG {
+	if l.level <= DEBUG {
 		l.dlog.Output(l.depth, fmt.Sprint(v...))
 	}
 }
 
 func (l *logger) Debugn(v ...interface{}) {
-	if l.level >= DEBUG {
+	if l.level <= DEBUG {
 		l.dlog.Output(l.depth, fmt.Sprintln(v...))
 	}
 }
 
 func (l *logger) Debugf(format string, v ...interface{}) {
-	if l.level >= DEBUG {
+	if l.level <= DEBUG {
 		l.dlog.Output(l.depth, fmt.Sprintf(format, v...))
 	}
 }
 
 func (l *logger) Info(v ...interface{}) {
-	if l.level >= INFO {
+	if l.level <= INFO {
 		l.ilog.Output(l.depth, fmt.Sprint(v...))
 	}
 }
 
 func (l *logger) Infon(v ...interface{}) {
-	if l.level >= INFO {
+	if l.level <= INFO {
 		l.ilog.Output(l.depth, fmt.Sprintln(v...))
 	}
 }
 
 func (l *logger) Infof(format string, v ...interface{}) {
-	if l.level >= INFO {
+	if l.level <= INFO {
 		l.ilog.Output(l.depth, fmt.Sprintf(format, v...))
 	}
 }
 
 func (l *logger) Warn(v ...interface{}) {
-	if l.level >= WARN {
+	if l.level <= WARN {
 		l.wlog.Output(l.depth, fmt.Sprint(v...))
 	}
 }
 
 func (l *logger) Warnn(v ...interface{}) {
-	if l.level >= WARN {
+	if l.level <= WARN {
 		l.wlog.Output(l.depth, fmt.Sprintln(v...))
 	}
 }
 
 func (l *logger) Warnf(format string, v ...interface{}) {
-	if l.level >= WARN {
+	if l.level <= WARN {
 		l.wlog.Output(l.depth, fmt.Sprintf(format, v...))
 	}
 }
 
 func (l *logger) Error(v ...interface{}) {
-	if l.level >= ERROR {
+	if l.level <= ERROR {
 		l.elog.Output(l.depth, fmt.Sprint(v...))
 	}
 }
 
 func (l *logger) Errorn(v ...interface{}) {
-	if l.level >= ERROR {
+	if l.level <= ERROR {
 		l.elog.Output(l.depth, fmt.Sprintln(v...))
 	}
 }
 
 func (l *logger) Errorf(format string, v ...interface{}) {
-	if l.level >= ERROR {
+	if l.level <= ERROR {
 		l.elog.Output(l.depth, fmt.Sprintf(format, v...))
 	}
 }
 
 func (l *logger) Fatal(v ...interface{}) {
-	if l.level >= FATAL {
+	if l.level <= FATAL {
 		l.flog.Output(l.depth, fmt.Sprint(v...))
 		os.Exit(1)
 	}
 }
 
 func (l *logger) Fataln(v ...interface{}) {
-	if l.level >= FATAL {
+	if l.level <= FATAL {
 		l.flog.Output(l.depth, fmt.Sprintln(v...))
 		os.Exit(1)
 	}
 }
 
 func (l *logger) Fatalf(format string, v ...interface{}) {
-	if l.level >= FATAL {
+	if l.level <= FATAL {
 		l.flog.Output(l.depth, fmt.Sprintf(format, v...))
 		os.Exit(1)
 	}
 }
 
 func (l *logger) Panic(v ...interface{}) {
-	if l.level >= PANIC {
+	if l.level <= PANIC {
 		l.plog.Output(l.depth, fmt.Sprint(v...))
 		panic(v)
 	}
 }
 
 func (l *logger) Panicn(v ...interface{}) {
-	if l.level >= PANIC {
+	if l.level <= PANIC {
 		l.plog.Output(l.depth, fmt.Sprintln(v...))
 		panic(v)
 	}
 }
 
 func (l *logger) Panicf(format string, v ...interface{}) {
-	if l.level >= PANIC {
+	if l.level <= PANIC {
 		l.plog.Output(l.depth, fmt.Sprintf(format, v...))
 		panic(v)
 	}
