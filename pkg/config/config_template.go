@@ -1338,6 +1338,25 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 	return nil
 }
 
+/**
+load items from configuration file periodly.
+ */
+type ConfigurationFileHotLoader interface {
+	/**
+	register a configuration file into the loader.
+	path : the path of the configuration file
+	period: load the configration every period
+	configObject: the target that will be updated
+	 */
+	Register(path string,period int64,configObject interface{})
+
+	/**
+	unregister a configuration file from the loader.
+	the configuration file will be loaded again.
+	 */
+	Unregister(path string)
+}
+
 func NewConfigurationFileGenerator(defFileName string)ConfigurationFileGenerator{
 	return &ConfigurationFileGeneratorImpl{
 		parameterDefinitionFileName: defFileName,
