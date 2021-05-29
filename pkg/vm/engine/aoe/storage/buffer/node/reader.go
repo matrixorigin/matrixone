@@ -10,8 +10,7 @@ import (
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"os"
 	"path/filepath"
-
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -73,7 +72,7 @@ func (nr *NodeReader) Load() (err error) {
 	}
 
 	dir := filepath.Dir(nr.Filename)
-	log.Info(dir)
+	// log.Info(dir)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
 	}

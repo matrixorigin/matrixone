@@ -53,7 +53,7 @@ func (mgr *BufferManager) String() string {
 		for segID, ids := range segMap {
 			s += fmt.Sprintf("  Segment %d Nodes %d {\n", segID, len(ids))
 			for _, id := range ids {
-				s += fmt.Sprintf("    Block-%d-Part-%d [%d] (%d)\n", id.BlockID, id.PartID, id.Iter, mgr.Nodes[id].GetState())
+				s += fmt.Sprintf("    Block-%d-Part-%d [%d] (%d) (%d)\n", id.BlockID, id.PartID, id.Iter, mgr.Nodes[id].GetState(), mgr.Nodes[id].GetCapacity())
 			}
 			s += "  }\n"
 		}
@@ -184,7 +184,7 @@ func (mgr *BufferManager) makePoolNode(capacity uint64) *buf.Node {
 		evict_node := mgr.EvictHolder.Dequeue()
 		// log.Infof("Evict node %s", evict_node.String())
 		if evict_node == nil {
-			log.Printf("Cannot get node from queue")
+			// log.Printf("Cannot get node from queue")
 			return nil
 		}
 		if evict_node.Handle.IsClosed() {

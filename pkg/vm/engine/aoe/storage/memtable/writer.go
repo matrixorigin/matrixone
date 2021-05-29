@@ -2,13 +2,18 @@ package memtable
 
 import (
 	"context"
-	"fmt"
+	"encoding/binary"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
-	// "os"
+	"os"
+	"path/filepath"
+	"time"
+
+	log "github.com/sirupsen/logrus"
+	// "matrixone/pkg/vm/engine/aoe/storage/layout"
 	// "io"
 )
 
@@ -42,26 +47,58 @@ type MemtableWriter struct {
 	Memtable imem.IMemTable
 }
 
-func MakeMemtableFileName(id *layout.ID) string {
-	return fmt.Sprintf("%d_%d_%d_%d", id.TableID, id.SegmentID, id.BlockID, id.PartID)
-}
-
 func (sw *MemtableWriter) Flush() (err error) {
-	return nil
+	id := sw.Memtable.GetID()
+	fname := e.MakeFilename(sw.Dirname, e.FTBlock, id.ToBlockFileName(), false)
+	log.Infof("Flushing memtable: %s", fname)
+	dir := filepath.Dir(fname)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		err = os.MkdirAll(dir, 0755)
+	}
+	if err != nil {
+		return err
+	}
+	w, err := os.OpenFile(fname, os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+
+	mt := sw.Memtable.(*MemTable)
+
+	buf := make([]byte, 2+len(mt.Types)*8)
+	binary.BigEndian.PutUint16(buf, uint16(len(mt.Columns)))
+	for idx, t := range mt.Types {
+		colSize := mt.Meta.Count * uint64(t.Size)
+		// log.Infof("Col %d Size %d", idx, colSize)
+		binary.BigEndian.PutUint64(buf[2+idx*8:], colSize)
+	}
+	_, err = w.Write(buf)
+	if err != nil {
+		return err
+	}
+	cursor := col.ScanCursor{}
+	for _, colBlk := range mt.Columns {
+		err := colBlk.InitScanCursor(&cursor)
+		if err != nil {
+			return err
+		}
+		for {
+			err = cursor.Init()
+			if err == nil {
+				break
+			}
+			time.Sleep(time.Duration(1) * time.Millisecond)
+		}
+		defer cursor.Close()
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(cursor.Current.GetBuf())
+		if err != nil {
+			return err
+		}
+	}
+	log.Infof("%s Flushed", fname)
+	return err
 }
-
-// func (sw *MemtableWriter) Write(obj interface{}) (err error) {
-// 	data := obj.()
-
-// 	// log.Infof("PreCommit CheckPoint: %s", fname)
-// 	fname := e.MakeFilename(sw.Dirname, e.FTSpillMemory, MakeSpillFileName(&sw.ID), false)
-// 	w, err := os.OpenFile(fname, os.O_WRONLY|os.O_CREATE, 0666)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	_, err = w.Write(data)
-// 	if err != nil {
-// 		return err
-// 	}
-// 	return err
-// }

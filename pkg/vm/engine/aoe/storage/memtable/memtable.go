@@ -1,9 +1,11 @@
 package memtable
 
 import (
+	"context"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
-	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
+	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -18,12 +20,13 @@ import (
 type MemTable struct {
 	Opts *engine.Options
 	sync.RWMutex
-	WF      ioif.IWriterFactory
 	Meta    *md.Block
 	Data    *chunk.Chunk
 	Full    bool
 	Columns []col.IColumnBlock
 	Cursors []col.IScanCursor
+	ID      layout.ID
+	Types   []types.Type
 }
 
 var (
@@ -38,6 +41,8 @@ func NewMemTable(colTypes []types.Type, columnBlocks []col.IColumnBlock,
 		Opts:    opts,
 		Columns: columnBlocks,
 		Cursors: cursors,
+		ID:      columnBlocks[0].GetID(),
+		Types:   colTypes,
 	}
 	var vectors []vector.Vector
 	for idx, blk := range columnBlocks {
@@ -50,6 +55,10 @@ func NewMemTable(colTypes []types.Type, columnBlocks []col.IColumnBlock,
 	}
 
 	return mt
+}
+
+func (mt *MemTable) GetID() layout.ID {
+	return mt.ID
 }
 
 func (mt *MemTable) InitScanCursors(cursors []interface{}) error {
@@ -91,16 +100,18 @@ func (mt *MemTable) Append(c *chunk.Chunk, offset uint64, index *md.LogIndex) (n
 // If crashed before Step 3, same as above.
 func (mt *MemTable) Flush() error {
 	mt.Opts.EventListener.FlushBlockBeginCB(mt)
-	// writer := mt.WF.MakeWriter(buf.SPILL_MEMORY_WRITER_BUILDER, context.TODO())
-	// err := mt.W.Write(mt)
-	// if err != nil {
-	// 	mt.Opts.EventListener.BackgroundErrorCB(err)
-	// 	return err
-	// }
+	wCtx := context.TODO()
+	wCtx = context.WithValue(wCtx, "memtable", mt)
+	writer := dio.WRITER_FACTORY.MakeWriter(MEMTABLE_WRITER, wCtx)
+	err := writer.Flush()
+	if err != nil {
+		mt.Opts.EventListener.BackgroundErrorCB(err)
+		return err
+	}
 	ctx := mops.OpCtx{Block: mt.Meta, Opts: mt.Opts}
 	op := mops.NewUpdateOp(&ctx)
 	op.Push()
-	err := op.WaitDone()
+	err = op.WaitDone()
 	if err != nil {
 		mt.Opts.EventListener.BackgroundErrorCB(err)
 		return err

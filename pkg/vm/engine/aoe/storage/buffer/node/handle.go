@@ -52,7 +52,6 @@ func (h *NodeHandle) FlushData() error {
 	if !h.Spillable {
 		return nil
 	}
-	log.Infof("Flushing node %v", h.GetID())
 	return h.SpillIO.Flush()
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"os"
+	"path/filepath"
 	"strconv"
 
 	log "github.com/sirupsen/logrus"
@@ -30,6 +31,13 @@ func (ck *Checkpointer) PreCommit(info *md.MetaInfo) error {
 	}
 	fname := MakeFilename(ck.Dirname, FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), true)
 	log.Infof("PreCommit CheckPoint: %s", fname)
+	dir := filepath.Dir(fname)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		err = os.MkdirAll(dir, 0755)
+		if err != nil {
+			return err
+		}
+	}
 	w, err := os.OpenFile(fname, os.O_WRONLY|os.O_CREATE, 0666)
 	if err != nil {
 		return err

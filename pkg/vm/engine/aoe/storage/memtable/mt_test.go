@@ -70,10 +70,13 @@ func BuildChunk(types []types.Type, rows uint64) *chunk.Chunk {
 }
 
 func TestCollection(t *testing.T) {
+	maxRows := uint64(1024 * 1024)
+	capacity := maxRows * 2 * 4 * 1
 	opts := new(engine.Options)
 	// opts.EventListener = e.NewLoggingEventListener()
 	dirname := "/tmp"
 	opts.FillDefaults(dirname)
+	opts.Meta.Conf.BlockMaxRows = maxRows
 
 	opts.Meta.Updater.Start()
 	opts.Meta.Flusher.Start()
@@ -88,7 +91,6 @@ func TestCollection(t *testing.T) {
 	tbl := op.GetTable()
 
 	manager := NewManager(opts)
-	capacity := uint64(128)
 	flusher := w.NewOpWorker()
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
 	colDefs := make([]types.Type, 2)
@@ -122,6 +124,7 @@ func TestCollection(t *testing.T) {
 			}
 			err = c0.Append(insert, index)
 			assert.Nil(t, err)
+			// t.Log(bufMgr.String())
 		}(logid, &waitgroup)
 	}
 	waitgroup.Wait()

@@ -60,7 +60,7 @@ func MakeNodeFileName(id *layout.ID) string {
 func (sw *NodeWriter) Flush() (err error) {
 	node := sw.Handle.GetBuffer().GetDataNode()
 	dir := filepath.Dir(sw.Filename)
-	log.Info(dir)
+	log.Infof("Flushing %s", sw.Filename)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
 	}

@@ -4,8 +4,7 @@ import (
 	"fmt"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 )
 
 type SimpleEvictHolder struct {
@@ -36,17 +35,17 @@ func NewSimpleEvictHolder(ctx ...interface{}) IEvictHolder {
 }
 
 func (holder *SimpleEvictHolder) Enqueue(node *EvictNode) {
-	log.Infof("Equeue evict h %v", node.Handle.GetID())
+	// log.Infof("Equeue evict h %v", node.Handle.GetID())
 	holder.Queue <- node
 }
 
 func (holder *SimpleEvictHolder) Dequeue() *EvictNode {
 	select {
 	case node := <-holder.Queue:
-		log.Infof("Dequeue evict h %v", node.Handle.GetID())
+		// log.Infof("Dequeue evict h %v", node.Handle.GetID())
 		return node
 	default:
-		log.Info("Dequeue empty evict h")
+		// log.Info("Dequeue empty evict h")
 		return nil
 	}
 }
