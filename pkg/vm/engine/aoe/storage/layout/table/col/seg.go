@@ -9,6 +9,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"runtime"
 	"sync"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -173,7 +174,11 @@ func (seg *ColumnSegment) Close() error {
 
 func (seg *ColumnSegment) RegisterBlock(bufMgr bmgrif.IBufferManager, id layout.ID, maxRows uint64) (blk IColumnBlock, err error) {
 	blk = NewStdColumnBlock(seg, id, TRANSIENT_BLK)
-	_ = NewColumnPart(bufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
+	part := NewColumnPart(bufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
+	for part == nil {
+		part = NewColumnPart(bufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
+		time.Sleep(time.Duration(1) * time.Millisecond)
+	}
 	// TODO: StrColumnBlock
 	return blk, err
 }

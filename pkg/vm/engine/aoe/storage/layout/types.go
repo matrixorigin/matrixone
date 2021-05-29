@@ -7,6 +7,7 @@ import (
 
 type ID struct {
 	TableID   uint64
+	Idx       uint16
 	SegmentID uint64
 	BlockID   uint64
 	PartID    uint32
@@ -39,7 +40,7 @@ func (id *ID) AsSegmentID() ID {
 }
 
 func (id *ID) String() string {
-	return fmt.Sprintf("ID<%d-%d-%d-%d-%d>", id.TableID, id.SegmentID, id.BlockID, id.PartID, id.Iter)
+	return fmt.Sprintf("ID<%d-%d-%d-%d-%d-%d>", id.TableID, id.Idx, id.SegmentID, id.BlockID, id.PartID, id.Iter)
 }
 
 func (id *ID) TableString() string {
@@ -47,11 +48,11 @@ func (id *ID) TableString() string {
 }
 
 func (id *ID) SegmentString() string {
-	return fmt.Sprintf("ID<%d-%d>", id.TableID, id.SegmentID)
+	return fmt.Sprintf("ID<%d-%d-%d>", id.TableID, id.Idx, id.SegmentID)
 }
 
 func (id *ID) BlockString() string {
-	return fmt.Sprintf("ID<%d-%d-%d>", id.TableID, id.SegmentID, id.BlockID)
+	return fmt.Sprintf("ID<%d-%d-%d-%d>", id.TableID, id.Idx, id.SegmentID, id.BlockID)
 }
 
 func (id *ID) IsSameSegment(o ID) bool {
@@ -79,6 +80,7 @@ func (id *ID) NextPart() ID {
 func (id *ID) NextIter() ID {
 	return ID{
 		TableID:   id.TableID,
+		Idx:       id.Idx,
 		SegmentID: id.SegmentID,
 		BlockID:   id.BlockID,
 		PartID:    id.PartID,
@@ -105,6 +107,10 @@ func (id *ID) IsTransient() bool {
 		return true
 	}
 	return false
+}
+
+func (id *ID) ToPartFileName() string {
+	return fmt.Sprintf("%d_%d_%d_%d_%d", id.TableID, id.Idx, id.SegmentID, id.BlockID, id.PartID)
 }
 
 func (id *ID) ToBlockFileName() string {

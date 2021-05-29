@@ -71,7 +71,7 @@ func BuildChunk(types []types.Type, rows uint64) *chunk.Chunk {
 
 func TestCollection(t *testing.T) {
 	maxRows := uint64(1024 * 1024)
-	capacity := maxRows * 2 * 4 * 1
+	capacity := maxRows * 2 * 4 * 10
 	opts := new(engine.Options)
 	// opts.EventListener = e.NewLoggingEventListener()
 	dirname := "/tmp"

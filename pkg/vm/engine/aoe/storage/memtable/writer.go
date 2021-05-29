@@ -70,15 +70,14 @@ func (sw *MemtableWriter) Flush() (err error) {
 	binary.BigEndian.PutUint16(buf, uint16(len(mt.Columns)))
 	for idx, t := range mt.Types {
 		colSize := mt.Meta.Count * uint64(t.Size)
-		// log.Infof("Col %d Size %d", idx, colSize)
 		binary.BigEndian.PutUint64(buf[2+idx*8:], colSize)
 	}
 	_, err = w.Write(buf)
 	if err != nil {
 		return err
 	}
-	cursor := col.ScanCursor{}
 	for _, colBlk := range mt.Columns {
+		cursor := col.ScanCursor{}
 		err := colBlk.InitScanCursor(&cursor)
 		if err != nil {
 			return err

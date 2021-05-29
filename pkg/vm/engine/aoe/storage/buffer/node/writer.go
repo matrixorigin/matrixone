@@ -54,7 +54,7 @@ type NodeWriter struct {
 }
 
 func MakeNodeFileName(id *layout.ID) string {
-	return fmt.Sprintf("%d_%d_%d_%d", id.TableID, id.SegmentID, id.BlockID, id.PartID)
+	return fmt.Sprintf("%d_%d_%d_%d_%d", id.TableID, id.Idx, id.SegmentID, id.BlockID, id.PartID)
 }
 
 func (sw *NodeWriter) Flush() (err error) {

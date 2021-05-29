@@ -60,17 +60,18 @@ func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id layout.ID,
 		NodeID:      id,
 		ColIdx:      blk.GetColIdx(),
 	}
+	part.NodeID.Idx = uint16(blk.GetColIdx())
 
 	switch blk.GetBlockType() {
 	case TRANSIENT_BLK:
-		bNode := bmgr.RegisterSpillableNode(typeSize*rowCount, id)
+		bNode := bmgr.RegisterSpillableNode(typeSize*rowCount, part.NodeID)
 		if bNode == nil {
 			return nil
 		}
 		part.BufNode = bNode
 	case PERSISTENT_BLK:
 		csf := ldio.MockColSegmentFile{}
-		part.BufNode = bmgr.RegisterNode(typeSize*rowCount, id, &csf)
+		part.BufNode = bmgr.RegisterNode(typeSize*rowCount, part.NodeID, &csf)
 		// sf := ldio.NewUnsortedSegmentFile(dio.READER_FACTORY.Dirname, id.AsSegmentID())
 		// csf := ldio.ColSegmentFile{
 		// 	SegmentFile: sf,
@@ -79,7 +80,7 @@ func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id layout.ID,
 		// part.BufNode = bmgr.RegisterNode(typeSize*rowCount, id, &csf)
 	case PERSISTENT_SORTED_BLK:
 		csf := ldio.MockColSegmentFile{}
-		part.BufNode = bmgr.RegisterNode(typeSize*rowCount, id, &csf)
+		part.BufNode = bmgr.RegisterNode(typeSize*rowCount, part.NodeID, &csf)
 		// sf := ldio.NewSortedSegmentFile(dio.READER_FACTORY.Dirname, id.AsSegmentID())
 		// csf := ldio.ColSegmentFile{
 		// 	SegmentFile: sf,
@@ -88,7 +89,7 @@ func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id layout.ID,
 		// part.BufNode = bmgr.RegisterNode(typeSize*rowCount, id, &csf)
 	case MOCK_BLK:
 		csf := ldio.MockColSegmentFile{}
-		part.BufNode = bmgr.RegisterNode(typeSize*rowCount, id, &csf)
+		part.BufNode = bmgr.RegisterNode(typeSize*rowCount, part.NodeID, &csf)
 	default:
 		panic("not support")
 	}
