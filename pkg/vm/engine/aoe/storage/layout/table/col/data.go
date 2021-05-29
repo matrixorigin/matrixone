@@ -3,9 +3,9 @@ package col
 import (
 	"errors"
 	"fmt"
+	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout"
-	mock "matrixone/pkg/vm/engine/aoe/storage/mock/type"
 )
 
 type IColumnData interface {
@@ -27,13 +27,13 @@ type IColumnData interface {
 }
 
 type ColumnData struct {
-	Type     mock.ColType
+	Type     types.Type
 	Idx      int
 	RowCount uint64
 	SegTree  ISegmentTree
 }
 
-func NewColumnData(col_type mock.ColType, col_idx int) IColumnData {
+func NewColumnData(col_type types.Type, col_idx int) IColumnData {
 	data := &ColumnData{
 		Type:    col_type,
 		Idx:     col_idx,

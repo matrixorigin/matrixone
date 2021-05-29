@@ -2,13 +2,13 @@ package coldata
 
 import (
 	"github.com/stretchr/testify/assert"
+	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	mock "matrixone/pkg/vm/engine/aoe/storage/mock/type"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"runtime"
 	"testing"
@@ -23,7 +23,7 @@ func makeBufMagr(capacity uint64) mgrif.IBufferManager {
 }
 
 func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id layout.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
-	colType := mock.INTEGER
+	colType := types.Type{types.T_int32, 4, 4, 0}
 	seg := col.NewColumnSegment(id, colIdx, colType, col.UNSORTED_SEG)
 	blk_id := id
 	for i := 0; i < blkCnt; i++ {
@@ -50,13 +50,13 @@ func makeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typ
 }
 
 func TestUpgradeSegOp(t *testing.T) {
-	colDefs := make([]mock.ColType, 2)
-	colDefs[0] = mock.INTEGER
-	colDefs[1] = mock.INTEGER
+	colDefs := make([]types.Type, 2)
+	colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
+	colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
 	opts.MemData.Updater.Start()
-	typeSize := colDefs[0].Size()
+	typeSize := uint64(colDefs[0].Size)
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
 	bufMgr := makeBufMagr(capacity)
@@ -87,13 +87,13 @@ func TestUpgradeSegOp(t *testing.T) {
 }
 
 func TestUpgradeBlkOp(t *testing.T) {
-	colDefs := make([]mock.ColType, 2)
-	colDefs[0] = mock.INTEGER
-	colDefs[1] = mock.INTEGER
+	colDefs := make([]types.Type, 2)
+	colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
+	colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
 	opts.MemData.Updater.Start()
-	typeSize := colDefs[0].Size()
+	typeSize := uint64(colDefs[0].Size)
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
 	bufMgr := makeBufMagr(capacity)

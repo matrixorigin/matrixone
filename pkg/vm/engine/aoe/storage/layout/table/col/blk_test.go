@@ -2,11 +2,11 @@ package col
 
 import (
 	"github.com/stretchr/testify/assert"
+	"matrixone/pkg/container/types"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout"
-	mock "matrixone/pkg/vm/engine/aoe/storage/mock/type"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"runtime"
 	"sync"
@@ -27,7 +27,7 @@ func TestStdColumnBlock(t *testing.T) {
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	seg_cnt := 5
-	colType := mock.INTEGER
+	colType := types.Type{types.T_int64, 8, 8, 0}
 	for i := 0; i < seg_cnt; i++ {
 		seg_id := baseid.NextSegment()
 		seg := NewColumnSegment(seg_id, 0, colType, UNSORTED_SEG)
@@ -74,7 +74,7 @@ func TestStdColumnBlock2(t *testing.T) {
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	seg_cnt := 5
-	colType := mock.INTEGER
+	colType := types.Type{types.T_int64, 8, 8, 0}
 	for i := 0; i < seg_cnt; i++ {
 		seg_id := baseid.NextSegment()
 		seg := NewColumnSegment(seg_id, 0, colType, UNSORTED_SEG)
@@ -141,7 +141,7 @@ func TestStrColumnBlock(t *testing.T) {
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	seg_cnt := 5
-	colType := mock.INTEGER
+	colType := types.Type{types.T_int64, 8, 8, 0}
 	for i := 0; i < seg_cnt; i++ {
 		seg_id := baseid.NextSegment()
 		seg := NewColumnSegment(seg_id, 0, colType, UNSORTED_SEG)
@@ -206,7 +206,7 @@ func (t *MockType) Size() uint64 {
 func TestStdSegmentTree(t *testing.T) {
 	baseid := layout.ID{}
 	col_idx := 0
-	colType := mock.INTEGER
+	colType := types.Type{types.T_int64, 8, 8, 0}
 	col_data := NewColumnData(colType, col_idx)
 
 	seg_cnt := 5
@@ -254,7 +254,7 @@ func TestRegisterNode(t *testing.T) {
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	seg_cnt := 5
-	colType := mock.INTEGER
+	colType := types.Type{types.T_int64, 8, 8, 0}
 	for i := 0; i < seg_cnt; i++ {
 		seg_id := baseid.NextSegment()
 		seg := NewColumnSegment(seg_id, 0, colType, UNSORTED_SEG)
@@ -299,7 +299,7 @@ func TestRegisterNode(t *testing.T) {
 }
 
 func makeSegment(bufMgr mgrif.IBufferManager, id layout.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) IColumnSegment {
-	colType := mock.INTEGER
+	colType := types.Type{types.T_int64, 8, 8, 0}
 	seg := NewColumnSegment(id, 0, colType, UNSORTED_SEG)
 	blk_id := id
 	for i := 0; i < blkCnt; i++ {

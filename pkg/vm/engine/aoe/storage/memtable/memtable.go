@@ -1,12 +1,12 @@
 package memtable
 
 import (
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	mock "matrixone/pkg/vm/engine/aoe/storage/mock/type"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
@@ -30,7 +30,7 @@ var (
 	_ imem.IMemTable = (*MemTable)(nil)
 )
 
-func NewMemTable(colTypes []mock.ColType, columnBlocks []col.IColumnBlock,
+func NewMemTable(colTypes []types.Type, columnBlocks []col.IColumnBlock,
 	cursors []col.IScanCursor, opts *engine.Options, meta *md.Block) imem.IMemTable {
 	mt := &MemTable{
 		Meta:    meta,

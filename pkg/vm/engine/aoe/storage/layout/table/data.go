@@ -3,10 +3,10 @@ package table
 import (
 	"fmt"
 	log "github.com/sirupsen/logrus"
+	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	mock "matrixone/pkg/vm/engine/aoe/storage/mock/type"
 	"runtime"
 	"sync"
 )
@@ -17,7 +17,7 @@ type ITableData interface {
 	GetID() uint64
 	GetCollumns() []col.IColumnData
 	GetColTypeSize(idx int) uint64
-	GetColTypes() []mock.ColType
+	GetColTypes() []types.Type
 	GetBufMgr() bmgrif.IBufferManager
 	GetSegmentCount() uint64
 
@@ -43,7 +43,7 @@ type ITableData interface {
 // 	return uint64(4)
 // }
 
-func NewTableData(bufMgr bmgrif.IBufferManager, id uint64, colTypes []mock.ColType) ITableData {
+func NewTableData(bufMgr bmgrif.IBufferManager, id uint64, colTypes []types.Type) ITableData {
 	data := &TableData{
 		ID:      id,
 		Columns: make([]col.IColumnData, 0),
@@ -65,7 +65,7 @@ type TableData struct {
 	ID       uint64
 	RowCount uint64
 	Columns  []col.IColumnData
-	ColType  []mock.ColType
+	ColType  []types.Type
 	BufMgr   bmgrif.IBufferManager
 }
 
@@ -77,7 +77,7 @@ func (td *TableData) GetID() uint64 {
 	return td.ID
 }
 
-func (td *TableData) GetColTypes() []mock.ColType {
+func (td *TableData) GetColTypes() []types.Type {
 	return td.ColType
 }
 
@@ -86,7 +86,7 @@ func (td *TableData) GetCollumns() []col.IColumnData {
 }
 
 func (td *TableData) GetColTypeSize(idx int) uint64 {
-	return td.ColType[idx].Size()
+	return uint64(td.ColType[idx].Size)
 }
 
 func (td *TableData) GetBufMgr() bmgrif.IBufferManager {

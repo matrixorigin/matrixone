@@ -1,7 +1,7 @@
 package vector
 
 import (
-	mock "matrixone/pkg/vm/engine/aoe/storage/mock/type"
+	"matrixone/pkg/container/types"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -13,7 +13,7 @@ type Vector interface {
 }
 
 type BaseVector struct {
-	Type   mock.ColType
+	Type   types.Type
 	Data   []byte
 	Offset int
 }
@@ -28,7 +28,7 @@ type StrVector struct {
 	// AuxAlloc common.IAllocator
 }
 
-func NewStdVector(t mock.ColType, dataBuf []byte) Vector {
+func NewStdVector(t types.Type, dataBuf []byte) Vector {
 	vec := &StdVector{
 		BaseVector: BaseVector{
 			Type: t,
@@ -39,7 +39,7 @@ func NewStdVector(t mock.ColType, dataBuf []byte) Vector {
 }
 
 func (v *StdVector) GetCount() uint64 {
-	return uint64(v.Offset) / v.Type.Size()
+	return uint64(v.Offset) / uint64(v.Type.Size)
 }
 
 func (v *StdVector) GetData() []byte {
@@ -48,7 +48,7 @@ func (v *StdVector) GetData() []byte {
 
 func (v *StdVector) Append(o Vector, offset uint64) (n uint64, err error) {
 	buf := o.GetData()
-	tsize := int(v.Type.Size())
+	tsize := int(v.Type.Size)
 	remaining := cap(v.Data) - v.Offset
 	other_remaining := len(buf) - tsize*int(offset)
 	to_write := other_remaining
@@ -62,7 +62,7 @@ func (v *StdVector) Append(o Vector, offset uint64) (n uint64, err error) {
 	return uint64(to_write / tsize), nil
 }
 
-// func NewStrVector(t mock.ColType, dataBuf []byte, auxBuf []byte, alloc common.IAllocator) Vector {
+// func NewStrVector(t types.Type, dataBuf []byte, auxBuf []byte, alloc common.IAllocator) Vector {
 // 	vec := &StrVector{
 // 		BaseVector: BaseVector{
 // 			Type: t,

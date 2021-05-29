@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout"
-	mock "matrixone/pkg/vm/engine/aoe/storage/mock/type"
 	"runtime"
 	"sync"
 
@@ -51,10 +51,10 @@ type ColumnSegment struct {
 	IDMap    map[layout.ID]int
 	Idx      int
 	Type     SegmentType
-	ColType  mock.ColType
+	ColType  types.Type
 }
 
-func NewColumnSegment(id layout.ID, colIdx int, colType mock.ColType, segType SegmentType) IColumnSegment {
+func NewColumnSegment(id layout.ID, colIdx int, colType types.Type, segType SegmentType) IColumnSegment {
 	seg := &ColumnSegment{
 		ID:      id,
 		IDMap:   make(map[layout.ID]int, 0),
@@ -173,7 +173,7 @@ func (seg *ColumnSegment) Close() error {
 
 func (seg *ColumnSegment) RegisterBlock(bufMgr bmgrif.IBufferManager, id layout.ID, maxRows uint64) (blk IColumnBlock, err error) {
 	blk = NewStdColumnBlock(seg, id, TRANSIENT_BLK)
-	_ = NewColumnPart(bufMgr, blk, id, maxRows, uint64(seg.ColType.Size()))
+	_ = NewColumnPart(bufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
 	// TODO: StrColumnBlock
 	return blk, err
 }

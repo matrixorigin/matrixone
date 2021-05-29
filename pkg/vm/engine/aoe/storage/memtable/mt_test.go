@@ -2,13 +2,13 @@ package memtable
 
 import (
 	"github.com/stretchr/testify/assert"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	mock "matrixone/pkg/vm/engine/aoe/storage/mock/type"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
@@ -34,7 +34,7 @@ func TestManager(t *testing.T) {
 	flusher := w.NewOpWorker()
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
 	t0 := uint64(0)
-	colDefs := make([]mock.ColType, 2)
+	colDefs := make([]types.Type, 2)
 	t0_data := table.NewTableData(bufMgr, t0, colDefs)
 
 	c0, err := manager.RegisterCollection(t0_data)
@@ -55,9 +55,9 @@ func TestManager(t *testing.T) {
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 }
 
-func BuildChunk(types []mock.ColType, rows uint64) *chunk.Chunk {
+func BuildChunk(types []types.Type, rows uint64) *chunk.Chunk {
 	var vectors []vector.Vector
-	buf := make([]byte, rows*types[0].Size())
+	buf := make([]byte, int32(rows)*types[0].Size)
 	for _, colType := range types {
 		vec := vector.NewStdVector(colType, buf)
 		vec.(*vector.StdVector).Offset = cap(buf)
@@ -91,9 +91,9 @@ func TestCollection(t *testing.T) {
 	capacity := uint64(128)
 	flusher := w.NewOpWorker()
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
-	colDefs := make([]mock.ColType, 2)
-	colDefs[0] = mock.INTEGER
-	colDefs[1] = mock.INTEGER
+	colDefs := make([]types.Type, 2)
+	colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
+	colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
 	t0_data := table.NewTableData(bufMgr, tbl.ID, colDefs)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
