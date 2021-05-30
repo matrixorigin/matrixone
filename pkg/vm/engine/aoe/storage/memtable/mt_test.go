@@ -70,8 +70,9 @@ func BuildChunk(types []types.Type, rows uint64) *chunk.Chunk {
 }
 
 func TestCollection(t *testing.T) {
-	maxRows := uint64(1024 * 1024)
-	capacity := maxRows * 2 * 4 * 10
+	maxRows := uint64(1024)
+	cols := 4
+	capacity := maxRows * 4 * uint64(cols) * 4
 	opts := new(engine.Options)
 	// opts.EventListener = e.NewLoggingEventListener()
 	dirname := "/tmp"
@@ -93,9 +94,12 @@ func TestCollection(t *testing.T) {
 	manager := NewManager(opts)
 	flusher := w.NewOpWorker()
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
-	colDefs := make([]types.Type, 2)
-	colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
-	colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
+	colDefs := make([]types.Type, cols)
+	for i := 0; i < cols; i++ {
+		colDefs[i] = types.Type{types.T_int32, 4, 4, 0}
+	}
+	// colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
+	// colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
 	t0_data := table.NewTableData(bufMgr, tbl.ID, colDefs)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
@@ -135,9 +139,9 @@ func TestCollection(t *testing.T) {
 	}
 	t.Log(bufMgr.String())
 
-	opts.Meta.Updater.Stop()
-	opts.Meta.Flusher.Stop()
 	opts.Data.Flusher.Stop()
+	opts.Meta.Flusher.Stop()
+	opts.Meta.Updater.Stop()
 	opts.Data.Sorter.Stop()
 }
 

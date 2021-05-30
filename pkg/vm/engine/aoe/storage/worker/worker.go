@@ -2,15 +2,28 @@ package ops
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"sync"
+	"sync/atomic"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type Cmd = uint8
 
 const (
 	QUIT Cmd = iota
+)
+
+type State = int32
+
+const (
+	CREATED State = iota
+	RUNNING
+	STOPPING_RECEIVER
+	STOPPING_CMD
+	STOPPED
 )
 
 const (
@@ -22,9 +35,10 @@ var (
 )
 
 type OpWorker struct {
-	OpC  chan iops.IOp
-	CmdC chan Cmd
-	Done bool
+	OpC   chan iops.IOp
+	CmdC  chan Cmd
+	State State
+	Wg    sync.WaitGroup
 }
 
 func NewOpWorker(args ...int) *OpWorker {
@@ -39,19 +53,28 @@ func NewOpWorker(args ...int) *OpWorker {
 		}
 	}
 	worker := &OpWorker{
-		OpC:  make(chan iops.IOp, l),
-		CmdC: make(chan Cmd, l),
+		OpC:   make(chan iops.IOp, l),
+		CmdC:  make(chan Cmd, l),
+		State: CREATED,
 	}
 	return worker
 }
 
 func (w *OpWorker) Start() {
 	log.Infof("Start OpWorker")
+	if w.State != CREATED {
+		panic("logic error")
+	}
+	w.State = RUNNING
 	go func() {
-		for !w.Done {
+		for {
+			if atomic.LoadInt32(&w.State) == STOPPED {
+				break
+			}
 			select {
 			case op := <-w.OpC:
 				w.onOp(op)
+				w.Wg.Done()
 			case cmd := <-w.CmdC:
 				w.onCmd(cmd)
 			}
@@ -60,11 +83,46 @@ func (w *OpWorker) Start() {
 }
 
 func (w *OpWorker) Stop() {
-	w.CmdC <- QUIT
+	w.StopReceiver()
+	w.WaitStop()
 }
 
-func (w *OpWorker) SendOp(op iops.IOp) {
+func (w *OpWorker) StopReceiver() {
+	state := atomic.LoadInt32(&w.State)
+	if state >= STOPPING_RECEIVER {
+		return
+	}
+	if atomic.CompareAndSwapInt32(&w.State, state, STOPPING_RECEIVER) {
+		return
+	}
+}
+
+func (w *OpWorker) WaitStop() {
+	state := atomic.LoadInt32(&w.State)
+	if state <= RUNNING {
+		panic("logic error")
+	}
+	if state == STOPPED {
+		return
+	}
+	if atomic.CompareAndSwapInt32(&w.State, STOPPING_RECEIVER, STOPPING_CMD) {
+		w.Wg.Wait()
+		w.CmdC <- QUIT
+	}
+}
+
+func (w *OpWorker) SendOp(op iops.IOp) bool {
+	state := atomic.LoadInt32(&w.State)
+	if state != RUNNING {
+		return false
+	}
+	w.Wg.Add(1)
+	if atomic.LoadInt32(&w.State) != RUNNING {
+		w.Wg.Done()
+		return false
+	}
 	w.OpC <- op
+	return true
 }
 
 func (w *OpWorker) onOp(op iops.IOp) {
@@ -79,7 +137,9 @@ func (w *OpWorker) onCmd(cmd Cmd) {
 		log.Infof("Quit OpWorker")
 		close(w.CmdC)
 		close(w.OpC)
-		w.Done = true
+		if !atomic.CompareAndSwapInt32(&w.State, STOPPING_CMD, STOPPED) {
+			panic("logic error")
+		}
 	default:
 		panic(fmt.Sprintf("Unsupported cmd %d", cmd))
 	}

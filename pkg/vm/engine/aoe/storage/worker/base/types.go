@@ -7,5 +7,7 @@ import (
 type IOpWorker interface {
 	Start()
 	Stop()
-	SendOp(ops.IOp)
+	SendOp(ops.IOp) bool
+	StopReceiver()
+	WaitStop()
 }
