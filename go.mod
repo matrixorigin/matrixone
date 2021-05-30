@@ -5,6 +5,7 @@ go 1.15
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/aws/aws-sdk-go v1.37.14
+	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75 // indirect
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/google/uuid v1.2.0

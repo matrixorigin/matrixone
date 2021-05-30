@@ -6,7 +6,8 @@ type SelectStatement interface {
 
 //the SelectStatement with an ORDER and/or LIMIT.
 type Select struct {
-	Select SelectStatement
+	statementImpl
+	Select  SelectStatement
 	OrderBy OrderBy
 	Limit   *Limit
 }
@@ -16,13 +17,13 @@ type OrderBy []*Order
 
 //the ordering expression.
 type Order struct {
-	Expr       Expr
-	Direction  Direction
+	Expr      Expr
+	Direction Direction
 	//without order
-	NullOrder  bool
+	NullOrder bool
 }
 
-func NewOrder(e Expr,d Direction,o bool)*Order{
+func NewOrder(e Expr, d Direction, o bool) *Order {
 	return &Order{
 		Expr:      e,
 		Direction: d,
@@ -49,7 +50,7 @@ type Limit struct {
 	Offset, Count Expr
 }
 
-func NewLimit(o,c Expr)*Limit{
+func NewLimit(o, c Expr) *Limit {
 	return &Limit{
 		Offset: o,
 		Count:  c,
@@ -62,15 +63,14 @@ type ParenSelect struct {
 	Select *Select
 }
 
-
 type SelectClause struct {
 	SelectStatement
-	From		*From
-	Distinct	bool
-	Where		*Where
-	Exprs		SelectExprs
-	GroupBy     GroupBy
-	Having      *Where
+	From     *From
+	Distinct bool
+	Where    *Where
+	Exprs    SelectExprs
+	GroupBy  GroupBy
+	Having   *Where
 }
 
 //WHERE or HAVING clause.
@@ -78,7 +78,7 @@ type Where struct {
 	Expr Expr
 }
 
-func NewWhere(e Expr)*Where{
+func NewWhere(e Expr) *Where {
 	return &Where{Expr: e}
 }
 
@@ -122,12 +122,12 @@ type JoinTableExpr struct {
 	Cond     JoinCond
 }
 
-func NewJoinTableExpr(jt string,l,r TableExpr,jc JoinCond)*JoinTableExpr{
+func NewJoinTableExpr(jt string, l, r TableExpr, jc JoinCond) *JoinTableExpr {
 	return &JoinTableExpr{
-		JoinType:  jt,
-		Left:      l,
-		Right:     r,
-		Cond:      jc,
+		JoinType: jt,
+		Left:     l,
+		Right:    r,
+		Cond:     jc,
 	}
 }
 
@@ -137,11 +137,11 @@ type JoinCond interface {
 }
 
 // the NATURAL join condition
-type NaturalJoinCond struct{
+type NaturalJoinCond struct {
 	JoinCond
 }
 
-func NewNaturalJoinCond()*NaturalJoinCond{
+func NewNaturalJoinCond() *NaturalJoinCond {
 	return &NaturalJoinCond{}
 }
 
@@ -151,7 +151,7 @@ type OnJoinCond struct {
 	Expr Expr
 }
 
-func NewOnJoinCond(e Expr)*OnJoinCond{
+func NewOnJoinCond(e Expr) *OnJoinCond {
 	return &OnJoinCond{Expr: e}
 }
 
@@ -161,7 +161,7 @@ type UsingJoinCond struct {
 	Cols IdentifierList
 }
 
-func NewUsingJoinCond(c IdentifierList)*UsingJoinCond{
+func NewUsingJoinCond(c IdentifierList) *UsingJoinCond {
 	return &UsingJoinCond{Cols: c}
 }
 
@@ -171,7 +171,7 @@ type ParenTableExpr struct {
 	Expr TableExpr
 }
 
-func NewParenTableExpr(e TableExpr)*ParenTableExpr{
+func NewParenTableExpr(e TableExpr) *ParenTableExpr {
 	return &ParenTableExpr{Expr: e}
 }
 
@@ -185,14 +185,14 @@ type AliasClause struct {
 //the table expression coupled with an optional alias.
 type AliasedTableExpr struct {
 	TableExpr
-	Expr       TableExpr
-	As         AliasClause
+	Expr TableExpr
+	As   AliasClause
 }
 
-func NewAliasedTableExpr(e TableExpr,a AliasClause)*AliasedTableExpr{
+func NewAliasedTableExpr(e TableExpr, a AliasClause) *AliasedTableExpr {
 	return &AliasedTableExpr{
 		Expr: e,
-		As: a,
+		As:   a,
 	}
 }
 
@@ -202,7 +202,7 @@ type StatementSource struct {
 	Statement Statement
 }
 
-func NewStatementSource(s Statement)*StatementSource{
+func NewStatementSource(s Statement) *StatementSource {
 	return &StatementSource{
 		Statement: s,
 	}
@@ -216,7 +216,6 @@ type From struct {
 	Tables TableExprs
 }
 
-func NewFrom(t TableExprs)*From{
+func NewFrom(t TableExprs) *From {
 	return &From{Tables: t}
 }
-

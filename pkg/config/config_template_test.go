@@ -12,14 +12,14 @@ import (
 )
 
 type par struct {
-	Name     string 	`toml:"Name"`
+	Name string `toml:"Name"`
 }
 type Pars struct {
 	Par []par
 }
 
 func TestToml(t *testing.T) {
-	blob :=`
+	blob := `
 		[[par]]
 		Name = "Thunder Road"
 		
@@ -37,14 +37,14 @@ func TestToml(t *testing.T) {
 	}
 }
 
-func compareArray(A,B []string)bool{
-	if len(A) != len(B){
+func compareArray(A, B []string) bool {
+	if len(A) != len(B) {
 		return false
 	}
 
 	sort.Strings(A)
 	sort.Strings(B)
-	for i:=0; i < len(A);i++{
+	for i := 0; i < len(A); i++ {
 		if A[i] != B[i] {
 			return false
 		}
@@ -75,67 +75,67 @@ func TestParameter(t *testing.T) {
 		update-mode = "fix"
 		`
 	var results = map[string]parameter{
-		"autocommit":parameter{
-				Name : "autocommit",
-				Scope : []string{"global", "session"},
-				Access : []string{"file"},
-				DataType: "bool",
-				DomainType : "set",
-				Values: []string{"true"},
-				Comment : "autocommit",
-				UpdateMode:"dynamic",
-			},
-		"back-log":parameter{
-			Name : "back-log",
-			Scope : []string{"global"},
-			Access : []string{"file"},
-			DataType: "int64",
-			DomainType : "range",
-			Values : []string{"-1","1","65535"},
-			Comment : "back-log",
-			UpdateMode:"fix",
+		"autocommit": parameter{
+			Name:       "autocommit",
+			Scope:      []string{"global", "session"},
+			Access:     []string{"file"},
+			DataType:   "bool",
+			DomainType: "set",
+			Values:     []string{"true"},
+			Comment:    "autocommit",
+			UpdateMode: "dynamic",
+		},
+		"back-log": parameter{
+			Name:       "back-log",
+			Scope:      []string{"global"},
+			Access:     []string{"file"},
+			DataType:   "int64",
+			DomainType: "range",
+			Values:     []string{"-1", "1", "65535"},
+			Comment:    "back-log",
+			UpdateMode: "fix",
 		},
 	}
 	var paras parameters
 	if metadata, err := toml.Decode(blob, &paras); err != nil {
 		t.Errorf("error:%v \n", err)
-	}else if undecoded := metadata.Undecoded() ; len(undecoded) > 0 && err == nil{
+	} else if undecoded := metadata.Undecoded(); len(undecoded) > 0 && err == nil {
 		for _, item := range undecoded {
-			t.Errorf("undecoded %s\n",item.String())
+			t.Errorf("undecoded %s\n", item.String())
 		}
 	}
 
 	for _, p := range paras.Parameter {
 		par := results[p.Name]
 		if p.Name != par.Name ||
-			!compareArray(p.Scope , par.Scope) ||
-			!compareArray(p.Access , par.Access) ||
+			!compareArray(p.Scope, par.Scope) ||
+			!compareArray(p.Access, par.Access) ||
 			p.DataType != par.DataType ||
 			p.DomainType != par.DomainType ||
-			!compareArray(p.Values,par.Values) ||
+			!compareArray(p.Values, par.Values) ||
 			p.Comment != par.Comment ||
-			p.UpdateMode != par.UpdateMode{
-				t.Errorf("toml decode parameter failed.")
-			}
+			p.UpdateMode != par.UpdateMode {
+			t.Errorf("toml decode parameter failed.")
+		}
 	}
 }
 
 func Test_isAsciiChar(t *testing.T) {
 	cases := [][]byte{
-		{'a', 'j','z', 'A','J', 'Z','_'},
-		{'<','=','>','+','{','[','@',0,' ','~'},
+		{'a', 'j', 'z', 'A', 'J', 'Z', '_'},
+		{'<', '=', '>', '+', '{', '[', '@', 0, ' ', '~'},
 	}
 
-	results :=[]bool{
+	results := []bool{
 		true,
 		false,
 	}
 
-	for i:=0; i < len(results);i++{
-		for _, x := range cases[i]{
+	for i := 0; i < len(results); i++ {
+		for _, x := range cases[i] {
 			r := isAsciiChar(x)
-			if r != results[i]{
-				t.Errorf("isAsciiChar failed. %d %c %v %v",i,x,r,results[i])
+			if r != results[i] {
+				t.Errorf("isAsciiChar failed. %d %c %v %v", i, x, r, results[i])
 				return
 			}
 		}
@@ -144,20 +144,20 @@ func Test_isAsciiChar(t *testing.T) {
 
 func Test_isAsciiDigit(t *testing.T) {
 	cases := [][]byte{
-		{'0', '1','7', '8','9'},
-		{'<','=','>','+','{','[','@',0,' ','~','/',':'},
+		{'0', '1', '7', '8', '9'},
+		{'<', '=', '>', '+', '{', '[', '@', 0, ' ', '~', '/', ':'},
 	}
 
-	results :=[]bool{
+	results := []bool{
 		true,
 		false,
 	}
 
-	for i:=0; i < len(results);i++{
-		for _, x := range cases[i]{
+	for i := 0; i < len(results); i++ {
+		for _, x := range cases[i] {
 			r := isAsciiDigit(x)
-			if r != results[i]{
-				t.Errorf("isAsciiDigit failed. %d %c %v %v",i,x,r,results[i])
+			if r != results[i] {
+				t.Errorf("isAsciiDigit failed. %d %c %v %v", i, x, r, results[i])
 				return
 			}
 		}
@@ -166,19 +166,19 @@ func Test_isAsciiDigit(t *testing.T) {
 
 func Test_isGoIdentifier(t *testing.T) {
 	cases := [][]string{
-		{"a", "j","z", "_"},
-		{"A","J", "Z"},
-		{"<","=",">","+","{","[","@","0"," ","~",""},
-		{"a0", "j0","z0", "_0"},
-		{"A0","J0", "Z0"},
-		{"a<", "j<","z<", "_<"},
-		{"A<","J<", "Z<"},
-		{"ap", "jp","zp", "_p"},
-		{"Ap","Jp", "Zp"},
-		{"pA","pJ", "pZ"},
+		{"a", "j", "z", "_"},
+		{"A", "J", "Z"},
+		{"<", "=", ">", "+", "{", "[", "@", "0", " ", "~", ""},
+		{"a0", "j0", "z0", "_0"},
+		{"A0", "J0", "Z0"},
+		{"a<", "j<", "z<", "_<"},
+		{"A<", "J<", "Z<"},
+		{"ap", "jp", "zp", "_p"},
+		{"Ap", "Jp", "Zp"},
+		{"pA", "pJ", "pZ"},
 	}
 
-	results :=[]bool{
+	results := []bool{
 		true,
 		false,
 		false,
@@ -191,11 +191,11 @@ func Test_isGoIdentifier(t *testing.T) {
 		true,
 	}
 
-	for i:=0; i < len(results);i++{
-		for _, x := range cases[i]{
+	for i := 0; i < len(results); i++ {
+		for _, x := range cases[i] {
 			r := isGoIdentifier(x)
-			if r != results[i]{
-				t.Errorf("isGoIdentifier failed. %d %s %v %v",i,x,r,results[i])
+			if r != results[i] {
+				t.Errorf("isGoIdentifier failed. %d %s %v %v", i, x, r, results[i])
 				return
 			}
 		}
@@ -204,19 +204,19 @@ func Test_isGoIdentifier(t *testing.T) {
 
 func Test_isGoStructAndInterfaceIdentifier(t *testing.T) {
 	cases := [][]string{
-		{"a", "j","z", "_"},
-		{"A","J", "Z"},
-		{"<","=",">","+","{","[","@","0"," ","~",""},
-		{"a0", "j0","z0", "_0"},
-		{"A0","J0", "Z0"},
-		{"a<", "j<","z<", "_<"},
-		{"A<","J<", "Z<"},
-		{"ap", "jp","zp", "_p"},
-		{"Ap","Jp", "Zp"},
-		{"pA","pJ", "pZ"},
+		{"a", "j", "z", "_"},
+		{"A", "J", "Z"},
+		{"<", "=", ">", "+", "{", "[", "@", "0", " ", "~", ""},
+		{"a0", "j0", "z0", "_0"},
+		{"A0", "J0", "Z0"},
+		{"a<", "j<", "z<", "_<"},
+		{"A<", "J<", "Z<"},
+		{"ap", "jp", "zp", "_p"},
+		{"Ap", "Jp", "Zp"},
+		{"pA", "pJ", "pZ"},
 	}
 
-	results :=[]bool{
+	results := []bool{
 		true,
 		true,
 		false,
@@ -229,44 +229,44 @@ func Test_isGoStructAndInterfaceIdentifier(t *testing.T) {
 		true,
 	}
 
-	for i:=0; i < len(results);i++{
-		for _, x := range cases[i]{
+	for i := 0; i < len(results); i++ {
+		for _, x := range cases[i] {
 			r := isGoStructAndInterfaceIdentifier(x)
-			if r != results[i]{
-				t.Errorf("isGoIdentifier failed. %d %s %v %v",i,x,r,results[i])
+			if r != results[i] {
+				t.Errorf("isGoIdentifier failed. %d %s %v %v", i, x, r, results[i])
 				return
 			}
 		}
 	}
 }
 
-func Test_isSubset(t *testing.T){
+func Test_isSubset(t *testing.T) {
 	A := [][]string{
-		{"a","b","c"},
+		{"a", "b", "c"},
 		{},
-		{"a","a"},
-		{"a","e"},
-		{"a","b","c","e"},
-		{"a","b"},
-		{"b","c"},
-		{"a","c"},
+		{"a", "a"},
+		{"a", "e"},
+		{"a", "b", "c", "e"},
+		{"a", "b"},
+		{"b", "c"},
+		{"a", "c"},
 		{"a"},
 		{"b"},
 		{"c"},
 	}
 
 	B := [][]string{
-		{"a","b","c"},
-		{"a","b","c"},
-		{"a","b","c"},
-		{"a","b","c"},
-		{"a","b","c"},
-		{"a","b","c"},
-		{"a","b","c"},
-		{"a","b","c"},
-		{"a","b","c"},
-		{"a","b","c"},
-		{"a","b","c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
+		{"a", "b", "c"},
 	}
 
 	results := []bool{
@@ -283,25 +283,25 @@ func Test_isSubset(t *testing.T){
 		true,
 	}
 
-	for i:=0; i < len(results);i++{
-		r := isSubset(A[i],B[i])
-		if r != results[i]{
-			t.Errorf("isSubset failed. %d %s %s %v %v",i,A[i],B[i],r,results[i])
+	for i := 0; i < len(results); i++ {
+		r := isSubset(A[i], B[i])
+		if r != results[i] {
+			t.Errorf("isSubset failed. %d %s %s %v %v", i, A[i], B[i], r, results[i])
 			return
 		}
 	}
 }
 
-func Test_isScope(t *testing.T){
+func Test_isScope(t *testing.T) {
 	A := [][]string{
-		{"session","global","c"},
+		{"session", "global", "c"},
 		{},
-		{"session","session"},
-		{"session","e"},
-		{"session","global","c","e"},
-		{"session","global"},
-		{"global","c"},
-		{"session","c"},
+		{"session", "session"},
+		{"session", "e"},
+		{"session", "global", "c", "e"},
+		{"session", "global"},
+		{"global", "c"},
+		{"session", "c"},
 		{"session"},
 		{"global"},
 		{"c"},
@@ -321,25 +321,25 @@ func Test_isScope(t *testing.T){
 		false,
 	}
 
-	for i:=0; i < len(results);i++{
+	for i := 0; i < len(results); i++ {
 		r := isScope(A[i])
-		if r != results[i]{
-			t.Errorf("isScope failed. %d %s %v %v",i,A[i],r,results[i])
+		if r != results[i] {
+			t.Errorf("isScope failed. %d %s %v %v", i, A[i], r, results[i])
 			return
 		}
 	}
 }
 
-func Test_isAccess(t *testing.T){
+func Test_isAccess(t *testing.T) {
 	A := [][]string{
-		{"cmd","file","c"},
+		{"cmd", "file", "c"},
 		{},
-		{"cmd","cmd"},
-		{"cmd","e"},
-		{"cmd","file","c","e"},
-		{"cmd","file"},
-		{"file","c"},
-		{"cmd","c"},
+		{"cmd", "cmd"},
+		{"cmd", "e"},
+		{"cmd", "file", "c", "e"},
+		{"cmd", "file"},
+		{"file", "c"},
+		{"cmd", "c"},
 		{"cmd"},
 		{"file"},
 		{"c"},
@@ -359,19 +359,19 @@ func Test_isAccess(t *testing.T){
 		false,
 	}
 
-	for i:=0; i < len(results);i++{
+	for i := 0; i < len(results); i++ {
 		r := isAccess(A[i])
-		if r != results[i]{
-			t.Errorf("isAccess failed. %d %s %v %v",i,A[i],r,results[i])
+		if r != results[i] {
+			t.Errorf("isAccess failed. %d %s %v %v", i, A[i], r, results[i])
 			return
 		}
 	}
 }
 
-func Test_isDataType(t *testing.T){
+func Test_isDataType(t *testing.T) {
 	A := []string{
 		"string", "int64", "float64", "bool",
-		"A","B","C","D",
+		"A", "B", "C", "D",
 	}
 
 	results := []bool{
@@ -385,20 +385,20 @@ func Test_isDataType(t *testing.T){
 		false,
 	}
 
-	for i:=0; i < len(results);i++{
+	for i := 0; i < len(results); i++ {
 		r := isDataType(A[i])
-		if r != results[i]{
-			t.Errorf("isDataType failed. %d %s %v %v",i,A[i],r,results[i])
+		if r != results[i] {
+			t.Errorf("isDataType failed. %d %s %v %v", i, A[i], r, results[i])
 			return
 		}
 	}
 }
 
-func Test_isDomainType(t *testing.T){
+func Test_isDomainType(t *testing.T) {
 	A := []string{
-		"set","range",
+		"set", "range",
 		"string", "int64", "float64", "bool",
-		"A","B","C","D",
+		"A", "B", "C", "D",
 	}
 
 	results := []bool{
@@ -414,97 +414,97 @@ func Test_isDomainType(t *testing.T){
 		false,
 	}
 
-	for i:=0; i < len(results);i++{
+	for i := 0; i < len(results); i++ {
 		r := isDomainType(A[i])
-		if r != results[i]{
-			t.Errorf("isDataType failed. %d %s %v %v",i,A[i],r,results[i])
+		if r != results[i] {
+			t.Errorf("isDataType failed. %d %s %v %v", i, A[i], r, results[i])
 			return
 		}
 	}
 }
 
 type valueCase struct {
-	dataType string
+	dataType   string
 	domainType string
-	values []string
+	values     []string
 }
 
-func Test_checkValues(t *testing.T){
+func Test_checkValues(t *testing.T) {
 	A := []valueCase{
 		//string
-		{"string","set",[]string{}},
-		{"string","set",[]string{"A"}},
-		{"string","set",[]string{"A","A"}},
-		{"string","set",[]string{"A","A","B","C"}},
-		{"string","set",[]string{"A","B","C"}},
+		{"string", "set", []string{}},
+		{"string", "set", []string{"A"}},
+		{"string", "set", []string{"A", "A"}},
+		{"string", "set", []string{"A", "A", "B", "C"}},
+		{"string", "set", []string{"A", "B", "C"}},
 
-		{"string","range",[]string{}},
-		{"string","range",[]string{"A"}},
-		{"string","range",[]string{"A","A"}},
-		{"string","range",[]string{"A","A","B","C"}},
-		{"string","range",[]string{"A","B","C"}},
+		{"string", "range", []string{}},
+		{"string", "range", []string{"A"}},
+		{"string", "range", []string{"A", "A"}},
+		{"string", "range", []string{"A", "A", "B", "C"}},
+		{"string", "range", []string{"A", "B", "C"}},
 
 		//int64
-		{"int64","set",[]string{}},
-		{"int64","set",[]string{"A"}},
-		{"int64","set",[]string{"A","A"}},
-		{"int64","set",[]string{"A","A","B","C"}},
-		{"int64","set",[]string{"A","B","C"}},
+		{"int64", "set", []string{}},
+		{"int64", "set", []string{"A"}},
+		{"int64", "set", []string{"A", "A"}},
+		{"int64", "set", []string{"A", "A", "B", "C"}},
+		{"int64", "set", []string{"A", "B", "C"}},
 
-		{"int64","set",[]string{"0"}},
-		{"int64","set",[]string{"0","0"}},
-		{"int64","set",[]string{"0","0","1","C"}},
-		{"int64","set",[]string{"0","1","2"}},
-		{"int64","set",[]string{"0","1","2","0"}},
+		{"int64", "set", []string{"0"}},
+		{"int64", "set", []string{"0", "0"}},
+		{"int64", "set", []string{"0", "0", "1", "C"}},
+		{"int64", "set", []string{"0", "1", "2"}},
+		{"int64", "set", []string{"0", "1", "2", "0"}},
 
-		{"int64","range",[]string{"0"}},
-		{"int64","range",[]string{"0","1"}},
-		{"int64","range",[]string{"0","1","2"}},
-		{"int64","range",[]string{"1","0","2"}},
-		{"int64","range",[]string{"3","1","2"}},
-		{"int64","range",[]string{"5","1","9"}},
+		{"int64", "range", []string{"0"}},
+		{"int64", "range", []string{"0", "1"}},
+		{"int64", "range", []string{"0", "1", "2"}},
+		{"int64", "range", []string{"1", "0", "2"}},
+		{"int64", "range", []string{"3", "1", "2"}},
+		{"int64", "range", []string{"5", "1", "9"}},
 
 		//float64
-		{"float64","set",[]string{}},
-		{"float64","set",[]string{"A"}},
-		{"float64","set",[]string{"A","A"}},
-		{"float64","set",[]string{"A","A","B","C"}},
-		{"float64","set",[]string{"A","B","C"}},
+		{"float64", "set", []string{}},
+		{"float64", "set", []string{"A"}},
+		{"float64", "set", []string{"A", "A"}},
+		{"float64", "set", []string{"A", "A", "B", "C"}},
+		{"float64", "set", []string{"A", "B", "C"}},
 
-		{"float64","set",[]string{"0.1"}},
-		{"float64","set",[]string{"0.1","0.1"}},
-		{"float64","set",[]string{"0","0","1","C"}},
-		{"float64","set",[]string{"0","1","2"}},
-		{"float64","set",[]string{"0","1","2","0"}},
+		{"float64", "set", []string{"0.1"}},
+		{"float64", "set", []string{"0.1", "0.1"}},
+		{"float64", "set", []string{"0", "0", "1", "C"}},
+		{"float64", "set", []string{"0", "1", "2"}},
+		{"float64", "set", []string{"0", "1", "2", "0"}},
 
-		{"float64","range",[]string{"0"}},
-		{"float64","range",[]string{"0","1"}},
-		{"float64","range",[]string{"0","1","2"}},
-		{"float64","range",[]string{"1","0","2"}},
-		{"float64","range",[]string{"3","1","2"}},
-		{"float64","range",[]string{"5","1","9"}},
+		{"float64", "range", []string{"0"}},
+		{"float64", "range", []string{"0", "1"}},
+		{"float64", "range", []string{"0", "1", "2"}},
+		{"float64", "range", []string{"1", "0", "2"}},
+		{"float64", "range", []string{"3", "1", "2"}},
+		{"float64", "range", []string{"5", "1", "9"}},
 
 		//bool
-		{"bool","set",[]string{}},
-		{"bool","set",[]string{"A"}},
-		{"bool","set",[]string{"A","A"}},
-		{"bool","set",[]string{"A","A","B","C"}},
-		{"bool","set",[]string{"A","B","C"}},
+		{"bool", "set", []string{}},
+		{"bool", "set", []string{"A"}},
+		{"bool", "set", []string{"A", "A"}},
+		{"bool", "set", []string{"A", "A", "B", "C"}},
+		{"bool", "set", []string{"A", "B", "C"}},
 
-		{"bool","set",[]string{"0.1"}},
-		{"bool","set",[]string{"false"}},
-		{"bool","set",[]string{"off"}},
-		{"bool","set",[]string{"true"}},
-		{"bool","set",[]string{"on"}},
+		{"bool", "set", []string{"0.1"}},
+		{"bool", "set", []string{"false"}},
+		{"bool", "set", []string{"off"}},
+		{"bool", "set", []string{"true"}},
+		{"bool", "set", []string{"on"}},
 
-		{"bool","range",[]string{"0","1","2","0"}},
-		{"bool","set",[]string{"FALSE"}},
-		{"bool","set",[]string{"OFF"}},
-		{"bool","set",[]string{"TRUE"}},
-		{"bool","set",[]string{"ON"}},
+		{"bool", "range", []string{"0", "1", "2", "0"}},
+		{"bool", "set", []string{"FALSE"}},
+		{"bool", "set", []string{"OFF"}},
+		{"bool", "set", []string{"TRUE"}},
+		{"bool", "set", []string{"ON"}},
 
 		//x
-		{"x","set",[]string{"FALSE"}},
+		{"x", "set", []string{"FALSE"}},
 	}
 
 	results := []bool{
@@ -584,10 +584,10 @@ func Test_checkValues(t *testing.T){
 		false,
 	}
 
-	for i:=0; i < len(results);i++{
-		r := checkValues(A[i].dataType,A[i].domainType,A[i].values)
-		if r != results[i]{
-			t.Errorf("checkValues failed. %d %s %v %v",i,A[i],r,results[i])
+	for i := 0; i < len(results); i++ {
+		r := checkValues(A[i].dataType, A[i].domainType, A[i].values)
+		if r != results[i] {
+			t.Errorf("checkValues failed. %d %s %v %v", i, A[i], r, results[i])
 			return
 		}
 	}
@@ -602,11 +602,11 @@ func Test_hasDuplicateValue(t *testing.T) {
 		args args
 		want bool
 	}{
-		{"t1",args{[]string{"A","B","A"}},true},
-		{"t2",args{[]string{"A","B","C"}},false},
-		{"t3",args{[]string{"A"}},false},
-		{"t4",args{[]string{"A","A"}},true},
-		{"t5",args{[]string{}},false},
+		{"t1", args{[]string{"A", "B", "A"}}, true},
+		{"t2", args{[]string{"A", "B", "C"}}, false},
+		{"t3", args{[]string{"A"}}, false},
+		{"t4", args{[]string{"A", "A"}}, true},
+		{"t5", args{[]string{}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -626,11 +626,11 @@ func Test_hasDuplicateValueInt64(t *testing.T) {
 		args args
 		want bool
 	}{
-		{"t1",args{[]int64{0,1,0}},true},
-		{"t2",args{[]int64{0,1,2}},false},
-		{"t3",args{[]int64{0}},false},
-		{"t4",args{[]int64{0,0}},true},
-		{"t5",args{[]int64{}},false},
+		{"t1", args{[]int64{0, 1, 0}}, true},
+		{"t2", args{[]int64{0, 1, 2}}, false},
+		{"t3", args{[]int64{0}}, false},
+		{"t4", args{[]int64{0, 0}}, true},
+		{"t5", args{[]int64{}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -650,11 +650,11 @@ func Test_hasDuplicateValueFloat64(t *testing.T) {
 		args args
 		want bool
 	}{
-		{"t1",args{[]float64{0,1,0}},true},
-		{"t2",args{[]float64{0,1,2}},false},
-		{"t3",args{[]float64{0}},false},
-		{"t4",args{[]float64{0,0}},true},
-		{"t5",args{[]float64{}},false},
+		{"t1", args{[]float64{0, 1, 0}}, true},
+		{"t2", args{[]float64{0, 1, 2}}, false},
+		{"t3", args{[]float64{0}}, false},
+		{"t4", args{[]float64{0, 0}}, true},
+		{"t5", args{[]float64{}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -674,8 +674,8 @@ func Test_parameters_LoadParametersDefinition(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"t1",args{"test/t1.toml"},false},
-		{"t2",args{"test/t2.toml"},true},
+		{"t1", args{"test/t1.toml"}, false},
+		{"t2", args{"test/t2.toml"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -691,6 +691,8 @@ func Test_parameters_LoadParametersDefinitionFromString(t *testing.T) {
 	t1 := `
 		parameter-struct-name = "AllParameters"
 		config-struct-name = "configuration"
+		operation-file-name = "parameters"
+		config-file-name = "config"
 
 		[[parameter]]
 		name = "autocommit"
@@ -705,6 +707,8 @@ func Test_parameters_LoadParametersDefinitionFromString(t *testing.T) {
 	t2 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "autocommit@"
@@ -719,6 +723,8 @@ config-struct-name = "configuration"
 	t3 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "autocommit"
@@ -733,6 +739,8 @@ config-struct-name = "configuration"
 	t4 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "autocommit"
@@ -747,6 +755,8 @@ config-struct-name = "configuration"
 	t5 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "autocommit"
@@ -761,6 +771,8 @@ config-struct-name = "configuration"
 	t6 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "autocommit"
@@ -775,6 +787,8 @@ config-struct-name = "configuration"
 	t7 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "count"
@@ -789,6 +803,8 @@ config-struct-name = "configuration"
 	t8 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "count"
@@ -811,9 +827,11 @@ config-struct-name = "configuration"
 		update-mode = "fix"
 `
 
-	t9 :=`
+	t9 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "boolset1"
@@ -826,9 +844,11 @@ config-struct-name = "configuration"
 		update-mode = "dynamic"
 `
 
-	t10 :=`
+	t10 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "int64set1"
@@ -841,9 +861,11 @@ config-struct-name = "configuration"
 		update-mode = "dynamic"
 `
 
-	t11 :=`
+	t11 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "float64set1"
@@ -856,9 +878,11 @@ config-struct-name = "configuration"
 		update-mode = "dynamic"
 `
 
-	t12 :=`
+	t12 := `
 parameter-struct-name = "AllParameters"
 config-struct-name = "configuration"
+operation-file-name = "parameters"
+config-file-name = "config"
 
 		[[parameter]]
 		name = "stringset1"
@@ -878,18 +902,18 @@ config-struct-name = "configuration"
 		args    args
 		wantErr bool
 	}{
-		{"t1",args{t1},false},
-		{"t2",args{t2},true},
-		{"t3",args{t3},true},
-		{"t4",args{t4},true},
-		{"t5",args{t5},true},
-		{"t6",args{t6},false},
-		{"t7",args{t7},false},
-		{"t8",args{t8},true},
-		{"t9",args{t9},false},
-		{"t10",args{t10},false},
-		{"t11",args{t11},false},
-		{"t12",args{t12},false},
+		{"t1", args{t1}, false},
+		{"t2", args{t2}, true},
+		{"t3", args{t3}, true},
+		{"t4", args{t4}, true},
+		{"t5", args{t5}, true},
+		{"t6", args{t6}, false},
+		{"t7", args{t7}, false},
+		{"t8", args{t8}, true},
+		{"t9", args{t9}, false},
+		{"t10", args{t10}, false},
+		{"t11", args{t11}, false},
+		{"t12", args{t12}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -906,7 +930,7 @@ type Inventory struct {
 	Count    uint
 }
 
-var tmplStr =  `
+var tmplStr = `
 // Code generated by tool; DO NOT EDIT.
 package config
 
@@ -941,7 +965,7 @@ type {{.ConfigurationStructName}} struct{
 	{{ printf "/**\n\tName:\t%s\n\tScope:\t%s\n\tAccess:\t%s\n\tDataType:\t%s\n\tDomainType:\t%s\n\tValues:\t%s\n\tComment:\t%s\n\tUpdateMode:\t%s\n\t*/"  
 			.Name .Scope .Access .DataType .DomainType .Values .Comment .UpdateMode
 	}}
-	{{ printf "%s    %s  `+"`toml:"+`\"%s\"`+"`"+`" .CapitalName .DataType .Name }}
+	{{ printf "%s    %s  ` + "`toml:" + `\"%s\"` + "`" + `" .CapitalName .DataType .Name }}
 
 	{{end}}
 {{end}}
@@ -1296,13 +1320,13 @@ func (ap * {{.ParameterStructName}} ) UpdateParametersWithConfiguration(config *
 }
 `
 
-func Test_template(t *testing.T){
+func Test_template(t *testing.T) {
 	var paras = parameters{
-		ParameterStructName: "AllParameters",
+		ParameterStructName:     "AllParameters",
 		ConfigurationStructName: "configuration",
 		Parameter: []parameter{
 			{
-				Name: "boolSet1",
+				Name:       "boolSet1",
 				Scope:      []string{"global", "session"},
 				Access:     []string{"file"},
 				DataType:   "bool",
@@ -1312,7 +1336,7 @@ func Test_template(t *testing.T){
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "boolRange1",
+				Name:       "boolRange1",
 				Scope:      []string{"global", "session"},
 				Access:     []string{"file"},
 				DataType:   "bool",
@@ -1322,97 +1346,97 @@ func Test_template(t *testing.T){
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "stringSet1",
+				Name:       "stringSet1",
 				Scope:      []string{"global"},
 				Access:     []string{"file"},
 				DataType:   "string",
 				DomainType: "set",
-				Values:     []string{"localhost","127.0.0.1",},
+				Values:     []string{"localhost", "127.0.0.1"},
 				Comment:    "stringSet1",
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "stringRange1",
+				Name:       "stringRange1",
 				Scope:      []string{"global"},
 				Access:     []string{"file"},
 				DataType:   "string",
 				DomainType: "range",
-				Values:     []string{"localhost","127.0.0.1",},
+				Values:     []string{"localhost", "127.0.0.1"},
 				Comment:    "stringRange1",
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "int64set1",
+				Name:       "int64set1",
 				Scope:      []string{"global"},
 				Access:     []string{"file"},
 				DataType:   "int64",
 				DomainType: "set",
-				Values:     []string{"-1","2","65535"},
+				Values:     []string{"-1", "2", "65535"},
 				Comment:    "int64set1",
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "int64range1",
+				Name:       "int64range1",
 				Scope:      []string{"global"},
 				Access:     []string{"file"},
 				DataType:   "int64",
 				DomainType: "range",
-				Values:     []string{"-1","-1","65535"},
+				Values:     []string{"-1", "-1", "65535"},
 				Comment:    "int64range1",
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "int64X1",
+				Name:       "int64X1",
 				Scope:      []string{"global"},
 				Access:     []string{"file"},
 				DataType:   "int64",
 				DomainType: "X",
-				Values:     []string{"-1","-1","65535"},
+				Values:     []string{"-1", "-1", "65535"},
 				Comment:    "int64X1",
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "float64set1",
+				Name:       "float64set1",
 				Scope:      []string{"global"},
 				Access:     []string{"file"},
 				DataType:   "float64",
 				DomainType: "set",
-				Values:     []string{"-1.01","2.02","65535.03"},
+				Values:     []string{"-1.01", "2.02", "65535.03"},
 				Comment:    "float64set1",
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "float64range1",
+				Name:       "float64range1",
 				Scope:      []string{"global"},
 				Access:     []string{"file"},
 				DataType:   "float64",
 				DomainType: "range",
-				Values:     []string{"-2.02","-1.01","65535.03"},
+				Values:     []string{"-2.02", "-1.01", "65535.03"},
 				Comment:    "float64range1",
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "float64X1",
+				Name:       "float64X1",
 				Scope:      []string{"global"},
 				Access:     []string{"file"},
 				DataType:   "float64",
 				DomainType: "X",
-				Values:     []string{"-1","-1","65535"},
+				Values:     []string{"-1", "-1", "65535"},
 				Comment:    "float64X1",
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "float64set2",
+				Name:       "float64set2",
 				Scope:      []string{"global"},
 				Access:     []string{"file"},
 				DataType:   "float64",
 				DomainType: "set",
-				Values:     []string{"-1","-1","65535"},
+				Values:     []string{"-1", "-1", "65535"},
 				Comment:    "float64set2",
 				UpdateMode: "fix",
 			},
 			{
-				Name: "boolSet2",
+				Name:       "boolSet2",
 				Scope:      []string{"global", "session"},
 				Access:     []string{"file"},
 				DataType:   "bool",
@@ -1422,7 +1446,7 @@ func Test_template(t *testing.T){
 				UpdateMode: "dynamic",
 			},
 			{
-				Name: "boolSet3",
+				Name:       "boolSet3",
 				Scope:      []string{"global", "session"},
 				Access:     []string{"file"},
 				DataType:   "bool",
@@ -1434,7 +1458,7 @@ func Test_template(t *testing.T){
 		},
 	}
 
-	for i :=0; i<len(paras.Parameter);i++{
+	for i := 0; i < len(paras.Parameter); i++ {
 		p := paras.Parameter[i].Name
 		capName := p
 		capName = string(unicode.ToUpper(rune(p[0]))) + p[1:]
@@ -1442,19 +1466,23 @@ func Test_template(t *testing.T){
 	}
 
 	tmpl, err := template.New("test").Parse(tmplStr)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 
 	f, err := os.Create("parameters.go")
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	defer f.Close()
 
 	err = tmpl.Execute(f, paras)
-	if err != nil { panic(err) }
+	if err != nil {
+		panic(err)
+	}
 }
 
-var tomlTmplString=`
+var tomlTmplString = `
 # Code generated by tool; DO NOT EDIT.
 {{range $index,$param := .Parameter}}
 {{ if ne .UpdateMode "fix"}}
@@ -1485,7 +1513,7 @@ var tomlTmplString=`
 {{end}}
 `
 
-var testOperationTmpl=`
+var testOperationTmpl = `
 // Code generated by tool; DO NOT EDIT.
 package config
 
@@ -1515,7 +1543,7 @@ func is{{.ConfigurationStructName}}Equal(c1,c2 {{.ConfigurationStructName}}) boo
 }
 
 func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T) {
-	t1 := `+"`"+`
+	t1 := ` + "`" + `
 {{range $index,$param := .Parameter}}
 {{ if ne .UpdateMode "fix"}}
 	{{- with $count := len .Values -}}
@@ -1539,7 +1567,7 @@ func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T)
 	{{- end -}}
 {{end}}
 {{end}}		
-`+"`"+`
+` + "`" + `
 	t1_config:={{.ConfigurationStructName}}{
 		rwlock:            sync.RWMutex{},
 
@@ -1609,7 +1637,7 @@ func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T)
 }
 `
 
-func Test_ParameterDefinitionAndTemplate2(t *testing.T){
+func Test_ParameterDefinitionAndTemplate2(t *testing.T) {
 	t1 := `
 		parameter-struct-name = "AllParameters"
 		config-struct-name = "configuration"
@@ -1798,7 +1826,7 @@ func Test_ParameterDefinitionAndTemplate2(t *testing.T){
 		update-mode = "fix"
 `
 
-	t5 :=`
+	t5 := `
 		parameter-struct-name = "AllParameters"
 		config-struct-name = "configuration"
 		operation-file-name = "parameters"
@@ -1832,7 +1860,7 @@ func Test_ParameterDefinitionAndTemplate2(t *testing.T){
 		update-mode = "fix"
 `
 
-	t7 :=`
+	t7 := `
 		parameter-struct-name = "AllParameters"
 		config-struct-name = "configuration"
 		operation-file-name = "parameters"
@@ -1849,7 +1877,7 @@ func Test_ParameterDefinitionAndTemplate2(t *testing.T){
 		update-mode = "dynamic"
 `
 
-	t8 :=`
+	t8 := `
 		parameter-struct-name = "AllParameters"
 		config-struct-name = "configuration"
 		operation-file-name = "parameters"
@@ -1873,14 +1901,14 @@ func Test_ParameterDefinitionAndTemplate2(t *testing.T){
 		args    args
 		wantErr bool
 	}{
-		{"t1",args{t1},false},
-		{"t2",args{t2},true},
-		{"t3",args{t3},true},
-		{"t4",args{t4},true},
-		{"t5",args{t5},true},
-		{"t6",args{t6},true},
-		{"t7",args{t7},true},
-		{"t8",args{t8},true},
+		{"t1", args{t1}, false},
+		{"t2", args{t2}, true},
+		{"t3", args{t3}, true},
+		{"t4", args{t4}, true},
+		{"t5", args{t5}, true},
+		{"t6", args{t6}, true},
+		{"t7", args{t7}, true},
+		{"t8", args{t8}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1888,54 +1916,65 @@ func Test_ParameterDefinitionAndTemplate2(t *testing.T){
 			if err := params.LoadParametersDefinitionFromString(tt.args.input); (err != nil) != tt.wantErr {
 				t.Errorf("LoadParametersDefinitionFromString() error = %v, wantErr %v", err, tt.wantErr)
 				return
-			}else if err!=nil{
+			} else if err != nil {
 				return
 			}
 
 			tmpl, err := template.New("test").Parse(tmplStr)
-			if err != nil { panic(err) }
+			if err != nil {
+				panic(err)
+			}
 
 			f, err := os.Create("parameters.go")
-			if err != nil{
+			if err != nil {
 				panic(err)
 			}
 			defer f.Close()
 
 			err = tmpl.Execute(f, params)
-			if err != nil { panic(err) }
+			if err != nil {
+				panic(err)
+			}
 
-			tomlTmpl,err := template.New("toml").Parse(tomlTmplString)
-			if err != nil { panic(err)}
+			tomlTmpl, err := template.New("toml").Parse(tomlTmplString)
+			if err != nil {
+				panic(err)
+			}
 
-			tomlf,err := os.Create("config.toml")
-			if err!= nil{
+			tomlf, err := os.Create("config.toml")
+			if err != nil {
 				panic(err)
 			}
 			defer tomlf.Close()
 
-			err = tomlTmpl.Execute(tomlf,params)
-			if err != nil { panic(err) }
+			err = tomlTmpl.Execute(tomlf, params)
+			if err != nil {
+				panic(err)
+			}
 
-			testTmpl,err := template.New("genTest").Parse(testOperationTmpl)
-			if err != nil { panic(err)}
+			testTmpl, err := template.New("genTest").Parse(testOperationTmpl)
+			if err != nil {
+				panic(err)
+			}
 
-			testf,err := os.Create("parameters_test.go")
-			if err!= nil{
+			testf, err := os.Create("parameters_test.go")
+			if err != nil {
 				panic(err)
 			}
 			defer testf.Close()
 
-			err = testTmpl.Execute(testf,params)
-			if err != nil { panic(err) }
+			err = testTmpl.Execute(testf, params)
+			if err != nil {
+				panic(err)
+			}
 
 		})
 	}
 
-
 }
 
 func Test_String(t *testing.T) {
-	fmt.Printf("%s \n","`toml:\"name\"`")
+	fmt.Printf("%s \n", "`toml:\"name\"`")
 }
 
 func TestNewConfigurationFileGenerator(t *testing.T) {
@@ -1943,18 +1982,18 @@ func TestNewConfigurationFileGenerator(t *testing.T) {
 		defFileName string
 	}
 	tests := []struct {
-		name string
-		args args
+		name    string
+		args    args
 		wantErr bool
 	}{
-		{"t1",args{"test/def1.toml"},false},
-		{"t2",args{"test/def2.toml"},false},
-		{"t3",args{"system_vars_def.toml"},false},
+		{"t1", args{"test/def1.toml"}, false},
+		{"t2", args{"test/def2.toml"}, false},
+		{"t3", args{"system_vars_def.toml"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gen := NewConfigurationFileGenerator(tt.args.defFileName)
-			if err := gen.Generate(); (err!=nil) != tt.wantErr {
+			if err := gen.Generate(); (err != nil) != tt.wantErr {
 				t.Errorf("Generator() = %v, want %v", err, tt.wantErr)
 			}
 		})

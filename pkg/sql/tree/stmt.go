@@ -7,3 +7,6 @@ type Statement interface {
 	NodePrinter
 }
 
+type statementImpl struct {
+	Statement
+}
