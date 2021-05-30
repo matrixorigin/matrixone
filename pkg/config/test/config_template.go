@@ -32,23 +32,22 @@ import (
 		The global parameter change does not affect the session value for any current client sessions (
 		not even the session within which the global value change occurs).
 */
-var scopeOptions = []string{"session","global"}
+var scopeOptions = []string{"session", "global"}
 
 //the access
-var accessOptions = []string{"cmd","file","env"}
+var accessOptions = []string{"cmd", "file", "env"}
 
 //the data type
 var dataTypeOptions = []string{"string", "int64", "float64", "bool"}
 
-var boolFalseOptions = []string {"false","off"}
-var boolTrueOptions = []string {"true","on"}
+var boolFalseOptions = []string{"false", "off"}
+var boolTrueOptions = []string{"true", "on"}
 
 //the domain
 var domainTyoeOptions = []string{"set", "range"}
 
 //the updateMode
-var updateModeOptions = []string{"dynamic","fix","hotload"}
-
+var updateModeOptions = []string{"dynamic", "fix", "hotload"}
 
 //a unit in configuration template for a configuration item
 type parameter struct {
@@ -60,19 +59,19 @@ type parameter struct {
 
 	//the scope (also visibility)
 	//where can the others see the value
-	Scope []string	`toml:"scope"`
+	Scope []string `toml:"scope"`
 
 	//the access: command line; configure file; environment variable in the shell
 	//where the value can be changed
-	Access []string	`toml:"access"`
+	Access []string `toml:"access"`
 
 	//the data type of the value like int, string ,bool,float,...
-	DataType string	`toml:"type"`
+	DataType string `toml:"type"`
 
 	//the domain of the value for validity: set; range;
 	//set: select one among discrete values.
 	//range: select a point in a real range
-	DomainType string	`toml:"domain-type"`
+	DomainType string `toml:"domain-type"`
 
 	/**
 	The first one is the initial-value.
@@ -85,24 +84,24 @@ type parameter struct {
 
 		special situation
 			[] is empty, you can set any value in the domain of the data type
-	 */
+	*/
 	Values []string `toml:"values"`
 
 	//the comment
-	Comment string	`toml:"comment"`
+	Comment string `toml:"comment"`
 
 	//the update mode in running
 	//dynamic: can be updated in running
 	//fix: can not be updated in running
 	//hotLoad: can be loaded from the config file and updated in running
-	UpdateMode string	`toml:"update-mode"`
+	UpdateMode string `toml:"update-mode"`
 }
 
-type parameters struct{
+type parameters struct {
 	//the name of parameter data structure
 	//the parameter structure can be exported.
 	//the first character must be capital.
-	ParameterStructName string	`toml:"parameter-struct-name"`
+	ParameterStructName string `toml:"parameter-struct-name"`
 
 	//the name of configuration data structure
 	//the configuration structure is an internal structure that will not be exported.
@@ -123,121 +122,121 @@ type parameters struct{
 
 /**
 load and analyse parameters definition from the template file
- */
+*/
 func (params *parameters) LoadParametersDefinitionFromFile(filename string) error {
-	pfile,err :=os.Open(filename)
-	if err != nil{
+	pfile, err := os.Open(filename)
+	if err != nil {
 		return err
 	}
 	defer pfile.Close()
 
-	fbytes,err := ioutil.ReadAll(pfile)
-	if err != nil{
+	fbytes, err := ioutil.ReadAll(pfile)
+	if err != nil {
 		return err
 	}
 	return params.LoadParametersDefinitionFromString(string(fbytes))
 }
 
 func (params *parameters) LoadParametersDefinitionFromString(input string) error {
-	metadata, err := toml.Decode(input, params);
+	metadata, err := toml.Decode(input, params)
 	if err != nil {
 		return err
-	}else if failed := metadata.Undecoded() ; len(failed) > 0 {
+	} else if failed := metadata.Undecoded(); len(failed) > 0 {
 		var failedItems []string
 		for _, item := range failed {
 			failedItems = append(failedItems, item.String())
 		}
-		return fmt.Errorf("decode failed %s. error:%v",failedItems,err)
+		return fmt.Errorf("decode failed %s. error:%v", failedItems, err)
 	}
 
 	//check parameter-struct-name
-	if !isExportedGoIdentifier(params.ParameterStructName){
-		return fmt.Errorf("ParameterStructName [%s] is not a valid identifier name within ascii characters",params.ParameterStructName)
+	if !isExportedGoIdentifier(params.ParameterStructName) {
+		return fmt.Errorf("ParameterStructName [%s] is not a valid identifier name within ascii characters", params.ParameterStructName)
 	}
 
 	//check config-struct-name
-	if !isGoIdentifier(params.ConfigurationStructName){
-		return fmt.Errorf("ConfigurationStructName [%s] is not a valid identifier name within ascii characters",params.ConfigurationStructName)
+	if !isGoIdentifier(params.ConfigurationStructName) {
+		return fmt.Errorf("ConfigurationStructName [%s] is not a valid identifier name within ascii characters", params.ConfigurationStructName)
 	}
 
 	//check parameter operation file name
-	if !isGoStructAndInterfaceIdentifier(params.OperationFileName){
-		return fmt.Errorf("OperationFileName [%s] is not a valid identifier name within ascii characters",params.OperationFileName)
+	if !isGoStructAndInterfaceIdentifier(params.OperationFileName) {
+		return fmt.Errorf("OperationFileName [%s] is not a valid identifier name within ascii characters", params.OperationFileName)
 	}
 
 	//check parameter configuration file name
-	if !isGoStructAndInterfaceIdentifier(params.ConfigurationFileName){
-		return fmt.Errorf("ConfigurationFileName [%s] is not a valid identifier name within ascii characters",params.ConfigurationFileName)
+	if !isGoStructAndInterfaceIdentifier(params.ConfigurationFileName) {
+		return fmt.Errorf("ConfigurationFileName [%s] is not a valid identifier name within ascii characters", params.ConfigurationFileName)
 	}
 
 	//check parameter
-	for _,p := range params.Parameter{
-		if !isGoIdentifier(p.Name){
-			return fmt.Errorf("Name [%s] is not a valid identifier name within ascii characters",p.Name)
+	for _, p := range params.Parameter {
+		if !isGoIdentifier(p.Name) {
+			return fmt.Errorf("Name [%s] is not a valid identifier name within ascii characters", p.Name)
 		}
 
-		if !isScope(p.Scope){
-			return fmt.Errorf("Scope [%s] is not a valid scope",p.Scope)
+		if !isScope(p.Scope) {
+			return fmt.Errorf("Scope [%s] is not a valid scope", p.Scope)
 		}
 
-		if !isAccess(p.Access){
-			return fmt.Errorf("Access [%s] is not a valid access",p.Access)
+		if !isAccess(p.Access) {
+			return fmt.Errorf("Access [%s] is not a valid access", p.Access)
 		}
 
-		if !isDataType(p.DataType){
-			return fmt.Errorf("DataType [%s] is not a valid data type",p.DataType)
+		if !isDataType(p.DataType) {
+			return fmt.Errorf("DataType [%s] is not a valid data type", p.DataType)
 		}
 
-		if !isDomainType(p.DomainType){
-			return fmt.Errorf("DomainType [%s] is not a valid domain type",p.DomainType)
+		if !isDomainType(p.DomainType) {
+			return fmt.Errorf("DomainType [%s] is not a valid domain type", p.DomainType)
 		}
 
-		if !checkValues(p.DataType,p.DomainType,p.Values){
-			return fmt.Errorf("Values [%s] is not compatible with data type %s and domain type %s",p.Values,p.DataType,p.DomainType)
+		if !checkValues(p.DataType, p.DomainType, p.Values) {
+			return fmt.Errorf("Values [%s] is not compatible with data type %s and domain type %s", p.Values, p.DataType, p.DomainType)
 		}
 
-		if !isUpdateMode(p.UpdateMode){
-			return fmt.Errorf("UpdateMode [%s] is not a valid update mode",p.UpdateMode)
+		if !isUpdateMode(p.UpdateMode) {
+			return fmt.Errorf("UpdateMode [%s] is not a valid update mode", p.UpdateMode)
 		}
 	}
 
 	//parameter name dedup
 	var dedup = make(map[string]bool)
 
-	if _,ok := dedup[params.ParameterStructName];!ok{
+	if _, ok := dedup[params.ParameterStructName]; !ok {
 		dedup[params.ParameterStructName] = true
-	}else{
-		return fmt.Errorf("has duplicate parameter struct name %s.",params.ParameterStructName)
+	} else {
+		return fmt.Errorf("has duplicate parameter struct name %s.", params.ParameterStructName)
 	}
 
-	if _,ok := dedup[params.ConfigurationStructName];!ok{
+	if _, ok := dedup[params.ConfigurationStructName]; !ok {
 		dedup[params.ConfigurationStructName] = true
-	}else{
-		return fmt.Errorf("has duplicate configuration struct name %s.",params.ConfigurationStructName)
+	} else {
+		return fmt.Errorf("has duplicate configuration struct name %s.", params.ConfigurationStructName)
 	}
 
-	if _,ok := dedup[params.OperationFileName];!ok{
+	if _, ok := dedup[params.OperationFileName]; !ok {
 		dedup[params.OperationFileName] = true
-	}else{
-		return fmt.Errorf("has duplicate operation file name %s.",params.OperationFileName)
+	} else {
+		return fmt.Errorf("has duplicate operation file name %s.", params.OperationFileName)
 	}
 
-	if _,ok := dedup[params.ConfigurationFileName];!ok{
+	if _, ok := dedup[params.ConfigurationFileName]; !ok {
 		dedup[params.ConfigurationFileName] = true
-	}else{
-		return fmt.Errorf("has duplicate configuration file name %s.",params.ConfigurationFileName)
+	} else {
+		return fmt.Errorf("has duplicate configuration file name %s.", params.ConfigurationFileName)
 	}
 
-	for _,p := range params.Parameter{
-		if _,ok := dedup[p.Name];!ok{
+	for _, p := range params.Parameter {
+		if _, ok := dedup[p.Name]; !ok {
 			dedup[p.Name] = true
-		}else{
-			return fmt.Errorf("has duplicate parameter name %s.",p.Name)
+		} else {
+			return fmt.Errorf("has duplicate parameter name %s.", p.Name)
 		}
 	}
 
 	//make capital name for the name
-	for i := 0; i < len(params.Parameter); i++{
+	for i := 0; i < len(params.Parameter); i++ {
 		p := params.Parameter[i].Name
 		capName := p
 		capName = string(unicode.ToUpper(rune(p[0]))) + p[1:]
@@ -250,27 +249,27 @@ func (params *parameters) LoadParametersDefinitionFromString(input string) error
 /**
 check the x is a valid low case ascii character
 */
-func isLowCaseAsciiChar(x byte)bool{
-	return x >='a' && x <='z' || x == '_'
+func isLowCaseAsciiChar(x byte) bool {
+	return x >= 'a' && x <= 'z' || x == '_'
 }
 
 /**
 check the x is a valid low case ascii character
 */
-func isUpCaseAsciiChar(x byte)bool{
-	return x >='A' && x <='Z'
+func isUpCaseAsciiChar(x byte) bool {
+	return x >= 'A' && x <= 'Z'
 }
 
 /**
 check the x is a valid ascii character
- */
-func isAsciiChar(x byte)bool{
-	return x >='a' && x <='z' || x >= 'A' && x <= 'Z' || x == '_'
+*/
+func isAsciiChar(x byte) bool {
+	return x >= 'a' && x <= 'z' || x >= 'A' && x <= 'Z' || x == '_'
 }
 
 /**
 check the x is a valid ascii digit
- */
+*/
 func isAsciiDigit(x byte) bool {
 	return x >= '0' && x <= '9'
 }
@@ -286,20 +285,20 @@ digit      = "0" ... "9"
 
 here,the letter just has the ascii characters.
 So,it's the subset of the identifier in Golang.
- */
+*/
 func isGoIdentifier(s string) bool {
 	if len(s) == 0 {
 		return false
 	}
 
 	//the first character is a low case ascii character.
-	if ! isLowCaseAsciiChar(s[0]){
+	if !isLowCaseAsciiChar(s[0]) {
 		return false
 	}
 
 	//the rest should ascii character | ascii digit | _
-	for i := 1 ; i < len(s);i++{
-		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])){
+	for i := 1; i < len(s); i++ {
+		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])) {
 			return false
 		}
 	}
@@ -325,13 +324,13 @@ func isExportedGoIdentifier(s string) bool {
 	}
 
 	//the first character is a low case ascii character.
-	if ! isUpCaseAsciiChar(s[0]){
+	if !isUpCaseAsciiChar(s[0]) {
 		return false
 	}
 
 	//the rest should ascii character | ascii digit | _
-	for i := 1 ; i < len(s);i++{
-		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])){
+	for i := 1; i < len(s); i++ {
+		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])) {
 			return false
 		}
 	}
@@ -356,13 +355,13 @@ func isGoStructAndInterfaceIdentifier(s string) bool {
 	}
 
 	//the first character is a low case ascii character.
-	if ! isAsciiChar(s[0]){
+	if !isAsciiChar(s[0]) {
 		return false
 	}
 
 	//the rest should ascii character | ascii digit | _
-	for i := 1 ; i < len(s);i++{
-		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])){
+	for i := 1; i < len(s); i++ {
+		if !(isAsciiChar(s[i]) || isAsciiDigit(s[i])) {
 			return false
 		}
 	}
@@ -372,60 +371,60 @@ func isGoStructAndInterfaceIdentifier(s string) bool {
 
 /**
 check if the scope is valid.
- */
-func isScope(sc []string)bool  {
-	return isSubset(sc,scopeOptions)
+*/
+func isScope(sc []string) bool {
+	return isSubset(sc, scopeOptions)
 }
 
 /**
 check if the access is valid.
- */
-func isAccess(sc []string)bool{
-	return isSubset(sc,accessOptions)
+*/
+func isAccess(sc []string) bool {
+	return isSubset(sc, accessOptions)
 }
 
 /**
 check if the data type is valid
- */
-func isDataType(x string)bool{
-	return isInSlice(x,dataTypeOptions)
+*/
+func isDataType(x string) bool {
+	return isInSlice(x, dataTypeOptions)
 }
 
 /**
 check if the domain type is valid
- */
-func isDomainType(x string)bool{
+*/
+func isDomainType(x string) bool {
 	return isInSlice(x, domainTyoeOptions)
 }
 
 /**
 make a float string look like a float64 string.
- */
-func looklikeFloat64String(s string)string{
-	if i:=strings.Index(s,".");i!=-1{
-		if i == len(s) - 1{//. is the last one, append a zero
-			return s +"0"
+*/
+func looklikeFloat64String(s string) string {
+	if i := strings.Index(s, "."); i != -1 {
+		if i == len(s)-1 { //. is the last one, append a zero
+			return s + "0"
 		}
 		return s
-	}else {
-		return s+".0"
+	} else {
+		return s + ".0"
 	}
 }
 
 /**
 check if the values are valid based on dataType, domainType.
- */
-func checkValues(dataType string,domainType string,values []string)bool{
+*/
+func checkValues(dataType string, domainType string, values []string) bool {
 	switch dataType {
 	case "string":
 		switch domainType {
 		case "set":
 			if len(values) < 1 {
 				return true
-			}else if len(values) == 1 {
+			} else if len(values) == 1 {
 				return true
-			}else {
-				if hasDuplicateValueString(values){
+			} else {
+				if hasDuplicateValueString(values) {
 					return false
 				}
 			}
@@ -443,21 +442,21 @@ func checkValues(dataType string,domainType string,values []string)bool{
 			}
 
 			var intArr []int64
-			for i:=0; i < len(values);i++{
-				if v,err := strconv.ParseInt(values[i],10,64);err != nil{
+			for i := 0; i < len(values); i++ {
+				if v, err := strconv.ParseInt(values[i], 10, 64); err != nil {
 					return false
-				}else{
-					intArr = append(intArr,v)
+				} else {
+					intArr = append(intArr, v)
 				}
 			}
 
-			if len(intArr) == 1{
+			if len(intArr) == 1 {
 				return true
 			}
 
 			//first one is the default value.
 			//there are no duplicate values in the set.
-			if hasDuplicateValueInt64(intArr){
+			if hasDuplicateValueInt64(intArr) {
 				return false
 			}
 			return true
@@ -467,15 +466,15 @@ func checkValues(dataType string,domainType string,values []string)bool{
 			}
 
 			var intArr []int64
-			for i:=0; i < len(values);i++{
-				if v,err := strconv.ParseInt(values[i],10,64);err != nil{
+			for i := 0; i < len(values); i++ {
+				if v, err := strconv.ParseInt(values[i], 10, 64); err != nil {
 					return false
-				}else{
-					intArr = append(intArr,v)
+				} else {
+					intArr = append(intArr, v)
 				}
 			}
 
-			if !(intArr[0] >= intArr[1] && intArr[0] <= intArr[2]){
+			if !(intArr[0] >= intArr[1] && intArr[0] <= intArr[2]) {
 				return false
 			}
 			return true
@@ -488,24 +487,24 @@ func checkValues(dataType string,domainType string,values []string)bool{
 			}
 
 			var fArr []float64
-			for i:=0; i < len(values);i++{
-				if v,err := strconv.ParseFloat(values[i],64);err != nil{
+			for i := 0; i < len(values); i++ {
+				if v, err := strconv.ParseFloat(values[i], 64); err != nil {
 					return false
-				}else{
-					fArr = append(fArr,v)
+				} else {
+					fArr = append(fArr, v)
 				}
 			}
 
-			if len(fArr) == 1{
+			if len(fArr) == 1 {
 				return true
 			}
 
-			if hasDuplicateValueFloat64(fArr){
+			if hasDuplicateValueFloat64(fArr) {
 				return false
 			}
 
 			//for configuration file generation
-			for i :=0 ;i < len(values);i++{
+			for i := 0; i < len(values); i++ {
 				values[i] = looklikeFloat64String(values[i])
 			}
 
@@ -516,15 +515,15 @@ func checkValues(dataType string,domainType string,values []string)bool{
 			}
 
 			var fArr []float64
-			for i:=0; i < len(values);i++{
-				if v,err := strconv.ParseFloat(values[i],64);err != nil{
+			for i := 0; i < len(values); i++ {
+				if v, err := strconv.ParseFloat(values[i], 64); err != nil {
 					return false
-				}else{
-					fArr = append(fArr,v)
+				} else {
+					fArr = append(fArr, v)
 				}
 			}
 
-			if !(fArr[0] >= fArr[1] && fArr[0] <= fArr[2]){
+			if !(fArr[0] >= fArr[1] && fArr[0] <= fArr[2]) {
 				return false
 			}
 			return true
@@ -532,16 +531,16 @@ func checkValues(dataType string,domainType string,values []string)bool{
 	case "bool":
 		switch domainType {
 		case "set":
-			if len(values) < 1{
+			if len(values) < 1 {
 				return true
 			}
 
-			if len(values) != 1{
+			if len(values) != 1 {
 				return false
 			}
 
-			low:=strings.ToLower(values[0])
-			if !isInSlice(low,boolFalseOptions) && !isInSlice(low,boolTrueOptions){
+			low := strings.ToLower(values[0])
+			if !isInSlice(low, boolFalseOptions) && !isInSlice(low, boolTrueOptions) {
 				return false
 			}
 			return true
@@ -558,8 +557,8 @@ func checkValues(dataType string,domainType string,values []string)bool{
 /**
 check if the update mode is valid
 */
-func isUpdateMode(um string)bool{
-	return isInSlice(um,updateModeOptions)
+func isUpdateMode(um string) bool {
+	return isInSlice(um, updateModeOptions)
 }
 
 /**
@@ -567,25 +566,25 @@ check if A is a valid subset of B.
 if A has something that is not in B,then return false.
 if A has duplicate elements,then return false.
 if A has nothing,then return false.
- */
+*/
 func isSubset(A []string, B []string) bool {
-	if len(A) > len(B){
+	if len(A) > len(B) {
 		return false
 	}
 
 	sort.Strings(B)
 
 	//check the element of A is in B or not
-	for _,x := range A {
-		if !isInSlice(x,B){
+	for _, x := range A {
+		if !isInSlice(x, B) {
 			return false
 		}
 	}
 
 	//check the A has duplicate elements
 	dedup := map[string]bool{}
-	for _,x := range A{
-		if _,ok := dedup[x]; ok{//duplicate scope
+	for _, x := range A {
+		if _, ok := dedup[x]; ok { //duplicate scope
 			return false
 		}
 		dedup[x] = true
@@ -596,9 +595,9 @@ func isSubset(A []string, B []string) bool {
 
 /**
 check if x in a slice
- */
-func isInSlice(x string,arr []string) bool {
-	for _,y := range arr{
+*/
+func isInSlice(x string, arr []string) bool {
+	for _, y := range arr {
 		if x == y {
 			return true
 		}
@@ -609,8 +608,8 @@ func isInSlice(x string,arr []string) bool {
 /**
 check if x in a slice
 */
-func isInSliceBool(x bool,arr []bool) bool {
-	for _,y := range arr{
+func isInSliceBool(x bool, arr []bool) bool {
+	for _, y := range arr {
 		if x == y {
 			return true
 		}
@@ -621,8 +620,8 @@ func isInSliceBool(x bool,arr []bool) bool {
 /**
 check if x in a slice
 */
-func isInSliceInt64(x int64,arr []int64) bool {
-	for _,y := range arr{
+func isInSliceInt64(x int64, arr []int64) bool {
+	for _, y := range arr {
 		if x == y {
 			return true
 		}
@@ -633,8 +632,8 @@ func isInSliceInt64(x int64,arr []int64) bool {
 /**
 check if x in a slice
 */
-func isInSliceFloat64(x float64,arr []float64) bool {
-	for _,y := range arr{
+func isInSliceFloat64(x float64, arr []float64) bool {
+	for _, y := range arr {
 		if x == y {
 			return true
 		}
@@ -644,13 +643,13 @@ func isInSliceFloat64(x float64,arr []float64) bool {
 
 /**
 check if x has duplicate values.
- */
-func hasDuplicateValueString(x []string)bool{
-	var dedup =make(map[string]bool)
-	for _,v := range x{
-		if _,ok := dedup[v]; !ok{
+*/
+func hasDuplicateValueString(x []string) bool {
+	var dedup = make(map[string]bool)
+	for _, v := range x {
+		if _, ok := dedup[v]; !ok {
 			dedup[v] = true
-		}else{
+		} else {
 			return true
 		}
 	}
@@ -660,12 +659,12 @@ func hasDuplicateValueString(x []string)bool{
 /**
 check if x has duplicate values.
 */
-func hasDuplicateValueInt64(x []int64)bool{
-	var dedup =make(map[int64]bool)
-	for _,v := range x{
-		if _,ok := dedup[v]; !ok{
+func hasDuplicateValueInt64(x []int64) bool {
+	var dedup = make(map[int64]bool)
+	for _, v := range x {
+		if _, ok := dedup[v]; !ok {
 			dedup[v] = true
-		}else{
+		} else {
 			return true
 		}
 	}
@@ -675,19 +674,19 @@ func hasDuplicateValueInt64(x []int64)bool{
 /**
 check if x has duplicate values.
 */
-func hasDuplicateValueFloat64(x []float64)bool{
-	var dedup =make(map[float64]bool)
-	for _,v := range x{
-		if _,ok := dedup[v]; !ok{
+func hasDuplicateValueFloat64(x []float64) bool {
+	var dedup = make(map[float64]bool)
+	for _, v := range x {
+		if _, ok := dedup[v]; !ok {
 			dedup[v] = true
-		}else{
+		} else {
 			return true
 		}
 	}
 	return false
 }
 
-var defaultParameterTempate =  `
+var defaultParameterTempate = `
 // Code generated by tool; DO NOT EDIT.
 package config
 
@@ -722,7 +721,7 @@ type {{.ConfigurationStructName}} struct{
 	{{ printf "/**\n\tName:\t%s\n\tScope:\t%s\n\tAccess:\t%s\n\tDataType:\t%s\n\tDomainType:\t%s\n\tValues:\t%s\n\tComment:\t%s\n\tUpdateMode:\t%s\n\t*/"  
 			.Name .Scope .Access .DataType .DomainType .Values .Comment .UpdateMode
 	}}
-	{{ printf "%s    %s  `+"`toml:"+`\"%s\"`+"`"+`" .CapitalName .DataType .Name }}
+	{{ printf "%s    %s  ` + "`toml:" + `\"%s\"` + "`" + `" .CapitalName .DataType .Name }}
 
 	{{end}}
 {{end}}
@@ -1093,7 +1092,7 @@ func Load{{.ConfigurationStructName}}FromFile(filename string,params *{{.Paramet
 }
 `
 
-var defaultConfigurationTemplate=`
+var defaultConfigurationTemplate = `
 # Code generated by tool; DO NOT EDIT.
 {{range $index,$param := .Parameter}}
 {{ if ne .UpdateMode "fix"}}
@@ -1124,7 +1123,7 @@ var defaultConfigurationTemplate=`
 {{end}}
 `
 
-var defaultOperationTestTemplate=`
+var defaultOperationTestTemplate = `
 // Code generated by tool; DO NOT EDIT.
 package config
 
@@ -1154,7 +1153,7 @@ func is{{.ConfigurationStructName}}Equal(c1,c2 {{.ConfigurationStructName}}) boo
 }
 
 func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T) {
-	t1 := `+"`"+`
+	t1 := ` + "`" + `
 {{range $index,$param := .Parameter}}
 {{ if ne .UpdateMode "fix"}}
 	{{- with $count := len .Values -}}
@@ -1178,7 +1177,7 @@ func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T)
 	{{- end -}}
 {{end}}
 {{end}}		
-`+"`"+`
+` + "`" + `
 	t1_config:={{.ConfigurationStructName}}{
 		rwlock:            sync.RWMutex{},
 
@@ -1258,7 +1257,7 @@ type ConfigurationFileGenerator interface {
 	Output:
 		1. operation interface and code for parameters
 		2. configuraion file for parameters
-	 */
+	*/
 	Generate() error
 }
 
@@ -1279,21 +1278,21 @@ type ConfigurationFileGeneratorImpl struct {
 func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 	defDir, err := filepath.Abs(filepath.Dir(cfgi.parameterDefinitionFileName))
 	if err != nil {
-		return fmt.Errorf("Get the directory of parameter defintion file failed.error:%v",err)
+		return fmt.Errorf("Get the directory of parameter defintion file failed.error:%v", err)
 	}
 
 	params := &parameters{}
 	if err := params.LoadParametersDefinitionFromFile(cfgi.parameterDefinitionFileName); err != nil {
-		return fmt.Errorf("LoadParametersDefinitionFromFile failed.error:%v",err)
+		return fmt.Errorf("LoadParametersDefinitionFromFile failed.error:%v", err)
 	}
 
 	parameterTmpl, err := template.New("MakeParameterTemplate").Parse(cfgi.parameterTemplate)
 	if err != nil {
-		return fmt.Errorf("Make parameter template failed. error:%v",err)
+		return fmt.Errorf("Make parameter template failed. error:%v", err)
 	}
 
-	f, err := os.Create(defDir+"/"+params.OperationFileName+".go")
-	if err != nil{
+	f, err := os.Create(defDir + "/" + params.OperationFileName + ".go")
+	if err != nil {
 		return err
 	}
 	defer f.Close()
@@ -1303,34 +1302,34 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 		return err
 	}
 
-	tomlTmpl,err := template.New("MakeConfigurationTemplate").Parse(cfgi.configurationTemplate)
+	tomlTmpl, err := template.New("MakeConfigurationTemplate").Parse(cfgi.configurationTemplate)
 	if err != nil {
 		return err
 	}
 
-	tomlf,err := os.Create(defDir+"/"+params.ConfigurationFileName+".toml")
-	if err!= nil{
+	tomlf, err := os.Create(defDir + "/" + params.ConfigurationFileName + ".toml")
+	if err != nil {
 		return err
 	}
 	defer tomlf.Close()
 
-	err = tomlTmpl.Execute(tomlf,params)
+	err = tomlTmpl.Execute(tomlf, params)
 	if err != nil {
 		return err
 	}
 
-	testCasesTmpl,err := template.New("MakeTestCasesTemplate").Parse(cfgi.parameterTestCasesTemplate)
+	testCasesTmpl, err := template.New("MakeTestCasesTemplate").Parse(cfgi.parameterTestCasesTemplate)
 	if err != nil {
 		return err
 	}
 
-	testCasesf,err := os.Create(defDir+"/"+params.OperationFileName+"_test.go")
-	if err!= nil{
+	testCasesf, err := os.Create(defDir + "/" + params.OperationFileName + "_test.go")
+	if err != nil {
 		return err
 	}
 	defer testCasesf.Close()
 
-	err = testCasesTmpl.Execute(testCasesf,params)
+	err = testCasesTmpl.Execute(testCasesf, params)
 	if err != nil {
 		return err
 	}
@@ -1340,28 +1339,28 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 
 /**
 load items from configuration file periodly.
- */
+*/
 type ConfigurationFileHotLoader interface {
 	/**
 	register a configuration file into the loader.
 	path : the path of the configuration file
 	period: load the configration every period
 	configObject: the target that will be updated
-	 */
-	Register(path string,period int64,configObject interface{})
+	*/
+	Register(path string, period int64, configObject interface{})
 
 	/**
 	unregister a configuration file from the loader.
 	the configuration file will be loaded again.
-	 */
+	*/
 	Unregister(path string)
 }
 
-func NewConfigurationFileGenerator(defFileName string)ConfigurationFileGenerator{
+func NewConfigurationFileGenerator(defFileName string) ConfigurationFileGenerator {
 	return &ConfigurationFileGeneratorImpl{
 		parameterDefinitionFileName: defFileName,
-		parameterTemplate: defaultParameterTempate,
-		configurationTemplate: defaultConfigurationTemplate,
-		parameterTestCasesTemplate: defaultOperationTestTemplate,
+		parameterTemplate:           defaultParameterTempate,
+		configurationTemplate:       defaultConfigurationTemplate,
+		parameterTestCasesTemplate:  defaultOperationTestTemplate,
 	}
 }
