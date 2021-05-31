@@ -8,6 +8,7 @@ import (
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
@@ -71,8 +72,8 @@ func BuildChunk(types []types.Type, rows uint64) *chunk.Chunk {
 
 func TestCollection(t *testing.T) {
 	maxRows := uint64(1024)
-	cols := 4
-	capacity := maxRows * 4 * uint64(cols) * 4
+	cols := 2
+	capacity := maxRows * 4 * uint64(cols) * 2
 	opts := new(engine.Options)
 	// opts.EventListener = e.NewLoggingEventListener()
 	dirname := "/tmp"
@@ -83,6 +84,7 @@ func TestCollection(t *testing.T) {
 	opts.Meta.Flusher.Start()
 	opts.Data.Flusher.Start()
 	opts.Data.Sorter.Start()
+	opts.MemData.Updater.Start()
 
 	opCtx := mops.OpCtx{Opts: opts}
 	op := mops.NewCreateTblOp(&opCtx)
@@ -137,8 +139,27 @@ func TestCollection(t *testing.T) {
 		runtime.GC()
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
+
+	for _, column := range t0_data.GetCollumns() {
+		loopSeg := column.GetSegmentRoot()
+		for loopSeg != nil {
+			cursor := col.ScanCursor{}
+			for {
+				loopSeg.InitScanCursor(&cursor)
+				err := cursor.Init()
+				assert.Nil(t, err)
+				cursor.Next()
+				if cursor.Current == nil {
+					break
+				}
+			}
+			cursor.Close()
+			loopSeg = loopSeg.GetNext()
+		}
+	}
 	t.Log(bufMgr.String())
 
+	opts.MemData.Updater.Stop()
 	opts.Data.Flusher.Stop()
 	opts.Meta.Flusher.Stop()
 	opts.Meta.Updater.Stop()

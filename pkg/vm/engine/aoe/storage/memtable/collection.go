@@ -63,7 +63,7 @@ func (c *Collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
 		c.mem.Cursors[idx].Init()
 	}
 
-	tbl = NewMemTable(c.TableData.GetColTypes(), colBlks, c.mem.Cursors, c.Opts, blk)
+	tbl = NewMemTable(c.TableData, c.TableData.GetColTypes(), colBlks, c.mem.Cursors, c.Opts, blk)
 	c.mem.MemTables = append(c.mem.MemTables, tbl)
 	return tbl, err
 }

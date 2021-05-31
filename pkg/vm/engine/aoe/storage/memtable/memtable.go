@@ -6,11 +6,13 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
+	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	"sync"
 
@@ -20,29 +22,31 @@ import (
 type MemTable struct {
 	Opts *engine.Options
 	sync.RWMutex
-	Meta    *md.Block
-	Data    *chunk.Chunk
-	Full    bool
-	Columns []col.IColumnBlock
-	Cursors []col.IScanCursor
-	ID      layout.ID
-	Types   []types.Type
+	TableData table.ITableData
+	Meta      *md.Block
+	Data      *chunk.Chunk
+	Full      bool
+	Columns   []col.IColumnBlock
+	Cursors   []col.IScanCursor
+	ID        layout.ID
+	Types     []types.Type
 }
 
 var (
 	_ imem.IMemTable = (*MemTable)(nil)
 )
 
-func NewMemTable(colTypes []types.Type, columnBlocks []col.IColumnBlock,
+func NewMemTable(tableData table.ITableData, colTypes []types.Type, columnBlocks []col.IColumnBlock,
 	cursors []col.IScanCursor, opts *engine.Options, meta *md.Block) imem.IMemTable {
 	mt := &MemTable{
-		Meta:    meta,
-		Full:    false,
-		Opts:    opts,
-		Columns: columnBlocks,
-		Cursors: cursors,
-		ID:      columnBlocks[0].GetID(),
-		Types:   colTypes,
+		Meta:      meta,
+		Full:      false,
+		Opts:      opts,
+		Columns:   columnBlocks,
+		Cursors:   cursors,
+		ID:        columnBlocks[0].GetID(),
+		Types:     colTypes,
+		TableData: tableData,
 	}
 	var vectors []vector.Vector
 	for idx, blk := range columnBlocks {
@@ -116,6 +120,15 @@ func (mt *MemTable) Flush() error {
 		mt.Opts.EventListener.BackgroundErrorCB(err)
 		return err
 	}
+	go func() {
+		colCtx := cops.OpCtx{Opts: mt.Opts}
+		upgradeBlkOp := cops.NewUpgradeBlkOp(&colCtx, mt.Columns[0].GetID(), mt.TableData)
+		upgradeBlkOp.Push()
+		err = upgradeBlkOp.WaitDone()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+		}
+	}()
 	go func() {
 		ctx := mops.OpCtx{Opts: mt.Opts}
 		op := mops.NewCheckpointOp(&ctx)

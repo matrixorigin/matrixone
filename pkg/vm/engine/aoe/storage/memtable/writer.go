@@ -66,11 +66,12 @@ func (sw *MemtableWriter) Flush() (err error) {
 
 	mt := sw.Memtable.(*MemTable)
 
-	buf := make([]byte, 2+len(mt.Types)*8)
+	buf := make([]byte, 2+len(mt.Types)*8*2)
 	binary.BigEndian.PutUint16(buf, uint16(len(mt.Columns)))
 	for idx, t := range mt.Types {
 		colSize := mt.Meta.Count * uint64(t.Size)
-		binary.BigEndian.PutUint64(buf[2+idx*8:], colSize)
+		binary.BigEndian.PutUint64(buf[2+idx*16:], id.BlockID)
+		binary.BigEndian.PutUint64(buf[2+idx*16+8:], colSize)
 	}
 	_, err = w.Write(buf)
 	if err != nil {

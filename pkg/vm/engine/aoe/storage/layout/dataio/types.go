@@ -12,4 +12,6 @@ type Pointer struct {
 type Key struct {
 	Col uint64
 	ID  layout.ID
+	// BlockID uint64
+	// PartID  uint32
 }
