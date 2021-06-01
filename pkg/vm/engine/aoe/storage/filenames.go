@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -28,6 +29,20 @@ func MakeDataDir(dirname string) string {
 
 func MakeMetaDir(dirname string) string {
 	return path.Join(dirname, "meta")
+}
+
+func ParseMetaFileName(filename string) (version int, ok bool) {
+	ok = true
+	name := strings.TrimSuffix(filename, ".ckp")
+	if len(name) == len(filename) {
+		ok = false
+		return version, ok
+	}
+	version, err := strconv.Atoi(name)
+	if err != nil {
+		panic(err)
+	}
+	return version, ok
 }
 
 func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
