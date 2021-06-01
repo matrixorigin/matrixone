@@ -1,37 +1,25 @@
 package db
 
 import (
+	"github.com/stretchr/testify/assert"
+	"io/ioutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"os"
 	"strconv"
-
-	"github.com/stretchr/testify/assert"
-
-	// bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	// dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	// "matrixone/pkg/vm/engine/aoe/storage/layout"
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table"
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	// "matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	// "matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
-	// mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
-	// w "matrixone/pkg/vm/engine/aoe/storage/worker"
-	// "runtime"
-	// "sync"
 	"testing"
-	// "time"
 )
 
 var (
 	TEST_DB_DIR = "/tmp/open_test"
 )
 
-func init() {
+func initTest() {
 	os.RemoveAll(TEST_DB_DIR)
 }
 
 func TestLoadMetaInfo(t *testing.T) {
+	initTest()
 	cfg := &md.Configuration{
 		Dir:              TEST_DB_DIR,
 		SegmentMaxBlocks: 10,
@@ -80,4 +68,61 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Equal(t, info.CheckPoint, info2.CheckPoint)
 	assert.Equal(t, info.Sequence.NextTableID, info2.Sequence.NextTableID)
 	assert.Equal(t, info.Tables, info2.Tables)
+}
+
+func TestCleanStaleMeta(t *testing.T) {
+	initTest()
+	cfg := &md.Configuration{
+		Dir:              TEST_DB_DIR,
+		SegmentMaxBlocks: 10,
+		BlockMaxRows:     10,
+	}
+	dir := e.MakeMetaDir(cfg.Dir)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		err = os.MkdirAll(dir, 0755)
+		assert.Nil(t, err)
+	}
+
+	invalids := []string{"ds234", "234ds"}
+	for _, invalid := range invalids {
+		fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, invalid, false)
+
+		f, err := os.Create(fname)
+		assert.Nil(t, err)
+		f.Close()
+
+		f1 := func() {
+			cleanStaleMeta(cfg.Dir)
+		}
+		assert.Panics(t, f1)
+		err = os.Remove(fname)
+		assert.Nil(t, err)
+	}
+
+	valids := []string{"1", "2", "3", "100"}
+	for _, valid := range valids {
+		fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, valid, false)
+		f, err := os.Create(fname)
+		assert.Nil(t, err)
+		f.Close()
+		t.Log(fname)
+	}
+
+	files, err := ioutil.ReadDir(dir)
+	assert.Nil(t, err)
+	assert.Equal(t, len(valids), len(files))
+
+	cleanStaleMeta(cfg.Dir)
+
+	files, err = ioutil.ReadDir(dir)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(files))
+
+	fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, "100", false)
+	_, err = os.Stat(fname)
+	assert.Nil(t, err)
+}
+
+func TestCleanStaleData(t *testing.T) {
+	// TODO
 }

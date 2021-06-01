@@ -35,8 +35,7 @@ func ParseMetaFileName(filename string) (version int, ok bool) {
 	ok = true
 	name := strings.TrimSuffix(filename, ".ckp")
 	if len(name) == len(filename) {
-		ok = false
-		return version, ok
+		panic(fmt.Sprintf("invalid file name %s", filename))
 	}
 	version, err := strconv.Atoi(name)
 	if err != nil {

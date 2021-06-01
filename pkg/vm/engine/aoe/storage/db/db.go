@@ -2,14 +2,21 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"io/ioutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"os"
+	"path"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -45,8 +52,104 @@ type DB struct {
 // 	_ Writer = (*DB)(nil)
 // )
 
-func (d *DB) restoreMeta() {
-	// db.MetaInfo
+func cleanStaleMeta(dirname string) {
+	dir := e.MakeMetaDir(dirname)
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		panic(err)
+	}
+	if len(files) == 0 {
+		return
+	}
+
+	maxVersion := -1
+	maxIdx := -1
+
+	filenames := make(map[int]string)
+
+	for idx, file := range files {
+		if e.IsTempFile(file.Name()) {
+			log.Infof("Removing %s", path.Join(dir, file.Name()))
+			err = os.Remove(path.Join(dir, file.Name()))
+			if err != nil {
+				panic(err)
+			}
+		}
+		version, ok := e.ParseMetaFileName(file.Name())
+		if !ok {
+			continue
+		}
+		if version > maxVersion {
+			maxVersion = version
+			maxIdx = idx
+		}
+		filenames[idx] = file.Name()
+	}
+
+	if maxIdx == -1 {
+		return
+	}
+
+	for idx, filename := range filenames {
+		if idx == maxIdx {
+			continue
+		}
+		log.Infof("Removing %s", path.Join(dir, filename))
+		err = os.Remove(path.Join(dir, filename))
+		if err != nil {
+			panic(err)
+		}
+	}
+}
+
+func (d *DB) validateAndCleanStaleData() {
+	expectFiles := make(map[string]bool)
+	for _, tbl := range d.MetaInfo.Tables {
+		for _, seg := range tbl.Segments {
+			id := layout.ID{
+				TableID:   seg.TableID,
+				SegmentID: seg.ID,
+			}
+			if seg.DataState == md.SORTED {
+				name := e.MakeFilename(d.Dir, e.FTSegment, id.ToSegmentFileName(), false)
+				expectFiles[name] = true
+			} else {
+				for _, blk := range seg.Blocks {
+					if blk.DataState == md.EMPTY {
+						continue
+					}
+					id.BlockID = blk.ID
+					name := e.MakeFilename(d.Dir, e.FTBlock, id.ToBlockFileName(), false)
+					expectFiles[name] = true
+				}
+			}
+		}
+	}
+
+	err := filepath.Walk(e.MakeDataDir(d.Dir), func(p string, info os.FileInfo, err error) error {
+		err = nil
+		if e.IsTempFile(info.Name()) {
+			log.Infof("Removing %s", p)
+			err = os.Remove(p)
+			return err
+		}
+		_, ok := expectFiles[p]
+		if !ok {
+			log.Infof("Removing %s", p)
+			err = os.Remove(p)
+		}
+		expectFiles[p] = false
+		return err
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	for name, ok := range expectFiles {
+		if ok {
+			panic(fmt.Sprintf("Missing %s", name))
+		}
+	}
 }
 
 func (d *DB) startWorkers() {

@@ -88,6 +88,9 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		Closed:          new(atomic.Value),
 	}
 
+	cleanStaleMeta(opts.Meta.Conf.Dir)
+	db.validateAndCleanStaleData()
+
 	db.startWorkers()
 	return db, err
 }
