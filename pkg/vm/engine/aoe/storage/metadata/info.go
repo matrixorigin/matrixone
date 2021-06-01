@@ -12,22 +12,6 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
-const (
-	META_FILE_NAME = "META"
-)
-
-// var (
-// 	Meta = *NewMetaInfo(nil)
-// )
-
-// func init() {
-// 	Meta.Conf = &Configuration{
-// 		Dir:              "/tmp",
-// 		BlockMaxRows:     BLOCK_ROW_COUNT,
-// 		SegmentMaxBlocks: SEGMENT_BLOCK_COUNT,
-// 	}
-// }
-
 func NewMetaInfo(conf *Configuration) *MetaInfo {
 	info := &MetaInfo{
 		Tables: make(map[uint64]*Table),
@@ -35,18 +19,6 @@ func NewMetaInfo(conf *Configuration) *MetaInfo {
 	}
 	return info
 }
-
-// func InitMeta(conf *Configuration) error {
-// 	r, err := os.OpenFile(path.Join(conf.Dir, META_FILE_NAME), os.O_RDONLY, 0666)
-// 	defer r.Close()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	info, err := Deserialize(r)
-// 	info.Conf = *conf
-// 	Meta = *info
-// 	return err
-// }
 
 func (info *MetaInfo) ReferenceTable(table_id uint64) (tbl *Table, err error) {
 	info.RLock()
@@ -182,6 +154,7 @@ func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 		if max_tbl_blkid > info.Sequence.NextBlockID {
 			info.Sequence.NextBlockID = max_tbl_blkid
 		}
+		tbl.Info = info
 	}
 
 	return info, err

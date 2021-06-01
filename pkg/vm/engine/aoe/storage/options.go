@@ -10,6 +10,11 @@ import (
 	// todo "aoe/pkg/mock"
 )
 
+type CacheCfg struct {
+	InsertCapacity uint64
+	DataCapacity   uint64
+}
+
 type Options struct {
 	EventListener e.EventListener
 
@@ -34,6 +39,8 @@ type Options struct {
 	MemData struct {
 		Updater iw.IOpWorker
 	}
+
+	CacheCfg *CacheCfg
 }
 
 func (o *Options) FillDefaults(dirname string) *Options {
@@ -56,6 +63,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.Meta.Conf = &md.Configuration{
 			BlockMaxRows:     md.BLOCK_ROW_COUNT,
 			SegmentMaxBlocks: md.SEGMENT_BLOCK_COUNT,
+			Dir:              dirname,
 		}
 	}
 	if o.Meta.Info == nil {
@@ -86,6 +94,13 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.MemData.Updater == nil {
 		o.MemData.Updater = w.NewOpWorker()
+	}
+
+	if o.CacheCfg == nil {
+		o.CacheCfg = &CacheCfg{
+			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks,
+			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 10,
+		}
 	}
 	return o
 }
