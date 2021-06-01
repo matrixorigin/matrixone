@@ -154,6 +154,7 @@ func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 		if max_tbl_blkid > info.Sequence.NextBlockID {
 			info.Sequence.NextBlockID = max_tbl_blkid
 		}
+		tbl.Info = info
 	}
 
 	return info, err

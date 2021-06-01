@@ -18,8 +18,9 @@ import (
 func loadMetaInfo(cfg *md.Configuration) *md.MetaInfo {
 	empty := false
 	var err error
-	if _, err = os.Stat(cfg.Dir); os.IsNotExist(err) {
-		err = os.MkdirAll(cfg.Dir, 0755)
+	dir := e.MakeMetaDir(cfg.Dir)
+	if _, err = os.Stat(dir); os.IsNotExist(err) {
+		err = os.MkdirAll(dir, 0755)
 		empty = true
 	}
 	if err != nil {
@@ -29,7 +30,7 @@ func loadMetaInfo(cfg *md.Configuration) *md.MetaInfo {
 		return md.NewMetaInfo(cfg)
 	}
 
-	files, err := ioutil.ReadDir(cfg.Dir)
+	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		panic(fmt.Sprintf("err: %s", err))
 	}
@@ -55,14 +56,16 @@ func loadMetaInfo(cfg *md.Configuration) *md.MetaInfo {
 		return md.NewMetaInfo(cfg)
 	}
 
-	r, err := os.OpenFile(path.Join(cfg.Dir, files[maxIdx].Name()), os.O_RDONLY, 0666)
+	r, err := os.OpenFile(path.Join(dir, files[maxIdx].Name()), os.O_RDONLY, 0666)
 	if err != nil {
 		panic(err)
 	}
+	defer r.Close()
 	metaInfo, err := md.Deserialize(r)
 	if err != nil {
 		panic(err)
 	}
+	metaInfo.Conf = cfg
 	return metaInfo
 }
 

@@ -63,7 +63,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.Meta.Conf = &md.Configuration{
 			BlockMaxRows:     md.BLOCK_ROW_COUNT,
 			SegmentMaxBlocks: md.SEGMENT_BLOCK_COUNT,
-			Dir:              MakeMetaDir(dirname),
+			Dir:              dirname,
 		}
 	}
 	if o.Meta.Info == nil {
