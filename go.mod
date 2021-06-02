@@ -7,8 +7,8 @@ require (
 	github.com/aws/aws-sdk-go v1.37.14 // indirect
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
-	github.com/fagongzi/goetty v1.7.0 // indirect
-	github.com/fagongzi/util v0.0.0-20210409031311-a10fdf8fbd7a // indirect
+	github.com/fagongzi/goetty v2.0.2+incompatible
+	github.com/fagongzi/util v0.0.0-20201116094402-221cc40c4593
 	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.2.0
