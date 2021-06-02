@@ -1,16 +1,12 @@
 package catalogkv
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/fagongzi/goetty/codec"
-	"github.com/matrixorigin/matrixcube/command"
+	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/pb"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage"
@@ -18,7 +14,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	stdLog "log"
 	"os"
-	"strings"
 	"testing"
 	"time"
 )
@@ -87,16 +82,13 @@ func newTestClusterStore(t *testing.T, initShardsFunc func() []bhmetapb.Shard) (
 		}
 		cfg.Customize.CustomInitShardsFactory = initShardsFunc
 		s := raftstore.NewStore(cfg)
-		h := &testHandler{
-			store: s,
-		}
+		h := NewHandler(s)
+
 		c.applications = append(c.applications, server.NewApplication(server.Cfg{
 			Addr:    fmt.Sprintf("127.0.0.1:808%d", i),
 			Store:   s,
 			Handler: h,
 		}))
-		s.RegisterWriteFunc(1, h.set)
-		s.RegisterReadFunc(2, h.get)
 	}
 	return c, nil
 }
@@ -128,119 +120,54 @@ func TestClusterStartAndStop(t *testing.T) {
 	assert.NoError(t, err)
 	defer c.stop()
 	assert.NoError(t, c.start())
-
 	stdLog.Printf("app all started.")
 
-	cmdSet := testRequest{
-		Op:    "SET",
-		Key:   "hello",
-		Value: "world",
-	}
-	resp, err := c.applications[0].Exec(&cmdSet, 10*time.Second)
+	resp, err := setTest(c)
 	assert.NoError(t, err)
 	assert.Equal(t, "OK", string(resp))
 
-	cmdGet := testRequest{
-		Op:  "GET",
-		Key: "hello",
-	}
-	value, err := c.applications[0].Exec(&cmdGet, 10*time.Second)
+	value, err := getTest(c)
 	assert.NoError(t, err)
 	assert.Equal(t, value, []byte("world"))
-	println("hello: ", string(value))
+
+	id, err := incrTest(c, "table-id", 10)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(10), format.MustBytesToUint64(id))
+
+	cid, err := incrTest(c, "table-1-col-id", 11)
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(11), format.MustBytesToUint64(cid))
 }
 
-type testRequest struct {
-	Op    string `json:"json:op"`
-	Key   string `json:"key"`
-	Value string `json:"value,omitempty"`
+func setTest(c *testCluster) ([]byte, error) {
+	return c.applications[0].Exec(&request{
+		Op:    uint64(1),
+		Key:   "hello",
+		Value: "world",
+	}, 1*time.Second)
 }
 
-type testHandler struct {
-	store raftstore.Store
+func getTest(c *testCluster) ([]byte, error) {
+	return c.applications[0].Exec(&request{
+		Op:  uint64(10000),
+		Key: "hello",
+	}, 1*time.Second)
 }
 
-func (h *testHandler) BuildRequest(req *raftcmdpb.Request, msg interface{}) error {
-	cmd := msg.(*testRequest)
-
-	cmdName := strings.ToUpper(cmd.Op)
-
-	if cmdName != "SET" && cmdName != "GET" {
-		return fmt.Errorf("%s not support", cmd)
+func incrTest(c *testCluster, incrKey string, times uint64) ([]byte, error) {
+	cmdAlloc := request{
+		Op:  uint64(2),
+		Key: incrKey,
 	}
-
-	data, err := json.Marshal(cmd)
-	if err != nil {
-		return err
+	var value []byte
+	var err error
+	for i := uint64(0); i < times; i++ {
+		value, err = c.applications[0].Exec(&cmdAlloc, 1*time.Second)
+		if err != nil {
+			break
+		}
 	}
-
-	req.Key = []byte(cmd.Key)
-	switch cmdName {
-	case "SET":
-		req.CustemType = 1
-		req.Type = raftcmdpb.CMDType_Write
-	case "GET":
-		req.CustemType = 2
-		req.Type = raftcmdpb.CMDType_Read
-
-	}
-	req.Key = []byte(cmd.Key)
-	req.Cmd = data
-	return nil
-}
-
-func (h *testHandler) Codec() (codec.Encoder, codec.Decoder) {
-	return nil, nil
-}
-
-func (h *testHandler) AddReadFunc(cmdType uint64, cb command.ReadCommandFunc) {
-	h.store.RegisterReadFunc(cmdType, cb)
-}
-
-func (h *testHandler) AddWriteFunc(cmdType uint64, cb command.WriteCommandFunc) {
-	h.store.RegisterWriteFunc(cmdType, cb)
-}
-
-func (h *testHandler) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
-	resp := pb.AcquireResponse()
-
-	cmd := testRequest{}
-	err := json.Unmarshal(req.Cmd, &cmd)
-	if err != nil {
-		resp.Value = []byte(err.Error())
-		return 0, 0, resp
-	}
-
-	err = ctx.WriteBatch().Set(req.Key, []byte(cmd.Value))
-	if err != nil {
-		resp.Value = []byte(err.Error())
-		return 0, 0, resp
-	}
-
-	writtenBytes := uint64(len(req.Key) + len(cmd.Value))
-	changedBytes := int64(writtenBytes)
-	resp.Value = []byte("OK")
-	return writtenBytes, changedBytes, resp
-}
-
-func (h *testHandler) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
-	resp := pb.AcquireResponse()
-
-	cmd := testRequest{}
-	err := json.Unmarshal(req.Cmd, &cmd)
-	if err != nil {
-		resp.Value = []byte(err.Error())
-		return resp, 0
-	}
-
-	value, err := h.store.DataStorageByGroup(0, 0).Get(req.Key)
-	if err != nil {
-		resp.Value = []byte(err.Error())
-		return resp, 0
-	}
-
-	resp.Value = value
-	return resp, uint64(len(value))
+	return value, err
 }
 
 type emptyLog struct{}

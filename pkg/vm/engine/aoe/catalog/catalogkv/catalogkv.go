@@ -3,6 +3,7 @@ package catalogkv
 import (
 	"encoding/json"
 	"github.com/fagongzi/goetty/codec"
+	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
@@ -10,7 +11,6 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
-	"strconv"
 )
 
 var (
@@ -28,23 +28,24 @@ func NewHandler(store raftstore.Store) server.Handler {
 		store: store,
 		types: make(map[uint64]raftcmdpb.CMDType),
 	}
+	h.initSupportCMDs()
 	return h
 }
 
 func (h *handler) initSupportCMDs() {
 	h.AddWriteFunc(set, h.set)
 	h.AddReadFunc(get, h.get)
+	h.AddWriteFunc(incr, h.incr)
 }
 
 func (h *handler) BuildRequest(req *raftcmdpb.Request, msg interface{}) error {
 	op := msg.(*request)
-	cmdType, err := strconv.ParseUint(op.Op, 10, 64)
-	if _, ok := h.types[cmdType]; !ok || err != nil {
+	if _, ok := h.types[op.Op]; !ok {
 		return ErrCMDNotSupport
 	}
 	req.Key = []byte(op.Key)
-	req.CustemType = cmdType
-	req.Type = h.types[cmdType]
+	req.CustemType = op.Op
+	req.Type = h.types[op.Op]
 	data, err := json.Marshal(op)
 	if err != nil {
 		return err
@@ -105,6 +106,44 @@ func (h *handler) get(shard bhmetapb.Shard, req *raftcmdpb.Request, c command.Co
 	return resp, 0
 }
 
+func (h *handler) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+	resp := pb.AcquireResponse()
+
+	cmd := request{}
+	err := json.Unmarshal(req.Cmd, &cmd)
+	if err != nil {
+		resp.Value = []byte(err.Error())
+		return 0, 0, resp
+	}
+
+	id := uint64(0)
+	if v, ok := ctx.Attrs()[string(req.Key)]; ok {
+		id = format.MustBytesToUint64(v.([]byte))
+	} else {
+		value, err := h.store.DataStorageByGroup(shard.Group, shard.ID).Get(req.Key)
+		if err != nil {
+			return 0, 0, resp
+		}
+		if len(value) > 0 {
+			id = format.MustBytesToUint64(value)
+		}
+	}
+
+	id++
+	newV := format.Uint64ToBytes(id)
+	ctx.Attrs()[string(req.Key)] = newV
+
+	err = ctx.WriteBatch().Set(req.Key, newV)
+	if err != nil {
+		return 0, 0, resp
+	}
+
+	writtenBytes := uint64(len(req.Key) + len(cmd.Value))
+	changedBytes := int64(writtenBytes)
+	resp.Value = newV
+	return writtenBytes, changedBytes, resp
+}
+
 func (h *handler) getPebbleByGroup(group uint64) *pebble.Storage {
 	return h.store.DataStorageByGroup(group, 500).(*pebble.Storage)
 }
@@ -114,7 +153,7 @@ func errorResp(err error) []byte {
 }
 
 type request struct {
-	Op    string `json:"json:op"`
+	Op    uint64 `json:"json:op_type"`
 	Key   string `json:"key"`
 	Value string `json:"value,omitempty"`
 }
