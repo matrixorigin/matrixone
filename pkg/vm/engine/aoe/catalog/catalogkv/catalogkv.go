@@ -120,7 +120,7 @@ func (h *handler) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command
 	if v, ok := ctx.Attrs()[string(req.Key)]; ok {
 		id = format.MustBytesToUint64(v.([]byte))
 	} else {
-		value, err := h.store.DataStorageByGroup(shard.Group, shard.ID).Get(req.Key)
+		value, err := h.getPebbleByGroup(shard.Group).Get(req.Key)
 		if err != nil {
 			return 0, 0, resp
 		}

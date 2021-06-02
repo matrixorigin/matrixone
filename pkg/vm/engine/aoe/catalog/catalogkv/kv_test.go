@@ -156,7 +156,7 @@ func getTest(c *testCluster) ([]byte, error) {
 
 func incrTest(c *testCluster, incrKey string, times uint64) ([]byte, error) {
 	cmdAlloc := request{
-		Op:  uint64(2),
+		Op:  uint64(3),
 		Key: incrKey,
 	}
 	var value []byte
