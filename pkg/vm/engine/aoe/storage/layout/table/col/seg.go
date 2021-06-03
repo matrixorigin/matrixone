@@ -6,7 +6,7 @@ import (
 	"io"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"runtime"
 	"sync"
 	"time"
@@ -26,8 +26,8 @@ type IColumnSegment interface {
 	sync.Locker
 	GetNext() IColumnSegment
 	SetNext(next IColumnSegment)
-	GetID() layout.ID
-	GetBlockIDs() []layout.ID
+	GetID() common.ID
+	GetBlockIDs() []common.ID
 	GetBlockRoot() IColumnBlock
 	GetPartRoot() IColumnPart
 	GetRowCount() uint64
@@ -37,28 +37,28 @@ type IColumnSegment interface {
 	GetColIdx() int
 	GetSegmentType() SegmentType
 	CloneWithUpgrade() IColumnSegment
-	UpgradeBlock(id layout.ID) (IColumnBlock, error)
-	GetBlock(id layout.ID) IColumnBlock
+	UpgradeBlock(id common.ID) (IColumnBlock, error)
+	GetBlock(id common.ID) IColumnBlock
 	InitScanCursor(cursor *ScanCursor) error
-	RegisterBlock(bufMgr bmgrif.IBufferManager, id layout.ID, maxRows uint64) (blk IColumnBlock, err error)
+	RegisterBlock(bufMgr bmgrif.IBufferManager, id common.ID, maxRows uint64) (blk IColumnBlock, err error)
 }
 
 type ColumnSegment struct {
 	sync.RWMutex
-	ID       layout.ID
+	ID       common.ID
 	Next     IColumnSegment
 	Blocks   []IColumnBlock
 	RowCount uint64
-	IDMap    map[layout.ID]int
+	IDMap    map[common.ID]int
 	Idx      int
 	Type     SegmentType
 	ColType  types.Type
 }
 
-func NewColumnSegment(id layout.ID, colIdx int, colType types.Type, segType SegmentType) IColumnSegment {
+func NewColumnSegment(id common.ID, colIdx int, colType types.Type, segType SegmentType) IColumnSegment {
 	seg := &ColumnSegment{
 		ID:      id,
-		IDMap:   make(map[layout.ID]int, 0),
+		IDMap:   make(map[common.ID]int, 0),
 		Idx:     colIdx,
 		Type:    segType,
 		ColType: colType,
@@ -82,7 +82,7 @@ func (seg *ColumnSegment) GetSegmentType() SegmentType {
 	return seg.Type
 }
 
-func (seg *ColumnSegment) GetBlock(id layout.ID) IColumnBlock {
+func (seg *ColumnSegment) GetBlock(id common.ID) IColumnBlock {
 	seg.RLock()
 	defer seg.RUnlock()
 	idx, ok := seg.IDMap[id]
@@ -92,7 +92,7 @@ func (seg *ColumnSegment) GetBlock(id layout.ID) IColumnBlock {
 	return seg.Blocks[idx]
 }
 
-func (seg *ColumnSegment) UpgradeBlock(id layout.ID) (IColumnBlock, error) {
+func (seg *ColumnSegment) UpgradeBlock(id common.ID) (IColumnBlock, error) {
 	if seg.Type != UNSORTED_SEG {
 		panic("logic error")
 	}
@@ -172,7 +172,7 @@ func (seg *ColumnSegment) Close() error {
 	return nil
 }
 
-func (seg *ColumnSegment) RegisterBlock(bufMgr bmgrif.IBufferManager, id layout.ID, maxRows uint64) (blk IColumnBlock, err error) {
+func (seg *ColumnSegment) RegisterBlock(bufMgr bmgrif.IBufferManager, id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
 	blk = NewStdColumnBlock(seg, id, TRANSIENT_BLK)
 	part := NewColumnPart(bufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
 	for part == nil {
@@ -183,7 +183,7 @@ func (seg *ColumnSegment) RegisterBlock(bufMgr bmgrif.IBufferManager, id layout.
 	return blk, err
 }
 
-func (seg *ColumnSegment) GetID() layout.ID {
+func (seg *ColumnSegment) GetID() common.ID {
 	return seg.ID
 }
 
@@ -229,10 +229,10 @@ func (seg *ColumnSegment) InitScanCursor(cursor *ScanCursor) error {
 	return blk.InitScanCursor(cursor)
 }
 
-func (seg *ColumnSegment) GetBlockIDs() []layout.ID {
+func (seg *ColumnSegment) GetBlockIDs() []common.ID {
 	seg.RLock()
 	defer seg.RUnlock()
-	var ids []layout.ID
+	var ids []common.ID
 	for _, blk := range seg.Blocks {
 		ids = append(ids, blk.GetID())
 	}

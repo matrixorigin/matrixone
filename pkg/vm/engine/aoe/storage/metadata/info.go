@@ -43,6 +43,23 @@ func (info *MetaInfo) ReferenceBlock(table_id, segment_id, block_id uint64) (blk
 	return blk, err
 }
 
+func (info *MetaInfo) TableSegmentIDs(tableID uint64, args ...int64) (ids map[uint64]uint64, err error) {
+	info.RLock()
+	tbl, ok := info.Tables[tableID]
+	info.RUnlock()
+	if !ok {
+		return ids, errors.New(fmt.Sprintf("Specified table %d not found", tableID))
+	}
+	var ts int64
+	if len(args) == 0 {
+		ts = NowMicro()
+	} else {
+		ts = args[0]
+	}
+	ids = tbl.SegmentIDs(ts)
+	return ids, err
+}
+
 func (info *MetaInfo) TableIDs(args ...int64) map[uint64]uint64 {
 	var ts int64
 	if len(args) == 0 {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type IColumnData interface {
@@ -13,17 +13,18 @@ type IColumnData interface {
 	ToString(depth uint64) string
 	InitScanCursor(cursor *ScanCursor) error
 	Append(seg IColumnSegment) error
-	DropSegment(id layout.ID) (seg IColumnSegment, err error)
+	DropSegment(id common.ID) (seg IColumnSegment, err error)
 	// AppendBlock(blk IColumnBlock) error
 	// AppendPart(part IColumnPart) error
-	UpgradeBlock(blkID layout.ID) IColumnBlock
-	UpgradeSegment(segID layout.ID) IColumnSegment
+	UpgradeBlock(blkID common.ID) IColumnBlock
+	UpgradeSegment(segID common.ID) IColumnSegment
 	SegmentCount() uint64
 	GetSegmentRoot() IColumnSegment
 	GetSegmentTail() IColumnSegment
+	GetSegment(common.ID) IColumnSegment
 	GetColIdx() int
-	RegisterSegment(id layout.ID) (seg IColumnSegment, err error)
-	RegisterBlock(bufMgr bmgrif.IBufferManager, id layout.ID, maxRows uint64) (blk IColumnBlock, err error)
+	RegisterSegment(id common.ID) (seg IColumnSegment, err error)
+	RegisterBlock(bufMgr bmgrif.IBufferManager, id common.ID, maxRows uint64) (blk IColumnBlock, err error)
 }
 
 type ColumnData struct {
@@ -54,7 +55,7 @@ func (cdata *ColumnData) GetSegmentTail() IColumnSegment {
 	return cdata.SegTree.GetTail()
 }
 
-func (cdata *ColumnData) DropSegment(id layout.ID) (seg IColumnSegment, err error) {
+func (cdata *ColumnData) DropSegment(id common.ID) (seg IColumnSegment, err error) {
 	return cdata.SegTree.DropSegment(id)
 }
 
@@ -69,13 +70,13 @@ func (cdata *ColumnData) Append(seg IColumnSegment) error {
 	return cdata.SegTree.Append(seg)
 }
 
-func (cdata *ColumnData) RegisterSegment(id layout.ID) (seg IColumnSegment, err error) {
+func (cdata *ColumnData) RegisterSegment(id common.ID) (seg IColumnSegment, err error) {
 	seg = NewColumnSegment(id, cdata.Idx, cdata.Type, UNSORTED_SEG)
 	err = cdata.Append(seg)
 	return seg, err
 }
 
-func (cdata *ColumnData) RegisterBlock(bufMgr bmgrif.IBufferManager, id layout.ID, maxRows uint64) (blk IColumnBlock, err error) {
+func (cdata *ColumnData) RegisterBlock(bufMgr bmgrif.IBufferManager, id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
 	seg := cdata.GetSegmentTail()
 	if seg == nil {
 		err = errors.New(fmt.Sprintf("cannot register blk: %s", id.BlockString()))
@@ -104,12 +105,16 @@ func (cdata *ColumnData) RegisterBlock(bufMgr bmgrif.IBufferManager, id layout.I
 // 	return nil
 // }
 
-func (cdata *ColumnData) UpgradeBlock(blkID layout.ID) IColumnBlock {
+func (cdata *ColumnData) UpgradeBlock(blkID common.ID) IColumnBlock {
 	return cdata.SegTree.UpgradeBlock(blkID)
 }
 
-func (cdata *ColumnData) UpgradeSegment(segID layout.ID) IColumnSegment {
+func (cdata *ColumnData) UpgradeSegment(segID common.ID) IColumnSegment {
 	return cdata.SegTree.UpgradeSegment(segID)
+}
+
+func (cdata *ColumnData) GetSegment(segID common.ID) IColumnSegment {
+	return cdata.SegTree.GetSegment(segID)
 }
 
 func (cdata *ColumnData) InitScanCursor(cursor *ScanCursor) error {

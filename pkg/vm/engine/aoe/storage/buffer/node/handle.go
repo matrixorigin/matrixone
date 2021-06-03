@@ -8,8 +8,8 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
@@ -97,7 +97,7 @@ func (h *NodeHandle) HasRef() bool {
 	return v > uint64(0)
 }
 
-func (h *NodeHandle) GetID() layout.ID {
+func (h *NodeHandle) GetID() common.ID {
 	return h.ID
 }
 
@@ -208,7 +208,7 @@ func NewBufferHandle(n nif.INodeHandle, mgr mgrif.IBufferManager) nif.IBufferHan
 	return h
 }
 
-func (h *BufferHandle) GetID() layout.ID {
+func (h *BufferHandle) GetID() common.ID {
 	return h.Handle.GetID()
 }
 

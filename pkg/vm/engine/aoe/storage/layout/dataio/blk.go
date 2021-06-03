@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"sync"
 
@@ -14,11 +14,11 @@ import (
 type BlockFile struct {
 	sync.RWMutex
 	os.File
-	ID    layout.ID
+	ID    common.ID
 	Parts map[Key]Pointer
 }
 
-func NewBlockFile(dirname string, id layout.ID) *BlockFile {
+func NewBlockFile(dirname string, id common.ID) *BlockFile {
 	bf := &BlockFile{
 		Parts: make(map[Key]Pointer),
 		ID:    id,
@@ -39,7 +39,7 @@ func NewBlockFile(dirname string, id layout.ID) *BlockFile {
 	return bf
 }
 
-func (bf *BlockFile) initPointers(id layout.ID) {
+func (bf *BlockFile) initPointers(id common.ID) {
 	twoBytes := make([]byte, 2)
 	_, err := bf.File.Read(twoBytes)
 	if err != nil {
@@ -75,7 +75,7 @@ func (bf *BlockFile) initPointers(id layout.ID) {
 	}
 }
 
-func (bf *BlockFile) ReadPart(colIdx uint64, id layout.ID, buf []byte) {
+func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	key := Key{
 		Col: colIdx,
 		ID:  id.AsBlockID(),

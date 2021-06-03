@@ -2,7 +2,7 @@ package col
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"runtime"
 	// log "github.com/sirupsen/logrus"
 )
@@ -12,7 +12,7 @@ type StdColumnBlock struct {
 	Part IColumnPart
 }
 
-func NewStdColumnBlock(seg IColumnSegment, id layout.ID, blkType BlockType) IColumnBlock {
+func NewStdColumnBlock(seg IColumnSegment, id common.ID, blkType BlockType) IColumnBlock {
 	blk := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{
 			ID:     id,

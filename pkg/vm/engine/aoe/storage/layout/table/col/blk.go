@@ -2,7 +2,7 @@ package col
 
 import (
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 )
 
@@ -21,7 +21,7 @@ type IColumnBlock interface {
 	io.Closer
 	GetNext() IColumnBlock
 	SetNext(next IColumnBlock)
-	GetID() layout.ID
+	GetID() common.ID
 	GetRowCount() uint64
 	InitScanCursor(cusor *ScanCursor) error
 	Append(part IColumnPart)
@@ -34,7 +34,7 @@ type IColumnBlock interface {
 
 type ColumnBlock struct {
 	sync.RWMutex
-	ID       layout.ID
+	ID       common.ID
 	Next     IColumnBlock
 	RowCount uint64
 	Type     BlockType
@@ -68,6 +68,6 @@ func (blk *ColumnBlock) GetNext() IColumnBlock {
 	return blk.Next
 }
 
-func (blk *ColumnBlock) GetID() layout.ID {
+func (blk *ColumnBlock) GetID() common.ID {
 	return blk.ID
 }

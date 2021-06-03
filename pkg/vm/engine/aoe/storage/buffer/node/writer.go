@@ -6,9 +6,9 @@ import (
 	log "github.com/sirupsen/logrus"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"os"
 	"path/filepath"
 )
@@ -53,7 +53,7 @@ type NodeWriter struct {
 	Filename string
 }
 
-func MakeNodeFileName(id *layout.ID) string {
+func MakeNodeFileName(id *common.ID) string {
 	return fmt.Sprintf("%d_%d_%d_%d_%d", id.TableID, id.Idx, id.SegmentID, id.BlockID, id.PartID)
 }
 

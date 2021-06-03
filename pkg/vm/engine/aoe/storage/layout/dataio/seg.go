@@ -4,17 +4,17 @@ import (
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"sync"
 )
 
 type ISegmentFile interface {
-	ReadPart(colIdx uint64, id layout.ID, buf []byte)
+	ReadPart(colIdx uint64, id common.ID, buf []byte)
 }
 
 type IColSegmentFile interface {
-	ReadPart(id layout.ID, buf []byte)
+	ReadPart(id common.ID, buf []byte)
 }
 
 type ColSegmentFile struct {
@@ -22,39 +22,39 @@ type ColSegmentFile struct {
 	ColIdx      uint64
 }
 
-func (csf *ColSegmentFile) ReadPart(id layout.ID, buf []byte) {
+func (csf *ColSegmentFile) ReadPart(id common.ID, buf []byte) {
 	csf.SegmentFile.ReadPart(csf.ColIdx, id, buf)
 }
 
 type MockColSegmentFile struct {
 }
 
-func (msf *MockColSegmentFile) ReadPart(id layout.ID, buf []byte) {
+func (msf *MockColSegmentFile) ReadPart(id common.ID, buf []byte) {
 	log.Infof("MockColSegmentFile ReadPart %s size: %d cap: %d", id.SegmentString(), len(buf), cap(buf))
 }
 
 type MockSegmentFile struct {
 }
 
-func (msf *MockSegmentFile) ReadPart(colIdx uint64, id layout.ID, buf []byte) {
+func (msf *MockSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	log.Infof("MockSegmentFile ReadPart %d %s size: %d cap: %d", colIdx, id.SegmentString(), len(buf), cap(buf))
 }
 
 type UnsortedSegmentFile struct {
 	sync.RWMutex
-	ID     layout.ID
-	Blocks map[layout.ID]*BlockFile
+	ID     common.ID
+	Blocks map[common.ID]*BlockFile
 }
 
-func NewUnsortedSegmentFile(dirname string, id layout.ID) ISegmentFile {
+func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 	usf := &UnsortedSegmentFile{
 		ID:     id,
-		Blocks: make(map[layout.ID]*BlockFile),
+		Blocks: make(map[common.ID]*BlockFile),
 	}
 	return usf
 }
 
-func (sf *UnsortedSegmentFile) AddBlock(id layout.ID, bf *BlockFile) {
+func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf *BlockFile) {
 	_, ok := sf.Blocks[id]
 	if ok {
 		panic("logic error")
@@ -62,7 +62,7 @@ func (sf *UnsortedSegmentFile) AddBlock(id layout.ID, bf *BlockFile) {
 	sf.Blocks[id] = bf
 }
 
-func (sf *UnsortedSegmentFile) ReadPart(colIdx uint64, id layout.ID, buf []byte) {
+func (sf *UnsortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	blk, ok := sf.Blocks[id.AsBlockID()]
 	if !ok {
 		panic("logic error")
@@ -70,7 +70,7 @@ func (sf *UnsortedSegmentFile) ReadPart(colIdx uint64, id layout.ID, buf []byte)
 	blk.ReadPart(colIdx, id, buf)
 }
 
-func NewSortedSegmentFile(dirname string, id layout.ID) ISegmentFile {
+func NewSortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 	sf := &SortedSegmentFile{
 		Parts: make(map[Key]Pointer),
 		ID:    id,
@@ -93,7 +93,7 @@ func NewSortedSegmentFile(dirname string, id layout.ID) ISegmentFile {
 
 type SortedSegmentFile struct {
 	sync.RWMutex
-	ID layout.ID
+	ID common.ID
 	os.File
 	Parts map[Key]Pointer
 }
@@ -102,7 +102,7 @@ func (sf *SortedSegmentFile) initPointers() {
 	// TODO
 }
 
-func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id layout.ID, buf []byte) {
+func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	key := Key{
 		Col: colIdx,
 		ID:  id,

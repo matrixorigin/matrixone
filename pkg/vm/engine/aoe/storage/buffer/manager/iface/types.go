@@ -3,7 +3,7 @@ package iface
 import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 )
 
@@ -17,8 +17,8 @@ type IBufferManager interface {
 	NodeCount() int
 
 	RegisterMemory(capacity uint64, spillable bool) nif.INodeHandle
-	RegisterSpillableNode(capacity uint64, node_id layout.ID) nif.INodeHandle
-	RegisterNode(capacity uint64, node_id layout.ID, segFile interface{}) nif.INodeHandle
+	RegisterSpillableNode(capacity uint64, node_id common.ID) nif.INodeHandle
+	RegisterNode(capacity uint64, node_id common.ID, segFile interface{}) nif.INodeHandle
 	UnregisterNode(nif.INodeHandle)
 
 	// // Allocate(size uint64) buf.IBufferH

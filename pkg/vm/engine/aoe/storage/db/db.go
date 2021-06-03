@@ -7,7 +7,10 @@ import (
 	"io/ioutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle"
+	ih "matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"os"
@@ -36,7 +39,8 @@ type DB struct {
 	MutableBufMgr   bmgrif.IBufferManager
 	TableDataBufMgr bmgrif.IBufferManager
 
-	MetaInfo *md.MetaInfo
+	MetaInfo  *md.MetaInfo
+	DataTable table.ITableData
 
 	DataDir  *os.File
 	FileLock io.Closer
@@ -102,11 +106,63 @@ func cleanStaleMeta(dirname string) {
 	}
 }
 
+func (d *DB) NewSegmentIter(o *e.IterOptions) ih.ISegmentIterator {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	var h *handle.SegmentsHandle
+	if o.All {
+		h = handle.NewAllSegmentsHandle(o.ColIdxes, d.DataTable)
+	} else {
+		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, d.DataTable)
+	}
+	return h.NewSegIt()
+}
+
+func (d *DB) NewBlockIter(o *e.IterOptions) ih.IBlockIterator {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	var h *handle.SegmentsHandle
+	if o.All {
+		h = handle.NewAllSegmentsHandle(o.ColIdxes, d.DataTable)
+	} else {
+		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, d.DataTable)
+	}
+	return h.NewBlkIt()
+}
+
+func (d *DB) TableIDs() (ids []uint64, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	tids := d.MetaInfo.TableIDs()
+	for tid := range tids {
+		ids = append(ids, tid)
+	}
+	return ids, err
+}
+
+func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	sids, err := d.MetaInfo.TableSegmentIDs(tableID)
+	if err != nil {
+		return ids, err
+	}
+	// TODO: Refactor metainfo to 1. keep order 2. use common.ID
+	for sid := range sids {
+		ids = append(ids, common.ID{TableID: tableID, SegmentID: sid})
+	}
+	return ids, err
+}
+
 func (d *DB) validateAndCleanStaleData() {
 	expectFiles := make(map[string]bool)
 	for _, tbl := range d.MetaInfo.Tables {
 		for _, seg := range tbl.Segments {
-			id := layout.ID{
+			id := common.ID{
 				TableID:   seg.TableID,
 				SegmentID: seg.ID,
 			}

@@ -4,8 +4,8 @@ import (
 	// e "matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/stretchr/testify/assert"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"testing"
 	// "os"
 	// "context"
@@ -57,7 +57,7 @@ func TestNode(t *testing.T) {
 	assert.Equal(t, capacity, pool.GetCapacity())
 	assert.Equal(t, node_capacity, pool.GetUsage())
 
-	id := layout.NewTransientID()
+	id := common.NewTransientID()
 	id1 := id.Next()
 	node_buff1 := NewNodeBuffer(*id1, node1)
 	assert.Equal(t, node_buff1.GetCapacity(), node_capacity)
@@ -81,7 +81,7 @@ func TestNode(t *testing.T) {
 }
 
 func TestHandle(t *testing.T) {
-	id := layout.NewTransientID()
+	id := common.NewTransientID()
 	ctx := NodeHandleCtx{
 		ID: *id,
 	}

@@ -5,8 +5,8 @@ import (
 	"matrixone/pkg/container/types"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"runtime"
 	"sync"
@@ -23,7 +23,7 @@ func init() {
 }
 
 func TestStdColumnBlock(t *testing.T) {
-	baseid := layout.ID{}
+	baseid := common.ID{}
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	seg_cnt := 5
@@ -70,7 +70,7 @@ func TestStdColumnBlock2(t *testing.T) {
 	capacity := typeSize * row_count
 	bufMgr := makeBufMagr(capacity)
 	t.Log(bufMgr.GetCapacity())
-	baseid := layout.ID{}
+	baseid := common.ID{}
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	seg_cnt := 5
@@ -137,7 +137,7 @@ func TestStrColumnBlock(t *testing.T) {
 	capacity := typeSize * row_count
 	bufMgr := makeBufMagr(capacity)
 	t.Log(bufMgr.GetCapacity())
-	baseid := layout.ID{}
+	baseid := common.ID{}
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	seg_cnt := 5
@@ -204,7 +204,7 @@ func (t *MockType) Size() uint64 {
 }
 
 func TestStdSegmentTree(t *testing.T) {
-	baseid := layout.ID{}
+	baseid := common.ID{}
 	col_idx := 0
 	colType := types.Type{types.T_int64, 8, 8, 0}
 	col_data := NewColumnData(colType, col_idx)
@@ -250,7 +250,7 @@ func TestRegisterNode(t *testing.T) {
 	row_count := uint64(64)
 	capacity := typeSize * row_count
 	bufMgr := makeBufMagr(capacity)
-	baseid := layout.ID{}
+	baseid := common.ID{}
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	seg_cnt := 5
@@ -298,7 +298,7 @@ func TestRegisterNode(t *testing.T) {
 	cursor.Close()
 }
 
-func makeSegment(bufMgr mgrif.IBufferManager, id layout.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) IColumnSegment {
+func makeSegment(bufMgr mgrif.IBufferManager, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) IColumnSegment {
 	colType := types.Type{types.T_int64, 8, 8, 0}
 	seg := NewColumnSegment(id, 0, colType, UNSORTED_SEG)
 	blk_id := id
@@ -310,7 +310,7 @@ func makeSegment(bufMgr mgrif.IBufferManager, id layout.ID, blkCnt int, rowCount
 }
 
 func makeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typeSize uint64, t *testing.T) []IColumnSegment {
-	baseid := layout.ID{}
+	baseid := common.ID{}
 	var segs []IColumnSegment
 	var rootSeg IColumnSegment
 	var prevSeg IColumnSegment
