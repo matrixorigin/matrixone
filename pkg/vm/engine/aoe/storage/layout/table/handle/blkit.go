@@ -2,11 +2,15 @@ package handle
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+)
+
+var (
+	_ base.IBlockIterator = (*BlockIt)(nil)
 )
 
 type BlockIt struct {
-	Cols   []col.IColumnBlock
-	SegPos int
+	Cols []col.IColumnBlock
 }
 
 func (sit *BlockIt) Next() {
@@ -29,7 +33,7 @@ func (sit *BlockIt) Valid() bool {
 	return sit.Cols != nil
 }
 
-func (sit *BlockIt) GetBlockHandle() *BlockHandle {
+func (sit *BlockIt) GetBlockHandle() base.IBlockHandle {
 	h := &BlockHandle{
 		ID:   sit.Cols[0].GetID(),
 		Cols: sit.Cols,

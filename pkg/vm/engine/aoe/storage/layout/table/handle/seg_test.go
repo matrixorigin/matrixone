@@ -65,35 +65,40 @@ func TestSegmentHandle(t *testing.T) {
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 
 	cols := []int{0, 1}
-	handle := SegmentsHandle{IDS: segIDs, ColIdxes: cols, TableData: tableData}
+	handle1 := NewSegmentsHandle(segIDs, cols, tableData)
+	handle2 := NewAllSegmentsHandle(cols, tableData)
 
-	sit := handle.NewIterator()
-	assert.True(t, sit.Valid())
-	totalSegCnt := 0
-	for sit.Valid() {
-		totalSegCnt++
-		segHandle := sit.GetSegmentHandle()
-		assert.NotNil(t, segHandle)
-		blkit := segHandle.NewIterator()
-		assert.True(t, blkit.Valid())
-		segBlks := 0
-		for blkit.Valid() {
-			segBlks++
-			blkit.Next()
+	handles := []*SegmentsHandle{handle1, handle2}
+
+	for _, handle := range handles {
+		sit := handle.NewSegIt()
+		assert.True(t, sit.Valid())
+		totalSegCnt := 0
+		for sit.Valid() {
+			totalSegCnt++
+			segHandle := sit.GetSegmentHandle()
+			assert.NotNil(t, segHandle)
+			blkit := segHandle.NewIterator()
+			assert.True(t, blkit.Valid())
+			segBlks := 0
+			for blkit.Valid() {
+				segBlks++
+				blkit.Next()
+			}
+			assert.Equal(t, blk_cnt, segBlks)
+			sit.Next()
 		}
-		assert.Equal(t, blk_cnt, segBlks)
-		sit.Next()
-	}
-	assert.Equal(t, seg_cnt, totalSegCnt)
+		assert.Equal(t, seg_cnt, totalSegCnt)
 
-	lit := handle.NewLinkIterator()
-	assert.True(t, lit.Valid())
-	totalBlks := 0
-	for lit.Valid() {
-		totalBlks++
-		blkHandle := lit.GetBlockHandle()
-		assert.NotNil(t, blkHandle)
-		lit.Next()
+		lit := handle.NewBlkIt()
+		assert.True(t, lit.Valid())
+		totalBlks := 0
+		for lit.Valid() {
+			totalBlks++
+			blkHandle := lit.GetBlockHandle()
+			assert.NotNil(t, blkHandle)
+			lit.Next()
+		}
+		assert.Equal(t, seg_cnt*blk_cnt, totalBlks)
 	}
-	assert.Equal(t, seg_cnt*blk_cnt, totalBlks)
 }

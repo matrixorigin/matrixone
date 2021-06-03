@@ -1,8 +1,16 @@
 package handle
 
+import (
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+)
+
+var (
+	_ base.IBlockIterator = (*BlockLinkIterator)(nil)
+)
+
 type BlockLinkIterator struct {
-	SegIt *SegmentIt
-	BlkIt *BlockIt
+	SegIt base.ISegmentIterator
+	BlkIt base.IBlockIterator
 }
 
 func (it *BlockLinkIterator) Next() {
@@ -27,6 +35,6 @@ func (it *BlockLinkIterator) Valid() bool {
 	return it.BlkIt.Valid()
 }
 
-func (it *BlockLinkIterator) GetBlockHandle() *BlockHandle {
+func (it *BlockLinkIterator) GetBlockHandle() base.IBlockHandle {
 	return it.BlkIt.GetBlockHandle()
 }

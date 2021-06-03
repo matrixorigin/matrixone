@@ -2,6 +2,11 @@ package handle
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+)
+
+var (
+	_ base.ISegmentIterator = (*SegmentIt)(nil)
 )
 
 type SegmentIt struct {
@@ -20,10 +25,9 @@ func (ssit *SegmentIt) Next() {
 	ssit.Pos++
 }
 
-func (ssit *SegmentIt) GetSegmentHandle() *SegmentHandle {
+func (ssit *SegmentIt) GetSegmentHandle() base.ISegmentHandle {
 	h := &SegmentHandle{
 		ID:   ssit.Handle.IDS[ssit.Pos],
-		Pos:  ssit.Pos,
 		Cols: make([]col.IColumnSegment, 0),
 	}
 	for idx := range ssit.Handle.ColIdxes {
