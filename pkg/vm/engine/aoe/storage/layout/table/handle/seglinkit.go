@@ -24,6 +24,10 @@ func (it *SegmentLinkIt) Valid() bool {
 	return true
 }
 
+func (it *SegmentLinkIt) Close() error {
+	return nil
+}
+
 func (it *SegmentLinkIt) Next() {
 	newCols := make([]col.IColumnSegment, 0)
 	for _, colSeg := range it.Cols {

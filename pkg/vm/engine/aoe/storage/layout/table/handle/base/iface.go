@@ -1,6 +1,9 @@
 package base
 
+import "io"
+
 type IBlockHandle interface {
+	io.Closer
 }
 
 type ISegmentHandle interface {
@@ -8,6 +11,7 @@ type ISegmentHandle interface {
 }
 
 type Iterator interface {
+	io.Closer
 	Next()
 	Valid() bool
 }

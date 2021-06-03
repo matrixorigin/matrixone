@@ -12,11 +12,10 @@ type SegmentHandle struct {
 }
 
 func (sh *SegmentHandle) NewIterator() base.IBlockIterator {
-	it := &BlockIt{
-		Cols: make([]col.IColumnBlock, 0),
-	}
+	buf := itBlkAllocPool.Get().(*itBlkAlloc)
+	buf.It.Alloc = buf
 	for _, colSeg := range sh.Cols {
-		it.Cols = append(it.Cols, colSeg.GetBlockRoot())
+		buf.It.Cols = append(buf.It.Cols, colSeg.GetBlockRoot())
 	}
-	return it
+	return &buf.It
 }

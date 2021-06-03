@@ -25,6 +25,10 @@ func (ssit *SegmentIt) Next() {
 	ssit.Pos++
 }
 
+func (ssit *SegmentIt) Close() error {
+	return nil
+}
+
 func (ssit *SegmentIt) GetSegmentHandle() base.ISegmentHandle {
 	h := &SegmentHandle{
 		ID:   ssit.Handle.IDS[ssit.Pos],

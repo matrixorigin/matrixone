@@ -2,6 +2,7 @@ package handle
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -25,7 +26,16 @@ func (it *BlockLinkIterator) Next() {
 	}
 
 	h := it.SegIt.GetSegmentHandle()
+	it.BlkIt.Close()
 	it.BlkIt = h.NewIterator()
+}
+
+func (it *BlockLinkIterator) Close() error {
+	var err error
+	if it.BlkIt != nil {
+		err = it.BlkIt.Close()
+	}
+	return err
 }
 
 func (it *BlockLinkIterator) Valid() bool {

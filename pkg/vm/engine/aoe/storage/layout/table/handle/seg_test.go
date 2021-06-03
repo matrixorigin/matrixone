@@ -57,7 +57,7 @@ func TestSegmentHandle(t *testing.T) {
 	opts.MemData.Updater.Start()
 	typeSize := uint64(colDefs[0].Size)
 	row_count := uint64(64)
-	seg_cnt := 100
+	seg_cnt := 1000
 	blk_cnt := 64
 	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
 	bufMgr := makeBufMagr(capacity)
@@ -88,6 +88,7 @@ func TestSegmentHandle(t *testing.T) {
 				segBlks++
 				blkit.Next()
 			}
+			blkit.Close()
 			assert.Equal(t, blk_cnt, segBlks)
 			sit.Next()
 		}
@@ -100,9 +101,11 @@ func TestSegmentHandle(t *testing.T) {
 			totalBlks++
 			blkHandle := lit.GetBlockHandle()
 			assert.NotNil(t, blkHandle)
+			blkHandle.Close()
 			lit.Next()
 		}
 		assert.Equal(t, seg_cnt*blk_cnt, totalBlks)
+		lit.Close()
 	}
 	du := time.Since(now)
 	t.Log(du)
