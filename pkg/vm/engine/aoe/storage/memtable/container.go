@@ -5,7 +5,7 @@ import (
 	"fmt"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -22,9 +22,9 @@ type Container interface {
 type StaticContainer struct {
 	sync.RWMutex
 	BufMgr  bmgrif.IBufferManager
-	BaseID  layout.ID
-	Nodes   map[layout.ID]nif.INodeHandle
-	Handles map[layout.ID]nif.IBufferHandle
+	BaseID  common.ID
+	Nodes   map[common.ID]nif.INodeHandle
+	Handles map[common.ID]nif.IBufferHandle
 	Pined   bool
 	Impl    Container
 }
@@ -35,14 +35,14 @@ type DynamicContainer struct {
 	StepSize uint64
 }
 
-func NewDynamicContainer(bmgr bmgrif.IBufferManager, id layout.ID, step uint64) Container {
+func NewDynamicContainer(bmgr bmgrif.IBufferManager, id common.ID, step uint64) Container {
 	con := &DynamicContainer{
 		StepSize: step,
 		StaticContainer: StaticContainer{
 			BufMgr:  bmgr,
 			BaseID:  id,
-			Nodes:   make(map[layout.ID]nif.INodeHandle),
-			Handles: make(map[layout.ID]nif.IBufferHandle),
+			Nodes:   make(map[common.ID]nif.INodeHandle),
+			Handles: make(map[common.ID]nif.IBufferHandle),
 			Pined:   true,
 		},
 	}
@@ -82,7 +82,7 @@ func (con *StaticContainer) Pin() error {
 	for id, n := range con.Nodes {
 		h := con.BufMgr.Pin(n)
 		if h == nil {
-			con.Handles = make(map[layout.ID]nif.IBufferHandle)
+			con.Handles = make(map[common.ID]nif.IBufferHandle)
 			return errors.New(fmt.Sprintf("Cannot pin node %v", id))
 		}
 		con.Handles[id] = h
@@ -103,7 +103,7 @@ func (con *StaticContainer) Unpin() {
 			panic(fmt.Sprintf("logic error: %v", err))
 		}
 	}
-	con.Handles = make(map[layout.ID]nif.IBufferHandle)
+	con.Handles = make(map[common.ID]nif.IBufferHandle)
 	con.Pined = false
 	return
 }
@@ -114,11 +114,11 @@ func (con *StaticContainer) Close() error {
 	for _, h := range con.Handles {
 		h.Close()
 	}
-	con.Handles = make(map[layout.ID]nif.IBufferHandle)
+	con.Handles = make(map[common.ID]nif.IBufferHandle)
 	for _, n := range con.Nodes {
 		n.Close()
 	}
-	con.Nodes = make(map[layout.ID]nif.INodeHandle)
+	con.Nodes = make(map[common.ID]nif.INodeHandle)
 	return nil
 }
 

@@ -5,7 +5,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"runtime"
 	"sync"
@@ -21,8 +21,8 @@ type ITableData interface {
 	GetBufMgr() bmgrif.IBufferManager
 	GetSegmentCount() uint64
 
-	UpgradeBlock(blkID layout.ID) (blks []col.IColumnBlock)
-	UpgradeSegment(segID layout.ID) (segs []col.IColumnSegment)
+	UpgradeBlock(blkID common.ID) (blks []col.IColumnBlock)
+	UpgradeSegment(segID common.ID) (segs []col.IColumnSegment)
 	AppendColSegments(colSegs []col.IColumnSegment)
 	// Scan()
 }
@@ -97,7 +97,7 @@ func (td *TableData) GetSegmentCount() uint64 {
 	return td.Columns[0].SegmentCount()
 }
 
-func (td *TableData) UpgradeBlock(blkID layout.ID) (blks []col.IColumnBlock) {
+func (td *TableData) UpgradeBlock(blkID common.ID) (blks []col.IColumnBlock) {
 	for _, column := range td.Columns {
 		blk := column.UpgradeBlock(blkID)
 		blks = append(blks, blk)
@@ -105,7 +105,7 @@ func (td *TableData) UpgradeBlock(blkID layout.ID) (blks []col.IColumnBlock) {
 	return blks
 }
 
-func (td *TableData) UpgradeSegment(segID layout.ID) (segs []col.IColumnSegment) {
+func (td *TableData) UpgradeSegment(segID common.ID) (segs []col.IColumnSegment) {
 	for _, column := range td.Columns {
 		seg := column.UpgradeSegment(segID)
 		segs = append(segs, seg)

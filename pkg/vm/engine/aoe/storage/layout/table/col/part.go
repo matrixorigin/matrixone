@@ -6,8 +6,8 @@ import (
 	"io"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"runtime"
 	"sync"
@@ -60,17 +60,17 @@ type IColumnPart interface {
 	GetNext() IColumnPart
 	SetNext(IColumnPart)
 	InitScanCursor(cursor *ScanCursor) error
-	GetID() layout.ID
+	GetID() common.ID
 	// GetBlock() IColumnBlock
 	GetBuf() []byte
 	GetColIdx() int
 	CloneWithUpgrade(blk IColumnBlock) IColumnPart
-	GetNodeID() layout.ID
+	GetNodeID() common.ID
 }
 
 type ColumnPart struct {
 	sync.RWMutex
-	ID          layout.ID
+	ID          common.ID
 	Next        IColumnPart
 	BufMgr      bmgrif.IBufferManager
 	BufNode     nif.INodeHandle
@@ -79,12 +79,12 @@ type ColumnPart struct {
 	RowCount    uint64
 	Size        uint64
 	Capacity    uint64
-	NodeID      layout.ID
+	NodeID      common.ID
 	BlockType   BlockType
 	ColIdx      int
 }
 
-func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id layout.ID,
+func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 	rowCount uint64, typeSize uint64) IColumnPart {
 	part := &ColumnPart{
 		BufMgr:      bmgr,
@@ -126,7 +126,7 @@ func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id layout.ID,
 	return part
 }
 
-func (part *ColumnPart) GetNodeID() layout.ID {
+func (part *ColumnPart) GetNodeID() common.ID {
 	return part.NodeID
 }
 
@@ -211,7 +211,7 @@ func (part *ColumnPart) SetSize(size uint64) {
 	part.Size = size
 }
 
-func (part *ColumnPart) GetID() layout.ID {
+func (part *ColumnPart) GetID() common.ID {
 	return part.ID
 }
 

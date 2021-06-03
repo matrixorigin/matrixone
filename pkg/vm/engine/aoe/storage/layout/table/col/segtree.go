@@ -3,7 +3,7 @@ package col
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"runtime"
 
 	log "github.com/sirupsen/logrus"
@@ -23,23 +23,23 @@ type ISegmentTree interface {
 
 	// Modifier
 	Append(seg IColumnSegment) error
-	UpgradeBlock(blkID layout.ID) IColumnBlock
-	UpgradeSegment(segID layout.ID) IColumnSegment
-	DropSegment(id layout.ID) (seg IColumnSegment, err error)
+	UpgradeBlock(blkID common.ID) IColumnBlock
+	UpgradeSegment(segID common.ID) IColumnSegment
+	DropSegment(id common.ID) (seg IColumnSegment, err error)
 }
 
 type SegmentTree struct {
 	data struct {
 		sync.RWMutex
 		Segments []IColumnSegment
-		Helper   map[layout.ID]int
+		Helper   map[common.ID]int
 	}
 }
 
 func NewSegmentTree() ISegmentTree {
 	tree := &SegmentTree{}
 	tree.data.Segments = make([]IColumnSegment, 0)
-	tree.data.Helper = make(map[layout.ID]int)
+	tree.data.Helper = make(map[common.ID]int)
 	runtime.SetFinalizer(tree, func(o *SegmentTree) {
 		log.Infof("[GC]: SegmentTree: %s", o.String())
 		o.data.Segments = nil
@@ -47,7 +47,7 @@ func NewSegmentTree() ISegmentTree {
 	return tree
 }
 
-func (tree *SegmentTree) DropSegment(id layout.ID) (seg IColumnSegment, err error) {
+func (tree *SegmentTree) DropSegment(id common.ID) (seg IColumnSegment, err error) {
 	idx, ok := tree.data.Helper[id]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("Specified seg %s not found", id.SegmentString()))
@@ -91,7 +91,7 @@ func (tree *SegmentTree) GetTail() IColumnSegment {
 	return tree.data.Segments[len(tree.data.Segments)-1]
 }
 
-func (tree *SegmentTree) UpgradeBlock(blkID layout.ID) IColumnBlock {
+func (tree *SegmentTree) UpgradeBlock(blkID common.ID) IColumnBlock {
 	idx, ok := tree.data.Helper[blkID.AsSegmentID()]
 	if !ok {
 		panic("logic error")
@@ -104,7 +104,7 @@ func (tree *SegmentTree) UpgradeBlock(blkID layout.ID) IColumnBlock {
 	return blk
 }
 
-func (tree *SegmentTree) UpgradeSegment(segID layout.ID) IColumnSegment {
+func (tree *SegmentTree) UpgradeSegment(segID common.ID) IColumnSegment {
 	idx, ok := tree.data.Helper[segID]
 	if !ok {
 		panic("logic error")

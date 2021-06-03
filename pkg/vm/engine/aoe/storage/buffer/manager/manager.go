@@ -7,7 +7,7 @@ import (
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
@@ -19,9 +19,9 @@ var (
 func NewBufferManager(capacity uint64, flusher iw.IOpWorker, evict_ctx ...interface{}) mgrif.IBufferManager {
 	mgr := &BufferManager{
 		IMemoryPool: buf.NewSimpleMemoryPool(capacity),
-		Nodes:       make(map[layout.ID]nif.INodeHandle),
+		Nodes:       make(map[common.ID]nif.INodeHandle),
 		EvictHolder: NewSimpleEvictHolder(evict_ctx...),
-		TransientID: *layout.NewTransientID(),
+		TransientID: *common.NewTransientID(),
 		Flusher:     flusher,
 	}
 
@@ -38,11 +38,11 @@ func (mgr *BufferManager) String() string {
 	mgr.RLock()
 	defer mgr.RUnlock()
 	s := fmt.Sprintf("BMgr[Cap:%d, Usage:%d, Nodes:%d]:\n", mgr.GetCapacity(), mgr.GetUsage(), len(mgr.Nodes))
-	var mapped = map[uint64]map[uint64][]layout.ID{}
+	var mapped = map[uint64]map[uint64][]common.ID{}
 	for k, _ := range mgr.Nodes {
 		_, ok := mapped[k.TableID]
 		if !ok {
-			mapped[k.TableID] = make(map[uint64][]layout.ID)
+			mapped[k.TableID] = make(map[uint64][]common.ID)
 		}
 		l := mapped[k.TableID][k.SegmentID]
 		l = append(l, k)
@@ -78,7 +78,7 @@ func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool) nif.IN
 	return handle
 }
 
-func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id layout.ID) nif.INodeHandle {
+func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id common.ID) nif.INodeHandle {
 	// log.Infof("RegisterSpillableNode %s", node_id.String())
 	{
 		mgr.RLock()
@@ -118,7 +118,7 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id layout.
 	return handle
 }
 
-func (mgr *BufferManager) RegisterNode(capacity uint64, node_id layout.ID, segFile interface{}) nif.INodeHandle {
+func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, segFile interface{}) nif.INodeHandle {
 	mgr.Lock()
 	defer mgr.Unlock()
 	// log.Infof("RegisterNode %s", node_id.String())

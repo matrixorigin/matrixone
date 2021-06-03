@@ -1,9 +1,9 @@
 package base
 
 import (
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table"
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	// "matrixone/pkg/vm/engine/aoe/storage/common/table"
+	// "matrixone/pkg/vm/engine/aoe/storage/common/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 )
@@ -13,7 +13,7 @@ type IMemTable interface {
 	IsFull() bool
 	Flush() error
 	GetMeta() *md.Block
-	GetID() layout.ID
+	GetID() common.ID
 	InitScanCursors(cursors []interface{}) error
 }
 

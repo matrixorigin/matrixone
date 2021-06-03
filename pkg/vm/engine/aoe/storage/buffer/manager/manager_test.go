@@ -4,8 +4,8 @@ import (
 	// e "matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/stretchr/testify/assert"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"testing"
@@ -21,7 +21,7 @@ func init() {
 func TestManagerBasic(t *testing.T) {
 	flusher := w.NewOpWorker()
 	mgr := NewBufferManager(uint64(1), flusher)
-	baseid := layout.NewTransientID()
+	baseid := common.NewTransientID()
 	baseid.TableID = uint64(0)
 	node0 := baseid.Next()
 	node1 := baseid.Next()
@@ -70,7 +70,7 @@ func TestManager2(t *testing.T) {
 	capacity := uint64(1024)
 	node_capacity := 2 * capacity
 	mgr := NewBufferManager(capacity, flusher)
-	node0 := layout.ID{}
+	node0 := common.ID{}
 	empty := &ldio.MockColSegmentFile{}
 	h0 := mgr.RegisterNode(node_capacity, node0, empty)
 	assert.Equal(t, h0.GetID(), node0)
@@ -110,7 +110,7 @@ func TestManager3(t *testing.T) {
 	mgr := NewBufferManager(capacity, flusher)
 	assert.Equal(t, mgr.GetCapacity(), capacity)
 
-	id := layout.ID{}
+	id := common.ID{}
 	n0 := *id.Next()
 	empty := &ldio.MockColSegmentFile{}
 	h0 := mgr.RegisterNode(node_capacity, n0, empty)
@@ -164,7 +164,7 @@ func TestManager4(t *testing.T) {
 	mgr := NewBufferManager(capacity, flusher)
 	assert.Equal(t, mgr.GetCapacity(), capacity)
 
-	baseid := layout.ID{}
+	baseid := common.ID{}
 	id0 := *baseid.Next()
 	h0 := mgr.RegisterSpillableNode(node_capacity, id0)
 	assert.Nil(t, h0)
@@ -220,7 +220,7 @@ func TestManager5(t *testing.T) {
 
 	bh0.Close()
 	assert.False(t, h0_1.HasRef())
-	id := layout.ID{}
+	id := common.ID{}
 	id1 := id.Next()
 	h1 = mgr.RegisterSpillableNode(node_capacity, *id1)
 	assert.NotNil(t, h1)
