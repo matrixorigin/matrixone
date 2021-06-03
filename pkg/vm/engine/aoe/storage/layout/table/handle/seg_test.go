@@ -1,7 +1,6 @@
 package handle
 
 import (
-	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
@@ -11,6 +10,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
@@ -55,12 +57,12 @@ func TestSegmentHandle(t *testing.T) {
 	opts.MemData.Updater.Start()
 	typeSize := uint64(colDefs[0].Size)
 	row_count := uint64(64)
-	capacity := typeSize * row_count * 10000
+	seg_cnt := 100
+	blk_cnt := 64
+	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
 	bufMgr := makeBufMagr(capacity)
 	t0 := uint64(0)
 	tableData := table.NewTableData(bufMgr, t0, colDefs)
-	seg_cnt := 4
-	blk_cnt := 5
 	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 
@@ -68,6 +70,7 @@ func TestSegmentHandle(t *testing.T) {
 	handle1 := NewSegmentsHandle(segIDs, cols, tableData)
 	handle2 := NewAllSegmentsHandle(cols, tableData)
 
+	now := time.Now()
 	handles := []*SegmentsHandle{handle1, handle2}
 
 	for _, handle := range handles {
@@ -101,4 +104,6 @@ func TestSegmentHandle(t *testing.T) {
 		}
 		assert.Equal(t, seg_cnt*blk_cnt, totalBlks)
 	}
+	du := time.Since(now)
+	t.Log(du)
 }
