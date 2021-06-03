@@ -34,23 +34,30 @@ func NewHandler(store raftstore.Store) server.Handler {
 
 func (h *handler) initSupportCMDs() {
 	h.AddWriteFunc(set, h.set)
-	h.AddReadFunc(get, h.get)
+	h.AddWriteFunc(bset, h.batchSet)
 	h.AddWriteFunc(incr, h.incr)
+	//h.AddWriteFunc(del,)
+	//h.AddWriteFunc(bdel,)
+	//h.AddWriteFunc(rdel,)
+
+	h.AddReadFunc(get, h.get)
+
 }
 
-func (h *handler) BuildRequest(req *raftcmdpb.Request, msg interface{}) error {
-	op := msg.(*request)
+func (h *handler) BuildRequest(req *raftcmdpb.Request, data interface{}) error {
+	op := data.(KVArgs)
+
 	if _, ok := h.types[op.Op]; !ok {
 		return ErrCMDNotSupport
 	}
-	req.Key = []byte(op.Key)
+	req.Key = op.Args[0]
 	req.CustemType = op.Op
 	req.Type = h.types[op.Op]
-	data, err := json.Marshal(op)
+	cmd, err := json.Marshal(op)
 	if err != nil {
 		return err
 	}
-	req.Cmd = data
+	req.Cmd = cmd
 	return nil
 }
 
@@ -70,29 +77,62 @@ func (h *handler) AddWriteFunc(cmdType uint64, cb command.WriteCommandFunc) {
 	h.store.RegisterWriteFunc(cmdType, cb)
 }
 
-func (h *handler) set(shard bhmetapb.Shard, req *raftcmdpb.Request, c command.Context) (uint64, int64, *raftcmdpb.Response) {
+func (h *handler) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
-	cmd := request{}
-	err := json.Unmarshal(req.Cmd, &cmd)
+
+	args := &KVArgs{}
+	err := json.Unmarshal(req.Cmd, &args)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
-	err = h.getPebbleByGroup(shard.Group).Set(req.Key, []byte(cmd.Value))
+	if len(args.Args) <= 1 {
+		resp.Value = errorResp(ErrInvalidValue)
+		return 0, 0, resp
+	}
+	err = h.getPebbleByGroup(shard.Group).Set(req.Key, args.Args[1])
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
-	writtenBytes := uint64(len(req.Key) + len(cmd.Value))
+	writtenBytes := uint64(len(req.Key) + len(args.Args[1]))
 	changedBytes := int64(writtenBytes)
 	resp.Value = statusResp
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *handler) get(shard bhmetapb.Shard, req *raftcmdpb.Request, c command.Context) (*raftcmdpb.Response, uint64) {
+func (h *handler) batchSet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
-	cmd := request{}
-	err := json.Unmarshal(req.Cmd, &cmd)
+
+	args := &KVArgs{}
+	err := json.Unmarshal(req.Cmd, &args)
+	if err != nil {
+		resp.Value = errorResp(err)
+		return 0, 0, resp
+	}
+	if len(args.Args)%2 != 0 {
+		resp.Value = errorResp(ErrInvalidValue)
+		return 0, 0, resp
+	}
+
+	writtenBytes := uint64(0)
+	for i := 0; i < len(args.Args)/2; i++ {
+		key := raftstore.EncodeDataKey(shard.Group, args.Args[2*i])
+		err = ctx.WriteBatch().Set(key, args.Args[2*i+1])
+		writtenBytes += uint64(len(key))
+		writtenBytes += uint64(len(args.Args[2*i+1]))
+	}
+	changedBytes := int64(writtenBytes)
+	resp.Value = statusResp
+	return writtenBytes, changedBytes, resp
+}
+
+func (h *handler) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+	resp := pb.AcquireResponse()
+
+	args := &KVArgs{}
+	err := json.Unmarshal(req.Cmd, &args)
+
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
@@ -109,8 +149,9 @@ func (h *handler) get(shard bhmetapb.Shard, req *raftcmdpb.Request, c command.Co
 func (h *handler) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
-	cmd := request{}
-	err := json.Unmarshal(req.Cmd, &cmd)
+	args := &KVArgs{}
+	err := json.Unmarshal(req.Cmd, &args)
+
 	if err != nil {
 		resp.Value = []byte(err.Error())
 		return 0, 0, resp
@@ -138,7 +179,7 @@ func (h *handler) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command
 		return 0, 0, resp
 	}
 
-	writtenBytes := uint64(len(req.Key) + len(cmd.Value))
+	writtenBytes := uint64(len(req.Key))
 	changedBytes := int64(writtenBytes)
 	resp.Value = newV
 	return writtenBytes, changedBytes, resp
@@ -152,8 +193,8 @@ func errorResp(err error) []byte {
 	return []byte(err.Error())
 }
 
-type request struct {
+/*type request struct {
 	Op    uint64 `json:"json:op_type"`
-	Key   string `json:"key"`
-	Value string `json:"value,omitempty"`
-}
+	Key   []byte `json:"key"`
+	Value [][]byte `json:"value,omitempty"`
+}*/
