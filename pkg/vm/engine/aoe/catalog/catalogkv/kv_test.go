@@ -140,29 +140,33 @@ func TestClusterStartAndStop(t *testing.T) {
 }
 
 func setTest(c *testCluster) ([]byte, error) {
-	return c.applications[0].Exec(&request{
-		Op:    uint64(1),
-		Key:   "hello",
-		Value: "world",
+	return c.applications[0].Exec(KVArgs{
+		Op: uint64(1),
+		Args: [][]byte{
+			[]byte("hello"),
+			[]byte("world"),
+		},
 	}, 1*time.Second)
 }
 
 func getTest(c *testCluster) ([]byte, error) {
-	return c.applications[0].Exec(&request{
-		Op:  uint64(10000),
-		Key: "hello",
+	return c.applications[0].Exec(KVArgs{
+		Op: uint64(10000),
+		Args: [][]byte{
+			[]byte("hello"),
+		},
 	}, 1*time.Second)
 }
 
 func incrTest(c *testCluster, incrKey string, times uint64) ([]byte, error) {
-	cmdAlloc := request{
-		Op:  uint64(3),
-		Key: incrKey,
+	cmdAlloc := KVArgs{
+		Op:   uint64(2),
+		Args: [][]byte{[]byte(incrKey)},
 	}
 	var value []byte
 	var err error
 	for i := uint64(0); i < times; i++ {
-		value, err = c.applications[0].Exec(&cmdAlloc, 1*time.Second)
+		value, err = c.applications[0].Exec(cmdAlloc, 1*time.Second)
 		if err != nil {
 			break
 		}

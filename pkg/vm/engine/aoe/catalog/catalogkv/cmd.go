@@ -3,11 +3,10 @@ package catalogkv
 const (
 	// write cmd
 	set  uint64 = 1 // set
-	mset uint64 = 2 // multi set
-	incr uint64 = 3 // incr
-	del  uint64 = 4 // delete
-	bdel uint64 = 5 // batch delete
-	rdel uint64 = 6 // range delete
+	incr uint64 = 2 // incr
+	del  uint64 = 3 // delete
+	bdel uint64 = 4 // batch delete
+	rdel uint64 = 5 // range delete
 
 	// read cmd
 	get  uint64 = 10000
