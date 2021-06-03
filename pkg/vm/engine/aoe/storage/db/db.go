@@ -8,6 +8,9 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle"
+	ih "matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"os"
@@ -36,7 +39,8 @@ type DB struct {
 	MutableBufMgr   bmgrif.IBufferManager
 	TableDataBufMgr bmgrif.IBufferManager
 
-	MetaInfo *md.MetaInfo
+	MetaInfo  *md.MetaInfo
+	DataTable table.ITableData
 
 	DataDir  *os.File
 	FileLock io.Closer
@@ -100,6 +104,32 @@ func cleanStaleMeta(dirname string) {
 			panic(err)
 		}
 	}
+}
+
+func (d *DB) NewSegmentIter(o *e.IterOptions) ih.ISegmentIterator {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	var h *handle.SegmentsHandle
+	if o.All {
+		h = handle.NewAllSegmentsHandle(o.ColIdxes, d.DataTable)
+	} else {
+		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, d.DataTable)
+	}
+	return h.NewSegIt()
+}
+
+func (d *DB) NewBlockIter(o *e.IterOptions) ih.IBlockIterator {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	var h *handle.SegmentsHandle
+	if o.All {
+		h = handle.NewAllSegmentsHandle(o.ColIdxes, d.DataTable)
+	} else {
+		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, d.DataTable)
+	}
+	return h.NewBlkIt()
 }
 
 func (d *DB) TableIDs() (ids []uint64, err error) {

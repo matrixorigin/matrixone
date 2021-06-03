@@ -1,6 +1,8 @@
 package base
 
-import "io"
+import (
+	"io"
+)
 
 type IBlockHandle interface {
 	io.Closer
