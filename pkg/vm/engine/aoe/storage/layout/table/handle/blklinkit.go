@@ -28,6 +28,7 @@ func (it *BlockLinkIterator) Next() {
 	h := it.SegIt.GetSegmentHandle()
 	it.BlkIt.Close()
 	it.BlkIt = h.NewIterator()
+	h.Close()
 }
 
 func (it *BlockLinkIterator) Close() error {

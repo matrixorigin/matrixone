@@ -45,6 +45,7 @@ func (sh *SegmentsHandle) NewBlkIt() base.IBlockIterator {
 		SegIt: segIt,
 		BlkIt: h.NewIterator(),
 	}
+	h.Close()
 	return it
 }
 

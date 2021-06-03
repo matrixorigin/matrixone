@@ -9,6 +9,7 @@ type IBlockHandle interface {
 }
 
 type ISegmentHandle interface {
+	io.Closer
 	NewIterator() IBlockIterator
 }
 

@@ -1,7 +1,7 @@
 package handle
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
 )
 
@@ -30,10 +30,8 @@ func (ssit *SegmentIt) Close() error {
 }
 
 func (ssit *SegmentIt) GetSegmentHandle() base.ISegmentHandle {
-	h := &SegmentHandle{
-		ID:   ssit.Handle.IDS[ssit.Pos],
-		Cols: make([]col.IColumnSegment, 0),
-	}
+	h := segHandlePool.Get().(*SegmentHandle)
+	h.ID = ssit.Handle.IDS[ssit.Pos]
 	for idx := range ssit.Handle.ColIdxes {
 		colData := ssit.Handle.TableData.GetCollumn(idx)
 		h.Cols = append(h.Cols, colData.GetSegment(h.ID))

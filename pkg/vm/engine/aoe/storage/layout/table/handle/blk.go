@@ -28,6 +28,7 @@ type BlockHandle struct {
 
 func (bh *BlockHandle) Close() error {
 	if bhh := bh; bhh != nil {
+		bhh.Cols = bhh.Cols[:0]
 		blkHandlePool.Put(bhh)
 		bh = nil
 	}
