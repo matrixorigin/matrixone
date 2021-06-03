@@ -122,11 +122,11 @@ func TestClusterStartAndStop(t *testing.T) {
 	assert.NoError(t, c.start())
 	stdLog.Printf("app all started.")
 
-	resp, err := setTest(c)
+	resp, err := setTest([]byte("hello"), []byte("world"), c)
 	assert.NoError(t, err)
 	assert.Equal(t, "OK", string(resp))
 
-	value, err := getTest(c)
+	value, err := getTest([]byte("hello"), c)
 	assert.NoError(t, err)
 	assert.Equal(t, value, []byte("world"))
 
@@ -137,23 +137,45 @@ func TestClusterStartAndStop(t *testing.T) {
 	cid, err := incrTest(c, "table-1-col-id", 11)
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(11), format.MustBytesToUint64(cid))
+
+	resp, err = batchSetTest([][]byte{
+		[]byte("bk1"),
+		[]byte("bv1"),
+		[]byte("bk2"),
+		[]byte("bv2"),
+	}, c)
+	assert.NoError(t, err)
+	value, err = getTest([]byte("bk1"), c)
+	assert.NoError(t, err)
+	assert.Equal(t, value, []byte("bv1"))
+	value, err = getTest([]byte("bk2"), c)
+	assert.NoError(t, err)
+	assert.Equal(t, value, []byte("bv2"))
+
 }
 
-func setTest(c *testCluster) ([]byte, error) {
+func setTest(key []byte, value []byte, c *testCluster) ([]byte, error) {
 	return c.applications[0].Exec(KVArgs{
 		Op: uint64(1),
 		Args: [][]byte{
-			[]byte("hello"),
-			[]byte("world"),
+			key,
+			value,
 		},
 	}, 1*time.Second)
 }
 
-func getTest(c *testCluster) ([]byte, error) {
+func batchSetTest(pairs [][]byte, c *testCluster) ([]byte, error) {
+	return c.applications[0].Exec(KVArgs{
+		Op:   uint64(6),
+		Args: pairs,
+	}, 1*time.Second)
+}
+
+func getTest(key []byte, c *testCluster) ([]byte, error) {
 	return c.applications[0].Exec(KVArgs{
 		Op: uint64(10000),
 		Args: [][]byte{
-			[]byte("hello"),
+			key,
 		},
 	}, 1*time.Second)
 }
