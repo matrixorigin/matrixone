@@ -4,8 +4,8 @@ import (
 	"context"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
@@ -28,7 +28,7 @@ type MemTable struct {
 	Full      bool
 	Columns   []col.IColumnBlock
 	Cursors   []col.IScanCursor
-	ID        layout.ID
+	ID        common.ID
 	Types     []types.Type
 }
 
@@ -61,7 +61,7 @@ func NewMemTable(tableData table.ITableData, colTypes []types.Type, columnBlocks
 	return mt
 }
 
-func (mt *MemTable) GetID() layout.ID {
+func (mt *MemTable) GetID() common.ID {
 	return mt.ID
 }
 

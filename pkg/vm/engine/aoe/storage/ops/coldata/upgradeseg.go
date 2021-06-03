@@ -1,13 +1,13 @@
 package coldata
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	// log "github.com/sirupsen/logrus"
 )
 
-func NewUpgradeSegOp(ctx *OpCtx, segID layout.ID, td table.ITableData) *UpgradeSegOp {
+func NewUpgradeSegOp(ctx *OpCtx, segID common.ID, td table.ITableData) *UpgradeSegOp {
 	op := &UpgradeSegOp{
 		SegmentID: segID,
 		TableData: td,
@@ -18,7 +18,7 @@ func NewUpgradeSegOp(ctx *OpCtx, segID layout.ID, td table.ITableData) *UpgradeS
 
 type UpgradeSegOp struct {
 	Op
-	SegmentID layout.ID
+	SegmentID common.ID
 	TableData table.ITableData
 	Segments  []col.IColumnSegment
 }

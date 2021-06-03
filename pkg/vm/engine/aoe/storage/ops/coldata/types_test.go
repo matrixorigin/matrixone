@@ -6,7 +6,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
@@ -22,7 +22,7 @@ func makeBufMagr(capacity uint64) mgrif.IBufferManager {
 	return bufMgr
 }
 
-func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id layout.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
+func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
 	colType := types.Type{types.T_int32, 4, 4, 0}
 	seg := col.NewColumnSegment(id, colIdx, colType, col.UNSORTED_SEG)
 	blk_id := id
@@ -33,9 +33,9 @@ func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id layout.ID, blkCnt i
 	return seg
 }
 
-func makeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typeSize uint64, tableData table.ITableData, t *testing.T) []layout.ID {
-	baseid := layout.ID{}
-	var segIDs []layout.ID
+func makeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typeSize uint64, tableData table.ITableData, t *testing.T) []common.ID {
+	baseid := common.ID{}
+	var segIDs []common.ID
 	for i := 0; i < segCnt; i++ {
 		var colSegs []col.IColumnSegment
 		seg_id := baseid.NextSegment()

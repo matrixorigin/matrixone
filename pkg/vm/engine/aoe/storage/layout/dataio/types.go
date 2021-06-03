@@ -1,7 +1,7 @@
 package dataio
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type Pointer struct {
@@ -11,7 +11,7 @@ type Pointer struct {
 
 type Key struct {
 	Col uint64
-	ID  layout.ID
+	ID  common.ID
 	// BlockID uint64
 	// PartID  uint32
 }

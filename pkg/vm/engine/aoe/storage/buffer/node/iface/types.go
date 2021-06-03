@@ -3,7 +3,7 @@ package iface
 import (
 	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	"sync/atomic"
 )
@@ -65,14 +65,14 @@ const (
 
 type INodeBuffer interface {
 	buf.IBuffer
-	GetID() layout.ID
+	GetID() common.ID
 	// GetType() BufferType
 }
 
 type INodeHandle interface {
 	sync.Locker
 	io.Closer
-	GetID() layout.ID
+	GetID() common.ID
 	Unload()
 	// Loadable() bool
 	Unloadable() bool
@@ -101,5 +101,5 @@ type INodeHandle interface {
 
 type IBufferHandle interface {
 	io.Closer
-	GetID() layout.ID
+	GetID() common.ID
 }

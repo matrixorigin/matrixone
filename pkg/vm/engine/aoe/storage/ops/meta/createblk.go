@@ -1,7 +1,7 @@
 package meta
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -75,7 +75,7 @@ func (op *CreateBlkOp) Execute() error {
 }
 
 func (op *CreateBlkOp) registerTableData(blk *md.Block) {
-	blk_id := layout.ID{
+	blk_id := common.ID{
 		TableID:   blk.TableID,
 		SegmentID: blk.SegmentID,
 		BlockID:   blk.ID,

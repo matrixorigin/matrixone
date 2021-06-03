@@ -6,7 +6,7 @@ package dataio
 // )
 
 // type PartReader struct {
-// 	ID          layout.ID
+// 	ID          common.ID
 // 	SegmentFile ISegmentFile
 // }
 
