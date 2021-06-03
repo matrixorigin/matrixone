@@ -16,6 +16,7 @@ type ITableData interface {
 	GetRowCount() uint64
 	GetID() uint64
 	GetCollumns() []col.IColumnData
+	GetCollumn(int) col.IColumnData
 	GetColTypeSize(idx int) uint64
 	GetColTypes() []types.Type
 	GetBufMgr() bmgrif.IBufferManager
@@ -79,6 +80,13 @@ func (td *TableData) GetID() uint64 {
 
 func (td *TableData) GetColTypes() []types.Type {
 	return td.ColType
+}
+
+func (td *TableData) GetCollumn(idx int) col.IColumnData {
+	if idx >= len(td.ColType) {
+		panic("logic error")
+	}
+	return td.Columns[idx]
 }
 
 func (td *TableData) GetCollumns() []col.IColumnData {

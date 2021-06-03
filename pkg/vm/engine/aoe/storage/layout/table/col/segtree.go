@@ -19,6 +19,7 @@ type ISegmentTree interface {
 	GetRoot() IColumnSegment
 	GetTail() IColumnSegment
 	Depth() uint64
+	GetSegment(common.ID) IColumnSegment
 	// ReferenceOther(other ISegmentTree)
 
 	// Modifier
@@ -89,6 +90,16 @@ func (tree *SegmentTree) GetTail() IColumnSegment {
 		return nil
 	}
 	return tree.data.Segments[len(tree.data.Segments)-1]
+}
+
+func (tree *SegmentTree) GetSegment(segID common.ID) IColumnSegment {
+	tree.data.RLock()
+	idx, ok := tree.data.Helper[segID]
+	defer tree.data.RUnlock()
+	if !ok {
+		return nil
+	}
+	return tree.data.Segments[idx]
 }
 
 func (tree *SegmentTree) UpgradeBlock(blkID common.ID) IColumnBlock {

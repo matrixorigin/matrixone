@@ -21,6 +21,7 @@ type IColumnData interface {
 	SegmentCount() uint64
 	GetSegmentRoot() IColumnSegment
 	GetSegmentTail() IColumnSegment
+	GetSegment(common.ID) IColumnSegment
 	GetColIdx() int
 	RegisterSegment(id common.ID) (seg IColumnSegment, err error)
 	RegisterBlock(bufMgr bmgrif.IBufferManager, id common.ID, maxRows uint64) (blk IColumnBlock, err error)
@@ -110,6 +111,10 @@ func (cdata *ColumnData) UpgradeBlock(blkID common.ID) IColumnBlock {
 
 func (cdata *ColumnData) UpgradeSegment(segID common.ID) IColumnSegment {
 	return cdata.SegTree.UpgradeSegment(segID)
+}
+
+func (cdata *ColumnData) GetSegment(segID common.ID) IColumnSegment {
+	return cdata.SegTree.GetSegment(segID)
 }
 
 func (cdata *ColumnData) InitScanCursor(cursor *ScanCursor) error {
