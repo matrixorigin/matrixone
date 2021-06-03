@@ -102,6 +102,32 @@ func cleanStaleMeta(dirname string) {
 	}
 }
 
+func (d *DB) TableIDs() (ids []uint64, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	tids := d.MetaInfo.TableIDs()
+	for tid := range tids {
+		ids = append(ids, tid)
+	}
+	return ids, err
+}
+
+func (d *DB) TableSegmentIDs(tableID uint64) (ids []layout.ID, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	sids, err := d.MetaInfo.TableSegmentIDs(tableID)
+	if err != nil {
+		return ids, err
+	}
+	// TODO: Refactor metainfo to 1. keep order 2. use layout.ID
+	for sid := range sids {
+		ids = append(ids, layout.ID{TableID: tableID, SegmentID: sid})
+	}
+	return ids, err
+}
+
 func (d *DB) validateAndCleanStaleData() {
 	expectFiles := make(map[string]bool)
 	for _, tbl := range d.MetaInfo.Tables {
