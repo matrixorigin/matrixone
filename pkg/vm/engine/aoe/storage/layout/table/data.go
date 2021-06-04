@@ -1,6 +1,7 @@
 package table
 
 import (
+	"errors"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
@@ -135,4 +136,52 @@ func (td *TableData) AppendColSegments(colSegs []col.IColumnSegment) {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
 	}
+}
+
+type Tables struct {
+	sync.RWMutex
+	Data      map[uint64]ITableData
+	Ids       map[uint64]bool
+	Tombstone map[uint64]ITableData
+}
+
+func (ts *Tables) TableIds() (ids map[uint64]bool) {
+	ts.RLock()
+	defer ts.RUnlock()
+	return ts.Ids
+}
+
+func (ts *Tables) DropTable(tid uint64) (err error) {
+	ts.Lock()
+	defer ts.Unlock()
+	tbl, ok := ts.Data[tid]
+	if !ok {
+		return errors.New(fmt.Sprintf("Specified table %d not found", tid))
+	}
+	ts.Tombstone[tid] = tbl
+	delete(ts.Ids, tid)
+	delete(ts.Data, tid)
+	return nil
+}
+
+func (ts *Tables) GetTable(tid uint64) (tbl ITableData, err error) {
+	ts.RLock()
+	defer ts.RUnlock()
+	tbl, ok := ts.Data[tbl.GetID()]
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("Specified table %d not found", tid))
+	}
+	return tbl, err
+}
+
+func (ts *Tables) CreateTable(tbl ITableData) (err error) {
+	ts.Lock()
+	defer ts.Unlock()
+	_, ok := ts.Data[tbl.GetID()]
+	if ok {
+		return errors.New(fmt.Sprintf("Dup table %d found", tbl.GetID()))
+	}
+	ts.Ids[tbl.GetID()] = true
+	ts.Data[tbl.GetID()] = tbl
+	return nil
 }

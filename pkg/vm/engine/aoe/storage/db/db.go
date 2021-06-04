@@ -39,8 +39,8 @@ type DB struct {
 	MutableBufMgr   bmgrif.IBufferManager
 	TableDataBufMgr bmgrif.IBufferManager
 
-	MetaInfo  *md.MetaInfo
-	DataTable table.ITableData
+	MetaInfo   *md.MetaInfo
+	DataTables table.Tables
 
 	DataDir  *os.File
 	FileLock io.Closer
@@ -106,30 +106,38 @@ func cleanStaleMeta(dirname string) {
 	}
 }
 
-func (d *DB) NewSegmentIter(o *e.IterOptions) ih.ISegmentIterator {
+func (d *DB) NewSegmentIter(o *e.IterOptions) (ih.ISegmentIterator, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
+	tableData, err := d.DataTables.GetTable(o.TableID)
+	if err != nil {
+		return nil, err
+	}
 	var h *handle.SegmentsHandle
 	if o.All {
-		h = handle.NewAllSegmentsHandle(o.ColIdxes, d.DataTable)
+		h = handle.NewAllSegmentsHandle(o.ColIdxes, tableData)
 	} else {
-		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, d.DataTable)
+		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, tableData)
 	}
-	return h.NewSegIt()
+	return h.NewSegIt(), nil
 }
 
-func (d *DB) NewBlockIter(o *e.IterOptions) ih.IBlockIterator {
+func (d *DB) NewBlockIter(o *e.IterOptions) (ih.IBlockIterator, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
+	tableData, err := d.DataTables.GetTable(o.TableID)
+	if err != nil {
+		return nil, err
+	}
 	var h *handle.SegmentsHandle
 	if o.All {
-		h = handle.NewAllSegmentsHandle(o.ColIdxes, d.DataTable)
+		h = handle.NewAllSegmentsHandle(o.ColIdxes, tableData)
 	} else {
-		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, d.DataTable)
+		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, tableData)
 	}
-	return h.NewBlkIt()
+	return h.NewBlkIt(), nil
 }
 
 func (d *DB) TableIDs() (ids []uint64, err error) {
