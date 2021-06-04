@@ -2,6 +2,7 @@ package tree
 
 import (
 	"log"
+	//"reflect"
 	"testing"
 )
 
@@ -9,6 +10,7 @@ func TestParse(t *testing.T) {
 	type args struct {
 		sql string
 	}
+
 	_,s :=gen_transform_t15()
 
 	sql :=`SELECT u.a,(SELECT t.a FROM sa.t,u)
@@ -69,3 +71,4 @@ func TestParse2(t *testing.T) {
 	//	fmt.Printf("%s\n",st)
 	//}
 }
+
