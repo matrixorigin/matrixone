@@ -83,10 +83,11 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		MemTableMgr:     memtblMgr,
 		MutableBufMgr:   mutBufMgr,
 		TableDataBufMgr: dataBufMgr,
-		MetaInfo:        opts.Meta.Info,
 		ClosedC:         make(chan struct{}),
 		Closed:          new(atomic.Value),
 	}
+
+	db.store.MetaInfo = opts.Meta.Info
 
 	cleanStaleMeta(opts.Meta.Conf.Dir)
 	db.validateAndCleanStaleData()

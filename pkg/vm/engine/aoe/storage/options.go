@@ -12,6 +12,7 @@ import (
 )
 
 type IterOptions struct {
+	TableName  string
 	TableID    uint64
 	All        bool
 	ColIdxes   []int

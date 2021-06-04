@@ -23,6 +23,16 @@ func NewMetaInfo(conf *Configuration) *MetaInfo {
 	return info
 }
 
+func (info *MetaInfo) ReferenceTableByName(name string) (tbl *Table, err error) {
+	info.RLock()
+	defer info.RUnlock()
+	id, ok := info.NameMap[name]
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("specified table %s not found in info", name))
+	}
+	return info.Tables[id], nil
+}
+
 func (info *MetaInfo) ReferenceTable(table_id uint64) (tbl *Table, err error) {
 	info.RLock()
 	defer info.RUnlock()

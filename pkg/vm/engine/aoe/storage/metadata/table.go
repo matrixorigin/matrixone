@@ -3,6 +3,7 @@ package md
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -161,7 +162,12 @@ func (tbl *Table) RegisterSegment(seg *Segment) error {
 		return errors.New(fmt.Sprintf("Duplicate segment %d found in table %d", seg.GetID(), tbl.ID))
 	}
 	tbl.Segments[seg.GetID()] = seg
+	atomic.StoreUint64(&tbl.SegmentCnt, uint64(len(tbl.Segments)))
 	return nil
+}
+
+func (tbl *Table) GetSegmentCount() uint64 {
+	return atomic.LoadUint64(&tbl.SegmentCnt)
 }
 
 func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {

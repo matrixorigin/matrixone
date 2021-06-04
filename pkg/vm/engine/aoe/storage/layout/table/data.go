@@ -137,6 +137,10 @@ func (ts *Tables) TableIds() (ids map[uint64]bool) {
 func (ts *Tables) DropTable(tid uint64) (err error) {
 	ts.Lock()
 	defer ts.Unlock()
+	return ts.DropTableNoLock(tid)
+}
+
+func (ts *Tables) DropTableNoLock(tid uint64) (err error) {
 	tbl, ok := ts.Data[tid]
 	if !ok {
 		return errors.New(fmt.Sprintf("Specified table %d not found", tid))
@@ -147,9 +151,7 @@ func (ts *Tables) DropTable(tid uint64) (err error) {
 	return nil
 }
 
-func (ts *Tables) GetTable(tid uint64) (tbl ITableData, err error) {
-	ts.RLock()
-	defer ts.RUnlock()
+func (ts *Tables) GetTableNoLock(tid uint64) (tbl ITableData, err error) {
 	tbl, ok := ts.Data[tbl.GetID()]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("Specified table %d not found", tid))
@@ -157,9 +159,19 @@ func (ts *Tables) GetTable(tid uint64) (tbl ITableData, err error) {
 	return tbl, err
 }
 
+func (ts *Tables) GetTable(tid uint64) (tbl ITableData, err error) {
+	ts.RLock()
+	defer ts.RUnlock()
+	return ts.GetTableNoLock(tid)
+}
+
 func (ts *Tables) CreateTable(tbl ITableData) (err error) {
 	ts.Lock()
 	defer ts.Unlock()
+	return ts.CreateTableNoLock(tbl)
+}
+
+func (ts *Tables) CreateTableNoLock(tbl ITableData) (err error) {
 	_, ok := ts.Data[tbl.GetID()]
 	if ok {
 		return errors.New(fmt.Sprintf("Dup table %d found", tbl.GetID()))

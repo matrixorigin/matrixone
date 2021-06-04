@@ -88,10 +88,11 @@ type Table struct {
 	BoundSate
 	sync.RWMutex
 	TimeStamp
-	ID       uint64
-	Segments map[uint64]*Segment
-	Info     *MetaInfo `json:"-"`
-	Schema   *Schema
+	ID         uint64
+	Segments   map[uint64]*Segment
+	SegmentCnt uint64
+	Info       *MetaInfo `json:"-"`
+	Schema     *Schema
 }
 
 type Configuration struct {
