@@ -31,7 +31,8 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Equal(t, uint64(0), info.Sequence.NextSegmentID)
 	assert.Equal(t, uint64(0), info.Sequence.NextTableID)
 
-	tbl, err := info.CreateTable()
+	schema := md.MockSchema(2)
+	tbl, err := info.CreateTable(schema)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1), info.Sequence.NextTableID)
 
@@ -48,7 +49,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.Serialize(w)
 	assert.Nil(t, err)
 
-	tbl, err = info.CreateTable()
+	tbl, err = info.CreateTable(schema)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), info.Sequence.NextTableID)
 	err = info.RegisterTable(tbl)

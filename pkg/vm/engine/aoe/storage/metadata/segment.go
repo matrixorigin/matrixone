@@ -9,7 +9,7 @@ const (
 	SEGMENT_BLOCK_COUNT = 4
 )
 
-func NewSegment(info *MetaInfo, table_id, id uint64) *Segment {
+func NewSegment(info *MetaInfo, table_id, id uint64, schema *Schema) *Segment {
 	seg := &Segment{
 		ID:            id,
 		TableID:       table_id,
@@ -17,6 +17,7 @@ func NewSegment(info *MetaInfo, table_id, id uint64) *Segment {
 		TimeStamp:     *NewTimeStamp(),
 		MaxBlockCount: SEGMENT_BLOCK_COUNT,
 		Info:          info,
+		Schema:        schema,
 	}
 	return seg
 }
@@ -49,7 +50,7 @@ func (seg *Segment) BlockIDs(args ...interface{}) map[uint64]uint64 {
 }
 
 func (seg *Segment) CreateBlock() (blk *Block, err error) {
-	blk = NewBlock(seg.TableID, seg.ID, seg.Info.Sequence.GetBlockID(), seg.Info.Conf.BlockMaxRows)
+	blk = NewBlock(seg.TableID, seg.ID, seg.Info.Sequence.GetBlockID(), seg.Info.Conf.BlockMaxRows, seg.Schema)
 	return blk, err
 }
 
@@ -172,7 +173,7 @@ func (seg *Segment) Copy(ts ...int64) *Segment {
 	} else {
 		t = ts[0]
 	}
-	new_seg := NewSegment(seg.Info, seg.TableID, seg.ID)
+	new_seg := NewSegment(seg.Info, seg.TableID, seg.ID, seg.Schema)
 	new_seg.TimeStamp = seg.TimeStamp
 	new_seg.MaxBlockCount = seg.MaxBlockCount
 	new_seg.DataState = seg.DataState

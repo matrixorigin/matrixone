@@ -86,7 +86,8 @@ func TestCollection(t *testing.T) {
 	opts.Data.Sorter.Start()
 	opts.MemData.Updater.Start()
 
-	opCtx := mops.OpCtx{Opts: opts}
+	schema := md.MockSchema(2)
+	opCtx := mops.OpCtx{Opts: opts, Schema: schema}
 	op := mops.NewCreateTblOp(&opCtx)
 	op.Push()
 	err := op.WaitDone()

@@ -79,8 +79,11 @@ func (info *MetaInfo) TableIDs(args ...int64) map[uint64]uint64 {
 	return ids
 }
 
-func (info *MetaInfo) CreateTable() (tbl *Table, err error) {
-	tbl = NewTable(info, info.Sequence.GetTableID())
+func (info *MetaInfo) CreateTable(schema *Schema) (tbl *Table, err error) {
+	if !schema.Valid() {
+		return nil, errors.New("invalid schema")
+	}
+	tbl = NewTable(info, schema, info.Sequence.GetTableID())
 	return tbl, err
 }
 

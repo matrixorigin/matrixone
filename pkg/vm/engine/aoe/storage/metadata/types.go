@@ -1,6 +1,7 @@
 package md
 
 import (
+	"matrixone/pkg/container/types"
 	"sync"
 )
 
@@ -50,6 +51,7 @@ type Block struct {
 	PrevIndex   *LogIndex
 	DeleteIndex *uint64
 	DataState   DataState
+	Schema      *Schema `json:"-"`
 }
 
 type Sequence struct {
@@ -68,6 +70,17 @@ type Segment struct {
 	Blocks        map[uint64]*Block
 	DataState     DataState
 	Info          *MetaInfo `json:"-"`
+	Schema        *Schema   `json:"-"`
+}
+
+type ColDef struct {
+	Name string
+	Idx  int
+	Type types.Type
+}
+
+type Schema struct {
+	ColDefs []*ColDef
 }
 
 type Table struct {
@@ -77,6 +90,7 @@ type Table struct {
 	ID       uint64
 	Segments map[uint64]*Segment
 	Info     *MetaInfo `json:"-"`
+	Schema   *Schema
 }
 
 type Configuration struct {
