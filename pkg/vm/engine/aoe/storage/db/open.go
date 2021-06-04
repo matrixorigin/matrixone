@@ -70,7 +70,7 @@ func loadMetaInfo(cfg *md.Configuration) *md.MetaInfo {
 }
 
 func Open(dirname string, opts *e.Options) (db *DB, err error) {
-	opts.FillDefaults(db.Dir)
+	opts.FillDefaults(dirname)
 	opts.Meta.Info = loadMetaInfo(opts.Meta.Conf)
 
 	memtblMgr := mt.NewManager(opts)

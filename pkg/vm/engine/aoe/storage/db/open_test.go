@@ -11,17 +11,17 @@ import (
 )
 
 var (
-	TEST_DB_DIR = "/tmp/open_test"
+	TEST_OPEN_DIR = "/tmp/open_test"
 )
 
 func initTest() {
-	os.RemoveAll(TEST_DB_DIR)
+	os.RemoveAll(TEST_OPEN_DIR)
 }
 
 func TestLoadMetaInfo(t *testing.T) {
 	initTest()
 	cfg := &md.Configuration{
-		Dir:              TEST_DB_DIR,
+		Dir:              TEST_OPEN_DIR,
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
@@ -73,7 +73,7 @@ func TestLoadMetaInfo(t *testing.T) {
 func TestCleanStaleMeta(t *testing.T) {
 	initTest()
 	cfg := &md.Configuration{
-		Dir:              TEST_DB_DIR,
+		Dir:              TEST_OPEN_DIR,
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
@@ -120,6 +120,22 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, "100", false)
 	_, err = os.Stat(fname)
+	assert.Nil(t, err)
+}
+
+func TestOpen(t *testing.T) {
+	initTest()
+	cfg := &md.Configuration{
+		Dir:              TEST_OPEN_DIR,
+		SegmentMaxBlocks: 10,
+		BlockMaxRows:     10,
+	}
+	opts := &e.Options{}
+	opts.Meta.Conf = cfg
+	dbi, err := Open(TEST_OPEN_DIR, opts)
+	assert.Nil(t, err)
+	assert.NotNil(t, dbi)
+	err = dbi.Close()
 	assert.Nil(t, err)
 }
 

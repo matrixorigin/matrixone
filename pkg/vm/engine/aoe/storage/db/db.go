@@ -182,6 +182,17 @@ func (d *DB) validateAndCleanStaleData() {
 		}
 	}
 
+	dataDir := e.MakeDataDir(d.Dir)
+	if len(expectFiles) == 0 {
+		if _, err := os.Stat(dataDir); os.IsNotExist(err) {
+			err = os.MkdirAll(dataDir, 0755)
+			if err != nil {
+				panic(fmt.Sprintf("err: %s", err))
+			}
+			return
+		}
+	}
+
 	err := filepath.Walk(e.MakeDataDir(d.Dir), func(p string, info os.FileInfo, err error) error {
 		err = nil
 		if e.IsTempFile(info.Name()) {

@@ -35,10 +35,11 @@ var (
 )
 
 type OpWorker struct {
-	OpC   chan iops.IOp
-	CmdC  chan Cmd
-	State State
-	Wg    sync.WaitGroup
+	OpC      chan iops.IOp
+	CmdC     chan Cmd
+	State    State
+	Wg       sync.WaitGroup
+	ClosedCh chan struct{}
 }
 
 func NewOpWorker(args ...int) *OpWorker {
@@ -53,9 +54,10 @@ func NewOpWorker(args ...int) *OpWorker {
 		}
 	}
 	worker := &OpWorker{
-		OpC:   make(chan iops.IOp, l),
-		CmdC:  make(chan Cmd, l),
-		State: CREATED,
+		OpC:      make(chan iops.IOp, l),
+		CmdC:     make(chan Cmd, l),
+		State:    CREATED,
+		ClosedCh: make(chan struct{}),
 	}
 	return worker
 }
@@ -109,6 +111,7 @@ func (w *OpWorker) WaitStop() {
 		w.Wg.Wait()
 		w.CmdC <- QUIT
 	}
+	<-w.ClosedCh
 }
 
 func (w *OpWorker) SendOp(op iops.IOp) bool {
@@ -140,6 +143,7 @@ func (w *OpWorker) onCmd(cmd Cmd) {
 		if !atomic.CompareAndSwapInt32(&w.State, STOPPING_CMD, STOPPED) {
 			panic("logic error")
 		}
+		w.ClosedCh <- struct{}{}
 	default:
 		panic(fmt.Sprintf("Unsupported cmd %d", cmd))
 	}
