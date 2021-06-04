@@ -3,6 +3,7 @@ package catalogkv
 import (
 	"fmt"
 	"github.com/fagongzi/util/format"
+	"github.com/fagongzi/util/hack"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
@@ -14,6 +15,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	stdLog "log"
 	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -117,8 +121,9 @@ func (c *testCluster) stop() {
 func TestClusterStartAndStop(t *testing.T) {
 	defer cleanupTmpDir()
 	c, err := newTestClusterStore(t, nil)
-	assert.NoError(t, err)
+
 	defer c.stop()
+
 	assert.NoError(t, c.start())
 	stdLog.Printf("app all started.")
 
@@ -152,6 +157,21 @@ func TestClusterStartAndStop(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, value, []byte("bv2"))
 
+	tr := tran{
+		completed:  uint64(0),
+		completedC: make(chan int, 1),
+	}
+	tr.setAsyncTest(c)
+	assert.Equal(t, uint64(20), tr.successed)
+	tr.kvCache.Range(func(key, value interface{}) bool {
+		keySuffix := strings.Split(key.(string), "-")
+		valueSuffix := strings.Split(hack.SliceToString(value.([]byte)), "-")
+		assert.Equal(t, 3, len(keySuffix))
+		assert.Equal(t, 3, len(valueSuffix))
+		assert.Equal(t, keySuffix[2], valueSuffix[2])
+		return true
+	})
+	stdLog.Println("test complete")
 }
 
 func setTest(key []byte, value []byte, c *testCluster) ([]byte, error) {
@@ -162,6 +182,61 @@ func setTest(key []byte, value []byte, c *testCluster) ([]byte, error) {
 			value,
 		},
 	}, 1*time.Second)
+}
+
+type tran struct {
+	successed  uint64
+	completed  uint64
+	kvCache    sync.Map
+	completedC chan int
+}
+
+func (t *tran) setAsyncTest(c *testCluster) {
+
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("async-key-%d", i))
+		value := []byte(fmt.Sprintf("async-value-%d", i))
+		c.applications[0].AsyncExec(KVArgs{
+			Op: uint64(1),
+			Args: [][]byte{
+				key,
+				value,
+			},
+		}, func(arg interface{}, value []byte, err error) {
+			completed := atomic.AddUint64(&t.completed, 1)
+			if err != nil {
+				stdLog.Printf("%v failed", string(arg.([]byte)))
+			} else {
+				atomic.AddUint64(&t.successed, 1)
+			}
+			if completed == uint64(10) {
+				t.completedC <- 0
+			}
+		}, key)
+	}
+	<-t.completedC
+	t.completed = uint64(0)
+	for i := 0; i < 10; i++ {
+		key := []byte(fmt.Sprintf("async-key-%d", i))
+		c.applications[0].AsyncExec(KVArgs{
+			Op: uint64(10000),
+			Args: [][]byte{
+				key,
+			},
+		}, func(arg interface{}, value []byte, err error) {
+			completed := atomic.AddUint64(&t.completed, 1)
+			if err != nil {
+				stdLog.Printf("%v failed", string(arg.([]byte)))
+			} else {
+				atomic.AddUint64(&t.successed, 1)
+				t.kvCache.Store(hack.SliceToString(arg.([]byte)), value)
+			}
+			if completed == uint64(10) {
+				t.completedC <- 0
+			}
+		}, key)
+	}
+	<-t.completedC
 }
 
 func batchSetTest(pairs [][]byte, c *testCluster) ([]byte, error) {
