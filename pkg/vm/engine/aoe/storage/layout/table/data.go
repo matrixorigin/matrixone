@@ -26,24 +26,7 @@ type ITableData interface {
 	UpgradeBlock(blkID common.ID) (blks []col.IColumnBlock)
 	UpgradeSegment(segID common.ID) (segs []col.IColumnSegment)
 	AppendColSegments(colSegs []col.IColumnSegment)
-	// Scan()
 }
-
-// type IColumnDef interface {
-// 	GetType() interface{}
-// 	TypeSize() uint64
-// }
-
-// type MockColumnDef struct {
-// }
-
-// func (c *MockColumnDef) GetType() interface{} {
-// 	return nil
-// }
-
-// func (c *MockColumnDef) TypeSize() uint64 {
-// 	return uint64(4)
-// }
 
 func NewTableData(bufMgr bmgrif.IBufferManager, id uint64, colTypes []types.Type) ITableData {
 	data := &TableData{

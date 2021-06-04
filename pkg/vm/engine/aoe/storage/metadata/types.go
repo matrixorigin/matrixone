@@ -80,6 +80,7 @@ type ColDef struct {
 }
 
 type Schema struct {
+	Name    string
 	ColDefs []*ColDef
 }
 
@@ -105,4 +106,7 @@ type MetaInfo struct {
 	Conf       *Configuration `json:"-"`
 	CheckPoint uint64
 	Tables     map[uint64]*Table
+	TableIds   map[uint64]bool   `json:"-"`
+	NameMap    map[string]uint64 `json:"-"`
+	Tombstone  map[uint64]bool   `json:"-"`
 }

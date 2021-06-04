@@ -32,6 +32,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Equal(t, uint64(0), info.Sequence.NextTableID)
 
 	schema := md.MockSchema(2)
+	schema.Name = "mock1"
 	tbl, err := info.CreateTable(schema)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1), info.Sequence.NextTableID)
@@ -48,8 +49,9 @@ func TestLoadMetaInfo(t *testing.T) {
 	defer w.Close()
 	err = info.Serialize(w)
 	assert.Nil(t, err)
-
-	tbl, err = info.CreateTable(schema)
+	schema2 := md.MockSchema(2)
+	schema2.Name = "mock2"
+	tbl, err = info.CreateTable(schema2)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), info.Sequence.NextTableID)
 	err = info.RegisterTable(tbl)

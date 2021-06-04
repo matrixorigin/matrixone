@@ -14,8 +14,11 @@ import (
 
 func NewMetaInfo(conf *Configuration) *MetaInfo {
 	info := &MetaInfo{
-		Tables: make(map[uint64]*Table),
-		Conf:   conf,
+		Tables:    make(map[uint64]*Table),
+		Conf:      conf,
+		TableIds:  make(map[uint64]bool),
+		NameMap:   make(map[string]uint64),
+		Tombstone: make(map[uint64]bool),
 	}
 	return info
 }
@@ -118,12 +121,18 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	if ok {
 		return errors.New(fmt.Sprintf("Duplicate table %d found in info", tbl.ID))
 	}
+	_, ok = info.NameMap[tbl.Schema.Name]
+	if ok {
+		return errors.New(fmt.Sprintf("Duplicate table %s found in info", tbl.Schema.Name))
+	}
 	err := tbl.Attach()
 	if err != nil {
 		return err
 	}
 
 	info.Tables[tbl.ID] = tbl
+	info.NameMap[tbl.Schema.Name] = tbl.ID
+	info.TableIds[tbl.ID] = true
 	return nil
 }
 
@@ -152,9 +161,7 @@ func (info *MetaInfo) Serialize(w io.Writer) error {
 }
 
 func Deserialize(r io.Reader) (info *MetaInfo, err error) {
-	info = &MetaInfo{
-		Tables: make(map[uint64]*Table),
-	}
+	info = NewMetaInfo(nil)
 	err = dump.NewDecoder(r).Decode(info)
 	if err != nil {
 		return nil, err
@@ -163,6 +170,7 @@ func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 	info.Sequence.NextBlockID = 0
 	info.Sequence.NextSegmentID = 0
 	info.Sequence.NextTableID = 0
+	ts := NowMicro()
 	for k, tbl := range info.Tables {
 		max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()
 		if k > info.Sequence.NextTableID {
@@ -175,6 +183,12 @@ func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 			info.Sequence.NextBlockID = max_tbl_blkid
 		}
 		tbl.Info = info
+		if tbl.IsDeleted(ts) {
+			info.Tombstone[tbl.ID] = true
+		} else {
+			info.TableIds[tbl.ID] = true
+			info.NameMap[tbl.Schema.Name] = tbl.ID
+		}
 	}
 
 	return info, err

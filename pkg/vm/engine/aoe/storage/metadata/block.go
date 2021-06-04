@@ -70,7 +70,7 @@ func (blk *Block) SetIndex(idx LogIndex) {
 
 func (blk *Block) String() string {
 	s := fmt.Sprintf("Blk(%d-%d-%d)[%s]", blk.TableID, blk.SegmentID, blk.ID, blk.TimeStamp.String())
-	if blk.IsDeleted() {
+	if blk.IsDeleted(NowMicro()) {
 		s += "[D]"
 	}
 	if blk.Count == blk.MaxRowCount {

@@ -106,6 +106,8 @@ func cleanStaleMeta(dirname string) {
 	}
 }
 
+// func (d *DB) CreateTable(table)
+
 func (d *DB) NewSegmentIter(o *e.IterOptions) (ih.ISegmentIterator, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)

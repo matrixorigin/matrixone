@@ -18,13 +18,13 @@ func NewTimeStamp() *TimeStamp {
 	return ts
 }
 
-func (ts *TimeStamp) IsDeleted() bool {
-	val := atomic.LoadInt64(&(ts.DeltetedOn))
-	if val == 0 {
-		return false
-	}
-	return true
-}
+// func (ts *TimeStamp) IsDeleted() bool {
+// 	val := atomic.LoadInt64(&(ts.DeltetedOn))
+// 	if val == 0 {
+// 		return false
+// 	}
+// 	return true
+// }
 
 func (ts *TimeStamp) Deltete(t int64) error {
 	val := atomic.LoadInt64(&(ts.DeltetedOn))
@@ -38,14 +38,25 @@ func (ts *TimeStamp) Deltete(t int64) error {
 	return nil
 }
 
-func (ts *TimeStamp) Select(t int64) bool {
+func (ts *TimeStamp) IsDeleted(t int64) bool {
 	delon := atomic.LoadInt64(&(ts.DeltetedOn))
 	if delon != 0 {
 		if delon <= t {
-			return false
+			return true
 		}
 	}
+	return false
+}
+
+func (ts *TimeStamp) IsCreated(t int64) bool {
 	return ts.CreatedOn < t
+}
+
+func (ts *TimeStamp) Select(t int64) bool {
+	if ts.IsDeleted(t) {
+		return false
+	}
+	return ts.IsCreated(t)
 }
 
 func (ts *TimeStamp) String() string {
