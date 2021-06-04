@@ -129,6 +129,8 @@ const (
 	NOT_LIKE                             // NOT LIKE
 	REG_MATCH                            // REG_MATCH
 	NOT_REG_MATCH                        // NOT REG_MATCH
+	IS_DISTINCT_FROM
+	IS_NOT_DISTINCT_FROM
 
 	//reference: https://dev.mysql.com/doc/refman/8.0/en/all-subqueries.html
 	//subquery with ANY,SOME,ALL
@@ -398,4 +400,102 @@ func NewRangeCond(n bool, l, f, t Expr) *RangeCond {
 		From: f,
 		To:   t,
 	}
+}
+
+//Case-When expression.
+type CaseExpr struct {
+	exprImpl
+	Expr  Expr
+	Whens []*When
+	Else  Expr
+}
+
+func NewCaseExpr(e Expr,w []*When,el Expr)*CaseExpr{
+	return &CaseExpr{
+		Expr:  e,
+		Whens: w,
+		Else:  el,
+	}
+}
+
+//When sub-expression.
+type When struct {
+	Cond Expr
+	Val  Expr
+}
+
+func NewWhen(c,v Expr)*When{
+	return &When{
+		Cond: c,
+		Val:  v,
+	}
+}
+
+// IntervalType is the type for time and timestamp units.
+type IntervalType int
+
+const (
+	//an invalid time or timestamp unit
+	INTERVAL_TYPE_INVALID IntervalType = iota
+	//the time or timestamp unit MICROSECOND.
+	INTERVAL_TYPE_MICROSECOND
+	//the time or timestamp unit SECOND.
+	INTERVAL_TYPE_SECOND
+	//the time or timestamp unit MINUTE.
+	INTERVAL_TYPE_MINUTE
+	//the time or timestamp unit HOUR.
+	INTERVAL_TYPE_HOUR
+	//the time or timestamp unit DAY.
+	INTERVAL_TYPE_DAY
+	//the time or timestamp unit WEEK.
+	INTERVAL_TYPE_WEEK
+	//the time or timestamp unit MONTH.
+	INTERVAL_TYPE_MONTH
+	//the time or timestamp unit QUARTER.
+	INTERVAL_TYPE_QUARTER
+	//the time or timestamp unit YEAR.
+	INTERVAL_TYPE_YEAR
+	//the time unit SECOND_MICROSECOND.
+	INTERVAL_TYPE_SECOND_MICROSECOND
+	//the time unit MINUTE_MICROSECOND.
+	INTERVAL_TYPE_MINUTE_MICROSECOND
+	//the time unit MINUTE_SECOND.
+	INTERVAL_TYPE_MINUTE_SECOND
+	//the time unit HOUR_MICROSECOND.
+	INTERVAL_TYPE_HOUR_MICROSECOND
+	//the time unit HOUR_SECOND.
+	INTERVAL_TYPE_HOUR_SECOND
+	//the time unit HOUR_MINUTE.
+	INTERVAL_TYPE_HOUR_MINUTE
+	//the time unit DAY_MICROSECOND.
+	INTERVAL_TYPE_DAY_MICROSECOND
+	//the time unit DAY_SECOND.
+	INTERVAL_TYPE_DAY_SECOND
+	//the time unit DAY_MINUTE.
+	INTERVAL_TYPE_DAYMINUTE
+	//the time unit DAY_HOUR.
+	INTERVAL_TYPE_DAYHOUR
+	//the time unit YEAR_MONTH.
+	INTERVAL_TYPE_YEARMONTH
+)
+
+//INTERVAL / time unit
+type IntervalExpr struct {
+	exprImpl
+	Type IntervalType
+}
+
+func NewIntervalExpr(t IntervalType)*IntervalExpr{
+	return &IntervalExpr{
+		Type:     t,
+	}
+}
+
+//the DEFAULT expression.
+type DefaultVal struct{
+	exprImpl
+}
+
+func NewDefaultVal()*DefaultVal{
+	return &DefaultVal{}
 }

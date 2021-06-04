@@ -33,7 +33,7 @@ type UnresolvedObjectName struct {
 	NumParts int
 
 	//At most three components, in reverse order.
-	//object name, schema, catalog/db.
+	//object name, db/schema, catalog.
 	Parts [3]string
 }
 

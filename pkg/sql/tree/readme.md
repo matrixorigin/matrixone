@@ -10,8 +10,6 @@ ast, err := p.Parse(sql)
 
 # unsupported expression transformers that will be implemented in the future
 
-CaseExpr{}  -> CaseExpr
-DefaultExpr{} -> ColumnItem
 PositionExpr{} -> OrderBy / GroupBy position
 
 ValuesExpr{} -> ValuesClause  keyword: VALUES

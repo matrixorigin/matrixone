@@ -12,6 +12,14 @@ type Select struct {
 	Limit   *Limit
 }
 
+func NewSelect(s SelectStatement,o OrderBy,l *Limit)*Select{
+	return &Select{
+		Select:        s,
+		OrderBy:       o,
+		Limit:         l,
+	}
+}
+
 // OrderBy represents an ORDER BY clause.
 type OrderBy []*Order
 

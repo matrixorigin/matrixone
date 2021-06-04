@@ -32,7 +32,7 @@ type UnresolvedName struct {
 	//the name ends with a star. then the first element is empty in the Parts
 	Star bool
 
-	// Parts are the name components (at most 4: column, table, schema, catalog/db.), in reverse order.
+	// Parts are the name components (at most 4: column, table, db/schema, catalog.), in reverse order.
 	Parts NameParts
 }
 

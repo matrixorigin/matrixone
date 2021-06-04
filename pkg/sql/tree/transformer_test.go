@@ -1,9 +1,11 @@
 package tree
 
 import (
+	"fmt"
 	"github.com/pingcap/parser"
 	"github.com/pingcap/parser/ast"
 	"github.com/pingcap/parser/model"
+	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/parser/opcode"
 	"github.com/pingcap/parser/test_driver"
 	_ "github.com/pingcap/parser/test_driver"
@@ -20,7 +22,8 @@ https://github.com/pingcap/parser/blob/master/docs/quickstart.md
 func TestParser(t *testing.T) {
 	p := parser.New()
 
-	sql := `SELECT u.a,(SELECT t.a FROM sa.t,u)
+	sql := `
+SELECT u.a,(SELECT t.a FROM sa.t,u)
 		from u,(SELECT t.a,u.a FROM sa.t,u where t.a = u.a)
 		where (u.a,u.b,u.c) in (SELECT t.a,u.a,t.b * u.b tubb
 		FROM sa.t join u on t.c = u.c or t.d != u.d
@@ -29,8 +32,7 @@ func TestParser(t *testing.T) {
 		group by t.a,u.a,(t.b+u.b+v.b)
 		having t.a = 'jj' and v.c > 1000
 		order by t.a asc,u.a desc,v.d asc,tubb
-		limit 100,2000)
-
+		limit 100,2000);
 ;`
 
 	stmtNodes, _, err := p.Parse(sql, "", "")
@@ -39,7 +41,25 @@ func TestParser(t *testing.T) {
 		return
 	}
 
-	for _, _ = range stmtNodes {
+	for _, sn := range stmtNodes {
+		switch n := sn.(type) {
+		case *ast.SelectStmt:
+			ss := transformSelectStmtToSelect(n)
+
+			fmt.Printf("ss %v\n",ss.Limit != nil )
+
+		case *ast.SetOprStmt:
+			ss := transformSetOprStmtToSelectStatement(n)
+			if uc,ok := ss.(*Select); !ok{
+
+			}else{
+				fmt.Printf("all %v\n",uc.Limit != nil)
+			}
+		case *ast.InsertStmt:
+			ss := transformInsertStmtToInsert(n)
+
+			fmt.Printf("ss %v\n",ss.Rows != nil)
+		}
 
 	}
 }
@@ -556,6 +576,103 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 
 	t50Want := NewParenExpr(f1)
 
+	//ColumnNameExpr
+	t51 := &ast.ColumnNameExpr{
+		Name:  &ast.ColumnName{
+			Schema: model.CIStr{"sch", "sch"},
+			Table: model.CIStr{"t1", "sch"},
+			Name: model.CIStr{"a", "sch"}},
+		Refer: nil,
+	}
+
+	t51Want,_ := NewUnresolvedName("sch","t1","a")
+
+	//FuncCallExpr
+	t52 := &ast.FuncCallExpr{
+		Tp:     ast.FuncCallExprTypeGeneric,
+		Schema: model.CIStr{"t1","t1"},
+		FnName: model.CIStr{"abs","abs"},
+		Args:   []ast.ExprNode{e1,e2,e3},
+	}
+
+	t52Fname,_ := NewUnresolvedName("t1","abs")
+	t52Want := NewFuncExpr(0,t52Fname,[]Expr{f1,f2,f3},nil)
+
+	//AggregateFuncExpr avg
+	t53 := &ast.AggregateFuncExpr{
+		F:        "avg",
+		Args:     []ast.ExprNode{e1,e2,e3},
+		Distinct: true,
+		Order:    nil,
+	}
+
+	t53Fname,_ := NewUnresolvedName("avg")
+	t53Want := NewFuncExpr(FUNC_TYPE_DISTINCT,t53Fname,[]Expr{f1,f2,f3},nil)
+
+	//FuncCastExpr cast 
+	t54 := &ast.FuncCastExpr{
+		Expr:            e1,
+		Tp:              types.NewFieldType(mysql.TypeFloat),
+		FunctionType:    0,
+		ExplicitCharSet: false,
+	}
+
+	t54Want := NewCastExpr(f1,TYPE_FLOAT)
+
+	//RowExpr (1,2,3,4)
+	t55 := &ast.RowExpr{Values: []ast.ExprNode{e1,e2,e3,e4,&ast.DefaultExpr{}}}
+	t55Want := NewTuple([]Expr{f1,f2,f3,f4,NewDefaultVal()})
+
+	//BetweenExpr
+	t56 := &ast.BetweenExpr{
+		Expr:  e1,
+		Left:  e2,
+		Right: e3,
+		Not:   true,
+	}
+
+	t56Want := NewRangeCond(true,f1,f2,f3)
+
+	//CaseExpr
+	t57When := []*ast.WhenClause{
+		&ast.WhenClause{
+			Expr:   e2,
+			Result: e3,
+		},
+		&ast.WhenClause{
+			Expr:   e4,
+			Result: e5,
+		},
+	}
+	t57 := &ast.CaseExpr{
+		Value:       e1,
+		WhenClauses: t57When,
+		ElseClause:  e6,
+	}
+
+	t57Want_when :=[]*When{
+		&When{Cond: f2,Val:f3},
+		&When{Cond: f4,Val:f5},
+	}
+	t57Want := NewCaseExpr(f1,t57Want_when,f6)
+
+	//TimeUnitExpr
+	t58 := &ast.TimeUnitExpr{Unit: ast.TimeUnitSecond}
+	t58Want := NewIntervalExpr(INTERVAL_TYPE_SECOND)
+
+	//IsTruthExpr
+	t59 := &ast.IsTruthExpr{
+		Expr: e1,
+		Not:  true,
+		True: 1,
+	}
+
+	t59Want := NewComparisonExpr(IS_DISTINCT_FROM,f1,f1)
+
+	//DefaultExpr
+	t60 := &ast.DefaultExpr{}
+	t60Want := NewDefaultVal()
+
 	tests := []struct {
 		name string
 		args args
@@ -611,6 +728,16 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 		{"t48", args{t48}, t48Want},
 		{"t49", args{t49}, t49Want},
 		{"t50", args{t50}, t50Want},
+		{"t51", args{t51}, t51Want},
+		{"t52", args{t52}, t52Want},
+		{"t53", args{t53}, t53Want},
+		{"t54", args{t54}, t54Want},
+		{"t55", args{t55}, t55Want},
+		{"t56", args{t56}, t56Want},
+		{"t57", args{t57}, t57Want},
+		{"t58", args{t58}, t58Want},
+		{"t59", args{t59}, t59Want},
+		{"t60", args{t60}, t60Want},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -3005,7 +3132,7 @@ func gen_transform_t12() (*ast.SelectStmt, *Select) {
 	want_call_abs := NewFuncExpr(0, want_abs, []Expr{want_u_a}, nil)
 
 	want_count, _ := NewUnresolvedName("count")
-	want_call_count := NewFuncExpr(0, want_count, []Expr{want_u_b}, nil)
+	want_call_count := NewFuncExpr(FUNC_TYPE_ALL, want_count, []Expr{want_u_b}, nil)
 
 	want_call_cast := NewCastExpr(want_u_c, TYPE_VARSTRING)
 
@@ -3531,8 +3658,193 @@ func Test_transformSelectStmtToSelect(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := transformSelectStmtToSelect(tt.args.ss); !reflect.DeepEqual(got, tt.want) {
+			if got := transformSelectStmtToSelect(tt.args.ss);
+			!reflect.DeepEqual(got, tt.want) {
 				t.Errorf("transformSelectStmtToSelect() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_transformSetOprStmtToSelectStatement(t *testing.T) {
+
+}
+
+func gen_insert_t1()(*ast.InsertStmt,*Insert){
+	e1 := ast.NewValueExpr(1, "", "")
+	e2 := ast.NewValueExpr(2, "", "")
+	e3 := ast.NewValueExpr(3, "", "")
+	e4 := ast.NewValueExpr(4, "", "")
+	e5 := ast.NewValueExpr(5, "", "")
+	e6 := ast.NewValueExpr(6, "", "")
+	eTrue := ast.NewValueExpr(true, "", "")
+	eFalse := ast.NewValueExpr(false, "", "")
+
+	f1 := NewNumVal(constant.MakeInt64(1), "", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "", false)
+	f3 := NewNumVal(constant.MakeInt64(3), "", false)
+	f4 := NewNumVal(constant.MakeInt64(4), "", false)
+	f5 := NewNumVal(constant.MakeInt64(5), "", false)
+	f6 := NewNumVal(constant.MakeInt64(6), "", false)
+	fTrue := NewNumVal(constant.MakeInt64(1), "", false)
+	fFalse := NewNumVal(constant.MakeInt64(0), "", false)
+
+	//============================
+	u := gen_table("", "u")
+
+	t1Join := &ast.Join{
+		Left:           u,
+		Right:          nil,
+		Tp:             0,
+		On:             nil,
+		Using:          nil,
+		NaturalJoin:    false,
+		StraightJoin:   false,
+		ExplicitParens: false,
+	}
+
+	t1TableRef := &ast.TableRefsClause{TableRefs: t1Join}
+
+	colNames := []*ast.ColumnName{
+		&ast.ColumnName{Name: model.CIStr{"a","a"}},
+		&ast.ColumnName{Name: model.CIStr{"b","b"}},
+		&ast.ColumnName{Name: model.CIStr{"c","c"}},
+	}
+
+	lists := [][]ast.ExprNode{
+		{
+			e1,e2,e3,e4,
+		},
+		{
+			e5,e6,eTrue,eFalse,
+		},
+	}
+
+	partitionNames :=[]model.CIStr{
+		model.CIStr{"p1","p1"},
+		model.CIStr{"p2","p2"},
+	}
+
+	t1_insert :=&ast.InsertStmt{
+		IsReplace:      false,
+		IgnoreErr:      false,
+		Table:          t1TableRef,
+		Columns:        colNames,
+		Lists:          lists,
+		Setlist:        nil,
+		Priority:       0,
+		OnDuplicate:    nil,
+		Select:         nil,
+		TableHints:     nil,
+		PartitionNames: partitionNames,
+	}
+
+	//================================
+	want_u := gen_want_table("", "u")
+
+	want_table_ref := &JoinTableExpr{
+		JoinType: "",
+		Left:     want_u,
+		Right:    nil,
+		Cond:     nil,
+	}
+
+	want_col_names := IdentifierList{
+		Identifier("a"),
+		Identifier("b"),
+		Identifier("c"),
+	}
+
+	var rows []Exprs = []Exprs{
+		[]Expr{
+			f1,f2,f3,f4,
+		},
+		[]Expr{
+			f5,f6,fTrue,fFalse,
+		},
+	}
+	vc := NewValuesClause(rows)
+	sel := NewSelect(vc,nil,nil)
+
+	pnames := IdentifierList{
+		"p1","p2",
+	}
+
+	t1_want_insert :=&Insert{
+		Table:          want_table_ref,
+		Columns:        want_col_names,
+		Rows:           sel,
+		PartitionNames: pnames,
+	}
+
+
+	return t1_insert,t1_want_insert
+}
+
+func gen_insert_t2()(*ast.InsertStmt,*Insert){
+	t1,t1_want := gen_insert_t1()
+
+	l := t1.Lists
+
+	t1_list := []*ast.RowExpr{
+		&ast.RowExpr{Values: l[0]},
+		&ast.RowExpr{Values: l[1]},
+	}
+
+	t1.Lists = nil
+
+	t1.Select = &ast.SelectStmt{
+		SelectStmtOpts:   nil,
+		Distinct:         false,
+		From:             nil,
+		Where:            nil,
+		Fields:           nil,
+		GroupBy:          nil,
+		Having:           nil,
+		WindowSpecs:      nil,
+		OrderBy:          nil,
+		Limit:            nil,
+		LockInfo:         nil,
+		TableHints:       nil,
+		IsInBraces:       false,
+		QueryBlockOffset: 0,
+		SelectIntoOpt:    nil,
+		AfterSetOperator: nil,
+		Kind:             0,
+		Lists:            t1_list,
+	}
+
+	t1_want_list,_ := t1_want.Rows.Select.(*ValuesClause)
+
+	var t1_want_rows =[]Exprs{
+		[]Expr{NewTuple(t1_want_list.Rows[0])},
+		[]Expr{NewTuple(t1_want_list.Rows[1])},
+	}
+
+	t1_want.Rows = NewSelect(NewValuesClause(t1_want_rows),nil,nil)
+	return t1,t1_want
+}
+
+func Test_transformInsertStmtToInsert(t *testing.T) {
+	type args struct {
+		is *ast.InsertStmt
+	}
+
+	t1,t1_want := gen_insert_t1()
+	t2,t2_want := gen_insert_t2()
+
+	tests := []struct {
+		name string
+		args args
+		want *Insert
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformInsertStmtToInsert(tt.args.is); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformInsertStmtToInsert() = %v, want %v", got, tt.want)
 			}
 		})
 	}
