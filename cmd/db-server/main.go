@@ -60,7 +60,7 @@ func cleanup() {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Printf("Usage: %s configFile", os.Args[0])
+		fmt.Printf("Usage: %s configFile\n", os.Args[0])
 		os.Exit(-1)
 	}
 	flag.Parse()

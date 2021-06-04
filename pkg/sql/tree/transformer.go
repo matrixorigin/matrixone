@@ -3,6 +3,7 @@ package tree
 import (
 	"fmt"
 	"github.com/pingcap/parser/ast"
+	"github.com/pingcap/parser/model"
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/parser/opcode"
 	"github.com/pingcap/parser/test_driver"
@@ -299,8 +300,12 @@ func transformPatternRegexpExprToComparisonExprIn(pre *ast.PatternRegexpExpr) *C
 //transform ast.ResultSetNode to tree.SelectStatement
 func transformResultSetNodeToSelectStatement(rsn ast.ResultSetNode) SelectStatement {
 	switch n := rsn.(type) {
+	case *ast.SubqueryExpr:
+		return transformSubqueryExprToSubquery(n)
 	case *ast.SelectStmt:
 		return transformSelectStmtToSelectStatement(n)
+	case *ast.SetOprStmt:
+		return transformSetOprStmtToSelectStatement(n)
 	}
 	panic(fmt.Errorf("unsupported resultSetNode"))
 	return nil
@@ -379,22 +384,27 @@ func transformSelectStmtToStatementSource(ss *ast.SelectStmt) *StatementSource {
 	return NewStatementSource(sts)
 }
 
+//transform ast.SelectStmt to tree.Subquery
+func transformSelectStmtToSubquery(ss *ast.SelectStmt) *Subquery {
+	sts := transformSelectStmtToSelectStatement(ss)
+	return NewSubquery(sts,false)
+}
+
 //transform ast.ResultSetNode to tree.TableExpr
 func transformResultSetNodeToTableExpr(rsn ast.ResultSetNode) TableExpr {
 	switch n := rsn.(type) {
 	case *ast.SubqueryExpr:
 		return transformSubqueryExprToSubquery(n)
 	case *ast.Join:
-		if n.ExplicitParens {
-			return transformJoinToParenTableExpr(n)
-		}
-		return transformJoinToJoinTableExpr(n)
+		return transformJoinToTableExpr(n)
 	case *ast.TableName:
 		return transformTableNameToTableName(n)
 	case *ast.TableSource:
 		return transformTableSourceToAliasedTableExpr(n)
 	case *ast.SelectStmt:
-		return transformSelectStmtToStatementSource(n)
+		return transformSelectStmtToSubquery(n)
+	case *ast.SetOprStmt:
+		return transformSetOprStmtToSelectStatement(n)
 	}
 	panic(fmt.Errorf("unsupported ResultSetNode type:%v ", rsn))
 	return nil
@@ -405,6 +415,15 @@ func transformColumnNameListToNameList(cn []*ast.ColumnName) IdentifierList {
 	var l IdentifierList
 	for _, x := range cn {
 		l = append(l, Identifier(x.Name.O))
+	}
+	return l
+}
+
+//transform []model.CIStr to tree.IdentifirList
+func transformCIStrToIdentifierList(ci []model.CIStr)IdentifierList{
+	var l IdentifierList
+	for _,x := range ci{
+		l = append(l,Identifier(x.O))
 	}
 	return l
 }
@@ -427,6 +446,7 @@ func transformJoinToJoinTableExpr(j *ast.Join) *JoinTableExpr {
 
 	switch j.Tp {
 	case ast.CrossJoin:
+
 		t = JOIN_TYPE_CROSS
 	case ast.LeftJoin:
 		t = JOIN_TYPE_LEFT
@@ -465,7 +485,7 @@ func transformJoinToJoinTableExpr(j *ast.Join) *JoinTableExpr {
 //transform ast.Join to tree.ParenTableExpr
 func transformJoinToParenTableExpr(j *ast.Join) *ParenTableExpr {
 	if j.ExplicitParens {
-		j.ExplicitParens = false
+		//j.ExplicitParens = false
 		jt := transformJoinToJoinTableExpr(j)
 		return NewParenTableExpr(jt)
 	}
@@ -473,16 +493,28 @@ func transformJoinToParenTableExpr(j *ast.Join) *ParenTableExpr {
 	return nil
 }
 
+//transform ast.Join to tree.TableExpr
+func transformJoinToTableExpr(j *ast.Join)TableExpr{
+	jt := transformJoinToJoinTableExpr(j)
+	if j.ExplicitParens{
+		return NewParenTableExpr(jt)
+	}
+	return jt
+}
+
 //transform ast.TableRefsClause to tree.From
 func transformTableRefsClauseToFrom(trc *ast.TableRefsClause) *From {
 	var te []TableExpr = make([]TableExpr, 1)
-	t := transformJoinToJoinTableExpr(trc.TableRefs)
+	t := transformJoinToTableExpr(trc.TableRefs)
 	te[0] = t
 	return NewFrom(te)
 }
 
 //transform ast.ColumnNameExpr to tree.UnresolvedName
 func transformColumnNameExprToUnresolvedName(cne *ast.ColumnNameExpr) *UnresolvedName {
+	if cne.Name == nil{
+		panic(fmt.Errorf("need column name"))
+	}
 	cn := cne.Name
 	ud, _ := NewUnresolvedName(cn.Schema.O, cn.Table.O, cn.Name.O)
 	return ud
@@ -512,6 +544,8 @@ func transformAggregateFuncExprToFuncExpr(afe *ast.AggregateFuncExpr) *FuncExpr 
 	var ft funcType = 0
 	if afe.Distinct {
 		ft = FUNC_TYPE_DISTINCT
+	}else{
+		ft = FUNC_TYPE_ALL
 	}
 
 	var ob OrderBy
@@ -591,8 +625,8 @@ func transformFuncCastExprToCastExpr(fce *ast.FuncCastExpr) *CastExpr {
 //transform ast.RowExpr to tree.Tuple
 func transformRowExprToTuple(re *ast.RowExpr) *Tuple {
 	var ar []Expr = make([]Expr, len(re.Values))
-	for i, re := range re.Values {
-		ar[i] = transformExprNodeToExpr(re)
+	for i, en := range re.Values {
+		ar[i] = transformExprNodeToExpr(en)
 	}
 	return NewTuple(ar)
 }
@@ -603,6 +637,104 @@ func transformBetweenExprToRangeCond(be *ast.BetweenExpr) *RangeCond {
 	l := transformExprNodeToExpr(be.Left)
 	r := transformExprNodeToExpr(be.Right)
 	return NewRangeCond(be.Not, e, l, r)
+}
+
+//transform ast.WhenClause to tree.When
+func transformWhenClauseToWhen(wc * ast.WhenClause)*When{
+	c := transformExprNodeToExpr(wc.Expr)
+	v := transformExprNodeToExpr(wc.Result)
+	return NewWhen(c,v)
+}
+
+//transform ast.CaseExpr to tree.CaseExpr
+func transformCaseExprToCaseExpr(ce * ast.CaseExpr)*CaseExpr{
+	var e Expr = nil
+	var el Expr = nil
+	if ce.Value != nil{
+		e = transformExprNodeToExpr(ce.Value)
+	}
+	var whens []*When = make([]*When,len(ce.WhenClauses))
+	for i,w := range ce.WhenClauses{
+		whens[i] = transformWhenClauseToWhen(w)
+	}
+	if ce.ElseClause != nil{
+		el = transformExprNodeToExpr(ce.ElseClause)
+	}
+	return NewCaseExpr(e,whens,el)
+}
+
+//transform ast.TimeUnitExpr to tree.IntervalExpr
+func transformTimeUnitExprToIntervalExpr(tue *ast.TimeUnitExpr)*IntervalExpr{
+	switch tue.Unit {
+	case ast.TimeUnitInvalid:
+		return NewIntervalExpr(INTERVAL_TYPE_INVALID)
+	case ast.TimeUnitMicrosecond:
+		return NewIntervalExpr(INTERVAL_TYPE_MICROSECOND)
+	case ast.TimeUnitSecond:
+		return NewIntervalExpr(INTERVAL_TYPE_SECOND)
+	case ast.TimeUnitMinute:
+		return NewIntervalExpr(INTERVAL_TYPE_MINUTE)
+	case ast.TimeUnitHour:
+		return NewIntervalExpr(INTERVAL_TYPE_HOUR)
+	case ast.TimeUnitDay:
+		return NewIntervalExpr(INTERVAL_TYPE_DAY)
+	case ast.TimeUnitWeek:
+		return NewIntervalExpr(INTERVAL_TYPE_WEEK)
+	case ast.TimeUnitMonth:
+		return NewIntervalExpr(INTERVAL_TYPE_MONTH)
+	case ast.TimeUnitQuarter:
+		return NewIntervalExpr(INTERVAL_TYPE_QUARTER)
+	case ast.TimeUnitYear:
+		return NewIntervalExpr(INTERVAL_TYPE_YEAR)
+	case ast.TimeUnitSecondMicrosecond:
+		return NewIntervalExpr(INTERVAL_TYPE_SECOND_MICROSECOND)
+	case ast.TimeUnitMinuteMicrosecond:
+		return NewIntervalExpr(INTERVAL_TYPE_MINUTE_MICROSECOND)
+	case ast.TimeUnitMinuteSecond:
+		return NewIntervalExpr(INTERVAL_TYPE_MINUTE_SECOND)
+	case ast.TimeUnitHourMicrosecond:
+		return NewIntervalExpr(INTERVAL_TYPE_HOUR_MICROSECOND)
+	case ast.TimeUnitHourSecond:
+		return NewIntervalExpr(INTERVAL_TYPE_HOUR_SECOND)
+	case ast.TimeUnitHourMinute:
+		return NewIntervalExpr(INTERVAL_TYPE_HOUR_MINUTE)
+	case ast.TimeUnitDayMicrosecond:
+		return NewIntervalExpr(INTERVAL_TYPE_DAY_MICROSECOND)
+	case ast.TimeUnitDaySecond:
+		return NewIntervalExpr(INTERVAL_TYPE_DAY_SECOND)
+	case ast.TimeUnitDayMinute:
+		return NewIntervalExpr(INTERVAL_TYPE_DAYMINUTE)
+	case ast.TimeUnitDayHour:
+		return NewIntervalExpr(INTERVAL_TYPE_DAYHOUR)
+	case ast.TimeUnitYearMonth:
+		return NewIntervalExpr(INTERVAL_TYPE_YEARMONTH)
+	}
+	panic(fmt.Errorf("unsupported time unit type %v ",tue.Unit))
+	return nil
+}
+
+//transform ast.IsTruthExpr to tree.ComparisonExpr
+func transformIsTruthExprToComparisonExpr(ite *ast.IsTruthExpr)*ComparisonExpr{
+	e := transformExprNodeToExpr(ite.Expr)
+	var op ComparisonOp
+	if ite.Not {
+		op = IS_DISTINCT_FROM
+	}else{
+		op = IS_NOT_DISTINCT_FROM
+	}
+	var r *NumVal
+	if ite.True == 1 {
+		r = NewNumVal(constant.MakeInt64(1),"",false)
+	}else{
+		r = NewNumVal(constant.MakeInt64(0),"",false)
+	}
+
+	return NewComparisonExpr(op,e,r)
+}
+
+//transform ast.DefaultExpr to tree.DefaultVal
+func transformDefaultExprToDefaultVal(expr *ast.DefaultExpr)*DefaultVal{
+	return NewDefaultVal()
 }
 
 //transform ast.ExprNode to tree.Expr
@@ -681,6 +813,14 @@ func transformExprNodeToExpr(node ast.ExprNode) Expr {
 		return transformRowExprToTuple(n)
 	case *ast.BetweenExpr:
 		return transformBetweenExprToRangeCond(n)
+	case *ast.CaseExpr:
+		return transformCaseExprToCaseExpr(n)
+	case *ast.TimeUnitExpr:
+		return transformTimeUnitExprToIntervalExpr(n)
+	case *ast.IsTruthExpr:
+		return transformIsTruthExprToComparisonExpr(n)
+	case *ast.DefaultExpr:
+		return transformDefaultExprToDefaultVal(n)
 	}
 	panic(fmt.Errorf("unsupported node %v ", node))
 	return nil
@@ -759,7 +899,10 @@ func transformHavingClauseToWhere(hc *ast.HavingClause) *Where {
 
 //transform ast.Limit to tree.Limit
 func transformLimitToLimit(l *ast.Limit) *Limit {
-	o := transformExprNodeToExpr(l.Offset)
+	var o Expr = nil
+	if l.Offset !=  nil{
+		o = transformExprNodeToExpr(l.Offset)
+	}
 	c := transformExprNodeToExpr(l.Count)
 	return NewLimit(o, c)
 }
@@ -833,9 +976,207 @@ func transformSelectStmtToParenSelect(ss *ast.SelectStmt) *ParenSelect {
 
 //transform ast.SelectStmt to tree.SelectStatement
 func transformSelectStmtToSelectStatement(ss *ast.SelectStmt) SelectStatement {
-	if ss.IsInBraces {
-		return transformSelectStmtToParenSelect(ss)
-	} else {
-		return transformSelectStmtToSelectClause(ss)
+	//if ss.IsInBraces {
+	//	return transformSelectStmtToParenSelect(ss)
+	//} else {
+	return transformSelectStmtToSelectClause(ss)
+	//}
+}
+
+//transform ast.Node to tree.(UnionType,bool)
+func transformSetOprTypeToUnionType(n ast.Node)(UnionType,bool){
+	var oprType ast.SetOprType
+	switch sel := n.(type) {
+	case *ast.SelectStmt:
+		if sel.AfterSetOperator == nil{
+			panic(fmt.Errorf("need set operator"))
+		}
+		oprType = *sel.AfterSetOperator
+	case *ast.SetOprSelectList:
+		if sel.AfterSetOperator == nil{
+			panic(fmt.Errorf("need set operator"))
+		}
+		oprType = *sel.AfterSetOperator
+	default:
+		panic(fmt.Errorf("unsupported single node %v",n))
 	}
+	var all bool
+	var t UnionType
+	switch oprType {
+	case ast.Union:
+		t = UNION
+		all = false
+	case ast.UnionAll:
+		t = UNION
+		all = true
+	case ast.Except:
+		t = EXCEPT
+		all = false
+	case ast.ExceptAll:
+		t = EXCEPT
+		all = true
+	case ast.Intersect:
+		t = INTERSECT
+		all = false
+	case ast.IntersectAll:
+		t = INTERSECT
+		all = true
+	}
+	return t,all
+}
+
+//transform ast.Node to tree.SelectStatement
+func transformSingleNodeToSelectStatement(n ast.Node) SelectStatement {
+	switch sel := n.(type) {
+	case *ast.SelectStmt:
+		return transformSelectStmtToSelect(sel)
+	case *ast.SetOprSelectList:
+		return transformSetOprSelectListToSelectStatement(sel)
+	default:
+		panic(fmt.Errorf("unsupported single node %v",n))
+	}
+}
+
+/*
+transform []ast.Node to tree.SelectgStatement
+Set operations: UNION,INTERSECT,EXCEPT
+Precedence:
+INTERSECT > UNION
+INTERSECT > EXCEPT
+UNION = EXCEPT
+
+Left Associativity: UNION,INTERSECT,EXCEPT
+ */
+func transformSelectArrayToSelectStatement(selects []ast.Node) SelectStatement {
+	if len(selects) == 0{
+		panic(fmt.Errorf("need Selects"))
+	}else if len(selects) == 1{
+		return transformSingleNodeToSelectStatement(selects[0])
+	}else if len(selects) == 2{
+		//just two
+		l := transformSingleNodeToSelectStatement(selects[0])
+		r := transformSingleNodeToSelectStatement(selects[1])
+		t,all := transformSetOprTypeToUnionType(selects[1])
+		uc := NewUnionClause(t,l,r,all)
+		return uc
+	}
+
+	//find the last EXCEPT or UNION
+	var i int
+	for i = len(selects) - 1; i > 0 ; i-- {//exclude the first one
+		var find bool = false
+		switch sel := selects[i].(type) {
+		case *ast.SelectStmt:
+			if sel.AfterSetOperator !=nil && (*sel.AfterSetOperator != ast.Intersect && *sel.AfterSetOperator != ast.IntersectAll){
+				find = true
+				break
+			}
+		case *ast.SetOprSelectList:
+			if sel.AfterSetOperator !=nil && (*sel.AfterSetOperator != ast.Intersect && *sel.AfterSetOperator != ast.IntersectAll){
+				find = true
+				break
+			}
+		default:
+			panic(fmt.Errorf("unsupported union statement %v",selects[i]))
+		}
+		if find {
+			break
+		}
+	}
+
+	if i > 0{//Got the last EXCEPT or UNION
+		//split the list into two parts
+		//recursively transform them
+
+		//left part
+		l := transformSelectArrayToSelectStatement(selects[:i])
+
+		//right part
+		r := transformSelectArrayToSelectStatement(selects[i:])
+
+		//union type
+		t,all := transformSetOprTypeToUnionType(selects[i])
+		uc := NewUnionClause(t,l,r,all)
+		return uc
+	}else{
+		//Got single / multiple INTERSECT
+		var left SelectStatement
+		for j,n := range selects{
+			stmt := transformSingleNodeToSelectStatement(n)
+			if j == 0{//first
+				left = stmt
+			}else{
+				t,all := transformSetOprTypeToUnionType(n)
+				left = NewUnionClause(t,left,stmt,all)
+			}
+		}
+		//return NewSelect(uc,nil,nil)
+		return left
+	}
+	panic(fmt.Errorf("missing something"))
+	return nil
+}
+
+//transform ast.SetOprSelectList to tree.SelectStatement
+func transformSetOprSelectListToSelectStatement(sosl *ast.SetOprSelectList)SelectStatement{
+	return transformSelectArrayToSelectStatement(sosl.Selects)
+	panic(fmt.Errorf("missing something"))
+	return nil
+}
+
+//transform ast.SetOprStmt to tree.SelectStatement
+func transformSetOprStmtToSelectStatement(sos *ast.SetOprStmt)SelectStatement{
+	var ordy OrderBy = nil
+	var lm *Limit = nil
+	if sos.OrderBy != nil{
+		ordy = transformOrderByClauseToOrderBy(sos.OrderBy)
+	}
+	if sos.Limit != nil{
+		lm = transformLimitToLimit(sos.Limit)
+	}
+	ss := transformSetOprSelectListToSelectStatement(sos.SelectList)
+	return NewSelect(ss,ordy,lm)
+}
+
+//transform ast.InsertStmt to tree.Insert
+func transformInsertStmtToInsert(is *ast.InsertStmt)*Insert{
+	var table TableExpr = nil
+	if is.Table != nil{
+		table = transformJoinToTableExpr(is.Table.TableRefs)
+	}
+	var colums IdentifierList = nil
+	colums = transformColumnNameListToNameList(is.Columns)
+
+	var rows []Exprs = nil
+	if is.Lists != nil {
+		for _,row := range is.Lists{
+			var arr Exprs = nil
+			for _,col := range row{
+				e := transformExprNodeToExpr(col)
+				arr = append(arr,e)
+			}
+			rows = append(rows,arr)
+		}
+	}else if is.Select != nil{
+		if ss,ok := is.Select.(*ast.SelectStmt); !ok{
+			panic(fmt.Errorf("needs selectstmt"))
+		}else{
+			for _,row := range ss.Lists{
+				e := transformExprNodeToExpr(row)
+				rows = append(rows,[]Expr{e})
+			}
+		}
+	}else{
+		panic(fmt.Errorf("empty insertstmt"))
+	}
+
+	partition := transformCIStrToIdentifierList(is.PartitionNames)
+
+	vc := NewValuesClause(rows)
+	sel := NewSelect(vc,nil,nil)
+	return NewInsert(table, colums, sel, partition)
+}
+
+func transformCreateTableStmtTo(){
+
 }
