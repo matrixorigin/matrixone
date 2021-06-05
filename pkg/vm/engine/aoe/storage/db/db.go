@@ -142,6 +142,14 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 	return collection.Append(ck, index)
 }
 
+func (d *DB) HasTable(name string) bool {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	_, err := d.store.MetaInfo.ReferenceTableByName(name)
+	return err == nil
+}
+
 func (d *DB) CreateTable(schema *md.Schema) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)

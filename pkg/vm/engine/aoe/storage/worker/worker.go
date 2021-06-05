@@ -63,7 +63,7 @@ func NewOpWorker(args ...int) *OpWorker {
 }
 
 func (w *OpWorker) Start() {
-	log.Infof("Start OpWorker")
+	// log.Infof("Start OpWorker")
 	if w.State != CREATED {
 		panic("logic error")
 	}
@@ -137,7 +137,7 @@ func (w *OpWorker) onOp(op iops.IOp) {
 func (w *OpWorker) onCmd(cmd Cmd) {
 	switch cmd {
 	case QUIT:
-		log.Infof("Quit OpWorker")
+		// log.Infof("Quit OpWorker")
 		close(w.CmdC)
 		close(w.OpC)
 		if !atomic.CompareAndSwapInt32(&w.State, STOPPING_CMD, STOPPED) {
