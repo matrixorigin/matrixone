@@ -128,16 +128,23 @@ type Tables struct {
 	Tombstone map[uint64]ITableData
 }
 
+func NewTables() *Tables {
+	return &Tables{
+		Data:      make(map[uint64]ITableData),
+		Ids:       make(map[uint64]bool),
+		Tombstone: make(map[uint64]ITableData),
+	}
+}
+
 func (ts *Tables) TableIds() (ids map[uint64]bool) {
-	ts.RLock()
-	defer ts.RUnlock()
 	return ts.Ids
 }
 
 func (ts *Tables) DropTable(tid uint64) (err error) {
 	ts.Lock()
-	defer ts.Unlock()
-	return ts.DropTableNoLock(tid)
+	err = ts.DropTableNoLock(tid)
+	ts.Unlock()
+	return err
 }
 
 func (ts *Tables) DropTableNoLock(tid uint64) (err error) {
@@ -152,7 +159,7 @@ func (ts *Tables) DropTableNoLock(tid uint64) (err error) {
 }
 
 func (ts *Tables) GetTableNoLock(tid uint64) (tbl ITableData, err error) {
-	tbl, ok := ts.Data[tbl.GetID()]
+	tbl, ok := ts.Data[tid]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("Specified table %d not found", tid))
 	}
@@ -161,14 +168,16 @@ func (ts *Tables) GetTableNoLock(tid uint64) (tbl ITableData, err error) {
 
 func (ts *Tables) GetTable(tid uint64) (tbl ITableData, err error) {
 	ts.RLock()
-	defer ts.RUnlock()
-	return ts.GetTableNoLock(tid)
+	tbl, err = ts.GetTableNoLock(tid)
+	ts.RUnlock()
+	return tbl, err
 }
 
 func (ts *Tables) CreateTable(tbl ITableData) (err error) {
 	ts.Lock()
-	defer ts.Unlock()
-	return ts.CreateTableNoLock(tbl)
+	err = ts.CreateTableNoLock(tbl)
+	ts.Unlock()
+	return err
 }
 
 func (ts *Tables) CreateTableNoLock(tbl ITableData) (err error) {

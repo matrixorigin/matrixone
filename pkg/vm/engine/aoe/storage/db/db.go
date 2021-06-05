@@ -176,7 +176,7 @@ func (d *DB) NewSegmentIter(o *e.IterOptions) (ih.ISegmentIterator, error) {
 	if tableMeta.GetSegmentCount() == uint64(0) {
 		return nil, nil
 	}
-	tableData, err := d.store.DataTables.GetTable(o.TableID)
+	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +202,7 @@ func (d *DB) NewBlockIter(o *e.IterOptions) (ih.IBlockIterator, error) {
 		return nil, nil
 	}
 
-	tableData, err := d.store.DataTables.GetTable(o.TableID)
+	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
 	if err != nil {
 		return nil, err
 	}

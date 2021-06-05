@@ -27,6 +27,13 @@ func (s *Schema) Valid() bool {
 	return true
 }
 
+func (s *Schema) Types() (ts []types.Type) {
+	for _, colDef := range s.ColDefs {
+		ts = append(ts, colDef.Type)
+	}
+	return ts
+}
+
 func MockSchema(colCnt int) *Schema {
 	schema := &Schema{
 		ColDefs: make([]*ColDef, colCnt),

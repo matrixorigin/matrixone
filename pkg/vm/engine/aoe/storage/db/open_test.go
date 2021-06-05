@@ -46,7 +46,6 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
-	defer w.Close()
 	err = info.Serialize(w)
 	assert.Nil(t, err)
 	schema2 := md.MockSchema(2)
@@ -59,6 +58,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	info.CheckPoint++
 
 	filename = e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
+	w.Close()
 
 	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
