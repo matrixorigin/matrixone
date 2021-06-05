@@ -13,6 +13,8 @@ import (
 	ih "matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	"os"
 	"path"
@@ -43,7 +45,7 @@ type DB struct {
 	store struct {
 		sync.RWMutex
 		MetaInfo   *md.MetaInfo
-		DataTables table.Tables
+		DataTables *table.Tables
 	}
 
 	DataDir  *os.File
@@ -108,6 +110,36 @@ func cleanStaleMeta(dirname string) {
 			panic(err)
 		}
 	}
+}
+
+func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	tbl, err := d.store.MetaInfo.ReferenceTableByName(tableName)
+	if err != nil {
+		return err
+	}
+
+	collection := d.MemTableMgr.GetCollection(tbl.GetID())
+	if collection == nil {
+		opCtx := &mdops.OpCtx{
+			Opts:       d.Opts,
+			MTManager:  d.MemTableMgr,
+			TableMeta:  tbl,
+			BufManager: d.MutableBufMgr,
+			Tables:     d.store.DataTables,
+		}
+		op := mdops.NewCreateTableOp(opCtx)
+		op.Push()
+		err = op.WaitDone()
+		if err != nil {
+			panic("logic error")
+		}
+		collection = op.Collection
+	}
+
+	return collection.Append(ck, index)
 }
 
 func (d *DB) CreateTable(schema *md.Schema) (id uint64, err error) {
