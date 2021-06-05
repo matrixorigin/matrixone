@@ -1,17 +1,19 @@
 package handle
 
 import (
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
 	"sync"
+	"sync/atomic"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var (
 	_ base.IBlockIterator = (*BlockIt)(nil)
 )
 
-var itAllocCnt = 0
+var itAllocCnt int32 = 0
 var itReleaseCnt = 0
 
 type itBlkAlloc struct {
@@ -20,8 +22,8 @@ type itBlkAlloc struct {
 
 var itBlkAllocPool = sync.Pool{
 	New: func() interface{} {
-		itAllocCnt++
-		log.Infof("Alloc blk it %d", itAllocCnt)
+		cnt := atomic.AddInt32(&itAllocCnt, int32(1))
+		log.Infof("Alloc blk it %d", cnt)
 		return &itBlkAlloc{It: BlockIt{Cols: make([]col.IColumnBlock, 0)}}
 	},
 }

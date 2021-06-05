@@ -66,7 +66,11 @@ func (sh *SegmentsHandle) newSegmentLinkIterator() base.ISegmentIterator {
 	it := &SegmentLinkIt{}
 	for _, colIdx := range sh.ColIdxes {
 		colData := sh.TableData.GetCollumn(colIdx)
-		it.Cols = append(it.Cols, colData.GetSegmentRoot())
+		colSeg := colData.GetSegmentRoot()
+		if colSeg == nil {
+			return nil
+		}
+		it.Cols = append(it.Cols, colSeg)
 	}
 	return it
 }

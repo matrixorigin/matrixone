@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	e "matrixone/pkg/vm/engine/aoe/storage"
@@ -26,8 +27,8 @@ func initDB() *DB {
 	rand.Seed(time.Now().UnixNano())
 	cfg := &md.Configuration{
 		Dir:              TEST_DB_DIR,
-		SegmentMaxBlocks: 10,
-		BlockMaxRows:     10,
+		SegmentMaxBlocks: 2,
+		BlockMaxRows:     100,
 	}
 	opts := &e.Options{}
 	opts.Meta.Conf = cfg
@@ -125,6 +126,7 @@ func TestAppend(t *testing.T) {
 		}
 		segIt.Next()
 	}
+	segIt.Close()
 	assert.Equal(t, 1, segCount)
 	assert.Equal(t, blkCnt, blkCount)
 
@@ -141,6 +143,137 @@ func TestAppend(t *testing.T) {
 		t.Log(h.GetColumn(1).String())
 		blkIt.Next()
 	}
+	blkIt.Close()
 	assert.Equal(t, blkCnt, blkCount)
+	dbi.Close()
+}
+
+type InsertReq struct {
+	Name     string
+	Data     *chunk.Chunk
+	LogIndex *md.LogIndex
+}
+
+func TestConcurrency(t *testing.T) {
+	initDBTest()
+	dbi := initDB()
+	schema := md.MockSchema(2)
+	schema.Name = "mockcon"
+	_, err := dbi.CreateTable(schema)
+	assert.Nil(t, err)
+	blkCnt := dbi.store.MetaInfo.Conf.SegmentMaxBlocks
+	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * blkCnt
+	baseCk := chunk.MockChunk(schema.Types(), rows)
+	insertCh := make(chan *InsertReq)
+	searchCh := make(chan *e.IterOptions)
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func(ctx context.Context) {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case req := <-searchCh:
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					{
+						segIt, err := dbi.NewSegmentIter(req)
+						assert.Nil(t, err)
+						if segIt == nil {
+							return
+						}
+						segCnt := 0
+						blkCnt := 0
+						for segIt.Valid() {
+							segCnt++
+							sh := segIt.GetSegmentHandle()
+							blkIt := sh.NewIterator()
+							for blkIt.Valid() {
+								blkCnt++
+								blkIt.Next()
+							}
+							blkIt.Close()
+							segIt.Next()
+						}
+						segIt.Close()
+						// t.Logf("segCnt = %d", segCnt)
+						// t.Logf("blkCnt = %d", blkCnt)
+					}
+				}()
+			case req := <-insertCh:
+				wg.Add(1)
+				go func() {
+					err = dbi.Append(req.Name, req.Data, req.LogIndex)
+					assert.Nil(t, err)
+					wg.Done()
+				}()
+			}
+		}
+	}(reqCtx)
+
+	insertCnt := rand.Intn(4) + 4
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < insertCnt; i++ {
+			insertReq := &InsertReq{
+				Name:     schema.Name,
+				Data:     baseCk,
+				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: baseCk.GetCount()},
+			}
+			insertCh <- insertReq
+		}
+	}()
+
+	cols := make([]int, 0)
+	for i := 0; i < len(schema.ColDefs); i++ {
+		cols = append(cols, i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		reqCnt := rand.Intn(200) + 200
+		for i := 0; i < reqCnt; i++ {
+			searchReq := &e.IterOptions{
+				TableName: schema.Name,
+				All:       true,
+				ColIdxes:  cols,
+			}
+			searchCh <- searchReq
+			// time.Sleep(1 * time.Microsecond)
+		}
+	}()
+
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	wg.Wait()
+	opts := &e.IterOptions{
+		TableName: schema.Name,
+		All:       true,
+		ColIdxes:  cols,
+	}
+	segIt, err := dbi.NewSegmentIter(opts)
+	segCnt := 0
+	tblkCnt := 0
+	for segIt.Valid() {
+		segCnt++
+		h := segIt.GetSegmentHandle()
+		blkIt := h.NewIterator()
+		for blkIt.Valid() {
+			tblkCnt++
+			blkIt.Next()
+		}
+		blkIt.Close()
+		segIt.Next()
+	}
+	segIt.Close()
+	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
+	assert.Equal(t, (insertCnt+1)/2, segCnt)
+
 	dbi.Close()
 }
