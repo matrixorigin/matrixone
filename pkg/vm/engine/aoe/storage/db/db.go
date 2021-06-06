@@ -139,7 +139,8 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 		collection = op.Collection
 	}
 
-	return collection.Append(ck, index)
+	clonedIndex := *index
+	return collection.Append(ck, &clonedIndex)
 }
 
 func (d *DB) HasTable(name string) bool {

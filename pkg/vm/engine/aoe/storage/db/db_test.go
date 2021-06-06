@@ -207,7 +207,7 @@ func TestConcurrency(t *testing.T) {
 			case req := <-insertCh:
 				wg.Add(1)
 				go func() {
-					err = dbi.Append(req.Name, req.Data, req.LogIndex)
+					err := dbi.Append(req.Name, req.Data, req.LogIndex)
 					assert.Nil(t, err)
 					wg.Done()
 				}()
