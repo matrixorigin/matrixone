@@ -217,9 +217,11 @@ func TestConcurrency(t *testing.T) {
 
 	insertCnt := rand.Intn(4) + 4
 
-	wg.Add(1)
+	var wg2 sync.WaitGroup
+
+	wg2.Add(1)
 	go func() {
-		defer wg.Done()
+		defer wg2.Done()
 		for i := 0; i < insertCnt; i++ {
 			insertReq := &InsertReq{
 				Name:     schema.Name,
@@ -234,9 +236,9 @@ func TestConcurrency(t *testing.T) {
 	for i := 0; i < len(schema.ColDefs); i++ {
 		cols = append(cols, i)
 	}
-	wg.Add(1)
+	wg2.Add(1)
 	go func() {
-		defer wg.Done()
+		defer wg2.Done()
 		reqCnt := rand.Intn(200) + 200
 		for i := 0; i < reqCnt; i++ {
 			searchReq := &e.IterOptions{
@@ -249,7 +251,7 @@ func TestConcurrency(t *testing.T) {
 		}
 	}()
 
-	time.Sleep(10 * time.Millisecond)
+	wg2.Wait()
 	cancel()
 	wg.Wait()
 	opts := &e.IterOptions{
@@ -274,6 +276,16 @@ func TestConcurrency(t *testing.T) {
 	segIt.Close()
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	assert.Equal(t, (insertCnt+1)/2, segCnt)
+
+	blkIt, err := dbi.NewBlockIter(opts)
+	assert.Nil(t, err)
+	tblkCnt = 0
+	for blkIt.Valid() {
+		tblkCnt++
+		blkIt.Next()
+	}
+	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
+	blkIt.Close()
 
 	dbi.Close()
 }
