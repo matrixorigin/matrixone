@@ -28,6 +28,10 @@ var itBlkAllocPool = sync.Pool{
 	},
 }
 
+var EmptyBlockIt = &BlockIt{
+	Cols: make([]col.IColumnBlock, 0),
+}
+
 type BlockIt struct {
 	Cols  []col.IColumnBlock
 	Alloc *itBlkAlloc

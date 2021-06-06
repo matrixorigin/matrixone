@@ -175,7 +175,7 @@ func (d *DB) NewSegmentIter(o *e.IterOptions) (ih.ISegmentIterator, error) {
 		return nil, err
 	}
 	if tableMeta.GetSegmentCount() == uint64(0) {
-		return nil, nil
+		return handle.EmptySegmentIt, nil
 	}
 	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
 	if err != nil {
@@ -200,7 +200,7 @@ func (d *DB) NewBlockIter(o *e.IterOptions) (ih.IBlockIterator, error) {
 	}
 
 	if tableMeta.GetSegmentCount() == uint64(0) {
-		return nil, nil
+		return handle.EmptyBlockIt, nil
 	}
 
 	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
