@@ -31,6 +31,9 @@ func (ssit *SegmentIt) Next() {
 }
 
 func (ssit *SegmentIt) Close() error {
+	// if ssit.Handle != nil {
+	// 	ssit.Handle.Close
+	// }
 	return nil
 }
 

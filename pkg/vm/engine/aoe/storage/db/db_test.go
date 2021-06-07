@@ -216,8 +216,7 @@ func TestConcurrency(t *testing.T) {
 		}
 	}(reqCtx)
 
-	insertCnt := rand.Intn(4) + 4
-
+	insertCnt := 8
 	var wg2 sync.WaitGroup
 
 	wg2.Add(1)
@@ -266,6 +265,7 @@ func TestConcurrency(t *testing.T) {
 		segCnt++
 		h := segIt.GetSegmentHandle()
 		blkIt := h.NewIterator()
+		h.Close()
 		for blkIt.Valid() {
 			tblkCnt++
 			blkIt.Next()
@@ -286,15 +286,11 @@ func TestConcurrency(t *testing.T) {
 	}
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	blkIt.Close()
+	time.Sleep(time.Duration(200) * time.Millisecond)
 
 	t.Log(dbi.WorkersStatsString())
-	// time.Sleep(time.Duration(200) * time.Millisecond)
-	// for i := 0; i < 500; i++ {
-	// 	runtime.GC()
-	// 	time.Sleep(time.Duration(1) * time.Millisecond)
-	// }
-	// t.Log(dbi.MTBufMgr.String())
-	// t.Log(dbi.SSTBufMgr.String())
+	t.Log(dbi.MTBufMgr.String())
+	t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()
 }
 
