@@ -10,4 +10,5 @@ type IOpWorker interface {
 	SendOp(ops.IOp) bool
 	StopReceiver()
 	WaitStop()
+	StatsString() string
 }

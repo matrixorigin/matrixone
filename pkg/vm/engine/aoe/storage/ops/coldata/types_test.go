@@ -17,7 +17,7 @@ import (
 )
 
 func makeBufMagr(capacity uint64) mgrif.IBufferManager {
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Mock Flusher")
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
 	return bufMgr
 }

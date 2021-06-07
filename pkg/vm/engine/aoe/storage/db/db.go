@@ -319,6 +319,15 @@ func (d *DB) stopWorkers() {
 	d.Opts.Meta.Updater.Stop()
 }
 
+func (d *DB) WorkersStatsString() string {
+	s := fmt.Sprintf("%s\n", d.Opts.MemData.Updater.StatsString())
+	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Flusher.StatsString())
+	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Sorter.StatsString())
+	s = fmt.Sprintf("%s%s\n", s, d.Opts.Meta.Updater.StatsString())
+	s = fmt.Sprintf("%s%s\n", s, d.Opts.Meta.Flusher.StatsString())
+	return s
+}
+
 func (d *DB) Close() error {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)

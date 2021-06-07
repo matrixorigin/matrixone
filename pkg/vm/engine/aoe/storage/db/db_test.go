@@ -287,5 +287,6 @@ func TestConcurrency(t *testing.T) {
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	blkIt.Close()
 
+	t.Log(dbi.WorkersStatsString())
 	dbi.Close()
 }

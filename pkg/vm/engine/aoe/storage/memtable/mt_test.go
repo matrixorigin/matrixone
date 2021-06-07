@@ -31,7 +31,7 @@ func TestManager(t *testing.T) {
 	manager := NewManager(opts)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Mock Flusher")
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
 	t0 := uint64(0)
 	colDefs := make([]types.Type, 2)
@@ -80,7 +80,7 @@ func TestCollection(t *testing.T) {
 	tbl := op.GetTable()
 
 	manager := NewManager(opts)
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Mock Flusher")
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
 	colDefs := make([]types.Type, cols)
 	for i := 0; i < cols; i++ {
@@ -154,7 +154,7 @@ func TestCollection(t *testing.T) {
 
 func TestContainer(t *testing.T) {
 	capacity := uint64(4096)
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Mock Flusher")
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
 
 	baseid := common.ID{}

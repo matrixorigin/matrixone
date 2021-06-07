@@ -25,7 +25,7 @@ func MakeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt i
 }
 
 func MakeBufMagr(capacity uint64) mgrif.IBufferManager {
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Mock Flusher")
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
 	return bufMgr
 }
