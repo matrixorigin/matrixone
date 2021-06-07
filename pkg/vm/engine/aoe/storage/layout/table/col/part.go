@@ -115,12 +115,6 @@ func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 	default:
 		panic("not support")
 	}
-	// runtime.SetFinalizer(part, func(p IColumnPart) {
-	// 	p.SetNext(nil)
-	// 	id := p.GetID()
-	// 	log.Infof("GC ColumnPart %s", id.String())
-	// 	p.Close()
-	// })
 
 	blk.Append(part)
 	return part
@@ -173,13 +167,6 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 		panic("not supported")
 	}
 
-	// cloned.Next = part.Next
-	// runtime.SetFinalizer(cloned, func(p IColumnPart) {
-	// 	id := p.GetID()
-	// 	log.Infof("GC ColumnPart %s", id.String())
-	// 	p.SetNext(nil)
-	// 	p.Close()
-	// })
 	blk.UnRef()
 	return cloned
 }

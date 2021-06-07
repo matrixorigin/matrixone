@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	// "runtime"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -74,12 +73,6 @@ func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, id common.ID, c
 		MTBufMgr:  mtBufMgr,
 		SSTBufMgr: sstBufMgr,
 	}
-	// runtime.SetFinalizer(seg, func(o IColumnSegment) {
-	// 	id := o.GetID()
-	// 	// o.SetNext(nil)
-	// 	log.Infof("[GC]: ColumnSegment %s [%d]", id.SegmentString(), o.GetSegmentType())
-	// 	o.Close()
-	// })
 	return seg.Ref()
 }
 
@@ -186,11 +179,6 @@ func (seg *ColumnSegment) CloneWithUpgrade() IColumnSegment {
 		}
 		prev = cur
 	}
-	// runtime.SetFinalizer(cloned, func(o IColumnSegment) {
-	// 	o.SetNext(nil)
-	// 	// id := o.GetID()
-	// 	// log.Infof("[GC]: ColumnSegment %s [%d]", id.SegmentString(), o.GetSegmentType())
-	// })
 	return cloned
 }
 
@@ -224,11 +212,6 @@ func (seg *ColumnSegment) Close() error {
 	for _, blk := range seg.Blocks {
 		blk.UnRef()
 	}
-	// if seg.Next != nil {
-	// 	seg.Next.UnRef()
-	// 	seg.Next = nil
-	// }
-	// TODO
 	seg.Blocks = nil
 	return nil
 }

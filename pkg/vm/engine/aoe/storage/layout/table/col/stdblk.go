@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync/atomic"
-	// "runtime"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -21,12 +20,6 @@ func NewStdColumnBlock(seg IColumnSegment, id common.ID, blkType BlockType) ICol
 			ColIdx: seg.GetColIdx(),
 		},
 	}
-	// runtime.SetFinalizer(blk, func(o IColumnBlock) {
-	// 	o.SetNext(nil)
-	// 	// id := o.GetID()
-	// 	// log.Infof("[GC]: StdColumnBlock %s [%d]", id.BlockString(), o.GetBlockType())
-	// 	o.Close()
-	// })
 	seg.Append(blk.Ref())
 	return blk.Ref()
 }
@@ -61,12 +54,6 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment) IColumnBlock {
 		panic("logic error")
 	}
 	cloned.Part = part
-	// runtime.SetFinalizer(cloned, func(o IColumnBlock) {
-	// 	o.SetNext(nil)
-	// 	// id := o.GetID()
-	// 	// log.Infof("[GC]: StdColumnBlock %s [%d]", id.BlockString(), o.GetBlockType())
-	// 	o.Close()
-	// })
 	seg.UnRef()
 	return cloned
 }
