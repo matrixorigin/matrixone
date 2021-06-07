@@ -80,17 +80,17 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	dio.READER_FACTORY.Init(opts, dirname)
 
 	memtblMgr := mt.NewManager(opts)
-	mutBufMgr := bm.NewBufferManager(opts.CacheCfg.InsertCapacity, opts.MemData.Updater)
-	dataBufMgr := bm.NewBufferManager(opts.CacheCfg.DataCapacity, opts.MemData.Updater)
+	mtBufMgr := bm.NewBufferManager(opts.CacheCfg.InsertCapacity, opts.MemData.Updater)
+	sstBufMgr := bm.NewBufferManager(opts.CacheCfg.DataCapacity, opts.MemData.Updater)
 
 	db = &DB{
-		Dir:             dirname,
-		Opts:            opts,
-		MemTableMgr:     memtblMgr,
-		MutableBufMgr:   mutBufMgr,
-		TableDataBufMgr: dataBufMgr,
-		ClosedC:         make(chan struct{}),
-		Closed:          new(atomic.Value),
+		Dir:         dirname,
+		Opts:        opts,
+		MemTableMgr: memtblMgr,
+		MTBufMgr:    mtBufMgr,
+		SSTBufMgr:   sstBufMgr,
+		ClosedC:     make(chan struct{}),
+		Closed:      new(atomic.Value),
 	}
 
 	db.store.DataTables = table.NewTables()

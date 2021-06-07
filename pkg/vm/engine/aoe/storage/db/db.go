@@ -38,9 +38,9 @@ type DB struct {
 	Dir  string
 	Opts *e.Options
 
-	MemTableMgr     mtif.IManager
-	MutableBufMgr   bmgrif.IBufferManager
-	TableDataBufMgr bmgrif.IBufferManager
+	MemTableMgr mtif.IManager
+	MTBufMgr    bmgrif.IBufferManager
+	SSTBufMgr   bmgrif.IBufferManager
 
 	store struct {
 		sync.RWMutex
@@ -127,8 +127,8 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 			Opts:      d.Opts,
 			MTManager: d.MemTableMgr,
 			TableMeta: tbl,
-			MTBufMgr:  d.MutableBufMgr,
-			SSTBufMgr: d.TableDataBufMgr,
+			MTBufMgr:  d.MTBufMgr,
+			SSTBufMgr: d.SSTBufMgr,
 			Tables:    d.store.DataTables,
 		}
 		op := mdops.NewCreateTableOp(opCtx)
