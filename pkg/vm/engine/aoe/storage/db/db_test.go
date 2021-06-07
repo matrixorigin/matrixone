@@ -8,6 +8,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -247,7 +248,6 @@ func TestConcurrency(t *testing.T) {
 				ColIdxes:  cols,
 			}
 			searchCh <- searchReq
-			// time.Sleep(1 * time.Microsecond)
 		}
 	}()
 
@@ -288,5 +288,67 @@ func TestConcurrency(t *testing.T) {
 	blkIt.Close()
 
 	t.Log(dbi.WorkersStatsString())
+	// time.Sleep(time.Duration(200) * time.Millisecond)
+	// for i := 0; i < 500; i++ {
+	// 	runtime.GC()
+	// 	time.Sleep(time.Duration(1) * time.Millisecond)
+	// }
+	// t.Log(dbi.MTBufMgr.String())
+	// t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()
+}
+
+func TestGC(t *testing.T) {
+	initDBTest()
+	dbi := initDB()
+	schema := md.MockSchema(2)
+	schema.Name = "mockcon"
+	tid, err := dbi.CreateTable(schema)
+	assert.Nil(t, err)
+	t.Log(tid)
+	blkCnt := dbi.store.MetaInfo.Conf.SegmentMaxBlocks
+	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * blkCnt
+	baseCk := chunk.MockChunk(schema.Types(), rows)
+
+	logIdx := &md.LogIndex{
+		ID:       uint64(0),
+		Capacity: baseCk.GetCount(),
+	}
+
+	{
+		for i := uint64(0); i < 1; i++ {
+			logIdx.ID = i
+			dbi.Append(schema.Name, baseCk, logIdx)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		runtime.GC()
+		time.Sleep(time.Duration(1) * time.Millisecond)
+	}
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < 8; i++ {
+			wg.Add(1)
+			{
+				// go func() {
+				// dbi.Append(schema.Name, baseCk, logIdx)
+				collection := dbi.MemTableMgr.GetCollection(tid)
+				collection.Append(baseCk, logIdx)
+				wg.Done()
+			}
+		}
+	}
+	wg.Wait()
+	for i := 0; i < 100; i++ {
+		runtime.GC()
+		time.Sleep(time.Duration(1) * time.Millisecond)
+	}
+	time.Sleep(time.Duration(100) * time.Millisecond)
+	for i := 0; i < 100; i++ {
+		runtime.GC()
+		time.Sleep(time.Duration(1) * time.Millisecond)
+	}
+	dbi.Close()
+	t.Log(dbi.MTBufMgr.String())
+	t.Log(dbi.SSTBufMgr.String())
 }

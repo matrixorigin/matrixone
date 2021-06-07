@@ -29,11 +29,6 @@ var (
 	ErrClosed = errors.New("aoe: closed")
 )
 
-// type Reader interface {
-// }
-// type Writer interface {
-// }
-
 type DB struct {
 	Dir  string
 	Opts *e.Options
@@ -56,11 +51,6 @@ type DB struct {
 
 	sync.RWMutex
 }
-
-// var (
-// 	_ Reader = (*DB)(nil)
-// 	_ Writer = (*DB)(nil)
-// )
 
 func cleanStaleMeta(dirname string) {
 	dir := e.MakeMetaDir(dirname)
