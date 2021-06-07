@@ -4,7 +4,6 @@ import (
 	"fmt"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
-	"sync"
 	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
@@ -35,10 +34,11 @@ var (
 )
 
 type OpWorker struct {
-	OpC   chan iops.IOp
-	CmdC  chan Cmd
-	State State
-	Wg    sync.WaitGroup
+	OpC      chan iops.IOp
+	CmdC     chan Cmd
+	State    State
+	Pending  int64
+	ClosedCh chan struct{}
 }
 
 func NewOpWorker(args ...int) *OpWorker {
@@ -53,15 +53,16 @@ func NewOpWorker(args ...int) *OpWorker {
 		}
 	}
 	worker := &OpWorker{
-		OpC:   make(chan iops.IOp, l),
-		CmdC:  make(chan Cmd, l),
-		State: CREATED,
+		OpC:      make(chan iops.IOp, l),
+		CmdC:     make(chan Cmd, l),
+		State:    CREATED,
+		ClosedCh: make(chan struct{}),
 	}
 	return worker
 }
 
 func (w *OpWorker) Start() {
-	log.Infof("Start OpWorker")
+	// log.Infof("Start OpWorker")
 	if w.State != CREATED {
 		panic("logic error")
 	}
@@ -74,7 +75,7 @@ func (w *OpWorker) Start() {
 			select {
 			case op := <-w.OpC:
 				w.onOp(op)
-				w.Wg.Done()
+				atomic.AddInt64(&w.Pending, int64(-1))
 			case cmd := <-w.CmdC:
 				w.onCmd(cmd)
 			}
@@ -106,9 +107,16 @@ func (w *OpWorker) WaitStop() {
 		return
 	}
 	if atomic.CompareAndSwapInt32(&w.State, STOPPING_RECEIVER, STOPPING_CMD) {
-		w.Wg.Wait()
+		pending := atomic.LoadInt64(&w.Pending)
+		for {
+			if pending == 0 {
+				break
+			}
+			pending = atomic.LoadInt64(&w.Pending)
+		}
 		w.CmdC <- QUIT
 	}
+	<-w.ClosedCh
 }
 
 func (w *OpWorker) SendOp(op iops.IOp) bool {
@@ -116,9 +124,9 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 	if state != RUNNING {
 		return false
 	}
-	w.Wg.Add(1)
+	atomic.AddInt64(&w.Pending, int64(1))
 	if atomic.LoadInt32(&w.State) != RUNNING {
-		w.Wg.Done()
+		atomic.AddInt64(&w.Pending, int64(-1))
 		return false
 	}
 	w.OpC <- op
@@ -134,12 +142,13 @@ func (w *OpWorker) onOp(op iops.IOp) {
 func (w *OpWorker) onCmd(cmd Cmd) {
 	switch cmd {
 	case QUIT:
-		log.Infof("Quit OpWorker")
+		// log.Infof("Quit OpWorker")
 		close(w.CmdC)
 		close(w.OpC)
 		if !atomic.CompareAndSwapInt32(&w.State, STOPPING_CMD, STOPPED) {
 			panic("logic error")
 		}
+		w.ClosedCh <- struct{}{}
 	default:
 		panic(fmt.Sprintf("Unsupported cmd %d", cmd))
 	}

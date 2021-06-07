@@ -3,10 +3,11 @@ package md
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
 
-func NewTable(info *MetaInfo, ids ...uint64) *Table {
+func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
 	var id uint64
 	if len(ids) == 0 {
 		id = info.Sequence.GetTableID()
@@ -18,6 +19,7 @@ func NewTable(info *MetaInfo, ids ...uint64) *Table {
 		Segments:  make(map[uint64]*Segment),
 		TimeStamp: *NewTimeStamp(),
 		Info:      info,
+		Schema:    schema,
 	}
 	return tbl
 }
@@ -112,7 +114,7 @@ func (tbl *Table) SetInfo(info *MetaInfo) error {
 }
 
 func (tbl *Table) CreateSegment() (seg *Segment, err error) {
-	seg = NewSegment(tbl.Info, tbl.ID, tbl.Info.Sequence.GetSegmentID())
+	seg = NewSegment(tbl.Info, tbl.ID, tbl.Info.Sequence.GetSegmentID(), tbl.Schema)
 	return seg, err
 }
 
@@ -160,7 +162,12 @@ func (tbl *Table) RegisterSegment(seg *Segment) error {
 		return errors.New(fmt.Sprintf("Duplicate segment %d found in table %d", seg.GetID(), tbl.ID))
 	}
 	tbl.Segments[seg.GetID()] = seg
+	atomic.StoreUint64(&tbl.SegmentCnt, uint64(len(tbl.Segments)))
 	return nil
+}
+
+func (tbl *Table) GetSegmentCount() uint64 {
+	return atomic.LoadUint64(&tbl.SegmentCnt)
 }
 
 func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {
@@ -186,7 +193,7 @@ func (tbl *Table) Copy(ts ...int64) *Table {
 	} else {
 		t = ts[0]
 	}
-	new_tbl := NewTable(tbl.Info, tbl.ID)
+	new_tbl := NewTable(tbl.Info, tbl.Schema, tbl.ID)
 	new_tbl.TimeStamp = tbl.TimeStamp
 	new_tbl.BoundSate = tbl.BoundSate
 	for k, v := range tbl.Segments {

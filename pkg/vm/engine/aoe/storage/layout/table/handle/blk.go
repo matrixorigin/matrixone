@@ -1,11 +1,13 @@
 package handle
 
 import (
-	log "github.com/sirupsen/logrus"
+	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -24,6 +26,17 @@ var (
 type BlockHandle struct {
 	ID   common.ID
 	Cols []col.IColumnBlock
+}
+
+func (bh *BlockHandle) GetID() *common.ID {
+	return &bh.ID
+}
+
+func (bh *BlockHandle) GetColumn(idx int) col.IColumnBlock {
+	if idx < 0 || idx >= len(bh.Cols) {
+		panic(fmt.Sprintf("Specified idx %d is out of scope", idx))
+	}
+	return bh.Cols[idx]
 }
 
 func (bh *BlockHandle) Close() error {
