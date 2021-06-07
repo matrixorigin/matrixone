@@ -7,11 +7,11 @@ import (
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
-
-	log "github.com/sirupsen/logrus"
+	// "runtime"
+	// log "github.com/sirupsen/logrus"
 )
 
 type SegmentType uint8
@@ -43,10 +43,14 @@ type IColumnSegment interface {
 	GetBlock(id common.ID) IColumnBlock
 	InitScanCursor(cursor *ScanCursor) error
 	RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error)
+	Ref() IColumnSegment
+	UnRef()
+	GetRefs() int64
 }
 
 type ColumnSegment struct {
 	sync.RWMutex
+	Refs      int64
 	ID        common.ID
 	Next      IColumnSegment
 	Blocks    []IColumnBlock
@@ -62,6 +66,7 @@ type ColumnSegment struct {
 func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, id common.ID, colIdx int, colType types.Type, segType SegmentType) IColumnSegment {
 	seg := &ColumnSegment{
 		ID:        id,
+		Refs:      0,
 		IDMap:     make(map[common.ID]int, 0),
 		Idx:       colIdx,
 		Type:      segType,
@@ -69,13 +74,13 @@ func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, id common.ID, c
 		MTBufMgr:  mtBufMgr,
 		SSTBufMgr: sstBufMgr,
 	}
-	runtime.SetFinalizer(seg, func(o IColumnSegment) {
-		id := o.GetID()
-		o.SetNext(nil)
-		log.Infof("[GC]: ColumnSegment %s [%d]", id.SegmentString(), o.GetSegmentType())
-		o.Close()
-	})
-	return seg
+	// runtime.SetFinalizer(seg, func(o IColumnSegment) {
+	// 	id := o.GetID()
+	// 	// o.SetNext(nil)
+	// 	log.Infof("[GC]: ColumnSegment %s [%d]", id.SegmentString(), o.GetSegmentType())
+	// 	o.Close()
+	// })
+	return seg.Ref()
 }
 
 func (seg *ColumnSegment) GetMTBufMgr() bmgrif.IBufferManager {
@@ -84,6 +89,26 @@ func (seg *ColumnSegment) GetMTBufMgr() bmgrif.IBufferManager {
 
 func (seg *ColumnSegment) GetSSTBufMgr() bmgrif.IBufferManager {
 	return seg.SSTBufMgr
+}
+
+func (seg *ColumnSegment) Ref() IColumnSegment {
+	atomic.AddInt64(&seg.Refs, int64(1))
+	// log.Infof("Ref ColSegment %s to refs=%d %p", seg.ID.SegmentString(), newRef, seg)
+	return seg
+}
+
+func (seg *ColumnSegment) UnRef() {
+	newRef := atomic.AddInt64(&seg.Refs, int64(-1))
+	// log.Infof("UnRef ColSegment %s to refs=%d %p", seg.ID.SegmentString(), newRef, seg)
+	if newRef == 0 {
+		seg.Close()
+	} else if newRef < 0 {
+		panic("logic error")
+	}
+}
+
+func (seg *ColumnSegment) GetRefs() int64 {
+	return atomic.LoadInt64(&seg.Refs)
 }
 
 func (seg *ColumnSegment) GetColIdx() int {
@@ -103,7 +128,7 @@ func (seg *ColumnSegment) GetBlock(id common.ID) IColumnBlock {
 	if !ok {
 		return nil
 	}
-	return seg.Blocks[idx]
+	return seg.Blocks[idx].Ref()
 }
 
 func (seg *ColumnSegment) UpgradeBlock(id common.ID) (IColumnBlock, error) {
@@ -118,7 +143,7 @@ func (seg *ColumnSegment) UpgradeBlock(id common.ID) (IColumnBlock, error) {
 		panic("logic error")
 	}
 	old := seg.Blocks[idx]
-	upgradeBlk := old.CloneWithUpgrade(seg)
+	upgradeBlk := old.CloneWithUpgrade(seg.Ref())
 	if upgradeBlk == nil {
 		return nil, errors.New(fmt.Sprintf("Cannot upgrade blk: %s", id.BlockString()))
 	}
@@ -131,9 +156,10 @@ func (seg *ColumnSegment) UpgradeBlock(id common.ID) (IColumnBlock, error) {
 	defer seg.Unlock()
 	seg.Blocks[idx] = upgradeBlk
 	if idx > 0 {
-		seg.Blocks[idx-1].SetNext(upgradeBlk)
+		seg.Blocks[idx-1].SetNext(upgradeBlk.Ref())
 	}
-	return upgradeBlk, nil
+	old.UnRef()
+	return upgradeBlk.Ref(), nil
 }
 
 func (seg *ColumnSegment) CloneWithUpgrade() IColumnSegment {
@@ -150,20 +176,21 @@ func (seg *ColumnSegment) CloneWithUpgrade() IColumnSegment {
 		MTBufMgr:  seg.MTBufMgr,
 		SSTBufMgr: seg.SSTBufMgr,
 	}
+	cloned.Ref()
 	var prev IColumnBlock
 	for _, blk := range seg.Blocks {
-		cur := blk.CloneWithUpgrade(cloned)
+		cur := blk.CloneWithUpgrade(cloned.Ref())
 		cloned.Blocks = append(cloned.Blocks, cur)
 		if prev != nil {
-			prev.SetNext(cur)
+			prev.SetNext(cur.Ref())
 		}
 		prev = cur
 	}
-	runtime.SetFinalizer(cloned, func(o IColumnSegment) {
-		o.SetNext(nil)
-		// id := o.GetID()
-		// log.Infof("[GC]: ColumnSegment %s [%d]", id.SegmentString(), o.GetSegmentType())
-	})
+	// runtime.SetFinalizer(cloned, func(o IColumnSegment) {
+	// 	o.SetNext(nil)
+	// 	// id := o.GetID()
+	// 	// log.Infof("[GC]: ColumnSegment %s [%d]", id.SegmentString(), o.GetSegmentType())
+	// })
 	return cloned
 }
 
@@ -175,25 +202,42 @@ func (seg *ColumnSegment) GetRowCount() uint64 {
 
 func (seg *ColumnSegment) SetNext(next IColumnSegment) {
 	seg.Lock()
-	defer seg.Unlock()
+	if seg.Next != nil {
+		seg.Next.UnRef()
+	}
 	seg.Next = next
+	seg.Unlock()
 }
 
 func (seg *ColumnSegment) GetNext() IColumnSegment {
 	seg.RLock()
-	defer seg.RUnlock()
-	return seg.Next
+	if seg.Next != nil {
+		seg.Next.Ref()
+	}
+	r := seg.Next
+	seg.RUnlock()
+	return r
 }
 
 func (seg *ColumnSegment) Close() error {
+	// log.Infof("Close segment %s refs=%d", seg.ID.SegmentString(), seg.Refs)
+	for _, blk := range seg.Blocks {
+		blk.UnRef()
+	}
+	// if seg.Next != nil {
+	// 	seg.Next.UnRef()
+	// 	seg.Next = nil
+	// }
+	// TODO
+	seg.Blocks = nil
 	return nil
 }
 
 func (seg *ColumnSegment) RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
 	blk = NewStdColumnBlock(seg, id, TRANSIENT_BLK)
-	part := NewColumnPart(seg.MTBufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
+	part := NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.ColType.Size))
 	for part == nil {
-		part = NewColumnPart(seg.MTBufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
+		part = NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.ColType.Size))
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	// TODO: StrColumnBlock
@@ -206,12 +250,13 @@ func (seg *ColumnSegment) GetID() common.ID {
 
 func (seg *ColumnSegment) Append(blk IColumnBlock) {
 	if !seg.ID.IsSameSegment(blk.GetID()) {
+		blk.UnRef()
 		panic("logic error")
 	}
 	seg.Lock()
 	defer seg.Unlock()
 	if len(seg.Blocks) > 0 {
-		seg.Blocks[len(seg.Blocks)-1].SetNext(blk)
+		seg.Blocks[len(seg.Blocks)-1].SetNext(blk.Ref())
 	}
 	seg.Blocks = append(seg.Blocks, blk)
 	seg.IDMap[blk.GetID()] = len(seg.Blocks) - 1
@@ -224,7 +269,7 @@ func (seg *ColumnSegment) GetBlockRoot() IColumnBlock {
 	if len(seg.Blocks) == 0 {
 		return nil
 	}
-	return seg.Blocks[0]
+	return seg.Blocks[0].Ref()
 }
 
 func (seg *ColumnSegment) GetPartRoot() IColumnPart {

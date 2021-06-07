@@ -30,6 +30,8 @@ type IColumnBlock interface {
 	GetColIdx() int
 	CloneWithUpgrade(IColumnSegment) IColumnBlock
 	String() string
+	Ref() IColumnBlock
+	UnRef()
 }
 
 type ColumnBlock struct {
@@ -39,6 +41,7 @@ type ColumnBlock struct {
 	RowCount uint64
 	Type     BlockType
 	ColIdx   int
+	Refs     int64
 	// Segment  IColumnSegment
 }
 
@@ -59,13 +62,20 @@ func (blk *ColumnBlock) GetRowCount() uint64 {
 func (blk *ColumnBlock) SetNext(next IColumnBlock) {
 	blk.Lock()
 	defer blk.Unlock()
+	if blk.Next != nil {
+		blk.Next.UnRef()
+	}
 	blk.Next = next
 }
 
 func (blk *ColumnBlock) GetNext() IColumnBlock {
 	blk.RLock()
-	defer blk.RUnlock()
-	return blk.Next
+	if blk.Next != nil {
+		blk.Next.Ref()
+	}
+	r := blk.Next
+	blk.RUnlock()
+	return r
 }
 
 func (blk *ColumnBlock) GetID() common.ID {

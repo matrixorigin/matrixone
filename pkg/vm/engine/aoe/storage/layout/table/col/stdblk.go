@@ -3,7 +3,8 @@ package col
 import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"runtime"
+	"sync/atomic"
+	// "runtime"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -20,14 +21,14 @@ func NewStdColumnBlock(seg IColumnSegment, id common.ID, blkType BlockType) ICol
 			ColIdx: seg.GetColIdx(),
 		},
 	}
-	seg.Append(blk)
-	runtime.SetFinalizer(blk, func(o IColumnBlock) {
-		o.SetNext(nil)
-		// id := o.GetID()
-		// log.Infof("[GC]: StdColumnBlock %s [%d]", id.BlockString(), o.GetBlockType())
-		o.Close()
-	})
-	return blk
+	// runtime.SetFinalizer(blk, func(o IColumnBlock) {
+	// 	o.SetNext(nil)
+	// 	// id := o.GetID()
+	// 	// log.Infof("[GC]: StdColumnBlock %s [%d]", id.BlockString(), o.GetBlockType())
+	// 	o.Close()
+	// })
+	seg.Append(blk.Ref())
+	return blk.Ref()
 }
 
 func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment) IColumnBlock {
@@ -52,26 +53,44 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment) IColumnBlock {
 			ColIdx: seg.GetColIdx(),
 		},
 	}
+	cloned.Ref()
 	blk.RLock()
-	part := blk.Part.CloneWithUpgrade(cloned, seg.GetSSTBufMgr())
+	part := blk.Part.CloneWithUpgrade(cloned.Ref(), seg.GetSSTBufMgr())
 	blk.RUnlock()
 	if part == nil {
 		panic("logic error")
 	}
 	cloned.Part = part
-	runtime.SetFinalizer(cloned, func(o IColumnBlock) {
-		o.SetNext(nil)
-		// id := o.GetID()
-		// log.Infof("[GC]: StdColumnBlock %s [%d]", id.BlockString(), o.GetBlockType())
-		o.Close()
-	})
+	// runtime.SetFinalizer(cloned, func(o IColumnBlock) {
+	// 	o.SetNext(nil)
+	// 	// id := o.GetID()
+	// 	// log.Infof("[GC]: StdColumnBlock %s [%d]", id.BlockString(), o.GetBlockType())
+	// 	o.Close()
+	// })
+	seg.UnRef()
 	return cloned
+}
+
+func (blk *StdColumnBlock) Ref() IColumnBlock {
+	atomic.AddInt64(&blk.Refs, int64(1))
+	// newRef := atomic.AddInt64(&blk.Refs, int64(1))
+	// log.Infof("StdColumnBlock %s Ref to %d, %p", blk.ID.BlockString(), newRef, blk)
+	return blk
+}
+
+func (blk *StdColumnBlock) UnRef() {
+	newRef := atomic.AddInt64(&blk.Refs, int64(-1))
+	// log.Infof("StdColumnBlock %s Unref to %d, %p", blk.ID.BlockString(), newRef, blk)
+	if newRef == 0 {
+		blk.Close()
+	}
 }
 
 func (blk *StdColumnBlock) GetPartRoot() IColumnPart {
 	blk.RLock()
-	defer blk.RUnlock()
-	return blk.Part
+	p := blk.Part
+	blk.RUnlock()
+	return p
 }
 
 func (blk *StdColumnBlock) Append(part IColumnPart) {
@@ -84,6 +103,15 @@ func (blk *StdColumnBlock) Append(part IColumnPart) {
 }
 
 func (blk *StdColumnBlock) Close() error {
+	// log.Infof("Close StdBlk %s Refs=%d, %p", blk.ID.BlockString(), blk.Refs, blk)
+	if blk.Next != nil {
+		blk.Next.UnRef()
+		blk.Next = nil
+	}
+	if blk.Part != nil {
+		blk.Part.Close()
+	}
+	blk.Part = nil
 	return nil
 }
 

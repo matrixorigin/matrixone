@@ -8,10 +8,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 	"unsafe"
+	// "sync"
 )
 
 var WORK_DIR = "/tmp/layout/blk_test"
@@ -305,8 +305,9 @@ func makeSegment(mtBufMgr, sstBufMgr mgrif.IBufferManager, id common.ID, blkCnt 
 	seg := NewColumnSegment(mtBufMgr, sstBufMgr, id, 0, colType, UNSORTED_SEG)
 	blk_id := id
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
+		blk, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
 		assert.Nil(t, err)
+		blk.UnRef()
 	}
 	return seg
 }
@@ -321,7 +322,7 @@ func makeSegments(mtBufMgr, sstBufMgr mgrif.IBufferManager, segCnt, blkCnt int, 
 		seg := makeSegment(mtBufMgr, sstBufMgr, seg_id, blkCnt, rowCount, typeSize, t)
 		segs = append(segs, seg)
 		if prevSeg != nil {
-			prevSeg.SetNext(seg)
+			prevSeg.SetNext(seg.Ref())
 		}
 		if rootSeg == nil {
 			rootSeg = seg
@@ -340,91 +341,86 @@ func TestUpgradeStdSegment(t *testing.T) {
 	seg_cnt := 5
 	blk_cnt := 4
 	segs := makeSegments(mtBufMgr, sstBufMgr, seg_cnt, blk_cnt, row_count, typeSize, t)
-	rootSeg := segs[0]
+	rootSeg := segs[0].Ref()
 
-	for _, seg := range segs {
-		cursor := ScanCursor{}
-		err := seg.InitScanCursor(&cursor)
-		assert.Nil(t, err)
-		assert.False(t, cursor.Inited)
-		err = cursor.Init()
-		assert.Nil(t, err)
-		assert.True(t, cursor.Inited)
-	}
+	// pools := 1
+	// var savedStrings []*[]string
+	// var wg sync.WaitGroup
+	// for i := 0; i < pools; i++ {
+	// 	wg.Add(1)
+	// 	var strings []string
+	// 	savedStrings = append(savedStrings, &strings)
+	// 	go func(wgp *sync.WaitGroup, strs *[]string) {
+	// 		defer wgp.Done()
+	// 		cursor := ScanCursor{CurrSeg: rootSeg}
+	// 		err := rootSeg.InitScanCursor(&cursor)
+	// 		assert.Nil(t, err)
+	// 		cursor.Init()
+	// 		cnt := 0
+	// 		// prevType := TRANSIENT_BLK
+	// 		for cursor.Current != nil {
+	// 			cnt += 1
+	// 			err = cursor.Init()
+	// 			assert.Nil(t, err)
+	// 			cursor.Next()
+	// 		}
+	// 		assert.Equal(t, seg_cnt*blk_cnt, cnt)
+	// 	}(&wg, &strings)
+	// }
 
-	pools := 1
-	var savedStrings []*[]string
-	var wg sync.WaitGroup
-	for i := 0; i < pools; i++ {
-		wg.Add(1)
-		var strings []string
-		savedStrings = append(savedStrings, &strings)
-		go func(wgp *sync.WaitGroup, strs *[]string) {
-			defer wgp.Done()
-			cursor := ScanCursor{CurrSeg: rootSeg}
-			err := rootSeg.InitScanCursor(&cursor)
-			assert.Nil(t, err)
-			cursor.Init()
-			cnt := 0
-			// prevType := TRANSIENT_BLK
-			for cursor.Current != nil {
-				cnt += 1
-				err = cursor.Init()
-				assert.Nil(t, err)
-				// assert.True(t, cursor.Current.GetBlock().GetBlockType() >= prevType, cursor.Current.GetBlock().String())
-				// prevType = cursor.Current.GetBlock().GetBlockType()
-				cursor.Next()
-			}
-			assert.Equal(t, seg_cnt*blk_cnt, cnt)
-		}(&wg, &strings)
-	}
-
-	wg.Wait()
+	// wg.Wait()
 	assert.Equal(t, blk_cnt*seg_cnt, mtBufMgr.NodeCount())
 	assert.Equal(t, 0, sstBufMgr.NodeCount())
 
-	currSeg := rootSeg
+	currSeg := rootSeg.Ref()
 	for currSeg != nil {
 		ids := currSeg.GetBlockIDs()
 		for _, id := range ids {
 			oldBlk := currSeg.GetBlock(id)
 			assert.NotNil(t, oldBlk)
 			assert.Equal(t, TRANSIENT_BLK, oldBlk.GetBlockType())
+			oldBlk.UnRef()
 			blk, err := currSeg.UpgradeBlock(id)
 			assert.Nil(t, err)
 			assert.Equal(t, PERSISTENT_BLK, blk.GetBlockType())
+			blk.UnRef()
 		}
+		currSeg.UnRef()
 		currSeg = currSeg.GetNext()
 	}
 
-	for i := 0; i < 5; i++ {
-		runtime.GC()
-		time.Sleep(time.Duration(1) * time.Millisecond)
-	}
-
-	currSeg = rootSeg
+	currSeg = rootSeg.Ref()
 	for currSeg != nil {
 		ids := currSeg.GetBlockIDs()
 		for _, id := range ids {
 			oldBlk := currSeg.GetBlock(id)
 			assert.NotNil(t, oldBlk)
 			assert.Equal(t, PERSISTENT_BLK, oldBlk.GetBlockType())
+			oldBlk.UnRef()
 			blk, err := currSeg.UpgradeBlock(id)
 			assert.Nil(t, err)
 			assert.Equal(t, PERSISTENT_SORTED_BLK, blk.GetBlockType())
+			blk.UnRef()
 		}
+		currSeg.UnRef()
 		currSeg = currSeg.GetNext()
 	}
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 0; i++ {
 		runtime.GC()
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
-	assert.Equal(t, 0, mtBufMgr.NodeCount())
-	assert.Equal(t, blk_cnt*seg_cnt, sstBufMgr.NodeCount())
-	currSeg = rootSeg
+	currSeg = rootSeg.Ref()
 	for currSeg != nil {
+		currSeg.UnRef()
 		currSeg = currSeg.GetNext()
 	}
-	// t.Log(mtBufMgr.String())
-	// t.Log(sstBufMgr.String())
+	rootSeg.UnRef()
+	t.Log(mtBufMgr.String())
+	t.Log(sstBufMgr.String())
+	assert.Equal(t, 0, mtBufMgr.NodeCount())
+	assert.Equal(t, blk_cnt*seg_cnt, sstBufMgr.NodeCount())
+
+	for _, seg := range segs {
+		seg.UnRef()
+	}
 }

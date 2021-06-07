@@ -145,7 +145,7 @@ func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, segFi
 
 func (mgr *BufferManager) UnregisterNode(h nif.INodeHandle) {
 	node_id := h.GetID()
-	// log.Infof("UnRegisterNode %s", node_id.String())
+	log.Infof("UnRegisterNode %s", node_id.String())
 	if h.IsSpillable() {
 		if node_id.IsTransient() {
 			h.Clean()

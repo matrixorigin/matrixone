@@ -142,6 +142,7 @@ func TestCollection(t *testing.T) {
 				}
 			}
 			cursor.Close()
+			loopSeg.UnRef()
 			loopSeg = loopSeg.GetNext()
 		}
 	}

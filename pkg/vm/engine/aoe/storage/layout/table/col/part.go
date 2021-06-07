@@ -9,10 +9,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"runtime"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
+	// "runtime"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -86,6 +85,7 @@ type ColumnPart struct {
 
 func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 	rowCount uint64, typeSize uint64) IColumnPart {
+	defer blk.UnRef()
 	part := &ColumnPart{
 		BufMgr:      bmgr,
 		ID:          id,
@@ -115,12 +115,12 @@ func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 	default:
 		panic("not support")
 	}
-	runtime.SetFinalizer(part, func(p IColumnPart) {
-		p.SetNext(nil)
-		id := p.GetID()
-		log.Infof("GC ColumnPart %s", id.String())
-		p.Close()
-	})
+	// runtime.SetFinalizer(part, func(p IColumnPart) {
+	// 	p.SetNext(nil)
+	// 	id := p.GetID()
+	// 	log.Infof("GC ColumnPart %s", id.String())
+	// 	p.Close()
+	// })
 
 	blk.Append(part)
 	return part
@@ -174,12 +174,13 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	}
 
 	// cloned.Next = part.Next
-	runtime.SetFinalizer(cloned, func(p IColumnPart) {
-		id := p.GetID()
-		log.Infof("GC ColumnPart %s", id.String())
-		p.SetNext(nil)
-		p.Close()
-	})
+	// runtime.SetFinalizer(cloned, func(p IColumnPart) {
+	// 	id := p.GetID()
+	// 	log.Infof("GC ColumnPart %s", id.String())
+	// 	p.SetNext(nil)
+	// 	p.Close()
+	// })
+	blk.UnRef()
 	return cloned
 }
 

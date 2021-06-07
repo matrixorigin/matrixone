@@ -41,6 +41,9 @@ func (bh *BlockHandle) GetColumn(idx int) col.IColumnBlock {
 
 func (bh *BlockHandle) Close() error {
 	if bhh := bh; bhh != nil {
+		for _, col := range bhh.Cols {
+			col.UnRef()
+		}
 		bhh.Cols = bhh.Cols[:0]
 		blkHandlePool.Put(bhh)
 		bh = nil

@@ -78,7 +78,7 @@ func (cdata *ColumnData) Append(seg IColumnSegment) error {
 func (cdata *ColumnData) RegisterSegment(id common.ID) (seg IColumnSegment, err error) {
 	seg = NewColumnSegment(cdata.MTBufMgr, cdata.SSTBufMgr, id, cdata.Idx, cdata.Type, UNSORTED_SEG)
 	err = cdata.Append(seg)
-	return seg, err
+	return seg.Ref(), err
 }
 
 func (cdata *ColumnData) RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
@@ -87,7 +87,9 @@ func (cdata *ColumnData) RegisterBlock(id common.ID, maxRows uint64) (blk IColum
 		err = errors.New(fmt.Sprintf("cannot register blk: %s", id.BlockString()))
 		return blk, err
 	}
-	return seg.RegisterBlock(id, maxRows)
+	blk, err = seg.RegisterBlock(id, maxRows)
+	seg.UnRef()
+	return blk, err
 }
 
 // func (cdata *ColumnData) AppendBlock(blk IColumnBlock) error {

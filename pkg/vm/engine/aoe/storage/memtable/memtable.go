@@ -146,6 +146,13 @@ func (mt *MemTable) GetMeta() *md.Block {
 	return mt.Meta
 }
 
+func (mt *MemTable) Close() error {
+	for _, colBlk := range mt.Columns {
+		colBlk.UnRef()
+	}
+	return nil
+}
+
 func (mt *MemTable) IsFull() bool {
 	return mt.Full
 }

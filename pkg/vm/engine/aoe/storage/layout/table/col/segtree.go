@@ -80,7 +80,7 @@ func (tree *SegmentTree) GetRoot() IColumnSegment {
 	if len(tree.data.Segments) == 0 {
 		return nil
 	}
-	return tree.data.Segments[0]
+	return tree.data.Segments[0].Ref()
 }
 
 func (tree *SegmentTree) GetTail() IColumnSegment {
@@ -89,7 +89,7 @@ func (tree *SegmentTree) GetTail() IColumnSegment {
 	if len(tree.data.Segments) == 0 {
 		return nil
 	}
-	return tree.data.Segments[len(tree.data.Segments)-1]
+	return tree.data.Segments[len(tree.data.Segments)-1].Ref()
 }
 
 func (tree *SegmentTree) GetSegment(segID common.ID) IColumnSegment {
@@ -99,7 +99,7 @@ func (tree *SegmentTree) GetSegment(segID common.ID) IColumnSegment {
 	if !ok {
 		return nil
 	}
-	return tree.data.Segments[idx]
+	return tree.data.Segments[idx].Ref()
 }
 
 func (tree *SegmentTree) UpgradeBlock(blkID common.ID) IColumnBlock {
@@ -141,10 +141,14 @@ func (tree *SegmentTree) UpgradeSegment(segID common.ID) IColumnSegment {
 	tree.data.Lock()
 	defer tree.data.Unlock()
 	tree.data.Segments[idx] = upgradeSeg
+	// if old_next != nil {
+	// 	seg.SetNext(nil)
+	// }
 	if idx > 0 {
-		tree.data.Segments[idx-1].SetNext(upgradeSeg)
+		tree.data.Segments[idx-1].SetNext(upgradeSeg.Ref())
 	}
-	return upgradeSeg
+	seg.UnRef()
+	return upgradeSeg.Ref()
 }
 
 func (tree *SegmentTree) Append(seg IColumnSegment) error {
@@ -155,7 +159,7 @@ func (tree *SegmentTree) Append(seg IColumnSegment) error {
 		return errors.New(fmt.Sprintf("Duplicate seg %v in tree", seg.GetID()))
 	}
 	if len(tree.data.Segments) != 0 {
-		tree.data.Segments[len(tree.data.Segments)-1].SetNext(seg)
+		tree.data.Segments[len(tree.data.Segments)-1].SetNext(seg.Ref())
 	}
 	tree.data.Segments = append(tree.data.Segments, seg)
 	tree.data.Helper[seg.GetID()] = len(tree.data.Segments) - 1

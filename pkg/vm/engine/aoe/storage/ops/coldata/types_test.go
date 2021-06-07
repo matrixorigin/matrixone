@@ -27,8 +27,9 @@ func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt i
 	seg := col.NewColumnSegment(bufMgr, bufMgr, id, colIdx, colType, col.UNSORTED_SEG)
 	blk_id := id
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
+		blk, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
 		assert.Nil(t, err)
+		blk.UnRef()
 	}
 	return seg
 }
@@ -67,6 +68,8 @@ func TestUpgradeSegOp(t *testing.T) {
 	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 
+	segs := make([]col.IColumnSegment, 0)
+
 	for idx, segID := range segIDs {
 		ctx := new(OpCtx)
 		ctx.Opts = opts
@@ -75,11 +78,15 @@ func TestUpgradeSegOp(t *testing.T) {
 		op.WaitDone()
 		for _, seg := range op.Segments {
 			assert.Equal(t, col.SORTED_SEG, seg.GetSegmentType())
+			nextSeg := seg.GetNext()
 			if idx < seg_cnt-1 {
-				assert.NotNil(t, seg.GetNext())
+				assert.NotNil(t, nextSeg)
+				nextSeg.UnRef()
 			} else {
-				assert.Nil(t, seg.GetNext())
+				assert.Nil(t, nextSeg)
 			}
+			seg.UnRef()
+			segs = append(segs, seg)
 		}
 	}
 
@@ -127,14 +134,16 @@ func TestUpgradeBlkOp(t *testing.T) {
 				} else if idx == 1 {
 					assert.Equal(t, col.PERSISTENT_SORTED_BLK, blk.GetBlockType())
 				}
+				blk.UnRef()
 			}
 		}
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 0; i++ {
 		runtime.GC()
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	t.Log(bufMgr.String())
 	assert.Equal(t, seg_cnt*blk_cnt*len(colDefs), bufMgr.NodeCount())
+
 	opts.MemData.Updater.Stop()
 }
