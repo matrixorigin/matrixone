@@ -5,6 +5,8 @@ import (
 	"io/ioutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"os"
@@ -70,8 +72,12 @@ func loadMetaInfo(cfg *md.Configuration) *md.MetaInfo {
 }
 
 func Open(dirname string, opts *e.Options) (db *DB, err error) {
-	opts.FillDefaults(db.Dir)
+	opts.FillDefaults(dirname)
 	opts.Meta.Info = loadMetaInfo(opts.Meta.Conf)
+
+	// TODO: refactor needed
+	dio.WRITER_FACTORY.Init(opts, dirname)
+	dio.READER_FACTORY.Init(opts, dirname)
 
 	memtblMgr := mt.NewManager(opts)
 	mutBufMgr := bm.NewBufferManager(opts.CacheCfg.InsertCapacity, opts.MemData.Updater)
@@ -83,10 +89,12 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		MemTableMgr:     memtblMgr,
 		MutableBufMgr:   mutBufMgr,
 		TableDataBufMgr: dataBufMgr,
-		MetaInfo:        opts.Meta.Info,
 		ClosedC:         make(chan struct{}),
 		Closed:          new(atomic.Value),
 	}
+
+	db.store.DataTables = table.NewTables()
+	db.store.MetaInfo = opts.Meta.Info
 
 	cleanStaleMeta(opts.Meta.Conf.Dir)
 	db.validateAndCleanStaleData()

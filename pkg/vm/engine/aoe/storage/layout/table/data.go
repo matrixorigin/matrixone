@@ -1,6 +1,7 @@
 package table
 
 import (
+	"errors"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
@@ -25,24 +26,7 @@ type ITableData interface {
 	UpgradeBlock(blkID common.ID) (blks []col.IColumnBlock)
 	UpgradeSegment(segID common.ID) (segs []col.IColumnSegment)
 	AppendColSegments(colSegs []col.IColumnSegment)
-	// Scan()
 }
-
-// type IColumnDef interface {
-// 	GetType() interface{}
-// 	TypeSize() uint64
-// }
-
-// type MockColumnDef struct {
-// }
-
-// func (c *MockColumnDef) GetType() interface{} {
-// 	return nil
-// }
-
-// func (c *MockColumnDef) TypeSize() uint64 {
-// 	return uint64(4)
-// }
 
 func NewTableData(bufMgr bmgrif.IBufferManager, id uint64, colTypes []types.Type) ITableData {
 	data := &TableData{
@@ -135,4 +119,73 @@ func (td *TableData) AppendColSegments(colSegs []col.IColumnSegment) {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
 	}
+}
+
+type Tables struct {
+	sync.RWMutex
+	Data      map[uint64]ITableData
+	Ids       map[uint64]bool
+	Tombstone map[uint64]ITableData
+}
+
+func NewTables() *Tables {
+	return &Tables{
+		Data:      make(map[uint64]ITableData),
+		Ids:       make(map[uint64]bool),
+		Tombstone: make(map[uint64]ITableData),
+	}
+}
+
+func (ts *Tables) TableIds() (ids map[uint64]bool) {
+	return ts.Ids
+}
+
+func (ts *Tables) DropTable(tid uint64) (err error) {
+	ts.Lock()
+	err = ts.DropTableNoLock(tid)
+	ts.Unlock()
+	return err
+}
+
+func (ts *Tables) DropTableNoLock(tid uint64) (err error) {
+	tbl, ok := ts.Data[tid]
+	if !ok {
+		return errors.New(fmt.Sprintf("Specified table %d not found", tid))
+	}
+	ts.Tombstone[tid] = tbl
+	delete(ts.Ids, tid)
+	delete(ts.Data, tid)
+	return nil
+}
+
+func (ts *Tables) GetTableNoLock(tid uint64) (tbl ITableData, err error) {
+	tbl, ok := ts.Data[tid]
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("Specified table %d not found", tid))
+	}
+	return tbl, err
+}
+
+func (ts *Tables) GetTable(tid uint64) (tbl ITableData, err error) {
+	ts.RLock()
+	tbl, err = ts.GetTableNoLock(tid)
+	ts.RUnlock()
+	return tbl, err
+}
+
+func (ts *Tables) CreateTable(tbl ITableData) (err error) {
+	ts.Lock()
+	err = ts.CreateTableNoLock(tbl)
+	ts.Unlock()
+	return err
+}
+
+func (ts *Tables) CreateTableNoLock(tbl ITableData) (err error) {
+	_, ok := ts.Data[tbl.GetID()]
+	if ok {
+		return errors.New(fmt.Sprintf("Dup table %d found", tbl.GetID()))
+	}
+	ts.Ids[tbl.GetID()] = true
+	ts.Data[tbl.GetID()] = tbl
+	return nil
 }

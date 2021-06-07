@@ -13,6 +13,9 @@ import (
 	ih "matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata"
+	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	"os"
 	"path"
 	"path/filepath"
@@ -39,8 +42,11 @@ type DB struct {
 	MutableBufMgr   bmgrif.IBufferManager
 	TableDataBufMgr bmgrif.IBufferManager
 
-	MetaInfo  *md.MetaInfo
-	DataTable table.ITableData
+	store struct {
+		sync.RWMutex
+		MetaInfo   *md.MetaInfo
+		DataTables *table.Tables
+	}
 
 	DataDir  *os.File
 	FileLock io.Closer
@@ -106,37 +112,115 @@ func cleanStaleMeta(dirname string) {
 	}
 }
 
-func (d *DB) NewSegmentIter(o *e.IterOptions) ih.ISegmentIterator {
+func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	var h *handle.SegmentsHandle
-	if o.All {
-		h = handle.NewAllSegmentsHandle(o.ColIdxes, d.DataTable)
-	} else {
-		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, d.DataTable)
+	tbl, err := d.store.MetaInfo.ReferenceTableByName(tableName)
+	if err != nil {
+		return err
 	}
-	return h.NewSegIt()
+
+	collection := d.MemTableMgr.GetCollection(tbl.GetID())
+	if collection == nil {
+		opCtx := &mdops.OpCtx{
+			Opts:       d.Opts,
+			MTManager:  d.MemTableMgr,
+			TableMeta:  tbl,
+			BufManager: d.MutableBufMgr,
+			Tables:     d.store.DataTables,
+		}
+		op := mdops.NewCreateTableOp(opCtx)
+		op.Push()
+		err = op.WaitDone()
+		if err != nil {
+			panic("logic error")
+		}
+		collection = op.Collection
+	}
+
+	clonedIndex := *index
+	return collection.Append(ck, &clonedIndex)
 }
 
-func (d *DB) NewBlockIter(o *e.IterOptions) ih.IBlockIterator {
+func (d *DB) HasTable(name string) bool {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
+	_, err := d.store.MetaInfo.ReferenceTableByName(name)
+	return err == nil
+}
+
+func (d *DB) CreateTable(schema *md.Schema) (id uint64, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	opCtx := &mops.OpCtx{Opts: d.Opts, Schema: schema}
+	op := mops.NewCreateTblOp(opCtx)
+	op.Push()
+	err = op.WaitDone()
+	if err != nil {
+		return id, err
+	}
+	id = op.GetTable().GetID()
+	return id, nil
+}
+
+func (d *DB) NewSegmentIter(o *e.IterOptions) (ih.ISegmentIterator, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	tableMeta, err := d.store.MetaInfo.ReferenceTableByName(o.TableName)
+	if err != nil {
+		return nil, err
+	}
+	if tableMeta.GetSegmentCount() == uint64(0) {
+		return handle.EmptySegmentIt, nil
+	}
+	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
+	if err != nil {
+		return nil, err
+	}
 	var h *handle.SegmentsHandle
 	if o.All {
-		h = handle.NewAllSegmentsHandle(o.ColIdxes, d.DataTable)
+		h = handle.NewAllSegmentsHandle(o.ColIdxes, tableData)
 	} else {
-		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, d.DataTable)
+		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, tableData)
 	}
-	return h.NewBlkIt()
+	return h.NewSegIt(), nil
+}
+
+func (d *DB) NewBlockIter(o *e.IterOptions) (ih.IBlockIterator, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	tableMeta, err := d.store.MetaInfo.ReferenceTableByName(o.TableName)
+	if err != nil {
+		return nil, err
+	}
+
+	if tableMeta.GetSegmentCount() == uint64(0) {
+		return handle.EmptyBlockIt, nil
+	}
+
+	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
+	if err != nil {
+		return nil, err
+	}
+	var h *handle.SegmentsHandle
+	if o.All {
+		h = handle.NewAllSegmentsHandle(o.ColIdxes, tableData)
+	} else {
+		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, tableData)
+	}
+	return h.NewBlkIt(), nil
 }
 
 func (d *DB) TableIDs() (ids []uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tids := d.MetaInfo.TableIDs()
+	tids := d.store.MetaInfo.TableIDs()
 	for tid := range tids {
 		ids = append(ids, tid)
 	}
@@ -147,7 +231,7 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	sids, err := d.MetaInfo.TableSegmentIDs(tableID)
+	sids, err := d.store.MetaInfo.TableSegmentIDs(tableID)
 	if err != nil {
 		return ids, err
 	}
@@ -160,7 +244,7 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 
 func (d *DB) validateAndCleanStaleData() {
 	expectFiles := make(map[string]bool)
-	for _, tbl := range d.MetaInfo.Tables {
+	for _, tbl := range d.store.MetaInfo.Tables {
 		for _, seg := range tbl.Segments {
 			id := common.ID{
 				TableID:   seg.TableID,
@@ -179,6 +263,17 @@ func (d *DB) validateAndCleanStaleData() {
 					expectFiles[name] = true
 				}
 			}
+		}
+	}
+
+	dataDir := e.MakeDataDir(d.Dir)
+	if len(expectFiles) == 0 {
+		if _, err := os.Stat(dataDir); os.IsNotExist(err) {
+			err = os.MkdirAll(dataDir, 0755)
+			if err != nil {
+				panic(fmt.Sprintf("err: %s", err))
+			}
+			return
 		}
 	}
 

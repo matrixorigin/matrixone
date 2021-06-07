@@ -2,10 +2,14 @@ package base
 
 import (
 	"io"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 )
 
 type IBlockHandle interface {
 	io.Closer
+	GetID() *common.ID
+	GetColumn(int) col.IColumnBlock
 }
 
 type ISegmentHandle interface {

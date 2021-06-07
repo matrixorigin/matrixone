@@ -11,7 +11,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"runtime"
@@ -56,20 +55,6 @@ func TestManager(t *testing.T) {
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 }
 
-func BuildChunk(types []types.Type, rows uint64) *chunk.Chunk {
-	var vectors []vector.Vector
-	buf := make([]byte, int32(rows)*types[0].Size)
-	for _, colType := range types {
-		vec := vector.NewStdVector(colType, buf)
-		vec.(*vector.StdVector).Offset = cap(buf)
-		vectors = append(vectors, vec)
-	}
-
-	return &chunk.Chunk{
-		Vectors: vectors,
-	}
-}
-
 func TestCollection(t *testing.T) {
 	maxRows := uint64(1024)
 	cols := 2
@@ -86,7 +71,8 @@ func TestCollection(t *testing.T) {
 	opts.Data.Sorter.Start()
 	opts.MemData.Updater.Start()
 
-	opCtx := mops.OpCtx{Opts: opts}
+	schema := md.MockSchema(2)
+	opCtx := mops.OpCtx{Opts: opts, Schema: schema}
 	op := mops.NewCreateTblOp(&opCtx)
 	op.Push()
 	err := op.WaitDone()
@@ -123,7 +109,7 @@ func TestCollection(t *testing.T) {
 		seq++
 		go func(id uint64, wg *sync.WaitGroup) {
 			defer wg.Done()
-			insert := BuildChunk(colDefs, thisStep*opts.Meta.Conf.BlockMaxRows)
+			insert := chunk.MockChunk(colDefs, thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &md.LogIndex{
 				ID:       id,
 				Capacity: insert.GetCount(),

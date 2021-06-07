@@ -12,6 +12,7 @@ import (
 )
 
 type IterOptions struct {
+	TableName  string
 	TableID    uint64
 	All        bool
 	ColIdxes   []int
@@ -106,8 +107,8 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.CacheCfg == nil {
 		o.CacheCfg = &CacheCfg{
-			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks,
-			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 10,
+			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 20,
+			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 20,
 		}
 	}
 	return o
