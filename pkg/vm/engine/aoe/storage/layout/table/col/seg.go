@@ -36,32 +36,38 @@ type IColumnSegment interface {
 	Append(blk IColumnBlock)
 	GetColIdx() int
 	GetSegmentType() SegmentType
+	GetMTBufMgr() bmgrif.IBufferManager
+	GetSSTBufMgr() bmgrif.IBufferManager
 	CloneWithUpgrade() IColumnSegment
 	UpgradeBlock(id common.ID) (IColumnBlock, error)
 	GetBlock(id common.ID) IColumnBlock
 	InitScanCursor(cursor *ScanCursor) error
-	RegisterBlock(bufMgr bmgrif.IBufferManager, id common.ID, maxRows uint64) (blk IColumnBlock, err error)
+	RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error)
 }
 
 type ColumnSegment struct {
 	sync.RWMutex
-	ID       common.ID
-	Next     IColumnSegment
-	Blocks   []IColumnBlock
-	RowCount uint64
-	IDMap    map[common.ID]int
-	Idx      int
-	Type     SegmentType
-	ColType  types.Type
+	ID        common.ID
+	Next      IColumnSegment
+	Blocks    []IColumnBlock
+	RowCount  uint64
+	IDMap     map[common.ID]int
+	Idx       int
+	Type      SegmentType
+	ColType   types.Type
+	MTBufMgr  bmgrif.IBufferManager
+	SSTBufMgr bmgrif.IBufferManager
 }
 
-func NewColumnSegment(id common.ID, colIdx int, colType types.Type, segType SegmentType) IColumnSegment {
+func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, id common.ID, colIdx int, colType types.Type, segType SegmentType) IColumnSegment {
 	seg := &ColumnSegment{
-		ID:      id,
-		IDMap:   make(map[common.ID]int, 0),
-		Idx:     colIdx,
-		Type:    segType,
-		ColType: colType,
+		ID:        id,
+		IDMap:     make(map[common.ID]int, 0),
+		Idx:       colIdx,
+		Type:      segType,
+		ColType:   colType,
+		MTBufMgr:  mtBufMgr,
+		SSTBufMgr: sstBufMgr,
 	}
 	runtime.SetFinalizer(seg, func(o IColumnSegment) {
 		id := o.GetID()
@@ -70,6 +76,14 @@ func NewColumnSegment(id common.ID, colIdx int, colType types.Type, segType Segm
 		o.Close()
 	})
 	return seg
+}
+
+func (seg *ColumnSegment) GetMTBufMgr() bmgrif.IBufferManager {
+	return seg.MTBufMgr
+}
+
+func (seg *ColumnSegment) GetSSTBufMgr() bmgrif.IBufferManager {
+	return seg.SSTBufMgr
 }
 
 func (seg *ColumnSegment) GetColIdx() int {
@@ -127,11 +141,14 @@ func (seg *ColumnSegment) CloneWithUpgrade() IColumnSegment {
 		panic("logic error")
 	}
 	cloned := &ColumnSegment{
-		ID:       seg.ID,
-		IDMap:    seg.IDMap,
-		RowCount: seg.RowCount,
-		Next:     seg.Next,
-		Type:     SORTED_SEG,
+		ID:        seg.ID,
+		IDMap:     seg.IDMap,
+		RowCount:  seg.RowCount,
+		Next:      seg.Next,
+		Type:      SORTED_SEG,
+		ColType:   seg.ColType,
+		MTBufMgr:  seg.MTBufMgr,
+		SSTBufMgr: seg.SSTBufMgr,
 	}
 	var prev IColumnBlock
 	for _, blk := range seg.Blocks {
@@ -172,11 +189,11 @@ func (seg *ColumnSegment) Close() error {
 	return nil
 }
 
-func (seg *ColumnSegment) RegisterBlock(bufMgr bmgrif.IBufferManager, id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
+func (seg *ColumnSegment) RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
 	blk = NewStdColumnBlock(seg, id, TRANSIENT_BLK)
-	part := NewColumnPart(bufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
+	part := NewColumnPart(seg.MTBufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
 	for part == nil {
-		part = NewColumnPart(bufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
+		part = NewColumnPart(seg.MTBufMgr, blk, id, maxRows, uint64(seg.ColType.Size))
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	// TODO: StrColumnBlock

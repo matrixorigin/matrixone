@@ -25,7 +25,7 @@ func TestSegmentHandle(t *testing.T) {
 	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
 	bufMgr := tutil.MakeBufMagr(capacity)
 	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, t0, colDefs)
+	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
 	segIDs := tutil.MakeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 

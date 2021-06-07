@@ -9,6 +9,7 @@ import (
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
@@ -230,4 +231,9 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 	}
 	handle.Ref()
 	return handle.MakeHandle()
+}
+
+func MockBufMgr(capacity uint64) mgrif.IBufferManager {
+	flusher := w.NewOpWorker("MockFlusher")
+	return NewBufferManager(capacity, flusher)
 }

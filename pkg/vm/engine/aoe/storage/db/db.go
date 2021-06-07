@@ -124,11 +124,12 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 	collection := d.MemTableMgr.GetCollection(tbl.GetID())
 	if collection == nil {
 		opCtx := &mdops.OpCtx{
-			Opts:       d.Opts,
-			MTManager:  d.MemTableMgr,
-			TableMeta:  tbl,
-			BufManager: d.MutableBufMgr,
-			Tables:     d.store.DataTables,
+			Opts:      d.Opts,
+			MTManager: d.MemTableMgr,
+			TableMeta: tbl,
+			MTBufMgr:  d.MutableBufMgr,
+			SSTBufMgr: d.TableDataBufMgr,
+			Tables:    d.store.DataTables,
 		}
 		op := mdops.NewCreateTableOp(opCtx)
 		op.Push()

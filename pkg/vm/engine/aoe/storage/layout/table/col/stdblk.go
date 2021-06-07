@@ -53,7 +53,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment) IColumnBlock {
 		},
 	}
 	blk.RLock()
-	part := blk.Part.CloneWithUpgrade(cloned)
+	part := blk.Part.CloneWithUpgrade(cloned, seg.GetSSTBufMgr())
 	blk.RUnlock()
 	if part == nil {
 		panic("logic error")

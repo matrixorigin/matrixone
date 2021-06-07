@@ -24,10 +24,10 @@ func makeBufMagr(capacity uint64) mgrif.IBufferManager {
 
 func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
 	colType := types.Type{types.T_int32, 4, 4, 0}
-	seg := col.NewColumnSegment(id, colIdx, colType, col.UNSORTED_SEG)
+	seg := col.NewColumnSegment(bufMgr, bufMgr, id, colIdx, colType, col.UNSORTED_SEG)
 	blk_id := id
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.RegisterBlock(bufMgr, blk_id.NextBlock(), rowCount)
+		_, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
 		assert.Nil(t, err)
 	}
 	return seg
@@ -61,7 +61,7 @@ func TestUpgradeSegOp(t *testing.T) {
 	capacity := typeSize * row_count * 10000
 	bufMgr := makeBufMagr(capacity)
 	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, t0, colDefs)
+	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
 	seg_cnt := 4
 	blk_cnt := 4
 	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
@@ -98,7 +98,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 	capacity := typeSize * row_count * 10000
 	bufMgr := makeBufMagr(capacity)
 	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, t0, colDefs)
+	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
 	seg_cnt := 2
 	blk_cnt := 2
 	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)

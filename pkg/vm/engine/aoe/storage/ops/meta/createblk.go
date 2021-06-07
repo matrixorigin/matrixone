@@ -87,7 +87,7 @@ func (op *CreateBlkOp) registerTableData(blk *md.Block) {
 				panic("should not happend")
 			}
 		}
-		colBlk, _ := column.RegisterBlock(op.TableData.GetBufMgr(), blk_id, blk.MaxRowCount)
+		colBlk, _ := column.RegisterBlock(blk_id, blk.MaxRowCount)
 		op.ColBlocks = append(op.ColBlocks, colBlk)
 	}
 }

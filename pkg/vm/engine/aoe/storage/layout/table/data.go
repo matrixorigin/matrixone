@@ -20,7 +20,8 @@ type ITableData interface {
 	GetCollumn(int) col.IColumnData
 	GetColTypeSize(idx int) uint64
 	GetColTypes() []types.Type
-	GetBufMgr() bmgrif.IBufferManager
+	GetMTBufMgr() bmgrif.IBufferManager
+	GetSSTBufMgr() bmgrif.IBufferManager
 	GetSegmentCount() uint64
 
 	UpgradeBlock(blkID common.ID) (blks []col.IColumnBlock)
@@ -28,15 +29,16 @@ type ITableData interface {
 	AppendColSegments(colSegs []col.IColumnSegment)
 }
 
-func NewTableData(bufMgr bmgrif.IBufferManager, id uint64, colTypes []types.Type) ITableData {
+func NewTableData(mtBufMgr, sstBufMgr bmgrif.IBufferManager, id uint64, colTypes []types.Type) ITableData {
 	data := &TableData{
-		ID:      id,
-		Columns: make([]col.IColumnData, 0),
-		ColType: colTypes,
-		BufMgr:  bufMgr,
+		ID:        id,
+		Columns:   make([]col.IColumnData, 0),
+		ColType:   colTypes,
+		MTBufMgr:  mtBufMgr,
+		SSTBufMgr: sstBufMgr,
 	}
 	for idx, colType := range colTypes {
-		data.Columns = append(data.Columns, col.NewColumnData(colType, idx))
+		data.Columns = append(data.Columns, col.NewColumnData(mtBufMgr, sstBufMgr, colType, idx))
 	}
 	runtime.SetFinalizer(data, func(o ITableData) {
 		id := o.GetID()
@@ -47,11 +49,12 @@ func NewTableData(bufMgr bmgrif.IBufferManager, id uint64, colTypes []types.Type
 
 type TableData struct {
 	sync.Mutex
-	ID       uint64
-	RowCount uint64
-	Columns  []col.IColumnData
-	ColType  []types.Type
-	BufMgr   bmgrif.IBufferManager
+	ID        uint64
+	RowCount  uint64
+	Columns   []col.IColumnData
+	ColType   []types.Type
+	MTBufMgr  bmgrif.IBufferManager
+	SSTBufMgr bmgrif.IBufferManager
 }
 
 func (td *TableData) GetRowCount() uint64 {
@@ -81,8 +84,12 @@ func (td *TableData) GetColTypeSize(idx int) uint64 {
 	return uint64(td.ColType[idx].Size)
 }
 
-func (td *TableData) GetBufMgr() bmgrif.IBufferManager {
-	return td.BufMgr
+func (td *TableData) GetMTBufMgr() bmgrif.IBufferManager {
+	return td.MTBufMgr
+}
+
+func (td *TableData) GetSSTBufMgr() bmgrif.IBufferManager {
+	return td.SSTBufMgr
 }
 
 func (td *TableData) GetSegmentCount() uint64 {
