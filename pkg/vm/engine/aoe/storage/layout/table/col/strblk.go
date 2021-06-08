@@ -1,9 +1,11 @@
 package col
 
 import (
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"runtime"
+	"sync/atomic"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type StrColumnBlock struct {
@@ -30,17 +32,28 @@ func NewStrColumnBlock(seg IColumnSegment, id common.ID, blkType BlockType) ICol
 	return blk
 }
 
+func (blk *StrColumnBlock) Ref() IColumnBlock {
+	atomic.AddInt64(&blk.Refs, int64(1))
+	return blk
+}
+
+func (blk *StrColumnBlock) UnRef() {
+	if atomic.AddInt64(&blk.Refs, int64(-1)) == 0 {
+		blk.Close()
+	}
+}
+
 func (blk *StrColumnBlock) CloneWithUpgrade(seg IColumnSegment) IColumnBlock {
 	return nil
 }
 
 func (blk *StrColumnBlock) Close() error {
-	for _, part := range blk.Parts {
-		err := part.Close()
-		if err != nil {
-			return err
-		}
-	}
+	// for _, part := range blk.Parts {
+	// 	err := part.Close()
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
 	return nil
 }
 

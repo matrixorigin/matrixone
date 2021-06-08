@@ -28,6 +28,9 @@ type SegmentHandle struct {
 
 func (sh *SegmentHandle) Close() error {
 	if shh := sh; shh != nil {
+		for _, col := range shh.Cols {
+			col.UnRef()
+		}
 		shh.Cols = shh.Cols[:0]
 		segHandlePool.Put(shh)
 		sh = nil

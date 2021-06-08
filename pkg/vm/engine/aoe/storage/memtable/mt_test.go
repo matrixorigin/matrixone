@@ -31,11 +31,12 @@ func TestManager(t *testing.T) {
 	manager := NewManager(opts)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
-	flusher := w.NewOpWorker()
-	bufMgr := bmgr.NewBufferManager(capacity, flusher)
+	flusher := w.NewOpWorker("Mock Flusher")
+	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
+	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	t0 := uint64(0)
 	colDefs := make([]types.Type, 2)
-	t0_data := table.NewTableData(bufMgr, t0, colDefs)
+	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, t0, colDefs)
 
 	c0, err := manager.RegisterCollection(t0_data)
 	assert.Nil(t, err)
@@ -80,15 +81,16 @@ func TestCollection(t *testing.T) {
 	tbl := op.GetTable()
 
 	manager := NewManager(opts)
-	flusher := w.NewOpWorker()
-	bufMgr := bmgr.NewBufferManager(capacity, flusher)
+	flusher := w.NewOpWorker("Mock Flusher")
+	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
+	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	colDefs := make([]types.Type, cols)
 	for i := 0; i < cols; i++ {
 		colDefs[i] = types.Type{types.T_int32, 4, 4, 0}
 	}
 	// colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
 	// colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
-	t0_data := table.NewTableData(bufMgr, tbl.ID, colDefs)
+	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tbl.ID, colDefs)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
 	expect_blks := blks
@@ -116,7 +118,7 @@ func TestCollection(t *testing.T) {
 			}
 			err = c0.Append(insert, index)
 			assert.Nil(t, err)
-			// t.Log(bufMgr.String())
+			// t.Log(mtBufMgr.String())
 		}(logid, &waitgroup)
 	}
 	waitgroup.Wait()
@@ -140,10 +142,11 @@ func TestCollection(t *testing.T) {
 				}
 			}
 			cursor.Close()
+			loopSeg.UnRef()
 			loopSeg = loopSeg.GetNext()
 		}
 	}
-	t.Log(bufMgr.String())
+	t.Log(mtBufMgr.String())
 
 	opts.MemData.Updater.Stop()
 	opts.Data.Flusher.Stop()
@@ -154,13 +157,13 @@ func TestCollection(t *testing.T) {
 
 func TestContainer(t *testing.T) {
 	capacity := uint64(4096)
-	flusher := w.NewOpWorker()
-	bufMgr := bmgr.NewBufferManager(capacity, flusher)
+	flusher := w.NewOpWorker("Mock Flusher")
+	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 
 	baseid := common.ID{}
 	step := capacity / 2
 	// step := capacity
-	con := NewDynamicContainer(bufMgr, baseid, step)
+	con := NewDynamicContainer(mtBufMgr, baseid, step)
 	assert.Equal(t, uint64(0), con.GetCapacity())
 
 	err := con.Allocate()
@@ -170,7 +173,7 @@ func TestContainer(t *testing.T) {
 
 	id2 := baseid
 	id2.BlockID += 1
-	con2 := NewDynamicContainer(bufMgr, id2, step)
+	con2 := NewDynamicContainer(mtBufMgr, id2, step)
 	assert.NotNil(t, con2)
 	err = con2.Allocate()
 	assert.Nil(t, err)
@@ -183,11 +186,11 @@ func TestContainer(t *testing.T) {
 	err = con2.Allocate()
 	assert.Nil(t, err)
 	assert.Equal(t, step*2, con2.GetCapacity())
-	assert.Equal(t, capacity, bufMgr.GetUsage())
+	assert.Equal(t, capacity, mtBufMgr.GetUsage())
 
 	con.Close()
 	con2.Close()
 	assert.Equal(t, uint64(0), con.GetCapacity())
 	assert.Equal(t, uint64(0), con2.GetCapacity())
-	assert.Equal(t, capacity, bufMgr.GetCapacity())
+	assert.Equal(t, capacity, mtBufMgr.GetCapacity())
 }

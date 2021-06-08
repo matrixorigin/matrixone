@@ -7,12 +7,11 @@ import (
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"runtime"
-	"sync"
 	"testing"
 	"time"
 	"unsafe"
+	// "sync"
 )
 
 var WORK_DIR = "/tmp/layout/blk_test"
@@ -26,11 +25,13 @@ func TestStdColumnBlock(t *testing.T) {
 	baseid := common.ID{}
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
+	mtBufMgr := bmgr.MockBufMgr(10000)
+	sstBufMgr := bmgr.MockBufMgr(10000)
 	seg_cnt := 5
 	colType := types.Type{types.T_int64, 8, 8, 0}
 	for i := 0; i < seg_cnt; i++ {
 		seg_id := baseid.NextSegment()
-		seg := NewColumnSegment(seg_id, 0, colType, UNSORTED_SEG)
+		seg := NewColumnSegment(mtBufMgr, sstBufMgr, seg_id, 0, colType, UNSORTED_SEG)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		blk_0_id := seg_id.NextBlock()
@@ -68,7 +69,7 @@ func TestStdColumnBlock2(t *testing.T) {
 	typeSize := uint64(unsafe.Sizeof(uint64(0)))
 	row_count := uint64(64)
 	capacity := typeSize * row_count
-	bufMgr := makeBufMagr(capacity)
+	bufMgr := bmgr.MockBufMgr(capacity)
 	t.Log(bufMgr.GetCapacity())
 	baseid := common.ID{}
 	var prev_seg IColumnSegment
@@ -77,7 +78,7 @@ func TestStdColumnBlock2(t *testing.T) {
 	colType := types.Type{types.T_int64, 8, 8, 0}
 	for i := 0; i < seg_cnt; i++ {
 		seg_id := baseid.NextSegment()
-		seg := NewColumnSegment(seg_id, 0, colType, UNSORTED_SEG)
+		seg := NewColumnSegment(bufMgr, bufMgr, seg_id, 0, colType, UNSORTED_SEG)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		blk_0_id := seg_id.NextBlock()
@@ -135,7 +136,7 @@ func TestStrColumnBlock(t *testing.T) {
 	typeSize := uint64(unsafe.Sizeof(uint64(0)))
 	row_count := uint64(1)
 	capacity := typeSize * row_count
-	bufMgr := makeBufMagr(capacity)
+	bufMgr := bmgr.MockBufMgr(capacity)
 	t.Log(bufMgr.GetCapacity())
 	baseid := common.ID{}
 	var prev_seg IColumnSegment
@@ -144,7 +145,7 @@ func TestStrColumnBlock(t *testing.T) {
 	colType := types.Type{types.T_int64, 8, 8, 0}
 	for i := 0; i < seg_cnt; i++ {
 		seg_id := baseid.NextSegment()
-		seg := NewColumnSegment(seg_id, 0, colType, UNSORTED_SEG)
+		seg := NewColumnSegment(bufMgr, bufMgr, seg_id, 0, colType, UNSORTED_SEG)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		blk_0_id := seg_id.NextBlock()
@@ -207,12 +208,13 @@ func TestStdSegmentTree(t *testing.T) {
 	baseid := common.ID{}
 	col_idx := 0
 	colType := types.Type{types.T_int64, 8, 8, 0}
-	col_data := NewColumnData(colType, col_idx)
+	bufMgr := bmgr.MockBufMgr(1000000)
+	col_data := NewColumnData(bufMgr, bufMgr, colType, col_idx)
 
 	seg_cnt := 5
 	for i := 0; i < seg_cnt; i++ {
 		seg_id := baseid.NextSegment()
-		seg := NewColumnSegment(seg_id, 0, colType, UNSORTED_SEG)
+		seg := NewColumnSegment(bufMgr, bufMgr, seg_id, 0, colType, UNSORTED_SEG)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		err := col_data.Append(seg)
@@ -249,7 +251,7 @@ func TestRegisterNode(t *testing.T) {
 	typeSize := uint64(unsafe.Sizeof(uint64(0)))
 	row_count := uint64(64)
 	capacity := typeSize * row_count
-	bufMgr := makeBufMagr(capacity)
+	bufMgr := bmgr.MockBufMgr(capacity)
 	baseid := common.ID{}
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
@@ -257,7 +259,7 @@ func TestRegisterNode(t *testing.T) {
 	colType := types.Type{types.T_int64, 8, 8, 0}
 	for i := 0; i < seg_cnt; i++ {
 		seg_id := baseid.NextSegment()
-		seg := NewColumnSegment(seg_id, 0, colType, UNSORTED_SEG)
+		seg := NewColumnSegment(bufMgr, bufMgr, seg_id, 0, colType, UNSORTED_SEG)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		blk_0_id := seg_id.NextBlock()
@@ -298,28 +300,29 @@ func TestRegisterNode(t *testing.T) {
 	cursor.Close()
 }
 
-func makeSegment(bufMgr mgrif.IBufferManager, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) IColumnSegment {
+func makeSegment(mtBufMgr, sstBufMgr mgrif.IBufferManager, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) IColumnSegment {
 	colType := types.Type{types.T_int64, 8, 8, 0}
-	seg := NewColumnSegment(id, 0, colType, UNSORTED_SEG)
+	seg := NewColumnSegment(mtBufMgr, sstBufMgr, id, 0, colType, UNSORTED_SEG)
 	blk_id := id
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.RegisterBlock(bufMgr, blk_id.NextBlock(), rowCount)
+		blk, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
 		assert.Nil(t, err)
+		blk.UnRef()
 	}
 	return seg
 }
 
-func makeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typeSize uint64, t *testing.T) []IColumnSegment {
+func makeSegments(mtBufMgr, sstBufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typeSize uint64, t *testing.T) []IColumnSegment {
 	baseid := common.ID{}
 	var segs []IColumnSegment
 	var rootSeg IColumnSegment
 	var prevSeg IColumnSegment
 	for i := 0; i < segCnt; i++ {
 		seg_id := baseid.NextSegment()
-		seg := makeSegment(bufMgr, seg_id, blkCnt, rowCount, typeSize, t)
+		seg := makeSegment(mtBufMgr, sstBufMgr, seg_id, blkCnt, rowCount, typeSize, t)
 		segs = append(segs, seg)
 		if prevSeg != nil {
-			prevSeg.SetNext(seg)
+			prevSeg.SetNext(seg.Ref())
 		}
 		if rootSeg == nil {
 			rootSeg = seg
@@ -329,101 +332,95 @@ func makeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typ
 	return segs
 }
 
-func makeBufMagr(capacity uint64) mgrif.IBufferManager {
-	flusher := w.NewOpWorker()
-	bufMgr := bmgr.NewBufferManager(capacity, flusher)
-	return bufMgr
-}
-
 func TestUpgradeStdSegment(t *testing.T) {
 	typeSize := uint64(unsafe.Sizeof(uint64(0)))
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
-	bufMgr := makeBufMagr(capacity)
+	mtBufMgr := bmgr.MockBufMgr(capacity)
+	sstBufMgr := bmgr.MockBufMgr(capacity)
 	seg_cnt := 5
 	blk_cnt := 4
-	segs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, t)
-	rootSeg := segs[0]
+	segs := makeSegments(mtBufMgr, sstBufMgr, seg_cnt, blk_cnt, row_count, typeSize, t)
+	rootSeg := segs[0].Ref()
 
-	for _, seg := range segs {
-		cursor := ScanCursor{}
-		err := seg.InitScanCursor(&cursor)
-		assert.Nil(t, err)
-		assert.False(t, cursor.Inited)
-		err = cursor.Init()
-		assert.Nil(t, err)
-		assert.True(t, cursor.Inited)
-	}
+	// pools := 1
+	// var savedStrings []*[]string
+	// var wg sync.WaitGroup
+	// for i := 0; i < pools; i++ {
+	// 	wg.Add(1)
+	// 	var strings []string
+	// 	savedStrings = append(savedStrings, &strings)
+	// 	go func(wgp *sync.WaitGroup, strs *[]string) {
+	// 		defer wgp.Done()
+	// 		cursor := ScanCursor{CurrSeg: rootSeg}
+	// 		err := rootSeg.InitScanCursor(&cursor)
+	// 		assert.Nil(t, err)
+	// 		cursor.Init()
+	// 		cnt := 0
+	// 		// prevType := TRANSIENT_BLK
+	// 		for cursor.Current != nil {
+	// 			cnt += 1
+	// 			err = cursor.Init()
+	// 			assert.Nil(t, err)
+	// 			cursor.Next()
+	// 		}
+	// 		assert.Equal(t, seg_cnt*blk_cnt, cnt)
+	// 	}(&wg, &strings)
+	// }
 
-	pools := 1
-	var savedStrings []*[]string
-	var wg sync.WaitGroup
-	for i := 0; i < pools; i++ {
-		wg.Add(1)
-		var strings []string
-		savedStrings = append(savedStrings, &strings)
-		go func(wgp *sync.WaitGroup, strs *[]string) {
-			defer wgp.Done()
-			cursor := ScanCursor{CurrSeg: rootSeg}
-			err := rootSeg.InitScanCursor(&cursor)
-			assert.Nil(t, err)
-			cursor.Init()
-			cnt := 0
-			// prevType := TRANSIENT_BLK
-			for cursor.Current != nil {
-				cnt += 1
-				err = cursor.Init()
-				assert.Nil(t, err)
-				// assert.True(t, cursor.Current.GetBlock().GetBlockType() >= prevType, cursor.Current.GetBlock().String())
-				// prevType = cursor.Current.GetBlock().GetBlockType()
-				cursor.Next()
-			}
-			assert.Equal(t, seg_cnt*blk_cnt, cnt)
-		}(&wg, &strings)
-	}
+	// wg.Wait()
+	assert.Equal(t, blk_cnt*seg_cnt, mtBufMgr.NodeCount())
+	assert.Equal(t, 0, sstBufMgr.NodeCount())
 
-	currSeg := rootSeg
+	currSeg := rootSeg.Ref()
 	for currSeg != nil {
 		ids := currSeg.GetBlockIDs()
 		for _, id := range ids {
 			oldBlk := currSeg.GetBlock(id)
 			assert.NotNil(t, oldBlk)
 			assert.Equal(t, TRANSIENT_BLK, oldBlk.GetBlockType())
+			oldBlk.UnRef()
 			blk, err := currSeg.UpgradeBlock(id)
 			assert.Nil(t, err)
 			assert.Equal(t, PERSISTENT_BLK, blk.GetBlockType())
+			blk.UnRef()
 		}
+		currSeg.UnRef()
 		currSeg = currSeg.GetNext()
 	}
 
-	currSeg = rootSeg
+	currSeg = rootSeg.Ref()
 	for currSeg != nil {
 		ids := currSeg.GetBlockIDs()
 		for _, id := range ids {
 			oldBlk := currSeg.GetBlock(id)
 			assert.NotNil(t, oldBlk)
 			assert.Equal(t, PERSISTENT_BLK, oldBlk.GetBlockType())
+			oldBlk.UnRef()
 			blk, err := currSeg.UpgradeBlock(id)
 			assert.Nil(t, err)
 			assert.Equal(t, PERSISTENT_SORTED_BLK, blk.GetBlockType())
+			blk.UnRef()
 		}
+		currSeg.UnRef()
 		currSeg = currSeg.GetNext()
 	}
-	wg.Wait()
-	// currSeg = rootSeg
-	// for currSeg != nil {
-	// 	ids := currSeg.GetBlockIDs()
-	// 	for _, id := range ids {
-	// 		blk := currSeg.GetBlock(id)
-	// 		t.Log(blk.String())
-	// 	}
-	// 	currSeg = currSeg.GetNext()
-	// }
-	// for _, strings := range savedStrings {
-	// 	t.Log("---------------------------")
-	// 	for _, str := range *strings {
-	// 		t.Log(str)
-	// 	}
-	// 	assert.Equal(t, seg_cnt*blk_cnt, len(*strings))
-	// }
+	for i := 0; i < 0; i++ {
+		runtime.GC()
+		time.Sleep(time.Duration(1) * time.Millisecond)
+	}
+	currSeg = rootSeg.Ref()
+	for currSeg != nil {
+		currSeg.UnRef()
+		currSeg = currSeg.GetNext()
+	}
+	rootSeg.UnRef()
+	t.Log(mtBufMgr.String())
+	t.Log(sstBufMgr.String())
+	assert.Equal(t, 0, mtBufMgr.NodeCount())
+	assert.Equal(t, blk_cnt*seg_cnt, sstBufMgr.NodeCount())
+
+	for _, seg := range segs {
+		seg.UnRef()
+	}
 }

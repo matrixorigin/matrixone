@@ -29,7 +29,7 @@ func (op *CreateTableOp) Execute() error {
 	for _, colDef := range meta.Schema.ColDefs {
 		colTypes = append(colTypes, colDef.Type)
 	}
-	tableData := table.NewTableData(op.Ctx.BufManager, meta.ID, colTypes)
+	tableData := table.NewTableData(op.Ctx.MTBufMgr, op.Ctx.SSTBufMgr, meta.ID, colTypes)
 	err := op.Ctx.Tables.CreateTable(tableData)
 	if err != nil {
 		return err

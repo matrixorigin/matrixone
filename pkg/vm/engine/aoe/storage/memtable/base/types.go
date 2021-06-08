@@ -12,6 +12,7 @@ type IMemTable interface {
 	Append(c *chunk.Chunk, offset uint64, index *md.LogIndex) (n uint64, err error)
 	IsFull() bool
 	Flush() error
+	Close() error
 	GetMeta() *md.Block
 	GetID() common.ID
 	InitScanCursors(cursors []interface{}) error

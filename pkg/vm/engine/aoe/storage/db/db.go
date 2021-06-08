@@ -29,18 +29,13 @@ var (
 	ErrClosed = errors.New("aoe: closed")
 )
 
-// type Reader interface {
-// }
-// type Writer interface {
-// }
-
 type DB struct {
 	Dir  string
 	Opts *e.Options
 
-	MemTableMgr     mtif.IManager
-	MutableBufMgr   bmgrif.IBufferManager
-	TableDataBufMgr bmgrif.IBufferManager
+	MemTableMgr mtif.IManager
+	MTBufMgr    bmgrif.IBufferManager
+	SSTBufMgr   bmgrif.IBufferManager
 
 	store struct {
 		sync.RWMutex
@@ -56,11 +51,6 @@ type DB struct {
 
 	sync.RWMutex
 }
-
-// var (
-// 	_ Reader = (*DB)(nil)
-// 	_ Writer = (*DB)(nil)
-// )
 
 func cleanStaleMeta(dirname string) {
 	dir := e.MakeMetaDir(dirname)
@@ -124,11 +114,12 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 	collection := d.MemTableMgr.GetCollection(tbl.GetID())
 	if collection == nil {
 		opCtx := &mdops.OpCtx{
-			Opts:       d.Opts,
-			MTManager:  d.MemTableMgr,
-			TableMeta:  tbl,
-			BufManager: d.MutableBufMgr,
-			Tables:     d.store.DataTables,
+			Opts:      d.Opts,
+			MTManager: d.MemTableMgr,
+			TableMeta: tbl,
+			MTBufMgr:  d.MTBufMgr,
+			SSTBufMgr: d.SSTBufMgr,
+			Tables:    d.store.DataTables,
 		}
 		op := mdops.NewCreateTableOp(opCtx)
 		op.Push()
@@ -317,6 +308,15 @@ func (d *DB) stopWorkers() {
 	d.Opts.Data.Sorter.Stop()
 	d.Opts.Meta.Flusher.Stop()
 	d.Opts.Meta.Updater.Stop()
+}
+
+func (d *DB) WorkersStatsString() string {
+	s := fmt.Sprintf("%s\n", d.Opts.MemData.Updater.StatsString())
+	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Flusher.StatsString())
+	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Sorter.StatsString())
+	s = fmt.Sprintf("%s%s\n", s, d.Opts.Meta.Updater.StatsString())
+	s = fmt.Sprintf("%s%s\n", s, d.Opts.Meta.Flusher.StatsString())
+	return s
 }
 
 func (d *DB) Close() error {
