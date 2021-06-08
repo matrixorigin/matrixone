@@ -24,10 +24,14 @@ func (op *CreateTableOp) Execute() error {
 		return nil
 	}
 	meta := op.Ctx.TableMeta
-	tableData := table.NewTableData(op.Ctx.MTBufMgr, op.Ctx.SSTBufMgr, meta)
-	err := op.Ctx.Tables.CreateTable(tableData)
+
+	tableData, err := op.Ctx.Tables.GetTable(meta.ID)
 	if err != nil {
-		return err
+		tableData = table.NewTableData(op.Ctx.MTBufMgr, op.Ctx.SSTBufMgr, meta)
+		err = op.Ctx.Tables.CreateTable(tableData)
+		if err != nil {
+			return err
+		}
 	}
 	collection, err = op.Ctx.MTManager.RegisterCollection(tableData)
 	if err != nil {

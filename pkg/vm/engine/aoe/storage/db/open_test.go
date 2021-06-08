@@ -188,13 +188,13 @@ func TestReplay(t *testing.T) {
 
 	_, err = dbi.CreateTable(schema)
 	assert.NotNil(t, err)
-	// for i := 0; i < insertCnt; i++ {
-	// 	err = dbi.Append(schema.Name, ck, logIdx)
-	// 	assert.Nil(t, err)
-	// }
+	for i := 0; i < insertCnt; i++ {
+		err = dbi.Append(schema.Name, ck, logIdx)
+		assert.Nil(t, err)
+	}
 
-	// time.Sleep(time.Duration(10) * time.Millisecond)
-	// t.Log(dbi.MTBufMgr.String())
-	// t.Log(dbi.SSTBufMgr.String())
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	t.Log(dbi.MTBufMgr.String())
+	t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()
 }

@@ -125,7 +125,7 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 		op.Push()
 		err = op.WaitDone()
 		if err != nil {
-			panic("logic error")
+			panic(fmt.Sprintf("logic error: %s", err))
 		}
 		collection = op.Collection
 	}
