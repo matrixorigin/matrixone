@@ -17,6 +17,24 @@ const (
 	MOCK_PERSISTENT_SORTED_BLK
 )
 
+func (t BlockType) String() string {
+	switch t {
+	case TRANSIENT_BLK:
+		return "TB"
+	case PERSISTENT_BLK:
+		return "PB"
+	case PERSISTENT_SORTED_BLK:
+		return "PSB"
+	case MOCK_BLK:
+		return "MB"
+	case MOCK_PERSISTENT_BLK:
+		return "MPB"
+	case MOCK_PERSISTENT_SORTED_BLK:
+		return "MPSB"
+	}
+	panic("unspported")
+}
+
 type IColumnBlock interface {
 	io.Closer
 	GetNext() IColumnBlock

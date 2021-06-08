@@ -50,11 +50,12 @@ func (mgr *BufferManager) String() string {
 		mapped[k.TableID][k.SegmentID] = l
 	}
 	for tbID, segMap := range mapped {
-		s += fmt.Sprintf("Table %d Nodes %d {\n", tbID, len(segMap))
+		s += fmt.Sprintf("Table %d SegmentCnt=%d {\n", tbID, len(segMap))
 		for segID, ids := range segMap {
-			s += fmt.Sprintf("  Segment %d Nodes %d {\n", segID, len(ids))
+			s += fmt.Sprintf("  Segment %d PartCnt=%d {\n", segID, len(ids))
 			for _, id := range ids {
-				s += fmt.Sprintf("    Block-%d-Part-%d [%d] (%d) (%d)\n", id.BlockID, id.PartID, id.Iter, mgr.Nodes[id].GetState(), mgr.Nodes[id].GetCapacity())
+				s += fmt.Sprintf("    (Col: %d Blk:%d, Part: %d) [Iter=%d] (%s) (Cap=%d)\n", id.Idx, id.BlockID, id.PartID,
+					id.Iter, nif.NodeStateString(mgr.Nodes[id].GetState()), mgr.Nodes[id].GetCapacity())
 			}
 			s += "  }\n"
 		}

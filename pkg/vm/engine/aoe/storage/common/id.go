@@ -40,7 +40,7 @@ func (id *ID) AsSegmentID() ID {
 }
 
 func (id *ID) String() string {
-	return fmt.Sprintf("ID<%d-%d-%d-%d-%d-%d>", id.TableID, id.Idx, id.SegmentID, id.BlockID, id.PartID, id.Iter)
+	return fmt.Sprintf("ID<%d:%d-%d-%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID, id.Iter)
 }
 
 func (id *ID) TableString() string {
@@ -48,11 +48,11 @@ func (id *ID) TableString() string {
 }
 
 func (id *ID) SegmentString() string {
-	return fmt.Sprintf("ID<%d-%d-%d>", id.TableID, id.Idx, id.SegmentID)
+	return fmt.Sprintf("ID<%d:%d-%d>", id.Idx, id.TableID, id.SegmentID)
 }
 
 func (id *ID) BlockString() string {
-	return fmt.Sprintf("ID<%d-%d-%d-%d>", id.TableID, id.Idx, id.SegmentID, id.BlockID)
+	return fmt.Sprintf("ID<%d:%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID)
 }
 
 func (id *ID) IsSameSegment(o ID) bool {
@@ -110,7 +110,7 @@ func (id *ID) IsTransient() bool {
 }
 
 func (id *ID) ToPartFileName() string {
-	return fmt.Sprintf("%d_%d_%d_%d_%d", id.TableID, id.Idx, id.SegmentID, id.BlockID, id.PartID)
+	return fmt.Sprintf("%d_%d_%d_%d_%d", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID)
 }
 
 func (id *ID) ToBlockFileName() string {

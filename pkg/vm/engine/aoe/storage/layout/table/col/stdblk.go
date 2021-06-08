@@ -114,6 +114,6 @@ func (blk *StdColumnBlock) InitScanCursor(cursor *ScanCursor) error {
 
 func (blk *StdColumnBlock) String() string {
 	partID := blk.Part.GetNodeID()
-	s := fmt.Sprintf("Std[%s](T=%d)[Part=%s]", blk.ID.BlockString(), blk.Type, partID.String())
+	s := fmt.Sprintf("Std[%s](T=%s)[Part=%s]", blk.ID.BlockString(), blk.Type.String(), partID.String())
 	return s
 }
