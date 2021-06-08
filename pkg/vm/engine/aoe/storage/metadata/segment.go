@@ -13,7 +13,8 @@ func NewSegment(info *MetaInfo, table_id, id uint64, schema *Schema) *Segment {
 	seg := &Segment{
 		ID:            id,
 		TableID:       table_id,
-		Blocks:        make(map[uint64]*Block),
+		Blocks:        make([]*Block, 0),
+		IdMap:         make(map[uint64]int),
 		TimeStamp:     *NewTimeStamp(),
 		MaxBlockCount: SEGMENT_BLOCK_COUNT,
 		Info:          info,
@@ -72,11 +73,11 @@ func (seg *Segment) String() string {
 func (seg *Segment) CloneBlock(id uint64) (blk *Block, err error) {
 	seg.RLock()
 	defer seg.RUnlock()
-	rblk, ok := seg.Blocks[id]
+	idx, ok := seg.IdMap[id]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("block %d not found in segment %d", id, seg.ID))
 	}
-	blk = rblk.Copy()
+	blk = seg.Blocks[idx].Copy()
 	err = blk.Detach()
 	return blk, err
 }
@@ -84,21 +85,16 @@ func (seg *Segment) CloneBlock(id uint64) (blk *Block, err error) {
 func (seg *Segment) ReferenceBlock(id uint64) (blk *Block, err error) {
 	seg.RLock()
 	defer seg.RUnlock()
-	blk, ok := seg.Blocks[id]
+	idx, ok := seg.IdMap[id]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("block %d not found in segment %d", id, seg.ID))
 	}
-	return blk, nil
+	return seg.Blocks[idx], nil
 }
 
 func (seg *Segment) SetInfo(info *MetaInfo) error {
 	if seg.Info == nil {
 		seg.Info = info
-		// for _, blk := range seg.Blocks {
-		// 	if blk.Info == nil {
-		// 		blk.Info = info
-		// 	}
-		// }
 	}
 
 	return nil
@@ -121,11 +117,12 @@ func (seg *Segment) RegisterBlock(blk *Block) error {
 	if len(seg.Blocks) == int(seg.MaxBlockCount) {
 		return errors.New(fmt.Sprintf("Cannot add block into full segment %d", seg.ID))
 	}
-	_, ok := seg.Blocks[blk.ID]
+	_, ok := seg.IdMap[blk.ID]
 	if ok {
 		return errors.New(fmt.Sprintf("Duplicate block %d found in segment %d", blk.GetID(), seg.ID))
 	}
-	seg.Blocks[blk.GetID()] = blk
+	seg.IdMap[blk.GetID()] = len(seg.Blocks)
+	seg.Blocks = append(seg.Blocks, blk)
 	if len(seg.Blocks) == int(seg.MaxBlockCount) {
 		if blk.IsFull() {
 			seg.DataState = CLOSED
@@ -157,7 +154,7 @@ func (seg *Segment) TryClose() bool {
 
 func (seg *Segment) GetMaxBlkID() uint64 {
 	blkid := uint64(0)
-	for bid, _ := range seg.Blocks {
+	for bid, _ := range seg.IdMap {
 		if bid > blkid {
 			blkid = bid
 		}
@@ -177,12 +174,13 @@ func (seg *Segment) Copy(ts ...int64) *Segment {
 	new_seg.TimeStamp = seg.TimeStamp
 	new_seg.MaxBlockCount = seg.MaxBlockCount
 	new_seg.DataState = seg.DataState
-	for k, v := range seg.Blocks {
+	for _, v := range seg.Blocks {
 		if !v.Select(t) {
 			continue
 		}
 		blk, _ := seg.CloneBlock(v.ID)
-		new_seg.Blocks[k] = blk
+		new_seg.IdMap[v.GetID()] = len(new_seg.Blocks)
+		new_seg.Blocks = append(new_seg.Blocks, blk)
 	}
 
 	return new_seg

@@ -295,6 +295,10 @@ func (d *DB) replayAndCleanData() {
 			panic(fmt.Sprintf("Missing %s", name))
 		}
 	}
+	err = d.store.DataTables.Replay(d.MTBufMgr, d.SSTBufMgr, d.store.MetaInfo)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (d *DB) startWorkers() {

@@ -183,15 +183,18 @@ func TestReplay(t *testing.T) {
 	_, err = os.Stat(invalidFileName)
 	assert.True(t, os.IsNotExist(err))
 
-	_, err = dbi.CreateTable(schema)
-	assert.NotNil(t, err)
-	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(schema.Name, ck, logIdx)
-		assert.Nil(t, err)
-	}
-
-	time.Sleep(time.Duration(10) * time.Millisecond)
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
+
+	_, err = dbi.CreateTable(schema)
+	assert.NotNil(t, err)
+	// for i := 0; i < insertCnt; i++ {
+	// 	err = dbi.Append(schema.Name, ck, logIdx)
+	// 	assert.Nil(t, err)
+	// }
+
+	// time.Sleep(time.Duration(10) * time.Millisecond)
+	// t.Log(dbi.MTBufMgr.String())
+	// t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()
 }

@@ -196,4 +196,56 @@ func (ts *Tables) CreateTableNoLock(tbl ITableData) (err error) {
 	return nil
 }
 
-// func (ts *Tables) ReplayTable()
+func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.MetaInfo) error {
+	for _, meta := range info.Tables {
+		tbl := NewTableData(mtBufMgr, sstBufMgr, meta)
+		colTypes := meta.Schema.Types()
+		for _, segMeta := range meta.Segments {
+			segId := common.ID{
+				TableID:   meta.ID,
+				SegmentID: segMeta.ID,
+			}
+			segType := col.UNSORTED_SEG
+			if segMeta.DataState == md.SORTED {
+				segType = col.SORTED_SEG
+			}
+			for colIdx, colType := range colTypes {
+				segId.Idx = uint16(colIdx)
+				colSeg := col.NewColumnSegment(mtBufMgr, sstBufMgr, segId, colIdx, colType, segType)
+				defer colSeg.UnRef()
+				for _, blkMeta := range segMeta.Blocks {
+					blkId := segId.AsBlockID()
+					blkId.BlockID = blkMeta.ID
+					blkType := col.TRANSIENT_BLK
+					bufMgr := mtBufMgr
+					if segType == col.SORTED_SEG {
+						blkType = col.PERSISTENT_SORTED_BLK
+						bufMgr = sstBufMgr
+					} else if blkMeta.DataState == md.FULL {
+						blkType = col.PERSISTENT_BLK
+						bufMgr = sstBufMgr
+					}
+					// TODO: strblk
+					// Only stdblk now
+					colBlk := col.NewStdColumnBlock(colSeg.Ref(), blkId, blkType)
+					defer colBlk.UnRef()
+					colPart := col.NewColumnPart(bufMgr, colBlk.Ref(), blkId, info.Conf.BlockMaxRows, uint64(colType.Size))
+					if colPart == nil {
+						return errors.New(fmt.Sprintf("data replay error"))
+					}
+					// TODO: How to handle more than 1 empty blk or segment
+					// if blkMeta.DataState == md.EMPTY {
+					// 	break
+					// }
+				}
+				if err := tbl.GetCollumn(colIdx).Append(colSeg.Ref()); err != nil {
+					return err
+				}
+			}
+		}
+		if err := ts.CreateTable(tbl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
