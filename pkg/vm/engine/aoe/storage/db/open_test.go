@@ -1,13 +1,17 @@
 package db
 
 import (
-	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -142,6 +146,52 @@ func TestOpen(t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func TestCleanStaleData(t *testing.T) {
-	// TODO
+func TestReplay(t *testing.T) {
+	initDBTest()
+	dbi := initDB()
+	schema := md.MockSchema(2)
+	schema.Name = "mocktbl"
+	_, err := dbi.CreateTable(schema)
+	assert.Nil(t, err)
+	blkCnt := 2
+	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
+	ck := chunk.MockChunk(schema.Types(), rows)
+	assert.Equal(t, uint64(rows), ck.GetCount())
+	logIdx := &md.LogIndex{
+		ID:       uint64(0),
+		Capacity: ck.GetCount(),
+	}
+	insertCnt := 4
+	for i := 0; i < insertCnt; i++ {
+		err = dbi.Append(schema.Name, ck, logIdx)
+		assert.Nil(t, err)
+	}
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	t.Log(dbi.MTBufMgr.String())
+	t.Log(dbi.SSTBufMgr.String())
+	dbi.Close()
+
+	dataDir := e.MakeDataDir(dbi.Dir)
+	invalidFileName := filepath.Join(dataDir, "invalid")
+	f, err := os.OpenFile(invalidFileName, os.O_RDONLY|os.O_CREATE, 0666)
+	assert.Nil(t, err)
+	f.Close()
+
+	dbi = initDB()
+
+	os.Stat(invalidFileName)
+	_, err = os.Stat(invalidFileName)
+	assert.True(t, os.IsNotExist(err))
+
+	_, err = dbi.CreateTable(schema)
+	assert.NotNil(t, err)
+	for i := 0; i < insertCnt; i++ {
+		err = dbi.Append(schema.Name, ck, logIdx)
+		assert.Nil(t, err)
+	}
+
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	t.Log(dbi.MTBufMgr.String())
+	t.Log(dbi.SSTBufMgr.String())
+	dbi.Close()
 }
