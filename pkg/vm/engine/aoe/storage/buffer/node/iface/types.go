@@ -25,6 +25,22 @@ const (
 	NODE_LOADED
 )
 
+func NodeStateString(state NodeState) string {
+	switch state {
+	case NODE_UNLOAD:
+		return "UNLOAD"
+	case NODE_LOADING:
+		return "LOADING"
+	case NODE_ROOLBACK:
+		return "ROLLBACK"
+	case NODE_UNLOADING:
+		return "UNLOADING"
+	case NODE_LOADED:
+		return "LOADED"
+	}
+	panic("unsupported")
+}
+
 func AtomicLoadState(addr *NodeState) NodeState {
 	return atomic.LoadUint32(addr)
 }

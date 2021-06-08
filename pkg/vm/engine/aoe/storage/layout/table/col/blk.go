@@ -4,6 +4,7 @@ import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
+	"sync/atomic"
 )
 
 type BlockType uint8
@@ -16,6 +17,24 @@ const (
 	MOCK_PERSISTENT_BLK
 	MOCK_PERSISTENT_SORTED_BLK
 )
+
+func (t BlockType) String() string {
+	switch t {
+	case TRANSIENT_BLK:
+		return "TB"
+	case PERSISTENT_BLK:
+		return "PB"
+	case PERSISTENT_SORTED_BLK:
+		return "PSB"
+	case MOCK_BLK:
+		return "MB"
+	case MOCK_PERSISTENT_BLK:
+		return "MPB"
+	case MOCK_PERSISTENT_SORTED_BLK:
+		return "MPSB"
+	}
+	panic("unspported")
+}
 
 type IColumnBlock interface {
 	io.Closer
@@ -30,6 +49,9 @@ type IColumnBlock interface {
 	GetColIdx() int
 	CloneWithUpgrade(IColumnSegment) IColumnBlock
 	String() string
+	Ref() IColumnBlock
+	UnRef()
+	GetRefs() int64
 }
 
 type ColumnBlock struct {
@@ -39,7 +61,12 @@ type ColumnBlock struct {
 	RowCount uint64
 	Type     BlockType
 	ColIdx   int
+	Refs     int64
 	// Segment  IColumnSegment
+}
+
+func (blk *ColumnBlock) GetRefs() int64 {
+	return atomic.LoadInt64(&blk.Refs)
 }
 
 func (blk *ColumnBlock) GetColIdx() int {
@@ -59,13 +86,20 @@ func (blk *ColumnBlock) GetRowCount() uint64 {
 func (blk *ColumnBlock) SetNext(next IColumnBlock) {
 	blk.Lock()
 	defer blk.Unlock()
+	if blk.Next != nil {
+		blk.Next.UnRef()
+	}
 	blk.Next = next
 }
 
 func (blk *ColumnBlock) GetNext() IColumnBlock {
 	blk.RLock()
-	defer blk.RUnlock()
-	return blk.Next
+	if blk.Next != nil {
+		blk.Next.Ref()
+	}
+	r := blk.Next
+	blk.RUnlock()
+	return r
 }
 
 func (blk *ColumnBlock) GetID() common.ID {

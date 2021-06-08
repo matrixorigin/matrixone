@@ -13,11 +13,12 @@ import (
 )
 
 type OpCtx struct {
-	Opts       *e.Options
-	Tables     *table.Tables
-	MTManager  mtif.IManager
-	BufManager bmgrif.IBufferManager
-	TableMeta  *md.Table
+	Opts      *e.Options
+	Tables    *table.Tables
+	MTManager mtif.IManager
+	MTBufMgr  bmgrif.IBufferManager
+	SSTBufMgr bmgrif.IBufferManager
+	TableMeta *md.Table
 }
 
 type Op struct {

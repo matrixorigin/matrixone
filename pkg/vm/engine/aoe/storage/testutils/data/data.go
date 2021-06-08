@@ -15,17 +15,17 @@ import (
 
 func MakeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
 	colType := types.Type{types.T_int32, 4, 4, 0}
-	seg := col.NewColumnSegment(id, colIdx, colType, col.UNSORTED_SEG)
+	seg := col.NewColumnSegment(bufMgr, bufMgr, id, colIdx, colType, col.UNSORTED_SEG)
 	blk_id := id
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.RegisterBlock(bufMgr, blk_id.NextBlock(), rowCount)
+		_, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
 		assert.Nil(t, err)
 	}
 	return seg
 }
 
 func MakeBufMagr(capacity uint64) mgrif.IBufferManager {
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Mock Flusher")
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
 	return bufMgr
 }

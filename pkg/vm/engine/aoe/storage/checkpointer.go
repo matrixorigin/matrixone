@@ -30,7 +30,7 @@ func (ck *Checkpointer) PreCommit(info *md.MetaInfo) error {
 		return errors.New("nil info")
 	}
 	fname := MakeFilename(ck.Dirname, FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), true)
-	log.Infof("PreCommit CheckPoint: %s", fname)
+	// log.Infof("PreCommit CheckPoint: %s", fname)
 	dir := filepath.Dir(fname)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
@@ -42,7 +42,7 @@ func (ck *Checkpointer) PreCommit(info *md.MetaInfo) error {
 	if err != nil {
 		return err
 	}
-	// log.Infof(info.String())
+	defer w.Close()
 	err = info.Serialize(w)
 	if err != nil {
 		return err
@@ -59,7 +59,7 @@ func (ck *Checkpointer) Commit() error {
 	if err != nil {
 		return err
 	}
-	log.Infof("Commit CheckPoint: %s", fname)
+	// log.Infof("Commit CheckPoint: %s", fname)
 	err = os.Rename(ck.TmpFile, fname)
 	return err
 }

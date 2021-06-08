@@ -17,18 +17,19 @@ import (
 )
 
 func makeBufMagr(capacity uint64) mgrif.IBufferManager {
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Mock Flusher")
 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
 	return bufMgr
 }
 
 func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
 	colType := types.Type{types.T_int32, 4, 4, 0}
-	seg := col.NewColumnSegment(id, colIdx, colType, col.UNSORTED_SEG)
+	seg := col.NewColumnSegment(bufMgr, bufMgr, id, colIdx, colType, col.UNSORTED_SEG)
 	blk_id := id
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.RegisterBlock(bufMgr, blk_id.NextBlock(), rowCount)
+		blk, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
 		assert.Nil(t, err)
+		blk.UnRef()
 	}
 	return seg
 }
@@ -61,11 +62,13 @@ func TestUpgradeSegOp(t *testing.T) {
 	capacity := typeSize * row_count * 10000
 	bufMgr := makeBufMagr(capacity)
 	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, t0, colDefs)
+	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
 	seg_cnt := 4
 	blk_cnt := 4
 	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
+
+	segs := make([]col.IColumnSegment, 0)
 
 	for idx, segID := range segIDs {
 		ctx := new(OpCtx)
@@ -75,11 +78,15 @@ func TestUpgradeSegOp(t *testing.T) {
 		op.WaitDone()
 		for _, seg := range op.Segments {
 			assert.Equal(t, col.SORTED_SEG, seg.GetSegmentType())
+			nextSeg := seg.GetNext()
 			if idx < seg_cnt-1 {
-				assert.NotNil(t, seg.GetNext())
+				assert.NotNil(t, nextSeg)
+				nextSeg.UnRef()
 			} else {
-				assert.Nil(t, seg.GetNext())
+				assert.Nil(t, nextSeg)
 			}
+			seg.UnRef()
+			segs = append(segs, seg)
 		}
 	}
 
@@ -98,7 +105,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 	capacity := typeSize * row_count * 10000
 	bufMgr := makeBufMagr(capacity)
 	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, t0, colDefs)
+	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
 	seg_cnt := 2
 	blk_cnt := 2
 	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
@@ -127,14 +134,16 @@ func TestUpgradeBlkOp(t *testing.T) {
 				} else if idx == 1 {
 					assert.Equal(t, col.PERSISTENT_SORTED_BLK, blk.GetBlockType())
 				}
+				blk.UnRef()
 			}
 		}
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 0; i++ {
 		runtime.GC()
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	t.Log(bufMgr.String())
 	assert.Equal(t, seg_cnt*blk_cnt*len(colDefs), bufMgr.NodeCount())
+
 	opts.MemData.Updater.Stop()
 }

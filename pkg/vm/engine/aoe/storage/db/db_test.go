@@ -98,8 +98,11 @@ func TestAppend(t *testing.T) {
 	invalidName := "xxx"
 	err = dbi.Append(invalidName, ck, logIdx)
 	assert.NotNil(t, err)
-	err = dbi.Append(schema.Name, ck, logIdx)
-	assert.Nil(t, err)
+	insertCnt := 4
+	for i := 0; i < insertCnt; i++ {
+		err = dbi.Append(schema.Name, ck, logIdx)
+		assert.Nil(t, err)
+	}
 
 	cols := []int{0, 1}
 	iterOpts := &e.IterOptions{
@@ -119,16 +122,18 @@ func TestAppend(t *testing.T) {
 		segH := segIt.GetSegmentHandle()
 		assert.NotNil(t, segH)
 		blkIt := segH.NewIterator()
+		segH.Close()
 		assert.NotNil(t, blkIt)
 		for blkIt.Valid() {
 			blkCount++
 			blkIt.Next()
 		}
+		blkIt.Close()
 		segIt.Next()
 	}
 	segIt.Close()
-	assert.Equal(t, 1, segCount)
-	assert.Equal(t, blkCnt, blkCount)
+	assert.Equal(t, 2, segCount)
+	assert.Equal(t, blkCnt*insertCnt, blkCount)
 
 	blkIt, err := dbi.NewBlockIter(iterOpts)
 	assert.Nil(t, err)
@@ -139,12 +144,14 @@ func TestAppend(t *testing.T) {
 		blkCount++
 		h := blkIt.GetBlockHandle()
 		assert.NotNil(t, h)
-		t.Log(h.GetColumn(0).String())
-		t.Log(h.GetColumn(1).String())
+		h.Close()
 		blkIt.Next()
 	}
 	blkIt.Close()
-	assert.Equal(t, blkCnt, blkCount)
+	assert.Equal(t, blkCnt*insertCnt, blkCount)
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	t.Log(dbi.MTBufMgr.String())
+	t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()
 }
 
@@ -215,8 +222,7 @@ func TestConcurrency(t *testing.T) {
 		}
 	}(reqCtx)
 
-	insertCnt := rand.Intn(4) + 4
-
+	insertCnt := 8
 	var wg2 sync.WaitGroup
 
 	wg2.Add(1)
@@ -247,7 +253,6 @@ func TestConcurrency(t *testing.T) {
 				ColIdxes:  cols,
 			}
 			searchCh <- searchReq
-			// time.Sleep(1 * time.Microsecond)
 		}
 	}()
 
@@ -266,6 +271,7 @@ func TestConcurrency(t *testing.T) {
 		segCnt++
 		h := segIt.GetSegmentHandle()
 		blkIt := h.NewIterator()
+		h.Close()
 		for blkIt.Valid() {
 			tblkCnt++
 			blkIt.Next()
@@ -286,6 +292,46 @@ func TestConcurrency(t *testing.T) {
 	}
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	blkIt.Close()
+	time.Sleep(time.Duration(200) * time.Millisecond)
 
+	t.Log(dbi.WorkersStatsString())
+	t.Log(dbi.MTBufMgr.String())
+	t.Log(dbi.SSTBufMgr.String())
+	dbi.Close()
+}
+
+func TestGC(t *testing.T) {
+	initDBTest()
+	dbi := initDB()
+	schema := md.MockSchema(2)
+	schema.Name = "mockcon"
+	_, err := dbi.CreateTable(schema)
+	assert.Nil(t, err)
+	blkCnt := dbi.store.MetaInfo.Conf.SegmentMaxBlocks
+	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * blkCnt
+	baseCk := chunk.MockChunk(schema.Types(), rows)
+
+	logIdx := &md.LogIndex{
+		ID:       uint64(0),
+		Capacity: baseCk.GetCount(),
+	}
+
+	insertCnt := uint64(8)
+
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			go func() {
+				dbi.Append(schema.Name, baseCk, logIdx)
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+	time.Sleep(time.Duration(40) * time.Millisecond)
+	t.Log(dbi.MTBufMgr.String())
+	t.Log(dbi.SSTBufMgr.String())
+	assert.Equal(t, int(blkCnt*insertCnt*2), dbi.SSTBufMgr.NodeCount()+dbi.MTBufMgr.NodeCount())
 	dbi.Close()
 }

@@ -25,21 +25,25 @@ type IColumnData interface {
 	GetSegment(common.ID) IColumnSegment
 	GetColIdx() int
 	RegisterSegment(id common.ID) (seg IColumnSegment, err error)
-	RegisterBlock(bufMgr bmgrif.IBufferManager, id common.ID, maxRows uint64) (blk IColumnBlock, err error)
+	RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error)
 }
 
 type ColumnData struct {
-	Type     types.Type
-	Idx      int
-	RowCount uint64
-	SegTree  ISegmentTree
+	Type      types.Type
+	Idx       int
+	RowCount  uint64
+	SegTree   ISegmentTree
+	MTBufMgr  bmgrif.IBufferManager
+	SSTBufMgr bmgrif.IBufferManager
 }
 
-func NewColumnData(col_type types.Type, col_idx int) IColumnData {
+func NewColumnData(mtBufMgr, sstBufMgr bmgrif.IBufferManager, col_type types.Type, col_idx int) IColumnData {
 	data := &ColumnData{
-		Type:    col_type,
-		Idx:     col_idx,
-		SegTree: NewSegmentTree(),
+		Type:      col_type,
+		Idx:       col_idx,
+		SegTree:   NewSegmentTree(),
+		MTBufMgr:  mtBufMgr,
+		SSTBufMgr: sstBufMgr,
 	}
 	return data
 }
@@ -72,18 +76,20 @@ func (cdata *ColumnData) Append(seg IColumnSegment) error {
 }
 
 func (cdata *ColumnData) RegisterSegment(id common.ID) (seg IColumnSegment, err error) {
-	seg = NewColumnSegment(id, cdata.Idx, cdata.Type, UNSORTED_SEG)
+	seg = NewColumnSegment(cdata.MTBufMgr, cdata.SSTBufMgr, id, cdata.Idx, cdata.Type, UNSORTED_SEG)
 	err = cdata.Append(seg)
-	return seg, err
+	return seg.Ref(), err
 }
 
-func (cdata *ColumnData) RegisterBlock(bufMgr bmgrif.IBufferManager, id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
+func (cdata *ColumnData) RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
 	seg := cdata.GetSegmentTail()
 	if seg == nil {
 		err = errors.New(fmt.Sprintf("cannot register blk: %s", id.BlockString()))
 		return blk, err
 	}
-	return seg.RegisterBlock(bufMgr, id, maxRows)
+	blk, err = seg.RegisterBlock(id, maxRows)
+	seg.UnRef()
+	return blk, err
 }
 
 // func (cdata *ColumnData) AppendBlock(blk IColumnBlock) error {
