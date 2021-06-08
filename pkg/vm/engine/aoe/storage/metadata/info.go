@@ -199,6 +199,10 @@ func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 			info.TableIds[tbl.ID] = true
 			info.NameMap[tbl.Schema.Name] = tbl.ID
 		}
+		tbl.IdMap = make(map[uint64]int)
+		for idx, seg := range tbl.Segments {
+			tbl.IdMap[seg.GetID()] = idx
+		}
 	}
 
 	return info, err

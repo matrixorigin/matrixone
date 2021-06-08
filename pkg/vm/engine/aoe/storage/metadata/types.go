@@ -89,7 +89,8 @@ type Table struct {
 	sync.RWMutex
 	TimeStamp
 	ID         uint64
-	Segments   map[uint64]*Segment
+	Segments   []*Segment
+	IdMap      map[uint64]int `json:"-"`
 	SegmentCnt uint64
 	Info       *MetaInfo `json:"-"`
 	Schema     *Schema

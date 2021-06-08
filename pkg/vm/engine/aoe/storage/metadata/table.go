@@ -16,7 +16,8 @@ func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
 	}
 	tbl := &Table{
 		ID:        id,
-		Segments:  make(map[uint64]*Segment),
+		Segments:  make([]*Segment, 0),
+		IdMap:     make(map[uint64]int),
 		TimeStamp: *NewTimeStamp(),
 		Info:      info,
 		Schema:    schema,
@@ -63,10 +64,11 @@ func (tbl *Table) ReferenceSegment(segment_id uint64) (seg *Segment, err error) 
 }
 
 func (tbl *Table) referenceSegmentNoLock(segment_id uint64) (seg *Segment, err error) {
-	seg, ok := tbl.Segments[segment_id]
+	idx, ok := tbl.IdMap[segment_id]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("specified segment %d not found in table %d", segment_id, tbl.ID))
 	}
+	seg = tbl.Segments[idx]
 	return seg, nil
 }
 
@@ -157,11 +159,12 @@ func (tbl *Table) RegisterSegment(seg *Segment) error {
 		return err
 	}
 
-	_, ok := tbl.Segments[seg.ID]
+	_, ok := tbl.IdMap[seg.ID]
 	if ok {
 		return errors.New(fmt.Sprintf("Duplicate segment %d found in table %d", seg.GetID(), tbl.ID))
 	}
-	tbl.Segments[seg.GetID()] = seg
+	tbl.IdMap[seg.GetID()] = len(tbl.Segments)
+	tbl.Segments = append(tbl.Segments, seg)
 	atomic.StoreUint64(&tbl.SegmentCnt, uint64(len(tbl.Segments)))
 	return nil
 }
@@ -173,7 +176,8 @@ func (tbl *Table) GetSegmentCount() uint64 {
 func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {
 	blkid := uint64(0)
 	segid := uint64(0)
-	for sid, seg := range tbl.Segments {
+	for _, seg := range tbl.Segments {
+		sid := seg.GetID()
 		max_blkid := seg.GetMaxBlkID()
 		if max_blkid > blkid {
 			blkid = max_blkid
@@ -196,12 +200,13 @@ func (tbl *Table) Copy(ts ...int64) *Table {
 	new_tbl := NewTable(tbl.Info, tbl.Schema, tbl.ID)
 	new_tbl.TimeStamp = tbl.TimeStamp
 	new_tbl.BoundSate = tbl.BoundSate
-	for k, v := range tbl.Segments {
+	for _, v := range tbl.Segments {
 		if !v.Select(t) {
 			continue
 		}
 		seg, _ := tbl.CloneSegment(v.ID)
-		new_tbl.Segments[k] = seg
+		new_tbl.IdMap[seg.GetID()] = len(new_tbl.Segments)
+		new_tbl.Segments = append(new_tbl.Segments, seg)
 	}
 
 	return new_tbl
