@@ -99,8 +99,11 @@ func TestAppend(t *testing.T) {
 	invalidName := "xxx"
 	err = dbi.Append(invalidName, ck, logIdx)
 	assert.NotNil(t, err)
-	err = dbi.Append(schema.Name, ck, logIdx)
-	assert.Nil(t, err)
+	insertCnt := 4
+	for i := 0; i < insertCnt; i++ {
+		err = dbi.Append(schema.Name, ck, logIdx)
+		assert.Nil(t, err)
+	}
 
 	cols := []int{0, 1}
 	iterOpts := &e.IterOptions{
@@ -120,16 +123,18 @@ func TestAppend(t *testing.T) {
 		segH := segIt.GetSegmentHandle()
 		assert.NotNil(t, segH)
 		blkIt := segH.NewIterator()
+		segH.Close()
 		assert.NotNil(t, blkIt)
 		for blkIt.Valid() {
 			blkCount++
 			blkIt.Next()
 		}
+		blkIt.Close()
 		segIt.Next()
 	}
 	segIt.Close()
-	assert.Equal(t, 1, segCount)
-	assert.Equal(t, blkCnt, blkCount)
+	assert.Equal(t, 2, segCount)
+	assert.Equal(t, blkCnt*insertCnt, blkCount)
 
 	blkIt, err := dbi.NewBlockIter(iterOpts)
 	assert.Nil(t, err)
@@ -140,12 +145,14 @@ func TestAppend(t *testing.T) {
 		blkCount++
 		h := blkIt.GetBlockHandle()
 		assert.NotNil(t, h)
-		t.Log(h.GetColumn(0).String())
-		t.Log(h.GetColumn(1).String())
+		h.Close()
 		blkIt.Next()
 	}
 	blkIt.Close()
-	assert.Equal(t, blkCnt, blkCount)
+	assert.Equal(t, blkCnt*insertCnt, blkCount)
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	t.Log(dbi.MTBufMgr.String())
+	t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()
 }
 
