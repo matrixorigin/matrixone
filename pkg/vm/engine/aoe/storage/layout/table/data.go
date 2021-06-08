@@ -8,6 +8,7 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
 	"sync"
 )
@@ -29,16 +30,15 @@ type ITableData interface {
 	AppendColSegments(colSegs []col.IColumnSegment)
 }
 
-func NewTableData(mtBufMgr, sstBufMgr bmgrif.IBufferManager, id uint64, colTypes []types.Type) ITableData {
+func NewTableData(mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
 	data := &TableData{
-		ID:        id,
 		Columns:   make([]col.IColumnData, 0),
-		ColType:   colTypes,
 		MTBufMgr:  mtBufMgr,
 		SSTBufMgr: sstBufMgr,
+		Meta:      meta,
 	}
-	for idx, colType := range colTypes {
-		data.Columns = append(data.Columns, col.NewColumnData(mtBufMgr, sstBufMgr, colType, idx))
+	for idx, colDef := range meta.Schema.ColDefs {
+		data.Columns = append(data.Columns, col.NewColumnData(mtBufMgr, sstBufMgr, colDef.Type, idx))
 	}
 	runtime.SetFinalizer(data, func(o ITableData) {
 		id := o.GetID()
@@ -49,12 +49,11 @@ func NewTableData(mtBufMgr, sstBufMgr bmgrif.IBufferManager, id uint64, colTypes
 
 type TableData struct {
 	sync.Mutex
-	ID        uint64
 	RowCount  uint64
 	Columns   []col.IColumnData
-	ColType   []types.Type
 	MTBufMgr  bmgrif.IBufferManager
 	SSTBufMgr bmgrif.IBufferManager
+	Meta      *md.Table
 }
 
 func (td *TableData) GetRowCount() uint64 {
@@ -62,15 +61,15 @@ func (td *TableData) GetRowCount() uint64 {
 }
 
 func (td *TableData) GetID() uint64 {
-	return td.ID
+	return td.Meta.ID
 }
 
 func (td *TableData) GetColTypes() []types.Type {
-	return td.ColType
+	return td.Meta.Schema.Types()
 }
 
 func (td *TableData) GetCollumn(idx int) col.IColumnData {
-	if idx >= len(td.ColType) {
+	if idx >= len(td.Meta.Schema.ColDefs) {
 		panic("logic error")
 	}
 	return td.Columns[idx]
@@ -81,7 +80,7 @@ func (td *TableData) GetCollumns() []col.IColumnData {
 }
 
 func (td *TableData) GetColTypeSize(idx int) uint64 {
-	return uint64(td.ColType[idx].Size)
+	return uint64(td.Meta.Schema.ColDefs[idx].Type.Size)
 }
 
 func (td *TableData) GetMTBufMgr() bmgrif.IBufferManager {
@@ -114,7 +113,7 @@ func (td *TableData) UpgradeSegment(segID common.ID) (segs []col.IColumnSegment)
 
 // Only be called at engine startup.
 func (td *TableData) AppendColSegments(colSegs []col.IColumnSegment) {
-	if len(colSegs) != len(td.ColType) {
+	if len(colSegs) != len(td.Meta.Schema.ColDefs) {
 		panic("logic error")
 	}
 	for idx, column := range td.Columns {
@@ -196,3 +195,5 @@ func (ts *Tables) CreateTableNoLock(tbl ITableData) (err error) {
 	ts.Data[tbl.GetID()] = tbl
 	return nil
 }
+
+// func (ts *Tables) ReplayTable()

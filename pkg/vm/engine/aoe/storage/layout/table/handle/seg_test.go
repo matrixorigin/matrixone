@@ -1,9 +1,9 @@
 package handle
 
 import (
-	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	tutil "matrixone/pkg/vm/engine/aoe/storage/testutils/data"
 	"testing"
 	"time"
@@ -12,20 +12,19 @@ import (
 )
 
 func TestSegmentHandle(t *testing.T) {
-	colDefs := make([]types.Type, 2)
-	colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
-	colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
+	schema := md.MockSchema(2)
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
 	opts.MemData.Updater.Start()
-	typeSize := uint64(colDefs[0].Size)
+	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
 	seg_cnt := 100
 	blk_cnt := 64
 	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
 	bufMgr := tutil.MakeBufMagr(capacity)
 	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
+	tableMeta := &md.Table{Schema: schema, ID: t0}
+	tableData := table.NewTableData(bufMgr, bufMgr, tableMeta)
 	segIDs := tutil.MakeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 

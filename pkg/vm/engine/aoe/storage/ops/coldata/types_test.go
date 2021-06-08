@@ -1,7 +1,6 @@
 package coldata
 
 import (
-	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
@@ -9,10 +8,13 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -51,18 +53,17 @@ func makeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typ
 }
 
 func TestUpgradeSegOp(t *testing.T) {
-	colDefs := make([]types.Type, 2)
-	colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
-	colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
+	schema := md.MockSchema(2)
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
 	opts.MemData.Updater.Start()
-	typeSize := uint64(colDefs[0].Size)
+	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
 	bufMgr := makeBufMagr(capacity)
 	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
+	tableMeta := &md.Table{Schema: schema, ID: t0}
+	tableData := table.NewTableData(bufMgr, bufMgr, tableMeta)
 	seg_cnt := 4
 	blk_cnt := 4
 	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
@@ -94,24 +95,23 @@ func TestUpgradeSegOp(t *testing.T) {
 }
 
 func TestUpgradeBlkOp(t *testing.T) {
-	colDefs := make([]types.Type, 2)
-	colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
-	colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
+	schema := md.MockSchema(2)
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
 	opts.MemData.Updater.Start()
-	typeSize := uint64(colDefs[0].Size)
+	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
 	bufMgr := makeBufMagr(capacity)
 	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
+	tableMeta := &md.Table{Schema: schema, ID: t0}
+	tableData := table.NewTableData(bufMgr, bufMgr, tableMeta)
 	seg_cnt := 2
 	blk_cnt := 2
 	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 	t.Log(bufMgr.String())
-	assert.Equal(t, seg_cnt*blk_cnt*len(colDefs), bufMgr.NodeCount())
+	assert.Equal(t, seg_cnt*blk_cnt*len(schema.ColDefs), bufMgr.NodeCount())
 	for _, segID := range segIDs {
 		var ops []*UpgradeBlkOp
 		blkID := segID
@@ -127,7 +127,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 
 		for idx, op := range ops {
 			op.WaitDone()
-			assert.Equal(t, len(colDefs), len(op.Blocks))
+			assert.Equal(t, len(schema.ColDefs), len(op.Blocks))
 			for _, blk := range op.Blocks {
 				if idx == 0 {
 					assert.Equal(t, col.PERSISTENT_BLK, blk.GetBlockType())
@@ -143,7 +143,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	t.Log(bufMgr.String())
-	assert.Equal(t, seg_cnt*blk_cnt*len(colDefs), bufMgr.NodeCount())
+	assert.Equal(t, seg_cnt*blk_cnt*len(schema.ColDefs), bufMgr.NodeCount())
 
 	opts.MemData.Updater.Stop()
 }
