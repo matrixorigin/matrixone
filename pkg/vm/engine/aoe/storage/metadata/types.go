@@ -43,15 +43,13 @@ type Block struct {
 	BoundSate
 	TimeStamp
 	ID          uint64
-	SegmentID   uint64
-	TableID     uint64
 	MaxRowCount uint64
 	Count       uint64
 	Index       *LogIndex
 	PrevIndex   *LogIndex
 	DeleteIndex *uint64
 	DataState   DataState
-	Schema      *Schema `json:"-"`
+	Segment     *Segment `json:"-"`
 }
 
 type Sequence struct {

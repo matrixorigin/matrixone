@@ -76,8 +76,8 @@ func (op *CreateBlkOp) Execute() error {
 
 func (op *CreateBlkOp) registerTableData(blk *md.Block) {
 	blk_id := common.ID{
-		TableID:   blk.TableID,
-		SegmentID: blk.SegmentID,
+		TableID:   blk.Segment.TableID,
+		SegmentID: blk.Segment.ID,
 		BlockID:   blk.ID,
 	}
 	for _, column := range op.TableData.GetCollumns() {

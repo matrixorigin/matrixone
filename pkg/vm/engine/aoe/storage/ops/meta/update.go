@@ -23,12 +23,12 @@ func (op *UpdateOp) updateBlock(blk *md.Block) error {
 		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d", blk.ID, md.Detatched))
 	}
 
-	table, err := op.Ctx.Opts.Meta.Info.ReferenceTable(blk.TableID)
+	table, err := op.Ctx.Opts.Meta.Info.ReferenceTable(blk.Segment.TableID)
 	if err != nil {
 		return err
 	}
 
-	seg, err := table.ReferenceSegment(blk.SegmentID)
+	seg, err := table.ReferenceSegment(blk.Segment.ID)
 	if err != nil {
 		return err
 	}

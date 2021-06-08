@@ -51,7 +51,7 @@ func (seg *Segment) BlockIDs(args ...interface{}) map[uint64]uint64 {
 }
 
 func (seg *Segment) CreateBlock() (blk *Block, err error) {
-	blk = NewBlock(seg.TableID, seg.ID, seg.Info.Sequence.GetBlockID(), seg.Info.Conf.BlockMaxRows, seg.Schema)
+	blk = NewBlock(seg.Info.Sequence.GetBlockID(), seg)
 	return blk, err
 }
 
@@ -101,8 +101,8 @@ func (seg *Segment) SetInfo(info *MetaInfo) error {
 }
 
 func (seg *Segment) RegisterBlock(blk *Block) error {
-	if blk.TableID != seg.TableID {
-		return errors.New(fmt.Sprintf("table id mismatch %d:%d", seg.TableID, blk.TableID))
+	if blk.Segment.TableID != seg.TableID {
+		return errors.New(fmt.Sprintf("table id mismatch %d:%d", seg.TableID, blk.Segment.TableID))
 	}
 	if blk.GetSegmentID() != seg.GetID() {
 		return errors.New(fmt.Sprintf("segment id mismatch %d:%d", seg.GetID(), blk.GetSegmentID()))

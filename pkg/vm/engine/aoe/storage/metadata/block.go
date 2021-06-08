@@ -10,14 +10,12 @@ const (
 	BLOCK_ROW_COUNT = 16
 )
 
-func NewBlock(table_id, segment_id, id, capacity uint64, schema *Schema) *Block {
+func NewBlock(id uint64, segment *Segment) *Block {
 	blk := &Block{
 		ID:          id,
-		TableID:     table_id,
-		SegmentID:   segment_id,
 		TimeStamp:   *NewTimeStamp(),
-		MaxRowCount: capacity,
-		Schema:      schema,
+		MaxRowCount: segment.Info.Conf.BlockMaxRows,
+		Segment:     segment,
 	}
 	return blk
 }
@@ -40,15 +38,11 @@ func (blk *Block) GetAppliedIndex() (uint64, error) {
 }
 
 func (blk *Block) GetID() uint64 {
-	blk.RLock()
-	defer blk.RUnlock()
 	return blk.ID
 }
 
 func (blk *Block) GetSegmentID() uint64 {
-	blk.RLock()
-	defer blk.RUnlock()
-	return blk.SegmentID
+	return blk.Segment.ID
 }
 
 func (blk *Block) SetIndex(idx LogIndex) {
@@ -69,7 +63,7 @@ func (blk *Block) SetIndex(idx LogIndex) {
 }
 
 func (blk *Block) String() string {
-	s := fmt.Sprintf("Blk(%d-%d-%d)[%s]", blk.TableID, blk.SegmentID, blk.ID, blk.TimeStamp.String())
+	s := fmt.Sprintf("Blk(%d-%d-%d)[%s]", blk.Segment.TableID, blk.Segment.ID, blk.ID, blk.TimeStamp.String())
 	if blk.IsDeleted(NowMicro()) {
 		s += "[D]"
 	}
@@ -106,7 +100,7 @@ func (blk *Block) SetCount(count uint64) error {
 func (blk *Block) Update(target *Block) error {
 	blk.Lock()
 	defer blk.Unlock()
-	if blk.ID != target.ID || blk.SegmentID != target.SegmentID || blk.TableID != target.TableID {
+	if blk.ID != target.ID || blk.Segment.ID != target.Segment.ID || blk.Segment.TableID != target.Segment.TableID {
 		return errors.New("block, segment, table id not matched")
 	}
 
@@ -136,11 +130,10 @@ func (blk *Block) Copy() *Block {
 
 func (blk *Block) copyNoLock(new_blk *Block) *Block {
 	if new_blk == nil {
-		new_blk = NewBlock(blk.TableID, blk.SegmentID, blk.ID, blk.MaxRowCount, blk.Schema)
+		new_blk = NewBlock(blk.ID, blk.Segment)
 	}
+	new_blk.Segment = blk.Segment
 	new_blk.ID = blk.ID
-	new_blk.SegmentID = blk.SegmentID
-	new_blk.TableID = blk.TableID
 	new_blk.TimeStamp = blk.TimeStamp
 	new_blk.MaxRowCount = blk.MaxRowCount
 	new_blk.BoundSate = blk.BoundSate
