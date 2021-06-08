@@ -4,6 +4,7 @@ import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
+	"sync/atomic"
 )
 
 type BlockType uint8
@@ -50,6 +51,7 @@ type IColumnBlock interface {
 	String() string
 	Ref() IColumnBlock
 	UnRef()
+	GetRefs() int64
 }
 
 type ColumnBlock struct {
@@ -61,6 +63,10 @@ type ColumnBlock struct {
 	ColIdx   int
 	Refs     int64
 	// Segment  IColumnSegment
+}
+
+func (blk *ColumnBlock) GetRefs() int64 {
+	return atomic.LoadInt64(&blk.Refs)
 }
 
 func (blk *ColumnBlock) GetColIdx() int {

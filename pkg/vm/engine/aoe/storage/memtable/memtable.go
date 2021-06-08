@@ -15,8 +15,7 @@ import (
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 )
 
 type MemTable struct {
@@ -84,8 +83,8 @@ func (mt *MemTable) Append(c *chunk.Chunk, offset uint64, index *md.LogIndex) (n
 		return n, err
 	}
 	index.Count = n
-	log.Info(mt.Meta.String())
-	log.Info(index.String())
+	// log.Info(mt.Meta.String())
+	// log.Info(index.String())
 	mt.Meta.SetIndex(*index)
 	mt.Meta.Count += n
 	if mt.Data.GetCount() == mt.Meta.MaxRowCount {
