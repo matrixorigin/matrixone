@@ -1,12 +1,10 @@
 package like
 
-import "matrixone/pkg/container/vector"
-
+/*
 var (
 	sLike func(*vector.Bytes, []byte, []int64) ([]int64, error)
 )
 
-/*
 func sLikePure(s *vector.Bytes, expr []byte) ([]int64, error) {
 	n := uint32(len(expr))
 	rs := sel.Pool.Get().([]int64)

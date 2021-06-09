@@ -13,6 +13,7 @@ import (
 	"matrixone/pkg/intmap/fastmap"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
@@ -125,7 +126,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			rbat := &batch.Batch{
 				Ro:    true,
-				Attrs: ctr.attrs,
+				Attrs: ctr.rattrs,
 				Vecs:  append(bat.Vecs, vecs...),
 			}
 			ctr.rows++
@@ -664,7 +665,12 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 }
 
 func (ctr *Container) newSpill(proc *process.Process) error {
-	if err := ctr.spill.e.Create(ctr.spill.id, ctr.spill.md); err != nil {
+	var defs []engine.TableDef
+
+	for _, attr := range ctr.spill.md {
+		defs = append(defs, &engine.AttributeDef{attr})
+	}
+	if err := ctr.spill.e.Create(ctr.spill.id, defs, nil, nil); err != nil {
 		return err
 	}
 	r, err := ctr.spill.e.Relation(ctr.spill.id)
@@ -679,7 +685,7 @@ func (ctr *Container) newSpill(proc *process.Process) error {
 func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
-		hash.Rehash(count, ctr.hashs, vec)
+		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count))
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

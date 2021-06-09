@@ -12,6 +12,8 @@ import (
 	"matrixone/pkg/intmap/fastmap"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
+
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/process"
 
 	"github.com/google/uuid"
@@ -450,7 +452,7 @@ func (ctr *Container) product(sel int64, g *hash.SetGroup, bat *batch.Batch, pro
 			return err
 		}
 		defer func() {
-			if len(ctr.bats[g.Idx].Seg) > 0 && proc.Size() > proc.Lim.Size {
+			if len(ctr.bats[g.Idx].Seg.Id) > 0 && proc.Size() > proc.Lim.Size {
 				bat.Clean(proc)
 				ctr.bats[g.Idx].Bat = nil
 			} else {
@@ -479,7 +481,12 @@ func (ctr *Container) product(sel int64, g *hash.SetGroup, bat *batch.Batch, pro
 }
 
 func (ctr *Container) newSpill(proc *process.Process) error {
-	if err := ctr.spill.e.Create(ctr.spill.id, ctr.spill.md); err != nil {
+	var defs []engine.TableDef
+
+	for _, attr := range ctr.spill.md {
+		defs = append(defs, &engine.AttributeDef{attr})
+	}
+	if err := ctr.spill.e.Create(ctr.spill.id, defs, nil, nil); err != nil {
 		return err
 	}
 	r, err := ctr.spill.e.Relation(ctr.spill.id)
@@ -494,7 +501,7 @@ func (ctr *Container) newSpill(proc *process.Process) error {
 func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
-		hash.Rehash(count, ctr.hashs, vec)
+		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count))
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

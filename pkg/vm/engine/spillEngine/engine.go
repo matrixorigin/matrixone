@@ -47,10 +47,32 @@ func (e *spillEngine) NewIterator(prefix []byte) (engine.Iterator, error) {
 }
 
 func (e *spillEngine) Delete(name string) error {
+	return nil
+}
+
+func (e *spillEngine) Create(name string) error {
+	return nil
+}
+
+func (e *spillEngine) Database(name string) (engine.Database, error) {
+	return &database{e.path, e.cdb, e.db}, nil
+}
+
+func (e *database) Delete(name string) error {
 	return os.RemoveAll(path.Join(e.path, name))
 }
 
-func (e *spillEngine) Create(name string, attrs []metadata.Attribute) error {
+func (e *database) Create(name string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy) error {
+	var attrs []metadata.Attribute
+
+	{
+		for _, def := range defs {
+			v, ok := def.(*engine.AttributeDef)
+			if ok {
+				attrs = append(attrs, v.Attr)
+			}
+		}
+	}
 	data, err := encoding.Encode(meta.Metadata{Name: name, Attrs: attrs})
 	if err != nil {
 		return err
@@ -69,11 +91,11 @@ func (e *spillEngine) Create(name string, attrs []metadata.Attribute) error {
 	return nil
 }
 
-func (e *spillEngine) Relations() []engine.Relation {
+func (e *database) Relations() []engine.Relation {
 	return nil
 }
 
-func (e *spillEngine) Relation(name string) (engine.Relation, error) {
+func (e *database) Relation(name string) (engine.Relation, error) {
 	var md meta.Metadata
 
 	data, err := e.cdb.GetCopy(path.Join(name, MetaKey))

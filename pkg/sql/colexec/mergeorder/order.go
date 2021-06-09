@@ -9,6 +9,7 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
@@ -438,8 +439,13 @@ func (ctr *Container) loads(ptn *partition, proc *process.Process) error {
 }
 
 func (ctr *Container) newSpill(ptn *partition, proc *process.Process) error {
+	var defs []engine.TableDef
+
+	for _, attr := range ctr.spill.md {
+		defs = append(defs, &engine.AttributeDef{attr})
+	}
 	id := pkey(ctr.spill.id, len(ctr.ptns))
-	if err := ctr.spill.e.Create(id, ctr.spill.md); err != nil {
+	if err := ctr.spill.e.Create(id, defs, nil, nil); err != nil {
 		return err
 	}
 	r, err := ctr.spill.e.Relation(id)

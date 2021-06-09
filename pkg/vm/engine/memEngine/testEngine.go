@@ -14,33 +14,36 @@ import (
 
 func NewTestEngine() engine.Engine {
 	e := New(kv.New())
-	CreateR(e)
-	CreateS(e)
+	db, _ := e.Database("default")
+	CreateR(db)
+	CreateS(db)
+	CreateT(db)
+	CreateW(db)
 	return e
 }
 
-func CreateR(e engine.Engine) {
+func CreateR(e engine.Database) {
 	{
-		var attrs []metadata.Attribute
+		var defs []engine.TableDef
 
 		{
-			attrs = append(attrs, metadata.Attribute{
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
 				Alg:  compress.Lz4,
 				Name: "orderId",
 				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
-			})
-			attrs = append(attrs, metadata.Attribute{
+			}})
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
 				Alg:  compress.Lz4,
 				Name: "uid",
 				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
-			})
-			attrs = append(attrs, metadata.Attribute{
+			}})
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
 				Alg:  compress.Lz4,
 				Name: "price",
 				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
-			})
+			}})
 		}
-		if err := e.Create("R", attrs); err != nil {
+		if err := e.Create("R", defs, nil, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -130,28 +133,29 @@ func CreateR(e engine.Engine) {
 	}
 }
 
-func CreateS(e engine.Engine) {
+func CreateS(e engine.Database) {
 	{
-		var attrs []metadata.Attribute
+		var defs []engine.TableDef
 
 		{
-			attrs = append(attrs, metadata.Attribute{
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
 				Alg:  compress.Lz4,
 				Name: "orderId",
 				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
-			})
-			attrs = append(attrs, metadata.Attribute{
+			}})
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
 				Alg:  compress.Lz4,
 				Name: "uid",
 				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
-			})
-			attrs = append(attrs, metadata.Attribute{
+			}})
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
 				Alg:  compress.Lz4,
 				Name: "price",
 				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
-			})
+			}})
 		}
-		if err := e.Create("S", attrs); err != nil {
+
+		if err := e.Create("S", defs, nil, nil); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -202,6 +206,230 @@ func CreateS(e engine.Engine) {
 	}
 	{
 		bat := batch.New(true, []string{"orderId", "uid", "price"})
+		{
+			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+			vs := make([][]byte, 10)
+			for i := 10; i < 20; i++ {
+				vs[i-10] = []byte(fmt.Sprintf("%v", i*2))
+			}
+			if err := vec.Append(vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[0] = vec
+		}
+		{
+			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+			vs := make([][]byte, 10)
+			for i := 10; i < 20; i++ {
+				vs[i-10] = []byte(fmt.Sprintf("%v", i%2))
+			}
+			if err := vec.Append(vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[1] = vec
+		}
+		{
+			vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+			vs := make([]float64, 10)
+			for i := 10; i < 20; i++ {
+				vs[i-10] = float64(i)
+			}
+			if err := vec.Append(vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[2] = vec
+		}
+		if err := r.Write(bat); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func CreateT(e engine.Database) {
+	{
+		var defs []engine.TableDef
+
+		{
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "orderId",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "uid",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "amount",
+				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
+			}})
+		}
+
+		if err := e.Create("T", defs, nil, nil); err != nil {
+			log.Fatal(err)
+		}
+	}
+	r, err := e.Relation("T")
+	if err != nil {
+		log.Fatal(err)
+	}
+	{
+		bat := batch.New(true, []string{"orderId", "uid", "amount"})
+		{
+			{
+				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+				vs := make([][]byte, 10)
+				for i := 0; i < 10; i++ {
+					vs[i] = []byte(fmt.Sprintf("%v", i*2))
+				}
+				if err := vec.Append(vs); err != nil {
+					log.Fatal(err)
+				}
+				bat.Vecs[0] = vec
+			}
+			{
+				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+				vs := make([][]byte, 10)
+				for i := 0; i < 10; i++ {
+					vs[i] = []byte(fmt.Sprintf("%v", i%2))
+				}
+				if err := vec.Append(vs); err != nil {
+					log.Fatal(err)
+				}
+				bat.Vecs[1] = vec
+			}
+			{
+				vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+				vs := make([]float64, 10)
+				for i := 0; i < 10; i++ {
+					vs[i] = float64(i)
+				}
+				if err := vec.Append(vs); err != nil {
+					log.Fatal(err)
+				}
+				bat.Vecs[2] = vec
+			}
+		}
+		if err := r.Write(bat); err != nil {
+			log.Fatal(err)
+		}
+	}
+	{
+		bat := batch.New(true, []string{"orderId", "uid", "amount"})
+		{
+			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+			vs := make([][]byte, 10)
+			for i := 10; i < 20; i++ {
+				vs[i-10] = []byte(fmt.Sprintf("%v", i*2))
+			}
+			if err := vec.Append(vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[0] = vec
+		}
+		{
+			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+			vs := make([][]byte, 10)
+			for i := 10; i < 20; i++ {
+				vs[i-10] = []byte(fmt.Sprintf("%v", i%2))
+			}
+			if err := vec.Append(vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[1] = vec
+		}
+		{
+			vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+			vs := make([]float64, 10)
+			for i := 10; i < 20; i++ {
+				vs[i-10] = float64(i)
+			}
+			if err := vec.Append(vs); err != nil {
+				log.Fatal(err)
+			}
+			bat.Vecs[2] = vec
+		}
+		if err := r.Write(bat); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func CreateW(e engine.Database) {
+	{
+		var defs []engine.TableDef
+
+		{
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "A",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "B",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "C",
+				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
+			}})
+		}
+
+		if err := e.Create("W", defs, nil, nil); err != nil {
+			log.Fatal(err)
+		}
+	}
+	r, err := e.Relation("W")
+	if err != nil {
+		log.Fatal(err)
+	}
+	{
+		bat := batch.New(true, []string{"A", "B", "C"})
+		{
+			{
+				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+				vs := make([][]byte, 10)
+				for i := 0; i < 10; i++ {
+					vs[i] = []byte(fmt.Sprintf("%v", i*2))
+				}
+				if err := vec.Append(vs); err != nil {
+					log.Fatal(err)
+				}
+				bat.Vecs[0] = vec
+			}
+			{
+				vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+				vs := make([][]byte, 10)
+				for i := 0; i < 10; i++ {
+					vs[i] = []byte(fmt.Sprintf("%v", i%2))
+				}
+				if err := vec.Append(vs); err != nil {
+					log.Fatal(err)
+				}
+				bat.Vecs[1] = vec
+			}
+			{
+				vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+				vs := make([]float64, 10)
+				for i := 0; i < 10; i++ {
+					vs[i] = float64(i)
+				}
+				if err := vec.Append(vs); err != nil {
+					log.Fatal(err)
+				}
+				bat.Vecs[2] = vec
+			}
+		}
+		if err := r.Write(bat); err != nil {
+			log.Fatal(err)
+		}
+	}
+	{
+		bat := batch.New(true, []string{"A", "B", "C"})
 		{
 			vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
 			vs := make([][]byte, 10)
