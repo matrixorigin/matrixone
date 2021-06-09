@@ -48,7 +48,7 @@ type IColumnBlock interface {
 	GetPartRoot() IColumnPart
 	GetBlockType() BlockType
 	GetColIdx() int
-	CloneWithUpgrade(IColumnSegment) IColumnBlock
+	CloneWithUpgrade(IColumnSegment, *md.Block) IColumnBlock
 	String() string
 	Ref() IColumnBlock
 	UnRef()

@@ -36,7 +36,6 @@ func TestStdColumnBlock(t *testing.T) {
 	schema := md.MockSchema(1)
 	seg_cnt := 5
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
-	t.Logf("xxxxx %d %d", uint64(seg_cnt)*blks, len(meta.Segments))
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	mtBufMgr := bmgr.MockBufMgr(10000)
@@ -48,11 +47,11 @@ func TestStdColumnBlock(t *testing.T) {
 		assert.Nil(t, seg.GetBlockRoot())
 
 		bMeta0 := segMeta.Blocks[0]
-		blk_0 := NewStdColumnBlock(seg, *bMeta0.AsCommonID(), MOCK_BLK)
+		blk_0 := NewStdColumnBlock(seg, bMeta0)
 		assert.Nil(t, blk_0.GetNext())
 		assert.Equal(t, blk_0, seg.GetBlockRoot())
 		bMeta1 := segMeta.Blocks[1]
-		blk_1 := NewStdColumnBlock(seg, *bMeta1.AsCommonID(), MOCK_BLK)
+		blk_1 := NewStdColumnBlock(seg, bMeta1)
 		assert.Nil(t, blk_1.GetNext())
 		assert.Equal(t, blk_1, blk_0.GetNext())
 		if prev_seg != nil {
@@ -88,7 +87,7 @@ func TestStdColumnBlock2(t *testing.T) {
 
 	typeSize := uint64(unsafe.Sizeof(uint64(0)))
 	row_count := info.Conf.BlockMaxRows
-	capacity := typeSize * row_count
+	capacity := typeSize * row_count * uint64(seg_cnt) * 2
 	bufMgr := bmgr.MockBufMgr(capacity)
 	t.Log(bufMgr.GetCapacity())
 	var prev_seg IColumnSegment
@@ -99,12 +98,12 @@ func TestStdColumnBlock2(t *testing.T) {
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		blkMeta0 := segMeta.Blocks[0]
-		blk_0 := NewStdColumnBlock(seg, *blkMeta0.AsCommonID(), MOCK_BLK)
+		blk_0 := NewStdColumnBlock(seg, blkMeta0)
 		part_0 := NewColumnPart(bufMgr, blk_0, *blkMeta0.AsCommonID(), row_count, typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
-		blkMeta1 := segMeta.Blocks[0]
-		blk_1 := NewStdColumnBlock(seg, *blkMeta1.AsCommonID(), MOCK_BLK)
+		blkMeta1 := segMeta.Blocks[1]
+		blk_1 := NewStdColumnBlock(seg, blkMeta1)
 		part_1 := NewColumnPart(bufMgr, blk_1, *blkMeta1.AsCommonID(), row_count, typeSize)
 		assert.Nil(t, part_1.GetNext())
 		assert.Equal(t, part_1, blk_1.GetPartRoot())
@@ -283,7 +282,7 @@ func TestRegisterNode(t *testing.T) {
 	col_idx := 0
 	typeSize := uint64(schema.ColDefs[col_idx].Type.Size)
 	row_count := uint64(64)
-	capacity := typeSize * row_count
+	capacity := typeSize * row_count * uint64(seg_cnt) * 2
 	bufMgr := bmgr.MockBufMgr(capacity)
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
@@ -294,12 +293,12 @@ func TestRegisterNode(t *testing.T) {
 		assert.Nil(t, seg.GetBlockRoot())
 		blk0Meta := segMeta.Blocks[0]
 		blk0Id := *blk0Meta.AsCommonID()
-		blk_0 := NewStdColumnBlock(seg, blk0Id, MOCK_BLK)
+		blk_0 := NewStdColumnBlock(seg, blk0Meta)
 		part_0 := NewColumnPart(bufMgr, blk_0, blk0Id, row_count, typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		blk1Meta := segMeta.Blocks[1]
-		blk_1 := NewStdColumnBlock(seg, *blk1Meta.AsCommonID(), MOCK_BLK)
+		blk_1 := NewStdColumnBlock(seg, blk1Meta)
 		part_1 := NewColumnPart(bufMgr, blk_1, *blk1Meta.AsCommonID(), row_count, typeSize)
 		assert.Nil(t, part_1.GetNext())
 		assert.Equal(t, part_1, blk_1.GetPartRoot())
@@ -309,6 +308,7 @@ func TestRegisterNode(t *testing.T) {
 			first_seg = seg
 		}
 		prev_seg = seg
+		t.Log(bufMgr.String())
 	}
 	t.Log(first_seg.ToString(true))
 	blk := first_seg.GetBlockRoot()
@@ -334,8 +334,7 @@ func TestRegisterNode(t *testing.T) {
 func makeSegment(mtBufMgr, sstBufMgr mgrif.IBufferManager, colIdx int, meta *md.Segment, t *testing.T) IColumnSegment {
 	seg := NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, meta)
 	for _, blkMeta := range meta.Blocks {
-		id := blkMeta.AsCommonID()
-		blk, err := seg.RegisterBlock(*id, meta.Info.Conf.BlockMaxRows)
+		blk, err := seg.RegisterBlock(blkMeta)
 		assert.Nil(t, err)
 		blk.UnRef()
 	}
@@ -408,12 +407,18 @@ func TestUpgradeStdSegment(t *testing.T) {
 	currSeg := rootSeg.Ref()
 	for currSeg != nil {
 		ids := currSeg.GetBlockIDs()
+		segMeta := currSeg.GetMeta()
 		for _, id := range ids {
 			oldBlk := currSeg.GetBlock(id)
 			assert.NotNil(t, oldBlk)
 			assert.Equal(t, TRANSIENT_BLK, oldBlk.GetBlockType())
+			blkMeta, err := segMeta.ReferenceBlock(oldBlk.GetID().BlockID)
+			assert.Nil(t, err)
+			newMeta := blkMeta.Copy()
+			assert.Equal(t, md.EMPTY, blkMeta.DataState)
+			newMeta.DataState = md.FULL
 			oldBlk.UnRef()
-			blk, err := currSeg.UpgradeBlock(id)
+			blk, err := currSeg.UpgradeBlock(newMeta)
 			assert.Nil(t, err)
 			assert.Equal(t, PERSISTENT_BLK, blk.GetBlockType())
 			blk.UnRef()
@@ -425,12 +430,18 @@ func TestUpgradeStdSegment(t *testing.T) {
 	currSeg = rootSeg.Ref()
 	for currSeg != nil {
 		ids := currSeg.GetBlockIDs()
+		segMeta := currSeg.GetMeta()
 		for _, id := range ids {
 			oldBlk := currSeg.GetBlock(id)
 			assert.NotNil(t, oldBlk)
 			assert.Equal(t, PERSISTENT_BLK, oldBlk.GetBlockType())
+			blkMeta, err := segMeta.ReferenceBlock(oldBlk.GetID().BlockID)
+			assert.Nil(t, err)
+			newMeta := blkMeta.Copy()
 			oldBlk.UnRef()
-			blk, err := currSeg.UpgradeBlock(id)
+			assert.Equal(t, md.EMPTY, blkMeta.DataState)
+			newMeta.DataState = md.FULL
+			blk, err := currSeg.UpgradeBlock(newMeta)
 			assert.Nil(t, err)
 			assert.Equal(t, PERSISTENT_SORTED_BLK, blk.GetBlockType())
 			blk.UnRef()

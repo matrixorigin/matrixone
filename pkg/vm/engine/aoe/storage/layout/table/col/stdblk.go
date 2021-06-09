@@ -2,7 +2,7 @@ package col
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
@@ -12,21 +12,33 @@ type StdColumnBlock struct {
 	Part IColumnPart
 }
 
-func NewStdColumnBlock(seg IColumnSegment, id common.ID, blkType BlockType) IColumnBlock {
+func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
+	var blkType BlockType
+	if meta.DataState < md.FULL {
+		blkType = TRANSIENT_BLK
+	} else if seg.GetSegmentType() == UNSORTED_SEG {
+		blkType = PERSISTENT_BLK
+	} else {
+		blkType = PERSISTENT_SORTED_BLK
+	}
 	blk := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{
-			ID:     id,
+			ID:     *meta.AsCommonID(),
 			Type:   blkType,
 			ColIdx: seg.GetColIdx(),
+			Meta:   meta,
 		},
 	}
 	seg.Append(blk.Ref())
 	return blk.Ref()
 }
 
-func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment) IColumnBlock {
+func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Block) IColumnBlock {
 	if blk.Type == PERSISTENT_SORTED_BLK {
 		panic("logic error")
+	}
+	if newMeta.DataState != md.FULL {
+		panic(fmt.Sprintf("logic error: blk %s DataState=%d", newMeta.AsCommonID().BlockString(), newMeta.DataState))
 	}
 	var newType BlockType
 	switch blk.Type {
@@ -44,6 +56,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment) IColumnBlock {
 			ID:     blk.ID,
 			Type:   newType,
 			ColIdx: seg.GetColIdx(),
+			Meta:   newMeta,
 		},
 	}
 	cloned.Ref()

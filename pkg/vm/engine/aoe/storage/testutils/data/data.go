@@ -23,8 +23,7 @@ func MakeBufMagr(capacity uint64) mgrif.IBufferManager {
 func MakeSegment(mtBufMgr, sstBufMgr mgrif.IBufferManager, colIdx int, meta *md.Segment, t *testing.T) col.IColumnSegment {
 	seg := col.NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, meta)
 	for _, blkMeta := range meta.Blocks {
-		id := blkMeta.AsCommonID()
-		blk, err := seg.RegisterBlock(*id, meta.Info.Conf.BlockMaxRows)
+		blk, err := seg.RegisterBlock(blkMeta)
 		assert.Nil(t, err)
 		blk.UnRef()
 	}

@@ -38,10 +38,10 @@ type IColumnSegment interface {
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager
 	CloneWithUpgrade(*md.Segment) IColumnSegment
-	UpgradeBlock(id common.ID) (IColumnBlock, error)
+	UpgradeBlock(*md.Block) (IColumnBlock, error)
 	GetBlock(id common.ID) IColumnBlock
 	InitScanCursor(cursor *ScanCursor) error
-	RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error)
+	RegisterBlock(*md.Block) (blk IColumnBlock, err error)
 	Ref() IColumnSegment
 	UnRef()
 	GetRefs() int64
@@ -132,19 +132,20 @@ func (seg *ColumnSegment) GetBlock(id common.ID) IColumnBlock {
 	return seg.Blocks[idx].Ref()
 }
 
-func (seg *ColumnSegment) UpgradeBlock(id common.ID) (IColumnBlock, error) {
+func (seg *ColumnSegment) UpgradeBlock(newMeta *md.Block) (IColumnBlock, error) {
 	if seg.Type != UNSORTED_SEG {
 		panic("logic error")
 	}
-	if !seg.ID.IsSameSegment(id) {
+	id := newMeta.AsCommonID()
+	if !seg.ID.IsSameSegment(*id) {
 		panic("logic error")
 	}
-	idx, ok := seg.IDMap[id]
+	idx, ok := seg.IDMap[*id]
 	if !ok {
 		panic(fmt.Sprintf("logic error: blk %s not found in seg %s", id.BlockString(), seg.ID.SegmentString()))
 	}
 	old := seg.Blocks[idx]
-	upgradeBlk := old.CloneWithUpgrade(seg.Ref())
+	upgradeBlk := old.CloneWithUpgrade(seg.Ref(), newMeta)
 	if upgradeBlk == nil {
 		return nil, errors.New(fmt.Sprintf("Cannot upgrade blk: %s", id.BlockString()))
 	}
@@ -183,7 +184,11 @@ func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment) IColumnSegment {
 	cloned.Ref()
 	var prev IColumnBlock
 	for _, blk := range seg.Blocks {
-		cur := blk.CloneWithUpgrade(cloned.Ref())
+		newBlkMeta, err := meta.ReferenceBlock(blk.GetID().BlockID)
+		if err != nil {
+			panic(err)
+		}
+		cur := blk.CloneWithUpgrade(cloned.Ref(), newBlkMeta)
 		cloned.Blocks = append(cloned.Blocks, cur)
 		if prev != nil {
 			prev.SetNext(cur.Ref())
@@ -225,11 +230,13 @@ func (seg *ColumnSegment) Close() error {
 	return nil
 }
 
-func (seg *ColumnSegment) RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
-	blk = NewStdColumnBlock(seg, id, TRANSIENT_BLK)
-	part := NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
+func (seg *ColumnSegment) RegisterBlock(blkMeta *md.Block) (blk IColumnBlock, err error) {
+	blk = NewStdColumnBlock(seg, blkMeta)
+	part := NewColumnPart(seg.MTBufMgr, blk.Ref(), blk.GetID(), blkMeta.Segment.Info.Conf.BlockMaxRows,
+		uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 	for part == nil {
-		part = NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
+		part = NewColumnPart(seg.MTBufMgr, blk.Ref(), blk.GetID(), blkMeta.Segment.Info.Conf.BlockMaxRows,
+			uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	// TODO: StrColumnBlock

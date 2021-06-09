@@ -25,7 +25,7 @@ type ITableData interface {
 	GetSSTBufMgr() bmgrif.IBufferManager
 	GetSegmentCount() uint64
 
-	UpgradeBlock(blkID common.ID) (blks []col.IColumnBlock)
+	UpgradeBlock(*md.Block) (blks []col.IColumnBlock)
 	UpgradeSegment(segID common.ID) (segs []col.IColumnSegment)
 	AppendColSegments(colSegs []col.IColumnSegment)
 }
@@ -95,9 +95,9 @@ func (td *TableData) GetSegmentCount() uint64 {
 	return td.Columns[0].SegmentCount()
 }
 
-func (td *TableData) UpgradeBlock(blkID common.ID) (blks []col.IColumnBlock) {
+func (td *TableData) UpgradeBlock(newMeta *md.Block) (blks []col.IColumnBlock) {
 	for _, column := range td.Columns {
-		blk := column.UpgradeBlock(blkID)
+		blk := column.UpgradeBlock(newMeta)
 		blks = append(blks, blk)
 	}
 	return blks
@@ -201,10 +201,6 @@ func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.Met
 		tbl := NewTableData(mtBufMgr, sstBufMgr, meta)
 		colTypes := meta.Schema.Types()
 		for _, segMeta := range meta.Segments {
-			segId := common.ID{
-				TableID:   meta.ID,
-				SegmentID: segMeta.ID,
-			}
 			segType := col.UNSORTED_SEG
 			if segMeta.DataState == md.SORTED {
 				segType = col.SORTED_SEG
@@ -213,20 +209,16 @@ func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.Met
 				colSeg := col.NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, segMeta)
 				defer colSeg.UnRef()
 				for _, blkMeta := range segMeta.Blocks {
-					blkId := segId.AsBlockID()
-					blkId.BlockID = blkMeta.ID
-					blkType := col.TRANSIENT_BLK
+					blkId := *blkMeta.AsCommonID()
 					bufMgr := mtBufMgr
 					if segType == col.SORTED_SEG {
-						blkType = col.PERSISTENT_SORTED_BLK
 						bufMgr = sstBufMgr
 					} else if blkMeta.DataState == md.FULL {
-						blkType = col.PERSISTENT_BLK
 						bufMgr = sstBufMgr
 					}
 					// TODO: strblk
 					// Only stdblk now
-					colBlk := col.NewStdColumnBlock(colSeg.Ref(), blkId, blkType)
+					colBlk := col.NewStdColumnBlock(colSeg.Ref(), blkMeta)
 					defer colBlk.UnRef()
 					colPart := col.NewColumnPart(bufMgr, colBlk.Ref(), blkId, info.Conf.BlockMaxRows, uint64(colType.Size))
 					if colPart == nil {
@@ -252,8 +244,7 @@ func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.Met
 func MockSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) col.IColumnSegment {
 	seg := col.NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, meta)
 	for _, blkMeta := range meta.Blocks {
-		id := blkMeta.AsCommonID()
-		blk, err := seg.RegisterBlock(*id, meta.Info.Conf.BlockMaxRows)
+		blk, err := seg.RegisterBlock(blkMeta)
 		if err != nil {
 			panic(err)
 		}

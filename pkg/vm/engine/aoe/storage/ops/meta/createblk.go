@@ -1,7 +1,6 @@
 package meta
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -75,11 +74,6 @@ func (op *CreateBlkOp) Execute() error {
 }
 
 func (op *CreateBlkOp) registerTableData(blk *md.Block) {
-	blk_id := common.ID{
-		TableID:   blk.Segment.TableID,
-		SegmentID: blk.Segment.ID,
-		BlockID:   blk.ID,
-	}
 	for _, column := range op.TableData.GetCollumns() {
 		if op.NewSegment {
 			seg, err := column.RegisterSegment(blk.Segment)
@@ -88,7 +82,10 @@ func (op *CreateBlkOp) registerTableData(blk *md.Block) {
 			}
 			seg.UnRef()
 		}
-		colBlk, _ := column.RegisterBlock(blk_id, blk.MaxRowCount)
+		colBlk, err := column.RegisterBlock(blk)
+		if err != nil {
+			panic("should not happend")
+		}
 		op.ColBlocks = append(op.ColBlocks, colBlk)
 	}
 }

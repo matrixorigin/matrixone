@@ -6,7 +6,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	"runtime"
 	"testing"
 	"time"
 
@@ -34,6 +33,13 @@ func TestUpgradeSegOp(t *testing.T) {
 
 	segs := make([]col.IColumnSegment, 0)
 
+	for _, segMeta := range tableMeta.Segments {
+		for _, blkMeta := range segMeta.Blocks {
+			blkMeta.DataState = md.FULL
+			blkMeta.Count = blkMeta.MaxRowCount
+		}
+	}
+
 	for idx, segID := range segIDs {
 		ctx := new(OpCtx)
 		ctx.Opts = opts
@@ -53,7 +59,6 @@ func TestUpgradeSegOp(t *testing.T) {
 			segs = append(segs, seg)
 		}
 	}
-
 	opts.MemData.Updater.Stop()
 }
 
@@ -86,10 +91,12 @@ func TestUpgradeBlkOp(t *testing.T) {
 		var ops []*UpgradeBlkOp
 		segMeta, _ := tableMeta.ReferenceSegment(segID.SegmentID)
 		blkID := segMeta.Blocks[0].AsCommonID()
+		blkMeta, err := segMeta.CloneBlock(blkID.BlockID)
+		blkMeta.DataState = md.FULL
+		assert.Nil(t, err)
 		ctx := new(OpCtx)
 		ctx.Opts = opts
-		// ctx.BlkMeta =
-		t.Logf("upgrade blk %s", blkID.BlockString())
+		ctx.BlkMeta = blkMeta
 		op := NewUpgradeBlkOp(ctx, *blkID, tableData)
 		op.Push()
 		ops = append(ops, op)
@@ -111,10 +118,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 			}
 		}
 	}
-	for i := 0; i < 0; i++ {
-		runtime.GC()
-		time.Sleep(time.Duration(1) * time.Millisecond)
-	}
+	time.Sleep(time.Duration(10) * time.Millisecond)
 	t.Log(bufMgr.String())
 	assert.Equal(t, int(blkCnt)*len(schema.ColDefs), bufMgr.NodeCount())
 
