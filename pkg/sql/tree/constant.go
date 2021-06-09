@@ -10,7 +10,7 @@ type Constant interface {
 //the AST for the constant numeric value.
 type NumVal struct {
 	Constant
-	value constant.Value
+	Value constant.Value
 
 	// negative is the sign label
 	negative bool
@@ -19,8 +19,8 @@ type NumVal struct {
 	origString string
 
 	//converted result
-	resInt     int64
-	resFloat   float64
+	resInt   int64
+	resFloat float64
 }
 
 func (n *NumVal) String() string {
@@ -28,5 +28,5 @@ func (n *NumVal) String() string {
 }
 
 func NewNumVal(value constant.Value, origString string, negative bool) *NumVal {
-	return &NumVal{value: value, origString: origString, negative: negative}
+	return &NumVal{Value: value, origString: origString, negative: negative}
 }

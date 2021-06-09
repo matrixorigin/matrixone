@@ -13,6 +13,12 @@ type spillEngine struct {
 	db   engine.DB // kv store
 }
 
+type database struct {
+	path string
+	cdb  *kv.KV    // column store
+	db   engine.DB // kv store
+}
+
 type relation struct {
 	id string
 	db *kv.KV

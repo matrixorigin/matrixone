@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/hash"
 	"matrixone/pkg/intmap/fastmap"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
@@ -57,13 +58,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		switch ctr.state {
 		case Build:
 			ctr.spill.e = n.E
-			if err := ctr.build(n.Attrs, proc); err != nil {
+			if err := ctr.build(n.Rattrs, proc); err != nil {
 				ctr.clean(proc)
 				return true, err
 			}
 			ctr.state = Probe
 		case Probe:
-			return ctr.probe(n.R, n.S, n.Attrs, proc)
+			return ctr.probe(n.R, n.S, n.Sattrs, proc)
 		}
 	}
 }
@@ -444,7 +445,7 @@ func (ctr *Container) product(n int, sels []int64, g *hash.BagGroup, bat *batch.
 					return err
 				}
 				defer func() {
-					if len(ctr.bats[idx].Seg) > 0 && proc.Size() > proc.Lim.Size {
+					if len(ctr.bats[idx].Seg.Id) > 0 && proc.Size() > proc.Lim.Size {
 						bat.Clean(proc)
 						ctr.bats[idx].Bat = nil
 					} else {
@@ -468,7 +469,7 @@ func (ctr *Container) product(n int, sels []int64, g *hash.BagGroup, bat *batch.
 					k++
 				}
 				{
-					if len(ctr.bats[idx].Seg) > 0 && proc.Size() > proc.Lim.Size {
+					if len(ctr.bats[idx].Seg.Id) > 0 && proc.Size() > proc.Lim.Size {
 						bat.Clean(proc)
 						ctr.bats[idx].Bat = nil
 					} else {
@@ -482,7 +483,12 @@ func (ctr *Container) product(n int, sels []int64, g *hash.BagGroup, bat *batch.
 }
 
 func (ctr *Container) newSpill(proc *process.Process) error {
-	if err := ctr.spill.e.Create(ctr.spill.id, ctr.spill.md); err != nil {
+	var defs []engine.TableDef
+
+	for _, attr := range ctr.spill.md {
+		defs = append(defs, &engine.AttributeDef{attr})
+	}
+	if err := ctr.spill.e.Create(ctr.spill.id, defs, nil, nil); err != nil {
 		return err
 	}
 	r, err := ctr.spill.e.Relation(ctr.spill.id)
@@ -497,7 +503,7 @@ func (ctr *Container) newSpill(proc *process.Process) error {
 func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
-		hash.Rehash(count, ctr.hashs, vec)
+		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count))
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

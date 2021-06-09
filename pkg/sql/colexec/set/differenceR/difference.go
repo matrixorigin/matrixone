@@ -15,6 +15,7 @@ import (
 	"matrixone/pkg/vm/process"
 
 	"github.com/google/uuid"
+	"matrixone/pkg/vm/engine"
 )
 
 func init() {
@@ -437,7 +438,12 @@ func (ctr *Container) expan(proc *process.Process) error {
 }
 
 func (ctr *Container) newSpill(proc *process.Process) error {
-	if err := ctr.spill.e.Create(ctr.spill.id, ctr.spill.md); err != nil {
+	var defs []engine.TableDef
+
+	for _, attr := range ctr.spill.md {
+		defs = append(defs, &engine.AttributeDef{attr})
+	}
+	if err := ctr.spill.e.Create(ctr.spill.id, defs, nil, nil); err != nil {
 		return err
 	}
 	r, err := ctr.spill.e.Relation(ctr.spill.id)
@@ -452,7 +458,7 @@ func (ctr *Container) newSpill(proc *process.Process) error {
 func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
-		hash.Rehash(count, ctr.hashs, vec)
+		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count))
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

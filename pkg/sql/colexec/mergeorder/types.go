@@ -36,11 +36,11 @@ type partition struct {
 	heap []int
 	lens []int64
 	mins []int64
-	segs []string
 	bat  *batch.Batch
 	bats []*batch.Batch
 	r    engine.Relation
 	cmps []compare.Compare
+	segs []engine.SegmentInfo
 }
 
 type Container struct {
