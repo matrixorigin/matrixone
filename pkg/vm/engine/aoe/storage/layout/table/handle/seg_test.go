@@ -2,9 +2,9 @@ package handle
 
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	tutil "matrixone/pkg/vm/engine/aoe/storage/testutils/data"
 	"testing"
 	"time"
 
@@ -21,13 +21,13 @@ func TestSegmentHandle(t *testing.T) {
 	seg_cnt := 100
 	blk_cnt := 64
 	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
-	bufMgr := tutil.MakeBufMagr(capacity)
+	bufMgr := bmgr.MockBufMgr(capacity)
 
 	info := md.MockInfo(row_count, uint64(blk_cnt))
 	tableMeta := md.MockTable(info, schema, uint64(blk_cnt*seg_cnt))
 
 	tableData := table.NewTableData(bufMgr, bufMgr, tableMeta)
-	segIDs := tutil.MakeSegments(bufMgr, bufMgr, tableMeta, tableData, t)
+	segIDs := table.MockSegments(bufMgr, bufMgr, tableMeta, tableData)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 	// t.Log(bufMgr.String())
 

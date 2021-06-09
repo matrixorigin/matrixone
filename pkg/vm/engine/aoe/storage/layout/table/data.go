@@ -248,3 +248,30 @@ func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.Met
 	}
 	return nil
 }
+
+func MockSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) col.IColumnSegment {
+	seg := col.NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, meta)
+	for _, blkMeta := range meta.Blocks {
+		id := blkMeta.AsCommonID()
+		blk, err := seg.RegisterBlock(*id, meta.Info.Conf.BlockMaxRows)
+		if err != nil {
+			panic(err)
+		}
+		blk.UnRef()
+	}
+	return seg
+}
+
+func MockSegments(mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table, tblData ITableData) []common.ID {
+	var segIDs []common.ID
+	for _, segMeta := range meta.Segments {
+		var colSegs []col.IColumnSegment
+		for colIdx, _ := range segMeta.Schema.ColDefs {
+			colSeg := MockSegment(mtBufMgr, sstBufMgr, colIdx, segMeta)
+			colSegs = append(colSegs, colSeg)
+		}
+		tblData.AppendColSegments(colSegs)
+		segIDs = append(segIDs, *segMeta.AsCommonID())
+	}
+	return segIDs
+}
