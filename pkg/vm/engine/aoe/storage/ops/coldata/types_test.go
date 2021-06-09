@@ -97,11 +97,11 @@ func TestUpgradeBlkOp(t *testing.T) {
 		ctx := new(OpCtx)
 		ctx.Opts = opts
 		ctx.BlkMeta = blkMeta
-		op := NewUpgradeBlkOp(ctx, *blkID, tableData)
+		op := NewUpgradeBlkOp(ctx, tableData)
 		op.Push()
 		ops = append(ops, op)
 
-		op = NewUpgradeBlkOp(ctx, *blkID, tableData)
+		op = NewUpgradeBlkOp(ctx, tableData)
 		op.Push()
 		ops = append(ops, op)
 
