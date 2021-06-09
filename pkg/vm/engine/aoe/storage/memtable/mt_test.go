@@ -118,7 +118,7 @@ func TestCollection(t *testing.T) {
 				ID:       id,
 				Capacity: insert.GetCount(),
 			}
-			err = c0.Append(insert, index)
+			err := c0.Append(insert, index)
 			assert.Nil(t, err)
 			// t.Log(mtBufMgr.String())
 		}(logid, &waitgroup)

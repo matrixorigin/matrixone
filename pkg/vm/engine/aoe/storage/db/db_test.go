@@ -149,7 +149,7 @@ func TestAppend(t *testing.T) {
 	}
 	blkIt.Close()
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
-	time.Sleep(time.Duration(10) * time.Millisecond)
+	// time.Sleep(time.Duration(20) * time.Millisecond)
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()

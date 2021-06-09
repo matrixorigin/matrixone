@@ -4,6 +4,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -68,7 +69,16 @@ func (op *CreateBlkOp) Execute() error {
 	}
 	op.Result = cloned
 	if op.TableData != nil {
-		op.registerTableData(blk)
+		// op.registerTableData(cloned)
+		ctx := new(mmop.OpCtx)
+		ctx.Opts = op.Ctx.Opts
+		segBlkOp := mmop.NewCreateSegBlkOp(ctx, op.NewSegment, cloned, op.TableData)
+		segBlkOp.Push()
+		err = segBlkOp.WaitDone()
+		if err != nil {
+			return err
+		}
+		op.ColBlocks = segBlkOp.ColBlocks
 	}
 	return err
 }

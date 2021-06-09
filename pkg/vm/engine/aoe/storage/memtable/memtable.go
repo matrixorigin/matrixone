@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"context"
+	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -16,7 +17,6 @@ import (
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	"sync"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 type MemTable struct {
@@ -126,16 +126,26 @@ func (mt *MemTable) Flush() error {
 	{
 		ctx := mops.OpCtx{Opts: mt.Opts}
 		getssop := mops.NewGetSSOp(&ctx)
-		getssop.Push()
-		err := getssop.WaitDone()
+		err := getssop.Push()
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
+		}
+		err = getssop.WaitDone()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
 		}
 		op := mops.NewCheckpointOp(&ctx, getssop.SS)
-		op.Push()
+		err = op.Push()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
+		}
 		err = op.WaitDone()
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
 		}
 	}
 	// }()
@@ -143,10 +153,15 @@ func (mt *MemTable) Flush() error {
 	{
 		colCtx := cops.OpCtx{Opts: mt.Opts, BlkMeta: newMeta}
 		upgradeBlkOp := cops.NewUpgradeBlkOp(&colCtx, mt.TableData)
-		upgradeBlkOp.Push()
+		err := upgradeBlkOp.Push()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
+		}
 		err = upgradeBlkOp.WaitDone()
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
 		}
 	}
 	// }()
