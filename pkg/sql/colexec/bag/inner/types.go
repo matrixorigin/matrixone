@@ -50,9 +50,10 @@ type Container struct {
 }
 
 type Argument struct {
-	R     string
-	S     string
-	Attrs []string
-	Ctr   Container
-	E     engine.SpillEngine
+	R      string
+	S      string
+	Rattrs []string
+	Sattrs []string
+	Ctr    Container
+	E      engine.SpillEngine
 }

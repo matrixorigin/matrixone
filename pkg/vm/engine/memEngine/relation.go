@@ -25,24 +25,24 @@ func (r *relation) Size(_ string) int64 {
 	return 0
 }
 
-func (r *relation) Segment(id string, proc *process.Process) engine.Segment {
-	return segment.New(id, r.db, proc, r.md.Attrs)
+func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
+	return segment.New(si.Id, r.db, proc, r.md.Attrs)
 }
 
-func (r *relation) Segments() []string {
-	segs := make([]string, r.md.Segs)
+func (r *relation) Segments() []engine.SegmentInfo {
+	segs := make([]engine.SegmentInfo, r.md.Segs)
 	for i := range segs {
-		segs[i] = sKey(i, r.id)
+		segs[i].Id = sKey(i, r.id)
 	}
 	return segs
 }
 
-func (r *relation) Attribute() []metadata.Attribute {
-	return r.md.Attrs
+func (r *relation) Index() []*engine.IndexTableDef {
+	return nil
 }
 
-func (r *relation) Scheduling(_ metadata.Nodes) []*engine.Unit {
-	return nil
+func (r *relation) Attribute() []metadata.Attribute {
+	return r.md.Attrs
 }
 
 func (r *relation) Write(bat *batch.Batch) error {
@@ -77,11 +77,11 @@ func (r *relation) Write(bat *batch.Batch) error {
 	return nil
 }
 
-func (r *relation) AddAttribute(_ metadata.Attribute) error {
+func (r *relation) AddAttribute(_ engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) DelAttribute(_ metadata.Attribute) error {
+func (r *relation) DelAttribute(_ engine.TableDef) error {
 	return nil
 }
 

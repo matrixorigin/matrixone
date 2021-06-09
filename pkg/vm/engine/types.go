@@ -2,14 +2,28 @@ package engine
 
 import (
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 
 	"github.com/pilosa/pilosa/roaring"
 )
 
+const (
+	Sparse = iota
+	Bsi
+	Inverted
+)
+
+type SegmentInfo struct {
+	Id       string
+	GroupId  string
+	TabletId string
+	Node     metadata.Node
+}
+
 type Unit struct {
-	Segs []string
+	Segs []SegmentInfo
 	N    metadata.Node
 }
 
@@ -18,22 +32,64 @@ type Statistics interface {
 	Size(string) int64
 }
 
+type ListPartition struct {
+	Name         string
+	Extends      []extend.Extend
+	Subpartition *PartitionBy
+}
+
+type RangePartition struct {
+	Name         string
+	From         []extend.Extend
+	To           []extend.Extend
+	Subpartition *PartitionBy
+}
+
+type PartitionBy struct {
+	Fields []string
+	List   []ListPartition
+	Range  []RangePartition
+}
+
+type DistributionBy struct {
+	Num    int
+	Group  string
+	Fields []string
+}
+
+type IndexTableDef struct {
+	Typ         int
+	Name        string
+	PartitionBy *PartitionBy
+}
+
+type AttributeDef struct {
+	Attr metadata.Attribute
+}
+
+type TableDef interface {
+	tableDef()
+}
+
+func (*AttributeDef) tableDef()  {}
+func (*IndexTableDef) tableDef() {}
+
 type Relation interface {
 	Statistics
 
 	ID() string
 
-	Segments() []string
+	Segments() []SegmentInfo
+
+	Index() []*IndexTableDef
 	Attribute() []metadata.Attribute
 
-	Scheduling(metadata.Nodes) []*Unit
-
-	Segment(string, *process.Process) Segment
+	Segment(SegmentInfo, *process.Process) Segment
 
 	Write(*batch.Batch) error
 
-	AddAttribute(metadata.Attribute) error
-	DelAttribute(metadata.Attribute) error
+	AddAttribute(TableDef) error
+	DelAttribute(TableDef) error
 }
 
 type Filter interface {
@@ -84,12 +140,18 @@ type Block interface {
 	Prefetch([]uint64, []string, *process.Process) (*batch.Batch, error) // read only arguments
 }
 
-type Engine interface {
+type Database interface {
 	Relations() []Relation
 	Relation(string) (Relation, error)
 
 	Delete(string) error
-	Create(string, []metadata.Attribute) error
+	Create(string, []TableDef, *PartitionBy, *DistributionBy) error
+}
+
+type Engine interface {
+	Create(string) error
+	Delete(string) error
+	Database(string) (Database, error)
 }
 
 type DB interface {
@@ -120,5 +182,5 @@ type Iterator interface {
 
 type SpillEngine interface {
 	DB
-	Engine
+	Database
 }
