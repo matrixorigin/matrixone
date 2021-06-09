@@ -210,8 +210,7 @@ func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.Met
 				segType = col.SORTED_SEG
 			}
 			for colIdx, colType := range colTypes {
-				segId.Idx = uint16(colIdx)
-				colSeg := col.NewColumnSegment(mtBufMgr, sstBufMgr, segId, colIdx, colType, segType)
+				colSeg := col.NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, segMeta)
 				defer colSeg.UnRef()
 				for _, blkMeta := range segMeta.Blocks {
 					blkId := segId.AsBlockID()

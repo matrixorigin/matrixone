@@ -1,8 +1,9 @@
 package handle
 
 import (
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+	// log "github.com/sirupsen/logrus"
+	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 )
 
 var (

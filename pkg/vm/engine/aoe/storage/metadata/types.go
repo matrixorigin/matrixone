@@ -65,6 +65,7 @@ type Segment struct {
 	ID            uint64
 	TableID       uint64
 	MaxBlockCount uint64
+	Count         uint64
 	Blocks        []*Block
 	IdMap         map[uint64]int
 	DataState     DataState

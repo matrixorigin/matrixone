@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -37,7 +37,7 @@ type IColumnSegment interface {
 	GetSegmentType() SegmentType
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager
-	CloneWithUpgrade() IColumnSegment
+	CloneWithUpgrade(*md.Segment) IColumnSegment
 	UpgradeBlock(id common.ID) (IColumnBlock, error)
 	GetBlock(id common.ID) IColumnBlock
 	InitScanCursor(cursor *ScanCursor) error
@@ -45,35 +45,43 @@ type IColumnSegment interface {
 	Ref() IColumnSegment
 	UnRef()
 	GetRefs() int64
+	GetMeta() *md.Segment
 }
 
 type ColumnSegment struct {
 	sync.RWMutex
 	Refs      int64
 	ID        common.ID
+	ColIdx    int
 	Next      IColumnSegment
 	Blocks    []IColumnBlock
-	RowCount  uint64
 	IDMap     map[common.ID]int
-	Idx       int
 	Type      SegmentType
-	ColType   types.Type
 	MTBufMgr  bmgrif.IBufferManager
 	SSTBufMgr bmgrif.IBufferManager
+	Meta      *md.Segment
 }
 
-func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, id common.ID, colIdx int, colType types.Type, segType SegmentType) IColumnSegment {
+func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
+	segType := UNSORTED_SEG
+	if meta.DataState == md.SORTED {
+		segType = SORTED_SEG
+	}
 	seg := &ColumnSegment{
-		ID:        id,
+		ID:        *meta.AsCommonID(),
+		ColIdx:    colIdx,
 		Refs:      0,
 		IDMap:     make(map[common.ID]int, 0),
-		Idx:       colIdx,
 		Type:      segType,
-		ColType:   colType,
+		Meta:      meta,
 		MTBufMgr:  mtBufMgr,
 		SSTBufMgr: sstBufMgr,
 	}
 	return seg.Ref()
+}
+
+func (seg *ColumnSegment) GetMeta() *md.Segment {
+	return seg.Meta
 }
 
 func (seg *ColumnSegment) GetMTBufMgr() bmgrif.IBufferManager {
@@ -105,7 +113,7 @@ func (seg *ColumnSegment) GetRefs() int64 {
 }
 
 func (seg *ColumnSegment) GetColIdx() int {
-	return seg.Idx
+	return seg.ColIdx
 }
 
 func (seg *ColumnSegment) GetSegmentType() SegmentType {
@@ -133,7 +141,7 @@ func (seg *ColumnSegment) UpgradeBlock(id common.ID) (IColumnBlock, error) {
 	}
 	idx, ok := seg.IDMap[id]
 	if !ok {
-		panic("logic error")
+		panic(fmt.Sprintf("logic error: blk %s not found in seg %s", id.BlockString(), seg.ID.SegmentString()))
 	}
 	old := seg.Blocks[idx]
 	upgradeBlk := old.CloneWithUpgrade(seg.Ref())
@@ -155,19 +163,22 @@ func (seg *ColumnSegment) UpgradeBlock(id common.ID) (IColumnBlock, error) {
 	return upgradeBlk.Ref(), nil
 }
 
-func (seg *ColumnSegment) CloneWithUpgrade() IColumnSegment {
+func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment) IColumnSegment {
 	if seg.Type != UNSORTED_SEG {
 		panic("logic error")
 	}
+	// TODO: temp commit it, will be enabled later
+	// if meta.DataState != md.SORTED {
+	// 	panic("logic error")
+	// }
 	cloned := &ColumnSegment{
 		ID:        seg.ID,
 		IDMap:     seg.IDMap,
-		RowCount:  seg.RowCount,
 		Next:      seg.Next,
 		Type:      SORTED_SEG,
-		ColType:   seg.ColType,
 		MTBufMgr:  seg.MTBufMgr,
 		SSTBufMgr: seg.SSTBufMgr,
+		Meta:      meta,
 	}
 	cloned.Ref()
 	var prev IColumnBlock
@@ -183,9 +194,7 @@ func (seg *ColumnSegment) CloneWithUpgrade() IColumnSegment {
 }
 
 func (seg *ColumnSegment) GetRowCount() uint64 {
-	seg.RLock()
-	defer seg.RUnlock()
-	return seg.RowCount
+	return atomic.LoadUint64(&seg.Meta.Count)
 }
 
 func (seg *ColumnSegment) SetNext(next IColumnSegment) {
@@ -218,9 +227,9 @@ func (seg *ColumnSegment) Close() error {
 
 func (seg *ColumnSegment) RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
 	blk = NewStdColumnBlock(seg, id, TRANSIENT_BLK)
-	part := NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.ColType.Size))
+	part := NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 	for part == nil {
-		part = NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.ColType.Size))
+		part = NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	// TODO: StrColumnBlock
@@ -243,7 +252,6 @@ func (seg *ColumnSegment) Append(blk IColumnBlock) {
 	}
 	seg.Blocks = append(seg.Blocks, blk)
 	seg.IDMap[blk.GetID()] = len(seg.Blocks) - 1
-	seg.RowCount += blk.GetRowCount()
 }
 
 func (seg *ColumnSegment) GetBlockRoot() IColumnBlock {

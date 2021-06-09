@@ -3,6 +3,7 @@ package md
 import (
 	"errors"
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 const (
@@ -16,7 +17,7 @@ func NewSegment(info *MetaInfo, table_id, id uint64, schema *Schema) *Segment {
 		Blocks:        make([]*Block, 0),
 		IdMap:         make(map[uint64]int),
 		TimeStamp:     *NewTimeStamp(),
-		MaxBlockCount: SEGMENT_BLOCK_COUNT,
+		MaxBlockCount: info.Conf.SegmentMaxBlocks,
 		Info:          info,
 		Schema:        schema,
 	}
@@ -25,6 +26,13 @@ func NewSegment(info *MetaInfo, table_id, id uint64, schema *Schema) *Segment {
 
 func (seg *Segment) GetTableID() uint64 {
 	return seg.TableID
+}
+
+func (seg *Segment) AsCommonID() *common.ID {
+	return &common.ID{
+		TableID:   seg.TableID,
+		SegmentID: seg.ID,
+	}
 }
 
 func (seg *Segment) GetID() uint64 {

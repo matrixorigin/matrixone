@@ -129,7 +129,7 @@ func (tree *SegmentTree) UpgradeSegment(segID common.ID) IColumnSegment {
 		panic("logic error")
 	}
 
-	upgradeSeg := seg.CloneWithUpgrade()
+	upgradeSeg := seg.CloneWithUpgrade(seg.GetMeta())
 	if upgradeSeg == nil {
 		panic(fmt.Sprintf("Cannot upgrade seg: %s", segID.SegmentString()))
 	}

@@ -3,8 +3,8 @@ package md
 import (
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
@@ -222,7 +222,11 @@ func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
 			tbl.RegisterSegment(activeSeg)
 		}
 		blk, _ := activeSeg.CreateBlock()
-		activeSeg.RegisterBlock(blk)
+		err := activeSeg.RegisterBlock(blk)
+		if err != nil {
+			log.Errorf("seg blks = %d, maxBlks = %d", len(activeSeg.Blocks), activeSeg.MaxBlockCount)
+			panic(err)
+		}
 		if len(activeSeg.Blocks) == int(info.Conf.SegmentMaxBlocks) {
 			activeSeg = nil
 		}

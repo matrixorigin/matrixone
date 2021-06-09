@@ -22,18 +22,22 @@ func TestSegmentHandle(t *testing.T) {
 	blk_cnt := 64
 	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
 	bufMgr := tutil.MakeBufMagr(capacity)
-	t0 := uint64(0)
-	tableMeta := &md.Table{Schema: schema, ID: t0}
+
+	info := md.MockInfo(row_count, uint64(blk_cnt))
+	tableMeta := md.MockTable(info, schema, uint64(blk_cnt*seg_cnt))
+
 	tableData := table.NewTableData(bufMgr, bufMgr, tableMeta)
-	segIDs := tutil.MakeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
+	segIDs := tutil.MakeSegments(bufMgr, bufMgr, tableMeta, tableData, t)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
+	// t.Log(bufMgr.String())
 
 	cols := []int{0, 1}
 	handle1 := NewSegmentsHandle(segIDs, cols, tableData)
 	handle2 := NewAllSegmentsHandle(cols, tableData)
 
 	now := time.Now()
-	handles := []*SegmentsHandle{handle1, handle2}
+	handles := []*SegmentsHandle{handle2, handle1}
+	handles = []*SegmentsHandle{handle1}
 
 	for _, handle := range handles {
 		sit := handle.NewSegIt()

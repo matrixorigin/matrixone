@@ -82,7 +82,7 @@ func (op *CreateBlkOp) registerTableData(blk *md.Block) {
 	}
 	for _, column := range op.TableData.GetCollumns() {
 		if op.NewSegment {
-			seg, err := column.RegisterSegment(blk_id.AsSegmentID())
+			seg, err := column.RegisterSegment(blk.Segment)
 			if err != nil {
 				panic("should not happend")
 			}

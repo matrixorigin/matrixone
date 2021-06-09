@@ -15,6 +15,7 @@ import (
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	"sync"
+	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -86,7 +87,7 @@ func (mt *MemTable) Append(c *chunk.Chunk, offset uint64, index *md.LogIndex) (n
 	// log.Info(mt.Meta.String())
 	// log.Info(index.String())
 	mt.Meta.SetIndex(*index)
-	mt.Meta.Count += n
+	atomic.AddUint64(&mt.Meta.Count, n)
 	if mt.Data.GetCount() == mt.Meta.MaxRowCount {
 		mt.Full = true
 		mt.Meta.DataState = md.FULL

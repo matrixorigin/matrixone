@@ -3,10 +3,12 @@ package col
 import (
 	"errors"
 	"fmt"
+
 	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 )
 
 type IColumnData interface {
@@ -24,7 +26,7 @@ type IColumnData interface {
 	GetSegmentTail() IColumnSegment
 	GetSegment(common.ID) IColumnSegment
 	GetColIdx() int
-	RegisterSegment(id common.ID) (seg IColumnSegment, err error)
+	RegisterSegment(*md.Segment) (seg IColumnSegment, err error)
 	RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error)
 }
 
@@ -75,8 +77,8 @@ func (cdata *ColumnData) Append(seg IColumnSegment) error {
 	return cdata.SegTree.Append(seg)
 }
 
-func (cdata *ColumnData) RegisterSegment(id common.ID) (seg IColumnSegment, err error) {
-	seg = NewColumnSegment(cdata.MTBufMgr, cdata.SSTBufMgr, id, cdata.Idx, cdata.Type, UNSORTED_SEG)
+func (cdata *ColumnData) RegisterSegment(meta *md.Segment) (seg IColumnSegment, err error) {
+	seg = NewColumnSegment(cdata.MTBufMgr, cdata.SSTBufMgr, cdata.Idx, meta)
 	err = cdata.Append(seg)
 	return seg.Ref(), err
 }

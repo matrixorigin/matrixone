@@ -3,6 +3,7 @@ package md
 import (
 	"errors"
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -118,6 +119,14 @@ func (blk *Block) Update(target *Block) error {
 	target.copyNoLock(blk)
 
 	return nil
+}
+
+func (blk *Block) AsCommonID() *common.ID {
+	return &common.ID{
+		TableID:   blk.Segment.TableID,
+		SegmentID: blk.Segment.ID,
+		BlockID:   blk.ID,
+	}
 }
 
 func (blk *Block) Copy() *Block {

@@ -23,6 +23,14 @@ func NewMetaInfo(conf *Configuration) *MetaInfo {
 	return info
 }
 
+func MockInfo(blkRows, blks uint64) *MetaInfo {
+	info := NewMetaInfo(&Configuration{
+		BlockMaxRows:     blkRows,
+		SegmentMaxBlocks: blks,
+	})
+	return info
+}
+
 func (info *MetaInfo) ReferenceTableByName(name string) (tbl *Table, err error) {
 	info.RLock()
 	defer info.RUnlock()
