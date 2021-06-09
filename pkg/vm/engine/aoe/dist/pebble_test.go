@@ -1,4 +1,4 @@
-package catalogkv
+package dist
 
 import (
 	"fmt"

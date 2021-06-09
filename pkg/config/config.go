@@ -150,10 +150,10 @@ type Security struct {
 	SSLCert                string   `toml:"ssl-cert" json:"ssl-cert"`
 	SSLKey                 string   `toml:"ssl-key" json:"ssl-key"`
 	RequireSecureTransport bool     `toml:"require-secure-transport" json:"require-secure-transport"`
-	ClusterSSLCA           string   `toml:"cluster-ssl-ca" json:"cluster-ssl-ca"`
-	ClusterSSLCert         string   `toml:"cluster-ssl-cert" json:"cluster-ssl-cert"`
-	ClusterSSLKey          string   `toml:"cluster-ssl-key" json:"cluster-ssl-key"`
-	ClusterVerifyCN        []string `toml:"cluster-verify-cn" json:"cluster-verify-cn"`
+	ClusterSSLCA           string   `toml:"engine-ssl-ca" json:"engine-ssl-ca"`
+	ClusterSSLCert         string   `toml:"engine-ssl-cert" json:"engine-ssl-cert"`
+	ClusterSSLKey          string   `toml:"engine-ssl-key" json:"engine-ssl-key"`
+	ClusterVerifyCN        []string `toml:"engine-verify-cn" json:"engine-verify-cn"`
 	// If set to "plaintext", the spilled files will not be encrypted.
 	SpilledFileEncryptionMethod string `toml:"spilled-file-encryption-method" json:"spilled-file-encryption-method"`
 }

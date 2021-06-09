@@ -8,11 +8,12 @@ require (
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
 	github.com/cznic/mathutil v0.0.0-20181122101859-297441e03548
 	github.com/fagongzi/goetty v2.0.2+incompatible
+	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287
 	github.com/fagongzi/util v0.0.0-20210409031311-a10fdf8fbd7a
 	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.2.0
-	github.com/matrixorigin/matrixcube v0.0.0-20210601055014-cd3e4564cc34
+	github.com/matrixorigin/matrixcube v0.0.0-20210608025608-b14600dd2969
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pilosa/pilosa v1.4.1
 	github.com/pingcap/check v0.0.0-20190102082844-67f458068fc8

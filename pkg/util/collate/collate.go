@@ -112,7 +112,7 @@ func CompatibleCollate(collate1, collate2 string) bool {
 
 // RewriteNewCollationIDIfNeeded rewrites a collation id if the new collations are enabled.
 // When new collations are enabled, we turn the collation id to negative so that other the
-// components of the cluster(for example, TiKV) is able to aware of it without any change to
+// components of the engine(for example, TiKV) is able to aware of it without any change to
 // the protocol definition.
 // When new collations are not enabled, collation id remains the same.
 func RewriteNewCollationIDIfNeeded(id int32) int32 {

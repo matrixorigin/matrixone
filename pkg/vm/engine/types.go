@@ -2,14 +2,77 @@ package engine
 
 import (
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 
 	"github.com/pilosa/pilosa/roaring"
 )
 
+const (
+	Sparse = iota
+	Bsi
+	Inverted
+)
+
+type SchemaState byte
+
+const (
+	// StateNone means this schema element is absent and can't be used.
+	StateNone SchemaState = iota
+	// StateDeleteOnly means we can only delete items for this schema element.
+	StateDeleteOnly
+	// StatePublic means this schema element is ok for all write and read operations.
+	StatePublic
+)
+
+type CatalogInfo struct {
+	Id   uint64
+	Name string
+}
+
+// SchemaInfo stores the information of a schema(database).
+type SchemaInfo struct {
+	Catalog CatalogInfo
+	Id      uint64
+	Name    string
+}
+
+// TableInfo stores the information of a table or view.
+type TableInfo struct {
+	Catalog CatalogInfo
+	Schema  SchemaInfo
+	Id      uint64
+	Name    string
+	// Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
+	Type string
+	// Column is listed in order in which they appear in schema
+	Columns []*ColumnInfo
+	Comment string
+}
+
+// TabletInfo stores the information of one tablet.
+type TabletInfo struct {
+}
+
+// PartitionInfo stores the information of a partition.
+type PartitionInfo struct {
+}
+
+// SegmentInfo stores the information of a segment.
+type SegmentInfo struct {
+	Id          string
+	GroupId     string
+	TabletId    string
+	PartitionId string
+}
+
+// ColumnInfo stores the information of a column.
+type ColumnInfo struct {
+}
+
 type Unit struct {
-	Segs []string
+	Segs []SegmentInfo
 	N    metadata.Node
 }
 
@@ -18,22 +81,69 @@ type Statistics interface {
 	Size(string) int64
 }
 
+type ListPartition struct {
+	Name         string
+	Extends      []extend.Extend
+	Subpartition *PartitionBy
+}
+
+type RangePartition struct {
+	Name         string
+	From         []extend.Extend
+	To           []extend.Extend
+	Subpartition *PartitionBy
+}
+
+type PartitionBy struct {
+	Fields []string
+	List   []ListPartition
+	Range  []RangePartition
+}
+
+type DistributionBy struct {
+	Num    int
+	Group  string
+	Fields []string
+}
+
+type IndexTableDef struct {
+	Typ         int
+	Name        string
+	PartitionBy *PartitionBy
+}
+
+type AttributeDef struct {
+	Attr metadata.Attribute
+}
+
+type TableDef interface {
+	tableDef()
+}
+
+func (*AttributeDef) tableDef()  {}
+func (*IndexTableDef) tableDef() {}
+
 type Relation interface {
 	Statistics
 
 	ID() string
 
-	Segments() []string
-	Attribute() []metadata.Attribute
+	Segments() []SegmentInfo
+
+	Index() []*IndexTableDef
+	Attribute() []*AttributeDef
+
+	Partition() *PartitionBy
+	Distribution() *DistributionBy
 
 	Scheduling(metadata.Nodes) []*Unit
 
-	Segment(string, *process.Process) Segment
+	Segment(SegmentInfo, *process.Process) Segment
 
 	Write(*batch.Batch) error
 
-	AddAttribute(metadata.Attribute) error
-	DelAttribute(metadata.Attribute) error
+	AddTableDef(TableDef) error
+	DelTableDef(TableDef) error
 }
 
 type Filter interface {
@@ -84,41 +194,16 @@ type Block interface {
 	Prefetch([]uint64, []string, *process.Process) (*batch.Batch, error) // read only arguments
 }
 
-type Engine interface {
+type Database interface {
 	Relations() []Relation
 	Relation(string) (Relation, error)
 
 	Delete(string) error
-	Create(string, []metadata.Attribute) error
+	Create(string, []TableDef, *PartitionBy, *DistributionBy) error
 }
 
-type DB interface {
-	Close() error
-	NewBatch() (Batch, error)
-	NewIterator([]byte) (Iterator, error)
-
-	Del([]byte) error
-	Set([]byte, []byte) error
-	Get([]byte) ([]byte, error)
-}
-
-type Batch interface {
-	Cancel() error
-	Commit() error
-	Del([]byte) error
-	Set([]byte, []byte) error
-}
-
-type Iterator interface {
-	Next() error
-	Valid() bool
-	Close() error
-	Seek([]byte) error
-	Key() []byte
-	Value() ([]byte, error)
-}
-
-type SpillEngine interface {
-	DB
-	Engine
+type Engine interface {
+	Create(string) error // 权限之类的参数怎么填
+	Delete(string) error
+	Database(string) (Database, error)
 }

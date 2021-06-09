@@ -336,7 +336,7 @@ func GetSysVar(name string) *SysVar {
 	return sysVars[name]
 }
 
-// SetSysVar sets a sysvar. This will not propagate to the cluster, so it should only be
+// SetSysVar sets a sysvar. This will not propagate to the engine, so it should only be
 // used for instance scoped AUTO variables such as system_time_zone.
 func SetSysVar(name string, value string) {
 	name = strings.ToLower(name)
