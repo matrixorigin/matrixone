@@ -110,7 +110,7 @@ func (info *MetaInfo) CreateTable(schema *Schema) (tbl *Table, err error) {
 
 func (info *MetaInfo) UpdateCheckpoint(id uint64) error {
 	if !atomic.CompareAndSwapUint64(&info.CheckPoint, id-1, id) {
-		return errors.New(fmt.Sprintf("Cannot update checkpoint to %d", id))
+		return errors.New(fmt.Sprintf("Cannot update checkpoint from %d to %d", info.CheckPoint, id))
 	}
 	return nil
 }

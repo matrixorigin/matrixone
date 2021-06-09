@@ -122,7 +122,25 @@ func (mt *MemTable) Flush() error {
 		return err
 	}
 	newMeta := op.NewMeta
-	go func() {
+	// go func() {
+	{
+		ctx := mops.OpCtx{Opts: mt.Opts}
+		getssop := mops.NewGetSSOp(&ctx)
+		getssop.Push()
+		err := getssop.WaitDone()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+		}
+		op := mops.NewCheckpointOp(&ctx, getssop.SS)
+		op.Push()
+		err = op.WaitDone()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+		}
+	}
+	// }()
+	// go func() {
+	{
 		colCtx := cops.OpCtx{Opts: mt.Opts, BlkMeta: newMeta}
 		upgradeBlkOp := cops.NewUpgradeBlkOp(&colCtx, mt.TableData)
 		upgradeBlkOp.Push()
@@ -130,16 +148,8 @@ func (mt *MemTable) Flush() error {
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 		}
-	}()
-	go func() {
-		ctx := mops.OpCtx{Opts: mt.Opts}
-		op := mops.NewCheckpointOp(&ctx)
-		op.Push()
-		err := op.WaitDone()
-		if err != nil {
-			mt.Opts.EventListener.BackgroundErrorCB(err)
-		}
-	}()
+	}
+	// }()
 	mt.Opts.EventListener.FlushBlockEndCB(mt)
 	return nil
 }
