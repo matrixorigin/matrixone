@@ -100,23 +100,27 @@ func TestUpgradeBlkOp(t *testing.T) {
 	opts.FillDefaults("/tmp")
 	opts.MemData.Updater.Start()
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
-	row_count := uint64(64)
+	info := md.NewMetaInfo(&md.Configuration{
+		BlockMaxRows:     uint64(10),
+		SegmentMaxBlocks: uint64(2),
+	})
+	row_count := info.Conf.BlockMaxRows
 	capacity := typeSize * row_count * 10000
 	bufMgr := makeBufMagr(capacity)
-	t0 := uint64(0)
-	tableMeta := &md.Table{Schema: schema, ID: t0}
+	segCnt := uint64(2)
+	blkCnt := segCnt * info.Conf.SegmentMaxBlocks
+	tableMeta := md.MockTable(info, schema, blkCnt)
 	tableData := table.NewTableData(bufMgr, bufMgr, tableMeta)
-	seg_cnt := 2
-	blk_cnt := 2
-	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
-	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
+	segIDs := makeSegments(bufMgr, int(segCnt), int(info.Conf.SegmentMaxBlocks), row_count, typeSize, tableData, t)
+	assert.Equal(t, uint64(segCnt), tableData.GetSegmentCount())
 	t.Log(bufMgr.String())
-	assert.Equal(t, seg_cnt*blk_cnt*len(schema.ColDefs), bufMgr.NodeCount())
+	assert.Equal(t, int(blkCnt)*len(schema.ColDefs), bufMgr.NodeCount())
 	for _, segID := range segIDs {
 		var ops []*UpgradeBlkOp
 		blkID := segID
 		ctx := new(OpCtx)
 		ctx.Opts = opts
+		// ctx.BlkMeta =
 		op := NewUpgradeBlkOp(ctx, blkID, tableData)
 		op.Push()
 		ops = append(ops, op)
@@ -143,7 +147,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	t.Log(bufMgr.String())
-	assert.Equal(t, seg_cnt*blk_cnt*len(schema.ColDefs), bufMgr.NodeCount())
+	assert.Equal(t, int(blkCnt)*len(schema.ColDefs), bufMgr.NodeCount())
 
 	opts.MemData.Updater.Stop()
 }

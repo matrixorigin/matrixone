@@ -211,3 +211,21 @@ func (tbl *Table) Copy(ts ...int64) *Table {
 
 	return new_tbl
 }
+
+func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
+	tbl, _ := info.CreateTable(schema)
+	info.RegisterTable(tbl)
+	var activeSeg *Segment
+	for i := uint64(0); i < blkCnt; i++ {
+		if activeSeg == nil {
+			activeSeg, _ = tbl.CreateSegment()
+			tbl.RegisterSegment(activeSeg)
+		}
+		blk, _ := activeSeg.CreateBlock()
+		activeSeg.RegisterBlock(blk)
+		if len(activeSeg.Blocks) == int(info.Conf.SegmentMaxBlocks) {
+			activeSeg = nil
+		}
+	}
+	return tbl
+}

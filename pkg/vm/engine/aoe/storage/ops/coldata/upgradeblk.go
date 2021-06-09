@@ -25,5 +25,7 @@ type UpgradeBlkOp struct {
 
 func (op *UpgradeBlkOp) Execute() error {
 	op.Blocks = op.TableData.UpgradeBlock(op.BlockID)
+	// TODO
+	// op.Blocks = op.TableData.UpgradeBlock(op.Ctx.BlkMeta)
 	return nil
 }

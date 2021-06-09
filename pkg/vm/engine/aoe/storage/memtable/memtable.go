@@ -120,8 +120,9 @@ func (mt *MemTable) Flush() error {
 		mt.Opts.EventListener.BackgroundErrorCB(err)
 		return err
 	}
+	newMeta := op.NewMeta
 	go func() {
-		colCtx := cops.OpCtx{Opts: mt.Opts}
+		colCtx := cops.OpCtx{Opts: mt.Opts, BlkMeta: newMeta}
 		upgradeBlkOp := cops.NewUpgradeBlkOp(&colCtx, mt.Columns[0].GetID(), mt.TableData)
 		upgradeBlkOp.Push()
 		err = upgradeBlkOp.WaitDone()

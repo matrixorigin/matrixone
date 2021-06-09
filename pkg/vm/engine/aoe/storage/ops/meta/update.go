@@ -15,6 +15,7 @@ func NewUpdateOp(ctx *OpCtx) *UpdateOp {
 
 type UpdateOp struct {
 	Op
+	NewMeta *md.Block
 }
 
 func (op *UpdateOp) updateBlock(blk *md.Block) error {
@@ -44,6 +45,8 @@ func (op *UpdateOp) updateBlock(blk *md.Block) error {
 	if rblk.IsFull() {
 		seg.TryClose()
 	}
+
+	op.NewMeta = rblk
 
 	return nil
 }
