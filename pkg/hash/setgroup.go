@@ -25,7 +25,7 @@ func (g *SetGroup) Probe(sels, matched []int64, vecs []*vector.Vector,
 		return -1, nil, err
 	}
 	defer func() {
-		if len(bats[g.Idx].Seg) > 0 && proc.Size() > proc.Lim.Size {
+		if len(bats[g.Idx].Seg.Id) > 0 && proc.Size() > proc.Lim.Size {
 			bat.Clean(proc)
 			bats[g.Idx].Bat = nil
 		} else {
@@ -419,7 +419,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs []*vector.Vector,
 		return nil, err
 	}
 	defer func() {
-		if len(bats[g.Idx].Seg) > 0 && proc.Size() > proc.Lim.Size {
+		if len(bats[g.Idx].Seg.Id) > 0 && proc.Size() > proc.Lim.Size {
 			bat.Clean(proc)
 		} else {
 			bats[g.Idx].Bat = bat

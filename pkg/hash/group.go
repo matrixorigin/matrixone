@@ -31,7 +31,7 @@ func (g *Group) Fill(sels, matched []int64, vecs []*vector.Vector, bats []*block
 		return nil, err
 	}
 	defer func() {
-		if len(bats[g.Idx].Seg) > 0 && proc.Size() > proc.Lim.Size {
+		if len(bats[g.Idx].Seg.Id) > 0 && proc.Size() > proc.Lim.Size {
 			bat.Clean(proc)
 			bats[g.Idx].Bat = nil
 		} else {

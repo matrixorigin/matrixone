@@ -38,6 +38,30 @@ func New(maxSize, factor int) *Mempool {
 	return m
 }
 
+func Realloc(data []byte, size int64) int64 {
+	if data == nil {
+		return size
+	}
+	n := int64(cap(data) - CountSize)
+	newcap := n
+	doublecap := n + n
+	if size > doublecap {
+		newcap = size
+	} else {
+		if len(data)-CountSize < 1024 {
+			newcap = doublecap
+		} else {
+			for 0 < newcap && newcap < size {
+				newcap += newcap / 4
+			}
+			if newcap <= 0 {
+				newcap = size
+			}
+		}
+	}
+	return newcap
+}
+
 func (m *Mempool) Alloc(size int) []byte {
 	size = ((size + PageSize - 1 + CountSize) >> PageOffset) << PageOffset
 	if size <= m.maxSize {

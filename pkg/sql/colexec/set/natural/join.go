@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/hash"
 	"matrixone/pkg/intmap/fastmap"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
@@ -231,10 +232,10 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 				ctr.attrs = make([]string, 0, len(bat.Attrs)+len(ctr.spill.attrs))
 				ctr.attrs = append(ctr.attrs, attrs...)
 				for i, j := len(attrs), len(bat.Attrs); i < j; i++ {
-					ctr.attrs = append(ctr.attrs, rName+"."+bat.Attrs[i])
+					ctr.attrs = append(ctr.attrs, bat.Attrs[i])
 				}
 				for i, j := len(attrs), len(ctr.spill.attrs); i < j; i++ {
-					ctr.attrs = append(ctr.attrs, sName+"."+ctr.spill.attrs[i])
+					ctr.attrs = append(ctr.attrs, ctr.spill.attrs[i])
 				}
 			}
 		} else {
@@ -451,7 +452,7 @@ func (ctr *Container) product(n int, sel int64, g *hash.SetGroup, bat *batch.Bat
 			return err
 		}
 		defer func() {
-			if len(ctr.bats[g.Idx].Seg) > 0 && proc.Size() > proc.Lim.Size {
+			if len(ctr.bats[g.Idx].Seg.Id) > 0 && proc.Size() > proc.Lim.Size {
 				bat.Clean(proc)
 				ctr.bats[g.Idx].Bat = nil
 			} else {
@@ -480,7 +481,12 @@ func (ctr *Container) product(n int, sel int64, g *hash.SetGroup, bat *batch.Bat
 }
 
 func (ctr *Container) newSpill(proc *process.Process) error {
-	if err := ctr.spill.e.Create(ctr.spill.id, ctr.spill.md); err != nil {
+	var defs []engine.TableDef
+
+	for _, attr := range ctr.spill.md {
+		defs = append(defs, &engine.AttributeDef{attr})
+	}
+	if err := ctr.spill.e.Create(ctr.spill.id, defs, nil, nil); err != nil {
 		return err
 	}
 	r, err := ctr.spill.e.Relation(ctr.spill.id)
@@ -495,7 +501,7 @@ func (ctr *Container) newSpill(proc *process.Process) error {
 func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
-		hash.Rehash(count, ctr.hashs, vec)
+		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count))
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

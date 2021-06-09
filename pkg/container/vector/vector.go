@@ -342,7 +342,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]int8)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < len(vs)+1 {
-				data, err := proc.Alloc(int64(len(vs) + 1))
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)))
 				if err != nil {
 					return err
 				}
@@ -363,7 +363,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]int16)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*2 {
-				data, err := proc.Alloc(int64(len(vs)+1) * 2)
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)*2))
 				if err != nil {
 					return err
 				}
@@ -384,7 +384,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]int32)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*4 {
-				data, err := proc.Alloc(int64(len(vs)+1) * 4)
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)*4))
 				if err != nil {
 					return err
 				}
@@ -405,7 +405,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]int64)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*8 {
-				data, err := proc.Alloc(int64(len(vs)+1) * 8)
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)*8))
 				if err != nil {
 					return err
 				}
@@ -424,7 +424,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]uint8)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1) {
-				data, err := proc.Alloc(int64(len(vs) + 1))
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)))
 				if err != nil {
 					return err
 				}
@@ -445,7 +445,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]uint16)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*2 {
-				data, err := proc.Alloc(int64(len(vs)+1) * 2)
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)*2))
 				if err != nil {
 					return err
 				}
@@ -466,7 +466,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]uint32)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*4 {
-				data, err := proc.Alloc(int64(len(vs)+1) * 4)
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)*4))
 				if err != nil {
 					return err
 				}
@@ -487,7 +487,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]uint64)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*8 {
-				data, err := proc.Alloc(int64(len(vs)+1) * 8)
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)*8))
 				if err != nil {
 					return err
 				}
@@ -508,7 +508,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]types.Decimal)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*encoding.DecimalSize {
-				data, err := proc.Alloc(int64((len(vs) + 1) * encoding.DecimalSize))
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64((len(vs)+1)*encoding.DecimalSize)))
 				if err != nil {
 					return err
 				}
@@ -529,7 +529,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]float32)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*4 {
-				data, err := proc.Alloc(int64(len(vs)+1) * 4)
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)*4))
 				if err != nil {
 					return err
 				}
@@ -550,7 +550,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]float64)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*8 {
-				data, err := proc.Alloc(int64(len(vs)+1) * 8)
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(vs)+1)*8))
 				if err != nil {
 					return err
 				}
@@ -571,7 +571,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]types.Date)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*encoding.DateSize {
-				data, err := proc.Alloc(int64((len(vs) + 1) * encoding.DateSize))
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64((len(vs)+1)*encoding.DateSize)))
 				if err != nil {
 					return err
 				}
@@ -592,7 +592,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.([]types.Datetime)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < (len(vs)+1)*encoding.DatetimeSize {
-				data, err := proc.Alloc(int64((len(vs) + 1) * encoding.DatetimeSize))
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64((len(vs)+1)*encoding.DatetimeSize)))
 				if err != nil {
 					return err
 				}
@@ -618,12 +618,13 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		col := v.Col.(*types.Bytes)
 		{
 			if v.Data == nil || cap(v.Data[mempool.CountSize:]) < len(col.Data)+len(from) {
-				data, err := proc.Alloc(int64((len(col.Data) + len(from))))
+				data, err := proc.Alloc(mempool.Realloc(v.Data, int64(len(col.Data)+len(from))))
 				if err != nil {
 					return err
 				}
 				if v.Data != nil {
-					copy(data, v.Data)
+					copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
+					copy(data[mempool.CountSize:], col.Data)
 					proc.Free(v.Data)
 				} else {
 					copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])

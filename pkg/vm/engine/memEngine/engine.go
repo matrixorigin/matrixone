@@ -17,12 +17,33 @@ func New(db *kv.KV) *memEngine {
 }
 
 func (e *memEngine) Delete(name string) error {
+	return nil
+}
+
+func (e *memEngine) Create(name string) error {
+	return nil
+}
+
+func (e *memEngine) Database(name string) (engine.Database, error) {
+	return &database{e.db, e.proc}, nil
+}
+
+func (e *database) Delete(name string) error {
 	return e.db.Del(name)
 }
 
-func (e *memEngine) Create(name string, attrs []metadata.Attribute) error {
+func (e *database) Create(name string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy) error {
 	var md meta.Metadata
+	var attrs []metadata.Attribute
 
+	{
+		for _, def := range defs {
+			v, ok := def.(*engine.AttributeDef)
+			if ok {
+				attrs = append(attrs, v.Attr)
+			}
+		}
+	}
 	md.Name = name
 	md.Attrs = attrs
 	data, err := encoding.Encode(md)
@@ -32,11 +53,11 @@ func (e *memEngine) Create(name string, attrs []metadata.Attribute) error {
 	return e.db.Set(name, data)
 }
 
-func (e *memEngine) Relations() []engine.Relation {
+func (e *database) Relations() []engine.Relation {
 	return nil
 }
 
-func (e *memEngine) Relation(name string) (engine.Relation, error) {
+func (e *database) Relation(name string) (engine.Relation, error) {
 	var md meta.Metadata
 
 	data, err := e.db.Get(name, e.proc)
