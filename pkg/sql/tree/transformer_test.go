@@ -94,22 +94,23 @@ func Test_transformDatumToNumVal(t *testing.T) {
 		args args
 		want *NumVal
 	}{
-		{"t1", args{&t1}, NewNumVal(constant.MakeInt64(math.MaxInt64), "", false)},
-		{"t2", args{&t2}, NewNumVal(constant.MakeInt64(math.MinInt64), "", false)},
-		{"t3", args{&t3}, NewNumVal(constant.MakeUnknown(), "", false)},
-		{"t4", args{&t4}, NewNumVal(constant.MakeUint64(math.MaxUint64/2), "", false)},
-		{"t5", args{&t5}, NewNumVal(constant.MakeUint64(0), "", false)},
-		{"t6", args{&t6}, NewNumVal(constant.MakeFloat64(math.MaxFloat32), "", false)},
-		{"t7", args{&t7}, NewNumVal(constant.MakeFloat64(-math.MaxFloat32), "", false)},
-		{"t8", args{&t8}, NewNumVal(constant.MakeFloat64(math.MaxFloat64), "", false)},
-		{"t9", args{&t9}, NewNumVal(constant.MakeFloat64(-math.MaxFloat64), "", false)},
-		{"t10", args{&t10}, NewNumVal(constant.MakeString(s), "", false)},
-		{"t11", args{&t11}, NewNumVal(constant.MakeInt64(1), "", false)},
-		{"t12", args{&t12}, NewNumVal(constant.MakeInt64(0), "", false)},
+		{"t1", args{&t1}, NewNumVal(constant.MakeInt64(math.MaxInt64), "9223372036854775807", false)},
+		{"t2", args{&t2}, NewNumVal(constant.MakeInt64(math.MinInt64), "-9223372036854775808", false)},
+		{"t3", args{&t3}, NewNumVal(constant.MakeUnknown(), "NULL", false)},
+		{"t4", args{&t4}, NewNumVal(constant.MakeUint64(math.MaxUint64/2), "9223372036854775807", false)},
+		{"t5", args{&t5}, NewNumVal(constant.MakeUint64(0), "0", false)},
+		{"t6", args{&t6}, NewNumVal(constant.MakeFloat64(math.MaxFloat32), "340282346638528860000000000000000000000", false)},
+		{"t7", args{&t7}, NewNumVal(constant.MakeFloat64(-math.MaxFloat32), "-340282346638528860000000000000000000000", false)},
+		{"t8", args{&t8}, NewNumVal(constant.MakeFloat64(math.MaxFloat64), "179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", false)},
+		{"t9", args{&t9}, NewNumVal(constant.MakeFloat64(-math.MaxFloat64), "-179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", false)},
+		{"t10", args{&t10}, NewNumVal(constant.MakeString(s), s, false)},
+		{"t11", args{&t11}, NewNumVal(constant.MakeInt64(1), "1", false)},
+		{"t12", args{&t12}, NewNumVal(constant.MakeInt64(0), "0", false)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := transformDatumToNumVal(tt.args.datum); !reflect.DeepEqual(got, tt.want) {
+			if got := transformDatumToNumVal(tt.args.datum);
+			!reflect.DeepEqual(got, tt.want) {
 				t.Errorf("transformDatumToNumVal() = %v, want %v", got, tt.want)
 			}
 		})
@@ -143,14 +144,14 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 	eTrue := ast.NewValueExpr(true, "", "")
 	eFalse := ast.NewValueExpr(false, "", "")
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	f3 := NewNumVal(constant.MakeInt64(3), "", false)
-	f4 := NewNumVal(constant.MakeInt64(4), "", false)
-	f5 := NewNumVal(constant.MakeInt64(5), "", false)
-	f6 := NewNumVal(constant.MakeInt64(6), "", false)
-	fTrue := NewNumVal(constant.MakeInt64(1), "", false)
-	fFalse := NewNumVal(constant.MakeInt64(0), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f3 := NewNumVal(constant.MakeInt64(3), "3", false)
+	f4 := NewNumVal(constant.MakeInt64(4), "4", false)
+	f5 := NewNumVal(constant.MakeInt64(5), "5", false)
+	f6 := NewNumVal(constant.MakeInt64(6), "6", false)
+	fTrue := NewNumVal(constant.MakeInt64(1), "1", false)
+	fFalse := NewNumVal(constant.MakeInt64(0), "0", false)
 
 	//2 * 3
 	t11 := &ast.BinaryOperationExpr{
@@ -682,16 +683,16 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 		args args
 		want Expr
 	}{
-		{"t1", args{t1}, NewNumVal(constant.MakeInt64(math.MaxInt64), "", false)},
-		{"t2", args{t2}, NewNumVal(constant.MakeInt64(math.MinInt64), "", false)},
-		{"t3", args{t3}, NewNumVal(constant.MakeUnknown(), "", false)},
-		{"t4", args{t4}, NewNumVal(constant.MakeUint64(math.MaxUint64/2), "", false)},
-		{"t5", args{t5}, NewNumVal(constant.MakeUint64(0), "", false)},
-		{"t6", args{t6}, NewNumVal(constant.MakeFloat64(math.MaxFloat32), "", false)},
-		{"t7", args{t7}, NewNumVal(constant.MakeFloat64(-math.MaxFloat32), "", false)},
-		{"t8", args{t8}, NewNumVal(constant.MakeFloat64(math.MaxFloat64), "", false)},
-		{"t9", args{t9}, NewNumVal(constant.MakeFloat64(-math.MaxFloat64), "", false)},
-		{"t10", args{t10}, NewNumVal(constant.MakeString(s), "", false)},
+		{"t1", args{t1}, NewNumVal(constant.MakeInt64(math.MaxInt64), "9223372036854775807", false)},
+		{"t2", args{t2}, NewNumVal(constant.MakeInt64(math.MinInt64), "-9223372036854775808", false)},
+		{"t3", args{t3}, NewNumVal(constant.MakeUnknown(), "NULL", false)},
+		{"t4", args{t4}, NewNumVal(constant.MakeUint64(math.MaxUint64/2), "9223372036854775807", false)},
+		{"t5", args{t5}, NewNumVal(constant.MakeUint64(0), "0", false)},
+		{"t6", args{t6}, NewNumVal(constant.MakeFloat64(math.MaxFloat32), "340282346638528860000000000000000000000", false)},
+		{"t7", args{t7}, NewNumVal(constant.MakeFloat64(-math.MaxFloat32), "-340282346638528860000000000000000000000", false)},
+		{"t8", args{t8}, NewNumVal(constant.MakeFloat64(math.MaxFloat64), "179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", false)},
+		{"t9", args{t9}, NewNumVal(constant.MakeFloat64(-math.MaxFloat64), "-179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", false)},
+		{"t10", args{t10}, NewNumVal(constant.MakeString(s), s, false)},
 		{"t11", args{t11}, t11Want},
 		{"t12", args{t12}, t12Want},
 		{"t13", args{t13}, t13Want},
@@ -745,7 +746,8 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := transformExprNodeToExpr(tt.args.node); !reflect.DeepEqual(got, tt.want) {
+			if got := transformExprNodeToExpr(tt.args.node);
+			!reflect.DeepEqual(got, tt.want) {
 				t.Errorf("transformExprNodeToExpr() = %v, want %v", got, tt.want)
 			}
 		})
@@ -2458,9 +2460,9 @@ func gen_transform_t8() (*ast.SelectStmt, *Select) {
 	}
 
 	//having t.a = 'jj' and v.c > 1000
-	want_tjj := NewNumVal(constant.MakeString("jj"), "", false)
+	want_tjj := NewNumVal(constant.MakeString("jj"), "jj", false)
 	want_t_a_eq_tjj := NewComparisonExpr(EQUAL, want_t_a, want_tjj)
-	want_v_c_gt_1000 := NewComparisonExpr(GREAT_THAN, want_v_c, NewNumVal(constant.MakeInt64(1000), "", false))
+	want_v_c_gt_1000 := NewComparisonExpr(GREAT_THAN, want_v_c, NewNumVal(constant.MakeInt64(1000), "1000", false))
 	want_t_a_eq_tjj_and_v_c_gt_1000 := NewAndExpr(want_t_a_eq_tjj, want_v_c_gt_1000)
 	want_having := NewWhere(want_t_a_eq_tjj_and_v_c_gt_1000)
 	t1wantFieldList := []SelectExpr{
@@ -2784,9 +2786,9 @@ func gen_transform_t9() (*ast.SelectStmt, *Select) {
 	}
 
 	//having t.a = 'jj' and v.c > 1000
-	want_tjj := NewNumVal(constant.MakeString("jj"), "", false)
+	want_tjj := NewNumVal(constant.MakeString("jj"), "jj", false)
 	want_t_a_eq_tjj := NewComparisonExpr(EQUAL, want_t_a, want_tjj)
-	num1000 := NewNumVal(constant.MakeInt64(1000), "", false)
+	num1000 := NewNumVal(constant.MakeInt64(1000), "1000", false)
 	want_v_c_gt_1000 := NewComparisonExpr(GREAT_THAN, want_v_c, num1000)
 	want_t_a_eq_tjj_and_v_c_gt_1000 := NewAndExpr(want_t_a_eq_tjj, want_v_c_gt_1000)
 	want_having := NewWhere(want_t_a_eq_tjj_and_v_c_gt_1000)
@@ -2800,8 +2802,8 @@ func gen_transform_t9() (*ast.SelectStmt, *Select) {
 	}
 
 	//limit 100,2000
-	num100 := NewNumVal(constant.MakeInt64(100), "", false)
-	num2000 := NewNumVal(constant.MakeInt64(2000), "", false)
+	num100 := NewNumVal(constant.MakeInt64(100), "100", false)
+	num2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
 
 	want_limit := NewLimit(num100, num2000)
 
@@ -3684,14 +3686,14 @@ func gen_insert_t1()(*ast.InsertStmt,*Insert){
 	eTrue := ast.NewValueExpr(true, "", "")
 	eFalse := ast.NewValueExpr(false, "", "")
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	f3 := NewNumVal(constant.MakeInt64(3), "", false)
-	f4 := NewNumVal(constant.MakeInt64(4), "", false)
-	f5 := NewNumVal(constant.MakeInt64(5), "", false)
-	f6 := NewNumVal(constant.MakeInt64(6), "", false)
-	fTrue := NewNumVal(constant.MakeInt64(1), "", false)
-	fFalse := NewNumVal(constant.MakeInt64(0), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f3 := NewNumVal(constant.MakeInt64(3), "3", false)
+	f4 := NewNumVal(constant.MakeInt64(4), "4", false)
+	f5 := NewNumVal(constant.MakeInt64(5), "5", false)
+	f6 := NewNumVal(constant.MakeInt64(6), "6", false)
+	fTrue := NewNumVal(constant.MakeInt64(1), "1", false)
+	fFalse := NewNumVal(constant.MakeInt64(0), "0", false)
 
 	//============================
 	u := gen_table("", "u")
@@ -3923,11 +3925,11 @@ SUBPARTITIONS 2
 
 	col1_attr_arr := []ColumnAttribute{
 		NewAttributeNull(false),
-		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"",false)),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
 		NewAttributeAutoIncrement(),
 		NewAttributeUniqueKey(),
 		NewAttributePrimaryKey(),
-		NewAttributeComment(NewNumVal(constant.MakeString("a"),"",false)),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
 		NewAttributeCollate("utf8_bin"),
 		NewAttributeColumnFormat("DYNAMIC"),
 		NewAttributeStorage("disk"),
@@ -3945,10 +3947,10 @@ SUBPARTITIONS 2
 				),
 	}
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	f1990 := NewNumVal(constant.MakeInt64(1990), "", false)
-	f2000 := NewNumVal(constant.MakeInt64(2000), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
 
 	col2_attr_arr := []ColumnAttribute{
 		NewAttributeGeneratedAlways(NewBinaryExpr(PLUS,f1,f2),false),
@@ -4122,11 +4124,11 @@ SUBPARTITIONS 2
 
 	col1_attr_arr := []ColumnAttribute{
 		NewAttributeNull(false),
-		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"",false)),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
 		NewAttributeAutoIncrement(),
 		NewAttributeUniqueKey(),
 		NewAttributePrimaryKey(),
-		NewAttributeComment(NewNumVal(constant.MakeString("a"),"",false)),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
 		NewAttributeCollate("utf8_bin"),
 		NewAttributeColumnFormat("DYNAMIC"),
 		NewAttributeStorage("disk"),
@@ -4144,19 +4146,19 @@ SUBPARTITIONS 2
 		),
 	}
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	f1990 := NewNumVal(constant.MakeInt64(1990), "", false)
-	f1991 := NewNumVal(constant.MakeInt64(1991), "", false)
-	f1992 := NewNumVal(constant.MakeInt64(1992), "", false)
-	f1993 := NewNumVal(constant.MakeInt64(1993), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	f1993 := NewNumVal(constant.MakeInt64(1993), "1993", false)
 
-	f2000 := NewNumVal(constant.MakeInt64(2000), "", false)
-	f2001 := NewNumVal(constant.MakeInt64(2001), "", false)
-	f2002 := NewNumVal(constant.MakeInt64(2002), "", false)
-	f2003 := NewNumVal(constant.MakeInt64(2003), "", false)
+	f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
 
-	null_val := NewNumVal(constant.MakeUnknown(), "", false)
+	null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
 
 	col2_attr_arr := []ColumnAttribute{
 		NewAttributeGeneratedAlways(NewBinaryExpr(PLUS,f1,f2),false),
@@ -4330,11 +4332,11 @@ SUBPARTITIONS 2
 
 	col1_attr_arr := []ColumnAttribute{
 		NewAttributeNull(false),
-		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"",false)),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
 		NewAttributeAutoIncrement(),
 		NewAttributeUniqueKey(),
 		NewAttributePrimaryKey(),
-		NewAttributeComment(NewNumVal(constant.MakeString("a"),"",false)),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
 		NewAttributeCollate("utf8_bin"),
 		NewAttributeColumnFormat("DYNAMIC"),
 		NewAttributeStorage("disk"),
@@ -4352,19 +4354,19 @@ SUBPARTITIONS 2
 		),
 	}
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	f1990 := NewNumVal(constant.MakeInt64(1990), "", false)
-	f1991 := NewNumVal(constant.MakeInt64(1991), "", false)
-	f1992 := NewNumVal(constant.MakeInt64(1992), "", false)
-	f1993 := NewNumVal(constant.MakeInt64(1993), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	f1993 := NewNumVal(constant.MakeInt64(1993), "1993", false)
 
-	f2000 := NewNumVal(constant.MakeInt64(2000), "", false)
-	f2001 := NewNumVal(constant.MakeInt64(2001), "", false)
-	f2002 := NewNumVal(constant.MakeInt64(2002), "", false)
-	f2003 := NewNumVal(constant.MakeInt64(2003), "", false)
+	f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
 
-	null_val := NewNumVal(constant.MakeUnknown(), "", false)
+	null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
 
 	col2_attr_arr := []ColumnAttribute{
 		NewAttributeGeneratedAlways(NewBinaryExpr(PLUS,f1,f2),false),
@@ -4539,11 +4541,11 @@ SUBPARTITIONS 2
 
 	col1_attr_arr := []ColumnAttribute{
 		NewAttributeNull(false),
-		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"",false)),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
 		NewAttributeAutoIncrement(),
 		NewAttributeUniqueKey(),
 		NewAttributePrimaryKey(),
-		NewAttributeComment(NewNumVal(constant.MakeString("a"),"",false)),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
 		NewAttributeCollate("utf8_bin"),
 		NewAttributeColumnFormat("DYNAMIC"),
 		NewAttributeStorage("disk"),
@@ -4561,19 +4563,19 @@ SUBPARTITIONS 2
 		),
 	}
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	f1990 := NewNumVal(constant.MakeInt64(1990), "", false)
-	f1991 := NewNumVal(constant.MakeInt64(1991), "", false)
-	//f1992 := NewNumVal(constant.MakeInt64(1992), "", false)
-	//f1993 := NewNumVal(constant.MakeInt64(1993), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	//f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	//f1993 := NewNumVal(constant.MakeInt64(1993), "1992", false)
 
-	f2000 := NewNumVal(constant.MakeInt64(2000), "", false)
-	f2001 := NewNumVal(constant.MakeInt64(2001), "", false)
-	//f2002 := NewNumVal(constant.MakeInt64(2002), "", false)
-	//f2003 := NewNumVal(constant.MakeInt64(2003), "", false)
+	f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	//f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	//f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
 
-	//null_val := NewNumVal(constant.MakeUnknown(), "", false)
+	//null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
 	max_value := NewMaxValue()
 
 	col2_attr_arr := []ColumnAttribute{
@@ -4750,11 +4752,11 @@ SUBPARTITIONS 2
 
 	col1_attr_arr := []ColumnAttribute{
 		NewAttributeNull(false),
-		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"",false)),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
 		NewAttributeAutoIncrement(),
 		NewAttributeUniqueKey(),
 		NewAttributePrimaryKey(),
-		NewAttributeComment(NewNumVal(constant.MakeString("a"),"",false)),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
 		NewAttributeCollate("utf8_bin"),
 		NewAttributeColumnFormat("DYNAMIC"),
 		NewAttributeStorage("disk"),
@@ -4772,19 +4774,19 @@ SUBPARTITIONS 2
 		),
 	}
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	//f1990 := NewNumVal(constant.MakeInt64(1990), "", false)
-	//f1991 := NewNumVal(constant.MakeInt64(1991), "", false)
-	//f1992 := NewNumVal(constant.MakeInt64(1992), "", false)
-	//f1993 := NewNumVal(constant.MakeInt64(1993), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	//f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	//f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	//f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	//f1993 := NewNumVal(constant.MakeInt64(1993), "1993", false)
 
-	//f2000 := NewNumVal(constant.MakeInt64(2000), "", false)
-	//f2001 := NewNumVal(constant.MakeInt64(2001), "", false)
-	//f2002 := NewNumVal(constant.MakeInt64(2002), "", false)
-	//f2003 := NewNumVal(constant.MakeInt64(2003), "", false)
+	//f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	//f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	//f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	//f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
 
-	//null_val := NewNumVal(constant.MakeUnknown(), "", false)
+	//null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
 	//max_value := NewMaxValue()
 
 	col2_attr_arr := []ColumnAttribute{
@@ -4961,11 +4963,11 @@ SUBPARTITIONS 2
 
 	col1_attr_arr := []ColumnAttribute{
 		NewAttributeNull(false),
-		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"",false)),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
 		NewAttributeAutoIncrement(),
 		NewAttributeUniqueKey(),
 		NewAttributePrimaryKey(),
-		NewAttributeComment(NewNumVal(constant.MakeString("a"),"",false)),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
 		NewAttributeCollate("utf8_bin"),
 		NewAttributeColumnFormat("DYNAMIC"),
 		NewAttributeStorage("disk"),
@@ -4983,19 +4985,19 @@ SUBPARTITIONS 2
 		),
 	}
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	//f1990 := NewNumVal(constant.MakeInt64(1990), "", false)
-	//f1991 := NewNumVal(constant.MakeInt64(1991), "", false)
-	//f1992 := NewNumVal(constant.MakeInt64(1992), "", false)
-	//f1993 := NewNumVal(constant.MakeInt64(1993), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	//f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	//f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	//f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	//f1993 := NewNumVal(constant.MakeInt64(1993), "1993", false)
 
-	//f2000 := NewNumVal(constant.MakeInt64(2000), "", false)
-	//f2001 := NewNumVal(constant.MakeInt64(2001), "", false)
-	//f2002 := NewNumVal(constant.MakeInt64(2002), "", false)
-	//f2003 := NewNumVal(constant.MakeInt64(2003), "", false)
+	//f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	//f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	//f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	//f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
 
-	//null_val := NewNumVal(constant.MakeUnknown(), "", false)
+	//null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
 	//max_value := NewMaxValue()
 
 	col2_attr_arr := []ColumnAttribute{

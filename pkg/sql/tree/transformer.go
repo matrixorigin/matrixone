@@ -753,9 +753,9 @@ func transformIsTruthExprToComparisonExpr(ite *ast.IsTruthExpr) *ComparisonExpr 
 	}
 	var r *NumVal
 	if ite.True == 1 {
-		r = NewNumVal(constant.MakeInt64(1),"",false)
+		r = NewNumVal(constant.MakeInt64(1),"1",false)
 	}else{
-		r = NewNumVal(constant.MakeInt64(0),"",false)
+		r = NewNumVal(constant.MakeInt64(0),"0",false)
 	}
 
 	return NewComparisonExpr(op,e,r)
