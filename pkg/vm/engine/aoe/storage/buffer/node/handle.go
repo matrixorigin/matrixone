@@ -121,7 +121,7 @@ func (h *NodeHandle) Close() error {
 	if h.Buff != nil {
 		h.Buff.Close()
 	}
-	log.Infof("UnregisterNode %v", h.ID)
+	// log.Infof("UnregisterNode %v", h.ID)
 	h.Manager.UnregisterNode(h)
 	return nil
 }

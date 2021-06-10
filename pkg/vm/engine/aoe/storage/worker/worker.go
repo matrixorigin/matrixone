@@ -4,7 +4,6 @@ import (
 	"fmt"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
-	"sync"
 	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
@@ -34,14 +33,46 @@ var (
 	_ iw.IOpWorker = (*OpWorker)(nil)
 )
 
-type OpWorker struct {
-	OpC   chan iops.IOp
-	CmdC  chan Cmd
-	State State
-	Wg    sync.WaitGroup
+type Stats struct {
+	Processed uint64
+	Successed uint64
+	Failed    uint64
+	AvgTime   int64
 }
 
-func NewOpWorker(args ...int) *OpWorker {
+func (s *Stats) AddProcessed() {
+	atomic.AddUint64(&s.Processed, uint64(1))
+}
+
+func (s *Stats) AddSuccessed() {
+	atomic.AddUint64(&s.Successed, uint64(1))
+}
+
+func (s *Stats) AddFailed() {
+	atomic.AddUint64(&s.Failed, uint64(1))
+}
+
+func (s *Stats) RecordTime(t int64) {
+	procced := atomic.LoadUint64(&s.Processed)
+	s.AvgTime = (s.AvgTime*int64(procced-1) + t) / int64(procced)
+}
+
+func (s *Stats) String() string {
+	r := fmt.Sprintf("Total: %d, Succ: %d, Fail: %d, AvgTime: %dus", s.Processed, s.Successed, s.Failed, s.AvgTime)
+	return r
+}
+
+type OpWorker struct {
+	Name     string
+	OpC      chan iops.IOp
+	CmdC     chan Cmd
+	State    State
+	Pending  int64
+	ClosedCh chan struct{}
+	Stats    Stats
+}
+
+func NewOpWorker(name string, args ...int) *OpWorker {
 	var l int
 	if len(args) == 0 {
 		l = QUEUE_SIZE
@@ -53,15 +84,17 @@ func NewOpWorker(args ...int) *OpWorker {
 		}
 	}
 	worker := &OpWorker{
-		OpC:   make(chan iops.IOp, l),
-		CmdC:  make(chan Cmd, l),
-		State: CREATED,
+		Name:     name,
+		OpC:      make(chan iops.IOp, l),
+		CmdC:     make(chan Cmd, l),
+		State:    CREATED,
+		ClosedCh: make(chan struct{}),
 	}
 	return worker
 }
 
 func (w *OpWorker) Start() {
-	log.Infof("Start OpWorker")
+	// log.Infof("Start OpWorker")
 	if w.State != CREATED {
 		panic("logic error")
 	}
@@ -74,7 +107,7 @@ func (w *OpWorker) Start() {
 			select {
 			case op := <-w.OpC:
 				w.onOp(op)
-				w.Wg.Done()
+				atomic.AddInt64(&w.Pending, int64(-1))
 			case cmd := <-w.CmdC:
 				w.onCmd(cmd)
 			}
@@ -106,9 +139,16 @@ func (w *OpWorker) WaitStop() {
 		return
 	}
 	if atomic.CompareAndSwapInt32(&w.State, STOPPING_RECEIVER, STOPPING_CMD) {
-		w.Wg.Wait()
+		pending := atomic.LoadInt64(&w.Pending)
+		for {
+			if pending == 0 {
+				break
+			}
+			pending = atomic.LoadInt64(&w.Pending)
+		}
 		w.CmdC <- QUIT
 	}
+	<-w.ClosedCh
 }
 
 func (w *OpWorker) SendOp(op iops.IOp) bool {
@@ -116,9 +156,9 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 	if state != RUNNING {
 		return false
 	}
-	w.Wg.Add(1)
+	atomic.AddInt64(&w.Pending, int64(1))
 	if atomic.LoadInt32(&w.State) != RUNNING {
-		w.Wg.Done()
+		atomic.AddInt64(&w.Pending, int64(-1))
 		return false
 	}
 	w.OpC <- op
@@ -128,19 +168,32 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 func (w *OpWorker) onOp(op iops.IOp) {
 	// log.Info("OpWorker: onOp")
 	err := op.OnExec()
+	w.Stats.AddProcessed()
+	if err != nil {
+		w.Stats.AddFailed()
+	} else {
+		w.Stats.AddSuccessed()
+	}
 	op.SetError(err)
+	w.Stats.RecordTime(op.GetExecutTime())
 }
 
 func (w *OpWorker) onCmd(cmd Cmd) {
 	switch cmd {
 	case QUIT:
-		log.Infof("Quit OpWorker")
+		// log.Infof("Quit OpWorker")
 		close(w.CmdC)
 		close(w.OpC)
 		if !atomic.CompareAndSwapInt32(&w.State, STOPPING_CMD, STOPPED) {
 			panic("logic error")
 		}
+		w.ClosedCh <- struct{}{}
 	default:
 		panic(fmt.Sprintf("Unsupported cmd %d", cmd))
 	}
+}
+
+func (w *OpWorker) StatsString() string {
+	s := fmt.Sprintf("| Stats | %s | w | %s", w.Stats.String(), w.Name)
+	return s
 }

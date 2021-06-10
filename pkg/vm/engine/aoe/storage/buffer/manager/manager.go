@@ -9,6 +9,7 @@ import (
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
@@ -49,11 +50,12 @@ func (mgr *BufferManager) String() string {
 		mapped[k.TableID][k.SegmentID] = l
 	}
 	for tbID, segMap := range mapped {
-		s += fmt.Sprintf("Table %d Nodes %d {\n", tbID, len(segMap))
+		s += fmt.Sprintf("Table %d SegmentCnt=%d {\n", tbID, len(segMap))
 		for segID, ids := range segMap {
-			s += fmt.Sprintf("  Segment %d Nodes %d {\n", segID, len(ids))
+			s += fmt.Sprintf("  Segment %d PartCnt=%d {\n", segID, len(ids))
 			for _, id := range ids {
-				s += fmt.Sprintf("    Block-%d-Part-%d [%d] (%d) (%d)\n", id.BlockID, id.PartID, id.Iter, mgr.Nodes[id].GetState(), mgr.Nodes[id].GetCapacity())
+				s += fmt.Sprintf("    (Col: %d Blk:%d, Part: %d) [Iter=%d] (%s) (Cap=%d)\n", id.Idx, id.BlockID, id.PartID,
+					id.Iter, nif.NodeStateString(mgr.Nodes[id].GetState()), mgr.Nodes[id].GetCapacity())
 			}
 			s += "  }\n"
 		}
@@ -144,7 +146,7 @@ func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, segFi
 
 func (mgr *BufferManager) UnregisterNode(h nif.INodeHandle) {
 	node_id := h.GetID()
-	// log.Infof("UnRegisterNode %s", node_id.String())
+	log.Infof("UnRegisterNode %s", node_id.String())
 	if h.IsSpillable() {
 		if node_id.IsTransient() {
 			h.Clean()
@@ -230,4 +232,9 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 	}
 	handle.Ref()
 	return handle.MakeHandle()
+}
+
+func MockBufMgr(capacity uint64) mgrif.IBufferManager {
+	flusher := w.NewOpWorker("MockFlusher")
+	return NewBufferManager(capacity, flusher)
 }

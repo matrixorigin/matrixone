@@ -10,13 +10,14 @@ const (
 	BLOCK_ROW_COUNT = 16
 )
 
-func NewBlock(table_id, segment_id, id, capacity uint64) *Block {
+func NewBlock(table_id, segment_id, id, capacity uint64, schema *Schema) *Block {
 	blk := &Block{
 		ID:          id,
 		TableID:     table_id,
 		SegmentID:   segment_id,
 		TimeStamp:   *NewTimeStamp(),
 		MaxRowCount: capacity,
+		Schema:      schema,
 	}
 	return blk
 }
@@ -69,7 +70,7 @@ func (blk *Block) SetIndex(idx LogIndex) {
 
 func (blk *Block) String() string {
 	s := fmt.Sprintf("Blk(%d-%d-%d)[%s]", blk.TableID, blk.SegmentID, blk.ID, blk.TimeStamp.String())
-	if blk.IsDeleted() {
+	if blk.IsDeleted(NowMicro()) {
 		s += "[D]"
 	}
 	if blk.Count == blk.MaxRowCount {
@@ -135,7 +136,7 @@ func (blk *Block) Copy() *Block {
 
 func (blk *Block) copyNoLock(new_blk *Block) *Block {
 	if new_blk == nil {
-		new_blk = NewBlock(blk.TableID, blk.SegmentID, blk.ID, blk.MaxRowCount)
+		new_blk = NewBlock(blk.TableID, blk.SegmentID, blk.ID, blk.MaxRowCount, blk.Schema)
 	}
 	new_blk.ID = blk.ID
 	new_blk.SegmentID = blk.SegmentID

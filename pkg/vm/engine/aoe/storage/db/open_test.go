@@ -11,17 +11,17 @@ import (
 )
 
 var (
-	TEST_DB_DIR = "/tmp/open_test"
+	TEST_OPEN_DIR = "/tmp/open_test"
 )
 
 func initTest() {
-	os.RemoveAll(TEST_DB_DIR)
+	os.RemoveAll(TEST_OPEN_DIR)
 }
 
 func TestLoadMetaInfo(t *testing.T) {
 	initTest()
 	cfg := &md.Configuration{
-		Dir:              TEST_DB_DIR,
+		Dir:              TEST_OPEN_DIR,
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
@@ -31,7 +31,9 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Equal(t, uint64(0), info.Sequence.NextSegmentID)
 	assert.Equal(t, uint64(0), info.Sequence.NextTableID)
 
-	tbl, err := info.CreateTable()
+	schema := md.MockSchema(2)
+	schema.Name = "mock1"
+	tbl, err := info.CreateTable(schema)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1), info.Sequence.NextTableID)
 
@@ -44,11 +46,11 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
-	defer w.Close()
 	err = info.Serialize(w)
 	assert.Nil(t, err)
-
-	tbl, err = info.CreateTable()
+	schema2 := md.MockSchema(2)
+	schema2.Name = "mock2"
+	tbl, err = info.CreateTable(schema2)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), info.Sequence.NextTableID)
 	err = info.RegisterTable(tbl)
@@ -56,6 +58,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	info.CheckPoint++
 
 	filename = e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
+	w.Close()
 
 	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
@@ -73,7 +76,7 @@ func TestLoadMetaInfo(t *testing.T) {
 func TestCleanStaleMeta(t *testing.T) {
 	initTest()
 	cfg := &md.Configuration{
-		Dir:              TEST_DB_DIR,
+		Dir:              TEST_OPEN_DIR,
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
@@ -120,6 +123,22 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, "100", false)
 	_, err = os.Stat(fname)
+	assert.Nil(t, err)
+}
+
+func TestOpen(t *testing.T) {
+	initTest()
+	cfg := &md.Configuration{
+		Dir:              TEST_OPEN_DIR,
+		SegmentMaxBlocks: 10,
+		BlockMaxRows:     10,
+	}
+	opts := &e.Options{}
+	opts.Meta.Conf = cfg
+	dbi, err := Open(TEST_OPEN_DIR, opts)
+	assert.Nil(t, err)
+	assert.NotNil(t, dbi)
+	err = dbi.Close()
 	assert.Nil(t, err)
 }
 

@@ -11,7 +11,17 @@ import (
 	// todo "aoe/pkg/mock"
 )
 
+const (
+	DEFAULT_MON_COLLECTOR = "MON_COLLECTOR"
+	DEFAULT_META_FLUSHER  = "META_FLUSER"
+	DEFAULT_META_UPDATER  = "META_UPDATER"
+	DEFAULT_DATA_FLUSHER  = "DATA_FLUSHER"
+	DEFAULT_DATA_SORTER   = "DATA_SORTER"
+	DEFAULT_MDATA_UPDATER = "MDATA_UPDATER"
+)
+
 type IterOptions struct {
+	TableName  string
 	TableID    uint64
 	All        bool
 	ColIdxes   []int
@@ -58,14 +68,14 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	o.EventListener.FillDefaults()
 
 	if o.Mon.Collector == nil {
-		o.Mon.Collector = w.NewOpWorker()
+		o.Mon.Collector = w.NewOpWorker(DEFAULT_MON_COLLECTOR)
 	}
 
 	if o.Meta.Flusher == nil {
-		o.Meta.Flusher = w.NewOpWorker()
+		o.Meta.Flusher = w.NewOpWorker(DEFAULT_META_FLUSHER)
 	}
 	if o.Meta.Updater == nil {
-		o.Meta.Updater = w.NewOpWorker()
+		o.Meta.Updater = w.NewOpWorker(DEFAULT_META_UPDATER)
 	}
 	if o.Meta.Conf == nil {
 		o.Meta.Conf = &md.Configuration{
@@ -93,21 +103,21 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	// }
 
 	if o.Data.Flusher == nil {
-		o.Data.Flusher = w.NewOpWorker()
+		o.Data.Flusher = w.NewOpWorker(DEFAULT_DATA_FLUSHER)
 	}
 
 	if o.Data.Sorter == nil {
-		o.Data.Sorter = w.NewOpWorker()
+		o.Data.Sorter = w.NewOpWorker(DEFAULT_DATA_SORTER)
 	}
 
 	if o.MemData.Updater == nil {
-		o.MemData.Updater = w.NewOpWorker()
+		o.MemData.Updater = w.NewOpWorker(DEFAULT_MDATA_UPDATER)
 	}
 
 	if o.CacheCfg == nil {
 		o.CacheCfg = &CacheCfg{
-			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks,
-			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 10,
+			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 20,
+			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 20,
 		}
 	}
 	return o

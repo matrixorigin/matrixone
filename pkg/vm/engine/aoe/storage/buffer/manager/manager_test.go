@@ -19,7 +19,7 @@ func init() {
 }
 
 func TestManagerBasic(t *testing.T) {
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Flusher")
 	mgr := NewBufferManager(uint64(1), flusher)
 	baseid := common.NewTransientID()
 	baseid.TableID = uint64(0)
@@ -66,7 +66,7 @@ func TestManagerBasic(t *testing.T) {
 }
 
 func TestManager2(t *testing.T) {
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Flusher")
 	capacity := uint64(1024)
 	node_capacity := 2 * capacity
 	mgr := NewBufferManager(capacity, flusher)
@@ -106,7 +106,7 @@ func TestManager2(t *testing.T) {
 func TestManager3(t *testing.T) {
 	node_capacity := uint64(1024)
 	capacity := node_capacity * 2
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Flusher")
 	mgr := NewBufferManager(capacity, flusher)
 	assert.Equal(t, mgr.GetCapacity(), capacity)
 
@@ -160,7 +160,7 @@ func TestManager3(t *testing.T) {
 func TestManager4(t *testing.T) {
 	node_capacity := uint64(1024)
 	capacity := node_capacity / 2
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Flusher")
 	mgr := NewBufferManager(capacity, flusher)
 	assert.Equal(t, mgr.GetCapacity(), capacity)
 
@@ -191,7 +191,7 @@ func TestManager4(t *testing.T) {
 func TestManager5(t *testing.T) {
 	node_capacity := uint64(1024)
 	capacity := node_capacity / 2
-	flusher := w.NewOpWorker()
+	flusher := w.NewOpWorker("Flusher")
 	mgr := NewBufferManager(capacity, flusher)
 	assert.Equal(t, mgr.GetCapacity(), capacity)
 

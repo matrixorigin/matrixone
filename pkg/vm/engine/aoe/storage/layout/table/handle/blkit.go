@@ -1,17 +1,19 @@
 package handle
 
 import (
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
 	"sync"
+	"sync/atomic"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var (
 	_ base.IBlockIterator = (*BlockIt)(nil)
 )
 
-var itAllocCnt = 0
+var itAllocCnt int32 = 0
 var itReleaseCnt = 0
 
 type itBlkAlloc struct {
@@ -20,30 +22,39 @@ type itBlkAlloc struct {
 
 var itBlkAllocPool = sync.Pool{
 	New: func() interface{} {
-		itAllocCnt++
-		log.Infof("Alloc blk it %d", itAllocCnt)
+		cnt := atomic.AddInt32(&itAllocCnt, int32(1))
+		log.Infof("Alloc blk it %d", cnt)
 		return &itBlkAlloc{It: BlockIt{Cols: make([]col.IColumnBlock, 0)}}
 	},
 }
 
+var EmptyBlockIt = &BlockIt{
+	Cols: make([]col.IColumnBlock, 0),
+}
+
 type BlockIt struct {
-	Cols  []col.IColumnBlock
-	Alloc *itBlkAlloc
+	Invalid bool
+	Cols    []col.IColumnBlock
+	Alloc   *itBlkAlloc
 }
 
 func (it *BlockIt) Next() {
 	for i, colBlk := range it.Cols {
 		newBlk := colBlk.GetNext()
 		if newBlk == nil {
-			it.Cols = it.Cols[:0]
+			it.Invalid = true
 			return
 		}
+		it.Cols[i].UnRef()
 		it.Cols[i] = newBlk
 	}
 }
 
 func (it *BlockIt) Valid() bool {
 	if it == nil {
+		return false
+	}
+	if it.Invalid {
 		return false
 	}
 	if it.Cols == nil {
@@ -55,16 +66,18 @@ func (it *BlockIt) Valid() bool {
 func (it *BlockIt) GetBlockHandle() base.IBlockHandle {
 	blkHandle := blkHandlePool.Get().(*BlockHandle)
 	blkHandle.ID = it.Cols[0].GetID()
+	for _, col := range it.Cols {
+		blkHandle.Cols = append(blkHandle.Cols, col.Ref())
+	}
 	blkHandle.Cols = it.Cols
-	// h := &BlockHandle{
-	// 	ID:   it.Cols[0].GetID(),
-	// 	Cols: it.Cols,
-	// }
 	return blkHandle
 }
 
 func (it *BlockIt) Close() error {
 	if alloc := it.Alloc; alloc != nil {
+		for _, col := range it.Cols {
+			col.UnRef()
+		}
 		*it = BlockIt{Cols: it.Cols[:0]}
 		// itReleaseCnt++
 		// log.Infof("Release %d", itReleaseCnt)

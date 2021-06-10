@@ -15,7 +15,8 @@ func TestBlock(t *testing.T) {
 	info := NewMetaInfo(conf)
 	ts1 := NowMicro()
 	time.Sleep(time.Duration(1) * time.Microsecond)
-	blk := NewBlock(info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows)
+	schema := MockSchema(2)
+	blk := NewBlock(info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows, schema)
 	time.Sleep(time.Duration(1) * time.Microsecond)
 	ts2 := NowMicro()
 	t.Logf("%d %d %d", ts1, blk.CreatedOn, ts2)
@@ -43,8 +44,9 @@ func TestSegment(t *testing.T) {
 	}
 	info := NewMetaInfo(conf)
 	t1 := NowMicro()
-	seg1 := NewSegment(info, info.Sequence.GetTableID(), info.Sequence.GetSegmentID())
-	blk1 := NewBlock(seg1.GetTableID(), info.Sequence.GetSegmentID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows)
+	schema := MockSchema(2)
+	seg1 := NewSegment(info, info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), schema)
+	blk1 := NewBlock(seg1.GetTableID(), info.Sequence.GetSegmentID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows, schema)
 	err := seg1.RegisterBlock(blk1)
 	assert.Error(t, err)
 
@@ -54,7 +56,7 @@ func TestSegment(t *testing.T) {
 		err = seg1.RegisterBlock(blk1)
 		assert.Nil(t, err)
 	}
-	blk2 := NewBlock(seg1.GetTableID(), seg1.GetID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows)
+	blk2 := NewBlock(seg1.GetTableID(), seg1.GetID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows, schema)
 	err = seg1.RegisterBlock(blk2)
 	assert.Error(t, err)
 	t.Log(err)
@@ -79,7 +81,8 @@ func TestTable(t *testing.T) {
 		Dir:              "/tmp",
 	}
 	info := NewMetaInfo(conf)
-	bkt := NewTable(info)
+	schema := MockSchema(2)
+	bkt := NewTable(info, schema)
 	seg, err := bkt.CreateSegment()
 	assert.Nil(t, err)
 
@@ -98,7 +101,8 @@ func TestInfo(t *testing.T) {
 		Dir:              "/tmp",
 	}
 	info := NewMetaInfo(conf)
-	tbl, err := info.CreateTable()
+	schema := MockSchema(2)
+	tbl, err := info.CreateTable(schema)
 	assert.Nil(t, err)
 
 	assert.Equal(t, tbl.GetBoundState(), STANDLONE)

@@ -6,6 +6,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"sync"
+	// log "github.com/sirupsen/logrus"
 )
 
 type Manager struct {
@@ -29,16 +30,18 @@ func NewManager(opts *engine.Options) imem.IManager {
 
 func (m *Manager) CollectionIDs() map[uint64]uint64 {
 	ids := make(map[uint64]uint64)
+	m.RLock()
 	for k, _ := range m.Collections {
 		ids[k] = k
 	}
+	m.RUnlock()
 	return ids
 }
 
 func (m *Manager) GetCollection(id uint64) imem.ICollection {
 	m.RLock()
-	defer m.RLock()
 	c, ok := m.Collections[id]
+	m.RUnlock()
 	if !ok {
 		return nil
 	}
@@ -47,25 +50,27 @@ func (m *Manager) GetCollection(id uint64) imem.ICollection {
 
 func (m *Manager) RegisterCollection(td interface{}) (c imem.ICollection, err error) {
 	m.Lock()
-	defer m.Unlock()
 	tableData := td.(table.ITableData)
 	_, ok := m.Collections[tableData.GetID()]
 	if ok {
+		m.Unlock()
 		return nil, errors.New("logic error")
 	}
 	c = NewCollection(tableData, m.Opts)
 	m.Collections[tableData.GetID()] = c
+	m.Unlock()
 	return c, err
 }
 
 func (m *Manager) UnregisterCollection(id uint64) (c imem.ICollection, err error) {
 	m.Lock()
-	defer m.Unlock()
 	c, ok := m.Collections[id]
 	if ok {
 		delete(m.Collections, id)
 	} else {
+		m.Unlock()
 		return nil, errors.New("logic error")
 	}
+	m.Unlock()
 	return c, err
 }

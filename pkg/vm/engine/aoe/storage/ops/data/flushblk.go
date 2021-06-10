@@ -38,6 +38,6 @@ func (op *FlushBlkOp) Execute() error {
 		log.Errorf("Flush memtable %d failed %s", mem.GetMeta().GetID(), err)
 		return err
 	}
-
+	mem.Close()
 	return nil
 }

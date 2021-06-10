@@ -19,8 +19,8 @@ type NumVal struct {
 	origString string
 
 	//converted result
-	resInt     int64
-	resFloat   float64
+	resInt   int64
+	resFloat float64
 }
 
 func (n *NumVal) String() string {

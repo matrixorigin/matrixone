@@ -6,13 +6,14 @@ import (
 )
 
 func NewCreateTblOp(ctx *OpCtx) *CreateTblOp {
-	op := &CreateTblOp{}
+	op := &CreateTblOp{Schema: ctx.Schema}
 	op.Op = *NewOp(op, ctx, ctx.Opts.Meta.Updater)
 	return op
 }
 
 type CreateTblOp struct {
 	Op
+	Schema *md.Schema
 }
 
 func (op *CreateTblOp) GetTable() *md.Table {
@@ -21,7 +22,7 @@ func (op *CreateTblOp) GetTable() *md.Table {
 }
 
 func (op *CreateTblOp) Execute() error {
-	tbl, err := op.Ctx.Opts.Meta.Info.CreateTable()
+	tbl, err := op.Ctx.Opts.Meta.Info.CreateTable(op.Schema)
 	if err != nil {
 		return err
 	}

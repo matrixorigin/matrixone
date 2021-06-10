@@ -9,12 +9,17 @@ var (
 	_ base.ISegmentIterator = (*SegmentIt)(nil)
 )
 
+var EmptySegmentIt = &SegmentIt{}
+
 type SegmentIt struct {
 	Handle *SegmentsHandle
 	Pos    int
 }
 
 func (ssit *SegmentIt) Valid() bool {
+	if ssit.Handle == nil {
+		return false
+	}
 	if ssit.Pos >= len(ssit.Handle.IDS) {
 		return false
 	}
@@ -26,6 +31,9 @@ func (ssit *SegmentIt) Next() {
 }
 
 func (ssit *SegmentIt) Close() error {
+	// if ssit.Handle != nil {
+	// 	ssit.Handle.Close
+	// }
 	return nil
 }
 

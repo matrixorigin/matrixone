@@ -130,14 +130,5 @@ var UnaryOps = map[int][]*UnaryOp{
 				return vec, nil
 			},
 		},
-		/*
-			&UnaryOp{
-				Typ:        types.T_decimal,
-				ReturnType: types.T_decimal,
-				Fn: func(v *vector.Vector, p *process.Process, _ bool) (*vector.Vector, error) {
-					return nil, errors.New("not implemented")
-				},
-			},
-		*/
 	},
 }

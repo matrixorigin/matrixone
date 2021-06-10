@@ -3,50 +3,13 @@ package handle
 import (
 	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
+	tutil "matrixone/pkg/vm/engine/aoe/storage/testutils/data"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
-
-func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
-	colType := types.Type{types.T_int32, 4, 4, 0}
-	seg := col.NewColumnSegment(id, colIdx, colType, col.UNSORTED_SEG)
-	blk_id := id
-	for i := 0; i < blkCnt; i++ {
-		_, err := seg.RegisterBlock(bufMgr, blk_id.NextBlock(), rowCount)
-		assert.Nil(t, err)
-	}
-	return seg
-}
-
-func makeBufMagr(capacity uint64) mgrif.IBufferManager {
-	flusher := w.NewOpWorker()
-	bufMgr := bmgr.NewBufferManager(capacity, flusher)
-	return bufMgr
-}
-
-func makeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typeSize uint64, tableData table.ITableData, t *testing.T) []common.ID {
-	baseid := common.ID{}
-	var segIDs []common.ID
-	for i := 0; i < segCnt; i++ {
-		var colSegs []col.IColumnSegment
-		seg_id := baseid.NextSegment()
-		for colIdx, _ := range tableData.GetColTypes() {
-			colSeg := makeSegment(bufMgr, colIdx, seg_id, blkCnt, rowCount, typeSize, t)
-			colSegs = append(colSegs, colSeg)
-		}
-		tableData.AppendColSegments(colSegs)
-		segIDs = append(segIDs, seg_id)
-	}
-	return segIDs
-}
 
 func TestSegmentHandle(t *testing.T) {
 	colDefs := make([]types.Type, 2)
@@ -60,10 +23,10 @@ func TestSegmentHandle(t *testing.T) {
 	seg_cnt := 100
 	blk_cnt := 64
 	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
-	bufMgr := makeBufMagr(capacity)
+	bufMgr := tutil.MakeBufMagr(capacity)
 	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, t0, colDefs)
-	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
+	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
+	segIDs := tutil.MakeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 
 	cols := []int{0, 1}

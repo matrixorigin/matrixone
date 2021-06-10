@@ -8,8 +8,9 @@ import (
 )
 
 type OpCtx struct {
-	Block *md.Block
-	Opts  *e.Options
+	Block  *md.Block
+	Opts   *e.Options
+	Schema *md.Schema
 }
 
 type Op struct {

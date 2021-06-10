@@ -1,16 +1,18 @@
 package ops
 
 import (
-	log "github.com/sirupsen/logrus"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iworker "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func NewOp(impl iops.IOpInternal, w iworker.IOpWorker) *Op {
 	op := &Op{
-		Impl:   impl,
-		Worker: w,
-		// ErrorC: make(chan error, 1000),
+		Impl:       impl,
+		Worker:     w,
+		CreateTime: time.Now(),
 	}
 	return op
 }
@@ -23,6 +25,7 @@ func (op *Op) Push() {
 }
 
 func (op *Op) SetError(err error) {
+	op.EndTime = time.Now()
 	op.Err = err
 	op.ErrorC <- err
 }
@@ -45,6 +48,7 @@ func (op *Op) Execute() error {
 }
 
 func (op *Op) OnExec() error {
+	op.StartTime = time.Now()
 	err := op.PreExecute()
 	if err != nil {
 		return err
@@ -63,4 +67,20 @@ func (op *Op) OnExec() error {
 	}
 	err = op.Impl.PostExecute()
 	return err
+}
+
+func (op *Op) GetCreateTime() time.Time {
+	return op.CreateTime
+}
+
+func (op *Op) GetStartTime() time.Time {
+	return op.StartTime
+}
+
+func (op *Op) GetEndTime() time.Time {
+	return op.EndTime
+}
+
+func (op *Op) GetExecutTime() int64 {
+	return op.EndTime.Sub(op.StartTime).Microseconds()
 }

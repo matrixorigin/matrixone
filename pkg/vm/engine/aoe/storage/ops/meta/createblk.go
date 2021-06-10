@@ -82,12 +82,13 @@ func (op *CreateBlkOp) registerTableData(blk *md.Block) {
 	}
 	for _, column := range op.TableData.GetCollumns() {
 		if op.NewSegment {
-			_, err := column.RegisterSegment(blk_id.AsSegmentID())
+			seg, err := column.RegisterSegment(blk_id.AsSegmentID())
 			if err != nil {
 				panic("should not happend")
 			}
+			seg.UnRef()
 		}
-		colBlk, _ := column.RegisterBlock(op.TableData.GetBufMgr(), blk_id, blk.MaxRowCount)
+		colBlk, _ := column.RegisterBlock(blk_id, blk.MaxRowCount)
 		op.ColBlocks = append(op.ColBlocks, colBlk)
 	}
 }

@@ -6,9 +6,9 @@ import (
 )
 
 type Block struct {
-	Seg   string
 	Cs    []uint64
 	Attrs []string
 	Bat   *batch.Batch
 	R     engine.Relation
+	Seg   engine.SegmentInfo
 }

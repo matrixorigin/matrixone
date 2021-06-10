@@ -9,10 +9,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"runtime"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
+	// "runtime"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -64,7 +63,7 @@ type IColumnPart interface {
 	// GetBlock() IColumnBlock
 	GetBuf() []byte
 	GetColIdx() int
-	CloneWithUpgrade(blk IColumnBlock) IColumnPart
+	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
 	GetNodeID() common.ID
 }
 
@@ -86,6 +85,7 @@ type ColumnPart struct {
 
 func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 	rowCount uint64, typeSize uint64) IColumnPart {
+	defer blk.UnRef()
 	part := &ColumnPart{
 		BufMgr:      bmgr,
 		ID:          id,
@@ -115,12 +115,6 @@ func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 	default:
 		panic("not support")
 	}
-	runtime.SetFinalizer(part, func(p IColumnPart) {
-		p.SetNext(nil)
-		id := p.GetID()
-		log.Infof("GC ColumnPart %s", id.String())
-		p.Close()
-	})
 
 	blk.Append(part)
 	return part
@@ -130,10 +124,10 @@ func (part *ColumnPart) GetNodeID() common.ID {
 	return part.NodeID
 }
 
-func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock) IColumnPart {
+func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager) IColumnPart {
 	cloned := &ColumnPart{
 		ID:          part.ID,
-		BufMgr:      part.BufMgr,
+		BufMgr:      sstBufMgr,
 		TypeSize:    part.TypeSize,
 		MaxRowCount: part.MaxRowCount,
 		RowCount:    part.RowCount,
@@ -162,24 +156,18 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock) IColumnPart {
 		panic("logic error")
 	case MOCK_BLK:
 		csf := ldio.MockColSegmentFile{}
-		cloned.BufNode = part.BufMgr.RegisterNode(part.TypeSize*part.MaxRowCount, cloned.NodeID, &csf)
+		cloned.BufNode = cloned.BufMgr.RegisterNode(part.TypeSize*part.MaxRowCount, cloned.NodeID, &csf)
 		cloned.BlockType = MOCK_PERSISTENT_BLK
 	case MOCK_PERSISTENT_BLK:
 		csf := ldio.MockColSegmentFile{}
-		cloned.BufNode = part.BufMgr.RegisterNode(part.TypeSize*part.MaxRowCount, cloned.NodeID, &csf)
+		cloned.BufNode = cloned.BufMgr.RegisterNode(part.TypeSize*part.MaxRowCount, cloned.NodeID, &csf)
 		cloned.BlockType = MOCK_PERSISTENT_SORTED_BLK
 
 	default:
 		panic("not supported")
 	}
 
-	// cloned.Next = part.Next
-	runtime.SetFinalizer(cloned, func(p IColumnPart) {
-		id := p.GetID()
-		log.Infof("GC ColumnPart %s", id.String())
-		p.SetNext(nil)
-		p.Close()
-	})
+	blk.UnRef()
 	return cloned
 }
 

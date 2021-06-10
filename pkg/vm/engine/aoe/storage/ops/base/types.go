@@ -1,6 +1,6 @@
 package base
 
-import ()
+import "time"
 
 type IOpInternal interface {
 	PreExecute() error
@@ -11,4 +11,8 @@ type IOpInternal interface {
 type IOp interface {
 	OnExec() error
 	SetError(err error)
+	GetCreateTime() time.Time
+	GetStartTime() time.Time
+	GetEndTime() time.Time
+	GetExecutTime() int64
 }

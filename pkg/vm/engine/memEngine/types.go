@@ -12,6 +12,11 @@ type memEngine struct {
 	proc *process.Process
 }
 
+type database struct {
+	db   *kv.KV
+	proc *process.Process
+}
+
 type relation struct {
 	id string
 	db *kv.KV
