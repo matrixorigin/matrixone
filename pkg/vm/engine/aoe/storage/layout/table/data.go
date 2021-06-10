@@ -200,15 +200,27 @@ func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.Met
 	for _, meta := range info.Tables {
 		tbl := NewTableData(mtBufMgr, sstBufMgr, meta)
 		colTypes := meta.Schema.Types()
+		activeSeg := meta.GetActiveSegment()
 		for _, segMeta := range meta.Segments {
+			if activeSeg != nil {
+				if activeSeg.ID < segMeta.ID {
+					break
+				}
+			}
 			segType := col.UNSORTED_SEG
 			if segMeta.DataState == md.SORTED {
 				segType = col.SORTED_SEG
 			}
+			activeBlk := segMeta.GetActiveBlk()
 			for colIdx, colType := range colTypes {
 				colSeg := col.NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, segMeta)
 				defer colSeg.UnRef()
 				for _, blkMeta := range segMeta.Blocks {
+					if activeBlk != nil {
+						if activeBlk.ID <= blkMeta.ID {
+							break
+						}
+					}
 					blkId := *blkMeta.AsCommonID()
 					bufMgr := mtBufMgr
 					if segType == col.SORTED_SEG {

@@ -64,7 +64,7 @@ func (blk *Block) SetIndex(idx LogIndex) {
 }
 
 func (blk *Block) String() string {
-	s := fmt.Sprintf("Blk(%d-%d-%d)[%s]", blk.Segment.TableID, blk.Segment.ID, blk.ID, blk.TimeStamp.String())
+	s := fmt.Sprintf("Blk(%d-%d-%d)(%d)", blk.Segment.TableID, blk.Segment.ID, blk.ID, blk.BoundSate)
 	if blk.IsDeleted(NowMicro()) {
 		s += "[D]"
 	}

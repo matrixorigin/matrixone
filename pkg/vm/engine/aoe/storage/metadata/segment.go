@@ -3,6 +3,7 @@ package md
 import (
 	"errors"
 	"fmt"
+	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
@@ -58,13 +59,31 @@ func (seg *Segment) BlockIDs(args ...interface{}) map[uint64]uint64 {
 	return ids
 }
 
+func (seg *Segment) GetActiveBlk() *Block {
+	if seg.ActiveBlk >= len(seg.Blocks) {
+		return nil
+	}
+	return seg.Blocks[seg.ActiveBlk]
+}
+
+func (seg *Segment) NextActiveBlk() *Block {
+	var blk *Block
+	if seg.ActiveBlk >= len(seg.Blocks)-1 {
+		seg.ActiveBlk++
+		return blk
+	}
+	blk = seg.Blocks[seg.ActiveBlk]
+	seg.ActiveBlk++
+	return blk
+}
+
 func (seg *Segment) CreateBlock() (blk *Block, err error) {
 	blk = NewBlock(seg.Info.Sequence.GetBlockID(), seg)
 	return blk, err
 }
 
 func (seg *Segment) String() string {
-	s := fmt.Sprintf("Seg(%d-%d)", seg.TableID, seg.ID)
+	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d]", seg.TableID, seg.ID, seg.ActiveBlk)
 	s += "["
 	pos := 0
 	for _, blk := range seg.Blocks {
@@ -78,7 +97,7 @@ func (seg *Segment) String() string {
 	return s
 }
 
-func (seg *Segment) CloneBlock(id uint64) (blk *Block, err error) {
+func (seg *Segment) CloneBlock(id uint64, ctx CopyCtx) (blk *Block, err error) {
 	seg.RLock()
 	defer seg.RUnlock()
 	idx, ok := seg.IdMap[id]
@@ -86,7 +105,9 @@ func (seg *Segment) CloneBlock(id uint64) (blk *Block, err error) {
 		return nil, errors.New(fmt.Sprintf("block %d not found in segment %d", id, seg.ID))
 	}
 	blk = seg.Blocks[idx].Copy()
-	err = blk.Detach()
+	if !ctx.Attached {
+		err = blk.Detach()
+	}
 	return blk, err
 }
 
@@ -171,22 +192,43 @@ func (seg *Segment) GetMaxBlkID() uint64 {
 	return blkid
 }
 
-func (seg *Segment) Copy(ts ...int64) *Segment {
-	var t int64
-	if len(ts) == 0 {
-		t = NowMicro()
+func (seg *Segment) ReplayState() {
+	if seg.DataState >= CLOSED {
+		return
+	}
+	if len(seg.Blocks) == 0 {
+		seg.DataState = EMPTY
+		return
+	}
+	fullBlkCnt := 0
+	for _, blk := range seg.Blocks {
+		if blk.DataState == FULL {
+			fullBlkCnt++
+		}
+	}
+	if fullBlkCnt == 0 {
+		seg.DataState = EMPTY
+	} else if fullBlkCnt < int(seg.Info.Conf.SegmentMaxBlocks) {
+		seg.DataState = PARTIAL
 	} else {
-		t = ts[0]
+		seg.DataState = CLOSED
+	}
+}
+
+func (seg *Segment) Copy(ctx CopyCtx) *Segment {
+	if ctx.Ts == 0 {
+		ctx.Ts = NowMicro()
 	}
 	new_seg := NewSegment(seg.Info, seg.TableID, seg.ID, seg.Schema)
 	new_seg.TimeStamp = seg.TimeStamp
 	new_seg.MaxBlockCount = seg.MaxBlockCount
 	new_seg.DataState = seg.DataState
+	new_seg.BoundSate = seg.BoundSate
 	for _, v := range seg.Blocks {
-		if !v.Select(t) {
+		if !v.Select(ctx.Ts) {
 			continue
 		}
-		blk, _ := seg.CloneBlock(v.ID)
+		blk, _ := seg.CloneBlock(v.ID, ctx)
 		new_seg.IdMap[v.GetID()] = len(new_seg.Blocks)
 		new_seg.Blocks = append(new_seg.Blocks, blk)
 	}

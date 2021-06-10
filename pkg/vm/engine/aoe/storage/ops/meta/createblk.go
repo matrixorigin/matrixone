@@ -1,11 +1,11 @@
 package meta
 
 import (
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata"
-	// log "github.com/sirupsen/logrus"
 )
 
 func NewCreateBlkOp(ctx *OpCtx, tid uint64, tableData table.ITableData) *CreateBlkOp {
@@ -43,8 +43,11 @@ func (op *CreateBlkOp) Execute() error {
 		return err
 	}
 
-	seg, err := table.GetInfullSegment()
-	if err != nil {
+	seg := table.GetActiveSegment()
+	if seg == nil {
+		seg = table.NextActiveSegment()
+	}
+	if seg == nil {
 		seg, err = table.CreateSegment()
 		if err != nil {
 			return err
@@ -55,17 +58,31 @@ func (op *CreateBlkOp) Execute() error {
 		}
 		op.NewSegment = true
 	}
-	blk, err := seg.CreateBlock()
-	if err != nil {
-		return err
+
+	var cloned *md.Block
+	blk := seg.GetActiveBlk()
+	if blk == nil {
+		blk = seg.NextActiveBlk()
+	} else {
+		seg.NextActiveBlk()
 	}
-	err = seg.RegisterBlock(blk)
-	if err != nil {
-		return err
-	}
-	cloned, err := seg.CloneBlock(blk.ID)
-	if err != nil {
-		return err
+	if blk == nil {
+		blk, err = seg.CreateBlock()
+		if err != nil {
+			return err
+		}
+		err = seg.RegisterBlock(blk)
+		if err != nil {
+			return err
+		}
+		ctx := md.CopyCtx{}
+		cloned, err = seg.CloneBlock(blk.ID, ctx)
+		if err != nil {
+			return err
+		}
+	} else {
+		cloned = blk.Copy()
+		cloned.Detach()
 	}
 	op.Result = cloned
 	if op.TableData != nil {
@@ -88,6 +105,7 @@ func (op *CreateBlkOp) registerTableData(blk *md.Block) {
 		if op.NewSegment {
 			seg, err := column.RegisterSegment(blk.Segment)
 			if err != nil {
+				log.Error(err)
 				panic("should not happend")
 			}
 			seg.UnRef()

@@ -21,7 +21,7 @@ type UpdateOp struct {
 func (op *UpdateOp) updateBlock(blk *md.Block) error {
 	if blk.BoundSate != md.Detatched {
 		log.Errorf("")
-		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d", blk.ID, md.Detatched))
+		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d, but %d", blk.ID, md.Detatched, blk.BoundSate))
 	}
 
 	table, err := op.Ctx.Opts.Meta.Info.ReferenceTable(blk.Segment.TableID)
@@ -37,7 +37,9 @@ func (op *UpdateOp) updateBlock(blk *md.Block) error {
 	if err != nil {
 		return err
 	}
-	err = rblk.Update(blk)
+	tmpBlk := blk.Copy()
+	tmpBlk.Attach()
+	err = rblk.Update(tmpBlk)
 	if err != nil {
 		return err
 	}

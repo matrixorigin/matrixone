@@ -29,7 +29,7 @@ func (tbl *Table) GetID() uint64 {
 	return tbl.ID
 }
 
-func (tbl *Table) CloneSegment(segment_id uint64, ts ...int64) (seg *Segment, err error) {
+func (tbl *Table) CloneSegment(segment_id uint64, ctx CopyCtx) (seg *Segment, err error) {
 	tbl.RLock()
 	seg, err = tbl.referenceSegmentNoLock(segment_id)
 	if err != nil {
@@ -37,9 +37,11 @@ func (tbl *Table) CloneSegment(segment_id uint64, ts ...int64) (seg *Segment, er
 		return nil, err
 	}
 	tbl.RUnlock()
-	seg = seg.Copy(ts...)
-	err = seg.Detach()
-	return seg, err
+	segCpy := seg.Copy(ctx)
+	if !ctx.Attached {
+		err = segCpy.Detach()
+	}
+	return segCpy, err
 }
 
 func (tbl *Table) ReferenceBlock(segment_id, block_id uint64) (blk *Block, err error) {
@@ -120,6 +122,49 @@ func (tbl *Table) CreateSegment() (seg *Segment, err error) {
 	return seg, err
 }
 
+func (tbl *Table) NextActiveSegment() *Segment {
+	var seg *Segment
+	if tbl.ActiveSegment >= len(tbl.Segments) {
+		return seg
+	}
+	tbl.ActiveSegment++
+	return tbl.GetActiveSegment()
+	// if tbl.ActiveSegment <= len(tbl.Segments)-1 {
+	// 	seg = tbl.Segments[tbl.ActiveSegment]
+	// }
+	// return seg
+}
+
+func (tbl *Table) GetActiveSegment() *Segment {
+	if tbl.ActiveSegment >= len(tbl.Segments) {
+		return nil
+	}
+	seg := tbl.Segments[tbl.ActiveSegment]
+	blk := seg.GetActiveBlk()
+	if blk == nil && uint64(len(seg.Blocks)) == tbl.Info.Conf.SegmentMaxBlocks {
+		return nil
+	}
+	return seg
+	// for i := len(tbl.Segments) - 1; i >= 0; i-- {
+	// 	seg := tbl.Segments[i]
+	// 	if seg.DataState >= CLOSED {
+	// 		break
+	// 	} else if seg.DataState == EMPTY {
+	// 		active = seg
+	// 	} else if seg.DataState == PARTIAL {
+	// 		active = seg
+	// 		break
+	// 	} else if seg.DataState == FULL {
+	// 		activeBlk := seg.GetActiveBlock()
+	// 		if activeBlk != nil {
+	// 			active = seg
+	// 		}
+	// 		break
+	// 	}
+	// }
+	// return active
+}
+
 func (tbl *Table) GetInfullSegment() (seg *Segment, err error) {
 	tbl.RLock()
 	defer tbl.RUnlock()
@@ -132,7 +177,7 @@ func (tbl *Table) GetInfullSegment() (seg *Segment, err error) {
 }
 
 func (tbl *Table) String() string {
-	s := fmt.Sprintf("Tbl(%d)", tbl.ID)
+	s := fmt.Sprintf("Tbl(%d) %d", tbl.ID, tbl.ActiveSegment)
 	s += "["
 	for i, seg := range tbl.Segments {
 		if i != 0 {
@@ -190,21 +235,18 @@ func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {
 	return segid, blkid
 }
 
-func (tbl *Table) Copy(ts ...int64) *Table {
-	var t int64
-	if len(ts) == 0 {
-		t = NowMicro()
-	} else {
-		t = ts[0]
+func (tbl *Table) Copy(ctx CopyCtx) *Table {
+	if ctx.Ts == 0 {
+		ctx.Ts = NowMicro()
 	}
 	new_tbl := NewTable(tbl.Info, tbl.Schema, tbl.ID)
 	new_tbl.TimeStamp = tbl.TimeStamp
 	new_tbl.BoundSate = tbl.BoundSate
 	for _, v := range tbl.Segments {
-		if !v.Select(t) {
+		if !v.Select(ctx.Ts) {
 			continue
 		}
-		seg, _ := tbl.CloneSegment(v.ID)
+		seg, _ := tbl.CloneSegment(v.ID, ctx)
 		new_tbl.IdMap[seg.GetID()] = len(new_tbl.Segments)
 		new_tbl.Segments = append(new_tbl.Segments, seg)
 	}

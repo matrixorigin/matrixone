@@ -18,8 +18,8 @@ type GetSSOp struct {
 }
 
 func (op *GetSSOp) Execute() error {
-	ts := md.NowMicro()
-	op.SS = op.Ctx.Opts.Meta.Info.Copy(ts)
+	ctx := md.CopyCtx{Ts: md.NowMicro(), Attached: true}
+	op.SS = op.Ctx.Opts.Meta.Info.Copy(ctx)
 	if op.SS == nil {
 		return errors.New("empty metainfo")
 	}

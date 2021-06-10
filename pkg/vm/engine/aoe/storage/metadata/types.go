@@ -67,6 +67,7 @@ type Segment struct {
 	MaxBlockCount uint64
 	Count         uint64
 	Blocks        []*Block
+	ActiveBlk     int
 	IdMap         map[uint64]int
 	DataState     DataState
 	Info          *MetaInfo `json:"-"`
@@ -88,12 +89,13 @@ type Table struct {
 	BoundSate
 	sync.RWMutex
 	TimeStamp
-	ID         uint64
-	Segments   []*Segment
-	IdMap      map[uint64]int `json:"-"`
-	SegmentCnt uint64
-	Info       *MetaInfo `json:"-"`
-	Schema     *Schema
+	ID            uint64
+	Segments      []*Segment
+	SegmentCnt    uint64
+	ActiveSegment int            `json:"-"`
+	IdMap         map[uint64]int `json:"-"`
+	Info          *MetaInfo      `json:"-"`
+	Schema        *Schema
 }
 
 type Configuration struct {
@@ -111,4 +113,9 @@ type MetaInfo struct {
 	TableIds   map[uint64]bool   `json:"-"`
 	NameMap    map[string]uint64 `json:"-"`
 	Tombstone  map[uint64]bool   `json:"-"`
+}
+
+type CopyCtx struct {
+	Ts       int64
+	Attached bool
 }

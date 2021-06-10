@@ -80,7 +80,8 @@ func TestBasicOps(t *testing.T) {
 	du := time.Since(now)
 	t.Log(du)
 
-	info_copy := info.Copy()
+	ctx := md.CopyCtx{Attached: true}
+	info_copy := info.Copy(ctx)
 
 	path := "/tmp/tttttt"
 	w, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0666)

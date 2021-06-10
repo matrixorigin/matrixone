@@ -91,7 +91,8 @@ func TestUpgradeBlkOp(t *testing.T) {
 		var ops []*UpgradeBlkOp
 		segMeta, _ := tableMeta.ReferenceSegment(segID.SegmentID)
 		blkID := segMeta.Blocks[0].AsCommonID()
-		blkMeta, err := segMeta.CloneBlock(blkID.BlockID)
+		cpCtx := md.CopyCtx{}
+		blkMeta, err := segMeta.CloneBlock(blkID.BlockID, cpCtx)
 		blkMeta.DataState = md.FULL
 		assert.Nil(t, err)
 		ctx := new(OpCtx)

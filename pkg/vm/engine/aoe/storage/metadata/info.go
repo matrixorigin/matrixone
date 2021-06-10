@@ -154,20 +154,17 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	return nil
 }
 
-func (info *MetaInfo) Copy(ts ...int64) *MetaInfo {
-	var t int64
-	if len(ts) == 0 {
-		t = NowMicro()
-	} else {
-		t = ts[0]
+func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
+	if ctx.Ts == 0 {
+		ctx.Ts = NowMicro()
 	}
 	new_info := NewMetaInfo(info.Conf)
 	new_info.CheckPoint = info.CheckPoint
 	for k, v := range info.Tables {
-		if !v.Select(t) {
+		if !v.Select(ctx.Ts) {
 			continue
 		}
-		tbl := v.Copy(ts...)
+		tbl := v.Copy(ctx)
 		new_info.Tables[k] = tbl
 	}
 
@@ -208,13 +205,38 @@ func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 			info.NameMap[tbl.Schema.Name] = tbl.ID
 		}
 		tbl.IdMap = make(map[uint64]int)
+		segFound := false
 		for idx, seg := range tbl.Segments {
 			tbl.IdMap[seg.GetID()] = idx
 			seg.Info = info
 			seg.Schema = tbl.Schema
-			for _, blk := range seg.Blocks {
+			blkFound := false
+			for iblk, blk := range seg.Blocks {
+				if !blkFound {
+					if blk.DataState < FULL {
+						blkFound = true
+						seg.ActiveBlk = iblk
+					} else {
+						seg.ActiveBlk++
+					}
+				}
 				blk.Segment = seg
 			}
+			if !segFound {
+				if seg.DataState < FULL {
+					segFound = true
+					tbl.ActiveSegment = idx
+				} else if seg.DataState == FULL {
+					blk := seg.GetActiveBlk()
+					if blk != nil {
+						tbl.ActiveSegment = idx
+						segFound = true
+					}
+				} else {
+					tbl.ActiveSegment++
+				}
+			}
+			// seg.ReplayState()
 		}
 	}
 
