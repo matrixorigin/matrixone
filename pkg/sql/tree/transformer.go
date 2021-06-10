@@ -7,7 +7,9 @@ import (
 	"github.com/pingcap/parser/mysql"
 	"github.com/pingcap/parser/opcode"
 	"github.com/pingcap/parser/test_driver"
+	"github.com/pingcap/parser/types"
 	"go/constant"
+	"strconv"
 )
 
 //transform test_driver.ValueExpr::Datum to tree.NumVal
@@ -16,22 +18,27 @@ import (
 func transformDatumToNumVal(datum *test_driver.Datum) *NumVal {
 	switch datum.Kind() {
 	case test_driver.KindNull: //go Unknown Value expresses the null value.
-		return NewNumVal(constant.MakeUnknown(), "", false)
+		return NewNumVal(constant.MakeUnknown(), "NULL", false)
 	case test_driver.KindInt64: //include mysql true,false
-		return NewNumVal(constant.MakeInt64(datum.GetInt64()), "", false)
+		orgStr := strconv.FormatInt(datum.GetInt64(),10)
+		return NewNumVal(constant.MakeInt64(datum.GetInt64()), orgStr, false)
 	case test_driver.KindUint64:
-		return NewNumVal(constant.MakeUint64(datum.GetUint64()), "", false)
+		orgStr := strconv.FormatUint(datum.GetUint64(),10)
+		return NewNumVal(constant.MakeUint64(datum.GetUint64()), orgStr, false)
 	case test_driver.KindFloat32:
-		return NewNumVal(constant.MakeFloat64(datum.GetFloat64()), "", false)
+		orgStr := strconv.FormatFloat(datum.GetFloat64(),'f',-1,64)
+		return NewNumVal(constant.MakeFloat64(datum.GetFloat64()), orgStr, false)
 	case test_driver.KindFloat64: //mysql 1.2E3, 1.2E-3, -1.2E3, -1.2E-3;
-		return NewNumVal(constant.MakeFloat64(datum.GetFloat64()), "", false)
+		orgStr := strconv.FormatFloat(datum.GetFloat64(),'f',-1,64)
+		return NewNumVal(constant.MakeFloat64(datum.GetFloat64()), orgStr, false)
 	case test_driver.KindString:
-		return NewNumVal(constant.MakeString(datum.GetString()), "", false)
+		return NewNumVal(constant.MakeString(datum.GetString()), datum.GetString(), false)
+	case test_driver.KindMysqlDecimal: //mysql .2, 3.4, -6.78, +9.10
+		deci := datum.GetMysqlDecimal().ToString()
+		return NewNumVal(constant.MakeFloat64(datum.GetFloat64()),string(deci),false)
 	case test_driver.KindBytes:
 		fallthrough
 	case test_driver.KindBinaryLiteral:
-		fallthrough
-	case test_driver.KindMysqlDecimal: //mysql .2, 3.4, -6.78, +9.10
 		fallthrough
 	case test_driver.KindMysqlDuration:
 		fallthrough
@@ -54,7 +61,7 @@ func transformDatumToNumVal(datum *test_driver.Datum) *NumVal {
 	case test_driver.KindMysqlJSON:
 		fallthrough
 	default:
-		panic("unsupported datum type")
+		panic(fmt.Errorf("unsupported datum type %v",datum.Kind()))
 	}
 }
 
@@ -419,6 +426,16 @@ func transformColumnNameListToNameList(cn []*ast.ColumnName) IdentifierList {
 	return l
 }
 
+//transform []*ast.ColumnName to []*tree.UnresolvedName
+func transformColumnNameListToUnresolvedNameList(cn []*ast.ColumnName) []*UnresolvedName {
+	var l []*UnresolvedName
+	for _, x := range cn {
+		un := transformColumnNameToUnresolvedName(x)
+		l = append(l, un)
+	}
+	return l
+}
+
 //transform []model.CIStr to tree.IdentifirList
 func transformCIStrToIdentifierList(ci []model.CIStr)IdentifierList{
 	var l IdentifierList
@@ -520,6 +537,12 @@ func transformColumnNameExprToUnresolvedName(cne *ast.ColumnNameExpr) *Unresolve
 	return ud
 }
 
+//transform ast.ColumnName to tree.UnresolvedName
+func transformColumnNameToUnresolvedName(cn *ast.ColumnName)*UnresolvedName{
+	ud, _ := NewUnresolvedName(cn.Schema.O, cn.Table.O, cn.Name.O)
+	return ud
+}
+
 //transform ast.FuncCallExpr to tree.FuncExpr
 func transformFuncCallExprToFuncExpr(fce *ast.FuncCallExpr) *FuncExpr {
 	fname, _ := NewUnresolvedName(fce.Schema.O, fce.FnName.O)
@@ -555,11 +578,10 @@ func transformAggregateFuncExprToFuncExpr(afe *ast.AggregateFuncExpr) *FuncExpr 
 	return NewFuncExpr(ft, fname, es, ob)
 }
 
-//transform ast.FuncCastExpr to tree.CastExpr
-func transformFuncCastExprToCastExpr(fce *ast.FuncCastExpr) *CastExpr {
-	e := transformExprNodeToExpr(fce.Expr)
+//transform types.FieldType to ResolvableTypeReference
+func transformFieldTypeToResolvableTypeReference(ft *types.FieldType)ResolvableTypeReference{
 	var t ResolvableTypeReference
-	switch fce.Tp.Tp {
+	switch ft.Tp {
 	case mysql.TypeUnspecified:
 		panic(fmt.Errorf("unsupported type"))
 	case mysql.TypeTiny:
@@ -619,6 +641,13 @@ func transformFuncCastExprToCastExpr(fce *ast.FuncCastExpr) *CastExpr {
 	default:
 		panic("unsupported cast type")
 	}
+	return t
+}
+
+//transform ast.FuncCastExpr to tree.CastExpr
+func transformFuncCastExprToCastExpr(fce *ast.FuncCastExpr) *CastExpr {
+	e := transformExprNodeToExpr(fce.Expr)
+	var t ResolvableTypeReference = transformFieldTypeToResolvableTypeReference(fce.Tp)
 	return NewCastExpr(e, t)
 }
 
@@ -737,6 +766,11 @@ func transformDefaultExprToDefaultVal(expr *ast.DefaultExpr)*DefaultVal{
 	return NewDefaultVal()
 }
 
+//transform ast.MaxValueExpr to tree.MaxValue
+func transformMaxValueExprToMaxValue(expr *ast.MaxValueExpr) *MaxValue {
+	return NewMaxValue()
+}
+
 //transform ast.ExprNode to tree.Expr
 func transformExprNodeToExpr(node ast.ExprNode) Expr {
 	switch n := node.(type) {
@@ -821,6 +855,8 @@ func transformExprNodeToExpr(node ast.ExprNode) Expr {
 		return transformIsTruthExprToComparisonExpr(n)
 	case *ast.DefaultExpr:
 		return transformDefaultExprToDefaultVal(n)
+	case *ast.MaxValueExpr:
+		return transformMaxValueExprToMaxValue(n)
 	}
 	panic(fmt.Errorf("unsupported node %v ", node))
 	return nil
@@ -1177,6 +1213,492 @@ func transformInsertStmtToInsert(is *ast.InsertStmt)*Insert{
 	return NewInsert(table, colums, sel, partition)
 }
 
-func transformCreateTableStmtTo(){
+//transform ast.IndexPartSpecification to tree.KeyPart
+func transformIndexPartSpecificationToKeyPart(ips *ast.IndexPartSpecification)*KeyPart{
+	cname := transformColumnNameToUnresolvedName(ips.Column)
+	var e Expr = nil
+	if ips.Expr != nil{
+		e = transformExprNodeToExpr(ips.Expr)
+	}
 
+	return NewKeyPart(cname,ips.Length,e)
+}
+
+//transform []*ast.IndexPartSpecification to []*KeyPart
+func transformIndexPartSpecificationArrayToKeyPartArray(ipsArr []*ast.IndexPartSpecification)[]*KeyPart{
+	var kparts []*KeyPart = make([]*KeyPart,len(ipsArr))
+	for i,p := range ipsArr{
+		kparts[i] = transformIndexPartSpecificationToKeyPart(p)
+	}
+	return kparts
+}
+
+//transform ast.ReferOptionType to tree.ReferenceOptionType
+func transformReferOptionTypeToReferenceOptionType(rot ast.ReferOptionType)ReferenceOptionType{
+	switch rot {
+	case ast.ReferOptionNoOption:
+		return REFERENCE_OPTION_INVALID
+	case ast.ReferOptionRestrict:
+		return REFERENCE_OPTION_RESTRICT
+	case ast.ReferOptionCascade:
+		return REFERENCE_OPTION_CASCADE
+	case ast.ReferOptionSetNull:
+		return REFERENCE_OPTION_SET_NULL
+	case ast.ReferOptionNoAction:
+		return REFERENCE_OPTION_NO_ACTION
+	case ast.ReferOptionSetDefault:
+		return REFERENCE_OPTION_SET_DEFAULT
+	}
+	panic(fmt.Errorf("invalid reference option %v",rot))
+	return REFERENCE_OPTION_INVALID
+}
+
+//transform ast.ReferenceDef to tree.AttributeReference
+func transformReferenceDefToAttributeReference(rd *ast.ReferenceDef)*AttributeReference{
+	tname := transformTableNameToTableName(rd.Table)
+	var kparts []*KeyPart = transformIndexPartSpecificationArrayToKeyPartArray(rd.IndexPartSpecifications)
+	var ondelete ReferenceOptionType = REFERENCE_OPTION_INVALID
+	if rd.OnDelete != nil{
+		ondelete = transformReferOptionTypeToReferenceOptionType(rd.OnDelete.ReferOpt)
+	}
+	var onupdate ReferenceOptionType = REFERENCE_OPTION_INVALID
+	if rd.OnUpdate != nil{
+		onupdate = transformReferOptionTypeToReferenceOptionType(rd.OnUpdate.ReferOpt)
+	}
+	var match MatchType = MATCH_INVALID
+	switch rd.Match {
+	case ast.MatchNone:
+		match = MATCH_INVALID
+	case ast.MatchFull:
+		match = MATCH_FULL
+	case ast.MatchPartial:
+		match = MATCH_PARTIAL
+	case ast.MatchSimple:
+		match = MATCH_SIMPLE
+	}
+	return NewAttributeReference(tname,kparts,match,ondelete,onupdate)
+}
+
+//transform ast.ColumnOption to tree.ColumnAttribute
+func transformColumnOptionToColumnAttribute(co *ast.ColumnOption) ColumnAttribute {
+	switch co.Tp {
+	case ast.ColumnOptionPrimaryKey:
+		return NewAttributePrimaryKey()
+	case ast.ColumnOptionNotNull:
+		return NewAttributeNull(false)
+	case ast.ColumnOptionAutoIncrement:
+		return NewAttributeAutoIncrement()
+	case ast.ColumnOptionDefaultValue:
+		e := transformExprNodeToExpr(co.Expr)
+		return NewAttributeDefault(e)
+	case ast.ColumnOptionUniqKey:
+		return NewAttributeUniqueKey()
+	case ast.ColumnOptionNull:
+		return NewAttributeNull(true)
+	case ast.ColumnOptionComment:
+		e := transformExprNodeToExpr(co.Expr)
+		return NewAttributeComment(e)
+	case ast.ColumnOptionGenerated:
+		e := transformExprNodeToExpr(co.Expr)
+		return NewAttributeGeneratedAlways(e,co.Stored)
+	case ast.ColumnOptionReference:
+		return transformReferenceDefToAttributeReference(co.Refer)
+	case ast.ColumnOptionCollate:
+		return NewAttributeCollate(co.StrValue)
+	case ast.ColumnOptionCheck:
+		e := transformExprNodeToExpr(co.Expr)
+		return NewAttributeCheck(e, co.Enforced, co.ConstraintName)
+	case ast.ColumnOptionColumnFormat:
+		return NewAttributeColumnFormat(co.StrValue)
+	case ast.ColumnOptionStorage:
+		return NewAttributeStorage(co.StrValue)
+	case ast.ColumnOptionAutoRandom:
+		return NewAttributeAutoRandom(co.AutoRandomBitLength)
+	case ast.ColumnOptionOnUpdate:
+		e := transformExprNodeToExpr(co.Expr)
+		return NewAttributeOnUpdate(e)
+	case ast.ColumnOptionFulltext:
+		fallthrough
+	case ast.ColumnOptionNoOption:
+		fallthrough
+	default:
+		panic(fmt.Errorf("invalid column option"))
+	}
+	panic(fmt.Errorf("invalid column option"))
+	return nil
+}
+
+//transform ast.ColumnDef to tree.ColumnTableDef
+func transformColumnDefToTableDef(cd *ast.ColumnDef)*ColumnTableDef{
+	name := transformColumnNameToUnresolvedName(cd.Name)
+	t := transformFieldTypeToResolvableTypeReference(cd.Tp)
+	var attr_arr []ColumnAttribute = make([]ColumnAttribute,len(cd.Options))
+	for i,op := range cd.Options{
+		attr_arr[i] = transformColumnOptionToColumnAttribute(op)
+	}
+
+	return NewColumnTableDef(name,t,attr_arr)
+}
+
+//transform model.IndexType to tree.IndexType
+func transformIndexTypeToIndexType(it model.IndexType)IndexType {
+	switch it {
+	case model.IndexTypeInvalid:
+		return INDEX_TYPE_INVALID
+	case model.IndexTypeBtree:
+		return INDEX_TYPE_BTREE
+	case model.IndexTypeHash:
+		return INDEX_TYPE_HASH
+	case model.IndexTypeRtree:
+		return INDEX_TYPE_RTREE
+	}
+	return INDEX_TYPE_INVALID
+}
+
+//transform ast.IndexVisibility to tree.VisibleType
+func transformIndexVisibilityToVisibleType(iv ast.IndexVisibility) VisibleType {
+	switch iv {
+	case ast.IndexVisibilityDefault:
+		return VISIBLE_TYPE_INVALID
+	case ast.IndexVisibilityVisible:
+		return VISIBLE_TYPE_VISIBLE
+	case ast.IndexVisibilityInvisible:
+		return VISIBLE_TYPE_INVISIBLE
+	}
+	return VISIBLE_TYPE_INVALID
+}
+
+//transform ast.IndexOption to tree.IndexOption
+func transformIndexOptionToIndexOption(io *ast.IndexOption)*IndexOption{
+	it := transformIndexTypeToIndexType(io.Tp)
+	vt := transformIndexVisibilityToVisibleType(io.Visibility)
+	return NewIndexOption(io.KeyBlockSize,it,io.ParserName.O,io.Comment,vt,"","")
+}
+
+//transform ast.Constraint to IndexTableDef
+func transformConstraintToIndexTableDef(c *ast.Constraint)IndexTableDef{
+	switch c.Tp {
+	case ast.ConstraintPrimaryKey:
+		var kparts []*KeyPart = transformIndexPartSpecificationArrayToKeyPartArray(c.Keys)
+		var io *IndexOption = nil
+		if c.Option != nil{
+			io = transformIndexOptionToIndexOption(c.Option)
+		}
+		return NewPrimaryKeyIndex(kparts,c.Name,c.IsEmptyIndex,io)
+	case ast.ConstraintIndex:
+		var kparts []*KeyPart = transformIndexPartSpecificationArrayToKeyPartArray(c.Keys)
+		var io *IndexOption = nil
+		if c.Option != nil{
+			io = transformIndexOptionToIndexOption(c.Option)
+		}
+		return NewIndex(kparts,c.Name,c.IsEmptyIndex,io)
+	case ast.ConstraintUniq:
+		var kparts []*KeyPart = transformIndexPartSpecificationArrayToKeyPartArray(c.Keys)
+		var io *IndexOption = nil
+		if c.Option != nil{
+			io = transformIndexOptionToIndexOption(c.Option)
+		}
+		return NewUniqueIndex(kparts,c.Name,c.IsEmptyIndex,io)
+	case ast.ConstraintForeignKey:
+		var kparts []*KeyPart = transformIndexPartSpecificationArrayToKeyPartArray(c.Keys)
+		var refer *AttributeReference = nil
+		if c.Refer != nil{
+			refer = transformReferenceDefToAttributeReference(c.Refer)
+		}
+		return NewForeignKey(c.IfNotExists,kparts,c.Name,refer,c.IsEmptyIndex)
+	case ast.ConstraintFulltext:
+		var kparts []*KeyPart = transformIndexPartSpecificationArrayToKeyPartArray(c.Keys)
+		var io *IndexOption = nil
+		if c.Option != nil{
+			io = transformIndexOptionToIndexOption(c.Option)
+		}
+		return NewFullTextIndex(kparts,c.Name,c.IsEmptyIndex,io)
+	case ast.ConstraintCheck:
+		e := transformExprNodeToExpr(c.Expr)
+		return NewCheckIndex(e,c.Enforced)
+	case ast.ConstraintNoConstraint:
+		fallthrough
+	case ast.ConstraintKey:
+		fallthrough
+	case ast.ConstraintUniqKey:
+		fallthrough
+	case ast.ConstraintUniqIndex:
+		fallthrough
+	default:
+		panic(fmt.Errorf("unsupported constraint %v",c.Tp))
+	}
+	return nil
+}
+
+//transform ast.RowFormat to tree.RowFormatType
+func transformRowFormatToRowFormatType(rf uint64)RowFormatType{
+	switch rf {
+	case ast.RowFormatDefault:
+		return ROW_FORMAT_DEFAULT
+	case ast.RowFormatDynamic:
+		return ROW_FORMAT_DYNAMIC
+	case ast.RowFormatFixed:
+		return ROW_FORMAT_FIXED
+	case ast.RowFormatCompressed:
+		return ROW_FORMAT_COMPRESSED
+	case ast.RowFormatRedundant:
+		return ROW_FORMAT_REDUNDANT
+	case ast.RowFormatCompact:
+		return ROW_FORMAT_COMPACT
+	case ast.TokuDBRowFormatDefault:
+		fallthrough
+	case ast.TokuDBRowFormatFast:
+		fallthrough
+	case ast.TokuDBRowFormatSmall:
+		fallthrough
+	case ast.TokuDBRowFormatZlib:
+		fallthrough
+	case ast.TokuDBRowFormatQuickLZ:
+		fallthrough
+	case ast.TokuDBRowFormatLzma:
+		fallthrough
+	case ast.TokuDBRowFormatSnappy:
+		fallthrough
+	case ast.TokuDBRowFormatUncompressed:
+		fallthrough
+	default:
+		panic(fmt.Errorf("unsupported row format %v",rf))
+	}
+	return ROW_FORMAT_DEFAULT
+}
+
+//transform ast.TableOption to tree.TableOption
+func transformTableOptionToTableOption(to *ast.TableOption) TableOption {
+	switch to.Tp {
+	case ast.TableOptionEngine:
+		return NewTableOptionEngine(to.StrValue)
+	case ast.TableOptionCharset:
+		return NewTableOptionCharset(to.StrValue)
+	case ast.TableOptionCollate:
+		return NewTableOptionCollate(to.StrValue)
+	case ast.TableOptionAutoIncrement:
+		return NewTableOptionAutoIncrement(to.UintValue)
+	case ast.TableOptionComment:
+		return NewTableOptionComment(to.StrValue)
+	case ast.TableOptionAvgRowLength:
+		return NewTableOptionAvgRowLength(to.UintValue)
+	case ast.TableOptionCheckSum:
+		return NewTableOptionChecksum(to.UintValue)
+	case ast.TableOptionCompression:
+		return NewTableOptionCompression(to.StrValue)
+	case ast.TableOptionConnection:
+		return NewTableOptionConnection(to.StrValue)
+	case ast.TableOptionPassword:
+		return NewTableOptionPassword(to.StrValue)
+	case ast.TableOptionKeyBlockSize:
+		return NewTableOptionKeyBlockSize(to.UintValue)
+	case ast.TableOptionMaxRows:
+		return NewTableOptionMaxRows(to.UintValue)
+	case ast.TableOptionMinRows:
+		return NewTableOptionMinRows(to.UintValue)
+	case ast.TableOptionDelayKeyWrite:
+		return NewTableOptionDelayKeyWrite(to.UintValue)
+	case ast.TableOptionRowFormat:
+		ft := transformRowFormatToRowFormatType(to.UintValue)
+		return NewTableOptionRowFormat(ft)
+	case ast.TableOptionStatsPersistent:
+		return NewTableOptionStatsPersistent()
+	case ast.TableOptionStatsAutoRecalc:
+		return NewTableOptionStatsAutoRecalc(to.UintValue,to.Default)
+	case ast.TableOptionPackKeys:
+		return NewTableOptionPackKeys()
+	case ast.TableOptionTablespace:
+		return NewTableOptionTablespace(to.StrValue)
+	case ast.TableOptionDataDirectory:
+		return NewTableOptionDataDirectory(to.StrValue)
+	case ast.TableOptionIndexDirectory:
+		return NewTableOptionIndexDirectory(to.StrValue)
+	case ast.TableOptionStorageMedia:
+		return NewTableOptionStorageMedia(to.StrValue)
+	case ast.TableOptionStatsSamplePages:
+		return NewTableOptionStatsSamplePages(to.UintValue,to.Default)
+	case ast.TableOptionSecondaryEngine:
+		return NewTableOptionSecondaryEngine(to.StrValue)
+	case ast.TableOptionSecondaryEngineNull:
+		return NewTableOptionSecondaryEngineNull()
+	case ast.TableOptionUnion:
+		var name []*TableName = make([]*TableName,len(to.TableNames))
+		for i,tn := range to.TableNames{
+			name[i] = transformTableNameToTableName(tn)
+		}
+		return NewTableOptionUnion(name)
+	case ast.TableOptionEncryption:
+		return NewTableOptionEncryption(to.StrValue)
+	case ast.TableOptionNone://mysql 8.0 does not have it
+	case ast.TableOptionAutoIdCache://mysql 8.0 does not have it
+	case ast.TableOptionAutoRandomBase://mysql 8.0 does not have it
+	case ast.TableOptionShardRowID://mysql 8.0 does not have it
+	case ast.TableOptionPreSplitRegion://mysql 8.0 does not have it
+	case ast.TableOptionNodegroup://mysql 8.0 does not have it
+	case ast.TableOptionInsertMethod://mysql 8.0 does not have it
+	case ast.TableOptionTableCheckSum://mysql 8.0 does not have it
+	default:
+		panic(fmt.Errorf("unsupported table option"))
+	}
+	return nil
+}
+
+//transform ast.PartitionMethod to tree.PartitionBy
+func transformPartitionMethodToPartitionBy(pm *ast.PartitionMethod)*PartitionBy{
+	var partType PartitionType
+	switch pm.Tp {
+	case model.PartitionTypeRange:
+		var e Expr = nil
+		var c []*UnresolvedName = nil
+		if pm.Expr != nil{
+			e = transformExprNodeToExpr(pm.Expr)
+		}
+		if pm.ColumnNames != nil{
+			c = transformColumnNameListToUnresolvedNameList(pm.ColumnNames)
+		}
+		partType = NewRangeType(e,c)
+	case model.PartitionTypeHash:
+		var e Expr = nil
+		if pm.Expr != nil{
+			e = transformExprNodeToExpr(pm.Expr)
+		}
+		partType = NewHashType(pm.Linear,e)
+	case model.PartitionTypeList:
+		var e Expr = nil
+		var c []*UnresolvedName = nil
+		if pm.Expr != nil{
+			e = transformExprNodeToExpr(pm.Expr)
+		}
+		if pm.ColumnNames != nil{
+			c = transformColumnNameListToUnresolvedNameList(pm.ColumnNames)
+		}
+		partType = NewListType(e,c)
+	case model.PartitionTypeKey:
+		var c []*UnresolvedName = nil
+		if pm.ColumnNames != nil{
+			c = transformColumnNameListToUnresolvedNameList(pm.ColumnNames)
+		}
+		partType = NewKeyType(pm.Linear,c)
+	default:
+		panic(fmt.Errorf("unsupported partition type %v",pm.Tp))
+	}
+	return NewPartitionBy(partType,pm.Num)
+}
+
+//transform ast.PartitionDefinitionClause to tree.Values
+func transformPartitionDefinitionClauseToValues(pdc ast.PartitionDefinitionClause) Values {
+	switch n := pdc.(type) {
+	case *ast.PartitionDefinitionClauseLessThan:
+		var el Exprs = make([]Expr,len(n.Exprs))
+		for i,e := range n.Exprs{
+			el[i] = transformExprNodeToExpr(e)
+		}
+		return NewValuesLessThan(el)
+	case *ast.PartitionDefinitionClauseIn:
+		var el []Exprs = make([]Exprs,len(n.Values))
+		for i,v := range n.Values{
+			el[i] = make([]Expr,len(v))
+			for j,vv := range v{
+				el[i][j] = transformExprNodeToExpr(vv)
+			}
+		}
+		return NewValuesIn(el)
+	case *ast.PartitionDefinitionClauseNone:
+	case *ast.PartitionDefinitionClauseHistory:
+	default:
+		panic(fmt.Errorf("unsupported PartitionDefinitionClause %v ",n))
+	}
+	return nil
+}
+
+//transform ast.SubPartitionDefinition to tree.SubPartition
+func transformSubPartitionDefinitionToSubPartition(spd *ast.SubPartitionDefinition)*SubPartition  {
+	var options []TableOption = nil
+	if spd.Options != nil{
+		options = make([]TableOption,len(spd.Options))
+		for i,o := range spd.Options{
+			options[i] = transformTableOptionToTableOption(o)
+		}
+	}
+	return NewSubPartition(Identifier(spd.Name.O),options)
+}
+
+//transform ast.PartitionDefinition to tree.Partition
+func transformPartitionDefinitionToPartition(pd *ast.PartitionDefinition) *Partition {
+	name := Identifier(pd.Name.O)
+	var values Values = nil
+	if pd.Clause != nil {
+		values = transformPartitionDefinitionClauseToValues(pd.Clause)
+	}
+
+	var options []TableOption = nil
+	if pd.Options != nil{
+		options = make([]TableOption,len(pd.Options))
+		for i,o := range pd.Options{
+			options[i] = transformTableOptionToTableOption(o)
+		}
+	}
+
+	var subs []*SubPartition = nil
+	if pd.Sub != nil {
+		subs = make([]*SubPartition,len(pd.Sub))
+		for i,s := range pd.Sub{
+			subs[i] = transformSubPartitionDefinitionToSubPartition(s)
+		}
+	}
+
+	return NewPartition(name,values,options,subs)
+}
+
+//transform ast.PartitionOptions to tree.PartitionOption
+func transformPartitionOptionsToPartitionOption(po *ast.PartitionOptions)*PartitionOption{
+	var partBy *PartitionBy = transformPartitionMethodToPartitionBy(&po.PartitionMethod)
+	var subPartBy *PartitionBy = nil
+	if po.Sub != nil{
+		subPartBy = transformPartitionMethodToPartitionBy(po.Sub)
+	}
+
+	var parts []*Partition = nil
+	if po.Definitions != nil{
+		parts = make([]*Partition,len(po.Definitions))
+		for i,d := range po.Definitions{
+			parts[i] = transformPartitionDefinitionToPartition(d)
+		}
+	}
+
+	return NewPartitionOption(partBy,subPartBy,parts)
+}
+
+//transform ast.CreateTableStmt to tree.CreateTable
+func transformCreateTableStmtToCreateTable(cts *ast.CreateTableStmt)*CreateTable{
+	table := transformTableNameToTableName(cts.Table)
+	var defs TableDefs = make([]TableDef,len(cts.Cols) + len(cts.Constraints))
+	for i,col := range cts.Cols{
+		defs[i] = transformColumnDefToTableDef(col)
+	}
+
+	for i,ct := range cts.Constraints{
+		defs[i + len(cts.Cols)] = transformConstraintToIndexTableDef(ct)
+	}
+
+	var options []TableOption = nil
+	if cts.Options != nil{
+		options = make([]TableOption,len(cts.Options))
+		for i,to := range cts.Options{
+			options[i] = transformTableOptionToTableOption(to)
+		}
+	}
+
+	var partition *PartitionOption = nil
+	if cts.Partition != nil{
+		partition = transformPartitionOptionsToPartitionOption(cts.Partition)
+	}
+
+	return &CreateTable{
+		IfNotExists: cts.IfNotExists,
+		Table:       *table,
+		Defs:        defs,
+		Options: options,
+		PartitionOption: partition,
+	}
 }
