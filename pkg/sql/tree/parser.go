@@ -22,10 +22,17 @@ func (p *Parser) Parse(sql string) ([]Statement, error) {
 
 	var tree_stmt []Statement = make([]Statement, len(stmtNodes))
 	for i, stmt := range stmtNodes {
-		if ss, ok := stmt.(*ast.SelectStmt); !ok {
+		switch st := stmt.(type) {
+		case *ast.SelectStmt:
+			tree_stmt[i] = transformSelectStmtToSelect(st)
+		case *ast.SetOprStmt:
+			tree_stmt[i] = transformSetOprStmtToSelectStatement(st)
+		case *ast.InsertStmt:
+			tree_stmt[i] = transformInsertStmtToInsert(st)
+		case *ast.CreateTableStmt:
+			tree_stmt[i] = transformCreateTableStmtToCreateTable(st)
+		default:
 			return nil, fmt.Errorf("parser parse failed.error:%v", err)
-		} else {
-			tree_stmt[i] = transformSelectStmtToSelect(ss)
 		}
 	}
 	return tree_stmt, nil

@@ -499,3 +499,11 @@ type DefaultVal struct{
 func NewDefaultVal()*DefaultVal{
 	return &DefaultVal{}
 }
+
+type MaxValue struct {
+	exprImpl
+}
+
+func NewMaxValue()*MaxValue{
+	return &MaxValue{}
+}

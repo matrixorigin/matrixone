@@ -59,6 +59,10 @@ SELECT u.a,(SELECT t.a FROM sa.t,u)
 			ss := transformInsertStmtToInsert(n)
 
 			fmt.Printf("ss %v\n",ss.Rows != nil)
+		case *ast.CreateTableStmt:
+			ss := transformCreateTableStmtToCreateTable(n)
+
+			fmt.Printf("ss %v\n",ss.IfNotExists)
 		}
 
 	}
@@ -90,22 +94,23 @@ func Test_transformDatumToNumVal(t *testing.T) {
 		args args
 		want *NumVal
 	}{
-		{"t1", args{&t1}, NewNumVal(constant.MakeInt64(math.MaxInt64), "", false)},
-		{"t2", args{&t2}, NewNumVal(constant.MakeInt64(math.MinInt64), "", false)},
-		{"t3", args{&t3}, NewNumVal(constant.MakeUnknown(), "", false)},
-		{"t4", args{&t4}, NewNumVal(constant.MakeUint64(math.MaxUint64/2), "", false)},
-		{"t5", args{&t5}, NewNumVal(constant.MakeUint64(0), "", false)},
-		{"t6", args{&t6}, NewNumVal(constant.MakeFloat64(math.MaxFloat32), "", false)},
-		{"t7", args{&t7}, NewNumVal(constant.MakeFloat64(-math.MaxFloat32), "", false)},
-		{"t8", args{&t8}, NewNumVal(constant.MakeFloat64(math.MaxFloat64), "", false)},
-		{"t9", args{&t9}, NewNumVal(constant.MakeFloat64(-math.MaxFloat64), "", false)},
-		{"t10", args{&t10}, NewNumVal(constant.MakeString(s), "", false)},
-		{"t11", args{&t11}, NewNumVal(constant.MakeInt64(1), "", false)},
-		{"t12", args{&t12}, NewNumVal(constant.MakeInt64(0), "", false)},
+		{"t1", args{&t1}, NewNumVal(constant.MakeInt64(math.MaxInt64), "9223372036854775807", false)},
+		{"t2", args{&t2}, NewNumVal(constant.MakeInt64(math.MinInt64), "-9223372036854775808", false)},
+		{"t3", args{&t3}, NewNumVal(constant.MakeUnknown(), "NULL", false)},
+		{"t4", args{&t4}, NewNumVal(constant.MakeUint64(math.MaxUint64/2), "9223372036854775807", false)},
+		{"t5", args{&t5}, NewNumVal(constant.MakeUint64(0), "0", false)},
+		{"t6", args{&t6}, NewNumVal(constant.MakeFloat64(math.MaxFloat32), "340282346638528860000000000000000000000", false)},
+		{"t7", args{&t7}, NewNumVal(constant.MakeFloat64(-math.MaxFloat32), "-340282346638528860000000000000000000000", false)},
+		{"t8", args{&t8}, NewNumVal(constant.MakeFloat64(math.MaxFloat64), "179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", false)},
+		{"t9", args{&t9}, NewNumVal(constant.MakeFloat64(-math.MaxFloat64), "-179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", false)},
+		{"t10", args{&t10}, NewNumVal(constant.MakeString(s), s, false)},
+		{"t11", args{&t11}, NewNumVal(constant.MakeInt64(1), "1", false)},
+		{"t12", args{&t12}, NewNumVal(constant.MakeInt64(0), "0", false)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := transformDatumToNumVal(tt.args.datum); !reflect.DeepEqual(got, tt.want) {
+			if got := transformDatumToNumVal(tt.args.datum);
+			!reflect.DeepEqual(got, tt.want) {
 				t.Errorf("transformDatumToNumVal() = %v, want %v", got, tt.want)
 			}
 		})
@@ -139,14 +144,14 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 	eTrue := ast.NewValueExpr(true, "", "")
 	eFalse := ast.NewValueExpr(false, "", "")
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	f3 := NewNumVal(constant.MakeInt64(3), "", false)
-	f4 := NewNumVal(constant.MakeInt64(4), "", false)
-	f5 := NewNumVal(constant.MakeInt64(5), "", false)
-	f6 := NewNumVal(constant.MakeInt64(6), "", false)
-	fTrue := NewNumVal(constant.MakeInt64(1), "", false)
-	fFalse := NewNumVal(constant.MakeInt64(0), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f3 := NewNumVal(constant.MakeInt64(3), "3", false)
+	f4 := NewNumVal(constant.MakeInt64(4), "4", false)
+	f5 := NewNumVal(constant.MakeInt64(5), "5", false)
+	f6 := NewNumVal(constant.MakeInt64(6), "6", false)
+	fTrue := NewNumVal(constant.MakeInt64(1), "1", false)
+	fFalse := NewNumVal(constant.MakeInt64(0), "0", false)
 
 	//2 * 3
 	t11 := &ast.BinaryOperationExpr{
@@ -678,16 +683,16 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 		args args
 		want Expr
 	}{
-		{"t1", args{t1}, NewNumVal(constant.MakeInt64(math.MaxInt64), "", false)},
-		{"t2", args{t2}, NewNumVal(constant.MakeInt64(math.MinInt64), "", false)},
-		{"t3", args{t3}, NewNumVal(constant.MakeUnknown(), "", false)},
-		{"t4", args{t4}, NewNumVal(constant.MakeUint64(math.MaxUint64/2), "", false)},
-		{"t5", args{t5}, NewNumVal(constant.MakeUint64(0), "", false)},
-		{"t6", args{t6}, NewNumVal(constant.MakeFloat64(math.MaxFloat32), "", false)},
-		{"t7", args{t7}, NewNumVal(constant.MakeFloat64(-math.MaxFloat32), "", false)},
-		{"t8", args{t8}, NewNumVal(constant.MakeFloat64(math.MaxFloat64), "", false)},
-		{"t9", args{t9}, NewNumVal(constant.MakeFloat64(-math.MaxFloat64), "", false)},
-		{"t10", args{t10}, NewNumVal(constant.MakeString(s), "", false)},
+		{"t1", args{t1}, NewNumVal(constant.MakeInt64(math.MaxInt64), "9223372036854775807", false)},
+		{"t2", args{t2}, NewNumVal(constant.MakeInt64(math.MinInt64), "-9223372036854775808", false)},
+		{"t3", args{t3}, NewNumVal(constant.MakeUnknown(), "NULL", false)},
+		{"t4", args{t4}, NewNumVal(constant.MakeUint64(math.MaxUint64/2), "9223372036854775807", false)},
+		{"t5", args{t5}, NewNumVal(constant.MakeUint64(0), "0", false)},
+		{"t6", args{t6}, NewNumVal(constant.MakeFloat64(math.MaxFloat32), "340282346638528860000000000000000000000", false)},
+		{"t7", args{t7}, NewNumVal(constant.MakeFloat64(-math.MaxFloat32), "-340282346638528860000000000000000000000", false)},
+		{"t8", args{t8}, NewNumVal(constant.MakeFloat64(math.MaxFloat64), "179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", false)},
+		{"t9", args{t9}, NewNumVal(constant.MakeFloat64(-math.MaxFloat64), "-179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000", false)},
+		{"t10", args{t10}, NewNumVal(constant.MakeString(s), s, false)},
 		{"t11", args{t11}, t11Want},
 		{"t12", args{t12}, t12Want},
 		{"t13", args{t13}, t13Want},
@@ -741,7 +746,8 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := transformExprNodeToExpr(tt.args.node); !reflect.DeepEqual(got, tt.want) {
+			if got := transformExprNodeToExpr(tt.args.node);
+			!reflect.DeepEqual(got, tt.want) {
 				t.Errorf("transformExprNodeToExpr() = %v, want %v", got, tt.want)
 			}
 		})
@@ -2454,9 +2460,9 @@ func gen_transform_t8() (*ast.SelectStmt, *Select) {
 	}
 
 	//having t.a = 'jj' and v.c > 1000
-	want_tjj := NewNumVal(constant.MakeString("jj"), "", false)
+	want_tjj := NewNumVal(constant.MakeString("jj"), "jj", false)
 	want_t_a_eq_tjj := NewComparisonExpr(EQUAL, want_t_a, want_tjj)
-	want_v_c_gt_1000 := NewComparisonExpr(GREAT_THAN, want_v_c, NewNumVal(constant.MakeInt64(1000), "", false))
+	want_v_c_gt_1000 := NewComparisonExpr(GREAT_THAN, want_v_c, NewNumVal(constant.MakeInt64(1000), "1000", false))
 	want_t_a_eq_tjj_and_v_c_gt_1000 := NewAndExpr(want_t_a_eq_tjj, want_v_c_gt_1000)
 	want_having := NewWhere(want_t_a_eq_tjj_and_v_c_gt_1000)
 	t1wantFieldList := []SelectExpr{
@@ -2780,9 +2786,9 @@ func gen_transform_t9() (*ast.SelectStmt, *Select) {
 	}
 
 	//having t.a = 'jj' and v.c > 1000
-	want_tjj := NewNumVal(constant.MakeString("jj"), "", false)
+	want_tjj := NewNumVal(constant.MakeString("jj"), "jj", false)
 	want_t_a_eq_tjj := NewComparisonExpr(EQUAL, want_t_a, want_tjj)
-	num1000 := NewNumVal(constant.MakeInt64(1000), "", false)
+	num1000 := NewNumVal(constant.MakeInt64(1000), "1000", false)
 	want_v_c_gt_1000 := NewComparisonExpr(GREAT_THAN, want_v_c, num1000)
 	want_t_a_eq_tjj_and_v_c_gt_1000 := NewAndExpr(want_t_a_eq_tjj, want_v_c_gt_1000)
 	want_having := NewWhere(want_t_a_eq_tjj_and_v_c_gt_1000)
@@ -2796,8 +2802,8 @@ func gen_transform_t9() (*ast.SelectStmt, *Select) {
 	}
 
 	//limit 100,2000
-	num100 := NewNumVal(constant.MakeInt64(100), "", false)
-	num2000 := NewNumVal(constant.MakeInt64(2000), "", false)
+	num100 := NewNumVal(constant.MakeInt64(100), "100", false)
+	num2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
 
 	want_limit := NewLimit(num100, num2000)
 
@@ -3680,14 +3686,14 @@ func gen_insert_t1()(*ast.InsertStmt,*Insert){
 	eTrue := ast.NewValueExpr(true, "", "")
 	eFalse := ast.NewValueExpr(false, "", "")
 
-	f1 := NewNumVal(constant.MakeInt64(1), "", false)
-	f2 := NewNumVal(constant.MakeInt64(2), "", false)
-	f3 := NewNumVal(constant.MakeInt64(3), "", false)
-	f4 := NewNumVal(constant.MakeInt64(4), "", false)
-	f5 := NewNumVal(constant.MakeInt64(5), "", false)
-	f6 := NewNumVal(constant.MakeInt64(6), "", false)
-	fTrue := NewNumVal(constant.MakeInt64(1), "", false)
-	fFalse := NewNumVal(constant.MakeInt64(0), "", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f3 := NewNumVal(constant.MakeInt64(3), "3", false)
+	f4 := NewNumVal(constant.MakeInt64(4), "4", false)
+	f5 := NewNumVal(constant.MakeInt64(5), "5", false)
+	f6 := NewNumVal(constant.MakeInt64(6), "6", false)
+	fTrue := NewNumVal(constant.MakeInt64(1), "1", false)
+	fFalse := NewNumVal(constant.MakeInt64(0), "0", false)
 
 	//============================
 	u := gen_table("", "u")
@@ -3845,6 +3851,1287 @@ func Test_transformInsertStmtToInsert(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := transformInsertStmtToInsert(tt.args.is); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("transformInsertStmtToInsert() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_create_table_t1()(*ast.CreateTableStmt,*CreateTable){
+	sql := `create table if not exists A
+(
+	a int not null default 1 auto_increment unique primary key
+		COMMENT "a" 
+		collate utf8_bin 
+		column_format dynamic
+		STORAGE disk
+		REFERENCES B(b asc,c desc) match full on delete cascade on update restrict
+		CONSTRAINT cx check (b+c) enforced,
+	b int GENERATED ALWAYS AS (1+2) virtual,
+	index a_b_idx using btree (a,b) key_block_size 64 comment "a_b_idx"
+)engine = "innodb" ROW_FORMAT = dynamic comment = "table A" COMPRESSION = "lz4"
+PARTITION BY RANGE( YEAR(purchased) )
+PARTITIONS 3
+
+SUBPARTITION BY HASH( TO_DAYS(purchased) ) 
+SUBPARTITIONS 2
+
+(
+	PARTITION p0 VALUES LESS THAN (1990) 
+	engine = "innodb"
+	comment = "p0"
+	DATA DIRECTORY = "/data"
+	INDEX DIRECTORY = "/index"
+	max_rows = 1000
+	min_rows = 100
+	TABLESPACE = tspace
+	(
+		SUBPARTITION s0
+			engine = "innodb"
+			comment = "sub_s0"
+			DATA DIRECTORY = "/data/s0"
+			INDEX DIRECTORY = "/index/s0"
+			max_rows = 1000
+			min_rows = 100
+			TABLESPACE = tspace_s0
+		,
+		SUBPARTITION s1
+	),
+	PARTITION p1 VALUES LESS THAN (2000) (
+		SUBPARTITION s2,
+		SUBPARTITION s3
+	),
+	PARTITION p2 VALUES LESS THAN MAXVALUE (
+		SUBPARTITION s4,
+		SUBPARTITION s5
+	)
+);
+`
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.CreateTableStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+	year_name,_ := NewUnresolvedName("","YEAR")
+	purchased_name,_ := NewUnresolvedName("","","purchased")
+	to_days_name,_ := NewUnresolvedName("","TO_DAYS")
+
+	col1_attr_arr := []ColumnAttribute{
+		NewAttributeNull(false),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
+		NewAttributeAutoIncrement(),
+		NewAttributeUniqueKey(),
+		NewAttributePrimaryKey(),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
+		NewAttributeCollate("utf8_bin"),
+		NewAttributeColumnFormat("DYNAMIC"),
+		NewAttributeStorage("disk"),
+		NewAttributeReference(
+			NewTableName("B",ObjectNamePrefix{}),
+			[]*KeyPart{NewKeyPart(bname,-1,nil),NewKeyPart(cname,-1,nil)},
+			MATCH_FULL,
+			REFERENCE_OPTION_CASCADE,
+			REFERENCE_OPTION_RESTRICT,
+			),
+			NewAttributeCheck(
+				NewBinaryExpr(PLUS,bname,cname),
+				true,
+				"cx",
+				),
+	}
+
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+
+	col2_attr_arr := []ColumnAttribute{
+		NewAttributeGeneratedAlways(NewBinaryExpr(PLUS,f1,f2),false),
+	}
+
+	want_defs :=TableDefs{
+		NewColumnTableDef(aname,TYPE_LONG, col1_attr_arr),
+		NewColumnTableDef(bname,TYPE_LONG, col2_attr_arr),
+		NewIndex([]*KeyPart{NewKeyPart(aname,-1,nil),NewKeyPart(bname,-1,nil)},
+			"a_b_idx",
+			false,
+			NewIndexOption(64,INDEX_TYPE_BTREE,"","a_b_idx",VISIBLE_TYPE_INVALID,"",""),
+			),
+	}
+
+	table_options :=[]TableOption{
+		NewTableOptionEngine("innodb"),
+		NewTableOptionRowFormat(ROW_FORMAT_DYNAMIC),
+		NewTableOptionComment("table A"),
+		NewTableOptionCompression("lz4"),
+	}
+
+	partitions := []*Partition{
+		NewPartition(Identifier("p0"),
+			NewValuesLessThan([]Expr{f1990}),
+			[]TableOption{
+				NewTableOptionEngine("innodb"),
+				NewTableOptionComment("p0"),
+				NewTableOptionDataDirectory("/data"),
+				NewTableOptionIndexDirectory("/index"),
+				NewTableOptionMaxRows(1000),
+				NewTableOptionMinRows(100),
+				NewTableOptionTablespace("tspace"),
+			},
+			[]*SubPartition{
+				NewSubPartition(Identifier("s0"),
+					[]TableOption{
+						NewTableOptionEngine("innodb"),
+						NewTableOptionComment("sub_s0"),
+						NewTableOptionDataDirectory("/data/s0"),
+						NewTableOptionIndexDirectory("/index/s0"),
+						NewTableOptionMaxRows(1000),
+						NewTableOptionMinRows(100),
+						NewTableOptionTablespace("tspace_s0"),
+					},
+					),
+				NewSubPartition(Identifier("s1"),
+					[]TableOption{},
+					),
+			},
+			),
+			NewPartition(Identifier("p1"),
+				NewValuesLessThan([]Expr{f2000}),
+				[]TableOption{},
+				[]*SubPartition{
+					NewSubPartition(
+						Identifier("s2"),
+						[]TableOption{},
+					),
+					NewSubPartition(
+						Identifier("s3"),
+						[]TableOption{},
+						),
+				},
+				),
+		NewPartition(Identifier("p2"),
+			NewValuesLessThan([]Expr{NewMaxValue()}),
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s4"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s5"),
+					[]TableOption{},
+				),
+			},
+		),
+	}
+
+	partition_option := &PartitionOption{
+		PartBy:     PartitionBy{
+			NewRangeType(NewFuncExpr(0,year_name,[]Expr{purchased_name},nil),nil),
+			3,
+		},
+		SubPartBy:  NewPartitionBy(NewHashType(false,NewFuncExpr(0,to_days_name,[]Expr{purchased_name},nil)),2),
+		Partitions: partitions,
+	}
+
+	want:= &CreateTable{
+		IfNotExists:     true,
+		Table:           TableName{objName:objName{
+			ObjectNamePrefix: ObjectNamePrefix{},
+			ObjectName:       "A",
+		}},
+		Defs:            want_defs,
+		Options:         table_options,
+		PartitionOption: partition_option,
+	}
+
+	return n,want
+}
+
+func generate_create_table_t2()(*ast.CreateTableStmt,*CreateTable){
+	sql := `create table if not exists A
+(
+	a int not null default 1 auto_increment unique primary key
+		COMMENT "a" 
+		collate utf8_bin 
+		column_format dynamic
+		STORAGE disk
+		REFERENCES B(b asc,c desc) match full on delete cascade on update restrict
+		CONSTRAINT cx check (b+c) enforced,
+	b int GENERATED ALWAYS AS (1+2) virtual,
+	index a_b_idx using btree (a,b) key_block_size 64 comment "a_b_idx"
+)engine = "innodb" ROW_FORMAT = dynamic comment = "table A" COMPRESSION = "lz4"
+PARTITION BY LIST( YEAR(purchased) )
+PARTITIONS 3
+
+SUBPARTITION BY HASH( TO_DAYS(purchased) ) 
+SUBPARTITIONS 2
+
+(
+	PARTITION p0 VALUES IN (1990,1991,1992,1993) 
+	engine = "innodb"
+	comment = "p0"
+	DATA DIRECTORY = "/data"
+	INDEX DIRECTORY = "/index"
+	max_rows = 1000
+	min_rows = 100
+	TABLESPACE = tspace
+	(
+		SUBPARTITION s0
+			engine = "innodb"
+			comment = "sub_s0"
+			DATA DIRECTORY = "/data/s0"
+			INDEX DIRECTORY = "/index/s0"
+			max_rows = 1000
+			min_rows = 100
+			TABLESPACE = tspace_s0
+		,
+		SUBPARTITION s1
+	),
+	PARTITION p1 VALUES IN (2000,2001,2002,2003) (
+		SUBPARTITION s2,
+		SUBPARTITION s3
+	),
+	PARTITION p2 VALUES IN (NULL,NULL,NULL,NULL) (
+		SUBPARTITION s4,
+		SUBPARTITION s5
+	)
+);
+`
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.CreateTableStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+	year_name,_ := NewUnresolvedName("","YEAR")
+	purchased_name,_ := NewUnresolvedName("","","purchased")
+	to_days_name,_ := NewUnresolvedName("","TO_DAYS")
+
+	col1_attr_arr := []ColumnAttribute{
+		NewAttributeNull(false),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
+		NewAttributeAutoIncrement(),
+		NewAttributeUniqueKey(),
+		NewAttributePrimaryKey(),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
+		NewAttributeCollate("utf8_bin"),
+		NewAttributeColumnFormat("DYNAMIC"),
+		NewAttributeStorage("disk"),
+		NewAttributeReference(
+			NewTableName("B",ObjectNamePrefix{}),
+			[]*KeyPart{NewKeyPart(bname,-1,nil),NewKeyPart(cname,-1,nil)},
+			MATCH_FULL,
+			REFERENCE_OPTION_CASCADE,
+			REFERENCE_OPTION_RESTRICT,
+		),
+		NewAttributeCheck(
+			NewBinaryExpr(PLUS,bname,cname),
+			true,
+			"cx",
+		),
+	}
+
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	f1993 := NewNumVal(constant.MakeInt64(1993), "1993", false)
+
+	f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
+
+	null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
+
+	col2_attr_arr := []ColumnAttribute{
+		NewAttributeGeneratedAlways(NewBinaryExpr(PLUS,f1,f2),false),
+	}
+
+	want_defs :=TableDefs{
+		NewColumnTableDef(aname,TYPE_LONG, col1_attr_arr),
+		NewColumnTableDef(bname,TYPE_LONG, col2_attr_arr),
+		NewIndex([]*KeyPart{NewKeyPart(aname,-1,nil),NewKeyPart(bname,-1,nil)},
+			"a_b_idx",
+			false,
+			NewIndexOption(64,INDEX_TYPE_BTREE,"","a_b_idx",VISIBLE_TYPE_INVALID,"",""),
+		),
+	}
+
+	table_options :=[]TableOption{
+		NewTableOptionEngine("innodb"),
+		NewTableOptionRowFormat(ROW_FORMAT_DYNAMIC),
+		NewTableOptionComment("table A"),
+		NewTableOptionCompression("lz4"),
+	}
+
+	partitions := []*Partition{
+		NewPartition(Identifier("p0"),
+			NewValuesIn([]Exprs{[]Expr{f1990},[]Expr{f1991},[]Expr{f1992},[]Expr{f1993}}),
+			[]TableOption{
+				NewTableOptionEngine("innodb"),
+				NewTableOptionComment("p0"),
+				NewTableOptionDataDirectory("/data"),
+				NewTableOptionIndexDirectory("/index"),
+				NewTableOptionMaxRows(1000),
+				NewTableOptionMinRows(100),
+				NewTableOptionTablespace("tspace"),
+			},
+			[]*SubPartition{
+				NewSubPartition(Identifier("s0"),
+					[]TableOption{
+						NewTableOptionEngine("innodb"),
+						NewTableOptionComment("sub_s0"),
+						NewTableOptionDataDirectory("/data/s0"),
+						NewTableOptionIndexDirectory("/index/s0"),
+						NewTableOptionMaxRows(1000),
+						NewTableOptionMinRows(100),
+						NewTableOptionTablespace("tspace_s0"),
+					},
+				),
+				NewSubPartition(Identifier("s1"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p1"),
+			NewValuesIn([]Exprs{[]Expr{f2000},[]Expr{f2001},[]Expr{f2002},[]Expr{f2003}}),
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s2"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s3"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p2"),
+			NewValuesIn([]Exprs{[]Expr{null_val},[]Expr{null_val},[]Expr{null_val},[]Expr{null_val}}),
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s4"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s5"),
+					[]TableOption{},
+				),
+			},
+		),
+	}
+
+	partition_option := &PartitionOption{
+		PartBy:     PartitionBy{
+			NewListType(NewFuncExpr(0,year_name,[]Expr{purchased_name},nil),nil),
+			3,
+		},
+		SubPartBy:  NewPartitionBy(NewHashType(false,NewFuncExpr(0,to_days_name,[]Expr{purchased_name},nil)),2),
+		Partitions: partitions,
+	}
+
+	want:= &CreateTable{
+		IfNotExists:     true,
+		Table:           TableName{objName:objName{
+			ObjectNamePrefix: ObjectNamePrefix{},
+			ObjectName:       "A",
+		}},
+		Defs:            want_defs,
+		Options:         table_options,
+		PartitionOption: partition_option,
+	}
+
+	return n,want
+}
+
+func generate_create_table_t3()(*ast.CreateTableStmt,*CreateTable){
+	sql := `create table if not exists A
+(
+	a int not null default 1 auto_increment unique primary key
+		COMMENT "a" 
+		collate utf8_bin 
+		column_format dynamic
+		STORAGE disk
+		REFERENCES B(b asc,c desc) match full on delete cascade on update restrict
+		CONSTRAINT cx check (b+c) enforced,
+	b int GENERATED ALWAYS AS (1+2) virtual,
+	index a_b_idx using btree (a,b) key_block_size 64 comment "a_b_idx"
+)engine = "innodb" ROW_FORMAT = dynamic comment = "table A" COMPRESSION = "lz4"
+PARTITION BY LIST COLUMNS(a,b)
+PARTITIONS 3
+
+SUBPARTITION BY HASH( TO_DAYS(purchased) ) 
+SUBPARTITIONS 2
+
+(
+	PARTITION p0 VALUES IN ((1990,1991),(1992,1993)) 
+	engine = "innodb"
+	comment = "p0"
+	DATA DIRECTORY = "/data"
+	INDEX DIRECTORY = "/index"
+	max_rows = 1000
+	min_rows = 100
+	TABLESPACE = tspace
+	(
+		SUBPARTITION s0
+			engine = "innodb"
+			comment = "sub_s0"
+			DATA DIRECTORY = "/data/s0"
+			INDEX DIRECTORY = "/index/s0"
+			max_rows = 1000
+			min_rows = 100
+			TABLESPACE = tspace_s0
+		,
+		SUBPARTITION s1
+	),
+	PARTITION p1 VALUES IN ((2000,2001),(2002,2003)) (
+		SUBPARTITION s2,
+		SUBPARTITION s3
+	),
+	PARTITION p2 VALUES IN ((NULL,NULL),(NULL,NULL)) (
+		SUBPARTITION s4,
+		SUBPARTITION s5
+	)
+);
+`
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.CreateTableStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+	//year_name,_ := NewUnresolvedName("","YEAR")
+	purchased_name,_ := NewUnresolvedName("","","purchased")
+	to_days_name,_ := NewUnresolvedName("","TO_DAYS")
+
+	col1_attr_arr := []ColumnAttribute{
+		NewAttributeNull(false),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
+		NewAttributeAutoIncrement(),
+		NewAttributeUniqueKey(),
+		NewAttributePrimaryKey(),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
+		NewAttributeCollate("utf8_bin"),
+		NewAttributeColumnFormat("DYNAMIC"),
+		NewAttributeStorage("disk"),
+		NewAttributeReference(
+			NewTableName("B",ObjectNamePrefix{}),
+			[]*KeyPart{NewKeyPart(bname,-1,nil),NewKeyPart(cname,-1,nil)},
+			MATCH_FULL,
+			REFERENCE_OPTION_CASCADE,
+			REFERENCE_OPTION_RESTRICT,
+		),
+		NewAttributeCheck(
+			NewBinaryExpr(PLUS,bname,cname),
+			true,
+			"cx",
+		),
+	}
+
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	f1993 := NewNumVal(constant.MakeInt64(1993), "1993", false)
+
+	f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
+
+	null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
+
+	col2_attr_arr := []ColumnAttribute{
+		NewAttributeGeneratedAlways(NewBinaryExpr(PLUS,f1,f2),false),
+	}
+
+	want_defs :=TableDefs{
+		NewColumnTableDef(aname,TYPE_LONG, col1_attr_arr),
+		NewColumnTableDef(bname,TYPE_LONG, col2_attr_arr),
+		NewIndex([]*KeyPart{NewKeyPart(aname,-1,nil),NewKeyPart(bname,-1,nil)},
+			"a_b_idx",
+			false,
+			NewIndexOption(64,INDEX_TYPE_BTREE,"","a_b_idx",VISIBLE_TYPE_INVALID,"",""),
+		),
+	}
+
+	table_options :=[]TableOption{
+		NewTableOptionEngine("innodb"),
+		NewTableOptionRowFormat(ROW_FORMAT_DYNAMIC),
+		NewTableOptionComment("table A"),
+		NewTableOptionCompression("lz4"),
+	}
+
+	partitions := []*Partition{
+		NewPartition(Identifier("p0"),
+			NewValuesIn([]Exprs{[]Expr{f1990,f1991},[]Expr{f1992,f1993}}),
+			[]TableOption{
+				NewTableOptionEngine("innodb"),
+				NewTableOptionComment("p0"),
+				NewTableOptionDataDirectory("/data"),
+				NewTableOptionIndexDirectory("/index"),
+				NewTableOptionMaxRows(1000),
+				NewTableOptionMinRows(100),
+				NewTableOptionTablespace("tspace"),
+			},
+			[]*SubPartition{
+				NewSubPartition(Identifier("s0"),
+					[]TableOption{
+						NewTableOptionEngine("innodb"),
+						NewTableOptionComment("sub_s0"),
+						NewTableOptionDataDirectory("/data/s0"),
+						NewTableOptionIndexDirectory("/index/s0"),
+						NewTableOptionMaxRows(1000),
+						NewTableOptionMinRows(100),
+						NewTableOptionTablespace("tspace_s0"),
+					},
+				),
+				NewSubPartition(Identifier("s1"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p1"),
+			NewValuesIn([]Exprs{[]Expr{f2000,f2001},[]Expr{f2002,f2003}}),
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s2"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s3"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p2"),
+			NewValuesIn([]Exprs{[]Expr{null_val,null_val},[]Expr{null_val,null_val}}),
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s4"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s5"),
+					[]TableOption{},
+				),
+			},
+		),
+	}
+
+	partition_option := &PartitionOption{
+		PartBy:     PartitionBy{
+			NewListType(nil,[]*UnresolvedName{aname,bname}),
+			3,
+		},
+		SubPartBy:  NewPartitionBy(NewHashType(false,NewFuncExpr(0,to_days_name,[]Expr{purchased_name},nil)),2),
+		Partitions: partitions,
+	}
+
+	want:= &CreateTable{
+		IfNotExists:     true,
+		Table:           TableName{objName:objName{
+			ObjectNamePrefix: ObjectNamePrefix{},
+			ObjectName:       "A",
+		}},
+		Defs:            want_defs,
+		Options:         table_options,
+		PartitionOption: partition_option,
+	}
+
+	return n,want
+}
+
+func generate_create_table_t4()(*ast.CreateTableStmt,*CreateTable){
+	sql := `create table if not exists A
+(
+	a int not null default 1 auto_increment unique primary key
+		COMMENT "a" 
+		collate utf8_bin 
+		column_format dynamic
+		STORAGE disk
+		REFERENCES B(b asc,c desc) match full on delete cascade on update restrict
+		CONSTRAINT cx check (b+c) enforced,
+	b int GENERATED ALWAYS AS (1+2) virtual,
+	index a_b_idx using btree (a,b) key_block_size 64 comment "a_b_idx"
+)engine = "innodb" ROW_FORMAT = dynamic comment = "table A" COMPRESSION = "lz4"
+PARTITION BY RANGE COLUMNS(a,b)
+PARTITIONS 3
+
+SUBPARTITION BY HASH( TO_DAYS(purchased) ) 
+SUBPARTITIONS 2
+
+(
+	PARTITION p0 VALUES LESS THAN (1990,1991) 
+	engine = "innodb"
+	comment = "p0"
+	DATA DIRECTORY = "/data"
+	INDEX DIRECTORY = "/index"
+	max_rows = 1000
+	min_rows = 100
+	TABLESPACE = tspace
+	(
+		SUBPARTITION s0
+			engine = "innodb"
+			comment = "sub_s0"
+			DATA DIRECTORY = "/data/s0"
+			INDEX DIRECTORY = "/index/s0"
+			max_rows = 1000
+			min_rows = 100
+			TABLESPACE = tspace_s0
+		,
+		SUBPARTITION s1
+	),
+	PARTITION p1 VALUES LESS THAN (2000,2001) (
+		SUBPARTITION s2,
+		SUBPARTITION s3
+	),
+	PARTITION p2 VALUES LESS THAN (MAXVALUE,MAXVALUE) (
+		SUBPARTITION s4,
+		SUBPARTITION s5
+	)
+)
+;
+`
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.CreateTableStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+	//year_name,_ := NewUnresolvedName("","YEAR")
+	purchased_name,_ := NewUnresolvedName("","","purchased")
+	to_days_name,_ := NewUnresolvedName("","TO_DAYS")
+
+	col1_attr_arr := []ColumnAttribute{
+		NewAttributeNull(false),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
+		NewAttributeAutoIncrement(),
+		NewAttributeUniqueKey(),
+		NewAttributePrimaryKey(),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
+		NewAttributeCollate("utf8_bin"),
+		NewAttributeColumnFormat("DYNAMIC"),
+		NewAttributeStorage("disk"),
+		NewAttributeReference(
+			NewTableName("B",ObjectNamePrefix{}),
+			[]*KeyPart{NewKeyPart(bname,-1,nil),NewKeyPart(cname,-1,nil)},
+			MATCH_FULL,
+			REFERENCE_OPTION_CASCADE,
+			REFERENCE_OPTION_RESTRICT,
+		),
+		NewAttributeCheck(
+			NewBinaryExpr(PLUS,bname,cname),
+			true,
+			"cx",
+		),
+	}
+
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	//f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	//f1993 := NewNumVal(constant.MakeInt64(1993), "1992", false)
+
+	f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	//f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	//f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
+
+	//null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
+	max_value := NewMaxValue()
+
+	col2_attr_arr := []ColumnAttribute{
+		NewAttributeGeneratedAlways(NewBinaryExpr(PLUS,f1,f2),false),
+	}
+
+	want_defs :=TableDefs{
+		NewColumnTableDef(aname,TYPE_LONG, col1_attr_arr),
+		NewColumnTableDef(bname,TYPE_LONG, col2_attr_arr),
+		NewIndex([]*KeyPart{NewKeyPart(aname,-1,nil),NewKeyPart(bname,-1,nil)},
+			"a_b_idx",
+			false,
+			NewIndexOption(64,INDEX_TYPE_BTREE,"","a_b_idx",VISIBLE_TYPE_INVALID,"",""),
+		),
+	}
+
+	table_options :=[]TableOption{
+		NewTableOptionEngine("innodb"),
+		NewTableOptionRowFormat(ROW_FORMAT_DYNAMIC),
+		NewTableOptionComment("table A"),
+		NewTableOptionCompression("lz4"),
+	}
+
+	partitions := []*Partition{
+		NewPartition(Identifier("p0"),
+			NewValuesLessThan([]Expr{f1990,f1991}),
+			[]TableOption{
+				NewTableOptionEngine("innodb"),
+				NewTableOptionComment("p0"),
+				NewTableOptionDataDirectory("/data"),
+				NewTableOptionIndexDirectory("/index"),
+				NewTableOptionMaxRows(1000),
+				NewTableOptionMinRows(100),
+				NewTableOptionTablespace("tspace"),
+			},
+			[]*SubPartition{
+				NewSubPartition(Identifier("s0"),
+					[]TableOption{
+						NewTableOptionEngine("innodb"),
+						NewTableOptionComment("sub_s0"),
+						NewTableOptionDataDirectory("/data/s0"),
+						NewTableOptionIndexDirectory("/index/s0"),
+						NewTableOptionMaxRows(1000),
+						NewTableOptionMinRows(100),
+						NewTableOptionTablespace("tspace_s0"),
+					},
+				),
+				NewSubPartition(Identifier("s1"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p1"),
+			NewValuesLessThan([]Expr{f2000,f2001}),
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s2"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s3"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p2"),
+			NewValuesLessThan([]Expr{max_value,max_value}),
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s4"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s5"),
+					[]TableOption{},
+				),
+			},
+		),
+	}
+
+	partition_option := &PartitionOption{
+		PartBy:     PartitionBy{
+			NewRangeType(nil,[]*UnresolvedName{aname,bname}),
+			3,
+		},
+		SubPartBy:  NewPartitionBy(NewHashType(false,NewFuncExpr(0,to_days_name,[]Expr{purchased_name},nil)),2),
+		Partitions: partitions,
+	}
+
+	want:= &CreateTable{
+		IfNotExists:     true,
+		Table:           TableName{objName:objName{
+			ObjectNamePrefix: ObjectNamePrefix{},
+			ObjectName:       "A",
+		}},
+		Defs:            want_defs,
+		Options:         table_options,
+		PartitionOption: partition_option,
+	}
+
+	return n,want
+}
+
+func generate_create_table_t5()(*ast.CreateTableStmt,*CreateTable){
+	sql := `
+create table if not exists A
+(
+	a int not null default 1 auto_increment unique primary key
+		COMMENT "a" 
+		collate utf8_bin 
+		column_format dynamic
+		STORAGE disk
+		REFERENCES B(b asc,c desc) match full on delete cascade on update restrict
+		CONSTRAINT cx check (b+c) enforced,
+	b int GENERATED ALWAYS AS (1+2) virtual,
+	index a_b_idx using btree (a,b) key_block_size 64 comment "a_b_idx"
+)engine = "innodb" ROW_FORMAT = dynamic comment = "table A" COMPRESSION = "lz4"
+PARTITION BY HASH(YEAR(purchased))
+PARTITIONS 3
+
+SUBPARTITION BY HASH( TO_DAYS(purchased) ) 
+SUBPARTITIONS 2
+
+(
+	PARTITION p0  
+	engine = "innodb"
+	comment = "p0"
+	DATA DIRECTORY = "/data"
+	INDEX DIRECTORY = "/index"
+	max_rows = 1000
+	min_rows = 100
+	TABLESPACE = tspace
+	(
+		SUBPARTITION s0
+			engine = "innodb"
+			comment = "sub_s0"
+			DATA DIRECTORY = "/data/s0"
+			INDEX DIRECTORY = "/index/s0"
+			max_rows = 1000
+			min_rows = 100
+			TABLESPACE = tspace_s0
+		,
+		SUBPARTITION s1
+	),
+	PARTITION p1 (
+		SUBPARTITION s2,
+		SUBPARTITION s3
+	),
+	PARTITION p2 (
+		SUBPARTITION s4,
+		SUBPARTITION s5
+	)
+)
+;
+`
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.CreateTableStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+	year_name,_ := NewUnresolvedName("","YEAR")
+	purchased_name,_ := NewUnresolvedName("","","purchased")
+	to_days_name,_ := NewUnresolvedName("","TO_DAYS")
+
+	col1_attr_arr := []ColumnAttribute{
+		NewAttributeNull(false),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
+		NewAttributeAutoIncrement(),
+		NewAttributeUniqueKey(),
+		NewAttributePrimaryKey(),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
+		NewAttributeCollate("utf8_bin"),
+		NewAttributeColumnFormat("DYNAMIC"),
+		NewAttributeStorage("disk"),
+		NewAttributeReference(
+			NewTableName("B",ObjectNamePrefix{}),
+			[]*KeyPart{NewKeyPart(bname,-1,nil),NewKeyPart(cname,-1,nil)},
+			MATCH_FULL,
+			REFERENCE_OPTION_CASCADE,
+			REFERENCE_OPTION_RESTRICT,
+		),
+		NewAttributeCheck(
+			NewBinaryExpr(PLUS,bname,cname),
+			true,
+			"cx",
+		),
+	}
+
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	//f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	//f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	//f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	//f1993 := NewNumVal(constant.MakeInt64(1993), "1993", false)
+
+	//f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	//f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	//f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	//f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
+
+	//null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
+	//max_value := NewMaxValue()
+
+	col2_attr_arr := []ColumnAttribute{
+		NewAttributeGeneratedAlways(NewBinaryExpr(PLUS,f1,f2),false),
+	}
+
+	want_defs :=TableDefs{
+		NewColumnTableDef(aname,TYPE_LONG, col1_attr_arr),
+		NewColumnTableDef(bname,TYPE_LONG, col2_attr_arr),
+		NewIndex([]*KeyPart{NewKeyPart(aname,-1,nil),NewKeyPart(bname,-1,nil)},
+			"a_b_idx",
+			false,
+			NewIndexOption(64,INDEX_TYPE_BTREE,"","a_b_idx",VISIBLE_TYPE_INVALID,"",""),
+		),
+	}
+
+	table_options :=[]TableOption{
+		NewTableOptionEngine("innodb"),
+		NewTableOptionRowFormat(ROW_FORMAT_DYNAMIC),
+		NewTableOptionComment("table A"),
+		NewTableOptionCompression("lz4"),
+	}
+
+	partitions := []*Partition{
+		NewPartition(Identifier("p0"),
+			nil,
+			[]TableOption{
+				NewTableOptionEngine("innodb"),
+				NewTableOptionComment("p0"),
+				NewTableOptionDataDirectory("/data"),
+				NewTableOptionIndexDirectory("/index"),
+				NewTableOptionMaxRows(1000),
+				NewTableOptionMinRows(100),
+				NewTableOptionTablespace("tspace"),
+			},
+			[]*SubPartition{
+				NewSubPartition(Identifier("s0"),
+					[]TableOption{
+						NewTableOptionEngine("innodb"),
+						NewTableOptionComment("sub_s0"),
+						NewTableOptionDataDirectory("/data/s0"),
+						NewTableOptionIndexDirectory("/index/s0"),
+						NewTableOptionMaxRows(1000),
+						NewTableOptionMinRows(100),
+						NewTableOptionTablespace("tspace_s0"),
+					},
+				),
+				NewSubPartition(Identifier("s1"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p1"),
+			nil,
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s2"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s3"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p2"),
+			nil,
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s4"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s5"),
+					[]TableOption{},
+				),
+			},
+		),
+	}
+
+	partition_option := &PartitionOption{
+		PartBy:     PartitionBy{
+			NewHashType(false,NewFuncExpr(0,year_name,[]Expr{purchased_name},nil)),
+			3,
+		},
+		SubPartBy:  NewPartitionBy(NewHashType(false,NewFuncExpr(0,to_days_name,[]Expr{purchased_name},nil)),2),
+		Partitions: partitions,
+	}
+
+	want:= &CreateTable{
+		IfNotExists:     true,
+		Table:           TableName{objName:objName{
+			ObjectNamePrefix: ObjectNamePrefix{},
+			ObjectName:       "A",
+		}},
+		Defs:            want_defs,
+		Options:         table_options,
+		PartitionOption: partition_option,
+	}
+
+	return n,want
+}
+
+func generate_create_table_t6()(*ast.CreateTableStmt,*CreateTable){
+	sql := `
+create table if not exists A
+(
+	a int not null default 1 auto_increment unique primary key
+		COMMENT "a" 
+		collate utf8_bin 
+		column_format dynamic
+		STORAGE disk
+		REFERENCES B(b asc,c desc) match full on delete cascade on update restrict
+		CONSTRAINT cx check (b+c) enforced,
+	b int GENERATED ALWAYS AS (1+2) virtual,
+	index a_b_idx using btree (a,b) key_block_size 64 comment "a_b_idx"
+)engine = "innodb" ROW_FORMAT = dynamic comment = "table A" COMPRESSION = "lz4"
+PARTITION BY LINEAR KEY(a,b)
+PARTITIONS 3
+
+SUBPARTITION BY HASH( TO_DAYS(purchased) ) 
+SUBPARTITIONS 2
+
+(
+	PARTITION p0  
+	engine = "innodb"
+	comment = "p0"
+	DATA DIRECTORY = "/data"
+	INDEX DIRECTORY = "/index"
+	max_rows = 1000
+	min_rows = 100
+	TABLESPACE = tspace
+	(
+		SUBPARTITION s0
+			engine = "innodb"
+			comment = "sub_s0"
+			DATA DIRECTORY = "/data/s0"
+			INDEX DIRECTORY = "/index/s0"
+			max_rows = 1000
+			min_rows = 100
+			TABLESPACE = tspace_s0
+		,
+		SUBPARTITION s1
+	),
+	PARTITION p1 (
+		SUBPARTITION s2,
+		SUBPARTITION s3
+	),
+	PARTITION p2 (
+		SUBPARTITION s4,
+		SUBPARTITION s5
+	)
+)
+;
+`
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.CreateTableStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+	//year_name,_ := NewUnresolvedName("","YEAR")
+	purchased_name,_ := NewUnresolvedName("","","purchased")
+	to_days_name,_ := NewUnresolvedName("","TO_DAYS")
+
+	col1_attr_arr := []ColumnAttribute{
+		NewAttributeNull(false),
+		NewAttributeDefault(NewNumVal(constant.MakeInt64(1),"1",false)),
+		NewAttributeAutoIncrement(),
+		NewAttributeUniqueKey(),
+		NewAttributePrimaryKey(),
+		NewAttributeComment(NewNumVal(constant.MakeString("a"),"a",false)),
+		NewAttributeCollate("utf8_bin"),
+		NewAttributeColumnFormat("DYNAMIC"),
+		NewAttributeStorage("disk"),
+		NewAttributeReference(
+			NewTableName("B",ObjectNamePrefix{}),
+			[]*KeyPart{NewKeyPart(bname,-1,nil),NewKeyPart(cname,-1,nil)},
+			MATCH_FULL,
+			REFERENCE_OPTION_CASCADE,
+			REFERENCE_OPTION_RESTRICT,
+		),
+		NewAttributeCheck(
+			NewBinaryExpr(PLUS,bname,cname),
+			true,
+			"cx",
+		),
+	}
+
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f2 := NewNumVal(constant.MakeInt64(2), "2", false)
+	//f1990 := NewNumVal(constant.MakeInt64(1990), "1990", false)
+	//f1991 := NewNumVal(constant.MakeInt64(1991), "1991", false)
+	//f1992 := NewNumVal(constant.MakeInt64(1992), "1992", false)
+	//f1993 := NewNumVal(constant.MakeInt64(1993), "1993", false)
+
+	//f2000 := NewNumVal(constant.MakeInt64(2000), "2000", false)
+	//f2001 := NewNumVal(constant.MakeInt64(2001), "2001", false)
+	//f2002 := NewNumVal(constant.MakeInt64(2002), "2002", false)
+	//f2003 := NewNumVal(constant.MakeInt64(2003), "2003", false)
+
+	//null_val := NewNumVal(constant.MakeUnknown(), "NULL", false)
+	//max_value := NewMaxValue()
+
+	col2_attr_arr := []ColumnAttribute{
+		NewAttributeGeneratedAlways(NewBinaryExpr(PLUS,f1,f2),false),
+	}
+
+	want_defs :=TableDefs{
+		NewColumnTableDef(aname,TYPE_LONG, col1_attr_arr),
+		NewColumnTableDef(bname,TYPE_LONG, col2_attr_arr),
+		NewIndex([]*KeyPart{NewKeyPart(aname,-1,nil),NewKeyPart(bname,-1,nil)},
+			"a_b_idx",
+			false,
+			NewIndexOption(64,INDEX_TYPE_BTREE,"","a_b_idx",VISIBLE_TYPE_INVALID,"",""),
+		),
+	}
+
+	table_options :=[]TableOption{
+		NewTableOptionEngine("innodb"),
+		NewTableOptionRowFormat(ROW_FORMAT_DYNAMIC),
+		NewTableOptionComment("table A"),
+		NewTableOptionCompression("lz4"),
+	}
+
+	partitions := []*Partition{
+		NewPartition(Identifier("p0"),
+			nil,
+			[]TableOption{
+				NewTableOptionEngine("innodb"),
+				NewTableOptionComment("p0"),
+				NewTableOptionDataDirectory("/data"),
+				NewTableOptionIndexDirectory("/index"),
+				NewTableOptionMaxRows(1000),
+				NewTableOptionMinRows(100),
+				NewTableOptionTablespace("tspace"),
+			},
+			[]*SubPartition{
+				NewSubPartition(Identifier("s0"),
+					[]TableOption{
+						NewTableOptionEngine("innodb"),
+						NewTableOptionComment("sub_s0"),
+						NewTableOptionDataDirectory("/data/s0"),
+						NewTableOptionIndexDirectory("/index/s0"),
+						NewTableOptionMaxRows(1000),
+						NewTableOptionMinRows(100),
+						NewTableOptionTablespace("tspace_s0"),
+					},
+				),
+				NewSubPartition(Identifier("s1"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p1"),
+			nil,
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s2"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s3"),
+					[]TableOption{},
+				),
+			},
+		),
+		NewPartition(Identifier("p2"),
+			nil,
+			[]TableOption{},
+			[]*SubPartition{
+				NewSubPartition(
+					Identifier("s4"),
+					[]TableOption{},
+				),
+				NewSubPartition(
+					Identifier("s5"),
+					[]TableOption{},
+				),
+			},
+		),
+	}
+
+	partition_option := &PartitionOption{
+		PartBy:     PartitionBy{
+			NewKeyType(true,[]*UnresolvedName{aname,bname}),
+			3,
+		},
+		SubPartBy:  NewPartitionBy(NewHashType(false,NewFuncExpr(0,to_days_name,[]Expr{purchased_name},nil)),2),
+		Partitions: partitions,
+	}
+
+	want:= &CreateTable{
+		IfNotExists:     true,
+		Table:           TableName{objName:objName{
+			ObjectNamePrefix: ObjectNamePrefix{},
+			ObjectName:       "A",
+		}},
+		Defs:            want_defs,
+		Options:         table_options,
+		PartitionOption: partition_option,
+	}
+
+	return n,want
+}
+
+func Test_transformCreateTableStmtToCreateTable(t *testing.T) {
+	type args struct {
+		cts *ast.CreateTableStmt
+	}
+
+	t1,t1want := generate_create_table_t1()
+	t2,t2want := generate_create_table_t2()
+	t3,t3want := generate_create_table_t3()
+	t4,t4want := generate_create_table_t4()
+	t5,t5want := generate_create_table_t5()
+	t6,t6want := generate_create_table_t6()
+
+	tests := []struct {
+		name string
+		args args
+		want *CreateTable
+	}{
+		{"t1",args{cts: t1},t1want},
+		{"t2",args{cts: t2},t2want},
+		{"t3",args{cts: t3},t3want},
+		{"t4",args{cts: t4},t4want},
+		{"t5",args{cts: t5},t5want},
+		{"t6",args{cts: t6},t6want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformCreateTableStmtToCreateTable(tt.args.cts);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformCreateTableStmtToCreateTable() = %v, want %v", got, tt.want)
 			}
 		})
 	}

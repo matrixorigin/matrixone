@@ -532,7 +532,7 @@ func (mrs *MysqlResultSet) GetString(rindex,cindex uint64) (string, error) {
 	case float32:
 		return strconv.FormatFloat(float64(v),'f',-1,32),nil
 	case float64:
-		return strconv.FormatFloat(v,'f',-1,32),nil
+		return strconv.FormatFloat(v,'f',-1,64),nil
 	case string:
 		return v,nil
 	case []byte:
