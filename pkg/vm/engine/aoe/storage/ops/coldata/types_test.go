@@ -68,10 +68,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 	opts.FillDefaults("/tmp")
 	opts.MemData.Updater.Start()
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
-	info := md.NewMetaInfo(&md.Configuration{
-		BlockMaxRows:     uint64(10),
-		SegmentMaxBlocks: uint64(2),
-	})
+	info := md.MockInfo(uint64(10), uint64(2))
 	row_count := info.Conf.BlockMaxRows
 	capacity := typeSize * row_count * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)

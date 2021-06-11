@@ -11,7 +11,6 @@ import (
 	"unsafe"
 
 	"github.com/stretchr/testify/assert"
-	// "sync"
 )
 
 var WORK_DIR = "/tmp/layout/blk_test"
@@ -21,18 +20,10 @@ func init() {
 	dio.READER_FACTORY.Init(nil, WORK_DIR)
 }
 
-func mockInfo(blkRows, blks uint64) *md.MetaInfo {
-	info := md.NewMetaInfo(&md.Configuration{
-		BlockMaxRows:     blkRows,
-		SegmentMaxBlocks: blks,
-	})
-	return info
-}
-
 func TestStdColumnBlock(t *testing.T) {
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	seg_cnt := 5
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
@@ -61,7 +52,6 @@ func TestStdColumnBlock(t *testing.T) {
 		}
 		prev_seg = seg
 	}
-	t.Log(first_seg.ToString(true))
 	var cnt int
 	loopSeg := first_seg
 	for loopSeg != nil {
@@ -81,7 +71,7 @@ func TestStdColumnBlock2(t *testing.T) {
 	seg_cnt := 5
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
 
@@ -89,7 +79,6 @@ func TestStdColumnBlock2(t *testing.T) {
 	row_count := info.Conf.BlockMaxRows
 	capacity := typeSize * row_count * uint64(seg_cnt) * 2
 	bufMgr := bmgr.MockBufMgr(capacity)
-	t.Log(bufMgr.GetCapacity())
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	for i := 0; i < seg_cnt; i++ {
@@ -152,7 +141,7 @@ func TestStrColumnBlock(t *testing.T) {
 	seg_cnt := 5
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
 
@@ -160,7 +149,6 @@ func TestStrColumnBlock(t *testing.T) {
 	row_count := info.Conf.BlockMaxRows
 	capacity := uint64(typeSize) * row_count
 	bufMgr := bmgr.MockBufMgr(capacity)
-	// t.Log(bufMgr.GetCapacity())
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	for i := 0; i < seg_cnt; i++ {
@@ -217,18 +205,11 @@ func TestStrColumnBlock(t *testing.T) {
 	cursor.Close()
 }
 
-type MockType struct {
-}
-
-func (t *MockType) Size() uint64 {
-	return uint64(4)
-}
-
 func TestStdSegmentTree(t *testing.T) {
 	seg_cnt := 5
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
 
@@ -275,7 +256,7 @@ func TestRegisterNode(t *testing.T) {
 	seg_cnt := 5
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
 
@@ -310,7 +291,6 @@ func TestRegisterNode(t *testing.T) {
 		prev_seg = seg
 		t.Log(bufMgr.String())
 	}
-	t.Log(first_seg.ToString(true))
 	blk := first_seg.GetBlockRoot()
 	assert.NotNil(t, blk)
 	first_part := first_seg.GetPartRoot()
@@ -363,11 +343,10 @@ func TestUpgradeStdSegment(t *testing.T) {
 	seg_cnt := uint64(5)
 	blkRows := uint64(10)
 	blks := uint64(4)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, seg_cnt*blks)
 
-	// col_idx := 0
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * info.Conf.BlockMaxRows * 10000
 	mtBufMgr := bmgr.MockBufMgr(capacity)
@@ -448,10 +427,6 @@ func TestUpgradeStdSegment(t *testing.T) {
 		}
 		currSeg.UnRef()
 		currSeg = currSeg.GetNext()
-	}
-	for i := 0; i < 0; i++ {
-		runtime.GC()
-		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	currSeg = rootSeg.Ref()
 	for currSeg != nil {

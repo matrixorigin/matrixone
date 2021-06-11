@@ -255,6 +255,12 @@ func (tbl *Table) Copy(ctx CopyCtx) *Table {
 }
 
 func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
+	if info == nil {
+		info = MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	}
+	if schema == nil {
+		schema = MockSchema(2)
+	}
 	tbl, _ := info.CreateTable(schema)
 	info.RegisterTable(tbl)
 	var activeSeg *Segment

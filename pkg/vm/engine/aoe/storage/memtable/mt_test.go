@@ -2,7 +2,6 @@ package memtable
 
 import (
 	"github.com/stretchr/testify/assert"
-	// "matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -34,9 +33,7 @@ func TestManager(t *testing.T) {
 	flusher := w.NewOpWorker("Mock Flusher")
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	t0 := uint64(0)
-	schema := md.MockSchema(2)
-	tableMeta := &md.Table{Schema: schema, ID: t0}
+	tableMeta := md.MockTable(nil, nil, 10)
 	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tableMeta)
 
 	c0, err := manager.RegisterCollection(t0_data)
@@ -47,11 +44,11 @@ func TestManager(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
-	c00, err = manager.UnregisterCollection(t0 + 1)
+	c00, err = manager.UnregisterCollection(tableMeta.ID + 1)
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
-	c00, err = manager.UnregisterCollection(t0)
+	c00, err = manager.UnregisterCollection(tableMeta.ID)
 	assert.Nil(t, err)
 	assert.NotNil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
@@ -85,13 +82,7 @@ func TestCollection(t *testing.T) {
 	flusher := w.NewOpWorker("Mock Flusher")
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	// colDefs := make([]types.Type, cols)
-	// for i := 0; i < cols; i++ {
-	// 	colDefs[i] = types.Type{types.T_int32, 4, 4, 0}
-	// }
-	// colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
-	// colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
-	tableMeta := &md.Table{Schema: schema, ID: tbl.ID}
+	tableMeta := md.MockTable(nil, schema, 10)
 	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tableMeta)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
@@ -159,8 +150,7 @@ func TestCollection(t *testing.T) {
 
 func TestContainer(t *testing.T) {
 	capacity := uint64(4096)
-	flusher := w.NewOpWorker("Mock Flusher")
-	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
+	mtBufMgr := bmgr.MockBufMgr(capacity)
 
 	baseid := common.ID{}
 	step := capacity / 2
