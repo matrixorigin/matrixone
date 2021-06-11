@@ -3,6 +3,7 @@ package col
 import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
@@ -63,7 +64,7 @@ type ColumnBlock struct {
 	ColIdx int
 	Refs   int64
 	Meta   *md.Block
-	// Segment  IColumnSegment
+	File   ldio.ISegmentFile
 }
 
 func (blk *ColumnBlock) GetRefs() int64 {

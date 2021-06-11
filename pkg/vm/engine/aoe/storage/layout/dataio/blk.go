@@ -39,6 +39,18 @@ func NewBlockFile(dirname string, id common.ID) *BlockFile {
 	return bf
 }
 
+func (bf *BlockFile) Destory() {
+	name := bf.Name()
+	err := bf.Close()
+	if err != nil {
+		panic(err)
+	}
+	err = os.Remove(name)
+	if err != nil {
+		panic(err)
+	}
+}
+
 func (bf *BlockFile) initPointers(id common.ID) {
 	twoBytes := make([]byte, 2)
 	_, err := bf.File.Read(twoBytes)

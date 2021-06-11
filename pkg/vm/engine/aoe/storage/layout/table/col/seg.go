@@ -6,6 +6,7 @@ import (
 	"io"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
@@ -46,6 +47,7 @@ type IColumnSegment interface {
 	UnRef()
 	GetRefs() int64
 	GetMeta() *md.Segment
+	GetFsManager() *ldio.Manager
 }
 
 type ColumnSegment struct {
@@ -60,6 +62,8 @@ type ColumnSegment struct {
 	MTBufMgr  bmgrif.IBufferManager
 	SSTBufMgr bmgrif.IBufferManager
 	Meta      *md.Segment
+	FsMgr     *ldio.Manager
+	File      ldio.ISegmentFile
 }
 
 func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
@@ -78,6 +82,10 @@ func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, met
 		SSTBufMgr: sstBufMgr,
 	}
 	return seg.Ref()
+}
+
+func (seg *ColumnSegment) GetFsManager() *ldio.Manager {
+	return seg.FsMgr
 }
 
 func (seg *ColumnSegment) GetMeta() *md.Segment {

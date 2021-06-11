@@ -2,14 +2,18 @@ package dataio
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	"io"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type ISegmentFile interface {
+	io.Closer
+	Destory()
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 }
 
@@ -40,18 +44,43 @@ func (msf *MockSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	log.Infof("MockSegmentFile ReadPart %d %s size: %d cap: %d", colIdx, id.SegmentString(), len(buf), cap(buf))
 }
 
+func (msf *MockColSegmentFile) Close() error {
+	return nil
+}
+
+func (msf *MockColSegmentFile) Destory() {
+}
+
 type UnsortedSegmentFile struct {
 	sync.RWMutex
 	ID     common.ID
 	Blocks map[common.ID]*BlockFile
+	Dir    string
 }
 
 func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 	usf := &UnsortedSegmentFile{
 		ID:     id,
+		Dir:    dirname,
 		Blocks: make(map[common.ID]*BlockFile),
 	}
 	return usf
+}
+
+func (sf *UnsortedSegmentFile) Close() error {
+	for _, blkFile := range sf.Blocks {
+		err := blkFile.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (sf *UnsortedSegmentFile) Destory() {
+	for _, blkFile := range sf.Blocks {
+		blkFile.Destory()
+	}
 }
 
 func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf *BlockFile) {
@@ -100,6 +129,18 @@ type SortedSegmentFile struct {
 
 func (sf *SortedSegmentFile) initPointers() {
 	// TODO
+}
+
+func (sf *SortedSegmentFile) Destory() {
+	name := sf.Name()
+	err := sf.Close()
+	if err != nil {
+		panic(err)
+	}
+	err = os.Remove(name)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
