@@ -1,6 +1,7 @@
 package iface
 
 import (
+	"fmt"
 	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -33,12 +34,14 @@ func NodeStateString(state NodeState) string {
 		return "LOADING"
 	case NODE_ROOLBACK:
 		return "ROLLBACK"
+	case NODE_COMMIT:
+		return "COMMIT"
 	case NODE_UNLOADING:
 		return "UNLOADING"
 	case NODE_LOADED:
 		return "LOADED"
 	}
-	panic("unsupported")
+	panic(fmt.Sprintf("unsupported: %d", state))
 }
 
 func AtomicLoadState(addr *NodeState) NodeState {
