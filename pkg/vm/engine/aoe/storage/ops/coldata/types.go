@@ -2,6 +2,7 @@ package coldata
 
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iworker "matrixone/pkg/vm/engine/aoe/storage/worker/base"
@@ -9,7 +10,8 @@ import (
 )
 
 type OpCtx struct {
-	Opts *e.Options
+	Opts    *e.Options
+	BlkMeta *md.Block
 }
 
 type Op struct {

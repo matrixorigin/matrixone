@@ -1,11 +1,10 @@
 package ops
 
 import (
+	"errors"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iworker "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
 
 func NewOp(impl iops.IOpInternal, w iworker.IOpWorker) *Op {
@@ -17,11 +16,12 @@ func NewOp(impl iops.IOpInternal, w iworker.IOpWorker) *Op {
 	return op
 }
 
-func (op *Op) Push() {
+func (op *Op) Push() error {
 	r := op.Worker.SendOp(op)
 	if !r {
-		log.Errorf("Send op error!")
+		return errors.New("send op error!")
 	}
+	return nil
 }
 
 func (op *Op) SetError(err error) {

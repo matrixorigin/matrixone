@@ -15,20 +15,21 @@ func NewUpdateOp(ctx *OpCtx) *UpdateOp {
 
 type UpdateOp struct {
 	Op
+	NewMeta *md.Block
 }
 
 func (op *UpdateOp) updateBlock(blk *md.Block) error {
 	if blk.BoundSate != md.Detatched {
 		log.Errorf("")
-		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d", blk.ID, md.Detatched))
+		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d, but %d", blk.ID, md.Detatched, blk.BoundSate))
 	}
 
-	table, err := op.Ctx.Opts.Meta.Info.ReferenceTable(blk.TableID)
+	table, err := op.Ctx.Opts.Meta.Info.ReferenceTable(blk.Segment.TableID)
 	if err != nil {
 		return err
 	}
 
-	seg, err := table.ReferenceSegment(blk.SegmentID)
+	seg, err := table.ReferenceSegment(blk.Segment.ID)
 	if err != nil {
 		return err
 	}
@@ -36,7 +37,9 @@ func (op *UpdateOp) updateBlock(blk *md.Block) error {
 	if err != nil {
 		return err
 	}
-	err = rblk.Update(blk)
+	tmpBlk := blk.Copy()
+	tmpBlk.Attach()
+	err = rblk.Update(tmpBlk)
 	if err != nil {
 		return err
 	}
@@ -44,6 +47,8 @@ func (op *UpdateOp) updateBlock(blk *md.Block) error {
 	if rblk.IsFull() {
 		seg.TryClose()
 	}
+
+	op.NewMeta = rblk
 
 	return nil
 }

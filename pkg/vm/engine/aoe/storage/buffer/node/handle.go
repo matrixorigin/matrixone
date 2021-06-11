@@ -102,7 +102,7 @@ func (h *NodeHandle) GetID() common.ID {
 }
 
 func (h *NodeHandle) GetState() nif.NodeState {
-	return h.State
+	return atomic.LoadUint32(&h.State)
 }
 
 func (h *NodeHandle) IsSpillable() bool {
