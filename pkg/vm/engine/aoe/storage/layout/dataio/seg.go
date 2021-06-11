@@ -44,11 +44,11 @@ func (msf *MockSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	log.Infof("MockSegmentFile ReadPart %d %s size: %d cap: %d", colIdx, id.SegmentString(), len(buf), cap(buf))
 }
 
-func (msf *MockColSegmentFile) Close() error {
+func (msf *MockSegmentFile) Close() error {
 	return nil
 }
 
-func (msf *MockColSegmentFile) Destory() {
+func (msf *MockSegmentFile) Destory() {
 }
 
 type UnsortedSegmentFile struct {
@@ -81,6 +81,11 @@ func (sf *UnsortedSegmentFile) Destory() {
 	for _, blkFile := range sf.Blocks {
 		blkFile.Destory()
 	}
+}
+
+func (sf *UnsortedSegmentFile) GetBlock(id common.ID) *BlockFile {
+	blk := sf.Blocks[id]
+	return blk
 }
 
 func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf *BlockFile) {

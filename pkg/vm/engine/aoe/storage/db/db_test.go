@@ -150,6 +150,7 @@ func TestAppend(t *testing.T) {
 	blkIt.Close()
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 	// time.Sleep(time.Duration(20) * time.Millisecond)
+	t.Log(dbi.FsMgr.String())
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()
@@ -245,7 +246,7 @@ func TestConcurrency(t *testing.T) {
 	wg2.Add(1)
 	go func() {
 		defer wg2.Done()
-		reqCnt := rand.Intn(200) + 200
+		reqCnt := rand.Intn(100) + 100
 		for i := 0; i < reqCnt; i++ {
 			searchReq := &e.IterOptions{
 				TableName: schema.Name,
@@ -292,7 +293,7 @@ func TestConcurrency(t *testing.T) {
 	}
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	blkIt.Close()
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(time.Duration(50) * time.Millisecond)
 
 	t.Log(dbi.WorkersStatsString())
 	t.Log(dbi.MTBufMgr.String())

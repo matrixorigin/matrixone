@@ -3,6 +3,7 @@ package coldata
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -21,14 +22,15 @@ func TestUpgradeSegOp(t *testing.T) {
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)
+	fsMgr := ldio.MockFsMgr
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
 
 	info := md.MockInfo(row_count, blk_cnt)
 	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
-	tableData := table.NewTableData(bufMgr, bufMgr, tableMeta)
+	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, tableMeta)
 
-	segIDs := table.MockSegments(bufMgr, bufMgr, tableMeta, tableData)
+	segIDs := table.MockSegments(fsMgr, bufMgr, bufMgr, tableMeta, tableData)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 
 	segs := make([]col.IColumnSegment, 0)
@@ -72,12 +74,13 @@ func TestUpgradeBlkOp(t *testing.T) {
 	row_count := info.Conf.BlockMaxRows
 	capacity := typeSize * row_count * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)
+	fsMgr := ldio.MockFsMgr
 	segCnt := uint64(2)
 	blkCnt := segCnt * info.Conf.SegmentMaxBlocks
 
 	tableMeta := md.MockTable(info, schema, blkCnt)
-	tableData := table.NewTableData(bufMgr, bufMgr, tableMeta)
-	segIDs := table.MockSegments(bufMgr, bufMgr, tableMeta, tableData)
+	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, tableMeta)
+	segIDs := table.MockSegments(fsMgr, bufMgr, bufMgr, tableMeta, tableData)
 	assert.Equal(t, uint64(segCnt), tableData.GetSegmentCount())
 	t.Log(bufMgr.String())
 	assert.Equal(t, int(blkCnt)*len(schema.ColDefs), bufMgr.NodeCount())

@@ -10,7 +10,6 @@ import (
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"sync"
-	// "runtime"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -22,15 +21,26 @@ var (
 func init() {
 }
 
-func initUnsortedBlkNode(part *ColumnPart) {
-	sf := ldio.NewUnsortedSegmentFile(dio.READER_FACTORY.Dirname, part.ID.AsSegmentID())
-	csf := ldio.ColSegmentFile{
-		SegmentFile: sf,
-		ColIdx:      uint64(part.ColIdx),
+func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
+	sf := fsMgr.GetUnsortedFile(part.ID.AsSegmentID())
+	switch usf := sf.(type) {
+	case *ldio.MockSegmentFile:
+		csf := ldio.MockColSegmentFile{}
+		part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
+	case *ldio.UnsortedSegmentFile:
+		csf := ldio.ColSegmentFile{
+			SegmentFile: sf,
+			ColIdx:      uint64(part.ColIdx),
+		}
+		blkId := part.ID.AsBlockID()
+		if usf.GetBlock(blkId) == nil {
+			bf := ldio.NewBlockFile(dio.READER_FACTORY.Dirname, part.ID.AsBlockID())
+			usf.AddBlock(blkId, bf)
+		}
+		part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
+	default:
+		panic(fmt.Sprintf("%v", usf))
 	}
-	bf := ldio.NewBlockFile(dio.READER_FACTORY.Dirname, part.ID.AsBlockID())
-	sf.(*ldio.UnsortedSegmentFile).AddBlock(part.ID.AsBlockID(), bf)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
 }
 
 func initMockUnsortedBlkNode(part *ColumnPart) {
@@ -38,13 +48,21 @@ func initMockUnsortedBlkNode(part *ColumnPart) {
 	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
 }
 
-func initSortedBlkNode(part *ColumnPart) {
-	sf := ldio.NewSortedSegmentFile(dio.READER_FACTORY.Dirname, part.ID.AsSegmentID())
-	csf := ldio.ColSegmentFile{
-		SegmentFile: sf,
-		ColIdx:      uint64(part.ColIdx),
+func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
+	sf := fsMgr.GetSortedFile(part.ID.AsSegmentID())
+	switch ssf := sf.(type) {
+	case *ldio.MockSegmentFile:
+		csf := ldio.MockColSegmentFile{}
+		part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
+	case *ldio.SortedSegmentFile:
+		csf := ldio.ColSegmentFile{
+			SegmentFile: sf,
+			ColIdx:      uint64(part.ColIdx),
+		}
+		part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
+	default:
+		panic(fmt.Sprintf("%v", ssf))
 	}
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
 }
 
 type ColumnPartAllocator struct {
@@ -63,7 +81,7 @@ type IColumnPart interface {
 	// GetBlock() IColumnBlock
 	GetBuf() []byte
 	GetColIdx() int
-	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
+	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager, ldio.IManager) IColumnPart
 	GetNodeID() common.ID
 }
 
@@ -83,7 +101,7 @@ type ColumnPart struct {
 	ColIdx      int
 }
 
-func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
+func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 	rowCount uint64, typeSize uint64) IColumnPart {
 	defer blk.UnRef()
 	part := &ColumnPart{
@@ -106,9 +124,9 @@ func NewColumnPart(bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 		}
 		part.BufNode = bNode
 	case PERSISTENT_BLK:
-		initUBN(part)
+		initUBN(part, fsMgr)
 	case PERSISTENT_SORTED_BLK:
-		initBN(part)
+		initBN(part, fsMgr)
 	case MOCK_BLK:
 		csf := ldio.MockColSegmentFile{}
 		part.BufNode = bmgr.RegisterNode(typeSize*rowCount, part.NodeID, &csf)
@@ -124,7 +142,7 @@ func (part *ColumnPart) GetNodeID() common.ID {
 	return part.NodeID
 }
 
-func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager) IColumnPart {
+func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager, fsMgr ldio.IManager) IColumnPart {
 	cloned := &ColumnPart{
 		ID:          part.ID,
 		BufMgr:      sstBufMgr,
@@ -138,20 +156,11 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	}
 	switch part.BlockType {
 	case TRANSIENT_BLK:
-		// csf := ldio.MockColSegmentFile{}
-		// cloned.BufNode = part.BufMgr.RegisterNode(part.TypeSize*part.MaxRowCount, cloned.NodeID, &csf)
 		cloned.BlockType = PERSISTENT_BLK
-		initMockUnsortedBlkNode(cloned)
-		// initUBN(cloned)
+		initUBN(cloned, fsMgr)
 	case PERSISTENT_BLK:
-		initMockUnsortedBlkNode(cloned)
 		cloned.BlockType = PERSISTENT_SORTED_BLK
-		// sf := ldio.NewSortedSegmentFile(dio.READER_FACTORY.Dirname, part.ID.AsSegmentID())
-		// csf := ldio.ColSegmentFile{
-		// 	SegmentFile: sf,
-		// 	ColIdx:      uint64(part.ColIdx),
-		// }
-		// cloned.BufNode = part.BufMgr.RegisterNode(part.MaxRowCount*part.TypeSize, cloned.NodeID, &csf)
+		initBN(cloned, fsMgr)
 	case PERSISTENT_SORTED_BLK:
 		panic("logic error")
 	case MOCK_BLK:

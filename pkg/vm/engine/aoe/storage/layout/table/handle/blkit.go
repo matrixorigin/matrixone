@@ -4,9 +4,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
 	"sync"
-	"sync/atomic"
-
-	log "github.com/sirupsen/logrus"
+	// "sync/atomic"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -22,8 +21,8 @@ type itBlkAlloc struct {
 
 var itBlkAllocPool = sync.Pool{
 	New: func() interface{} {
-		cnt := atomic.AddInt32(&itAllocCnt, int32(1))
-		log.Infof("Alloc blk it %d", cnt)
+		// cnt := atomic.AddInt32(&itAllocCnt, int32(1))
+		// log.Infof("Alloc blk it %d", cnt)
 		return &itBlkAlloc{It: BlockIt{Cols: make([]col.IColumnBlock, 0)}}
 	},
 }

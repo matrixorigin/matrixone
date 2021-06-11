@@ -6,6 +6,7 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -31,10 +32,11 @@ func TestManager(t *testing.T) {
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
 	flusher := w.NewOpWorker("Mock Flusher")
+	fsMgr := ldio.DefaultFsMgr
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	tableMeta := md.MockTable(nil, nil, 10)
-	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tableMeta)
+	t0_data := table.NewTableData(fsMgr, mtBufMgr, sstBufMgr, tableMeta)
 
 	c0, err := manager.RegisterCollection(t0_data)
 	assert.Nil(t, err)
@@ -80,10 +82,11 @@ func TestCollection(t *testing.T) {
 
 	manager := NewManager(opts)
 	flusher := w.NewOpWorker("Mock Flusher")
+	fsMgr := ldio.DefaultFsMgr
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	tableMeta := md.MockTable(nil, schema, 10)
-	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tableMeta)
+	t0_data := table.NewTableData(fsMgr, mtBufMgr, sstBufMgr, tableMeta)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
 	expect_blks := blks
