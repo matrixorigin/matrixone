@@ -2,7 +2,7 @@ package memtable
 
 import (
 	"github.com/stretchr/testify/assert"
-	"matrixone/pkg/container/types"
+	// "matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -35,8 +35,9 @@ func TestManager(t *testing.T) {
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	t0 := uint64(0)
-	colDefs := make([]types.Type, 2)
-	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, t0, colDefs)
+	schema := md.MockSchema(2)
+	tableMeta := &md.Table{Schema: schema, ID: t0}
+	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tableMeta)
 
 	c0, err := manager.RegisterCollection(t0_data)
 	assert.Nil(t, err)
@@ -84,13 +85,14 @@ func TestCollection(t *testing.T) {
 	flusher := w.NewOpWorker("Mock Flusher")
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	colDefs := make([]types.Type, cols)
-	for i := 0; i < cols; i++ {
-		colDefs[i] = types.Type{types.T_int32, 4, 4, 0}
-	}
+	// colDefs := make([]types.Type, cols)
+	// for i := 0; i < cols; i++ {
+	// 	colDefs[i] = types.Type{types.T_int32, 4, 4, 0}
+	// }
 	// colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
 	// colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
-	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tbl.ID, colDefs)
+	tableMeta := &md.Table{Schema: schema, ID: tbl.ID}
+	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tableMeta)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
 	expect_blks := blks
@@ -111,12 +113,12 @@ func TestCollection(t *testing.T) {
 		seq++
 		go func(id uint64, wg *sync.WaitGroup) {
 			defer wg.Done()
-			insert := chunk.MockChunk(colDefs, thisStep*opts.Meta.Conf.BlockMaxRows)
+			insert := chunk.MockChunk(schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &md.LogIndex{
 				ID:       id,
 				Capacity: insert.GetCount(),
 			}
-			err = c0.Append(insert, index)
+			err := c0.Append(insert, index)
 			assert.Nil(t, err)
 			// t.Log(mtBufMgr.String())
 		}(logid, &waitgroup)

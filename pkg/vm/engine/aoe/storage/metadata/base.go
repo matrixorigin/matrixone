@@ -70,7 +70,7 @@ func (state *BoundSate) GetBoundState() BoundSate {
 
 func (state *BoundSate) Detach() error {
 	if *state == Detatched || *state == STANDLONE {
-		return errors.New("detatched or stalone already")
+		panic(fmt.Sprintf("detatched or stalone already: %d", *state))
 	}
 	*state = Detatched
 	return nil

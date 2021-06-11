@@ -125,7 +125,7 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 		op.Push()
 		err = op.WaitDone()
 		if err != nil {
-			panic("logic error")
+			panic(fmt.Sprintf("logic error: %s", err))
 		}
 		collection = op.Collection
 	}
@@ -233,7 +233,7 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 	return ids, err
 }
 
-func (d *DB) validateAndCleanStaleData() {
+func (d *DB) replayAndCleanData() {
 	expectFiles := make(map[string]bool)
 	for _, tbl := range d.store.MetaInfo.Tables {
 		for _, seg := range tbl.Segments {
@@ -246,7 +246,7 @@ func (d *DB) validateAndCleanStaleData() {
 				expectFiles[name] = true
 			} else {
 				for _, blk := range seg.Blocks {
-					if blk.DataState == md.EMPTY {
+					if blk.DataState == md.EMPTY && !blk.IsFull() {
 						continue
 					}
 					id.BlockID = blk.ID
@@ -269,6 +269,9 @@ func (d *DB) validateAndCleanStaleData() {
 	}
 
 	err := filepath.Walk(e.MakeDataDir(d.Dir), func(p string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
 		err = nil
 		if e.IsTempFile(info.Name()) {
 			log.Infof("Removing %s", p)
@@ -291,6 +294,10 @@ func (d *DB) validateAndCleanStaleData() {
 		if ok {
 			panic(fmt.Sprintf("Missing %s", name))
 		}
+	}
+	err = d.store.DataTables.Replay(d.MTBufMgr, d.SSTBufMgr, d.store.MetaInfo)
+	if err != nil {
+		panic(err)
 	}
 }
 

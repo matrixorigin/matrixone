@@ -16,7 +16,8 @@ func TestBlock(t *testing.T) {
 	ts1 := NowMicro()
 	time.Sleep(time.Duration(1) * time.Microsecond)
 	schema := MockSchema(2)
-	blk := NewBlock(info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows, schema)
+	seg := NewSegment(info, info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), schema)
+	blk := NewBlock(info.Sequence.GetBlockID(), seg)
 	time.Sleep(time.Duration(1) * time.Microsecond)
 	ts2 := NowMicro()
 	t.Logf("%d %d %d", ts1, blk.CreatedOn, ts2)
@@ -46,7 +47,8 @@ func TestSegment(t *testing.T) {
 	t1 := NowMicro()
 	schema := MockSchema(2)
 	seg1 := NewSegment(info, info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), schema)
-	blk1 := NewBlock(seg1.GetTableID(), info.Sequence.GetSegmentID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows, schema)
+	seg2 := NewSegment(info, seg1.TableID, info.Sequence.GetSegmentID(), schema)
+	blk1 := NewBlock(info.Sequence.GetBlockID(), seg2)
 	err := seg1.RegisterBlock(blk1)
 	assert.Error(t, err)
 
@@ -56,7 +58,7 @@ func TestSegment(t *testing.T) {
 		err = seg1.RegisterBlock(blk1)
 		assert.Nil(t, err)
 	}
-	blk2 := NewBlock(seg1.GetTableID(), seg1.GetID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows, schema)
+	blk2 := NewBlock(info.Sequence.GetBlockID(), seg1)
 	err = seg1.RegisterBlock(blk2)
 	assert.Error(t, err)
 	t.Log(err)

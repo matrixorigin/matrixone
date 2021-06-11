@@ -1,11 +1,11 @@
 package meta
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	// log "github.com/sirupsen/logrus"
+	mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata"
 )
 
 func NewCreateBlkOp(ctx *OpCtx, tid uint64, tableData table.ITableData) *CreateBlkOp {
@@ -43,8 +43,11 @@ func (op *CreateBlkOp) Execute() error {
 		return err
 	}
 
-	seg, err := table.GetInfullSegment()
-	if err != nil {
+	seg := table.GetActiveSegment()
+	if seg == nil {
+		seg = table.NextActiveSegment()
+	}
+	if seg == nil {
 		seg, err = table.CreateSegment()
 		if err != nil {
 			return err
@@ -55,40 +58,62 @@ func (op *CreateBlkOp) Execute() error {
 		}
 		op.NewSegment = true
 	}
-	blk, err := seg.CreateBlock()
-	if err != nil {
-		return err
+
+	var cloned *md.Block
+	blk := seg.GetActiveBlk()
+	if blk == nil {
+		blk = seg.NextActiveBlk()
+	} else {
+		seg.NextActiveBlk()
 	}
-	err = seg.RegisterBlock(blk)
-	if err != nil {
-		return err
-	}
-	cloned, err := seg.CloneBlock(blk.ID)
-	if err != nil {
-		return err
+	if blk == nil {
+		blk, err = seg.CreateBlock()
+		if err != nil {
+			return err
+		}
+		err = seg.RegisterBlock(blk)
+		if err != nil {
+			return err
+		}
+		ctx := md.CopyCtx{}
+		cloned, err = seg.CloneBlock(blk.ID, ctx)
+		if err != nil {
+			return err
+		}
+	} else {
+		cloned = blk.Copy()
+		cloned.Detach()
 	}
 	op.Result = cloned
 	if op.TableData != nil {
-		op.registerTableData(blk)
+		// op.registerTableData(cloned)
+		ctx := new(mmop.OpCtx)
+		ctx.Opts = op.Ctx.Opts
+		segBlkOp := mmop.NewCreateSegBlkOp(ctx, op.NewSegment, cloned, op.TableData)
+		segBlkOp.Push()
+		err = segBlkOp.WaitDone()
+		if err != nil {
+			return err
+		}
+		op.ColBlocks = segBlkOp.ColBlocks
 	}
 	return err
 }
 
 func (op *CreateBlkOp) registerTableData(blk *md.Block) {
-	blk_id := common.ID{
-		TableID:   blk.TableID,
-		SegmentID: blk.SegmentID,
-		BlockID:   blk.ID,
-	}
 	for _, column := range op.TableData.GetCollumns() {
 		if op.NewSegment {
-			seg, err := column.RegisterSegment(blk_id.AsSegmentID())
+			seg, err := column.RegisterSegment(blk.Segment)
 			if err != nil {
+				log.Error(err)
 				panic("should not happend")
 			}
 			seg.UnRef()
 		}
-		colBlk, _ := column.RegisterBlock(blk_id, blk.MaxRowCount)
+		colBlk, err := column.RegisterBlock(blk)
+		if err != nil {
+			panic("should not happend")
+		}
 		op.ColBlocks = append(op.ColBlocks, colBlk)
 	}
 }

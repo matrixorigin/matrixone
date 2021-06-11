@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"context"
+	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -15,7 +16,7 @@ import (
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	"sync"
-	// log "github.com/sirupsen/logrus"
+	"sync/atomic"
 )
 
 type MemTable struct {
@@ -86,9 +87,10 @@ func (mt *MemTable) Append(c *chunk.Chunk, offset uint64, index *md.LogIndex) (n
 	// log.Info(mt.Meta.String())
 	// log.Info(index.String())
 	mt.Meta.SetIndex(*index)
-	mt.Meta.Count += n
+	atomic.AddUint64(&mt.Meta.Count, n)
 	if mt.Data.GetCount() == mt.Meta.MaxRowCount {
 		mt.Full = true
+		mt.Meta.DataState = md.FULL
 	}
 	return n, err
 }
@@ -119,24 +121,50 @@ func (mt *MemTable) Flush() error {
 		mt.Opts.EventListener.BackgroundErrorCB(err)
 		return err
 	}
-	go func() {
-		colCtx := cops.OpCtx{Opts: mt.Opts}
-		upgradeBlkOp := cops.NewUpgradeBlkOp(&colCtx, mt.Columns[0].GetID(), mt.TableData)
-		upgradeBlkOp.Push()
+	newMeta := op.NewMeta
+	// go func() {
+	{
+		ctx := mops.OpCtx{Opts: mt.Opts}
+		getssop := mops.NewGetSSOp(&ctx)
+		err := getssop.Push()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
+		}
+		err = getssop.WaitDone()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
+		}
+		op := mops.NewCheckpointOp(&ctx, getssop.SS)
+		err = op.Push()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
+		}
+		err = op.WaitDone()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
+		}
+	}
+	// }()
+	// go func() {
+	{
+		colCtx := cops.OpCtx{Opts: mt.Opts, BlkMeta: newMeta}
+		upgradeBlkOp := cops.NewUpgradeBlkOp(&colCtx, mt.TableData)
+		err := upgradeBlkOp.Push()
+		if err != nil {
+			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
+		}
 		err = upgradeBlkOp.WaitDone()
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
+			return err
 		}
-	}()
-	go func() {
-		ctx := mops.OpCtx{Opts: mt.Opts}
-		op := mops.NewCheckpointOp(&ctx)
-		op.Push()
-		err := op.WaitDone()
-		if err != nil {
-			mt.Opts.EventListener.BackgroundErrorCB(err)
-		}
-	}()
+	}
+	// }()
 	mt.Opts.EventListener.FlushBlockEndCB(mt)
 	return nil
 }

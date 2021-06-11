@@ -3,6 +3,7 @@ package col
 import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
 )
@@ -47,7 +48,7 @@ type IColumnBlock interface {
 	GetPartRoot() IColumnPart
 	GetBlockType() BlockType
 	GetColIdx() int
-	CloneWithUpgrade(IColumnSegment) IColumnBlock
+	CloneWithUpgrade(IColumnSegment, *md.Block) IColumnBlock
 	String() string
 	Ref() IColumnBlock
 	UnRef()
@@ -56,12 +57,12 @@ type IColumnBlock interface {
 
 type ColumnBlock struct {
 	sync.RWMutex
-	ID       common.ID
-	Next     IColumnBlock
-	RowCount uint64
-	Type     BlockType
-	ColIdx   int
-	Refs     int64
+	ID     common.ID
+	Next   IColumnBlock
+	Type   BlockType
+	ColIdx int
+	Refs   int64
+	Meta   *md.Block
 	// Segment  IColumnSegment
 }
 
@@ -80,7 +81,7 @@ func (blk *ColumnBlock) GetBlockType() BlockType {
 }
 
 func (blk *ColumnBlock) GetRowCount() uint64 {
-	return blk.RowCount
+	return atomic.LoadUint64(&blk.Meta.Count)
 }
 
 func (blk *ColumnBlock) SetNext(next IColumnBlock) {
