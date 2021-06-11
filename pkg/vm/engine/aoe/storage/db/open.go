@@ -97,7 +97,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	db.store.MetaInfo = opts.Meta.Info
 
 	cleanStaleMeta(opts.Meta.Conf.Dir)
-	db.validateAndCleanStaleData()
+	db.replayAndCleanData()
 
 	db.startWorkers()
 	return db, err

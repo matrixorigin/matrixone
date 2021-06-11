@@ -60,7 +60,15 @@ func (it *BlockIt) Valid() bool {
 	if it.Cols == nil {
 		return false
 	}
-	return len(it.Cols) != 0
+	if len(it.Cols) == 0 {
+		return false
+	}
+	for _, col := range it.Cols {
+		if col == nil {
+			return false
+		}
+	}
+	return true
 }
 
 func (it *BlockIt) GetBlockHandle() base.IBlockHandle {
@@ -76,7 +84,9 @@ func (it *BlockIt) GetBlockHandle() base.IBlockHandle {
 func (it *BlockIt) Close() error {
 	if alloc := it.Alloc; alloc != nil {
 		for _, col := range it.Cols {
-			col.UnRef()
+			if col != nil {
+				col.UnRef()
+			}
 		}
 		*it = BlockIt{Cols: it.Cols[:0]}
 		// itReleaseCnt++

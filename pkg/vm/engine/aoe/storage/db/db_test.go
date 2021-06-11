@@ -92,7 +92,7 @@ func TestAppend(t *testing.T) {
 	ck := chunk.MockChunk(schema.Types(), rows)
 	assert.Equal(t, uint64(rows), ck.GetCount())
 	logIdx := &md.LogIndex{
-		ID:       uint64(9),
+		ID:       uint64(0),
 		Capacity: ck.GetCount(),
 	}
 	invalidName := "xxx"
@@ -132,7 +132,7 @@ func TestAppend(t *testing.T) {
 		segIt.Next()
 	}
 	segIt.Close()
-	assert.Equal(t, 2, segCount)
+	assert.Equal(t, insertCnt, segCount)
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 
 	blkIt, err := dbi.NewBlockIter(iterOpts)
@@ -149,7 +149,7 @@ func TestAppend(t *testing.T) {
 	}
 	blkIt.Close()
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
-	time.Sleep(time.Duration(10) * time.Millisecond)
+	// time.Sleep(time.Duration(20) * time.Millisecond)
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()
@@ -281,7 +281,7 @@ func TestConcurrency(t *testing.T) {
 	}
 	segIt.Close()
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
-	assert.Equal(t, (insertCnt+1)/2, segCnt)
+	assert.Equal(t, insertCnt, segCnt)
 
 	blkIt, err := dbi.NewBlockIter(opts)
 	assert.Nil(t, err)

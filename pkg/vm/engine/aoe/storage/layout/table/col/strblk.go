@@ -2,6 +2,7 @@ package col
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
 	"sync/atomic"
 
@@ -43,7 +44,7 @@ func (blk *StrColumnBlock) UnRef() {
 	}
 }
 
-func (blk *StrColumnBlock) CloneWithUpgrade(seg IColumnSegment) IColumnBlock {
+func (blk *StrColumnBlock) CloneWithUpgrade(seg IColumnSegment, meta *md.Block) IColumnBlock {
 	return nil
 }
 
