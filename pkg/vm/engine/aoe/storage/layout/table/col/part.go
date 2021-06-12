@@ -7,7 +7,7 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	// dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -23,53 +23,16 @@ func init() {
 
 func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetUnsortedFile(part.ID.AsSegmentID())
-	switch usf := sf.(type) {
-	case *ldio.MockSegmentFile:
-		csf := ldio.MockColSegmentFile{}
-		part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
-	case *ldio.UnsortedSegmentFile:
-		csf := ldio.ColSegmentFile{
-			SegmentFile: sf,
-			ColIdx:      uint64(part.ColIdx),
-		}
-		blkId := part.ID.AsBlockID()
-		if usf.GetBlock(blkId) == nil {
-			bf := ldio.NewBlockFile(dio.READER_FACTORY.Dirname, part.ID.AsBlockID())
-			usf.AddBlock(blkId, bf)
-		}
-		part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
-	default:
-		panic(fmt.Sprintf("%v", usf))
-	}
-}
-
-func initMockUnsortedBlkNode(part *ColumnPart) {
-	csf := ldio.MockColSegmentFile{}
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
+	sf.RefBlock(part.ID.AsBlockID())
+	csf := sf.MakeColSegmentFile(part.ColIdx)
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, csf)
 }
 
 func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetSortedFile(part.ID.AsSegmentID())
-	switch ssf := sf.(type) {
-	case *ldio.MockSegmentFile:
-		csf := ldio.MockColSegmentFile{}
-		part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
-	case *ldio.SortedSegmentFile:
-		csf := ldio.ColSegmentFile{
-			SegmentFile: sf,
-			ColIdx:      uint64(part.ColIdx),
-		}
-		part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, &csf)
-	default:
-		panic(fmt.Sprintf("%v", ssf))
-	}
-}
-
-type ColumnPartAllocator struct {
-}
-
-func (alloc *ColumnPartAllocator) Malloc() (buf []byte, err error) {
-	return buf, err
+	sf.RefBlock(part.ID.AsBlockID())
+	csf := sf.MakeColSegmentFile(part.ColIdx)
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, csf)
 }
 
 type IColumnPart interface {

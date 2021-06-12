@@ -7,6 +7,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -14,6 +15,9 @@ import (
 type ISegmentFile interface {
 	io.Closer
 	Destory()
+	RefBlock(blkId common.ID)
+	UnrefBlock(blkId common.ID)
+	MakeColSegmentFile(colIdx int) IColSegmentFile
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 }
 
@@ -51,11 +55,22 @@ func (msf *MockSegmentFile) Close() error {
 func (msf *MockSegmentFile) Destory() {
 }
 
+func (msf *MockSegmentFile) RefBlock(id common.ID) {
+}
+
+func (msf *MockSegmentFile) UnrefBlock(id common.ID) {
+}
+
+func (msf *MockSegmentFile) MakeColSegmentFile(colIdx int) IColSegmentFile {
+	return &MockColSegmentFile{}
+}
+
 type UnsortedSegmentFile struct {
 	sync.RWMutex
 	ID     common.ID
 	Blocks map[common.ID]*BlockFile
 	Dir    string
+	Refs   int32
 }
 
 func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
@@ -65,6 +80,33 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 		Blocks: make(map[common.ID]*BlockFile),
 	}
 	return usf
+}
+
+func (sf *UnsortedSegmentFile) RefBlock(id common.ID) {
+	_, ok := sf.Blocks[id]
+	if !ok {
+		bf := NewBlockFile(sf.Dir, id)
+		sf.AddBlock(id, bf)
+	}
+	atomic.AddInt32(&sf.Refs, int32(1))
+}
+
+func (sf *UnsortedSegmentFile) UnrefBlock(id common.ID) {
+	v := atomic.AddInt32(&sf.Refs, int32(-1))
+	if v == int32(0) {
+		sf.Destory()
+	}
+	if v < int32(0) {
+		panic("logic error")
+	}
+}
+
+func (sf *UnsortedSegmentFile) MakeColSegmentFile(colIdx int) IColSegmentFile {
+	csf := &ColSegmentFile{
+		SegmentFile: sf,
+		ColIdx:      uint64(colIdx),
+	}
+	return csf
 }
 
 func (sf *UnsortedSegmentFile) Close() error {
@@ -81,6 +123,7 @@ func (sf *UnsortedSegmentFile) Destory() {
 	for _, blkFile := range sf.Blocks {
 		blkFile.Destory()
 	}
+	sf.Blocks = nil
 }
 
 func (sf *UnsortedSegmentFile) GetBlock(id common.ID) *BlockFile {
@@ -129,7 +172,30 @@ type SortedSegmentFile struct {
 	sync.RWMutex
 	ID common.ID
 	os.File
+	Refs  int32
 	Parts map[Key]Pointer
+}
+
+func (sf *SortedSegmentFile) MakeColSegmentFile(colIdx int) IColSegmentFile {
+	csf := &ColSegmentFile{
+		SegmentFile: sf,
+		ColIdx:      uint64(colIdx),
+	}
+	return csf
+}
+
+func (sf *SortedSegmentFile) RefBlock(id common.ID) {
+	atomic.AddInt32(&sf.Refs, int32(1))
+}
+
+func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
+	v := atomic.AddInt32(&sf.Refs, int32(-1))
+	if v == int32(0) {
+		sf.Destory()
+	}
+	if v < int32(0) {
+		panic("logic error")
+	}
 }
 
 func (sf *SortedSegmentFile) initPointers() {
@@ -138,6 +204,7 @@ func (sf *SortedSegmentFile) initPointers() {
 
 func (sf *SortedSegmentFile) Destory() {
 	name := sf.Name()
+	log.Infof("Destory sorted segment file: %s", name)
 	err := sf.Close()
 	if err != nil {
 		panic(err)

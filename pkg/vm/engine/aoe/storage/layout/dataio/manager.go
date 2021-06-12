@@ -126,7 +126,7 @@ func (mgr *Manager) GetSortedFile(id common.ID) ISegmentFile {
 func (mgr *Manager) String() string {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	s := fmt.Sprintf("<Manager>: Unsorted[%d], Sorted[%d]\n", len(mgr.UnsortedFiles), len(mgr.SortedFiles))
+	s := fmt.Sprintf("<Manager:%s>: Unsorted[%d], Sorted[%d]\n", mgr.Dir, len(mgr.UnsortedFiles), len(mgr.SortedFiles))
 	if len(mgr.UnsortedFiles) > 0 {
 		for k, _ := range mgr.UnsortedFiles {
 			s = fmt.Sprintf("%s %s", s, k.SegmentString())

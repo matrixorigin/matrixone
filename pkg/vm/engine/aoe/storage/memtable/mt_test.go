@@ -81,8 +81,8 @@ func TestCollection(t *testing.T) {
 	tbl := op.GetTable()
 
 	manager := NewManager(opts)
+	fsMgr := ldio.NewManager(WORK_DIR)
 	flusher := w.NewOpWorker("Mock Flusher")
-	fsMgr := ldio.DefaultFsMgr
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	tableMeta := md.MockTable(nil, schema, 10)
