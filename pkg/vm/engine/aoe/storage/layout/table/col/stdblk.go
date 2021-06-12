@@ -73,10 +73,6 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 		}
 	case PERSISTENT_BLK:
 		newType = PERSISTENT_SORTED_BLK
-	case MOCK_BLK:
-		newType = MOCK_PERSISTENT_BLK
-	case MOCK_PERSISTENT_BLK:
-		newType = MOCK_PERSISTENT_SORTED_BLK
 	}
 	cloned := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{

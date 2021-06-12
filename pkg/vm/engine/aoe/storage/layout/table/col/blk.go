@@ -15,9 +15,6 @@ const (
 	TRANSIENT_BLK BlockType = iota
 	PERSISTENT_BLK
 	PERSISTENT_SORTED_BLK
-	MOCK_BLK
-	MOCK_PERSISTENT_BLK
-	MOCK_PERSISTENT_SORTED_BLK
 )
 
 func (t BlockType) String() string {
@@ -28,12 +25,6 @@ func (t BlockType) String() string {
 		return "PB"
 	case PERSISTENT_SORTED_BLK:
 		return "PSB"
-	case MOCK_BLK:
-		return "MB"
-	case MOCK_PERSISTENT_BLK:
-		return "MPB"
-	case MOCK_PERSISTENT_SORTED_BLK:
-		return "MPSB"
 	}
 	panic("unspported")
 }

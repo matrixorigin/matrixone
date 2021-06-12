@@ -7,19 +7,10 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	// dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
-
-var (
-	initUBN = initUnsortedBlkNode
-	initBN  = initSortedBlkNode
-)
-
-func init() {
-}
 
 func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetUnsortedFile(part.ID.AsSegmentID())
@@ -87,12 +78,9 @@ func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnB
 		}
 		part.BufNode = bNode
 	case PERSISTENT_BLK:
-		initUBN(part, fsMgr)
+		initUnsortedBlkNode(part, fsMgr)
 	case PERSISTENT_SORTED_BLK:
-		initBN(part, fsMgr)
-	case MOCK_BLK:
-		csf := ldio.MockColSegmentFile{}
-		part.BufNode = bmgr.RegisterNode(typeSize*rowCount, part.NodeID, &csf)
+		initSortedBlkNode(part, fsMgr)
 	default:
 		panic("not support")
 	}
@@ -120,21 +108,12 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	switch part.BlockType {
 	case TRANSIENT_BLK:
 		cloned.BlockType = PERSISTENT_BLK
-		initUBN(cloned, fsMgr)
+		initUnsortedBlkNode(cloned, fsMgr)
 	case PERSISTENT_BLK:
 		cloned.BlockType = PERSISTENT_SORTED_BLK
-		initBN(cloned, fsMgr)
+		initSortedBlkNode(cloned, fsMgr)
 	case PERSISTENT_SORTED_BLK:
 		panic("logic error")
-	case MOCK_BLK:
-		csf := ldio.MockColSegmentFile{}
-		cloned.BufNode = cloned.BufMgr.RegisterNode(part.TypeSize*part.MaxRowCount, cloned.NodeID, &csf)
-		cloned.BlockType = MOCK_PERSISTENT_BLK
-	case MOCK_PERSISTENT_BLK:
-		csf := ldio.MockColSegmentFile{}
-		cloned.BufNode = cloned.BufMgr.RegisterNode(part.TypeSize*part.MaxRowCount, cloned.NodeID, &csf)
-		cloned.BlockType = MOCK_PERSISTENT_SORTED_BLK
-
 	default:
 		panic("not supported")
 	}

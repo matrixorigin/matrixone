@@ -148,24 +148,25 @@ func TestStrColumnBlock(t *testing.T) {
 
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := info.Conf.BlockMaxRows
-	capacity := uint64(typeSize) * row_count
+	capacity := uint64(typeSize) * row_count * 10
 	bufMgr := bmgr.MockBufMgr(capacity)
+	fsMgr := ldio.MockFsMgr
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	for i := 0; i < seg_cnt; i++ {
 		segMeta := meta.Segments[i]
-		seg := NewColumnSegment(ldio.DefaultFsMgr, bufMgr, bufMgr, 0, segMeta)
+		seg := NewColumnSegment(fsMgr, bufMgr, bufMgr, 0, segMeta)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		blkMeta0 := segMeta.Blocks[0]
 		blk0Id := *blkMeta0.AsCommonID()
-		blk_0 := NewStrColumnBlock(seg, blk0Id, MOCK_BLK)
+		blk_0 := NewStrColumnBlock(seg, blk0Id, TRANSIENT_BLK)
 		part_0_0_id := blk0Id.NextPart()
-		part_0 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, part_0_0_id, row_count, typeSize)
+		part_0 := NewColumnPart(fsMgr, bufMgr, blk_0, part_0_0_id, row_count, typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		part_0_1_id := blk0Id.NextPart()
-		part_0_1 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, part_0_1_id, row_count, typeSize)
+		part_0_1 := NewColumnPart(fsMgr, bufMgr, blk_0, part_0_1_id, row_count, typeSize)
 		assert.Nil(t, part_0_1.GetNext())
 		if prev_seg != nil {
 			prev_seg.SetNext(seg)
