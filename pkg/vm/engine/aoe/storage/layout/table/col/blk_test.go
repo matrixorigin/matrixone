@@ -150,7 +150,7 @@ func TestStrColumnBlock(t *testing.T) {
 	row_count := info.Conf.BlockMaxRows
 	capacity := uint64(typeSize) * row_count * 10
 	bufMgr := bmgr.MockBufMgr(capacity)
-	fsMgr := ldio.MockFsMgr
+	fsMgr := ldio.NewManager(WORK_DIR, true)
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	for i := 0; i < seg_cnt; i++ {
@@ -355,7 +355,7 @@ func TestUpgradeStdSegment(t *testing.T) {
 	capacity := typeSize * info.Conf.BlockMaxRows * 10000
 	mtBufMgr := bmgr.MockBufMgr(capacity)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
-	fsMgr := ldio.MockFsMgr
+	fsMgr := ldio.NewManager(WORK_DIR, true)
 	segs := makeSegments(fsMgr, mtBufMgr, sstBufMgr, meta, t)
 	rootSeg := segs[0].Ref()
 

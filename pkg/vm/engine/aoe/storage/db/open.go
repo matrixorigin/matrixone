@@ -80,7 +80,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	dio.WRITER_FACTORY.Init(opts, dirname)
 	dio.READER_FACTORY.Init(opts, dirname)
 
-	fsMgr := ldio.NewManager(dirname)
+	fsMgr := ldio.NewManager(dirname, false)
 	memtblMgr := mt.NewManager(opts)
 	mtBufMgr := bm.NewBufferManager(opts.CacheCfg.InsertCapacity, opts.MemData.Updater)
 	sstBufMgr := bm.NewBufferManager(opts.CacheCfg.DataCapacity, opts.MemData.Updater)

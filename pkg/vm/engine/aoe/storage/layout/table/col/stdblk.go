@@ -73,6 +73,17 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 		}
 	case PERSISTENT_BLK:
 		newType = PERSISTENT_SORTED_BLK
+		segFile := fsMgr.GetUnsortedFile(seg.GetID())
+		if segFile != nil {
+			fsMgr.UpgradeFile(seg.GetID())
+		} else {
+			segFile = fsMgr.GetSortedFile(seg.GetID())
+		}
+		if segFile == nil {
+			panic("logic error")
+		}
+	default:
+		panic("logic error")
 	}
 	cloned := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{

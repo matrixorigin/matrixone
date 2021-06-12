@@ -3,6 +3,7 @@ package dataio
 import (
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"sync"
@@ -23,8 +24,8 @@ var DefaultFsMgr IManager
 var MockFsMgr IManager
 
 func init() {
-	DefaultFsMgr = NewManager(dio.WRITER_FACTORY.Dirname)
-	MockFsMgr = NewMockManager()
+	DefaultFsMgr = NewManager(dio.WRITER_FACTORY.Dirname, false)
+	MockFsMgr = NewManager(dio.WRITER_FACTORY.Dirname, true)
 }
 
 type Manager struct {
@@ -32,21 +33,25 @@ type Manager struct {
 	UnsortedFiles map[common.ID]ISegmentFile
 	SortedFiles   map[common.ID]ISegmentFile
 	Dir           string
+	Mock          bool
 }
 
-type MockManager struct {
-}
-
-func NewManager(dir string) *Manager {
+func NewManager(dir string, mock bool) *Manager {
 	return &Manager{
 		UnsortedFiles: make(map[common.ID]ISegmentFile),
 		SortedFiles:   make(map[common.ID]ISegmentFile),
 		Dir:           dir,
+		Mock:          mock,
 	}
 }
 
 func (mgr *Manager) RegisterUnsortedFiles(id common.ID) (ISegmentFile, error) {
-	usf := NewUnsortedSegmentFile(mgr.Dir, id)
+	var usf ISegmentFile
+	if mgr.Mock {
+		usf = NewMockSegmentFile(mgr.Dir, UnsortedSegFile, id)
+	} else {
+		usf = NewUnsortedSegmentFile(mgr.Dir, id)
+	}
 	mgr.Lock()
 	defer mgr.Unlock()
 	_, ok := mgr.UnsortedFiles[id]
@@ -59,7 +64,12 @@ func (mgr *Manager) RegisterUnsortedFiles(id common.ID) (ISegmentFile, error) {
 }
 
 func (mgr *Manager) RegisterSortedFiles(id common.ID) (ISegmentFile, error) {
-	sf := NewSortedSegmentFile(mgr.Dir, id)
+	var sf ISegmentFile
+	if mgr.Mock {
+		sf = NewMockSegmentFile(mgr.Dir, UnsortedSegFile, id)
+	} else {
+		sf = NewSortedSegmentFile(mgr.Dir, id)
+	}
 	mgr.Lock()
 	defer mgr.Unlock()
 	_, ok := mgr.UnsortedFiles[id]
@@ -77,10 +87,16 @@ func (mgr *Manager) RegisterSortedFiles(id common.ID) (ISegmentFile, error) {
 }
 
 func (mgr *Manager) UpgradeFile(id common.ID) ISegmentFile {
-	sf := NewSortedSegmentFile(mgr.Dir, id)
+	var sf ISegmentFile
+	if mgr.Mock {
+		sf = NewMockSegmentFile(mgr.Dir, UnsortedSegFile, id)
+	} else {
+		sf = NewSortedSegmentFile(mgr.Dir, id)
+	}
 	mgr.Lock()
 	staleFile, ok := mgr.UnsortedFiles[id]
 	if !ok {
+		log.Info(mgr.stringNoLock())
 		panic(fmt.Sprintf("upgrade file %s not found", id.SegmentString()))
 	}
 	defer staleFile.Close()
@@ -117,7 +133,11 @@ func (mgr *Manager) GetSortedFile(id common.ID) ISegmentFile {
 func (mgr *Manager) String() string {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	s := fmt.Sprintf("<Manager:%s>: Unsorted[%d], Sorted[%d]\n", mgr.Dir, len(mgr.UnsortedFiles), len(mgr.SortedFiles))
+	return mgr.stringNoLock()
+}
+
+func (mgr *Manager) stringNoLock() string {
+	s := fmt.Sprintf("<Manager:%s>[%v]: Unsorted[%d], Sorted[%d]\n", mgr.Dir, mgr.Mock, len(mgr.UnsortedFiles), len(mgr.SortedFiles))
 	if len(mgr.UnsortedFiles) > 0 {
 		for k, _ := range mgr.UnsortedFiles {
 			s = fmt.Sprintf("%s %s", s, k.SegmentString())
@@ -147,37 +167,4 @@ func (mgr *Manager) Close() error {
 		}
 	}
 	return nil
-}
-
-func NewMockManager() IManager {
-	return &MockManager{}
-}
-
-func (mmgr *MockManager) RegisterSortedFiles(id common.ID) (ISegmentFile, error) {
-	sf := &MockSegmentFile{}
-	return sf, nil
-}
-
-func (mmgr *MockManager) RegisterUnsortedFiles(id common.ID) (ISegmentFile, error) {
-	sf := &MockSegmentFile{}
-	return sf, nil
-}
-
-func (mmgr *MockManager) UpgradeFile(id common.ID) ISegmentFile {
-	sf := &MockSegmentFile{}
-	return sf
-}
-
-func (mmgr *MockManager) GetSortedFile(id common.ID) ISegmentFile {
-	sf := &MockSegmentFile{}
-	return sf
-}
-
-func (mmgr *MockManager) GetUnsortedFile(id common.ID) ISegmentFile {
-	sf := &MockSegmentFile{}
-	return sf
-}
-
-func (mmgr *MockManager) String() string {
-	return "<MockManager>"
 }

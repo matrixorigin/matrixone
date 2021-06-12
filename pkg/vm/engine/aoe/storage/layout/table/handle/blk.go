@@ -6,16 +6,15 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
-	allocTimes    = 0
+	// allocTimes    = 0
 	blkHandlePool = sync.Pool{
 		New: func() interface{} {
-			allocTimes++
-			log.Infof("Alloc blk handle: %d", allocTimes)
+			// allocTimes++
+			// log.Infof("Alloc blk handle: %d", allocTimes)
 			h := new(BlockHandle)
 			h.Cols = make([]col.IColumnBlock, 0)
 			return h
