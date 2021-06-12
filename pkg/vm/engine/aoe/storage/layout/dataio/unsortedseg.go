@@ -24,6 +24,8 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 }
 
 func (sf *UnsortedSegmentFile) RefBlock(id common.ID) {
+	sf.Lock()
+	defer sf.Unlock()
 	_, ok := sf.Blocks[id]
 	if !ok {
 		bf := NewBlockFile(sf.Dir, id)
@@ -68,6 +70,8 @@ func (sf *UnsortedSegmentFile) Destory() {
 }
 
 func (sf *UnsortedSegmentFile) GetBlock(id common.ID) *BlockFile {
+	sf.RLock()
+	defer sf.RUnlock()
 	blk := sf.Blocks[id]
 	return blk
 }
@@ -81,9 +85,11 @@ func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf *BlockFile) {
 }
 
 func (sf *UnsortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
+	sf.RLock()
 	blk, ok := sf.Blocks[id.AsBlockID()]
 	if !ok {
 		panic("logic error")
 	}
+	sf.RUnlock()
 	blk.ReadPart(colIdx, id, buf)
 }

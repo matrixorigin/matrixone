@@ -40,12 +40,11 @@ func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
 }
 
 func (h *NodeHandle) Iteration() uint64 {
-	return h.Iter
+	return atomic.LoadUint64(&h.Iter)
 }
 
 func (h *NodeHandle) IncIteration() uint64 {
-	h.Iter++
-	return h.Iter
+	return atomic.AddUint64(&h.Iter, uint64(1))
 }
 
 func (h *NodeHandle) FlushData() error {

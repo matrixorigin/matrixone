@@ -126,8 +126,6 @@ func (part *ColumnPart) GetColIdx() int {
 }
 
 func (part *ColumnPart) GetBuf() []byte {
-	part.RLock()
-	defer part.RUnlock()
 	return part.BufNode.GetBuffer().GetDataNode().Data
 }
 
@@ -180,11 +178,7 @@ func (part *ColumnPart) Close() error {
 }
 
 func (part *ColumnPart) InitScanCursor(cursor *ScanCursor) error {
-	bufMgr := part.BufMgr
-	part.RLock()
-	bufNode := part.BufNode
-	part.RUnlock()
-	cursor.Handle = bufMgr.Pin(bufNode)
+	cursor.Handle = part.BufMgr.Pin(part.BufNode)
 	if cursor.Handle == nil {
 		return errors.New(fmt.Sprintf("Cannot pin part %v", part.ID))
 	}

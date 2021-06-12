@@ -22,7 +22,7 @@ func TestUpgradeSegOp(t *testing.T) {
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)
-	fsMgr := ldio.MockFsMgr
+	fsMgr := ldio.NewManager("/tmp", true)
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
 
@@ -74,7 +74,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 	row_count := info.Conf.BlockMaxRows
 	capacity := typeSize * row_count * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)
-	fsMgr := ldio.MockFsMgr
+	fsMgr := ldio.NewManager("/tmp", true)
 	segCnt := uint64(2)
 	blkCnt := segCnt * info.Conf.SegmentMaxBlocks
 
