@@ -91,6 +91,8 @@ func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if len(buf) != int(pointer.Len) {
 		panic("logic error")
 	}
+	sf.Lock()
+	defer sf.Unlock()
 	n, err := sf.ReadAt(buf, pointer.Offset)
 	if err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))

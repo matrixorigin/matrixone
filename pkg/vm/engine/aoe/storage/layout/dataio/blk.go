@@ -100,6 +100,8 @@ func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if len(buf) != int(pointer.Len) {
 		panic("logic error")
 	}
+	bf.Lock()
+	defer bf.Unlock()
 	n, err := bf.ReadAt(buf, pointer.Offset)
 	if err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
