@@ -17,6 +17,7 @@ func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf.RefBlock(part.ID.AsBlockID())
 	csf := sf.MakeColSegmentFile(part.ColIdx)
 	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, csf)
+	part.SegFile = sf
 }
 
 func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
@@ -24,6 +25,7 @@ func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf.RefBlock(part.ID.AsBlockID())
 	csf := sf.MakeColSegmentFile(part.ColIdx)
 	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, csf)
+	part.SegFile = sf
 }
 
 type IColumnPart interface {
@@ -51,8 +53,8 @@ type ColumnPart struct {
 	Size        uint64
 	Capacity    uint64
 	NodeID      common.ID
-	BlockType   BlockType
 	ColIdx      int
+	SegFile     ldio.ISegmentFile
 }
 
 func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
@@ -64,7 +66,6 @@ func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnB
 		TypeSize:    typeSize,
 		MaxRowCount: rowCount,
 		NodeID:      id,
-		BlockType:   blk.GetBlockType(),
 		ColIdx:      blk.GetColIdx(),
 		Capacity:    typeSize * rowCount,
 	}
@@ -105,15 +106,13 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 		NodeID:      part.NodeID.NextIter(),
 		ColIdx:      part.GetColIdx(),
 	}
-	switch part.BlockType {
+	switch blk.GetBlockType() {
 	case TRANSIENT_BLK:
-		cloned.BlockType = PERSISTENT_BLK
-		initUnsortedBlkNode(cloned, fsMgr)
-	case PERSISTENT_BLK:
-		cloned.BlockType = PERSISTENT_SORTED_BLK
-		initSortedBlkNode(cloned, fsMgr)
-	case PERSISTENT_SORTED_BLK:
 		panic("logic error")
+	case PERSISTENT_BLK:
+		initUnsortedBlkNode(cloned, fsMgr)
+	case PERSISTENT_SORTED_BLK:
+		initSortedBlkNode(cloned, fsMgr)
 	default:
 		panic("not supported")
 	}
@@ -173,6 +172,9 @@ func (part *ColumnPart) Close() error {
 			panic("logic error")
 		}
 		part.BufNode = nil
+	}
+	if part.SegFile != nil {
+		part.SegFile.UnrefBlock(part.ID.AsSegmentID())
 	}
 	return nil
 }

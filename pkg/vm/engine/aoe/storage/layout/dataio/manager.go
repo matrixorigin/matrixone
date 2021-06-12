@@ -27,15 +27,6 @@ func init() {
 	MockFsMgr = NewMockManager()
 }
 
-type IManager interface {
-	RegisterSortedFiles(common.ID) (ISegmentFile, error)
-	RegisterUnsortedFiles(common.ID) (ISegmentFile, error)
-	UpgradeFile(common.ID) ISegmentFile
-	GetSortedFile(common.ID) ISegmentFile
-	GetUnsortedFile(common.ID) ISegmentFile
-	String() string
-}
-
 type Manager struct {
 	sync.RWMutex
 	UnsortedFiles map[common.ID]ISegmentFile
