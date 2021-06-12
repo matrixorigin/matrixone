@@ -71,13 +71,17 @@ func (it *BlockIt) Valid() bool {
 }
 
 func (it *BlockIt) GetBlockHandle() base.IBlockHandle {
-	blkHandle := blkHandlePool.Get().(*BlockHandle)
+	// TODO
+	// blkHandle := blkHandlePool.Get().(*BlockHandle)
+	blkHandle := BlockHandle{
+		Cols: make([]col.IColumnBlock, 0, len(it.Cols)),
+	}
 	blkHandle.ID = it.Cols[0].GetID()
 	for _, col := range it.Cols {
 		blkHandle.Cols = append(blkHandle.Cols, col.Ref())
 	}
 	blkHandle.Cols = it.Cols
-	return blkHandle
+	return &blkHandle
 }
 
 func (it *BlockIt) Close() error {

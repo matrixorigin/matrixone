@@ -17,6 +17,7 @@ var (
 			// log.Infof("Alloc blk handle: %d", allocTimes)
 			h := new(BlockHandle)
 			h.Cols = make([]col.IColumnBlock, 0)
+			// h.Cursors = make([]col.ScanCursor, 0)
 			return h
 		},
 	}
@@ -25,6 +26,7 @@ var (
 type BlockHandle struct {
 	ID   common.ID
 	Cols []col.IColumnBlock
+	// Cursors []col.ScanCursor
 }
 
 func (bh *BlockHandle) GetID() *common.ID {
@@ -44,10 +46,20 @@ func (bh *BlockHandle) Close() error {
 			col.UnRef()
 		}
 		bhh.Cols = bhh.Cols[:0]
-		blkHandlePool.Put(bhh)
+		// TODO
+		// blkHandlePool.Put(bhh)
 		bh = nil
 	}
 	return nil
+}
+
+func (bh *BlockHandle) InitScanCursor() []col.ScanCursor {
+	cursors := make([]col.ScanCursor, len(bh.Cols))
+	for idx, colBlk := range bh.Cols {
+		colBlk.InitScanCursor(&cursors[idx])
+		cursors[idx].Init()
+	}
+	return cursors
 }
 
 func (bh *BlockHandle) Fetch() *chunk.Chunk {
