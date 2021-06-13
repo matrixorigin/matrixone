@@ -7,12 +7,11 @@ import (
 
 type ColPartFile struct {
 	SegmentFile ISegmentFile
-	ColIdx      uint64
 	ID          *common.ID
 }
 
 func (cpf *ColPartFile) Read(buf []byte) (n int, err error) {
-	cpf.SegmentFile.ReadPart(cpf.ColIdx, *cpf.ID, buf)
+	cpf.SegmentFile.ReadPart(uint64(cpf.ID.Idx), *cpf.ID, buf)
 	return len(buf), nil
 }
 

@@ -68,9 +68,8 @@ func (msf *MockSegmentFile) UnrefBlock(id common.ID) {
 	}
 }
 
-func (msf *MockSegmentFile) MakeColPartFile(colIdx int, id *common.ID) IColPartFile {
+func (msf *MockSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
 	psf := &ColPartFile{
-		ColIdx:      uint64(colIdx),
 		SegmentFile: msf,
 		ID:          id,
 	}

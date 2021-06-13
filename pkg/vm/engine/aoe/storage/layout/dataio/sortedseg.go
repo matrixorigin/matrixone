@@ -40,9 +40,8 @@ type SortedSegmentFile struct {
 	Parts map[Key]Pointer
 }
 
-func (sf *SortedSegmentFile) MakeColPartFile(colIdx int, id *common.ID) IColPartFile {
+func (sf *SortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
 	cpf := &ColPartFile{
-		ColIdx:      uint64(colIdx),
 		ID:          id,
 		SegmentFile: sf,
 	}

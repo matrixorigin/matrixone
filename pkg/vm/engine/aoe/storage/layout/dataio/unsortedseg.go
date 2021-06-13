@@ -44,9 +44,8 @@ func (sf *UnsortedSegmentFile) UnrefBlock(id common.ID) {
 	}
 }
 
-func (sf *UnsortedSegmentFile) MakeColPartFile(colIdx int, id *common.ID) IColPartFile {
+func (sf *UnsortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
 	cpf := &ColPartFile{
-		ColIdx:      uint64(colIdx),
 		ID:          id,
 		SegmentFile: sf,
 	}
