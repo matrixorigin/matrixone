@@ -6,6 +6,7 @@ import (
 	"io"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
@@ -46,6 +47,7 @@ type IColumnSegment interface {
 	UnRef()
 	GetRefs() int64
 	GetMeta() *md.Segment
+	GetFsManager() ldio.IManager
 }
 
 type ColumnSegment struct {
@@ -60,9 +62,10 @@ type ColumnSegment struct {
 	MTBufMgr  bmgrif.IBufferManager
 	SSTBufMgr bmgrif.IBufferManager
 	Meta      *md.Segment
+	FsMgr     ldio.IManager
 }
 
-func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
+func NewColumnSegment(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
 	segType := UNSORTED_SEG
 	if meta.DataState == md.SORTED {
 		segType = SORTED_SEG
@@ -76,8 +79,13 @@ func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, met
 		Meta:      meta,
 		MTBufMgr:  mtBufMgr,
 		SSTBufMgr: sstBufMgr,
+		FsMgr:     fsMgr,
 	}
 	return seg.Ref()
+}
+
+func (seg *ColumnSegment) GetFsManager() ldio.IManager {
+	return seg.FsMgr
 }
 
 func (seg *ColumnSegment) GetMeta() *md.Segment {
@@ -180,6 +188,7 @@ func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment) IColumnSegment {
 		MTBufMgr:  seg.MTBufMgr,
 		SSTBufMgr: seg.SSTBufMgr,
 		Meta:      meta,
+		FsMgr:     seg.GetFsManager(),
 	}
 	cloned.Ref()
 	var prev IColumnBlock
@@ -232,10 +241,10 @@ func (seg *ColumnSegment) Close() error {
 
 func (seg *ColumnSegment) RegisterBlock(blkMeta *md.Block) (blk IColumnBlock, err error) {
 	blk = NewStdColumnBlock(seg, blkMeta)
-	part := NewColumnPart(seg.MTBufMgr, blk.Ref(), blk.GetID(), blkMeta.Segment.Info.Conf.BlockMaxRows,
+	part := NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(), blkMeta.Segment.Info.Conf.BlockMaxRows,
 		uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 	for part == nil {
-		part = NewColumnPart(seg.MTBufMgr, blk.Ref(), blk.GetID(), blkMeta.Segment.Info.Conf.BlockMaxRows,
+		part = NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(), blkMeta.Segment.Info.Conf.BlockMaxRows,
 			uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}

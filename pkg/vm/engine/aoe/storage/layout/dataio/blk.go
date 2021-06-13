@@ -39,6 +39,19 @@ func NewBlockFile(dirname string, id common.ID) *BlockFile {
 	return bf
 }
 
+func (bf *BlockFile) Destory() {
+	name := bf.Name()
+	log.Infof("Destory blockfile: %s", name)
+	err := bf.Close()
+	if err != nil {
+		panic(err)
+	}
+	err = os.Remove(name)
+	if err != nil {
+		panic(err)
+	}
+}
+
 func (bf *BlockFile) initPointers(id common.ID) {
 	twoBytes := make([]byte, 2)
 	_, err := bf.File.Read(twoBytes)
@@ -87,6 +100,8 @@ func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if len(buf) != int(pointer.Len) {
 		panic("logic error")
 	}
+	bf.Lock()
+	defer bf.Unlock()
 	n, err := bf.ReadAt(buf, pointer.Offset)
 	if err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
