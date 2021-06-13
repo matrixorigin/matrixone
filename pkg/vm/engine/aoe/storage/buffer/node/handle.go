@@ -34,7 +34,7 @@ func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
 
 	c := context.TODO()
 	c = context.WithValue(c, "handle", handle)
-	c = context.WithValue(c, "segmentfile", ctx.SegmentFile)
+	c = context.WithValue(c, "file", ctx.File)
 	handle.SpillIO = NewNodeIO(dio.WRITER_FACTORY.Opts, c)
 	return handle
 }

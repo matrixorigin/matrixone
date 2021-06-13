@@ -52,6 +52,15 @@ func (sf *UnsortedSegmentFile) MakeColSegmentFile(colIdx int) IColSegmentFile {
 	return csf
 }
 
+func (sf *UnsortedSegmentFile) MakeColPartFile(colIdx int, id *common.ID) IColPartFile {
+	cpf := &ColPartFile{
+		ColIdx:      uint64(colIdx),
+		ID:          id,
+		SegmentFile: sf,
+	}
+	return cpf
+}
+
 func (sf *UnsortedSegmentFile) Close() error {
 	for _, blkFile := range sf.Blocks {
 		err := blkFile.Close()

@@ -17,12 +17,12 @@ type NodeBuffer struct {
 }
 
 type NodeHandleCtx struct {
-	ID          common.ID
-	Buff        buf.IBuffer
-	Spillable   bool
-	Manager     mgrif.IBufferManager
-	Size        uint64
-	SegmentFile dio.IColSegmentFile
+	ID        common.ID
+	Buff      buf.IBuffer
+	Spillable bool
+	Manager   mgrif.IBufferManager
+	Size      uint64
+	File      dio.IColPartFile
 }
 
 type NodeHandle struct {

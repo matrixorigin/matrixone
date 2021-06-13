@@ -30,11 +30,11 @@ func (b *NodeReaderBuilder) Build(rf ioif.IReaderFactory, ctx context.Context) i
 		panic("logic error")
 	}
 	var (
-		filename    string
-		segmentFile ldio.IColSegmentFile
+		filename string
+		file     ldio.IColPartFile
 	)
-	sf := ctx.Value("segmentfile")
-	if sf == nil {
+	fileCtx := ctx.Value("file")
+	if fileCtx == nil {
 		fn := ctx.Value("filename")
 		if fn == nil {
 			id := handle.GetID()
@@ -43,31 +43,30 @@ func (b *NodeReaderBuilder) Build(rf ioif.IReaderFactory, ctx context.Context) i
 			filename = fmt.Sprintf("%v", fn)
 		}
 	} else {
-		segmentFile = sf.(ldio.IColSegmentFile)
+		file = fileCtx.(ldio.IColPartFile)
 	}
 	r := &NodeReader{
-		Opts:        rf.GetOpts(),
-		Dirname:     rf.GetDir(),
-		Handle:      handle,
-		Filename:    filename,
-		SegmentFile: segmentFile,
+		Opts:     rf.GetOpts(),
+		Dirname:  rf.GetDir(),
+		Handle:   handle,
+		Filename: filename,
+		File:     file,
 	}
 	return r
 }
 
 type NodeReader struct {
-	Opts        *e.Options
-	Dirname     string
-	Handle      iface.INodeHandle
-	Filename    string
-	SegmentFile ldio.IColSegmentFile
-	ColIdx      uint64
+	Opts     *e.Options
+	Dirname  string
+	Handle   iface.INodeHandle
+	Filename string
+	File     ldio.IColPartFile
 }
 
 func (nr *NodeReader) Load() (err error) {
 	node := nr.Handle.GetBuffer().GetDataNode()
-	if nr.SegmentFile != nil {
-		nr.SegmentFile.ReadPart(nr.Handle.GetID(), node.Data)
+	if nr.File != nil {
+		nr.File.Read(node.Data)
 		return nil
 	}
 

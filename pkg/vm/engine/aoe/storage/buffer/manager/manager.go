@@ -120,11 +120,11 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id common.
 	return handle
 }
 
-func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, segFile interface{}) nif.INodeHandle {
+func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, file interface{}) nif.INodeHandle {
 	mgr.Lock()
 	defer mgr.Unlock()
 	// log.Infof("RegisterNode %s", node_id.String())
-	sf := segFile.(ldio.IColSegmentFile)
+	pf := file.(ldio.IColPartFile)
 
 	handle, ok := mgr.Nodes[node_id]
 	if ok {
@@ -133,11 +133,11 @@ func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, segFi
 		}
 	}
 	ctx := node.NodeHandleCtx{
-		ID:          node_id,
-		Manager:     mgr,
-		Size:        capacity,
-		Spillable:   false,
-		SegmentFile: sf,
+		ID:        node_id,
+		Manager:   mgr,
+		Size:      capacity,
+		Spillable: false,
+		File:      pf,
 	}
 	handle = node.NewNodeHandle(&ctx)
 	mgr.Nodes[node_id] = handle

@@ -15,16 +15,16 @@ import (
 func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetUnsortedFile(part.ID.AsSegmentID())
 	sf.RefBlock(part.ID.AsBlockID())
-	csf := sf.MakeColSegmentFile(part.ColIdx)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, csf)
+	psf := sf.MakeColPartFile(part.ColIdx, &part.NodeID)
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
 	part.SegFile = sf
 }
 
 func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetSortedFile(part.ID.AsSegmentID())
 	sf.RefBlock(part.ID.AsBlockID())
-	csf := sf.MakeColSegmentFile(part.ColIdx)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, csf)
+	psf := sf.MakeColPartFile(part.ColIdx, &part.NodeID)
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
 	part.SegFile = sf
 }
 
