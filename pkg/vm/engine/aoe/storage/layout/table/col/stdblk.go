@@ -2,10 +2,10 @@ package col
 
 import (
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 type StdColumnBlock struct {
@@ -98,6 +98,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 	part := blk.Part.CloneWithUpgrade(cloned.Ref(), seg.GetSSTBufMgr(), seg.GetFsManager())
 	blk.RUnlock()
 	if part == nil {
+		log.Errorf("logic error")
 		panic("logic error")
 	}
 	cloned.Part = part
