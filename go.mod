@@ -18,6 +18,7 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
 	github.com/pingcap/log v0.0.0-20200511115504-543df19646ad // indirect
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
+	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.2.0
 	github.com/stretchr/testify v1.7.0
 	github.com/traetox/goaio v0.0.0-20171005222435-46641abceb17 // indirect

@@ -7,6 +7,7 @@ import (
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
@@ -30,7 +31,7 @@ type ITableData interface {
 	AppendColSegments(colSegs []col.IColumnSegment)
 }
 
-func NewTableData(mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
+func NewTableData(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
 	data := &TableData{
 		Columns:   make([]col.IColumnData, 0),
 		MTBufMgr:  mtBufMgr,
@@ -38,7 +39,7 @@ func NewTableData(mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITa
 		Meta:      meta,
 	}
 	for idx, colDef := range meta.Schema.ColDefs {
-		data.Columns = append(data.Columns, col.NewColumnData(mtBufMgr, sstBufMgr, colDef.Type, idx))
+		data.Columns = append(data.Columns, col.NewColumnData(fsMgr, mtBufMgr, sstBufMgr, colDef.Type, idx))
 	}
 	runtime.SetFinalizer(data, func(o ITableData) {
 		id := o.GetID()
@@ -196,9 +197,9 @@ func (ts *Tables) CreateTableNoLock(tbl ITableData) (err error) {
 	return nil
 }
 
-func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.MetaInfo) error {
+func (ts *Tables) Replay(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.MetaInfo) error {
 	for _, meta := range info.Tables {
-		tbl := NewTableData(mtBufMgr, sstBufMgr, meta)
+		tbl := NewTableData(fsMgr, mtBufMgr, sstBufMgr, meta)
 		colTypes := meta.Schema.Types()
 		activeSeg := meta.GetActiveSegment()
 		for _, segMeta := range meta.Segments {
@@ -213,7 +214,7 @@ func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.Met
 			}
 			activeBlk := segMeta.GetActiveBlk()
 			for colIdx, colType := range colTypes {
-				colSeg := col.NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, segMeta)
+				colSeg := col.NewColumnSegment(fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
 				defer colSeg.UnRef()
 				for _, blkMeta := range segMeta.Blocks {
 					if activeBlk != nil {
@@ -232,7 +233,7 @@ func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.Met
 					// Only stdblk now
 					colBlk := col.NewStdColumnBlock(colSeg.Ref(), blkMeta)
 					defer colBlk.UnRef()
-					colPart := col.NewColumnPart(bufMgr, colBlk.Ref(), blkId, info.Conf.BlockMaxRows, uint64(colType.Size))
+					colPart := col.NewColumnPart(colSeg.GetFsManager(), bufMgr, colBlk.Ref(), blkId, info.Conf.BlockMaxRows, uint64(colType.Size))
 					if colPart == nil {
 						return errors.New(fmt.Sprintf("data replay error"))
 					}
@@ -253,8 +254,8 @@ func (ts *Tables) Replay(mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.Met
 	return nil
 }
 
-func MockSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) col.IColumnSegment {
-	seg := col.NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, meta)
+func MockSegment(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) col.IColumnSegment {
+	seg := col.NewColumnSegment(fsMgr, mtBufMgr, sstBufMgr, colIdx, meta)
 	for _, blkMeta := range meta.Blocks {
 		blk, err := seg.RegisterBlock(blkMeta)
 		if err != nil {
@@ -265,12 +266,12 @@ func MockSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md
 	return seg
 }
 
-func MockSegments(mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table, tblData ITableData) []common.ID {
+func MockSegments(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table, tblData ITableData) []common.ID {
 	var segIDs []common.ID
 	for _, segMeta := range meta.Segments {
 		var colSegs []col.IColumnSegment
 		for colIdx, _ := range segMeta.Schema.ColDefs {
-			colSeg := MockSegment(mtBufMgr, sstBufMgr, colIdx, segMeta)
+			colSeg := MockSegment(fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
 			colSegs = append(colSegs, colSeg)
 		}
 		tblData.AppendColSegments(colSegs)

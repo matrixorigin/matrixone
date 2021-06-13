@@ -200,9 +200,11 @@ func (mgr *BufferManager) makePoolNode(capacity uint64) *buf.Node {
 		{
 			evict_node.Handle.Lock()
 			if !evict_node.Unloadable(evict_node.Handle) {
+				evict_node.Handle.Unlock()
 				continue
 			}
 			if !evict_node.Handle.Unloadable() {
+				evict_node.Handle.Unlock()
 				continue
 			}
 			evict_node.Handle.Unload()

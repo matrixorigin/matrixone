@@ -1,14 +1,13 @@
 package manager
 
 import (
-	// e "matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/stretchr/testify/assert"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"testing"
+	// e "matrixone/pkg/vm/engine/aoe/storage"
 )
 
 var WORK_DIR = "/tmp/buff/manager_test"
@@ -19,8 +18,7 @@ func init() {
 }
 
 func TestManagerBasic(t *testing.T) {
-	flusher := w.NewOpWorker("Flusher")
-	mgr := NewBufferManager(uint64(1), flusher)
+	mgr := MockBufMgr(uint64(1))
 	baseid := common.NewTransientID()
 	baseid.TableID = uint64(0)
 	node0 := baseid.Next()
@@ -66,10 +64,9 @@ func TestManagerBasic(t *testing.T) {
 }
 
 func TestManager2(t *testing.T) {
-	flusher := w.NewOpWorker("Flusher")
 	capacity := uint64(1024)
 	node_capacity := 2 * capacity
-	mgr := NewBufferManager(capacity, flusher)
+	mgr := MockBufMgr(capacity)
 	node0 := common.ID{}
 	empty := &ldio.MockColSegmentFile{}
 	h0 := mgr.RegisterNode(node_capacity, node0, empty)
@@ -106,8 +103,7 @@ func TestManager2(t *testing.T) {
 func TestManager3(t *testing.T) {
 	node_capacity := uint64(1024)
 	capacity := node_capacity * 2
-	flusher := w.NewOpWorker("Flusher")
-	mgr := NewBufferManager(capacity, flusher)
+	mgr := MockBufMgr(capacity)
 	assert.Equal(t, mgr.GetCapacity(), capacity)
 
 	id := common.ID{}
@@ -160,8 +156,7 @@ func TestManager3(t *testing.T) {
 func TestManager4(t *testing.T) {
 	node_capacity := uint64(1024)
 	capacity := node_capacity / 2
-	flusher := w.NewOpWorker("Flusher")
-	mgr := NewBufferManager(capacity, flusher)
+	mgr := MockBufMgr(capacity)
 	assert.Equal(t, mgr.GetCapacity(), capacity)
 
 	baseid := common.ID{}
@@ -191,8 +186,7 @@ func TestManager4(t *testing.T) {
 func TestManager5(t *testing.T) {
 	node_capacity := uint64(1024)
 	capacity := node_capacity / 2
-	flusher := w.NewOpWorker("Flusher")
-	mgr := NewBufferManager(capacity, flusher)
+	mgr := MockBufMgr(capacity)
 	assert.Equal(t, mgr.GetCapacity(), capacity)
 
 	h0 := mgr.RegisterMemory(node_capacity, false)

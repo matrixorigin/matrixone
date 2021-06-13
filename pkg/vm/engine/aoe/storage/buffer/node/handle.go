@@ -40,12 +40,11 @@ func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
 }
 
 func (h *NodeHandle) Iteration() uint64 {
-	return h.Iter
+	return atomic.LoadUint64(&h.Iter)
 }
 
 func (h *NodeHandle) IncIteration() uint64 {
-	h.Iter++
-	return h.Iter
+	return atomic.AddUint64(&h.Iter, uint64(1))
 }
 
 func (h *NodeHandle) FlushData() error {
@@ -114,6 +113,8 @@ func (h *NodeHandle) Clean() error {
 }
 
 func (h *NodeHandle) Close() error {
+	h.Lock()
+	defer h.Unlock()
 	if !nif.AtomicCASRTState(&(h.RTState), nif.NODE_RT_RUNNING, nif.NODE_RT_CLOSED) {
 		// Cocurrent senario that other client already call Close before
 		return nil
@@ -132,12 +133,18 @@ func (h *NodeHandle) IsClosed() bool {
 }
 
 func (h *NodeHandle) Unloadable() bool {
-	if h.State == nif.NODE_UNLOAD {
+	state := atomic.LoadUint32(&h.State)
+	if state == nif.NODE_UNLOAD {
 		return false
 	}
 	if h.HasRef() {
 		return false
 	}
+
+	// rtState := atomic.LoadUint32(&h.RTState)
+	// if rtState == nif.NODE_RT_CLOSED {
+	// 	return false
+	// }
 
 	return true
 }
@@ -149,8 +156,8 @@ func (h *NodeHandle) RollbackLoad() {
 	h.UnRef()
 	if h.Buff != nil {
 		h.Buff.Close()
+		h.Buff = nil
 	}
-	h.Buff = nil
 	nif.AtomicStoreState(&(h.State), nif.NODE_UNLOAD)
 }
 

@@ -150,6 +150,7 @@ func TestAppend(t *testing.T) {
 	blkIt.Close()
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 	// time.Sleep(time.Duration(20) * time.Millisecond)
+	t.Log(dbi.FsMgr.String())
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
 	dbi.Close()
@@ -161,6 +162,8 @@ type InsertReq struct {
 	LogIndex *md.LogIndex
 }
 
+// TODO: When the capacity is not very big and the query concurrency is very high,
+// the db will be stuck due to no more space. Need intruduce timeout mechanism later
 func TestConcurrency(t *testing.T) {
 	initDBTest()
 	dbi := initDB()
@@ -201,6 +204,12 @@ func TestConcurrency(t *testing.T) {
 							blkIt := sh.NewIterator()
 							for blkIt.Valid() {
 								blkCnt++
+								blkHandle := blkIt.GetBlockHandle()
+								cursors := blkHandle.InitScanCursor()
+								for _, cursor := range cursors {
+									cursor.Close()
+								}
+								blkHandle.Close()
 								blkIt.Next()
 							}
 							blkIt.Close()
@@ -245,7 +254,7 @@ func TestConcurrency(t *testing.T) {
 	wg2.Add(1)
 	go func() {
 		defer wg2.Done()
-		reqCnt := rand.Intn(200) + 200
+		reqCnt := rand.Intn(100) + 100
 		for i := 0; i < reqCnt; i++ {
 			searchReq := &e.IterOptions{
 				TableName: schema.Name,
@@ -264,6 +273,7 @@ func TestConcurrency(t *testing.T) {
 		All:       true,
 		ColIdxes:  cols,
 	}
+	time.Sleep(time.Duration(10) * time.Millisecond)
 	segIt, err := dbi.NewSegmentIter(opts)
 	segCnt := 0
 	tblkCnt := 0
@@ -274,6 +284,12 @@ func TestConcurrency(t *testing.T) {
 		h.Close()
 		for blkIt.Valid() {
 			tblkCnt++
+			blkHandle := blkIt.GetBlockHandle()
+			cursors := blkHandle.InitScanCursor()
+			for _, cursor := range cursors {
+				cursor.Close()
+			}
+			blkHandle.Close()
 			blkIt.Next()
 		}
 		blkIt.Close()
@@ -292,7 +308,7 @@ func TestConcurrency(t *testing.T) {
 	}
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	blkIt.Close()
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(time.Duration(80) * time.Millisecond)
 
 	t.Log(dbi.WorkersStatsString())
 	t.Log(dbi.MTBufMgr.String())
