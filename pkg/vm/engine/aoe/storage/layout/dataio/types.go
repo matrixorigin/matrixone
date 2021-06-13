@@ -31,7 +31,6 @@ type ISegmentFile interface {
 	Destory()
 	RefBlock(blkId common.ID)
 	UnrefBlock(blkId common.ID)
-	MakeColSegmentFile(colIdx int) IColSegmentFile
 	MakeColPartFile(colIdx int, id *common.ID) IColPartFile
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 }

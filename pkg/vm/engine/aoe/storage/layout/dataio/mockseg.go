@@ -76,11 +76,3 @@ func (msf *MockSegmentFile) MakeColPartFile(colIdx int, id *common.ID) IColPartF
 	}
 	return psf
 }
-
-func (msf *MockSegmentFile) MakeColSegmentFile(colIdx int) IColSegmentFile {
-	csf := &ColSegmentFile{
-		SegmentFile: msf,
-		ColIdx:      uint64(colIdx),
-	}
-	return csf
-}

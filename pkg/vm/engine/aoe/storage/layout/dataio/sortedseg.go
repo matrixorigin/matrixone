@@ -49,14 +49,6 @@ func (sf *SortedSegmentFile) MakeColPartFile(colIdx int, id *common.ID) IColPart
 	return cpf
 }
 
-func (sf *SortedSegmentFile) MakeColSegmentFile(colIdx int) IColSegmentFile {
-	csf := &ColSegmentFile{
-		SegmentFile: sf,
-		ColIdx:      uint64(colIdx),
-	}
-	return csf
-}
-
 func (sf *SortedSegmentFile) RefBlock(id common.ID) {
 	atomic.AddInt32(&sf.Refs, int32(1))
 }
