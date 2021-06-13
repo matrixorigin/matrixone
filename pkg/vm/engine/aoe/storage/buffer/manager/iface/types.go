@@ -1,6 +1,7 @@
 package iface
 
 import (
+	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -18,7 +19,7 @@ type IBufferManager interface {
 
 	RegisterMemory(capacity uint64, spillable bool) nif.INodeHandle
 	RegisterSpillableNode(capacity uint64, node_id common.ID) nif.INodeHandle
-	RegisterNode(capacity uint64, node_id common.ID, file interface{}) nif.INodeHandle
+	RegisterNode(capacity uint64, node_id common.ID, reader io.Reader) nif.INodeHandle
 	UnregisterNode(nif.INodeHandle)
 
 	// // Allocate(size uint64) buf.IBufferH

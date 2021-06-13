@@ -2,15 +2,16 @@ package manager
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -120,11 +121,10 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id common.
 	return handle
 }
 
-func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, file interface{}) nif.INodeHandle {
+func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, reader io.Reader) nif.INodeHandle {
 	mgr.Lock()
 	defer mgr.Unlock()
 	// log.Infof("RegisterNode %s", node_id.String())
-	pf := file.(ldio.IColPartFile)
 
 	handle, ok := mgr.Nodes[node_id]
 	if ok {
@@ -137,7 +137,7 @@ func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, file 
 		Manager:   mgr,
 		Size:      capacity,
 		Spillable: false,
-		File:      pf,
+		Reader:    reader,
 	}
 	handle = node.NewNodeHandle(&ctx)
 	mgr.Nodes[node_id] = handle

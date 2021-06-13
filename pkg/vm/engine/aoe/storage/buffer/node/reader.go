@@ -3,11 +3,11 @@ package node
 import (
 	"context"
 	"fmt"
+	"io"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"os"
 	"path/filepath"
 	// log "github.com/sirupsen/logrus"
@@ -31,10 +31,10 @@ func (b *NodeReaderBuilder) Build(rf ioif.IReaderFactory, ctx context.Context) i
 	}
 	var (
 		filename string
-		file     ldio.IColPartFile
+		reader   io.Reader
 	)
-	fileCtx := ctx.Value("file")
-	if fileCtx == nil {
+	readerCtx := ctx.Value("reader")
+	if readerCtx == nil {
 		fn := ctx.Value("filename")
 		if fn == nil {
 			id := handle.GetID()
@@ -43,14 +43,14 @@ func (b *NodeReaderBuilder) Build(rf ioif.IReaderFactory, ctx context.Context) i
 			filename = fmt.Sprintf("%v", fn)
 		}
 	} else {
-		file = fileCtx.(ldio.IColPartFile)
+		reader = readerCtx.(io.Reader)
 	}
 	r := &NodeReader{
 		Opts:     rf.GetOpts(),
 		Dirname:  rf.GetDir(),
 		Handle:   handle,
 		Filename: filename,
-		File:     file,
+		Reader:   reader,
 	}
 	return r
 }
@@ -60,13 +60,13 @@ type NodeReader struct {
 	Dirname  string
 	Handle   iface.INodeHandle
 	Filename string
-	File     ldio.IColPartFile
+	Reader   io.Reader
 }
 
 func (nr *NodeReader) Load() (err error) {
 	node := nr.Handle.GetBuffer().GetDataNode()
-	if nr.File != nil {
-		nr.File.Read(node.Data)
+	if nr.Reader != nil {
+		nr.Reader.Read(node.Data)
 		return nil
 	}
 
