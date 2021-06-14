@@ -314,7 +314,11 @@ func (seg *ColumnSegment) String() string {
 
 func (seg *ColumnSegment) ToString(verbose bool) string {
 	if verbose {
-		return fmt.Sprintf("Seg(%v)(%d)[HasNext:%v]", seg.ID, seg.Type, seg.Next != nil)
+		s := fmt.Sprintf("Seg(%v)(%d)[HasNext:%v]", seg.ID.String(), seg.Type, seg.Next != nil)
+		for _, blk := range seg.Blocks {
+			s = fmt.Sprintf("%s\n\t%s", s, blk.String())
+		}
+		return s
 	}
 	return fmt.Sprintf("(%v, %v)", seg.ID, seg.Type)
 }

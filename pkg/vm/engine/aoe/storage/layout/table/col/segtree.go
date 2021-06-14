@@ -183,13 +183,10 @@ func (tree *SegmentTree) ToString(depth uint64) string {
 	}
 	ret := fmt.Sprintf("SegTree (%v/%v) [", depth, tree.Depth())
 	for i := uint64(0); i < depth; i++ {
-		ret += tree.data.Segments[i].ToString(true)
-		if i != depth-1 {
-			ret += ","
-		}
+		ret = fmt.Sprintf("%s\n%s", ret, tree.data.Segments[i].ToString(true))
 	}
 
-	ret += "]"
+	ret = fmt.Sprintf("%s\n]", ret)
 
 	return ret
 }
