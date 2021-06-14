@@ -16,7 +16,6 @@ import (
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	"sync"
-	"sync/atomic"
 )
 
 type MemTable struct {
@@ -85,8 +84,8 @@ func (mt *MemTable) Append(c *chunk.Chunk, offset uint64, index *md.LogIndex) (n
 	}
 	index.Count = n
 	mt.Meta.SetIndex(*index)
-	atomic.AddUint64(&mt.Meta.Count, n)
-	log.Infof("offset=%d, writecnt=%d, cap=%d, index=%s, blkcnt=%d", offset, n, c.GetCount(), index.String(), mt.Meta.Count)
+	mt.Meta.AddCount(n)
+	log.Infof("offset=%d, writecnt=%d, cap=%d, index=%s, blkcnt=%d", offset, n, c.GetCount(), index.String(), mt.Meta.GetCount())
 	if mt.Data.GetCount() == mt.Meta.MaxRowCount {
 		mt.Full = true
 		mt.Meta.DataState = md.FULL
