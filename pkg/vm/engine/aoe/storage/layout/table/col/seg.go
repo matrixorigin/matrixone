@@ -7,6 +7,7 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
@@ -52,17 +53,18 @@ type IColumnSegment interface {
 
 type ColumnSegment struct {
 	sync.RWMutex
-	Refs      int64
-	ID        common.ID
-	ColIdx    int
-	Next      IColumnSegment
-	Blocks    []IColumnBlock
-	IDMap     map[common.ID]int
-	Type      SegmentType
-	MTBufMgr  bmgrif.IBufferManager
-	SSTBufMgr bmgrif.IBufferManager
-	Meta      *md.Segment
-	FsMgr     ldio.IManager
+	Refs        int64
+	ID          common.ID
+	ColIdx      int
+	Next        IColumnSegment
+	Blocks      []IColumnBlock
+	IDMap       map[common.ID]int
+	Type        SegmentType
+	MTBufMgr    bmgrif.IBufferManager
+	SSTBufMgr   bmgrif.IBufferManager
+	Meta        *md.Segment
+	FsMgr       ldio.IManager
+	IndexHolder *index.SegmentHolder
 }
 
 func NewColumnSegment(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {

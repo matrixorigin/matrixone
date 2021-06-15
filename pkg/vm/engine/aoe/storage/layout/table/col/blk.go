@@ -4,6 +4,7 @@ import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
@@ -49,13 +50,14 @@ type IColumnBlock interface {
 
 type ColumnBlock struct {
 	sync.RWMutex
-	ID     common.ID
-	Next   IColumnBlock
-	Type   BlockType
-	ColIdx int
-	Refs   int64
-	Meta   *md.Block
-	File   ldio.ISegmentFile
+	ID          common.ID
+	Next        IColumnBlock
+	Type        BlockType
+	ColIdx      int
+	Refs        int64
+	Meta        *md.Block
+	File        ldio.ISegmentFile
+	IndexHolder *index.BlockHolder
 }
 
 func (blk *ColumnBlock) GetRefs() int64 {

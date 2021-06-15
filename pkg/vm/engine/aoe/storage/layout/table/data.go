@@ -3,15 +3,17 @@ package table
 import (
 	"errors"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type ITableData interface {
@@ -50,11 +52,12 @@ func NewTableData(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager
 
 type TableData struct {
 	sync.Mutex
-	RowCount  uint64
-	Columns   []col.IColumnData
-	MTBufMgr  bmgrif.IBufferManager
-	SSTBufMgr bmgrif.IBufferManager
-	Meta      *md.Table
+	RowCount    uint64
+	Columns     []col.IColumnData
+	MTBufMgr    bmgrif.IBufferManager
+	SSTBufMgr   bmgrif.IBufferManager
+	Meta        *md.Table
+	IndexHolder *index.TableHolder
 }
 
 func (td *TableData) GetRowCount() uint64 {
