@@ -6,11 +6,15 @@ import (
 	"matrixone/pkg/sql/op"
 )
 
-func New(prev op.OP, es []*Extend) *Projection {
+func New(prev op.OP, es []*Extend) (*Projection, error) {
+	as := make([]string, 0, len(es))
 	attrs := make(map[string]types.Type)
 	for _, e := range es {
 		if len(e.Alias) == 0 {
 			e.Alias = e.E.String()
+		}
+		if _, ok := attrs[e.Alias]; ok {
+			return nil, fmt.Errorf("column '%s' is ambiguous", e.Alias)
 		}
 		switch typ := e.E.ReturnType(); typ {
 		case types.T_int8:
@@ -40,12 +44,14 @@ func New(prev op.OP, es []*Extend) *Projection {
 		case types.T_sel:
 			attrs[e.Alias] = types.Type{Oid: typ, Size: 8}
 		}
+		as = append(as, e.Alias)
 	}
 	return &Projection{
+		As:    as,
 		Es:    es,
 		Prev:  prev,
 		Attrs: attrs,
-	}
+	}, nil
 }
 
 func (n *Projection) String() string {

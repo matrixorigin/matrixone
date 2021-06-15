@@ -17,6 +17,7 @@ import (
 	"matrixone/pkg/sql/colexec/mergeorder"
 	"matrixone/pkg/sql/colexec/mergesum"
 	"matrixone/pkg/sql/colexec/mergetop"
+	"matrixone/pkg/sql/colexec/myoutput"
 	"matrixone/pkg/sql/colexec/offset"
 	"matrixone/pkg/sql/colexec/order"
 	"matrixone/pkg/sql/colexec/output"
@@ -63,6 +64,7 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	BagInnerJoin:      binner.String,
 	BagNaturalJoin:    bnatural.String,
 	Output:            output.String,
+	MyOutput:          myoutput.String,
 	Exchange:          exchange.String,
 	MergeTop:          mergetop.String,
 	MergeDedup:        mergededup.String,
@@ -100,6 +102,7 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	BagInnerJoin:      binner.Prepare,
 	BagNaturalJoin:    bnatural.Prepare,
 	Output:            output.Prepare,
+	MyOutput:          myoutput.Prepare,
 	Exchange:          exchange.Prepare,
 	MergeTop:          mergetop.Prepare,
 	MergeDedup:        mergededup.Prepare,
@@ -137,6 +140,7 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	BagInnerJoin:      binner.Call,
 	BagNaturalJoin:    bnatural.Call,
 	Output:            output.Call,
+	MyOutput:          myoutput.Call,
 	Exchange:          exchange.Call,
 	MergeTop:          mergetop.Call,
 	MergeDedup:        mergededup.Call,

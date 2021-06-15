@@ -9,6 +9,7 @@ import (
 type Summarize struct {
 	Prev  op.OP
 	ID    string
+	As    []string
 	Es    []aggregation.Extend
 	Attrs map[string]types.Type
 }

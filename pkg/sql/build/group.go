@@ -40,7 +40,11 @@ func (b *build) buildGroupBy(o op.OP, ns tree.GroupBy) (op.OP, []*extend.Attribu
 			rs = append(rs, attr)
 		}
 	}
-	return projection.New(o, pes), rs, nil
+	o, err := projection.New(o, pes)
+	if err != nil {
+		return nil, nil, err
+	}
+	return o, rs, nil
 }
 
 func (b *build) stripGroup(o op.OP, ns tree.SelectExprs, gs []*extend.Attribute) (op.OP, error) {
@@ -64,5 +68,5 @@ func (b *build) stripGroup(o op.OP, ns tree.SelectExprs, gs []*extend.Attribute)
 	for _, g := range gs {
 		es = append(es, &projection.Extend{E: g})
 	}
-	return projection.New(o, es), nil
+	return projection.New(o, es)
 }

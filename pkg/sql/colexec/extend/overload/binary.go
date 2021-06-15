@@ -2755,7 +2755,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Int8LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Int8GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -2785,7 +2785,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Int16LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Int16GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -2815,7 +2815,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Int32LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Int32GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -2845,7 +2845,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Int64LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Int64GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -2875,7 +2875,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Uint8LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Uint8GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -2905,7 +2905,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Uint16LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Uint16GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -2935,7 +2935,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Uint32LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Uint32GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -2965,7 +2965,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Uint64LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Uint64GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -2995,7 +2995,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Float32LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Float32GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3025,7 +3025,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Float64LtScalar(rvs[0], lvs, rs))
+					vec.SetCol(gt.Float64GtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3057,7 +3057,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Int8LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Int8GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3087,7 +3087,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Int16LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Int16GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3117,7 +3117,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Int32LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Int32GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3147,7 +3147,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Int64LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Int64GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3177,7 +3177,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Uint8LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Uint8GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3207,7 +3207,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Uint16LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Uint16GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3237,7 +3237,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Uint32LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Uint32GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3267,7 +3267,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Uint64LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Uint64GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3297,7 +3297,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Float32LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Float32GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3327,7 +3327,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Float64LeScalar(rvs[0], lvs, rs))
+					vec.SetCol(ge.Float64GeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3359,7 +3359,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Int8GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Int8LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3389,7 +3389,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Int16GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Int16LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3419,7 +3419,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Int32GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Int32LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3449,7 +3449,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Int64GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Int64LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3479,7 +3479,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Uint8GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Uint8LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3509,7 +3509,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Uint16GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Uint16LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3539,7 +3539,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Uint32GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Uint32LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3569,7 +3569,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Uint64GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Uint64LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3599,7 +3599,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Float32GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Float32LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3629,7 +3629,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Float64GtScalar(rvs[0], lvs, rs))
+					vec.SetCol(lt.Float64LtScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3661,7 +3661,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Int8GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Int8LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3691,7 +3691,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Int16GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Int16LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3721,7 +3721,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Int32GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Int32LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3751,7 +3751,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Int64GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Int64LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3781,7 +3781,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Uint8GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Uint8LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3811,7 +3811,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Uint16GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Uint16LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3841,7 +3841,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Uint32GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Uint32LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3871,7 +3871,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Uint64GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Uint64LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3901,7 +3901,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Float32GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Float32LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
@@ -3931,7 +3931,7 @@ var BinOps = map[int][]*BinOp{
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Float64GeScalar(rvs[0], lvs, rs))
+					vec.SetCol(le.Float64LeScalar(rvs[0], lvs, rs))
 				default:
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
