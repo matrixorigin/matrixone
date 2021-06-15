@@ -36,6 +36,11 @@ func NewSegmentHolder(id uint64, segType SegmentType) *SegmentHolder {
 	return holder
 }
 
+func (holder *SegmentHolder) stringNoLock() string {
+	s := fmt.Sprintf("<IndexSegmentHolder[%d]>[Ty=%d](Cnt=%d)", holder.ID, holder.Type, holder.tree.BlockCnt)
+	return s
+}
+
 func (holder *SegmentHolder) GetBlock(id uint64) (blk *BlockHolder) {
 	holder.tree.RLock()
 	idx, ok := holder.tree.IdMap[id]

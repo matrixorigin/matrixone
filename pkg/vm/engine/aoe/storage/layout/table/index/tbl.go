@@ -53,6 +53,16 @@ func (holder *TableHolder) GetSegmentCount() int64 {
 	return atomic.LoadInt64(&holder.tree.SegmentCnt)
 }
 
+func (holder *TableHolder) String() string {
+	holder.tree.RLock()
+	defer holder.tree.RUnlock()
+	s := fmt.Sprintf("<IndexTableHolder[%d]>[Cnt=%d]", holder.ID, holder.tree.SegmentCnt)
+	for _, seg := range holder.tree.Segments {
+		s = fmt.Sprintf("%s\n\t%s", s, seg.stringNoLock())
+	}
+	return s
+}
+
 func (holder *TableHolder) UpgradeSegment(id uint64, segType SegmentType) *SegmentHolder {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()

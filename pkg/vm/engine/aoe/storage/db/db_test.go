@@ -159,6 +159,7 @@ func TestAppend(t *testing.T) {
 	tbl, err := dbi.store.DataTables.GetTable(tid)
 	assert.Nil(t, err)
 	t.Log(tbl.GetCollumn(0).ToString(1000))
+	t.Log(tbl.GetIndexHolder().String())
 	dbi.Close()
 }
 
