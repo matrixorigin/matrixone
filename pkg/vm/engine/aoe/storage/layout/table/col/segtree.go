@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
 
@@ -32,15 +33,16 @@ type ISegmentTree interface {
 }
 
 type SegmentTree struct {
-	data struct {
+	IndexHolder *index.TableHolder
+	data        struct {
 		sync.RWMutex
 		Segments []IColumnSegment
 		Helper   map[common.ID]int
 	}
 }
 
-func NewSegmentTree() ISegmentTree {
-	tree := &SegmentTree{}
+func NewSegmentTree(indexHolder *index.TableHolder) ISegmentTree {
+	tree := &SegmentTree{IndexHolder: indexHolder}
 	tree.data.Segments = make([]IColumnSegment, 0)
 	tree.data.Helper = make(map[common.ID]int)
 	runtime.SetFinalizer(tree, func(o *SegmentTree) {
@@ -132,7 +134,7 @@ func (tree *SegmentTree) UpgradeSegment(segID common.ID) IColumnSegment {
 		panic("logic error")
 	}
 
-	upgradeSeg := seg.CloneWithUpgrade(seg.GetMeta())
+	upgradeSeg := seg.CloneWithUpgrade(seg.GetMeta(), tree.IndexHolder)
 	if upgradeSeg == nil {
 		panic(fmt.Sprintf("Cannot upgrade seg: %s", segID.SegmentString()))
 	}

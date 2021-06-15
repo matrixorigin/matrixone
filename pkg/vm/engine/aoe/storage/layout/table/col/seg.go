@@ -39,7 +39,7 @@ type IColumnSegment interface {
 	GetSegmentType() SegmentType
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager
-	CloneWithUpgrade(*md.Segment) IColumnSegment
+	CloneWithUpgrade(*md.Segment, *index.TableHolder) IColumnSegment
 	UpgradeBlock(*md.Block) (IColumnBlock, error)
 	GetBlock(id common.ID) IColumnBlock
 	InitScanCursor(cursor *ScanCursor) error
@@ -69,8 +69,10 @@ type ColumnSegment struct {
 
 func NewColumnSegment(tblHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
 	segType := UNSORTED_SEG
+	indexSegType := index.UnsortedSegment
 	if meta.DataState == md.SORTED {
 		segType = SORTED_SEG
+		indexSegType = index.SortedSegment
 	}
 	seg := &ColumnSegment{
 		ID:        *meta.AsCommonID(),
@@ -85,7 +87,7 @@ func NewColumnSegment(tblHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMg
 	}
 	seg.IndexHolder = tblHolder.GetSegment(seg.ID.SegmentID)
 	if seg.IndexHolder == nil {
-		segHolder := index.NewSegmentHolder(seg.ID.SegmentID)
+		segHolder := index.NewSegmentHolder(seg.ID.SegmentID, indexSegType)
 		// segHolder.Init()
 		tblHolder.AddSegment(segHolder)
 		seg.IndexHolder = segHolder
@@ -182,7 +184,7 @@ func (seg *ColumnSegment) UpgradeBlock(newMeta *md.Block) (IColumnBlock, error) 
 	return upgradeBlk.Ref(), nil
 }
 
-func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment) IColumnSegment {
+func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment, indexTblHolder *index.TableHolder) IColumnSegment {
 	if seg.Type != UNSORTED_SEG {
 		panic("logic error")
 	}
@@ -201,6 +203,15 @@ func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment) IColumnSegment {
 		FsMgr:     seg.GetFsManager(),
 	}
 	cloned.Ref()
+	segIndexHolder := indexTblHolder.GetSegment(seg.ID.SegmentID)
+	if segIndexHolder == nil {
+		panic("logic error")
+	}
+	if segIndexHolder.Type == index.UnsortedSegment {
+		segIndexHolder = indexTblHolder.UpgradeSegment(seg.ID.SegmentID, index.SortedSegment)
+		// segIndexHolder.Init()
+	}
+	cloned.IndexHolder = segIndexHolder
 	var prev IColumnBlock
 	for _, blk := range seg.Blocks {
 		newBlkMeta, err := meta.ReferenceBlock(blk.GetID().BlockID)

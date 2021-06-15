@@ -6,6 +6,13 @@ import (
 	"sync/atomic"
 )
 
+type SegmentType uint8
+
+const (
+	UnsortedSegment SegmentType = iota
+	SortedSegment
+)
+
 type SegmentHolder struct {
 	ID   uint64
 	self struct {
@@ -18,10 +25,11 @@ type SegmentHolder struct {
 		IdMap    map[uint64]int
 		BlockCnt int32
 	}
+	Type SegmentType
 }
 
-func NewSegmentHolder(id uint64) *SegmentHolder {
-	holder := &SegmentHolder{ID: id}
+func NewSegmentHolder(id uint64, segType SegmentType) *SegmentHolder {
+	holder := &SegmentHolder{ID: id, Type: segType}
 	holder.tree.Blocks = make([]*BlockHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
 	holder.self.Indexes = make(map[string]Index)

@@ -7,7 +7,8 @@ import (
 )
 
 func TestSegment(t *testing.T) {
-	segHolder := NewSegmentHolder(uint64(0))
+	segType := UnsortedSegment
+	segHolder := NewSegmentHolder(uint64(0), segType)
 	assert.Equal(t, int32(0), segHolder.GetBlockCount())
 
 	blk0Id := uint64(0)
@@ -35,10 +36,11 @@ func TestTable(t *testing.T) {
 	tableHolder := NewTableHolder(uint64(0))
 	assert.Equal(t, int64(0), tableHolder.GetSegmentCount())
 
+	segType := UnsortedSegment
 	seg0Id := uint64(0)
-	seg0Holder := NewSegmentHolder(seg0Id)
+	seg0Holder := NewSegmentHolder(seg0Id, segType)
 	seg1Id := uint64(1)
-	seg1Holder := NewSegmentHolder(seg1Id)
+	seg1Holder := NewSegmentHolder(seg1Id, segType)
 
 	seg0 := tableHolder.GetSegment(seg0Id)
 	assert.Nil(t, seg0)

@@ -45,7 +45,7 @@ func NewColumnData(indexHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMgr
 	data := &ColumnData{
 		Type:        col_type,
 		Idx:         col_idx,
-		SegTree:     NewSegmentTree(),
+		SegTree:     NewSegmentTree(indexHolder),
 		MTBufMgr:    mtBufMgr,
 		SSTBufMgr:   sstBufMgr,
 		FsMgr:       fsMgr,

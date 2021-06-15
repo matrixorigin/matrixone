@@ -53,6 +53,22 @@ func (holder *TableHolder) GetSegmentCount() int64 {
 	return atomic.LoadInt64(&holder.tree.SegmentCnt)
 }
 
+func (holder *TableHolder) UpgradeSegment(id uint64, segType SegmentType) *SegmentHolder {
+	holder.tree.Lock()
+	defer holder.tree.Unlock()
+	idx, ok := holder.tree.IdMap[id]
+	if !ok {
+		panic(fmt.Sprintf("specified seg %d not found in %d", id, holder.ID))
+	}
+	stale := holder.tree.Segments[idx]
+	if stale.Type >= segType {
+		panic(fmt.Sprintf("Cannot upgrade segment %d, type %d", id, segType))
+	}
+	newSeg := NewSegmentHolder(id, segType)
+	holder.tree.Segments[idx] = newSeg
+	return newSeg
+}
+
 func (holder *TableHolder) GetSegment(id uint64) (seg *SegmentHolder) {
 	holder.tree.RLock()
 	idx, ok := holder.tree.IdMap[id]
