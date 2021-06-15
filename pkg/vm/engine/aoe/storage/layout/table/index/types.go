@@ -1,14 +1,12 @@
 package index
 
-type Type uint16
-
-const (
-	ZoneMap Type = iota
+import (
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
 // TODO: Just for index framework implementation placeholder
 type Index interface {
-	Type() Type
+	Type() base.IndexType
 	Eq(interface{}) bool
 	Ne(interface{}) bool
 	Lt(interface{}) bool

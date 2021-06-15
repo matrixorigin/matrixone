@@ -10,12 +10,14 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
 )
 
 var (
-	_ mgrif.IBufferManager = (*BufferManager)(nil)
+	_          mgrif.IBufferManager = (*BufferManager)(nil)
+	evictTimes                      = int64(0)
 )
 
 func NewBufferManager(capacity uint64, flusher iw.IOpWorker, evict_ctx ...interface{}) mgrif.IBufferManager {
@@ -39,7 +41,7 @@ func (mgr *BufferManager) NodeCount() int {
 func (mgr *BufferManager) String() string {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	s := fmt.Sprintf("BMgr[Cap:%d, Usage:%d, Nodes:%d]:\n", mgr.GetCapacity(), mgr.GetUsage(), len(mgr.Nodes))
+	s := fmt.Sprintf("BMgr[Cap:%d, Usage:%d, Nodes:%d, EvictTimes: %d]:\n", mgr.GetCapacity(), mgr.GetUsage(), len(mgr.Nodes), atomic.LoadInt64(&evictTimes))
 	var mapped = map[uint64]map[uint64][]common.ID{}
 	for k, _ := range mgr.Nodes {
 		_, ok := mapped[k.TableID]
@@ -146,7 +148,7 @@ func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, reade
 
 func (mgr *BufferManager) UnregisterNode(h nif.INodeHandle) {
 	node_id := h.GetID()
-	log.Infof("UnRegisterNode %s", node_id.String())
+	// log.Infof("UnRegisterNode %s", node_id.String())
 	if h.IsSpillable() {
 		if node_id.IsTransient() {
 			h.Clean()
@@ -171,6 +173,7 @@ func (mgr *BufferManager) Unpin(handle nif.INodeHandle) {
 		panic("logic error")
 	}
 	if !handle.HasRef() {
+		atomic.AddInt64(&evictTimes, int64(1))
 		evict_node := &EvictNode{Handle: handle, Iter: handle.IncIteration()}
 		mgr.EvictHolder.Enqueue(evict_node)
 	}

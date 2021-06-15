@@ -3,6 +3,7 @@ package index
 import (
 	"bytes"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
 // TODO: Just for temp test
@@ -20,8 +21,8 @@ func NewZoneMap(t types.Type, minv, maxv interface{}) Index {
 	}
 }
 
-func (i *ZoneMapIndex) Type() Type {
-	return ZoneMap
+func (i *ZoneMapIndex) Type() base.IndexType {
+	return base.ZoneMap
 }
 
 func (i *ZoneMapIndex) Eq(v interface{}) bool {
