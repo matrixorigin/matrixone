@@ -27,6 +27,7 @@ type ITableData interface {
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager
 	GetSegmentCount() uint64
+	GetIndexHolder() *index.TableHolder
 
 	UpgradeBlock(*md.Block) (blks []col.IColumnBlock)
 	UpgradeSegment(segID common.ID) (segs []col.IColumnSegment)
@@ -35,13 +36,14 @@ type ITableData interface {
 
 func NewTableData(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
 	data := &TableData{
-		Columns:   make([]col.IColumnData, 0),
-		MTBufMgr:  mtBufMgr,
-		SSTBufMgr: sstBufMgr,
-		Meta:      meta,
+		Columns:     make([]col.IColumnData, 0),
+		MTBufMgr:    mtBufMgr,
+		SSTBufMgr:   sstBufMgr,
+		Meta:        meta,
+		IndexHolder: index.NewTableHolder(meta.ID),
 	}
 	for idx, colDef := range meta.Schema.ColDefs {
-		data.Columns = append(data.Columns, col.NewColumnData(fsMgr, mtBufMgr, sstBufMgr, colDef.Type, idx))
+		data.Columns = append(data.Columns, col.NewColumnData(data.IndexHolder, fsMgr, mtBufMgr, sstBufMgr, colDef.Type, idx))
 	}
 	runtime.SetFinalizer(data, func(o ITableData) {
 		id := o.GetID()
@@ -62,6 +64,10 @@ type TableData struct {
 
 func (td *TableData) GetRowCount() uint64 {
 	return td.RowCount
+}
+
+func (td *TableData) GetIndexHolder() *index.TableHolder {
+	return td.IndexHolder
 }
 
 func (td *TableData) GetID() uint64 {
@@ -217,7 +223,7 @@ func (ts *Tables) Replay(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBuffer
 			}
 			activeBlk := segMeta.GetActiveBlk()
 			for colIdx, colType := range colTypes {
-				colSeg := col.NewColumnSegment(fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
+				colSeg := col.NewColumnSegment(tbl.GetIndexHolder(), fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
 				defer colSeg.UnRef()
 				for _, blkMeta := range segMeta.Blocks {
 					if activeBlk != nil {
@@ -257,8 +263,8 @@ func (ts *Tables) Replay(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBuffer
 	return nil
 }
 
-func MockSegment(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) col.IColumnSegment {
-	seg := col.NewColumnSegment(fsMgr, mtBufMgr, sstBufMgr, colIdx, meta)
+func MockSegment(indexHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) col.IColumnSegment {
+	seg := col.NewColumnSegment(indexHolder, fsMgr, mtBufMgr, sstBufMgr, colIdx, meta)
 	for _, blkMeta := range meta.Blocks {
 		blk, err := seg.RegisterBlock(blkMeta)
 		if err != nil {
@@ -274,7 +280,7 @@ func MockSegments(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager
 	for _, segMeta := range meta.Segments {
 		var colSegs []col.IColumnSegment
 		for colIdx, _ := range segMeta.Schema.ColDefs {
-			colSeg := MockSegment(fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
+			colSeg := MockSegment(tblData.GetIndexHolder(), fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
 			colSegs = append(colSegs, colSeg)
 		}
 		tblData.AppendColSegments(colSegs)

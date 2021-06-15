@@ -32,7 +32,7 @@ func TestSegment(t *testing.T) {
 }
 
 func TestTable(t *testing.T) {
-	tableHolder := NewTableHolder()
+	tableHolder := NewTableHolder(uint64(0))
 	assert.Equal(t, int64(0), tableHolder.GetSegmentCount())
 
 	seg0Id := uint64(0)

@@ -7,6 +7,7 @@ import (
 )
 
 type TableHolder struct {
+	ID   uint64
 	tree struct {
 		sync.RWMutex
 		Segments   []*SegmentHolder
@@ -15,8 +16,8 @@ type TableHolder struct {
 	}
 }
 
-func NewTableHolder() *TableHolder {
-	holder := &TableHolder{}
+func NewTableHolder(id uint64) *TableHolder {
+	holder := &TableHolder{ID: id}
 	holder.tree.Segments = make([]*SegmentHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
 	return holder

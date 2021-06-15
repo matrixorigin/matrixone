@@ -67,7 +67,7 @@ type ColumnSegment struct {
 	IndexHolder *index.SegmentHolder
 }
 
-func NewColumnSegment(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
+func NewColumnSegment(tblHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
 	segType := UNSORTED_SEG
 	if meta.DataState == md.SORTED {
 		segType = SORTED_SEG
@@ -83,6 +83,14 @@ func NewColumnSegment(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferMan
 		SSTBufMgr: sstBufMgr,
 		FsMgr:     fsMgr,
 	}
+	seg.IndexHolder = tblHolder.GetSegment(seg.ID.SegmentID)
+	if seg.IndexHolder == nil {
+		segHolder := index.NewSegmentHolder(seg.ID.SegmentID)
+		// segHolder.Init()
+		tblHolder.AddSegment(segHolder)
+		seg.IndexHolder = segHolder
+	}
+
 	return seg.Ref()
 }
 

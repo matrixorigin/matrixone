@@ -41,14 +41,15 @@ type ColumnData struct {
 	IndexHolder *index.TableHolder
 }
 
-func NewColumnData(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, col_type types.Type, col_idx int) IColumnData {
+func NewColumnData(indexHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, col_type types.Type, col_idx int) IColumnData {
 	data := &ColumnData{
-		Type:      col_type,
-		Idx:       col_idx,
-		SegTree:   NewSegmentTree(),
-		MTBufMgr:  mtBufMgr,
-		SSTBufMgr: sstBufMgr,
-		FsMgr:     fsMgr,
+		Type:        col_type,
+		Idx:         col_idx,
+		SegTree:     NewSegmentTree(),
+		MTBufMgr:    mtBufMgr,
+		SSTBufMgr:   sstBufMgr,
+		FsMgr:       fsMgr,
+		IndexHolder: indexHolder,
 	}
 	return data
 }
@@ -81,7 +82,7 @@ func (cdata *ColumnData) Append(seg IColumnSegment) error {
 }
 
 func (cdata *ColumnData) RegisterSegment(meta *md.Segment) (seg IColumnSegment, err error) {
-	seg = NewColumnSegment(cdata.FsMgr, cdata.MTBufMgr, cdata.SSTBufMgr, cdata.Idx, meta)
+	seg = NewColumnSegment(cdata.IndexHolder, cdata.FsMgr, cdata.MTBufMgr, cdata.SSTBufMgr, cdata.Idx, meta)
 	err = cdata.Append(seg)
 	return seg.Ref(), err
 }
