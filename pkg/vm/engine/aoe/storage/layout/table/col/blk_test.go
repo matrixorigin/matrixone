@@ -89,12 +89,12 @@ func TestStdColumnBlock2(t *testing.T) {
 		assert.Nil(t, seg.GetBlockRoot())
 		blkMeta0 := segMeta.Blocks[0]
 		blk_0 := NewStdColumnBlock(seg, blkMeta0)
-		part_0 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, *blkMeta0.AsCommonID(), row_count, typeSize)
+		part_0 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, *blkMeta0.AsCommonID(), row_count*typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		blkMeta1 := segMeta.Blocks[1]
 		blk_1 := NewStdColumnBlock(seg, blkMeta1)
-		part_1 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_1, *blkMeta1.AsCommonID(), row_count, typeSize)
+		part_1 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_1, *blkMeta1.AsCommonID(), row_count*typeSize)
 		assert.Nil(t, part_1.GetNext())
 		assert.Equal(t, part_1, blk_1.GetPartRoot())
 		// assert.Equal(t, row_count*2, seg.GetRowCount())
@@ -162,11 +162,11 @@ func TestStrColumnBlock(t *testing.T) {
 		blk0Id := *blkMeta0.AsCommonID()
 		blk_0 := NewStrColumnBlock(seg, blk0Id, TRANSIENT_BLK)
 		part_0_0_id := blk0Id.NextPart()
-		part_0 := NewColumnPart(fsMgr, bufMgr, blk_0, part_0_0_id, row_count, typeSize)
+		part_0 := NewColumnPart(fsMgr, bufMgr, blk_0, part_0_0_id, row_count*typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		part_0_1_id := blk0Id.NextPart()
-		part_0_1 := NewColumnPart(fsMgr, bufMgr, blk_0, part_0_1_id, row_count, typeSize)
+		part_0_1 := NewColumnPart(fsMgr, bufMgr, blk_0, part_0_1_id, row_count*typeSize)
 		assert.Nil(t, part_0_1.GetNext())
 		if prev_seg != nil {
 			prev_seg.SetNext(seg)
@@ -279,12 +279,12 @@ func TestRegisterNode(t *testing.T) {
 		blk0Meta := segMeta.Blocks[0]
 		blk0Id := *blk0Meta.AsCommonID()
 		blk_0 := NewStdColumnBlock(seg, blk0Meta)
-		part_0 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, blk0Id, row_count, typeSize)
+		part_0 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, blk0Id, row_count*typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		blk1Meta := segMeta.Blocks[1]
 		blk_1 := NewStdColumnBlock(seg, blk1Meta)
-		part_1 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_1, *blk1Meta.AsCommonID(), row_count, typeSize)
+		part_1 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_1, *blk1Meta.AsCommonID(), row_count*typeSize)
 		assert.Nil(t, part_1.GetNext())
 		assert.Equal(t, part_1, blk_1.GetPartRoot())
 		if prev_seg != nil {

@@ -241,11 +241,11 @@ func (seg *ColumnSegment) Close() error {
 
 func (seg *ColumnSegment) RegisterBlock(blkMeta *md.Block) (blk IColumnBlock, err error) {
 	blk = NewStdColumnBlock(seg, blkMeta)
-	part := NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(), blkMeta.Segment.Info.Conf.BlockMaxRows,
-		uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
+	part := NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(),
+		blkMeta.Segment.Info.Conf.BlockMaxRows*uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 	for part == nil {
-		part = NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(), blkMeta.Segment.Info.Conf.BlockMaxRows,
-			uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
+		part = NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(),
+			blkMeta.Segment.Info.Conf.BlockMaxRows*uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	// TODO: StrColumnBlock
@@ -314,7 +314,11 @@ func (seg *ColumnSegment) String() string {
 
 func (seg *ColumnSegment) ToString(verbose bool) string {
 	if verbose {
-		return fmt.Sprintf("Seg(%v)(%d)[HasNext:%v]", seg.ID, seg.Type, seg.Next != nil)
+		s := fmt.Sprintf("Seg(%v)(%d)[HasNext:%v]", seg.ID.String(), seg.Type, seg.Next != nil)
+		for _, blk := range seg.Blocks {
+			s = fmt.Sprintf("%s\n\t%s", s, blk.String())
+		}
+		return s
 	}
 	return fmt.Sprintf("(%v, %v)", seg.ID, seg.Type)
 }

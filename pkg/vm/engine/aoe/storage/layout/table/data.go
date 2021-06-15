@@ -233,7 +233,7 @@ func (ts *Tables) Replay(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBuffer
 					// Only stdblk now
 					colBlk := col.NewStdColumnBlock(colSeg.Ref(), blkMeta)
 					defer colBlk.UnRef()
-					colPart := col.NewColumnPart(colSeg.GetFsManager(), bufMgr, colBlk.Ref(), blkId, info.Conf.BlockMaxRows, uint64(colType.Size))
+					colPart := col.NewColumnPart(colSeg.GetFsManager(), bufMgr, colBlk.Ref(), blkId, info.Conf.BlockMaxRows*uint64(colType.Size))
 					if colPart == nil {
 						return errors.New(fmt.Sprintf("data replay error"))
 					}

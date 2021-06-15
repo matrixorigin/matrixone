@@ -28,7 +28,7 @@ func TestManagerBasic(t *testing.T) {
 	node_capacity := uint64(64)
 
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 0)
-	empty := &ldio.ColSegmentFile{}
+	empty := new(ldio.MockColPartFile)
 	h0 := mgr.RegisterNode(node_capacity, *node0, empty)
 	assert.NotNil(t, h0)
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 1)
@@ -68,7 +68,7 @@ func TestManager2(t *testing.T) {
 	node_capacity := 2 * capacity
 	mgr := MockBufMgr(capacity)
 	node0 := common.ID{}
-	empty := &ldio.MockColSegmentFile{}
+	empty := new(ldio.MockColPartFile)
 	h0 := mgr.RegisterNode(node_capacity, node0, empty)
 	assert.Equal(t, h0.GetID(), node0)
 	assert.False(t, h0.HasRef())
@@ -108,7 +108,7 @@ func TestManager3(t *testing.T) {
 
 	id := common.ID{}
 	n0 := *id.Next()
-	empty := &ldio.MockColSegmentFile{}
+	empty := new(ldio.MockColPartFile)
 	h0 := mgr.RegisterNode(node_capacity, n0, empty)
 	assert.NotNil(t, h0)
 	assert.Equal(t, h0.GetID(), n0)

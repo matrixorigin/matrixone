@@ -44,12 +44,12 @@ func (sf *UnsortedSegmentFile) UnrefBlock(id common.ID) {
 	}
 }
 
-func (sf *UnsortedSegmentFile) MakeColSegmentFile(colIdx int) IColSegmentFile {
-	csf := &ColSegmentFile{
+func (sf *UnsortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
+	cpf := &ColPartFile{
+		ID:          id,
 		SegmentFile: sf,
-		ColIdx:      uint64(colIdx),
 	}
-	return csf
+	return cpf
 }
 
 func (sf *UnsortedSegmentFile) Close() error {

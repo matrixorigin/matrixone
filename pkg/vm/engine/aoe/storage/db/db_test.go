@@ -85,7 +85,7 @@ func TestAppend(t *testing.T) {
 	dbi := initDB()
 	schema := md.MockSchema(2)
 	schema.Name = "mocktbl"
-	_, err := dbi.CreateTable(schema)
+	tid, err := dbi.CreateTable(schema)
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
@@ -102,6 +102,9 @@ func TestAppend(t *testing.T) {
 	for i := 0; i < insertCnt; i++ {
 		err = dbi.Append(schema.Name, ck, logIdx)
 		assert.Nil(t, err)
+		// tbl, err := dbi.store.DataTables.GetTable(tid)
+		// assert.Nil(t, err)
+		// t.Log(tbl.GetCollumn(0).ToString(1000))
 	}
 
 	cols := []int{0, 1}
@@ -149,10 +152,13 @@ func TestAppend(t *testing.T) {
 	}
 	blkIt.Close()
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
-	// time.Sleep(time.Duration(20) * time.Millisecond)
+	time.Sleep(time.Duration(20) * time.Millisecond)
 	t.Log(dbi.FsMgr.String())
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
+	tbl, err := dbi.store.DataTables.GetTable(tid)
+	assert.Nil(t, err)
+	t.Log(tbl.GetCollumn(0).ToString(1000))
 	dbi.Close()
 }
 

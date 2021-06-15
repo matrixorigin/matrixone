@@ -34,8 +34,8 @@ func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
 
 	c := context.TODO()
 	c = context.WithValue(c, "handle", handle)
-	c = context.WithValue(c, "segmentfile", ctx.SegmentFile)
-	handle.SpillIO = NewNodeIO(dio.WRITER_FACTORY.Opts, c)
+	c = context.WithValue(c, "reader", ctx.Reader)
+	handle.IO = NewNodeIO(dio.WRITER_FACTORY.Opts, c)
 	return handle
 }
 
@@ -51,7 +51,7 @@ func (h *NodeHandle) FlushData() error {
 	if !h.Spillable {
 		return nil
 	}
-	return h.SpillIO.Flush()
+	return h.IO.Flush()
 }
 
 func (h *NodeHandle) GetBuffer() buf.IBuffer {
@@ -109,7 +109,7 @@ func (h *NodeHandle) IsSpillable() bool {
 }
 
 func (h *NodeHandle) Clean() error {
-	return h.SpillIO.Clean()
+	return h.IO.Clean()
 }
 
 func (h *NodeHandle) Close() error {
@@ -172,7 +172,7 @@ func (h *NodeHandle) CommitLoad() error {
 
 	if h.Spillable {
 		log.Infof("loading transient node %v", h.ID)
-		err := h.SpillIO.Load()
+		err := h.IO.Load()
 		if err != nil {
 			return err
 		}
@@ -180,7 +180,7 @@ func (h *NodeHandle) CommitLoad() error {
 		panic("logic error: should not load non-spillable transient memory")
 	} else {
 		log.Infof("loading persistent node %v", h.ID)
-		err := h.SpillIO.Load()
+		err := h.IO.Load()
 		if err != nil {
 			return err
 		}
