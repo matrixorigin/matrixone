@@ -2,15 +2,9 @@ package index
 
 import (
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
-)
-
-type SegmentType uint8
-
-const (
-	UnsortedSegment SegmentType = iota
-	SortedSegment
 )
 
 type SegmentHolder struct {
@@ -25,10 +19,10 @@ type SegmentHolder struct {
 		IdMap    map[uint64]int
 		BlockCnt int32
 	}
-	Type SegmentType
+	Type base.SegmentType
 }
 
-func NewSegmentHolder(id uint64, segType SegmentType) *SegmentHolder {
+func NewSegmentHolder(id uint64, segType base.SegmentType) *SegmentHolder {
 	holder := &SegmentHolder{ID: id, Type: segType}
 	holder.tree.Blocks = make([]*BlockHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
@@ -86,7 +80,7 @@ func (holder *SegmentHolder) GetBlockCount() int32 {
 	return atomic.LoadInt32(&holder.tree.BlockCnt)
 }
 
-func (holder *SegmentHolder) UpgradeBlock(id uint64, blkType BlockType) *BlockHolder {
+func (holder *SegmentHolder) UpgradeBlock(id uint64, blkType base.BlockType) *BlockHolder {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
 	idx, ok := holder.tree.IdMap[id]

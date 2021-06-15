@@ -6,6 +6,7 @@ import (
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
@@ -217,9 +218,9 @@ func (ts *Tables) Replay(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBuffer
 					break
 				}
 			}
-			segType := col.UNSORTED_SEG
+			segType := base.UNSORTED_SEG
 			if segMeta.DataState == md.SORTED {
-				segType = col.SORTED_SEG
+				segType = base.SORTED_SEG
 			}
 			activeBlk := segMeta.GetActiveBlk()
 			for colIdx, colType := range colTypes {
@@ -233,7 +234,7 @@ func (ts *Tables) Replay(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBuffer
 					}
 					blkId := *blkMeta.AsCommonID()
 					bufMgr := mtBufMgr
-					if segType == col.SORTED_SEG {
+					if segType == base.SORTED_SEG {
 						bufMgr = sstBufMgr
 					} else if blkMeta.DataState == md.FULL {
 						bufMgr = sstBufMgr

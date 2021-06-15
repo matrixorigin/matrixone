@@ -7,6 +7,7 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -65,15 +66,15 @@ func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnB
 	part.NodeID.Idx = uint16(blk.GetColIdx())
 
 	switch blk.GetBlockType() {
-	case TRANSIENT_BLK:
+	case base.TRANSIENT_BLK:
 		bNode := bmgr.RegisterSpillableNode(capacity, part.NodeID)
 		if bNode == nil {
 			return nil
 		}
 		part.BufNode = bNode
-	case PERSISTENT_BLK:
+	case base.PERSISTENT_BLK:
 		initUnsortedBlkNode(part, fsMgr)
-	case PERSISTENT_SORTED_BLK:
+	case base.PERSISTENT_SORTED_BLK:
 		initSortedBlkNode(part, fsMgr)
 	default:
 		panic("not support")
@@ -96,11 +97,11 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 		NodeID:   part.NodeID.NextIter(),
 	}
 	switch blk.GetBlockType() {
-	case TRANSIENT_BLK:
+	case base.TRANSIENT_BLK:
 		panic("logic error")
-	case PERSISTENT_BLK:
+	case base.PERSISTENT_BLK:
 		initUnsortedBlkNode(cloned, fsMgr)
-	case PERSISTENT_SORTED_BLK:
+	case base.PERSISTENT_SORTED_BLK:
 		initSortedBlkNode(cloned, fsMgr)
 	default:
 		panic("not supported")

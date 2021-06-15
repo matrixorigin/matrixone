@@ -4,6 +4,7 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -164,7 +165,7 @@ func TestStrColumnBlock(t *testing.T) {
 		assert.Nil(t, seg.GetBlockRoot())
 		blkMeta0 := segMeta.Blocks[0]
 		blk0Id := *blkMeta0.AsCommonID()
-		blk_0 := NewStrColumnBlock(seg, blk0Id, TRANSIENT_BLK)
+		blk_0 := NewStrColumnBlock(seg, blk0Id, base.TRANSIENT_BLK)
 		part_0_0_id := blk0Id.NextPart()
 		part_0 := NewColumnPart(fsMgr, bufMgr, blk_0, part_0_0_id, row_count*typeSize)
 		assert.Nil(t, part_0.GetNext())
@@ -402,7 +403,7 @@ func TestUpgradeStdSegment(t *testing.T) {
 		for _, id := range ids {
 			oldBlk := currSeg.GetBlock(id)
 			assert.NotNil(t, oldBlk)
-			assert.Equal(t, TRANSIENT_BLK, oldBlk.GetBlockType())
+			assert.Equal(t, base.TRANSIENT_BLK, oldBlk.GetBlockType())
 			blkMeta, err := segMeta.ReferenceBlock(oldBlk.GetID().BlockID)
 			assert.Nil(t, err)
 			newMeta := blkMeta.Copy()
@@ -411,7 +412,7 @@ func TestUpgradeStdSegment(t *testing.T) {
 			oldBlk.UnRef()
 			blk, err := currSeg.UpgradeBlock(newMeta)
 			assert.Nil(t, err)
-			assert.Equal(t, PERSISTENT_BLK, blk.GetBlockType())
+			assert.Equal(t, base.PERSISTENT_BLK, blk.GetBlockType())
 			blk.UnRef()
 		}
 		currSeg.UnRef()
@@ -425,7 +426,7 @@ func TestUpgradeStdSegment(t *testing.T) {
 		for _, id := range ids {
 			oldBlk := currSeg.GetBlock(id)
 			assert.NotNil(t, oldBlk)
-			assert.Equal(t, PERSISTENT_BLK, oldBlk.GetBlockType())
+			assert.Equal(t, base.PERSISTENT_BLK, oldBlk.GetBlockType())
 			blkMeta, err := segMeta.ReferenceBlock(oldBlk.GetID().BlockID)
 			assert.Nil(t, err)
 			newMeta := blkMeta.Copy()
@@ -434,7 +435,7 @@ func TestUpgradeStdSegment(t *testing.T) {
 			newMeta.DataState = md.FULL
 			blk, err := currSeg.UpgradeBlock(newMeta)
 			assert.Nil(t, err)
-			assert.Equal(t, PERSISTENT_SORTED_BLK, blk.GetBlockType())
+			assert.Equal(t, base.PERSISTENT_SORTED_BLK, blk.GetBlockType())
 			blk.UnRef()
 		}
 		currSeg.UnRef()

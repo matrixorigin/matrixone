@@ -3,32 +3,13 @@ package col
 import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
 )
-
-type BlockType uint8
-
-const (
-	TRANSIENT_BLK BlockType = iota
-	PERSISTENT_BLK
-	PERSISTENT_SORTED_BLK
-)
-
-func (t BlockType) String() string {
-	switch t {
-	case TRANSIENT_BLK:
-		return "TB"
-	case PERSISTENT_BLK:
-		return "PB"
-	case PERSISTENT_SORTED_BLK:
-		return "PSB"
-	}
-	panic("unspported")
-}
 
 type IColumnBlock interface {
 	io.Closer
@@ -39,7 +20,7 @@ type IColumnBlock interface {
 	InitScanCursor(cusor *ScanCursor) error
 	Append(part IColumnPart)
 	GetPartRoot() IColumnPart
-	GetBlockType() BlockType
+	GetBlockType() base.BlockType
 	GetIndexHolder() *index.BlockHolder
 	GetColIdx() int
 	CloneWithUpgrade(IColumnSegment, *md.Block) IColumnBlock
@@ -53,7 +34,7 @@ type ColumnBlock struct {
 	sync.RWMutex
 	ID          common.ID
 	Next        IColumnBlock
-	Type        BlockType
+	Type        base.BlockType
 	ColIdx      int
 	Refs        int64
 	Meta        *md.Block
@@ -73,7 +54,7 @@ func (blk *ColumnBlock) GetColIdx() int {
 	return blk.ColIdx
 }
 
-func (blk *ColumnBlock) GetBlockType() BlockType {
+func (blk *ColumnBlock) GetBlockType() base.BlockType {
 	blk.RLock()
 	defer blk.RUnlock()
 	return blk.Type

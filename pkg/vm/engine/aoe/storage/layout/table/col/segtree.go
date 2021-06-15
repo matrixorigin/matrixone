@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
@@ -127,7 +128,7 @@ func (tree *SegmentTree) UpgradeSegment(segID common.ID) IColumnSegment {
 	}
 	seg := tree.data.Segments[idx]
 
-	if seg.GetSegmentType() != UNSORTED_SEG {
+	if seg.GetSegmentType() != base.UNSORTED_SEG {
 		panic("logic error")
 	}
 	if !segID.IsSameSegment(seg.GetID()) {

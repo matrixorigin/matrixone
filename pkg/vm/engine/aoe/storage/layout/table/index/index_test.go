@@ -3,19 +3,20 @@ package index
 import (
 	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"testing"
 	// "matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 func TestSegment(t *testing.T) {
-	segType := UnsortedSegment
+	segType := base.UNSORTED_SEG
 	segHolder := NewSegmentHolder(uint64(0), segType)
 	assert.Equal(t, int32(0), segHolder.GetBlockCount())
 
 	blk0Id := uint64(0)
-	blk0Holder := NewBlockHolder(blk0Id, TransientBlk)
+	blk0Holder := NewBlockHolder(blk0Id, base.TRANSIENT_BLK)
 	blk1Id := uint64(1)
-	blk1Holder := NewBlockHolder(blk1Id, TransientBlk)
+	blk1Holder := NewBlockHolder(blk1Id, base.TRANSIENT_BLK)
 
 	blk0 := segHolder.GetBlock(blk0Id)
 	assert.Nil(t, blk0)
@@ -37,7 +38,7 @@ func TestTable(t *testing.T) {
 	tableHolder := NewTableHolder(uint64(0))
 	assert.Equal(t, int64(0), tableHolder.GetSegmentCount())
 
-	segType := UnsortedSegment
+	segType := base.UNSORTED_SEG
 	seg0Id := uint64(0)
 	seg0Holder := NewSegmentHolder(seg0Id, segType)
 	seg1Id := uint64(1)

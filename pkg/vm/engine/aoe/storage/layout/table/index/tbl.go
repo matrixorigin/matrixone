@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
 )
@@ -63,7 +64,7 @@ func (holder *TableHolder) String() string {
 	return s
 }
 
-func (holder *TableHolder) UpgradeSegment(id uint64, segType SegmentType) *SegmentHolder {
+func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) *SegmentHolder {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
 	idx, ok := holder.tree.IdMap[id]
