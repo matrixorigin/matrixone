@@ -1,6 +1,13 @@
-package catalog
+package aoe
 
-import "github.com/matrixorigin/matrixcube/components/prophet/storage"
+import "matrixone/pkg/container/types"
+
+type Group uint64
+
+const (
+	KVGroup Group = iota
+	AOEGroup
+)
 
 type SchemaState byte
 
@@ -13,9 +20,9 @@ const (
 	StatePublic
 )
 
-type Cat struct {
-	store storage.Storage
-}
+const (
+	SharedShardUnique = "###shared"
+)
 
 type CatalogInfo struct {
 	Id   uint64
@@ -39,15 +46,21 @@ type TableInfo struct {
 	// Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
 	Type string `json:"type"`
 	// Column is listed in order in which they appear in schema
-	columns  []*ColumnInfo  `json:"columns"`
-	comment  string         `json:"comment"`
-	state    SchemaState    `json:"state"`
-	segments []*SegmentInfo `json:"segments"`
+	Columns   []ColumnInfo  `json:"columns"`
+	Comment   string        `json:"comment"`
+	State     SchemaState   `json:"state"`
+	Segments  []SegmentInfo `json:"segments"`
+	Partition []byte        `json:"partition"`
 }
 
 // PartitionInfo stores the information of a partition.
 type PartitionInfo struct {
-	TableID uint64 ``
+	SchemaId uint64 `json:"schema_id"`
+	TableID  uint64 `json:"table_id"`
+	ColumnId uint64 `json:"column_id"`
+	Id       uint64 `json:"id"`
+	Name     string `json:"name"`
+	Value    string `json:"value"`
 }
 
 // SegmentInfo stores the information of a segment.
@@ -61,4 +74,10 @@ type SegmentInfo struct {
 
 // ColumnInfo stores the information of a column.
 type ColumnInfo struct {
+	SchemaId uint64     `json:"schema_id"`
+	TableID  uint64     `json:"table_id"`
+	Id       uint64     `json:"column_id"`
+	Name     string     `json:"name"`
+	Type     types.Type `json:"type"`
+	Alg      int        `json:"alg"`
 }

@@ -1,17 +1,18 @@
 package catalog
 
 import (
-	"github.com/pingcap/parser/mysql"
-	"matrixone/pkg/util/dbterror"
+	"errors"
 )
 
 var (
-	// ErrDBExists is the error for db exists.
-	ErrDBExists = dbterror.ClassMeta.NewStd(mysql.ErrDBCreateExists)
+	// ErrDBCreate is the err
+	ErrDBCreate = errors.New("db create failed")
+	// ErrDBCreateExists is the error for db exists.
+	ErrDBCreateExists = errors.New("db already exists")
 	// ErrDBNotExists is the error for db not exists.
-	ErrDBNotExists = dbterror.ClassMeta.NewStd(mysql.ErrBadDB)
-	// ErrTableExists is the error for table exists.
-	ErrTableExists = dbterror.ClassMeta.NewStd(mysql.ErrTableExists)
+	ErrDBNotExists = errors.New("db not exist")
+	// ErrTableCreateExists is the error for table exists.
+	ErrTableCreateExists = errors.New("table already exists")
 	// ErrTableNotExists is the error for table not exists.
-	ErrTableNotExists = dbterror.ClassMeta.NewStd(mysql.ErrNoSuchTable)
+	ErrTableNotExists = errors.New("table not exist")
 )
