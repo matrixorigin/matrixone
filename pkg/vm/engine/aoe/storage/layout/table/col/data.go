@@ -3,11 +3,11 @@ package col
 import (
 	"errors"
 	"fmt"
-
 	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 )
 
@@ -35,15 +35,17 @@ type ColumnData struct {
 	SegTree   ISegmentTree
 	MTBufMgr  bmgrif.IBufferManager
 	SSTBufMgr bmgrif.IBufferManager
+	FsMgr     ldio.IManager
 }
 
-func NewColumnData(mtBufMgr, sstBufMgr bmgrif.IBufferManager, col_type types.Type, col_idx int) IColumnData {
+func NewColumnData(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, col_type types.Type, col_idx int) IColumnData {
 	data := &ColumnData{
 		Type:      col_type,
 		Idx:       col_idx,
 		SegTree:   NewSegmentTree(),
 		MTBufMgr:  mtBufMgr,
 		SSTBufMgr: sstBufMgr,
+		FsMgr:     fsMgr,
 	}
 	return data
 }
@@ -76,7 +78,7 @@ func (cdata *ColumnData) Append(seg IColumnSegment) error {
 }
 
 func (cdata *ColumnData) RegisterSegment(meta *md.Segment) (seg IColumnSegment, err error) {
-	seg = NewColumnSegment(cdata.MTBufMgr, cdata.SSTBufMgr, cdata.Idx, meta)
+	seg = NewColumnSegment(cdata.FsMgr, cdata.MTBufMgr, cdata.SSTBufMgr, cdata.Idx, meta)
 	err = cdata.Append(seg)
 	return seg.Ref(), err
 }

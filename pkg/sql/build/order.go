@@ -73,7 +73,11 @@ func (b *build) stripOrderBy(o op.OP, ns tree.OrderBy) (op.OP, []order.Attribute
 			i++
 		}
 	}
-	return projection.New(o, pes), rs, nil
+	o, err := projection.New(o, pes)
+	if err != nil {
+		return nil, nil, err
+	}
+	return o, rs, nil
 }
 
 func getDirection(d tree.Direction) order.Direction {

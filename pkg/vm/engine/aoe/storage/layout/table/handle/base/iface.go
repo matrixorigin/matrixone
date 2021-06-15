@@ -10,6 +10,7 @@ type IBlockHandle interface {
 	io.Closer
 	GetID() *common.ID
 	GetColumn(int) col.IColumnBlock
+	InitScanCursor() []col.ScanCursor
 }
 
 type ISegmentHandle interface {

@@ -8,6 +8,7 @@ import (
 	"matrixone/pkg/vm/metadata"
 	"os"
 	"path"
+	"runtime"
 )
 
 const (
@@ -44,6 +45,12 @@ func (e *spillEngine) NewBatch() (engine.Batch, error) {
 
 func (e *spillEngine) NewIterator(prefix []byte) (engine.Iterator, error) {
 	return e.db.NewIterator(prefix)
+}
+
+func (e *spillEngine) Node(_ string) *engine.NodeInfo {
+	return &engine.NodeInfo{
+		Mcpu: runtime.NumCPU(),
+	}
 }
 
 func (e *spillEngine) Delete(name string) error {

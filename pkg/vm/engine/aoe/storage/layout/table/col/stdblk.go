@@ -2,9 +2,10 @@ package col
 
 import (
 	"fmt"
+	log "github.com/sirupsen/logrus"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 type StdColumnBlock struct {
@@ -14,12 +15,30 @@ type StdColumnBlock struct {
 
 func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 	var blkType BlockType
+	var segFile ldio.ISegmentFile
+	fsMgr := seg.GetFsManager()
 	if meta.DataState < md.FULL {
 		blkType = TRANSIENT_BLK
 	} else if seg.GetSegmentType() == UNSORTED_SEG {
 		blkType = PERSISTENT_BLK
+		segFile = fsMgr.GetUnsortedFile(seg.GetID())
+		if segFile == nil {
+			_, err := fsMgr.RegisterUnsortedFiles(seg.GetID())
+			if err != nil {
+				panic(err)
+			}
+		}
 	} else {
 		blkType = PERSISTENT_SORTED_BLK
+		segFile = fsMgr.GetUnsortedFile(seg.GetID())
+		if segFile != nil {
+			fsMgr.UpgradeFile(seg.GetID())
+		} else {
+			_, err := fsMgr.RegisterSortedFiles(seg.GetID())
+			if err != nil {
+				panic(err)
+			}
+		}
 	}
 	blk := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{
@@ -40,16 +59,31 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 	if newMeta.DataState != md.FULL {
 		panic(fmt.Sprintf("logic error: blk %s DataState=%d", newMeta.AsCommonID().BlockString(), newMeta.DataState))
 	}
+	fsMgr := seg.GetFsManager()
 	var newType BlockType
 	switch blk.Type {
 	case TRANSIENT_BLK:
 		newType = PERSISTENT_BLK
+		segFile := fsMgr.GetUnsortedFile(seg.GetID())
+		if segFile == nil {
+			_, err := fsMgr.RegisterUnsortedFiles(seg.GetID())
+			if err != nil {
+				panic(err)
+			}
+		}
 	case PERSISTENT_BLK:
 		newType = PERSISTENT_SORTED_BLK
-	case MOCK_BLK:
-		newType = MOCK_PERSISTENT_BLK
-	case MOCK_PERSISTENT_BLK:
-		newType = MOCK_PERSISTENT_SORTED_BLK
+		segFile := fsMgr.GetUnsortedFile(seg.GetID())
+		if segFile != nil {
+			fsMgr.UpgradeFile(seg.GetID())
+		} else {
+			segFile = fsMgr.GetSortedFile(seg.GetID())
+		}
+		if segFile == nil {
+			panic("logic error")
+		}
+	default:
+		panic("logic error")
 	}
 	cloned := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{
@@ -61,9 +95,10 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 	}
 	cloned.Ref()
 	blk.RLock()
-	part := blk.Part.CloneWithUpgrade(cloned.Ref(), seg.GetSSTBufMgr())
+	part := blk.Part.CloneWithUpgrade(cloned.Ref(), seg.GetSSTBufMgr(), seg.GetFsManager())
 	blk.RUnlock()
 	if part == nil {
+		log.Errorf("logic error")
 		panic("logic error")
 	}
 	cloned.Part = part

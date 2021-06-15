@@ -2,11 +2,11 @@ package memtable
 
 import (
 	"github.com/stretchr/testify/assert"
-	// "matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -32,12 +32,11 @@ func TestManager(t *testing.T) {
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
 	flusher := w.NewOpWorker("Mock Flusher")
+	fsMgr := ldio.DefaultFsMgr
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	t0 := uint64(0)
-	schema := md.MockSchema(2)
-	tableMeta := &md.Table{Schema: schema, ID: t0}
-	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tableMeta)
+	tableMeta := md.MockTable(nil, nil, 10)
+	t0_data := table.NewTableData(fsMgr, mtBufMgr, sstBufMgr, tableMeta)
 
 	c0, err := manager.RegisterCollection(t0_data)
 	assert.Nil(t, err)
@@ -47,11 +46,11 @@ func TestManager(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
-	c00, err = manager.UnregisterCollection(t0 + 1)
+	c00, err = manager.UnregisterCollection(tableMeta.ID + 1)
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
-	c00, err = manager.UnregisterCollection(t0)
+	c00, err = manager.UnregisterCollection(tableMeta.ID)
 	assert.Nil(t, err)
 	assert.NotNil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
@@ -82,17 +81,12 @@ func TestCollection(t *testing.T) {
 	tbl := op.GetTable()
 
 	manager := NewManager(opts)
+	fsMgr := ldio.NewManager(WORK_DIR, false)
 	flusher := w.NewOpWorker("Mock Flusher")
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	// colDefs := make([]types.Type, cols)
-	// for i := 0; i < cols; i++ {
-	// 	colDefs[i] = types.Type{types.T_int32, 4, 4, 0}
-	// }
-	// colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
-	// colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
-	tableMeta := &md.Table{Schema: schema, ID: tbl.ID}
-	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tableMeta)
+	tableMeta := md.MockTable(nil, schema, 10)
+	t0_data := table.NewTableData(fsMgr, mtBufMgr, sstBufMgr, tableMeta)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
 	expect_blks := blks
@@ -159,8 +153,7 @@ func TestCollection(t *testing.T) {
 
 func TestContainer(t *testing.T) {
 	capacity := uint64(4096)
-	flusher := w.NewOpWorker("Mock Flusher")
-	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
+	mtBufMgr := bmgr.MockBufMgr(capacity)
 
 	baseid := common.ID{}
 	step := capacity / 2

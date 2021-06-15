@@ -4,6 +4,7 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
 	"testing"
@@ -11,7 +12,6 @@ import (
 	"unsafe"
 
 	"github.com/stretchr/testify/assert"
-	// "sync"
 )
 
 var WORK_DIR = "/tmp/layout/blk_test"
@@ -21,18 +21,10 @@ func init() {
 	dio.READER_FACTORY.Init(nil, WORK_DIR)
 }
 
-func mockInfo(blkRows, blks uint64) *md.MetaInfo {
-	info := md.NewMetaInfo(&md.Configuration{
-		BlockMaxRows:     blkRows,
-		SegmentMaxBlocks: blks,
-	})
-	return info
-}
-
 func TestStdColumnBlock(t *testing.T) {
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	seg_cnt := 5
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
@@ -42,7 +34,7 @@ func TestStdColumnBlock(t *testing.T) {
 	sstBufMgr := bmgr.MockBufMgr(10000)
 	for i := 0; i < seg_cnt; i++ {
 		segMeta := meta.Segments[i]
-		seg := NewColumnSegment(mtBufMgr, sstBufMgr, 0, segMeta)
+		seg := NewColumnSegment(ldio.DefaultFsMgr, mtBufMgr, sstBufMgr, 0, segMeta)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 
@@ -61,7 +53,6 @@ func TestStdColumnBlock(t *testing.T) {
 		}
 		prev_seg = seg
 	}
-	t.Log(first_seg.ToString(true))
 	var cnt int
 	loopSeg := first_seg
 	for loopSeg != nil {
@@ -81,7 +72,7 @@ func TestStdColumnBlock2(t *testing.T) {
 	seg_cnt := 5
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
 
@@ -89,22 +80,21 @@ func TestStdColumnBlock2(t *testing.T) {
 	row_count := info.Conf.BlockMaxRows
 	capacity := typeSize * row_count * uint64(seg_cnt) * 2
 	bufMgr := bmgr.MockBufMgr(capacity)
-	t.Log(bufMgr.GetCapacity())
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	for i := 0; i < seg_cnt; i++ {
 		segMeta := meta.Segments[i]
-		seg := NewColumnSegment(bufMgr, bufMgr, 0, segMeta)
+		seg := NewColumnSegment(ldio.DefaultFsMgr, bufMgr, bufMgr, 0, segMeta)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		blkMeta0 := segMeta.Blocks[0]
 		blk_0 := NewStdColumnBlock(seg, blkMeta0)
-		part_0 := NewColumnPart(bufMgr, blk_0, *blkMeta0.AsCommonID(), row_count, typeSize)
+		part_0 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, *blkMeta0.AsCommonID(), row_count, typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		blkMeta1 := segMeta.Blocks[1]
 		blk_1 := NewStdColumnBlock(seg, blkMeta1)
-		part_1 := NewColumnPart(bufMgr, blk_1, *blkMeta1.AsCommonID(), row_count, typeSize)
+		part_1 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_1, *blkMeta1.AsCommonID(), row_count, typeSize)
 		assert.Nil(t, part_1.GetNext())
 		assert.Equal(t, part_1, blk_1.GetPartRoot())
 		// assert.Equal(t, row_count*2, seg.GetRowCount())
@@ -152,31 +142,31 @@ func TestStrColumnBlock(t *testing.T) {
 	seg_cnt := 5
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
 
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := info.Conf.BlockMaxRows
-	capacity := uint64(typeSize) * row_count
+	capacity := uint64(typeSize) * row_count * 10
 	bufMgr := bmgr.MockBufMgr(capacity)
-	// t.Log(bufMgr.GetCapacity())
+	fsMgr := ldio.NewManager(WORK_DIR, true)
 	var prev_seg IColumnSegment
 	var first_seg IColumnSegment
 	for i := 0; i < seg_cnt; i++ {
 		segMeta := meta.Segments[i]
-		seg := NewColumnSegment(bufMgr, bufMgr, 0, segMeta)
+		seg := NewColumnSegment(fsMgr, bufMgr, bufMgr, 0, segMeta)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		blkMeta0 := segMeta.Blocks[0]
 		blk0Id := *blkMeta0.AsCommonID()
-		blk_0 := NewStrColumnBlock(seg, blk0Id, MOCK_BLK)
+		blk_0 := NewStrColumnBlock(seg, blk0Id, TRANSIENT_BLK)
 		part_0_0_id := blk0Id.NextPart()
-		part_0 := NewColumnPart(bufMgr, blk_0, part_0_0_id, row_count, typeSize)
+		part_0 := NewColumnPart(fsMgr, bufMgr, blk_0, part_0_0_id, row_count, typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		part_0_1_id := blk0Id.NextPart()
-		part_0_1 := NewColumnPart(bufMgr, blk_0, part_0_1_id, row_count, typeSize)
+		part_0_1 := NewColumnPart(fsMgr, bufMgr, blk_0, part_0_1_id, row_count, typeSize)
 		assert.Nil(t, part_0_1.GetNext())
 		if prev_seg != nil {
 			prev_seg.SetNext(seg)
@@ -217,28 +207,22 @@ func TestStrColumnBlock(t *testing.T) {
 	cursor.Close()
 }
 
-type MockType struct {
-}
-
-func (t *MockType) Size() uint64 {
-	return uint64(4)
-}
-
 func TestStdSegmentTree(t *testing.T) {
 	seg_cnt := 5
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
+	fsMgr := ldio.DefaultFsMgr
 
 	col_idx := 0
 	bufMgr := bmgr.MockBufMgr(1000000)
-	col_data := NewColumnData(bufMgr, bufMgr, schema.ColDefs[0].Type, col_idx)
+	col_data := NewColumnData(fsMgr, bufMgr, bufMgr, schema.ColDefs[0].Type, col_idx)
 
 	for i := 0; i < seg_cnt; i++ {
 		segMeta := meta.Segments[i]
-		seg := NewColumnSegment(bufMgr, bufMgr, col_idx, segMeta)
+		seg := NewColumnSegment(fsMgr, bufMgr, bufMgr, col_idx, segMeta)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		err := col_data.Append(seg)
@@ -275,9 +259,10 @@ func TestRegisterNode(t *testing.T) {
 	seg_cnt := 5
 	blkRows := uint64(10)
 	blks := uint64(10)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, uint64(seg_cnt)*blks)
+	fsMgr := ldio.DefaultFsMgr
 
 	col_idx := 0
 	typeSize := uint64(schema.ColDefs[col_idx].Type.Size)
@@ -288,18 +273,18 @@ func TestRegisterNode(t *testing.T) {
 	var first_seg IColumnSegment
 	for i := 0; i < seg_cnt; i++ {
 		segMeta := meta.Segments[i]
-		seg := NewColumnSegment(bufMgr, bufMgr, col_idx, segMeta)
+		seg := NewColumnSegment(fsMgr, bufMgr, bufMgr, col_idx, segMeta)
 		assert.Nil(t, seg.GetNext())
 		assert.Nil(t, seg.GetBlockRoot())
 		blk0Meta := segMeta.Blocks[0]
 		blk0Id := *blk0Meta.AsCommonID()
 		blk_0 := NewStdColumnBlock(seg, blk0Meta)
-		part_0 := NewColumnPart(bufMgr, blk_0, blk0Id, row_count, typeSize)
+		part_0 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, blk0Id, row_count, typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		blk1Meta := segMeta.Blocks[1]
 		blk_1 := NewStdColumnBlock(seg, blk1Meta)
-		part_1 := NewColumnPart(bufMgr, blk_1, *blk1Meta.AsCommonID(), row_count, typeSize)
+		part_1 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_1, *blk1Meta.AsCommonID(), row_count, typeSize)
 		assert.Nil(t, part_1.GetNext())
 		assert.Equal(t, part_1, blk_1.GetPartRoot())
 		if prev_seg != nil {
@@ -310,7 +295,6 @@ func TestRegisterNode(t *testing.T) {
 		prev_seg = seg
 		t.Log(bufMgr.String())
 	}
-	t.Log(first_seg.ToString(true))
 	blk := first_seg.GetBlockRoot()
 	assert.NotNil(t, blk)
 	first_part := first_seg.GetPartRoot()
@@ -331,8 +315,8 @@ func TestRegisterNode(t *testing.T) {
 	cursor.Close()
 }
 
-func makeSegment(mtBufMgr, sstBufMgr mgrif.IBufferManager, colIdx int, meta *md.Segment, t *testing.T) IColumnSegment {
-	seg := NewColumnSegment(mtBufMgr, sstBufMgr, colIdx, meta)
+func makeSegment(fsMgr ldio.IManager, mtBufMgr, sstBufMgr mgrif.IBufferManager, colIdx int, meta *md.Segment, t *testing.T) IColumnSegment {
+	seg := NewColumnSegment(fsMgr, mtBufMgr, sstBufMgr, colIdx, meta)
 	for _, blkMeta := range meta.Blocks {
 		blk, err := seg.RegisterBlock(blkMeta)
 		assert.Nil(t, err)
@@ -341,12 +325,12 @@ func makeSegment(mtBufMgr, sstBufMgr mgrif.IBufferManager, colIdx int, meta *md.
 	return seg
 }
 
-func makeSegments(mtBufMgr, sstBufMgr mgrif.IBufferManager, meta *md.Table, t *testing.T) []IColumnSegment {
+func makeSegments(fsMgr ldio.IManager, mtBufMgr, sstBufMgr mgrif.IBufferManager, meta *md.Table, t *testing.T) []IColumnSegment {
 	var segs []IColumnSegment
 	var rootSeg IColumnSegment
 	var prevSeg IColumnSegment
 	for _, segMeta := range meta.Segments {
-		seg := makeSegment(mtBufMgr, sstBufMgr, 0, segMeta, t)
+		seg := makeSegment(fsMgr, mtBufMgr, sstBufMgr, 0, segMeta, t)
 		segs = append(segs, seg)
 		if prevSeg != nil {
 			prevSeg.SetNext(seg.Ref())
@@ -363,16 +347,16 @@ func TestUpgradeStdSegment(t *testing.T) {
 	seg_cnt := uint64(5)
 	blkRows := uint64(10)
 	blks := uint64(4)
-	info := mockInfo(blkRows, blks)
+	info := md.MockInfo(blkRows, blks)
 	schema := md.MockSchema(1)
 	meta := md.MockTable(info, schema, seg_cnt*blks)
 
-	// col_idx := 0
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * info.Conf.BlockMaxRows * 10000
 	mtBufMgr := bmgr.MockBufMgr(capacity)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
-	segs := makeSegments(mtBufMgr, sstBufMgr, meta, t)
+	fsMgr := ldio.NewManager(WORK_DIR, true)
+	segs := makeSegments(fsMgr, mtBufMgr, sstBufMgr, meta, t)
 	rootSeg := segs[0].Ref()
 
 	// pools := 1
@@ -448,10 +432,6 @@ func TestUpgradeStdSegment(t *testing.T) {
 		}
 		currSeg.UnRef()
 		currSeg = currSeg.GetNext()
-	}
-	for i := 0; i < 0; i++ {
-		runtime.GC()
-		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	currSeg = rootSeg.Ref()
 	for currSeg != nil {

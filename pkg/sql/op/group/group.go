@@ -8,10 +8,14 @@ import (
 	"matrixone/pkg/sql/op"
 )
 
-func New(prev op.OP, gs []*extend.Attribute, es []aggregation.Extend) *Group {
+func New(prev op.OP, gs []*extend.Attribute, es []aggregation.Extend) (*Group, error) {
+	as := make([]string, 0, len(es))
 	attrs := make(map[string]types.Type)
 	{
 		for _, g := range gs {
+			if _, ok := attrs[g.Name]; ok {
+				return nil, fmt.Errorf("column '%s' is ambiguous", g.Name)
+			}
 			attrs[g.Name] = g.Type.ToType()
 		}
 	}
@@ -20,15 +24,20 @@ func New(prev op.OP, gs []*extend.Attribute, es []aggregation.Extend) *Group {
 			if len(e.Alias) == 0 {
 				e.Alias = fmt.Sprintf("%s(%s)", aggregation.AggName[e.Op], e.Name)
 			}
+			if _, ok := attrs[e.Alias]; ok {
+				return nil, fmt.Errorf("column '%s' is ambiguous", e.Alias)
+			}
 			attrs[e.Alias] = e.Agg.Type()
+			as = append(as, e.Alias)
 		}
 	}
 	return &Group{
+		As:    as,
 		Es:    es,
 		Gs:    gs,
 		Prev:  prev,
 		Attrs: attrs,
-	}
+	}, nil
 }
 
 func (n *Group) String() string {

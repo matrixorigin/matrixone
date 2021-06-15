@@ -3,6 +3,7 @@ package col
 import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
@@ -14,9 +15,6 @@ const (
 	TRANSIENT_BLK BlockType = iota
 	PERSISTENT_BLK
 	PERSISTENT_SORTED_BLK
-	MOCK_BLK
-	MOCK_PERSISTENT_BLK
-	MOCK_PERSISTENT_SORTED_BLK
 )
 
 func (t BlockType) String() string {
@@ -27,12 +25,6 @@ func (t BlockType) String() string {
 		return "PB"
 	case PERSISTENT_SORTED_BLK:
 		return "PSB"
-	case MOCK_BLK:
-		return "MB"
-	case MOCK_PERSISTENT_BLK:
-		return "MPB"
-	case MOCK_PERSISTENT_SORTED_BLK:
-		return "MPSB"
 	}
 	panic("unspported")
 }
@@ -63,7 +55,7 @@ type ColumnBlock struct {
 	ColIdx int
 	Refs   int64
 	Meta   *md.Block
-	// Segment  IColumnSegment
+	File   ldio.ISegmentFile
 }
 
 func (blk *ColumnBlock) GetRefs() int64 {
