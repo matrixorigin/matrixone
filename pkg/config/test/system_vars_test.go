@@ -7,26 +7,16 @@ import (
 	"testing"
 )
 
-func TestVariables_LoadInitialValues(t *testing.T) {
-	ap := &Variables{}
+func TestSystemVariables_LoadInitialValues(t *testing.T) {
+	ap := &SystemVariables{}
 	if err :=ap.LoadInitialValues(); err!=nil{
 		t.Errorf("LoadInitialValues failed. error:%v",err)
 	}
 }
 
-func isvconfigEqual(c1,c2 vconfig) bool {
+func isvarsConfigEqual(c1,c2 varsConfig) bool {
 
 
-
-	if c1.Autoload != c2.Autoload {
-		return false
-	}
-
-
-
-	if c1.Rootname != c2.Rootname {
-		return false
-	}
 
 
 
@@ -36,68 +26,48 @@ func isvconfigEqual(c1,c2 vconfig) bool {
 
 
 
-	if c1.Dumpuser != c2.Dumpuser {
-		return false
-	}
 
 
 
-	if c1.Dumppassword != c2.Dumppassword {
-		return false
-	}
 
 
-
-	if c1.Port != c2.Port {
-		return false
-	}
-
-
-
-	if c1.Ip != c2.Ip {
-		return false
-	}
 
 
 
 	return true
 }
 
-func Test_vconfig_LoadConfigurationFromString(t *testing.T) {
+func Test_varsConfig_LoadConfigurationFromString(t *testing.T) {
 	t1 := `
 
-autoload= false
 
-rootname= "root"
 
 rootpassword= ""
 
-dumpuser= "dump"
 
-dumppassword= "111"
 
-port=9000
 
-ip= "localhost"
+
+
+
+
 		
 `
-	t1_config:=vconfig{
+	t1_config:=varsConfig{
 		rwlock:            sync.RWMutex{},
 
 
-Autoload: false ,
 
-Rootname: "root" ,
 
 Rootpassword: "" ,
 
-Dumpuser: "dump" ,
 
-Dumppassword: "111" ,
 
-Port:9000,
 
-Ip: "localhost" ,
+
+
+
+
 	
 
 		name2updatedFlags: nil,
@@ -105,7 +75,7 @@ Ip: "localhost" ,
 
 	type args struct {
 		input string
-		config vconfig
+		config varsConfig
 	}
 	tests := []struct {
 		name    string
@@ -118,11 +88,11 @@ Ip: "localhost" ,
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ap := &Variables{}
+			ap := &SystemVariables{}
 			if err := ap.LoadInitialValues(); err != nil{
 				t.Errorf("LoadInitialValues failed.error %v",err)
 			}
-			config := &vconfig{}
+			config := &varsConfig{}
 			if err := config.LoadConfigurationFromString(tt.args.input); (err != nil) != tt.wantErr {
 				t.Errorf("LoadConfigurationFromString() error = %v, wantErr %v", err, tt.wantErr)
 			}else if err != nil{
@@ -133,7 +103,7 @@ Ip: "localhost" ,
 				t.Errorf("UpdateParametersWithConfiguration failed. error:%v",err)
 			}
 
-			if ( isvconfigEqual(*config,tt.args.config) != true ) != tt.wantErr3{
+			if ( isvarsConfigEqual(*config,tt.args.config) != true ) != tt.wantErr3{
 				t.Errorf("Configuration are not equal. %v vs %v ",*config,tt.args.config)
 				return
 			}

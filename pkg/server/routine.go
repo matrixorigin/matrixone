@@ -2,14 +2,19 @@ package server
 
 import (
 	"fmt"
+	"matrixone/pkg/config"
 )
 
-type Session interface {}
+type Session interface {
+
+}
 
 type SessionImpl struct {
+	Session
 	//variables
 	user string
 	dbname string
+	sessionVars config.SystemVariables
 }
 
 //the routine is an abstract of handling something repeatedly.

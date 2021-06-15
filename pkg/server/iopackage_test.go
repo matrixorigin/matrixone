@@ -1,10 +1,11 @@
 package server
 
 import (
+	"fmt"
+	"matrixone/pkg/config"
 	"net"
 	"sync/atomic"
 	"testing"
-	"fmt"
 	"time"
 )
 
@@ -251,6 +252,8 @@ func echoHandler(in net.Conn){
 
 func echoServer(handler func (conn net.Conn)){
 	setServer(0)
+	config.GlobalSystemVariables.LoadInitialValues()
+	config.LoadvarsConfigFromFile("../config/system_vars_config.toml", &config.GlobalSystemVariables)
 	addrPort := "localhost:6001"
 	listener,err := net.Listen("tcp", addrPort)
 	if err != nil{
