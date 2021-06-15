@@ -79,6 +79,56 @@ func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 	return resp, 0
 }
 
+func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+	resp := pb.AcquireResponse()
+	args := &Args{}
+	if err := json.Unmarshal(req.Cmd, &args); err != nil {
+		resp.Value = errorResp(err)
+		return resp, 500
+	}
+	var data [][]byte
+	err := h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(req.Key, func(key, value []byte) (bool, error) {
+		data = append(data, key)
+		data = append(data, value)
+		return true, nil
+	}, false)
+	if err != nil {
+		resp.Value = errorResp(err)
+		return resp, 500
+	}
+	resp.Value, err = json.Marshal(data)
+	if err := json.Unmarshal(req.Cmd, &args); err != nil {
+		resp.Value = errorResp(err)
+		return resp, 500
+	}
+	return resp, 0
+}
+
+func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+	resp := pb.AcquireResponse()
+	args := &Args{}
+	if err := json.Unmarshal(req.Cmd, &args); err != nil {
+		resp.Value = errorResp(err)
+		return resp, 500
+	}
+	var data [][]byte
+	err := h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(req.Key, func(key, value []byte) (bool, error) {
+		data = append(data, key)
+		data = append(data, value)
+		return true, nil
+	}, false)
+	if err != nil {
+		resp.Value = errorResp(err)
+		return resp, 500
+	}
+	resp.Value, err = json.Marshal(data)
+	if err := json.Unmarshal(req.Cmd, &args); err != nil {
+		resp.Value = errorResp(err)
+		return resp, 500
+	}
+	return resp, 0
+}
+
 func (h *aoeStorage) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 

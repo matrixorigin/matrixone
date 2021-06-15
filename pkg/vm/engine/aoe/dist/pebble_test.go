@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/assert"
-	"matrixone/pkg/vm/engine/aoe/catalog"
 	"strings"
 	"testing"
 )
@@ -22,7 +21,7 @@ func TestPebbleStorage(t *testing.T) {
 		prefix := "/m/db"
 		for i := 1; i <= 3; i++ {
 			key := []byte(fmt.Sprintf("%v/%v/%d", prefix, "defaultdb", i))
-			err := s.Set(key, []byte{byte(catalog.StatePublic)})
+			err := s.Set(key, []byte{byte(0)})
 			assert.NoError(t, err)
 		}
 		err := s.PrefixScan([]byte(fmt.Sprintf("%v/%v", prefix, "defaultdb")),
@@ -37,7 +36,7 @@ func TestPebbleStorage(t *testing.T) {
 		prefix := "/m/db"
 		for i := 1; i <= 3; i++ {
 			key := []byte(fmt.Sprintf("%v/%v/%d", prefix, "defaultdb", i))
-			err := s.Set(key, []byte{byte(catalog.StateNone)})
+			err := s.Set(key, []byte{byte(1)})
 			assert.NoError(t, err)
 		}
 		err := s.Scan([]byte(fmt.Sprintf("%v/%v/%d", prefix, "defaultdb", 1)),

@@ -5,11 +5,14 @@ import (
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage/mem"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/assert"
 	stdLog "log"
+	"matrixone/pkg/vm/engine/aoe"
 	"os"
 	"testing"
 	"time"
@@ -74,6 +77,7 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 			cfg.Prophet.EmbedEtcd.ClientUrls = fmt.Sprintf("http://127.0.0.1:4000%d", i)
 			cfg.Prophet.EmbedEtcd.PeerUrls = fmt.Sprintf("http://127.0.0.1:5000%d", i)
 			cfg.Prophet.Schedule.EnableJointConsensus = true
+
 		}, server.Cfg{
 			Addr: fmt.Sprintf("127.0.0.1:808%d", i),
 		})
@@ -97,66 +101,89 @@ func TestClusterStartAndStop(t *testing.T) {
 
 	defer c.stop()
 
+	time.Sleep(2 * time.Second)
+
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
 
-	resp, err := setTest([]byte("hello"), []byte("world"), c)
+	//Set Test
+	resp, err := c.applications[0].Exec(Args{
+		Op: uint64(Set),
+		Args: [][]byte{
+			[]byte("hello"),
+			[]byte("world"),
+		},
+	})
 	assert.NoError(t, err)
 	assert.Equal(t, "OK", string(resp))
 
-	value, err := getTest([]byte("hello"), c)
+	//Get Test
+	value, err := c.applications[0].Exec(Args{
+		Op: uint64(Get),
+		Args: [][]byte{
+			[]byte("hello"),
+		},
+	})
 	assert.NoError(t, err)
 	assert.Equal(t, value, []byte("world"))
 
-	gValue, err := getWithGroupTest([]byte("hello"), AOEGroup, c)
+	// To Shard(Not Existed) Get Test
+	gValue, err := c.applications[0].ExecWithGroup(Args{
+		Op: uint64(Get),
+		Args: [][]byte{
+			[]byte("hello"),
+		},
+		ShardId: 13,
+	}, aoe.AOEGroup)
+	assert.Error(t, err, ErrShardNotExisted)
+	assert.Nil(t, gValue)
+
+	// Dynamic Create Shard Test
+	client := c.applications[0].RaftStore().Prophet().GetClient()
+	err = client.AsyncAddResources(raftstore.NewResourceAdapterWithShard(
+		bhmetapb.Shard{
+			Start:  []byte("2"),
+			End:    []byte("3"),
+			Unique: "gTable1",
+			Group:  uint64(aoe.AOEGroup),
+		}))
+	//
+	assert.NoError(t, err)
+	time.Sleep(5 * time.Second)
+
+	// Get With Group Test
+	gValue, err = c.applications[0].ExecWithGroup(Args{
+		Op: uint64(Get),
+		Args: [][]byte{
+			[]byte("hello"),
+		},
+		ShardId: 13,
+	}, aoe.AOEGroup)
 	assert.NoError(t, err)
 	assert.Nil(t, gValue)
 
-	resp, err = setWithGroupTest([]byte("hello"), []byte("world"), AOEGroup, c)
+	// Set With Group Test
+	resp, err = c.applications[0].ExecWithGroup(Args{
+		Op: uint64(Set),
+		Args: [][]byte{
+			[]byte("hello"),
+			[]byte("world"),
+		},
+		ShardId: 13,
+	}, aoe.AOEGroup)
 	assert.NoError(t, err)
 	assert.Equal(t, "OK", string(resp))
 
-	gValue, err = getWithGroupTest([]byte("hello"), AOEGroup, c)
+	// Get With Group Test
+	gValue, err = c.applications[0].ExecWithGroup(Args{
+		Op: uint64(Get),
+		Args: [][]byte{
+			[]byte("hello"),
+		},
+		ShardId: 13,
+	}, aoe.AOEGroup)
 	assert.NoError(t, err)
-	assert.NotNil(t, gValue)
-
-}
-
-func setTest(key []byte, value []byte, c *testCluster) ([]byte, error) {
-	return c.applications[0].Exec(Args{
-		Op: uint64(Set),
-		Args: [][]byte{
-			key,
-			value,
-		},
-	})
-}
-
-func setWithGroupTest(key []byte, value []byte, group Group, c *testCluster) ([]byte, error) {
-	return c.applications[0].ExecWithGroup(Args{
-		Op: uint64(Set),
-		Args: [][]byte{
-			key,
-			value,
-		},
-	}, group)
-}
-
-func getWithGroupTest(key []byte, group Group, c *testCluster) ([]byte, error) {
-	return c.applications[0].ExecWithGroup(Args{
-		Op: uint64(Get),
-		Args: [][]byte{
-			key,
-		},
-	}, group)
-}
-func getTest(key []byte, c *testCluster) ([]byte, error) {
-	return c.applications[0].Exec(Args{
-		Op: uint64(Get),
-		Args: [][]byte{
-			key,
-		},
-	})
+	assert.Equal(t, gValue, []byte("world"))
 }
 
 type emptyLog struct{}
