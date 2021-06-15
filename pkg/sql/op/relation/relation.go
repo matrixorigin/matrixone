@@ -45,6 +45,7 @@ func New(name, schema string, r engine.Relation) *Relation {
 	return &Relation{
 		R:     r,
 		Us:    us,
+		Rid:   name,
 		ID:    name,
 		Attrs: attrs,
 		DB:    schema,
@@ -61,9 +62,9 @@ func (n *Relation) Rename(name string) {
 
 func (n *Relation) String() string {
 	if len(n.DB) == 0 {
-		return n.ID
+		return n.Rid
 	}
-	return fmt.Sprintf("(%s.%s)", n.DB, n.ID)
+	return fmt.Sprintf("(%s.%s)", n.DB, n.Rid)
 }
 
 func (n *Relation) Attribute() map[string]types.Type {

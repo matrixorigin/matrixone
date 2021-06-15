@@ -105,7 +105,7 @@ func (b *build) checkInnerJoin(r, s op.OP, rattrs, sattrs []string, expr tree.Ex
 
 func getJoinAttribute(r, s op.OP, name *tree.UnresolvedName) (string, string, types.Type, error) {
 	if len(name.Parts[1]) == 0 {
-		return "", "", types.Type{}, fmt.Errorf("column '%s' in in on clause is ambiguous", name.Parts[0])
+		return "", "", types.Type{}, fmt.Errorf("column '%s' in on clause is ambiguous", name.Parts[0])
 	}
 	rname, sname := r.Name(), s.Name()
 	rattrs, sattrs := r.Attribute(), s.Attribute()

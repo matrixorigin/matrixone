@@ -19,6 +19,7 @@ func NewTestEngine() engine.Engine {
 	CreateS(db)
 	CreateT(db)
 	CreateW(db)
+	CreateV(db)
 	return e
 }
 
@@ -462,6 +463,47 @@ func CreateW(e engine.Database) {
 				log.Fatal(err)
 			}
 			bat.Vecs[2] = vec
+		}
+		if err := r.Write(bat); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func CreateV(e engine.Database) {
+	{
+		var defs []engine.TableDef
+
+		{
+			defs = append(defs, &engine.AttributeDef{metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "C",
+				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
+			}})
+		}
+
+		if err := e.Create("V", defs, nil, nil); err != nil {
+			log.Fatal(err)
+		}
+	}
+	r, err := e.Relation("V")
+	if err != nil {
+		log.Fatal(err)
+	}
+	{
+		bat := batch.New(true, []string{"C"})
+		{
+			{
+				vec := vector.New(types.Type{types.T(types.T_float64), 8, 8, 0})
+				vs := make([]float64, 10)
+				for i := 0; i < 10; i++ {
+					vs[i] = float64(i)
+				}
+				if err := vec.Append(vs); err != nil {
+					log.Fatal(err)
+				}
+				bat.Vecs[0] = vec
+			}
 		}
 		if err := r.Write(bat); err != nil {
 			log.Fatal(err)
