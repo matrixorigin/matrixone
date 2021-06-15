@@ -90,7 +90,7 @@ func TestCollection(t *testing.T) {
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
 	expect_blks := blks
-	batch_size := uint64(4)
+	batch_size := uint64(8)
 	step := expect_blks / batch_size
 	var waitgroup sync.WaitGroup
 	seq := uint64(0)
@@ -118,7 +118,7 @@ func TestCollection(t *testing.T) {
 		}(logid, &waitgroup)
 	}
 	waitgroup.Wait()
-	assert.Equal(t, len(tbl.SegmentIDs()), int(blks/opts.Meta.Info.Conf.SegmentMaxBlocks))
+	assert.Equal(t, len(tbl.SegmentIDs()), int(blks/(opts.Meta.Info.Conf.SegmentMaxBlocks)))
 	for i := 0; i < 50; i++ {
 		runtime.GC()
 		time.Sleep(time.Duration(1) * time.Millisecond)

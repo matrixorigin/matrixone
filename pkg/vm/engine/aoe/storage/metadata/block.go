@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -44,6 +45,18 @@ func (blk *Block) GetID() uint64 {
 
 func (blk *Block) GetSegmentID() uint64 {
 	return blk.Segment.ID
+}
+
+func (blk *Block) GetCount() uint64 {
+	return atomic.LoadUint64(&blk.Count)
+}
+
+func (blk *Block) AddCount(n uint64) uint64 {
+	newCnt := atomic.AddUint64(&blk.Count, n)
+	if newCnt > blk.Segment.Info.Conf.BlockMaxRows {
+		panic("logic error")
+	}
+	return newCnt
 }
 
 func (blk *Block) SetIndex(idx LogIndex) {

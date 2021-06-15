@@ -31,10 +31,14 @@ type ISegmentFile interface {
 	Destory()
 	RefBlock(blkId common.ID)
 	UnrefBlock(blkId common.ID)
-	MakeColSegmentFile(colIdx int) IColSegmentFile
+	MakeColPartFile(id *common.ID) IColPartFile
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 }
 
 type IColSegmentFile interface {
 	ReadPart(id common.ID, buf []byte)
+}
+
+type IColPartFile interface {
+	io.Reader
 }

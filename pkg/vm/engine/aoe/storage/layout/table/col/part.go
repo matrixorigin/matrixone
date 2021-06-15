@@ -15,16 +15,16 @@ import (
 func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetUnsortedFile(part.ID.AsSegmentID())
 	sf.RefBlock(part.ID.AsBlockID())
-	csf := sf.MakeColSegmentFile(part.ColIdx)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, csf)
+	psf := sf.MakeColPartFile(&part.NodeID)
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
 	part.SegFile = sf
 }
 
 func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetSortedFile(part.ID.AsSegmentID())
 	sf.RefBlock(part.ID.AsBlockID())
-	csf := sf.MakeColSegmentFile(part.ColIdx)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, csf)
+	psf := sf.MakeColPartFile(&part.NodeID)
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
 	part.SegFile = sf
 }
 
@@ -43,37 +43,30 @@ type IColumnPart interface {
 
 type ColumnPart struct {
 	sync.RWMutex
-	ID          common.ID
-	Next        IColumnPart
-	BufMgr      bmgrif.IBufferManager
-	BufNode     nif.INodeHandle
-	TypeSize    uint64
-	MaxRowCount uint64
-	RowCount    uint64
-	Size        uint64
-	Capacity    uint64
-	NodeID      common.ID
-	ColIdx      int
-	SegFile     ldio.ISegmentFile
+	ID       common.ID
+	Next     IColumnPart
+	BufMgr   bmgrif.IBufferManager
+	BufNode  nif.INodeHandle
+	Size     uint64
+	Capacity uint64
+	NodeID   common.ID
+	SegFile  ldio.ISegmentFile
 }
 
 func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
-	rowCount uint64, typeSize uint64) IColumnPart {
+	capacity uint64) IColumnPart {
 	defer blk.UnRef()
 	part := &ColumnPart{
-		BufMgr:      bmgr,
-		ID:          id,
-		TypeSize:    typeSize,
-		MaxRowCount: rowCount,
-		NodeID:      id,
-		ColIdx:      blk.GetColIdx(),
-		Capacity:    typeSize * rowCount,
+		BufMgr:   bmgr,
+		ID:       id,
+		NodeID:   id,
+		Capacity: capacity,
 	}
 	part.NodeID.Idx = uint16(blk.GetColIdx())
 
 	switch blk.GetBlockType() {
 	case TRANSIENT_BLK:
-		bNode := bmgr.RegisterSpillableNode(typeSize*rowCount, part.NodeID)
+		bNode := bmgr.RegisterSpillableNode(capacity, part.NodeID)
 		if bNode == nil {
 			return nil
 		}
@@ -96,15 +89,11 @@ func (part *ColumnPart) GetNodeID() common.ID {
 
 func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager, fsMgr ldio.IManager) IColumnPart {
 	cloned := &ColumnPart{
-		ID:          part.ID,
-		BufMgr:      sstBufMgr,
-		TypeSize:    part.TypeSize,
-		MaxRowCount: part.MaxRowCount,
-		RowCount:    part.RowCount,
-		Size:        part.Size,
-		Capacity:    part.Capacity,
-		NodeID:      part.NodeID.NextIter(),
-		ColIdx:      part.GetColIdx(),
+		ID:       part.ID,
+		BufMgr:   sstBufMgr,
+		Size:     part.Size,
+		Capacity: part.Capacity,
+		NodeID:   part.NodeID.NextIter(),
 	}
 	switch blk.GetBlockType() {
 	case TRANSIENT_BLK:
@@ -122,29 +111,11 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 }
 
 func (part *ColumnPart) GetColIdx() int {
-	return part.ColIdx
+	return int(part.NodeID.Idx)
 }
 
 func (part *ColumnPart) GetBuf() []byte {
 	return part.BufNode.GetBuffer().GetDataNode().Data
-}
-
-func (part *ColumnPart) SetRowCount(cnt uint64) {
-	if cnt > part.MaxRowCount {
-		panic("logic error")
-	}
-	part.Lock()
-	defer part.Unlock()
-	part.RowCount = cnt
-}
-
-func (part *ColumnPart) SetSize(size uint64) {
-	if size > part.Capacity {
-		panic("logic error")
-	}
-	part.Lock()
-	defer part.Unlock()
-	part.Size = size
 }
 
 func (part *ColumnPart) GetID() common.ID {
