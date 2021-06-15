@@ -1,6 +1,7 @@
 package index
 
 import (
+	"fmt"
 	"sync"
 )
 
@@ -26,4 +27,9 @@ func NewBlockHolder(id uint64, t BlockType) *BlockHolder {
 	}
 	holder.Indexes = make(map[string]Index)
 	return holder
+}
+
+func (holder *BlockHolder) stringNoLock() string {
+	s := fmt.Sprintf("<IndexBlkHolder[%d]>[Ty=%d]", holder.ID, holder.Type)
+	return s
 }
