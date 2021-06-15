@@ -8,7 +8,7 @@ import (
 func New(limit int64, mmu *host.Mmu) *Mmu {
 	return &Mmu{
 		Mmu:   mmu,
-		limit: limit,
+		Limit: limit,
 	}
 }
 
@@ -32,7 +32,7 @@ func (m *Mmu) Alloc(size int64) error {
 	if size == 0 {
 		return nil
 	}
-	if m.size+size > m.limit {
+	if m.size+size > m.Limit {
 		return mmu.OutOfMemory
 	}
 	if err := m.Mmu.Alloc(size); err != nil {

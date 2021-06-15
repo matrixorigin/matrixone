@@ -36,7 +36,7 @@ func (b *build) buildProjection(o op.OP, ns tree.SelectExprs) (op.OP, error) {
 			})
 		}
 	}
-	return projection.New(o, es), nil
+	return projection.New(o, es)
 }
 
 func (b *build) buildProjectionWithGroup(o op.OP, ns tree.SelectExprs, gs []*extend.Attribute) (op.OP, error) {
@@ -102,7 +102,10 @@ func (b *build) buildProjectionWithGroup(o op.OP, ns tree.SelectExprs, gs []*ext
 			})
 		}
 	}
-	return b.buildProjection(group.New(o, gs, es), ys)
+	if o, err = group.New(o, gs, es); err != nil {
+		return nil, err
+	}
+	return b.buildProjection(o, ys)
 }
 
 func classify(ns tree.SelectExprs) (tree.SelectExprs, tree.SelectExprs, error) {
