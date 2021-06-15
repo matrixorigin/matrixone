@@ -2,10 +2,12 @@ package col
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync/atomic"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type StdColumnBlock struct {
@@ -14,11 +16,19 @@ type StdColumnBlock struct {
 }
 
 func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
-	var blkType BlockType
-	var segFile ldio.ISegmentFile
+	var (
+		blkType BlockType
+		segFile ldio.ISegmentFile
+	)
 	fsMgr := seg.GetFsManager()
+	indexHolder := seg.GetIndexHolder().GetBlock(meta.ID)
+
 	if meta.DataState < md.FULL {
 		blkType = TRANSIENT_BLK
+		if indexHolder == nil {
+			indexHolder = index.NewBlockHolder(meta.ID, index.TransientBlk)
+			seg.GetIndexHolder().AddBlock(indexHolder)
+		}
 	} else if seg.GetSegmentType() == UNSORTED_SEG {
 		blkType = PERSISTENT_BLK
 		segFile = fsMgr.GetUnsortedFile(seg.GetID())
@@ -27,6 +37,10 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 			if err != nil {
 				panic(err)
 			}
+		}
+		if indexHolder == nil {
+			indexHolder = index.NewBlockHolder(meta.ID, index.PersistentBlk)
+			seg.GetIndexHolder().AddBlock(indexHolder)
 		}
 	} else {
 		blkType = PERSISTENT_SORTED_BLK
@@ -39,13 +53,18 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 				panic(err)
 			}
 		}
+		if indexHolder == nil {
+			indexHolder = index.NewBlockHolder(meta.ID, index.SortedPersistentBlk)
+			seg.GetIndexHolder().AddBlock(indexHolder)
+		}
 	}
 	blk := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{
-			ID:     *meta.AsCommonID(),
-			Type:   blkType,
-			ColIdx: seg.GetColIdx(),
-			Meta:   meta,
+			ID:          *meta.AsCommonID(),
+			Type:        blkType,
+			ColIdx:      seg.GetColIdx(),
+			Meta:        meta,
+			IndexHolder: indexHolder,
 		},
 	}
 	seg.Append(blk.Ref())
@@ -60,6 +79,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 		panic(fmt.Sprintf("logic error: blk %s DataState=%d", newMeta.AsCommonID().BlockString(), newMeta.DataState))
 	}
 	fsMgr := seg.GetFsManager()
+	indexHolder := seg.GetIndexHolder().GetBlock(newMeta.ID)
 	var newType BlockType
 	switch blk.Type {
 	case TRANSIENT_BLK:
@@ -70,6 +90,12 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 			if err != nil {
 				panic(err)
 			}
+		}
+		if indexHolder == nil {
+			indexHolder = index.NewBlockHolder(newMeta.ID, index.PersistentBlk)
+			seg.GetIndexHolder().AddBlock(indexHolder)
+		} else if indexHolder.Type < index.PersistentBlk {
+			indexHolder = seg.GetIndexHolder().UpgradeBlock(newMeta.ID, index.PersistentBlk)
 		}
 	case PERSISTENT_BLK:
 		newType = PERSISTENT_SORTED_BLK
@@ -82,15 +108,22 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 		if segFile == nil {
 			panic("logic error")
 		}
+		if indexHolder == nil {
+			indexHolder = index.NewBlockHolder(newMeta.ID, index.SortedPersistentBlk)
+			seg.GetIndexHolder().AddBlock(indexHolder)
+		} else if indexHolder.Type < index.SortedPersistentBlk {
+			indexHolder = seg.GetIndexHolder().UpgradeBlock(newMeta.ID, index.SortedPersistentBlk)
+		}
 	default:
 		panic("logic error")
 	}
 	cloned := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{
-			ID:     blk.ID,
-			Type:   newType,
-			ColIdx: seg.GetColIdx(),
-			Meta:   newMeta,
+			ID:          blk.ID,
+			Type:        newType,
+			ColIdx:      seg.GetColIdx(),
+			Meta:        newMeta,
+			IndexHolder: indexHolder,
 		},
 	}
 	cloned.Ref()

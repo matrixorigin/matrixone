@@ -82,3 +82,19 @@ func (holder *SegmentHolder) DropSegment(id uint64) *BlockHolder {
 func (holder *SegmentHolder) GetBlockCount() int32 {
 	return atomic.LoadInt32(&holder.tree.BlockCnt)
 }
+
+func (holder *SegmentHolder) UpgradeBlock(id uint64, blkType BlockType) *BlockHolder {
+	holder.tree.Lock()
+	defer holder.tree.Unlock()
+	idx, ok := holder.tree.IdMap[id]
+	if !ok {
+		panic(fmt.Sprintf("specified blk %d not found in %d", id, holder.ID))
+	}
+	stale := holder.tree.Blocks[idx]
+	if stale.Type >= blkType {
+		panic(fmt.Sprintf("Cannot upgrade blk %d, type %d", id, blkType))
+	}
+	newBlk := NewBlockHolder(id, blkType)
+	holder.tree.Blocks[idx] = newBlk
+	return newBlk
+}

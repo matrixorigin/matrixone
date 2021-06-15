@@ -39,6 +39,7 @@ type IColumnSegment interface {
 	GetSegmentType() SegmentType
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager
+	GetIndexHolder() *index.SegmentHolder
 	CloneWithUpgrade(*md.Segment, *index.TableHolder) IColumnSegment
 	UpgradeBlock(*md.Block) (IColumnBlock, error)
 	GetBlock(id common.ID) IColumnBlock
@@ -94,6 +95,10 @@ func NewColumnSegment(tblHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMg
 	}
 
 	return seg.Ref()
+}
+
+func (seg *ColumnSegment) GetIndexHolder() *index.SegmentHolder {
+	return seg.IndexHolder
 }
 
 func (seg *ColumnSegment) GetFsManager() ldio.IManager {

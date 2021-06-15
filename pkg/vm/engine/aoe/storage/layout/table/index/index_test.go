@@ -12,9 +12,9 @@ func TestSegment(t *testing.T) {
 	assert.Equal(t, int32(0), segHolder.GetBlockCount())
 
 	blk0Id := uint64(0)
-	blk0Holder := NewBlockHolder(blk0Id)
+	blk0Holder := NewBlockHolder(blk0Id, TransientBlk)
 	blk1Id := uint64(1)
-	blk1Holder := NewBlockHolder(blk1Id)
+	blk1Holder := NewBlockHolder(blk1Id, TransientBlk)
 
 	blk0 := segHolder.GetBlock(blk0Id)
 	assert.Nil(t, blk0)
