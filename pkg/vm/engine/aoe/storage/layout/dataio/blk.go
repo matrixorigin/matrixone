@@ -25,7 +25,7 @@ func NewBlockFile(dirname string, id common.ID) *BlockFile {
 	}
 
 	name := e.MakeFilename(dirname, e.FTBlock, id.ToBlockFileName(), false)
-	log.Infof("BlockFile name %s", name)
+	// log.Infof("BlockFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
 	}

@@ -11,8 +11,7 @@ import (
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync/atomic"
-
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -225,7 +224,7 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 		n := mgr.makePoolNode(handle.GetCapacity())
 		if n == nil {
 			handle.RollbackLoad()
-			log.Warnf("Cannot makeSpace(%d,%d)", handle.GetCapacity(), mgr.GetCapacity())
+			// log.Warnf("Cannot makeSpace(%d,%d)", handle.GetCapacity(), mgr.GetCapacity())
 			return nil
 		}
 		buf := node.NewNodeBuffer(handle.GetID(), n)
