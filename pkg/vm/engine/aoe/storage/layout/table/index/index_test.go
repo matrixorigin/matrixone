@@ -1,9 +1,10 @@
 package index
 
 import (
-	// "matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/stretchr/testify/assert"
+	"matrixone/pkg/container/types"
 	"testing"
+	// "matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 func TestSegment(t *testing.T) {
@@ -56,4 +57,12 @@ func TestTable(t *testing.T) {
 	assert.Equal(t, int64(1), tableHolder.GetSegmentCount())
 	seg0 = tableHolder.GetSegment(seg0Id)
 	assert.Nil(t, seg0)
+}
+
+func TestIndex(t *testing.T) {
+	int32zm := NewZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100))
+	assert.False(t, int32zm.Eq(int32(9)))
+	assert.True(t, int32zm.Eq(int32(10)))
+	assert.True(t, int32zm.Eq(int32(100)))
+	assert.False(t, int32zm.Eq(int32(101)))
 }

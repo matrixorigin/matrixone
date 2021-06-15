@@ -40,6 +40,7 @@ type IColumnBlock interface {
 	Append(part IColumnPart)
 	GetPartRoot() IColumnPart
 	GetBlockType() BlockType
+	GetIndexHolder() *index.BlockHolder
 	GetColIdx() int
 	CloneWithUpgrade(IColumnSegment, *md.Block) IColumnBlock
 	String() string
@@ -62,6 +63,10 @@ type ColumnBlock struct {
 
 func (blk *ColumnBlock) GetRefs() int64 {
 	return atomic.LoadInt64(&blk.Refs)
+}
+
+func (blk *ColumnBlock) GetIndexHolder() *index.BlockHolder {
+	return blk.IndexHolder
 }
 
 func (blk *ColumnBlock) GetColIdx() int {
