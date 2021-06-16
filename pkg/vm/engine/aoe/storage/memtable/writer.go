@@ -1,25 +1,20 @@
 package memtable
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
-	"matrixone/pkg/encoding"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"os"
 	"path/filepath"
 	"time"
-
-	log "github.com/sirupsen/logrus"
-	// "matrixone/pkg/vm/engine/aoe/storage/common"
-	// "io"
 )
 
 const (
@@ -83,14 +78,14 @@ func (sw *MemtableWriter) Flush() (err error) {
 		}
 	}
 
-	var indexBuf bytes.Buffer
-	indexBuf.Write(encoding.EncodeInt16(int16(len(zmIndexes))))
-	for _, zm := range zmIndexes {
-		zmBuf, _ := zm.Marshall()
-		indexBuf.Write(encoding.EncodeInt32(int32(len(zmBuf))))
-		indexBuf.Write(zmBuf)
+	ibuf, err := ldio.DefaultRWHelper.WriteIndexes(zmIndexes)
+	if err != nil {
+		return err
 	}
-	_, err = w.Write(indexBuf.Bytes())
+	_, err = w.Write(ibuf)
+	if err != nil {
+		return err
+	}
 
 	buf := make([]byte, 2+len(mt.Types)*8*2)
 	binary.BigEndian.PutUint16(buf, uint16(len(mt.Columns)))

@@ -3,11 +3,9 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
-	"matrixone/pkg/encoding"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"os"
 	"sync"
 
@@ -57,32 +55,12 @@ func (bf *BlockFile) Destory() {
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
-	twoBytes := make([]byte, 2)
-	fourBytes := make([]byte, 4)
-	_, err := bf.File.Read(twoBytes)
+	_, err := DefaultRWHelper.ReadIndexesMeta(bf.File)
+	// _, err := DefaultRWHelper.ReadIndexes(bf.File)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	indexes := []index.Index{}
-	indexCnt := encoding.DecodeInt16(twoBytes)
-	if indexCnt > 0 {
-		for i := 0; i < int(indexCnt); i++ {
-			_, err := bf.File.Read(fourBytes)
-			if err != nil {
-				panic(fmt.Sprintf("unexpect error: %s", err))
-			}
-			length := encoding.DecodeInt32(fourBytes)
-			buf := make([]byte, int(length))
-			_, err = bf.File.Read(buf)
-			if err != nil {
-				panic(fmt.Sprintf("unexpect error: %s", err))
-			}
-			zm := new(index.ZoneMapIndex)
-			zm.Unmarshall(buf)
-			indexes = append(indexes, zm)
-		}
-	}
-
+	twoBytes := make([]byte, 2)
 	_, err = bf.File.Read(twoBytes)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
