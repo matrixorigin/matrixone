@@ -5,19 +5,18 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"sync"
 )
 
 type NodeBuffer struct {
 	buf.IBuffer
-	ID common.ID
+	ID uint64
 	// Type nif.BufferType
 }
 
 type NodeHandleCtx struct {
-	ID        common.ID
+	ID        uint64
 	Buff      buf.IBuffer
 	Spillable bool
 	Manager   mgrif.IBufferManager
@@ -28,7 +27,7 @@ type NodeHandleCtx struct {
 type NodeHandle struct {
 	sync.Mutex
 	State     nif.NodeState
-	ID        common.ID
+	ID        uint64
 	Buff      buf.IBuffer
 	Spillable bool
 	Capacity  uint64

@@ -16,7 +16,7 @@ import (
 func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetUnsortedFile(part.ID.AsSegmentID())
 	sf.RefBlock(part.ID.AsBlockID())
-	psf := sf.MakeColPartFile(&part.NodeID)
+	psf := sf.MakeColPartFile(&part.ID)
 	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
 	part.SegFile = sf
 }
@@ -24,7 +24,7 @@ func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetSortedFile(part.ID.AsSegmentID())
 	sf.RefBlock(part.ID.AsBlockID())
-	psf := sf.MakeColPartFile(&part.NodeID)
+	psf := sf.MakeColPartFile(&part.ID)
 	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
 	part.SegFile = sf
 }
@@ -39,7 +39,7 @@ type IColumnPart interface {
 	GetBuf() []byte
 	GetColIdx() int
 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager, ldio.IManager) IColumnPart
-	GetNodeID() common.ID
+	GetNodeID() uint64
 }
 
 type ColumnPart struct {
@@ -50,7 +50,7 @@ type ColumnPart struct {
 	BufNode  nif.INodeHandle
 	Size     uint64
 	Capacity uint64
-	NodeID   common.ID
+	NodeID   uint64
 	SegFile  ldio.ISegmentFile
 }
 
@@ -60,10 +60,9 @@ func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnB
 	part := &ColumnPart{
 		BufMgr:   bmgr,
 		ID:       id,
-		NodeID:   id,
+		NodeID:   bmgr.GetNextID(),
 		Capacity: capacity,
 	}
-	part.NodeID.Idx = uint16(blk.GetColIdx())
 
 	switch blk.GetBlockType() {
 	case base.TRANSIENT_BLK:
@@ -84,7 +83,7 @@ func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnB
 	return part
 }
 
-func (part *ColumnPart) GetNodeID() common.ID {
+func (part *ColumnPart) GetNodeID() uint64 {
 	return part.NodeID
 }
 
@@ -94,7 +93,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 		BufMgr:   sstBufMgr,
 		Size:     part.Size,
 		Capacity: part.Capacity,
-		NodeID:   part.NodeID.NextIter(),
+		NodeID:   sstBufMgr.GetNextID(),
 	}
 	switch blk.GetBlockType() {
 	case base.TRANSIENT_BLK:
@@ -112,7 +111,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 }
 
 func (part *ColumnPart) GetColIdx() int {
-	return int(part.NodeID.Idx)
+	return int(part.ID.Idx)
 }
 
 func (part *ColumnPart) GetBuf() []byte {

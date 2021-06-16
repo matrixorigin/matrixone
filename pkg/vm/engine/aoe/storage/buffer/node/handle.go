@@ -8,7 +8,6 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
@@ -94,7 +93,7 @@ func (h *NodeHandle) HasRef() bool {
 	return atomic.LoadUint64(&h.Refs) != 0
 }
 
-func (h *NodeHandle) GetID() common.ID {
+func (h *NodeHandle) GetID() uint64 {
 	return h.ID
 }
 
@@ -174,8 +173,6 @@ func (h *NodeHandle) CommitLoad() error {
 		if err != nil {
 			return err
 		}
-	} else if h.ID.IsTransient() {
-		panic("logic error: should not load non-spillable transient memory")
 	} else {
 		// log.Infof("loading persistent node %v", h.ID)
 		err := h.IO.Load()
@@ -213,7 +210,7 @@ func NewBufferHandle(n nif.INodeHandle, mgr mgrif.IBufferManager) nif.IBufferHan
 	return h
 }
 
-func (h *BufferHandle) GetID() common.ID {
+func (h *BufferHandle) GetID() uint64 {
 	return h.Handle.GetID()
 }
 

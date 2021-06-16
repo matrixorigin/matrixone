@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	"sync/atomic"
 )
@@ -84,14 +83,14 @@ const (
 
 type INodeBuffer interface {
 	buf.IBuffer
-	GetID() common.ID
+	GetID() uint64
 	// GetType() BufferType
 }
 
 type INodeHandle interface {
 	sync.Locker
 	io.Closer
-	GetID() common.ID
+	GetID() uint64
 	Unload()
 	// Loadable() bool
 	Unloadable() bool
@@ -120,5 +119,5 @@ type INodeHandle interface {
 
 type IBufferHandle interface {
 	io.Closer
-	GetID() common.ID
+	GetID() uint64
 }

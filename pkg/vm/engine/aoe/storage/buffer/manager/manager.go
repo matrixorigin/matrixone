@@ -7,7 +7,6 @@ import (
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync/atomic"
@@ -15,17 +14,19 @@ import (
 )
 
 var (
-	_          mgrif.IBufferManager = (*BufferManager)(nil)
-	evictTimes                      = int64(0)
+	_                  mgrif.IBufferManager = (*BufferManager)(nil)
+	evictTimes                              = int64(0)
+	TRANSIENT_START_ID                      = ^(uint64(0)) / 2
 )
 
 func NewBufferManager(capacity uint64, flusher iw.IOpWorker, evict_ctx ...interface{}) mgrif.IBufferManager {
 	mgr := &BufferManager{
-		IMemoryPool: buf.NewSimpleMemoryPool(capacity),
-		Nodes:       make(map[common.ID]nif.INodeHandle),
-		EvictHolder: NewSimpleEvictHolder(evict_ctx...),
-		TransientID: *common.NewTransientID(),
-		Flusher:     flusher,
+		IMemoryPool:     buf.NewSimpleMemoryPool(capacity),
+		Nodes:           make(map[uint64]nif.INodeHandle),
+		EvictHolder:     NewSimpleEvictHolder(evict_ctx...),
+		NextID:          uint64(0),
+		NextTransientID: TRANSIENT_START_ID,
+		Flusher:         flusher,
 	}
 
 	return mgr
@@ -41,29 +42,41 @@ func (mgr *BufferManager) String() string {
 	mgr.RLock()
 	defer mgr.RUnlock()
 	s := fmt.Sprintf("BMgr[Cap:%d, Usage:%d, Nodes:%d, EvictTimes: %d]:\n", mgr.GetCapacity(), mgr.GetUsage(), len(mgr.Nodes), atomic.LoadInt64(&evictTimes))
-	var mapped = map[uint64]map[uint64][]common.ID{}
-	for k, _ := range mgr.Nodes {
-		_, ok := mapped[k.TableID]
-		if !ok {
-			mapped[k.TableID] = make(map[uint64][]common.ID)
-		}
-		l := mapped[k.TableID][k.SegmentID]
-		l = append(l, k)
-		mapped[k.TableID][k.SegmentID] = l
+	for _, node := range mgr.Nodes {
+		s = fmt.Sprintf("%s\n\t%d | %s | Cap: %d ", s, node.GetID(), nif.NodeStateString(mgr.Nodes[node.GetID()].GetState()), mgr.Nodes[node.GetID()].GetCapacity())
 	}
-	for tbID, segMap := range mapped {
-		s += fmt.Sprintf("Table %d SegmentCnt=%d {\n", tbID, len(segMap))
-		for segID, ids := range segMap {
-			s += fmt.Sprintf("  Segment %d PartCnt=%d {\n", segID, len(ids))
-			for _, id := range ids {
-				s += fmt.Sprintf("    (Col: %d Blk:%d, Part: %d) [Iter=%d] (%s) (Cap=%d)\n", id.Idx, id.BlockID, id.PartID,
-					id.Iter, nif.NodeStateString(mgr.Nodes[id].GetState()), mgr.Nodes[id].GetCapacity())
-			}
-			s += "  }\n"
-		}
-		s += "}"
-	}
+	// var mapped = map[uint64]map[uint64][]common.ID{}
+	// for k, _ := range mgr.Nodes {
+	// 	_, ok := mapped[k.TableID]
+	// 	if !ok {
+	// 		mapped[k.TableID] = make(map[uint64][]common.ID)
+	// 	}
+	// 	l := mapped[k.TableID][k.SegmentID]
+	// 	l = append(l, k)
+	// 	mapped[k.TableID][k.SegmentID] = l
+	// }
+	// for tbID, segMap := range mapped {
+	// 	s += fmt.Sprintf("Table %d SegmentCnt=%d {\n", tbID, len(segMap))
+	// 	for segID, ids := range segMap {
+	// 		s += fmt.Sprintf("  Segment %d PartCnt=%d {\n", segID, len(ids))
+	// 		for _, id := range ids {
+	// 			s += fmt.Sprintf("    (Col: %d Blk:%d, Part: %d) [Iter=%d] (%s) (Cap=%d)\n", id.Idx, id.BlockID, id.PartID,
+	// 				id.Iter, nif.NodeStateString(mgr.Nodes[id].GetState()), mgr.Nodes[id].GetCapacity())
+	// 		}
+	// 		s += "  }\n"
+	// 	}
+	// 	s += "}"
+	// }
+	// return s
 	return s
+}
+
+func (mgr *BufferManager) GetNextID() uint64 {
+	return atomic.AddUint64(&mgr.NextID, uint64(1)) - 1
+}
+
+func (mgr *BufferManager) GetNextTransientID() uint64 {
+	return atomic.AddUint64(&mgr.NextTransientID, uint64(1)) - 1
 }
 
 func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool) nif.INodeHandle {
@@ -71,18 +84,18 @@ func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool) nif.IN
 	if pNode == nil {
 		return nil
 	}
-	transient_id := mgr.TransientID.Next()
+	id := mgr.GetNextTransientID()
 	ctx := node.NodeHandleCtx{
-		ID:        *transient_id,
+		ID:        id,
 		Manager:   mgr,
-		Buff:      node.NewNodeBuffer(*transient_id, pNode),
+		Buff:      node.NewNodeBuffer(id, pNode),
 		Spillable: spillable,
 	}
 	handle := node.NewNodeHandle(&ctx)
 	return handle
 }
 
-func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id common.ID) nif.INodeHandle {
+func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64) nif.INodeHandle {
 	// log.Infof("RegisterSpillableNode %s", node_id.String())
 	{
 		mgr.RLock()
@@ -122,7 +135,7 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id common.
 	return handle
 }
 
-func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, reader io.Reader) nif.INodeHandle {
+func (mgr *BufferManager) RegisterNode(capacity uint64, node_id uint64, reader io.Reader) nif.INodeHandle {
 	mgr.Lock()
 	defer mgr.Unlock()
 	// log.Infof("RegisterNode %s", node_id.String())
@@ -149,7 +162,7 @@ func (mgr *BufferManager) UnregisterNode(h nif.INodeHandle) {
 	node_id := h.GetID()
 	// log.Infof("UnRegisterNode %s", node_id.String())
 	if h.IsSpillable() {
-		if node_id.IsTransient() {
+		if node_id >= TRANSIENT_START_ID {
 			h.Clean()
 			return
 		} else {

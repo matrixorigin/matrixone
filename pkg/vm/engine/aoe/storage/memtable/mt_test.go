@@ -4,7 +4,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
@@ -149,43 +148,4 @@ func TestCollection(t *testing.T) {
 	opts.Meta.Flusher.Stop()
 	opts.Meta.Updater.Stop()
 	opts.Data.Sorter.Stop()
-}
-
-func TestContainer(t *testing.T) {
-	capacity := uint64(4096)
-	mtBufMgr := bmgr.MockBufMgr(capacity)
-
-	baseid := common.ID{}
-	step := capacity / 2
-	// step := capacity
-	con := NewDynamicContainer(mtBufMgr, baseid, step)
-	assert.Equal(t, uint64(0), con.GetCapacity())
-
-	err := con.Allocate()
-	assert.Nil(t, err)
-	assert.Equal(t, step, con.GetCapacity())
-	assert.True(t, con.IsPined())
-
-	id2 := baseid
-	id2.BlockID += 1
-	con2 := NewDynamicContainer(mtBufMgr, id2, step)
-	assert.NotNil(t, con2)
-	err = con2.Allocate()
-	assert.Nil(t, err)
-
-	err = con2.Allocate()
-	assert.NotNil(t, err)
-	assert.Equal(t, step, con2.GetCapacity())
-
-	con.Unpin()
-	err = con2.Allocate()
-	assert.Nil(t, err)
-	assert.Equal(t, step*2, con2.GetCapacity())
-	assert.Equal(t, capacity, mtBufMgr.GetUsage())
-
-	con.Close()
-	con2.Close()
-	assert.Equal(t, uint64(0), con.GetCapacity())
-	assert.Equal(t, uint64(0), con2.GetCapacity())
-	assert.Equal(t, capacity, mtBufMgr.GetCapacity())
 }
