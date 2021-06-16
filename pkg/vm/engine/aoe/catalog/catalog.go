@@ -135,8 +135,8 @@ func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
 	lock.RLock()
 	defer lock.RUnlock()
 	resp, err := c.store.Get(c.dbKey(id))
-	if err != nil {
-		return nil, err
+	if err != nil || resp == nil {
+		return nil, ErrDBNotExists
 	}
 	db := aoe.SchemaInfo{}
 	_ = json.Unmarshal(resp, &db)
@@ -270,8 +270,8 @@ func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, err
 		lock.RLock()
 		defer lock.RUnlock()
 		value, err := c.store.Get(c.tableKey(dbId, tid))
-		if err != nil {
-			return nil, err
+		if err != nil || value == nil {
+			return nil, ErrTableNotExists
 		}
 		_ = json.Unmarshal(value, &t)
 		if t.State != aoe.StatePublic {
@@ -289,11 +289,11 @@ func (c *Catalog) checkDBExists(dbName string) (uint64, error) {
 	lock := v.(*sync.RWMutex)
 	lock.RLock()
 	defer lock.RUnlock()
-	if value, err := c.store.Get(c.dbIDKey(dbName)); err != nil {
+	if value, err := c.store.Get(c.dbIDKey(dbName)); err != nil || value == nil {
 		return 0, ErrDBNotExists
 	} else {
 		id := format.MustBytesToUint64(value)
-		if v, err := c.store.Get(c.dbKey(id)); err != nil {
+		if v, err := c.store.Get(c.dbKey(id)); err != nil || value == nil {
 			return 0, ErrDBNotExists
 		} else {
 			db := aoe.SchemaInfo{}
@@ -324,11 +324,11 @@ func (c *Catalog) checkTableExists(dbId uint64, tableName string) (uint64, error
 	lock := v.(*sync.RWMutex)
 	lock.RLock()
 	defer lock.RUnlock()
-	if value, err := c.store.Get(c.tableIDKey(dbId, tableName)); err != nil {
+	if value, err := c.store.Get(c.tableIDKey(dbId, tableName)); err != nil || value == nil {
 		return 0, ErrTableNotExists
 	} else {
 		id := format.MustBytesToUint64(value)
-		if v, err := c.store.Get(c.tableKey(dbId, id)); err != nil {
+		if v, err := c.store.Get(c.tableKey(dbId, id)); err != nil || value == nil {
 			return 0, ErrTableNotExists
 		} else {
 			table := aoe.TableInfo{}
@@ -352,7 +352,11 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) error {
 }
 
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
-	return 0, nil
+	id, err := c.store.AllocID(idKey)
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
 }
 
 //where to generate id

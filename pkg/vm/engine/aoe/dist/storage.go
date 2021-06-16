@@ -139,8 +139,8 @@ func NewStorageWithOptions(
 			},
 			{
 				Group: uint64(aoe.AOEGroup),
-				Start: []byte("1"),
-				End:   []byte("2"),
+				Start: []byte("0"),
+				End:   []byte("1"),
 			},
 		}
 	}
@@ -273,7 +273,7 @@ func (h *aoeStorage) Scan(start []byte, end []byte, limit uint64) ([][]byte, err
 }
 
 func (h *aoeStorage) ScanWithGroup(start []byte, end []byte, limit uint64, group aoe.Group) ([][]byte, error) {
-	req := &Args{
+	req := Args{
 		Op: uint64(Scan),
 		Args: [][]byte{
 			start,
@@ -298,7 +298,7 @@ func (h *aoeStorage) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
 }
 
 func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group aoe.Group) ([][]byte, error) {
-	req := &Args{
+	req := Args{
 		Op: uint64(PrefixScan),
 		Args: [][]byte{
 			prefix,
@@ -319,7 +319,7 @@ func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group aoe.
 }
 
 func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {
-	req := &Args{
+	req := Args{
 		Op: uint64(Incr),
 		Args: [][]byte{
 			idkey,

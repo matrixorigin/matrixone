@@ -13,7 +13,7 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage/mem"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist"
@@ -107,13 +107,17 @@ func TestClusterStartAndStop(t *testing.T) {
 
 	time.Sleep(2 * time.Second)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	stdLog.Printf("app all started.")
+	catalog := DefaultCatalog(c.applications[0])
+	testCreateDB(t, catalog)
+	//testCreateTable(t,catalog)
 
+}
+
+func testCreateTable(t *testing.T, c Catalog) {
 	// mock create table(skip validation and id generate), dbid=1, tid=2,
 	// 1. create meta set it's state to StateNone, encoding meta and save in kv
-
-	cat := DefaultCatalog(c.applications[0])
 
 	table := aoe.TableInfo{
 		SchemaId: 1,
@@ -123,13 +127,13 @@ func TestClusterStartAndStop(t *testing.T) {
 	}
 
 	meta, err := json.Marshal(table)
-	err = c.applications[0].Set(cat.tableKey(table.SchemaId, table.Id), meta)
-	assert.NoError(t, err)
+	err = c.store.Set(c.tableKey(table.SchemaId, table.Id), meta)
+	require.NoError(t, err)
 
 	// 2. Create Shard for table
 	// Dynamic Create Shard Test
-	client := c.applications[0].RaftStore().Prophet().GetClient()
-	key := cat.tableKey(table.SchemaId, table.Id)
+	client := c.store.RaftStore().Prophet().GetClient()
+	key := c.tableKey(table.SchemaId, table.Id)
 	header := format.Uint64ToBytes(uint64(len(key)))
 	buf := bytes.Buffer{}
 	buf.Write(header)
@@ -143,21 +147,21 @@ func TestClusterStartAndStop(t *testing.T) {
 			Group:  uint64(aoe.AOEGroup),
 			Data:   buf.Bytes(),
 		}))
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	completedC := make(chan aoe.TableInfo, 1)
 	defer close(completedC)
 	tm := aoe.TableInfo{}
 	go func() {
 		for {
-			value, err := c.applications[0].Get(key)
+			value, err := c.store.Get(key)
 			if err != nil {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				break
 			}
 			err = json.Unmarshal(value, &tm)
 			if err != nil {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				break
 			}
 			if tm.State == aoe.StateNone {
@@ -178,6 +182,23 @@ func TestClusterStartAndStop(t *testing.T) {
 		stdLog.Printf("create %s failed, timeout", table.Name)
 
 	}
+}
+func testCreateDB(t *testing.T, c Catalog) {
+	dbName := "test_db1"
+	id, err := c.CreateDatabase(dbName)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), id)
+
+	id, err = c.CreateDatabase(dbName)
+	require.Error(t, ErrDBCreateExists, err)
+}
+
+func testDescDB(t *testing.T, s dist.Storage) {
+
+}
+
+func testDescDBs(t *testing.T, s dist.Storage) {
+
 }
 
 type emptyLog struct{}
