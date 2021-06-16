@@ -20,6 +20,18 @@
 
 
 
+	
+#	Name:	dumpdatabase
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	string
+#	DomainType:	set
+#	Values:	[default]
+#	Comment:	dump database name
+#	UpdateMode:	dynamic
+	dumpdatabase= "default"
+
+
 
 
 

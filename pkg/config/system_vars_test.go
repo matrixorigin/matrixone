@@ -30,6 +30,12 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 
 
 
+	if c1.Dumpdatabase != c2.Dumpdatabase {
+		return false
+	}
+
+
+
 
 
 
@@ -48,6 +54,8 @@ rootpassword= ""
 
 
 
+dumpdatabase= "default"
+
 
 
 
@@ -64,6 +72,8 @@ Rootpassword: "" ,
 
 
 
+
+Dumpdatabase: "default" ,
 
 
 

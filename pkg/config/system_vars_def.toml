@@ -48,6 +48,16 @@ comment = "dump user password"
 update-mode = "fix"
 
 [[parameter]]
+name = "dumpdatabase"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["default"]
+comment = "dump database name"
+update-mode = "dynamic"
+
+[[parameter]]
 name = "port"
 scope = ["global"]
 access = ["file"]

@@ -3,17 +3,18 @@ package server
 import (
 	"fmt"
 	"matrixone/pkg/config"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/mmu/guest"
 )
 
-type Session interface {
-
-}
-
-type SessionImpl struct {
-	Session
+type Session struct {
 	//variables
 	user string
 	dbname string
+
+	guestMmu *guest.Mmu
+	mempool *mempool.Mempool
+
 	sessionVars config.SystemVariables
 }
 
@@ -27,6 +28,15 @@ type Routine interface {
 
 	//quit the execution routine
 	Quit()
+
+	//get the session
+	GetSession()*Session
+
+	//get the clientprotocol
+	GetClientProtocol()ClientProtocol
+
+	//get the cmdexecutor
+	GetCmdExecutor()CmdExecutor
 }
 
 //handle requests repeatedly.
@@ -41,7 +51,15 @@ type RoutineImpl struct {
 	executor CmdExecutor
 
 	//the related session
-	ses Session
+	ses *Session
+}
+
+func (ri *RoutineImpl) GetClientProtocol() ClientProtocol {
+	return ri.protocol
+}
+
+func (ri *RoutineImpl) GetCmdExecutor() CmdExecutor {
+	return ri.executor
 }
 
 func (ri *RoutineImpl) ID()uint32  {
@@ -71,9 +89,11 @@ func (ri *RoutineImpl) Loop() {
 			break
 		}
 
-		if err = ri.protocol.SendResponse(resp);err != nil{
-			fmt.Printf("routine send response failed. error:%v ",err)
-			break
+		if resp != nil {
+			if err = ri.protocol.SendResponse(resp);err != nil{
+				fmt.Printf("routine send response failed. error:%v ",err)
+				break
+			}
 		}
 
 		//mysql client protocol: quit command
@@ -89,14 +109,26 @@ func (ri *RoutineImpl) Quit() {
 	ri.Close()
 }
 
-func NewSession()Session{
-	return &SessionImpl{}
+func (ri *RoutineImpl) GetSession() *Session {
+	return ri.ses
 }
 
-func NewRoutine(protocol ClientProtocol,executor CmdExecutor,session Session)Routine{
-	return &RoutineImpl{
+func NewSession()*Session{
+	return &Session{
+		guestMmu: guest.New(1<<40, HostMmu),
+		mempool: mempool.New(1<<40, 8),
+	}
+}
+
+func NewRoutine(protocol ClientProtocol,executor CmdExecutor,session *Session)Routine{
+	ri := &RoutineImpl{
 		protocol: protocol,
 		executor: executor,
 		ses:session,
 	}
+
+	protocol.SetRoutine(ri)
+	executor.SetRoutine(ri)
+
+	return ri
 }

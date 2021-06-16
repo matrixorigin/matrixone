@@ -2,6 +2,9 @@ package server
 
 import (
 	"fmt"
+	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/metadata"
+	"matrixone/pkg/vm/mmu/host"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -9,6 +12,15 @@ import (
 
 //ID counter for the new connection
 var initConnectionID uint32 = 1000
+
+//host memory
+var HostMmu *host.Mmu = nil
+
+//Storage Engine
+var StorageEngine engine.Engine
+
+//Cluster Nodes
+var ClusterNodes metadata.Nodes
 
 //the Server is an abstract of handling connections from clients repeatedly.
 type Server interface {

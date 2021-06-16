@@ -1,8 +1,8 @@
 package compile
 
 import (
+	"matrixone/pkg/client"
 	"matrixone/pkg/container/types"
-	"matrixone/pkg/server"
 	"matrixone/pkg/sql/build"
 	"matrixone/pkg/sql/colexec/myoutput"
 	"matrixone/pkg/sql/op"
@@ -80,7 +80,7 @@ func (c *compile) Compile() ([]*Exec, error) {
 	return es, nil
 }
 
-func (e *Exec) Run(mrs *server.MysqlResultSet) error {
+func (e *Exec) Run(mrs *client.MysqlResultSet) error {
 	var wg sync.WaitGroup
 
 	for _, s := range e.ss {
@@ -95,31 +95,31 @@ func (e *Exec) Run(mrs *server.MysqlResultSet) error {
 		}
 	}
 	{
-		mrs.Columns = make([]server.Column, len(e.cs))
+		mrs.Columns = make([]client.Column, len(e.cs))
 		mrs.Name2Index = make(map[string]uint64)
 		for i, c := range e.cs {
 			mrs.Name2Index[c.Name] = uint64(i)
-			col := new(server.MysqlColumn)
+			col := new(client.MysqlColumn)
 			col.SetName(c.Name)
 			switch c.Typ {
 			case types.T_int8:
 				col.SetLength(1)
-				col.SetColumnType(server.MYSQL_TYPE_TINY)
+				col.SetColumnType(client.MYSQL_TYPE_TINY)
 			case types.T_int16:
 				col.SetLength(2)
-				col.SetColumnType(server.MYSQL_TYPE_SHORT)
+				col.SetColumnType(client.MYSQL_TYPE_SHORT)
 			case types.T_int32:
 				col.SetLength(4)
-				col.SetColumnType(server.MYSQL_TYPE_LONG)
+				col.SetColumnType(client.MYSQL_TYPE_LONG)
 			case types.T_int64:
 				col.SetLength(8)
-				col.SetColumnType(server.MYSQL_TYPE_LONGLONG)
+				col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
 			case types.T_float32:
 				col.SetLength(4)
-				col.SetColumnType(server.MYSQL_TYPE_FLOAT)
+				col.SetColumnType(client.MYSQL_TYPE_FLOAT)
 			case types.T_float64:
 				col.SetLength(8)
-				col.SetColumnType(server.MYSQL_TYPE_DOUBLE)
+				col.SetColumnType(client.MYSQL_TYPE_DOUBLE)
 			case types.T_char:
 			case types.T_varchar:
 			}

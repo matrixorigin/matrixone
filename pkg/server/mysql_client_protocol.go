@@ -5,6 +5,7 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"math/rand"
+	"matrixone/pkg/client"
 	"matrixone/pkg/config"
 	"strconv"
 	"time"
@@ -96,7 +97,6 @@ const (
 
 type MysqlClientProtocol struct {
 	ClientProtocolImpl
-	Column
 
 	//The sequence-id is incremented with each packet and may wrap around.
 	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
@@ -839,7 +839,7 @@ func (mcp *MysqlClientProtocol) sendEOFPacket(warnings, status uint16) error {
 }
 
 //make the column information with the format of column definition41
-func (mcp *MysqlClientProtocol) makeColumnDefinition41(column *MysqlColumn,cmd int)[]byte  {
+func (mcp *MysqlClientProtocol) makeColumnDefinition41(column *client.MysqlColumn,cmd int)[]byte  {
 	space := 8 * 9 + //lenenc bytes of 8 fields
 		21 +  //fixed-length fields
 		3  +  // catalog "def"
@@ -901,8 +901,8 @@ func (mcp *MysqlClientProtocol) makeColumnDefinition41(column *MysqlColumn,cmd i
 }
 
 //the server send the column definition to the client
-func (mcp *MysqlClientProtocol) sendColumnDefinition(column Column,cmd int) error {
-	mysqlColumn,ok := column.(*MysqlColumn)
+func (mcp *MysqlClientProtocol) sendColumnDefinition(column client.Column,cmd int) error {
+	mysqlColumn,ok := column.(*client.MysqlColumn)
 	if !ok{
 		return fmt.Errorf("sendColumn need MysqlColumn")
 	}
@@ -932,11 +932,11 @@ func (mcp *MysqlClientProtocol) sendColumnCount(count uint64) error {
 	return nil
 }
 
-func (mcp *MysqlClientProtocol) sendColumns(mrs *MysqlResultSet,cmd int,warnings,status uint16) error {
+func (mcp *MysqlClientProtocol) sendColumns(mrs *client.MysqlResultSet,cmd int,warnings,status uint16) error {
 	var err error
 	//column_count * Protocol::ColumnDefinition packets
 	for i := uint64(0) ; i < mrs.GetColumnCount();i++{
-		var col Column
+		var col client.Column
 		if col,err = mrs.GetColumn(i); err != nil{
 			return err
 		}else if err = mcp.sendColumnDefinition(col,cmd); err != nil{
@@ -954,14 +954,14 @@ func (mcp *MysqlClientProtocol) sendColumns(mrs *MysqlResultSet,cmd int,warnings
 }
 
 //the server convert every row of the result set into the format that mysql protocol needs
-func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint64) ([]byte, error) {
+func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *client.MysqlResultSet, r uint64) ([]byte, error) {
 	var data []byte
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
 		column,err := mrs.GetColumn(i)
 		if err != nil{
 			return nil,err
 		}
-		mysqlColumn,ok := column.(*MysqlColumn)
+		mysqlColumn,ok := column.(*client.MysqlColumn)
 		if !ok{
 			return nil,fmt.Errorf("sendColumn need MysqlColumn")
 		}
@@ -975,13 +975,13 @@ func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint
 		}
 
 		switch mysqlColumn.ColumnType() {
-		case MYSQL_TYPE_DECIMAL:
+		case client.MYSQL_TYPE_DECIMAL:
 			return nil,fmt.Errorf("unsupported Decimal")
-		case MYSQL_TYPE_TINY, MYSQL_TYPE_SHORT, MYSQL_TYPE_INT24, MYSQL_TYPE_LONG, MYSQL_TYPE_YEAR:
+		case client.MYSQL_TYPE_TINY, client.MYSQL_TYPE_SHORT, client.MYSQL_TYPE_INT24, client.MYSQL_TYPE_LONG, client.MYSQL_TYPE_YEAR:
 			if value,err2 := mrs.GetInt64(r,i);err2 != nil{
 				return nil,err2
 			}else{
-				if mysqlColumn.ColumnType() == MYSQL_TYPE_YEAR{
+				if mysqlColumn.ColumnType() == client.MYSQL_TYPE_YEAR{
 					if value == 0 {
 						data = mcp.appendStringLenEnc(data,"0000")
 					}else{
@@ -991,20 +991,20 @@ func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint
 					data = mcp.appendStringLenEncOfInt64(data,value)
 				}
 			}
-		case MYSQL_TYPE_FLOAT:
+		case client.MYSQL_TYPE_FLOAT:
 			if value,err2 := mrs.GetFloat64(r,i);err2 != nil{
 				return nil,err2
 			}else{
 				data = mcp.appendStringLenEncOfFloat64(data,value,32)
 			}
-		case MYSQL_TYPE_DOUBLE:
+		case client.MYSQL_TYPE_DOUBLE:
 			if value,err2 := mrs.GetFloat64(r,i);err2 != nil{
 				return nil,err2
 			}else{
 				data = mcp.appendStringLenEncOfFloat64(data,value,64)
 			}
-		case MYSQL_TYPE_LONGLONG:
-			if uint32(mysqlColumn.Flag()) & UNSIGNED_FLAG != 0{
+		case client.MYSQL_TYPE_LONGLONG:
+			if uint32(mysqlColumn.Flag()) & client.UNSIGNED_FLAG != 0{
 				if value,err2 := mrs.GetUint64(r,i);err2 != nil{
 					return nil,err2
 				}else{
@@ -1017,13 +1017,13 @@ func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint
 					data = mcp.appendStringLenEncOfInt64(data,value)
 				}
 			}
-		case MYSQL_TYPE_VARCHAR,MYSQL_TYPE_VAR_STRING,MYSQL_TYPE_STRING:
+		case client.MYSQL_TYPE_VARCHAR,client.MYSQL_TYPE_VAR_STRING,client.MYSQL_TYPE_STRING:
 			if value,err2 := mrs.GetString(r,i);err2 != nil{
 				return nil,err2
 			}else{
 				data = mcp.appendStringLenEnc(data,value)
 			}
-		case MYSQL_TYPE_DATE,MYSQL_TYPE_DATETIME,MYSQL_TYPE_TIMESTAMP,MYSQL_TYPE_TIME:
+		case client.MYSQL_TYPE_DATE,client.MYSQL_TYPE_DATETIME,client.MYSQL_TYPE_TIMESTAMP,client.MYSQL_TYPE_TIME:
 			return nil,fmt.Errorf("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
 		default:
 			return nil,fmt.Errorf("unsupported column type %d ",mysqlColumn.ColumnType())
@@ -1033,7 +1033,7 @@ func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint
 }
 
 //the server send every row of the result set as an independent packet
-func (mcp *MysqlClientProtocol) sendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
+func (mcp *MysqlClientProtocol) sendResultSetTextRow(mrs *client.MysqlResultSet, r uint64) error {
 	var data []byte
 	var err error
 	if data,err = mcp.makeResultSetTextRow(mrs,r); err != nil{
@@ -1053,9 +1053,9 @@ func (mcp *MysqlClientProtocol) sendResultSetTextRow(mrs *MysqlResultSet, r uint
 
 //the server send the result set of execution the client
 //the routine follows the article: https://dev.mysql.com/doc/internals/en/com-query-response.html
-func (mcp *MysqlClientProtocol) sendResultSet(set ResultSet,cmd int,warnings,status uint16) error {
+func (mcp *MysqlClientProtocol) sendResultSet(set client.ResultSet,cmd int,warnings,status uint16) error {
 	var err error
-	mysqlRS,ok := set.(*MysqlResultSet)
+	mysqlRS,ok := set.(*client.MysqlResultSet)
 	if !ok{
 		return fmt.Errorf("sendResultSet need MysqlResultSet")
 	}
@@ -1244,6 +1244,12 @@ func (mcp *MysqlClientProtocol) Handshake() error {
 	}
 
 	//TODO: Open the Session for the client
+	//if mcp.username == config.GlobalSystemVariables.GetDumpuser() {//dump 111 default
+	//	mcp.database = config.GlobalSystemVariables.GetDumpdatabase()
+	//}
+	ses := mcp.routine.GetSession()
+	ses.user = mcp.username
+	ses.dbname = mcp.database
 
 	if err = mcp.sendOKPacket(0, 0, 0, 0, ""); err!=nil{
 		return err
@@ -1283,14 +1289,14 @@ func (mcp *MysqlClientProtocol) SendResponse(resp *Response) error  {
 		}
 		return mcp.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,fmt.Sprintf("unkown error:%v",err))
 	case resultResponse:
-		mer := resp.data.(*MysqlExecutionResult)
+		mer := resp.data.(*client.MysqlExecutionResult)
 		if mer == nil{
 			return mcp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
-		if mer.mrs == nil {
-			return mcp.sendOKPacket(mer.affectedRows, mer.insertID, uint16(resp.status), mer.warnings, "")
+		if mer.Mrs() == nil {
+			return mcp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
 		}
-		return mcp.sendResultSet(mer.mrs,resp.cmd,mer.warnings,uint16(resp.status))
+		return mcp.sendResultSet(mer.Mrs(),resp.cmd,mer.Warnings(),uint16(resp.status))
 	default:
 		return fmt.Errorf("unsupported response:%d ",resp.category)
 	}

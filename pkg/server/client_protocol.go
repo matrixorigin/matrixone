@@ -91,6 +91,9 @@ type ClientProtocol interface {
 
 	//close the protocol layer
 	Close()
+
+	//set Routine
+	SetRoutine(Routine)
 }
 
 type ClientProtocolImpl struct{
@@ -102,6 +105,9 @@ type ClientProtocolImpl struct{
 
 	//the id of the connection
 	connectionID uint32
+
+	//routine
+	routine Routine
 }
 
 func (cpi *ClientProtocolImpl) ConnectionID() uint32 {
@@ -114,4 +120,8 @@ func (cpi *ClientProtocolImpl) Peer() (string, string) {
 
 func (cpi *ClientProtocolImpl) Close() {
 	cpi.io.Close()
+}
+
+func (cpi *ClientProtocolImpl) SetRoutine(r Routine)  {
+	cpi.routine = r
 }

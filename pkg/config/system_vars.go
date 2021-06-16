@@ -62,6 +62,18 @@ type SystemVariables struct{
 	dumppassword    string
 
 	/**
+	Name:	dumpdatabase
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[default]
+	Comment:	dump database name
+	UpdateMode:	dynamic
+	*/
+	dumpdatabase    string
+
+	/**
 	Name:	port
 	Scope:	[global]
 	Access:	[file]
@@ -118,6 +130,21 @@ type varsConfig struct{
 	
 
 	
+	/**
+	Name:	dumpdatabase
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[default]
+	Comment:	dump database name
+	UpdateMode:	dynamic
+	*/
+	Dumpdatabase    string  `toml:"dumpdatabase"`
+
+	
+
+	
 
 	
 
@@ -152,6 +179,8 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["dumpuser"] = "	Name:	dumpuser	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[dump]	Comment:	dump user name	UpdateMode:	fix	"
 	
 	ap.name2definition["dumppassword"] = "	Name:	dumppassword	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[111]	Comment:	dump user password	UpdateMode:	fix	"
+	
+	ap.name2definition["dumpdatabase"] = "	Name:	dumpdatabase	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[default]	Comment:	dump database name	UpdateMode:	dynamic	"
 	
 	ap.name2definition["port"] = "	Name:	port	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[6001]	Comment:	port	UpdateMode:	fix	"
 	
@@ -272,6 +301,25 @@ func (ap *SystemVariables) LoadInitialValues()error{
 	
 		
 		
+			dumpdatabasechoices :=[]string {
+				
+				"default",
+					
+			}
+			if len(dumpdatabasechoices) != 0{
+				if err = ap.setDumpdatabase( dumpdatabasechoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","Dumpdatabase",err)
+				}
+			}else{
+				//empty string
+				if err = ap.setDumpdatabase( "" ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","Dumpdatabase",err)
+				}
+			}
+		
+	
+		
+		
 			portchoices :=[]int64 {
 				
 				6001,
@@ -355,6 +403,15 @@ func (ap * SystemVariables ) GetDumppassword() string {
 }
 
 /**
+Get the value of the parameter dumpdatabase
+*/
+func (ap * SystemVariables ) GetDumpdatabase() string {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.dumpdatabase
+}
+
+/**
 Get the value of the parameter port
 */
 func (ap * SystemVariables ) GetPort() int64 {
@@ -390,6 +447,15 @@ func (ap * SystemVariables ) SetRootpassword(value string)error {
 
 
 
+
+
+
+/**
+Set the value of the parameter dumpdatabase
+*/
+func (ap * SystemVariables ) SetDumpdatabase(value string)error {
+	return  ap.setDumpdatabase(value)
+}
 
 
 
@@ -513,6 +579,34 @@ func (ap * SystemVariables ) setDumppassword(value string)error {
 }
 
 /**
+Set the value of the parameter dumpdatabase
+*/
+func (ap * SystemVariables ) setDumpdatabase(value string)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]string {
+				
+				"default",
+					
+			}
+			if len( choices ) != 0{
+				if !isInSlice(value, choices){
+					return fmt.Errorf("setDumpdatabase,the value %s is not in set %v",value,choices)
+				}
+			}//else means any string
+		
+
+	
+
+	ap.dumpdatabase = value
+	return nil
+}
+
+/**
 Set the value of the parameter port
 */
 func (ap * SystemVariables ) setPort(value int64)error {
@@ -600,6 +694,10 @@ func (config *varsConfig) resetUpdatedFlags(){
 	
 	
 	
+	
+	
+	
+		config.name2updatedFlags["dumpdatabase"] = false
 	
 	
 	
@@ -694,6 +792,14 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	
 	
 	
+	
+	
+	
+	if config.getUpdatedFlag("dumpdatabase"){
+		if err = ap.setDumpdatabase(config.Dumpdatabase); err != nil{
+			return fmt.Errorf("update parameter dumpdatabase failed.error:%v",err)
+		}
+	}
 	
 	
 	
