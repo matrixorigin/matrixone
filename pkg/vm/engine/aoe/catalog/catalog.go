@@ -63,6 +63,9 @@ func (c *Catalog) CreateDatabase(dbName string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err = c.store.Set(c.dbIDKey(dbName), format.Uint64ToBytes(id)); err != nil {
+		return 0, err
+	}
 	info := aoe.SchemaInfo{
 		State:     aoe.StatePublic,
 		Name:      dbName,
@@ -77,7 +80,6 @@ func (c *Catalog) CreateDatabase(dbName string) (uint64, error) {
 }
 
 func (c *Catalog) DelDatabase(dbName string) (uint64, error) {
-
 	if id, err := c.checkDBExists(dbName); err != nil {
 		return 0, err
 	} else {
@@ -114,9 +116,10 @@ func (c *Catalog) GetDBs() ([]aoe.SchemaInfo, error) {
 		return nil, err
 	}
 	var dbs []aoe.SchemaInfo
-	for _, v := range values {
+
+	for i := 1; i < len(values); i = i + 2 {
 		db := aoe.SchemaInfo{}
-		_ = json.Unmarshal(v, &db)
+		_ = json.Unmarshal(values[i], &db)
 		dbs = append(dbs, db)
 	}
 	return dbs, nil
@@ -146,8 +149,7 @@ func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
 	return &db, nil
 }
 
-func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engine.TableDef, pdef engine.PartitionBy) (uint64, error) {
-
+func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engine.TableDef, pdef *engine.PartitionBy) (uint64, error) {
 	dbId, err := c.checkDBExists(dbName)
 	if err != nil {
 		return 0, err
@@ -166,6 +168,10 @@ func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engin
 	lock.RLock()
 	defer lock.RUnlock()
 	tid, err := c.genGlobalUniqIDs([]byte(cTableIDPrefix))
+	if err != nil {
+		return 0, err
+	}
+	err = c.store.Set(c.tableIDKey(dbId, tableName), format.Uint64ToBytes(tid))
 	if err != nil {
 		return 0, err
 	}
@@ -244,9 +250,12 @@ func (c *Catalog) GetTables(dbName string) ([]aoe.TableInfo, error) {
 			return nil, err
 		}
 		var tables []aoe.TableInfo
-		for _, v := range values {
+		for i := 1; i < len(values); i = i + 2 {
 			t := aoe.TableInfo{}
-			_ = json.Unmarshal(v, &t)
+			_ = json.Unmarshal(values[i], &t)
+			if t.State != aoe.StatePublic {
+				continue
+			}
 			tables = append(tables, t)
 		}
 		return tables, nil
