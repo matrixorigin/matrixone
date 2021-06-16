@@ -1,6 +1,7 @@
 package dist
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/fagongzi/util/format"
@@ -146,24 +147,23 @@ func NewStorageWithOptions(
 
 	cfg.Prophet.ResourceStateChangedHandler = func(res metadata.Resource, from metapb.ResourceState, to metapb.ResourceState) {
 		if from == metapb.ResourceState_WaittingCreate && to == metapb.ResourceState_Running {
-			fmt.Printf("[QSQ] ResourceStateChanged, %d, %s, %v", res.ID(), res.Unique(), string(res.Data()))
 			if res.Data() == nil {
 				return
 			}
-			//TODO：Change table state and store meta in kv
+
 			header := format.MustBytesToUint64(res.Data()[0:8])
-			key := res.Data()[8 : 8+header]
+			keys := bytes.Split(res.Data()[8:8+header], []byte("#"))
+			tKey := keys[0]
+			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), res.ID()))
+
+			// TODO: Call local interface to create new tablet
+			// TODO: Re-design group store and set value to segment_ids
+			_ = h.Set(rKey, []byte(res.Unique()))
 			t := aoe.TableInfo{}
 			_ = json.Unmarshal(res.Data()[8+header:], &t)
 			t.State = aoe.StatePublic
 			meta, _ := json.Marshal(t)
-			_, _ = h.Exec(Args{
-				Op: uint64(Set),
-				Args: [][]byte{
-					key,
-					meta,
-				},
-			})
+			_ = h.Set(tKey, meta)
 		}
 	}
 
