@@ -4,6 +4,7 @@ import (
 	"fmt"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -13,7 +14,7 @@ import (
 
 func NewSortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 	sf := &SortedSegmentFile{
-		Parts: make(map[Key]Pointer),
+		Parts: make(map[Key]base.Pointer),
 		ID:    id,
 	}
 
@@ -37,7 +38,7 @@ type SortedSegmentFile struct {
 	ID common.ID
 	os.File
 	Refs  int32
-	Parts map[Key]Pointer
+	Parts map[Key]base.Pointer
 }
 
 func (sf *SortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {

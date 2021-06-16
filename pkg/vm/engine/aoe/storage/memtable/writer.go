@@ -1,12 +1,17 @@
 package memtable
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/encoding"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
+	// "matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"os"
 	"path/filepath"
@@ -65,6 +70,27 @@ func (sw *MemtableWriter) Flush() (err error) {
 	defer w.Close()
 
 	mt := sw.Memtable.(*MemTable)
+
+	zmIndexes := []index.Index{}
+
+	// TODO: Here mock zonemap index for test
+	for idx, ctype := range mt.Types {
+		if ctype.Oid == types.T_int32 {
+			minv := int32(1) + int32(idx)*100
+			maxv := int32(99) + int32(idx)*100
+			zm := index.NewZoneMap(ctype, minv, maxv, int16(idx))
+			zmIndexes = append(zmIndexes, zm)
+		}
+	}
+
+	var indexBuf bytes.Buffer
+	indexBuf.Write(encoding.EncodeInt16(int16(len(zmIndexes))))
+	for _, zm := range zmIndexes {
+		zmBuf, _ := zm.Marshall()
+		indexBuf.Write(encoding.EncodeInt32(int32(len(zmBuf))))
+		indexBuf.Write(zmBuf)
+	}
+	_, err = w.Write(indexBuf.Bytes())
 
 	buf := make([]byte, 2+len(mt.Types)*8*2)
 	binary.BigEndian.PutUint16(buf, uint16(len(mt.Columns)))

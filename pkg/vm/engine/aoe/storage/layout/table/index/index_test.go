@@ -61,7 +61,7 @@ func TestTable(t *testing.T) {
 }
 
 func TestIndex(t *testing.T) {
-	int32zm := NewZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100))
+	int32zm := NewZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100), int16(0))
 	assert.False(t, int32zm.Eq(int32(9)))
 	assert.True(t, int32zm.Eq(int32(10)))
 	assert.True(t, int32zm.Eq(int32(100)))

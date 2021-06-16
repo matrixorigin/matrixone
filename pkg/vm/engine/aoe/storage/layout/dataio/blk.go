@@ -3,8 +3,11 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
+	"matrixone/pkg/encoding"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"os"
 	"sync"
 
@@ -15,12 +18,13 @@ type BlockFile struct {
 	sync.RWMutex
 	os.File
 	ID    common.ID
-	Parts map[Key]Pointer
+	Parts map[Key]base.Pointer
+	Meta  *FileMeta
 }
 
 func NewBlockFile(dirname string, id common.ID) *BlockFile {
 	bf := &BlockFile{
-		Parts: make(map[Key]Pointer),
+		Parts: make(map[Key]base.Pointer),
 		ID:    id,
 	}
 
@@ -54,7 +58,32 @@ func (bf *BlockFile) Destory() {
 
 func (bf *BlockFile) initPointers(id common.ID) {
 	twoBytes := make([]byte, 2)
+	fourBytes := make([]byte, 4)
 	_, err := bf.File.Read(twoBytes)
+	if err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	indexes := []index.Index{}
+	indexCnt := encoding.DecodeInt16(twoBytes)
+	if indexCnt > 0 {
+		for i := 0; i < int(indexCnt); i++ {
+			_, err := bf.File.Read(fourBytes)
+			if err != nil {
+				panic(fmt.Sprintf("unexpect error: %s", err))
+			}
+			length := encoding.DecodeInt32(fourBytes)
+			buf := make([]byte, int(length))
+			_, err = bf.File.Read(buf)
+			if err != nil {
+				panic(fmt.Sprintf("unexpect error: %s", err))
+			}
+			zm := new(index.ZoneMapIndex)
+			zm.Unmarshall(buf)
+			indexes = append(indexes, zm)
+		}
+	}
+
+	_, err = bf.File.Read(twoBytes)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
@@ -80,7 +109,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		if err != nil {
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
-		bf.Parts[key] = Pointer{
+		bf.Parts[key] = base.Pointer{
 			Offset: int64(currOffset),
 			Len:    binary.BigEndian.Uint64(eightBytes),
 		}

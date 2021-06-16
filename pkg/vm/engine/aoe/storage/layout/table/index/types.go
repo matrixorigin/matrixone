@@ -14,4 +14,7 @@ type Index interface {
 	Gt(interface{}) bool
 	Ge(interface{}) bool
 	Btw(interface{}) bool
+
+	Marshall() ([]byte, error)
+	Unmarshall([]byte) error
 }
