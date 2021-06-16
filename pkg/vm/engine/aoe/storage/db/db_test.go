@@ -85,14 +85,14 @@ func TestAppend(t *testing.T) {
 	dbi := initDB()
 	schema := md.MockSchema(2)
 	schema.Name = "mocktbl"
-	_, err := dbi.CreateTable(schema)
+	tid, err := dbi.CreateTable(schema)
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
 	ck := chunk.MockChunk(schema.Types(), rows)
 	assert.Equal(t, uint64(rows), ck.GetCount())
 	logIdx := &md.LogIndex{
-		ID:       uint64(9),
+		ID:       uint64(0),
 		Capacity: ck.GetCount(),
 	}
 	invalidName := "xxx"
@@ -102,6 +102,9 @@ func TestAppend(t *testing.T) {
 	for i := 0; i < insertCnt; i++ {
 		err = dbi.Append(schema.Name, ck, logIdx)
 		assert.Nil(t, err)
+		// tbl, err := dbi.store.DataTables.GetTable(tid)
+		// assert.Nil(t, err)
+		// t.Log(tbl.GetCollumn(0).ToString(1000))
 	}
 
 	cols := []int{0, 1}
@@ -132,7 +135,7 @@ func TestAppend(t *testing.T) {
 		segIt.Next()
 	}
 	segIt.Close()
-	assert.Equal(t, 2, segCount)
+	assert.Equal(t, insertCnt, segCount)
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 
 	blkIt, err := dbi.NewBlockIter(iterOpts)
@@ -149,9 +152,13 @@ func TestAppend(t *testing.T) {
 	}
 	blkIt.Close()
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
-	time.Sleep(time.Duration(10) * time.Millisecond)
+	time.Sleep(time.Duration(20) * time.Millisecond)
+	t.Log(dbi.FsMgr.String())
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
+	tbl, err := dbi.store.DataTables.GetTable(tid)
+	assert.Nil(t, err)
+	t.Log(tbl.GetCollumn(0).ToString(1000))
 	dbi.Close()
 }
 
@@ -161,6 +168,8 @@ type InsertReq struct {
 	LogIndex *md.LogIndex
 }
 
+// TODO: When the capacity is not very big and the query concurrency is very high,
+// the db will be stuck due to no more space. Need intruduce timeout mechanism later
 func TestConcurrency(t *testing.T) {
 	initDBTest()
 	dbi := initDB()
@@ -201,6 +210,12 @@ func TestConcurrency(t *testing.T) {
 							blkIt := sh.NewIterator()
 							for blkIt.Valid() {
 								blkCnt++
+								blkHandle := blkIt.GetBlockHandle()
+								cursors := blkHandle.InitScanCursor()
+								for _, cursor := range cursors {
+									cursor.Close()
+								}
+								blkHandle.Close()
 								blkIt.Next()
 							}
 							blkIt.Close()
@@ -245,7 +260,7 @@ func TestConcurrency(t *testing.T) {
 	wg2.Add(1)
 	go func() {
 		defer wg2.Done()
-		reqCnt := rand.Intn(200) + 200
+		reqCnt := rand.Intn(100) + 100
 		for i := 0; i < reqCnt; i++ {
 			searchReq := &e.IterOptions{
 				TableName: schema.Name,
@@ -264,6 +279,7 @@ func TestConcurrency(t *testing.T) {
 		All:       true,
 		ColIdxes:  cols,
 	}
+	time.Sleep(time.Duration(10) * time.Millisecond)
 	segIt, err := dbi.NewSegmentIter(opts)
 	segCnt := 0
 	tblkCnt := 0
@@ -274,6 +290,12 @@ func TestConcurrency(t *testing.T) {
 		h.Close()
 		for blkIt.Valid() {
 			tblkCnt++
+			blkHandle := blkIt.GetBlockHandle()
+			cursors := blkHandle.InitScanCursor()
+			for _, cursor := range cursors {
+				cursor.Close()
+			}
+			blkHandle.Close()
 			blkIt.Next()
 		}
 		blkIt.Close()
@@ -281,7 +303,7 @@ func TestConcurrency(t *testing.T) {
 	}
 	segIt.Close()
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
-	assert.Equal(t, (insertCnt+1)/2, segCnt)
+	assert.Equal(t, insertCnt, segCnt)
 
 	blkIt, err := dbi.NewBlockIter(opts)
 	assert.Nil(t, err)
@@ -292,7 +314,7 @@ func TestConcurrency(t *testing.T) {
 	}
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	blkIt.Close()
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(time.Duration(80) * time.Millisecond)
 
 	t.Log(dbi.WorkersStatsString())
 	t.Log(dbi.MTBufMgr.String())

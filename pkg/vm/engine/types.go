@@ -27,6 +27,10 @@ type Unit struct {
 	N    metadata.Node
 }
 
+type NodeInfo struct {
+	Mcpu int
+}
+
 type Statistics interface {
 	Rows() int64
 	Size(string) int64
@@ -152,6 +156,8 @@ type Engine interface {
 	Create(string) error
 	Delete(string) error
 	Database(string) (Database, error)
+
+	Node(string) *NodeInfo
 }
 
 type DB interface {

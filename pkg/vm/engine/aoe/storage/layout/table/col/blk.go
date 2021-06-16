@@ -3,6 +3,8 @@ package col
 import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
 )
@@ -13,9 +15,6 @@ const (
 	TRANSIENT_BLK BlockType = iota
 	PERSISTENT_BLK
 	PERSISTENT_SORTED_BLK
-	MOCK_BLK
-	MOCK_PERSISTENT_BLK
-	MOCK_PERSISTENT_SORTED_BLK
 )
 
 func (t BlockType) String() string {
@@ -26,12 +25,6 @@ func (t BlockType) String() string {
 		return "PB"
 	case PERSISTENT_SORTED_BLK:
 		return "PSB"
-	case MOCK_BLK:
-		return "MB"
-	case MOCK_PERSISTENT_BLK:
-		return "MPB"
-	case MOCK_PERSISTENT_SORTED_BLK:
-		return "MPSB"
 	}
 	panic("unspported")
 }
@@ -47,7 +40,7 @@ type IColumnBlock interface {
 	GetPartRoot() IColumnPart
 	GetBlockType() BlockType
 	GetColIdx() int
-	CloneWithUpgrade(IColumnSegment) IColumnBlock
+	CloneWithUpgrade(IColumnSegment, *md.Block) IColumnBlock
 	String() string
 	Ref() IColumnBlock
 	UnRef()
@@ -56,13 +49,13 @@ type IColumnBlock interface {
 
 type ColumnBlock struct {
 	sync.RWMutex
-	ID       common.ID
-	Next     IColumnBlock
-	RowCount uint64
-	Type     BlockType
-	ColIdx   int
-	Refs     int64
-	// Segment  IColumnSegment
+	ID     common.ID
+	Next   IColumnBlock
+	Type   BlockType
+	ColIdx int
+	Refs   int64
+	Meta   *md.Block
+	File   ldio.ISegmentFile
 }
 
 func (blk *ColumnBlock) GetRefs() int64 {
@@ -80,7 +73,7 @@ func (blk *ColumnBlock) GetBlockType() BlockType {
 }
 
 func (blk *ColumnBlock) GetRowCount() uint64 {
-	return blk.RowCount
+	return atomic.LoadUint64(&blk.Meta.Count)
 }
 
 func (blk *ColumnBlock) SetNext(next IColumnBlock) {

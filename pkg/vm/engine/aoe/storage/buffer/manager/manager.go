@@ -2,15 +2,16 @@ package manager
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -120,11 +121,10 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id common.
 	return handle
 }
 
-func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, segFile interface{}) nif.INodeHandle {
+func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, reader io.Reader) nif.INodeHandle {
 	mgr.Lock()
 	defer mgr.Unlock()
 	// log.Infof("RegisterNode %s", node_id.String())
-	sf := segFile.(ldio.IColSegmentFile)
 
 	handle, ok := mgr.Nodes[node_id]
 	if ok {
@@ -133,11 +133,11 @@ func (mgr *BufferManager) RegisterNode(capacity uint64, node_id common.ID, segFi
 		}
 	}
 	ctx := node.NodeHandleCtx{
-		ID:          node_id,
-		Manager:     mgr,
-		Size:        capacity,
-		Spillable:   false,
-		SegmentFile: sf,
+		ID:        node_id,
+		Manager:   mgr,
+		Size:      capacity,
+		Spillable: false,
+		Reader:    reader,
 	}
 	handle = node.NewNodeHandle(&ctx)
 	mgr.Nodes[node_id] = handle
@@ -200,9 +200,11 @@ func (mgr *BufferManager) makePoolNode(capacity uint64) *buf.Node {
 		{
 			evict_node.Handle.Lock()
 			if !evict_node.Unloadable(evict_node.Handle) {
+				evict_node.Handle.Unlock()
 				continue
 			}
 			if !evict_node.Handle.Unloadable() {
+				evict_node.Handle.Unlock()
 				continue
 			}
 			evict_node.Handle.Unload()

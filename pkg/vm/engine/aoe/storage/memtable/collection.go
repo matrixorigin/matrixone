@@ -60,7 +60,10 @@ func (c *Collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
 	for idx, colBlk := range colBlks {
 		c.mem.Cursors[idx] = &col.ScanCursor{}
 		colBlk.InitScanCursor(c.mem.Cursors[idx].(*col.ScanCursor))
-		c.mem.Cursors[idx].Init()
+		err := c.mem.Cursors[idx].Init()
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	tbl = NewMemTable(c.TableData, c.TableData.GetColTypes(), colBlks, c.mem.Cursors, c.Opts, blk)

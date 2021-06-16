@@ -34,25 +34,24 @@ func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
 
 	c := context.TODO()
 	c = context.WithValue(c, "handle", handle)
-	c = context.WithValue(c, "segmentfile", ctx.SegmentFile)
-	handle.SpillIO = NewNodeIO(dio.WRITER_FACTORY.Opts, c)
+	c = context.WithValue(c, "reader", ctx.Reader)
+	handle.IO = NewNodeIO(dio.WRITER_FACTORY.Opts, c)
 	return handle
 }
 
 func (h *NodeHandle) Iteration() uint64 {
-	return h.Iter
+	return atomic.LoadUint64(&h.Iter)
 }
 
 func (h *NodeHandle) IncIteration() uint64 {
-	h.Iter++
-	return h.Iter
+	return atomic.AddUint64(&h.Iter, uint64(1))
 }
 
 func (h *NodeHandle) FlushData() error {
 	if !h.Spillable {
 		return nil
 	}
-	return h.SpillIO.Flush()
+	return h.IO.Flush()
 }
 
 func (h *NodeHandle) GetBuffer() buf.IBuffer {
@@ -102,7 +101,7 @@ func (h *NodeHandle) GetID() common.ID {
 }
 
 func (h *NodeHandle) GetState() nif.NodeState {
-	return h.State
+	return atomic.LoadUint32(&h.State)
 }
 
 func (h *NodeHandle) IsSpillable() bool {
@@ -110,10 +109,12 @@ func (h *NodeHandle) IsSpillable() bool {
 }
 
 func (h *NodeHandle) Clean() error {
-	return h.SpillIO.Clean()
+	return h.IO.Clean()
 }
 
 func (h *NodeHandle) Close() error {
+	h.Lock()
+	defer h.Unlock()
 	if !nif.AtomicCASRTState(&(h.RTState), nif.NODE_RT_RUNNING, nif.NODE_RT_CLOSED) {
 		// Cocurrent senario that other client already call Close before
 		return nil
@@ -132,12 +133,18 @@ func (h *NodeHandle) IsClosed() bool {
 }
 
 func (h *NodeHandle) Unloadable() bool {
-	if h.State == nif.NODE_UNLOAD {
+	state := atomic.LoadUint32(&h.State)
+	if state == nif.NODE_UNLOAD {
 		return false
 	}
 	if h.HasRef() {
 		return false
 	}
+
+	// rtState := atomic.LoadUint32(&h.RTState)
+	// if rtState == nif.NODE_RT_CLOSED {
+	// 	return false
+	// }
 
 	return true
 }
@@ -149,8 +156,8 @@ func (h *NodeHandle) RollbackLoad() {
 	h.UnRef()
 	if h.Buff != nil {
 		h.Buff.Close()
+		h.Buff = nil
 	}
-	h.Buff = nil
 	nif.AtomicStoreState(&(h.State), nif.NODE_UNLOAD)
 }
 
@@ -165,7 +172,7 @@ func (h *NodeHandle) CommitLoad() error {
 
 	if h.Spillable {
 		log.Infof("loading transient node %v", h.ID)
-		err := h.SpillIO.Load()
+		err := h.IO.Load()
 		if err != nil {
 			return err
 		}
@@ -173,7 +180,7 @@ func (h *NodeHandle) CommitLoad() error {
 		panic("logic error: should not load non-spillable transient memory")
 	} else {
 		log.Infof("loading persistent node %v", h.ID)
-		err := h.SpillIO.Load()
+		err := h.IO.Load()
 		if err != nil {
 			return err
 		}

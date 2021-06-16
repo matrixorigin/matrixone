@@ -29,6 +29,7 @@ const (
 	BagInnerJoin
 	BagNaturalJoin
 	Output
+	MyOutput
 	Exchange
 	MergeTop
 	MergeDedup

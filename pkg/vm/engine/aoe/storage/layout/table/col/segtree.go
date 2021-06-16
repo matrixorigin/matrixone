@@ -4,10 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
 
-	log "github.com/sirupsen/logrus"
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type ISegmentTree interface {
@@ -24,7 +26,7 @@ type ISegmentTree interface {
 
 	// Modifier
 	Append(seg IColumnSegment) error
-	UpgradeBlock(blkID common.ID) IColumnBlock
+	UpgradeBlock(*md.Block) IColumnBlock
 	UpgradeSegment(segID common.ID) IColumnSegment
 	DropSegment(id common.ID) (seg IColumnSegment, err error)
 }
@@ -102,13 +104,14 @@ func (tree *SegmentTree) GetSegment(segID common.ID) IColumnSegment {
 	return tree.data.Segments[idx].Ref()
 }
 
-func (tree *SegmentTree) UpgradeBlock(blkID common.ID) IColumnBlock {
-	idx, ok := tree.data.Helper[blkID.AsSegmentID()]
+func (tree *SegmentTree) UpgradeBlock(newMeta *md.Block) IColumnBlock {
+	blkId := newMeta.AsCommonID()
+	idx, ok := tree.data.Helper[blkId.AsSegmentID()]
 	if !ok {
 		panic("logic error")
 	}
 	seg := tree.data.Segments[idx]
-	blk, err := seg.UpgradeBlock(blkID)
+	blk, err := seg.UpgradeBlock(newMeta)
 	if err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
 	}
@@ -129,7 +132,7 @@ func (tree *SegmentTree) UpgradeSegment(segID common.ID) IColumnSegment {
 		panic("logic error")
 	}
 
-	upgradeSeg := seg.CloneWithUpgrade()
+	upgradeSeg := seg.CloneWithUpgrade(seg.GetMeta())
 	if upgradeSeg == nil {
 		panic(fmt.Sprintf("Cannot upgrade seg: %s", segID.SegmentString()))
 	}
@@ -180,13 +183,10 @@ func (tree *SegmentTree) ToString(depth uint64) string {
 	}
 	ret := fmt.Sprintf("SegTree (%v/%v) [", depth, tree.Depth())
 	for i := uint64(0); i < depth; i++ {
-		ret += tree.data.Segments[i].ToString(true)
-		if i != depth-1 {
-			ret += ","
-		}
+		ret = fmt.Sprintf("%s\n%s", ret, tree.data.Segments[i].ToString(true))
 	}
 
-	ret += "]"
+	ret = fmt.Sprintf("%s\n]", ret)
 
 	return ret
 }

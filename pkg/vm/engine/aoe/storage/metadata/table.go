@@ -3,8 +3,8 @@ package md
 import (
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
@@ -16,7 +16,8 @@ func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
 	}
 	tbl := &Table{
 		ID:        id,
-		Segments:  make(map[uint64]*Segment),
+		Segments:  make([]*Segment, 0),
+		IdMap:     make(map[uint64]int),
 		TimeStamp: *NewTimeStamp(),
 		Info:      info,
 		Schema:    schema,
@@ -28,7 +29,7 @@ func (tbl *Table) GetID() uint64 {
 	return tbl.ID
 }
 
-func (tbl *Table) CloneSegment(segment_id uint64, ts ...int64) (seg *Segment, err error) {
+func (tbl *Table) CloneSegment(segment_id uint64, ctx CopyCtx) (seg *Segment, err error) {
 	tbl.RLock()
 	seg, err = tbl.referenceSegmentNoLock(segment_id)
 	if err != nil {
@@ -36,9 +37,11 @@ func (tbl *Table) CloneSegment(segment_id uint64, ts ...int64) (seg *Segment, er
 		return nil, err
 	}
 	tbl.RUnlock()
-	seg = seg.Copy(ts...)
-	err = seg.Detach()
-	return seg, err
+	segCpy := seg.Copy(ctx)
+	if !ctx.Attached {
+		err = segCpy.Detach()
+	}
+	return segCpy, err
 }
 
 func (tbl *Table) ReferenceBlock(segment_id, block_id uint64) (blk *Block, err error) {
@@ -63,10 +66,11 @@ func (tbl *Table) ReferenceSegment(segment_id uint64) (seg *Segment, err error) 
 }
 
 func (tbl *Table) referenceSegmentNoLock(segment_id uint64) (seg *Segment, err error) {
-	seg, ok := tbl.Segments[segment_id]
+	idx, ok := tbl.IdMap[segment_id]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("specified segment %d not found in table %d", segment_id, tbl.ID))
 	}
+	seg = tbl.Segments[idx]
 	return seg, nil
 }
 
@@ -118,6 +122,49 @@ func (tbl *Table) CreateSegment() (seg *Segment, err error) {
 	return seg, err
 }
 
+func (tbl *Table) NextActiveSegment() *Segment {
+	var seg *Segment
+	if tbl.ActiveSegment >= len(tbl.Segments) {
+		return seg
+	}
+	tbl.ActiveSegment++
+	return tbl.GetActiveSegment()
+	// if tbl.ActiveSegment <= len(tbl.Segments)-1 {
+	// 	seg = tbl.Segments[tbl.ActiveSegment]
+	// }
+	// return seg
+}
+
+func (tbl *Table) GetActiveSegment() *Segment {
+	if tbl.ActiveSegment >= len(tbl.Segments) {
+		return nil
+	}
+	seg := tbl.Segments[tbl.ActiveSegment]
+	blk := seg.GetActiveBlk()
+	if blk == nil && uint64(len(seg.Blocks)) == tbl.Info.Conf.SegmentMaxBlocks {
+		return nil
+	}
+	return seg
+	// for i := len(tbl.Segments) - 1; i >= 0; i-- {
+	// 	seg := tbl.Segments[i]
+	// 	if seg.DataState >= CLOSED {
+	// 		break
+	// 	} else if seg.DataState == EMPTY {
+	// 		active = seg
+	// 	} else if seg.DataState == PARTIAL {
+	// 		active = seg
+	// 		break
+	// 	} else if seg.DataState == FULL {
+	// 		activeBlk := seg.GetActiveBlock()
+	// 		if activeBlk != nil {
+	// 			active = seg
+	// 		}
+	// 		break
+	// 	}
+	// }
+	// return active
+}
+
 func (tbl *Table) GetInfullSegment() (seg *Segment, err error) {
 	tbl.RLock()
 	defer tbl.RUnlock()
@@ -130,7 +177,7 @@ func (tbl *Table) GetInfullSegment() (seg *Segment, err error) {
 }
 
 func (tbl *Table) String() string {
-	s := fmt.Sprintf("Tbl(%d)", tbl.ID)
+	s := fmt.Sprintf("Tbl(%d) %d", tbl.ID, tbl.ActiveSegment)
 	s += "["
 	for i, seg := range tbl.Segments {
 		if i != 0 {
@@ -157,11 +204,12 @@ func (tbl *Table) RegisterSegment(seg *Segment) error {
 		return err
 	}
 
-	_, ok := tbl.Segments[seg.ID]
+	_, ok := tbl.IdMap[seg.ID]
 	if ok {
 		return errors.New(fmt.Sprintf("Duplicate segment %d found in table %d", seg.GetID(), tbl.ID))
 	}
-	tbl.Segments[seg.GetID()] = seg
+	tbl.IdMap[seg.GetID()] = len(tbl.Segments)
+	tbl.Segments = append(tbl.Segments, seg)
 	atomic.StoreUint64(&tbl.SegmentCnt, uint64(len(tbl.Segments)))
 	return nil
 }
@@ -173,7 +221,8 @@ func (tbl *Table) GetSegmentCount() uint64 {
 func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {
 	blkid := uint64(0)
 	segid := uint64(0)
-	for sid, seg := range tbl.Segments {
+	for _, seg := range tbl.Segments {
+		sid := seg.GetID()
 		max_blkid := seg.GetMaxBlkID()
 		if max_blkid > blkid {
 			blkid = max_blkid
@@ -186,23 +235,49 @@ func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {
 	return segid, blkid
 }
 
-func (tbl *Table) Copy(ts ...int64) *Table {
-	var t int64
-	if len(ts) == 0 {
-		t = NowMicro()
-	} else {
-		t = ts[0]
+func (tbl *Table) Copy(ctx CopyCtx) *Table {
+	if ctx.Ts == 0 {
+		ctx.Ts = NowMicro()
 	}
 	new_tbl := NewTable(tbl.Info, tbl.Schema, tbl.ID)
 	new_tbl.TimeStamp = tbl.TimeStamp
 	new_tbl.BoundSate = tbl.BoundSate
-	for k, v := range tbl.Segments {
-		if !v.Select(t) {
+	for _, v := range tbl.Segments {
+		if !v.Select(ctx.Ts) {
 			continue
 		}
-		seg, _ := tbl.CloneSegment(v.ID)
-		new_tbl.Segments[k] = seg
+		seg, _ := tbl.CloneSegment(v.ID, ctx)
+		new_tbl.IdMap[seg.GetID()] = len(new_tbl.Segments)
+		new_tbl.Segments = append(new_tbl.Segments, seg)
 	}
 
 	return new_tbl
+}
+
+func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
+	if info == nil {
+		info = MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	}
+	if schema == nil {
+		schema = MockSchema(2)
+	}
+	tbl, _ := info.CreateTable(schema)
+	info.RegisterTable(tbl)
+	var activeSeg *Segment
+	for i := uint64(0); i < blkCnt; i++ {
+		if activeSeg == nil {
+			activeSeg, _ = tbl.CreateSegment()
+			tbl.RegisterSegment(activeSeg)
+		}
+		blk, _ := activeSeg.CreateBlock()
+		err := activeSeg.RegisterBlock(blk)
+		if err != nil {
+			log.Errorf("seg blks = %d, maxBlks = %d", len(activeSeg.Blocks), activeSeg.MaxBlockCount)
+			panic(err)
+		}
+		if len(activeSeg.Blocks) == int(info.Conf.SegmentMaxBlocks) {
+			activeSeg = nil
+		}
+	}
+	return tbl
 }

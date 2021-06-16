@@ -1,12 +1,12 @@
 package node
 
 import (
+	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	dio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"sync"
 )
 
@@ -17,12 +17,12 @@ type NodeBuffer struct {
 }
 
 type NodeHandleCtx struct {
-	ID          common.ID
-	Buff        buf.IBuffer
-	Spillable   bool
-	Manager     mgrif.IBufferManager
-	Size        uint64
-	SegmentFile dio.IColSegmentFile
+	ID        common.ID
+	Buff      buf.IBuffer
+	Spillable bool
+	Manager   mgrif.IBufferManager
+	Size      uint64
+	Reader    io.Reader
 }
 
 type NodeHandle struct {
@@ -36,7 +36,7 @@ type NodeHandle struct {
 	Refs      uint64
 	Manager   mgrif.IBufferManager
 	Iter      uint64
-	SpillIO   ioif.IO
+	IO        ioif.IO
 }
 
 // BufferHandle is created from IBufferManager::Pin, which will set the INodeHandle reference to 1
