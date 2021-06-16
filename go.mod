@@ -13,6 +13,7 @@ require (
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.2.0
 	github.com/matrixorigin/matrixcube v0.0.0-20210611054819-ffd6d1e59f32
+	github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pilosa/pilosa v1.4.1
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
