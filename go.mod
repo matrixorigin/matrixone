@@ -27,4 +27,4 @@ require (
 	golang.org/x/tools v0.0.0-20201105001634-bc3cf281b174 // indirect
 )
 
-replace go.etcd.io/etcd => github.com/deepfabric/etcd v3.4.15+incompatible
+replace go.etcd.io/etcd => github.com/deepfabric/etcd v1.4.15
