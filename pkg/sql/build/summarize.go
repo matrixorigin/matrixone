@@ -98,7 +98,7 @@ func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs) (op.OP, error) {
 
 		}
 	}
-	return summarize.New(o, es), nil
+	return summarize.New(o, es)
 }
 
 func (b *build) stripSummarize(o op.OP, ns tree.SelectExprs) (op.OP, error) {
@@ -117,7 +117,7 @@ func (b *build) stripSummarize(o op.OP, ns tree.SelectExprs) (op.OP, error) {
 		}
 	}
 	if len(es) > 0 {
-		return projection.New(o, es), nil
+		return projection.New(o, es)
 	}
 	return o, nil
 }

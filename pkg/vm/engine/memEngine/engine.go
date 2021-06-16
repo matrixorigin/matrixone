@@ -10,10 +10,17 @@ import (
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
+	"runtime"
 )
 
 func New(db *kv.KV) *memEngine {
 	return &memEngine{db, process.New(guest.New(1<<20, host.New(1<<20)), mempool.New(1<<32, 16))}
+}
+
+func (e *memEngine) Node(_ string) *engine.NodeInfo {
+	return &engine.NodeInfo{
+		Mcpu: runtime.NumCPU(),
+	}
 }
 
 func (e *memEngine) Delete(name string) error {
