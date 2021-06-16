@@ -7,3 +7,9 @@ import (
 type FileMeta struct {
 	Indexes *base.IndexesMeta
 }
+
+func NewFileMeta() *FileMeta {
+	m := new(FileMeta)
+	m.Indexes = base.NewIndexesMeta()
+	return m
+}

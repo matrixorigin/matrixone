@@ -16,14 +16,15 @@ type BlockFile struct {
 	sync.RWMutex
 	os.File
 	ID    common.ID
-	Parts map[Key]base.Pointer
+	Parts map[Key]*base.Pointer
 	Meta  *FileMeta
 }
 
 func NewBlockFile(dirname string, id common.ID) *BlockFile {
 	bf := &BlockFile{
-		Parts: make(map[Key]base.Pointer),
+		Parts: make(map[Key]*base.Pointer),
 		ID:    id,
+		Meta:  NewFileMeta(),
 	}
 
 	name := e.MakeFilename(dirname, e.FTBlock, id.ToBlockFileName(), false)
@@ -55,7 +56,8 @@ func (bf *BlockFile) Destory() {
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
-	_, err := DefaultRWHelper.ReadIndexesMeta(bf.File)
+	indexMeta, err := DefaultRWHelper.ReadIndexesMeta(bf.File)
+	bf.Meta.Indexes = indexMeta
 	// _, err := DefaultRWHelper.ReadIndexes(bf.File)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
@@ -87,11 +89,23 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		if err != nil {
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
-		bf.Parts[key] = base.Pointer{
+		bf.Parts[key] = &base.Pointer{
 			Offset: int64(currOffset),
 			Len:    binary.BigEndian.Uint64(eightBytes),
 		}
 		currOffset += int(bf.Parts[key].Len)
+	}
+}
+
+func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
+	bf.Lock()
+	defer bf.Unlock()
+	n, err := bf.ReadAt(buf, ptr.Offset)
+	if err != nil {
+		panic(fmt.Sprintf("logic error: %s", err))
+	}
+	if n != int(ptr.Len) {
+		panic("logic error")
 	}
 }
 
@@ -107,13 +121,14 @@ func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if len(buf) != int(pointer.Len) {
 		panic("logic error")
 	}
-	bf.Lock()
-	defer bf.Unlock()
-	n, err := bf.ReadAt(buf, pointer.Offset)
-	if err != nil {
-		panic(fmt.Sprintf("logic error: %s", err))
-	}
-	if n != int(pointer.Len) {
-		panic("logic error")
-	}
+	bf.ReadPoint(pointer, buf)
+	// bf.Lock()
+	// defer bf.Unlock()
+	// n, err := bf.ReadAt(buf, pointer.Offset)
+	// if err != nil {
+	// 	panic(fmt.Sprintf("logic error: %s", err))
+	// }
+	// if n != int(pointer.Len) {
+	// 	panic("logic error")
+	// }
 }

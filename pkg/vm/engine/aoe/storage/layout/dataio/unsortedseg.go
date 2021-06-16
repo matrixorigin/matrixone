@@ -2,6 +2,7 @@ package dataio
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
 )
@@ -21,6 +22,40 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 		Blocks: make(map[common.ID]*BlockFile),
 	}
 	return usf
+}
+
+// func (sf *UnsortedSegmentFile) RefBlockIndex(id common.ID) {
+// 	sf.Lock()
+// 	defer sf.Unlock()
+// 	_, ok := sf.Blocks[id]
+// 	if !ok {
+// 		panic("logic error")
+// 	}
+// 	atomic.AddInt32(&sf.Refs, int32(1))
+// }
+
+// func (sf *UnsortedSegmentFile) UnrefBlockIndex(id common.ID) {
+// 	v := atomic.AddInt32(&sf.Refs, int32(-1))
+// 	if v == int32(0) {
+// 		sf.Destory()
+// 	}
+// 	if v < int32(0) {
+// 		panic("logic error")
+// 	}
+// }
+
+func (sf *UnsortedSegmentFile) RefIndex() {
+	atomic.AddInt32(&sf.Refs, int32(1))
+}
+
+func (sf *UnsortedSegmentFile) UnrefIndex() {
+	v := atomic.AddInt32(&sf.Refs, int32(-1))
+	if v == int32(0) {
+		sf.Destory()
+	}
+	if v < int32(0) {
+		panic("logic error")
+	}
 }
 
 func (sf *UnsortedSegmentFile) RefBlock(id common.ID) {
@@ -82,6 +117,20 @@ func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf *BlockFile) {
 		panic("logic error")
 	}
 	sf.Blocks[id] = bf
+}
+
+func (sf *UnsortedSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
+	panic("not supported")
+}
+
+func (sf *UnsortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {
+	sf.RLock()
+	blk, ok := sf.Blocks[id.AsBlockID()]
+	if !ok {
+		panic("logic error")
+	}
+	sf.RUnlock()
+	blk.ReadPoint(ptr, buf)
 }
 
 func (sf *UnsortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
