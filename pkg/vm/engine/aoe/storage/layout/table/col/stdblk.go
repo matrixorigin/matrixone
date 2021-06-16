@@ -2,13 +2,12 @@ package col
 
 import (
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync/atomic"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type StdColumnBlock struct {
@@ -68,7 +67,7 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 			IndexHolder: indexHolder,
 		},
 	}
-	seg.Append(blk.Ref())
+	// seg.Append(blk.Ref())
 	return blk.Ref()
 }
 

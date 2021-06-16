@@ -242,6 +242,7 @@ func (ts *Tables) Replay(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBuffer
 					// TODO: strblk
 					// Only stdblk now
 					colBlk := col.NewStdColumnBlock(colSeg.Ref(), blkMeta)
+					colSeg.Append(colBlk.Ref())
 					defer colBlk.UnRef()
 					colPart := col.NewColumnPart(colSeg.GetFsManager(), bufMgr, colBlk.Ref(), blkId, info.Conf.BlockMaxRows*uint64(colType.Size))
 					if colPart == nil {

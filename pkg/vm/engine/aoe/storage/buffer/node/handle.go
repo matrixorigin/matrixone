@@ -151,7 +151,7 @@ func (h *NodeHandle) RollbackLoad() {
 	if !nif.AtomicCASState(&(h.State), nif.NODE_LOADING, nif.NODE_ROOLBACK) {
 		return
 	}
-	h.UnRef()
+	// h.UnRef()
 	if h.Buff != nil {
 		h.Buff.Close()
 		h.Buff = nil
@@ -192,7 +192,7 @@ func (h *NodeHandle) CommitLoad() error {
 
 func (h *NodeHandle) MakeHandle() nif.IBufferHandle {
 	if nif.AtomicLoadState(&(h.State)) != nif.NODE_LOADED {
-		panic("Should not call MakeHandle not NODE_LOADED")
+		panic(fmt.Sprintf("Should not call MakeHandle not NODE_LOADED: %d", h.State))
 	}
 	return NewBufferHandle(h, h.Manager)
 }

@@ -151,6 +151,9 @@ func (part *ColumnPart) Close() error {
 
 func (part *ColumnPart) InitScanCursor(cursor *ScanCursor) error {
 	cursor.Handle = part.BufMgr.Pin(part.BufNode)
+	for cursor.Handle == nil {
+		cursor.Handle = part.BufMgr.Pin(part.BufNode)
+	}
 	if cursor.Handle == nil {
 		return errors.New(fmt.Sprintf("Cannot pin part %v", part.ID))
 	}

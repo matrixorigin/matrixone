@@ -43,10 +43,12 @@ func TestStdColumnBlock(t *testing.T) {
 
 		bMeta0 := segMeta.Blocks[0]
 		blk_0 := NewStdColumnBlock(seg, bMeta0)
+		seg.Append(blk_0.Ref())
 		assert.Nil(t, blk_0.GetNext())
 		assert.Equal(t, blk_0, seg.GetBlockRoot())
 		bMeta1 := segMeta.Blocks[1]
 		blk_1 := NewStdColumnBlock(seg, bMeta1)
+		seg.Append(blk_1.Ref())
 		assert.Nil(t, blk_1.GetNext())
 		assert.Equal(t, blk_1, blk_0.GetNext())
 		if prev_seg != nil {
@@ -93,11 +95,13 @@ func TestStdColumnBlock2(t *testing.T) {
 		assert.Nil(t, seg.GetBlockRoot())
 		blkMeta0 := segMeta.Blocks[0]
 		blk_0 := NewStdColumnBlock(seg, blkMeta0)
+		seg.Append(blk_0.Ref())
 		part_0 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, *blkMeta0.AsCommonID(), row_count*typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		blkMeta1 := segMeta.Blocks[1]
 		blk_1 := NewStdColumnBlock(seg, blkMeta1)
+		seg.Append(blk_1.Ref())
 		part_1 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_1, *blkMeta1.AsCommonID(), row_count*typeSize)
 		assert.Nil(t, part_1.GetNext())
 		assert.Equal(t, part_1, blk_1.GetPartRoot())
@@ -286,11 +290,13 @@ func TestRegisterNode(t *testing.T) {
 		blk0Meta := segMeta.Blocks[0]
 		blk0Id := *blk0Meta.AsCommonID()
 		blk_0 := NewStdColumnBlock(seg, blk0Meta)
+		seg.Append(blk_0.Ref())
 		part_0 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_0, blk0Id, row_count*typeSize)
 		assert.Nil(t, part_0.GetNext())
 		assert.Equal(t, part_0, blk_0.GetPartRoot())
 		blk1Meta := segMeta.Blocks[1]
 		blk_1 := NewStdColumnBlock(seg, blk1Meta)
+		seg.Append(blk_1.Ref())
 		part_1 := NewColumnPart(ldio.DefaultFsMgr, bufMgr, blk_1, *blk1Meta.AsCommonID(), row_count*typeSize)
 		assert.Nil(t, part_1.GetNext())
 		assert.Equal(t, part_1, blk_1.GetPartRoot())

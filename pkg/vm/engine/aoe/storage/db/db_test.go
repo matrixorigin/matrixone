@@ -339,7 +339,7 @@ func TestGC(t *testing.T) {
 		Capacity: baseCk.GetCount(),
 	}
 
-	insertCnt := uint64(8)
+	insertCnt := uint64(4)
 
 	var wg sync.WaitGroup
 	{
