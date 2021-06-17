@@ -55,6 +55,10 @@ func (bf *BlockFile) Destory() {
 	}
 }
 
+func (bf *BlockFile) GetIndexMeta() *base.IndexesMeta {
+	return bf.Meta.Indexes
+}
+
 func (bf *BlockFile) initPointers(id common.ID) {
 	indexMeta, err := DefaultRWHelper.ReadIndexesMeta(bf.File)
 	bf.Meta.Indexes = indexMeta

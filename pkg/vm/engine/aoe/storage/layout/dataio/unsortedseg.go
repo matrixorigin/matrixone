@@ -24,39 +24,20 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 	return usf
 }
 
-// func (sf *UnsortedSegmentFile) RefBlockIndex(id common.ID) {
-// 	sf.Lock()
-// 	defer sf.Unlock()
-// 	_, ok := sf.Blocks[id]
-// 	if !ok {
-// 		panic("logic error")
-// 	}
-// 	atomic.AddInt32(&sf.Refs, int32(1))
-// }
+func (sf *UnsortedSegmentFile) Ref() {
+	atomic.AddInt32(&sf.Refs, int32(1))
+}
 
-// func (sf *UnsortedSegmentFile) UnrefBlockIndex(id common.ID) {
-// 	v := atomic.AddInt32(&sf.Refs, int32(-1))
-// 	if v == int32(0) {
-// 		sf.Destory()
-// 	}
-// 	if v < int32(0) {
-// 		panic("logic error")
-// 	}
-// }
-
-// func (sf *UnsortedSegmentFile) RefIndex() {
-// 	atomic.AddInt32(&sf.Refs, int32(1))
-// }
-
-// func (sf *UnsortedSegmentFile) UnrefIndex() {
-// 	v := atomic.AddInt32(&sf.Refs, int32(-1))
-// 	if v == int32(0) {
-// 		sf.Destory()
-// 	}
-// 	if v < int32(0) {
-// 		panic("logic error")
-// 	}
-// }
+func (sf *UnsortedSegmentFile) Unref() {
+	v := atomic.AddInt32(&sf.Refs, int32(-1))
+	if v < int32(0) {
+		panic("logic error")
+	}
+	if v == int32(0) {
+		sf.Close()
+		sf.Destory()
+	}
+}
 
 func (sf *UnsortedSegmentFile) RefBlock(id common.ID) {
 	sf.Lock()
@@ -79,15 +60,23 @@ func (sf *UnsortedSegmentFile) UnrefBlock(id common.ID) {
 	}
 }
 
-func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
-	cpf := &ColPartFile{
-		ID:          id,
-		SegmentFile: sf,
-	}
-	return cpf
+func (sf *UnsortedSegmentFile) GetIndexMeta() *base.IndexesMeta {
+	return nil
 }
 
-func (sf *UnsortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
+func (sf *UnsortedSegmentFile) GetBlockIndexMeta(id common.ID) *base.IndexesMeta {
+	blk := sf.GetBlock(id)
+	if blk == nil {
+		return nil
+	}
+	return blk.GetIndexMeta()
+}
+
+func (sf *UnsortedSegmentFile) MakeVirtualSegmentIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+	return nil
+}
+
+func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
 	cpf := &ColPartFile{
 		ID:          id,
 		SegmentFile: sf,
