@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	// log "github.com/sirupsen/logrus"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
@@ -18,7 +19,7 @@ func NewNodeIO(opts *e.Options, ctx context.Context) ioif.IO {
 	segmentFile := ctx.Value("segmentfile")
 	if segmentFile == nil {
 		id := handle.GetID()
-		filename := e.MakeFilename(dio.WRITER_FACTORY.Dirname, e.FTTransientNode, id.ToPartFileName(), false)
+		filename := e.MakeFilename(dio.WRITER_FACTORY.Dirname, e.FTTransientNode, fmt.Sprintf("%d", id), false)
 		ctx = context.WithValue(ctx, "filename", filename)
 	}
 

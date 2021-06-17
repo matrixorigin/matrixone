@@ -6,7 +6,6 @@ import (
 	log "github.com/sirupsen/logrus"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"os"
@@ -33,7 +32,7 @@ func (b *NodeWriterBuilder) Build(wf ioif.IWriterFactory, ctx context.Context) i
 	fn := ctx.Value("filename")
 	if fn == nil {
 		id := handle.GetID()
-		filename = e.MakeFilename(dio.READER_FACTORY.Dirname, e.FTTransientNode, MakeNodeFileName(&id), false)
+		filename = e.MakeFilename(dio.READER_FACTORY.Dirname, e.FTTransientNode, MakeNodeFileName(id), false)
 	} else {
 		filename = fmt.Sprintf("%v", fn)
 	}
@@ -53,8 +52,8 @@ type NodeWriter struct {
 	Filename string
 }
 
-func MakeNodeFileName(id *common.ID) string {
-	return fmt.Sprintf("%d_%d_%d_%d_%d", id.TableID, id.Idx, id.SegmentID, id.BlockID, id.PartID)
+func MakeNodeFileName(id uint64) string {
+	return fmt.Sprintf("%d", id)
 }
 
 func (sw *NodeWriter) Flush() (err error) {

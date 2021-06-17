@@ -5,6 +5,7 @@ import (
 	"fmt"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
 	"sync"
 
@@ -15,17 +16,19 @@ type BlockFile struct {
 	sync.RWMutex
 	os.File
 	ID    common.ID
-	Parts map[Key]Pointer
+	Parts map[Key]*base.Pointer
+	Meta  *FileMeta
 }
 
 func NewBlockFile(dirname string, id common.ID) *BlockFile {
 	bf := &BlockFile{
-		Parts: make(map[Key]Pointer),
+		Parts: make(map[Key]*base.Pointer),
 		ID:    id,
+		Meta:  NewFileMeta(),
 	}
 
 	name := e.MakeFilename(dirname, e.FTBlock, id.ToBlockFileName(), false)
-	log.Infof("BlockFile name %s", name)
+	// log.Infof("BlockFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
 	}
@@ -53,8 +56,14 @@ func (bf *BlockFile) Destory() {
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
+	indexMeta, err := DefaultRWHelper.ReadIndexesMeta(bf.File)
+	bf.Meta.Indexes = indexMeta
+	// _, err := DefaultRWHelper.ReadIndexes(bf.File)
+	if err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
 	twoBytes := make([]byte, 2)
-	_, err := bf.File.Read(twoBytes)
+	_, err = bf.File.Read(twoBytes)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
@@ -80,11 +89,23 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		if err != nil {
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
-		bf.Parts[key] = Pointer{
+		bf.Parts[key] = &base.Pointer{
 			Offset: int64(currOffset),
 			Len:    binary.BigEndian.Uint64(eightBytes),
 		}
 		currOffset += int(bf.Parts[key].Len)
+	}
+}
+
+func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
+	bf.Lock()
+	defer bf.Unlock()
+	n, err := bf.ReadAt(buf, ptr.Offset)
+	if err != nil {
+		panic(fmt.Sprintf("logic error: %s", err))
+	}
+	if n != int(ptr.Len) {
+		panic("logic error")
 	}
 }
 
@@ -100,13 +121,14 @@ func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if len(buf) != int(pointer.Len) {
 		panic("logic error")
 	}
-	bf.Lock()
-	defer bf.Unlock()
-	n, err := bf.ReadAt(buf, pointer.Offset)
-	if err != nil {
-		panic(fmt.Sprintf("logic error: %s", err))
-	}
-	if n != int(pointer.Len) {
-		panic("logic error")
-	}
+	bf.ReadPoint(pointer, buf)
+	// bf.Lock()
+	// defer bf.Unlock()
+	// n, err := bf.ReadAt(buf, pointer.Offset)
+	// if err != nil {
+	// 	panic(fmt.Sprintf("logic error: %s", err))
+	// }
+	// if n != int(pointer.Len) {
+	// 	panic("logic error")
+	// }
 }

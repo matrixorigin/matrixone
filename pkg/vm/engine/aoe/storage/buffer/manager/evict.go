@@ -2,14 +2,14 @@ package manager
 
 import (
 	"fmt"
+	sq "github.com/yireyun/go-queue"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"sync"
-	// log "github.com/sirupsen/logrus"
 )
 
 type SimpleEvictHolder struct {
+	Queue *sq.EsQueue
 	sync.Mutex
-	Queue chan *EvictNode
 }
 
 const (
@@ -29,25 +29,21 @@ func NewSimpleEvictHolder(ctx ...interface{}) IEvictHolder {
 		}
 	}
 	holder := &SimpleEvictHolder{
-		Queue: make(chan *EvictNode, c),
+		Queue: sq.NewQueue(uint32(c)),
 	}
 	return holder
 }
 
 func (holder *SimpleEvictHolder) Enqueue(node *EvictNode) {
-	// log.Infof("Equeue evict h %v", node.Handle.GetID())
-	holder.Queue <- node
+	holder.Queue.Put(node)
 }
 
 func (holder *SimpleEvictHolder) Dequeue() *EvictNode {
-	select {
-	case node := <-holder.Queue:
-		// log.Infof("Dequeue evict h %v", node.Handle.GetID())
-		return node
-	default:
-		// log.Info("Dequeue empty evict h")
+	r, ok, _ := holder.Queue.Get()
+	if !ok {
 		return nil
 	}
+	return r.(*EvictNode)
 }
 
 func (node *EvictNode) String() string {

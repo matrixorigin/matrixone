@@ -80,7 +80,7 @@ func (it *BlockIt) GetBlockHandle() base.IBlockHandle {
 	for _, col := range it.Cols {
 		blkHandle.Cols = append(blkHandle.Cols, col.Ref())
 	}
-	blkHandle.Cols = it.Cols
+	// blkHandle.Cols = it.Cols
 	return &blkHandle
 }
 

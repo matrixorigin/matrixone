@@ -3,7 +3,6 @@ package node
 import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -12,7 +11,7 @@ var (
 	_ iface.INodeBuffer = (*NodeBuffer)(nil)
 )
 
-func NewNodeBuffer(id common.ID, node *buf.Node) iface.INodeBuffer {
+func NewNodeBuffer(id uint64, node *buf.Node) iface.INodeBuffer {
 	if node == nil {
 		return nil
 	}
@@ -25,7 +24,7 @@ func NewNodeBuffer(id common.ID, node *buf.Node) iface.INodeBuffer {
 	return nb
 }
 
-func (nb *NodeBuffer) GetID() common.ID {
+func (nb *NodeBuffer) GetID() uint64 {
 	return nb.ID
 }
 
