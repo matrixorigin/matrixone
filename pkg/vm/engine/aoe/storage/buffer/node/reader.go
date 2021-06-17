@@ -38,7 +38,7 @@ func (b *NodeReaderBuilder) Build(rf ioif.IReaderFactory, ctx context.Context) i
 		fn := ctx.Value("filename")
 		if fn == nil {
 			id := handle.GetID()
-			filename = e.MakeFilename(dio.READER_FACTORY.Dirname, e.FTTransientNode, MakeNodeFileName(&id), false)
+			filename = e.MakeFilename(dio.READER_FACTORY.Dirname, e.FTTransientNode, MakeNodeFileName(id), false)
 		} else {
 			filename = fmt.Sprintf("%v", fn)
 		}
