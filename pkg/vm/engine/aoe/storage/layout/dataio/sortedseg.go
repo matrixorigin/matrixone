@@ -41,7 +41,7 @@ type SortedSegmentFile struct {
 	Parts map[Key]*base.Pointer
 }
 
-func (sf *SortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
+func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
 	cpf := &ColPartFile{
 		ID:          id,
 		SegmentFile: sf,
@@ -49,32 +49,12 @@ func (sf *SortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
 	return cpf
 }
 
-func (sf *SortedSegmentFile) RefIndex() {
-	atomic.AddInt32(&sf.Refs, int32(1))
-}
-
-func (sf *SortedSegmentFile) UnrefIndex() {
-	v := atomic.AddInt32(&sf.Refs, int32(-1))
-	if v == int32(0) {
-		sf.Destory()
+func (sf *SortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
+	cpf := &ColPartFile{
+		ID:          id,
+		SegmentFile: sf,
 	}
-	if v < int32(0) {
-		panic("logic error")
-	}
-}
-
-func (sf *SortedSegmentFile) RefBlockIndex(id common.ID) {
-	atomic.AddInt32(&sf.Refs, int32(1))
-}
-
-func (sf *SortedSegmentFile) UnrefBlockIndex(id common.ID) {
-	v := atomic.AddInt32(&sf.Refs, int32(-1))
-	if v == int32(0) {
-		sf.Destory()
-	}
-	if v < int32(0) {
-		panic("logic error")
-	}
+	return cpf
 }
 
 func (sf *SortedSegmentFile) RefBlock(id common.ID) {

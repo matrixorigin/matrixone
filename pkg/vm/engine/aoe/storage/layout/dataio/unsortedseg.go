@@ -10,7 +10,7 @@ import (
 type UnsortedSegmentFile struct {
 	sync.RWMutex
 	ID     common.ID
-	Blocks map[common.ID]*BlockFile
+	Blocks map[common.ID]IBlockFile
 	Dir    string
 	Refs   int32
 }
@@ -19,7 +19,7 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 	usf := &UnsortedSegmentFile{
 		ID:     id,
 		Dir:    dirname,
-		Blocks: make(map[common.ID]*BlockFile),
+		Blocks: make(map[common.ID]IBlockFile),
 	}
 	return usf
 }
@@ -44,19 +44,19 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 // 	}
 // }
 
-func (sf *UnsortedSegmentFile) RefIndex() {
-	atomic.AddInt32(&sf.Refs, int32(1))
-}
+// func (sf *UnsortedSegmentFile) RefIndex() {
+// 	atomic.AddInt32(&sf.Refs, int32(1))
+// }
 
-func (sf *UnsortedSegmentFile) UnrefIndex() {
-	v := atomic.AddInt32(&sf.Refs, int32(-1))
-	if v == int32(0) {
-		sf.Destory()
-	}
-	if v < int32(0) {
-		panic("logic error")
-	}
-}
+// func (sf *UnsortedSegmentFile) UnrefIndex() {
+// 	v := atomic.AddInt32(&sf.Refs, int32(-1))
+// 	if v == int32(0) {
+// 		sf.Destory()
+// 	}
+// 	if v < int32(0) {
+// 		panic("logic error")
+// 	}
+// }
 
 func (sf *UnsortedSegmentFile) RefBlock(id common.ID) {
 	sf.Lock()
@@ -77,6 +77,14 @@ func (sf *UnsortedSegmentFile) UnrefBlock(id common.ID) {
 	if v < int32(0) {
 		panic("logic error")
 	}
+}
+
+func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
+	cpf := &ColPartFile{
+		ID:          id,
+		SegmentFile: sf,
+	}
+	return cpf
 }
 
 func (sf *UnsortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
@@ -104,14 +112,14 @@ func (sf *UnsortedSegmentFile) Destory() {
 	sf.Blocks = nil
 }
 
-func (sf *UnsortedSegmentFile) GetBlock(id common.ID) *BlockFile {
+func (sf *UnsortedSegmentFile) GetBlock(id common.ID) IBlockFile {
 	sf.RLock()
 	defer sf.RUnlock()
 	blk := sf.Blocks[id]
 	return blk
 }
 
-func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf *BlockFile) {
+func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf IBlockFile) {
 	_, ok := sf.Blocks[id]
 	if ok {
 		panic("logic error")

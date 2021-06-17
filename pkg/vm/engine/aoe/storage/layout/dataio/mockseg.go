@@ -77,21 +77,12 @@ func (msf *MockSegmentFile) UnrefBlock(id common.ID) {
 	}
 }
 
-func (msf *MockSegmentFile) RefIndex() {
-	log.Infof("%s:%s | RefIndex", msf.TypeName, msf.FileName)
-	atomic.AddInt32(&msf.Refs, int32(1))
-}
-
-func (msf *MockSegmentFile) UnrefIndex() {
-	log.Infof("%s:%s | UnrefIndex", msf.TypeName, msf.FileName)
-	v := atomic.AddInt32(&msf.Refs, int32(-1))
-	if v < int32(0) {
-		panic("logic error")
+func (msf *MockSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
+	psf := &ColPartFile{
+		SegmentFile: msf,
+		ID:          id,
 	}
-	if v == int32(0) {
-		msf.Close()
-		msf.Destory()
-	}
+	return psf
 }
 
 func (msf *MockSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {

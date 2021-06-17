@@ -22,19 +22,27 @@ type IManager interface {
 	String() string
 }
 
-type ISegmentFile interface {
+type IHostFile interface {
 	io.Closer
+	ReadPoint(ptr *base.Pointer, buf []byte)
+	ReadPart(colIdx uint64, id common.ID, buf []byte)
 	Destory()
+}
+
+type ISegmentFile interface {
+	IHostFile
 	RefBlock(blkId common.ID)
 	UnrefBlock(blkId common.ID)
-	RefIndex()
-	UnrefIndex()
-	// RefBlockIndex(common.ID)
-	// UnrefBlockIndex(common.ID)
 	MakeColPartFile(id *common.ID) IColPartFile
-	ReadPart(colIdx uint64, id common.ID, buf []byte)
-	ReadPoint(ptr *base.Pointer, buf []byte)
 	ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte)
+
+	// MakeVirtualBlkIndexFile(id *common.ID) base.IVirtaulFile
+	// MakeVirtualSegFile(id *common.ID) base.IVirtaulFile
+	MakeVirtualPartFile(id *common.ID) base.IVirtaulFile
+}
+
+type IBlockFile interface {
+	IHostFile
 }
 
 type IColSegmentFile interface {

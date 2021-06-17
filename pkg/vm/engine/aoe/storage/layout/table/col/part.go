@@ -15,19 +15,15 @@ import (
 )
 
 func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
-	sf := fsMgr.GetUnsortedFile(part.ID.AsSegmentID())
-	sf.RefBlock(part.ID.AsBlockID())
-	psf := sf.MakeColPartFile(&part.ID)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf, buf.RawMemoryNodeConstructor)
-	part.SegFile = sf
+	part.VFile = fsMgr.GetUnsortedFile(part.ID.AsSegmentID()).MakeVirtualPartFile(&part.ID)
+	part.VFile.Ref()
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, part.VFile, buf.RawMemoryNodeConstructor)
 }
 
 func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
-	sf := fsMgr.GetSortedFile(part.ID.AsSegmentID())
-	sf.RefBlock(part.ID.AsBlockID())
-	psf := sf.MakeColPartFile(&part.ID)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf, buf.RawMemoryNodeConstructor)
-	part.SegFile = sf
+	part.VFile = fsMgr.GetSortedFile(part.ID.AsSegmentID()).MakeVirtualPartFile(&part.ID)
+	part.VFile.Ref()
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, part.VFile, buf.RawMemoryNodeConstructor)
 }
 
 type IColumnPart interface {
@@ -51,7 +47,7 @@ type ColumnPart struct {
 	Size     uint64
 	Capacity uint64
 	NodeID   uint64
-	SegFile  ldio.ISegmentFile
+	VFile    base.IVirtaulFile
 }
 
 func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
@@ -142,8 +138,8 @@ func (part *ColumnPart) Close() error {
 		}
 		part.BufNode = nil
 	}
-	if part.SegFile != nil {
-		part.SegFile.UnrefBlock(part.ID.AsSegmentID())
+	if part.VFile != nil {
+		part.VFile.Unref()
 	}
 	return nil
 }

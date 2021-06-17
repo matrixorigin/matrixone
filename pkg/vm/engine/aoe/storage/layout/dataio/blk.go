@@ -20,7 +20,7 @@ type BlockFile struct {
 	Meta  *FileMeta
 }
 
-func NewBlockFile(dirname string, id common.ID) *BlockFile {
+func NewBlockFile(dirname string, id common.ID) IBlockFile {
 	bf := &BlockFile{
 		Parts: make(map[Key]*base.Pointer),
 		ID:    id,

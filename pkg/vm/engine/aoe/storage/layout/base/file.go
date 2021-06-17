@@ -7,7 +7,7 @@ import (
 
 type IVirtaulFile interface {
 	io.Reader
-	io.Writer
+	// io.Writer
 	Ref()
 	Unref()
 }
