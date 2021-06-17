@@ -16,26 +16,28 @@ type NodeBuffer struct {
 }
 
 type NodeHandleCtx struct {
-	ID        uint64
-	Buff      buf.IBuffer
-	Spillable bool
-	Manager   mgrif.IBufferManager
-	Size      uint64
-	Reader    io.Reader
+	ID          uint64
+	Buff        buf.IBuffer
+	Spillable   bool
+	Manager     mgrif.IBufferManager
+	Size        uint64
+	Reader      io.Reader
+	Constructor buf.MemoryNodeConstructor
 }
 
 type NodeHandle struct {
 	sync.Mutex
-	State     nif.NodeState
-	ID        uint64
-	Buff      buf.IBuffer
-	Spillable bool
-	Capacity  uint64
-	RTState   nif.NodeRTState
-	Refs      uint64
-	Manager   mgrif.IBufferManager
-	Iter      uint64
-	IO        ioif.IO
+	State       nif.NodeState
+	ID          uint64
+	Buff        buf.IBuffer
+	Spillable   bool
+	Capacity    uint64
+	RTState     nif.NodeRTState
+	Refs        uint64
+	Manager     mgrif.IBufferManager
+	Iter        uint64
+	IO          ioif.IO
+	Constructor buf.MemoryNodeConstructor
 }
 
 // BufferHandle is created from IBufferManager::Pin, which will set the INodeHandle reference to 1

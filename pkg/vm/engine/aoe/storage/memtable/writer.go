@@ -115,7 +115,7 @@ func (sw *MemtableWriter) Flush() (err error) {
 		if err != nil {
 			return err
 		}
-		_, err = w.Write(cursor.Current.GetBuf())
+		_, err = cursor.Current.GetDataNode().WriteTo(w)
 		if err != nil {
 			return err
 		}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -17,7 +18,7 @@ func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetUnsortedFile(part.ID.AsSegmentID())
 	sf.RefBlock(part.ID.AsBlockID())
 	psf := sf.MakeColPartFile(&part.ID)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf, buf.RawMemoryNodeConstructor)
 	part.SegFile = sf
 }
 
@@ -25,7 +26,7 @@ func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
 	sf := fsMgr.GetSortedFile(part.ID.AsSegmentID())
 	sf.RefBlock(part.ID.AsBlockID())
 	psf := sf.MakeColPartFile(&part.ID)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
+	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf, buf.RawMemoryNodeConstructor)
 	part.SegFile = sf
 }
 
@@ -35,8 +36,7 @@ type IColumnPart interface {
 	SetNext(IColumnPart)
 	InitScanCursor(cursor *ScanCursor) error
 	GetID() common.ID
-	// GetBlock() IColumnBlock
-	GetBuf() []byte
+	GetDataNode() buf.IMemoryNode
 	GetColIdx() int
 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager, ldio.IManager) IColumnPart
 	GetNodeID() uint64
@@ -66,7 +66,7 @@ func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnB
 
 	switch blk.GetBlockType() {
 	case base.TRANSIENT_BLK:
-		bNode := bmgr.RegisterSpillableNode(capacity, part.NodeID)
+		bNode := bmgr.RegisterSpillableNode(capacity, part.NodeID, buf.RawMemoryNodeConstructor)
 		if bNode == nil {
 			return nil
 		}
@@ -114,8 +114,8 @@ func (part *ColumnPart) GetColIdx() int {
 	return int(part.ID.Idx)
 }
 
-func (part *ColumnPart) GetBuf() []byte {
-	return part.BufNode.GetBuffer().GetDataNode().Data
+func (part *ColumnPart) GetDataNode() buf.IMemoryNode {
+	return part.BufNode.GetBuffer().GetDataNode()
 }
 
 func (part *ColumnPart) GetID() common.ID {
@@ -156,6 +156,5 @@ func (part *ColumnPart) InitScanCursor(cursor *ScanCursor) error {
 	if cursor.Handle == nil {
 		return errors.New(fmt.Sprintf("Cannot pin part %v", part.ID))
 	}
-	// cursor.Inited = true
 	return nil
 }
