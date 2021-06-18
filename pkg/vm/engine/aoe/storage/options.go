@@ -116,8 +116,8 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.CacheCfg == nil {
 		o.CacheCfg = &CacheCfg{
-			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 40,
-			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 20,
+			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
+			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 40,
 		}
 	}
 	return o

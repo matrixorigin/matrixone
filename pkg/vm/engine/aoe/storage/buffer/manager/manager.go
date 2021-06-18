@@ -15,7 +15,6 @@ import (
 
 var (
 	_                  mgrif.IBufferManager = (*BufferManager)(nil)
-	evictTimes                              = int64(0)
 	TRANSIENT_START_ID                      = ^(uint64(0)) / 2
 )
 
@@ -41,7 +40,8 @@ func (mgr *BufferManager) NodeCount() int {
 func (mgr *BufferManager) String() string {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	s := fmt.Sprintf("BMgr[Cap:%d, Usage:%d, Nodes:%d, EvictTimes: %d]:\n", mgr.GetCapacity(), mgr.GetUsage(), len(mgr.Nodes), atomic.LoadInt64(&evictTimes))
+	s := fmt.Sprintf("BMgr[Cap:%d, Usage:%d, Nodes:%d, LoadTimes:%d, EvictTimes:%d]:\n", mgr.GetCapacity(), mgr.GetUsage(),
+		len(mgr.Nodes), atomic.LoadInt64(&mgr.LoadTimes), atomic.LoadInt64(&mgr.EvictTimes))
 	for _, node := range mgr.Nodes {
 		s = fmt.Sprintf("%s\n\t%d | %s | Cap: %d ", s, node.GetID(), nif.NodeStateString(mgr.Nodes[node.GetID()].GetState()), mgr.Nodes[node.GetID()].GetCapacity())
 	}
@@ -188,7 +188,7 @@ func (mgr *BufferManager) Unpin(handle nif.INodeHandle) {
 		panic("logic error")
 	}
 	if !handle.HasRef() {
-		atomic.AddInt64(&evictTimes, int64(1))
+		atomic.AddInt64(&mgr.EvictTimes, int64(1))
 		evict_node := &EvictNode{Handle: handle, Iter: handle.IncIteration()}
 		mgr.EvictHolder.Enqueue(evict_node)
 	}
@@ -249,6 +249,7 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 			handle.RollbackLoad()
 			panic(err.Error())
 		}
+		atomic.AddInt64(&mgr.LoadTimes, int64(1))
 	}
 	handle.Ref()
 	return handle.MakeHandle()
