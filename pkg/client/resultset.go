@@ -1,4 +1,4 @@
-package server
+package client
 
 import (
 	"fmt"
@@ -289,7 +289,16 @@ type MysqlResultSet struct {
 
 func (mrs *MysqlResultSet) AddColumn(column Column) uint64 {
 	mrs.Columns = append(mrs.Columns, column)
-	return mrs.GetColumnCount() - 1
+	ret := mrs.GetColumnCount() - 1
+
+	if mrs.Name2Index == nil {
+		mrs.Name2Index = make(map[string]uint64)
+	}
+
+	name := column.Name()
+	mrs.Name2Index[name] = ret
+
+	return ret
 }
 
 func (mrs *MysqlResultSet) GetColumnCount() uint64 {
@@ -594,4 +603,14 @@ func (mer *MysqlExecutionResult) Status() uint16 {
 
 func (mer *MysqlExecutionResult) SetStatus(status uint16) {
 	mer.status = status
+}
+
+func NewMysqlExecutionResult(status uint16,insertid,rows uint64,warnings uint16,mrs *MysqlResultSet)*MysqlExecutionResult{
+	return &MysqlExecutionResult{
+		status:       status,
+		insertID:     insertid,
+		affectedRows: rows,
+		warnings:     warnings,
+		mrs:          mrs,
+	}
 }

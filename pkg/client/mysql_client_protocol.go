@@ -1,4 +1,4 @@
-package server
+package client
 
 import (
 	"bytes"
@@ -96,7 +96,6 @@ const (
 
 type MysqlClientProtocol struct {
 	ClientProtocolImpl
-	Column
 
 	//The sequence-id is incremented with each packet and may wrap around.
 	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
@@ -761,7 +760,7 @@ func (mcp *MysqlClientProtocol) makeOKPacket(affectedRows, lastInsertId uint64, 
 	if mcp.capability & CLIENT_SESSION_TRACK != 0{
 		//TODO:implement it
 	}else{
-		alen := min(len(data) - pos,len(message))
+		alen := Min(len(data) - pos,len(message))
 		blen := len(message) - alen
 		if alen > 0{
 			pos = mcp.writeStringFix(data,pos,message,alen)
@@ -838,6 +837,38 @@ func (mcp *MysqlClientProtocol) sendEOFPacket(warnings, status uint16) error {
 	return nil
 }
 
+func (mcp *MysqlClientProtocol) SendEOFPacketIf(warnings, status uint16) error {
+	mcp.GetLock().Lock()
+	defer mcp.GetLock().Unlock()
+
+	var err error
+	//If the CLIENT_DEPRECATE_EOF client capability flag is not set, EOF_Packet
+	if mcp.capability & CLIENT_DEPRECATE_EOF == 0 {
+		if err = mcp.sendEOFPacket(warnings,status); err != nil{
+			return err
+		}
+	}
+	return nil
+}
+
+func (mcp *MysqlClientProtocol) SendEOFOrOkPacket(warnings,status uint16) error {
+	mcp.GetLock().Lock()
+	defer mcp.GetLock().Unlock()
+
+	var err error = nil
+	//If the CLIENT_DEPRECATE_EOF client capability flag is set, OK_Packet; else EOF_Packet.
+	if mcp.capability & CLIENT_DEPRECATE_EOF != 0 {
+		if err = mcp.sendOKPacket(0, 0, status, 0, ""); err != nil{
+			return err
+		}
+	}else{
+		if err = mcp.sendEOFPacket(warnings,status); err != nil{
+			return err
+		}
+	}
+	return nil
+}
+
 //make the column information with the format of column definition41
 func (mcp *MysqlClientProtocol) makeColumnDefinition41(column *MysqlColumn,cmd int)[]byte  {
 	space := 8 * 9 + //lenenc bytes of 8 fields
@@ -901,6 +932,30 @@ func (mcp *MysqlClientProtocol) makeColumnDefinition41(column *MysqlColumn,cmd i
 }
 
 //the server send the column definition to the client
+//thread safe
+func (mcp *MysqlClientProtocol) SendColumnDefinition(column Column,cmd int) error {
+	mcp.GetLock().Lock()
+	defer mcp.GetLock().Unlock()
+
+	mysqlColumn,ok := column.(*MysqlColumn)
+	if !ok{
+		return fmt.Errorf("sendColumn need MysqlColumn")
+	}
+
+	var data []byte
+	if mcp.capability & CLIENT_PROTOCOL_41 != 0{
+		data = mcp.makeColumnDefinition41(mysqlColumn,cmd)
+	}else{
+		//TODO: ColumnDefinition320
+	}
+
+	if err := mcp.sendPayload(data); err != nil{
+		return fmt.Errorf("send column failed.error:%v",err)
+	}
+	return nil
+}
+
+//the server send the column definition to the client
 func (mcp *MysqlClientProtocol) sendColumnDefinition(column Column,cmd int) error {
 	mysqlColumn,ok := column.(*MysqlColumn)
 	if !ok{
@@ -916,6 +971,22 @@ func (mcp *MysqlClientProtocol) sendColumnDefinition(column Column,cmd int) erro
 
 	if err := mcp.sendPayload(data); err != nil{
 		return fmt.Errorf("send column failed.error:%v",err)
+	}
+	return nil
+}
+
+//the server send the column count
+//thread safe
+func (mcp *MysqlClientProtocol) SendColumnCount(count uint64) error {
+	mcp.GetLock().Lock()
+	defer mcp.GetLock().Unlock()
+
+	var data []byte = make([]byte,20)
+
+	pos := mcp.writeIntLenEnc(data,0,count)
+
+	if err := mcp.sendPayload(data[:pos]); err != nil{
+		return fmt.Errorf("send column count failed.error:%v",err)
 	}
 	return nil
 }
@@ -981,7 +1052,7 @@ func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint
 			if value,err2 := mrs.GetInt64(r,i);err2 != nil{
 				return nil,err2
 			}else{
-				if mysqlColumn.ColumnType() == MYSQL_TYPE_YEAR{
+				if mysqlColumn.ColumnType() == MYSQL_TYPE_YEAR {
 					if value == 0 {
 						data = mcp.appendStringLenEnc(data,"0000")
 					}else{
@@ -1004,7 +1075,7 @@ func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint
 				data = mcp.appendStringLenEncOfFloat64(data,value,64)
 			}
 		case MYSQL_TYPE_LONGLONG:
-			if uint32(mysqlColumn.Flag()) & UNSIGNED_FLAG != 0{
+			if uint32(mysqlColumn.Flag()) &UNSIGNED_FLAG != 0{
 				if value,err2 := mrs.GetUint64(r,i);err2 != nil{
 					return nil,err2
 				}else{
@@ -1017,19 +1088,42 @@ func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint
 					data = mcp.appendStringLenEncOfInt64(data,value)
 				}
 			}
-		case MYSQL_TYPE_VARCHAR,MYSQL_TYPE_VAR_STRING,MYSQL_TYPE_STRING:
+		case MYSQL_TYPE_VARCHAR, MYSQL_TYPE_VAR_STRING, MYSQL_TYPE_STRING:
 			if value,err2 := mrs.GetString(r,i);err2 != nil{
 				return nil,err2
 			}else{
 				data = mcp.appendStringLenEnc(data,value)
 			}
-		case MYSQL_TYPE_DATE,MYSQL_TYPE_DATETIME,MYSQL_TYPE_TIMESTAMP,MYSQL_TYPE_TIME:
+		case MYSQL_TYPE_DATE, MYSQL_TYPE_DATETIME, MYSQL_TYPE_TIMESTAMP, MYSQL_TYPE_TIME:
 			return nil,fmt.Errorf("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
 		default:
 			return nil,fmt.Errorf("unsupported column type %d ",mysqlColumn.ColumnType())
 		}
 	}
 	return data, nil
+}
+
+//the server send every row of the result set as an independent packet
+//thread safe
+func (mcp *MysqlClientProtocol) SendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
+	mcp.GetLock().Lock()
+	defer mcp.GetLock().Unlock()
+
+	var data []byte
+	var err error
+	if data,err = mcp.makeResultSetTextRow(mrs,r); err != nil{
+		//ERR_Packet in case of error
+		if err1 := mcp.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,err.Error()) ; err1 != nil{
+			return err1
+		}
+		return err
+	}
+
+	if err = mcp.sendPayload(data); err != nil{
+		return fmt.Errorf("send result set text row failed. error: %v",err)
+	}
+
+	return nil
 }
 
 //the server send every row of the result set as an independent packet
@@ -1096,7 +1190,7 @@ func (mcp *MysqlClientProtocol) sendPayload(data []byte)error  {
 	var length int = len(data)
 	var	curLen int = 0
 	for ;i < length ; i += curLen{
-		curLen = min(int(MaxPayloadSize),length - i)
+		curLen = Min(int(MaxPayloadSize),length - i)
 
 		//make mysql client protocol header
 		//4 bytes
@@ -1244,6 +1338,12 @@ func (mcp *MysqlClientProtocol) Handshake() error {
 	}
 
 	//TODO: Open the Session for the client
+	//if mcp.username == config.GlobalSystemVariables.GetDumpuser() {//dump 111 default
+	//	mcp.database = config.GlobalSystemVariables.GetDumpdatabase()
+	//}
+	ses := mcp.routine.GetSession()
+	ses.User = mcp.username
+	ses.Dbname = mcp.database
 
 	if err = mcp.sendOKPacket(0, 0, 0, 0, ""); err!=nil{
 		return err
@@ -1252,6 +1352,9 @@ func (mcp *MysqlClientProtocol) Handshake() error {
 }
 
 func (mcp *MysqlClientProtocol) ReadRequest()(*Request,error)  {
+	mcp.GetLock().Lock()
+	defer mcp.GetLock().Unlock()
+
 	//The sequence-id is incremented with each packet and may wrap around.
 	//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
 	mcp.setSequenceID(0)
@@ -1263,7 +1366,7 @@ func (mcp *MysqlClientProtocol) ReadRequest()(*Request,error)  {
 	}
 
 	req := &Request{
-		cmd: int(payload[0]),
+		Cmd:  int(payload[0]),
 		data: payload[1:],
 	}
 
@@ -1271,26 +1374,29 @@ func (mcp *MysqlClientProtocol) ReadRequest()(*Request,error)  {
 }
 
 func (mcp *MysqlClientProtocol) SendResponse(resp *Response) error  {
+	mcp.GetLock().Lock()
+	defer mcp.GetLock().Unlock()
+
 	switch resp.category {
-	case okResponse:
+	case OkResponse:
 		return mcp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 	case eofResponse:
 		return mcp.sendEOFPacket(0,uint16(resp.status))
-	case errorResponse:
+	case ErrorResponse:
 		err := resp.data.(error)
 		if err == nil {
 			return mcp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
 		return mcp.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,fmt.Sprintf("unkown error:%v",err))
-	case resultResponse:
+	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil{
 			return mcp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
-		if mer.mrs == nil {
-			return mcp.sendOKPacket(mer.affectedRows, mer.insertID, uint16(resp.status), mer.warnings, "")
+		if mer.Mrs() == nil {
+			return mcp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
 		}
-		return mcp.sendResultSet(mer.mrs,resp.cmd,mer.warnings,uint16(resp.status))
+		return mcp.sendResultSet(mer.Mrs(),resp.cmd,mer.Warnings(),uint16(resp.status))
 	default:
 		return fmt.Errorf("unsupported response:%d ",resp.category)
 	}

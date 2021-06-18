@@ -1266,6 +1266,9 @@ type ConfigurationFileGeneratorImpl struct {
 	//the name of the parameter definition
 	parameterDefinitionFileName string
 
+	//the output directory of the configuration file
+	configurationOutputDirectory string
+
 	//the template string for the auto generated parameter operation interfaces and classes.
 	parameterTemplate string
 
@@ -1277,9 +1280,17 @@ type ConfigurationFileGeneratorImpl struct {
 }
 
 func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
+	var outDir string
+
 	defDir, err := filepath.Abs(filepath.Dir(cfgi.parameterDefinitionFileName))
 	if err != nil {
 		return fmt.Errorf("Get the directory of parameter defintion file failed.error:%v",err)
+	}
+
+	if len(cfgi.configurationOutputDirectory) == 0 {
+		outDir = defDir
+	}else{
+		outDir = cfgi.configurationOutputDirectory
 	}
 
 	params := &parameters{}
@@ -1292,7 +1303,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 		return fmt.Errorf("Make parameter template failed. error:%v",err)
 	}
 
-	f, err := os.Create(defDir+"/"+params.OperationFileName+".go")
+	f, err := os.Create(outDir+"/"+params.OperationFileName+".go")
 	if err != nil{
 		return err
 	}
@@ -1308,7 +1319,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 		return err
 	}
 
-	tomlf,err := os.Create(defDir+"/"+params.ConfigurationFileName+".toml")
+	tomlf,err := os.Create(outDir+"/"+params.ConfigurationFileName+".toml")
 	if err!= nil{
 		return err
 	}
@@ -1324,7 +1335,7 @@ func (cfgi *ConfigurationFileGeneratorImpl) Generate() error {
 		return err
 	}
 
-	testCasesf,err := os.Create(defDir+"/"+params.OperationFileName+"_test.go")
+	testCasesf,err := os.Create(outDir+"/"+params.OperationFileName+"_test.go")
 	if err!= nil{
 		return err
 	}
@@ -1360,6 +1371,17 @@ type ConfigurationFileHotLoader interface {
 func NewConfigurationFileGenerator(defFileName string)ConfigurationFileGenerator{
 	return &ConfigurationFileGeneratorImpl{
 		parameterDefinitionFileName: defFileName,
+		configurationOutputDirectory: "",
+		parameterTemplate: defaultParameterTempate,
+		configurationTemplate: defaultConfigurationTemplate,
+		parameterTestCasesTemplate: defaultOperationTestTemplate,
+	}
+}
+
+func NewConfigurationFileGeneratorWithOutputDirectory(defFileName,outputDirectory string)ConfigurationFileGenerator{
+	return &ConfigurationFileGeneratorImpl{
+		parameterDefinitionFileName: defFileName,
+		configurationOutputDirectory: outputDirectory,
 		parameterTemplate: defaultParameterTempate,
 		configurationTemplate: defaultConfigurationTemplate,
 		parameterTestCasesTemplate: defaultOperationTestTemplate,

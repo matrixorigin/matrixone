@@ -674,8 +674,8 @@ func Test_parameters_LoadParametersDefinition(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"t1", args{"test/t1.toml"}, false},
-		{"t2", args{"test/t2.toml"}, true},
+		{"t1", args{"t1.toml"}, false},
+		{"t2", args{"t2.toml"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1986,8 +1986,8 @@ func TestNewConfigurationFileGenerator(t *testing.T) {
 		args    args
 		wantErr bool
 	}{
-		{"t1", args{"test/def1.toml"}, false},
-		{"t2", args{"test/def2.toml"}, false},
+		{"t1", args{"def1.toml"}, false},
+		{"t2", args{"def2.toml"}, false},
 		{"t3", args{"system_vars_def.toml"}, false},
 	}
 	for _, tt := range tests {

@@ -3,9 +3,9 @@ package build
 import (
 	"fmt"
 	"go/constant"
+	"matrixone/pkg/client"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/server"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/colexec/extend/overload"
 	"matrixone/pkg/sql/op"
@@ -112,25 +112,25 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 		}
 		typ := types.Type{}
 		switch uint8(e.Type.(*tree.T).InternalType) {
-		case server.MYSQL_TYPE_TINY:
+		case client.MYSQL_TYPE_TINY:
 			typ.Size = 1
 			typ.Oid = types.T_int8
-		case server.MYSQL_TYPE_SHORT:
+		case client.MYSQL_TYPE_SHORT:
 			typ.Size = 2
 			typ.Oid = types.T_int16
-		case server.MYSQL_TYPE_LONG:
+		case client.MYSQL_TYPE_LONG:
 			typ.Size = 4
 			typ.Oid = types.T_int32
-		case server.MYSQL_TYPE_LONGLONG:
+		case client.MYSQL_TYPE_LONGLONG:
 			typ.Size = 8
 			typ.Oid = types.T_int64
-		case server.MYSQL_TYPE_FLOAT:
+		case client.MYSQL_TYPE_FLOAT:
 			typ.Size = 4
 			typ.Oid = types.T_float32
-		case server.MYSQL_TYPE_DOUBLE:
+		case client.MYSQL_TYPE_DOUBLE:
 			typ.Size = 8
 			typ.Oid = types.T_float64
-		case server.MYSQL_TYPE_VARCHAR:
+		case client.MYSQL_TYPE_VARCHAR:
 			typ.Size = 24
 			typ.Oid = types.T_varchar
 		default:

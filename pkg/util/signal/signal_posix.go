@@ -43,9 +43,9 @@ func SetupSignalHandler(shutdownFunc func(bool)) {
 	closeSignalChan := make(chan os.Signal, 1)
 	signal.Notify(closeSignalChan,
 		syscall.SIGHUP,
-		syscall.SIGINT,
+		syscall.SIGINT, //mac: ctrl c
 		syscall.SIGTERM,
-		syscall.SIGQUIT)
+		syscall.SIGQUIT) //mac: ctrl \
 
 	go func() {
 		sig := <-closeSignalChan

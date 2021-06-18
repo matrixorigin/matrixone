@@ -62,6 +62,18 @@ type SystemVariables struct{
 	dumppassword    string
 
 	/**
+	Name:	dumpdatabase
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[default]
+	Comment:	dump database name
+	UpdateMode:	dynamic
+	*/
+	dumpdatabase    string
+
+	/**
 	Name:	port
 	Scope:	[global]
 	Access:	[file]
@@ -84,6 +96,126 @@ type SystemVariables struct{
 	UpdateMode:	fix
 	*/
 	host    string
+
+	/**
+	Name:	sendRow
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[]
+	Comment:	send data row while producing
+	UpdateMode:	dynamic
+	*/
+	sendRow    bool
+
+	/**
+	Name:	dumpEnv
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[]
+	Comment:	dump Environment with memEngine Null nodes for testing
+	UpdateMode:	dynamic
+	*/
+	dumpEnv    bool
+
+	/**
+	Name:	hostMmuLimitation
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[1099511627776]
+	Comment:	host mmu limitation. default: 1 << 40 = 1099511627776
+	UpdateMode:	dynamic
+	*/
+	hostMmuLimitation    int64
+
+	/**
+	Name:	guestMmuLimitation
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[1099511627776]
+	Comment:	guest mmu limitation. default: 1 << 40 = 1099511627776
+	UpdateMode:	dynamic
+	*/
+	guestMmuLimitation    int64
+
+	/**
+	Name:	mempoolMaxSize
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[1099511627776]
+	Comment:	mempool maxsize. default: 1 << 40 = 1099511627776
+	UpdateMode:	dynamic
+	*/
+	mempoolMaxSize    int64
+
+	/**
+	Name:	mempoolFactor
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[8]
+	Comment:	mempool factor. default: 8
+	UpdateMode:	dynamic
+	*/
+	mempoolFactor    int64
+
+	/**
+	Name:	processLimitationSize
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[42949672960]
+	Comment:	process.Limitation.Size. default: 10 << 32 = 42949672960
+	UpdateMode:	dynamic
+	*/
+	processLimitationSize    int64
+
+	/**
+	Name:	processLimitationBatchRows
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[42949672960]
+	Comment:	process.Limitation.BatchRows. default: 10 << 32 = 42949672960
+	UpdateMode:	dynamic
+	*/
+	processLimitationBatchRows    int64
+
+	/**
+	Name:	processLimitationBatchSize
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[0]
+	Comment:	process.Limitation.BatchSize. default: 0
+	UpdateMode:	dynamic
+	*/
+	processLimitationBatchSize    int64
+
+	/**
+	Name:	processLimitationPartitionRows
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[42949672960]
+	Comment:	process.Limitation.PartitionRows. default: 10 << 32 = 42949672960
+	UpdateMode:	dynamic
+	*/
+	processLimitationPartitionRows    int64
 
 
 	//parameter name -> parameter definition string
@@ -118,6 +250,171 @@ type varsConfig struct{
 	
 
 	
+	/**
+	Name:	dumpdatabase
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[default]
+	Comment:	dump database name
+	UpdateMode:	dynamic
+	*/
+	Dumpdatabase    string  `toml:"dumpdatabase"`
+
+	
+
+	
+
+	
+
+	
+	/**
+	Name:	sendRow
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[]
+	Comment:	send data row while producing
+	UpdateMode:	dynamic
+	*/
+	SendRow    bool  `toml:"sendRow"`
+
+	
+
+	
+	/**
+	Name:	dumpEnv
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[]
+	Comment:	dump Environment with memEngine Null nodes for testing
+	UpdateMode:	dynamic
+	*/
+	DumpEnv    bool  `toml:"dumpEnv"`
+
+	
+
+	
+	/**
+	Name:	hostMmuLimitation
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[1099511627776]
+	Comment:	host mmu limitation. default: 1 << 40 = 1099511627776
+	UpdateMode:	dynamic
+	*/
+	HostMmuLimitation    int64  `toml:"hostMmuLimitation"`
+
+	
+
+	
+	/**
+	Name:	guestMmuLimitation
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[1099511627776]
+	Comment:	guest mmu limitation. default: 1 << 40 = 1099511627776
+	UpdateMode:	dynamic
+	*/
+	GuestMmuLimitation    int64  `toml:"guestMmuLimitation"`
+
+	
+
+	
+	/**
+	Name:	mempoolMaxSize
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[1099511627776]
+	Comment:	mempool maxsize. default: 1 << 40 = 1099511627776
+	UpdateMode:	dynamic
+	*/
+	MempoolMaxSize    int64  `toml:"mempoolMaxSize"`
+
+	
+
+	
+	/**
+	Name:	mempoolFactor
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[8]
+	Comment:	mempool factor. default: 8
+	UpdateMode:	dynamic
+	*/
+	MempoolFactor    int64  `toml:"mempoolFactor"`
+
+	
+
+	
+	/**
+	Name:	processLimitationSize
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[42949672960]
+	Comment:	process.Limitation.Size. default: 10 << 32 = 42949672960
+	UpdateMode:	dynamic
+	*/
+	ProcessLimitationSize    int64  `toml:"processLimitationSize"`
+
+	
+
+	
+	/**
+	Name:	processLimitationBatchRows
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[42949672960]
+	Comment:	process.Limitation.BatchRows. default: 10 << 32 = 42949672960
+	UpdateMode:	dynamic
+	*/
+	ProcessLimitationBatchRows    int64  `toml:"processLimitationBatchRows"`
+
+	
+
+	
+	/**
+	Name:	processLimitationBatchSize
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[0]
+	Comment:	process.Limitation.BatchSize. default: 0
+	UpdateMode:	dynamic
+	*/
+	ProcessLimitationBatchSize    int64  `toml:"processLimitationBatchSize"`
+
+	
+
+	
+	/**
+	Name:	processLimitationPartitionRows
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[42949672960]
+	Comment:	process.Limitation.PartitionRows. default: 10 << 32 = 42949672960
+	UpdateMode:	dynamic
+	*/
+	ProcessLimitationPartitionRows    int64  `toml:"processLimitationPartitionRows"`
 
 	
 
@@ -153,9 +450,31 @@ func (ap *SystemVariables) PrepareDefinition(){
 	
 	ap.name2definition["dumppassword"] = "	Name:	dumppassword	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[111]	Comment:	dump user password	UpdateMode:	fix	"
 	
+	ap.name2definition["dumpdatabase"] = "	Name:	dumpdatabase	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[default]	Comment:	dump database name	UpdateMode:	dynamic	"
+	
 	ap.name2definition["port"] = "	Name:	port	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[6001]	Comment:	port	UpdateMode:	fix	"
 	
 	ap.name2definition["host"] = "	Name:	host	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[localhost 127.0.0.1 0.0.0.0]	Comment:	listening ip	UpdateMode:	fix	"
+	
+	ap.name2definition["sendRow"] = "	Name:	sendRow	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[]	Comment:	send data row while producing	UpdateMode:	dynamic	"
+	
+	ap.name2definition["dumpEnv"] = "	Name:	dumpEnv	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[]	Comment:	dump Environment with memEngine Null nodes for testing	UpdateMode:	dynamic	"
+	
+	ap.name2definition["hostMmuLimitation"] = "	Name:	hostMmuLimitation	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[1099511627776]	Comment:	host mmu limitation. default: 1 << 40 = 1099511627776	UpdateMode:	dynamic	"
+	
+	ap.name2definition["guestMmuLimitation"] = "	Name:	guestMmuLimitation	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[1099511627776]	Comment:	guest mmu limitation. default: 1 << 40 = 1099511627776	UpdateMode:	dynamic	"
+	
+	ap.name2definition["mempoolMaxSize"] = "	Name:	mempoolMaxSize	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[1099511627776]	Comment:	mempool maxsize. default: 1 << 40 = 1099511627776	UpdateMode:	dynamic	"
+	
+	ap.name2definition["mempoolFactor"] = "	Name:	mempoolFactor	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[8]	Comment:	mempool factor. default: 8	UpdateMode:	dynamic	"
+	
+	ap.name2definition["processLimitationSize"] = "	Name:	processLimitationSize	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[42949672960]	Comment:	process.Limitation.Size. default: 10 << 32 = 42949672960	UpdateMode:	dynamic	"
+	
+	ap.name2definition["processLimitationBatchRows"] = "	Name:	processLimitationBatchRows	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[42949672960]	Comment:	process.Limitation.BatchRows. default: 10 << 32 = 42949672960	UpdateMode:	dynamic	"
+	
+	ap.name2definition["processLimitationBatchSize"] = "	Name:	processLimitationBatchSize	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[0]	Comment:	process.Limitation.BatchSize. default: 0	UpdateMode:	dynamic	"
+	
+	ap.name2definition["processLimitationPartitionRows"] = "	Name:	processLimitationPartitionRows	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[42949672960]	Comment:	process.Limitation.PartitionRows. default: 10 << 32 = 42949672960	UpdateMode:	dynamic	"
 	
 }
 
@@ -272,6 +591,25 @@ func (ap *SystemVariables) LoadInitialValues()error{
 	
 		
 		
+			dumpdatabasechoices :=[]string {
+				
+				"default",
+					
+			}
+			if len(dumpdatabasechoices) != 0{
+				if err = ap.setDumpdatabase( dumpdatabasechoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","Dumpdatabase",err)
+				}
+			}else{
+				//empty string
+				if err = ap.setDumpdatabase( "" ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","Dumpdatabase",err)
+				}
+			}
+		
+	
+		
+		
 			portchoices :=[]int64 {
 				
 				6001,
@@ -310,6 +648,202 @@ func (ap *SystemVariables) LoadInitialValues()error{
 				if err = ap.setHost( "" ) ; err != nil{
 					return fmt.Errorf("set%s failed.error:%v","Host",err)
 				}
+			}
+		
+	
+		
+		
+			sendRowchoices :=[]bool {
+					
+			}
+			if len(sendRowchoices) != 0{
+				if err = ap.setSendRow( sendRowchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","SendRow",err)
+				}
+			}else{
+				
+					if err = ap.setSendRow( false ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","SendRow",err)
+					}	
+				
+			}
+		
+	
+		
+		
+			dumpEnvchoices :=[]bool {
+					
+			}
+			if len(dumpEnvchoices) != 0{
+				if err = ap.setDumpEnv( dumpEnvchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","DumpEnv",err)
+				}
+			}else{
+				
+					if err = ap.setDumpEnv( false ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","DumpEnv",err)
+					}	
+				
+			}
+		
+	
+		
+		
+			hostMmuLimitationchoices :=[]int64 {
+				
+				1099511627776,
+					
+			}
+			if len(hostMmuLimitationchoices) != 0{
+				if err = ap.setHostMmuLimitation( hostMmuLimitationchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","HostMmuLimitation",err)
+				}
+			}else{
+				
+					if err = ap.setHostMmuLimitation( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","HostMmuLimitation",err)
+					}
+				
+			}
+		
+	
+		
+		
+			guestMmuLimitationchoices :=[]int64 {
+				
+				1099511627776,
+					
+			}
+			if len(guestMmuLimitationchoices) != 0{
+				if err = ap.setGuestMmuLimitation( guestMmuLimitationchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","GuestMmuLimitation",err)
+				}
+			}else{
+				
+					if err = ap.setGuestMmuLimitation( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","GuestMmuLimitation",err)
+					}
+				
+			}
+		
+	
+		
+		
+			mempoolMaxSizechoices :=[]int64 {
+				
+				1099511627776,
+					
+			}
+			if len(mempoolMaxSizechoices) != 0{
+				if err = ap.setMempoolMaxSize( mempoolMaxSizechoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","MempoolMaxSize",err)
+				}
+			}else{
+				
+					if err = ap.setMempoolMaxSize( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","MempoolMaxSize",err)
+					}
+				
+			}
+		
+	
+		
+		
+			mempoolFactorchoices :=[]int64 {
+				
+				8,
+					
+			}
+			if len(mempoolFactorchoices) != 0{
+				if err = ap.setMempoolFactor( mempoolFactorchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","MempoolFactor",err)
+				}
+			}else{
+				
+					if err = ap.setMempoolFactor( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","MempoolFactor",err)
+					}
+				
+			}
+		
+	
+		
+		
+			processLimitationSizechoices :=[]int64 {
+				
+				42949672960,
+					
+			}
+			if len(processLimitationSizechoices) != 0{
+				if err = ap.setProcessLimitationSize( processLimitationSizechoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","ProcessLimitationSize",err)
+				}
+			}else{
+				
+					if err = ap.setProcessLimitationSize( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","ProcessLimitationSize",err)
+					}
+				
+			}
+		
+	
+		
+		
+			processLimitationBatchRowschoices :=[]int64 {
+				
+				42949672960,
+					
+			}
+			if len(processLimitationBatchRowschoices) != 0{
+				if err = ap.setProcessLimitationBatchRows( processLimitationBatchRowschoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchRows",err)
+				}
+			}else{
+				
+					if err = ap.setProcessLimitationBatchRows( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchRows",err)
+					}
+				
+			}
+		
+	
+		
+		
+			processLimitationBatchSizechoices :=[]int64 {
+				
+				0,
+					
+			}
+			if len(processLimitationBatchSizechoices) != 0{
+				if err = ap.setProcessLimitationBatchSize( processLimitationBatchSizechoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchSize",err)
+				}
+			}else{
+				
+					if err = ap.setProcessLimitationBatchSize( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchSize",err)
+					}
+				
+			}
+		
+	
+		
+		
+			processLimitationPartitionRowschoices :=[]int64 {
+				
+				42949672960,
+					
+			}
+			if len(processLimitationPartitionRowschoices) != 0{
+				if err = ap.setProcessLimitationPartitionRows( processLimitationPartitionRowschoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","ProcessLimitationPartitionRows",err)
+				}
+			}else{
+				
+					if err = ap.setProcessLimitationPartitionRows( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","ProcessLimitationPartitionRows",err)
+					}
+				
 			}
 		
 	
@@ -355,6 +889,15 @@ func (ap * SystemVariables ) GetDumppassword() string {
 }
 
 /**
+Get the value of the parameter dumpdatabase
+*/
+func (ap * SystemVariables ) GetDumpdatabase() string {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.dumpdatabase
+}
+
+/**
 Get the value of the parameter port
 */
 func (ap * SystemVariables ) GetPort() int64 {
@@ -370,6 +913,96 @@ func (ap * SystemVariables ) GetHost() string {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	return ap.host
+}
+
+/**
+Get the value of the parameter sendRow
+*/
+func (ap * SystemVariables ) GetSendRow() bool {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.sendRow
+}
+
+/**
+Get the value of the parameter dumpEnv
+*/
+func (ap * SystemVariables ) GetDumpEnv() bool {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.dumpEnv
+}
+
+/**
+Get the value of the parameter hostMmuLimitation
+*/
+func (ap * SystemVariables ) GetHostMmuLimitation() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.hostMmuLimitation
+}
+
+/**
+Get the value of the parameter guestMmuLimitation
+*/
+func (ap * SystemVariables ) GetGuestMmuLimitation() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.guestMmuLimitation
+}
+
+/**
+Get the value of the parameter mempoolMaxSize
+*/
+func (ap * SystemVariables ) GetMempoolMaxSize() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.mempoolMaxSize
+}
+
+/**
+Get the value of the parameter mempoolFactor
+*/
+func (ap * SystemVariables ) GetMempoolFactor() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.mempoolFactor
+}
+
+/**
+Get the value of the parameter processLimitationSize
+*/
+func (ap * SystemVariables ) GetProcessLimitationSize() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.processLimitationSize
+}
+
+/**
+Get the value of the parameter processLimitationBatchRows
+*/
+func (ap * SystemVariables ) GetProcessLimitationBatchRows() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.processLimitationBatchRows
+}
+
+/**
+Get the value of the parameter processLimitationBatchSize
+*/
+func (ap * SystemVariables ) GetProcessLimitationBatchSize() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.processLimitationBatchSize
+}
+
+/**
+Get the value of the parameter processLimitationPartitionRows
+*/
+func (ap * SystemVariables ) GetProcessLimitationPartitionRows() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.processLimitationPartitionRows
 }
 
 
@@ -393,7 +1026,106 @@ func (ap * SystemVariables ) SetRootpassword(value string)error {
 
 
 
+/**
+Set the value of the parameter dumpdatabase
+*/
+func (ap * SystemVariables ) SetDumpdatabase(value string)error {
+	return  ap.setDumpdatabase(value)
+}
 
+
+
+
+
+
+
+/**
+Set the value of the parameter sendRow
+*/
+func (ap * SystemVariables ) SetSendRow(value bool)error {
+	return  ap.setSendRow(value)
+}
+
+
+
+/**
+Set the value of the parameter dumpEnv
+*/
+func (ap * SystemVariables ) SetDumpEnv(value bool)error {
+	return  ap.setDumpEnv(value)
+}
+
+
+
+/**
+Set the value of the parameter hostMmuLimitation
+*/
+func (ap * SystemVariables ) SetHostMmuLimitation(value int64)error {
+	return  ap.setHostMmuLimitation(value)
+}
+
+
+
+/**
+Set the value of the parameter guestMmuLimitation
+*/
+func (ap * SystemVariables ) SetGuestMmuLimitation(value int64)error {
+	return  ap.setGuestMmuLimitation(value)
+}
+
+
+
+/**
+Set the value of the parameter mempoolMaxSize
+*/
+func (ap * SystemVariables ) SetMempoolMaxSize(value int64)error {
+	return  ap.setMempoolMaxSize(value)
+}
+
+
+
+/**
+Set the value of the parameter mempoolFactor
+*/
+func (ap * SystemVariables ) SetMempoolFactor(value int64)error {
+	return  ap.setMempoolFactor(value)
+}
+
+
+
+/**
+Set the value of the parameter processLimitationSize
+*/
+func (ap * SystemVariables ) SetProcessLimitationSize(value int64)error {
+	return  ap.setProcessLimitationSize(value)
+}
+
+
+
+/**
+Set the value of the parameter processLimitationBatchRows
+*/
+func (ap * SystemVariables ) SetProcessLimitationBatchRows(value int64)error {
+	return  ap.setProcessLimitationBatchRows(value)
+}
+
+
+
+/**
+Set the value of the parameter processLimitationBatchSize
+*/
+func (ap * SystemVariables ) SetProcessLimitationBatchSize(value int64)error {
+	return  ap.setProcessLimitationBatchSize(value)
+}
+
+
+
+/**
+Set the value of the parameter processLimitationPartitionRows
+*/
+func (ap * SystemVariables ) SetProcessLimitationPartitionRows(value int64)error {
+	return  ap.setProcessLimitationPartitionRows(value)
+}
 
 
 
@@ -513,6 +1245,34 @@ func (ap * SystemVariables ) setDumppassword(value string)error {
 }
 
 /**
+Set the value of the parameter dumpdatabase
+*/
+func (ap * SystemVariables ) setDumpdatabase(value string)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]string {
+				
+				"default",
+					
+			}
+			if len( choices ) != 0{
+				if !isInSlice(value, choices){
+					return fmt.Errorf("setDumpdatabase,the value %s is not in set %v",value,choices)
+				}
+			}//else means any string
+		
+
+	
+
+	ap.dumpdatabase = value
+	return nil
+}
+
+/**
 Set the value of the parameter port
 */
 func (ap * SystemVariables ) setPort(value int64)error {
@@ -572,6 +1332,282 @@ func (ap * SystemVariables ) setHost(value string)error {
 	return nil
 }
 
+/**
+Set the value of the parameter sendRow
+*/
+func (ap * SystemVariables ) setSendRow(value bool)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+		
+		
+			choices :=[]bool {
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceBool(value, choices){
+					return fmt.Errorf("setSendRow,the value %t is not in set %v",value,choices)
+				}
+			}//else means any bool value: true or false
+		
+
+	
+
+	ap.sendRow = value
+	return nil
+}
+
+/**
+Set the value of the parameter dumpEnv
+*/
+func (ap * SystemVariables ) setDumpEnv(value bool)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+		
+		
+			choices :=[]bool {
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceBool(value, choices){
+					return fmt.Errorf("setDumpEnv,the value %t is not in set %v",value,choices)
+				}
+			}//else means any bool value: true or false
+		
+
+	
+
+	ap.dumpEnv = value
+	return nil
+}
+
+/**
+Set the value of the parameter hostMmuLimitation
+*/
+func (ap * SystemVariables ) setHostMmuLimitation(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				1099511627776,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setHostMmuLimitation,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.hostMmuLimitation = value
+	return nil
+}
+
+/**
+Set the value of the parameter guestMmuLimitation
+*/
+func (ap * SystemVariables ) setGuestMmuLimitation(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				1099511627776,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setGuestMmuLimitation,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.guestMmuLimitation = value
+	return nil
+}
+
+/**
+Set the value of the parameter mempoolMaxSize
+*/
+func (ap * SystemVariables ) setMempoolMaxSize(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				1099511627776,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setMempoolMaxSize,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.mempoolMaxSize = value
+	return nil
+}
+
+/**
+Set the value of the parameter mempoolFactor
+*/
+func (ap * SystemVariables ) setMempoolFactor(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				8,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setMempoolFactor,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.mempoolFactor = value
+	return nil
+}
+
+/**
+Set the value of the parameter processLimitationSize
+*/
+func (ap * SystemVariables ) setProcessLimitationSize(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				42949672960,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setProcessLimitationSize,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.processLimitationSize = value
+	return nil
+}
+
+/**
+Set the value of the parameter processLimitationBatchRows
+*/
+func (ap * SystemVariables ) setProcessLimitationBatchRows(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				42949672960,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setProcessLimitationBatchRows,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.processLimitationBatchRows = value
+	return nil
+}
+
+/**
+Set the value of the parameter processLimitationBatchSize
+*/
+func (ap * SystemVariables ) setProcessLimitationBatchSize(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				0,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setProcessLimitationBatchSize,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.processLimitationBatchSize = value
+	return nil
+}
+
+/**
+Set the value of the parameter processLimitationPartitionRows
+*/
+func (ap * SystemVariables ) setProcessLimitationPartitionRows(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				42949672960,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setProcessLimitationPartitionRows,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.processLimitationPartitionRows = value
+	return nil
+}
+
 
 
 /**
@@ -603,7 +1639,51 @@ func (config *varsConfig) resetUpdatedFlags(){
 	
 	
 	
+		config.name2updatedFlags["dumpdatabase"] = false
 	
+	
+	
+	
+	
+	
+	
+		config.name2updatedFlags["sendRow"] = false
+	
+	
+	
+		config.name2updatedFlags["dumpEnv"] = false
+	
+	
+	
+		config.name2updatedFlags["hostMmuLimitation"] = false
+	
+	
+	
+		config.name2updatedFlags["guestMmuLimitation"] = false
+	
+	
+	
+		config.name2updatedFlags["mempoolMaxSize"] = false
+	
+	
+	
+		config.name2updatedFlags["mempoolFactor"] = false
+	
+	
+	
+		config.name2updatedFlags["processLimitationSize"] = false
+	
+	
+	
+		config.name2updatedFlags["processLimitationBatchRows"] = false
+	
+	
+	
+		config.name2updatedFlags["processLimitationBatchSize"] = false
+	
+	
+	
+		config.name2updatedFlags["processLimitationPartitionRows"] = false
 	
 	
 }
@@ -697,7 +1777,95 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	
 	
 	
+	if config.getUpdatedFlag("dumpdatabase"){
+		if err = ap.setDumpdatabase(config.Dumpdatabase); err != nil{
+			return fmt.Errorf("update parameter dumpdatabase failed.error:%v",err)
+		}
+	}
 	
+	
+	
+	
+	
+	
+	
+	if config.getUpdatedFlag("sendRow"){
+		if err = ap.setSendRow(config.SendRow); err != nil{
+			return fmt.Errorf("update parameter sendRow failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("dumpEnv"){
+		if err = ap.setDumpEnv(config.DumpEnv); err != nil{
+			return fmt.Errorf("update parameter dumpEnv failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("hostMmuLimitation"){
+		if err = ap.setHostMmuLimitation(config.HostMmuLimitation); err != nil{
+			return fmt.Errorf("update parameter hostMmuLimitation failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("guestMmuLimitation"){
+		if err = ap.setGuestMmuLimitation(config.GuestMmuLimitation); err != nil{
+			return fmt.Errorf("update parameter guestMmuLimitation failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("mempoolMaxSize"){
+		if err = ap.setMempoolMaxSize(config.MempoolMaxSize); err != nil{
+			return fmt.Errorf("update parameter mempoolMaxSize failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("mempoolFactor"){
+		if err = ap.setMempoolFactor(config.MempoolFactor); err != nil{
+			return fmt.Errorf("update parameter mempoolFactor failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("processLimitationSize"){
+		if err = ap.setProcessLimitationSize(config.ProcessLimitationSize); err != nil{
+			return fmt.Errorf("update parameter processLimitationSize failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("processLimitationBatchRows"){
+		if err = ap.setProcessLimitationBatchRows(config.ProcessLimitationBatchRows); err != nil{
+			return fmt.Errorf("update parameter processLimitationBatchRows failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("processLimitationBatchSize"){
+		if err = ap.setProcessLimitationBatchSize(config.ProcessLimitationBatchSize); err != nil{
+			return fmt.Errorf("update parameter processLimitationBatchSize failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("processLimitationPartitionRows"){
+		if err = ap.setProcessLimitationPartitionRows(config.ProcessLimitationPartitionRows); err != nil{
+			return fmt.Errorf("update parameter processLimitationPartitionRows failed.error:%v",err)
+		}
+	}
 	
 	
 	return nil

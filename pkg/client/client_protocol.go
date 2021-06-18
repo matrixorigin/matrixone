@@ -1,8 +1,10 @@
-package server
+package client
+
+import "sync"
 
 type Request struct {
 	//the command from the client
-	cmd int
+	Cmd int
 
 	//the data from the client
 	data interface{}
@@ -17,11 +19,11 @@ func (req *Request) SetData(data interface{}) {
 }
 
 func (req *Request) GetCmd() int {
-	return req.cmd
+	return req.Cmd
 }
 
 func (req *Request) SetCmd(cmd int) {
-	req.cmd = cmd
+	req.Cmd = cmd
 }
 
 type Response struct {
@@ -38,15 +40,24 @@ type Response struct {
 	data interface{}
 }
 
+func NewResponse(category,status,cmd int,d interface{})*Response{
+	return &Response{
+		category: category,
+		status:   status,
+		cmd:      cmd,
+		data:     d,
+	}
+}
+
 const (
 	// OK message
-	okResponse = iota
+	OkResponse = iota
 	// Error message
-	errorResponse
+	ErrorResponse
 	// EOF message
 	eofResponse
 	//result message
-	resultResponse
+	ResultResponse
 )
 
 func (resp *Response) GetData() interface{} {
@@ -91,9 +102,15 @@ type ClientProtocol interface {
 
 	//close the protocol layer
 	Close()
+
+	//set Routine
+	SetRoutine(Routine)
 }
 
 type ClientProtocolImpl struct{
+	//mutex
+	lock sync.Mutex
+
 	//io layer for the connection
 	io IOPackage
 
@@ -102,6 +119,9 @@ type ClientProtocolImpl struct{
 
 	//the id of the connection
 	connectionID uint32
+
+	//routine
+	routine Routine
 }
 
 func (cpi *ClientProtocolImpl) ConnectionID() uint32 {
@@ -114,4 +134,12 @@ func (cpi *ClientProtocolImpl) Peer() (string, string) {
 
 func (cpi *ClientProtocolImpl) Close() {
 	cpi.io.Close()
+}
+
+func (cpi *ClientProtocolImpl) SetRoutine(r Routine)  {
+	cpi.routine = r
+}
+
+func (cpi *ClientProtocolImpl) GetLock() sync.Locker {
+	return &cpi.lock
 }
