@@ -1,9 +1,8 @@
-package server
+package client
 
 import (
 	"fmt"
 	"math"
-	"matrixone/pkg/client"
 	"net"
 	"testing"
 )
@@ -206,9 +205,9 @@ func handshakeHandler(in net.Conn){
 		switch uint8(req.GetCmd()){
 		case COM_QUIT:
 			resp = &Response{
-			category: okResponse,
-			status: 0,
-			data:nil,
+			category: OkResponse,
+			status:   0,
+			data:     nil,
 			}
 			if err = mysql.SendResponse(resp); err != nil{
 				fmt.Printf("send response failed. error:%v",err)
@@ -218,18 +217,18 @@ func handshakeHandler(in net.Conn){
 			var query =string(req.GetData().([]byte))
 			fmt.Printf("query: %s \n",query)
 			resp = &Response{
-				category: okResponse,
-				status: 0,
-				data:nil,
+				category: OkResponse,
+				status:   0,
+				data:     nil,
 			}
 			if err = mysql.SendResponse(resp); err != nil{
 				fmt.Printf("send response failed. error:%v",err)
 				break
 			}
 		default:
-			fmt.Printf("unsupported command. 0x%x \n",req.cmd)
+			fmt.Printf("unsupported command. 0x%x \n",req.Cmd)
 		}
-		if uint8(req.cmd) == COM_QUIT{
+		if uint8(req.Cmd) == COM_QUIT{
 			break
 		}
 	}
@@ -242,8 +241,8 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	echoServer(handshakeHandler)
 }
 
-func makeMysqlTinyIntResultSet(unsigned bool)*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlTinyIntResultSet(unsigned bool)*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Tiny"
 	if unsigned{
@@ -252,10 +251,10 @@ func makeMysqlTinyIntResultSet(unsigned bool)*client.MysqlResultSet{
 		name = name + "Int"
 	}
 
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_TINY)
+	mysqlCol.SetColumnType(MYSQL_TYPE_TINY)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -282,12 +281,12 @@ func makeMysqlTinyIntResultSet(unsigned bool)*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlTinyResult(unsigned bool) *client.MysqlExecutionResult {
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlTinyIntResultSet(unsigned))
+func makeMysqlTinyResult(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlTinyIntResultSet(unsigned))
 }
 
-func makeMysqlShortResultSet(unsigned bool)*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlShortResultSet(unsigned bool)*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Short"
 	if unsigned{
@@ -295,10 +294,10 @@ func makeMysqlShortResultSet(unsigned bool)*client.MysqlResultSet{
 	}else{
 		name = name + "Int"
 	}
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_SHORT)
+	mysqlCol.SetColumnType(MYSQL_TYPE_SHORT)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -325,12 +324,12 @@ func makeMysqlShortResultSet(unsigned bool)*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlShortResult(unsigned bool) *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlShortResultSet(unsigned))
+func makeMysqlShortResult(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlShortResultSet(unsigned))
 }
 
-func makeMysqlLongResultSet(unsigned bool)*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlLongResultSet(unsigned bool)*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Long"
 	if unsigned{
@@ -338,10 +337,10 @@ func makeMysqlLongResultSet(unsigned bool)*client.MysqlResultSet{
 	}else{
 		name = name + "Int"
 	}
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_LONG)
+	mysqlCol.SetColumnType(MYSQL_TYPE_LONG)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -368,12 +367,12 @@ func makeMysqlLongResultSet(unsigned bool)*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlLongResult(unsigned bool) *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlLongResultSet(unsigned))
+func makeMysqlLongResult(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlLongResultSet(unsigned))
 }
 
-func makeMysqlLongLongResultSet(unsigned bool)*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlLongLongResultSet(unsigned bool)*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "LongLong"
 	if unsigned{
@@ -381,10 +380,10 @@ func makeMysqlLongLongResultSet(unsigned bool)*client.MysqlResultSet{
 	}else{
 		name = name + "Int"
 	}
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_LONGLONG)
+	mysqlCol.SetColumnType(MYSQL_TYPE_LONGLONG)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -411,12 +410,12 @@ func makeMysqlLongLongResultSet(unsigned bool)*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlLongLongResult(unsigned bool) *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlLongLongResultSet(unsigned))
+func makeMysqlLongLongResult(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlLongLongResultSet(unsigned))
 }
 
-func makeMysqlInt24ResultSet(unsigned bool)*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlInt24ResultSet(unsigned bool)*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Int24"
 	if unsigned{
@@ -424,10 +423,10 @@ func makeMysqlInt24ResultSet(unsigned bool)*client.MysqlResultSet{
 	}else{
 		name = name + "Int"
 	}
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_INT24)
+	mysqlCol.SetColumnType(MYSQL_TYPE_INT24)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -456,12 +455,12 @@ func makeMysqlInt24ResultSet(unsigned bool)*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlInt24Result(unsigned bool) *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlInt24ResultSet(unsigned))
+func makeMysqlInt24Result(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlInt24ResultSet(unsigned))
 }
 
-func makeMysqlYearResultSet(unsigned bool)*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlYearResultSet(unsigned bool)*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Year"
 	if unsigned{
@@ -469,10 +468,10 @@ func makeMysqlYearResultSet(unsigned bool)*client.MysqlResultSet{
 	}else{
 		name = name + "Int"
 	}
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_YEAR)
+	mysqlCol.SetColumnType(MYSQL_TYPE_YEAR)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -499,19 +498,19 @@ func makeMysqlYearResultSet(unsigned bool)*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlYearResult(unsigned bool) *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlYearResultSet(unsigned))
+func makeMysqlYearResult(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlYearResultSet(unsigned))
 }
 
-func makeMysqlVarcharResultSet()*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlVarcharResultSet()*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Varchar"
 
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_VARCHAR)
+	mysqlCol.SetColumnType(MYSQL_TYPE_VARCHAR)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -529,19 +528,19 @@ func makeMysqlVarcharResultSet()*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlVarcharResult() *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlVarcharResultSet())
+func makeMysqlVarcharResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlVarcharResultSet())
 }
 
-func makeMysqlVarStringResultSet()*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlVarStringResultSet()*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Varstring"
 
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
+	mysqlCol.SetColumnType(MYSQL_TYPE_VAR_STRING)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -559,19 +558,19 @@ func makeMysqlVarStringResultSet()*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlVarStringResult() *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlVarStringResultSet())
+func makeMysqlVarStringResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlVarStringResultSet())
 }
 
-func makeMysqlStringResultSet()*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlStringResultSet()*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "String"
 
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_STRING)
+	mysqlCol.SetColumnType(MYSQL_TYPE_STRING)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -589,19 +588,19 @@ func makeMysqlStringResultSet()*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlStringResult() *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlStringResultSet())
+func makeMysqlStringResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlStringResultSet())
 }
 
-func makeMysqlFloatResultSet()*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlFloatResultSet()*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Float"
 
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_FLOAT)
+	mysqlCol.SetColumnType(MYSQL_TYPE_FLOAT)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -619,19 +618,19 @@ func makeMysqlFloatResultSet()*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlFloatResult() *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlFloatResultSet())
+func makeMysqlFloatResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlFloatResultSet())
 }
 
-func makeMysqlDoubleResultSet()*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMysqlDoubleResultSet()*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Double"
 
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_DOUBLE)
+	mysqlCol.SetColumnType(MYSQL_TYPE_DOUBLE)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -649,20 +648,20 @@ func makeMysqlDoubleResultSet()*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysqlDoubleResult() *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMysqlDoubleResultSet())
+func makeMysqlDoubleResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlDoubleResultSet())
 }
 
-func make8ColumnsResultSet()*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func make8ColumnsResultSet()*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	var columnTypes = []uint8{
-		client.MYSQL_TYPE_TINY,
-		client.MYSQL_TYPE_SHORT,
-		client.MYSQL_TYPE_LONG,
-		client.MYSQL_TYPE_LONGLONG,
-		client.MYSQL_TYPE_VARCHAR,
-		client.MYSQL_TYPE_FLOAT}
+		MYSQL_TYPE_TINY,
+		MYSQL_TYPE_SHORT,
+		MYSQL_TYPE_LONG,
+		MYSQL_TYPE_LONGLONG,
+		MYSQL_TYPE_VARCHAR,
+		MYSQL_TYPE_FLOAT}
 
 	var names=[]string{
 		"Tiny",
@@ -682,7 +681,7 @@ func make8ColumnsResultSet()*client.MysqlResultSet{
 
 	for i,ct := range columnTypes{
 		name := names[i]
-		mysqlCol := new(client.MysqlColumn)
+		mysqlCol := new(MysqlColumn)
 		mysqlCol.SetName(name)
 		mysqlCol.SetOrgName(name + "OrgName")
 		mysqlCol.SetColumnType(ct)
@@ -701,17 +700,17 @@ func make8ColumnsResultSet()*client.MysqlResultSet{
 	return rs
 }
 
-func makeMysql8ColumnsResult() *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,make8ColumnsResultSet())
+func makeMysql8ColumnsResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,make8ColumnsResultSet())
 }
 
-func makeMoreThan16MBResultSet()*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func makeMoreThan16MBResultSet()*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	var columnTypes = []uint8{
-		client.MYSQL_TYPE_LONGLONG,
-		client.MYSQL_TYPE_DOUBLE,
-		client.MYSQL_TYPE_VARCHAR,
+		MYSQL_TYPE_LONGLONG,
+		MYSQL_TYPE_DOUBLE,
+		MYSQL_TYPE_VARCHAR,
 		}
 
 	var names=[]string{
@@ -724,7 +723,7 @@ func makeMoreThan16MBResultSet()*client.MysqlResultSet{
 
 	for i,ct := range columnTypes{
 		name := names[i]
-		mysqlCol := new(client.MysqlColumn)
+		mysqlCol := new(MysqlColumn)
 		mysqlCol.SetName(name)
 		mysqlCol.SetOrgName(name + "OrgName")
 		mysqlCol.SetColumnType(ct)
@@ -745,19 +744,19 @@ func makeMoreThan16MBResultSet()*client.MysqlResultSet{
 }
 
 //the size of resultset will be morethan 16MB
-func makeMoreThan16MBResult() *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,makeMoreThan16MBResultSet())
+func makeMoreThan16MBResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMoreThan16MBResultSet())
 }
 
-func make16MBRowResultSet()*client.MysqlResultSet{
-	var rs *client.MysqlResultSet = &client.MysqlResultSet{}
+func make16MBRowResultSet()*MysqlResultSet {
+	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Varstring"
 
-	mysqlCol := new(client.MysqlColumn)
+	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
+	mysqlCol.SetColumnType(MYSQL_TYPE_VAR_STRING)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -809,8 +808,8 @@ func make16MBRowResultSet()*client.MysqlResultSet{
 }
 
 //the size of resultset row will be more than 16MB
-func make16MBRowResult() *client.MysqlExecutionResult{
-	return client.NewMysqlExecutionResult(0,0,0,0,make16MBRowResultSet())
+func make16MBRowResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,make16MBRowResultSet())
 }
 
 func resultsetHandler(in net.Conn){
@@ -819,7 +818,7 @@ func resultsetHandler(in net.Conn){
 	defer io.Close()
 	fmt.Println("Server handling")
 	mysql := NewMysqlClientProtocol(io,0)
-	cmdExe := NewMysqlCmdExecutor()
+	cmdExe := &CmdExecutorImpl{}
 	rt := NewRoutine(mysql,cmdExe,NewSession())
 
 	if err = mysql.Handshake(); err!=nil{
@@ -842,9 +841,9 @@ func resultsetHandler(in net.Conn){
 		switch uint8(req.GetCmd()){
 		case COM_QUIT:
 			resp = &Response{
-				category: okResponse,
-				status: 0,
-				data:nil,
+				category: OkResponse,
+				status:   0,
+				data:     nil,
 			}
 			if err = mysql.SendResponse(resp); err != nil{
 				fmt.Printf("send response failed. error:%v",err)
@@ -856,128 +855,128 @@ func resultsetHandler(in net.Conn){
 			switch query {
 			case "tiny":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					cmd:      0,
 					data:     makeMysqlTinyResult(false),
 				}
 			case "tinyu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlTinyResult(true),
 				}
 			case "short":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlShortResult(false),
 				}
 			case "shortu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlShortResult(true),
 				}
 			case "long":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlLongResult(false),
 				}
 			case "longu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlLongResult(true),
 				}
 			case "longlong":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlLongLongResult(false),
 				}
 			case "longlongu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlLongLongResult(true),
 				}
 			case "int24":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlInt24Result(false),
 				}
 			case "int24u":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlInt24Result(true),
 				}
 			case "year":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlYearResult(false),
 				}
 			case "yearu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlYearResult(true),
 				}
 			case "varchar":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlVarcharResult(),
 				}
 			case "varstring":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlVarStringResult(),
 				}
 			case "string":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlStringResult(),
 				}
 			case "float":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlFloatResult(),
 				}
 			case "double":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlDoubleResult(),
 				}
 			case "8columns":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysql8ColumnsResult(),
 				}
 			case "16mb":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMoreThan16MBResult(),
 				}
 			case "16mbrow":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     make16MBRowResult(),
 				}
 			default:
 				resp = &Response{
-					category: okResponse,
+					category: OkResponse,
 					status:   0,
 					data:     nil,
 				}
@@ -989,9 +988,9 @@ func resultsetHandler(in net.Conn){
 			}
 
 		default:
-			fmt.Printf("unsupported command. 0x%x \n",req.cmd)
+			fmt.Printf("unsupported command. 0x%x \n",req.Cmd)
 		}
-		if uint8(req.cmd) == COM_QUIT{
+		if uint8(req.Cmd) == COM_QUIT{
 			break
 		}
 	}

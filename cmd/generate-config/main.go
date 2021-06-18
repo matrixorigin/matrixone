@@ -7,12 +7,19 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2{
-		fmt.Printf("usage: %s definitionFile \n",os.Args[0])
+	argCnt := len(os.Args)
+	if argCnt < 2 || argCnt > 3{
+		fmt.Printf("usage: %s definitionFile [outputDiretory]\n",os.Args[0])
 		return
 	}
 
-	gen := config.NewConfigurationFileGenerator(os.Args[1])
+	var gen config.ConfigurationFileGenerator
+	if argCnt == 2 {
+		gen = config.NewConfigurationFileGenerator(os.Args[1])
+	}else if argCnt == 3 {
+		gen = config.NewConfigurationFileGeneratorWithOutputDirectory(os.Args[1],os.Args[2])
+	}
+
 	if err := gen.Generate(); err!=nil {
 		fmt.Printf("generate system variables failed. error:%v \n",err)
 		os.Exit(-1)

@@ -1,4 +1,4 @@
-package server
+package client
 
 import (
 	"bufio"
@@ -8,8 +8,8 @@ import (
 	"net"
 )
 
-const defaultReadBufferSize int = 512
-const defaultWriteBufferSize int = 512
+const DefaultReadBufferSize int = 512
+const DefaultWriteBufferSize int = 512
 
 type IOPackage interface {
 	//read a packet with size from the connection
@@ -118,6 +118,7 @@ func (bio *IOPackageImpl) ReadPacket(count int) ([]byte, error) {
 
 func (bio *IOPackageImpl) WritePacket(data []byte) error {
 	if wCount,err :=bio.bufferWriter.Write(data); err != nil{
+		fmt.Printf("written %d , all is %d \n",wCount,len(data))
 		return err
 	}else if wCount != len(data){
 		return fmt.Errorf("write %d bytes,but succeeds %d bytes. error: %v",len(data), wCount,err)

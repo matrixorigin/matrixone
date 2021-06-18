@@ -41,18 +41,29 @@ func main() {
 		fmt.Printf("Usage: %s configFile\n", os.Args[0])
 		os.Exit(-1)
 	}
-
-	server.HostMmu = host.New(1 << 40)
-
-	//test storage engine
-	server.StorageEngine = memEngine.NewTestEngine()
-
-	//test cluster nodes
-	server.ClusterNodes = metadata.Nodes{}
-
 	flag.Parse()
+
+	//before anything using the configuration
 	config.GlobalSystemVariables.LoadInitialValues()
 	config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables)
+
+	fmt.Println("Shutdown The Server With Ctrl+C | Ctrl+\\.")
+
+	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
+
+	if config.GlobalSystemVariables.GetDumpEnv() {
+		//test storage engine
+		config.StorageEngine = memEngine.NewTestEngine()
+
+		//test cluster nodes
+		config.ClusterNodes = metadata.Nodes{}
+	}else{
+		//TODO:
+		config.StorageEngine = nil
+
+		config.ClusterNodes = nil
+	}
+
 	createServer()
 	registerSignalHandlers()
 	runServer()

@@ -1,4 +1,4 @@
-package server
+package client
 
 //handle the command from the client
 type CmdExecutor interface {
@@ -16,9 +16,9 @@ type CmdExecutorImpl struct {
 	//sql parser
 	//database engine
 
-	routine Routine
+	Routine Routine
 }
 
 func (cei *CmdExecutorImpl) SetRoutine(r Routine)  {
-	cei.routine = r
+	cei.Routine = r
 }

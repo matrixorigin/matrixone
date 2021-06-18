@@ -1,8 +1,10 @@
-package server
+package client
+
+import "sync"
 
 type Request struct {
 	//the command from the client
-	cmd int
+	Cmd int
 
 	//the data from the client
 	data interface{}
@@ -17,11 +19,11 @@ func (req *Request) SetData(data interface{}) {
 }
 
 func (req *Request) GetCmd() int {
-	return req.cmd
+	return req.Cmd
 }
 
 func (req *Request) SetCmd(cmd int) {
-	req.cmd = cmd
+	req.Cmd = cmd
 }
 
 type Response struct {
@@ -38,15 +40,24 @@ type Response struct {
 	data interface{}
 }
 
+func NewResponse(category,status,cmd int,d interface{})*Response{
+	return &Response{
+		category: category,
+		status:   status,
+		cmd:      cmd,
+		data:     d,
+	}
+}
+
 const (
 	// OK message
-	okResponse = iota
+	OkResponse = iota
 	// Error message
-	errorResponse
+	ErrorResponse
 	// EOF message
 	eofResponse
 	//result message
-	resultResponse
+	ResultResponse
 )
 
 func (resp *Response) GetData() interface{} {
@@ -97,6 +108,9 @@ type ClientProtocol interface {
 }
 
 type ClientProtocolImpl struct{
+	//mutex
+	lock sync.Mutex
+
 	//io layer for the connection
 	io IOPackage
 
@@ -124,4 +138,8 @@ func (cpi *ClientProtocolImpl) Close() {
 
 func (cpi *ClientProtocolImpl) SetRoutine(r Routine)  {
 	cpi.routine = r
+}
+
+func (cpi *ClientProtocolImpl) GetLock() sync.Locker {
+	return &cpi.lock
 }

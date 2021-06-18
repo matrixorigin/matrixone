@@ -1,0 +1,178 @@
+# do not change this part {
+parameter-struct-name = "SystemVariables"
+config-struct-name = "varsConfig"
+
+operation-file-name = "system_vars"
+
+config-file-name = "system_vars_config"
+# }
+
+[[parameter]]
+name = "rootname"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["root"]
+comment = "root name"
+update-mode = "fix"
+
+[[parameter]]
+name = "rootpassword"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = [""]
+comment = "root password"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "dumpuser"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["dump"]
+comment = "dump user name"
+update-mode = "fix"
+
+[[parameter]]
+name = "dumppassword"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["111"]
+comment = "dump user password"
+update-mode = "fix"
+
+[[parameter]]
+name = "dumpdatabase"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["default"]
+comment = "dump database name"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "port"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["6001"]
+comment = "port"
+update-mode = "fix"
+
+[[parameter]]
+name = "host"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["localhost","127.0.0.1","0.0.0.0"]
+comment = "listening ip"
+update-mode = "fix"
+
+[[parameter]]
+name = "sendRow"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["true"]
+comment = "send data row while producing"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "dumpEnv"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["true"]
+comment = "dump Environment with memEngine Null nodes for testing"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "hostMmuLimitation"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["1099511627776"]
+comment = "host mmu limitation. default: 1 << 40 = 1099511627776"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "guestMmuLimitation"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["1099511627776"]
+comment = "guest mmu limitation. default: 1 << 40 = 1099511627776"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "mempoolMaxSize"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["1099511627776"]
+comment = "mempool maxsize. default: 1 << 40 = 1099511627776"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "mempoolFactor"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["8"]
+comment = "mempool factor. default: 8"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "processLimitationSize"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["42949672960"]
+comment = "process.Limitation.Size. default: 10 << 32 = 42949672960"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "processLimitationBatchRows"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["42949672960"]
+comment = "process.Limitation.BatchRows. default: 10 << 32 = 42949672960"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "processLimitationBatchSize"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["0"]
+comment = "process.Limitation.BatchSize. default: 0"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "processLimitationPartitionRows"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["42949672960"]
+comment = "process.Limitation.PartitionRows. default: 10 << 32 = 42949672960"
+update-mode = "dynamic"

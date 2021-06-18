@@ -289,7 +289,16 @@ type MysqlResultSet struct {
 
 func (mrs *MysqlResultSet) AddColumn(column Column) uint64 {
 	mrs.Columns = append(mrs.Columns, column)
-	return mrs.GetColumnCount() - 1
+	ret := mrs.GetColumnCount() - 1
+
+	if mrs.Name2Index == nil {
+		mrs.Name2Index = make(map[string]uint64)
+	}
+
+	name := column.Name()
+	mrs.Name2Index[name] = ret
+
+	return ret
 }
 
 func (mrs *MysqlResultSet) GetColumnCount() uint64 {

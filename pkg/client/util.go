@@ -1,6 +1,11 @@
-package server
+package client
 
-import "sync/atomic"
+import (
+	"bytes"
+	"runtime"
+	"strconv"
+	"sync/atomic"
+)
 
 //a convenient data structure for closing
 type CloseFlag struct {
@@ -22,15 +27,15 @@ func (cf CloseFlag) Close() {
 	cf.setClosed(1)
 }
 
-func (cf CloseFlag) isClosed() bool {
+func (cf CloseFlag) IsClosed() bool {
 	return atomic.LoadUint32(&cf.closed) !=0
 }
 
-func (cf CloseFlag) isOpened() bool {
+func (cf CloseFlag) IsOpened() bool {
 	return atomic.LoadUint32(&cf.closed) == 0
 }
 
-func min(a int, b int) int{
+func Min(a int, b int) int{
 	if a < b {
 		return a
 	}else{
@@ -38,10 +43,20 @@ func min(a int, b int) int{
 	}
 }
 
-func max(a int, b int) int{
+func Max(a int, b int) int{
 	if a < b {
 		return b
 	}else{
 		return a
 	}
+}
+
+//get the outine id
+func GetRoutineId() uint64 {
+	data := make([]byte, 64)
+	data = data[:runtime.Stack(data, false)]
+	data = bytes.TrimPrefix(data, []byte("goroutine "))
+	data = data[:bytes.IndexByte(data, ' ')]
+	id, _ := strconv.ParseUint(string(data), 10, 64)
+	return id
 }

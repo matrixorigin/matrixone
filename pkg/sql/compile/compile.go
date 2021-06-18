@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"fmt"
 	"matrixone/pkg/client"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/build"
@@ -78,6 +79,106 @@ func (c *compile) Compile() ([]*Exec, error) {
 		}
 	}
 	return es, nil
+}
+
+//send the row to the client while the engine is producing the row.
+func (e *Exec) RunWhileSend(routine client.Routine) error {
+	var err error
+	ses := routine.GetSession()
+	proto := routine.GetClientProtocol().(*client.MysqlClientProtocol)
+
+	ses.Mrs = &client.MysqlResultSet{}
+
+	//send column count
+	colCnt := uint64(len(e.cs))
+	if err = proto.SendColumnCount(colCnt);err!=nil{
+		return err
+	}
+
+	//send columns
+	//column_count * Protocol::ColumnDefinition packets
+	cmd := ses.Cmd
+	for _, c := range e.cs {
+		col := new(client.MysqlColumn)
+		col.SetName(c.Name)
+		switch c.Typ {
+		case types.T_int8:
+			col.SetColumnType(client.MYSQL_TYPE_TINY)
+		case types.T_uint8:
+			col.SetColumnType(client.MYSQL_TYPE_TINY)
+			col.SetSigned(true)
+		case types.T_int16:
+			col.SetColumnType(client.MYSQL_TYPE_SHORT)
+		case types.T_uint16:
+			col.SetColumnType(client.MYSQL_TYPE_SHORT)
+			col.SetSigned(true)
+		case types.T_int32:
+			col.SetColumnType(client.MYSQL_TYPE_LONG)
+		case types.T_uint32:
+			col.SetColumnType(client.MYSQL_TYPE_LONG)
+			col.SetSigned(true)
+		case types.T_int64:
+			col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
+		case types.T_uint64:
+			col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
+			col.SetSigned(true)
+		case types.T_float32:
+			col.SetColumnType(client.MYSQL_TYPE_FLOAT)
+		case types.T_float64:
+			col.SetColumnType(client.MYSQL_TYPE_DOUBLE)
+		case types.T_char:
+			col.SetColumnType(client.MYSQL_TYPE_STRING)
+		case types.T_varchar:
+			col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
+		default:
+			return fmt.Errorf("RunWhileSend : unsupported type %d \n",c.Typ)
+		}
+
+		ses.Mrs.AddColumn(col)
+
+		/*
+		mysql COM_QUERY response: send the column definition per column
+		 */
+		if err = proto.SendColumnDefinition(col,cmd); err != nil {
+			return err
+		}
+	}
+
+	/*
+	mysql COM_QUERY response: End after the column has been sent.
+	send EOF packet
+	 */
+	if err = proto.SendEOFPacketIf(0,0); err != nil {
+		return err
+	}
+
+	//start execution pipeline
+	var wg sync.WaitGroup
+
+	for _, s := range e.ss {
+		switch s.Magic {
+		case Normal:
+			wg.Add(1)
+			go func() {
+				s.Run(e.e)
+				wg.Done()
+			}()
+		case Merge:
+		}
+	}
+
+	//blocked until the pipeline outputing
+	wg.Wait()
+
+	/*
+	mysql COM_QUERY response: End after the data row has been sent.
+	After all row data has been sent, it sends the EOF or OK packet.
+	 */
+	if err = proto.SendEOFOrOkPacket(0,0); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (e *Exec) Run(mrs *client.MysqlResultSet) error {

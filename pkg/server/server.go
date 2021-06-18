@@ -2,9 +2,7 @@ package server
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/mmu/host"
+	"matrixone/pkg/client"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -12,15 +10,6 @@ import (
 
 //ID counter for the new connection
 var initConnectionID uint32 = 1000
-
-//host memory
-var HostMmu *host.Mmu = nil
-
-//Storage Engine
-var StorageEngine engine.Engine
-
-//Cluster Nodes
-var ClusterNodes metadata.Nodes
 
 //the Server is an abstract of handling connections from clients repeatedly.
 type Server interface {
@@ -32,7 +21,7 @@ type Server interface {
 }
 
 type ServerImpl struct {
-	CloseFlag
+	client.CloseFlag
 
 	//mutex for shared data structure
 	rwlock sync.RWMutex
@@ -41,18 +30,19 @@ type ServerImpl struct {
 	listener net.Listener
 
 	//clients who has connected with server
-	clients map[uint64] Routine
+	clients map[uint64] client.Routine
 
 	//config
+	address string
 }
 
 //allocate resources for processing the connection
-func (si *ServerImpl) newConnection(cnn net.Conn) Routine {
-	var IO IOPackage = NewIOPackage(cnn,defaultReadBufferSize,defaultWriteBufferSize,true)
-	pro := NewMysqlClientProtocol(IO,nextConnectionID())
+func (si *ServerImpl) newConnection(cnn net.Conn) client.Routine {
+	var IO client.IOPackage = client.NewIOPackage(cnn,client.DefaultReadBufferSize,client.DefaultWriteBufferSize,true)
+	pro := client.NewMysqlClientProtocol(IO,nextConnectionID())
 	exe := NewMysqlCmdExecutor()
-	ses := NewSession()
-	rt := NewRoutine(pro,exe,ses)
+	ses := client.NewSession()
+	rt := client.NewRoutine(pro,exe,ses)
 
 	si.rwlock.Lock()
 	si.clients[uint64(rt.ID())] = rt
@@ -62,7 +52,7 @@ func (si *ServerImpl) newConnection(cnn net.Conn) Routine {
 }
 
 //handle the connection
-func (si *ServerImpl) handleConnection(routine Routine) {
+func (si *ServerImpl) handleConnection(routine client.Routine) {
 	routine.Loop()
 
 	//the routine has exited
@@ -72,7 +62,8 @@ func (si *ServerImpl) handleConnection(routine Routine) {
 }
 
 func (si *ServerImpl) Loop() {
-	for si.isOpened(){
+	fmt.Printf("Server Listening on : %s \n",si.address)
+	for si.IsOpened(){
 		cnn,err := si.listener.Accept()
 		if err != nil{
 			fmt.Printf("server listen failed. error:%v",err)
@@ -95,6 +86,10 @@ func (si *ServerImpl) Quit() {
 			si.listener = nil
 		}
 	}
+
+	for _,client := range si.clients {
+		client.Quit()
+	}
 }
 
 func nextConnectionID()uint32{
@@ -104,7 +99,8 @@ func nextConnectionID()uint32{
 func NewServer(address string)Server{
 	var err error
 	svr := &ServerImpl{
-		clients : make(map[uint64]Routine),
+		clients : make(map[uint64]client.Routine),
+		address: address,
 	}
 
 	if svr.listener,err = net.Listen("tcp",address);err!=nil{

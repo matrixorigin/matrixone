@@ -3,12 +3,13 @@ package server
 import (
 	"fmt"
 	"matrixone/pkg/client"
+	"matrixone/pkg/config"
 	"matrixone/pkg/sql/compile"
 	"matrixone/pkg/vm/process"
 )
 
 type MysqlCmdExecutor struct {
-	CmdExecutorImpl
+	client.CmdExecutorImpl
 
 	//the count of sql has been processed
 	sqlCount uint64
@@ -20,7 +21,7 @@ func (mce *MysqlCmdExecutor) getNextProcessId()string{
 	temporary method:
 	routineId + sqlCount
 	 */
-	routineId := mce.routine.ID()
+	routineId := mce.Routine.ID()
 	return fmt.Sprintf("%d%d",routineId,mce.sqlCount)
 }
 
@@ -30,39 +31,42 @@ func (mce *MysqlCmdExecutor) addSqlCount(a uint64)  {
 
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
-	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol()
+	ses := mce.Routine.GetSession()
+	proto := mce.Routine.GetClientProtocol().(*client.MysqlClientProtocol)
 
-	proc := process.New(ses.guestMmu, ses.mempool)
+	proc := process.New(ses.GuestMmu, ses.Mempool)
 	proc.Id = mce.getNextProcessId()
-	proc.Lim.Size = 10 << 32
-	proc.Lim.BatchRows = 10 << 32
-	proc.Lim.PartitionRows = 10 << 32
+	proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
+	proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
+	proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
 
-	comp := compile.New(ses.dbname, sql, StorageEngine, ClusterNodes, proc)
+	comp := compile.New(ses.Dbname, sql, config.StorageEngine, config.ClusterNodes, proc)
 	execs, err := comp.Compile()
 	if err != nil {
 		return err
 	}
 
+	var choose bool = config.GlobalSystemVariables.GetSendRow()
+
 	for _, exec := range execs {
-		mrs := new(client.MysqlResultSet)
-		if er := exec.Run(mrs); er != nil {
-			return er
-		}
+		if choose {
+			client.Rt = mce.Routine
+			if er := exec.RunWhileSend(mce.Routine); er != nil {
+				return er
+			}
+		}else{
+			mrs := new(client.MysqlResultSet)
+			if er := exec.Run(mrs); er != nil {
+				return er
+			}
 
-		mer := client.NewMysqlExecutionResult(0,0,0,0,mrs)
-		fmt.Printf("row count %d col count %d\n",mrs.GetRowCount(),mrs.GetColumnCount())
-		resp := &Response{
-			category: resultResponse,
-			status: 0,
-			cmd:int(COM_QUERY),
-			data:mer,
-		}
+			mer := client.NewMysqlExecutionResult(0,0,0,0,mrs)
+			resp := client.NewResponse(client.ResultResponse,0,int(client.COM_QUERY),mer)
 
-		if err = proto.SendResponse(resp);err != nil{
-			return fmt.Errorf("routine send response failed. error:%v ",err)
+			if err = proto.SendResponse(resp);err != nil{
+				return fmt.Errorf("routine send response failed. error:%v ",err)
+			}
 		}
 	}
 
@@ -70,18 +74,18 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 }
 
 //the server execute the commands from the client following the mysql's routine
-func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
-	var resp *Response = nil
+func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response, error) {
+	var resp *client.Response = nil
 	switch uint8(req.GetCmd()){
-	case COM_QUIT:
-		resp = &Response{
-			category: okResponse,
-			status: 0,
-			cmd:int(COM_QUIT),
-			data:nil,
-		}
+	case client.COM_QUIT:
+		resp = client.NewResponse(
+			client.OkResponse,
+			0,
+			int(client.COM_QUIT),
+			nil,
+		)
 		return resp,nil
-	case COM_QUERY:
+	case client.COM_QUERY:
 		var query =string(req.GetData().([]byte))
 
 		mce.addSqlCount(1)
@@ -89,39 +93,40 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 		fmt.Printf("query:%s \n",query)
 
 		err := mce.doComQuery(query)
+
 		if err != nil{
-			resp = &Response{
-				category: errorResponse,
-				status: 0,
-				cmd:int(COM_QUERY),
-				data:err,
-			}
+			resp = client.NewResponse(
+				client.ErrorResponse,
+				0,
+				int(client.COM_QUERY),
+				err,
+			)
 		}
 		return resp,nil
-	case COM_INIT_DB:
+	case client.COM_INIT_DB:
 
 		var dbname =string(req.GetData().([]byte))
-		ses := mce.routine.GetSession()
-		oldname := ses.dbname
-		ses.dbname = dbname
+		ses := mce.Routine.GetSession()
+		oldname := ses.Dbname
+		ses.Dbname = dbname
 
-		fmt.Printf("user %s change databse from [%s] to [%s]\n",ses.user,oldname,ses.dbname)
+		fmt.Printf("user %s change databse from [%s] to [%s]\n",ses.User,oldname,ses.Dbname)
 
-		resp = &Response{
-			category: okResponse,
-			status: 0,
-			cmd:int(COM_INIT_DB),
-			data:nil,
-		}
+		resp = client.NewResponse(
+			client.OkResponse,
+			0,
+			int(client.COM_INIT_DB),
+			nil,
+		)
 		return resp,nil
 	default:
-		err := fmt.Errorf("unsupported command. 0x%x \n",req.cmd)
-		resp = &Response{
-			category: errorResponse,
-			status: 0,
-			cmd: req.cmd,
-			data: err,
-		}
+		err := fmt.Errorf("unsupported command. 0x%x \n",req.Cmd)
+		resp = client.NewResponse(
+			client.ErrorResponse,
+			0,
+			req.Cmd,
+			err,
+		)
 	}
 	return resp,nil
 }
