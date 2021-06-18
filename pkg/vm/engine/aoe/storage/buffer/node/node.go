@@ -11,7 +11,7 @@ var (
 	_ iface.INodeBuffer = (*NodeBuffer)(nil)
 )
 
-func NewNodeBuffer(id uint64, node *buf.Node) iface.INodeBuffer {
+func NewNodeBuffer(id uint64, node buf.IMemoryNode) iface.INodeBuffer {
 	if node == nil {
 		return nil
 	}
@@ -20,14 +20,9 @@ func NewNodeBuffer(id uint64, node *buf.Node) iface.INodeBuffer {
 		IBuffer: ibuf,
 		ID:      id,
 	}
-	// nb.IBuffer.(*buf.Buffer).Type = buf.BLOCK_BUFFER
 	return nb
 }
 
 func (nb *NodeBuffer) GetID() uint64 {
 	return nb.ID
 }
-
-// func (nb *NodeBuffer) GetType() iface.BufferType {
-// 	return nb.Type
-// }

@@ -21,13 +21,14 @@ func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
 		state = nif.NODE_LOADED
 	}
 	handle := &NodeHandle{
-		ID:        ctx.ID,
-		Buff:      ctx.Buff,
-		Capacity:  size,
-		State:     state,
-		RTState:   nif.NODE_RT_RUNNING,
-		Manager:   ctx.Manager,
-		Spillable: ctx.Spillable,
+		ID:          ctx.ID,
+		Buff:        ctx.Buff,
+		Capacity:    size,
+		State:       state,
+		RTState:     nif.NODE_RT_RUNNING,
+		Manager:     ctx.Manager,
+		Spillable:   ctx.Spillable,
+		Constructor: ctx.Constructor,
 	}
 
 	c := context.TODO()
@@ -71,6 +72,10 @@ func (h *NodeHandle) Unload() {
 	h.Buff = nil
 	nif.AtomicStoreState(&(h.State), nif.NODE_UNLOAD)
 	// log.Infof("Unload %s", h.ID.String())
+}
+
+func (h *NodeHandle) GetNodeCreator() buf.MemoryNodeConstructor {
+	return h.Constructor
 }
 
 func (h *NodeHandle) GetCapacity() uint64 {

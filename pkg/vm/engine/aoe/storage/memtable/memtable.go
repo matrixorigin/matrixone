@@ -2,9 +2,9 @@ package memtable
 
 import (
 	"context"
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
+	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
@@ -16,6 +16,8 @@ import (
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type MemTable struct {
@@ -49,7 +51,7 @@ func NewMemTable(tableData table.ITableData, colTypes []types.Type, columnBlocks
 	}
 	var vectors []vector.Vector
 	for idx, blk := range columnBlocks {
-		vec := vector.NewStdVector(colTypes[idx], blk.GetPartRoot().GetBuf())
+		vec := vector.NewStdVector(colTypes[idx], blk.GetPartRoot().GetDataNode().(*buf.RawMemoryNode).Data)
 		vectors = append(vectors, vec)
 	}
 

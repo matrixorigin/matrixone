@@ -67,7 +67,6 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 			IndexHolder: indexHolder,
 		},
 	}
-	// seg.Append(blk.Ref())
 	return blk.Ref()
 }
 

@@ -20,7 +20,7 @@ type BlockFile struct {
 	Meta  *FileMeta
 }
 
-func NewBlockFile(dirname string, id common.ID) *BlockFile {
+func NewBlockFile(dirname string, id common.ID) IBlockFile {
 	bf := &BlockFile{
 		Parts: make(map[Key]*base.Pointer),
 		ID:    id,
@@ -53,6 +53,10 @@ func (bf *BlockFile) Destory() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+func (bf *BlockFile) GetIndexMeta() *base.IndexesMeta {
+	return bf.Meta.Indexes
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {

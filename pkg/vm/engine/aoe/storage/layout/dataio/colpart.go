@@ -15,6 +15,14 @@ func (cpf *ColPartFile) Read(buf []byte) (n int, err error) {
 	return len(buf), nil
 }
 
+func (cpf *ColPartFile) Ref() {
+	cpf.SegmentFile.RefBlock(cpf.ID.AsBlockID())
+}
+
+func (cpf *ColPartFile) Unref() {
+	cpf.SegmentFile.UnrefBlock(cpf.ID.AsBlockID())
+}
+
 type MockColPartFile struct {
 }
 
