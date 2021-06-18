@@ -9,7 +9,7 @@ import (
 type BlockHolder struct {
 	ID uint64
 	sync.RWMutex
-	Indexes map[string]Index
+	Indexes []*IndexInfo
 	Type    base.BlockType
 }
 
@@ -18,7 +18,7 @@ func NewBlockHolder(id uint64, t base.BlockType) *BlockHolder {
 		ID:   id,
 		Type: t,
 	}
-	holder.Indexes = make(map[string]Index)
+	holder.Indexes = make([]*IndexInfo, 0)
 	return holder
 }
 

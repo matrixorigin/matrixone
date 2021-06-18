@@ -26,4 +26,6 @@ type BufferManager struct {
 	Flusher         iw.IOpWorker
 	NextID          uint64
 	NextTransientID uint64
+	EvictTimes      int64
+	LoadTimes       int64
 }

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"github.com/panjf2000/ants/v2"
 	"math/rand"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -28,7 +29,7 @@ func initDB() *DB {
 	cfg := &md.Configuration{
 		Dir:              TEST_DB_DIR,
 		SegmentMaxBlocks: 2,
-		BlockMaxRows:     100,
+		BlockMaxRows:     20000,
 	}
 	opts := &e.Options{}
 	opts.Meta.Conf = cfg
@@ -159,7 +160,7 @@ func TestAppend(t *testing.T) {
 	tbl, err := dbi.store.DataTables.GetTable(tid)
 	assert.Nil(t, err)
 	t.Log(tbl.GetCollumn(0).ToString(1000))
-	t.Log(tbl.GetIndexHolder().String())
+	// t.Log(tbl.GetIndexHolder().String())
 	dbi.Close()
 }
 
@@ -184,8 +185,11 @@ func TestConcurrency(t *testing.T) {
 	insertCh := make(chan *InsertReq)
 	searchCh := make(chan *e.IterOptions)
 
+	p, _ := ants.NewPool(40)
+
 	reqCtx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
+	var searchWg sync.WaitGroup
 	wg.Add(1)
 	go func(ctx context.Context) {
 		defer wg.Done()
@@ -194,9 +198,8 @@ func TestConcurrency(t *testing.T) {
 			case <-ctx.Done():
 				return
 			case req := <-searchCh:
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				f := func() {
+					defer searchWg.Done()
 					{
 						segIt, err := dbi.NewSegmentIter(req)
 						assert.Nil(t, err)
@@ -223,10 +226,9 @@ func TestConcurrency(t *testing.T) {
 							segIt.Next()
 						}
 						segIt.Close()
-						// t.Logf("segCnt = %d", segCnt)
-						// t.Logf("blkCnt = %d", blkCnt)
 					}
-				}()
+				}
+				p.Submit(f)
 			case req := <-insertCh:
 				wg.Add(1)
 				go func() {
@@ -261,18 +263,20 @@ func TestConcurrency(t *testing.T) {
 	wg2.Add(1)
 	go func() {
 		defer wg2.Done()
-		reqCnt := rand.Intn(100) + 100
+		reqCnt := 20000
 		for i := 0; i < reqCnt; i++ {
 			searchReq := &e.IterOptions{
 				TableName: schema.Name,
 				All:       true,
 				ColIdxes:  cols,
 			}
+			searchWg.Add(1)
 			searchCh <- searchReq
 		}
 	}()
 
 	wg2.Wait()
+	searchWg.Wait()
 	cancel()
 	wg.Wait()
 	opts := &e.IterOptions{
@@ -281,6 +285,7 @@ func TestConcurrency(t *testing.T) {
 		ColIdxes:  cols,
 	}
 	time.Sleep(time.Duration(10) * time.Millisecond)
+	now := time.Now()
 	segIt, err := dbi.NewSegmentIter(opts)
 	segCnt := 0
 	tblkCnt := 0
@@ -315,7 +320,8 @@ func TestConcurrency(t *testing.T) {
 	}
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	blkIt.Close()
-	time.Sleep(time.Duration(80) * time.Millisecond)
+	t.Logf("Takes %v", time.Since(now))
+	time.Sleep(time.Duration(100) * time.Millisecond)
 
 	t.Log(dbi.WorkersStatsString())
 	t.Log(dbi.MTBufMgr.String())

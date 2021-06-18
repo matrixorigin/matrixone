@@ -15,7 +15,6 @@ import (
 
 var (
 	_                  mgrif.IBufferManager = (*BufferManager)(nil)
-	evictTimes                              = int64(0)
 	TRANSIENT_START_ID                      = ^(uint64(0)) / 2
 )
 
@@ -41,7 +40,8 @@ func (mgr *BufferManager) NodeCount() int {
 func (mgr *BufferManager) String() string {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	s := fmt.Sprintf("BMgr[Cap:%d, Usage:%d, Nodes:%d, EvictTimes: %d]:\n", mgr.GetCapacity(), mgr.GetUsage(), len(mgr.Nodes), atomic.LoadInt64(&evictTimes))
+	s := fmt.Sprintf("BMgr[Cap:%d, Usage:%d, Nodes:%d, LoadTimes:%d, EvictTimes:%d]:\n", mgr.GetCapacity(), mgr.GetUsage(),
+		len(mgr.Nodes), atomic.LoadInt64(&mgr.LoadTimes), atomic.LoadInt64(&mgr.EvictTimes))
 	for _, node := range mgr.Nodes {
 		s = fmt.Sprintf("%s\n\t%d | %s | Cap: %d ", s, node.GetID(), nif.NodeStateString(mgr.Nodes[node.GetID()].GetState()), mgr.Nodes[node.GetID()].GetCapacity())
 	}
@@ -79,23 +79,24 @@ func (mgr *BufferManager) GetNextTransientID() uint64 {
 	return atomic.AddUint64(&mgr.NextTransientID, uint64(1)) - 1
 }
 
-func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool) nif.INodeHandle {
-	pNode := mgr.makePoolNode(capacity)
+func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
+	pNode := mgr.makePoolNode(capacity, constructor)
 	if pNode == nil {
 		return nil
 	}
 	id := mgr.GetNextTransientID()
 	ctx := node.NodeHandleCtx{
-		ID:        id,
-		Manager:   mgr,
-		Buff:      node.NewNodeBuffer(id, pNode),
-		Spillable: spillable,
+		ID:          id,
+		Manager:     mgr,
+		Buff:        node.NewNodeBuffer(id, pNode),
+		Spillable:   spillable,
+		Constructor: constructor,
 	}
 	handle := node.NewNodeHandle(&ctx)
 	return handle
 }
 
-func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64) nif.INodeHandle {
+func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
 	// log.Infof("RegisterSpillableNode %s", node_id.String())
 	{
 		mgr.RLock()
@@ -109,15 +110,16 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64)
 		mgr.RUnlock()
 	}
 
-	pNode := mgr.makePoolNode(capacity)
+	pNode := mgr.makePoolNode(capacity, constructor)
 	if pNode == nil {
 		return nil
 	}
 	ctx := node.NodeHandleCtx{
-		ID:        node_id,
-		Manager:   mgr,
-		Buff:      node.NewNodeBuffer(node_id, pNode),
-		Spillable: true,
+		ID:          node_id,
+		Manager:     mgr,
+		Buff:        node.NewNodeBuffer(node_id, pNode),
+		Spillable:   true,
+		Constructor: constructor,
 	}
 	handle := node.NewNodeHandle(&ctx)
 
@@ -126,7 +128,7 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64)
 	h, ok := mgr.Nodes[node_id]
 	if ok {
 		if !h.IsClosed() {
-			go func() { mgr.FreeNode(pNode) }()
+			go func() { pNode.FreeMemory() }()
 			return h
 		}
 	}
@@ -135,7 +137,7 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64)
 	return handle
 }
 
-func (mgr *BufferManager) RegisterNode(capacity uint64, node_id uint64, reader io.Reader) nif.INodeHandle {
+func (mgr *BufferManager) RegisterNode(capacity uint64, node_id uint64, reader io.Reader, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
 	mgr.Lock()
 	defer mgr.Unlock()
 	// log.Infof("RegisterNode %s", node_id.String())
@@ -147,11 +149,12 @@ func (mgr *BufferManager) RegisterNode(capacity uint64, node_id uint64, reader i
 		}
 	}
 	ctx := node.NodeHandleCtx{
-		ID:        node_id,
-		Manager:   mgr,
-		Size:      capacity,
-		Spillable: false,
-		Reader:    reader,
+		ID:          node_id,
+		Manager:     mgr,
+		Size:        capacity,
+		Spillable:   false,
+		Reader:      reader,
+		Constructor: constructor,
 	}
 	handle = node.NewNodeHandle(&ctx)
 	mgr.Nodes[node_id] = handle
@@ -185,14 +188,14 @@ func (mgr *BufferManager) Unpin(handle nif.INodeHandle) {
 		panic("logic error")
 	}
 	if !handle.HasRef() {
-		atomic.AddInt64(&evictTimes, int64(1))
+		atomic.AddInt64(&mgr.EvictTimes, int64(1))
 		evict_node := &EvictNode{Handle: handle, Iter: handle.IncIteration()}
 		mgr.EvictHolder.Enqueue(evict_node)
 	}
 }
 
-func (mgr *BufferManager) makePoolNode(capacity uint64) *buf.Node {
-	node := mgr.MakeNode(capacity)
+func (mgr *BufferManager) makePoolNode(capacity uint64, constructor buf.MemoryNodeConstructor) buf.IMemoryNode {
+	node := mgr.Alloc(capacity, constructor)
 	if node != nil {
 		return node
 	}
@@ -225,7 +228,7 @@ func (mgr *BufferManager) makePoolNode(capacity uint64) *buf.Node {
 			evict_node.Handle.Unload()
 			evict_node.Handle.Unlock()
 		}
-		node = mgr.MakeNode(capacity)
+		node = mgr.Alloc(capacity, constructor)
 	}
 	return node
 }
@@ -234,7 +237,7 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 	handle.Lock()
 	defer handle.Unlock()
 	if handle.PrepareLoad() {
-		n := mgr.makePoolNode(handle.GetCapacity())
+		n := mgr.makePoolNode(handle.GetCapacity(), handle.GetNodeCreator())
 		if n == nil {
 			handle.RollbackLoad()
 			// log.Warnf("Cannot makeSpace(%d,%d)", handle.GetCapacity(), mgr.GetCapacity())
@@ -246,6 +249,7 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 			handle.RollbackLoad()
 			panic(err.Error())
 		}
+		atomic.AddInt64(&mgr.LoadTimes, int64(1))
 	}
 	handle.Ref()
 	return handle.MakeHandle()

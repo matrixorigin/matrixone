@@ -1,6 +1,16 @@
 package base
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+)
+
+type IVirtaulFile interface {
+	io.Reader
+	// io.Writer
+	Ref()
+	Unref()
+}
 
 type Pointer struct {
 	Offset int64

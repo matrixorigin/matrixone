@@ -10,6 +10,7 @@ require (
 	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.2.0
+	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pilosa/pilosa v1.4.0
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
