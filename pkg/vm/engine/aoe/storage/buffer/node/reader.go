@@ -66,7 +66,7 @@ type NodeReader struct {
 func (nr *NodeReader) Load() (err error) {
 	node := nr.Handle.GetBuffer().GetDataNode()
 	if nr.Reader != nil {
-		nr.Reader.Read(node.Data)
+		node.ReadFrom(nr.Reader)
 		return nil
 	}
 
@@ -83,7 +83,7 @@ func (nr *NodeReader) Load() (err error) {
 	if err != nil {
 		return err
 	}
-	_, err = w.Read(node.Data)
+	_, err = node.ReadFrom(w)
 	if err != nil {
 		return err
 	}

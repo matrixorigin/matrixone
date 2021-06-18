@@ -14,8 +14,9 @@ import (
 
 func NewSortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 	sf := &SortedSegmentFile{
-		Parts: make(map[Key]*base.Pointer),
-		ID:    id,
+		Parts:      make(map[Key]*base.Pointer),
+		ID:         id,
+		BlocksMeta: make(map[common.ID]*FileMeta),
 	}
 
 	name := e.MakeFilename(dirname, e.FTSegment, id.ToSegmentFileName(), false)
@@ -37,11 +38,21 @@ type SortedSegmentFile struct {
 	sync.RWMutex
 	ID common.ID
 	os.File
-	Refs  int32
-	Parts map[Key]*base.Pointer
+	Refs       int32
+	Parts      map[Key]*base.Pointer
+	Meta       *FileMeta
+	BlocksMeta map[common.ID]*FileMeta
 }
 
-func (sf *SortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
+func (sf *SortedSegmentFile) MakeVirtualSegmentIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+	vf := &EmbbedIndexFile{
+		SegmentFile: sf,
+		Meta:        meta,
+	}
+	return vf
+}
+
+func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
 	cpf := &ColPartFile{
 		ID:          id,
 		SegmentFile: sf,
@@ -49,31 +60,18 @@ func (sf *SortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
 	return cpf
 }
 
-func (sf *SortedSegmentFile) RefIndex() {
+func (sf *SortedSegmentFile) Ref() {
 	atomic.AddInt32(&sf.Refs, int32(1))
 }
 
-func (sf *SortedSegmentFile) UnrefIndex() {
+func (sf *SortedSegmentFile) Unref() {
 	v := atomic.AddInt32(&sf.Refs, int32(-1))
-	if v == int32(0) {
-		sf.Destory()
-	}
 	if v < int32(0) {
 		panic("logic error")
 	}
-}
-
-func (sf *SortedSegmentFile) RefBlockIndex(id common.ID) {
-	atomic.AddInt32(&sf.Refs, int32(1))
-}
-
-func (sf *SortedSegmentFile) UnrefBlockIndex(id common.ID) {
-	v := atomic.AddInt32(&sf.Refs, int32(-1))
 	if v == int32(0) {
+		sf.Close()
 		sf.Destory()
-	}
-	if v < int32(0) {
-		panic("logic error")
 	}
 }
 
@@ -93,6 +91,18 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 
 func (sf *SortedSegmentFile) initPointers() {
 	// TODO
+}
+
+func (sf *SortedSegmentFile) GetIndexMeta() *base.IndexesMeta {
+	return sf.Meta.Indexes
+}
+
+func (sf *SortedSegmentFile) GetBlockIndexMeta(id common.ID) *base.IndexesMeta {
+	blkMeta := sf.BlocksMeta[id]
+	if blkMeta == nil {
+		return nil
+	}
+	return blkMeta.Indexes
 }
 
 func (sf *SortedSegmentFile) Destory() {

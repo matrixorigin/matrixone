@@ -2,17 +2,25 @@ package index
 
 import (
 	"bytes"
+	"io"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
+	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
-// TODO: Just for temp test
+// TODO: Just for temp test, rework later
+func ZoneMapIndexConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+	return NewZoneMapEmptyNode(capacity, freeFunc)
+}
+
 type ZoneMapIndex struct {
-	T    types.Type
-	MinV interface{}
-	MaxV interface{}
-	Col  int16
+	T        types.Type
+	MinV     interface{}
+	MaxV     interface{}
+	Col      int16
+	FreeFunc buf.MemoryFreeFunc
+	Capacity uint64
 }
 
 func NewZoneMap(t types.Type, minv, maxv interface{}, colIdx int16) Index {
@@ -22,6 +30,49 @@ func NewZoneMap(t types.Type, minv, maxv interface{}, colIdx int16) Index {
 		MaxV: maxv,
 		Col:  colIdx,
 	}
+}
+
+func NewZoneMapEmptyNode(capacity uint64, freeFunc buf.MemoryFreeFunc) Index {
+	return &ZoneMapIndex{
+		Capacity: capacity,
+		FreeFunc: freeFunc,
+	}
+}
+
+func (i *ZoneMapIndex) FreeMemory() {
+	if i.FreeFunc != nil {
+		i.FreeFunc(i)
+	}
+}
+
+func (i *ZoneMapIndex) GetMemorySize() uint64 {
+	return i.Capacity
+}
+
+func (i *ZoneMapIndex) GetMemoryCapacity() uint64 {
+	return i.Capacity
+}
+
+func (i *ZoneMapIndex) Reset() {
+}
+
+func (i *ZoneMapIndex) ReadFrom(r io.Reader) (n int64, err error) {
+	buf := make([]byte, i.Capacity)
+	nr, err := r.Read(buf)
+	if err != nil {
+		return int64(nr), err
+	}
+	err = i.Unmarshall(buf)
+	return int64(nr), err
+}
+
+func (i *ZoneMapIndex) WriteTo(w io.Writer) (n int64, err error) {
+	buf, err := i.Marshall()
+	if err != nil {
+		return n, err
+	}
+	nw, err := w.Write(buf)
+	return int64(nw), err
 }
 
 func (i *ZoneMapIndex) Unmarshall(data []byte) error {

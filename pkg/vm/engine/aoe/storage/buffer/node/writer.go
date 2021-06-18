@@ -71,7 +71,7 @@ func (sw *NodeWriter) Flush() (err error) {
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(node.Data)
+	_, err = node.WriteTo(w)
 	if err != nil {
 		return err
 	}

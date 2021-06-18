@@ -10,7 +10,7 @@ import (
 type UnsortedSegmentFile struct {
 	sync.RWMutex
 	ID     common.ID
-	Blocks map[common.ID]*BlockFile
+	Blocks map[common.ID]IBlockFile
 	Dir    string
 	Refs   int32
 }
@@ -19,42 +19,23 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 	usf := &UnsortedSegmentFile{
 		ID:     id,
 		Dir:    dirname,
-		Blocks: make(map[common.ID]*BlockFile),
+		Blocks: make(map[common.ID]IBlockFile),
 	}
 	return usf
 }
 
-// func (sf *UnsortedSegmentFile) RefBlockIndex(id common.ID) {
-// 	sf.Lock()
-// 	defer sf.Unlock()
-// 	_, ok := sf.Blocks[id]
-// 	if !ok {
-// 		panic("logic error")
-// 	}
-// 	atomic.AddInt32(&sf.Refs, int32(1))
-// }
-
-// func (sf *UnsortedSegmentFile) UnrefBlockIndex(id common.ID) {
-// 	v := atomic.AddInt32(&sf.Refs, int32(-1))
-// 	if v == int32(0) {
-// 		sf.Destory()
-// 	}
-// 	if v < int32(0) {
-// 		panic("logic error")
-// 	}
-// }
-
-func (sf *UnsortedSegmentFile) RefIndex() {
+func (sf *UnsortedSegmentFile) Ref() {
 	atomic.AddInt32(&sf.Refs, int32(1))
 }
 
-func (sf *UnsortedSegmentFile) UnrefIndex() {
+func (sf *UnsortedSegmentFile) Unref() {
 	v := atomic.AddInt32(&sf.Refs, int32(-1))
-	if v == int32(0) {
-		sf.Destory()
-	}
 	if v < int32(0) {
 		panic("logic error")
+	}
+	if v == int32(0) {
+		sf.Close()
+		sf.Destory()
 	}
 }
 
@@ -79,7 +60,23 @@ func (sf *UnsortedSegmentFile) UnrefBlock(id common.ID) {
 	}
 }
 
-func (sf *UnsortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
+func (sf *UnsortedSegmentFile) GetIndexMeta() *base.IndexesMeta {
+	return nil
+}
+
+func (sf *UnsortedSegmentFile) GetBlockIndexMeta(id common.ID) *base.IndexesMeta {
+	blk := sf.GetBlock(id)
+	if blk == nil {
+		return nil
+	}
+	return blk.GetIndexMeta()
+}
+
+func (sf *UnsortedSegmentFile) MakeVirtualSegmentIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+	return nil
+}
+
+func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
 	cpf := &ColPartFile{
 		ID:          id,
 		SegmentFile: sf,
@@ -104,14 +101,14 @@ func (sf *UnsortedSegmentFile) Destory() {
 	sf.Blocks = nil
 }
 
-func (sf *UnsortedSegmentFile) GetBlock(id common.ID) *BlockFile {
+func (sf *UnsortedSegmentFile) GetBlock(id common.ID) IBlockFile {
 	sf.RLock()
 	defer sf.RUnlock()
 	blk := sf.Blocks[id]
 	return blk
 }
 
-func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf *BlockFile) {
+func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf IBlockFile) {
 	_, ok := sf.Blocks[id]
 	if ok {
 		panic("logic error")

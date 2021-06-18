@@ -91,6 +91,7 @@ type INodeHandle interface {
 	sync.Locker
 	io.Closer
 	GetID() uint64
+	GetNodeCreator() buf.MemoryNodeConstructor
 	Unload()
 	// Loadable() bool
 	Unloadable() bool
