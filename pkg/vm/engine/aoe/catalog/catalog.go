@@ -45,6 +45,7 @@ func DefaultCatalog(store dist.Storage) Catalog {
 		}
 	})
 	return gCatalog
+
 }
 
 func (c *Catalog) CreateDatabase(dbName string) (uint64, error) {

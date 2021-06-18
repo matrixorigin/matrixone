@@ -88,8 +88,15 @@ func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 
 func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
+	args := &Args{}
+	err := json.Unmarshal(req.Cmd, &args)
+	if err != nil {
+		resp.Value = errorResp(err)
+		return resp, 500
+	}
+	prefix := raftstore.EncodeDataKey(shard.Group, args.Args[1])
 	var data [][]byte
-	err := h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(req.Key, func(key, value []byte) (bool, error) {
+	err = h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(prefix, func(key, value []byte) (bool, error) {
 		data = append(data, key)
 		data = append(data, value)
 		return true, nil
@@ -98,7 +105,12 @@ func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 		resp.Value = errorResp(err)
 		return resp, 500
 	}
-	resp.Value, err = json.Marshal(data)
+	if data != nil && shard.End != nil {
+		data = append(data, shard.End)
+	}
+	if data != nil {
+		resp.Value, err = json.Marshal(data)
+	}
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
@@ -117,6 +129,11 @@ func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
+	}
+
+	if data != nil && shard.End != nil {
+		/*		lastKey := data[len(data)-2]
+				if */
 	}
 	resp.Value, err = json.Marshal(data)
 	if err != nil {

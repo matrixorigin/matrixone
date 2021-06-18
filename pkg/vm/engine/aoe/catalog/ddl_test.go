@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
@@ -86,6 +87,7 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 
 			cfg.Replication.ShardHeartbeatDuration = typeutil.NewDuration(time.Millisecond * 100)
 			cfg.Replication.StoreHeartbeatDuration = typeutil.NewDuration(time.Second)
+
 			cfg.Raft.TickInterval = typeutil.NewDuration(time.Millisecond * 100)
 
 			cfg.Prophet.Name = fmt.Sprintf("node-%d", i)
@@ -99,7 +101,7 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 			cfg.Prophet.Schedule.EnableJointConsensus = true
 
 		}, server.Cfg{
-			Addr: fmt.Sprintf("127.0.0.1:808%d", i),
+			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
 		})
 		if err != nil {
 			return nil, err
@@ -143,8 +145,6 @@ func testTableDDL(t *testing.T, c Catalog) {
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 
-	t0 := time.Now()
-	stdLog.Printf("call create table at %d", t0.UnixNano())
 	tid, err := c.CreateTable(dbName, tableName, cols, nil)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), tid)
@@ -162,7 +162,6 @@ func testTableDDL(t *testing.T, c Catalog) {
 	}()
 	select {
 	case <-completedC:
-		stdLog.Printf("%s is created, cost %d ms", tableName, time.Since(t0).Milliseconds())
 		break
 	case <-time.After(3 * time.Second):
 		stdLog.Printf("create %s failed, timeout", tableName)
@@ -171,13 +170,21 @@ func testTableDDL(t *testing.T, c Catalog) {
 	tid, err = c.CreateTable(dbName, tableName, cols, nil)
 	require.Equal(t, ErrTableCreateExists, err)
 
-	tid2, err := c.CreateTable(dbName, tableName+"2", cols, nil)
-	require.NoError(t, err)
-	require.Less(t, tid, tid2)
+	for i := 1; i < 10; i++ {
+		tid2, err := c.CreateTable(dbName, fmt.Sprintf("%s%d", tableName, i), cols, nil)
+		require.NoError(t, err)
+		require.Less(t, tid, tid2)
+	}
+	time.Sleep(5 * time.Second)
 
 	tbs, err = c.GetTables(dbName)
+
+	for _, tb := range tbs {
+		s, _ := json.Marshal(tb)
+		stdLog.Println(string(s))
+	}
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, 2, len(tbs))
+	require.GreaterOrEqual(t, 10, len(tbs))
 
 }
 func testDBDDL(t *testing.T, c Catalog) {
