@@ -1,4 +1,4 @@
-package server
+package client
 
 //tuple (collation id, collation name)
 type collationIDName struct {

@@ -9,21 +9,9 @@ import (
 )
 
 //all parameters in the system
-type Variables struct{
+type SystemVariables struct{
 	//read and write lock
 	rwlock	sync.RWMutex
-
-	/**
-	Name:	autoload
-	Scope:	[global]
-	Access:	[file]
-	DataType:	bool
-	DomainType:	set
-	Values:	[]
-	Comment:	autoload something
-	UpdateMode:	dynamic
-	*/
-	autoload    bool
 
 	/**
 	Name:	rootname
@@ -33,7 +21,7 @@ type Variables struct{
 	DomainType:	set
 	Values:	[root]
 	Comment:	root name
-	UpdateMode:	dynamic
+	UpdateMode:	fix
 	*/
 	rootname    string
 
@@ -57,7 +45,7 @@ type Variables struct{
 	DomainType:	set
 	Values:	[dump]
 	Comment:	dump user name
-	UpdateMode:	dynamic
+	UpdateMode:	fix
 	*/
 	dumpuser    string
 
@@ -69,7 +57,7 @@ type Variables struct{
 	DomainType:	set
 	Values:	[111]
 	Comment:	dump user password
-	UpdateMode:	dynamic
+	UpdateMode:	fix
 	*/
 	dumppassword    string
 
@@ -79,62 +67,34 @@ type Variables struct{
 	Access:	[file]
 	DataType:	int64
 	DomainType:	set
-	Values:	[9000]
+	Values:	[6001]
 	Comment:	port
-	UpdateMode:	dynamic
+	UpdateMode:	fix
 	*/
 	port    int64
 
 	/**
-	Name:	ip
+	Name:	host
 	Scope:	[global]
 	Access:	[file]
 	DataType:	string
 	DomainType:	set
-	Values:	[localhost 127.0.0.1]
+	Values:	[localhost 127.0.0.1 0.0.0.0]
 	Comment:	listening ip
-	UpdateMode:	dynamic
+	UpdateMode:	fix
 	*/
-	ip    string
+	host    string
 
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
-}//end Variables
+}//end SystemVariables
 
 //all parameters can be set in the configuration file.
-type vconfig struct{
+type varsConfig struct{
 	//read and write lock
 	rwlock	sync.RWMutex
 
-
-	
-	/**
-	Name:	autoload
-	Scope:	[global]
-	Access:	[file]
-	DataType:	bool
-	DomainType:	set
-	Values:	[]
-	Comment:	autoload something
-	UpdateMode:	dynamic
-	*/
-	Autoload    bool  `toml:"autoload"`
-
-	
-
-	
-	/**
-	Name:	rootname
-	Scope:	[global]
-	Access:	[file]
-	DataType:	string
-	DomainType:	set
-	Values:	[root]
-	Comment:	root name
-	UpdateMode:	dynamic
-	*/
-	Rootname    string  `toml:"rootname"`
 
 	
 
@@ -154,75 +114,23 @@ type vconfig struct{
 	
 
 	
-	/**
-	Name:	dumpuser
-	Scope:	[global]
-	Access:	[file]
-	DataType:	string
-	DomainType:	set
-	Values:	[dump]
-	Comment:	dump user name
-	UpdateMode:	dynamic
-	*/
-	Dumpuser    string  `toml:"dumpuser"`
 
 	
 
 	
-	/**
-	Name:	dumppassword
-	Scope:	[global]
-	Access:	[file]
-	DataType:	string
-	DomainType:	set
-	Values:	[111]
-	Comment:	dump user password
-	UpdateMode:	dynamic
-	*/
-	Dumppassword    string  `toml:"dumppassword"`
-
-	
-
-	
-	/**
-	Name:	port
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	set
-	Values:	[9000]
-	Comment:	port
-	UpdateMode:	dynamic
-	*/
-	Port    int64  `toml:"port"`
-
-	
-
-	
-	/**
-	Name:	ip
-	Scope:	[global]
-	Access:	[file]
-	DataType:	string
-	DomainType:	set
-	Values:	[localhost 127.0.0.1]
-	Comment:	listening ip
-	UpdateMode:	dynamic
-	*/
-	Ip    string  `toml:"ip"`
 
 	
 
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
-}//end vconfig
+}//end varsConfig
 
 /**
 prepare something before anything else.
 it is unsafe in multi-thread environment.
 */
-func (ap *Variables) prepareAnything(){
+func (ap *SystemVariables) prepareAnything(){
 	if ap.name2definition == nil {
 		ap.name2definition = make(map[string]string)
 	}
@@ -231,32 +139,30 @@ func (ap *Variables) prepareAnything(){
 /**
 set parameter and its string of the definition.
 */
-func (ap *Variables) PrepareDefinition(){
+func (ap *SystemVariables) PrepareDefinition(){
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 
 	ap.prepareAnything()
 	
-	ap.name2definition["autoload"] = "	Name:	autoload	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[]	Comment:	autoload something	UpdateMode:	dynamic	"
-	
-	ap.name2definition["rootname"] = "	Name:	rootname	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[root]	Comment:	root name	UpdateMode:	dynamic	"
+	ap.name2definition["rootname"] = "	Name:	rootname	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[root]	Comment:	root name	UpdateMode:	fix	"
 	
 	ap.name2definition["rootpassword"] = "	Name:	rootpassword	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[]	Comment:	root password	UpdateMode:	dynamic	"
 	
-	ap.name2definition["dumpuser"] = "	Name:	dumpuser	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[dump]	Comment:	dump user name	UpdateMode:	dynamic	"
+	ap.name2definition["dumpuser"] = "	Name:	dumpuser	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[dump]	Comment:	dump user name	UpdateMode:	fix	"
 	
-	ap.name2definition["dumppassword"] = "	Name:	dumppassword	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[111]	Comment:	dump user password	UpdateMode:	dynamic	"
+	ap.name2definition["dumppassword"] = "	Name:	dumppassword	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[111]	Comment:	dump user password	UpdateMode:	fix	"
 	
-	ap.name2definition["port"] = "	Name:	port	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[9000]	Comment:	port	UpdateMode:	dynamic	"
+	ap.name2definition["port"] = "	Name:	port	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[6001]	Comment:	port	UpdateMode:	fix	"
 	
-	ap.name2definition["ip"] = "	Name:	ip	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[localhost 127.0.0.1]	Comment:	listening ip	UpdateMode:	dynamic	"
+	ap.name2definition["host"] = "	Name:	host	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[localhost 127.0.0.1 0.0.0.0]	Comment:	listening ip	UpdateMode:	fix	"
 	
 }
 
 /**
 get the definition of the parameter.
 */
-func (ap *Variables) GetDefinition(name string)(string,error){
+func (ap *SystemVariables) GetDefinition(name string)(string,error){
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	ap.prepareAnything()
@@ -270,7 +176,7 @@ func (ap *Variables) GetDefinition(name string)(string,error){
 /**
 check if there is the parameter
 */
-func (ap *Variables) HasParameter(name string)bool{
+func (ap *SystemVariables) HasParameter(name string)bool{
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	ap.prepareAnything()
@@ -284,27 +190,9 @@ func (ap *Variables) HasParameter(name string)bool{
 /**
 Load the initial values of all parameters.
 */
-func (ap *Variables) LoadInitialValues()error{
+func (ap *SystemVariables) LoadInitialValues()error{
 	ap.PrepareDefinition()
 	var err error
-	
-		
-		
-			autoloadchoices :=[]bool {
-					
-			}
-			if len(autoloadchoices) != 0{
-				if err = ap.setAutoload( autoloadchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Autoload",err)
-				}
-			}else{
-				
-					if err = ap.setAutoload( false ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","Autoload",err)
-					}	
-				
-			}
-		
 	
 		
 		
@@ -386,7 +274,7 @@ func (ap *Variables) LoadInitialValues()error{
 		
 			portchoices :=[]int64 {
 				
-				9000,
+				6001,
 					
 			}
 			if len(portchoices) != 0{
@@ -404,21 +292,23 @@ func (ap *Variables) LoadInitialValues()error{
 	
 		
 		
-			ipchoices :=[]string {
+			hostchoices :=[]string {
 				
 				"localhost",
 				
 				"127.0.0.1",
+				
+				"0.0.0.0",
 					
 			}
-			if len(ipchoices) != 0{
-				if err = ap.setIp( ipchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Ip",err)
+			if len(hostchoices) != 0{
+				if err = ap.setHost( hostchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","Host",err)
 				}
 			}else{
 				//empty string
-				if err = ap.setIp( "" ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Ip",err)
+				if err = ap.setHost( "" ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","Host",err)
 				}
 			}
 		
@@ -429,18 +319,9 @@ func (ap *Variables) LoadInitialValues()error{
 
 
 /**
-Get the value of the parameter autoload
-*/
-func (ap * Variables ) GetAutoload() bool {
-	ap.rwlock.RLock()
-	defer ap.rwlock.RUnlock()
-	return ap.autoload
-}
-
-/**
 Get the value of the parameter rootname
 */
-func (ap * Variables ) GetRootname() string {
+func (ap * SystemVariables ) GetRootname() string {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	return ap.rootname
@@ -449,7 +330,7 @@ func (ap * Variables ) GetRootname() string {
 /**
 Get the value of the parameter rootpassword
 */
-func (ap * Variables ) GetRootpassword() string {
+func (ap * SystemVariables ) GetRootpassword() string {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	return ap.rootpassword
@@ -458,7 +339,7 @@ func (ap * Variables ) GetRootpassword() string {
 /**
 Get the value of the parameter dumpuser
 */
-func (ap * Variables ) GetDumpuser() string {
+func (ap * SystemVariables ) GetDumpuser() string {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	return ap.dumpuser
@@ -467,7 +348,7 @@ func (ap * Variables ) GetDumpuser() string {
 /**
 Get the value of the parameter dumppassword
 */
-func (ap * Variables ) GetDumppassword() string {
+func (ap * SystemVariables ) GetDumppassword() string {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	return ap.dumppassword
@@ -476,19 +357,19 @@ func (ap * Variables ) GetDumppassword() string {
 /**
 Get the value of the parameter port
 */
-func (ap * Variables ) GetPort() int64 {
+func (ap * SystemVariables ) GetPort() int64 {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	return ap.port
 }
 
 /**
-Get the value of the parameter ip
+Get the value of the parameter host
 */
-func (ap * Variables ) GetIp() string {
+func (ap * SystemVariables ) GetHost() string {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
-	return ap.ip
+	return ap.host
 }
 
 
@@ -496,103 +377,33 @@ func (ap * Variables ) GetIp() string {
 
 
 
-
-/**
-Set the value of the parameter autoload
-*/
-func (ap * Variables ) SetAutoload(value bool)error {
-	return  ap.setAutoload(value)
-}
-
-
-
-/**
-Set the value of the parameter rootname
-*/
-func (ap * Variables ) SetRootname(value string)error {
-	return  ap.setRootname(value)
-}
 
 
 
 /**
 Set the value of the parameter rootpassword
 */
-func (ap * Variables ) SetRootpassword(value string)error {
+func (ap * SystemVariables ) SetRootpassword(value string)error {
 	return  ap.setRootpassword(value)
 }
 
 
 
-/**
-Set the value of the parameter dumpuser
-*/
-func (ap * Variables ) SetDumpuser(value string)error {
-	return  ap.setDumpuser(value)
-}
-
-
-
-/**
-Set the value of the parameter dumppassword
-*/
-func (ap * Variables ) SetDumppassword(value string)error {
-	return  ap.setDumppassword(value)
-}
-
-
-
-/**
-Set the value of the parameter port
-*/
-func (ap * Variables ) SetPort(value int64)error {
-	return  ap.setPort(value)
-}
-
-
-
-/**
-Set the value of the parameter ip
-*/
-func (ap * Variables ) SetIp(value string)error {
-	return  ap.setIp(value)
-}
 
 
 
 
 
 
-/**
-Set the value of the parameter autoload
-*/
-func (ap * Variables ) setAutoload(value bool)error {
-	ap.rwlock.Lock()
-	defer ap.rwlock.Unlock()
 
-	
-		
-		
-			choices :=[]bool {
-					
-			}
-			if len( choices ) != 0{
-				if !isInSliceBool(value, choices){
-					return fmt.Errorf("setAutoload,the value %t is not in set %v",value,choices)
-				}
-			}//else means any bool value: true or false
-		
 
-	
 
-	ap.autoload = value
-	return nil
-}
+
 
 /**
 Set the value of the parameter rootname
 */
-func (ap * Variables ) setRootname(value string)error {
+func (ap * SystemVariables ) setRootname(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 
@@ -620,7 +431,7 @@ func (ap * Variables ) setRootname(value string)error {
 /**
 Set the value of the parameter rootpassword
 */
-func (ap * Variables ) setRootpassword(value string)error {
+func (ap * SystemVariables ) setRootpassword(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 
@@ -648,7 +459,7 @@ func (ap * Variables ) setRootpassword(value string)error {
 /**
 Set the value of the parameter dumpuser
 */
-func (ap * Variables ) setDumpuser(value string)error {
+func (ap * SystemVariables ) setDumpuser(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 
@@ -676,7 +487,7 @@ func (ap * Variables ) setDumpuser(value string)error {
 /**
 Set the value of the parameter dumppassword
 */
-func (ap * Variables ) setDumppassword(value string)error {
+func (ap * SystemVariables ) setDumppassword(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 
@@ -704,7 +515,7 @@ func (ap * Variables ) setDumppassword(value string)error {
 /**
 Set the value of the parameter port
 */
-func (ap * Variables ) setPort(value int64)error {
+func (ap * SystemVariables ) setPort(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 
@@ -713,7 +524,7 @@ func (ap * Variables ) setPort(value int64)error {
 		
 			choices :=[]int64 {
 				
-				9000,
+				6001,
 					
 			}
 			if len( choices ) != 0{
@@ -730,9 +541,9 @@ func (ap * Variables ) setPort(value int64)error {
 }
 
 /**
-Set the value of the parameter ip
+Set the value of the parameter host
 */
-func (ap * Variables ) setIp(value string)error {
+func (ap * SystemVariables ) setHost(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 
@@ -744,18 +555,20 @@ func (ap * Variables ) setIp(value string)error {
 				"localhost",
 				
 				"127.0.0.1",
+				
+				"0.0.0.0",
 					
 			}
 			if len( choices ) != 0{
 				if !isInSlice(value, choices){
-					return fmt.Errorf("setIp,the value %s is not in set %v",value,choices)
+					return fmt.Errorf("setHost,the value %s is not in set %v",value,choices)
 				}
 			}//else means any string
 		
 
 	
 
-	ap.ip = value
+	ap.host = value
 	return nil
 }
 
@@ -765,7 +578,7 @@ func (ap * Variables ) setIp(value string)error {
 prepare something before anything else.
 it is unsafe in multi-thread environment.
 */
-func (config *vconfig) prepareAnything(){
+func (config *varsConfig) prepareAnything(){
 	if config.name2updatedFlags == nil {
 		config.name2updatedFlags = make(map[string]bool)
 	}
@@ -774,17 +587,11 @@ func (config *vconfig) prepareAnything(){
 /**
 reset update flags of configuration items
 */
-func (config *vconfig) resetUpdatedFlags(){
+func (config *varsConfig) resetUpdatedFlags(){
 	config.rwlock.Lock()
 	defer config.rwlock.Unlock()
 	config.prepareAnything()
 	
-	
-		config.name2updatedFlags["autoload"] = false
-	
-	
-	
-		config.name2updatedFlags["rootname"] = false
 	
 	
 	
@@ -792,19 +599,11 @@ func (config *vconfig) resetUpdatedFlags(){
 	
 	
 	
-		config.name2updatedFlags["dumpuser"] = false
 	
 	
 	
-		config.name2updatedFlags["dumppassword"] = false
 	
 	
-	
-		config.name2updatedFlags["port"] = false
-	
-	
-	
-		config.name2updatedFlags["ip"] = false
 	
 	
 }
@@ -812,7 +611,7 @@ func (config *vconfig) resetUpdatedFlags(){
 /**
 set update flag of configuration item
 */
-func (config *vconfig) setUpdatedFlag(name string,updated bool){
+func (config *varsConfig) setUpdatedFlag(name string,updated bool){
 	config.rwlock.Lock()
 	defer config.rwlock.Unlock()
 	config.prepareAnything()
@@ -822,7 +621,7 @@ func (config *vconfig) setUpdatedFlag(name string,updated bool){
 /**
 get update flag of configuration item
 */
-func (config *vconfig) getUpdatedFlag(name string)bool{
+func (config *varsConfig) getUpdatedFlag(name string)bool{
 	config.rwlock.RLock()
 	defer config.rwlock.RUnlock()
 	config.prepareAnything()
@@ -832,7 +631,7 @@ func (config *vconfig) getUpdatedFlag(name string)bool{
 /**
 Load parameters' values in the configuration string.
 */
-func (config *vconfig) LoadConfigurationFromString(input string) error {
+func (config *varsConfig) LoadConfigurationFromString(input string) error {
 	config.resetUpdatedFlags()
 
 	metadata, err := toml.Decode(input, config);
@@ -856,7 +655,7 @@ func (config *vconfig) LoadConfigurationFromString(input string) error {
 /**
 Load parameters' values in the configuration file.
 */
-func (config *vconfig) LoadConfigurationFromFile(fname string) error {
+func (config *varsConfig) LoadConfigurationFromFile(fname string) error {
 	config.resetUpdatedFlags()
 
 	metadata, err := toml.DecodeFile(fname, config);
@@ -880,23 +679,9 @@ func (config *vconfig) LoadConfigurationFromFile(fname string) error {
 /**
 Update parameters' values with configuration.
 */
-func (ap * Variables ) UpdateParametersWithConfiguration(config *vconfig)error{
+func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfig)error{
 	var err error
 	
-	
-	if config.getUpdatedFlag("autoload"){
-		if err = ap.setAutoload(config.Autoload); err != nil{
-			return fmt.Errorf("update parameter autoload failed.error:%v",err)
-		}
-	}
-	
-	
-	
-	if config.getUpdatedFlag("rootname"){
-		if err = ap.setRootname(config.Rootname); err != nil{
-			return fmt.Errorf("update parameter rootname failed.error:%v",err)
-		}
-	}
 	
 	
 	
@@ -908,46 +693,22 @@ func (ap * Variables ) UpdateParametersWithConfiguration(config *vconfig)error{
 	
 	
 	
-	if config.getUpdatedFlag("dumpuser"){
-		if err = ap.setDumpuser(config.Dumpuser); err != nil{
-			return fmt.Errorf("update parameter dumpuser failed.error:%v",err)
-		}
-	}
 	
 	
 	
-	if config.getUpdatedFlag("dumppassword"){
-		if err = ap.setDumppassword(config.Dumppassword); err != nil{
-			return fmt.Errorf("update parameter dumppassword failed.error:%v",err)
-		}
-	}
 	
 	
-	
-	if config.getUpdatedFlag("port"){
-		if err = ap.setPort(config.Port); err != nil{
-			return fmt.Errorf("update parameter port failed.error:%v",err)
-		}
-	}
-	
-	
-	
-	if config.getUpdatedFlag("ip"){
-		if err = ap.setIp(config.Ip); err != nil{
-			return fmt.Errorf("update parameter ip failed.error:%v",err)
-		}
-	}
 	
 	
 	return nil
 }
 
 /**
-Load configuration from file into vconfig.
-Then update items into Variables
+Load configuration from file into varsConfig.
+Then update items into SystemVariables
 */
-func LoadvconfigFromFile(filename string,params *Variables) error{
-	config := &vconfig{}
+func LoadvarsConfigFromFile(filename string,params *SystemVariables) error{
+	config := &varsConfig{}
 	if err := config.LoadConfigurationFromFile(filename); err != nil{
 		return err
 	}

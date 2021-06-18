@@ -1,4 +1,4 @@
-package server
+package client
 
 import (
 	"fmt"
@@ -205,9 +205,9 @@ func handshakeHandler(in net.Conn){
 		switch uint8(req.GetCmd()){
 		case COM_QUIT:
 			resp = &Response{
-			category: okResponse,
-			status: 0,
-			data:nil,
+			category: OkResponse,
+			status:   0,
+			data:     nil,
 			}
 			if err = mysql.SendResponse(resp); err != nil{
 				fmt.Printf("send response failed. error:%v",err)
@@ -217,18 +217,18 @@ func handshakeHandler(in net.Conn){
 			var query =string(req.GetData().([]byte))
 			fmt.Printf("query: %s \n",query)
 			resp = &Response{
-				category: okResponse,
-				status: 0,
-				data:nil,
+				category: OkResponse,
+				status:   0,
+				data:     nil,
 			}
 			if err = mysql.SendResponse(resp); err != nil{
 				fmt.Printf("send response failed. error:%v",err)
 				break
 			}
 		default:
-			fmt.Printf("unsupported command. 0x%x \n",req.cmd)
+			fmt.Printf("unsupported command. 0x%x \n",req.Cmd)
 		}
-		if uint8(req.cmd) == COM_QUIT{
+		if uint8(req.Cmd) == COM_QUIT{
 			break
 		}
 	}
@@ -241,7 +241,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	echoServer(handshakeHandler)
 }
 
-func makeMysqlTinyIntResultSet(unsigned bool)*MysqlResultSet{
+func makeMysqlTinyIntResultSet(unsigned bool)*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Tiny"
@@ -282,16 +282,10 @@ func makeMysqlTinyIntResultSet(unsigned bool)*MysqlResultSet{
 }
 
 func makeMysqlTinyResult(unsigned bool) *MysqlExecutionResult {
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlTinyIntResultSet(unsigned),
-	}
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlTinyIntResultSet(unsigned))
 }
 
-func makeMysqlShortResultSet(unsigned bool)*MysqlResultSet{
+func makeMysqlShortResultSet(unsigned bool)*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Short"
@@ -330,17 +324,11 @@ func makeMysqlShortResultSet(unsigned bool)*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlShortResult(unsigned bool) *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlShortResultSet(unsigned),
-	}
+func makeMysqlShortResult(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlShortResultSet(unsigned))
 }
 
-func makeMysqlLongResultSet(unsigned bool)*MysqlResultSet{
+func makeMysqlLongResultSet(unsigned bool)*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Long"
@@ -379,17 +367,11 @@ func makeMysqlLongResultSet(unsigned bool)*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlLongResult(unsigned bool) *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlLongResultSet(unsigned),
-	}
+func makeMysqlLongResult(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlLongResultSet(unsigned))
 }
 
-func makeMysqlLongLongResultSet(unsigned bool)*MysqlResultSet{
+func makeMysqlLongLongResultSet(unsigned bool)*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "LongLong"
@@ -428,17 +410,11 @@ func makeMysqlLongLongResultSet(unsigned bool)*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlLongLongResult(unsigned bool) *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlLongLongResultSet(unsigned),
-	}
+func makeMysqlLongLongResult(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlLongLongResultSet(unsigned))
 }
 
-func makeMysqlInt24ResultSet(unsigned bool)*MysqlResultSet{
+func makeMysqlInt24ResultSet(unsigned bool)*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Int24"
@@ -479,17 +455,11 @@ func makeMysqlInt24ResultSet(unsigned bool)*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlInt24Result(unsigned bool) *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlInt24ResultSet(unsigned),
-	}
+func makeMysqlInt24Result(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlInt24ResultSet(unsigned))
 }
 
-func makeMysqlYearResultSet(unsigned bool)*MysqlResultSet{
+func makeMysqlYearResultSet(unsigned bool)*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Year"
@@ -528,17 +498,11 @@ func makeMysqlYearResultSet(unsigned bool)*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlYearResult(unsigned bool) *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlYearResultSet(unsigned),
-	}
+func makeMysqlYearResult(unsigned bool) *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlYearResultSet(unsigned))
 }
 
-func makeMysqlVarcharResultSet()*MysqlResultSet{
+func makeMysqlVarcharResultSet()*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Varchar"
@@ -564,17 +528,11 @@ func makeMysqlVarcharResultSet()*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlVarcharResult() *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlVarcharResultSet(),
-	}
+func makeMysqlVarcharResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlVarcharResultSet())
 }
 
-func makeMysqlVarStringResultSet()*MysqlResultSet{
+func makeMysqlVarStringResultSet()*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Varstring"
@@ -600,17 +558,11 @@ func makeMysqlVarStringResultSet()*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlVarStringResult() *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlVarStringResultSet(),
-	}
+func makeMysqlVarStringResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlVarStringResultSet())
 }
 
-func makeMysqlStringResultSet()*MysqlResultSet{
+func makeMysqlStringResultSet()*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "String"
@@ -636,17 +588,11 @@ func makeMysqlStringResultSet()*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlStringResult() *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlStringResultSet(),
-	}
+func makeMysqlStringResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlStringResultSet())
 }
 
-func makeMysqlFloatResultSet()*MysqlResultSet{
+func makeMysqlFloatResultSet()*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Float"
@@ -672,17 +618,11 @@ func makeMysqlFloatResultSet()*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlFloatResult() *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlFloatResultSet(),
-	}
+func makeMysqlFloatResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlFloatResultSet())
 }
 
-func makeMysqlDoubleResultSet()*MysqlResultSet{
+func makeMysqlDoubleResultSet()*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Double"
@@ -708,17 +648,11 @@ func makeMysqlDoubleResultSet()*MysqlResultSet{
 	return rs
 }
 
-func makeMysqlDoubleResult() *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMysqlDoubleResultSet(),
-	}
+func makeMysqlDoubleResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMysqlDoubleResultSet())
 }
 
-func make8ColumnsResultSet()*MysqlResultSet{
+func make8ColumnsResultSet()*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	var columnTypes = []uint8{
@@ -766,17 +700,11 @@ func make8ColumnsResultSet()*MysqlResultSet{
 	return rs
 }
 
-func makeMysql8ColumnsResult() *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          make8ColumnsResultSet(),
-	}
+func makeMysql8ColumnsResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,make8ColumnsResultSet())
 }
 
-func makeMoreThan16MBResultSet()*MysqlResultSet{
+func makeMoreThan16MBResultSet()*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	var columnTypes = []uint8{
@@ -816,17 +744,11 @@ func makeMoreThan16MBResultSet()*MysqlResultSet{
 }
 
 //the size of resultset will be morethan 16MB
-func makeMoreThan16MBResult() *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          makeMoreThan16MBResultSet(),
-	}
+func makeMoreThan16MBResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,makeMoreThan16MBResultSet())
 }
 
-func make16MBRowResultSet()*MysqlResultSet{
+func make16MBRowResultSet()*MysqlResultSet {
 	var rs *MysqlResultSet = &MysqlResultSet{}
 
 	name := "Varstring"
@@ -886,14 +808,8 @@ func make16MBRowResultSet()*MysqlResultSet{
 }
 
 //the size of resultset row will be more than 16MB
-func make16MBRowResult() *MysqlExecutionResult{
-	return &MysqlExecutionResult{
-		status:       0,
-		insertID:     0,
-		affectedRows: 0,
-		warnings:     0,
-		mrs:          make16MBRowResultSet(),
-	}
+func make16MBRowResult() *MysqlExecutionResult {
+	return NewMysqlExecutionResult(0,0,0,0,make16MBRowResultSet())
 }
 
 func resultsetHandler(in net.Conn){
@@ -902,6 +818,9 @@ func resultsetHandler(in net.Conn){
 	defer io.Close()
 	fmt.Println("Server handling")
 	mysql := NewMysqlClientProtocol(io,0)
+	cmdExe := &CmdExecutorImpl{}
+	rt := NewRoutine(mysql,cmdExe,NewSession())
+
 	if err = mysql.Handshake(); err!=nil{
 		msg := fmt.Sprintf("handshake failed. error:%v",err)
 		mysql.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,msg)
@@ -922,9 +841,9 @@ func resultsetHandler(in net.Conn){
 		switch uint8(req.GetCmd()){
 		case COM_QUIT:
 			resp = &Response{
-				category: okResponse,
-				status: 0,
-				data:nil,
+				category: OkResponse,
+				status:   0,
+				data:     nil,
 			}
 			if err = mysql.SendResponse(resp); err != nil{
 				fmt.Printf("send response failed. error:%v",err)
@@ -936,127 +855,128 @@ func resultsetHandler(in net.Conn){
 			switch query {
 			case "tiny":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
+					cmd:      0,
 					data:     makeMysqlTinyResult(false),
 				}
 			case "tinyu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlTinyResult(true),
 				}
 			case "short":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlShortResult(false),
 				}
 			case "shortu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlShortResult(true),
 				}
 			case "long":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlLongResult(false),
 				}
 			case "longu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlLongResult(true),
 				}
 			case "longlong":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlLongLongResult(false),
 				}
 			case "longlongu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlLongLongResult(true),
 				}
 			case "int24":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlInt24Result(false),
 				}
 			case "int24u":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlInt24Result(true),
 				}
 			case "year":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlYearResult(false),
 				}
 			case "yearu":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlYearResult(true),
 				}
 			case "varchar":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlVarcharResult(),
 				}
 			case "varstring":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlVarStringResult(),
 				}
 			case "string":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlStringResult(),
 				}
 			case "float":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlFloatResult(),
 				}
 			case "double":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysqlDoubleResult(),
 				}
 			case "8columns":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMysql8ColumnsResult(),
 				}
 			case "16mb":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     makeMoreThan16MBResult(),
 				}
 			case "16mbrow":
 				resp = &Response{
-					category: resultResponse,
+					category: ResultResponse,
 					status:   0,
 					data:     make16MBRowResult(),
 				}
 			default:
 				resp = &Response{
-					category: okResponse,
+					category: OkResponse,
 					status:   0,
 					data:     nil,
 				}
@@ -1068,12 +988,13 @@ func resultsetHandler(in net.Conn){
 			}
 
 		default:
-			fmt.Printf("unsupported command. 0x%x \n",req.cmd)
+			fmt.Printf("unsupported command. 0x%x \n",req.Cmd)
 		}
-		if uint8(req.cmd) == COM_QUIT{
+		if uint8(req.Cmd) == COM_QUIT{
 			break
 		}
 	}
+	rt.Quit()
 }
 
 func TestMysqlResultSet(t *testing.T){
