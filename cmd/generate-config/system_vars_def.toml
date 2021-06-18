@@ -83,7 +83,7 @@ scope = ["global"]
 access = ["file"]
 type = "bool"
 domain-type = "set"
-values = ["true"]
+values = []
 comment = "send data row while producing"
 update-mode = "dynamic"
 
@@ -93,7 +93,7 @@ scope = ["global"]
 access = ["file"]
 type = "bool"
 domain-type = "set"
-values = ["true"]
+values = []
 comment = "dump Environment with memEngine Null nodes for testing"
 update-mode = "dynamic"
 

@@ -932,6 +932,7 @@ func (mcp *MysqlClientProtocol) makeColumnDefinition41(column *MysqlColumn,cmd i
 }
 
 //the server send the column definition to the client
+//thread safe
 func (mcp *MysqlClientProtocol) SendColumnDefinition(column Column,cmd int) error {
 	mcp.GetLock().Lock()
 	defer mcp.GetLock().Unlock()
@@ -954,11 +955,44 @@ func (mcp *MysqlClientProtocol) SendColumnDefinition(column Column,cmd int) erro
 	return nil
 }
 
+//the server send the column definition to the client
+func (mcp *MysqlClientProtocol) sendColumnDefinition(column Column,cmd int) error {
+	mysqlColumn,ok := column.(*MysqlColumn)
+	if !ok{
+		return fmt.Errorf("sendColumn need MysqlColumn")
+	}
+
+	var data []byte
+	if mcp.capability & CLIENT_PROTOCOL_41 != 0{
+		data = mcp.makeColumnDefinition41(mysqlColumn,cmd)
+	}else{
+		//TODO: ColumnDefinition320
+	}
+
+	if err := mcp.sendPayload(data); err != nil{
+		return fmt.Errorf("send column failed.error:%v",err)
+	}
+	return nil
+}
+
 //the server send the column count
+//thread safe
 func (mcp *MysqlClientProtocol) SendColumnCount(count uint64) error {
 	mcp.GetLock().Lock()
 	defer mcp.GetLock().Unlock()
 
+	var data []byte = make([]byte,20)
+
+	pos := mcp.writeIntLenEnc(data,0,count)
+
+	if err := mcp.sendPayload(data[:pos]); err != nil{
+		return fmt.Errorf("send column count failed.error:%v",err)
+	}
+	return nil
+}
+
+//the server send the column count
+func (mcp *MysqlClientProtocol) sendColumnCount(count uint64) error {
 	var data []byte = make([]byte,20)
 
 	pos := mcp.writeIntLenEnc(data,0,count)
@@ -976,7 +1010,7 @@ func (mcp *MysqlClientProtocol) sendColumns(mrs *MysqlResultSet,cmd int,warnings
 		var col Column
 		if col,err = mrs.GetColumn(i); err != nil{
 			return err
-		}else if err = mcp.SendColumnDefinition(col,cmd); err != nil{
+		}else if err = mcp.sendColumnDefinition(col,cmd); err != nil{
 			return err
 		}
 	}
@@ -1070,10 +1104,30 @@ func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint
 }
 
 //the server send every row of the result set as an independent packet
+//thread safe
 func (mcp *MysqlClientProtocol) SendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
 	mcp.GetLock().Lock()
 	defer mcp.GetLock().Unlock()
 
+	var data []byte
+	var err error
+	if data,err = mcp.makeResultSetTextRow(mrs,r); err != nil{
+		//ERR_Packet in case of error
+		if err1 := mcp.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,err.Error()) ; err1 != nil{
+			return err1
+		}
+		return err
+	}
+
+	if err = mcp.sendPayload(data); err != nil{
+		return fmt.Errorf("send result set text row failed. error: %v",err)
+	}
+
+	return nil
+}
+
+//the server send every row of the result set as an independent packet
+func (mcp *MysqlClientProtocol) sendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
 	var data []byte
 	var err error
 	if data,err = mcp.makeResultSetTextRow(mrs,r); err != nil{
@@ -1101,7 +1155,7 @@ func (mcp *MysqlClientProtocol) sendResultSet(set ResultSet,cmd int,warnings,sta
 	}
 
 	//A packet containing a Protocol::LengthEncodedInteger column_count
-	if err = mcp.SendColumnCount(mysqlRS.GetColumnCount()); err != nil{
+	if err = mcp.sendColumnCount(mysqlRS.GetColumnCount()); err != nil{
 		return err
 	}
 
@@ -1111,7 +1165,7 @@ func (mcp *MysqlClientProtocol) sendResultSet(set ResultSet,cmd int,warnings,sta
 
 	//One or more ProtocolText::ResultsetRow packets, each containing column_count values
 	for i := uint64(0) ; i < mysqlRS.GetRowCount();i++{
-		if err = mcp.SendResultSetTextRow(mysqlRS,i) ; err != nil{
+		if err = mcp.sendResultSetTextRow(mysqlRS,i) ; err != nil{
 			return err
 		}
 	}

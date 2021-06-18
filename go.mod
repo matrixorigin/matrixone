@@ -12,11 +12,11 @@ require (
 	github.com/google/uuid v1.2.0
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pilosa/pilosa v1.4.0
-	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.2.0
 	github.com/stretchr/testify v1.7.0
+	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
 	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b // indirect
 	golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f
 	golang.org/x/tools v0.0.0-20201105001634-bc3cf281b174 // indirect

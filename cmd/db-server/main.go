@@ -44,20 +44,30 @@ func main() {
 	flag.Parse()
 
 	//before anything using the configuration
-	config.GlobalSystemVariables.LoadInitialValues()
-	config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables)
+	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
+		fmt.Printf("error:%v\n",err)
+		return
+	}
+
+	if err := config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables); err != nil {
+		fmt.Printf("error:%v\n",err)
+		return
+	}
 
 	fmt.Println("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 
-	if config.GlobalSystemVariables.GetDumpEnv() {
+	if ! config.GlobalSystemVariables.GetDumpEnv() {
+		fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 		//test storage engine
 		config.StorageEngine = memEngine.NewTestEngine()
 
 		//test cluster nodes
 		config.ClusterNodes = metadata.Nodes{}
 	}else{
+		panic("The Official Storage Engine and Cluster Nodes are in the developing.")
+
 		//TODO:
 		config.StorageEngine = nil
 

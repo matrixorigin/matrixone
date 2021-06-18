@@ -3,6 +3,7 @@ package dataio
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
@@ -30,6 +31,14 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) ISegmentFile 
 	sf.FileName = e.MakeFilename(dirname, e.FTSegment, id.ToSegmentFileName(), false)
 	log.Infof("%s:%s | Created", sf.TypeName, sf.FileName)
 	return sf
+}
+
+func (msf *MockSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
+	log.Infof("(%s:%s) | ReadPoint (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, ptr.Offset, ptr.Len, len(buf), cap(buf))
+}
+
+func (msf *MockSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {
+	log.Infof("(%s:%s) | ReadBlockPoint[%s] (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, id.BlockString(), ptr.Offset, ptr.Len, len(buf), cap(buf))
 }
 
 func (msf *MockSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
@@ -68,10 +77,27 @@ func (msf *MockSegmentFile) UnrefBlock(id common.ID) {
 	}
 }
 
-func (msf *MockSegmentFile) MakeColSegmentFile(colIdx int) IColSegmentFile {
-	csf := &ColSegmentFile{
-		SegmentFile: msf,
-		ColIdx:      uint64(colIdx),
+func (msf *MockSegmentFile) RefIndex() {
+	log.Infof("%s:%s | RefIndex", msf.TypeName, msf.FileName)
+	atomic.AddInt32(&msf.Refs, int32(1))
+}
+
+func (msf *MockSegmentFile) UnrefIndex() {
+	log.Infof("%s:%s | UnrefIndex", msf.TypeName, msf.FileName)
+	v := atomic.AddInt32(&msf.Refs, int32(-1))
+	if v < int32(0) {
+		panic("logic error")
 	}
-	return csf
+	if v == int32(0) {
+		msf.Close()
+		msf.Destory()
+	}
+}
+
+func (msf *MockSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
+	psf := &ColPartFile{
+		SegmentFile: msf,
+		ID:          id,
+	}
+	return psf
 }

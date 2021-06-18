@@ -103,7 +103,7 @@ type SystemVariables struct{
 	Access:	[file]
 	DataType:	bool
 	DomainType:	set
-	Values:	[true]
+	Values:	[]
 	Comment:	send data row while producing
 	UpdateMode:	dynamic
 	*/
@@ -115,7 +115,7 @@ type SystemVariables struct{
 	Access:	[file]
 	DataType:	bool
 	DomainType:	set
-	Values:	[true]
+	Values:	[]
 	Comment:	dump Environment with memEngine Null nodes for testing
 	UpdateMode:	dynamic
 	*/
@@ -275,7 +275,7 @@ type varsConfig struct{
 	Access:	[file]
 	DataType:	bool
 	DomainType:	set
-	Values:	[true]
+	Values:	[]
 	Comment:	send data row while producing
 	UpdateMode:	dynamic
 	*/
@@ -290,7 +290,7 @@ type varsConfig struct{
 	Access:	[file]
 	DataType:	bool
 	DomainType:	set
-	Values:	[true]
+	Values:	[]
 	Comment:	dump Environment with memEngine Null nodes for testing
 	UpdateMode:	dynamic
 	*/
@@ -456,9 +456,9 @@ func (ap *SystemVariables) PrepareDefinition(){
 	
 	ap.name2definition["host"] = "	Name:	host	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[localhost 127.0.0.1 0.0.0.0]	Comment:	listening ip	UpdateMode:	fix	"
 	
-	ap.name2definition["sendRow"] = "	Name:	sendRow	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[true]	Comment:	send data row while producing	UpdateMode:	dynamic	"
+	ap.name2definition["sendRow"] = "	Name:	sendRow	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[]	Comment:	send data row while producing	UpdateMode:	dynamic	"
 	
-	ap.name2definition["dumpEnv"] = "	Name:	dumpEnv	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[true]	Comment:	dump Environment with memEngine Null nodes for testing	UpdateMode:	dynamic	"
+	ap.name2definition["dumpEnv"] = "	Name:	dumpEnv	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[]	Comment:	dump Environment with memEngine Null nodes for testing	UpdateMode:	dynamic	"
 	
 	ap.name2definition["hostMmuLimitation"] = "	Name:	hostMmuLimitation	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[1099511627776]	Comment:	host mmu limitation. default: 1 << 40 = 1099511627776	UpdateMode:	dynamic	"
 	
@@ -654,8 +654,6 @@ func (ap *SystemVariables) LoadInitialValues()error{
 		
 		
 			sendRowchoices :=[]bool {
-				
-				true,
 					
 			}
 			if len(sendRowchoices) != 0{
@@ -674,8 +672,6 @@ func (ap *SystemVariables) LoadInitialValues()error{
 		
 		
 			dumpEnvchoices :=[]bool {
-				
-				true,
 					
 			}
 			if len(dumpEnvchoices) != 0{
@@ -1347,8 +1343,6 @@ func (ap * SystemVariables ) setSendRow(value bool)error {
 		
 		
 			choices :=[]bool {
-				
-				true,
 					
 			}
 			if len( choices ) != 0{
@@ -1375,8 +1369,6 @@ func (ap * SystemVariables ) setDumpEnv(value bool)error {
 		
 		
 			choices :=[]bool {
-				
-				true,
 					
 			}
 			if len( choices ) != 0{

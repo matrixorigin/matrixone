@@ -31,6 +31,7 @@ const (
 	Output
 	MyOutput
 	Exchange
+	Merge
 	MergeTop
 	MergeDedup
 	MergeOrder

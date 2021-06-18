@@ -120,9 +120,9 @@ dumpdatabase= "default"
 
 
 
-sendRow=true
+sendRow= false
 
-dumpEnv=true
+dumpEnv= false
 
 hostMmuLimitation=1099511627776
 
@@ -159,9 +159,9 @@ Dumpdatabase: "default" ,
 
 
 
-SendRow:true,
+SendRow: false ,
 
-DumpEnv:true,
+DumpEnv: false ,
 
 HostMmuLimitation:1099511627776,
 

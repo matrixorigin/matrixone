@@ -9,6 +9,7 @@ import (
 	"matrixone/pkg/sql/op/dedup"
 	"matrixone/pkg/sql/op/limit"
 	"matrixone/pkg/sql/op/offset"
+	"matrixone/pkg/sql/op/projection"
 	"matrixone/pkg/sql/tree"
 )
 
@@ -17,7 +18,8 @@ func (b *build) buildSelectStatement(stmt tree.SelectStatement) (op.OP, error) {
 	case *tree.ParenSelect:
 		return b.buildSelect(stmt.Select)
 	case *tree.SelectClause:
-		return b.buildSelectClause(stmt)
+		o, _, err := b.buildSelectClause(stmt, nil)
+		return o, err
 	default:
 		return nil, fmt.Errorf("unknown select statement '%T'", stmt)
 	}
@@ -31,9 +33,15 @@ func (b *build) buildSelect(stmt *tree.Select) (op.OP, error) {
 		stmt = s.Select
 		wrapped = stmt.Select
 		if stmt.OrderBy != nil {
+			if orderBy != nil {
+				return nil, errors.New("multiple ORDER BY clauses not allowed")
+			}
 			orderBy = stmt.OrderBy
 		}
 		if stmt.Limit != nil {
+			if fetch != nil {
+				return nil, errors.New("multiple LIMIT clauses not allowed")
+			}
 			fetch = stmt.Limit
 		}
 	}
@@ -43,13 +51,13 @@ func (b *build) buildSelect(stmt *tree.Select) (op.OP, error) {
 func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree.OrderBy, fetch *tree.Limit) (op.OP, error) {
 	var o op.OP
 	var err error
+	var es []*projection.Extend
 
 	switch stmt := stmt.(type) {
 	case *tree.ParenSelect:
 		return nil, fmt.Errorf("%T in buildSelectStmtWithoutParens", stmt)
 	case *tree.SelectClause:
-		o, err = b.buildSelectClause(stmt)
-		if err != nil {
+		if o, es, err = b.buildSelectClause(stmt, orderBy); err != nil {
 			return nil, err
 		}
 	default:
@@ -68,10 +76,15 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 			if v.V.Typ.Oid != types.T_int64 {
 				return nil, fmt.Errorf("Undeclared variable '%s'", e)
 			}
-			return b.buildTop(o, orderBy, v.V.Col.([]int64)[0])
+			if o, err = b.buildTop(o, orderBy, v.V.Col.([]int64)[0]); err != nil {
+				return nil, err
+			}
+			if len(es) > 0 {
+				return projection.New(o, es)
+			}
+			return o, nil
 		} else {
-			o, err = b.buildOrderBy(o, orderBy)
-			if err != nil {
+			if o, err = b.buildOrderBy(o, orderBy); err != nil {
 				return nil, err
 			}
 		}
@@ -106,73 +119,108 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 			o = limit.New(o, v.V.Col.([]int64)[0])
 		}
 	}
+	if len(es) > 0 {
+		return projection.New(o, es)
+	}
 	return o, nil
 }
 
-func (b *build) buildSelectClause(stmt *tree.SelectClause) (op.OP, error) {
+func (b *build) buildSelectClause(stmt *tree.SelectClause, orderBy tree.OrderBy) (op.OP, []*projection.Extend, error) {
+	if b.hasSummarize(stmt.Exprs) {
+		return b.buildSelectClauseWithSummarize(stmt)
+	}
+	return b.buildSelectClauseWithoutSummarize(stmt, orderBy)
+}
+
+func (b *build) buildSelectClauseWithSummarize(stmt *tree.SelectClause) (op.OP, []*projection.Extend, error) {
 	var o op.OP
 	var err error
 
 	if stmt.From == nil {
-		return nil, errors.New("need from clause")
+		return nil, nil, errors.New("need from clause")
 	}
 	if o, err = b.buildFrom(stmt.From.Tables); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	if len(stmt.GroupBy) != 0 {
+		if len(stmt.Exprs) != 0 {
+			if o, err = b.buildGroupBy(o, stmt.Exprs, stmt.GroupBy, stmt.Where); err != nil {
+				return nil, nil, err
+			}
+		}
+	} else {
+		if o, err = b.buildSummarize(o, stmt.Exprs, stmt.Where); err != nil {
+			return nil, nil, err
+		}
+	}
+	return o, nil, nil
+}
+
+func (b *build) buildSelectClauseWithoutSummarize(stmt *tree.SelectClause, orderBy tree.OrderBy) (op.OP, []*projection.Extend, error) {
+	var o op.OP
+	var err error
+	var es, pes []*projection.Extend
+
+	if stmt.From == nil {
+		return nil, nil, errors.New("need from clause")
+	}
+	if o, err = b.buildFrom(stmt.From.Tables); err != nil {
+		return nil, nil, err
+	}
+	mp := make(map[string]uint8)
 	if stmt.Where != nil {
-		if o, err = b.buildWhere(o, stmt.Where); err != nil {
-			return nil, err
+		if err := b.extractExtend(o, stmt.Where.Expr, &es, mp); err != nil {
+			return nil, nil, err
+		}
+	}
+	if len(orderBy) > 0 {
+		for _, ord := range orderBy {
+			if err := b.extractExtend(o, ord.Expr, &es, mp); err != nil {
+				return nil, nil, err
+			}
 		}
 	}
 	if len(stmt.GroupBy) != 0 {
 		var gs []*extend.Attribute
-		if o, gs, err = b.buildGroupBy(o, stmt.GroupBy); err != nil {
-			return nil, err
+		if o, pes, err = b.buildProjectionWithOrder(o, stmt.Exprs, es, mp); err != nil {
+			return nil, nil, err
 		}
-		if len(stmt.Exprs) != 0 {
-			if b.hasSummarize(stmt.Exprs) {
-				if o, err = b.buildProjectionWithGroup(o, stmt.Exprs, gs); err != nil {
-					return nil, err
-				}
-			} else {
-				o = dedup.New(o, gs)
-				if o, err = b.buildProjection(o, stmt.Exprs); err != nil {
-					return nil, err
-				}
+		if stmt.Where != nil {
+			if o, err = b.buildWhere(o, stmt.Where); err != nil {
+				return nil, nil, err
 			}
 		}
-		if stmt.Having != nil {
-			if o, err = b.buildWhere(o, stmt.Having); err != nil {
-				return nil, err
+		for _, g := range stmt.GroupBy {
+			e, err := b.buildExtend(o, g)
+			if err != nil {
+				return nil, nil, err
 			}
+			gs = append(gs, &extend.Attribute{
+				Name: e.String(),
+				Type: e.ReturnType(),
+			})
 		}
-		if stmt.Distinct {
-			if o, err = b.buildDedup(o); err != nil {
-				return nil, err
-			}
+		o = dedup.New(o, gs)
+	} else {
+		if o, pes, err = b.buildProjectionWithOrder(o, stmt.Exprs, es, mp); err != nil {
+			return nil, nil, err
 		}
-		return o, nil
-	}
-	if len(stmt.Exprs) != 0 {
-		if b.hasSummarize(stmt.Exprs) {
-			if o, err = b.buildSummarize(o, stmt.Exprs); err != nil {
-				return nil, err
-			}
-		} else {
-			if o, err = b.buildProjection(o, stmt.Exprs); err != nil {
-				return nil, err
+		if stmt.Where != nil {
+			if o, err = b.buildWhere(o, stmt.Where); err != nil {
+				return nil, nil, err
 			}
 		}
 	}
 	if stmt.Having != nil {
 		if o, err = b.buildWhere(o, stmt.Having); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	if stmt.Distinct {
 		if o, err = b.buildDedup(o); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return o, nil
+	return o, pes, nil
+
 }

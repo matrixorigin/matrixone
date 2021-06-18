@@ -42,10 +42,10 @@
 #	Access:	[file]
 #	DataType:	bool
 #	DomainType:	set
-#	Values:	[true]
+#	Values:	[]
 #	Comment:	send data row while producing
 #	UpdateMode:	dynamic
-	sendRow=true
+	sendRow= false
 
 
 	
@@ -54,10 +54,10 @@
 #	Access:	[file]
 #	DataType:	bool
 #	DomainType:	set
-#	Values:	[true]
+#	Values:	[]
 #	Comment:	dump Environment with memEngine Null nodes for testing
 #	UpdateMode:	dynamic
-	dumpEnv=true
+	dumpEnv= false
 
 
 	

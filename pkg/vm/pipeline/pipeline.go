@@ -35,7 +35,7 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 	defer func() {
 		{
 			proc.Reg.Ax = nil
-			_, err = vm.Run(p.ins, proc)
+			vm.Run(p.ins, proc)
 		}
 	}()
 	if err = vm.Prepare(p.ins, proc); err != nil {
@@ -70,11 +70,18 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 }
 
 func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
+	defer func() {
+		{
+			proc.Reg.Ax = nil
+			vm.Run(p.ins, proc)
+		}
+	}()
 	if err := vm.Prepare(p.ins, proc); err != nil {
 		vm.Clean(p.ins, proc)
 		return false, err
 	}
 	for {
+		proc.Reg.Ax = nil
 		if end, err := vm.Run(p.ins, proc); err != nil || end {
 			return end, err
 		}

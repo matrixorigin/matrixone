@@ -6,7 +6,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"sync"
-	// log "github.com/sirupsen/logrus"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -57,7 +58,11 @@ func (bh *BlockHandle) InitScanCursor() []col.ScanCursor {
 	cursors := make([]col.ScanCursor, len(bh.Cols))
 	for idx, colBlk := range bh.Cols {
 		colBlk.InitScanCursor(&cursors[idx])
-		cursors[idx].Init()
+		err := cursors[idx].Init()
+		if err != nil {
+			log.Error(fmt.Sprintf("logic error: %s", err))
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
 	}
 	return cursors
 }

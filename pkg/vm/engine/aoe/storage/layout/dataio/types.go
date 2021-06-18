@@ -3,12 +3,8 @@ package dataio
 import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
-
-type Pointer struct {
-	Offset int64
-	Len    uint64
-}
 
 type Key struct {
 	Col uint64
@@ -31,10 +27,24 @@ type ISegmentFile interface {
 	Destory()
 	RefBlock(blkId common.ID)
 	UnrefBlock(blkId common.ID)
-	MakeColSegmentFile(colIdx int) IColSegmentFile
+	RefIndex()
+	UnrefIndex()
+	// RefBlockIndex(common.ID)
+	// UnrefBlockIndex(common.ID)
+	MakeColPartFile(id *common.ID) IColPartFile
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
+	ReadPoint(ptr *base.Pointer, buf []byte)
+	ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte)
 }
 
 type IColSegmentFile interface {
 	ReadPart(id common.ID, buf []byte)
+}
+
+type IColPartFile interface {
+	io.Reader
+}
+
+type IIndexFile interface {
+	io.Reader
 }

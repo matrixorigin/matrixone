@@ -4,6 +4,7 @@ import (
 	"fmt"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -13,7 +14,7 @@ import (
 
 func NewSortedSegmentFile(dirname string, id common.ID) ISegmentFile {
 	sf := &SortedSegmentFile{
-		Parts: make(map[Key]Pointer),
+		Parts: make(map[Key]*base.Pointer),
 		ID:    id,
 	}
 
@@ -37,15 +38,43 @@ type SortedSegmentFile struct {
 	ID common.ID
 	os.File
 	Refs  int32
-	Parts map[Key]Pointer
+	Parts map[Key]*base.Pointer
 }
 
-func (sf *SortedSegmentFile) MakeColSegmentFile(colIdx int) IColSegmentFile {
-	csf := &ColSegmentFile{
+func (sf *SortedSegmentFile) MakeColPartFile(id *common.ID) IColPartFile {
+	cpf := &ColPartFile{
+		ID:          id,
 		SegmentFile: sf,
-		ColIdx:      uint64(colIdx),
 	}
-	return csf
+	return cpf
+}
+
+func (sf *SortedSegmentFile) RefIndex() {
+	atomic.AddInt32(&sf.Refs, int32(1))
+}
+
+func (sf *SortedSegmentFile) UnrefIndex() {
+	v := atomic.AddInt32(&sf.Refs, int32(-1))
+	if v == int32(0) {
+		sf.Destory()
+	}
+	if v < int32(0) {
+		panic("logic error")
+	}
+}
+
+func (sf *SortedSegmentFile) RefBlockIndex(id common.ID) {
+	atomic.AddInt32(&sf.Refs, int32(1))
+}
+
+func (sf *SortedSegmentFile) UnrefBlockIndex(id common.ID) {
+	v := atomic.AddInt32(&sf.Refs, int32(-1))
+	if v == int32(0) {
+		sf.Destory()
+	}
+	if v < int32(0) {
+		panic("logic error")
+	}
 }
 
 func (sf *SortedSegmentFile) RefBlock(id common.ID) {
@@ -79,6 +108,22 @@ func (sf *SortedSegmentFile) Destory() {
 	}
 }
 
+func (sf *SortedSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
+	sf.Lock()
+	defer sf.Unlock()
+	n, err := sf.ReadAt(buf, ptr.Offset)
+	if err != nil {
+		panic(fmt.Sprintf("logic error: %s", err))
+	}
+	if n != int(ptr.Len) {
+		panic("logic error")
+	}
+}
+
+func (sf *SortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {
+	sf.ReadPoint(ptr, buf)
+}
+
 func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	key := Key{
 		Col: colIdx,
@@ -91,13 +136,6 @@ func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if len(buf) != int(pointer.Len) {
 		panic("logic error")
 	}
-	sf.Lock()
-	defer sf.Unlock()
-	n, err := sf.ReadAt(buf, pointer.Offset)
-	if err != nil {
-		panic(fmt.Sprintf("logic error: %s", err))
-	}
-	if n != int(pointer.Len) {
-		panic("logic error")
-	}
+
+	sf.ReadPoint(pointer, buf)
 }

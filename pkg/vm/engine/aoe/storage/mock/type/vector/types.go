@@ -57,7 +57,9 @@ func (v *StdVector) Append(o Vector, offset uint64) (n uint64, err error) {
 	}
 	start := int(offset) * tsize
 	end := int(offset)*tsize + to_write
-	v.Data = append(v.Data[v.Offset:], buf[start:end]...)
+	// log.Infof("1. cap(v.Data)=%d, len(v.Data)=%d, v.Offset=%d, start=%d, end=%d\n", cap(v.Data), len(v.Data), v.Offset, start, end)
+	copy(v.Data[v.Offset:], buf[start:end])
+	// log.Infof("2. cap(v.Data)=%d, len(v.Data)=%d, v.Offset=%d\n", cap(v.Data), len(v.Data), v.Offset)
 	v.Offset += to_write
 	return uint64(to_write / tsize), nil
 }

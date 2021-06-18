@@ -3,6 +3,7 @@ package coldata
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
@@ -49,7 +50,7 @@ func TestUpgradeSegOp(t *testing.T) {
 		op.Push()
 		op.WaitDone()
 		for _, seg := range op.Segments {
-			assert.Equal(t, col.SORTED_SEG, seg.GetSegmentType())
+			assert.Equal(t, base.SORTED_SEG, seg.GetSegmentType())
 			nextSeg := seg.GetNext()
 			if idx < int(seg_cnt)-1 {
 				assert.NotNil(t, nextSeg)
@@ -111,9 +112,9 @@ func TestUpgradeBlkOp(t *testing.T) {
 			assert.Equal(t, len(schema.ColDefs), len(op.Blocks))
 			for _, blk := range op.Blocks {
 				if idx == 0 {
-					assert.Equal(t, col.PERSISTENT_BLK, blk.GetBlockType())
+					assert.Equal(t, base.PERSISTENT_BLK, blk.GetBlockType())
 				} else if idx == 1 {
-					assert.Equal(t, col.PERSISTENT_SORTED_BLK, blk.GetBlockType())
+					assert.Equal(t, base.PERSISTENT_SORTED_BLK, blk.GetBlockType())
 				}
 				blk.UnRef()
 			}
