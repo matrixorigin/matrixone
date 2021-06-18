@@ -15,18 +15,15 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	rp := arg.(*Argument).Res
+	ap := arg.(*Argument)
 	if proc.Reg.Ax != nil {
 		bat := proc.Reg.Ax.(*batch.Batch)
-		if bat != nil {
-			bat.Reorder(rp.Attrs)
+		if bat != nil && bat.Attrs != nil {
+			bat.Reorder(ap.Attrs)
 			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
 				return false, err
 			}
-			if err := rp.FillResult(bat); err != nil {
-				bat.Clean(proc)
-				return false, err
-			}
+			ap.Func(ap.Data, bat)
 			bat.Clean(proc)
 		}
 	}

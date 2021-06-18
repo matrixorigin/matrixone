@@ -37,6 +37,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	n := arg.(*Argument)
 	ctr := &n.Ctr
+	ctr.refer = n.Refer
 	bat := proc.Reg.Ax.(*batch.Batch)
 	if bat.Attrs == nil {
 		return false, nil
@@ -94,7 +95,7 @@ func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, pr
 			ctr.bat.Vecs = ctr.bat.Vecs[:i]
 			return err
 		}
-		copy(ctr.bat.Vecs[i].Data, encoding.EncodeUint64(proc.Refer[e.Alias]))
+		copy(ctr.bat.Vecs[i].Data, encoding.EncodeUint64(ctr.refer[e.Alias]))
 	}
 	return nil
 }

@@ -6,6 +6,12 @@ import (
 	"matrixone/pkg/container/batch"
 )
 
+const (
+	Build = iota
+	Eval
+	End
+)
+
 // Direction for ordering results.
 type Direction int8
 
@@ -17,6 +23,7 @@ const (
 )
 
 type Container struct {
+	state int
 	n     int // number of attributes involved in sorting
 	data  []byte
 	sels  []int64

@@ -14,6 +14,7 @@ const (
 	Merge
 	MergeEval
 	EvalPrepare
+	End
 )
 
 // Direction for ordering results.

@@ -1,7 +1,9 @@
 package myoutput
 
-import "matrixone/pkg/sql/result"
+import "matrixone/pkg/container/batch"
 
 type Argument struct {
-	Res *result.Result
+	Attrs []string
+	Data  interface{}
+	Func  func(interface{}, *batch.Batch)
 }
