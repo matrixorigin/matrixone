@@ -53,6 +53,31 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
 	for {
+		switch ctr.state {
+		case Build:
+			if err := ctr.build(n, proc); err != nil {
+				ctr.clean(proc)
+				ctr.state = End
+				return true, err
+			}
+			ctr.state = Eval
+		case Eval:
+			if err := ctr.Eval(n, proc); err != nil {
+				ctr.clean(proc)
+				ctr.state = End
+				return true, err
+			}
+			ctr.state = End
+			return true, nil
+		case End:
+			proc.Reg.Ax = nil
+			return true, nil
+		}
+	}
+}
+
+func (ctr *Container) build(n *Argument, proc *process.Process) error {
+	for {
 		if len(proc.Reg.Ws) == 0 {
 			break
 		}
@@ -79,8 +104,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
 				reg.Ch = nil
 				reg.Wg.Done()
-				ctr.clean(bat, proc)
-				return true, err
+				bat.Clean(proc)
+				return err
 			}
 			if ctr.bat == nil {
 				ctr.bat = batch.New(true, bat.Attrs)
@@ -99,21 +124,25 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				if err := ctr.processBatch(n.Limit, bat, proc); err != nil {
 					reg.Ch = nil
 					reg.Wg.Done()
-					ctr.clean(bat, proc)
-					return true, err
+					bat.Clean(proc)
+					return err
 				}
 			} else {
 				if err := ctr.processBatchSels(n.Limit, bat, proc); err != nil {
 					reg.Ch = nil
 					reg.Wg.Done()
-					ctr.clean(bat, proc)
-					return true, err
+					bat.Clean(proc)
+					return err
 				}
 			}
 			bat.Clean(proc)
 			reg.Wg.Done()
 		}
 	}
+	return nil
+}
+
+func (ctr *Container) Eval(n *Argument, proc *process.Process) error {
 	if int64(len(ctr.sels)) < n.Limit {
 		for i, cmp := range ctr.cmps {
 			cmp.Set(0, ctr.bat.Vecs[i])
@@ -134,8 +163,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	proc.Reg.Ax = ctr.bat
 	ctr.bat = nil
 	ctr.data = nil
-	ctr.clean(nil, proc)
-	return true, nil
+	return nil
 }
 
 func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.Process) error {
@@ -243,10 +271,7 @@ func (ctr *Container) processBatchSels(limit int64, bat *batch.Batch, proc *proc
 	return nil
 }
 
-func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
-	if bat != nil {
-		bat.Clean(proc)
-	}
+func (ctr *Container) clean(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc)
 	}

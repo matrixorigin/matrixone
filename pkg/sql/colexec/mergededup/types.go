@@ -12,6 +12,7 @@ import (
 const (
 	Build = iota
 	Eval
+	End
 )
 
 const (

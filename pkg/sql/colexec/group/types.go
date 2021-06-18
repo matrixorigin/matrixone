@@ -34,11 +34,13 @@ type Container struct {
 	slots  *fastmap.Map // hash code -> sels index
 	bat    *block.Block
 	bats   []*block.Block
+	refer  map[string]uint64
 	groups map[uint64][]*hash.Group // hash code -> group list
 }
 
 type Argument struct {
-	Gs  []string
-	Ctr Container
-	Es  []aggregation.Extend
+	Gs    []string
+	Ctr   Container
+	Refer map[string]uint64
+	Es    []aggregation.Extend
 }

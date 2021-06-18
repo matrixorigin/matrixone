@@ -12,6 +12,7 @@ import (
 	"matrixone/pkg/sql/colexec/exchange"
 	"matrixone/pkg/sql/colexec/group"
 	"matrixone/pkg/sql/colexec/limit"
+	"matrixone/pkg/sql/colexec/merge"
 	"matrixone/pkg/sql/colexec/mergededup"
 	"matrixone/pkg/sql/colexec/mergegroup"
 	"matrixone/pkg/sql/colexec/mergeorder"
@@ -66,6 +67,7 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	Output:            output.String,
 	MyOutput:          myoutput.String,
 	Exchange:          exchange.String,
+	Merge:             merge.String,
 	MergeTop:          mergetop.String,
 	MergeDedup:        mergededup.String,
 	MergeOrder:        mergeorder.String,
@@ -104,6 +106,7 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	Output:            output.Prepare,
 	MyOutput:          myoutput.Prepare,
 	Exchange:          exchange.Prepare,
+	Merge:             merge.Prepare,
 	MergeTop:          mergetop.Prepare,
 	MergeDedup:        mergededup.Prepare,
 	MergeOrder:        mergeorder.Prepare,
@@ -142,6 +145,7 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	Output:            output.Call,
 	MyOutput:          myoutput.Call,
 	Exchange:          exchange.Call,
+	Merge:             merge.Call,
 	MergeTop:          mergetop.Call,
 	MergeDedup:        mergededup.Call,
 	MergeOrder:        mergeorder.Call,

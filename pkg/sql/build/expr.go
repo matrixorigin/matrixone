@@ -21,6 +21,36 @@ func (b *build) buildExtend(o op.OP, n tree.Expr) (extend.Extend, error) {
 	return b.pruneExtend(e)
 }
 
+func (b *build) hasAggregate(n tree.Expr) bool {
+	switch e := n.(type) {
+	case *tree.ParenExpr:
+		return b.hasAggregate(e.Expr)
+	case *tree.OrExpr:
+		return b.hasAggregate(e.Left) || b.hasAggregate(e.Right)
+	case *tree.NotExpr:
+		return b.hasAggregate(e.Expr)
+	case *tree.AndExpr:
+		return b.hasAggregate(e.Left) || b.hasAggregate(e.Right)
+	case *tree.UnaryExpr:
+		return b.hasAggregate(e.Expr)
+	case *tree.BinaryExpr:
+		return b.hasAggregate(e.Left) || b.hasAggregate(e.Right)
+	case *tree.ComparisonExpr:
+		return b.hasAggregate(e.Left) || b.hasAggregate(e.Right)
+	case *tree.FuncExpr:
+		if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok {
+			if _, ok = AggFuncs[name.Parts[0]]; ok {
+				return true
+			}
+		}
+	case *tree.CastExpr:
+		return b.hasAggregate(e.Expr)
+	case *tree.RangeCond:
+		return b.hasAggregate(e.Left) || b.hasAggregate(e.From) || b.hasAggregate(e.To)
+	}
+	return false
+}
+
 func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/encoding"
+	"matrixone/pkg/sql/colexec/extend"
+	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 	"matrixone/pkg/vm/register"
 )
@@ -42,33 +44,18 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			clean(bat, rbat, proc)
 			return false, err
 		}
-		if count, ok := proc.Refer[n.Attrs[i]]; ok {
-			copy(rbat.Vecs[i].Data, encoding.EncodeUint64(count))
-		} else {
-			count = encoding.DecodeUint64(rbat.Vecs[i].Data)
-			copy(rbat.Vecs[i].Data, encoding.EncodeUint64(1+count))
+		if _, ok := n.Es[i].(*extend.Attribute); !ok {
+			copy(rbat.Vecs[i].Data[:mempool.CountSize], encoding.EncodeUint64(n.Refer[n.Attrs[i]]))
 		}
 	}
 	{
 		for _, e := range n.Es {
-			bat.Reduce(e.Attributes(), proc)
-		}
-	}
-	{
-		mp := make(map[string]uint8)
-		{
-			for _, attr := range bat.Attrs {
-				mp[attr] = 0
-			}
-		}
-		for i, attr := range rbat.Attrs {
-			if _, ok := mp[attr]; !ok {
-				bat.Attrs = append(bat.Attrs, attr)
-				bat.Vecs = append(bat.Vecs, rbat.Vecs[i])
+			if _, ok := e.(*extend.Attribute); !ok {
+				bat.Reduce(e.Attributes(), proc)
 			}
 		}
 	}
-	proc.Reg.Ax = bat
+	proc.Reg.Ax = rbat
 	register.FreeRegisters(proc)
 	return false, nil
 }
