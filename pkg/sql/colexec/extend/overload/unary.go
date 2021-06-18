@@ -37,7 +37,7 @@ var UnaryOps = map[int][]*UnaryOp{
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt8Slice(vec.Data)
+				rs := encoding.DecodeInt8Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(vs)]
 				vec.Col = rs
 				vec.Nsp = v.Nsp

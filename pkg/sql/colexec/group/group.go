@@ -80,10 +80,10 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	return nil
 }
 
-// slow version
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
+	ctr.refer = n.Refer
 	if proc.Reg.Ax == nil {
 		ctr.clean(proc)
 		return false, nil
@@ -435,7 +435,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 		}
 	}
 	for i, e := range es {
-		copy(vecs[i].Data, encoding.EncodeUint64(proc.Refer[e.Alias]))
+		copy(vecs[i].Data, encoding.EncodeUint64(ctr.refer[e.Alias]))
 	}
 	return vecs, nil
 }
@@ -551,14 +551,15 @@ func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vecto
 		hash.RehashSels(sels[:count], ctr.hashs, vec)
 	}
 	nextslot := 0
-	for i, h := range ctr.hashs {
+	for _, sel := range sels {
+		h := ctr.hashs[sel]
 		slot, ok := ctr.slots.Get(h)
 		if !ok {
 			slot = nextslot
 			ctr.slots.Set(h, slot)
 			nextslot++
 		}
-		ctr.sels[slot] = append(ctr.sels[slot], sels[i])
+		ctr.sels[slot] = append(ctr.sels[slot], sel)
 	}
 }
 

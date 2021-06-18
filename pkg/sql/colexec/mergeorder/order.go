@@ -49,6 +49,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			ctr.spill.e = n.E
 			if err := ctr.build(n, proc); err != nil {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, err
 			}
 			if len(ctr.ptns) == 0 {
@@ -58,6 +59,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 		case Eval:
 			if err := ctr.eval(proc); err != nil {
+				ctr.state = End
 				return true, err
 			}
 			ctr.bat.Reduce(ctr.attrs, proc)
@@ -65,18 +67,21 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			ctr.bat = nil
 			if len(ctr.ptn.heap) == 0 {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, nil
 			}
 			return false, nil
 		case Merge:
 			if err := ctr.merge(proc); err != nil {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, err
 			}
 			ctr.state = MergeEval
 		case MergeEval:
 			if err := ctr.mergeeval(proc); err != nil {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, err
 			}
 			ctr.bat.Reduce(ctr.attrs, proc)
@@ -84,6 +89,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			ctr.bat = nil
 			if len(ctr.heap) == 0 {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, nil
 			}
 			return false, nil
@@ -91,6 +97,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			for _, bat := range ctr.ptn.bats {
 				if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
 					ctr.clean(proc)
+					ctr.state = End
 					return true, err
 				}
 			}
@@ -104,12 +111,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 					n, err := bat.Length(proc)
 					if err != nil {
 						ctr.clean(proc)
+						ctr.state = End
 						return true, err
 					}
 					ptn.lens[i] = int64(n)
 				}
 			}
 			ctr.state = Eval
+		case End:
+			proc.Reg.Ax = nil
+			return true, nil
 		}
 	}
 	return false, nil

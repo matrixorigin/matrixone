@@ -4,13 +4,31 @@ import (
 	"matrixone/pkg/sql/colexec/extend"
 	vprojection "matrixone/pkg/sql/colexec/projection"
 	"matrixone/pkg/sql/op/projection"
+	"matrixone/pkg/sql/op/relation"
 	"matrixone/pkg/vm"
 )
 
-func (c *compile) compileProjection(o *projection.Projection) ([]*Scope, error) {
-	var attrs []string
-
-	ss, err := c.compile(o.Prev)
+func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint64) ([]*Scope, error) {
+	refer := make(map[string]uint64)
+	{
+		for i, e := range o.Es {
+			if name, ok := e.E.(*extend.Attribute); ok {
+				if _, ok := o.Prev.(*relation.Relation); ok {
+					mp[name.Name]++
+				}
+			} else {
+				attr := o.As[i]
+				if v, ok := mp[attr]; ok {
+					refer[attr] = v
+					delete(mp, attr)
+				} else {
+					refer[attr]++
+				}
+				IncRef(e.E, mp)
+			}
+		}
+	}
+	ss, err := c.compile(o.Prev, mp)
 	if err != nil {
 		return nil, err
 	}
@@ -22,20 +40,14 @@ func (c *compile) compileProjection(o *projection.Projection) ([]*Scope, error) 
 		for i, e := range o.Es {
 			arg.Es[i] = e.E
 			arg.Attrs[i] = e.Alias
-			attrs = append(attrs, e.E.Attributes()...)
 		}
 	}
+	arg.Refer = refer
 	for _, s := range ss {
 		s.Ins = append(s.Ins, vm.Instruction{
 			Arg: arg,
 			Op:  vm.Projection,
 		})
-		IncRef(s, attrs)
-		{
-			for _, attr := range o.As {
-				s.Proc.Refer[attr] = 1
-			}
-		}
 	}
 	return ss, nil
 }

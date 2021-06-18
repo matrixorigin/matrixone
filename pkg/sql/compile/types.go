@@ -3,7 +3,6 @@ package compile
 import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/op/relation"
-	"matrixone/pkg/sql/result"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
@@ -37,10 +36,10 @@ type Col struct {
 }
 
 type Exec struct {
-	cs []*Col
-	ss []*Scope
-	e  engine.Engine
-	rs []*result.Result
+	err error
+	cs  []*Col
+	ss  []*Scope
+	e   engine.Engine
 }
 
 type compile struct {
