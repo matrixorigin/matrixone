@@ -12,6 +12,7 @@ type IScanCursor interface {
 	Next() bool
 	Init() error
 	IsInited() bool
+	GetNode() bmgrif.MangaedNode
 }
 
 type ScanCursor struct {
@@ -19,6 +20,10 @@ type ScanCursor struct {
 	Current IColumnPart
 	Node    bmgrif.MangaedNode
 	Inited  bool
+}
+
+func (c *ScanCursor) GetNode() bmgrif.MangaedNode {
+	return c.Node
 }
 
 func (c *ScanCursor) Next() bool {

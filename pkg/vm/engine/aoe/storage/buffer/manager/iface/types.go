@@ -17,7 +17,6 @@ type IVFile interface {
 type INode interface {
 	io.Closer
 	GetManagedNode() MangaedNode
-	GetDataNode() buf.IMemoryNode
 }
 
 type MangaedNode struct {
