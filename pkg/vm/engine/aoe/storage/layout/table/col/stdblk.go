@@ -26,7 +26,7 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 	if meta.DataState < md.FULL {
 		blkType = base.TRANSIENT_BLK
 		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType)
+			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
 			newIndexHolder = true
 		}
 	} else if seg.GetSegmentType() == base.UNSORTED_SEG {
@@ -39,7 +39,7 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 			}
 		}
 		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType)
+			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
 			newIndexHolder = true
 		}
 	} else {
@@ -54,7 +54,7 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 			}
 		}
 		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType)
+			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
 			newIndexHolder = true
 		}
 	}
@@ -98,7 +98,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 			}
 		}
 		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(newMeta.AsCommonID().AsBlockID(), newType)
+			indexHolder = seg.GetIndexHolder().RegisterBlock(newMeta.AsCommonID().AsBlockID(), newType, nil)
 			newIndexHolder = true
 		} else if indexHolder.Type < newType {
 			indexHolder = seg.GetIndexHolder().UpgradeBlock(newMeta.ID, newType)
@@ -116,7 +116,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 			panic("logic error")
 		}
 		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(newMeta.AsCommonID().AsBlockID(), newType)
+			indexHolder = seg.GetIndexHolder().RegisterBlock(newMeta.AsCommonID().AsBlockID(), newType, nil)
 			newIndexHolder = true
 		} else if indexHolder.Type < newType {
 			indexHolder = seg.GetIndexHolder().UpgradeBlock(newMeta.ID, newType)

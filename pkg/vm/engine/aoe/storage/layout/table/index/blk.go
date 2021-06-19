@@ -12,18 +12,20 @@ type BlockHolder struct {
 	RefHelper
 	ID common.ID
 	sync.RWMutex
-	Indexes []*Node
-	Type    base.BlockType
-	BufMgr  mgrif.IBufferManager
-	Inited  bool
+	Indexes     []*Node
+	Type        base.BlockType
+	BufMgr      mgrif.IBufferManager
+	Inited      bool
+	PostCloseCB PostCloseCB
 }
 
-func newBlockHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType) *BlockHolder {
+func newBlockHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType, cb PostCloseCB) *BlockHolder {
 	holder := &BlockHolder{
-		ID:     id,
-		Type:   t,
-		BufMgr: bufMgr,
-		Inited: false,
+		ID:          id,
+		Type:        t,
+		BufMgr:      bufMgr,
+		Inited:      false,
+		PostCloseCB: cb,
 	}
 	holder.Indexes = make([]*Node, 0)
 	holder.OnZeroCB = holder.close
@@ -50,6 +52,9 @@ func (holder *BlockHolder) Init(segFile base.ISegmentFile) {
 func (holder *BlockHolder) close() {
 	for _, index := range holder.Indexes {
 		index.Unref()
+	}
+	if holder.PostCloseCB != nil {
+		holder.PostCloseCB(holder)
 	}
 }
 

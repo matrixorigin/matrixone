@@ -100,8 +100,8 @@ func (holder *SegmentHolder) GetBlock(id uint64) (blk *BlockHolder) {
 	return blk
 }
 
-func (holder *SegmentHolder) RegisterBlock(id common.ID, blkType base.BlockType) *BlockHolder {
-	blk := newBlockHolder(holder.BufMgr, id, blkType)
+func (holder *SegmentHolder) RegisterBlock(id common.ID, blkType base.BlockType, cb PostCloseCB) *BlockHolder {
+	blk := newBlockHolder(holder.BufMgr, id, blkType, cb)
 	holder.addBlock(blk)
 	blk.Ref()
 	return blk
@@ -148,7 +148,7 @@ func (holder *SegmentHolder) UpgradeBlock(id uint64, blkType base.BlockType) *Bl
 	if stale.Type >= blkType {
 		panic(fmt.Sprintf("Cannot upgrade blk %d, type %d", id, blkType))
 	}
-	blk := newBlockHolder(holder.BufMgr, stale.ID, blkType)
+	blk := newBlockHolder(holder.BufMgr, stale.ID, blkType, stale.PostCloseCB)
 	holder.tree.Blocks[idx] = blk
 	blk.Ref()
 	stale.Unref()
