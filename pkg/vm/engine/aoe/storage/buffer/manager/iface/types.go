@@ -7,6 +7,28 @@ import (
 	"sync"
 )
 
+type IVFile interface {
+	io.Reader
+	Ref()
+	Unref()
+	// io.Writer
+}
+
+type INode interface {
+	io.Closer
+	GetManagedNode() MangaedNode
+	GetDataNode() buf.IMemoryNode
+}
+
+type MangaedNode struct {
+	Handle   nif.IBufferHandle
+	DataNode buf.IMemoryNode
+}
+
+func (h *MangaedNode) Close() error {
+	return h.Handle.Close()
+}
+
 type IBufferManager interface {
 	sync.Locker
 	RLock()

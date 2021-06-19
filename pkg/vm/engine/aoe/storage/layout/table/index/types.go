@@ -2,18 +2,15 @@ package index
 
 import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 
 	"github.com/pilosa/pilosa/roaring"
 )
 
 type IndexInfo struct {
-	Node INode
+	*bmgr.Node
 	Cols *roaring.Bitmap
-}
-
-func (info *IndexInfo) GetIndexHandle() NodeHandle {
-	return info.Node.GetHandle()
 }
 
 func (info *IndexInfo) ContainsCol(v uint64) bool {
