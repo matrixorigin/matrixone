@@ -17,18 +17,18 @@ func TestSegment(t *testing.T) {
 	assert.Equal(t, int32(0), segHolder.GetBlockCount())
 
 	blk0Id := segID
-	blk0Holder := NewBlockHolder(bufMgr, blk0Id, base.TRANSIENT_BLK)
+	blk0Holder := newBlockHolder(bufMgr, blk0Id, base.TRANSIENT_BLK)
 	blk1Id := blk0Id
 	blk1Id.BlockID++
-	blk1Holder := NewBlockHolder(bufMgr, blk1Id, base.TRANSIENT_BLK)
+	blk1Holder := newBlockHolder(bufMgr, blk1Id, base.TRANSIENT_BLK)
 
 	blk0 := segHolder.GetBlock(blk0Id.BlockID)
 	assert.Nil(t, blk0)
-	segHolder.AddBlock(blk0Holder)
+	segHolder.addBlock(blk0Holder)
 	blk0 = segHolder.GetBlock(blk0Id.BlockID)
 	assert.NotNil(t, blk0)
 	assert.Equal(t, int32(1), segHolder.GetBlockCount())
-	segHolder.AddBlock(blk1Holder)
+	segHolder.addBlock(blk1Holder)
 	assert.Equal(t, int32(2), segHolder.GetBlockCount())
 
 	dropped := segHolder.DropSegment(blk0Id.BlockID)

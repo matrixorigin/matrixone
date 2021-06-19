@@ -9,6 +9,7 @@ import (
 )
 
 type BlockHolder struct {
+	RefHelper
 	ID common.ID
 	sync.RWMutex
 	Indexes []*Node
@@ -17,7 +18,7 @@ type BlockHolder struct {
 	Inited  bool
 }
 
-func NewBlockHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType) *BlockHolder {
+func newBlockHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType) *BlockHolder {
 	holder := &BlockHolder{
 		ID:     id,
 		Type:   t,
@@ -25,6 +26,8 @@ func NewBlockHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType)
 		Inited: false,
 	}
 	holder.Indexes = make([]*Node, 0)
+	holder.OnZeroCB = holder.close
+	holder.Ref()
 	return holder
 }
 
@@ -42,6 +45,12 @@ func (holder *BlockHolder) Init(segFile base.ISegmentFile) {
 		holder.Indexes = append(holder.Indexes, node)
 	}
 	holder.Inited = true
+}
+
+func (holder *BlockHolder) close() {
+	// for _, index := range holder.Indexes {
+	// 	index.Unref()
+	// }
 }
 
 func (holder *BlockHolder) Any() bool {

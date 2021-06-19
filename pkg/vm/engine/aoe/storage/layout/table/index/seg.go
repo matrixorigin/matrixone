@@ -9,7 +9,30 @@ import (
 	"sync/atomic"
 )
 
+type OnZeroCB func()
+
+type RefHelper struct {
+	Refs     int64
+	OnZeroCB OnZeroCB
+}
+
+func (helper *RefHelper) Ref() {
+	atomic.AddInt64(&helper.Refs, int64(1))
+}
+
+func (helper *RefHelper) Unref() {
+	v := atomic.AddInt64(&helper.Refs, int64(-1))
+	if v == 0 {
+		if helper.OnZeroCB != nil {
+			helper.OnZeroCB()
+		}
+	} else if v < 0 {
+		panic("logic error")
+	}
+}
+
 type SegmentHolder struct {
+	RefHelper
 	ID     common.ID
 	BufMgr mgrif.IBufferManager
 	self   struct {
@@ -30,7 +53,18 @@ func NewSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	holder.tree.Blocks = make([]*BlockHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
 	holder.self.Indexes = make(map[string]Index)
+	holder.OnZeroCB = holder.close
 	return holder
+}
+
+func (holder *SegmentHolder) close() {
+	for _, blk := range holder.tree.Blocks {
+		blk.Unref()
+	}
+
+	// for _, index := range holder.self.Indexes {
+	// 	index.Unref()
+	// }
 }
 
 func (holder *SegmentHolder) stringNoLock() string {
@@ -49,11 +83,19 @@ func (holder *SegmentHolder) GetBlock(id uint64) (blk *BlockHolder) {
 		return nil
 	}
 	blk = holder.tree.Blocks[idx]
+	blk.Ref()
 	holder.tree.RUnlock()
 	return blk
 }
 
-func (holder *SegmentHolder) AddBlock(blk *BlockHolder) {
+func (holder *SegmentHolder) RegisterBlock(id common.ID, blkType base.BlockType) *BlockHolder {
+	blk := newBlockHolder(holder.BufMgr, id, blkType)
+	holder.addBlock(blk)
+	blk.Ref()
+	return blk
+}
+
+func (holder *SegmentHolder) addBlock(blk *BlockHolder) {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
 	_, ok := holder.tree.IdMap[blk.ID.BlockID]
@@ -94,7 +136,9 @@ func (holder *SegmentHolder) UpgradeBlock(id uint64, blkType base.BlockType) *Bl
 	if stale.Type >= blkType {
 		panic(fmt.Sprintf("Cannot upgrade blk %d, type %d", id, blkType))
 	}
-	newBlk := NewBlockHolder(holder.BufMgr, stale.ID, blkType)
-	holder.tree.Blocks[idx] = newBlk
-	return newBlk
+	blk := newBlockHolder(holder.BufMgr, stale.ID, blkType)
+	holder.tree.Blocks[idx] = blk
+	blk.Ref()
+	stale.Unref()
+	return blk
 }
