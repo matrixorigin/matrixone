@@ -4,7 +4,6 @@ import (
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync/atomic"
@@ -18,7 +17,7 @@ type StdColumnBlock struct {
 func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 	var (
 		blkType base.BlockType
-		segFile ldio.ISegmentFile
+		segFile base.ISegmentFile
 	)
 	fsMgr := seg.GetFsManager()
 	indexHolder := seg.GetIndexHolder().GetBlock(meta.ID)

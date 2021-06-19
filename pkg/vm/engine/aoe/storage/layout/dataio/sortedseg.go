@@ -12,9 +12,9 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func NewSortedSegmentFile(dirname string, id common.ID) ISegmentFile {
+func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	sf := &SortedSegmentFile{
-		Parts:      make(map[Key]*base.Pointer),
+		Parts:      make(map[base.Key]*base.Pointer),
 		ID:         id,
 		BlocksMeta: make(map[common.ID]*FileMeta),
 	}
@@ -39,7 +39,7 @@ type SortedSegmentFile struct {
 	ID common.ID
 	os.File
 	Refs       int32
-	Parts      map[Key]*base.Pointer
+	Parts      map[base.Key]*base.Pointer
 	Meta       *FileMeta
 	BlocksMeta map[common.ID]*FileMeta
 }
@@ -135,7 +135,7 @@ func (sf *SortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf
 }
 
 func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
-	key := Key{
+	key := base.Key{
 		Col: colIdx,
 		ID:  id,
 	}

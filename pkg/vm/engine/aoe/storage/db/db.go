@@ -8,7 +8,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle"
 	ih "matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
@@ -34,7 +34,7 @@ type DB struct {
 	Dir  string
 	Opts *e.Options
 
-	FsMgr       ldio.IManager
+	FsMgr       base.IManager
 	MemTableMgr mtif.IManager
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager

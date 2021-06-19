@@ -6,7 +6,7 @@ import (
 )
 
 type EmbbedIndexFile struct {
-	SegmentFile ISegmentFile
+	SegmentFile base.ISegmentFile
 	Meta        *base.IndexMeta
 }
 

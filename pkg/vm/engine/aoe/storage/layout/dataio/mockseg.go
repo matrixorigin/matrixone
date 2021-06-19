@@ -17,7 +17,7 @@ type MockSegmentFile struct {
 	ID       common.ID
 }
 
-func NewMockSegmentFile(dirname string, ft FileType, id common.ID) ISegmentFile {
+func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegmentFile {
 	msf := new(MockSegmentFile)
 	msf.FileType = ft
 	msf.ID = id

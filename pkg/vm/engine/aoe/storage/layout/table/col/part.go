@@ -6,7 +6,6 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -18,7 +17,7 @@ type IColumnPart interface {
 	InitScanCursor(cursor *ScanCursor) error
 	GetID() common.ID
 	GetColIdx() int
-	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager, ldio.IManager) IColumnPart
+	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager, base.IManager) IColumnPart
 }
 
 type ColumnPart struct {
@@ -28,7 +27,7 @@ type ColumnPart struct {
 	Next IColumnPart
 }
 
-func NewColumnPart(fsMgr ldio.IManager, bufMgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
+func NewColumnPart(fsMgr base.IManager, bufMgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 	capacity uint64) IColumnPart {
 	defer blk.UnRef()
 	part := &ColumnPart{ID: id}
@@ -51,7 +50,7 @@ func NewColumnPart(fsMgr ldio.IManager, bufMgr bmgrif.IBufferManager, blk IColum
 	return part
 }
 
-func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager, fsMgr ldio.IManager) IColumnPart {
+func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager, fsMgr base.IManager) IColumnPart {
 	defer blk.UnRef()
 	cloned := &ColumnPart{ID: part.ID}
 	var vf bmgrif.IVFile

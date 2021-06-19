@@ -10,16 +10,16 @@ import (
 type UnsortedSegmentFile struct {
 	sync.RWMutex
 	ID     common.ID
-	Blocks map[common.ID]IBlockFile
+	Blocks map[common.ID]base.IBlockFile
 	Dir    string
 	Refs   int32
 }
 
-func NewUnsortedSegmentFile(dirname string, id common.ID) ISegmentFile {
+func NewUnsortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	usf := &UnsortedSegmentFile{
 		ID:     id,
 		Dir:    dirname,
-		Blocks: make(map[common.ID]IBlockFile),
+		Blocks: make(map[common.ID]base.IBlockFile),
 	}
 	return usf
 }
@@ -101,14 +101,14 @@ func (sf *UnsortedSegmentFile) Destory() {
 	sf.Blocks = nil
 }
 
-func (sf *UnsortedSegmentFile) GetBlock(id common.ID) IBlockFile {
+func (sf *UnsortedSegmentFile) GetBlock(id common.ID) base.IBlockFile {
 	sf.RLock()
 	defer sf.RUnlock()
 	blk := sf.Blocks[id]
 	return blk
 }
 
-func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf IBlockFile) {
+func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf base.IBlockFile) {
 	_, ok := sf.Blocks[id]
 	if ok {
 		panic("logic error")

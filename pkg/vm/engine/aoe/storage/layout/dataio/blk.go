@@ -16,13 +16,13 @@ type BlockFile struct {
 	sync.RWMutex
 	os.File
 	ID    common.ID
-	Parts map[Key]*base.Pointer
+	Parts map[base.Key]*base.Pointer
 	Meta  *FileMeta
 }
 
-func NewBlockFile(dirname string, id common.ID) IBlockFile {
+func NewBlockFile(dirname string, id common.ID) base.IBlockFile {
 	bf := &BlockFile{
-		Parts: make(map[Key]*base.Pointer),
+		Parts: make(map[base.Key]*base.Pointer),
 		ID:    id,
 		Meta:  NewFileMeta(),
 	}
@@ -85,7 +85,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		if blkID != id.BlockID {
 			panic("logic error")
 		}
-		key := Key{
+		key := base.Key{
 			Col: uint64(i),
 			ID:  id.AsBlockID(),
 		}
@@ -114,7 +114,7 @@ func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 }
 
 func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
-	key := Key{
+	key := base.Key{
 		Col: colIdx,
 		ID:  id.AsBlockID(),
 	}

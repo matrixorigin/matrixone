@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 )
@@ -20,6 +21,10 @@ func NewBlockHolder(id uint64, t base.BlockType) *BlockHolder {
 	}
 	holder.Indexes = make([]*Node, 0)
 	return holder
+}
+
+func (holder *BlockHolder) AddNode(bufMgr mgrif.IBufferManager, vf mgrif.IVFile) {
+	// NewNode(meta.Cols, bufMgr,
 }
 
 func (holder *BlockHolder) stringNoLock() string {

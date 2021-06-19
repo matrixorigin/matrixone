@@ -7,7 +7,6 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
@@ -43,7 +42,7 @@ type IColumnSegment interface {
 	UnRef()
 	GetRefs() int64
 	GetMeta() *md.Segment
-	GetFsManager() ldio.IManager
+	GetFsManager() base.IManager
 }
 
 type ColumnSegment struct {
@@ -58,11 +57,11 @@ type ColumnSegment struct {
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
 	Meta        *md.Segment
-	FsMgr       ldio.IManager
+	FsMgr       base.IManager
 	IndexHolder *index.SegmentHolder
 }
 
-func NewColumnSegment(tblHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
+func NewColumnSegment(tblHolder *index.TableHolder, fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
 	segType := base.UNSORTED_SEG
 	indexSegType := base.UNSORTED_SEG
 	if meta.DataState == md.SORTED {
@@ -95,7 +94,7 @@ func (seg *ColumnSegment) GetIndexHolder() *index.SegmentHolder {
 	return seg.IndexHolder
 }
 
-func (seg *ColumnSegment) GetFsManager() ldio.IManager {
+func (seg *ColumnSegment) GetFsManager() base.IManager {
 	return seg.FsMgr
 }
 

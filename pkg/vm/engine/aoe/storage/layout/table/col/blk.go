@@ -4,7 +4,6 @@ import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
@@ -38,7 +37,7 @@ type ColumnBlock struct {
 	ColIdx      int
 	Refs        int64
 	Meta        *md.Block
-	File        ldio.ISegmentFile
+	File        base.ISegmentFile
 	IndexHolder *index.BlockHolder
 }
 
