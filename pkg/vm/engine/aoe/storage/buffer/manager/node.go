@@ -15,7 +15,7 @@ type Node struct {
 	VFile       bmgrif.IVFile
 }
 
-func NewNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) bmgrif.INode {
+func newNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) bmgrif.INode {
 	node := &Node{
 		BufMgr:      bufMgr,
 		VFile:       vf,

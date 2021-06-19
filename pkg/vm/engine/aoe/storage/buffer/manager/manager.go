@@ -79,6 +79,10 @@ func (mgr *BufferManager) GetNextTransientID() uint64 {
 	return atomic.AddUint64(&mgr.NextTransientID, uint64(1)) - 1
 }
 
+func (mgr *BufferManager) CreateNode(vf mgrif.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) mgrif.INode {
+	return newNode(mgr, vf, constructor, capacity)
+}
+
 func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
 	pNode := mgr.makePoolNode(capacity, constructor)
 	if pNode == nil {

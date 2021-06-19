@@ -50,6 +50,8 @@ type IBufferManager interface {
 	RegisterNode(capacity uint64, node_id uint64, reader io.Reader, constructor buf.MemoryNodeConstructor) nif.INodeHandle
 	UnregisterNode(nif.INodeHandle)
 
+	CreateNode(vf IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) INode
+
 	// // Allocate(size uint64) buf.IBufferH
 
 	Pin(h nif.INodeHandle) nif.IBufferHandle

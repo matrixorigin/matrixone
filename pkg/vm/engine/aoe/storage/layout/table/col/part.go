@@ -42,7 +42,7 @@ func NewColumnPart(fsMgr ldio.IManager, bufMgr bmgrif.IBufferManager, blk IColum
 	default:
 		panic("not support")
 	}
-	part.Node = bmgr.NewNode(bufMgr, vf, buf.RawMemoryNodeConstructor, capacity).(*bmgr.Node)
+	part.Node = bufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, capacity).(*bmgr.Node)
 	if part.Node == nil {
 		return nil
 	}
@@ -65,7 +65,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	default:
 		panic("not supported")
 	}
-	cloned.Node = bmgr.NewNode(sstBufMgr, vf, buf.RawMemoryNodeConstructor, part.Capacity).(*bmgr.Node)
+	cloned.Node = sstBufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, part.Capacity).(*bmgr.Node)
 
 	return cloned
 }
