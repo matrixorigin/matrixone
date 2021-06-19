@@ -10,15 +10,17 @@ import (
 type Node struct {
 	*bmgr.Node
 	RefHelper
-	Cols *roaring.Bitmap
+	Cols        *roaring.Bitmap
+	PostCloseCB PostCloseCB
 }
 
-func NewNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.MemoryNodeConstructor,
-	capacity uint64, cols *roaring.Bitmap) *Node {
+func newNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.MemoryNodeConstructor,
+	capacity uint64, cols *roaring.Bitmap, cb PostCloseCB) *Node {
 	node := new(Node)
 	node.Cols = cols
 	node.Node = bufMgr.CreateNode(vf, constructor, capacity).(*bmgr.Node)
 	node.OnZeroCB = node.close
+	node.PostCloseCB = cb
 	node.Ref()
 	return node
 }
@@ -26,6 +28,9 @@ func NewNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.Mem
 func (node *Node) close() {
 	if node.Node != nil {
 		node.Node.Close()
+	}
+	if node.PostCloseCB != nil {
+		node.PostCloseCB(node)
 	}
 }
 

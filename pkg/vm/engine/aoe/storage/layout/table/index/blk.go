@@ -43,7 +43,7 @@ func (holder *BlockHolder) Init(segFile base.ISegmentFile) {
 	}
 	for _, meta := range indexesMeta.Data {
 		vf := segFile.MakeVirtualBlkIndexFile(&holder.ID, meta)
-		node := NewNode(holder.BufMgr, vf, ZoneMapIndexConstructor, meta.Ptr.Len, meta.Cols)
+		node := newNode(holder.BufMgr, vf, ZoneMapIndexConstructor, meta.Ptr.Len, meta.Cols, nil)
 		holder.Indexes = append(holder.Indexes, node)
 	}
 	holder.Inited = true

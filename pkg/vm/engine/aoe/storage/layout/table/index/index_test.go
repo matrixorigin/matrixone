@@ -85,14 +85,30 @@ func TestRefs1(t *testing.T) {
 	}
 	seg0IndexHolder := tblHolder.RegisterSegment(id, base.UNSORTED_SEG, cb)
 	assert.Equal(t, int64(2), seg0IndexHolder.RefCount())
+
+	seg0Ref := tblHolder.GetSegment(id.SegmentID)
+	assert.Equal(t, int64(3), seg0Ref.RefCount())
+	assert.Equal(t, int64(3), seg0IndexHolder.RefCount())
+	assert.False(t, released)
+
 	droppedSeg := tblHolder.DropSegment(id.SegmentID)
+	assert.Equal(t, int64(3), seg0Ref.RefCount())
+	assert.Equal(t, int64(3), droppedSeg.RefCount())
+	assert.Equal(t, int64(3), seg0IndexHolder.RefCount())
+
+	droppedSeg.Unref()
+	assert.Equal(t, int64(2), seg0Ref.RefCount())
 	assert.Equal(t, int64(2), droppedSeg.RefCount())
 	assert.Equal(t, int64(2), seg0IndexHolder.RefCount())
-	droppedSeg.Unref()
+	assert.False(t, released)
+
+	seg0IndexHolder.Unref()
+	assert.Equal(t, int64(1), seg0Ref.RefCount())
 	assert.Equal(t, int64(1), droppedSeg.RefCount())
 	assert.Equal(t, int64(1), seg0IndexHolder.RefCount())
 	assert.False(t, released)
-	seg0IndexHolder.Unref()
+
+	seg0Ref.Unref()
 	assert.Equal(t, int64(0), droppedSeg.RefCount())
 	assert.Equal(t, int64(0), seg0IndexHolder.RefCount())
 	assert.True(t, released)
