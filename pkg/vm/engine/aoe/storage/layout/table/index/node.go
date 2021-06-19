@@ -12,8 +12,8 @@ type Node struct {
 	Cols *roaring.Bitmap
 }
 
-func NewNode(cols *roaring.Bitmap, bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile,
-	constructor buf.MemoryNodeConstructor, capacity uint64) *Node {
+func NewNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.MemoryNodeConstructor,
+	capacity uint64, cols *roaring.Bitmap) *Node {
 	node := new(Node)
 	node.Cols = cols
 	node.Node = bufMgr.CreateNode(vf, constructor, capacity).(*bmgr.Node)

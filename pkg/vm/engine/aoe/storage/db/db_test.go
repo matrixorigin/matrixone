@@ -157,6 +157,7 @@ func TestAppend(t *testing.T) {
 	t.Log(dbi.FsMgr.String())
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
+	t.Log(dbi.IndexBufMgr.String())
 	tbl, err := dbi.store.DataTables.GetTable(tid)
 	assert.Nil(t, err)
 	t.Log(tbl.GetCollumn(0).ToString(1000))
@@ -326,6 +327,7 @@ func TestConcurrency(t *testing.T) {
 	t.Log(dbi.WorkersStatsString())
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
+	t.Log(dbi.IndexBufMgr.String())
 	dbi.Close()
 }
 
@@ -361,6 +363,7 @@ func TestGC(t *testing.T) {
 	time.Sleep(time.Duration(40) * time.Millisecond)
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
+	t.Log(dbi.IndexBufMgr.String())
 	assert.Equal(t, int(blkCnt*insertCnt*2), dbi.SSTBufMgr.NodeCount()+dbi.MTBufMgr.NodeCount())
 	dbi.Close()
 }

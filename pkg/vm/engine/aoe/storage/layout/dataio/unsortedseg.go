@@ -1,6 +1,7 @@
 package dataio
 
 import (
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
@@ -31,6 +32,7 @@ func (sf *UnsortedSegmentFile) Ref() {
 func (sf *UnsortedSegmentFile) Unref() {
 	v := atomic.AddInt32(&sf.Refs, int32(-1))
 	if v < int32(0) {
+		log.Errorf("logic error")
 		panic("logic error")
 	}
 	if v == int32(0) {

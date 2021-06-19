@@ -82,6 +82,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 
 	fsMgr := ldio.NewManager(dirname, false)
 	memtblMgr := mt.NewManager(opts)
+	indexBufMgr := bm.NewBufferManager(opts.CacheCfg.IndexCapacity, opts.MemData.Updater)
 	mtBufMgr := bm.NewBufferManager(opts.CacheCfg.InsertCapacity, opts.MemData.Updater)
 	sstBufMgr := bm.NewBufferManager(opts.CacheCfg.DataCapacity, opts.MemData.Updater)
 
@@ -90,6 +91,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		Opts:        opts,
 		FsMgr:       fsMgr,
 		MemTableMgr: memtblMgr,
+		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mtBufMgr,
 		SSTBufMgr:   sstBufMgr,
 		ClosedC:     make(chan struct{}),
