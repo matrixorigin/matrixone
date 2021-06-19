@@ -13,20 +13,32 @@ type BlockHolder struct {
 	sync.RWMutex
 	Indexes []*Node
 	Type    base.BlockType
+	BufMgr  mgrif.IBufferManager
 }
 
-func NewBlockHolder(id common.ID, t base.BlockType) *BlockHolder {
+func NewBlockHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType) *BlockHolder {
 	holder := &BlockHolder{
-		ID:   id,
-		Type: t,
+		ID:     id,
+		Type:   t,
+		BufMgr: bufMgr,
 	}
 	holder.Indexes = make([]*Node, 0)
 	return holder
 }
 
 func (holder *BlockHolder) init(segFile base.ISegmentFile) {
-	// indexesMeta := segFile.GetBlockIndexesMeta(holder.ID)
+	indexesMeta := segFile.GetBlockIndexesMeta(holder.ID)
+	if indexesMeta == nil {
+		return
+	}
+	// for _, meta := range indexesMeta.Data {
+	// 	vf := segFile.MakeVirtualBlkIndexFile(&holder.ID, meta)
+	// 	node := NewNode(meta.Cols, vf, ZoneMapIndexConstructor, meta.Ptr.Len)
+	// }
+}
 
+func (holder *BlockHolder) Any() bool {
+	return len(holder.Indexes) > 0
 }
 
 func (holder *BlockHolder) addNode(bufMgr mgrif.IBufferManager, vf mgrif.IVFile) {

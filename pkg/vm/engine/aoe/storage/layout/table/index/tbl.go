@@ -2,14 +2,16 @@ package index
 
 import (
 	"fmt"
+	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
 )
 
 type TableHolder struct {
-	ID   uint64
-	tree struct {
+	ID     uint64
+	BufMgr mgrif.IBufferManager
+	tree   struct {
 		sync.RWMutex
 		Segments   []*SegmentHolder
 		IdMap      map[uint64]int
@@ -17,8 +19,8 @@ type TableHolder struct {
 	}
 }
 
-func NewTableHolder(id uint64) *TableHolder {
-	holder := &TableHolder{ID: id}
+func NewTableHolder(bufMgr mgrif.IBufferManager, id uint64) *TableHolder {
+	holder := &TableHolder{ID: id, BufMgr: bufMgr}
 	holder.tree.Segments = make([]*SegmentHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
 	return holder
@@ -75,7 +77,7 @@ func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) *
 	if stale.Type >= segType {
 		panic(fmt.Sprintf("Cannot upgrade segment %d, type %d", id, segType))
 	}
-	newSeg := NewSegmentHolder(stale.ID, segType)
+	newSeg := NewSegmentHolder(holder.BufMgr, stale.ID, segType)
 	holder.tree.Segments[idx] = newSeg
 	return newSeg
 }

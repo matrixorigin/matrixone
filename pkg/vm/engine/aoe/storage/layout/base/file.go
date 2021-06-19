@@ -69,6 +69,8 @@ type IBaseFile interface {
 	ReadPoint(ptr *Pointer, buf []byte)
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 	Destory()
+	MakeVirtalIndexFile(*IndexMeta) IVirtaulFile
+	GetDir() string
 }
 
 type ISegmentFile interface {
@@ -80,8 +82,7 @@ type ISegmentFile interface {
 	ReadBlockPoint(id common.ID, ptr *Pointer, buf []byte)
 	GetBlockIndexesMeta(id common.ID) *IndexesMeta
 
-	// MakeVirtualBlkIndexFile(id *common.ID) base.IVirtaulFile
-	MakeVirtualSegmentIndexFile(*IndexMeta) IVirtaulFile
+	MakeVirtualBlkIndexFile(id *common.ID, meta *IndexMeta) IVirtaulFile
 	MakeVirtualPartFile(id *common.ID) IVirtaulFile
 }
 

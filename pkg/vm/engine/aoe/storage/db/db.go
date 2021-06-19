@@ -36,6 +36,8 @@ type DB struct {
 
 	FsMgr       base.IManager
 	MemTableMgr mtif.IManager
+
+	IndexBufMgr bmgrif.IBufferManager
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
 
@@ -116,13 +118,14 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 	collection := d.MemTableMgr.GetCollection(tbl.GetID())
 	if collection == nil {
 		opCtx := &mdops.OpCtx{
-			Opts:      d.Opts,
-			MTManager: d.MemTableMgr,
-			TableMeta: tbl,
-			MTBufMgr:  d.MTBufMgr,
-			SSTBufMgr: d.SSTBufMgr,
-			FsMgr:     d.FsMgr,
-			Tables:    d.store.DataTables,
+			Opts:        d.Opts,
+			MTManager:   d.MemTableMgr,
+			TableMeta:   tbl,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.store.DataTables,
 		}
 		op := mdops.NewCreateTableOp(opCtx)
 		op.Push()
@@ -298,7 +301,7 @@ func (d *DB) replayAndCleanData() {
 			panic(fmt.Sprintf("Missing %s", name))
 		}
 	}
-	err = d.store.DataTables.Replay(d.FsMgr, d.MTBufMgr, d.SSTBufMgr, d.store.MetaInfo)
+	err = d.store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.store.MetaInfo)
 	if err != nil {
 		panic(err)
 	}

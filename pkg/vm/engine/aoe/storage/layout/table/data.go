@@ -34,13 +34,13 @@ type ITableData interface {
 	AppendColSegments(colSegs []col.IColumnSegment)
 }
 
-func NewTableData(fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
+func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
 	data := &TableData{
 		Columns:     make([]col.IColumnData, 0),
 		MTBufMgr:    mtBufMgr,
 		SSTBufMgr:   sstBufMgr,
 		Meta:        meta,
-		IndexHolder: index.NewTableHolder(meta.ID),
+		IndexHolder: index.NewTableHolder(indexBufMgr, meta.ID),
 	}
 	for idx, colDef := range meta.Schema.ColDefs {
 		data.Columns = append(data.Columns, col.NewColumnData(data.IndexHolder, fsMgr, mtBufMgr, sstBufMgr, colDef.Type, idx))
@@ -206,9 +206,9 @@ func (ts *Tables) CreateTableNoLock(tbl ITableData) (err error) {
 	return nil
 }
 
-func (ts *Tables) Replay(fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.MetaInfo) error {
+func (ts *Tables) Replay(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.MetaInfo) error {
 	for _, meta := range info.Tables {
-		tbl := NewTableData(fsMgr, mtBufMgr, sstBufMgr, meta)
+		tbl := NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, meta)
 		colTypes := meta.Schema.Types()
 		activeSeg := meta.GetActiveSegment()
 		for _, segMeta := range meta.Segments {

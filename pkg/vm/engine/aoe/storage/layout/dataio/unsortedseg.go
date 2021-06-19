@@ -39,12 +39,16 @@ func (sf *UnsortedSegmentFile) Unref() {
 	}
 }
 
+func (sf *UnsortedSegmentFile) GetDir() string {
+	return sf.Dir
+}
+
 func (sf *UnsortedSegmentFile) RefBlock(id common.ID) {
 	sf.Lock()
 	defer sf.Unlock()
 	_, ok := sf.Blocks[id]
 	if !ok {
-		bf := NewBlockFile(sf.Dir, id)
+		bf := NewBlockFile(sf, id)
 		sf.AddBlock(id, bf)
 	}
 	atomic.AddInt32(&sf.Refs, int32(1))
@@ -72,8 +76,16 @@ func (sf *UnsortedSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMe
 	return blk.GetIndexesMeta()
 }
 
-func (sf *UnsortedSegmentFile) MakeVirtualSegmentIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (sf *UnsortedSegmentFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
 	return nil
+}
+
+func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) base.IVirtaulFile {
+	blk := sf.GetBlock(*id)
+	if blk == nil {
+		return nil
+	}
+	return blk.MakeVirtalIndexFile(meta)
 }
 
 func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {

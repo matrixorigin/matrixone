@@ -81,7 +81,7 @@ func NewColumnSegment(tblHolder *index.TableHolder, fsMgr base.IManager, mtBufMg
 	}
 	seg.IndexHolder = tblHolder.GetSegment(seg.ID.SegmentID)
 	if seg.IndexHolder == nil {
-		segHolder := index.NewSegmentHolder(seg.ID.AsSegmentID(), indexSegType)
+		segHolder := index.NewSegmentHolder(tblHolder.BufMgr, seg.ID.AsSegmentID(), indexSegType)
 		// segHolder.Init()
 		tblHolder.AddSegment(segHolder)
 		seg.IndexHolder = segHolder

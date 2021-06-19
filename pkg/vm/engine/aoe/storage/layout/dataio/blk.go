@@ -7,6 +7,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
+	"path/filepath"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
@@ -15,18 +16,21 @@ import (
 type BlockFile struct {
 	sync.RWMutex
 	os.File
-	ID    common.ID
-	Parts map[base.Key]*base.Pointer
-	Meta  *FileMeta
+	ID          common.ID
+	Parts       map[base.Key]*base.Pointer
+	Meta        *FileMeta
+	SegmentFile base.ISegmentFile
 }
 
-func NewBlockFile(dirname string, id common.ID) base.IBlockFile {
+func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
 	bf := &BlockFile{
-		Parts: make(map[base.Key]*base.Pointer),
-		ID:    id,
-		Meta:  NewFileMeta(),
+		Parts:       make(map[base.Key]*base.Pointer),
+		ID:          id,
+		Meta:        NewFileMeta(),
+		SegmentFile: segFile,
 	}
 
+	dirname := segFile.GetDir()
 	name := e.MakeFilename(dirname, e.FTBlock, id.ToBlockFileName(), false)
 	// log.Infof("BlockFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
@@ -40,6 +44,10 @@ func NewBlockFile(dirname string, id common.ID) base.IBlockFile {
 	bf.File = *r
 	bf.initPointers(id)
 	return bf
+}
+
+func (bf *BlockFile) GetDir() string {
+	return filepath.Dir(bf.Name())
 }
 
 func (bf *BlockFile) Destory() {
@@ -57,6 +65,17 @@ func (bf *BlockFile) Destory() {
 
 func (bf *BlockFile) GetIndexesMeta() *base.IndexesMeta {
 	return bf.Meta.Indexes
+}
+
+func (bf *BlockFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+	vf := &EmbbedBlockIndexFile{
+		EmbbedIndexFile: EmbbedIndexFile{
+			SegmentFile: bf.SegmentFile,
+			Meta:        meta,
+		},
+		ID: bf.ID,
+	}
+	return vf
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {

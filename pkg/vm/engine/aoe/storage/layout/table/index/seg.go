@@ -2,6 +2,7 @@ package index
 
 import (
 	"fmt"
+	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
@@ -9,8 +10,9 @@ import (
 )
 
 type SegmentHolder struct {
-	ID   common.ID
-	self struct {
+	ID     common.ID
+	BufMgr mgrif.IBufferManager
+	self   struct {
 		sync.RWMutex
 		Indexes map[string]Index
 	}
@@ -23,8 +25,8 @@ type SegmentHolder struct {
 	Type base.SegmentType
 }
 
-func NewSegmentHolder(id common.ID, segType base.SegmentType) *SegmentHolder {
-	holder := &SegmentHolder{ID: id, Type: segType}
+func NewSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.SegmentType) *SegmentHolder {
+	holder := &SegmentHolder{ID: id, Type: segType, BufMgr: bufMgr}
 	holder.tree.Blocks = make([]*BlockHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
 	holder.self.Indexes = make(map[string]Index)
@@ -92,7 +94,7 @@ func (holder *SegmentHolder) UpgradeBlock(id uint64, blkType base.BlockType) *Bl
 	if stale.Type >= blkType {
 		panic(fmt.Sprintf("Cannot upgrade blk %d, type %d", id, blkType))
 	}
-	newBlk := NewBlockHolder(stale.ID, blkType)
+	newBlk := NewBlockHolder(holder.BufMgr, stale.ID, blkType)
 	holder.tree.Blocks[idx] = newBlk
 	return newBlk
 }

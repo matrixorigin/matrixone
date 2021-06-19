@@ -3,6 +3,7 @@ package index
 import (
 	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/container/types"
+	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"testing"
@@ -11,14 +12,15 @@ import (
 func TestSegment(t *testing.T) {
 	segType := base.UNSORTED_SEG
 	segID := common.ID{}
-	segHolder := NewSegmentHolder(segID, segType)
+	bufMgr := bmgr.MockBufMgr(1000)
+	segHolder := NewSegmentHolder(bufMgr, segID, segType)
 	assert.Equal(t, int32(0), segHolder.GetBlockCount())
 
 	blk0Id := segID
-	blk0Holder := NewBlockHolder(blk0Id, base.TRANSIENT_BLK)
+	blk0Holder := NewBlockHolder(bufMgr, blk0Id, base.TRANSIENT_BLK)
 	blk1Id := blk0Id
 	blk1Id.BlockID++
-	blk1Holder := NewBlockHolder(blk1Id, base.TRANSIENT_BLK)
+	blk1Holder := NewBlockHolder(bufMgr, blk1Id, base.TRANSIENT_BLK)
 
 	blk0 := segHolder.GetBlock(blk0Id.BlockID)
 	assert.Nil(t, blk0)
@@ -37,15 +39,16 @@ func TestSegment(t *testing.T) {
 }
 
 func TestTable(t *testing.T) {
-	tableHolder := NewTableHolder(uint64(0))
+	bufMgr := bmgr.MockBufMgr(1000)
+	tableHolder := NewTableHolder(bufMgr, uint64(0))
 	assert.Equal(t, int64(0), tableHolder.GetSegmentCount())
 
 	segType := base.UNSORTED_SEG
 	seg0Id := common.ID{}
-	seg0Holder := NewSegmentHolder(seg0Id, segType)
+	seg0Holder := NewSegmentHolder(bufMgr, seg0Id, segType)
 	seg1Id := seg0Id
 	seg1Id.SegmentID++
-	seg1Holder := NewSegmentHolder(seg1Id, segType)
+	seg1Holder := NewSegmentHolder(bufMgr, seg1Id, segType)
 
 	seg0 := tableHolder.GetSegment(seg0Id.SegmentID)
 	assert.Nil(t, seg0)

@@ -6,6 +6,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
@@ -44,7 +45,15 @@ type SortedSegmentFile struct {
 	BlocksMeta map[common.ID]*FileMeta
 }
 
-func (sf *SortedSegmentFile) MakeVirtualSegmentIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (sf *SortedSegmentFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+	vf := &EmbbedIndexFile{
+		SegmentFile: sf,
+		Meta:        meta,
+	}
+	return vf
+}
+
+func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) base.IVirtaulFile {
 	vf := &EmbbedIndexFile{
 		SegmentFile: sf,
 		Meta:        meta,
@@ -58,6 +67,10 @@ func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFil
 		SegmentFile: sf,
 	}
 	return cpf
+}
+
+func (sf *SortedSegmentFile) GetDir() string {
+	return filepath.Dir(sf.Name())
 }
 
 func (sf *SortedSegmentFile) Ref() {
