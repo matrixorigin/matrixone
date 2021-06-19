@@ -58,6 +58,12 @@ func (holder *BlockHolder) close() {
 	}
 }
 
+func (holder *BlockHolder) GetIndexNode(idx int) *Node {
+	node := holder.Indexes[idx]
+	node.Ref()
+	return node
+}
+
 func (holder *BlockHolder) Any() bool {
 	return len(holder.Indexes) > 0
 }
@@ -67,7 +73,7 @@ func (holder *BlockHolder) IndexCount() int {
 }
 
 func (holder *BlockHolder) stringNoLock() string {
-	s := fmt.Sprintf("<IndexBlkHolder[%s]>[Ty=%d](Cnt=%d)", holder.ID.BlockString(), holder.Type, len(holder.Indexes))
+	s := fmt.Sprintf("<IndexBlkHolder[%s]>[Ty=%d](Cnt=%d)(Refs=%d)", holder.ID.BlockString(), holder.Type, len(holder.Indexes), holder.RefCount())
 	for _, i := range holder.Indexes {
 		s = fmt.Sprintf("%s\n\tIndex: [Refs=%d]", s, i.RefCount())
 	}

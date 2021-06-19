@@ -6,6 +6,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"os"
 	"path/filepath"
 	"sync"
@@ -79,12 +80,12 @@ func (bf *BlockFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
-	indexMeta, err := DefaultRWHelper.ReadIndexesMeta(bf.File)
-	bf.Meta.Indexes = indexMeta
-	// _, err := DefaultRWHelper.ReadIndexes(bf.File)
+	indexMeta, err := index.DefaultRWHelper.ReadIndexesMeta(bf.File)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
+	bf.Meta.Indexes = indexMeta
+	// return
 	twoBytes := make([]byte, 2)
 	_, err = bf.File.Read(twoBytes)
 	if err != nil {

@@ -9,6 +9,10 @@ import (
 	"testing"
 )
 
+var (
+	workDir = "/tmp/index_test"
+)
+
 func TestSegment(t *testing.T) {
 	segType := base.UNSORTED_SEG
 	segID := common.ID{}
