@@ -4,6 +4,7 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	// log "github.com/sirupsen/logrus"
 )
 
 type Node struct {
@@ -38,14 +39,12 @@ func (n *Node) GetDataNode() buf.IMemoryNode {
 }
 
 func (n *Node) GetManagedNode() bmgrif.MangaedNode {
-	mnode := bmgrif.MangaedNode{
-		DataNode: n.BufNode.GetBuffer().GetDataNode(),
-	}
-
+	mnode := bmgrif.MangaedNode{}
 	mnode.Handle = n.BufMgr.Pin(n.BufNode)
 	for mnode.Handle == nil {
 		mnode.Handle = n.BufMgr.Pin(n.BufNode)
 	}
+	mnode.DataNode = n.BufNode.GetBuffer().GetDataNode()
 	return mnode
 }
 

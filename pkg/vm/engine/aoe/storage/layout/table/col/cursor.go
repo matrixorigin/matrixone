@@ -3,7 +3,7 @@ package col
 import (
 	"errors"
 	"io"
-	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -17,7 +17,7 @@ type IScanCursor interface {
 type ScanCursor struct {
 	CurrSeg IColumnSegment
 	Current IColumnPart
-	Handle  nif.IBufferHandle
+	Node    bmgrif.MangaedNode
 	Inited  bool
 }
 
@@ -71,13 +71,5 @@ func (c *ScanCursor) Init() error {
 
 func (c *ScanCursor) Close() error {
 	c.Inited = false
-	if c.Handle != nil {
-		err := c.Handle.Close()
-		if err != nil {
-			panic("logic error")
-		}
-		c.Handle = nil
-		return nil
-	}
-	return nil
+	return c.Node.Close()
 }

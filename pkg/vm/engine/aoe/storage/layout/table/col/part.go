@@ -1,8 +1,6 @@
 package col
 
 import (
-	"errors"
-	"fmt"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -93,12 +91,6 @@ func (part *ColumnPart) GetNext() IColumnPart {
 }
 
 func (part *ColumnPart) InitScanCursor(cursor *ScanCursor) error {
-	cursor.Handle = part.BufMgr.Pin(part.BufNode)
-	for cursor.Handle == nil {
-		cursor.Handle = part.BufMgr.Pin(part.BufNode)
-	}
-	if cursor.Handle == nil {
-		return errors.New(fmt.Sprintf("Cannot pin part %v", part.ID))
-	}
+	cursor.Node = part.GetManagedNode()
 	return nil
 }

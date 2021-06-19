@@ -26,7 +26,13 @@ type MangaedNode struct {
 }
 
 func (h *MangaedNode) Close() error {
-	return h.Handle.Close()
+	hh := h.Handle
+	h.Handle = nil
+	h.DataNode = nil
+	if hh != nil {
+		return hh.Close()
+	}
+	return nil
 }
 
 type IBufferManager interface {
