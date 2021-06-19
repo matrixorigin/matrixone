@@ -31,7 +31,7 @@ func TestSegment(t *testing.T) {
 	segHolder.addBlock(blk1Holder)
 	assert.Equal(t, int32(2), segHolder.GetBlockCount())
 
-	dropped := segHolder.DropSegment(blk0Id.BlockID)
+	dropped := segHolder.DropBlock(blk0Id.BlockID)
 	assert.Equal(t, blk0Id, dropped.ID)
 	assert.Equal(t, int32(1), segHolder.GetBlockCount())
 	blk0 = segHolder.GetBlock(blk0Id.BlockID)

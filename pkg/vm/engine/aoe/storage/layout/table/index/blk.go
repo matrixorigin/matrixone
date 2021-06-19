@@ -48,9 +48,9 @@ func (holder *BlockHolder) Init(segFile base.ISegmentFile) {
 }
 
 func (holder *BlockHolder) close() {
-	// for _, index := range holder.Indexes {
-	// 	index.Unref()
-	// }
+	for _, index := range holder.Indexes {
+		index.Unref()
+	}
 }
 
 func (holder *BlockHolder) Any() bool {

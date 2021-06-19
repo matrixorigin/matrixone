@@ -9,6 +9,7 @@ import (
 
 type Node struct {
 	*bmgr.Node
+	RefHelper
 	Cols *roaring.Bitmap
 }
 
@@ -17,7 +18,15 @@ func NewNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.Mem
 	node := new(Node)
 	node.Cols = cols
 	node.Node = bufMgr.CreateNode(vf, constructor, capacity).(*bmgr.Node)
+	node.OnZeroCB = node.close
+	node.Ref()
 	return node
+}
+
+func (node *Node) close() {
+	if node.Node != nil {
+		node.Node.Close()
+	}
 }
 
 func (node *Node) ContainsCol(v uint64) bool {
