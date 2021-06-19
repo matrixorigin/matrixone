@@ -13,7 +13,7 @@ func TestSegment(t *testing.T) {
 	segType := base.UNSORTED_SEG
 	segID := common.ID{}
 	bufMgr := bmgr.MockBufMgr(1000)
-	segHolder := NewSegmentHolder(bufMgr, segID, segType)
+	segHolder := newSegmentHolder(bufMgr, segID, segType, nil)
 	assert.Equal(t, int32(0), segHolder.GetBlockCount())
 
 	blk0Id := segID
@@ -45,18 +45,18 @@ func TestTable(t *testing.T) {
 
 	segType := base.UNSORTED_SEG
 	seg0Id := common.ID{}
-	seg0Holder := NewSegmentHolder(bufMgr, seg0Id, segType)
+	seg0Holder := newSegmentHolder(bufMgr, seg0Id, segType, nil)
 	seg1Id := seg0Id
 	seg1Id.SegmentID++
-	seg1Holder := NewSegmentHolder(bufMgr, seg1Id, segType)
+	seg1Holder := newSegmentHolder(bufMgr, seg1Id, segType, nil)
 
 	seg0 := tableHolder.GetSegment(seg0Id.SegmentID)
 	assert.Nil(t, seg0)
-	tableHolder.AddSegment(seg0Holder)
+	tableHolder.addSegment(seg0Holder)
 	seg0 = tableHolder.GetSegment(seg0Id.SegmentID)
 	assert.NotNil(t, seg0)
 	assert.Equal(t, int64(1), tableHolder.GetSegmentCount())
-	tableHolder.AddSegment(seg1Holder)
+	tableHolder.addSegment(seg1Holder)
 	assert.Equal(t, int64(2), tableHolder.GetSegmentCount())
 
 	dropped := tableHolder.DropSegment(seg0Id.SegmentID)
@@ -72,4 +72,28 @@ func TestIndex(t *testing.T) {
 	assert.True(t, int32zm.Eq(int32(10)))
 	assert.True(t, int32zm.Eq(int32(100)))
 	assert.False(t, int32zm.Eq(int32(101)))
+}
+
+func TestRefs1(t *testing.T) {
+	capacity := uint64(1000)
+	bufMgr := bmgr.MockBufMgr(capacity)
+	id := common.ID{}
+	tblHolder := NewTableHolder(bufMgr, id.TableID)
+	released := false
+	cb := func(interface{}) {
+		released = true
+	}
+	seg0IndexHolder := tblHolder.RegisterSegment(id, base.UNSORTED_SEG, cb)
+	assert.Equal(t, int64(2), seg0IndexHolder.RefCount())
+	droppedSeg := tblHolder.DropSegment(id.SegmentID)
+	assert.Equal(t, int64(2), droppedSeg.RefCount())
+	assert.Equal(t, int64(2), seg0IndexHolder.RefCount())
+	droppedSeg.Unref()
+	assert.Equal(t, int64(1), droppedSeg.RefCount())
+	assert.Equal(t, int64(1), seg0IndexHolder.RefCount())
+	assert.False(t, released)
+	seg0IndexHolder.Unref()
+	assert.Equal(t, int64(0), droppedSeg.RefCount())
+	assert.Equal(t, int64(0), seg0IndexHolder.RefCount())
+	assert.True(t, released)
 }

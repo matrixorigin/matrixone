@@ -3,6 +3,7 @@ package index
 import (
 	"fmt"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
@@ -26,7 +27,14 @@ func NewTableHolder(bufMgr mgrif.IBufferManager, id uint64) *TableHolder {
 	return holder
 }
 
-func (holder *TableHolder) AddSegment(seg *SegmentHolder) {
+func (holder *TableHolder) RegisterSegment(id common.ID, segType base.SegmentType, cb PostCloseCB) *SegmentHolder {
+	segHolder := newSegmentHolder(holder.BufMgr, id, segType, cb)
+	holder.addSegment(segHolder)
+	segHolder.Ref()
+	return segHolder
+}
+
+func (holder *TableHolder) addSegment(seg *SegmentHolder) {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
 	_, ok := holder.tree.IdMap[seg.ID.SegmentID]
@@ -77,8 +85,10 @@ func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) *
 	if stale.Type >= segType {
 		panic(fmt.Sprintf("Cannot upgrade segment %d, type %d", id, segType))
 	}
-	newSeg := NewSegmentHolder(holder.BufMgr, stale.ID, segType)
+	newSeg := newSegmentHolder(holder.BufMgr, stale.ID, segType, stale.PostCloseCB)
 	holder.tree.Segments[idx] = newSeg
+	newSeg.Ref()
+	stale.Unref()
 	return newSeg
 }
 
@@ -91,5 +101,15 @@ func (holder *TableHolder) GetSegment(id uint64) (seg *SegmentHolder) {
 	}
 	seg = holder.tree.Segments[idx]
 	holder.tree.RUnlock()
+	seg.Ref()
 	return seg
+}
+
+func (holder *TableHolder) Close() error {
+	holder.tree.Lock()
+	defer holder.tree.Unlock()
+	for _, seg := range holder.tree.Segments {
+		seg.Unref()
+	}
+	return nil
 }

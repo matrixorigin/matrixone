@@ -16,6 +16,10 @@ type RefHelper struct {
 	OnZeroCB OnZeroCB
 }
 
+func (helper *RefHelper) RefCount() int64 {
+	return atomic.LoadInt64(&helper.Refs)
+}
+
 func (helper *RefHelper) Ref() {
 	atomic.AddInt64(&helper.Refs, int64(1))
 }
@@ -31,6 +35,8 @@ func (helper *RefHelper) Unref() {
 	}
 }
 
+type PostCloseCB = func(interface{})
+
 type SegmentHolder struct {
 	RefHelper
 	ID     common.ID
@@ -45,15 +51,17 @@ type SegmentHolder struct {
 		IdMap    map[uint64]int
 		BlockCnt int32
 	}
-	Type base.SegmentType
+	Type        base.SegmentType
+	PostCloseCB PostCloseCB
 }
 
-func NewSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.SegmentType) *SegmentHolder {
+func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.SegmentType, cb PostCloseCB) *SegmentHolder {
 	holder := &SegmentHolder{ID: id, Type: segType, BufMgr: bufMgr}
 	holder.tree.Blocks = make([]*BlockHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
 	holder.self.Indexes = make([]*Node, 0)
 	holder.OnZeroCB = holder.close
+	holder.PostCloseCB = cb
 	holder.Ref()
 	return holder
 }
@@ -65,6 +73,9 @@ func (holder *SegmentHolder) close() {
 
 	for _, index := range holder.self.Indexes {
 		index.Unref()
+	}
+	if holder.PostCloseCB != nil {
+		holder.PostCloseCB(holder)
 	}
 }
 
