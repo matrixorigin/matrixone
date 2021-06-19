@@ -33,11 +33,11 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegment
 	return msf
 }
 
-func (msf *MockSegmentFile) GetIndexMeta() *base.IndexesMeta {
+func (msf *MockSegmentFile) GetIndexesMeta() *base.IndexesMeta {
 	return nil
 }
 
-func (msf *MockSegmentFile) GetBlockIndexMeta(id common.ID) *base.IndexesMeta {
+func (msf *MockSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMeta {
 	return nil
 }
 

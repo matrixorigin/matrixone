@@ -60,16 +60,16 @@ func (sf *UnsortedSegmentFile) UnrefBlock(id common.ID) {
 	}
 }
 
-func (sf *UnsortedSegmentFile) GetIndexMeta() *base.IndexesMeta {
+func (sf *UnsortedSegmentFile) GetIndexesMeta() *base.IndexesMeta {
 	return nil
 }
 
-func (sf *UnsortedSegmentFile) GetBlockIndexMeta(id common.ID) *base.IndexesMeta {
+func (sf *UnsortedSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMeta {
 	blk := sf.GetBlock(id)
 	if blk == nil {
 		return nil
 	}
-	return blk.GetIndexMeta()
+	return blk.GetIndexesMeta()
 }
 
 func (sf *UnsortedSegmentFile) MakeVirtualSegmentIndexFile(meta *base.IndexMeta) base.IVirtaulFile {

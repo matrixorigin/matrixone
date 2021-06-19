@@ -27,11 +27,11 @@ func NewTableHolder(id uint64) *TableHolder {
 func (holder *TableHolder) AddSegment(seg *SegmentHolder) {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
-	_, ok := holder.tree.IdMap[seg.ID]
+	_, ok := holder.tree.IdMap[seg.ID.SegmentID]
 	if ok {
-		panic(fmt.Sprintf("Duplicate seg %d", seg.ID))
+		panic(fmt.Sprintf("Duplicate seg %s", seg.ID.SegmentString()))
 	}
-	holder.tree.IdMap[seg.ID] = len(holder.tree.Segments)
+	holder.tree.IdMap[seg.ID.SegmentID] = len(holder.tree.Segments)
 	holder.tree.Segments = append(holder.tree.Segments, seg)
 	atomic.AddInt64(&holder.tree.SegmentCnt, int64(1))
 }
@@ -75,7 +75,7 @@ func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) *
 	if stale.Type >= segType {
 		panic(fmt.Sprintf("Cannot upgrade segment %d, type %d", id, segType))
 	}
-	newSeg := NewSegmentHolder(id, segType)
+	newSeg := NewSegmentHolder(stale.ID, segType)
 	holder.tree.Segments[idx] = newSeg
 	return newSeg
 }

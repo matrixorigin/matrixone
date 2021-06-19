@@ -2,13 +2,14 @@ package index
 
 import (
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
 )
 
 type SegmentHolder struct {
-	ID   uint64
+	ID   common.ID
 	self struct {
 		sync.RWMutex
 		Indexes map[string]Index
@@ -22,7 +23,7 @@ type SegmentHolder struct {
 	Type base.SegmentType
 }
 
-func NewSegmentHolder(id uint64, segType base.SegmentType) *SegmentHolder {
+func NewSegmentHolder(id common.ID, segType base.SegmentType) *SegmentHolder {
 	holder := &SegmentHolder{ID: id, Type: segType}
 	holder.tree.Blocks = make([]*BlockHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
@@ -53,11 +54,11 @@ func (holder *SegmentHolder) GetBlock(id uint64) (blk *BlockHolder) {
 func (holder *SegmentHolder) AddBlock(blk *BlockHolder) {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
-	_, ok := holder.tree.IdMap[blk.ID]
+	_, ok := holder.tree.IdMap[blk.ID.BlockID]
 	if ok {
-		panic(fmt.Sprintf("Duplicate blk %d for seg %d", blk.ID, holder.ID))
+		panic(fmt.Sprintf("Duplicate blk %s for seg %s", blk.ID.BlockString(), holder.ID.SegmentString()))
 	}
-	holder.tree.IdMap[blk.ID] = len(holder.tree.Blocks)
+	holder.tree.IdMap[blk.ID.BlockID] = len(holder.tree.Blocks)
 	holder.tree.Blocks = append(holder.tree.Blocks, blk)
 	atomic.AddInt32(&holder.tree.BlockCnt, int32(1))
 }
@@ -91,7 +92,7 @@ func (holder *SegmentHolder) UpgradeBlock(id uint64, blkType base.BlockType) *Bl
 	if stale.Type >= blkType {
 		panic(fmt.Sprintf("Cannot upgrade blk %d, type %d", id, blkType))
 	}
-	newBlk := NewBlockHolder(id, blkType)
+	newBlk := NewBlockHolder(stale.ID, blkType)
 	holder.tree.Blocks[idx] = newBlk
 	return newBlk
 }

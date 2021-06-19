@@ -55,7 +55,7 @@ func (bf *BlockFile) Destory() {
 	}
 }
 
-func (bf *BlockFile) GetIndexMeta() *base.IndexesMeta {
+func (bf *BlockFile) GetIndexesMeta() *base.IndexesMeta {
 	return bf.Meta.Indexes
 }
 

@@ -65,7 +65,7 @@ type IManager interface {
 
 type IBaseFile interface {
 	io.Closer
-	GetIndexMeta() *IndexesMeta
+	GetIndexesMeta() *IndexesMeta
 	ReadPoint(ptr *Pointer, buf []byte)
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 	Destory()
@@ -78,7 +78,7 @@ type ISegmentFile interface {
 	RefBlock(blkId common.ID)
 	UnrefBlock(blkId common.ID)
 	ReadBlockPoint(id common.ID, ptr *Pointer, buf []byte)
-	GetBlockIndexMeta(id common.ID) *IndexesMeta
+	GetBlockIndexesMeta(id common.ID) *IndexesMeta
 
 	// MakeVirtualBlkIndexFile(id *common.ID) base.IVirtaulFile
 	MakeVirtualSegmentIndexFile(*IndexMeta) IVirtaulFile

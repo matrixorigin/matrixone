@@ -93,11 +93,11 @@ func (sf *SortedSegmentFile) initPointers() {
 	// TODO
 }
 
-func (sf *SortedSegmentFile) GetIndexMeta() *base.IndexesMeta {
+func (sf *SortedSegmentFile) GetIndexesMeta() *base.IndexesMeta {
 	return sf.Meta.Indexes
 }
 
-func (sf *SortedSegmentFile) GetBlockIndexMeta(id common.ID) *base.IndexesMeta {
+func (sf *SortedSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMeta {
 	blkMeta := sf.BlocksMeta[id]
 	if blkMeta == nil {
 		return nil
