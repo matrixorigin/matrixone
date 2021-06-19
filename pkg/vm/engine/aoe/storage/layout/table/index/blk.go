@@ -68,5 +68,8 @@ func (holder *BlockHolder) IndexCount() int {
 
 func (holder *BlockHolder) stringNoLock() string {
 	s := fmt.Sprintf("<IndexBlkHolder[%s]>[Ty=%d](Cnt=%d)", holder.ID.BlockString(), holder.Type, len(holder.Indexes))
+	for _, i := range holder.Indexes {
+		s = fmt.Sprintf("%s\n\tIndex: [Refs=%d]", s, i.RefCount())
+	}
 	return s
 }

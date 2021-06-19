@@ -113,3 +113,37 @@ func TestRefs1(t *testing.T) {
 	assert.Equal(t, int64(0), seg0IndexHolder.RefCount())
 	assert.True(t, released)
 }
+
+func TestRefs2(t *testing.T) {
+	capacity := uint64(1000)
+	bufMgr := bmgr.MockBufMgr(capacity)
+	id := common.ID{}
+	tblHolder := NewTableHolder(bufMgr, id.TableID)
+	released := false
+	cb := func(interface{}) {
+		released = true
+	}
+	seg0IndexHolder := tblHolder.RegisterSegment(id, base.UNSORTED_SEG, nil)
+	blk0 := seg0IndexHolder.RegisterBlock(id, base.TRANSIENT_BLK, cb)
+	assert.Equal(t, int64(2), blk0.RefCount())
+	assert.False(t, released)
+
+	blk0Ref := seg0IndexHolder.GetBlock(id.BlockID)
+	assert.Equal(t, int64(3), blk0Ref.RefCount())
+	assert.False(t, released)
+
+	seg0IndexHolder.Unref()
+
+	blk0.Unref()
+	assert.Equal(t, int64(2), blk0.RefCount())
+	assert.False(t, released)
+
+	droppedSeg := tblHolder.DropSegment(id.SegmentID)
+	droppedSeg.Unref()
+	assert.Equal(t, int64(1), blk0.RefCount())
+	assert.False(t, released)
+
+	blk0Ref.Unref()
+	assert.Equal(t, int64(0), blk0.RefCount())
+	assert.True(t, released)
+}
