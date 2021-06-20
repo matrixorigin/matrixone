@@ -176,7 +176,11 @@ func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engin
 	if err != nil {
 		return 0, err
 	}
-	tInfo := aoe.TableInfo{}
+	tInfo := aoe.TableInfo{
+		Id: tid,
+		Name: tableName,
+		SchemaId: dbId,
+	}
 	id := uint64(0)
 	for _, def := range tableDefs {
 		switch v := def.(type) {

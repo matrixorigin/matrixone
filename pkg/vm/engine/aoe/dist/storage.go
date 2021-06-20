@@ -15,7 +15,6 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
-	"github.com/sirupsen/logrus"
 	"math/rand"
 	"matrixone/pkg/vm/engine/aoe"
 	"sync"
@@ -137,11 +136,11 @@ func NewStorageWithOptions(
 		return []bhmetapb.Shard{
 			{
 				Group: uint64(aoe.KVGroup),
-				End:   []byte("/meta/Table/1/3"),
+				End:   []byte("/meta/Table/1/5"),
 			},
 			{
 				Group: uint64(aoe.KVGroup),
-				Start: []byte("/meta/Table/1/3"),
+				Start: []byte("/meta/Table/1/5"),
 			},
 			{
 				Group: uint64(aoe.AOEGroup),
@@ -328,7 +327,6 @@ func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group aoe.
 		if err != nil || kvs == nil || len(kvs) == 0 {
 			break
 		}
-		logrus.Infof("[QSQ] scan in %d shard, match count is %d, first key is %s", i, len(kvs), string(kvs[0]))
 		if len(kvs)%2 == 0 {
 			pairs = append(pairs, kvs...)
 			break

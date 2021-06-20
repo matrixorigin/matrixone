@@ -184,7 +184,7 @@ func testTableDDL(t *testing.T, c Catalog) {
 		stdLog.Println(string(s))
 	}
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, 10, len(tbs))
+	require.Equal(t, 10, len(tbs))
 
 }
 func testDBDDL(t *testing.T, c Catalog) {
