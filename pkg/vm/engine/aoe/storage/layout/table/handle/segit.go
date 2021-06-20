@@ -45,5 +45,6 @@ func (ssit *SegmentIt) GetSegmentHandle() base.ISegmentHandle {
 		colData := ssit.Handle.TableData.GetCollumn(idx)
 		h.Cols = append(h.Cols, colData.GetSegment(h.ID))
 	}
+	h.IndexHolder = h.Cols[0].GetIndexHolder()
 	return h
 }

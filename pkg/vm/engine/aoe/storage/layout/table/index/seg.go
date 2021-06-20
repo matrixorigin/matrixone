@@ -80,7 +80,7 @@ func (holder *SegmentHolder) close() {
 }
 
 func (holder *SegmentHolder) stringNoLock() string {
-	s := fmt.Sprintf("<IndexSegmentHolder[%s]>[Ty=%d](Cnt=%d)(RefCount=%d)", holder.ID.SegmentString(), holder.Type,
+	s := fmt.Sprintf("<IndexSegmentHolder[%s]>[Ty=%v](Cnt=%d)(RefCount=%d)", holder.ID.SegmentString(), holder.Type,
 		holder.tree.BlockCnt, holder.RefCount())
 	for _, blk := range holder.tree.Blocks {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.stringNoLock())

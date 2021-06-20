@@ -32,6 +32,7 @@ type BufferManager struct {
 	NextTransientID uint64
 	EvictTimes      int64
 	LoadTimes       int64
+	UnregisterTimes int64
 }
 
 type mockVFile struct{}

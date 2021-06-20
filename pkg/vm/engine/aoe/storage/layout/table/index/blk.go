@@ -72,8 +72,14 @@ func (holder *BlockHolder) IndexCount() int {
 	return len(holder.Indexes)
 }
 
+func (holder *BlockHolder) String() string {
+	holder.RLock()
+	defer holder.RUnlock()
+	return holder.stringNoLock()
+}
+
 func (holder *BlockHolder) stringNoLock() string {
-	s := fmt.Sprintf("<IndexBlkHolder[%s]>[Ty=%d](Cnt=%d)(Refs=%d)", holder.ID.BlockString(), holder.Type, len(holder.Indexes), holder.RefCount())
+	s := fmt.Sprintf("<IndexBlkHolder[%s]>[Ty=%v](Cnt=%d)(Refs=%d)", holder.ID.BlockString(), holder.Type, len(holder.Indexes), holder.RefCount())
 	for _, i := range holder.Indexes {
 		s = fmt.Sprintf("%s\n\tIndex: [Refs=%d]", s, i.RefCount())
 	}
