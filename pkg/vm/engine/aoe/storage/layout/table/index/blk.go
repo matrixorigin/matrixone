@@ -9,7 +9,7 @@ import (
 )
 
 type BlockHolder struct {
-	RefHelper
+	common.RefHelper
 	ID common.ID
 	sync.RWMutex
 	Indexes     []*Node
