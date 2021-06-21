@@ -6,6 +6,7 @@ import (
 	"io"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	it "matrixone/pkg/vm/engine/aoe/storage/iterator"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -16,6 +17,7 @@ import (
 )
 
 type IColumnSegment interface {
+	it.IResources
 	io.Closer
 	sync.Locker
 	GetNext() IColumnSegment
@@ -47,6 +49,7 @@ type IColumnSegment interface {
 
 type ColumnSegment struct {
 	sync.RWMutex
+	it.BaseResources
 	Refs        int64
 	ID          common.ID
 	ColIdx      int
@@ -79,6 +82,7 @@ func NewColumnSegment(tblHolder *index.TableHolder, fsMgr base.IManager, mtBufMg
 		SSTBufMgr: sstBufMgr,
 		FsMgr:     fsMgr,
 	}
+	seg.Impl = seg
 	seg.IndexHolder = tblHolder.GetSegment(seg.ID.SegmentID)
 	if seg.IndexHolder == nil {
 		segHolder := tblHolder.RegisterSegment(seg.ID.AsSegmentID(), indexSegType, nil)
@@ -86,6 +90,17 @@ func NewColumnSegment(tblHolder *index.TableHolder, fsMgr base.IManager, mtBufMg
 	}
 
 	return seg.Ref()
+}
+
+func (seg *ColumnSegment) HandleResources(handle it.HandleT) error {
+	var err error
+	for _, blk := range seg.Blocks {
+		err = handle(blk)
+		if err != nil {
+			return err
+		}
+	}
+	return err
 }
 
 func (seg *ColumnSegment) GetIndexHolder() *index.SegmentHolder {
