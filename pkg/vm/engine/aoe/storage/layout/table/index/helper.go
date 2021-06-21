@@ -1,4 +1,4 @@
-package dataio
+package index
 
 import (
 	"bytes"
@@ -7,7 +7,6 @@ import (
 	"io"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"os"
 )
 
@@ -17,7 +16,7 @@ var (
 
 type RWHelper struct{}
 
-func (h *RWHelper) WriteIndexes(indexes []index.Index) ([]byte, error) {
+func (h *RWHelper) WriteIndexes(indexes []Index) ([]byte, error) {
 	var buf bytes.Buffer
 	_, err := buf.Write(encoding.EncodeInt16(int16(len(indexes))))
 	if err != nil {
@@ -38,7 +37,7 @@ func (h *RWHelper) WriteIndexes(indexes []index.Index) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (h *RWHelper) ReadIndexes(f os.File) (indexes []index.Index, err error) {
+func (h *RWHelper) ReadIndexes(f os.File) (indexes []Index, err error) {
 	twoBytes := make([]byte, 2)
 	fourBytes := make([]byte, 4)
 	_, err = f.Read(twoBytes)
@@ -54,7 +53,7 @@ func (h *RWHelper) ReadIndexes(f os.File) (indexes []index.Index, err error) {
 		indexType := encoding.DecodeUint16(twoBytes)
 		switch indexType {
 		case base.ZoneMap:
-			idx := new(index.ZoneMapIndex)
+			idx := new(ZoneMapIndex)
 			indexes = append(indexes, idx)
 		default:
 			panic("unsupported")

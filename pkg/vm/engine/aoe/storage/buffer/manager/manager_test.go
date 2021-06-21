@@ -4,11 +4,9 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	// e "matrixone/pkg/vm/engine/aoe/storage"
 )
 
 var WORK_DIR = "/tmp/buff/manager_test"
@@ -27,7 +25,7 @@ func TestManagerBasic(t *testing.T) {
 	node_capacity := uint64(64)
 
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 0)
-	empty := new(ldio.MockColPartFile)
+	empty := &MockVFile
 	h0 := mgr.RegisterNode(node_capacity, node0, empty, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, h0)
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 1)
@@ -67,7 +65,7 @@ func TestManager2(t *testing.T) {
 	node_capacity := 2 * capacity
 	mgr := MockBufMgr(capacity)
 	node0 := mgr.GetNextID()
-	empty := new(ldio.MockColPartFile)
+	empty := &MockVFile
 	constructor := buf.RawMemoryNodeConstructor
 	h0 := mgr.RegisterNode(node_capacity, node0, empty, constructor)
 	assert.Equal(t, h0.GetID(), node0)
@@ -107,7 +105,7 @@ func TestManager3(t *testing.T) {
 	assert.Equal(t, mgr.GetCapacity(), capacity)
 
 	n0 := mgr.GetNextID()
-	empty := new(ldio.MockColPartFile)
+	empty := &MockVFile
 	constructor := buf.RawMemoryNodeConstructor
 	h0 := mgr.RegisterNode(node_capacity, n0, empty, constructor)
 	assert.NotNil(t, h0)

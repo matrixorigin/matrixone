@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"sync"
 
@@ -25,9 +26,9 @@ var (
 )
 
 type BlockHandle struct {
-	ID   common.ID
-	Cols []col.IColumnBlock
-	// Cursors []col.ScanCursor
+	ID          common.ID
+	Cols        []col.IColumnBlock
+	IndexHolder *index.BlockHolder
 }
 
 func (bh *BlockHandle) GetID() *common.ID {
@@ -39,6 +40,10 @@ func (bh *BlockHandle) GetColumn(idx int) col.IColumnBlock {
 		panic(fmt.Sprintf("Specified idx %d is out of scope", idx))
 	}
 	return bh.Cols[idx]
+}
+
+func (bh *BlockHandle) GetIndexHolder() *index.BlockHolder {
+	return bh.IndexHolder
 }
 
 func (bh *BlockHandle) Close() error {

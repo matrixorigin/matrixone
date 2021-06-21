@@ -29,7 +29,7 @@ func TestUpgradeSegOp(t *testing.T) {
 
 	info := md.MockInfo(row_count, blk_cnt)
 	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
-	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, tableMeta)
+	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
 
 	segIDs := table.MockSegments(fsMgr, bufMgr, bufMgr, tableMeta, tableData)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
@@ -80,7 +80,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 	blkCnt := segCnt * info.Conf.SegmentMaxBlocks
 
 	tableMeta := md.MockTable(info, schema, blkCnt)
-	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, tableMeta)
+	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
 	segIDs := table.MockSegments(fsMgr, bufMgr, bufMgr, tableMeta, tableData)
 	assert.Equal(t, uint64(segCnt), tableData.GetSegmentCount())
 	t.Log(bufMgr.String())

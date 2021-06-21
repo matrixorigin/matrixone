@@ -40,34 +40,11 @@ func (mgr *BufferManager) NodeCount() int {
 func (mgr *BufferManager) String() string {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	s := fmt.Sprintf("BMgr[Cap:%d, Usage:%d, Nodes:%d, LoadTimes:%d, EvictTimes:%d]:\n", mgr.GetCapacity(), mgr.GetUsage(),
-		len(mgr.Nodes), atomic.LoadInt64(&mgr.LoadTimes), atomic.LoadInt64(&mgr.EvictTimes))
+	s := fmt.Sprintf("BMgr[Cap:%d,Usage:%d,Nodes:%d,LoadTimes:%d,EvictTimes:%d,UnregisterTimes:%d]:\n", mgr.GetCapacity(), mgr.GetUsage(),
+		len(mgr.Nodes), atomic.LoadInt64(&mgr.LoadTimes), atomic.LoadInt64(&mgr.EvictTimes), atomic.LoadInt64(&mgr.UnregisterTimes))
 	for _, node := range mgr.Nodes {
 		s = fmt.Sprintf("%s\n\t%d | %s | Cap: %d ", s, node.GetID(), nif.NodeStateString(mgr.Nodes[node.GetID()].GetState()), mgr.Nodes[node.GetID()].GetCapacity())
 	}
-	// var mapped = map[uint64]map[uint64][]common.ID{}
-	// for k, _ := range mgr.Nodes {
-	// 	_, ok := mapped[k.TableID]
-	// 	if !ok {
-	// 		mapped[k.TableID] = make(map[uint64][]common.ID)
-	// 	}
-	// 	l := mapped[k.TableID][k.SegmentID]
-	// 	l = append(l, k)
-	// 	mapped[k.TableID][k.SegmentID] = l
-	// }
-	// for tbID, segMap := range mapped {
-	// 	s += fmt.Sprintf("Table %d SegmentCnt=%d {\n", tbID, len(segMap))
-	// 	for segID, ids := range segMap {
-	// 		s += fmt.Sprintf("  Segment %d PartCnt=%d {\n", segID, len(ids))
-	// 		for _, id := range ids {
-	// 			s += fmt.Sprintf("    (Col: %d Blk:%d, Part: %d) [Iter=%d] (%s) (Cap=%d)\n", id.Idx, id.BlockID, id.PartID,
-	// 				id.Iter, nif.NodeStateString(mgr.Nodes[id].GetState()), mgr.Nodes[id].GetCapacity())
-	// 		}
-	// 		s += "  }\n"
-	// 	}
-	// 	s += "}"
-	// }
-	// return s
 	return s
 }
 
@@ -77,6 +54,10 @@ func (mgr *BufferManager) GetNextID() uint64 {
 
 func (mgr *BufferManager) GetNextTransientID() uint64 {
 	return atomic.AddUint64(&mgr.NextTransientID, uint64(1)) - 1
+}
+
+func (mgr *BufferManager) CreateNode(vf mgrif.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) mgrif.INode {
+	return newNode(mgr, vf, constructor, capacity)
 }
 
 func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
@@ -162,6 +143,7 @@ func (mgr *BufferManager) RegisterNode(capacity uint64, node_id uint64, reader i
 }
 
 func (mgr *BufferManager) UnregisterNode(h nif.INodeHandle) {
+	atomic.AddInt64(&mgr.UnregisterTimes, int64(1))
 	node_id := h.GetID()
 	// log.Infof("UnRegisterNode %s", node_id.String())
 	if h.IsSpillable() {

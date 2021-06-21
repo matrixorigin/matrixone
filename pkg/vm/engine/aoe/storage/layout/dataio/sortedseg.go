@@ -6,15 +6,16 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
 )
 
-func NewSortedSegmentFile(dirname string, id common.ID) ISegmentFile {
+func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	sf := &SortedSegmentFile{
-		Parts:      make(map[Key]*base.Pointer),
+		Parts:      make(map[base.Key]*base.Pointer),
 		ID:         id,
 		BlocksMeta: make(map[common.ID]*FileMeta),
 	}
@@ -39,12 +40,20 @@ type SortedSegmentFile struct {
 	ID common.ID
 	os.File
 	Refs       int32
-	Parts      map[Key]*base.Pointer
+	Parts      map[base.Key]*base.Pointer
 	Meta       *FileMeta
 	BlocksMeta map[common.ID]*FileMeta
 }
 
-func (sf *SortedSegmentFile) MakeVirtualSegmentIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (sf *SortedSegmentFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+	vf := &EmbbedIndexFile{
+		SegmentFile: sf,
+		Meta:        meta,
+	}
+	return vf
+}
+
+func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) base.IVirtaulFile {
 	vf := &EmbbedIndexFile{
 		SegmentFile: sf,
 		Meta:        meta,
@@ -58,6 +67,10 @@ func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFil
 		SegmentFile: sf,
 	}
 	return cpf
+}
+
+func (sf *SortedSegmentFile) GetDir() string {
+	return filepath.Dir(sf.Name())
 }
 
 func (sf *SortedSegmentFile) Ref() {
@@ -93,11 +106,11 @@ func (sf *SortedSegmentFile) initPointers() {
 	// TODO
 }
 
-func (sf *SortedSegmentFile) GetIndexMeta() *base.IndexesMeta {
+func (sf *SortedSegmentFile) GetIndexesMeta() *base.IndexesMeta {
 	return sf.Meta.Indexes
 }
 
-func (sf *SortedSegmentFile) GetBlockIndexMeta(id common.ID) *base.IndexesMeta {
+func (sf *SortedSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMeta {
 	blkMeta := sf.BlocksMeta[id]
 	if blkMeta == nil {
 		return nil
@@ -135,7 +148,7 @@ func (sf *SortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf
 }
 
 func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
-	key := Key{
+	key := base.Key{
 		Col: colIdx,
 		ID:  id,
 	}

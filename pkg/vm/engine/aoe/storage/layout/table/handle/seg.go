@@ -5,6 +5,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"sync"
 )
 
@@ -22,8 +23,9 @@ var (
 )
 
 type SegmentHandle struct {
-	ID   common.ID
-	Cols []col.IColumnSegment
+	ID          common.ID
+	Cols        []col.IColumnSegment
+	IndexHolder *index.SegmentHolder
 }
 
 func (sh *SegmentHandle) Close() error {

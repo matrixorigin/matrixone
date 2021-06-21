@@ -3,7 +3,7 @@ package memdata
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -14,13 +14,14 @@ import (
 )
 
 type OpCtx struct {
-	Opts      *e.Options
-	Tables    *table.Tables
-	MTManager mtif.IManager
-	MTBufMgr  bmgrif.IBufferManager
-	SSTBufMgr bmgrif.IBufferManager
-	FsMgr     ldio.IManager
-	TableMeta *md.Table
+	Opts        *e.Options
+	Tables      *table.Tables
+	MTManager   mtif.IManager
+	IndexBufMgr bmgrif.IBufferManager
+	MTBufMgr    bmgrif.IBufferManager
+	SSTBufMgr   bmgrif.IBufferManager
+	FsMgr       base.IManager
+	TableMeta   *md.Table
 }
 
 type Op struct {

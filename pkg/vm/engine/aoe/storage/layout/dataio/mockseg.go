@@ -4,6 +4,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"path/filepath"
 	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
@@ -17,7 +18,7 @@ type MockSegmentFile struct {
 	ID       common.ID
 }
 
-func NewMockSegmentFile(dirname string, ft FileType, id common.ID) ISegmentFile {
+func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegmentFile {
 	msf := new(MockSegmentFile)
 	msf.FileType = ft
 	msf.ID = id
@@ -33,11 +34,11 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) ISegmentFile 
 	return msf
 }
 
-func (msf *MockSegmentFile) GetIndexMeta() *base.IndexesMeta {
+func (msf *MockSegmentFile) GetIndexesMeta() *base.IndexesMeta {
 	return nil
 }
 
-func (msf *MockSegmentFile) GetBlockIndexMeta(id common.ID) *base.IndexesMeta {
+func (msf *MockSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMeta {
 	return nil
 }
 
@@ -102,7 +103,15 @@ func (msf *MockSegmentFile) UnrefBlock(id common.ID) {
 	}
 }
 
-func (msf *MockSegmentFile) MakeVirtualSegmentIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (msf *MockSegmentFile) GetDir() string {
+	return filepath.Dir(msf.FileName)
+}
+
+func (msf *MockSegmentFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+	return nil
+}
+
+func (msf *MockSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) base.IVirtaulFile {
 	return nil
 }
 

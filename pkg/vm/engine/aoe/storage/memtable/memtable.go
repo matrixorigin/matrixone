@@ -50,8 +50,8 @@ func NewMemTable(tableData table.ITableData, colTypes []types.Type, columnBlocks
 		TableData: tableData,
 	}
 	var vectors []vector.Vector
-	for idx, blk := range columnBlocks {
-		vec := vector.NewStdVector(colTypes[idx], blk.GetPartRoot().GetDataNode().(*buf.RawMemoryNode).Data)
+	for idx, _ := range columnBlocks {
+		vec := vector.NewStdVector(colTypes[idx], mt.Cursors[idx].GetNode().DataNode.(*buf.RawMemoryNode).Data)
 		vectors = append(vectors, vec)
 	}
 
