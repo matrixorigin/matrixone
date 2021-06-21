@@ -2,14 +2,17 @@ package index
 
 import (
 	"fmt"
+	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
 )
 
 type TableHolder struct {
-	ID   uint64
-	tree struct {
+	ID     uint64
+	BufMgr mgrif.IBufferManager
+	tree   struct {
 		sync.RWMutex
 		Segments   []*SegmentHolder
 		IdMap      map[uint64]int
@@ -17,21 +20,28 @@ type TableHolder struct {
 	}
 }
 
-func NewTableHolder(id uint64) *TableHolder {
-	holder := &TableHolder{ID: id}
+func NewTableHolder(bufMgr mgrif.IBufferManager, id uint64) *TableHolder {
+	holder := &TableHolder{ID: id, BufMgr: bufMgr}
 	holder.tree.Segments = make([]*SegmentHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
 	return holder
 }
 
-func (holder *TableHolder) AddSegment(seg *SegmentHolder) {
+func (holder *TableHolder) RegisterSegment(id common.ID, segType base.SegmentType, cb PostCloseCB) *SegmentHolder {
+	segHolder := newSegmentHolder(holder.BufMgr, id, segType, cb)
+	holder.addSegment(segHolder)
+	segHolder.Ref()
+	return segHolder
+}
+
+func (holder *TableHolder) addSegment(seg *SegmentHolder) {
 	holder.tree.Lock()
 	defer holder.tree.Unlock()
-	_, ok := holder.tree.IdMap[seg.ID]
+	_, ok := holder.tree.IdMap[seg.ID.SegmentID]
 	if ok {
-		panic(fmt.Sprintf("Duplicate seg %d", seg.ID))
+		panic(fmt.Sprintf("Duplicate seg %s", seg.ID.SegmentString()))
 	}
-	holder.tree.IdMap[seg.ID] = len(holder.tree.Segments)
+	holder.tree.IdMap[seg.ID.SegmentID] = len(holder.tree.Segments)
 	holder.tree.Segments = append(holder.tree.Segments, seg)
 	atomic.AddInt64(&holder.tree.SegmentCnt, int64(1))
 }
@@ -75,8 +85,10 @@ func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) *
 	if stale.Type >= segType {
 		panic(fmt.Sprintf("Cannot upgrade segment %d, type %d", id, segType))
 	}
-	newSeg := NewSegmentHolder(id, segType)
+	newSeg := newSegmentHolder(holder.BufMgr, stale.ID, segType, stale.PostCloseCB)
 	holder.tree.Segments[idx] = newSeg
+	newSeg.Ref()
+	stale.Unref()
 	return newSeg
 }
 
@@ -89,5 +101,15 @@ func (holder *TableHolder) GetSegment(id uint64) (seg *SegmentHolder) {
 	}
 	seg = holder.tree.Segments[idx]
 	holder.tree.RUnlock()
+	seg.Ref()
 	return seg
+}
+
+func (holder *TableHolder) Close() error {
+	holder.tree.Lock()
+	defer holder.tree.Unlock()
+	for _, seg := range holder.tree.Segments {
+		seg.Unref()
+	}
+	return nil
 }

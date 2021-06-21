@@ -3,14 +3,13 @@ package col
 import (
 	"errors"
 	"fmt"
-
-	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	// log "github.com/sirupsen/logrus"
 )
 
 type IColumnData interface {
@@ -37,11 +36,11 @@ type ColumnData struct {
 	SegTree     ISegmentTree
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
-	FsMgr       ldio.IManager
+	FsMgr       base.IManager
 	IndexHolder *index.TableHolder
 }
 
-func NewColumnData(indexHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, col_type types.Type, col_idx int) IColumnData {
+func NewColumnData(indexHolder *index.TableHolder, fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, col_type types.Type, col_idx int) IColumnData {
 	data := &ColumnData{
 		Type:        col_type,
 		Idx:         col_idx,

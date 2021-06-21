@@ -2,11 +2,12 @@ package dataio
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	// log "github.com/sirupsen/logrus"
 )
 
 type ColPartFile struct {
-	SegmentFile ISegmentFile
+	SegmentFile base.ISegmentFile
 	ID          *common.ID
 }
 

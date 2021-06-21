@@ -1,66 +1,47 @@
 package index
 
 import (
+	"github.com/pilosa/pilosa/roaring"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
-type INode interface {
-	GetHandle() NodeHandle
-}
-
 type Node struct {
-	Constructor buf.MemoryNodeConstructor
-	BufMgr      bmgrif.IBufferManager
-	BufNode     nif.INodeHandle
-	Capacity    uint64
-	VFile       base.IVirtaulFile
+	*bmgr.Node
+	RefHelper
+	Cols        *roaring.Bitmap
+	PostCloseCB PostCloseCB
 }
 
-type NodeHandle struct {
-	Handle nif.IBufferHandle
-	Index  Index
-}
-
-func (h *NodeHandle) Close() error {
-	return h.Handle.Close()
-}
-
-func NewNode(bufMgr bmgrif.IBufferManager, vf base.IVirtaulFile, constructor buf.MemoryNodeConstructor, capacity uint64) INode {
-	node := &Node{
-		BufMgr:      bufMgr,
-		VFile:       vf,
-		Constructor: constructor,
-		Capacity:    capacity,
-	}
-	node.VFile.Ref()
-	node.BufNode = node.BufMgr.RegisterNode(node.Capacity, bufMgr.GetNextID(), node.VFile, node.Constructor)
+func newNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.MemoryNodeConstructor,
+	capacity uint64, cols *roaring.Bitmap, cb PostCloseCB) *Node {
+	node := new(Node)
+	node.Cols = cols
+	node.Node = bufMgr.CreateNode(vf, constructor, capacity).(*bmgr.Node)
+	node.OnZeroCB = node.close
+	node.PostCloseCB = cb
+	node.Ref()
 	return node
 }
 
-func (n *Node) GetHandle() NodeHandle {
-	handle := NodeHandle{
-		Index: n.BufNode.GetBuffer().GetDataNode().(Index),
+func (node *Node) close() {
+	if node.Node != nil {
+		node.Node.Close()
 	}
-
-	handle.Handle = n.BufMgr.Pin(n.BufNode)
-	for handle.Handle == nil {
-		handle.Handle = n.BufMgr.Pin(n.BufNode)
+	if node.PostCloseCB != nil {
+		node.PostCloseCB(node)
 	}
-	return handle
 }
 
-func (n *Node) Close() {
-	if n.BufNode != nil {
-		err := n.BufNode.Close()
-		if err != nil {
-			panic("logic error")
-		}
-		n.BufNode = nil
-	}
-	if n.VFile != nil {
-		n.VFile.Unref()
-	}
+func (node *Node) ContainsCol(v uint64) bool {
+	return node.Cols.Contains(v)
+}
+
+func (node *Node) ContainsOnlyCol(v uint64) bool {
+	return node.Cols.Contains(v) && node.Cols.Count() == 1
+}
+
+func (node *Node) AllCols() []uint64 {
+	return node.Cols.Slice()
 }

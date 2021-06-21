@@ -8,7 +8,6 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
@@ -78,7 +77,7 @@ func (sw *MemtableWriter) Flush() (err error) {
 		}
 	}
 
-	ibuf, err := ldio.DefaultRWHelper.WriteIndexes(zmIndexes)
+	ibuf, err := index.DefaultRWHelper.WriteIndexes(zmIndexes)
 	if err != nil {
 		return err
 	}
@@ -115,7 +114,7 @@ func (sw *MemtableWriter) Flush() (err error) {
 		if err != nil {
 			return err
 		}
-		_, err = cursor.Current.GetDataNode().WriteTo(w)
+		_, err = cursor.Node.DataNode.WriteTo(w)
 		if err != nil {
 			return err
 		}

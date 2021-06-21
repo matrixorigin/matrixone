@@ -6,7 +6,9 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"os"
+	"path/filepath"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
@@ -15,18 +17,21 @@ import (
 type BlockFile struct {
 	sync.RWMutex
 	os.File
-	ID    common.ID
-	Parts map[Key]*base.Pointer
-	Meta  *FileMeta
+	ID          common.ID
+	Parts       map[base.Key]*base.Pointer
+	Meta        *FileMeta
+	SegmentFile base.ISegmentFile
 }
 
-func NewBlockFile(dirname string, id common.ID) IBlockFile {
+func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
 	bf := &BlockFile{
-		Parts: make(map[Key]*base.Pointer),
-		ID:    id,
-		Meta:  NewFileMeta(),
+		Parts:       make(map[base.Key]*base.Pointer),
+		ID:          id,
+		Meta:        NewFileMeta(),
+		SegmentFile: segFile,
 	}
 
+	dirname := segFile.GetDir()
 	name := e.MakeFilename(dirname, e.FTBlock, id.ToBlockFileName(), false)
 	// log.Infof("BlockFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
@@ -42,6 +47,10 @@ func NewBlockFile(dirname string, id common.ID) IBlockFile {
 	return bf
 }
 
+func (bf *BlockFile) GetDir() string {
+	return filepath.Dir(bf.Name())
+}
+
 func (bf *BlockFile) Destory() {
 	name := bf.Name()
 	log.Infof("Destory blockfile: %s", name)
@@ -55,17 +64,28 @@ func (bf *BlockFile) Destory() {
 	}
 }
 
-func (bf *BlockFile) GetIndexMeta() *base.IndexesMeta {
+func (bf *BlockFile) GetIndexesMeta() *base.IndexesMeta {
 	return bf.Meta.Indexes
 }
 
+func (bf *BlockFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+	vf := &EmbbedBlockIndexFile{
+		EmbbedIndexFile: EmbbedIndexFile{
+			SegmentFile: bf.SegmentFile,
+			Meta:        meta,
+		},
+		ID: bf.ID,
+	}
+	return vf
+}
+
 func (bf *BlockFile) initPointers(id common.ID) {
-	indexMeta, err := DefaultRWHelper.ReadIndexesMeta(bf.File)
-	bf.Meta.Indexes = indexMeta
-	// _, err := DefaultRWHelper.ReadIndexes(bf.File)
+	indexMeta, err := index.DefaultRWHelper.ReadIndexesMeta(bf.File)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
+	bf.Meta.Indexes = indexMeta
+	// return
 	twoBytes := make([]byte, 2)
 	_, err = bf.File.Read(twoBytes)
 	if err != nil {
@@ -85,7 +105,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		if blkID != id.BlockID {
 			panic("logic error")
 		}
-		key := Key{
+		key := base.Key{
 			Col: uint64(i),
 			ID:  id.AsBlockID(),
 		}
@@ -114,7 +134,7 @@ func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 }
 
 func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
-	key := Key{
+	key := base.Key{
 		Col: colIdx,
 		ID:  id.AsBlockID(),
 	}

@@ -6,6 +6,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 )
 
@@ -20,8 +21,8 @@ const (
 	SortedSegFile
 )
 
-var DefaultFsMgr IManager
-var MockFsMgr IManager
+var DefaultFsMgr base.IManager
+var MockFsMgr base.IManager
 
 func init() {
 	DefaultFsMgr = NewManager(dio.WRITER_FACTORY.Dirname, false)
@@ -30,23 +31,23 @@ func init() {
 
 type Manager struct {
 	sync.RWMutex
-	UnsortedFiles map[common.ID]ISegmentFile
-	SortedFiles   map[common.ID]ISegmentFile
+	UnsortedFiles map[common.ID]base.ISegmentFile
+	SortedFiles   map[common.ID]base.ISegmentFile
 	Dir           string
 	Mock          bool
 }
 
 func NewManager(dir string, mock bool) *Manager {
 	return &Manager{
-		UnsortedFiles: make(map[common.ID]ISegmentFile),
-		SortedFiles:   make(map[common.ID]ISegmentFile),
+		UnsortedFiles: make(map[common.ID]base.ISegmentFile),
+		SortedFiles:   make(map[common.ID]base.ISegmentFile),
 		Dir:           dir,
 		Mock:          mock,
 	}
 }
 
-func (mgr *Manager) RegisterUnsortedFiles(id common.ID) (ISegmentFile, error) {
-	var usf ISegmentFile
+func (mgr *Manager) RegisterUnsortedFiles(id common.ID) (base.ISegmentFile, error) {
+	var usf base.ISegmentFile
 	if mgr.Mock {
 		usf = NewMockSegmentFile(mgr.Dir, UnsortedSegFile, id)
 	} else {
@@ -63,8 +64,8 @@ func (mgr *Manager) RegisterUnsortedFiles(id common.ID) (ISegmentFile, error) {
 	return usf, nil
 }
 
-func (mgr *Manager) RegisterSortedFiles(id common.ID) (ISegmentFile, error) {
-	var sf ISegmentFile
+func (mgr *Manager) RegisterSortedFiles(id common.ID) (base.ISegmentFile, error) {
+	var sf base.ISegmentFile
 	if mgr.Mock {
 		sf = NewMockSegmentFile(mgr.Dir, UnsortedSegFile, id)
 	} else {
@@ -86,8 +87,8 @@ func (mgr *Manager) RegisterSortedFiles(id common.ID) (ISegmentFile, error) {
 	return sf, nil
 }
 
-func (mgr *Manager) UpgradeFile(id common.ID) ISegmentFile {
-	var sf ISegmentFile
+func (mgr *Manager) UpgradeFile(id common.ID) base.ISegmentFile {
+	var sf base.ISegmentFile
 	if mgr.Mock {
 		sf = NewMockSegmentFile(mgr.Dir, UnsortedSegFile, id)
 	} else {
@@ -110,7 +111,7 @@ func (mgr *Manager) UpgradeFile(id common.ID) ISegmentFile {
 	return sf
 }
 
-func (mgr *Manager) GetUnsortedFile(id common.ID) ISegmentFile {
+func (mgr *Manager) GetUnsortedFile(id common.ID) base.ISegmentFile {
 	mgr.RLock()
 	defer mgr.RUnlock()
 	f, ok := mgr.UnsortedFiles[id]
@@ -120,7 +121,7 @@ func (mgr *Manager) GetUnsortedFile(id common.ID) ISegmentFile {
 	return f
 }
 
-func (mgr *Manager) GetSortedFile(id common.ID) ISegmentFile {
+func (mgr *Manager) GetSortedFile(id common.ID) base.ISegmentFile {
 	mgr.RLock()
 	defer mgr.RUnlock()
 	f, ok := mgr.SortedFiles[id]
