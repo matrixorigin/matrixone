@@ -63,17 +63,15 @@ type ColumnInfo struct {
 	Alg      int        `json:"alg"`
 }
 
-// PartitionInfo stores the information of a partition.
-type PartitionInfo struct {
-	SchemaId   uint64   `json:"schema_id"`
-	TableID    uint64   `json:"table_id"`
-	Columns    []string `json:"columns"`
-	Ids        []uint64 `json:"ids"`
-	Names      []string `json:"names"`
-	Definition []byte   `json:"definition"`
+type IndexInfo struct {
+	SchemaId uint64   `json:"schema_id"`
+	TableId  uint64   `json:"table_id"`
+	Columns  []uint64 `json:"columns"`
+	Id       uint64   `json:"id"`
+	Names    []string `json:"column_names"`
+	Type     uint64   `json:"type"`
 }
 
-// SegmentInfo stores the information of a segment.
 type SegmentInfo struct {
 	TableId     uint64 `json:"table_id"`
 	Id          uint64 `json:"id"`

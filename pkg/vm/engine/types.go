@@ -62,9 +62,8 @@ type DistributionBy struct {
 }
 
 type IndexTableDef struct {
-	Typ         int
-	Name        string
-	PartitionBy *PartitionBy
+	Typ   int
+	Names []string
 }
 
 type AttributeDef struct {
