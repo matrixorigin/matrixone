@@ -298,8 +298,8 @@ func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, err
 	}
 }
 
-func (c *Catalog) DispatchQueries(dbName string, tableName string) (map[uint64]map[uint16][]aoe.SegmentInfo, error) {
-	resp := make(map[uint64]map[uint16][]aoe.SegmentInfo)
+func (c *Catalog) DispatchQueries(dbName string, tableName string) (map[uint64]map[uint64][]aoe.SegmentInfo, error) {
+	resp := make(map[uint64]map[uint64][]aoe.SegmentInfo)
 	if dbId, err := c.checkDBExists(dbName); err != nil {
 		return nil, err
 	} else {
@@ -320,7 +320,7 @@ func (c *Catalog) DispatchQueries(dbName string, tableName string) (map[uint64]m
 		}
 		for i := 0; i < len(values); i = i + 2 {
 			keys := bytes.Split(values[i], []byte("/"))
-			pId := format.MustBytesToUint16(keys[len(keys)-1])
+			pId := format.MustBytesToUint64(keys[len(keys)-1])
 			gId := format.MustBytesToUint64(keys[len(keys)-2])
 			value := values[i+1]
 			seg := aoe.SegmentInfo{}
@@ -411,33 +411,33 @@ func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 
 //where to generate id
 func (c *Catalog) dbIDKey(dbName string) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%s", cPrefix, cDBIDPrefix, dbName))
+	return []byte(fmt.Sprintf("%s/%d/%s/%s", cPrefix, DefaultCatalogId, cDBIDPrefix, dbName))
 }
 
 func (c *Catalog) dbKey(id uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d", cPrefix, cDBPrefix, id))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d", cPrefix, DefaultCatalogId, cDBPrefix, id))
 }
 
 func (c *Catalog) dbPrefix() []byte {
-	return []byte(fmt.Sprintf("%s/%s/", cPrefix, cDBPrefix))
+	return []byte(fmt.Sprintf("%s/%d/%s/", cPrefix, DefaultCatalogId, cDBPrefix))
 }
 
 func (c *Catalog) tableIDKey(dbId uint64, tableName string) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/%s", cPrefix, cTableIDPrefix, dbId, tableName))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/%s", cPrefix, DefaultCatalogId, cTableIDPrefix, dbId, tableName))
 }
 
 func (c *Catalog) tableKey(dbId uint64, tId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/%d", cPrefix, cTablePrefix, dbId, tId))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d", cPrefix, DefaultCatalogId, cTablePrefix, dbId, tId))
 }
 
 func (c *Catalog) tablePrefix(dbId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/", cPrefix, cTablePrefix, dbId))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/", cPrefix, DefaultCatalogId, cTablePrefix, dbId))
 }
 
-func (c *Catalog) routeKey(dbId uint64, tId uint64, gId uint64, pId uint16) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/%d/%d/%d", cPrefix, cRoutePrefix, dbId, tId, gId, pId))
+func (c *Catalog) routeKey(dbId uint64, tId uint64, gId uint64, pId uint64) []byte {
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/%d/%d", cPrefix, DefaultCatalogId, cRoutePrefix, dbId, tId, gId, pId))
 }
 
 func (c *Catalog) routePrefix(dbId uint64, tId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/%d/", cPrefix, cRoutePrefix, dbId, tId))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/", cPrefix, DefaultCatalogId, cRoutePrefix, dbId, tId))
 }
