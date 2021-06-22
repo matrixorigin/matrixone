@@ -15,6 +15,7 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
+	"github.com/sirupsen/logrus"
 	"math/rand"
 	"matrixone/pkg/vm/engine/aoe"
 	"sync"
@@ -160,9 +161,9 @@ func NewStorageWithOptions(
 			keys := bytes.Split(res.Data()[8:8+header], []byte("#"))
 			tKey := keys[0]
 			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), res.ID()))
-
+			logrus.Infof("[lalala]%s, %s", string(tKey), string(rKey))
 			// TODO: Call local interface to create new tablet
-			// TODO: Re-design group store and set value to segment_ids
+			// TODO: Re-design group store and set value to <partition, segment_ids>
 			_ = h.Set(rKey, []byte(res.Unique()))
 			t := aoe.TableInfo{}
 			_ = json.Unmarshal(res.Data()[8+header:], &t)
