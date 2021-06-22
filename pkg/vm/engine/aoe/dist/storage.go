@@ -15,6 +15,7 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
+	"github.com/sirupsen/logrus"
 	"math/rand"
 	"matrixone/pkg/vm/engine/aoe"
 	"sync"
@@ -136,6 +137,11 @@ func NewStorageWithOptions(
 		return []bhmetapb.Shard{
 			{
 				Group: uint64(aoe.KVGroup),
+				End:   []byte("/meta/Table/1/5"),
+			},
+			{
+				Group: uint64(aoe.KVGroup),
+				Start: []byte("/meta/Table/1/5"),
 			},
 			{
 				Group: uint64(aoe.AOEGroup),
@@ -155,9 +161,9 @@ func NewStorageWithOptions(
 			keys := bytes.Split(res.Data()[8:8+header], []byte("#"))
 			tKey := keys[0]
 			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), res.ID()))
-
+			logrus.Infof("[lalala]%s, %s", string(tKey), string(rKey))
 			// TODO: Call local interface to create new tablet
-			// TODO: Re-design group store and set value to segment_ids
+			// TODO: Re-design group store and set value to <partition, segment_ids>
 			_ = h.Set(rKey, []byte(res.Unique()))
 			t := aoe.TableInfo{}
 			_ = json.Unmarshal(res.Data()[8+header:], &t)
@@ -298,24 +304,39 @@ func (h *aoeStorage) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
 }
 
 func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group aoe.Group) ([][]byte, error) {
+	startKey := prefix
 	req := Args{
 		Op: uint64(PrefixScan),
 		Args: [][]byte{
+			startKey,
 			prefix,
 		},
 		Limit: limit,
 	}
-
-	data, err := h.ExecWithGroup(req, group)
-	if err != nil {
-		return nil, err
-	}
 	var pairs [][]byte
-	err = json.Unmarshal(data, &pairs)
-	if err != nil {
-		return nil, err
+	var err error
+	var data []byte
+	i := 0
+	for {
+		i = i + 1
+		data, err = h.ExecWithGroup(req, group)
+		if data == nil || err != nil {
+			break
+		}
+		var kvs [][]byte
+		err = json.Unmarshal(data, &kvs)
+		if err != nil || kvs == nil || len(kvs) == 0 {
+			break
+		}
+		if len(kvs)%2 == 0 {
+			pairs = append(pairs, kvs...)
+			break
+		}
+
+		pairs = append(pairs, kvs[0:len(kvs)-1]...)
+		req.Args[0] = kvs[len(kvs)-1]
 	}
-	return pairs, nil
+	return pairs, err
 }
 
 func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {

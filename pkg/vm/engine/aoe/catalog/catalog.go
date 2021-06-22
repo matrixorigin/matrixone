@@ -45,6 +45,7 @@ func DefaultCatalog(store dist.Storage) Catalog {
 		}
 	})
 	return gCatalog
+
 }
 
 func (c *Catalog) CreateDatabase(dbName string) (uint64, error) {
@@ -175,7 +176,11 @@ func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engin
 	if err != nil {
 		return 0, err
 	}
-	tInfo := aoe.TableInfo{}
+	tInfo := aoe.TableInfo{
+		Id:       tid,
+		Name:     tableName,
+		SchemaId: dbId,
+	}
 	id := uint64(0)
 	for _, def := range tableDefs {
 		switch v := def.(type) {
@@ -196,8 +201,10 @@ func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engin
 	}
 	tInfo.State = aoe.StateNone
 
-	// TODO: call interface provided by mochen to replace json.Marshal
-	tInfo.Partition, _ = json.Marshal(pdef)
+	if pdef != nil {
+		// TODO: call interface provided by mochen to replace json.Marshal
+		tInfo.Partition, _ = json.Marshal(pdef)
+	}
 
 	meta, _ := json.Marshal(tInfo)
 
@@ -288,6 +295,39 @@ func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, err
 		}
 		return &t, nil
 	}
+}
+
+func (c *Catalog) DispatchQueries(dbName string, tableName string) (map[uint64]map[uint16][]aoe.SegmentInfo, error) {
+	resp := make(map[uint64]map[uint16][]aoe.SegmentInfo)
+	if dbId, err := c.checkDBExists(dbName); err != nil {
+		return nil, err
+	} else {
+		tid, err := c.checkTableExists(dbId, tableName)
+		if err != nil {
+			return nil, err
+		}
+		v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tableName)))
+		if !ok {
+			return nil, ErrTableNotExists
+		}
+		lock := v.(*sync.RWMutex)
+		lock.RLock()
+		defer lock.RUnlock()
+		values, err := c.store.PrefixScan(c.routePrefix(dbId, tid), 0)
+		if err != nil {
+			return nil, err
+		}
+		for i := 0; i < len(values); i = i + 2 {
+			keys := bytes.Split(values[i], []byte("/"))
+			pId := format.MustBytesToUint16(keys[len(keys)-1])
+			gId := format.MustBytesToUint64(keys[len(keys)-2])
+			value := values[i+1]
+			seg := aoe.SegmentInfo{}
+			_ = json.Unmarshal(value, &seg)
+			resp[gId][pId] = append(resp[gId][pId], seg)
+		}
+	}
+	return resp, nil
 }
 
 func (c *Catalog) checkDBExists(dbName string) (uint64, error) {
@@ -393,8 +433,8 @@ func (c *Catalog) tablePrefix(dbId uint64) []byte {
 	return []byte(fmt.Sprintf("%s/%s/%d/", cPrefix, cTablePrefix, dbId))
 }
 
-func (c *Catalog) routeKey(dbId uint64, tId uint64, gId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/%d/%d", cPrefix, cRoutePrefix, dbId, tId, gId))
+func (c *Catalog) routeKey(dbId uint64, tId uint64, gId uint64, pId uint16) []byte {
+	return []byte(fmt.Sprintf("%s/%s/%d/%d/%d/%d", cPrefix, cRoutePrefix, dbId, tId, gId, pId))
 }
 
 func (c *Catalog) routePrefix(dbId uint64, tId uint64) []byte {
