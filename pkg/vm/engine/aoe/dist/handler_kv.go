@@ -34,6 +34,20 @@ func (h *aoeStorage) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 	return writtenBytes, changedBytes, resp
 }
 
+func (h *aoeStorage) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+	resp := pb.AcquireResponse()
+
+	err := h.getStoreByGroup(shard.Group, shard.ID).Delete(req.Key)
+	if err != nil {
+		resp.Value = errorResp(err)
+		return 0, 0, resp
+	}
+	writtenBytes := uint64(len(req.Key))
+	changedBytes := int64(writtenBytes)
+	resp.Value = []byte("OK")
+	return writtenBytes, changedBytes, resp
+}
+
 func (h *aoeStorage) batchSet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
@@ -63,13 +77,6 @@ func (h *aoeStorage) batchSet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 
-	args := &Args{}
-	err := json.Unmarshal(req.Cmd, &args)
-
-	if err != nil {
-		resp.Value = errorResp(err)
-		return resp, 500
-	}
 	value, err := h.getStoreByGroup(shard.Group, req.ToShard).Get(req.Key)
 	if err != nil {
 		resp.Value = errorResp(err)
@@ -81,11 +88,6 @@ func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 
 func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	args := &Args{}
-	if err := json.Unmarshal(req.Cmd, &args); err != nil {
-		resp.Value = errorResp(err)
-		return resp, 500
-	}
 	var data [][]byte
 	err := h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(req.Key, func(key, value []byte) (bool, error) {
 		data = append(data, key)
@@ -97,7 +99,7 @@ func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 		return resp, 500
 	}
 	resp.Value, err = json.Marshal(data)
-	if err := json.Unmarshal(req.Cmd, &args); err != nil {
+	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
 	}
@@ -106,11 +108,6 @@ func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 
 func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	args := &Args{}
-	if err := json.Unmarshal(req.Cmd, &args); err != nil {
-		resp.Value = errorResp(err)
-		return resp, 500
-	}
 	var data [][]byte
 	err := h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(req.Key, func(key, value []byte) (bool, error) {
 		data = append(data, key)
@@ -122,7 +119,7 @@ func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 		return resp, 500
 	}
 	resp.Value, err = json.Marshal(data)
-	if err := json.Unmarshal(req.Cmd, &args); err != nil {
+	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
 	}

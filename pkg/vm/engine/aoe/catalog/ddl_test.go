@@ -1,29 +1,45 @@
 package catalog
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
-	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage/mem"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist"
+	"matrixone/pkg/vm/metadata"
 	"os"
 	"testing"
 	"time"
 )
 
 var (
-	tmpDir = "./cube-test"
+	tmpDir    = "./cube-test"
+	dbName    = "test_db1"
+	tableName = "test_tb"
+	cols      = []engine.TableDef{
+		&engine.AttributeDef{
+			Attr: metadata.Attribute{
+				Name: "col1",
+				Type: types.Type{},
+				Alg:  0,
+			},
+		},
+		&engine.AttributeDef{
+			Attr: metadata.Attribute{
+				Name: "col2",
+				Type: types.Type{},
+				Alg:  0,
+			},
+		},
+	}
 )
 
 func recreateTestTempDir() (err error) {
@@ -110,95 +126,86 @@ func TestClusterStartAndStop(t *testing.T) {
 	require.NoError(t, err)
 	stdLog.Printf("app all started.")
 	catalog := DefaultCatalog(c.applications[0])
-	testCreateDB(t, catalog)
-	//testCreateTable(t,catalog)
+	//testDBDDL(t, catalog)
+	testTableDDL(t, catalog)
 
 }
 
-func testCreateTable(t *testing.T, c Catalog) {
-	// mock create table(skip validation and id generate), dbid=1, tid=2,
-	// 1. create meta set it's state to StateNone, encoding meta and save in kv
+func testTableDDL(t *testing.T, c Catalog) {
+	tbs, err := c.GetTables(dbName)
+	require.Error(t, ErrDBNotExists, err)
 
-	table := aoe.TableInfo{
-		SchemaId: 1,
-		Id:       1,
-		Name:     "my_table",
-		State:    aoe.StateNone,
-	}
-
-	meta, err := json.Marshal(table)
-	err = c.store.Set(c.tableKey(table.SchemaId, table.Id), meta)
+	id, err := c.CreateDatabase(dbName)
 	require.NoError(t, err)
+	require.Less(t, uint64(0), id)
 
-	// 2. Create Shard for table
-	// Dynamic Create Shard Test
-	client := c.store.RaftStore().Prophet().GetClient()
-	key := c.tableKey(table.SchemaId, table.Id)
-	header := format.Uint64ToBytes(uint64(len(key)))
-	buf := bytes.Buffer{}
-	buf.Write(header)
-	buf.Write(key)
-	buf.Write(meta)
-	err = client.AsyncAddResources(raftstore.NewResourceAdapterWithShard(
-		bhmetapb.Shard{
-			Start:  []byte("2"),
-			End:    []byte("3"),
-			Unique: "gTable1",
-			Group:  uint64(aoe.AOEGroup),
-			Data:   buf.Bytes(),
-		}))
+	tbs, err = c.GetTables(dbName)
 	require.NoError(t, err)
+	require.Nil(t, tbs)
 
-	completedC := make(chan aoe.TableInfo, 1)
+	t0 := time.Now()
+	stdLog.Printf("call create table at %d", t0.UnixNano())
+	tid, err := c.CreateTable(dbName, tableName, cols, nil)
+	require.NoError(t, err)
+	require.Less(t, uint64(0), tid)
+
+	completedC := make(chan *aoe.TableInfo, 1)
 	defer close(completedC)
-	tm := aoe.TableInfo{}
 	go func() {
 		for {
-			value, err := c.store.Get(key)
-			if err != nil {
-				require.NoError(t, err)
-				break
-			}
-			err = json.Unmarshal(value, &tm)
-			if err != nil {
-				require.NoError(t, err)
-				break
-			}
-			if tm.State == aoe.StateNone {
-				stdLog.Printf("%s is creating, pls wait", tm.Name)
-				time.Sleep(100 * time.Millisecond)
-			} else if tm.State == aoe.StatePublic {
-				completedC <- tm
+			tb, _ := c.GetTable(dbName, tableName)
+			if tb != nil {
+				completedC <- tb
 				break
 			}
 		}
 	}()
-
 	select {
 	case <-completedC:
-		stdLog.Printf("%s is created", tm.Name)
-		return
+		stdLog.Printf("%s is created, cost %d ms", tableName, time.Since(t0).Milliseconds())
+		break
 	case <-time.After(3 * time.Second):
-		stdLog.Printf("create %s failed, timeout", table.Name)
-
+		stdLog.Printf("create %s failed, timeout", tableName)
 	}
+
+	tid, err = c.CreateTable(dbName, tableName, cols, nil)
+	require.Equal(t, ErrTableCreateExists, err)
+
+	tid2, err := c.CreateTable(dbName, tableName+"2", cols, nil)
+	require.NoError(t, err)
+	require.Less(t, tid, tid2)
+
+	tbs, err = c.GetTables(dbName)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, 2, len(tbs))
+
 }
-func testCreateDB(t *testing.T, c Catalog) {
-	dbName := "test_db1"
+func testDBDDL(t *testing.T, c Catalog) {
+	dbs, err := c.GetDBs()
+	require.NoError(t, err)
+	require.Nil(t, dbs)
+
 	id, err := c.CreateDatabase(dbName)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), id)
 
 	id, err = c.CreateDatabase(dbName)
-	require.Error(t, ErrDBCreateExists, err)
-}
+	require.Equal(t, ErrDBCreateExists, err)
 
-func testDescDB(t *testing.T, s dist.Storage) {
+	dbs, err = c.GetDBs()
+	require.NoError(t, err)
+	require.Equal(t, 1, len(dbs))
 
-}
+	db, err := c.GetDB(dbName)
+	require.NoError(t, err)
+	require.Equal(t, dbName, db.Name)
 
-func testDescDBs(t *testing.T, s dist.Storage) {
+	id, err = c.DelDatabase(dbName)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), id)
 
+	db, err = c.GetDB(dbName)
+	require.Error(t, ErrDBNotExists, err)
 }
 
 type emptyLog struct{}

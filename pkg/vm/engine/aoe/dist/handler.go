@@ -21,6 +21,7 @@ const (
 
 func (h *aoeStorage) init() {
 	h.AddWriteFunc(uint64(Set), h.set)
+	h.AddWriteFunc(uint64(Del), h.del)
 	h.AddWriteFunc(uint64(Incr), h.incr)
 	h.AddReadFunc(uint64(Get), h.get)
 	h.AddReadFunc(uint64(PrefixScan), h.prefixScan)

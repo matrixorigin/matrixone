@@ -147,10 +147,10 @@ func NewStorageWithOptions(
 
 	cfg.Prophet.ResourceStateChangedHandler = func(res metadata.Resource, from metapb.ResourceState, to metapb.ResourceState) {
 		if from == metapb.ResourceState_WaittingCreate && to == metapb.ResourceState_Running {
+
 			if res.Data() == nil {
 				return
 			}
-
 			header := format.MustBytesToUint64(res.Data()[0:8])
 			keys := bytes.Split(res.Data()[8:8+header], []byte("#"))
 			tKey := keys[0]
