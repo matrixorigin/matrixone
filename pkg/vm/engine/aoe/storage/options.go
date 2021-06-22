@@ -29,6 +29,7 @@ type IterOptions struct {
 }
 
 type CacheCfg struct {
+	IndexCapacity  uint64
 	InsertCapacity uint64
 	DataCapacity   uint64
 }
@@ -116,8 +117,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.CacheCfg == nil {
 		o.CacheCfg = &CacheCfg{
-			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 20,
-			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 20,
+			IndexCapacity:  o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
+			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
+			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 40,
 		}
 	}
 	return o

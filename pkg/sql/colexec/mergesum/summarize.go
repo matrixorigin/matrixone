@@ -8,7 +8,6 @@ import (
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
 	"matrixone/pkg/vm/process"
-	"matrixone/pkg/vm/register"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -35,6 +34,35 @@ func Prepare(proc *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
+	ctr.refer = n.Refer
+	for {
+		switch ctr.state {
+		case Build:
+			if err := ctr.build(n, proc); err != nil {
+				ctr.clean(proc)
+				ctr.state = End
+				return true, err
+			}
+			ctr.state = Eval
+		case Eval:
+			if err := ctr.eval(n.Es, proc); err != nil {
+				ctr.clean(proc)
+				ctr.state = End
+				return true, err
+			}
+			proc.Reg.Ax = ctr.bat
+			ctr.bat = nil
+			ctr.clean(proc)
+			ctr.state = End
+			return true, nil
+		case End:
+			proc.Reg.Ax = nil
+			return true, nil
+		}
+	}
+}
+
+func (ctr *Container) build(n *Argument, proc *process.Process) error {
 	for {
 		if len(proc.Reg.Ws) == 0 {
 			break
@@ -57,34 +85,30 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			if err := ctr.processBatch(bat, n.Es, proc); err != nil {
 				reg.Ch = nil
 				reg.Wg.Done()
-				ctr.clean(bat, proc)
-				return true, err
+				bat.Clean(proc)
+				return err
 			}
 			bat.Clean(proc)
 			reg.Wg.Done()
 		}
 	}
-	if err := ctr.eval(n.Es, proc); err != nil {
-		ctr.clean(nil, proc)
-		return true, err
-	}
-	proc.Reg.Ax = ctr.bat
-	ctr.bat = nil
-	ctr.clean(nil, proc)
-	register.FreeRegisters(proc)
-	return true, nil
+	return nil
 }
 
 func (ctr *Container) eval(es []aggregation.Extend, proc *process.Process) error {
 	var err error
 
+	if es[0].Agg == nil {
+		ctr.bat = batch.New(true, nil)
+		return nil
+	}
 	ctr.bat = batch.New(true, ctr.attrs)
 	for i, e := range es {
 		if ctr.bat.Vecs[i], err = e.Agg.EvalCopy(proc); err != nil {
 			ctr.bat.Vecs = ctr.bat.Vecs[:i]
 			return err
 		}
-		copy(ctr.bat.Vecs[i].Data, encoding.EncodeUint64(proc.Refer[e.Alias]))
+		copy(ctr.bat.Vecs[i].Data, encoding.EncodeUint64(ctr.refer[e.Alias]))
 	}
 	return nil
 }
@@ -132,10 +156,7 @@ func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, pr
 	return nil
 }
 
-func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
-	if bat != nil {
-		bat.Clean(proc)
-	}
+func (ctr *Container) clean(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc)
 	}

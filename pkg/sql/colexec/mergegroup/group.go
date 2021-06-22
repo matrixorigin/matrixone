@@ -95,12 +95,14 @@ func Prepare(proc *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
+	ctr.refer = n.Refer
 	for {
 		switch ctr.state {
 		case Build:
 			ctr.spill.e = n.E
 			if err := ctr.build(n, proc); err != nil {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, err
 			}
 			ctr.rows = 0
@@ -108,20 +110,24 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		case Eval:
 			if len(ctr.bats) == 0 {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, nil
 			}
 			bat, err := ctr.bats[0].GetBatch(proc)
 			if err != nil {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, err
 			}
 			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, err
 			}
 			vecs, err := ctr.eval(ctr.rows, bat.Vecs[0].Length(), n.Es, proc)
 			if err != nil {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, err
 			}
 			rbat := &batch.Batch{
@@ -136,9 +142,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			ctr.bats = ctr.bats[1:]
 			if len(ctr.bats) == 0 {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, nil
 			}
 			return false, nil
+		case End:
+			proc.Reg.Ax = nil
+			return true, nil
 		}
 	}
 	return true, nil
@@ -424,7 +434,7 @@ func (ctr *Container) eval(idx int64, length int, es []aggregation.Extend, proc 
 		}
 	}
 	for i, e := range es {
-		copy(vecs[i].Data, encoding.EncodeUint64(proc.Refer[e.Alias]))
+		copy(vecs[i].Data, encoding.EncodeUint64(ctr.refer[e.Alias]))
 	}
 	return vecs, nil
 }
@@ -714,14 +724,15 @@ func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vecto
 		hash.RehashSels(sels[:count], ctr.hashs, vec)
 	}
 	nextslot := 0
-	for i, h := range ctr.hashs {
+	for _, sel := range sels {
+		h := ctr.hashs[sel]
 		slot, ok := ctr.slots.Get(h)
 		if !ok {
 			slot = nextslot
 			ctr.slots.Set(h, slot)
 			nextslot++
 		}
-		ctr.sels[slot] = append(ctr.sels[slot], sels[i])
+		ctr.sels[slot] = append(ctr.sels[slot], sel)
 	}
 }
 

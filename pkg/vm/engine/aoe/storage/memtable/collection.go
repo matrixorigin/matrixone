@@ -60,7 +60,10 @@ func (c *Collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
 	for idx, colBlk := range colBlks {
 		c.mem.Cursors[idx] = &col.ScanCursor{}
 		colBlk.InitScanCursor(c.mem.Cursors[idx].(*col.ScanCursor))
-		c.mem.Cursors[idx].Init()
+		err := c.mem.Cursors[idx].Init()
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	tbl = NewMemTable(c.TableData, c.TableData.GetColTypes(), colBlks, c.mem.Cursors, c.Opts, blk)
@@ -84,13 +87,13 @@ func (c *Collection) Append(ck *chunk.Chunk, index *md.LogIndex) (err error) {
 	offset := uint64(0)
 	for {
 		if mut.IsFull() {
+			for _, cursor := range c.mem.Cursors {
+				cursor.Close()
+			}
 			mut, err = c.onNoMutableTable()
 			if err != nil {
 				c.Opts.EventListener.BackgroundErrorCB(err)
 				return err
-			}
-			for _, cursor := range c.mem.Cursors {
-				cursor.Close()
 			}
 			go func() {
 				ctx := dops.OpCtx{Collection: c, Opts: c.Opts}

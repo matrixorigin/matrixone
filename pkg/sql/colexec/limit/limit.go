@@ -28,11 +28,17 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 	n := arg.(*Argument)
+	if n.Seen >= n.Limit {
+		proc.Reg.Ax = nil
+		bat.Clean(proc)
+		return true, nil
+	}
 	if length := uint64(len(bat.Sels)); length > 0 {
 		newSeen := n.Seen + length
 		if newSeen >= n.Limit { // limit - seen
 			bat.Sels = bat.Sels[:n.Limit-n.Seen]
 			proc.Reg.Ax = bat
+			n.Seen = newSeen
 			register.FreeRegisters(proc)
 			return true, nil
 		}
@@ -56,6 +62,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		bat.Sels = sels
 		bat.SelsData = data
 		proc.Reg.Ax = bat
+		n.Seen = newSeen
 		register.FreeRegisters(proc)
 		return true, nil
 	}

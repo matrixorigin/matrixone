@@ -14,6 +14,7 @@ type Extend struct {
 type Projection struct {
 	Prev  op.OP
 	ID    string
+	As    []string
 	Es    []*Extend
 	Attrs map[string]types.Type
 }

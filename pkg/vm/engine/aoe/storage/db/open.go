@@ -6,6 +6,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -79,14 +80,18 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	dio.WRITER_FACTORY.Init(opts, dirname)
 	dio.READER_FACTORY.Init(opts, dirname)
 
+	fsMgr := ldio.NewManager(dirname, false)
 	memtblMgr := mt.NewManager(opts)
+	indexBufMgr := bm.NewBufferManager(opts.CacheCfg.IndexCapacity, opts.MemData.Updater)
 	mtBufMgr := bm.NewBufferManager(opts.CacheCfg.InsertCapacity, opts.MemData.Updater)
 	sstBufMgr := bm.NewBufferManager(opts.CacheCfg.DataCapacity, opts.MemData.Updater)
 
 	db = &DB{
 		Dir:         dirname,
 		Opts:        opts,
+		FsMgr:       fsMgr,
 		MemTableMgr: memtblMgr,
+		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mtBufMgr,
 		SSTBufMgr:   sstBufMgr,
 		ClosedC:     make(chan struct{}),
@@ -97,7 +102,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	db.store.MetaInfo = opts.Meta.Info
 
 	cleanStaleMeta(opts.Meta.Conf.Dir)
-	db.validateAndCleanStaleData()
+	db.replayAndCleanData()
 
 	db.startWorkers()
 	return db, err

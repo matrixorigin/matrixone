@@ -2,6 +2,8 @@ package col
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
 	"sync/atomic"
 
@@ -13,7 +15,7 @@ type StrColumnBlock struct {
 	Parts []IColumnPart
 }
 
-func NewStrColumnBlock(seg IColumnSegment, id common.ID, blkType BlockType) IColumnBlock {
+func NewStrColumnBlock(seg IColumnSegment, id common.ID, blkType base.BlockType) IColumnBlock {
 	blk := &StrColumnBlock{
 		ColumnBlock: ColumnBlock{
 			ID:     id,
@@ -43,7 +45,7 @@ func (blk *StrColumnBlock) UnRef() {
 	}
 }
 
-func (blk *StrColumnBlock) CloneWithUpgrade(seg IColumnSegment) IColumnBlock {
+func (blk *StrColumnBlock) CloneWithUpgrade(seg IColumnSegment, meta *md.Block) IColumnBlock {
 	return nil
 }
 

@@ -7,19 +7,25 @@ import (
 	"matrixone/pkg/sql/op"
 )
 
-func New(prev op.OP, es []aggregation.Extend) *Summarize {
+func New(prev op.OP, es []aggregation.Extend) (*Summarize, error) {
+	as := make([]string, 0, len(es))
 	attrs := make(map[string]types.Type)
 	for _, e := range es {
 		if len(e.Alias) == 0 {
 			e.Alias = fmt.Sprintf("%s(%s)", aggregation.AggName[e.Op], e.Name)
 		}
+		if _, ok := attrs[e.Alias]; ok {
+			return nil, fmt.Errorf("column '%s' is ambiguous", e.Alias)
+		}
 		attrs[e.Alias] = e.Agg.Type()
+		as = append(as, e.Alias)
 	}
 	return &Summarize{
+		As:    as,
 		Es:    es,
 		Prev:  prev,
 		Attrs: attrs,
-	}
+	}, nil
 }
 
 func (n *Summarize) String() string {

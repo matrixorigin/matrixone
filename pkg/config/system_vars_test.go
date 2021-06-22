@@ -30,7 +30,73 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 
 
 
+	if c1.Dumpdatabase != c2.Dumpdatabase {
+		return false
+	}
 
+
+
+
+
+
+
+	if c1.SendRow != c2.SendRow {
+		return false
+	}
+
+
+
+	if c1.DumpEnv != c2.DumpEnv {
+		return false
+	}
+
+
+
+	if c1.HostMmuLimitation != c2.HostMmuLimitation {
+		return false
+	}
+
+
+
+	if c1.GuestMmuLimitation != c2.GuestMmuLimitation {
+		return false
+	}
+
+
+
+	if c1.MempoolMaxSize != c2.MempoolMaxSize {
+		return false
+	}
+
+
+
+	if c1.MempoolFactor != c2.MempoolFactor {
+		return false
+	}
+
+
+
+	if c1.ProcessLimitationSize != c2.ProcessLimitationSize {
+		return false
+	}
+
+
+
+	if c1.ProcessLimitationBatchRows != c2.ProcessLimitationBatchRows {
+		return false
+	}
+
+
+
+	if c1.ProcessLimitationBatchSize != c2.ProcessLimitationBatchSize {
+		return false
+	}
+
+
+
+	if c1.ProcessLimitationPartitionRows != c2.ProcessLimitationPartitionRows {
+		return false
+	}
 
 
 
@@ -48,9 +114,31 @@ rootpassword= ""
 
 
 
+dumpdatabase= "default"
 
 
 
+
+
+sendRow= false
+
+dumpEnv= false
+
+hostMmuLimitation=1099511627776
+
+guestMmuLimitation=1099511627776
+
+mempoolMaxSize=1099511627776
+
+mempoolFactor=8
+
+processLimitationSize=42949672960
+
+processLimitationBatchRows=42949672960
+
+processLimitationBatchSize=0
+
+processLimitationPartitionRows=42949672960
 		
 `
 	t1_config:=varsConfig{
@@ -65,9 +153,31 @@ Rootpassword: "" ,
 
 
 
+Dumpdatabase: "default" ,
 
 
 
+
+
+SendRow: false ,
+
+DumpEnv: false ,
+
+HostMmuLimitation:1099511627776,
+
+GuestMmuLimitation:1099511627776,
+
+MempoolMaxSize:1099511627776,
+
+MempoolFactor:8,
+
+ProcessLimitationSize:42949672960,
+
+ProcessLimitationBatchRows:42949672960,
+
+ProcessLimitationBatchSize:0,
+
+ProcessLimitationPartitionRows:42949672960,
 	
 
 		name2updatedFlags: nil,

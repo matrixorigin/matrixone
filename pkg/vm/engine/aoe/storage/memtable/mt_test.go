@@ -2,11 +2,10 @@ package memtable
 
 import (
 	"github.com/stretchr/testify/assert"
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -32,11 +31,12 @@ func TestManager(t *testing.T) {
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
 	flusher := w.NewOpWorker("Mock Flusher")
+	fsMgr := ldio.DefaultFsMgr
+	indexBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	t0 := uint64(0)
-	colDefs := make([]types.Type, 2)
-	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, t0, colDefs)
+	tableMeta := md.MockTable(nil, nil, 10)
+	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 
 	c0, err := manager.RegisterCollection(t0_data)
 	assert.Nil(t, err)
@@ -46,11 +46,11 @@ func TestManager(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
-	c00, err = manager.UnregisterCollection(t0 + 1)
+	c00, err = manager.UnregisterCollection(tableMeta.ID + 1)
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
-	c00, err = manager.UnregisterCollection(t0)
+	c00, err = manager.UnregisterCollection(tableMeta.ID)
 	assert.Nil(t, err)
 	assert.NotNil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
@@ -81,20 +81,17 @@ func TestCollection(t *testing.T) {
 	tbl := op.GetTable()
 
 	manager := NewManager(opts)
+	fsMgr := ldio.NewManager(WORK_DIR, false)
 	flusher := w.NewOpWorker("Mock Flusher")
+	indexBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	colDefs := make([]types.Type, cols)
-	for i := 0; i < cols; i++ {
-		colDefs[i] = types.Type{types.T_int32, 4, 4, 0}
-	}
-	// colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
-	// colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
-	t0_data := table.NewTableData(mtBufMgr, sstBufMgr, tbl.ID, colDefs)
+	tableMeta := md.MockTable(nil, schema, 10)
+	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
 	expect_blks := blks
-	batch_size := uint64(4)
+	batch_size := uint64(8)
 	step := expect_blks / batch_size
 	var waitgroup sync.WaitGroup
 	seq := uint64(0)
@@ -111,18 +108,18 @@ func TestCollection(t *testing.T) {
 		seq++
 		go func(id uint64, wg *sync.WaitGroup) {
 			defer wg.Done()
-			insert := chunk.MockChunk(colDefs, thisStep*opts.Meta.Conf.BlockMaxRows)
+			insert := chunk.MockChunk(schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &md.LogIndex{
 				ID:       id,
 				Capacity: insert.GetCount(),
 			}
-			err = c0.Append(insert, index)
+			err := c0.Append(insert, index)
 			assert.Nil(t, err)
 			// t.Log(mtBufMgr.String())
 		}(logid, &waitgroup)
 	}
 	waitgroup.Wait()
-	assert.Equal(t, len(tbl.SegmentIDs()), int(blks/opts.Meta.Info.Conf.SegmentMaxBlocks))
+	assert.Equal(t, len(tbl.SegmentIDs()), int(blks/(opts.Meta.Info.Conf.SegmentMaxBlocks)))
 	for i := 0; i < 50; i++ {
 		runtime.GC()
 		time.Sleep(time.Duration(1) * time.Millisecond)
@@ -153,44 +150,4 @@ func TestCollection(t *testing.T) {
 	opts.Meta.Flusher.Stop()
 	opts.Meta.Updater.Stop()
 	opts.Data.Sorter.Stop()
-}
-
-func TestContainer(t *testing.T) {
-	capacity := uint64(4096)
-	flusher := w.NewOpWorker("Mock Flusher")
-	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
-
-	baseid := common.ID{}
-	step := capacity / 2
-	// step := capacity
-	con := NewDynamicContainer(mtBufMgr, baseid, step)
-	assert.Equal(t, uint64(0), con.GetCapacity())
-
-	err := con.Allocate()
-	assert.Nil(t, err)
-	assert.Equal(t, step, con.GetCapacity())
-	assert.True(t, con.IsPined())
-
-	id2 := baseid
-	id2.BlockID += 1
-	con2 := NewDynamicContainer(mtBufMgr, id2, step)
-	assert.NotNil(t, con2)
-	err = con2.Allocate()
-	assert.Nil(t, err)
-
-	err = con2.Allocate()
-	assert.NotNil(t, err)
-	assert.Equal(t, step, con2.GetCapacity())
-
-	con.Unpin()
-	err = con2.Allocate()
-	assert.Nil(t, err)
-	assert.Equal(t, step*2, con2.GetCapacity())
-	assert.Equal(t, capacity, mtBufMgr.GetUsage())
-
-	con.Close()
-	con2.Close()
-	assert.Equal(t, uint64(0), con.GetCapacity())
-	assert.Equal(t, uint64(0), con2.GetCapacity())
-	assert.Equal(t, capacity, mtBufMgr.GetCapacity())
 }

@@ -10,6 +10,7 @@ import (
 type Group struct {
 	Prev  op.OP
 	ID    string
+	As    []string
 	Gs    []*extend.Attribute
 	Es    []aggregation.Extend
 	Attrs map[string]types.Type

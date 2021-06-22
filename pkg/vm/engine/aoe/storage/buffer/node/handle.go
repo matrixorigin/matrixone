@@ -8,11 +8,9 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"sync/atomic"
-
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 )
 
 func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
@@ -23,36 +21,36 @@ func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
 		state = nif.NODE_LOADED
 	}
 	handle := &NodeHandle{
-		ID:        ctx.ID,
-		Buff:      ctx.Buff,
-		Capacity:  size,
-		State:     state,
-		RTState:   nif.NODE_RT_RUNNING,
-		Manager:   ctx.Manager,
-		Spillable: ctx.Spillable,
+		ID:          ctx.ID,
+		Buff:        ctx.Buff,
+		Capacity:    size,
+		State:       state,
+		RTState:     nif.NODE_RT_RUNNING,
+		Manager:     ctx.Manager,
+		Spillable:   ctx.Spillable,
+		Constructor: ctx.Constructor,
 	}
 
 	c := context.TODO()
 	c = context.WithValue(c, "handle", handle)
-	c = context.WithValue(c, "segmentfile", ctx.SegmentFile)
-	handle.SpillIO = NewNodeIO(dio.WRITER_FACTORY.Opts, c)
+	c = context.WithValue(c, "reader", ctx.Reader)
+	handle.IO = NewNodeIO(dio.WRITER_FACTORY.Opts, c)
 	return handle
 }
 
 func (h *NodeHandle) Iteration() uint64 {
-	return h.Iter
+	return atomic.LoadUint64(&h.Iter)
 }
 
 func (h *NodeHandle) IncIteration() uint64 {
-	h.Iter++
-	return h.Iter
+	return atomic.AddUint64(&h.Iter, uint64(1))
 }
 
 func (h *NodeHandle) FlushData() error {
 	if !h.Spillable {
 		return nil
 	}
-	return h.SpillIO.Flush()
+	return h.IO.Flush()
 }
 
 func (h *NodeHandle) GetBuffer() buf.IBuffer {
@@ -73,7 +71,11 @@ func (h *NodeHandle) Unload() {
 	h.Buff.Close()
 	h.Buff = nil
 	nif.AtomicStoreState(&(h.State), nif.NODE_UNLOAD)
-	log.Infof("Unload %s", h.ID.String())
+	// log.Infof("Unload %s", h.ID.String())
+}
+
+func (h *NodeHandle) GetNodeCreator() buf.MemoryNodeConstructor {
+	return h.Constructor
 }
 
 func (h *NodeHandle) GetCapacity() uint64 {
@@ -93,16 +95,15 @@ func (h *NodeHandle) UnRef() bool {
 }
 
 func (h *NodeHandle) HasRef() bool {
-	v := atomic.LoadUint64(&(h.Refs))
-	return v > uint64(0)
+	return atomic.LoadUint64(&h.Refs) != 0
 }
 
-func (h *NodeHandle) GetID() common.ID {
+func (h *NodeHandle) GetID() uint64 {
 	return h.ID
 }
 
 func (h *NodeHandle) GetState() nif.NodeState {
-	return h.State
+	return atomic.LoadUint32(&h.State)
 }
 
 func (h *NodeHandle) IsSpillable() bool {
@@ -110,10 +111,12 @@ func (h *NodeHandle) IsSpillable() bool {
 }
 
 func (h *NodeHandle) Clean() error {
-	return h.SpillIO.Clean()
+	return h.IO.Clean()
 }
 
 func (h *NodeHandle) Close() error {
+	h.Lock()
+	defer h.Unlock()
 	if !nif.AtomicCASRTState(&(h.RTState), nif.NODE_RT_RUNNING, nif.NODE_RT_CLOSED) {
 		// Cocurrent senario that other client already call Close before
 		return nil
@@ -132,12 +135,18 @@ func (h *NodeHandle) IsClosed() bool {
 }
 
 func (h *NodeHandle) Unloadable() bool {
-	if h.State == nif.NODE_UNLOAD {
+	state := atomic.LoadUint32(&h.State)
+	if state == nif.NODE_UNLOAD {
 		return false
 	}
 	if h.HasRef() {
 		return false
 	}
+
+	// rtState := atomic.LoadUint32(&h.RTState)
+	// if rtState == nif.NODE_RT_CLOSED {
+	// 	return false
+	// }
 
 	return true
 }
@@ -146,11 +155,11 @@ func (h *NodeHandle) RollbackLoad() {
 	if !nif.AtomicCASState(&(h.State), nif.NODE_LOADING, nif.NODE_ROOLBACK) {
 		return
 	}
-	h.UnRef()
+	// h.UnRef()
 	if h.Buff != nil {
 		h.Buff.Close()
+		h.Buff = nil
 	}
-	h.Buff = nil
 	nif.AtomicStoreState(&(h.State), nif.NODE_UNLOAD)
 }
 
@@ -164,16 +173,14 @@ func (h *NodeHandle) CommitLoad() error {
 	}
 
 	if h.Spillable {
-		log.Infof("loading transient node %v", h.ID)
-		err := h.SpillIO.Load()
+		// log.Infof("loading transient node %v", h.ID)
+		err := h.IO.Load()
 		if err != nil {
 			return err
 		}
-	} else if h.ID.IsTransient() {
-		panic("logic error: should not load non-spillable transient memory")
 	} else {
-		log.Infof("loading persistent node %v", h.ID)
-		err := h.SpillIO.Load()
+		// log.Infof("loading persistent node %v", h.ID)
+		err := h.IO.Load()
 		if err != nil {
 			return err
 		}
@@ -187,7 +194,7 @@ func (h *NodeHandle) CommitLoad() error {
 
 func (h *NodeHandle) MakeHandle() nif.IBufferHandle {
 	if nif.AtomicLoadState(&(h.State)) != nif.NODE_LOADED {
-		panic("Should not call MakeHandle not NODE_LOADED")
+		panic(fmt.Sprintf("Should not call MakeHandle not NODE_LOADED: %d", h.State))
 	}
 	return NewBufferHandle(h, h.Manager)
 }
@@ -208,7 +215,7 @@ func NewBufferHandle(n nif.INodeHandle, mgr mgrif.IBufferManager) nif.IBufferHan
 	return h
 }
 
-func (h *BufferHandle) GetID() common.ID {
+func (h *BufferHandle) GetID() uint64 {
 	return h.Handle.GetID()
 }
 

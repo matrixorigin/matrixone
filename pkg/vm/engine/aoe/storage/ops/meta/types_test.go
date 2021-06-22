@@ -1,30 +1,23 @@
 package meta
 
 import (
-	"github.com/stretchr/testify/assert"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"os"
+	"path"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 	// log "github.com/sirupsen/logrus"
 )
 
-func createInfo() *md.MetaInfo {
-	conf := &md.Configuration{
-		BlockMaxRows:     md.BLOCK_ROW_COUNT,
-		SegmentMaxBlocks: md.SEGMENT_BLOCK_COUNT,
-		Dir:              "/tmp",
-	}
-	info := md.NewMetaInfo(conf)
-	return info
-}
-
 func TestBasicOps(t *testing.T) {
 	opts := e.Options{}
-	info := createInfo()
+	info := md.MockInfo(md.BLOCK_ROW_COUNT, md.SEGMENT_BLOCK_COUNT)
+	info.Conf.Dir = "/tmp"
 	opts.Meta.Info = info
-	opts.FillDefaults("/tmp")
+	opts.FillDefaults(info.Conf.Dir)
 	opts.Meta.Updater.Start()
 
 	now := time.Now()
@@ -54,7 +47,7 @@ func TestBasicOps(t *testing.T) {
 	blk1.SetCount(blk1.MaxRowCount)
 	assert.Equal(t, blk1.DataState, md.FULL)
 
-	blk2, err := info.ReferenceBlock(blk1.TableID, blk1.SegmentID, blk1.ID)
+	blk2, err := info.ReferenceBlock(blk1.Segment.TableID, blk1.Segment.ID, blk1.ID)
 	assert.Nil(t, err)
 	assert.Equal(t, blk2.DataState, md.EMPTY)
 	assert.Equal(t, blk2.Count, uint64(0))
@@ -65,14 +58,14 @@ func TestBasicOps(t *testing.T) {
 	err = updateop.WaitDone()
 	assert.Nil(t, err)
 
-	blk3, err := info.ReferenceBlock(blk1.TableID, blk1.SegmentID, blk1.ID)
+	blk3, err := info.ReferenceBlock(blk1.Segment.TableID, blk1.Segment.ID, blk1.ID)
 	assert.Nil(t, err)
 	assert.Equal(t, blk3.DataState, md.FULL)
 	assert.Equal(t, blk1.Count, blk3.Count)
 
 	for i := 0; i < 100; i++ {
 		opCtx = OpCtx{Opts: &opts}
-		blkop = NewCreateBlkOp(&opCtx, blk1.TableID, nil)
+		blkop = NewCreateBlkOp(&opCtx, blk1.Segment.TableID, nil)
 		blkop.Push()
 		err = blkop.WaitDone()
 		assert.Nil(t, err)
@@ -80,16 +73,17 @@ func TestBasicOps(t *testing.T) {
 	du := time.Since(now)
 	t.Log(du)
 
-	info_copy := info.Copy()
+	ctx := md.CopyCtx{Attached: true}
+	info_copy := info.Copy(ctx)
 
-	path := "/tmp/tttttt"
-	w, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0666)
+	fpath := path.Join(info.Conf.Dir, "tttttttt")
+	w, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Equal(t, err, nil)
 	err = info_copy.Serialize(w)
 	assert.Nil(t, err)
 	w.Close()
 
-	r, err := os.OpenFile(path, os.O_RDONLY, 0666)
+	r, err := os.OpenFile(fpath, os.O_RDONLY, 0666)
 	assert.Equal(t, err, nil)
 
 	de_info, err := md.Deserialize(r)

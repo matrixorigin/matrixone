@@ -7,16 +7,13 @@ import (
 )
 
 func TestBlock(t *testing.T) {
-	conf := &Configuration{
-		BlockMaxRows:     BLOCK_ROW_COUNT,
-		SegmentMaxBlocks: SEGMENT_BLOCK_COUNT,
-		Dir:              "/tmp",
-	}
-	info := NewMetaInfo(conf)
 	ts1 := NowMicro()
 	time.Sleep(time.Duration(1) * time.Microsecond)
+	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	blk := NewBlock(info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows, schema)
+	seg := NewSegment(info, info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), schema)
+	blk := NewBlock(info.Sequence.GetBlockID(), seg)
 	time.Sleep(time.Duration(1) * time.Microsecond)
 	ts2 := NowMicro()
 	t.Logf("%d %d %d", ts1, blk.CreatedOn, ts2)
@@ -37,16 +34,13 @@ func TestBlock(t *testing.T) {
 }
 
 func TestSegment(t *testing.T) {
-	conf := &Configuration{
-		BlockMaxRows:     BLOCK_ROW_COUNT,
-		SegmentMaxBlocks: SEGMENT_BLOCK_COUNT,
-		Dir:              "/tmp",
-	}
-	info := NewMetaInfo(conf)
-	t1 := NowMicro()
+	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
+	t1 := NowMicro()
 	seg1 := NewSegment(info, info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), schema)
-	blk1 := NewBlock(seg1.GetTableID(), info.Sequence.GetSegmentID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows, schema)
+	seg2 := NewSegment(info, seg1.TableID, info.Sequence.GetSegmentID(), schema)
+	blk1 := NewBlock(info.Sequence.GetBlockID(), seg2)
 	err := seg1.RegisterBlock(blk1)
 	assert.Error(t, err)
 
@@ -56,7 +50,7 @@ func TestSegment(t *testing.T) {
 		err = seg1.RegisterBlock(blk1)
 		assert.Nil(t, err)
 	}
-	blk2 := NewBlock(seg1.GetTableID(), seg1.GetID(), info.Sequence.GetBlockID(), info.Conf.BlockMaxRows, schema)
+	blk2 := NewBlock(info.Sequence.GetBlockID(), seg1)
 	err = seg1.RegisterBlock(blk2)
 	assert.Error(t, err)
 	t.Log(err)
@@ -75,12 +69,8 @@ func TestSegment(t *testing.T) {
 }
 
 func TestTable(t *testing.T) {
-	conf := &Configuration{
-		BlockMaxRows:     BLOCK_ROW_COUNT,
-		SegmentMaxBlocks: SEGMENT_BLOCK_COUNT,
-		Dir:              "/tmp",
-	}
-	info := NewMetaInfo(conf)
+	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
 	bkt := NewTable(info, schema)
 	seg, err := bkt.CreateSegment()
@@ -95,12 +85,8 @@ func TestTable(t *testing.T) {
 }
 
 func TestInfo(t *testing.T) {
-	conf := &Configuration{
-		BlockMaxRows:     BLOCK_ROW_COUNT,
-		SegmentMaxBlocks: SEGMENT_BLOCK_COUNT,
-		Dir:              "/tmp",
-	}
-	info := NewMetaInfo(conf)
+	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
 	tbl, err := info.CreateTable(schema)
 	assert.Nil(t, err)

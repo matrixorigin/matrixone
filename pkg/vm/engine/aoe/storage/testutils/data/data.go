@@ -1,47 +1,45 @@
 package data
 
-import (
-	"matrixone/pkg/container/types"
-	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
-	"testing"
+// import (
+// 	"github.com/stretchr/testify/assert"
+// 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+// 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+// 	"matrixone/pkg/vm/engine/aoe/storage/common"
+// 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+// 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
+// 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+// 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+// 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
+// 	"testing"
+// 	// log "github.com/sirupsen/logrus"
+// )
 
-	"github.com/stretchr/testify/assert"
-)
+// func MakeBufMagr(capacity uint64) mgrif.IBufferManager {
+// 	flusher := w.NewOpWorker("Mock Flusher")
+// 	bufMgr := bmgr.NewBufferManager(capacity, flusher)
+// 	return bufMgr
+// }
 
-func MakeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
-	colType := types.Type{types.T_int32, 4, 4, 0}
-	seg := col.NewColumnSegment(bufMgr, bufMgr, id, colIdx, colType, col.UNSORTED_SEG)
-	blk_id := id
-	for i := 0; i < blkCnt; i++ {
-		_, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
-		assert.Nil(t, err)
-	}
-	return seg
-}
+// func MakeSegment(fsMgr ldio.IManager, mtBufMgr, sstBufMgr mgrif.IBufferManager, colIdx int, meta *md.Segment, t *testing.T) col.IColumnSegment {
+// 	seg := col.NewColumnSegment(fsMgr, mtBufMgr, sstBufMgr, colIdx, meta)
+// 	for _, blkMeta := range meta.Blocks {
+// 		blk, err := seg.RegisterBlock(blkMeta)
+// 		assert.Nil(t, err)
+// 		blk.UnRef()
+// 	}
+// 	return seg
+// }
 
-func MakeBufMagr(capacity uint64) mgrif.IBufferManager {
-	flusher := w.NewOpWorker("Mock Flusher")
-	bufMgr := bmgr.NewBufferManager(capacity, flusher)
-	return bufMgr
-}
-
-func MakeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typeSize uint64, tableData table.ITableData, t *testing.T) []common.ID {
-	baseid := common.ID{}
-	var segIDs []common.ID
-	for i := 0; i < segCnt; i++ {
-		var colSegs []col.IColumnSegment
-		seg_id := baseid.NextSegment()
-		for colIdx, _ := range tableData.GetColTypes() {
-			colSeg := MakeSegment(bufMgr, colIdx, seg_id, blkCnt, rowCount, typeSize, t)
-			colSegs = append(colSegs, colSeg)
-		}
-		tableData.AppendColSegments(colSegs)
-		segIDs = append(segIDs, seg_id)
-	}
-	return segIDs
-}
+// func MakeSegments(fsMgr ldio.IManager, mtBufMgr, sstBufMgr mgrif.IBufferManager, meta *md.Table, tblData table.ITableData, t *testing.T) []common.ID {
+// 	var segIDs []common.ID
+// 	for _, segMeta := range meta.Segments {
+// 		var colSegs []col.IColumnSegment
+// 		for colIdx, _ := range segMeta.Schema.ColDefs {
+// 			colSeg := MakeSegment(fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta, t)
+// 			colSegs = append(colSegs, colSeg)
+// 		}
+// 		tblData.AppendColSegments(colSegs)
+// 		segIDs = append(segIDs, *segMeta.AsCommonID())
+// 	}
+// 	return segIDs
+// }

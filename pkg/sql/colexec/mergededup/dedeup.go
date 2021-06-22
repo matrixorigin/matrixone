@@ -60,22 +60,28 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			ctr.spill.e = n.E
 			if err := ctr.build(n, proc); err != nil {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, err
 			}
 			ctr.state = Eval
 		case Eval:
-			if err := ctr.eval(proc); err != nil {
+			if err := ctr.eval(n, proc); err != nil {
 				ctr.clean(proc)
+				ctr.state = End
 				return true, err
 			}
 			if ctr.bat == nil {
 				proc.Reg.Ax = nil
 				ctr.clean(proc)
+				ctr.state = End
 				return true, nil
 			}
 			proc.Reg.Ax = ctr.bat
 			ctr.bat = nil
 			return false, nil
+		case End:
+			proc.Reg.Ax = nil
+			return true, nil
 		}
 	}
 }
@@ -205,7 +211,7 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 	return nil
 }
 
-func (ctr *Container) eval(proc *process.Process) error {
+func (ctr *Container) eval(n *Argument, proc *process.Process) error {
 	if len(ctr.bats) == 0 {
 		return nil
 	}
@@ -213,6 +219,7 @@ func (ctr *Container) eval(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
+	bat.Reduce(n.Attrs, proc)
 	ctr.bat = bat
 	ctr.bats = ctr.bats[1:]
 	return nil
@@ -277,7 +284,7 @@ func (ctr *Container) unitDedup(start int, count int, sels []int64,
 				ctr.groups[h] = make([]*hash.SetGroup, 0, 8)
 			}
 			for len(remaining) > 0 {
-				g := hash.NewSetGroup(int64(len(ctr.bats)), int64(remaining[0]))
+				g := hash.NewSetGroup(int64(len(ctr.bats)-1), int64(remaining[0]))
 				{
 					if n := cap(bat.Sels); n == 0 {
 						data, err := proc.Alloc(int64(8 * 8))
@@ -370,14 +377,15 @@ func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vecto
 		hash.RehashSels(sels[:count], ctr.hashs, vec)
 	}
 	nextslot := 0
-	for i, h := range ctr.hashs {
+	for _, sel := range sels {
+		h := ctr.hashs[sel]
 		slot, ok := ctr.slots.Get(h)
 		if !ok {
 			slot = nextslot
 			ctr.slots.Set(h, slot)
 			nextslot++
 		}
-		ctr.sels[slot] = append(ctr.sels[slot], sels[i])
+		ctr.sels[slot] = append(ctr.sels[slot], sel)
 	}
 }
 

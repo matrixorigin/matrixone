@@ -26,48 +26,62 @@ var AggFuncs map[string]int = map[string]int{
 
 func (b *build) hasSummarize(ns tree.SelectExprs) bool {
 	for _, n := range ns {
-		if e, ok := n.Expr.(*tree.FuncExpr); ok {
-			if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok {
-				if _, ok = AggFuncs[name.Parts[0]]; ok {
-					return true
-				}
-			}
-
+		if b.hasAggregate(n.Expr) {
+			return true
 		}
 	}
 	return false
 }
 
-func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs) (op.OP, error) {
+func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs, where *tree.Where) (op.OP, error) {
+	var err error
+	var fs []*tree.FuncExpr
 	var es []aggregation.Extend
 
 	{
 		for _, n := range ns {
-			if _, ok := n.Expr.(*tree.FuncExpr); !ok {
+			if !b.hasAggregate(n.Expr) {
 				return nil, fmt.Errorf("noaggregated column '%s'", n.Expr)
 			}
 		}
 	}
-	o, err := b.stripSummarize(o, ns)
-	if err != nil {
-		return nil, err
+	{
+		var pes []*projection.Extend
+
+		mp, mq := make(map[string]uint8), make(map[string]uint8)
+		if where != nil {
+			if err := b.extractExtend(o, where.Expr, &pes, mp); err != nil {
+				return nil, err
+			}
+		}
+		for i, n := range ns {
+			if ns[i].Expr, err = b.stripAggregate(o, n.Expr, &fs, &pes, mp, mq); err != nil {
+				return nil, err
+			}
+		}
+		if len(pes) > 0 {
+			if o, err = projection.New(o, pes); err != nil {
+				return nil, err
+			}
+		}
+		if where != nil {
+			if o, err = b.buildWhere(o, where); err != nil {
+				return nil, err
+			}
+		}
 	}
-	for _, n := range ns {
-		expr := n.Expr.(*tree.FuncExpr)
-		name, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
+	for _, f := range fs {
+		name, ok := f.Func.FunctionReference.(*tree.UnresolvedName)
 		if !ok {
-			return nil, fmt.Errorf("illegal expression '%s'", n)
+			return nil, fmt.Errorf("illegal expression '%s'", f)
 		}
 		op, ok := AggFuncs[name.Parts[0]]
 		if !ok {
 			return nil, fmt.Errorf("unimplemented aggregated functions '%s'", name.Parts[0])
 		}
-		alias := string(n.As)
-		switch e := expr.Exprs[0].(type) {
+		switch e := f.Exprs[0].(type) {
 		case *tree.NumVal:
-			if len(alias) == 0 {
-				alias = "count(*)"
-			}
+			alias := "count(*)"
 			agg, err := newAggregate(op, types.Type{Oid: types.T_int64, Size: 8})
 			if err != nil {
 				return nil, err
@@ -78,9 +92,7 @@ func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs) (op.OP, error) {
 				Op:    aggregation.StarCount,
 			})
 		case *tree.UnresolvedName:
-			if len(alias) == 0 {
-				alias = fmt.Sprintf("%s(%s)", name.Parts[0], e.Parts[0])
-			}
+			alias := fmt.Sprintf("%s(%s)", name.Parts[0], e.Parts[0])
 			typ, ok := o.Attribute()[e.Parts[0]]
 			if !ok {
 				return nil, fmt.Errorf("unknown column '%s' in aggregation", e.Parts[0])
@@ -95,31 +107,114 @@ func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs) (op.OP, error) {
 				Alias: alias,
 				Name:  e.Parts[0],
 			})
-
 		}
 	}
-	return summarize.New(o, es), nil
+	if o, err = summarize.New(o, es); err != nil {
+		return nil, err
+	}
+	return b.buildProjection(o, ns)
 }
 
-func (b *build) stripSummarize(o op.OP, ns tree.SelectExprs) (op.OP, error) {
-	var es []*projection.Extend
+func (b *build) stripAggregate(o op.OP, n tree.Expr, fs *[]*tree.FuncExpr, es *[]*projection.Extend, mp, mq map[string]uint8) (tree.Expr, error) {
+	var err error
 
-	for _, n := range ns {
-		if _, ok := n.Expr.(*tree.FuncExpr).Exprs[0].(*tree.NumVal); !ok {
-			e, err := b.buildExtend(o, n.Expr.(*tree.FuncExpr).Exprs[0])
-			if err != nil {
-				return nil, err
-			}
-			es = append(es, &projection.Extend{E: e})
-			n.Expr.(*tree.FuncExpr).Exprs[0] = &tree.UnresolvedName{
-				Parts: [4]string{e.String()},
+	switch e := n.(type) {
+	case *tree.ParenExpr:
+		if e.Expr, err = b.stripAggregate(o, e.Expr, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case *tree.OrExpr:
+		if e.Left, err = b.stripAggregate(o, e.Left, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		if e.Right, err = b.stripAggregate(o, e.Right, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case *tree.NotExpr:
+		if e.Expr, err = b.stripAggregate(o, e.Expr, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case *tree.AndExpr:
+		if e.Left, err = b.stripAggregate(o, e.Left, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		if e.Right, err = b.stripAggregate(o, e.Right, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case *tree.UnaryExpr:
+		if e.Expr, err = b.stripAggregate(o, e.Expr, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case *tree.BinaryExpr:
+		if e.Left, err = b.stripAggregate(o, e.Left, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		if e.Right, err = b.stripAggregate(o, e.Right, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case *tree.ComparisonExpr:
+		if e.Left, err = b.stripAggregate(o, e.Left, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		if e.Right, err = b.stripAggregate(o, e.Right, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		return e, nil
+	case *tree.FuncExpr:
+		if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok {
+			if _, ok = AggFuncs[name.Parts[0]]; ok {
+				switch e.Exprs[0].(type) {
+				case *tree.NumVal:
+					if _, ok := mq["count(*)"]; !ok {
+						*(fs) = append(*(fs), e)
+						mq["count(*)"] = 0
+					}
+					return &tree.UnresolvedName{
+						Parts: [4]string{"count(*)"},
+					}, nil
+				default:
+					ext, err := b.buildExtend(o, e.Exprs[0])
+					if err != nil {
+						return nil, err
+					}
+					if _, ok := mp[ext.String()]; !ok {
+						mp[ext.String()] = 0
+						*(es) = append((*es), &projection.Extend{E: ext})
+					}
+					e.Exprs[0] = &tree.UnresolvedName{
+						Parts: [4]string{ext.String()},
+					}
+					fn := fmt.Sprintf("%s(%s)", name.Parts[0], ext)
+					if _, ok := mq[fn]; !ok {
+						*(fs) = append(*(fs), e)
+						mq[fn] = 0
+					}
+					return &tree.UnresolvedName{
+						Parts: [4]string{fn},
+					}, nil
+				}
 			}
 		}
+		return e, nil
+	case *tree.RangeCond:
+		if e.To, err = b.stripAggregate(o, e.To, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		if e.Left, err = b.stripAggregate(o, e.Left, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		if e.From, err = b.stripAggregate(o, e.From, fs, es, mp, mq); err != nil {
+			return nil, err
+		}
+		return e, nil
 	}
-	if len(es) > 0 {
-		return projection.New(o, es), nil
-	}
-	return o, nil
+	return n, nil
 }
 
 func newAggregate(op int, typ types.Type) (aggregation.Aggregation, error) {

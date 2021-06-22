@@ -54,11 +54,15 @@ func (s *Stats) AddFailed() {
 
 func (s *Stats) RecordTime(t int64) {
 	procced := atomic.LoadUint64(&s.Processed)
-	s.AvgTime = (s.AvgTime*int64(procced-1) + t) / int64(procced)
+	atomic.StoreInt64(&s.AvgTime, (s.AvgTime*int64(procced-1)+t)/int64(procced))
 }
 
 func (s *Stats) String() string {
-	r := fmt.Sprintf("Total: %d, Succ: %d, Fail: %d, AvgTime: %dus", s.Processed, s.Successed, s.Failed, s.AvgTime)
+	procced := atomic.LoadUint64(&s.Processed)
+	succ := atomic.LoadUint64(&s.Successed)
+	fail := atomic.LoadUint64(&s.Failed)
+	avg := atomic.LoadInt64(&s.AvgTime)
+	r := fmt.Sprintf("Total: %d, Succ: %d, Fail: %d, AvgTime: %dus", procced, succ, fail, avg)
 	return r
 }
 

@@ -4,12 +4,15 @@ import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 )
 
 type IBlockHandle interface {
 	io.Closer
 	GetID() *common.ID
 	GetColumn(int) col.IColumnBlock
+	InitScanCursor() []col.ScanCursor
+	GetIndexHolder() *index.BlockHolder
 }
 
 type ISegmentHandle interface {

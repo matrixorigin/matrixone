@@ -1,8 +1,9 @@
 package handle
 
 import (
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+	// log "github.com/sirupsen/logrus"
+	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 )
 
 var (
@@ -44,5 +45,6 @@ func (ssit *SegmentIt) GetSegmentHandle() base.ISegmentHandle {
 		colData := ssit.Handle.TableData.GetCollumn(idx)
 		h.Cols = append(h.Cols, colData.GetSegment(h.ID))
 	}
+	h.IndexHolder = h.Cols[0].GetIndexHolder()
 	return h
 }

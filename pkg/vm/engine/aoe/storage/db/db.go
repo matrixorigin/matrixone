@@ -8,6 +8,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle"
 	ih "matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
@@ -33,7 +34,10 @@ type DB struct {
 	Dir  string
 	Opts *e.Options
 
+	FsMgr       base.IManager
 	MemTableMgr mtif.IManager
+
+	IndexBufMgr bmgrif.IBufferManager
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
 
@@ -114,18 +118,20 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 	collection := d.MemTableMgr.GetCollection(tbl.GetID())
 	if collection == nil {
 		opCtx := &mdops.OpCtx{
-			Opts:      d.Opts,
-			MTManager: d.MemTableMgr,
-			TableMeta: tbl,
-			MTBufMgr:  d.MTBufMgr,
-			SSTBufMgr: d.SSTBufMgr,
-			Tables:    d.store.DataTables,
+			Opts:        d.Opts,
+			MTManager:   d.MemTableMgr,
+			TableMeta:   tbl,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.store.DataTables,
 		}
 		op := mdops.NewCreateTableOp(opCtx)
 		op.Push()
 		err = op.WaitDone()
 		if err != nil {
-			panic("logic error")
+			panic(fmt.Sprintf("logic error: %s", err))
 		}
 		collection = op.Collection
 	}
@@ -233,7 +239,7 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 	return ids, err
 }
 
-func (d *DB) validateAndCleanStaleData() {
+func (d *DB) replayAndCleanData() {
 	expectFiles := make(map[string]bool)
 	for _, tbl := range d.store.MetaInfo.Tables {
 		for _, seg := range tbl.Segments {
@@ -246,7 +252,7 @@ func (d *DB) validateAndCleanStaleData() {
 				expectFiles[name] = true
 			} else {
 				for _, blk := range seg.Blocks {
-					if blk.DataState == md.EMPTY {
+					if blk.DataState == md.EMPTY && !blk.IsFull() {
 						continue
 					}
 					id.BlockID = blk.ID
@@ -269,6 +275,9 @@ func (d *DB) validateAndCleanStaleData() {
 	}
 
 	err := filepath.Walk(e.MakeDataDir(d.Dir), func(p string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
 		err = nil
 		if e.IsTempFile(info.Name()) {
 			log.Infof("Removing %s", p)
@@ -291,6 +300,10 @@ func (d *DB) validateAndCleanStaleData() {
 		if ok {
 			panic(fmt.Sprintf("Missing %s", name))
 		}
+	}
+	err = d.store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.store.MetaInfo)
+	if err != nil {
+		panic(err)
 	}
 }
 

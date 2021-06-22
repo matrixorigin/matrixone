@@ -3,10 +3,13 @@ package col
 import (
 	"errors"
 	"fmt"
-	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	// log "github.com/sirupsen/logrus"
 )
 
 type IColumnData interface {
@@ -15,35 +18,37 @@ type IColumnData interface {
 	InitScanCursor(cursor *ScanCursor) error
 	Append(seg IColumnSegment) error
 	DropSegment(id common.ID) (seg IColumnSegment, err error)
-	// AppendBlock(blk IColumnBlock) error
-	// AppendPart(part IColumnPart) error
-	UpgradeBlock(blkID common.ID) IColumnBlock
+	UpgradeBlock(*md.Block) IColumnBlock
 	UpgradeSegment(segID common.ID) IColumnSegment
 	SegmentCount() uint64
 	GetSegmentRoot() IColumnSegment
 	GetSegmentTail() IColumnSegment
 	GetSegment(common.ID) IColumnSegment
 	GetColIdx() int
-	RegisterSegment(id common.ID) (seg IColumnSegment, err error)
-	RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error)
+	RegisterSegment(*md.Segment) (seg IColumnSegment, err error)
+	RegisterBlock(*md.Block) (blk IColumnBlock, err error)
 }
 
 type ColumnData struct {
-	Type      types.Type
-	Idx       int
-	RowCount  uint64
-	SegTree   ISegmentTree
-	MTBufMgr  bmgrif.IBufferManager
-	SSTBufMgr bmgrif.IBufferManager
+	Type        types.Type
+	Idx         int
+	RowCount    uint64
+	SegTree     ISegmentTree
+	MTBufMgr    bmgrif.IBufferManager
+	SSTBufMgr   bmgrif.IBufferManager
+	FsMgr       base.IManager
+	IndexHolder *index.TableHolder
 }
 
-func NewColumnData(mtBufMgr, sstBufMgr bmgrif.IBufferManager, col_type types.Type, col_idx int) IColumnData {
+func NewColumnData(indexHolder *index.TableHolder, fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, col_type types.Type, col_idx int) IColumnData {
 	data := &ColumnData{
-		Type:      col_type,
-		Idx:       col_idx,
-		SegTree:   NewSegmentTree(),
-		MTBufMgr:  mtBufMgr,
-		SSTBufMgr: sstBufMgr,
+		Type:        col_type,
+		Idx:         col_idx,
+		SegTree:     NewSegmentTree(indexHolder),
+		MTBufMgr:    mtBufMgr,
+		SSTBufMgr:   sstBufMgr,
+		FsMgr:       fsMgr,
+		IndexHolder: indexHolder,
 	}
 	return data
 }
@@ -75,19 +80,19 @@ func (cdata *ColumnData) Append(seg IColumnSegment) error {
 	return cdata.SegTree.Append(seg)
 }
 
-func (cdata *ColumnData) RegisterSegment(id common.ID) (seg IColumnSegment, err error) {
-	seg = NewColumnSegment(cdata.MTBufMgr, cdata.SSTBufMgr, id, cdata.Idx, cdata.Type, UNSORTED_SEG)
+func (cdata *ColumnData) RegisterSegment(meta *md.Segment) (seg IColumnSegment, err error) {
+	seg = NewColumnSegment(cdata.IndexHolder, cdata.FsMgr, cdata.MTBufMgr, cdata.SSTBufMgr, cdata.Idx, meta)
 	err = cdata.Append(seg)
 	return seg.Ref(), err
 }
 
-func (cdata *ColumnData) RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
+func (cdata *ColumnData) RegisterBlock(blkMeta *md.Block) (blk IColumnBlock, err error) {
 	seg := cdata.GetSegmentTail()
 	if seg == nil {
-		err = errors.New(fmt.Sprintf("cannot register blk: %s", id.BlockString()))
+		err = errors.New(fmt.Sprintf("cannot register blk: %s", blkMeta.AsCommonID().BlockString()))
 		return blk, err
 	}
-	blk, err = seg.RegisterBlock(id, maxRows)
+	blk, err = seg.RegisterBlock(blkMeta)
 	seg.UnRef()
 	return blk, err
 }
@@ -112,8 +117,8 @@ func (cdata *ColumnData) RegisterBlock(id common.ID, maxRows uint64) (blk IColum
 // 	return nil
 // }
 
-func (cdata *ColumnData) UpgradeBlock(blkID common.ID) IColumnBlock {
-	return cdata.SegTree.UpgradeBlock(blkID)
+func (cdata *ColumnData) UpgradeBlock(newMeta *md.Block) IColumnBlock {
+	return cdata.SegTree.UpgradeBlock(newMeta)
 }
 
 func (cdata *ColumnData) UpgradeSegment(segID common.ID) IColumnSegment {

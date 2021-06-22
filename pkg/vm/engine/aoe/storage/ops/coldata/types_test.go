@@ -1,74 +1,47 @@
 package coldata
 
 import (
-	"github.com/stretchr/testify/assert"
-	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
-	"runtime"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"testing"
 	"time"
-	// log "github.com/sirupsen/logrus"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func makeBufMagr(capacity uint64) mgrif.IBufferManager {
-	flusher := w.NewOpWorker("Mock Flusher")
-	bufMgr := bmgr.NewBufferManager(capacity, flusher)
-	return bufMgr
-}
-
-func makeSegment(bufMgr mgrif.IBufferManager, colIdx int, id common.ID, blkCnt int, rowCount, typeSize uint64, t *testing.T) col.IColumnSegment {
-	colType := types.Type{types.T_int32, 4, 4, 0}
-	seg := col.NewColumnSegment(bufMgr, bufMgr, id, colIdx, colType, col.UNSORTED_SEG)
-	blk_id := id
-	for i := 0; i < blkCnt; i++ {
-		blk, err := seg.RegisterBlock(blk_id.NextBlock(), rowCount)
-		assert.Nil(t, err)
-		blk.UnRef()
-	}
-	return seg
-}
-
-func makeSegments(bufMgr mgrif.IBufferManager, segCnt, blkCnt int, rowCount, typeSize uint64, tableData table.ITableData, t *testing.T) []common.ID {
-	baseid := common.ID{}
-	var segIDs []common.ID
-	for i := 0; i < segCnt; i++ {
-		var colSegs []col.IColumnSegment
-		seg_id := baseid.NextSegment()
-		for colIdx, _ := range tableData.GetColTypes() {
-			colSeg := makeSegment(bufMgr, colIdx, seg_id, blkCnt, rowCount, typeSize, t)
-			colSegs = append(colSegs, colSeg)
-		}
-		tableData.AppendColSegments(colSegs)
-		segIDs = append(segIDs, seg_id)
-	}
-	return segIDs
-}
-
 func TestUpgradeSegOp(t *testing.T) {
-	colDefs := make([]types.Type, 2)
-	colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
-	colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
+	schema := md.MockSchema(2)
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
 	opts.MemData.Updater.Start()
-	typeSize := uint64(colDefs[0].Size)
+	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
-	bufMgr := makeBufMagr(capacity)
-	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
-	seg_cnt := 4
-	blk_cnt := 4
-	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
+	bufMgr := bmgr.MockBufMgr(capacity)
+	fsMgr := ldio.NewManager("/tmp", true)
+	seg_cnt := uint64(4)
+	blk_cnt := uint64(4)
+
+	info := md.MockInfo(row_count, blk_cnt)
+	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
+	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
+
+	segIDs := table.MockSegments(fsMgr, bufMgr, bufMgr, tableMeta, tableData)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 
 	segs := make([]col.IColumnSegment, 0)
+
+	for _, segMeta := range tableMeta.Segments {
+		for _, blkMeta := range segMeta.Blocks {
+			blkMeta.DataState = md.FULL
+			blkMeta.Count = blkMeta.MaxRowCount
+		}
+	}
 
 	for idx, segID := range segIDs {
 		ctx := new(OpCtx)
@@ -77,9 +50,9 @@ func TestUpgradeSegOp(t *testing.T) {
 		op.Push()
 		op.WaitDone()
 		for _, seg := range op.Segments {
-			assert.Equal(t, col.SORTED_SEG, seg.GetSegmentType())
+			assert.Equal(t, base.SORTED_SEG, seg.GetSegmentType())
 			nextSeg := seg.GetNext()
-			if idx < seg_cnt-1 {
+			if idx < int(seg_cnt)-1 {
 				assert.NotNil(t, nextSeg)
 				nextSeg.UnRef()
 			} else {
@@ -89,61 +62,67 @@ func TestUpgradeSegOp(t *testing.T) {
 			segs = append(segs, seg)
 		}
 	}
-
 	opts.MemData.Updater.Stop()
 }
 
 func TestUpgradeBlkOp(t *testing.T) {
-	colDefs := make([]types.Type, 2)
-	colDefs[0] = types.Type{types.T_int32, 4, 4, 0}
-	colDefs[1] = types.Type{types.T_int32, 4, 4, 0}
+	schema := md.MockSchema(2)
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
 	opts.MemData.Updater.Start()
-	typeSize := uint64(colDefs[0].Size)
-	row_count := uint64(64)
+	typeSize := uint64(schema.ColDefs[0].Type.Size)
+	info := md.MockInfo(uint64(10), uint64(2))
+	row_count := info.Conf.BlockMaxRows
 	capacity := typeSize * row_count * 10000
-	bufMgr := makeBufMagr(capacity)
-	t0 := uint64(0)
-	tableData := table.NewTableData(bufMgr, bufMgr, t0, colDefs)
-	seg_cnt := 2
-	blk_cnt := 2
-	segIDs := makeSegments(bufMgr, seg_cnt, blk_cnt, row_count, typeSize, tableData, t)
-	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
+	bufMgr := bmgr.MockBufMgr(capacity)
+	fsMgr := ldio.NewManager("/tmp", true)
+	segCnt := uint64(2)
+	blkCnt := segCnt * info.Conf.SegmentMaxBlocks
+
+	tableMeta := md.MockTable(info, schema, blkCnt)
+	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
+	segIDs := table.MockSegments(fsMgr, bufMgr, bufMgr, tableMeta, tableData)
+	assert.Equal(t, uint64(segCnt), tableData.GetSegmentCount())
 	t.Log(bufMgr.String())
-	assert.Equal(t, seg_cnt*blk_cnt*len(colDefs), bufMgr.NodeCount())
+	assert.Equal(t, int(blkCnt)*len(schema.ColDefs), bufMgr.NodeCount())
+	for _, segID := range segIDs {
+		t.Logf("seg %s", segID.SegmentString())
+	}
 	for _, segID := range segIDs {
 		var ops []*UpgradeBlkOp
-		blkID := segID
+		segMeta, _ := tableMeta.ReferenceSegment(segID.SegmentID)
+		blkID := segMeta.Blocks[0].AsCommonID()
+		cpCtx := md.CopyCtx{}
+		blkMeta, err := segMeta.CloneBlock(blkID.BlockID, cpCtx)
+		blkMeta.DataState = md.FULL
+		assert.Nil(t, err)
 		ctx := new(OpCtx)
 		ctx.Opts = opts
-		op := NewUpgradeBlkOp(ctx, blkID, tableData)
+		ctx.BlkMeta = blkMeta
+		op := NewUpgradeBlkOp(ctx, tableData)
 		op.Push()
 		ops = append(ops, op)
 
-		op = NewUpgradeBlkOp(ctx, blkID, tableData)
+		op = NewUpgradeBlkOp(ctx, tableData)
 		op.Push()
 		ops = append(ops, op)
 
 		for idx, op := range ops {
 			op.WaitDone()
-			assert.Equal(t, len(colDefs), len(op.Blocks))
+			assert.Equal(t, len(schema.ColDefs), len(op.Blocks))
 			for _, blk := range op.Blocks {
 				if idx == 0 {
-					assert.Equal(t, col.PERSISTENT_BLK, blk.GetBlockType())
+					assert.Equal(t, base.PERSISTENT_BLK, blk.GetBlockType())
 				} else if idx == 1 {
-					assert.Equal(t, col.PERSISTENT_SORTED_BLK, blk.GetBlockType())
+					assert.Equal(t, base.PERSISTENT_SORTED_BLK, blk.GetBlockType())
 				}
 				blk.UnRef()
 			}
 		}
 	}
-	for i := 0; i < 0; i++ {
-		runtime.GC()
-		time.Sleep(time.Duration(1) * time.Millisecond)
-	}
+	time.Sleep(time.Duration(10) * time.Millisecond)
 	t.Log(bufMgr.String())
-	assert.Equal(t, seg_cnt*blk_cnt*len(colDefs), bufMgr.NodeCount())
+	assert.Equal(t, int(blkCnt)*len(schema.ColDefs), bufMgr.NodeCount())
 
 	opts.MemData.Updater.Stop()
 }

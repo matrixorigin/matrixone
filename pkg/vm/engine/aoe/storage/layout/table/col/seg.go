@@ -4,20 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
 	"time"
 	// log "github.com/sirupsen/logrus"
-)
-
-type SegmentType uint8
-
-const (
-	UNSORTED_SEG SegmentType = iota
-	SORTED_SEG
 )
 
 type IColumnSegment interface {
@@ -34,46 +29,75 @@ type IColumnSegment interface {
 	ToString(verbose bool) string
 	Append(blk IColumnBlock)
 	GetColIdx() int
-	GetSegmentType() SegmentType
+	GetSegmentType() base.SegmentType
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager
-	CloneWithUpgrade() IColumnSegment
-	UpgradeBlock(id common.ID) (IColumnBlock, error)
+	GetIndexHolder() *index.SegmentHolder
+	CloneWithUpgrade(*md.Segment, *index.TableHolder) IColumnSegment
+	UpgradeBlock(*md.Block) (IColumnBlock, error)
 	GetBlock(id common.ID) IColumnBlock
 	InitScanCursor(cursor *ScanCursor) error
-	RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error)
+	RegisterBlock(*md.Block) (blk IColumnBlock, err error)
 	Ref() IColumnSegment
 	UnRef()
 	GetRefs() int64
+	GetMeta() *md.Segment
+	GetFsManager() base.IManager
 }
 
 type ColumnSegment struct {
 	sync.RWMutex
-	Refs      int64
-	ID        common.ID
-	Next      IColumnSegment
-	Blocks    []IColumnBlock
-	RowCount  uint64
-	IDMap     map[common.ID]int
-	Idx       int
-	Type      SegmentType
-	ColType   types.Type
-	MTBufMgr  bmgrif.IBufferManager
-	SSTBufMgr bmgrif.IBufferManager
+	Refs        int64
+	ID          common.ID
+	ColIdx      int
+	Next        IColumnSegment
+	Blocks      []IColumnBlock
+	IDMap       map[common.ID]int
+	Type        base.SegmentType
+	MTBufMgr    bmgrif.IBufferManager
+	SSTBufMgr   bmgrif.IBufferManager
+	Meta        *md.Segment
+	FsMgr       base.IManager
+	IndexHolder *index.SegmentHolder
 }
 
-func NewColumnSegment(mtBufMgr, sstBufMgr bmgrif.IBufferManager, id common.ID, colIdx int, colType types.Type, segType SegmentType) IColumnSegment {
+func NewColumnSegment(tblHolder *index.TableHolder, fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) IColumnSegment {
+	segType := base.UNSORTED_SEG
+	indexSegType := base.UNSORTED_SEG
+	if meta.DataState == md.SORTED {
+		segType = base.SORTED_SEG
+		indexSegType = base.SORTED_SEG
+	}
 	seg := &ColumnSegment{
-		ID:        id,
+		ID:        *meta.AsCommonID(),
+		ColIdx:    colIdx,
 		Refs:      0,
 		IDMap:     make(map[common.ID]int, 0),
-		Idx:       colIdx,
 		Type:      segType,
-		ColType:   colType,
+		Meta:      meta,
 		MTBufMgr:  mtBufMgr,
 		SSTBufMgr: sstBufMgr,
+		FsMgr:     fsMgr,
 	}
+	seg.IndexHolder = tblHolder.GetSegment(seg.ID.SegmentID)
+	if seg.IndexHolder == nil {
+		segHolder := tblHolder.RegisterSegment(seg.ID.AsSegmentID(), indexSegType, nil)
+		seg.IndexHolder = segHolder
+	}
+
 	return seg.Ref()
+}
+
+func (seg *ColumnSegment) GetIndexHolder() *index.SegmentHolder {
+	return seg.IndexHolder
+}
+
+func (seg *ColumnSegment) GetFsManager() base.IManager {
+	return seg.FsMgr
+}
+
+func (seg *ColumnSegment) GetMeta() *md.Segment {
+	return seg.Meta
 }
 
 func (seg *ColumnSegment) GetMTBufMgr() bmgrif.IBufferManager {
@@ -105,10 +129,10 @@ func (seg *ColumnSegment) GetRefs() int64 {
 }
 
 func (seg *ColumnSegment) GetColIdx() int {
-	return seg.Idx
+	return seg.ColIdx
 }
 
-func (seg *ColumnSegment) GetSegmentType() SegmentType {
+func (seg *ColumnSegment) GetSegmentType() base.SegmentType {
 	seg.RLock()
 	defer seg.RUnlock()
 	return seg.Type
@@ -124,19 +148,20 @@ func (seg *ColumnSegment) GetBlock(id common.ID) IColumnBlock {
 	return seg.Blocks[idx].Ref()
 }
 
-func (seg *ColumnSegment) UpgradeBlock(id common.ID) (IColumnBlock, error) {
-	if seg.Type != UNSORTED_SEG {
+func (seg *ColumnSegment) UpgradeBlock(newMeta *md.Block) (IColumnBlock, error) {
+	if seg.Type != base.UNSORTED_SEG {
 		panic("logic error")
 	}
-	if !seg.ID.IsSameSegment(id) {
+	id := newMeta.AsCommonID()
+	if !seg.ID.IsSameSegment(*id) {
 		panic("logic error")
 	}
-	idx, ok := seg.IDMap[id]
+	idx, ok := seg.IDMap[*id]
 	if !ok {
-		panic("logic error")
+		panic(fmt.Sprintf("logic error: blk %s not found in seg %s", id.BlockString(), seg.ID.SegmentString()))
 	}
 	old := seg.Blocks[idx]
-	upgradeBlk := old.CloneWithUpgrade(seg.Ref())
+	upgradeBlk := old.CloneWithUpgrade(seg.Ref(), newMeta)
 	if upgradeBlk == nil {
 		return nil, errors.New(fmt.Sprintf("Cannot upgrade blk: %s", id.BlockString()))
 	}
@@ -155,24 +180,41 @@ func (seg *ColumnSegment) UpgradeBlock(id common.ID) (IColumnBlock, error) {
 	return upgradeBlk.Ref(), nil
 }
 
-func (seg *ColumnSegment) CloneWithUpgrade() IColumnSegment {
-	if seg.Type != UNSORTED_SEG {
+func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment, indexTblHolder *index.TableHolder) IColumnSegment {
+	if seg.Type != base.UNSORTED_SEG {
 		panic("logic error")
 	}
+	// TODO: temp commit it, will be enabled later
+	// if meta.DataState != md.SORTED {
+	// 	panic("logic error")
+	// }
 	cloned := &ColumnSegment{
 		ID:        seg.ID,
 		IDMap:     seg.IDMap,
-		RowCount:  seg.RowCount,
 		Next:      seg.Next,
-		Type:      SORTED_SEG,
-		ColType:   seg.ColType,
+		Type:      base.SORTED_SEG,
 		MTBufMgr:  seg.MTBufMgr,
 		SSTBufMgr: seg.SSTBufMgr,
+		Meta:      meta,
+		FsMgr:     seg.GetFsManager(),
 	}
 	cloned.Ref()
+	segIndexHolder := indexTblHolder.GetSegment(seg.ID.SegmentID)
+	if segIndexHolder == nil {
+		panic("logic error")
+	}
+	if segIndexHolder.Type == base.UNSORTED_SEG {
+		segIndexHolder = indexTblHolder.UpgradeSegment(seg.ID.SegmentID, base.SORTED_SEG)
+		// segIndexHolder.Init()
+	}
+	cloned.IndexHolder = segIndexHolder
 	var prev IColumnBlock
 	for _, blk := range seg.Blocks {
-		cur := blk.CloneWithUpgrade(cloned.Ref())
+		newBlkMeta, err := meta.ReferenceBlock(blk.GetID().BlockID)
+		if err != nil {
+			panic(err)
+		}
+		cur := blk.CloneWithUpgrade(cloned.Ref(), newBlkMeta)
 		cloned.Blocks = append(cloned.Blocks, cur)
 		if prev != nil {
 			prev.SetNext(cur.Ref())
@@ -183,9 +225,7 @@ func (seg *ColumnSegment) CloneWithUpgrade() IColumnSegment {
 }
 
 func (seg *ColumnSegment) GetRowCount() uint64 {
-	seg.RLock()
-	defer seg.RUnlock()
-	return seg.RowCount
+	return atomic.LoadUint64(&seg.Meta.Count)
 }
 
 func (seg *ColumnSegment) SetNext(next IColumnSegment) {
@@ -216,13 +256,16 @@ func (seg *ColumnSegment) Close() error {
 	return nil
 }
 
-func (seg *ColumnSegment) RegisterBlock(id common.ID, maxRows uint64) (blk IColumnBlock, err error) {
-	blk = NewStdColumnBlock(seg, id, TRANSIENT_BLK)
-	part := NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.ColType.Size))
+func (seg *ColumnSegment) RegisterBlock(blkMeta *md.Block) (blk IColumnBlock, err error) {
+	blk = NewStdColumnBlock(seg, blkMeta)
+	part := NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(),
+		blkMeta.Segment.Info.Conf.BlockMaxRows*uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 	for part == nil {
-		part = NewColumnPart(seg.MTBufMgr, blk.Ref(), id, maxRows, uint64(seg.ColType.Size))
+		part = NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(),
+			blkMeta.Segment.Info.Conf.BlockMaxRows*uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
+	seg.Append(blk.Ref())
 	// TODO: StrColumnBlock
 	return blk, err
 }
@@ -243,7 +286,6 @@ func (seg *ColumnSegment) Append(blk IColumnBlock) {
 	}
 	seg.Blocks = append(seg.Blocks, blk)
 	seg.IDMap[blk.GetID()] = len(seg.Blocks) - 1
-	seg.RowCount += blk.GetRowCount()
 }
 
 func (seg *ColumnSegment) GetBlockRoot() IColumnBlock {
@@ -290,7 +332,11 @@ func (seg *ColumnSegment) String() string {
 
 func (seg *ColumnSegment) ToString(verbose bool) string {
 	if verbose {
-		return fmt.Sprintf("Seg(%v)(%d)[HasNext:%v]", seg.ID, seg.Type, seg.Next != nil)
+		s := fmt.Sprintf("Seg(%v)(%d)[HasNext:%v]", seg.ID.String(), seg.Type, seg.Next != nil)
+		for _, blk := range seg.Blocks {
+			s = fmt.Sprintf("%s\n\t%s", s, blk.String())
+		}
+		return s
 	}
 	return fmt.Sprintf("(%v, %v)", seg.ID, seg.Type)
 }

@@ -532,14 +532,15 @@ func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vecto
 		hash.RehashSels(sels[:count], ctr.hashs, vec)
 	}
 	nextslot := 0
-	for i, h := range ctr.hashs {
+	for _, sel := range sels {
+		h := ctr.hashs[sel]
 		slot, ok := ctr.slots.Get(h)
 		if !ok {
 			slot = nextslot
 			ctr.slots.Set(h, slot)
 			nextslot++
 		}
-		ctr.sels[slot] = append(ctr.sels[slot], sels[i])
+		ctr.sels[slot] = append(ctr.sels[slot], sel)
 	}
 }
 

@@ -1,19 +1,20 @@
 package handle
 
 import (
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"sync"
 )
 
 var (
-	shAllocTimes  = 0
+	// shAllocTimes  = 0
 	segHandlePool = sync.Pool{
 		New: func() interface{} {
-			shAllocTimes++
-			log.Infof("Alloc seg handle: %d", shAllocTimes)
+			// shAllocTimes++
+			// log.Infof("Alloc seg handle: %d", shAllocTimes)
 			h := new(SegmentHandle)
 			h.Cols = make([]col.IColumnSegment, 0)
 			return h
@@ -22,8 +23,9 @@ var (
 )
 
 type SegmentHandle struct {
-	ID   common.ID
-	Cols []col.IColumnSegment
+	ID          common.ID
+	Cols        []col.IColumnSegment
+	IndexHolder *index.SegmentHolder
 }
 
 func (sh *SegmentHandle) Close() error {
