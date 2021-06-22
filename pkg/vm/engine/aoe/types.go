@@ -46,10 +46,11 @@ type TableInfo struct {
 	// Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
 	Type string `json:"type"`
 	// Column is listed in order in which they appear in schema
-	Columns   []ColumnInfo `json:"columns"`
-	Comment   string       `json:"comment"`
-	State     SchemaState  `json:"state"`
-	Partition []byte       `json:"partition"`
+	Columns         []ColumnInfo `json:"columns"`
+	Comment         []byte       `json:"comment"`
+	State           SchemaState  `json:"state"`
+	Partition       []byte       `json:"partition"`
+	CreateStatement []byte       `json:"create_statement"`
 }
 
 // ColumnInfo stores the information of a column.
