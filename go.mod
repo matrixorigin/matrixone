@@ -15,17 +15,15 @@ require (
 	github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
-	github.com/pilosa/pilosa v1.4.0
+	github.com/pilosa/pilosa v1.4.1
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.7.0
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
 	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b // indirect
-	github.com/traetox/goaio v0.0.0-20171005222435-46641abceb17 // indirect
-	go.uber.org/zap v1.15.0 // indirect
 	golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f
 	golang.org/x/tools v0.0.0-20201105001634-bc3cf281b174 // indirect
 )
 
-replace go.etcd.io/etcd => github.com/deepfabric/etcd v3.4.15+incompatible
+replace go.etcd.io/etcd => github.com/deepfabric/etcd v1.4.15
