@@ -78,7 +78,7 @@ func (sf *UnsortedSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMe
 	return blk.GetIndexesMeta()
 }
 
-func (sf *UnsortedSegmentFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (sf *UnsortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
 	return nil
 }
 
@@ -87,7 +87,7 @@ func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base
 	if blk == nil {
 		return nil
 	}
-	return blk.MakeVirtalIndexFile(meta)
+	return blk.MakeVirtualIndexFile(meta)
 }
 
 func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {

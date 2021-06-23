@@ -107,7 +107,7 @@ func (msf *MockSegmentFile) GetDir() string {
 	return filepath.Dir(msf.FileName)
 }
 
-func (msf *MockSegmentFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (msf *MockSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
 	return nil
 }
 

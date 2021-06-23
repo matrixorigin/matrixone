@@ -69,7 +69,7 @@ type IBaseFile interface {
 	ReadPoint(ptr *Pointer, buf []byte)
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 	Destory()
-	MakeVirtalIndexFile(*IndexMeta) IVirtaulFile
+	MakeVirtualIndexFile(*IndexMeta) IVirtaulFile
 	GetDir() string
 }
 
