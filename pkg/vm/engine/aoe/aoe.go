@@ -16,8 +16,8 @@ func init() {
 	gob.Register(ColumnInfo{})
 }
 
-func EncodeTable(sid, tid uint64, name, typ, comment string,
-	defs []engine.TableDef, pdef *engine.PartitionBy) ([]byte, error) {
+func Transfer(sid, tid uint64, name, typ, comment string,
+	defs []engine.TableDef, pdef *engine.PartitionBy) (TableInfo, error) {
 	var tbl TableInfo
 
 	tbl.SchemaId = sid
@@ -36,10 +36,14 @@ func EncodeTable(sid, tid uint64, name, typ, comment string,
 	{
 		data, err := PartitionDef(pdef)
 		if err != nil {
-			return nil, err
+			return tbl, err
 		}
 		tbl.Partition = data
 	}
+	return tbl, nil
+}
+
+func EncodeTable(tbl TableInfo) ([]byte, error) {
 	return encoding.Encode(tbl)
 }
 

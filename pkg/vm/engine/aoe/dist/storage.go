@@ -162,10 +162,9 @@ func NewStorageWithOptions(
 			// TODO: Call local interface to create new tablet
 			// TODO: Re-design group store and set value to <partition, segment_ids>
 			_ = h.Set(rKey, []byte(res.Unique()))
-			t := aoe.TableInfo{}
-			_ = json.Unmarshal(res.Data()[8+header:], &t)
+			t, _ := aoe.DecodeTable(res.Data()[8+header:])
 			t.State = aoe.StatePublic
-			meta, _ := json.Marshal(t)
+			meta, _ := aoe.EncodeTable(t)
 			_ = h.Set(tKey, meta)
 		}
 	}

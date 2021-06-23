@@ -150,7 +150,7 @@ func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
 	return &db, nil
 }
 
-func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engine.TableDef, pdef *engine.PartitionBy, createStatement []byte) (uint64, error) {
+func (c *Catalog) CreateTable(dbName string, tableName string, typ string, comment string, tableDefs []engine.TableDef, pdef *engine.PartitionBy, createStatement []byte) (uint64, error) {
 	dbId, err := c.checkDBExists(dbName)
 	if err != nil {
 		return 0, err
@@ -175,37 +175,16 @@ func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engin
 	if err != nil {
 		return 0, err
 	}
-	tInfo := aoe.TableInfo{
-		Id:              tid,
-		Name:            tableName,
-		SchemaId:        dbId,
-		CreateStatement: createStatement,
-	}
-	id := uint64(0)
-	for _, def := range tableDefs {
-		switch v := def.(type) {
-		case *engine.AttributeDef:
-			col := aoe.ColumnInfo{
-				SchemaId: dbId,
-				TableID:  tid,
-				Id:       id,
-				Name:     v.Attr.Name,
-				Type:     v.Attr.Type,
-				Alg:      v.Attr.Alg,
-			}
-			tInfo.Columns = append(tInfo.Columns, col)
-		case *engine.IndexTableDef:
-			continue
-		}
+	tInfo, err := aoe.Transfer(dbId, tid, tableName, typ, comment, tableDefs, pdef)
+	if err != nil {
+		return 0, ErrTableCreateFailed
 	}
 	tInfo.State = aoe.StateNone
 
-	if pdef != nil {
-		// TODO: call interface provided by mochen to replace json.Marshal
-		tInfo.Partition, _ = json.Marshal(pdef)
+	meta, err := json.Marshal(tInfo)
+	if err != nil {
+		return 0, ErrTableCreateFailed
 	}
-
-	meta, _ := json.Marshal(tInfo)
 
 	//save metadata to kv
 	err = c.store.Set(c.tableKey(dbId, tid), meta)
