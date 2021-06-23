@@ -58,6 +58,26 @@ func (holder *BlockHolder) Init(segFile base.ISegmentFile) {
 	holder.Inited = true
 }
 
+func (holder *BlockHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
+	idxes, ok := holder.ColIndexes[colIdx]
+	if !ok {
+		// TODO
+		ctx.BoolRes = true
+		return nil
+	}
+	var err error
+	for _, idx := range idxes {
+		node := holder.Indexes[idx].GetManagedNode()
+		err = node.DataNode.(Index).Eval(ctx)
+		if err != nil {
+			node.Close()
+			return err
+		}
+		node.Close()
+	}
+	return nil
+}
+
 func (holder *BlockHolder) close() {
 	for _, index := range holder.Indexes {
 		index.Unref()

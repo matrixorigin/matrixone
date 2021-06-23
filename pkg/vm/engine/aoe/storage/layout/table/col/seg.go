@@ -85,19 +85,41 @@ func NewColumnSegment(tblHolder *index.TableHolder, fsMgr base.IManager, mtBufMg
 	}
 	seg.Impl = seg
 	seg.IndexHolder = tblHolder.GetSegment(seg.ID.SegmentID)
+	var err error
 	if seg.IndexHolder == nil {
 		segHolder := tblHolder.RegisterSegment(seg.ID.AsSegmentID(), indexSegType, nil)
 		seg.IndexHolder = segHolder
+		id := seg.ID.AsSegmentID()
+		segFile := fsMgr.GetUnsortedFile(id)
+		if segType == base.UNSORTED_SEG {
+			if segFile == nil {
+				segFile, err = fsMgr.RegisterUnsortedFiles(seg.GetID())
+				if err != nil {
+					panic(err)
+				}
+			}
+			seg.IndexHolder.Init(segFile)
+		} else {
+			if segFile != nil {
+				fsMgr.UpgradeFile(seg.GetID())
+			} else {
+				segFile = fsMgr.GetSortedFile(seg.GetID())
+				if segFile == nil {
+					segFile, err = fsMgr.RegisterSortedFiles(seg.GetID())
+					if err != nil {
+						panic(err)
+					}
+				}
+			}
+			seg.IndexHolder.Init(segFile)
+		}
 	}
 
 	return seg.Ref()
 }
 
 func (seg *ColumnSegment) EvalFilter(ctx *index.FilterCtx) error {
-	return nil
-	// for _, segIndex := range seg.IndexHolder.self.Indexes {
-
-	// }
+	return seg.IndexHolder.EvalFilter(seg.ColIdx, ctx)
 }
 
 func (seg *ColumnSegment) HandleResources(handle it.HandleT) error {
@@ -228,7 +250,15 @@ func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment, indexTblHolder *ind
 	}
 	if segIndexHolder.Type == base.UNSORTED_SEG {
 		segIndexHolder = indexTblHolder.UpgradeSegment(seg.ID.SegmentID, base.SORTED_SEG)
-		// segIndexHolder.Init()
+		id := seg.ID.AsSegmentID()
+		segFile := cloned.FsMgr.GetSortedFile(id)
+		if segFile == nil {
+			segFile = cloned.FsMgr.UpgradeFile(id)
+			if segFile == nil {
+				panic("logic error")
+			}
+		}
+		seg.IndexHolder.Init(segFile)
 	}
 	cloned.IndexHolder = segIndexHolder
 	var prev IColumnBlock

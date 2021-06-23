@@ -44,23 +44,7 @@ type ColumnBlock struct {
 }
 
 func (blk *ColumnBlock) EvalFilter(ctx *index.FilterCtx) error {
-	idxes, ok := blk.IndexHolder.ColIndexes[blk.ColIdx]
-	if !ok {
-		// TODO
-		ctx.BoolRes = true
-		return nil
-	}
-	var err error
-	for _, idx := range idxes {
-		node := blk.IndexHolder.Indexes[idx].GetManagedNode()
-		err = node.DataNode.(index.Index).Eval(ctx)
-		if err != nil {
-			node.Close()
-			return err
-		}
-		node.Close()
-	}
-	return nil
+	return blk.IndexHolder.EvalFilter(blk.ColIdx, ctx)
 }
 
 func (blk *ColumnBlock) GetRefs() int64 {
