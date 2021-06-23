@@ -26,6 +26,10 @@ func (n *Offset) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Offset) Columns() []string {
+	return n.Prev.Columns()
+}
+
 func (n *Offset) Attribute() map[string]types.Type {
 	return n.Attrs
 }

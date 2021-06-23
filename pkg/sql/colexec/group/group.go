@@ -75,15 +75,16 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		matchs: make([]int64, UnitLimit),
 		hashs:  make([]uint64, UnitLimit),
 		sels:   make([][]int64, UnitLimit),
-		slots:  fastmap.Pool.Get().(*fastmap.Map),
 	}
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
+	Prepare(proc, arg)
 	n := arg.(*Argument)
 	ctr := &n.Ctr
 	ctr.refer = n.Refer
+	ctr.slots = fastmap.Pool.Get().(*fastmap.Map)
 	if proc.Reg.Ax == nil {
 		ctr.clean(proc)
 		return false, nil
@@ -176,6 +177,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	ctr.bat = nil
 	ctr.bats = nil
+	ctr.clean(proc)
 	return false, nil
 }
 

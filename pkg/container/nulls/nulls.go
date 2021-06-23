@@ -6,35 +6,35 @@ import (
 	"reflect"
 	"unsafe"
 
-	"github.com/pilosa/pilosa/roaring"
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 func (n *Nulls) Any() bool {
 	if n.Np == nil {
 		return false
 	}
-	return n.Np.Any()
+	return !n.Np.IsEmpty()
 }
 
 func (n *Nulls) Size() int {
 	if n.Np == nil {
 		return 0
 	}
-	return n.Np.Size()
+	return int(n.Np.GetSizeInBytes())
 }
 
 func (n *Nulls) Length() int {
 	if n.Np == nil {
 		return 0
 	}
-	return int(n.Np.Count())
+	return int(n.Np.GetCardinality())
 }
 
 func (n *Nulls) String() string {
 	if n.Np == nil {
 		return "[]"
 	}
-	return fmt.Sprintf("%v", n.Np.Slice())
+	return fmt.Sprintf("%v", n.Np.ToArray())
 }
 
 func (n *Nulls) Contains(row uint64) bool {
@@ -46,17 +46,19 @@ func (n *Nulls) Contains(row uint64) bool {
 
 func (n *Nulls) Add(rows ...uint64) {
 	if n.Np == nil {
-		n.Np = roaring.NewBitmap(rows...)
+		n.Np = roaring.BitmapOf(rows...)
 		return
 	}
-	n.Np.DirectAddN(rows...)
+	n.Np.AddMany(rows)
 }
 
 func (n *Nulls) Del(rows ...uint64) {
 	if n.Np == nil {
 		return
 	}
-	n.Np.DirectRemoveN(rows...)
+	for _, row := range rows {
+		n.Np.Remove(row)
+	}
 }
 
 func (n *Nulls) FilterCount(sels []int64) int {
@@ -82,7 +84,7 @@ func (n *Nulls) Range(start, end uint64) *Nulls {
 	np := roaring.NewBitmap()
 	for ; start < end; start++ {
 		if n.Np.Contains(start) {
-			np.DirectAdd(start)
+			np.Add(start)
 		}
 	}
 	return &Nulls{np}
@@ -97,7 +99,7 @@ func (n *Nulls) Filter(sels []int64) *Nulls {
 	np := roaring.NewBitmap()
 	for i, sel := range sp {
 		if n.Np.Contains(sel) {
-			np.DirectAdd(uint64(i))
+			np.Add(uint64(i))
 		}
 	}
 	return &Nulls{np}
@@ -131,13 +133,13 @@ func (n *Nulls) Or(m *Nulls) *Nulls {
 	switch {
 	case m == nil:
 		return &Nulls{n.Np}
-	case n.Np == nil || m.Np == nil:
+	case n.Np == nil && m.Np == nil:
 		return &Nulls{}
-	case n.Np != nil || m.Np == nil:
+	case n.Np != nil && m.Np == nil:
 		return &Nulls{n.Np}
-	case n.Np == nil || m.Np != nil:
+	case n.Np == nil && m.Np != nil:
 		return &Nulls{m.Np}
 	default:
-		return &Nulls{n.Np.Union(m.Np)}
+		return &Nulls{roaring.Or(n.Np, m.Np)}
 	}
 }

@@ -45,6 +45,10 @@ func (n *Join) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Join) Columns() []string {
+	return nil
+}
+
 func (n *Join) Attribute() map[string]types.Type {
 	return n.Attrs
 }

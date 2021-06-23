@@ -1,6 +1,8 @@
 package nulls
 
-import "github.com/pilosa/pilosa/roaring"
+import (
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
+)
 
 /*
 type Nulls interface{
