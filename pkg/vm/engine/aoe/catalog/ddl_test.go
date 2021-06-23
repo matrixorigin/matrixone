@@ -145,7 +145,7 @@ func testTableDDL(t *testing.T, c Catalog) {
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 
-	tid, err := c.CreateTable(dbName, tableName, "", "", cols, nil, nil)
+	tid, err := c.CreateTable(dbName, tableName, "", 0, cols, nil)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), tid)
 
@@ -167,11 +167,11 @@ func testTableDDL(t *testing.T, c Catalog) {
 	case <-time.After(3 * time.Second):
 		stdLog.Printf("create %s failed, timeout", tableName)
 	}
-	tid, err = c.CreateTable(dbName, tableName, "", "", cols, nil, nil)
+	tid, err = c.CreateTable(dbName, tableName, "", 0, cols, nil)
 	require.Equal(t, ErrTableCreateExists, err)
 
 	for i := 1; i < 10; i++ {
-		tid2, err := c.CreateTable(dbName, fmt.Sprintf("%s%d", tableName, i), "", "", cols, nil, nil)
+		tid2, err := c.CreateTable(dbName, fmt.Sprintf("%s%d", tableName, i), "", 0, cols, nil)
 		require.NoError(t, err)
 		require.Less(t, tid, tid2)
 	}

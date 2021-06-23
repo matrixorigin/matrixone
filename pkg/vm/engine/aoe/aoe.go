@@ -16,7 +16,7 @@ func init() {
 	gob.Register(ColumnInfo{})
 }
 
-func Transfer(sid, tid uint64, name, typ, comment string,
+func Transfer(sid, tid, typ uint64, name,  comment string,
 	defs []engine.TableDef, pdef *engine.PartitionBy) (TableInfo, error) {
 	var tbl TableInfo
 
@@ -32,7 +32,7 @@ func Transfer(sid, tid uint64, name, typ, comment string,
 			mp[col.Name] = col.Id
 		}
 	}
-	tbl.Indexs = IndexDefs(sid, tid, mp, defs)
+	tbl.Indexes = IndexDefs(sid, tid, mp, defs)
 	if pdef != nil {
 		data, err := PartitionDef(pdef)
 		if err != nil {
