@@ -5,20 +5,25 @@ go 1.15
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
-	github.com/fagongzi/goetty v2.0.2+incompatible
-	github.com/fagongzi/util v0.0.0-20201116094402-221cc40c4593
+	github.com/fagongzi/goetty v1.8.0
+	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287 // indirect
+	github.com/fagongzi/util v0.0.0-20210409031311-a10fdf8fbd7a
 	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.2.0
+	github.com/matrixorigin/matrixcube v0.0.0-20210619015613-2f9ba0b3d83c
+	github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
-	github.com/pilosa/pilosa v1.4.0
+	github.com/pilosa/pilosa v1.4.1
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
 	github.com/pkg/errors v0.9.1
-	github.com/sirupsen/logrus v1.2.0
+	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.7.0
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
 	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b // indirect
 	golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f
 	golang.org/x/tools v0.0.0-20201105001634-bc3cf281b174 // indirect
 )
+
+replace go.etcd.io/etcd => github.com/deepfabric/etcd v1.4.15

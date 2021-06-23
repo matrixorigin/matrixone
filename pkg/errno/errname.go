@@ -548,7 +548,7 @@ var MySQLErrName = map[uint16]*mysql.ErrMessage{
 	ErrColCountDoesntMatchPleaseUpdate:          mysql.Message("Column count of mysql.%s is wrong. Expected %d, found %d. Created with MySQL %d, now running %d. Please use mysqlUpgrade to fix this error.", nil),
 	ErrTempTablePreventsSwitchOutOfRbr:          mysql.Message("Cannot switch out of the row-based binary log format when the session has open temporary tables", nil),
 	ErrStoredFunctionPreventsSwitchBinlogFormat: mysql.Message("Cannot change the binary logging format inside a stored function or trigger", nil),
-	ErrNdbCantSwitchBinlogFormat:                mysql.Message("The NDB cluster engine does not support changing the binlog format on the fly yet", nil),
+	ErrNdbCantSwitchBinlogFormat:                mysql.Message("The NDB engine engine does not support changing the binlog format on the fly yet", nil),
 	ErrPartitionNoTemporary:                     mysql.Message("Cannot create temporary table with partitions", nil),
 	ErrPartitionConstDomain:                     mysql.Message("Partition constant is out of partition function domain", nil),
 	ErrPartitionFunctionIsNotAllowed:            mysql.Message("This partition function is not allowed", nil),
