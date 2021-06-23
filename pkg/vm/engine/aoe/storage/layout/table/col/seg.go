@@ -6,6 +6,7 @@ import (
 	"io"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	it "matrixone/pkg/vm/engine/aoe/storage/iterator"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -16,6 +17,7 @@ import (
 )
 
 type IColumnSegment interface {
+	it.IResources
 	io.Closer
 	sync.Locker
 	GetNext() IColumnSegment
@@ -43,10 +45,12 @@ type IColumnSegment interface {
 	GetRefs() int64
 	GetMeta() *md.Segment
 	GetFsManager() base.IManager
+	EvalFilter(*index.FilterCtx) error
 }
 
 type ColumnSegment struct {
 	sync.RWMutex
+	it.BaseResources
 	Refs        int64
 	ID          common.ID
 	ColIdx      int
@@ -79,13 +83,54 @@ func NewColumnSegment(tblHolder *index.TableHolder, fsMgr base.IManager, mtBufMg
 		SSTBufMgr: sstBufMgr,
 		FsMgr:     fsMgr,
 	}
+	seg.Impl = seg
 	seg.IndexHolder = tblHolder.GetSegment(seg.ID.SegmentID)
+	var err error
 	if seg.IndexHolder == nil {
 		segHolder := tblHolder.RegisterSegment(seg.ID.AsSegmentID(), indexSegType, nil)
 		seg.IndexHolder = segHolder
+		id := seg.ID.AsSegmentID()
+		segFile := fsMgr.GetUnsortedFile(id)
+		if segType == base.UNSORTED_SEG {
+			if segFile == nil {
+				segFile, err = fsMgr.RegisterUnsortedFiles(seg.GetID())
+				if err != nil {
+					panic(err)
+				}
+			}
+			seg.IndexHolder.Init(segFile)
+		} else {
+			if segFile != nil {
+				fsMgr.UpgradeFile(seg.GetID())
+			} else {
+				segFile = fsMgr.GetSortedFile(seg.GetID())
+				if segFile == nil {
+					segFile, err = fsMgr.RegisterSortedFiles(seg.GetID())
+					if err != nil {
+						panic(err)
+					}
+				}
+			}
+			seg.IndexHolder.Init(segFile)
+		}
 	}
 
 	return seg.Ref()
+}
+
+func (seg *ColumnSegment) EvalFilter(ctx *index.FilterCtx) error {
+	return seg.IndexHolder.EvalFilter(seg.ColIdx, ctx)
+}
+
+func (seg *ColumnSegment) HandleResources(handle it.HandleT) error {
+	var err error
+	for _, blk := range seg.Blocks {
+		err = handle(blk)
+		if err != nil {
+			return err
+		}
+	}
+	return err
 }
 
 func (seg *ColumnSegment) GetIndexHolder() *index.SegmentHolder {
@@ -205,7 +250,15 @@ func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment, indexTblHolder *ind
 	}
 	if segIndexHolder.Type == base.UNSORTED_SEG {
 		segIndexHolder = indexTblHolder.UpgradeSegment(seg.ID.SegmentID, base.SORTED_SEG)
-		// segIndexHolder.Init()
+		id := seg.ID.AsSegmentID()
+		segFile := cloned.FsMgr.GetSortedFile(id)
+		if segFile == nil {
+			segFile = cloned.FsMgr.UpgradeFile(id)
+			if segFile == nil {
+				panic("logic error")
+			}
+		}
+		seg.IndexHolder.Init(segFile)
 	}
 	cloned.IndexHolder = segIndexHolder
 	var prev IColumnBlock

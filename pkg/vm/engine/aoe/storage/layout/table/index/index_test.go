@@ -72,10 +72,23 @@ func TestTable(t *testing.T) {
 
 func TestIndex(t *testing.T) {
 	int32zm := NewZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100), int16(0))
-	assert.False(t, int32zm.Eq(int32(9)))
-	assert.True(t, int32zm.Eq(int32(10)))
-	assert.True(t, int32zm.Eq(int32(100)))
-	assert.False(t, int32zm.Eq(int32(101)))
+	ctx := NewFilterCtx(OpEq)
+	ctx.Val = int32(9)
+	ctx.Eval(int32zm)
+	assert.False(t, ctx.BoolRes)
+	ctx.Reset()
+	ctx.Val = int32(10)
+	ctx.Op = OpEq
+	ctx.Eval(int32zm)
+	assert.True(t, ctx.BoolRes)
+	ctx.Val = int32(100)
+	ctx.Op = OpEq
+	ctx.Eval(int32zm)
+	assert.True(t, ctx.BoolRes)
+	ctx.Val = int32(101)
+	ctx.Op = OpEq
+	ctx.Eval(int32zm)
+	assert.False(t, ctx.BoolRes)
 }
 
 func TestRefs1(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	it "matrixone/pkg/vm/engine/aoe/storage/iterator"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
@@ -361,6 +362,18 @@ func makeSegments(indexHolder *index.TableHolder, fsMgr base.IManager, mtBufMgr,
 	return segs
 }
 
+type testBlkIt struct {
+	it.BaseIterator
+}
+
+func newTestBlkIt(executor it.ExecutorT, res it.IResources) it.Iterator {
+	blkIt := new(testBlkIt)
+	blkIt.Impl = blkIt
+	blkIt.Executor = executor
+	blkIt.Resources = res
+	return blkIt
+}
+
 func TestUpgradeStdSegment(t *testing.T) {
 	seg_cnt := uint64(5)
 	blkRows := uint64(10)
@@ -450,6 +463,13 @@ func TestUpgradeStdSegment(t *testing.T) {
 			assert.Equal(t, base.PERSISTENT_SORTED_BLK, blk.GetBlockType())
 			blk.UnRef()
 		}
+		executor := func(blk interface{}, iter it.Iterator) error {
+			t.Log(blk)
+			t.Log(iter)
+			return nil
+		}
+		blkIt := newTestBlkIt(executor, currSeg)
+		blkIt.Iter()
 		currSeg.UnRef()
 		currSeg = currSeg.GetNext()
 	}

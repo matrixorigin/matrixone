@@ -48,9 +48,12 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 		if segFile != nil {
 			fsMgr.UpgradeFile(seg.GetID())
 		} else {
-			_, err := fsMgr.RegisterSortedFiles(seg.GetID())
-			if err != nil {
-				panic(err)
+			segFile = fsMgr.GetSortedFile(seg.GetID())
+			if segFile == nil {
+				_, err := fsMgr.RegisterSortedFiles(seg.GetID())
+				if err != nil {
+					panic(err)
+				}
 			}
 		}
 		if indexHolder == nil {

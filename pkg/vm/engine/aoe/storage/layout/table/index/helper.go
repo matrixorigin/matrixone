@@ -3,11 +3,13 @@ package index
 import (
 	"bytes"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
+
+	"github.com/pilosa/pilosa/roaring"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -24,6 +26,12 @@ func (h *RWHelper) WriteIndexes(indexes []Index) ([]byte, error) {
 	}
 	for _, i := range indexes {
 		_, err := buf.Write(encoding.EncodeUint16(i.Type()))
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, i := range indexes {
+		_, err := buf.Write(encoding.EncodeInt16(i.GetCol()))
 		if err != nil {
 			return nil, err
 		}
@@ -57,6 +65,12 @@ func (h *RWHelper) ReadIndexes(f os.File) (indexes []Index, err error) {
 			indexes = append(indexes, idx)
 		default:
 			panic("unsupported")
+		}
+	}
+	for i := 0; i < int(indexCnt); i++ {
+		_, err := f.Read(twoBytes)
+		if err != nil {
+			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
 	}
 	for i := 0; i < int(indexCnt); i++ {
@@ -95,7 +109,16 @@ func (h *RWHelper) ReadIndexesMeta(f os.File) (meta *base.IndexesMeta, err error
 		im := new(base.IndexMeta)
 		im.Type = indexType
 		im.Ptr = new(base.Pointer)
+		im.Cols = roaring.NewBitmap()
 		meta.Data = append(meta.Data, im)
+	}
+	for i := 0; i < int(indexCnt); i++ {
+		_, err := f.Read(twoBytes)
+		if err != nil {
+			panic(fmt.Sprintf("unexpect error: %s", err))
+		}
+		col := encoding.DecodeInt16(twoBytes)
+		meta.Data[i].Cols.Add(uint64(col))
 	}
 	for i := 0; i < int(indexCnt); i++ {
 		_, err := f.Read(fourBytes)
