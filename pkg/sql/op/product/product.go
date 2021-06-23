@@ -53,6 +53,10 @@ func (n *Product) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Product) Columns() []string {
+	return nil
+}
+
 func (n *Product) Attribute() map[string]types.Type {
 	return n.Attrs
 }

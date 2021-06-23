@@ -50,6 +50,10 @@ func (n *Summarize) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Summarize) Columns() []string {
+	return n.Prev.Columns()
+}
+
 func (n *Summarize) Attribute() map[string]types.Type {
 	return n.Attrs
 }

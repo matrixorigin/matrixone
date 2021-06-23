@@ -43,6 +43,10 @@ func (n *Dedup) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Dedup) Columns() []string {
+	return n.Prev.Columns()
+}
+
 func (n *Dedup) Attribute() map[string]types.Type {
 	return n.Attrs
 }

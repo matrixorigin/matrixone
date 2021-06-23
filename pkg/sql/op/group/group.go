@@ -71,6 +71,10 @@ func (n *Group) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Group) Columns() []string {
+	return n.Prev.Columns()
+}
+
 func (n *Group) Attribute() map[string]types.Type {
 	return n.Attrs
 }

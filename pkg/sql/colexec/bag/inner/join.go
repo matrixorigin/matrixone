@@ -47,6 +47,14 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		fastmap.Pool.Put(ctr.slots)
 		return err
 	}
+	{
+		for _, attr := range n.Rattrs {
+			ctr.rAttrs = append(ctr.rAttrs, n.R+"."+attr)
+		}
+		for _, attr := range n.Sattrs {
+			ctr.rAttrs = append(ctr.rAttrs, n.S+"."+attr)
+		}
+	}
 	ctr.spill.id = fmt.Sprintf("%s.%v", proc.Id, uuid)
 	return nil
 }
@@ -59,12 +67,22 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		case Build:
 			ctr.spill.e = n.E
 			if err := ctr.build(n.Rattrs, proc); err != nil {
+				ctr.state = End
 				ctr.clean(proc)
 				return true, err
 			}
 			ctr.state = Probe
 		case Probe:
-			return ctr.probe(n.R, n.S, n.Sattrs, proc)
+			ok, err := ctr.probe(n.R, n.S, n.Sattrs, proc)
+			if err != nil || ok {
+				ctr.state = End
+				ctr.clean(proc)
+				return ok, err
+			}
+			return ok, err
+		case End:
+			proc.Reg.Ax = nil
+			return true, nil
 		}
 	}
 }
@@ -283,6 +301,7 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 		}
 		reg.Wg.Done()
 		bat.Clean(proc)
+		ctr.probeState.bat.Reduce(ctr.rAttrs, proc)
 		proc.Reg.Ax = ctr.probeState.bat
 		ctr.probeState.bat = nil
 		return false, nil

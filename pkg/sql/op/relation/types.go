@@ -20,10 +20,12 @@ type Unit struct {
 }
 
 type Relation struct {
+	S     bool // is single
 	ID    string
 	DB    string
 	Rid   string // real id
 	Us    []*Unit
+	Cols  []string
 	R     engine.Relation
 	Attrs map[string]types.Type
 }

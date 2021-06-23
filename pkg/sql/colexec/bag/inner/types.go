@@ -12,6 +12,7 @@ import (
 const (
 	Build = iota
 	Probe
+	End
 )
 
 const (
@@ -30,6 +31,7 @@ type Container struct {
 	matchs     []int64
 	hashs      []uint64
 	attrs      []string
+	rAttrs     []string       // reduce attrs
 	sels       [][]int64      // sels
 	slots      *fastmap.Map   // hash code -> sels index
 	bats       []*block.Block // s relation
