@@ -8,6 +8,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
+	// log "github.com/sirupsen/logrus"
 )
 
 type IColumnBlock interface {
@@ -23,6 +24,7 @@ type IColumnBlock interface {
 	GetIndexHolder() *index.BlockHolder
 	GetColIdx() int
 	CloneWithUpgrade(IColumnSegment, *md.Block) IColumnBlock
+	EvalFilter(*index.FilterCtx) error
 	String() string
 	Ref() IColumnBlock
 	UnRef()
@@ -39,6 +41,26 @@ type ColumnBlock struct {
 	Meta        *md.Block
 	File        base.ISegmentFile
 	IndexHolder *index.BlockHolder
+}
+
+func (blk *ColumnBlock) EvalFilter(ctx *index.FilterCtx) error {
+	idxes, ok := blk.IndexHolder.ColIndexes[blk.ColIdx]
+	if !ok {
+		// TODO
+		ctx.BoolRes = true
+		return nil
+	}
+	var err error
+	for _, idx := range idxes {
+		node := blk.IndexHolder.Indexes[idx].GetManagedNode()
+		err = node.DataNode.(index.Index).Eval(ctx)
+		if err != nil {
+			node.Close()
+			return err
+		}
+		node.Close()
+	}
+	return nil
 }
 
 func (blk *ColumnBlock) GetRefs() int64 {

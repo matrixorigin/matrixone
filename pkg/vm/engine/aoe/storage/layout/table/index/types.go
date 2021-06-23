@@ -64,5 +64,6 @@ func (ctx *FilterCtx) Eval(i Index) error {
 type Index interface {
 	buf.IMemoryNode
 	Type() base.IndexType
+	GetCol() int16
 	Eval(ctx *FilterCtx) error
 }

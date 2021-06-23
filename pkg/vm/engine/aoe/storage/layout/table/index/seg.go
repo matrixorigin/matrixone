@@ -17,7 +17,7 @@ type SegmentHolder struct {
 	BufMgr mgrif.IBufferManager
 	self   struct {
 		sync.RWMutex
-		Indexes []*Node
+		ColIndexes map[int][]*Node
 	}
 	tree struct {
 		sync.RWMutex
@@ -33,7 +33,7 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	holder := &SegmentHolder{ID: id, Type: segType, BufMgr: bufMgr}
 	holder.tree.Blocks = make([]*BlockHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
-	holder.self.Indexes = make([]*Node, 0)
+	holder.self.ColIndexes = make(map[int][]*Node, 0)
 	holder.OnZeroCB = holder.close
 	holder.PostCloseCB = cb
 	holder.Ref()
@@ -45,8 +45,10 @@ func (holder *SegmentHolder) close() {
 		blk.Unref()
 	}
 
-	for _, index := range holder.self.Indexes {
-		index.Unref()
+	for _, colIndexes := range holder.self.ColIndexes {
+		for _, colIndex := range colIndexes {
+			colIndex.Unref()
+		}
 	}
 	if holder.PostCloseCB != nil {
 		holder.PostCloseCB(holder)

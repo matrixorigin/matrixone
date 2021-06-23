@@ -13,6 +13,7 @@ type BlockHolder struct {
 	ID common.ID
 	sync.RWMutex
 	Indexes     []*Node
+	ColIndexes  map[int][]int
 	Type        base.BlockType
 	BufMgr      mgrif.IBufferManager
 	Inited      bool
@@ -27,6 +28,7 @@ func newBlockHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType,
 		Inited:      false,
 		PostCloseCB: cb,
 	}
+	holder.ColIndexes = make(map[int][]int)
 	holder.Indexes = make([]*Node, 0)
 	holder.OnZeroCB = holder.close
 	holder.Ref()
@@ -43,7 +45,14 @@ func (holder *BlockHolder) Init(segFile base.ISegmentFile) {
 	}
 	for _, meta := range indexesMeta.Data {
 		vf := segFile.MakeVirtualBlkIndexFile(&holder.ID, meta)
+		col := int(meta.Cols.Slice()[0])
 		node := newNode(holder.BufMgr, vf, ZoneMapIndexConstructor, meta.Ptr.Len, meta.Cols, nil)
+		idxes, ok := holder.ColIndexes[col]
+		if !ok {
+			idxes = make([]int, 0)
+			holder.ColIndexes[col] = idxes
+		}
+		holder.ColIndexes[col] = append(holder.ColIndexes[col], len(holder.Indexes))
 		holder.Indexes = append(holder.Indexes, node)
 	}
 	holder.Inited = true
@@ -83,5 +92,6 @@ func (holder *BlockHolder) stringNoLock() string {
 	for _, i := range holder.Indexes {
 		s = fmt.Sprintf("%s\n\tIndex: [Refs=%d]", s, i.RefCount())
 	}
+	// s = fmt.Sprintf("%s\n%vs, holder.ColIndexes)
 	return s
 }

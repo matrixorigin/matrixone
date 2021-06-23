@@ -50,6 +50,10 @@ func MockInt32ZmIndexes(cols int) (indexes []Index) {
 	return indexes
 }
 
+func (i *ZoneMapIndex) GetCol() int16 {
+	return i.Col
+}
+
 func (i *ZoneMapIndex) Eval(ctx *FilterCtx) error {
 	switch ctx.Op {
 	case OpEq:

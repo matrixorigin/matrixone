@@ -45,6 +45,7 @@ type IColumnSegment interface {
 	GetRefs() int64
 	GetMeta() *md.Segment
 	GetFsManager() base.IManager
+	EvalFilter(*index.FilterCtx) error
 }
 
 type ColumnSegment struct {
@@ -90,6 +91,13 @@ func NewColumnSegment(tblHolder *index.TableHolder, fsMgr base.IManager, mtBufMg
 	}
 
 	return seg.Ref()
+}
+
+func (seg *ColumnSegment) EvalFilter(ctx *index.FilterCtx) error {
+	return nil
+	// for _, segIndex := range seg.IndexHolder.self.Indexes {
+
+	// }
 }
 
 func (seg *ColumnSegment) HandleResources(handle it.HandleT) error {
