@@ -35,7 +35,7 @@ func (pool *SimpleMemoryPool) GetUsage() uint64 {
 }
 
 // Only for temp test
-func (pool *SimpleMemoryPool) MakeNode(size uint64) (node *Node) {
+func (pool *SimpleMemoryPool) Alloc(size uint64, constructor MemoryNodeConstructor) (node IMemoryNode) {
 	capacity := atomic.LoadUint64(&(pool.Capacity))
 	currsize := atomic.LoadUint64(&(pool.Usage))
 	postsize := size + currsize
@@ -47,16 +47,12 @@ func (pool *SimpleMemoryPool) MakeNode(size uint64) (node *Node) {
 		postsize += currsize + size
 		if postsize > capacity {
 			return nil
-			// return &Node{Data: []byte{}, Pool: pool}
 		}
 	}
-	// buf := make([]byte, 0, size)
-	buf := make([]byte, size)
-	return &Node{Data: buf, Pool: pool, Capacity: size}
+	return constructor(size, WithFreeWithPool(pool))
 }
 
-func (pool *SimpleMemoryPool) FreeNode(node *Node) {
-	size := uint64(cap(node.Data))
+func (pool *SimpleMemoryPool) Free(size uint64) {
 	if size == 0 {
 		return
 	}
@@ -64,9 +60,4 @@ func (pool *SimpleMemoryPool) FreeNode(node *Node) {
 	if usagesize > pool.Capacity {
 		panic("")
 	}
-	node.Data = nil
-}
-
-func (n *Node) Size() uint64 {
-	return uint64(len(n.Data))
 }

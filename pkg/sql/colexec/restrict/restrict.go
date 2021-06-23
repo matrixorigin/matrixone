@@ -35,8 +35,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	bat.SelsData = vec.Data
 	bat.Sels = vec.Col.([]int64)
-	bat.Reduce(n.Attrs, proc)
-	proc.Reg.Ax = bat
+	if len(bat.Sels) > 0 {
+		bat.Reduce(n.Attrs, proc)
+		proc.Reg.Ax = bat
+	} else {
+		bat.Clean(proc)
+		bat.Attrs = nil
+		proc.Reg.Ax = bat
+	}
 	register.FreeRegisters(proc)
 	return false, nil
 }

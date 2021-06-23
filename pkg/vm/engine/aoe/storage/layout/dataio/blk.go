@@ -5,7 +5,10 @@ import (
 	"fmt"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"os"
+	"path/filepath"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
@@ -14,18 +17,23 @@ import (
 type BlockFile struct {
 	sync.RWMutex
 	os.File
-	ID    common.ID
-	Parts map[Key]Pointer
+	ID          common.ID
+	Parts       map[base.Key]*base.Pointer
+	Meta        *FileMeta
+	SegmentFile base.ISegmentFile
 }
 
-func NewBlockFile(dirname string, id common.ID) *BlockFile {
+func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
 	bf := &BlockFile{
-		Parts: make(map[Key]Pointer),
-		ID:    id,
+		Parts:       make(map[base.Key]*base.Pointer),
+		ID:          id,
+		Meta:        NewFileMeta(),
+		SegmentFile: segFile,
 	}
 
+	dirname := segFile.GetDir()
 	name := e.MakeFilename(dirname, e.FTBlock, id.ToBlockFileName(), false)
-	log.Infof("BlockFile name %s", name)
+	// log.Infof("BlockFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
 	}
@@ -37,6 +45,10 @@ func NewBlockFile(dirname string, id common.ID) *BlockFile {
 	bf.File = *r
 	bf.initPointers(id)
 	return bf
+}
+
+func (bf *BlockFile) GetDir() string {
+	return filepath.Dir(bf.Name())
 }
 
 func (bf *BlockFile) Destory() {
@@ -52,9 +64,30 @@ func (bf *BlockFile) Destory() {
 	}
 }
 
+func (bf *BlockFile) GetIndexesMeta() *base.IndexesMeta {
+	return bf.Meta.Indexes
+}
+
+func (bf *BlockFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+	vf := &EmbbedBlockIndexFile{
+		EmbbedIndexFile: EmbbedIndexFile{
+			SegmentFile: bf.SegmentFile,
+			Meta:        meta,
+		},
+		ID: bf.ID,
+	}
+	return vf
+}
+
 func (bf *BlockFile) initPointers(id common.ID) {
+	indexMeta, err := index.DefaultRWHelper.ReadIndexesMeta(bf.File)
+	if err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	bf.Meta.Indexes = indexMeta
+	// return
 	twoBytes := make([]byte, 2)
-	_, err := bf.File.Read(twoBytes)
+	_, err = bf.File.Read(twoBytes)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
@@ -72,7 +105,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		if blkID != id.BlockID {
 			panic("logic error")
 		}
-		key := Key{
+		key := base.Key{
 			Col: uint64(i),
 			ID:  id.AsBlockID(),
 		}
@@ -80,7 +113,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		if err != nil {
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
-		bf.Parts[key] = Pointer{
+		bf.Parts[key] = &base.Pointer{
 			Offset: int64(currOffset),
 			Len:    binary.BigEndian.Uint64(eightBytes),
 		}
@@ -88,8 +121,20 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	}
 }
 
+func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
+	bf.Lock()
+	defer bf.Unlock()
+	n, err := bf.ReadAt(buf, ptr.Offset)
+	if err != nil {
+		panic(fmt.Sprintf("logic error: %s", err))
+	}
+	if n != int(ptr.Len) {
+		panic("logic error")
+	}
+}
+
 func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
-	key := Key{
+	key := base.Key{
 		Col: colIdx,
 		ID:  id.AsBlockID(),
 	}
@@ -100,13 +145,14 @@ func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if len(buf) != int(pointer.Len) {
 		panic("logic error")
 	}
-	bf.Lock()
-	defer bf.Unlock()
-	n, err := bf.ReadAt(buf, pointer.Offset)
-	if err != nil {
-		panic(fmt.Sprintf("logic error: %s", err))
-	}
-	if n != int(pointer.Len) {
-		panic("logic error")
-	}
+	bf.ReadPoint(pointer, buf)
+	// bf.Lock()
+	// defer bf.Unlock()
+	// n, err := bf.ReadAt(buf, pointer.Offset)
+	// if err != nil {
+	// 	panic(fmt.Sprintf("logic error: %s", err))
+	// }
+	// if n != int(pointer.Len) {
+	// 	panic("logic error")
+	// }
 }

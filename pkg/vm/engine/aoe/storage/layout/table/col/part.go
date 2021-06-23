@@ -1,121 +1,76 @@
 package col
 
 import (
-	"errors"
-	"fmt"
-	"io"
+	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
 
-func initUnsortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
-	sf := fsMgr.GetUnsortedFile(part.ID.AsSegmentID())
-	sf.RefBlock(part.ID.AsBlockID())
-	psf := sf.MakeColPartFile(&part.NodeID)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
-	part.SegFile = sf
-}
-
-func initSortedBlkNode(part *ColumnPart, fsMgr ldio.IManager) {
-	sf := fsMgr.GetSortedFile(part.ID.AsSegmentID())
-	sf.RefBlock(part.ID.AsBlockID())
-	psf := sf.MakeColPartFile(&part.NodeID)
-	part.BufNode = part.BufMgr.RegisterNode(part.Capacity, part.NodeID, psf)
-	part.SegFile = sf
-}
-
 type IColumnPart interface {
-	io.Closer
+	bmgrif.INode
 	GetNext() IColumnPart
 	SetNext(IColumnPart)
 	InitScanCursor(cursor *ScanCursor) error
 	GetID() common.ID
-	// GetBlock() IColumnBlock
-	GetBuf() []byte
 	GetColIdx() int
-	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager, ldio.IManager) IColumnPart
-	GetNodeID() common.ID
+	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager, base.IManager) IColumnPart
 }
 
 type ColumnPart struct {
 	sync.RWMutex
-	ID       common.ID
-	Next     IColumnPart
-	BufMgr   bmgrif.IBufferManager
-	BufNode  nif.INodeHandle
-	Size     uint64
-	Capacity uint64
-	NodeID   common.ID
-	SegFile  ldio.ISegmentFile
+	*bmgr.Node
+	ID   common.ID
+	Next IColumnPart
 }
 
-func NewColumnPart(fsMgr ldio.IManager, bmgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
+func NewColumnPart(fsMgr base.IManager, bufMgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
 	capacity uint64) IColumnPart {
 	defer blk.UnRef()
-	part := &ColumnPart{
-		BufMgr:   bmgr,
-		ID:       id,
-		NodeID:   id,
-		Capacity: capacity,
-	}
-	part.NodeID.Idx = uint16(blk.GetColIdx())
-
+	part := &ColumnPart{ID: id}
+	var vf bmgrif.IVFile
 	switch blk.GetBlockType() {
-	case TRANSIENT_BLK:
-		bNode := bmgr.RegisterSpillableNode(capacity, part.NodeID)
-		if bNode == nil {
-			return nil
-		}
-		part.BufNode = bNode
-	case PERSISTENT_BLK:
-		initUnsortedBlkNode(part, fsMgr)
-	case PERSISTENT_SORTED_BLK:
-		initSortedBlkNode(part, fsMgr)
+	case base.TRANSIENT_BLK:
+	case base.PERSISTENT_BLK:
+		vf = fsMgr.GetUnsortedFile(part.ID.AsSegmentID()).MakeVirtualPartFile(&part.ID)
+	case base.PERSISTENT_SORTED_BLK:
+		vf = fsMgr.GetSortedFile(part.ID.AsSegmentID()).MakeVirtualPartFile(&part.ID)
 	default:
 		panic("not support")
+	}
+	part.Node = bufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, capacity).(*bmgr.Node)
+	if part.Node == nil {
+		return nil
 	}
 
 	blk.Append(part)
 	return part
 }
 
-func (part *ColumnPart) GetNodeID() common.ID {
-	return part.NodeID
-}
-
-func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager, fsMgr ldio.IManager) IColumnPart {
-	cloned := &ColumnPart{
-		ID:       part.ID,
-		BufMgr:   sstBufMgr,
-		Size:     part.Size,
-		Capacity: part.Capacity,
-		NodeID:   part.NodeID.NextIter(),
-	}
+func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager, fsMgr base.IManager) IColumnPart {
+	defer blk.UnRef()
+	cloned := &ColumnPart{ID: part.ID}
+	var vf bmgrif.IVFile
 	switch blk.GetBlockType() {
-	case TRANSIENT_BLK:
+	case base.TRANSIENT_BLK:
 		panic("logic error")
-	case PERSISTENT_BLK:
-		initUnsortedBlkNode(cloned, fsMgr)
-	case PERSISTENT_SORTED_BLK:
-		initSortedBlkNode(cloned, fsMgr)
+	case base.PERSISTENT_BLK:
+		vf = fsMgr.GetUnsortedFile(cloned.ID.AsSegmentID()).MakeVirtualPartFile(&cloned.ID)
+	case base.PERSISTENT_SORTED_BLK:
+		vf = fsMgr.GetSortedFile(cloned.ID.AsSegmentID()).MakeVirtualPartFile(&cloned.ID)
 	default:
 		panic("not supported")
 	}
+	cloned.Node = sstBufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, part.Capacity).(*bmgr.Node)
 
-	blk.UnRef()
 	return cloned
 }
 
 func (part *ColumnPart) GetColIdx() int {
-	return int(part.NodeID.Idx)
-}
-
-func (part *ColumnPart) GetBuf() []byte {
-	return part.BufNode.GetBuffer().GetDataNode().Data
+	return int(part.ID.Idx)
 }
 
 func (part *ColumnPart) GetID() common.ID {
@@ -134,25 +89,7 @@ func (part *ColumnPart) GetNext() IColumnPart {
 	return part.Next
 }
 
-func (part *ColumnPart) Close() error {
-	if part.BufNode != nil {
-		err := part.BufNode.Close()
-		if err != nil {
-			panic("logic error")
-		}
-		part.BufNode = nil
-	}
-	if part.SegFile != nil {
-		part.SegFile.UnrefBlock(part.ID.AsSegmentID())
-	}
-	return nil
-}
-
 func (part *ColumnPart) InitScanCursor(cursor *ScanCursor) error {
-	cursor.Handle = part.BufMgr.Pin(part.BufNode)
-	if cursor.Handle == nil {
-		return errors.New(fmt.Sprintf("Cannot pin part %v", part.ID))
-	}
-	// cursor.Inited = true
+	cursor.Node = part.GetManagedNode()
 	return nil
 }

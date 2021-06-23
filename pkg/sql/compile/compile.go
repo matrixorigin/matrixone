@@ -1,8 +1,8 @@
 package compile
 
 import (
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/server"
+	"fmt"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/sql/build"
 	"matrixone/pkg/sql/colexec/myoutput"
 	"matrixone/pkg/sql/op"
@@ -20,7 +20,6 @@ import (
 	"matrixone/pkg/sql/op/summarize"
 	"matrixone/pkg/sql/op/top"
 	"matrixone/pkg/sql/opt"
-	"matrixone/pkg/sql/result"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
@@ -39,7 +38,7 @@ func New(db string, sql string, e engine.Engine, ns metadata.Nodes, proc *proces
 	}
 }
 
-func (c *compile) Compile() ([]*Exec, error) {
+func (c *compile) Compile(u interface{}, fill func(interface{}, *batch.Batch)) ([]*Exec, error) {
 	os, err := build.New(c.db, c.sql, c.e, c.proc).Build()
 	if err != nil {
 		return nil, err
@@ -49,7 +48,7 @@ func (c *compile) Compile() ([]*Exec, error) {
 	}
 	es := make([]*Exec, len(os))
 	for i, o := range os {
-		ss, err := c.compile(o)
+		ss, err := c.compile(o, make(map[string]uint64))
 		if err != nil {
 			return nil, err
 		}
@@ -60,77 +59,54 @@ func (c *compile) Compile() ([]*Exec, error) {
 			attrs = append(attrs, k)
 			cs = append(cs, &Col{v.Oid, k})
 		}
-		rs := make([]*result.Result, len(ss))
-		for i, s := range ss {
-			rs[i] = &result.Result{
-				Attrs: attrs,
-			}
+		for _, s := range ss {
 			s.Ins = append(s.Ins, vm.Instruction{
-				Op:  vm.MyOutput,
-				Arg: &myoutput.Argument{rs[i]},
+				Op: vm.MyOutput,
+				Arg: &myoutput.Argument{
+					Data:  u,
+					Func:  fill,
+					Attrs: attrs,
+				},
 			})
 		}
 		es[i] = &Exec{
 			cs: cs,
 			ss: ss,
-			rs: rs,
 			e:  c.e,
 		}
 	}
 	return es, nil
 }
 
-func (e *Exec) Run(mrs *server.MysqlResultSet) error {
+func (e *Exec) Columns() []*Col {
+	return e.cs
+}
+
+func (e *Exec) Run() error {
 	var wg sync.WaitGroup
 
-	for _, s := range e.ss {
-		switch s.Magic {
+	for i := range e.ss {
+		switch e.ss[i].Magic {
 		case Normal:
 			wg.Add(1)
-			go func() {
-				s.Run(e.e)
+			go func(s *Scope) {
+				if err := s.Run(e.e); err != nil {
+					e.err = err
+				}
 				wg.Done()
-			}()
+			}(e.ss[i])
 		case Merge:
-		}
-	}
-	{
-		mrs.Columns = make([]server.Column, len(e.cs))
-		mrs.Name2Index = make(map[string]uint64)
-		for i, c := range e.cs {
-			mrs.Name2Index[c.Name] = uint64(i)
-			col := new(server.MysqlColumn)
-			col.SetName(c.Name)
-			switch c.Typ {
-			case types.T_int8:
-				col.SetLength(1)
-				col.SetColumnType(server.MYSQL_TYPE_TINY)
-			case types.T_int16:
-				col.SetLength(2)
-				col.SetColumnType(server.MYSQL_TYPE_SHORT)
-			case types.T_int32:
-				col.SetLength(4)
-				col.SetColumnType(server.MYSQL_TYPE_LONG)
-			case types.T_int64:
-				col.SetLength(8)
-				col.SetColumnType(server.MYSQL_TYPE_LONGLONG)
-			case types.T_float32:
-				col.SetLength(4)
-				col.SetColumnType(server.MYSQL_TYPE_FLOAT)
-			case types.T_float64:
-				col.SetLength(8)
-				col.SetColumnType(server.MYSQL_TYPE_DOUBLE)
-			case types.T_char:
-			case types.T_varchar:
-			}
-			mrs.Columns[i] = col
+			wg.Add(1)
+			go func(s *Scope) {
+				if err := s.MergeRun(e.e, wg); err != nil {
+					e.err = err
+				}
+				wg.Done()
+			}(e.ss[i])
 		}
 	}
 	wg.Wait()
-	for _, r := range e.rs {
-		mrs.Data = append(mrs.Data, r.Rows...)
-	}
-	return nil
+	return e.err
 }
 
 func (s *Scope) Run(e engine.Engine) error {
@@ -168,24 +144,62 @@ func (s *Scope) Run(e engine.Engine) error {
 	return nil
 }
 
-func (c *compile) compile(o op.OP) ([]*Scope, error) {
+func (s *Scope) MergeRun(e engine.Engine, wg sync.WaitGroup) error {
+	var err error
+
+	for i := range s.Ss {
+		switch s.Ss[i].Magic {
+		case Normal:
+			wg.Add(1)
+			go func(s *Scope) {
+				if rerr := s.Run(e); rerr != nil {
+					err = rerr
+				}
+				wg.Done()
+			}(s.Ss[i])
+		case Merge:
+			wg.Add(1)
+			go func(s *Scope) {
+				if rerr := s.MergeRun(e, wg); rerr != nil {
+					err = rerr
+				}
+				wg.Done()
+			}(s.Ss[i])
+		}
+	}
+	p := pipeline.NewMerge(s.Ins)
+	if _, err = p.RunMerge(s.Proc); err != nil {
+		return err
+	}
+	return err
+}
+
+func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 	switch n := o.(type) {
 	case *top.Top:
+		return c.compileTop(n, mp)
 	case *dedup.Dedup:
+		return c.compileDedup(n, mp)
 	case *group.Group:
+		return c.compileGroup(n, mp)
 	case *limit.Limit:
+		return c.compileLimit(n, mp)
 	case *order.Order:
+		return c.compileOrder(n, mp)
 	case *offset.Offset:
+		return c.compileOffset(n, mp)
 	case *product.Product:
+		return nil, fmt.Errorf("'%s' unsupprt now", o)
 	case *innerJoin.Join:
 	case *naturalJoin.Join:
 	case *relation.Relation:
-		return c.compileRelation(n)
+		return c.compileRelation(n, mp)
 	case *restrict.Restrict:
-		return c.compileRestrict(n)
+		return c.compileRestrict(n, mp)
 	case *summarize.Summarize:
+		return c.compileSummarize(n, mp)
 	case *projection.Projection:
-		return c.compileProjection(n)
+		return c.compileProjection(n, mp)
 	}
-	return nil, nil
+	return nil, fmt.Errorf("'%s' unsupprt now", o)
 }

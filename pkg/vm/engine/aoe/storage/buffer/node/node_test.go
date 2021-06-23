@@ -1,10 +1,8 @@
 package node
 
 import (
-	// e "matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/stretchr/testify/assert"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"testing"
 	// "os"
@@ -51,39 +49,41 @@ func TestNode(t *testing.T) {
 	assert.NotNil(t, pool)
 	assert.Equal(t, capacity, pool.GetCapacity())
 	assert.Equal(t, uint64(0), pool.GetUsage())
-	node1 := pool.MakeNode(node_capacity)
+	node1 := pool.Alloc(node_capacity, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, node1)
-	assert.Equal(t, node_capacity, node1.Capacity)
+	assert.Equal(t, node_capacity, node1.GetMemoryCapacity())
 	assert.Equal(t, capacity, pool.GetCapacity())
 	assert.Equal(t, node_capacity, pool.GetUsage())
 
-	id := common.NewTransientID()
-	id1 := id.Next()
-	node_buff1 := NewNodeBuffer(*id1, node1)
+	id := uint64(0)
+	id1 := id
+	id++
+	node_buff1 := NewNodeBuffer(id1, node1)
 	assert.Equal(t, node_buff1.GetCapacity(), node_capacity)
-	assert.Equal(t, *id1, node_buff1.GetID())
+	assert.Equal(t, id1, node_buff1.GetID())
 
-	node2 := pool.MakeNode(node_capacity)
+	node2 := pool.Alloc(node_capacity, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, node2)
-	id2 := id.Next()
-	node_buff2 := NewNodeBuffer(*id2, node2)
+	id2 := id
+	id++
+	node_buff2 := NewNodeBuffer(id2, node2)
 	assert.Equal(t, node_buff2.GetCapacity(), node_capacity)
-	assert.Equal(t, *id2, node_buff2.GetID())
+	assert.Equal(t, id2, node_buff2.GetID())
 	assert.Equal(t, 2*node_capacity, pool.GetUsage())
 
 	node_buff1.Close()
-	assert.Equal(t, node_buff1.GetCapacity(), uint64(0))
+	assert.Equal(t, node_buff1.GetNodeSize(), uint64(0))
 	assert.Equal(t, node_capacity, pool.GetUsage())
 
 	node_buff2.Close()
-	assert.Equal(t, node_buff2.GetCapacity(), uint64(0))
+	assert.Equal(t, node_buff2.GetNodeSize(), uint64(0))
 	assert.Equal(t, uint64(0), pool.GetUsage())
 }
 
 func TestHandle(t *testing.T) {
-	id := common.NewTransientID()
+	id := uint64(0)
 	ctx := NodeHandleCtx{
-		ID: *id,
+		ID: id,
 	}
 
 	handle := NewNodeHandle(&ctx)

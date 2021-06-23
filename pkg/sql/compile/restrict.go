@@ -6,12 +6,17 @@ import (
 	"matrixone/pkg/vm"
 )
 
-func (c *compile) compileRestrict(o *restrict.Restrict) ([]*Scope, error) {
-	ss, err := c.compile(o.Prev)
+func (c *compile) compileRestrict(o *restrict.Restrict, mp map[string]uint64) ([]*Scope, error) {
+	{
+		attrs := o.E.Attributes()
+		for _, attr := range attrs {
+			mp[attr]++
+		}
+	}
+	ss, err := c.compile(o.Prev, mp)
 	if err != nil {
 		return nil, err
 	}
-	attrs := o.E.Attributes()
 	for _, s := range ss {
 		s.Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Restrict,
@@ -19,7 +24,6 @@ func (c *compile) compileRestrict(o *restrict.Restrict) ([]*Scope, error) {
 				E: o.E,
 			},
 		})
-		IncRef(s, attrs)
 	}
 	return ss, nil
 }

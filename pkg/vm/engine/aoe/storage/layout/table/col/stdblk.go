@@ -3,7 +3,7 @@ package col
 import (
 	"fmt"
 	log "github.com/sirupsen/logrus"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync/atomic"
 )
@@ -14,22 +14,36 @@ type StdColumnBlock struct {
 }
 
 func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
-	var blkType BlockType
-	var segFile ldio.ISegmentFile
+	var (
+		blkType base.BlockType
+		segFile base.ISegmentFile
+		err     error
+	)
 	fsMgr := seg.GetFsManager()
+	indexHolder := seg.GetIndexHolder().GetBlock(meta.ID)
+	newIndexHolder := false
+
 	if meta.DataState < md.FULL {
-		blkType = TRANSIENT_BLK
-	} else if seg.GetSegmentType() == UNSORTED_SEG {
-		blkType = PERSISTENT_BLK
+		blkType = base.TRANSIENT_BLK
+		if indexHolder == nil {
+			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
+			newIndexHolder = true
+		}
+	} else if seg.GetSegmentType() == base.UNSORTED_SEG {
+		blkType = base.PERSISTENT_BLK
 		segFile = fsMgr.GetUnsortedFile(seg.GetID())
 		if segFile == nil {
-			_, err := fsMgr.RegisterUnsortedFiles(seg.GetID())
+			segFile, err = fsMgr.RegisterUnsortedFiles(seg.GetID())
 			if err != nil {
 				panic(err)
 			}
 		}
+		if indexHolder == nil {
+			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
+			newIndexHolder = true
+		}
 	} else {
-		blkType = PERSISTENT_SORTED_BLK
+		blkType = base.PERSISTENT_SORTED_BLK
 		segFile = fsMgr.GetUnsortedFile(seg.GetID())
 		if segFile != nil {
 			fsMgr.UpgradeFile(seg.GetID())
@@ -39,58 +53,85 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 				panic(err)
 			}
 		}
+		if indexHolder == nil {
+			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
+			newIndexHolder = true
+		}
 	}
 	blk := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{
-			ID:     *meta.AsCommonID(),
-			Type:   blkType,
-			ColIdx: seg.GetColIdx(),
-			Meta:   meta,
+			ID:          *meta.AsCommonID(),
+			Type:        blkType,
+			ColIdx:      seg.GetColIdx(),
+			Meta:        meta,
+			IndexHolder: indexHolder,
 		},
 	}
-	seg.Append(blk.Ref())
+
+	if newIndexHolder && segFile != nil {
+		indexHolder.Init(segFile)
+	}
 	return blk.Ref()
 }
 
 func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Block) IColumnBlock {
-	if blk.Type == PERSISTENT_SORTED_BLK {
+	if blk.Type == base.PERSISTENT_SORTED_BLK {
 		panic("logic error")
 	}
 	if newMeta.DataState != md.FULL {
 		panic(fmt.Sprintf("logic error: blk %s DataState=%d", newMeta.AsCommonID().BlockString(), newMeta.DataState))
 	}
 	fsMgr := seg.GetFsManager()
-	var newType BlockType
+	indexHolder := seg.GetIndexHolder().GetBlock(newMeta.ID)
+	newIndexHolder := false
+	var err error
+	var newType base.BlockType
+	var segFile base.ISegmentFile
 	switch blk.Type {
-	case TRANSIENT_BLK:
-		newType = PERSISTENT_BLK
-		segFile := fsMgr.GetUnsortedFile(seg.GetID())
+	case base.TRANSIENT_BLK:
+		newType = base.PERSISTENT_BLK
+		segFile = fsMgr.GetUnsortedFile(seg.GetID())
 		if segFile == nil {
-			_, err := fsMgr.RegisterUnsortedFiles(seg.GetID())
+			segFile, err = fsMgr.RegisterUnsortedFiles(seg.GetID())
 			if err != nil {
 				panic(err)
 			}
 		}
-	case PERSISTENT_BLK:
-		newType = PERSISTENT_SORTED_BLK
-		segFile := fsMgr.GetUnsortedFile(seg.GetID())
+		if indexHolder == nil {
+			indexHolder = seg.GetIndexHolder().RegisterBlock(newMeta.AsCommonID().AsBlockID(), newType, nil)
+			newIndexHolder = true
+		} else if indexHolder.Type < newType {
+			indexHolder = seg.GetIndexHolder().UpgradeBlock(newMeta.ID, newType)
+			newIndexHolder = true
+		}
+	case base.PERSISTENT_BLK:
+		newType = base.PERSISTENT_SORTED_BLK
+		segFile = fsMgr.GetUnsortedFile(seg.GetID())
 		if segFile != nil {
-			fsMgr.UpgradeFile(seg.GetID())
+			segFile = fsMgr.UpgradeFile(seg.GetID())
 		} else {
 			segFile = fsMgr.GetSortedFile(seg.GetID())
 		}
 		if segFile == nil {
 			panic("logic error")
 		}
+		if indexHolder == nil {
+			indexHolder = seg.GetIndexHolder().RegisterBlock(newMeta.AsCommonID().AsBlockID(), newType, nil)
+			newIndexHolder = true
+		} else if indexHolder.Type < newType {
+			indexHolder = seg.GetIndexHolder().UpgradeBlock(newMeta.ID, newType)
+			newIndexHolder = true
+		}
 	default:
 		panic("logic error")
 	}
 	cloned := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{
-			ID:     blk.ID,
-			Type:   newType,
-			ColIdx: seg.GetColIdx(),
-			Meta:   newMeta,
+			ID:          blk.ID,
+			Type:        newType,
+			ColIdx:      seg.GetColIdx(),
+			Meta:        newMeta,
+			IndexHolder: indexHolder,
 		},
 	}
 	cloned.Ref()
@@ -100,6 +141,9 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 	if part == nil {
 		log.Errorf("logic error")
 		panic("logic error")
+	}
+	if newIndexHolder {
+		indexHolder.Init(segFile)
 	}
 	cloned.Part = part
 	seg.UnRef()
@@ -139,6 +183,10 @@ func (blk *StdColumnBlock) Append(part IColumnPart) {
 
 func (blk *StdColumnBlock) Close() error {
 	// log.Infof("Close StdBlk %s Refs=%d, %p", blk.ID.BlockString(), blk.Refs, blk)
+	if blk.IndexHolder != nil {
+		blk.IndexHolder.Unref()
+		blk.IndexHolder = nil
+	}
 	if blk.Next != nil {
 		blk.Next.UnRef()
 		blk.Next = nil
@@ -161,7 +209,6 @@ func (blk *StdColumnBlock) InitScanCursor(cursor *ScanCursor) error {
 }
 
 func (blk *StdColumnBlock) String() string {
-	partID := blk.Part.GetNodeID()
-	s := fmt.Sprintf("<Std[%s](T=%s)[Part=%s](Refs=%d)(Size=%d)>", blk.Meta.String(), blk.Type.String(), partID.String(), blk.GetRefs(), blk.Meta.Count)
+	s := fmt.Sprintf("<Std[%s](T=%s)(Refs=%d)(Size=%d)>", blk.Meta.String(), blk.Type.String(), blk.GetRefs(), blk.Meta.Count)
 	return s
 }

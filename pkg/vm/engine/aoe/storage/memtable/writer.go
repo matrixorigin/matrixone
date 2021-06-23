@@ -3,18 +3,17 @@ package memtable
 import (
 	"context"
 	"encoding/binary"
+	log "github.com/sirupsen/logrus"
+	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"os"
 	"path/filepath"
 	"time"
-
-	log "github.com/sirupsen/logrus"
-	// "matrixone/pkg/vm/engine/aoe/storage/common"
-	// "io"
 )
 
 const (
@@ -66,6 +65,27 @@ func (sw *MemtableWriter) Flush() (err error) {
 
 	mt := sw.Memtable.(*MemTable)
 
+	zmIndexes := []index.Index{}
+
+	// TODO: Here mock zonemap index for test
+	for idx, ctype := range mt.Types {
+		if ctype.Oid == types.T_int32 {
+			minv := int32(1) + int32(idx)*100
+			maxv := int32(99) + int32(idx)*100
+			zm := index.NewZoneMap(ctype, minv, maxv, int16(idx))
+			zmIndexes = append(zmIndexes, zm)
+		}
+	}
+
+	ibuf, err := index.DefaultRWHelper.WriteIndexes(zmIndexes)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(ibuf)
+	if err != nil {
+		return err
+	}
+
 	buf := make([]byte, 2+len(mt.Types)*8*2)
 	binary.BigEndian.PutUint16(buf, uint16(len(mt.Columns)))
 	for idx, t := range mt.Types {
@@ -94,7 +114,7 @@ func (sw *MemtableWriter) Flush() (err error) {
 		if err != nil {
 			return err
 		}
-		_, err = w.Write(cursor.Current.GetBuf())
+		_, err = cursor.Node.DataNode.WriteTo(w)
 		if err != nil {
 			return err
 		}

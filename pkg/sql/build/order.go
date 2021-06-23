@@ -26,54 +26,37 @@ func (b *build) buildOrderBy(o op.OP, ns tree.OrderBy) (op.OP, error) {
 }
 
 func (b *build) stripOrderBy(o op.OP, ns tree.OrderBy) (op.OP, []order.Attribute, error) {
-	var es []extend.Extend
-	var attrs []*extend.Attribute
+	var es []*projection.Extend
 
+	mp := make(map[string]uint8)
 	rs := make([]order.Attribute, 0, len(ns))
 	for _, n := range ns {
 		e, err := b.buildExtend(o, n.Expr)
 		if err != nil {
 			return nil, nil, err
 		}
-		if attr, ok := e.(*extend.Attribute); !ok {
-			es = append(es, e)
-		} else {
-			attrs = append(attrs, attr)
+		if _, ok := mp[e.String()]; !ok {
+			mp[e.String()] = 0
+			es = append(es, &projection.Extend{E: e})
 		}
+		rs = append(rs, order.Attribute{
+			Name: e.String(),
+			Type: e.ReturnType(),
+			Dirt: getDirection(n.Direction),
+		})
 	}
-	if len(es) == 0 {
-		for i, attr := range attrs {
-			rs = append(rs, order.Attribute{
-				Name: attr.Name,
-				Type: attr.Type,
-				Dirt: getDirection(ns[i].Direction),
+	attrs := o.Attribute()
+	for attr, typ := range attrs {
+		if _, ok := mp[attr]; !ok {
+			es = append(es, &projection.Extend{
+				E: &extend.Attribute{
+					Name: attr,
+					Type: typ.Oid,
+				},
 			})
 		}
-		return o, rs, nil
 	}
-	pes := make([]*projection.Extend, 0, len(es)+len(attrs))
-	{
-		i := 0
-		for _, e := range es {
-			pes = append(pes, &projection.Extend{E: e})
-			rs = append(rs, order.Attribute{
-				Name: e.String(),
-				Type: e.ReturnType(),
-				Dirt: getDirection(ns[i].Direction),
-			})
-			i++
-		}
-		for _, attr := range attrs {
-			pes = append(pes, &projection.Extend{E: attr})
-			rs = append(rs, order.Attribute{
-				Name: attr.Name,
-				Type: attr.Type,
-				Dirt: getDirection(ns[i].Direction),
-			})
-			i++
-		}
-	}
-	o, err := projection.New(o, pes)
+	o, err := projection.New(o, es)
 	if err != nil {
 		return nil, nil, err
 	}
