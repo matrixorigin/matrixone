@@ -4,7 +4,6 @@ import (
 	"matrixone/pkg/sql/colexec/extend"
 	vprojection "matrixone/pkg/sql/colexec/projection"
 	"matrixone/pkg/sql/op/projection"
-	"matrixone/pkg/sql/op/relation"
 	"matrixone/pkg/vm"
 )
 
@@ -13,7 +12,7 @@ func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint
 	{
 		for i, e := range o.Es {
 			if name, ok := e.E.(*extend.Attribute); ok {
-				if _, ok := o.Prev.(*relation.Relation); ok {
+				if IsSource(o.Prev) {
 					mp[name.Name]++
 				}
 			} else {

@@ -42,7 +42,7 @@ func TestVector(t *testing.T) {
 		if err := w.Copy(v, 1, 9, proc); err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("w[0] = v[6]: %v\n", w)
+		fmt.Printf("w[1] = v[9]: %v\n", w)
 	}
 	w.Free(proc)
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())

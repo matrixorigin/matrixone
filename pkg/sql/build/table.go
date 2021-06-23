@@ -8,12 +8,12 @@ import (
 
 func (b *build) buildTable(stmt *tree.TableName) (op.OP, error) {
 	if len(stmt.SchemaName) == 0 {
-		return b.getTable(b.db, string(stmt.ObjectName))
+		return b.getTable(true, b.db, string(stmt.ObjectName))
 	}
-	return b.getTable(string(stmt.SchemaName), string(stmt.ObjectName))
+	return b.getTable(false, string(stmt.SchemaName), string(stmt.ObjectName))
 }
 
-func (b *build) getTable(schema string, name string) (op.OP, error) {
+func (b *build) getTable(s bool, schema string, name string) (op.OP, error) {
 	db, err := b.e.Database(schema)
 	if err != nil {
 		return nil, err
@@ -22,5 +22,5 @@ func (b *build) getTable(schema string, name string) (op.OP, error) {
 	if err != nil {
 		return nil, err
 	}
-	return relation.New(name, schema, r), nil
+	return relation.New(s, name, schema, r), nil
 }

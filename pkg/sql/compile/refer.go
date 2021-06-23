@@ -1,6 +1,11 @@
 package compile
 
-import "matrixone/pkg/sql/colexec/extend"
+import (
+	"matrixone/pkg/sql/colexec/extend"
+	"matrixone/pkg/sql/op"
+	"matrixone/pkg/sql/op/innerJoin"
+	"matrixone/pkg/sql/op/relation"
+)
 
 func IncRef(e extend.Extend, mp map[string]uint64) {
 	switch v := e.(type) {
@@ -12,4 +17,14 @@ func IncRef(e extend.Extend, mp map[string]uint64) {
 		IncRef(v.Left, mp)
 		IncRef(v.Right, mp)
 	}
+}
+
+func IsSource(o op.OP) bool {
+	switch o.(type) {
+	case *relation.Relation:
+		return true
+	case *innerJoin.Join:
+		return true
+	}
+	return false
 }

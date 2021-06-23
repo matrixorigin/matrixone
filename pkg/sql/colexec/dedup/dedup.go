@@ -32,36 +32,41 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		matchs: make([]int64, UnitLimit),
 		hashs:  make([]uint64, UnitLimit),
 		sels:   make([][]int64, UnitLimit),
-		slots:  fastmap.Pool.Get().(*fastmap.Map),
 	}
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
+	Prepare(proc, arg)
 	n := arg.(*Argument)
 	ctr := &n.Ctr
+	ctr.slots = fastmap.Pool.Get().(*fastmap.Map)
 	if proc.Reg.Ax == nil {
-		ctr.clean(nil, proc)
+		ctr.clean(proc)
 		return false, nil
 	}
 	bat := proc.Reg.Ax.(*batch.Batch)
 	if bat == nil || bat.Attrs == nil {
+		ctr.clean(proc)
 		return false, nil
 	}
 	ctr.groups = make(map[uint64][]*hash.DedupGroup)
 	vecs := make([]*vector.Vector, len(n.Attrs))
 	if err := bat.Prefetch(n.Attrs, vecs, proc); err != nil {
-		ctr.clean(bat, proc)
+		bat.Clean(proc)
+		ctr.clean(proc)
 		return false, err
 	}
 	if len(bat.Sels) == 0 {
 		if err := ctr.batchDedup(vecs, proc); err != nil {
-			ctr.clean(bat, proc)
+			bat.Clean(proc)
+			ctr.clean(proc)
 			return false, err
 		}
 	} else {
 		if err := ctr.batchDedupSels(bat.Sels, vecs, proc); err != nil {
-			ctr.clean(bat, proc)
+			bat.Clean(proc)
+			ctr.clean(proc)
 			return false, err
 		}
 		proc.Free(bat.SelsData)
@@ -72,6 +77,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	ctr.dedupState.sels = nil
 	ctr.dedupState.data = nil
 	proc.Reg.Ax = bat
+	ctr.clean(proc)
 	return false, nil
 }
 
@@ -201,12 +207,9 @@ func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vecto
 	}
 }
 
-func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
-	if bat != nil {
-		bat.Clean(proc)
-	}
+func (ctr *Container) clean(proc *process.Process) {
+	fastmap.Pool.Put(ctr.slots)
 	if ctr.dedupState.data != nil {
 		proc.Free(ctr.dedupState.data)
 	}
-	fastmap.Pool.Put(ctr.slots)
 }
