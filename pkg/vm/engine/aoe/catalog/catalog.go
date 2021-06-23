@@ -150,7 +150,7 @@ func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
 	return &db, nil
 }
 
-func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engine.TableDef, pdef *engine.PartitionBy) (uint64, error) {
+func (c *Catalog) CreateTable(dbName string, tableName string, typ string, comment string, tableDefs []engine.TableDef, pdef *engine.PartitionBy, createStatement []byte) (uint64, error) {
 	dbId, err := c.checkDBExists(dbName)
 	if err != nil {
 		return 0, err
@@ -164,7 +164,6 @@ func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engin
 		v = &sync.RWMutex{}
 		c.gMutex.Set(string(c.tableIDKey(dbId, tableName)), v)
 	}
-
 	lock := v.(*sync.RWMutex)
 	lock.RLock()
 	defer lock.RUnlock()
@@ -176,37 +175,16 @@ func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engin
 	if err != nil {
 		return 0, err
 	}
-	tInfo := aoe.TableInfo{
-		Id:       tid,
-		Name:     tableName,
-		SchemaId: dbId,
-	}
-	id := uint64(0)
-	for _, def := range tableDefs {
-		switch v := def.(type) {
-		case *engine.AttributeDef:
-			col := aoe.ColumnInfo{
-				SchemaId: dbId,
-				TableID:  tid,
-				Id:       id,
-				Name:     v.Attr.Name,
-				Type:     v.Attr.Type,
-				Alg:      v.Attr.Alg,
-			}
-			tInfo.Columns = append(tInfo.Columns, col)
-		case *engine.IndexTableDef:
-			// TODO: how to handle unsupported param
-			continue
-		}
+	tInfo, err := aoe.Transfer(dbId, tid, tableName, typ, comment, tableDefs, pdef)
+	if err != nil {
+		return 0, ErrTableCreateFailed
 	}
 	tInfo.State = aoe.StateNone
 
-	if pdef != nil {
-		// TODO: call interface provided by mochen to replace json.Marshal
-		tInfo.Partition, _ = json.Marshal(pdef)
+	meta, err := aoe.EncodeTable(tInfo)
+	if err != nil {
+		return 0, ErrTableCreateFailed
 	}
-
-	meta, _ := json.Marshal(tInfo)
 
 	//save metadata to kv
 	err = c.store.Set(c.tableKey(dbId, tid), meta)
@@ -258,8 +236,7 @@ func (c *Catalog) GetTables(dbName string) ([]aoe.TableInfo, error) {
 		}
 		var tables []aoe.TableInfo
 		for i := 1; i < len(values); i = i + 2 {
-			t := aoe.TableInfo{}
-			_ = json.Unmarshal(values[i], &t)
+			t, _ := aoe.DecodeTable(values[i])
 			if t.State != aoe.StatePublic {
 				continue
 			}
@@ -273,7 +250,6 @@ func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, err
 	if dbId, err := c.checkDBExists(dbName); err != nil {
 		return nil, err
 	} else {
-		var t aoe.TableInfo
 		tid, err := c.checkTableExists(dbId, tableName)
 		if err != nil {
 			return nil, err
@@ -289,7 +265,7 @@ func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, err
 		if err != nil || value == nil {
 			return nil, ErrTableNotExists
 		}
-		_ = json.Unmarshal(value, &t)
+		t, _ := aoe.DecodeTable(value)
 		if t.State != aoe.StatePublic {
 			return nil, err
 		}
@@ -297,8 +273,8 @@ func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, err
 	}
 }
 
-func (c *Catalog) DispatchQueries(dbName string, tableName string) (map[uint64]map[uint16][]aoe.SegmentInfo, error) {
-	resp := make(map[uint64]map[uint16][]aoe.SegmentInfo)
+func (c *Catalog) DispatchQueries(dbName string, tableName string) ([]aoe.RouteInfo, error) {
+	items := make(map[uint64]map[uint64][]aoe.SegmentInfo)
 	if dbId, err := c.checkDBExists(dbName); err != nil {
 		return nil, err
 	} else {
@@ -319,13 +295,21 @@ func (c *Catalog) DispatchQueries(dbName string, tableName string) (map[uint64]m
 		}
 		for i := 0; i < len(values); i = i + 2 {
 			keys := bytes.Split(values[i], []byte("/"))
-			pId := format.MustBytesToUint16(keys[len(keys)-1])
+			pId := format.MustBytesToUint64(keys[len(keys)-1])
 			gId := format.MustBytesToUint64(keys[len(keys)-2])
 			value := values[i+1]
 			seg := aoe.SegmentInfo{}
 			_ = json.Unmarshal(value, &seg)
-			resp[gId][pId] = append(resp[gId][pId], seg)
+			items[gId][pId] = append(items[gId][pId], seg)
 		}
+	}
+	var resp []aoe.RouteInfo
+	for gId, p := range items {
+		resp = append(resp, aoe.RouteInfo{
+			Node:     []byte(c.store.RaftStore().GetRouter().LeaderAddress(gId)),
+			GroupId:  gId,
+			Segments: p,
+		})
 	}
 	return resp, nil
 }
@@ -380,12 +364,12 @@ func (c *Catalog) checkTableExists(dbId uint64, tableName string) (uint64, error
 		if v, err := c.store.Get(c.tableKey(dbId, id)); err != nil || value == nil {
 			return 0, ErrTableNotExists
 		} else {
-			table := aoe.TableInfo{}
-			if err = json.Unmarshal(v, &table); err != nil {
+			if table, err := aoe.DecodeTable(v); err != nil {
 				return 0, ErrTableNotExists
-			}
-			if table.State == aoe.StateDeleteOnly {
-				return 0, ErrTableNotExists
+			}else {
+				if table.State == aoe.StateDeleteOnly {
+					return 0, ErrTableNotExists
+				}
 			}
 		}
 		return id, nil
@@ -410,33 +394,33 @@ func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 
 //where to generate id
 func (c *Catalog) dbIDKey(dbName string) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%s", cPrefix, cDBIDPrefix, dbName))
+	return []byte(fmt.Sprintf("%s/%d/%s/%s", cPrefix, DefaultCatalogId, cDBIDPrefix, dbName))
 }
 
 func (c *Catalog) dbKey(id uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d", cPrefix, cDBPrefix, id))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d", cPrefix, DefaultCatalogId, cDBPrefix, id))
 }
 
 func (c *Catalog) dbPrefix() []byte {
-	return []byte(fmt.Sprintf("%s/%s/", cPrefix, cDBPrefix))
+	return []byte(fmt.Sprintf("%s/%d/%s/", cPrefix, DefaultCatalogId, cDBPrefix))
 }
 
 func (c *Catalog) tableIDKey(dbId uint64, tableName string) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/%s", cPrefix, cTableIDPrefix, dbId, tableName))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/%s", cPrefix, DefaultCatalogId, cTableIDPrefix, dbId, tableName))
 }
 
 func (c *Catalog) tableKey(dbId uint64, tId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/%d", cPrefix, cTablePrefix, dbId, tId))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d", cPrefix, DefaultCatalogId, cTablePrefix, dbId, tId))
 }
 
 func (c *Catalog) tablePrefix(dbId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/", cPrefix, cTablePrefix, dbId))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/", cPrefix, DefaultCatalogId, cTablePrefix, dbId))
 }
 
-func (c *Catalog) routeKey(dbId uint64, tId uint64, gId uint64, pId uint16) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/%d/%d/%d", cPrefix, cRoutePrefix, dbId, tId, gId, pId))
+func (c *Catalog) routeKey(dbId uint64, tId uint64, gId uint64, pId uint64) []byte {
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/%d/%d", cPrefix, DefaultCatalogId, cRoutePrefix, dbId, tId, gId, pId))
 }
 
 func (c *Catalog) routePrefix(dbId uint64, tId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%s/%d/%d/", cPrefix, cRoutePrefix, dbId, tId))
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/", cPrefix, DefaultCatalogId, cRoutePrefix, dbId, tId))
 }

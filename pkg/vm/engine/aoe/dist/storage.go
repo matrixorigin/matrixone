@@ -15,8 +15,6 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
-	"github.com/sirupsen/logrus"
-	"math/rand"
 	"matrixone/pkg/vm/engine/aoe"
 	"sync"
 	"time"
@@ -137,11 +135,6 @@ func NewStorageWithOptions(
 		return []bhmetapb.Shard{
 			{
 				Group: uint64(aoe.KVGroup),
-				End:   []byte("/meta/Table/1/5"),
-			},
-			{
-				Group: uint64(aoe.KVGroup),
-				Start: []byte("/meta/Table/1/5"),
 			},
 			{
 				Group: uint64(aoe.AOEGroup),
@@ -161,14 +154,12 @@ func NewStorageWithOptions(
 			keys := bytes.Split(res.Data()[8:8+header], []byte("#"))
 			tKey := keys[0]
 			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), res.ID()))
-			logrus.Infof("[lalala]%s, %s", string(tKey), string(rKey))
 			// TODO: Call local interface to create new tablet
 			// TODO: Re-design group store and set value to <partition, segment_ids>
 			_ = h.Set(rKey, []byte(res.Unique()))
-			t := aoe.TableInfo{}
-			_ = json.Unmarshal(res.Data()[8+header:], &t)
+			t, _ := aoe.DecodeTable(res.Data()[8+header:])
 			t.State = aoe.StatePublic
-			meta, _ := json.Marshal(t)
+			meta, _ := aoe.EncodeTable(t)
 			_ = h.Set(tKey, meta)
 		}
 	}
@@ -189,23 +180,10 @@ func NewStorageWithOptions(
 			return proxy.Dispatch(req)
 		}
 		args := cmd.(Args)
-		if args.ShardId == 0 {
+		if args.Node == nil {
 			return proxy.Dispatch(req)
 		}
-		var shardIds []uint64
-		var toAddresses []string
-		proxy.Router().Every(req.Group, true, func(shard *bhmetapb.Shard, address string) {
-			if shard.ID == args.ShardId {
-				shardIds = append(shardIds, shard.ID)
-				toAddresses = append(toAddresses, address)
-			}
-		})
-		if shardIds == nil {
-			return ErrShardNotExisted
-		}
-		i := rand.Intn(len(shardIds))
-		req.ToShard = shardIds[i]
-		return proxy.DispatchTo(req, shardIds[i], toAddresses[i])
+		return proxy.DispatchTo(req, args.ShardId, string(args.Node))
 	})
 	h.init()
 	if err := h.app.Start(); err != nil {

@@ -14,5 +14,6 @@ var (
 	// ErrTableCreateExists is the error for table exists.
 	ErrTableCreateExists = errors.New("table already exists")
 	// ErrTableNotExists is the error for table not exists.
-	ErrTableNotExists = errors.New("table not exist")
+	ErrTableNotExists    = errors.New("table not exist")
+	ErrTableCreateFailed = errors.New("create table failed")
 )

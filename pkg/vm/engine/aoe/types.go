@@ -46,8 +46,9 @@ type TableInfo struct {
 	// Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
 	Type string `json:"type"`
 	// Column is listed in order in which they appear in schema
+	Indexs    []IndexInfo  `json:"indexs"`
 	Columns   []ColumnInfo `json:"columns"`
-	Comment   string       `json:"comment"`
+	Comment   []byte       `json:"comment"`
 	State     SchemaState  `json:"state"`
 	Partition []byte       `json:"partition"`
 }
@@ -62,21 +63,25 @@ type ColumnInfo struct {
 	Alg      int        `json:"alg"`
 }
 
-// PartitionInfo stores the information of a partition.
-type PartitionInfo struct {
-	SchemaId   uint64   `json:"schema_id"`
-	TableID    uint64   `json:"table_id"`
-	Columns    []string `json:"columns"`
-	Ids        []uint64 `json:"ids"`
-	Names      []string `json:"names"`
-	Definition []byte   `json:"definition"`
+type IndexInfo struct {
+	SchemaId uint64   `json:"schema_id"`
+	TableId  uint64   `json:"table_id"`
+	Columns  []uint64 `json:"columns"`
+	Id       uint64   `json:"id"`
+	Names    []string `json:"column_names"`
+	Type     uint64   `json:"type"`
 }
 
-// SegmentInfo stores the information of a segment.
 type SegmentInfo struct {
 	TableId     uint64 `json:"table_id"`
 	Id          uint64 `json:"id"`
 	GroupId     uint64 `json:"group_id"`
 	TabletId    string `json:"tablet_id"`
 	PartitionId string `json:"partition_id"`
+}
+
+type RouteInfo struct {
+	GroupId  uint64 `json:"group_id"`
+	Node     []byte `json:"node"`
+	Segments map[uint64][]SegmentInfo
 }
