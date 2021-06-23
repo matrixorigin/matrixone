@@ -15,7 +15,6 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
-	"math/rand"
 	"matrixone/pkg/vm/engine/aoe"
 	"sync"
 	"time"
@@ -187,23 +186,10 @@ func NewStorageWithOptions(
 			return proxy.Dispatch(req)
 		}
 		args := cmd.(Args)
-		if args.ShardId == 0 {
+		if args.Node == nil {
 			return proxy.Dispatch(req)
 		}
-		var shardIds []uint64
-		var toAddresses []string
-		proxy.Router().Every(req.Group, true, func(shard *bhmetapb.Shard, address string) {
-			if shard.ID == args.ShardId {
-				shardIds = append(shardIds, shard.ID)
-				toAddresses = append(toAddresses, address)
-			}
-		})
-		if shardIds == nil {
-			return ErrShardNotExisted
-		}
-		i := rand.Intn(len(shardIds))
-		req.ToShard = shardIds[i]
-		return proxy.DispatchTo(req, shardIds[i], toAddresses[i])
+		return proxy.DispatchTo(req, args.ShardId, string(args.Node))
 	})
 	h.init()
 	if err := h.app.Start(); err != nil {

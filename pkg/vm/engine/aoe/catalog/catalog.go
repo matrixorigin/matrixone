@@ -164,7 +164,6 @@ func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engin
 		v = &sync.RWMutex{}
 		c.gMutex.Set(string(c.tableIDKey(dbId, tableName)), v)
 	}
-
 	lock := v.(*sync.RWMutex)
 	lock.RLock()
 	defer lock.RUnlock()
@@ -196,7 +195,6 @@ func (c *Catalog) CreateTable(dbName string, tableName string, tableDefs []engin
 			}
 			tInfo.Columns = append(tInfo.Columns, col)
 		case *engine.IndexTableDef:
-			// TODO: how to handle unsupported param
 			continue
 		}
 	}
@@ -298,8 +296,8 @@ func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, err
 	}
 }
 
-func (c *Catalog) DispatchQueries(dbName string, tableName string) (map[uint64]map[uint64][]aoe.SegmentInfo, error) {
-	resp := make(map[uint64]map[uint64][]aoe.SegmentInfo)
+func (c *Catalog) DispatchQueries(dbName string, tableName string) ([]aoe.RouteInfo, error) {
+	items := make(map[uint64]map[uint64][]aoe.SegmentInfo)
 	if dbId, err := c.checkDBExists(dbName); err != nil {
 		return nil, err
 	} else {
@@ -325,8 +323,16 @@ func (c *Catalog) DispatchQueries(dbName string, tableName string) (map[uint64]m
 			value := values[i+1]
 			seg := aoe.SegmentInfo{}
 			_ = json.Unmarshal(value, &seg)
-			resp[gId][pId] = append(resp[gId][pId], seg)
+			items[gId][pId] = append(items[gId][pId], seg)
 		}
+	}
+	var resp []aoe.RouteInfo
+	for gId, p := range items {
+		resp = append(resp, aoe.RouteInfo{
+			Node:     []byte(c.store.RaftStore().GetRouter().LeaderAddress(gId)),
+			GroupId:  gId,
+			Segments: p,
+		})
 	}
 	return resp, nil
 }

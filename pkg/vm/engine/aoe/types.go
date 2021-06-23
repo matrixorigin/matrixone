@@ -79,3 +79,9 @@ type SegmentInfo struct {
 	TabletId    string `json:"tablet_id"`
 	PartitionId string `json:"partition_id"`
 }
+
+type RouteInfo struct {
+	GroupId  uint64 `json:"group_id"`
+	Node     []byte `json:"node"`
+	Segments map[uint64][]SegmentInfo
+}
