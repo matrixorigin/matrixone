@@ -25,6 +25,8 @@ func EncodePartition(def *engine.PartitionBy, buf *bytes.Buffer) error {
 				return err
 			}
 		}
+	} else {
+		buf.Write(encoding.EncodeUint32(0))
 	}
 	if n := len(def.Range); n > 0 {
 		buf.Write(encoding.EncodeUint32(uint32(n)))
@@ -33,6 +35,8 @@ func EncodePartition(def *engine.PartitionBy, buf *bytes.Buffer) error {
 				return err
 			}
 		}
+	} else {
+		buf.Write(encoding.EncodeUint32(0))
 	}
 	return nil
 }
