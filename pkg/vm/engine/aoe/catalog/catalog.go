@@ -181,7 +181,7 @@ func (c *Catalog) CreateTable(dbName string, tableName string, typ string, comme
 	}
 	tInfo.State = aoe.StateNone
 
-	meta, err := json.Marshal(tInfo)
+	meta, err := aoe.EncodeTable(tInfo)
 	if err != nil {
 		return 0, ErrTableCreateFailed
 	}
@@ -236,8 +236,7 @@ func (c *Catalog) GetTables(dbName string) ([]aoe.TableInfo, error) {
 		}
 		var tables []aoe.TableInfo
 		for i := 1; i < len(values); i = i + 2 {
-			t := aoe.TableInfo{}
-			_ = json.Unmarshal(values[i], &t)
+			t, _ := aoe.DecodeTable(values[i])
 			if t.State != aoe.StatePublic {
 				continue
 			}
@@ -251,7 +250,6 @@ func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, err
 	if dbId, err := c.checkDBExists(dbName); err != nil {
 		return nil, err
 	} else {
-		var t aoe.TableInfo
 		tid, err := c.checkTableExists(dbId, tableName)
 		if err != nil {
 			return nil, err
@@ -267,7 +265,7 @@ func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, err
 		if err != nil || value == nil {
 			return nil, ErrTableNotExists
 		}
-		_ = json.Unmarshal(value, &t)
+		t, _ := aoe.DecodeTable(value)
 		if t.State != aoe.StatePublic {
 			return nil, err
 		}
@@ -366,12 +364,12 @@ func (c *Catalog) checkTableExists(dbId uint64, tableName string) (uint64, error
 		if v, err := c.store.Get(c.tableKey(dbId, id)); err != nil || value == nil {
 			return 0, ErrTableNotExists
 		} else {
-			table := aoe.TableInfo{}
-			if err = json.Unmarshal(v, &table); err != nil {
+			if table, err := aoe.DecodeTable(v); err != nil {
 				return 0, ErrTableNotExists
-			}
-			if table.State == aoe.StateDeleteOnly {
-				return 0, ErrTableNotExists
+			}else {
+				if table.State == aoe.StateDeleteOnly {
+					return 0, ErrTableNotExists
+				}
 			}
 		}
 		return id, nil

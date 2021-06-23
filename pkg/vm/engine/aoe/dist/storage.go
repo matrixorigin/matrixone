@@ -135,11 +135,6 @@ func NewStorageWithOptions(
 		return []bhmetapb.Shard{
 			{
 				Group: uint64(aoe.KVGroup),
-				End:   []byte("/meta/Table/1/5"),
-			},
-			{
-				Group: uint64(aoe.KVGroup),
-				Start: []byte("/meta/Table/1/5"),
 			},
 			{
 				Group: uint64(aoe.AOEGroup),

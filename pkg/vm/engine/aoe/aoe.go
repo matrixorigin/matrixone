@@ -33,7 +33,7 @@ func Transfer(sid, tid uint64, name, typ, comment string,
 		}
 	}
 	tbl.Indexs = IndexDefs(sid, tid, mp, defs)
-	{
+	if pdef != nil {
 		data, err := PartitionDef(pdef)
 		if err != nil {
 			return tbl, err
