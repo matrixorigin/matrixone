@@ -23,16 +23,7 @@ func TestParser(t *testing.T) {
 	p := parser.New()
 
 	sql := `
-SELECT u.a,(SELECT t.a FROM sa.t,u)
-		from u,(SELECT t.a,u.a FROM sa.t,u where t.a = u.a)
-		where (u.a,u.b,u.c) in (SELECT t.a,u.a,t.b * u.b tubb
-		FROM sa.t join u on t.c = u.c or t.d != u.d
-				  join v on u.a != v.a
-		where t.a = u.a and t.b > u.b
-		group by t.a,u.a,(t.b+u.b+v.b)
-		having t.a = 'jj' and v.c > 1000
-		order by t.a asc,u.a desc,v.d asc,tubb
-		limit 100,2000);
+create table t(a date,b datetime(2),c timestamp(3),d time(3),e year,f year(4))
 ;`
 
 	stmtNodes, _, err := p.Parse(sql, "", "")
@@ -63,6 +54,41 @@ SELECT u.a,(SELECT t.a FROM sa.t,u)
 			ss := transformCreateTableStmtToCreateTable(n)
 
 			fmt.Printf("ss %v\n",ss.IfNotExists)
+		case *ast.CreateDatabaseStmt:
+			ss := transformCreateDatabaseStmtToCreateDatabase(n)
+
+			fmt.Printf("ss %v\n",ss.IfNotExists)
+		case *ast.DropDatabaseStmt:
+			ss := transformDropDatabaseStmtToDropDatabase(n)
+
+			fmt.Printf("ss %v\n",ss.IfExists)
+		case *ast.DeleteStmt:
+			ss := transformDeleteStmtToDelete(n)
+
+			fmt.Printf("ss %v \n",ss.String())
+		case *ast.UpdateStmt:
+			ss := transformUpdateStmtToUpdate(n)
+
+			fmt.Printf("ss %v \n",ss.String())
+		case *ast.LoadDataStmt:
+			ss := transformLoadDataStmtToLoad(n)
+
+			fmt.Printf("ss %v \n",ss.String())
+		case *ast.BeginStmt:
+			ss := transformBeginStmtToBeginTransaction(n)
+
+			fmt.Printf("ss %v \n",ss.String())
+		case *ast.ShowStmt:
+			s := transformShowStmtToShow(n)
+			ss := s.(*ShowColumns)
+
+			fmt.Printf("ss %v \n",ss.String())
+		case *ast.ExplainStmt:
+			s := transformExplainStmtToExplain(n)
+
+			ss := s.(*ExplainStmt)
+
+			fmt.Printf("ss %v \n",ss.String())
 		}
 
 	}
@@ -3715,6 +3741,7 @@ func gen_insert_t1()(*ast.InsertStmt,*Insert){
 		&ast.ColumnName{Name: model.CIStr{"a","a"}},
 		&ast.ColumnName{Name: model.CIStr{"b","b"}},
 		&ast.ColumnName{Name: model.CIStr{"c","c"}},
+		&ast.ColumnName{Name: model.CIStr{"d","d"}},
 	}
 
 	lists := [][]ast.ExprNode{
@@ -3759,6 +3786,7 @@ func gen_insert_t1()(*ast.InsertStmt,*Insert){
 		Identifier("a"),
 		Identifier("b"),
 		Identifier("c"),
+		Identifier("d"),
 	}
 
 	var rows []Exprs = []Exprs{
@@ -3831,6 +3859,27 @@ func gen_insert_t2()(*ast.InsertStmt,*Insert){
 	return t1,t1_want
 }
 
+func gen_insert_t3()(*ast.InsertStmt,*Insert){
+	sql := `
+insert into u partition(p1,p2) (a,b,c,d) values (1,2,3,4),(5,6,1,0)
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.InsertStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	_,want := gen_insert_t1()
+
+	return n,want
+}
+
 func Test_transformInsertStmtToInsert(t *testing.T) {
 	type args struct {
 		is *ast.InsertStmt
@@ -3838,6 +3887,7 @@ func Test_transformInsertStmtToInsert(t *testing.T) {
 
 	t1,t1_want := gen_insert_t1()
 	t2,t2_want := gen_insert_t2()
+	t3,t3_want := gen_insert_t3()
 
 	tests := []struct {
 		name string
@@ -3846,6 +3896,7 @@ func Test_transformInsertStmtToInsert(t *testing.T) {
 	}{
 		{"t1",args{t1},t1_want},
 		{"t2",args{t2},t2_want},
+		{"t3",args{t3},t3_want},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -5132,6 +5183,1510 @@ func Test_transformCreateTableStmtToCreateTable(t *testing.T) {
 			if got := transformCreateTableStmtToCreateTable(tt.args.cts);
 			!reflect.DeepEqual(got, tt.want) {
 				t.Errorf("transformCreateTableStmtToCreateTable() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_create_database()(*ast.CreateDatabaseStmt,*CreateDatabase) {
+	sql := `
+create database if not exists A
+character set = 'utf8mb4'
+collate = 'utf8_bin'
+ENCRYPTION = 'Y';
+`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.CreateDatabaseStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	createOpts := []CreateOption{
+		NewCreateOptionCharset("utf8mb4"),
+		NewCreateOptionCollate("utf8_bin"),
+		NewCreateOptionEncryption("Y"),
+	}
+
+	t1_want := &CreateDatabase{
+		IfNotExists:   true,
+		Name:          "A",
+		CreateOptions: createOpts,
+	}
+
+	return n,t1_want
+}
+
+func Test_transformCreateDatabaseStmtToCreateDatabase(t *testing.T) {
+	type args struct {
+		cds *ast.CreateDatabaseStmt
+	}
+
+	t1,t1_want := generate_create_database()
+
+	tests := []struct {
+		name string
+		args args
+		want *CreateDatabase
+	}{
+		{"t1",args{t1},t1_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformCreateDatabaseStmtToCreateDatabase(tt.args.cds);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformCreateDatabaseStmtToCreateDatabase() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_drop_database()(*ast.DropDatabaseStmt,*DropDatabase){
+	sql := `
+drop database if exists A
+;
+`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.DropDatabaseStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	want := &DropDatabase{
+		Name:          "A",
+		IfExists:      true,
+	}
+
+	return n,want
+}
+
+func Test_transformDropDatabaseStmtToDropDatabase(t *testing.T) {
+	type args struct {
+		dds *ast.DropDatabaseStmt
+	}
+
+	t1,t1_want := generate_drop_database()
+
+	tests := []struct {
+		name string
+		args args
+		want *DropDatabase
+	}{
+		{"t1",args{t1},t1_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformDropDatabaseStmtToDropDatabase(tt.args.dds); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformDropDatabaseStmtToDropDatabase() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_drop_table()(*ast.DropTableStmt,*DropTable) {
+	sql := `
+drop table if exists A,B,C
+;
+`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.DropTableStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	names := []*TableName{
+		NewTableName("A",ObjectNamePrefix{
+			CatalogName:     "",
+			SchemaName:      "",
+			ExplicitCatalog: false,
+			ExplicitSchema:  false,
+		}),
+		NewTableName("B",ObjectNamePrefix{
+			CatalogName:     "",
+			SchemaName:      "",
+			ExplicitCatalog: false,
+			ExplicitSchema:  false,
+		}),
+		NewTableName("C",ObjectNamePrefix{
+			CatalogName:     "",
+			SchemaName:      "",
+			ExplicitCatalog: false,
+			ExplicitSchema:  false,
+		}),
+	}
+
+	want := &DropTable{
+		IfExists:      true,
+		Names:         names,
+	}
+	return n, want
+}
+
+func Test_transformDropTableStmtToDropTable(t *testing.T) {
+	type args struct {
+		dts *ast.DropTableStmt
+	}
+
+	t1,t1_want := generate_drop_table()
+
+	tests := []struct {
+		name string
+		args args
+		want *DropTable
+	}{
+		{"t1",args{t1},t1_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformDropTableStmtToDropTable(tt.args.dts); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformDropTableStmtToDropTable() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_delete_table()(*ast.DeleteStmt,*Delete){
+	sql := `
+delete from A as AA
+;
+`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.DeleteStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	tn := NewTableName(Identifier("A"),ObjectNamePrefix{
+		CatalogName:     "",
+		SchemaName:      "",
+		ExplicitCatalog: false,
+		ExplicitSchema:  false,
+	})
+
+	ac := AliasClause{
+		Alias:       "AA",
+	}
+
+	want := &Delete{
+		Table:         NewJoinTableExpr("",NewAliasedTableExpr(tn,ac),nil,nil),
+		Where:         NewWhere(nil),
+		OrderBy:       nil,
+		Limit:         nil,
+	}
+
+	return n, want
+}
+
+func generate_delete_table2()(*ast.DeleteStmt,*Delete){
+	sql := `
+delete from A as AA
+where a != 0 
+order by b
+limit 1
+;
+`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+	n,ok := stmt[0].(*ast.DeleteStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	tn := NewTableName(Identifier("A"),ObjectNamePrefix{
+		CatalogName:     "",
+		SchemaName:      "",
+		ExplicitCatalog: false,
+		ExplicitSchema:  false,
+	})
+
+	ac := AliasClause{
+		Alias:       "AA",
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+
+	o := OrderBy{
+		NewOrder(bname,Ascending,true),
+	}
+
+	l := NewLimit(nil,f1)
+
+	want := &Delete{
+		Table:         NewJoinTableExpr("",NewAliasedTableExpr(tn,ac),nil,nil),
+		Where:         NewWhere(NewComparisonExpr(NOT_EQUAL,aname,f0)),
+		OrderBy:       o,
+		Limit:         l,
+	}
+
+	return n, want
+}
+
+
+func Test_transformDeleteStmtToDelete(t *testing.T) {
+	type args struct {
+		ds *ast.DeleteStmt
+	}
+
+	t1,t1_want := generate_delete_table()
+	t2,t2_want := generate_delete_table2()
+
+	tests := []struct {
+		name string
+		args args
+		want *Delete
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformDeleteStmtToDelete(tt.args.ds);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformDeleteStmtToDelete() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_update_stmt_1() (*ast.UpdateStmt, *Update) {
+	sql := `
+update A as AA
+set a = 3, b = 4
+;
+`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+
+	n,ok := stmt[0].(*ast.UpdateStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	tn := NewTableName(Identifier("A"),ObjectNamePrefix{
+		CatalogName:     "",
+		SchemaName:      "",
+		ExplicitCatalog: false,
+		ExplicitSchema:  false,
+	})
+
+	ac := AliasClause{
+		Alias:       "AA",
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+
+	f3 := NewNumVal(constant.MakeInt64(3), "3", false)
+	f4 := NewNumVal(constant.MakeInt64(4), "4", false)
+
+	ue := UpdateExprs{
+		NewUpdateExpr(false,[]*UnresolvedName{aname},f3),
+		NewUpdateExpr(false,[]*UnresolvedName{bname},f4),
+	}
+
+	want := &Update{
+		Table:         NewJoinTableExpr("",NewAliasedTableExpr(tn,ac),nil,nil),
+		Exprs:         ue,
+		From:          nil,
+		Where:         NewWhere(nil),
+		OrderBy:       nil,
+		Limit:         nil,
+	}
+
+	return n, want
+}
+
+func generate_update_stmt_2() (*ast.UpdateStmt, *Update) {
+	sql := `
+update A as AA
+set a = 3, b = 4
+where a != 0
+order by b
+limit 1
+;
+`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+
+	n,ok := stmt[0].(*ast.UpdateStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	tn := NewTableName(Identifier("A"),ObjectNamePrefix{
+		CatalogName:     "",
+		SchemaName:      "",
+		ExplicitCatalog: false,
+		ExplicitSchema:  false,
+	})
+
+	ac := AliasClause{
+		Alias:       "AA",
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+	f3 := NewNumVal(constant.MakeInt64(3), "3", false)
+	f4 := NewNumVal(constant.MakeInt64(4), "4", false)
+
+	ue := UpdateExprs{
+		NewUpdateExpr(false,[]*UnresolvedName{aname},f3),
+		NewUpdateExpr(false,[]*UnresolvedName{bname},f4),
+	}
+
+	o := OrderBy{
+		NewOrder(bname,Ascending,true),
+	}
+
+	l := NewLimit(nil,f1)
+
+	want := &Update{
+		Table:         NewJoinTableExpr("",NewAliasedTableExpr(tn,ac),nil,nil),
+		Exprs:         ue,
+		From:          nil,
+		Where:         NewWhere(NewComparisonExpr(NOT_EQUAL,aname,f0)),
+		OrderBy:       o,
+		Limit:         l,
+	}
+
+	return n, want
+}
+
+func Test_transformUpdateStmtToUpdate(t *testing.T) {
+	type args struct {
+		us *ast.UpdateStmt
+	}
+
+	t1,t1_want := generate_update_stmt_1()
+	t2,t2_want := generate_update_stmt_2()
+
+	tests := []struct {
+		name string
+		args args
+		want *Update
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformUpdateStmtToUpdate(tt.args.us);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformUpdateStmtToUpdate() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_load_data_1()(*ast.LoadDataStmt,*Load) {
+	sql := `
+load data infile 'data.txt' INTO TABLE db.A;
+;`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+
+	n,ok := stmt[0].(*ast.LoadDataStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	want := &Load{
+		Local:             false,
+		File:              "data.txt",
+		DuplicateHandling: NewDuplicateKeyError(),
+		Table:             NewTableName("A",ObjectNamePrefix{
+			CatalogName:     "",
+			SchemaName:      "db",
+			ExplicitCatalog: false,
+			ExplicitSchema:  true,
+		}),
+		Fields:            NewFields("\t",false,0,'\\'),
+		Lines:             NewLines("","\n"),
+		IgnoredLines:      0,
+		ColumnList:        make([]LoadColumn,0),
+		Assignments:       nil,
+	}
+
+	return n, want
+}
+
+func generate_load_data_2()(*ast.LoadDataStmt,*Load) {
+	sql := `
+load data 
+local
+infile 'data.txt'
+replace
+INTO TABLE db.A
+FIELDS TERMINATED BY '\t' OPTIONALLY ENCLOSED BY '\n' ESCAPED BY '\\'
+LINES STARTING BY '#' TERMINATED BY '\n'
+IGNORE 2 LINES
+(a,b,@vc,@vd)
+set c = @vc != 0, d = @vd != 1 
+;`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+
+	n,ok := stmt[0].(*ast.LoadDataStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+	dname,_ := NewUnresolvedName("","","d")
+
+	colList :=[]LoadColumn{
+		aname,
+		bname,
+		NewVarExpr("vc",false,false,nil),
+		NewVarExpr("vd",false,false,nil),
+	}
+
+	vc := NewVarExpr("vc",false,false,nil)
+	vd := NewVarExpr("vd",false,false,nil)
+
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+
+	assigns := UpdateExprs{
+		NewUpdateExpr(false,[]*UnresolvedName{cname},NewComparisonExpr(NOT_EQUAL,vc,f0)),
+		NewUpdateExpr(false,[]*UnresolvedName{dname},NewComparisonExpr(NOT_EQUAL,vd,f1)),
+	}
+	want := &Load{
+		Local:             true,
+		File:              "data.txt",
+		DuplicateHandling: NewDuplicateKeyReplace(),
+		Table:             NewTableName("A",ObjectNamePrefix{
+			CatalogName:     "",
+			SchemaName:      "db",
+			ExplicitCatalog: false,
+			ExplicitSchema:  true,
+		}),
+		Fields:            NewFields("\t",true,'\n','\\'),
+		Lines:             NewLines("#","\n"),
+		IgnoredLines:      2,
+		ColumnList:        colList,
+		Assignments:       assigns,
+	}
+
+	return n, want
+}
+
+func Test_transformLoadDataStmtToLoad(t *testing.T) {
+	type args struct {
+		lds *ast.LoadDataStmt
+	}
+
+	t1,t1_want := generate_load_data_1()
+	t2,t2_want := generate_load_data_2()
+
+	tests := []struct {
+		name string
+		args args
+		want *Load
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformLoadDataStmtToLoad(tt.args.lds);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformLoadDataStmtToLoad() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_transformBeginStmtToBeginTransaction(t *testing.T) {
+	type args struct {
+		bs *ast.BeginStmt
+	}
+
+	t1 := &ast.BeginStmt{ReadOnly: true}
+	t1_want := &BeginTransaction{Modes: MakeTransactionModes(READ_WRITE_MODE_READ_ONLY)}
+
+	t2 := &ast.BeginStmt{ReadOnly: false}
+	t2_want := &BeginTransaction{Modes: MakeTransactionModes(READ_WRITE_MODE_READ_WRITE)}
+
+	tests := []struct {
+		name string
+		args args
+		want *BeginTransaction
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformBeginStmtToBeginTransaction(tt.args.bs); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformBeginStmtToBeginTransaction() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_transformCommitTransaction(t *testing.T) {
+	type args struct {
+		cs *ast.CommitStmt
+	}
+
+	t1 := &ast.CommitStmt{CompletionType: ast.CompletionTypeDefault}
+	t1_want := &CommitTransaction{Type: COMPLETION_TYPE_NO_CHAIN}
+
+	t2 := &ast.CommitStmt{CompletionType: ast.CompletionTypeChain}
+	t2_want := &CommitTransaction{Type: COMPLETION_TYPE_CHAIN}
+
+	t3 := &ast.CommitStmt{CompletionType: ast.CompletionTypeRelease}
+	t3_want := &CommitTransaction{Type: COMPLETION_TYPE_RELEASE}
+
+	tests := []struct {
+		name string
+		args args
+		want *CommitTransaction
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+		{"t3",args{t3},t3_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformCommitStmtToCommitTransaction(tt.args.cs); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformCommitTransaction() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_transformRollbackStmtToRollbackTransaction(t *testing.T) {
+	type args struct {
+		rs *ast.RollbackStmt
+	}
+
+	t1 := &ast.RollbackStmt{CompletionType: ast.CompletionTypeDefault}
+	t1_want := &RollbackTransaction{Type: COMPLETION_TYPE_NO_CHAIN}
+
+	t2 := &ast.RollbackStmt{CompletionType: ast.CompletionTypeChain}
+	t2_want := &RollbackTransaction{Type: COMPLETION_TYPE_CHAIN}
+
+	t3 := &ast.RollbackStmt{CompletionType: ast.CompletionTypeRelease}
+	t3_want := &RollbackTransaction{Type: COMPLETION_TYPE_RELEASE}
+
+	tests := []struct {
+		name string
+		args args
+		want *RollbackTransaction
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+		{"t3",args{t3},t3_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformRollbackStmtToRollbackTransaction(tt.args.rs); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformRollbackStmtToRollbackTransaction() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_show_create_table() (*ast.ShowStmt, *ShowCreate) {
+	sql := `
+show create table db.A
+;`
+
+	p := parser.New()
+	stmt,_, err := p.Parse(sql,"","")
+	if err != nil{
+		panic(fmt.Errorf("%v",err))
+	}
+
+	n,ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v",ok))
+	}
+
+	u,_ := NewUnresolvedObjectName(2,[3]string{"db","A"})
+
+	want := &ShowCreate{Name: u}
+
+	return n,want
+}
+
+func generate_show_create_database() (*ast.ShowStmt, *ShowCreateDatabase) {
+	sql := `
+show create database if not exists D
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &ShowCreateDatabase{IfNotExists: true,Name:"D"}
+	return n,want
+}
+
+func generate_show_columns_1() (*ast.ShowStmt, *ShowColumns) {
+	sql := `
+show columns from A
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	t,_ := NewUnresolvedObjectName(2,[3]string{"","A"})
+
+	want := &ShowColumns{Table:t}
+	return n,want
+}
+
+func generate_show_columns_2() (*ast.ShowStmt, *ShowColumns) {
+	sql := `
+show EXTENDED FULL columns 
+from A
+from db
+like 'a%'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	t,_ := NewUnresolvedObjectName(2,[3]string{"","A"})
+
+	ls := NewNumVal(constant.MakeString("a%"),"a%",false)
+	l := NewComparisonExpr(LIKE,nil,ls)
+
+	want := &ShowColumns{Ext:true,Full:true,Table:t,DBName: "db",Like: l}
+	return n,want
+}
+
+func generate_show_columns_3() (*ast.ShowStmt, *ShowColumns) {
+	sql := `
+show EXTENDED FULL columns 
+from A
+from db
+where a != 0
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	t,_ := NewUnresolvedObjectName(2,[3]string{"","A"})
+
+	aname,_ := NewUnresolvedName("","","a")
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+
+	w := NewComparisonExpr(NOT_EQUAL,aname,f0)
+	where := NewWhere(w)
+
+	want := &ShowColumns{Ext:true,Full:true,Table:t,DBName: "db",Where: where}
+	return n,want
+}
+
+func generate_show_databases_1() (*ast.ShowStmt, *ShowDatabases) {
+	sql := `
+show databases 
+like 'a%'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	ls := NewNumVal(constant.MakeString("a%"),"a%",false)
+	l := NewComparisonExpr(LIKE,nil,ls)
+	want := NewShowDatabases(l,nil)
+
+	return n,want
+}
+
+func generate_show_databases_2() (*ast.ShowStmt, *ShowDatabases) {
+	sql := `
+show databases 
+where a != 0
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+
+	w := NewComparisonExpr(NOT_EQUAL,aname,f0)
+	where := NewWhere(w)
+
+	want := NewShowDatabases(nil,where)
+
+	return n,want
+}
+
+func generate_show_tables_1() (*ast.ShowStmt, *ShowTables) {
+	sql := `
+show tables from db
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := NewShowTables(false,false,"db",nil,nil)
+	return n,want
+}
+
+func generate_show_tables_2() (*ast.ShowStmt, *ShowTables) {
+	sql := `
+show FULL tables 
+from db
+like 'a%'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	ls := NewNumVal(constant.MakeString("a%"),"a%",false)
+	l := NewComparisonExpr(LIKE,nil,ls)
+
+	want := NewShowTables(false,true,"db",l,nil)
+	return n,want
+}
+
+func generate_show_tables_3() (*ast.ShowStmt, *ShowTables) {
+	sql := `
+show FULL tables 
+from db
+where a != 0
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+
+	w := NewComparisonExpr(NOT_EQUAL,aname,f0)
+	where := NewWhere(w)
+
+	want := NewShowTables(false,true,"db",nil,where)
+	return n,want
+}
+
+func generate_show_processlist()(*ast.ShowStmt,*ShowProcessList) {
+	sql := `
+show FULL PROCESSLIST
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := NewShowProcessList(true)
+	return n,want
+}
+
+func generate_show_errors() (*ast.ShowStmt, *ShowErrors) {
+	sql := `
+show errors
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+	return n,NewShowErrors()
+}
+
+func generate_show_warnings() (*ast.ShowStmt, *ShowWarnings) {
+	sql := `
+show warnings
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+	return n,NewShowWarnings()
+}
+
+func generate_show_variables_1()(*ast.ShowStmt,*ShowVariables){
+	sql := `
+show VARIABLES
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	return n,NewShowVariables(false,nil,nil)
+}
+
+func generate_show_variables_2()(*ast.ShowStmt,*ShowVariables){
+	sql := `
+show VARIABLES
+like 'a%'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	ls := NewNumVal(constant.MakeString("a%"),"a%",false)
+	l := NewComparisonExpr(LIKE,nil,ls)
+
+	return n,NewShowVariables(false,l,nil)
+}
+
+func generate_show_variables_3()(*ast.ShowStmt,*ShowVariables){
+	sql := `
+show global VARIABLES
+where a!=0
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+
+	w := NewComparisonExpr(NOT_EQUAL,aname,f0)
+	where := NewWhere(w)
+
+	return n,NewShowVariables(true,nil,where)
+}
+
+func Test_transformShowStmtToShow(t *testing.T) {
+	type args struct {
+		ss *ast.ShowStmt
+	}
+
+	t1,t1_want := generate_show_create_table()
+	t2,t2_want := generate_show_create_database()
+	t3,t3_want := generate_show_columns_1()
+	t4,t4_want := generate_show_columns_2()
+	t5,t5_want := generate_show_columns_3()
+	t6,t6_want := generate_show_databases_1()
+	t7,t7_want := generate_show_databases_2()
+	t8,t8_want := generate_show_tables_1()
+	t9,t9_want := generate_show_tables_2()
+	t10,t10_want := generate_show_tables_3()
+	t11,t11_want := generate_show_processlist()
+	t12,t12_want := generate_show_errors()
+	t13,t13_want := generate_show_warnings()
+	t14,t14_want := generate_show_variables_1()
+	t15,t15_want := generate_show_variables_2()
+	t16,t16_want := generate_show_variables_3()
+
+	tests := []struct {
+		name string
+		args args
+		want Show
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+		{"t3",args{t3},t3_want},
+		{"t4",args{t4},t4_want},
+		{"t5",args{t5},t5_want},
+		{"t6",args{t6},t6_want},
+		{"t7",args{t7},t7_want},
+		{"t8",args{t8},t8_want},
+		{"t9",args{t9},t9_want},
+		{"t10",args{t10},t10_want},
+		{"t11",args{t11},t11_want},
+		{"t12",args{t12},t12_want},
+		{"t13",args{t13},t13_want},
+		{"t14",args{t14},t14_want},
+		{"t15",args{t15},t15_want},
+		{"t16",args{t16},t16_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := transformShowStmtToShow(tt.args.ss);
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformShowStmtToShow() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_explain_tablename() (*ast.ExplainStmt, Explain) {
+	sql := `
+explain A a
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ExplainStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	t,_ := NewUnresolvedObjectName(2,[3]string{"","A"})
+
+	aname,_ := NewUnresolvedName("","","a")
+
+	st := &ShowColumns{
+		Ext:      false,
+		Full:     false,
+		Table:    t,
+		DBName:   "",
+		Like:     nil,
+		Where:    nil,
+		ColName: aname,
+	}
+	want := NewExplainStmt(st,"")
+
+	return n,want
+}
+
+func generate_explain_select() (*ast.ExplainStmt, Explain) {
+	sql := `
+explain format = "tree" select a from A
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ExplainStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	//t,_ := NewUnresolvedObjectName(2,[3]string{"","A"})
+
+	aname,_ := NewUnresolvedName("","","a")
+
+	jt := NewJoinTableExpr("",NewAliasedTableExpr(NewTableName(Identifier("A"),ObjectNamePrefix{
+		CatalogName:     "",
+		SchemaName:      "",
+		ExplicitCatalog: false,
+		ExplicitSchema:  false,
+	}),AliasClause{}),nil,nil)
+
+	st := &SelectClause{
+		From:            &From{[]TableExpr{jt}},
+		Distinct:        false,
+		Where:           nil,
+		Exprs:           []SelectExpr{SelectExpr{Expr: aname}},
+		GroupBy:         nil,
+		Having:          nil,
+	}
+
+	want := NewExplainStmt(st,"tree")
+
+	return n,want
+}
+
+func generate_explain_set_select() (*ast.ExplainStmt, Explain) {
+	sql := `
+explain format = "tree" select a from A union select b from B
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ExplainStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	//t,_ := NewUnresolvedObjectName(2,[3]string{"","A"})
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+
+	jt := NewJoinTableExpr("",NewAliasedTableExpr(NewTableName(Identifier("A"),ObjectNamePrefix{
+		CatalogName:     "",
+		SchemaName:      "",
+		ExplicitCatalog: false,
+		ExplicitSchema:  false,
+	}),AliasClause{}),nil,nil)
+
+	left := &SelectClause{
+		From:            &From{[]TableExpr{jt}},
+		Distinct:        false,
+		Where:           nil,
+		Exprs:           []SelectExpr{SelectExpr{Expr: aname}},
+		GroupBy:         nil,
+		Having:          nil,
+	}
+
+	r_jt := NewJoinTableExpr("",NewAliasedTableExpr(NewTableName(Identifier("B"),ObjectNamePrefix{
+		CatalogName:     "",
+		SchemaName:      "",
+		ExplicitCatalog: false,
+		ExplicitSchema:  false,
+	}),AliasClause{}),nil,nil)
+
+	right := &SelectClause{
+		From:            &From{[]TableExpr{r_jt}},
+		Distinct:        false,
+		Where:           nil,
+		Exprs:           []SelectExpr{SelectExpr{Expr: bname}},
+		GroupBy:         nil,
+		Having:          nil,
+	}
+
+	st := NewUnionClause(UNION,
+		NewSelect(left,nil,nil),
+		NewSelect(right,nil,nil),
+		false)
+	want := NewExplainStmt(NewSelect(st,nil,nil),"tree")
+
+	return n,want
+}
+
+func generate_explain_delete() (*ast.ExplainStmt, Explain) {
+	sql := `
+explain  format = "tree" 
+delete from A as AA
+where a != 0 
+order by b
+limit 1
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ExplainStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	_,del := generate_delete_table2()
+	want := NewExplainStmt(del,"tree")
+	return n,want
+}
+
+func generate_explain_update() (*ast.ExplainStmt, Explain) {
+	sql := `
+explain  format = "tree" 
+update A as AA
+set a = 3, b = 4
+where a != 0
+order by b
+limit 1
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ExplainStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	_,up := generate_update_stmt_2()
+	want := NewExplainStmt(up,"tree")
+	return n,want
+}
+
+func generate_explain_insert() (*ast.ExplainStmt, Explain) {
+	sql := `
+explain  format = "tree" 
+insert into u partition(p1,p2) (a,b,c,d) values (1,2,3,4),(5,6,1,0)
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ExplainStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	_,in := gen_insert_t3()
+	want := NewExplainStmt(in,"tree")
+	return n,want
+}
+
+func generate_explain_analyze_insert() (*ast.ExplainStmt, Explain) {
+	sql := `
+explain analyze 
+insert into u partition(p1,p2) (a,b,c,d) values (1,2,3,4),(5,6,1,0)
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ExplainStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	_,in := gen_insert_t3()
+	want := NewExplainAnalyze(in,"row")
+	return n,want
+}
+
+func Test_transformExplainStmtToExplain(t *testing.T) {
+	type args struct {
+		es *ast.ExplainStmt
+	}
+
+	t1,t1_want := generate_explain_tablename()
+	t2,t2_want := generate_explain_select()
+	t3,t3_want := generate_explain_set_select()
+	t4,t4_want := generate_explain_delete()
+	t5,t5_want := generate_explain_update()
+	t6,t6_want := generate_explain_insert()
+	t7,t7_want := generate_explain_analyze_insert()
+
+	tests := []struct {
+		name string
+		args args
+		want Explain
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+		{"t3",args{t3},t3_want},
+		{"t4",args{t4},t4_want},
+		{"t5",args{t5},t5_want},
+		{"t6",args{t6},t6_want},
+		{"t7",args{t7},t7_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformExplainStmtToExplain(tt.args.es);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformExplainStmtToExplain() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_explain_for() (*ast.ExplainForStmt, Explain) {
+	sql := `
+explain
+format = "tree"
+for connection 1
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ExplainForStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := NewExplainFor("tree",1)
+	return n,want
+}
+
+func Test_transformExplainForStmtToExplain(t *testing.T) {
+	type args struct {
+		efs *ast.ExplainForStmt
+	}
+
+	t1,t1_want := generate_explain_for()
+
+	tests := []struct {
+		name string
+		args args
+		want Explain
+	}{
+		{"t1",args{t1},t1_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformExplainForStmtToExplain(tt.args.efs); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformExplainForStmtToExplain() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_set_var_1()(*ast.SetStmt,*SetVar){
+	sql := `
+set a = 0, b = 1
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+
+	a := []*VarAssignmentExpr{
+		NewVarAssignmentExpr(true,false,"a",f0,nil),
+		NewVarAssignmentExpr(true,false,"b",f1,nil),
+	}
+	want := NewSetVar(a)
+
+	return n, want
+}
+
+func generate_set_user_defined_var()(*ast.SetStmt,*SetVar){
+	sql := `
+set @a = 0, @b = 1
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+
+	a := []*VarAssignmentExpr{
+		NewVarAssignmentExpr(false,false,"a",f0,nil),
+		NewVarAssignmentExpr(false,false,"b",f1,nil),
+	}
+	want := NewSetVar(a)
+
+	return n, want
+}
+
+func generate_set_var_2()(*ast.SetStmt,*SetVar){
+	sql := `
+set a = 0,session b = 1, @@session.c = 1, global d = 1, @@global.e = 1
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+	f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+
+	a := []*VarAssignmentExpr{
+		NewVarAssignmentExpr(true,false,"a",f0,nil),
+		NewVarAssignmentExpr(true,false,"b",f1,nil),
+		NewVarAssignmentExpr(true,false,"c",f1,nil),
+		NewVarAssignmentExpr(true,true,"d",f1,nil),
+		NewVarAssignmentExpr(true,true,"e",f1,nil),
+	}
+	want := NewSetVar(a)
+
+	return n, want
+}
+
+func Test_transformSetStmtToSetVar(t *testing.T) {
+	type args struct {
+		ss *ast.SetStmt
+	}
+
+	t1,t1_want := generate_set_var_1()
+	t2,t2_want := generate_set_user_defined_var()
+	t3,t3_want := generate_set_var_2()
+
+	tests := []struct {
+		name string
+		args args
+		want *SetVar
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+		{"t3",args{t3},t3_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformSetStmtToSetVar(tt.args.ss);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformSetStmtToSetVar() = %v, want %v", got, tt.want)
 			}
 		})
 	}

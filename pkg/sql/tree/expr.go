@@ -507,3 +507,29 @@ type MaxValue struct {
 func NewMaxValue()*MaxValue{
 	return &MaxValue{}
 }
+
+/*
+Variable Expression Used in Set Statement,
+Load Data statement, Show statement,etc.
+Variable types:
+User-Defined Variable
+Local-Variable: DECLARE statement
+System Variable: Global System Variable, Session System Variable
+ */
+
+type VarExpr struct {
+	exprImpl
+	Name string
+	System bool
+	Global bool
+	Expr Expr
+}
+
+func NewVarExpr(n string,s bool,g bool,e Expr) *VarExpr {
+	return &VarExpr{
+		Name:     n,
+		System:   s,
+		Global:   g,
+		Expr:     e,
+	}
+}

@@ -258,7 +258,7 @@ func makeMysqlTinyIntResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 	mysqlCol.SetSigned(!unsigned)
 
 	rs.AddColumn(mysqlCol)
@@ -301,7 +301,7 @@ func makeMysqlShortResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 	mysqlCol.SetSigned(!unsigned)
 
 	rs.AddColumn(mysqlCol)
@@ -344,7 +344,7 @@ func makeMysqlLongResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 	mysqlCol.SetSigned(!unsigned)
 
 	rs.AddColumn(mysqlCol)
@@ -387,7 +387,7 @@ func makeMysqlLongLongResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 	mysqlCol.SetSigned(!unsigned)
 
 	rs.AddColumn(mysqlCol)
@@ -430,7 +430,7 @@ func makeMysqlInt24ResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 	mysqlCol.SetSigned(!unsigned)
 
 	rs.AddColumn(mysqlCol)
@@ -475,7 +475,7 @@ func makeMysqlYearResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 	mysqlCol.SetSigned(!unsigned)
 
 	rs.AddColumn(mysqlCol)
@@ -514,7 +514,7 @@ func makeMysqlVarcharResultSet()*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 	rs.AddColumn(mysqlCol)
 
@@ -544,7 +544,7 @@ func makeMysqlVarStringResultSet()*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 	rs.AddColumn(mysqlCol)
 
@@ -574,7 +574,7 @@ func makeMysqlStringResultSet()*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 	rs.AddColumn(mysqlCol)
 
@@ -604,7 +604,7 @@ func makeMysqlFloatResultSet()*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 	rs.AddColumn(mysqlCol)
 
@@ -634,7 +634,7 @@ func makeMysqlDoubleResultSet()*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 	rs.AddColumn(mysqlCol)
 
@@ -688,7 +688,7 @@ func make8ColumnsResultSet()*MysqlResultSet {
 		mysqlCol.SetSchema(name + "Schema")
 		mysqlCol.SetTable(name + "Table")
 		mysqlCol.SetOrgTable(name + "Table")
-		mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 		rs.AddColumn(mysqlCol)
 	}
@@ -730,7 +730,7 @@ func makeMoreThan16MBResultSet()*MysqlResultSet {
 		mysqlCol.SetSchema(name + "Schema")
 		mysqlCol.SetTable(name + "Table")
 		mysqlCol.SetOrgTable(name + "Table")
-		mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+		mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 		rs.AddColumn(mysqlCol)
 	}
@@ -760,7 +760,7 @@ func make16MBRowResultSet()*MysqlResultSet {
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
-	mysqlCol.SetCharset(uint16(utf8mb4CollationID))
+	mysqlCol.SetCharset(uint16(Utf8mb4CollationID))
 
 	rs.AddColumn(mysqlCol)
 

@@ -37,7 +37,7 @@ func transformDatumToNumVal(datum *test_driver.Datum) *NumVal {
 		deci := datum.GetMysqlDecimal().ToString()
 		f64, err := strconv.ParseFloat(string(deci), 64)
 		if err != nil {
-			panic(fmt.Errorf("convert decimal string to float64 failed. %v", err))
+			panic(fmt.Errorf("convert decimal string to float64 failed. %v\n", err))
 		}
 		return NewNumVal(constant.MakeFloat64(f64), string(deci), false)
 	case test_driver.KindBytes:
@@ -65,7 +65,7 @@ func transformDatumToNumVal(datum *test_driver.Datum) *NumVal {
 	case test_driver.KindMysqlJSON:
 		fallthrough
 	default:
-		panic(fmt.Errorf("unsupported datum type %v", datum.Kind()))
+		panic(fmt.Errorf("unsupported datum type %v\n", datum.Kind()))
 	}
 }
 
@@ -86,7 +86,7 @@ func transformUnaryOperatorExprToUnaryExpr(uoe *ast.UnaryOperationExpr) *UnaryEx
 		return NewUnaryExpr(UNARY_MARK, e)
 
 	}
-	panic(fmt.Errorf("unsupported unary expr. op:%s ", uoe.Op.String()))
+	panic(fmt.Errorf("unsupported unary expr. op:%s \n", uoe.Op.String()))
 	return nil
 }
 
@@ -97,7 +97,7 @@ func transformUnaryOperatorExprToNotExpr(uoe *ast.UnaryOperationExpr) *NotExpr {
 		e := transformExprNodeToExpr(uoe.V)
 		return NewNotExpr(e)
 	}
-	panic(fmt.Errorf("unsupported not expr. op:%s ", uoe.Op.String()))
+	panic(fmt.Errorf("unsupported not expr. op:%s \n", uoe.Op.String()))
 	return nil
 }
 
@@ -152,7 +152,7 @@ func transformBinaryOperationExprToBinaryExpr(boe *ast.BinaryOperationExpr) *Bin
 		return NewBinaryExpr(RIGHT_SHIFT, l, r)
 		//logic operation
 	}
-	panic(fmt.Errorf("unsupported binary expr. op:%s ", boe.Op.String()))
+	panic(fmt.Errorf("unsupported binary expr. op:%s \n", boe.Op.String()))
 	return nil
 }
 
@@ -185,7 +185,7 @@ func transformBinaryOperationExprToComparisonExpr(boe *ast.BinaryOperationExpr) 
 		r := transformExprNodeToExpr(boe.R)
 		return NewComparisonExpr(NOT_EQUAL, l, r)
 	}
-	panic(fmt.Errorf("unsupported comparison expr. op:%s ", boe.Op.String()))
+	panic(fmt.Errorf("unsupported comparison expr. op:%s \n", boe.Op.String()))
 	return nil
 }
 
@@ -198,7 +198,7 @@ func transformBinaryOperationExprToAndExpr(boe *ast.BinaryOperationExpr) *AndExp
 		r := transformExprNodeToExpr(boe.R)
 		return NewAndExpr(l, r)
 	}
-	panic(fmt.Errorf("unsupported and expr. op:%s ", boe.Op.String()))
+	panic(fmt.Errorf("unsupported and expr. op:%s \n", boe.Op.String()))
 	return nil
 }
 
@@ -211,7 +211,7 @@ func transformBinaryOperationExprToOrExpr(boe *ast.BinaryOperationExpr) *OrExpr 
 		r := transformExprNodeToExpr(boe.R)
 		return NewOrExpr(l, r)
 	}
-	panic(fmt.Errorf("unsupported or expr. op:%s ", boe.Op.String()))
+	panic(fmt.Errorf("unsupported or expr. op:%s \n", boe.Op.String()))
 	return nil
 }
 
@@ -224,7 +224,7 @@ func transformBinaryOperationExprToXorExpr(boe *ast.BinaryOperationExpr) *XorExp
 		r := transformExprNodeToExpr(boe.R)
 		return NewXorExpr(l, r)
 	}
-	panic(fmt.Errorf("unsupported xor expr. op:%s ", boe.Op.String()))
+	panic(fmt.Errorf("unsupported xor expr. op:%s \n", boe.Op.String()))
 	return nil
 }
 
@@ -234,7 +234,7 @@ func transformIsNullExprToIsNullExpr(ine *ast.IsNullExpr) *IsNullExpr {
 		e := transformExprNodeToExpr(ine.Expr)
 		return NewIsNullExpr(e)
 	}
-	panic(fmt.Errorf("unsupported is null expr. %v ", ine))
+	panic(fmt.Errorf("unsupported is null expr. %v \n", ine))
 	return nil
 }
 
@@ -244,7 +244,7 @@ func transformIsNullExprToIsNotNullExpr(ine *ast.IsNullExpr) *IsNotNullExpr {
 		e := transformExprNodeToExpr(ine.Expr)
 		return NewIsNotNullExpr(e)
 	}
-	panic(fmt.Errorf("unsupported is not null expr. %v ", ine))
+	panic(fmt.Errorf("unsupported is not null expr. %v \n", ine))
 	return nil
 }
 
@@ -277,7 +277,13 @@ func transformPatternInExprToComparisonExprIn(pie *ast.PatternInExpr) *Compariso
 
 //transform ast.PatternLikeExpr (in expression) to tree.ComparisonExpr.LIKE
 func transformPatternLikeExprToComparisonExprIn(ple *ast.PatternLikeExpr) *ComparisonExpr {
-	e1 := transformExprNodeToExpr(ple.Expr)
+	//may have Expr
+	var e1 Expr = nil
+	if ple.Expr != nil {
+		e1 = transformExprNodeToExpr(ple.Expr)
+	}
+
+	//Must have Pattern
 	e2 := transformExprNodeToExpr(ple.Pattern)
 	//TODO:escape
 
@@ -318,7 +324,7 @@ func transformResultSetNodeToSelectStatement(rsn ast.ResultSetNode) SelectStatem
 	case *ast.SetOprStmt:
 		return transformSetOprStmtToSelectStatement(n)
 	}
-	panic(fmt.Errorf("unsupported resultSetNode"))
+	panic(fmt.Errorf("unsupported resultSetNode\n"))
 	return nil
 }
 
@@ -361,7 +367,7 @@ func transformCompareSubqueryExprToSubquery(cse *ast.CompareSubqueryExpr) *Compa
 	case opcode.NE: // <>,!=
 		return NewComparisonExprWithSubop(NOT_EQUAL, subop, l, r)
 	}
-	panic(fmt.Errorf("unsupported CompareSubqueryExpr expr. op:%s ", cse.Op.String()))
+	panic(fmt.Errorf("unsupported CompareSubqueryExpr expr. op:%s \n", cse.Op.String()))
 	return nil
 }
 
@@ -379,6 +385,15 @@ func transformTableNameToTableName(tn *ast.TableName) *TableName {
 		ExplicitCatalog: false,
 		ExplicitSchema:  len(tn.Schema.O) != 0,
 	})
+}
+
+//transform ast.TableName to tree.UnresolvedObjectName
+func transformTableNameToUnresolvedObjectName(tn *ast.TableName)*UnresolvedObjectName{
+	u,err := NewUnresolvedObjectName(2,[3]string{tn.Schema.O,tn.Name.O})
+	if err != nil {
+		panic(fmt.Errorf("TableName to UnresolvedObjectName failed. error:%v\n",err))
+	}
+	return u
 }
 
 //transform ast.TableSource to tree.AliasedTableExpr
@@ -417,7 +432,7 @@ func transformResultSetNodeToTableExpr(rsn ast.ResultSetNode) TableExpr {
 	case *ast.SetOprStmt:
 		return transformSetOprStmtToSelectStatement(n)
 	}
-	panic(fmt.Errorf("unsupported ResultSetNode type:%v ", rsn))
+	panic(fmt.Errorf("unsupported ResultSetNode type:%v \n", rsn))
 	return nil
 }
 
@@ -510,7 +525,7 @@ func transformJoinToParenTableExpr(j *ast.Join) *ParenTableExpr {
 		jt := transformJoinToJoinTableExpr(j)
 		return NewParenTableExpr(jt)
 	}
-	panic(fmt.Errorf("Need ExplicitParens :%v ", j))
+	panic(fmt.Errorf("Need ExplicitParens :%v \n", j))
 	return nil
 }
 
@@ -534,7 +549,7 @@ func transformTableRefsClauseToFrom(trc *ast.TableRefsClause) *From {
 //transform ast.ColumnNameExpr to tree.UnresolvedName
 func transformColumnNameExprToUnresolvedName(cne *ast.ColumnNameExpr) *UnresolvedName {
 	if cne.Name == nil {
-		panic(fmt.Errorf("need column name"))
+		panic(fmt.Errorf("need column name\n"))
 	}
 	cn := cne.Name
 	ud, _ := NewUnresolvedName(cn.Schema.O, cn.Table.O, cn.Name.O)
@@ -584,10 +599,10 @@ func transformAggregateFuncExprToFuncExpr(afe *ast.AggregateFuncExpr) *FuncExpr 
 
 //transform types.FieldType to ResolvableTypeReference
 func transformFieldTypeToResolvableTypeReference(ft *types.FieldType) ResolvableTypeReference {
-	var t ResolvableTypeReference
+	var t *T
 	switch ft.Tp {
 	case mysql.TypeUnspecified:
-		panic(fmt.Errorf("unsupported type"))
+		panic(fmt.Errorf("unsupported type\n"))
 	case mysql.TypeTiny:
 		t = TYPE_TINY
 	case mysql.TypeShort:
@@ -645,7 +660,12 @@ func transformFieldTypeToResolvableTypeReference(ft *types.FieldType) Resolvable
 	default:
 		panic("unsupported cast type")
 	}
-	return t
+	fsp := ft.Decimal
+	if fsp == -1 {
+		fsp = 0
+	}
+	tt := &T{InternalType: t.InternalType,Fsp: fsp}
+	return tt
 }
 
 //transform ast.FuncCastExpr to tree.CastExpr
@@ -742,7 +762,7 @@ func transformTimeUnitExprToIntervalExpr(tue *ast.TimeUnitExpr) *IntervalExpr {
 	case ast.TimeUnitYearMonth:
 		return NewIntervalExpr(INTERVAL_TYPE_YEARMONTH)
 	}
-	panic(fmt.Errorf("unsupported time unit type %v ", tue.Unit))
+	panic(fmt.Errorf("unsupported time unit type %v \n", tue.Unit))
 	return nil
 }
 
@@ -773,6 +793,16 @@ func transformDefaultExprToDefaultVal(expr *ast.DefaultExpr) *DefaultVal {
 //transform ast.MaxValueExpr to tree.MaxValue
 func transformMaxValueExprToMaxValue(expr *ast.MaxValueExpr) *MaxValue {
 	return NewMaxValue()
+}
+
+//transform ast.VariableExpr to tree.VarExpr
+func transformVariableExprToVarExpr(ve *ast.VariableExpr) *VarExpr {
+	var e Expr = nil
+	if ve.Value != nil {
+		e = transformExprNodeToExpr(ve.Value)
+	}
+
+	return NewVarExpr(ve.Name,ve.IsSystem,ve.IsGlobal,e)
 }
 
 //transform ast.ExprNode to tree.Expr
@@ -861,8 +891,10 @@ func transformExprNodeToExpr(node ast.ExprNode) Expr {
 		return transformDefaultExprToDefaultVal(n)
 	case *ast.MaxValueExpr:
 		return transformMaxValueExprToMaxValue(n)
+	case *ast.VariableExpr:
+		return transformVariableExprToVarExpr(n)
 	}
-	panic(fmt.Errorf("unsupported node %v ", node))
+	panic(fmt.Errorf("unsupported node %v \n", node))
 	return nil
 }
 
@@ -1005,7 +1037,7 @@ func transformSelectStmtToSelect(ss *ast.SelectStmt) *Select {
 //transform ast.SelectStmt(IsInBraces is true) to tree.ParenSelect
 func transformSelectStmtToParenSelect(ss *ast.SelectStmt) *ParenSelect {
 	if !ss.IsInBraces {
-		panic(fmt.Errorf("only in brace"))
+		panic(fmt.Errorf("only in brace\n"))
 	}
 	ss.IsInBraces = false
 	s := transformSelectStmtToSelect(ss)
@@ -1029,16 +1061,16 @@ func transformSetOprTypeToUnionType(n ast.Node) (UnionType, bool) {
 	switch sel := n.(type) {
 	case *ast.SelectStmt:
 		if sel.AfterSetOperator == nil {
-			panic(fmt.Errorf("need set operator"))
+			panic(fmt.Errorf("need set operator\n"))
 		}
 		oprType = *sel.AfterSetOperator
 	case *ast.SetOprSelectList:
 		if sel.AfterSetOperator == nil {
-			panic(fmt.Errorf("need set operator"))
+			panic(fmt.Errorf("need set operator\n"))
 		}
 		oprType = *sel.AfterSetOperator
 	default:
-		panic(fmt.Errorf("unsupported single node %v", n))
+		panic(fmt.Errorf("unsupported single node %v\n", n))
 	}
 	var all bool
 	var t UnionType
@@ -1073,7 +1105,7 @@ func transformSingleNodeToSelectStatement(n ast.Node) SelectStatement {
 	case *ast.SetOprSelectList:
 		return transformSetOprSelectListToSelectStatement(sel)
 	default:
-		panic(fmt.Errorf("unsupported single node %v", n))
+		panic(fmt.Errorf("unsupported single node %v\n", n))
 	}
 }
 
@@ -1089,7 +1121,7 @@ Left Associativity: UNION,INTERSECT,EXCEPT
 */
 func transformSelectArrayToSelectStatement(selects []ast.Node) SelectStatement {
 	if len(selects) == 0 {
-		panic(fmt.Errorf("need Selects"))
+		panic(fmt.Errorf("need Selects\n"))
 	} else if len(selects) == 1 {
 		return transformSingleNodeToSelectStatement(selects[0])
 	} else if len(selects) == 2 {
@@ -1117,7 +1149,7 @@ func transformSelectArrayToSelectStatement(selects []ast.Node) SelectStatement {
 				break
 			}
 		default:
-			panic(fmt.Errorf("unsupported union statement %v", selects[i]))
+			panic(fmt.Errorf("unsupported union statement %v\n", selects[i]))
 		}
 		if find {
 			break
@@ -1153,14 +1185,14 @@ func transformSelectArrayToSelectStatement(selects []ast.Node) SelectStatement {
 		//return NewSelect(uc,nil,nil)
 		return left
 	}
-	panic(fmt.Errorf("missing something"))
+	panic(fmt.Errorf("missing something\n"))
 	return nil
 }
 
 //transform ast.SetOprSelectList to tree.SelectStatement
 func transformSetOprSelectListToSelectStatement(sosl *ast.SetOprSelectList) SelectStatement {
 	return transformSelectArrayToSelectStatement(sosl.Selects)
-	panic(fmt.Errorf("missing something"))
+	panic(fmt.Errorf("missing something\n"))
 	return nil
 }
 
@@ -1199,7 +1231,7 @@ func transformInsertStmtToInsert(is *ast.InsertStmt) *Insert {
 		}
 	} else if is.Select != nil {
 		if ss, ok := is.Select.(*ast.SelectStmt); !ok {
-			panic(fmt.Errorf("needs selectstmt"))
+			panic(fmt.Errorf("needs selectstmt\n"))
 		} else {
 			for _, row := range ss.Lists {
 				e := transformExprNodeToExpr(row)
@@ -1207,7 +1239,7 @@ func transformInsertStmtToInsert(is *ast.InsertStmt) *Insert {
 			}
 		}
 	} else {
-		panic(fmt.Errorf("empty insertstmt"))
+		panic(fmt.Errorf("empty insertstmt\n"))
 	}
 
 	partition := transformCIStrToIdentifierList(is.PartitionNames)
@@ -1253,7 +1285,7 @@ func transformReferOptionTypeToReferenceOptionType(rot ast.ReferOptionType) Refe
 	case ast.ReferOptionSetDefault:
 		return REFERENCE_OPTION_SET_DEFAULT
 	}
-	panic(fmt.Errorf("invalid reference option %v", rot))
+	panic(fmt.Errorf("invalid reference option %v\n", rot))
 	return REFERENCE_OPTION_INVALID
 }
 
@@ -1326,9 +1358,9 @@ func transformColumnOptionToColumnAttribute(co *ast.ColumnOption) ColumnAttribut
 	case ast.ColumnOptionNoOption:
 		fallthrough
 	default:
-		panic(fmt.Errorf("invalid column option"))
+		panic(fmt.Errorf("invalid column option\n"))
 	}
-	panic(fmt.Errorf("invalid column option"))
+	panic(fmt.Errorf("invalid column option\n"))
 	return nil
 }
 
@@ -1429,7 +1461,7 @@ func transformConstraintToIndexTableDef(c *ast.Constraint) IndexTableDef {
 	case ast.ConstraintUniqIndex:
 		fallthrough
 	default:
-		panic(fmt.Errorf("unsupported constraint %v", c.Tp))
+		panic(fmt.Errorf("unsupported constraint %v\n", c.Tp))
 	}
 	return nil
 }
@@ -1466,7 +1498,7 @@ func transformRowFormatToRowFormatType(rf uint64) RowFormatType {
 	case ast.TokuDBRowFormatUncompressed:
 		fallthrough
 	default:
-		panic(fmt.Errorf("unsupported row format %v", rf))
+		panic(fmt.Errorf("unsupported row format %v\n", rf))
 	}
 	return ROW_FORMAT_DEFAULT
 }
@@ -1542,7 +1574,7 @@ func transformTableOptionToTableOption(to *ast.TableOption) TableOption {
 	case ast.TableOptionInsertMethod: //mysql 8.0 does not have it
 	case ast.TableOptionTableCheckSum: //mysql 8.0 does not have it
 	default:
-		panic(fmt.Errorf("unsupported table option"))
+		panic(fmt.Errorf("unsupported table option\n"))
 	}
 	return nil
 }
@@ -1584,7 +1616,7 @@ func transformPartitionMethodToPartitionBy(pm *ast.PartitionMethod) *PartitionBy
 		}
 		partType = NewKeyType(pm.Linear, c)
 	default:
-		panic(fmt.Errorf("unsupported partition type %v", pm.Tp))
+		panic(fmt.Errorf("unsupported partition type %v\n", pm.Tp))
 	}
 	return NewPartitionBy(partType, pm.Num)
 }
@@ -1610,7 +1642,7 @@ func transformPartitionDefinitionClauseToValues(pdc ast.PartitionDefinitionClaus
 	case *ast.PartitionDefinitionClauseNone:
 	case *ast.PartitionDefinitionClauseHistory:
 	default:
-		panic(fmt.Errorf("unsupported PartitionDefinitionClause %v ", n))
+		panic(fmt.Errorf("unsupported PartitionDefinitionClause %v \n", n))
 	}
 	return nil
 }
@@ -1705,4 +1737,349 @@ func transformCreateTableStmtToCreateTable(cts *ast.CreateTableStmt) *CreateTabl
 		Options:         options,
 		PartitionOption: partition,
 	}
+}
+
+//transform ast.DatabaseOption to tree.CreateOption
+func transformDatabaseOptionToCreateOption(do *ast.DatabaseOption)CreateOption{
+	switch do.Tp {
+	case ast.DatabaseOptionNone:
+		panic("no such thing")
+	case ast.DatabaseOptionCharset:
+		return NewCreateOptionCharset(do.Value)
+	case ast.DatabaseOptionCollate:
+		return NewCreateOptionCollate(do.Value)
+	case ast.DatabaseOptionEncryption:
+		return NewCreateOptionEncryption(do.Value)
+	}
+	panic(fmt.Errorf("unsupported database option %v\n",do.Tp))
+	return nil
+}
+
+//transform ast.CreateDatabaseStmt to tree.CreateDatabase
+func transformCreateDatabaseStmtToCreateDatabase(cds *ast.CreateDatabaseStmt)*CreateDatabase{
+	var opts []CreateOption = nil
+	if cds.Options != nil{
+		opts = make([]CreateOption,len(cds.Options))
+		for i,co := range cds.Options {
+			opts[i] = transformDatabaseOptionToCreateOption(co)
+		}
+	}
+	return NewCreateDatabase(cds.IfNotExists,Identifier(cds.Name),opts)
+}
+
+//transform ast.DropDatabaseStmt to tree.DropDatabase
+func transformDropDatabaseStmtToDropDatabase(dds *ast.DropDatabaseStmt)*DropDatabase{
+	return NewDropDatabase(Identifier(dds.Name),dds.IfExists)
+}
+
+//transform ast.DropTableStmt to tree.DropTable
+func transformDropTableStmtToDropTable(dts *ast.DropTableStmt)*DropTable{
+	var names TableNames = nil
+	if dts.Tables != nil {
+		names = make([]*TableName,len(dts.Tables))
+		for i,t := range dts.Tables {
+			names[i] = transformTableNameToTableName(t)
+		}
+	}
+	return NewDropTable(dts.IfExists,names)
+}
+
+//transform ast.DeleteStmt to tree.Delete
+func transformDeleteStmtToDelete(ds *ast.DeleteStmt)*Delete{
+	if ds.Tables != nil && ds.TableRefs != nil {
+		panic("unsupported multiple-Table syntax for Delete statement ")
+	}
+	tabExpr := transformJoinToTableExpr(ds.TableRefs.TableRefs)
+	var w Expr = nil
+	if ds.Where != nil {
+		w = transformExprNodeToExpr(ds.Where)
+	}
+
+	var o OrderBy = nil
+	if ds.Order != nil {
+		o = transformOrderByClauseToOrderBy(ds.Order)
+	}
+
+	var l *Limit = nil
+	if ds.Limit != nil {
+		l = transformLimitToLimit(ds.Limit)
+	}
+
+	return NewDelete(tabExpr,NewWhere(w),o,l);
+}
+
+//transform ast.Assignment to tree.UpdateExpr
+func transformAssignmentToUpdateExpr(a *ast.Assignment) *UpdateExpr {
+	un := transformColumnNameToUnresolvedName(a.Column)
+	e := transformExprNodeToExpr(a.Expr)
+	return NewUpdateExpr(false, []*UnresolvedName{un}, e)
+}
+
+//transform ast.UpdateStmt to tree.Update
+func transformUpdateStmtToUpdate(us *ast.UpdateStmt) *Update {
+	te := transformJoinToTableExpr(us.TableRefs.TableRefs)
+
+	var ues UpdateExprs = make([]*UpdateExpr,len(us.List))
+	for i,as := range us.List {
+		ues[i] = transformAssignmentToUpdateExpr(as)
+	}
+
+	var w Expr = nil
+	if us.Where != nil {
+		w = transformExprNodeToExpr(us.Where)
+	}
+
+	var o OrderBy = nil
+	if us.Order != nil {
+		o = transformOrderByClauseToOrderBy(us.Order)
+	}
+
+	var l *Limit = nil
+	if us.Limit != nil {
+		l = transformLimitToLimit(us.Limit)
+	}
+
+	return NewUpdate(te,ues,nil,NewWhere(w),o,l)
+}
+
+//transform ast.ColumnNameOrUserVar to tree.LoadColumn
+func transformColumnNameOrUserVarToLoadColumn(cnouv *ast.ColumnNameOrUserVar) LoadColumn {
+	if cnouv.ColumnName != nil {
+		return transformColumnNameToUnresolvedName(cnouv.ColumnName)
+	}
+	if cnouv.UserVar != nil {
+		return transformVariableExprToVarExpr(cnouv.UserVar)
+	}
+	panic("Both of ColumnName and UserVar are nil")
+	return nil
+}
+
+//transform ast.LoadDataStmt to tree.Load
+func transformLoadDataStmtToLoad(lds *ast.LoadDataStmt) *Load {
+	var dk DuplicateKey = nil
+	switch lds.OnDuplicate {
+	case ast.OnDuplicateKeyHandlingError:
+		dk = NewDuplicateKeyError()
+	case ast.OnDuplicateKeyHandlingReplace:
+		dk = NewDuplicateKeyReplace()
+	case ast.OnDuplicateKeyHandlingIgnore:
+		dk = NewDuplicateKeyIgnore()
+	}
+
+	tn := transformTableNameToTableName(lds.Table)
+
+	var fie *Fields = nil
+	if lds.FieldsInfo != nil {
+		fc := lds.FieldsInfo
+		fie = NewFields(fc.Terminated,fc.OptEnclosed,fc.Enclosed,fc.Escaped)
+	}
+
+	var li *Lines = nil
+	if lds.LinesInfo != nil {
+		lc := lds.LinesInfo
+		li = NewLines(lc.Starting,lc.Terminated)
+	}
+
+	var lcs []LoadColumn = nil
+	if lds.ColumnsAndUserVars != nil {
+		lcs = make([]LoadColumn,len(lds.ColumnsAndUserVars))
+		for i,c := range lds.ColumnsAndUserVars {
+			lcs[i] = transformColumnNameOrUserVarToLoadColumn(c)
+		}
+	}
+
+	var ues UpdateExprs = nil
+	if lds.ColumnAssignments != nil {
+		ues = make([]*UpdateExpr,len(lds.ColumnAssignments))
+		for i,a := range lds.ColumnAssignments {
+			ues[i] = transformAssignmentToUpdateExpr(a)
+		}
+	}
+
+	return NewLoad(lds.IsLocal,lds.Path,dk,tn,fie,li,lds.IgnoreLines,lcs,ues)
+}
+
+//transform ast.BeginStmt to tree.BeginTransaction
+func transformBeginStmtToBeginTransaction(bs *ast.BeginStmt)*BeginTransaction{
+	var rwm ReadWriteMode = READ_WRITE_MODE_READ_WRITE
+	if bs.ReadOnly {
+		rwm = READ_WRITE_MODE_READ_ONLY
+	}
+	return NewBeginTransaction(MakeTransactionModes(rwm))
+}
+
+//transform ast.CompletionType to tree.CompletionType
+func transformCompletionTypeToCompletionType(ct ast.CompletionType) CompletionType {
+	var t CompletionType = COMPLETION_TYPE_NO_CHAIN
+	switch ct {
+	case ast.CompletionTypeDefault:
+		t = COMPLETION_TYPE_NO_CHAIN
+	case ast.CompletionTypeChain:
+		t = COMPLETION_TYPE_CHAIN
+	case ast.CompletionTypeRelease:
+		t = COMPLETION_TYPE_RELEASE
+	}
+	return t
+}
+
+//transform ast.CommitStmt to tree.CommitTransaction
+func transformCommitStmtToCommitTransaction(cs *ast.CommitStmt) *CommitTransaction {
+	t := transformCompletionTypeToCompletionType(cs.CompletionType)
+	return NewCommitTransaction(t)
+}
+
+//transform ast.RollbackStmt to tree.RollbackTransaction
+func transformRollbackStmtToRollbackTransaction(rs *ast.RollbackStmt) *RollbackTransaction {
+	t := transformCompletionTypeToCompletionType(rs.CompletionType)
+	return NewRollbackTransaction(t)
+}
+
+//transform ast.UseStmt to tree.Use
+func transformUseStmtToUse(us *ast.UseStmt) *Use {
+	return NewUse(us.DBName)
+}
+
+//transform ast.ShowStmt to tree.Show
+func transformShowStmtToShow(ss *ast.ShowStmt)Show{
+	switch ss.Tp {
+	case ast.ShowCreateTable:
+		u := transformTableNameToUnresolvedObjectName(ss.Table)
+		return NewShowCreate(u)
+	case ast.ShowCreateDatabase:
+		return NewShowCreateDatabase(ss.IfNotExists,ss.DBName)
+	case ast.ShowColumns:
+		u := transformTableNameToUnresolvedObjectName(ss.Table)
+
+		var cname *UnresolvedName = nil
+		if ss.Column != nil {
+			cname = transformColumnNameToUnresolvedName(ss.Column)
+		}
+
+		var l *ComparisonExpr = nil
+		if ss.Pattern != nil {
+			l = transformPatternLikeExprToComparisonExprIn(ss.Pattern)
+		}
+
+		var w *Where = nil
+		if ss.Where != nil {
+			e := transformExprNodeToExpr(ss.Where)
+			w = NewWhere(e)
+		}
+
+		return NewShowColumns(ss.Extended, ss.Full, u, ss.DBName, l, w, cname)
+	case ast.ShowDatabases:
+		var l *ComparisonExpr = nil
+		if ss.Pattern != nil {
+			l = transformPatternLikeExprToComparisonExprIn(ss.Pattern)
+		}
+
+		var w *Where = nil
+		if ss.Where != nil {
+			e := transformExprNodeToExpr(ss.Where)
+			w = NewWhere(e)
+		}
+		return NewShowDatabases(l,w)
+	case ast.ShowTables:
+		var l *ComparisonExpr = nil
+		if ss.Pattern != nil {
+			l = transformPatternLikeExprToComparisonExprIn(ss.Pattern)
+		}
+
+		var w *Where = nil
+		if ss.Where != nil {
+			e := transformExprNodeToExpr(ss.Where)
+			w = NewWhere(e)
+		}
+		return NewShowTables(ss.Extended,ss.Full,ss.DBName,l,w)
+	case ast.ShowProcessList:
+		return NewShowProcessList(ss.Full)
+	case ast.ShowErrors:
+		return NewShowErrors()
+	case ast.ShowWarnings:
+		return NewShowWarnings()
+	case ast.ShowVariables:
+		var l *ComparisonExpr = nil
+		if ss.Pattern != nil {
+			l = transformPatternLikeExprToComparisonExprIn(ss.Pattern)
+		}
+
+		var w *Where = nil
+		if ss.Where != nil {
+			e := transformExprNodeToExpr(ss.Where)
+			w = NewWhere(e)
+		}
+		return NewShowVariables(ss.GlobalScope,l,w)
+	case ast.ShowStatus:
+		var l *ComparisonExpr = nil
+		if ss.Pattern != nil {
+			l = transformPatternLikeExprToComparisonExprIn(ss.Pattern)
+		}
+
+		var w *Where = nil
+		if ss.Where != nil {
+			e := transformExprNodeToExpr(ss.Where)
+			w = NewWhere(e)
+		}
+		return NewShowStatus(ss.GlobalScope,l,w)
+	}
+	panic(fmt.Errorf("unsupported show %v\n",ss.Tp))
+	return nil
+}
+
+//transform ast.ExplainStmt to tree.Explain
+func transformExplainStmtToExplain(es *ast.ExplainStmt) Explain {
+	var stmt Statement = nil
+	switch st := es.Stmt.(type) {
+	case *ast.ShowStmt:
+		stmt = transformShowStmtToShow(st)
+	case *ast.SetOprStmt:
+		stmt = transformSetOprStmtToSelectStatement(st)
+	case *ast.SelectStmt:
+		stmt = transformSelectStmtToSelectStatement(st)
+	case *ast.DeleteStmt:
+		stmt = transformDeleteStmtToDelete(st)
+	case *ast.InsertStmt:
+		stmt = transformInsertStmtToInsert(st)
+	case *ast.UpdateStmt:
+		stmt = transformUpdateStmtToUpdate(st)
+	default:
+		panic(fmt.Errorf("unsupported Statment %v \n",st))
+	}
+	if es.Analyze {
+		return NewExplainAnalyze(stmt,es.Format)
+	}else{
+		return NewExplainStmt(stmt,es.Format)
+	}
+	return nil
+}
+
+//transform ast.ExplainForStmt to tree.Explain
+func transformExplainForStmtToExplain(efs *ast.ExplainForStmt) Explain {
+	return NewExplainFor(efs.Format,efs.ConnectionID)
+}
+
+//transform ast.VariableAssignment to tree.VarAssignmentExpr
+func transformVariableAssignment(va *ast.VariableAssignment)*VarAssignmentExpr {
+	var v Expr = nil
+	if va.Value != nil {
+		v = transformExprNodeToExpr(va.Value)
+	}
+
+	var r Expr = nil
+	if va.ExtendValue != nil {
+		r = transformExprNodeToExpr(va.ExtendValue)
+	}
+	return NewVarAssignmentExpr(va.IsSystem,va.IsGlobal,va.Name,v,r)
+}
+
+//transform ast.SetStmt to tree.SetVar
+func transformSetStmtToSetVar(ss *ast.SetStmt) *SetVar{
+	var a []*VarAssignmentExpr = nil
+	if ss.Variables != nil {
+		a = make([]*VarAssignmentExpr,len(ss.Variables))
+		for i,v := range ss.Variables {
+			a[i] = transformVariableAssignment(v)
+		}
+	}
+	return NewSetVar(a)
 }
