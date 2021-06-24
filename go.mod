@@ -4,6 +4,7 @@ go 1.15
 
 require (
 	github.com/BurntSushi/toml v0.3.1
+	github.com/RoaringBitmap/roaring v0.8.0
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
 	github.com/fagongzi/goetty v1.8.0
 	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287 // indirect

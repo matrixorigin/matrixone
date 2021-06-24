@@ -2,7 +2,9 @@ package compile
 
 import (
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/relation"
+	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
@@ -12,6 +14,7 @@ import (
 const (
 	Normal = iota
 	Merge
+	Insert
 )
 
 type Source struct {
@@ -24,6 +27,7 @@ type Source struct {
 
 type Scope struct {
 	Magic int
+	O     op.OP
 	Data  *Source
 	Ss    []*Scope
 	Ins   vm.Instructions
@@ -36,14 +40,17 @@ type Col struct {
 }
 
 type Exec struct {
-	err error
-	cs  []*Col
-	ss  []*Scope
-	e   engine.Engine
+	err  error
+	cs   []*Col
+	ss   []*Scope
+	c    *compile
+	e    engine.Engine
+	stmt tree.Statement
 }
 
 type compile struct {
 	db   string
+	uid  string
 	sql  string
 	e    engine.Engine
 	ns   metadata.Nodes

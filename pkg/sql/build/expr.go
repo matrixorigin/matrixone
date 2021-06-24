@@ -352,6 +352,49 @@ func stripParens(expr tree.Expr) tree.Expr {
 	return expr
 }
 
+func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
+	switch e := n.(type) {
+	case *tree.NumVal:
+		return buildConstantValue(typ, e.Value)
+	}
+	return nil, fmt.Errorf("'%v' is not support now", n)
+}
+
+func buildConstantValue(typ types.Type, val constant.Value) (interface{}, error) {
+	switch val.Kind() {
+	case constant.Int:
+		switch typ.Oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			v, _ := constant.Int64Val(val)
+			return int64(v), nil
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			v, _ := constant.Uint64Val(val)
+			return uint64(v), nil
+		case types.T_float32:
+			v, _ := constant.Float32Val(val)
+			return float32(v), nil
+		case types.T_float64:
+			v, _ := constant.Float64Val(val)
+			return float64(v), nil
+		}
+	case constant.Float:
+		switch typ.Oid {
+		case types.T_float32:
+			v, _ := constant.Float32Val(val)
+			return float32(v), nil
+		case types.T_float64:
+			v, _ := constant.Float64Val(val)
+			return float64(v), nil
+		}
+	case constant.String:
+		switch typ.Oid {
+		case types.T_char, types.T_varchar:
+			return constant.StringVal(val), nil
+		}
+	}
+	return nil, fmt.Errorf("unsupport value: %v", val)
+}
+
 func buildValue(val constant.Value) (extend.Extend, error) {
 	switch val.Kind() {
 	case constant.Int:
