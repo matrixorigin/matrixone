@@ -9,41 +9,17 @@ import (
 	"sync/atomic"
 )
 
-type OnZeroCB func()
-
-type RefHelper struct {
-	Refs     int64
-	OnZeroCB OnZeroCB
-}
-
-func (helper *RefHelper) RefCount() int64 {
-	return atomic.LoadInt64(&helper.Refs)
-}
-
-func (helper *RefHelper) Ref() {
-	atomic.AddInt64(&helper.Refs, int64(1))
-}
-
-func (helper *RefHelper) Unref() {
-	v := atomic.AddInt64(&helper.Refs, int64(-1))
-	if v == 0 {
-		if helper.OnZeroCB != nil {
-			helper.OnZeroCB()
-		}
-	} else if v < 0 {
-		panic("logic error")
-	}
-}
-
 type PostCloseCB = func(interface{})
 
 type SegmentHolder struct {
-	RefHelper
+	common.RefHelper
 	ID     common.ID
 	BufMgr mgrif.IBufferManager
+	Inited bool
 	self   struct {
 		sync.RWMutex
-		Indexes []*Node
+		Indexes    []*Node
+		ColIndexes map[int][]int
 	}
 	tree struct {
 		sync.RWMutex
@@ -59,6 +35,7 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	holder := &SegmentHolder{ID: id, Type: segType, BufMgr: bufMgr}
 	holder.tree.Blocks = make([]*BlockHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
+	holder.self.ColIndexes = make(map[int][]int)
 	holder.self.Indexes = make([]*Node, 0)
 	holder.OnZeroCB = holder.close
 	holder.PostCloseCB = cb
@@ -66,17 +43,60 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	return holder
 }
 
+func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
+	if holder.Inited {
+		panic("logic error")
+	}
+	indexesMeta := segFile.GetIndexesMeta()
+	if indexesMeta == nil {
+		return
+	}
+	for _, meta := range indexesMeta.Data {
+		vf := segFile.MakeVirtualIndexFile(meta)
+		col := int(meta.Cols.Slice()[0])
+		node := newNode(holder.BufMgr, vf, ZoneMapIndexConstructor, meta.Ptr.Len, meta.Cols, nil)
+		idxes, ok := holder.self.ColIndexes[col]
+		if !ok {
+			idxes = make([]int, 0)
+			holder.self.ColIndexes[col] = idxes
+		}
+		holder.self.ColIndexes[col] = append(holder.self.ColIndexes[col], len(holder.self.Indexes))
+		holder.self.Indexes = append(holder.self.Indexes, node)
+	}
+	holder.Inited = true
+}
+
 func (holder *SegmentHolder) close() {
 	for _, blk := range holder.tree.Blocks {
 		blk.Unref()
 	}
 
-	for _, index := range holder.self.Indexes {
-		index.Unref()
+	for _, colIndex := range holder.self.Indexes {
+		colIndex.Unref()
 	}
 	if holder.PostCloseCB != nil {
 		holder.PostCloseCB(holder)
 	}
+}
+
+func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
+	idxes, ok := holder.self.ColIndexes[colIdx]
+	if !ok {
+		// TODO
+		ctx.BoolRes = true
+		return nil
+	}
+	var err error
+	for _, idx := range idxes {
+		node := holder.self.Indexes[idx].GetManagedNode()
+		err = node.DataNode.(Index).Eval(ctx)
+		if err != nil {
+			node.Close()
+			return err
+		}
+		node.Close()
+	}
+	return nil
 }
 
 func (holder *SegmentHolder) stringNoLock() string {

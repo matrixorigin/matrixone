@@ -36,6 +36,10 @@ func (n *Order) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Order) Columns() []string {
+	return n.Prev.Columns()
+}
+
 func (n *Order) Attribute() map[string]types.Type {
 	return n.Attrs
 }

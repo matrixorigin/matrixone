@@ -3,15 +3,18 @@ package db
 import (
 	"context"
 	"fmt"
-	"github.com/panjf2000/ants/v2"
 	"math/rand"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/panjf2000/ants/v2"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -302,8 +305,22 @@ func TestConcurrency(t *testing.T) {
 		for blkIt.Valid() {
 			tblkCnt++
 			blkHandle := blkIt.GetBlockHandle()
-			// indexHolder := blkHandle.GetIndexHolder()
-			// t.Log(indexHolder.String())
+			col0 := blkHandle.GetColumn(0)
+			ctx := index.NewFilterCtx(index.OpEq)
+			ctx.Val = int32(0 + col0.GetColIdx()*100)
+			err = col0.EvalFilter(ctx)
+			assert.Nil(t, err)
+			if col0.GetBlockType() > base.PERSISTENT_BLK {
+				assert.False(t, ctx.BoolRes)
+			}
+			ctx.Reset()
+			ctx.Op = index.OpEq
+			ctx.Val = int32(1 + col0.GetColIdx()*100)
+			err = col0.EvalFilter(ctx)
+			assert.Nil(t, err)
+			if col0.GetBlockType() > base.PERSISTENT_BLK {
+				assert.True(t, ctx.BoolRes)
+			}
 			cursors := blkHandle.InitScanCursor()
 			for _, cursor := range cursors {
 				cursor.Close()

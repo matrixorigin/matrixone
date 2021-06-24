@@ -8,5 +8,6 @@ type OP interface {
 	Name() string
 	Rename(string)
 	String() string
+	Columns() []string
 	Attribute() map[string]types.Type
 }

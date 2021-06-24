@@ -53,11 +53,10 @@ func (c *compile) Compile(u interface{}, fill func(interface{}, *batch.Batch)) (
 			return nil, err
 		}
 		mp := o.Attribute()
+		attrs := o.Columns()
 		cs := make([]*Col, 0, len(mp))
-		attrs := make([]string, 0, len(mp))
-		for k, v := range mp {
-			attrs = append(attrs, k)
-			cs = append(cs, &Col{v.Oid, k})
+		for _, attr := range attrs {
+			cs = append(cs, &Col{mp[attr].Oid, attr})
 		}
 		for _, s := range ss {
 			s.Ins = append(s.Ins, vm.Instruction{
@@ -191,6 +190,7 @@ func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 	case *product.Product:
 		return nil, fmt.Errorf("'%s' unsupprt now", o)
 	case *innerJoin.Join:
+		return c.compileInnerJoin(n, mp)
 	case *naturalJoin.Join:
 	case *relation.Relation:
 		return c.compileRelation(n, mp)

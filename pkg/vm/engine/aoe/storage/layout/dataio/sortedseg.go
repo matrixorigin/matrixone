@@ -45,7 +45,7 @@ type SortedSegmentFile struct {
 	BlocksMeta map[common.ID]*FileMeta
 }
 
-func (sf *SortedSegmentFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (sf *SortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
 	vf := &EmbbedIndexFile{
 		SegmentFile: sf,
 		Meta:        meta,

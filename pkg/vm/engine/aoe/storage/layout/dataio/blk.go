@@ -68,7 +68,7 @@ func (bf *BlockFile) GetIndexesMeta() *base.IndexesMeta {
 	return bf.Meta.Indexes
 }
 
-func (bf *BlockFile) MakeVirtalIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (bf *BlockFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
 	vf := &EmbbedBlockIndexFile{
 		EmbbedIndexFile: EmbbedIndexFile{
 			SegmentFile: bf.SegmentFile,

@@ -5,11 +5,12 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type Node struct {
 	*bmgr.Node
-	RefHelper
+	common.RefHelper
 	Cols        *roaring.Bitmap
 	PostCloseCB PostCloseCB
 }

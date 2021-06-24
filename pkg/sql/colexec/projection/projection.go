@@ -38,6 +38,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 	rbat := batch.New(true, n.Attrs)
+	if len(bat.Sels) > 0 {
+		rbat.Sels = bat.Sels
+		rbat.SelsData = bat.SelsData
+		bat.Sels = nil
+		bat.SelsData = nil
+	}
 	for i := range n.Attrs {
 		if rbat.Vecs[i], _, err = n.Es[i].Eval(bat, proc); err != nil {
 			rbat.Vecs = rbat.Vecs[:i]

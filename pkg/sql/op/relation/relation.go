@@ -6,14 +6,16 @@ import (
 	"matrixone/pkg/vm/engine"
 )
 
-func New(name, schema string, r engine.Relation) *Relation {
+func New(s bool, name, schema string, r engine.Relation) *Relation {
 	var us []*Unit
+	var cols []string
 
 	attrs := make(map[string]types.Type)
 	{
 		attrDefs := r.Attribute()
 		for _, attr := range attrDefs {
 			attrs[attr.Name] = attr.Type
+			cols = append(cols, attr.Name)
 		}
 	}
 	{
@@ -43,8 +45,10 @@ func New(name, schema string, r engine.Relation) *Relation {
 		}
 	}
 	return &Relation{
+		S:     s,
 		R:     r,
 		Us:    us,
+		Cols:  cols,
 		Rid:   name,
 		ID:    name,
 		Attrs: attrs,
@@ -61,10 +65,14 @@ func (n *Relation) Rename(name string) {
 }
 
 func (n *Relation) String() string {
-	if len(n.DB) == 0 {
-		return n.Rid
+	if n.S {
+		return n.ID
 	}
-	return fmt.Sprintf("(%s.%s)", n.DB, n.Rid)
+	return fmt.Sprintf("%s.%s", n.DB, n.Rid)
+}
+
+func (n *Relation) Columns() []string {
+	return n.Cols
 }
 
 func (n *Relation) Attribute() map[string]types.Type {

@@ -26,6 +26,10 @@ func (n *Limit) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Limit) Columns() []string {
+	return n.Prev.Columns()
+}
+
 func (n *Limit) Attribute() map[string]types.Type {
 	return n.Attrs
 }
