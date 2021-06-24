@@ -40,17 +40,20 @@ type SchemaInfo struct {
 
 // TableInfo stores the information of a table or view.
 type TableInfo struct {
-	SchemaId uint64 `json:"schema_id"`
-	Id       uint64 `json:"id"`
-	Name     string `json:"name"`
-	// Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
-	Type string `json:"type"`
-	// Column is listed in order in which they appear in schema
-	Indexs    []IndexInfo  `json:"indexs"`
-	Columns   []ColumnInfo `json:"columns"`
+	SchemaId  uint64       `json:"schema_id"`
+	Id        uint64       `json:"id"`
+	Name      string       `json:"name"`
+	Type      uint64       `json:"type"` // Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
+	Indexes   []IndexInfo  `json:"indexes"`
+	Columns   []ColumnInfo `json:"columns"` // Column is listed in order in which they appear in schema
 	Comment   []byte       `json:"comment"`
 	State     SchemaState  `json:"state"`
 	Partition []byte       `json:"partition"`
+}
+
+type TabletInfo struct {
+	Table TableInfo
+	Name  string
 }
 
 // ColumnInfo stores the information of a column.

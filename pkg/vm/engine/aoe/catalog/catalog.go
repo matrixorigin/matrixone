@@ -150,7 +150,7 @@ func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
 	return &db, nil
 }
 
-func (c *Catalog) CreateTable(dbName string, tableName string, typ string, comment string, tableDefs []engine.TableDef, pdef *engine.PartitionBy, createStatement []byte) (uint64, error) {
+func (c *Catalog) CreateTable(dbName, tableName, comment string, typ uint64, tableDefs []engine.TableDef, pdef *engine.PartitionBy) (uint64, error) {
 	dbId, err := c.checkDBExists(dbName)
 	if err != nil {
 		return 0, err
@@ -175,7 +175,7 @@ func (c *Catalog) CreateTable(dbName string, tableName string, typ string, comme
 	if err != nil {
 		return 0, err
 	}
-	tInfo, err := aoe.Transfer(dbId, tid, tableName, typ, comment, tableDefs, pdef)
+	tInfo, err := aoe.Transfer(dbId, tid, typ, tableName, comment, tableDefs, pdef)
 	if err != nil {
 		return 0, ErrTableCreateFailed
 	}
@@ -382,6 +382,10 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) error {
 		return nil
 	}
 	return ErrTableCreateExists
+}
+
+func (c *Catalog) EncodeTabletName(tableId uint64, groupId uint64) string {
+	return fmt.Sprintf("%d#%d", tableId, groupId)
 }
 
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
