@@ -34,6 +34,7 @@ func NewTestEngine() engine.Engine {
 		"V100000",
 		"V1000000",
 	}
+
 	for _, rel := range tables {
 		fmt.Printf("test table: %s\n", rel)
 	}
@@ -527,6 +528,7 @@ func CreateV(e engine.Database) {
 		}
 	}
 }
+
 
 func CreateVCount(e engine.Database, count int) {
 	name := fmt.Sprintf("V%d", count)
