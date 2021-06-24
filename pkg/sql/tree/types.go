@@ -9,6 +9,8 @@ type InternalType uint8
 //sql type
 type T struct {
 	InternalType InternalType
+	//fractional seconds precision in TIME,DATETIME,TIMESTAMP
+	Fsp int
 }
 
 var (

@@ -35,6 +35,8 @@ func (mce *MysqlCmdExecutor) addSqlCount(a uint64)  {
 extract the data from the pipeline.
 obj: routine obj
 TODO:Add error
+Warning: The pipeline is the multi-thread environment. The getDataFromPipeline will
+	access the shared data. To be careful, when it writes the shared data.
  */
 func getDataFromPipeline(obj interface{},bat *batch.Batch){
 	rt := obj.(client.Routine)
@@ -43,12 +45,18 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 	var choose bool = ! config.GlobalSystemVariables.GetSendRow()
 	if choose {
 		goID := client.GetRoutineId()
-		fmt.Printf("goid %d \n",goID)
 
+		fmt.Printf("goid %d \n",goID)
 
 		proto := rt.GetClientProtocol().(*client.MysqlClientProtocol)
 
-		mrs := ses.Mrs
+		//Create a new temporary resultset per pipeline thread.
+		mrs := &client.MysqlResultSet{}
+		//Warning: Don't change Columns in this.
+		//Reference the shared Columns of the session among multi-thread.
+		mrs.Columns = ses.Mrs.Columns
+		mrs.Name2Index = ses.Mrs.Name2Index
+
 		//one row
 		row := make([]interface{}, len(bat.Vecs))
 		mrs.Data = make([][]interface{},1)
@@ -208,6 +216,8 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 					}
 				}
 
+				//fmt.Printf("row -+> %v \n",row)
+
 				//send row
 				if err := proto.SendResultSetTextRow(mrs,0); err != nil {
 					//return err
@@ -366,6 +376,8 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						fmt.Printf("getDataFromPipeline : unsupported type %d \n",vec.Typ.Oid)
 					}
 				}
+
+				//fmt.Printf("row -*> %v \n",row)
 
 				//send row
 				if err := proto.SendResultSetTextRow(mrs,0); err != nil {
@@ -868,6 +880,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				}
 
 				ses.Mrs.AddColumn(col)
+
+				//fmt.Printf("doComQuery col name %v type %v \n",col.Name(),col.ColumnType())
 
 				/*
 					mysql COM_QUERY response: send the column definition per column

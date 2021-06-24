@@ -1,5 +1,65 @@
 package tree
 
+type CreateOption interface {
+	NodePrinter
+}
+
+type createOptionImpl struct {
+	CreateOption
+}
+
+type CreateOptionDefault struct {
+	createOptionImpl
+}
+
+type CreateOptionCharset struct {
+	createOptionImpl
+	Charset string
+}
+
+func NewCreateOptionCharset(c string)*CreateOptionCharset{
+	return &CreateOptionCharset{
+		Charset:          c,
+	}
+}
+
+type CreateOptionCollate struct {
+	createOptionImpl
+	Collate string
+}
+
+func NewCreateOptionCollate(c string)*CreateOptionCollate{
+	return &CreateOptionCollate{
+		Collate: c,
+	}
+}
+
+type CreateOptionEncryption struct {
+	createOptionImpl
+	Encrypt string
+}
+
+func NewCreateOptionEncryption(e string)*CreateOptionEncryption{
+	return &CreateOptionEncryption{
+		Encrypt: e,
+	}
+}
+
+type CreateDatabase struct {
+	statementImpl
+	IfNotExists     bool
+	Name            Identifier
+	CreateOptions []CreateOption
+}
+
+func NewCreateDatabase(ine bool,name Identifier,opts []CreateOption)*CreateDatabase{
+	return &CreateDatabase{
+		IfNotExists:   ine,
+		Name:          name,
+		CreateOptions: opts,
+	}
+}
+
 type CreateTable struct {
 	statementImpl
 	IfNotExists      bool

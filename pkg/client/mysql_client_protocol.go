@@ -851,6 +851,8 @@ func (mcp *MysqlClientProtocol) SendEOFPacketIf(warnings, status uint16) error {
 	return nil
 }
 
+//the OK or EOF packet
+//thread safe
 func (mcp *MysqlClientProtocol) SendEOFOrOkPacket(warnings,status uint16) error {
 	mcp.GetLock().Lock()
 	defer mcp.GetLock().Unlock()
@@ -937,22 +939,7 @@ func (mcp *MysqlClientProtocol) SendColumnDefinition(column Column,cmd int) erro
 	mcp.GetLock().Lock()
 	defer mcp.GetLock().Unlock()
 
-	mysqlColumn,ok := column.(*MysqlColumn)
-	if !ok{
-		return fmt.Errorf("sendColumn need MysqlColumn")
-	}
-
-	var data []byte
-	if mcp.capability & CLIENT_PROTOCOL_41 != 0{
-		data = mcp.makeColumnDefinition41(mysqlColumn,cmd)
-	}else{
-		//TODO: ColumnDefinition320
-	}
-
-	if err := mcp.sendPayload(data); err != nil{
-		return fmt.Errorf("send column failed.error:%v",err)
-	}
-	return nil
+	return mcp.sendColumnDefinition(column,cmd)
 }
 
 //the server send the column definition to the client
@@ -981,14 +968,7 @@ func (mcp *MysqlClientProtocol) SendColumnCount(count uint64) error {
 	mcp.GetLock().Lock()
 	defer mcp.GetLock().Unlock()
 
-	var data []byte = make([]byte,20)
-
-	pos := mcp.writeIntLenEnc(data,0,count)
-
-	if err := mcp.sendPayload(data[:pos]); err != nil{
-		return fmt.Errorf("send column count failed.error:%v",err)
-	}
-	return nil
+	return mcp.sendColumnCount(count)
 }
 
 //the server send the column count
@@ -1109,21 +1089,7 @@ func (mcp *MysqlClientProtocol) SendResultSetTextRow(mrs *MysqlResultSet, r uint
 	mcp.GetLock().Lock()
 	defer mcp.GetLock().Unlock()
 
-	var data []byte
-	var err error
-	if data,err = mcp.makeResultSetTextRow(mrs,r); err != nil{
-		//ERR_Packet in case of error
-		if err1 := mcp.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,err.Error()) ; err1 != nil{
-			return err1
-		}
-		return err
-	}
-
-	if err = mcp.sendPayload(data); err != nil{
-		return fmt.Errorf("send result set text row failed. error: %v",err)
-	}
-
-	return nil
+	return mcp.sendResultSetTextRow(mrs,r)
 }
 
 //the server send every row of the result set as an independent packet
