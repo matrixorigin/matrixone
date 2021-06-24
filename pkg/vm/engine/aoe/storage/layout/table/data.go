@@ -7,7 +7,6 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -35,13 +34,13 @@ type ITableData interface {
 	AppendColSegments(colSegs []col.IColumnSegment)
 }
 
-func NewTableData(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
+func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
 	data := &TableData{
 		Columns:     make([]col.IColumnData, 0),
 		MTBufMgr:    mtBufMgr,
 		SSTBufMgr:   sstBufMgr,
 		Meta:        meta,
-		IndexHolder: index.NewTableHolder(meta.ID),
+		IndexHolder: index.NewTableHolder(indexBufMgr, meta.ID),
 	}
 	for idx, colDef := range meta.Schema.ColDefs {
 		data.Columns = append(data.Columns, col.NewColumnData(data.IndexHolder, fsMgr, mtBufMgr, sstBufMgr, colDef.Type, idx))
@@ -207,9 +206,9 @@ func (ts *Tables) CreateTableNoLock(tbl ITableData) (err error) {
 	return nil
 }
 
-func (ts *Tables) Replay(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.MetaInfo) error {
+func (ts *Tables) Replay(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.MetaInfo) error {
 	for _, meta := range info.Tables {
-		tbl := NewTableData(fsMgr, mtBufMgr, sstBufMgr, meta)
+		tbl := NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, meta)
 		colTypes := meta.Schema.Types()
 		activeSeg := meta.GetActiveSegment()
 		for _, segMeta := range meta.Segments {
@@ -265,7 +264,7 @@ func (ts *Tables) Replay(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBuffer
 	return nil
 }
 
-func MockSegment(indexHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) col.IColumnSegment {
+func MockSegment(indexHolder *index.TableHolder, fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) col.IColumnSegment {
 	seg := col.NewColumnSegment(indexHolder, fsMgr, mtBufMgr, sstBufMgr, colIdx, meta)
 	for _, blkMeta := range meta.Blocks {
 		blk, err := seg.RegisterBlock(blkMeta)
@@ -277,7 +276,7 @@ func MockSegment(indexHolder *index.TableHolder, fsMgr ldio.IManager, mtBufMgr, 
 	return seg
 }
 
-func MockSegments(fsMgr ldio.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table, tblData ITableData) []common.ID {
+func MockSegments(fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table, tblData ITableData) []common.ID {
 	var segIDs []common.ID
 	for _, segMeta := range meta.Segments {
 		var colSegs []col.IColumnSegment

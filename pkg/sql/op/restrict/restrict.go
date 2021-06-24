@@ -27,6 +27,10 @@ func (n *Restrict) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Restrict) Columns() []string {
+	return n.Prev.Columns()
+}
+
 func (n *Restrict) Attribute() map[string]types.Type {
 	return n.Attrs
 }

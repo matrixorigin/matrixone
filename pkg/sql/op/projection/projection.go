@@ -84,6 +84,10 @@ func (n *Projection) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Projection) Columns() []string {
+	return n.As
+}
+
 func (n *Projection) Attribute() map[string]types.Type {
 	return n.Attrs
 }

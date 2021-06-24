@@ -20,9 +20,9 @@ func NewTestEngine() engine.Engine {
 	CreateT(db)
 	CreateW(db)
 	CreateV(db)
-	CreateVCount(db,10000)
-	CreateVCount(db,100000)
-	CreateVCount(db,1000000)
+	CreateVCount(db, 10000)
+	CreateVCount(db, 100000)
+	CreateVCount(db, 1000000)
 
 	tables := []string{
 		"R",
@@ -34,8 +34,9 @@ func NewTestEngine() engine.Engine {
 		"V100000",
 		"V1000000",
 	}
-	for _,rel := range tables {
-		fmt.Printf("test table: %s\n",rel)
+
+	for _, rel := range tables {
+		fmt.Printf("test table: %s\n", rel)
 	}
 	return e
 }
@@ -528,8 +529,9 @@ func CreateV(e engine.Database) {
 	}
 }
 
-func CreateVCount(e engine.Database,count int) {
-	name := fmt.Sprintf("V%d",count)
+
+func CreateVCount(e engine.Database, count int) {
+	name := fmt.Sprintf("V%d", count)
 	{
 		var defs []engine.TableDef
 

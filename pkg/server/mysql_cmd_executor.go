@@ -7,6 +7,7 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/compile"
+	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/vm/process"
 )
 
@@ -215,6 +216,7 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						fmt.Printf("getDataFromPipeline : unsupported type %d \n",vec.Typ.Oid)
 					}
 				}
+
 
 				//fmt.Printf("row -+> %v \n",row)
 
@@ -800,6 +802,115 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 	}
 }
 
+func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
+	ses := mce.Routine.GetSession()
+	proto := mce.Routine.GetClientProtocol()
+
+	//TODO: check meta data
+	var err error = nil
+	if _,err = config.StorageEngine.Database(name); err != nil {
+		//echo client. no such database
+		return err
+	}
+	oldname := ses.Dbname
+	ses.Dbname = name
+
+	fmt.Printf("user %s change database from [%s] to [%s]\n",ses.User,oldname,ses.Dbname)
+
+	resp := client.NewResponse(
+		client.OkResponse,
+		0,
+		int(client.COM_INIT_DB),
+		nil,
+	)
+
+	if err = proto.SendResponse(resp) ; err != nil {
+		return err
+	}
+	//echo client. database changed.
+	return nil
+}
+
+//handle Use statement
+func (mce *MysqlCmdExecutor) handleUse(use *tree.Use) error {
+	return mce.handleUseDB(use.Name)
+}
+
+func (mce *MysqlCmdExecutor) handleShowDatabases(sd *tree.ShowDatabases) error {
+	var err error = nil
+	ses := mce.Routine.GetSession()
+	proto := mce.Routine.GetClientProtocol()
+
+	mrs := ses.Mrs
+	col := &client.MysqlColumn{}
+	col.SetName("Database")
+	col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
+	col.SetCharset(uint16(client.Utf8mb4CollationID))
+
+	mrs.AddColumn(col)
+
+	//TODO:get database name from the engine
+	row := make([]interface{},1)
+	row[0] = ses.Dbname
+	mrs.AddRow(row)
+
+	mer := client.NewMysqlExecutionResult(0,0,0,0,mrs)
+	resp := client.NewResponse(
+		client.ResultResponse,
+		0,
+		int(client.COM_QUERY),
+		mer,
+	)
+
+	if err = proto.SendResponse(resp) ; err != nil {
+		return err
+	}
+	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleShowTables(st *tree.ShowTables)error  {
+	var err error = nil
+	ses := mce.Routine.GetSession()
+	proto := mce.Routine.GetClientProtocol()
+
+	mrs := ses.Mrs
+	col := &client.MysqlColumn{}
+
+	col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
+	col.SetCharset(uint16(45))
+	mrs.AddColumn(col)
+
+	//TODO:get database name from the engine
+	col.SetName("Tables_in_" + ses.Dbname)
+
+	db,err := config.StorageEngine.Database(ses.Dbname)
+	if err != nil {
+		return err
+	}
+
+	tables := db.Relations()
+	fmt.Printf("table count %v \n",len(tables))
+	for _,t := range tables {
+		row := make([]interface{},1)
+		fmt.Printf("table %v \n",t.ID())
+		row[0] = t.ID()
+		mrs.AddRow(row)
+	}
+
+	mer := client.NewMysqlExecutionResult(0,0,0,0,mrs)
+	resp := client.NewResponse(
+		client.ResultResponse,
+		0,
+		int(client.COM_QUERY),
+		mer,
+	)
+
+	if err = proto.SendResponse(resp) ; err != nil {
+		return err
+	}
+	return nil
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.Routine.GetSession()
@@ -812,8 +923,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
 
-	comp := compile.New(ses.Dbname, sql, config.StorageEngine, config.ClusterNodes, proc)
-	execs, err := comp.Compile(mce.Routine,getDataFromPipeline)
+	comp := compile.New(ses.Dbname, sql,ses.User, config.StorageEngine, config.ClusterNodes, proc)
+	execs, err := comp.Compile()
 	if err != nil {
 		return err
 	}
@@ -827,6 +938,44 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	}()
 
 	for _, exec := range execs {
+		stmt := exec.Statement()
+
+		var selfHandle bool = false
+
+		switch st := stmt.(type) {
+		case *tree.Use:
+			selfHandle = true
+			if err = mce.handleUse(st); err != nil {
+				return err
+			}
+
+		case *tree.ShowDatabases:
+			selfHandle = true
+			if err = mce.handleShowDatabases(st) ; err != nil {
+				return err
+			}
+		case *tree.ShowTables:
+			selfHandle = true
+			if err = mce.handleShowTables(st) ; err != nil {
+				return err
+			}
+		case *tree.SetVar:
+			selfHandle = true
+			return fmt.Errorf("unsupported set var yet")
+		}
+
+		if selfHandle {
+			continue
+		}
+
+		if err = exec.SetSchema(ses.Dbname); err != nil {
+			return err
+		}
+
+		if err = exec.Compile(mce.Routine,getDataFromPipeline); err != nil {
+			return err
+		}
+
 		columns := exec.Columns()
 		if choose {
 
@@ -978,6 +1127,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 //the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response, error) {
 	var resp *client.Response = nil
+	fmt.Printf("cmd %v \n",req.GetCmd())
 	switch uint8(req.GetCmd()){
 	case client.COM_QUIT:
 		resp = client.NewResponse(
@@ -1008,18 +1158,16 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response,
 	case client.COM_INIT_DB:
 
 		var dbname =string(req.GetData().([]byte))
-		ses := mce.Routine.GetSession()
-		oldname := ses.Dbname
-		ses.Dbname = dbname
+		err := mce.handleUseDB(dbname)
+		if err != nil {
+			resp = client.NewResponse(
+				client.ErrorResponse,
+				0,
+				int(client.COM_INIT_DB),
+				err,
+			)
+		}
 
-		fmt.Printf("user %s change databse from [%s] to [%s]\n",ses.User,oldname,ses.Dbname)
-
-		resp = client.NewResponse(
-			client.OkResponse,
-			0,
-			int(client.COM_INIT_DB),
-			nil,
-		)
 		return resp,nil
 	default:
 		err := fmt.Errorf("unsupported command. 0x%x \n",req.Cmd)

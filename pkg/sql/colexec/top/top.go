@@ -41,6 +41,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	var err error
 
+	Prepare(proc, arg)
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}

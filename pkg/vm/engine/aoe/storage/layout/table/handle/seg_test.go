@@ -27,7 +27,7 @@ func TestSegmentHandle(t *testing.T) {
 	info := md.MockInfo(row_count, uint64(blk_cnt))
 	tableMeta := md.MockTable(info, schema, uint64(blk_cnt*seg_cnt))
 
-	tableData := table.NewTableData(ldio.DefaultFsMgr, bufMgr, bufMgr, tableMeta)
+	tableData := table.NewTableData(ldio.DefaultFsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
 	segIDs := table.MockSegments(ldio.DefaultFsMgr, bufMgr, bufMgr, tableMeta, tableData)
 	assert.Equal(t, uint64(seg_cnt), tableData.GetSegmentCount())
 	// t.Log(bufMgr.String())

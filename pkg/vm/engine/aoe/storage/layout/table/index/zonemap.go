@@ -39,6 +39,43 @@ func NewZoneMapEmptyNode(capacity uint64, freeFunc buf.MemoryFreeFunc) Index {
 	}
 }
 
+func MockInt32ZmIndexes(cols int) (indexes []Index) {
+	t := types.Type{Oid: types.T_int32, Size: 4}
+	for idx := 0; idx < cols; idx++ {
+		minv := int32(1) + int32(idx)*100
+		maxv := int32(99) + int32(idx)*100
+		zm := NewZoneMap(t, minv, maxv, int16(idx))
+		indexes = append(indexes, zm)
+	}
+	return indexes
+}
+
+func (i *ZoneMapIndex) GetCol() int16 {
+	return i.Col
+}
+
+func (i *ZoneMapIndex) Eval(ctx *FilterCtx) error {
+	switch ctx.Op {
+	case OpEq:
+		ctx.BoolRes = i.Eq(ctx.Val)
+	case OpNe:
+		ctx.BoolRes = i.Ne(ctx.Val)
+	case OpGe:
+		ctx.BoolRes = i.Ge(ctx.Val)
+	case OpGt:
+		ctx.BoolRes = i.Gt(ctx.Val)
+	case OpLe:
+		ctx.BoolRes = i.Le(ctx.Val)
+	case OpLt:
+		ctx.BoolRes = i.Lt(ctx.Val)
+	case OpIn:
+		ctx.BoolRes = i.Ge(ctx.ValMin) && i.Le(ctx.ValMax)
+	case OpOut:
+		ctx.BoolRes = i.Lt(ctx.ValMin) || i.Gt(ctx.ValMax)
+	}
+	return nil
+}
+
 func (i *ZoneMapIndex) FreeMemory() {
 	if i.FreeFunc != nil {
 		i.FreeFunc(i)

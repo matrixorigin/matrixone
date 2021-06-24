@@ -77,7 +77,7 @@ const (
 	// DefaultCollationID is utf8mb4_bin(46)
 	utf8mb4BinCollationID 	uint8 = 46
 
-	utf8mb4CollationID		uint8 = 45
+	Utf8mb4CollationID uint8 = 45
 
 	AuthNativePassword		string = "mysql_native_password"
 
@@ -702,7 +702,7 @@ func (mcp *MysqlClientProtocol) handleClientResponse320(resp320 response320) err
 	//if the client does not notice its default charset, the server gives a default charset.
 	//Run the sql in mysql 8.0.23 to get the charset
 	//the sql: select * from information_schema.collations where collation_name = 'utf8mb4_general_ci';
-	mcp.collationID = int(utf8mb4CollationID)
+	mcp.collationID = int(Utf8mb4CollationID)
 	mcp.collationName = "utf8mb4_general_ci"
 	mcp.charset = "utf8mb4"
 

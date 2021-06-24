@@ -7,36 +7,63 @@ import (
 	"github.com/pilosa/pilosa/roaring"
 )
 
-type IndexInfo struct {
-	Node INode
-	Cols *roaring.Bitmap
+type OpType uint8
+
+const (
+	OpInv OpType = iota
+	OpEq
+	OpNe
+	OpLt
+	OpLe
+	OpGt
+	OpGe
+	OpIn
+	OpOut
+)
+
+type FilterCtx struct {
+	Op  OpType
+	Val interface{}
+
+	// Used for IN | NOT IN
+	ValSet map[interface{}]bool
+
+	ValMin interface{}
+	ValMax interface{}
+
+	BoolRes bool
+	BMRes   *roaring.Bitmap
+	Err     error
 }
 
-func (info *IndexInfo) GetIndexHandle() NodeHandle {
-	return info.Node.GetHandle()
+func NewFilterCtx(t OpType) *FilterCtx {
+	ctx := &FilterCtx{
+		Op:     t,
+		ValSet: make(map[interface{}]bool),
+	}
+	return ctx
 }
 
-func (info *IndexInfo) ContainsCol(v uint64) bool {
-	return info.Cols.Contains(v)
+func (ctx *FilterCtx) Reset() {
+	ctx.Op = OpInv
+	ctx.Val = nil
+	for k := range ctx.ValSet {
+		delete(ctx.ValSet, k)
+	}
+	ctx.ValMin = nil
+	ctx.ValMax = nil
+	ctx.BoolRes = false
+	ctx.BMRes = nil
+	ctx.Err = nil
 }
 
-func (info *IndexInfo) ContainsOnlyCol(v uint64) bool {
-	return info.Cols.Contains(v) && info.Cols.Count() == 1
+func (ctx *FilterCtx) Eval(i Index) error {
+	return i.Eval(ctx)
 }
 
-func (info *IndexInfo) AllCols() []uint64 {
-	return info.Cols.Slice()
-}
-
-// TODO: Just for index framework implementation placeholder
 type Index interface {
 	buf.IMemoryNode
 	Type() base.IndexType
-	Eq(interface{}) bool
-	Ne(interface{}) bool
-	Lt(interface{}) bool
-	Le(interface{}) bool
-	Gt(interface{}) bool
-	Ge(interface{}) bool
-	Btw(interface{}) bool
+	GetCol() int16
+	Eval(ctx *FilterCtx) error
 }

@@ -164,6 +164,10 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				ctr.bats = ctr.bats[:len(ctr.bats)-1]
 				reg.Wg.Done()
 				continue
+			} else {
+				blk := ctr.bats[len(ctr.bats)-1]
+				blk.Bat.Sels = bat.Sels
+				blk.Bat.SelsData = bat.SelsData
 			}
 			switch {
 			case ctr.spilled:

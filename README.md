@@ -50,6 +50,7 @@ Change to the root directory of the `matrixone`.
 
 **2. Connect the server**
 
+
 We need to install the mysql client first.
 
 Test Account:

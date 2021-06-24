@@ -4,11 +4,11 @@ import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
+	// log "github.com/sirupsen/logrus"
 )
 
 type IColumnBlock interface {
@@ -24,6 +24,7 @@ type IColumnBlock interface {
 	GetIndexHolder() *index.BlockHolder
 	GetColIdx() int
 	CloneWithUpgrade(IColumnSegment, *md.Block) IColumnBlock
+	EvalFilter(*index.FilterCtx) error
 	String() string
 	Ref() IColumnBlock
 	UnRef()
@@ -38,8 +39,12 @@ type ColumnBlock struct {
 	ColIdx      int
 	Refs        int64
 	Meta        *md.Block
-	File        ldio.ISegmentFile
+	File        base.ISegmentFile
 	IndexHolder *index.BlockHolder
+}
+
+func (blk *ColumnBlock) EvalFilter(ctx *index.FilterCtx) error {
+	return blk.IndexHolder.EvalFilter(blk.ColIdx, ctx)
 }
 
 func (blk *ColumnBlock) GetRefs() int64 {
