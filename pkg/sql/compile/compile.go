@@ -9,6 +9,7 @@ import (
 	"matrixone/pkg/sql/op/dedup"
 	"matrixone/pkg/sql/op/group"
 	"matrixone/pkg/sql/op/innerJoin"
+	"matrixone/pkg/sql/op/insert"
 	"matrixone/pkg/sql/op/limit"
 	"matrixone/pkg/sql/op/naturalJoin"
 	"matrixone/pkg/sql/op/offset"
@@ -20,6 +21,7 @@ import (
 	"matrixone/pkg/sql/op/summarize"
 	"matrixone/pkg/sql/op/top"
 	"matrixone/pkg/sql/opt"
+	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
@@ -28,53 +30,72 @@ import (
 	"sync"
 )
 
-func New(db string, sql string, e engine.Engine, ns metadata.Nodes, proc *process.Process) *compile {
+func New(db string, sql string, uid string,
+	e engine.Engine, ns metadata.Nodes, proc *process.Process) *compile {
 	return &compile{
 		e:    e,
 		db:   db,
 		ns:   ns,
+		uid:  uid,
 		sql:  sql,
 		proc: proc,
 	}
 }
 
-func (c *compile) Compile(u interface{}, fill func(interface{}, *batch.Batch)) ([]*Exec, error) {
-	os, err := build.New(c.db, c.sql, c.e, c.proc).Build()
+func (c *compile) Compile() ([]*Exec, error) {
+	stmts, err := tree.NewParser().Parse(c.sql)
 	if err != nil {
 		return nil, err
 	}
-	for i, o := range os {
-		os[i] = opt.Optimize(o)
-	}
-	es := make([]*Exec, len(os))
-	for i, o := range os {
-		ss, err := c.compile(o, make(map[string]uint64))
-		if err != nil {
-			return nil, err
-		}
-		mp := o.Attribute()
-		attrs := o.Columns()
-		cs := make([]*Col, 0, len(mp))
-		for _, attr := range attrs {
-			cs = append(cs, &Col{mp[attr].Oid, attr})
-		}
-		for _, s := range ss {
-			s.Ins = append(s.Ins, vm.Instruction{
-				Op: vm.MyOutput,
-				Arg: &myoutput.Argument{
-					Data:  u,
-					Func:  fill,
-					Attrs: attrs,
-				},
-			})
-		}
+	es := make([]*Exec, len(stmts))
+	for i, stmt := range stmts {
 		es[i] = &Exec{
-			cs: cs,
-			ss: ss,
-			e:  c.e,
+			c:    c,
+			stmt: stmt,
 		}
 	}
 	return es, nil
+}
+
+func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch)) error {
+	o, err := build.New(e.c.db, e.c.sql, e.c.e, e.c.proc).BuildStatement(e.stmt)
+	if err != nil {
+		return err
+	}
+	o = opt.Optimize(o)
+	ss, err := e.c.compile(o, make(map[string]uint64))
+	if err != nil {
+		return err
+	}
+	mp := o.Attribute()
+	attrs := o.Columns()
+	cs := make([]*Col, 0, len(mp))
+	for _, attr := range attrs {
+		cs = append(cs, &Col{mp[attr].Oid, attr})
+	}
+	for _, s := range ss {
+		s.Ins = append(s.Ins, vm.Instruction{
+			Op: vm.MyOutput,
+			Arg: &myoutput.Argument{
+				Data:  u,
+				Func:  fill,
+				Attrs: attrs,
+			},
+		})
+	}
+	e.cs = cs
+	e.ss = ss
+	e.e = e.c.e
+	return nil
+}
+
+func (e *Exec) Statement() tree.Statement {
+	return e.stmt
+}
+
+func (e *Exec) SetSchema(db string) error {
+	e.c.db = db
+	return nil
 }
 
 func (e *Exec) Columns() []*Col {
@@ -98,6 +119,14 @@ func (e *Exec) Run() error {
 			wg.Add(1)
 			go func(s *Scope) {
 				if err := s.MergeRun(e.e, wg); err != nil {
+					e.err = err
+				}
+				wg.Done()
+			}(e.ss[i])
+		case Insert:
+			wg.Add(1)
+			go func(s *Scope) {
+				if err := s.Insert(); err != nil {
 					e.err = err
 				}
 				wg.Done()
@@ -173,8 +202,15 @@ func (s *Scope) MergeRun(e engine.Engine, wg sync.WaitGroup) error {
 	return err
 }
 
+func (s *Scope) Insert() error {
+	o, _ := s.O.(*insert.Insert)
+	return o.R.Write(o.Bat)
+}
+
 func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 	switch n := o.(type) {
+	case *insert.Insert:
+		return []*Scope{&Scope{Magic: Insert, O: o}}, nil
 	case *top.Top:
 		return c.compileTop(n, mp)
 	case *dedup.Dedup:
