@@ -2,6 +2,7 @@ package db
 
 import (
 	"io/ioutil"
+	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -149,13 +150,15 @@ func TestOpen(t *testing.T) {
 func TestReplay(t *testing.T) {
 	initDBTest()
 	dbi := initDB()
-	schema := md.MockSchema(2)
-	schema.Name = "mocktbl"
-	_, err := dbi.CreateTable(schema)
+	tableInfo := md.MockTableInfo(2)
+	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mocktbl"}
+	tid, err := dbi.CreateTable(&tablet)
+	assert.Nil(t, err)
+	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockChunk(schema.Types(), rows)
+	ck := chunk.MockChunk(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), ck.GetCount())
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
@@ -163,7 +166,7 @@ func TestReplay(t *testing.T) {
 	}
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(schema.Name, ck, logIdx)
+		err = dbi.Append(tablet.Name, ck, logIdx)
 		assert.Nil(t, err)
 	}
 	time.Sleep(time.Duration(10) * time.Millisecond)
@@ -186,10 +189,10 @@ func TestReplay(t *testing.T) {
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
 
-	_, err = dbi.CreateTable(schema)
+	_, err = dbi.CreateTable(&tablet)
 	assert.NotNil(t, err)
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(schema.Name, ck, logIdx)
+		err = dbi.Append(tablet.Name, ck, logIdx)
 		assert.Nil(t, err)
 	}
 

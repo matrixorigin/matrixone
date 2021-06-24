@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
@@ -50,13 +51,13 @@ func TestCreateTable(t *testing.T) {
 	var wg sync.WaitGroup
 	names := make([]string, 0)
 	for i := 0; i < tblCnt; i++ {
-		schema := md.MockSchema(2)
+		tableInfo := md.MockTableInfo(2)
 		name := fmt.Sprintf("%s%d", prefix, i)
-		schema.Name = name
+		tablet := aoe.TabletInfo{Table: *tableInfo, Name: name}
 		names = append(names, name)
 		wg.Add(1)
 		go func(w *sync.WaitGroup) {
-			_, err := dbi.CreateTable(schema)
+			_, err := dbi.CreateTable(&tablet)
 			assert.Nil(t, err)
 			w.Done()
 		}(&wg)
@@ -75,25 +76,27 @@ func TestCreateDuplicateTable(t *testing.T) {
 	initDBTest()
 	dbi := initDB()
 	defer dbi.Close()
-	schema := md.MockSchema(2)
-	schema.Name = "t1"
 
-	_, err := dbi.CreateTable(schema)
+	tableInfo := md.MockTableInfo(2)
+	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "t1"}
+	_, err := dbi.CreateTable(&tablet)
 	assert.Nil(t, err)
-	_, err = dbi.CreateTable(schema)
+	_, err = dbi.CreateTable(&tablet)
 	assert.NotNil(t, err)
 }
 
 func TestAppend(t *testing.T) {
 	initDBTest()
 	dbi := initDB()
-	schema := md.MockSchema(2)
-	schema.Name = "mocktbl"
-	tid, err := dbi.CreateTable(schema)
+	tableInfo := md.MockTableInfo(2)
+	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mocktbl"}
+	tid, err := dbi.CreateTable(&tablet)
+	assert.Nil(t, err)
+	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockChunk(schema.Types(), rows)
+	ck := chunk.MockChunk(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), ck.GetCount())
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
@@ -104,7 +107,7 @@ func TestAppend(t *testing.T) {
 	assert.NotNil(t, err)
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(schema.Name, ck, logIdx)
+		err = dbi.Append(tableInfo.Name, ck, logIdx)
 		assert.Nil(t, err)
 		// tbl, err := dbi.store.DataTables.GetTable(tid)
 		// assert.Nil(t, err)
@@ -113,7 +116,7 @@ func TestAppend(t *testing.T) {
 
 	cols := []int{0, 1}
 	iterOpts := &e.IterOptions{
-		TableName: schema.Name,
+		TableName: tableInfo.Name,
 		All:       true,
 		ColIdxes:  cols,
 	}
@@ -179,13 +182,15 @@ type InsertReq struct {
 func TestConcurrency(t *testing.T) {
 	initDBTest()
 	dbi := initDB()
-	schema := md.MockSchema(2)
-	schema.Name = "mockcon"
-	tid, err := dbi.CreateTable(schema)
+	tableInfo := md.MockTableInfo(2)
+	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
+	tid, err := dbi.CreateTable(&tablet)
+	assert.Nil(t, err)
+	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := dbi.store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockChunk(schema.Types(), rows)
+	baseCk := chunk.MockChunk(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan *InsertReq)
 	searchCh := make(chan *e.IterOptions)
 
@@ -254,7 +259,7 @@ func TestConcurrency(t *testing.T) {
 		defer wg2.Done()
 		for i := 0; i < insertCnt; i++ {
 			insertReq := &InsertReq{
-				Name:     schema.Name,
+				Name:     tablet.Name,
 				Data:     baseCk,
 				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: baseCk.GetCount()},
 			}
@@ -263,7 +268,7 @@ func TestConcurrency(t *testing.T) {
 	}()
 
 	cols := make([]int, 0)
-	for i := 0; i < len(schema.ColDefs); i++ {
+	for i := 0; i < len(tblMeta.Schema.ColDefs); i++ {
 		cols = append(cols, i)
 	}
 	wg2.Add(1)
@@ -272,7 +277,7 @@ func TestConcurrency(t *testing.T) {
 		reqCnt := 20000
 		for i := 0; i < reqCnt; i++ {
 			searchReq := &e.IterOptions{
-				TableName: schema.Name,
+				TableName: tablet.Name,
 				All:       true,
 				ColIdxes:  cols,
 			}
@@ -286,7 +291,7 @@ func TestConcurrency(t *testing.T) {
 	cancel()
 	wg.Wait()
 	opts := &e.IterOptions{
-		TableName: schema.Name,
+		TableName: tablet.Name,
 		All:       true,
 		ColIdxes:  cols,
 	}
@@ -358,13 +363,15 @@ func TestConcurrency(t *testing.T) {
 func TestGC(t *testing.T) {
 	initDBTest()
 	dbi := initDB()
-	schema := md.MockSchema(2)
-	schema.Name = "mockcon"
-	_, err := dbi.CreateTable(schema)
+	tableInfo := md.MockTableInfo(2)
+	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
+	tid, err := dbi.CreateTable(&tablet)
 	assert.Nil(t, err)
 	blkCnt := dbi.store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockChunk(schema.Types(), rows)
+	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
+	assert.Nil(t, err)
+	baseCk := chunk.MockChunk(tblMeta.Schema.Types(), rows)
 
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
@@ -378,7 +385,7 @@ func TestGC(t *testing.T) {
 		for i := uint64(0); i < insertCnt; i++ {
 			wg.Add(1)
 			go func() {
-				dbi.Append(schema.Name, baseCk, logIdx)
+				dbi.Append(tablet.Name, baseCk, logIdx)
 				wg.Done()
 			}()
 		}
