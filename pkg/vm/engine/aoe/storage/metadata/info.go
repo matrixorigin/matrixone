@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"matrixone/pkg/vm/engine/aoe"
 	"sync/atomic"
 	// "os"
 	// "path"
@@ -152,6 +153,42 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	info.NameMap[tbl.Schema.Name] = tbl.ID
 	info.TableIds[tbl.ID] = true
 	return nil
+}
+
+func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo) (*Table, error) {
+	schema := &Schema{
+		Name:    tinfo.Name,
+		ColDefs: make([]*ColDef, 0),
+		Indexes: make([]*IndexInfo, 0),
+	}
+	for idx, colInfo := range tinfo.Columns {
+		newInfo := &ColDef{
+			Name: colInfo.Name,
+			Idx:  idx,
+			Type: colInfo.Type,
+		}
+		schema.ColDefs = append(schema.ColDefs, newInfo)
+	}
+	for _, indexInfo := range tinfo.Indexes {
+		newInfo := &IndexInfo{
+			ID:      info.Sequence.GetIndexID(),
+			Type:    IndexType(indexInfo.Type),
+			Columns: make([]uint16, 0),
+		}
+		for _, col := range indexInfo.Columns {
+			newInfo.Columns = append(newInfo.Columns, uint16(col))
+		}
+		schema.Indexes = append(schema.Indexes, newInfo)
+	}
+	tbl, err := info.CreateTable(schema)
+	if err != nil {
+		return nil, err
+	}
+	err = info.RegisterTable(tbl)
+	if err != nil {
+		return nil, err
+	}
+	return tbl, nil
 }
 
 func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {

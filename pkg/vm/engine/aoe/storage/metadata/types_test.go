@@ -98,3 +98,27 @@ func TestInfo(t *testing.T) {
 	t.Log(info.String())
 	assert.Equal(t, tbl.GetBoundState(), Attached)
 }
+
+func TestCreateTable(t *testing.T) {
+	colCnt := 2
+	tblInfo := MockTableInfo(colCnt)
+
+	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	info.Conf.Dir = "/tmp"
+	tbl, err := info.CreateTableFromTableInfo(tblInfo)
+	assert.Nil(t, err)
+	assert.Equal(t, tblInfo.Name, tbl.Schema.Name)
+
+	assert.Equal(t, len(tblInfo.Indexes), len(tbl.Schema.Indexes))
+	for idx, indexInfo := range tblInfo.Indexes {
+		assert.Equal(t, indexInfo.Type, uint64(tbl.Schema.Indexes[idx].Type))
+		for iidx := range indexInfo.Columns {
+			assert.Equal(t, indexInfo.Columns[iidx], uint64(tbl.Schema.Indexes[idx].Columns[iidx]))
+		}
+	}
+	for idx, colInfo := range tblInfo.Columns {
+		assert.Equal(t, colInfo.Type, tbl.Schema.ColDefs[idx].Type)
+		assert.Equal(t, colInfo.Name, tbl.Schema.ColDefs[idx].Name)
+		assert.Equal(t, idx, tbl.Schema.ColDefs[idx].Idx)
+	}
+}
