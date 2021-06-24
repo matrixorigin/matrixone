@@ -6,7 +6,7 @@ import (
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 
-	"github.com/pilosa/pilosa/roaring"
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 const (

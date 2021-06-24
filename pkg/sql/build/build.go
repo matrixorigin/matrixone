@@ -25,7 +25,7 @@ func (b *build) Build() ([]op.OP, error) {
 	}
 	os := make([]op.OP, len(stmts))
 	for i, stmt := range stmts {
-		o, err := b.buildStatement(rewrite.Rewrite(stmt))
+		o, err := b.BuildStatement(rewrite.Rewrite(stmt))
 		if err != nil {
 			return nil, err
 		}
@@ -34,12 +34,16 @@ func (b *build) Build() ([]op.OP, error) {
 	return os, nil
 }
 
-func (b *build) buildStatement(stmt tree.Statement) (op.OP, error) {
+func (b *build) BuildStatement(stmt tree.Statement) (op.OP, error) {
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		return b.buildSelect(stmt)
 	case *tree.ParenSelect:
 		return b.buildSelect(stmt.Select)
+	case *tree.Insert:
+		return b.buildInsert(stmt)
+	case *tree.CreateTable:
+		return b.buildCreateTable(stmt)
 	}
 	return nil, fmt.Errorf("unexpected statement: '%T'", stmt)
 }
