@@ -172,6 +172,11 @@ func TestReplay(t *testing.T) {
 	time.Sleep(time.Duration(10) * time.Millisecond)
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
+
+	lastTableID := dbi.Opts.Meta.Info.Sequence.NextTableID
+	lastSegmentID := dbi.Opts.Meta.Info.Sequence.NextSegmentID
+	lastBlockID := dbi.Opts.Meta.Info.Sequence.NextBlockID
+	lastIndexID := dbi.Opts.Meta.Info.Sequence.NextIndexID
 	dbi.Close()
 
 	dataDir := e.MakeDataDir(dbi.Dir)
@@ -188,6 +193,19 @@ func TestReplay(t *testing.T) {
 
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
+
+	lastTableID2 := dbi.Opts.Meta.Info.Sequence.NextTableID
+	lastSegmentID2 := dbi.Opts.Meta.Info.Sequence.NextSegmentID
+	lastBlockID2 := dbi.Opts.Meta.Info.Sequence.NextBlockID
+	lastIndexID2 := dbi.Opts.Meta.Info.Sequence.NextIndexID
+	assert.Equal(t, lastTableID, lastTableID2)
+	assert.Equal(t, lastSegmentID, lastSegmentID2)
+	assert.Equal(t, lastBlockID, lastBlockID2)
+	assert.Equal(t, lastIndexID, lastIndexID2)
+
+	replaytblMeta, err := dbi.Opts.Meta.Info.ReferenceTableByName(tablet.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, tblMeta.Schema.Name, replaytblMeta.Schema.Name)
 
 	_, err = dbi.CreateTable(&tablet)
 	assert.NotNil(t, err)

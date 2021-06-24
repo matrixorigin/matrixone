@@ -222,8 +222,14 @@ func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 	info.Sequence.NextBlockID = 0
 	info.Sequence.NextSegmentID = 0
 	info.Sequence.NextTableID = 0
+	info.Sequence.NextIndexID = 0
 	ts := NowMicro()
 	for k, tbl := range info.Tables {
+		if len(tbl.Schema.Indexes) > 0 {
+			if tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID > info.Sequence.NextIndexID {
+				info.Sequence.NextIndexID = tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID
+			}
+		}
 		max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()
 		if k > info.Sequence.NextTableID {
 			info.Sequence.NextTableID = k
