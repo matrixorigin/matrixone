@@ -22,8 +22,8 @@ func TestBasicOps(t *testing.T) {
 
 	now := time.Now()
 
-	schema := md.MockSchema(2)
-	opCtx := OpCtx{Opts: &opts, Schema: schema}
+	tabletInfo := md.MockTableInfo(2)
+	opCtx := OpCtx{Opts: &opts, TableInfo: tabletInfo}
 	op := NewCreateTblOp(&opCtx)
 	op.Push()
 	err := op.WaitDone()
