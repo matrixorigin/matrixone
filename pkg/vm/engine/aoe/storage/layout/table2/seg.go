@@ -29,7 +29,7 @@ type Segment struct {
 	SegmentFile base.ISegmentFile
 }
 
-func NewSegment(host ITableData, meta *md.Segment) (iface.ISegment, error) {
+func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error) {
 	var err error
 	segType := base.UNSORTED_SEG
 	if meta.DataState == md.SORTED {
@@ -82,6 +82,10 @@ func (seg *Segment) noRefCB() {
 	for _, blk := range seg.tree.Blocks {
 		blk.Unref()
 	}
+}
+
+func (seg *Segment) GetMeta() *md.Segment {
+	return seg.Meta
 }
 
 func (seg *Segment) GetSegmentFile() base.ISegmentFile {
@@ -149,4 +153,50 @@ func (seg *Segment) StrongRefBlock(id uint64) iface.IBlock {
 	blk := seg.tree.Blocks[idx]
 	blk.Ref()
 	return blk
+}
+func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (iface.ISegment, error) {
+	if seg.Type != base.UNSORTED_SEG {
+		panic("logic error")
+	}
+	cloned := &Segment{
+		Type:      base.SORTED_SEG,
+		MTBufMgr:  seg.MTBufMgr,
+		SSTBufMgr: seg.SSTBufMgr,
+		FsMgr:     seg.FsMgr,
+		Meta:      meta,
+	}
+
+	indexHolder := td.GetIndexHolder().GetSegment(seg.Meta.ID)
+	if indexHolder == nil {
+		panic("logic error")
+	}
+
+	if indexHolder.Type == base.UNSORTED_SEG {
+		indexHolder = td.GetIndexHolder().UpgradeSegment(seg.Meta.ID, base.SORTED_SEG)
+		id := seg.Meta.AsCommonID().AsSegmentID()
+		segFile := seg.FsMgr.GetSortedFile(id)
+		if segFile == nil {
+			segFile = seg.FsMgr.UpgradeFile(id)
+			if segFile == nil {
+				panic("logic error")
+			}
+		}
+		seg.IndexHolder.Init(segFile)
+	}
+	cloned.IndexHolder = indexHolder
+	for _, blk := range seg.tree.Blocks {
+		newBlkMeta, err := cloned.Meta.ReferenceBlock(blk.GetMeta().ID)
+		if err != nil {
+			panic(err)
+		}
+		cloned.Ref()
+		cur, err := blk.CloneWithUpgrade(cloned, newBlkMeta)
+		if err != nil {
+			panic(err)
+		}
+		cloned.tree.Blocks = append(cloned.tree.Blocks, cur)
+	}
+
+	cloned.Ref()
+	return cloned, nil
 }

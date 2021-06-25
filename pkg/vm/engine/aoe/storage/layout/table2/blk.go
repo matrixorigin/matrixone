@@ -96,3 +96,77 @@ func (blk *Block) GetIndexHolder() *index.BlockHolder {
 func (blk *Block) GetMeta() *md.Block {
 	return blk.Meta
 }
+
+func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
+	if blk.Type == base.PERSISTENT_SORTED_BLK {
+		panic("logic error")
+	}
+	if meta.DataState != md.FULL {
+		panic("logic error")
+	}
+
+	segId := meta.AsCommonID().AsSegmentID()
+	blkId := meta.AsCommonID().AsBlockID()
+	var (
+		newType base.BlockType
+		segFile base.ISegmentFile
+		err     error
+	)
+	indexHolder := host.GetIndexHolder().GetBlock(meta.ID)
+	newIndexHolder := false
+
+	switch blk.Type {
+	case base.TRANSIENT_BLK:
+		newType = base.PERSISTENT_BLK
+		segFile = host.GetFsManager().GetUnsortedFile(segId)
+		if segFile == nil {
+			segFile, err = host.GetFsManager().RegisterUnsortedFiles(segId)
+			if err != nil {
+				panic("logic error")
+			}
+		}
+		if indexHolder == nil {
+			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
+			newIndexHolder = true
+		} else if indexHolder.Type < newType {
+			indexHolder = host.GetIndexHolder().UpgradeBlock(meta.ID, newType)
+			newIndexHolder = true
+		}
+	case base.PERSISTENT_BLK:
+		newType = base.PERSISTENT_SORTED_BLK
+		segFile = host.GetFsManager().GetSortedFile(segId)
+		if segFile == nil {
+			panic("logic error")
+		}
+		if indexHolder == nil {
+			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
+			newIndexHolder = true
+		} else if indexHolder.Type < newType {
+			indexHolder = host.GetIndexHolder().UpgradeBlock(meta.ID, newType)
+			newIndexHolder = true
+		}
+	default:
+		panic("logic error")
+	}
+	cloned := &Block{
+		Meta:        meta,
+		MTBufMgr:    blk.MTBufMgr,
+		SSTBufMgr:   blk.SSTBufMgr,
+		FsMgr:       blk.FsMgr,
+		IndexHolder: indexHolder,
+		Type:        newType,
+	}
+	cloned.data.Columns = make([]IColumnBlock, 0)
+	cloned.data.Helper = make(map[string]int)
+	if newIndexHolder {
+		indexHolder.Init(segFile)
+	}
+	blk.cloneWithUpgradeColumns()
+	cloned.Ref()
+	host.Unref()
+	return cloned, nil
+}
+
+func (blk *Block) cloneWithUpgradeColumns() {
+	// TODO
+}

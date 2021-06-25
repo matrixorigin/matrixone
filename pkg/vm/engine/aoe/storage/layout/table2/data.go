@@ -14,24 +14,7 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
-type ITableData interface {
-	GetID() uint64
-	GetName() string
-	GetMTBufMgr() bmgrif.IBufferManager
-	GetSSTBufMgr() bmgrif.IBufferManager
-	GetFsManager() base.IManager
-	GetSegmentCount() uint32
-	GetIndexHolder() *index.TableHolder
-	RegisterSegment(meta *md.Segment) (seg iface.ISegment, err error)
-	RegisterBlock(meta *md.Block) (blk iface.IBlock, err error)
-	StrongRefSegment(id uint64) iface.ISegment
-	WeakRefSegment(id uint64) iface.ISegment
-	StrongRefBlock(segId, blkId uint64) iface.IBlock
-	WeakRefBlock(segId, blkId uint64) iface.IBlock
-	String() string
-}
-
-func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
+func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) iface.ITableData {
 	data := &TableData{
 		MTBufMgr:    mtBufMgr,
 		SSTBufMgr:   sstBufMgr,
@@ -167,4 +150,32 @@ func (td *TableData) RegisterBlock(meta *md.Block) (blk iface.IBlock, err error)
 	seg := td.tree.Segments[idx]
 	blk, err = seg.RegisterBlock(meta)
 	return blk, err
+}
+
+func (td *TableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
+	idx, ok := td.tree.Helper[id]
+	if !ok {
+		panic("logic error")
+	}
+	seg = td.tree.Segments[idx]
+	if seg.GetType() != base.UNSORTED_SEG {
+		panic("logic error")
+	}
+	if seg.GetMeta().ID != id {
+		panic("logic error")
+	}
+	meta, err := td.Meta.ReferenceSegment(id)
+	if err != nil {
+		return nil, err
+	}
+	upgradeSeg, err := seg.CloneWithUpgrade(td, meta)
+	if err != nil {
+		panic(err)
+	}
+	td.tree.Lock()
+	defer td.tree.Unlock()
+	td.tree.Segments[idx] = upgradeSeg
+	seg.Unref()
+	upgradeSeg.Ref()
+	return upgradeSeg, nil
 }

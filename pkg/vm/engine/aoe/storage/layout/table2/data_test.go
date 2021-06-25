@@ -1,6 +1,7 @@
 package table
 
 import (
+	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -18,6 +19,9 @@ func init() {
 }
 
 func TestBase1(t *testing.T) {
+	opts := new(e.Options)
+	opts.FillDefaults(WORK_DIR)
+	opts.MemData.Updater.Start()
 	segCnt := uint64(4)
 	blkCnt := uint64(4)
 	rowCount := uint64(10)
@@ -26,7 +30,7 @@ func TestBase1(t *testing.T) {
 	schema := md.MockSchema(2)
 	tableMeta := md.MockTable(info, schema, segCnt*blkCnt)
 
-	fsMgr := ldio.NewManager(WORK_DIR, false)
+	fsMgr := ldio.NewManager(WORK_DIR, true)
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(capacity)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
@@ -43,9 +47,9 @@ func TestBase1(t *testing.T) {
 
 		refSeg := tblData.StrongRefSegment(segId)
 		refSeg.Unref()
-		assert.Equal(t, int64(1), seg.RefCount())
+		assert.Equal(t, int64(1), refSeg.RefCount())
 		refSeg = tblData.WeakRefSegment(segId)
-		assert.Equal(t, int64(1), seg.RefCount())
+		assert.Equal(t, int64(1), refSeg.RefCount())
 
 		blkIds := segMeta.BlockIDs()
 		for blkId, _ := range blkIds {
@@ -56,10 +60,35 @@ func TestBase1(t *testing.T) {
 			blk.Unref()
 			assert.Equal(t, int64(1), blk.RefCount())
 		}
+		refSeg = tblData.WeakRefSegment(segId)
+		assert.Equal(t, int64(1), refSeg.RefCount())
 	}
 
 	assert.Equal(t, segCnt, uint64(tblData.GetSegmentCount()))
 
 	t.Log(tblData.String())
 	t.Log(fsMgr.String())
+
+	for _, segMeta := range tableMeta.Segments {
+		for _, blkMeta := range segMeta.Blocks {
+			blkMeta.DataState = md.FULL
+			blkMeta.Count = blkMeta.MaxRowCount
+		}
+	}
+
+	for segId, _ := range segIds {
+		refSeg := tblData.WeakRefSegment(segId)
+		assert.Equal(t, int64(1), refSeg.RefCount())
+		upgraded, err := tblData.UpgradeSegment(segId)
+		assert.Nil(t, err)
+		upgraded.Unref()
+		assert.Equal(t, int64(1), upgraded.RefCount())
+	}
+	t.Log(tblData.String())
+	t.Log(fsMgr.String())
+	opts.MemData.Updater.Stop()
+}
+
+func TestUpgrade(t *testing.T) {
+
 }
