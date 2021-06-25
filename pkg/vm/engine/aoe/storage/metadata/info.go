@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"matrixone/pkg/vm/engine/aoe"
 	"sync/atomic"
 	// "os"
 	// "path"
@@ -154,6 +155,42 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	return nil
 }
 
+func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo) (*Table, error) {
+	schema := &Schema{
+		Name:    tinfo.Name,
+		ColDefs: make([]*ColDef, 0),
+		Indexes: make([]*IndexInfo, 0),
+	}
+	for idx, colInfo := range tinfo.Columns {
+		newInfo := &ColDef{
+			Name: colInfo.Name,
+			Idx:  idx,
+			Type: colInfo.Type,
+		}
+		schema.ColDefs = append(schema.ColDefs, newInfo)
+	}
+	for _, indexInfo := range tinfo.Indexes {
+		newInfo := &IndexInfo{
+			ID:      info.Sequence.GetIndexID(),
+			Type:    IndexType(indexInfo.Type),
+			Columns: make([]uint16, 0),
+		}
+		for _, col := range indexInfo.Columns {
+			newInfo.Columns = append(newInfo.Columns, uint16(col))
+		}
+		schema.Indexes = append(schema.Indexes, newInfo)
+	}
+	tbl, err := info.CreateTable(schema)
+	if err != nil {
+		return nil, err
+	}
+	err = info.RegisterTable(tbl)
+	if err != nil {
+		return nil, err
+	}
+	return tbl, nil
+}
+
 func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
@@ -185,8 +222,14 @@ func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 	info.Sequence.NextBlockID = 0
 	info.Sequence.NextSegmentID = 0
 	info.Sequence.NextTableID = 0
+	info.Sequence.NextIndexID = 0
 	ts := NowMicro()
 	for k, tbl := range info.Tables {
+		if len(tbl.Schema.Indexes) > 0 {
+			if tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID > info.Sequence.NextIndexID {
+				info.Sequence.NextIndexID = tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID
+			}
+		}
 		max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()
 		if k > info.Sequence.NextTableID {
 			info.Sequence.NextTableID = k

@@ -72,8 +72,8 @@ func TestCollection(t *testing.T) {
 	opts.Data.Sorter.Start()
 	opts.MemData.Updater.Start()
 
-	schema := md.MockSchema(2)
-	opCtx := mops.OpCtx{Opts: opts, Schema: schema}
+	tabletInfo := md.MockTableInfo(2)
+	opCtx := mops.OpCtx{Opts: opts, TableInfo: tabletInfo}
 	op := mops.NewCreateTblOp(&opCtx)
 	op.Push()
 	err := op.WaitDone()
@@ -86,7 +86,7 @@ func TestCollection(t *testing.T) {
 	indexBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	tableMeta := md.MockTable(nil, schema, 10)
+	tableMeta := md.MockTable(nil, tbl.Schema, 10)
 	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
@@ -108,7 +108,7 @@ func TestCollection(t *testing.T) {
 		seq++
 		go func(id uint64, wg *sync.WaitGroup) {
 			defer wg.Done()
-			insert := chunk.MockChunk(schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
+			insert := chunk.MockChunk(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &md.LogIndex{
 				ID:       id,
 				Capacity: insert.GetCount(),
