@@ -9,6 +9,7 @@ import (
 	"github.com/pingcap/parser/test_driver"
 	"github.com/pingcap/parser/types"
 	"go/constant"
+	"matrixone/pkg/client"
 	"strconv"
 )
 
@@ -600,6 +601,7 @@ func transformAggregateFuncExprToFuncExpr(afe *ast.AggregateFuncExpr) *FuncExpr 
 //transform types.FieldType to ResolvableTypeReference
 func transformFieldTypeToResolvableTypeReference(ft *types.FieldType) ResolvableTypeReference {
 	var t *T
+	var timeType bool = false
 	switch ft.Tp {
 	case mysql.TypeUnspecified:
 		panic(fmt.Errorf("unsupported type\n"))
@@ -617,20 +619,26 @@ func transformFieldTypeToResolvableTypeReference(ft *types.FieldType) Resolvable
 		t = TYPE_NULL
 	case mysql.TypeTimestamp:
 		t = TYPE_TIMESTAMP
+		timeType = true
 	case mysql.TypeLonglong:
 		t = TYPE_LONGLONG
 	case mysql.TypeInt24:
 		t = TYPE_INT24
 	case mysql.TypeDate:
 		t = TYPE_DATE
+		timeType = true
 	case mysql.TypeDuration:
 		t = TYPE_DURATION
+		timeType = true
 	case mysql.TypeDatetime:
 		t = TYPE_DATETIME
+		timeType = true
 	case mysql.TypeYear:
 		t = TYPE_YEAR
+		timeType = true
 	case mysql.TypeNewDate:
 		t = TYPE_NEWDATE
+		timeType = true
 	case mysql.TypeVarchar:
 		t = TYPE_VARCHAR
 	case mysql.TypeBit:
@@ -639,6 +647,7 @@ func transformFieldTypeToResolvableTypeReference(ft *types.FieldType) Resolvable
 		t = TYPE_JSON
 	case mysql.TypeNewDecimal:
 		t = TYPE_NEWDATE
+		timeType = true
 	case mysql.TypeEnum:
 		t = TYPE_ENUM
 	case mysql.TypeSet:
@@ -660,11 +669,36 @@ func transformFieldTypeToResolvableTypeReference(ft *types.FieldType) Resolvable
 	default:
 		panic("unsupported cast type")
 	}
-	fsp := ft.Decimal
-	if fsp == -1 {
-		fsp = 0
+
+	tt := &T{InternalType: t.InternalType}
+
+	displayWith := ft.Flen
+	if displayWith == -1 {
+		displayWith = 0
 	}
-	tt := &T{InternalType: t.InternalType,Fsp: fsp}
+
+	tt.InternalType.DisplayWith = int32(displayWith)
+
+	precision := ft.Decimal
+	if precision == -1 {
+		precision = 0
+		if timeType {
+			tt.InternalType.TimePrecisionIsSet = false
+		}
+	} else if precision == 0 {
+		if timeType {
+			tt.InternalType.TimePrecisionIsSet = true
+		}
+	}
+
+	tt.InternalType.Precision = int32(precision)
+
+	//unsigned
+	tt.InternalType.Unsigned = (uint32(ft.Flag) & client.UNSIGNED_FLAG) > 0
+
+	//binary
+	tt.InternalType.Binary = (uint32(ft.Flag) & client.BINARY_FLAG) > 0
+
 	return tt
 }
 
@@ -2035,7 +2069,7 @@ func transformExplainStmtToExplain(es *ast.ExplainStmt) Explain {
 	case *ast.SetOprStmt:
 		stmt = transformSetOprStmtToSelectStatement(st)
 	case *ast.SelectStmt:
-		stmt = transformSelectStmtToSelectStatement(st)
+		stmt = transformSelectStmtToSelect(st)
 	case *ast.DeleteStmt:
 		stmt = transformDeleteStmtToDelete(st)
 	case *ast.InsertStmt:

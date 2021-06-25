@@ -4,9 +4,11 @@ go.sum
 bin/
 y.go
 *.output
-.DS_Store
+**/.DS_Store
 .vscode
 *.iml
 tags
 coverage.txt
 vendor/
+gen_config
+main
