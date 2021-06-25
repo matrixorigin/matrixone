@@ -2,6 +2,12 @@ package common
 
 import "sync/atomic"
 
+type IRef interface {
+	RefCount() int64
+	Ref()
+	Unref()
+}
+
 type OnZeroCB func()
 
 type RefHelper struct {
