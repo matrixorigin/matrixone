@@ -111,7 +111,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 			return nil, err
 		}
 		typ := types.Type{}
-		switch uint8(e.Type.(*tree.T).InternalType) {
+		switch uint8(e.Type.(*tree.T).InternalType.Oid) {
 		case client.MYSQL_TYPE_TINY:
 			typ.Size = 1
 			typ.Oid = types.T_int8

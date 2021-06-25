@@ -948,20 +948,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			if err = mce.handleUse(st); err != nil {
 				return err
 			}
-
-		case *tree.ShowDatabases:
-			selfHandle = true
-			if err = mce.handleShowDatabases(st) ; err != nil {
-				return err
-			}
-		case *tree.ShowTables:
-			selfHandle = true
-			if err = mce.handleShowTables(st) ; err != nil {
-				return err
-			}
-		case *tree.SetVar:
-			selfHandle = true
-			return fmt.Errorf("unsupported set var yet")
 		}
 
 		if selfHandle {

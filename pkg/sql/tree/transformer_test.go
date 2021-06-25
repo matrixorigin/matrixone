@@ -88,7 +88,7 @@ create table t(a date,b datetime(2),c timestamp(3),d time(3),e year,f year(4))
 
 			ss := s.(*ExplainStmt)
 
-			fmt.Printf("ss %v \n",ss.String())
+			fmt.Printf("ss %v \n",ss.Statement != nil)
 		}
 
 	}
@@ -6325,7 +6325,7 @@ explain format = "tree" select a from A
 		ExplicitSchema:  false,
 	}),AliasClause{}),nil,nil)
 
-	st := &SelectClause{
+	sc := &SelectClause{
 		From:            &From{[]TableExpr{jt}},
 		Distinct:        false,
 		Where:           nil,
@@ -6334,6 +6334,7 @@ explain format = "tree" select a from A
 		Having:          nil,
 	}
 
+	st := NewSelect(sc,nil,nil)
 	want := NewExplainStmt(st,"tree")
 
 	return n,want

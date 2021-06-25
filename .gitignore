@@ -10,3 +10,6 @@ y.go
 tags
 coverage.txt
 vendor/
+cmd/db-server/.DS_Store
+gen_config
+main
