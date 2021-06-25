@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -148,11 +149,12 @@ func (d *DB) HasTable(name string) bool {
 	return err == nil
 }
 
-func (d *DB) CreateTable(schema *md.Schema) (id uint64, err error) {
+func (d *DB) CreateTable(info *aoe.TabletInfo) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	opCtx := &mops.OpCtx{Opts: d.Opts, Schema: schema}
+	info.Table.Name = info.Name
+	opCtx := &mops.OpCtx{Opts: d.Opts, TableInfo: &info.Table}
 	op := mops.NewCreateTblOp(opCtx)
 	op.Push()
 	err = op.WaitDone()

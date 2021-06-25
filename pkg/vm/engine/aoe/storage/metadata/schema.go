@@ -3,6 +3,7 @@ package md
 import (
 	"fmt"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/vm/engine/aoe"
 )
 
 func (s *Schema) Valid() bool {
@@ -34,9 +35,27 @@ func (s *Schema) Types() (ts []types.Type) {
 	return ts
 }
 
+func (s *Schema) Clone() *Schema {
+	newSchema := &Schema{
+		ColDefs: make([]*ColDef, 0),
+		Indexes: make([]*IndexInfo, 0),
+		Name:    s.Name,
+	}
+	for _, colDef := range s.ColDefs {
+		newColDef := *colDef
+		newSchema.ColDefs = append(newSchema.ColDefs, &newColDef)
+	}
+	for _, indexInfo := range s.Indexes {
+		newInfo := *indexInfo
+		newSchema.Indexes = append(newSchema.Indexes, &newInfo)
+	}
+	return newSchema
+}
+
 func MockSchema(colCnt int) *Schema {
 	schema := &Schema{
 		ColDefs: make([]*ColDef, colCnt),
+		Indexes: make([]*IndexInfo, 0),
 	}
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
@@ -49,4 +68,24 @@ func MockSchema(colCnt int) *Schema {
 		schema.ColDefs[i] = colDef
 	}
 	return schema
+}
+
+func MockTableInfo(colCnt int) *aoe.TableInfo {
+	tblInfo := &aoe.TableInfo{
+		Name:    "mocktbl",
+		Columns: make([]aoe.ColumnInfo, 0),
+		Indexes: make([]aoe.IndexInfo, 0),
+	}
+	prefix := "mock_"
+	for i := 0; i < colCnt; i++ {
+		name := fmt.Sprintf("%s%d", prefix, i)
+		colInfo := aoe.ColumnInfo{
+			Name: name,
+			Type: types.Type{types.T_int32, 4, 4, 0},
+		}
+		indexInfo := aoe.IndexInfo{Type: uint64(ZoneMap), Columns: []uint64{uint64(i)}}
+		tblInfo.Columns = append(tblInfo.Columns, colInfo)
+		tblInfo.Indexes = append(tblInfo.Indexes, indexInfo)
+	}
+	return tblInfo
 }

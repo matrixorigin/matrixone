@@ -95,3 +95,11 @@ func (seq *Sequence) GetBlockID() uint64 {
 func (seq *Sequence) GetTableID() uint64 {
 	return atomic.AddUint64(&(seq.NextTableID), uint64(1))
 }
+
+func (seq *Sequence) GetPartitionID() uint64 {
+	return atomic.AddUint64(&(seq.NextPartitionID), uint64(1))
+}
+
+func (seq *Sequence) GetIndexID() uint64 {
+	return atomic.AddUint64(&(seq.NextIndexID), uint64(1))
+}

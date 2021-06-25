@@ -5,6 +5,12 @@ import (
 	"sync"
 )
 
+type IndexType uint16
+
+const (
+	ZoneMap IndexType = iota
+)
+
 type LogIndex struct {
 	ID       uint64
 	Start    uint64
@@ -36,8 +42,6 @@ const (
 	SORTED            // Segment only. Merge sorted
 )
 
-type IndexType = uint32
-
 type Block struct {
 	sync.RWMutex
 	BoundSate
@@ -53,9 +57,11 @@ type Block struct {
 }
 
 type Sequence struct {
-	NextBlockID   uint64
-	NextSegmentID uint64
-	NextTableID   uint64
+	NextBlockID     uint64
+	NextSegmentID   uint64
+	NextPartitionID uint64
+	NextTableID     uint64
+	NextIndexID     uint64
 }
 
 type Segment struct {
@@ -82,7 +88,14 @@ type ColDef struct {
 
 type Schema struct {
 	Name    string
+	Indexes []*IndexInfo
 	ColDefs []*ColDef
+}
+
+type IndexInfo struct {
+	Type    IndexType
+	Columns []uint16
+	ID      uint64
 }
 
 type Table struct {

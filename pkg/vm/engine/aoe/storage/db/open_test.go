@@ -2,6 +2,7 @@ package db
 
 import (
 	"io/ioutil"
+	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -149,13 +150,15 @@ func TestOpen(t *testing.T) {
 func TestReplay(t *testing.T) {
 	initDBTest()
 	dbi := initDB()
-	schema := md.MockSchema(2)
-	schema.Name = "mocktbl"
-	_, err := dbi.CreateTable(schema)
+	tableInfo := md.MockTableInfo(2)
+	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mocktbl"}
+	tid, err := dbi.CreateTable(&tablet)
+	assert.Nil(t, err)
+	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockChunk(schema.Types(), rows)
+	ck := chunk.MockChunk(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), ck.GetCount())
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
@@ -163,12 +166,17 @@ func TestReplay(t *testing.T) {
 	}
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(schema.Name, ck, logIdx)
+		err = dbi.Append(tablet.Name, ck, logIdx)
 		assert.Nil(t, err)
 	}
 	time.Sleep(time.Duration(10) * time.Millisecond)
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
+
+	lastTableID := dbi.Opts.Meta.Info.Sequence.NextTableID
+	lastSegmentID := dbi.Opts.Meta.Info.Sequence.NextSegmentID
+	lastBlockID := dbi.Opts.Meta.Info.Sequence.NextBlockID
+	lastIndexID := dbi.Opts.Meta.Info.Sequence.NextIndexID
 	dbi.Close()
 
 	dataDir := e.MakeDataDir(dbi.Dir)
@@ -186,10 +194,23 @@ func TestReplay(t *testing.T) {
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
 
-	_, err = dbi.CreateTable(schema)
+	lastTableID2 := dbi.Opts.Meta.Info.Sequence.NextTableID
+	lastSegmentID2 := dbi.Opts.Meta.Info.Sequence.NextSegmentID
+	lastBlockID2 := dbi.Opts.Meta.Info.Sequence.NextBlockID
+	lastIndexID2 := dbi.Opts.Meta.Info.Sequence.NextIndexID
+	assert.Equal(t, lastTableID, lastTableID2)
+	assert.Equal(t, lastSegmentID, lastSegmentID2)
+	assert.Equal(t, lastBlockID, lastBlockID2)
+	assert.Equal(t, lastIndexID, lastIndexID2)
+
+	replaytblMeta, err := dbi.Opts.Meta.Info.ReferenceTableByName(tablet.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, tblMeta.Schema.Name, replaytblMeta.Schema.Name)
+
+	_, err = dbi.CreateTable(&tablet)
 	assert.NotNil(t, err)
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(schema.Name, ck, logIdx)
+		err = dbi.Append(tablet.Name, ck, logIdx)
 		assert.Nil(t, err)
 	}
 
