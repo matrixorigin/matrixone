@@ -16,13 +16,15 @@ type IColumnBlock interface {
 	// GetNext() IColumnBlock
 	// SetNext(next IColumnBlock)
 	GetID() uint64
+	GetMeta() *md.Block
 	GetRowCount() uint64
 	// InitScanCursor(cusor *ScanCursor) error
-	// Append(part IColumnPart)
+	RegisterPart(part IColumnPart)
 	// GetPartRoot() IColumnPart
-	// GetBlockType() base.BlockType
+	GetType() base.BlockType
 	GetIndexHolder() *index.BlockHolder
 	GetColIdx() int
+	GetSegmentFile() base.ISegmentFile
 	CloneWithUpgrade(iface.IBlock) IColumnBlock
 	// EvalFilter(*index.FilterCtx) error
 	String() string
@@ -43,6 +45,10 @@ type ColumnBlock struct {
 // 	return blk.IndexHolder.EvalFilter(blk.ColIdx, ctx)
 // }
 
+func (blk *ColumnBlock) GetSegmentFile() base.ISegmentFile {
+	return blk.SegmentFile
+}
+
 func (blk *ColumnBlock) GetIndexHolder() *index.BlockHolder {
 	return blk.IndexHolder
 }
@@ -51,11 +57,13 @@ func (blk *ColumnBlock) GetColIdx() int {
 	return blk.ColIdx
 }
 
-// func (blk *ColumnBlock) GetBlockType() base.BlockType {
-// 	blk.RLock()
-// 	defer blk.RUnlock()
-// 	return blk.Type
-// }
+func (blk *ColumnBlock) GetMeta() *md.Block {
+	return blk.Meta
+}
+
+func (blk *ColumnBlock) GetType() base.BlockType {
+	return blk.Type
+}
 
 func (blk *ColumnBlock) GetRowCount() uint64 {
 	return atomic.LoadUint64(&blk.Meta.Count)

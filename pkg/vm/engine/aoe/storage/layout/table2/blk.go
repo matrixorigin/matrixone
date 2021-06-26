@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
+	// log "github.com/sirupsen/logrus"
 )
 
 type Block struct {
@@ -79,6 +80,7 @@ func (blk *Block) noRefCB() {
 	for _, colBlk := range blk.data.Columns {
 		colBlk.Unref()
 	}
+	// log.Infof("destroy blk %d", blk.Meta.ID)
 }
 
 func (blk *Block) GetMTBufMgr() bmgrif.IBufferManager {
@@ -159,6 +161,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		FsMgr:       blk.FsMgr,
 		IndexHolder: indexHolder,
 		Type:        newType,
+		SegmentFile: host.GetSegmentFile(),
 	}
 	cloned.data.Columns = make([]col.IColumnBlock, 0)
 	cloned.data.Helper = make(map[string]int)
@@ -166,6 +169,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		indexHolder.Init(segFile)
 	}
 	blk.cloneWithUpgradeColumns(cloned)
+	cloned.OnZeroCB = cloned.noRefCB
 	cloned.Ref()
 	host.Unref()
 	return cloned, nil

@@ -1,95 +1,99 @@
 package col
 
-// import (
-// 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-// 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-// 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-// 	"matrixone/pkg/vm/engine/aoe/storage/common"
-// 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-// 	"sync"
-// 	// log "github.com/sirupsen/logrus"
-// )
+import (
+	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
+	"sync"
+	// log "github.com/sirupsen/logrus"
+)
 
-// type IColumnPart interface {
-// 	bmgrif.INode
-// 	GetNext() IColumnPart
-// 	SetNext(IColumnPart)
-// 	InitScanCursor(cursor *ScanCursor) error
-// 	GetID() common.ID
-// 	GetColIdx() int
-// 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager, base.IManager) IColumnPart
-// }
+type IColumnPart interface {
+	bmgrif.INode
+	common.IRef
+	GetNext() IColumnPart
+	SetNext(IColumnPart)
+	GetID() uint64
+	GetColIdx() int
+	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
+}
 
-// type ColumnPart struct {
-// 	sync.RWMutex
-// 	*bmgr.Node
-// 	ID   common.ID
-// 	Next IColumnPart
-// }
+type ColumnPart struct {
+	sync.RWMutex
+	common.RefHelper
+	*bmgr.Node
+	Block IColumnBlock
+	Next  IColumnPart
+}
 
-// func NewColumnPart(fsMgr base.IManager, bufMgr bmgrif.IBufferManager, blk IColumnBlock, id common.ID,
-// 	capacity uint64) IColumnPart {
-// 	defer blk.UnRef()
-// 	part := &ColumnPart{ID: id}
-// 	var vf bmgrif.IVFile
-// 	switch blk.GetBlockType() {
-// 	case base.TRANSIENT_BLK:
-// 	case base.PERSISTENT_BLK:
-// 		vf = fsMgr.GetUnsortedFile(part.ID.AsSegmentID()).MakeVirtualPartFile(&part.ID)
-// 	case base.PERSISTENT_SORTED_BLK:
-// 		vf = fsMgr.GetSortedFile(part.ID.AsSegmentID()).MakeVirtualPartFile(&part.ID)
-// 	default:
-// 		panic("not support")
-// 	}
-// 	part.Node = bufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, capacity).(*bmgr.Node)
-// 	if part.Node == nil {
-// 		return nil
-// 	}
+func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumnPart {
+	defer host.Unref()
+	defer blk.Unref()
+	var bufMgr bmgrif.IBufferManager
+	part := &ColumnPart{Block: blk}
+	blkId := blk.GetMeta().AsCommonID().AsBlockID()
+	var vf bmgrif.IVFile
+	switch blk.GetType() {
+	case base.TRANSIENT_BLK:
+		bufMgr = host.GetMTBufMgr()
+	case base.PERSISTENT_BLK:
+		bufMgr = host.GetSSTBufMgr()
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+	case base.PERSISTENT_SORTED_BLK:
+		bufMgr = host.GetSSTBufMgr()
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+	default:
+		panic("not support")
+	}
+	part.Node = bufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, capacity).(*bmgr.Node)
+	if part.Node == nil {
+		return nil
+	}
 
-// 	blk.Append(part)
-// 	return part
-// }
+	blk.RegisterPart(part)
+	part.Ref()
+	return part
+}
 
-// func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager, fsMgr base.IManager) IColumnPart {
-// 	defer blk.UnRef()
-// 	cloned := &ColumnPart{ID: part.ID}
-// 	var vf bmgrif.IVFile
-// 	switch blk.GetBlockType() {
-// 	case base.TRANSIENT_BLK:
-// 		panic("logic error")
-// 	case base.PERSISTENT_BLK:
-// 		vf = fsMgr.GetUnsortedFile(cloned.ID.AsSegmentID()).MakeVirtualPartFile(&cloned.ID)
-// 	case base.PERSISTENT_SORTED_BLK:
-// 		vf = fsMgr.GetSortedFile(cloned.ID.AsSegmentID()).MakeVirtualPartFile(&cloned.ID)
-// 	default:
-// 		panic("not supported")
-// 	}
-// 	cloned.Node = sstBufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, part.Capacity).(*bmgr.Node)
+func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager) IColumnPart {
+	defer blk.Unref()
+	cloned := &ColumnPart{Block: blk}
+	blkId := blk.GetMeta().AsCommonID().AsBlockID()
+	var vf bmgrif.IVFile
+	switch blk.GetType() {
+	case base.TRANSIENT_BLK:
+		panic("logic error")
+	case base.PERSISTENT_BLK:
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+	case base.PERSISTENT_SORTED_BLK:
+		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+	default:
+		panic("not supported")
+	}
+	cloned.Node = sstBufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, part.Capacity).(*bmgr.Node)
 
-// 	return cloned
-// }
+	return cloned
+}
 
-// func (part *ColumnPart) GetColIdx() int {
-// 	return int(part.ID.Idx)
-// }
+func (part *ColumnPart) GetColIdx() int {
+	return part.Block.GetColIdx()
+}
 
-// func (part *ColumnPart) GetID() common.ID {
-// 	return part.ID
-// }
+func (part *ColumnPart) GetID() uint64 {
+	return part.Block.GetMeta().ID
+}
 
-// func (part *ColumnPart) SetNext(next IColumnPart) {
-// 	part.Lock()
-// 	defer part.Unlock()
-// 	part.Next = next
-// }
+func (part *ColumnPart) SetNext(next IColumnPart) {
+	part.Lock()
+	defer part.Unlock()
+	part.Next = next
+}
 
-// func (part *ColumnPart) GetNext() IColumnPart {
-// 	part.RLock()
-// 	defer part.RUnlock()
-// 	return part.Next
-// }
-
-// func (part *ColumnPart) InitScanCursor(cursor *ScanCursor) error {
-// 	cursor.Node = part.GetManagedNode()
-// 	return nil
-// }
+func (part *ColumnPart) GetNext() IColumnPart {
+	part.RLock()
+	defer part.RUnlock()
+	return part.Next
+}

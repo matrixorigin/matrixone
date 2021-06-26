@@ -10,6 +10,8 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type Segment struct {
@@ -81,7 +83,9 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 func (seg *Segment) noRefCB() {
 	for _, blk := range seg.tree.Blocks {
 		blk.Unref()
+		// log.Infof("blk refs=%d", blk.RefCount())
 	}
+	// log.Infof("destroy seg %d", seg.Meta.ID)
 }
 
 func (seg *Segment) GetMeta() *md.Segment {
@@ -174,10 +178,11 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		panic("logic error")
 	}
 
+	var segFile base.ISegmentFile
 	if indexHolder.Type == base.UNSORTED_SEG {
 		indexHolder = td.GetIndexHolder().UpgradeSegment(seg.Meta.ID, base.SORTED_SEG)
 		id := seg.Meta.AsCommonID().AsSegmentID()
-		segFile := seg.FsMgr.GetSortedFile(id)
+		segFile = seg.FsMgr.GetSortedFile(id)
 		if segFile == nil {
 			segFile = seg.FsMgr.UpgradeFile(id)
 			if segFile == nil {
@@ -187,6 +192,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		seg.IndexHolder.Init(segFile)
 	}
 	cloned.IndexHolder = indexHolder
+	cloned.SegmentFile = segFile
 	for _, blk := range seg.tree.Blocks {
 		newBlkMeta, err := cloned.Meta.ReferenceBlock(blk.GetMeta().ID)
 		if err != nil {
@@ -213,6 +219,7 @@ func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 	}
 	idx, ok := seg.tree.Helper[meta.ID]
 	if !ok {
+		log.Errorf("")
 		panic("logic error")
 	}
 	old := seg.tree.Blocks[idx]
@@ -224,7 +231,11 @@ func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 	seg.tree.Lock()
 	defer seg.tree.Unlock()
 	seg.tree.Blocks[idx] = upgradeBlk
-	old.Unref()
 	upgradeBlk.Ref()
+	// log.Infof("111111 %d", old.RefCount())
+	// log.Info(old.String())
+	// TODO
+	// old.Unref()
+	// log.Infof("22222 %d", old.RefCount())
 	return upgradeBlk, nil
 }

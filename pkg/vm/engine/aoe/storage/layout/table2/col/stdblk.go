@@ -5,12 +5,14 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	// log "github.com/sirupsen/logrus"
+	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type StdColumnBlock struct {
 	ColumnBlock
-	// Part IColumnPart
+	Part IColumnPart
 }
 
 func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
@@ -22,12 +24,22 @@ func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
 			Type:        host.GetType(),
 		},
 	}
-
+	capacity := blk.Meta.Segment.Info.Conf.BlockMaxRows * uint64(blk.Meta.Segment.Schema.ColDefs[colIdx].Type.Size)
+	host.Ref()
+	blk.Ref()
+	part := NewColumnPart(host, blk, capacity)
+	for part == nil {
+		blk.Ref()
+		part = NewColumnPart(host, blk, capacity)
+		time.Sleep(time.Duration(1) * time.Millisecond)
+	}
+	part.Unref()
 	blk.Ref()
 	return blk
 }
 
 func (blk *StdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
+	defer host.Unref()
 	if blk.Type == base.PERSISTENT_SORTED_BLK {
 		panic("logic error")
 	}
@@ -43,28 +55,28 @@ func (blk *StdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
 			SegmentFile: host.GetSegmentFile(),
 		},
 	}
+	cloned.Ref()
 	blk.RLock()
-	// part := blk.Part.CloneWithUpgrade(cloned.Ref(), seg.GetSSTBufMgr(), seg.GetFsManager())
+	part := blk.Part.CloneWithUpgrade(cloned, host.GetSSTBufMgr())
 	blk.RUnlock()
-	// if part == nil {
-	// 	log.Errorf("logic error")
-	// 	panic("logic error")
-	// }
-	// cloned.Part = part
+	if part == nil {
+		log.Errorf("logic error")
+		panic("logic error")
+	}
+	cloned.Part = part
 	cloned.OnZeroCB = cloned.close
 	cloned.Ref()
-	host.Unref()
 	return cloned
 }
 
-// func (blk *StdColumnBlock) Append(part IColumnPart) {
-// 	blk.Lock()
-// 	defer blk.Unlock()
-// 	if !blk.ID.IsSameBlock(part.GetID()) || blk.Part != nil {
-// 		panic("logic error")
-// 	}
-// 	blk.Part = part
-// }
+func (blk *StdColumnBlock) RegisterPart(part IColumnPart) {
+	blk.Lock()
+	defer blk.Unlock()
+	if blk.Meta.ID != part.GetID() || blk.Part != nil {
+		panic("logic error")
+	}
+	blk.Part = part
+}
 
 func (blk *StdColumnBlock) close() {
 	// log.Infof("Close StdBlk %s Refs=%d, %p", blk.ID.BlockString(), blk.Refs, blk)
@@ -72,10 +84,11 @@ func (blk *StdColumnBlock) close() {
 		blk.IndexHolder.Unref()
 		blk.IndexHolder = nil
 	}
-	// if blk.Part != nil {
-	// 	blk.Part.Close()
-	// }
-	// blk.Part = nil
+	if blk.Part != nil {
+		blk.Part.Close()
+	}
+	blk.Part = nil
+	// log.Infof("destroy colblk %d, colidx %d", blk.Meta.ID, blk.ColIdx)
 }
 
 func (blk *StdColumnBlock) String() string {
