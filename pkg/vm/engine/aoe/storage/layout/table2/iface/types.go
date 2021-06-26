@@ -9,6 +9,7 @@ import (
 )
 
 type ITableData interface {
+	common.IRef
 	GetID() uint64
 	GetName() string
 	GetMTBufMgr() bmgrif.IBufferManager
@@ -54,4 +55,5 @@ type IBlock interface {
 	GetType() base.BlockType
 	CloneWithUpgrade(ISegment, *md.Block) (IBlock, error)
 	GetSegmentFile() base.ISegmentFile
+	String() string
 }

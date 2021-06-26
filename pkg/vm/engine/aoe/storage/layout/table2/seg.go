@@ -115,7 +115,10 @@ func (seg *Segment) GetIndexHolder() *index.SegmentHolder {
 func (seg *Segment) String() string {
 	seg.tree.RLock()
 	defer seg.tree.RUnlock()
-	s := fmt.Sprintf("<Segment[%d]>(BlkCnt=%d)", seg.Meta.ID, seg.tree.BlockCnt)
+	s := fmt.Sprintf("<Segment[%d]>(BlkCnt=%d)(Refs=%d)", seg.Meta.ID, seg.tree.BlockCnt, seg.RefCount())
+	for _, blk := range seg.tree.Blocks {
+		s = fmt.Sprintf("%s\n\t%s", s, blk.String())
+	}
 	return s
 }
 

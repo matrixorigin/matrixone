@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
@@ -24,10 +25,12 @@ func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.I
 	}
 	data.tree.Segments = make([]iface.ISegment, 0)
 	data.tree.Helper = make(map[uint64]int)
+	data.OnZeroCB = data.close
 	return data
 }
 
 type TableData struct {
+	common.RefHelper
 	tree struct {
 		sync.RWMutex
 		Segments   []iface.ISegment
@@ -39,6 +42,12 @@ type TableData struct {
 	Meta        *md.Table
 	IndexHolder *index.TableHolder
 	FsMgr       base.IManager
+}
+
+func (td *TableData) close() {
+	for _, segment := range td.tree.Segments {
+		segment.Unref()
+	}
 }
 
 func (td *TableData) GetIndexHolder() *index.TableHolder {

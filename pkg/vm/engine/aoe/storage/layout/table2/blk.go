@@ -1,25 +1,22 @@
 package table
 
 import (
+	"fmt"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table2/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 )
 
-type IColumnBlock interface {
-	common.IRef
-}
-
 type Block struct {
 	common.RefHelper
 	data struct {
 		sync.RWMutex
-		Columns []IColumnBlock
+		Columns []col.IColumnBlock
 		Helper  map[string]int
 	}
 	Meta        *md.Block
@@ -39,7 +36,7 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 		FsMgr:     host.GetFsManager(),
 	}
 
-	blk.data.Columns = make([]IColumnBlock, 0)
+	blk.data.Columns = make([]col.IColumnBlock, 0)
 	blk.data.Helper = make(map[string]int)
 	blk.OnZeroCB = blk.noRefCB
 
@@ -66,6 +63,11 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 }
 
 func (blk *Block) initColumns() error {
+	for idx, colDef := range blk.Meta.Segment.Schema.ColDefs {
+		colBlk := col.NewStdColumnBlock(blk, idx)
+		blk.data.Helper[colDef.Name] = len(blk.data.Columns)
+		blk.data.Columns = append(blk.data.Columns, colBlk)
+	}
 	return nil
 }
 
@@ -158,21 +160,32 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		IndexHolder: indexHolder,
 		Type:        newType,
 	}
-	cloned.data.Columns = make([]IColumnBlock, 0)
+	cloned.data.Columns = make([]col.IColumnBlock, 0)
 	cloned.data.Helper = make(map[string]int)
 	if newIndexHolder {
 		indexHolder.Init(segFile)
 	}
-	blk.cloneWithUpgradeColumns()
+	blk.cloneWithUpgradeColumns(cloned)
 	cloned.Ref()
 	host.Unref()
 	return cloned, nil
 }
 
-func (blk *Block) cloneWithUpgradeColumns() {
-	// TODO
+func (blk *Block) cloneWithUpgradeColumns(cloned *Block) {
+	for name, idx := range blk.data.Helper {
+		colBlk := blk.data.Columns[idx]
+		cloned.Ref()
+		clonedCol := colBlk.CloneWithUpgrade(cloned)
+		cloned.data.Helper[name] = len(cloned.data.Columns)
+		cloned.data.Columns = append(cloned.data.Columns, clonedCol)
+	}
 }
 
 func (blk *Block) GetSegmentFile() base.ISegmentFile {
 	return blk.SegmentFile
+}
+
+func (blk *Block) String() string {
+	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(Refs=%d)", blk.Meta.ID, len(blk.data.Columns), blk.RefCount())
+	return s
 }
