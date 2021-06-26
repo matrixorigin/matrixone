@@ -2,6 +2,7 @@ package iface
 
 import (
 	"io"
+	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -69,4 +70,6 @@ type IBlockHandle interface {
 	io.Closer
 	GetHost() IBlock
 	GetPageNode(colIdx, pos int) bmgrif.MangaedNode
+	Cols() int
+	ColType(idx int) types.Type
 }

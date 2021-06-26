@@ -2,19 +2,17 @@ package memtable
 
 import (
 	"context"
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
-	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
+	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldatav2"
+	mops "matrixone/pkg/vm/engine/aoe/storage/ops/metav2"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
@@ -23,35 +21,30 @@ import (
 type MemTable struct {
 	Opts *engine.Options
 	sync.RWMutex
-	TableData table.ITableData
-	Meta      *md.Block
+	TableData iface.ITableData
 	Data      *chunk.Chunk
 	Full      bool
-	Columns   []col.IColumnBlock
-	Cursors   []col.IScanCursor
-	ID        common.ID
-	Types     []types.Type
+	Handle    iface.IBlockHandle
+	Meta      *md.Block
+	Block     iface.IBlock
 }
 
 var (
 	_ imem.IMemTable = (*MemTable)(nil)
 )
 
-func NewMemTable(tableData table.ITableData, colTypes []types.Type, columnBlocks []col.IColumnBlock,
-	cursors []col.IScanCursor, opts *engine.Options, meta *md.Block) imem.IMemTable {
+func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IBlock) imem.IMemTable {
 	mt := &MemTable{
-		Meta:      meta,
-		Full:      false,
 		Opts:      opts,
-		Columns:   columnBlocks,
-		Cursors:   cursors,
-		ID:        columnBlocks[0].GetID(),
-		Types:     colTypes,
 		TableData: tableData,
+		Handle:    data.GetBlockHandle(),
+		Block:     data,
+		Meta:      data.GetMeta(),
 	}
+
 	var vectors []vector.Vector
-	for idx, _ := range columnBlocks {
-		vec := vector.NewStdVector(colTypes[idx], mt.Cursors[idx].GetNode().DataNode.(*buf.RawMemoryNode).Data)
+	for idx := 0; idx < mt.Handle.Cols(); idx++ {
+		vec := vector.NewStdVector(mt.Handle.ColType(idx), mt.Handle.GetPageNode(idx, 0).DataNode.(*buf.RawMemoryNode).Data)
 		vectors = append(vectors, vec)
 	}
 
@@ -63,18 +56,7 @@ func NewMemTable(tableData table.ITableData, colTypes []types.Type, columnBlocks
 }
 
 func (mt *MemTable) GetID() common.ID {
-	return mt.ID
-}
-
-func (mt *MemTable) InitScanCursors(cursors []interface{}) error {
-	for idx, colBlock := range mt.Columns {
-		cursor := cursors[idx].(*col.ScanCursor)
-		err := colBlock.InitScanCursor(cursor)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	return mt.Meta.AsCommonID().AsBlockID()
 }
 
 func (mt *MemTable) Append(c *chunk.Chunk, offset uint64, index *md.LogIndex) (n uint64, err error) {
@@ -173,10 +155,19 @@ func (mt *MemTable) GetMeta() *md.Block {
 	return mt.Meta
 }
 
-func (mt *MemTable) Close() error {
-	for _, colBlk := range mt.Columns {
-		colBlk.UnRef()
+func (mt *MemTable) Unpin() {
+	if mt.Handle != nil {
+		mt.Handle.Close()
+		mt.Handle = nil
 	}
+}
+
+func (mt *MemTable) Close() error {
+	if mt.Handle != nil {
+		mt.Handle.Close()
+		mt.Handle = nil
+	}
+	mt.Block.Unref()
 	return nil
 }
 

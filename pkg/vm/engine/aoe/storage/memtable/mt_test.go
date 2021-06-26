@@ -6,13 +6,11 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	table "matrixone/pkg/vm/engine/aoe/storage/layout/table2"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -120,30 +118,30 @@ func TestCollection(t *testing.T) {
 	}
 	waitgroup.Wait()
 	assert.Equal(t, len(tbl.SegmentIDs()), int(blks/(opts.Meta.Info.Conf.SegmentMaxBlocks)))
-	for i := 0; i < 50; i++ {
-		runtime.GC()
-		time.Sleep(time.Duration(1) * time.Millisecond)
-	}
+	time.Sleep(time.Duration(40) * time.Millisecond)
 
-	for _, column := range t0_data.GetCollumns() {
-		loopSeg := column.GetSegmentRoot()
-		for loopSeg != nil {
-			cursor := col.ScanCursor{}
-			for {
-				loopSeg.InitScanCursor(&cursor)
-				err := cursor.Init()
-				assert.Nil(t, err)
-				cursor.Next()
-				if cursor.Current == nil {
-					break
-				}
-			}
-			cursor.Close()
-			loopSeg.UnRef()
-			loopSeg = loopSeg.GetNext()
-		}
-	}
+	// for _, column := range t0_data.GetCollumns() {
+	// 	loopSeg := column.GetSegmentRoot()
+	// 	for loopSeg != nil {
+	// 		cursor := col.ScanCursor{}
+	// 		for {
+	// 			loopSeg.InitScanCursor(&cursor)
+	// 			err := cursor.Init()
+	// 			assert.Nil(t, err)
+	// 			cursor.Next()
+	// 			if cursor.Current == nil {
+	// 				break
+	// 			}
+	// 		}
+	// 		cursor.Close()
+	// 		loopSeg.UnRef()
+	// 		loopSeg = loopSeg.GetNext()
+	// 	}
+	// }
 	t.Log(mtBufMgr.String())
+	t.Log(sstBufMgr.String())
+	t.Log(indexBufMgr.String())
+	t.Log(fsMgr.String())
 
 	opts.MemData.Updater.Stop()
 	opts.Data.Flusher.Stop()
