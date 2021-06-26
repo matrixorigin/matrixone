@@ -40,6 +40,25 @@ func (seg *Segment) GetID() uint64 {
 	return seg.ID
 }
 
+func (seg *Segment) BlockIDList(args ...interface{}) []uint64 {
+	var ts int64
+	if len(args) == 0 {
+		ts = NowMicro()
+	} else {
+		ts = args[0].(int64)
+	}
+	ids := make([]uint64, 0)
+	seg.RLock()
+	defer seg.RUnlock()
+	for _, blk := range seg.Blocks {
+		if !blk.Select(ts) {
+			continue
+		}
+		ids = append(ids, blk.ID)
+	}
+	return ids
+}
+
 func (seg *Segment) BlockIDs(args ...interface{}) map[uint64]uint64 {
 	var ts int64
 	if len(args) == 0 {

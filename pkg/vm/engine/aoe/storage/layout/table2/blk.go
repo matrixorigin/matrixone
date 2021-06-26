@@ -201,6 +201,16 @@ func (blk *Block) GetBlockHandle() iface.IBlockHandle {
 	return h
 }
 
+func (blk *Block) WeakGetWrappedBlock(colIdx []int) iface.IBlockHandle {
+	h := new(BlockHandle)
+	h.Columns = make(map[int]iface.IColBlockHandle, len(colIdx))
+	h.Host = blk
+	for idx, colIdx := range colIdx {
+		h.Columns[idx] = blk.data.Columns[colIdx].GetBlockHandle()
+	}
+	return h
+}
+
 func (blk *Block) SetNext(next iface.IBlock) {
 	blk.data.Lock()
 	defer blk.data.Unlock()
