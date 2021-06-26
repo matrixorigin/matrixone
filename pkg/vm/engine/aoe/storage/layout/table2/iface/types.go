@@ -42,6 +42,8 @@ type ISegment interface {
 	RegisterBlock(*md.Block) (blk IBlock, err error)
 	StrongRefBlock(id uint64) IBlock
 	WeakRefBlock(id uint64) IBlock
+	GetNext() ISegment
+	SetNext(ISegment)
 	String() string
 	CloneWithUpgrade(ITableData, *md.Segment) (ISegment, error)
 	UpgradeBlock(*md.Block) (IBlock, error)

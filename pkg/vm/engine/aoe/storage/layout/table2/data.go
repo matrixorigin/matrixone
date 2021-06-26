@@ -142,6 +142,16 @@ func (td *TableData) RegisterSegment(meta *md.Segment) (seg iface.ISegment, err 
 	}
 	td.tree.Lock()
 	defer td.tree.Unlock()
+	_, ok := td.tree.Helper[meta.ID]
+	if ok {
+		return nil, errors.New("Duplicate seg")
+	}
+
+	if len(td.tree.Segments) != 0 {
+		seg.Ref()
+		td.tree.Segments[len(td.tree.Segments)-1].SetNext(seg)
+	}
+
 	td.tree.Segments = append(td.tree.Segments, seg)
 	td.tree.Helper[meta.ID] = int(td.tree.SegmentCnt)
 	atomic.AddUint32(&td.tree.SegmentCnt, uint32(1))
@@ -190,9 +200,21 @@ func (td *TableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
 	if err != nil {
 		panic(err)
 	}
+
+	var oldNext iface.ISegment
+	if idx != len(td.tree.Segments)-1 {
+		oldNext = old.GetNext()
+	}
+	upgradeSeg.SetNext(oldNext)
+
 	td.tree.Lock()
 	defer td.tree.Unlock()
 	td.tree.Segments[idx] = upgradeSeg
+	if idx > 0 {
+		upgradeSeg.Ref()
+		td.tree.Segments[idx-1].SetNext(upgradeSeg)
+	}
+	old.SetNext(nil)
 	old.Unref()
 	upgradeSeg.Ref()
 	return upgradeSeg, nil

@@ -22,6 +22,7 @@ type Segment struct {
 		Blocks   []iface.IBlock
 		Helper   map[uint64]int
 		BlockCnt uint32
+		Next     iface.ISegment
 	}
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
@@ -86,6 +87,25 @@ func (seg *Segment) noRefCB() {
 		// log.Infof("blk refs=%d", blk.RefCount())
 	}
 	// log.Infof("destroy seg %d", seg.Meta.ID)
+}
+
+func (seg *Segment) SetNext(next iface.ISegment) {
+	seg.tree.Lock()
+	defer seg.tree.Unlock()
+	if seg.tree.Next != nil {
+		seg.tree.Next.Unref()
+	}
+	seg.tree.Next = next
+}
+
+func (seg *Segment) GetNext() iface.ISegment {
+	seg.tree.RLock()
+	if seg.tree.Next != nil {
+		seg.tree.Next.Ref()
+	}
+	r := seg.tree.Next
+	seg.tree.RUnlock()
+	return r
 }
 
 func (seg *Segment) GetMeta() *md.Segment {
@@ -203,6 +223,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		}
 		cloned.tree.Helper[newBlkMeta.ID] = len(cloned.tree.Blocks)
 		cloned.tree.Blocks = append(cloned.tree.Blocks, cur)
+		cloned.tree.BlockCnt++
 	}
 
 	cloned.Ref()
