@@ -232,10 +232,6 @@ func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 	defer seg.tree.Unlock()
 	seg.tree.Blocks[idx] = upgradeBlk
 	upgradeBlk.Ref()
-	// log.Infof("111111 %d", old.RefCount())
-	// log.Info(old.String())
-	// TODO
-	// old.Unref()
-	// log.Infof("22222 %d", old.RefCount())
+	old.Unref()
 	return upgradeBlk, nil
 }

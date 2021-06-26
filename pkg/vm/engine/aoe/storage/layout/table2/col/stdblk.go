@@ -16,6 +16,7 @@ type StdColumnBlock struct {
 }
 
 func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
+	defer host.Unref()
 	blk := &StdColumnBlock{
 		ColumnBlock: ColumnBlock{
 			ColIdx:      colIdx,
@@ -30,10 +31,12 @@ func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
 	part := NewColumnPart(host, blk, capacity)
 	for part == nil {
 		blk.Ref()
+		host.Ref()
 		part = NewColumnPart(host, blk, capacity)
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	part.Unref()
+	blk.OnZeroCB = blk.close
 	blk.Ref()
 	return blk
 }
@@ -79,7 +82,6 @@ func (blk *StdColumnBlock) RegisterPart(part IColumnPart) {
 }
 
 func (blk *StdColumnBlock) close() {
-	// log.Infof("Close StdBlk %s Refs=%d, %p", blk.ID.BlockString(), blk.Refs, blk)
 	if blk.IndexHolder != nil {
 		blk.IndexHolder.Unref()
 		blk.IndexHolder = nil

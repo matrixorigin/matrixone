@@ -3,6 +3,7 @@ package table
 import (
 	"errors"
 	"fmt"
+	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -12,7 +13,6 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) iface.ITableData {
@@ -175,25 +175,46 @@ func (td *TableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
 	if !ok {
 		panic("logic error")
 	}
-	seg = td.tree.Segments[idx]
-	if seg.GetType() != base.UNSORTED_SEG {
+	old := td.tree.Segments[idx]
+	if old.GetType() != base.UNSORTED_SEG {
 		panic("logic error")
 	}
-	if seg.GetMeta().ID != id {
+	if old.GetMeta().ID != id {
 		panic("logic error")
 	}
 	meta, err := td.Meta.ReferenceSegment(id)
 	if err != nil {
 		return nil, err
 	}
-	upgradeSeg, err := seg.CloneWithUpgrade(td, meta)
+	upgradeSeg, err := old.CloneWithUpgrade(td, meta)
 	if err != nil {
 		panic(err)
 	}
 	td.tree.Lock()
 	defer td.tree.Unlock()
 	td.tree.Segments[idx] = upgradeSeg
-	seg.Unref()
+	old.Unref()
 	upgradeSeg.Ref()
 	return upgradeSeg, nil
+}
+
+func MockSegments(meta *md.Table, tblData iface.ITableData) []uint64 {
+	segs := make([]uint64, 0)
+	for _, segMeta := range meta.Segments {
+		seg, err := tblData.RegisterSegment(segMeta)
+		if err != nil {
+			panic(err)
+		}
+		for _, blkMeta := range segMeta.Blocks {
+			blk, err := seg.RegisterBlock(blkMeta)
+			if err != nil {
+				panic(err)
+			}
+			blk.Unref()
+		}
+		segs = append(segs, seg.GetMeta().ID)
+		seg.Unref()
+	}
+
+	return segs
 }

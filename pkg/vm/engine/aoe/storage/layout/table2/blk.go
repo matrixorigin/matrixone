@@ -2,6 +2,7 @@ package table
 
 import (
 	"fmt"
+	// log "github.com/sirupsen/logrus"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -10,7 +11,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
-	// log "github.com/sirupsen/logrus"
 )
 
 type Block struct {
@@ -51,6 +51,7 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 	}
 	indexHolder := host.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
 
+	blk.Ref()
 	err := blk.initColumns()
 	if err != nil {
 		return nil, err
@@ -59,12 +60,12 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 	blk.SegmentFile = host.GetSegmentFile()
 	blk.IndexHolder = indexHolder
 	blk.Type = blkType
-	blk.Ref()
 	return blk, nil
 }
 
 func (blk *Block) initColumns() error {
 	for idx, colDef := range blk.Meta.Segment.Schema.ColDefs {
+		blk.Ref()
 		colBlk := col.NewStdColumnBlock(blk, idx)
 		blk.data.Helper[colDef.Name] = len(blk.data.Columns)
 		blk.data.Columns = append(blk.data.Columns, colBlk)
@@ -78,6 +79,7 @@ func (blk *Block) GetType() base.BlockType {
 
 func (blk *Block) noRefCB() {
 	for _, colBlk := range blk.data.Columns {
+		// log.Infof("destroy blk %d, col %d, refs %d", blk.Meta.ID, idx, colBlk.RefCount())
 		colBlk.Unref()
 	}
 	// log.Infof("destroy blk %d", blk.Meta.ID)
@@ -191,5 +193,8 @@ func (blk *Block) GetSegmentFile() base.ISegmentFile {
 
 func (blk *Block) String() string {
 	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(Refs=%d)", blk.Meta.ID, len(blk.data.Columns), blk.RefCount())
+	for _, colBlk := range blk.data.Columns {
+		s = fmt.Sprintf("%s/n\t%s", s, colBlk.String())
+	}
 	return s
 }
