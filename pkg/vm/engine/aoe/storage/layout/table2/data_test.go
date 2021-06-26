@@ -77,6 +77,24 @@ func TestBase1(t *testing.T) {
 	}
 
 	for segId, _ := range segIds {
+		segMeta, err := tableMeta.ReferenceSegment(segId)
+		assert.Nil(t, err)
+		blkIds := segMeta.BlockIDs()
+		refSeg := tblData.WeakRefSegment(segId)
+		assert.Equal(t, int64(1), refSeg.RefCount())
+		for blkId, _ := range blkIds {
+			blkMeta, err := segMeta.ReferenceBlock(blkId)
+			assert.Nil(t, err)
+			upgraded, err := tblData.UpgradeBlock(blkMeta)
+			assert.Nil(t, err)
+			upgraded.Unref()
+			assert.Equal(t, int64(1), upgraded.RefCount())
+		}
+	}
+
+	t.Log(tblData.String())
+	t.Log(fsMgr.String())
+	for segId, _ := range segIds {
 		refSeg := tblData.WeakRefSegment(segId)
 		assert.Equal(t, int64(1), refSeg.RefCount())
 		upgraded, err := tblData.UpgradeSegment(segId)

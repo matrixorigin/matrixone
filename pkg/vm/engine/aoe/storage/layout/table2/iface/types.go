@@ -24,6 +24,7 @@ type ITableData interface {
 	WeakRefBlock(segId, blkId uint64) IBlock
 	String() string
 	UpgradeSegment(id uint64) (ISegment, error)
+	UpgradeBlock(*md.Block) (IBlock, error)
 }
 
 type ISegment interface {
@@ -40,6 +41,7 @@ type ISegment interface {
 	WeakRefBlock(id uint64) IBlock
 	String() string
 	CloneWithUpgrade(ITableData, *md.Segment) (ISegment, error)
+	UpgradeBlock(*md.Block) (IBlock, error)
 }
 
 type IBlock interface {
@@ -51,4 +53,5 @@ type IBlock interface {
 	GetMeta() *md.Block
 	GetType() base.BlockType
 	CloneWithUpgrade(ISegment, *md.Block) (IBlock, error)
+	GetSegmentFile() base.ISegmentFile
 }

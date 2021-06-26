@@ -200,3 +200,28 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	cloned.Ref()
 	return cloned, nil
 }
+
+func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
+	if seg.Type != base.UNSORTED_SEG {
+		panic("logic error")
+	}
+	if seg.Meta.ID != meta.Segment.ID {
+		panic("logic error")
+	}
+	idx, ok := seg.tree.Helper[meta.ID]
+	if !ok {
+		panic("logic error")
+	}
+	old := seg.tree.Blocks[idx]
+	seg.Ref()
+	upgradeBlk, err := old.CloneWithUpgrade(seg, meta)
+	if err != nil {
+		return nil, err
+	}
+	seg.tree.Lock()
+	defer seg.tree.Unlock()
+	seg.tree.Blocks[idx] = upgradeBlk
+	old.Unref()
+	upgradeBlk.Ref()
+	return upgradeBlk, nil
+}

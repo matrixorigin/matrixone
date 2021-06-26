@@ -27,6 +27,7 @@ type Block struct {
 	SSTBufMgr   bmgrif.IBufferManager
 	IndexHolder *index.BlockHolder
 	FsMgr       base.IManager
+	SegmentFile base.ISegmentFile
 	Type        base.BlockType
 }
 
@@ -57,6 +58,7 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 		return nil, err
 	}
 
+	blk.SegmentFile = host.GetSegmentFile()
 	blk.IndexHolder = indexHolder
 	blk.Type = blkType
 	blk.Ref()
@@ -169,4 +171,8 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 
 func (blk *Block) cloneWithUpgradeColumns() {
 	// TODO
+}
+
+func (blk *Block) GetSegmentFile() base.ISegmentFile {
+	return blk.SegmentFile
 }

@@ -152,6 +152,15 @@ func (td *TableData) RegisterBlock(meta *md.Block) (blk iface.IBlock, err error)
 	return blk, err
 }
 
+func (td *TableData) UpgradeBlock(meta *md.Block) (blk iface.IBlock, err error) {
+	idx, ok := td.tree.Helper[meta.Segment.ID]
+	if !ok {
+		return nil, errors.New("seg not found")
+	}
+	seg := td.tree.Segments[idx]
+	return seg.UpgradeBlock(meta)
+}
+
 func (td *TableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
 	idx, ok := td.tree.Helper[id]
 	if !ok {
