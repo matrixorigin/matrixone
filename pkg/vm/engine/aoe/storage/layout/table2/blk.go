@@ -19,6 +19,7 @@ type Block struct {
 		sync.RWMutex
 		Columns []col.IColumnBlock
 		Helper  map[string]int
+		Next    iface.IBlock
 	}
 	Meta        *md.Block
 	MTBufMgr    bmgrif.IBufferManager
@@ -81,6 +82,10 @@ func (blk *Block) noRefCB() {
 	for _, colBlk := range blk.data.Columns {
 		// log.Infof("destroy blk %d, col %d, refs %d", blk.Meta.ID, idx, colBlk.RefCount())
 		colBlk.Unref()
+	}
+	if blk.data.Next != nil {
+		blk.data.Next.Unref()
+		blk.data.Next = nil
 	}
 	// log.Infof("destroy blk %d", blk.Meta.ID)
 }
@@ -194,4 +199,23 @@ func (blk *Block) GetBlockHandle() iface.IBlockHandle {
 		h.Columns[idx] = colBlk.GetBlockHandle()
 	}
 	return h
+}
+
+func (blk *Block) SetNext(next iface.IBlock) {
+	blk.data.Lock()
+	defer blk.data.Unlock()
+	if blk.data.Next != nil {
+		blk.data.Next.Unref()
+	}
+	blk.data.Next = next
+}
+
+func (blk *Block) GetNext() iface.IBlock {
+	blk.data.RLock()
+	if blk.data.Next != nil {
+		blk.data.Next.Ref()
+	}
+	r := blk.data.Next
+	blk.data.RUnlock()
+	return r
 }

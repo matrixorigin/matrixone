@@ -86,6 +86,10 @@ func (seg *Segment) noRefCB() {
 		blk.Unref()
 		// log.Infof("blk refs=%d", blk.RefCount())
 	}
+	if seg.tree.Next != nil {
+		seg.tree.Next.Unref()
+		seg.tree.Next = nil
+	}
 	// log.Infof("destroy seg %d", seg.Meta.ID)
 }
 
@@ -153,6 +157,11 @@ func (seg *Segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err erro
 	}
 	seg.tree.Lock()
 	defer seg.tree.Unlock()
+	if len(seg.tree.Blocks) > 0 {
+		blk.Ref()
+		seg.tree.Blocks[len(seg.tree.Blocks)-1].SetNext(blk)
+	}
+
 	seg.tree.Blocks = append(seg.tree.Blocks, blk)
 	seg.tree.Helper[blkMeta.ID] = int(seg.tree.BlockCnt)
 	atomic.AddUint32(&seg.tree.BlockCnt, uint32(1))
@@ -211,6 +220,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	}
 	cloned.IndexHolder = indexHolder
 	cloned.SegmentFile = segFile
+	var prev iface.IBlock
 	for _, blk := range seg.tree.Blocks {
 		newBlkMeta, err := cloned.Meta.ReferenceBlock(blk.GetMeta().ID)
 		if err != nil {
@@ -224,6 +234,11 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		cloned.tree.Helper[newBlkMeta.ID] = len(cloned.tree.Blocks)
 		cloned.tree.Blocks = append(cloned.tree.Blocks, cur)
 		cloned.tree.BlockCnt++
+		if prev != nil {
+			cur.Ref()
+			prev.SetNext(cur)
+		}
+		prev = cur
 	}
 
 	cloned.Ref()
@@ -248,10 +263,21 @@ func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 	if err != nil {
 		return nil, err
 	}
+	var oldNext iface.IBlock
+	if idx != len(seg.tree.Blocks)-1 {
+		oldNext = old.GetNext()
+	}
+	upgradeBlk.SetNext(oldNext)
+
 	seg.tree.Lock()
 	defer seg.tree.Unlock()
 	seg.tree.Blocks[idx] = upgradeBlk
+	if idx > 0 {
+		upgradeBlk.Ref()
+		seg.tree.Blocks[idx-1].SetNext(upgradeBlk)
+	}
 	upgradeBlk.Ref()
+	// old.SetNext(nil)
 	old.Unref()
 	return upgradeBlk, nil
 }

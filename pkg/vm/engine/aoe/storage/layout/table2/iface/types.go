@@ -61,6 +61,8 @@ type IBlock interface {
 	GetSegmentFile() base.ISegmentFile
 	String() string
 	GetBlockHandle() IBlockHandle
+	GetNext() IBlock
+	SetNext(next IBlock)
 }
 
 type IColBlockHandle interface {

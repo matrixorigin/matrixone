@@ -60,13 +60,19 @@ func TestBase1(t *testing.T) {
 		assert.Equal(t, int64(1+delta), refSeg.RefCount())
 
 		blkIds := segMeta.BlockIDs()
+		id := 0
 		for blkId, _ := range blkIds {
+			idelta := 0
+			if id > 0 {
+				idelta = 1
+			}
+			id++
 			blkMeta, err := segMeta.ReferenceBlock(blkId)
 			assert.Nil(t, err)
 			blk, err := tblData.RegisterBlock(blkMeta)
 			assert.Nil(t, err)
 			blk.Unref()
-			assert.Equal(t, int64(1), blk.RefCount())
+			assert.Equal(t, int64(1+idelta), blk.RefCount())
 		}
 		refSeg = tblData.WeakRefSegment(segId)
 		assert.Equal(t, int64(1+delta), refSeg.RefCount())

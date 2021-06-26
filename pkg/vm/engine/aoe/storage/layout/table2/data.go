@@ -214,7 +214,7 @@ func (td *TableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
 		upgradeSeg.Ref()
 		td.tree.Segments[idx-1].SetNext(upgradeSeg)
 	}
-	old.SetNext(nil)
+	// old.SetNext(nil)
 	old.Unref()
 	upgradeSeg.Ref()
 	return upgradeSeg, nil
