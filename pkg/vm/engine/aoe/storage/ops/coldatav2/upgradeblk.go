@@ -1,12 +1,11 @@
 package coldata
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
 	// log "github.com/sirupsen/logrus"
 )
 
-func NewUpgradeBlkOp(ctx *OpCtx, td table.ITableData) *UpgradeBlkOp {
+func NewUpgradeBlkOp(ctx *OpCtx, td iface.ITableData) *UpgradeBlkOp {
 	op := &UpgradeBlkOp{
 		TableData: td,
 	}
@@ -16,11 +15,12 @@ func NewUpgradeBlkOp(ctx *OpCtx, td table.ITableData) *UpgradeBlkOp {
 
 type UpgradeBlkOp struct {
 	Op
-	TableData table.ITableData
-	Blocks    []col.IColumnBlock
+	TableData iface.ITableData
+	Block     iface.IBlock
 }
 
 func (op *UpgradeBlkOp) Execute() error {
-	op.Blocks = op.TableData.UpgradeBlock(op.Ctx.BlkMeta)
-	return nil
+	var err error
+	op.Block, err = op.TableData.UpgradeBlock(op.Ctx.BlkMeta)
+	return err
 }

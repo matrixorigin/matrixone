@@ -62,6 +62,7 @@ func TestUpgradeSegOp(t *testing.T) {
 			segs = append(segs, seg)
 		}
 	}
+	t.Log(fsMgr.String())
 	opts.MemData.Updater.Stop()
 }
 

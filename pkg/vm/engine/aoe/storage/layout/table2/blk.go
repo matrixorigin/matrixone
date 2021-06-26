@@ -113,12 +113,12 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		panic("logic error")
 	}
 
-	segId := meta.AsCommonID().AsSegmentID()
+	// segId := meta.AsCommonID().AsSegmentID()
 	blkId := meta.AsCommonID().AsBlockID()
 	var (
 		newType base.BlockType
-		segFile base.ISegmentFile
-		err     error
+		// segFile base.ISegmentFile
+		// err     error
 	)
 	indexHolder := host.GetIndexHolder().GetBlock(meta.ID)
 	newIndexHolder := false
@@ -126,13 +126,16 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 	switch blk.Type {
 	case base.TRANSIENT_BLK:
 		newType = base.PERSISTENT_BLK
-		segFile = host.GetFsManager().GetUnsortedFile(segId)
-		if segFile == nil {
-			segFile, err = host.GetFsManager().RegisterUnsortedFiles(segId)
-			if err != nil {
-				panic("logic error")
-			}
-		}
+		// segFile = host.GetFsManager().GetUnsortedFile(segId)
+		// if segFile == nil {
+		// 	panic("logic error")
+		// }
+		// if segFile == nil {
+		// 	segFile, err = host.GetFsManager().RegisterUnsortedFiles(segId)
+		// 	if err != nil {
+		// 		panic("logic error")
+		// 	}
+		// }
 		if indexHolder == nil {
 			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
 			newIndexHolder = true
@@ -142,10 +145,10 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		}
 	case base.PERSISTENT_BLK:
 		newType = base.PERSISTENT_SORTED_BLK
-		segFile = host.GetFsManager().GetSortedFile(segId)
-		if segFile == nil {
-			panic("logic error")
-		}
+		// segFile = host.GetFsManager().GetSortedFile(segId)
+		// if segFile == nil {
+		// 	panic("logic error")
+		// }
 		if indexHolder == nil {
 			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
 			newIndexHolder = true
@@ -168,7 +171,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 	cloned.data.Columns = make([]col.IColumnBlock, 0)
 	cloned.data.Helper = make(map[string]int)
 	if newIndexHolder {
-		indexHolder.Init(segFile)
+		indexHolder.Init(cloned.SegmentFile)
 	}
 	blk.cloneWithUpgradeColumns(cloned)
 	cloned.OnZeroCB = cloned.noRefCB

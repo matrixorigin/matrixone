@@ -14,6 +14,64 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestUpgradeBlkOp(t *testing.T) {
+	schema := md.MockSchema(2)
+	opts := new(e.Options)
+	opts.FillDefaults("/tmp")
+	opts.MemData.Updater.Start()
+	typeSize := uint64(schema.ColDefs[0].Type.Size)
+	row_count := uint64(64)
+	capacity := typeSize * row_count * 10000
+	bufMgr := bmgr.MockBufMgr(capacity)
+	fsMgr := ldio.NewManager("/tmp", true)
+	seg_cnt := uint64(4)
+	blk_cnt := uint64(4)
+
+	info := md.MockInfo(row_count, blk_cnt)
+	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
+	tableData := tbl.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
+	segIds := tbl.MockSegments(tableMeta, tableData)
+
+	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())
+
+	for _, segMeta := range tableMeta.Segments {
+		for _, blkMeta := range segMeta.Blocks {
+			blkMeta.DataState = md.FULL
+			blkMeta.Count = blkMeta.MaxRowCount
+		}
+	}
+
+	for _, segID := range segIds {
+		segMeta, err := tableMeta.ReferenceSegment(segID)
+		assert.Nil(t, err)
+		cpCtx := md.CopyCtx{}
+		blkMeta, err := segMeta.CloneBlock(segMeta.Blocks[0].ID, cpCtx)
+		assert.Nil(t, err)
+		ctx := new(OpCtx)
+		ctx.Opts = opts
+		ctx.BlkMeta = blkMeta
+		op := NewUpgradeBlkOp(ctx, tableData)
+		op.Push()
+		err = op.WaitDone()
+		assert.Nil(t, err)
+		blk := op.Block
+		assert.Equal(t, base.PERSISTENT_BLK, blk.GetType())
+		blk.Unref()
+
+		op2 := NewUpgradeSegOp(ctx, segID, tableData)
+		op2.Push()
+		err = op2.WaitDone()
+		assert.Nil(t, err)
+		seg := op2.Segment
+		assert.Equal(t, base.SORTED_SEG, seg.GetType())
+		seg.Unref()
+	}
+	t.Log(fsMgr.String())
+	t.Log(tableData.String())
+	t.Log(bufMgr.String())
+	opts.MemData.Updater.Stop()
+}
+
 func TestUpgradeSegOp(t *testing.T) {
 	schema := md.MockSchema(2)
 	opts := new(e.Options)
@@ -57,65 +115,3 @@ func TestUpgradeSegOp(t *testing.T) {
 	// t.Log(bufMgr.String())
 	opts.MemData.Updater.Stop()
 }
-
-// func TestUpgradeBlkOp(t *testing.T) {
-// 	schema := md.MockSchema(2)
-// 	opts := new(e.Options)
-// 	opts.FillDefaults("/tmp")
-// 	opts.MemData.Updater.Start()
-// 	typeSize := uint64(schema.ColDefs[0].Type.Size)
-// 	info := md.MockInfo(uint64(10), uint64(2))
-// 	row_count := info.Conf.BlockMaxRows
-// 	capacity := typeSize * row_count * 10000
-// 	bufMgr := bmgr.MockBufMgr(capacity)
-// 	fsMgr := ldio.NewManager("/tmp", true)
-// 	segCnt := uint64(2)
-// 	blkCnt := segCnt * info.Conf.SegmentMaxBlocks
-
-// 	tableMeta := md.MockTable(info, schema, blkCnt)
-// 	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
-// 	segIDs := table.MockSegments(fsMgr, bufMgr, bufMgr, tableMeta, tableData)
-// 	assert.Equal(t, uint64(segCnt), tableData.GetSegmentCount())
-// 	t.Log(bufMgr.String())
-// 	assert.Equal(t, int(blkCnt)*len(schema.ColDefs), bufMgr.NodeCount())
-// 	for _, segID := range segIDs {
-// 		t.Logf("seg %s", segID.SegmentString())
-// 	}
-// 	for _, segID := range segIDs {
-// 		var ops []*UpgradeBlkOp
-// 		segMeta, _ := tableMeta.ReferenceSegment(segID.SegmentID)
-// 		blkID := segMeta.Blocks[0].AsCommonID()
-// 		cpCtx := md.CopyCtx{}
-// 		blkMeta, err := segMeta.CloneBlock(blkID.BlockID, cpCtx)
-// 		blkMeta.DataState = md.FULL
-// 		assert.Nil(t, err)
-// 		ctx := new(OpCtx)
-// 		ctx.Opts = opts
-// 		ctx.BlkMeta = blkMeta
-// 		op := NewUpgradeBlkOp(ctx, tableData)
-// 		op.Push()
-// 		ops = append(ops, op)
-
-// 		op = NewUpgradeBlkOp(ctx, tableData)
-// 		op.Push()
-// 		ops = append(ops, op)
-
-// 		for idx, op := range ops {
-// 			op.WaitDone()
-// 			assert.Equal(t, len(schema.ColDefs), len(op.Blocks))
-// 			for _, blk := range op.Blocks {
-// 				if idx == 0 {
-// 					assert.Equal(t, base.PERSISTENT_BLK, blk.GetBlockType())
-// 				} else if idx == 1 {
-// 					assert.Equal(t, base.PERSISTENT_SORTED_BLK, blk.GetBlockType())
-// 				}
-// 				blk.UnRef()
-// 			}
-// 		}
-// 	}
-// 	time.Sleep(time.Duration(10) * time.Millisecond)
-// 	t.Log(bufMgr.String())
-// 	assert.Equal(t, int(blkCnt)*len(schema.ColDefs), bufMgr.NodeCount())
-
-// 	opts.MemData.Updater.Stop()
-// }

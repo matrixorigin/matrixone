@@ -178,17 +178,13 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		panic("logic error")
 	}
 
-	var segFile base.ISegmentFile
+	id := seg.Meta.AsCommonID().AsSegmentID()
+	segFile := seg.FsMgr.UpgradeFile(id)
+	if segFile == nil {
+		panic("logic error")
+	}
 	if indexHolder.Type == base.UNSORTED_SEG {
 		indexHolder = td.GetIndexHolder().UpgradeSegment(seg.Meta.ID, base.SORTED_SEG)
-		id := seg.Meta.AsCommonID().AsSegmentID()
-		segFile = seg.FsMgr.GetSortedFile(id)
-		if segFile == nil {
-			segFile = seg.FsMgr.UpgradeFile(id)
-			if segFile == nil {
-				panic("logic error")
-			}
-		}
 		seg.IndexHolder.Init(segFile)
 	}
 	cloned.IndexHolder = indexHolder
