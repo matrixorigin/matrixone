@@ -1,6 +1,7 @@
 package iface
 
 import (
+	"io"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -56,4 +57,16 @@ type IBlock interface {
 	CloneWithUpgrade(ISegment, *md.Block) (IBlock, error)
 	GetSegmentFile() base.ISegmentFile
 	String() string
+	GetBlockHandle() IBlockHandle
+}
+
+type IColBlockHandle interface {
+	io.Closer
+	GetPageNode(int) bmgrif.MangaedNode
+}
+
+type IBlockHandle interface {
+	io.Closer
+	GetHost() IBlock
+	GetPageNode(colIdx, pos int) bmgrif.MangaedNode
 }

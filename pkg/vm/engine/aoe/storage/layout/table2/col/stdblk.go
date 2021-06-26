@@ -93,6 +93,12 @@ func (blk *StdColumnBlock) close() {
 	// log.Infof("destroy colblk %d, colidx %d", blk.Meta.ID, blk.ColIdx)
 }
 
+func (blk *StdColumnBlock) GetBlockHandle() iface.IColBlockHandle {
+	h := new(StdColBlockHandle)
+	h.Node = blk.Part.GetManagedNode()
+	return h
+}
+
 func (blk *StdColumnBlock) String() string {
 	s := fmt.Sprintf("<Std[%s](T=%s)(Refs=%d)(Size=%d)>", blk.Meta.String(), blk.Type.String(), blk.RefCount(), blk.Meta.Count)
 	return s

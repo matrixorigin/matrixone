@@ -172,6 +172,8 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		FsMgr:     seg.FsMgr,
 		Meta:      meta,
 	}
+	cloned.tree.Blocks = make([]iface.IBlock, 0)
+	cloned.tree.Helper = make(map[uint64]int)
 
 	indexHolder := td.GetIndexHolder().GetSegment(seg.Meta.ID)
 	if indexHolder == nil {
@@ -199,6 +201,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		if err != nil {
 			panic(err)
 		}
+		cloned.tree.Helper[newBlkMeta.ID] = len(cloned.tree.Blocks)
 		cloned.tree.Blocks = append(cloned.tree.Blocks, cur)
 	}
 

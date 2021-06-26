@@ -25,14 +25,14 @@ func TestBase1(t *testing.T) {
 	segCnt := uint64(4)
 	blkCnt := uint64(4)
 	rowCount := uint64(10)
-	capacity := uint64(10000)
+	capacity := uint64(200)
 	info := md.MockInfo(rowCount, blkCnt)
 	schema := md.MockSchema(2)
 	tableMeta := md.MockTable(info, schema, segCnt*blkCnt)
 
 	fsMgr := ldio.NewManager(WORK_DIR, true)
 	indexBufMgr := bmgr.MockBufMgr(capacity)
-	mtBufMgr := bmgr.MockBufMgr(capacity)
+	mtBufMgr := bmgr.MockBufMgr(2000)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
 	tblData := NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 
@@ -103,7 +103,23 @@ func TestBase1(t *testing.T) {
 		assert.Equal(t, int64(1), upgraded.RefCount())
 	}
 	t.Log(tblData.String())
-	t.Log(fsMgr.String())
+	t.Log(mtBufMgr.String())
+	t.Log(sstBufMgr.String())
+
+	for segId, _ := range segIds {
+		segMeta, err := tableMeta.ReferenceSegment(segId)
+		assert.Nil(t, err)
+		blkIds := segMeta.BlockIDs()
+		for blkId, _ := range blkIds {
+			refBlk := tblData.WeakRefBlock(segId, blkId)
+			assert.NotNil(t, refBlk)
+			handle := refBlk.GetBlockHandle()
+			handle.Close()
+		}
+
+	}
+	t.Log(sstBufMgr.String())
+
 	opts.MemData.Updater.Stop()
 }
 

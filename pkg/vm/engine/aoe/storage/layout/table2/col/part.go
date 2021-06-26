@@ -48,10 +48,11 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	default:
 		panic("not support")
 	}
-	part.Node = bufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, capacity).(*bmgr.Node)
-	if part.Node == nil {
+	node := bufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, capacity)
+	if node == nil {
 		return nil
 	}
+	part.Node = node.(*bmgr.Node)
 
 	blk.RegisterPart(part)
 	part.Ref()

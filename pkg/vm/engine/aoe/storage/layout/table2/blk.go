@@ -184,3 +184,14 @@ func (blk *Block) String() string {
 	}
 	return s
 }
+
+func (blk *Block) GetBlockHandle() iface.IBlockHandle {
+	h := new(BlockHandle)
+	h.Columns = make(map[int]iface.IColBlockHandle, len(blk.data.Columns))
+	blk.Ref()
+	h.Host = blk
+	for idx, colBlk := range blk.data.Columns {
+		h.Columns[idx] = colBlk.GetBlockHandle()
+	}
+	return h
+}
