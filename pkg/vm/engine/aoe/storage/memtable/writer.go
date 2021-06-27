@@ -8,7 +8,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"os"
 	"path/filepath"

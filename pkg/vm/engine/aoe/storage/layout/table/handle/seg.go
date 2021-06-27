@@ -3,9 +3,9 @@ package handle
 import (
 	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"sync"
 )
 

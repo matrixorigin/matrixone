@@ -7,7 +7,7 @@ import (
 	it "matrixone/pkg/vm/engine/aoe/storage/iterator"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"runtime"
 	"testing"

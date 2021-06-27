@@ -3,8 +3,8 @@ package handle
 import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"sync"
 

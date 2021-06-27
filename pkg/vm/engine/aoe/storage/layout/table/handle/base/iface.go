@@ -3,8 +3,8 @@ package base
 import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 )
 
 type IBlockHandle interface {
