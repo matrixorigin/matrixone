@@ -1,7 +1,12 @@
 package handle
 
 import (
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+)
+
+var (
+	_ dbi.IBlock = (*Block)(nil)
 )
 
 type Block struct {
@@ -9,7 +14,7 @@ type Block struct {
 	Data iface.IBlock
 }
 
-func (blk *Block) Prefetch() iface.IBlockHandle {
+func (blk *Block) Prefetch() dbi.IBlockHandle {
 	return blk.Data.StrongWrappedBlock(blk.Host.Attr)
 }
 

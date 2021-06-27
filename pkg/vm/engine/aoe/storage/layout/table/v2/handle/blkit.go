@@ -1,7 +1,11 @@
 package handle
 
 import (
-	hif "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+)
+
+var (
+	_ dbi.IBlockIt = (*BlockIt)(nil)
 )
 
 type BlockIt struct {
@@ -10,7 +14,7 @@ type BlockIt struct {
 	Pos     int
 }
 
-func NewBlockIt(segment *Segment, blkIds []uint64) hif.IBlockIt {
+func NewBlockIt(segment *Segment, blkIds []uint64) dbi.IBlockIt {
 	it := &BlockIt{
 		Ids:     blkIds,
 		Segment: segment,
@@ -18,7 +22,7 @@ func NewBlockIt(segment *Segment, blkIds []uint64) hif.IBlockIt {
 	return it
 }
 
-func (it *BlockIt) GetHandle() hif.IBlock {
+func (it *BlockIt) GetHandle() dbi.IBlock {
 	h := &Block{
 		Data: it.Segment.Data.WeakRefBlock(it.Ids[it.Pos]),
 		Host: it.Segment,

@@ -1,20 +1,28 @@
-package iface
+package dbi
 
 import (
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 )
 
+type ISnapshot interface {
+	io.Closer
+	SegmentIds() []uint64
+	NewIt() ISegmentIt
+	GetSegment(id uint64) ISegment
+}
+
+type IBlockHandle interface {
+	io.Closer
+}
+
 type IBlock interface {
-	// io.Closer
 	GetID() uint64
 	GetSegmentID() uint64
 	GetTableID() uint64
-	Prefetch() iface.IBlockHandle
+	Prefetch() IBlockHandle
 }
 
 type ISegment interface {
-	// io.Closer
 	NewIt() IBlockIt
 	GetID() uint64
 	GetTableID() uint64

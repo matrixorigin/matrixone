@@ -1,8 +1,12 @@
 package handle
 
 import (
-	hif "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+)
+
+var (
+	_ dbi.ISegmentIt = (*SegmentLinkIt)(nil)
 )
 
 type SegmentLinkIt struct {
@@ -11,7 +15,7 @@ type SegmentLinkIt struct {
 	Cursor    iface.ISegment
 }
 
-func NewSegmentLinkIt(ss *Snapshot) hif.ISegmentIt {
+func NewSegmentLinkIt(ss *Snapshot) dbi.ISegmentIt {
 	if ss == nil {
 		return &SegmentLinkIt{}
 	}
@@ -50,7 +54,7 @@ func (it *SegmentLinkIt) Valid() bool {
 	return false
 }
 
-func (it *SegmentLinkIt) GetHandle() hif.ISegment {
+func (it *SegmentLinkIt) GetHandle() dbi.ISegment {
 	seg := &Segment{
 		Data: it.Snapshot.TableData.WeakRefSegment(it.Cursor.GetMeta().ID),
 		Attr: it.Snapshot.Attr,

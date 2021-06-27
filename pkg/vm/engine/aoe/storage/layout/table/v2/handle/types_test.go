@@ -40,7 +40,7 @@ func TestSnapshot(t *testing.T) {
 
 	cols := []int{0, 1}
 	ss := NewSnapshot(segIDs, cols, tableData)
-	segIt := ss.NewSegmentIt()
+	segIt := ss.NewIt()
 	actualSegCnt := 0
 	actualBlkCnt := 0
 	for segIt.Valid() {
@@ -69,7 +69,7 @@ func TestSnapshot(t *testing.T) {
 	assert.Equal(t, int64(1), root.RefCount())
 
 	ss2 := NewLinkAllSnapshot(cols, tableData)
-	linkSegIt := ss2.NewSegmentIt()
+	linkSegIt := ss2.NewIt()
 	actualSegCnt = 0
 	actualBlkCnt = 0
 	for linkSegIt.Valid() {
@@ -92,7 +92,7 @@ func TestSnapshot(t *testing.T) {
 	assert.Equal(t, seg_cnt, actualSegCnt)
 	assert.Equal(t, seg_cnt*blk_cnt, actualBlkCnt)
 
-	linkSegIt = ss2.NewSegmentIt()
+	linkSegIt = ss2.NewIt()
 	for linkSegIt.Valid() {
 		segment := linkSegIt.GetHandle()
 		ids := segment.BlockIds()

@@ -125,7 +125,7 @@ func TestAppend(t *testing.T) {
 	segCount := 0
 	ss, err := dbi.GetSnapshot(iterOpts)
 	assert.Nil(t, err)
-	segIt := ss.NewSegmentIt()
+	segIt := ss.NewIt()
 	assert.NotNil(t, segIt)
 
 	for segIt.Valid() {
@@ -197,7 +197,7 @@ func TestConcurrency(t *testing.T) {
 					{
 						ss, err := dbi.GetSnapshot(req)
 						assert.Nil(t, err)
-						segIt := ss.NewSegmentIt()
+						segIt := ss.NewIt()
 						assert.Nil(t, err)
 						if segIt == nil {
 							return
@@ -292,7 +292,7 @@ func TestConcurrency(t *testing.T) {
 	now := time.Now()
 	ss, err := dbi.GetSnapshot(opts)
 	assert.Nil(t, err)
-	segIt := ss.NewSegmentIt()
+	segIt := ss.NewIt()
 	segCnt := 0
 	tblkCnt := 0
 	for segIt.Valid() {

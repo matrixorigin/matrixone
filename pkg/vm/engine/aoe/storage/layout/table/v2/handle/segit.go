@@ -1,12 +1,16 @@
 package handle
 
 import (
-	hif "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 )
 
 var (
 	EmptySegmentIt = new(SegmentIt)
+)
+
+var (
+	_ dbi.ISegmentIt = (*SegmentIt)(nil)
 )
 
 type SegmentIt struct {
@@ -15,7 +19,7 @@ type SegmentIt struct {
 	Pos       int
 }
 
-func NewSegmentIt(ss *Snapshot) hif.ISegmentIt {
+func NewSegmentIt(ss *Snapshot) dbi.ISegmentIt {
 	it := &SegmentIt{
 		Snapshot:  ss,
 		OnCloseCB: ss.removeIt,
@@ -40,7 +44,7 @@ func (it *SegmentIt) Valid() bool {
 	return true
 }
 
-func (it *SegmentIt) GetHandle() hif.ISegment {
+func (it *SegmentIt) GetHandle() dbi.ISegment {
 	seg := &Segment{
 		Data: it.Snapshot.TableData.WeakRefSegment(it.Snapshot.Ids[it.Pos]),
 		Attr: it.Snapshot.Attr,

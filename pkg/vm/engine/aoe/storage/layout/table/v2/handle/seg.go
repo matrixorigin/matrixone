@@ -1,12 +1,12 @@
 package handle
 
 import (
-	hif "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 )
 
 var (
-	_ hif.ISegment = (*Segment)(nil)
+	_ dbi.ISegment = (*Segment)(nil)
 )
 
 type Segment struct {
@@ -26,7 +26,7 @@ func (seg *Segment) GetTableID() uint64 {
 	return seg.Data.GetMeta().TableID
 }
 
-func (seg *Segment) NewIt() hif.IBlockIt {
+func (seg *Segment) NewIt() dbi.IBlockIt {
 	it := &BlockIt{
 		Segment: seg,
 		Ids:     seg.Data.BlockIds(),
@@ -34,7 +34,7 @@ func (seg *Segment) NewIt() hif.IBlockIt {
 	return it
 }
 
-func (seg *Segment) GetBlock(id uint64) hif.IBlock {
+func (seg *Segment) GetBlock(id uint64) dbi.IBlock {
 	data := seg.Data.WeakRefBlock(id)
 	if data == nil {
 		return nil

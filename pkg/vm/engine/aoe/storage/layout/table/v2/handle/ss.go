@@ -1,16 +1,16 @@
 package handle
 
 import (
-	hif "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"sync"
 	"sync/atomic"
 )
 
-type CloseSegmentItCB func(hif.ISegmentIt)
+type CloseSegmentItCB func(dbi.ISegmentIt)
 
 var (
-	EmptySnapshot = &Snapshot{}
+	_ dbi.ISnapshot = (*Snapshot)(nil)
 )
 
 const (
@@ -27,7 +27,7 @@ type Snapshot struct {
 	State     int32
 	trace     struct {
 		sync.RWMutex
-		Iterators map[hif.ISegmentIt]bool
+		Iterators map[dbi.ISegmentIt]bool
 	}
 	ActiveIters int32
 }
@@ -39,14 +39,14 @@ func NewSnapshot(ids []uint64, attrs []int, td iface.ITableData) *Snapshot {
 		TableData: td,
 		State:     Active,
 	}
-	ss.trace.Iterators = make(map[hif.ISegmentIt]bool)
+	ss.trace.Iterators = make(map[dbi.ISegmentIt]bool)
 
 	return ss
 }
 
 func NewEmptySnapshot() *Snapshot {
 	ss := new(Snapshot)
-	ss.trace.Iterators = make(map[hif.ISegmentIt]bool)
+	ss.trace.Iterators = make(map[dbi.ISegmentIt]bool)
 	return ss
 }
 
@@ -60,6 +60,17 @@ func NewLinkAllSnapshot(attrs []int, td iface.ITableData) *Snapshot {
 	return ss
 }
 
+func (ss *Snapshot) GetSegment(id uint64) dbi.ISegment {
+	if ss.TableData != nil {
+		seg := &Segment{
+			Data: ss.TableData.WeakRefSegment(id),
+			Attr: ss.Attr,
+		}
+		return seg
+	}
+	return nil
+}
+
 func (ss *Snapshot) SegmentIds() []uint64 {
 	if ss.ScanAll {
 		return ss.TableData.SegmentIds()
@@ -67,7 +78,7 @@ func (ss *Snapshot) SegmentIds() []uint64 {
 	return ss.Ids
 }
 
-func (ss *Snapshot) GetState() int32 {
+func (ss *Snapshot) getState() int32 {
 	return atomic.LoadInt32(&ss.State)
 }
 
@@ -94,15 +105,15 @@ func (ss *Snapshot) Close() error {
 	return nil
 }
 
-func (ss *Snapshot) removeIt(it hif.ISegmentIt) {
+func (ss *Snapshot) removeIt(it dbi.ISegmentIt) {
 	atomic.AddInt32(&ss.ActiveIters, int32(-1))
 }
 
-func (ss *Snapshot) NewSegmentIt() hif.ISegmentIt {
-	if ss.GetState() > Active {
+func (ss *Snapshot) NewIt() dbi.ISegmentIt {
+	if ss.getState() > Active {
 		panic("logic error")
 	}
-	var it hif.ISegmentIt
+	var it dbi.ISegmentIt
 	if ss.ScanAll {
 		it = NewSegmentLinkIt(ss)
 	} else {
