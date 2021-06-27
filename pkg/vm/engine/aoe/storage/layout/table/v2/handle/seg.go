@@ -5,9 +5,17 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 )
 
+var (
+	_ hif.ISegment = (*Segment)(nil)
+)
+
 type Segment struct {
 	Data iface.ISegment
 	Attr []int
+}
+
+func (seg *Segment) BlockIds() []uint64 {
+	return seg.Data.BlockIds()
 }
 
 func (seg *Segment) GetID() uint64 {
@@ -26,6 +34,14 @@ func (seg *Segment) NewIt() hif.IBlockIt {
 	return it
 }
 
-// func (seg *Segment) Close() error {
-// 	return nil
-// }
+func (seg *Segment) GetBlock(id uint64) hif.IBlock {
+	data := seg.Data.WeakRefBlock(id)
+	if data == nil {
+		return nil
+	}
+	blk := &Block{
+		Data: data,
+		Host: seg,
+	}
+	return blk
+}

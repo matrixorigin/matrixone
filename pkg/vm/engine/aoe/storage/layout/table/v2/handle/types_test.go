@@ -92,7 +92,23 @@ func TestSnapshot(t *testing.T) {
 	assert.Equal(t, seg_cnt, actualSegCnt)
 	assert.Equal(t, seg_cnt*blk_cnt, actualBlkCnt)
 
+	linkSegIt = ss2.NewSegmentIt()
+	for linkSegIt.Valid() {
+		segment := linkSegIt.GetHandle()
+		ids := segment.BlockIds()
+		for _, id := range ids {
+			blk := segment.GetBlock(id)
+			assert.NotNil(t, blk)
+			blkH := blk.Prefetch()
+			blkH.Close()
+		}
+		linkSegIt.Next()
+	}
+	linkSegIt.Close()
+
 	ss2.Close()
 	assert.Equal(t, int64(1), root.RefCount())
 	t.Log(tableData.String())
+	t.Log(mtBufMgr.String())
+	t.Log(sstBufMgr.String())
 }

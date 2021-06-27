@@ -60,6 +60,13 @@ func NewLinkAllSnapshot(attrs []int, td iface.ITableData) *Snapshot {
 	return ss
 }
 
+func (ss *Snapshot) SegmentIds() []uint64 {
+	if ss.ScanAll {
+		return ss.TableData.SegmentIds()
+	}
+	return ss.Ids
+}
+
 func (ss *Snapshot) GetState() int32 {
 	return atomic.LoadInt32(&ss.State)
 }

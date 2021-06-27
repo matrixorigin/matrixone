@@ -18,6 +18,8 @@ type ISegment interface {
 	NewIt() IBlockIt
 	GetID() uint64
 	GetTableID() uint64
+	BlockIds() []uint64
+	GetBlock(id uint64) IBlock
 }
 
 type Iterator interface {
