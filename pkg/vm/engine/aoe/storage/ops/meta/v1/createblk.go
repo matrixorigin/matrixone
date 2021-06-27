@@ -5,7 +5,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata"
+	mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v1"
 )
 
 func NewCreateBlkOp(ctx *OpCtx, tid uint64, tableData table.ITableData) *CreateBlkOp {

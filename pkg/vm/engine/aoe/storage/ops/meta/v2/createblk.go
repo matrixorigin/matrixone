@@ -4,7 +4,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdatav2"
+	mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 )
 
 func NewCreateBlkOp(ctx *OpCtx, tid uint64, tableData iface.ITableData) *CreateBlkOp {
