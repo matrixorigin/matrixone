@@ -47,7 +47,7 @@ type MemtableWriter struct {
 func (sw *MemtableWriter) Flush() (err error) {
 	id := sw.Memtable.GetID()
 	fname := e.MakeFilename(sw.Dirname, e.FTBlock, id.ToBlockFileName(), false)
-	log.Infof("Flushing memtable: %s", fname)
+	log.Infof("%s | Memtable | Flushing", fname)
 	dir := filepath.Dir(fname)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
@@ -104,6 +104,6 @@ func (sw *MemtableWriter) Flush() (err error) {
 			return err
 		}
 	}
-	log.Infof("%s Flushed", fname)
+	log.Infof("%s | Memtable | Flushed", fname)
 	return err
 }

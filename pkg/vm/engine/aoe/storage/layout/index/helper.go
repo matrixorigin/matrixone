@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/pilosa/pilosa/roaring"
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -137,6 +137,6 @@ func (h *RWHelper) ReadIndexesMeta(f os.File) (meta *base.IndexesMeta, err error
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
 	}
-	log.Info(meta.String())
+	// log.Info(meta.String())
 	return meta, nil
 }
