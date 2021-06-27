@@ -6,7 +6,7 @@ import (
 )
 
 type IBlock interface {
-	io.Closer
+	// io.Closer
 	GetID() uint64
 	GetSegmentID() uint64
 	GetTableID() uint64
@@ -14,7 +14,7 @@ type IBlock interface {
 }
 
 type ISegment interface {
-	io.Closer
+	// io.Closer
 	NewIt() IBlockIt
 	GetID() uint64
 	GetTableID() uint64

@@ -52,11 +52,11 @@ func TestSnapshot(t *testing.T) {
 			blk := blkIt.GetHandle()
 			h := blk.Prefetch()
 			h.Close()
-			blk.Close()
+			// blk.Close()
 			blkIt.Next()
 		}
 		blkIt.Close()
-		segment.Close()
+		// segment.Close()
 		segIt.Next()
 	}
 	segIt.Close()
@@ -81,11 +81,11 @@ func TestSnapshot(t *testing.T) {
 			blk := blkIt.GetHandle()
 			h := blk.Prefetch()
 			h.Close()
-			blk.Close()
+			// blk.Close()
 			blkIt.Next()
 		}
 		blkIt.Close()
-		segment.Close()
+		// segment.Close()
 		linkSegIt.Next()
 	}
 	linkSegIt.Close()

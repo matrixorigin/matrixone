@@ -26,6 +26,6 @@ func (seg *Segment) NewIt() hif.IBlockIt {
 	return it
 }
 
-func (seg *Segment) Close() error {
-	return nil
-}
+// func (seg *Segment) Close() error {
+// 	return nil
+// }

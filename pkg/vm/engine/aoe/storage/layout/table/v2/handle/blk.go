@@ -25,6 +25,6 @@ func (blk *Block) GetTableID() uint64 {
 	return blk.Data.GetMeta().Segment.TableID
 }
 
-func (blk *Block) Close() error {
-	return nil
-}
+// func (blk *Block) Close() error {
+// 	return nil
+// }

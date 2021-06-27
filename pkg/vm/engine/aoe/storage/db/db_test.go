@@ -133,7 +133,7 @@ func TestAppend(t *testing.T) {
 		segH := segIt.GetHandle()
 		assert.NotNil(t, segH)
 		blkIt := segH.NewIt()
-		segH.Close()
+		// segH.Close()
 		assert.NotNil(t, blkIt)
 		for blkIt.Valid() {
 			blkCount++
@@ -213,7 +213,7 @@ func TestConcurrency(t *testing.T) {
 								blkHandle := blkIt.GetHandle()
 								hh := blkHandle.Prefetch()
 								hh.Close()
-								blkHandle.Close()
+								// blkHandle.Close()
 								blkIt.Next()
 							}
 							blkIt.Close()
@@ -320,11 +320,11 @@ func TestConcurrency(t *testing.T) {
 			// }
 			hh := blkHandle.Prefetch()
 			hh.Close()
-			blkHandle.Close()
+			// blkHandle.Close()
 			blkIt.Next()
 		}
 		blkIt.Close()
-		h.Close()
+		// h.Close()
 		segIt.Next()
 	}
 	segIt.Close()
