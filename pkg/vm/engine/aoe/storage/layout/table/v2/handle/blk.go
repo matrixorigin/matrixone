@@ -10,7 +10,7 @@ type Block struct {
 }
 
 func (blk *Block) Prefetch() iface.IBlockHandle {
-	return blk.Data.WeakGetWrappedBlock(blk.Host.Attr)
+	return blk.Data.StrongWrappedBlock(blk.Host.Attr)
 }
 
 func (blk *Block) GetID() uint64 {

@@ -201,7 +201,7 @@ func (blk *Block) GetBlockHandle() iface.IBlockHandle {
 	return h
 }
 
-func (blk *Block) WeakGetWrappedBlock(colIdx []int) iface.IBlockHandle {
+func (blk *Block) StrongWrappedBlock(colIdx []int) iface.IBlockHandle {
 	h := new(BlockHandle)
 	h.Columns = make(map[int]iface.IColBlockHandle, len(colIdx))
 	blk.Ref()

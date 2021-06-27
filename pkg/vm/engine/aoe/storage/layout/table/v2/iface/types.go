@@ -65,7 +65,7 @@ type IBlock interface {
 	GetSegmentFile() base.ISegmentFile
 	String() string
 	GetBlockHandle() IBlockHandle
-	WeakGetWrappedBlock(colIdx []int) IBlockHandle
+	StrongWrappedBlock(colIdx []int) IBlockHandle
 	GetNext() IBlock
 	SetNext(next IBlock)
 }
