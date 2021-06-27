@@ -1,7 +1,7 @@
 package coldata
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	// log "github.com/sirupsen/logrus"
 )
 

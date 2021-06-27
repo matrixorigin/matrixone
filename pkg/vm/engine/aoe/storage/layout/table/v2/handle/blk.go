@@ -1,7 +1,7 @@
 package handle
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 )
 
 type Block struct {

@@ -3,7 +3,7 @@ package memtable
 import (
 	"errors"
 	"matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"sync"
 	// log "github.com/sirupsen/logrus"

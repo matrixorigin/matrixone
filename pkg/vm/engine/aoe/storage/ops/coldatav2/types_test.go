@@ -5,11 +5,9 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	tbl "matrixone/pkg/vm/engine/aoe/storage/layout/table2"
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	tbl "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"testing"
-	// "time"
 
 	"github.com/stretchr/testify/assert"
 )

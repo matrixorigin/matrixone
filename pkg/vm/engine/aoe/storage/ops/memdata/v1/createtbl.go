@@ -1,7 +1,7 @@
 package memdata
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
+	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	// log "github.com/sirupsen/logrus"
 )

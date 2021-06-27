@@ -1,8 +1,7 @@
 package handle
 
 import (
-	hif "matrixone/pkg/vm/engine/aoe/storage/layout/table2/handle/iface"
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
+	hif "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle/iface"
 )
 
 type BlockIt struct {

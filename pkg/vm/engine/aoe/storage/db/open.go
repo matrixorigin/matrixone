@@ -7,7 +7,7 @@ import (
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	table "matrixone/pkg/vm/engine/aoe/storage/layout/table2"
+	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"os"

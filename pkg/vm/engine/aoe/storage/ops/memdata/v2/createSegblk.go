@@ -1,7 +1,7 @@
 package memdata
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	// log "github.com/sirupsen/logrus"
 )

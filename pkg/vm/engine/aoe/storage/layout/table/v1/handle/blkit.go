@@ -1,8 +1,8 @@
 package handle
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle/base"
 	"sync"
 	// "sync/atomic"
 	// log "github.com/sirupsen/logrus"
