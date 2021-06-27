@@ -50,17 +50,17 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 	} else {
 		blkType = base.PERSISTENT_SORTED_BLK
 	}
+	blk.Type = blkType
 	indexHolder := host.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
 
+	blk.SegmentFile = host.GetSegmentFile()
+	blk.IndexHolder = indexHolder
 	blk.Ref()
 	err := blk.initColumns()
 	if err != nil {
 		return nil, err
 	}
 
-	blk.SegmentFile = host.GetSegmentFile()
-	blk.IndexHolder = indexHolder
-	blk.Type = blkType
 	return blk, nil
 }
 
