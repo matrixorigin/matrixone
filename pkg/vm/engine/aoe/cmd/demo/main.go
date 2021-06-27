@@ -1,15 +1,17 @@
 package main
 
 import (
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
 	"sync"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func main() {
@@ -70,11 +72,11 @@ func main() {
 		}
 		insertWg.Done()
 	}()
-	iterOpts := e.IterOptions{All: true, TableName: tName, ColIdxes: cols}
+	ctx := dbi.GetSnapshotCtx{ScanAll: true, TableName: tName, Cols: cols}
 	searchWg.Add(1)
 	go func() {
 		for i := 0; i < 0; i++ {
-			ss, err := inst.GetSnapshot(&iterOpts)
+			ss, err := inst.GetSnapshot(&ctx)
 			if err != nil {
 				panic(err)
 			}

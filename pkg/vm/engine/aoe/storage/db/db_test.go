@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
@@ -35,15 +36,15 @@ func initDB() *DB {
 	}
 	opts := &e.Options{}
 	opts.Meta.Conf = cfg
-	dbi, _ := Open(TEST_DB_DIR, opts)
-	return dbi
+	inst, _ := Open(TEST_DB_DIR, opts)
+	return inst
 }
 
 func TestCreateTable(t *testing.T) {
 	initDBTest()
-	dbi := initDB()
-	assert.NotNil(t, dbi)
-	defer dbi.Close()
+	inst := initDB()
+	assert.NotNil(t, inst)
+	defer inst.Close()
 	tblCnt := rand.Intn(5) + 3
 	prefix := "mocktbl_"
 	var wg sync.WaitGroup
@@ -55,45 +56,45 @@ func TestCreateTable(t *testing.T) {
 		names = append(names, name)
 		wg.Add(1)
 		go func(w *sync.WaitGroup) {
-			_, err := dbi.CreateTable(&tablet)
+			_, err := inst.CreateTable(&tablet)
 			assert.Nil(t, err)
 			w.Done()
 		}(&wg)
 	}
 	wg.Wait()
-	ids, err := dbi.TableIDs()
+	ids, err := inst.TableIDs()
 	assert.Nil(t, err)
 	assert.Equal(t, tblCnt, len(ids))
 	for _, name := range names {
-		assert.True(t, dbi.HasTable(name))
+		assert.True(t, inst.HasTable(name))
 	}
-	t.Log(dbi.store.MetaInfo.String())
+	t.Log(inst.store.MetaInfo.String())
 }
 
 func TestCreateDuplicateTable(t *testing.T) {
 	initDBTest()
-	dbi := initDB()
-	defer dbi.Close()
+	inst := initDB()
+	defer inst.Close()
 
 	tableInfo := md.MockTableInfo(2)
 	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "t1"}
-	_, err := dbi.CreateTable(&tablet)
+	_, err := inst.CreateTable(&tablet)
 	assert.Nil(t, err)
-	_, err = dbi.CreateTable(&tablet)
+	_, err = inst.CreateTable(&tablet)
 	assert.NotNil(t, err)
 }
 
 func TestAppend(t *testing.T) {
 	initDBTest()
-	dbi := initDB()
+	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
 	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mocktbl"}
-	tid, err := dbi.CreateTable(&tablet)
+	tid, err := inst.CreateTable(&tablet)
 	assert.Nil(t, err)
-	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := 2
-	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
+	rows := inst.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
 	ck := chunk.MockChunk(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), ck.GetCount())
 	logIdx := &md.LogIndex{
@@ -101,29 +102,29 @@ func TestAppend(t *testing.T) {
 		Capacity: ck.GetCount(),
 	}
 	invalidName := "xxx"
-	err = dbi.Append(invalidName, ck, logIdx)
+	err = inst.Append(invalidName, ck, logIdx)
 	assert.NotNil(t, err)
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(tableInfo.Name, ck, logIdx)
+		err = inst.Append(tableInfo.Name, ck, logIdx)
 		assert.Nil(t, err)
-		// tbl, err := dbi.store.DataTables.GetTable(tid)
+		// tbl, err := inst.store.DataTables.GetTable(tid)
 		// assert.Nil(t, err)
 		// t.Log(tbl.GetCollumn(0).ToString(1000))
 	}
 
 	cols := []int{0, 1}
-	tbl, _ := dbi.store.DataTables.GetTable(tid)
+	tbl, _ := inst.store.DataTables.GetTable(tid)
 	segIds := tbl.SegmentIds()
-	iterOpts := &e.IterOptions{
+	ssCtx := &dbi.GetSnapshotCtx{
 		TableName:  tableInfo.Name,
 		SegmentIds: segIds,
-		ColIdxes:   cols,
+		Cols:       cols,
 	}
 
 	blkCount := 0
 	segCount := 0
-	ss, err := dbi.GetSnapshot(iterOpts)
+	ss, err := inst.GetSnapshot(ssCtx)
 	assert.Nil(t, err)
 	segIt := ss.NewIt()
 	assert.NotNil(t, segIt)
@@ -148,12 +149,12 @@ func TestAppend(t *testing.T) {
 	ss.Close()
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
-	t.Log(dbi.FsMgr.String())
-	t.Log(dbi.MTBufMgr.String())
-	t.Log(dbi.SSTBufMgr.String())
-	t.Log(dbi.IndexBufMgr.String())
+	t.Log(inst.FsMgr.String())
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	t.Log(inst.IndexBufMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
-	dbi.Close()
+	inst.Close()
 }
 
 type InsertReq struct {
@@ -166,18 +167,18 @@ type InsertReq struct {
 // the db will be stuck due to no more space. Need intruduce timeout mechanism later
 func TestConcurrency(t *testing.T) {
 	initDBTest()
-	dbi := initDB()
+	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
 	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
-	tid, err := dbi.CreateTable(&tablet)
+	tid, err := inst.CreateTable(&tablet)
 	assert.Nil(t, err)
-	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
-	blkCnt := dbi.store.MetaInfo.Conf.SegmentMaxBlocks
-	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * blkCnt
+	blkCnt := inst.store.MetaInfo.Conf.SegmentMaxBlocks
+	rows := inst.store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	baseCk := chunk.MockChunk(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan *InsertReq)
-	searchCh := make(chan *e.IterOptions)
+	searchCh := make(chan *dbi.GetSnapshotCtx)
 
 	p, _ := ants.NewPool(40)
 
@@ -195,7 +196,7 @@ func TestConcurrency(t *testing.T) {
 				f := func() {
 					defer searchWg.Done()
 					{
-						ss, err := dbi.GetSnapshot(req)
+						ss, err := inst.GetSnapshot(req)
 						assert.Nil(t, err)
 						segIt := ss.NewIt()
 						assert.Nil(t, err)
@@ -227,7 +228,7 @@ func TestConcurrency(t *testing.T) {
 			case req := <-insertCh:
 				wg.Add(1)
 				go func() {
-					err := dbi.Append(req.Name, req.Data, req.LogIndex)
+					err := inst.Append(req.Name, req.Data, req.LogIndex)
 					assert.Nil(t, err)
 					wg.Done()
 				}()
@@ -260,16 +261,16 @@ func TestConcurrency(t *testing.T) {
 		defer wg2.Done()
 		reqCnt := 20000
 		for i := 0; i < reqCnt; i++ {
-			tbl, _ := dbi.store.DataTables.GetTable(tid)
+			tbl, _ := inst.store.DataTables.GetTable(tid)
 			for tbl == nil {
 				time.Sleep(time.Duration(100) * time.Microsecond)
-				tbl, _ = dbi.store.DataTables.GetTable(tid)
+				tbl, _ = inst.store.DataTables.GetTable(tid)
 			}
 			segIds := tbl.SegmentIds()
-			searchReq := &e.IterOptions{
+			searchReq := &dbi.GetSnapshotCtx{
 				TableName:  tablet.Name,
 				SegmentIds: segIds,
-				ColIdxes:   cols,
+				Cols:       cols,
 			}
 			searchWg.Add(1)
 			searchCh <- searchReq
@@ -281,16 +282,16 @@ func TestConcurrency(t *testing.T) {
 	cancel()
 	wg.Wait()
 	time.Sleep(time.Duration(100) * time.Millisecond)
-	tbl, _ := dbi.store.DataTables.GetTable(tid)
+	tbl, _ := inst.store.DataTables.GetTable(tid)
 	root := tbl.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
-	opts := &e.IterOptions{
+	opts := &dbi.GetSnapshotCtx{
 		TableName: tablet.Name,
-		ColIdxes:  cols,
-		All:       true,
+		Cols:      cols,
+		ScanAll:   true,
 	}
 	now := time.Now()
-	ss, err := dbi.GetSnapshot(opts)
+	ss, err := inst.GetSnapshot(opts)
 	assert.Nil(t, err)
 	segIt := ss.NewIt()
 	segCnt := 0
@@ -337,24 +338,24 @@ func TestConcurrency(t *testing.T) {
 	t.Log(tbl.String())
 	time.Sleep(time.Duration(100) * time.Millisecond)
 
-	t.Log(dbi.WorkersStatsString())
-	t.Log(dbi.MTBufMgr.String())
-	t.Log(dbi.SSTBufMgr.String())
-	// t.Log(dbi.IndexBufMgr.String())
+	t.Log(inst.WorkersStatsString())
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	// t.Log(inst.IndexBufMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
-	dbi.Close()
+	inst.Close()
 }
 
 func TestGC(t *testing.T) {
 	initDBTest()
-	dbi := initDB()
+	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
 	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
-	tid, err := dbi.CreateTable(&tablet)
+	tid, err := inst.CreateTable(&tablet)
 	assert.Nil(t, err)
-	blkCnt := dbi.store.MetaInfo.Conf.SegmentMaxBlocks
-	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
+	blkCnt := inst.store.MetaInfo.Conf.SegmentMaxBlocks
+	rows := inst.store.MetaInfo.Conf.BlockMaxRows * blkCnt
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	baseCk := chunk.MockChunk(tblMeta.Schema.Types(), rows)
 
@@ -370,16 +371,16 @@ func TestGC(t *testing.T) {
 		for i := uint64(0); i < insertCnt; i++ {
 			wg.Add(1)
 			go func() {
-				dbi.Append(tablet.Name, baseCk, logIdx)
+				inst.Append(tablet.Name, baseCk, logIdx)
 				wg.Done()
 			}()
 		}
 	}
 	wg.Wait()
 	time.Sleep(time.Duration(40) * time.Millisecond)
-	t.Log(dbi.MTBufMgr.String())
-	t.Log(dbi.SSTBufMgr.String())
-	t.Log(dbi.IndexBufMgr.String())
-	assert.Equal(t, int(blkCnt*insertCnt*2), dbi.SSTBufMgr.NodeCount()+dbi.MTBufMgr.NodeCount())
-	dbi.Close()
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	t.Log(inst.IndexBufMgr.String())
+	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	inst.Close()
 }

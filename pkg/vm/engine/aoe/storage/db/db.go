@@ -9,6 +9,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
@@ -165,11 +166,11 @@ func (d *DB) CreateTable(info *aoe.TabletInfo) (id uint64, err error) {
 	return id, nil
 }
 
-func (d *DB) GetSnapshot(o *e.IterOptions) (*handle.Snapshot, error) {
+func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tableMeta, err := d.store.MetaInfo.ReferenceTableByName(o.TableName)
+	tableMeta, err := d.store.MetaInfo.ReferenceTableByName(ctx.TableName)
 	if err != nil {
 		return nil, err
 	}
@@ -181,10 +182,10 @@ func (d *DB) GetSnapshot(o *e.IterOptions) (*handle.Snapshot, error) {
 		return nil, err
 	}
 	var ss *handle.Snapshot
-	if o.All {
-		ss = handle.NewLinkAllSnapshot(o.ColIdxes, tableData)
+	if ctx.ScanAll {
+		ss = handle.NewLinkAllSnapshot(ctx.Cols, tableData)
 	} else {
-		ss = handle.NewSnapshot(o.SegmentIds, o.ColIdxes, tableData)
+		ss = handle.NewSnapshot(ctx.SegmentIds, ctx.Cols, tableData)
 	}
 	return ss, nil
 }
