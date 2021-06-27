@@ -19,8 +19,8 @@ func TestSnapshot(t *testing.T) {
 	opts.MemData.Updater.Start()
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
-	seg_cnt := 100
-	blk_cnt := 64
+	seg_cnt := 4
+	blk_cnt := 2
 	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(capacity)
@@ -32,6 +32,10 @@ func TestSnapshot(t *testing.T) {
 	tableData := table.NewTableData(ldio.DefaultFsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 	segIDs := table.MockSegments(tableMeta, tableData)
 	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())
+
+	root := tableData.WeakRefRoot()
+	assert.Equal(t, int64(1), root.RefCount())
+
 	now := time.Now()
 
 	cols := []int{0, 1}
@@ -62,4 +66,33 @@ func TestSnapshot(t *testing.T) {
 	t.Log(du)
 	t.Log(sstBufMgr.String())
 	ss.Close()
+	assert.Equal(t, int64(1), root.RefCount())
+
+	ss2 := NewLinkAllSnapshot(cols, tableData)
+	linkSegIt := ss2.NewSegmentIt()
+	actualSegCnt = 0
+	actualBlkCnt = 0
+	for linkSegIt.Valid() {
+		actualSegCnt++
+		segment := linkSegIt.GetHandle()
+		blkIt := segment.NewIt()
+		for blkIt.Valid() {
+			actualBlkCnt++
+			blk := blkIt.GetHandle()
+			h := blk.Prefetch()
+			h.Close()
+			blk.Close()
+			blkIt.Next()
+		}
+		blkIt.Close()
+		segment.Close()
+		linkSegIt.Next()
+	}
+	linkSegIt.Close()
+	assert.Equal(t, seg_cnt, actualSegCnt)
+	assert.Equal(t, seg_cnt*blk_cnt, actualBlkCnt)
+
+	ss2.Close()
+	assert.Equal(t, int64(1), root.RefCount())
+	t.Log(tableData.String())
 }

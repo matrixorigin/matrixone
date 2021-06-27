@@ -56,6 +56,27 @@ func (td *TableData) GetIndexHolder() *index.TableHolder {
 	return td.IndexHolder
 }
 
+func (td *TableData) WeakRefRoot() iface.ISegment {
+	if atomic.LoadUint32(&td.tree.SegmentCnt) == 0 {
+		return nil
+	}
+	td.tree.RLock()
+	root := td.tree.Segments[0]
+	td.tree.RUnlock()
+	return root
+}
+
+func (td *TableData) StongRefRoot() iface.ISegment {
+	if atomic.LoadUint32(&td.tree.SegmentCnt) == 0 {
+		return nil
+	}
+	td.tree.RLock()
+	root := td.tree.Segments[0]
+	td.tree.RUnlock()
+	root.Ref()
+	return root
+}
+
 func (td *TableData) GetID() uint64 {
 	return td.Meta.ID
 }

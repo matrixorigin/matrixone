@@ -29,6 +29,8 @@ type ITableData interface {
 	UpgradeSegment(id uint64) (ISegment, error)
 	UpgradeBlock(*md.Block) (IBlock, error)
 	SegmentIds() []uint64
+	StongRefRoot() ISegment
+	WeakRefRoot() ISegment
 }
 
 type ISegment interface {

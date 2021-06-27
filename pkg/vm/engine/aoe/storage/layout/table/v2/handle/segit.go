@@ -51,6 +51,7 @@ func (it *SegmentIt) GetHandle() hif.ISegment {
 func (it *SegmentIt) Close() error {
 	if it.OnCloseCB != nil {
 		it.OnCloseCB(it)
+		it.OnCloseCB = nil
 	}
 	return nil
 }
