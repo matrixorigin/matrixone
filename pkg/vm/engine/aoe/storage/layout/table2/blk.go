@@ -204,6 +204,7 @@ func (blk *Block) GetBlockHandle() iface.IBlockHandle {
 func (blk *Block) WeakGetWrappedBlock(colIdx []int) iface.IBlockHandle {
 	h := new(BlockHandle)
 	h.Columns = make(map[int]iface.IColBlockHandle, len(colIdx))
+	blk.Ref()
 	h.Host = blk
 	for idx, colIdx := range colIdx {
 		h.Columns[idx] = blk.data.Columns[colIdx].GetBlockHandle()

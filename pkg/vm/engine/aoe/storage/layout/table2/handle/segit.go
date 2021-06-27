@@ -5,6 +5,10 @@ import (
 	// "matrixone/pkg/vm/engine/aoe/storage/layout/table2/iface"
 )
 
+var (
+	EmptySegmentIt = new(SegmentIt)
+)
+
 type SegmentIt struct {
 	OnCloseCB CloseSegmentItCB
 	Snapshot  *Snapshot
@@ -25,6 +29,9 @@ func (it *SegmentIt) Next() {
 
 func (it *SegmentIt) Valid() bool {
 	if it.Snapshot == nil {
+		return false
+	}
+	if it.Snapshot.Ids == nil {
 		return false
 	}
 	if it.Pos >= len(it.Snapshot.Ids) {

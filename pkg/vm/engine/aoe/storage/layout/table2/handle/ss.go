@@ -9,6 +9,10 @@ import (
 
 type CloseSegmentItCB func(hif.ISegmentIt)
 
+var (
+	EmptySnapshot = &Snapshot{}
+)
+
 const (
 	Active int32 = iota
 	Closing
@@ -39,10 +43,16 @@ func NewSnapshot(ids []uint64, attrs []int, td iface.ITableData) *Snapshot {
 	return ss
 }
 
-func NewLinkAllSnapshot(attrs []string, td iface.ITableData) *Snapshot {
+func NewEmptySnapshot() *Snapshot {
+	ss := new(Snapshot)
+	ss.dynamic.Iterators = make(map[hif.ISegmentIt]bool)
+	return ss
+}
+
+func NewLinkAllSnapshot(attrs []int, td iface.ITableData) *Snapshot {
 	ss := &Snapshot{
 		ScanAll:   true,
-		Attr:      make([]int, len(attrs)),
+		Attr:      attrs,
 		TableData: td,
 		State:     Active,
 	}
@@ -77,9 +87,9 @@ func (ss *Snapshot) Close() error {
 }
 
 func (ss *Snapshot) removeIt(it hif.ISegmentIt) {
-	ss.dynamic.Lock()
-	delete(ss.dynamic.Iterators, it)
-	ss.dynamic.Unlock()
+	// ss.dynamic.Lock()
+	// delete(ss.dynamic.Iterators, it)
+	// ss.dynamic.Unlock()
 }
 
 func (ss *Snapshot) NewSegmentIt() hif.ISegmentIt {
@@ -91,6 +101,7 @@ func (ss *Snapshot) NewSegmentIt() hif.ISegmentIt {
 	} else {
 		it = NewSegmentIt(ss)
 	}
+
 	ss.dynamic.Lock()
 	ss.dynamic.Iterators[it] = true
 	ss.dynamic.Unlock()

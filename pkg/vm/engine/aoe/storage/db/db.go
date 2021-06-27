@@ -10,14 +10,14 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/handle"
-	ih "matrixone/pkg/vm/engine/aoe/storage/layout/table/handle/base"
+	table "matrixone/pkg/vm/engine/aoe/storage/layout/table2"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table2/handle"
+
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
+	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdatav2"
+	mops "matrixone/pkg/vm/engine/aoe/storage/ops/metav2"
 	"os"
 	"path"
 	"path/filepath"
@@ -165,7 +165,7 @@ func (d *DB) CreateTable(info *aoe.TabletInfo) (id uint64, err error) {
 	return id, nil
 }
 
-func (d *DB) NewSegmentIter(o *e.IterOptions) (ih.ISegmentIterator, error) {
+func (d *DB) GetSnapshot(o *e.IterOptions) (*handle.Snapshot, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -174,45 +174,19 @@ func (d *DB) NewSegmentIter(o *e.IterOptions) (ih.ISegmentIterator, error) {
 		return nil, err
 	}
 	if tableMeta.GetSegmentCount() == uint64(0) {
-		return handle.EmptySegmentIt, nil
+		return handle.NewEmptySnapshot(), nil
 	}
 	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
 	if err != nil {
 		return nil, err
 	}
-	var h *handle.SegmentsHandle
+	var ss *handle.Snapshot
 	if o.All {
-		h = handle.NewAllSegmentsHandle(o.ColIdxes, tableData)
+		ss = handle.NewLinkAllSnapshot(o.ColIdxes, tableData)
 	} else {
-		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, tableData)
+		ss = handle.NewSnapshot(o.SegmentIds, o.ColIdxes, tableData)
 	}
-	return h.NewSegIt(), nil
-}
-
-func (d *DB) NewBlockIter(o *e.IterOptions) (ih.IBlockIterator, error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	tableMeta, err := d.store.MetaInfo.ReferenceTableByName(o.TableName)
-	if err != nil {
-		return nil, err
-	}
-
-	if tableMeta.GetSegmentCount() == uint64(0) {
-		return handle.EmptyBlockIt, nil
-	}
-
-	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
-	if err != nil {
-		return nil, err
-	}
-	var h *handle.SegmentsHandle
-	if o.All {
-		h = handle.NewAllSegmentsHandle(o.ColIdxes, tableData)
-	} else {
-		h = handle.NewSegmentsHandle(o.SegmentIds, o.ColIdxes, tableData)
-	}
-	return h.NewBlkIt(), nil
+	return ss, nil
 }
 
 func (d *DB) TableIDs() (ids []uint64, err error) {

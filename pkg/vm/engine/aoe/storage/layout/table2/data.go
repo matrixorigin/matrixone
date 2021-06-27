@@ -25,6 +25,7 @@ func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.I
 	}
 	data.tree.Segments = make([]iface.ISegment, 0)
 	data.tree.Helper = make(map[uint64]int)
+	data.tree.Ids = make([]uint64, 0)
 	data.OnZeroCB = data.close
 	return data
 }
@@ -34,6 +35,7 @@ type TableData struct {
 	tree struct {
 		sync.RWMutex
 		Segments   []iface.ISegment
+		Ids        []uint64
 		Helper     map[uint64]int
 		SegmentCnt uint32
 	}
@@ -153,10 +155,21 @@ func (td *TableData) RegisterSegment(meta *md.Segment) (seg iface.ISegment, err 
 	}
 
 	td.tree.Segments = append(td.tree.Segments, seg)
+	td.tree.Ids = append(td.tree.Ids, seg.GetMeta().ID)
 	td.tree.Helper[meta.ID] = int(td.tree.SegmentCnt)
 	atomic.AddUint32(&td.tree.SegmentCnt, uint32(1))
 	seg.Ref()
 	return seg, err
+}
+
+func (td *TableData) SegmentIds() []uint64 {
+	ids := make([]uint64, 0, atomic.LoadUint32(&td.tree.SegmentCnt))
+	td.tree.RLock()
+	for _, seg := range td.tree.Segments {
+		ids = append(ids, seg.GetMeta().ID)
+	}
+	td.tree.RUnlock()
+	return ids
 }
 
 func (td *TableData) RegisterBlock(meta *md.Block) (blk iface.IBlock, err error) {

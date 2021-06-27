@@ -21,7 +21,7 @@ func (seg *Segment) GetTableID() uint64 {
 func (seg *Segment) NewIt() hif.IBlockIt {
 	it := &BlockIt{
 		Segment: seg,
-		Ids:     seg.Data.GetMeta().BlockIDList(),
+		Ids:     seg.Data.BlockIds(),
 	}
 	return it
 }

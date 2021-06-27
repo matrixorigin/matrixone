@@ -21,6 +21,7 @@ type Segment struct {
 		sync.RWMutex
 		Blocks   []iface.IBlock
 		Helper   map[uint64]int
+		BlockIds []uint64
 		BlockCnt uint32
 		Next     iface.ISegment
 	}
@@ -75,10 +76,27 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 
 	seg.tree.Blocks = make([]iface.IBlock, 0)
 	seg.tree.Helper = make(map[uint64]int)
+	seg.tree.BlockIds = make([]uint64, 0)
 	seg.OnZeroCB = seg.noRefCB
 	seg.SegmentFile = segFile
 	seg.Ref()
 	return seg, nil
+}
+
+func (seg *Segment) BlockIds() []uint64 {
+	if seg.Type == base.SORTED_SEG {
+		return seg.tree.BlockIds
+	}
+	if atomic.LoadUint32(&seg.tree.BlockCnt) == uint32(seg.Meta.Info.Conf.SegmentMaxBlocks) {
+		return seg.tree.BlockIds
+	}
+	ret := make([]uint64, 0, atomic.LoadUint32(&seg.tree.BlockCnt))
+	seg.tree.RLock()
+	for _, blk := range seg.tree.Blocks {
+		ret = append(ret, blk.GetMeta().ID)
+	}
+	seg.tree.RUnlock()
+	return ret
 }
 
 func (seg *Segment) noRefCB() {
@@ -163,6 +181,7 @@ func (seg *Segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err erro
 	}
 
 	seg.tree.Blocks = append(seg.tree.Blocks, blk)
+	seg.tree.BlockIds = append(seg.tree.BlockIds, blk.GetMeta().ID)
 	seg.tree.Helper[blkMeta.ID] = int(seg.tree.BlockCnt)
 	atomic.AddUint32(&seg.tree.BlockCnt, uint32(1))
 	blk.Ref()
@@ -203,6 +222,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	}
 	cloned.tree.Blocks = make([]iface.IBlock, 0)
 	cloned.tree.Helper = make(map[uint64]int)
+	cloned.tree.BlockIds = make([]uint64, 0)
 
 	indexHolder := td.GetIndexHolder().GetSegment(seg.Meta.ID)
 	if indexHolder == nil {
@@ -233,6 +253,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		}
 		cloned.tree.Helper[newBlkMeta.ID] = len(cloned.tree.Blocks)
 		cloned.tree.Blocks = append(cloned.tree.Blocks, cur)
+		seg.tree.BlockIds = append(seg.tree.BlockIds, cur.GetMeta().ID)
 		cloned.tree.BlockCnt++
 		if prev != nil {
 			cur.Ref()

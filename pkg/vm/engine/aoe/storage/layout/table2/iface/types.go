@@ -28,6 +28,7 @@ type ITableData interface {
 	String() string
 	UpgradeSegment(id uint64) (ISegment, error)
 	UpgradeBlock(*md.Block) (IBlock, error)
+	SegmentIds() []uint64
 }
 
 type ISegment interface {
@@ -47,6 +48,7 @@ type ISegment interface {
 	String() string
 	CloneWithUpgrade(ITableData, *md.Segment) (ISegment, error)
 	UpgradeBlock(*md.Block) (IBlock, error)
+	BlockIds() []uint64
 }
 
 type IBlock interface {

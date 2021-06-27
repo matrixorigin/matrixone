@@ -6,8 +6,6 @@ import (
 	"math/rand"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
@@ -115,23 +113,26 @@ func TestAppend(t *testing.T) {
 	}
 
 	cols := []int{0, 1}
+	tbl, _ := dbi.store.DataTables.GetTable(tid)
+	segIds := tbl.SegmentIds()
 	iterOpts := &e.IterOptions{
-		TableName: tableInfo.Name,
-		All:       true,
-		ColIdxes:  cols,
+		TableName:  tableInfo.Name,
+		SegmentIds: segIds,
+		ColIdxes:   cols,
 	}
 
 	blkCount := 0
 	segCount := 0
-	segIt, err := dbi.NewSegmentIter(iterOpts)
+	ss, err := dbi.GetSnapshot(iterOpts)
 	assert.Nil(t, err)
+	segIt := ss.NewSegmentIt()
 	assert.NotNil(t, segIt)
 
 	for segIt.Valid() {
 		segCount++
-		segH := segIt.GetSegmentHandle()
+		segH := segIt.GetHandle()
 		assert.NotNil(t, segH)
-		blkIt := segH.NewIterator()
+		blkIt := segH.NewIt()
 		segH.Close()
 		assert.NotNil(t, blkIt)
 		for blkIt.Valid() {
@@ -144,29 +145,13 @@ func TestAppend(t *testing.T) {
 	segIt.Close()
 	assert.Equal(t, insertCnt, segCount)
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
+	ss.Close()
 
-	blkIt, err := dbi.NewBlockIter(iterOpts)
-	assert.Nil(t, err)
-	assert.NotNil(t, blkIt)
-
-	blkCount = 0
-	for blkIt.Valid() {
-		blkCount++
-		h := blkIt.GetBlockHandle()
-		assert.NotNil(t, h)
-		h.Close()
-		blkIt.Next()
-	}
-	blkIt.Close()
-	assert.Equal(t, blkCnt*insertCnt, blkCount)
 	time.Sleep(time.Duration(20) * time.Millisecond)
 	t.Log(dbi.FsMgr.String())
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
 	t.Log(dbi.IndexBufMgr.String())
-	tbl, err := dbi.store.DataTables.GetTable(tid)
-	assert.Nil(t, err)
-	t.Log(tbl.GetCollumn(0).ToString(1000))
 	// t.Log(tbl.GetIndexHolder().String())
 	dbi.Close()
 }
@@ -210,7 +195,9 @@ func TestConcurrency(t *testing.T) {
 				f := func() {
 					defer searchWg.Done()
 					{
-						segIt, err := dbi.NewSegmentIter(req)
+						ss, err := dbi.GetSnapshot(req)
+						assert.Nil(t, err)
+						segIt := ss.NewSegmentIt()
 						assert.Nil(t, err)
 						if segIt == nil {
 							return
@@ -219,17 +206,13 @@ func TestConcurrency(t *testing.T) {
 						blkCnt := 0
 						for segIt.Valid() {
 							segCnt++
-							sh := segIt.GetSegmentHandle()
-							blkIt := sh.NewIterator()
+							sh := segIt.GetHandle()
+							blkIt := sh.NewIt()
 							for blkIt.Valid() {
 								blkCnt++
-								blkHandle := blkIt.GetBlockHandle()
-								// indexHolder := blkHandle.GetIndexHolder()
-								// t.Log(indexHolder.String())
-								cursors := blkHandle.InitScanCursor()
-								for _, cursor := range cursors {
-									cursor.Close()
-								}
+								blkHandle := blkIt.GetHandle()
+								hh := blkHandle.Prefetch()
+								hh.Close()
 								blkHandle.Close()
 								blkIt.Next()
 							}
@@ -237,6 +220,7 @@ func TestConcurrency(t *testing.T) {
 							segIt.Next()
 						}
 						segIt.Close()
+						ss.Close()
 					}
 				}
 				p.Submit(f)
@@ -276,10 +260,16 @@ func TestConcurrency(t *testing.T) {
 		defer wg2.Done()
 		reqCnt := 20000
 		for i := 0; i < reqCnt; i++ {
+			tbl, _ := dbi.store.DataTables.GetTable(tid)
+			for tbl == nil {
+				time.Sleep(time.Duration(100) * time.Microsecond)
+				tbl, _ = dbi.store.DataTables.GetTable(tid)
+			}
+			segIds := tbl.SegmentIds()
 			searchReq := &e.IterOptions{
-				TableName: tablet.Name,
-				All:       true,
-				ColIdxes:  cols,
+				TableName:  tablet.Name,
+				SegmentIds: segIds,
+				ColIdxes:   cols,
 			}
 			searchWg.Add(1)
 			searchCh <- searchReq
@@ -290,72 +280,64 @@ func TestConcurrency(t *testing.T) {
 	searchWg.Wait()
 	cancel()
 	wg.Wait()
+	time.Sleep(time.Duration(100) * time.Millisecond)
+	tbl, _ := dbi.store.DataTables.GetTable(tid)
+	segIds := tbl.SegmentIds()
 	opts := &e.IterOptions{
-		TableName: tablet.Name,
-		All:       true,
-		ColIdxes:  cols,
+		TableName:  tablet.Name,
+		SegmentIds: segIds,
+		ColIdxes:   cols,
 	}
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	tbl, err := dbi.store.DataTables.GetTable(tid)
-	assert.NotNil(t, tbl)
 	now := time.Now()
-	segIt, err := dbi.NewSegmentIter(opts)
+	ss, err := dbi.GetSnapshot(opts)
+	assert.Nil(t, err)
+	segIt := ss.NewSegmentIt()
 	segCnt := 0
 	tblkCnt := 0
 	for segIt.Valid() {
 		segCnt++
-		h := segIt.GetSegmentHandle()
-		blkIt := h.NewIterator()
-		h.Close()
+		h := segIt.GetHandle()
+		blkIt := h.NewIt()
 		for blkIt.Valid() {
 			tblkCnt++
-			blkHandle := blkIt.GetBlockHandle()
-			col0 := blkHandle.GetColumn(0)
-			ctx := index.NewFilterCtx(index.OpEq)
-			ctx.Val = int32(0 + col0.GetColIdx()*100)
-			err = col0.EvalFilter(ctx)
-			assert.Nil(t, err)
-			if col0.GetBlockType() > base.PERSISTENT_BLK {
-				assert.False(t, ctx.BoolRes)
-			}
-			ctx.Reset()
-			ctx.Op = index.OpEq
-			ctx.Val = int32(1 + col0.GetColIdx()*100)
-			err = col0.EvalFilter(ctx)
-			assert.Nil(t, err)
-			if col0.GetBlockType() > base.PERSISTENT_BLK {
-				assert.True(t, ctx.BoolRes)
-			}
-			cursors := blkHandle.InitScanCursor()
-			for _, cursor := range cursors {
-				cursor.Close()
-			}
+			blkHandle := blkIt.GetHandle()
+			// col0 := blkHandle.GetColumn(0)
+			// ctx := index.NewFilterCtx(index.OpEq)
+			// ctx.Val = int32(0 + col0.GetColIdx()*100)
+			// err = col0.EvalFilter(ctx)
+			// assert.Nil(t, err)
+			// if col0.GetBlockType() > base.PERSISTENT_BLK {
+			// 	assert.False(t, ctx.BoolRes)
+			// }
+			// ctx.Reset()
+			// ctx.Op = index.OpEq
+			// ctx.Val = int32(1 + col0.GetColIdx()*100)
+			// err = col0.EvalFilter(ctx)
+			// assert.Nil(t, err)
+			// if col0.GetBlockType() > base.PERSISTENT_BLK {
+			// 	assert.True(t, ctx.BoolRes)
+			// }
+			hh := blkHandle.Prefetch()
+			hh.Close()
 			blkHandle.Close()
 			blkIt.Next()
 		}
 		blkIt.Close()
+		h.Close()
 		segIt.Next()
 	}
 	segIt.Close()
+	ss.Close()
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	assert.Equal(t, insertCnt, segCnt)
 
-	blkIt, err := dbi.NewBlockIter(opts)
-	assert.Nil(t, err)
-	tblkCnt = 0
-	for blkIt.Valid() {
-		tblkCnt++
-		blkIt.Next()
-	}
-	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
-	blkIt.Close()
 	t.Logf("Takes %v", time.Since(now))
 	time.Sleep(time.Duration(100) * time.Millisecond)
 
 	t.Log(dbi.WorkersStatsString())
 	t.Log(dbi.MTBufMgr.String())
 	t.Log(dbi.SSTBufMgr.String())
-	t.Log(dbi.IndexBufMgr.String())
+	// t.Log(dbi.IndexBufMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
 	dbi.Close()
 }
