@@ -11,7 +11,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
-	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldatav2"
+	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata/v2"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
 
