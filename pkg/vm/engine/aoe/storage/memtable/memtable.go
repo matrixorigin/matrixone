@@ -12,7 +12,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldatav2"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/metav2"
+	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
 
 	log "github.com/sirupsen/logrus"

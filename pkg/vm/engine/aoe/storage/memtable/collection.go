@@ -7,7 +7,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/metav2"
+	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )

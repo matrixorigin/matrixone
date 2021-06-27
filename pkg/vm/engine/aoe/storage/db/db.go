@@ -17,7 +17,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdatav2"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/metav2"
+	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"os"
 	"path"
 	"path/filepath"
