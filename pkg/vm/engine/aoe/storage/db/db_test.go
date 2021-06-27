@@ -282,11 +282,12 @@ func TestConcurrency(t *testing.T) {
 	wg.Wait()
 	time.Sleep(time.Duration(100) * time.Millisecond)
 	tbl, _ := dbi.store.DataTables.GetTable(tid)
-	segIds := tbl.SegmentIds()
+	root := tbl.WeakRefRoot()
+	assert.Equal(t, int64(1), root.RefCount())
 	opts := &e.IterOptions{
-		TableName:  tablet.Name,
-		SegmentIds: segIds,
-		ColIdxes:   cols,
+		TableName: tablet.Name,
+		ColIdxes:  cols,
+		All:       true,
 	}
 	now := time.Now()
 	ss, err := dbi.GetSnapshot(opts)
@@ -330,8 +331,10 @@ func TestConcurrency(t *testing.T) {
 	ss.Close()
 	assert.Equal(t, insertCnt*int(blkCnt), tblkCnt)
 	assert.Equal(t, insertCnt, segCnt)
+	assert.Equal(t, int64(1), root.RefCount())
 
 	t.Logf("Takes %v", time.Since(now))
+	t.Log(tbl.String())
 	time.Sleep(time.Duration(100) * time.Millisecond)
 
 	t.Log(dbi.WorkersStatsString())
