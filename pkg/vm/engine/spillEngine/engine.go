@@ -61,6 +61,10 @@ func (e *spillEngine) Create(name string) error {
 	return nil
 }
 
+func (e *spillEngine) Databases() []string {
+	return nil
+}
+
 func (e *spillEngine) Database(name string) (engine.Database, error) {
 	return &database{e.path, e.cdb, e.db}, nil
 }
@@ -98,7 +102,7 @@ func (e *database) Create(name string, defs []engine.TableDef, _ *engine.Partiti
 	return nil
 }
 
-func (e *database) Relations() []engine.Relation {
+func (e *database) Relations() []string {
 	return nil
 }
 
