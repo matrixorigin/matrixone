@@ -52,7 +52,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if err != nil {
 						return nil, err
 					}
-					vs[j] = v.(int8)
+					vs[j] = int8(v.(int64))
 				}
 			}
 			if err := vec.Append(vs); err != nil {
@@ -66,7 +66,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if err != nil {
 						return nil, err
 					}
-					vs[j] = v.(int16)
+					vs[j] = int16(v.(int64))
 				}
 			}
 			if err := vec.Append(vs); err != nil {
@@ -80,7 +80,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if err != nil {
 						return nil, err
 					}
-					vs[j] = v.(int32)
+					vs[j] = int32(v.(int64))
 				}
 			}
 			if err := vec.Append(vs); err != nil {
@@ -108,7 +108,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if err != nil {
 						return nil, err
 					}
-					vs[j] = v.(uint8)
+					vs[j] = uint8(v.(uint64))
 				}
 			}
 			if err := vec.Append(vs); err != nil {
@@ -122,7 +122,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if err != nil {
 						return nil, err
 					}
-					vs[j] = v.(uint16)
+					vs[j] = uint16(v.(uint64))
 				}
 			}
 			if err := vec.Append(vs); err != nil {
@@ -136,7 +136,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if err != nil {
 						return nil, err
 					}
-					vs[j] = v.(uint32)
+					vs[j] = uint32(v.(uint64))
 				}
 			}
 			if err := vec.Append(vs); err != nil {

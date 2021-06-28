@@ -7,6 +7,9 @@ import (
 )
 
 func (c *compile) compileRelation(o *relation.Relation, mp map[string]uint64) ([]*Scope, error) {
+	if len(o.Us) == 0 {
+		return nil, nil
+	}
 	n := len(o.Us[0].Segs)
 	mcpu := c.e.Node(o.Us[0].N.Id).Mcpu
 	if n < mcpu {

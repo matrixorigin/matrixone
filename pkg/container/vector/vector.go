@@ -26,13 +26,13 @@ func New(typ types.Type) *Vector {
 	case types.T_int16:
 		return &Vector{
 			Typ: typ,
-			Col: []int32{},
+			Col: []int16{},
 			Nsp: &nulls.Nulls{},
 		}
 	case types.T_int32:
 		return &Vector{
 			Typ: typ,
-			Col: []int64{},
+			Col: []int32{},
 			Nsp: &nulls.Nulls{},
 		}
 	case types.T_int64:
