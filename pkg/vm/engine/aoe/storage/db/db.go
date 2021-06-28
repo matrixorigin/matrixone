@@ -150,6 +150,17 @@ func (d *DB) HasTable(name string) bool {
 	return err == nil
 }
 
+func (d *DB) DropTable(name string) (id uint64, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	opCtx := &mops.OpCtx{Opts: d.Opts}
+	op := mops.NewDropTblOp(opCtx, name, d.store.DataTables)
+	op.Push()
+	err = op.WaitDone()
+	return op.Id, err
+}
+
 func (d *DB) CreateTable(info *aoe.TabletInfo) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)

@@ -99,7 +99,7 @@ func TestInfo(t *testing.T) {
 	assert.Equal(t, tbl.GetBoundState(), Attached)
 }
 
-func TestCreateTable(t *testing.T) {
+func TestCreateDropTable(t *testing.T) {
 	colCnt := 2
 	tblInfo := MockTableInfo(colCnt)
 
@@ -121,4 +121,30 @@ func TestCreateTable(t *testing.T) {
 		assert.Equal(t, colInfo.Name, tbl.Schema.ColDefs[idx].Name)
 		assert.Equal(t, idx, tbl.Schema.ColDefs[idx].Idx)
 	}
+
+	rTbl, err := info.ReferenceTableByName(tbl.Schema.Name)
+	assert.Nil(t, err)
+	assert.NotNil(t, rTbl)
+
+	ts := NowMicro()
+	assert.False(t, rTbl.IsDeleted(ts))
+
+	tid, err := info.SoftDeleteTable(tbl.Schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, rTbl.ID, tid)
+
+	_, err = info.SoftDeleteTable(tbl.Schema.Name)
+	assert.NotNil(t, err)
+
+	rTbl2, err := info.ReferenceTableByName(tbl.Schema.Name)
+	assert.NotNil(t, err)
+	assert.Nil(t, rTbl2)
+
+	ts = NowMicro()
+	assert.True(t, rTbl.IsDeleted(ts))
+
+	rTbl3, err := info.ReferenceTable(tid)
+	assert.Nil(t, err)
+	assert.Equal(t, rTbl3.ID, tid)
+	assert.True(t, rTbl3.IsDeleted(ts))
 }

@@ -84,6 +84,44 @@ func TestCreateDuplicateTable(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
+func TestDropTable(t *testing.T) {
+	initDBTest()
+	inst := initDB()
+	defer inst.Close()
+
+	name := "t1"
+	tableInfo := md.MockTableInfo(2)
+	tablet := aoe.TabletInfo{Table: *tableInfo, Name: name}
+	tid, err := inst.CreateTable(&tablet)
+	assert.Nil(t, err)
+
+	ssCtx := &dbi.GetSnapshotCtx{
+		TableName: name,
+		Cols:      []int{0},
+		ScanAll:   true,
+	}
+
+	ss, err := inst.GetSnapshot(ssCtx)
+	assert.Nil(t, err)
+	ss.Close()
+
+	dropTid, err := inst.DropTable(name)
+	assert.Nil(t, err)
+	assert.Equal(t, tid, dropTid)
+
+	ss, err = inst.GetSnapshot(ssCtx)
+	assert.NotNil(t, err)
+	assert.Nil(t, ss)
+
+	tid2, err := inst.CreateTable(&tablet)
+	assert.Nil(t, err)
+	assert.NotEqual(t, tid, tid2)
+
+	ss, err = inst.GetSnapshot(ssCtx)
+	assert.Nil(t, err)
+	ss.Close()
+}
+
 func TestAppend(t *testing.T) {
 	initDBTest()
 	inst := initDB()
