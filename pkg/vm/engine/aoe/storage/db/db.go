@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -16,7 +17,6 @@ import (
 
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"os"
@@ -108,7 +108,7 @@ func cleanStaleMeta(dirname string) {
 	}
 }
 
-func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err error) {
+func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -139,7 +139,7 @@ func (d *DB) Append(tableName string, ck *chunk.Chunk, index *md.LogIndex) (err 
 	}
 
 	clonedIndex := *index
-	return collection.Append(ck, &clonedIndex)
+	return collection.Append(bat, &clonedIndex)
 }
 
 func (d *DB) HasTable(name string) bool {

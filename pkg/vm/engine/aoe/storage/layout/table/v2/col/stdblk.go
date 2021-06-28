@@ -15,6 +15,10 @@ type StdColumnBlock struct {
 	Part IColumnPart
 }
 
+func EstimateStdColumnCapacity(colIdx int, meta *md.Block) uint64 {
+	return meta.Segment.Info.Conf.BlockMaxRows * uint64(meta.Segment.Schema.ColDefs[colIdx].Type.Size)
+}
+
 func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
 	defer host.Unref()
 	blk := &StdColumnBlock{
@@ -25,7 +29,7 @@ func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
 			Type:        host.GetType(),
 		},
 	}
-	capacity := blk.Meta.Segment.Info.Conf.BlockMaxRows * uint64(blk.Meta.Segment.Schema.ColDefs[colIdx].Type.Size)
+	capacity := EstimateStdColumnCapacity(colIdx, blk.Meta)
 	host.Ref()
 	blk.Ref()
 	part := NewColumnPart(host, blk, capacity)

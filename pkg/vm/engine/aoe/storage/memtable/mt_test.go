@@ -1,7 +1,6 @@
 package memtable
 
 import (
-	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
@@ -14,6 +13,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var WORK_DIR = "/tmp/memtable/mt_test"
@@ -106,10 +107,10 @@ func TestCollection(t *testing.T) {
 		seq++
 		go func(id uint64, wg *sync.WaitGroup) {
 			defer wg.Done()
-			insert := chunk.MockChunk(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
+			insert := chunk.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &md.LogIndex{
 				ID:       id,
-				Capacity: insert.GetCount(),
+				Capacity: uint64(insert.Vecs[0].Length()),
 			}
 			err := c0.Append(insert, index)
 			assert.Nil(t, err)
