@@ -32,6 +32,21 @@ func MockInfo(blkRows, blks uint64) *MetaInfo {
 	return info
 }
 
+func (info *MetaInfo) SoftDeleteTable(name string) (id uint64, err error) {
+	id, ok := info.NameMap[name]
+	if !ok {
+		return id, errors.New(fmt.Sprintf("Table %s not existed", name))
+	}
+	ts := NowMicro()
+	info.Lock()
+	defer info.Unlock()
+	delete(info.NameMap, name)
+	info.Tombstone[id] = true
+	table := info.Tables[id]
+	table.Deltete(ts)
+	return id, nil
+}
+
 func (info *MetaInfo) ReferenceTableByName(name string) (tbl *Table, err error) {
 	info.RLock()
 	defer info.RUnlock()
