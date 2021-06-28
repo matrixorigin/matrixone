@@ -13,9 +13,9 @@ type IMemTable interface {
 	IsFull() bool
 	Flush() error
 	Close() error
+	Unpin()
 	GetMeta() *md.Block
 	GetID() common.ID
-	InitScanCursors(cursors []interface{}) error
 }
 
 type ICollection interface {

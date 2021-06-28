@@ -3,7 +3,7 @@ package memtable
 import (
 	"errors"
 	"matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -13,7 +13,7 @@ type Manager struct {
 	sync.RWMutex
 	Opts        *engine.Options
 	Collections map[uint64]imem.ICollection
-	TableData   table.ITableData
+	TableData   iface.ITableData
 }
 
 var (
@@ -50,7 +50,7 @@ func (m *Manager) GetCollection(id uint64) imem.ICollection {
 
 func (m *Manager) RegisterCollection(td interface{}) (c imem.ICollection, err error) {
 	m.Lock()
-	tableData := td.(table.ITableData)
+	tableData := td.(iface.ITableData)
 	_, ok := m.Collections[tableData.GetID()]
 	if ok {
 		m.Unlock()
