@@ -23,7 +23,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
 				return false, err
 			}
-			ap.Func(ap.Data, bat)
+			if err := ap.Func(ap.Data, bat); err != nil {
+				bat.Clean(proc)
+				return true, err
+			}
 			bat.Clean(proc)
 		}
 	}

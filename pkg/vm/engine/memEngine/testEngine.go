@@ -8,36 +8,23 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/memEngine/kv"
 	"matrixone/pkg/vm/metadata"
 )
 
 func NewTestEngine() engine.Engine {
-	e := New(kv.New())
-	db, _ := e.Database("default")
-	CreateR(db)
-	CreateS(db)
-	CreateT(db)
-	CreateW(db)
-	CreateV(db)
-	CreateVCount(db, 10000)
-	CreateVCount(db, 100000)
-	CreateVCount(db, 1000000)
-
-	tables := []string{
-		"R",
-		"S",
-		"T",
-		"V",
-		"W",
-		"V10000",
-		"V100000",
-		"V1000000",
-	}
-
-	for _, rel := range tables {
-		fmt.Printf("test table: %s\n", rel)
-	}
+	e := New()
+	e.Create("test")
+	/*
+		db, _ := e.Database("test")
+		CreateR(db)
+		CreateS(db)
+		CreateT(db)
+		CreateW(db)
+		CreateV(db)
+		CreateVCount(db, 10000)
+		CreateVCount(db, 100000)
+		CreateVCount(db, 1000000)
+	*/
 	return e
 }
 
@@ -528,7 +515,6 @@ func CreateV(e engine.Database) {
 		}
 	}
 }
-
 
 func CreateVCount(e engine.Database, count int) {
 	name := fmt.Sprintf("V%d", count)

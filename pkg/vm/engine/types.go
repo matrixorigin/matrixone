@@ -144,7 +144,7 @@ type Block interface {
 }
 
 type Database interface {
-	Relations() []Relation
+	Relations() []string
 	Relation(string) (Relation, error)
 
 	Delete(string) error
@@ -154,6 +154,7 @@ type Database interface {
 type Engine interface {
 	Create(string) error
 	Delete(string) error
+	Databases() []string
 	Database(string) (Database, error)
 
 	Node(string) *NodeInfo

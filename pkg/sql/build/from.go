@@ -2,7 +2,6 @@ package build
 
 import (
 	"fmt"
-	"log"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/product"
 	"matrixone/pkg/sql/tree"
@@ -11,7 +10,7 @@ import (
 func (b *build) buildFrom(stmts tree.TableExprs) (op.OP, error) {
 	r, err := b.buildFromTable(stmts[0])
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	if stmts = stmts[1:]; len(stmts) == 0 {
 		return r, nil
