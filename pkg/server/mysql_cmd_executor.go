@@ -962,147 +962,181 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			return err
 		}
 
-		columns := exec.Columns()
-		if choose {
-
-			/*
-			Step 1 : send column count and column definition.
-			 */
-
-			//send column count
-			colCnt := uint64(len(columns))
-			if err = proto.SendColumnCount(colCnt);err!=nil{
-				return err
-			}
-
-			//send columns
-			//column_count * Protocol::ColumnDefinition packets
-			cmd := ses.Cmd
-			for _, c := range columns {
-				col := new(client.MysqlColumn)
-				col.SetName(c.Name)
-				switch c.Typ {
-				case types.T_int8:
-					col.SetColumnType(client.MYSQL_TYPE_TINY)
-				case types.T_uint8:
-					col.SetColumnType(client.MYSQL_TYPE_TINY)
-					col.SetSigned(true)
-				case types.T_int16:
-					col.SetColumnType(client.MYSQL_TYPE_SHORT)
-				case types.T_uint16:
-					col.SetColumnType(client.MYSQL_TYPE_SHORT)
-					col.SetSigned(true)
-				case types.T_int32:
-					col.SetColumnType(client.MYSQL_TYPE_LONG)
-				case types.T_uint32:
-					col.SetColumnType(client.MYSQL_TYPE_LONG)
-					col.SetSigned(true)
-				case types.T_int64:
-					col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
-				case types.T_uint64:
-					col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
-					col.SetSigned(true)
-				case types.T_float32:
-					col.SetColumnType(client.MYSQL_TYPE_FLOAT)
-				case types.T_float64:
-					col.SetColumnType(client.MYSQL_TYPE_DOUBLE)
-				case types.T_char:
-					col.SetColumnType(client.MYSQL_TYPE_STRING)
-				case types.T_varchar:
-					col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
-				default:
-					return fmt.Errorf("RunWhileSend : unsupported type %d \n",c.Typ)
-				}
-
-				ses.Mrs.AddColumn(col)
-
-				//fmt.Printf("doComQuery col name %v type %v \n",col.Name(),col.ColumnType())
+		switch stmt.(type) {
+		//produce result set
+		case *tree.Select,
+			*tree.ShowCreate,*tree.ShowCreateDatabase,*tree.ShowTables,*tree.ShowDatabases,*tree.ShowColumns,
+			*tree.ShowProcessList,*tree.ShowErrors,*tree.ShowWarnings,*tree.ShowVariables,*tree.ShowStatus,
+			*tree.ExplainFor,*tree.ExplainAnalyze,*tree.ExplainStmt:
+			columns := exec.Columns()
+			if choose {
 
 				/*
-					mysql COM_QUERY response: send the column definition per column
+					Step 1 : send column count and column definition.
 				*/
-				if err = proto.SendColumnDefinition(col,cmd); err != nil {
+
+				//send column count
+				colCnt := uint64(len(columns))
+				if err = proto.SendColumnCount(colCnt);err!=nil{
 					return err
 				}
-			}
 
-			/*
-				mysql COM_QUERY response: End after the column has been sent.
-				send EOF packet
-			*/
-			if err = proto.SendEOFPacketIf(0,0); err != nil {
-				return err
-			}
+				//send columns
+				//column_count * Protocol::ColumnDefinition packets
+				cmd := ses.Cmd
+				for _, c := range columns {
+					col := new(client.MysqlColumn)
+					col.SetName(c.Name)
+					switch c.Typ {
+					case types.T_int8:
+						col.SetColumnType(client.MYSQL_TYPE_TINY)
+					case types.T_uint8:
+						col.SetColumnType(client.MYSQL_TYPE_TINY)
+						col.SetSigned(true)
+					case types.T_int16:
+						col.SetColumnType(client.MYSQL_TYPE_SHORT)
+					case types.T_uint16:
+						col.SetColumnType(client.MYSQL_TYPE_SHORT)
+						col.SetSigned(true)
+					case types.T_int32:
+						col.SetColumnType(client.MYSQL_TYPE_LONG)
+					case types.T_uint32:
+						col.SetColumnType(client.MYSQL_TYPE_LONG)
+						col.SetSigned(true)
+					case types.T_int64:
+						col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
+					case types.T_uint64:
+						col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
+						col.SetSigned(true)
+					case types.T_float32:
+						col.SetColumnType(client.MYSQL_TYPE_FLOAT)
+					case types.T_float64:
+						col.SetColumnType(client.MYSQL_TYPE_DOUBLE)
+					case types.T_char:
+						col.SetColumnType(client.MYSQL_TYPE_STRING)
+					case types.T_varchar:
+						col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
+					default:
+						return fmt.Errorf("RunWhileSend : unsupported type %d \n",c.Typ)
+					}
 
-			/*
-			Step 2: Start pipeline
-			Producing the data row and sending the data row
-			 */
+					ses.Mrs.AddColumn(col)
 
-			if er := exec.Run(); er != nil {
-				return er
-			}
+					//fmt.Printf("doComQuery col name %v type %v \n",col.Name(),col.ColumnType())
 
-			/*
-			Step 3: Say goodbye
-			 */
-
-			/*
-				mysql COM_QUERY response: End after the data row has been sent.
-				After all row data has been sent, it sends the EOF or OK packet.
-			*/
-			if err = proto.SendEOFOrOkPacket(0,0); err != nil {
-				return err
-			}
-		}else{
-			for _, c := range columns {
-				col := new(client.MysqlColumn)
-				col.SetName(c.Name)
-				switch c.Typ {
-				case types.T_int8:
-					col.SetColumnType(client.MYSQL_TYPE_TINY)
-				case types.T_uint8:
-					col.SetColumnType(client.MYSQL_TYPE_TINY)
-					col.SetSigned(true)
-				case types.T_int16:
-					col.SetColumnType(client.MYSQL_TYPE_SHORT)
-				case types.T_uint16:
-					col.SetColumnType(client.MYSQL_TYPE_SHORT)
-					col.SetSigned(true)
-				case types.T_int32:
-					col.SetColumnType(client.MYSQL_TYPE_LONG)
-				case types.T_uint32:
-					col.SetColumnType(client.MYSQL_TYPE_LONG)
-					col.SetSigned(true)
-				case types.T_int64:
-					col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
-				case types.T_uint64:
-					col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
-					col.SetSigned(true)
-				case types.T_float32:
-					col.SetColumnType(client.MYSQL_TYPE_FLOAT)
-				case types.T_float64:
-					col.SetColumnType(client.MYSQL_TYPE_DOUBLE)
-				case types.T_char:
-					col.SetColumnType(client.MYSQL_TYPE_STRING)
-				case types.T_varchar:
-					col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
-				default:
-					return fmt.Errorf("RunWhileSend : unsupported type %d \n",c.Typ)
+					/*
+						mysql COM_QUERY response: send the column definition per column
+					*/
+					if err = proto.SendColumnDefinition(col,cmd); err != nil {
+						return err
+					}
 				}
 
-				ses.Mrs.AddColumn(col)
+				/*
+					mysql COM_QUERY response: End after the column has been sent.
+					send EOF packet
+				*/
+				if err = proto.SendEOFPacketIf(0,0); err != nil {
+					return err
+				}
+
+				/*
+					Step 2: Start pipeline
+					Producing the data row and sending the data row
+				*/
+
+				if er := exec.Run(); er != nil {
+					return er
+				}
+
+				/*
+					Step 3: Say goodbye
+				*/
+
+				/*
+					mysql COM_QUERY response: End after the data row has been sent.
+					After all row data has been sent, it sends the EOF or OK packet.
+				*/
+				if err = proto.SendEOFOrOkPacket(0,0); err != nil {
+					return err
+				}
+			}else{
+				for _, c := range columns {
+					col := new(client.MysqlColumn)
+					col.SetName(c.Name)
+					switch c.Typ {
+					case types.T_int8:
+						col.SetColumnType(client.MYSQL_TYPE_TINY)
+					case types.T_uint8:
+						col.SetColumnType(client.MYSQL_TYPE_TINY)
+						col.SetSigned(true)
+					case types.T_int16:
+						col.SetColumnType(client.MYSQL_TYPE_SHORT)
+					case types.T_uint16:
+						col.SetColumnType(client.MYSQL_TYPE_SHORT)
+						col.SetSigned(true)
+					case types.T_int32:
+						col.SetColumnType(client.MYSQL_TYPE_LONG)
+					case types.T_uint32:
+						col.SetColumnType(client.MYSQL_TYPE_LONG)
+						col.SetSigned(true)
+					case types.T_int64:
+						col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
+					case types.T_uint64:
+						col.SetColumnType(client.MYSQL_TYPE_LONGLONG)
+						col.SetSigned(true)
+					case types.T_float32:
+						col.SetColumnType(client.MYSQL_TYPE_FLOAT)
+					case types.T_float64:
+						col.SetColumnType(client.MYSQL_TYPE_DOUBLE)
+					case types.T_char:
+						col.SetColumnType(client.MYSQL_TYPE_STRING)
+					case types.T_varchar:
+						col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
+					default:
+						return fmt.Errorf("RunWhileSend : unsupported type %d \n",c.Typ)
+					}
+
+					ses.Mrs.AddColumn(col)
+				}
+
+				if er := exec.Run(); er != nil {
+					return er
+				}
+
+				mer := client.NewMysqlExecutionResult(0,0,0,0,ses.Mrs)
+				resp := client.NewResponse(client.ResultResponse,0,int(client.COM_QUERY),mer)
+
+				if err = proto.SendResponse(resp);err != nil{
+					return fmt.Errorf("routine send response failed. error:%v ",err)
+				}
 			}
+		//just status, no result set
+		case *tree.CreateTable,*tree.DropTable,*tree.CreateDatabase,*tree.DropDatabase,
+		*tree.Insert,*tree.Delete,*tree.Update,
+		*tree.BeginTransaction,*tree.CommitTransaction,*tree.RollbackTransaction,
+		*tree.SetVar:
+			/*
+				Step 1: Start
+			*/
 
 			if er := exec.Run(); er != nil {
 				return er
 			}
 
-			mer := client.NewMysqlExecutionResult(0,0,0,0,ses.Mrs)
-			resp := client.NewResponse(client.ResultResponse,0,int(client.COM_QUERY),mer)
+			/*
+				Step 2: Echo client
+			*/
 
-			if err = proto.SendResponse(resp);err != nil{
-				return fmt.Errorf("routine send response failed. error:%v ",err)
+			resp := client.NewResponse(
+				client.OkResponse,
+				0,
+				int(client.COM_QUERY),
+				nil,
+			)
+
+			if err = proto.SendResponse(resp) ; err != nil {
+				return err
 			}
 		}
 	}
