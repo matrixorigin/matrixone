@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/relation"
@@ -15,6 +16,13 @@ const (
 	Normal = iota
 	Merge
 	Insert
+	Explain
+	DropTable
+	DropDatabase
+	CreateTable
+	CreateDatabase
+	ShowTables
+	ShowDatabases
 )
 
 type Source struct {
@@ -46,6 +54,8 @@ type Exec struct {
 	c    *compile
 	e    engine.Engine
 	stmt tree.Statement
+	u    interface{}
+	fill func(interface{}, *batch.Batch) error
 }
 
 type compile struct {

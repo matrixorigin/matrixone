@@ -3,7 +3,7 @@ package engine
 import (
 	// dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	// ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	// "matrixone/pkg/vm/engine/aoe/storage/common"
 	e "matrixone/pkg/vm/engine/aoe/storage/event"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
@@ -25,7 +25,7 @@ type IterOptions struct {
 	TableID    uint64
 	All        bool
 	ColIdxes   []int
-	SegmentIds []common.ID
+	SegmentIds []uint64
 }
 
 type CacheCfg struct {

@@ -8,12 +8,13 @@ import (
 
 // standalone memory engine
 type memEngine struct {
-	db   *kv.KV
 	proc *process.Process
+	mp   map[string]*database
 }
 
 type database struct {
 	db   *kv.KV
+	mp   map[string]uint8
 	proc *process.Process
 }
 

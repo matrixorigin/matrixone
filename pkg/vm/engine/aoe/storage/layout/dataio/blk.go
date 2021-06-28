@@ -6,7 +6,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/index"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"os"
 	"path/filepath"
 	"sync"

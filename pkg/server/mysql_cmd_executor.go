@@ -19,16 +19,16 @@ type MysqlCmdExecutor struct {
 }
 
 //get new process id
-func (mce *MysqlCmdExecutor) getNextProcessId()string{
+func (mce *MysqlCmdExecutor) getNextProcessId() string {
 	/*
-	temporary method:
-	routineId + sqlCount
-	 */
+		temporary method:
+		routineId + sqlCount
+	*/
 	routineId := mce.Routine.ID()
-	return fmt.Sprintf("%d%d",routineId,mce.sqlCount)
+	return fmt.Sprintf("%d%d", routineId, mce.sqlCount)
 }
 
-func (mce *MysqlCmdExecutor) addSqlCount(a uint64)  {
+func (mce *MysqlCmdExecutor) addSqlCount(a uint64) {
 	mce.sqlCount += a
 }
 
@@ -38,16 +38,18 @@ obj: routine obj
 TODO:Add error
 Warning: The pipeline is the multi-thread environment. The getDataFromPipeline will
 	access the shared data. To be careful, when it writes the shared data.
- */
-func getDataFromPipeline(obj interface{},bat *batch.Batch){
+*/
+func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	rt := obj.(client.Routine)
 	ses := rt.GetSession()
 
-	var choose bool = ! config.GlobalSystemVariables.GetSendRow()
+	fmt.Println("hello------")
+
+	var choose bool = !config.GlobalSystemVariables.GetSendRow()
 	if choose {
 		goID := client.GetRoutineId()
 
-		fmt.Printf("goid %d \n",goID)
+		fmt.Printf("goid %d \n", goID)
 
 		proto := rt.GetClientProtocol().(*client.MysqlClientProtocol)
 
@@ -60,335 +62,338 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 
 		//one row
 		row := make([]interface{}, len(bat.Vecs))
-		mrs.Data = make([][]interface{},1)
+		mrs.Data = make([][]interface{}, 1)
 		mrs.Data[0] = row
 
 		if n := len(bat.Sels); n == 0 {
 			n = bat.Vecs[0].Length()
-			for j := int64(0); j < int64(n); j++ {//row index
-				for i, vec := range bat.Vecs {//col index
-					switch vec.Typ.Oid {//get col
+			for j := int64(0); j < int64(n); j++ { //row index
+				for i, vec := range bat.Vecs { //col index
+					switch vec.Typ.Oid { //get col
 					case types.T_int8:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]int8)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]int8)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_uint8:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]uint8)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]uint8)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_int16:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]int16)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]int16)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_uint16:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]uint16)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]uint16)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_int32:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]int32)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]int32)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_uint32:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]uint32)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]uint32)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_int64:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]int64)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]int64)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_uint64:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]uint64)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]uint64)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_float32:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]float32)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]float32)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_float64:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]float64)
 							row[i] = vs[j]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]float64)
 								row[i] = vs[j]
 							}
 						}
 					case types.T_char:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.(*types.Bytes)
 							row[i] = vs.Get(j)
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(j)
 							}
 						}
 					case types.T_varchar:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.(*types.Bytes)
 							row[i] = vs.Get(j)
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(j)
 							}
 						}
 					default:
-						fmt.Printf("getDataFromPipeline : unsupported type %d \n",vec.Typ.Oid)
+						fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+						return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 					}
 				}
 
-
-				//fmt.Printf("row -+> %v \n",row)
+				// fmt.Printf("row -+> %s \n", row[0])
 
 				//send row
-				if err := proto.SendResultSetTextRow(mrs,0); err != nil {
+				if err := proto.SendResultSetTextRow(mrs, 0); err != nil {
 					//return err
-					fmt.Printf("getDataFromPipeline error %v \n",err)
+					fmt.Printf("getDataFromPipeline error %v \n", err)
+					return err
 				}
 			}
 		} else {
-			for j := 0; j < n; j++ {//row index
-				for i, vec := range bat.Vecs {//col index
-					switch vec.Typ.Oid {//get col
+			for j := 0; j < n; j++ { //row index
+				for i, vec := range bat.Vecs { //col index
+					switch vec.Typ.Oid { //get col
 					case types.T_int8:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]int8)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]int8)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_uint8:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]uint8)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]uint8)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_int16:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]int16)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]int16)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_uint16:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]uint16)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]uint16)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_int32:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]int32)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]int32)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_uint32:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]uint32)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]uint32)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_int64:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]int64)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]int64)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_uint64:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]uint64)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]uint64)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_float32:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]float32)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]float32)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_float64:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.([]float64)
 							row[i] = vs[bat.Sels[j]]
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.([]float64)
 								row[i] = vs[bat.Sels[j]]
 							}
 						}
 					case types.T_char:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.(*types.Bytes)
 							row[i] = vs.Get(bat.Sels[j])
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(bat.Sels[j])
 							}
 						}
 					case types.T_varchar:
-						if ! vec.Nsp.Any() {//all data in this column are not null
+						if !vec.Nsp.Any() { //all data in this column are not null
 							vs := vec.Col.(*types.Bytes)
 							row[i] = vs.Get(bat.Sels[j])
-						}else{
-							if vec.Nsp.Contains(uint64(j)) {//is null
+						} else {
+							if vec.Nsp.Contains(uint64(j)) { //is null
 								row[i] = nil
-							}else{
+							} else {
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(bat.Sels[j])
 							}
 						}
 					default:
-						fmt.Printf("getDataFromPipeline : unsupported type %d \n",vec.Typ.Oid)
+						fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+						return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 					}
 				}
 
 				//fmt.Printf("row -*> %v \n",row)
 
 				//send row
-				if err := proto.SendResultSetTextRow(mrs,0); err != nil {
+				if err := proto.SendResultSetTextRow(mrs, 0); err != nil {
 					//return err
-					fmt.Printf("getDataFromPipeline error %v \n",err)
+					fmt.Printf("getDataFromPipeline error %v \n", err)
+					return err
 				}
 			}
 		}
-	}else {
+	} else {
 
 		if n := len(bat.Sels); n == 0 {
 			n = bat.Vecs[0].Length()
@@ -396,15 +401,15 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 			for i := 0; i < n; i++ {
 				rows[i] = make([]interface{}, len(bat.Vecs))
 			}
-			for i, vec := range bat.Vecs {//column index
+			for i, vec := range bat.Vecs { //column index
 				switch vec.Typ.Oid {
 				case types.T_int8:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]int8)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -415,12 +420,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_uint8:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]uint8)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -431,12 +436,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_int16:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]int16)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -447,12 +452,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_uint16:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]uint16)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -463,12 +468,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_int32:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]int32)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -479,12 +484,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_uint32:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]uint32)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -495,12 +500,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_int64:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]int64)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -511,12 +516,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_uint64:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]uint64)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -527,12 +532,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_float32:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]float32)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -543,12 +548,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_float64:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]float64)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[j]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -559,12 +564,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_char:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.(*types.Bytes)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs.Get(int64(j))
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -575,12 +580,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_varchar:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.(*types.Bytes)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs.Get(int64(j))
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -591,7 +596,8 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				default:
-					fmt.Printf("FillResult else1: unsupported type %d \n",vec.Typ.Oid)
+					fmt.Printf("FillResult else1: unsupported type %d \n", vec.Typ.Oid)
+					return fmt.Errorf("FillResult else1: unsupported type %d \n", vec.Typ.Oid)
 				}
 			}
 			ses.Mrs.Data = rows
@@ -603,12 +609,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 			for i, vec := range bat.Vecs {
 				switch vec.Typ.Oid {
 				case types.T_int8:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]int8)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -619,12 +625,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_uint8:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]uint8)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -635,12 +641,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_int16:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]int16)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -651,12 +657,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_uint16:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]uint16)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -667,12 +673,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_int32:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]int32)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -683,12 +689,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_uint32:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]uint32)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -699,12 +705,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_int64:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]int64)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -715,12 +721,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_uint64:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]uint64)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -731,12 +737,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_float32:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]float32)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -747,12 +753,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_float64:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.([]float64)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs[bat.Sels[j]]
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -763,12 +769,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_char:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.(*types.Bytes)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs.Get(bat.Sels[j])
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -779,12 +785,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 						}
 					}
 				case types.T_varchar:
-					if ! vec.Nsp.Any() {//all data in this column are not null
+					if !vec.Nsp.Any() { //all data in this column are not null
 						vs := vec.Col.(*types.Bytes)
 						for j := 0; j < n; j++ {
 							rows[j][i] = vs.Get(bat.Sels[j])
 						}
-					}else{
+					} else {
 						for j := 0; j < n; j++ {
 							if vec.Nsp.Contains(uint64(j)) { //is null
 								rows[j][i] = nil
@@ -796,10 +802,12 @@ func getDataFromPipeline(obj interface{},bat *batch.Batch){
 					}
 				default:
 					fmt.Printf("FillResult else2: unsupported type %d \n", vec.Typ.Oid)
+					return fmt.Errorf("FillResult else2: unsupported type %d \n", vec.Typ.Oid)
 				}
 			}
 		}
 	}
+	return nil
 }
 
 func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
@@ -808,14 +816,14 @@ func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
 
 	//TODO: check meta data
 	var err error = nil
-	if _,err = config.StorageEngine.Database(name); err != nil {
+	if _, err = config.StorageEngine.Database(name); err != nil {
 		//echo client. no such database
 		return err
 	}
 	oldname := ses.Dbname
 	ses.Dbname = name
 
-	fmt.Printf("user %s change database from [%s] to [%s]\n",ses.User,oldname,ses.Dbname)
+	fmt.Printf("user %s change database from [%s] to [%s]\n", ses.User, oldname, ses.Dbname)
 
 	resp := client.NewResponse(
 		client.OkResponse,
@@ -824,7 +832,7 @@ func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
 		nil,
 	)
 
-	if err = proto.SendResponse(resp) ; err != nil {
+	if err = proto.SendResponse(resp); err != nil {
 		return err
 	}
 	//echo client. database changed.
@@ -850,11 +858,11 @@ func (mce *MysqlCmdExecutor) handleShowDatabases(sd *tree.ShowDatabases) error {
 	mrs.AddColumn(col)
 
 	//TODO:get database name from the engine
-	row := make([]interface{},1)
+	row := make([]interface{}, 1)
 	row[0] = ses.Dbname
 	mrs.AddRow(row)
 
-	mer := client.NewMysqlExecutionResult(0,0,0,0,mrs)
+	mer := client.NewMysqlExecutionResult(0, 0, 0, 0, mrs)
 	resp := client.NewResponse(
 		client.ResultResponse,
 		0,
@@ -862,13 +870,13 @@ func (mce *MysqlCmdExecutor) handleShowDatabases(sd *tree.ShowDatabases) error {
 		mer,
 	)
 
-	if err = proto.SendResponse(resp) ; err != nil {
+	if err = proto.SendResponse(resp); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (mce *MysqlCmdExecutor) handleShowTables(st *tree.ShowTables)error  {
+func (mce *MysqlCmdExecutor) handleShowTables(st *tree.ShowTables) error {
 	var err error = nil
 	ses := mce.Routine.GetSession()
 	proto := mce.Routine.GetClientProtocol()
@@ -883,21 +891,21 @@ func (mce *MysqlCmdExecutor) handleShowTables(st *tree.ShowTables)error  {
 	//TODO:get database name from the engine
 	col.SetName("Tables_in_" + ses.Dbname)
 
-	db,err := config.StorageEngine.Database(ses.Dbname)
+	db, err := config.StorageEngine.Database(ses.Dbname)
 	if err != nil {
 		return err
 	}
 
 	tables := db.Relations()
-	fmt.Printf("table count %v \n",len(tables))
-	for _,t := range tables {
-		row := make([]interface{},1)
-		fmt.Printf("table %v \n",t.ID())
-		row[0] = t.ID()
+	fmt.Printf("table count %v \n", len(tables))
+	for _, t := range tables {
+		row := make([]interface{}, 1)
+		fmt.Printf("table %v \n", t)
+		row[0] = t
 		mrs.AddRow(row)
 	}
 
-	mer := client.NewMysqlExecutionResult(0,0,0,0,mrs)
+	mer := client.NewMysqlExecutionResult(0, 0, 0, 0, mrs)
 	resp := client.NewResponse(
 		client.ResultResponse,
 		0,
@@ -905,7 +913,7 @@ func (mce *MysqlCmdExecutor) handleShowTables(st *tree.ShowTables)error  {
 		mer,
 	)
 
-	if err = proto.SendResponse(resp) ; err != nil {
+	if err = proto.SendResponse(resp); err != nil {
 		return err
 	}
 	return nil
@@ -923,17 +931,17 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
 
-	comp := compile.New(ses.Dbname, sql,ses.User, config.StorageEngine, config.ClusterNodes, proc)
+	comp := compile.New(ses.Dbname, sql, ses.User, config.StorageEngine, config.ClusterNodes, proc)
 	execs, err := comp.Compile()
 	if err != nil {
 		return err
 	}
 
-	var choose bool = ! config.GlobalSystemVariables.GetSendRow()
+	var choose bool = !config.GlobalSystemVariables.GetSendRow()
 
 	ses.Mrs = &client.MysqlResultSet{}
 
-	defer func(){
+	defer func() {
 		ses.Mrs = nil
 	}()
 
@@ -958,16 +966,16 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			return err
 		}
 
-		if err = exec.Compile(mce.Routine,getDataFromPipeline); err != nil {
+		if err = exec.Compile(mce.Routine, getDataFromPipeline); err != nil {
 			return err
 		}
 
 		switch stmt.(type) {
 		//produce result set
 		case *tree.Select,
-			*tree.ShowCreate,*tree.ShowCreateDatabase,*tree.ShowTables,*tree.ShowDatabases,*tree.ShowColumns,
-			*tree.ShowProcessList,*tree.ShowErrors,*tree.ShowWarnings,*tree.ShowVariables,*tree.ShowStatus,
-			*tree.ExplainFor,*tree.ExplainAnalyze,*tree.ExplainStmt:
+			*tree.ShowCreate, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
+			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
+			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 			columns := exec.Columns()
 			if choose {
 
@@ -977,7 +985,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 				//send column count
 				colCnt := uint64(len(columns))
-				if err = proto.SendColumnCount(colCnt);err!=nil{
+				if err = proto.SendColumnCount(colCnt); err != nil {
 					return err
 				}
 
@@ -1017,7 +1025,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					case types.T_varchar:
 						col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
 					default:
-						return fmt.Errorf("RunWhileSend : unsupported type %d \n",c.Typ)
+						return fmt.Errorf("RunWhileSend : unsupported type %d \n", c.Typ)
 					}
 
 					ses.Mrs.AddColumn(col)
@@ -1027,7 +1035,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					/*
 						mysql COM_QUERY response: send the column definition per column
 					*/
-					if err = proto.SendColumnDefinition(col,cmd); err != nil {
+					if err = proto.SendColumnDefinition(col, cmd); err != nil {
 						return err
 					}
 				}
@@ -1036,7 +1044,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					mysql COM_QUERY response: End after the column has been sent.
 					send EOF packet
 				*/
-				if err = proto.SendEOFPacketIf(0,0); err != nil {
+				if err = proto.SendEOFPacketIf(0, 0); err != nil {
 					return err
 				}
 
@@ -1057,10 +1065,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					mysql COM_QUERY response: End after the data row has been sent.
 					After all row data has been sent, it sends the EOF or OK packet.
 				*/
-				if err = proto.SendEOFOrOkPacket(0,0); err != nil {
+				if err = proto.SendEOFOrOkPacket(0, 0); err != nil {
 					return err
 				}
-			}else{
+			} else {
 				for _, c := range columns {
 					col := new(client.MysqlColumn)
 					col.SetName(c.Name)
@@ -1094,7 +1102,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					case types.T_varchar:
 						col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
 					default:
-						return fmt.Errorf("RunWhileSend : unsupported type %d \n",c.Typ)
+						return fmt.Errorf("RunWhileSend : unsupported type %d \n", c.Typ)
 					}
 
 					ses.Mrs.AddColumn(col)
@@ -1104,18 +1112,18 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return er
 				}
 
-				mer := client.NewMysqlExecutionResult(0,0,0,0,ses.Mrs)
-				resp := client.NewResponse(client.ResultResponse,0,int(client.COM_QUERY),mer)
+				mer := client.NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+				resp := client.NewResponse(client.ResultResponse, 0, int(client.COM_QUERY), mer)
 
-				if err = proto.SendResponse(resp);err != nil{
-					return fmt.Errorf("routine send response failed. error:%v ",err)
+				if err = proto.SendResponse(resp); err != nil {
+					return fmt.Errorf("routine send response failed. error:%v ", err)
 				}
 			}
 		//just status, no result set
-		case *tree.CreateTable,*tree.DropTable,*tree.CreateDatabase,*tree.DropDatabase,
-		*tree.Insert,*tree.Delete,*tree.Update,
-		*tree.BeginTransaction,*tree.CommitTransaction,*tree.RollbackTransaction,
-		*tree.SetVar:
+		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+			*tree.Insert, *tree.Delete, *tree.Update,
+			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
+			*tree.SetVar:
 			/*
 				Step 1: Start
 			*/
@@ -1127,7 +1135,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			/*
 				Step 2: Echo client
 			*/
-
 			resp := client.NewResponse(
 				client.OkResponse,
 				0,
@@ -1135,7 +1142,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				nil,
 			)
 
-			if err = proto.SendResponse(resp) ; err != nil {
+			if err = proto.SendResponse(resp); err != nil {
 				return err
 			}
 		}
@@ -1147,8 +1154,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 //the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response, error) {
 	var resp *client.Response = nil
-	fmt.Printf("cmd %v \n",req.GetCmd())
-	switch uint8(req.GetCmd()){
+	fmt.Printf("cmd %v \n", req.GetCmd())
+	switch uint8(req.GetCmd()) {
 	case client.COM_QUIT:
 		resp = client.NewResponse(
 			client.OkResponse,
@@ -1156,17 +1163,17 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response,
 			int(client.COM_QUIT),
 			nil,
 		)
-		return resp,nil
+		return resp, nil
 	case client.COM_QUERY:
-		var query =string(req.GetData().([]byte))
+		var query = string(req.GetData().([]byte))
 
 		mce.addSqlCount(1)
 
-		fmt.Printf("query:%s \n",query)
+		fmt.Printf("query:%s \n", query)
 
 		err := mce.doComQuery(query)
 
-		if err != nil{
+		if err != nil {
 			resp = client.NewResponse(
 				client.ErrorResponse,
 				0,
@@ -1174,10 +1181,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response,
 				err,
 			)
 		}
-		return resp,nil
+		return resp, nil
 	case client.COM_INIT_DB:
 
-		var dbname =string(req.GetData().([]byte))
+		var dbname = string(req.GetData().([]byte))
 		err := mce.handleUseDB(dbname)
 		if err != nil {
 			resp = client.NewResponse(
@@ -1188,9 +1195,9 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response,
 			)
 		}
 
-		return resp,nil
+		return resp, nil
 	default:
-		err := fmt.Errorf("unsupported command. 0x%x \n",req.Cmd)
+		err := fmt.Errorf("unsupported command. 0x%x \n", req.Cmd)
 		resp = client.NewResponse(
 			client.ErrorResponse,
 			0,
@@ -1198,13 +1205,13 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response,
 			err,
 		)
 	}
-	return resp,nil
+	return resp, nil
 }
 
 func (mce *MysqlCmdExecutor) Close() {
 	//TODO:
 }
 
-func NewMysqlCmdExecutor()*MysqlCmdExecutor{
+func NewMysqlCmdExecutor() *MysqlCmdExecutor {
 	return &MysqlCmdExecutor{}
 }
