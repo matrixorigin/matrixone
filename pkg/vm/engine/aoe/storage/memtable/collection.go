@@ -2,13 +2,12 @@ package memtable
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta"
+	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -16,11 +15,10 @@ import (
 type Collection struct {
 	ID        uint64
 	Opts      *engine.Options
-	TableData table.ITableData
+	TableData iface.ITableData
 	mem       struct {
 		sync.RWMutex
 		MemTables []imem.IMemTable
-		Cursors   []col.IScanCursor
 	}
 }
 
@@ -28,45 +26,35 @@ var (
 	_ imem.ICollection = (*Collection)(nil)
 )
 
-func NewCollection(tableData table.ITableData, opts *engine.Options) imem.ICollection {
+func NewCollection(tableData iface.ITableData, opts *engine.Options) imem.ICollection {
 	c := &Collection{
 		ID:        tableData.GetID(),
 		Opts:      opts,
 		TableData: tableData,
 	}
 	c.mem.MemTables = make([]imem.IMemTable, 0)
-	c.mem.Cursors = make([]col.IScanCursor, len(tableData.GetCollumns()))
 	return c
 }
 
-func (c *Collection) onNoBlock() (blk *md.Block, colBlks []col.IColumnBlock, err error) {
+func (c *Collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) {
 	ctx := mops.OpCtx{Opts: c.Opts}
 	op := mops.NewCreateBlkOp(&ctx, c.ID, c.TableData)
 	op.Push()
 	err = op.WaitDone()
 	if err != nil {
-		return nil, colBlks, err
+		return nil, nil, err
 	}
-	blk = op.GetBlock()
-	return blk, op.ColBlocks, nil
+	meta = op.GetBlock()
+	return meta, op.Block, nil
 }
 
 func (c *Collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
-	blk, colBlks, err := c.onNoBlock()
+	_, data, err := c.onNoBlock()
 	if err != nil {
 		return nil, err
 	}
 
-	for idx, colBlk := range colBlks {
-		c.mem.Cursors[idx] = &col.ScanCursor{}
-		colBlk.InitScanCursor(c.mem.Cursors[idx].(*col.ScanCursor))
-		err := c.mem.Cursors[idx].Init()
-		if err != nil {
-			panic(err)
-		}
-	}
-
-	tbl = NewMemTable(c.TableData, c.TableData.GetColTypes(), colBlks, c.mem.Cursors, c.Opts, blk)
+	tbl = NewMemTable(c.Opts, c.TableData, data)
 	c.mem.MemTables = append(c.mem.MemTables, tbl)
 	return tbl, err
 }
@@ -87,9 +75,7 @@ func (c *Collection) Append(ck *chunk.Chunk, index *md.LogIndex) (err error) {
 	offset := uint64(0)
 	for {
 		if mut.IsFull() {
-			for _, cursor := range c.mem.Cursors {
-				cursor.Close()
-			}
+			mut.Unpin()
 			mut, err = c.onNoMutableTable()
 			if err != nil {
 				c.Opts.EventListener.BackgroundErrorCB(err)

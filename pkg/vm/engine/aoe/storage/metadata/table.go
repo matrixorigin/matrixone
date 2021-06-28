@@ -250,6 +250,7 @@ func (tbl *Table) Copy(ctx CopyCtx) *Table {
 		new_tbl.IdMap[seg.GetID()] = len(new_tbl.Segments)
 		new_tbl.Segments = append(new_tbl.Segments, seg)
 	}
+	new_tbl.SegmentCnt = uint64(len(new_tbl.Segments))
 
 	return new_tbl
 }

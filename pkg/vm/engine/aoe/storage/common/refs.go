@@ -1,6 +1,15 @@
 package common
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+	// log "github.com/sirupsen/logrus"
+)
+
+type IRef interface {
+	RefCount() int64
+	Ref()
+	Unref()
+}
 
 type OnZeroCB func()
 

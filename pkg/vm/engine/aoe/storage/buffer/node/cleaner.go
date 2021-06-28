@@ -3,10 +3,10 @@ package node
 import (
 	"context"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"os"
+	// log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -37,6 +37,6 @@ type NodeCleaner struct {
 }
 
 func (nc *NodeCleaner) Clean() error {
-	log.Infof("NodeCleaner removing %s", nc.Filename)
+	// log.Infof("NodeCleaner removing %s", nc.Filename)
 	return os.Remove(nc.Filename)
 }
