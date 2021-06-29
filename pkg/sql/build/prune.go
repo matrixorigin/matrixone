@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/colexec/extend/overload"
+	"matrixone/pkg/sqlerror"
 )
 
 var (
@@ -310,7 +312,7 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -361,7 +363,7 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -418,7 +420,7 @@ func (b *build) pruneMod(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -469,7 +471,7 @@ func (b *build) pruneMod(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -523,7 +525,7 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -571,7 +573,7 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -625,7 +627,7 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -673,7 +675,7 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -727,7 +729,7 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -775,7 +777,7 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -834,7 +836,7 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -887,7 +889,7 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -946,7 +948,7 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -999,7 +1001,7 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -1058,7 +1060,7 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -1111,7 +1113,7 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -1170,7 +1172,7 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -1223,7 +1225,7 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -1282,7 +1284,7 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -1335,7 +1337,7 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -1394,7 +1396,7 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -1447,7 +1449,7 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, fmt.Errorf("illegal expression '%s'", e)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}

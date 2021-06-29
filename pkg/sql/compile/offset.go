@@ -58,5 +58,4 @@ func (c *compile) compileOffset(o *offset.Offset, mp map[string]uint64) ([]*Scop
 		},
 	})
 	return []*Scope{rs}, nil
-
 }

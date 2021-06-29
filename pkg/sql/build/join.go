@@ -2,11 +2,13 @@ package build
 
 import (
 	"fmt"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/innerJoin"
 	"matrixone/pkg/sql/op/naturalJoin"
 	"matrixone/pkg/sql/op/product"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildJoin(stmt *tree.JoinTableExpr) (op.OP, error) {
@@ -21,11 +23,11 @@ func (b *build) buildJoin(stmt *tree.JoinTableExpr) (op.OP, error) {
 	{
 		switch stmt.JoinType {
 		case tree.JOIN_TYPE_FULL:
-			return nil, fmt.Errorf("unsupport join type %v", stmt.JoinType)
+			return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join type '%v'", stmt.JoinType))
 		case tree.JOIN_TYPE_LEFT:
-			return nil, fmt.Errorf("unsupport join type %v", stmt.JoinType)
+			return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join type '%v'", stmt.JoinType))
 		case tree.JOIN_TYPE_RIGHT:
-			return nil, fmt.Errorf("unsupport join type %v", stmt.JoinType)
+			return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join type '%v'", stmt.JoinType))
 		}
 	}
 	if stmt.Cond == nil {
@@ -47,7 +49,7 @@ func (b *build) buildJoin(stmt *tree.JoinTableExpr) (op.OP, error) {
 		}
 		return innerJoin.New(r, s, rattrs, sattrs), nil
 	default:
-		return nil, fmt.Errorf("unsupport join condition %#v", cond)
+		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join condition '%v'", cond))
 	}
 	return nil, nil
 }

@@ -6,10 +6,12 @@ import (
 	"matrixone/pkg/client"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/colexec/extend/overload"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildExtend(o op.OP, n tree.Expr) (extend.Extend, error) {
@@ -88,7 +90,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 		}
 		return &extend.BinaryExtend{overload.And, left, right}, nil
 	case *tree.XorExpr:
-		return nil, fmt.Errorf("Xor is not support now")
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Xor is not support now"))
 	case *tree.UnaryExpr:
 		return b.buildUnary(o, e)
 	case *tree.BinaryExpr:
@@ -96,15 +98,15 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 	case *tree.ComparisonExpr:
 		return b.buildComparison(o, e)
 	case *tree.Tuple:
-		return nil, fmt.Errorf("'%v' is not support now", n)
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 	case *tree.FuncExpr:
-		return nil, fmt.Errorf("'%v' is not support now", n)
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 	case *tree.IsNullExpr:
-		return nil, fmt.Errorf("'%v' is not support now", n)
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 	case *tree.IsNotNullExpr:
-		return nil, fmt.Errorf("'%v' is not support now", n)
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 	case *tree.Subquery:
-		return nil, fmt.Errorf("'%v' is not support now", n)
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 	case *tree.CastExpr:
 		left, err := b.buildExpr(o, e.Expr)
 		if err != nil {
@@ -134,7 +136,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 			typ.Size = 24
 			typ.Oid = types.T_varchar
 		default:
-			return nil, fmt.Errorf("'%v' is not support now", n)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 		}
 		return &extend.BinaryExtend{
 			Op:    overload.Typecast,
@@ -185,7 +187,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 	case *tree.UnresolvedName:
 		return b.buildAttribute(o, e)
 	}
-	return nil, fmt.Errorf("'%v' is not support now", n)
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }
 
 func (b *build) buildUnary(o op.OP, e *tree.UnaryExpr) (extend.Extend, error) {
@@ -199,7 +201,7 @@ func (b *build) buildUnary(o op.OP, e *tree.UnaryExpr) (extend.Extend, error) {
 	case tree.UNARY_PLUS:
 		return b.buildExpr(o, e.Expr)
 	}
-	return nil, fmt.Errorf("'%v' is not support now", e)
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }
 
 func (b *build) buildBinary(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) {
@@ -255,7 +257,7 @@ func (b *build) buildBinary(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) 
 		}
 		return &extend.BinaryExtend{overload.Div, left, right}, nil
 	}
-	return nil, fmt.Errorf("'%v' is not support now", e)
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }
 
 func (b *build) buildComparison(o op.OP, e *tree.ComparisonExpr) (extend.Extend, error) {
@@ -321,19 +323,19 @@ func (b *build) buildComparison(o op.OP, e *tree.ComparisonExpr) (extend.Extend,
 		}
 		return &extend.BinaryExtend{overload.NE, left, right}, nil
 	}
-	return nil, fmt.Errorf("'%v' is not support now", e)
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }
 
 func (b *build) buildAttribute(o op.OP, e *tree.UnresolvedName) (extend.Extend, error) {
 	if e.Star {
-		return nil, fmt.Errorf("'%v' is not support now", e)
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 	}
 	attrs := o.Attribute()
 	if e.NumParts == 1 {
 		if typ, ok := attrs[e.Parts[0]]; ok {
 			return &extend.Attribute{Name: e.Parts[0], Type: typ.Oid}, nil
 		}
-		return nil, fmt.Errorf("unknown column '%s' in expr", e.Parts[0])
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unknown column '%s' in expr", e.Parts[0]))
 	}
 	if typ, ok := attrs[e.Parts[0]]; ok {
 		return &extend.Attribute{Name: e.Parts[0], Type: typ.Oid}, nil
@@ -342,7 +344,7 @@ func (b *build) buildAttribute(o op.OP, e *tree.UnresolvedName) (extend.Extend, 
 	if typ, ok := attrs[name]; ok {
 		return &extend.Attribute{Name: name, Type: typ.Oid}, nil
 	}
-	return nil, fmt.Errorf("unknown column '%s' in expr", e.Parts[0])
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unknown column '%s' in expr", e.Parts[0]))
 }
 
 func stripParens(expr tree.Expr) tree.Expr {
@@ -357,11 +359,13 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 	case *tree.NumVal:
 		return buildConstantValue(typ, e.Value)
 	}
-	return nil, fmt.Errorf("'%v' is not support now", n)
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }
 
 func buildConstantValue(typ types.Type, val constant.Value) (interface{}, error) {
 	switch val.Kind() {
+	case constant.Unknown:
+		return nil, nil
 	case constant.Int:
 		switch typ.Oid {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
@@ -392,7 +396,7 @@ func buildConstantValue(typ types.Type, val constant.Value) (interface{}, error)
 			return constant.StringVal(val), nil
 		}
 	}
-	return nil, fmt.Errorf("unsupport value: %v", val)
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport value: %v", val))
 }
 
 func buildValue(val constant.Value) (extend.Extend, error) {
@@ -417,6 +421,6 @@ func buildValue(val constant.Value) (extend.Extend, error) {
 		}
 		return &extend.ValueExtend{vec}, nil
 	default:
-		return nil, fmt.Errorf("unsupport value: %v", val)
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport value: %v", val))
 	}
 }

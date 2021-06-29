@@ -3,7 +3,9 @@ package projection
 import (
 	"fmt"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/op"
+	"matrixone/pkg/sqlerror"
 )
 
 func New(prev op.OP, es []*Extend) (*Projection, error) {
@@ -14,7 +16,7 @@ func New(prev op.OP, es []*Extend) (*Projection, error) {
 			e.Alias = e.E.String()
 		}
 		if _, ok := attrs[e.Alias]; ok {
-			return nil, fmt.Errorf("column '%s' is ambiguous", e.Alias)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("column '%s' is ambiguous", e.Alias))
 		}
 		switch typ := e.E.ReturnType(); typ {
 		case types.T_int8:

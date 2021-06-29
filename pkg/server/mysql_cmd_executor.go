@@ -44,6 +44,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := rt.GetSession()
 
 	fmt.Println("hello------")
+	{
+		fmt.Printf("bat: %v\n", bat)
+	}
 
 	var choose bool = !config.GlobalSystemVariables.GetSendRow()
 	if choose {
@@ -220,7 +223,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 
-				// fmt.Printf("row -+> %s \n", row[0])
+				//	fmt.Printf("row -+> %s \n", row[0])
 
 				//send row
 				if err := proto.SendResultSetTextRow(mrs, 0); err != nil {

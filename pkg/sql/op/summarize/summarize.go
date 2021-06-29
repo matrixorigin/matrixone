@@ -3,8 +3,10 @@ package summarize
 import (
 	"fmt"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/op"
+	"matrixone/pkg/sqlerror"
 )
 
 func New(prev op.OP, es []aggregation.Extend) (*Summarize, error) {
@@ -15,7 +17,7 @@ func New(prev op.OP, es []aggregation.Extend) (*Summarize, error) {
 			e.Alias = fmt.Sprintf("%s(%s)", aggregation.AggName[e.Op], e.Name)
 		}
 		if _, ok := attrs[e.Alias]; ok {
-			return nil, fmt.Errorf("column '%s' is ambiguous", e.Alias)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("column '%s' is ambiguous", e.Alias))
 		}
 		attrs[e.Alias] = e.Agg.Type()
 		as = append(as, e.Alias)
