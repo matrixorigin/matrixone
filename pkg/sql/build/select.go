@@ -1,9 +1,9 @@
 package build
 
 import (
-	"errors"
 	"fmt"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/dedup"
@@ -11,6 +11,7 @@ import (
 	"matrixone/pkg/sql/op/offset"
 	"matrixone/pkg/sql/op/projection"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildSelectStatement(stmt tree.SelectStatement) (op.OP, error) {
@@ -21,7 +22,7 @@ func (b *build) buildSelectStatement(stmt tree.SelectStatement) (op.OP, error) {
 		o, _, err := b.buildSelectClause(stmt, nil)
 		return o, err
 	default:
-		return nil, fmt.Errorf("unknown select statement '%T'", stmt)
+		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement '%T'", stmt))
 	}
 }
 
@@ -34,13 +35,13 @@ func (b *build) buildSelect(stmt *tree.Select) (op.OP, error) {
 		wrapped = stmt.Select
 		if stmt.OrderBy != nil {
 			if orderBy != nil {
-				return nil, errors.New("multiple ORDER BY clauses not allowed")
+				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, "multiple ORDER BY clauses not allowed")
 			}
 			orderBy = stmt.OrderBy
 		}
 		if stmt.Limit != nil {
 			if fetch != nil {
-				return nil, errors.New("multiple LIMIT clauses not allowed")
+				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, "multiple LIMIT clauses not allowed")
 			}
 			fetch = stmt.Limit
 		}
@@ -55,13 +56,13 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 
 	switch stmt := stmt.(type) {
 	case *tree.ParenSelect:
-		return nil, fmt.Errorf("%T in buildSelectStmtWithoutParens", stmt)
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("%T in buildSelectStmtWithoutParens", stmt))
 	case *tree.SelectClause:
 		if o, es, err = b.buildSelectClause(stmt, orderBy); err != nil {
 			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("unknown select statement: %T", stmt)
+		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
 	if len(orderBy) > 0 {
 		if fetch != nil && fetch.Offset == nil && fetch.Count != nil {
@@ -71,10 +72,10 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 			}
 			v, ok := e.(*extend.ValueExtend)
 			if !ok {
-				return nil, fmt.Errorf("Undeclared variable '%s'", e)
+				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Undeclared variable '%s'", e))
 			}
 			if v.V.Typ.Oid != types.T_int64 {
-				return nil, fmt.Errorf("Undeclared variable '%s'", e)
+				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Undeclared variable '%s'", e))
 			}
 			if o, err = b.buildTop(o, orderBy, v.V.Col.([]int64)[0]); err != nil {
 				return nil, err
@@ -97,10 +98,10 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 			}
 			v, ok := e.(*extend.ValueExtend)
 			if !ok {
-				return nil, fmt.Errorf("Undeclared variable '%s'", e)
+				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Undeclared variable '%s'", e))
 			}
 			if v.V.Typ.Oid != types.T_int64 {
-				return nil, fmt.Errorf("Undeclared variable '%s'", e)
+				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Undeclared variable '%s'", e))
 			}
 			o = offset.New(o, v.V.Col.([]int64)[0])
 		}
@@ -111,10 +112,10 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 			}
 			v, ok := e.(*extend.ValueExtend)
 			if !ok {
-				return nil, fmt.Errorf("Undeclared variable '%s'", e)
+				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Undeclared variable '%s'", e))
 			}
 			if v.V.Typ.Oid != types.T_int64 {
-				return nil, fmt.Errorf("Undeclared variable '%s'", e)
+				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Undeclared variable '%s'", e))
 			}
 			o = limit.New(o, v.V.Col.([]int64)[0])
 		}
@@ -137,7 +138,7 @@ func (b *build) buildSelectClauseWithSummarize(stmt *tree.SelectClause) (op.OP, 
 	var err error
 
 	if stmt.From == nil {
-		return nil, nil, errors.New("need from clause")
+		return nil, nil, sqlerror.New(errno.SQLStatementNotYetComplete, "need from clause")
 	}
 	if o, err = b.buildFrom(stmt.From.Tables); err != nil {
 		return nil, nil, err
@@ -162,7 +163,7 @@ func (b *build) buildSelectClauseWithoutSummarize(stmt *tree.SelectClause, order
 	var es, pes []*projection.Extend
 
 	if stmt.From == nil {
-		return nil, nil, errors.New("need from clause")
+		return nil, nil, sqlerror.New(errno.SQLStatementNotYetComplete, "need from clause")
 	}
 	if o, err = b.buildFrom(stmt.From.Tables); err != nil {
 		return nil, nil, err
@@ -222,5 +223,4 @@ func (b *build) buildSelectClauseWithoutSummarize(stmt *tree.SelectClause, order
 		}
 	}
 	return o, pes, nil
-
 }
