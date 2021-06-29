@@ -14,6 +14,7 @@ type UnsortedSegmentFile struct {
 	Blocks map[common.ID]base.IBlockFile
 	Dir    string
 	Refs   int32
+	Info   *fileStat
 }
 
 func NewUnsortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
@@ -21,6 +22,9 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 		ID:     id,
 		Dir:    dirname,
 		Blocks: make(map[common.ID]base.IBlockFile),
+		Info: &fileStat{
+			name: id.ToSegmentFilePath(),
+		},
 	}
 	return usf
 }
@@ -91,11 +95,11 @@ func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base
 }
 
 func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
-	cpf := &ColPartFile{
-		ID:          id,
-		SegmentFile: sf,
-	}
-	return cpf
+	return newPartFile(id, sf, false)
+}
+
+func (sf *UnsortedSegmentFile) Stat() base.FileInfo {
+	return sf.Info
 }
 
 func (sf *UnsortedSegmentFile) Close() error {
@@ -128,6 +132,7 @@ func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf base.IBlockFile) {
 		panic("logic error")
 	}
 	sf.Blocks[id] = bf
+	atomic.AddInt64(&sf.Info.size, bf.Stat().Size())
 }
 
 func (sf *UnsortedSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
@@ -142,6 +147,16 @@ func (sf *UnsortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, b
 	}
 	sf.RUnlock()
 	blk.ReadPoint(ptr, buf)
+}
+
+func (sf *UnsortedSegmentFile) PartSize(colIdx uint64, id common.ID) int64 {
+	sf.RLock()
+	blk, ok := sf.Blocks[id.AsBlockID()]
+	if !ok {
+		panic("logic error")
+	}
+	sf.RUnlock()
+	return blk.PartSize(colIdx, id)
 }
 
 func (sf *UnsortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {

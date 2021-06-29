@@ -22,6 +22,7 @@ type BlockFile struct {
 	Parts       map[base.Key]*base.Pointer
 	Meta        *FileMeta
 	SegmentFile base.ISegmentFile
+	Info        base.FileInfo
 }
 
 func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
@@ -35,8 +36,14 @@ func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
 	dirname := segFile.GetDir()
 	name := e.MakeFilename(dirname, e.FTBlock, id.ToBlockFileName(), false)
 	// log.Infof("BlockFile name %s", name)
-	if _, err := os.Stat(name); os.IsNotExist(err) {
+	var info os.FileInfo
+	var err error
+	if info, err = os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
+	}
+	bf.Info = &fileStat{
+		size: info.Size(),
+		name: id.ToBlockFilePath(),
 	}
 	r, err := os.OpenFile(name, os.O_RDONLY, 0666)
 	if err != nil {
@@ -70,14 +77,7 @@ func (bf *BlockFile) GetIndexesMeta() *base.IndexesMeta {
 }
 
 func (bf *BlockFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
-	vf := &EmbbedBlockIndexFile{
-		EmbbedIndexFile: EmbbedIndexFile{
-			SegmentFile: bf.SegmentFile,
-			Meta:        meta,
-		},
-		ID: bf.ID,
-	}
-	return vf
+	return newEmbbedBlockIndexFile(&bf.ID, bf.SegmentFile, meta)
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
@@ -122,6 +122,10 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	}
 }
 
+func (bf *BlockFile) Stat() base.FileInfo {
+	return bf.Info
+}
+
 func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	bf.Lock()
 	defer bf.Unlock()
@@ -132,6 +136,19 @@ func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	if n > int(ptr.Len) {
 		panic("logic error")
 	}
+}
+
+func (bf *BlockFile) PartSize(colIdx uint64, id common.ID) int64 {
+	key := base.Key{
+		Col: colIdx,
+		ID:  id.AsBlockID(),
+	}
+	pointer, ok := bf.Parts[key]
+	if !ok {
+		panic("logic error")
+	}
+
+	return int64(pointer.Len)
 }
 
 func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {

@@ -1,6 +1,7 @@
 package col
 
 import (
+	// log "github.com/sirupsen/logrus"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -8,7 +9,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"sync"
-	// log "github.com/sirupsen/logrus"
 )
 
 type IColumnPart interface {
@@ -48,6 +48,13 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	default:
 		panic("not support")
 	}
+	if vf != nil {
+		vvf := vf.(base.IVirtaulFile)
+		// Only in mock case, the stat is nil
+		if stat := vvf.Stat(); stat != nil {
+			part.Capacity = uint64(vvf.Stat().Size())
+		}
+	}
 	node := bufMgr.CreateNode(vf, vector.StdVectorConstructor, capacity)
 	if node == nil {
 		return nil
@@ -73,6 +80,12 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
 	default:
 		panic("not supported")
+	}
+	if vf != nil {
+		vvf := vf.(base.IVirtaulFile)
+		if stat := vvf.Stat(); stat != nil {
+			part.Capacity = uint64(vvf.Stat().Size())
+		}
 	}
 	cloned.Node = sstBufMgr.CreateNode(vf, vector.StdVectorConstructor, part.Capacity).(*bmgr.Node)
 

@@ -16,6 +16,7 @@ type MockSegmentFile struct {
 	TypeName string
 	Refs     int32
 	ID       common.ID
+	Info     *fileStat
 }
 
 func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegmentFile {
@@ -29,9 +30,16 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegment
 	} else {
 		panic("unspported")
 	}
+	msf.Info = &fileStat{
+		name: id.ToSegmentFilePath(),
+	}
 	msf.FileName = e.MakeFilename(dirname, e.FTSegment, id.ToSegmentFileName(), false)
 	log.Infof("%s:%s | Created", msf.TypeName, msf.FileName)
 	return msf
+}
+
+func (msf *MockSegmentFile) Stat() base.FileInfo {
+	return msf.Info
 }
 
 func (msf *MockSegmentFile) GetIndexesMeta() *base.IndexesMeta {
@@ -48,6 +56,10 @@ func (msf *MockSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 
 func (msf *MockSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {
 	log.Infof("(%s:%s) | ReadBlockPoint[%s] (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, id.BlockString(), ptr.Offset, ptr.Len, len(buf), cap(buf))
+}
+
+func (msf *MockSegmentFile) PartSize(colIdx uint64, id common.ID) int64 {
+	return 0
 }
 
 func (msf *MockSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
@@ -116,9 +128,5 @@ func (msf *MockSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.In
 }
 
 func (msf *MockSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
-	psf := &ColPartFile{
-		SegmentFile: msf,
-		ID:          id,
-	}
-	return psf
+	return newPartFile(id, msf, true)
 }
