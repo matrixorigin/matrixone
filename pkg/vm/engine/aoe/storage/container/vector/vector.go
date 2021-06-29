@@ -9,6 +9,7 @@ import (
 	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"os"
 	"reflect"
 	"unsafe"
 
@@ -17,7 +18,7 @@ import (
 )
 
 func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return NewEmptyStdVector(capacity, freeFunc)
+	return NewStdVectorNode(capacity, freeFunc)
 }
 
 type IVector interface {
@@ -41,12 +42,19 @@ func NewStdVector(t types.Type, capacity uint64) *StdVector {
 	}
 }
 
-func NewEmptyStdVector(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+func NewStdVectorNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return &StdVector{
 		Data:         make([]byte, 0),
 		VMask:        &nulls.Nulls{},
 		NodeCapacity: capacity,
 		FreeFunc:     freeFunc,
+	}
+}
+
+func NewEmptyStdVector() *StdVector {
+	return &StdVector{
+		Data:  make([]byte, 0),
+		VMask: &nulls.Nulls{},
 	}
 }
 
@@ -146,7 +154,7 @@ func (v *StdVector) GetValue(idx int) interface{} {
 	// case types.T_date:
 	// case types.T_datetime:
 	default:
-		panic("not supported yet")
+		panic(fmt.Sprintf("type %v not supported yet", v.Type))
 	}
 }
 
@@ -339,9 +347,15 @@ func (vec *StdVector) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return n, err
 	}
+
+	// TODO: will remove below os.File type check.
+	switch f := r.(type) {
+	case *os.File:
+		f.Seek(0, io.SeekStart)
+	}
 	realSize := encoding.DecodeUint64(capBuf)
 	buf := make([]byte, realSize)
-	_, err = r.Read(buf[8:])
+	_, err = r.Read(buf)
 	if err != nil {
 		return n, err
 	}

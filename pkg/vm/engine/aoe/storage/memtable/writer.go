@@ -3,7 +3,7 @@ package memtable
 import (
 	"context"
 	"encoding/binary"
-	log "github.com/sirupsen/logrus"
+	"io"
 	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
@@ -12,6 +12,8 @@ import (
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"os"
 	"path/filepath"
+
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -87,23 +89,33 @@ func (sw *MemtableWriter) Flush() (err error) {
 
 	buf := make([]byte, 2+len(mtTypes)*8*2)
 	binary.BigEndian.PutUint16(buf, uint16(len(mt.Meta.Segment.Schema.ColDefs)))
-	for idx, t := range mtTypes {
-		colSize := mt.Meta.Count * uint64(t.Size)
+	handle := mt.Block.GetBlockHandle()
+	defer handle.Close()
+	var colBufs [][]byte
+	for idx, _ := range mtTypes {
+		colBuf, err := handle.GetVector(idx).Marshall()
+		if err != nil {
+			return err
+		}
+		colBufs = append(colBufs, colBuf)
+		colSize := len(colBuf)
 		binary.BigEndian.PutUint64(buf[2+idx*16:], id.BlockID)
-		binary.BigEndian.PutUint64(buf[2+idx*16+8:], colSize)
+		binary.BigEndian.PutUint64(buf[2+idx*16+8:], uint64(colSize))
 	}
 	_, err = w.Write(buf)
 	if err != nil {
 		return err
 	}
-	handle := mt.Block.GetBlockHandle()
-	defer handle.Close()
+	var colDataPos []int64
 	for idx := 0; idx < handle.Cols(); idx++ {
-		_, err = handle.GetPageNode(idx, 0).DataNode.WriteTo(w)
+		offset, _ := w.Seek(0, io.SeekCurrent)
+		colDataPos = append(colDataPos, offset)
+		_, err = w.Write(colBufs[idx])
 		if err != nil {
 			return err
 		}
 	}
+	// log.Debugf("ColData Pos: %v", colDataPos)
 	log.Infof("%s | Memtable | Flushed", fname)
 	return err
 }
