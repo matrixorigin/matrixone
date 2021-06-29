@@ -2,6 +2,7 @@ package dbi
 
 import (
 	"io"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 )
 
 type ISnapshot interface {
@@ -13,6 +14,7 @@ type ISnapshot interface {
 
 type IBlockHandle interface {
 	io.Closer
+	GetVector(int) *vector.StdVector
 }
 
 type IBlock interface {

@@ -1,11 +1,11 @@
 package memtable
 
 import (
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
@@ -59,7 +59,7 @@ func (c *Collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
 	return tbl, err
 }
 
-func (c *Collection) Append(ck *chunk.Chunk, index *md.LogIndex) (err error) {
+func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 	var mut imem.IMemTable
 	c.mem.Lock()
 	defer c.mem.Unlock()
@@ -88,12 +88,12 @@ func (c *Collection) Append(ck *chunk.Chunk, index *md.LogIndex) (err error) {
 				op.WaitDone()
 			}()
 		}
-		n, err := mut.Append(ck, offset, index)
+		n, err := mut.Append(bat, offset, index)
 		if err != nil {
 			return err
 		}
 		offset += n
-		if offset == ck.GetCount() {
+		if offset == uint64(bat.Vecs[0].Length()) {
 			break
 		}
 		if index.IsApplied() {

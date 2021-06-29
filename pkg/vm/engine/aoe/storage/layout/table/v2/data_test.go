@@ -132,8 +132,8 @@ func TestBase1(t *testing.T) {
 		for blkId, _ := range blkIds {
 			refBlk := tblData.WeakRefBlock(segId, blkId)
 			assert.NotNil(t, refBlk)
-			handle := refBlk.GetBlockHandle()
-			handle.Close()
+			// handle := refBlk.GetBlockHandle()
+			// handle.Close()
 		}
 
 	}

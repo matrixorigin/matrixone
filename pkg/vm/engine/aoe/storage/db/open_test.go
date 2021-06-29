@@ -158,11 +158,11 @@ func TestReplay(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockChunk(tblMeta.Schema.Types(), rows)
-	assert.Equal(t, uint64(rows), ck.GetCount())
+	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
-		Capacity: ck.GetCount(),
+		Capacity: uint64(ck.Vecs[0].Length()),
 	}
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {

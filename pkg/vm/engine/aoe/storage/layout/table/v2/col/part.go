@@ -1,10 +1,10 @@
 package col
 
 import (
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"sync"
@@ -48,7 +48,7 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	default:
 		panic("not support")
 	}
-	node := bufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, capacity)
+	node := bufMgr.CreateNode(vf, vector.StdVectorConstructor, capacity)
 	if node == nil {
 		return nil
 	}
@@ -74,7 +74,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	default:
 		panic("not supported")
 	}
-	cloned.Node = sstBufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, part.Capacity).(*bmgr.Node)
+	cloned.Node = sstBufMgr.CreateNode(vf, vector.StdVectorConstructor, part.Capacity).(*bmgr.Node)
 
 	return cloned
 }
