@@ -1,45 +1,60 @@
 package chunk
 
 import (
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
-	vec "matrixone/pkg/vm/engine/aoe/storage/mock/type/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	// log "github.com/sirupsen/logrus"
 )
 
 type IChunk interface {
 	Append(IChunk, offset uint64) (n uint64, err error)
-	GetVector(int) vec.Vector
+	GetVector(int) *vector.StdVector
 	GetCount() uint64
 }
 
 type Chunk struct {
-	Vectors []vec.Vector
+	Vectors []*vector.StdVector
 }
 
-func (c *Chunk) Append(o *Chunk, offset uint64) (n uint64, err error) {
-	for i, vector := range c.Vectors {
-		n, err = vector.Append(o.Vectors[i], offset)
+func (c *Chunk) Append(bat *batch.Batch, offset uint64) (n uint64, err error) {
+	for i, vec := range c.Vectors {
+		// log.Infof("i %d, offset %d, bat size %d, vec cap %d", i, offset, bat.Vecs[0].Length(), vec.Capacity())
+		nr, err := vec.AppendVector(bat.Vecs[i], int(offset))
 		if err != nil {
 			return n, err
 		}
+		n = uint64(nr)
 	}
 	return n, err
 }
 
 func (c *Chunk) GetCount() uint64 {
-	return c.Vectors[0].GetCount()
+	return uint64(c.Vectors[0].Length())
 }
 
 func MockChunk(types []types.Type, rows uint64) *Chunk {
-	var vectors []vec.Vector
-	buf := make([]byte, int32(rows)*types[0].Size)
+	var vectors []*vector.StdVector
 	for _, colType := range types {
-		vector := vec.NewStdVector(colType, buf)
-		vector.(*vec.StdVector).Offset = cap(buf)
-		vectors = append(vectors, vector)
+		vectors = append(vectors, vector.MockStdVector(colType, rows))
 	}
 
 	return &Chunk{
 		Vectors: vectors,
 	}
+}
+
+func MockBatch(types []types.Type, rows uint64) *batch.Batch {
+	var attrs []string
+	for _, t := range types {
+		attrs = append(attrs, t.Oid.String())
+	}
+
+	bat := batch.New(true, attrs)
+	for i, colType := range types {
+		vec := vector.MockStdVector(colType, rows)
+		bat.Vecs[i] = vec.CopyToVector()
+	}
+
+	return bat
 }

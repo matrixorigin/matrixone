@@ -5,6 +5,7 @@ import (
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -79,6 +80,7 @@ type IBlockHandle interface {
 	io.Closer
 	GetHost() IBlock
 	GetPageNode(colIdx, pos int) bmgrif.MangaedNode
+	GetVector(int) *vector.StdVector
 	Cols() int
 	ColType(idx int) types.Type
 }

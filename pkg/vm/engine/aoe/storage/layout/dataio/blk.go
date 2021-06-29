@@ -3,6 +3,7 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -85,7 +86,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
 	bf.Meta.Indexes = indexMeta
-	// return
+	offset, _ := bf.File.Seek(0, io.SeekCurrent)
 	twoBytes := make([]byte, 2)
 	_, err = bf.File.Read(twoBytes)
 	if err != nil {
@@ -94,7 +95,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 
 	cols := binary.BigEndian.Uint16(twoBytes)
 	headSize := 2 + 2*8*int(cols)
-	currOffset := headSize
+	currOffset := headSize + int(offset)
 	eightBytes := make([]byte, 8)
 	for i := uint16(0); i < cols; i++ {
 		_, err = bf.File.Read(eightBytes)
@@ -128,7 +129,7 @@ func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	if err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
 	}
-	if n != int(ptr.Len) {
+	if n > int(ptr.Len) {
 		panic("logic error")
 	}
 }
@@ -142,17 +143,9 @@ func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if !ok {
 		panic("logic error")
 	}
-	if len(buf) != int(pointer.Len) {
-		panic("logic error")
+
+	if len(buf) > int(pointer.Len) {
+		panic(fmt.Sprintf("buf len is %d, but pointer len is %d", len(buf), pointer.Len))
 	}
 	bf.ReadPoint(pointer, buf)
-	// bf.Lock()
-	// defer bf.Unlock()
-	// n, err := bf.ReadAt(buf, pointer.Offset)
-	// if err != nil {
-	// 	panic(fmt.Sprintf("logic error: %s", err))
-	// }
-	// if n != int(pointer.Len) {
-	// 	panic("logic error")
-	// }
 }

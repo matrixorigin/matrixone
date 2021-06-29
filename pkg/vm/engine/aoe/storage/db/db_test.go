@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -133,11 +134,11 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := inst.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockChunk(tblMeta.Schema.Types(), rows)
-	assert.Equal(t, uint64(rows), ck.GetCount())
+	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	assert.Equal(t, int(rows), ck.Vecs[0].Length())
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
-		Capacity: ck.GetCount(),
+		Capacity: uint64(ck.Vecs[0].Length()),
 	}
 	invalidName := "xxx"
 	err = inst.Append(invalidName, ck, logIdx)
@@ -197,7 +198,7 @@ func TestAppend(t *testing.T) {
 
 type InsertReq struct {
 	Name     string
-	Data     *chunk.Chunk
+	Data     *batch.Batch
 	LogIndex *md.LogIndex
 }
 
@@ -214,7 +215,7 @@ func TestConcurrency(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := inst.store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockChunk(tblMeta.Schema.Types(), rows)
+	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan *InsertReq)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
@@ -284,7 +285,7 @@ func TestConcurrency(t *testing.T) {
 			insertReq := &InsertReq{
 				Name:     tablet.Name,
 				Data:     baseCk,
-				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: baseCk.GetCount()},
+				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: uint64(baseCk.Vecs[0].Length())},
 			}
 			insertCh <- insertReq
 		}
@@ -395,11 +396,11 @@ func TestGC(t *testing.T) {
 	rows := inst.store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
-	baseCk := chunk.MockChunk(tblMeta.Schema.Types(), rows)
+	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
-		Capacity: baseCk.GetCount(),
+		Capacity: uint64(baseCk.Vecs[0].Length()),
 	}
 
 	insertCnt := uint64(4)
