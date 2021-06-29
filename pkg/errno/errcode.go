@@ -1,5 +1,48 @@
 package errno
 
+// PGSQL error code
+const (
+	SuccessFulCompletion                    = "00"
+	Waring                                  = "01"
+	NoData                                  = "02"
+	SQLStatementNotYetComplete              = "03"
+	ConnectionException                     = "08"
+	TriggeredActionException                = "09"
+	FeatureNotSupported                     = "0A"
+	InvalidTransactionInitiation            = "0B"
+	LocatorException                        = "0F"
+	InvalidGrantor                          = "0L"
+	InvalidRoleSpecification                = "0P"
+	DiagnosticsException                    = "0Z"
+	CaseNotFound                            = "20"
+	CardinalityViolation                    = "21"
+	DataException                           = "22"
+	IntegrityConstraintViolation            = "23"
+	InvalidCursorState                      = "24"
+	InvalidTransactionState                 = "25"
+	InvalidSQLStatementName                 = "26"
+	TriggeredDataChangeViolation            = "27"
+	InvalidAuthorizationSpecification       = "28"
+	DependentPrivilegeDescriptorsStillExist = "2B"
+	InvalidTransactionTermination           = "2D"
+	SQLRoutineException                     = "2F"
+	InvalidCursorName                       = "34"
+	ExternalRoutineException                = "38"
+	ExternalRoutineInvocationException      = "39"
+	SavepointException                      = "3B"
+	InvalidCatalogName                      = "3D"
+	InvalidSchemaName                       = "3F"
+	TransactionRollback                     = "40"
+	SyntaxErrororAccessRuleViolation        = "42"
+	WITHCHECKOPTIONViolation                = "44"
+	InsufficientResources                   = "53"
+	ProgramLimitExceeded                    = "54"
+	ObjectNotInPrerequisiteState            = "55"
+	OperatorIntervention                    = "56"
+	SystemError                             = "58"
+	InternalError                           = "XX"
+)
+
 // MySQL error code.
 // This value is numeric. It is not portable to other database systems.
 const (

@@ -2,9 +2,11 @@ package build
 
 import (
 	"fmt"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/explain"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildExplain(stmt tree.Explain) (op.OP, error) {
@@ -28,5 +30,5 @@ func (b *build) buildExplain(stmt tree.Explain) (op.OP, error) {
 		}
 		return explain.New(o), nil
 	}
-	return nil, fmt.Errorf("unsupport explain statement: '%v'", stmt)
+	return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport explain statement: '%v'", stmt))
 }

@@ -3,12 +3,14 @@ package build
 import (
 	"fmt"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/group"
 	"matrixone/pkg/sql/op/projection"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildGroupBy(o op.OP, ns tree.SelectExprs, grs tree.GroupBy, where *tree.Where) (op.OP, error) {
@@ -61,11 +63,11 @@ func (b *build) buildGroupBy(o op.OP, ns tree.SelectExprs, grs tree.GroupBy, whe
 	for _, f := range fs {
 		name, ok := f.Func.FunctionReference.(*tree.UnresolvedName)
 		if !ok {
-			return nil, fmt.Errorf("illegal expression '%s'", f)
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", f))
 		}
 		op, ok := AggFuncs[name.Parts[0]]
 		if !ok {
-			return nil, fmt.Errorf("unimplemented aggregated functions '%s'", name.Parts[0])
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented aggregated functions '%s'", name.Parts[0]))
 		}
 		switch e := f.Exprs[0].(type) {
 		case *tree.NumVal:
@@ -83,7 +85,7 @@ func (b *build) buildGroupBy(o op.OP, ns tree.SelectExprs, grs tree.GroupBy, whe
 			alias := fmt.Sprintf("%s(%s)", name.Parts[0], e.Parts[0])
 			typ, ok := o.Attribute()[e.Parts[0]]
 			if !ok {
-				return nil, fmt.Errorf("unknown column '%s' in aggregation", e.Parts[0])
+				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unknown column '%s' in aggregation", e.Parts[0]))
 			}
 			agg, err := newAggregate(op, typ)
 			if err != nil {

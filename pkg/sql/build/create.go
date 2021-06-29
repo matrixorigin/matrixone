@@ -5,10 +5,12 @@ import (
 	"matrixone/pkg/client"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/createDatabase"
 	"matrixone/pkg/sql/op/createTable"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
 )
@@ -33,6 +35,9 @@ func (b *build) buildCreateTable(stmt *tree.CreateTable) (op.OP, error) {
 			defs = append(defs, def)
 		}
 	}
+	if stmt.PartitionOption != nil {
+		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, "partitionBy not yet complete")
+	}
 	return createTable.New(stmt.IfNotExists, tblName, defs, nil, db), nil
 }
 
@@ -55,7 +60,7 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
 			},
 		}, nil
 	default:
-		return nil, fmt.Errorf("unsupport table def: '%v'", def)
+		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table def: '%v'", def))
 	}
 }
 
@@ -92,13 +97,13 @@ func (b *build) getTableDefType(typ tree.ResolvableTypeReference) (*types.Type, 
 			return &types.Type{Oid: types.T_varchar, Size: 24, Width: n.InternalType.Width}, nil
 		}
 	}
-	return nil, fmt.Errorf("unsupport type: '%v'", typ)
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport type: '%v'", typ))
 }
 
 func (b *build) tableInfo(stmt tree.TableExpr) (string, string, error) {
 	tbl, ok := stmt.(tree.TableName)
 	if !ok {
-		return "", "", fmt.Errorf("unsupport table: '%v'", stmt)
+		return "", "", sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table: '%v'", stmt))
 	}
 	if len(tbl.SchemaName) == 0 {
 		tbl.SchemaName = tree.Identifier(b.db)

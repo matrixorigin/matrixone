@@ -5,6 +5,7 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/build"
 	"matrixone/pkg/sql/colexec/myoutput"
 	"matrixone/pkg/sql/op"
@@ -31,6 +32,7 @@ import (
 	"matrixone/pkg/sql/op/top"
 	"matrixone/pkg/sql/opt"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
@@ -254,7 +256,7 @@ func (s *Scope) Run(e engine.Engine) error {
 		}
 	}
 	if _, err := p.Run(segs, s.Proc); err != nil {
-		return err
+		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
 	}
 	return nil
 }
@@ -283,10 +285,13 @@ func (s *Scope) MergeRun(e engine.Engine, wg sync.WaitGroup) error {
 		}
 	}
 	p := pipeline.NewMerge(s.Ins)
-	if _, err = p.RunMerge(s.Proc); err != nil {
-		return err
+	if _, rerr := p.RunMerge(s.Proc); rerr != nil {
+		err = rerr
 	}
-	return err
+	if err != nil {
+		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
+	}
+	return nil
 }
 
 func (s *Scope) Insert() error {
@@ -312,7 +317,7 @@ func (s *Scope) CreateTable() error {
 		if o.Flg {
 			return nil
 		}
-		return fmt.Errorf("table '%v' already exists", o.Id)
+		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%v' already exists", o.Id))
 	}
 	return o.Db.Create(o.Id, o.Defs, o.Pdef, nil)
 }
@@ -323,7 +328,7 @@ func (s *Scope) CreateDatabase() error {
 		if o.Flg {
 			return nil
 		}
-		return fmt.Errorf("database '%v' already exists", o.Id)
+		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database '%v' already exists", o.Id))
 	}
 	return o.E.Create(o.Id)
 }
@@ -429,7 +434,7 @@ func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 	case *offset.Offset:
 		return c.compileOffset(n, mp)
 	case *product.Product:
-		return nil, fmt.Errorf("'%s' unsupprt now", o)
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%s' unsupprt now", o))
 	case *innerJoin.Join:
 		return c.compileInnerJoin(n, mp)
 	case *naturalJoin.Join:
@@ -442,5 +447,5 @@ func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 	case *projection.Projection:
 		return c.compileProjection(n, mp)
 	}
-	return nil, fmt.Errorf("'%s' unsupprt now", o)
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%s' unsupprt now", o))
 }

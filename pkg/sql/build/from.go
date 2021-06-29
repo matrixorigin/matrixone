@@ -2,9 +2,11 @@ package build
 
 import (
 	"fmt"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/product"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildFrom(stmts tree.TableExprs) (op.OP, error) {
@@ -48,7 +50,7 @@ func (b *build) buildFromTable(stmt tree.TableExpr) (op.OP, error) {
 	case *tree.Subquery:
 		return b.buildSelectStatement(stmt.Select)
 	case *tree.StatementSource:
-		return nil, fmt.Errorf("unknown table expr: %T", stmt)
+		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown table expr: %T", stmt))
 	}
-	return nil, fmt.Errorf("unknown table expr: %T", stmt)
+	return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown table expr: %T", stmt))
 }

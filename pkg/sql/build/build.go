@@ -2,9 +2,11 @@ package build
 
 import (
 	"fmt"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/rewrite"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/process"
 )
@@ -57,5 +59,5 @@ func (b *build) BuildStatement(stmt tree.Statement) (op.OP, error) {
 	case *tree.ShowDatabases:
 		return b.buildShowDatabases(stmt)
 	}
-	return nil, fmt.Errorf("unexpected statement: '%T'", stmt)
+	return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", stmt))
 }
