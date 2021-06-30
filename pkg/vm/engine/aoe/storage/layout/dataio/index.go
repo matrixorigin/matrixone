@@ -9,11 +9,41 @@ import (
 type EmbbedIndexFile struct {
 	SegmentFile base.ISegmentFile
 	Meta        *base.IndexMeta
+	Info        *fileStat
 }
 
 type EmbbedBlockIndexFile struct {
 	EmbbedIndexFile
 	ID common.ID
+}
+
+func newEmbbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) base.IVirtaulFile {
+	f := &EmbbedIndexFile{
+		SegmentFile: host,
+		Meta:        meta,
+		Info: &fileStat{
+			size: int64(meta.Ptr.Len),
+		},
+	}
+	return f
+}
+
+func newEmbbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.IndexMeta) base.IVirtaulFile {
+	f := &EmbbedBlockIndexFile{
+		EmbbedIndexFile: EmbbedIndexFile{
+			SegmentFile: host,
+			Meta:        meta,
+			Info: &fileStat{
+				size: int64(meta.Ptr.Len),
+			},
+		},
+		ID: *id,
+	}
+	return f
+}
+
+func (f *EmbbedIndexFile) Stat() base.FileInfo {
+	return f.Info
 }
 
 func (f *EmbbedIndexFile) Ref() {
@@ -32,6 +62,9 @@ func (f *EmbbedIndexFile) Read(buf []byte) (n int, err error) {
 	return len(buf), nil
 }
 
+func (bf *EmbbedBlockIndexFile) Stat() base.FileInfo {
+	return bf.Info
+}
 func (bf *EmbbedBlockIndexFile) Ref() {
 	bf.SegmentFile.RefBlock(bf.ID)
 }

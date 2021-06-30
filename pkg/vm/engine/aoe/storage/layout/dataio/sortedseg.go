@@ -18,6 +18,9 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 		Parts:      make(map[base.Key]*base.Pointer),
 		ID:         id,
 		BlocksMeta: make(map[common.ID]*FileMeta),
+		Info: &fileStat{
+			name: id.ToSegmentFilePath(),
+		},
 	}
 
 	name := e.MakeFilename(dirname, e.FTSegment, id.ToSegmentFileName(), false)
@@ -43,30 +46,23 @@ type SortedSegmentFile struct {
 	Parts      map[base.Key]*base.Pointer
 	Meta       *FileMeta
 	BlocksMeta map[common.ID]*FileMeta
+	Info       *fileStat
 }
 
 func (sf *SortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
-	vf := &EmbbedIndexFile{
-		SegmentFile: sf,
-		Meta:        meta,
-	}
-	return vf
+	return newEmbbedIndexFile(sf, meta)
 }
 
 func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) base.IVirtaulFile {
-	vf := &EmbbedIndexFile{
-		SegmentFile: sf,
-		Meta:        meta,
-	}
-	return vf
+	return newEmbbedIndexFile(sf, meta)
 }
 
 func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
-	cpf := &ColPartFile{
-		ID:          id,
-		SegmentFile: sf,
-	}
-	return cpf
+	return newPartFile(id, sf, false)
+}
+
+func (sf *SortedSegmentFile) Stat() base.FileInfo {
+	return sf.Info
 }
 
 func (sf *SortedSegmentFile) GetDir() string {
@@ -145,6 +141,18 @@ func (sf *SortedSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 
 func (sf *SortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {
 	sf.ReadPoint(ptr, buf)
+}
+
+func (sf *SortedSegmentFile) PartSize(colIdx uint64, id common.ID) int64 {
+	key := base.Key{
+		Col: colIdx,
+		ID:  id,
+	}
+	pointer, ok := sf.Parts[key]
+	if !ok {
+		panic("logic error")
+	}
+	return int64(pointer.Len)
 }
 
 func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
