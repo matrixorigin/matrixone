@@ -45,10 +45,7 @@ func (it *SegmentIt) Valid() bool {
 }
 
 func (it *SegmentIt) GetHandle() dbi.ISegment {
-	seg := &Segment{
-		Data: it.Snapshot.TableData.WeakRefSegment(it.Snapshot.Ids[it.Pos]),
-		Attr: it.Snapshot.Attr,
-	}
+	seg := it.Snapshot.GetSegment(it.Snapshot.Ids[it.Pos])
 	return seg
 }
 
