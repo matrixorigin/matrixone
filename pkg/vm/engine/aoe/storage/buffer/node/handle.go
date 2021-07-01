@@ -223,3 +223,7 @@ func (h *BufferHandle) Close() error {
 	h.Manager.Unpin(h.Handle)
 	return nil
 }
+
+func (h *BufferHandle) GetHandle() nif.INodeHandle {
+	return h.Handle
+}

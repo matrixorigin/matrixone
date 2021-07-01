@@ -121,4 +121,5 @@ type INodeHandle interface {
 type IBufferHandle interface {
 	io.Closer
 	GetID() uint64
+	GetHandle() INodeHandle
 }
