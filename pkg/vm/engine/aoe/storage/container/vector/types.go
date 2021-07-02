@@ -25,11 +25,10 @@ var (
 )
 
 type StdVector struct {
+	sync.RWMutex
 	Type         types.Type
 	StatMask     Mask
 	Data         []byte
-	MaskMtx      sync.RWMutex
-	VMaskMtx     sync.RWMutex
 	VMask        *nulls.Nulls
 	FreeFunc     buf.MemoryFreeFunc
 	NodeCapacity uint64

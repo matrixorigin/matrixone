@@ -108,15 +108,15 @@ func (v *StdVector) IsNull(idx int) bool {
 		panic(VecInvalidOffsetErr.Error())
 	}
 	if !v.IsReadonly() {
-		v.VMaskMtx.RLock()
-		defer v.VMaskMtx.RUnlock()
+		v.RLock()
+		defer v.RUnlock()
 	}
 	return v.VMask.Contains(uint64(idx))
 }
 
 func (v *StdVector) SetValue(idx int, val interface{}) {
-	v.VMaskMtx.Lock()
-	defer v.VMaskMtx.Unlock()
+	v.Lock()
+	defer v.Unlock()
 	if idx >= v.Length() {
 		panic(fmt.Sprintf("idx %d is out of range", idx))
 	}
@@ -155,8 +155,8 @@ func (v *StdVector) GetValue(idx int) interface{} {
 		panic(fmt.Sprintf("idx %d is out of range", idx))
 	}
 	if !v.IsReadonly() {
-		v.VMaskMtx.RLock()
-		defer v.VMaskMtx.RLocker()
+		v.RLock()
+		defer v.RLocker()
 	}
 	start := idx * int(v.Type.Size)
 	data := v.Data[start : start+int(v.Type.Size)]
@@ -193,8 +193,8 @@ func (v *StdVector) Append(n int, vals interface{}) error {
 	if v.IsReadonly() {
 		return VecWriteRoErr
 	}
-	v.VMaskMtx.Lock()
-	defer v.VMaskMtx.Unlock()
+	v.Lock()
+	defer v.Unlock()
 	err := v.appendWithOffset(0, n, vals)
 	if err != nil {
 		return err
@@ -257,8 +257,8 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	if v.IsReadonly() {
 		return 0, VecWriteRoErr
 	}
-	v.VMaskMtx.Lock()
-	defer v.VMaskMtx.Unlock()
+	v.Lock()
+	defer v.Unlock()
 	n = v.Capacity() - v.Length()
 	if n > vec.Length()-offset {
 		n = vec.Length() - offset
@@ -318,7 +318,7 @@ func (v *StdVector) SliceReference(start, end int) *StdVector {
 }
 
 // func (v *StdVector) SetNull(idx int) error {
-// 	v.VMaskMtx.Lock()
+// 	v.Lock()
 // 	mask := atomic.LoadUint64(&v.StatMask)
 // 	if mask&ReadonlyMask != 0 {
 // 		return VecWriteRoErr
@@ -328,7 +328,7 @@ func (v *StdVector) SliceReference(start, end int) *StdVector {
 // 		return VecInvalidOffsetErr
 // 	}
 
-// 	v.VMaskMtx.Unlock()
+// 	v.Unlock()
 // 	newMask := mask | HasNullMask
 // 	v.VMask.Add(uint64(idx))
 
@@ -336,8 +336,8 @@ func (v *StdVector) SliceReference(start, end int) *StdVector {
 
 func (v *StdVector) GetLatestView() *StdVector {
 	if !v.IsReadonly() {
-		v.VMaskMtx.RLock()
-		defer v.VMaskMtx.RUnlock()
+		v.RLock()
+		defer v.RUnlock()
 	}
 	mask := atomic.LoadUint64(&v.StatMask)
 	endPos := int(mask & PosMask)
