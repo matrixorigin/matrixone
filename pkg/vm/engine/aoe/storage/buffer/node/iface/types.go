@@ -116,9 +116,11 @@ type INodeHandle interface {
 	GetBuffer() buf.IBuffer
 	IsSpillable() bool
 	Clean() error
+	String() string
 }
 
 type IBufferHandle interface {
 	io.Closer
 	GetID() uint64
+	GetHandle() INodeHandle
 }

@@ -25,7 +25,11 @@ type Snapshot struct {
 	Ids       []uint64
 	ScanAll   bool
 	State     int32
-	trace     struct {
+	tree      struct {
+		sync.RWMutex
+		Segments map[uint64]*Segment
+	}
+	trace struct {
 		sync.RWMutex
 		Iterators map[dbi.ISegmentIt]bool
 	}
@@ -40,6 +44,7 @@ func NewSnapshot(ids []uint64, attrs []int, td iface.ITableData) *Snapshot {
 		State:     Active,
 	}
 	ss.trace.Iterators = make(map[dbi.ISegmentIt]bool)
+	ss.tree.Segments = make(map[uint64]*Segment)
 
 	return ss
 }
@@ -47,6 +52,7 @@ func NewSnapshot(ids []uint64, attrs []int, td iface.ITableData) *Snapshot {
 func NewEmptySnapshot() *Snapshot {
 	ss := new(Snapshot)
 	ss.trace.Iterators = make(map[dbi.ISegmentIt]bool)
+	ss.tree.Segments = make(map[uint64]*Segment)
 	return ss
 }
 
@@ -62,10 +68,25 @@ func NewLinkAllSnapshot(attrs []int, td iface.ITableData) *Snapshot {
 
 func (ss *Snapshot) GetSegment(id uint64) dbi.ISegment {
 	if ss.TableData != nil {
-		seg := &Segment{
-			Data: ss.TableData.WeakRefSegment(id),
+		ss.tree.RLock()
+		seg := ss.tree.Segments[id]
+		if seg != nil {
+			ss.tree.RUnlock()
+			return seg
+		}
+		ss.tree.RUnlock()
+		ss.tree.Lock()
+		seg = ss.tree.Segments[id]
+		if seg != nil {
+			ss.tree.Unlock()
+			return seg
+		}
+		seg = &Segment{
+			Data: ss.TableData.StrongRefSegment(id),
 			Attr: ss.Attr,
 		}
+		ss.tree.Segments[id] = seg
+		ss.tree.Unlock()
 		return seg
 	}
 	return nil
@@ -94,6 +115,11 @@ func (ss *Snapshot) Close() error {
 		// for it := range ss.trace.Iterators {
 		// 	delete(ss.trace.Iterators, it)
 		// }
+		ss.tree.Lock()
+		for _, seg := range ss.tree.Segments {
+			seg.Data.Unref()
+		}
+		ss.tree.Unlock()
 		ss.trace.Unlock()
 		if ss.TableData != nil {
 			// TODO: Implement TableData ref logic

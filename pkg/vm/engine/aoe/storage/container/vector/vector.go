@@ -11,9 +11,8 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"os"
 	"reflect"
+	"sync/atomic"
 	"unsafe"
-
-	"github.com/cockroachdb/errors"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -25,13 +24,14 @@ type IVector interface {
 	SetValue(v interface{})
 	GetValue() interface{}
 	Append(interface{}) error
-	AppendWithOffset(int, interface{}) error
 	AppendVector(*ro.Vector, int) (int, error)
 	Length() int
 	Capacity() int
 	DataBytes() int
 	Close() error
-	Window(start, end int) IVector
+	IsReadonly() bool
+	SliceReference(start, end int) IVector
+	// ReadonlyView()
 }
 
 func NewStdVector(t types.Type, capacity uint64) *StdVector {
@@ -69,8 +69,16 @@ func (v *StdVector) Close() error {
 	return nil
 }
 
+func (v *StdVector) HasNull() bool {
+	return atomic.LoadUint64(&v.StatMask)&HasNullMask != 0
+}
+
+func (v *StdVector) IsReadonly() bool {
+	return atomic.LoadUint64(&v.StatMask)&ReadonlyMask != 0
+}
+
 func (v *StdVector) Length() int {
-	return len(v.Data) / int(v.Type.Size)
+	return int(atomic.LoadUint64(&v.StatMask) & PosMask)
 }
 
 func (v *StdVector) Capacity() int {
@@ -95,7 +103,23 @@ func (v *StdVector) GetMemoryCapacity() uint64 {
 	return v.NodeCapacity
 }
 
+func (v *StdVector) IsNull(idx int) bool {
+	if idx >= v.Length() {
+		panic(VecInvalidOffsetErr.Error())
+	}
+	if !v.IsReadonly() {
+		v.RLock()
+		defer v.RUnlock()
+	}
+	return v.VMask.Contains(uint64(idx))
+}
+
 func (v *StdVector) SetValue(idx int, val interface{}) {
+	v.Lock()
+	defer v.Unlock()
+	if idx >= v.Length() {
+		panic(fmt.Sprintf("idx %d is out of range", idx))
+	}
 	start := idx * int(v.Type.Size)
 	switch v.Type.Oid {
 	case types.T_int8:
@@ -127,6 +151,13 @@ func (v *StdVector) SetValue(idx int, val interface{}) {
 }
 
 func (v *StdVector) GetValue(idx int) interface{} {
+	if idx >= v.Length() || idx < 0 {
+		panic(fmt.Sprintf("idx %d is out of range", idx))
+	}
+	if !v.IsReadonly() {
+		v.RLock()
+		defer v.RLocker()
+	}
 	start := idx * int(v.Type.Size)
 	data := v.Data[start : start+int(v.Type.Size)]
 	switch v.Type.Oid {
@@ -159,10 +190,27 @@ func (v *StdVector) GetValue(idx int) interface{} {
 }
 
 func (v *StdVector) Append(n int, vals interface{}) error {
-	return v.AppendWithOffset(0, n, vals)
+	if v.IsReadonly() {
+		return VecWriteRoErr
+	}
+	v.Lock()
+	defer v.Unlock()
+	err := v.appendWithOffset(0, n, vals)
+	if err != nil {
+		return err
+	}
+
+	mask := v.StatMask & (^PosMask)
+	pos := uint64(len(v.Data)/int(v.Type.Size)) & PosMask
+	mask = mask | pos
+	if len(v.Data) == cap(v.Data) {
+		mask = mask | ReadonlyMask
+	}
+	atomic.StoreUint64(&v.StatMask, mask)
+	return nil
 }
 
-func (v *StdVector) AppendWithOffset(offset, n int, vals interface{}) error {
+func (v *StdVector) appendWithOffset(offset, n int, vals interface{}) error {
 	var data []byte
 	switch v.Type.Oid {
 	case types.T_int8:
@@ -204,38 +252,109 @@ func (v *StdVector) AppendWithOffset(offset, n int, vals interface{}) error {
 
 func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) {
 	if offset < 0 || offset >= vec.Length() {
-		return n, errors.New("invalid offset")
+		return n, VecInvalidOffsetErr
 	}
+	if v.IsReadonly() {
+		return 0, VecWriteRoErr
+	}
+	v.Lock()
+	defer v.Unlock()
 	n = v.Capacity() - v.Length()
 	if n > vec.Length()-offset {
 		n = vec.Length() - offset
 	}
 	startRow := v.Length()
 
-	err = v.AppendWithOffset(offset, n, vec.Col)
+	err = v.appendWithOffset(offset, n, vec.Col)
 	if err != nil {
 		return n, err
 	}
-	if vec.Nsp.Np == nil {
-		return n, err
-	}
-
-	for row := startRow; row < v.Length(); row++ {
-		if vec.Nsp.Contains(uint64(offset + row - startRow)) {
-			v.VMask.Add(uint64(row))
+	if vec.Nsp.Np != nil {
+		for row := startRow; row < startRow+vec.Length(); row++ {
+			if vec.Nsp.Contains(uint64(offset + row - startRow)) {
+				v.VMask.Add(uint64(row))
+			}
 		}
 	}
+	mask := v.StatMask & (^PosMask)
+	pos := uint64(len(v.Data)/int(v.Type.Size)) & PosMask
+	mask = mask | pos
+	if len(v.Data) == cap(v.Data) {
+		mask = mask | ReadonlyMask
+	}
+	if v.VMask.Any() {
+		mask = mask | HasNullMask
+	}
+	atomic.StoreUint64(&v.StatMask, mask)
 
 	return n, err
 }
 
-func (v *StdVector) Window(start, end int) *StdVector {
+func (v *StdVector) SliceReference(start, end int) *StdVector {
+	if !v.IsReadonly() {
+		panic("should call this in ro mode")
+	}
 	startIdx := start * int(v.Type.Size)
 	endIdx := end * int(v.Type.Size)
+	mask := ReadonlyMask | (uint64(end-start) & PosMask)
 	vec := &StdVector{
-		Type:  v.Type,
-		Data:  v.Data[startIdx:endIdx],
-		VMask: v.VMask.Range(uint64(start), uint64(end)),
+		Type: v.Type,
+		Data: v.Data[startIdx:endIdx],
+	}
+	if v.VMask.Np != nil {
+		vmask := v.VMask.Range(uint64(start), uint64(end))
+		vec.VMask = vmask
+		if vmask.Any() {
+			mask = mask | HasNullMask
+		}
+	} else {
+		vec.VMask = &nulls.Nulls{}
+	}
+	vec.StatMask = mask
+	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data))
+	hp.Cap = hp.Len
+	vec.Data = *(*[]byte)(unsafe.Pointer(&hp))
+	return vec
+}
+
+// func (v *StdVector) SetNull(idx int) error {
+// 	v.Lock()
+// 	mask := atomic.LoadUint64(&v.StatMask)
+// 	if mask&ReadonlyMask != 0 {
+// 		return VecWriteRoErr
+// 	}
+// 	pos := mask | PosMask
+// 	if idx >= int(pos) {
+// 		return VecInvalidOffsetErr
+// 	}
+
+// 	v.Unlock()
+// 	newMask := mask | HasNullMask
+// 	v.VMask.Add(uint64(idx))
+
+// }
+
+func (v *StdVector) GetLatestView() *StdVector {
+	if !v.IsReadonly() {
+		v.RLock()
+		defer v.RUnlock()
+	}
+	mask := atomic.LoadUint64(&v.StatMask)
+	endPos := int(mask & PosMask)
+	endIdx := endPos * int(v.Type.Size)
+	vec := &StdVector{
+		StatMask: ReadonlyMask | mask,
+		Type:     v.Type,
+		Data:     v.Data[0:endIdx],
+	}
+	if mask&HasNullMask != 0 {
+		if mask&ReadonlyMask == 0 {
+			vec.VMask = v.VMask.Range(0, uint64(endPos))
+		} else {
+			vec.VMask = v.VMask.Range(0, uint64(endPos))
+		}
+	} else {
+		vec.VMask = &nulls.Nulls{}
 	}
 	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data))
 	hp.Cap = hp.Len
@@ -244,6 +363,9 @@ func (v *StdVector) Window(start, end int) *StdVector {
 }
 
 func (v *StdVector) CopyToVector() *ro.Vector {
+	if atomic.LoadUint64(&v.StatMask)&ReadonlyMask == 0 {
+		panic("should call in ro mode")
+	}
 	length := v.Length()
 	vec := ro.New(v.Type)
 	switch v.Type.Oid {
@@ -368,6 +490,8 @@ func (vec *StdVector) Unmarshall(data []byte) error {
 	buf := data
 	vec.NodeCapacity = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
+	vec.StatMask = encoding.DecodeUint64(buf[:8])
+	buf = buf[8:]
 	vec.Type = encoding.DecodeType(buf[:encoding.TypeSize])
 	buf = buf[encoding.TypeSize:]
 	nb := encoding.DecodeUint32(buf[:4])
@@ -385,6 +509,7 @@ func (vec *StdVector) Unmarshall(data []byte) error {
 func (vec *StdVector) Marshall() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeUint64(uint64(0)))
+	buf.Write(encoding.EncodeUint64(vec.StatMask))
 	buf.Write(encoding.EncodeType(vec.Type))
 	nb, err := vec.VMask.Show()
 	if err != nil {
