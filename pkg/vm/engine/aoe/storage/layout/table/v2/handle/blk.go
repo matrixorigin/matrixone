@@ -2,7 +2,7 @@ package handle
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 )
 
 var (
@@ -11,23 +11,33 @@ var (
 
 type Block struct {
 	Host *Segment
-	Data iface.IBlock
+	Id   uint64
+	// Data iface.IBlock
 }
 
 func (blk *Block) Prefetch() dbi.IBlockHandle {
-	return blk.Data.StrongWrappedBlock(blk.Host.Attr)
+	realBlk := blk.Host.Data.StrongRefBlock(blk.Id)
+	defer realBlk.Unref()
+	return realBlk.StrongWrappedBlock(blk.Host.Attr)
+	// return blk.Data.StrongWrappedBlock(blk.Host.Attr)
 }
 
 func (blk *Block) GetID() uint64 {
-	return blk.Data.GetMeta().ID
+	return blk.Id
+	// return blk.Data.GetMeta().ID
 }
 
 func (blk *Block) GetSegmentID() uint64 {
-	return blk.Data.GetMeta().Segment.ID
+	realBlk := blk.Host.Data.StrongRefBlock(blk.Id)
+	defer realBlk.Unref()
+	return realBlk.GetMeta().Segment.ID
+	// return blk.Data.GetMeta().Segment.ID
 }
 
 func (blk *Block) GetTableID() uint64 {
-	return blk.Data.GetMeta().Segment.TableID
+	realBlk := blk.Host.Data.StrongRefBlock(blk.Id)
+	defer realBlk.Unref()
+	return realBlk.GetMeta().Segment.TableID
 }
 
 // func (blk *Block) Close() error {

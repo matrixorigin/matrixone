@@ -44,7 +44,9 @@ func (n *Node) GetManagedNode() bmgrif.MangaedNode {
 	for mnode.Handle == nil {
 		mnode.Handle = n.BufMgr.Pin(n.BufNode)
 	}
-	mnode.DataNode = n.BufNode.GetBuffer().GetDataNode()
+	b := mnode.Handle.GetHandle().GetBuffer()
+	mnode.DataNode = b.GetDataNode()
+	// mnode.DataNode = n.BufNode.GetBuffer().GetDataNode()
 	return mnode
 }
 

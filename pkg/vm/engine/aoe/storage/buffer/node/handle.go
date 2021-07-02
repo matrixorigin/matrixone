@@ -57,6 +57,11 @@ func (h *NodeHandle) GetBuffer() buf.IBuffer {
 	return h.Buff
 }
 
+func (h *NodeHandle) String() string {
+	s := fmt.Sprintf("<NodeHandle>(Refs=%d)", atomic.LoadUint64(&h.Refs))
+	return s
+}
+
 func (h *NodeHandle) Unload() {
 	if nif.AtomicLoadState(&h.State) == nif.NODE_UNLOAD {
 		return
@@ -222,4 +227,8 @@ func (h *BufferHandle) GetID() uint64 {
 func (h *BufferHandle) Close() error {
 	h.Manager.Unpin(h.Handle)
 	return nil
+}
+
+func (h *BufferHandle) GetHandle() nif.INodeHandle {
+	return h.Handle
 }

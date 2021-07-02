@@ -40,7 +40,8 @@ func (seg *Segment) GetBlock(id uint64) dbi.IBlock {
 		return nil
 	}
 	blk := &Block{
-		Data: data,
+		Id: id,
+		// Data: data,
 		Host: seg,
 	}
 	return blk

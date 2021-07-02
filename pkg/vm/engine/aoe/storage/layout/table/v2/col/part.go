@@ -52,7 +52,7 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 		vvf := vf.(base.IVirtaulFile)
 		// Only in mock case, the stat is nil
 		if stat := vvf.Stat(); stat != nil {
-			part.Capacity = uint64(vvf.Stat().Size())
+			capacity = uint64(stat.Size())
 		}
 	}
 	node := bufMgr.CreateNode(vf, vector.StdVectorConstructor, capacity)
