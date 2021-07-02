@@ -117,7 +117,7 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 		return err
 	}
 
-	collection := d.MemTableMgr.GetCollection(tbl.GetID())
+	collection := d.MemTableMgr.StrongRefCollection(tbl.GetID())
 	if collection == nil {
 		opCtx := &mdops.OpCtx{
 			Opts:        d.Opts,
@@ -139,6 +139,7 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 	}
 
 	clonedIndex := *index
+	defer collection.Unref()
 	return collection.Append(bat, &clonedIndex)
 }
 
@@ -158,6 +159,17 @@ func (d *DB) DropTable(name string) (id uint64, err error) {
 	op := mops.NewDropTblOp(opCtx, name, d.store.DataTables)
 	op.Push()
 	err = op.WaitDone()
+	// if err != nil {
+	// 	return id, err
+	// }
+	// op2Ctx := &mdops.OpCtx{Opts: d.Opts, Tables: d.store.DataTables}
+	// op2 := mdops.NewDropTblOp(op2Ctx, op.Id)
+	// op2.Push()
+	// err = op2.WaitDone()
+	// if err != nil && err != table.NotExistErr {
+	// 	panic(err)
+	// }
+	// err = nil
 	return op.Id, err
 }
 

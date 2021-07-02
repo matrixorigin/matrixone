@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"context"
+	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -18,8 +19,9 @@ import (
 )
 
 type MemTable struct {
-	Opts *engine.Options
 	sync.RWMutex
+	common.RefHelper
+	Opts      *engine.Options
 	TableData iface.ITableData
 	Data      *chunk.Chunk
 	Full      bool
@@ -52,11 +54,21 @@ func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IB
 		Vectors: vectors,
 	}
 
+	mt.OnZeroCB = mt.close
+	mt.Ref()
 	return mt
 }
 
 func (mt *MemTable) GetID() common.ID {
 	return mt.Meta.AsCommonID().AsBlockID()
+}
+
+func (mt *MemTable) String() string {
+	mt.RLock()
+	defer mt.RUnlock()
+	id := mt.GetID()
+	s := fmt.Sprintf("<MT[%s]>(Refs=%d)(Count=%d)", id.BlockString(), mt.RefCount(), mt.Data.GetCount())
+	return s
 }
 
 func (mt *MemTable) Append(bat *batch.Batch, offset uint64, index *md.LogIndex) (n uint64, err error) {
@@ -163,13 +175,19 @@ func (mt *MemTable) Unpin() {
 	}
 }
 
-func (mt *MemTable) Close() error {
+func (mt *MemTable) close() {
 	if mt.Handle != nil {
 		mt.Handle.Close()
 		mt.Handle = nil
 	}
-	mt.Block.Unref()
-	return nil
+	if mt.Block != nil {
+		mt.Block.Unref()
+		mt.Block = nil
+	}
+	if mt.TableData != nil {
+		mt.TableData.Unref()
+		mt.TableData = nil
+	}
 }
 
 func (mt *MemTable) IsFull() bool {

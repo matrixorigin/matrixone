@@ -18,7 +18,7 @@ type CreateTableOp struct {
 }
 
 func (op *CreateTableOp) Execute() error {
-	collection := op.Ctx.MTManager.GetCollection(op.Ctx.TableMeta.ID)
+	collection := op.Ctx.MTManager.StrongRefCollection(op.Ctx.TableMeta.ID)
 	if collection != nil {
 		op.Collection = collection
 		return nil
@@ -33,6 +33,7 @@ func (op *CreateTableOp) Execute() error {
 			return err
 		}
 	}
+	tableData.Ref()
 	collection, err = op.Ctx.MTManager.RegisterCollection(tableData)
 	if err != nil {
 		return err

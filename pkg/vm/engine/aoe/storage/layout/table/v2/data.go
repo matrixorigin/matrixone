@@ -15,6 +15,10 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
+var (
+	NotExistErr = errors.New("not exist error")
+)
+
 func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) iface.ITableData {
 	data := &TableData{
 		MTBufMgr:    mtBufMgr,
@@ -305,7 +309,8 @@ func (ts *Tables) DropTable(tid uint64) (err error) {
 func (ts *Tables) DropTableNoLock(tid uint64) (err error) {
 	tbl, ok := ts.Data[tid]
 	if !ok {
-		return errors.New(fmt.Sprintf("Specified table %d not found", tid))
+		// return errors.New(fmt.Sprintf("Specified table %d not found", tid))
+		return NotExistErr
 	}
 	ts.Tombstone[tid] = tbl
 	delete(ts.Ids, tid)
