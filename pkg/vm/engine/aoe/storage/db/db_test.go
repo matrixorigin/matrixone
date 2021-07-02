@@ -147,13 +147,13 @@ func TestAppend(t *testing.T) {
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(tableInfo.Name, ck, logIdx)
 		assert.Nil(t, err)
-		// tbl, err := inst.store.DataTables.GetTable(tid)
+		// tbl, err := inst.store.DataTables.WeakRefTable(tid)
 		// assert.Nil(t, err)
 		// t.Log(tbl.GetCollumn(0).ToString(1000))
 	}
 
 	cols := []int{0, 1}
-	tbl, _ := inst.store.DataTables.GetTable(tid)
+	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 	segIds := tbl.SegmentIds()
 	ssCtx := &dbi.GetSnapshotCtx{
 		TableName:  tableInfo.Name,
@@ -300,10 +300,10 @@ func TestConcurrency(t *testing.T) {
 		defer wg2.Done()
 		reqCnt := 20000
 		for i := 0; i < reqCnt; i++ {
-			tbl, _ := inst.store.DataTables.GetTable(tid)
+			tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 			for tbl == nil {
 				time.Sleep(time.Duration(100) * time.Microsecond)
-				tbl, _ = inst.store.DataTables.GetTable(tid)
+				tbl, _ = inst.store.DataTables.WeakRefTable(tid)
 			}
 			segIds := tbl.SegmentIds()
 			searchReq := &dbi.GetSnapshotCtx{
@@ -321,7 +321,7 @@ func TestConcurrency(t *testing.T) {
 	cancel()
 	wg.Wait()
 	time.Sleep(time.Duration(100) * time.Millisecond)
-	tbl, _ := inst.store.DataTables.GetTable(tid)
+	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 	root := tbl.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
 	opts := &dbi.GetSnapshotCtx{

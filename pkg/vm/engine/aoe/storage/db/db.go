@@ -188,7 +188,7 @@ func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	if tableMeta.GetSegmentCount() == uint64(0) {
 		return handle.NewEmptySnapshot(), nil
 	}
-	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
+	tableData, err := d.store.DataTables.StrongRefTable(tableMeta.ID)
 	if err != nil {
 		return nil, err
 	}

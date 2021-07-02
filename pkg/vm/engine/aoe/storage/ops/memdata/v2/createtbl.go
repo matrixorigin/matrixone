@@ -25,7 +25,7 @@ func (op *CreateTableOp) Execute() error {
 	}
 	meta := op.Ctx.TableMeta
 
-	tableData, err := op.Ctx.Tables.GetTable(meta.ID)
+	tableData, err := op.Ctx.Tables.StrongRefTable(meta.ID)
 	if err != nil {
 		tableData = table.NewTableData(op.Ctx.FsMgr, op.Ctx.IndexBufMgr, op.Ctx.MTBufMgr, op.Ctx.SSTBufMgr, meta)
 		err = op.Ctx.Tables.CreateTable(tableData)
