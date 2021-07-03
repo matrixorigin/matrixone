@@ -99,10 +99,10 @@ func (wk *Worker) heartbeat() {
 }
 
 func (wk *Worker) process() {
-	wk.exec.RLock()
+	wk.exec.Lock()
 	reqs := wk.exec.reqs
 	wk.exec.reqs = wk.exec.reqs[:0]
-	wk.exec.RUnlock()
+	wk.exec.Unlock()
 	for _, req := range reqs {
 		wk.exec.worker.SendOp(req)
 		if req.GetIteration() >= 1000 {
