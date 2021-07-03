@@ -157,10 +157,12 @@ func (v *StdVector) GetValue(idx int) interface{} {
 	}
 	if !v.IsReadonly() {
 		v.RLock()
-		defer v.RLocker()
 	}
 	start := idx * int(v.Type.Size)
 	data := v.Data[start : start+int(v.Type.Size)]
+	if !v.IsReadonly() {
+		v.RUnlock()
+	}
 	switch v.Type.Oid {
 	case types.T_int8:
 		return encoding.DecodeInt8(data)

@@ -3,7 +3,6 @@ package table
 import (
 	"errors"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -13,6 +12,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -56,7 +56,7 @@ func (td *TableData) close() {
 	for _, segment := range td.tree.Segments {
 		segment.Unref()
 	}
-	log.Infof("table %d noref", td.Meta.ID)
+	// log.Infof("table %d noref", td.Meta.ID)
 }
 
 func (td *TableData) GetIndexHolder() *index.TableHolder {
