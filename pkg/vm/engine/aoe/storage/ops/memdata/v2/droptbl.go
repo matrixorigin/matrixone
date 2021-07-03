@@ -1,7 +1,8 @@
 package memdata
 
 import (
-// log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 )
 
 func NewDropTblOp(ctx *OpCtx, id uint64) *DropTblOp {
@@ -12,9 +13,12 @@ func NewDropTblOp(ctx *OpCtx, id uint64) *DropTblOp {
 
 type DropTblOp struct {
 	Op
-	Id uint64
+	Id    uint64
+	Table iface.ITableData
 }
 
 func (op *DropTblOp) Execute() error {
-	return op.Ctx.Tables.DropTable(op.Id)
+	tbl, err := op.Ctx.Tables.DropTable(op.Id)
+	op.Table = tbl
+	return err
 }

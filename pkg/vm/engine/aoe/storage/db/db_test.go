@@ -388,7 +388,7 @@ func TestConcurrency(t *testing.T) {
 	inst.Close()
 }
 
-func TestGC(t *testing.T) {
+func TestDropTable2(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
@@ -406,7 +406,7 @@ func TestGC(t *testing.T) {
 		Capacity: uint64(baseCk.Vecs[0].Length()),
 	}
 
-	insertCnt := uint64(4)
+	insertCnt := uint64(1)
 
 	var wg sync.WaitGroup
 	{
@@ -419,10 +419,16 @@ func TestGC(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	time.Sleep(time.Duration(40) * time.Millisecond)
+	// tbl, _ := inst.store.DataTables.WeakRefTable(tid)
+	// t.Log(tbl.String())
+
+	inst.DropTable(tablet.Name)
+	time.Sleep(time.Duration(200) * time.Millisecond)
+
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
 	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	t.Log(inst.MemTableMgr.String())
 	inst.Close()
 }
