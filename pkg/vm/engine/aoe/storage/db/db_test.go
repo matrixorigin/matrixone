@@ -421,6 +421,11 @@ func TestDropTable2(t *testing.T) {
 	wg.Wait()
 	// tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 	// t.Log(tbl.String())
+	time.Sleep(time.Duration(200) * time.Millisecond)
+
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 
 	inst.DropTable(tablet.Name)
 	time.Sleep(time.Duration(200) * time.Millisecond)
@@ -428,7 +433,7 @@ func TestDropTable2(t *testing.T) {
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
-	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	t.Log(inst.MemTableMgr.String())
+	assert.Equal(t, 0, inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	inst.Close()
 }

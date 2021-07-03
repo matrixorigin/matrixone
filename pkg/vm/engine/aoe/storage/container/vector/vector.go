@@ -47,6 +47,7 @@ func NewStdVectorNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryN
 		Data:         make([]byte, 0),
 		VMask:        &nulls.Nulls{},
 		NodeCapacity: capacity,
+		AllocSize:    capacity,
 		FreeFunc:     freeFunc,
 	}
 }
@@ -100,7 +101,7 @@ func (v *StdVector) GetMemorySize() uint64 {
 }
 
 func (v *StdVector) GetMemoryCapacity() uint64 {
-	return v.NodeCapacity
+	return v.AllocSize
 }
 
 func (v *StdVector) IsNull(idx int) bool {
