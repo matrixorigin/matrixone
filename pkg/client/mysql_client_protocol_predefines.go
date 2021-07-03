@@ -1,5 +1,10 @@
 package client
 
+import (
+	"fmt"
+	"strings"
+)
+
 //tuple (collation id, collation name)
 type collationIDName struct {
 	collationID int
@@ -11484,4 +11489,36 @@ var errorMsgRefer=map[uint16]errorMsgItem{
 	ER_FIREWALL_PFS_TABLE_REGISTER_FAILED : {13705,[]string{"HY000"},"Automatic registration of Performance schema table(s) failed."},
 	ER_IB_MSG_STATS_SAMPLING_TOO_LARGE : {13706,[]string{"HY000"},"%s"},
 
+}
+
+type MysqlError struct {
+	error
+	ErrorCode uint16
+	SqlState string
+	Format string
+	Args []interface{}
+}
+
+func (me *MysqlError) Error() string {
+	cnt := strings.Count(me.Format,"%")
+	return fmt.Sprintf(me.Format,me.Args[:cnt]...)
+}
+
+func NewMysqlError(code uint16,args ...interface{})*MysqlError{
+	if errItem,ok := errorMsgRefer[code];!ok {
+		defaultErr := errorMsgRefer[ER_UNKNOWN_ERROR]
+		return &MysqlError{
+			ErrorCode: ER_UNKNOWN_ERROR,
+			SqlState:  defaultErr.sqlStates[0],
+			Format: 	defaultErr.errorMsgOrFormat,
+			Args: args,
+		}
+	}else{
+		return &MysqlError{
+			ErrorCode: code,
+			SqlState:  errItem.sqlStates[0],
+			Format:    errItem.errorMsgOrFormat,
+			Args: args,
+		}
+	}
 }

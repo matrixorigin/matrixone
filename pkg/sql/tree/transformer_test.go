@@ -23,7 +23,9 @@ func TestParser(t *testing.T) {
 	p := parser.New()
 
 	sql := `
-create table t(a date,b datetime(2),c timestamp(3),d time(3),e year,f year(4))
+grant proxy on u1
+to u2,u3,u4
+WITH GRANT OPTION
 ;`
 
 	stmtNodes, _, err := p.Parse(sql, "", "")
@@ -80,15 +82,39 @@ create table t(a date,b datetime(2),c timestamp(3),d time(3),e year,f year(4))
 			fmt.Printf("ss %v \n",ss.String())
 		case *ast.ShowStmt:
 			s := transformShowStmtToShow(n)
-			ss := s.(*ShowColumns)
+			ss := s.(*ShowIndex)
 
-			fmt.Printf("ss %v \n",ss.String())
+			fmt.Printf("ss %v \n",ss.showImpl)
 		case *ast.ExplainStmt:
 			s := transformExplainStmtToExplain(n)
 
 			ss := s.(*ExplainStmt)
 
 			fmt.Printf("ss %v \n",ss.Statement != nil)
+		case *ast.CreateIndexStmt:
+			s := transformCreateIndexStmtToCreateIndex(n)
+
+			fmt.Printf("s %v \n",s.IfNotExists)
+		case *ast.DropIndexStmt:
+			s := transformDropIndexStmtToDropIndex(n)
+
+			fmt.Printf("s %v \n",s.IfExists)
+		case *ast.CreateUserStmt:
+			s := transformCreatUserStmtToCreateUser(n)
+
+			fmt.Printf("s %v \n",s.IfNotExists)
+		case *ast.DropUserStmt:
+			s := transformDropUserStmtToDropUser(n)
+
+			fmt.Printf("s %v \n",s.IfExists)
+		case *ast.RevokeStmt:
+			s := transformRevokeStmtToRevoke(n)
+
+			fmt.Printf("s %v \n",s.Users != nil)
+		case *ast.RevokeRoleStmt:
+			s := transformRevokeRoleStmtToRevoke(n)
+
+			fmt.Printf("s %v \n",s.Users != nil)
 		}
 
 	}
@@ -640,7 +666,7 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 	t53Fname,_ := NewUnresolvedName("avg")
 	t53Want := NewFuncExpr(FUNC_TYPE_DISTINCT,t53Fname,[]Expr{f1,f2,f3},nil)
 
-	//FuncCastExpr cast 
+	//FuncCastExpr cast
 	t54 := &ast.FuncCastExpr{
 		Expr:            e1,
 		Tp:              types.NewFieldType(mysql.TypeFloat),
@@ -6210,6 +6236,84 @@ where a!=0
 	return n,NewShowVariables(true,nil,where)
 }
 
+func generate_show_index_1()(*ast.ShowStmt,*ShowIndex) {
+	sql := `
+show index from A from db where a != 0
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+
+	w := NewComparisonExpr(NOT_EQUAL,aname,f0)
+	where := NewWhere(w)
+
+	want := &ShowIndex{
+		TableName: TableName{
+			objName:   objName{
+				ObjectNamePrefix: ObjectNamePrefix{
+					CatalogName: "",
+					SchemaName: "db",
+					ExplicitCatalog: false,
+					ExplicitSchema: true,
+				},
+				ObjectName:       "A",
+			},
+		},
+		Where:     where,
+	}
+	return n,want
+}
+
+func generate_show_index_2()(*ast.ShowStmt,*ShowIndex) {
+	sql := `
+show index from A where a != 0
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.ShowStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+
+	w := NewComparisonExpr(NOT_EQUAL,aname,f0)
+	where := NewWhere(w)
+
+	want := &ShowIndex{
+		TableName: TableName{
+			objName:   objName{
+				ObjectNamePrefix: ObjectNamePrefix{
+					CatalogName: "",
+					SchemaName: "",
+					ExplicitCatalog: false,
+					ExplicitSchema: false,
+				},
+				ObjectName:       "A",
+			},
+		},
+		Where:     where,
+	}
+	return n,want
+}
+
 func Test_transformShowStmtToShow(t *testing.T) {
 	type args struct {
 		ss *ast.ShowStmt
@@ -6231,6 +6335,8 @@ func Test_transformShowStmtToShow(t *testing.T) {
 	t14,t14_want := generate_show_variables_1()
 	t15,t15_want := generate_show_variables_2()
 	t16,t16_want := generate_show_variables_3()
+	t17,t17_want := generate_show_index_1()
+	t18,t18_want := generate_show_index_2()
 
 	tests := []struct {
 		name string
@@ -6253,6 +6359,8 @@ func Test_transformShowStmtToShow(t *testing.T) {
 		{"t14",args{t14},t14_want},
 		{"t15",args{t15},t15_want},
 		{"t16",args{t16},t16_want},
+		{"t17",args{t17},t17_want},
+		{"t18",args{t18},t18_want},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -6688,6 +6796,1384 @@ func Test_transformSetStmtToSetVar(t *testing.T) {
 			if got := transformSetStmtToSetVar(tt.args.ss);
 			!reflect.DeepEqual(got, tt.want) {
 				t.Errorf("transformSetStmtToSetVar() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_create_index_1()(*ast.CreateIndexStmt,*CreateIndex) {
+	sql := `
+create  unique index if not exists idx1
+using btree
+on A (a,b(10),(a+b),(a-b))
+KEY_BLOCK_SIZE 10
+with parser x
+comment 'x'
+visible
+lock = default
+algorithm = default
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.CreateIndexStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	//cname,_ := NewUnresolvedName("","","c")
+
+	kps := []*KeyPart {
+		NewKeyPart(aname,-1,nil),
+		NewKeyPart(bname,10,nil),
+		NewKeyPart(nil,0,NewBinaryExpr(PLUS,aname,bname)),
+		NewKeyPart(nil,0,NewBinaryExpr(MINUS,aname,bname)),
+	}
+
+	io := &IndexOption{
+		KeyBlockSize:             10,
+		iType:                    INDEX_TYPE_BTREE,
+		ParserName:               "x",
+		Comment:                  "x",
+		Visible:                  VISIBLE_TYPE_VISIBLE,
+		EngineAttribute:          "",
+		SecondaryEngineAttribute: "",
+	}
+
+	want := &CreateIndex{
+		Name:          "idx1",
+		Table:         TableName{
+			objName:   objName{
+				ObjectNamePrefix: ObjectNamePrefix{},
+				ObjectName:       "A",
+			},
+		},
+		IndexCat:      INDEX_CATEGORY_UNIQUE,
+		IfNotExists:   true,
+		KeyParts:      kps,
+		IndexOption:   io,
+		MiscOption:    nil,
+	}
+
+	return n, want
+}
+
+func generate_create_index_2()(*ast.CreateIndexStmt,*CreateIndex) {
+	sql := `
+create index idx1
+on A (a,b(10),(a+b),(a-b))
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.CreateIndexStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	//cname,_ := NewUnresolvedName("","","c")
+
+	kps := []*KeyPart {
+		NewKeyPart(aname,-1,nil),
+		NewKeyPart(bname,10,nil),
+		NewKeyPart(nil,0,NewBinaryExpr(PLUS,aname,bname)),
+		NewKeyPart(nil,0,NewBinaryExpr(MINUS,aname,bname)),
+	}
+
+	io := &IndexOption{
+		KeyBlockSize:             0,
+		iType:                    INDEX_TYPE_INVALID,
+		ParserName:               "",
+		Comment:                  "",
+		Visible:                  VISIBLE_TYPE_INVALID,
+		EngineAttribute:          "",
+		SecondaryEngineAttribute: "",
+	}
+
+	want := &CreateIndex{
+		Name:          "idx1",
+		Table:         TableName{
+			objName:   objName{
+				ObjectNamePrefix: ObjectNamePrefix{},
+				ObjectName:       "A",
+			},
+		},
+		IndexCat:      INDEX_CATEGORY_NONE,
+		IfNotExists:   false,
+		KeyParts:      kps,
+		IndexOption:   io,
+		MiscOption:    nil,
+	}
+
+	return n, want
+}
+
+func Test_transformCreateIndexStmtToCreateIndex(t *testing.T) {
+	type args struct {
+		cis *ast.CreateIndexStmt
+	}
+
+	t1,t1_want := generate_create_index_1()
+	t2,t2_want := generate_create_index_2()
+
+	tests := []struct {
+		name string
+		args args
+		want *CreateIndex
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformCreateIndexStmtToCreateIndex(tt.args.cis);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformCreateIndexStmtToCreateIndex() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_drop_index1()(*ast.DropIndexStmt,*DropIndex) {
+	sql := `
+drop index if exists idx1 on A
+algorithm default
+lock default
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.DropIndexStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &DropIndex{
+		Name:          "idx1",
+		TableName:     TableName{
+			objName:   objName{
+				ObjectName:       "A",
+			},
+		},
+		IfExists:      true,
+		MiscOption:    nil,
+	}
+
+	return n, want
+}
+
+func generate_drop_index2()(*ast.DropIndexStmt,*DropIndex) {
+	sql := `
+drop index idx1 on A
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.DropIndexStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &DropIndex{
+		Name:          "idx1",
+		TableName:     TableName{
+			objName:   objName{
+				ObjectName:       "A",
+			},
+		},
+		IfExists:      false,
+		MiscOption:    nil,
+	}
+
+	return n, want
+}
+
+func Test_transformDropIndexStmt(t *testing.T) {
+	type args struct {
+		dis *ast.DropIndexStmt
+	}
+
+	t1,t1_want := generate_drop_index1()
+	t2,t2_want := generate_drop_index2()
+
+	tests := []struct {
+		name string
+		args args
+		want *DropIndex
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformDropIndexStmtToDropIndex(tt.args.dis); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformDropIndexStmt() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_create_role_1()(*ast.CreateUserStmt,*CreateRole){
+	sql := `
+create role if not exists 'a','b','a'@'b'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.CreateUserStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	r := []*Role{
+		NewRole("a","%"),
+		NewRole("b","%"),
+		NewRole("a","b"),
+	}
+
+	want := &CreateRole{
+		IfNotExists:   true,
+		Roles:         r,
+	}
+
+	return n, want
+}
+
+func generate_create_role_2()(*ast.CreateUserStmt,*CreateRole){
+	sql := `
+create role 'a'@'b'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.CreateUserStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	r := []*Role{
+		NewRole("a","b"),
+	}
+
+	want := &CreateRole{
+		IfNotExists:   false,
+		Roles:         r,
+	}
+
+	return n, want
+}
+
+func Test_transformCreateUserStmtToCreateRole(t *testing.T) {
+	type args struct {
+		cus *ast.CreateUserStmt
+	}
+
+	t1,t1_want := generate_create_role_1()
+	t2,t2_want := generate_create_role_2()
+
+	tests := []struct {
+		name string
+		args args
+		want *CreateRole
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformCreateUserStmtToCreateRole(tt.args.cus); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformCreateUserStmtToCreateUser() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_drop_role_1()(*ast.DropUserStmt,*DropRole){
+	sql := `
+drop role if exists 'a','b','a'@'b'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.DropUserStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	r := []*Role {
+		NewRole("a","%"),
+		NewRole("b","%"),
+		NewRole("a","b"),
+	}
+
+	want := &DropRole{
+		IfExists:      true,
+		Roles:         r,
+	}
+
+	return n, want
+}
+
+func Test_transformDropUserStmtToDropRole(t *testing.T) {
+	type args struct {
+		dus *ast.DropUserStmt
+	}
+
+	t1,t1_want := generate_drop_role_1()
+
+	tests := []struct {
+		name string
+		args args
+		want *DropRole
+	}{
+		{"t1",args{t1},t1_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformDropUserStmtToDropRole(tt.args.dus); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformDropUserStmtToDropRole() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_create_user_1()(*ast.CreateUserStmt,*CreateUser) {
+	sql := `
+create user if not exists
+u1 identified by 'u1', u2 identified with u2row as 'u2'
+require cipher 'xxx'  subject 'yyy'
+with MAX_QUERIES_PER_HOUR 0 MAX_UPDATES_PER_HOUR 1
+PASSWORD EXPIRE INTERVAL 1 DAY PASSWORD EXPIRE DEFAULT ACCOUNT LOCK ACCOUNT UNLOCK
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.CreateUserStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	users := []*User{
+		NewUser("u1","%","","u1"),
+		NewUser("u2","%","","u2"),//u2row can't be recoginzed
+	}
+
+	tls := []TlsOption{
+		&TlsOptionCipher{Cipher: "xxx"},
+		&TlsOptionSubject{Subject: "yyy"},
+	}
+
+	//f0 := NewNumVal(constant.MakeInt64(0), "0", false)
+	//f1 := NewNumVal(constant.MakeInt64(1), "1", false)
+
+	res := []ResourceOption{
+		&ResourceOptionMaxQueriesPerHour{Count: 0},
+		&ResourceOptionMaxUpdatesPerHour{Count: 1},
+	}
+
+	miscs := []UserMiscOption{
+		&UserMiscOptionPasswordExpireInterval{Value: 1},
+		&UserMiscOptionPasswordExpireDefault{},
+		&UserMiscOptionAccountLock{},
+		&UserMiscOptionAccountUnlock{},
+	}
+
+	want := &CreateUser{
+		IfNotExists:   true,
+		Users:         users,
+		Roles:         nil,
+		TlsOpts:       tls,
+		ResOpts:       res,
+		MiscOpts:      miscs,
+	}
+
+	return n, want
+}
+
+func generate_create_user_2()(*ast.CreateUserStmt,*CreateUser) {
+	sql := `
+create user
+u1 , u2
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.CreateUserStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	users := []*User{
+		NewUser("u1","%","",""),
+		NewUser("u2","%","",""),//u2row can't be recoginzed
+	}
+
+	want := &CreateUser{
+		IfNotExists:   false,
+		Users:         users,
+		Roles:         nil,
+		TlsOpts:       make([]TlsOption,0),
+		ResOpts:       make([]ResourceOption,0),
+		MiscOpts:      make([]UserMiscOption,0),
+	}
+
+	return n, want
+}
+
+func Test_transformCreatUserStmtToCreateUser(t *testing.T) {
+	type args struct {
+		cus *ast.CreateUserStmt
+	}
+
+	t1,t1_want := generate_create_user_1()
+	t2,t2_want := generate_create_user_2()
+
+	tests := []struct {
+		name string
+		args args
+		want *CreateUser
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformCreatUserStmtToCreateUser(tt.args.cus);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformCreatUserStmtToCreateUser() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_drop_user_1()(*ast.DropUserStmt,*DropUser){
+	sql := `
+drop user if exists
+u1 , u2
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.DropUserStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	users := []*User{
+		NewUser("u1","%","",""),
+		NewUser("u2","%","",""),
+	}
+
+	want := &DropUser{
+		IfExists:      true,
+		Users:         users,
+	}
+
+	return n, want
+}
+
+func Test_transformDropUserStmtToDropUser(t *testing.T) {
+	type args struct {
+		dus *ast.DropUserStmt
+	}
+
+	t1,t1_want := generate_drop_user_1()
+
+	tests := []struct {
+		name string
+		args args
+		want *DropUser
+	}{
+		{"t1",args{t1},t1_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformDropUserStmtToDropUser(tt.args.dus); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformDropUserStmtToDropUser() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_alter_user_1() (*ast.AlterUserStmt,*AlterUser) {
+	sql := `
+alter user if exists
+u1 identified by 'u1', u2 identified with u2row as 'u2'
+require cipher 'xxx'  subject 'yyy'
+with MAX_QUERIES_PER_HOUR 0 MAX_UPDATES_PER_HOUR 1
+PASSWORD EXPIRE INTERVAL 1 DAY PASSWORD EXPIRE DEFAULT ACCOUNT LOCK ACCOUNT UNLOCK
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.AlterUserStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	users := []*User{
+		NewUser("u1","%","","u1"),
+		NewUser("u2","%","","u2"),//u2row can't be recoginzed
+	}
+
+	tls := []TlsOption{
+		&TlsOptionCipher{Cipher: "xxx"},
+		&TlsOptionSubject{Subject: "yyy"},
+	}
+
+	res := []ResourceOption{
+		&ResourceOptionMaxQueriesPerHour{Count: 0},
+		&ResourceOptionMaxUpdatesPerHour{Count: 1},
+	}
+
+	miscs := []UserMiscOption{
+		&UserMiscOptionPasswordExpireInterval{Value: 1},
+		&UserMiscOptionPasswordExpireDefault{},
+		&UserMiscOptionAccountLock{},
+		&UserMiscOptionAccountUnlock{},
+	}
+
+	want := &AlterUser{
+		IfExists:   true,
+		Users:         users,
+		Roles:         nil,
+		TlsOpts:       tls,
+		ResOpts:       res,
+		MiscOpts:      miscs,
+	}
+
+	return n, want
+
+	return nil, nil
+}
+
+func generate_alter_user_2() (*ast.AlterUserStmt,*AlterUser) {
+	sql := `
+alter user
+u1, u2
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.AlterUserStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	users := []*User{
+		NewUser("u1","%","",""),
+		NewUser("u2","%","",""),//u2row can't be recoginzed
+	}
+
+	want := &AlterUser{
+		IfExists:   false,
+		Users:         users,
+		Roles:         nil,
+		TlsOpts:       make([]TlsOption,0),
+		ResOpts:       make([]ResourceOption,0),
+		MiscOpts:      make([]UserMiscOption,0),
+	}
+	return n,want
+}
+
+func generate_alter_user_3() (*ast.AlterUserStmt,*AlterUser) {
+	sql := `
+alter user
+user() IDENTIFIED BY 'xxx'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.AlterUserStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &AlterUser{
+		IfExists:   false,
+		IsUserFunc: true,
+		UserFunc: NewUser("","","","xxx"),
+		Users:         nil,
+		Roles:         nil,
+		TlsOpts:       nil,
+		ResOpts:       nil,
+		MiscOpts:      nil,
+	}
+	return n,want
+}
+
+func Test_transformAlterUserStmtToAlterUser(t *testing.T) {
+	type args struct {
+		aus *ast.AlterUserStmt
+	}
+
+	t1,t1_want := generate_alter_user_1()
+	t2,t2_want := generate_alter_user_2()
+	t3,t3_want := generate_alter_user_3()
+
+	tests := []struct {
+		name string
+		args args
+		want *AlterUser
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+		{"t3",args{t3},t3_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformAlterUserStmtToAlterUser(tt.args.aus);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformAlterUserStmtToAlterUser() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_roke_1()(*ast.RevokeStmt,*Revoke) {
+	sql := `
+revoke all,all(a,b),create(a,b),select(a,b),super(a,b,c)
+on table db.A
+from u1,'u2'@'h2',''@'h3'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.RevokeStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+
+	privs := []*Privilege{
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_ALL,nil),
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_ALL,[]*UnresolvedName{aname,bname}),
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_CREATE,[]*UnresolvedName{aname,bname}),
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_SELECT,[]*UnresolvedName{aname,bname}),
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_SUPER,[]*UnresolvedName{aname,bname,cname}),
+	}
+
+	u := []*User{
+		NewUser("u1","%","",""),
+		NewUser("u2","h2","",""),
+		NewUser("","h3","",""),
+	}
+
+	want := &Revoke{
+		Privileges:    privs,
+		ObjType:       OBJECT_TYPE_TABLE,
+		Level:         NewPrivilegeLevel(PRIVILEGE_LEVEL_TYPE_TABLE,"db","A",""),
+		Users:         u,
+		Roles:         nil,
+	}
+
+	return n, want
+}
+
+func generate_roke_2()(*ast.RevokeStmt,*Revoke) {
+	sql := `
+revoke super(a,b,c)
+on procedure db.func
+from '@''h3'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.RevokeStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+
+	privs := []*Privilege{
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_SUPER,[]*UnresolvedName{aname,bname,cname}),
+	}
+
+	u := []*User{
+		NewUser("@'h3","%","",""),
+	}
+
+	want := &Revoke{
+		Privileges:    privs,
+		ObjType:       OBJECT_TYPE_PROCEDURE,
+		Level:         NewPrivilegeLevel(PRIVILEGE_LEVEL_TYPE_TABLE,"db","func",""),
+		Users:         u,
+		Roles:         nil,
+	}
+
+	return n, want
+}
+
+func Test_transformRevokeStmtToRevoke(t *testing.T) {
+	type args struct {
+		rs *ast.RevokeStmt
+	}
+
+	t1,t1_want := generate_roke_1()
+	t2,t2_want := generate_roke_2()
+
+	tests := []struct {
+		name string
+		args args
+		want *Revoke
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformRevokeStmtToRevoke(tt.args.rs);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformRevokeStmtToRevoke() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_roke_3()(*ast.RevokeRoleStmt,*Revoke) {
+	sql := `
+revoke r1,r2,r3 
+from u1,u2,u3
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.RevokeRoleStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	rirr :=[]*Role{
+		NewRole("r1","%"),
+		NewRole("r2","%"),
+		NewRole("r3","%"),
+	}
+
+	u := []*User{
+		NewUser("u1","%","",""),
+		NewUser("u2","%","",""),
+		NewUser("u3","%","",""),
+	}
+
+	want := &Revoke{
+		IsRevokeRole: true,
+		RolesInRevokeRole: rirr,
+		Privileges:    nil,
+		ObjType:       0,
+		Level:         nil,
+		Users:         u,
+		Roles:         nil,
+	}
+
+	return n, want
+}
+
+func Test_transformRevokeRoleStmtToRevoke(t *testing.T) {
+	type args struct {
+		rrs *ast.RevokeRoleStmt
+	}
+
+	t1,t1_want := generate_roke_3()
+
+	tests := []struct {
+		name string
+		args args
+		want *Revoke
+	}{
+		{"t1",args{t1},t1_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformRevokeRoleStmtToRevoke(tt.args.rrs); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformRevokeRoleStmtToRevoke() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_grant_1()(*ast.GrantStmt,*Grant){
+	sql := `
+grant all,all(a,b),create(a,b),select(a,b),super(a,b,c)
+on table db.A
+to u1,'u2'@'h2',''@'h3'
+with grant option
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.GrantStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+
+	privs := []*Privilege{
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_ALL,nil),
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_ALL,[]*UnresolvedName{aname,bname}),
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_CREATE,[]*UnresolvedName{aname,bname}),
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_SELECT,[]*UnresolvedName{aname,bname}),
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_SUPER,[]*UnresolvedName{aname,bname,cname}),
+	}
+
+	u := []*User{
+		NewUser("u1","%","",""),
+		NewUser("u2","h2","",""),
+		NewUser("","h3","",""),
+	}
+
+	want := &Grant{
+		Privileges:    privs,
+		ObjType:       OBJECT_TYPE_TABLE,
+		Level:         NewPrivilegeLevel(PRIVILEGE_LEVEL_TYPE_TABLE,"db","A",""),
+		Users:         u,
+		Roles:         nil,
+		GrantOption: true,
+	}
+
+	return n, want
+}
+
+func generate_grant_2()(*ast.GrantStmt,*Grant) {
+	sql := `
+grant super(a,b,c)
+on procedure db.func
+to '@''h3'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.GrantStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	aname,_ := NewUnresolvedName("","","a")
+	bname,_ := NewUnresolvedName("","","b")
+	cname,_ := NewUnresolvedName("","","c")
+
+	privs := []*Privilege{
+		NewPrivilege(PRIVILEGE_TYPE_STATIC_SUPER,[]*UnresolvedName{aname,bname,cname}),
+	}
+
+	u := []*User{
+		NewUser("@'h3","%","",""),
+	}
+
+	want := &Grant{
+		Privileges:    privs,
+		ObjType:       OBJECT_TYPE_PROCEDURE,
+		Level:         NewPrivilegeLevel(PRIVILEGE_LEVEL_TYPE_TABLE,"db","func",""),
+		Users:         u,
+		Roles:         nil,
+	}
+
+	return n, want
+}
+
+func Test_transformGrantStmtToGrant(t *testing.T) {
+	type args struct {
+		gs *ast.GrantStmt
+	}
+
+	t1,t1_want := generate_grant_1()
+	t2,t2_want := generate_grant_2()
+
+	tests := []struct {
+		name string
+		args args
+		want *Grant
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformGrantStmtToGrant(tt.args.gs); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformGrantStmtToGrant() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_grant_3()(*ast.GrantRoleStmt,*Grant){
+	sql := `
+grant r1,r2,r3
+to u2,u3,u4
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.GrantRoleStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &Grant{
+		IsGrantRole:      true,
+		RolesInGrantRole: []*Role{NewRole("r1","%"),NewRole("r2","%"),NewRole("r3","%")},
+		Privileges:       nil,
+		ObjType:          0,
+		Level:            nil,
+		Users:            []*User{NewUser("u2","%","",""),NewUser("u3","%","",""),NewUser("u4","%","","")},
+		Roles:            nil,
+		GrantOption:      false,
+	}
+
+	return n, want
+}
+
+func Test_transformGrantRoleStmtToGrant(t *testing.T) {
+	type args struct {
+		grs *ast.GrantRoleStmt
+	}
+
+	t1,t1_want := generate_grant_3()
+
+	tests := []struct {
+		name string
+		args args
+		want *Grant
+	}{
+		{"t1",args{t1},t1_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformGrantRoleStmtToGrant(tt.args.grs);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformGrantRoleStmtToGrant() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_grant_4()(*ast.GrantProxyStmt,*Grant){
+	sql := `
+grant proxy on u1
+to u2,u3,u4
+WITH GRANT OPTION
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.GrantProxyStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &Grant{
+		IsGrantRole:      false,
+		IsProxy: true,
+		RolesInGrantRole: nil,
+		Privileges:       nil,
+		ObjType:          0,
+		Level:            nil,
+		ProxyUser: NewUser("u1","%","",""),
+		Users:            []*User{NewUser("u2","%","",""),NewUser("u3","%","",""),NewUser("u4","%","","")},
+		Roles:            nil,
+		GrantOption:      true,
+	}
+
+	return n, want
+}
+
+func Test_transformGrantProxyStmtToGrant(t *testing.T) {
+	type args struct {
+		gps *ast.GrantProxyStmt
+	}
+
+	t1,t1_want := generate_grant_4()
+
+	tests := []struct {
+		name string
+		args args
+		want *Grant
+	}{
+		{"t1",args{t1},t1_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformGrantProxyStmtToGrant(tt.args.gps);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformGrantProxyStmtToGrant() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_setDefaultRole_1()(*ast.SetDefaultRoleStmt,*SetDefaultRole) {
+	sql := `
+set default role
+none
+to u1,u2,u3
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetDefaultRoleStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &SetDefaultRole{
+		Type:          SET_DEFAULT_ROLE_TYPE_NONE,
+		Roles:         nil,
+		Users:         []*User{NewUser("u1","%","",""),NewUser("u2","%","",""),NewUser("u3","%","","")},
+	}
+
+	return n, want
+}
+
+func generate_setDefaultRole_2()(*ast.SetDefaultRoleStmt,*SetDefaultRole) {
+	sql := `
+set default role
+all
+to u1,u2,u3
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetDefaultRoleStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &SetDefaultRole{
+		Type:          SET_DEFAULT_ROLE_TYPE_ALL,
+		Roles:         nil,
+		Users:         []*User{NewUser("u1","%","",""),NewUser("u2","%","",""),NewUser("u3","%","","")},
+	}
+
+	return n, want
+}
+
+func generate_setDefaultRole_3()(*ast.SetDefaultRoleStmt,*SetDefaultRole) {
+	sql := `
+set default role
+r1,r2,r3
+to u1,u2,u3
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetDefaultRoleStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &SetDefaultRole{
+		Type:          SET_DEFAULT_ROLE_TYPE_NORMAL,
+		Roles:         []*Role{NewRole("r1","%"),NewRole("r2","%"),NewRole("r3","%")},
+		Users:         []*User{NewUser("u1","%","",""),NewUser("u2","%","",""),NewUser("u3","%","","")},
+	}
+
+	return n, want
+}
+
+func Test_transformSetDefaultRoleStmtToSetDefaultRole(t *testing.T) {
+	type args struct {
+		sdrs *ast.SetDefaultRoleStmt
+	}
+
+	t1,t1_want := generate_setDefaultRole_1()
+	t2,t2_want := generate_setDefaultRole_2()
+	t3,t3_want := generate_setDefaultRole_3()
+
+	tests := []struct {
+		name string
+		args args
+		want *SetDefaultRole
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+		{"t3",args{t3},t3_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformSetDefaultRoleStmtToSetDefaultRole(tt.args.sdrs);
+			!reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformSetDefaultRoleStmtToSetDefaultRole() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_set_role_1()(*ast.SetRoleStmt,*SetRole) {
+	sql := `
+set role
+default
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetRoleStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &SetRole{
+		Type:          SET_ROLE_TYPE_DEFAULT,
+		Roles:         nil,
+	}
+
+	return n, want
+}
+
+func generate_set_role_2()(*ast.SetRoleStmt,*SetRole) {
+	sql := `
+set role
+all except r1,r2,r3
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetRoleStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &SetRole{
+		Type:          SET_ROLE_TYPE_ALL_EXCEPT,
+		Roles:         []*Role{NewRole("r1","%"),NewRole("r2","%"),NewRole("r3","%")},
+	}
+
+	return n, want
+}
+
+func generate_set_role_3()(*ast.SetRoleStmt,*SetRole) {
+	sql := `
+set role
+r1,r2,r3
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetRoleStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &SetRole{
+		Type:          SET_ROLE_TYPE_NORMAL,
+		Roles:         []*Role{NewRole("r1","%"),NewRole("r2","%"),NewRole("r3","%")},
+	}
+
+	return n, want
+}
+
+func Test_transformSetRoleStmtToSetRole(t *testing.T) {
+	type args struct {
+		srs *ast.SetRoleStmt
+	}
+
+	t1,t1_want := generate_set_role_1()
+	t2,t2_want := generate_set_role_2()
+	t3,t3_want := generate_set_role_3()
+
+	tests := []struct {
+		name string
+		args args
+		want *SetRole
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+		{"t3",args{t3},t3_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformSetRoleStmtToSetRole(tt.args.srs); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformSetRoleStmtToSetRole() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func generate_set_password_1()(*ast.SetPwdStmt,*SetPassword) {
+	sql := `
+set password for u1@h1
+= 'ppp'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetPwdStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &SetPassword{
+		User:          NewUser("u1","h1","",""),
+		Password:      "ppp",
+	}
+
+	return n,want
+}
+
+func generate_set_password_2()(*ast.SetPwdStmt,*SetPassword) {
+	sql := `
+set password
+= 'ppp'
+;`
+
+	p := parser.New()
+	stmt, _, err := p.Parse(sql, "", "")
+	if err != nil {
+		panic(fmt.Errorf("%v", err))
+	}
+
+	n, ok := stmt[0].(*ast.SetPwdStmt)
+	if !ok {
+		panic(fmt.Errorf("%v", ok))
+	}
+
+	want := &SetPassword{
+		User:          nil,
+		Password:      "ppp",
+	}
+
+	return n,want
+}
+
+func Test_transformSetPwdStmtToSetPassword(t *testing.T) {
+	type args struct {
+		sps *ast.SetPwdStmt
+	}
+
+	t1,t1_want := generate_set_password_1()
+	t2,t2_want := generate_set_password_2()
+
+	tests := []struct {
+		name string
+		args args
+		want *SetPassword
+	}{
+		{"t1",args{t1},t1_want},
+		{"t2",args{t2},t2_want},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := transformSetPwdStmtToSetPassword(tt.args.sps); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("transformSetPwdStmtToSetPassword() = %v, want %v", got, tt.want)
 			}
 		})
 	}

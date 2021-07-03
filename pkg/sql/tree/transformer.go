@@ -1285,7 +1285,11 @@ func transformInsertStmtToInsert(is *ast.InsertStmt) *Insert {
 
 //transform ast.IndexPartSpecification to tree.KeyPart
 func transformIndexPartSpecificationToKeyPart(ips *ast.IndexPartSpecification) *KeyPart {
-	cname := transformColumnNameToUnresolvedName(ips.Column)
+	var cname *UnresolvedName = nil
+	if ips.Column != nil {
+		cname = transformColumnNameToUnresolvedName(ips.Column)
+	}
+
 	var e Expr = nil
 	if ips.Expr != nil {
 		e = transformExprNodeToExpr(ips.Expr)
@@ -1423,6 +1427,21 @@ func transformIndexTypeToIndexType(it model.IndexType) IndexType {
 		return INDEX_TYPE_RTREE
 	}
 	return INDEX_TYPE_INVALID
+}
+
+//transform ast.IndexKeyType to tree.IndexType
+func transformIndexKeyTypeToIndexCategory(it ast.IndexKeyType) IndexCategory {
+	switch it {
+	case ast.IndexKeyTypeNone:
+		return INDEX_CATEGORY_NONE
+	case ast.IndexKeyTypeUnique:
+		return INDEX_CATEGORY_UNIQUE
+	case ast.IndexKeyTypeSpatial:
+		return INDEX_CATEGORY_SPATIAL
+	case ast.IndexKeyTypeFullText:
+		return INDEX_CATEGORY_FULLTEXT
+	}
+	return INDEX_CATEGORY_NONE
 }
 
 //transform ast.IndexVisibility to tree.VisibleType
@@ -2055,6 +2074,15 @@ func transformShowStmtToShow(ss *ast.ShowStmt)Show{
 			w = NewWhere(e)
 		}
 		return NewShowStatus(ss.GlobalScope,l,w)
+	case ast.ShowIndex:
+		t := transformTableNameToTableName(ss.Table)
+
+		var w *Where = nil
+		if ss.Where != nil {
+			e := transformExprNodeToExpr(ss.Where)
+			w = NewWhere(e)
+		}
+		return NewShowIndex(*t,w)
 	}
 	panic(fmt.Errorf("unsupported show %v\n",ss.Tp))
 	return nil
@@ -2116,4 +2144,623 @@ func transformSetStmtToSetVar(ss *ast.SetStmt) *SetVar{
 		}
 	}
 	return NewSetVar(a)
+}
+
+//transform ast.IndexLockAndAlgorithm to []tree.MiscOption
+func transformIndexLockAndAlgorithmToMiscOption(ilaa *ast.IndexLockAndAlgorithm)[]MiscOption {
+	var misc []MiscOption
+	switch ilaa.LockTp {
+	case ast.LockTypeNone:
+		misc = append(misc,&LockNone{})
+	case ast.LockTypeDefault:
+		misc = append(misc,&LockDefault{})
+	case ast.LockTypeShared:
+		misc = append(misc,&LockShared{})
+	case ast.LockTypeExclusive:
+		misc = append(misc,&LockExclusive{})
+	}
+
+	switch ilaa.AlgorithmTp {
+	case ast.AlgorithmTypeDefault:
+		misc = append(misc,&AlgorithmDefault{})
+	case ast.AlgorithmTypeCopy:
+		misc = append(misc,&AlgorithmCopy{})
+	case ast.AlgorithmTypeInplace:
+		misc = append(misc,&AlgorithmInplace{})
+	default:
+		misc = append(misc,&AlgorithmDefault{})
+	}
+
+	return misc
+}
+
+//transform ast.CreateIndexStmt to tree.CreateIndex
+func transformCreateIndexStmtToCreateIndex(cis *ast.CreateIndexStmt) *CreateIndex{
+	tab := transformTableNameToTableName(cis.Table)
+
+	it := transformIndexKeyTypeToIndexCategory(cis.KeyType)
+
+	kps := transformIndexPartSpecificationArrayToKeyPartArray(cis.IndexPartSpecifications)
+	var indexOpt *IndexOption = nil
+	if cis.IndexOption != nil {
+		indexOpt = transformIndexOptionToIndexOption(cis.IndexOption)
+	}
+
+	var misc []MiscOption = nil
+	if cis.LockAlg != nil {
+		misc = transformIndexLockAndAlgorithmToMiscOption(cis.LockAlg)
+	}
+
+	return NewCreateIndex(Identifier(cis.IndexName), *tab, cis.IfNotExists, it, kps, indexOpt, misc)
+}
+
+//transform ast.DropIndexStmt to tree.DropIndex
+func transformDropIndexStmtToDropIndex(dis *ast.DropIndexStmt) *DropIndex {
+	tab := transformTableNameToTableName(dis.Table)
+
+	var misc []MiscOption = nil
+	if dis.LockAlg != nil {
+		misc = transformIndexLockAndAlgorithmToMiscOption(dis.LockAlg)
+	}
+
+	return NewDropIndex(Identifier(dis.IndexName),*tab,dis.IfExists,misc)
+}
+
+//transform ast.UserSpec to tree.Role
+func transformUserSpecToRole(us *ast.UserSpec) *Role {
+	if !us.IsRole {
+		panic("it is not role")
+	}else if us.User == nil {
+		panic("role is null")
+	}
+
+	return NewRole(us.User.Username,us.User.Hostname)
+}
+
+//transform ast.CreateUserStmt to tree.CreateRole
+func transformCreateUserStmtToCreateRole(cus *ast.CreateUserStmt)*CreateRole {
+	if !cus.IsCreateRole {
+		panic("it is not create role statement")
+	}
+
+	var r []*Role = nil
+	if cus.Specs != nil {
+		r = make([]*Role,len(cus.Specs))
+		for i,us := range cus.Specs {
+			r[i] = transformUserSpecToRole(us)
+		}
+	}
+
+	return NewCreateRole(cus.IfNotExists,r)
+}
+
+//transform ast.DropUserStmt to tree.DropRole
+func transformDropUserStmtToDropRole(dus *ast.DropUserStmt) *DropRole {
+	if !dus.IsDropRole {
+		panic("it is not drop user statement")
+	}
+
+	var r []*Role = nil
+	if dus.UserList != nil {
+		r = make([]*Role,len(dus.UserList))
+		for i,us := range dus.UserList {
+			r[i] = NewRole(us.Username,us.Hostname)
+		}
+	}
+	return NewDropRole(dus.IfExists,r)
+}
+
+//transform ast.AuthOption to tree.User
+func transformAuthOptionToUser(ao *ast.AuthOption) *User{
+	ap := ""
+	as := ""
+
+	if ao != nil {
+		if ao.ByAuthString {
+			as = ao.AuthString
+		} else {
+			as = ao.HashString
+		}
+	}
+
+	return NewUser("","",ap,as)
+}
+
+//transform ast.UserSpec to tree.Role
+func transformUserSpecToUser(us *ast.UserSpec) *User {
+	if us.IsRole {
+		panic("it is not user")
+	}else if us.User == nil {
+		panic("user is null")
+	}
+
+	u := transformAuthOptionToUser(us.AuthOpt)
+	u.Username = us.User.Username
+	u.Hostname = us.User.Hostname
+	return u
+}
+
+func transformTLSOptionToTlsOption(t *ast.TLSOption) TlsOption {
+	switch t.Type {
+	case ast.TslNone:
+		return &TlsOptionNone{}
+	case ast.Ssl:
+		return &TlsOptionSSL{}
+	case ast.X509:
+		return &TlsOptionX509{}
+	case ast.Cipher:
+		return &TlsOptionCipher{
+			Cipher:        t.Value,
+		}
+	case ast.Issuer:
+		return &TlsOptionIssuer{
+			Issuer:        t.Value,
+		}
+	case ast.Subject:
+		return &TlsOptionSubject{
+			Subject:       t.Value,
+		}
+	default:
+		panic("unsupported tlsoption")
+	}
+	return nil
+}
+
+//transform ast.ResourceOption to tree.ResourceOption
+func transformResourceOptionToResourceOption(ro *ast.ResourceOption)ResourceOption{
+	switch ro.Type {
+	case ast.MaxQueriesPerHour:
+		return &ResourceOptionMaxQueriesPerHour{Count:ro.Count}
+	case ast.MaxUpdatesPerHour:
+		return &ResourceOptionMaxUpdatesPerHour{Count:ro.Count}
+	case ast.MaxConnectionsPerHour:
+		return &ResourceOptionMaxConnectionPerHour{Count:ro.Count}
+	case ast.MaxUserConnections:
+		return &ResourceOptionMaxUserConnections{Count :ro.Count}
+	}
+	return nil
+}
+
+//transform ast.PasswordOrLockOption to tree.UserMiscOption
+func transformPasswordOrLockOptionToUserMiscOption(polo *ast.PasswordOrLockOption) UserMiscOption {
+	switch polo.Type {
+	case ast.PasswordExpire:
+		return &UserMiscOptionPasswordExpireNone{}
+	case ast.PasswordExpireDefault:
+		return &UserMiscOptionPasswordExpireDefault{}
+	case ast.PasswordExpireNever:
+		return &UserMiscOptionPasswordExpireNever{}
+	case ast.PasswordExpireInterval:
+		return &UserMiscOptionPasswordExpireInterval{Value: polo.Count}
+	case ast.Lock:
+		return &UserMiscOptionAccountLock{}
+	case ast.Unlock:
+		return &UserMiscOptionAccountUnlock{}
+	default:
+		panic("unsupported password or lock")
+	}
+	return nil
+}
+
+//transform ast.CreateUserStmt to tree.CreateUser
+func transformCreatUserStmtToCreateUser(cus *ast.CreateUserStmt)*CreateUser{
+	if cus.IsCreateRole {
+		panic("it is not the create user statement")
+	}
+
+	var u []*User = nil
+	var r []*Role = nil
+	if cus.Specs != nil {
+		for _,us := range cus.Specs {
+			if us.IsRole {
+				ret := transformUserSpecToRole(us)
+				r = append(r,ret)
+			}else{
+				ret := transformUserSpecToUser(us)
+				u = append(u,ret)
+			}
+		}
+	}
+
+	var tls []TlsOption = nil
+	if cus.TLSOptions != nil {
+		tls = make([]TlsOption,len(cus.TLSOptions))
+		for i,t := range cus.TLSOptions {
+			tls[i] = transformTLSOptionToTlsOption(t)
+		}
+	}
+
+	var res []ResourceOption = nil
+	if cus.ResourceOptions != nil {
+		res = make([]ResourceOption,len(cus.ResourceOptions))
+		for i,re := range cus.ResourceOptions {
+			res[i] = transformResourceOptionToResourceOption(re)
+		}
+	}
+
+	var umo []UserMiscOption = nil
+	if cus.PasswordOrLockOptions != nil {
+		umo = make([]UserMiscOption,len(cus.PasswordOrLockOptions))
+		for i,p := range cus.PasswordOrLockOptions {
+			umo[i] = transformPasswordOrLockOptionToUserMiscOption(p)
+		}
+	}
+
+	return NewCreateUser(cus.IfNotExists,u,r,tls,res,umo)
+}
+
+//transform ast.DropUserStmt to tree.DropUser
+func transformDropUserStmtToDropUser(dus *ast.DropUserStmt)*DropUser{
+	if dus.IsDropRole {
+		panic("it is not the drop user statement")
+	}
+
+	var u []*User = nil
+	if dus.UserList != nil {
+		u = make([]*User,len(dus.UserList))
+		for i,ul := range dus.UserList {
+			u[i] = NewUser(ul.Username,ul.Hostname,"","")
+		}
+	}
+	return NewDropUser(dus.IfExists,u)
+}
+
+//transform ast.AlterUserStmt to tree.AlterUser
+func transformAlterUserStmtToAlterUser(aus *ast.AlterUserStmt) *AlterUser{
+	if aus.CurrentAuth != nil {
+		userfunc := transformAuthOptionToUser(aus.CurrentAuth)
+		return NewAlterUser(aus.IfExists,true,userfunc,nil,nil,nil,nil,nil)
+	}
+
+	var u []*User = nil
+	var r []*Role = nil
+	if aus.Specs != nil {
+		for _,us := range aus.Specs {
+			if us.IsRole {
+				ret := transformUserSpecToRole(us)
+				r = append(r,ret)
+			}else{
+				ret := transformUserSpecToUser(us)
+				u = append(u,ret)
+			}
+		}
+	}
+
+	var tls []TlsOption = nil
+	if aus.TLSOptions != nil {
+		tls = make([]TlsOption,len(aus.TLSOptions))
+		for i,t := range aus.TLSOptions {
+			tls[i] = transformTLSOptionToTlsOption(t)
+		}
+	}
+
+	var res []ResourceOption = nil
+	if aus.ResourceOptions != nil {
+		res = make([]ResourceOption,len(aus.ResourceOptions))
+		for i,re := range aus.ResourceOptions {
+			res[i] = transformResourceOptionToResourceOption(re)
+		}
+	}
+
+	var umo []UserMiscOption = nil
+	if aus.PasswordOrLockOptions != nil {
+		umo = make([]UserMiscOption,len(aus.PasswordOrLockOptions))
+		for i,p := range aus.PasswordOrLockOptions {
+			umo[i] = transformPasswordOrLockOptionToUserMiscOption(p)
+		}
+	}
+
+	return NewAlterUser(aus.IfExists,false,nil,u,r,tls,res,umo)
+}
+
+//transform mysql.PrivilegeType to tree.PrivilegeType
+func transformPrivilegeTypeToPrivilegeType(pt mysql.PrivilegeType)PrivilegeType{
+	switch pt {
+	case mysql.UsagePriv:
+		return PRIVILEGE_TYPE_STATIC_USAGE
+	case mysql.CreatePriv:
+		return PRIVILEGE_TYPE_STATIC_CREATE
+	case mysql.SelectPriv:
+		return PRIVILEGE_TYPE_STATIC_SELECT
+	case mysql.InsertPriv:
+		return PRIVILEGE_TYPE_STATIC_INSERT
+	case mysql.UpdatePriv:
+		return PRIVILEGE_TYPE_STATIC_UPDATE
+	case mysql.DeletePriv:
+		return PRIVILEGE_TYPE_STATIC_DELETE
+	case mysql.ShowDBPriv:
+		return PRIVILEGE_TYPE_STATIC_SHOW_DATABASES
+	case mysql.SuperPriv:
+		return PRIVILEGE_TYPE_STATIC_SUPER
+	case mysql.CreateUserPriv:
+		return PRIVILEGE_TYPE_STATIC_CREATE_USER
+	case mysql.TriggerPriv:
+		return PRIVILEGE_TYPE_STATIC_TRIGGER
+	case mysql.DropPriv:
+		return PRIVILEGE_TYPE_STATIC_DROP
+	case mysql.ProcessPriv:
+		return PRIVILEGE_TYPE_STATIC_PROCESS
+	case mysql.GrantPriv:
+		return PRIVILEGE_TYPE_STATIC_GRANT_OPTION
+	case mysql.ReferencesPriv:
+		return PRIVILEGE_TYPE_STATIC_REFERENCES
+	case mysql.AlterPriv:
+		return PRIVILEGE_TYPE_STATIC_ALTER
+	case mysql.ExecutePriv:
+		return PRIVILEGE_TYPE_STATIC_EXECUTE
+	case mysql.IndexPriv:
+		return PRIVILEGE_TYPE_STATIC_INDEX
+	case mysql.CreateViewPriv:
+		return PRIVILEGE_TYPE_STATIC_CREATE_VIEW
+	case mysql.ShowViewPriv:
+		return PRIVILEGE_TYPE_STATIC_SHOW_VIEW
+	case mysql.CreateRolePriv:
+		return PRIVILEGE_TYPE_STATIC_CREATE_ROLE
+	case mysql.DropRolePriv:
+		return PRIVILEGE_TYPE_STATIC_DROP_ROLE
+	case mysql.CreateTMPTablePriv:
+		return PRIVILEGE_TYPE_STATIC_CREATE_TEMPORARY_TABLES
+	case mysql.LockTablesPriv:
+		return PRIVILEGE_TYPE_STATIC_LOCK_TABLES
+	case mysql.CreateRoutinePriv:
+		return PRIVILEGE_TYPE_STATIC_CREATE_ROUTINE
+	case mysql.AlterRoutinePriv:
+		return PRIVILEGE_TYPE_STATIC_ALTER_ROUTINE
+	case mysql.EventPriv:
+		return PRIVILEGE_TYPE_STATIC_EVENT
+	case mysql.ShutdownPriv:
+		return PRIVILEGE_TYPE_STATIC_SHUTDOWN
+	case mysql.ReloadPriv:
+		return PRIVILEGE_TYPE_STATIC_RELOAD
+	case mysql.FilePriv:
+		return PRIVILEGE_TYPE_STATIC_FILE
+	case mysql.CreateTablespacePriv:
+		return PRIVILEGE_TYPE_STATIC_CREATE_TABLESPACE
+	case mysql.ReplicationClientPriv:
+		return PRIVILEGE_TYPE_STATIC_REPLICATION_CLIENT
+	case mysql.ReplicationSlavePriv:
+		return PRIVILEGE_TYPE_STATIC_REPLICATION_SLAVE
+	case mysql.AllPriv:
+		return PRIVILEGE_TYPE_STATIC_ALL
+	case mysql.ConfigPriv:
+		fallthrough
+	case mysql.ExtendedPriv:
+		fallthrough
+	default:
+		panic("unsupported privilege type")
+	}
+}
+
+//transform ast.PrivElem to tree.Privilege
+func transformPrivElemToPrivilege(pe *ast.PrivElem)*Privilege {
+	pt := transformPrivilegeTypeToPrivilegeType(pe.Priv)
+	var cols []*UnresolvedName = nil
+	if pe.Cols != nil {
+		cols = make([]*UnresolvedName,len(pe.Cols))
+		for i,c := range pe.Cols {
+			cols[i] = transformColumnNameToUnresolvedName(c)
+		}
+	}
+	return NewPrivilege(pt,cols)
+}
+
+// transform ast.ObjectTypeType To tree.ObjectType
+func transformObjectTypeTypeToObjectType(ott ast.ObjectTypeType)ObjectType{
+	switch ott {
+	case ast.ObjectTypeNone:
+		return OBJECT_TYPE_NONE
+	case ast.ObjectTypeTable:
+		return OBJECT_TYPE_TABLE
+	case ast.ObjectTypeFunction:
+		return OBJECT_TYPE_FUNCTION
+	case ast.ObjectTypeProcedure:
+		return OBJECT_TYPE_PROCEDURE
+	}
+	return OBJECT_TYPE_NONE
+}
+
+//transform ast.GrantLevelType to tree.PrivilegeLevelType
+func transformGrantLevelTypeToPrivilegeLevelType(glt ast.GrantLevelType)PrivilegeLevelType {
+	switch glt {
+	case ast.GrantLevelNone:
+		return PRIVILEGE_LEVEL_TYPE_GLOBAL
+	case ast.GrantLevelGlobal:
+		return PRIVILEGE_LEVEL_TYPE_GLOBAL
+	case ast.GrantLevelDB:
+		return PRIVILEGE_LEVEL_TYPE_DATABASE
+	case ast.GrantLevelTable:
+		return PRIVILEGE_LEVEL_TYPE_TABLE
+	}
+	return PRIVILEGE_LEVEL_TYPE_GLOBAL
+}
+
+//transform ast.GrantLevel to tree.PrivilegeLevel
+func transformGrantLevelToPrivilegeLevel(gl *ast.GrantLevel) *PrivilegeLevel {
+	plt := transformGrantLevelTypeToPrivilegeLevelType(gl.Level)
+	return NewPrivilegeLevel(plt,gl.DBName,gl.TableName,"")
+}
+
+//transform ast.RevokeStmt to tree.Revoke
+func transformRevokeStmtToRevoke(rs *ast.RevokeStmt)*Revoke{
+	var p[]*Privilege = nil
+	if rs.Privs != nil {
+		p = make([]*Privilege,len(rs.Privs))
+		for i,pr := range rs.Privs {
+			p[i] = transformPrivElemToPrivilege(pr)
+		}
+	}
+
+	objType := transformObjectTypeTypeToObjectType(rs.ObjectType)
+	pl := transformGrantLevelToPrivilegeLevel(rs.Level)
+
+	var u []*User = nil
+	var r []*Role = nil
+	if rs.Users != nil {
+		for _,us := range rs.Users {
+			if us.IsRole {
+				ret := transformUserSpecToRole(us)
+				r = append(r,ret)
+			}else{
+				ret := transformUserSpecToUser(us)
+				u = append(u,ret)
+			}
+		}
+	}
+
+	return NewRevoke(false, nil, p, objType, pl, u, r)
+}
+
+//transform ast.RevokeRoleStmt to tree.Revoke
+func transformRevokeRoleStmtToRevoke(rrs *ast.RevokeRoleStmt) *Revoke {
+	var r []*Role = nil
+	if rrs.Roles != nil {
+		r = make([]*Role,len(rrs.Roles))
+		for i,rl := range rrs.Roles {
+			r[i] = NewRole(rl.Username,rl.Hostname)
+		}
+	}
+
+
+	var u []*User = nil
+	if rrs.Users != nil {
+		u = make([]*User,len(rrs.Users))
+		for i,us := range rrs.Users{
+			u[i] = NewUser(us.Username,us.Hostname,"","")
+		}
+	}
+	return NewRevoke(true,r,nil,0,nil,u,nil)
+}
+
+//transform ast.GrantStmt to tree.Grant
+func transformGrantStmtToGrant(gs *ast.GrantStmt)*Grant{
+	var p[]*Privilege = nil
+	if gs.Privs != nil {
+		p = make([]*Privilege,len(gs.Privs))
+		for i,pr := range gs.Privs {
+			p[i] = transformPrivElemToPrivilege(pr)
+		}
+	}
+
+	objType := transformObjectTypeTypeToObjectType(gs.ObjectType)
+	pl := transformGrantLevelToPrivilegeLevel(gs.Level)
+
+	var u []*User = nil
+	var r []*Role = nil
+	if gs.Users != nil {
+		for _,us := range gs.Users {
+			if us.IsRole {
+				ret := transformUserSpecToRole(us)
+				r = append(r,ret)
+			}else{
+				ret := transformUserSpecToUser(us)
+				u = append(u,ret)
+			}
+		}
+	}
+
+	return NewGrant(false, false, nil, p, objType, pl, nil, u, r, gs.WithGrant)
+}
+
+//transform ast.GrantRoleStmt to tree.Grant
+func transformGrantRoleStmtToGrant(grs *ast.GrantRoleStmt)*Grant{
+	var r []*Role = nil
+	if grs.Roles != nil {
+		r = make([]*Role,len(grs.Roles))
+		for i,rl := range grs.Roles {
+			r[i] = NewRole(rl.Username,rl.Hostname)
+		}
+	}
+
+	var u []*User = nil
+	if grs.Users != nil {
+		u = make([]*User,len(grs.Users))
+		for i,us := range grs.Users{
+			u[i] = NewUser(us.Username,us.Hostname,"","")
+		}
+	}
+	return NewGrant(true, false, r, nil, OBJECT_TYPE_NONE, nil, nil, u, nil, false)
+}
+
+//transform ast.GrantProxyStmt to tree.Grant
+func transformGrantProxyStmtToGrant(gps *ast.GrantProxyStmt)*Grant {
+	pu := NewUser(gps.LocalUser.Username,gps.LocalUser.Hostname,"","")
+
+	var u []*User = nil
+	if gps.ExternalUsers != nil {
+		u = make([]*User,len(gps.ExternalUsers))
+		for i,us := range gps.ExternalUsers{
+			u[i] = NewUser(us.Username,us.Hostname,"","")
+		}
+	}
+
+	return NewGrant(false, true, nil, nil, OBJECT_TYPE_NONE, nil, pu, u, nil, gps.WithGrant)
+}
+
+//transform ast.SetDefaultRoleStmt to tree.SetDefaultRole
+func transformSetDefaultRoleStmtToSetDefaultRole(sdrs *ast.SetDefaultRoleStmt)*SetDefaultRole {
+	var t SetDefaultRoleType = SET_DEFAULT_ROLE_TYPE_NORMAL
+	switch sdrs.SetRoleOpt {
+	case ast.SetRoleNone:
+		t = SET_DEFAULT_ROLE_TYPE_NONE
+	case ast.SetRoleAll:
+		t = SET_DEFAULT_ROLE_TYPE_ALL
+	case ast.SetRoleRegular:
+		t = SET_DEFAULT_ROLE_TYPE_NORMAL
+	default :
+		panic("unsupported default role type")
+	}
+
+	var r []*Role = nil
+	if sdrs.RoleList != nil {
+		r = make([]*Role,len(sdrs.RoleList))
+		for i,rl := range sdrs.RoleList {
+			r[i] = NewRole(rl.Username,rl.Hostname)
+		}
+	}
+
+	var u []*User = nil
+	if sdrs.UserList != nil {
+		u = make([]*User,len(sdrs.UserList))
+		for i,us := range sdrs.UserList{
+			u[i] = NewUser(us.Username,us.Hostname,"","")
+		}
+	}
+
+	return NewSetDefaultRole(t,r,u)
+}
+
+//transform ast.SetRoleStmt to tree.SetRole
+func transformSetRoleStmtToSetRole(srs *ast.SetRoleStmt) *SetRole {
+	var t SetRoleType = SET_ROLE_TYPE_NORMAL
+	switch srs.SetRoleOpt {
+	case ast.SetRoleDefault:
+		t = SET_ROLE_TYPE_DEFAULT
+	case ast.SetRoleNone:
+		t = SET_ROLE_TYPE_NONE
+	case ast.SetRoleAll:
+		t = SET_ROLE_TYPE_ALL
+	case ast.SetRoleAllExcept:
+		t = SET_ROLE_TYPE_ALL_EXCEPT
+	case ast.SetRoleRegular:
+		t = SET_ROLE_TYPE_NORMAL
+	}
+
+	var r []*Role = nil
+	if srs.RoleList != nil {
+		r = make([]*Role,len(srs.RoleList))
+		for i,rl := range srs.RoleList {
+			r[i] = NewRole(rl.Username,rl.Hostname)
+		}
+	}
+
+	return NewSetRole(t,r)
+}
+
+//transform ast.SetPwdStmt to tree.SetPassword
+func transformSetPwdStmtToSetPassword(sps *ast.SetPwdStmt) *SetPassword {
+	var u *User = nil
+	if sps.User != nil {
+		u = NewUser(sps.User.Username,sps.User.Hostname,"","")
+	}
+	return NewSetPassword(u,sps.Password)
 }

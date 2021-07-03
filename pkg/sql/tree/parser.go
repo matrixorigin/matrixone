@@ -41,6 +41,10 @@ func (p *Parser) Parse(sql string) (tree_stmt []Statement,err error) {
 			tree_stmt[i] = transformCreateDatabaseStmtToCreateDatabase(st)
 		case *ast.DropDatabaseStmt:
 			tree_stmt[i] = transformDropDatabaseStmtToDropDatabase(st)
+		case *ast.CreateIndexStmt:
+			tree_stmt[i] = transformCreateIndexStmtToCreateIndex(st)
+		case *ast.DropIndexStmt:
+			tree_stmt[i] = transformDropIndexStmtToDropIndex(st)
 		//Data Manipulation Statement DML
 		case *ast.SelectStmt:
 			tree_stmt[i] = transformSelectStmtToSelect(st)
@@ -62,8 +66,38 @@ func (p *Parser) Parse(sql string) (tree_stmt []Statement,err error) {
 		case *ast.RollbackStmt:
 			tree_stmt[i] = transformRollbackStmtToRollbackTransaction(st)
 		//Database Administration Statement
+		case *ast.CreateUserStmt:
+			if st.IsCreateRole {//create role
+				tree_stmt[i] = transformCreateUserStmtToCreateRole(st)
+			}else{
+				tree_stmt[i] = transformCreatUserStmtToCreateUser(st)
+			}
+		case *ast.DropUserStmt:
+			if st.IsDropRole {
+				tree_stmt[i] = transformDropUserStmtToDropRole(st)
+			}else{
+				tree_stmt[i] = transformDropUserStmtToDropUser(st)
+			}
+		case *ast.AlterUserStmt:
+			tree_stmt[i] = transformAlterUserStmtToAlterUser(st)
+		case *ast.RevokeStmt:
+			tree_stmt[i] = transformRevokeStmtToRevoke(st)
+		case *ast.RevokeRoleStmt:
+			tree_stmt[i] = transformRevokeRoleStmtToRevoke(st)
+		case *ast.GrantStmt:
+			tree_stmt[i] = transformGrantStmtToGrant(st)
+		case *ast.GrantProxyStmt:
+			tree_stmt[i] = transformGrantProxyStmtToGrant(st)
+		case *ast.GrantRoleStmt:
+			tree_stmt[i] = transformGrantRoleStmtToGrant(st)
 		case *ast.SetStmt:
 			tree_stmt[i] = transformSetStmtToSetVar(st)
+		case *ast.SetDefaultRoleStmt:
+			tree_stmt[i] = transformSetDefaultRoleStmtToSetDefaultRole(st)
+		case *ast.SetRoleStmt:
+			tree_stmt[i] = transformSetRoleStmtToSetRole(st)
+		case *ast.SetPwdStmt:
+			tree_stmt[i] = transformSetPwdStmtToSetPassword(st)
 		case *ast.ShowStmt:
 			tree_stmt[i] = transformShowStmtToShow(st)
 		//Utility Statemnt

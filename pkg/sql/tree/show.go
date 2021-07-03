@@ -145,3 +145,17 @@ func NewShowStatus(g bool,l *ComparisonExpr,w *Where) *ShowStatus {
 		Where: w,
 	}
 }
+
+//show index statement
+type ShowIndex struct {
+	showImpl
+	TableName TableName
+	Where *Where
+}
+
+func NewShowIndex(t TableName,w *Where) *ShowIndex  {
+	return &ShowIndex{
+		TableName: t,
+		Where:     w,
+	}
+}
