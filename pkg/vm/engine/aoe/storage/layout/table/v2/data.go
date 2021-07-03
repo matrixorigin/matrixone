@@ -52,6 +52,7 @@ type TableData struct {
 }
 
 func (td *TableData) close() {
+	td.IndexHolder.Unref()
 	for _, segment := range td.tree.Segments {
 		segment.Unref()
 	}

@@ -419,9 +419,9 @@ func TestDropTable2(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	// tbl, _ := inst.store.DataTables.WeakRefTable(tid)
-	// t.Log(tbl.String())
 	time.Sleep(time.Duration(200) * time.Millisecond)
+	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
+	t.Log(tbl.String())
 
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())

@@ -2,7 +2,6 @@ package table
 
 import (
 	"fmt"
-	// log "github.com/sirupsen/logrus"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -11,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
+	// log "github.com/sirupsen/logrus"
 )
 
 type Block struct {
@@ -40,7 +40,7 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 
 	blk.data.Columns = make([]col.IColumnBlock, 0)
 	blk.data.Helper = make(map[string]int)
-	blk.OnZeroCB = blk.noRefCB
+	blk.OnZeroCB = blk.close
 
 	var blkType base.BlockType
 	if meta.DataState < md.FULL {
@@ -78,7 +78,10 @@ func (blk *Block) GetType() base.BlockType {
 	return blk.Type
 }
 
-func (blk *Block) noRefCB() {
+func (blk *Block) close() {
+	if blk.IndexHolder != nil {
+		blk.IndexHolder.Unref()
+	}
 	for _, colBlk := range blk.data.Columns {
 		// log.Infof("destroy blk %d, col %d, refs %d", blk.Meta.ID, idx, colBlk.RefCount())
 		colBlk.Unref()
@@ -103,6 +106,7 @@ func (blk *Block) GetFsManager() base.IManager {
 }
 
 func (blk *Block) GetIndexHolder() *index.BlockHolder {
+	blk.IndexHolder.Ref()
 	return blk.IndexHolder
 }
 
@@ -162,7 +166,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		indexHolder.Init(cloned.SegmentFile)
 	}
 	blk.cloneWithUpgradeColumns(cloned)
-	cloned.OnZeroCB = cloned.noRefCB
+	cloned.OnZeroCB = cloned.close
 	cloned.Ref()
 	host.Unref()
 	return cloned, nil
