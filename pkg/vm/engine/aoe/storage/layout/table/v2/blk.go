@@ -126,7 +126,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 	var (
 		newType base.BlockType
 	)
-	indexHolder := host.GetIndexHolder().GetBlock(meta.ID)
+	indexHolder := host.GetIndexHolder().StrongRefBlock(meta.ID)
 	newIndexHolder := false
 
 	switch blk.Type {

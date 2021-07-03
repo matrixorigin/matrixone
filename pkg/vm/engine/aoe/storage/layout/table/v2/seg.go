@@ -227,7 +227,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	cloned.tree.Helper = make(map[uint64]int)
 	cloned.tree.BlockIds = make([]uint64, 0)
 
-	indexHolder := td.GetIndexHolder().GetSegment(seg.Meta.ID)
+	indexHolder := td.GetIndexHolder().StrongRefSegment(seg.Meta.ID)
 	if indexHolder == nil {
 		panic("logic error")
 	}

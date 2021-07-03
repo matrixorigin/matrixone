@@ -87,7 +87,7 @@ func TestAll(t *testing.T) {
 	t.Log(tblHolder.String())
 	assert.Equal(t, colCnt*blkCnt, bufMgr.NodeCount())
 	for bidx := 0; bidx < blkCnt; bidx++ {
-		blk := segHolder.GetBlock(uint64(bidx))
+		blk := segHolder.StrongRefBlock(uint64(bidx))
 		for i, _ := range blk.Indexes {
 			node := blk.GetIndexNode(i)
 			mnode := node.GetManagedNode()

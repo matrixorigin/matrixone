@@ -108,7 +108,7 @@ func (holder *SegmentHolder) stringNoLock() string {
 	return s
 }
 
-func (holder *SegmentHolder) GetBlock(id uint64) (blk *BlockHolder) {
+func (holder *SegmentHolder) StrongRefBlock(id uint64) (blk *BlockHolder) {
 	holder.tree.RLock()
 	idx, ok := holder.tree.IdMap[id]
 	if !ok {

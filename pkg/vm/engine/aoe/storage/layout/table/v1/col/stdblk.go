@@ -20,7 +20,7 @@ func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
 		err     error
 	)
 	fsMgr := seg.GetFsManager()
-	indexHolder := seg.GetIndexHolder().GetBlock(meta.ID)
+	indexHolder := seg.GetIndexHolder().StrongRefBlock(meta.ID)
 	newIndexHolder := false
 
 	if meta.DataState < md.FULL {
@@ -85,7 +85,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 		panic(fmt.Sprintf("logic error: blk %s DataState=%d", newMeta.AsCommonID().BlockString(), newMeta.DataState))
 	}
 	fsMgr := seg.GetFsManager()
-	indexHolder := seg.GetIndexHolder().GetBlock(newMeta.ID)
+	indexHolder := seg.GetIndexHolder().StrongRefBlock(newMeta.ID)
 	newIndexHolder := false
 	var err error
 	var newType base.BlockType

@@ -102,7 +102,7 @@ func (holder *TableHolder) UpgradeSegment(id uint64, segType base.SegmentType) *
 	return newSeg
 }
 
-func (holder *TableHolder) GetSegment(id uint64) (seg *SegmentHolder) {
+func (holder *TableHolder) StrongRefSegment(id uint64) (seg *SegmentHolder) {
 	holder.tree.RLock()
 	idx, ok := holder.tree.IdMap[id]
 	if !ok {
