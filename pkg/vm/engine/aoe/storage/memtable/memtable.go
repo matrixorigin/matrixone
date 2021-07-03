@@ -158,6 +158,7 @@ func (mt *MemTable) Flush() error {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 			return err
 		}
+		upgradeBlkOp.Block.Unref()
 	}
 	// }()
 	mt.Opts.EventListener.FlushBlockEndCB(mt)

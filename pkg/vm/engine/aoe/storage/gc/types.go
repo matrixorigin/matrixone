@@ -79,8 +79,8 @@ func (wk *Worker) Accept(request gci.IRequest) {
 
 func (wk *Worker) Start() {
 	wk.hb.wg.Add(1)
-	go wk.heartbeat()
 	wk.OpWorker.Start()
+	go wk.heartbeat()
 	wk.exec.worker.Start()
 }
 
