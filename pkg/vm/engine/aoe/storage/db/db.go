@@ -10,6 +10,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
@@ -159,17 +160,8 @@ func (d *DB) DropTable(name string) (id uint64, err error) {
 	op := mops.NewDropTblOp(opCtx, name, d.store.DataTables)
 	op.Push()
 	err = op.WaitDone()
-	// if err != nil {
-	// 	return id, err
-	// }
-	// op2Ctx := &mdops.OpCtx{Opts: d.Opts, Tables: d.store.DataTables}
-	// op2 := mdops.NewDropTblOp(op2Ctx, op.Id)
-	// op2.Push()
-	// err = op2.WaitDone()
-	// if err != nil && err != table.NotExistErr {
-	// 	panic(err)
-	// }
-	// err = nil
+	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.store.DataTables)
+	d.Opts.GC.Acceptor.Accept(req)
 	return op.Id, err
 }
 
@@ -308,6 +300,7 @@ func (d *DB) replayAndCleanData() {
 }
 
 func (d *DB) startWorkers() {
+	d.Opts.GC.Acceptor.Start()
 	d.Opts.MemData.Updater.Start()
 	d.Opts.Data.Flusher.Start()
 	d.Opts.Data.Sorter.Start()
@@ -316,6 +309,7 @@ func (d *DB) startWorkers() {
 }
 
 func (d *DB) stopWorkers() {
+	d.Opts.GC.Acceptor.Stop()
 	d.Opts.MemData.Updater.Stop()
 	d.Opts.Data.Flusher.Stop()
 	d.Opts.Data.Sorter.Stop()

@@ -33,6 +33,8 @@ var (
 	_ iw.IOpWorker = (*OpWorker)(nil)
 )
 
+type OpExecFunc func(op iops.IOp)
+
 type Stats struct {
 	Processed uint64
 	Successed uint64
@@ -74,6 +76,7 @@ type OpWorker struct {
 	Pending  int64
 	ClosedCh chan struct{}
 	Stats    Stats
+	ExecFunc OpExecFunc
 }
 
 func NewOpWorker(name string, args ...int) *OpWorker {
@@ -94,6 +97,7 @@ func NewOpWorker(name string, args ...int) *OpWorker {
 		State:    CREATED,
 		ClosedCh: make(chan struct{}),
 	}
+	worker.ExecFunc = worker.onOp
 	return worker
 }
 
@@ -110,7 +114,7 @@ func (w *OpWorker) Start() {
 			}
 			select {
 			case op := <-w.OpC:
-				w.onOp(op)
+				w.ExecFunc(op)
 				atomic.AddInt64(&w.Pending, int64(-1))
 			case cmd := <-w.CmdC:
 				w.onCmd(cmd)
