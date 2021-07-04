@@ -101,7 +101,7 @@ func (wk *Worker) heartbeat() {
 func (wk *Worker) process() {
 	wk.exec.Lock()
 	reqs := wk.exec.reqs
-	wk.exec.reqs = wk.exec.reqs[:0]
+	wk.exec.reqs = make([]gci.IRequest, 0)
 	wk.exec.Unlock()
 	for _, req := range reqs {
 		wk.exec.worker.SendOp(req)

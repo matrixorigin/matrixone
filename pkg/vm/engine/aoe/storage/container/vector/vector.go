@@ -21,9 +21,12 @@ func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMem
 }
 
 type IVector interface {
-	SetValue(v interface{})
-	GetValue() interface{}
-	Append(interface{}) error
+	SetValue(int, interface{})
+	GetValue(int) interface{}
+	IsNull(int) bool
+	HasNull() bool
+	NullCnt() int
+	Append(int, interface{}) error
 	AppendVector(*ro.Vector, int) (int, error)
 	Length() int
 	Capacity() int
@@ -31,10 +34,11 @@ type IVector interface {
 	Close() error
 	IsReadonly() bool
 	SliceReference(start, end int) IVector
-	// ReadonlyView()
+	GetLatestView() IVector
+	CopyToVector() *ro.Vector
 }
 
-func NewStdVector(t types.Type, capacity uint64) *StdVector {
+func NewStdVector(t types.Type, capacity uint64) IVector {
 	return &StdVector{
 		Type:  t,
 		Data:  make([]byte, 0, capacity*uint64(t.Size)),
@@ -72,6 +76,19 @@ func (v *StdVector) Close() error {
 
 func (v *StdVector) HasNull() bool {
 	return atomic.LoadUint64(&v.StatMask)&HasNullMask != 0
+}
+
+func (v *StdVector) NullCnt() int {
+	if !v.HasNull() {
+		return 0
+	}
+
+	if !v.IsReadonly() {
+		v.RLock()
+		defer v.RUnlock()
+	}
+
+	return v.VMask.Length()
 }
 
 func (v *StdVector) IsReadonly() bool {
@@ -293,7 +310,7 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	return n, err
 }
 
-func (v *StdVector) SliceReference(start, end int) *StdVector {
+func (v *StdVector) SliceReference(start, end int) IVector {
 	if !v.IsReadonly() {
 		panic("should call this in ro mode")
 	}
@@ -337,7 +354,7 @@ func (v *StdVector) SliceReference(start, end int) *StdVector {
 
 // }
 
-func (v *StdVector) GetLatestView() *StdVector {
+func (v *StdVector) GetLatestView() IVector {
 	if !v.IsReadonly() {
 		v.RLock()
 		defer v.RUnlock()
@@ -533,7 +550,7 @@ func (vec *StdVector) Marshall() ([]byte, error) {
 func (vec *StdVector) Reset() {
 }
 
-func MockStdVector(t types.Type, rows uint64) *StdVector {
+func MockStdVector(t types.Type, rows uint64) IVector {
 	vec := NewStdVector(t, rows)
 	switch t.Oid {
 	case types.T_int32:

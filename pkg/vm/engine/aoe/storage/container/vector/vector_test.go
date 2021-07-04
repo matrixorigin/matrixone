@@ -83,5 +83,5 @@ func TestStdVector(t *testing.T) {
 	// t.Log(lens)
 	// t.Log(vals)
 	// t.Log(ro)
-	assert.Equal(t, 2000, vec01.VMask.Length())
+	assert.Equal(t, 2000, vec01.NullCnt())
 }

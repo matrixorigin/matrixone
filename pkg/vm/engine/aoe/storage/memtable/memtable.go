@@ -43,7 +43,7 @@ func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IB
 		Meta:      data.GetMeta(),
 	}
 
-	var vectors []*vector.StdVector
+	var vectors []vector.IVector
 	for idx := 0; idx < mt.Handle.Cols(); idx++ {
 		vec := mt.Handle.GetPageNode(idx, 0).DataNode.(*vector.StdVector)
 		vec.InplaceInit(mt.Meta.Segment.Schema.ColDefs[idx].Type, mt.Meta.Segment.Info.Conf.BlockMaxRows)

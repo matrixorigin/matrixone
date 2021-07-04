@@ -9,12 +9,12 @@ import (
 
 type IChunk interface {
 	Append(IChunk, offset uint64) (n uint64, err error)
-	GetVector(int) *vector.StdVector
+	GetVector(int) vector.IVector
 	GetCount() uint64
 }
 
 type Chunk struct {
-	Vectors []*vector.StdVector
+	Vectors []vector.IVector
 }
 
 func (c *Chunk) Append(bat *batch.Batch, offset uint64) (n uint64, err error) {
@@ -34,7 +34,7 @@ func (c *Chunk) GetCount() uint64 {
 }
 
 func MockChunk(types []types.Type, rows uint64) *Chunk {
-	var vectors []*vector.StdVector
+	var vectors []vector.IVector
 	for _, colType := range types {
 		vectors = append(vectors, vector.MockStdVector(colType, rows))
 	}
