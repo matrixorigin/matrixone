@@ -4,10 +4,13 @@ import (
 	"fmt"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -192,6 +195,17 @@ func (blk *Block) String() string {
 		s = fmt.Sprintf("%s/n\t%s", s, colBlk.String())
 	}
 	return s
+}
+
+func (blk *Block) GetFullBatch() batch.IBatch {
+	vecs := make([]vector.IVector, len(blk.data.Columns))
+	attrs := make([]int, len(blk.data.Columns))
+	for idx, colBlk := range blk.data.Columns {
+		vecs[idx] = colBlk.GetVector()
+		attrs[idx] = colBlk.GetColIdx()
+	}
+	blk.Ref()
+	return wrapper.NewBatch(blk, attrs, vecs)
 }
 
 func (blk *Block) GetBlockHandle() iface.IBlockHandle {

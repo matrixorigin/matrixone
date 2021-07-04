@@ -45,6 +45,14 @@ func (n *Node) GetManagedNode() bmgrif.MangaedNode {
 	return mnode
 }
 
+func (n *Node) GetBufferHandle() nif.IBufferHandle {
+	nh := n.BufMgr.Pin(n.BufNode)
+	for nh == nil {
+		nh = n.BufMgr.Pin(n.BufNode)
+	}
+	return nh
+}
+
 func (n *Node) Close() error {
 	if n.BufNode != nil {
 		err := n.BufNode.Close()

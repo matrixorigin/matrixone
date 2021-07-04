@@ -17,6 +17,7 @@ type IVFile interface {
 type INode interface {
 	io.Closer
 	GetManagedNode() MangaedNode
+	GetBufferHandle() nif.IBufferHandle
 }
 
 type MangaedNode struct {

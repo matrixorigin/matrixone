@@ -8,6 +8,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	"sync"
 )
 
@@ -19,6 +20,7 @@ type IColumnPart interface {
 	GetID() uint64
 	GetColIdx() int
 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
+	GetVector() vector.IVector
 }
 
 type ColumnPart struct {
@@ -90,6 +92,11 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	cloned.Node = sstBufMgr.CreateNode(vf, vector.StdVectorConstructor, part.Capacity).(*bmgr.Node)
 
 	return cloned
+}
+
+func (part *ColumnPart) GetVector() vector.IVector {
+	handle := part.GetBufferHandle()
+	return wrapper.NewVector(handle)
 }
 
 func (part *ColumnPart) GetColIdx() int {

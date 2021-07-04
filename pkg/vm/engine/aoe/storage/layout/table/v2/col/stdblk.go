@@ -2,6 +2,7 @@ package col
 
 import (
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -95,6 +96,10 @@ func (blk *StdColumnBlock) close() {
 	}
 	blk.Part = nil
 	// log.Infof("destroy colblk %d, colidx %d", blk.Meta.ID, blk.ColIdx)
+}
+
+func (blk *StdColumnBlock) GetVector() vector.IVector {
+	return blk.Part.GetVector()
 }
 
 func (blk *StdColumnBlock) GetBlockHandle() iface.IColBlockHandle {
