@@ -3,6 +3,7 @@ package gci
 import (
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"time"
 )
 
 type RequestType int32
@@ -12,11 +13,11 @@ const (
 )
 
 const (
-	DefaultInterval int64 = 10
+	DefaultInterval = 10 * time.Millisecond
 )
 
 type WorkerCfg struct {
-	Interval int64
+	Interval time.Duration
 	Executor iw.IOpWorker
 }
 

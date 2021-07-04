@@ -34,10 +34,6 @@ func newNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.Mem
 	return node
 }
 
-func (n *Node) GetDataNode() buf.IMemoryNode {
-	return n.BufNode.GetBuffer().GetDataNode()
-}
-
 func (n *Node) GetManagedNode() bmgrif.MangaedNode {
 	mnode := bmgrif.MangaedNode{}
 	mnode.Handle = n.BufMgr.Pin(n.BufNode)
@@ -46,7 +42,6 @@ func (n *Node) GetManagedNode() bmgrif.MangaedNode {
 	}
 	b := mnode.Handle.GetHandle().GetBuffer()
 	mnode.DataNode = b.GetDataNode()
-	// mnode.DataNode = n.BufNode.GetBuffer().GetDataNode()
 	return mnode
 }
 
