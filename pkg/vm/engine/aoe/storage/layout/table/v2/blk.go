@@ -220,17 +220,6 @@ func (blk *Block) GetBatch(attrs []int) batch.IBatch {
 	return wrapper.NewBatch(blk, attrs, vecs)
 }
 
-func (blk *Block) StrongWrappedBlock(colIdx []int) iface.IBlockHandle {
-	h := new(BlockHandle)
-	h.Columns = make(map[int]iface.IColBlockHandle, len(colIdx))
-	blk.Ref()
-	h.Host = blk
-	for idx, colIdx := range colIdx {
-		h.Columns[idx] = blk.data.Columns[colIdx].GetBlockHandle()
-	}
-	return h
-}
-
 func (blk *Block) SetNext(next iface.IBlock) {
 	blk.data.Lock()
 	defer blk.data.Unlock()

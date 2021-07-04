@@ -1,7 +1,6 @@
 package col
 
 import (
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -30,23 +29,7 @@ type IColumnBlock interface {
 	CloneWithUpgrade(iface.IBlock) IColumnBlock
 	// EvalFilter(*index.FilterCtx) error
 	String() string
-	GetBlockHandle() iface.IColBlockHandle
 	GetVector() vector.IVector
-}
-
-type StdColBlockHandle struct {
-	Node bmgrif.MangaedNode
-}
-
-func (h *StdColBlockHandle) Close() error {
-	return h.Node.Close()
-}
-
-func (h *StdColBlockHandle) GetPageNode(pos int) bmgrif.MangaedNode {
-	if pos > 0 {
-		panic("logic error")
-	}
-	return h.Node
 }
 
 type ColumnBlock struct {
