@@ -18,14 +18,14 @@ type CreateTableOp struct {
 }
 
 func (op *CreateTableOp) Execute() error {
-	collection := op.Ctx.MTManager.GetCollection(op.Ctx.TableMeta.ID)
+	collection := op.Ctx.MTManager.StrongRefCollection(op.Ctx.TableMeta.ID)
 	if collection != nil {
 		op.Collection = collection
 		return nil
 	}
 	meta := op.Ctx.TableMeta
 
-	tableData, err := op.Ctx.Tables.GetTable(meta.ID)
+	tableData, err := op.Ctx.Tables.StrongRefTable(meta.ID)
 	if err != nil {
 		tableData = table.NewTableData(op.Ctx.FsMgr, op.Ctx.IndexBufMgr, op.Ctx.MTBufMgr, op.Ctx.SSTBufMgr, meta)
 		err = op.Ctx.Tables.CreateTable(tableData)
@@ -33,6 +33,7 @@ func (op *CreateTableOp) Execute() error {
 			return err
 		}
 	}
+	tableData.Ref()
 	collection, err = op.Ctx.MTManager.RegisterCollection(tableData)
 	if err != nil {
 		return err

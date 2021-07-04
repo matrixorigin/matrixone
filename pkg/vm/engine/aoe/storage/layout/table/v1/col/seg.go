@@ -84,7 +84,7 @@ func NewColumnSegment(tblHolder *index.TableHolder, fsMgr base.IManager, mtBufMg
 		FsMgr:     fsMgr,
 	}
 	seg.Impl = seg
-	seg.IndexHolder = tblHolder.GetSegment(seg.ID.SegmentID)
+	seg.IndexHolder = tblHolder.StrongRefSegment(seg.ID.SegmentID)
 	var err error
 	if seg.IndexHolder == nil {
 		segHolder := tblHolder.RegisterSegment(seg.ID.AsSegmentID(), indexSegType, nil)
@@ -244,7 +244,7 @@ func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment, indexTblHolder *ind
 		FsMgr:     seg.GetFsManager(),
 	}
 	cloned.Ref()
-	segIndexHolder := indexTblHolder.GetSegment(seg.ID.SegmentID)
+	segIndexHolder := indexTblHolder.StrongRefSegment(seg.ID.SegmentID)
 	if segIndexHolder == nil {
 		panic("logic error")
 	}

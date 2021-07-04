@@ -5,6 +5,7 @@ import (
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iworker "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"time"
+	// log "github.com/sirupsen/logrus"
 )
 
 func NewOp(impl iops.IOpInternal, w iworker.IOpWorker) *Op {

@@ -122,8 +122,7 @@ func (ss *Snapshot) Close() error {
 		ss.tree.Unlock()
 		ss.trace.Unlock()
 		if ss.TableData != nil {
-			// TODO: Implement TableData ref logic
-			// ss.TableData.Unref()
+			ss.TableData.Unref()
 			ss.TableData = nil
 		}
 		atomic.StoreInt32(&ss.State, Closed)

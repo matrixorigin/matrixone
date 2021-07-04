@@ -47,6 +47,7 @@ func NewStdVectorNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryN
 		Data:         make([]byte, 0),
 		VMask:        &nulls.Nulls{},
 		NodeCapacity: capacity,
+		AllocSize:    capacity,
 		FreeFunc:     freeFunc,
 	}
 }
@@ -100,7 +101,7 @@ func (v *StdVector) GetMemorySize() uint64 {
 }
 
 func (v *StdVector) GetMemoryCapacity() uint64 {
-	return v.NodeCapacity
+	return v.AllocSize
 }
 
 func (v *StdVector) IsNull(idx int) bool {
@@ -156,10 +157,12 @@ func (v *StdVector) GetValue(idx int) interface{} {
 	}
 	if !v.IsReadonly() {
 		v.RLock()
-		defer v.RLocker()
 	}
 	start := idx * int(v.Type.Size)
 	data := v.Data[start : start+int(v.Type.Size)]
+	if !v.IsReadonly() {
+		v.RUnlock()
+	}
 	switch v.Type.Oid {
 	case types.T_int8:
 		return encoding.DecodeInt8(data)

@@ -32,4 +32,5 @@ type StdVector struct {
 	VMask        *nulls.Nulls
 	FreeFunc     buf.MemoryFreeFunc
 	NodeCapacity uint64
+	AllocSize    uint64
 }

@@ -77,7 +77,7 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	seg.tree.Blocks = make([]iface.IBlock, 0)
 	seg.tree.Helper = make(map[uint64]int)
 	seg.tree.BlockIds = make([]uint64, 0)
-	seg.OnZeroCB = seg.noRefCB
+	seg.OnZeroCB = seg.close
 	seg.SegmentFile = segFile
 	seg.Ref()
 	return seg, nil
@@ -99,7 +99,10 @@ func (seg *Segment) BlockIds() []uint64 {
 	return ret
 }
 
-func (seg *Segment) noRefCB() {
+func (seg *Segment) close() {
+	if seg.IndexHolder != nil {
+		seg.IndexHolder.Unref()
+	}
 	for _, blk := range seg.tree.Blocks {
 		blk.Unref()
 		// log.Infof("blk refs=%d", blk.RefCount())
@@ -161,7 +164,7 @@ func (seg *Segment) GetIndexHolder() *index.SegmentHolder {
 func (seg *Segment) String() string {
 	seg.tree.RLock()
 	defer seg.tree.RUnlock()
-	s := fmt.Sprintf("<Segment[%d]>(BlkCnt=%d)(Refs=%d)", seg.Meta.ID, seg.tree.BlockCnt, seg.RefCount())
+	s := fmt.Sprintf("<Segment[%d]>(BlkCnt=%d)(Refs=%d)(IndexRefs=%d)", seg.Meta.ID, seg.tree.BlockCnt, seg.RefCount(), seg.IndexHolder.RefCount())
 	for _, blk := range seg.tree.Blocks {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.String())
 	}
@@ -224,7 +227,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	cloned.tree.Helper = make(map[uint64]int)
 	cloned.tree.BlockIds = make([]uint64, 0)
 
-	indexHolder := td.GetIndexHolder().GetSegment(seg.Meta.ID)
+	indexHolder := td.GetIndexHolder().StrongRefSegment(seg.Meta.ID)
 	if indexHolder == nil {
 		panic("logic error")
 	}
