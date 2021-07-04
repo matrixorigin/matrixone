@@ -10,6 +10,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
@@ -117,7 +118,7 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 		return err
 	}
 
-	collection := d.MemTableMgr.GetCollection(tbl.GetID())
+	collection := d.MemTableMgr.StrongRefCollection(tbl.GetID())
 	if collection == nil {
 		opCtx := &mdops.OpCtx{
 			Opts:        d.Opts,
@@ -139,6 +140,7 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 	}
 
 	clonedIndex := *index
+	defer collection.Unref()
 	return collection.Append(bat, &clonedIndex)
 }
 
@@ -158,6 +160,8 @@ func (d *DB) DropTable(name string) (id uint64, err error) {
 	op := mops.NewDropTblOp(opCtx, name, d.store.DataTables)
 	op.Push()
 	err = op.WaitDone()
+	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.store.DataTables, d.MemTableMgr)
+	d.Opts.GC.Acceptor.Accept(req)
 	return op.Id, err
 }
 
@@ -188,7 +192,7 @@ func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	if tableMeta.GetSegmentCount() == uint64(0) {
 		return handle.NewEmptySnapshot(), nil
 	}
-	tableData, err := d.store.DataTables.GetTable(tableMeta.ID)
+	tableData, err := d.store.DataTables.StrongRefTable(tableMeta.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -296,6 +300,7 @@ func (d *DB) replayAndCleanData() {
 }
 
 func (d *DB) startWorkers() {
+	d.Opts.GC.Acceptor.Start()
 	d.Opts.MemData.Updater.Start()
 	d.Opts.Data.Flusher.Start()
 	d.Opts.Data.Sorter.Start()
@@ -304,6 +309,7 @@ func (d *DB) startWorkers() {
 }
 
 func (d *DB) stopWorkers() {
+	d.Opts.GC.Acceptor.Stop()
 	d.Opts.MemData.Updater.Stop()
 	d.Opts.Data.Flusher.Stop()
 	d.Opts.Data.Sorter.Stop()

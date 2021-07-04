@@ -26,10 +26,10 @@ func TestSegment(t *testing.T) {
 	blk1Id.BlockID++
 	blk1Holder := newBlockHolder(bufMgr, blk1Id, base.TRANSIENT_BLK, nil)
 
-	blk0 := segHolder.GetBlock(blk0Id.BlockID)
+	blk0 := segHolder.StrongRefBlock(blk0Id.BlockID)
 	assert.Nil(t, blk0)
 	segHolder.addBlock(blk0Holder)
-	blk0 = segHolder.GetBlock(blk0Id.BlockID)
+	blk0 = segHolder.StrongRefBlock(blk0Id.BlockID)
 	assert.NotNil(t, blk0)
 	assert.Equal(t, int32(1), segHolder.GetBlockCount())
 	segHolder.addBlock(blk1Holder)
@@ -38,7 +38,7 @@ func TestSegment(t *testing.T) {
 	dropped := segHolder.DropBlock(blk0Id.BlockID)
 	assert.Equal(t, blk0Id, dropped.ID)
 	assert.Equal(t, int32(1), segHolder.GetBlockCount())
-	blk0 = segHolder.GetBlock(blk0Id.BlockID)
+	blk0 = segHolder.StrongRefBlock(blk0Id.BlockID)
 	assert.Nil(t, blk0)
 }
 
@@ -54,10 +54,10 @@ func TestTable(t *testing.T) {
 	seg1Id.SegmentID++
 	seg1Holder := newSegmentHolder(bufMgr, seg1Id, segType, nil)
 
-	seg0 := tableHolder.GetSegment(seg0Id.SegmentID)
+	seg0 := tableHolder.StrongRefSegment(seg0Id.SegmentID)
 	assert.Nil(t, seg0)
 	tableHolder.addSegment(seg0Holder)
-	seg0 = tableHolder.GetSegment(seg0Id.SegmentID)
+	seg0 = tableHolder.StrongRefSegment(seg0Id.SegmentID)
 	assert.NotNil(t, seg0)
 	assert.Equal(t, int64(1), tableHolder.GetSegmentCount())
 	tableHolder.addSegment(seg1Holder)
@@ -66,7 +66,7 @@ func TestTable(t *testing.T) {
 	dropped := tableHolder.DropSegment(seg0Id.SegmentID)
 	assert.Equal(t, seg0Id, dropped.ID)
 	assert.Equal(t, int64(1), tableHolder.GetSegmentCount())
-	seg0 = tableHolder.GetSegment(seg0Id.SegmentID)
+	seg0 = tableHolder.StrongRefSegment(seg0Id.SegmentID)
 	assert.Nil(t, seg0)
 }
 
@@ -103,7 +103,7 @@ func TestRefs1(t *testing.T) {
 	seg0IndexHolder := tblHolder.RegisterSegment(id, base.UNSORTED_SEG, cb)
 	assert.Equal(t, int64(2), seg0IndexHolder.RefCount())
 
-	seg0Ref := tblHolder.GetSegment(id.SegmentID)
+	seg0Ref := tblHolder.StrongRefSegment(id.SegmentID)
 	assert.Equal(t, int64(3), seg0Ref.RefCount())
 	assert.Equal(t, int64(3), seg0IndexHolder.RefCount())
 	assert.False(t, released)
@@ -145,7 +145,7 @@ func TestRefs2(t *testing.T) {
 	assert.Equal(t, int64(2), blk0.RefCount())
 	assert.False(t, released)
 
-	blk0Ref := seg0IndexHolder.GetBlock(id.BlockID)
+	blk0Ref := seg0IndexHolder.StrongRefBlock(id.BlockID)
 	assert.Equal(t, int64(3), blk0Ref.RefCount())
 	assert.False(t, released)
 

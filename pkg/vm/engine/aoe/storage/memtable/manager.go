@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"errors"
+	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
@@ -38,7 +39,7 @@ func (m *Manager) CollectionIDs() map[uint64]uint64 {
 	return ids
 }
 
-func (m *Manager) GetCollection(id uint64) imem.ICollection {
+func (m *Manager) WeakRefCollection(id uint64) imem.ICollection {
 	m.RLock()
 	c, ok := m.Collections[id]
 	m.RUnlock()
@@ -46,6 +47,29 @@ func (m *Manager) GetCollection(id uint64) imem.ICollection {
 		return nil
 	}
 	return c
+}
+
+func (m *Manager) StrongRefCollection(id uint64) imem.ICollection {
+	m.RLock()
+	c, ok := m.Collections[id]
+	if ok {
+		c.Ref()
+	}
+	m.RUnlock()
+	if !ok {
+		return nil
+	}
+	return c
+}
+
+func (m *Manager) String() string {
+	m.RLock()
+	defer m.RUnlock()
+	s := fmt.Sprintf("<MTManager>(TableCnt=%d)", len(m.Collections))
+	for _, c := range m.Collections {
+		s = fmt.Sprintf("%s\n\t%s", s, c.String())
+	}
+	return s
 }
 
 func (m *Manager) RegisterCollection(td interface{}) (c imem.ICollection, err error) {
@@ -59,6 +83,7 @@ func (m *Manager) RegisterCollection(td interface{}) (c imem.ICollection, err er
 	c = NewCollection(tableData, m.Opts)
 	m.Collections[tableData.GetID()] = c
 	m.Unlock()
+	c.Ref()
 	return c, err
 }
 

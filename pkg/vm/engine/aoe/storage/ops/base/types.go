@@ -11,6 +11,7 @@ type IOpInternal interface {
 type IOp interface {
 	OnExec() error
 	SetError(err error)
+	WaitDone() error
 	GetCreateTime() time.Time
 	GetStartTime() time.Time
 	GetEndTime() time.Time

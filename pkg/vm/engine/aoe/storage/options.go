@@ -5,6 +5,8 @@ import (
 	// ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	// "matrixone/pkg/vm/engine/aoe/storage/common"
 	e "matrixone/pkg/vm/engine/aoe/storage/event"
+	"matrixone/pkg/vm/engine/aoe/storage/gc"
+	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
@@ -57,6 +59,11 @@ type Options struct {
 
 	MemData struct {
 		Updater iw.IOpWorker
+	}
+
+	GC struct {
+		Conf     *gci.WorkerCfg
+		Acceptor gci.IAcceptor
 	}
 
 	CacheCfg *CacheCfg
@@ -118,9 +125,18 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CacheCfg == nil {
 		o.CacheCfg = &CacheCfg{
 			IndexCapacity:  o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
-			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
+			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 40,
 			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 40,
 		}
+	}
+
+	if o.GC.Acceptor == nil {
+		cfg := o.GC.Conf
+		if cfg == nil {
+			cfg = new(gci.WorkerCfg)
+			cfg.Interval = gci.DefaultInterval
+		}
+		o.GC.Acceptor = gc.NewWorker(cfg)
 	}
 	return o
 }

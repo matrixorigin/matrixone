@@ -147,13 +147,13 @@ func TestAppend(t *testing.T) {
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(tableInfo.Name, ck, logIdx)
 		assert.Nil(t, err)
-		// tbl, err := inst.store.DataTables.GetTable(tid)
+		// tbl, err := inst.store.DataTables.WeakRefTable(tid)
 		// assert.Nil(t, err)
 		// t.Log(tbl.GetCollumn(0).ToString(1000))
 	}
 
 	cols := []int{0, 1}
-	tbl, _ := inst.store.DataTables.GetTable(tid)
+	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 	segIds := tbl.SegmentIds()
 	ssCtx := &dbi.GetSnapshotCtx{
 		TableName:  tableInfo.Name,
@@ -300,10 +300,10 @@ func TestConcurrency(t *testing.T) {
 		defer wg2.Done()
 		reqCnt := 20000
 		for i := 0; i < reqCnt; i++ {
-			tbl, _ := inst.store.DataTables.GetTable(tid)
+			tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 			for tbl == nil {
 				time.Sleep(time.Duration(100) * time.Microsecond)
-				tbl, _ = inst.store.DataTables.GetTable(tid)
+				tbl, _ = inst.store.DataTables.WeakRefTable(tid)
 			}
 			segIds := tbl.SegmentIds()
 			searchReq := &dbi.GetSnapshotCtx{
@@ -321,7 +321,7 @@ func TestConcurrency(t *testing.T) {
 	cancel()
 	wg.Wait()
 	time.Sleep(time.Duration(100) * time.Millisecond)
-	tbl, _ := inst.store.DataTables.GetTable(tid)
+	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 	root := tbl.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
 	opts := &dbi.GetSnapshotCtx{
@@ -382,12 +382,13 @@ func TestConcurrency(t *testing.T) {
 	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
+	t.Log(inst.MemTableMgr.String())
 	// t.Log(inst.IndexBufMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
 	inst.Close()
 }
 
-func TestGC(t *testing.T) {
+func TestDropTable2(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
@@ -405,7 +406,7 @@ func TestGC(t *testing.T) {
 		Capacity: uint64(baseCk.Vecs[0].Length()),
 	}
 
-	insertCnt := uint64(4)
+	insertCnt := uint64(1)
 
 	var wg sync.WaitGroup
 	{
@@ -418,10 +419,21 @@ func TestGC(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	time.Sleep(time.Duration(40) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
+	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
+	t.Log(tbl.String())
+
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+
+	inst.DropTable(tablet.Name)
+	time.Sleep(time.Duration(200) * time.Millisecond)
+
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
-	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	t.Log(inst.MemTableMgr.String())
+	assert.Equal(t, 0, inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	inst.Close()
 }

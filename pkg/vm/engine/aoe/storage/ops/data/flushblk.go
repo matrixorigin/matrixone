@@ -21,6 +21,9 @@ func (op *FlushBlkOp) onFlushErr(mem imem.IMemTable) {
 // This Op is create when a memtable is full, and it is sent to meta Flusher queue.
 // The Flusher executes this op.
 func (op *FlushBlkOp) Execute() error {
+	if op.Ctx.Collection != nil {
+		defer op.Ctx.Collection.Unref()
+	}
 	var mem imem.IMemTable
 	if op.Ctx.MemTable != nil {
 		mem = op.Ctx.MemTable
@@ -38,6 +41,6 @@ func (op *FlushBlkOp) Execute() error {
 		log.Errorf("Flush memtable %d failed %s", mem.GetMeta().GetID(), err)
 		return err
 	}
-	mem.Close()
+	mem.Unref()
 	return nil
 }

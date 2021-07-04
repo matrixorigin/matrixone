@@ -41,6 +41,9 @@ func TestManager(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, c0)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
+	assert.Equal(t, int64(2), c0.RefCount())
+	c0.Unref()
+	assert.Equal(t, int64(1), c0.RefCount())
 	c00, err := manager.RegisterCollection(t0_data)
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
@@ -49,10 +52,15 @@ func TestManager(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
+	t.Log(manager.String())
 	c00, err = manager.UnregisterCollection(tableMeta.ID)
 	assert.Nil(t, err)
 	assert.NotNil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
+	assert.Equal(t, int64(1), c0.RefCount())
+	assert.Equal(t, int64(1), c00.RefCount())
+	c00.Unref()
+	assert.Equal(t, int64(0), c0.RefCount())
 }
 
 func TestCollection(t *testing.T) {
@@ -143,6 +151,7 @@ func TestCollection(t *testing.T) {
 	t.Log(sstBufMgr.String())
 	t.Log(indexBufMgr.String())
 	t.Log(fsMgr.String())
+	t.Log(manager)
 
 	opts.MemData.Updater.Stop()
 	opts.Data.Flusher.Stop()
