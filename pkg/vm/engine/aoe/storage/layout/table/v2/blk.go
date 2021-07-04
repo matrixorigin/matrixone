@@ -208,6 +208,18 @@ func (blk *Block) GetFullBatch() batch.IBatch {
 	return wrapper.NewBatch(blk, attrs, vecs)
 }
 
+func (blk *Block) GetBatch(attrs []int) batch.IBatch {
+	// TODO: check attrs validity
+	vecs := make([]vector.IVector, len(attrs))
+	clonedAttrs := make([]int, len(attrs))
+	for idx, attr := range attrs {
+		clonedAttrs[idx] = attr
+		vecs[idx] = blk.data.Columns[attr].GetVector()
+	}
+	blk.Ref()
+	return wrapper.NewBatch(blk, attrs, vecs)
+}
+
 func (blk *Block) StrongWrappedBlock(colIdx []int) iface.IBlockHandle {
 	h := new(BlockHandle)
 	h.Columns = make(map[int]iface.IColBlockHandle, len(colIdx))

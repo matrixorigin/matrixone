@@ -2,6 +2,7 @@ package dbi
 
 import (
 	"io"
+	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 )
 
@@ -21,7 +22,7 @@ type IBlock interface {
 	GetID() uint64
 	GetSegmentID() uint64
 	GetTableID() uint64
-	Prefetch() IBlockHandle
+	Prefetch() batch.IBatch
 }
 
 type ISegment interface {

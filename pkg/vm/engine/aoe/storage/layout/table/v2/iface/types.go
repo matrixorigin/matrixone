@@ -67,7 +67,7 @@ type IBlock interface {
 	GetSegmentFile() base.ISegmentFile
 	String() string
 	GetFullBatch() batch.IBatch
-	StrongWrappedBlock(colIdx []int) IBlockHandle
+	GetBatch(attrs []int) batch.IBatch
 	GetNext() IBlock
 	SetNext(next IBlock)
 }
