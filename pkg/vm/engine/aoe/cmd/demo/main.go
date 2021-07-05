@@ -17,10 +17,10 @@ import (
 func main() {
 	workDir := "/tmp/myDemo"
 	os.RemoveAll(workDir)
-	colCnt := 16
+	colCnt := 4
 	metaConf := &md.Configuration{
 		Dir:              workDir,
-		BlockMaxRows:     80000,
+		BlockMaxRows:     10000,
 		SegmentMaxBlocks: 10,
 	}
 	cacheCfg := &e.CacheCfg{
@@ -45,12 +45,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	rows := metaConf.BlockMaxRows / 2
+	rows := metaConf.BlockMaxRows / 8
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTableByName(tName)
-	ck := chunk.MockChunk(tblMeta.Schema.Types(), rows)
+	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
-		Capacity: ck.GetCount(),
+		Capacity: uint64(ck.Vecs[0].Length()),
 	}
 	cols := make([]int, 0)
 	for i := 0; i < len(tblMeta.Schema.ColDefs); i++ {
@@ -67,43 +67,68 @@ func main() {
 		for i := 0; i < insertCnt; i++ {
 			err = inst.Append(tName, ck, logIdx)
 			if err != nil {
-				panic(err)
+				log.Warn(err)
 			}
 		}
 		insertWg.Done()
 	}()
 	ctx := dbi.GetSnapshotCtx{ScanAll: true, TableName: tName, Cols: cols}
+
+	doScan := func() {
+		ss, err := inst.GetSnapshot(&ctx)
+		if err != nil {
+			log.Warn(err)
+			return
+		}
+		segIt := ss.NewIt()
+		for segIt.Valid() {
+			segment := segIt.GetHandle()
+			blkIt := segment.NewIt()
+			for blkIt.Valid() {
+				block := blkIt.GetHandle()
+				hh := block.Prefetch()
+				vec := hh.GetVector(0)
+				// pos := int(metaConf.BlockMaxRows / 2)
+				if vec.Length() >= 2 {
+					log.Infof("vec[1]=%v", vec.GetValue(1))
+				}
+				hh.Close()
+				blkIt.Next()
+			}
+			blkIt.Close()
+			segIt.Next()
+		}
+		segIt.Close()
+
+		ss.Close()
+	}
 	searchWg.Add(1)
 	go func() {
-		for i := 0; i < 0; i++ {
-			ss, err := inst.GetSnapshot(&ctx)
-			if err != nil {
-				panic(err)
-			}
-			segIt := ss.NewIt()
-			for segIt.Valid() {
-				segment := segIt.GetHandle()
-				blkIt := segment.NewIt()
-				for blkIt.Valid() {
-					block := blkIt.GetHandle()
-					hh := block.Prefetch()
-					hh.Close()
-					blkIt.Next()
-				}
-				blkIt.Close()
-				segIt.Next()
-			}
-			segIt.Close()
-
-			ss.Close()
+		for i := 0; i < 10; i++ {
+			time.Sleep(time.Duration(1) * time.Millisecond)
+			doScan()
 		}
 		searchWg.Done()
 	}()
-
 	insertWg.Wait()
+
+	time.Sleep(time.Duration(20) * time.Millisecond)
+	_, err = inst.DropTable(tName)
+	log.Infof("drop err: %v", err)
 	searchWg.Wait()
-	time.Sleep(time.Duration(500) * time.Millisecond)
+	// time.Sleep(time.Duration(100) * time.Millisecond)
+	doScan()
+	log.Info(inst.IndexBufMgr.String())
 	log.Info(inst.MTBufMgr.String())
 	log.Info(inst.SSTBufMgr.String())
+
+	// time.Sleep(time.Duration(10) * time.Millisecond)
+	// _, err = inst.DropTable(tName)
+
+	time.Sleep(time.Duration(100) * time.Millisecond)
+	log.Info(inst.IndexBufMgr.String())
+	log.Info(inst.MTBufMgr.String())
+	log.Info(inst.SSTBufMgr.String())
+	log.Infof("drop err: %v", err)
 	inst.Close()
 }

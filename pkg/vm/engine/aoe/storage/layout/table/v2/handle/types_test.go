@@ -30,6 +30,7 @@ func TestSnapshot(t *testing.T) {
 	tableMeta := md.MockTable(info, schema, uint64(blk_cnt*seg_cnt))
 
 	tableData := table.NewTableData(ldio.DefaultFsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
+	t.Logf("TableData Refs=%d", tableData.RefCount())
 	segIDs := table.MockSegments(tableMeta, tableData)
 	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())
 
@@ -39,6 +40,7 @@ func TestSnapshot(t *testing.T) {
 	now := time.Now()
 
 	cols := []int{0, 1}
+	tableData.Ref()
 	ss := NewSnapshot(segIDs, cols, tableData)
 	segIt := ss.NewIt()
 	actualSegCnt := 0
@@ -65,9 +67,11 @@ func TestSnapshot(t *testing.T) {
 	du := time.Since(now)
 	t.Log(du)
 	t.Log(sstBufMgr.String())
+	t.Log(tableData.String())
 	ss.Close()
 	assert.Equal(t, int64(1), root.RefCount())
 
+	tableData.Ref()
 	ss2 := NewLinkAllSnapshot(cols, tableData)
 	linkSegIt := ss2.NewIt()
 	actualSegCnt = 0

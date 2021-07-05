@@ -18,7 +18,7 @@ type CreateTableOp struct {
 }
 
 func (op *CreateTableOp) Execute() error {
-	collection := op.Ctx.MTManager.GetCollection(op.Ctx.TableMeta.ID)
+	collection := op.Ctx.MTManager.WeakRefCollection(op.Ctx.TableMeta.ID)
 	if collection != nil {
 		op.Collection = collection
 		return nil

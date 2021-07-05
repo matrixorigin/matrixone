@@ -8,11 +8,16 @@ import (
 	"github.com/pilosa/pilosa/roaring"
 )
 
+type FileInfo interface {
+	Name() string
+	Size() int64
+}
+
 type IVirtaulFile interface {
 	io.Reader
-	// io.Writer
 	Ref()
 	Unref()
+	Stat() FileInfo
 }
 
 type Pointer struct {
@@ -68,7 +73,9 @@ type IBaseFile interface {
 	GetIndexesMeta() *IndexesMeta
 	ReadPoint(ptr *Pointer, buf []byte)
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
+	PartSize(colIdx uint64, id common.ID) int64
 	Destory()
+	Stat() FileInfo
 	MakeVirtualIndexFile(*IndexMeta) IVirtaulFile
 	GetDir() string
 }

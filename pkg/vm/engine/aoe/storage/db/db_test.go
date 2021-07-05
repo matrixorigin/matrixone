@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -133,11 +134,11 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := inst.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockChunk(tblMeta.Schema.Types(), rows)
-	assert.Equal(t, uint64(rows), ck.GetCount())
+	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	assert.Equal(t, int(rows), ck.Vecs[0].Length())
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
-		Capacity: ck.GetCount(),
+		Capacity: uint64(ck.Vecs[0].Length()),
 	}
 	invalidName := "xxx"
 	err = inst.Append(invalidName, ck, logIdx)
@@ -146,13 +147,13 @@ func TestAppend(t *testing.T) {
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(tableInfo.Name, ck, logIdx)
 		assert.Nil(t, err)
-		// tbl, err := inst.store.DataTables.GetTable(tid)
+		// tbl, err := inst.store.DataTables.WeakRefTable(tid)
 		// assert.Nil(t, err)
 		// t.Log(tbl.GetCollumn(0).ToString(1000))
 	}
 
 	cols := []int{0, 1}
-	tbl, _ := inst.store.DataTables.GetTable(tid)
+	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 	segIds := tbl.SegmentIds()
 	ssCtx := &dbi.GetSnapshotCtx{
 		TableName:  tableInfo.Name,
@@ -197,7 +198,7 @@ func TestAppend(t *testing.T) {
 
 type InsertReq struct {
 	Name     string
-	Data     *chunk.Chunk
+	Data     *batch.Batch
 	LogIndex *md.LogIndex
 }
 
@@ -214,7 +215,7 @@ func TestConcurrency(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := inst.store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockChunk(tblMeta.Schema.Types(), rows)
+	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan *InsertReq)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
@@ -284,7 +285,7 @@ func TestConcurrency(t *testing.T) {
 			insertReq := &InsertReq{
 				Name:     tablet.Name,
 				Data:     baseCk,
-				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: baseCk.GetCount()},
+				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: uint64(baseCk.Vecs[0].Length())},
 			}
 			insertCh <- insertReq
 		}
@@ -299,10 +300,10 @@ func TestConcurrency(t *testing.T) {
 		defer wg2.Done()
 		reqCnt := 20000
 		for i := 0; i < reqCnt; i++ {
-			tbl, _ := inst.store.DataTables.GetTable(tid)
+			tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 			for tbl == nil {
 				time.Sleep(time.Duration(100) * time.Microsecond)
-				tbl, _ = inst.store.DataTables.GetTable(tid)
+				tbl, _ = inst.store.DataTables.WeakRefTable(tid)
 			}
 			segIds := tbl.SegmentIds()
 			searchReq := &dbi.GetSnapshotCtx{
@@ -320,7 +321,7 @@ func TestConcurrency(t *testing.T) {
 	cancel()
 	wg.Wait()
 	time.Sleep(time.Duration(100) * time.Millisecond)
-	tbl, _ := inst.store.DataTables.GetTable(tid)
+	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 	root := tbl.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
 	opts := &dbi.GetSnapshotCtx{
@@ -358,6 +359,8 @@ func TestConcurrency(t *testing.T) {
 			// 	assert.True(t, ctx.BoolRes)
 			// }
 			hh := blkHandle.Prefetch()
+			vec0 := hh.GetVector(0)
+			t.Logf("vec0[22]=%v", vec0.GetValue(22))
 			hh.Close()
 			// blkHandle.Close()
 			blkIt.Next()
@@ -379,12 +382,13 @@ func TestConcurrency(t *testing.T) {
 	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
+	t.Log(inst.MemTableMgr.String())
 	// t.Log(inst.IndexBufMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
 	inst.Close()
 }
 
-func TestGC(t *testing.T) {
+func TestDropTable2(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
@@ -395,14 +399,14 @@ func TestGC(t *testing.T) {
 	rows := inst.store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
-	baseCk := chunk.MockChunk(tblMeta.Schema.Types(), rows)
+	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 
 	logIdx := &md.LogIndex{
 		ID:       uint64(0),
-		Capacity: baseCk.GetCount(),
+		Capacity: uint64(baseCk.Vecs[0].Length()),
 	}
 
-	insertCnt := uint64(4)
+	insertCnt := uint64(1)
 
 	var wg sync.WaitGroup
 	{
@@ -415,10 +419,21 @@ func TestGC(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	time.Sleep(time.Duration(40) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
+	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
+	t.Log(tbl.String())
+
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+
+	inst.DropTable(tablet.Name)
+	time.Sleep(time.Duration(200) * time.Millisecond)
+
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
-	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	t.Log(inst.MemTableMgr.String())
+	assert.Equal(t, 0, inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	inst.Close()
 }

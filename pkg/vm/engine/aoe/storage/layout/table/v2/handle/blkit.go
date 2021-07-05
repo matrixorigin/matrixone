@@ -24,7 +24,8 @@ func NewBlockIt(segment *Segment, blkIds []uint64) dbi.IBlockIt {
 
 func (it *BlockIt) GetHandle() dbi.IBlock {
 	h := &Block{
-		Data: it.Segment.Data.WeakRefBlock(it.Ids[it.Pos]),
+		// Data: it.Segment.Data.WeakRefBlock(it.Ids[it.Pos]),
+		Id:   it.Ids[it.Pos],
 		Host: it.Segment,
 	}
 	return h

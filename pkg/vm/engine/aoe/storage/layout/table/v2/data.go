@@ -3,7 +3,6 @@ package table
 import (
 	"errors"
 	"fmt"
-	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -13,6 +12,11 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	"sync/atomic"
+	// log "github.com/sirupsen/logrus"
+)
+
+var (
+	NotExistErr = errors.New("not exist error")
 )
 
 func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) iface.ITableData {
@@ -27,6 +31,7 @@ func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.I
 	data.tree.Helper = make(map[uint64]int)
 	data.tree.Ids = make([]uint64, 0)
 	data.OnZeroCB = data.close
+	data.Ref()
 	return data
 }
 
@@ -47,9 +52,11 @@ type TableData struct {
 }
 
 func (td *TableData) close() {
+	td.IndexHolder.Unref()
 	for _, segment := range td.tree.Segments {
 		segment.Unref()
 	}
+	// log.Infof("table %d noref", td.Meta.ID)
 }
 
 func (td *TableData) GetIndexHolder() *index.TableHolder {
@@ -112,7 +119,7 @@ func (td *TableData) GetSegmentCount() uint32 {
 func (td *TableData) String() string {
 	td.tree.RLock()
 	defer td.tree.RUnlock()
-	s := fmt.Sprintf("<Table[%d]>(SegCnt=%d)", td.Meta.ID, td.tree.SegmentCnt)
+	s := fmt.Sprintf("<Table[%d]>(SegCnt=%d)(Refs=%d)", td.Meta.ID, td.tree.SegmentCnt, td.RefCount())
 	for _, seg := range td.tree.Segments {
 		s = fmt.Sprintf("%s\n\t%s", s, seg.String())
 	}
@@ -294,22 +301,23 @@ func (ts *Tables) TableIds() (ids map[uint64]bool) {
 	return ts.Ids
 }
 
-func (ts *Tables) DropTable(tid uint64) (err error) {
+func (ts *Tables) DropTable(tid uint64) (tbl iface.ITableData, err error) {
 	ts.Lock()
-	err = ts.DropTableNoLock(tid)
+	tbl, err = ts.DropTableNoLock(tid)
 	ts.Unlock()
-	return err
+	return tbl, err
 }
 
-func (ts *Tables) DropTableNoLock(tid uint64) (err error) {
+func (ts *Tables) DropTableNoLock(tid uint64) (tbl iface.ITableData, err error) {
 	tbl, ok := ts.Data[tid]
 	if !ok {
-		return errors.New(fmt.Sprintf("Specified table %d not found", tid))
+		// return errors.New(fmt.Sprintf("Specified table %d not found", tid))
+		return tbl, NotExistErr
 	}
-	ts.Tombstone[tid] = tbl
+	// ts.Tombstone[tid] = tbl
 	delete(ts.Ids, tid)
 	delete(ts.Data, tid)
-	return nil
+	return tbl, nil
 }
 
 func (ts *Tables) GetTableNoLock(tid uint64) (tbl iface.ITableData, err error) {
@@ -320,9 +328,19 @@ func (ts *Tables) GetTableNoLock(tid uint64) (tbl iface.ITableData, err error) {
 	return tbl, err
 }
 
-func (ts *Tables) GetTable(tid uint64) (tbl iface.ITableData, err error) {
+func (ts *Tables) WeakRefTable(tid uint64) (tbl iface.ITableData, err error) {
 	ts.RLock()
 	tbl, err = ts.GetTableNoLock(tid)
+	ts.RUnlock()
+	return tbl, err
+}
+
+func (ts *Tables) StrongRefTable(tid uint64) (tbl iface.ITableData, err error) {
+	ts.RLock()
+	tbl, err = ts.GetTableNoLock(tid)
+	if tbl != nil {
+		tbl.Ref()
+	}
 	ts.RUnlock()
 	return tbl, err
 }

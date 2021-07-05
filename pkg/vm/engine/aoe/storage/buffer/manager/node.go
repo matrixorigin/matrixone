@@ -23,7 +23,7 @@ func newNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.Mem
 		Capacity:    capacity,
 	}
 	if node.VFile != nil {
-		node.VFile.Ref()
+		// node.VFile.Ref()
 		node.BufNode = node.BufMgr.RegisterNode(node.Capacity, bufMgr.GetNextID(), node.VFile, node.Constructor)
 	} else {
 		node.BufNode = node.BufMgr.RegisterSpillableNode(node.Capacity, bufMgr.GetNextID(), node.Constructor)
@@ -44,7 +44,9 @@ func (n *Node) GetManagedNode() bmgrif.MangaedNode {
 	for mnode.Handle == nil {
 		mnode.Handle = n.BufMgr.Pin(n.BufNode)
 	}
-	mnode.DataNode = n.BufNode.GetBuffer().GetDataNode()
+	b := mnode.Handle.GetHandle().GetBuffer()
+	mnode.DataNode = b.GetDataNode()
+	// mnode.DataNode = n.BufNode.GetBuffer().GetDataNode()
 	return mnode
 }
 
