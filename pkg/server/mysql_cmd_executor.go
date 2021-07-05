@@ -1060,7 +1060,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			*tree.CreateIndex,*tree.DropIndex,
 			*tree.Insert, *tree.Delete, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
-			*tree.SetVar:
+			*tree.SetVar,
+			*tree.Load,
+			*tree.CreateUser,*tree.DropUser,*tree.AlterUser,
+			*tree.CreateRole,*tree.DropRole,
+			*tree.Revoke,*tree.Grant,
+			*tree.SetDefaultRole,*tree.SetRole,*tree.SetPassword:
 			/*
 				Step 1: Start
 			*/
