@@ -97,7 +97,7 @@ func (b *build) getTableDefType(typ tree.ResolvableTypeReference) (*types.Type, 
 			return &types.Type{Oid: types.T_varchar, Size: 24, Width: n.InternalType.Width}, nil
 		}
 	}
-	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport type: '%v'", typ))
+	return nil, sqlerror.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport type: '%v'", typ))
 }
 
 func (b *build) tableInfo(stmt tree.TableExpr) (string, string, error) {

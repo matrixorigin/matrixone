@@ -48,7 +48,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 	for i, attr := range attrs {
 		typ, ok := mp[attr]
 		if !ok {
-			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unknown column '%s' in 'filed list'", attrs[i]))
+			return nil, sqlerror.New(errno.UndefinedColumn, fmt.Sprintf("unknown column '%s' in 'filed list'", attrs[i]))
 		}
 		bat.Vecs[i] = vector.New(typ)
 		delete(mp, attr)
@@ -312,7 +312,7 @@ func (b *build) tableName(stmt tree.TableExpr) (string, string, engine.Relation,
 	}
 	r, err := db.Relation(string(tbl.ObjectName))
 	if err != nil {
-		return "", "", nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
+		return "", "", nil, sqlerror.New(errno.UndefinedTable, err.Error())
 	}
 	return string(tbl.SchemaName), string(tbl.ObjectName), r, nil
 }
