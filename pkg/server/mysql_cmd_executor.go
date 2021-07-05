@@ -386,7 +386,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 
-				//fmt.Printf("row -*> %v \n",row)
+				fmt.Printf("row -*> %v \n",row)
 
 				//send row
 				if err := proto.SendResultSetTextRow(mrs, 0); err != nil {
@@ -821,7 +821,7 @@ func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
 	var err error = nil
 	if _, err = config.StorageEngine.Database(name); err != nil {
 		//echo client. no such database
-		return err
+		return client.NewMysqlError(client.ER_BAD_DB_ERROR,name)
 	}
 	oldname := ses.Dbname
 	ses.Dbname = name
@@ -845,81 +845,6 @@ func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
 //handle Use statement
 func (mce *MysqlCmdExecutor) handleUse(use *tree.Use) error {
 	return mce.handleUseDB(use.Name)
-}
-
-func (mce *MysqlCmdExecutor) handleShowDatabases(sd *tree.ShowDatabases) error {
-	var err error = nil
-	ses := mce.Routine.GetSession()
-	proto := mce.Routine.GetClientProtocol()
-
-	mrs := ses.Mrs
-	col := &client.MysqlColumn{}
-	col.SetName("Database")
-	col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
-	col.SetCharset(uint16(client.Utf8mb4CollationID))
-
-	mrs.AddColumn(col)
-
-	//TODO:get database name from the engine
-	row := make([]interface{}, 1)
-	row[0] = ses.Dbname
-	mrs.AddRow(row)
-
-	mer := client.NewMysqlExecutionResult(0, 0, 0, 0, mrs)
-	resp := client.NewResponse(
-		client.ResultResponse,
-		0,
-		int(client.COM_QUERY),
-		mer,
-	)
-
-	if err = proto.SendResponse(resp); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (mce *MysqlCmdExecutor) handleShowTables(st *tree.ShowTables) error {
-	var err error = nil
-	ses := mce.Routine.GetSession()
-	proto := mce.Routine.GetClientProtocol()
-
-	mrs := ses.Mrs
-	col := &client.MysqlColumn{}
-
-	col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
-	col.SetCharset(uint16(45))
-	mrs.AddColumn(col)
-
-	//TODO:get database name from the engine
-	col.SetName("Tables_in_" + ses.Dbname)
-
-	db, err := config.StorageEngine.Database(ses.Dbname)
-	if err != nil {
-		return err
-	}
-
-	tables := db.Relations()
-	fmt.Printf("table count %v \n", len(tables))
-	for _, t := range tables {
-		row := make([]interface{}, 1)
-		fmt.Printf("table %v \n", t)
-		row[0] = t
-		mrs.AddRow(row)
-	}
-
-	mer := client.NewMysqlExecutionResult(0, 0, 0, 0, mrs)
-	resp := client.NewResponse(
-		client.ResultResponse,
-		0,
-		int(client.COM_QUERY),
-		mer,
-	)
-
-	if err = proto.SendResponse(resp); err != nil {
-		return err
-	}
-	return nil
 }
 
 //execute query
@@ -950,6 +875,16 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 	for _, exec := range execs {
 		stmt := exec.Statement()
+		//check database
+		if ses.Dbname == "" {
+			//if none database has been selected, database operations must be failed.
+			switch stmt.(type) {
+			case *tree.ShowDatabases,*tree.CreateDatabase,*tree.ShowWarnings,*tree.ShowErrors,
+			*tree.ShowStatus:
+			default:
+				return client.NewMysqlError(client.ER_NO_DB_ERROR)
+			}
+		}
 
 		var selfHandle bool = false
 
@@ -978,6 +913,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		case *tree.Select,
 			*tree.ShowCreate, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
+			*tree.ShowIndex,
 			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 			columns := exec.Columns()
 			if choose {
@@ -1124,9 +1060,15 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
+			*tree.CreateIndex,*tree.DropIndex,
 			*tree.Insert, *tree.Delete, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
-			*tree.SetVar:
+			*tree.SetVar,
+			*tree.Load,
+			*tree.CreateUser,*tree.DropUser,*tree.AlterUser,
+			*tree.CreateRole,*tree.DropRole,
+			*tree.Revoke,*tree.Grant,
+			*tree.SetDefaultRole,*tree.SetRole,*tree.SetPassword:
 			/*
 				Step 1: Start
 			*/
@@ -1138,7 +1080,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			/*
 				Step 2: Echo client
 			*/
-
 			resp := client.NewResponse(
 				client.OkResponse,
 				0,

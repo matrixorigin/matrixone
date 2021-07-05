@@ -898,3 +898,269 @@ func NewPartitionOption(pb *PartitionBy,spb *PartitionBy,parts []*Partition)*Par
 		Partitions: parts,
 	}
 }
+
+type IndexCategory int
+
+const (
+	INDEX_CATEGORY_NONE IndexCategory = iota
+	INDEX_CATEGORY_UNIQUE
+	INDEX_CATEGORY_FULLTEXT
+	INDEX_CATEGORY_SPATIAL
+)
+
+type CreateIndex struct {
+	statementImpl
+	Name Identifier
+	Table TableName
+	IndexCat IndexCategory
+	IfNotExists bool
+	KeyParts []*KeyPart
+	IndexOption *IndexOption
+	MiscOption []MiscOption
+}
+
+func NewCreateIndex(n Identifier, t TableName, ife bool, it IndexCategory, k []*KeyPart, i *IndexOption, m []MiscOption) *CreateIndex {
+	return &CreateIndex{
+		Name:          n,
+		Table:         t,
+		IfNotExists: ife,
+		IndexCat: it,
+		KeyParts:      k,
+		IndexOption:   i,
+		MiscOption:    m,
+	}
+}
+
+type MiscOption interface {
+	NodePrinter
+}
+
+type miscOption struct {
+	MiscOption
+}
+
+type AlgorithmDefault struct {
+	miscOption
+}
+
+type AlgorithmInplace struct {
+	miscOption
+}
+
+type AlgorithmCopy struct {
+	miscOption
+}
+
+type LockDefault struct {
+	miscOption
+}
+
+type LockNone struct {
+	miscOption
+}
+
+type LockShared struct {
+	miscOption
+}
+
+type LockExclusive struct {
+	miscOption
+}
+
+type CreateRole struct {
+	statementImpl
+	IfNotExists bool
+	Roles []*Role
+}
+
+func NewCreateRole(ife bool,r []*Role) *CreateRole {
+	return &CreateRole{
+		IfNotExists:   ife,
+		Roles:         r,
+	}
+}
+
+type Role struct {
+	NodePrinter
+	UserName string
+	HostName string
+}
+
+func NewRole(u,h string) *Role {
+	return &Role{
+		UserName:    u,
+		HostName:    h,
+	}
+}
+
+type User struct {
+	NodePrinter
+	Username string
+	Hostname string
+	AuthPlugin string
+	AuthString string
+}
+
+func NewUser(u,h,ap,as string)*User{
+	return &User{
+		Username:    u,
+		Hostname:    h,
+		AuthPlugin:  ap,
+		AuthString:  as,
+	}
+}
+
+type TlsOption interface {
+	NodePrinter
+}
+
+type tlsOptionImpl struct {
+	TlsOption
+}
+
+type TlsOptionNone struct {
+	tlsOptionImpl
+}
+
+type TlsOptionSSL struct {
+	tlsOptionImpl
+}
+
+type TlsOptionX509 struct {
+	tlsOptionImpl
+}
+
+type TlsOptionCipher struct {
+	tlsOptionImpl
+	Cipher string
+}
+
+type TlsOptionIssuer struct {
+	tlsOptionImpl
+	Issuer string
+}
+
+type TlsOptionSubject struct {
+	tlsOptionImpl
+	Subject string
+}
+
+type ResourceOption interface {
+}
+
+type resourceOptionImpl struct {
+	ResourceOption
+}
+
+type ResourceOptionMaxQueriesPerHour struct {
+	resourceOptionImpl
+	Count int64
+}
+
+type ResourceOptionMaxUpdatesPerHour struct {
+	resourceOptionImpl
+	Count int64
+}
+
+type ResourceOptionMaxConnectionPerHour struct {
+	resourceOptionImpl
+	Count int64
+}
+
+type ResourceOptionMaxUserConnections struct {
+	resourceOptionImpl
+	Count int64
+}
+
+type UserMiscOption interface {
+}
+
+type userMiscOptionImpl struct {
+	UserMiscOption
+}
+
+type UserMiscOptionPasswordExpireNone struct {
+	userMiscOptionImpl
+}
+
+type UserMiscOptionPasswordExpireDefault struct {
+	userMiscOptionImpl
+}
+
+type UserMiscOptionPasswordExpireNever struct {
+	userMiscOptionImpl
+}
+
+type UserMiscOptionPasswordExpireInterval struct {
+	userMiscOptionImpl
+	Value int64
+}
+
+type UserMiscOptionPasswordHistoryDefault struct {
+	userMiscOptionImpl
+}
+
+type UserMiscOptionPasswordHistoryCount struct {
+	userMiscOptionImpl
+	Value int
+}
+
+type UserMiscOptionPasswordReuseIntervalDefault struct {
+	userMiscOptionImpl
+}
+
+type UserMiscOptionPasswordReuseIntervalCount struct {
+	userMiscOptionImpl
+	Value int
+}
+
+type UserMiscOptionPasswordRequireCurrentDefault struct {
+	userMiscOptionImpl
+}
+
+type UserMiscOptionPasswordRequireCurrentOptional struct {
+	userMiscOptionImpl
+}
+
+type UserMiscOptionFailedLoginAttempts struct {
+	userMiscOptionImpl
+	Value int
+}
+
+type UserMiscOptionPasswordLockTimeCount struct {
+	userMiscOptionImpl
+	Value int
+}
+
+type UserMiscOptionPasswordLockTimeUnbounded struct {
+	userMiscOptionImpl
+}
+
+type UserMiscOptionAccountLock struct {
+	userMiscOptionImpl
+}
+
+type UserMiscOptionAccountUnlock struct {
+	userMiscOptionImpl
+}
+
+type CreateUser struct {
+	statementImpl
+	IfNotExists bool
+	Users []*User
+	Roles []*Role
+	TlsOpts []TlsOption
+	ResOpts []ResourceOption
+	MiscOpts []UserMiscOption
+}
+
+func NewCreateUser(ife bool, u []*User, r []*Role, tls []TlsOption, res []ResourceOption, misc []UserMiscOption) *CreateUser {
+	return &CreateUser{
+		IfNotExists: ife,
+		Users:         u,
+		Roles:         r,
+		TlsOpts:       tls,
+		ResOpts:       res,
+		MiscOpts:      misc,
+	}
+}
