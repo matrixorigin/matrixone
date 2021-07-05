@@ -359,7 +359,7 @@ func TestConcurrency(t *testing.T) {
 			// 	assert.True(t, ctx.BoolRes)
 			// }
 			hh := blkHandle.Prefetch()
-			vec0 := hh.GetVector(0)
+			vec0 := hh.GetVectorByAttr(0)
 			t.Logf("vec0[22]=%v", vec0.GetValue(22))
 			hh.Close()
 			// blkHandle.Close()
@@ -426,10 +426,23 @@ func TestDropTable2(t *testing.T) {
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	cols := make([]int, 0)
+	for i := 0; i < len(tblMeta.Schema.ColDefs); i++ {
+		cols = append(cols, i)
+	}
+	opts := &dbi.GetSnapshotCtx{
+		TableName: tablet.Name,
+		Cols:      cols,
+		ScanAll:   true,
+	}
+	ss, err := inst.GetSnapshot(opts)
+	assert.Nil(t, err)
 
 	inst.DropTable(tablet.Name)
-	time.Sleep(time.Duration(200) * time.Millisecond)
-
+	time.Sleep(time.Duration(100) * time.Millisecond)
+	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	ss.Close()
+	time.Sleep(time.Duration(100) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())

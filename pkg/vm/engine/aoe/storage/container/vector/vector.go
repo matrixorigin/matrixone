@@ -9,6 +9,7 @@ import (
 	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -21,20 +22,25 @@ func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMem
 }
 
 type IVector interface {
-	SetValue(v interface{})
-	GetValue() interface{}
-	Append(interface{}) error
+	buf.IMemoryNode
+	SetValue(int, interface{})
+	GetValue(int) interface{}
+	IsNull(int) bool
+	HasNull() bool
+	NullCnt() int
+	Append(int, interface{}) error
 	AppendVector(*ro.Vector, int) (int, error)
 	Length() int
 	Capacity() int
-	DataBytes() int
 	Close() error
 	IsReadonly() bool
 	SliceReference(start, end int) IVector
-	// ReadonlyView()
+	GetLatestView() IVector
+	CopyToVector() *ro.Vector
+	PlacementNew(t types.Type, capacity uint64)
 }
 
-func NewStdVector(t types.Type, capacity uint64) *StdVector {
+func NewStdVector(t types.Type, capacity uint64) IVector {
 	return &StdVector{
 		Type:  t,
 		Data:  make([]byte, 0, capacity*uint64(t.Size)),
@@ -59,7 +65,7 @@ func NewEmptyStdVector() *StdVector {
 	}
 }
 
-func (v *StdVector) InplaceInit(t types.Type, capacity uint64) {
+func (v *StdVector) PlacementNew(t types.Type, capacity uint64) {
 	v.Type = t
 	v.Data = make([]byte, 0, capacity*uint64(t.Size))
 }
@@ -71,22 +77,35 @@ func (v *StdVector) Close() error {
 }
 
 func (v *StdVector) HasNull() bool {
-	return atomic.LoadUint64(&v.StatMask)&HasNullMask != 0
+	return atomic.LoadUint64(&v.StatMask)&container.HasNullMask != 0
+}
+
+func (v *StdVector) NullCnt() int {
+	if !v.HasNull() {
+		return 0
+	}
+
+	if !v.IsReadonly() {
+		v.RLock()
+		defer v.RUnlock()
+	}
+
+	return v.VMask.Length()
 }
 
 func (v *StdVector) IsReadonly() bool {
-	return atomic.LoadUint64(&v.StatMask)&ReadonlyMask != 0
+	return atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask != 0
 }
 
 func (v *StdVector) Length() int {
-	return int(atomic.LoadUint64(&v.StatMask) & PosMask)
+	return int(atomic.LoadUint64(&v.StatMask) & container.PosMask)
 }
 
 func (v *StdVector) Capacity() int {
 	return cap(v.Data) / int(v.Type.Size)
 }
 
-func (v *StdVector) DataBytes() int {
+func (v *StdVector) dataBytes() int {
 	return cap(v.Data)
 }
 
@@ -97,7 +116,7 @@ func (v *StdVector) FreeMemory() {
 }
 
 func (v *StdVector) GetMemorySize() uint64 {
-	return uint64(v.DataBytes())
+	return uint64(v.dataBytes())
 }
 
 func (v *StdVector) GetMemoryCapacity() uint64 {
@@ -203,11 +222,11 @@ func (v *StdVector) Append(n int, vals interface{}) error {
 		return err
 	}
 
-	mask := v.StatMask & (^PosMask)
-	pos := uint64(len(v.Data)/int(v.Type.Size)) & PosMask
+	mask := v.StatMask & (^container.PosMask)
+	pos := uint64(len(v.Data)/int(v.Type.Size)) & container.PosMask
 	mask = mask | pos
 	if len(v.Data) == cap(v.Data) {
-		mask = mask | ReadonlyMask
+		mask = mask | container.ReadonlyMask
 	}
 	atomic.StoreUint64(&v.StatMask, mask)
 	return nil
@@ -279,27 +298,27 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 			}
 		}
 	}
-	mask := v.StatMask & (^PosMask)
-	pos := uint64(len(v.Data)/int(v.Type.Size)) & PosMask
+	mask := v.StatMask & (^container.PosMask)
+	pos := uint64(len(v.Data)/int(v.Type.Size)) & container.PosMask
 	mask = mask | pos
 	if len(v.Data) == cap(v.Data) {
-		mask = mask | ReadonlyMask
+		mask = mask | container.ReadonlyMask
 	}
 	if v.VMask.Any() {
-		mask = mask | HasNullMask
+		mask = mask | container.HasNullMask
 	}
 	atomic.StoreUint64(&v.StatMask, mask)
 
 	return n, err
 }
 
-func (v *StdVector) SliceReference(start, end int) *StdVector {
+func (v *StdVector) SliceReference(start, end int) IVector {
 	if !v.IsReadonly() {
 		panic("should call this in ro mode")
 	}
 	startIdx := start * int(v.Type.Size)
 	endIdx := end * int(v.Type.Size)
-	mask := ReadonlyMask | (uint64(end-start) & PosMask)
+	mask := container.ReadonlyMask | (uint64(end-start) & container.PosMask)
 	vec := &StdVector{
 		Type: v.Type,
 		Data: v.Data[startIdx:endIdx],
@@ -308,7 +327,7 @@ func (v *StdVector) SliceReference(start, end int) *StdVector {
 		vmask := v.VMask.Range(uint64(start), uint64(end))
 		vec.VMask = vmask
 		if vmask.Any() {
-			mask = mask | HasNullMask
+			mask = mask | container.HasNullMask
 		}
 	} else {
 		vec.VMask = &nulls.Nulls{}
@@ -337,21 +356,21 @@ func (v *StdVector) SliceReference(start, end int) *StdVector {
 
 // }
 
-func (v *StdVector) GetLatestView() *StdVector {
+func (v *StdVector) GetLatestView() IVector {
 	if !v.IsReadonly() {
 		v.RLock()
 		defer v.RUnlock()
 	}
 	mask := atomic.LoadUint64(&v.StatMask)
-	endPos := int(mask & PosMask)
+	endPos := int(mask & container.PosMask)
 	endIdx := endPos * int(v.Type.Size)
 	vec := &StdVector{
-		StatMask: ReadonlyMask | mask,
+		StatMask: container.ReadonlyMask | mask,
 		Type:     v.Type,
 		Data:     v.Data[0:endIdx],
 	}
-	if mask&HasNullMask != 0 {
-		if mask&ReadonlyMask == 0 {
+	if mask&container.HasNullMask != 0 {
+		if mask&container.ReadonlyMask == 0 {
 			vec.VMask = v.VMask.Range(0, uint64(endPos))
 		} else {
 			vec.VMask = v.VMask.Range(0, uint64(endPos))
@@ -366,7 +385,7 @@ func (v *StdVector) GetLatestView() *StdVector {
 }
 
 func (v *StdVector) CopyToVector() *ro.Vector {
-	if atomic.LoadUint64(&v.StatMask)&ReadonlyMask == 0 {
+	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		panic("should call in ro mode")
 	}
 	length := v.Length()
@@ -533,7 +552,7 @@ func (vec *StdVector) Marshall() ([]byte, error) {
 func (vec *StdVector) Reset() {
 }
 
-func MockStdVector(t types.Type, rows uint64) *StdVector {
+func MockStdVector(t types.Type, rows uint64) IVector {
 	vec := NewStdVector(t, rows)
 	switch t.Oid {
 	case types.T_int32:

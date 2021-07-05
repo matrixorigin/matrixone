@@ -1,22 +1,12 @@
 package vector
 
 import (
+	"github.com/cockroachdb/errors"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"sync"
-
-	// "sync"
-
-	"github.com/cockroachdb/errors"
-)
-
-type Mask = uint64
-
-const (
-	ReadonlyMask Mask = 0x01000000
-	HasNullMask  Mask = 0x02000000
-	PosMask      Mask = 0x00FFFFFF
 )
 
 var (
@@ -27,7 +17,7 @@ var (
 type StdVector struct {
 	sync.RWMutex
 	Type         types.Type
-	StatMask     Mask
+	StatMask     container.Mask
 	Data         []byte
 	VMask        *nulls.Nulls
 	FreeFunc     buf.MemoryFreeFunc

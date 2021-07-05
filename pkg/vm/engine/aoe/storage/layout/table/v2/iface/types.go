@@ -5,6 +5,7 @@ import (
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -65,8 +66,8 @@ type IBlock interface {
 	CloneWithUpgrade(ISegment, *md.Block) (IBlock, error)
 	GetSegmentFile() base.ISegmentFile
 	String() string
-	GetBlockHandle() IBlockHandle
-	StrongWrappedBlock(colIdx []int) IBlockHandle
+	GetFullBatch() batch.IBatch
+	GetBatch(attrs []int) batch.IBatch
 	GetNext() IBlock
 	SetNext(next IBlock)
 }
