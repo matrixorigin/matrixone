@@ -3,6 +3,7 @@ package build
 import (
 	"fmt"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/aggregation/avg"
 	"matrixone/pkg/sql/colexec/aggregation/count"
@@ -14,6 +15,7 @@ import (
 	"matrixone/pkg/sql/op/projection"
 	"matrixone/pkg/sql/op/summarize"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 )
 
 var AggFuncs map[string]int = map[string]int{
@@ -41,7 +43,7 @@ func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs, where *tree.Where) 
 	{
 		for _, n := range ns {
 			if !b.hasAggregate(n.Expr) {
-				return nil, fmt.Errorf("noaggregated column '%s'", n.Expr)
+				return nil, sqlerror.New(errno.SyntaxError, fmt.Sprintf("noaggregated column '%s'", n.Expr))
 			}
 		}
 	}
@@ -73,11 +75,11 @@ func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs, where *tree.Where) 
 	for _, f := range fs {
 		name, ok := f.Func.FunctionReference.(*tree.UnresolvedName)
 		if !ok {
-			return nil, fmt.Errorf("illegal expression '%s'", f)
+			return nil, sqlerror.New(errno.SyntaxError, fmt.Sprintf("illegal expression '%s'", f))
 		}
 		op, ok := AggFuncs[name.Parts[0]]
 		if !ok {
-			return nil, fmt.Errorf("unimplemented aggregated functions '%s'", name.Parts[0])
+			return nil, sqlerror.New(errno.UndefinedFunction, fmt.Sprintf("unimplemented aggregated functions '%s'", name.Parts[0]))
 		}
 		switch e := f.Exprs[0].(type) {
 		case *tree.NumVal:
@@ -95,7 +97,7 @@ func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs, where *tree.Where) 
 			alias := fmt.Sprintf("%s(%s)", name.Parts[0], e.Parts[0])
 			typ, ok := o.Attribute()[e.Parts[0]]
 			if !ok {
-				return nil, fmt.Errorf("unknown column '%s' in aggregation", e.Parts[0])
+				return nil, sqlerror.New(errno.UndefinedColumn, fmt.Sprintf("unknown column '%s' in aggregation", e.Parts[0]))
 			}
 			agg, err := newAggregate(op, typ)
 			if err != nil {
@@ -292,5 +294,5 @@ func newAggregate(op int, typ types.Type) (aggregation.Aggregation, error) {
 	case aggregation.StarCount:
 		return starcount.New(typ), nil
 	}
-	return nil, fmt.Errorf("unimplemented aggregation '%v' for '%s'", op, typ)
+	return nil, sqlerror.New(errno.UndefinedFunction, fmt.Sprintf("unimplemented aggregation '%v' for '%s'", op, typ))
 }

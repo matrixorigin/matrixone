@@ -15,7 +15,7 @@ func (b *build) checkProduct(r, s op.OP) error {
 		rattrs, sattrs := r.Attribute(), s.Attribute()
 		for attr, _ := range rattrs {
 			if _, ok := sattrs[attr]; ok {
-				return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("conflict attribute '%s'", attr))
+				return sqlerror.New(errno.AmbiguousColumn, fmt.Sprintf("conflict attribute '%s'", attr))
 			}
 		}
 	case len(r.Name()) != 0 && len(s.Name()) == 0:
@@ -23,7 +23,7 @@ func (b *build) checkProduct(r, s op.OP) error {
 		rattrs, sattrs := r.Attribute(), s.Attribute()
 		for attr, _ := range rattrs {
 			if _, ok := sattrs[name+"."+attr]; ok {
-				return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("conflict attribute '%s'", name+"."+attr))
+				return sqlerror.New(errno.AmbiguousColumn, fmt.Sprintf("conflict attribute '%s'", name+"."+attr))
 			}
 		}
 	case len(r.Name()) == 0 && len(s.Name()) != 0:
@@ -31,7 +31,7 @@ func (b *build) checkProduct(r, s op.OP) error {
 		rattrs, sattrs := r.Attribute(), s.Attribute()
 		for attr, _ := range sattrs {
 			if _, ok := rattrs[name+"."+attr]; ok {
-				return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("conflict attribute '%s'", name+"."+attr))
+				return sqlerror.New(errno.AmbiguousColumn, fmt.Sprintf("conflict attribute '%s'", name+"."+attr))
 			}
 		}
 	}
@@ -97,7 +97,7 @@ func (b *build) checkInnerJoin(r, s op.OP, rattrs, sattrs []string, expr tree.Ex
 			}
 		}
 		if ltyp.Oid != rtyp.Oid {
-			return nil, nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%s' and '%s' type mismatch", left.Parts[0], right.Parts[0]))
+			return nil, nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("'%s' and '%s' type mismatch", left.Parts[0], right.Parts[0]))
 		}
 		return rattrs, sattrs, nil
 	}
@@ -107,21 +107,21 @@ func (b *build) checkInnerJoin(r, s op.OP, rattrs, sattrs []string, expr tree.Ex
 
 func getJoinAttribute(r, s op.OP, name *tree.UnresolvedName) (string, string, types.Type, error) {
 	if len(name.Parts[1]) == 0 {
-		return "", "", types.Type{}, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("column '%s' in on clause is ambiguous", name.Parts[0]))
+		return "", "", types.Type{}, sqlerror.New(errno.AmbiguousColumn, fmt.Sprintf("column '%s' in on clause is ambiguous", name.Parts[0]))
 	}
 	rname, sname := r.Name(), s.Name()
 	rattrs, sattrs := r.Attribute(), s.Attribute()
 	if len(rname) > 0 && rname == name.Parts[1] {
 		typ, ok := rattrs[name.Parts[0]]
 		if !ok {
-			return "", "", types.Type{}, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unknown column '%s.%s' in on clause", name.Parts[1], name.Parts[0]))
+			return "", "", types.Type{}, sqlerror.New(errno.UndefinedColumn, fmt.Sprintf("unknown column '%s.%s' in on clause", name.Parts[1], name.Parts[0]))
 		}
 		return name.Parts[0], "", typ, nil
 	}
 	if len(sname) > 0 && sname == name.Parts[1] {
 		typ, ok := sattrs[name.Parts[0]]
 		if !ok {
-			return "", "", types.Type{}, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unknown column '%s.%s' in on clause", name.Parts[1], name.Parts[0]))
+			return "", "", types.Type{}, sqlerror.New(errno.UndefinedColumn, fmt.Sprintf("unknown column '%s.%s' in on clause", name.Parts[1], name.Parts[0]))
 		}
 		return "", name.Parts[0], typ, nil
 	}
@@ -132,5 +132,5 @@ func getJoinAttribute(r, s op.OP, name *tree.UnresolvedName) (string, string, ty
 	if typ, ok := sattrs[colName]; ok {
 		return "", colName, typ, nil
 	}
-	return "", "", types.Type{}, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unknown column '%s' in on clause", colName))
+	return "", "", types.Type{}, sqlerror.New(errno.UndefinedColumn, fmt.Sprintf("unknown column '%s' in on clause", colName))
 }
