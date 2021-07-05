@@ -22,7 +22,6 @@ func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMem
 }
 
 type IVector interface {
-	buf.IMemoryNode
 	SetValue(int, interface{})
 	GetValue(int) interface{}
 	IsNull(int) bool
@@ -38,6 +37,11 @@ type IVector interface {
 	GetLatestView() IVector
 	CopyToVector() *ro.Vector
 	PlacementNew(t types.Type, capacity uint64)
+}
+
+type IVectorNode interface {
+	buf.IMemoryNode
+	IVector
 }
 
 func NewStdVector(t types.Type, capacity uint64) IVector {
