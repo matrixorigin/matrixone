@@ -3,6 +3,7 @@ package vector
 import (
 	"matrixone/pkg/container/types"
 	v "matrixone/pkg/container/vector"
+	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"sync"
 	"testing"
 
@@ -84,4 +85,42 @@ func TestStdVector(t *testing.T) {
 	// t.Log(vals)
 	// t.Log(ro)
 	assert.Equal(t, 2000, vec01.NullCnt())
+}
+
+func TestStrVector(t *testing.T) {
+	size := uint64(4)
+	vec := NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, size)
+	assert.Equal(t, int(size), vec.Capacity())
+	assert.Equal(t, 0, vec.Length())
+
+	assert.False(t, vec.IsReadonly())
+	str0 := "str0"
+	str1 := "str1"
+	str2 := "str2"
+	str3 := "str3"
+	strs := [][]byte{[]byte(str0), []byte(str1)}
+	err := vec.Append(len(strs), strs)
+	assert.Nil(t, err)
+	assert.Equal(t, len(strs), vec.Length())
+	assert.False(t, vec.IsReadonly())
+	s := 0
+	for _, str := range strs {
+		s += len(str)
+	}
+	assert.Equal(t, uint64(len(strs)*2*4+s), vec.(buf.IMemoryNode).GetMemorySize())
+	prevLen := len(strs)
+	strs = [][]byte{[]byte(str2), []byte(str3)}
+	err = vec.Append(len(strs), strs)
+	assert.Nil(t, err)
+	assert.Equal(t, prevLen+len(strs), vec.Length())
+	assert.Equal(t, vec.Capacity(), vec.Length())
+	assert.True(t, vec.IsReadonly())
+	for _, str := range strs {
+		s += len(str)
+	}
+	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), vec.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, []byte(str0), vec.GetValue(0))
+	assert.Equal(t, []byte(str1), vec.GetValue(1))
+	assert.Equal(t, []byte(str2), vec.GetValue(2))
+	assert.Equal(t, []byte(str3), vec.GetValue(3))
 }

@@ -44,26 +44,32 @@ type IVectorNode interface {
 
 func NewStdVector(t types.Type, capacity uint64) IVector {
 	return &StdVector{
-		Type:  t,
-		Data:  make([]byte, 0, capacity*uint64(t.Size)),
-		VMask: &nulls.Nulls{},
+		BaseVector: BaseVector{
+			Type:  t,
+			VMask: &nulls.Nulls{},
+		},
+		Data: make([]byte, 0, capacity*uint64(t.Size)),
 	}
 }
 
 func NewStdVectorNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return &StdVector{
 		Data:         make([]byte, 0),
-		VMask:        &nulls.Nulls{},
 		NodeCapacity: capacity,
 		AllocSize:    capacity,
 		FreeFunc:     freeFunc,
+		BaseVector: BaseVector{
+			VMask: &nulls.Nulls{},
+		},
 	}
 }
 
 func NewEmptyStdVector() *StdVector {
 	return &StdVector{
-		Data:  make([]byte, 0),
-		VMask: &nulls.Nulls{},
+		Data: make([]byte, 0),
+		BaseVector: BaseVector{
+			VMask: &nulls.Nulls{},
+		},
 	}
 }
 
@@ -76,31 +82,6 @@ func (v *StdVector) Close() error {
 	v.VMask = nil
 	v.Data = nil
 	return nil
-}
-
-func (v *StdVector) HasNull() bool {
-	return atomic.LoadUint64(&v.StatMask)&container.HasNullMask != 0
-}
-
-func (v *StdVector) NullCnt() int {
-	if !v.HasNull() {
-		return 0
-	}
-
-	if !v.IsReadonly() {
-		v.RLock()
-		defer v.RUnlock()
-	}
-
-	return v.VMask.Length()
-}
-
-func (v *StdVector) IsReadonly() bool {
-	return atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask != 0
-}
-
-func (v *StdVector) Length() int {
-	return int(atomic.LoadUint64(&v.StatMask) & container.PosMask)
 }
 
 func (v *StdVector) Capacity() int {
@@ -123,17 +104,6 @@ func (v *StdVector) GetMemorySize() uint64 {
 
 func (v *StdVector) GetMemoryCapacity() uint64 {
 	return v.AllocSize
-}
-
-func (v *StdVector) IsNull(idx int) bool {
-	if idx >= v.Length() {
-		panic(VecInvalidOffsetErr.Error())
-	}
-	if !v.IsReadonly() {
-		v.RLock()
-		defer v.RUnlock()
-	}
-	return v.VMask.Contains(uint64(idx))
 }
 
 func (v *StdVector) SetValue(idx int, val interface{}) {
@@ -322,7 +292,9 @@ func (v *StdVector) SliceReference(start, end int) dbi.IVectorReader {
 	endIdx := end * int(v.Type.Size)
 	mask := container.ReadonlyMask | (uint64(end-start) & container.PosMask)
 	vec := &StdVector{
-		Type: v.Type,
+		BaseVector: BaseVector{
+			Type: v.Type,
+		},
 		Data: v.Data[startIdx:endIdx],
 	}
 	if v.VMask.Np != nil {
@@ -367,9 +339,11 @@ func (v *StdVector) GetLatestView() IVector {
 	endPos := int(mask & container.PosMask)
 	endIdx := endPos * int(v.Type.Size)
 	vec := &StdVector{
-		StatMask: container.ReadonlyMask | mask,
-		Type:     v.Type,
-		Data:     v.Data[0:endIdx],
+		BaseVector: BaseVector{
+			StatMask: container.ReadonlyMask | mask,
+			Type:     v.Type,
+		},
+		Data: v.Data[0:endIdx],
 	}
 	if mask&container.HasNullMask != 0 {
 		if mask&container.ReadonlyMask == 0 {
