@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -21,18 +22,6 @@ func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMem
 	return NewStdVectorNode(capacity, freeFunc)
 }
 
-type IVectorReader interface {
-	io.Closer
-	GetValue(int) interface{}
-	IsNull(int) bool
-	HasNull() bool
-	NullCnt() int
-	Length() int
-	Capacity() int
-	SliceReference(start, end int) IVectorReader
-	CopyToVector() *ro.Vector
-}
-
 type IVectorWriter interface {
 	io.Closer
 	SetValue(int, interface{})
@@ -42,7 +31,7 @@ type IVectorWriter interface {
 
 type IVector interface {
 	IsReadonly() bool
-	IVectorReader
+	dbi.IVectorReader
 	IVectorWriter
 	GetLatestView() IVector
 	PlacementNew(t types.Type, capacity uint64)
@@ -325,7 +314,7 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	return n, err
 }
 
-func (v *StdVector) SliceReference(start, end int) IVectorReader {
+func (v *StdVector) SliceReference(start, end int) dbi.IVectorReader {
 	if !v.IsReadonly() {
 		panic("should call this in ro mode")
 	}

@@ -2,11 +2,10 @@ package iface
 
 import (
 	"io"
-	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -67,7 +66,7 @@ type IBlock interface {
 	GetSegmentFile() base.ISegmentFile
 	String() string
 	GetFullBatch() batch.IBatch
-	GetBatch(attrs []int) batch.IBatchReader
+	GetBatch(attrs []int) dbi.IBatchReader
 	GetNext() IBlock
 	SetNext(next IBlock)
 }
@@ -75,13 +74,4 @@ type IBlock interface {
 type IColBlockHandle interface {
 	io.Closer
 	GetPageNode(int) bmgrif.MangaedNode
-}
-
-type IBlockHandle interface {
-	io.Closer
-	GetHost() IBlock
-	GetPageNode(colIdx, pos int) bmgrif.MangaedNode
-	GetVector(int) *vector.StdVector
-	Cols() int
-	ColType(idx int) types.Type
 }

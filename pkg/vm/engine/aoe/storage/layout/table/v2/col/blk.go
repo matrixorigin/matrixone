@@ -3,6 +3,7 @@ package col
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
@@ -30,7 +31,7 @@ type IColumnBlock interface {
 	// EvalFilter(*index.FilterCtx) error
 	String() string
 	GetVector() vector.IVector
-	GetVectorReader() vector.IVectorReader
+	GetVectorReader() dbi.IVectorReader
 }
 
 type ColumnBlock struct {

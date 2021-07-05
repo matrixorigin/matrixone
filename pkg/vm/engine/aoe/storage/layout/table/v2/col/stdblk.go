@@ -3,6 +3,7 @@ package col
 import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -102,8 +103,8 @@ func (blk *StdColumnBlock) GetVector() vector.IVector {
 	return blk.Part.GetVector()
 }
 
-func (blk *StdColumnBlock) GetVectorReader() vector.IVectorReader {
-	return blk.Part.GetVector().(vector.IVectorReader)
+func (blk *StdColumnBlock) GetVectorReader() dbi.IVectorReader {
+	return blk.Part.GetVector().(dbi.IVectorReader)
 }
 
 func (blk *StdColumnBlock) String() string {
