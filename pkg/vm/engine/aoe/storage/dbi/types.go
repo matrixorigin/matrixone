@@ -22,7 +22,7 @@ type IBlock interface {
 	GetID() uint64
 	GetSegmentID() uint64
 	GetTableID() uint64
-	Prefetch() batch.IBatch
+	Prefetch() batch.IBatchReader
 }
 
 type ISegment interface {

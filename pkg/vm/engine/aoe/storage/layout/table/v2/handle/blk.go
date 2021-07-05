@@ -14,7 +14,7 @@ type Block struct {
 	Id   uint64
 }
 
-func (blk *Block) Prefetch() batch.IBatch {
+func (blk *Block) Prefetch() batch.IBatchReader {
 	realBlk := blk.Host.Data.StrongRefBlock(blk.Id)
 	defer realBlk.Unref()
 	return realBlk.GetBatch(blk.Host.Attr)

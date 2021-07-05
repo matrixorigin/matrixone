@@ -21,21 +21,30 @@ func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMem
 	return NewStdVectorNode(capacity, freeFunc)
 }
 
-type IVector interface {
-	SetValue(int, interface{})
+type IVectorReader interface {
+	io.Closer
 	GetValue(int) interface{}
 	IsNull(int) bool
 	HasNull() bool
 	NullCnt() int
-	Append(int, interface{}) error
-	AppendVector(*ro.Vector, int) (int, error)
 	Length() int
 	Capacity() int
-	Close() error
-	IsReadonly() bool
-	SliceReference(start, end int) IVector
-	GetLatestView() IVector
+	SliceReference(start, end int) IVectorReader
 	CopyToVector() *ro.Vector
+}
+
+type IVectorWriter interface {
+	io.Closer
+	SetValue(int, interface{})
+	Append(int, interface{}) error
+	AppendVector(*ro.Vector, int) (int, error)
+}
+
+type IVector interface {
+	IsReadonly() bool
+	IVectorReader
+	IVectorWriter
+	GetLatestView() IVector
 	PlacementNew(t types.Type, capacity uint64)
 }
 
@@ -316,7 +325,7 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	return n, err
 }
 
-func (v *StdVector) SliceReference(start, end int) IVector {
+func (v *StdVector) SliceReference(start, end int) IVectorReader {
 	if !v.IsReadonly() {
 		panic("should call this in ro mode")
 	}

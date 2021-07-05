@@ -30,6 +30,7 @@ type IColumnBlock interface {
 	// EvalFilter(*index.FilterCtx) error
 	String() string
 	GetVector() vector.IVector
+	GetVectorReader() vector.IVectorReader
 }
 
 type ColumnBlock struct {

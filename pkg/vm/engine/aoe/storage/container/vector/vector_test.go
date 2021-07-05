@@ -30,7 +30,7 @@ func TestStdVector(t *testing.T) {
 	assert.Equal(t, int32(1), ref.GetValue(0))
 	assert.Equal(t, int32(2), ref.GetValue(1))
 	assert.False(t, ref.HasNull())
-	assert.True(t, ref.IsReadonly())
+	assert.True(t, ref.(IVector).IsReadonly())
 
 	vvec := v.New(vecType)
 	vvec.Append([]int32{0, 1, 2, 3, 4})

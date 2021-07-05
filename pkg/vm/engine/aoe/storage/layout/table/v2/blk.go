@@ -208,7 +208,7 @@ func (blk *Block) GetFullBatch() batch.IBatch {
 	return wrapper.NewBatch(blk, attrs, vecs)
 }
 
-func (blk *Block) GetBatch(attrs []int) batch.IBatch {
+func (blk *Block) GetBatch(attrs []int) batch.IBatchReader {
 	// TODO: check attrs validity
 	vecs := make([]vector.IVector, len(attrs))
 	clonedAttrs := make([]int, len(attrs))
@@ -217,7 +217,7 @@ func (blk *Block) GetBatch(attrs []int) batch.IBatch {
 		vecs[idx] = blk.data.Columns[attr].GetVector()
 	}
 	blk.Ref()
-	return wrapper.NewBatch(blk, attrs, vecs)
+	return wrapper.NewBatch(blk, attrs, vecs).(batch.IBatchReader)
 }
 
 func (blk *Block) SetNext(next iface.IBlock) {

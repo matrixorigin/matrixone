@@ -42,6 +42,14 @@ func (bat *Batch) IsReadonly() bool {
 	return bat.Vecs[len(bat.Vecs)-1].IsReadonly()
 }
 
+func (bat *Batch) GetReaderByAttr(attr int) vector.IVectorReader {
+	vec := bat.GetVectorByAttr(attr)
+	if vec == nil {
+		return vec
+	}
+	return vec.(vector.IVectorReader)
+}
+
 func (bat *Batch) GetVectorByAttr(attr int) vector.IVector {
 	pos, ok := bat.AttrsMap[attr]
 	if !ok {

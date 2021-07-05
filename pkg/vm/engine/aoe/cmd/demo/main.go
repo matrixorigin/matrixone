@@ -87,7 +87,7 @@ func main() {
 			for blkIt.Valid() {
 				block := blkIt.GetHandle()
 				hh := block.Prefetch()
-				vec := hh.GetVectorByAttr(0)
+				vec := hh.GetReaderByAttr(0)
 				// pos := int(metaConf.BlockMaxRows / 2)
 				if vec.Length() >= 2 {
 					log.Infof("vec[1]=%v", vec.GetValue(1))

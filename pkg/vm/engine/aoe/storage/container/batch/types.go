@@ -12,14 +12,19 @@ var (
 	BatAlreadyClosedErr = errors.New("already closed error")
 )
 
-type IBatch interface {
+type IBatchReader interface {
 	IsReadonly() bool
 	Length() int
 	GetAttrs() []int
-	GetVectorByAttr(attrId int) vector.IVector
 	Close() error
 	CloseVector(idx int) error
 	IsVectorClosed(idx int) bool
+	GetReaderByAttr(attr int) vector.IVectorReader
+}
+
+type IBatch interface {
+	IBatchReader
+	GetVectorByAttr(attrId int) vector.IVector
 }
 
 type Batch struct {
