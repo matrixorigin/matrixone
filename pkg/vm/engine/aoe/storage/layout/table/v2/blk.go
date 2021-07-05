@@ -4,10 +4,13 @@ import (
 	"fmt"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -194,26 +197,27 @@ func (blk *Block) String() string {
 	return s
 }
 
-func (blk *Block) GetBlockHandle() iface.IBlockHandle {
-	h := new(BlockHandle)
-	h.Columns = make(map[int]iface.IColBlockHandle, len(blk.data.Columns))
-	blk.Ref()
-	h.Host = blk
+func (blk *Block) GetFullBatch() batch.IBatch {
+	vecs := make([]vector.IVector, len(blk.data.Columns))
+	attrs := make([]int, len(blk.data.Columns))
 	for idx, colBlk := range blk.data.Columns {
-		h.Columns[idx] = colBlk.GetBlockHandle()
+		vecs[idx] = colBlk.GetVector()
+		attrs[idx] = colBlk.GetColIdx()
 	}
-	return h
+	blk.Ref()
+	return wrapper.NewBatch(blk, attrs, vecs)
 }
 
-func (blk *Block) StrongWrappedBlock(colIdx []int) iface.IBlockHandle {
-	h := new(BlockHandle)
-	h.Columns = make(map[int]iface.IColBlockHandle, len(colIdx))
-	blk.Ref()
-	h.Host = blk
-	for idx, colIdx := range colIdx {
-		h.Columns[idx] = blk.data.Columns[colIdx].GetBlockHandle()
+func (blk *Block) GetBatch(attrs []int) batch.IBatch {
+	// TODO: check attrs validity
+	vecs := make([]vector.IVector, len(attrs))
+	clonedAttrs := make([]int, len(attrs))
+	for idx, attr := range attrs {
+		clonedAttrs[idx] = attr
+		vecs[idx] = blk.data.Columns[attr].GetVector()
 	}
-	return h
+	blk.Ref()
+	return wrapper.NewBatch(blk, attrs, vecs)
 }
 
 func (blk *Block) SetNext(next iface.IBlock) {

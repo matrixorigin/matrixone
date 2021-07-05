@@ -3,15 +3,14 @@ package memtable
 import (
 	"context"
 	"fmt"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage"
+	ro "matrixone/pkg/container/batch"
+	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata/v2"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
@@ -23,9 +22,8 @@ type MemTable struct {
 	common.RefHelper
 	Opts      *engine.Options
 	TableData iface.ITableData
-	Data      *chunk.Chunk
 	Full      bool
-	Handle    iface.IBlockHandle
+	Batch     batch.IBatch
 	Meta      *md.Block
 	Block     iface.IBlock
 }
@@ -38,20 +36,14 @@ func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IB
 	mt := &MemTable{
 		Opts:      opts,
 		TableData: tableData,
-		Handle:    data.GetBlockHandle(),
+		Batch:     data.GetFullBatch(),
 		Block:     data,
 		Meta:      data.GetMeta(),
 	}
 
-	var vectors []*vector.StdVector
-	for idx := 0; idx < mt.Handle.Cols(); idx++ {
-		vec := mt.Handle.GetPageNode(idx, 0).DataNode.(*vector.StdVector)
-		vec.InplaceInit(mt.Meta.Segment.Schema.ColDefs[idx].Type, mt.Meta.Segment.Info.Conf.BlockMaxRows)
-		vectors = append(vectors, vec)
-	}
-
-	mt.Data = &chunk.Chunk{
-		Vectors: vectors,
+	for idx, colIdx := range mt.Batch.GetAttrs() {
+		vec := mt.Batch.GetVectorByAttr(colIdx)
+		vec.PlacementNew(mt.Meta.Segment.Schema.ColDefs[idx].Type, mt.Meta.Segment.Info.Conf.BlockMaxRows)
 	}
 
 	mt.OnZeroCB = mt.close
@@ -67,23 +59,26 @@ func (mt *MemTable) String() string {
 	mt.RLock()
 	defer mt.RUnlock()
 	id := mt.GetID()
-	s := fmt.Sprintf("<MT[%s]>(Refs=%d)(Count=%d)", id.BlockString(), mt.RefCount(), mt.Data.GetCount())
+	s := fmt.Sprintf("<MT[%s]>(Refs=%d)(Count=%d)", id.BlockString(), mt.RefCount(), mt.Batch.Length())
 	return s
 }
 
-func (mt *MemTable) Append(bat *batch.Batch, offset uint64, index *md.LogIndex) (n uint64, err error) {
+func (mt *MemTable) Append(bat *ro.Batch, offset uint64, index *md.LogIndex) (n uint64, err error) {
 	mt.Lock()
 	defer mt.Unlock()
-	n, err = mt.Data.Append(bat, offset)
-	if err != nil {
-		return n, err
+	var na int
+	for idx, attr := range mt.Batch.GetAttrs() {
+		if na, err = mt.Batch.GetVectorByAttr(attr).AppendVector(bat.Vecs[idx], int(offset)); err != nil {
+			return n, err
+		}
 	}
+	n = uint64(na)
 	index.Count = n
 	mt.Meta.SetIndex(*index)
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
 	mt.Meta.AddCount(n)
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
-	if mt.Data.GetCount() == mt.Meta.MaxRowCount {
+	if uint64(mt.Batch.Length()) == mt.Meta.MaxRowCount {
 		mt.Full = true
 		mt.Meta.DataState = md.FULL
 	}
@@ -170,16 +165,16 @@ func (mt *MemTable) GetMeta() *md.Block {
 }
 
 func (mt *MemTable) Unpin() {
-	if mt.Handle != nil {
-		mt.Handle.Close()
-		mt.Handle = nil
+	if mt.Batch != nil {
+		mt.Batch.Close()
+		mt.Batch = nil
 	}
 }
 
 func (mt *MemTable) close() {
-	if mt.Handle != nil {
-		mt.Handle.Close()
-		mt.Handle = nil
+	if mt.Batch != nil {
+		mt.Batch.Close()
+		mt.Batch = nil
 	}
 	if mt.Block != nil {
 		mt.Block.Unref()
