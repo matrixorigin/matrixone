@@ -123,4 +123,35 @@ func TestStrVector(t *testing.T) {
 	assert.Equal(t, []byte(str1), vec.GetValue(1))
 	assert.Equal(t, []byte(str2), vec.GetValue(2))
 	assert.Equal(t, []byte(str3), vec.GetValue(3))
+
+	nodeVec := vec.(buf.IMemoryNode)
+	marshalled, err := nodeVec.Marshall()
+	assert.Nil(t, err)
+
+	mirror := NewEmptyStrVector()
+	err = mirror.(buf.IMemoryNode).Unmarshall(marshalled)
+	assert.Nil(t, err)
+
+	t.Log(mirror.Length())
+	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), mirror.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, []byte(str0), mirror.GetValue(0))
+	assert.Equal(t, []byte(str1), mirror.GetValue(1))
+	assert.Equal(t, []byte(str2), mirror.GetValue(2))
+	assert.Equal(t, []byte(str3), mirror.GetValue(3))
+	assert.Equal(t, 4, mirror.Length())
+	assert.True(t, mirror.IsReadonly())
+
+	view := mirror.GetLatestView()
+	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), view.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, []byte(str0), view.GetValue(0))
+	assert.Equal(t, []byte(str1), view.GetValue(1))
+	assert.Equal(t, []byte(str2), view.GetValue(2))
+	assert.Equal(t, []byte(str3), view.GetValue(3))
+	assert.Equal(t, 4, view.Length())
+	assert.True(t, mirror.IsReadonly())
+
+	ref := vec.SliceReference(1, 3)
+	assert.Equal(t, 2, ref.Length())
+	assert.Equal(t, []byte(str1), ref.GetValue(0))
+	assert.Equal(t, []byte(str2), ref.GetValue(1))
 }

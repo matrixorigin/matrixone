@@ -50,6 +50,19 @@ func NewStrVectorNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryN
 	}
 }
 
+func NewEmptyStrVector() IVector {
+	return &StrVector{
+		BaseVector: BaseVector{
+			VMask: &nulls.Nulls{},
+		},
+		Data: &types.Bytes{
+			Data:    make([]byte, 0),
+			Offsets: make([]uint32, 0),
+			Lengths: make([]uint32, 0),
+		},
+	}
+}
+
 func (v *StrVector) PlacementNew(t types.Type, capacity uint64) {
 	v.Type = t
 	v.Data = &types.Bytes{
