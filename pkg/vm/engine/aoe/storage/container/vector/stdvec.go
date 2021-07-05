@@ -78,6 +78,10 @@ func (v *StdVector) PlacementNew(t types.Type, capacity uint64) {
 	v.Data = make([]byte, 0, capacity*uint64(t.Size))
 }
 
+func (v *StdVector) GetType() dbi.VectorType {
+	return dbi.StdVec
+}
+
 func (v *StdVector) Close() error {
 	v.VMask = nil
 	v.Data = nil
@@ -526,25 +530,4 @@ func (vec *StdVector) Marshall() ([]byte, error) {
 }
 
 func (vec *StdVector) Reset() {
-}
-
-func MockStdVector(t types.Type, rows uint64) IVector {
-	vec := NewStdVector(t, rows)
-	switch t.Oid {
-	case types.T_int32:
-		vals := []int32{}
-		for i := uint64(0); i < rows; i++ {
-			vals = append(vals, int32(i))
-		}
-		vec.Append(len(vals), vals)
-	case types.T_float64:
-		vals := []float64{}
-		for i := uint64(0); i < rows; i++ {
-			vals = append(vals, float64(i))
-		}
-		vec.Append(len(vals), vals)
-	default:
-		panic("not supported")
-	}
-	return vec
 }

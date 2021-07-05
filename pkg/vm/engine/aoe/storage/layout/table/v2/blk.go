@@ -164,7 +164,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		Type:        newType,
 		SegmentFile: host.GetSegmentFile(),
 	}
-	cloned.data.Columns = make([]col.IColumnBlock, 0)
+	cloned.data.Columns = make([]col.IColumnBlock, len(blk.data.Columns))
 	cloned.data.Helper = make(map[string]int)
 	if newIndexHolder {
 		indexHolder.Init(cloned.SegmentFile)
@@ -181,8 +181,8 @@ func (blk *Block) cloneWithUpgradeColumns(cloned *Block) {
 		colBlk := blk.data.Columns[idx]
 		cloned.Ref()
 		clonedCol := colBlk.CloneWithUpgrade(cloned)
-		cloned.data.Helper[name] = len(cloned.data.Columns)
-		cloned.data.Columns = append(cloned.data.Columns, clonedCol)
+		cloned.data.Helper[name] = idx
+		cloned.data.Columns[idx] = clonedCol
 	}
 }
 

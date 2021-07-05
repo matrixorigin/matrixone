@@ -72,6 +72,10 @@ func (v *StrVector) PlacementNew(t types.Type, capacity uint64) {
 	}
 }
 
+func (v *StrVector) GetType() dbi.VectorType {
+	return dbi.StrVec
+}
+
 func (v *StrVector) Close() error {
 	v.VMask = nil
 	v.Data = nil
@@ -167,7 +171,15 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	}
 	startRow := v.Length()
 
-	err = v.appendWithOffset(offset, n, vec.Col)
+	dataBytes := vec.Col.(*types.Bytes)
+	insert := make([][]byte, 0, len(dataBytes.Lengths))
+	for i := 0; i < len(dataBytes.Lengths); i++ {
+		s := dataBytes.Offsets[i]
+		e := s + dataBytes.Lengths[i]
+		insert = append(insert, dataBytes.Data[s:e])
+	}
+
+	err = v.appendWithOffset(offset, n, insert)
 	if err != nil {
 		return n, err
 	}

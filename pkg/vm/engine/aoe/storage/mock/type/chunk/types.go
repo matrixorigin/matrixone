@@ -36,7 +36,7 @@ func (c *Chunk) GetCount() uint64 {
 func MockChunk(types []types.Type, rows uint64) *Chunk {
 	var vectors []vector.IVector
 	for _, colType := range types {
-		vectors = append(vectors, vector.MockStdVector(colType, rows))
+		vectors = append(vectors, vector.MockVector(colType, rows))
 	}
 
 	return &Chunk{
@@ -52,7 +52,7 @@ func MockBatch(types []types.Type, rows uint64) *batch.Batch {
 
 	bat := batch.New(true, attrs)
 	for i, colType := range types {
-		vec := vector.MockStdVector(colType, rows)
+		vec := vector.MockVector(colType, rows)
 		bat.Vecs[i] = vec.CopyToVector()
 	}
 

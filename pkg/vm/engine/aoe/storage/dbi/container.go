@@ -5,6 +5,13 @@ import (
 	ro "matrixone/pkg/container/vector"
 )
 
+type VectorType uint8
+
+const (
+	StdVec VectorType = iota
+	StrVec
+)
+
 type IBatchReader interface {
 	IsReadonly() bool
 	Length() int
@@ -17,6 +24,7 @@ type IBatchReader interface {
 
 type IVectorReader interface {
 	io.Closer
+	GetType() VectorType
 	GetValue(int) interface{}
 	IsNull(int) bool
 	HasNull() bool

@@ -1,6 +1,7 @@
 package col
 
 import (
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -15,15 +16,12 @@ import (
 
 type IColumnBlock interface {
 	common.IRef
-	// GetNext() IColumnBlock
-	// SetNext(next IColumnBlock)
 	GetID() uint64
 	GetMeta() *md.Block
 	GetRowCount() uint64
-	// InitScanCursor(cusor *ScanCursor) error
 	RegisterPart(part IColumnPart)
-	// GetPartRoot() IColumnPart
 	GetType() base.BlockType
+	GetColType() types.Type
 	GetIndexHolder() *index.BlockHolder
 	GetColIdx() int
 	GetSegmentFile() base.ISegmentFile
@@ -59,6 +57,10 @@ func (blk *ColumnBlock) GetIndexHolder() *index.BlockHolder {
 
 func (blk *ColumnBlock) GetColIdx() int {
 	return blk.ColIdx
+}
+
+func (blk *ColumnBlock) GetColType() types.Type {
+	return blk.Meta.Segment.Schema.ColDefs[blk.ColIdx].Type
 }
 
 func (blk *ColumnBlock) GetMeta() *md.Block {

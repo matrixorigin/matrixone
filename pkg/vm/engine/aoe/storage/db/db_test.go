@@ -298,7 +298,7 @@ func TestConcurrency(t *testing.T) {
 	wg2.Add(1)
 	go func() {
 		defer wg2.Done()
-		reqCnt := 20000
+		reqCnt := 10000
 		for i := 0; i < reqCnt; i++ {
 			tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 			for tbl == nil {

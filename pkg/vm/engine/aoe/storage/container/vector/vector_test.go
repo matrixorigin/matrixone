@@ -4,6 +4,7 @@ import (
 	"matrixone/pkg/container/types"
 	v "matrixone/pkg/container/vector"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"os"
 	"sync"
 	"testing"
 
@@ -132,7 +133,6 @@ func TestStrVector(t *testing.T) {
 	err = mirror.(buf.IMemoryNode).Unmarshall(marshalled)
 	assert.Nil(t, err)
 
-	t.Log(mirror.Length())
 	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), mirror.(buf.IMemoryNode).GetMemorySize())
 	assert.Equal(t, []byte(str0), mirror.GetValue(0))
 	assert.Equal(t, []byte(str1), mirror.GetValue(1))
@@ -154,4 +154,24 @@ func TestStrVector(t *testing.T) {
 	assert.Equal(t, 2, ref.Length())
 	assert.Equal(t, []byte(str1), ref.GetValue(0))
 	assert.Equal(t, []byte(str2), ref.GetValue(1))
+
+	fname := "/tmp/xxstrvec"
+	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, 0666)
+	assert.Nil(t, err)
+	_, err = nodeVec.WriteTo(f)
+	assert.Nil(t, err)
+	f.Close()
+
+	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
+	assert.Nil(t, err)
+	builtVec := NewEmptyStrVector().(IVectorNode)
+	_, err = builtVec.ReadFrom(f)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte(str0), builtVec.GetValue(0))
+	assert.Equal(t, []byte(str1), builtVec.GetValue(1))
+	assert.Equal(t, []byte(str2), builtVec.GetValue(2))
+	assert.Equal(t, []byte(str3), builtVec.GetValue(3))
+	assert.Equal(t, 4, builtVec.Length())
+	assert.True(t, builtVec.IsReadonly())
+	f.Close()
 }
