@@ -22,26 +22,6 @@ func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMem
 	return NewStdVectorNode(capacity, freeFunc)
 }
 
-type IVectorWriter interface {
-	io.Closer
-	SetValue(int, interface{})
-	Append(int, interface{}) error
-	AppendVector(*ro.Vector, int) (int, error)
-}
-
-type IVector interface {
-	IsReadonly() bool
-	dbi.IVectorReader
-	IVectorWriter
-	GetLatestView() IVector
-	PlacementNew(t types.Type, capacity uint64)
-}
-
-type IVectorNode interface {
-	buf.IMemoryNode
-	IVector
-}
-
 func NewStdVector(t types.Type, capacity uint64) IVector {
 	return &StdVector{
 		BaseVector: BaseVector{
