@@ -1,7 +1,7 @@
 package col
 
 import (
-	// log "github.com/sirupsen/logrus"
+	"matrixone/pkg/container/types"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	"sync"
+	// log "github.com/sirupsen/logrus"
 )
 
 type IColumnPart interface {
@@ -37,6 +38,7 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	var bufMgr bmgrif.IBufferManager
 	part := &ColumnPart{Block: blk}
 	blkId := blk.GetMeta().AsCommonID().AsBlockID()
+	blkId.Idx = uint16(blk.GetColIdx())
 	var vf bmgrif.IVFile
 	switch blk.GetType() {
 	case base.TRANSIENT_BLK:
@@ -57,7 +59,13 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 			capacity = uint64(stat.Size())
 		}
 	}
-	node := bufMgr.CreateNode(vf, vector.StdVectorConstructor, capacity)
+	var node bmgrif.INode
+	switch blk.GetColType().Oid {
+	case types.T_char, types.T_varchar, types.T_json:
+		node = bufMgr.CreateNode(vf, vector.StrVectorConstructor, capacity)
+	default:
+		node = bufMgr.CreateNode(vf, vector.StdVectorConstructor, capacity)
+	}
 	if node == nil {
 		return nil
 	}
@@ -72,6 +80,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	defer blk.Unref()
 	cloned := &ColumnPart{Block: blk}
 	blkId := blk.GetMeta().AsCommonID().AsBlockID()
+	blkId.Idx = uint16(blk.GetColIdx())
 	var vf bmgrif.IVFile
 	switch blk.GetType() {
 	case base.TRANSIENT_BLK:
@@ -89,14 +98,20 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 			part.Capacity = uint64(vvf.Stat().Size())
 		}
 	}
-	cloned.Node = sstBufMgr.CreateNode(vf, vector.StdVectorConstructor, part.Capacity).(*bmgr.Node)
+	switch blk.GetColType().Oid {
+	case types.T_char, types.T_varchar, types.T_json:
+		cloned.Node = sstBufMgr.CreateNode(vf, vector.StrVectorConstructor, part.Capacity).(*bmgr.Node)
+	default:
+		cloned.Node = sstBufMgr.CreateNode(vf, vector.StdVectorConstructor, part.Capacity).(*bmgr.Node)
+	}
 
 	return cloned
 }
 
 func (part *ColumnPart) GetVector() vector.IVector {
 	handle := part.GetBufferHandle()
-	return wrapper.NewVector(handle)
+	vec := wrapper.NewVector(handle)
+	return vec
 }
 
 func (part *ColumnPart) GetColIdx() int {

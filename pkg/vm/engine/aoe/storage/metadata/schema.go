@@ -81,7 +81,11 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 		name := fmt.Sprintf("%s%d", prefix, i)
 		colInfo := aoe.ColumnInfo{
 			Name: name,
-			Type: types.Type{types.T_int32, 4, 4, 0},
+		}
+		if i == 1 {
+			colInfo.Type = types.Type{types.T(types.T_varchar), 24, 0, 0}
+		} else {
+			colInfo.Type = types.Type{types.T_int32, 4, 4, 0}
 		}
 		indexInfo := aoe.IndexInfo{Type: uint64(ZoneMap), Columns: []uint64{uint64(i)}}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)

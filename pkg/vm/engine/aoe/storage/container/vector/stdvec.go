@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -21,47 +22,54 @@ func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMem
 	return NewStdVectorNode(capacity, freeFunc)
 }
 
-type IVector interface {
-	buf.IMemoryNode
+type IVectorWriter interface {
+	io.Closer
 	SetValue(int, interface{})
-	GetValue(int) interface{}
-	IsNull(int) bool
-	HasNull() bool
-	NullCnt() int
 	Append(int, interface{}) error
 	AppendVector(*ro.Vector, int) (int, error)
-	Length() int
-	Capacity() int
-	Close() error
+}
+
+type IVector interface {
 	IsReadonly() bool
-	SliceReference(start, end int) IVector
+	dbi.IVectorReader
+	IVectorWriter
 	GetLatestView() IVector
-	CopyToVector() *ro.Vector
 	PlacementNew(t types.Type, capacity uint64)
+}
+
+type IVectorNode interface {
+	buf.IMemoryNode
+	IVector
 }
 
 func NewStdVector(t types.Type, capacity uint64) IVector {
 	return &StdVector{
-		Type:  t,
-		Data:  make([]byte, 0, capacity*uint64(t.Size)),
-		VMask: &nulls.Nulls{},
+		BaseVector: BaseVector{
+			Type:  t,
+			VMask: &nulls.Nulls{},
+		},
+		Data: make([]byte, 0, capacity*uint64(t.Size)),
 	}
 }
 
 func NewStdVectorNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return &StdVector{
 		Data:         make([]byte, 0),
-		VMask:        &nulls.Nulls{},
 		NodeCapacity: capacity,
 		AllocSize:    capacity,
 		FreeFunc:     freeFunc,
+		BaseVector: BaseVector{
+			VMask: &nulls.Nulls{},
+		},
 	}
 }
 
 func NewEmptyStdVector() *StdVector {
 	return &StdVector{
-		Data:  make([]byte, 0),
-		VMask: &nulls.Nulls{},
+		Data: make([]byte, 0),
+		BaseVector: BaseVector{
+			VMask: &nulls.Nulls{},
+		},
 	}
 }
 
@@ -70,35 +78,14 @@ func (v *StdVector) PlacementNew(t types.Type, capacity uint64) {
 	v.Data = make([]byte, 0, capacity*uint64(t.Size))
 }
 
+func (v *StdVector) GetType() dbi.VectorType {
+	return dbi.StdVec
+}
+
 func (v *StdVector) Close() error {
 	v.VMask = nil
 	v.Data = nil
 	return nil
-}
-
-func (v *StdVector) HasNull() bool {
-	return atomic.LoadUint64(&v.StatMask)&container.HasNullMask != 0
-}
-
-func (v *StdVector) NullCnt() int {
-	if !v.HasNull() {
-		return 0
-	}
-
-	if !v.IsReadonly() {
-		v.RLock()
-		defer v.RUnlock()
-	}
-
-	return v.VMask.Length()
-}
-
-func (v *StdVector) IsReadonly() bool {
-	return atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask != 0
-}
-
-func (v *StdVector) Length() int {
-	return int(atomic.LoadUint64(&v.StatMask) & container.PosMask)
 }
 
 func (v *StdVector) Capacity() int {
@@ -121,17 +108,6 @@ func (v *StdVector) GetMemorySize() uint64 {
 
 func (v *StdVector) GetMemoryCapacity() uint64 {
 	return v.AllocSize
-}
-
-func (v *StdVector) IsNull(idx int) bool {
-	if idx >= v.Length() {
-		panic(VecInvalidOffsetErr.Error())
-	}
-	if !v.IsReadonly() {
-		v.RLock()
-		defer v.RUnlock()
-	}
-	return v.VMask.Contains(uint64(idx))
 }
 
 func (v *StdVector) SetValue(idx int, val interface{}) {
@@ -312,7 +288,7 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	return n, err
 }
 
-func (v *StdVector) SliceReference(start, end int) IVector {
+func (v *StdVector) SliceReference(start, end int) dbi.IVectorReader {
 	if !v.IsReadonly() {
 		panic("should call this in ro mode")
 	}
@@ -320,7 +296,9 @@ func (v *StdVector) SliceReference(start, end int) IVector {
 	endIdx := end * int(v.Type.Size)
 	mask := container.ReadonlyMask | (uint64(end-start) & container.PosMask)
 	vec := &StdVector{
-		Type: v.Type,
+		BaseVector: BaseVector{
+			Type: v.Type,
+		},
 		Data: v.Data[startIdx:endIdx],
 	}
 	if v.VMask.Np != nil {
@@ -365,9 +343,11 @@ func (v *StdVector) GetLatestView() IVector {
 	endPos := int(mask & container.PosMask)
 	endIdx := endPos * int(v.Type.Size)
 	vec := &StdVector{
-		StatMask: container.ReadonlyMask | mask,
-		Type:     v.Type,
-		Data:     v.Data[0:endIdx],
+		BaseVector: BaseVector{
+			StatMask: container.ReadonlyMask | mask,
+			Type:     v.Type,
+		},
+		Data: v.Data[0:endIdx],
 	}
 	if mask&container.HasNullMask != 0 {
 		if mask&container.ReadonlyMask == 0 {
@@ -550,25 +530,4 @@ func (vec *StdVector) Marshall() ([]byte, error) {
 }
 
 func (vec *StdVector) Reset() {
-}
-
-func MockStdVector(t types.Type, rows uint64) IVector {
-	vec := NewStdVector(t, rows)
-	switch t.Oid {
-	case types.T_int32:
-		vals := []int32{}
-		for i := uint64(0); i < rows; i++ {
-			vals = append(vals, int32(i))
-		}
-		vec.Append(len(vals), vals)
-	case types.T_float64:
-		vals := []float64{}
-		for i := uint64(0); i < rows; i++ {
-			vals = append(vals, float64(i))
-		}
-		vec.Append(len(vals), vals)
-	default:
-		panic("not supported")
-	}
-	return vec
 }

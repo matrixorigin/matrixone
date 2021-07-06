@@ -2,9 +2,11 @@ package batch
 
 import (
 	"errors"
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 var (
@@ -13,13 +15,8 @@ var (
 )
 
 type IBatch interface {
-	IsReadonly() bool
-	Length() int
-	GetAttrs() []int
+	dbi.IBatchReader
 	GetVectorByAttr(attrId int) vector.IVector
-	Close() error
-	CloseVector(idx int) error
-	IsVectorClosed(idx int) bool
 }
 
 type Batch struct {
