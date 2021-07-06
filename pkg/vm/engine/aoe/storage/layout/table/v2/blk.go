@@ -6,6 +6,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/col"
@@ -163,7 +164,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		Type:        newType,
 		SegmentFile: host.GetSegmentFile(),
 	}
-	cloned.data.Columns = make([]col.IColumnBlock, 0)
+	cloned.data.Columns = make([]col.IColumnBlock, len(blk.data.Columns))
 	cloned.data.Helper = make(map[string]int)
 	if newIndexHolder {
 		indexHolder.Init(cloned.SegmentFile)
@@ -180,8 +181,8 @@ func (blk *Block) cloneWithUpgradeColumns(cloned *Block) {
 		colBlk := blk.data.Columns[idx]
 		cloned.Ref()
 		clonedCol := colBlk.CloneWithUpgrade(cloned)
-		cloned.data.Helper[name] = len(cloned.data.Columns)
-		cloned.data.Columns = append(cloned.data.Columns, clonedCol)
+		cloned.data.Helper[name] = idx
+		cloned.data.Columns[idx] = clonedCol
 	}
 }
 
@@ -208,7 +209,7 @@ func (blk *Block) GetFullBatch() batch.IBatch {
 	return wrapper.NewBatch(blk, attrs, vecs)
 }
 
-func (blk *Block) GetBatch(attrs []int) batch.IBatch {
+func (blk *Block) GetBatch(attrs []int) dbi.IBatchReader {
 	// TODO: check attrs validity
 	vecs := make([]vector.IVector, len(attrs))
 	clonedAttrs := make([]int, len(attrs))
@@ -217,7 +218,7 @@ func (blk *Block) GetBatch(attrs []int) batch.IBatch {
 		vecs[idx] = blk.data.Columns[attr].GetVector()
 	}
 	blk.Ref()
-	return wrapper.NewBatch(blk, attrs, vecs)
+	return wrapper.NewBatch(blk, attrs, vecs).(dbi.IBatchReader)
 }
 
 func (blk *Block) SetNext(next iface.IBlock) {

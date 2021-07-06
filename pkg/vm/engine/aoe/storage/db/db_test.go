@@ -298,7 +298,7 @@ func TestConcurrency(t *testing.T) {
 	wg2.Add(1)
 	go func() {
 		defer wg2.Done()
-		reqCnt := 20000
+		reqCnt := 10000
 		for i := 0; i < reqCnt; i++ {
 			tbl, _ := inst.store.DataTables.WeakRefTable(tid)
 			for tbl == nil {
@@ -359,7 +359,7 @@ func TestConcurrency(t *testing.T) {
 			// 	assert.True(t, ctx.BoolRes)
 			// }
 			hh := blkHandle.Prefetch()
-			vec0 := hh.GetVectorByAttr(0)
+			vec0 := hh.GetReaderByAttr(0)
 			t.Logf("vec0[22]=%v", vec0.GetValue(22))
 			hh.Close()
 			// blkHandle.Close()

@@ -7,7 +7,7 @@ import (
 )
 
 type vectorWrapper struct {
-	vector.IVector
+	vector.IVectorNode
 	handle nif.IBufferHandle
 }
 
@@ -16,8 +16,8 @@ func NewVector(handle nif.IBufferHandle) vector.IVector {
 		return nil
 	}
 	v := &vectorWrapper{
-		handle:  handle,
-		IVector: handle.GetHandle().GetBuffer().GetDataNode().(vector.IVector),
+		handle:      handle,
+		IVectorNode: handle.GetHandle().GetBuffer().GetDataNode().(vector.IVectorNode),
 	}
 	return v
 }

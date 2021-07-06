@@ -66,7 +66,7 @@ func TestManager(t *testing.T) {
 func TestCollection(t *testing.T) {
 	maxRows := uint64(1024)
 	cols := 2
-	capacity := maxRows * 4 * uint64(cols) * 2
+	capacity := maxRows * 4 * uint64(cols) * 2 * 2
 	opts := new(engine.Options)
 	// opts.EventListener = e.NewLoggingEventListener()
 	dirname := "/tmp"

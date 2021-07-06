@@ -2,7 +2,9 @@ package col
 
 import (
 	"fmt"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -17,7 +19,12 @@ type StdColumnBlock struct {
 }
 
 func EstimateStdColumnCapacity(colIdx int, meta *md.Block) uint64 {
-	return meta.Segment.Info.Conf.BlockMaxRows * uint64(meta.Segment.Schema.ColDefs[colIdx].Type.Size)
+	switch meta.Segment.Schema.ColDefs[colIdx].Type.Oid {
+	case types.T_json, types.T_char, types.T_varchar:
+		return meta.Segment.Info.Conf.BlockMaxRows * 2 * 4
+	default:
+		return meta.Segment.Info.Conf.BlockMaxRows * uint64(meta.Segment.Schema.ColDefs[colIdx].Type.Size)
+	}
 }
 
 func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
@@ -100,6 +107,10 @@ func (blk *StdColumnBlock) close() {
 
 func (blk *StdColumnBlock) GetVector() vector.IVector {
 	return blk.Part.GetVector()
+}
+
+func (blk *StdColumnBlock) GetVectorReader() dbi.IVectorReader {
+	return blk.Part.GetVector().(dbi.IVectorReader)
 }
 
 func (blk *StdColumnBlock) String() string {

@@ -1,8 +1,10 @@
 package batch
 
 import (
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 var (
@@ -40,6 +42,14 @@ func (bat *Batch) Length() int {
 
 func (bat *Batch) IsReadonly() bool {
 	return bat.Vecs[len(bat.Vecs)-1].IsReadonly()
+}
+
+func (bat *Batch) GetReaderByAttr(attr int) dbi.IVectorReader {
+	vec := bat.GetVectorByAttr(attr)
+	if vec == nil {
+		return vec
+	}
+	return vec.(dbi.IVectorReader)
 }
 
 func (bat *Batch) GetVectorByAttr(attr int) vector.IVector {
