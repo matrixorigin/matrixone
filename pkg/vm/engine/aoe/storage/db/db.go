@@ -6,11 +6,13 @@ import (
 	"io"
 	"io/ioutil"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
+	"matrixone/pkg/vm/engine/aoe/storage/db/internal"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
@@ -29,8 +31,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	DefaultDatabase = "DEFAULTDB"
+)
+
 var (
-	ErrClosed = errors.New("aoe: closed")
+	ErrClosed      = errors.New("aoe: closed")
+	ErrUnsupported = errors.New("aoe: unsupported")
+	ErrNotFound    = errors.New("aoe: notfound")
 )
 
 type DB struct {
@@ -335,4 +343,23 @@ func (d *DB) Close() error {
 	close(d.ClosedC)
 	d.stopWorkers()
 	return nil
+}
+
+func (d *DB) Create(name string) error {
+	return ErrUnsupported
+}
+
+func (d *DB) Delete(name string) error {
+	return ErrUnsupported
+}
+
+func (d *DB) Databases() []string {
+	return []string{DefaultDatabase}
+}
+
+func (d *DB) Database(name string) (engine.Database, error) {
+	if name != DefaultDatabase {
+		return nil, ErrNotFound
+	}
+	return internal.NewDatabase(d.Opts, d.store.DataTables, d.Closed), nil
 }

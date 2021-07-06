@@ -2,6 +2,7 @@ package iface
 
 import (
 	"io"
+	"matrixone/pkg/container/vector"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -32,6 +33,7 @@ type ITableData interface {
 	SegmentIds() []uint64
 	StongRefRoot() ISegment
 	WeakRefRoot() ISegment
+	GetMeta() *md.Table
 }
 
 type ISegment interface {
@@ -67,6 +69,7 @@ type IBlock interface {
 	String() string
 	GetFullBatch() batch.IBatch
 	GetBatch(attrs []int) dbi.IBatchReader
+	GetVectorCopy(attr string) *vector.Vector
 	GetNext() IBlock
 	SetNext(next IBlock)
 }

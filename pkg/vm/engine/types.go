@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"io"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/vm/metadata"
@@ -78,6 +79,7 @@ func (*AttributeDef) tableDef()  {}
 func (*IndexTableDef) tableDef() {}
 
 type Relation interface {
+	io.Closer
 	Statistics
 
 	ID() string

@@ -431,7 +431,7 @@ func (v *StdVector) CopyToVector() *ro.Vector {
 		vec.Col = col
 		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
 	default:
-		panic("not supported yet")
+		panic(fmt.Sprintf("%s not supported yet", v.Type))
 	}
 	return vec
 }

@@ -2,6 +2,7 @@ package table
 
 import (
 	"fmt"
+	ro "matrixone/pkg/container/vector"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -196,6 +197,21 @@ func (blk *Block) String() string {
 		s = fmt.Sprintf("%s/n\t%s", s, colBlk.String())
 	}
 	return s
+}
+
+func (blk *Block) GetVectorCopy(attr string) *ro.Vector {
+	colIdx := blk.Meta.Segment.Schema.GetColIdx(attr)
+	vec := blk.data.Columns[colIdx].GetVector()
+	if !vec.IsReadonly() {
+		if vec.Length() == 0 {
+			vec.Close()
+			return ro.New(blk.Meta.Segment.Schema.ColDefs[colIdx].Type)
+		}
+		vec = vec.GetLatestView()
+	}
+	ret := vec.CopyToVector()
+	vec.Close()
+	return ret
 }
 
 func (blk *Block) GetFullBatch() batch.IBatch {
