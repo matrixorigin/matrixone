@@ -10,13 +10,11 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"os"
 	"path/filepath"
-	"sync"
 
 	log "github.com/sirupsen/logrus"
 )
 
 type BlockFile struct {
-	sync.RWMutex
 	os.File
 	ID          common.ID
 	Parts       map[base.Key]*base.Pointer
@@ -127,8 +125,6 @@ func (bf *BlockFile) Stat() base.FileInfo {
 }
 
 func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
-	bf.Lock()
-	defer bf.Unlock()
 	n, err := bf.ReadAt(buf, ptr.Offset)
 	if err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
