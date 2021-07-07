@@ -359,8 +359,8 @@ func TestConcurrency(t *testing.T) {
 			// 	assert.True(t, ctx.BoolRes)
 			// }
 			hh := blkHandle.Prefetch()
-			vec0 := hh.GetReaderByAttr(0)
-			t.Logf("vec0[22]=%v", vec0.GetValue(22))
+			vec0 := hh.GetReaderByAttr(1)
+			t.Logf("vec0[22]=%s, type=%d", vec0.GetValue(22), vec0.GetType())
 			hh.Close()
 			// blkHandle.Close()
 			blkIt.Next()

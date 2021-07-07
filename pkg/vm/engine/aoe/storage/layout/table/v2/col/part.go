@@ -2,6 +2,9 @@ package col
 
 import (
 	"matrixone/pkg/container/types"
+	ro "matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
+	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -9,6 +12,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/process"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -40,15 +45,24 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	blkId := blk.GetMeta().AsCommonID().AsBlockID()
 	blkId.Idx = uint16(blk.GetColIdx())
 	var vf bmgrif.IVFile
+	var constructor buf.MemoryNodeConstructor
 	switch blk.GetType() {
 	case base.TRANSIENT_BLK:
 		bufMgr = host.GetMTBufMgr()
+		switch blk.GetColType().Oid {
+		case types.T_char, types.T_varchar, types.T_json:
+			constructor = vector.StrVectorConstructor
+		default:
+			constructor = vector.StdVectorConstructor
+		}
 	case base.PERSISTENT_BLK:
 		bufMgr = host.GetSSTBufMgr()
 		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+		constructor = vector.VectorWrapperConstructor
 	case base.PERSISTENT_SORTED_BLK:
 		bufMgr = host.GetSSTBufMgr()
 		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
+		constructor = vector.VectorWrapperConstructor
 	default:
 		panic("not support")
 	}
@@ -59,17 +73,11 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 			capacity = uint64(stat.Size())
 		}
 	}
-	var node bmgrif.INode
-	switch blk.GetColType().Oid {
-	case types.T_char, types.T_varchar, types.T_json:
-		node = bufMgr.CreateNode(vf, vector.StrVectorConstructor, capacity)
-	default:
-		node = bufMgr.CreateNode(vf, vector.StdVectorConstructor, capacity)
-	}
+	node := bufMgr.CreateNode(vf, constructor, capacity).(*bmgr.Node)
 	if node == nil {
 		return nil
 	}
-	part.Node = node.(*bmgr.Node)
+	part.Node = node
 
 	blk.RegisterPart(part)
 	part.Ref()
@@ -98,12 +106,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 			part.Capacity = uint64(vvf.Stat().Size())
 		}
 	}
-	switch blk.GetColType().Oid {
-	case types.T_char, types.T_varchar, types.T_json:
-		cloned.Node = sstBufMgr.CreateNode(vf, vector.StrVectorConstructor, part.Capacity).(*bmgr.Node)
-	default:
-		cloned.Node = sstBufMgr.CreateNode(vf, vector.StdVectorConstructor, part.Capacity).(*bmgr.Node)
-	}
+	cloned.Node = sstBufMgr.CreateNode(vf, vector.VectorWrapperConstructor, part.Capacity).(*bmgr.Node)
 
 	return cloned
 }
@@ -112,6 +115,27 @@ func (part *ColumnPart) GetVector() vector.IVector {
 	handle := part.GetBufferHandle()
 	vec := wrapper.NewVector(handle)
 	return vec
+}
+
+func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	size := int64(part.Capacity)
+	data, err := proc.Alloc(size)
+	if err != nil {
+		return nil, err
+	}
+	data = data[:mempool.CountSize+size]
+	if _, err := part.VFile.Read(data[mempool.CountSize:]); err != nil {
+		proc.Free(data)
+		return nil, err
+	}
+	vec := ro.New(part.Block.GetColType())
+	if err := vec.Read(data[:len(data)-4]); err != nil {
+		proc.Free(data)
+		return nil, err
+	}
+	vec.Data = data
+	copy(data, encoding.EncodeUint64(ref))
+	return vec, nil
 }
 
 func (part *ColumnPart) GetColIdx() int {

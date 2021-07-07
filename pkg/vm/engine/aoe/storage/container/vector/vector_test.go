@@ -175,3 +175,35 @@ func TestStrVector(t *testing.T) {
 	assert.True(t, builtVec.IsReadonly())
 	f.Close()
 }
+
+func TestWrapper(t *testing.T) {
+	t0 := types.Type{types.T(types.T_varchar), 24, 0, 0}
+	t1 := types.Type{types.T_int32, 4, 4, 0}
+	rows := uint64(100)
+	vec0 := MockVector(t0, rows)
+	vec1 := MockVector(t1, rows)
+	v0 := vec0.CopyToVector()
+	v1 := vec1.CopyToVector()
+	w0 := NewVectorWrapper(v0)
+	w1 := NewVectorWrapper(v1)
+	assert.Equal(t, int(rows), w0.Length())
+	assert.Equal(t, int(rows), w1.Length())
+
+	fname := "/tmp/vectorwrapper"
+	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, 0666)
+	assert.Nil(t, err)
+	n, err := w0.WriteTo(f)
+	assert.Nil(t, err)
+	f.Close()
+
+	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
+	assert.Nil(t, err)
+	rw0 := NewEmptyWrapper(t0)
+	rw0.AllocSize = uint64(n)
+	_, err = rw0.ReadFrom(f)
+	assert.Nil(t, err)
+
+	assert.Equal(t, int(rows), rw0.Length())
+
+	f.Close()
+}
