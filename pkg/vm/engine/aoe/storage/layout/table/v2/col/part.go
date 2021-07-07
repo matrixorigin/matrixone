@@ -23,6 +23,7 @@ type IColumnPart interface {
 	SetNext(IColumnPart)
 	GetID() uint64
 	GetColIdx() int
+	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
 	GetVector() vector.IVector
 }
@@ -116,6 +117,20 @@ func (part *ColumnPart) GetVector() vector.IVector {
 }
 
 func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	if part.VFile == nil {
+		var ret *ro.Vector
+		vec := part.GetVector()
+		if !vec.IsReadonly() {
+			if vec.Length() == 0 {
+				vec.Close()
+				return ro.New(part.Block.GetColType()), nil
+			}
+			vec = vec.GetLatestView()
+		}
+		ret = vec.CopyToVector()
+		vec.Close()
+		return ret, nil
+	}
 	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
 	wrapper.AllocSize = part.Capacity
 	_, err := wrapper.ReadWithProc(part.VFile, ref, proc)

@@ -164,7 +164,7 @@ func (v *VectorWrapper) GetLatestView() IVector {
 }
 
 func (v *VectorWrapper) CopyToVector() *base.Vector {
-	panic("not supported")
+	return &v.Vector
 }
 
 func (v *VectorWrapper) AppendVector(vec *base.Vector, offset int) (n int, err error) {

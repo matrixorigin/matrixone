@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/process"
 )
 
 type ITableData interface {
@@ -69,7 +70,7 @@ type IBlock interface {
 	String() string
 	GetFullBatch() batch.IBatch
 	GetBatch(attrs []int) dbi.IBatchReader
-	GetVectorCopy(attr string) *vector.Vector
+	GetVectorCopy(attr string, ref uint64, proc *process.Process) (*vector.Vector, error)
 	GetNext() IBlock
 	SetNext(next IBlock)
 }

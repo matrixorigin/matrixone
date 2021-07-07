@@ -40,9 +40,8 @@ func (blk *Block) Read(size int64, ref uint64, attr string, proc *process.Proces
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
 	if data != nil {
 		defer data.Unref()
-		if vec := data.GetVectorCopy(attr); vec != nil {
-			return vec, nil
-		}
+		vec, err := data.GetVectorCopy(attr, ref, proc)
+		return vec, err
 	}
 	return nil, errors.New(fmt.Sprintf("Specified blk %d not found", blk.Id))
 }

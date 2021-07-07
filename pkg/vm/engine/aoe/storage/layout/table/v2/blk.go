@@ -14,6 +14,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/process"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -199,19 +200,13 @@ func (blk *Block) String() string {
 	return s
 }
 
-func (blk *Block) GetVectorCopy(attr string) *ro.Vector {
+func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
 	colIdx := blk.Meta.Segment.Schema.GetColIdx(attr)
-	vec := blk.data.Columns[colIdx].GetVector()
-	if !vec.IsReadonly() {
-		if vec.Length() == 0 {
-			vec.Close()
-			return ro.New(blk.Meta.Segment.Schema.ColDefs[colIdx].Type)
-		}
-		vec = vec.GetLatestView()
+	vec, err := blk.data.Columns[colIdx].ForceLoad(ref, proc)
+	if err != nil {
+		return nil, err
 	}
-	ret := vec.CopyToVector()
-	vec.Close()
-	return ret
+	return vec, nil
 }
 
 func (blk *Block) GetFullBatch() batch.IBatch {

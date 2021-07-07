@@ -3,11 +3,13 @@ package col
 import (
 	"fmt"
 	"matrixone/pkg/container/types"
+	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/process"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -103,6 +105,10 @@ func (blk *StdColumnBlock) close() {
 	}
 	blk.Part = nil
 	// log.Infof("destroy colblk %d, colidx %d", blk.Meta.ID, blk.ColIdx)
+}
+
+func (blk *StdColumnBlock) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	return blk.Part.ForceLoad(ref, proc)
 }
 
 func (blk *StdColumnBlock) GetVector() vector.IVector {
