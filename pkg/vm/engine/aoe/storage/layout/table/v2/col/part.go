@@ -3,7 +3,6 @@ package col
 import (
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -12,7 +11,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -118,24 +116,13 @@ func (part *ColumnPart) GetVector() vector.IVector {
 }
 
 func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
-	size := int64(part.Capacity)
-	data, err := proc.Alloc(size)
+	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
+	wrapper.AllocSize = part.Capacity
+	_, err := wrapper.ReadWithProc(part.VFile, ref, proc)
 	if err != nil {
 		return nil, err
 	}
-	data = data[:mempool.CountSize+size]
-	if _, err := part.VFile.Read(data[mempool.CountSize:]); err != nil {
-		proc.Free(data)
-		return nil, err
-	}
-	vec := ro.New(part.Block.GetColType())
-	if err := vec.Read(data[:len(data)-4]); err != nil {
-		proc.Free(data)
-		return nil, err
-	}
-	vec.Data = data
-	copy(data, encoding.EncodeUint64(ref))
-	return vec, nil
+	return &wrapper.Vector, nil
 }
 
 func (part *ColumnPart) GetColIdx() int {

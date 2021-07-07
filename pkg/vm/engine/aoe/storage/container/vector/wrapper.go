@@ -193,6 +193,23 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 	return int64(nr), err
 }
 
+func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Process) (n int64, err error) {
+	data, err := proc.Alloc(int64(vec.AllocSize))
+	if err != nil {
+		return n, err
+	}
+	buf := data[:mempool.CountSize+vec.AllocSize]
+	nr, err := r.Read(buf[mempool.CountSize:])
+	if err != nil {
+		proc.Free(data)
+		return n, err
+	}
+	err = vec.Vector.Read(data)
+	copy(data, encoding.EncodeUint64(ref))
+
+	return int64(nr), err
+}
+
 func (vec *VectorWrapper) Marshall() ([]byte, error) {
 	return vec.Show()
 }

@@ -3,7 +3,12 @@ package vector
 import (
 	"matrixone/pkg/container/types"
 	v "matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/mmu/host"
+	"matrixone/pkg/vm/process"
 	"os"
 	"sync"
 	"testing"
@@ -204,6 +209,25 @@ func TestWrapper(t *testing.T) {
 	assert.Nil(t, err)
 
 	assert.Equal(t, int(rows), rw0.Length())
+	f.Close()
 
+	hm := host.New(1 << 20)
+	gm := guest.New(1<<20, hm)
+	proc := process.New(gm, mempool.New(1<<32, 8))
+	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
+	assert.Nil(t, err)
+	assert.Nil(t, err)
+	ww0 := NewEmptyWrapper(t0)
+	ww0.AllocSize = uint64(n)
+	ref := uint64(1)
+	nr, err := ww0.ReadWithProc(f, ref, proc)
+	assert.Equal(t, n, nr)
+
+	assert.Equal(t, int(rows), ww0.Length())
+	refCnt := encoding.DecodeUint64(ww0.Vector.Data[0:mempool.CountSize])
+	assert.Equal(t, ref, refCnt)
+	assert.True(t, proc.Size() != 0)
+	ww0.Vector.Free(proc)
+	assert.True(t, proc.Size() == 0)
 	f.Close()
 }
