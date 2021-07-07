@@ -6,13 +6,11 @@ import (
 	"io"
 	"io/ioutil"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
-	"matrixone/pkg/vm/engine/aoe/storage/db/internal"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
@@ -29,10 +27,6 @@ import (
 	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
-)
-
-const (
-	DefaultDatabase = "DEFAULTDB"
 )
 
 var (
@@ -52,7 +46,7 @@ type DB struct {
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
 
-	store struct {
+	Store struct {
 		sync.RWMutex
 		MetaInfo   *md.MetaInfo
 		DataTables *table.Tables
@@ -121,7 +115,7 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tbl, err := d.store.MetaInfo.ReferenceTableByName(tableName)
+	tbl, err := d.Store.MetaInfo.ReferenceTableByName(tableName)
 	if err != nil {
 		return err
 	}
@@ -136,7 +130,7 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 			MTBufMgr:    d.MTBufMgr,
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
-			Tables:      d.store.DataTables,
+			Tables:      d.Store.DataTables,
 		}
 		op := mdops.NewCreateTableOp(opCtx)
 		op.Push()
@@ -156,7 +150,7 @@ func (d *DB) HasTable(name string) bool {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	_, err := d.store.MetaInfo.ReferenceTableByName(name)
+	_, err := d.Store.MetaInfo.ReferenceTableByName(name)
 	return err == nil
 }
 
@@ -165,10 +159,10 @@ func (d *DB) DropTable(name string) (id uint64, err error) {
 		panic(err)
 	}
 	opCtx := &mops.OpCtx{Opts: d.Opts}
-	op := mops.NewDropTblOp(opCtx, name, d.store.DataTables)
+	op := mops.NewDropTblOp(opCtx, name, d.Store.DataTables)
 	op.Push()
 	err = op.WaitDone()
-	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.store.DataTables, d.MemTableMgr)
+	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.Store.DataTables, d.MemTableMgr)
 	d.Opts.GC.Acceptor.Accept(req)
 	return op.Id, err
 }
@@ -193,14 +187,14 @@ func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tableMeta, err := d.store.MetaInfo.ReferenceTableByName(ctx.TableName)
+	tableMeta, err := d.Store.MetaInfo.ReferenceTableByName(ctx.TableName)
 	if err != nil {
 		return nil, err
 	}
 	if tableMeta.GetSegmentCount() == uint64(0) {
 		return handle.NewEmptySnapshot(), nil
 	}
-	tableData, err := d.store.DataTables.StrongRefTable(tableMeta.ID)
+	tableData, err := d.Store.DataTables.StrongRefTable(tableMeta.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -217,7 +211,7 @@ func (d *DB) TableIDs() (ids []uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tids := d.store.MetaInfo.TableIDs()
+	tids := d.Store.MetaInfo.TableIDs()
 	for tid := range tids {
 		ids = append(ids, tid)
 	}
@@ -228,7 +222,7 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	sids, err := d.store.MetaInfo.TableSegmentIDs(tableID)
+	sids, err := d.Store.MetaInfo.TableSegmentIDs(tableID)
 	if err != nil {
 		return ids, err
 	}
@@ -241,7 +235,7 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 
 func (d *DB) replayAndCleanData() {
 	expectFiles := make(map[string]bool)
-	for _, tbl := range d.store.MetaInfo.Tables {
+	for _, tbl := range d.Store.MetaInfo.Tables {
 		for _, seg := range tbl.Segments {
 			id := common.ID{
 				TableID:   seg.TableID,
@@ -301,7 +295,7 @@ func (d *DB) replayAndCleanData() {
 			panic(fmt.Sprintf("Missing %s", name))
 		}
 	}
-	err = d.store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.store.MetaInfo)
+	err = d.Store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.Store.MetaInfo)
 	if err != nil {
 		panic(err)
 	}
@@ -314,6 +308,19 @@ func (d *DB) startWorkers() {
 	d.Opts.Data.Sorter.Start()
 	d.Opts.Meta.Flusher.Start()
 	d.Opts.Meta.Updater.Start()
+}
+
+func (d *DB) EnsureNotClosed() {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+}
+
+func (d *DB) IsClosed() bool {
+	if err := d.Closed.Load(); err != nil {
+		return true
+	}
+	return false
 }
 
 func (d *DB) stopWorkers() {
@@ -343,23 +350,4 @@ func (d *DB) Close() error {
 	close(d.ClosedC)
 	d.stopWorkers()
 	return nil
-}
-
-func (d *DB) Create(name string) error {
-	return ErrUnsupported
-}
-
-func (d *DB) Delete(name string) error {
-	return ErrUnsupported
-}
-
-func (d *DB) Databases() []string {
-	return []string{DefaultDatabase}
-}
-
-func (d *DB) Database(name string) (engine.Database, error) {
-	if name != DefaultDatabase {
-		return nil, ErrNotFound
-	}
-	return internal.NewDatabase(d.Opts, d.store.DataTables, d.Closed), nil
 }

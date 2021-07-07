@@ -1,4 +1,4 @@
-package internal
+package engine
 
 import (
 	"errors"

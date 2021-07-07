@@ -157,7 +157,7 @@ func TestReplay(t *testing.T) {
 	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := 2
-	rows := dbi.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
+	rows := dbi.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
 	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
 	logIdx := &md.LogIndex{

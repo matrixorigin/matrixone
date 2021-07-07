@@ -1,10 +1,12 @@
-package internal
+package engine
 
 import (
 	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"strconv"
@@ -13,16 +15,20 @@ import (
 )
 
 type Relation struct {
-	TableData iface.ITableData
-	tree      struct {
+	Data   iface.ITableData
+	DBImpl *db.DB
+	Meta   *md.Table
+	tree   struct {
 		sync.RWMutex
 		Segments map[string]*Segment
 	}
 }
 
-func NewRelation(data iface.ITableData) *Relation {
+func NewRelation(impl *db.DB, data iface.ITableData, meta *md.Table) *Relation {
 	r := &Relation{
-		TableData: data,
+		DBImpl: impl,
+		Meta:   meta,
+		Data:   data,
 	}
 	r.tree.Segments = make(map[string]*Segment)
 	return r
@@ -37,22 +43,21 @@ func (r *Relation) Size(attr string) int64 {
 }
 
 func (r *Relation) ID() string {
-	return r.TableData.GetName()
+	return r.Meta.Schema.Name
 }
 
 func (r *Relation) Close() error {
-	if r.TableData != nil {
-		for _, seg := range r.tree.Segments {
-			seg.Data.Unref()
-		}
-		r.TableData.Unref()
-		r.TableData = nil
+	r.tree.Lock()
+	for _, seg := range r.tree.Segments {
+		seg.Data.Unref()
 	}
+	r.tree.Unlock()
+	r.Data.Unref()
 	return nil
 }
 
 func (r *Relation) Segments() []engine.SegmentInfo {
-	ids := r.TableData.SegmentIds()
+	ids := r.Data.SegmentIds()
 	infos := make([]engine.SegmentInfo, len(ids))
 	for idx, id := range ids {
 		infos[idx].Id = strconv.FormatUint(id, 10)
@@ -65,7 +70,7 @@ func (r *Relation) Index() []*engine.IndexTableDef {
 }
 
 func (r *Relation) Attribute() []metadata.Attribute {
-	meta := r.TableData.GetMeta()
+	meta := r.Data.GetMeta()
 	attrs := make([]metadata.Attribute, len(meta.Schema.ColDefs))
 	for idx, attr := range attrs {
 		attr.Name = meta.Schema.ColDefs[idx].Name
@@ -95,7 +100,7 @@ func (r *Relation) Segment(info engine.SegmentInfo, proc *process.Process) engin
 	}
 	seg = &Segment{
 		Ids:  new(atomic.Value),
-		Data: r.TableData.StrongRefSegment(id),
+		Data: r.Data.StrongRefSegment(id),
 	}
 	r.tree.Segments[info.Id] = seg
 	r.tree.Unlock()
@@ -104,7 +109,8 @@ func (r *Relation) Segment(info engine.SegmentInfo, proc *process.Process) engin
 
 // func (r *Relation) Write(bat *batch.Batch, index *md.LogIndex) error {
 func (r *Relation) Write(bat *batch.Batch) error {
-	return nil
+	index := md.LogIndex{Capacity: uint64(bat.Vecs[0].Length())}
+	return r.DBImpl.Append(r.Meta.Schema.Name, bat, &index)
 }
 
 func (r *Relation) AddAttribute(_ engine.TableDef) error {

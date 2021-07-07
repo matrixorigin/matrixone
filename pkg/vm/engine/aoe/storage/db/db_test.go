@@ -69,7 +69,7 @@ func TestCreateTable(t *testing.T) {
 	for _, name := range names {
 		assert.True(t, inst.HasTable(name))
 	}
-	t.Log(inst.store.MetaInfo.String())
+	t.Log(inst.Store.MetaInfo.String())
 }
 
 func TestCreateDuplicateTable(t *testing.T) {
@@ -133,7 +133,7 @@ func TestAppend(t *testing.T) {
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := 2
-	rows := inst.store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
+	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
 	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, int(rows), ck.Vecs[0].Length())
 	logIdx := &md.LogIndex{
@@ -147,13 +147,13 @@ func TestAppend(t *testing.T) {
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(tableInfo.Name, ck, logIdx)
 		assert.Nil(t, err)
-		// tbl, err := inst.store.DataTables.WeakRefTable(tid)
+		// tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 		// assert.Nil(t, err)
 		// t.Log(tbl.GetCollumn(0).ToString(1000))
 	}
 
 	cols := []int{0, 1}
-	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
+	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	segIds := tbl.SegmentIds()
 	ssCtx := &dbi.GetSnapshotCtx{
 		TableName:  tableInfo.Name,
@@ -213,8 +213,8 @@ func TestConcurrency(t *testing.T) {
 	assert.Nil(t, err)
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
-	blkCnt := inst.store.MetaInfo.Conf.SegmentMaxBlocks
-	rows := inst.store.MetaInfo.Conf.BlockMaxRows * blkCnt
+	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
+	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan *InsertReq)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
@@ -300,10 +300,10 @@ func TestConcurrency(t *testing.T) {
 		defer wg2.Done()
 		reqCnt := 10000
 		for i := 0; i < reqCnt; i++ {
-			tbl, _ := inst.store.DataTables.WeakRefTable(tid)
+			tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 			for tbl == nil {
 				time.Sleep(time.Duration(100) * time.Microsecond)
-				tbl, _ = inst.store.DataTables.WeakRefTable(tid)
+				tbl, _ = inst.Store.DataTables.WeakRefTable(tid)
 			}
 			segIds := tbl.SegmentIds()
 			searchReq := &dbi.GetSnapshotCtx{
@@ -321,7 +321,7 @@ func TestConcurrency(t *testing.T) {
 	cancel()
 	wg.Wait()
 	time.Sleep(time.Duration(100) * time.Millisecond)
-	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
+	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	root := tbl.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
 	opts := &dbi.GetSnapshotCtx{
@@ -395,8 +395,8 @@ func TestDropTable2(t *testing.T) {
 	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
 	tid, err := inst.CreateTable(&tablet)
 	assert.Nil(t, err)
-	blkCnt := inst.store.MetaInfo.Conf.SegmentMaxBlocks
-	rows := inst.store.MetaInfo.Conf.BlockMaxRows * blkCnt
+	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
+	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
@@ -420,7 +420,7 @@ func TestDropTable2(t *testing.T) {
 	}
 	wg.Wait()
 	time.Sleep(time.Duration(200) * time.Millisecond)
-	tbl, _ := inst.store.DataTables.WeakRefTable(tid)
+	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	t.Log(tbl.String())
 
 	t.Log(inst.MTBufMgr.String())
