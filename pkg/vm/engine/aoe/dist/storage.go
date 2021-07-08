@@ -176,14 +176,16 @@ func NewStorageWithOptions(
 	scfg.Store = h.store
 	scfg.Handler = h
 	h.app = server.NewApplicationWithDispatcher(scfg, func(req *raftcmdpb.Request, cmd interface{}, proxy proxy.ShardsProxy) error {
-		if req.Group == uint64(aoe.KVGroup) {
+		switch req.Group {
+		case uint64(aoe.KVGroup):
 			return proxy.Dispatch(req)
+		case uint64(aoe.AOEGroup):
+			args := cmd.(Args)
+			req.ToShard = args.ShardId
+			return proxy.DispatchTo(req, args.ShardId, proxy.Router().LeaderAddress(args.ShardId))
 		}
-		args := cmd.(Args)
-		if args.Node == nil {
-			return proxy.Dispatch(req)
-		}
-		return proxy.DispatchTo(req, args.ShardId, string(args.Node))
+		return ErrDispatchFailed
+
 	})
 	h.init()
 	if err := h.app.Start(); err != nil {
