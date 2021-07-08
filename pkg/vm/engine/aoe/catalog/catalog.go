@@ -81,8 +81,8 @@ func (c *Catalog) CreateDatabase(dbName string) (uint64, error) {
 }
 
 func (c *Catalog) DelDatabase(dbName string) (uint64, error) {
-	if id, err := c.checkDBExists(dbName); err != nil {
-		return 0, err
+	if db, _ := c.checkDBNotExists(dbName); db == nil {
+		return 0, ErrDBNotExists
 	} else {
 		v, ok := c.gMutex.Get(string(c.dbIDKey(dbName)))
 		if !ok {
@@ -94,7 +94,7 @@ func (c *Catalog) DelDatabase(dbName string) (uint64, error) {
 			c.gMutex.Remove(string(c.dbIDKey(dbName)))
 			lock.Unlock()
 		}()
-		value, err := c.store.Get(c.dbKey(id))
+		value, err := c.store.Get(c.dbKey(db.Id))
 		if err != nil {
 			return 0, err
 		}
@@ -102,12 +102,12 @@ func (c *Catalog) DelDatabase(dbName string) (uint64, error) {
 		_ = json.Unmarshal(value, &db)
 		db.State = aoe.StateDeleteOnly
 		value, _ = json.Marshal(db)
-		if err = c.store.Set(c.dbKey(id), value); err != nil {
+		if err = c.store.Set(c.dbKey(db.Id), value); err != nil {
 			return 0, err
 		}
 		err = c.store.Delete(c.dbIDKey(dbName))
 		// TODO: Data Cleanup Notify (Drop tables & related within deleted db)
-		return id, err
+		return db.Id, err
 	}
 }
 
@@ -127,35 +127,22 @@ func (c *Catalog) GetDBs() ([]aoe.SchemaInfo, error) {
 }
 
 func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
-	id, err := c.checkDBExists(dbName)
-	if err != nil {
-		return nil, err
-	}
-	v, ok := c.gMutex.Get(string(c.dbIDKey(dbName)))
-	if !ok {
+	db, _ := c.checkDBNotExists(dbName)
+	if db == nil {
 		return nil, ErrDBNotExists
 	}
-	lock := v.(*sync.RWMutex)
-	lock.RLock()
-	defer lock.RUnlock()
-	resp, err := c.store.Get(c.dbKey(id))
-	if err != nil || resp == nil {
-		return nil, ErrDBNotExists
-	}
-	db := aoe.SchemaInfo{}
-	_ = json.Unmarshal(resp, &db)
 	if db.State != aoe.StatePublic {
 		return nil, ErrDBNotExists
 	}
-	return &db, nil
+	return db, nil
 }
 
-func (c *Catalog) CreateTable(dbName, tableName, comment string, typ uint64, tableDefs []engine.TableDef, pdef *engine.PartitionBy) (uint64, error) {
-	dbId, err := c.checkDBExists(dbName)
+func (c *Catalog) CreateTable(dbId, typ uint64, tableName, comment string, tableDefs []engine.TableDef, pdef *engine.PartitionBy) (uint64, error) {
+	_, err := c.checkDBExists(dbId)
 	if err != nil {
 		return 0, err
 	}
-	err = c.checkTableNotExists(dbId, tableName)
+	_, err = c.checkTableNotExists(dbId, tableName)
 	if err != nil {
 		return 0, err
 	}
@@ -219,14 +206,14 @@ func (c *Catalog) CreateTable(dbName, tableName, comment string, typ uint64, tab
 	return tid, nil
 }
 
-func (c *Catalog) DropTable(dbName, tableName string) (uint64, error) {
-	dbId, err := c.checkDBExists(dbName)
+func (c *Catalog) DropTable(dbId uint64, tableName string) (uint64, error) {
+	_, err := c.checkDBExists(dbId)
 	if err != nil {
 		return 0, err
 	}
-	tid, err := c.checkTableExists(dbId, tableName)
-	if err != nil {
-		return 0, err
+	tb, err := c.checkTableNotExists(dbId, tableName)
+	if tb == nil {
+		return 0, ErrTableNotExists
 	}
 	v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tableName)))
 	if !ok {
@@ -235,38 +222,31 @@ func (c *Catalog) DropTable(dbName, tableName string) (uint64, error) {
 	lock := v.(*sync.RWMutex)
 	lock.Lock()
 	defer func() {
-		c.gMutex.Remove(string(c.dbIDKey(dbName)))
+		c.gMutex.Remove(string(c.tableIDKey(dbId, tableName)))
 		lock.Unlock()
 	}()
-
-	value, err := c.store.Get(c.tableKey(dbId, tid))
-	if err != nil {
-		return 0, err
-	}
-	tb := aoe.TableInfo{}
-	_ = json.Unmarshal(value, &tb)
 	tb.State = aoe.StateDeleteOnly
-	value, _ = json.Marshal(tb)
-	if err = c.store.Set(c.tableKey(dbId, tid), value); err != nil {
+	value, _ := json.Marshal(tb)
+	if err = c.store.Set(c.tableKey(dbId, tb.Id), value); err != nil {
 		return 0, err
 	}
 	err = c.store.Delete(c.tableIDKey(dbId, tableName))
 	//TODO：Data Cleanup Notify
-	return tid, err
+	return tb.Id, err
 
 }
-func (c *Catalog) GetTables(dbName string) ([]aoe.TableInfo, error) {
-	if id, err := c.checkDBExists(dbName); err != nil {
+func (c *Catalog) GetTables(dbId uint64) ([]aoe.TableInfo, error) {
+	if db, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
-		v, ok := c.gMutex.Get(string(c.dbIDKey(dbName)))
+		v, ok := c.gMutex.Get(string(c.dbIDKey(db.Name)))
 		if !ok {
 			return nil, ErrDBNotExists
 		}
 		lock := v.(*sync.RWMutex)
 		lock.RLock()
 		defer lock.RUnlock()
-		values, err := c.store.PrefixScan(c.tablePrefix(id), 0)
+		values, err := c.store.PrefixScan(c.tablePrefix(dbId), 0)
 		if err != nil {
 			return nil, err
 		}
@@ -282,43 +262,31 @@ func (c *Catalog) GetTables(dbName string) ([]aoe.TableInfo, error) {
 	}
 }
 
-func (c *Catalog) GetTable(dbName string, tableName string) (*aoe.TableInfo, error) {
-	if dbId, err := c.checkDBExists(dbName); err != nil {
+func (c *Catalog) GetTable(dbId uint64, tableName string) (*aoe.TableInfo, error) {
+	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
-		tid, err := c.checkTableExists(dbId, tableName)
-		if err != nil {
-			return nil, err
-		}
-		v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tableName)))
-		if !ok {
+		tb, _ := c.checkTableNotExists(dbId, tableName)
+		if tb == nil {
 			return nil, ErrTableNotExists
 		}
-		lock := v.(*sync.RWMutex)
-		lock.RLock()
-		defer lock.RUnlock()
-		value, err := c.store.Get(c.tableKey(dbId, tid))
-		if err != nil || value == nil {
+		if tb.State != aoe.StatePublic {
 			return nil, ErrTableNotExists
 		}
-		t, _ := aoe.DecodeTable(value)
-		if t.State != aoe.StatePublic {
-			return nil, err
-		}
-		return &t, nil
+		return tb, nil
 	}
 }
 
-func (c *Catalog) DispatchQueries(dbName string, tableName string) ([]aoe.RouteInfo, error) {
+func (c *Catalog) DispatchQueries(dbId, tid uint64) ([]aoe.RouteInfo, error) {
 	items := make(map[uint64]map[uint64][]aoe.SegmentInfo)
-	if dbId, err := c.checkDBExists(dbName); err != nil {
+	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
-		tid, err := c.checkTableExists(dbId, tableName)
+		tb, err := c.checkTableExists(dbId, tid)
 		if err != nil {
 			return nil, err
 		}
-		v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tableName)))
+		v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tb.Name)))
 		if !ok {
 			return nil, ErrTableNotExists
 		}
@@ -350,74 +318,74 @@ func (c *Catalog) DispatchQueries(dbName string, tableName string) ([]aoe.RouteI
 	return resp, nil
 }
 
-func (c *Catalog) checkDBExists(dbName string) (uint64, error) {
+func (c *Catalog) checkDBExists(id uint64) (*aoe.SchemaInfo, error) {
+	db := aoe.SchemaInfo{}
+	if v, err := c.store.Get(c.dbKey(id)); err != nil {
+		return nil, ErrDBNotExists
+	} else {
+		if err = json.Unmarshal(v, &db); err != nil {
+			return nil, ErrDBNotExists
+		}
+		if db.State == aoe.StateDeleteOnly {
+			return nil, ErrDBNotExists
+		}
+	}
+	return &db, nil
+}
+
+func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 	v, ok := c.gMutex.Get(string(c.dbIDKey(dbName)))
 	if !ok {
-		return 0, ErrDBNotExists
+		return nil, nil
 	}
 	lock := v.(*sync.RWMutex)
 	lock.RLock()
 	defer lock.RUnlock()
 	if value, err := c.store.Get(c.dbIDKey(dbName)); err != nil || value == nil {
-		return 0, ErrDBNotExists
+		return nil, nil
 	} else {
 		id := format.MustBytesToUint64(value)
-		if v, err := c.store.Get(c.dbKey(id)); err != nil || value == nil {
-			return 0, ErrDBNotExists
+		db, err := c.checkDBExists(id)
+		if err == ErrDBNotExists {
+			return nil, nil
+		}
+		return db, ErrDBCreateExists
+	}
+}
+
+func (c *Catalog) checkTableExists(dbId, id uint64) (*aoe.TableInfo, error) {
+		if v, err := c.store.Get(c.tableKey(dbId, id)); err != nil {
+			return nil, ErrTableNotExists
 		} else {
-			db := aoe.SchemaInfo{}
-			if err = json.Unmarshal(v, &db); err != nil {
-				return 0, ErrDBNotExists
-			}
-			if db.State == aoe.StateDeleteOnly {
-				return 0, ErrDBNotExists
+			if table, err := aoe.DecodeTable(v); err != nil {
+				return nil, ErrTableNotExists
+			} else {
+				if table.State == aoe.StateDeleteOnly {
+					return nil, ErrTableNotExists
+				}
+				return &table, nil
 			}
 		}
-		return id, nil
-	}
 }
 
-func (c *Catalog) checkDBNotExists(dbName string) (bool, error) {
-	_, err := c.checkDBExists(dbName)
-	if err == ErrDBNotExists {
-		return true, nil
-	}
-	return false, ErrDBCreateExists
-}
-
-func (c *Catalog) checkTableExists(dbId uint64, tableName string) (uint64, error) {
+func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.TableInfo, error) {
 	v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tableName)))
 	if !ok {
-		return 0, ErrTableNotExists
+		return nil, nil
 	}
 	lock := v.(*sync.RWMutex)
 	lock.RLock()
 	defer lock.RUnlock()
 	if value, err := c.store.Get(c.tableIDKey(dbId, tableName)); err != nil || value == nil {
-		return 0, ErrTableNotExists
+		return nil, nil
 	} else {
 		id := format.MustBytesToUint64(value)
-		if v, err := c.store.Get(c.tableKey(dbId, id)); err != nil || value == nil {
-			return 0, ErrTableNotExists
-		} else {
-			if table, err := aoe.DecodeTable(v); err != nil {
-				return 0, ErrTableNotExists
-			}else {
-				if table.State == aoe.StateDeleteOnly {
-					return 0, ErrTableNotExists
-				}
-			}
+		tb, err := c.checkTableExists(dbId, id)
+		if err == ErrTableNotExists {
+			return nil, nil
 		}
-		return id, nil
+		return tb, ErrTableCreateExists
 	}
-}
-
-func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) error {
-	_, err := c.checkTableExists(dbId, tableName)
-	if err == ErrTableNotExists {
-		return nil
-	}
-	return ErrTableCreateExists
 }
 
 func (c *Catalog) EncodeTabletName(tableId uint64, groupId uint64) string {

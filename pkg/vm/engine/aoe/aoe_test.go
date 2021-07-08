@@ -14,7 +14,7 @@ import (
 )
 
 func TestAoe(t *testing.T) {
-	data, err := EncodeTable(0, 0, "R", "table", "", NewTableDefs(), NewPartition())
+	data, err := EncodeTable(TableInfo{})
 	if err != nil {
 		log.Fatal(err)
 	}

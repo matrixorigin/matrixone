@@ -36,12 +36,12 @@ func (e *aoeEngine) Databases() []string {
 }
 
 func (e *aoeEngine) Database(name string) (engine.Database, error) {
-	_, err := e.catalog.GetDB(name)
+	db, err := e.catalog.GetDB(name)
 	if err != nil {
 		return nil, err
 	}
 	return &database{
-		name:    name,
+		id:    db.Id,
 		catalog: e.catalog,
 	}, nil
 }

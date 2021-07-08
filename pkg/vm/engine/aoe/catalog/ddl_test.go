@@ -132,18 +132,18 @@ func TestClusterStartAndStop(t *testing.T) {
 }
 
 func testTableDDL(t *testing.T, c Catalog) {
-	tbs, err := c.GetTables(dbName)
+	tbs, err := c.GetTables(99)
 	require.Error(t, ErrDBNotExists, err)
 
-	id, err := c.CreateDatabase(dbName)
+	dbid, err := c.CreateDatabase(dbName)
 	require.NoError(t, err)
-	require.Less(t, uint64(0), id)
+	require.Less(t, uint64(0), dbid)
 
-	tbs, err = c.GetTables(dbName)
+	tbs, err = c.GetTables(dbid)
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 
-	tid, err := c.CreateTable(dbName, tableName, "", 0, cols, nil)
+	tid, err := c.CreateTable(dbid, 0, tableName, "", cols, nil)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), tid)
 
@@ -151,7 +151,7 @@ func testTableDDL(t *testing.T, c Catalog) {
 	defer close(completedC)
 	go func() {
 		for {
-			tb, _ := c.GetTable(dbName, tableName)
+			tb, _ := c.GetTable(dbid, tableName)
 			if tb != nil {
 				completedC <- tb
 				break
@@ -165,17 +165,17 @@ func testTableDDL(t *testing.T, c Catalog) {
 	case <-time.After(3 * time.Second):
 		stdLog.Printf("create %s failed, timeout", tableName)
 	}
-	_, err = c.CreateTable(dbName, tableName, "", 0, cols, nil)
+	_, err = c.CreateTable(dbid, 0, tableName, "",  cols, nil)
 	require.Equal(t, ErrTableCreateExists, err)
 
 	for i := 1; i < 10; i++ {
-		tid2, err := c.CreateTable(dbName, fmt.Sprintf("%s%d", tableName, i), "", 0, cols, nil)
+		tid2, err := c.CreateTable(dbid, 0, fmt.Sprintf("%s%d", tableName, i), "", cols, nil)
 		require.NoError(t, err)
 		require.Less(t, tid, tid2)
 	}
 	time.Sleep(5 * time.Second)
 
-	tbs, err = c.GetTables(dbName)
+	tbs, err = c.GetTables(dbid)
 
 	for _, tb := range tbs {
 		s, _ := json.Marshal(tb)
@@ -184,11 +184,11 @@ func testTableDDL(t *testing.T, c Catalog) {
 	require.NoError(t, err)
 	require.Equal(t, 10, len(tbs))
 
-	dTid, err := c.DropTable(dbName, tableName)
+	dTid, err := c.DropTable(dbid, tableName)
 	require.NoError(t, err)
 	require.Equal(t, tid, dTid)
 
-	_, err = c.GetTable(dbName, tableName)
+	_, err = c.GetTable(dbid, tableName)
 	require.Error(t, ErrTableNotExists, err)
 
 }

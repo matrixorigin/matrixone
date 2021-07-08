@@ -11,13 +11,13 @@ type aoeEngine struct {
 }
 
 type database struct {
-	name string
+	id uint64
 	catalog *catalog.Catalog
 }
 
 type relation struct {
-	dbName string
-	name string
+	pid uint64
+	id uint64
 	catalog *catalog.Catalog
 	store *dist.Storage
 }
