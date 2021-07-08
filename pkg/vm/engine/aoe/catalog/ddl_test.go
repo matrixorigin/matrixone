@@ -3,7 +3,6 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
@@ -65,7 +64,6 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 	if err := recreateTestTempDir(); err != nil {
 		return nil, err
 	}
-	util.SetLogger(&emptyLog{})
 	c := &testCluster{t: t}
 	for i := 0; i < 3; i++ {
 		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
@@ -77,9 +75,6 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 			return nil, err
 		}
 		memDataStorage := mem.NewStorage()
-		if err != nil {
-			return nil, err
-		}
 		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, memDataStorage, func(cfg *config.Config) {
 			cfg.DataPath = fmt.Sprintf("%s/node-%d", tmpDir, i)
 			cfg.RaftAddr = fmt.Sprintf("127.0.0.1:1000%d", i)
@@ -134,18 +129,18 @@ func TestClusterStartAndStop(t *testing.T) {
 }
 
 func testTableDDL(t *testing.T, c Catalog) {
-	tbs, err := c.GetTables(dbName)
+	tbs, err := c.GetTables(99)
 	require.Error(t, ErrDBNotExists, err)
 
-	id, err := c.CreateDatabase(dbName)
+	dbid, err := c.CreateDatabase(dbName, engine.AOE)
 	require.NoError(t, err)
-	require.Less(t, uint64(0), id)
+	require.Less(t, uint64(0), dbid)
 
-	tbs, err = c.GetTables(dbName)
+	tbs, err = c.GetTables(dbid)
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 
-	tid, err := c.CreateTable(dbName, tableName, "", 0, cols, nil)
+	tid, err := c.CreateTable(dbid, 0, tableName, "", cols, nil)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), tid)
 
@@ -153,7 +148,7 @@ func testTableDDL(t *testing.T, c Catalog) {
 	defer close(completedC)
 	go func() {
 		for {
-			tb, _ := c.GetTable(dbName, tableName)
+			tb, _ := c.GetTable(dbid, tableName)
 			if tb != nil {
 				completedC <- tb
 				break
@@ -167,17 +162,17 @@ func testTableDDL(t *testing.T, c Catalog) {
 	case <-time.After(3 * time.Second):
 		stdLog.Printf("create %s failed, timeout", tableName)
 	}
-	tid, err = c.CreateTable(dbName, tableName, "", 0, cols, nil)
+	_, err = c.CreateTable(dbid, 0, tableName, "",  cols, nil)
 	require.Equal(t, ErrTableCreateExists, err)
 
 	for i := 1; i < 10; i++ {
-		tid2, err := c.CreateTable(dbName, fmt.Sprintf("%s%d", tableName, i), "", 0, cols, nil)
+		tid2, err := c.CreateTable(dbid, 0, fmt.Sprintf("%s%d", tableName, i), "", cols, nil)
 		require.NoError(t, err)
 		require.Less(t, tid, tid2)
 	}
 	time.Sleep(5 * time.Second)
 
-	tbs, err = c.GetTables(dbName)
+	tbs, err = c.GetTables(dbid)
 
 	for _, tb := range tbs {
 		s, _ := json.Marshal(tb)
@@ -186,17 +181,24 @@ func testTableDDL(t *testing.T, c Catalog) {
 	require.NoError(t, err)
 	require.Equal(t, 10, len(tbs))
 
+	dTid, err := c.DropTable(dbid, tableName)
+	require.NoError(t, err)
+	require.Equal(t, tid, dTid)
+
+	_, err = c.GetTable(dbid, tableName)
+	require.Error(t, ErrTableNotExists, err)
+
 }
 func testDBDDL(t *testing.T, c Catalog) {
 	dbs, err := c.GetDBs()
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 
-	id, err := c.CreateDatabase(dbName)
+	id, err := c.CreateDatabase(dbName, engine.AOE)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), id)
 
-	id, err = c.CreateDatabase(dbName)
+	id, err = c.CreateDatabase(dbName, engine.AOE)
 	require.Equal(t, ErrDBCreateExists, err)
 
 	dbs, err = c.GetDBs()
@@ -215,39 +217,3 @@ func testDBDDL(t *testing.T, c Catalog) {
 	require.Error(t, ErrDBNotExists, err)
 }
 
-type emptyLog struct{}
-
-func (l *emptyLog) Info(v ...interface{}) {
-
-}
-
-func (l *emptyLog) Infof(format string, v ...interface{}) {
-	stdLog.Printf(format, v...)
-}
-func (l *emptyLog) Debug(v ...interface{}) {
-
-}
-
-func (l *emptyLog) Debugf(format string, v ...interface{}) {
-}
-
-func (l *emptyLog) Warning(v ...interface{}) {
-}
-
-func (l *emptyLog) Warningf(format string, v ...interface{}) {
-}
-
-func (l *emptyLog) Error(v ...interface{}) {
-}
-
-func (l *emptyLog) Errorf(format string, v ...interface{}) {
-	stdLog.Printf(format, v...)
-}
-
-func (l *emptyLog) Fatal(v ...interface{}) {
-	stdLog.Panic(v...)
-}
-
-func (l *emptyLog) Fatalf(format string, v ...interface{}) {
-	stdLog.Panicf(format, v...)
-}

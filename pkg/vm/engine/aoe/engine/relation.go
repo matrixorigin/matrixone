@@ -9,7 +9,7 @@ import (
 )
 
 func (r *relation) ID() string {
-	return string(format.Uint64ToBytes(r.id))
+	return string(format.UInt64ToString(r.id))
 }
 
 func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
@@ -40,4 +40,12 @@ func (r *relation) AddAttribute(_ engine.TableDef) error {
 
 func (r *relation) DelAttribute(_ engine.TableDef) error {
 	return nil
+}
+
+func (r *relation) Rows() int64 {
+	panic("implement me")
+}
+
+func (r *relation) Size(s string) int64 {
+	panic("implement me")
 }

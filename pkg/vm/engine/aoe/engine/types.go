@@ -12,6 +12,7 @@ type aoeEngine struct {
 
 type database struct {
 	id uint64
+	typ int
 	catalog *catalog.Catalog
 }
 
@@ -21,3 +22,5 @@ type relation struct {
 	catalog *catalog.Catalog
 	store *dist.Storage
 }
+
+
