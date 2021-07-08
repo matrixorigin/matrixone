@@ -5,15 +5,12 @@ import (
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
-	// e "matrixone/pkg/vm/engine/aoe/storage"
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 )
 
 type Database struct {
 	DBImpl *db.DB
 }
 
-// func NewDatabase(opts *e.Options, tables *table.Tables, closed *atomic.Value) engine.Database {
 func NewDatabase(impl *db.DB) engine.Database {
 	d := &Database{
 		DBImpl: impl,
@@ -62,11 +59,10 @@ func (d *Database) Relation(name string) (engine.Relation, error) {
 }
 
 func (d *Database) Delete(name string) error {
-	d.DBImpl.EnsureNotClosed()
-	return nil
+	_, err := d.DBImpl.DropTable(name)
+	return err
 }
 
-func (d *Database) Create(name string, tbl []engine.TableDef, pby *engine.PartitionBy, dpy *engine.DistributionBy) error {
-	d.DBImpl.EnsureNotClosed()
+func (d *Database) Create(name string, attrs []engine.TableDef, pby *engine.PartitionBy, dpy *engine.DistributionBy) error {
 	return nil
 }

@@ -78,9 +78,9 @@ func TestEngine(t *testing.T) {
 		cols = append(cols, i)
 	}
 	refs := make([]uint64, len(attrs))
-	hm := host.New(1 << 20)
-	gm := guest.New(1<<20, hm)
-	proc := process.New(gm, mempool.New(1<<32, 8))
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm, mempool.New(1<<48, 8))
 
 	reqCtx, cancel := context.WithCancel(context.Background())
 	var (
@@ -154,7 +154,9 @@ func TestEngine(t *testing.T) {
 			case req := <-insertCh:
 				loopWg.Add(1)
 				t := func() {
-					err := eng.DBImpl.Append(req.Name, req.Data, req.LogIndex)
+					rel, err := dbase.Relation(req.Name)
+					assert.Nil(t, err)
+					err = rel.Write(req.Data)
 					assert.Nil(t, err)
 					loopWg.Done()
 				}
