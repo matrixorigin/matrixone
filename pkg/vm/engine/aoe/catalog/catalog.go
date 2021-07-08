@@ -48,7 +48,7 @@ func DefaultCatalog(store dist.Storage) Catalog {
 
 }
 
-func (c *Catalog) CreateDatabase(dbName string) (uint64, error) {
+func (c *Catalog) CreateDatabase(dbName string, typ int) (uint64, error) {
 	if _, err := c.checkDBNotExists(dbName); err != nil {
 		return 0, err
 	}
@@ -72,6 +72,7 @@ func (c *Catalog) CreateDatabase(dbName string) (uint64, error) {
 		Name:      dbName,
 		Id:        id,
 		CatalogId: 1,
+		Type:      typ,
 	}
 	value, _ := json.Marshal(info)
 	if err = c.store.Set(c.dbKey(id), value); err != nil {
@@ -354,18 +355,18 @@ func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 }
 
 func (c *Catalog) checkTableExists(dbId, id uint64) (*aoe.TableInfo, error) {
-		if v, err := c.store.Get(c.tableKey(dbId, id)); err != nil {
+	if v, err := c.store.Get(c.tableKey(dbId, id)); err != nil {
+		return nil, ErrTableNotExists
+	} else {
+		if table, err := aoe.DecodeTable(v); err != nil {
 			return nil, ErrTableNotExists
 		} else {
-			if table, err := aoe.DecodeTable(v); err != nil {
+			if table.State == aoe.StateDeleteOnly {
 				return nil, ErrTableNotExists
-			} else {
-				if table.State == aoe.StateDeleteOnly {
-					return nil, ErrTableNotExists
-				}
-				return &table, nil
 			}
+			return &table, nil
 		}
+	}
 }
 
 func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.TableInfo, error) {

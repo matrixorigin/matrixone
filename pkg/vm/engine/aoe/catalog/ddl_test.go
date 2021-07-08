@@ -75,9 +75,6 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 			return nil, err
 		}
 		memDataStorage := mem.NewStorage()
-		if err != nil {
-			return nil, err
-		}
 		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, memDataStorage, func(cfg *config.Config) {
 			cfg.DataPath = fmt.Sprintf("%s/node-%d", tmpDir, i)
 			cfg.RaftAddr = fmt.Sprintf("127.0.0.1:1000%d", i)
@@ -135,7 +132,7 @@ func testTableDDL(t *testing.T, c Catalog) {
 	tbs, err := c.GetTables(99)
 	require.Error(t, ErrDBNotExists, err)
 
-	dbid, err := c.CreateDatabase(dbName)
+	dbid, err := c.CreateDatabase(dbName, engine.AOE)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
@@ -197,11 +194,11 @@ func testDBDDL(t *testing.T, c Catalog) {
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 
-	id, err := c.CreateDatabase(dbName)
+	id, err := c.CreateDatabase(dbName, engine.AOE)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), id)
 
-	id, err = c.CreateDatabase(dbName)
+	id, err = c.CreateDatabase(dbName, engine.AOE)
 	require.Equal(t, ErrDBCreateExists, err)
 
 	dbs, err = c.GetDBs()

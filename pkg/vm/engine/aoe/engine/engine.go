@@ -20,8 +20,8 @@ func (e *aoeEngine) Delete(name string) error {
 	return err
 }
 
-func (e *aoeEngine) Create(name string) error {
-	_, err := e.catalog.CreateDatabase(name)
+func (e *aoeEngine) Create(name string, typ int) error {
+	_, err := e.catalog.CreateDatabase(name, typ)
 	return err
 }
 
@@ -41,7 +41,8 @@ func (e *aoeEngine) Database(name string) (engine.Database, error) {
 		return nil, err
 	}
 	return &database{
-		id:    db.Id,
+		id:      db.Id,
+		typ:     db.Type,
 		catalog: e.catalog,
 	}, nil
 }

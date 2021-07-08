@@ -4,13 +4,19 @@ import (
 	"matrixone/pkg/vm/engine"
 )
 
+
+
+func (db *database) Type() int {
+	return db.typ
+}
+
 func (db *database) Delete(name string) error {
 	_, err :=  db.catalog.DropTable(db.id, name)
 	return err
 }
 
-func (db *database) Create(name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy) error {
-	_, err := db.catalog.CreateTable(db.id, 0, name, "", defs, pdef)
+func (db *database) Create(name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
+	_, err := db.catalog.CreateTable(db.id, 0, name, comment, defs, pdef)
 	return err
 }
 

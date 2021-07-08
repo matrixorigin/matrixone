@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/fagongzi/util/format"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
@@ -8,7 +9,7 @@ import (
 )
 
 func (r *relation) ID() string {
-	return r.name
+	return string(format.UInt64ToString(r.id))
 }
 
 func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
