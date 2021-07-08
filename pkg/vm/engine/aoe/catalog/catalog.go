@@ -219,6 +219,31 @@ func (c *Catalog) CreateTable(dbName, tableName, comment string, typ uint64, tab
 	return tid, nil
 }
 
+func (c *Catalog) DropTable(dbName, tableName string) (uint64, error) {
+	dbId, err := c.checkDBExists(dbName)
+	if err != nil {
+		return 0, err
+	}
+	err = c.checkTableNotExists(dbId, tableName)
+	if err != nil {
+		return 0, err
+	}
+	v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tableName)))
+	if !ok {
+		return 0, nil
+	}
+	lock := v.(*sync.RWMutex)
+	lock.Lock()
+	defer func() {
+		c.gMutex.Remove(string(c.dbIDKey(dbName)))
+		lock.Unlock()
+	}()
+
+
+	//TODO
+	return 0, err
+
+}
 func (c *Catalog) GetTables(dbName string) ([]aoe.TableInfo, error) {
 	if id, err := c.checkDBExists(dbName); err != nil {
 		return nil, err
