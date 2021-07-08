@@ -72,11 +72,12 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 			capacity = uint64(stat.Size())
 		}
 	}
-	node := bufMgr.CreateNode(vf, constructor, capacity).(*bmgr.Node)
+	var node bmgrif.INode
+	node = bufMgr.CreateNode(vf, constructor, capacity)
 	if node == nil {
 		return nil
 	}
-	part.Node = node
+	part.Node = node.(*bmgr.Node)
 
 	blk.RegisterPart(part)
 	part.Ref()
