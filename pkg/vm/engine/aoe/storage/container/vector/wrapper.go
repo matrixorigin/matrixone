@@ -205,6 +205,10 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 		return n, err
 	}
 	err = vec.Vector.Read(data)
+	if err != nil {
+		proc.Free(data)
+		return n, err
+	}
 	copy(data, encoding.EncodeUint64(ref))
 
 	return int64(nr), err
