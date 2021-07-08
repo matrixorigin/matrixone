@@ -3,7 +3,6 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
@@ -65,7 +64,6 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 	if err := recreateTestTempDir(); err != nil {
 		return nil, err
 	}
-	util.SetLogger(&emptyLog{})
 	c := &testCluster{t: t}
 	for i := 0; i < 3; i++ {
 		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
@@ -167,7 +165,7 @@ func testTableDDL(t *testing.T, c Catalog) {
 	case <-time.After(3 * time.Second):
 		stdLog.Printf("create %s failed, timeout", tableName)
 	}
-	tid, err = c.CreateTable(dbName, tableName, "", 0, cols, nil)
+	_, err = c.CreateTable(dbName, tableName, "", 0, cols, nil)
 	require.Equal(t, ErrTableCreateExists, err)
 
 	for i := 1; i < 10; i++ {
@@ -185,6 +183,13 @@ func testTableDDL(t *testing.T, c Catalog) {
 	}
 	require.NoError(t, err)
 	require.Equal(t, 10, len(tbs))
+
+	dTid, err := c.DropTable(dbName, tableName)
+	require.NoError(t, err)
+	require.Equal(t, tid, dTid)
+
+	_, err = c.GetTable(dbName, tableName)
+	require.Error(t, ErrTableNotExists, err)
 
 }
 func testDBDDL(t *testing.T, c Catalog) {
@@ -215,39 +220,3 @@ func testDBDDL(t *testing.T, c Catalog) {
 	require.Error(t, ErrDBNotExists, err)
 }
 
-type emptyLog struct{}
-
-func (l *emptyLog) Info(v ...interface{}) {
-
-}
-
-func (l *emptyLog) Infof(format string, v ...interface{}) {
-	stdLog.Printf(format, v...)
-}
-func (l *emptyLog) Debug(v ...interface{}) {
-
-}
-
-func (l *emptyLog) Debugf(format string, v ...interface{}) {
-}
-
-func (l *emptyLog) Warning(v ...interface{}) {
-}
-
-func (l *emptyLog) Warningf(format string, v ...interface{}) {
-}
-
-func (l *emptyLog) Error(v ...interface{}) {
-}
-
-func (l *emptyLog) Errorf(format string, v ...interface{}) {
-	stdLog.Printf(format, v...)
-}
-
-func (l *emptyLog) Fatal(v ...interface{}) {
-	stdLog.Panic(v...)
-}
-
-func (l *emptyLog) Fatalf(format string, v ...interface{}) {
-	stdLog.Panicf(format, v...)
-}

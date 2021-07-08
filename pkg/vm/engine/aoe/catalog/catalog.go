@@ -106,7 +106,7 @@ func (c *Catalog) DelDatabase(dbName string) (uint64, error) {
 			return 0, err
 		}
 		err = c.store.Delete(c.dbIDKey(dbName))
-		// TODO ADD Async Deletion Task Queue (Drop tables & related within deleted db)
+		// TODO: Data Cleanup Notify (Drop tables & related within deleted db)
 		return id, err
 	}
 }
@@ -224,7 +224,7 @@ func (c *Catalog) DropTable(dbName, tableName string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	err = c.checkTableNotExists(dbId, tableName)
+	tid, err := c.checkTableExists(dbId, tableName)
 	if err != nil {
 		return 0, err
 	}
@@ -239,9 +239,20 @@ func (c *Catalog) DropTable(dbName, tableName string) (uint64, error) {
 		lock.Unlock()
 	}()
 
-
-	//TODO
-	return 0, err
+	value, err := c.store.Get(c.tableKey(dbId, tid))
+	if err != nil {
+		return 0, err
+	}
+	tb := aoe.TableInfo{}
+	_ = json.Unmarshal(value, &tb)
+	tb.State = aoe.StateDeleteOnly
+	value, _ = json.Marshal(tb)
+	if err = c.store.Set(c.tableKey(dbId, tid), value); err != nil {
+		return 0, err
+	}
+	err = c.store.Delete(c.tableIDKey(dbId, tableName))
+	//TODO：Data Cleanup Notify
+	return tid, err
 
 }
 func (c *Catalog) GetTables(dbName string) ([]aoe.TableInfo, error) {

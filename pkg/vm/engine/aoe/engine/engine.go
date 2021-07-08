@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"fmt"
 	"matrixone/pkg/vm/engine"
 )
 
@@ -9,9 +8,7 @@ func New() *aoeEngine {
 	//1. Parse config
 	//2. New Storage
 	//3. New Catalog
-	return &aoeEngine{
-
-	}
+	return &aoeEngine{}
 }
 
 func (e *aoeEngine) Node(_ string) *engine.NodeInfo {
@@ -19,19 +16,32 @@ func (e *aoeEngine) Node(_ string) *engine.NodeInfo {
 }
 
 func (e *aoeEngine) Delete(name string) error {
-
-	return nil
+	_, err := e.catalog.DelDatabase(name)
+	return err
 }
 
 func (e *aoeEngine) Create(name string) error {
-
-	return nil
+	_, err := e.catalog.CreateDatabase(name)
+	return err
 }
 
 func (e *aoeEngine) Databases() []string {
-	return nil
+	var ds []string
+	if dbs, err := e.catalog.GetDBs(); err == nil {
+		for _, db := range dbs {
+			ds = append(ds, db.Name)
+		}
+	}
+	return ds
 }
 
 func (e *aoeEngine) Database(name string) (engine.Database, error) {
-	return nil, fmt.Errorf("database '%s' not exist", name)
+	_, err := e.catalog.GetDB(name)
+	if err != nil {
+		return nil, err
+	}
+	return &database{
+		name:    name,
+		catalog: e.catalog,
+	}, nil
 }
