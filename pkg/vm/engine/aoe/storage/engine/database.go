@@ -18,6 +18,10 @@ func NewDatabase(impl *db.DB) engine.Database {
 	return d
 }
 
+func (d *Database) Type() int {
+	return 0
+}
+
 func (d *Database) Relations() []string {
 	d.DBImpl.EnsureNotClosed()
 	return d.DBImpl.Opts.Meta.Info.TableNames()
@@ -63,6 +67,6 @@ func (d *Database) Delete(name string) error {
 	return err
 }
 
-func (d *Database) Create(name string, attrs []engine.TableDef, pby *engine.PartitionBy, dpy *engine.DistributionBy) error {
+func (d *Database) Create(_ string, _ []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
 	return nil
 }
