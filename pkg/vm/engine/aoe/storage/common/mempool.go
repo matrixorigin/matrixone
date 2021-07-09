@@ -135,7 +135,7 @@ type Mempool struct {
 	pools      []poolWrapper
 	capacity   uint64
 	usage      uint64
-	quatausage uint64
+	quotausage uint64
 	other      uint64
 }
 
@@ -203,12 +203,19 @@ func (mp *Mempool) Alloc(size uint64) *MemNode {
 }
 
 func (mp *Mempool) ApplyQuota(size uint64) *MemNode {
-	postsize := atomic.AddUint64(&mp.usage, size)
+	preusage := atomic.LoadUint64(&mp.usage)
+	postsize := preusage + size
 	if postsize > mp.capacity {
-		atomic.AddUint64(&mp.usage, ^uint64(size-1))
 		return nil
 	}
-	atomic.AddUint64(&mp.quatausage, size)
+	for !atomic.CompareAndSwapUint64(&mp.usage, preusage, postsize) {
+		preusage = atomic.LoadUint64(&mp.usage)
+		postsize = preusage + size
+		if postsize > mp.capacity {
+			return nil
+		}
+	}
+	atomic.AddUint64(&mp.quotausage, size)
 	node := new(MemNode)
 	node.size = uint32(size)
 	return node
@@ -220,7 +227,7 @@ func (mp *Mempool) Free(n *MemNode) {
 	}
 	size := n.Size()
 	if n.IsQuota() {
-		atomic.AddUint64(&mp.quatausage, ^uint64(uint64(size)-1))
+		atomic.AddUint64(&mp.quotausage, ^uint64(uint64(size)-1))
 		n = nil
 	} else {
 		if n.idx < uint8(len(PageSizes)) {
@@ -248,7 +255,7 @@ func (mp *Mempool) Capacity() uint64 {
 
 func (mp *Mempool) String() string {
 	usage := atomic.LoadUint64(&mp.usage)
-	s := fmt.Sprintf("<Mempool>(Cap=%d)(Usage=%d)(Quota=%d)", mp.capacity, usage, atomic.LoadUint64(&mp.quatausage))
+	s := fmt.Sprintf("<Mempool>(Cap=%d)(Usage=%d)(Quota=%d)", mp.capacity, usage, atomic.LoadUint64(&mp.quotausage))
 	for _, pool := range mp.pools {
 		s = fmt.Sprintf("%s\nPage: %d, Count: %d", s, pool.idx, pool.Count())
 	}
