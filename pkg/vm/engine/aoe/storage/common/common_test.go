@@ -27,7 +27,7 @@ func TestPool(t *testing.T) {
 	assert.Equal(t, uint64(0), mp.Usage())
 
 	size := K * 4
-	p, _ := ants.NewPool(1)
+	p, _ := ants.NewPool(20)
 	var wg sync.WaitGroup
 
 	now := time.Now()
@@ -51,17 +51,38 @@ func TestPool(t *testing.T) {
 	// t.Logf("1. Takes %s, proc size: %d", time.Since(now), proc.Size())
 	// now = time.Now()
 
-	for i := 0; i < 1024*512; i++ {
+	// for i := 0; i < 1024*2; i++ {
+	for i := 0; i < 1024*1024; i++ {
 		wg.Add(1)
 		f := func() {
 			defer wg.Done()
 			n := mp.Alloc(size)
-			mp.Free(n)
+			if n != nil {
+				mp.Free(n)
+			}
 		}
 		p.Submit(f)
 	}
 	wg.Wait()
-	assert.Equal(t, uint64(0), mp.Usage())
 	t.Logf("Takes %s", time.Since(now))
+	assert.Equal(t, uint64(0), mp.Usage())
+	t.Log(mp.String())
+	n := mp.Alloc(M)
+	if n != nil {
+		assert.Equal(t, uint64(1), mp.other)
+		mp.Free(n)
+		assert.Equal(t, uint64(0), mp.other)
+	}
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		f := func() {
+			defer wg.Done()
+			quota := mp.ApplyQuota(size)
+			mp.Free(quota)
+		}
+		p.Submit(f)
+	}
+	wg.Wait()
 	t.Log(mp.String())
 }

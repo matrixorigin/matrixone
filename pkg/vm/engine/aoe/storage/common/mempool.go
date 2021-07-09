@@ -2,7 +2,7 @@ package common
 
 import (
 	"fmt"
-	// log "github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"sync"
 	"sync/atomic"
 )
@@ -89,7 +89,7 @@ var (
 	}
 )
 
-func findPage(size uint64) (idx int, ok bool) {
+func findPageIdx(size uint64) (idx int, ok bool) {
 	if size > PageSizes[len(PageSizes)-1] {
 		return idx, false
 	}
@@ -132,22 +132,32 @@ func (p *poolWrapper) Count() int {
 }
 
 type Mempool struct {
-	pools    []poolWrapper
-	capacity uint64
-	usage    uint64
+	pools      []poolWrapper
+	capacity   uint64
+	usage      uint64
+	quatausage uint64
+	other      uint64
 }
 
 type MemNode struct {
-	idx uint8
-	Buf []byte
+	size uint32
+	idx  uint8
+	Buf  []byte
 }
 
 func (n *MemNode) Size() int {
-	return cap(n.Buf)
+	if n.Buf != nil {
+		return cap(n.Buf)
+	}
+	return int(n.size)
 }
 
 func (n *MemNode) PageIdx() int {
 	return int(n.idx)
+}
+
+func (n *MemNode) IsQuota() bool {
+	return n.Buf == nil
 }
 
 func NewMempool(capacity uint64) *Mempool {
@@ -165,22 +175,43 @@ func NewMempool(capacity uint64) *Mempool {
 }
 
 func (mp *Mempool) Alloc(size uint64) *MemNode {
-	pageIdx, ok := findPage(size)
+	pageIdx, ok := findPageIdx(size)
 	if ok {
 		size = PageSizes[pageIdx]
 	}
+	preusage := atomic.LoadUint64(&mp.usage)
+	postsize := preusage + size
+	if postsize > mp.capacity {
+		return nil
+	}
+	for !atomic.CompareAndSwapUint64(&mp.usage, preusage, postsize) {
+		preusage = atomic.LoadUint64(&mp.usage)
+		postsize = preusage + size
+		if postsize > mp.capacity {
+			return nil
+		}
+	}
+
+	if !ok {
+		atomic.AddUint64(&mp.other, uint64(1))
+		node := new(MemNode)
+		node.idx = uint8(len(PageSizes))
+		node.Buf = make([]byte, size)
+		return node
+	}
+	return mp.pools[pageIdx].Get().(*MemNode)
+}
+
+func (mp *Mempool) ApplyQuota(size uint64) *MemNode {
 	postsize := atomic.AddUint64(&mp.usage, size)
 	if postsize > mp.capacity {
 		atomic.AddUint64(&mp.usage, ^uint64(size-1))
 		return nil
 	}
-
-	if !ok {
-		node := new(MemNode)
-		node.Buf = make([]byte, size)
-		return node
-	}
-	return mp.pools[pageIdx].Get().(*MemNode)
+	atomic.AddUint64(&mp.quatausage, size)
+	node := new(MemNode)
+	node.size = uint32(size)
+	return node
 }
 
 func (mp *Mempool) Free(n *MemNode) {
@@ -188,10 +219,21 @@ func (mp *Mempool) Free(n *MemNode) {
 		return
 	}
 	size := n.Size()
-	mp.pools[n.PageIdx()].Put(n)
+	if n.IsQuota() {
+		atomic.AddUint64(&mp.quatausage, ^uint64(uint64(size)-1))
+		n = nil
+	} else {
+		if n.idx < uint8(len(PageSizes)) {
+			mp.pools[n.PageIdx()].Put(n)
+		} else {
+			atomic.AddUint64(&mp.other, ^uint64(0))
+			n = nil
+		}
+	}
 	// log.Infof("Free size %d", size)
 	usage := atomic.AddUint64(&mp.usage, ^uint64(uint64(size)-1))
 	if usage > mp.capacity {
+		log.Error("logic error")
 		panic("")
 	}
 }
@@ -206,9 +248,10 @@ func (mp *Mempool) Capacity() uint64 {
 
 func (mp *Mempool) String() string {
 	usage := atomic.LoadUint64(&mp.usage)
-	s := fmt.Sprintf("<Mempool>(Cap=%d)(Usage=%d)", mp.capacity, usage)
+	s := fmt.Sprintf("<Mempool>(Cap=%d)(Usage=%d)(Quota=%d)", mp.capacity, usage, atomic.LoadUint64(&mp.quatausage))
 	for _, pool := range mp.pools {
 		s = fmt.Sprintf("%s\nPage: %d, Count: %d", s, pool.idx, pool.Count())
 	}
+	s = fmt.Sprintf("%s\nPage: [UDEF], Count: %d", s, atomic.LoadUint64(&mp.other))
 	return s
 }
