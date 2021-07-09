@@ -87,9 +87,10 @@ type ColDef struct {
 }
 
 type Schema struct {
-	Name    string
-	Indexes []*IndexInfo
-	ColDefs []*ColDef
+	Name      string
+	Indexes   []*IndexInfo
+	ColDefs   []*ColDef
+	NameIdMap map[string]int
 }
 
 type IndexInfo struct {
