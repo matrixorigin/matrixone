@@ -25,3 +25,12 @@ func NewVector(handle nif.IBufferHandle) vector.IVector {
 func (v *vectorWrapper) Close() error {
 	return v.handle.Close()
 }
+
+func (v *vectorWrapper) GetLatestView() vector.IVector {
+	vec := v.IVectorNode.GetLatestView()
+	ret := &vectorWrapper{
+		IVectorNode: vec.(vector.IVectorNode),
+		handle:      v.handle,
+	}
+	return ret
+}

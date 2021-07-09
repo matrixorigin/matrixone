@@ -3,7 +3,12 @@ package vector
 import (
 	"matrixone/pkg/container/types"
 	v "matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/mmu/host"
+	"matrixone/pkg/vm/process"
 	"os"
 	"sync"
 	"testing"
@@ -173,5 +178,56 @@ func TestStrVector(t *testing.T) {
 	assert.Equal(t, []byte(str3), builtVec.GetValue(3))
 	assert.Equal(t, 4, builtVec.Length())
 	assert.True(t, builtVec.IsReadonly())
+	f.Close()
+}
+
+func TestWrapper(t *testing.T) {
+	t0 := types.Type{types.T(types.T_varchar), 24, 0, 0}
+	t1 := types.Type{types.T_int32, 4, 4, 0}
+	rows := uint64(100)
+	vec0 := MockVector(t0, rows)
+	vec1 := MockVector(t1, rows)
+	v0 := vec0.CopyToVector()
+	v1 := vec1.CopyToVector()
+	w0 := NewVectorWrapper(v0)
+	w1 := NewVectorWrapper(v1)
+	assert.Equal(t, int(rows), w0.Length())
+	assert.Equal(t, int(rows), w1.Length())
+
+	fname := "/tmp/vectorwrapper"
+	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, 0666)
+	assert.Nil(t, err)
+	n, err := w0.WriteTo(f)
+	assert.Nil(t, err)
+	f.Close()
+
+	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
+	assert.Nil(t, err)
+	rw0 := NewEmptyWrapper(t0)
+	rw0.AllocSize = uint64(n)
+	_, err = rw0.ReadFrom(f)
+	assert.Nil(t, err)
+
+	assert.Equal(t, int(rows), rw0.Length())
+	f.Close()
+
+	hm := host.New(1 << 20)
+	gm := guest.New(1<<20, hm)
+	proc := process.New(gm, mempool.New(1<<32, 8))
+	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
+	assert.Nil(t, err)
+	assert.Nil(t, err)
+	ww0 := NewEmptyWrapper(t0)
+	ww0.AllocSize = uint64(n)
+	ref := uint64(1)
+	nr, err := ww0.ReadWithProc(f, ref, proc)
+	assert.Equal(t, n, nr)
+
+	assert.Equal(t, int(rows), ww0.Length())
+	refCnt := encoding.DecodeUint64(ww0.Vector.Data[0:mempool.CountSize])
+	assert.Equal(t, ref, refCnt)
+	assert.True(t, proc.Size() != 0)
+	ww0.Vector.Free(proc)
+	assert.True(t, proc.Size() == 0)
 	f.Close()
 }

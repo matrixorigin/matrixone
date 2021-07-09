@@ -116,6 +116,10 @@ func (td *TableData) GetSegmentCount() uint32 {
 	return atomic.LoadUint32(&td.tree.SegmentCnt)
 }
 
+func (td *TableData) GetMeta() *md.Table {
+	return td.Meta
+}
+
 func (td *TableData) String() string {
 	td.tree.RLock()
 	defer td.tree.RUnlock()

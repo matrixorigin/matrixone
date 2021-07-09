@@ -6,7 +6,6 @@ import (
 	"io"
 	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	b "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -94,7 +93,10 @@ func (sw *MemtableWriter) Flush() (err error) {
 	defer bat.Close()
 	var colBufs [][]byte
 	for idx, _ := range mtTypes {
-		colBuf, err := bat.GetVectorByAttr(idx).(b.IMemoryNode).Marshall()
+		node := bat.GetVectorByAttr(idx)
+		vec := node.CopyToVector()
+		// colBuf, err := bat.GetVectorByAttr(idx).(b.IMemoryNode).Marshall()
+		colBuf, err := vec.Show()
 		if err != nil {
 			return err
 		}

@@ -10,6 +10,7 @@ type VectorType uint8
 const (
 	StdVec VectorType = iota
 	StrVec
+	Wrapper
 )
 
 type IBatchReader interface {

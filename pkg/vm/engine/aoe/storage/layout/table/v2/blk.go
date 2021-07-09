@@ -2,6 +2,7 @@ package table
 
 import (
 	"fmt"
+	ro "matrixone/pkg/container/vector"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -13,6 +14,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/process"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -196,6 +198,15 @@ func (blk *Block) String() string {
 		s = fmt.Sprintf("%s/n\t%s", s, colBlk.String())
 	}
 	return s
+}
+
+func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
+	colIdx := blk.Meta.Segment.Schema.GetColIdx(attr)
+	vec, err := blk.data.Columns[colIdx].ForceLoad(ref, proc)
+	if err != nil {
+		return nil, err
+	}
+	return vec, nil
 }
 
 func (blk *Block) GetFullBatch() batch.IBatch {
