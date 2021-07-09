@@ -107,7 +107,7 @@ func TestEngine(t *testing.T) {
 					}
 				}
 			}
-			rel.Close()
+			rel.(*Relation).Close()
 		}
 	}
 	assert.NotNil(t, task)
