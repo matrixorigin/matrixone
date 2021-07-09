@@ -7,6 +7,7 @@ import (
 	base "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
@@ -14,6 +15,7 @@ import (
 )
 
 type VectorWrapper struct {
+	MNode *common.MemNode
 	base.Vector
 	FreeFunc  buf.MemoryFreeFunc
 	AllocSize uint64
@@ -79,6 +81,9 @@ func (v *VectorWrapper) SetCol(col interface{}) {
 }
 
 func (v *VectorWrapper) FreeMemory() {
+	if v.MNode != nil {
+		common.GPool.Free(v.MNode)
+	}
 	if v.FreeFunc != nil {
 		v.FreeFunc(v)
 	}
@@ -181,6 +186,18 @@ func (vec *VectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
+	// vec.MNode = common.GPool.Alloc(vec.AllocSize + mempool.CountSize)
+	// data := vec.MNode.Buf
+	// nr, err := r.Read(data[mempool.CountSize : vec.AllocSize+mempool.CountSize])
+	// if err != nil {
+	// 	return n, err
+	// }
+	// t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
+	// v := base.New(t)
+	// vec.Col = v.Col
+	// err = vec.Vector.Read(data)
+	// return int64(nr), err
+
 	data := make([]byte, vec.AllocSize+mempool.CountSize)
 	nr, err := r.Read(data[mempool.CountSize:])
 	if err != nil {
@@ -204,7 +221,7 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 		proc.Free(data)
 		return n, err
 	}
-	err = vec.Vector.Read(data)
+	err = vec.Vector.Read(data[:mempool.CountSize+vec.AllocSize])
 	if err != nil {
 		proc.Free(data)
 		return n, err

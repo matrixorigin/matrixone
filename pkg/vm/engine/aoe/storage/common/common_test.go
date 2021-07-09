@@ -67,7 +67,7 @@ func TestPool(t *testing.T) {
 	t.Logf("Takes %s", time.Since(now))
 	assert.Equal(t, uint64(0), mp.Usage())
 	t.Log(mp.String())
-	n := mp.Alloc(M)
+	n := mp.Alloc(2 * M)
 	if n != nil {
 		assert.Equal(t, uint64(1), mp.other)
 		mp.Free(n)
