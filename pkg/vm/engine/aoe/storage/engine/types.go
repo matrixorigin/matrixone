@@ -13,6 +13,10 @@ type Engine struct {
 	DBImpl *db.DB
 }
 
+func (e *Engine) Type() int {
+	return 0
+}
+
 func (e *Engine) Create(name string) error {
 	return db.ErrUnsupported
 }
