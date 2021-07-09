@@ -137,6 +137,7 @@ type Mempool struct {
 	usage      uint64
 	quotausage uint64
 	other      uint64
+	peakusage  uint64
 }
 
 type MemNode struct {
@@ -190,6 +191,11 @@ func (mp *Mempool) Alloc(size uint64) *MemNode {
 		if postsize > mp.capacity {
 			return nil
 		}
+	}
+
+	peak := atomic.LoadUint64(&mp.peakusage)
+	if postsize > peak {
+		atomic.CompareAndSwapUint64(&mp.peakusage, peak, postsize)
 	}
 
 	if !ok {
@@ -255,7 +261,8 @@ func (mp *Mempool) Capacity() uint64 {
 
 func (mp *Mempool) String() string {
 	usage := atomic.LoadUint64(&mp.usage)
-	s := fmt.Sprintf("<Mempool>(Cap=%d)(Usage=%d)(Quota=%d)", mp.capacity, usage, atomic.LoadUint64(&mp.quotausage))
+	peak := atomic.LoadUint64(&mp.peakusage)
+	s := fmt.Sprintf("<Mempool>(Cap=%d)(Usage=%d)(Quota=%d)(Peak=%d)", mp.capacity, usage, atomic.LoadUint64(&mp.quotausage), peak)
 	for _, pool := range mp.pools {
 		s = fmt.Sprintf("%s\nPage: %d, Count: %d", s, pool.idx, pool.Count())
 	}
