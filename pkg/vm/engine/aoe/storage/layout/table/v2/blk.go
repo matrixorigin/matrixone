@@ -2,6 +2,7 @@ package table
 
 import (
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	ro "matrixone/pkg/container/vector"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -16,7 +17,8 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
 	"matrixone/pkg/vm/process"
 	"sync"
-	// log "github.com/sirupsen/logrus"
+	"sync/atomic"
+	"unsafe"
 )
 
 type Block struct {
@@ -28,6 +30,8 @@ type Block struct {
 		AttrSize []uint64
 		Next     iface.IBlock
 	}
+	PrevVer     *iface.IBlock
+	NextVer     *iface.IBlock
 	Meta        *md.Block
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
@@ -116,7 +120,41 @@ func (blk *Block) close() {
 		blk.data.Next.Unref()
 		blk.data.Next = nil
 	}
+	nextVer := blk.GetNextVersion()
+	if nextVer != nil {
+		// log.Infof("destroy version chain for blk %d", blk.Meta.ID)
+		nextVer.SetPrevVersion(nil)
+		nextVer.Unref()
+	}
 	// log.Infof("destroy blk %d", blk.Meta.ID)
+}
+
+func (blk *Block) SetPrevVersion(prev iface.IBlock) {
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&blk.PrevVer)), unsafe.Pointer(&prev))
+	if prev != nil {
+		blk.Ref()
+		prev.SetNextVersion(blk)
+	}
+}
+
+func (blk *Block) SetNextVersion(ver iface.IBlock) {
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&blk.NextVer)), unsafe.Pointer(&ver))
+}
+
+func (blk *Block) GetPrevVersion() iface.IBlock {
+	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&blk.PrevVer)))
+	if ptr == nil {
+		return nil
+	}
+	return *(*iface.IBlock)(ptr)
+}
+
+func (blk *Block) GetNextVersion() iface.IBlock {
+	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&blk.NextVer)))
+	if ptr == nil {
+		return nil
+	}
+	return *(*iface.IBlock)(ptr)
 }
 
 func (blk *Block) GetMTBufMgr() bmgrif.IBufferManager {

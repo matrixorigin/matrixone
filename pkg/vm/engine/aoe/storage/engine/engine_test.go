@@ -212,5 +212,6 @@ func TestEngine(t *testing.T) {
 	t.Log(tbl.Size(attr))
 	attr = tblMeta.Schema.ColDefs[1].Name
 	t.Log(tbl.Size(attr))
+	t.Log(tbl.String())
 	eng.DBImpl.Close()
 }

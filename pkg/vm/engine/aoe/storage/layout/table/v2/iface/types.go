@@ -79,6 +79,10 @@ type IBlock interface {
 	GetRowCount() uint64
 	GetNext() IBlock
 	SetNext(next IBlock)
+	SetPrevVersion(ver IBlock)
+	GetPrevVersion() IBlock
+	SetNextVersion(ver IBlock)
+	GetNextVersion() IBlock
 	Size(string) uint64
 }
 

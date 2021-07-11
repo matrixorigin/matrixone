@@ -198,6 +198,14 @@ func (seg *Segment) String() string {
 	s := fmt.Sprintf("<Segment[%d]>(BlkCnt=%d)(Refs=%d)(IndexRefs=%d)", seg.Meta.ID, seg.tree.BlockCnt, seg.RefCount(), seg.IndexHolder.RefCount())
 	for _, blk := range seg.tree.Blocks {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.String())
+		prev := blk.GetPrevVersion()
+		v := 0
+		for prev != nil {
+			s = fmt.Sprintf("%s V%d", s, v)
+			v++
+			prev = prev.GetPrevVersion()
+		}
+		s = fmt.Sprintf("%s V%d", s, v)
 	}
 	return s
 }
@@ -323,6 +331,7 @@ func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 		oldNext = old.GetNext()
 	}
 	upgradeBlk.SetNext(oldNext)
+	upgradeBlk.SetPrevVersion(old)
 
 	seg.tree.Lock()
 	defer seg.tree.Unlock()
