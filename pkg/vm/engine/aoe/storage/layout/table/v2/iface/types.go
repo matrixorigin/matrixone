@@ -34,6 +34,8 @@ type ITableData interface {
 	SegmentIds() []uint64
 	StongRefRoot() ISegment
 	WeakRefRoot() ISegment
+	GetRowCount() uint64
+	AddRows(uint64) uint64
 	GetMeta() *md.Table
 }
 
@@ -52,6 +54,7 @@ type ISegment interface {
 	GetNext() ISegment
 	SetNext(ISegment)
 	String() string
+	GetRowCount() uint64
 	CloneWithUpgrade(ITableData, *md.Segment) (ISegment, error)
 	UpgradeBlock(*md.Block) (IBlock, error)
 	BlockIds() []uint64
@@ -71,6 +74,7 @@ type IBlock interface {
 	GetFullBatch() batch.IBatch
 	GetBatch(attrs []int) dbi.IBatchReader
 	GetVectorCopy(attr string, ref uint64, proc *process.Process) (*vector.Vector, error)
+	GetRowCount() uint64
 	GetNext() IBlock
 	SetNext(next IBlock)
 }

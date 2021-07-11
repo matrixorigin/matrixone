@@ -43,6 +43,7 @@ type TableData struct {
 		Ids        []uint64
 		Helper     map[uint64]int
 		SegmentCnt uint32
+		RowCount   uint64
 	}
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
@@ -202,6 +203,14 @@ func (td *TableData) SegmentIds() []uint64 {
 	}
 	td.tree.RUnlock()
 	return ids
+}
+
+func (td *TableData) GetRowCount() uint64 {
+	return atomic.LoadUint64(&td.tree.RowCount)
+}
+
+func (td *TableData) AddRows(rows uint64) uint64 {
+	return atomic.AddUint64(&td.tree.RowCount, rows)
 }
 
 func (td *TableData) RegisterBlock(meta *md.Block) (blk iface.IBlock, err error) {

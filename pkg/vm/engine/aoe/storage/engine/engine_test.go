@@ -205,5 +205,8 @@ func TestEngine(t *testing.T) {
 	t.Log(eng.DBImpl.SSTBufMgr.String())
 	t.Log(eng.DBImpl.MemTableMgr.String())
 	t.Logf("Load: %d", loadCnt)
+	tbl, _ := eng.DBImpl.Store.DataTables.WeakRefTable(tid)
+	assert.Equal(t, tbl.GetRowCount(), rows*uint64(insertCnt))
+	t.Log(tbl.GetRowCount())
 	eng.DBImpl.Close()
 }

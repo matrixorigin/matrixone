@@ -84,6 +84,10 @@ func (blk *Block) GetType() base.BlockType {
 	return blk.Type
 }
 
+func (blk *Block) GetRowCount() uint64 {
+	return blk.Meta.GetCount()
+}
+
 func (blk *Block) close() {
 	if blk.IndexHolder != nil {
 		blk.IndexHolder.Unref()

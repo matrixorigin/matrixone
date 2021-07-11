@@ -71,7 +71,6 @@ type Segment struct {
 	ID            uint64
 	TableID       uint64
 	MaxBlockCount uint64
-	Count         uint64
 	Blocks        []*Block
 	ActiveBlk     int
 	IdMap         map[uint64]int
@@ -99,6 +98,11 @@ type IndexInfo struct {
 	ID      uint64
 }
 
+type Statstics struct {
+	Rows uint64
+	Size uint64
+}
+
 type Table struct {
 	BoundSate
 	sync.RWMutex
@@ -110,6 +114,7 @@ type Table struct {
 	IdMap         map[uint64]int `json:"-"`
 	Info          *MetaInfo      `json:"-"`
 	Schema        *Schema
+	Stat          *Statstics
 }
 
 type Configuration struct {

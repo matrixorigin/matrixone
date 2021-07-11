@@ -83,6 +83,19 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	return seg, nil
 }
 
+func (seg *Segment) GetRowCount() uint64 {
+	if seg.Meta.DataState >= md.CLOSED {
+		return seg.Meta.Info.Conf.BlockMaxRows * seg.Meta.Info.Conf.SegmentMaxBlocks
+	}
+	var ret uint64
+	seg.tree.RLock()
+	for _, blk := range seg.tree.Blocks {
+		ret += blk.GetRowCount()
+	}
+	seg.tree.RUnlock()
+	return ret
+}
+
 func (seg *Segment) BlockIds() []uint64 {
 	if seg.Type == base.SORTED_SEG {
 		return seg.tree.BlockIds
