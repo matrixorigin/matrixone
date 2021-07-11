@@ -19,7 +19,7 @@ var (
 	NotExistErr = errors.New("not exist error")
 )
 
-func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) iface.ITableData {
+func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) *TableData {
 	data := &TableData{
 		MTBufMgr:    mtBufMgr,
 		SSTBufMgr:   sstBufMgr,
@@ -213,6 +213,12 @@ func (td *TableData) AddRows(rows uint64) uint64 {
 	return atomic.AddUint64(&td.tree.RowCount, rows)
 }
 
+func (td *TableData) initRowCount() {
+	for _, seg := range td.tree.Segments {
+		td.tree.RowCount += seg.GetRowCount()
+	}
+}
+
 func (td *TableData) RegisterBlock(meta *md.Block) (blk iface.IBlock, err error) {
 	td.tree.RLock()
 	defer td.tree.RUnlock()
@@ -402,6 +408,7 @@ func (ts *Tables) Replay(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr b
 				defer blk.Unref()
 			}
 		}
+		tbl.initRowCount()
 		if err := ts.CreateTable(tbl); err != nil {
 			return err
 		}
