@@ -203,7 +203,7 @@ func (seg *Segment) String() string {
 		for prev != nil {
 			s = fmt.Sprintf("%s V%d", s, v)
 			v++
-			prev = prev.GetPrevVersion()
+			prev = prev.(*Block).GetPrevVersion()
 		}
 		s = fmt.Sprintf("%s V%d", s, v)
 	}
