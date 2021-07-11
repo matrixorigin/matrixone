@@ -5,6 +5,7 @@ import (
 	be "matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/engine"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -30,7 +31,7 @@ const (
 	workDir            string = "/tmp/readtest"
 	tableName          string = "mocktbl"
 
-	colCnt     int    = 1000
+	colCnt     int    = 2000
 	insertRows uint64 = blockRows * blockCntPerSegment * 10
 
 	insertCnt       uint64 = 20
@@ -113,7 +114,8 @@ func makeFiles(impl *db.DB) {
 			panic(err)
 		}
 	}
-	time.Sleep(time.Duration(5000) * time.Millisecond)
+	waitTime := insertCnt * uint64(ibat.Vecs[0].Length()) * uint64(colCnt) / uint64(400000000) * 5000
+	time.Sleep(time.Duration(waitTime) * time.Millisecond)
 }
 
 func makeDatabase(impl *db.DB) be.Database {
@@ -176,9 +178,10 @@ func readData() {
 	}
 	wg.Wait()
 	log.Infof("Time: %s, Rows: %d", time.Since(now), totalRows)
+	log.Info(common.GPool.String())
 }
 
 func main() {
-	// mockData()
-	readData()
+	mockData()
+	// readData()
 }

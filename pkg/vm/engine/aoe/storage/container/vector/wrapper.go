@@ -211,6 +211,8 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Process) (n int64, err error) {
+	// node := common.GPool.Alloc(vec.AllocSize + mempool.CountSize)
+	// data := node.Buf
 	data, err := proc.Alloc(int64(vec.AllocSize))
 	if err != nil {
 		return n, err
@@ -227,6 +229,7 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 		return n, err
 	}
 	copy(data, encoding.EncodeUint64(ref))
+	// common.GPool.Free(node)
 
 	return int64(nr), err
 }

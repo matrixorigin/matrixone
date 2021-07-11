@@ -14,6 +14,7 @@ const (
 const (
 	K uint64 = 1024
 	M uint64 = 1024 * 1024
+	G        = K * M
 )
 
 var (
@@ -33,7 +34,7 @@ var (
 		128 * K,
 		256 * K,
 		512 * K,
-		K * K,
+		M,
 	}
 	pools = []sync.Pool{}
 )
@@ -54,6 +55,21 @@ func init() {
 		pools = append(pools, pool)
 	}
 	GPool = NewMempool(UNLIMIT)
+}
+
+func ToH(size uint64) string {
+	var s string
+	if size < K {
+		s = fmt.Sprintf("%d B", size)
+	} else if size < M {
+		s = fmt.Sprintf("%.4f KB", float64(size)/float64(K))
+	} else if size < G {
+		s = fmt.Sprintf("%.4f MB", float64(size)/float64(M))
+	} else {
+		s = fmt.Sprintf("%.4f GB", float64(size)/float64(G))
+	}
+
+	return s
 }
 
 func findPageIdx(size uint64) (idx int, ok bool) {
@@ -229,9 +245,9 @@ func (mp *Mempool) Capacity() uint64 {
 func (mp *Mempool) String() string {
 	usage := atomic.LoadUint64(&mp.usage)
 	peak := atomic.LoadUint64(&mp.peakusage)
-	s := fmt.Sprintf("<Mempool>(Cap=%d)(Usage=%d)(Quota=%d)(Peak=%d)", mp.capacity, usage, atomic.LoadUint64(&mp.quotausage), peak)
+	s := fmt.Sprintf("<Mempool>(Cap=%s)(Usage=%s)(Quota=%s)(Peak=%s)", ToH(mp.capacity), ToH(usage), ToH(atomic.LoadUint64(&mp.quotausage)), ToH(peak))
 	for _, pool := range mp.pools {
-		s = fmt.Sprintf("%s\nPage: %.4f K, Count: %d", s, float64(PageSizes[pool.idx])/float64(K), pool.Count())
+		s = fmt.Sprintf("%s\nPage: %s, Count: %d", s, ToH(PageSizes[pool.idx]), pool.Count())
 	}
 	s = fmt.Sprintf("%s\nPage: [UDEF], Count: %d", s, atomic.LoadUint64(&mp.other))
 	return s
