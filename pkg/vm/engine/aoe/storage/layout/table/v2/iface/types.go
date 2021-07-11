@@ -37,6 +37,7 @@ type ITableData interface {
 	GetRowCount() uint64
 	AddRows(uint64) uint64
 	GetMeta() *md.Table
+	Size(string) uint64
 }
 
 type ISegment interface {
@@ -55,6 +56,7 @@ type ISegment interface {
 	SetNext(ISegment)
 	String() string
 	GetRowCount() uint64
+	Size(string) uint64
 	CloneWithUpgrade(ITableData, *md.Segment) (ISegment, error)
 	UpgradeBlock(*md.Block) (IBlock, error)
 	BlockIds() []uint64
@@ -77,6 +79,7 @@ type IBlock interface {
 	GetRowCount() uint64
 	GetNext() IBlock
 	SetNext(next IBlock)
+	Size(string) uint64
 }
 
 type IColBlockHandle interface {

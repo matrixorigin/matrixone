@@ -23,6 +23,7 @@ type Segment struct {
 		Helper   map[uint64]int
 		BlockIds []uint64
 		BlockCnt uint32
+		AttrSize map[string]uint64
 		Next     iface.ISegment
 	}
 	MTBufMgr    bmgrif.IBufferManager
@@ -77,6 +78,7 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	seg.tree.Blocks = make([]iface.IBlock, 0)
 	seg.tree.Helper = make(map[uint64]int)
 	seg.tree.BlockIds = make([]uint64, 0)
+	seg.tree.AttrSize = make(map[string]uint64)
 	seg.OnZeroCB = seg.close
 	seg.SegmentFile = segFile
 	seg.Ref()
@@ -94,6 +96,22 @@ func (seg *Segment) GetRowCount() uint64 {
 	}
 	seg.tree.RUnlock()
 	return ret
+}
+
+func (seg *Segment) Size(attr string) uint64 {
+	if seg.Type >= base.SORTED_SEG {
+		return seg.tree.AttrSize[attr]
+	}
+	size := uint64(0)
+	blkCnt := atomic.LoadUint32(&seg.tree.BlockCnt)
+	var blk iface.IBlock
+	for i := 0; i < int(blkCnt); i++ {
+		seg.tree.RLock()
+		blk = seg.tree.Blocks[i]
+		seg.tree.RUnlock()
+		size += blk.Size(attr)
+	}
+	return size
 }
 
 func (seg *Segment) BlockIds() []uint64 {

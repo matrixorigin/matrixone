@@ -23,9 +23,10 @@ type Block struct {
 	common.RefHelper
 	data struct {
 		sync.RWMutex
-		Columns []col.IColumnBlock
-		Helper  map[string]int
-		Next    iface.IBlock
+		Columns  []col.IColumnBlock
+		Helper   map[string]int
+		AttrSize []uint64
+		Next     iface.IBlock
 	}
 	Meta        *md.Block
 	MTBufMgr    bmgrif.IBufferManager
@@ -71,11 +72,15 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 }
 
 func (blk *Block) initColumns() error {
+	blk.data.AttrSize = make([]uint64, 0)
 	for idx, colDef := range blk.Meta.Segment.Schema.ColDefs {
 		blk.Ref()
 		colBlk := col.NewStdColumnBlock(blk, idx)
 		blk.data.Helper[colDef.Name] = len(blk.data.Columns)
 		blk.data.Columns = append(blk.data.Columns, colBlk)
+		if blk.Type >= base.PERSISTENT_BLK {
+			blk.data.AttrSize = append(blk.data.AttrSize, colBlk.Size())
+		}
 	}
 	return nil
 }
@@ -86,6 +91,17 @@ func (blk *Block) GetType() base.BlockType {
 
 func (blk *Block) GetRowCount() uint64 {
 	return blk.Meta.GetCount()
+}
+
+func (blk *Block) Size(attr string) uint64 {
+	idx, ok := blk.data.Helper[attr]
+	if !ok {
+		panic("logic error")
+	}
+	if blk.Type >= base.PERSISTENT_BLK {
+		return blk.data.AttrSize[idx]
+	}
+	return blk.data.Columns[idx].Size()
 }
 
 func (blk *Block) close() {
@@ -189,6 +205,7 @@ func (blk *Block) cloneWithUpgradeColumns(cloned *Block) {
 		clonedCol := colBlk.CloneWithUpgrade(cloned)
 		cloned.data.Helper[name] = idx
 		cloned.data.Columns[idx] = clonedCol
+		cloned.data.AttrSize = append(cloned.data.AttrSize, clonedCol.Size())
 	}
 }
 

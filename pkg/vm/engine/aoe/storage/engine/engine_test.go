@@ -208,5 +208,9 @@ func TestEngine(t *testing.T) {
 	tbl, _ := eng.DBImpl.Store.DataTables.WeakRefTable(tid)
 	assert.Equal(t, tbl.GetRowCount(), rows*uint64(insertCnt))
 	t.Log(tbl.GetRowCount())
+	attr := tblMeta.Schema.ColDefs[0].Name
+	t.Log(tbl.Size(attr))
+	attr = tblMeta.Schema.ColDefs[1].Name
+	t.Log(tbl.Size(attr))
 	eng.DBImpl.Close()
 }

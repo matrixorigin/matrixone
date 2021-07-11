@@ -195,6 +195,19 @@ func (td *TableData) RegisterSegment(meta *md.Segment) (seg iface.ISegment, err 
 	return seg, err
 }
 
+func (td *TableData) Size(attr string) uint64 {
+	size := uint64(0)
+	segCnt := atomic.LoadUint32(&td.tree.SegmentCnt)
+	var seg iface.ISegment
+	for i := 0; i < int(segCnt); i++ {
+		td.tree.RLock()
+		seg = td.tree.Segments[i]
+		td.tree.RUnlock()
+		size += seg.Size(attr)
+	}
+	return size
+}
+
 func (td *TableData) SegmentIds() []uint64 {
 	ids := make([]uint64, 0, atomic.LoadUint32(&td.tree.SegmentCnt))
 	td.tree.RLock()
