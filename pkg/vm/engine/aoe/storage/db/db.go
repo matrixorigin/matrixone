@@ -146,6 +146,42 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 	return collection.Append(bat, &clonedIndex)
 }
 
+func (d *DB) Relation(name string) (*Relation, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	meta, err := d.Opts.Meta.Info.ReferenceTableByName(name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := d.Store.DataTables.StrongRefTable(meta.ID)
+	if err != nil {
+		opCtx := &mdops.OpCtx{
+			Opts:        d.Opts,
+			MTManager:   d.MemTableMgr,
+			TableMeta:   meta,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.Store.DataTables,
+		}
+		op := mdops.NewCreateTableOp(opCtx)
+		op.Push()
+		err = op.WaitDone()
+		if err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection := op.Collection
+		if data, err = d.Store.DataTables.StrongRefTable(meta.ID); err != nil {
+			collection.Unref()
+			return nil, err
+		}
+		collection.Unref()
+	}
+	return NewRelation(d, data, meta), nil
+}
+
 func (d *DB) HasTable(name string) bool {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
@@ -216,6 +252,13 @@ func (d *DB) TableIDs() (ids []uint64, err error) {
 		ids = append(ids, tid)
 	}
 	return ids, err
+}
+
+func (d *DB) TableNames() []string {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	return d.Opts.Meta.Info.TableNames()
 }
 
 func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {

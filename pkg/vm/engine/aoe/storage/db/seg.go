@@ -1,4 +1,4 @@
-package engine
+package db
 
 import (
 	"matrixone/pkg/vm/engine"
@@ -58,9 +58,9 @@ func (seg *Segment) NewSparseFilter() engine.SparseFilter {
 }
 
 func (seg *Segment) Rows() int64 {
-	return 0
+	return int64(seg.Data.GetRowCount())
 }
 
 func (seg *Segment) Size(attr string) int64 {
-	return 0
+	return int64(seg.Data.Size(attr))
 }
