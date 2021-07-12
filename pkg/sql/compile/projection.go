@@ -14,17 +14,17 @@ func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint
 			if name, ok := e.E.(*extend.Attribute); ok {
 				if IsSource(o.Prev) {
 					mp[name.Name]++
+					continue
 				}
-			} else {
-				attr := o.As[i]
-				if v, ok := mp[attr]; ok {
-					refer[attr] = v
-					delete(mp, attr)
-				} else {
-					refer[attr]++
-				}
-				IncRef(e.E, mp)
 			}
+			attr := o.As[i]
+			if v, ok := mp[attr]; ok {
+				refer[attr] = v
+				delete(mp, attr)
+			} else {
+				refer[attr]++
+			}
+			IncRef(e.E, mp)
 		}
 	}
 	ss, err := c.compile(o.Prev, mp)

@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
+	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -94,6 +96,15 @@ func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, pr
 		if ctr.bat.Vecs[i], err = e.Agg.EvalCopy(proc); err != nil {
 			ctr.bat.Vecs = ctr.bat.Vecs[:i]
 			return err
+		}
+		switch e.Agg.Type().Oid {
+		case types.T_tuple:
+			data, err := proc.Alloc(0)
+			if err != nil {
+				ctr.bat.Vecs = ctr.bat.Vecs[:i]
+				return err
+			}
+			ctr.bat.Vecs[i].Data = data[:mempool.CountSize]
 		}
 		copy(ctr.bat.Vecs[i].Data, encoding.EncodeUint64(ctr.refer[e.Alias]))
 	}
