@@ -36,3 +36,29 @@ func (p *Process) Alloc(size int64) ([]byte, error) {
 	}
 	return data, nil
 }
+
+func (p *Process) Grow(old []byte, size int64) ([]byte, error) {
+	n := int64(cap(old))
+	newcap := n
+	doublecap := n + n
+	if size > doublecap {
+		newcap = size
+	} else {
+		if n < 1024 {
+			newcap = doublecap
+		} else {
+			for 0 < newcap && newcap < size {
+				newcap += newcap / 4
+			}
+			if newcap <= 0 {
+				newcap = size
+			}
+		}
+	}
+	data, err := p.Alloc(newcap * 8)
+	if err != nil {
+		return nil, err
+	}
+	copy(data[mempool.CountSize:], old)
+	return data, nil
+}
