@@ -1,10 +1,11 @@
 package dist
 
 import (
-	"encoding/json"
 	"github.com/fagongzi/goetty/codec"
+	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
+	"matrixone/pkg/vm/engine/aoe/dist/pb"
 )
 
 type cmdType uint64
@@ -20,30 +21,41 @@ const (
 )
 
 func (h *aoeStorage) init() {
-	h.AddWriteFunc(uint64(Set), h.set)
-	h.AddWriteFunc(uint64(Del), h.del)
-	h.AddWriteFunc(uint64(Incr), h.incr)
-	h.AddReadFunc(uint64(Get), h.get)
-	h.AddReadFunc(uint64(PrefixScan), h.prefixScan)
-	h.AddReadFunc(uint64(Scan), h.scan)
+	h.AddWriteFunc(uint64(pb.Set), h.set)
+	h.AddWriteFunc(uint64(pb.Del), h.del)
+	h.AddWriteFunc(uint64(pb.Incr), h.incr)
+	h.AddReadFunc(uint64(pb.Get), h.get)
+	h.AddReadFunc(uint64(pb.PrefixScan), h.prefixScan)
+	h.AddReadFunc(uint64(pb.Scan), h.scan)
 }
 
-func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, i interface{}) error {
-
-	op := i.(Args)
-
-	if _, ok := h.cmds[op.Op]; !ok {
-		return ErrCMDNotSupport
+func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error {
+	customReq := cmd.(pb.Request)
+	switch customReq.Type {
+	case pb.Set:
+		msg := customReq.Set
+		req.Key = msg.Key
+		req.CustemType = uint64(pb.Set)
+		req.Type = raftcmdpb.CMDType_Write
+		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.Get:
+		msg := customReq.Get
+		req.Key = msg.Key
+		req.CustemType = uint64(pb.Get)
+		req.Type = raftcmdpb.CMDType_Read
+	case pb.PrefixScan:
+		msg := cmd.(*pb.PrefixScanRequest)
+		req.Key = msg.Prefix
+		req.CustemType = uint64(pb.PrefixScan)
+		req.Type = raftcmdpb.CMDType_Read
+		req.Cmd = protoc.MustMarshal(msg)
+	case pb.Incr:
+		msg := cmd.(*pb.AllocIDRequest)
+		req.Key = msg.Key
+		req.CustemType = uint64(pb.Incr)
+		req.Type = raftcmdpb.CMDType_Write
+		req.Cmd = protoc.MustMarshal(msg)
 	}
-
-	req.Key = op.Args[0]
-	req.CustemType = op.Op
-	req.Type = h.cmds[op.Op]
-	cmd, err := json.Marshal(op)
-	if err != nil {
-		return err
-	}
-	req.Cmd = cmd
 	return nil
 }
 
@@ -62,3 +74,4 @@ func (h *aoeStorage) AddWriteFunc(cmdType uint64, cb command.WriteCommandFunc) {
 	h.cmds[cmdType] = raftcmdpb.CMDType_Write
 	h.store.RegisterWriteFunc(cmdType, cb)
 }
+

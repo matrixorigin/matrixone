@@ -2,7 +2,6 @@ package dist
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
@@ -13,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"os"
 	"testing"
 	"time"
@@ -44,7 +44,6 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 	if err := recreateTestTempDir(); err != nil {
 		return nil, err
 	}
-	util.SetLogger(&emptyLog{})
 	c := &testCluster{t: t}
 	for i := 0; i < 3; i++ {
 		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
@@ -79,7 +78,7 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 			cfg.Prophet.Schedule.EnableJointConsensus = true
 
 		}, server.Cfg{
-			Addr: fmt.Sprintf("127.0.0.1:808%d", i),
+			Addr: fmt.Sprintf("127.0.0.1:908%d", i),
 		})
 		if err != nil {
 			return nil, err
@@ -107,25 +106,27 @@ func TestClusterStartAndStop(t *testing.T) {
 	stdLog.Printf("app all started.")
 
 	//Set Test
-	resp, err := c.applications[0].Exec(Args{
-		Op: uint64(Set),
-		Args: [][]byte{
-			[]byte("hello"),
-			[]byte("world"),
+	resp, err := c.applications[0].Exec(pb.Request{
+		Type: pb.Set,
+		Group: pb.KVGroup,
+		Set: pb.SetRequest{
+			Key:   []byte("Hello"),
+			Value: []byte("World"),
 		},
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, "OK", string(resp))
 
 	//Get Test
-	value, err := c.applications[0].Exec(Args{
-		Op: uint64(Get),
-		Args: [][]byte{
-			[]byte("hello"),
+	value, err := c.applications[0].Exec(pb.Request{
+		Type: pb.Get,
+		Get: pb.GetRequest{
+			Key : []byte("Hello"),
 		},
 	})
 	assert.NoError(t, err)
-	assert.Equal(t, value, []byte("world"))
+	assert.Equal(t, value, []byte("World"))
+
 
 	// To Shard(Not Existed) Get Test
 	gValue, err := c.applications[0].ExecWithGroup(Args{
@@ -137,6 +138,8 @@ func TestClusterStartAndStop(t *testing.T) {
 	}, aoe.AOEGroup)
 	assert.Error(t, err, ErrShardNotExisted)
 	assert.Nil(t, gValue)
+
+
 
 	// Dynamic Create Shard Test
 	client := c.applications[0].RaftStore().Prophet().GetClient()
@@ -184,41 +187,4 @@ func TestClusterStartAndStop(t *testing.T) {
 	}, aoe.AOEGroup)
 	assert.NoError(t, err)
 	assert.Equal(t, gValue, []byte("world"))
-}
-
-type emptyLog struct{}
-
-func (l *emptyLog) Info(v ...interface{}) {
-
-}
-
-func (l *emptyLog) Infof(format string, v ...interface{}) {
-	stdLog.Printf(format, v...)
-}
-func (l *emptyLog) Debug(v ...interface{}) {
-
-}
-
-func (l *emptyLog) Debugf(format string, v ...interface{}) {
-}
-
-func (l *emptyLog) Warning(v ...interface{}) {
-}
-
-func (l *emptyLog) Warningf(format string, v ...interface{}) {
-}
-
-func (l *emptyLog) Error(v ...interface{}) {
-}
-
-func (l *emptyLog) Errorf(format string, v ...interface{}) {
-	stdLog.Printf(format, v...)
-}
-
-func (l *emptyLog) Fatal(v ...interface{}) {
-	stdLog.Panic(v...)
-}
-
-func (l *emptyLog) Fatalf(format string, v ...interface{}) {
-	stdLog.Panicf(format, v...)
 }
