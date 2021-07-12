@@ -423,6 +423,13 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 			vecs[i].Col = col
 			vecs[i].Data = data
 		case types.T_tuple:
+			data, err := proc.Alloc(0)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					vecs[j].Free(proc)
+				}
+				return nil, err
+			}
 			vs := make([][]interface{}, length)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
@@ -434,6 +441,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 			}
 			vecs[i].Col = vs
+			vecs[i].Data = data[:mempool.CountSize]
 		}
 	}
 	for i, e := range es {
