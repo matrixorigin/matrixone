@@ -2,13 +2,6 @@ package aoe
 
 import "matrixone/pkg/container/types"
 
-type Group uint64
-
-const (
-	KVGroup Group = iota
-	AOEGroup
-)
-
 type SchemaState byte
 
 const (
