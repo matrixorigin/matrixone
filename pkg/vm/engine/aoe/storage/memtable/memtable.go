@@ -25,6 +25,7 @@ type MemTable struct {
 	Full      bool
 	Batch     batch.IBatch
 	Meta      *md.Block
+	TableMeta *md.Table
 	Block     iface.IBlock
 }
 
@@ -39,6 +40,7 @@ func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IB
 		Batch:     data.GetFullBatch(),
 		Block:     data,
 		Meta:      data.GetMeta(),
+		TableMeta: tableData.GetMeta(),
 	}
 
 	for idx, colIdx := range mt.Batch.GetAttrs() {
@@ -77,6 +79,7 @@ func (mt *MemTable) Append(bat *ro.Batch, offset uint64, index *md.LogIndex) (n 
 	mt.Meta.SetIndex(*index)
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
 	mt.Meta.AddCount(n)
+	mt.TableData.AddRows(n)
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
 	if uint64(mt.Batch.Length()) == mt.Meta.MaxRowCount {
 		mt.Full = true

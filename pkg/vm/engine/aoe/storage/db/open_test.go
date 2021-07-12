@@ -177,6 +177,10 @@ func TestReplay(t *testing.T) {
 	lastSegmentID := dbi.Opts.Meta.Info.Sequence.NextSegmentID
 	lastBlockID := dbi.Opts.Meta.Info.Sequence.NextBlockID
 	lastIndexID := dbi.Opts.Meta.Info.Sequence.NextIndexID
+	tbl, err := dbi.Store.DataTables.WeakRefTable(tblMeta.ID)
+	assert.Nil(t, err)
+	t.Logf("Row count: %d", tbl.GetRowCount())
+
 	dbi.Close()
 
 	dataDir := e.MakeDataDir(dbi.Dir)
@@ -206,6 +210,10 @@ func TestReplay(t *testing.T) {
 	replaytblMeta, err := dbi.Opts.Meta.Info.ReferenceTableByName(tablet.Name)
 	assert.Nil(t, err)
 	assert.Equal(t, tblMeta.Schema.Name, replaytblMeta.Schema.Name)
+
+	tbl, err = dbi.Store.DataTables.WeakRefTable(replaytblMeta.ID)
+	assert.Nil(t, err)
+	t.Logf("Row count: %d", tbl.GetRowCount())
 
 	_, err = dbi.CreateTable(&tablet)
 	assert.NotNil(t, err)

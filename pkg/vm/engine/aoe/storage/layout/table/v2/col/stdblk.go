@@ -119,6 +119,10 @@ func (blk *StdColumnBlock) GetVectorReader() dbi.IVectorReader {
 	return blk.Part.GetVector().(dbi.IVectorReader)
 }
 
+func (blk *StdColumnBlock) Size() uint64 {
+	return blk.Part.Size()
+}
+
 func (blk *StdColumnBlock) String() string {
 	s := fmt.Sprintf("<Std[%s](T=%s)(Refs=%d)(Size=%d)>", blk.Meta.String(), blk.Type.String(), blk.RefCount(), blk.Meta.Count)
 	return s
