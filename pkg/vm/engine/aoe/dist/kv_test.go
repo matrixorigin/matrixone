@@ -10,8 +10,8 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/mem"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	stdLog "log"
-	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"os"
 	"testing"
@@ -114,8 +114,8 @@ func TestClusterStartAndStop(t *testing.T) {
 			Value: []byte("World"),
 		},
 	})
-	assert.NoError(t, err)
-	assert.Equal(t, "OK", string(resp))
+	require.NoError(t, err)
+	require.Equal(t, "OK", string(resp))
 
 	//Get Test
 	value, err := c.applications[0].Exec(pb.Request{
@@ -124,20 +124,20 @@ func TestClusterStartAndStop(t *testing.T) {
 			Key : []byte("Hello"),
 		},
 	})
-	assert.NoError(t, err)
-	assert.Equal(t, value, []byte("World"))
+	require.NoError(t, err)
+	require.Equal(t, value, []byte("World"))
 
 
 	// To Shard(Not Existed) Get Test
-	gValue, err := c.applications[0].ExecWithGroup(Args{
-		Op: uint64(Get),
-		Args: [][]byte{
-			[]byte("hello"),
+	gValue, err := c.applications[0].ExecWithGroup(pb.Request{
+		Type: pb.Get,
+		Shard: 13,
+		Get: pb.GetRequest{
+			Key : []byte("Hello"),
 		},
-		ShardId: 13,
-	}, aoe.AOEGroup)
-	assert.Error(t, err, ErrShardNotExisted)
-	assert.Nil(t, gValue)
+	}, pb.AOEGroup)
+	require.Error(t, err, ErrShardNotExisted)
+	require.Nil(t, gValue)
 
 
 
@@ -148,43 +148,43 @@ func TestClusterStartAndStop(t *testing.T) {
 			Start:  []byte("2"),
 			End:    []byte("3"),
 			Unique: "gTable1",
-			Group:  uint64(aoe.AOEGroup),
+			Group:  uint64(pb.AOEGroup),
 		}))
 	//
 	assert.NoError(t, err)
 	time.Sleep(5 * time.Second)
 
 	// Get With Group Test
-	gValue, err = c.applications[0].ExecWithGroup(Args{
-		Op: uint64(Get),
-		Args: [][]byte{
-			[]byte("hello"),
+	gValue, err = c.applications[0].ExecWithGroup(pb.Request{
+		Type: pb.Get,
+		Shard: 13,
+		Get: pb.GetRequest{
+			Key : []byte("Hello"),
 		},
-		ShardId: 13,
-	}, aoe.AOEGroup)
+	}, pb.AOEGroup)
 	assert.NoError(t, err)
 	assert.Nil(t, gValue)
 
 	// Set With Group Test
-	resp, err = c.applications[0].ExecWithGroup(Args{
-		Op: uint64(Set),
-		Args: [][]byte{
-			[]byte("hello"),
-			[]byte("world"),
+	resp, err = c.applications[0].ExecWithGroup(pb.Request{
+		Type: pb.Set,
+		Shard: 13,
+		Set: pb.SetRequest{
+			Key:   []byte("Hello"),
+			Value: []byte("World"),
 		},
-		ShardId: 13,
-	}, aoe.AOEGroup)
+	}, pb.AOEGroup)
 	assert.NoError(t, err)
 	assert.Equal(t, "OK", string(resp))
 
 	// Get With Group Test
-	gValue, err = c.applications[0].ExecWithGroup(Args{
-		Op: uint64(Get),
-		Args: [][]byte{
-			[]byte("hello"),
+	gValue, err = c.applications[0].ExecWithGroup(pb.Request{
+		Type: pb.Get,
+		Shard: 13,
+		Get: pb.GetRequest{
+			Key : []byte("Hello"),
 		},
-		ShardId: 13,
-	}, aoe.AOEGroup)
+	}, pb.AOEGroup)
 	assert.NoError(t, err)
-	assert.Equal(t, gValue, []byte("world"))
+	assert.Equal(t, gValue, []byte("World"))
 }

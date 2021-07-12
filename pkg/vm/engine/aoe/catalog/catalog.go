@@ -11,6 +11,7 @@ import (
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist"
+	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"sync"
 )
 
@@ -209,7 +210,7 @@ func (c *Catalog) CreateTable(dbName, tableName, comment string, typ uint64, tab
 			Start:  format.Uint64ToBytes(tid),
 			End:    format.Uint64ToBytes(tid + 1),
 			Unique: "gTable-" + string(format.UInt64ToString(tid)),
-			Group:  uint64(aoe.AOEGroup),
+			Group:  uint64(pb.AOEGroup),
 			Data:   buf.Bytes(),
 		}))
 	// TODO: wait table meta state changed?

@@ -16,6 +16,7 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
 	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"sync"
 	"time"
 )
@@ -32,27 +33,23 @@ type Storage interface {
 	Close()
 	// Set set key value
 	Set([]byte, []byte) error
-	// SetWithTTL Set set key value with a TTL in seconds
-	SetWithTTL([]byte, []byte, int64) error
-	// SetWithGroupWithTTL set key value with a TTL in seconds
-	SetWithGroupWithTTL([]byte, []byte, aoe.Group, int64) error
 	// SetWithGroup set key value
-	SetWithGroup([]byte, []byte, aoe.Group) error
+	SetWithGroup([]byte, []byte, pb.Group) error
 
 	// Get returns the value of key
 	Get([]byte) ([]byte, error)
 	// GetWithGroup returns the value of key
-	GetWithGroup([]byte, aoe.Group) ([]byte, error)
+	GetWithGroup([]byte, pb.Group) ([]byte, error)
 	// Delete remove the key from the store
 	Delete([]byte) error
 	// Scan scan [start,end) data
 	Scan([]byte, []byte, uint64) ([][]byte, error)
 	// ScanWithGroup Scan scan [start,end) data
-	ScanWithGroup([]byte, []byte, uint64, aoe.Group) ([][]byte, error)
+	ScanWithGroup([]byte, []byte, uint64, pb.Group) ([][]byte, error)
 	// PrefixScan scan k-vs which k starts with prefix
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
-	PrefixScanWithGroup([]byte, uint64, aoe.Group) ([][]byte, error)
+	PrefixScanWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
 	AllocID([]byte) (uint64, error)
 
 	// Exec exec command
@@ -60,9 +57,9 @@ type Storage interface {
 	// AsyncExec async exec command
 	AsyncExec(interface{}, func(interface{}, []byte, error), interface{})
 	// ExecWithGroup exec command with group
-	ExecWithGroup(interface{}, aoe.Group) ([]byte, error)
+	ExecWithGroup(interface{}, pb.Group) ([]byte, error)
 	// AsyncExecWithGroup async exec command with group
-	AsyncExecWithGroup(interface{}, aoe.Group, func(interface{}, []byte, error), interface{})
+	AsyncExecWithGroup(interface{}, pb.Group, func(interface{}, []byte, error), interface{})
 	// RaftStore returns the raft store
 	RaftStore() raftstore.Store
 }
@@ -105,7 +102,7 @@ func NewStorageWithOptions(
 	cfg := &config.Config{}
 	cfg.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
 		switch group {
-		case uint64(aoe.AOEGroup):
+		case uint64(pb.AOEGroup):
 			return func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
 				//panic("not impl")
 			}
@@ -118,9 +115,9 @@ func NewStorageWithOptions(
 	cfg.Storage.MetaStorage = metaStorage
 	cfg.Storage.DataStorageFactory = func(group, shardID uint64) cstorage.DataStorage {
 		switch group {
-		case uint64(aoe.KVGroup):
+		case uint64(pb.KVGroup):
 			return kvDataStorage
-		case uint64(aoe.AOEGroup):
+		case uint64(pb.AOEGroup):
 			return aoeDataStorage
 		}
 		return nil
@@ -129,15 +126,15 @@ func NewStorageWithOptions(
 		cb(kvDataStorage)
 		cb(aoeDataStorage)
 	}
-	cfg.Prophet.Replication.Groups = []uint64{uint64(aoe.KVGroup), uint64(aoe.AOEGroup)}
+	cfg.Prophet.Replication.Groups = []uint64{uint64(pb.KVGroup), uint64(pb.AOEGroup)}
 	cfg.ShardGroups = 2
 	cfg.Customize.CustomInitShardsFactory = func() []bhmetapb.Shard {
 		return []bhmetapb.Shard{
 			{
-				Group: uint64(aoe.KVGroup),
+				Group: uint64(pb.KVGroup),
 			},
 			{
-				Group: uint64(aoe.AOEGroup),
+				Group: uint64(pb.AOEGroup),
 				Start: []byte("0"),
 				End:   []byte("1"),
 			},
@@ -176,14 +173,15 @@ func NewStorageWithOptions(
 	scfg.Store = h.store
 	scfg.Handler = h
 	h.app = server.NewApplicationWithDispatcher(scfg, func(req *raftcmdpb.Request, cmd interface{}, proxy proxy.ShardsProxy) error {
-		if req.Group == uint64(aoe.KVGroup) {
+		if req.Group == uint64(pb.KVGroup) {
 			return proxy.Dispatch(req)
 		}
-		args := cmd.(Args)
-		if args.Node == nil {
+		args := cmd.(pb.Request)
+		if args.Shard == 0 {
 			return proxy.Dispatch(req)
 		}
-		return proxy.DispatchTo(req, args.ShardId, string(args.Node))
+		req.ToShard = args.Shard
+		return proxy.DispatchTo(req, args.Shard, h.store.GetRouter().LeaderAddress(req.ToShard))
 	})
 	h.init()
 	if err := h.app.Start(); err != nil {
@@ -193,47 +191,40 @@ func NewStorageWithOptions(
 }
 
 func (h *aoeStorage) Set(key, value []byte) error {
-	return h.SetWithTTL(key, value, 0)
-}
-
-func (h *aoeStorage) SetWithTTL(key, value []byte, ttl int64) error {
-	req := Args{
-		Op: uint64(Set),
-		Args: [][]byte{
-			key,
-			value,
+	req := pb.Request{
+		Type: pb.Set,
+		Set: pb.SetRequest{
+			Key: key,
+			Value: value,
 		},
 	}
 	_, err := h.Exec(req)
 	return err
 }
 
-func (h *aoeStorage) SetWithGroup(key, value []byte, group aoe.Group) error {
-	return h.SetWithGroupWithTTL(key, value, group, 0)
-}
-
-func (h *aoeStorage) SetWithGroupWithTTL(key, value []byte, group aoe.Group, ttl int64) error {
-	req := Args{
-		Op: uint64(Set),
-		Args: [][]byte{
-			key,
-			value,
+func (h *aoeStorage) SetWithGroup(key, value []byte, group pb.Group) error {
+	req := pb.Request{
+		Type: pb.Set,
+		Set: pb.SetRequest{
+			Key: key,
+			Value: value,
 		},
 	}
 	_, err := h.ExecWithGroup(req, group)
 	return err
 }
 
+
 func (h *aoeStorage) Get(key []byte) ([]byte, error) {
-	return h.GetWithGroup(key, aoe.KVGroup)
+	return h.GetWithGroup(key, pb.KVGroup)
 }
 
 // GetWithGroup returns the value of key
-func (h *aoeStorage) GetWithGroup(key []byte, group aoe.Group) ([]byte, error) {
-	req := Args{
-		Op: uint64(Get),
-		Args: [][]byte{
-			key,
+func (h *aoeStorage) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
+	req := pb.Request{
+		Type: pb.Get,
+		Get: pb.GetRequest{
+			Key: key,
 		},
 	}
 	value, err := h.ExecWithGroup(req, group)
@@ -241,29 +232,28 @@ func (h *aoeStorage) GetWithGroup(key []byte, group aoe.Group) ([]byte, error) {
 }
 
 func (h *aoeStorage) Delete(key []byte) error {
-	req := Args{
-		Op: uint64(Del),
-		Args: [][]byte{
-			key,
+	req := pb.Request{
+		Type: pb.Del,
+		Delete: pb.DeleteRequest{
+			Key: key,
 		},
 	}
-
 	_, err := h.Exec(req)
 	return err
 }
 
 func (h *aoeStorage) Scan(start []byte, end []byte, limit uint64) ([][]byte, error) {
-	return h.ScanWithGroup(start, end, limit, aoe.KVGroup)
+	return h.ScanWithGroup(start, end, limit, pb.KVGroup)
 }
 
-func (h *aoeStorage) ScanWithGroup(start []byte, end []byte, limit uint64, group aoe.Group) ([][]byte, error) {
-	req := Args{
-		Op: uint64(Scan),
-		Args: [][]byte{
-			start,
-			end,
+func (h *aoeStorage) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.Group) ([][]byte, error) {
+	req := pb.Request{
+		Type: pb.Scan,
+		Scan: pb.ScanRequest{
+			Start: start,
+			End: end,
+			Limit: limit,
 		},
-		Limit: limit,
 	}
 	data, err := h.ExecWithGroup(req, group)
 	if err != nil {
@@ -278,18 +268,17 @@ func (h *aoeStorage) ScanWithGroup(start []byte, end []byte, limit uint64, group
 }
 
 func (h *aoeStorage) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
-	return h.PrefixScanWithGroup(prefix, limit, aoe.KVGroup)
+	return h.PrefixScanWithGroup(prefix, limit, pb.KVGroup)
 }
 
-func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group aoe.Group) ([][]byte, error) {
-	startKey := prefix
-	req := Args{
-		Op: uint64(PrefixScan),
-		Args: [][]byte{
-			startKey,
-			prefix,
+func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
+	req := pb.Request{
+		Type: pb.PrefixScan,
+		PrefixScan: pb.PrefixScanRequest{
+			Prefix: prefix,
+			StartKey: prefix,
+			Limit: limit,
 		},
-		Limit: limit,
 	}
 	var pairs [][]byte
 	var err error
@@ -312,16 +301,16 @@ func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group aoe.
 		}
 
 		pairs = append(pairs, kvs[0:len(kvs)-1]...)
-		req.Args[0] = kvs[len(kvs)-1]
+		req.PrefixScan.StartKey = kvs[len(kvs)-1]
 	}
 	return pairs, err
 }
 
 func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {
-	req := Args{
-		Op: uint64(Incr),
-		Args: [][]byte{
-			idkey,
+	req := pb.Request{
+		Type: pb.Incr,
+		AllocID: pb.AllocIDRequest{
+			Key: idkey,
 		},
 	}
 	data, err := h.Exec(req)
@@ -340,11 +329,11 @@ func (h *aoeStorage) AsyncExec(cmd interface{}, cb func(interface{}, []byte, err
 	h.app.AsyncExecWithTimeout(cmd, cb, defaultRPCTimeout, arg)
 }
 
-func (h *aoeStorage) AsyncExecWithGroup(cmd interface{}, group aoe.Group, cb func(interface{}, []byte, error), arg interface{}) {
+func (h *aoeStorage) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(interface{}, []byte, error), arg interface{}) {
 	h.app.AsyncExecWithGroupAndTimeout(cmd, uint64(group), cb, defaultRPCTimeout, arg)
 }
 
-func (h *aoeStorage) ExecWithGroup(cmd interface{}, group aoe.Group) ([]byte, error) {
+func (h *aoeStorage) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
 	return h.app.ExecWithGroup(cmd, uint64(group), defaultRPCTimeout)
 }
 

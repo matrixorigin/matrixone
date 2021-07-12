@@ -10,16 +10,6 @@ import (
 
 type cmdType uint64
 
-const (
-	Set cmdType = iota
-	SetWithTTL
-	Incr
-	Del
-	Get
-	PrefixScan
-	Scan
-)
-
 func (h *aoeStorage) init() {
 	h.AddWriteFunc(uint64(pb.Set), h.set)
 	h.AddWriteFunc(uint64(pb.Del), h.del)
@@ -44,17 +34,17 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		req.CustemType = uint64(pb.Get)
 		req.Type = raftcmdpb.CMDType_Read
 	case pb.PrefixScan:
-		msg := cmd.(*pb.PrefixScanRequest)
+		msg := customReq.PrefixScan
 		req.Key = msg.Prefix
 		req.CustemType = uint64(pb.PrefixScan)
 		req.Type = raftcmdpb.CMDType_Read
-		req.Cmd = protoc.MustMarshal(msg)
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Incr:
-		msg := cmd.(*pb.AllocIDRequest)
+		msg := customReq.AllocID
 		req.Key = msg.Key
 		req.CustemType = uint64(pb.Incr)
 		req.Type = raftcmdpb.CMDType_Write
-		req.Cmd = protoc.MustMarshal(msg)
+		req.Cmd = protoc.MustMarshal(&msg)
 	}
 	return nil
 }

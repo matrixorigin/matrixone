@@ -84,7 +84,8 @@ message ScanRequest {
 // PrefixScanRequest scan request
 message PrefixScanRequest {
   bytes        prefix = 1;
-  uint64       limit = 2;
+  bytes        startKey = 2;
+  uint64       limit = 3;
 }
 
 // ErrorResponse error response
