@@ -1,7 +1,7 @@
 package mock
 
 import (
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	// ops "aoe/pkg/metadata3/ops"
 )
 

@@ -1,4 +1,4 @@
-package md
+package metadata
 
 import (
 	dump "encoding/json"

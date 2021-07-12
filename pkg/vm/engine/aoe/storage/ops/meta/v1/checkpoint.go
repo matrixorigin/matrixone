@@ -1,7 +1,7 @@
 package meta
 
 import (
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	// log "github.com/sirupsen/logrus"
 )
 

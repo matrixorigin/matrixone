@@ -2,7 +2,7 @@ package engine
 
 import (
 	"errors"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
 	"strconv"

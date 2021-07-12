@@ -17,7 +17,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
 
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"os"

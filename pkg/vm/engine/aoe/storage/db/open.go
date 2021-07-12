@@ -9,7 +9,7 @@ import (
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path"
 	"sync/atomic"
