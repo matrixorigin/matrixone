@@ -16,7 +16,7 @@ func New(prev op.OP, gs []*extend.Attribute, es []aggregation.Extend) (*Group, e
 	{
 		for _, g := range gs {
 			if _, ok := attrs[g.Name]; ok {
-				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("column '%s' is ambiguous", g.Name))
+				return nil, sqlerror.New(errno.AmbiguousColumn, fmt.Sprintf("column '%s' is ambiguous", g.Name))
 			}
 			attrs[g.Name] = g.Type.ToType()
 		}
@@ -27,7 +27,7 @@ func New(prev op.OP, gs []*extend.Attribute, es []aggregation.Extend) (*Group, e
 				e.Alias = fmt.Sprintf("%s(%s)", aggregation.AggName[e.Op], e.Name)
 			}
 			if _, ok := attrs[e.Alias]; ok {
-				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("column '%s' is ambiguous", e.Alias))
+				return nil, sqlerror.New(errno.AmbiguousAlias, fmt.Sprintf("alias '%s' is ambiguous", e.Alias))
 			}
 			attrs[e.Alias] = e.Agg.Type()
 			as = append(as, e.Alias)

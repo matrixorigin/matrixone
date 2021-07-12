@@ -2,7 +2,6 @@ package dbi
 
 import (
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 )
 
 type ISnapshot interface {
@@ -12,16 +11,11 @@ type ISnapshot interface {
 	GetSegment(id uint64) ISegment
 }
 
-type IBlockHandle interface {
-	io.Closer
-	GetVector(int) *vector.StdVector
-}
-
 type IBlock interface {
 	GetID() uint64
 	GetSegmentID() uint64
 	GetTableID() uint64
-	Prefetch() IBlockHandle
+	Prefetch() IBatchReader
 }
 
 type ISegment interface {

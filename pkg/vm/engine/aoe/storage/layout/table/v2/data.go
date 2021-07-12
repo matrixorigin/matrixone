@@ -19,7 +19,7 @@ var (
 	NotExistErr = errors.New("not exist error")
 )
 
-func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) iface.ITableData {
+func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) *TableData {
 	data := &TableData{
 		MTBufMgr:    mtBufMgr,
 		SSTBufMgr:   sstBufMgr,
@@ -43,6 +43,7 @@ type TableData struct {
 		Ids        []uint64
 		Helper     map[uint64]int
 		SegmentCnt uint32
+		RowCount   uint64
 	}
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
@@ -114,6 +115,10 @@ func (td *TableData) GetFsManager() base.IManager {
 
 func (td *TableData) GetSegmentCount() uint32 {
 	return atomic.LoadUint32(&td.tree.SegmentCnt)
+}
+
+func (td *TableData) GetMeta() *md.Table {
+	return td.Meta
 }
 
 func (td *TableData) String() string {
@@ -190,6 +195,19 @@ func (td *TableData) RegisterSegment(meta *md.Segment) (seg iface.ISegment, err 
 	return seg, err
 }
 
+func (td *TableData) Size(attr string) uint64 {
+	size := uint64(0)
+	segCnt := atomic.LoadUint32(&td.tree.SegmentCnt)
+	var seg iface.ISegment
+	for i := 0; i < int(segCnt); i++ {
+		td.tree.RLock()
+		seg = td.tree.Segments[i]
+		td.tree.RUnlock()
+		size += seg.Size(attr)
+	}
+	return size
+}
+
 func (td *TableData) SegmentIds() []uint64 {
 	ids := make([]uint64, 0, atomic.LoadUint32(&td.tree.SegmentCnt))
 	td.tree.RLock()
@@ -198,6 +216,20 @@ func (td *TableData) SegmentIds() []uint64 {
 	}
 	td.tree.RUnlock()
 	return ids
+}
+
+func (td *TableData) GetRowCount() uint64 {
+	return atomic.LoadUint64(&td.tree.RowCount)
+}
+
+func (td *TableData) AddRows(rows uint64) uint64 {
+	return atomic.AddUint64(&td.tree.RowCount, rows)
+}
+
+func (td *TableData) initRowCount() {
+	for _, seg := range td.tree.Segments {
+		td.tree.RowCount += seg.GetRowCount()
+	}
 }
 
 func (td *TableData) RegisterBlock(meta *md.Block) (blk iface.IBlock, err error) {
@@ -389,6 +421,7 @@ func (ts *Tables) Replay(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr b
 				defer blk.Unref()
 			}
 		}
+		tbl.initRowCount()
 		if err := ts.CreateTable(tbl); err != nil {
 			return err
 		}

@@ -39,7 +39,7 @@ func (req *BaseRequest) GetNext() gci.IRequest {
 type Worker struct {
 	w.OpWorker
 	hb struct {
-		interval int64
+		interval time.Duration
 		ctx      context.Context
 		cancel   context.CancelFunc
 		wg       sync.WaitGroup
@@ -85,7 +85,7 @@ func (wk *Worker) Start() {
 }
 
 func (wk *Worker) heartbeat() {
-	ticker := time.NewTicker(time.Duration(wk.hb.interval) * time.Millisecond)
+	ticker := time.NewTicker(wk.hb.interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -101,7 +101,7 @@ func (wk *Worker) heartbeat() {
 func (wk *Worker) process() {
 	wk.exec.Lock()
 	reqs := wk.exec.reqs
-	wk.exec.reqs = wk.exec.reqs[:0]
+	wk.exec.reqs = make([]gci.IRequest, 0)
 	wk.exec.Unlock()
 	for _, req := range reqs {
 		wk.exec.worker.SendOp(req)

@@ -278,7 +278,7 @@ func (seg *ColumnSegment) CloneWithUpgrade(meta *md.Segment, indexTblHolder *ind
 }
 
 func (seg *ColumnSegment) GetRowCount() uint64 {
-	return atomic.LoadUint64(&seg.Meta.Count)
+	return 0
 }
 
 func (seg *ColumnSegment) SetNext(next IColumnSegment) {

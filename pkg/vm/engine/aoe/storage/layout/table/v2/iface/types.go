@@ -2,13 +2,15 @@ package iface
 
 import (
 	"io"
-	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/process"
 )
 
 type ITableData interface {
@@ -32,6 +34,10 @@ type ITableData interface {
 	SegmentIds() []uint64
 	StongRefRoot() ISegment
 	WeakRefRoot() ISegment
+	GetRowCount() uint64
+	AddRows(uint64) uint64
+	GetMeta() *md.Table
+	Size(string) uint64
 }
 
 type ISegment interface {
@@ -49,12 +55,15 @@ type ISegment interface {
 	GetNext() ISegment
 	SetNext(ISegment)
 	String() string
+	GetRowCount() uint64
+	Size(string) uint64
 	CloneWithUpgrade(ITableData, *md.Segment) (ISegment, error)
 	UpgradeBlock(*md.Block) (IBlock, error)
 	BlockIds() []uint64
 }
 
 type IBlock interface {
+	common.MVCC
 	common.IRef
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager
@@ -65,22 +74,16 @@ type IBlock interface {
 	CloneWithUpgrade(ISegment, *md.Block) (IBlock, error)
 	GetSegmentFile() base.ISegmentFile
 	String() string
-	GetBlockHandle() IBlockHandle
-	StrongWrappedBlock(colIdx []int) IBlockHandle
+	GetFullBatch() batch.IBatch
+	GetBatch(attrs []int) dbi.IBatchReader
+	GetVectorCopy(attr string, ref uint64, proc *process.Process) (*vector.Vector, error)
+	GetRowCount() uint64
 	GetNext() IBlock
 	SetNext(next IBlock)
+	Size(string) uint64
 }
 
 type IColBlockHandle interface {
 	io.Closer
 	GetPageNode(int) bmgrif.MangaedNode
-}
-
-type IBlockHandle interface {
-	io.Closer
-	GetHost() IBlock
-	GetPageNode(colIdx, pos int) bmgrif.MangaedNode
-	GetVector(int) *vector.StdVector
-	Cols() int
-	ColType(idx int) types.Type
 }

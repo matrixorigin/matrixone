@@ -3,8 +3,10 @@ package md
 import (
 	"errors"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"sync/atomic"
+	"unsafe"
+
+	log "github.com/sirupsen/logrus"
 )
 
 func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
@@ -21,12 +23,39 @@ func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
 		TimeStamp: *NewTimeStamp(),
 		Info:      info,
 		Schema:    schema,
+		Stat:      new(Statstics),
 	}
 	return tbl
 }
 
 func (tbl *Table) GetID() uint64 {
 	return tbl.ID
+}
+
+func (tbl *Table) GetRows() uint64 {
+	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
+	return (*Statstics)(ptr).Rows
+}
+
+func (tbl *Table) AppendStat(rows, size uint64) *Statstics {
+	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
+	stat := (*Statstics)(ptr)
+	newStat := new(Statstics)
+	newStat.Rows = stat.Rows + rows
+	newStat.Size = stat.Size + size
+	nptr := (*unsafe.Pointer)(unsafe.Pointer(&newStat))
+	for !atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)), ptr, *nptr) {
+		ptr = atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
+		stat = (*Statstics)(ptr)
+		newStat.Rows = stat.Rows + rows
+		newStat.Size = stat.Size + size
+	}
+	return newStat
+}
+
+func (tbl *Table) GetSize() uint64 {
+	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
+	return (*Statstics)(ptr).Size
 }
 
 func (tbl *Table) CloneSegment(segment_id uint64, ctx CopyCtx) (seg *Segment, err error) {

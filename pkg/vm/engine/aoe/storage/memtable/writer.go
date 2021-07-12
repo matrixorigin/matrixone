@@ -89,11 +89,14 @@ func (sw *MemtableWriter) Flush() (err error) {
 
 	buf := make([]byte, 2+len(mtTypes)*8*2)
 	binary.BigEndian.PutUint16(buf, uint16(len(mt.Meta.Segment.Schema.ColDefs)))
-	handle := mt.Block.GetBlockHandle()
-	defer handle.Close()
+	bat := mt.Block.GetFullBatch()
+	defer bat.Close()
 	var colBufs [][]byte
 	for idx, _ := range mtTypes {
-		colBuf, err := handle.GetVector(idx).Marshall()
+		node := bat.GetVectorByAttr(idx)
+		vec := node.CopyToVector()
+		// colBuf, err := bat.GetVectorByAttr(idx).(b.IMemoryNode).Marshall()
+		colBuf, err := vec.Show()
 		if err != nil {
 			return err
 		}
@@ -107,7 +110,7 @@ func (sw *MemtableWriter) Flush() (err error) {
 		return err
 	}
 	var colDataPos []int64
-	for idx := 0; idx < handle.Cols(); idx++ {
+	for idx := 0; idx < len(mtTypes); idx++ {
 		offset, _ := w.Seek(0, io.SeekCurrent)
 		colDataPos = append(colDataPos, offset)
 		_, err = w.Write(colBufs[idx])

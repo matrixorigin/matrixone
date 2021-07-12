@@ -30,7 +30,9 @@ import (
 )
 
 var (
-	ErrClosed = errors.New("aoe: closed")
+	ErrClosed      = errors.New("aoe: closed")
+	ErrUnsupported = errors.New("aoe: unsupported")
+	ErrNotFound    = errors.New("aoe: notfound")
 )
 
 type DB struct {
@@ -44,7 +46,7 @@ type DB struct {
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
 
-	store struct {
+	Store struct {
 		sync.RWMutex
 		MetaInfo   *md.MetaInfo
 		DataTables *table.Tables
@@ -113,7 +115,7 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tbl, err := d.store.MetaInfo.ReferenceTableByName(tableName)
+	tbl, err := d.Store.MetaInfo.ReferenceTableByName(tableName)
 	if err != nil {
 		return err
 	}
@@ -128,7 +130,7 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 			MTBufMgr:    d.MTBufMgr,
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
-			Tables:      d.store.DataTables,
+			Tables:      d.Store.DataTables,
 		}
 		op := mdops.NewCreateTableOp(opCtx)
 		op.Push()
@@ -144,11 +146,47 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 	return collection.Append(bat, &clonedIndex)
 }
 
+func (d *DB) Relation(name string) (*Relation, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	meta, err := d.Opts.Meta.Info.ReferenceTableByName(name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := d.Store.DataTables.StrongRefTable(meta.ID)
+	if err != nil {
+		opCtx := &mdops.OpCtx{
+			Opts:        d.Opts,
+			MTManager:   d.MemTableMgr,
+			TableMeta:   meta,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.Store.DataTables,
+		}
+		op := mdops.NewCreateTableOp(opCtx)
+		op.Push()
+		err = op.WaitDone()
+		if err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection := op.Collection
+		if data, err = d.Store.DataTables.StrongRefTable(meta.ID); err != nil {
+			collection.Unref()
+			return nil, err
+		}
+		collection.Unref()
+	}
+	return NewRelation(d, data, meta), nil
+}
+
 func (d *DB) HasTable(name string) bool {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	_, err := d.store.MetaInfo.ReferenceTableByName(name)
+	_, err := d.Store.MetaInfo.ReferenceTableByName(name)
 	return err == nil
 }
 
@@ -157,10 +195,10 @@ func (d *DB) DropTable(name string) (id uint64, err error) {
 		panic(err)
 	}
 	opCtx := &mops.OpCtx{Opts: d.Opts}
-	op := mops.NewDropTblOp(opCtx, name, d.store.DataTables)
+	op := mops.NewDropTblOp(opCtx, name, d.Store.DataTables)
 	op.Push()
 	err = op.WaitDone()
-	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.store.DataTables, d.MemTableMgr)
+	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.Store.DataTables, d.MemTableMgr)
 	d.Opts.GC.Acceptor.Accept(req)
 	return op.Id, err
 }
@@ -185,14 +223,14 @@ func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tableMeta, err := d.store.MetaInfo.ReferenceTableByName(ctx.TableName)
+	tableMeta, err := d.Store.MetaInfo.ReferenceTableByName(ctx.TableName)
 	if err != nil {
 		return nil, err
 	}
 	if tableMeta.GetSegmentCount() == uint64(0) {
 		return handle.NewEmptySnapshot(), nil
 	}
-	tableData, err := d.store.DataTables.StrongRefTable(tableMeta.ID)
+	tableData, err := d.Store.DataTables.StrongRefTable(tableMeta.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -209,18 +247,25 @@ func (d *DB) TableIDs() (ids []uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tids := d.store.MetaInfo.TableIDs()
+	tids := d.Store.MetaInfo.TableIDs()
 	for tid := range tids {
 		ids = append(ids, tid)
 	}
 	return ids, err
 }
 
+func (d *DB) TableNames() []string {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	return d.Opts.Meta.Info.TableNames()
+}
+
 func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	sids, err := d.store.MetaInfo.TableSegmentIDs(tableID)
+	sids, err := d.Store.MetaInfo.TableSegmentIDs(tableID)
 	if err != nil {
 		return ids, err
 	}
@@ -233,7 +278,7 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 
 func (d *DB) replayAndCleanData() {
 	expectFiles := make(map[string]bool)
-	for _, tbl := range d.store.MetaInfo.Tables {
+	for _, tbl := range d.Store.MetaInfo.Tables {
 		for _, seg := range tbl.Segments {
 			id := common.ID{
 				TableID:   seg.TableID,
@@ -293,7 +338,7 @@ func (d *DB) replayAndCleanData() {
 			panic(fmt.Sprintf("Missing %s", name))
 		}
 	}
-	err = d.store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.store.MetaInfo)
+	err = d.Store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.Store.MetaInfo)
 	if err != nil {
 		panic(err)
 	}
@@ -306,6 +351,19 @@ func (d *DB) startWorkers() {
 	d.Opts.Data.Sorter.Start()
 	d.Opts.Meta.Flusher.Start()
 	d.Opts.Meta.Updater.Start()
+}
+
+func (d *DB) EnsureNotClosed() {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+}
+
+func (d *DB) IsClosed() bool {
+	if err := d.Closed.Load(); err != nil {
+		return true
+	}
+	return false
 }
 
 func (d *DB) stopWorkers() {

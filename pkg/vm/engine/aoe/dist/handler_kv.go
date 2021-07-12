@@ -4,33 +4,27 @@ import (
 	"bytes"
 	"encoding/json"
 	"github.com/fagongzi/util/format"
+	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/sirupsen/logrus"
+	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 )
 
 func (h *aoeStorage) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
+	customReq := &rpcpb.SetRequest{}
+	protoc.MustUnmarshal(customReq, req.Cmd)
 
-	args := &Args{}
-	err := json.Unmarshal(req.Cmd, &args)
+
+	err := h.getStoreByGroup(shard.Group, shard.ID).Set(req.Key, customReq.Value)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
-	if len(args.Args) <= 1 {
-		resp.Value = errorResp(ErrInvalidValue)
-		return 0, 0, resp
-	}
-	err = h.getStoreByGroup(shard.Group, shard.ID).Set(req.Key, args.Args[1])
-	if err != nil {
-		resp.Value = errorResp(err)
-		return 0, 0, resp
-	}
-	writtenBytes := uint64(len(req.Key) + len(args.Args[1]))
+	writtenBytes := uint64(len(req.Key) + len(customReq.Value))
 	changedBytes := int64(writtenBytes)
 	resp.Value = []byte("OK")
 	return writtenBytes, changedBytes, resp
@@ -50,31 +44,6 @@ func (h *aoeStorage) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *aoeStorage) batchSet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
-	resp := pb.AcquireResponse()
-
-	args := &Args{}
-	err := json.Unmarshal(req.Cmd, &args)
-	if err != nil {
-		resp.Value = errorResp(err)
-		return 0, 0, resp
-	}
-	if len(args.Args)%2 != 0 {
-		resp.Value = errorResp(ErrInvalidValue)
-		return 0, 0, resp
-	}
-
-	writtenBytes := uint64(0)
-	for i := 0; i < len(args.Args)/2; i++ {
-		key := raftstore.EncodeDataKey(shard.Group, args.Args[2*i])
-		err = ctx.WriteBatch().Set(key, args.Args[2*i+1])
-		writtenBytes += uint64(len(key))
-		writtenBytes += uint64(len(args.Args[2*i+1]))
-	}
-	changedBytes := int64(writtenBytes)
-	resp.Value = []byte("OK")
-	return writtenBytes, changedBytes, resp
-}
 
 func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
@@ -89,24 +58,18 @@ func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 }
 
 func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
-	logrus.Infof("prefixScan, req.key is %s, shard.Start is %s, shard.End is %s", string(req.Key), string(shard.Start), string(shard.End))
-	logrus.Infof("prefixScan, %d, %d", bytes.Compare(shard.Start, req.Key), bytes.Compare(shard.End, req.Key))
-	logrus.Infof("prefixScan, %d, %d", bytes.Compare(raftstore.EncodeDataKey(shard.Group, shard.Start), req.Key), bytes.Compare(raftstore.EncodeDataKey(shard.Group, shard.End), req.Key))
 	resp := pb.AcquireResponse()
-	args := &Args{}
-	err := json.Unmarshal(req.Cmd, &args)
-	if err != nil {
-		resp.Value = errorResp(err)
-		return resp, 500
-	}
-	prefix := raftstore.EncodeDataKey(shard.Group, args.Args[1])
+	customReq := &rpcpb.PrefixScanRequest{}
+	protoc.MustUnmarshal(customReq, req.Cmd)
+
+	prefix := raftstore.EncodeDataKey(shard.Group, customReq.Prefix)
 	var data [][]byte
-	err = h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(prefix, func(key, value []byte) (bool, error) {
+	err := h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(prefix, func(key, value []byte) (bool, error) {
 		if (shard.Start != nil && bytes.Compare(shard.Start, raftstore.DecodeDataKey(key)) > 0) ||
 			(shard.End != nil && bytes.Compare(shard.End, raftstore.DecodeDataKey(key)) <= 0) {
 			return true, nil
 		}
-		data = append(data, key)
+		data = append(data, raftstore.DecodeDataKey(key))
 		data = append(data, value)
 		return true, nil
 	}, false)
@@ -132,7 +95,6 @@ func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 	var data [][]byte
 
 	err := h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(req.Key, func(key, value []byte) (bool, error) {
-
 		data = append(data, key)
 		data = append(data, value)
 		return true, nil
@@ -157,14 +119,6 @@ func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 func (h *aoeStorage) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
-	args := &Args{}
-	err := json.Unmarshal(req.Cmd, &args)
-
-	if err != nil {
-		resp.Value = []byte(err.Error())
-		return 0, 0, resp
-	}
-
 	id := uint64(0)
 	if v, ok := ctx.Attrs()[string(req.Key)]; ok {
 		id = format.MustBytesToUint64(v.([]byte))
@@ -182,7 +136,7 @@ func (h *aoeStorage) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 	newV := format.Uint64ToBytes(id)
 	ctx.Attrs()[string(req.Key)] = newV
 
-	err = ctx.WriteBatch().Set(req.Key, newV)
+	err := ctx.WriteBatch().Set(req.Key, newV)
 	if err != nil {
 		return 0, 0, resp
 	}

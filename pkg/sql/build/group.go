@@ -67,7 +67,7 @@ func (b *build) buildGroupBy(o op.OP, ns tree.SelectExprs, grs tree.GroupBy, whe
 		}
 		op, ok := AggFuncs[name.Parts[0]]
 		if !ok {
-			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented aggregated functions '%s'", name.Parts[0]))
+			return nil, sqlerror.New(errno.UndefinedFunction, fmt.Sprintf("unimplemented aggregated functions '%s'", name.Parts[0]))
 		}
 		switch e := f.Exprs[0].(type) {
 		case *tree.NumVal:
@@ -85,7 +85,7 @@ func (b *build) buildGroupBy(o op.OP, ns tree.SelectExprs, grs tree.GroupBy, whe
 			alias := fmt.Sprintf("%s(%s)", name.Parts[0], e.Parts[0])
 			typ, ok := o.Attribute()[e.Parts[0]]
 			if !ok {
-				return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unknown column '%s' in aggregation", e.Parts[0]))
+				return nil, sqlerror.New(errno.UndefinedColumn, fmt.Sprintf("unknown column '%s' in aggregation", e.Parts[0]))
 			}
 			agg, err := newAggregate(op, typ)
 			if err != nil {

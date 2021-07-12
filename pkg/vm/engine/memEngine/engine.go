@@ -32,7 +32,7 @@ func (e *memEngine) Delete(name string) error {
 	return nil
 }
 
-func (e *memEngine) Create(name string) error {
+func (e *memEngine) Create(name string, _ int) error {
 	e.mp[name] = &database{
 		proc: e.proc,
 		db:   kv.New(),
@@ -57,12 +57,16 @@ func (e *memEngine) Database(name string) (engine.Database, error) {
 	return nil, fmt.Errorf("database '%s' not exist", name)
 }
 
+func (e *database) Type() int {
+	return engine.Spill
+}
+
 func (e *database) Delete(name string) error {
 	delete(e.mp, name)
 	return e.db.Del(name)
 }
 
-func (e *database) Create(name string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy) error {
+func (e *database) Create(name string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
 	var md meta.Metadata
 	var attrs []metadata.Attribute
 

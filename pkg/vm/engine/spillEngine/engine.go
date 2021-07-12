@@ -57,7 +57,7 @@ func (e *spillEngine) Delete(name string) error {
 	return nil
 }
 
-func (e *spillEngine) Create(name string) error {
+func (e *spillEngine) Create(name string, _ int) error {
 	return nil
 }
 
@@ -69,11 +69,15 @@ func (e *spillEngine) Database(name string) (engine.Database, error) {
 	return &database{e.path, e.cdb, e.db}, nil
 }
 
+func (e *database) Type() int {
+	return engine.Spill
+}
+
 func (e *database) Delete(name string) error {
 	return os.RemoveAll(path.Join(e.path, name))
 }
 
-func (e *database) Create(name string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy) error {
+func (e *database) Create(name string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
 	var attrs []metadata.Attribute
 
 	{

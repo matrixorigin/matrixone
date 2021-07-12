@@ -3,6 +3,13 @@ package vector
 import (
 	"matrixone/pkg/container/types"
 	v "matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
+	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/mmu/host"
+	"matrixone/pkg/vm/process"
+	"os"
 	"sync"
 	"testing"
 
@@ -30,7 +37,7 @@ func TestStdVector(t *testing.T) {
 	assert.Equal(t, int32(1), ref.GetValue(0))
 	assert.Equal(t, int32(2), ref.GetValue(1))
 	assert.False(t, ref.HasNull())
-	assert.True(t, ref.IsReadonly())
+	assert.True(t, ref.(IVector).IsReadonly())
 
 	vvec := v.New(vecType)
 	vvec.Append([]int32{0, 1, 2, 3, 4})
@@ -83,5 +90,144 @@ func TestStdVector(t *testing.T) {
 	// t.Log(lens)
 	// t.Log(vals)
 	// t.Log(ro)
-	assert.Equal(t, 2000, vec01.VMask.Length())
+	assert.Equal(t, 2000, vec01.NullCnt())
+}
+
+func TestStrVector(t *testing.T) {
+	size := uint64(4)
+	vec := NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, size)
+	assert.Equal(t, int(size), vec.Capacity())
+	assert.Equal(t, 0, vec.Length())
+
+	assert.False(t, vec.IsReadonly())
+	str0 := "str0"
+	str1 := "str1"
+	str2 := "str2"
+	str3 := "str3"
+	strs := [][]byte{[]byte(str0), []byte(str1)}
+	err := vec.Append(len(strs), strs)
+	assert.Nil(t, err)
+	assert.Equal(t, len(strs), vec.Length())
+	assert.False(t, vec.IsReadonly())
+	s := 0
+	for _, str := range strs {
+		s += len(str)
+	}
+	assert.Equal(t, uint64(len(strs)*2*4+s), vec.(buf.IMemoryNode).GetMemorySize())
+	prevLen := len(strs)
+	strs = [][]byte{[]byte(str2), []byte(str3)}
+	err = vec.Append(len(strs), strs)
+	assert.Nil(t, err)
+	assert.Equal(t, prevLen+len(strs), vec.Length())
+	assert.Equal(t, vec.Capacity(), vec.Length())
+	assert.True(t, vec.IsReadonly())
+	for _, str := range strs {
+		s += len(str)
+	}
+	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), vec.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, []byte(str0), vec.GetValue(0))
+	assert.Equal(t, []byte(str1), vec.GetValue(1))
+	assert.Equal(t, []byte(str2), vec.GetValue(2))
+	assert.Equal(t, []byte(str3), vec.GetValue(3))
+
+	nodeVec := vec.(buf.IMemoryNode)
+	marshalled, err := nodeVec.Marshall()
+	assert.Nil(t, err)
+
+	mirror := NewEmptyStrVector()
+	err = mirror.(buf.IMemoryNode).Unmarshall(marshalled)
+	assert.Nil(t, err)
+
+	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), mirror.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, []byte(str0), mirror.GetValue(0))
+	assert.Equal(t, []byte(str1), mirror.GetValue(1))
+	assert.Equal(t, []byte(str2), mirror.GetValue(2))
+	assert.Equal(t, []byte(str3), mirror.GetValue(3))
+	assert.Equal(t, 4, mirror.Length())
+	assert.True(t, mirror.IsReadonly())
+
+	view := mirror.GetLatestView()
+	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), view.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, []byte(str0), view.GetValue(0))
+	assert.Equal(t, []byte(str1), view.GetValue(1))
+	assert.Equal(t, []byte(str2), view.GetValue(2))
+	assert.Equal(t, []byte(str3), view.GetValue(3))
+	assert.Equal(t, 4, view.Length())
+	assert.True(t, mirror.IsReadonly())
+
+	ref := vec.SliceReference(1, 3)
+	assert.Equal(t, 2, ref.Length())
+	assert.Equal(t, []byte(str1), ref.GetValue(0))
+	assert.Equal(t, []byte(str2), ref.GetValue(1))
+
+	fname := "/tmp/xxstrvec"
+	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, 0666)
+	assert.Nil(t, err)
+	_, err = nodeVec.WriteTo(f)
+	assert.Nil(t, err)
+	f.Close()
+
+	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
+	assert.Nil(t, err)
+	builtVec := NewEmptyStrVector().(IVectorNode)
+	_, err = builtVec.ReadFrom(f)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte(str0), builtVec.GetValue(0))
+	assert.Equal(t, []byte(str1), builtVec.GetValue(1))
+	assert.Equal(t, []byte(str2), builtVec.GetValue(2))
+	assert.Equal(t, []byte(str3), builtVec.GetValue(3))
+	assert.Equal(t, 4, builtVec.Length())
+	assert.True(t, builtVec.IsReadonly())
+	f.Close()
+}
+
+func TestWrapper(t *testing.T) {
+	t0 := types.Type{types.T(types.T_varchar), 24, 0, 0}
+	t1 := types.Type{types.T_int32, 4, 4, 0}
+	rows := uint64(100)
+	vec0 := MockVector(t0, rows)
+	vec1 := MockVector(t1, rows)
+	v0 := vec0.CopyToVector()
+	v1 := vec1.CopyToVector()
+	w0 := NewVectorWrapper(v0)
+	w1 := NewVectorWrapper(v1)
+	assert.Equal(t, int(rows), w0.Length())
+	assert.Equal(t, int(rows), w1.Length())
+
+	fname := "/tmp/vectorwrapper"
+	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, 0666)
+	assert.Nil(t, err)
+	n, err := w0.WriteTo(f)
+	assert.Nil(t, err)
+	f.Close()
+
+	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
+	assert.Nil(t, err)
+	rw0 := NewEmptyWrapper(t0)
+	rw0.AllocSize = uint64(n)
+	_, err = rw0.ReadFrom(f)
+	assert.Nil(t, err)
+
+	assert.Equal(t, int(rows), rw0.Length())
+	f.Close()
+
+	hm := host.New(1 << 20)
+	gm := guest.New(1<<20, hm)
+	proc := process.New(gm, mempool.New(1<<32, 8))
+	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
+	assert.Nil(t, err)
+	assert.Nil(t, err)
+	ww0 := NewEmptyWrapper(t0)
+	ww0.AllocSize = uint64(n)
+	ref := uint64(1)
+	nr, err := ww0.ReadWithProc(f, ref, proc)
+	assert.Equal(t, n, nr)
+
+	assert.Equal(t, int(rows), ww0.Length())
+	refCnt := encoding.DecodeUint64(ww0.Vector.Data[0:mempool.CountSize])
+	assert.Equal(t, ref, refCnt)
+	assert.True(t, proc.Size() != 0)
+	ww0.Vector.Free(proc)
+	assert.True(t, proc.Size() == 0)
+	f.Close()
 }
