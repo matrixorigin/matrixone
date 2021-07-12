@@ -8,7 +8,7 @@ set -e
 # directories containing protos to be built
 DIRS="./metapb ./rpcpb"
 
-PRJ_PB_PATH="${GOPATH}/src/github.com/sukki37/matrixone/pkg/vm/engine/aoe/dist/pb"
+PRJ_PB_PATH="${GOPATH}/src/github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/dist/pb"
 # work_path=$(dirname $0)
 # cd ~/${work_path}
 
