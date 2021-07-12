@@ -10,7 +10,6 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/sirupsen/logrus"
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 )
 
@@ -59,9 +58,6 @@ func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 }
 
 func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
-	logrus.Infof("prefixScan, req.key is %s, shard.Start is %s, shard.End is %s", string(req.Key), string(shard.Start), string(shard.End))
-	logrus.Infof("prefixScan, %d, %d", bytes.Compare(shard.Start, req.Key), bytes.Compare(shard.End, req.Key))
-	logrus.Infof("prefixScan, %d, %d", bytes.Compare(raftstore.EncodeDataKey(shard.Group, shard.Start), req.Key), bytes.Compare(raftstore.EncodeDataKey(shard.Group, shard.End), req.Key))
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.PrefixScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -73,7 +69,7 @@ func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 			(shard.End != nil && bytes.Compare(shard.End, raftstore.DecodeDataKey(key)) <= 0) {
 			return true, nil
 		}
-		data = append(data, key)
+		data = append(data, raftstore.DecodeDataKey(key))
 		data = append(data, value)
 		return true, nil
 	}, false)

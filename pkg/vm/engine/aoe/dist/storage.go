@@ -50,6 +50,8 @@ type Storage interface {
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
 	PrefixScanWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
+	PrefixKeys([]byte, uint64) ([][]byte, error)
+	PrefixKeysWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
 	AllocID([]byte) (uint64, error)
 
 	// Exec exec command
@@ -295,15 +297,59 @@ func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.G
 		if err != nil || kvs == nil || len(kvs) == 0 {
 			break
 		}
+		for i:=0; i<len(kvs)-1; i+=2 {
+			pairs = append(pairs, kvs[i])
+		}
+
 		if len(kvs)%2 == 0 {
-			pairs = append(pairs, kvs...)
+			pairs = append(pairs, kvs[len(kvs)-1])
+			break
+		}
+		req.PrefixScan.StartKey = raftstore.EncodeDataKey(uint64(group), kvs[len(kvs)-1])
+	}
+	return pairs, err
+}
+
+func (h *aoeStorage) PrefixKeys(prefix []byte, limit uint64) ([][]byte, error) {
+	return h.PrefixKeysWithGroup(prefix, limit, pb.KVGroup)
+}
+
+func (h *aoeStorage) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
+	req := pb.Request{
+		Type: pb.PrefixScan,
+		PrefixScan: pb.PrefixScanRequest{
+			Prefix: prefix,
+			StartKey: prefix,
+			Limit: limit,
+		},
+	}
+	var values [][]byte
+	var err error
+	var data []byte
+	i := 0
+	for {
+		i = i + 1
+		data, err = h.ExecWithGroup(req, group)
+		if data == nil || err != nil {
+			break
+		}
+		var kvs [][]byte
+		err = json.Unmarshal(data, &kvs)
+		if err != nil || kvs == nil || len(kvs) == 0 {
 			break
 		}
 
-		pairs = append(pairs, kvs[0:len(kvs)-1]...)
-		req.PrefixScan.StartKey = kvs[len(kvs)-1]
+		for i:=0; i<len(kvs)-1; i+=2 {
+		 values = append(values, kvs[i])
+		}
+
+		if len(kvs)%2 == 0 {
+			break
+		}
+
+		req.PrefixScan.StartKey = raftstore.EncodeDataKey(uint64(group), kvs[len(kvs)-1])
 	}
-	return pairs, err
+	return values, err
 }
 
 func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {

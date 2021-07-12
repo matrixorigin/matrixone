@@ -2,6 +2,7 @@ package dist
 
 import (
 	"fmt"
+	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
@@ -151,7 +152,7 @@ func TestClusterStartAndStop(t *testing.T) {
 			Group:  uint64(pb.AOEGroup),
 		}))
 	//
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	time.Sleep(5 * time.Second)
 
 	// Get With Group Test
@@ -162,8 +163,8 @@ func TestClusterStartAndStop(t *testing.T) {
 			Key : []byte("Hello"),
 		},
 	}, pb.AOEGroup)
-	assert.NoError(t, err)
-	assert.Nil(t, gValue)
+	require.NoError(t, err)
+	require.Nil(t, gValue)
 
 	// Set With Group Test
 	resp, err = c.applications[0].ExecWithGroup(pb.Request{
@@ -174,8 +175,8 @@ func TestClusterStartAndStop(t *testing.T) {
 			Value: []byte("World"),
 		},
 	}, pb.AOEGroup)
-	assert.NoError(t, err)
-	assert.Equal(t, "OK", string(resp))
+	require.NoError(t, err)
+	require.Equal(t, "OK", string(resp))
 
 	// Get With Group Test
 	gValue, err = c.applications[0].ExecWithGroup(pb.Request{
@@ -185,6 +186,29 @@ func TestClusterStartAndStop(t *testing.T) {
 			Key : []byte("Hello"),
 		},
 	}, pb.AOEGroup)
-	assert.NoError(t, err)
-	assert.Equal(t, gValue, []byte("World"))
+	require.NoError(t, err)
+	require.Equal(t, gValue, []byte("World"))
+
+
+	//PrefixKeys Test
+	for i:=uint64(0); i< 2000; i++ {
+		key := fmt.Sprintf("prefix-%d", i)
+		_, err = c.applications[0].Exec(pb.Request{
+			Type: pb.Set,
+			Set: pb.SetRequest{
+				Key: []byte(key),
+				Value: format.Uint64ToBytes(i),
+			},
+		})
+		require.NoError(t, err)
+	}
+
+
+	kvs, err := c.applications[0].PrefixKeys([]byte("prefix-"), 0)
+	require.NoError(t, err)
+
+	println("QQQQQQQQQ: ", len(kvs))
+	for _, v := range kvs {
+		println(string(v))
+	}
 }
