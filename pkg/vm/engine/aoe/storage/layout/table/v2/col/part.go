@@ -26,6 +26,7 @@ type IColumnPart interface {
 	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
 	GetVector() vector.IVector
+	Size() uint64
 }
 
 type ColumnPart struct {
@@ -139,6 +140,15 @@ func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 		return nil, err
 	}
 	return &wrapper.Vector, nil
+}
+
+func (part *ColumnPart) Size() uint64 {
+	if part.VFile != nil {
+		return part.Capacity
+	}
+	vec := part.GetVector()
+	defer vec.Close()
+	return vec.GetMemorySize()
 }
 
 func (part *ColumnPart) GetColIdx() int {

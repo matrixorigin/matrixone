@@ -205,5 +205,13 @@ func TestEngine(t *testing.T) {
 	t.Log(eng.DBImpl.SSTBufMgr.String())
 	t.Log(eng.DBImpl.MemTableMgr.String())
 	t.Logf("Load: %d", loadCnt)
+	tbl, _ := eng.DBImpl.Store.DataTables.WeakRefTable(tid)
+	assert.Equal(t, tbl.GetRowCount(), rows*uint64(insertCnt))
+	t.Log(tbl.GetRowCount())
+	attr := tblMeta.Schema.ColDefs[0].Name
+	t.Log(tbl.Size(attr))
+	attr = tblMeta.Schema.ColDefs[1].Name
+	t.Log(tbl.Size(attr))
+	t.Log(tbl.String())
 	eng.DBImpl.Close()
 }

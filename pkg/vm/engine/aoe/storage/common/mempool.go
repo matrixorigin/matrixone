@@ -8,8 +8,17 @@ import (
 )
 
 const (
+	UNLIMIT uint64 = ^uint64(0)
+)
+
+const (
 	K uint64 = 1024
 	M uint64 = 1024 * 1024
+	G        = K * M
+)
+
+var (
+	GPool *Mempool
 )
 
 var (
@@ -18,76 +27,50 @@ var (
 		256,
 		1 * K,
 		4 * K,
+		8 * K,
 		16 * K,
+		32 * K,
 		64 * K,
+		128 * K,
 		256 * K,
+		512 * K,
+		M,
 	}
-	pools = []sync.Pool{
-		sync.Pool{
-			New: func() interface{} {
-				n := MemNode{
-					idx: uint8(0),
-					Buf: make([]byte, PageSizes[0]),
-				}
-				return &n
-			},
-		},
-		sync.Pool{
-			New: func() interface{} {
-				n := MemNode{
-					idx: uint8(1),
-					Buf: make([]byte, PageSizes[1]),
-				}
-				return &n
-			},
-		},
-		sync.Pool{
-			New: func() interface{} {
-				n := MemNode{
-					idx: uint8(2),
-					Buf: make([]byte, PageSizes[2]),
-				}
-				return &n
-			},
-		},
-		sync.Pool{
-			New: func() interface{} {
-				n := MemNode{
-					idx: uint8(3),
-					Buf: make([]byte, PageSizes[3]),
-				}
-				return &n
-			},
-		},
-		sync.Pool{
-			New: func() interface{} {
-				n := MemNode{
-					idx: uint8(4),
-					Buf: make([]byte, PageSizes[4]),
-				}
-				return &n
-			},
-		},
-		sync.Pool{
-			New: func() interface{} {
-				n := MemNode{
-					idx: uint8(5),
-					Buf: make([]byte, PageSizes[5]),
-				}
-				return &n
-			},
-		},
-		sync.Pool{
-			New: func() interface{} {
-				n := MemNode{
-					idx: uint8(6),
-					Buf: make([]byte, PageSizes[6]),
-				}
-				return &n
-			},
-		},
-	}
+	pools = []sync.Pool{}
 )
+
+func init() {
+	for idx, _ := range PageSizes {
+		pool := sync.Pool{
+			New: func(i int) func() interface{} {
+				return func() interface{} {
+					n := &MemNode{
+						idx: uint8(i),
+						Buf: make([]byte, PageSizes[i]),
+					}
+					return n
+				}
+			}(idx),
+		}
+		pools = append(pools, pool)
+	}
+	GPool = NewMempool(UNLIMIT)
+}
+
+func ToH(size uint64) string {
+	var s string
+	if size < K {
+		s = fmt.Sprintf("%d B", size)
+	} else if size < M {
+		s = fmt.Sprintf("%.4f KB", float64(size)/float64(K))
+	} else if size < G {
+		s = fmt.Sprintf("%.4f MB", float64(size)/float64(M))
+	} else {
+		s = fmt.Sprintf("%.4f GB", float64(size)/float64(G))
+	}
+
+	return s
+}
 
 func findPageIdx(size uint64) (idx int, ok bool) {
 	if size > PageSizes[len(PageSizes)-1] {
@@ -262,9 +245,9 @@ func (mp *Mempool) Capacity() uint64 {
 func (mp *Mempool) String() string {
 	usage := atomic.LoadUint64(&mp.usage)
 	peak := atomic.LoadUint64(&mp.peakusage)
-	s := fmt.Sprintf("<Mempool>(Cap=%d)(Usage=%d)(Quota=%d)(Peak=%d)", mp.capacity, usage, atomic.LoadUint64(&mp.quotausage), peak)
+	s := fmt.Sprintf("<Mempool>(Cap=%s)(Usage=%s)(Quota=%s)(Peak=%s)", ToH(mp.capacity), ToH(usage), ToH(atomic.LoadUint64(&mp.quotausage)), ToH(peak))
 	for _, pool := range mp.pools {
-		s = fmt.Sprintf("%s\nPage: %d, Count: %d", s, pool.idx, pool.Count())
+		s = fmt.Sprintf("%s\nPage: %s, Count: %d", s, ToH(PageSizes[pool.idx]), pool.Count())
 	}
 	s = fmt.Sprintf("%s\nPage: [UDEF], Count: %d", s, atomic.LoadUint64(&mp.other))
 	return s

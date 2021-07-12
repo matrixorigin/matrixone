@@ -30,6 +30,7 @@ type IColumnBlock interface {
 	CloneWithUpgrade(iface.IBlock) IColumnBlock
 	// EvalFilter(*index.FilterCtx) error
 	String() string
+	Size() uint64
 	GetVector() vector.IVector
 	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
 	GetVectorReader() dbi.IVectorReader
