@@ -2,6 +2,7 @@ package table
 
 import (
 	"fmt"
+	ro "matrixone/pkg/container/vector"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -13,17 +14,20 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/process"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
 
 type Block struct {
+	common.BaseMvcc
 	common.RefHelper
 	data struct {
 		sync.RWMutex
-		Columns []col.IColumnBlock
-		Helper  map[string]int
-		Next    iface.IBlock
+		Columns  []col.IColumnBlock
+		Helper   map[string]int
+		AttrSize []uint64
+		Next     iface.IBlock
 	}
 	Meta        *md.Block
 	MTBufMgr    bmgrif.IBufferManager
@@ -64,22 +68,50 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 	if err != nil {
 		return nil, err
 	}
+	blk.GetObject = func() interface{} {
+		return blk
+	}
+	blk.Pin = func(o interface{}) {
+		o.(*Block).Ref()
+	}
+	blk.Unpin = func(o interface{}) {
+		o.(*Block).Unref()
+	}
 
 	return blk, nil
 }
 
 func (blk *Block) initColumns() error {
+	blk.data.AttrSize = make([]uint64, 0)
 	for idx, colDef := range blk.Meta.Segment.Schema.ColDefs {
 		blk.Ref()
 		colBlk := col.NewStdColumnBlock(blk, idx)
 		blk.data.Helper[colDef.Name] = len(blk.data.Columns)
 		blk.data.Columns = append(blk.data.Columns, colBlk)
+		if blk.Type >= base.PERSISTENT_BLK {
+			blk.data.AttrSize = append(blk.data.AttrSize, colBlk.Size())
+		}
 	}
 	return nil
 }
 
 func (blk *Block) GetType() base.BlockType {
 	return blk.Type
+}
+
+func (blk *Block) GetRowCount() uint64 {
+	return blk.Meta.GetCount()
+}
+
+func (blk *Block) Size(attr string) uint64 {
+	idx, ok := blk.data.Helper[attr]
+	if !ok {
+		panic("logic error")
+	}
+	if blk.Type >= base.PERSISTENT_BLK {
+		return blk.data.AttrSize[idx]
+	}
+	return blk.data.Columns[idx].Size()
 }
 
 func (blk *Block) close() {
@@ -94,7 +126,8 @@ func (blk *Block) close() {
 		blk.data.Next.Unref()
 		blk.data.Next = nil
 	}
-	// log.Infof("destroy blk %d", blk.Meta.ID)
+
+	blk.OnVersionStale()
 }
 
 func (blk *Block) GetMTBufMgr() bmgrif.IBufferManager {
@@ -172,6 +205,15 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 	blk.cloneWithUpgradeColumns(cloned)
 	cloned.OnZeroCB = cloned.close
 	cloned.Ref()
+	cloned.GetObject = func() interface{} {
+		return cloned
+	}
+	cloned.Pin = func(o interface{}) {
+		o.(*Block).Ref()
+	}
+	cloned.Unpin = func(o interface{}) {
+		o.(*Block).Unref()
+	}
 	host.Unref()
 	return cloned, nil
 }
@@ -183,6 +225,7 @@ func (blk *Block) cloneWithUpgradeColumns(cloned *Block) {
 		clonedCol := colBlk.CloneWithUpgrade(cloned)
 		cloned.data.Helper[name] = idx
 		cloned.data.Columns[idx] = clonedCol
+		cloned.data.AttrSize = append(cloned.data.AttrSize, clonedCol.Size())
 	}
 }
 
@@ -196,6 +239,15 @@ func (blk *Block) String() string {
 		s = fmt.Sprintf("%s/n\t%s", s, colBlk.String())
 	}
 	return s
+}
+
+func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
+	colIdx := blk.Meta.Segment.Schema.GetColIdx(attr)
+	vec, err := blk.data.Columns[colIdx].ForceLoad(ref, proc)
+	if err != nil {
+		return nil, err
+	}
+	return vec, nil
 }
 
 func (blk *Block) GetFullBatch() batch.IBatch {

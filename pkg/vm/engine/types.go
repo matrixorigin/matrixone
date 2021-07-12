@@ -10,6 +10,12 @@ import (
 )
 
 const (
+	RSE = iota
+	AOE
+	Spill
+)
+
+const (
 	Sparse = iota
 	Bsi
 	Inverted
@@ -144,16 +150,19 @@ type Block interface {
 }
 
 type Database interface {
+	Type() int // engine type of database
+
 	Relations() []string
 	Relation(string) (Relation, error)
 
 	Delete(string) error
-	Create(string, []TableDef, *PartitionBy, *DistributionBy) error
+	Create(string, []TableDef, *PartitionBy, *DistributionBy, string) error // Create Table - (name, table define, partition define, distribution define, comment)
 }
 
 type Engine interface {
-	Create(string) error
 	Delete(string) error
+	Create(string, int) error // Create Database - (name, engine type)
+
 	Databases() []string
 	Database(string) (Database, error)
 

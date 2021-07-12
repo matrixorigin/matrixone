@@ -10,6 +10,7 @@ type VectorType uint8
 const (
 	StdVec VectorType = iota
 	StrVec
+	Wrapper
 )
 
 type IBatchReader interface {
@@ -31,6 +32,7 @@ type IVectorReader interface {
 	NullCnt() int
 	Length() int
 	Capacity() int
+	GetMemorySize() uint64
 	SliceReference(start, end int) IVectorReader
 	CopyToVector() *ro.Vector
 }

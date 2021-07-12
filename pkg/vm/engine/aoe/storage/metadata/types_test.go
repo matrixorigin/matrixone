@@ -1,9 +1,12 @@
 package md
 
 import (
-	"github.com/stretchr/testify/assert"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBlock(t *testing.T) {
@@ -82,6 +85,24 @@ func TestTable(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(bkt.String())
 	assert.Equal(t, seg.GetBoundState(), Attached)
+
+	sizeStep := uint64(20)
+	rowStep := uint64(10)
+	loopCnt := 1000
+	pool, _ := ants.NewPool(20)
+	var wg sync.WaitGroup
+	f := func() {
+		bkt.AppendStat(rowStep, sizeStep)
+		wg.Done()
+	}
+	for i := 0; i < loopCnt; i++ {
+		wg.Add(1)
+		pool.Submit(f)
+	}
+
+	wg.Wait()
+	assert.Equal(t, sizeStep*uint64(loopCnt), bkt.Stat.Size)
+	assert.Equal(t, rowStep*uint64(loopCnt), bkt.Stat.Rows)
 }
 
 func TestInfo(t *testing.T) {

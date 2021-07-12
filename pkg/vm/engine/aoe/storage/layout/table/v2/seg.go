@@ -23,6 +23,7 @@ type Segment struct {
 		Helper   map[uint64]int
 		BlockIds []uint64
 		BlockCnt uint32
+		AttrSize map[string]uint64
 		Next     iface.ISegment
 	}
 	MTBufMgr    bmgrif.IBufferManager
@@ -77,10 +78,40 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	seg.tree.Blocks = make([]iface.IBlock, 0)
 	seg.tree.Helper = make(map[uint64]int)
 	seg.tree.BlockIds = make([]uint64, 0)
+	seg.tree.AttrSize = make(map[string]uint64)
 	seg.OnZeroCB = seg.close
 	seg.SegmentFile = segFile
 	seg.Ref()
 	return seg, nil
+}
+
+func (seg *Segment) GetRowCount() uint64 {
+	if seg.Meta.DataState >= md.CLOSED {
+		return seg.Meta.Info.Conf.BlockMaxRows * seg.Meta.Info.Conf.SegmentMaxBlocks
+	}
+	var ret uint64
+	seg.tree.RLock()
+	for _, blk := range seg.tree.Blocks {
+		ret += blk.GetRowCount()
+	}
+	seg.tree.RUnlock()
+	return ret
+}
+
+func (seg *Segment) Size(attr string) uint64 {
+	if seg.Type >= base.SORTED_SEG {
+		return seg.tree.AttrSize[attr]
+	}
+	size := uint64(0)
+	blkCnt := atomic.LoadUint32(&seg.tree.BlockCnt)
+	var blk iface.IBlock
+	for i := 0; i < int(blkCnt); i++ {
+		seg.tree.RLock()
+		blk = seg.tree.Blocks[i]
+		seg.tree.RUnlock()
+		size += blk.Size(attr)
+	}
+	return size
 }
 
 func (seg *Segment) BlockIds() []uint64 {
@@ -167,6 +198,14 @@ func (seg *Segment) String() string {
 	s := fmt.Sprintf("<Segment[%d]>(BlkCnt=%d)(Refs=%d)(IndexRefs=%d)", seg.Meta.ID, seg.tree.BlockCnt, seg.RefCount(), seg.IndexHolder.RefCount())
 	for _, blk := range seg.tree.Blocks {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.String())
+		prev := blk.GetPrevVersion()
+		v := 0
+		for prev != nil {
+			s = fmt.Sprintf("%s V%d", s, v)
+			v++
+			prev = prev.(*Block).GetPrevVersion()
+		}
+		s = fmt.Sprintf("%s V%d", s, v)
 	}
 	return s
 }
@@ -292,6 +331,7 @@ func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 		oldNext = old.GetNext()
 	}
 	upgradeBlk.SetNext(oldNext)
+	upgradeBlk.SetPrevVersion(old)
 
 	seg.tree.Lock()
 	defer seg.tree.Unlock()

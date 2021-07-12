@@ -2,6 +2,7 @@ package col
 
 import (
 	"matrixone/pkg/container/types"
+	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -9,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
@@ -28,7 +30,9 @@ type IColumnBlock interface {
 	CloneWithUpgrade(iface.IBlock) IColumnBlock
 	// EvalFilter(*index.FilterCtx) error
 	String() string
+	Size() uint64
 	GetVector() vector.IVector
+	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
 	GetVectorReader() dbi.IVectorReader
 }
 
