@@ -97,6 +97,25 @@ func (info *MetaInfo) TableSegmentIDs(tableID uint64, args ...int64) (ids map[ui
 	return ids, err
 }
 
+func (info *MetaInfo) TableNames(args ...int64) []string {
+	var ts int64
+	if len(args) == 0 {
+		ts = NowMicro()
+	} else {
+		ts = args[0]
+	}
+	names := make([]string, 0)
+	info.RLock()
+	defer info.RUnlock()
+	for _, t := range info.Tables {
+		if !t.Select(ts) {
+			continue
+		}
+		names = append(names, t.Schema.Name)
+	}
+	return names
+}
+
 func (info *MetaInfo) TableIDs(args ...int64) map[uint64]uint64 {
 	var ts int64
 	if len(args) == 0 {
@@ -172,9 +191,10 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 
 func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo) (*Table, error) {
 	schema := &Schema{
-		Name:    tinfo.Name,
-		ColDefs: make([]*ColDef, 0),
-		Indexes: make([]*IndexInfo, 0),
+		Name:      tinfo.Name,
+		ColDefs:   make([]*ColDef, 0),
+		Indexes:   make([]*IndexInfo, 0),
+		NameIdMap: make(map[string]int),
 	}
 	for idx, colInfo := range tinfo.Columns {
 		newInfo := &ColDef{
@@ -182,6 +202,7 @@ func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo) (*Table, er
 			Idx:  idx,
 			Type: colInfo.Type,
 		}
+		schema.NameIdMap[newInfo.Name] = len(schema.ColDefs)
 		schema.ColDefs = append(schema.ColDefs, newInfo)
 	}
 	for _, indexInfo := range tinfo.Indexes {

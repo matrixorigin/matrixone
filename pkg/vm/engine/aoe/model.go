@@ -2,13 +2,6 @@ package aoe
 
 import "matrixone/pkg/container/types"
 
-type Group uint64
-
-const (
-	KVGroup Group = iota
-	AOEGroup
-)
-
 type SchemaState byte
 
 const (
@@ -36,6 +29,7 @@ type SchemaInfo struct {
 	Name      string       `json:"name"`
 	Tables    []*TableInfo `json:"tables"` // Tables in the DB.
 	State     SchemaState  `json:"state"`
+	Type      int          `json:"type"` // Engine type of schema: RSE、AOE、Spill
 }
 
 // TableInfo stores the information of a table or view.

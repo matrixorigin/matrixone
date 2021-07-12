@@ -136,7 +136,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 			typ.Size = 24
 			typ.Oid = types.T_varchar
 		default:
-			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+			return nil, sqlerror.New(errno.IndeterminateDatatype, fmt.Sprintf("'%v' is not support now", n))
 		}
 		return &extend.BinaryExtend{
 			Op:    overload.Typecast,
@@ -396,7 +396,7 @@ func buildConstantValue(typ types.Type, val constant.Value) (interface{}, error)
 			return constant.StringVal(val), nil
 		}
 	}
-	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport value: %v", val))
+	return nil, sqlerror.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", val))
 }
 
 func buildValue(val constant.Value) (extend.Extend, error) {

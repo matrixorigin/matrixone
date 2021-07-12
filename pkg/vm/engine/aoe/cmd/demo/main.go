@@ -3,6 +3,7 @@ package main
 import (
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	// "matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
@@ -87,10 +88,9 @@ func main() {
 			for blkIt.Valid() {
 				block := blkIt.GetHandle()
 				hh := block.Prefetch()
-				vec := hh.GetVector(0)
-				// pos := int(metaConf.BlockMaxRows / 2)
+				vec := hh.GetReaderByAttr(1)
 				if vec.Length() >= 2 {
-					log.Infof("vec[1]=%v", vec.GetValue(1))
+					log.Infof("vec[1]=%s, %d", vec.GetValue(1), vec.GetType())
 				}
 				hh.Close()
 				blkIt.Next()

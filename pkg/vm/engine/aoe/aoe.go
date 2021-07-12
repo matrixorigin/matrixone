@@ -16,7 +16,7 @@ func init() {
 	gob.Register(ColumnInfo{})
 }
 
-func Transfer(sid, tid, typ uint64, name,  comment string,
+func Transfer(sid, tid, typ uint64, name, comment string,
 	defs []engine.TableDef, pdef *engine.PartitionBy) (TableInfo, error) {
 	var tbl TableInfo
 

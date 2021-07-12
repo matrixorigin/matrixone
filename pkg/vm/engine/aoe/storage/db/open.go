@@ -98,8 +98,8 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		Closed:      new(atomic.Value),
 	}
 
-	db.store.DataTables = table.NewTables()
-	db.store.MetaInfo = opts.Meta.Info
+	db.Store.DataTables = table.NewTables()
+	db.Store.MetaInfo = opts.Meta.Info
 
 	cleanStaleMeta(opts.Meta.Conf.Dir)
 	db.replayAndCleanData()

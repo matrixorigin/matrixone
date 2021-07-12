@@ -1,12 +1,16 @@
 package col
 
 import (
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"matrixone/pkg/container/types"
+	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
@@ -14,37 +18,22 @@ import (
 
 type IColumnBlock interface {
 	common.IRef
-	// GetNext() IColumnBlock
-	// SetNext(next IColumnBlock)
 	GetID() uint64
 	GetMeta() *md.Block
 	GetRowCount() uint64
-	// InitScanCursor(cusor *ScanCursor) error
 	RegisterPart(part IColumnPart)
-	// GetPartRoot() IColumnPart
 	GetType() base.BlockType
+	GetColType() types.Type
 	GetIndexHolder() *index.BlockHolder
 	GetColIdx() int
 	GetSegmentFile() base.ISegmentFile
 	CloneWithUpgrade(iface.IBlock) IColumnBlock
 	// EvalFilter(*index.FilterCtx) error
 	String() string
-	GetBlockHandle() iface.IColBlockHandle
-}
-
-type StdColBlockHandle struct {
-	Node bmgrif.MangaedNode
-}
-
-func (h *StdColBlockHandle) Close() error {
-	return h.Node.Close()
-}
-
-func (h *StdColBlockHandle) GetPageNode(pos int) bmgrif.MangaedNode {
-	if pos > 0 {
-		panic("logic error")
-	}
-	return h.Node
+	Size() uint64
+	GetVector() vector.IVector
+	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
+	GetVectorReader() dbi.IVectorReader
 }
 
 type ColumnBlock struct {
@@ -72,6 +61,10 @@ func (blk *ColumnBlock) GetIndexHolder() *index.BlockHolder {
 
 func (blk *ColumnBlock) GetColIdx() int {
 	return blk.ColIdx
+}
+
+func (blk *ColumnBlock) GetColType() types.Type {
+	return blk.Meta.Segment.Schema.ColDefs[blk.ColIdx].Type
 }
 
 func (blk *ColumnBlock) GetMeta() *md.Block {
