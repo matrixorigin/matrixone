@@ -297,14 +297,12 @@ func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.G
 		if err != nil || kvs == nil || len(kvs) == 0 {
 			break
 		}
-		for i:=0; i<len(kvs)-1; i+=2 {
-			pairs = append(pairs, kvs[i])
-		}
-
 		if len(kvs)%2 == 0 {
-			pairs = append(pairs, kvs[len(kvs)-1])
+			pairs = append(pairs, kvs...)
 			break
 		}
+
+		pairs = append(pairs, kvs[0:len(kvs)-1]...)
 		req.PrefixScan.StartKey = raftstore.EncodeDataKey(uint64(group), kvs[len(kvs)-1])
 	}
 	return pairs, err

@@ -191,7 +191,7 @@ func TestClusterStartAndStop(t *testing.T) {
 
 
 	//PrefixKeys Test
-	for i:=uint64(0); i< 2000; i++ {
+	for i:=uint64(0); i< 20; i++ {
 		key := fmt.Sprintf("prefix-%d", i)
 		_, err = c.applications[0].Exec(pb.Request{
 			Type: pb.Set,
@@ -203,12 +203,14 @@ func TestClusterStartAndStop(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-
-	kvs, err := c.applications[0].PrefixKeys([]byte("prefix-"), 0)
+	keys, err := c.applications[0].PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
+	require.Equal(t, 20, len(keys))
 
-	println("QQQQQQQQQ: ", len(kvs))
-	for _, v := range kvs {
-		println(string(v))
-	}
+
+	kvs, err := c.applications[0].PrefixScan([]byte("prefix-"), 0)
+	require.NoError(t, err)
+	require.Equal(t, 40, len(kvs))
+
+
 }
