@@ -2,7 +2,7 @@ package meta
 
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path"
 	"testing"

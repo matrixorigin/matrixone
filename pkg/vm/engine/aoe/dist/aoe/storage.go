@@ -8,13 +8,13 @@ import (
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync/atomic"
 )
 
 // Storage memory storage
 type Storage struct {
-	db *adb.DB
+	db    *adb.DB
 	stats stats.Stats
 }
 
@@ -38,9 +38,9 @@ func (s *Storage) Stats() stats.Stats {
 	return s.stats
 }
 
-func (s *Storage) Write(tableName string, bat *batch.Batch, index *md.LogIndex) error  {
+func (s *Storage) Write(tableName string, bat *batch.Batch, index *md.LogIndex) error {
 	size := 0
-	for _, vec := range bat.Vecs{
+	for _, vec := range bat.Vecs {
 		size += len(vec.Data)
 	}
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
@@ -55,12 +55,9 @@ func (s *Storage) CreateTable(info *aoe.TabletInfo, index *md.LogIndex) (id uint
 	return s.db.CreateTable(info)
 }
 
-
-
-
 // SplitCheck Find a key from [start, end), so that the sum of bytes of the value of [start, key) <=size,
 // returns the current bytes in [start,end), and the founded key
-func SplitCheck(start []byte, end []byte, size uint64) (currentSize uint64, currentKeys uint64, splitKeys [][]byte, err error){
+func SplitCheck(start []byte, end []byte, size uint64) (currentSize uint64, currentKeys uint64, splitKeys [][]byte, err error) {
 	panic("not implemented")
 }
 
