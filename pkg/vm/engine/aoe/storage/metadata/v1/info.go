@@ -43,7 +43,7 @@ func (info *MetaInfo) SoftDeleteTable(name string) (id uint64, err error) {
 	delete(info.NameMap, name)
 	info.Tombstone[id] = true
 	table := info.Tables[id]
-	table.Deltete(ts)
+	table.Delete(ts)
 	return id, nil
 }
 

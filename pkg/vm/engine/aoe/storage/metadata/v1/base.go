@@ -26,7 +26,7 @@ func NewTimeStamp() *TimeStamp {
 // 	return true
 // }
 
-func (ts *TimeStamp) Deltete(t int64) error {
+func (ts *TimeStamp) Delete(t int64) error {
 	val := atomic.LoadInt64(&(ts.DeltetedOn))
 	if val != 0 {
 		return errors.New("already deleted")
