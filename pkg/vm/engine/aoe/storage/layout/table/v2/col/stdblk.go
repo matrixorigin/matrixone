@@ -8,7 +8,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/process"
 	"time"
 

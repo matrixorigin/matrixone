@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	log "github.com/sirupsen/logrus"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 func NewUpdateOp(ctx *OpCtx) *UpdateOp {

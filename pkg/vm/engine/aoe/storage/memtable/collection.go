@@ -7,7 +7,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"

@@ -4,7 +4,7 @@ import (
 	"io/ioutil"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
 	"path/filepath"

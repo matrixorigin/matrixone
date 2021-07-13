@@ -3,7 +3,7 @@ package event
 import (
 	log "github.com/sirupsen/logrus"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 func NewLoggingEventListener() EventListener {

@@ -1,7 +1,7 @@
 package meta
 
 import (
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -23,7 +23,7 @@ func (op *CheckpointOp) Execute() (err error) {
 	if err != nil {
 		return err
 	}
-	err = op.Ctx.Opts.Meta.Checkpointer.Commit()
+	err = op.Ctx.Opts.Meta.Checkpointer.Commit(op.Info)
 	if err != nil {
 		return err
 	}

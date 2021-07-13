@@ -5,7 +5,7 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"testing"
 	"time"
 

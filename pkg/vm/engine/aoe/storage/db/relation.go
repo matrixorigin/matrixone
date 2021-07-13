@@ -4,7 +4,7 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"strconv"

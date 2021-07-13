@@ -9,7 +9,7 @@ import (
 	it "matrixone/pkg/vm/engine/aoe/storage/iterator"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 	"sync/atomic"
 	"time"

@@ -13,7 +13,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/process"
 	"sync"
 	// log "github.com/sirupsen/logrus"
