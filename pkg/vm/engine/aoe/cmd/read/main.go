@@ -6,6 +6,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/mempool"
@@ -41,7 +42,7 @@ const (
 
 var (
 	opts     = &e.Options{}
-	tablet   *aoe.TabletInfo
+	table    *aoe.TableInfo
 	readPool *ants.Pool
 	proc     *process.Process
 )
@@ -64,10 +65,7 @@ func init() {
 	}
 	opts.Meta.Conf = mdCfg
 	info := md.MockTableInfo(colCnt)
-	tablet = &aoe.TabletInfo{
-		Table: *info,
-		Name:  tableName,
-	}
+	table = info
 }
 
 func getInsertBatch(meta *md.Table) *batch.Batch {
@@ -90,7 +88,7 @@ func makeDB() *db.DB {
 }
 
 func creatTable(impl *db.DB) {
-	_, err := impl.CreateTable(tablet)
+	_, err := impl.CreateTable(table, dbi.TableOpCtx{TableName: table.Name})
 	if err != nil {
 		panic(err)
 	}

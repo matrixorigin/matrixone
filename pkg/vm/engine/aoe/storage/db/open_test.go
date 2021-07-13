@@ -2,8 +2,8 @@ package db
 
 import (
 	"io/ioutil"
-	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
@@ -140,24 +140,23 @@ func TestOpen(t *testing.T) {
 	}
 	opts := &e.Options{}
 	opts.Meta.Conf = cfg
-	dbi, err := Open(TEST_OPEN_DIR, opts)
+	inst, err := Open(TEST_OPEN_DIR, opts)
 	assert.Nil(t, err)
-	assert.NotNil(t, dbi)
-	err = dbi.Close()
+	assert.NotNil(t, inst)
+	err = inst.Close()
 	assert.Nil(t, err)
 }
 
 func TestReplay(t *testing.T) {
 	initDBTest()
-	dbi := initDB()
+	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mocktbl"}
-	tid, err := dbi.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl"})
 	assert.Nil(t, err)
-	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := 2
-	rows := dbi.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
+	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
 	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
 	logIdx := &md.LogIndex{
@@ -166,64 +165,64 @@ func TestReplay(t *testing.T) {
 	}
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(tablet.Name, ck, logIdx)
+		err = inst.Append(tableInfo.Name, ck, logIdx)
 		assert.Nil(t, err)
 	}
 	time.Sleep(time.Duration(10) * time.Millisecond)
-	t.Log(dbi.MTBufMgr.String())
-	t.Log(dbi.SSTBufMgr.String())
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
 
-	lastTableID := dbi.Opts.Meta.Info.Sequence.NextTableID
-	lastSegmentID := dbi.Opts.Meta.Info.Sequence.NextSegmentID
-	lastBlockID := dbi.Opts.Meta.Info.Sequence.NextBlockID
-	lastIndexID := dbi.Opts.Meta.Info.Sequence.NextIndexID
-	tbl, err := dbi.Store.DataTables.WeakRefTable(tblMeta.ID)
+	lastTableID := inst.Opts.Meta.Info.Sequence.NextTableID
+	lastSegmentID := inst.Opts.Meta.Info.Sequence.NextSegmentID
+	lastBlockID := inst.Opts.Meta.Info.Sequence.NextBlockID
+	lastIndexID := inst.Opts.Meta.Info.Sequence.NextIndexID
+	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.ID)
 	assert.Nil(t, err)
 	t.Logf("Row count: %d", tbl.GetRowCount())
 
-	dbi.Close()
+	inst.Close()
 
-	dataDir := e.MakeDataDir(dbi.Dir)
+	dataDir := e.MakeDataDir(inst.Dir)
 	invalidFileName := filepath.Join(dataDir, "invalid")
 	f, err := os.OpenFile(invalidFileName, os.O_RDONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
 	f.Close()
 
-	dbi = initDB()
+	inst = initDB()
 
 	os.Stat(invalidFileName)
 	_, err = os.Stat(invalidFileName)
 	assert.True(t, os.IsNotExist(err))
 
-	t.Log(dbi.MTBufMgr.String())
-	t.Log(dbi.SSTBufMgr.String())
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
 
-	lastTableID2 := dbi.Opts.Meta.Info.Sequence.NextTableID
-	lastSegmentID2 := dbi.Opts.Meta.Info.Sequence.NextSegmentID
-	lastBlockID2 := dbi.Opts.Meta.Info.Sequence.NextBlockID
-	lastIndexID2 := dbi.Opts.Meta.Info.Sequence.NextIndexID
+	lastTableID2 := inst.Opts.Meta.Info.Sequence.NextTableID
+	lastSegmentID2 := inst.Opts.Meta.Info.Sequence.NextSegmentID
+	lastBlockID2 := inst.Opts.Meta.Info.Sequence.NextBlockID
+	lastIndexID2 := inst.Opts.Meta.Info.Sequence.NextIndexID
 	assert.Equal(t, lastTableID, lastTableID2)
 	assert.Equal(t, lastSegmentID, lastSegmentID2)
 	assert.Equal(t, lastBlockID, lastBlockID2)
 	assert.Equal(t, lastIndexID, lastIndexID2)
 
-	replaytblMeta, err := dbi.Opts.Meta.Info.ReferenceTableByName(tablet.Name)
+	replaytblMeta, err := inst.Opts.Meta.Info.ReferenceTableByName(tableInfo.Name)
 	assert.Nil(t, err)
 	assert.Equal(t, tblMeta.Schema.Name, replaytblMeta.Schema.Name)
 
-	tbl, err = dbi.Store.DataTables.WeakRefTable(replaytblMeta.ID)
+	tbl, err = inst.Store.DataTables.WeakRefTable(replaytblMeta.ID)
 	assert.Nil(t, err)
 	t.Logf("Row count: %d", tbl.GetRowCount())
 
-	_, err = dbi.CreateTable(&tablet)
+	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name})
 	assert.NotNil(t, err)
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(tablet.Name, ck, logIdx)
+		err = inst.Append(tableInfo.Name, ck, logIdx)
 		assert.Nil(t, err)
 	}
 
 	time.Sleep(time.Duration(10) * time.Millisecond)
-	t.Log(dbi.MTBufMgr.String())
-	t.Log(dbi.SSTBufMgr.String())
-	dbi.Close()
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	inst.Close()
 }

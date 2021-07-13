@@ -1,7 +1,6 @@
 package main
 
 import (
-	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	// "matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
@@ -37,12 +36,8 @@ func main() {
 	}
 
 	tableInfo := md.MockTableInfo(colCnt)
-	tabletInfo := aoe.TabletInfo{
-		Name:  tableInfo.Name,
-		Table: *tableInfo,
-	}
-	tName := tabletInfo.Name
-	_, err = inst.CreateTable(&tabletInfo)
+	tName := tableInfo.Name
+	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tName})
 	if err != nil {
 		panic(err)
 	}

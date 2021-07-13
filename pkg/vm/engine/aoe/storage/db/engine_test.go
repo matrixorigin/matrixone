@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -28,8 +27,7 @@ func TestEngine(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
@@ -141,7 +139,7 @@ func TestEngine(t *testing.T) {
 		defer driverWg.Done()
 		for i := 0; i < insertCnt; i++ {
 			req := &InsertReq{
-				Name:     tablet.Name,
+				Name:     tableInfo.Name,
 				Data:     baseCk,
 				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: uint64(baseCk.Vecs[0].Length())},
 			}
@@ -156,7 +154,7 @@ func TestEngine(t *testing.T) {
 		defer driverWg.Done()
 		for i := 0; i < searchCnt; i++ {
 			req := &dbi.GetSnapshotCtx{
-				TableName: tablet.Name,
+				TableName: tableInfo.Name,
 				ScanAll:   true,
 				Cols:      cols,
 			}

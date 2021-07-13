@@ -2,6 +2,7 @@ package meta
 
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path"
@@ -24,7 +25,7 @@ func TestBasicOps(t *testing.T) {
 
 	tabletInfo := md.MockTableInfo(2)
 	opCtx := OpCtx{Opts: &opts, TableInfo: tabletInfo}
-	op := NewCreateTblOp(&opCtx)
+	op := NewCreateTblOp(&opCtx, dbi.TableOpCtx{TableName: tabletInfo.Name})
 	op.Push()
 	err := op.WaitDone()
 	assert.Nil(t, err)

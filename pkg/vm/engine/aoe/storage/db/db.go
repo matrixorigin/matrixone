@@ -203,13 +203,13 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	return op.Id, err
 }
 
-func (d *DB) CreateTable(info *aoe.TabletInfo) (id uint64, err error) {
+func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	info.Table.Name = info.Name
-	opCtx := &mops.OpCtx{Opts: d.Opts, TableInfo: &info.Table}
-	op := mops.NewCreateTblOp(opCtx)
+	info.Name = ctx.TableName
+	opCtx := &mops.OpCtx{Opts: d.Opts, TableInfo: info}
+	op := mops.NewCreateTblOp(opCtx, ctx)
 	op.Push()
 	err = op.WaitDone()
 	if err != nil {

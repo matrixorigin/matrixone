@@ -2,17 +2,13 @@ package dbi
 
 type OnTableDroppedCB = func(error)
 
-type baseOpCtx struct {
-	OpIndex uint64
-}
-
-type baseTableOpCtx struct {
-	baseOpCtx
+type TableOpCtx struct {
+	OpIndex   uint64
 	TableName string
 }
 
 type GetSnapshotCtx struct {
-	baseTableOpCtx
+	OpIndex    uint64
 	TableName  string
 	SegmentIds []uint64
 	ScanAll    bool
@@ -20,7 +16,7 @@ type GetSnapshotCtx struct {
 }
 
 type DropTableCtx struct {
-	baseTableOpCtx
+	OpIndex    uint64
 	TableName  string
 	OnFinishCB OnTableDroppedCB
 }

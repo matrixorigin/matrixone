@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/rand"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -54,11 +53,10 @@ func TestCreateTable(t *testing.T) {
 	for i := 0; i < tblCnt; i++ {
 		tableInfo := md.MockTableInfo(2)
 		name := fmt.Sprintf("%s%d", prefix, i)
-		tablet := aoe.TabletInfo{Table: *tableInfo, Name: name}
 		names = append(names, name)
 		wg.Add(1)
 		go func(w *sync.WaitGroup) {
-			_, err := inst.CreateTable(&tablet)
+			_, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: name})
 			assert.Nil(t, err)
 			w.Done()
 		}(&wg)
@@ -79,10 +77,9 @@ func TestCreateDuplicateTable(t *testing.T) {
 	defer inst.Close()
 
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "t1"}
-	_, err := inst.CreateTable(&tablet)
+	_, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "t1"})
 	assert.Nil(t, err)
-	_, err = inst.CreateTable(&tablet)
+	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "t1"})
 	assert.NotNil(t, err)
 }
 
@@ -93,8 +90,7 @@ func TestDropTable(t *testing.T) {
 
 	name := "t1"
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: name}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: name})
 	assert.Nil(t, err)
 
 	ssCtx := &dbi.GetSnapshotCtx{
@@ -115,7 +111,7 @@ func TestDropTable(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, ss)
 
-	tid2, err := inst.CreateTable(&tablet)
+	tid2, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: name})
 	assert.Nil(t, err)
 	assert.NotEqual(t, tid, tid2)
 
@@ -128,8 +124,7 @@ func TestAppend(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mocktbl"}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl"})
 	assert.Nil(t, err)
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
@@ -209,8 +204,7 @@ func TestConcurrency(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
@@ -284,7 +278,7 @@ func TestConcurrency(t *testing.T) {
 		defer wg2.Done()
 		for i := 0; i < insertCnt; i++ {
 			insertReq := &InsertReq{
-				Name:     tablet.Name,
+				Name:     tableInfo.Name,
 				Data:     baseCk,
 				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: uint64(baseCk.Vecs[0].Length())},
 			}
@@ -308,7 +302,7 @@ func TestConcurrency(t *testing.T) {
 			}
 			segIds := tbl.SegmentIds()
 			searchReq := &dbi.GetSnapshotCtx{
-				TableName:  tablet.Name,
+				TableName:  tableInfo.Name,
 				SegmentIds: segIds,
 				Cols:       cols,
 			}
@@ -326,7 +320,7 @@ func TestConcurrency(t *testing.T) {
 	root := tbl.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
 	opts := &dbi.GetSnapshotCtx{
-		TableName: tablet.Name,
+		TableName: tableInfo.Name,
 		Cols:      cols,
 		ScanAll:   true,
 	}
@@ -393,8 +387,7 @@ func TestDropTable2(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
@@ -414,7 +407,7 @@ func TestDropTable2(t *testing.T) {
 		for i := uint64(0); i < insertCnt; i++ {
 			wg.Add(1)
 			go func() {
-				inst.Append(tablet.Name, baseCk, logIdx)
+				inst.Append(tableInfo.Name, baseCk, logIdx)
 				wg.Done()
 			}()
 		}
@@ -432,7 +425,7 @@ func TestDropTable2(t *testing.T) {
 		cols = append(cols, i)
 	}
 	opts := &dbi.GetSnapshotCtx{
-		TableName: tablet.Name,
+		TableName: tableInfo.Name,
 		Cols:      cols,
 		ScanAll:   true,
 	}
@@ -444,7 +437,7 @@ func TestDropTable2(t *testing.T) {
 	dropCB := func(err error) {
 		doneCh <- expectErr
 	}
-	inst.DropTable(dbi.DropTableCtx{TableName: tablet.Name, OnFinishCB: dropCB})
+	inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name, OnFinishCB: dropCB})
 	time.Sleep(time.Duration(100) * time.Millisecond)
 	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	ss.Close()
