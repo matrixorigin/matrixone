@@ -25,7 +25,7 @@ func TestBlock(t *testing.T) {
 	time.Sleep(time.Duration(1) * time.Microsecond)
 	ts3 := NowMicro()
 
-	err := blk.Deltete(ts3)
+	err := blk.Delete(ts3)
 	assert.Nil(t, err)
 	time.Sleep(time.Duration(1) * time.Microsecond)
 	ts4 := NowMicro()

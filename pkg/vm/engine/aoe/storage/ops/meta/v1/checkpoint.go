@@ -23,7 +23,7 @@ func (op *CheckpointOp) Execute() (err error) {
 	if err != nil {
 		return err
 	}
-	err = op.Ctx.Opts.Meta.Checkpointer.Commit()
+	err = op.Ctx.Opts.Meta.Checkpointer.Commit(op.Info)
 	if err != nil {
 		return err
 	}

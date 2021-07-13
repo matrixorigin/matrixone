@@ -51,7 +51,7 @@ func (ck *Checkpointer) PreCommit(info *md.MetaInfo) error {
 	return nil
 }
 
-func (ck *Checkpointer) Commit() error {
+func (ck *Checkpointer) Commit(info *md.MetaInfo) error {
 	if len(ck.TmpFile) == 0 {
 		return errors.New("Cannot Commit checkpoint, should do PreCommit before")
 	}
@@ -61,6 +61,8 @@ func (ck *Checkpointer) Commit() error {
 	}
 	// log.Infof("Commit CheckPoint: %s", fname)
 	err = os.Rename(ck.TmpFile, fname)
+	stale := MakeFilename(ck.Dirname, FTCheckpoint, strconv.Itoa(int(info.CheckPoint-1)), false)
+	os.Remove(stale)
 	return err
 }
 
