@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
+	"github.com/pingcap/errors"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -438,7 +439,12 @@ func TestDropTable2(t *testing.T) {
 	ss, err := inst.GetSnapshot(opts)
 	assert.Nil(t, err)
 
-	inst.DropTable(dbi.DropTableCtx{TableName: tablet.Name})
+	doneCh := make(chan error)
+	expectErr := errors.New("mock error")
+	dropCB := func(err error) {
+		doneCh <- expectErr
+	}
+	inst.DropTable(dbi.DropTableCtx{TableName: tablet.Name, OnFinishCB: dropCB})
 	time.Sleep(time.Duration(100) * time.Millisecond)
 	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	ss.Close()
@@ -448,5 +454,7 @@ func TestDropTable2(t *testing.T) {
 	t.Log(inst.IndexBufMgr.String())
 	t.Log(inst.MemTableMgr.String())
 	assert.Equal(t, 0, inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	err = <-doneCh
+	assert.Equal(t, expectErr, err)
 	inst.Close()
 }

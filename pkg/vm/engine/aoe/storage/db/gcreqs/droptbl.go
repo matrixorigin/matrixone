@@ -2,7 +2,9 @@ package gcreqs
 
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
+
 	// "matrixone/pkg/vm/engine/aoe/storage/gc/gci"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
@@ -16,14 +18,16 @@ type dropTblRequest struct {
 	TableId     uint64
 	MemTableMgr mtif.IManager
 	Opts        *e.Options
+	CB          dbi.OnTableDroppedCB
 }
 
-func NewDropTblRequest(opts *e.Options, id uint64, tables *table.Tables, mtMgr mtif.IManager) *dropTblRequest {
+func NewDropTblRequest(opts *e.Options, id uint64, tables *table.Tables, mtMgr mtif.IManager, cb dbi.OnTableDroppedCB) *dropTblRequest {
 	req := new(dropTblRequest)
 	req.TableId = id
 	req.Tables = tables
 	req.MemTableMgr = mtMgr
 	req.Opts = opts
+	req.CB = cb
 	req.Op = ops.Op{
 		Impl:   req,
 		ErrorC: make(chan error),
@@ -48,5 +52,8 @@ func (req *dropTblRequest) Execute() error {
 		return err
 	}
 	c.Unref()
+	if req.CB != nil {
+		req.CB(nil)
+	}
 	return err
 }

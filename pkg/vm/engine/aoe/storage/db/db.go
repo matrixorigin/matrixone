@@ -198,7 +198,7 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	op := mops.NewDropTblOp(opCtx, ctx, d.Store.DataTables)
 	op.Push()
 	err = op.WaitDone()
-	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.Store.DataTables, d.MemTableMgr)
+	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
 	d.Opts.GC.Acceptor.Accept(req)
 	return op.Id, err
 }

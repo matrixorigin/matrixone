@@ -1,6 +1,6 @@
 package dbi
 
-type OnTableDroppedCB = func(name string, opIdx uint64)
+type OnTableDroppedCB = func(error)
 
 type baseOpCtx struct {
 	OpIndex uint64
