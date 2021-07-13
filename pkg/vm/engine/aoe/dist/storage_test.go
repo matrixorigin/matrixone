@@ -5,8 +5,6 @@ import (
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage/mem"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
@@ -20,7 +18,7 @@ import (
 )
 
 var (
-	tmpDir = "./cube-test"
+	tmpDir = "/tmp/aoe-cluster-test"
 )
 
 func recreateTestTempDir() (err error) {
@@ -55,11 +53,12 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 		if err != nil {
 			return nil, err
 		}
-		memDataStorage := mem.NewStorage()
+		/*aoeDataStorage, err := aoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
 		if err != nil {
 			return nil, err
-		}
-		a, err := NewStorageWithOptions(metaStorage, pebbleDataStorage, memDataStorage, func(cfg *config.Config) {
+		}*/
+		aoeDataStorage := mem.NewStorage()
+		a, err := NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, func(cfg *config.Config) {
 			cfg.DataPath = fmt.Sprintf("%s/node-%d", tmpDir, i)
 			cfg.RaftAddr = fmt.Sprintf("127.0.0.1:1000%d", i)
 			cfg.ClientAddr = fmt.Sprintf("127.0.0.1:2000%d", i)
@@ -105,11 +104,13 @@ func TestClusterStartAndStop(t *testing.T) {
 
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
+	testKVStorage(t, c)
+}
 
+func testKVStorage(t *testing.T, c *testCluster) {
 	//Set Test
 	resp, err := c.applications[0].Exec(pb.Request{
 		Type: pb.Set,
-		Group: pb.KVGroup,
 		Set: pb.SetRequest{
 			Key:   []byte("Hello"),
 			Value: []byte("World"),
@@ -128,69 +129,7 @@ func TestClusterStartAndStop(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, value, []byte("World"))
 
-
-	// To Shard(Not Existed) Get Test
-	gValue, err := c.applications[0].ExecWithGroup(pb.Request{
-		Type: pb.Get,
-		Shard: 13,
-		Get: pb.GetRequest{
-			Key : []byte("Hello"),
-		},
-	}, pb.AOEGroup)
-	require.Error(t, err, ErrShardNotExisted)
-	require.Nil(t, gValue)
-
-
-
-	// Dynamic Create Shard Test
-	client := c.applications[0].RaftStore().Prophet().GetClient()
-	err = client.AsyncAddResources(raftstore.NewResourceAdapterWithShard(
-		bhmetapb.Shard{
-			Start:  []byte("2"),
-			End:    []byte("3"),
-			Unique: "gTable1",
-			Group:  uint64(pb.AOEGroup),
-		}))
-	//
-	require.NoError(t, err)
-	time.Sleep(5 * time.Second)
-
-	// Get With Group Test
-	gValue, err = c.applications[0].ExecWithGroup(pb.Request{
-		Type: pb.Get,
-		Shard: 13,
-		Get: pb.GetRequest{
-			Key : []byte("Hello"),
-		},
-	}, pb.AOEGroup)
-	require.NoError(t, err)
-	require.Nil(t, gValue)
-
-	// Set With Group Test
-	resp, err = c.applications[0].ExecWithGroup(pb.Request{
-		Type: pb.Set,
-		Shard: 13,
-		Set: pb.SetRequest{
-			Key:   []byte("Hello"),
-			Value: []byte("World"),
-		},
-	}, pb.AOEGroup)
-	require.NoError(t, err)
-	require.Equal(t, "OK", string(resp))
-
-	// Get With Group Test
-	gValue, err = c.applications[0].ExecWithGroup(pb.Request{
-		Type: pb.Get,
-		Shard: 13,
-		Get: pb.GetRequest{
-			Key : []byte("Hello"),
-		},
-	}, pb.AOEGroup)
-	require.NoError(t, err)
-	require.Equal(t, gValue, []byte("World"))
-
-
-	//PrefixKeys Test
+	//Prefix Test
 	for i:=uint64(0); i< 20; i++ {
 		key := fmt.Sprintf("prefix-%d", i)
 		_, err = c.applications[0].Exec(pb.Request{
@@ -212,5 +151,9 @@ func TestClusterStartAndStop(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 40, len(kvs))
 
-
+	err = c.applications[0].Delete([]byte("prefix-0"))
+	require.NoError(t, err)
+	keys, err = c.applications[0].PrefixKeys([]byte("prefix-"), 0)
+	require.NoError(t, err)
+	require.Equal(t, 19, len(keys))
 }

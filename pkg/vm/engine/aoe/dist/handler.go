@@ -28,6 +28,11 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		req.CustemType = uint64(pb.Set)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.Del:
+		msg := customReq.Delete
+		req.Key = msg.Key
+		req.CustemType = uint64(pb.Del)
+		req.Type = raftcmdpb.CMDType_Write
 	case pb.Get:
 		msg := customReq.Get
 		req.Key = msg.Key
