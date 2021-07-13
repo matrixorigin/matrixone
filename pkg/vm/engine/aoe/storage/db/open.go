@@ -15,9 +15,6 @@ import (
 	"sync/atomic"
 )
 
-// type Reader interface {
-// }
-
 func loadMetaInfo(cfg *md.Configuration) *md.MetaInfo {
 	empty := false
 	var err error
@@ -73,6 +70,15 @@ func loadMetaInfo(cfg *md.Configuration) *md.MetaInfo {
 }
 
 func Open(dirname string, opts *e.Options) (db *DB, err error) {
+	dbLocker, err := createDBLock(dirname)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if dbLocker != nil {
+			dbLocker.Close()
+		}
+	}()
 	opts.FillDefaults(dirname)
 	opts.Meta.Info = loadMetaInfo(opts.Meta.Conf)
 
@@ -105,5 +111,6 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	db.replayAndCleanData()
 
 	db.startWorkers()
+	db.DBLocker, dbLocker = dbLocker, nil
 	return db, err
 }

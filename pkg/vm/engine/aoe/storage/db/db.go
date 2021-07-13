@@ -53,7 +53,7 @@ type DB struct {
 	}
 
 	DataDir  *os.File
-	FileLock io.Closer
+	DBLocker io.Closer
 
 	Closed  *atomic.Value
 	ClosedC chan struct{}
@@ -392,5 +392,6 @@ func (d *DB) Close() error {
 	d.Closed.Store(ErrClosed)
 	close(d.ClosedC)
 	d.stopWorkers()
-	return nil
+	err := d.DBLocker.Close()
+	return err
 }
