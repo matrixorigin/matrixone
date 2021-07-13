@@ -1,26 +1,28 @@
 package meta
 
 import (
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	// mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	// log "github.com/sirupsen/logrus"
 )
 
-func NewDropTblOp(ctx *OpCtx, name string, tables *table.Tables) *DropTblOp {
-	op := &DropTblOp{Name: name, Tables: tables}
+func NewDropTblOp(ctx *OpCtx, dropCtx dbi.DropTableCtx, tables *table.Tables) *DropTblOp {
+	op := &DropTblOp{LocalCtx: dropCtx, Tables: tables}
 	op.Op = *NewOp(op, ctx, ctx.Opts.Meta.Updater)
 	return op
 }
 
 type DropTblOp struct {
 	Op
-	Name   string
-	Id     uint64
-	Tables *table.Tables
+	LocalCtx dbi.DropTableCtx
+	Name     string
+	Id       uint64
+	Tables   *table.Tables
 }
 
 func (op *DropTblOp) Execute() error {
-	id, err := op.Ctx.Opts.Meta.Info.SoftDeleteTable(op.Name)
+	id, err := op.Ctx.Opts.Meta.Info.SoftDeleteTable(op.LocalCtx.TableName)
 	if err != nil {
 		return err
 	}

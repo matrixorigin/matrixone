@@ -190,12 +190,12 @@ func (d *DB) HasTable(name string) bool {
 	return err == nil
 }
 
-func (d *DB) DropTable(name string) (id uint64, err error) {
+func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
 	opCtx := &mops.OpCtx{Opts: d.Opts}
-	op := mops.NewDropTblOp(opCtx, name, d.Store.DataTables)
+	op := mops.NewDropTblOp(opCtx, ctx, d.Store.DataTables)
 	op.Push()
 	err = op.WaitDone()
 	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.Store.DataTables, d.MemTableMgr)

@@ -106,7 +106,7 @@ func TestDropTable(t *testing.T) {
 	assert.Nil(t, err)
 	ss.Close()
 
-	dropTid, err := inst.DropTable(name)
+	dropTid, err := inst.DropTable(dbi.DropTableCtx{TableName: name})
 	assert.Nil(t, err)
 	assert.Equal(t, tid, dropTid)
 
@@ -438,7 +438,7 @@ func TestDropTable2(t *testing.T) {
 	ss, err := inst.GetSnapshot(opts)
 	assert.Nil(t, err)
 
-	inst.DropTable(tablet.Name)
+	inst.DropTable(dbi.DropTableCtx{TableName: tablet.Name})
 	time.Sleep(time.Duration(100) * time.Millisecond)
 	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	ss.Close()

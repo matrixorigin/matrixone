@@ -113,7 +113,7 @@ func main() {
 	insertWg.Wait()
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
-	_, err = inst.DropTable(tName)
+	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tName})
 	log.Infof("drop err: %v", err)
 	searchWg.Wait()
 	// time.Sleep(time.Duration(100) * time.Millisecond)
