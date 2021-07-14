@@ -23,7 +23,7 @@ func (op *CreateTblOp) GetTable() *md.Table {
 }
 
 func (op *CreateTblOp) Execute() error {
-	tbl, err := op.Ctx.Opts.Meta.Info.CreateTableFromTableInfo(op.Ctx.TableInfo)
+	tbl, err := op.Ctx.Opts.Meta.Info.CreateTableFromTableInfo(op.Ctx.TableInfo, op.LocalCtx)
 	if err != nil {
 		return err
 	}

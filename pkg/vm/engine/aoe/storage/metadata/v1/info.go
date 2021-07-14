@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync/atomic"
 	// "os"
 	// "path"
@@ -135,11 +136,11 @@ func (info *MetaInfo) TableIDs(args ...int64) map[uint64]uint64 {
 	return ids
 }
 
-func (info *MetaInfo) CreateTable(schema *Schema) (tbl *Table, err error) {
+func (info *MetaInfo) CreateTable(logIdx uint64, schema *Schema) (tbl *Table, err error) {
 	if !schema.Valid() {
 		return nil, errors.New("invalid schema")
 	}
-	tbl = NewTable(info, schema, info.Sequence.GetTableID())
+	tbl = NewTable(logIdx, info, schema, info.Sequence.GetTableID())
 	return tbl, err
 }
 
@@ -189,7 +190,7 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	return nil
 }
 
-func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo) (*Table, error) {
+func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo, ctx dbi.TableOpCtx) (*Table, error) {
 	schema := &Schema{
 		Name:      tinfo.Name,
 		ColDefs:   make([]*ColDef, 0),
@@ -216,7 +217,7 @@ func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo) (*Table, er
 		}
 		schema.Indexes = append(schema.Indexes, newInfo)
 	}
-	tbl, err := info.CreateTable(schema)
+	tbl, err := info.CreateTable(ctx.OpIndex, schema)
 	if err != nil {
 		return nil, err
 	}

@@ -9,7 +9,15 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
+var (
+	GloablSeqNum uint64 = 0
+)
+
+func NextGloablSeqnum() uint64 {
+	return atomic.AddUint64(&GloablSeqNum, uint64(1))
+}
+
+func NewTable(logIdx uint64, info *MetaInfo, schema *Schema, ids ...uint64) *Table {
 	var id uint64
 	if len(ids) == 0 {
 		id = info.Sequence.GetTableID()
@@ -24,6 +32,7 @@ func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
 		Info:      info,
 		Schema:    schema,
 		Stat:      new(Statstics),
+		LogHistry: LogHistry{CreatedIndex: logIdx},
 	}
 	return tbl
 }
@@ -268,9 +277,10 @@ func (tbl *Table) Copy(ctx CopyCtx) *Table {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
-	new_tbl := NewTable(tbl.Info, tbl.Schema, tbl.ID)
+	new_tbl := NewTable(tbl.CreatedIndex, tbl.Info, tbl.Schema, tbl.ID)
 	new_tbl.TimeStamp = tbl.TimeStamp
 	new_tbl.BoundSate = tbl.BoundSate
+	new_tbl.LogHistry = tbl.LogHistry
 	for _, v := range tbl.Segments {
 		if !v.Select(ctx.Ts) {
 			continue
@@ -291,7 +301,7 @@ func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
 	if schema == nil {
 		schema = MockSchema(2)
 	}
-	tbl, _ := info.CreateTable(schema)
+	tbl, _ := info.CreateTable(atomic.AddUint64(&GloablSeqNum, uint64(1)), schema)
 	info.RegisterTable(tbl)
 	var activeSeg *Segment
 	for i := uint64(0); i < blkCnt; i++ {

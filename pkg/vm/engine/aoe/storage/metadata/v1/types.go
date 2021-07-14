@@ -18,6 +18,12 @@ type LogIndex struct {
 	Capacity uint64
 }
 
+type LogHistry struct {
+	CreatedIndex uint64
+	DeletedIndex uint64
+	AppliedIndex uint64
+}
+
 type TimeStamp struct {
 	CreatedOn  int64
 	UpdatedOn  int64
@@ -107,6 +113,7 @@ type Table struct {
 	BoundSate
 	sync.RWMutex
 	TimeStamp
+	LogHistry
 	ID            uint64
 	Segments      []*Segment
 	SegmentCnt    uint64

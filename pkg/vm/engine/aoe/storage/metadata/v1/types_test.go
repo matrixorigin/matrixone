@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestTable(t *testing.T) {
 	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	bkt := NewTable(info, schema)
+	bkt := NewTable(NextGloablSeqnum(), info, schema)
 	seg, err := bkt.CreateSegment()
 	assert.Nil(t, err)
 
@@ -109,7 +110,7 @@ func TestInfo(t *testing.T) {
 	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	tbl, err := info.CreateTable(schema)
+	tbl, err := info.CreateTable(NextGloablSeqnum(), schema)
 	assert.Nil(t, err)
 
 	assert.Equal(t, tbl.GetBoundState(), STANDLONE)
@@ -126,7 +127,7 @@ func TestCreateDropTable(t *testing.T) {
 
 	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
-	tbl, err := info.CreateTableFromTableInfo(tblInfo)
+	tbl, err := info.CreateTableFromTableInfo(tblInfo, dbi.TableOpCtx{TableName: tblInfo.Name, OpIndex: NextGloablSeqnum()})
 	assert.Nil(t, err)
 	assert.Equal(t, tblInfo.Name, tbl.Schema.Name)
 
