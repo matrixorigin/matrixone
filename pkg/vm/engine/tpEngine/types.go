@@ -1,6 +1,7 @@
 package tpEngine
 
 import (
+	"fmt"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	"matrixone/pkg/vm/process"
@@ -8,6 +9,39 @@ import (
 )
 
 var tpEngineName string= "atomic"
+var tpEngineSlash byte = '/'
+
+/**
+primare key for comparable encoding
+ */
+type tpPrimaryKey interface {
+	encode([]byte)[]byte
+	fmt.Stringer
+}
+
+/**
+value in kv pair
+ */
+type tpValue interface {
+	encodeValue([]byte)[]byte
+	decodeValue([]byte)
+	fmt.Stringer
+}
+/**
+table key
+map: table model primary key -> the key of the kv storage
+ */
+type tpTableKey struct {
+	//prefix
+	engine tpPrimaryKey
+	dbId tpPrimaryKey
+	tableId tpPrimaryKey
+	indexId tpPrimaryKey
+	//count >= 1
+	primaries []tpPrimaryKey
+	//end part
+	suffix []tpPrimaryKey
+}
 
 /*
 tuple engine for metadata management
@@ -31,12 +65,15 @@ type tpEngine struct {
 	kv dist.Storage
 	proc *process.Process
 
-
-	nextDbNo uint64
-	nextSerialNo uint64
+	//db0 table meta1
+	nextDbNo    uint64
+	nextTableNo uint64
 
 	//for fast check
 	dbs []string
+
+	//for async recycle
+	recyclingDb []string
 }
 
 /*
