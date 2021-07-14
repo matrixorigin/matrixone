@@ -319,7 +319,7 @@ func (s *Scope) CreateTable() error {
 		}
 		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%v' already exists", o.Id))
 	}
-	return o.Db.Create(o.Id, o.Defs, o.Pdef, nil)
+	return o.Db.Create(o.Id, o.Defs, o.Pdef, nil, "")
 }
 
 func (s *Scope) CreateDatabase() error {
@@ -330,7 +330,7 @@ func (s *Scope) CreateDatabase() error {
 		}
 		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database '%v' already exists", o.Id))
 	}
-	return o.E.Create(o.Id)
+	return o.E.Create(o.Id, 0)
 }
 
 func (s *Scope) DropTable() error {

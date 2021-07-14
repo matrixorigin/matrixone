@@ -1,4 +1,4 @@
-package engine
+package db
 
 import (
 	"errors"
@@ -15,11 +15,15 @@ type Block struct {
 }
 
 func (blk *Block) Rows() int64 {
-	return 0
+	data := blk.Host.Data.StrongRefBlock(blk.Id)
+	defer data.Unref()
+	return int64(data.GetRowCount())
 }
 
 func (blk *Block) Size(attr string) int64 {
-	return 0
+	data := blk.Host.Data.StrongRefBlock(blk.Id)
+	defer data.Unref()
+	return int64(data.Size(attr))
 }
 
 func (blk *Block) ID() string {

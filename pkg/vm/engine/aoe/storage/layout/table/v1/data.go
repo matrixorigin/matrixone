@@ -9,7 +9,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"runtime"
 	"sync"
 

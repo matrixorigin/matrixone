@@ -6,7 +6,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	tbl "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"testing"
 
 	"github.com/stretchr/testify/assert"

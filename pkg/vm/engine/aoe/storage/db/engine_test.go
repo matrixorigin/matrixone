@@ -1,20 +1,15 @@
-package engine
+package db
 
 import (
 	"context"
-	"math/rand"
-	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
-	e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,43 +24,17 @@ var (
 	DIR = "/tmp/engine_test"
 )
 
-func initDBTest() {
-	os.RemoveAll(DIR)
-}
-
-func initDB() *Engine {
-	rand.Seed(time.Now().UnixNano())
-	cfg := &md.Configuration{
-		Dir:              DIR,
-		SegmentMaxBlocks: 2,
-		BlockMaxRows:     20000,
-	}
-	opts := &e.Options{}
-	opts.Meta.Conf = cfg
-	inst, _ := db.Open(DIR, opts)
-	eng := &Engine{
-		DBImpl: inst,
-	}
-	return eng
-}
-
-type InsertReq struct {
-	Name     string
-	Data     *batch.Batch
-	LogIndex *md.LogIndex
-}
-
 func TestEngine(t *testing.T) {
 	initDBTest()
-	eng := initDB()
+	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
 	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
-	tid, err := eng.DBImpl.CreateTable(&tablet)
+	tid, err := inst.CreateTable(&tablet)
 	assert.Nil(t, err)
-	tblMeta, err := eng.DBImpl.Opts.Meta.Info.ReferenceTable(tid)
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
-	blkCnt := eng.DBImpl.Store.MetaInfo.Conf.SegmentMaxBlocks
-	rows := eng.DBImpl.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
+	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
+	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan *InsertReq)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
@@ -88,12 +57,11 @@ func TestEngine(t *testing.T) {
 		searchWg sync.WaitGroup
 		loadCnt  uint32
 	)
-	dbase, err := eng.Database(DefaultDatabase)
 	assert.Nil(t, err)
 	task := func(ctx *dbi.GetSnapshotCtx) func() {
 		return func() {
 			defer searchWg.Done()
-			rel, err := dbase.Relation(tblMeta.Schema.Name)
+			rel, err := inst.Relation(tblMeta.Schema.Name)
 			assert.Nil(t, err)
 			for _, segInfo := range rel.Segments() {
 				seg := rel.Segment(segInfo, proc)
@@ -107,14 +75,14 @@ func TestEngine(t *testing.T) {
 					}
 				}
 			}
-			rel.(*Relation).Close()
+			rel.Close()
 		}
 	}
 	assert.NotNil(t, task)
 	task2 := func(ctx *dbi.GetSnapshotCtx) func() {
 		return func() {
 			defer searchWg.Done()
-			ss, err := eng.DBImpl.GetSnapshot(ctx)
+			ss, err := inst.GetSnapshot(ctx)
 			assert.Nil(t, err)
 			segIt := ss.NewIt()
 			assert.Nil(t, err)
@@ -154,9 +122,9 @@ func TestEngine(t *testing.T) {
 			case req := <-insertCh:
 				loopWg.Add(1)
 				t := func() {
-					rel, err := dbase.Relation(req.Name)
+					rel, err := inst.Relation(req.Name)
 					assert.Nil(t, err)
-					err = rel.Write(req.Data)
+					err = rel.Write(req.Data, req.LogIndex)
 					assert.Nil(t, err)
 					loopWg.Done()
 				}
@@ -200,12 +168,12 @@ func TestEngine(t *testing.T) {
 	searchWg.Wait()
 	cancel()
 	loopWg.Wait()
-	t.Log(eng.DBImpl.WorkersStatsString())
-	t.Log(eng.DBImpl.MTBufMgr.String())
-	t.Log(eng.DBImpl.SSTBufMgr.String())
-	t.Log(eng.DBImpl.MemTableMgr.String())
+	t.Log(inst.WorkersStatsString())
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	t.Log(inst.MemTableMgr.String())
 	t.Logf("Load: %d", loadCnt)
-	tbl, _ := eng.DBImpl.Store.DataTables.WeakRefTable(tid)
+	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Equal(t, tbl.GetRowCount(), rows*uint64(insertCnt))
 	t.Log(tbl.GetRowCount())
 	attr := tblMeta.Schema.ColDefs[0].Name
@@ -213,5 +181,9 @@ func TestEngine(t *testing.T) {
 	attr = tblMeta.Schema.ColDefs[1].Name
 	t.Log(tbl.Size(attr))
 	t.Log(tbl.String())
-	eng.DBImpl.Close()
+	rel, err := inst.Relation(tblMeta.Schema.Name)
+	assert.Nil(t, err)
+	t.Logf("Rows: %d, Size: %d", rel.Rows(), rel.Size(tblMeta.Schema.ColDefs[0].Name))
+	// t.Log()
+	inst.Close()
 }

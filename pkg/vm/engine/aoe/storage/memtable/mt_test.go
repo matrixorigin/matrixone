@@ -6,7 +6,7 @@ import (
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"

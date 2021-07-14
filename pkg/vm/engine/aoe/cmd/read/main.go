@@ -2,13 +2,11 @@ package main
 
 import (
 	"matrixone/pkg/container/batch"
-	be "matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/vm/engine/aoe/storage/engine"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
@@ -118,10 +116,6 @@ func makeFiles(impl *db.DB) {
 	time.Sleep(time.Duration(waitTime) * time.Millisecond)
 }
 
-func makeDatabase(impl *db.DB) be.Database {
-	return engine.NewDatabase(impl)
-}
-
 func mockData() {
 	doRemove()
 	impl := makeDB()
@@ -132,8 +126,7 @@ func mockData() {
 
 func readData() {
 	impl := makeDB()
-	dbase := makeDatabase(impl)
-	rel, err := dbase.Relation(tableName)
+	rel, err := impl.Relation(tableName)
 	if err != nil {
 		panic(err)
 	}

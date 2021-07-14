@@ -418,6 +418,13 @@ func (ctr *Container) eval(idx int64, length int, es []aggregation.Extend, proc 
 			vecs[i].Col = col
 			vecs[i].Data = data
 		case types.T_tuple:
+			data, err := proc.Alloc(0)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					vecs[j].Free(proc)
+				}
+				return nil, err
+			}
 			vs := make([][]interface{}, length)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
@@ -431,6 +438,7 @@ func (ctr *Container) eval(idx int64, length int, es []aggregation.Extend, proc 
 				}
 			}
 			vecs[i].Col = vs
+			vecs[i].Data = data[:mempool.CountSize]
 		}
 	}
 	for i, e := range es {
@@ -630,42 +638,44 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 					return err
 				}
 				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
-				if proc.Size() > proc.Lim.Size { // spill
-					if !ctr.spilled {
-						if err := ctr.newSpill(proc); err != nil {
-							return err
-						}
-						for i, blk := range ctr.bats {
-							if err := ctr.spill.r.Write(blk.Bat); err != nil {
+				/*
+					if proc.Size() > proc.Lim.Size { // spill
+						if !ctr.spilled {
+							if err := ctr.newSpill(proc); err != nil {
 								return err
 							}
-							blk.R = ctr.spill.r
-							blk.Seg = ctr.spill.r.Segments()[i]
-							blk.Bat.Clean(proc)
-							blk.Bat = nil
+							for i, blk := range ctr.bats {
+								if err := ctr.spill.r.Write(blk.Bat); err != nil {
+									return err
+								}
+								blk.R = ctr.spill.r
+								blk.Seg = ctr.spill.r.Segments()[i]
+								blk.Bat.Clean(proc)
+								blk.Bat = nil
+							}
+							ctr.spilled = true
+						} else {
+							if err := ctr.spill.r.Write(ctr.bat.Bat); err != nil {
+								return err
+							}
+							ctr.bat.R = ctr.spill.r
+							ctr.bat.Seg = ctr.spill.r.Segments()[len(ctr.bats)-1]
+							ctr.bat.Bat.Clean(proc)
+							ctr.bat.Bat = nil
 						}
-						ctr.spilled = true
-					} else {
-						if err := ctr.spill.r.Write(ctr.bat.Bat); err != nil {
-							return err
+						ctr.bat = &block.Block{
+							R:     ctr.spill.r,
+							Cs:    ctr.spill.cs,
+							Attrs: ctr.spill.attrs,
+							Bat:   batch.New(true, ctr.spill.attrs),
 						}
-						ctr.bat.R = ctr.spill.r
-						ctr.bat.Seg = ctr.spill.r.Segments()[len(ctr.bats)-1]
-						ctr.bat.Bat.Clean(proc)
-						ctr.bat.Bat = nil
+						for i := range ctr.bat.Bat.Vecs {
+							ctr.bat.Bat.Vecs[i] = vector.New(ctr.spill.md[i].Type)
+						}
+						ctr.bats = append(ctr.bats, ctr.bat)
+						ctr.rows = 0
 					}
-					ctr.bat = &block.Block{
-						R:     ctr.spill.r,
-						Cs:    ctr.spill.cs,
-						Attrs: ctr.spill.attrs,
-						Bat:   batch.New(true, ctr.spill.attrs),
-					}
-					for i := range ctr.bat.Bat.Vecs {
-						ctr.bat.Bat.Vecs[i] = vector.New(ctr.spill.md[i].Type)
-					}
-					ctr.bats = append(ctr.bats, ctr.bat)
-					ctr.rows = 0
-				}
+				*/
 			}
 			ctr.sels[ctr.slots.Vs[i][j]] = ctr.sels[ctr.slots.Vs[i][j]][:0]
 		}
@@ -680,7 +690,7 @@ func (ctr *Container) newSpill(proc *process.Process) error {
 	for _, attr := range ctr.spill.md {
 		defs = append(defs, &engine.AttributeDef{attr})
 	}
-	if err := ctr.spill.e.Create(ctr.spill.id, defs, nil, nil); err != nil {
+	if err := ctr.spill.e.Create(ctr.spill.id, defs, nil, nil, ""); err != nil {
 		return err
 	}
 	r, err := ctr.spill.e.Relation(ctr.spill.id)

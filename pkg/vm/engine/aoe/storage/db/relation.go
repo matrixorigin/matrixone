@@ -1,22 +1,21 @@
-package engine
+package db
 
 import (
-	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	// log "github.com/sirupsen/logrus"
 )
 
 type Relation struct {
 	Data   iface.ITableData
-	DBImpl *db.DB
+	DBImpl *DB
 	Meta   *md.Table
 	tree   struct {
 		sync.RWMutex
@@ -24,7 +23,7 @@ type Relation struct {
 	}
 }
 
-func NewRelation(impl *db.DB, data iface.ITableData, meta *md.Table) *Relation {
+func NewRelation(impl *DB, data iface.ITableData, meta *md.Table) *Relation {
 	r := &Relation{
 		DBImpl: impl,
 		Meta:   meta,
@@ -35,11 +34,11 @@ func NewRelation(impl *db.DB, data iface.ITableData, meta *md.Table) *Relation {
 }
 
 func (r *Relation) Rows() int64 {
-	return 0
+	return int64(r.Data.GetRowCount())
 }
 
 func (r *Relation) Size(attr string) int64 {
-	return 0
+	return int64(r.Data.Size(attr))
 }
 
 func (r *Relation) ID() string {
@@ -107,16 +106,15 @@ func (r *Relation) Segment(info engine.SegmentInfo, proc *process.Process) engin
 	return seg
 }
 
-// func (r *Relation) Write(bat *batch.Batch, index *md.LogIndex) error {
-func (r *Relation) Write(bat *batch.Batch) error {
-	index := md.LogIndex{Capacity: uint64(bat.Vecs[0].Length())}
-	return r.DBImpl.Append(r.Meta.Schema.Name, bat, &index)
+func (r *Relation) Write(bat *batch.Batch, index *md.LogIndex) error {
+	return r.DBImpl.Append(r.Meta.Schema.Name, bat, index)
+	// index := md.LogIndex{Capacity: uint64(bat.Vecs[0].Length())}
 }
 
-func (r *Relation) AddAttribute(_ engine.TableDef) error {
-	return nil
-}
+// func (r *Relation) AddAttribute(_ engine.TableDef) error {
+// 	return nil
+// }
 
-func (r *Relation) DelAttribute(_ engine.TableDef) error {
-	return nil
-}
+// func (r *Relation) DelAttribute(_ engine.TableDef) error {
+// 	return nil
+// }

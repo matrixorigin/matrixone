@@ -47,6 +47,8 @@ func ParseMetaFileName(filename string) (version int, ok bool) {
 func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
 	var s string
 	switch ft {
+	case FTLock:
+		s = path.Join(dirname, fmt.Sprintf("%s.lock", name))
 	case FTCheckpoint:
 		s = path.Join(MakeMetaDir(dirname), fmt.Sprintf("%s.ckp", name))
 	case FTTransientNode:
