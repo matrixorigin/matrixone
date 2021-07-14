@@ -34,16 +34,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
-	if bat.Attrs == nil {
+	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
 	rbat := batch.New(true, n.Attrs)
-	if len(bat.Sels) > 0 {
-		rbat.Sels = bat.Sels
-		rbat.SelsData = bat.SelsData
-		bat.Sels = nil
-		bat.SelsData = nil
-	}
 	for i := range n.Attrs {
 		if rbat.Vecs[i], _, err = n.Es[i].Eval(bat, proc); err != nil {
 			rbat.Vecs = rbat.Vecs[:i]
@@ -53,6 +47,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		if _, ok := n.Es[i].(*extend.Attribute); !ok {
 			copy(rbat.Vecs[i].Data[:mempool.CountSize], encoding.EncodeUint64(n.Refer[n.Attrs[i]]))
 		}
+	}
+	if bat.SelsData != nil {
+		proc.Free(bat.SelsData)
+		bat.Sels = nil
+		bat.SelsData = nil
 	}
 	{
 		for _, e := range n.Es {
