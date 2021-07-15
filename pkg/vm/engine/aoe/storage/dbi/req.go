@@ -20,3 +20,8 @@ type DropTableCtx struct {
 	TableName  string
 	OnFinishCB OnTableDroppedCB
 }
+
+type GetSegmentsCtx struct {
+	OpIndex   uint64
+	TableName string
+}

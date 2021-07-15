@@ -61,8 +61,8 @@ func TestEngine(t *testing.T) {
 			defer searchWg.Done()
 			rel, err := inst.Relation(tblMeta.Schema.Name)
 			assert.Nil(t, err)
-			for _, segInfo := range rel.Segments() {
-				seg := rel.Segment(segInfo, proc)
+			for _, segId := range rel.SegmentIds().Ids {
+				seg := rel.Segment(segId, proc)
 				for _, id := range seg.Blocks() {
 					blk := seg.Block(id, proc)
 					bat, err := blk.Prefetch(refs, attrs, proc)
@@ -182,6 +182,6 @@ func TestEngine(t *testing.T) {
 	rel, err := inst.Relation(tblMeta.Schema.Name)
 	assert.Nil(t, err)
 	t.Logf("Rows: %d, Size: %d", rel.Rows(), rel.Size(tblMeta.Schema.ColDefs[0].Name))
-	// t.Log()
+	t.Log(inst.GetSegmentIds(dbi.GetSegmentsCtx{TableName: tblMeta.Schema.Name}))
 	inst.Close()
 }

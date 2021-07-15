@@ -15,6 +15,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
+	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -146,14 +147,7 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 	return collection.Append(bat, &clonedIndex)
 }
 
-func (d *DB) Relation(name string) (*Relation, error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	meta, err := d.Opts.Meta.Info.ReferenceTableByName(name)
-	if err != nil {
-		return nil, err
-	}
+func (d *DB) getTableData(meta *md.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.ID)
 	if err != nil {
 		opCtx := &mdops.OpCtx{
@@ -178,6 +172,21 @@ func (d *DB) Relation(name string) (*Relation, error) {
 			return nil, err
 		}
 		collection.Unref()
+	}
+	return data, nil
+}
+
+func (d *DB) Relation(name string) (*Relation, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	meta, err := d.Opts.Meta.Info.ReferenceTableByName(name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := d.getTableData(meta)
+	if err != nil {
+		return nil, err
 	}
 	return NewRelation(d, data, meta), nil
 }
@@ -217,6 +226,25 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	}
 	id = op.GetTable().GetID()
 	return id, nil
+}
+
+func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	meta, err := d.Opts.Meta.Info.ReferenceTableByName(ctx.TableName)
+	if err != nil {
+		return ids
+	}
+	data, err := d.getTableData(meta)
+	if err != nil {
+		return ids
+	}
+	ids.Ids = data.SegmentIds()
+	// for _, id := range ids {
+	// 	infos = append(infos, engine.SegmentInfo{Id: strconv.FormatUint(id, 10)})
+	// }
+	return ids
 }
 
 func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {

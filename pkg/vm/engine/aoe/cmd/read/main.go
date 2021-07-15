@@ -136,15 +136,15 @@ func readData() {
 		cols = append(cols, i)
 	}
 	refs := make([]uint64, len(attrs))
-	segInfos := rel.Segments()
+	segIds := rel.SegmentIds()
 
 	totalRows := uint64(0)
 	startProfile()
 	defer stopProfile()
 	now := time.Now()
 	var wg sync.WaitGroup
-	for _, segInfo := range segInfos {
-		seg := rel.Segment(segInfo, proc)
+	for _, segId := range segIds.Ids {
+		seg := rel.Segment(segId, proc)
 		for _, id := range seg.Blocks() {
 			blk := seg.Block(id, proc)
 			bat, err := blk.Prefetch(refs, attrs, proc)
