@@ -2,6 +2,8 @@ package tpEngine
 
 import (
 	"bytes"
+	"fmt"
+	"github.com/stretchr/testify/assert"
 	"reflect"
 	"testing"
 )
@@ -159,5 +161,137 @@ func Test_decodeComparableBytes(t *testing.T) {
 				t.Errorf("decodeComparableBytes() got = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTableDatabasesRowCode(t *testing.T) {
+	row := NewTableDatabasesRow("abc",10,"xxx")
+	enc := row.encode(nil)
+
+	row2 := &tableDatabasesRow{}
+
+	_,err := row2.decode(enc)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if !reflect.DeepEqual(row,row2) {
+		t.Errorf("not equal. %v %v",row,row2)
+		return
+	}
+}
+
+func Test_decodeUint64(t *testing.T) {
+	cases := []uint64{
+		0,1,2,3,4,5,6,7,8,9,10,
+		11,12,13,14,15,16,17,18,19,20,
+	}
+
+	for _,s := range cases{
+		enc := encodeUint64(nil,s)
+		_,d,_ := decodeUint64(enc)
+		if s != d {
+			t.Error("not equal")
+		}
+	}
+}
+
+func Test_decodeString(t *testing.T) {
+	cases := []string{
+		"abc","def","dec","xxx","ppppzdaf",
+	}
+
+	for _,s := range cases{
+		enc := encodeString(nil,s)
+		_,d,_ := decodeString(enc)
+		if s != d {
+			t.Error("not equal")
+		}
+	}
+}
+
+func Test_decodeValue(t *testing.T) {
+	cases := []interface{}{
+		"abc","bcd","xxx",uint64(0xabcdef),uint64(19),
+	}
+
+	for _,s := range cases{
+		enc := encodeValue(nil,s)
+		_,d,err := decodeValue(enc)
+		if err != nil {
+			t.Error(err)
+		}
+		var ddd interface{}
+		switch dd := s.(type) {
+		case uint64:
+			ddd = dd
+		case string:
+			ddd = dd
+		default:
+			t.Errorf("unsupported type")
+		}
+
+		if !reflect.DeepEqual(s,ddd) {
+			t.Error(fmt.Errorf("not equal %v %v",s,d))
+		}
+	}
+}
+
+func Test_tpTupleImpl_decode(t *testing.T) {
+	cases := [][]interface{}{
+		{"abc","bcd","xxx",uint64(0xabcdef),uint64(19),},
+		{uint64(0),uint64(10000),"我们"},
+	}
+
+	for _,s := range cases{
+		tuple := &tpTupleImpl{
+			fields:      s,
+		}
+		enc := tuple.encode(nil)
+		d,err := tuple.decode(enc)
+		if err != nil {
+			t.Error(err)
+		}
+
+		if !reflect.DeepEqual(s,tuple.fields) {
+			t.Error(fmt.Errorf("not equal %v %v",s,d))
+		}
+	}
+}
+
+func Test_encodeUint64Key(t *testing.T) {
+	cases :=[][]uint64 {
+		{0,1},
+		{1,2},
+		{1,0xffffffffffffffff},
+	}
+
+	f1 := func(a, b uint64, aEnc, bEnc []byte) bool {
+		return a < b && bytes.Compare(aEnc,bEnc) < 0 && b > a && bytes.Compare(bEnc,aEnc) > 0
+	}
+
+	for _,c := range cases{
+		e1 := encodeUint64Key(nil,c[0])
+		e2 := encodeUint64Key(nil,c[1])
+		assert.True(t, f1(c[0],c[1],e1,e2))
+	}
+}
+
+func Test_encodeInt64Key(t *testing.T) {
+	cases :=[][]int64 {
+		{-1,1},
+		{-2,-1},
+		{0,1},
+		{1,2},
+	}
+
+	f1 := func(a, b int64, aEnc, bEnc []byte) bool {
+		return a < b && bytes.Compare(aEnc,bEnc) < 0 && b > a && bytes.Compare(bEnc,aEnc) > 0
+	}
+
+	for _,c := range cases{
+		e1 := encodeInt64Key(nil,c[0])
+		e2 := encodeInt64Key(nil,c[1])
+		assert.True(t, f1(c[0],c[1],e1,e2))
 	}
 }

@@ -145,6 +145,7 @@ func TestEngine_1(t *testing.T) {
 		err = te.getAllKvInTable(uint64(i), 2, 0)
 		err = te.getAllKvInTable(uint64(i), 3, 0)
 		err = te.getAllKvInTable(uint64(i), 4, 0)
+		err = te.getAllKvInTable(uint64(i), 5, 0)
 	}
 
 	require.NoError(t, err)
