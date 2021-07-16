@@ -10,64 +10,179 @@ import (
 )
 
 /**
+merge multiple schemas by order into the one
+ */
+func mergeTpSchema(schs ...*tpSchema)*tpSchema{
+	t := NewTpSchema()
+	for _,sch := range schs {
+		t.colTypes = append(t.colTypes,sch.colTypes...)
+		t.used = append(t.used,sch.used...)
+	}
+	return t
+}
+
+/**
+encode prefix
+ */
+func (ttk *tpTableKey) encodePrefix(data []byte) []byte {
+	return encodeKeysWithSchema(data,ttk.prefixSchema,
+		ttk.engine,
+		ttk.dbId,
+		ttk.tableId,
+		ttk.indexId,
+	)
+}
+
+func (ttk *tpTableKey) decodePrefix(data []byte) ([]byte,error) {
+	data1,prefixs,err := decodeKeys(data,ttk.prefixSchema)
+	if err != nil {
+		return nil, err
+	}
+
+	ttk.engine = prefixs[0].(string)
+	ttk.dbId = prefixs[1].(uint64)
+	ttk.tableId = prefixs[2].(uint64)
+	ttk.indexId = prefixs[3].(uint64)
+	return data1,nil
+}
+
+/**
+encode primary keys
+ */
+func (ttk *tpTableKey) encodePrimaryKeys(data []byte)[]byte{
+	if ttk.primarySchema == nil {
+		return data
+	}
+	if ttk.primaries == nil  || len(ttk.primaries) != ttk.primarySchema.ColumnCount(){
+		panic("missing primary keys or schema")
+	}
+
+	return encodeKeysWithSchema(data,ttk.primarySchema,ttk.primaries...)
+}
+
+func (ttk *tpTableKey) decodePrimaryKeys(data []byte)([]byte,error){
+	if ttk.primarySchema == nil {
+		return data,nil
+	}
+	data1,prims,err := decodeKeys(data,ttk.primarySchema)
+	if err != nil {
+		return nil, err
+	}
+
+	ttk.primaries = prims
+
+	return data1, nil
+}
+
+/**
+encode prefix and primary keys
+*/
+func (ttk *tpTableKey) encodePrefixAndPrimaryKeys(data []byte)[]byte{
+	data = ttk.encodePrefix(data)
+
+	data = ttk.encodePrimaryKeys(data)
+	return  data
+}
+
+func (ttk *tpTableKey) decodePrefixAndPrimaryKeys(data []byte) ([]byte,error){
+	data1,err := ttk.decodePrefix(data)
+	if err != nil {
+		return nil,err
+	}
+
+	data2,err := ttk.decodePrimaryKeys(data1)
+	if err != nil {
+		return nil, err
+	}
+	return data2,nil
+}
+
+/**
+encode suffix keys
+*/
+func (ttk *tpTableKey) encodeSuffix(data []byte)[]byte{
+	if ttk.suffixSchema == nil {
+		return data
+	}
+
+	if ttk.suffix == nil || len(ttk.suffix) != ttk.suffixSchema.ColumnCount() {
+		panic("missing suffix keys or schema")
+	}
+
+	return encodeKeysWithSchema(data,ttk.suffixSchema,ttk.suffix...)
+}
+
+func (ttk *tpTableKey) decodeSuffix(data []byte)([]byte,error){
+	if ttk.suffixSchema == nil {
+		return data, nil
+	}
+	data1,sufs,err := decodeKeys(data,ttk.suffixSchema)
+	if err != nil {
+		return nil,err
+	}
+
+	ttk.suffix = sufs
+
+	return data1,nil
+}
+
+/**
 encode table key into the comparable bytes
  */
 func (ttk *tpTableKey) encode(data []byte)[]byte{
-	//elementary method
-	//"tp-" prefix
-	data = append(data,string2bytes("tp")...)
+	data = ttk.encodePrefix(data)
 
-	//engine name
-	data = append(data,tpEngineSlash)
-	data = ttk.engine.encode(data)
+	data = ttk.encodePrimaryKeys(data)
 
-	//dbid tableod indexid
-	data = append(data,tpEngineSlash)
-	data = ttk.dbId.encode(data)
-
-	data = append(data,tpEngineSlash)
-	data = ttk.tableId.encode(data)
-
-	data = append(data,tpEngineSlash)
-	data = ttk.indexId.encode(data)
-
-	for _,pr := range ttk.primaries {
-		data = append(data,tpEngineSlash)
-		data = pr.encode(data)
-	}
-
-	for _,su := range ttk.suffix {
-		data = append(data,tpEngineSlash)
-		data = su.encode(data)
-	}
+	data = ttk.encodeSuffix(data)
 	return data
 }
 
-func (ttk *tpTableKey) String() string {
-	var primas string = "["
-	for _,pr := range ttk.primaries {
-		primas += pr.String()+","
+/**
+decode bytes into tptablekey
+ */
+func (ttk *tpTableKey) decode(data []byte)([]byte,error){
+	data1,err := ttk.decodePrefix(data)
+	if err != nil {
+		return nil,err
 	}
-	primas += "]"
 
-	var sufs string = "["
-	for _,su := range ttk.suffix {
-		sufs += su.String()+","
+	data2,err := ttk.decodePrimaryKeys(data1)
+	if err != nil {
+		return nil, err
 	}
-	sufs += "]"
 
-	return fmt.Sprintf("tp-%s-%d-%d-%d-%s-%s",ttk.engine,ttk.dbId,ttk.tableId,ttk.indexId,primas,sufs)
+	data3,err := ttk.decodeSuffix(data2)
+	if err != nil {
+		return nil, err
+	}
+	return data3,nil
 }
 
-func NewTpTableKey(e tpPrimaryKey,db,table,index tpPrimaryKey,prims []tpPrimaryKey,sufs []tpPrimaryKey) *tpTableKey{
-	return &tpTableKey{
-		engine:    e,
-		dbId:      db,
-		tableId:   table,
-		indexId:   index,
-		primaries: prims,
-		suffix:    sufs,
+func (ttk *tpTableKey) SetPrimarySchema(sch *tpSchema){
+	ttk.primarySchema = sch
+}
+
+func (ttk *tpTableKey) SetSuffixSchema(sch *tpSchema){
+	ttk.suffixSchema = sch
+}
+
+func (ttk *tpTableKey) isPrefixEqualTo(o *tpTableKey) bool {
+	if o == nil {
+		return false
 	}
+
+	return ttk.engine == ttk.engine &&
+		ttk.dbId == ttk.dbId &&
+		ttk.tableId == ttk.tableId &&
+		ttk.indexId == ttk.indexId
+}
+
+func (ttk *tpTableKey) String() string {
+	return fmt.Sprintf("%s-%d-%d-%d-[%v]-[%v]",
+		ttk.engine,ttk.dbId,ttk.tableId,ttk.indexId,
+		ttk.primaries,
+		ttk.suffix)
 }
 
 func NewTpEngine(eng string,kv dist.Storage,proc *process.Process)*tpEngine {
@@ -78,45 +193,9 @@ func NewTpEngine(eng string,kv dist.Storage,proc *process.Process)*tpEngine {
 		proc:        proc,
 		nextDbNo:    0, //TODO:fix persistence
 		nextTableNo: 0, //TODO:fix persistence
-		dbs: make(map[string]*tableDatabasesRow),
-		recyclingDb: make(map[string]*tableDatabasesRow),
+		dbs: make(map[string]*tpTupleImpl),
+		recyclingDb: make(map[string]*tpTupleImpl),
 	}
-}
-
-func string2bytes(s string)[]byte{
-	return []byte(s)
-}
-
-func bytes2string(bts []byte)string{
-	return string(bts)
-}
-
-/**
-check if x in a slice
-*/
-func isInSlice(x string,arr []string) bool {
-	for _,y := range arr{
-		if x == y {
-			return true
-		}
-	}
-	return false
-}
-
-//remove a string from array, return a new slice
-func removeFromSlice(x string,arr []string)[]string {
-	var i int
-	var y string
-	for i,y = range arr{
-		if x == y {
-			break
-		}
-	}
-
-	if i < len(arr) {
-		return append(arr[:i],arr[i+1:]...)
-	}
-	return arr
 }
 
 //database exists in the engine or not?
@@ -126,7 +205,7 @@ func (te *tpEngine)hasDatabase(name string) bool {
 }
 
 //save database
-func (te *tpEngine) saveDatabase(name string, meta *tableDatabasesRow) {
+func (te *tpEngine) saveDatabase(name string, meta *tpTupleImpl) {
 	te.dbs[name] = meta
 }
 
@@ -164,11 +243,13 @@ func (te *tpEngine) getNextTableNo() uint64 {
 //unsafe in multi-thread
 func (te *tpEngine) loadDatabaseList() error {
 	//if te.dbs == nil || len(te.dbs) == 0 {
-		prefix := NewTpTableKey(stringKey(tpEngineName),
-			uint64Key(0),uint64Key(TABLE_DATABASES_ID),uint64Key(0),
-			nil,nil)
-		prefix_key := prefix.encode(nil)
-		prefix_key = append(prefix_key,tpEngineSlash)
+		prefix := NewTpTableKey(tpEngineName,
+			tpEngineDatabase0Id, TABLE_DATABASES_ID, 0,
+			nil,
+			nil,
+			nil,
+			nil)
+		prefix_key := prefix.encodePrefix(nil)
 		value,err := te.kv.PrefixScan(prefix_key, math.MaxUint64)
 		if err != nil {
 			return err
@@ -178,9 +259,14 @@ func (te *tpEngine) loadDatabaseList() error {
 			k := value[i]
 			v := value[i+1]
 			if bytes.HasPrefix(k,prefix_key) {
-				db := string(k[len(prefix_key):])
+				_,keys,err := decodeKeys(k[len(prefix_key):],TABLE_DATABASES_PRIMARY_KEY_SCHEMA)
+				if err != nil {
+					return err
+				}
+				db := keys[0].(string)
+				fmt.Printf("+++> db: %v \n",db)
 				if !te.hasDatabase(db){
-					dbRow := &tableDatabasesRow{}
+					dbRow := &tpTupleImpl{}
 					_,err = dbRow.decode(v)
 					if err != nil {
 						return err
@@ -200,16 +286,19 @@ load database meta info, and save into the engine map.
  */
 //unsafe in multi-thread
 func (te *tpEngine) loadDatabase(db string) error {
-	db_skey := NewTpTableKey(stringKey(tpEngineName),
-		uint64Key(0),uint64Key(TABLE_DATABASES_ID),uint64Key(0),
-		[]tpPrimaryKey{stringKey(db)},nil)
+	db_skey := NewTpTableKey(tpEngineName,
+		tpEngineDatabase0Id, TABLE_DATABASES_ID, 0,
+		TABLE_DATABASES_PRIMARY_KEY_SCHEMA,
+		[]interface{}{db},
+		nil,
+		nil)
 	db_key := db_skey.encode(nil)
 	value,err := te.kv.Get(db_key)
 	if err != nil {
 		return err
 	}
 
-	dbRow := &tableDatabasesRow{}
+	dbRow := &tpTupleImpl{}
 	_,err = dbRow.decode(value)
 	if err!=nil {
 		return err
@@ -226,16 +315,41 @@ get all key-value pairs in a table
  */
 //unsafe in multi-thread
 func (te *tpEngine) getAllKvInTable(db,tab,idx uint64) error {
-	prefix := NewTpTableKey(stringKey(te.engName),uint64Key(db),uint64Key(tab),uint64Key(idx),nil,nil)
-	prefix_key := prefix.encode(nil)
+	prefix := NewTpTableKey(te.engName,
+		db, tab, idx,
+		nil,
+		nil,
+		nil,
+		nil)
+	prefix_key := prefix.encodePrefix(nil)
 	kvs,err := te.kv.PrefixScan(prefix_key,math.MaxUint64)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("===>db %v table %v idx %v\n",db,tab,idx)
+	var tbk *tpSchema = nil
+	switch tab {
+	case TABLE_DATABASES_ID:
+		tbk = mergeTpSchema(TP_ENGINE_PREFIX_KEY,TABLE_DATABASES_PRIMARY_KEY_SCHEMA)
+	case TABLE_TABLES_ID:
+		tbk = mergeTpSchema(TP_ENGINE_PREFIX_KEY,TABLE_TABLES_PRIMARY_KEY_SCHEMA)
+	case TABLE_INDEXES_ID:
+		tbk = mergeTpSchema(TP_ENGINE_PREFIX_KEY,TABLE_INDEXES_PRIMARY_KEY_SCHEMA)
+	case TABLE_META1_ID:
+		tbk = mergeTpSchema(TP_ENGINE_PREFIX_KEY,TABLE_META1_PRIMARY_KEY_SCHEMA)
+	case TABLE_META2_ID:
+		tbk = mergeTpSchema(TP_ENGINE_PREFIX_KEY,TABLE_META2_PRIMARY_KEY_SCHEMA)
+	case TABLE_VIEWS_ID:
+		tbk = mergeTpSchema(TP_ENGINE_PREFIX_KEY,TABLE_VIEWS_PRIMARY_KEY_SCHEMA)
+	default:
+		panic(fmt.Errorf("unsupported table key %v",tab))
+	}
 	row := &tpTupleImpl{}
 	for i:=0;i < len(kvs);i += 2 {
-		key := bytes2string(kvs[i])
+		_,key, err := decodeKeys(kvs[i],tbk)
+		if err != nil {
+			return err
+		}
 		_,err = row.decode(kvs[i+1])
 		if err!= nil {
 			fmt.Printf("===>%v %v \n",key,kvs[i+1])
@@ -255,9 +369,12 @@ func (te *tpEngine) setDefaultDatabase0Meta1(){
 
 //load table meta1 of the database 0
 func (te *tpEngine) loadDatabase0Meta1() error {
-	meta_skey := NewTpTableKey(stringKey(tpEngineName),
-		uint64Key(0),uint64Key(TABLE_META1_ID),uint64Key(0),
-		[]tpPrimaryKey{stringKey(TABLE_META1_PRIMARY_KEY)},nil)
+	meta_skey := NewTpTableKey(tpEngineName,
+		tpEngineDatabase0Id, TABLE_META1_ID, 0,
+		TABLE_META1_PRIMARY_KEY_SCHEMA,
+		[]interface{}{TABLE_META1_PRIMARY_KEY},
+		nil,
+		nil)
 	meta_key := meta_skey.encode(nil)
 	value,err := te.kv.Get(meta_key)
 	if err != nil {
@@ -268,26 +385,29 @@ func (te *tpEngine) loadDatabase0Meta1() error {
 		return fmt.Errorf("db0 meta1 does not have pk")
 	}
 
-	fmt.Printf("((( %v\n",value)
 	row := &tpTupleImpl{}
 	_,err = row.decode(value)
 	if err != nil{
 		return err
 	}
 
-	te.nextDbNo = row.fields[1].(uint64)
-	te.nextTableNo = row.fields[2].(uint64)
+	te.nextDbNo = row.fields[0].(uint64)
+	te.nextTableNo = row.fields[1].(uint64)
 
 	return nil
 }
 
 //store table meta1 of the database 0
 func (te *tpEngine) storeDatabase0Meta1() error {
-	meta_skey := NewTpTableKey(stringKey(tpEngineName),
-		uint64Key(0),uint64Key(TABLE_META1_ID),uint64Key(0),
-		[]tpPrimaryKey{stringKey(TABLE_META1_PRIMARY_KEY)},nil)
+	meta_skey := NewTpTableKey(tpEngineName,
+		tpEngineDatabase0Id, TABLE_META1_ID, 0,
+		TABLE_META1_PRIMARY_KEY_SCHEMA,
+		[]interface{}{TABLE_META1_PRIMARY_KEY},
+		nil,
+		nil)
 	meta_key := meta_skey.encode(nil)
-	metaRow := NewTpTupleImpl(TABLE_META1_PRIMARY_KEY,uint64(te.nextDbNo),uint64(te.nextTableNo))
+	metaRow := NewTpTupleImpl(TABLE_META1_REST_SCHEMA,
+		uint64(te.nextDbNo), uint64(te.nextTableNo))
 	meta_val := metaRow.encode(nil)
 	err := te.kv.Set(meta_key,meta_val)
 	if err != nil {
@@ -305,18 +425,22 @@ func (te *tpEngine)initDatabaseInternalHierarchy(dbname string, dbid uint64) err
 		step 1 :
 		Databases
 		------------------------
-		0          1        2
-		database   id       dbschema
+		0          1        2          3
+		database   id       createInfo schema
 		(primary)
 		------------------------
 		db0        0        "create database info"
 	*/
 
-	engDb0_skey := NewTpTableKey(stringKey(tpEngineName),
-		uint64Key(0),uint64Key(TABLE_DATABASES_ID),uint64Key(0),
-		[]tpPrimaryKey{stringKey(dbname)},nil)
+	engDb0_skey := NewTpTableKey(tpEngineName,
+		tpEngineDatabase0Id, TABLE_DATABASES_ID, uint64(0),
+		TABLE_DATABASES_PRIMARY_KEY_SCHEMA,
+		[]interface{}{dbname},
+		nil,
+		nil)
 	engDb0_key := engDb0_skey.encode(nil)
-	dbrow := NewTableDatabasesRow(dbname,dbid,"create database info")
+	dbrow := NewTpTupleImpl(TABLE_DATABASES_REST_SCHEMA,
+		dbid, "create database info","schema encode string")
 	engVal := dbrow.encode(nil)
 	err := te.kv.Set(engDb0_key,engVal)
 	if err != nil {
@@ -348,12 +472,17 @@ func (te *tpEngine)initDatabaseInternalHierarchy(dbname string, dbid uint64) err
 	}
 
 	for i,tn := range tableNames {
-		tab_skey := NewTpTableKey(stringKey(tpEngineName),
-			uint64Key(dbid),uint64Key(TABLE_TABLES_ID),uint64Key(0),
-			[]tpPrimaryKey{stringKey(tn)},nil)
+		tab_skey := NewTpTableKey(tpEngineName,
+			dbid, TABLE_TABLES_ID, uint64(0),
+			TABLE_TABLES_PRIMARY_KEY_SCHEMA,
+			[]interface{}{tn},
+			nil,
+			nil)
 		tab_key := tab_skey.encode(nil)
-		tabRow := NewTpTupleImpl(tn,uint64(i),"create table info")
+		tabRow := NewTpTupleImpl(TABLE_TABLES_REST_SCHEMA,
+			uint64(i), "create table info","schema encode info")
 		tab_value := tabRow.encode(nil)
+		fmt.Printf("///> %v %v \n",tab_skey,tabRow)
 		err = te.kv.Set(tab_key, tab_value)
 		if err != nil {
 			return err
@@ -377,11 +506,15 @@ func (te *tpEngine)initDatabaseInternalHierarchy(dbname string, dbid uint64) err
 			4          primary     0       "create index info"
 
 		*/
-		idx_skey := NewTpTableKey(stringKey(tpEngineName),
-			uint64Key(dbid),uint64Key(TABLE_INDEXES_ID),uint64Key(0),
-			[]tpPrimaryKey{uint64Key(i),stringKey(TABLE_INDEXES_PRIMARY_KEY_PART2)},nil)
+		idx_skey := NewTpTableKey(tpEngineName,
+			dbid, TABLE_INDEXES_ID, uint64(0),
+			TABLE_INDEXES_PRIMARY_KEY_SCHEMA,
+			[]interface{}{uint64(i), TABLE_INDEXES_PRIMARY_KEY_PART2},
+			nil,
+			nil)
 		idx_key := idx_skey.encode(nil)
-		idxRow := NewTpTupleImpl(uint64(i),TABLE_INDEXES_PRIMARY_KEY_PART2,uint64(0),"create index info")
+		idxRow := NewTpTupleImpl(TABLE_INDEXES_REST_SCHEMA,
+			uint64(0), "create index info","schema encode string")
 		idx_val := idxRow.encode(nil)
 		err = te.kv.Set(idx_key,idx_val)
 		if err != nil {
@@ -402,11 +535,15 @@ func (te *tpEngine)initDatabaseInternalHierarchy(dbname string, dbid uint64) err
 			    3                1
 			    4                1
 		*/
-		meta2_skey := NewTpTableKey(stringKey(tpEngineName),
-			uint64Key(dbid),uint64Key(TABLE_META2_ID),uint64Key(0),
-			[]tpPrimaryKey{uint64Key(i)},nil)
+		meta2_skey := NewTpTableKey(tpEngineName,
+			dbid, TABLE_META2_ID, uint64(0),
+			TABLE_META2_PRIMARY_KEY_SCHEMA,
+			[]interface{}{uint64(i)},
+			nil,
+			nil)
 		meta2_key := meta2_skey.encode(nil)
-		meta2Row := NewTpTupleImpl(uint64(i),uint64(1))
+		meta2Row := NewTpTupleImpl(TABLE_META2_REST_SCHEMA,
+			uint64(1))
 		meta2_val := meta2Row.encode(nil)
 		err = te.kv.Set(meta2_key,meta2_val)
 		if err != nil {
@@ -423,13 +560,16 @@ func (te *tpEngine)initDatabaseInternalHierarchy(dbname string, dbid uint64) err
 		------------------------------------------
 		pk                 1                LAST_TABLE_ID + 1
 	*/
-	meta_skey := NewTpTableKey(stringKey(tpEngineName),
-		uint64Key(dbid),uint64Key(TABLE_META1_ID),uint64Key(0),
-		[]tpPrimaryKey{stringKey(TABLE_META1_PRIMARY_KEY)},nil)
+	meta_skey := NewTpTableKey(tpEngineName,
+		dbid, TABLE_META1_ID, uint64(0),
+		TABLE_META1_PRIMARY_KEY_SCHEMA,
+		[]interface{}{TABLE_META1_PRIMARY_KEY},
+		nil,
+		nil)
 	meta_key := meta_skey.encode(nil)
-	metaRow := NewTpTupleImpl(TABLE_META1_PRIMARY_KEY,uint64(1),uint64(LAST_TABLE_ID+1))
+	metaRow := NewTpTupleImpl(TABLE_META1_REST_SCHEMA,
+		uint64(1), uint64(LAST_TABLE_ID+1))
 	meta_s_value := metaRow.encode(nil)
-	//fmt.Printf("[[[ %v\n",meta_s_value)
 	err = te.kv.Set(meta_key,meta_s_value)
 	if err != nil {
 		return err
@@ -446,8 +586,37 @@ func (te *tpEngine)initDatabaseInternalHierarchy(dbname string, dbid uint64) err
 	return nil
 }
 
+/**
+init the engine with database0 for internal usage.
+create the database 0 if not exsits
+ */
+func (te *tpEngine) Init() error {
+	//TODO:add transaction protection
+	te.rwlock.Lock()
+	defer te.rwlock.Unlock()
+
+	//step 1: get database list in the engine
+	err := te.loadDatabaseList()
+	if err != nil {
+		return err
+	}
+
+	//step 2: check if the db has existed
+	if te.hasDatabase(tpEngineDatabase0){
+		return nil
+	}
+
+	//step 3: create database0
+	//step 4: put the db in the engine with a new id
+	err = te.initDatabaseInternalHierarchy(tpEngineDatabase0,tpEngineDatabase0Id)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 //Create database
-func (te *tpEngine) Create(db string, et int) error {
+func (te *tpEngine) Create(db string,tp int) error {
 	//TODO:add transaction protection
 	te.rwlock.Lock()
 	defer te.rwlock.Unlock()
@@ -507,11 +676,13 @@ func (te *tpEngine) Delete(db string) error {
 	}
 
 	//step 3: remove the db from the engine
-	db_skey := NewTpTableKey(stringKey(te.engName),
-		uint64Key(0),uint64Key(TABLE_DATABASES_ID),uint64Key(0),
-		[]tpPrimaryKey{stringKey(db)},nil)
+	db_skey := NewTpTableKey(te.engName,
+		tpEngineDatabase0Id, TABLE_DATABASES_ID, 0,
+		TABLE_DATABASES_PRIMARY_KEY_SCHEMA,
+		[]interface{}{db},
+		nil,
+		nil)
 	db_key := db_skey.encode(nil)
-
 	err = te.kv.Delete(db_key)
 	if err != nil {
 		return err

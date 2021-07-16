@@ -216,7 +216,7 @@ func Test_decodeValue(t *testing.T) {
 	}
 
 	for _,s := range cases{
-		enc := encodeValue(nil,s)
+		enc := encodeValues(nil,s)
 		_,d,err := decodeValue(enc)
 		if err != nil {
 			t.Error(err)
@@ -293,5 +293,107 @@ func Test_encodeInt64Key(t *testing.T) {
 		e1 := encodeInt64Key(nil,c[0])
 		e2 := encodeInt64Key(nil,c[1])
 		assert.True(t, f1(c[0],c[1],e1,e2))
+	}
+}
+
+func Test_decodeStringKey(t *testing.T) {
+	type args struct {
+		data []byte
+	}
+
+	t1_want := "abc"
+	t1 := encodeStringKey(nil,t1_want)
+
+	t2_want := "abcdef"
+	t2 := encodeStringKey(nil,t2_want)
+
+	t3_want := "abcdefxswddddddffffffffffggggggggg\a0000g"
+	t3 := encodeStringKey(nil,t3_want)
+
+	tests := []struct {
+		name    string
+		args    args
+		want   string
+		wantErr bool
+	}{
+		{"t1",args{t1},t1_want,false},
+		{"t2",args{t2},t2_want,false},
+		{"t3",args{t3},t3_want,false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got1, err := decodeStringKey(tt.args.data)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("decodeStringKey() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if got1 != tt.want {
+				t.Errorf("decodeStringKey() got1 = %v, want %v", got1, tt.want)
+			}
+		})
+	}
+}
+
+func Test_decodeKey(t *testing.T) {
+	type args struct {
+		data    []byte
+		keyType byte
+	}
+	t1 := "abc"
+	t2 := uint64(0x768)
+
+
+	tests := []struct {
+		name    string
+		args    args
+		want1   interface{}
+		wantErr bool
+	}{
+		{"t1",args{encodeKeyWithType(nil,t1,TP_ENCODE_TYPE_STRING),TP_ENCODE_TYPE_STRING},t1,false},
+		{"t2",args{encodeKeyWithType(nil,t2,TP_ENCODE_TYPE_UINT64),TP_ENCODE_TYPE_UINT64},t2,false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got1, err := decodeKey(tt.args.data, tt.args.keyType)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("decodeKey() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got1, tt.want1) {
+				t.Errorf("decodeKey() got1 = %v, want %v", got1, tt.want1)
+			}
+		})
+	}
+}
+
+func Test_decodeKeys(t *testing.T) {
+	type args struct {
+		data     []byte
+		keyTypes *tpSchema
+	}
+
+	t1 := []interface{}{"abc",uint64(0x789),"def",uint64(0x906)}
+	t1_sch := NewTpSchema(TP_ENCODE_TYPE_STRING,TP_ENCODE_TYPE_UINT64,TP_ENCODE_TYPE_STRING,TP_ENCODE_TYPE_UINT64)
+
+	tests := []struct {
+		name    string
+		args    args
+		want   []interface{}
+		wantErr bool
+	}{
+		{"t1",args{encodeKeysWithSchema(nil,t1_sch,t1...),t1_sch},t1,false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, got1, err := decodeKeys(tt.args.data, tt.args.keyTypes)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("decodeKeys() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got1, tt.want) {
+				t.Errorf("decodeKeys() got1 = %v, want %v", got1, tt.want)
+			}
+		})
 	}
 }

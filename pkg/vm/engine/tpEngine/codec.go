@@ -1,6 +1,7 @@
 package tpEngine
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -113,27 +114,82 @@ func isValidStringKey(s string) bool{
 	return !strings.ContainsAny(s,string([]byte{tpEngineSlash,tpEngineConcat}))
 }
 
-type stringKey string
-
-func (sk stringKey) encode(data []byte) []byte {
-	data = append(data,string2bytes(string(sk))...)
+/**
+encode keys
+ */
+func encodeKeys(data []byte,keys ...interface{})[]byte{
+	for _,k := range keys {
+		data = encodeKey(data,k)
+	}
 	return data
 }
 
-func (sk stringKey) String() string {
-	return fmt.Sprintf("%s",string(sk))
-}
-
-type uint64Key uint64
-
-func (uk uint64Key) encode(data []byte) []byte {
-	//elementary method
-	data = append(data,fmt.Sprintf("%d",uk)...)
+func encodeKeysWithSchema(data []byte,sch* tpSchema,keys ...interface{})[]byte{
+	if len(keys) != sch.ColumnCount() {
+		panic("miss fields or schemas")
+	}
+	for i,k := range keys {
+		data = encodeKeyWithType(data,k,sch.ColumnType(i))
+	}
 	return data
 }
 
-func (uk uint64Key) String() string {
-	return fmt.Sprintf("%v",uint64(uk))
+/**
+encode key
+ */
+func encodeKey(data []byte,key interface{})[]byte{
+	switch k := key.(type) {
+	case string:
+		data = encodeStringKey(data,k)
+	case uint64:
+		data = encodeUint64Key(data,k)
+	default:
+		panic(fmt.Errorf("unsupported key %v",key))
+	}
+	return data
+}
+
+func encodeKeyWithType(data []byte,key interface{},keyType byte)[]byte{
+	switch keyType {
+	case TP_ENCODE_TYPE_STRING:
+		data = encodeStringKey(data,key.(string))
+	case TP_ENCODE_TYPE_UINT64:
+		data = encodeUint64Key(data,key.(uint64))
+	default:
+		panic(fmt.Errorf("unsupported key %v",key))
+	}
+	return data
+}
+
+/**
+decode keys with types
+ */
+func decodeKeys(data []byte, sch *tpSchema) ([]byte, []interface{}, error) {
+	var vals []interface{}
+	for i := 0 ; i < sch.ColumnCount() ; i++{
+		nd,v,err := decodeKey(data,sch.ColumnType(i))
+		if err != nil {
+			return nil, nil, err
+		}
+		data = nd
+		vals = append(vals,v)
+	}
+	return data,vals,nil
+}
+
+/**
+decode key with type
+ */
+func decodeKey(data []byte,keyType byte)([]byte,interface{},error){
+	switch keyType {
+	case TP_ENCODE_TYPE_STRING:
+		return decodeStringKey(data)
+	case TP_ENCODE_TYPE_UINT64:
+		return decodeUint64(data)
+	default:
+		panic(fmt.Errorf("unsupported key type %v",keyType))
+	}
+	return nil,nil,nil
 }
 
 /**
@@ -141,7 +197,66 @@ string a , b
 if a < b, then encode(a) < encode(b) in bytes
 */
 func encodeStringKey(data []byte,s string) []byte{
-	return append(data, string2bytes(s)...)
+	return encodeStringKeyLimited(data,s,tpEngineMaxLengthOfStringFieldInSystemTable)
+}
+
+/**
+decode string key
+ */
+func decodeStringKey(data []byte) ([]byte, string, error) {
+	if len(data) < tpEngineMaxLengthOfStringFieldInSystemTable {
+		return nil, "", fmt.Errorf("missing bytes")
+	}
+
+	padIdx := bytes.IndexByte(data,0)
+	var s string
+	if padIdx == -1 {
+		s = bytes2string(data[:tpEngineMaxLengthOfStringFieldInSystemTable])
+	} else{
+		s = bytes2string(data[:padIdx])
+	}
+
+	return data[tpEngineMaxLengthOfStringFieldInSystemTable:],s,nil
+}
+
+/**
+string a , b
+if a < b, then encode(a) < encode(b) in bytes
+
+if len(s) < length:
+	pad with 0;
+	encode s;
+else if len(s) == length:
+	encode s;
+else:
+	encode the prefix of s with length's bytes
+*/
+func encodeStringKeyLimited(data []byte, s string, length int) []byte {
+	l := len(s)
+	if l < length {
+		data = append(data,string2bytes(s)...)
+		pads := make([]byte,length - l)
+		for i:= 0; i < len(pads);i++{
+			pads[i] = 0
+		}
+		return append(data,pads...)
+	}else if l == length {
+		return append(data, string2bytes(s)...)
+	}else{
+		panic("the string key is too much long")
+		return append(data, string2bytes(s[:length])...)
+	}
+}
+
+/*
+decode string key with limited length
+ */
+func decodeStringKeyLimited(data []byte, length int) ([]byte, string, error) {
+	if len(data) < length {
+		return nil, "", fmt.Errorf("missing bytes")
+	}
+	s := bytes2string(data[:length])
+	return data[length:],s,nil
 }
 
 /**
@@ -152,14 +267,14 @@ func encodeUint64Key(data []byte,u uint64) []byte {
 	return encodeUint64(data,u)
 }
 
-const sign uint64 = (1 << 63)
+const sign64 uint64 = (1 << 63)
 
 /**
 int64 a , b
 if a < b, then encode(a) < encode(b) in bytes
 */
 func encodeInt64Key(data []byte,i int64) []byte {
-	return encodeUint64(data,uint64(i) ^ sign)
+	return encodeUint64(data,uint64(i) ^sign64)
 }
 
 //=======================================
@@ -167,42 +282,9 @@ func encodeInt64Key(data []byte,i int64) []byte {
 //=======================================
 
 /**
-value type
-*/
-type stringValue string
-
-func (sv stringValue) encodeValue(data []byte) []byte {
-	data = append(data,TP_ENCODE_TYPE_STRING)
-	return append(data,string2bytes(string(sv))...)
-}
-
-func (sv stringValue) String() string {
-	return string(sv)
-}
-
-type uint64Value uint64
-
-func (uv uint64Value) encodeValue(data []byte) []byte {
-	v := uint64(uv)
-	var tmp []byte = make([]byte,8)
-	binary.BigEndian.PutUint64(tmp,v)
-	//encode tage
-	data = append(data,TP_ENCODE_TYPE_UINT64)
-	return append(data,tmp...)
-}
-
-func (uv uint64Value) decodeValue(data []byte) {
-
-}
-
-func (uv uint64Value) String()string{
-	return ""
-}
-
-/**
 encode Value into bytes
 */
-func encodeValue(data []byte,args ...interface{})[]byte{
+func encodeValues(data []byte,args ...interface{})[]byte{
 	for _,arg := range args{
 		switch a := arg.(type) {
 		case uint64:
@@ -212,7 +294,30 @@ func encodeValue(data []byte,args ...interface{})[]byte{
 			data = append(data,TP_ENCODE_TYPE_STRING)
 			data = encodeString(data,a)
 		default:
-			panic(fmt.Errorf("unsupported value %v",a))
+			panic(fmt.Errorf("unsupported value %v",arg))
+		}
+	}
+	return data
+}
+
+/**
+encode Value into bytes with schema
+*/
+func encodeValuesWithSchema(sch *tpSchema,data []byte,args ...interface{})[]byte{
+	for i := 0; i < sch.ColumnCount(); i += 1{
+		if !sch.IsUsedInEncoding(i) {
+			continue
+		}
+		t := sch.ColumnType(i)
+		switch t {
+		case TP_ENCODE_TYPE_UINT64:
+			data = append(data,TP_ENCODE_TYPE_UINT64)
+			data = encodeUint64(data,args[i].(uint64))
+		case TP_ENCODE_TYPE_STRING:
+			data = append(data,TP_ENCODE_TYPE_STRING)
+			data = encodeString(data,args[i].(string))
+		default:
+			panic(fmt.Errorf("unsupported column type %v",t))
 		}
 	}
 	return data
@@ -302,9 +407,16 @@ func decodeUint64(data []byte)([]byte,uint64,error){
 	return data[8:],binary.BigEndian.Uint64(data),nil
 }
 
+/**
+tuple encode/decode
+ */
 
 func (tti *tpTupleImpl) encode(data []byte)[]byte{
-	return encodeValue(data,tti.fields...)
+	if tti.schema == nil {
+		return encodeValues(data,tti.fields...)
+	}else{
+		return encodeValuesWithSchema(tti.schema,data,tti.fields...)
+	}
 }
 
 //without column types ?
@@ -339,26 +451,4 @@ func (tdr *tableDatabasesRow) decode(data []byte) ([]byte,error) {
 
 func (tdr *tableDatabasesRow) String() string {
 	return fmt.Sprintf("[%v %v %v] ",tdr.fields[0],tdr.fields[1],tdr.fields[2])
-}
-
-func (ttr *tableTablesRow) encode(data []byte) []byte  {
-	//field count 3
-	return encodeValue(data,ttr.tabname,ttr.tabid,ttr.tabschema)
-}
-
-func (ttr *tableTablesRow) decode(data []byte) ([]byte,error){
-	//field count 3
-	nd,vals,err := decodeCountOfValues(data,3)
-	if err != nil {
-		return data,nil
-	}
-
-	ttr.tabname = vals[0].(string)
-	ttr.tabid = vals[1].(uint64)
-	ttr.tabschema = vals[2].(string)
-	return nd,nil
-}
-
-func (ttr *tableTablesRow) String() string {
-	return fmt.Sprintf("[%v %v %v] ",ttr.tabname,ttr.tabid,ttr.tabschema)
 }
