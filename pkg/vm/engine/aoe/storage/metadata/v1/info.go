@@ -46,6 +46,8 @@ func (info *MetaInfo) SoftDeleteTable(name string) (id uint64, err error) {
 	info.Tombstone[id] = true
 	table := info.Tables[id]
 	table.Delete(ts)
+	atomic.AddUint64(&info.CheckPoint, uint64(1))
+	table.UpdateVersion()
 	return id, nil
 }
 
@@ -242,6 +244,25 @@ func (info *MetaInfo) GetResourceType() ResourceType {
 	return ResInfo
 }
 
+func (info *MetaInfo) Unmarshal(buf []byte) error {
+	type Alias MetaInfo
+	v := &struct {
+		*Alias
+		Tables map[uint64]GenericTableWrapper
+	}{
+		Alias: (*Alias)(info),
+	}
+	err := json.Unmarshal(buf, v)
+	if err != nil {
+		return err
+	}
+	info.Tables = make(map[uint64]*Table)
+	for _, wrapped := range v.Tables {
+		info.Tables[wrapped.ID] = &Table{ID: wrapped.ID, TimeStamp: wrapped.TimeStamp}
+	}
+	return nil
+}
+
 func (info *MetaInfo) MarshalJSON() ([]byte, error) {
 	tables := make(map[uint64]GenericTableWrapper)
 	for _, tbl := range info.Tables {
@@ -253,12 +274,16 @@ func (info *MetaInfo) MarshalJSON() ([]byte, error) {
 	type Alias MetaInfo
 	return json.Marshal(&struct {
 		Tables map[uint64]GenericTableWrapper
-		Name   string
 		*Alias
 	}{
 		Tables: tables,
 		Alias:  (*Alias)(info),
 	})
+}
+
+func (info *MetaInfo) ReadFrom(r io.Reader) error {
+	err := dump.NewDecoder(r).Decode(info)
+	return err
 }
 
 func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
@@ -281,6 +306,15 @@ func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 func (info *MetaInfo) Serialize(w io.Writer) error {
 	return dump.NewEncoder(w).Encode(info)
 }
+
+// func DD(r io.Reader) (info *MetaInfo, err error) {
+// 	info = NewMetaInfo(nil)
+// 	err = dump.NewDecoder(r).Decode(info)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	ts := NowMicro()
+// }
 
 func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 	info = NewMetaInfo(nil)

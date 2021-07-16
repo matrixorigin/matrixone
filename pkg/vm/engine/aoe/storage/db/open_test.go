@@ -29,7 +29,9 @@ func TestLoadMetaInfo(t *testing.T) {
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
-	info := loadMetaInfo(cfg)
+	handle := NewReplayHandle(cfg.Dir)
+	info := handle.RebuildInfo(cfg)
+	// info := loadMetaInfo(cfg)
 	assert.Equal(t, uint64(0), info.CheckPoint)
 	assert.Equal(t, uint64(0), info.Sequence.NextBlockID)
 	assert.Equal(t, uint64(0), info.Sequence.NextSegmentID)
@@ -44,12 +46,18 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
 
+	filename := e.MakeFilename(cfg.Dir, e.FTTableCkp, tbl.GetFileName(), false)
+	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	assert.Nil(t, err)
+	defer w.Close()
+	err = tbl.Serialize(w)
+	assert.Nil(t, err)
+
 	info.CheckPoint++
 
-	// filename := e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
-	filename := e.MakeFilename(cfg.Dir, e.FTInfoCkp, info.GetFileName(), false)
+	filename = e.MakeFilename(cfg.Dir, e.FTInfoCkp, info.GetFileName(), false)
 
-	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
 	err = info.Serialize(w)
 	assert.Nil(t, err)
@@ -60,10 +68,17 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Equal(t, uint64(2), info.Sequence.NextTableID)
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
+
+	filename = e.MakeFilename(cfg.Dir, e.FTTableCkp, tbl.GetFileName(), false)
+	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	assert.Nil(t, err)
+	defer w.Close()
+	err = tbl.Serialize(w)
+	assert.Nil(t, err)
+
 	info.CheckPoint++
 
 	filename = e.MakeFilename(cfg.Dir, e.FTInfoCkp, info.GetFileName(), false)
-	// filename = e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
 	w.Close()
 
 	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
@@ -72,11 +87,21 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.Serialize(w)
 	assert.Nil(t, err)
 
-	info2 := loadMetaInfo(cfg)
+	handle2 := NewReplayHandle(cfg.Dir)
+	info2 := handle2.RebuildInfo(cfg)
 	assert.NotNil(t, info2)
 	assert.Equal(t, info.CheckPoint, info2.CheckPoint)
 	assert.Equal(t, info.Sequence.NextTableID, info2.Sequence.NextTableID)
-	assert.Equal(t, info.Tables, info2.Tables)
+	assert.Equal(t, len(info.Tables), len(info2.Tables))
+	for id, sTbl := range info.Tables {
+		tTbl := info2.Tables[id]
+		assert.Equal(t, sTbl.ID, tTbl.ID)
+		assert.Equal(t, sTbl.CheckPoint, tTbl.CheckPoint)
+		assert.Equal(t, sTbl.TimeStamp, tTbl.TimeStamp)
+		assert.Equal(t, sTbl.Schema, tTbl.Schema)
+	}
+	t.Log(info.String())
+	t.Log(info2.String())
 }
 
 func TestCleanStaleMeta(t *testing.T) {
@@ -102,7 +127,7 @@ func TestCleanStaleMeta(t *testing.T) {
 		f.Close()
 
 		f1 := func() {
-			cleanStaleMeta(cfg.Dir)
+			NewReplayHandle(cfg.Dir)
 		}
 		assert.Panics(t, f1)
 		err = os.Remove(fname)
@@ -123,11 +148,9 @@ func TestCleanStaleMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, len(valids), len(files))
 
-	cleanStaleMeta(cfg.Dir)
-
-	files, err = ioutil.ReadDir(dir)
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(files))
+	// files, err = ioutil.ReadDir(dir)
+	// assert.Nil(t, err)
+	// assert.Equal(t, 1, len(files))
 
 	// fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, "100", false)
 	fname := e.MakeFilename(cfg.Dir, e.FTInfoCkp, "100", false)

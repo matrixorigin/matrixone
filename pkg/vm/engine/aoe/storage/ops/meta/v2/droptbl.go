@@ -3,6 +3,7 @@ package meta
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	// mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	// log "github.com/sirupsen/logrus"
 )
@@ -27,6 +28,16 @@ func (op *DropTblOp) Execute() error {
 		return err
 	}
 	op.Id = id
+	{
+		ctx := md.CopyCtx{Ts: md.NowMicro() + 1, Attached: true}
+		info := op.Ctx.Opts.Meta.Info.Copy(ctx)
+		opCtx := OpCtx{Opts: op.Ctx.Opts}
+		flushOp := NewFlushInfoOp(&opCtx, info)
+		flushOp.Push()
+		go func() {
+			flushOp.WaitDone()
+		}()
+	}
 	return err
 	// TODO: gc the data should be in async way, will change it later
 	// ctx := new(mmop.OpCtx)

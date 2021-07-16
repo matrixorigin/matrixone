@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"unsafe"
 
@@ -12,8 +14,27 @@ import (
 )
 
 var (
-	GloablSeqNum uint64 = 0
+	GloablSeqNum         uint64 = 0
+	ErrParseTableCkpFile        = errors.New("parse table file name error")
 )
+
+func MakeTableCkpFile(tid, version uint64) string {
+	return fmt.Sprintf("%d_v%d", tid, version)
+}
+
+func ParseTableCkpFile(name string) (tid, version uint64, err error) {
+	strs := strings.Split(name, "_v")
+	if len(strs) != 2 {
+		return tid, version, ErrParseTableCkpFile
+	}
+	if tid, err = strconv.ParseUint(strs[0], 10, 64); err != nil {
+		return tid, version, err
+	}
+	if version, err = strconv.ParseUint(strs[1], 10, 64); err != nil {
+		return tid, version, err
+	}
+	return tid, version, err
+}
 
 func NextGloablSeqnum() uint64 {
 	return atomic.AddUint64(&GloablSeqNum, uint64(1))
@@ -51,6 +72,11 @@ func (tbl *Table) Marshal() ([]byte, error) {
 
 func (tbl *Table) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, tbl)
+}
+
+func (tbl *Table) ReadFrom(r io.Reader) error {
+	err := json.NewDecoder(r).Decode(tbl)
+	return err
 }
 
 func (tbl *Table) GetID() uint64 {
@@ -329,6 +355,63 @@ func (tbl *Table) Copy(ctx CopyCtx) *Table {
 	new_tbl.SegmentCnt = uint64(len(new_tbl.Segments))
 
 	return new_tbl
+}
+
+func (tbl *Table) Replay() {
+	ts := NowMicro()
+	if len(tbl.Schema.Indexes) > 0 {
+		if tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID > tbl.Info.Sequence.NextIndexID {
+			tbl.Info.Sequence.NextIndexID = tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID
+		}
+	}
+	max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()
+	if tbl.ID > tbl.Info.Sequence.NextTableID {
+		tbl.Info.Sequence.NextTableID = tbl.ID
+	}
+	if max_tbl_segid > tbl.Info.Sequence.NextSegmentID {
+		tbl.Info.Sequence.NextSegmentID = max_tbl_segid
+	}
+	if max_tbl_blkid > tbl.Info.Sequence.NextBlockID {
+		tbl.Info.Sequence.NextBlockID = max_tbl_blkid
+	}
+	if tbl.IsDeleted(ts) {
+		tbl.Info.Tombstone[tbl.ID] = true
+	} else {
+		tbl.Info.TableIds[tbl.ID] = true
+		tbl.Info.NameMap[tbl.Schema.Name] = tbl.ID
+	}
+	tbl.IdMap = make(map[uint64]int)
+	segFound := false
+	for idx, seg := range tbl.Segments {
+		tbl.IdMap[seg.GetID()] = idx
+		seg.Table = tbl
+		blkFound := false
+		for iblk, blk := range seg.Blocks {
+			if !blkFound {
+				if blk.DataState < FULL {
+					blkFound = true
+					seg.ActiveBlk = iblk
+				} else {
+					seg.ActiveBlk++
+				}
+			}
+			blk.Segment = seg
+		}
+		if !segFound {
+			if seg.DataState < FULL {
+				segFound = true
+				tbl.ActiveSegment = idx
+			} else if seg.DataState == FULL {
+				blk := seg.GetActiveBlk()
+				if blk != nil {
+					tbl.ActiveSegment = idx
+					segFound = true
+				}
+			} else {
+				tbl.ActiveSegment++
+			}
+		}
+	}
 }
 
 func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {

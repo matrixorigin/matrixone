@@ -180,4 +180,10 @@ func TestCreateDropTable(t *testing.T) {
 	infoBytes, err := json.Marshal(info)
 	assert.Nil(t, err)
 	t.Log(string(infoBytes))
+
+	newInfo := new(MetaInfo)
+	err = newInfo.Unmarshal(infoBytes)
+	assert.Nil(t, err)
+	assert.Equal(t, newInfo.Tables[tid].ID, tid)
+	assert.Equal(t, newInfo.Tables[tid].TimeStamp, rTbl3.TimeStamp)
 }

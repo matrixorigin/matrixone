@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
@@ -22,7 +21,6 @@ import (
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"os"
-	"path"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -60,56 +58,6 @@ type DB struct {
 	ClosedC chan struct{}
 
 	sync.RWMutex
-}
-
-func cleanStaleMeta(dirname string) {
-	dir := e.MakeMetaDir(dirname)
-	files, err := ioutil.ReadDir(dir)
-	if err != nil {
-		panic(err)
-	}
-	if len(files) == 0 {
-		return
-	}
-
-	maxVersion := -1
-	maxIdx := -1
-
-	filenames := make(map[int]string)
-
-	for idx, file := range files {
-		if e.IsTempFile(file.Name()) {
-			log.Infof("Removing %s", path.Join(dir, file.Name()))
-			err = os.Remove(path.Join(dir, file.Name()))
-			if err != nil {
-				panic(err)
-			}
-		}
-		version, ok := e.ParseMetaFileName(file.Name())
-		if !ok {
-			continue
-		}
-		if version > maxVersion {
-			maxVersion = version
-			maxIdx = idx
-		}
-		filenames[idx] = file.Name()
-	}
-
-	if maxIdx == -1 {
-		return
-	}
-
-	for idx, filename := range filenames {
-		if idx == maxIdx {
-			continue
-		}
-		log.Infof("Removing %s", path.Join(dir, filename))
-		err = os.Remove(path.Join(dir, filename))
-		if err != nil {
-			panic(err)
-		}
-	}
 }
 
 func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err error) {

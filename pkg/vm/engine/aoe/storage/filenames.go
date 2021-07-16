@@ -32,17 +32,24 @@ func MakeMetaDir(dirname string) string {
 	return path.Join(dirname, "meta")
 }
 
-func ParseMetaFileName(filename string) (version int, ok bool) {
-	ok = true
+func ParseInfoMetaName(filename string) (version int, ok bool) {
 	name := strings.TrimSuffix(filename, ".ckp")
 	if len(name) == len(filename) {
-		panic(fmt.Sprintf("invalid file name %s", filename))
+		return version, false
 	}
 	version, err := strconv.Atoi(name)
 	if err != nil {
 		panic(err)
 	}
-	return version, ok
+	return version, true
+}
+
+func ParseTableMetaName(filename string) (name string, ok bool) {
+	name = strings.TrimSuffix(filename, ".tckp")
+	if len(name) == len(filename) {
+		return name, false
+	}
+	return name, true
 }
 
 func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
