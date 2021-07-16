@@ -309,7 +309,7 @@ func (d *DB) replayAndCleanData() {
 	for _, tbl := range d.Store.MetaInfo.Tables {
 		for _, seg := range tbl.Segments {
 			id := common.ID{
-				TableID:   seg.TableID,
+				TableID:   seg.Table.ID,
 				SegmentID: seg.ID,
 			}
 			if seg.DataState == md.SORTED {

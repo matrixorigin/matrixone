@@ -16,7 +16,7 @@ func NewBlock(id uint64, segment *Segment) *Block {
 	blk := &Block{
 		ID:          id,
 		TimeStamp:   *NewTimeStamp(),
-		MaxRowCount: segment.Info.Conf.BlockMaxRows,
+		MaxRowCount: segment.Table.Conf.BlockMaxRows,
 		Segment:     segment,
 	}
 	return blk
@@ -53,7 +53,7 @@ func (blk *Block) GetCount() uint64 {
 
 func (blk *Block) AddCount(n uint64) uint64 {
 	newCnt := atomic.AddUint64(&blk.Count, n)
-	if newCnt > blk.Segment.Info.Conf.BlockMaxRows {
+	if newCnt > blk.Segment.Table.Conf.BlockMaxRows {
 		panic("logic error")
 	}
 	return newCnt
@@ -77,7 +77,7 @@ func (blk *Block) SetIndex(idx LogIndex) {
 }
 
 func (blk *Block) String() string {
-	s := fmt.Sprintf("Blk(%d-%d-%d)(%d)", blk.Segment.TableID, blk.Segment.ID, blk.ID, blk.BoundSate)
+	s := fmt.Sprintf("Blk(%d-%d-%d)(%d)", blk.Segment.Table.ID, blk.Segment.ID, blk.ID, blk.BoundSate)
 	if blk.IsDeleted(NowMicro()) {
 		s += "[D]"
 	}
@@ -114,7 +114,7 @@ func (blk *Block) SetCount(count uint64) error {
 func (blk *Block) Update(target *Block) error {
 	blk.Lock()
 	defer blk.Unlock()
-	if blk.ID != target.ID || blk.Segment.ID != target.Segment.ID || blk.Segment.TableID != target.Segment.TableID {
+	if blk.ID != target.ID || blk.Segment.ID != target.Segment.ID || blk.Segment.Table.ID != target.Segment.Table.ID {
 		return errors.New("block, segment, table id not matched")
 	}
 
@@ -136,7 +136,7 @@ func (blk *Block) Update(target *Block) error {
 
 func (blk *Block) AsCommonID() *common.ID {
 	return &common.ID{
-		TableID:   blk.Segment.TableID,
+		TableID:   blk.Segment.Table.ID,
 		SegmentID: blk.Segment.ID,
 		BlockID:   blk.ID,
 	}

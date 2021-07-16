@@ -288,8 +288,7 @@ func Deserialize(r io.Reader) (info *MetaInfo, err error) {
 		segFound := false
 		for idx, seg := range tbl.Segments {
 			tbl.IdMap[seg.GetID()] = idx
-			seg.Info = info
-			seg.Schema = tbl.Schema
+			seg.Table = tbl
 			blkFound := false
 			for iblk, blk := range seg.Blocks {
 				if !blkFound {

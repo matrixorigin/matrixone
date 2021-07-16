@@ -45,7 +45,7 @@ func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IB
 
 	for idx, colIdx := range mt.Batch.GetAttrs() {
 		vec := mt.Batch.GetVectorByAttr(colIdx)
-		vec.PlacementNew(mt.Meta.Segment.Schema.ColDefs[idx].Type, mt.Meta.Segment.Info.Conf.BlockMaxRows)
+		vec.PlacementNew(mt.Meta.Segment.Table.Schema.ColDefs[idx].Type, mt.Meta.Segment.Table.Conf.BlockMaxRows)
 	}
 
 	mt.OnZeroCB = mt.close

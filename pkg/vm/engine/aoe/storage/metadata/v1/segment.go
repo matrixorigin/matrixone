@@ -11,27 +11,25 @@ const (
 	SEGMENT_BLOCK_COUNT = 4
 )
 
-func NewSegment(info *MetaInfo, table_id, id uint64, schema *Schema) *Segment {
+func NewSegment(table *Table, id uint64) *Segment {
 	seg := &Segment{
 		ID:            id,
-		TableID:       table_id,
+		Table:         table,
 		Blocks:        make([]*Block, 0),
 		IdMap:         make(map[uint64]int),
 		TimeStamp:     *NewTimeStamp(),
-		MaxBlockCount: info.Conf.SegmentMaxBlocks,
-		Info:          info,
-		Schema:        schema,
+		MaxBlockCount: table.Conf.SegmentMaxBlocks,
 	}
 	return seg
 }
 
 func (seg *Segment) GetTableID() uint64 {
-	return seg.TableID
+	return seg.Table.ID
 }
 
 func (seg *Segment) AsCommonID() *common.ID {
 	return &common.ID{
-		TableID:   seg.TableID,
+		TableID:   seg.Table.ID,
 		SegmentID: seg.ID,
 	}
 }
@@ -97,12 +95,12 @@ func (seg *Segment) NextActiveBlk() *Block {
 }
 
 func (seg *Segment) CreateBlock() (blk *Block, err error) {
-	blk = NewBlock(seg.Info.Sequence.GetBlockID(), seg)
+	blk = NewBlock(seg.Table.Info.Sequence.GetBlockID(), seg)
 	return blk, err
 }
 
 func (seg *Segment) String() string {
-	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d]", seg.TableID, seg.ID, seg.ActiveBlk)
+	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d]", seg.Table.ID, seg.ID, seg.ActiveBlk)
 	s += "["
 	pos := 0
 	for _, blk := range seg.Blocks {
@@ -140,17 +138,9 @@ func (seg *Segment) ReferenceBlock(id uint64) (blk *Block, err error) {
 	return seg.Blocks[idx], nil
 }
 
-func (seg *Segment) SetInfo(info *MetaInfo) error {
-	if seg.Info == nil {
-		seg.Info = info
-	}
-
-	return nil
-}
-
 func (seg *Segment) RegisterBlock(blk *Block) error {
-	if blk.Segment.TableID != seg.TableID {
-		return errors.New(fmt.Sprintf("table id mismatch %d:%d", seg.TableID, blk.Segment.TableID))
+	if blk.Segment.Table.ID != seg.Table.ID {
+		return errors.New(fmt.Sprintf("table id mismatch %d:%d", seg.Table.ID, blk.Segment.Table.ID))
 	}
 	if blk.GetSegmentID() != seg.GetID() {
 		return errors.New(fmt.Sprintf("segment id mismatch %d:%d", seg.GetID(), blk.GetSegmentID()))
@@ -227,7 +217,7 @@ func (seg *Segment) ReplayState() {
 	}
 	if fullBlkCnt == 0 {
 		seg.DataState = EMPTY
-	} else if fullBlkCnt < int(seg.Info.Conf.SegmentMaxBlocks) {
+	} else if fullBlkCnt < int(seg.Table.Conf.SegmentMaxBlocks) {
 		seg.DataState = PARTIAL
 	} else {
 		seg.DataState = CLOSED
@@ -238,7 +228,7 @@ func (seg *Segment) Copy(ctx CopyCtx) *Segment {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
-	new_seg := NewSegment(seg.Info, seg.TableID, seg.ID, seg.Schema)
+	new_seg := NewSegment(seg.Table, seg.ID)
 	new_seg.TimeStamp = seg.TimeStamp
 	new_seg.MaxBlockCount = seg.MaxBlockCount
 	new_seg.DataState = seg.DataState

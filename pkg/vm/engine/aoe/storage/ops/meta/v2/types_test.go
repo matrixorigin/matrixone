@@ -48,7 +48,7 @@ func TestBasicOps(t *testing.T) {
 	blk1.SetCount(blk1.MaxRowCount)
 	assert.Equal(t, blk1.DataState, md.FULL)
 
-	blk2, err := info.ReferenceBlock(blk1.Segment.TableID, blk1.Segment.ID, blk1.ID)
+	blk2, err := info.ReferenceBlock(blk1.Segment.Table.ID, blk1.Segment.ID, blk1.ID)
 	assert.Nil(t, err)
 	assert.Equal(t, blk2.DataState, md.EMPTY)
 	assert.Equal(t, blk2.Count, uint64(0))
@@ -59,14 +59,14 @@ func TestBasicOps(t *testing.T) {
 	err = updateop.WaitDone()
 	assert.Nil(t, err)
 
-	blk3, err := info.ReferenceBlock(blk1.Segment.TableID, blk1.Segment.ID, blk1.ID)
+	blk3, err := info.ReferenceBlock(blk1.Segment.Table.ID, blk1.Segment.ID, blk1.ID)
 	assert.Nil(t, err)
 	assert.Equal(t, blk3.DataState, md.FULL)
 	assert.Equal(t, blk1.Count, blk3.Count)
 
 	for i := 0; i < 100; i++ {
 		opCtx = OpCtx{Opts: &opts}
-		blkop = NewCreateBlkOp(&opCtx, blk1.Segment.TableID, nil)
+		blkop = NewCreateBlkOp(&opCtx, blk1.Segment.Table.ID, nil)
 		blkop.Push()
 		err = blkop.WaitDone()
 		assert.Nil(t, err)

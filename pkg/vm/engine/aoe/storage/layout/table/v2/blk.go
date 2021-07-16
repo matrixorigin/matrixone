@@ -83,7 +83,7 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 
 func (blk *Block) initColumns() error {
 	blk.data.AttrSize = make([]uint64, 0)
-	for idx, colDef := range blk.Meta.Segment.Schema.ColDefs {
+	for idx, colDef := range blk.Meta.Segment.Table.Schema.ColDefs {
 		blk.Ref()
 		colBlk := col.NewStdColumnBlock(blk, idx)
 		blk.data.Helper[colDef.Name] = len(blk.data.Columns)
@@ -242,7 +242,7 @@ func (blk *Block) String() string {
 }
 
 func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
-	colIdx := blk.Meta.Segment.Schema.GetColIdx(attr)
+	colIdx := blk.Meta.Segment.Table.Schema.GetColIdx(attr)
 	vec, err := blk.data.Columns[colIdx].ForceLoad(ref, proc)
 	if err != nil {
 		return nil, err

@@ -30,6 +30,7 @@ func NewTable(logIdx uint64, info *MetaInfo, schema *Schema, ids ...uint64) *Tab
 		IdMap:     make(map[uint64]int),
 		TimeStamp: *NewTimeStamp(),
 		Info:      info,
+		Conf:      info.Conf,
 		Schema:    schema,
 		Stat:      new(Statstics),
 		LogHistry: LogHistry{CreatedIndex: logIdx},
@@ -141,22 +142,8 @@ func (tbl *Table) SegmentIDs(args ...int64) map[uint64]uint64 {
 	return ids
 }
 
-func (tbl *Table) SetInfo(info *MetaInfo) error {
-	if tbl.Info == nil {
-		tbl.Info = info
-		for _, seg := range tbl.Segments {
-			err := seg.SetInfo(info)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 func (tbl *Table) CreateSegment() (seg *Segment, err error) {
-	seg = NewSegment(tbl.Info, tbl.ID, tbl.Info.Sequence.GetSegmentID(), tbl.Schema)
+	seg = NewSegment(tbl, tbl.Info.Sequence.GetSegmentID())
 	return seg, err
 }
 
@@ -281,6 +268,7 @@ func (tbl *Table) Copy(ctx CopyCtx) *Table {
 	new_tbl.TimeStamp = tbl.TimeStamp
 	new_tbl.BoundSate = tbl.BoundSate
 	new_tbl.LogHistry = tbl.LogHistry
+	new_tbl.Conf = tbl.Conf
 	for _, v := range tbl.Segments {
 		if !v.Select(ctx.Ts) {
 			continue

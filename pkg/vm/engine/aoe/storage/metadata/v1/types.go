@@ -75,14 +75,12 @@ type Segment struct {
 	sync.RWMutex
 	TimeStamp
 	ID            uint64
-	TableID       uint64
 	MaxBlockCount uint64
 	Blocks        []*Block
 	ActiveBlk     int
 	IdMap         map[uint64]int
 	DataState     DataState
-	Info          *MetaInfo `json:"-"`
-	Schema        *Schema   `json:"-"`
+	Table         *Table `json:"-"`
 }
 
 type ColDef struct {
@@ -122,6 +120,7 @@ type Table struct {
 	Info          *MetaInfo      `json:"-"`
 	Schema        *Schema
 	Stat          *Statstics
+	Conf          *Configuration
 }
 
 type Configuration struct {

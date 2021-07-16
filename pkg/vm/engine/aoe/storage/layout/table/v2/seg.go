@@ -87,7 +87,7 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 
 func (seg *Segment) GetRowCount() uint64 {
 	if seg.Meta.DataState >= md.CLOSED {
-		return seg.Meta.Info.Conf.BlockMaxRows * seg.Meta.Info.Conf.SegmentMaxBlocks
+		return seg.Meta.Table.Conf.BlockMaxRows * seg.Meta.Table.Conf.SegmentMaxBlocks
 	}
 	var ret uint64
 	seg.tree.RLock()
@@ -118,7 +118,7 @@ func (seg *Segment) BlockIds() []uint64 {
 	if seg.Type == base.SORTED_SEG {
 		return seg.tree.BlockIds
 	}
-	if atomic.LoadUint32(&seg.tree.BlockCnt) == uint32(seg.Meta.Info.Conf.SegmentMaxBlocks) {
+	if atomic.LoadUint32(&seg.tree.BlockCnt) == uint32(seg.Meta.Table.Conf.SegmentMaxBlocks) {
 		return seg.tree.BlockIds
 	}
 	ret := make([]uint64, 0, atomic.LoadUint32(&seg.tree.BlockCnt))
