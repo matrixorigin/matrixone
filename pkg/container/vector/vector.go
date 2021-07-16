@@ -300,7 +300,7 @@ func (v *Vector) Shuffle(sels []int64) *Vector {
 		v.Col = vs
 		v.Nsp = v.Nsp.Filter(sels)
 	}
-	return nil
+	return v
 }
 
 // v[vi] = w[wi]
