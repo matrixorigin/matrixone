@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -130,6 +131,7 @@ func (blk *Block) Update(target *Block) error {
 		return errors.New(fmt.Sprintf("Cannot Update block from Count %d to %d", blk.Count, target.Count))
 	}
 	target.copyNoLock(blk)
+	blk.Segment.Table.UpdateVersion()
 
 	return nil
 }
@@ -140,6 +142,10 @@ func (blk *Block) AsCommonID() *common.ID {
 		SegmentID: blk.Segment.ID,
 		BlockID:   blk.ID,
 	}
+}
+
+func (blk *Block) Marshal() ([]byte, error) {
+	return json.Marshal(blk)
 }
 
 func (blk *Block) Copy() *Block {

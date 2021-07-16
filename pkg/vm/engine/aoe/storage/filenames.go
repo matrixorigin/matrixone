@@ -11,7 +11,8 @@ import (
 type FileType int
 
 const (
-	FTCheckpoint FileType = iota
+	FTInfoCkp FileType = iota
+	FTTableCkp
 	FTLock
 	FTBlock
 	FTSegment
@@ -49,8 +50,10 @@ func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
 	switch ft {
 	case FTLock:
 		s = path.Join(dirname, fmt.Sprintf("%s.lock", name))
-	case FTCheckpoint:
+	case FTInfoCkp:
 		s = path.Join(MakeMetaDir(dirname), fmt.Sprintf("%s.ckp", name))
+	case FTTableCkp:
+		s = path.Join(MakeMetaDir(dirname), fmt.Sprintf("%s.tckp", name))
 	case FTTransientNode:
 		s = path.Join(MakeSpillDir(dirname), fmt.Sprintf("%s.nod", name))
 		isTmp = false

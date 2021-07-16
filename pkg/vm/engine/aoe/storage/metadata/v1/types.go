@@ -1,8 +1,23 @@
 package metadata
 
 import (
+	"io"
 	"matrixone/pkg/container/types"
 	"sync"
+)
+
+type Resource interface {
+	GetResourceType() ResourceType
+	GetFileName() string
+	GetLastFileName() string
+	Serialize(io.Writer) error
+}
+
+type ResourceType uint8
+
+const (
+	ResInfo ResourceType = iota
+	ResTable
 )
 
 type IndexType uint16
@@ -118,9 +133,10 @@ type Table struct {
 	ActiveSegment int            `json:"-"`
 	IdMap         map[uint64]int `json:"-"`
 	Info          *MetaInfo      `json:"-"`
+	Stat          *Statstics     `json:"-"`
 	Schema        *Schema
-	Stat          *Statstics
 	Conf          *Configuration
+	CheckPoint    uint64
 }
 
 type Configuration struct {

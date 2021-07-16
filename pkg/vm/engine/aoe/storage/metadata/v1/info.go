@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"encoding/json"
 	dump "encoding/json"
 	"errors"
 	"fmt"
@@ -187,6 +188,7 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	info.Tables[tbl.ID] = tbl
 	info.NameMap[tbl.Schema.Name] = tbl.ID
 	info.TableIds[tbl.ID] = true
+	atomic.AddUint64(&info.CheckPoint, uint64(1))
 	return nil
 }
 
@@ -226,6 +228,37 @@ func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo, ctx dbi.Tab
 		return nil, err
 	}
 	return tbl, nil
+}
+
+func (info *MetaInfo) GetLastFileName() string {
+	return fmt.Sprintf("%d", info.CheckPoint-1)
+}
+
+func (info *MetaInfo) GetFileName() string {
+	return fmt.Sprintf("%d", info.CheckPoint)
+}
+
+func (info *MetaInfo) GetResourceType() ResourceType {
+	return ResInfo
+}
+
+func (info *MetaInfo) MarshalJSON() ([]byte, error) {
+	tables := make(map[uint64]GenericTableWrapper)
+	for _, tbl := range info.Tables {
+		tables[tbl.ID] = GenericTableWrapper{
+			ID:        tbl.ID,
+			TimeStamp: tbl.TimeStamp,
+		}
+	}
+	type Alias MetaInfo
+	return json.Marshal(&struct {
+		Tables map[uint64]GenericTableWrapper
+		Name   string
+		*Alias
+	}{
+		Tables: tables,
+		Alias:  (*Alias)(info),
+	})
 }
 
 func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {

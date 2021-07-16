@@ -8,7 +8,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -47,7 +46,8 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	info.CheckPoint++
 
-	filename := e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
+	// filename := e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
+	filename := e.MakeFilename(cfg.Dir, e.FTInfoCkp, info.GetFileName(), false)
 
 	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
@@ -62,7 +62,8 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Nil(t, err)
 	info.CheckPoint++
 
-	filename = e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
+	filename = e.MakeFilename(cfg.Dir, e.FTInfoCkp, info.GetFileName(), false)
+	// filename = e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
 	w.Close()
 
 	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
@@ -93,7 +94,8 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	invalids := []string{"ds234", "234ds"}
 	for _, invalid := range invalids {
-		fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, invalid, false)
+		// fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, invalid, false)
+		fname := e.MakeFilename(cfg.Dir, e.FTInfoCkp, invalid, false)
 
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
@@ -109,7 +111,8 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	valids := []string{"1", "2", "3", "100"}
 	for _, valid := range valids {
-		fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, valid, false)
+		// fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, valid, false)
+		fname := e.MakeFilename(cfg.Dir, e.FTInfoCkp, valid, false)
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
 		f.Close()
@@ -126,7 +129,8 @@ func TestCleanStaleMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(files))
 
-	fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, "100", false)
+	// fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, "100", false)
+	fname := e.MakeFilename(cfg.Dir, e.FTInfoCkp, "100", false)
 	_, err = os.Stat(fname)
 	assert.Nil(t, err)
 }

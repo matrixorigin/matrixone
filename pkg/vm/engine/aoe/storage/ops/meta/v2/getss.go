@@ -25,3 +25,24 @@ func (op *GetSSOp) Execute() error {
 	}
 	return nil
 }
+
+func NewGetTblSSOp(ctx *OpCtx, table *md.Table) *GetTblSSOp {
+	op := &GetTblSSOp{Source: table}
+	op.Op = *NewOp(op, ctx, ctx.Opts.Meta.Updater)
+	return op
+}
+
+type GetTblSSOp struct {
+	Op
+	Source *md.Table
+	Result *md.Table
+}
+
+func (op *GetTblSSOp) Execute() error {
+	ctx := md.CopyCtx{Ts: md.NowMicro(), Attached: true}
+	op.Result = op.Source.Copy(ctx)
+	if op.Result == nil {
+		return errors.New("empty table")
+	}
+	return nil
+}

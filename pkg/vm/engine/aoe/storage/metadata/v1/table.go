@@ -1,8 +1,10 @@
 package metadata
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"unsafe"
 
@@ -15,6 +17,11 @@ var (
 
 func NextGloablSeqnum() uint64 {
 	return atomic.AddUint64(&GloablSeqNum, uint64(1))
+}
+
+type GenericTableWrapper struct {
+	ID uint64
+	TimeStamp
 }
 
 func NewTable(logIdx uint64, info *MetaInfo, schema *Schema, ids ...uint64) *Table {
@@ -36,6 +43,14 @@ func NewTable(logIdx uint64, info *MetaInfo, schema *Schema, ids ...uint64) *Tab
 		LogHistry: LogHistry{CreatedIndex: logIdx},
 	}
 	return tbl
+}
+
+func (tbl *Table) Marshal() ([]byte, error) {
+	return json.Marshal(tbl)
+}
+
+func (tbl *Table) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, tbl)
 }
 
 func (tbl *Table) GetID() uint64 {
@@ -236,6 +251,7 @@ func (tbl *Table) RegisterSegment(seg *Segment) error {
 	tbl.IdMap[seg.GetID()] = len(tbl.Segments)
 	tbl.Segments = append(tbl.Segments, seg)
 	atomic.StoreUint64(&tbl.SegmentCnt, uint64(len(tbl.Segments)))
+	tbl.UpdateVersion()
 	return nil
 }
 
@@ -260,12 +276,45 @@ func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {
 	return segid, blkid
 }
 
+func (tbl *Table) UpdateVersion() {
+	atomic.AddUint64(&tbl.CheckPoint, uint64(1))
+}
+
+func (tbl *Table) GetFileName() string {
+	return fmt.Sprintf("%d_v%d", tbl.ID, tbl.CheckPoint)
+}
+
+func (tbl *Table) GetLastFileName() string {
+	return fmt.Sprintf("%d_v%d", tbl.ID, tbl.CheckPoint-1)
+}
+
+func (tbl *Table) Serialize(w io.Writer) error {
+	bytes, err := tbl.Marshal()
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(bytes)
+	return err
+}
+
+func (tbl *Table) GetResourceType() ResourceType {
+	return ResTable
+}
+
+func (tbl *Table) UpdateCheckpoint(id uint64) error {
+	if !atomic.CompareAndSwapUint64(&tbl.CheckPoint, id-1, id) {
+		return errors.New(fmt.Sprintf("Cannot update table checkpoint from %d to %d", tbl.CheckPoint, id))
+	}
+	return nil
+}
+
 func (tbl *Table) Copy(ctx CopyCtx) *Table {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
 	new_tbl := NewTable(tbl.CreatedIndex, tbl.Info, tbl.Schema, tbl.ID)
 	new_tbl.TimeStamp = tbl.TimeStamp
+	new_tbl.CheckPoint = tbl.CheckPoint
 	new_tbl.BoundSate = tbl.BoundSate
 	new_tbl.LogHistry = tbl.LogHistry
 	new_tbl.Conf = tbl.Conf

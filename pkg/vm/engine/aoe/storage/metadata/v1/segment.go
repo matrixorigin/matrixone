@@ -1,8 +1,10 @@
 package metadata
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+
 	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 )
@@ -94,6 +96,10 @@ func (seg *Segment) NextActiveBlk() *Block {
 	return blk
 }
 
+func (seg *Segment) Marshal() ([]byte, error) {
+	return json.Marshal(seg)
+}
+
 func (seg *Segment) CreateBlock() (blk *Block, err error) {
 	blk = NewBlock(seg.Table.Info.Sequence.GetBlockID(), seg)
 	return blk, err
@@ -170,6 +176,7 @@ func (seg *Segment) RegisterBlock(blk *Block) error {
 	} else {
 		seg.DataState = PARTIAL
 	}
+	seg.Table.UpdateVersion()
 	return nil
 }
 

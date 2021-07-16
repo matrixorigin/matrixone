@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"encoding/json"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
 	"testing"
@@ -171,4 +172,12 @@ func TestCreateDropTable(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, rTbl3.ID, tid)
 	assert.True(t, rTbl3.IsDeleted(ts))
+
+	tblBytes, err := rTbl3.Marshal()
+	assert.Nil(t, err)
+	t.Log(string(tblBytes))
+
+	infoBytes, err := json.Marshal(info)
+	assert.Nil(t, err)
+	t.Log(string(infoBytes))
 }

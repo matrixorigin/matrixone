@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -48,6 +49,21 @@ func TestEngine(t *testing.T) {
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
 	proc := process.New(gm, mempool.New(1<<48, 8))
+
+	tableCnt := 100
+	var twg sync.WaitGroup
+	for i := 0; i < tableCnt; i++ {
+		twg.Add(1)
+		f := func(idx int) func() {
+			return func() {
+				tInfo := *tableInfo
+				_, err := inst.CreateTable(&tInfo, dbi.TableOpCtx{TableName: fmt.Sprintf("%dxxxxxx%d", idx, idx)})
+				assert.Nil(t, err)
+				twg.Done()
+			}
+		}
+		p.Submit(f(i))
+	}
 
 	reqCtx, cancel := context.WithCancel(context.Background())
 	var (
@@ -166,12 +182,14 @@ func TestEngine(t *testing.T) {
 	searchWg.Wait()
 	cancel()
 	loopWg.Wait()
+	twg.Wait()
 	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.MemTableMgr.String())
 	t.Logf("Load: %d", loadCnt)
-	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
+	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
+	t.Logf("tbl %v, tid %d, err %v", tbl, tid, err)
 	assert.Equal(t, tbl.GetRowCount(), rows*uint64(insertCnt))
 	t.Log(tbl.GetRowCount())
 	attr := tblMeta.Schema.ColDefs[0].Name
