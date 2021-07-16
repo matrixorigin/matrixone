@@ -2,35 +2,46 @@ package engine
 
 import (
 	"github.com/fagongzi/util/format"
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 )
 
 func (r *relation) ID() string {
-	return string(format.UInt64ToString(r.id))
+	return string(format.UInt64ToString(r.tbl.Id))
 }
 
 func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
-	return nil
+	tRelation, err := r.catalog.Store.Relation(si.TabletId)
+	if err != nil {
+		log.Errorf("Generate relation for tablet %s failed, %s", si.TabletId, err.Error())
+		return nil
+	}
+	return tRelation.Segment(si, proc)
 }
 
 func (r *relation) Segments() []engine.SegmentInfo {
-
-	return nil
+	var segments []engine.SegmentInfo
+	for _, tablet := range r.tablets {
+		segments = append(segments, tablet.Segments()...)
+	}
+	return segments
 }
 
 func (r *relation) Index() []*engine.IndexTableDef {
-	return nil
+	return helper.Index(*r.tbl)
 }
 
 func (r *relation) Attribute() []metadata.Attribute {
-	return nil
+	return helper.Attribute(*r.tbl)
 }
 
 func (r *relation) Write(bat *batch.Batch) error {
 
+	//TODO: Choose one tablet and write
 	return nil
 }
 
@@ -43,9 +54,14 @@ func (r *relation) DelAttribute(_ engine.TableDef) error {
 }
 
 func (r *relation) Rows() int64 {
-	panic("implement me")
+	count := int64(0)
+	for _, t := range r.tablets{
+		count += t.Rows()
+	}
+	return count
 }
 
-func (r *relation) Size(s string) int64 {
-	panic("implement me")
+func (r *relation) Size(_ string) int64 {
+	return 0
 }
+

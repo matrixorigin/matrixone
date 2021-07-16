@@ -131,7 +131,7 @@ func readData() {
 		panic(err)
 	}
 	tblMeta, _ := impl.Opts.Meta.Info.ReferenceTableByName(tableName)
-	attrs := []string{}
+	var attrs []string
 	cols := make([]int, 0)
 	for i, colDef := range tblMeta.Schema.ColDefs {
 		attrs = append(attrs, colDef.Name)

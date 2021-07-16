@@ -49,7 +49,12 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		req.Key = msg.Key
 		req.CustemType = uint64(pb.Incr)
 		req.Type = raftcmdpb.CMDType_Write
-		req.Cmd = protoc.MustMarshal(&msg)
+		req.Cmd = protoc.MustMarshal(&msg)/*
+	case pb.Append:
+		msg := customReq.Append
+		req.ToShard = customReq.Shard*/
+
+
 	}
 	return nil
 }

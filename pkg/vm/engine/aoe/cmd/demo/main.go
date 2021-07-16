@@ -123,7 +123,7 @@ func main() {
 	log.Info(inst.SSTBufMgr.String())
 
 	// time.Sleep(time.Duration(10) * time.Millisecond)
-	// _, err = inst.DropTable(tName)
+	// _, err = inst.DropTablet(tName)
 
 	time.Sleep(time.Duration(100) * time.Millisecond)
 	log.Info(inst.IndexBufMgr.String())

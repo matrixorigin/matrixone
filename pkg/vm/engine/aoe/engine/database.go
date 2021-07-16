@@ -1,7 +1,9 @@
 package engine
 
 import (
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe/catalog"
 )
 
 
@@ -33,14 +35,26 @@ func (db *database) Relations() []string {
 }
 
 func (db *database) Relation(name string) (engine.Relation, error) {
-	tb, err := db.catalog.GetTable(db.id, name)
+	tablets, err := db.catalog.GetTablets(db.id, name)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
-	return &relation{
-		pid: db.id,
-		id: tb.Id,
+	if tablets == nil || len(tablets) == 0 {
+		return nil, catalog.ErrTableNotExists
+	}
+
+	r := &relation{
+		pid:     db.id,
+		tbl:     &tablets[0].Table,
 		catalog: db.catalog,
-	}, nil
+	}
+	for _, tbl := range tablets {
+		if tR, err := db.catalog.Store.Relation(tbl.Name); err != nil {
+			log.Errorf("Generate relation for tablet %s failed, %s", tbl.Name, err.Error())
+		}else {
+			r.tablets = append(r.tablets, tR)
+		}
+	}
+	return r, nil
 }
 
