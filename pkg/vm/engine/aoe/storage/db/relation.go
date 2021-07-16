@@ -108,13 +108,4 @@ func (r *Relation) Segment(id uint64, proc *process.Process) engine.Segment {
 
 func (r *Relation) Write(bat *batch.Batch, index *md.LogIndex) error {
 	return r.DBImpl.Append(r.Meta.Schema.Name, bat, index)
-	// index := md.LogIndex{Capacity: uint64(bat.Vecs[0].Length())}
 }
-
-// func (r *Relation) AddAttribute(_ engine.TableDef) error {
-// 	return nil
-// }
-
-// func (r *Relation) DelAttribute(_ engine.TableDef) error {
-// 	return nil
-// }

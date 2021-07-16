@@ -43,6 +43,7 @@ func NextGloablSeqnum() uint64 {
 type GenericTableWrapper struct {
 	ID uint64
 	TimeStamp
+	LogHistry
 }
 
 func NewTable(logIdx uint64, info *MetaInfo, schema *Schema, ids ...uint64) *Table {
@@ -327,11 +328,13 @@ func (tbl *Table) GetResourceType() ResourceType {
 	return ResTable
 }
 
-func (tbl *Table) UpdateCheckpoint(id uint64) error {
-	if !atomic.CompareAndSwapUint64(&tbl.CheckPoint, id-1, id) {
-		return errors.New(fmt.Sprintf("Cannot update table checkpoint from %d to %d", tbl.CheckPoint, id))
+func (tbl *Table) LiteCopy() *Table {
+	new_tbl := &Table{
+		ID:        tbl.ID,
+		TimeStamp: tbl.TimeStamp,
+		LogHistry: tbl.LogHistry,
 	}
-	return nil
+	return new_tbl
 }
 
 func (tbl *Table) Copy(ctx CopyCtx) *Table {

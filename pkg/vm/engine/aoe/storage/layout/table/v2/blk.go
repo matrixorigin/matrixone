@@ -114,6 +114,13 @@ func (blk *Block) Size(attr string) uint64 {
 	return blk.data.Columns[idx].Size()
 }
 
+func (blk *Block) GetSegmentedIndex() (id uint64, ok bool) {
+	if blk.Type == base.TRANSIENT_BLK {
+		return id, ok
+	}
+	return blk.Meta.GetAppliedIndex()
+}
+
 func (blk *Block) close() {
 	if blk.IndexHolder != nil {
 		blk.IndexHolder.Unref()

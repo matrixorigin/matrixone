@@ -23,7 +23,7 @@ type DropTblOp struct {
 }
 
 func (op *DropTblOp) Execute() error {
-	id, err := op.Ctx.Opts.Meta.Info.SoftDeleteTable(op.LocalCtx.TableName)
+	id, err := op.Ctx.Opts.Meta.Info.SoftDeleteTable(op.LocalCtx.TableName, op.LocalCtx.OpIndex)
 	if err != nil {
 		return err
 	}

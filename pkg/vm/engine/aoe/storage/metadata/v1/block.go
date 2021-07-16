@@ -23,21 +23,18 @@ func NewBlock(id uint64, segment *Segment) *Block {
 	return blk
 }
 
-func (blk *Block) GetAppliedIndex() (uint64, error) {
+func (blk *Block) GetAppliedIndex() (uint64, bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	if blk.DeleteIndex != nil {
-		return *blk.DeleteIndex, nil
-	}
 	if blk.Index != nil && blk.Index.IsApplied() {
-		return blk.Index.ID, nil
+		return blk.Index.ID, true
 	}
 
 	if blk.PrevIndex != nil {
-		return blk.PrevIndex.ID, nil
+		return blk.PrevIndex.ID, true
 	}
 
-	return 0, errors.New("not applied")
+	return 0, false
 }
 
 func (blk *Block) GetID() uint64 {
@@ -168,7 +165,6 @@ func (blk *Block) copyNoLock(new_blk *Block) *Block {
 	new_blk.Count = blk.Count
 	new_blk.Index = blk.Index
 	new_blk.PrevIndex = blk.PrevIndex
-	new_blk.DeleteIndex = blk.DeleteIndex
 	new_blk.DataState = blk.DataState
 
 	return new_blk

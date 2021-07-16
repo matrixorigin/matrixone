@@ -26,6 +26,7 @@ func (op *FlushInfoOp) Execute() (err error) {
 	if err != nil {
 		return err
 	}
+	op.Ctx.Opts.Meta.Info.UpdateCheckpointTime(op.Info.CkpTime)
 
 	return err
 }

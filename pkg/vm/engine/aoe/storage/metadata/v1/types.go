@@ -72,7 +72,6 @@ type Block struct {
 	Count       uint64
 	Index       *LogIndex
 	PrevIndex   *LogIndex
-	DeleteIndex *uint64
 	DataState   DataState
 	Segment     *Segment `json:"-"`
 }
@@ -154,6 +153,8 @@ type MetaInfo struct {
 	TableIds   map[uint64]bool   `json:"-"`
 	NameMap    map[string]uint64 `json:"-"`
 	Tombstone  map[uint64]bool   `json:"-"`
+	CkpTime    int64
+	// CkpTime    int64             `json:"-"`
 }
 
 type CopyCtx struct {

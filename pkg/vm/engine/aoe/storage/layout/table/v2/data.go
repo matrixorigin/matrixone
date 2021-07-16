@@ -208,6 +208,24 @@ func (td *TableData) Size(attr string) uint64 {
 	return size
 }
 
+func (td *TableData) GetSegmentedIndex() (id uint64, ok bool) {
+	if td.Meta.IsDeleted(td.Meta.Info.CkpTime) {
+		return td.Meta.DeletedIndex, true
+	}
+
+	segCnt := atomic.LoadUint32(&td.tree.SegmentCnt)
+	for i := int(segCnt) - 1; i >= 0; i-- {
+		td.tree.RLock()
+		seg := td.tree.Segments[i]
+		td.tree.RUnlock()
+		id, ok = seg.GetSegmentedIndex()
+		if ok {
+			return id, ok
+		}
+	}
+	return id, ok
+}
+
 func (td *TableData) SegmentIds() []uint64 {
 	ids := make([]uint64, 0, atomic.LoadUint32(&td.tree.SegmentCnt))
 	td.tree.RLock()

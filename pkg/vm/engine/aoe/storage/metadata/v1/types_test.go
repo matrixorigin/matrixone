@@ -154,11 +154,11 @@ func TestCreateDropTable(t *testing.T) {
 	ts := NowMicro()
 	assert.False(t, rTbl.IsDeleted(ts))
 
-	tid, err := info.SoftDeleteTable(tbl.Schema.Name)
+	tid, err := info.SoftDeleteTable(tbl.Schema.Name, NextGloablSeqnum())
 	assert.Nil(t, err)
 	assert.Equal(t, rTbl.ID, tid)
 
-	_, err = info.SoftDeleteTable(tbl.Schema.Name)
+	_, err = info.SoftDeleteTable(tbl.Schema.Name, NextGloablSeqnum())
 	assert.NotNil(t, err)
 
 	rTbl2, err := info.ReferenceTableByName(tbl.Schema.Name)

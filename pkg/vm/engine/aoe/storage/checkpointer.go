@@ -76,17 +76,6 @@ func (ck *Checkpointer) Commit(res md.Resource) error {
 	}
 	// log.Infof("Commit CheckPoint: %s", fname)
 	err = os.Rename(ck.TmpFile, fname)
-	var ftype FileType
-	switch res.GetResourceType() {
-	case md.ResInfo:
-		ftype = FTInfoCkp
-	case md.ResTable:
-		ftype = FTTableCkp
-	default:
-		panic("not supported")
-	}
-	stale := MakeFilename(ck.Dirname, ftype, res.GetLastFileName(), false)
-	os.Remove(stale)
 	return err
 }
 

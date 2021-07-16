@@ -203,3 +203,48 @@ func TestEngine(t *testing.T) {
 	t.Log(inst.GetSegmentIds(dbi.GetSegmentsCtx{TableName: tblMeta.Schema.Name}))
 	inst.Close()
 }
+
+func TestLogIndex(t *testing.T) {
+	initDBTest()
+	inst := initDB()
+	tableInfo := md.MockTableInfo(2)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: md.NextGloablSeqnum()})
+	assert.Nil(t, err)
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
+	assert.Nil(t, err)
+	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * 2 / 5
+	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+
+	// p, _ := ants.NewPool(40)
+
+	for i := 0; i < 50; i++ {
+		rel, err := inst.Relation(tblMeta.Schema.Name)
+		assert.Nil(t, err)
+		logIndex := &md.LogIndex{ID: md.NextGloablSeqnum(), Capacity: uint64(baseCk.Vecs[0].Length())}
+		err = rel.Write(baseCk, logIndex)
+		assert.Nil(t, err)
+	}
+
+	time.Sleep(time.Duration(100) * time.Millisecond)
+
+	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
+	assert.Nil(t, err)
+	logIndex, ok := tbl.GetSegmentedIndex()
+	assert.True(t, ok)
+	_, ok = tblMeta.Segments[len(tblMeta.Segments)-1].Blocks[1].GetAppliedIndex()
+	assert.False(t, ok)
+	expectIdx, ok := tblMeta.Segments[len(tblMeta.Segments)-1].Blocks[0].GetAppliedIndex()
+	assert.True(t, ok)
+	assert.Equal(t, expectIdx, logIndex)
+
+	dropLogIndex := md.NextGloablSeqnum()
+	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: dropLogIndex})
+	assert.Nil(t, err)
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	// tbl, err = inst.Store.DataTables.WeakRefTable(tid)
+	logIndex, ok = tbl.GetSegmentedIndex()
+	assert.True(t, ok)
+	assert.Equal(t, dropLogIndex, logIndex)
+
+	inst.Close()
+}

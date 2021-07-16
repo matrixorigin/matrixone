@@ -85,6 +85,30 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	return seg, nil
 }
 
+func (seg *Segment) GetSegmentedIndex() (id uint64, ok bool) {
+	ok = false
+	if seg.Type == base.SORTED_SEG {
+		for i := len(seg.tree.Blocks) - 1; i >= 0; i-- {
+			id, ok = seg.tree.Blocks[i].GetSegmentedIndex()
+			if ok {
+				return id, ok
+			}
+		}
+		return id, ok
+	}
+	blkCnt := atomic.LoadUint32(&seg.tree.BlockCnt)
+	for i := int(blkCnt) - 1; i >= 0; i-- {
+		seg.tree.RLock()
+		blk := seg.tree.Blocks[i]
+		seg.tree.RUnlock()
+		id, ok = blk.GetSegmentedIndex()
+		if ok {
+			return id, ok
+		}
+	}
+	return id, ok
+}
+
 func (seg *Segment) GetRowCount() uint64 {
 	if seg.Meta.DataState >= md.CLOSED {
 		return seg.Meta.Table.Conf.BlockMaxRows * seg.Meta.Table.Conf.SegmentMaxBlocks

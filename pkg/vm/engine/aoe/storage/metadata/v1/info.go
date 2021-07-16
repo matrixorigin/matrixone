@@ -34,7 +34,7 @@ func MockInfo(blkRows, blks uint64) *MetaInfo {
 	return info
 }
 
-func (info *MetaInfo) SoftDeleteTable(name string) (id uint64, err error) {
+func (info *MetaInfo) SoftDeleteTable(name string, logIndex uint64) (id uint64, err error) {
 	id, ok := info.NameMap[name]
 	if !ok {
 		return id, errors.New(fmt.Sprintf("Table %s not existed", name))
@@ -46,6 +46,7 @@ func (info *MetaInfo) SoftDeleteTable(name string) (id uint64, err error) {
 	info.Tombstone[id] = true
 	table := info.Tables[id]
 	table.Delete(ts)
+	table.LogHistry.DeletedIndex = logIndex
 	atomic.AddUint64(&info.CheckPoint, uint64(1))
 	table.UpdateVersion()
 	return id, nil
@@ -99,6 +100,16 @@ func (info *MetaInfo) TableSegmentIDs(tableID uint64, args ...int64) (ids map[ui
 	}
 	ids = tbl.SegmentIDs(ts)
 	return ids, err
+}
+
+func (info *MetaInfo) UpdateCheckpointTime(ts int64) {
+	curr := atomic.LoadInt64(&info.CkpTime)
+	for curr < ts {
+		if atomic.CompareAndSwapInt64(&info.CkpTime, curr, ts) {
+			return
+		}
+		curr = atomic.LoadInt64(&info.CkpTime)
+	}
 }
 
 func (info *MetaInfo) TableNames(args ...int64) []string {
@@ -269,6 +280,7 @@ func (info *MetaInfo) MarshalJSON() ([]byte, error) {
 		tables[tbl.ID] = GenericTableWrapper{
 			ID:        tbl.ID,
 			TimeStamp: tbl.TimeStamp,
+			LogHistry: tbl.LogHistry,
 		}
 	}
 	type Alias MetaInfo
@@ -292,11 +304,15 @@ func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 	}
 	new_info := NewMetaInfo(info.Conf)
 	new_info.CheckPoint = info.CheckPoint
+	new_info.CkpTime = ctx.Ts
 	for k, v := range info.Tables {
+		var tbl *Table
 		if !v.Select(ctx.Ts) {
-			continue
+			tbl = v.LiteCopy()
+		} else {
+			tbl = v.Copy(ctx)
 		}
-		tbl := v.Copy(ctx)
+
 		new_info.Tables[k] = tbl
 	}
 
