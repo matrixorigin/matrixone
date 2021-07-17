@@ -29,7 +29,7 @@ func TestLoadMetaInfo(t *testing.T) {
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
-	handle := NewReplayHandle(cfg.Dir)
+	handle := NewMetaHandle(cfg.Dir)
 	info := handle.RebuildInfo(cfg)
 	// info := loadMetaInfo(cfg)
 	assert.Equal(t, uint64(0), info.CheckPoint)
@@ -87,7 +87,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.Serialize(w)
 	assert.Nil(t, err)
 
-	handle2 := NewReplayHandle(cfg.Dir)
+	handle2 := NewMetaHandle(cfg.Dir)
 	info2 := handle2.RebuildInfo(cfg)
 	assert.NotNil(t, info2)
 	assert.Equal(t, info.CheckPoint, info2.CheckPoint)
@@ -126,7 +126,7 @@ func TestCleanStaleMeta(t *testing.T) {
 		f.Close()
 
 		f1 := func() {
-			NewReplayHandle(cfg.Dir)
+			NewMetaHandle(cfg.Dir)
 		}
 		assert.Panics(t, f1)
 		err = os.Remove(fname)

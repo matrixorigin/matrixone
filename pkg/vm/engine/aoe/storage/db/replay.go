@@ -32,7 +32,7 @@ type infoFile struct {
 	next    *infoFile
 }
 
-type replayHandle struct {
+type metaHandle struct {
 	infos         *infoFile
 	tables        map[uint64]*tableFile
 	others        []string
@@ -42,8 +42,8 @@ type replayHandle struct {
 	mask          *roaring.Bitmap
 }
 
-func NewReplayHandle(workDir string) *replayHandle {
-	fs := &replayHandle{
+func NewMetaHandle(workDir string) *metaHandle {
+	fs := &metaHandle{
 		workDir: workDir,
 		tables:  make(map[uint64]*tableFile),
 		others:  make([]string, 0),
@@ -74,7 +74,7 @@ func NewReplayHandle(workDir string) *replayHandle {
 	return fs
 }
 
-func (h *replayHandle) addTable(f *tableFile) {
+func (h *metaHandle) addTable(f *tableFile) {
 	head := h.tables[f.id]
 	if head == nil {
 		h.tables[f.id] = f
@@ -101,7 +101,7 @@ func (h *replayHandle) addTable(f *tableFile) {
 	prev.next = f
 }
 
-func (h *replayHandle) addInfo(f *infoFile) {
+func (h *metaHandle) addInfo(f *infoFile) {
 	var prev *infoFile
 	curr := h.infos
 	for curr != nil {
@@ -128,7 +128,7 @@ func (h *replayHandle) addInfo(f *infoFile) {
 	}
 }
 
-func (h *replayHandle) addFile(fname string) {
+func (h *metaHandle) addFile(fname string) {
 	name, ok := e.ParseTableMetaName(fname)
 	if ok {
 		tid, version, err := md.ParseTableCkpFile(name)
@@ -154,7 +154,7 @@ func (h *replayHandle) addFile(fname string) {
 	h.others = append(h.others, fname)
 }
 
-func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
+func (h *metaHandle) rebuildTable(tbl *md.Table) *md.Table {
 	head := h.tables[tbl.ID]
 	if head == nil {
 		return nil
@@ -171,7 +171,7 @@ func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
 	return ret
 }
 
-func (h *replayHandle) RebuildInfo(cfg *md.Configuration) *md.MetaInfo {
+func (h *metaHandle) RebuildInfo(cfg *md.Configuration) *md.MetaInfo {
 	info := md.NewMetaInfo(cfg)
 	if h.infos == nil {
 		return info
@@ -203,12 +203,12 @@ func (h *replayHandle) RebuildInfo(cfg *md.Configuration) *md.MetaInfo {
 	return info
 }
 
-func (h *replayHandle) cleanupFile(fname string) {
+func (h *metaHandle) cleanupFile(fname string) {
 	os.Remove(fname)
 	log.Infof("%s | Removed", fname)
 }
 
-func (h *replayHandle) Cleanup() {
+func (h *metaHandle) Cleanup() {
 	for tid, head := range h.tables {
 		if !h.mask.Contains(tid) {
 			h.cleanupFile(head.name)
@@ -229,7 +229,7 @@ func (h *replayHandle) Cleanup() {
 	}
 }
 
-func (h *replayHandle) CleanupWithCtx(maxVer int) {
+func (h *metaHandle) CleanupWithCtx(maxVer int) {
 	if maxVer <= 1 {
 		panic("logic error")
 	}
@@ -257,7 +257,7 @@ func (h *replayHandle) CleanupWithCtx(maxVer int) {
 	}
 }
 
-func (h *replayHandle) String() string {
+func (h *metaHandle) String() string {
 	s := fmt.Sprintf("[InfoFiles]:")
 	{
 		curr := h.infos

@@ -22,7 +22,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		}
 	}()
 	opts.FillDefaults(dirname)
-	metaReplayHandle := NewReplayHandle(dirname)
+	metaReplayHandle := NewMetaHandle(dirname)
 
 	opts.Meta.Info = metaReplayHandle.RebuildInfo(opts.Meta.Conf)
 

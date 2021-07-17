@@ -15,7 +15,7 @@ func NewMetaFileCleaner(info *md.MetaInfo) *metaFileCleaner {
 }
 
 func (c *metaFileCleaner) OnExec() {
-	handle := NewReplayHandle(c.info.Conf.Dir)
+	handle := NewMetaHandle(c.info.Conf.Dir)
 	handle.CleanupWithCtx(3)
 }
 
