@@ -1,16 +1,13 @@
 package engine
 
 import (
-	// dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	// ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	// "matrixone/pkg/vm/engine/aoe/storage/common"
 	e "matrixone/pkg/vm/engine/aoe/storage/event"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
-	// todo "aoe/pkg/mock"
+	"time"
 )
 
 const (
@@ -34,6 +31,10 @@ type CacheCfg struct {
 	IndexCapacity  uint64
 	InsertCapacity uint64
 	DataCapacity   uint64
+}
+
+type MetaCleanerCfg struct {
+	Interval time.Duration
 }
 
 type Options struct {
@@ -67,6 +68,8 @@ type Options struct {
 	}
 
 	CacheCfg *CacheCfg
+
+	MetaCleanerCfg *MetaCleanerCfg
 }
 
 func (o *Options) FillDefaults(dirname string) *Options {
@@ -137,6 +140,12 @@ func (o *Options) FillDefaults(dirname string) *Options {
 			cfg.Interval = gci.DefaultInterval
 		}
 		o.GC.Acceptor = gc.NewWorker(cfg)
+	}
+
+	if o.MetaCleanerCfg == nil {
+		o.MetaCleanerCfg = &MetaCleanerCfg{
+			Interval: time.Duration(20) * time.Second,
+		}
 	}
 	return o
 }

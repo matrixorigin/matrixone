@@ -209,7 +209,8 @@ func (td *TableData) Size(attr string) uint64 {
 }
 
 func (td *TableData) GetSegmentedIndex() (id uint64, ok bool) {
-	if td.Meta.IsDeleted(td.Meta.Info.CkpTime) {
+	ts := td.Meta.Info.GetCheckpointTime()
+	if td.Meta.IsDeleted(ts) {
 		return td.Meta.DeletedIndex, true
 	}
 

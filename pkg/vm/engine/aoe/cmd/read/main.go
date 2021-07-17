@@ -63,6 +63,9 @@ func init() {
 		InsertCapacity: blockRows * uint64(colCnt) * 2000,
 		DataCapacity:   blockRows * uint64(colCnt) * 2000,
 	}
+	opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+		Interval: time.Duration(1) * time.Second,
+	}
 	opts.Meta.Conf = mdCfg
 	info := md.MockTableInfo(colCnt)
 	table = info

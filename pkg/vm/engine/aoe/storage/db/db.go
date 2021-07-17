@@ -15,11 +15,11 @@ import (
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
 	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
-
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
+	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
 	"path/filepath"
 	"sync"
@@ -49,6 +49,10 @@ type DB struct {
 		sync.RWMutex
 		MetaInfo   *md.MetaInfo
 		DataTables *table.Tables
+	}
+
+	Cleaner struct {
+		MetaFiles iw.IHeartbeater
 	}
 
 	DataDir  *os.File
@@ -320,6 +324,10 @@ func (d *DB) replayAndCleanData() {
 	}
 }
 
+func (d *DB) startCleaner() {
+	d.Cleaner.MetaFiles.Start()
+}
+
 func (d *DB) startWorkers() {
 	d.Opts.GC.Acceptor.Start()
 	d.Opts.MemData.Updater.Start()
@@ -351,6 +359,10 @@ func (d *DB) stopWorkers() {
 	d.Opts.Meta.Updater.Stop()
 }
 
+func (d *DB) stopCleaner() {
+	d.Cleaner.MetaFiles.Stop()
+}
+
 func (d *DB) WorkersStatsString() string {
 	s := fmt.Sprintf("%s\n", d.Opts.MemData.Updater.StatsString())
 	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Flusher.StatsString())
@@ -368,6 +380,7 @@ func (d *DB) Close() error {
 	d.Closed.Store(ErrClosed)
 	close(d.ClosedC)
 	d.stopWorkers()
+	d.stopCleaner()
 	err := d.DBLocker.Close()
 	return err
 }

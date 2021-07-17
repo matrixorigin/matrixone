@@ -7,6 +7,7 @@ import (
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable"
+	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"sync/atomic"
 )
 
@@ -49,10 +50,12 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 
 	db.Store.DataTables = table.NewTables()
 	db.Store.MetaInfo = opts.Meta.Info
+	db.Cleaner.MetaFiles = w.NewHeartBeater(db.Opts.MetaCleanerCfg.Interval, NewMetaFileCleaner(db.Opts.Meta.Info))
 
 	metaReplayHandle.Cleanup()
 	db.replayAndCleanData()
 
+	db.startCleaner()
 	db.startWorkers()
 	db.DBLocker, dbLocker = dbLocker, nil
 	return db, err

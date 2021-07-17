@@ -9,8 +9,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync/atomic"
-	// "os"
-	// "path"
 	// dump "github.com/vmihailenco/msgpack/v5"
 	// log "github.com/sirupsen/logrus"
 )
@@ -110,6 +108,10 @@ func (info *MetaInfo) UpdateCheckpointTime(ts int64) {
 		}
 		curr = atomic.LoadInt64(&info.CkpTime)
 	}
+}
+
+func (info *MetaInfo) GetCheckpointTime() int64 {
+	return atomic.LoadInt64(&info.CkpTime)
 }
 
 func (info *MetaInfo) TableNames(args ...int64) []string {
@@ -325,86 +327,4 @@ func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 
 func (info *MetaInfo) Serialize(w io.Writer) error {
 	return dump.NewEncoder(w).Encode(info)
-}
-
-// func DD(r io.Reader) (info *MetaInfo, err error) {
-// 	info = NewMetaInfo(nil)
-// 	err = dump.NewDecoder(r).Decode(info)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	ts := NowMicro()
-// }
-
-func Deserialize(r io.Reader) (info *MetaInfo, err error) {
-	info = NewMetaInfo(nil)
-	err = dump.NewDecoder(r).Decode(info)
-	if err != nil {
-		return nil, err
-	}
-	// TODO: make it faster
-	info.Sequence.NextBlockID = 0
-	info.Sequence.NextSegmentID = 0
-	info.Sequence.NextTableID = 0
-	info.Sequence.NextIndexID = 0
-	ts := NowMicro()
-	for k, tbl := range info.Tables {
-		if len(tbl.Schema.Indexes) > 0 {
-			if tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID > info.Sequence.NextIndexID {
-				info.Sequence.NextIndexID = tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID
-			}
-		}
-		max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()
-		if k > info.Sequence.NextTableID {
-			info.Sequence.NextTableID = k
-		}
-		if max_tbl_segid > info.Sequence.NextSegmentID {
-			info.Sequence.NextSegmentID = max_tbl_segid
-		}
-		if max_tbl_blkid > info.Sequence.NextBlockID {
-			info.Sequence.NextBlockID = max_tbl_blkid
-		}
-		tbl.Info = info
-		if tbl.IsDeleted(ts) {
-			info.Tombstone[tbl.ID] = true
-		} else {
-			info.TableIds[tbl.ID] = true
-			info.NameMap[tbl.Schema.Name] = tbl.ID
-		}
-		tbl.IdMap = make(map[uint64]int)
-		segFound := false
-		for idx, seg := range tbl.Segments {
-			tbl.IdMap[seg.GetID()] = idx
-			seg.Table = tbl
-			blkFound := false
-			for iblk, blk := range seg.Blocks {
-				if !blkFound {
-					if blk.DataState < FULL {
-						blkFound = true
-						seg.ActiveBlk = iblk
-					} else {
-						seg.ActiveBlk++
-					}
-				}
-				blk.Segment = seg
-			}
-			if !segFound {
-				if seg.DataState < FULL {
-					segFound = true
-					tbl.ActiveSegment = idx
-				} else if seg.DataState == FULL {
-					blk := seg.GetActiveBlk()
-					if blk != nil {
-						tbl.ActiveSegment = idx
-						segFound = true
-					}
-				} else {
-					tbl.ActiveSegment++
-				}
-			}
-			// seg.ReplayState()
-		}
-	}
-
-	return info, err
 }

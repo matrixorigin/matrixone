@@ -155,7 +155,6 @@ type MetaInfo struct {
 	NameMap    map[string]uint64 `json:"-"`
 	Tombstone  map[uint64]bool   `json:"-"`
 	CkpTime    int64
-	// CkpTime    int64             `json:"-"`
 }
 
 type CopyCtx struct {

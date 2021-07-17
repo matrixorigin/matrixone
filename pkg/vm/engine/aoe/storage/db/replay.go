@@ -229,6 +229,34 @@ func (h *replayHandle) Cleanup() {
 	}
 }
 
+func (h *replayHandle) CleanupWithCtx(maxVer int) {
+	if maxVer <= 1 {
+		panic("logic error")
+	}
+	for _, head := range h.tables {
+		depth := 0
+		next := head
+		for next != nil {
+			if depth >= maxVer {
+				h.cleanupFile(next.name)
+			}
+			next = next.next
+			depth++
+		}
+	}
+	if h.infos != nil {
+		depth := 0
+		next := h.infos
+		for next != nil {
+			if depth >= maxVer {
+				h.cleanupFile(next.name)
+			}
+			depth++
+			next = next.next
+		}
+	}
+}
+
 func (h *replayHandle) String() string {
 	s := fmt.Sprintf("[InfoFiles]:")
 	{
