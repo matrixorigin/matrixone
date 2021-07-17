@@ -11,6 +11,7 @@ type Resource interface {
 	GetFileName() string
 	GetLastFileName() string
 	Serialize(io.Writer) error
+	GetTableId() uint64
 }
 
 type ResourceType uint8

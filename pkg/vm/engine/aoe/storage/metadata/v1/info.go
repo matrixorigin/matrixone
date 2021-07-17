@@ -298,6 +298,10 @@ func (info *MetaInfo) ReadFrom(r io.Reader) error {
 	return err
 }
 
+func (info *MetaInfo) GetTableId() uint64 {
+	panic("logic error")
+}
+
 func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()

@@ -32,16 +32,15 @@ func (ck *Checkpointer) PreCommit(res md.Resource) error {
 		log.Error("nil res")
 		return errors.New("nil res")
 	}
-	var ftype FileType
+	var fname string
 	switch res.GetResourceType() {
 	case md.ResInfo:
-		ftype = FTInfoCkp
+		fname = MakeInfoCkpFileName(ck.Dirname, res.GetFileName(), true)
 	case md.ResTable:
-		ftype = FTTableCkp
+		fname = MakeTableCkpFileName(ck.Dirname, res.GetFileName(), res.GetTableId(), true)
 	default:
 		panic("not supported")
 	}
-	fname := MakeFilename(ck.Dirname, ftype, res.GetFileName(), true)
 	// log.Infof("PreCommit CheckPoint: %s", fname)
 	if _, err := os.Stat(fname); err == nil {
 		return ErrAlreadyExist

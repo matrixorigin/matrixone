@@ -46,7 +46,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
 
-	filename := e.MakeFilename(cfg.Dir, e.FTTableCkp, tbl.GetFileName(), false)
+	filename := e.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
 	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
 	defer w.Close()
@@ -55,7 +55,7 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	info.CheckPoint++
 
-	filename = e.MakeFilename(cfg.Dir, e.FTInfoCkp, info.GetFileName(), false)
+	filename = e.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 
 	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
@@ -69,7 +69,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
 
-	filename = e.MakeFilename(cfg.Dir, e.FTTableCkp, tbl.GetFileName(), false)
+	filename = e.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
 	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
 	defer w.Close()
@@ -78,7 +78,7 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	info.CheckPoint++
 
-	filename = e.MakeFilename(cfg.Dir, e.FTInfoCkp, info.GetFileName(), false)
+	filename = e.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 	w.Close()
 
 	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
@@ -119,8 +119,7 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	invalids := []string{"ds234", "234ds"}
 	for _, invalid := range invalids {
-		// fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, invalid, false)
-		fname := e.MakeFilename(cfg.Dir, e.FTInfoCkp, invalid, false)
+		fname := e.MakeInfoCkpFileName(cfg.Dir, invalid, false)
 
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
@@ -136,8 +135,7 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	valids := []string{"1", "2", "3", "100"}
 	for _, valid := range valids {
-		// fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, valid, false)
-		fname := e.MakeFilename(cfg.Dir, e.FTInfoCkp, valid, false)
+		fname := e.MakeInfoCkpFileName(cfg.Dir, valid, false)
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
 		f.Close()
@@ -152,8 +150,7 @@ func TestCleanStaleMeta(t *testing.T) {
 	// assert.Nil(t, err)
 	// assert.Equal(t, 1, len(files))
 
-	// fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, "100", false)
-	fname := e.MakeFilename(cfg.Dir, e.FTInfoCkp, "100", false)
+	fname := e.MakeInfoCkpFileName(cfg.Dir, "100", false)
 	_, err = os.Stat(fname)
 	assert.Nil(t, err)
 }

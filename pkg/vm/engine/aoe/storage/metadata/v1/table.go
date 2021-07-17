@@ -328,6 +328,10 @@ func (tbl *Table) GetResourceType() ResourceType {
 	return ResTable
 }
 
+func (tbl *Table) GetTableId() uint64 {
+	return tbl.ID
+}
+
 func (tbl *Table) LiteCopy() *Table {
 	new_tbl := &Table{
 		ID:        tbl.ID,

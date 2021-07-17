@@ -261,7 +261,7 @@ func (d *DB) replayAndCleanData() {
 				SegmentID: seg.ID,
 			}
 			if seg.DataState == md.SORTED {
-				name := e.MakeFilename(d.Dir, e.FTSegment, id.ToSegmentFileName(), false)
+				name := e.MakeSegmentFileName(d.Dir, id.ToSegmentFileName(), id.TableID)
 				expectFiles[name] = true
 			} else {
 				for _, blk := range seg.Blocks {
@@ -269,7 +269,7 @@ func (d *DB) replayAndCleanData() {
 						continue
 					}
 					id.BlockID = blk.ID
-					name := e.MakeFilename(d.Dir, e.FTBlock, id.ToBlockFileName(), false)
+					name := e.MakeBlockFileName(d.Dir, id.ToBlockFileName(), id.TableID)
 					expectFiles[name] = true
 				}
 			}

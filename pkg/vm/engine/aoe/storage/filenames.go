@@ -32,6 +32,34 @@ func MakeMetaDir(dirname string) string {
 	return path.Join(dirname, "meta")
 }
 
+func MakeTableDir(dirname string, id uint64) string {
+	return path.Join(dirname, fmt.Sprintf("%d", id))
+}
+
+func MakeBlockFileName(dirname, name string, tableId uint64) string {
+	// dir := MakeTableDir(dirname, id)
+	dir := dirname
+	return MakeFilename(dir, FTBlock, name, false)
+}
+
+func MakeSegmentFileName(dirname, name string, tableId uint64) string {
+	// dir := MakeTableDir(dirname, id)
+	dir := dirname
+	return MakeFilename(dir, FTSegment, name, false)
+}
+
+func MakeTableCkpFileName(dirname, name string, tableId uint64, isTmp bool) string {
+	return MakeFilename(dirname, FTTableCkp, name, isTmp)
+}
+
+func MakeInfoCkpFileName(dirname, name string, isTmp bool) string {
+	return MakeFilename(dirname, FTInfoCkp, name, isTmp)
+}
+
+func MakeLockFileName(dirname, name string) string {
+	return MakeFilename(dirname, FTLock, name, false)
+}
+
 func ParseInfoMetaName(filename string) (version int, ok bool) {
 	name := strings.TrimSuffix(filename, ".ckp")
 	if len(name) == len(filename) {

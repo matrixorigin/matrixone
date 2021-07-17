@@ -133,7 +133,7 @@ func (h *replayHandle) addFile(fname string) {
 	if ok {
 		tid, version, err := md.ParseTableCkpFile(name)
 		if err != nil {
-			panic(err)
+			panic(fmt.Sprintf("parse table ckp file %s err: %s", fname, err))
 		}
 		f := new(tableFile)
 		f.name = path.Join(h.metaDir, fname)
