@@ -203,9 +203,11 @@ func (c *Catalog) CreateTable(dbId, typ uint64, tableName, comment string, table
 			Data:   buf.Bytes(),
 		}))
 	// TODO: wait table meta state changed?
+
 	if err != nil {
 		return 0, err
 	}
+	println(fmt.Sprintf("call create table, %d", tid))
 	return tid, nil
 }
 

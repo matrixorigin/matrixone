@@ -204,6 +204,7 @@ func (d *DB) DropTable(name string) (id uint64, err error) {
 }
 
 func (d *DB) CreateTable(info *aoe.TabletInfo) (id uint64, err error) {
+	println("[QSQ] call local CreateTable")
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -216,6 +217,7 @@ func (d *DB) CreateTable(info *aoe.TabletInfo) (id uint64, err error) {
 		return id, err
 	}
 	id = op.GetTable().GetID()
+	println(fmt.Sprintf("[QSQ] call local CreateTable finished, %d", id))
 	return id, nil
 }
 

@@ -1,12 +1,11 @@
 package catalog
 
 import (
-	"encoding/json"
 	"fmt"
+	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage/mem"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
@@ -14,6 +13,7 @@ import (
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/metadata"
 	"os"
 	"testing"
@@ -74,12 +74,16 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 		if err != nil {
 			return nil, err
 		}
-		memDataStorage := mem.NewStorage()
-		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, memDataStorage, func(cfg *config.Config) {
+		aoeDataStorage, err := daoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
+		if err != nil {
+			return nil, err
+		}
+		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, func(cfg *config.Config) {
 			cfg.DataPath = fmt.Sprintf("%s/node-%d", tmpDir, i)
 			cfg.RaftAddr = fmt.Sprintf("127.0.0.1:1000%d", i)
 			cfg.ClientAddr = fmt.Sprintf("127.0.0.1:2000%d", i)
 
+			pConfig.DefaultSchedulers = nil
 			cfg.Replication.ShardHeartbeatDuration = typeutil.NewDuration(time.Millisecond * 100)
 			cfg.Replication.StoreHeartbeatDuration = typeutil.NewDuration(time.Second)
 
@@ -147,47 +151,23 @@ func testTableDDL(t *testing.T, c Catalog) {
 	completedC := make(chan *aoe.TableInfo, 1)
 	defer close(completedC)
 	go func() {
+		i := 0
 		for {
 			tb, _ := c.GetTable(dbid, tableName)
 			if tb != nil {
 				completedC <- tb
 				break
 			}
+			i += 1
 		}
 	}()
 	select {
 	case <-completedC:
-		stdLog.Printf("create %s finished", tableName)
+		stdLog.Printf("[QSQ], create %s finished", tableName)
 		break
 	case <-time.After(3 * time.Second):
-		stdLog.Printf("create %s failed, timeout", tableName)
+		stdLog.Printf("[QSQ], create %s failed, timeout", tableName)
 	}
-	_, err = c.CreateTable(dbid, 0, tableName, "",  cols, nil)
-	require.Equal(t, ErrTableCreateExists, err)
-
-	for i := 1; i < 10; i++ {
-		tid2, err := c.CreateTable(dbid, 0, fmt.Sprintf("%s%d", tableName, i), "", cols, nil)
-		require.NoError(t, err)
-		require.Less(t, tid, tid2)
-	}
-	time.Sleep(5 * time.Second)
-
-	tbs, err = c.GetTables(dbid)
-
-	for _, tb := range tbs {
-		s, _ := json.Marshal(tb)
-		stdLog.Println(string(s))
-	}
-	require.NoError(t, err)
-	require.Equal(t, 10, len(tbs))
-
-	dTid, err := c.DropTable(dbid, tableName)
-	require.NoError(t, err)
-	require.Equal(t, tid, dTid)
-
-	_, err = c.GetTable(dbid, tableName)
-	require.Error(t, ErrTableNotExists, err)
-
 }
 func testDBDDL(t *testing.T, c Catalog) {
 	dbs, err := c.GetDBs()

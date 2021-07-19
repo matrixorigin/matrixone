@@ -83,8 +83,6 @@ type aoeStorage struct {
 	cmds  map[uint64]raftcmdpb.CMDType
 }
 
-
-
 func (h *aoeStorage) Start() error {
 	return h.app.Start()
 }
@@ -157,32 +155,44 @@ func NewStorageWithOptions(
 
 	cfg.Prophet.ResourceStateChangedHandler = func(res metadata.Resource, from metapb.ResourceState, to metapb.ResourceState) {
 		if from == metapb.ResourceState_WaittingCreate && to == metapb.ResourceState_Running {
+			println("[QSQ], Call ResourceStateChangedHandler")
 			if res.Data() == nil {
+				println("[QSQ], res data is empty, something wrong")
 				return
 			}
 			header := format.MustBytesToUint64(res.Data()[0:8])
 			keys := bytes.Split(res.Data()[8:8+header], []byte("#"))
 			tKey := keys[0]
 			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), res.ID()))
-			// TODO: Call local interface to create new tablet
-			// TODO: Re-design group store and set value to <partition, segment_ids>
-			_ = h.Set(rKey, []byte(res.Unique()))
 			t, _ := helper.DecodeTable(res.Data()[8+header:])
-			t.State = aoe.StatePublic
-			meta, _ := helper.EncodeTable(t)
-			_ = h.Set(tKey, meta)
+			// TODO: Re-design group store and set value to <partition, segment_ids>
+			if _, err := h.CreateTablet(&aoe.TabletInfo{
+				Name: fmt.Sprintf("%d#%d", res.ID(), t.Id),
+				ShardId: res.ID(),
+			}); err != nil {
+				//TODO: how to handle local create table failing
+				println(fmt.Sprintf("[QSQ], %s", err.Error()))
+			}else {
+				println(fmt.Sprintf("[QSQ], %s", fmt.Sprintf("%d#%d", res.ID(), t.Id)))
+				t.State = aoe.StatePublic
+				meta, _ := helper.EncodeTable(t)
+				_ = h.Set(tKey, meta)
+				_ = h.Set(rKey, []byte(res.Unique()))
+			}
 		}
 	}
 
 	cfg.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
 		return h
 	}
+
 	cfg.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
 		//TODO: 询问所有tablet
 		return func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
 			return newCompactIdx, err
 		}
 	}
+
 	cfg.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
 		//TODO:aoe group only
 		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
@@ -422,6 +432,7 @@ func (h *aoeStorage) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, erro
 }
 
 func (h *aoeStorage) CreateTablet(tbl *aoe.TabletInfo) (id uint64, err error) {
+	println("[QSQ] Call distributed CreateTablet, ", string(format.UInt64ToString(tbl.ShardId)))
 	info, _ := json.Marshal(tbl)
 	req := pb.Request{
 		Shard: tbl.ShardId,
@@ -430,10 +441,13 @@ func (h *aoeStorage) CreateTablet(tbl *aoe.TabletInfo) (id uint64, err error) {
 			TabletInfo: info,
 		},
 	}
+	println("[QSQ], begin to call ExecWithGroup for CreateTablet")
 	value, err := h.ExecWithGroup(req, pb.AOEGroup)
 	if err != nil {
+		println("[QSQ] Call distributed CreateTablet failed, ", err.Error())
 		return id, err
 	}
+	println("[QSQ] Call distributed CreateTablet finished")
 	return format.MustBytesToUint64(value), nil
 }
 
