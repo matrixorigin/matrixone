@@ -16,7 +16,7 @@ import (
 
 // Storage memory storage
 type Storage struct {
-	db *adb.DB
+	db    *adb.DB
 	stats stats.Stats
 }
 
@@ -40,10 +40,9 @@ func (s *Storage) Stats() stats.Stats {
 	return s.stats
 }
 
-
-func (s *Storage) Append(tabletName string, bat *batch.Batch, index *md.LogIndex) error  {
+func (s *Storage) Append(tabletName string, bat *batch.Batch, index *md.LogIndex) error {
 	size := 0
-	for _, vec := range bat.Vecs{
+	for _, vec := range bat.Vecs {
 		size += len(vec.Data)
 	}
 	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
@@ -69,6 +68,10 @@ func (s *Storage) DropTable(name string, index *md.LogIndex) (uint64, error) {
 
 func (s *Storage) TableIDs() (ids []uint64, err error) {
 	return s.db.TableIDs()
+}
+
+func (s *Storage) TableNames() (ids []string) {
+	return s.db.TableNames()
 }
 
 // RemovedShardData remove shard data

@@ -110,12 +110,8 @@ func TestClusterStartAndStop(t *testing.T) {
 
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
-	c.applications[0].RaftStore().GetRouter().Every(uint64(pb.KVGroup), false, func(shard *bhmetapb.Shard, address string){
-		println(fmt.Sprintf("[QQQ]%d, %d, %s", shard.Group, shard.ID, address))
-	})
-	c.applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), false, func(shard *bhmetapb.Shard, address string){
-		println(fmt.Sprintf("[QQQ]%d, %d, %s", shard.Group, shard.ID, address))
-	})
+
+
 	//testKVStorage(t, c)
 	testAOEStorage(t, c)
 }
@@ -175,11 +171,21 @@ func testAOEStorage(t *testing.T, c *testCluster)  {
 	//CreateTest
 	colCnt := 4
 	tableInfo := md.MockTableInfo(colCnt)
-	resp, err := c.applications[0].CreateTablet(&aoe.TabletInfo{
-		Name: fmt.Sprintf("%s#%d", tableInfo.Name, 101),
-		ShardId: 101,
+	toShard := uint64(0)
+	c.applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), false, func(shard *bhmetapb.Shard, address string){
+		toShard = shard.ID
+	})
+	require.Less(t, uint64(0), toShard)
+	tabletID, err := c.applications[0].CreateTablet(&aoe.TabletInfo{
+		Name: fmt.Sprintf("%d#%d", tableInfo.Id, toShard),
+		ShardId: toShard,
 		Table: *tableInfo,
 	})
 	require.NoError(t, err)
-	println(resp)
+	require.Less(t, uint64(0), tabletID)
+
+	names, err := c.applications[0].TabletNames(toShard)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, len(names))
 }

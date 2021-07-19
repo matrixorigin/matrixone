@@ -60,10 +60,10 @@ type Storage interface {
 
 	Append(string, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
-	CreateTablet(info *aoe.TabletInfo) (uint64, error)
+	CreateTablet(*aoe.TabletInfo) (uint64, error)
 	DropTablet(string) (uint64, error)
 	TabletIDs()([]uint64, error)
-
+	TabletNames(uint64) ([]string, error)
 	// Exec exec command
 	Exec(cmd interface{}) ([]byte, error)
 	// AsyncExec async exec command
@@ -421,27 +421,10 @@ func (h *aoeStorage) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, erro
 	return &s, nil
 }
 
-func (h *aoeStorage) TabletIDs() ([]uint64, error) {
-	req := pb.Request{
-		Type: pb.Relation,
-		TabletIds: pb.TabletIDsRequest{
-		},
-	}
-	value, err := h.ExecWithGroup(req, pb.AOEGroup)
-	if err != nil {
-		return nil, err
-	}
-	var rsp []uint64
-	err = json.Unmarshal(value, &rsp)
-	if err != nil {
-		return nil, err
-	}
-	return rsp, nil
-}
-
 func (h *aoeStorage) CreateTablet(tbl *aoe.TabletInfo) (id uint64, err error) {
 	info, _ := json.Marshal(tbl)
 	req := pb.Request{
+		Shard: tbl.ShardId,
 		Type: pb.CreateTablet,
 		CreateTablet: pb.CreateTabletRequest{
 			TabletInfo: info,
@@ -468,7 +451,42 @@ func (h *aoeStorage) DropTablet(name string) (id uint64, err error){
 	return format.MustBytesToUint64(value), nil
 }
 
+func (h *aoeStorage) TabletIDs() ([]uint64, error) {
+	req := pb.Request{
+		Type: pb.TabletIds,
+		TabletIds: pb.TabletIDsRequest{
+		},
+	}
+	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if err != nil {
+		return nil, err
+	}
+	var rsp []uint64
+	err = json.Unmarshal(value, &rsp)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
 
+func (h *aoeStorage) TabletNames(toShard uint64) ([]string, error) {
+	req := pb.Request{
+		Shard: toShard,
+		Type: pb.TabletNames,
+		TabletIds: pb.TabletIDsRequest{
+		},
+	}
+	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if err != nil {
+		return nil, err
+	}
+	var rsp []string
+	err = json.Unmarshal(value, &rsp)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
 
 
 

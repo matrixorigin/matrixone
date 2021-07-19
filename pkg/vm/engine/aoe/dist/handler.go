@@ -17,6 +17,9 @@ func (h *aoeStorage) init() {
 	h.AddReadFunc(uint64(pb.Get), h.get)
 	h.AddReadFunc(uint64(pb.PrefixScan), h.prefixScan)
 	h.AddReadFunc(uint64(pb.Scan), h.scan)
+
+	h.AddWriteFunc(uint64(pb.CreateTablet), h.createTablet)
+	h.AddReadFunc(uint64(pb.TabletNames), h.tableNames)
 }
 
 func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error {
@@ -49,12 +52,19 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		req.Key = msg.Key
 		req.CustemType = uint64(pb.Incr)
 		req.Type = raftcmdpb.CMDType_Write
-		req.Cmd = protoc.MustMarshal(&msg)/*
-	case pb.Append:
-		msg := customReq.Append
-		req.ToShard = customReq.Shard*/
-
-
+		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.CreateTablet:
+		msg := customReq.CreateTablet
+		req.ToShard = customReq.Shard
+		req.CustemType = uint64(pb.CreateTablet)
+		req.Type = raftcmdpb.CMDType_Write
+		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.TabletNames:
+		msg := customReq.TabletIds
+		req.ToShard = customReq.Shard
+		req.CustemType = uint64(pb.TabletNames)
+		req.Type = raftcmdpb.CMDType_Read
+		req.Cmd = protoc.MustMarshal(&msg)
 	}
 	return nil
 }

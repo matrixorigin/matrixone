@@ -5,16 +5,8 @@
 #
 set -e
 
-# directories containing protos to be built
-DIRS="./metapb ./rpcpb"
+PRJ_PB_PATH=$(cd "$(dirname "$0")";pwd)
+cd "${PRJ_PB_PATH}"
 
-PRJ_PB_PATH="${GOPATH}/src/github.com/sukki37/matrixone/pkg/vm/engine/aoe/dist/pb"
-# work_path=$(dirname $0)
-# cd ~/${work_path}
-
-for dir in ${DIRS}; do
-	pushd ${dir}
-		protoc  -I=.:"${PRJ_PB_PATH}":"${GOPATH}/src" --gogofaster_out=plugins=grpc:.  *.proto
-		goimports -w *.pb.go
-	popd
-done
+protoc -I=. -I=$GOPATH/src -I=$GOPATH/src/github.com/gogo/protobuf/protobuf --gogo_out=. meta.proto
+protoc -I=. -I=$GOPATH/src -I=$GOPATH/src/github.com/gogo/protobuf/protobuf --gogo_out=. rpc.proto

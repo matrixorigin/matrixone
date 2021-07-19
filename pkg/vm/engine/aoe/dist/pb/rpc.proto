@@ -24,6 +24,8 @@ enum Type {
   CreateTablet = 102;
   DropTablet = 103;
   Relation = 104;
+  TabletIds = 105;
+  TabletNames = 106;
 }
 
 message Request {
