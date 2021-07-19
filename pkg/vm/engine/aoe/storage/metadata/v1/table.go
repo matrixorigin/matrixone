@@ -1,15 +1,52 @@
 package metadata
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"unsafe"
 
 	log "github.com/sirupsen/logrus"
 )
 
-func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
+var (
+	GloablSeqNum         uint64 = 0
+	ErrParseTableCkpFile        = errors.New("parse table file name error")
+)
+
+func MakeTableCkpFile(tid, version uint64) string {
+	return fmt.Sprintf("%d_v%d", tid, version)
+}
+
+func ParseTableCkpFile(name string) (tid, version uint64, err error) {
+	strs := strings.Split(name, "_v")
+	if len(strs) != 2 {
+		return tid, version, ErrParseTableCkpFile
+	}
+	if tid, err = strconv.ParseUint(strs[0], 10, 64); err != nil {
+		return tid, version, err
+	}
+	if version, err = strconv.ParseUint(strs[1], 10, 64); err != nil {
+		return tid, version, err
+	}
+	return tid, version, err
+}
+
+func NextGloablSeqnum() uint64 {
+	return atomic.AddUint64(&GloablSeqNum, uint64(1))
+}
+
+type GenericTableWrapper struct {
+	ID uint64
+	TimeStamp
+	LogHistry
+}
+
+func NewTable(logIdx uint64, info *MetaInfo, schema *Schema, ids ...uint64) *Table {
 	var id uint64
 	if len(ids) == 0 {
 		id = info.Sequence.GetTableID()
@@ -22,10 +59,25 @@ func NewTable(info *MetaInfo, schema *Schema, ids ...uint64) *Table {
 		IdMap:     make(map[uint64]int),
 		TimeStamp: *NewTimeStamp(),
 		Info:      info,
+		Conf:      info.Conf,
 		Schema:    schema,
 		Stat:      new(Statstics),
+		LogHistry: LogHistry{CreatedIndex: logIdx},
 	}
 	return tbl
+}
+
+func (tbl *Table) Marshal() ([]byte, error) {
+	return json.Marshal(tbl)
+}
+
+func (tbl *Table) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, tbl)
+}
+
+func (tbl *Table) ReadFrom(r io.Reader) error {
+	err := json.NewDecoder(r).Decode(tbl)
+	return err
 }
 
 func (tbl *Table) GetID() uint64 {
@@ -132,22 +184,8 @@ func (tbl *Table) SegmentIDs(args ...int64) map[uint64]uint64 {
 	return ids
 }
 
-func (tbl *Table) SetInfo(info *MetaInfo) error {
-	if tbl.Info == nil {
-		tbl.Info = info
-		for _, seg := range tbl.Segments {
-			err := seg.SetInfo(info)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 func (tbl *Table) CreateSegment() (seg *Segment, err error) {
-	seg = NewSegment(tbl.Info, tbl.ID, tbl.Info.Sequence.GetSegmentID(), tbl.Schema)
+	seg = NewSegment(tbl, tbl.Info.Sequence.GetSegmentID())
 	return seg, err
 }
 
@@ -240,6 +278,7 @@ func (tbl *Table) RegisterSegment(seg *Segment) error {
 	tbl.IdMap[seg.GetID()] = len(tbl.Segments)
 	tbl.Segments = append(tbl.Segments, seg)
 	atomic.StoreUint64(&tbl.SegmentCnt, uint64(len(tbl.Segments)))
+	tbl.UpdateVersion()
 	return nil
 }
 
@@ -264,13 +303,54 @@ func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {
 	return segid, blkid
 }
 
+func (tbl *Table) UpdateVersion() {
+	atomic.AddUint64(&tbl.CheckPoint, uint64(1))
+}
+
+func (tbl *Table) GetFileName() string {
+	return fmt.Sprintf("%d_v%d", tbl.ID, tbl.CheckPoint)
+}
+
+func (tbl *Table) GetLastFileName() string {
+	return fmt.Sprintf("%d_v%d", tbl.ID, tbl.CheckPoint-1)
+}
+
+func (tbl *Table) Serialize(w io.Writer) error {
+	bytes, err := tbl.Marshal()
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(bytes)
+	return err
+}
+
+func (tbl *Table) GetResourceType() ResourceType {
+	return ResTable
+}
+
+func (tbl *Table) GetTableId() uint64 {
+	return tbl.ID
+}
+
+func (tbl *Table) LiteCopy() *Table {
+	new_tbl := &Table{
+		ID:        tbl.ID,
+		TimeStamp: tbl.TimeStamp,
+		LogHistry: tbl.LogHistry,
+	}
+	return new_tbl
+}
+
 func (tbl *Table) Copy(ctx CopyCtx) *Table {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
-	new_tbl := NewTable(tbl.Info, tbl.Schema, tbl.ID)
+	new_tbl := NewTable(tbl.CreatedIndex, tbl.Info, tbl.Schema, tbl.ID)
 	new_tbl.TimeStamp = tbl.TimeStamp
+	new_tbl.CheckPoint = tbl.CheckPoint
 	new_tbl.BoundSate = tbl.BoundSate
+	new_tbl.LogHistry = tbl.LogHistry
+	new_tbl.Conf = tbl.Conf
 	for _, v := range tbl.Segments {
 		if !v.Select(ctx.Ts) {
 			continue
@@ -284,6 +364,63 @@ func (tbl *Table) Copy(ctx CopyCtx) *Table {
 	return new_tbl
 }
 
+func (tbl *Table) Replay() {
+	ts := NowMicro()
+	if len(tbl.Schema.Indexes) > 0 {
+		if tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID > tbl.Info.Sequence.NextIndexID {
+			tbl.Info.Sequence.NextIndexID = tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID
+		}
+	}
+	max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()
+	if tbl.ID > tbl.Info.Sequence.NextTableID {
+		tbl.Info.Sequence.NextTableID = tbl.ID
+	}
+	if max_tbl_segid > tbl.Info.Sequence.NextSegmentID {
+		tbl.Info.Sequence.NextSegmentID = max_tbl_segid
+	}
+	if max_tbl_blkid > tbl.Info.Sequence.NextBlockID {
+		tbl.Info.Sequence.NextBlockID = max_tbl_blkid
+	}
+	if tbl.IsDeleted(ts) {
+		tbl.Info.Tombstone[tbl.ID] = true
+	} else {
+		tbl.Info.TableIds[tbl.ID] = true
+		tbl.Info.NameMap[tbl.Schema.Name] = tbl.ID
+	}
+	tbl.IdMap = make(map[uint64]int)
+	segFound := false
+	for idx, seg := range tbl.Segments {
+		tbl.IdMap[seg.GetID()] = idx
+		seg.Table = tbl
+		blkFound := false
+		for iblk, blk := range seg.Blocks {
+			if !blkFound {
+				if blk.DataState < FULL {
+					blkFound = true
+					seg.ActiveBlk = iblk
+				} else {
+					seg.ActiveBlk++
+				}
+			}
+			blk.Segment = seg
+		}
+		if !segFound {
+			if seg.DataState < FULL {
+				segFound = true
+				tbl.ActiveSegment = idx
+			} else if seg.DataState == FULL {
+				blk := seg.GetActiveBlk()
+				if blk != nil {
+					tbl.ActiveSegment = idx
+					segFound = true
+				}
+			} else {
+				tbl.ActiveSegment++
+			}
+		}
+	}
+}
+
 func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
 	if info == nil {
 		info = MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
@@ -291,7 +428,7 @@ func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
 	if schema == nil {
 		schema = MockSchema(2)
 	}
-	tbl, _ := info.CreateTable(schema)
+	tbl, _ := info.CreateTable(atomic.AddUint64(&GloablSeqNum, uint64(1)), schema)
 	info.RegisterTable(tbl)
 	var activeSeg *Segment
 	for i := uint64(0); i < blkCnt; i++ {

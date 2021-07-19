@@ -21,6 +21,7 @@ type ITableData interface {
 	GetSSTBufMgr() bmgrif.IBufferManager
 	GetFsManager() base.IManager
 	GetSegmentCount() uint32
+	GetSegmentedIndex() (uint64, bool)
 	GetIndexHolder() *index.TableHolder
 	RegisterSegment(meta *md.Segment) (seg ISegment, err error)
 	RegisterBlock(meta *md.Block) (blk IBlock, err error)
@@ -48,6 +49,7 @@ type ISegment interface {
 	GetFsManager() base.IManager
 	GetIndexHolder() *index.SegmentHolder
 	GetSegmentFile() base.ISegmentFile
+	GetSegmentedIndex() (uint64, bool)
 	GetType() base.SegmentType
 	RegisterBlock(*md.Block) (blk IBlock, err error)
 	StrongRefBlock(id uint64) IBlock
@@ -69,6 +71,7 @@ type IBlock interface {
 	GetSSTBufMgr() bmgrif.IBufferManager
 	GetFsManager() base.IManager
 	GetIndexHolder() *index.BlockHolder
+	GetSegmentedIndex() (uint64, bool)
 	GetMeta() *md.Block
 	GetType() base.BlockType
 	CloneWithUpgrade(ISegment, *md.Block) (IBlock, error)

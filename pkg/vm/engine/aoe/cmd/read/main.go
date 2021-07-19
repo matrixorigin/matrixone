@@ -6,6 +6,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/mempool"
@@ -41,7 +42,7 @@ const (
 
 var (
 	opts     = &e.Options{}
-	tablet   *aoe.TabletInfo
+	table    *aoe.TableInfo
 	readPool *ants.Pool
 	proc     *process.Process
 )
@@ -62,12 +63,12 @@ func init() {
 		InsertCapacity: blockRows * uint64(colCnt) * 2000,
 		DataCapacity:   blockRows * uint64(colCnt) * 2000,
 	}
+	opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+		Interval: time.Duration(1) * time.Second,
+	}
 	opts.Meta.Conf = mdCfg
 	info := md.MockTableInfo(colCnt)
-	tablet = &aoe.TabletInfo{
-		Table: *info,
-		Name:  tableName,
-	}
+	table = info
 }
 
 func getInsertBatch(meta *md.Table) *batch.Batch {
@@ -90,7 +91,7 @@ func makeDB() *db.DB {
 }
 
 func creatTable(impl *db.DB) {
-	_, err := impl.CreateTable(tablet)
+	_, err := impl.CreateTable(table, dbi.TableOpCtx{TableName: table.Name})
 	if err != nil {
 		panic(err)
 	}
@@ -107,8 +108,7 @@ func makeFiles(impl *db.DB) {
 	}
 	ibat := getInsertBatch(meta)
 	for i := uint64(0); i < insertCnt; i++ {
-		index := md.LogIndex{Capacity: uint64(ibat.Vecs[0].Length())}
-		if err := impl.Append(tableName, ibat, &index); err != nil {
+		if err := impl.Append(dbi.AppendCtx{TableName: tableName, Data: ibat, OpIndex: uint64(i)}); err != nil {
 			panic(err)
 		}
 	}
@@ -138,15 +138,15 @@ func readData() {
 		cols = append(cols, i)
 	}
 	refs := make([]uint64, len(attrs))
-	segInfos := rel.Segments()
+	segIds := rel.SegmentIds()
 
 	totalRows := uint64(0)
 	startProfile()
 	defer stopProfile()
 	now := time.Now()
 	var wg sync.WaitGroup
-	for _, segInfo := range segInfos {
-		seg := rel.Segment(segInfo, proc)
+	for _, segId := range segIds.Ids {
+		seg := rel.Segment(segId, proc)
 		for _, id := range seg.Blocks() {
 			blk := seg.Block(id, proc)
 			bat, err := blk.Prefetch(refs, attrs, proc)

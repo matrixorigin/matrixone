@@ -48,7 +48,7 @@ type MemtableWriter struct {
 
 func (sw *MemtableWriter) Flush() (err error) {
 	id := sw.Memtable.GetID()
-	fname := e.MakeFilename(sw.Dirname, e.FTBlock, id.ToBlockFileName(), false)
+	fname := e.MakeBlockFileName(sw.Dirname, id.ToBlockFileName(), id.TableID)
 	log.Infof("%s | Memtable | Flushing", fname)
 	dir := filepath.Dir(fname)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -68,7 +68,7 @@ func (sw *MemtableWriter) Flush() (err error) {
 	zmIndexes := []index.Index{}
 
 	// TODO: Here mock zonemap index for test
-	mtTypes := mt.Meta.Segment.Schema.Types()
+	mtTypes := mt.Meta.Segment.Table.Schema.Types()
 	for idx, ctype := range mtTypes {
 		if ctype.Oid == types.T_int32 {
 			minv := int32(1) + int32(idx)*100
@@ -88,7 +88,7 @@ func (sw *MemtableWriter) Flush() (err error) {
 	}
 
 	buf := make([]byte, 2+len(mtTypes)*8*2)
-	binary.BigEndian.PutUint16(buf, uint16(len(mt.Meta.Segment.Schema.ColDefs)))
+	binary.BigEndian.PutUint16(buf, uint16(len(mt.Meta.Segment.Table.Schema.ColDefs)))
 	bat := mt.Block.GetFullBatch()
 	defer bat.Close()
 	var colBufs [][]byte

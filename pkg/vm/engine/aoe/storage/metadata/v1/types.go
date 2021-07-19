@@ -1,8 +1,24 @@
 package metadata
 
 import (
+	"io"
 	"matrixone/pkg/container/types"
 	"sync"
+)
+
+type Resource interface {
+	GetResourceType() ResourceType
+	GetFileName() string
+	GetLastFileName() string
+	Serialize(io.Writer) error
+	GetTableId() uint64
+}
+
+type ResourceType uint8
+
+const (
+	ResInfo ResourceType = iota
+	ResTable
 )
 
 type IndexType uint16
@@ -16,6 +32,12 @@ type LogIndex struct {
 	Start    uint64
 	Count    uint64
 	Capacity uint64
+}
+
+type LogHistry struct {
+	CreatedIndex uint64
+	DeletedIndex uint64
+	AppliedIndex uint64
 }
 
 type TimeStamp struct {
@@ -51,7 +73,6 @@ type Block struct {
 	Count       uint64
 	Index       *LogIndex
 	PrevIndex   *LogIndex
-	DeleteIndex *uint64
 	DataState   DataState
 	Segment     *Segment `json:"-"`
 }
@@ -69,14 +90,12 @@ type Segment struct {
 	sync.RWMutex
 	TimeStamp
 	ID            uint64
-	TableID       uint64
 	MaxBlockCount uint64
 	Blocks        []*Block
 	ActiveBlk     int
 	IdMap         map[uint64]int
 	DataState     DataState
-	Info          *MetaInfo `json:"-"`
-	Schema        *Schema   `json:"-"`
+	Table         *Table `json:"-"`
 }
 
 type ColDef struct {
@@ -107,14 +126,17 @@ type Table struct {
 	BoundSate
 	sync.RWMutex
 	TimeStamp
+	LogHistry
 	ID            uint64
 	Segments      []*Segment
 	SegmentCnt    uint64
 	ActiveSegment int            `json:"-"`
 	IdMap         map[uint64]int `json:"-"`
 	Info          *MetaInfo      `json:"-"`
+	Stat          *Statstics     `json:"-"`
 	Schema        *Schema
-	Stat          *Statstics
+	Conf          *Configuration
+	CheckPoint    uint64
 }
 
 type Configuration struct {
@@ -132,6 +154,7 @@ type MetaInfo struct {
 	TableIds   map[uint64]bool   `json:"-"`
 	NameMap    map[string]uint64 `json:"-"`
 	Tombstone  map[uint64]bool   `json:"-"`
+	CkpTime    int64
 }
 
 type CopyCtx struct {

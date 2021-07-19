@@ -19,7 +19,7 @@ func createDBLock(dir string) (io.Closer, error) {
 			return nil, err
 		}
 	}
-	fname := e.MakeFilename(dir, e.FTLock, LockName, false)
+	fname := e.MakeLockFileName(dir, LockName)
 	f, err := os.Create(fname)
 	if err != nil {
 		return nil, err
