@@ -1,5 +1,7 @@
 package dbi
 
+import "matrixone/pkg/container/batch"
+
 type OnTableDroppedCB = func(error)
 
 type TableOpCtx struct {
@@ -24,4 +26,10 @@ type DropTableCtx struct {
 type GetSegmentsCtx struct {
 	OpIndex   uint64
 	TableName string
+}
+
+type AppendCtx struct {
+	OpIndex   uint64
+	TableName string
+	Data      *batch.Batch
 }

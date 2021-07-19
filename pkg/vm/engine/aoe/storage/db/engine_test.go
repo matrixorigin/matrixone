@@ -35,7 +35,7 @@ func TestEngine(t *testing.T) {
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
-	insertCh := make(chan *InsertReq)
+	insertCh := make(chan dbi.AppendCtx)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
 	p, _ := ants.NewPool(40)
@@ -136,9 +136,9 @@ func TestEngine(t *testing.T) {
 			case req := <-insertCh:
 				loopWg.Add(1)
 				t := func() {
-					rel, err := inst.Relation(req.Name)
+					rel, err := inst.Relation(req.TableName)
 					assert.Nil(t, err)
-					err = rel.Write(req.Data, req.LogIndex)
+					err = rel.Write(req)
 					assert.Nil(t, err)
 					loopWg.Done()
 				}
@@ -154,10 +154,10 @@ func TestEngine(t *testing.T) {
 	go func() {
 		defer driverWg.Done()
 		for i := 0; i < insertCnt; i++ {
-			req := &InsertReq{
-				Name:     tableInfo.Name,
-				Data:     baseCk,
-				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: uint64(baseCk.Vecs[0].Length())},
+			req := dbi.AppendCtx{
+				TableName: tableInfo.Name,
+				Data:      baseCk,
+				OpIndex:   uint64(i),
 			}
 			insertCh <- req
 		}
@@ -220,8 +220,11 @@ func TestLogIndex(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		rel, err := inst.Relation(tblMeta.Schema.Name)
 		assert.Nil(t, err)
-		logIndex := &md.LogIndex{ID: md.NextGloablSeqnum(), Capacity: uint64(baseCk.Vecs[0].Length())}
-		err = rel.Write(baseCk, logIndex)
+		err = rel.Write(dbi.AppendCtx{
+			OpIndex:   md.NextGloablSeqnum(),
+			Data:      baseCk,
+			TableName: tblMeta.Schema.Name,
+		})
 		assert.Nil(t, err)
 	}
 

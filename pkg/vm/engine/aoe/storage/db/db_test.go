@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"matrixone/pkg/container/batch"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -132,16 +131,19 @@ func TestAppend(t *testing.T) {
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
 	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, int(rows), ck.Vecs[0].Length())
-	logIdx := &md.LogIndex{
-		ID:       uint64(0),
-		Capacity: uint64(ck.Vecs[0].Length()),
-	}
 	invalidName := "xxx"
-	err = inst.Append(invalidName, ck, logIdx)
+	// err = inst.Append(invalidName, ck, logIdx)
+	appendCtx := dbi.AppendCtx{
+		OpIndex:   uint64(1),
+		TableName: invalidName,
+		Data:      ck,
+	}
+	err = inst.Append(appendCtx)
 	assert.NotNil(t, err)
 	insertCnt := 4
+	appendCtx.TableName = tblMeta.Schema.Name
 	for i := 0; i < insertCnt; i++ {
-		err = inst.Append(tableInfo.Name, ck, logIdx)
+		err = inst.Append(appendCtx)
 		assert.Nil(t, err)
 		// tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 		// assert.Nil(t, err)
@@ -192,12 +194,6 @@ func TestAppend(t *testing.T) {
 	inst.Close()
 }
 
-type InsertReq struct {
-	Name     string
-	Data     *batch.Batch
-	LogIndex *md.LogIndex
-}
-
 // TODO: When the capacity is not very big and the query concurrency is very high,
 // the db will be stuck due to no more space. Need intruduce timeout mechanism later
 func TestConcurrency(t *testing.T) {
@@ -211,7 +207,7 @@ func TestConcurrency(t *testing.T) {
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
-	insertCh := make(chan *InsertReq)
+	insertCh := make(chan dbi.AppendCtx)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
 	p, _ := ants.NewPool(40)
@@ -262,7 +258,7 @@ func TestConcurrency(t *testing.T) {
 			case req := <-insertCh:
 				wg.Add(1)
 				go func() {
-					err := inst.Append(req.Name, req.Data, req.LogIndex)
+					err := inst.Append(req)
 					assert.Nil(t, err)
 					wg.Done()
 				}()
@@ -277,10 +273,10 @@ func TestConcurrency(t *testing.T) {
 	go func() {
 		defer wg2.Done()
 		for i := 0; i < insertCnt; i++ {
-			insertReq := &InsertReq{
-				Name:     tableInfo.Name,
-				Data:     baseCk,
-				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: uint64(baseCk.Vecs[0].Length())},
+			insertReq := dbi.AppendCtx{
+				TableName: tableInfo.Name,
+				Data:      baseCk,
+				OpIndex:   uint64(i),
 			}
 			insertCh <- insertReq
 		}
@@ -395,11 +391,6 @@ func TestDropTable2(t *testing.T) {
 	assert.Nil(t, err)
 	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 
-	logIdx := &md.LogIndex{
-		ID:       uint64(0),
-		Capacity: uint64(baseCk.Vecs[0].Length()),
-	}
-
 	insertCnt := uint64(1)
 
 	var wg sync.WaitGroup
@@ -407,7 +398,11 @@ func TestDropTable2(t *testing.T) {
 		for i := uint64(0); i < insertCnt; i++ {
 			wg.Add(1)
 			go func() {
-				inst.Append(tableInfo.Name, baseCk, logIdx)
+				inst.Append(dbi.AppendCtx{
+					TableName: tableInfo.Name,
+					Data:      baseCk,
+					OpIndex:   uint64(1),
+				})
 				wg.Done()
 			}()
 		}

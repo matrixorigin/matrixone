@@ -1,8 +1,8 @@
 package db
 
 import (
-	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
@@ -106,6 +106,6 @@ func (r *Relation) Segment(id uint64, proc *process.Process) engine.Segment {
 	return seg
 }
 
-func (r *Relation) Write(bat *batch.Batch, index *md.LogIndex) error {
-	return r.DBImpl.Append(r.Meta.Schema.Name, bat, index)
+func (r *Relation) Write(ctx dbi.AppendCtx) error {
+	return r.DBImpl.Append(ctx)
 }

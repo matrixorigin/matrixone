@@ -44,10 +44,6 @@ func main() {
 	rows := metaConf.BlockMaxRows / 8
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTableByName(tName)
 	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
-	logIdx := &md.LogIndex{
-		ID:       uint64(0),
-		Capacity: uint64(ck.Vecs[0].Length()),
-	}
 	cols := make([]int, 0)
 	for i := 0; i < len(tblMeta.Schema.ColDefs); i++ {
 		cols = append(cols, i)
@@ -61,7 +57,7 @@ func main() {
 	insertWg.Add(1)
 	go func() {
 		for i := 0; i < insertCnt; i++ {
-			err = inst.Append(tName, ck, logIdx)
+			err = inst.Append(dbi.AppendCtx{TableName: tName, Data: ck, OpIndex: uint64(i)})
 			if err != nil {
 				log.Warn(err)
 			}

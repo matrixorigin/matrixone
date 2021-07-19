@@ -183,13 +183,13 @@ func TestReplay(t *testing.T) {
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
 	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
-	logIdx := &md.LogIndex{
-		ID:       uint64(0),
-		Capacity: uint64(ck.Vecs[0].Length()),
-	}
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
-		err = inst.Append(tableInfo.Name, ck, logIdx)
+		err = inst.Append(dbi.AppendCtx{
+			OpIndex:   uint64(i),
+			Data:      ck,
+			TableName: tableInfo.Name,
+		})
 		assert.Nil(t, err)
 	}
 	time.Sleep(time.Duration(10) * time.Millisecond)
@@ -241,7 +241,11 @@ func TestReplay(t *testing.T) {
 	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name})
 	assert.NotNil(t, err)
 	for i := 0; i < insertCnt; i++ {
-		err = inst.Append(tableInfo.Name, ck, logIdx)
+		err = inst.Append(dbi.AppendCtx{
+			TableName: tableInfo.Name,
+			Data:      ck,
+			OpIndex:   uint64(i),
+		})
 		assert.Nil(t, err)
 	}
 

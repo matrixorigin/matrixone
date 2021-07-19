@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -64,11 +63,11 @@ type DB struct {
 	sync.RWMutex
 }
 
-func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err error) {
+func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tbl, err := d.Store.MetaInfo.ReferenceTableByName(tableName)
+	tbl, err := d.Store.MetaInfo.ReferenceTableByName(ctx.TableName)
 	if err != nil {
 		return err
 	}
@@ -94,9 +93,12 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 		collection = op.Collection
 	}
 
-	clonedIndex := *index
+	index := &md.LogIndex{
+		ID:       ctx.OpIndex,
+		Capacity: uint64(ctx.Data.Vecs[0].Length()),
+	}
 	defer collection.Unref()
-	return collection.Append(bat, &clonedIndex)
+	return collection.Append(ctx.Data, index)
 }
 
 func (d *DB) getTableData(meta *md.Table) (tiface.ITableData, error) {
