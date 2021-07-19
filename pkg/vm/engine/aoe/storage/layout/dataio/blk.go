@@ -32,7 +32,7 @@ func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
 	}
 
 	dirname := segFile.GetDir()
-	name := e.MakeFilename(dirname, e.FTBlock, id.ToBlockFileName(), false)
+	name := e.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID)
 	// log.Infof("BlockFile name %s", name)
 	var info os.FileInfo
 	var err error

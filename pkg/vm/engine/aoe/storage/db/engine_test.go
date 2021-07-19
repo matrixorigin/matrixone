@@ -2,7 +2,7 @@ package db
 
 import (
 	"context"
-	"matrixone/pkg/vm/engine/aoe"
+	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -28,15 +28,14 @@ func TestEngine(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
-	insertCh := make(chan *InsertReq)
+	insertCh := make(chan dbi.AppendCtx)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
 	p, _ := ants.NewPool(40)
@@ -51,6 +50,21 @@ func TestEngine(t *testing.T) {
 	gm := guest.New(1<<40, hm)
 	proc := process.New(gm, mempool.New(1<<48, 8))
 
+	tableCnt := 100
+	var twg sync.WaitGroup
+	for i := 0; i < tableCnt; i++ {
+		twg.Add(1)
+		f := func(idx int) func() {
+			return func() {
+				tInfo := *tableInfo
+				_, err := inst.CreateTable(&tInfo, dbi.TableOpCtx{TableName: fmt.Sprintf("%dxxxxxx%d", idx, idx)})
+				assert.Nil(t, err)
+				twg.Done()
+			}
+		}
+		p.Submit(f(i))
+	}
+
 	reqCtx, cancel := context.WithCancel(context.Background())
 	var (
 		loopWg   sync.WaitGroup
@@ -63,8 +77,8 @@ func TestEngine(t *testing.T) {
 			defer searchWg.Done()
 			rel, err := inst.Relation(tblMeta.Schema.Name)
 			assert.Nil(t, err)
-			for _, segInfo := range rel.Segments() {
-				seg := rel.Segment(segInfo, proc)
+			for _, segId := range rel.SegmentIds().Ids {
+				seg := rel.Segment(segId, proc)
 				for _, id := range seg.Blocks() {
 					blk := seg.Block(id, proc)
 					bat, err := blk.Prefetch(refs, attrs, proc)
@@ -122,9 +136,9 @@ func TestEngine(t *testing.T) {
 			case req := <-insertCh:
 				loopWg.Add(1)
 				t := func() {
-					rel, err := inst.Relation(req.Name)
+					rel, err := inst.Relation(req.TableName)
 					assert.Nil(t, err)
-					err = rel.Write(req.Data, req.LogIndex)
+					err = rel.Write(req)
 					assert.Nil(t, err)
 					loopWg.Done()
 				}
@@ -140,10 +154,10 @@ func TestEngine(t *testing.T) {
 	go func() {
 		defer driverWg.Done()
 		for i := 0; i < insertCnt; i++ {
-			req := &InsertReq{
-				Name:     tablet.Name,
-				Data:     baseCk,
-				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: uint64(baseCk.Vecs[0].Length())},
+			req := dbi.AppendCtx{
+				TableName: tableInfo.Name,
+				Data:      baseCk,
+				OpIndex:   uint64(i),
 			}
 			insertCh <- req
 		}
@@ -156,7 +170,7 @@ func TestEngine(t *testing.T) {
 		defer driverWg.Done()
 		for i := 0; i < searchCnt; i++ {
 			req := &dbi.GetSnapshotCtx{
-				TableName: tablet.Name,
+				TableName: tableInfo.Name,
 				ScanAll:   true,
 				Cols:      cols,
 			}
@@ -168,12 +182,14 @@ func TestEngine(t *testing.T) {
 	searchWg.Wait()
 	cancel()
 	loopWg.Wait()
+	twg.Wait()
 	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.MemTableMgr.String())
 	t.Logf("Load: %d", loadCnt)
-	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
+	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
+	t.Logf("tbl %v, tid %d, err %v", tbl, tid, err)
 	assert.Equal(t, tbl.GetRowCount(), rows*uint64(insertCnt))
 	t.Log(tbl.GetRowCount())
 	attr := tblMeta.Schema.ColDefs[0].Name
@@ -184,6 +200,54 @@ func TestEngine(t *testing.T) {
 	rel, err := inst.Relation(tblMeta.Schema.Name)
 	assert.Nil(t, err)
 	t.Logf("Rows: %d, Size: %d", rel.Rows(), rel.Size(tblMeta.Schema.ColDefs[0].Name))
-	// t.Log()
+	t.Log(inst.GetSegmentIds(dbi.GetSegmentsCtx{TableName: tblMeta.Schema.Name}))
+	inst.Close()
+}
+
+func TestLogIndex(t *testing.T) {
+	initDBTest()
+	inst := initDB()
+	tableInfo := md.MockTableInfo(2)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: md.NextGloablSeqnum()})
+	assert.Nil(t, err)
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
+	assert.Nil(t, err)
+	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * 2 / 5
+	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+
+	// p, _ := ants.NewPool(40)
+
+	for i := 0; i < 50; i++ {
+		rel, err := inst.Relation(tblMeta.Schema.Name)
+		assert.Nil(t, err)
+		err = rel.Write(dbi.AppendCtx{
+			OpIndex:   md.NextGloablSeqnum(),
+			Data:      baseCk,
+			TableName: tblMeta.Schema.Name,
+		})
+		assert.Nil(t, err)
+	}
+
+	time.Sleep(time.Duration(100) * time.Millisecond)
+
+	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
+	assert.Nil(t, err)
+	logIndex, ok := tbl.GetSegmentedIndex()
+	assert.True(t, ok)
+	_, ok = tblMeta.Segments[len(tblMeta.Segments)-1].Blocks[1].GetAppliedIndex()
+	assert.False(t, ok)
+	expectIdx, ok := tblMeta.Segments[len(tblMeta.Segments)-1].Blocks[0].GetAppliedIndex()
+	assert.True(t, ok)
+	assert.Equal(t, expectIdx, logIndex)
+
+	dropLogIndex := md.NextGloablSeqnum()
+	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: dropLogIndex})
+	assert.Nil(t, err)
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	// tbl, err = inst.Store.DataTables.WeakRefTable(tid)
+	logIndex, ok = tbl.GetSegmentedIndex()
+	assert.True(t, ok)
+	assert.Equal(t, dropLogIndex, logIndex)
+
 	inst.Close()
 }

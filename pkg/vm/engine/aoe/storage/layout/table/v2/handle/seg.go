@@ -23,7 +23,7 @@ func (seg *Segment) GetID() uint64 {
 }
 
 func (seg *Segment) GetTableID() uint64 {
-	return seg.Data.GetMeta().TableID
+	return seg.Data.GetMeta().Table.ID
 }
 
 func (seg *Segment) NewIt() dbi.IBlockIt {

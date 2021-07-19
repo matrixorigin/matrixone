@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -16,6 +14,7 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
+	"github.com/pingcap/errors"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -53,11 +52,10 @@ func TestCreateTable(t *testing.T) {
 	for i := 0; i < tblCnt; i++ {
 		tableInfo := md.MockTableInfo(2)
 		name := fmt.Sprintf("%s%d", prefix, i)
-		tablet := aoe.TabletInfo{Table: *tableInfo, Name: name}
 		names = append(names, name)
 		wg.Add(1)
 		go func(w *sync.WaitGroup) {
-			_, err := inst.CreateTable(&tablet)
+			_, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: name})
 			assert.Nil(t, err)
 			w.Done()
 		}(&wg)
@@ -78,10 +76,9 @@ func TestCreateDuplicateTable(t *testing.T) {
 	defer inst.Close()
 
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "t1"}
-	_, err := inst.CreateTable(&tablet)
+	_, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "t1"})
 	assert.Nil(t, err)
-	_, err = inst.CreateTable(&tablet)
+	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "t1"})
 	assert.NotNil(t, err)
 }
 
@@ -92,8 +89,7 @@ func TestDropTable(t *testing.T) {
 
 	name := "t1"
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: name}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: name})
 	assert.Nil(t, err)
 
 	ssCtx := &dbi.GetSnapshotCtx{
@@ -106,7 +102,7 @@ func TestDropTable(t *testing.T) {
 	assert.Nil(t, err)
 	ss.Close()
 
-	dropTid, err := inst.DropTable(name)
+	dropTid, err := inst.DropTable(dbi.DropTableCtx{TableName: name})
 	assert.Nil(t, err)
 	assert.Equal(t, tid, dropTid)
 
@@ -114,7 +110,7 @@ func TestDropTable(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, ss)
 
-	tid2, err := inst.CreateTable(&tablet)
+	tid2, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: name})
 	assert.Nil(t, err)
 	assert.NotEqual(t, tid, tid2)
 
@@ -127,8 +123,7 @@ func TestAppend(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mocktbl"}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl"})
 	assert.Nil(t, err)
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
@@ -136,16 +131,19 @@ func TestAppend(t *testing.T) {
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
 	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, int(rows), ck.Vecs[0].Length())
-	logIdx := &md.LogIndex{
-		ID:       uint64(0),
-		Capacity: uint64(ck.Vecs[0].Length()),
-	}
 	invalidName := "xxx"
-	err = inst.Append(invalidName, ck, logIdx)
+	// err = inst.Append(invalidName, ck, logIdx)
+	appendCtx := dbi.AppendCtx{
+		OpIndex:   uint64(1),
+		TableName: invalidName,
+		Data:      ck,
+	}
+	err = inst.Append(appendCtx)
 	assert.NotNil(t, err)
 	insertCnt := 4
+	appendCtx.TableName = tblMeta.Schema.Name
 	for i := 0; i < insertCnt; i++ {
-		err = inst.Append(tableInfo.Name, ck, logIdx)
+		err = inst.Append(appendCtx)
 		assert.Nil(t, err)
 		// tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 		// assert.Nil(t, err)
@@ -196,27 +194,20 @@ func TestAppend(t *testing.T) {
 	inst.Close()
 }
 
-type InsertReq struct {
-	Name     string
-	Data     *batch.Batch
-	LogIndex *md.LogIndex
-}
-
 // TODO: When the capacity is not very big and the query concurrency is very high,
 // the db will be stuck due to no more space. Need intruduce timeout mechanism later
 func TestConcurrency(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
-	insertCh := make(chan *InsertReq)
+	insertCh := make(chan dbi.AppendCtx)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
 	p, _ := ants.NewPool(40)
@@ -267,7 +258,7 @@ func TestConcurrency(t *testing.T) {
 			case req := <-insertCh:
 				wg.Add(1)
 				go func() {
-					err := inst.Append(req.Name, req.Data, req.LogIndex)
+					err := inst.Append(req)
 					assert.Nil(t, err)
 					wg.Done()
 				}()
@@ -282,10 +273,10 @@ func TestConcurrency(t *testing.T) {
 	go func() {
 		defer wg2.Done()
 		for i := 0; i < insertCnt; i++ {
-			insertReq := &InsertReq{
-				Name:     tablet.Name,
-				Data:     baseCk,
-				LogIndex: &md.LogIndex{ID: uint64(i), Capacity: uint64(baseCk.Vecs[0].Length())},
+			insertReq := dbi.AppendCtx{
+				TableName: tableInfo.Name,
+				Data:      baseCk,
+				OpIndex:   uint64(i),
 			}
 			insertCh <- insertReq
 		}
@@ -307,7 +298,7 @@ func TestConcurrency(t *testing.T) {
 			}
 			segIds := tbl.SegmentIds()
 			searchReq := &dbi.GetSnapshotCtx{
-				TableName:  tablet.Name,
+				TableName:  tableInfo.Name,
 				SegmentIds: segIds,
 				Cols:       cols,
 			}
@@ -325,7 +316,7 @@ func TestConcurrency(t *testing.T) {
 	root := tbl.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
 	opts := &dbi.GetSnapshotCtx{
-		TableName: tablet.Name,
+		TableName: tableInfo.Name,
 		Cols:      cols,
 		ScanAll:   true,
 	}
@@ -392,19 +383,13 @@ func TestDropTable2(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mockcon"}
-	tid, err := inst.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
-
-	logIdx := &md.LogIndex{
-		ID:       uint64(0),
-		Capacity: uint64(baseCk.Vecs[0].Length()),
-	}
 
 	insertCnt := uint64(1)
 
@@ -413,7 +398,11 @@ func TestDropTable2(t *testing.T) {
 		for i := uint64(0); i < insertCnt; i++ {
 			wg.Add(1)
 			go func() {
-				inst.Append(tablet.Name, baseCk, logIdx)
+				inst.Append(dbi.AppendCtx{
+					TableName: tableInfo.Name,
+					Data:      baseCk,
+					OpIndex:   uint64(1),
+				})
 				wg.Done()
 			}()
 		}
@@ -431,14 +420,19 @@ func TestDropTable2(t *testing.T) {
 		cols = append(cols, i)
 	}
 	opts := &dbi.GetSnapshotCtx{
-		TableName: tablet.Name,
+		TableName: tableInfo.Name,
 		Cols:      cols,
 		ScanAll:   true,
 	}
 	ss, err := inst.GetSnapshot(opts)
 	assert.Nil(t, err)
 
-	inst.DropTable(tablet.Name)
+	doneCh := make(chan error)
+	expectErr := errors.New("mock error")
+	dropCB := func(err error) {
+		doneCh <- expectErr
+	}
+	inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name, OnFinishCB: dropCB})
 	time.Sleep(time.Duration(100) * time.Millisecond)
 	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	ss.Close()
@@ -448,5 +442,7 @@ func TestDropTable2(t *testing.T) {
 	t.Log(inst.IndexBufMgr.String())
 	t.Log(inst.MemTableMgr.String())
 	assert.Equal(t, 0, inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	err = <-doneCh
+	assert.Equal(t, expectErr, err)
 	inst.Close()
 }

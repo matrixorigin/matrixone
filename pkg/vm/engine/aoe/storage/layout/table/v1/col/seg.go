@@ -312,10 +312,10 @@ func (seg *ColumnSegment) Close() error {
 func (seg *ColumnSegment) RegisterBlock(blkMeta *md.Block) (blk IColumnBlock, err error) {
 	blk = NewStdColumnBlock(seg, blkMeta)
 	part := NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(),
-		blkMeta.Segment.Info.Conf.BlockMaxRows*uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
+		blkMeta.Segment.Table.Conf.BlockMaxRows*uint64(seg.Meta.Table.Schema.ColDefs[seg.ColIdx].Type.Size))
 	for part == nil {
 		part = NewColumnPart(seg.FsMgr, seg.MTBufMgr, blk.Ref(), blk.GetID(),
-			blkMeta.Segment.Info.Conf.BlockMaxRows*uint64(seg.Meta.Schema.ColDefs[seg.ColIdx].Type.Size))
+			blkMeta.Segment.Table.Conf.BlockMaxRows*uint64(seg.Meta.Table.Schema.ColDefs[seg.ColIdx].Type.Size))
 		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
 	seg.Append(blk.Ref())
