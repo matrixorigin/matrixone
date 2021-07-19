@@ -3,15 +3,18 @@ package dist
 import (
 	"fmt"
 	"github.com/fagongzi/util/format"
+	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage/mem"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
+	"matrixone/pkg/vm/engine/aoe"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"testing"
 	"time"
@@ -53,16 +56,18 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 		if err != nil {
 			return nil, err
 		}
-		/*aoeDataStorage, err := aoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
+		aoeDataStorage, err := daoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
 		if err != nil {
 			return nil, err
-		}*/
-		aoeDataStorage := mem.NewStorage()
+		}
+		//aoeDataStorage := mem.NewStorage()
 		a, err := NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, func(cfg *config.Config) {
+
 			cfg.DataPath = fmt.Sprintf("%s/node-%d", tmpDir, i)
 			cfg.RaftAddr = fmt.Sprintf("127.0.0.1:1000%d", i)
 			cfg.ClientAddr = fmt.Sprintf("127.0.0.1:2000%d", i)
 
+			pConfig.DefaultSchedulers = nil
 			cfg.Replication.ShardHeartbeatDuration = typeutil.NewDuration(time.Millisecond * 100)
 			cfg.Replication.StoreHeartbeatDuration = typeutil.NewDuration(time.Second)
 			cfg.Raft.TickInterval = typeutil.NewDuration(time.Millisecond * 100)
@@ -104,6 +109,7 @@ func TestClusterStartAndStop(t *testing.T) {
 
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
+
 	testKVStorage(t, c)
 }
 
@@ -156,4 +162,17 @@ func testKVStorage(t *testing.T, c *testCluster) {
 	keys, err = c.applications[0].PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 19, len(keys))
+}
+
+func testAOEStorage(t *testing.T, c *testCluster)  {
+	//CreateTest
+	colCnt := 4
+	tableInfo := md.MockTableInfo(colCnt)
+	resp, err := c.applications[0].CreateTablet(&aoe.TabletInfo{
+		Name: fmt.Sprintf("%s#%d", tableInfo.Name, 101),
+		ShardId: 101,
+		Table: *tableInfo,
+	})
+	require.NoError(t, err)
+	println(resp)
 }

@@ -18,7 +18,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
-	aoedb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
 	"sync"
@@ -61,9 +60,9 @@ type Storage interface {
 
 	Append(string, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
-	Relation(string2 string) (*aoedb.Relation, error)
 	CreateTablet(info *aoe.TabletInfo) (uint64, error)
 	DropTablet(string) (uint64, error)
+	TabletIDs()([]uint64, error)
 
 	// Exec exec command
 	Exec(cmd interface{}) ([]byte, error)
@@ -422,23 +421,22 @@ func (h *aoeStorage) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, erro
 	return &s, nil
 }
 
-func (h *aoeStorage) Relation(name string) (*aoedb.Relation, error) {
+func (h *aoeStorage) TabletIDs() ([]uint64, error) {
 	req := pb.Request{
 		Type: pb.Relation,
-		Relation: pb.RelationRequest{
-			Name: name,
+		TabletIds: pb.TabletIDsRequest{
 		},
 	}
 	value, err := h.ExecWithGroup(req, pb.AOEGroup)
 	if err != nil {
 		return nil, err
 	}
-	var r aoedb.Relation
-	err = json.Unmarshal(value, &r)
+	var rsp []uint64
+	err = json.Unmarshal(value, &rsp)
 	if err != nil {
 		return nil, err
 	}
-	return &r, nil
+	return rsp, nil
 }
 
 func (h *aoeStorage) CreateTablet(tbl *aoe.TabletInfo) (id uint64, err error) {

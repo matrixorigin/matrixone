@@ -66,6 +66,10 @@ func (s *Storage) DropTable(name string, index *md.LogIndex) (uint64, error) {
 	return s.db.DropTable(name)
 }
 
+func (s *Storage) TableIDs() (ids []uint64, err error) {
+	return s.db.TableIDs()
+}
+
 // RemovedShardData remove shard data
 func (s *Storage) RemovedShardData(shard bhmetapb.Shard, encodedStartKey, encodedEndKey []byte) error {
 	panic("implement me")
@@ -76,9 +80,9 @@ func (s *Storage) SplitCheck(start []byte, end []byte, size uint64) (currentSize
 }
 
 func (s *Storage) CreateSnapshot(path string, start, end []byte) error {
-	panic("implement me")
+	return nil
 }
 
 func (s *Storage) ApplySnapshot(path string) error {
-	panic("implement me")
+	return nil
 }

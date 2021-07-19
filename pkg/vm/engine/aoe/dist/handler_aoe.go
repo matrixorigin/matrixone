@@ -55,12 +55,11 @@ func (h *aoeStorage) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, c
 	return resp, 0
 }
 
-func (h *aoeStorage) relation(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+func (h *aoeStorage) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.RelationRequest{}
+	customReq := &rpcpb.TabletIDsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-
-	rsp, err := h.getStoreByGroup(shard.Group, req.ToShard).(*aoe.Storage).Relation(customReq.Name)
+	rsp, err := h.getStoreByGroup(shard.Group, req.ToShard).(*aoe.Storage).TableIDs()
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
