@@ -21,11 +21,11 @@ type StdColumnBlock struct {
 }
 
 func EstimateStdColumnCapacity(colIdx int, meta *md.Block) uint64 {
-	switch meta.Segment.Schema.ColDefs[colIdx].Type.Oid {
+	switch meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
 	case types.T_json, types.T_char, types.T_varchar:
-		return meta.Segment.Info.Conf.BlockMaxRows * 2 * 4
+		return meta.Segment.Table.Conf.BlockMaxRows * 2 * 4
 	default:
-		return meta.Segment.Info.Conf.BlockMaxRows * uint64(meta.Segment.Schema.ColDefs[colIdx].Type.Size)
+		return meta.Segment.Table.Conf.BlockMaxRows * uint64(meta.Segment.Table.Schema.ColDefs[colIdx].Type.Size)
 	}
 }
 

@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -15,13 +13,13 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
-
+	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
+	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
-	"path"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -52,6 +50,10 @@ type DB struct {
 		DataTables *table.Tables
 	}
 
+	Cleaner struct {
+		MetaFiles iw.IHeartbeater
+	}
+
 	DataDir  *os.File
 	DBLocker io.Closer
 
@@ -61,61 +63,11 @@ type DB struct {
 	sync.RWMutex
 }
 
-func cleanStaleMeta(dirname string) {
-	dir := e.MakeMetaDir(dirname)
-	files, err := ioutil.ReadDir(dir)
-	if err != nil {
-		panic(err)
-	}
-	if len(files) == 0 {
-		return
-	}
-
-	maxVersion := -1
-	maxIdx := -1
-
-	filenames := make(map[int]string)
-
-	for idx, file := range files {
-		if e.IsTempFile(file.Name()) {
-			log.Infof("Removing %s", path.Join(dir, file.Name()))
-			err = os.Remove(path.Join(dir, file.Name()))
-			if err != nil {
-				panic(err)
-			}
-		}
-		version, ok := e.ParseMetaFileName(file.Name())
-		if !ok {
-			continue
-		}
-		if version > maxVersion {
-			maxVersion = version
-			maxIdx = idx
-		}
-		filenames[idx] = file.Name()
-	}
-
-	if maxIdx == -1 {
-		return
-	}
-
-	for idx, filename := range filenames {
-		if idx == maxIdx {
-			continue
-		}
-		log.Infof("Removing %s", path.Join(dir, filename))
-		err = os.Remove(path.Join(dir, filename))
-		if err != nil {
-			panic(err)
-		}
-	}
-}
-
-func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err error) {
+func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tbl, err := d.Store.MetaInfo.ReferenceTableByName(tableName)
+	tbl, err := d.Store.MetaInfo.ReferenceTableByName(ctx.TableName)
 	if err != nil {
 		return err
 	}
@@ -141,19 +93,15 @@ func (d *DB) Append(tableName string, bat *batch.Batch, index *md.LogIndex) (err
 		collection = op.Collection
 	}
 
-	clonedIndex := *index
+	index := &md.LogIndex{
+		ID:       ctx.OpIndex,
+		Capacity: uint64(ctx.Data.Vecs[0].Length()),
+	}
 	defer collection.Unref()
-	return collection.Append(bat, &clonedIndex)
+	return collection.Append(ctx.Data, index)
 }
 
-func (d *DB) Relation(name string) (*Relation, error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	meta, err := d.Opts.Meta.Info.ReferenceTableByName(name)
-	if err != nil {
-		return nil, err
-	}
+func (d *DB) getTableData(meta *md.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.ID)
 	if err != nil {
 		opCtx := &mdops.OpCtx{
@@ -179,6 +127,21 @@ func (d *DB) Relation(name string) (*Relation, error) {
 		}
 		collection.Unref()
 	}
+	return data, nil
+}
+
+func (d *DB) Relation(name string) (*Relation, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	meta, err := d.Opts.Meta.Info.ReferenceTableByName(name)
+	if err != nil {
+		return nil, err
+	}
+	data, err := d.getTableData(meta)
+	if err != nil {
+		return nil, err
+	}
 	return NewRelation(d, data, meta), nil
 }
 
@@ -190,26 +153,26 @@ func (d *DB) HasTable(name string) bool {
 	return err == nil
 }
 
-func (d *DB) DropTable(name string) (id uint64, err error) {
+func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
 	opCtx := &mops.OpCtx{Opts: d.Opts}
-	op := mops.NewDropTblOp(opCtx, name, d.Store.DataTables)
+	op := mops.NewDropTblOp(opCtx, ctx, d.Store.DataTables)
 	op.Push()
 	err = op.WaitDone()
-	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.Store.DataTables, d.MemTableMgr)
+	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
 	d.Opts.GC.Acceptor.Accept(req)
 	return op.Id, err
 }
 
-func (d *DB) CreateTable(info *aoe.TabletInfo) (id uint64, err error) {
+func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	info.Table.Name = info.Name
-	opCtx := &mops.OpCtx{Opts: d.Opts, TableInfo: &info.Table}
-	op := mops.NewCreateTblOp(opCtx)
+	info.Name = ctx.TableName
+	opCtx := &mops.OpCtx{Opts: d.Opts, TableInfo: info}
+	op := mops.NewCreateTblOp(opCtx, ctx)
 	op.Push()
 	err = op.WaitDone()
 	if err != nil {
@@ -217,6 +180,25 @@ func (d *DB) CreateTable(info *aoe.TabletInfo) (id uint64, err error) {
 	}
 	id = op.GetTable().GetID()
 	return id, nil
+}
+
+func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	meta, err := d.Opts.Meta.Info.ReferenceTableByName(ctx.TableName)
+	if err != nil {
+		return ids
+	}
+	data, err := d.getTableData(meta)
+	if err != nil {
+		return ids
+	}
+	ids.Ids = data.SegmentIds()
+	// for _, id := range ids {
+	// 	infos = append(infos, engine.SegmentInfo{Id: strconv.FormatUint(id, 10)})
+	// }
+	return ids
 }
 
 func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
@@ -281,11 +263,11 @@ func (d *DB) replayAndCleanData() {
 	for _, tbl := range d.Store.MetaInfo.Tables {
 		for _, seg := range tbl.Segments {
 			id := common.ID{
-				TableID:   seg.TableID,
+				TableID:   seg.Table.ID,
 				SegmentID: seg.ID,
 			}
 			if seg.DataState == md.SORTED {
-				name := e.MakeFilename(d.Dir, e.FTSegment, id.ToSegmentFileName(), false)
+				name := e.MakeSegmentFileName(d.Dir, id.ToSegmentFileName(), id.TableID)
 				expectFiles[name] = true
 			} else {
 				for _, blk := range seg.Blocks {
@@ -293,7 +275,7 @@ func (d *DB) replayAndCleanData() {
 						continue
 					}
 					id.BlockID = blk.ID
-					name := e.MakeFilename(d.Dir, e.FTBlock, id.ToBlockFileName(), false)
+					name := e.MakeBlockFileName(d.Dir, id.ToBlockFileName(), id.TableID)
 					expectFiles[name] = true
 				}
 			}
@@ -344,6 +326,10 @@ func (d *DB) replayAndCleanData() {
 	}
 }
 
+func (d *DB) startCleaner() {
+	d.Cleaner.MetaFiles.Start()
+}
+
 func (d *DB) startWorkers() {
 	d.Opts.GC.Acceptor.Start()
 	d.Opts.MemData.Updater.Start()
@@ -375,6 +361,10 @@ func (d *DB) stopWorkers() {
 	d.Opts.Meta.Updater.Stop()
 }
 
+func (d *DB) stopCleaner() {
+	d.Cleaner.MetaFiles.Stop()
+}
+
 func (d *DB) WorkersStatsString() string {
 	s := fmt.Sprintf("%s\n", d.Opts.MemData.Updater.StatsString())
 	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Flusher.StatsString())
@@ -392,6 +382,7 @@ func (d *DB) Close() error {
 	d.Closed.Store(ErrClosed)
 	close(d.ClosedC)
 	d.stopWorkers()
+	d.stopCleaner()
 	err := d.DBLocker.Close()
 	return err
 }

@@ -280,7 +280,7 @@ func MockSegments(fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager
 	var segIDs []common.ID
 	for _, segMeta := range meta.Segments {
 		var colSegs []col.IColumnSegment
-		for colIdx, _ := range segMeta.Schema.ColDefs {
+		for colIdx, _ := range segMeta.Table.Schema.ColDefs {
 			colSeg := MockSegment(tblData.GetIndexHolder(), fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
 			colSegs = append(colSegs, colSeg)
 		}

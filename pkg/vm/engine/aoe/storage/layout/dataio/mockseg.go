@@ -33,7 +33,7 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegment
 	msf.Info = &fileStat{
 		name: id.ToSegmentFilePath(),
 	}
-	msf.FileName = e.MakeFilename(dirname, e.FTSegment, id.ToSegmentFileName(), false)
+	msf.FileName = e.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID)
 	log.Infof("%s:%s | Created", msf.TypeName, msf.FileName)
 	return msf
 }

@@ -45,7 +45,7 @@ func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IB
 
 	for idx, colIdx := range mt.Batch.GetAttrs() {
 		vec := mt.Batch.GetVectorByAttr(colIdx)
-		vec.PlacementNew(mt.Meta.Segment.Schema.ColDefs[idx].Type, mt.Meta.Segment.Info.Conf.BlockMaxRows)
+		vec.PlacementNew(mt.Meta.Segment.Table.Schema.ColDefs[idx].Type, mt.Meta.Segment.Table.Conf.BlockMaxRows)
 	}
 
 	mt.OnZeroCB = mt.close
@@ -118,7 +118,7 @@ func (mt *MemTable) Flush() error {
 	// go func() {
 	{
 		ctx := mops.OpCtx{Opts: mt.Opts}
-		getssop := mops.NewGetSSOp(&ctx)
+		getssop := mops.NewGetTblSSOp(&ctx, mt.TableMeta)
 		err := getssop.Push()
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
@@ -129,7 +129,7 @@ func (mt *MemTable) Flush() error {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 			return err
 		}
-		op := mops.NewCheckpointOp(&ctx, getssop.SS)
+		op := mops.NewFlushTblOp(&ctx, getssop.Result)
 		err = op.Push()
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)

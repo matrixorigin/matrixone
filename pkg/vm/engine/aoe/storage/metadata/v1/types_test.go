@@ -1,6 +1,8 @@
 package metadata
 
 import (
+	"encoding/json"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +17,8 @@ func TestBlock(t *testing.T) {
 	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	seg := NewSegment(info, info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), schema)
+	tbl := NewTable(NextGloablSeqnum(), info, schema)
+	seg := NewSegment(tbl, info.Sequence.GetSegmentID())
 	blk := NewBlock(info.Sequence.GetBlockID(), seg)
 	time.Sleep(time.Duration(1) * time.Microsecond)
 	ts2 := NowMicro()
@@ -41,8 +44,9 @@ func TestSegment(t *testing.T) {
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
 	t1 := NowMicro()
-	seg1 := NewSegment(info, info.Sequence.GetTableID(), info.Sequence.GetSegmentID(), schema)
-	seg2 := NewSegment(info, seg1.TableID, info.Sequence.GetSegmentID(), schema)
+	tbl := NewTable(NextGloablSeqnum(), info, schema)
+	seg1 := NewSegment(tbl, info.Sequence.GetSegmentID())
+	seg2 := NewSegment(tbl, info.Sequence.GetSegmentID())
 	blk1 := NewBlock(info.Sequence.GetBlockID(), seg2)
 	err := seg1.RegisterBlock(blk1)
 	assert.Error(t, err)
@@ -75,15 +79,15 @@ func TestTable(t *testing.T) {
 	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	bkt := NewTable(info, schema)
-	seg, err := bkt.CreateSegment()
+	tbl := NewTable(NextGloablSeqnum(), info, schema)
+	seg, err := tbl.CreateSegment()
 	assert.Nil(t, err)
 
 	assert.Equal(t, seg.GetBoundState(), STANDLONE)
 
-	err = bkt.RegisterSegment(seg)
+	err = tbl.RegisterSegment(seg)
 	assert.Nil(t, err)
-	t.Log(bkt.String())
+	t.Log(tbl.String())
 	assert.Equal(t, seg.GetBoundState(), Attached)
 
 	sizeStep := uint64(20)
@@ -92,7 +96,7 @@ func TestTable(t *testing.T) {
 	pool, _ := ants.NewPool(20)
 	var wg sync.WaitGroup
 	f := func() {
-		bkt.AppendStat(rowStep, sizeStep)
+		tbl.AppendStat(rowStep, sizeStep)
 		wg.Done()
 	}
 	for i := 0; i < loopCnt; i++ {
@@ -101,15 +105,15 @@ func TestTable(t *testing.T) {
 	}
 
 	wg.Wait()
-	assert.Equal(t, sizeStep*uint64(loopCnt), bkt.Stat.Size)
-	assert.Equal(t, rowStep*uint64(loopCnt), bkt.Stat.Rows)
+	assert.Equal(t, sizeStep*uint64(loopCnt), tbl.Stat.Size)
+	assert.Equal(t, rowStep*uint64(loopCnt), tbl.Stat.Rows)
 }
 
 func TestInfo(t *testing.T) {
 	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	tbl, err := info.CreateTable(schema)
+	tbl, err := info.CreateTable(NextGloablSeqnum(), schema)
 	assert.Nil(t, err)
 
 	assert.Equal(t, tbl.GetBoundState(), STANDLONE)
@@ -126,7 +130,7 @@ func TestCreateDropTable(t *testing.T) {
 
 	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
-	tbl, err := info.CreateTableFromTableInfo(tblInfo)
+	tbl, err := info.CreateTableFromTableInfo(tblInfo, dbi.TableOpCtx{TableName: tblInfo.Name, OpIndex: NextGloablSeqnum()})
 	assert.Nil(t, err)
 	assert.Equal(t, tblInfo.Name, tbl.Schema.Name)
 
@@ -150,11 +154,11 @@ func TestCreateDropTable(t *testing.T) {
 	ts := NowMicro()
 	assert.False(t, rTbl.IsDeleted(ts))
 
-	tid, err := info.SoftDeleteTable(tbl.Schema.Name)
+	tid, err := info.SoftDeleteTable(tbl.Schema.Name, NextGloablSeqnum())
 	assert.Nil(t, err)
 	assert.Equal(t, rTbl.ID, tid)
 
-	_, err = info.SoftDeleteTable(tbl.Schema.Name)
+	_, err = info.SoftDeleteTable(tbl.Schema.Name, NextGloablSeqnum())
 	assert.NotNil(t, err)
 
 	rTbl2, err := info.ReferenceTableByName(tbl.Schema.Name)
@@ -168,4 +172,18 @@ func TestCreateDropTable(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, rTbl3.ID, tid)
 	assert.True(t, rTbl3.IsDeleted(ts))
+
+	tblBytes, err := rTbl3.Marshal()
+	assert.Nil(t, err)
+	t.Log(string(tblBytes))
+
+	infoBytes, err := json.Marshal(info)
+	assert.Nil(t, err)
+	t.Log(string(infoBytes))
+
+	newInfo := new(MetaInfo)
+	err = newInfo.Unmarshal(infoBytes)
+	assert.Nil(t, err)
+	assert.Equal(t, newInfo.Tables[tid].ID, tid)
+	assert.Equal(t, newInfo.Tables[tid].TimeStamp, rTbl3.TimeStamp)
 }

@@ -64,7 +64,7 @@ func (blk *ColumnBlock) GetColIdx() int {
 }
 
 func (blk *ColumnBlock) GetColType() types.Type {
-	return blk.Meta.Segment.Schema.ColDefs[blk.ColIdx].Type
+	return blk.Meta.Segment.Table.Schema.ColDefs[blk.ColIdx].Type
 }
 
 func (blk *ColumnBlock) GetMeta() *md.Block {
