@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"os"
 	"sync/atomic"
 )
 
@@ -72,14 +73,18 @@ func (s *Storage) TableIDs() (ids []uint64, err error) {
 
 // RemovedShardData remove shard data
 func (s *Storage) RemovedShardData(shard bhmetapb.Shard, encodedStartKey, encodedEndKey []byte) error {
-	panic("implement me")
+	return nil
 }
 
 func (s *Storage) SplitCheck(start []byte, end []byte, size uint64) (currentSize uint64, currentKeys uint64, splitKeys [][]byte, err error) {
-	panic("implement me")
+	return 0, 0, nil, err
+
 }
 
 func (s *Storage) CreateSnapshot(path string, start, end []byte) error {
+	if _, err := os.Stat(path); err != nil {
+		os.MkdirAll(path, os.ModeDir)
+	}
 	return nil
 }
 

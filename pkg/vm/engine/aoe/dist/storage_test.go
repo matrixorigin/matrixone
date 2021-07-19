@@ -6,6 +6,7 @@ import (
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/assert"
@@ -109,8 +110,14 @@ func TestClusterStartAndStop(t *testing.T) {
 
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
-
-	testKVStorage(t, c)
+	c.applications[0].RaftStore().GetRouter().Every(uint64(pb.KVGroup), false, func(shard *bhmetapb.Shard, address string){
+		println(fmt.Sprintf("[QQQ]%d, %d, %s", shard.Group, shard.ID, address))
+	})
+	c.applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), false, func(shard *bhmetapb.Shard, address string){
+		println(fmt.Sprintf("[QQQ]%d, %d, %s", shard.Group, shard.ID, address))
+	})
+	//testKVStorage(t, c)
+	testAOEStorage(t, c)
 }
 
 func testKVStorage(t *testing.T, c *testCluster) {
