@@ -13,13 +13,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
-	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
@@ -115,7 +113,7 @@ func (c *testCluster) stop() {
 }
 
 func TestClusterStartAndStop(t *testing.T) {
-	//defer cleanupTmpDir()
+	defer cleanupTmpDir()
 	c, err := newTestClusterStore(t)
 
 	defer c.stop()
@@ -208,22 +206,10 @@ func testAOEStorage(t *testing.T, c *testCluster)  {
 	var buf bytes.Buffer
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)
+	ids, err := c.applications[0].GetSegmentIds(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard)
+	require.NoError(t, err)
+	fmt.Printf("SegmentIds is %v", ids)
 	err = c.applications[0].Append(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard, buf.Bytes())
 	require.NoError(t, err)
 
-}
-
-func MockBatch(types []types.Type, rows uint64) *batch.Batch {
-	var attrs []string
-	for _, t := range types {
-		attrs = append(attrs, t.Oid.String())
-	}
-
-	bat := batch.New(true, attrs)
-	for i, colType := range types {
-		vec := vector.MockVector(colType, rows)
-		bat.Vecs[i] = vec.CopyToVector()
-	}
-
-	return bat
 }

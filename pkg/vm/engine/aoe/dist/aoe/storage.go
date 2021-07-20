@@ -62,6 +62,10 @@ func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 	return s.db.GetSnapshot(ctx)
 }
 
+func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids adb.IDS) {
+	return s.db.GetSegmentIds(ctx)
+}
+
 func (s *Storage) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (uint64, error) {
 	return s.db.CreateTable(info, ctx)
 }

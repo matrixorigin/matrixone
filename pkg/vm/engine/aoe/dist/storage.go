@@ -18,6 +18,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
+	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
 	"sync"
@@ -60,6 +61,7 @@ type Storage interface {
 
 	Append(string, uint64, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
+	GetSegmentIds(string, uint64) (adb.IDS, error)
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	DropTablet(string) (uint64, error)
 	TabletIDs()([]uint64, error)
@@ -444,6 +446,25 @@ func (h *aoeStorage) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, erro
 		return nil, err
 	}
 	return &s, nil
+}
+
+func (h *aoeStorage) GetSegmentIds(tabletName string, toShard uint64) (ids adb.IDS, err error) {
+	req := pb.Request{
+		Type: pb.GetSegmentIds,
+		Shard: toShard,
+		GetSegmentIds: pb.GetSegmentIdsRequest{
+			Name: tabletName,
+		},
+	}
+	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if err != nil {
+		return ids, err
+	}
+	err = json.Unmarshal(value, &ids)
+	if err != nil {
+		return ids, err
+	}
+	return ids, nil
 }
 
 func (h *aoeStorage) CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) (err error) {
