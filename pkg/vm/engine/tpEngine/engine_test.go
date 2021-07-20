@@ -10,8 +10,11 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/mem"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/require"
+	"matrixone/pkg/compress"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/dist"
+	"matrixone/pkg/vm/metadata"
 	"os"
 	"reflect"
 	"testing"
@@ -138,8 +141,14 @@ func TestEngine_1(t *testing.T) {
 	getDatabaseListWrap(te, t, "init")
 
 	cnt := 1
+
+	var dbs []string = nil
+	for i :=0; i < cnt;i++{
+		dbs = append(dbs,fmt.Sprintf("db%d",i))
+	}
+
 	for i := 0; i < cnt; i++ {
-		err = te.Create(fmt.Sprintf("db%d",i), engine.RSE)
+		err = te.Create(dbs[i], engine.RSE)
 		if err != nil {
 			t.Error(err)
 			return
@@ -171,6 +180,49 @@ func TestEngine_1(t *testing.T) {
 	getDatabaseListWrap(te, t, "last")
 
 	time.Sleep(5 * time.Second)
+
+	db0,err := te.Database(dbs[0])
+	if err != nil {
+		t.Error(err)
+	}
+
+	var attr =[]engine.TableDef{
+		&engine.AttributeDef{//id
+			Attr: metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "id",
+				Type: types.Type{
+					Oid:       types.T_uint64,
+					Size:      8,
+					Width:     8,
+					Precision: 0,
+				},
+			},
+		},
+		&engine.AttributeDef{//name 100bytes
+			Attr: metadata.Attribute{
+				Alg:  compress.Lz4,
+				Name: "name",
+				Type: types.Type{
+					Oid:       types.T_char,
+					Size:      24,
+					Width:     100,
+					Precision: 0,
+				},
+			},
+		},
+	}
+
+	relName := "A"
+	err = db0.Create(relName,attr,nil,nil,"comment info")
+	if err != nil {
+		t.Error(err)
+	}
+
+	_,err = db0.Relation(relName)
+	if err != nil {
+		t.Error(err)
+	}
 
 	//test table engine
 	//tab_skey := makeTableKey(tpEngineName,0,1,0,"engine")

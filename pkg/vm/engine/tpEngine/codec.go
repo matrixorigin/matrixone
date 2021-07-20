@@ -293,6 +293,9 @@ func encodeValues(data []byte,args ...interface{})[]byte{
 		case string:
 			data = append(data,TP_ENCODE_TYPE_STRING)
 			data = encodeString(data,a)
+		case []byte:
+			data = append(data,TP_ENCODE_TYPE_BYTES)
+			data = encodeBytes(data,a)
 		default:
 			panic(fmt.Errorf("unsupported value %v",arg))
 		}
@@ -316,6 +319,9 @@ func encodeValuesWithSchema(sch *tpSchema,data []byte,args ...interface{})[]byte
 		case TP_ENCODE_TYPE_STRING:
 			data = append(data,TP_ENCODE_TYPE_STRING)
 			data = encodeString(data,args[i].(string))
+		case TP_ENCODE_TYPE_BYTES:
+			data = append(data,TP_ENCODE_TYPE_BYTES)
+			data = encodeBytes(data,args[i].([]byte))
 		default:
 			panic(fmt.Errorf("unsupported column type %v",t))
 		}
@@ -344,6 +350,12 @@ func decodeValue(data []byte) ([]byte, interface{}, error) {
 			return nil, nil, err
 		}
 		return nd, s, nil
+	case TP_ENCODE_TYPE_BYTES:
+		nd,b,err := decodeBytes(data[1:])
+		if err!= nil{
+			return nil, nil, err
+		}
+		return nd, b, nil
 	default:
 		panic(fmt.Errorf("unsupported encode type %v",data[0]))
 	}
@@ -379,6 +391,21 @@ func decodeValues(data []byte) ([]byte, []interface{}, error) {
 		vals = append(vals,v)
 	}
 	return data, vals, nil
+}
+
+//with length
+func encodeBytes(data []byte,bts []byte) []byte {
+	//add length 8bytes
+	data = encodeUint64(data,uint64(len(bts)))
+	return append(data,bts...)
+}
+
+func decodeBytes(data []byte)([]byte,[]byte,error) {
+	nd,u,err := decodeUint64(data)
+	if err != nil {
+		return nil,nil,err
+	}
+	return nd[u:],nd[:u],nil
 }
 
 //with length

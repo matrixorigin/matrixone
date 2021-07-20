@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/dist"
+	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"sync"
 )
@@ -26,8 +27,8 @@ const (
 		step 1 :
 		Databases
 		------------------------
-		0          1        2           3
-		database   id       createInfo  schema
+		0          1        2           3         4
+		database   id       createInfo  schema    TODO:EngineType
 		(primary)
 		------------------------
 		db0        0        "create database info"
@@ -142,13 +143,13 @@ var (
 		TP_ENCODE_TYPE_STRING,
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
-		TP_ENCODE_TYPE_STRING,
+		TP_ENCODE_TYPE_BYTES,
 		)
 	TABLE_TABLES_PRIMARY_KEY_SCHEMA *tpSchema = NewTpSchema(TP_ENCODE_TYPE_STRING)
 	TABLE_TABLES_REST_SCHEMA *tpSchema = NewTpSchema(
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
-		TP_ENCODE_TYPE_STRING,
+		TP_ENCODE_TYPE_BYTES,
 		)
 
 	//indexes table
@@ -224,121 +225,6 @@ Secondary Index:
 		row - (primary columns or indexed columns)
 
  */
-
-/**
-the simple schema definition of the table (system table, user table).
-Format: |column1 type | column2 type | ... | columnN type
- */
-type tpSchema struct {
-	//column types
-	colTypes []byte
-	/*
-	if used[i]
-		== 1, then, the column i will be encoded
-		== 0, then, the column i will be be encoded
-	 */
-	used []byte
-}
-
-/**
-decide the schema from the data
- */
-func NewTpSchemaHelper(args ...interface{}) *tpSchema {
-	var tps []byte
-	for _,arg := range args {
-		switch a := arg.(type) {
-		case uint64:
-			tps = append(tps,TP_ENCODE_TYPE_UINT64)
-		case string:
-			tps = append(tps,TP_ENCODE_TYPE_STRING)
-		default:
-			panic(fmt.Errorf("unsupported data type %v",a))
-		}
-	}
-	return NewTpSchema(tps...)
-}
-
-func NewTpSchema(c ...byte)*tpSchema {
-	return &tpSchema{
-		colTypes: c,
-		used: makeByteSlice(len(c),1),
-	}
-}
-
-func (ts *tpSchema) ColumnCount() int {
-	return len(ts.colTypes)
-}
-
-func (ts *tpSchema) ColumnType(i int)byte {
-	return ts.colTypes[i]
-}
-
-/*
-column may be encoded
- */
-func (ts *tpSchema) IsUsedInEncoding(i int) bool {
-	return ts.used[i] == 1
-}
-
-func (ts *tpSchema) UsedInEncoding(i int){
-	ts.colTypes[i] = 1
-}
-
-func (ts *tpSchema) UnUsedInEncoding(i int){
-	ts.colTypes[i] = 0
-}
-
-/**
-table key
-Function: table model primary key -> the key of the kv storage
-Format: /Fixed Prefix/Primary keys/Suffix/
-Components:
-1.Fixed Prefix: /engine/database id/table id/index id/
-2.Primary keys: /key1 key2 ... keyN/
-3.Suffix:/suf1 suf2 ... sufM/
- */
-type tpTableKey struct {
-	/*
-	schema for prefix:
-	string,uint64,uint64,uint64
-	 */
-	prefixSchema *tpSchema
-	//prefix
-	engine string
-	dbId uint64
-	tableId uint64
-	indexId uint64
-	//schema for primary keys
-	primarySchema *tpSchema
-	//count >= 1
-	primaries []interface{}
-	//schema for suffix
-	suffixSchema *tpSchema
-	//end part
-	suffix []interface{}
-}
-
-func NewTpTableKey(e string, db, table, index uint64, primSch *tpSchema, prims []interface{}, sufSch *tpSchema, sufs []interface{}) *tpTableKey {
-	return &tpTableKey{
-		prefixSchema: TP_ENGINE_PREFIX_KEY,
-		engine:    e,
-		dbId:      db,
-		tableId:   table,
-		indexId:   index,
-		primarySchema: primSch,
-		primaries: prims,
-		suffixSchema: sufSch,
-		suffix:    sufs,
-	}
-}
-
-func NewTpTableKeyWithSchema(primSch,suffSch *tpSchema) *tpTableKey{
-	return &tpTableKey{
-		prefixSchema: NewTpSchema(TP_ENCODE_TYPE_STRING,TP_ENCODE_TYPE_UINT64,TP_ENCODE_TYPE_UINT64,TP_ENCODE_TYPE_UINT64),
-		primarySchema: primSch,
-		suffixSchema: suffSch,
-	}
-}
 
 /**
 table tuple
@@ -434,7 +320,20 @@ key: y3 value: rel3
 ......
  */
 type tpDatabase struct {
+	engine.Database
+	rwlock sync.RWMutex
 	dbName string
+	dbId uint64
+	createInfo string
+	schema string
+	engineType int
+
+	//table meta1
+	nextDbNo    uint64
+	nextTableNo uint64
+
+	rels map[string]*tpTupleImpl
+
 	proc *process.Process
 	kv dist.Storage
 }
@@ -455,6 +354,33 @@ key: z3 value: tuple3
 ......
  */
 type tpRelation struct {
+	engine.Relation
+	rwlock sync.RWMutex
 	relName string
+	relId uint64
+
+	createInfo string
+
+	md tpMetadata
+
 	kv dist.Storage
+	proc *process.Process
+}
+
+type tpSegment struct {
+	engine.Segment
+
+	id   string
+	kv   *dist.Storage
+	proc *process.Process
+	mp   map[string]metadata.Attribute
+}
+
+type tpBlock struct {
+	engine.Block
+
+	id   string
+	kv   *dist.Storage
+	proc *process.Process
+	mp   map[string]metadata.Attribute
 }

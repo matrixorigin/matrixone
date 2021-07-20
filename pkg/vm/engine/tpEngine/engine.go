@@ -9,182 +9,6 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
-/**
-merge multiple schemas by order into the one
- */
-func mergeTpSchema(schs ...*tpSchema)*tpSchema{
-	t := NewTpSchema()
-	for _,sch := range schs {
-		t.colTypes = append(t.colTypes,sch.colTypes...)
-		t.used = append(t.used,sch.used...)
-	}
-	return t
-}
-
-/**
-encode prefix
- */
-func (ttk *tpTableKey) encodePrefix(data []byte) []byte {
-	return encodeKeysWithSchema(data,ttk.prefixSchema,
-		ttk.engine,
-		ttk.dbId,
-		ttk.tableId,
-		ttk.indexId,
-	)
-}
-
-func (ttk *tpTableKey) decodePrefix(data []byte) ([]byte,error) {
-	data1,prefixs,err := decodeKeys(data,ttk.prefixSchema)
-	if err != nil {
-		return nil, err
-	}
-
-	ttk.engine = prefixs[0].(string)
-	ttk.dbId = prefixs[1].(uint64)
-	ttk.tableId = prefixs[2].(uint64)
-	ttk.indexId = prefixs[3].(uint64)
-	return data1,nil
-}
-
-/**
-encode primary keys
- */
-func (ttk *tpTableKey) encodePrimaryKeys(data []byte)[]byte{
-	if ttk.primarySchema == nil {
-		return data
-	}
-	if ttk.primaries == nil  || len(ttk.primaries) != ttk.primarySchema.ColumnCount(){
-		panic("missing primary keys or schema")
-	}
-
-	return encodeKeysWithSchema(data,ttk.primarySchema,ttk.primaries...)
-}
-
-func (ttk *tpTableKey) decodePrimaryKeys(data []byte)([]byte,error){
-	if ttk.primarySchema == nil {
-		return data,nil
-	}
-	data1,prims,err := decodeKeys(data,ttk.primarySchema)
-	if err != nil {
-		return nil, err
-	}
-
-	ttk.primaries = prims
-
-	return data1, nil
-}
-
-/**
-encode prefix and primary keys
-*/
-func (ttk *tpTableKey) encodePrefixAndPrimaryKeys(data []byte)[]byte{
-	data = ttk.encodePrefix(data)
-
-	data = ttk.encodePrimaryKeys(data)
-	return  data
-}
-
-func (ttk *tpTableKey) decodePrefixAndPrimaryKeys(data []byte) ([]byte,error){
-	data1,err := ttk.decodePrefix(data)
-	if err != nil {
-		return nil,err
-	}
-
-	data2,err := ttk.decodePrimaryKeys(data1)
-	if err != nil {
-		return nil, err
-	}
-	return data2,nil
-}
-
-/**
-encode suffix keys
-*/
-func (ttk *tpTableKey) encodeSuffix(data []byte)[]byte{
-	if ttk.suffixSchema == nil {
-		return data
-	}
-
-	if ttk.suffix == nil || len(ttk.suffix) != ttk.suffixSchema.ColumnCount() {
-		panic("missing suffix keys or schema")
-	}
-
-	return encodeKeysWithSchema(data,ttk.suffixSchema,ttk.suffix...)
-}
-
-func (ttk *tpTableKey) decodeSuffix(data []byte)([]byte,error){
-	if ttk.suffixSchema == nil {
-		return data, nil
-	}
-	data1,sufs,err := decodeKeys(data,ttk.suffixSchema)
-	if err != nil {
-		return nil,err
-	}
-
-	ttk.suffix = sufs
-
-	return data1,nil
-}
-
-/**
-encode table key into the comparable bytes
- */
-func (ttk *tpTableKey) encode(data []byte)[]byte{
-	data = ttk.encodePrefix(data)
-
-	data = ttk.encodePrimaryKeys(data)
-
-	data = ttk.encodeSuffix(data)
-	return data
-}
-
-/**
-decode bytes into tptablekey
- */
-func (ttk *tpTableKey) decode(data []byte)([]byte,error){
-	data1,err := ttk.decodePrefix(data)
-	if err != nil {
-		return nil,err
-	}
-
-	data2,err := ttk.decodePrimaryKeys(data1)
-	if err != nil {
-		return nil, err
-	}
-
-	data3,err := ttk.decodeSuffix(data2)
-	if err != nil {
-		return nil, err
-	}
-	return data3,nil
-}
-
-func (ttk *tpTableKey) SetPrimarySchema(sch *tpSchema){
-	ttk.primarySchema = sch
-}
-
-func (ttk *tpTableKey) SetSuffixSchema(sch *tpSchema){
-	ttk.suffixSchema = sch
-}
-
-func (ttk *tpTableKey) isPrefixEqualTo(o *tpTableKey) bool {
-	if o == nil {
-		return false
-	}
-
-	return ttk.engine == ttk.engine &&
-		ttk.dbId == ttk.dbId &&
-		ttk.tableId == ttk.tableId &&
-		ttk.indexId == ttk.indexId
-}
-
-func (ttk *tpTableKey) String() string {
-	return fmt.Sprintf("%s-%d-%d-%d-[%v]-[%v]",
-		ttk.engine,ttk.dbId,ttk.tableId,ttk.indexId,
-		ttk.primaries,
-		ttk.suffix)
-}
-
 func NewTpEngine(eng string,kv dist.Storage,proc *process.Process)*tpEngine {
 	//TODO:load persisted status
 	return &tpEngine{
@@ -479,8 +303,13 @@ func (te *tpEngine)initDatabaseInternalHierarchy(dbname string, dbid uint64) err
 			nil,
 			nil)
 		tab_key := tab_skey.encode(nil)
+
+		//TODO: the encoding of the system table schema should be different from
+		//user table schema.
+		xxx := []byte {0xff,0xfe}
+
 		tabRow := NewTpTupleImpl(TABLE_TABLES_REST_SCHEMA,
-			uint64(i), "create table info","schema encode info")
+			uint64(i), "create table info",xxx)
 		tab_value := tabRow.encode(nil)
 		fmt.Printf("///> %v %v \n",tab_skey,tabRow)
 		err = te.kv.Set(tab_key, tab_value)
@@ -711,13 +540,26 @@ func (te *tpEngine) Databases() []string {
 	return keys
 }
 
-func (te *tpEngine) Database(db string) (engine.Database, error){
-	dbs := te.Databases()
-	if !isInSlice(db,dbs) {
-		return nil, fmt.Errorf("database %v does not exist",db)
+func (te *tpEngine) Database(name string) (engine.Database, error){
+	te.rwlock.Lock()
+	defer te.rwlock.Unlock()
+
+	err := te.loadDatabaseList()
+	if err != nil {
+		return nil, err
 	}
-	//TODO:create a database
-	return nil, nil
+
+	if !te.hasDatabase(name){
+		return nil, fmt.Errorf("database %v does not exist",name)
+	}
+
+	dbRow := te.dbs[name] //has been decoded
+	dbid := dbRow.fields[0].(uint64) //dbid
+	dbinfo := dbRow.fields[1].(string) //dbinfo
+	dbSch := dbRow.fields[2].(string) //dbschema
+
+	db := NewTpDatabase(name, dbid, dbinfo, dbSch, engine.RSE, te.kv, te.proc)
+	return db, nil
 }
 
 func (te *tpEngine) Node(string) *engine.NodeInfo {

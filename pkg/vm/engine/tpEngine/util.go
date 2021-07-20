@@ -1,5 +1,7 @@
 package tpEngine
 
+import "fmt"
+
 func string2bytes(s string)[]byte{
 	return []byte(s)
 }
@@ -45,4 +47,8 @@ func makeByteSlice(l int,v byte)[]byte{
 		u[i] = v
 	}
 	return u
+}
+
+func sKey(num int, id string) string {
+	return fmt.Sprintf("%v.%v", id, num)
 }
