@@ -1,14 +1,11 @@
 package node
 
 import (
-	// e "matrixone/pkg/vm/engine/aoe/storage"
-	"context"
 	"errors"
 	"fmt"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
@@ -31,10 +28,12 @@ func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
 		Constructor: ctx.Constructor,
 	}
 
-	c := context.TODO()
-	c = context.WithValue(c, "handle", handle)
-	c = context.WithValue(c, "reader", ctx.Reader)
-	handle.IO = NewNodeIO(dio.WRITER_FACTORY.Opts, c)
+	if ctx.Reader != nil {
+		handle.IO = NewNodeIOWithReader(handle, ctx.Reader)
+	} else if ctx.Spillable {
+		handle.IO = NewNodeIO(handle, ctx.Dir)
+	}
+
 	return handle
 }
 
