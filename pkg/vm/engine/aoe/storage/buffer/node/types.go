@@ -23,6 +23,7 @@ type NodeHandleCtx struct {
 	Size        uint64
 	Reader      io.Reader
 	Constructor buf.MemoryNodeConstructor
+	Dir         []byte
 }
 
 type NodeHandle struct {

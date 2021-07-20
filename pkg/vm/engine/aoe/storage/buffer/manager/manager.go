@@ -18,7 +18,7 @@ var (
 	TRANSIENT_START_ID                      = ^(uint64(0)) / 2
 )
 
-func NewBufferManager(capacity uint64, flusher iw.IOpWorker, evict_ctx ...interface{}) mgrif.IBufferManager {
+func NewBufferManager(dir string, capacity uint64, flusher iw.IOpWorker, evict_ctx ...interface{}) mgrif.IBufferManager {
 	mgr := &BufferManager{
 		IMemoryPool:     buf.NewSimpleMemoryPool(capacity),
 		Nodes:           make(map[uint64]nif.INodeHandle),
@@ -26,6 +26,7 @@ func NewBufferManager(capacity uint64, flusher iw.IOpWorker, evict_ctx ...interf
 		NextID:          uint64(0),
 		NextTransientID: TRANSIENT_START_ID,
 		Flusher:         flusher,
+		Dir:             []byte(dir),
 	}
 
 	return mgr
@@ -72,6 +73,7 @@ func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool, constr
 		Buff:        node.NewNodeBuffer(id, pNode),
 		Spillable:   spillable,
 		Constructor: constructor,
+		Dir:         mgr.Dir,
 	}
 	handle := node.NewNodeHandle(&ctx)
 	return handle
@@ -101,6 +103,7 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64,
 		Buff:        node.NewNodeBuffer(node_id, pNode),
 		Spillable:   true,
 		Constructor: constructor,
+		Dir:         mgr.Dir,
 	}
 	handle := node.NewNodeHandle(&ctx)
 
@@ -239,5 +242,6 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 
 func MockBufMgr(capacity uint64) mgrif.IBufferManager {
 	flusher := w.NewOpWorker("MockFlusher")
-	return NewBufferManager(capacity, flusher)
+	dir := "/tmp/mockbufdir"
+	return NewBufferManager(dir, capacity, flusher)
 }

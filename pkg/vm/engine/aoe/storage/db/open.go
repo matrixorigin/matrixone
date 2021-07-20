@@ -32,9 +32,9 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 
 	fsMgr := ldio.NewManager(dirname, false)
 	memtblMgr := mt.NewManager(opts)
-	indexBufMgr := bm.NewBufferManager(opts.CacheCfg.IndexCapacity, opts.MemData.Updater)
-	mtBufMgr := bm.NewBufferManager(opts.CacheCfg.InsertCapacity, opts.MemData.Updater)
-	sstBufMgr := bm.NewBufferManager(opts.CacheCfg.DataCapacity, opts.MemData.Updater)
+	indexBufMgr := bm.NewBufferManager(opts.Meta.Conf.Dir, opts.CacheCfg.IndexCapacity, opts.MemData.Updater)
+	mtBufMgr := bm.NewBufferManager(opts.Meta.Conf.Dir, opts.CacheCfg.InsertCapacity, opts.MemData.Updater)
+	sstBufMgr := bm.NewBufferManager(opts.Meta.Conf.Dir, opts.CacheCfg.DataCapacity, opts.MemData.Updater)
 
 	db = &DB{
 		Dir:         dirname,
