@@ -110,7 +110,8 @@ message TabletIDsRequest {
 }
 
 message CreateTabletRequest {
-  bytes tabletInfo = 1;
+  string name = 1;
+  bytes tableInfo = 2;
 }
 
 message DropTabletRequest {

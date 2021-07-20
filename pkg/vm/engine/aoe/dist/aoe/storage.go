@@ -47,7 +47,11 @@ func (s *Storage) Append(tabletName string, bat *batch.Batch, index *md.LogIndex
 	}
 	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
-	return s.db.Append(tabletName, bat, index)
+	return s.db.Append(dbi.AppendCtx{
+		OpIndex: index.ID,
+		TableName: tabletName,
+		Data: bat,
+	})
 }
 
 func (s *Storage) Relation(tabletName string) (*adb.Relation, error) {
@@ -58,12 +62,15 @@ func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 	return s.db.GetSnapshot(ctx)
 }
 
-func (s *Storage) CreateTable(info *aoe.TabletInfo, index *md.LogIndex) (uint64, error) {
-	return s.db.CreateTable(info)
+func (s *Storage) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (uint64, error) {
+	return s.db.CreateTable(info, ctx)
 }
 
 func (s *Storage) DropTable(name string, index *md.LogIndex) (uint64, error) {
-	return s.db.DropTable(name)
+	return s.db.DropTable(dbi.DropTableCtx{
+		OpIndex: index.ID,
+		TableName: name,
+	})
 }
 
 func (s *Storage) TableIDs() (ids []uint64, err error) {

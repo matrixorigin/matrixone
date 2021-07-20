@@ -9,8 +9,8 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"matrixone/pkg/sql/protocol"
-	"matrixone/pkg/vm/engine/aoe"
-	daoe"matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/common/helper"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -20,21 +20,21 @@ func (h *aoeStorage) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, 
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-	var tabletInfo aoe.TabletInfo
-	err := json.Unmarshal(customReq.TabletInfo, &tabletInfo)
+	t, err := helper.DecodeTable(customReq.TableInfo)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
 	store := h.getStoreByGroup(shard.Group, shard.ID).(*daoe.Storage)
-	id, err := store.CreateTable(&tabletInfo, &md.LogIndex{
-		ID: ctx.LogIndex(),
+	id, err := store.CreateTable(&t, dbi.TableOpCtx{
+		OpIndex: ctx.LogIndex(),
+		TableName: customReq.Name,
 	})
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
-	writtenBytes := uint64(len(req.Key) + len(customReq.TabletInfo))
+	writtenBytes := uint64(len(req.Key) + len(customReq.TableInfo))
 	changedBytes := int64(writtenBytes)
 	resp.Value = format.Uint64ToBytes(id)
 	return writtenBytes, changedBytes, resp

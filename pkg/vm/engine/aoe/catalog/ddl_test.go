@@ -9,11 +9,14 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
 	"os"
 	"testing"
@@ -144,7 +147,13 @@ func testTableDDL(t *testing.T, c Catalog) {
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 
-	tid, err := c.CreateTable(dbid, 0, tableName, "", cols, nil)
+
+	colCnt := 4
+	tableInfo := md.MockTableInfo(colCnt)
+	tableInfo.Id = 101
+
+	tid, err := c.CreateTable(dbid, *tableInfo)
+
 	require.NoError(t, err)
 	require.Less(t, uint64(0), tid)
 
@@ -153,7 +162,7 @@ func testTableDDL(t *testing.T, c Catalog) {
 	go func() {
 		i := 0
 		for {
-			tb, _ := c.GetTable(dbid, tableName)
+			tb, _ := c.GetTable(dbid, tableInfo.Name)
 			if tb != nil {
 				completedC <- tb
 				break
@@ -163,11 +172,19 @@ func testTableDDL(t *testing.T, c Catalog) {
 	}()
 	select {
 	case <-completedC:
-		stdLog.Printf("[QSQ], create %s finished", tableName)
+		stdLog.Printf("[QSQ], create %s finished", tableInfo.Name)
 		break
 	case <-time.After(3 * time.Second):
-		stdLog.Printf("[QSQ], create %s failed, timeout", tableName)
+		stdLog.Printf("[QSQ], create %s failed, timeout", tableInfo.Name)
 	}
+	tb, err := c.GetTable(dbid, tableInfo.Name)
+	require.NoError(t, err)
+	require.NotNil(t, tb)
+	require.Equal(t, aoe.StatePublic, tb.State)
+
+
+
+
 }
 func testDBDDL(t *testing.T, c Catalog) {
 	dbs, err := c.GetDBs()
@@ -197,3 +214,17 @@ func testDBDDL(t *testing.T, c Catalog) {
 	require.Error(t, ErrDBNotExists, err)
 }
 
+func MockBatch(types []types.Type, rows uint64) *batch.Batch {
+	var attrs []string
+	for _, t := range types {
+		attrs = append(attrs, t.Oid.String())
+	}
+
+	bat := batch.New(true, attrs)
+	for i, colType := range types {
+		vec := vector.MockVector(colType, rows)
+		bat.Vecs[i] = vec.CopyToVector()
+	}
+
+	return bat
+}

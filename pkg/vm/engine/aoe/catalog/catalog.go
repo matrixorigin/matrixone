@@ -8,7 +8,6 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	cmap "github.com/orcaman/concurrent-map"
-	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist"
@@ -140,19 +139,19 @@ func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
 	return db, nil
 }
 
-func (c *Catalog) CreateTable(dbId, typ uint64, tableName, comment string, tableDefs []engine.TableDef, pdef *engine.PartitionBy) (uint64, error) {
+func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 	_, err := c.checkDBExists(dbId)
 	if err != nil {
 		return 0, err
 	}
-	_, err = c.checkTableNotExists(dbId, tableName)
+	_, err = c.checkTableNotExists(dbId, tbl.Name)
 	if err != nil {
 		return 0, err
 	}
-	v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tableName)))
+	v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tbl.Name)))
 	if !ok {
 		v = &sync.RWMutex{}
-		c.gMutex.Set(string(c.tableIDKey(dbId, tableName)), v)
+		c.gMutex.Set(string(c.tableIDKey(dbId, tbl.Name)), v)
 	}
 	lock := v.(*sync.RWMutex)
 	lock.RLock()
@@ -161,17 +160,16 @@ func (c *Catalog) CreateTable(dbId, typ uint64, tableName, comment string, table
 	if err != nil {
 		return 0, err
 	}
-	err = c.Store.Set(c.tableIDKey(dbId, tableName), format.Uint64ToBytes(tid))
+	err = c.Store.Set(c.tableIDKey(dbId, tbl.Name), format.Uint64ToBytes(tid))
 	if err != nil {
 		return 0, err
 	}
-	tInfo, err := helper.Transfer(dbId, tid, typ, tableName, comment, tableDefs, pdef)
 	if err != nil {
 		return 0, ErrTableCreateFailed
 	}
-	tInfo.State = aoe.StateNone
+	tbl.State = aoe.StateNone
 
-	meta, err := helper.EncodeTable(tInfo)
+	meta, err := helper.EncodeTable(tbl)
 	if err != nil {
 		return 0, ErrTableCreateFailed
 	}
@@ -202,12 +200,13 @@ func (c *Catalog) CreateTable(dbId, typ uint64, tableName, comment string, table
 			Group:  uint64(pb.AOEGroup),
 			Data:   buf.Bytes(),
 		}))
+
+
 	// TODO: wait table meta state changed?
 
 	if err != nil {
 		return 0, err
 	}
-	println(fmt.Sprintf("call create table, %d", tid))
 	return tid, nil
 }
 

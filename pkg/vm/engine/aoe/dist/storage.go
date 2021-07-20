@@ -58,9 +58,9 @@ type Storage interface {
 	PrefixKeysWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
 	AllocID([]byte) (uint64, error)
 
-	Append(string, []byte) error
+	Append(string, uint64, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
-	CreateTablet(*aoe.TabletInfo) (uint64, error)
+	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	DropTablet(string) (uint64, error)
 	TabletIDs()([]uint64, error)
 	TabletNames(uint64) ([]string, error)
@@ -155,29 +155,43 @@ func NewStorageWithOptions(
 
 	cfg.Prophet.ResourceStateChangedHandler = func(res metadata.Resource, from metapb.ResourceState, to metapb.ResourceState) {
 		if from == metapb.ResourceState_WaittingCreate && to == metapb.ResourceState_Running {
-			println("[QSQ], Call ResourceStateChangedHandler")
 			if res.Data() == nil {
-				println("[QSQ], res data is empty, something wrong")
 				return
 			}
-			header := format.MustBytesToUint64(res.Data()[0:8])
-			keys := bytes.Split(res.Data()[8:8+header], []byte("#"))
-			tKey := keys[0]
-			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), res.ID()))
-			t, _ := helper.DecodeTable(res.Data()[8+header:])
-			// TODO: Re-design group store and set value to <partition, segment_ids>
-			if _, err := h.CreateTablet(&aoe.TabletInfo{
-				Name: fmt.Sprintf("%d#%d", res.ID(), t.Id),
-				ShardId: res.ID(),
-			}); err != nil {
+			//Key Job名称，唯一
+			//Data Job内容
+			//JobHandler处理逻辑
+			//Remove Job
+			//逻辑需要保证幂等
+			//Job只会在etcd的leader执行
+			data := format.Uint64ToBytes(res.ID())
+			data = append(data, res.Data()...)
+			if err := h.RaftStore().Prophet().GetStorage().PutJob([]byte("test"), data); err != nil {
 				//TODO: how to handle local create table failing
-				println(fmt.Sprintf("[QSQ], %s", err.Error()))
 			}else {
-				println(fmt.Sprintf("[QSQ], %s", fmt.Sprintf("%d#%d", res.ID(), t.Id)))
+				//h.RaftStore().Prophet().GetStorage().RemoveJob([]byte("test"))
+			}
+
+		}
+	}
+
+	cfg.Prophet.JobCheckerDuration = 1000 * time.Millisecond
+	cfg.Prophet.JobHandler = func(key, data []byte) {
+		if bytes.Equal(key, []byte("test")) {
+			toShard := format.MustBytesToUint64(data[0:8])
+			header := format.MustBytesToUint64(data[8:16])
+			keys := bytes.Split(data[16:16+header], []byte("#"))
+			tKey := keys[0]
+			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), toShard))
+			t, _ := helper.DecodeTable(data[16+header:])
+			// TODO: Re-design group store and set value to <partition, segment_ids>
+			if err := h.CreateTablet(fmt.Sprintf("%d#%d", t.Id, toShard), toShard, &t); err != nil {
+				//TODO: how to handle local create table failing
+			}else {
 				t.State = aoe.StatePublic
 				meta, _ := helper.EncodeTable(t)
 				_ = h.Set(tKey, meta)
-				_ = h.Set(rKey, []byte(res.Unique()))
+				_ = h.Set(rKey, []byte(t.Name))
 			}
 		}
 	}
@@ -399,9 +413,10 @@ func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {
 
 
 
-func (h *aoeStorage) Append(name string, data []byte) error {
+func (h *aoeStorage) Append(name string, shardId uint64, data []byte) error {
 	req := pb.Request{
 		Type: pb.Append,
+		Shard: shardId,
 		Append: pb.AppendRequest{
 			Data: data,
 			TabletName: name,
@@ -431,24 +446,21 @@ func (h *aoeStorage) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, erro
 	return &s, nil
 }
 
-func (h *aoeStorage) CreateTablet(tbl *aoe.TabletInfo) (id uint64, err error) {
-	println("[QSQ] Call distributed CreateTablet, ", string(format.UInt64ToString(tbl.ShardId)))
-	info, _ := json.Marshal(tbl)
+func (h *aoeStorage) CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) (err error) {
+	info, _ := helper.EncodeTable(*tbl)
 	req := pb.Request{
-		Shard: tbl.ShardId,
+		Shard: shardId,
 		Type: pb.CreateTablet,
 		CreateTablet: pb.CreateTabletRequest{
-			TabletInfo: info,
+			Name: name,
+			TableInfo: info,
 		},
 	}
-	println("[QSQ], begin to call ExecWithGroup for CreateTablet")
-	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	_, err = h.ExecWithGroup(req, pb.AOEGroup)
 	if err != nil {
-		println("[QSQ] Call distributed CreateTablet failed, ", err.Error())
-		return id, err
+		return err
 	}
-	println("[QSQ] Call distributed CreateTablet finished")
-	return format.MustBytesToUint64(value), nil
+	return nil
 }
 
 func (h *aoeStorage) DropTablet(name string) (id uint64, err error){
@@ -501,8 +513,6 @@ func (h *aoeStorage) TabletNames(toShard uint64) ([]string, error) {
 	}
 	return rsp, nil
 }
-
-
 
 func (h *aoeStorage) Exec(cmd interface{}) ([]byte, error) {
 	return h.app.Exec(cmd, defaultRPCTimeout)
