@@ -8,7 +8,21 @@ import (
 )
 
 func RewriteExtend(e extend.Extend) extend.Extend {
-	return rewriteNot(e)
+	switch v := e.(type) {
+	case *extend.ParenExtend:
+		v.E = RewriteExtend(v.E)
+		return v
+	case *extend.UnaryExtend:
+		if v.Op == overload.Not {
+			return rewriteNot(e)
+		}
+		return v
+	case *extend.BinaryExtend:
+		v.Left = RewriteExtend(v.Left)
+		v.Right = RewriteExtend(v.Right)
+		return v
+	}
+	return e
 }
 func rewriteNot(e extend.Extend) extend.Extend {
 	switch v := e.(type) {

@@ -61,11 +61,16 @@ var BinOps = map[int][]*BinOp{
 			LeftType:   types.T_sel,
 			RightType:  types.T_sel,
 			ReturnType: types.T_sel,
-			Fn: func(lv, rv *vector.Vector, _ *process.Process, _, _ bool) (*vector.Vector, error) {
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
 				lvs, rvs := lv.Col.([]int64), rv.Col.([]int64)
-				lv.Nsp = lv.Nsp.Or(rv.Nsp)
-				lv.SetCol(or.SelOr(lvs, rvs, lvs))
-				return lv, nil
+				vec, err := register.Get(proc, int64(len(lvs)+len(rvs))*8, lv.Typ)
+				if err != nil {
+					return nil, err
+				}
+				vec.Nsp = lv.Nsp.Or(rv.Nsp)
+				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				vec.SetCol(or.SelOr(lvs, rvs, rs))
+				return vec, nil
 			},
 		},
 	},
@@ -74,10 +79,19 @@ var BinOps = map[int][]*BinOp{
 			LeftType:   types.T_sel,
 			RightType:  types.T_sel,
 			ReturnType: types.T_sel,
-			Fn: func(lv, rv *vector.Vector, _ *process.Process, _, _ bool) (*vector.Vector, error) {
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
 				lvs, rvs := lv.Col.([]int64), rv.Col.([]int64)
-				lv.Nsp = lv.Nsp.Or(rv.Nsp)
-				lv.SetCol(and.SelAnd(lvs, rvs))
+				n := len(lvs)
+				if n < len(rvs) {
+					n = len(rvs)
+				}
+				vec, err := register.Get(proc, int64(n)*8, lv.Typ)
+				if err != nil {
+					return nil, err
+				}
+				vec.Nsp = lv.Nsp.Or(rv.Nsp)
+				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				vec.SetCol(and.SelAnd(lvs, rvs, rs))
 				return lv, nil
 			},
 		},
