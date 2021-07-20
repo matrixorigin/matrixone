@@ -63,6 +63,17 @@ func (h *aoeStorage) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	return writtenBytes, changedBytes, resp
 }
 
+func (h *aoeStorage) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
+	resp := pb.AcquireResponse()
+	customReq := &rpcpb.GetSegmentIdsRequest{}
+	protoc.MustUnmarshal(customReq, req.Cmd)
+	rsp := h.getStoreByGroup(shard.Group, req.ToShard).(*daoe.Storage).GetSegmentIds(dbi.GetSegmentsCtx{
+		TableName: customReq.Name,
+	})
+	resp.Value, _ = json.Marshal(rsp)
+	return resp, 0
+}
+
 func (h *aoeStorage) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.GetSnapshotRequest{}

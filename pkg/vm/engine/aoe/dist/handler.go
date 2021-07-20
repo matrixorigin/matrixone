@@ -21,6 +21,7 @@ func (h *aoeStorage) init() {
 	h.AddWriteFunc(uint64(pb.CreateTablet), h.createTablet)
 	h.AddWriteFunc(uint64(pb.Append), h.append)
 	h.AddReadFunc(uint64(pb.TabletNames), h.tableNames)
+	h.AddReadFunc(uint64(pb.GetSegmentIds), h.getSegmentIds)
 }
 
 func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error {
@@ -70,6 +71,12 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		msg := customReq.TabletIds
 		req.ToShard = customReq.Shard
 		req.CustemType = uint64(pb.TabletNames)
+		req.Type = raftcmdpb.CMDType_Read
+		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.GetSegmentIds:
+		msg := customReq.GetSegmentIds
+		req.ToShard = customReq.Shard
+		req.CustemType = uint64(pb.GetSegmentIds)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
 	}

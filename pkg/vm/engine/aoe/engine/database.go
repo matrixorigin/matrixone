@@ -4,6 +4,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
+	"matrixone/pkg/vm/engine/aoe/common/helper"
 )
 
 
@@ -18,6 +19,7 @@ func (db *database) Delete(name string) error {
 }
 
 func (db *database) Create(name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
+	tbl, err := helper.Transfer(db.id, 0, name, comment, defs, pdef)
 	_, err := db.catalog.CreateTable(db.id, 0, name, comment, defs, pdef)
 	return err
 }

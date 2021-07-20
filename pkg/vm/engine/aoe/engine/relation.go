@@ -24,11 +24,7 @@ func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.
 }
 
 func (r *relation) Segments() []engine.SegmentInfo {
-	var segments []engine.SegmentInfo
-	for _, tablet := range r.tablets {
-		segments = append(segments, tablet.Segments()...)
-	}
-	return segments
+	return r.segments
 }
 
 func (r *relation) Index() []*engine.IndexTableDef {

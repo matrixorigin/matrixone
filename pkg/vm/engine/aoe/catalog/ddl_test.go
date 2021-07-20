@@ -9,13 +9,11 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
-	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
 	"os"
@@ -212,19 +210,4 @@ func testDBDDL(t *testing.T, c Catalog) {
 
 	db, err = c.GetDB(dbName)
 	require.Error(t, ErrDBNotExists, err)
-}
-
-func MockBatch(types []types.Type, rows uint64) *batch.Batch {
-	var attrs []string
-	for _, t := range types {
-		attrs = append(attrs, t.Oid.String())
-	}
-
-	bat := batch.New(true, attrs)
-	for i, colType := range types {
-		vec := vector.MockVector(colType, rows)
-		bat.Vecs[i] = vec.CopyToVector()
-	}
-
-	return bat
 }
