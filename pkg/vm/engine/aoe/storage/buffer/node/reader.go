@@ -2,7 +2,6 @@ package node
 
 import (
 	"io"
-	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"os"
@@ -12,23 +11,18 @@ import (
 
 type NodeReader struct {
 	Handle   iface.INodeHandle
-	Filename string
+	Filename []byte
 	Reader   io.Reader
 }
 
-func NewNodeReader(nh iface.INodeHandle, dirname, filename string, reader io.Reader) ioif.Reader {
+func NewNodeReader(nh iface.INodeHandle, filename []byte, reader io.Reader) ioif.Reader {
 	nr := &NodeReader{
 		Handle: nh,
 		Reader: reader,
 	}
 
 	if nr.Reader == nil {
-		if filename != "" {
-			nr.Filename = filename
-		} else {
-			id := nh.GetID()
-			nr.Filename = e.MakeFilename(dirname, e.FTTransientNode, MakeNodeFileName(id), false)
-		}
+		nr.Filename = filename
 	}
 	return nr
 }
@@ -39,9 +33,8 @@ func (nr *NodeReader) Load() (err error) {
 		node.ReadFrom(nr.Reader)
 		return nil
 	}
-
-	dir := filepath.Dir(nr.Filename)
-	// log.Info(dir)
+	filename := string(nr.Filename)
+	dir := filepath.Dir(filename)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
 	}
@@ -49,7 +42,7 @@ func (nr *NodeReader) Load() (err error) {
 		return err
 	}
 
-	w, err := os.OpenFile(nr.Filename, os.O_RDONLY, 0666)
+	w, err := os.OpenFile(filename, os.O_RDONLY, 0666)
 	if err != nil {
 		return err
 	}

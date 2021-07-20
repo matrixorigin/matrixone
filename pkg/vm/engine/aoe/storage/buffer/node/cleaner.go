@@ -7,10 +7,10 @@ import (
 )
 
 type NodeCleaner struct {
-	Filename string
+	Filename []byte
 }
 
-func NewNodeCleaner(filename string) ioif.Cleaner {
+func NewNodeCleaner(filename []byte) ioif.Cleaner {
 	return &NodeCleaner{
 		Filename: filename,
 	}
@@ -18,5 +18,5 @@ func NewNodeCleaner(filename string) ioif.Cleaner {
 
 func (nc *NodeCleaner) Clean() error {
 	// log.Infof("NodeCleaner removing %s", nc.Filename)
-	return os.Remove(nc.Filename)
+	return os.Remove(string(nc.Filename))
 }
