@@ -18,7 +18,7 @@ var (
 	TRANSIENT_START_ID                      = ^(uint64(0)) / 2
 )
 
-func NewBufferManager(capacity uint64, flusher iw.IOpWorker, evict_ctx ...interface{}) mgrif.IBufferManager {
+func NewBufferManager(dir string, capacity uint64, flusher iw.IOpWorker, evict_ctx ...interface{}) mgrif.IBufferManager {
 	mgr := &BufferManager{
 		IMemoryPool:     buf.NewSimpleMemoryPool(capacity),
 		Nodes:           make(map[uint64]nif.INodeHandle),
@@ -26,6 +26,7 @@ func NewBufferManager(capacity uint64, flusher iw.IOpWorker, evict_ctx ...interf
 		NextID:          uint64(0),
 		NextTransientID: TRANSIENT_START_ID,
 		Flusher:         flusher,
+		Dir:             []byte(dir),
 	}
 
 	return mgr
@@ -239,5 +240,6 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 
 func MockBufMgr(capacity uint64) mgrif.IBufferManager {
 	flusher := w.NewOpWorker("MockFlusher")
-	return NewBufferManager(capacity, flusher)
+	dir := "/tmp/mockbufdir"
+	return NewBufferManager(dir, capacity, flusher)
 }
