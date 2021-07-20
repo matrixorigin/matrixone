@@ -1,12 +1,14 @@
 package db
 
 import (
+	"fmt"
 	"io/ioutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 	"time"
@@ -253,4 +255,34 @@ func TestReplay(t *testing.T) {
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	inst.Close()
+}
+
+func TestMultiInstance(t *testing.T) {
+	dir := "/tmp/multi"
+	os.RemoveAll(dir)
+	var dirs []string
+	for i := 0; i < 10; i++ {
+		dirs = append(dirs, path.Join(dir, fmt.Sprintf("wd%d", i)))
+	}
+	var insts []*DB
+	for _, d := range dirs {
+		opts := e.Options{}
+		inst, _ := Open(d, &opts)
+		insts = append(insts, inst)
+	}
+
+	info := md.MockTableInfo(2)
+	for _, inst := range insts {
+		info = md.MockTableInfo(2)
+		_, err := inst.CreateTable(info, dbi.TableOpCtx{TableName: info.Name})
+		assert.Nil(t, err)
+	}
+	meta, _ := insts[0].Opts.Meta.Info.ReferenceTableByName(info.Name)
+	bat := chunk.MockBatch(meta.Schema.Types(), 100)
+	for _, inst := range insts {
+		err := inst.Append(dbi.AppendCtx{TableName: info.Name, Data: bat})
+		assert.Nil(t, err)
+	}
+
+	time.Sleep(time.Duration(100) * time.Millisecond)
 }

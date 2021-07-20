@@ -1,13 +1,11 @@
 package memtable
 
 import (
-	"context"
 	"fmt"
 	ro "matrixone/pkg/container/batch"
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -98,9 +96,11 @@ func (mt *MemTable) Append(bat *ro.Batch, offset uint64, index *md.LogIndex) (n 
 // If crashed before Step 3, same as above.
 func (mt *MemTable) Flush() error {
 	mt.Opts.EventListener.FlushBlockBeginCB(mt)
-	wCtx := context.TODO()
-	wCtx = context.WithValue(wCtx, "memtable", mt)
-	writer := dio.WRITER_FACTORY.MakeWriter(MEMTABLE_WRITER, wCtx)
+	writer := &MemtableWriter{
+		Opts:     mt.Opts,
+		Dirname:  mt.Meta.Segment.Table.Conf.Dir,
+		Memtable: mt,
+	}
 	err := writer.Flush()
 	if err != nil {
 		mt.Opts.EventListener.BackgroundErrorCB(err)
