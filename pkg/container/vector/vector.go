@@ -221,83 +221,67 @@ func (v *Vector) Shuffle(sels []int64) *Vector {
 	switch v.Typ.Oid {
 	case types.T_int8:
 		vs := v.Col.([]int8)
-		shuffle.I8Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.I8Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_int16:
 		vs := v.Col.([]int16)
-		shuffle.I16Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.I16Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_int32:
 		vs := v.Col.([]int32)
-		shuffle.I32Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.I32Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_int64:
 		vs := v.Col.([]int64)
-		shuffle.I64Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.I64Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_uint8:
 		vs := v.Col.([]uint8)
-		shuffle.Ui8Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.Ui8Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_uint16:
 		vs := v.Col.([]uint16)
-		shuffle.Ui16Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.Ui16Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_uint32:
 		vs := v.Col.([]uint32)
-		shuffle.Ui32Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.Ui32Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_uint64:
 		vs := v.Col.([]uint64)
-		shuffle.Ui64Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.Ui64Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_decimal:
 		vs := v.Col.([]types.Decimal)
-		shuffle.DecimalShuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.DecimalShuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_float32:
 		vs := v.Col.([]float32)
-		shuffle.Float32Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.Float32Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_float64:
 		vs := v.Col.([]float64)
-		shuffle.Float64Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.Float64Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_date:
 		vs := v.Col.([]types.Date)
-		shuffle.DateShuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.DateShuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_datetime:
 		vs := v.Col.([]types.Datetime)
-		shuffle.DatetimeShuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.DatetimeShuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_sel:
 		vs := v.Col.([]int64)
-		shuffle.I64Shuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.I64Shuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_tuple:
 		vs := v.Col.([][]interface{})
-		shuffle.TupleShuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.TupleShuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	case types.T_char, types.T_varchar, types.T_json:
 		vs := v.Col.(*types.Bytes)
-		shuffle.SShuffle(vs, sels)
-		v.Col = vs
+		v.Col = shuffle.SShuffle(vs, sels)
 		v.Nsp = v.Nsp.Filter(sels)
 	}
 	return v

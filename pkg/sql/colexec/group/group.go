@@ -122,6 +122,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			vec, err := bat.GetVector(ctr.attrs[ctr.is[i]], proc)
 			if err != nil {
 				bat.Clean(proc)
+				ctr.clean(proc)
+				return false, err
 			}
 			if e.Agg == nil {
 				switch e.Op {
@@ -141,10 +143,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 					e.Agg = aggfunc.NewSumCount(vec.Typ)
 				default:
 					bat.Clean(proc)
+					ctr.clean(proc)
 					return false, fmt.Errorf("unsupport aggregation operator '%v'", e.Op)
 				}
 				if e.Agg == nil {
 					bat.Clean(proc)
+					ctr.clean(proc)
 					return false, fmt.Errorf("unsupport sumcount aggregation operator '%v' for %s", e.Op, bat.Vecs[i+len(n.Gs)].Typ)
 				}
 				n.Es[i].Agg = e.Agg

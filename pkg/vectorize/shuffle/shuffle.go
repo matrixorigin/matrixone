@@ -209,14 +209,11 @@ func tupleShufflePure(vs [][]interface{}, sels []int64) [][]interface{} {
 }
 
 func sShufflePure(vs *types.Bytes, sels []int64) *types.Bytes {
-	/*
-		os, ns := vs.Os, vs.Ns
-		for i, sel := range sels {
-			os[i] = os[sel]
-			ns[i] = ns[sel]
-		}
-		vs.Os = os[:len(sels)]
-		vs.Ns = ns[:len(sels)]
-	*/
+	os, ns := vs.Offsets, vs.Lengths
+	for i, sel := range sels {
+		os[i] = os[sel]
+		ns[i] = ns[sel]
+	}
+	vs.Offsets, vs.Lengths = os, ns
 	return vs
 }
