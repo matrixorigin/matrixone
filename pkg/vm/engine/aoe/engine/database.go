@@ -5,6 +5,7 @@ import (
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	"matrixone/pkg/vm/metadata"
 )
 
 
@@ -19,8 +20,11 @@ func (db *database) Delete(name string) error {
 }
 
 func (db *database) Create(name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
-	tbl, err := helper.Transfer(db.id, 0, name, comment, defs, pdef)
-	_, err := db.catalog.CreateTable(db.id, 0, name, comment, defs, pdef)
+	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
+	if err != nil {
+		return err
+	}
+	_, err = db.catalog.CreateTable(db.id, tbl)
 	return err
 }
 
@@ -50,11 +54,25 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 		tbl:     &tablets[0].Table,
 		catalog: db.catalog,
 	}
+	r.tablets = tablets
 	for _, tbl := range tablets {
-		if tR, err := db.catalog.Store.Relation(tbl.Name); err != nil {
-			log.Errorf("Generate relation for tablet %s failed, %s", tbl.Name, err.Error())
+		if ids, err := db.catalog.Store.GetSegmentIds(tbl.Name, tbl.ShardId); err != nil {
+			log.Errorf("get segmentInfos for tablet %s failed, %s", tbl.Name, err.Error())
 		}else {
-			r.tablets = append(r.tablets, tR)
+			if len(ids.Ids)==0{
+				continue
+			}
+			addr := db.catalog.Store.RaftStore().GetRouter().LeaderAddress(tbl.ShardId)
+			r.segments = append(r.segments, engine.SegmentInfo{
+				Version: ids.Version,
+				Ids: ids.Ids,
+				GroupId: tbl.ShardId,
+				TabletName: tbl.Name,
+				Node: metadata.Node{
+					Id: addr,
+					Addr: addr,
+				},
+			})
 		}
 	}
 	return r, nil

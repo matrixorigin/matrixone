@@ -22,6 +22,7 @@ type relation struct {
 	tbl *aoe.TableInfo
 	catalog *catalog.Catalog
 	segments []engine.SegmentInfo
+	tablets []aoe.TabletInfo
 }
 
 

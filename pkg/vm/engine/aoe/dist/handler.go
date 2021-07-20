@@ -30,51 +30,60 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 	case pb.Set:
 		msg := customReq.Set
 		req.Key = msg.Key
+		req.Group = uint64(customReq.Group)
 		req.CustemType = uint64(pb.Set)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Del:
 		msg := customReq.Delete
 		req.Key = msg.Key
+		req.Group = uint64(customReq.Group)
 		req.CustemType = uint64(pb.Del)
 		req.Type = raftcmdpb.CMDType_Write
 	case pb.Get:
 		msg := customReq.Get
 		req.Key = msg.Key
+		req.Group = uint64(customReq.Group)
 		req.CustemType = uint64(pb.Get)
 		req.Type = raftcmdpb.CMDType_Read
 	case pb.PrefixScan:
 		msg := customReq.PrefixScan
 		req.Key = msg.Prefix
+		req.Group = uint64(customReq.Group)
 		req.CustemType = uint64(pb.PrefixScan)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Incr:
 		msg := customReq.AllocID
 		req.Key = msg.Key
+		req.Group = uint64(customReq.Group)
 		req.CustemType = uint64(pb.Incr)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.CreateTablet:
 		msg := customReq.CreateTablet
+		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
 		req.CustemType = uint64(pb.CreateTablet)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Append:
 		msg := customReq.Append
+		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
 		req.CustemType = uint64(pb.Append)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.TabletNames:
 		msg := customReq.TabletIds
+		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
 		req.CustemType = uint64(pb.TabletNames)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.GetSegmentIds:
 		msg := customReq.GetSegmentIds
+		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
 		req.CustemType = uint64(pb.GetSegmentIds)
 		req.Type = raftcmdpb.CMDType_Read

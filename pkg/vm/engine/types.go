@@ -24,7 +24,7 @@ const (
 type SegmentInfo struct {
 	Version    uint64
 	Ids        []uint64
-	GroupId    string
+	GroupId    uint64
 	TabletName string
 	Node       metadata.Node
 }

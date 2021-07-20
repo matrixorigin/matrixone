@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"bytes"
+	"errors"
 	"github.com/fagongzi/util/format"
-	log "github.com/sirupsen/logrus"
+	"math/rand"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/metadata"
@@ -15,12 +18,7 @@ func (r *relation) ID() string {
 }
 
 func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
-	tRelation, err := r.catalog.Store.Relation(si.TabletId)
-	if err != nil {
-		log.Errorf("Generate relation for tablet %s failed, %s", si.TabletId, err.Error())
-		return nil
-	}
-	return tRelation.Segment(si, proc)
+	panic("impl")
 }
 
 func (r *relation) Segments() []engine.SegmentInfo {
@@ -36,9 +34,18 @@ func (r *relation) Attribute() []metadata.Attribute {
 }
 
 func (r *relation) Write(bat *batch.Batch) error {
-
-	//TODO: Choose one tablet and write
-	return nil
+	if len(r.tablets) == 0 {
+		return errors.New("no tablets exists")
+	}
+	targetTbl := r.tablets[rand.Intn(len(r.tablets))]
+	var buf *bytes.Buffer
+	if err := protocol.EncodeBatch(bat, buf); err != nil {
+		return err
+	}
+	if buf == nil {
+		return errors.New("empty batch")
+	}
+	return r.catalog.Store.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
 }
 
 func (r *relation) AddAttribute(_ engine.TableDef) error {
@@ -50,11 +57,7 @@ func (r *relation) DelAttribute(_ engine.TableDef) error {
 }
 
 func (r *relation) Rows() int64 {
-	count := int64(0)
-	for _, t := range r.tablets{
-		count += t.Rows()
-	}
-	return count
+	panic("impl")
 }
 
 func (r *relation) Size(_ string) int64 {
