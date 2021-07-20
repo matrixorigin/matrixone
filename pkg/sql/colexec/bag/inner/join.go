@@ -66,14 +66,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		switch ctr.state {
 		case Build:
 			ctr.spill.e = n.E
-			if err := ctr.build(n.Rattrs, proc); err != nil {
+			if err := ctr.build(n.Sattrs, proc); err != nil {
 				ctr.state = End
 				ctr.clean(proc)
 				return true, err
 			}
 			ctr.state = Probe
 		case Probe:
-			ok, err := ctr.probe(n.R, n.S, n.Sattrs, proc)
+			ok, err := ctr.probe(n.R, n.S, n.Rattrs, proc)
 			if err != nil || ok {
 				ctr.state = End
 				ctr.clean(proc)
@@ -223,7 +223,6 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 			reg.Wg.Done()
 			proc.Reg.Ax = nil
 			bat.Clean(proc)
-			ctr.clean(proc)
 			return true, nil
 		}
 		if len(ctr.probeState.attrs) == 0 {
@@ -284,7 +283,6 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 				reg.Ch = nil
 				reg.Wg.Done()
 				bat.Clean(proc)
-				ctr.clean(proc)
 				return true, err
 			}
 		} else {
@@ -292,7 +290,6 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 				reg.Ch = nil
 				reg.Wg.Done()
 				bat.Clean(proc)
-				ctr.clean(proc)
 				return true, err
 			}
 		}
