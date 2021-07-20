@@ -4,9 +4,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
@@ -81,7 +82,7 @@ func TestCollection(t *testing.T) {
 
 	tabletInfo := md.MockTableInfo(2)
 	opCtx := mops.OpCtx{Opts: opts, TableInfo: tabletInfo}
-	op := mops.NewCreateTblOp(&opCtx)
+	op := mops.NewCreateTblOp(&opCtx, dbi.TableOpCtx{TableName: tabletInfo.Name})
 	op.Push()
 	err := op.WaitDone()
 	assert.Nil(t, err)

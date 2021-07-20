@@ -9,7 +9,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
@@ -64,7 +64,7 @@ func (blk *ColumnBlock) GetColIdx() int {
 }
 
 func (blk *ColumnBlock) GetColType() types.Type {
-	return blk.Meta.Segment.Schema.ColDefs[blk.ColIdx].Type
+	return blk.Meta.Segment.Table.Schema.ColDefs[blk.ColIdx].Type
 }
 
 func (blk *ColumnBlock) GetMeta() *md.Block {

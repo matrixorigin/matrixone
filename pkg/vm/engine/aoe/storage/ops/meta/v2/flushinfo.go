@@ -5,20 +5,19 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
-func NewCheckpointOp(ctx *OpCtx, info *md.MetaInfo) *CheckpointOp {
-	op := new(CheckpointOp)
+func NewFlushInfoOp(ctx *OpCtx, info *md.MetaInfo) *FlushInfoOp {
+	op := new(FlushInfoOp)
 	op.Info = info
 	op.Op = *NewOp(op, ctx, ctx.Opts.Meta.Flusher)
 	return op
 }
 
-type CheckpointOp struct {
+type FlushInfoOp struct {
 	Op
 	Info *md.MetaInfo
 }
 
-func (op *CheckpointOp) Execute() (err error) {
-	op.Info.CheckPoint += 1
+func (op *FlushInfoOp) Execute() (err error) {
 	err = op.Ctx.Opts.Meta.Checkpointer.PreCommit(op.Info)
 	if err != nil {
 		return err
@@ -27,10 +26,7 @@ func (op *CheckpointOp) Execute() (err error) {
 	if err != nil {
 		return err
 	}
-	err = op.Ctx.Opts.Meta.Info.UpdateCheckpoint(op.Info.CheckPoint)
-	if err != nil {
-		panic(err)
-	}
+	op.Ctx.Opts.Meta.Info.UpdateCheckpointTime(op.Info.CkpTime)
 
 	return err
 }

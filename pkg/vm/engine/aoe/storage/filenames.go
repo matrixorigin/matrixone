@@ -11,7 +11,8 @@ import (
 type FileType int
 
 const (
-	FTCheckpoint FileType = iota
+	FTInfoCkp FileType = iota
+	FTTableCkp
 	FTLock
 	FTBlock
 	FTSegment
@@ -31,24 +32,63 @@ func MakeMetaDir(dirname string) string {
 	return path.Join(dirname, "meta")
 }
 
-func ParseMetaFileName(filename string) (version int, ok bool) {
-	ok = true
+func MakeTableDir(dirname string, id uint64) string {
+	return path.Join(dirname, fmt.Sprintf("%d", id))
+}
+
+func MakeBlockFileName(dirname, name string, tableId uint64) string {
+	// dir := MakeTableDir(dirname, id)
+	dir := dirname
+	return MakeFilename(dir, FTBlock, name, false)
+}
+
+func MakeSegmentFileName(dirname, name string, tableId uint64) string {
+	// dir := MakeTableDir(dirname, id)
+	dir := dirname
+	return MakeFilename(dir, FTSegment, name, false)
+}
+
+func MakeTableCkpFileName(dirname, name string, tableId uint64, isTmp bool) string {
+	return MakeFilename(dirname, FTTableCkp, name, isTmp)
+}
+
+func MakeInfoCkpFileName(dirname, name string, isTmp bool) string {
+	return MakeFilename(dirname, FTInfoCkp, name, isTmp)
+}
+
+func MakeLockFileName(dirname, name string) string {
+	return MakeFilename(dirname, FTLock, name, false)
+}
+
+func ParseInfoMetaName(filename string) (version int, ok bool) {
 	name := strings.TrimSuffix(filename, ".ckp")
 	if len(name) == len(filename) {
-		panic(fmt.Sprintf("invalid file name %s", filename))
+		return version, false
 	}
 	version, err := strconv.Atoi(name)
 	if err != nil {
 		panic(err)
 	}
-	return version, ok
+	return version, true
+}
+
+func ParseTableMetaName(filename string) (name string, ok bool) {
+	name = strings.TrimSuffix(filename, ".tckp")
+	if len(name) == len(filename) {
+		return name, false
+	}
+	return name, true
 }
 
 func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
 	var s string
 	switch ft {
-	case FTCheckpoint:
+	case FTLock:
+		s = path.Join(dirname, fmt.Sprintf("%s.lock", name))
+	case FTInfoCkp:
 		s = path.Join(MakeMetaDir(dirname), fmt.Sprintf("%s.ckp", name))
+	case FTTableCkp:
+		s = path.Join(MakeMetaDir(dirname), fmt.Sprintf("%s.tckp", name))
 	case FTTransientNode:
 		s = path.Join(MakeSpillDir(dirname), fmt.Sprintf("%s.nod", name))
 		isTmp = false

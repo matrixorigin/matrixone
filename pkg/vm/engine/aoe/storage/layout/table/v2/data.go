@@ -9,7 +9,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
@@ -206,6 +206,25 @@ func (td *TableData) Size(attr string) uint64 {
 		size += seg.Size(attr)
 	}
 	return size
+}
+
+func (td *TableData) GetSegmentedIndex() (id uint64, ok bool) {
+	ts := td.Meta.Info.GetCheckpointTime()
+	if td.Meta.IsDeleted(ts) {
+		return td.Meta.DeletedIndex, true
+	}
+
+	segCnt := atomic.LoadUint32(&td.tree.SegmentCnt)
+	for i := int(segCnt) - 1; i >= 0; i-- {
+		td.tree.RLock()
+		seg := td.tree.Segments[i]
+		td.tree.RUnlock()
+		id, ok = seg.GetSegmentedIndex()
+		if ok {
+			return id, ok
+		}
+	}
+	return id, ok
 }
 
 func (td *TableData) SegmentIds() []uint64 {

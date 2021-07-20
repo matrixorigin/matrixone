@@ -7,7 +7,7 @@ import (
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"testing"
 	"time"
 

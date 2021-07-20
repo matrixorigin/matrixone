@@ -9,7 +9,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"runtime"
 	"sync"
 
@@ -280,7 +280,7 @@ func MockSegments(fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager
 	var segIDs []common.ID
 	for _, segMeta := range meta.Segments {
 		var colSegs []col.IColumnSegment
-		for colIdx, _ := range segMeta.Schema.ColDefs {
+		for colIdx, _ := range segMeta.Table.Schema.ColDefs {
 			colSeg := MockSegment(tblData.GetIndexHolder(), fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
 			colSegs = append(colSegs, colSeg)
 		}

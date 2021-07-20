@@ -66,14 +66,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		switch ctr.state {
 		case Build:
 			ctr.spill.e = n.E
-			if err := ctr.build(n.Rattrs, proc); err != nil {
+			if err := ctr.build(n.Sattrs, proc); err != nil {
 				ctr.state = End
 				ctr.clean(proc)
 				return true, err
 			}
 			ctr.state = Probe
 		case Probe:
-			ok, err := ctr.probe(n.R, n.S, n.Sattrs, proc)
+			ok, err := ctr.probe(n.R, n.S, n.Rattrs, proc)
 			if err != nil || ok {
 				ctr.state = End
 				ctr.clean(proc)
@@ -155,29 +155,10 @@ func (ctr *Container) build(attrs []string, proc *process.Process) error {
 				return err
 			}
 		}
-		switch {
-		case ctr.spilled:
-			blk := ctr.bats[len(ctr.bats)-1]
-			if err := blk.Bat.Prefetch(blk.Bat.Attrs, blk.Bat.Vecs, proc); err != nil {
-				reg.Ch = nil
-				reg.Wg.Done()
-				return err
-			}
-			if err := ctr.spill.r.Write(blk.Bat); err != nil {
-				reg.Ch = nil
-				reg.Wg.Done()
-				return err
-			}
-			blk.Seg = ctr.spill.r.Segments()[len(ctr.bats)-1]
-			blk.Bat.Clean(proc)
-			blk.Bat = nil
-		case proc.Size() > proc.Lim.Size:
-			if err := ctr.newSpill(proc); err != nil {
-				reg.Ch = nil
-				reg.Wg.Done()
-				return err
-			}
-			for i, blk := range ctr.bats {
+		/*
+			switch {
+			case ctr.spilled:
+				blk := ctr.bats[len(ctr.bats)-1]
 				if err := blk.Bat.Prefetch(blk.Bat.Attrs, blk.Bat.Vecs, proc); err != nil {
 					reg.Ch = nil
 					reg.Wg.Done()
@@ -188,13 +169,34 @@ func (ctr *Container) build(attrs []string, proc *process.Process) error {
 					reg.Wg.Done()
 					return err
 				}
-				blk.R = ctr.spill.r
-				blk.Seg = ctr.spill.r.Segments()[i]
+				blk.Seg = ctr.spill.r.Segments()[len(ctr.bats)-1]
 				blk.Bat.Clean(proc)
 				blk.Bat = nil
+			case proc.Size() > proc.Lim.Size:
+				if err := ctr.newSpill(proc); err != nil {
+					reg.Ch = nil
+					reg.Wg.Done()
+					return err
+				}
+				for i, blk := range ctr.bats {
+					if err := blk.Bat.Prefetch(blk.Bat.Attrs, blk.Bat.Vecs, proc); err != nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+						return err
+					}
+					if err := ctr.spill.r.Write(blk.Bat); err != nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+						return err
+					}
+					blk.R = ctr.spill.r
+					blk.Seg = ctr.spill.r.Segments()[i]
+					blk.Bat.Clean(proc)
+					blk.Bat = nil
+				}
+				ctr.spilled = true
 			}
-			ctr.spilled = true
-		}
+		*/
 		reg.Wg.Done()
 	}
 	return nil
@@ -221,7 +223,6 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 			reg.Wg.Done()
 			proc.Reg.Ax = nil
 			bat.Clean(proc)
-			ctr.clean(proc)
 			return true, nil
 		}
 		if len(ctr.probeState.attrs) == 0 {
@@ -282,7 +283,6 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 				reg.Ch = nil
 				reg.Wg.Done()
 				bat.Clean(proc)
-				ctr.clean(proc)
 				return true, err
 			}
 		} else {
@@ -290,7 +290,6 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 				reg.Ch = nil
 				reg.Wg.Done()
 				bat.Clean(proc)
-				ctr.clean(proc)
 				return true, err
 			}
 		}
@@ -507,7 +506,7 @@ func (ctr *Container) newSpill(proc *process.Process) error {
 	for _, attr := range ctr.spill.md {
 		defs = append(defs, &engine.AttributeDef{attr})
 	}
-	if err := ctr.spill.e.Create(ctr.spill.id, defs, nil, nil); err != nil {
+	if err := ctr.spill.e.Create(ctr.spill.id, defs, nil, nil, ""); err != nil {
 		return err
 	}
 	r, err := ctr.spill.e.Relation(ctr.spill.id)

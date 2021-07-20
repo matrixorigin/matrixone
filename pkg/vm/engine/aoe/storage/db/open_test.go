@@ -1,14 +1,15 @@
 package db
 
 import (
+	"fmt"
 	"io/ioutil"
-	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
+	"path"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -30,7 +31,9 @@ func TestLoadMetaInfo(t *testing.T) {
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
-	info := loadMetaInfo(cfg)
+	handle := NewMetaHandle(cfg.Dir)
+	info := handle.RebuildInfo(cfg)
+	// info := loadMetaInfo(cfg)
 	assert.Equal(t, uint64(0), info.CheckPoint)
 	assert.Equal(t, uint64(0), info.Sequence.NextBlockID)
 	assert.Equal(t, uint64(0), info.Sequence.NextSegmentID)
@@ -38,31 +41,46 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	schema := md.MockSchema(2)
 	schema.Name = "mock1"
-	tbl, err := info.CreateTable(schema)
+	tbl, err := info.CreateTable(md.NextGloablSeqnum(), schema)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1), info.Sequence.NextTableID)
 
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
 
+	filename := e.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
+	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	assert.Nil(t, err)
+	defer w.Close()
+	err = tbl.Serialize(w)
+	assert.Nil(t, err)
+
 	info.CheckPoint++
 
-	filename := e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
+	filename = e.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 
-	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
 	err = info.Serialize(w)
 	assert.Nil(t, err)
 	schema2 := md.MockSchema(2)
 	schema2.Name = "mock2"
-	tbl, err = info.CreateTable(schema2)
+	tbl, err = info.CreateTable(md.NextGloablSeqnum(), schema2)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), info.Sequence.NextTableID)
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
+
+	filename = e.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
+	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	assert.Nil(t, err)
+	defer w.Close()
+	err = tbl.Serialize(w)
+	assert.Nil(t, err)
+
 	info.CheckPoint++
 
-	filename = e.MakeFilename(cfg.Dir, e.FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), false)
+	filename = e.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 	w.Close()
 
 	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
@@ -71,11 +89,21 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.Serialize(w)
 	assert.Nil(t, err)
 
-	info2 := loadMetaInfo(cfg)
+	handle2 := NewMetaHandle(cfg.Dir)
+	info2 := handle2.RebuildInfo(cfg)
 	assert.NotNil(t, info2)
 	assert.Equal(t, info.CheckPoint, info2.CheckPoint)
 	assert.Equal(t, info.Sequence.NextTableID, info2.Sequence.NextTableID)
-	assert.Equal(t, info.Tables, info2.Tables)
+	assert.Equal(t, len(info.Tables), len(info2.Tables))
+	for id, sTbl := range info.Tables {
+		tTbl := info2.Tables[id]
+		assert.Equal(t, sTbl.ID, tTbl.ID)
+		assert.Equal(t, sTbl.CheckPoint, tTbl.CheckPoint)
+		assert.Equal(t, sTbl.TimeStamp, tTbl.TimeStamp)
+		assert.Equal(t, sTbl.Schema, tTbl.Schema)
+	}
+	t.Log(info.String())
+	t.Log(info2.String())
 }
 
 func TestCleanStaleMeta(t *testing.T) {
@@ -93,14 +121,14 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	invalids := []string{"ds234", "234ds"}
 	for _, invalid := range invalids {
-		fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, invalid, false)
+		fname := e.MakeInfoCkpFileName(cfg.Dir, invalid, false)
 
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
 		f.Close()
 
 		f1 := func() {
-			cleanStaleMeta(cfg.Dir)
+			NewMetaHandle(cfg.Dir)
 		}
 		assert.Panics(t, f1)
 		err = os.Remove(fname)
@@ -109,7 +137,7 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	valids := []string{"1", "2", "3", "100"}
 	for _, valid := range valids {
-		fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, valid, false)
+		fname := e.MakeInfoCkpFileName(cfg.Dir, valid, false)
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
 		f.Close()
@@ -120,13 +148,11 @@ func TestCleanStaleMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, len(valids), len(files))
 
-	cleanStaleMeta(cfg.Dir)
+	// files, err = ioutil.ReadDir(dir)
+	// assert.Nil(t, err)
+	// assert.Equal(t, 1, len(files))
 
-	files, err = ioutil.ReadDir(dir)
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(files))
-
-	fname := e.MakeFilename(cfg.Dir, e.FTCheckpoint, "100", false)
+	fname := e.MakeInfoCkpFileName(cfg.Dir, "100", false)
 	_, err = os.Stat(fname)
 	assert.Nil(t, err)
 }
@@ -140,90 +166,123 @@ func TestOpen(t *testing.T) {
 	}
 	opts := &e.Options{}
 	opts.Meta.Conf = cfg
-	dbi, err := Open(TEST_OPEN_DIR, opts)
+	inst, err := Open(TEST_OPEN_DIR, opts)
 	assert.Nil(t, err)
-	assert.NotNil(t, dbi)
-	err = dbi.Close()
+	assert.NotNil(t, inst)
+	err = inst.Close()
 	assert.Nil(t, err)
 }
 
 func TestReplay(t *testing.T) {
 	initDBTest()
-	dbi := initDB()
+	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
-	tablet := aoe.TabletInfo{Table: *tableInfo, Name: "mocktbl"}
-	tid, err := dbi.CreateTable(&tablet)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl"})
 	assert.Nil(t, err)
-	tblMeta, err := dbi.Opts.Meta.Info.ReferenceTable(tid)
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	blkCnt := 2
-	rows := dbi.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
+	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
 	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
-	logIdx := &md.LogIndex{
-		ID:       uint64(0),
-		Capacity: uint64(ck.Vecs[0].Length()),
-	}
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(tablet.Name, ck, logIdx)
+		err = inst.Append(dbi.AppendCtx{
+			OpIndex:   uint64(i),
+			Data:      ck,
+			TableName: tableInfo.Name,
+		})
 		assert.Nil(t, err)
 	}
 	time.Sleep(time.Duration(10) * time.Millisecond)
-	t.Log(dbi.MTBufMgr.String())
-	t.Log(dbi.SSTBufMgr.String())
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
 
-	lastTableID := dbi.Opts.Meta.Info.Sequence.NextTableID
-	lastSegmentID := dbi.Opts.Meta.Info.Sequence.NextSegmentID
-	lastBlockID := dbi.Opts.Meta.Info.Sequence.NextBlockID
-	lastIndexID := dbi.Opts.Meta.Info.Sequence.NextIndexID
-	tbl, err := dbi.Store.DataTables.WeakRefTable(tblMeta.ID)
+	lastTableID := inst.Opts.Meta.Info.Sequence.NextTableID
+	lastSegmentID := inst.Opts.Meta.Info.Sequence.NextSegmentID
+	lastBlockID := inst.Opts.Meta.Info.Sequence.NextBlockID
+	lastIndexID := inst.Opts.Meta.Info.Sequence.NextIndexID
+	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.ID)
 	assert.Nil(t, err)
 	t.Logf("Row count: %d", tbl.GetRowCount())
 
-	dbi.Close()
+	inst.Close()
 
-	dataDir := e.MakeDataDir(dbi.Dir)
+	dataDir := e.MakeDataDir(inst.Dir)
 	invalidFileName := filepath.Join(dataDir, "invalid")
 	f, err := os.OpenFile(invalidFileName, os.O_RDONLY|os.O_CREATE, 0666)
 	assert.Nil(t, err)
 	f.Close()
 
-	dbi = initDB()
+	inst = initDB()
 
 	os.Stat(invalidFileName)
 	_, err = os.Stat(invalidFileName)
 	assert.True(t, os.IsNotExist(err))
 
-	t.Log(dbi.MTBufMgr.String())
-	t.Log(dbi.SSTBufMgr.String())
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
 
-	lastTableID2 := dbi.Opts.Meta.Info.Sequence.NextTableID
-	lastSegmentID2 := dbi.Opts.Meta.Info.Sequence.NextSegmentID
-	lastBlockID2 := dbi.Opts.Meta.Info.Sequence.NextBlockID
-	lastIndexID2 := dbi.Opts.Meta.Info.Sequence.NextIndexID
+	lastTableID2 := inst.Opts.Meta.Info.Sequence.NextTableID
+	lastSegmentID2 := inst.Opts.Meta.Info.Sequence.NextSegmentID
+	lastBlockID2 := inst.Opts.Meta.Info.Sequence.NextBlockID
+	lastIndexID2 := inst.Opts.Meta.Info.Sequence.NextIndexID
 	assert.Equal(t, lastTableID, lastTableID2)
 	assert.Equal(t, lastSegmentID, lastSegmentID2)
 	assert.Equal(t, lastBlockID, lastBlockID2)
 	assert.Equal(t, lastIndexID, lastIndexID2)
 
-	replaytblMeta, err := dbi.Opts.Meta.Info.ReferenceTableByName(tablet.Name)
+	replaytblMeta, err := inst.Opts.Meta.Info.ReferenceTableByName(tableInfo.Name)
 	assert.Nil(t, err)
 	assert.Equal(t, tblMeta.Schema.Name, replaytblMeta.Schema.Name)
 
-	tbl, err = dbi.Store.DataTables.WeakRefTable(replaytblMeta.ID)
+	tbl, err = inst.Store.DataTables.WeakRefTable(replaytblMeta.ID)
 	assert.Nil(t, err)
 	t.Logf("Row count: %d", tbl.GetRowCount())
 
-	_, err = dbi.CreateTable(&tablet)
+	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name})
 	assert.NotNil(t, err)
 	for i := 0; i < insertCnt; i++ {
-		err = dbi.Append(tablet.Name, ck, logIdx)
+		err = inst.Append(dbi.AppendCtx{
+			TableName: tableInfo.Name,
+			Data:      ck,
+			OpIndex:   uint64(i),
+		})
 		assert.Nil(t, err)
 	}
 
 	time.Sleep(time.Duration(10) * time.Millisecond)
-	t.Log(dbi.MTBufMgr.String())
-	t.Log(dbi.SSTBufMgr.String())
-	dbi.Close()
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	inst.Close()
+}
+
+func TestMultiInstance(t *testing.T) {
+	dir := "/tmp/multi"
+	os.RemoveAll(dir)
+	var dirs []string
+	for i := 0; i < 10; i++ {
+		dirs = append(dirs, path.Join(dir, fmt.Sprintf("wd%d", i)))
+	}
+	var insts []*DB
+	for _, d := range dirs {
+		opts := e.Options{}
+		inst, _ := Open(d, &opts)
+		insts = append(insts, inst)
+	}
+
+	info := md.MockTableInfo(2)
+	for _, inst := range insts {
+		info = md.MockTableInfo(2)
+		_, err := inst.CreateTable(info, dbi.TableOpCtx{TableName: info.Name})
+		assert.Nil(t, err)
+	}
+	meta, _ := insts[0].Opts.Meta.Info.ReferenceTableByName(info.Name)
+	bat := chunk.MockBatch(meta.Schema.Types(), 100)
+	for _, inst := range insts {
+		err := inst.Append(dbi.AppendCtx{TableName: info.Name, Data: bat})
+		assert.Nil(t, err)
+	}
+
+	time.Sleep(time.Duration(100) * time.Millisecond)
 }

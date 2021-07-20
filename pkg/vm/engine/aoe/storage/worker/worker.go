@@ -104,7 +104,7 @@ func NewOpWorker(name string, args ...int) *OpWorker {
 func (w *OpWorker) Start() {
 	// log.Infof("Start OpWorker")
 	if w.State != CREATED {
-		panic("logic error")
+		panic(fmt.Sprintf("logic error: %v", w.State))
 	}
 	w.State = RUNNING
 	go func() {

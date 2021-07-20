@@ -8,7 +8,7 @@ package data
 // 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 // 	"matrixone/pkg/vm/engine/aoe/storage/layout/table"
 // 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/col"
-// 	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+// 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 // 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 // 	"testing"
 // 	// log "github.com/sirupsen/logrus"

@@ -6,7 +6,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iworker "matrixone/pkg/vm/engine/aoe/storage/worker/base"

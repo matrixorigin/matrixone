@@ -2,12 +2,15 @@ package engine
 
 import (
 	"errors"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
-	"strconv"
 
 	log "github.com/sirupsen/logrus"
+)
+
+var (
+	ErrAlreadyExist = errors.New("ckp already done")
 )
 
 type Checkpointer struct {
@@ -24,13 +27,24 @@ func NewCheckpointer(opts *Options, dirname string) *Checkpointer {
 	return ck
 }
 
-func (ck *Checkpointer) PreCommit(info *md.MetaInfo) error {
-	if info == nil {
-		log.Error("nil info")
-		return errors.New("nil info")
+func (ck *Checkpointer) PreCommit(res md.Resource) error {
+	if res == nil {
+		log.Error("nil res")
+		return errors.New("nil res")
 	}
-	fname := MakeFilename(ck.Dirname, FTCheckpoint, strconv.Itoa(int(info.CheckPoint)), true)
+	var fname string
+	switch res.GetResourceType() {
+	case md.ResInfo:
+		fname = MakeInfoCkpFileName(ck.Dirname, res.GetFileName(), true)
+	case md.ResTable:
+		fname = MakeTableCkpFileName(ck.Dirname, res.GetFileName(), res.GetTableId(), true)
+	default:
+		panic("not supported")
+	}
 	// log.Infof("PreCommit CheckPoint: %s", fname)
+	if _, err := os.Stat(fname); err == nil {
+		return ErrAlreadyExist
+	}
 	dir := filepath.Dir(fname)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
@@ -43,7 +57,7 @@ func (ck *Checkpointer) PreCommit(info *md.MetaInfo) error {
 		return err
 	}
 	defer w.Close()
-	err = info.Serialize(w)
+	err = res.Serialize(w)
 	if err != nil {
 		return err
 	}
@@ -51,7 +65,7 @@ func (ck *Checkpointer) PreCommit(info *md.MetaInfo) error {
 	return nil
 }
 
-func (ck *Checkpointer) Commit() error {
+func (ck *Checkpointer) Commit(res md.Resource) error {
 	if len(ck.TmpFile) == 0 {
 		return errors.New("Cannot Commit checkpoint, should do PreCommit before")
 	}
