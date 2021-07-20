@@ -14,14 +14,21 @@ import (
 )
 
 type BlockWriter struct {
-	data         []*vector.Vector
-	meta         *md.Block
-	dir          string
-	fileHandle   *os.File
+	data       []*vector.Vector
+	meta       *md.Block
+	dir        string
+	fileHandle *os.File
+	fileGetter func(string, *md.Block) (*os.File, error)
+
+	// preprocessor preprocess data before writing, such as SORT
 	preprocessor func([]*vector.Vector, *md.Block) error
-	fileGetter   func(string, *md.Block) (*os.File, error)
+
+	// indexFlusher flush indexes that pre-defined in meta
 	indexFlusher func(*os.File, []*vector.Vector, *md.Block) error
-	dataFlusher  func(*os.File, []*vector.Vector, *md.Block) error
+
+	// dataFlusher flush columns data, including compression
+	dataFlusher func(*os.File, []*vector.Vector, *md.Block) error
+
 	preExecutor  func()
 	postExecutor func()
 }
