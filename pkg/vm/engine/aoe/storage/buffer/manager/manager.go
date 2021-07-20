@@ -73,6 +73,7 @@ func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool, constr
 		Buff:        node.NewNodeBuffer(id, pNode),
 		Spillable:   spillable,
 		Constructor: constructor,
+		Dir:         mgr.Dir,
 	}
 	handle := node.NewNodeHandle(&ctx)
 	return handle
@@ -102,6 +103,7 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64,
 		Buff:        node.NewNodeBuffer(node_id, pNode),
 		Spillable:   true,
 		Constructor: constructor,
+		Dir:         mgr.Dir,
 	}
 	handle := node.NewNodeHandle(&ctx)
 

@@ -1,55 +1,30 @@
 package node
 
 import (
-	"context"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"os"
 	"path/filepath"
 )
 
-const (
-	NODE_WRITER = "NW"
-)
-
-func init() {
-	dio.WRITER_FACTORY.RegisterBuilder(NODE_WRITER, &NodeWriterBuilder{})
-}
-
-type NodeWriterBuilder struct {
-}
-
-func (b *NodeWriterBuilder) Build(wf ioif.IWriterFactory, ctx context.Context) ioif.Writer {
-	handle := ctx.Value("handle").(iface.INodeHandle)
-	if handle == nil {
-		panic("logic error")
-	}
-	var filename string
-	fn := ctx.Value("filename")
-	if fn == nil {
-		id := handle.GetID()
-		filename = e.MakeFilename(dio.READER_FACTORY.Dirname, e.FTTransientNode, MakeNodeFileName(id), false)
-	} else {
-		filename = fmt.Sprintf("%v", fn)
-	}
-	w := &NodeWriter{
-		Opts:     wf.GetOpts(),
-		Dirname:  wf.GetDir(),
-		Handle:   handle,
-		Filename: filename,
-	}
-	return w
-}
-
 type NodeWriter struct {
-	Opts     *e.Options
-	Dirname  string
 	Handle   iface.INodeHandle
 	Filename string
+}
+
+func NewNodeWriter(nh iface.INodeHandle, dirname, filename string) ioif.Writer {
+	w := &NodeWriter{
+		Handle:   nh,
+		Filename: filename,
+	}
+	if w.Filename == "" {
+		id := nh.GetID()
+		w.Filename = e.MakeFilename(dirname, e.FTTransientNode, MakeNodeFileName(id), false)
+	}
+	return w
 }
 
 func MakeNodeFileName(id uint64) string {
