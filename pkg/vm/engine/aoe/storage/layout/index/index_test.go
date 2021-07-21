@@ -1,12 +1,14 @@
 package index
 
 import (
-	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/container/types"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"os"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -70,7 +72,82 @@ func TestTable(t *testing.T) {
 	assert.Nil(t, seg0)
 }
 
-func TestIndex(t *testing.T) {
+func TestBsi(t *testing.T) {
+	tp := types.Type{
+		Oid:  types.T_int32,
+		Size: 4,
+	}
+	bitSize := 30
+	col := int16(10)
+	bsiIdx := NewNumericBsiIndex(tp, bitSize, col)
+
+	xs := []int64{
+		10, 3, -7, 9, 0, 1, 9, -8, 2, -1, 12, -35435, 6545654, 2332, 2,
+	}
+
+	for i, x := range xs {
+		err := bsiIdx.Set(uint64(i), x)
+		assert.Nil(t, err)
+	}
+
+	for i, x := range xs {
+		v, ok := bsiIdx.Get(uint64(i))
+		assert.True(t, ok)
+		assert.Equal(t, x, v)
+	}
+	res, err := bsiIdx.Eq(int64(9), nil)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(2), res.GetCardinality())
+
+	buf, err := bsiIdx.Marshall()
+	assert.Nil(t, err)
+
+	bsiIdx2 := NewNumericBsiIndex(tp, 0, 0)
+	err = bsiIdx2.Unmarshall(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, col, bsiIdx2.Col)
+
+	for i, x := range xs {
+		v, ok := bsiIdx2.Get(uint64(i))
+		assert.True(t, ok)
+		assert.Equal(t, x, v)
+	}
+	res, err = bsiIdx2.Eq(int64(9), nil)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(2), res.GetCardinality())
+
+	fname := "/tmp/xxnumericbsi"
+	os.Remove(fname)
+	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	assert.Nil(t, err)
+	defer f.Close()
+
+	capacity, err := bsiIdx.WriteTo(f)
+	assert.Nil(t, err)
+
+	f, err = os.OpenFile(fname, os.O_RDONLY, os.ModePerm)
+	assert.Nil(t, err)
+	defer f.Close()
+
+	node := NewNumericBsiEmptyNode(uint64(capacity), nil)
+	_, err = node.ReadFrom(f)
+	assert.Nil(t, err)
+	t.Log(capacity)
+
+	bsiIdx3 := node.(*NumericBsiIndex)
+	assert.Equal(t, col, bsiIdx3.Col)
+
+	for i, x := range xs {
+		v, ok := bsiIdx3.Get(uint64(i))
+		assert.True(t, ok)
+		assert.Equal(t, x, v)
+	}
+	res, err = bsiIdx3.Eq(int64(9), nil)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(2), res.GetCardinality())
+}
+
+func TestZM(t *testing.T) {
 	int32zm := NewZoneMap(types.Type{Oid: types.T_int32, Size: 4}, int32(10), int32(100), int16(0))
 	ctx := NewFilterCtx(OpEq)
 	ctx.Val = int32(9)

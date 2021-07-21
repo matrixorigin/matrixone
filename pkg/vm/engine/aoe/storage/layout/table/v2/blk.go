@@ -77,6 +77,7 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 	blk.Unpin = func(o interface{}) {
 		o.(*Block).Unref()
 	}
+	indexHolder.Init(blk.SegmentFile)
 
 	return blk, nil
 }
@@ -206,9 +207,6 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 	}
 	cloned.data.Columns = make([]col.IColumnBlock, len(blk.data.Columns))
 	cloned.data.Helper = make(map[string]int)
-	if newIndexHolder {
-		indexHolder.Init(cloned.SegmentFile)
-	}
 	blk.cloneWithUpgradeColumns(cloned)
 	cloned.OnZeroCB = cloned.close
 	cloned.Ref()
@@ -220,6 +218,9 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 	}
 	cloned.Unpin = func(o interface{}) {
 		o.(*Block).Unref()
+	}
+	if newIndexHolder {
+		indexHolder.Init(cloned.SegmentFile)
 	}
 	host.Unref()
 	return cloned, nil

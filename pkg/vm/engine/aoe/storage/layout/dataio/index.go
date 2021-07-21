@@ -39,6 +39,7 @@ func newEmbbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.I
 		},
 		ID: *id,
 	}
+	f.Ref()
 	return f
 }
 
