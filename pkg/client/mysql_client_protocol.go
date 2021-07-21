@@ -1083,6 +1083,25 @@ func (mcp *MysqlClientProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint
 	return data, nil
 }
 
+//the server send group row of the result set as an independent packet
+//thread safe
+func (mcp *MysqlClientProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
+	if cnt == 0 {
+		return nil
+	}
+
+	mcp.GetLock().Lock()
+	defer mcp.GetLock().Unlock()
+	var err error = nil
+
+	for i := uint64(0); i < cnt; i++ {
+		if err = mcp.sendResultSetTextRow(mrs,i) ; err != nil{
+			return err
+		}
+	}
+	return err
+}
+
 //the server send every row of the result set as an independent packet
 //thread safe
 func (mcp *MysqlClientProtocol) SendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {

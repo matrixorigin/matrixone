@@ -30,6 +30,7 @@ func TestAoe(t *testing.T) {
 		}
 		fmt.Printf("tbl: %v\n", string(data))
 	}
+
 	if len(tbl.Partition) > 0 {
 		pdef, _, err := protocol.DecodePartition(tbl.Partition)
 		if err != nil {
@@ -37,6 +38,13 @@ func TestAoe(t *testing.T) {
 		}
 		fmt.Printf("partition: %v\n", pdef)
 	}
+
+	pdef, _, err := protocol.DecodePartition(tbl.Partition)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("partition: %v\n", pdef)
+
 }
 
 func NewTableDefs() []engine.TableDef {

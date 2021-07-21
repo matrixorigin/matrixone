@@ -64,6 +64,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Store.RaftStore().GetRouter().LeaderAddress(tbl.ShardId)
+
 			for _, id := range ids.Ids {
 				r.segments = append(r.segments, engine.SegmentInfo{
 					Version:  ids.Version,

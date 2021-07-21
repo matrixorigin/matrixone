@@ -217,6 +217,18 @@ type SystemVariables struct{
 	*/
 	processLimitationPartitionRows    int64
 
+	/**
+	Name:	countOfRowsPerSendingToClient
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[10]
+	Comment:	send the count of rows to the client
+	UpdateMode:	dynamic
+	*/
+	countOfRowsPerSendingToClient    int64
+
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -418,6 +430,21 @@ type varsConfig struct{
 
 	
 
+	
+	/**
+	Name:	countOfRowsPerSendingToClient
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[10]
+	Comment:	send the count of rows to the client
+	UpdateMode:	dynamic
+	*/
+	CountOfRowsPerSendingToClient    int64  `toml:"countOfRowsPerSendingToClient"`
+
+	
+
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -475,6 +502,8 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["processLimitationBatchSize"] = "	Name:	processLimitationBatchSize	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[0]	Comment:	process.Limitation.BatchSize. default: 0	UpdateMode:	dynamic	"
 	
 	ap.name2definition["processLimitationPartitionRows"] = "	Name:	processLimitationPartitionRows	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[42949672960]	Comment:	process.Limitation.PartitionRows. default: 10 << 32 = 42949672960	UpdateMode:	dynamic	"
+	
+	ap.name2definition["countOfRowsPerSendingToClient"] = "	Name:	countOfRowsPerSendingToClient	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[10]	Comment:	send the count of rows to the client	UpdateMode:	dynamic	"
 	
 }
 
@@ -847,6 +876,26 @@ func (ap *SystemVariables) LoadInitialValues()error{
 			}
 		
 	
+		
+		
+			countOfRowsPerSendingToClientchoices :=[]int64 {
+				
+				10,
+					
+			}
+			if len(countOfRowsPerSendingToClientchoices) != 0{
+				if err = ap.setCountOfRowsPerSendingToClient( countOfRowsPerSendingToClientchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","CountOfRowsPerSendingToClient",err)
+				}
+			}else{
+				
+					if err = ap.setCountOfRowsPerSendingToClient( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","CountOfRowsPerSendingToClient",err)
+					}
+				
+			}
+		
+	
 	return nil
 }
 
@@ -1005,6 +1054,15 @@ func (ap * SystemVariables ) GetProcessLimitationPartitionRows() int64 {
 	return ap.processLimitationPartitionRows
 }
 
+/**
+Get the value of the parameter countOfRowsPerSendingToClient
+*/
+func (ap * SystemVariables ) GetCountOfRowsPerSendingToClient() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.countOfRowsPerSendingToClient
+}
+
 
 
 
@@ -1125,6 +1183,15 @@ Set the value of the parameter processLimitationPartitionRows
 */
 func (ap * SystemVariables ) SetProcessLimitationPartitionRows(value int64)error {
 	return  ap.setProcessLimitationPartitionRows(value)
+}
+
+
+
+/**
+Set the value of the parameter countOfRowsPerSendingToClient
+*/
+func (ap * SystemVariables ) SetCountOfRowsPerSendingToClient(value int64)error {
+	return  ap.setCountOfRowsPerSendingToClient(value)
 }
 
 
@@ -1608,6 +1675,34 @@ func (ap * SystemVariables ) setProcessLimitationPartitionRows(value int64)error
 	return nil
 }
 
+/**
+Set the value of the parameter countOfRowsPerSendingToClient
+*/
+func (ap * SystemVariables ) setCountOfRowsPerSendingToClient(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				10,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setCountOfRowsPerSendingToClient,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.countOfRowsPerSendingToClient = value
+	return nil
+}
+
 
 
 /**
@@ -1684,6 +1779,10 @@ func (config *varsConfig) resetUpdatedFlags(){
 	
 	
 		config.name2updatedFlags["processLimitationPartitionRows"] = false
+	
+	
+	
+		config.name2updatedFlags["countOfRowsPerSendingToClient"] = false
 	
 	
 }
@@ -1864,6 +1963,14 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("processLimitationPartitionRows"){
 		if err = ap.setProcessLimitationPartitionRows(config.ProcessLimitationPartitionRows); err != nil{
 			return fmt.Errorf("update parameter processLimitationPartitionRows failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("countOfRowsPerSendingToClient"){
+		if err = ap.setCountOfRowsPerSendingToClient(config.CountOfRowsPerSendingToClient); err != nil{
+			return fmt.Errorf("update parameter countOfRowsPerSendingToClient failed.error:%v",err)
 		}
 	}
 	

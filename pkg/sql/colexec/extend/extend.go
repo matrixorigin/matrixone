@@ -69,6 +69,9 @@ var UnaryStrings = map[int]func(Extend) string{
 	overload.UnaryMinus: func(e Extend) string {
 		return "-" + e.String()
 	},
+	overload.Not: func(e Extend) string {
+		return fmt.Sprintf("not(%s)", e)
+	},
 }
 
 var BinaryStrings = map[int]func(Extend, Extend) string{
