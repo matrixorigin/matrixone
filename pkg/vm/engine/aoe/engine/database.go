@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"github.com/fagongzi/util/format"
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
@@ -63,16 +64,20 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Store.RaftStore().GetRouter().LeaderAddress(tbl.ShardId)
-			r.segments = append(r.segments, engine.SegmentInfo{
-				Version: ids.Version,
-				Ids: ids.Ids,
-				GroupId: tbl.ShardId,
-				TabletName: tbl.Name,
-				Node: metadata.Node{
-					Id: addr,
-					Addr: addr,
-				},
-			})
+
+			for _, id := range ids.Ids {
+				r.segments = append(r.segments, engine.SegmentInfo{
+					Version:  ids.Version,
+					Id:       string(format.Uint64ToBytes(id)),
+					GroupId:  string(format.Uint64ToBytes(tbl.ShardId)),
+					TabletId: tbl.Name,
+					Node: metadata.Node{
+						Id: addr,
+						Addr: addr,
+					},
+				})
+			}
+
 		}
 	}
 	return r, nil
