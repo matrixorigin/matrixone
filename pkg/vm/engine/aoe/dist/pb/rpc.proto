@@ -19,10 +19,14 @@ enum Type {
   Scan = 4;
   Incr = 5;
 
-  Append = 1000;
-  GetSnapshot = 1001;
-  CreateTable = 1002;
-  DropTable = 1003;
+  Append = 100;
+  GetSnapshot = 101;
+  CreateTablet = 102;
+  DropTablet = 103;
+  Relation = 104;
+  TabletIds = 105;
+  TabletNames = 106;
+  GetSegmentIds = 107;
 }
 
 message Request {
@@ -36,6 +40,13 @@ message Request {
   ScanRequest                  scan = 8  [(gogoproto.nullable) = false];
   PrefixScanRequest               prefixScan = 9  [(gogoproto.nullable) = false];
   AllocIDRequest               allocID = 10 [(gogoproto.nullable) = false];
+
+  AppendRequest append = 100 [(gogoproto.nullable) = false];
+  GetSnapshotRequest getSnapshot = 101 [(gogoproto.nullable) = false];
+  TabletIDsRequest tabletIds = 102 [(gogoproto.nullable) = false];
+  CreateTabletRequest createTablet = 103 [(gogoproto.nullable) = false];
+  DropTabletRequest dropTablet = 104 [(gogoproto.nullable) = false];
+  GetSegmentIdsRequest getSegmentIds = 105 [(gogoproto.nullable) = false];
 }
 
 
@@ -86,6 +97,31 @@ message PrefixScanRequest {
   bytes        prefix = 1;
   bytes        startKey = 2;
   uint64       limit = 3;
+}
+
+message AppendRequest {
+  string tabletName = 1;
+  bytes data = 2;
+}
+
+message GetSnapshotRequest {
+  bytes ctx = 1;
+}
+
+message GetSegmentIdsRequest {
+  string name = 1;
+}
+
+message TabletIDsRequest {
+}
+
+message CreateTabletRequest {
+  string name = 1;
+  bytes tableInfo = 2;
+}
+
+message DropTabletRequest {
+  string name = 1;
 }
 
 // ErrorResponse error response

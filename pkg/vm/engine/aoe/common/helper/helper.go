@@ -1,4 +1,4 @@
-package aoe
+package helper
 
 import (
 	"bytes"
@@ -7,18 +7,20 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/metadata"
 )
 
 func init() {
-	gob.Register(TableInfo{})
+	gob.Register(aoe.TableInfo{})
 	gob.Register(types.Type{})
-	gob.Register(IndexInfo{})
-	gob.Register(ColumnInfo{})
+	gob.Register(aoe.IndexInfo{})
+	gob.Register(aoe.ColumnInfo{})
 }
 
 func Transfer(sid, tid, typ uint64, name, comment string,
-	defs []engine.TableDef, pdef *engine.PartitionBy) (TableInfo, error) {
-	var tbl TableInfo
+	defs []engine.TableDef, pdef *engine.PartitionBy) (aoe.TableInfo, error) {
+	var tbl aoe.TableInfo
 
 	tbl.SchemaId = sid
 	tbl.Id = tid
@@ -43,24 +45,24 @@ func Transfer(sid, tid, typ uint64, name, comment string,
 	return tbl, nil
 }
 
-func EncodeTable(tbl TableInfo) ([]byte, error) {
+func EncodeTable(tbl aoe.TableInfo) ([]byte, error) {
 	return encoding.Encode(tbl)
 }
 
-func DecodeTable(data []byte) (TableInfo, error) {
-	var tbl TableInfo
+func DecodeTable(data []byte) (aoe.TableInfo, error) {
+	var tbl aoe.TableInfo
 
 	err := encoding.Decode(data, &tbl)
 	return tbl, err
 }
 
-func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []IndexInfo {
+func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []aoe.IndexInfo {
 	var id uint64
-	var idxs []IndexInfo
+	var idxs []aoe.IndexInfo
 
 	for _, def := range defs {
 		if v, ok := def.(*engine.IndexTableDef); ok {
-			idx := IndexInfo{
+			idx := aoe.IndexInfo{
 				SchemaId: sid,
 				TableId:  tid,
 				Id:       id,
@@ -77,13 +79,13 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 	return idxs
 }
 
-func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []ColumnInfo {
+func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 	var id uint64
-	var cols []ColumnInfo
+	var cols []aoe.ColumnInfo
 
 	for _, def := range defs {
 		if v, ok := def.(*engine.AttributeDef); ok {
-			cols = append(cols, ColumnInfo{
+			cols = append(cols, aoe.ColumnInfo{
 				SchemaId: sid,
 				TableID:  tid,
 				Id:       id,
@@ -104,4 +106,27 @@ func PartitionDef(def *engine.PartitionBy) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+func Index(tbl aoe.TableInfo) []*engine.IndexTableDef {
+	defs := make([]*engine.IndexTableDef, len(tbl.Indexes))
+	for i, idx := range tbl.Indexes {
+		defs[i] = &engine.IndexTableDef{
+			Typ:   int(idx.Type),
+			Names: idx.Names,
+		}
+	}
+	return defs
+}
+
+func Attribute(tbl aoe.TableInfo) []metadata.Attribute {
+	attrs := make([]metadata.Attribute, len(tbl.Columns))
+	for i, col := range tbl.Columns {
+		attrs[i] = metadata.Attribute{
+			Alg:  col.Alg,
+			Name: col.Name,
+			Type: col.Type,
+		}
+	}
+	return attrs
 }

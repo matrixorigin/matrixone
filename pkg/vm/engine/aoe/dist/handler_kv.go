@@ -10,6 +10,7 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/matrixorigin/matrixcube/storage/pebble"
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 )
 
@@ -19,7 +20,7 @@ func (h *aoeStorage) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
 
-	err := h.getStoreByGroup(shard.Group, shard.ID).Set(req.Key, customReq.Value)
+	err := h.getStoreByGroup(shard.Group, shard.ID).(*pebble.Storage).Set(req.Key, customReq.Value)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
@@ -33,7 +34,7 @@ func (h *aoeStorage) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 func (h *aoeStorage) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
-	err := h.getStoreByGroup(shard.Group, shard.ID).Delete(req.Key)
+	err := h.getStoreByGroup(shard.Group, shard.ID).(*pebble.Storage).Delete(req.Key)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
@@ -48,7 +49,7 @@ func (h *aoeStorage) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 
-	value, err := h.getStoreByGroup(shard.Group, req.ToShard).Get(req.Key)
+	value, err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).Get(req.Key)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
@@ -64,7 +65,7 @@ func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 
 	prefix := raftstore.EncodeDataKey(shard.Group, customReq.Prefix)
 	var data [][]byte
-	err := h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(prefix, func(key, value []byte) (bool, error) {
+	err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).PrefixScan(prefix, func(key, value []byte) (bool, error) {
 		if (shard.Start != nil && bytes.Compare(shard.Start, raftstore.DecodeDataKey(key)) > 0) ||
 			(shard.End != nil && bytes.Compare(shard.End, raftstore.DecodeDataKey(key)) <= 0) {
 			return true, nil
@@ -94,7 +95,7 @@ func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 	resp := pb.AcquireResponse()
 	var data [][]byte
 
-	err := h.getStoreByGroup(shard.Group, req.ToShard).PrefixScan(req.Key, func(key, value []byte) (bool, error) {
+	err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).PrefixScan(req.Key, func(key, value []byte) (bool, error) {
 		data = append(data, key)
 		data = append(data, value)
 		return true, nil
@@ -123,7 +124,7 @@ func (h *aoeStorage) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 	if v, ok := ctx.Attrs()[string(req.Key)]; ok {
 		id = format.MustBytesToUint64(v.([]byte))
 	} else {
-		value, err := h.getStoreByGroup(shard.Group, req.ToShard).Get(req.Key)
+		value, err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).Get(req.Key)
 		if err != nil {
 			return 0, 0, resp
 		}
