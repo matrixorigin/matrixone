@@ -4,6 +4,7 @@ import (
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
+	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	"matrixone/pkg/vm/engine/aoe/engine"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -46,7 +47,6 @@ func TestAOEEngine(t *testing.T) {
 	_, err = aoeEngine.Database(testDBName)
 	require.NotNil(t, err)
 
-
 	err = aoeEngine.Create(testDBName, 0)
 	require.NoError(t, err)
 	db, err := aoeEngine.Database(testDBName)
@@ -57,7 +57,18 @@ func TestAOEEngine(t *testing.T) {
 
 	mockTbl := md.MockTableInfo(colCnt)
 	mockTbl.Name = testTableName
-	//db.Create(testTableName, helper.Attribute(mockTbl), helper.PartitionDef(mockTbl), nil, "")
+	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
+	err = db.Create(testTableName, defs, pdef, nil, comment)
+	require.NoError(t, err)
+
+	tbls = db.Relations()
+	require.Equal(t, 1, len(tbls))
+
+	err = db.Delete(testTableName)
+	require.NoError(t, err)
+
+	tbls = db.Relations()
+	require.Equal(t, 0, len(tbls))
 
 }
 
