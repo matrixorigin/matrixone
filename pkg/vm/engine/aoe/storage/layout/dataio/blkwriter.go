@@ -80,16 +80,28 @@ func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, err
 }
 
 func (bw *BlockWriter) flushIndexes(w *os.File, data []*vector.Vector, meta *md.Block) error {
-	zm := []index.Index{}
+	indexes := []index.Index{}
+	hasBsi := false
 	for idx, t := range meta.Segment.Table.Schema.ColDefs {
 		if t.Type.Oid == types.T_int32 {
-			minv := int32(1) + int32(idx)*100
-			maxv := int32(99) + int32(idx)*100
-			zmi := index.NewZoneMap(t.Type, minv, maxv, int16(idx))
-			zm = append(zm, zmi)
+			{
+				minv := int32(1) + int32(idx)*100
+				maxv := int32(99) + int32(idx)*100
+				zmi := index.NewZoneMap(t.Type, minv, maxv, int16(idx))
+				indexes = append(indexes, zmi)
+			}
+			if !hasBsi {
+				// column := data[idx].Col.([]int32)
+				// bsiIdx := index.NewNumericBsiIndex(t.Type, 32, int16(idx))
+				// for row, val := range column {
+				// 	bsiIdx.Set(uint64(row), int64(val))
+				// }
+				// indexes = append(indexes, bsiIdx)
+				hasBsi = true
+			}
 		}
 	}
-	buf, err := index.DefaultRWHelper.WriteIndexes(zm)
+	buf, err := index.DefaultRWHelper.WriteIndexes(indexes)
 	if err != nil {
 		return err
 	}
