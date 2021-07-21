@@ -14,6 +14,7 @@ require (
 	github.com/gogo/protobuf v1.3.1
 	github.com/golang/protobuf v1.4.2
 	github.com/google/uuid v1.2.0
+
 	github.com/matrixorigin/matrixcube v0.0.0-20210719141803-595f668da9f7
 	github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc
 	github.com/panjf2000/ants/v2 v2.4.5

@@ -45,6 +45,34 @@ func Transfer(sid, tid, typ uint64, name, comment string,
 	return tbl, nil
 }
 
+func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, string, []engine.TableDef, *engine.PartitionBy, error) {
+	var err error
+	var defs []engine.TableDef
+	var pdef *engine.PartitionBy
+
+	if len(tbl.Partition) > 0 {
+		if pdef, _, err = protocol.DecodePartition(tbl.Partition); err != nil {
+			return 0, 0, 0, "", "", nil, nil, err
+		}
+	}
+	for _, col := range tbl.Columns {
+		defs = append(defs, &engine.AttributeDef{
+			Attr: metadata.Attribute{
+				Alg:  col.Alg,
+				Name: col.Name,
+				Type: col.Type,
+			},
+		})
+	}
+	for _, idx := range tbl.Indexes {
+		defs = append(defs, &engine.IndexTableDef{
+			Typ:   int(idx.Type),
+			Names: idx.Names,
+		})
+	}
+	return tbl.SchemaId, tbl.Id, tbl.Type, tbl.Name, string(tbl.Comment), defs, pdef, nil
+}
+
 func EncodeTable(tbl aoe.TableInfo) ([]byte, error) {
 	return encoding.Encode(tbl)
 }
