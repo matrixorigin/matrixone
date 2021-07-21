@@ -155,3 +155,15 @@
 #	UpdateMode:	dynamic
 	processLimitationPartitionRows=42949672960
 
+
+	
+#	Name:	countOfRowsPerSendingToClient
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[10]
+#	Comment:	send the count of rows to the client
+#	UpdateMode:	dynamic
+	countOfRowsPerSendingToClient=10
+
