@@ -33,6 +33,7 @@ type BufferManager struct {
 	EvictTimes      int64
 	LoadTimes       int64
 	UnregisterTimes int64
+	Dir             []byte
 }
 
 type mockVFile struct{}

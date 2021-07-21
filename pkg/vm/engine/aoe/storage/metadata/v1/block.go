@@ -1,6 +1,7 @@
-package md
+package metadata
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -16,27 +17,24 @@ func NewBlock(id uint64, segment *Segment) *Block {
 	blk := &Block{
 		ID:          id,
 		TimeStamp:   *NewTimeStamp(),
-		MaxRowCount: segment.Info.Conf.BlockMaxRows,
+		MaxRowCount: segment.Table.Conf.BlockMaxRows,
 		Segment:     segment,
 	}
 	return blk
 }
 
-func (blk *Block) GetAppliedIndex() (uint64, error) {
+func (blk *Block) GetAppliedIndex() (uint64, bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	if blk.DeleteIndex != nil {
-		return *blk.DeleteIndex, nil
-	}
 	if blk.Index != nil && blk.Index.IsApplied() {
-		return blk.Index.ID, nil
+		return blk.Index.ID, true
 	}
 
 	if blk.PrevIndex != nil {
-		return blk.PrevIndex.ID, nil
+		return blk.PrevIndex.ID, true
 	}
 
-	return 0, errors.New("not applied")
+	return 0, false
 }
 
 func (blk *Block) GetID() uint64 {
@@ -53,7 +51,7 @@ func (blk *Block) GetCount() uint64 {
 
 func (blk *Block) AddCount(n uint64) uint64 {
 	newCnt := atomic.AddUint64(&blk.Count, n)
-	if newCnt > blk.Segment.Info.Conf.BlockMaxRows {
+	if newCnt > blk.Segment.Table.Conf.BlockMaxRows {
 		panic("logic error")
 	}
 	return newCnt
@@ -77,7 +75,7 @@ func (blk *Block) SetIndex(idx LogIndex) {
 }
 
 func (blk *Block) String() string {
-	s := fmt.Sprintf("Blk(%d-%d-%d)(%d)", blk.Segment.TableID, blk.Segment.ID, blk.ID, blk.BoundSate)
+	s := fmt.Sprintf("Blk(%d-%d-%d)(%d)", blk.Segment.Table.ID, blk.Segment.ID, blk.ID, blk.BoundSate)
 	if blk.IsDeleted(NowMicro()) {
 		s += "[D]"
 	}
@@ -114,7 +112,7 @@ func (blk *Block) SetCount(count uint64) error {
 func (blk *Block) Update(target *Block) error {
 	blk.Lock()
 	defer blk.Unlock()
-	if blk.ID != target.ID || blk.Segment.ID != target.Segment.ID || blk.Segment.TableID != target.Segment.TableID {
+	if blk.ID != target.ID || blk.Segment.ID != target.Segment.ID || blk.Segment.Table.ID != target.Segment.Table.ID {
 		return errors.New("block, segment, table id not matched")
 	}
 
@@ -130,16 +128,21 @@ func (blk *Block) Update(target *Block) error {
 		return errors.New(fmt.Sprintf("Cannot Update block from Count %d to %d", blk.Count, target.Count))
 	}
 	target.copyNoLock(blk)
+	blk.Segment.Table.UpdateVersion()
 
 	return nil
 }
 
 func (blk *Block) AsCommonID() *common.ID {
 	return &common.ID{
-		TableID:   blk.Segment.TableID,
+		TableID:   blk.Segment.Table.ID,
 		SegmentID: blk.Segment.ID,
 		BlockID:   blk.ID,
 	}
+}
+
+func (blk *Block) Marshal() ([]byte, error) {
+	return json.Marshal(blk)
 }
 
 func (blk *Block) Copy() *Block {
@@ -162,7 +165,6 @@ func (blk *Block) copyNoLock(new_blk *Block) *Block {
 	new_blk.Count = blk.Count
 	new_blk.Index = blk.Index
 	new_blk.PrevIndex = blk.PrevIndex
-	new_blk.DeleteIndex = blk.DeleteIndex
 	new_blk.DataState = blk.DataState
 
 	return new_blk

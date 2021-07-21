@@ -100,6 +100,12 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 
 
 
+	if c1.CountOfRowsPerSendingToClient != c2.CountOfRowsPerSendingToClient {
+		return false
+	}
+
+
+
 	return true
 }
 
@@ -139,6 +145,8 @@ processLimitationBatchRows=42949672960
 processLimitationBatchSize=0
 
 processLimitationPartitionRows=42949672960
+
+countOfRowsPerSendingToClient=10
 		
 `
 	t1_config:=varsConfig{
@@ -178,6 +186,8 @@ ProcessLimitationBatchRows:42949672960,
 ProcessLimitationBatchSize:0,
 
 ProcessLimitationPartitionRows:42949672960,
+
+CountOfRowsPerSendingToClient:10,
 	
 
 		name2updatedFlags: nil,

@@ -4,9 +4,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
@@ -31,9 +32,9 @@ func TestManager(t *testing.T) {
 	capacity := uint64(4096)
 	flusher := w.NewOpWorker("Mock Flusher")
 	fsMgr := ldio.DefaultFsMgr
-	indexBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
+	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity, flusher)
+	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity, flusher)
+	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity, flusher)
 	tableMeta := md.MockTable(nil, nil, 10)
 	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 
@@ -81,7 +82,7 @@ func TestCollection(t *testing.T) {
 
 	tabletInfo := md.MockTableInfo(2)
 	opCtx := mops.OpCtx{Opts: opts, TableInfo: tabletInfo}
-	op := mops.NewCreateTblOp(&opCtx)
+	op := mops.NewCreateTblOp(&opCtx, dbi.TableOpCtx{TableName: tabletInfo.Name})
 	op.Push()
 	err := op.WaitDone()
 	assert.Nil(t, err)
@@ -90,9 +91,9 @@ func TestCollection(t *testing.T) {
 	manager := NewManager(opts)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
 	flusher := w.NewOpWorker("Mock Flusher")
-	indexBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	mtBufMgr := bmgr.NewBufferManager(capacity, flusher)
-	sstBufMgr := bmgr.NewBufferManager(capacity, flusher)
+	indexBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity, flusher)
+	mtBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity, flusher)
+	sstBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity, flusher)
 	tableMeta := md.MockTable(nil, tbl.Schema, 10)
 	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 	c0, _ := manager.RegisterCollection(t0_data)

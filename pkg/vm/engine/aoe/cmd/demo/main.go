@@ -1,12 +1,11 @@
 package main
 
 import (
-	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	// "matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
 	"sync"
@@ -37,22 +36,14 @@ func main() {
 	}
 
 	tableInfo := md.MockTableInfo(colCnt)
-	tabletInfo := aoe.TabletInfo{
-		Name:  tableInfo.Name,
-		Table: *tableInfo,
-	}
-	tName := tabletInfo.Name
-	_, err = inst.CreateTable(&tabletInfo)
+	tName := tableInfo.Name
+	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tName})
 	if err != nil {
 		panic(err)
 	}
 	rows := metaConf.BlockMaxRows / 8
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTableByName(tName)
 	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
-	logIdx := &md.LogIndex{
-		ID:       uint64(0),
-		Capacity: uint64(ck.Vecs[0].Length()),
-	}
 	cols := make([]int, 0)
 	for i := 0; i < len(tblMeta.Schema.ColDefs); i++ {
 		cols = append(cols, i)
@@ -66,7 +57,7 @@ func main() {
 	insertWg.Add(1)
 	go func() {
 		for i := 0; i < insertCnt; i++ {
-			err = inst.Append(tName, ck, logIdx)
+			err = inst.Append(dbi.AppendCtx{TableName: tName, Data: ck, OpIndex: uint64(i)})
 			if err != nil {
 				log.Warn(err)
 			}
@@ -113,7 +104,7 @@ func main() {
 	insertWg.Wait()
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
-	_, err = inst.DropTable(tName)
+	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tName})
 	log.Infof("drop err: %v", err)
 	searchWg.Wait()
 	// time.Sleep(time.Duration(100) * time.Millisecond)
@@ -123,7 +114,7 @@ func main() {
 	log.Info(inst.SSTBufMgr.String())
 
 	// time.Sleep(time.Duration(10) * time.Millisecond)
-	// _, err = inst.DropTable(tName)
+	// _, err = inst.DropTablet(tName)
 
 	time.Sleep(time.Duration(100) * time.Millisecond)
 	log.Info(inst.IndexBufMgr.String())

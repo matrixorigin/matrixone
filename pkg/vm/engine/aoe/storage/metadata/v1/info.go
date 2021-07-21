@@ -1,14 +1,14 @@
-package md
+package metadata
 
 import (
+	"encoding/json"
 	dump "encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync/atomic"
-	// "os"
-	// "path"
 	// dump "github.com/vmihailenco/msgpack/v5"
 	// log "github.com/sirupsen/logrus"
 )
@@ -32,7 +32,7 @@ func MockInfo(blkRows, blks uint64) *MetaInfo {
 	return info
 }
 
-func (info *MetaInfo) SoftDeleteTable(name string) (id uint64, err error) {
+func (info *MetaInfo) SoftDeleteTable(name string, logIndex uint64) (id uint64, err error) {
 	id, ok := info.NameMap[name]
 	if !ok {
 		return id, errors.New(fmt.Sprintf("Table %s not existed", name))
@@ -43,7 +43,10 @@ func (info *MetaInfo) SoftDeleteTable(name string) (id uint64, err error) {
 	delete(info.NameMap, name)
 	info.Tombstone[id] = true
 	table := info.Tables[id]
-	table.Deltete(ts)
+	table.Delete(ts)
+	table.LogHistry.DeletedIndex = logIndex
+	atomic.AddUint64(&info.CheckPoint, uint64(1))
+	table.UpdateVersion()
 	return id, nil
 }
 
@@ -97,6 +100,20 @@ func (info *MetaInfo) TableSegmentIDs(tableID uint64, args ...int64) (ids map[ui
 	return ids, err
 }
 
+func (info *MetaInfo) UpdateCheckpointTime(ts int64) {
+	curr := atomic.LoadInt64(&info.CkpTime)
+	for curr < ts {
+		if atomic.CompareAndSwapInt64(&info.CkpTime, curr, ts) {
+			return
+		}
+		curr = atomic.LoadInt64(&info.CkpTime)
+	}
+}
+
+func (info *MetaInfo) GetCheckpointTime() int64 {
+	return atomic.LoadInt64(&info.CkpTime)
+}
+
 func (info *MetaInfo) TableNames(args ...int64) []string {
 	var ts int64
 	if len(args) == 0 {
@@ -135,11 +152,11 @@ func (info *MetaInfo) TableIDs(args ...int64) map[uint64]uint64 {
 	return ids
 }
 
-func (info *MetaInfo) CreateTable(schema *Schema) (tbl *Table, err error) {
+func (info *MetaInfo) CreateTable(logIdx uint64, schema *Schema) (tbl *Table, err error) {
 	if !schema.Valid() {
 		return nil, errors.New("invalid schema")
 	}
-	tbl = NewTable(info, schema, info.Sequence.GetTableID())
+	tbl = NewTable(logIdx, info, schema, info.Sequence.GetTableID())
 	return tbl, err
 }
 
@@ -186,10 +203,11 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	info.Tables[tbl.ID] = tbl
 	info.NameMap[tbl.Schema.Name] = tbl.ID
 	info.TableIds[tbl.ID] = true
+	atomic.AddUint64(&info.CheckPoint, uint64(1))
 	return nil
 }
 
-func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo) (*Table, error) {
+func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo, ctx dbi.TableOpCtx) (*Table, error) {
 	schema := &Schema{
 		Name:      tinfo.Name,
 		ColDefs:   make([]*ColDef, 0),
@@ -216,7 +234,7 @@ func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo) (*Table, er
 		}
 		schema.Indexes = append(schema.Indexes, newInfo)
 	}
-	tbl, err := info.CreateTable(schema)
+	tbl, err := info.CreateTable(ctx.OpIndex, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -227,17 +245,80 @@ func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo) (*Table, er
 	return tbl, nil
 }
 
+func (info *MetaInfo) GetLastFileName() string {
+	return fmt.Sprintf("%d", info.CheckPoint-1)
+}
+
+func (info *MetaInfo) GetFileName() string {
+	return fmt.Sprintf("%d", info.CheckPoint)
+}
+
+func (info *MetaInfo) GetResourceType() ResourceType {
+	return ResInfo
+}
+
+func (info *MetaInfo) Unmarshal(buf []byte) error {
+	type Alias MetaInfo
+	v := &struct {
+		*Alias
+		Tables map[uint64]GenericTableWrapper
+	}{
+		Alias: (*Alias)(info),
+	}
+	err := json.Unmarshal(buf, v)
+	if err != nil {
+		return err
+	}
+	info.Tables = make(map[uint64]*Table)
+	for _, wrapped := range v.Tables {
+		info.Tables[wrapped.ID] = &Table{ID: wrapped.ID, TimeStamp: wrapped.TimeStamp}
+	}
+	return nil
+}
+
+func (info *MetaInfo) MarshalJSON() ([]byte, error) {
+	tables := make(map[uint64]GenericTableWrapper)
+	for _, tbl := range info.Tables {
+		tables[tbl.ID] = GenericTableWrapper{
+			ID:        tbl.ID,
+			TimeStamp: tbl.TimeStamp,
+			LogHistry: tbl.LogHistry,
+		}
+	}
+	type Alias MetaInfo
+	return json.Marshal(&struct {
+		Tables map[uint64]GenericTableWrapper
+		*Alias
+	}{
+		Tables: tables,
+		Alias:  (*Alias)(info),
+	})
+}
+
+func (info *MetaInfo) ReadFrom(r io.Reader) error {
+	err := dump.NewDecoder(r).Decode(info)
+	return err
+}
+
+func (info *MetaInfo) GetTableId() uint64 {
+	panic("logic error")
+}
+
 func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
 	new_info := NewMetaInfo(info.Conf)
 	new_info.CheckPoint = info.CheckPoint
+	new_info.CkpTime = ctx.Ts
 	for k, v := range info.Tables {
+		var tbl *Table
 		if !v.Select(ctx.Ts) {
-			continue
+			tbl = v.LiteCopy()
+		} else {
+			tbl = v.Copy(ctx)
 		}
-		tbl := v.Copy(ctx)
+
 		new_info.Tables[k] = tbl
 	}
 
@@ -246,78 +327,4 @@ func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 
 func (info *MetaInfo) Serialize(w io.Writer) error {
 	return dump.NewEncoder(w).Encode(info)
-}
-
-func Deserialize(r io.Reader) (info *MetaInfo, err error) {
-	info = NewMetaInfo(nil)
-	err = dump.NewDecoder(r).Decode(info)
-	if err != nil {
-		return nil, err
-	}
-	// TODO: make it faster
-	info.Sequence.NextBlockID = 0
-	info.Sequence.NextSegmentID = 0
-	info.Sequence.NextTableID = 0
-	info.Sequence.NextIndexID = 0
-	ts := NowMicro()
-	for k, tbl := range info.Tables {
-		if len(tbl.Schema.Indexes) > 0 {
-			if tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID > info.Sequence.NextIndexID {
-				info.Sequence.NextIndexID = tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID
-			}
-		}
-		max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()
-		if k > info.Sequence.NextTableID {
-			info.Sequence.NextTableID = k
-		}
-		if max_tbl_segid > info.Sequence.NextSegmentID {
-			info.Sequence.NextSegmentID = max_tbl_segid
-		}
-		if max_tbl_blkid > info.Sequence.NextBlockID {
-			info.Sequence.NextBlockID = max_tbl_blkid
-		}
-		tbl.Info = info
-		if tbl.IsDeleted(ts) {
-			info.Tombstone[tbl.ID] = true
-		} else {
-			info.TableIds[tbl.ID] = true
-			info.NameMap[tbl.Schema.Name] = tbl.ID
-		}
-		tbl.IdMap = make(map[uint64]int)
-		segFound := false
-		for idx, seg := range tbl.Segments {
-			tbl.IdMap[seg.GetID()] = idx
-			seg.Info = info
-			seg.Schema = tbl.Schema
-			blkFound := false
-			for iblk, blk := range seg.Blocks {
-				if !blkFound {
-					if blk.DataState < FULL {
-						blkFound = true
-						seg.ActiveBlk = iblk
-					} else {
-						seg.ActiveBlk++
-					}
-				}
-				blk.Segment = seg
-			}
-			if !segFound {
-				if seg.DataState < FULL {
-					segFound = true
-					tbl.ActiveSegment = idx
-				} else if seg.DataState == FULL {
-					blk := seg.GetActiveBlk()
-					if blk != nil {
-						tbl.ActiveSegment = idx
-						segFound = true
-					}
-				} else {
-					tbl.ActiveSegment++
-				}
-			}
-			// seg.ReplayState()
-		}
-	}
-
-	return info, err
 }

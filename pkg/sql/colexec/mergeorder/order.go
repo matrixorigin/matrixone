@@ -193,68 +193,75 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				}
 				ctr.ptn.rows += int64(n)
 			}
-			if ctr.ptn.rows > proc.Lim.PartitionRows {
-				if err := ctr.newSpill(ctr.ptn, proc); err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-					bat.Clean(proc)
-					return err
-				}
-				for i, pbat := range ctr.ptn.bats {
-					if err := pbat.Prefetch(pbat.Attrs, pbat.Vecs, proc); err != nil {
+			/*
+				if ctr.ptn.rows > proc.Lim.PartitionRows {
+					if err := ctr.newSpill(ctr.ptn, proc); err != nil {
 						reg.Ch = nil
 						reg.Wg.Done()
 						bat.Clean(proc)
-						ctr.ptn.bats = ctr.ptn.bats[i:]
 						return err
 					}
-					if err := ctr.ptn.r.Write(pbat); err != nil {
+					for i, pbat := range ctr.ptn.bats {
+						if err := pbat.Prefetch(pbat.Attrs, pbat.Vecs, proc); err != nil {
+							reg.Ch = nil
+							reg.Wg.Done()
+							bat.Clean(proc)
+							ctr.ptn.bats = ctr.ptn.bats[i:]
+							return err
+						}
+						if err := ctr.ptn.r.Write(pbat); err != nil {
+							reg.Ch = nil
+							reg.Wg.Done()
+							bat.Clean(proc)
+							ctr.ptn.bats = ctr.ptn.bats[i:]
+							return err
+						}
+						pbat.Clean(proc)
+					}
+					ctr.ptn.bats = nil
+					if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
 						reg.Ch = nil
 						reg.Wg.Done()
 						bat.Clean(proc)
-						ctr.ptn.bats = ctr.ptn.bats[i:]
 						return err
 					}
-					pbat.Clean(proc)
-				}
-				ctr.ptn.bats = nil
-				if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
+					if err := ctr.ptn.r.Write(bat); err != nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+						bat.Clean(proc)
+						return err
+					}
 					bat.Clean(proc)
-					return err
+					ctr.ptns = append(ctr.ptns, ctr.ptn)
+					ctr.ptn = nil
+				} else {
+					ctr.ptn.bats = append(ctr.ptn.bats, bat)
 				}
-				if err := ctr.ptn.r.Write(bat); err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-					bat.Clean(proc)
-					return err
-				}
-				bat.Clean(proc)
-				ctr.ptns = append(ctr.ptns, ctr.ptn)
-				ctr.ptn = nil
-			} else {
+			*/
+			{
 				ctr.ptn.bats = append(ctr.ptn.bats, bat)
 			}
 			reg.Wg.Done()
 		}
 	}
-	if ctr.ptn != nil && len(ctr.ptns) > 0 {
-		if err := ctr.newSpill(ctr.ptn, proc); err != nil {
-			return err
-		}
-		for i, bat := range ctr.ptn.bats {
-			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-				ctr.ptn.bats = ctr.ptn.bats[i:]
+	/*
+		if ctr.ptn != nil && len(ctr.ptns) > 0 {
+			if err := ctr.newSpill(ctr.ptn, proc); err != nil {
 				return err
 			}
-			if err := ctr.ptn.r.Write(bat); err != nil {
-				ctr.ptn.bats = ctr.ptn.bats[i:]
-				return err
+			for i, bat := range ctr.ptn.bats {
+				if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
+					ctr.ptn.bats = ctr.ptn.bats[i:]
+					return err
+				}
+				if err := ctr.ptn.r.Write(bat); err != nil {
+					ctr.ptn.bats = ctr.ptn.bats[i:]
+					return err
+				}
+				bat.Clean(proc)
 			}
-			bat.Clean(proc)
 		}
-	}
+	*/
 	return nil
 }
 
@@ -456,7 +463,7 @@ func (ctr *Container) newSpill(ptn *partition, proc *process.Process) error {
 		defs = append(defs, &engine.AttributeDef{attr})
 	}
 	id := pkey(ctr.spill.id, len(ctr.ptns))
-	if err := ctr.spill.e.Create(id, defs, nil, nil); err != nil {
+	if err := ctr.spill.e.Create(id, defs, nil, nil, ""); err != nil {
 		return err
 	}
 	r, err := ctr.spill.e.Relation(id)

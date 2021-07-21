@@ -71,10 +71,11 @@ func (b *build) buildProjectionWithOrder(o op.OP, ns tree.SelectExprs, es []*pro
 				})
 			}
 			pes = append(pes, &projection.Extend{
-				E:     e,
-				Alias: string(n.As),
+				E: &extend.Attribute{
+					Name: e.String(),
+					Type: e.ReturnType(),
+				},
 			})
-
 		}
 	}
 	o, err := projection.New(o, es)

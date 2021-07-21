@@ -3,7 +3,7 @@ package base
 import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type IMemTable interface {

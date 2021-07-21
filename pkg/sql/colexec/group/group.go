@@ -122,6 +122,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			vec, err := bat.GetVector(ctr.attrs[ctr.is[i]], proc)
 			if err != nil {
 				bat.Clean(proc)
+				ctr.clean(proc)
+				return false, err
 			}
 			if e.Agg == nil {
 				switch e.Op {
@@ -141,10 +143,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 					e.Agg = aggfunc.NewSumCount(vec.Typ)
 				default:
 					bat.Clean(proc)
+					ctr.clean(proc)
 					return false, fmt.Errorf("unsupport aggregation operator '%v'", e.Op)
 				}
 				if e.Agg == nil {
 					bat.Clean(proc)
+					ctr.clean(proc)
 					return false, fmt.Errorf("unsupport sumcount aggregation operator '%v' for %s", e.Op, bat.Vecs[i+len(n.Gs)].Typ)
 				}
 				n.Es[i].Agg = e.Agg
@@ -423,6 +427,13 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 			vecs[i].Col = col
 			vecs[i].Data = data
 		case types.T_tuple:
+			data, err := proc.Alloc(0)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					vecs[j].Free(proc)
+				}
+				return nil, err
+			}
 			vs := make([][]interface{}, length)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
@@ -434,6 +445,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 			}
 			vecs[i].Col = vs
+			vecs[i].Data = data[:mempool.CountSize]
 		}
 	}
 	for i, e := range es {

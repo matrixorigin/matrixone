@@ -1,16 +1,14 @@
 package memtable
 
 import (
-	"context"
 	"fmt"
 	ro "matrixone/pkg/container/batch"
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata/v2"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
@@ -45,7 +43,7 @@ func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IB
 
 	for idx, colIdx := range mt.Batch.GetAttrs() {
 		vec := mt.Batch.GetVectorByAttr(colIdx)
-		vec.PlacementNew(mt.Meta.Segment.Schema.ColDefs[idx].Type, mt.Meta.Segment.Info.Conf.BlockMaxRows)
+		vec.PlacementNew(mt.Meta.Segment.Table.Schema.ColDefs[idx].Type, mt.Meta.Segment.Table.Conf.BlockMaxRows)
 	}
 
 	mt.OnZeroCB = mt.close
@@ -98,9 +96,11 @@ func (mt *MemTable) Append(bat *ro.Batch, offset uint64, index *md.LogIndex) (n 
 // If crashed before Step 3, same as above.
 func (mt *MemTable) Flush() error {
 	mt.Opts.EventListener.FlushBlockBeginCB(mt)
-	wCtx := context.TODO()
-	wCtx = context.WithValue(wCtx, "memtable", mt)
-	writer := dio.WRITER_FACTORY.MakeWriter(MEMTABLE_WRITER, wCtx)
+	writer := &MemtableWriter{
+		Opts:     mt.Opts,
+		Dirname:  mt.Meta.Segment.Table.Conf.Dir,
+		Memtable: mt,
+	}
 	err := writer.Flush()
 	if err != nil {
 		mt.Opts.EventListener.BackgroundErrorCB(err)
@@ -118,7 +118,7 @@ func (mt *MemTable) Flush() error {
 	// go func() {
 	{
 		ctx := mops.OpCtx{Opts: mt.Opts}
-		getssop := mops.NewGetSSOp(&ctx)
+		getssop := mops.NewGetTblSSOp(&ctx, mt.TableMeta)
 		err := getssop.Push()
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
@@ -129,7 +129,7 @@ func (mt *MemTable) Flush() error {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 			return err
 		}
-		op := mops.NewCheckpointOp(&ctx, getssop.SS)
+		op := mops.NewFlushTblOp(&ctx, getssop.Result)
 		err = op.Push()
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)

@@ -22,10 +22,11 @@ const (
 )
 
 type SegmentInfo struct {
-	Id       string
-	GroupId  string
-	TabletId string
-	Node     metadata.Node
+	Version    uint64
+	Ids        []uint64
+	GroupId    uint64
+	TabletName string
+	Node       metadata.Node
 }
 
 type Unit struct {

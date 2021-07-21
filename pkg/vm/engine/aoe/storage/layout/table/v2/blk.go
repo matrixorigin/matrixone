@@ -13,7 +13,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/process"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -83,7 +83,7 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 
 func (blk *Block) initColumns() error {
 	blk.data.AttrSize = make([]uint64, 0)
-	for idx, colDef := range blk.Meta.Segment.Schema.ColDefs {
+	for idx, colDef := range blk.Meta.Segment.Table.Schema.ColDefs {
 		blk.Ref()
 		colBlk := col.NewStdColumnBlock(blk, idx)
 		blk.data.Helper[colDef.Name] = len(blk.data.Columns)
@@ -112,6 +112,13 @@ func (blk *Block) Size(attr string) uint64 {
 		return blk.data.AttrSize[idx]
 	}
 	return blk.data.Columns[idx].Size()
+}
+
+func (blk *Block) GetSegmentedIndex() (id uint64, ok bool) {
+	if blk.Type == base.TRANSIENT_BLK {
+		return id, ok
+	}
+	return blk.Meta.GetAppliedIndex()
 }
 
 func (blk *Block) close() {
@@ -242,7 +249,7 @@ func (blk *Block) String() string {
 }
 
 func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
-	colIdx := blk.Meta.Segment.Schema.GetColIdx(attr)
+	colIdx := blk.Meta.Segment.Table.Schema.GetColIdx(attr)
 	vec, err := blk.data.Columns[colIdx].ForceLoad(ref, proc)
 	if err != nil {
 		return nil, err

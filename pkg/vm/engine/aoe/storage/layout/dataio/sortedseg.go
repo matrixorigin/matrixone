@@ -23,7 +23,7 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 		},
 	}
 
-	name := e.MakeFilename(dirname, e.FTSegment, id.ToSegmentFileName(), false)
+	name := e.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID)
 	log.Infof("SegmentFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))

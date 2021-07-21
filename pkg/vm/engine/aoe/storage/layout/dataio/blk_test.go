@@ -23,7 +23,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indexes
 	var dir string
 	for i := 0; i < blkCnt; i++ {
 		id.BlockID = uint64(i)
-		name := e.MakeFilename(dirname, e.FTBlock, id.ToBlockFileName(), false)
+		name := e.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID)
 		dir = filepath.Dir(name)
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			err = os.MkdirAll(dir, 0755)

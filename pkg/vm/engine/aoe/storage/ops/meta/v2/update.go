@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	log "github.com/sirupsen/logrus"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 func NewUpdateOp(ctx *OpCtx) *UpdateOp {
@@ -24,7 +24,7 @@ func (op *UpdateOp) updateBlock(blk *md.Block) error {
 		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d, but %d", blk.ID, md.Detatched, blk.BoundSate))
 	}
 
-	table, err := op.Ctx.Opts.Meta.Info.ReferenceTable(blk.Segment.TableID)
+	table, err := op.Ctx.Opts.Meta.Info.ReferenceTable(blk.Segment.Table.ID)
 	if err != nil {
 		return err
 	}

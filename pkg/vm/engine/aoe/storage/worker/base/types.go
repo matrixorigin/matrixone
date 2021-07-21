@@ -12,3 +12,13 @@ type IOpWorker interface {
 	WaitStop()
 	StatsString() string
 }
+
+type IHeartbeater interface {
+	Start()
+	Stop()
+}
+
+type IHBHandle interface {
+	OnExec()
+	OnStopped()
+}

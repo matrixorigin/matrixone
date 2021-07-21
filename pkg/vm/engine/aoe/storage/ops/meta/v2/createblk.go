@@ -3,7 +3,7 @@ package meta
 import (
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 )
 
