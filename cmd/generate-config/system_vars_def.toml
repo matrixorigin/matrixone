@@ -176,3 +176,13 @@ domain-type = "set"
 values = ["42949672960"]
 comment = "process.Limitation.PartitionRows. default: 10 << 32 = 42949672960"
 update-mode = "dynamic"
+
+[[parameter]]
+name = "countOfRowsPerSendingToClient"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["10"]
+comment = "send the count of rows to the client"
+update-mode = "dynamic"

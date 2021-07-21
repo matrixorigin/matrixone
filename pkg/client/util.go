@@ -43,7 +43,23 @@ func Min(a int, b int) int{
 	}
 }
 
+func MinInt64(a int64, b int64) int64{
+	if a < b {
+		return a
+	}else{
+		return b
+	}
+}
+
 func Max(a int, b int) int{
+	if a < b {
+		return b
+	}else{
+		return a
+	}
+}
+
+func MaxInt64(a int64, b int64) int64{
 	if a < b {
 		return b
 	}else{
