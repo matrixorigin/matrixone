@@ -185,12 +185,12 @@ func TestAppend(t *testing.T) {
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 	ss.Close()
 
-	time.Sleep(time.Duration(20) * time.Millisecond)
+	time.Sleep(time.Duration(50) * time.Millisecond)
 	t.Log(inst.FsMgr.String())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
-	// t.Log(tbl.GetIndexHolder().String())
+	t.Log(tbl.GetIndexHolder().String())
 	inst.Close()
 }
 
