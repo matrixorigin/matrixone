@@ -1,6 +1,8 @@
 package aoe
 
-import "matrixone/pkg/container/types"
+import (
+	"matrixone/pkg/container/types"
+)
 
 type SchemaState byte
 
@@ -46,8 +48,9 @@ type TableInfo struct {
 }
 
 type TabletInfo struct {
-	Table TableInfo
-	Name  string
+	Name    string
+	ShardId uint64
+	Table   TableInfo
 }
 
 // ColumnInfo stores the information of a column.

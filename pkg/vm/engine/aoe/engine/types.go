@@ -1,8 +1,9 @@
 package engine
 
 import (
+	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/catalog"
-	"matrixone/pkg/vm/engine/aoe/dist"
 )
 
 // aoe engine
@@ -18,9 +19,8 @@ type database struct {
 
 type relation struct {
 	pid uint64
-	id uint64
+	tbl *aoe.TableInfo
 	catalog *catalog.Catalog
-	store *dist.Storage
+	segments []engine.SegmentInfo
+	tablets []aoe.TabletInfo
 }
-
-

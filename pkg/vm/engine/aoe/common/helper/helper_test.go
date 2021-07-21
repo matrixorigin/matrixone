@@ -1,4 +1,4 @@
-package aoe
+package helper
 
 import (
 	"encoding/json"
@@ -9,12 +9,13 @@ import (
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/metadata"
 	"testing"
 )
 
 func TestAoe(t *testing.T) {
-	data, err := EncodeTable(TableInfo{})
+	data, err := EncodeTable(aoe.TableInfo{})
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -1,7 +1,11 @@
 package engine
 
 import (
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe/catalog"
+	"matrixone/pkg/vm/engine/aoe/common/helper"
+	"matrixone/pkg/vm/metadata"
 )
 
 
@@ -16,7 +20,11 @@ func (db *database) Delete(name string) error {
 }
 
 func (db *database) Create(name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
-	_, err := db.catalog.CreateTable(db.id, 0, name, comment, defs, pdef)
+	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
+	if err != nil {
+		return err
+	}
+	_, err = db.catalog.CreateTable(db.id, tbl)
 	return err
 }
 
@@ -33,14 +41,40 @@ func (db *database) Relations() []string {
 }
 
 func (db *database) Relation(name string) (engine.Relation, error) {
-	tb, err := db.catalog.GetTable(db.id, name)
+	tablets, err := db.catalog.GetTablets(db.id, name)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
-	return &relation{
-		pid: db.id,
-		id: tb.Id,
+	if tablets == nil || len(tablets) == 0 {
+		return nil, catalog.ErrTableNotExists
+	}
+
+	r := &relation{
+		pid:     db.id,
+		tbl:     &tablets[0].Table,
 		catalog: db.catalog,
-	}, nil
+	}
+	r.tablets = tablets
+	for _, tbl := range tablets {
+		if ids, err := db.catalog.Store.GetSegmentIds(tbl.Name, tbl.ShardId); err != nil {
+			log.Errorf("get segmentInfos for tablet %s failed, %s", tbl.Name, err.Error())
+		}else {
+			if len(ids.Ids)==0{
+				continue
+			}
+			addr := db.catalog.Store.RaftStore().GetRouter().LeaderAddress(tbl.ShardId)
+			r.segments = append(r.segments, engine.SegmentInfo{
+				Version: ids.Version,
+				Ids: ids.Ids,
+				GroupId: tbl.ShardId,
+				TabletName: tbl.Name,
+				Node: metadata.Node{
+					Id: addr,
+					Addr: addr,
+				},
+			})
+		}
+	}
+	return r, nil
 }
 

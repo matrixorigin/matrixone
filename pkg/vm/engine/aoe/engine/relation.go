@@ -1,15 +1,19 @@
 package engine
 
 import (
-	"github.com/fagongzi/util/format"
+	"bytes"
+	"errors"
+	"math/rand"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 )
 
 func (r *relation) ID() string {
-	return string(format.UInt64ToString(r.id))
+	return r.tbl.Name
 }
 
 func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
@@ -17,21 +21,30 @@ func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.
 }
 
 func (r *relation) Segments() []engine.SegmentInfo {
-
-	return nil
+	return r.segments
 }
 
 func (r *relation) Index() []*engine.IndexTableDef {
-	return nil
+	return helper.Index(*r.tbl)
 }
 
 func (r *relation) Attribute() []metadata.Attribute {
-	return nil
+	return helper.Attribute(*r.tbl)
 }
 
 func (r *relation) Write(bat *batch.Batch) error {
-
-	return nil
+	if len(r.tablets) == 0 {
+		return errors.New("no tablets exists")
+	}
+	targetTbl := r.tablets[rand.Intn(len(r.tablets))]
+	var buf *bytes.Buffer
+	if err := protocol.EncodeBatch(bat, buf); err != nil {
+		return err
+	}
+	if buf == nil {
+		return errors.New("empty batch")
+	}
+	return r.catalog.Store.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
 }
 
 func (r *relation) AddAttribute(_ engine.TableDef) error {
@@ -43,9 +56,10 @@ func (r *relation) DelAttribute(_ engine.TableDef) error {
 }
 
 func (r *relation) Rows() int64 {
-	panic("implement me")
+	return 0
 }
 
-func (r *relation) Size(s string) int64 {
-	panic("implement me")
+func (r *relation) Size(_ string) int64 {
+	return 0
 }
+
