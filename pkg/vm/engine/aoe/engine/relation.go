@@ -3,7 +3,6 @@ package engine
 import (
 	"bytes"
 	"errors"
-	"github.com/fagongzi/util/format"
 	"math/rand"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/sql/protocol"
@@ -14,11 +13,11 @@ import (
 )
 
 func (r *relation) ID() string {
-	return string(format.UInt64ToString(r.tbl.Id))
+	return r.tbl.Name
 }
 
 func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
-	panic("impl")
+	return nil
 }
 
 func (r *relation) Segments() []engine.SegmentInfo {
@@ -57,7 +56,7 @@ func (r *relation) DelAttribute(_ engine.TableDef) error {
 }
 
 func (r *relation) Rows() int64 {
-	panic("impl")
+	return 0
 }
 
 func (r *relation) Size(_ string) int64 {

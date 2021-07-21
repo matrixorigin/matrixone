@@ -105,3 +105,7 @@ func (s *Storage) CreateSnapshot(path string, start, end []byte) error {
 func (s *Storage) ApplySnapshot(path string) error {
 	return nil
 }
+
+func (s *Storage) Stop() error {
+	return s.db.Close()
+}

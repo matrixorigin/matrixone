@@ -2,6 +2,7 @@ package engine
 
 import (
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe/catalog"
 )
 
 func New() *aoeEngine {
@@ -9,6 +10,15 @@ func New() *aoeEngine {
 	//2. New Storage
 	//3. New Catalog
 	return &aoeEngine{}
+}
+
+func Mock(c *catalog.Catalog) *aoeEngine {
+	//1. Parse config
+	//2. New Storage
+	//3. New Catalog
+	return &aoeEngine{
+		catalog: c,
+	}
 }
 
 func (e *aoeEngine) Node(_ string) *engine.NodeInfo {

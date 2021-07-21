@@ -24,5 +24,3 @@ type relation struct {
 	segments []engine.SegmentInfo
 	tablets []aoe.TabletInfo
 }
-
-

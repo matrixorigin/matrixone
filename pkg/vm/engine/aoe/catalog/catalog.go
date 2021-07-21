@@ -123,6 +123,9 @@ func (c *Catalog) GetDBs() ([]aoe.SchemaInfo, error) {
 	for i := 1; i < len(values); i = i + 2 {
 		db := aoe.SchemaInfo{}
 		_ = json.Unmarshal(values[i], &db)
+		if db.State != aoe.StatePublic {
+			continue
+		}
 		dbs = append(dbs, db)
 	}
 	return dbs, nil
