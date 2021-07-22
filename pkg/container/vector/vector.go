@@ -342,10 +342,12 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeInt8Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]int8)[sel])
+			v.Col = vs
 		}
 	case types.T_int16:
 		if len(v.Data) == 0 {
@@ -368,10 +370,12 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeInt16Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]int16)[sel])
+			v.Col = vs
 		}
 	case types.T_int32:
 		if len(v.Data) == 0 {
@@ -394,10 +398,12 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeInt32Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]int32)[sel])
+			v.Col = vs
 		}
 	case types.T_int64:
 		if len(v.Data) == 0 {
@@ -420,10 +426,12 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeInt64Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]int64)[sel])
+			v.Col = vs
 		}
 	case types.T_uint8:
 		if len(v.Data) == 0 {
@@ -446,10 +454,12 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeUint8Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]uint8)[sel])
+			v.Col = vs
 		}
 	case types.T_uint16:
 		if len(v.Data) == 0 {
@@ -472,10 +482,12 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeUint16Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]uint16)[sel])
+			v.Col = vs
 		}
 	case types.T_uint32:
 		if len(v.Data) == 0 {
@@ -498,10 +510,12 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeUint32Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]uint32)[sel])
+			v.Col = vs
 		}
 	case types.T_uint64:
 		if len(v.Data) == 0 {
@@ -524,10 +538,12 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeUint64Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]uint64)[sel])
+			v.Col = vs
 		}
 	case types.T_float32:
 		if len(v.Data) == 0 {
@@ -550,10 +566,12 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeFloat32Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]float32)[sel])
+			v.Col = vs
 		}
 	case types.T_float64:
 		if len(v.Data) == 0 {
@@ -576,12 +594,21 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				vs = encoding.DecodeFloat64Slice(data[mempool.CountSize:])
-				v.Col = vs[:n]
+				vs = vs[:n]
+				v.Col = vs
 				v.Data = data
 			}
 			vs = append(vs, w.Col.([]float64)[sel])
+			v.Col = vs
 		}
 	case types.T_tuple:
+		if len(v.Data) == 0 {
+			data, err := proc.Alloc(0)
+			if err != nil {
+				return err
+			}
+			v.Data = data
+		}
 		vs, ws := v.Col.([][]interface{}), w.Col.([][]interface{})
 		vs = append(vs, ws[sel])
 		v.Col = vs
@@ -619,6 +646,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			}
 		}
 		col.Data = append(col.Data, from...)
+		v.Col = col
 	}
 	if w.Nsp.Any() && w.Nsp.Contains(uint64(sel)) {
 		v.Nsp.Add(uint64(v.Length() - 1))

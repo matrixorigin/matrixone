@@ -127,6 +127,9 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 }
 
 func (b *build) buildSelectClause(stmt *tree.SelectClause, orderBy tree.OrderBy) (op.OP, []*projection.Extend, error) {
+	if err := b.checkProjection(stmt.Exprs); err != nil {
+		return nil, nil, err
+	}
 	if b.hasSummarize(stmt.Exprs) {
 		return b.buildSelectClauseWithSummarize(stmt)
 	}

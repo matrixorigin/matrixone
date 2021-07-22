@@ -23,7 +23,18 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("])"))
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
+func Prepare(_ *process.Process, _ interface{}) error {
+	return nil
+}
+
+func Call(proc *process.Process, arg interface{}) (bool, error) {
+	if proc.Reg.Ax == nil {
+		return false, nil
+	}
+	bat := proc.Reg.Ax.(*batch.Batch)
+	if bat == nil || bat.Attrs == nil {
+		return false, nil
+	}
 	n := arg.(*Argument)
 	ctr := &n.Ctr
 	{
@@ -34,19 +45,6 @@ func Prepare(proc *process.Process, arg interface{}) error {
 			ctr.ds[i] = f.Type == Descending
 		}
 	}
-	return nil
-}
-
-func Call(proc *process.Process, arg interface{}) (bool, error) {
-	if proc.Reg.Ax == nil {
-		return false, nil
-	}
-	bat := proc.Reg.Ax.(*batch.Batch)
-	if bat.Attrs == nil {
-		return false, nil
-	}
-	n := arg.(*Argument)
-	ctr := &n.Ctr
 	if len(bat.Sels) == 0 {
 		if err := ctr.processBatch(bat, proc); err != nil {
 			bat.Clean(proc)

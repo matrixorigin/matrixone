@@ -26,6 +26,7 @@ func String(arg interface{}, buf *bytes.Buffer) {
 
 func Prepare(proc *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
+	n.Ctr.refer = n.Refer
 	n.Ctr.attrs = make([]string, len(n.Es))
 	for i, e := range n.Es {
 		n.Ctr.attrs[i] = e.Alias
@@ -36,7 +37,6 @@ func Prepare(proc *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
-	ctr.refer = n.Refer
 	for {
 		switch ctr.state {
 		case Build:
