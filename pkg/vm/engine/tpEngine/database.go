@@ -7,7 +7,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/dist"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 )
@@ -23,6 +22,7 @@ func NewTpDatabase(n string, id uint64, cinfo string, sch string, t int, kv dist
 		nextTableNo: 0,//TODO:load from meta1
 		proc:        proc,
 		kv:          kv,
+		rels:        make(map[string]*tpTupleImpl),
 	}
 }
 
@@ -129,7 +129,8 @@ func (td *tpDatabase) Relation(name string) (engine.Relation, error) {
 	sch := relRow.fields[2].([]byte) //sch
 	var md tpMetadata
 
-	err = encoding.Decode(sch[mempool.CountSize:],&md)
+	//TODO: if it is the system table, the schema decode should be different.
+	err = encoding.Decode(sch,&md)
 	if err != nil {
 		return nil, err
 	}

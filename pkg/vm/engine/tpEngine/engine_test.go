@@ -219,9 +219,18 @@ func TestEngine_1(t *testing.T) {
 		t.Error(err)
 	}
 
-	_,err = db0.Relation(relName)
+	rel,err := db0.Relation(relName)
 	if err != nil {
 		t.Error(err)
+	}
+
+	for i := 0; i < len(attr) ; i++ {
+		a := attr[i].(*engine.AttributeDef)
+		b := rel.Attribute()[i]
+		if !reflect.DeepEqual(a.Attr, b) {
+			t.Error(fmt.Errorf("attribute enc/dec not equal %v %v",a.Attr,b))
+			return
+		}
 	}
 
 	//test table engine
