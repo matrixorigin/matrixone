@@ -8,11 +8,13 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	cmap "github.com/orcaman/concurrent-map"
+	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"sync"
+	"time"
 )
 
 const (
@@ -159,11 +161,11 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 	lock := v.(*sync.RWMutex)
 	lock.RLock()
 	defer lock.RUnlock()
-	tid, err := c.genGlobalUniqIDs([]byte(cTableIDPrefix))
+	tbl.Id, err = c.genGlobalUniqIDs([]byte(cTableIDPrefix))
 	if err != nil {
 		return 0, err
 	}
-	err = c.Store.Set(c.tableIDKey(dbId, tbl.Name), format.Uint64ToBytes(tid))
+	err = c.Store.Set(c.tableIDKey(dbId, tbl.Name), format.Uint64ToBytes(tbl.Id))
 	if err != nil {
 		return 0, err
 	}
@@ -178,7 +180,7 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 	}
 
 	//save metadata to kv
-	err = c.Store.Set(c.tableKey(dbId, tid), meta)
+	err = c.Store.Set(c.tableKey(dbId, tbl.Id), meta)
 	if err != nil {
 		return 0, err
 	}
@@ -186,8 +188,8 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 	// TODO: support shared tables
 	// created shards
 	client := c.Store.RaftStore().Prophet().GetClient()
-	tKey := c.tableKey(dbId, tid)
-	rKey := c.routePrefix(dbId, tid)
+	tKey := c.tableKey(dbId, tbl.Id)
+	rKey := c.routePrefix(dbId, tbl.Id)
 	header := format.Uint64ToBytes(uint64(len(tKey) + len(rKey) + len([]byte("#"))))
 	buf := bytes.Buffer{}
 	buf.Write(header)
@@ -197,20 +199,35 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 	buf.Write(meta)
 	err = client.AsyncAddResources(raftstore.NewResourceAdapterWithShard(
 		bhmetapb.Shard{
-			Start:  format.Uint64ToBytes(tid),
-			End:    format.Uint64ToBytes(tid + 1),
-			Unique: string(format.Uint64ToBytes(tid)),
+			Start:  format.Uint64ToBytes(tbl.Id),
+			End:    format.Uint64ToBytes(tbl.Id + 1),
+			Unique: string(format.Uint64ToBytes(tbl.Id)),
 			Group:  uint64(pb.AOEGroup),
 			Data:   buf.Bytes(),
 		}))
-
-
-	// TODO: wait table meta state changed?
-
 	if err != nil {
 		return 0, err
 	}
-	return tid, nil
+	completedC := make(chan *aoe.TableInfo, 1)
+	defer close(completedC)
+	go func() {
+		i := 0
+		for {
+			tb, _ := c.checkTableExists(dbId, tbl.Id)
+			if tb != nil && tb.State == aoe.StatePublic {
+				completedC <- tb
+				break
+			}
+			i += 1
+		}
+	}()
+	select {
+	case <-completedC:
+		return tbl.Id, nil
+	case <-time.After(3 * time.Second):
+		return tbl.Id, ErrTableCreateFailed
+	}
+
 }
 
 func (c *Catalog) DropTable(dbId uint64, tableName string) (uint64, error) {
@@ -301,16 +318,23 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 		lock.RLock()
 		defer lock.RUnlock()
 		shardIds, err := c.Store.PrefixKeys(c.routePrefix(dbId, tb.Id), 0)
+
 		if err != nil{
 			return nil, err
 		}
 		var tablets []aoe.TabletInfo
-		for _, sid := range shardIds {
-			tablets = append(tablets, aoe.TabletInfo{
-				Name: c.EncodeTabletName(tb.Id, format.MustBytesToUint64(sid)),
-				ShardId: format.MustBytesToUint64(sid),
-				Table: *tb,
-			})
+		for _, shardId := range shardIds {
+			if sid, err := format.ParseStrUInt64(string(shardId[len(c.routePrefix(dbId, tb.Id)):])); err != nil {
+				stdLog.Printf("convert shardid failed, %v", err)
+				continue
+			}else {
+				tablets = append(tablets, aoe.TabletInfo{
+					Name: c.EncodeTabletName(tb.Id, sid),
+					ShardId: sid,
+					Table: *tb,
+				})
+			}
+
 		}
 		return tablets, nil
 	}
@@ -423,6 +447,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 	}
 }
 func (c *Catalog) EncodeTabletName(tableId uint64, groupId uint64) string {
+	stdLog.Printf("[AAAAAAAAAAAAAAAAAAAAAAAAAAA]%d, %d, %s", tableId, groupId, fmt.Sprintf("%d#%d", tableId, groupId))
 	return fmt.Sprintf("%d#%d", tableId, groupId)
 }
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
