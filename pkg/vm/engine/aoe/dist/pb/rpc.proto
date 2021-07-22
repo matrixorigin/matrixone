@@ -13,11 +13,12 @@ option (gogoproto.goproto_enum_prefix_all) = false;
 
 enum Type {
   Set = 0;
-  Del = 1;
-  Get = 2;
-  PrefixScan = 3;
-  Scan = 4;
-  Incr = 5;
+  SetIfNotExist = 1;
+  Del = 2;
+  Get = 3;
+  PrefixScan = 4;
+  Scan = 5;
+  Incr = 6;
 
   Append = 100;
   GetSnapshot = 101;

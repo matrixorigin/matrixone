@@ -3,6 +3,7 @@ package dist
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"github.com/fagongzi/util/format"
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
@@ -21,6 +22,34 @@ func (h *aoeStorage) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 
 
 	err := h.getStoreByGroup(shard.Group, shard.ID).(*pebble.Storage).Set(req.Key, customReq.Value)
+	if err != nil {
+		resp.Value = errorResp(err)
+		return 0, 0, resp
+	}
+	writtenBytes := uint64(len(req.Key) + len(customReq.Value))
+	changedBytes := int64(writtenBytes)
+	resp.Value = []byte("OK")
+	return writtenBytes, changedBytes, resp
+}
+
+func (h *aoeStorage) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+	resp := pb.AcquireResponse()
+	customReq := &rpcpb.SetRequest{}
+	protoc.MustUnmarshal(customReq, req.Cmd)
+
+	value, err := h.getStoreByGroup(shard.Group, shard.ID).(*pebble.Storage).Get(req.Key)
+
+	if err != nil {
+		resp.Value = errorResp(err)
+		return 0, 0, resp
+	}
+
+	if value != nil {
+		resp.Value = errorResp(errors.New("key is already existed"))
+		return 0, 0, resp
+	}
+
+	err = h.getStoreByGroup(shard.Group, shard.ID).(*pebble.Storage).Set(req.Key, customReq.Value)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp

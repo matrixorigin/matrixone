@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/aware"
+	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/metadata"
 	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
-	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/proxy"
@@ -17,6 +17,7 @@ import (
 	cstorage "github.com/matrixorigin/matrixcube/storage"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -40,6 +41,9 @@ type Storage interface {
 	Set([]byte, []byte) error
 	// SetWithGroup set key value
 	SetWithGroup([]byte, []byte, pb.Group) error
+
+	// SetIfNotExist set key value if key is not exists.
+	SetIfNotExist([]byte, []byte) error
 
 	// Get returns the value of key
 	Get([]byte) ([]byte, error)
@@ -98,7 +102,7 @@ func NewStorage(
 	metadataStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage) (Storage, error) {
-	return NewStorageWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, nil, server.Cfg{})
+	return NewStorageWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, config.Config{})
 }
 
 // NewStorageWithOptions returns a beehive request handler
@@ -106,15 +110,12 @@ func NewStorageWithOptions(
 	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,
-	adjustFunc func(cfg *config.Config),
-	scfg server.Cfg) (Storage, error) {
+	c config.Config) (Storage, error) {
 
 	h := &aoeStorage{
 		cmds: make(map[uint64]raftcmdpb.CMDType),
 	}
-
-	cfg := &config.Config{}
-	cfg.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
+	c.CubeConfig.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
 		switch group {
 		case uint64(pb.AOEGroup):
 			return func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
@@ -126,8 +127,8 @@ func NewStorageWithOptions(
 			}
 		}
 	}
-	cfg.Storage.MetaStorage = metaStorage
-	cfg.Storage.DataStorageFactory = func(group, shardID uint64) cstorage.DataStorage {
+	c.CubeConfig.Storage.MetaStorage = metaStorage
+	c.CubeConfig.Storage.DataStorageFactory = func(group, shardID uint64) cstorage.DataStorage {
 		switch group {
 		case uint64(pb.KVGroup):
 			return kvDataStorage
@@ -136,26 +137,30 @@ func NewStorageWithOptions(
 		}
 		return nil
 	}
-	cfg.Storage.ForeachDataStorageFunc = func(cb func(cstorage.DataStorage)) {
+	c.CubeConfig.Storage.ForeachDataStorageFunc = func(cb func(cstorage.DataStorage)) {
 		cb(kvDataStorage)
 		cb(aoeDataStorage)
 	}
-	cfg.Prophet.Replication.Groups = []uint64{uint64(pb.KVGroup), uint64(pb.AOEGroup)}
-	cfg.ShardGroups = 2
-	cfg.Customize.CustomInitShardsFactory = func() []bhmetapb.Shard {
-		return []bhmetapb.Shard{
-			{
-				Group: uint64(pb.KVGroup),
-			},
-			{
+	c.CubeConfig.Prophet.Replication.Groups = []uint64{uint64(pb.KVGroup), uint64(pb.AOEGroup)}
+	c.CubeConfig.ShardGroups = 2
+
+	c.CubeConfig.Customize.CustomInitShardsFactory = func() []bhmetapb.Shard {
+		var initialGroups []bhmetapb.Shard
+		initialGroups = append(initialGroups, bhmetapb.Shard{
+			Group: uint64(pb.KVGroup),
+		})
+		for i:=uint64(0); i<c.ClusterConfig.PreAllocatedGroupNum; i++ {
+			initialGroups = append(initialGroups, bhmetapb.Shard{
 				Group: uint64(pb.AOEGroup),
-				Start: []byte("0"),
-				End:   []byte("1"),
-			},
+				Start: format.UInt64ToString(i),
+				End: format.UInt64ToString(i+1),
+			})
 		}
+		return initialGroups
 	}
 
-	cfg.Prophet.ResourceStateChangedHandler = func(res metadata.Resource, from metapb.ResourceState, to metapb.ResourceState) {
+
+	c.CubeConfig.Prophet.ResourceStateChangedHandler = func(res metadata.Resource, from metapb.ResourceState, to metapb.ResourceState) {
 		if from == metapb.ResourceState_WaittingCreate && to == metapb.ResourceState_Running {
 			if res.Data() == nil {
 				return
@@ -177,8 +182,8 @@ func NewStorageWithOptions(
 		}
 	}
 
-	cfg.Prophet.JobCheckerDuration = 1000 * time.Millisecond
-	cfg.Prophet.JobHandler = func(key, data []byte) {
+	c.CubeConfig.Prophet.JobCheckerDuration = 1000 * time.Millisecond
+	c.CubeConfig.Prophet.JobHandler = func(key, data []byte) {
 		if bytes.Equal(key, []byte("test")) {
 			toShard := format.MustBytesToUint64(data[0:8])
 			header := format.MustBytesToUint64(data[8:16])
@@ -198,32 +203,30 @@ func NewStorageWithOptions(
 		}
 	}
 
-	cfg.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
+	c.CubeConfig.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
 		return h
 	}
 
-	cfg.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
+	c.CubeConfig.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
 		//TODO: 询问所有tablet
 		return func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
 			return newCompactIdx, err
 		}
 	}
 
-	cfg.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
+	c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
 		//TODO:aoe group only
 		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
 			return adjustAppliedIndex
 		}
 	}
 
-	if adjustFunc != nil {
-		adjustFunc(cfg)
-	}
+	h.store = raftstore.NewStore(&c.CubeConfig)
 
-	h.store = raftstore.NewStore(cfg)
-	scfg.Store = h.store
-	scfg.Handler = h
-	h.app = server.NewApplicationWithDispatcher(scfg, func(req *raftcmdpb.Request, cmd interface{}, proxy proxy.ShardsProxy) error {
+	c.ServerConfig.Store = h.store
+	c.ServerConfig.Handler = h
+	pConfig.DefaultSchedulers = nil
+	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req *raftcmdpb.Request, cmd interface{}, proxy proxy.ShardsProxy) error {
 		if req.Group == uint64(pb.KVGroup) {
 			return proxy.Dispatch(req)
 		}
@@ -255,6 +258,20 @@ func (h *aoeStorage) SetWithGroup(key, value []byte, group pb.Group) error {
 		},
 	}
 	_, err := h.ExecWithGroup(req, group)
+	return err
+}
+
+
+func (h *aoeStorage) SetIfNotExist(key, value []byte) error {
+	req := pb.Request{
+		Type: pb.Set,
+		Group: pb.KVGroup,
+		Set: pb.SetRequest{
+			Key: key,
+			Value: value,
+		},
+	}
+	_, err := h.ExecWithGroup(req, pb.KVGroup)
 	return err
 }
 

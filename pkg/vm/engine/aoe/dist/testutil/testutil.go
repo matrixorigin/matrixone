@@ -4,12 +4,13 @@ import (
 	"fmt"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
-	"github.com/matrixorigin/matrixcube/config"
+	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"os"
 	"testing"
 	"time"
@@ -49,30 +50,41 @@ func NewTestClusterStore(t *testing.T,  f func(path string) (storage.DataStorage
 		if err != nil {
 			return nil, err
 		}
-		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, func(cfg *config.Config) {
-			cfg.DataPath = fmt.Sprintf("%s/node-%d", tmpDir, i)
-			cfg.RaftAddr = fmt.Sprintf("127.0.0.1:1000%d", i)
-			cfg.ClientAddr = fmt.Sprintf("127.0.0.1:2000%d", i)
-
-			pConfig.DefaultSchedulers = nil
-			cfg.Replication.ShardHeartbeatDuration = typeutil.NewDuration(time.Millisecond * 100)
-			cfg.Replication.StoreHeartbeatDuration = typeutil.NewDuration(time.Second)
-
-			cfg.Raft.TickInterval = typeutil.NewDuration(time.Millisecond * 100)
-
-			cfg.Prophet.Name = fmt.Sprintf("node-%d", i)
-			cfg.Prophet.StorageNode = true
-			cfg.Prophet.RPCAddr = fmt.Sprintf("127.0.0.1:3000%d", i)
-			if i != 0 {
-				cfg.Prophet.EmbedEtcd.Join = "http://127.0.0.1:40000"
-			}
-			cfg.Prophet.EmbedEtcd.ClientUrls = fmt.Sprintf("http://127.0.0.1:4000%d", i)
-			cfg.Prophet.EmbedEtcd.PeerUrls = fmt.Sprintf("http://127.0.0.1:5000%d", i)
-			cfg.Prophet.Schedule.EnableJointConsensus = true
-
-		}, server.Cfg{
+		cfg := config.Config{}
+		cfg.ServerConfig = server.Cfg{
 			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
-		})
+		}
+		cfg.ClusterConfig = config.ClusterConfig{
+
+		}
+		cfg.CubeConfig = cConfig.Config{
+			DataPath: fmt.Sprintf("%s/node-%d", tmpDir, i),
+			RaftAddr: fmt.Sprintf("127.0.0.1:1000%d", i),
+			ClientAddr: fmt.Sprintf("127.0.0.1:2000%d", i),
+			Replication: cConfig.ReplicationConfig{
+				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 100),
+				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
+			},
+			Raft: cConfig.RaftConfig{
+				TickInterval: typeutil.NewDuration(time.Millisecond * 100),
+			},
+			Prophet: pConfig.Config{
+				Name: fmt.Sprintf("node-%d", i),
+				StorageNode: true,
+				RPCAddr: fmt.Sprintf("127.0.0.1:3000%d", i),
+				EmbedEtcd: pConfig.EmbedEtcdConfig{
+					ClientUrls: fmt.Sprintf("http://127.0.0.1:4000%d", i),
+					PeerUrls: fmt.Sprintf("http://127.0.0.1:5000%d", i),
+				},
+				Schedule: pConfig.ScheduleConfig{
+					EnableJointConsensus: true,
+				},
+			},
+		}
+		if i != 0 {
+			cfg.CubeConfig.Prophet.EmbedEtcd.Join = "http://127.0.0.1:40000"
+		}
+		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
 		if err != nil {
 			return nil, err
 		}

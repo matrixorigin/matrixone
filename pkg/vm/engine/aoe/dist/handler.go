@@ -12,6 +12,7 @@ type cmdType uint64
 
 func (h *aoeStorage) init() {
 	h.AddWriteFunc(uint64(pb.Set), h.set)
+	h.AddWriteFunc(uint64(pb.SetIfNotExist), h.setIfNotExist)
 	h.AddWriteFunc(uint64(pb.Del), h.del)
 	h.AddWriteFunc(uint64(pb.Incr), h.incr)
 	h.AddReadFunc(uint64(pb.Get), h.get)

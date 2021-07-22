@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/fagongzi/util/format"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,7 +22,7 @@ import (
 )
 
 const (
-	blockRows          uint64 = 2
+	blockRows          uint64 = 10000
 	blockCntPerSegment uint64 = 4
 	insertRows                = blockRows * blockCntPerSegment * 10
 	insertCnt          uint64 = 20
@@ -62,23 +61,16 @@ func TestAOEStorage(t *testing.T) {
 
 func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 	//Set Test
-	resp, err := c.Applications[0].Exec(pb.Request{
-		Type: pb.Set,
-		Set: pb.SetRequest{
-			Key:   []byte("Hello"),
-			Value: []byte("World"),
-		},
-	})
+	err := c.Applications[0].SetIfNotExist([]byte("Hello"), []byte("World"))
 	require.NoError(t, err)
-	require.Equal(t, "OK", string(resp))
+
+	err = c.Applications[0].SetIfNotExist([]byte("Hello"), []byte("World1"))
+	value1, err := c.Applications[0].Get([]byte("Hello"))
+	println("[QQQ]", string(value1))
+	require.NotNil(t, err)
 
 	//Get Test
-	value, err := c.Applications[0].Exec(pb.Request{
-		Type: pb.Get,
-		Get: pb.GetRequest{
-			Key : []byte("Hello"),
-		},
-	})
+	value, err := c.Applications[0].Get([]byte("Hello"))
 	require.NoError(t, err)
 	require.Equal(t, value, []byte("World"))
 
@@ -116,10 +108,6 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	colCnt := 4
 	tableInfo := md.MockTableInfo(colCnt)
 	toShard := uint64(0)
-	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), false, func(shard *bhmetapb.Shard, address string){
-		toShard = shard.ID
-	})
-	require.Less(t, uint64(0), toShard)
 	err := c.Applications[0].CreateTablet(fmt.Sprintf("%d#%d", tableInfo.Id, toShard),toShard, tableInfo)
 	require.NoError(t, err)
 
@@ -143,4 +131,6 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	fmt.Printf("SegmentIds is %v", ids)
 	err = c.Applications[0].Append(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard, buf.Bytes())
 	require.NoError(t, err)
+
+	time.Sleep(3 * time.Second)
 }
