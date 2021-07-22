@@ -72,7 +72,80 @@ func TestTable(t *testing.T) {
 	assert.Nil(t, seg0)
 }
 
-func TestBsi(t *testing.T) {
+func TestStrBsi(t *testing.T) {
+	tp := types.Type{
+		Oid:   types.T_char,
+		Size:  8,
+		Width: 8,
+	}
+	col := int16(20)
+	bsiIdx := NewStringBsiIndex(tp, col)
+	xs := [][]byte{
+		[]byte("asdf"), []byte("a"), []byte("asd"), []byte("as"), []byte("bat"), []byte("basket"), []byte("asd"), []byte("a"),
+	}
+	for i, x := range xs {
+		err := bsiIdx.Set(uint64(i), x)
+		assert.Nil(t, err)
+	}
+
+	for i, x := range xs {
+		v, ok := bsiIdx.Get(uint64(i))
+		assert.True(t, ok)
+		assert.Equal(t, x, v)
+	}
+	res, err := bsiIdx.Eq([]byte("asd"), nil)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(2), res.GetCardinality())
+
+	buf, err := bsiIdx.Marshall()
+	assert.Nil(t, err)
+
+	bsiIdx2 := NewStringBsiIndex(tp, 0)
+	err = bsiIdx2.Unmarshall(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, col, bsiIdx2.Col)
+
+	for i, x := range xs {
+		v, ok := bsiIdx2.Get(uint64(i))
+		assert.True(t, ok)
+		assert.Equal(t, x, v)
+	}
+	res, err = bsiIdx2.Eq([]byte("asd"), nil)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(2), res.GetCardinality())
+
+	fname := "/tmp/xxstringbsi"
+	os.Remove(fname)
+	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	assert.Nil(t, err)
+	defer f.Close()
+
+	capacity, err := bsiIdx.WriteTo(f)
+	assert.Nil(t, err)
+
+	f, err = os.OpenFile(fname, os.O_RDONLY, os.ModePerm)
+	assert.Nil(t, err)
+	defer f.Close()
+
+	node := NewStringBsiEmptyNode(uint64(capacity), nil)
+	_, err = node.ReadFrom(f)
+	assert.Nil(t, err)
+	t.Log(capacity)
+
+	bsiIdx3 := node.(*StringBsiIndex)
+	assert.Equal(t, col, bsiIdx3.Col)
+
+	for i, x := range xs {
+		v, ok := bsiIdx3.Get(uint64(i))
+		assert.True(t, ok)
+		assert.Equal(t, x, v)
+	}
+	res, err = bsiIdx3.Eq([]byte("asd"), nil)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(2), res.GetCardinality())
+}
+
+func TestNumBsi(t *testing.T) {
 	tp := types.Type{
 		Oid:  types.T_int32,
 		Size: 4,
