@@ -24,7 +24,7 @@ var (
 
 func TestServer(t *testing.T) {
 
-	c, err := testutil.NewTestClusterStore(t)
+	c, err := testutil.NewTestClusterStore(t, nil)
 	require.NoError(t, err)
 	defer c.Stop()
 

@@ -231,7 +231,7 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 }
 
 func (c *Catalog) DropTable(dbId uint64, tableName string) (uint64, error) {
-	stdLog.Printf("[QQQQQQ]Call Drop Table")
+	t0 := time.Now()
 	_, err := c.checkDBExists(dbId)
 	if err != nil {
 		return 0, err
@@ -257,7 +257,7 @@ func (c *Catalog) DropTable(dbId uint64, tableName string) (uint64, error) {
 	}
 	err = c.Store.Delete(c.tableIDKey(dbId, tableName))
 	//TODO：Data Cleanup Notify
-	stdLog.Printf("[QQQQQQ]Call Drop Table finished, %d", tb.Id)
+	stdLog.Printf("[QQQQQQ]Call Drop Table finished, cost %d ms", time.Since(t0).Milliseconds())
 	return tb.Id, err
 
 }
@@ -320,16 +320,25 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 		lock.RLock()
 		defer lock.RUnlock()
 		shardIds, err := c.Store.PrefixKeys(c.routePrefix(dbId, tb.Id), 0)
+
 		if err != nil{
 			return nil, err
 		}
 		var tablets []aoe.TabletInfo
-		for _, sid := range shardIds {
-			tablets = append(tablets, aoe.TabletInfo{
-				Name: c.EncodeTabletName(tb.Id, format.MustBytesToUint64(sid)),
-				ShardId: format.MustBytesToUint64(sid),
-				Table: *tb,
-			})
+		for _, shardId := range shardIds {
+			stdLog.Printf("[QQQ] %v, %v, %v", string(shardId), string(c.routePrefix(dbId, tb.Id)), string(shardId[len(c.routePrefix(dbId, tb.Id)):]))
+
+			if sid, err := format.ParseStrUInt64(string(shardId[len(c.routePrefix(dbId, tb.Id)):])); err != nil {
+				stdLog.Printf("convert shardid failed, %v", err)
+				continue
+			}else {
+				tablets = append(tablets, aoe.TabletInfo{
+					Name: c.EncodeTabletName(tb.Id, sid),
+					ShardId: sid,
+					Table: *tb,
+				})
+			}
+
 		}
 		return tablets, nil
 	}
@@ -400,9 +409,7 @@ func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 	if value, err := c.Store.Get(c.dbIDKey(dbName)); err != nil || value == nil {
 		return nil, nil
 	} else {
-		println("[QQQQQ]")
 		id := format.MustBytesToUint64(value)
-		stdLog.Printf("[WWWWWW], %d", id)
 		db, err := c.checkDBExists(id)
 		if err == ErrDBNotExists {
 			return nil, nil
@@ -444,6 +451,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 	}
 }
 func (c *Catalog) EncodeTabletName(tableId uint64, groupId uint64) string {
+	stdLog.Printf("[AAAAAAAAAAAAAAAAAAAAAAAAAAA]%d, %d, %s", tableId, groupId, fmt.Sprintf("%d#%d", tableId, groupId))
 	return fmt.Sprintf("%d#%d", tableId, groupId)
 }
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
