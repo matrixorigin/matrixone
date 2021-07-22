@@ -56,6 +56,9 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 		bat.Vecs[i] = vector.New(typ)
 		delete(mp, attr)
 	}
+	if len(rows.Rows[0]) == 0 {
+		return insert.New(id, db, bat, r), nil
+	}
 	for i, vec := range bat.Vecs {
 		switch vec.Typ.Oid {
 		case types.T_int8:
