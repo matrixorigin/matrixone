@@ -2,11 +2,7 @@ package vm
 
 import (
 	"bytes"
-	bdifference "matrixone/pkg/sql/colexec/bag/difference"
-	bdifferenceR "matrixone/pkg/sql/colexec/bag/differenceR"
 	binner "matrixone/pkg/sql/colexec/bag/inner"
-	bintersect "matrixone/pkg/sql/colexec/bag/intersect"
-	bnatural "matrixone/pkg/sql/colexec/bag/natural"
 	bunion "matrixone/pkg/sql/colexec/bag/union"
 	"matrixone/pkg/sql/colexec/dedup"
 	"matrixone/pkg/sql/colexec/exchange"
@@ -18,18 +14,11 @@ import (
 	"matrixone/pkg/sql/colexec/mergeorder"
 	"matrixone/pkg/sql/colexec/mergesum"
 	"matrixone/pkg/sql/colexec/mergetop"
-	"matrixone/pkg/sql/colexec/myoutput"
 	"matrixone/pkg/sql/colexec/offset"
 	"matrixone/pkg/sql/colexec/order"
 	"matrixone/pkg/sql/colexec/output"
 	"matrixone/pkg/sql/colexec/projection"
 	"matrixone/pkg/sql/colexec/restrict"
-	"matrixone/pkg/sql/colexec/set/difference"
-	"matrixone/pkg/sql/colexec/set/differenceR"
-	"matrixone/pkg/sql/colexec/set/inner"
-	"matrixone/pkg/sql/colexec/set/intersect"
-	"matrixone/pkg/sql/colexec/set/natural"
-	"matrixone/pkg/sql/colexec/set/union"
 	"matrixone/pkg/sql/colexec/summarize"
 	"matrixone/pkg/sql/colexec/top"
 	"matrixone/pkg/sql/colexec/transfer"
@@ -47,25 +36,24 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	Restrict:          restrict.String,
 	Summarize:         summarize.String,
 	Projection:        projection.String,
-	SetUnion:          union.String,
-	SetIntersect:      intersect.String,
-	SetDifference:     difference.String,
-	SetDifferenceR:    differenceR.String,
+	SetUnion:          nil,
+	SetIntersect:      nil,
+	SetDifference:     nil,
+	SetDifferenceR:    nil,
 	SetFullJoin:       nil,
 	SetLeftJoin:       nil,
 	SetSemiJoin:       nil,
-	SetInnerJoin:      inner.String,
+	SetInnerJoin:      nil,
 	SetRightJoin:      nil,
-	SetNaturalJoin:    natural.String,
+	SetNaturalJoin:    nil,
 	SetSemiDifference: nil,
 	BagUnion:          bunion.String,
-	BagIntersect:      bintersect.String,
-	BagDifference:     bdifference.String,
-	BagDifferenceR:    bdifferenceR.String,
+	BagIntersect:      nil,
+	BagDifference:     nil,
+	BagDifferenceR:    nil,
 	BagInnerJoin:      binner.String,
-	BagNaturalJoin:    bnatural.String,
+	BagNaturalJoin:    nil,
 	Output:            output.String,
-	MyOutput:          myoutput.String,
 	Exchange:          exchange.String,
 	Merge:             merge.String,
 	MergeTop:          mergetop.String,
@@ -86,25 +74,24 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	Restrict:          restrict.Prepare,
 	Summarize:         summarize.Prepare,
 	Projection:        projection.Prepare,
-	SetUnion:          union.Prepare,
-	SetIntersect:      intersect.Prepare,
-	SetDifference:     difference.Prepare,
-	SetDifferenceR:    differenceR.Prepare,
+	SetUnion:          nil,
+	SetIntersect:      nil,
+	SetDifference:     nil,
+	SetDifferenceR:    nil,
 	SetFullJoin:       nil,
 	SetLeftJoin:       nil,
 	SetSemiJoin:       nil,
-	SetInnerJoin:      inner.Prepare,
+	SetInnerJoin:      nil,
 	SetRightJoin:      nil,
-	SetNaturalJoin:    natural.Prepare,
+	SetNaturalJoin:    nil,
 	SetSemiDifference: nil,
 	BagUnion:          bunion.Prepare,
-	BagIntersect:      bintersect.Prepare,
-	BagDifference:     bdifference.Prepare,
-	BagDifferenceR:    bdifferenceR.Prepare,
+	BagIntersect:      nil,
+	BagDifference:     nil,
+	BagDifferenceR:    nil,
 	BagInnerJoin:      binner.Prepare,
-	BagNaturalJoin:    bnatural.Prepare,
+	BagNaturalJoin:    nil,
 	Output:            output.Prepare,
-	MyOutput:          myoutput.Prepare,
 	Exchange:          exchange.Prepare,
 	Merge:             merge.Prepare,
 	MergeTop:          mergetop.Prepare,
@@ -125,25 +112,24 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	Restrict:          restrict.Call,
 	Summarize:         summarize.Call,
 	Projection:        projection.Call,
-	SetUnion:          union.Call,
-	SetIntersect:      intersect.Call,
-	SetDifference:     difference.Call,
-	SetDifferenceR:    differenceR.Call,
+	SetUnion:          nil,
+	SetIntersect:      nil,
+	SetDifference:     nil,
+	SetDifferenceR:    nil,
 	SetFullJoin:       nil,
 	SetLeftJoin:       nil,
 	SetSemiJoin:       nil,
-	SetInnerJoin:      inner.Call,
+	SetInnerJoin:      nil,
 	SetRightJoin:      nil,
-	SetNaturalJoin:    natural.Call,
+	SetNaturalJoin:    nil,
 	SetSemiDifference: nil,
 	BagUnion:          bunion.Call,
-	BagIntersect:      bintersect.Call,
-	BagDifference:     bdifference.Call,
-	BagDifferenceR:    bdifferenceR.Call,
+	BagIntersect:      nil,
+	BagDifference:     nil,
+	BagDifferenceR:    nil,
 	BagInnerJoin:      binner.Call,
-	BagNaturalJoin:    bnatural.Call,
+	BagNaturalJoin:    nil,
 	Output:            output.Call,
-	MyOutput:          myoutput.Call,
 	Exchange:          exchange.Call,
 	Merge:             merge.Call,
 	MergeTop:          mergetop.Call,

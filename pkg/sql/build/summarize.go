@@ -19,11 +19,12 @@ import (
 )
 
 var AggFuncs map[string]int = map[string]int{
-	"avg":   aggregation.Avg,
-	"max":   aggregation.Max,
-	"min":   aggregation.Min,
-	"sum":   aggregation.Sum,
-	"count": aggregation.Count,
+	"avg":       aggregation.Avg,
+	"max":       aggregation.Max,
+	"min":       aggregation.Min,
+	"sum":       aggregation.Sum,
+	"count":     aggregation.Count,
+	"starcount": aggregation.StarCount,
 }
 
 func (b *build) hasSummarize(ns tree.SelectExprs) bool {

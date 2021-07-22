@@ -1,6 +1,7 @@
 package dedup
 
 import (
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/hash"
 	"matrixone/pkg/intmap/fastmap"
 )
@@ -15,16 +16,15 @@ var (
 )
 
 type Container struct {
-	diffs      []bool
-	matchs     []int64
-	hashs      []uint64
-	sels       [][]int64    // sels
-	slots      *fastmap.Map // hash code -> sels index
-	dedupState struct {
-		data []byte
-		sels []int64
-	}
-	groups map[uint64][]*hash.DedupGroup // hash code -> group list
+	n      int
+	rows   int64
+	diffs  []bool
+	matchs []int64
+	hashs  []uint64
+	sels   [][]int64    // sels
+	slots  *fastmap.Map // hash code -> sels index
+	bat    *batch.Batch
+	groups map[uint64][]*hash.SetGroup // hash code -> group list
 }
 
 type Argument struct {

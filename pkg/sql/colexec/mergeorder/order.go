@@ -2,19 +2,15 @@ package mergeorder
 
 import (
 	"bytes"
-	"container/heap"
+	"errors"
 	"fmt"
-	"matrixone/pkg/compare"
-	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/partition"
+	"matrixone/pkg/sort"
 	"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
-
-	"github.com/google/uuid"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -32,11 +28,12 @@ func String(arg interface{}, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
-	uuid, err := uuid.NewUUID()
-	if err != nil {
-		return err
+	ctr.ds = make([]bool, len(n.Fs))
+	ctr.attrs = make([]string, len(n.Fs))
+	for i, f := range n.Fs {
+		ctr.attrs[i] = f.Attr
+		ctr.ds[i] = f.Type == Descending
 	}
-	ctr.spill.id = fmt.Sprintf("%s.%v", proc.Id, uuid)
 	return nil
 }
 
@@ -46,17 +43,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			ctr.spill.e = n.E
 			if err := ctr.build(n, proc); err != nil {
 				ctr.clean(proc)
 				ctr.state = End
 				return true, err
 			}
-			if len(ctr.ptns) == 0 {
-				ctr.state = EvalPrepare
-			} else {
-				ctr.state = Merge
-			}
+			ctr.state = Eval
 		case Eval:
 			if err := ctr.eval(proc); err != nil {
 				ctr.state = End
@@ -65,59 +57,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			ctr.bat.Reduce(ctr.attrs, proc)
 			proc.Reg.Ax = ctr.bat
 			ctr.bat = nil
-			if len(ctr.ptn.heap) == 0 {
-				ctr.clean(proc)
-				ctr.state = End
-				return true, nil
-			}
-			return false, nil
-		case Merge:
-			if err := ctr.merge(proc); err != nil {
-				ctr.clean(proc)
-				ctr.state = End
-				return true, err
-			}
-			ctr.state = MergeEval
-		case MergeEval:
-			if err := ctr.mergeeval(proc); err != nil {
-				ctr.clean(proc)
-				ctr.state = End
-				return true, err
-			}
-			ctr.bat.Reduce(ctr.attrs, proc)
-			proc.Reg.Ax = ctr.bat
-			ctr.bat = nil
-			if len(ctr.heap) == 0 {
-				ctr.clean(proc)
-				ctr.state = End
-				return true, nil
-			}
-			return false, nil
-		case EvalPrepare:
-			for _, bat := range ctr.ptn.bats {
-				if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-					ctr.clean(proc)
-					ctr.state = End
-					return true, err
-				}
-			}
-			ptn := ctr.ptn
-			ptn.mins = make([]int64, len(ptn.bats))
-			ptn.lens = make([]int64, len(ptn.bats))
-			for i, bat := range ptn.bats {
-				if n := len(bat.Sels); n > 0 {
-					ptn.lens[i] = int64(n)
-				} else {
-					n, err := bat.Length(proc)
-					if err != nil {
-						ctr.clean(proc)
-						ctr.state = End
-						return true, err
-					}
-					ptn.lens[i] = int64(n)
-				}
-			}
-			ctr.state = Eval
+			ctr.clean(proc)
+			ctr.state = End
+			return true, nil
 		case End:
 			proc.Reg.Ax = nil
 			return true, nil
@@ -146,378 +88,128 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				reg.Wg.Done()
 				continue
 			}
-			if ctr.attrs == nil {
-				ctr.attrs = make([]string, len(n.Fs))
-				for i, f := range n.Fs {
-					ctr.attrs[i] = f.Attr
-				}
+			if ctr.bat == nil {
 				bat.Reorder(ctr.attrs)
-				ctr.spill.attrs = make([]string, len(bat.Attrs))
-				for i, attr := range bat.Attrs {
-					ctr.spill.attrs[i] = attr
+			} else {
+				bat.Reorder(ctr.bat.Attrs)
+			}
+			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
+				reg.Ch = nil
+				reg.Wg.Done()
+				bat.Clean(proc)
+				return err
+			}
+			if ctr.bat == nil {
+				ctr.bat = batch.New(true, bat.Attrs)
+				for i, vec := range bat.Vecs {
+					ctr.bat.Vecs[i] = vector.New(vec.Typ)
 				}
-				ctr.cmps = make([]compare.Compare, len(n.Fs))
-				for i, f := range n.Fs {
-					ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, f.Type == Descending)
-				}
-				ctr.spill.cs = make([]uint64, len(bat.Attrs))
-				ctr.spill.md = make([]metadata.Attribute, len(bat.Attrs))
-				for i, attr := range bat.Attrs {
-					vec, err := bat.GetVector(attr, proc)
-					if err != nil {
-						reg.Ch = nil
-						reg.Wg.Done()
-						bat.Clean(proc)
-						return err
+			}
+			if len(bat.Sels) == 0 {
+				for sel, nsel := int64(0), int64(bat.Vecs[0].Length()); sel < nsel; sel++ {
+					{
+						for i, vec := range ctr.bat.Vecs {
+							if vec.Data == nil {
+								if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
+									reg.Ch = nil
+									reg.Wg.Done()
+									bat.Clean(proc)
+									return err
+								}
+								copy(vec.Data[:mempool.CountSize], bat.Vecs[i].Data[:mempool.CountSize])
+							} else {
+								if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
+									reg.Ch = nil
+									reg.Wg.Done()
+									bat.Clean(proc)
+									return err
+								}
+							}
+						}
 					}
-					ctr.spill.md[i] = metadata.Attribute{
-						Name: attr,
-						Type: vec.Typ,
-						Alg:  compress.Lz4,
-					}
-					ctr.spill.cs[i] = encoding.DecodeUint64(vec.Data[:mempool.CountSize])
 				}
 			} else {
-				bat.Reorder(ctr.spill.attrs)
-			}
-			if ctr.ptn == nil {
-				ctr.ptn = &partition{cmps: ctr.cmps}
-			}
-			{
-				n, err := bat.Length(proc)
-				if err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-					bat.Clean(proc)
-					return err
-				}
-				ctr.ptn.rows += int64(n)
-			}
-			/*
-				if ctr.ptn.rows > proc.Lim.PartitionRows {
-					if err := ctr.newSpill(ctr.ptn, proc); err != nil {
-						reg.Ch = nil
-						reg.Wg.Done()
-						bat.Clean(proc)
-						return err
-					}
-					for i, pbat := range ctr.ptn.bats {
-						if err := pbat.Prefetch(pbat.Attrs, pbat.Vecs, proc); err != nil {
-							reg.Ch = nil
-							reg.Wg.Done()
-							bat.Clean(proc)
-							ctr.ptn.bats = ctr.ptn.bats[i:]
-							return err
+				for _, sel := range bat.Sels {
+					{
+						for i, vec := range ctr.bat.Vecs {
+							if vec.Data == nil {
+								if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
+									reg.Ch = nil
+									reg.Wg.Done()
+									bat.Clean(proc)
+									return err
+								}
+								copy(vec.Data[:mempool.CountSize], bat.Vecs[i].Data[:mempool.CountSize])
+							} else {
+								if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
+									reg.Ch = nil
+									reg.Wg.Done()
+									bat.Clean(proc)
+									return err
+								}
+							}
+							ctr.bat.Vecs[i] = vec
 						}
-						if err := ctr.ptn.r.Write(pbat); err != nil {
-							reg.Ch = nil
-							reg.Wg.Done()
-							bat.Clean(proc)
-							ctr.ptn.bats = ctr.ptn.bats[i:]
-							return err
-						}
-						pbat.Clean(proc)
 					}
-					ctr.ptn.bats = nil
-					if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-						reg.Ch = nil
-						reg.Wg.Done()
-						bat.Clean(proc)
-						return err
-					}
-					if err := ctr.ptn.r.Write(bat); err != nil {
-						reg.Ch = nil
-						reg.Wg.Done()
-						bat.Clean(proc)
-						return err
-					}
-					bat.Clean(proc)
-					ctr.ptns = append(ctr.ptns, ctr.ptn)
-					ctr.ptn = nil
-				} else {
-					ctr.ptn.bats = append(ctr.ptn.bats, bat)
 				}
-			*/
-			{
-				ctr.ptn.bats = append(ctr.ptn.bats, bat)
 			}
+			if proc.Size() > proc.Lim.Size {
+				reg.Ch = nil
+				reg.Wg.Done()
+				bat.Clean(proc)
+				return errors.New("out of memory")
+			}
+			bat.Clean(proc)
 			reg.Wg.Done()
 		}
 	}
-	/*
-		if ctr.ptn != nil && len(ctr.ptns) > 0 {
-			if err := ctr.newSpill(ctr.ptn, proc); err != nil {
-				return err
-			}
-			for i, bat := range ctr.ptn.bats {
-				if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-					ctr.ptn.bats = ctr.ptn.bats[i:]
-					return err
-				}
-				if err := ctr.ptn.r.Write(bat); err != nil {
-					ctr.ptn.bats = ctr.ptn.bats[i:]
-					return err
-				}
-				bat.Clean(proc)
-			}
-		}
-	*/
 	return nil
 }
 
 func (ctr *Container) eval(proc *process.Process) error {
-	if ctr.ptn.heap == nil {
-		ctr.ptn.heap = make([]int, len(ctr.ptn.bats))
-		for i := range ctr.ptn.bats {
-			ctr.ptn.heap[i] = i
-		}
-		heap.Init(ctr.ptn)
-	}
-	if ctr.bat == nil {
-		ctr.bat = batch.New(true, ctr.spill.attrs)
-		for i := range ctr.spill.md {
-			ctr.bat.Vecs[i] = vector.New(ctr.spill.md[i].Type)
-		}
-	}
-	return ctr.ptn.emit(ctr.bat, proc)
-}
-
-func (ctr *Container) merge(proc *process.Process) error {
-	var bat *batch.Batch
-
-	for _, ptn := range ctr.ptns {
-		if err := ctr.loads(ptn, proc); err != nil {
-			return err
-		}
-		if ptn.heap == nil {
-			ptn.heap = make([]int, len(ptn.bats))
-			for i := range ptn.bats {
-				ptn.heap[i] = i
-			}
-			heap.Init(ptn)
-		}
-		segs := ptn.r.Segments()
-		for len(ptn.heap) > 0 {
-			if bat == nil {
-				bat = batch.New(true, ctr.spill.attrs)
-				for i := range ctr.spill.md {
-					bat.Vecs[i] = vector.New(ctr.spill.md[i].Type)
-				}
-			}
-			if err := ptn.emit(bat, proc); err != nil {
-				return err
-			}
-			if err := ptn.r.Write(bat); err != nil {
-				return err
-			}
-			bat.Clean(proc)
-			bat = nil
-		}
-		ptn.segs = ptn.r.Segments()[len(segs):]
-		for _, bat := range ptn.bats {
-			bat.Clean(proc)
-		}
-		ptn.bats = nil
-	}
-	return nil
-}
-
-func (ctr *Container) mergeeval(proc *process.Process) error {
-	if ctr.heap == nil {
-		ctr.heap = make([]int, len(ctr.ptns))
-		for i := range ctr.heap {
-			ctr.heap[i] = i
-		}
-		ctr.mins = make([]int64, len(ctr.heap))
-		ctr.lens = make([]int64, len(ctr.heap))
-		for i, ptn := range ctr.ptns {
-			if err := ctr.load(ptn, proc); err != nil {
-				return err
-			}
-			if n := len(ptn.bat.Sels); n > 0 {
-				ctr.lens[i] = int64(n)
-			} else {
-				n, err := ptn.bat.Length(proc)
-				if err != nil {
-					return err
-				}
-				ctr.lens[i] = int64(n)
-			}
-		}
-		heap.Init(ctr)
-	}
-	if ctr.bat == nil {
-		ctr.bat = batch.New(true, ctr.spill.attrs)
-		for i := range ctr.spill.md {
-			ctr.bat.Vecs[i] = vector.New(ctr.spill.md[i].Type)
-		}
-	}
-	for row := int64(0); row < proc.Lim.BatchRows; row++ {
-		if len(ctr.heap) == 0 {
-			break
-		}
-		idx := ctr.heap[0]
-		min := ctr.mins[idx]
-		if len(ctr.ptns[idx].bat.Sels) > 0 {
-			min = ctr.ptns[idx].bat.Sels[min]
-		}
-		for i, vec := range ctr.bat.Vecs {
-			if vec.Data == nil {
-				if err := vec.UnionOne(ctr.ptns[idx].bat.Vecs[i], min, proc); err != nil {
-					return err
-				}
-				copy(vec.Data[:mempool.CountSize], ctr.ptns[idx].bat.Vecs[i].Data[:mempool.CountSize])
-			} else {
-				if err := vec.UnionOne(ctr.ptns[idx].bat.Vecs[i], min, proc); err != nil {
-					return err
-				}
-			}
-		}
-		if ctr.mins[idx]+1 < ctr.lens[idx] {
-			ctr.mins[idx]++
-			heap.Fix(ctr, 0)
-		} else {
-			ptn := ctr.ptns[idx]
-			ptn.bat.Clean(proc)
-			if err := ctr.load(ptn, proc); err != nil {
-				return err
-			}
-			ctr.mins[idx] = 0
-			if ptn.bat == nil {
-				heap.Remove(ctr, 0)
-			} else if n := len(ptn.bat.Sels); n > 0 {
-				ctr.lens[idx] = int64(n)
-			} else {
-				n, err := ptn.bat.Length(proc)
-				if err != nil {
-					return err
-				}
-				ctr.lens[idx] = int64(n)
-			}
-		}
-	}
-	return nil
-}
-
-func (ctr *Container) load(ptn *partition, proc *process.Process) error {
-	if ptn.r == nil {
-		ptn.bat = ptn.bats[0]
-		ptn.bats = ptn.bats[1:]
-		return nil
-	}
-	if len(ptn.segs) == 0 {
-		ptn.bat = nil
-		return nil
-	}
-	seg := ptn.r.Segment(ptn.segs[0], proc)
-	bat, err := seg.Block(seg.Blocks()[0], proc).Prefetch(ctr.spill.cs, ctr.spill.attrs, proc)
+	ovec := ctr.bat.Vecs[0]
+	n := ovec.Length()
+	data, err := proc.Alloc(int64(n * 8))
 	if err != nil {
 		return err
 	}
-	if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-		bat.Clean(proc)
-		return err
-	}
-	ptn.bat = bat
-	ptn.segs = ptn.segs[1:]
-	return nil
-}
-
-func (ctr *Container) loads(ptn *partition, proc *process.Process) error {
-	if ptn.bats == nil {
-		ptn.bats = make([]*batch.Batch, 0, len(ptn.segs))
-		ids := ptn.r.Segments()
-		for _, id := range ids {
-			seg := ptn.r.Segment(id, proc)
-			bat, err := seg.Block(seg.Blocks()[0], proc).Prefetch(ctr.spill.cs, ctr.spill.attrs, proc)
-			if err != nil {
-				return err
-			}
-			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-				bat.Clean(proc)
-				return err
-			}
-			ptn.bats = append(ptn.bats, bat)
+	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
+	sels = sels[:n]
+	{
+		for i := range sels {
+			sels[i] = int64(i)
 		}
 	}
-	ptn.mins = make([]int64, len(ptn.bats))
-	ptn.lens = make([]int64, len(ptn.bats))
-	for i, bat := range ptn.bats {
-		if n := len(bat.Sels); n > 0 {
-			ptn.lens[i] = int64(n)
-		} else {
-			n, err := bat.Length(proc)
-			if err != nil {
-				return err
-			}
-			ptn.lens[i] = int64(n)
-		}
+	sort.Sort(ctr.ds[0], sels, ovec)
+	if len(ctr.attrs) == 1 {
+		ctr.bat.Sels = sels
+		ctr.bat.SelsData = data
+		return nil
 	}
-	return nil
-}
-
-func (ctr *Container) newSpill(ptn *partition, proc *process.Process) error {
-	var defs []engine.TableDef
-
-	for _, attr := range ctr.spill.md {
-		defs = append(defs, &engine.AttributeDef{attr})
-	}
-	id := pkey(ctr.spill.id, len(ctr.ptns))
-	if err := ctr.spill.e.Create(id, defs, nil, nil, ""); err != nil {
-		return err
-	}
-	r, err := ctr.spill.e.Relation(id)
-	if err != nil {
-		ctr.spill.e.Delete(id)
-		return err
-	}
-	ptn.r = r
-	return nil
-}
-
-func (ptn *partition) emit(bat *batch.Batch, proc *process.Process) error {
-	for row := int64(0); row < proc.Lim.BatchRows; row++ {
-		if len(ptn.heap) == 0 {
-			break
-		}
-		idx := ptn.heap[0]
-		min := ptn.mins[idx]
-		if len(ptn.bats[idx].Sels) > 0 {
-			min = ptn.bats[idx].Sels[min]
-		}
-		for i, vec := range bat.Vecs {
-			if vec.Data == nil {
-				if err := vec.UnionOne(ptn.bats[idx].Vecs[i], min, proc); err != nil {
-					return err
-				}
-				copy(vec.Data[:mempool.CountSize], ptn.bats[idx].Vecs[i].Data[:mempool.CountSize])
+	ps := make([]int64, 0, 16)
+	ds := make([]bool, len(sels))
+	for i, j := 1, len(ctr.attrs); i < j; i++ {
+		desc := ctr.ds[i]
+		ps = partition.Partition(sels, ds, ps, ovec)
+		vec := ctr.bat.Vecs[i]
+		for i, j := 0, len(ps); i < j; i++ {
+			if i == j-1 {
+				sort.Sort(desc, sels[ps[i]:], vec)
 			} else {
-				if err := vec.UnionOne(ptn.bats[idx].Vecs[i], min, proc); err != nil {
-					return err
-				}
+				sort.Sort(desc, sels[ps[i]:ps[i+1]], vec)
 			}
 		}
-		if ptn.mins[idx]+1 < ptn.lens[idx] {
-			ptn.mins[idx]++
-			heap.Fix(ptn, 0)
-		} else {
-			heap.Remove(ptn, 0)
-		}
+		ovec = vec
 	}
+	ctr.bat.Sels = sels
+	ctr.bat.SelsData = data
 	return nil
+
 }
 
 func (ctr *Container) clean(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc)
-	}
-	for i, ptn := range ctr.ptns {
-		for _, bat := range ptn.bats {
-			bat.Clean(proc)
-		}
-		if ptn.r != nil {
-			ctr.spill.e.Delete(pkey(ctr.spill.id, i))
-		}
 	}
 	{
 		for _, reg := range proc.Reg.Ws {
@@ -541,8 +233,4 @@ func (ctr *Container) clean(proc *process.Process) {
 			}
 		}
 	}
-}
-
-func pkey(id string, num int) string {
-	return fmt.Sprintf("%s.%v", id, num)
 }
