@@ -228,7 +228,7 @@ func TestLogIndex(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 
 	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Nil(t, err)
