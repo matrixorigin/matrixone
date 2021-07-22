@@ -24,29 +24,30 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString("]")
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
-	n := arg.(*Argument)
-	n.Ctr.attrs = make([]string, len(n.Es))
-	for i, e := range n.Es {
-		n.Ctr.attrs[i] = e.Alias
-	}
+func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
+	n := arg.(*Argument)
+	{
+		n.Ctr.attrs = make([]string, len(n.Es))
+		for i, e := range n.Es {
+			n.Ctr.attrs[i] = e.Alias
+		}
+		n.Ctr.refer = n.Refer
+	}
+	ctr := &n.Ctr
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}
-	n := arg.(*Argument)
-	ctr := &n.Ctr
-	ctr.refer = n.Refer
 	bat := proc.Reg.Ax.(*batch.Batch)
-	if bat.Attrs == nil {
+	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
-	ctr.bat = batch.New(true, ctr.attrs)
 	if err := ctr.processBatch(bat, n.Es, proc); err != nil {
-		ctr.clean(bat, proc)
+		bat.Clean(proc)
+		ctr.clean(proc)
 		return false, err
 	}
 	bat.Clean(proc)
@@ -111,10 +112,7 @@ func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, pr
 	return nil
 }
 
-func (ctr *Container) clean(bat *batch.Batch, proc *process.Process) {
-	if bat != nil {
-		bat.Clean(proc)
-	}
+func (ctr *Container) clean(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc)
 	}

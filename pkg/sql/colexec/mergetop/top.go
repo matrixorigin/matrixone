@@ -42,10 +42,10 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		for i := int64(0); i < n.Limit; i++ {
 			sels[i] = i
 		}
-		n.Ctr.data = data
-		n.Ctr.sels = sels[:0]
+		ctr.data = data
+		ctr.sels = sels[:0]
 	}
-	n.Ctr.n = len(n.Fs)
+	ctr.n = len(n.Fs)
 	return nil
 }
 

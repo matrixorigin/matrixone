@@ -7,7 +7,7 @@ import (
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/build"
-	"matrixone/pkg/sql/colexec/myoutput"
+	"matrixone/pkg/sql/colexec/output"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/createDatabase"
 	"matrixone/pkg/sql/op/createTable"
@@ -74,6 +74,9 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 		return err
 	}
 	o = opt.Optimize(o)
+	{
+		fmt.Printf("o: %v\n", o)
+	}
 	ss, err := e.c.compile(o, make(map[string]uint64))
 	if err != nil {
 		return err
@@ -106,8 +109,8 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	}
 	for _, s := range ss {
 		s.Ins = append(s.Ins, vm.Instruction{
-			Op: vm.MyOutput,
-			Arg: &myoutput.Argument{
+			Op: vm.Output,
+			Arg: &output.Argument{
 				Data:  u,
 				Func:  fill,
 				Attrs: attrs,

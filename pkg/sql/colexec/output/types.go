@@ -1,4 +1,4 @@
-package myoutput
+package output
 
 import "matrixone/pkg/container/batch"
 

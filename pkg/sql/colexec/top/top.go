@@ -23,37 +23,40 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", n.Limit))
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
-	n := arg.(*Argument)
-	ctr := &n.Ctr
-	{
-		ctr.attrs = make([]string, len(n.Fs))
-		for i, f := range n.Fs {
-			ctr.attrs[i] = f.Attr
-		}
-	}
-	ctr.n = len(n.Fs)
-	ctr.sels = make([]int64, n.Limit)
-	ctr.cmps = make([]compare.Compare, len(n.Fs))
+func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	var err error
 
-	Prepare(proc, arg)
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}
 	bat := proc.Reg.Ax.(*batch.Batch)
-	if bat.Attrs == nil {
+	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
 	n := arg.(*Argument)
 	ctr := &n.Ctr
-	bat.Reorder(ctr.attrs)
 	{
-		ctr.sels = ctr.sels[:n.Limit]
+		{
+			ctr.attrs = make([]string, len(n.Fs))
+			for i, f := range n.Fs {
+				ctr.attrs[i] = f.Attr
+			}
+		}
+		ctr.n = len(n.Fs)
+		ctr.sels = make([]int64, n.Limit)
+		ctr.cmps = make([]compare.Compare, len(n.Fs))
+
+	}
+	bat.Reorder(ctr.attrs)
+	if err := bat.Prefetch(ctr.attrs, bat.Vecs[:len(ctr.attrs)], proc); err != nil {
+		bat.Clean(proc)
+		return false, err
+	}
+	{
 		for i := int64(0); i < n.Limit; i++ {
 			ctr.sels[i] = i
 		}
@@ -62,10 +65,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, f.Type == Descending)
 			}
 		}
-	}
-	if err = bat.Prefetch(ctr.attrs, bat.Vecs, proc); err != nil {
-		bat.Clean(proc)
-		return false, err
 	}
 	ctr.processBatch(n.Limit, bat)
 	data, err := proc.Alloc(int64(len(ctr.sels) * 8))

@@ -16,15 +16,16 @@ func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint
 					mp[name.Name]++
 					continue
 				}
-			}
-			attr := o.As[i]
-			if v, ok := mp[attr]; ok {
-				refer[attr] = v
-				delete(mp, attr)
 			} else {
-				refer[attr]++
+				attr := o.As[i]
+				if v, ok := mp[attr]; ok {
+					refer[attr] = v
+					delete(mp, attr)
+				} else {
+					refer[attr]++
+				}
+				IncRef(e.E, mp)
 			}
-			IncRef(e.E, mp)
 		}
 	}
 	ss, err := c.compile(o.Prev, mp)
