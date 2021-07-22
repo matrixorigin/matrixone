@@ -37,11 +37,11 @@ func (r *relation) Write(bat *batch.Batch) error {
 		return errors.New("no tablets exists")
 	}
 	targetTbl := r.tablets[rand.Intn(len(r.tablets))]
-	var buf *bytes.Buffer
-	if err := protocol.EncodeBatch(bat, buf); err != nil {
+	var buf bytes.Buffer
+	if err := protocol.EncodeBatch(bat, &buf); err != nil {
 		return err
 	}
-	if buf == nil {
+	if buf.Len() == 0 {
 		return errors.New("empty batch")
 	}
 	return r.catalog.Store.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())

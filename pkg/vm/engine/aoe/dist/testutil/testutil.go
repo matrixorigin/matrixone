@@ -6,6 +6,7 @@ import (
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
+	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
@@ -15,7 +16,7 @@ import (
 )
 
 var (
-	tmpDir    = "./cube-test"
+	tmpDir    = "/tmp/aoe-cluster-test/"
 )
 
 
@@ -24,7 +25,7 @@ type TestCluster struct {
 	Applications []dist.Storage
 }
 
-func NewTestClusterStore(t *testing.T) (*TestCluster, error) {
+func NewTestClusterStore(t *testing.T,  f func(path string) (storage.DataStorage, error)) (*TestCluster, error) {
 	if err := recreateTestTempDir(); err != nil {
 		return nil, err
 	}
@@ -35,10 +36,16 @@ func NewTestClusterStore(t *testing.T) (*TestCluster, error) {
 			return nil, err
 		}
 		pebbleDataStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i))
+		var aoeDataStorage storage.DataStorage
 		if err != nil {
 			return nil, err
 		}
-		aoeDataStorage, err := daoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
+		if f == nil {
+			aoeDataStorage, err = daoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
+		} else {
+			aoeDataStorage, err = f(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
+		}
+
 		if err != nil {
 			return nil, err
 		}

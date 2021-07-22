@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"fmt"
+	stdLog "log"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
@@ -313,6 +314,7 @@ func DecodeExtend(data []byte) (extend.Extend, []byte, error) {
 
 func EncodeBatch(bat *batch.Batch, buf *bytes.Buffer) error {
 	sn := len(bat.Sels)
+	stdLog.Printf("length of sn %d", sn)
 	buf.Write(encoding.EncodeUint32(uint32(sn)))
 	if sn > 0 {
 		buf.Write(encoding.EncodeInt64Slice(bat.Sels))

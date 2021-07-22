@@ -38,7 +38,7 @@ func (db *database) Relations() []string {
 	for _, tb := range tbs {
 		rs = append(rs, tb.Name)
 	}
-	return nil
+	return rs
 }
 
 func (db *database) Relation(name string) (engine.Relation, error) {

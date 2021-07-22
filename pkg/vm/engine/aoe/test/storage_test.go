@@ -5,22 +5,25 @@ import (
 	"fmt"
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
+	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"testing"
 	"time"
 )
 
-var (
-	blockRows          uint64 = 100
+const (
+	blockRows          uint64 = 2
 	blockCntPerSegment uint64 = 4
 	insertRows                = blockRows * blockCntPerSegment * 10
 	insertCnt          uint64 = 20
@@ -29,7 +32,24 @@ var (
 
 
 func TestAOEStorage(t *testing.T) {
-	c, err := testutil.NewTestClusterStore(t)
+	c, err := testutil.NewTestClusterStore(t, func(path string) (storage.DataStorage, error) {
+		opts     := &e.Options{}
+		mdCfg := &md.Configuration{
+			Dir:              path,
+			SegmentMaxBlocks: blockCntPerSegment,
+			BlockMaxRows:     blockRows,
+		}
+		opts.CacheCfg = &e.CacheCfg{
+			IndexCapacity:  blockRows * blockCntPerSegment * 80,
+			InsertCapacity: blockRows * uint64(colCnt) * 2000,
+			DataCapacity:   blockRows * uint64(colCnt) * 2000,
+		}
+		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+			Interval: time.Duration(1) * time.Second,
+		}
+		opts.Meta.Conf = mdCfg
+		return daoe.NewStorageWithOptions(path, opts)
+	})
 	defer c.Stop()
 	time.Sleep(2 * time.Second)
 
