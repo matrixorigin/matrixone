@@ -3,12 +3,10 @@ package engine
 import (
 	"github.com/fagongzi/util/format"
 	log "github.com/sirupsen/logrus"
-	stdLog "log"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/metadata"
-	"time"
 )
 
 
@@ -18,13 +16,11 @@ func (db *database) Type() int {
 }
 
 func (db *database) Delete(name string) error {
-	stdLog.Printf("[QQQQQQ]Call Delete Table, %s", name)
 	_, err :=  db.catalog.DropTable(db.id, name)
 	return err
 }
 
 func (db *database) Create(name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
-	stdLog.Printf("[QQQQQQ]Call Create Table, %s", name)
 	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
 	if err != nil {
 		return err
@@ -46,12 +42,10 @@ func (db *database) Relations() []string {
 }
 
 func (db *database) Relation(name string) (engine.Relation, error) {
-	t0 := time.Now()
 	tablets, err := db.catalog.GetTablets(db.id, name)
 	if err != nil {
 		return nil, err
 	}
-	stdLog.Printf("[QQQQQQ]Call database.Relation, GetTablets %s finished, cost %d ms", name, time.Since(t0).Milliseconds())
 	if tablets == nil || len(tablets) == 0 {
 		return nil, catalog.ErrTableNotExists
 	}
@@ -86,7 +80,6 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 
 		}
 	}
-	stdLog.Printf("[QQQQQQ]Call database.Relation, %s finished, cost %d ms", name, time.Since(t0).Milliseconds())
 	return r, nil
 }
 

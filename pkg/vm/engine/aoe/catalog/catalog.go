@@ -231,7 +231,6 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 }
 
 func (c *Catalog) DropTable(dbId uint64, tableName string) (uint64, error) {
-	t0 := time.Now()
 	_, err := c.checkDBExists(dbId)
 	if err != nil {
 		return 0, err
@@ -257,7 +256,6 @@ func (c *Catalog) DropTable(dbId uint64, tableName string) (uint64, error) {
 	}
 	err = c.Store.Delete(c.tableIDKey(dbId, tableName))
 	//TODO：Data Cleanup Notify
-	stdLog.Printf("[QQQQQQ]Call Drop Table finished, cost %d ms", time.Since(t0).Milliseconds())
 	return tb.Id, err
 
 }
@@ -326,8 +324,6 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 		}
 		var tablets []aoe.TabletInfo
 		for _, shardId := range shardIds {
-			stdLog.Printf("[QQQ] %v, %v, %v", string(shardId), string(c.routePrefix(dbId, tb.Id)), string(shardId[len(c.routePrefix(dbId, tb.Id)):]))
-
 			if sid, err := format.ParseStrUInt64(string(shardId[len(c.routePrefix(dbId, tb.Id)):])); err != nil {
 				stdLog.Printf("convert shardid failed, %v", err)
 				continue

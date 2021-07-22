@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	blockRows          uint64 = 100
+	blockRows          uint64 = 2
 	blockCntPerSegment uint64 = 4
 	insertRows                = blockRows * blockCntPerSegment * 10
 	insertCnt          uint64 = 20

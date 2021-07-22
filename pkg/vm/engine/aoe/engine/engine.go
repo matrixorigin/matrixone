@@ -1,7 +1,6 @@
 package engine
 
 import (
-	stdLog "log"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
 )
@@ -32,7 +31,6 @@ func (e *aoeEngine) Delete(name string) error {
 }
 
 func (e *aoeEngine) Create(name string, typ int) error {
-	stdLog.Printf("[QQQ] call engine.Create, %s", name)
 	_, err := e.catalog.CreateDatabase(name, typ)
 	return err
 }
@@ -48,13 +46,10 @@ func (e *aoeEngine) Databases() []string {
 }
 
 func (e *aoeEngine) Database(name string) (engine.Database, error) {
-	stdLog.Printf("[QQQ] call engine.Database(name string), %s", name)
 	db, err := e.catalog.GetDB(name)
 	if err != nil {
-		stdLog.Printf("[QQQ] call engine.Database(name string) failed, %s, %s", name, err.Error())
 		return nil, err
 	}
-	stdLog.Printf("[QQQ] call engine.Database(name string) finished, %d, %s", db.Id, name)
 	return &database{
 		id:      db.Id,
 		typ:     db.Type,
