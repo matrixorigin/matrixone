@@ -4,6 +4,7 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -12,10 +13,10 @@ type Node struct {
 	BufMgr      bmgrif.IBufferManager
 	BufNode     nif.INodeHandle
 	Capacity    uint64
-	VFile       bmgrif.IVFile
+	VFile       common.IVFile
 }
 
-func newNode(bufMgr bmgrif.IBufferManager, vf bmgrif.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) bmgrif.INode {
+func newNode(bufMgr bmgrif.IBufferManager, vf common.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) bmgrif.INode {
 	node := &Node{
 		BufMgr:      bufMgr,
 		VFile:       vf,

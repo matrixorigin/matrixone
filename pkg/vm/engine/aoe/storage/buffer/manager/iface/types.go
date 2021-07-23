@@ -8,13 +8,6 @@ import (
 	"sync"
 )
 
-type IVFile interface {
-	io.Reader
-	Ref()
-	Unref()
-	// io.Writer
-}
-
 type INode interface {
 	io.Closer
 	GetManagedNode() MangaedNode
