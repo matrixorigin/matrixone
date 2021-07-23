@@ -12,7 +12,7 @@ import (
 )
 
 func NumericBsiIndexConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return nil
+	return NewNumericBsiEmptyNode(capacity, freeFunc)
 }
 
 type NumericBsiIndex struct {
@@ -23,7 +23,7 @@ type NumericBsiIndex struct {
 	FreeFunc  buf.MemoryFreeFunc
 }
 
-func initBsi(t types.Type, bitSize int) *bsi.NumericBSI {
+func initNumericBsi(t types.Type, bitSize int) *bsi.NumericBSI {
 	var bsiIdx bsi.BitSlicedIndex
 	switch t.Oid {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
@@ -39,7 +39,7 @@ func initBsi(t types.Type, bitSize int) *bsi.NumericBSI {
 }
 
 func NewNumericBsiIndex(t types.Type, bitSize int, colIdx int16) *NumericBsiIndex {
-	bsiIdx := initBsi(t, bitSize)
+	bsiIdx := initNumericBsi(t, bitSize)
 	return &NumericBsiIndex{
 		T:          t,
 		Col:        colIdx,
@@ -91,7 +91,7 @@ func (i *NumericBsiIndex) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	buf := data[2 : 2+encoding.TypeSize]
 	i.T = encoding.DecodeType(buf)
-	i.NumericBSI = *initBsi(i.T, 0)
+	i.NumericBSI = *initNumericBsi(i.T, 0)
 	err = i.Unmarshall(data)
 	return int64(nr), err
 }
