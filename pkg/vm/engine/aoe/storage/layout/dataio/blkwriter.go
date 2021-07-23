@@ -3,7 +3,6 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
-	"io"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	e "matrixone/pkg/vm/engine/aoe/storage"
@@ -127,10 +126,7 @@ func (bw *BlockWriter) flushColsData(w *os.File, data []*vector.Vector, meta *md
 	if _, err := w.Write(buf.Bytes()); err != nil {
 		return err
 	}
-	var colDataPos []int64
 	for idx := 0; idx < colCnt; idx++ {
-		offset, _ := w.Seek(0, io.SeekCurrent)
-		colDataPos = append(colDataPos, offset)
 		if _, err := w.Write(colBufs[idx]); err != nil {
 			return err
 		}

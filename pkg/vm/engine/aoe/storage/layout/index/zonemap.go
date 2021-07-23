@@ -15,12 +15,12 @@ func ZoneMapIndexConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.I
 }
 
 type ZoneMapIndex struct {
-	T        types.Type
-	MinV     interface{}
-	MaxV     interface{}
-	Col      int16
-	FreeFunc buf.MemoryFreeFunc
-	Capacity uint64
+	T         types.Type
+	MinV      interface{}
+	MaxV      interface{}
+	Col       int16
+	FreeFunc  buf.MemoryFreeFunc
+	AllocSize uint64
 }
 
 func NewZoneMap(t types.Type, minv, maxv interface{}, colIdx int16) Index {
@@ -34,8 +34,8 @@ func NewZoneMap(t types.Type, minv, maxv interface{}, colIdx int16) Index {
 
 func NewZoneMapEmptyNode(capacity uint64, freeFunc buf.MemoryFreeFunc) Index {
 	return &ZoneMapIndex{
-		Capacity: capacity,
-		FreeFunc: freeFunc,
+		AllocSize: capacity,
+		FreeFunc:  freeFunc,
 	}
 }
 
@@ -83,18 +83,18 @@ func (i *ZoneMapIndex) FreeMemory() {
 }
 
 func (i *ZoneMapIndex) GetMemorySize() uint64 {
-	return i.Capacity
+	return i.AllocSize
 }
 
 func (i *ZoneMapIndex) GetMemoryCapacity() uint64 {
-	return i.Capacity
+	return i.AllocSize
 }
 
 func (i *ZoneMapIndex) Reset() {
 }
 
 func (i *ZoneMapIndex) ReadFrom(r io.Reader) (n int64, err error) {
-	buf := make([]byte, i.Capacity)
+	buf := make([]byte, i.AllocSize)
 	nr, err := r.Read(buf)
 	if err != nil {
 		return int64(nr), err

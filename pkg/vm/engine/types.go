@@ -22,7 +22,6 @@ const (
 )
 
 type SegmentInfo struct {
-	Version  uint64
 	Id       string
 	GroupId  string
 	TabletId string

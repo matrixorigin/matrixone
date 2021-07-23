@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/block"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
@@ -43,48 +42,50 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString("]")
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
-	n := arg.(*Argument)
-	is := make([]int, len(n.Es))
-	attrs := make([]string, 0, len(n.Gs)+len(n.Es))
-	rattrs := make([]string, len(n.Gs)+len(n.Es))
-	{
-		mp := make(map[string]int)
-		for i, g := range n.Gs {
-			rattrs[i] = g
-			if _, ok := mp[g]; !ok {
-				mp[g] = len(attrs)
-				attrs = append(attrs, g)
-			}
-		}
-		for i, e := range n.Es {
-			rattrs[i+len(n.Gs)] = e.Alias
-			if _, ok := mp[e.Name]; !ok {
-				mp[e.Name] = len(attrs)
-				attrs = append(attrs, e.Name)
-			}
-			is[i] = mp[e.Name]
-		}
-	}
-	n.Ctr = Container{
-		is:     is,
-		attrs:  attrs,
-		rattrs: rattrs,
-		n:      len(n.Gs),
-		diffs:  make([]bool, UnitLimit),
-		matchs: make([]int64, UnitLimit),
-		hashs:  make([]uint64, UnitLimit),
-		sels:   make([][]int64, UnitLimit),
-	}
+func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	Prepare(proc, arg)
 	n := arg.(*Argument)
+	{
+		is := make([]int, len(n.Es))
+		attrs := make([]string, 0, len(n.Gs)+len(n.Es))
+		rattrs := make([]string, len(n.Gs)+len(n.Es))
+		{
+			mp := make(map[string]int)
+			for i, g := range n.Gs {
+				rattrs[i] = g
+				if _, ok := mp[g]; !ok {
+					mp[g] = len(attrs)
+					attrs = append(attrs, g)
+				}
+			}
+			for i, e := range n.Es {
+				rattrs[i+len(n.Gs)] = e.Alias
+				if _, ok := mp[e.Name]; !ok {
+					mp[e.Name] = len(attrs)
+					attrs = append(attrs, e.Name)
+				}
+				is[i] = mp[e.Name]
+			}
+		}
+		n.Ctr = Container{
+			is:     is,
+			attrs:  attrs,
+			rattrs: rattrs,
+			refer:  n.Refer,
+			n:      len(n.Gs),
+			diffs:  make([]bool, UnitLimit),
+			matchs: make([]int64, UnitLimit),
+			hashs:  make([]uint64, UnitLimit),
+			sels:   make([][]int64, UnitLimit),
+			groups: make(map[uint64][]*hash.Group),
+			slots:  fastmap.Pool.Get().(*fastmap.Map),
+		}
+
+	}
 	ctr := &n.Ctr
-	ctr.refer = n.Refer
-	ctr.slots = fastmap.Pool.Get().(*fastmap.Map)
 	if proc.Reg.Ax == nil {
 		ctr.clean(proc)
 		return false, nil
@@ -101,22 +102,15 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, err
 	}
 	{
-		ctr.groups = make(map[uint64][]*hash.Group)
-		if ctr.bat == nil {
-			ctr.bat = &block.Block{
-				Attrs: n.Gs,
-				Bat:   batch.New(true, n.Gs),
+		ctr.bat = batch.New(true, n.Gs)
+		for i, attr := range n.Gs {
+			vec, err := bat.GetVector(attr, proc)
+			if err != nil {
+				bat.Clean(proc)
+				ctr.clean(proc)
+				return false, err
 			}
-			for i, attr := range n.Gs {
-				vec, err := bat.GetVector(attr, proc)
-				if err != nil {
-					bat.Clean(proc)
-					ctr.clean(proc)
-					return false, err
-				}
-				ctr.bat.Bat.Vecs[i] = vector.New(vec.Typ)
-			}
-			ctr.bats = append(ctr.bats, ctr.bat)
+			ctr.bat.Vecs[i] = vector.New(vec.Typ)
 		}
 		for i, e := range n.Es {
 			vec, err := bat.GetVector(ctr.attrs[ctr.is[i]], proc)
@@ -177,10 +171,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	proc.Reg.Ax = &batch.Batch{
 		Ro:    true,
 		Attrs: ctr.rattrs,
-		Vecs:  append(ctr.bat.Bat.Vecs, vecs...),
+		Vecs:  append(ctr.bat.Vecs, vecs...),
 	}
 	ctr.bat = nil
-	ctr.bats = nil
 	ctr.clean(proc)
 	return false, nil
 }
@@ -497,7 +490,7 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 			remaining := ctr.sels[ctr.slots.Vs[i][j]]
 			if gs, ok := ctr.groups[h]; ok {
 				for _, g := range gs {
-					if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
+					if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs, proc); err != nil {
 						return err
 					}
 					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
@@ -506,22 +499,24 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 				ctr.groups[h] = make([]*hash.Group, 0, 8)
 			}
 			for len(remaining) > 0 {
-				g := hash.NewGroup(int64(len(ctr.bats)-1), ctr.rows, ctr.is, es)
-				for i, vec := range ctr.bat.Bat.Vecs {
-					if vec.Data == nil {
-						if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-							return err
-						}
-						copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
-					} else {
-						if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-							return err
+				g := hash.NewGroup(ctr.rows, ctr.is, es)
+				{
+					for i, vec := range ctr.bat.Vecs {
+						if vec.Data == nil {
+							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+								return err
+							}
+							copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
+						} else {
+							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+								return err
+							}
 						}
 					}
 				}
 				ctr.rows++
 				ctr.groups[h] = append(ctr.groups[h], g)
-				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bats, ctr.diffs, proc); err != nil {
+				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs, proc); err != nil {
 					return err
 				}
 				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
@@ -579,10 +574,8 @@ func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vecto
 
 func (ctr *Container) clean(proc *process.Process) {
 	fastmap.Pool.Put(ctr.slots)
-	for _, blk := range ctr.bats {
-		if blk.Bat != nil {
-			blk.Bat.Clean(proc)
-			blk.Bat = nil
-		}
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc)
+		ctr.bat = nil
 	}
 }

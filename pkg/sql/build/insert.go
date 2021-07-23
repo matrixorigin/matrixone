@@ -17,7 +17,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 	var attrs []string
 	var bat *batch.Batch
 
-	db, id, r, err := b.tableName(stmt.Table)
+	if _, ok := stmt.Table.(*tree.TableName); !ok {
+		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table: '%v'", stmt.Table))
+	}
+	db, id, r, err := b.tableName(stmt.Table.(*tree.TableName))
 	if err != nil {
 		return nil, err
 	}
@@ -52,6 +55,9 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 		}
 		bat.Vecs[i] = vector.New(typ)
 		delete(mp, attr)
+	}
+	if len(rows.Rows[0]) == 0 {
+		return insert.New(id, db, bat, r), nil
 	}
 	for i, vec := range bat.Vecs {
 		switch vec.Typ.Oid {
@@ -290,19 +296,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 	return insert.New(id, db, bat, r), nil
 }
 
-func (b *build) tableName(stmt tree.TableExpr) (string, string, engine.Relation, error) {
-	jtbl, ok := stmt.(*tree.JoinTableExpr)
-	if !ok {
-		return "", "", nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table: '%v'", stmt))
-	}
-	atbl, ok := jtbl.Left.(*tree.AliasedTableExpr)
-	if !ok {
-		return "", "", nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table: '%v'", stmt))
-	}
-	tbl, ok := atbl.Expr.(*tree.TableName)
-	if !ok {
-		return "", "", nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table: '%v'", stmt))
-	}
+func (b *build) tableName(tbl *tree.TableName) (string, string, engine.Relation, error) {
 	if len(tbl.SchemaName) == 0 {
 		tbl.SchemaName = tree.Identifier(b.db)
 	}

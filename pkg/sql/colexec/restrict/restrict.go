@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/vm/process"
 	"matrixone/pkg/vm/register"
 )
@@ -20,17 +21,22 @@ func Prepare(_ *process.Process, arg interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
+	n := arg.(*Argument)
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}
-	n := arg.(*Argument)
 	bat := proc.Reg.Ax.(*batch.Batch)
-	if bat.Attrs == nil {
+	if bat == nil || bat.Attrs == nil {
+		return false, nil
+	}
+	if _, ok := n.E.(*extend.Attribute); ok {
+		proc.Reg.Ax = bat
 		return false, nil
 	}
 	vec, _, err := n.E.Eval(bat, proc)
 	if err != nil {
-		clean(bat, proc)
+		bat.Clean(proc)
+		clean(proc)
 		return false, err
 	}
 	bat.SelsData = vec.Data
@@ -47,7 +53,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	return false, nil
 }
 
-func clean(bat *batch.Batch, proc *process.Process) {
-	bat.Clean(proc)
+func clean(proc *process.Process) {
 	register.FreeRegisters(proc)
 }
