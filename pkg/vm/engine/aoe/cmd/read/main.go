@@ -2,7 +2,9 @@ package main
 
 import (
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/engine/aoe/local"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
@@ -15,6 +17,7 @@ import (
 	"matrixone/pkg/vm/process"
 	"os"
 	"runtime/pprof"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -126,7 +129,12 @@ func mockData() {
 
 func readData() {
 	impl := makeDB()
-	rel, err := impl.Relation(tableName)
+	localEngine := local.NewLocalRoEngine(impl)
+	dbase, err := localEngine.Database("")
+	if err != nil {
+		panic(err)
+	}
+	rel, err := dbase.Relation(tableName)
 	if err != nil {
 		panic(err)
 	}
@@ -138,7 +146,12 @@ func readData() {
 		cols = append(cols, i)
 	}
 	refs := make([]uint64, len(attrs))
-	segIds := rel.SegmentIds()
+	var segIds db.IDS
+	{
+		dbrel, _ := impl.Relation(tableName)
+		segIds = dbrel.SegmentIds()
+		dbrel.Close()
+	}
 
 	totalRows := uint64(0)
 	startProfile()
@@ -146,7 +159,8 @@ func readData() {
 	now := time.Now()
 	var wg sync.WaitGroup
 	for _, segId := range segIds.Ids {
-		seg := rel.Segment(segId, proc)
+		idstr := strconv.FormatUint(segId, 10)
+		seg := rel.Segment(engine.SegmentInfo{Id: idstr}, proc)
 		for _, id := range seg.Blocks() {
 			blk := seg.Block(id, proc)
 			bat, err := blk.Prefetch(refs, attrs, proc)

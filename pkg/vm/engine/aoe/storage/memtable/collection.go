@@ -110,13 +110,16 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 				c.Opts.EventListener.BackgroundErrorCB(err)
 				return err
 			}
-			go func() {
+			{
 				c.Ref()
 				ctx := dops.OpCtx{Collection: c, Opts: c.Opts}
 				op := dops.NewFlushBlkOp(&ctx)
-				op.Push()
-				op.WaitDone()
-			}()
+				err = op.Push()
+				if err != nil {
+					return err
+				}
+				go op.WaitDone()
+			}
 		}
 		n, err := mut.Append(bat, offset, index)
 		if err != nil {
