@@ -28,6 +28,11 @@ func newPartFile(id *common.ID, host base.ISegmentFile, isMock bool) common.IVFi
 			},
 		}
 		// log.Infof("size, osize, aglo: %d, %d, %d", vf.Info.Size(), vf.Info.OriginSize(), vf.Info.CompressAlgo())
+	} else {
+		vf.Info = &colPartFileStat{
+			id:       id,
+			fileStat: fileStat{},
+		}
 	}
 	return vf
 }

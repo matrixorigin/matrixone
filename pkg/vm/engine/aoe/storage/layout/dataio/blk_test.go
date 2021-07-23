@@ -44,12 +44,12 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indexes
 		if err != nil {
 			panic(err)
 		}
-		twoBytes := make([]byte, 2)
-		binary.BigEndian.PutUint16(twoBytes, uint16(0))
-		_, err = w.Write(twoBytes)
-		if err != nil {
-			panic(err)
-		}
+		algo := uint8(0)
+		cols := uint16(0)
+		err = binary.Write(w, binary.BigEndian, &algo)
+		assert.Nil(t, err)
+		err = binary.Write(w, binary.BigEndian, &cols)
+		assert.Nil(t, err)
 		w.Close()
 	}
 	segFile := NewUnsortedSegmentFile(dirname, baseid)
