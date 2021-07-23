@@ -34,7 +34,8 @@ func newEmbbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.I
 			SegmentFile: host,
 			Meta:        meta,
 			Info: &fileStat{
-				size: int64(meta.Ptr.Len),
+				size:  int64(meta.Ptr.Len),
+				osize: int64(meta.Ptr.Len),
 			},
 		},
 		ID: *id,
