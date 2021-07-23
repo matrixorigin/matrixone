@@ -153,6 +153,10 @@ func (bf *BlockFile) PartSize(colIdx uint64, id common.ID, isOrigin bool) int64 
 	return int64(pointer.Len)
 }
 
+func (bf *BlockFile) GetFileType() common.FileType {
+	return common.DiskFile
+}
+
 func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	key := base.Key{
 		Col: colIdx,

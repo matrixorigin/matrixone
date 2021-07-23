@@ -2,6 +2,14 @@ package common
 
 import "io"
 
+type FileType uint8
+
+const (
+	InvalidFile FileType = iota
+	MemFile
+	DiskFile
+)
+
 type FileInfo interface {
 	Name() string
 	Size() int64
@@ -14,4 +22,5 @@ type IVFile interface {
 	Ref()
 	Unref()
 	Stat() FileInfo
+	GetFileType() FileType
 }

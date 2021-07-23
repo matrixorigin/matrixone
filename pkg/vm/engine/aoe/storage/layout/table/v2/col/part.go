@@ -67,9 +67,8 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 		panic("not support")
 	}
 	if vf != nil {
-		vvf := vf.(common.IVFile)
 		// Only in mock case, the stat is nil
-		if stat := vvf.Stat(); stat != nil {
+		if stat := vf.Stat(); stat != nil {
 			capacity = uint64(stat.Size())
 		}
 	}

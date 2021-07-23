@@ -103,6 +103,10 @@ func (sf *SortedSegmentFile) initPointers() {
 	// TODO
 }
 
+func (sf *SortedSegmentFile) GetFileType() common.FileType {
+	return common.DiskFile
+}
+
 func (sf *SortedSegmentFile) GetIndexesMeta() *base.IndexesMeta {
 	return sf.Meta.Indexes
 }

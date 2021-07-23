@@ -45,6 +45,10 @@ func (sf *UnsortedSegmentFile) Unref() {
 	}
 }
 
+func (sf *UnsortedSegmentFile) GetFileType() common.FileType {
+	return common.DiskFile
+}
+
 func (sf *UnsortedSegmentFile) GetDir() string {
 	return sf.Dir
 }

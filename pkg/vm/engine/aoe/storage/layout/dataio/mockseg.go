@@ -42,6 +42,10 @@ func (msf *MockSegmentFile) Stat() common.FileInfo {
 	return msf.Info
 }
 
+func (bf *MockSegmentFile) GetFileType() common.FileType {
+	return common.DiskFile
+}
+
 func (msf *MockSegmentFile) GetIndexesMeta() *base.IndexesMeta {
 	return nil
 }

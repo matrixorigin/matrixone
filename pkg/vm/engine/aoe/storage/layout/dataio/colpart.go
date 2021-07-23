@@ -41,6 +41,10 @@ func (cpf *ColPartFile) Stat() common.FileInfo {
 	return cpf.Info
 }
 
+func (cpf *ColPartFile) GetFileType() common.FileType {
+	return common.DiskFile
+}
+
 func (cpf *ColPartFile) Ref() {
 	cpf.SegmentFile.RefBlock(cpf.ID.AsBlockID())
 }
