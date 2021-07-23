@@ -7,6 +7,7 @@ import (
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync/atomic"
@@ -57,7 +58,7 @@ func (mgr *BufferManager) GetNextTransientID() uint64 {
 	return atomic.AddUint64(&mgr.NextTransientID, uint64(1)) - 1
 }
 
-func (mgr *BufferManager) CreateNode(vf mgrif.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) mgrif.INode {
+func (mgr *BufferManager) CreateNode(vf common.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) mgrif.INode {
 	return newNode(mgr, vf, constructor, capacity)
 }
 

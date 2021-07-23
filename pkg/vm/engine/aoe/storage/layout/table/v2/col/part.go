@@ -44,7 +44,7 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	part := &ColumnPart{Block: blk}
 	blkId := blk.GetMeta().AsCommonID().AsBlockID()
 	blkId.Idx = uint16(blk.GetColIdx())
-	var vf bmgrif.IVFile
+	var vf common.IVFile
 	var constructor buf.MemoryNodeConstructor
 	switch blk.GetType() {
 	case base.TRANSIENT_BLK:
@@ -90,7 +90,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	cloned := &ColumnPart{Block: blk}
 	blkId := blk.GetMeta().AsCommonID().AsBlockID()
 	blkId.Idx = uint16(blk.GetColIdx())
-	var vf bmgrif.IVFile
+	var vf common.IVFile
 	switch blk.GetType() {
 	case base.TRANSIENT_BLK:
 		panic("logic error")
@@ -102,9 +102,8 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 		panic("not supported")
 	}
 	if vf != nil {
-		vvf := vf.(common.IVFile)
-		if stat := vvf.Stat(); stat != nil {
-			part.Capacity = uint64(vvf.Stat().Size())
+		if stat := vf.Stat(); stat != nil {
+			part.Capacity = uint64(vf.Stat().Size())
 		}
 	}
 	cloned.Node = sstBufMgr.CreateNode(vf, vector.VectorWrapperConstructor, part.Capacity).(*bmgr.Node)

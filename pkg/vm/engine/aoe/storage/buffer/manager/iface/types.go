@@ -4,6 +4,7 @@ import (
 	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 )
 
@@ -51,7 +52,7 @@ type IBufferManager interface {
 	RegisterNode(capacity uint64, node_id uint64, reader io.Reader, constructor buf.MemoryNodeConstructor) nif.INodeHandle
 	UnregisterNode(nif.INodeHandle)
 
-	CreateNode(vf IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) INode
+	CreateNode(vf common.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) INode
 
 	// // Allocate(size uint64) buf.IBufferH
 
