@@ -8,21 +8,24 @@ import (
 	"github.com/RoaringBitmap/roaring"
 )
 
-type FileInfo interface {
-	Name() string
-	Size() int64
-}
+// type FileInfo interface {
+// 	Name() string
+// 	Size() int64
+// 	OriginSize() int64
+// 	CompressAlgo() int
+// }
 
-type IVirtaulFile interface {
-	io.Reader
-	Ref()
-	Unref()
-	Stat() FileInfo
-}
+// type IVirtaulFile interface {
+// 	io.Reader
+// 	Ref()
+// 	Unref()
+// 	Stat() FileInfo
+// }
 
 type Pointer struct {
-	Offset int64
-	Len    uint64
+	Offset    int64
+	Len       uint64
+	OriginLen uint64
 }
 
 type IndexesMeta struct {
@@ -73,10 +76,11 @@ type IBaseFile interface {
 	GetIndexesMeta() *IndexesMeta
 	ReadPoint(ptr *Pointer, buf []byte)
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
-	PartSize(colIdx uint64, id common.ID) int64
+	PartSize(colIdx uint64, id common.ID, isOrigin bool) int64
+	DataCompressAlgo(common.ID) int
 	Destory()
-	Stat() FileInfo
-	MakeVirtualIndexFile(*IndexMeta) IVirtaulFile
+	Stat() common.FileInfo
+	MakeVirtualIndexFile(*IndexMeta) common.IVFile
 	GetDir() string
 }
 
@@ -89,8 +93,8 @@ type ISegmentFile interface {
 	ReadBlockPoint(id common.ID, ptr *Pointer, buf []byte)
 	GetBlockIndexesMeta(id common.ID) *IndexesMeta
 
-	MakeVirtualBlkIndexFile(id *common.ID, meta *IndexMeta) IVirtaulFile
-	MakeVirtualPartFile(id *common.ID) IVirtaulFile
+	MakeVirtualBlkIndexFile(id *common.ID, meta *IndexMeta) common.IVFile
+	MakeVirtualPartFile(id *common.ID) common.IVFile
 }
 
 type IBlockFile interface {

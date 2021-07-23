@@ -51,7 +51,7 @@ func MockVector(t types.Type, rows uint64) IVector {
 		vec = NewStdVector(t, rows)
 		vals := []int32{}
 		for i := uint64(0); i < rows; i++ {
-			vals = append(vals, int32(i))
+			vals = append(vals, int32(i)%100)
 		}
 		vec.Append(len(vals), vals)
 	case types.T_float64:

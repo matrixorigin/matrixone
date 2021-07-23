@@ -38,7 +38,7 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegment
 	return msf
 }
 
-func (msf *MockSegmentFile) Stat() base.FileInfo {
+func (msf *MockSegmentFile) Stat() common.FileInfo {
 	return msf.Info
 }
 
@@ -58,7 +58,11 @@ func (msf *MockSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf 
 	log.Infof("(%s:%s) | ReadBlockPoint[%s] (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, id.BlockString(), ptr.Offset, ptr.Len, len(buf), cap(buf))
 }
 
-func (msf *MockSegmentFile) PartSize(colIdx uint64, id common.ID) int64 {
+func (sf *MockSegmentFile) DataCompressAlgo(id common.ID) int {
+	return 0
+}
+
+func (msf *MockSegmentFile) PartSize(colIdx uint64, id common.ID, _ bool) int64 {
 	return 0
 }
 
@@ -119,14 +123,14 @@ func (msf *MockSegmentFile) GetDir() string {
 	return filepath.Dir(msf.FileName)
 }
 
-func (msf *MockSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (msf *MockSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
 	return nil
 }
 
-func (msf *MockSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) base.IVirtaulFile {
+func (msf *MockSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) common.IVFile {
 	return nil
 }
 
-func (msf *MockSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
+func (msf *MockSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
 	return newPartFile(id, msf, true)
 }

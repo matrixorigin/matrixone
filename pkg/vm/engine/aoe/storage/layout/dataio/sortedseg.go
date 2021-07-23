@@ -47,21 +47,22 @@ type SortedSegmentFile struct {
 	Meta       *FileMeta
 	BlocksMeta map[common.ID]*FileMeta
 	Info       *fileStat
+	DataAlgo   int
 }
 
-func (sf *SortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (sf *SortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
 	return newEmbbedIndexFile(sf, meta)
 }
 
-func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) base.IVirtaulFile {
+func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) common.IVFile {
 	return newEmbbedIndexFile(sf, meta)
 }
 
-func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
+func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
 	return newPartFile(id, sf, false)
 }
 
-func (sf *SortedSegmentFile) Stat() base.FileInfo {
+func (sf *SortedSegmentFile) Stat() common.FileInfo {
 	return sf.Info
 }
 
@@ -143,7 +144,11 @@ func (sf *SortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf
 	sf.ReadPoint(ptr, buf)
 }
 
-func (sf *SortedSegmentFile) PartSize(colIdx uint64, id common.ID) int64 {
+func (sf *SortedSegmentFile) DataCompressAlgo(id common.ID) int {
+	return sf.DataAlgo
+}
+
+func (sf *SortedSegmentFile) PartSize(colIdx uint64, id common.ID, isOrigin bool) int64 {
 	key := base.Key{
 		Col: colIdx,
 		ID:  id,
@@ -151,6 +156,9 @@ func (sf *SortedSegmentFile) PartSize(colIdx uint64, id common.ID) int64 {
 	pointer, ok := sf.Parts[key]
 	if !ok {
 		panic("logic error")
+	}
+	if isOrigin {
+		return int64(pointer.OriginLen)
 	}
 	return int64(pointer.Len)
 }

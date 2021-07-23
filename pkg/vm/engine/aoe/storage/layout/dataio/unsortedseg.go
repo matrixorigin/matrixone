@@ -82,11 +82,11 @@ func (sf *UnsortedSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMe
 	return blk.GetIndexesMeta()
 }
 
-func (sf *UnsortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
+func (sf *UnsortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
 	return nil
 }
 
-func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) base.IVirtaulFile {
+func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) common.IVFile {
 	blk := sf.GetBlock(*id)
 	if blk == nil {
 		return nil
@@ -94,11 +94,11 @@ func (sf *UnsortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base
 	return blk.MakeVirtualIndexFile(meta)
 }
 
-func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) base.IVirtaulFile {
+func (sf *UnsortedSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
 	return newPartFile(id, sf, false)
 }
 
-func (sf *UnsortedSegmentFile) Stat() base.FileInfo {
+func (sf *UnsortedSegmentFile) Stat() common.FileInfo {
 	return sf.Info
 }
 
@@ -149,14 +149,24 @@ func (sf *UnsortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, b
 	blk.ReadPoint(ptr, buf)
 }
 
-func (sf *UnsortedSegmentFile) PartSize(colIdx uint64, id common.ID) int64 {
+func (sf *UnsortedSegmentFile) DataCompressAlgo(id common.ID) int {
 	sf.RLock()
 	blk, ok := sf.Blocks[id.AsBlockID()]
 	if !ok {
 		panic("logic error")
 	}
 	sf.RUnlock()
-	return blk.PartSize(colIdx, id)
+	return blk.DataCompressAlgo(id)
+}
+
+func (sf *UnsortedSegmentFile) PartSize(colIdx uint64, id common.ID, isOrigin bool) int64 {
+	sf.RLock()
+	blk, ok := sf.Blocks[id.AsBlockID()]
+	if !ok {
+		panic("logic error")
+	}
+	sf.RUnlock()
+	return blk.PartSize(colIdx, id, isOrigin)
 }
 
 func (sf *UnsortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {

@@ -3,6 +3,7 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	e "matrixone/pkg/vm/engine/aoe/storage"
@@ -10,6 +11,9 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
+
+	"github.com/pierrec/lz4"
+	// log "github.com/sirupsen/logrus"
 )
 
 type BlockWriter struct {
@@ -109,19 +113,37 @@ func (bw *BlockWriter) flushIndexes(w *os.File, data []*vector.Vector, meta *md.
 }
 
 func (bw *BlockWriter) flushColsData(w *os.File, data []*vector.Vector, meta *md.Block) error {
-	var buf bytes.Buffer
+	var (
+		err error
+		buf bytes.Buffer
+	)
+	algo := uint8(compress.Lz4)
+	if err = binary.Write(&buf, binary.BigEndian, uint8(algo)); err != nil {
+		return err
+	}
 	colCnt := len(meta.Segment.Table.Schema.ColDefs)
-	binary.Write(&buf, binary.BigEndian, uint16(colCnt))
+	if err = binary.Write(&buf, binary.BigEndian, uint16(colCnt)); err != nil {
+		return err
+	}
 	var colBufs [][]byte
 	for idx := 0; idx < colCnt; idx++ {
 		colBuf, err := data[idx].Show()
 		if err != nil {
 			return err
 		}
-		colBufs = append(colBufs, colBuf)
 		colSize := len(colBuf)
-		binary.Write(&buf, binary.BigEndian, meta.ID)
-		binary.Write(&buf, binary.BigEndian, uint64(colSize))
+		cbuf := make([]byte, lz4.CompressBlockBound(colSize))
+		if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
+			return err
+		}
+		if err = binary.Write(&buf, binary.BigEndian, uint64(len(cbuf))); err != nil {
+			return err
+		}
+		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
+			return err
+		}
+		// colBufs = append(colBufs, colBuf)
+		colBufs = append(colBufs, cbuf)
 	}
 	if _, err := w.Write(buf.Bytes()); err != nil {
 		return err

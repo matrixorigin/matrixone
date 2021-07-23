@@ -17,7 +17,7 @@ type EmbbedBlockIndexFile struct {
 	ID common.ID
 }
 
-func newEmbbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) base.IVirtaulFile {
+func newEmbbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) common.IVFile {
 	f := &EmbbedIndexFile{
 		SegmentFile: host,
 		Meta:        meta,
@@ -28,7 +28,7 @@ func newEmbbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) base.IVirt
 	return f
 }
 
-func newEmbbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.IndexMeta) base.IVirtaulFile {
+func newEmbbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.IndexMeta) common.IVFile {
 	f := &EmbbedBlockIndexFile{
 		EmbbedIndexFile: EmbbedIndexFile{
 			SegmentFile: host,
@@ -43,7 +43,7 @@ func newEmbbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.I
 	return f
 }
 
-func (f *EmbbedIndexFile) Stat() base.FileInfo {
+func (f *EmbbedIndexFile) Stat() common.FileInfo {
 	return f.Info
 }
 
@@ -63,7 +63,7 @@ func (f *EmbbedIndexFile) Read(buf []byte) (n int, err error) {
 	return len(buf), nil
 }
 
-func (bf *EmbbedBlockIndexFile) Stat() base.FileInfo {
+func (bf *EmbbedBlockIndexFile) Stat() common.FileInfo {
 	return bf.Info
 }
 func (bf *EmbbedBlockIndexFile) Ref() {

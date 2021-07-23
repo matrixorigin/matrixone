@@ -67,7 +67,7 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 		panic("not support")
 	}
 	if vf != nil {
-		vvf := vf.(base.IVirtaulFile)
+		vvf := vf.(common.IVFile)
 		// Only in mock case, the stat is nil
 		if stat := vvf.Stat(); stat != nil {
 			capacity = uint64(stat.Size())
@@ -102,7 +102,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 		panic("not supported")
 	}
 	if vf != nil {
-		vvf := vf.(base.IVirtaulFile)
+		vvf := vf.(common.IVFile)
 		if stat := vvf.Stat(); stat != nil {
 			part.Capacity = uint64(vvf.Stat().Size())
 		}
