@@ -1,15 +1,17 @@
 package vector
 
 import (
-	"github.com/cockroachdb/errors"
 	"io"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
+
+	"github.com/cockroachdb/errors"
 )
 
 var (
@@ -49,7 +51,8 @@ type StdVector struct {
 	Data         []byte
 	FreeFunc     buf.MemoryFreeFunc
 	NodeCapacity uint64
-	AllocSize    uint64
+	File         common.IVFile
+	UseCompress  bool
 }
 
 type StrVector struct {
@@ -57,5 +60,6 @@ type StrVector struct {
 	Data         *types.Bytes
 	FreeFunc     buf.MemoryFreeFunc
 	NodeCapacity uint64
-	AllocSize    uint64
+	File         common.IVFile
+	UseCompress  bool
 }

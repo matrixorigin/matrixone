@@ -6,21 +6,23 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
 // TODO: Just for temp test, rework later
-func ZoneMapIndexConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return NewZoneMapEmptyNode(capacity, freeFunc)
+func ZoneMapIndexConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+	return NewZoneMapEmptyNode(vf, useCompress, freeFunc)
 }
 
 type ZoneMapIndex struct {
-	T         types.Type
-	MinV      interface{}
-	MaxV      interface{}
-	Col       int16
-	FreeFunc  buf.MemoryFreeFunc
-	AllocSize uint64
+	T           types.Type
+	MinV        interface{}
+	MaxV        interface{}
+	Col         int16
+	FreeFunc    buf.MemoryFreeFunc
+	File        common.IVFile
+	UseCompress bool
 }
 
 func NewZoneMap(t types.Type, minv, maxv interface{}, colIdx int16) Index {
@@ -32,10 +34,11 @@ func NewZoneMap(t types.Type, minv, maxv interface{}, colIdx int16) Index {
 	}
 }
 
-func NewZoneMapEmptyNode(capacity uint64, freeFunc buf.MemoryFreeFunc) Index {
+func NewZoneMapEmptyNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) Index {
 	return &ZoneMapIndex{
-		AllocSize: capacity,
-		FreeFunc:  freeFunc,
+		FreeFunc:    freeFunc,
+		File:        vf,
+		UseCompress: useCompress,
 	}
 }
 
@@ -83,18 +86,26 @@ func (i *ZoneMapIndex) FreeMemory() {
 }
 
 func (i *ZoneMapIndex) GetMemorySize() uint64 {
-	return i.AllocSize
+	if i.UseCompress {
+		return uint64(i.File.Stat().Size())
+	} else {
+		return uint64(i.File.Stat().OriginSize())
+	}
 }
 
 func (i *ZoneMapIndex) GetMemoryCapacity() uint64 {
-	return i.AllocSize
+	if i.UseCompress {
+		return uint64(i.File.Stat().Size())
+	} else {
+		return uint64(i.File.Stat().OriginSize())
+	}
 }
 
 func (i *ZoneMapIndex) Reset() {
 }
 
 func (i *ZoneMapIndex) ReadFrom(r io.Reader) (n int64, err error) {
-	buf := make([]byte, i.AllocSize)
+	buf := make([]byte, i.GetMemoryCapacity())
 	nr, err := r.Read(buf)
 	if err != nil {
 		return int64(nr), err

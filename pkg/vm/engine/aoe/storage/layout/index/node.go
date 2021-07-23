@@ -15,11 +15,11 @@ type Node struct {
 	PostCloseCB PostCloseCB
 }
 
-func newNode(bufMgr bmgrif.IBufferManager, vf common.IVFile, constructor buf.MemoryNodeConstructor,
-	capacity uint64, cols *roaring.Bitmap, cb PostCloseCB) *Node {
+func newNode(bufMgr bmgrif.IBufferManager, vf common.IVFile, useCompress bool, constructor buf.MemoryNodeConstructor,
+	cols *roaring.Bitmap, cb PostCloseCB) *Node {
 	node := new(Node)
 	node.Cols = cols
-	node.Node = bufMgr.CreateNode(vf, constructor, capacity).(*bmgr.Node)
+	node.Node = bufMgr.CreateNode(vf, useCompress, constructor).(*bmgr.Node)
 	node.OnZeroCB = node.close
 	node.PostCloseCB = cb
 	node.Ref()

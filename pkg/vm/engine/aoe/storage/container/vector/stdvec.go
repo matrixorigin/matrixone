@@ -9,6 +9,7 @@ import (
 	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"os"
@@ -18,8 +19,8 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
-func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return NewStdVectorNode(capacity, freeFunc)
+func StdVectorConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+	return NewStdVectorNode(vf, useCompress, freeFunc)
 }
 
 func NewStdVector(t types.Type, capacity uint64) IVector {
@@ -32,12 +33,12 @@ func NewStdVector(t types.Type, capacity uint64) IVector {
 	}
 }
 
-func NewStdVectorNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+func NewStdVectorNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return &StdVector{
-		Data:         make([]byte, 0),
-		NodeCapacity: capacity,
-		AllocSize:    capacity,
-		FreeFunc:     freeFunc,
+		Data:        make([]byte, 0),
+		File:        vf,
+		UseCompress: useCompress,
+		FreeFunc:    freeFunc,
 		BaseVector: BaseVector{
 			VMask: &nulls.Nulls{},
 		},
@@ -87,7 +88,11 @@ func (v *StdVector) GetMemorySize() uint64 {
 }
 
 func (v *StdVector) GetMemoryCapacity() uint64 {
-	return v.AllocSize
+	if v.UseCompress {
+		return uint64(v.File.Stat().Size())
+	} else {
+		return uint64(v.File.Stat().OriginSize())
+	}
 }
 
 func (v *StdVector) SetValue(idx int, val interface{}) {

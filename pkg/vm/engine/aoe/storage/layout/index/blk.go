@@ -46,7 +46,7 @@ func (holder *BlockHolder) Init(segFile base.ISegmentFile) {
 	for _, meta := range indexesMeta.Data {
 		vf := segFile.MakeVirtualBlkIndexFile(&holder.ID, meta)
 		col := int(meta.Cols.ToArray()[0])
-		node := newNode(holder.BufMgr, vf, ZoneMapIndexConstructor, meta.Ptr.Len, meta.Cols, nil)
+		node := newNode(holder.BufMgr, vf, false, ZoneMapIndexConstructor, meta.Cols, nil)
 		idxes, ok := holder.ColIndexes[col]
 		if !ok {
 			idxes = make([]int, 0)

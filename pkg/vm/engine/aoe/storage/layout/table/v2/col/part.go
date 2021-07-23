@@ -55,6 +55,7 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 		default:
 			constructor = vector.StdVectorConstructor
 		}
+		vf = common.NewMemFile(int64(capacity))
 	case base.PERSISTENT_BLK:
 		bufMgr = host.GetSSTBufMgr()
 		vf = blk.GetSegmentFile().MakeVirtualPartFile(&blkId)
@@ -66,14 +67,9 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	default:
 		panic("not support")
 	}
-	if vf != nil {
-		// Only in mock case, the stat is nil
-		if stat := vf.Stat(); stat != nil {
-			capacity = uint64(stat.Size())
-		}
-	}
+
 	var node bmgrif.INode
-	node = bufMgr.CreateNode(vf, constructor, capacity)
+	node = bufMgr.CreateNode(vf, true, constructor)
 	if node == nil {
 		return nil
 	}
@@ -100,12 +96,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	default:
 		panic("not supported")
 	}
-	if vf != nil {
-		if stat := vf.Stat(); stat != nil {
-			part.Capacity = uint64(vf.Stat().Size())
-		}
-	}
-	cloned.Node = sstBufMgr.CreateNode(vf, vector.VectorWrapperConstructor, part.Capacity).(*bmgr.Node)
+	cloned.Node = sstBufMgr.CreateNode(vf, true, vector.VectorWrapperConstructor).(*bmgr.Node)
 
 	return cloned
 }
@@ -132,7 +123,7 @@ func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 		return ret, nil
 	}
 	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
-	wrapper.AllocSize = part.Capacity
+	wrapper.File = common.NewMemFile(int64(part.BufNode.GetCapacity()))
 	_, err := wrapper.ReadWithProc(part.VFile, ref, proc)
 	if err != nil {
 		return nil, err
@@ -141,8 +132,8 @@ func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 }
 
 func (part *ColumnPart) Size() uint64 {
-	if part.VFile != nil {
-		return part.Capacity
+	if part.VFile.GetFileType() == common.DiskFile {
+		return part.BufNode.GetCapacity()
 	}
 	vec := part.GetVector()
 	defer vec.Close()

@@ -17,18 +17,20 @@ import (
 type VectorWrapper struct {
 	MNode *common.MemNode
 	base.Vector
-	FreeFunc  buf.MemoryFreeFunc
-	AllocSize uint64
+	FreeFunc    buf.MemoryFreeFunc
+	File        common.IVFile
+	UseCompress bool
 }
 
-func VectorWrapperConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return NewVectorWrapperNode(capacity, freeFunc)
+func VectorWrapperConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+	return NewVectorWrapperNode(vf, useCompress, freeFunc)
 }
 
-func NewVectorWrapperNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+func NewVectorWrapperNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return &VectorWrapper{
-		AllocSize: capacity,
-		FreeFunc:  freeFunc,
+		FreeFunc:    freeFunc,
+		File:        vf,
+		UseCompress: useCompress,
 	}
 }
 
@@ -98,7 +100,11 @@ func (v *VectorWrapper) GetMemorySize() uint64 {
 }
 
 func (v *VectorWrapper) GetMemoryCapacity() uint64 {
-	return v.AllocSize
+	if v.UseCompress {
+		return uint64(v.File.Stat().Size())
+	} else {
+		return uint64(v.File.Stat().OriginSize())
+	}
 }
 
 func (v *VectorWrapper) SetValue(idx int, val interface{}) {
@@ -198,7 +204,7 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 	// err = vec.Vector.Read(data)
 	// return int64(nr), err
 
-	data := make([]byte, vec.AllocSize+mempool.CountSize)
+	data := make([]byte, vec.GetMemoryCapacity()+mempool.CountSize)
 	nr, err := r.Read(data[mempool.CountSize:])
 	if err != nil {
 		return n, err
@@ -213,17 +219,18 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Process) (n int64, err error) {
 	// node := common.GPool.Alloc(vec.AllocSize + mempool.CountSize)
 	// data := node.Buf
-	data, err := proc.Alloc(int64(vec.AllocSize))
+	allocSize := int64(vec.GetMemoryCapacity())
+	data, err := proc.Alloc(allocSize)
 	if err != nil {
 		return n, err
 	}
-	buf := data[:mempool.CountSize+vec.AllocSize]
+	buf := data[:mempool.CountSize+allocSize]
 	nr, err := r.Read(buf[mempool.CountSize:])
 	if err != nil {
 		proc.Free(data)
 		return n, err
 	}
-	err = vec.Vector.Read(data[:mempool.CountSize+vec.AllocSize])
+	err = vec.Vector.Read(data[:mempool.CountSize+allocSize])
 	if err != nil {
 		proc.Free(data)
 		return n, err

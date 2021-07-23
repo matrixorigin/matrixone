@@ -12,22 +12,20 @@ type Node struct {
 	Constructor buf.MemoryNodeConstructor
 	BufMgr      bmgrif.IBufferManager
 	BufNode     nif.INodeHandle
-	Capacity    uint64
 	VFile       common.IVFile
 }
 
-func newNode(bufMgr bmgrif.IBufferManager, vf common.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) bmgrif.INode {
+func newNode(bufMgr bmgrif.IBufferManager, vf common.IVFile, useCompress bool, constructor buf.MemoryNodeConstructor) bmgrif.INode {
 	node := &Node{
 		BufMgr:      bufMgr,
 		VFile:       vf,
 		Constructor: constructor,
-		Capacity:    capacity,
 	}
-	if node.VFile != nil {
+	if node.VFile.GetFileType() == common.DiskFile {
 		// node.VFile.Ref()
-		node.BufNode = node.BufMgr.RegisterNode(node.Capacity, bufMgr.GetNextID(), node.VFile, node.Constructor)
+		node.BufNode = node.BufMgr.RegisterNode(node.VFile, useCompress, bufMgr.GetNextID(), node.Constructor)
 	} else {
-		node.BufNode = node.BufMgr.RegisterSpillableNode(node.Capacity, bufMgr.GetNextID(), node.Constructor)
+		node.BufNode = node.BufMgr.RegisterSpillableNode(vf, bufMgr.GetNextID(), node.Constructor)
 		if node.BufNode == nil {
 			return nil
 		}
