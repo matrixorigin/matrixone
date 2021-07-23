@@ -5,7 +5,7 @@ import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 
-	"github.com/pilosa/pilosa/roaring"
+	"github.com/RoaringBitmap/roaring"
 )
 
 type FileInfo interface {

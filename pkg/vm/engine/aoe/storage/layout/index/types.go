@@ -4,7 +4,7 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 
-	"github.com/pilosa/pilosa/roaring"
+	"github.com/RoaringBitmap/roaring"
 )
 
 type OpType uint8

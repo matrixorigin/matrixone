@@ -53,7 +53,7 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 	}
 	for _, meta := range indexesMeta.Data {
 		vf := segFile.MakeVirtualIndexFile(meta)
-		col := int(meta.Cols.Slice()[0])
+		col := int(meta.Cols.ToArray()[0])
 		node := newNode(holder.BufMgr, vf, ZoneMapIndexConstructor, meta.Ptr.Len, meta.Cols, nil)
 		idxes, ok := holder.self.ColIndexes[col]
 		if !ok {

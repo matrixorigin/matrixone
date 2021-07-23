@@ -8,7 +8,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
 
-	"github.com/pilosa/pilosa/roaring"
+	"github.com/RoaringBitmap/roaring"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -118,7 +118,7 @@ func (h *RWHelper) ReadIndexesMeta(f os.File) (meta *base.IndexesMeta, err error
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
 		col := encoding.DecodeInt16(twoBytes)
-		meta.Data[i].Cols.Add(uint64(col))
+		meta.Data[i].Cols.Add(uint32(col))
 	}
 	for i := 0; i < int(indexCnt); i++ {
 		_, err := f.Read(fourBytes)

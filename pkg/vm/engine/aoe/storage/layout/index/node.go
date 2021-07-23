@@ -1,7 +1,7 @@
 package index
 
 import (
-	"github.com/pilosa/pilosa/roaring"
+	"github.com/RoaringBitmap/roaring"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -36,13 +36,13 @@ func (node *Node) close() {
 }
 
 func (node *Node) ContainsCol(v uint64) bool {
-	return node.Cols.Contains(v)
+	return node.Cols.Contains(uint32(v))
 }
 
 func (node *Node) ContainsOnlyCol(v uint64) bool {
-	return node.Cols.Contains(v) && node.Cols.Count() == 1
+	return node.Cols.Contains(uint32(v)) && node.Cols.GetCardinality() == 1
 }
 
-func (node *Node) AllCols() []uint64 {
-	return node.Cols.Slice()
+func (node *Node) AllCols() []uint32 {
+	return node.Cols.ToArray()
 }

@@ -18,7 +18,6 @@ require (
 	github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
-	github.com/pilosa/pilosa v1.4.1
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
 	github.com/pkg/errors v0.9.1
