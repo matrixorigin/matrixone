@@ -46,7 +46,7 @@ func NewEmptyWrapper(t types.Type) *VectorWrapper {
 	}
 }
 
-func (v *VectorWrapper) PlacementNew(t types.Type, capacity uint64) {
+func (v *VectorWrapper) PlacementNew(t types.Type) {
 	panic("not supported")
 }
 

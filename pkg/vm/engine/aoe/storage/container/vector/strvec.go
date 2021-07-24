@@ -67,7 +67,7 @@ func NewEmptyStrVector() IVector {
 	}
 }
 
-func (v *StrVector) PlacementNew(t types.Type, capacity uint64) {
+func (v *StrVector) PlacementNew(t types.Type) {
 	v.Type = t
 	size := v.File.Stat().OriginSize()
 	offsetCap := uint64(size / 2)

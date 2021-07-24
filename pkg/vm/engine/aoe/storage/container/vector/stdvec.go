@@ -54,9 +54,9 @@ func NewEmptyStdVector() *StdVector {
 	}
 }
 
-func (v *StdVector) PlacementNew(t types.Type, capacity uint64) {
+func (v *StdVector) PlacementNew(t types.Type) {
 	v.Type = t
-	capacity = uint64(v.File.Stat().OriginSize())
+	capacity := uint64(v.File.Stat().OriginSize())
 	if v.MNode != nil {
 		common.GPool.Free(v.MNode)
 	}

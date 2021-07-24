@@ -31,7 +31,7 @@ type IVector interface {
 	dbi.IVectorReader
 	IVectorWriter
 	GetLatestView() IVector
-	PlacementNew(t types.Type, capacity uint64)
+	PlacementNew(t types.Type)
 }
 
 type IVectorNode interface {
