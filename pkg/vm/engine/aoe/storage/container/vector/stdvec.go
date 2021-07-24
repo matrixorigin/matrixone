@@ -56,7 +56,16 @@ func NewEmptyStdVector() *StdVector {
 
 func (v *StdVector) PlacementNew(t types.Type, capacity uint64) {
 	v.Type = t
-	v.Data = make([]byte, 0, capacity*uint64(t.Size))
+	capacity = uint64(v.File.Stat().OriginSize())
+	if v.MNode != nil {
+		common.GPool.Free(v.MNode)
+	}
+	v.MNode = common.GPool.Alloc(capacity)
+	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v.MNode.Buf))
+	hp.Len = 0
+	hp.Cap = int(capacity)
+	v.Data = *(*[]byte)(unsafe.Pointer(&hp))
+	// v.Data = make([]byte, 0, capacity*uint64(t.Size))
 }
 
 func (v *StdVector) GetType() dbi.VectorType {
@@ -78,6 +87,9 @@ func (v *StdVector) dataBytes() int {
 }
 
 func (v *StdVector) FreeMemory() {
+	if v.MNode != nil {
+		common.GPool.Free(v.MNode)
+	}
 	if v.FreeFunc != nil {
 		v.FreeFunc(v)
 	}

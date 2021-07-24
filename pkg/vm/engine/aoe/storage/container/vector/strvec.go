@@ -13,7 +13,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"os"
+	"reflect"
 	"sync/atomic"
+	"unsafe"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -67,10 +69,26 @@ func NewEmptyStrVector() IVector {
 
 func (v *StrVector) PlacementNew(t types.Type, capacity uint64) {
 	v.Type = t
+	size := v.File.Stat().OriginSize()
+	offsetCap := uint64(size / 2)
+	lenCap := uint64(size / 2)
+	offsetNode := common.GPool.Alloc(offsetCap)
+	lenNode := common.GPool.Alloc(lenCap)
+	if v.MNodes == nil {
+		v.MNodes = make([]*common.MemNode, 2)
+	}
+	v.MNodes = append(v.MNodes, offsetNode)
+	v.MNodes = append(v.MNodes, lenNode)
+	offsetHp := *(*reflect.SliceHeader)(unsafe.Pointer(&(offsetNode.Buf)))
+	offsetHp.Len = 0
+	offsetHp.Cap = offsetHp.Cap * 4
+	lenHp := *(*reflect.SliceHeader)(unsafe.Pointer(&(lenNode.Buf)))
+	lenHp.Len = 0
+	lenHp.Cap = int(lenCap / 4)
 	v.Data = &types.Bytes{
 		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 0, capacity),
-		Lengths: make([]uint32, 0, capacity),
+		Offsets: *(*[]uint32)(unsafe.Pointer(&offsetHp)),
+		Lengths: *(*[]uint32)(unsafe.Pointer(&lenHp)),
 	}
 }
 
@@ -89,6 +107,11 @@ func (v *StrVector) Capacity() int {
 }
 
 func (v *StrVector) FreeMemory() {
+	if v.MNodes != nil {
+		for _, n := range v.MNodes {
+			common.GPool.Free(n)
+		}
+	}
 	if v.FreeFunc != nil {
 		v.FreeFunc(v)
 	}

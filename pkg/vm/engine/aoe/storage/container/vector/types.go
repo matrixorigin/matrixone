@@ -48,6 +48,7 @@ type BaseVector struct {
 
 type StdVector struct {
 	BaseVector
+	MNode        *common.MemNode
 	Data         []byte
 	FreeFunc     buf.MemoryFreeFunc
 	NodeCapacity uint64
@@ -57,6 +58,7 @@ type StdVector struct {
 
 type StrVector struct {
 	BaseVector
+	MNodes       []*common.MemNode
 	Data         *types.Bytes
 	FreeFunc     buf.MemoryFreeFunc
 	NodeCapacity uint64
