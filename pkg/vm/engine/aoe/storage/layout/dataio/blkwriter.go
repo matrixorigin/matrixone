@@ -15,6 +15,14 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
+type BlkDataSerializer func(*os.File, []*vector.Vector, *md.Block) error
+type BlkIndexSerializer func(*os.File, []*vector.Vector, *md.Block) error
+
+var (
+	defaultDataSerializer = flushWithLz4Compression
+	// defaultDataSerializer = flushNoCompression
+)
+
 type BlockWriter struct {
 	data       []*vector.Vector
 	meta       *md.Block
@@ -25,11 +33,11 @@ type BlockWriter struct {
 	// preprocessor preprocess data before writing, such as SORT
 	preprocessor func([]*vector.Vector, *md.Block) error
 
-	// indexFlusher flush indexes that pre-defined in meta
-	indexFlusher func(*os.File, []*vector.Vector, *md.Block) error
+	// indexSerializer flush indexes that pre-defined in meta
+	indexSerializer BlkIndexSerializer
 
-	// dataFlusher flush columns data, including compression
-	dataFlusher func(*os.File, []*vector.Vector, *md.Block) error
+	// dataSerializer flush columns data, including compression
+	dataSerializer BlkDataSerializer
 
 	preExecutor  func()
 	postExecutor func()
@@ -42,8 +50,8 @@ func NewBlockWriter(data []*vector.Vector, meta *md.Block, dir string) *BlockWri
 		dir:  dir,
 	}
 	w.fileGetter = w.createIOWriter
-	w.indexFlusher = w.flushIndexes
-	w.dataFlusher = w.flushColsData
+	w.indexSerializer = w.flushIndexes
+	w.dataSerializer = defaultDataSerializer
 	return w
 }
 
@@ -59,12 +67,12 @@ func (bw *BlockWriter) SetFileGetter(f func(string, *md.Block) (*os.File, error)
 	bw.fileGetter = f
 }
 
-func (bw *BlockWriter) SetIndexFlusher(f func(*os.File, []*vector.Vector, *md.Block) error) {
-	bw.indexFlusher = f
+func (bw *BlockWriter) SetIndexFlusher(f BlkIndexSerializer) {
+	bw.indexSerializer = f
 }
 
-func (bw *BlockWriter) SetDataFlusher(f func(*os.File, []*vector.Vector, *md.Block) error) {
-	bw.dataFlusher = f
+func (bw *BlockWriter) SetDataFlusher(f BlkDataSerializer) {
+	bw.dataSerializer = f
 }
 
 func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, error) {
@@ -111,53 +119,6 @@ func (bw *BlockWriter) flushIndexes(w *os.File, data []*vector.Vector, meta *md.
 	return err
 }
 
-func (bw *BlockWriter) flushColsData(w *os.File, data []*vector.Vector, meta *md.Block) error {
-	var (
-		err error
-		buf bytes.Buffer
-	)
-	// algo := uint8(compress.None)
-	algo := uint8(compress.Lz4)
-	if err = binary.Write(&buf, binary.BigEndian, uint8(algo)); err != nil {
-		return err
-	}
-	colCnt := len(meta.Segment.Table.Schema.ColDefs)
-	if err = binary.Write(&buf, binary.BigEndian, uint16(colCnt)); err != nil {
-		return err
-	}
-	var colBufs [][]byte
-	for idx := 0; idx < colCnt; idx++ {
-		colBuf, err := data[idx].Show()
-		if err != nil {
-			return err
-		}
-		colSize := len(colBuf)
-		cbuf := make([]byte, lz4.CompressBlockBound(colSize))
-		if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
-			return err
-		}
-		if err = binary.Write(&buf, binary.BigEndian, uint64(len(cbuf))); err != nil {
-			// if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
-			return err
-		}
-		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
-			return err
-		}
-		// colBufs = append(colBufs, colBuf)
-		colBufs = append(colBufs, cbuf)
-		// log.Infof("idx=%d, size=%d, osize=%d", idx, len(cbuf), colSize)
-	}
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		return err
-	}
-	for idx := 0; idx < colCnt; idx++ {
-		if _, err := w.Write(colBufs[idx]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (bw *BlockWriter) GetFileName() string {
 	s, _ := filepath.Abs(bw.fileHandle.Name())
 	return s
@@ -178,14 +139,101 @@ func (bw *BlockWriter) Execute() error {
 	if bw.preExecutor != nil {
 		bw.preExecutor()
 	}
-	if err = bw.indexFlusher(w, bw.data, bw.meta); err != nil {
+	if err = bw.indexSerializer(w, bw.data, bw.meta); err != nil {
 		return err
 	}
-	if err = bw.dataFlusher(w, bw.data, bw.meta); err != nil {
+	if err = bw.dataSerializer(w, bw.data, bw.meta); err != nil {
 		return err
 	}
 	if bw.postExecutor != nil {
 		bw.postExecutor()
+	}
+	return nil
+}
+
+func flushWithLz4Compression(w *os.File, data []*vector.Vector, meta *md.Block) error {
+	var (
+		err error
+		buf bytes.Buffer
+	)
+	algo := uint8(compress.Lz4)
+	if err = binary.Write(&buf, binary.BigEndian, uint8(algo)); err != nil {
+		return err
+	}
+	colCnt := len(meta.Segment.Table.Schema.ColDefs)
+	if err = binary.Write(&buf, binary.BigEndian, uint16(colCnt)); err != nil {
+		return err
+	}
+	var colBufs [][]byte
+	for idx := 0; idx < colCnt; idx++ {
+		colBuf, err := data[idx].Show()
+		if err != nil {
+			return err
+		}
+		colSize := len(colBuf)
+		cbuf := make([]byte, lz4.CompressBlockBound(colSize))
+		if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
+			return err
+		}
+		if err = binary.Write(&buf, binary.BigEndian, uint64(len(cbuf))); err != nil {
+			return err
+		}
+		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
+			return err
+		}
+		colBufs = append(colBufs, cbuf)
+	}
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		return err
+	}
+	for idx := 0; idx < colCnt; idx++ {
+		if _, err := w.Write(colBufs[idx]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func flushNoCompression(w *os.File, data []*vector.Vector, meta *md.Block) error {
+	var (
+		err error
+		buf bytes.Buffer
+	)
+	algo := uint8(compress.None)
+	if err = binary.Write(&buf, binary.BigEndian, uint8(algo)); err != nil {
+		return err
+	}
+	colCnt := len(meta.Segment.Table.Schema.ColDefs)
+	if err = binary.Write(&buf, binary.BigEndian, uint16(colCnt)); err != nil {
+		return err
+	}
+	var colBufs [][]byte
+	for idx := 0; idx < colCnt; idx++ {
+		colBuf, err := data[idx].Show()
+		if err != nil {
+			return err
+		}
+		colSize := len(colBuf)
+		cbuf := make([]byte, lz4.CompressBlockBound(colSize))
+		if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
+			return err
+		}
+		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
+			return err
+		}
+		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
+			return err
+		}
+		colBufs = append(colBufs, colBuf)
+		// log.Infof("idx=%d, size=%d, osize=%d", idx, len(cbuf), colSize)
+	}
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		return err
+	}
+	for idx := 0; idx < colCnt; idx++ {
+		if _, err := w.Write(colBufs[idx]); err != nil {
+			return err
+		}
 	}
 	return nil
 }
