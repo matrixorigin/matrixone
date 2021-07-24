@@ -59,7 +59,12 @@ func (mt *MemTable) String() string {
 	mt.RLock()
 	defer mt.RUnlock()
 	id := mt.GetID()
-	s := fmt.Sprintf("<MT[%s]>(Refs=%d)(Count=%d)", id.BlockString(), mt.RefCount(), mt.Batch.Length())
+	bat := mt.Batch
+	length := -1
+	if bat != nil {
+		length = bat.Length()
+	}
+	s := fmt.Sprintf("<MT[%s]>(Refs=%d)(Count=%d)", id.BlockString(), mt.RefCount(), length)
 	return s
 }
 

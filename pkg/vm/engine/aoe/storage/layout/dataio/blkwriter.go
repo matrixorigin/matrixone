@@ -3,6 +3,7 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/pierrec/lz4"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
@@ -11,7 +12,6 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
-	// "github.com/pierrec/lz4"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -116,6 +116,7 @@ func (bw *BlockWriter) flushColsData(w *os.File, data []*vector.Vector, meta *md
 		err error
 		buf bytes.Buffer
 	)
+	// algo := uint8(compress.None)
 	algo := uint8(compress.Lz4)
 	if err = binary.Write(&buf, binary.BigEndian, uint8(algo)); err != nil {
 		return err
@@ -131,18 +132,20 @@ func (bw *BlockWriter) flushColsData(w *os.File, data []*vector.Vector, meta *md
 			return err
 		}
 		colSize := len(colBuf)
-		// cbuf := make([]byte, lz4.CompressBlockBound(colSize))
-		// if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
-		// 	return err
-		// }
-		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
+		cbuf := make([]byte, lz4.CompressBlockBound(colSize))
+		if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
+			return err
+		}
+		if err = binary.Write(&buf, binary.BigEndian, uint64(len(cbuf))); err != nil {
+			// if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
 			return err
 		}
 		if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
 			return err
 		}
-		colBufs = append(colBufs, colBuf)
-		// colBufs = append(colBufs, cbuf)
+		// colBufs = append(colBufs, colBuf)
+		colBufs = append(colBufs, cbuf)
+		// log.Infof("idx=%d, size=%d, osize=%d", idx, len(cbuf), colSize)
 	}
 	if _, err := w.Write(buf.Bytes()); err != nil {
 		return err

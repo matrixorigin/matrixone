@@ -3,6 +3,7 @@ package vector
 import (
 	"fmt"
 	"io"
+	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
 	base "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
@@ -192,54 +193,118 @@ func (vec *VectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
-	allocSize := uint64(vec.GetMemoryCapacity())
-	vec.MNode = common.GPool.Alloc(allocSize + mempool.CountSize)
-	data := vec.MNode.Buf
-	nr, err := r.Read(data[mempool.CountSize : allocSize+mempool.CountSize])
-	if err != nil {
-		return n, err
-	}
-	t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
-	v := base.New(t)
-	vec.Col = v.Col
-	err = vec.Vector.Read(data)
-	return int64(nr), err
+	if vec.UseCompress {
+		allocSize := uint64(vec.GetMemoryCapacity())
+		vec.MNode = common.GPool.Alloc(allocSize)
+		data := vec.MNode.Buf[:allocSize]
+		nr, err := r.Read(data)
+		if err != nil {
+			common.GPool.Free(vec.MNode)
+			return n, err
+		}
 
-	// data := make([]byte, vec.GetMemoryCapacity()+mempool.CountSize)
-	// nr, err := r.Read(data[mempool.CountSize:])
-	// if err != nil {
-	// 	return n, err
-	// }
-	// t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
-	// v := base.New(t)
-	// vec.Col = v.Col
-	// err = vec.Vector.Read(data)
-	// return int64(nr), err
+		return int64(nr), err
+	}
+
+	stat := vec.File.Stat()
+	// log.Infof("%d, %d, %d", stat.CompressAlgo(), stat.Size(), stat.OriginSize())
+	switch stat.CompressAlgo() {
+	case compress.None:
+		allocSize := uint64(stat.Size())
+		vec.MNode = common.GPool.Alloc(allocSize + mempool.CountSize)
+		data := vec.MNode.Buf
+		nr, err := r.Read(data[mempool.CountSize : allocSize+mempool.CountSize])
+		if err != nil {
+			common.GPool.Free(vec.MNode)
+			return n, err
+		}
+		t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
+		v := base.New(t)
+		vec.Col = v.Col
+		err = vec.Vector.Read(data)
+		return int64(nr), err
+	case compress.Lz4:
+		loadSize := uint64(stat.Size())
+		originSize := uint64(stat.OriginSize())
+		tmpNode := common.GPool.Alloc(loadSize)
+		defer common.GPool.Free(tmpNode)
+		nr, err := r.Read(tmpNode.Buf[:loadSize])
+		if err != nil {
+			return n, err
+		}
+		vec.MNode = common.GPool.Alloc(originSize + mempool.CountSize)
+		_, err = compress.Decompress(tmpNode.Buf[:loadSize], vec.MNode.Buf[mempool.CountSize:originSize+mempool.CountSize], compress.Lz4)
+		if err != nil {
+			common.GPool.Free(vec.MNode)
+			return n, err
+		}
+		data := vec.MNode.Buf[:mempool.CountSize+originSize]
+		t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
+		v := base.New(t)
+		vec.Col = v.Col
+		err = vec.Vector.Read(data)
+		if err != nil {
+			common.GPool.Free(vec.MNode)
+		}
+		return int64(nr), err
+	default:
+		panic("not supported")
+	}
 }
 
 func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Process) (n int64, err error) {
-	// node := common.GPool.Alloc(vec.AllocSize + mempool.CountSize)
-	// data := node.Buf
-	allocSize := int64(vec.GetMemoryCapacity())
-	data, err := proc.Alloc(allocSize)
-	if err != nil {
-		return n, err
+	stat := vec.File.Stat()
+	// log.Infof("%d, %d, %d", stat.CompressAlgo(), stat.Size(), stat.OriginSize())
+	switch stat.CompressAlgo() {
+	case compress.None:
+		allocSize := int64(vec.GetMemoryCapacity())
+		data, err := proc.Alloc(allocSize)
+		if err != nil {
+			return n, err
+		}
+		// node := common.GPool.Alloc(uint64(allocSize) + mempool.CountSize)
+		// data := node.Buf
+		buf := data[:mempool.CountSize+allocSize]
+		nr, err := r.Read(buf[mempool.CountSize:])
+		if err != nil {
+			proc.Free(data)
+			return n, err
+		}
+		err = vec.Vector.Read(data[:mempool.CountSize+allocSize])
+		if err != nil {
+			proc.Free(data)
+			return n, err
+		}
+		copy(data, encoding.EncodeUint64(ref))
+		// common.GPool.Free(node)
+		return int64(nr), err
+	case compress.Lz4:
+		loadSize := uint64(stat.Size())
+		originSize := stat.OriginSize()
+		tmpNode := common.GPool.Alloc(loadSize)
+		defer common.GPool.Free(tmpNode)
+		nr, err := r.Read(tmpNode.Buf[:loadSize])
+		if err != nil {
+			return n, err
+		}
+		// node := common.GPool.Alloc(uint64(originSize) + mempool.CountSize)
+		// data := node.Buf
+		data, err := proc.Alloc(originSize)
+		_, err = compress.Decompress(tmpNode.Buf[:loadSize], data[mempool.CountSize:originSize+mempool.CountSize], compress.Lz4)
+		if err != nil {
+			proc.Free(data)
+			return n, err
+		}
+		t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
+		v := base.New(t)
+		vec.Col = v.Col
+		err = vec.Vector.Read(data)
+		copy(data, encoding.EncodeUint64(ref))
+		// common.GPool.Free(node)
+		return int64(nr), err
+	default:
+		panic("not supported")
 	}
-	buf := data[:mempool.CountSize+allocSize]
-	nr, err := r.Read(buf[mempool.CountSize:])
-	if err != nil {
-		proc.Free(data)
-		return n, err
-	}
-	err = vec.Vector.Read(data[:mempool.CountSize+allocSize])
-	if err != nil {
-		proc.Free(data)
-		return n, err
-	}
-	copy(data, encoding.EncodeUint64(ref))
-	// common.GPool.Free(node)
-
-	return int64(nr), err
 }
 
 func (vec *VectorWrapper) Marshall() ([]byte, error) {

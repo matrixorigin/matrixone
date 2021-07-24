@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	// "matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -191,7 +191,6 @@ func TestAppend(t *testing.T) {
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
-	t.Log(tbl.GetIndexHolder().String())
 	inst.Close()
 }
 
@@ -369,7 +368,7 @@ func TestConcurrency(t *testing.T) {
 
 	t.Logf("Takes %v", time.Since(now))
 	t.Log(tbl.String())
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 
 	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
@@ -377,7 +376,7 @@ func TestConcurrency(t *testing.T) {
 	t.Log(inst.MemTableMgr.String())
 	// t.Log(inst.IndexBufMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
-	t.Log(common.GPool.String())
+	// t.Log(common.GPool.String())
 	inst.Close()
 }
 

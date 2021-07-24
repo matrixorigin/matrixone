@@ -230,7 +230,7 @@ func TestLogIndex(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(time.Duration(400) * time.Millisecond)
 
 	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Nil(t, err)
@@ -245,7 +245,7 @@ func TestLogIndex(t *testing.T) {
 	dropLogIndex := md.NextGloablSeqnum()
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: dropLogIndex})
 	assert.Nil(t, err)
-	time.Sleep(time.Duration(10) * time.Millisecond)
+	time.Sleep(time.Duration(50) * time.Millisecond)
 	// tbl, err = inst.Store.DataTables.WeakRefTable(tid)
 	logIndex, ok = tbl.GetSegmentedIndex()
 	assert.True(t, ok)

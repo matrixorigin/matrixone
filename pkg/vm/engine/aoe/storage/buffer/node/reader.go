@@ -30,8 +30,8 @@ func NewNodeReader(nh iface.INodeHandle, filename []byte, reader io.Reader) ioif
 func (nr *NodeReader) Load() (err error) {
 	node := nr.Handle.GetBuffer().GetDataNode()
 	if nr.Reader != nil {
-		node.ReadFrom(nr.Reader)
-		return nil
+		_, err = node.ReadFrom(nr.Reader)
+		return err
 	}
 	filename := string(nr.Filename)
 	dir := filepath.Dir(filename)

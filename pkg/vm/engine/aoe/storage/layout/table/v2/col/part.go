@@ -69,7 +69,7 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	}
 
 	var node bmgrif.INode
-	node = bufMgr.CreateNode(vf, true, constructor)
+	node = bufMgr.CreateNode(vf, false, constructor)
 	if node == nil {
 		return nil
 	}
@@ -96,7 +96,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	default:
 		panic("not supported")
 	}
-	cloned.Node = sstBufMgr.CreateNode(vf, true, vector.VectorWrapperConstructor).(*bmgr.Node)
+	cloned.Node = sstBufMgr.CreateNode(vf, false, vector.VectorWrapperConstructor).(*bmgr.Node)
 
 	return cloned
 }
@@ -123,7 +123,7 @@ func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 		return ret, nil
 	}
 	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
-	wrapper.File = common.NewMemFile(int64(part.BufNode.GetCapacity()))
+	wrapper.File = part.VFile
 	_, err := wrapper.ReadWithProc(part.VFile, ref, proc)
 	if err != nil {
 		return nil, err
