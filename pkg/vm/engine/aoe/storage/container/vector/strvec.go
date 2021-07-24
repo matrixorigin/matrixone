@@ -43,11 +43,11 @@ func NewStrVectorNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFre
 		File:        vf,
 		UseCompress: useCompress,
 		FreeFunc:    freeFunc,
-		Data: &types.Bytes{
-			Data:    make([]byte, 0),
-			Offsets: make([]uint32, 0),
-			Lengths: make([]uint32, 0),
-		},
+		// Data: &types.Bytes{
+		// 	Data:    make([]byte, 0),
+		// 	Offsets: make([]uint32, 0),
+		// 	Lengths: make([]uint32, 0),
+		// },
 	}
 	return n
 }
@@ -330,7 +330,11 @@ func (vec *StrVector) Unmarshall(data []byte) error {
 	}
 	cnt := encoding.DecodeInt32(buf[:4])
 	buf = buf[4:]
-	vec.Data.Reset()
+	if vec.Data != nil {
+		vec.Data.Reset()
+	} else {
+		vec.Data = &types.Bytes{}
+	}
 	if cnt == 0 {
 		return nil
 	}
@@ -374,4 +378,5 @@ func (vec *StrVector) Marshall() ([]byte, error) {
 }
 
 func (vec *StrVector) Reset() {
+	vec.Data = nil
 }

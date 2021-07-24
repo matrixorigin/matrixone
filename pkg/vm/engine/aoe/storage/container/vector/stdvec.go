@@ -515,4 +515,5 @@ func (vec *StdVector) Marshall() ([]byte, error) {
 }
 
 func (vec *StdVector) Reset() {
+	vec.Data = nil
 }
