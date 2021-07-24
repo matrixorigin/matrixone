@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -201,6 +202,7 @@ func TestEngine(t *testing.T) {
 	assert.Nil(t, err)
 	t.Logf("Rows: %d, Size: %d", rel.Rows(), rel.Size(tblMeta.Schema.ColDefs[0].Name))
 	t.Log(inst.GetSegmentIds(dbi.GetSegmentsCtx{TableName: tblMeta.Schema.Name}))
+	t.Log(common.GPool.String())
 	inst.Close()
 }
 

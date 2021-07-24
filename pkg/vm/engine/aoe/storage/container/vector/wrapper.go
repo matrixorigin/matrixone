@@ -192,20 +192,10 @@ func (vec *VectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
-	// vec.MNode = common.GPool.Alloc(vec.AllocSize + mempool.CountSize)
-	// data := vec.MNode.Buf
-	// nr, err := r.Read(data[mempool.CountSize : vec.AllocSize+mempool.CountSize])
-	// if err != nil {
-	// 	return n, err
-	// }
-	// t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
-	// v := base.New(t)
-	// vec.Col = v.Col
-	// err = vec.Vector.Read(data)
-	// return int64(nr), err
-
-	data := make([]byte, vec.GetMemoryCapacity()+mempool.CountSize)
-	nr, err := r.Read(data[mempool.CountSize:])
+	allocSize := uint64(vec.GetMemoryCapacity())
+	vec.MNode = common.GPool.Alloc(allocSize + mempool.CountSize)
+	data := vec.MNode.Buf
+	nr, err := r.Read(data[mempool.CountSize : allocSize+mempool.CountSize])
 	if err != nil {
 		return n, err
 	}
@@ -214,6 +204,17 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 	vec.Col = v.Col
 	err = vec.Vector.Read(data)
 	return int64(nr), err
+
+	// data := make([]byte, vec.GetMemoryCapacity()+mempool.CountSize)
+	// nr, err := r.Read(data[mempool.CountSize:])
+	// if err != nil {
+	// 	return n, err
+	// }
+	// t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
+	// v := base.New(t)
+	// vec.Col = v.Col
+	// err = vec.Vector.Read(data)
+	// return int64(nr), err
 }
 
 func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Process) (n int64, err error) {

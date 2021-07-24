@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -376,6 +377,7 @@ func TestConcurrency(t *testing.T) {
 	t.Log(inst.MemTableMgr.String())
 	// t.Log(inst.IndexBufMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
+	t.Log(common.GPool.String())
 	inst.Close()
 }
 
