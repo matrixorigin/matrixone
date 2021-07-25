@@ -281,16 +281,19 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 	case compress.Lz4:
 		loadSize := uint64(stat.Size())
 		originSize := stat.OriginSize()
-		tmpNode := common.GPool.Alloc(loadSize)
+		tmpNode := common.GPool.Alloc(loadSize + mempool.CountSize)
 		defer common.GPool.Free(tmpNode)
-		nr, err := r.Read(tmpNode.Buf[:loadSize])
+		nr, err := r.Read(tmpNode.Buf[mempool.CountSize : loadSize+mempool.CountSize])
 		if err != nil {
 			return n, err
 		}
 		// node := common.GPool.Alloc(uint64(originSize) + mempool.CountSize)
 		// data := node.Buf
 		data, err := proc.Alloc(originSize)
-		_, err = compress.Decompress(tmpNode.Buf[:loadSize], data[mempool.CountSize:originSize+mempool.CountSize], compress.Lz4)
+		buf, err := compress.Decompress(tmpNode.Buf[mempool.CountSize:mempool.CountSize+loadSize], data[mempool.CountSize:originSize+mempool.CountSize], compress.Lz4)
+		if len(buf) != int(originSize) {
+			panic(fmt.Sprintf("invalid decompressed size: %d, %d is expected", len(buf), originSize))
+		}
 		if err != nil {
 			proc.Free(data)
 			return n, err
@@ -298,7 +301,7 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 		t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
 		v := base.New(t)
 		vec.Col = v.Col
-		err = vec.Vector.Read(data)
+		err = vec.Vector.Read(data[:mempool.CountSize+originSize])
 		copy(data, encoding.EncodeUint64(ref))
 		// common.GPool.Free(node)
 		return int64(nr), err

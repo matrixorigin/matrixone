@@ -48,11 +48,12 @@ var (
 	table    *aoe.TableInfo
 	readPool *ants.Pool
 	proc     *process.Process
+	hm       *host.Mmu
 )
 
 func init() {
 
-	hm := host.New(1 << 40)
+	hm = host.New(1 << 48)
 	gm := guest.New(1<<40, hm)
 	proc = process.New(gm, mempool.New(1<<48, 8))
 	readPool, _ = ants.NewPool(readPoolSize)
@@ -171,10 +172,15 @@ func readData() {
 				wg.Add(1)
 				f := func(b *batch.Batch, col string) func() {
 					return func() {
+						gm := guest.New(1<<48, hm)
+						proc2 := process.New(gm, mempool.New(1<<48, 8))
 						defer wg.Done()
-						v, err := bat.GetVector(col, proc)
+						v, err := bat.GetVector(col, proc2)
 						if err != nil {
 							panic(err)
+						}
+						if v != nil {
+							v.Free(proc2)
 						}
 						atomic.AddUint64(&totalRows, uint64(v.Length()))
 					}
@@ -186,6 +192,7 @@ func readData() {
 	wg.Wait()
 	log.Infof("Time: %s, Rows: %d", time.Since(now), totalRows)
 	log.Info(common.GPool.String())
+	log.Infof("MMU usage: %d", hm.Size())
 }
 
 func main() {

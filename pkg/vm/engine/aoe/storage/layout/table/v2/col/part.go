@@ -108,7 +108,7 @@ func (part *ColumnPart) GetVector() vector.IVector {
 }
 
 func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
-	if part.VFile == nil {
+	if part.VFile.GetFileType() == common.MemFile {
 		var ret *ro.Vector
 		vec := part.GetVector()
 		if !vec.IsReadonly() {
