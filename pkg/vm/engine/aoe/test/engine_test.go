@@ -26,6 +26,7 @@ const (
 	testDBName = "db1"
 	testTableName = "t1"
 	colCnt = 4
+	batchCnt = 1
 )
 
 func TestAOEEngine(t *testing.T) {
@@ -108,9 +109,10 @@ func TestAOEEngine(t *testing.T) {
 	require.NoError(t, err)
 	stdLog.Printf("size of batch is  %d", buf.Len())
 
-	err = tb.Write(ibat)
-	require.NoError(t, err)
-
+	for i:=0; i<batchCnt; i++ {
+		err = tb.Write(ibat)
+		require.NoError(t, err)
+	}
 
 	err = db.Delete(testTableName)
 	require.NoError(t, err)
