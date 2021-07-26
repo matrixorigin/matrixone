@@ -3,6 +3,7 @@ package manager
 import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"testing"
 
@@ -22,26 +23,25 @@ func TestManagerBasic(t *testing.T) {
 	node1 := mgr.GetNextID()
 	node2 := mgr.GetNextID()
 
-	node_capacity := uint64(64)
+	node_capacity := int64(64)
 
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 0)
-	empty := &MockVFile
-	h0 := mgr.RegisterNode(node_capacity, node0, empty, buf.RawMemoryNodeConstructor)
+	h0 := mgr.RegisterNode(common.NewMemFile(node_capacity), true, node0, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, h0)
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 1)
 	assert.Equal(t, node0, h0.GetID())
 
-	h1 := mgr.RegisterNode(node_capacity, node1, empty, buf.RawMemoryNodeConstructor)
+	h1 := mgr.RegisterNode(common.NewMemFile(node_capacity), true, node1, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, h1)
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 2)
 	assert.Equal(t, node1, h1.GetID())
 
-	h0_1 := mgr.RegisterNode(node_capacity, node0, empty, buf.RawMemoryNodeConstructor)
+	h0_1 := mgr.RegisterNode(common.NewMemFile(node_capacity), true, node0, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, h0_1)
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 2)
 	assert.Equal(t, node0, h0_1.GetID())
 
-	h2 := mgr.RegisterNode(node_capacity, node2, empty, buf.RawMemoryNodeConstructor)
+	h2 := mgr.RegisterNode(common.NewMemFile(node_capacity), true, node2, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, h2)
 	assert.Equal(t, len(mgr.(*BufferManager).Nodes), 3)
 	assert.Equal(t, node2, h2.GetID())
@@ -61,13 +61,12 @@ func TestManagerBasic(t *testing.T) {
 }
 
 func TestManager2(t *testing.T) {
-	capacity := uint64(1024)
+	capacity := int64(1024)
 	node_capacity := 2 * capacity
-	mgr := MockBufMgr(capacity)
+	mgr := MockBufMgr(uint64(capacity))
 	node0 := mgr.GetNextID()
-	empty := &MockVFile
 	constructor := buf.RawMemoryNodeConstructor
-	h0 := mgr.RegisterNode(node_capacity, node0, empty, constructor)
+	h0 := mgr.RegisterNode(common.NewMemFile(node_capacity), true, node0, constructor)
 	assert.Equal(t, h0.GetID(), node0)
 	assert.False(t, h0.HasRef())
 	b0 := mgr.Pin(h0)
@@ -99,32 +98,31 @@ func TestManager2(t *testing.T) {
 }
 
 func TestManager3(t *testing.T) {
-	node_capacity := uint64(1024)
+	node_capacity := int64(1024)
 	capacity := node_capacity * 2
-	mgr := MockBufMgr(capacity)
-	assert.Equal(t, mgr.GetCapacity(), capacity)
+	mgr := MockBufMgr(uint64(capacity))
+	assert.Equal(t, mgr.GetCapacity(), uint64(capacity))
 
 	n0 := mgr.GetNextID()
-	empty := &MockVFile
 	constructor := buf.RawMemoryNodeConstructor
-	h0 := mgr.RegisterNode(node_capacity, n0, empty, constructor)
+	h0 := mgr.RegisterNode(common.NewMemFile(node_capacity), true, n0, constructor)
 	assert.NotNil(t, h0)
 	assert.Equal(t, h0.GetID(), n0)
 	assert.Equal(t, h0.GetState(), nif.NODE_UNLOAD)
-	assert.Equal(t, mgr.GetCapacity(), capacity)
+	assert.Equal(t, mgr.GetCapacity(), uint64(capacity))
 
 	{
 		bh0 := mgr.Pin(h0)
 		assert.Equal(t, bh0.GetID(), n0)
 		assert.Equal(t, h0.GetState(), nif.NODE_LOADED)
 		assert.Equal(t, mgr.GetUsage(), h0.GetCapacity())
-		assert.Equal(t, mgr.GetCapacity(), capacity)
+		assert.Equal(t, mgr.GetCapacity(), uint64(capacity))
 		assert.True(t, h0.HasRef())
 		bh0.Close()
 		assert.False(t, h0.HasRef())
 
 		n1 := mgr.GetNextID()
-		h1 := mgr.RegisterNode(node_capacity, n1, empty, constructor)
+		h1 := mgr.RegisterNode(common.NewMemFile(node_capacity), true, n1, constructor)
 		assert.True(t, h1 != nil)
 		assert.Equal(t, h1.GetID(), n1)
 		assert.Equal(t, h1.GetState(), nif.NODE_UNLOAD)
@@ -136,7 +134,7 @@ func TestManager3(t *testing.T) {
 		assert.Equal(t, mgr.GetUsage(), h0.GetCapacity()+h1.GetCapacity())
 
 		n2 := mgr.GetNextID()
-		h2 := mgr.RegisterNode(node_capacity, n2, empty, constructor)
+		h2 := mgr.RegisterNode(common.NewMemFile(node_capacity), true, n2, constructor)
 		assert.True(t, h2 != nil)
 		assert.Equal(t, h2.GetID(), n2)
 		assert.Equal(t, h2.GetState(), nif.NODE_UNLOAD)
@@ -152,21 +150,21 @@ func TestManager3(t *testing.T) {
 }
 
 func TestManager4(t *testing.T) {
-	node_capacity := uint64(1024)
+	node_capacity := int64(1024)
 	capacity := node_capacity / 2
-	mgr := MockBufMgr(capacity)
-	assert.Equal(t, mgr.GetCapacity(), capacity)
+	mgr := MockBufMgr(uint64(capacity))
+	assert.Equal(t, mgr.GetCapacity(), uint64(capacity))
 
 	constructor := buf.RawMemoryNodeConstructor
 	id0 := mgr.GetNextID()
-	h0 := mgr.RegisterSpillableNode(node_capacity, id0, constructor)
+	h0 := mgr.RegisterSpillableNode(common.NewMemFile(node_capacity), id0, constructor)
 	assert.Nil(t, h0)
 	num_nodes := uint64(3)
-	mgr.SetCapacity(num_nodes * node_capacity)
+	mgr.SetCapacity(num_nodes * uint64(node_capacity))
 
-	h0_1 := mgr.RegisterSpillableNode(node_capacity, id0, constructor)
+	h0_1 := mgr.RegisterSpillableNode(common.NewMemFile(node_capacity), id0, constructor)
 	assert.NotNil(t, h0_1)
-	assert.Equal(t, h0_1.GetCapacity(), node_capacity)
+	assert.Equal(t, h0_1.GetCapacity(), uint64(node_capacity))
 	assert.Equal(t, h0_1.GetCapacity(), mgr.GetUsage())
 	assert.Equal(t, nif.NODE_LOADED, h0_1.GetState())
 	assert.False(t, h0_1.HasRef())
@@ -174,7 +172,7 @@ func TestManager4(t *testing.T) {
 	bh0 := mgr.Pin(h0_1)
 	assert.Equal(t, bh0.GetID(), id0)
 	assert.Equal(t, nif.NODE_LOADED, h0_1.GetState())
-	assert.Equal(t, h0_1.GetCapacity(), node_capacity)
+	assert.Equal(t, h0_1.GetCapacity(), uint64(node_capacity))
 	assert.Equal(t, h0_1.GetCapacity(), mgr.GetUsage())
 	assert.True(t, h0_1.HasRef())
 	bh0.Close()
@@ -182,20 +180,20 @@ func TestManager4(t *testing.T) {
 }
 
 func TestManager5(t *testing.T) {
-	node_capacity := uint64(1024)
+	node_capacity := int64(1024)
 	capacity := node_capacity / 2
-	mgr := MockBufMgr(capacity)
-	assert.Equal(t, mgr.GetCapacity(), capacity)
+	mgr := MockBufMgr(uint64(capacity))
+	assert.Equal(t, mgr.GetCapacity(), uint64(capacity))
 
 	constructor := buf.RawMemoryNodeConstructor
-	h0 := mgr.RegisterMemory(node_capacity, false, constructor)
+	h0 := mgr.RegisterMemory(common.NewMemFile(node_capacity), false, constructor)
 	assert.Nil(t, h0)
 
-	mgr.SetCapacity(node_capacity)
+	mgr.SetCapacity(uint64(node_capacity))
 
-	h0_1 := mgr.RegisterMemory(node_capacity, true, constructor)
+	h0_1 := mgr.RegisterMemory(common.NewMemFile(node_capacity), true, constructor)
 	assert.NotNil(t, h0_1)
-	assert.Equal(t, h0_1.GetCapacity(), node_capacity)
+	assert.Equal(t, h0_1.GetCapacity(), uint64(node_capacity))
 	assert.Equal(t, h0_1.GetCapacity(), mgr.GetUsage())
 	assert.Equal(t, nif.NODE_LOADED, h0_1.GetState())
 	assert.False(t, h0_1.HasRef())
@@ -204,22 +202,22 @@ func TestManager5(t *testing.T) {
 	bh0_id := bh0.GetID()
 	assert.True(t, bh0_id >= TRANSIENT_START_ID)
 	assert.Equal(t, nif.NODE_LOADED, h0_1.GetState())
-	assert.Equal(t, h0_1.GetCapacity(), node_capacity)
+	assert.Equal(t, h0_1.GetCapacity(), uint64(node_capacity))
 	assert.Equal(t, h0_1.GetCapacity(), mgr.GetUsage())
 	assert.True(t, h0_1.HasRef())
 
-	h1 := mgr.RegisterMemory(node_capacity, false, constructor)
+	h1 := mgr.RegisterMemory(common.NewMemFile(node_capacity), false, constructor)
 	assert.Nil(t, h1)
 
 	bh0.Close()
 	assert.False(t, h0_1.HasRef())
 	id1 := mgr.GetNextID()
-	h1 = mgr.RegisterSpillableNode(node_capacity, id1, constructor)
+	h1 = mgr.RegisterSpillableNode(common.NewMemFile(node_capacity), id1, constructor)
 	assert.NotNil(t, h1)
 
 	bh1 := mgr.Pin(h1)
 	assert.Equal(t, nif.NODE_LOADED, h1.GetState())
-	assert.Equal(t, h1.GetCapacity(), node_capacity)
+	assert.Equal(t, h1.GetCapacity(), uint64(node_capacity))
 	assert.Equal(t, h1.GetCapacity(), mgr.GetUsage())
 	assert.True(t, h1.HasRef())
 

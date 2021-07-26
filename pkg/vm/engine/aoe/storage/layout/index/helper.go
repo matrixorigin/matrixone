@@ -8,7 +8,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
 
-	"github.com/pilosa/pilosa/roaring"
+	"github.com/RoaringBitmap/roaring"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -18,25 +18,25 @@ var (
 
 type RWHelper struct{}
 
-func (h *RWHelper) WriteIndexes(indexes []Index) ([]byte, error) {
+func (h *RWHelper) WriteIndices(indices []Index) ([]byte, error) {
 	var buf bytes.Buffer
-	_, err := buf.Write(encoding.EncodeInt16(int16(len(indexes))))
+	_, err := buf.Write(encoding.EncodeInt16(int16(len(indices))))
 	if err != nil {
 		return nil, err
 	}
-	for _, i := range indexes {
+	for _, i := range indices {
 		_, err := buf.Write(encoding.EncodeUint16(i.Type()))
 		if err != nil {
 			return nil, err
 		}
 	}
-	for _, i := range indexes {
+	for _, i := range indices {
 		_, err := buf.Write(encoding.EncodeInt16(i.GetCol()))
 		if err != nil {
 			return nil, err
 		}
 	}
-	for _, i := range indexes {
+	for _, i := range indices {
 		ibuf, _ := i.Marshall()
 		buf.Write(encoding.EncodeInt32(int32(len(ibuf))))
 		buf.Write(ibuf)
@@ -45,7 +45,7 @@ func (h *RWHelper) WriteIndexes(indexes []Index) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (h *RWHelper) ReadIndexes(f os.File) (indexes []Index, err error) {
+func (h *RWHelper) ReadIndices(f os.File) (indices []Index, err error) {
 	twoBytes := make([]byte, 2)
 	fourBytes := make([]byte, 4)
 	_, err = f.Read(twoBytes)
@@ -62,7 +62,7 @@ func (h *RWHelper) ReadIndexes(f os.File) (indexes []Index, err error) {
 		switch indexType {
 		case base.ZoneMap:
 			idx := new(ZoneMapIndex)
-			indexes = append(indexes, idx)
+			indices = append(indices, idx)
 		default:
 			panic("unsupported")
 		}
@@ -84,12 +84,12 @@ func (h *RWHelper) ReadIndexes(f os.File) (indexes []Index, err error) {
 		if err != nil {
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
-		indexes[i].Unmarshall(buf)
+		indices[i].Unmarshall(buf)
 	}
-	return indexes, err
+	return indices, err
 }
 
-func (h *RWHelper) ReadIndexesMeta(f os.File) (meta *base.IndexesMeta, err error) {
+func (h *RWHelper) ReadIndicesMeta(f os.File) (meta *base.IndicesMeta, err error) {
 	twoBytes := make([]byte, 2)
 	fourBytes := make([]byte, 4)
 	_, err = f.Read(twoBytes)
@@ -98,7 +98,7 @@ func (h *RWHelper) ReadIndexesMeta(f os.File) (meta *base.IndexesMeta, err error
 	}
 	indexCnt := encoding.DecodeInt16(twoBytes)
 	if indexCnt > 0 {
-		meta = base.NewIndexesMeta()
+		meta = base.NewIndicesMeta()
 	}
 	for i := 0; i < int(indexCnt); i++ {
 		_, err := f.Read(twoBytes)
@@ -118,7 +118,7 @@ func (h *RWHelper) ReadIndexesMeta(f os.File) (meta *base.IndexesMeta, err error
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
 		col := encoding.DecodeInt16(twoBytes)
-		meta.Data[i].Cols.Add(uint64(col))
+		meta.Data[i].Cols.Add(uint32(col))
 	}
 	for i := 0; i < int(indexCnt); i++ {
 		_, err := f.Read(fourBytes)

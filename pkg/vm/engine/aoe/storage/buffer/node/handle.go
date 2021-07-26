@@ -6,30 +6,30 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
 
 func NewNodeHandle(ctx *NodeHandleCtx) nif.INodeHandle {
-	size := ctx.Size
 	state := nif.NODE_UNLOAD
 	if ctx.Buff != nil {
-		size = ctx.Buff.GetCapacity()
 		state = nif.NODE_LOADED
 	}
 	handle := &NodeHandle{
 		ID:          ctx.ID,
 		Buff:        ctx.Buff,
-		Capacity:    size,
+		File:        ctx.File,
 		State:       state,
 		RTState:     nif.NODE_RT_RUNNING,
 		Manager:     ctx.Manager,
 		Spillable:   ctx.Spillable,
+		UseCompress: ctx.UseCompress,
 		Constructor: ctx.Constructor,
 	}
 
-	if ctx.Reader != nil {
-		handle.IO = NewNodeIOWithReader(handle, ctx.Reader)
+	if ctx.File != nil && !ctx.Spillable {
+		handle.IO = NewNodeIOWithReader(handle, ctx.File)
 	} else if ctx.Spillable {
 		handle.IO = NewNodeIO(handle, ctx.Dir)
 	}
@@ -83,7 +83,11 @@ func (h *NodeHandle) GetNodeCreator() buf.MemoryNodeConstructor {
 }
 
 func (h *NodeHandle) GetCapacity() uint64 {
-	return h.Capacity
+	if h.UseCompress {
+		return uint64(h.File.Stat().Size())
+	} else {
+		return uint64(h.File.Stat().OriginSize())
+	}
 }
 
 func (h *NodeHandle) Ref() {
@@ -196,6 +200,14 @@ func (h *NodeHandle) CommitLoad() error {
 	return nil
 }
 
+func (h *NodeHandle) GetFile() common.IVFile {
+	return h.File
+}
+
+func (h *NodeHandle) IsCompress() bool {
+	return h.UseCompress
+}
+
 func (h *NodeHandle) MakeHandle() nif.IBufferHandle {
 	if nif.AtomicLoadState(&(h.State)) != nif.NODE_LOADED {
 		panic(fmt.Sprintf("Should not call MakeHandle not NODE_LOADED: %d", h.State))
@@ -204,7 +216,7 @@ func (h *NodeHandle) MakeHandle() nif.IBufferHandle {
 }
 
 func (h *NodeHandle) SetBuffer(buf buf.IBuffer) error {
-	if h.Buff != nil || h.Capacity != uint64(buf.GetCapacity()) {
+	if h.Buff != nil || h.GetCapacity() != uint64(buf.GetCapacity()) {
 		return errors.New("logic error")
 	}
 	h.Buff = buf

@@ -1,10 +1,10 @@
 package node
 
 import (
-	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"sync"
 )
@@ -20,10 +20,10 @@ type NodeHandleCtx struct {
 	Buff        buf.IBuffer
 	Spillable   bool
 	Manager     mgrif.IBufferManager
-	Size        uint64
-	Reader      io.Reader
+	File        common.IVFile
 	Constructor buf.MemoryNodeConstructor
 	Dir         []byte
+	UseCompress bool
 }
 
 type NodeHandle struct {
@@ -32,7 +32,8 @@ type NodeHandle struct {
 	ID          uint64
 	Buff        buf.IBuffer
 	Spillable   bool
-	Capacity    uint64
+	File        common.IVFile
+	UseCompress bool
 	RTState     nif.NodeRTState
 	Refs        uint64
 	Manager     mgrif.IBufferManager

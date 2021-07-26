@@ -1,10 +1,12 @@
 package node
 
 import (
-	"github.com/stretchr/testify/assert"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 	// "os"
 	// "context"
 )
@@ -49,7 +51,7 @@ func TestNode(t *testing.T) {
 	assert.NotNil(t, pool)
 	assert.Equal(t, capacity, pool.GetCapacity())
 	assert.Equal(t, uint64(0), pool.GetUsage())
-	node1 := pool.Alloc(node_capacity, buf.RawMemoryNodeConstructor)
+	node1 := pool.Alloc(common.NewMemFile(int64(node_capacity)), false, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, node1)
 	assert.Equal(t, node_capacity, node1.GetMemoryCapacity())
 	assert.Equal(t, capacity, pool.GetCapacity())
@@ -62,7 +64,7 @@ func TestNode(t *testing.T) {
 	assert.Equal(t, node_buff1.GetCapacity(), node_capacity)
 	assert.Equal(t, id1, node_buff1.GetID())
 
-	node2 := pool.Alloc(node_capacity, buf.RawMemoryNodeConstructor)
+	node2 := pool.Alloc(common.NewMemFile(int64(node_capacity)), false, buf.RawMemoryNodeConstructor)
 	assert.NotNil(t, node2)
 	id2 := id
 	id++
@@ -72,11 +74,9 @@ func TestNode(t *testing.T) {
 	assert.Equal(t, 2*node_capacity, pool.GetUsage())
 
 	node_buff1.Close()
-	assert.Equal(t, node_buff1.GetNodeSize(), uint64(0))
 	assert.Equal(t, node_capacity, pool.GetUsage())
 
 	node_buff2.Close()
-	assert.Equal(t, node_buff2.GetNodeSize(), uint64(0))
 	assert.Equal(t, uint64(0), pool.GetUsage())
 }
 

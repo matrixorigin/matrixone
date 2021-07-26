@@ -366,9 +366,9 @@ func (tbl *Table) Copy(ctx CopyCtx) *Table {
 
 func (tbl *Table) Replay() {
 	ts := NowMicro()
-	if len(tbl.Schema.Indexes) > 0 {
-		if tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID > tbl.Info.Sequence.NextIndexID {
-			tbl.Info.Sequence.NextIndexID = tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID
+	if len(tbl.Schema.Indices) > 0 {
+		if tbl.Schema.Indices[len(tbl.Schema.Indices)-1].ID > tbl.Info.Sequence.NextIndexID {
+			tbl.Info.Sequence.NextIndexID = tbl.Schema.Indices[len(tbl.Schema.Indices)-1].ID
 		}
 	}
 	max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()

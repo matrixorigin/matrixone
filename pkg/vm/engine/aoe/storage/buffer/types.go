@@ -2,15 +2,16 @@ package buf
 
 import (
 	"io"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type MemoryFreeFunc func(IMemoryNode)
 type MemoryAllocFunc func() (mem []byte, err error)
-type MemoryNodeConstructor func(uint64, MemoryFreeFunc) IMemoryNode
+type MemoryNodeConstructor func(common.IVFile, bool, MemoryFreeFunc) IMemoryNode
 
 type IMemoryPool interface {
 	Free(size uint64)
-	Alloc(size uint64, constructor MemoryNodeConstructor) IMemoryNode
+	Alloc(vf common.IVFile, useCompress bool, constructor MemoryNodeConstructor) IMemoryNode
 	GetCapacity() uint64
 	SetCapacity(uint64) error
 	GetUsage() uint64
@@ -37,12 +38,9 @@ var WithFreeWithPool = func(pool IMemoryPool) MemoryFreeFunc {
 type IBuffer interface {
 	io.Closer
 	GetCapacity() uint64
-	GetNodeSize() uint64
 	GetDataNode() IMemoryNode
 }
 
 type Buffer struct {
-	Node       IMemoryNode
-	DataSize   uint64
-	HeaderSize uint64
+	Node IMemoryNode
 }

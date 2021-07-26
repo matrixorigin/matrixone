@@ -1,28 +1,39 @@
 package buf
 
-import "io"
+import (
+	"io"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
+)
 
-func RawMemoryNodeConstructor(capacity uint64, freeFunc MemoryFreeFunc) IMemoryNode {
-	return NewRawMemoryNode(capacity, freeFunc)
+func RawMemoryNodeConstructor(vf common.IVFile, useCompress bool, freeFunc MemoryFreeFunc) IMemoryNode {
+	return NewRawMemoryNode(vf, useCompress, freeFunc)
 }
 
 type RawMemoryNode struct {
-	Data     []byte
-	Capacity uint64
-	FreeFunc MemoryFreeFunc
+	Data        []byte
+	FreeFunc    MemoryFreeFunc
+	UseCompress bool
+	File        common.IVFile
 }
 
-func NewRawMemoryNode(capacity uint64, freeFunc MemoryFreeFunc) IMemoryNode {
+func NewRawMemoryNode(vf common.IVFile, useCompress bool, freeFunc MemoryFreeFunc) IMemoryNode {
+	var capacity int64
+	if useCompress {
+		capacity = vf.Stat().Size()
+	} else {
+		capacity = vf.Stat().OriginSize()
+	}
 	node := &RawMemoryNode{
-		Capacity: capacity,
-		FreeFunc: freeFunc,
-		Data:     make([]byte, capacity),
+		FreeFunc:    freeFunc,
+		UseCompress: useCompress,
+		File:        vf,
+		Data:        make([]byte, capacity),
 	}
 	return node
 }
 
 func (mn *RawMemoryNode) GetMemoryCapacity() uint64 {
-	return mn.Capacity
+	return uint64(cap(mn.Data))
 }
 
 func (mn *RawMemoryNode) GetMemorySize() uint64 {
@@ -56,7 +67,7 @@ func (mn *RawMemoryNode) Marshall() (buf []byte, err error) {
 }
 
 func (mn *RawMemoryNode) Unmarshall(buf []byte) error {
-	length := int(mn.Capacity)
+	length := cap(mn.Data)
 	if length > len(buf) {
 		length = len(buf)
 	}
