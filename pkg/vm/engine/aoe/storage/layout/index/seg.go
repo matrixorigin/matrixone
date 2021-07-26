@@ -18,8 +18,8 @@ type SegmentHolder struct {
 	Inited bool
 	self   struct {
 		sync.RWMutex
-		Indexes    []*Node
-		ColIndexes map[int][]int
+		Indices    []*Node
+		ColIndices map[int][]int
 	}
 	tree struct {
 		sync.RWMutex
@@ -35,8 +35,8 @@ func newSegmentHolder(bufMgr mgrif.IBufferManager, id common.ID, segType base.Se
 	holder := &SegmentHolder{ID: id, Type: segType, BufMgr: bufMgr}
 	holder.tree.Blocks = make([]*BlockHolder, 0)
 	holder.tree.IdMap = make(map[uint64]int)
-	holder.self.ColIndexes = make(map[int][]int)
-	holder.self.Indexes = make([]*Node, 0)
+	holder.self.ColIndices = make(map[int][]int)
+	holder.self.Indices = make([]*Node, 0)
 	holder.OnZeroCB = holder.close
 	holder.PostCloseCB = cb
 	holder.Ref()
@@ -47,21 +47,21 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 	if holder.Inited {
 		panic("logic error")
 	}
-	indexesMeta := segFile.GetIndexesMeta()
-	if indexesMeta == nil {
+	indicesMeta := segFile.GetIndicesMeta()
+	if indicesMeta == nil {
 		return
 	}
-	for _, meta := range indexesMeta.Data {
+	for _, meta := range indicesMeta.Data {
 		vf := segFile.MakeVirtualIndexFile(meta)
 		col := int(meta.Cols.ToArray()[0])
 		node := newNode(holder.BufMgr, vf, false, ZoneMapIndexConstructor, meta.Cols, nil)
-		idxes, ok := holder.self.ColIndexes[col]
+		idxes, ok := holder.self.ColIndices[col]
 		if !ok {
 			idxes = make([]int, 0)
-			holder.self.ColIndexes[col] = idxes
+			holder.self.ColIndices[col] = idxes
 		}
-		holder.self.ColIndexes[col] = append(holder.self.ColIndexes[col], len(holder.self.Indexes))
-		holder.self.Indexes = append(holder.self.Indexes, node)
+		holder.self.ColIndices[col] = append(holder.self.ColIndices[col], len(holder.self.Indices))
+		holder.self.Indices = append(holder.self.Indices, node)
 	}
 	holder.Inited = true
 }
@@ -71,7 +71,7 @@ func (holder *SegmentHolder) close() {
 		blk.Unref()
 	}
 
-	for _, colIndex := range holder.self.Indexes {
+	for _, colIndex := range holder.self.Indices {
 		colIndex.Unref()
 	}
 	if holder.PostCloseCB != nil {
@@ -80,7 +80,7 @@ func (holder *SegmentHolder) close() {
 }
 
 func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
-	idxes, ok := holder.self.ColIndexes[colIdx]
+	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
 		// TODO
 		ctx.BoolRes = true
@@ -88,7 +88,7 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	}
 	var err error
 	for _, idx := range idxes {
-		node := holder.self.Indexes[idx].GetManagedNode()
+		node := holder.self.Indices[idx].GetManagedNode()
 		err = node.DataNode.(Index).Eval(ctx)
 		if err != nil {
 			node.Close()

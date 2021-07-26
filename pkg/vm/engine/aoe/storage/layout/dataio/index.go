@@ -6,19 +6,19 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
-type EmbbedIndexFile struct {
+type EmbedIndexFile struct {
 	SegmentFile base.ISegmentFile
 	Meta        *base.IndexMeta
 	Info        *fileStat
 }
 
-type EmbbedBlockIndexFile struct {
-	EmbbedIndexFile
+type EmbedBlockIndexFile struct {
+	EmbedIndexFile
 	ID common.ID
 }
 
-func newEmbbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) common.IVFile {
-	f := &EmbbedIndexFile{
+func newEmbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) common.IVFile {
+	f := &EmbedIndexFile{
 		SegmentFile: host,
 		Meta:        meta,
 		Info: &fileStat{
@@ -28,9 +28,9 @@ func newEmbbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) common.IVF
 	return f
 }
 
-func newEmbbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.IndexMeta) common.IVFile {
-	f := &EmbbedBlockIndexFile{
-		EmbbedIndexFile: EmbbedIndexFile{
+func newEmbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.IndexMeta) common.IVFile {
+	f := &EmbedBlockIndexFile{
+		EmbedIndexFile: EmbedIndexFile{
 			SegmentFile: host,
 			Meta:        meta,
 			Info: &fileStat{
@@ -44,23 +44,23 @@ func newEmbbedBlockIndexFile(id *common.ID, host base.ISegmentFile, meta *base.I
 	return f
 }
 
-func (f *EmbbedIndexFile) Stat() common.FileInfo {
+func (f *EmbedIndexFile) Stat() common.FileInfo {
 	return f.Info
 }
 
-func (f *EmbbedIndexFile) Ref() {
+func (f *EmbedIndexFile) Ref() {
 	f.SegmentFile.Ref()
 }
 
-func (f *EmbbedIndexFile) Unref() {
+func (f *EmbedIndexFile) Unref() {
 	f.SegmentFile.Ref()
 }
 
-func (cpf *EmbbedIndexFile) GetFileType() common.FileType {
+func (cpf *EmbedIndexFile) GetFileType() common.FileType {
 	return common.DiskFile
 }
 
-func (f *EmbbedIndexFile) Read(buf []byte) (n int, err error) {
+func (f *EmbedIndexFile) Read(buf []byte) (n int, err error) {
 	if len(buf) != int(f.Meta.Ptr.Len) {
 		panic("logic error")
 	}
@@ -68,18 +68,18 @@ func (f *EmbbedIndexFile) Read(buf []byte) (n int, err error) {
 	return len(buf), nil
 }
 
-func (bf *EmbbedBlockIndexFile) Stat() common.FileInfo {
+func (bf *EmbedBlockIndexFile) Stat() common.FileInfo {
 	return bf.Info
 }
-func (bf *EmbbedBlockIndexFile) Ref() {
+func (bf *EmbedBlockIndexFile) Ref() {
 	bf.SegmentFile.RefBlock(bf.ID)
 }
 
-func (bf *EmbbedBlockIndexFile) Unref() {
+func (bf *EmbedBlockIndexFile) Unref() {
 	bf.SegmentFile.UnrefBlock(bf.ID)
 }
 
-func (bf *EmbbedBlockIndexFile) Read(buf []byte) (n int, err error) {
+func (bf *EmbedBlockIndexFile) Read(buf []byte) (n int, err error) {
 	if len(buf) != int(bf.Meta.Ptr.Len) {
 		panic("logic error")
 	}

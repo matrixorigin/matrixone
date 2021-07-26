@@ -46,11 +46,11 @@ func (bf *MockSegmentFile) GetFileType() common.FileType {
 	return common.DiskFile
 }
 
-func (msf *MockSegmentFile) GetIndexesMeta() *base.IndexesMeta {
+func (msf *MockSegmentFile) GetIndicesMeta() *base.IndicesMeta {
 	return nil
 }
 
-func (msf *MockSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMeta {
+func (msf *MockSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta {
 	return nil
 }
 

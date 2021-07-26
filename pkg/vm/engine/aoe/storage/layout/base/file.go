@@ -8,32 +8,18 @@ import (
 	"github.com/RoaringBitmap/roaring"
 )
 
-// type FileInfo interface {
-// 	Name() string
-// 	Size() int64
-// 	OriginSize() int64
-// 	CompressAlgo() int
-// }
-
-// type IVirtaulFile interface {
-// 	io.Reader
-// 	Ref()
-// 	Unref()
-// 	Stat() FileInfo
-// }
-
 type Pointer struct {
 	Offset    int64
 	Len       uint64
 	OriginLen uint64
 }
 
-type IndexesMeta struct {
+type IndicesMeta struct {
 	Data []*IndexMeta
 }
 
-func (m *IndexesMeta) String() string {
-	s := fmt.Sprintf("<IndexesMeta>[Cnt=%d]", len(m.Data))
+func (m *IndicesMeta) String() string {
+	s := fmt.Sprintf("<IndicesMeta>[Cnt=%d]", len(m.Data))
 	for _, meta := range m.Data {
 		s = fmt.Sprintf("%s\n\t%s", s, meta.String())
 	}
@@ -46,8 +32,8 @@ type IndexMeta struct {
 	Ptr  *Pointer
 }
 
-func NewIndexesMeta() *IndexesMeta {
-	return &IndexesMeta{
+func NewIndicesMeta() *IndicesMeta {
+	return &IndicesMeta{
 		Data: make([]*IndexMeta, 0),
 	}
 }
@@ -73,7 +59,7 @@ type IManager interface {
 
 type IBaseFile interface {
 	io.Closer
-	GetIndexesMeta() *IndexesMeta
+	GetIndicesMeta() *IndicesMeta
 	ReadPoint(ptr *Pointer, buf []byte)
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 	PartSize(colIdx uint64, id common.ID, isOrigin bool) int64
@@ -91,7 +77,7 @@ type ISegmentFile interface {
 	RefBlock(blkId common.ID)
 	UnrefBlock(blkId common.ID)
 	ReadBlockPoint(id common.ID, ptr *Pointer, buf []byte)
-	GetBlockIndexesMeta(id common.ID) *IndexesMeta
+	GetBlockIndicesMeta(id common.ID) *IndicesMeta
 
 	MakeVirtualBlkIndexFile(id *common.ID, meta *IndexMeta) common.IVFile
 	MakeVirtualPartFile(id *common.ID) common.IVFile

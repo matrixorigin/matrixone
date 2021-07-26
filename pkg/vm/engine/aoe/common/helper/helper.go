@@ -34,7 +34,7 @@ func Transfer(sid, tid, typ uint64, name, comment string,
 			mp[col.Name] = col.Id
 		}
 	}
-	tbl.Indexes = IndexDefs(sid, tid, mp, defs)
+	tbl.Indices = IndexDefs(sid, tid, mp, defs)
 	if pdef != nil {
 		data, err := PartitionDef(pdef)
 		if err != nil {
@@ -64,7 +64,7 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, string, []en
 			},
 		})
 	}
-	for _, idx := range tbl.Indexes {
+	for _, idx := range tbl.Indices {
 		defs = append(defs, &engine.IndexTableDef{
 			Typ:   int(idx.Type),
 			Names: idx.Names,
@@ -137,8 +137,8 @@ func PartitionDef(def *engine.PartitionBy) ([]byte, error) {
 }
 
 func Index(tbl aoe.TableInfo) []*engine.IndexTableDef {
-	defs := make([]*engine.IndexTableDef, len(tbl.Indexes))
-	for i, idx := range tbl.Indexes {
+	defs := make([]*engine.IndexTableDef, len(tbl.Indices))
+	for i, idx := range tbl.Indices {
 		defs[i] = &engine.IndexTableDef{
 			Typ:   int(idx.Type),
 			Names: idx.Names,

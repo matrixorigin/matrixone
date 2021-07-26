@@ -51,11 +51,11 @@ type SortedSegmentFile struct {
 }
 
 func (sf *SortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
-	return newEmbbedIndexFile(sf, meta)
+	return newEmbedIndexFile(sf, meta)
 }
 
 func (sf *SortedSegmentFile) MakeVirtualBlkIndexFile(id *common.ID, meta *base.IndexMeta) common.IVFile {
-	return newEmbbedIndexFile(sf, meta)
+	return newEmbedIndexFile(sf, meta)
 }
 
 func (sf *SortedSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
@@ -107,16 +107,16 @@ func (sf *SortedSegmentFile) GetFileType() common.FileType {
 	return common.DiskFile
 }
 
-func (sf *SortedSegmentFile) GetIndexesMeta() *base.IndexesMeta {
-	return sf.Meta.Indexes
+func (sf *SortedSegmentFile) GetIndicesMeta() *base.IndicesMeta {
+	return sf.Meta.Indices
 }
 
-func (sf *SortedSegmentFile) GetBlockIndexesMeta(id common.ID) *base.IndexesMeta {
+func (sf *SortedSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta {
 	blkMeta := sf.BlocksMeta[id]
 	if blkMeta == nil {
 		return nil
 	}
-	return blkMeta.Indexes
+	return blkMeta.Indices
 }
 
 func (sf *SortedSegmentFile) Destory() {

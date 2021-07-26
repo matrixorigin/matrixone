@@ -18,7 +18,7 @@ var (
 	workDir = "/tmp/dataio_test"
 )
 
-func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indexes []index.Index, blkCnt int) base.ISegmentFile {
+func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices []index.Index, blkCnt int) base.ISegmentFile {
 	baseid := id
 	var dir string
 	for i := 0; i < blkCnt; i++ {
@@ -36,7 +36,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indexes
 		if err != nil {
 			panic(err)
 		}
-		buf, err := index.DefaultRWHelper.WriteIndexes(indexes)
+		buf, err := index.DefaultRWHelper.WriteIndices(indices)
 		if err != nil {
 			panic(err)
 		}
@@ -65,14 +65,14 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indexes
 func TestAll(t *testing.T) {
 	bufMgr := bmgr.MockBufMgr(26 * 4)
 	colCnt := 2
-	indexes := index.MockInt32ZmIndexes(colCnt)
+	indices := index.MockInt32ZmIndices(colCnt)
 	id := common.ID{}
 	blkCnt := 4
 	droppedBlocks := []uint64{}
 	blkCB := func(v interface{}) {
 		droppedBlocks = append(droppedBlocks, v.(*index.BlockHolder).ID.BlockID)
 	}
-	segFile := mockUnSortedSegmentFile(t, workDir, id, indexes, blkCnt)
+	segFile := mockUnSortedSegmentFile(t, workDir, id, indices, blkCnt)
 	tblHolder := index.NewTableHolder(bufMgr, id.TableID)
 	segHolder := tblHolder.RegisterSegment(id, base.UNSORTED_SEG, nil)
 	segHolder.Unref()
@@ -88,7 +88,7 @@ func TestAll(t *testing.T) {
 	assert.Equal(t, colCnt*blkCnt, bufMgr.NodeCount())
 	for bidx := 0; bidx < blkCnt; bidx++ {
 		blk := segHolder.StrongRefBlock(uint64(bidx))
-		for i, _ := range blk.Indexes {
+		for i, _ := range blk.Indices {
 			node := blk.GetIndexNode(i)
 			mnode := node.GetManagedNode()
 			zm := mnode.DataNode.(*index.ZoneMapIndex)

@@ -33,7 +33,7 @@ type BlockWriter struct {
 	// preprocessor preprocess data before writing, such as SORT
 	preprocessor func([]*vector.Vector, *md.Block) error
 
-	// indexSerializer flush indexes that pre-defined in meta
+	// indexSerializer flush indices that pre-defined in meta
 	indexSerializer BlkIndexSerializer
 
 	// dataSerializer flush columns data, including compression
@@ -50,7 +50,7 @@ func NewBlockWriter(data []*vector.Vector, meta *md.Block, dir string) *BlockWri
 		dir:  dir,
 	}
 	w.fileGetter = w.createIOWriter
-	w.indexSerializer = w.flushIndexes
+	w.indexSerializer = w.flushIndices
 	w.dataSerializer = defaultDataSerializer
 	return w
 }
@@ -89,8 +89,8 @@ func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, err
 	return w, err
 }
 
-func (bw *BlockWriter) flushIndexes(w *os.File, data []*vector.Vector, meta *md.Block) error {
-	indexes := []index.Index{}
+func (bw *BlockWriter) flushIndices(w *os.File, data []*vector.Vector, meta *md.Block) error {
+	indices := []index.Index{}
 	hasBsi := false
 	for idx, t := range meta.Segment.Table.Schema.ColDefs {
 		if t.Type.Oid == types.T_int32 {
@@ -98,7 +98,7 @@ func (bw *BlockWriter) flushIndexes(w *os.File, data []*vector.Vector, meta *md.
 				minv := int32(1) + int32(idx)*100
 				maxv := int32(99) + int32(idx)*100
 				zmi := index.NewZoneMap(t.Type, minv, maxv, int16(idx))
-				indexes = append(indexes, zmi)
+				indices = append(indices, zmi)
 			}
 			if !hasBsi {
 				// column := data[idx].Col.([]int32)
@@ -106,12 +106,12 @@ func (bw *BlockWriter) flushIndexes(w *os.File, data []*vector.Vector, meta *md.
 				// for row, val := range column {
 				// 	bsiIdx.Set(uint64(row), int64(val))
 				// }
-				// indexes = append(indexes, bsiIdx)
+				// indices = append(indices, bsiIdx)
 				hasBsi = true
 			}
 		}
 	}
-	buf, err := index.DefaultRWHelper.WriteIndexes(indexes)
+	buf, err := index.DefaultRWHelper.WriteIndices(indices)
 	if err != nil {
 		return err
 	}

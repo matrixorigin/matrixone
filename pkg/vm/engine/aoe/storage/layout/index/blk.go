@@ -12,8 +12,8 @@ type BlockHolder struct {
 	common.RefHelper
 	ID common.ID
 	sync.RWMutex
-	Indexes     []*Node
-	ColIndexes  map[int][]int
+	Indices     []*Node
+	ColIndices  map[int][]int
 	Type        base.BlockType
 	BufMgr      mgrif.IBufferManager
 	Inited      bool
@@ -28,8 +28,8 @@ func newBlockHolder(bufMgr mgrif.IBufferManager, id common.ID, t base.BlockType,
 		Inited:      false,
 		PostCloseCB: cb,
 	}
-	holder.ColIndexes = make(map[int][]int)
-	holder.Indexes = make([]*Node, 0)
+	holder.ColIndices = make(map[int][]int)
+	holder.Indices = make([]*Node, 0)
 	holder.OnZeroCB = holder.close
 	holder.Ref()
 	return holder
@@ -39,27 +39,27 @@ func (holder *BlockHolder) Init(segFile base.ISegmentFile) {
 	if holder.Inited {
 		panic("logic error")
 	}
-	indexesMeta := segFile.GetBlockIndexesMeta(holder.ID)
-	if indexesMeta == nil {
+	indicesMeta := segFile.GetBlockIndicesMeta(holder.ID)
+	if indicesMeta == nil {
 		return
 	}
-	for _, meta := range indexesMeta.Data {
+	for _, meta := range indicesMeta.Data {
 		vf := segFile.MakeVirtualBlkIndexFile(&holder.ID, meta)
 		col := int(meta.Cols.ToArray()[0])
 		node := newNode(holder.BufMgr, vf, false, ZoneMapIndexConstructor, meta.Cols, nil)
-		idxes, ok := holder.ColIndexes[col]
+		idxes, ok := holder.ColIndices[col]
 		if !ok {
 			idxes = make([]int, 0)
-			holder.ColIndexes[col] = idxes
+			holder.ColIndices[col] = idxes
 		}
-		holder.ColIndexes[col] = append(holder.ColIndexes[col], len(holder.Indexes))
-		holder.Indexes = append(holder.Indexes, node)
+		holder.ColIndices[col] = append(holder.ColIndices[col], len(holder.Indices))
+		holder.Indices = append(holder.Indices, node)
 	}
 	holder.Inited = true
 }
 
 func (holder *BlockHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
-	idxes, ok := holder.ColIndexes[colIdx]
+	idxes, ok := holder.ColIndices[colIdx]
 	if !ok {
 		// TODO
 		ctx.BoolRes = true
@@ -67,7 +67,7 @@ func (holder *BlockHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	}
 	var err error
 	for _, idx := range idxes {
-		node := holder.Indexes[idx].GetManagedNode()
+		node := holder.Indices[idx].GetManagedNode()
 		err = node.DataNode.(Index).Eval(ctx)
 		if err != nil {
 			node.Close()
@@ -79,7 +79,7 @@ func (holder *BlockHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 }
 
 func (holder *BlockHolder) close() {
-	for _, index := range holder.Indexes {
+	for _, index := range holder.Indices {
 		index.Unref()
 	}
 	if holder.PostCloseCB != nil {
@@ -88,17 +88,17 @@ func (holder *BlockHolder) close() {
 }
 
 func (holder *BlockHolder) GetIndexNode(idx int) *Node {
-	node := holder.Indexes[idx]
+	node := holder.Indices[idx]
 	node.Ref()
 	return node
 }
 
 func (holder *BlockHolder) Any() bool {
-	return len(holder.Indexes) > 0
+	return len(holder.Indices) > 0
 }
 
 func (holder *BlockHolder) IndexCount() int {
-	return len(holder.Indexes)
+	return len(holder.Indices)
 }
 
 func (holder *BlockHolder) String() string {
@@ -108,10 +108,10 @@ func (holder *BlockHolder) String() string {
 }
 
 func (holder *BlockHolder) stringNoLock() string {
-	s := fmt.Sprintf("<IndexBlkHolder[%s]>[Ty=%v](Cnt=%d)(Refs=%d)", holder.ID.BlockString(), holder.Type, len(holder.Indexes), holder.RefCount())
-	for _, i := range holder.Indexes {
+	s := fmt.Sprintf("<IndexBlkHolder[%s]>[Ty=%v](Cnt=%d)(Refs=%d)", holder.ID.BlockString(), holder.Type, len(holder.Indices), holder.RefCount())
+	for _, i := range holder.Indices {
 		s = fmt.Sprintf("%s\n\tIndex: [Refs=%d]", s, i.RefCount())
 	}
-	// s = fmt.Sprintf("%s\n%vs, holder.ColIndexes)
+	// s = fmt.Sprintf("%s\n%vs, holder.ColIndices)
 	return s
 }

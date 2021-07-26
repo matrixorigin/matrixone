@@ -42,15 +42,15 @@ func NewZoneMapEmptyNode(vf common.IVFile, useCompress bool, freeFunc buf.Memory
 	}
 }
 
-func MockInt32ZmIndexes(cols int) (indexes []Index) {
+func MockInt32ZmIndices(cols int) (indices []Index) {
 	t := types.Type{Oid: types.T_int32, Size: 4}
 	for idx := 0; idx < cols; idx++ {
 		minv := int32(1) + int32(idx)*100
 		maxv := int32(99) + int32(idx)*100
 		zm := NewZoneMap(t, minv, maxv, int16(idx))
-		indexes = append(indexes, zm)
+		indices = append(indices, zm)
 	}
-	return indexes
+	return indices
 }
 
 func (i *ZoneMapIndex) GetCol() int16 {

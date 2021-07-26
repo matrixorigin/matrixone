@@ -71,20 +71,20 @@ func (bf *BlockFile) Destory() {
 	}
 }
 
-func (bf *BlockFile) GetIndexesMeta() *base.IndexesMeta {
-	return bf.Meta.Indexes
+func (bf *BlockFile) GetIndicesMeta() *base.IndicesMeta {
+	return bf.Meta.Indices
 }
 
 func (bf *BlockFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
-	return newEmbbedBlockIndexFile(&bf.ID, bf.SegmentFile, meta)
+	return newEmbedBlockIndexFile(&bf.ID, bf.SegmentFile, meta)
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
-	indexMeta, err := index.DefaultRWHelper.ReadIndexesMeta(bf.File)
+	indexMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	bf.Meta.Indexes = indexMeta
+	bf.Meta.Indices = indexMeta
 
 	var (
 		cols uint16
