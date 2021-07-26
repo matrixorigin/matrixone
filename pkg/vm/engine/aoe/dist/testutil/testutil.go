@@ -66,7 +66,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 			RaftAddr: fmt.Sprintf("127.0.0.1:1000%d", i),
 			ClientAddr: fmt.Sprintf("127.0.0.1:2000%d", i),
 			Replication: cConfig.ReplicationConfig{
-				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 500),
+				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 100),
 				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
 			},
 			Raft: cConfig.RaftConfig{

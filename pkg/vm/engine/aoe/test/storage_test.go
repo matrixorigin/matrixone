@@ -166,7 +166,7 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	err = c.Applications[0].Append(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard, buf.Bytes())
 	require.NoError(t, err)
 
-	//time.Sleep(3 * time.Second)
+	time.Sleep(3 * time.Second)
 }
 
 func GetGoid() int64 {
