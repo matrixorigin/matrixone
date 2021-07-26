@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/cockroachdb/errors"
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/raftstore"
@@ -167,67 +168,33 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 	}
 	err = c.Store.Set(c.tableIDKey(dbId, tbl.Name), format.Uint64ToBytes(tbl.Id))
 	if err != nil {
-		return 0, err
-	}
-	if err != nil {
 		return 0, ErrTableCreateFailed
 	}
-	tbl.State = aoe.StateNone
-
-	meta, err := helper.EncodeTable(tbl)
-	if err != nil {
-		return 0, ErrTableCreateFailed
-	}
-
-	//save metadata to kv
-	err = c.Store.Set(c.tableKey(dbId, tbl.Id), meta)
-	if err != nil {
-		return 0, err
-	}
-
-	// TODO: support shared tables
-	// created shards
-	client := c.Store.RaftStore().Prophet().GetClient()
-	tKey := c.tableKey(dbId, tbl.Id)
-	rKey := c.routePrefix(dbId, tbl.Id)
-	header := format.Uint64ToBytes(uint64(len(tKey) + len(rKey) + len([]byte("#"))))
-	buf := bytes.Buffer{}
-	buf.Write(header)
-	buf.Write(tKey)
-	buf.Write([]byte("#"))
-	buf.Write(rKey)
-	buf.Write(meta)
-	err = client.AsyncAddResources(raftstore.NewResourceAdapterWithShard(
-		bhmetapb.Shard{
-			Start:  format.Uint64ToBytes(tbl.Id),
-			End:    format.Uint64ToBytes(tbl.Id + 1),
-			Unique: string(format.Uint64ToBytes(tbl.Id)),
-			Group:  uint64(pb.AOEGroup),
-			Data:   buf.Bytes(),
-		}))
-	if err != nil {
-		return 0, err
-	}
-	completedC := make(chan *aoe.TableInfo, 1)
-	defer close(completedC)
-	go func() {
-		i := 0
-		for {
-			tb, _ := c.checkTableExists(dbId, tbl.Id)
-			if tb != nil && tb.State == aoe.StatePublic {
-				completedC <- tb
-				break
-			}
-			i += 1
+	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
+		rkey := c.routeKey(dbId, tbl.Id, shardId)
+		if err := c.Store.CreateTablet(fmt.Sprintf("%d#%d", tbl.Id, shardId), shardId, &tbl); err != nil {
+			//TODO: remove shard's lock
+			return 0, ErrTableCreateFailed
 		}
-	}()
-	select {
-	case <-completedC:
+		if c.Store.Set(rkey, []byte(tbl.Name)) != nil {
+			//TODO: remove shard's lock
+			return 0, ErrTableCreateFailed
+		}
+		tbl.State = aoe.StatePublic
+		meta, err := helper.EncodeTable(tbl)
+		if err != nil {
+			return 0, ErrTableCreateFailed
+		}
+		//save metadata to kv
+		err = c.Store.Set(c.tableKey(dbId, tbl.Id), meta)
+		if err != nil {
+			return 0, err
+		}
 		return tbl.Id, nil
-	case <-time.After(3 * time.Second):
-		return tbl.Id, ErrTableCreateFailed
 	}
-
+	//No available situation
+	tbl.State = aoe.StateNone
+	return c.CreateTable(dbId, tbl)
 }
 
 func (c *Catalog) DropTable(dbId uint64, tableName string) (uint64, error) {
@@ -447,7 +414,6 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 	}
 }
 func (c *Catalog) EncodeTabletName(tableId uint64, groupId uint64) string {
-	stdLog.Printf("[AAAAAAAAAAAAAAAAAAAAAAAAAAA]%d, %d, %s", tableId, groupId, fmt.Sprintf("%d#%d", tableId, groupId))
 	return fmt.Sprintf("%d#%d", tableId, groupId)
 }
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
@@ -476,9 +442,83 @@ func (c *Catalog) tableKey(dbId uint64, tId uint64) []byte {
 func (c *Catalog) tablePrefix(dbId uint64) []byte {
 	return []byte(fmt.Sprintf("%s/%d/%s/%d/", cPrefix, DefaultCatalogId, cTablePrefix, dbId))
 }
-func (c *Catalog) routeKey(dbId uint64, tId uint64, gId uint64, pId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/%d/%d", cPrefix, DefaultCatalogId, cRoutePrefix, dbId, tId, gId, pId))
+func (c *Catalog) routeKey(dbId uint64, tId uint64, gId uint64) []byte {
+	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/%d", cPrefix, DefaultCatalogId, cRoutePrefix, dbId, tId, gId))
 }
 func (c *Catalog) routePrefix(dbId uint64, tId uint64) []byte {
 	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/", cPrefix, DefaultCatalogId, cRoutePrefix, dbId, tId))
+}
+
+func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
+	var rsp []uint64
+	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, address string) {
+		if len(rsp) > 0 {
+			return
+		}
+		err := c.Store.SetIfNotExist(format.UInt64ToString(shard.ID), format.UInt64ToString(tid))
+		if err == nil {
+			rsp = append(rsp, shard.ID)
+		}
+		return
+	})
+	if len(rsp) == 1 {
+		return rsp[0], nil
+	}
+	return shardid, errors.New("No available shards")
+}
+
+func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid uint64, err error) {
+	meta, err := helper.EncodeTable(tbl)
+	if err != nil {
+		return 0, ErrTableCreateFailed
+	}
+
+	//save metadata to kv
+	err = c.Store.Set(c.tableKey(dbId, tbl.Id), meta)
+	if err != nil {
+		return 0, err
+	}
+
+	// TODO: support shared tables
+	// created shards
+	client := c.Store.RaftStore().Prophet().GetClient()
+	tKey := c.tableKey(dbId, tbl.Id)
+	rKey := c.routePrefix(dbId, tbl.Id)
+	header := format.Uint64ToBytes(uint64(len(tKey) + len(rKey) + len([]byte("#"))))
+	buf := bytes.Buffer{}
+	buf.Write(header)
+	buf.Write(tKey)
+	buf.Write([]byte("#"))
+	buf.Write(rKey)
+	buf.Write(meta)
+	err = client.AsyncAddResources(raftstore.NewResourceAdapterWithShard(
+		bhmetapb.Shard{
+			Start:  format.Uint64ToBytes(tbl.Id),
+			End:    format.Uint64ToBytes(tbl.Id + 1),
+			Unique: string(format.Uint64ToBytes(tbl.Id)),
+			Group:  uint64(pb.AOEGroup),
+			Data:   buf.Bytes(),
+		}))
+	if err != nil {
+		return 0, err
+	}
+	completedC := make(chan *aoe.TableInfo, 1)
+	defer close(completedC)
+	go func() {
+		i := 0
+		for {
+			tb, _ := c.checkTableExists(dbId, tbl.Id)
+			if tb != nil && tb.State == aoe.StatePublic {
+				completedC <- tb
+				break
+			}
+			i += 1
+		}
+	}()
+	select {
+	case <-completedC:
+		return tbl.Id, nil
+	case <-time.After(3 * time.Second):
+		return tbl.Id, ErrTableCreateFailed
+	}
 }

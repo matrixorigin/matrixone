@@ -28,7 +28,7 @@ var (
 
 func TestServer(t *testing.T) {
 
-	c, err := testutil.NewTestClusterStore(t, func(path string) (storage.DataStorage, error) {
+	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
 		opts     := &e.Options{}
 		mdCfg := &md.Configuration{
 			Dir:              path,
