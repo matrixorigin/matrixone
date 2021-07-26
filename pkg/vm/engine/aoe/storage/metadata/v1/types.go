@@ -106,7 +106,7 @@ type ColDef struct {
 
 type Schema struct {
 	Name      string
-	Indexes   []*IndexInfo
+	Indices   []*IndexInfo
 	ColDefs   []*ColDef
 	NameIdMap map[string]int
 }

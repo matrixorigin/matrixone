@@ -4,15 +4,9 @@ import (
 	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 )
-
-type IVFile interface {
-	io.Reader
-	Ref()
-	Unref()
-	// io.Writer
-}
 
 type INode interface {
 	io.Closer
@@ -46,12 +40,12 @@ type IBufferManager interface {
 	GetNextID() uint64
 	GetNextTransientID() uint64
 
-	RegisterMemory(capacity uint64, spillable bool, constructor buf.MemoryNodeConstructor) nif.INodeHandle
-	RegisterSpillableNode(capacity uint64, node_id uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle
-	RegisterNode(capacity uint64, node_id uint64, reader io.Reader, constructor buf.MemoryNodeConstructor) nif.INodeHandle
+	RegisterMemory(vf common.IVFile, spillable bool, constructor buf.MemoryNodeConstructor) nif.INodeHandle
+	RegisterSpillableNode(vf common.IVFile, node_id uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle
+	RegisterNode(vf common.IVFile, useCompress bool, node_id uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle
 	UnregisterNode(nif.INodeHandle)
 
-	CreateNode(vf IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) INode
+	CreateNode(vf common.IVFile, useCompress bool, constructor buf.MemoryNodeConstructor) INode
 
 	// // Allocate(size uint64) buf.IBufferH
 

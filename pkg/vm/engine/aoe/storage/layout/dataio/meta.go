@@ -5,11 +5,11 @@ import (
 )
 
 type FileMeta struct {
-	Indexes *base.IndexesMeta
+	Indices *base.IndicesMeta
 }
 
 func NewFileMeta() *FileMeta {
 	m := new(FileMeta)
-	m.Indexes = base.NewIndexesMeta()
+	m.Indices = base.NewIndicesMeta()
 	return m
 }

@@ -9,19 +9,29 @@ import (
 type ColPartFile struct {
 	SegmentFile base.ISegmentFile
 	ID          *common.ID
-	Info        base.FileInfo
+	Info        common.FileInfo
 }
 
-func newPartFile(id *common.ID, host base.ISegmentFile, isMock bool) base.IVirtaulFile {
+func newPartFile(id *common.ID, host base.ISegmentFile, isMock bool) common.IVFile {
 	vf := &ColPartFile{
 		SegmentFile: host,
 		ID:          id,
 	}
 	vf.Ref()
 	if !isMock {
-		vf.Info = &fileStat{
-			name: id.ToPartFilePath(),
-			size: host.PartSize(uint64(id.Idx), *id),
+		vf.Info = &colPartFileStat{
+			id: id,
+			fileStat: fileStat{
+				size:  host.PartSize(uint64(id.Idx), *id, false),
+				osize: host.PartSize(uint64(id.Idx), *id, true),
+				algo:  uint8(host.DataCompressAlgo(*id)),
+			},
+		}
+		// log.Infof("size, osize, aglo: %d, %d, %d", vf.Info.Size(), vf.Info.OriginSize(), vf.Info.CompressAlgo())
+	} else {
+		vf.Info = &colPartFileStat{
+			id:       id,
+			fileStat: fileStat{},
 		}
 	}
 	return vf
@@ -32,8 +42,12 @@ func (cpf *ColPartFile) Read(buf []byte) (n int, err error) {
 	return len(buf), nil
 }
 
-func (cpf *ColPartFile) Stat() base.FileInfo {
+func (cpf *ColPartFile) Stat() common.FileInfo {
 	return cpf.Info
+}
+
+func (cpf *ColPartFile) GetFileType() common.FileType {
+	return common.DiskFile
 }
 
 func (cpf *ColPartFile) Ref() {

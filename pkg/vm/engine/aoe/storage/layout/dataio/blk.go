@@ -20,7 +20,8 @@ type BlockFile struct {
 	Parts       map[base.Key]*base.Pointer
 	Meta        *FileMeta
 	SegmentFile base.ISegmentFile
-	Info        base.FileInfo
+	Info        common.FileInfo
+	DataAlgo    int
 }
 
 func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
@@ -70,57 +71,56 @@ func (bf *BlockFile) Destory() {
 	}
 }
 
-func (bf *BlockFile) GetIndexesMeta() *base.IndexesMeta {
-	return bf.Meta.Indexes
+func (bf *BlockFile) GetIndicesMeta() *base.IndicesMeta {
+	return bf.Meta.Indices
 }
 
-func (bf *BlockFile) MakeVirtualIndexFile(meta *base.IndexMeta) base.IVirtaulFile {
-	return newEmbbedBlockIndexFile(&bf.ID, bf.SegmentFile, meta)
+func (bf *BlockFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
+	return newEmbedBlockIndexFile(&bf.ID, bf.SegmentFile, meta)
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
-	indexMeta, err := index.DefaultRWHelper.ReadIndexesMeta(bf.File)
+	indexMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
 	if err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	bf.Meta.Indexes = indexMeta
-	offset, _ := bf.File.Seek(0, io.SeekCurrent)
-	twoBytes := make([]byte, 2)
-	_, err = bf.File.Read(twoBytes)
-	if err != nil {
-		panic(fmt.Sprintf("unexpect error: %s", err))
-	}
+	bf.Meta.Indices = indexMeta
 
-	cols := binary.BigEndian.Uint16(twoBytes)
-	headSize := 2 + 2*8*int(cols)
+	var (
+		cols uint16
+		algo uint8
+	)
+	offset, _ := bf.File.Seek(0, io.SeekCurrent)
+	if err = binary.Read(&bf.File, binary.BigEndian, &algo); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	if err = binary.Read(&bf.File, binary.BigEndian, &cols); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	headSize := 3 + 2*8*int(cols)
 	currOffset := headSize + int(offset)
-	eightBytes := make([]byte, 8)
 	for i := uint16(0); i < cols; i++ {
-		_, err = bf.File.Read(eightBytes)
-		if err != nil {
-			panic(fmt.Sprintf("unexpect error: %s", err))
-		}
-		blkID := binary.BigEndian.Uint64(eightBytes)
-		if blkID != id.BlockID {
-			panic("logic error")
-		}
 		key := base.Key{
 			Col: uint64(i),
 			ID:  id.AsBlockID(),
 		}
-		_, err = bf.File.Read(eightBytes)
+		bf.Parts[key] = &base.Pointer{}
+		err = binary.Read(&bf.File, binary.BigEndian, &bf.Parts[key].Len)
 		if err != nil {
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
-		bf.Parts[key] = &base.Pointer{
-			Offset: int64(currOffset),
-			Len:    binary.BigEndian.Uint64(eightBytes),
+		err = binary.Read(&bf.File, binary.BigEndian, &bf.Parts[key].OriginLen)
+		if err != nil {
+			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
+		// log.Infof("(Len, OriginLen, Algo)=(%d, %d, %d)", bf.Parts[key].Len, bf.Parts[key].OriginLen, algo)
+		bf.Parts[key].Offset = int64(currOffset)
 		currOffset += int(bf.Parts[key].Len)
 	}
+	bf.DataAlgo = int(algo)
 }
 
-func (bf *BlockFile) Stat() base.FileInfo {
+func (bf *BlockFile) Stat() common.FileInfo {
 	return bf.Info
 }
 
@@ -134,7 +134,11 @@ func (bf *BlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	}
 }
 
-func (bf *BlockFile) PartSize(colIdx uint64, id common.ID) int64 {
+func (bf *BlockFile) DataCompressAlgo(id common.ID) int {
+	return bf.DataAlgo
+}
+
+func (bf *BlockFile) PartSize(colIdx uint64, id common.ID, isOrigin bool) int64 {
 	key := base.Key{
 		Col: colIdx,
 		ID:  id.AsBlockID(),
@@ -143,8 +147,14 @@ func (bf *BlockFile) PartSize(colIdx uint64, id common.ID) int64 {
 	if !ok {
 		panic("logic error")
 	}
-
+	if isOrigin {
+		return int64(pointer.OriginLen)
+	}
 	return int64(pointer.Len)
+}
+
+func (bf *BlockFile) GetFileType() common.FileType {
+	return common.DiskFile
 }
 
 func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {

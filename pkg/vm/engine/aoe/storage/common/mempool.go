@@ -24,7 +24,9 @@ var (
 var (
 	PageSizes = []uint64{
 		64,
+		128,
 		256,
+		512,
 		1 * K,
 		4 * K,
 		8 * K,

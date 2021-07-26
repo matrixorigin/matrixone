@@ -2,11 +2,11 @@ package manager
 
 import (
 	"fmt"
-	"io"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync/atomic"
@@ -57,12 +57,12 @@ func (mgr *BufferManager) GetNextTransientID() uint64 {
 	return atomic.AddUint64(&mgr.NextTransientID, uint64(1)) - 1
 }
 
-func (mgr *BufferManager) CreateNode(vf mgrif.IVFile, constructor buf.MemoryNodeConstructor, capacity uint64) mgrif.INode {
-	return newNode(mgr, vf, constructor, capacity)
+func (mgr *BufferManager) CreateNode(vf common.IVFile, useCompress bool, constructor buf.MemoryNodeConstructor) mgrif.INode {
+	return newNode(mgr, vf, useCompress, constructor)
 }
 
-func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
-	pNode := mgr.makePoolNode(capacity, constructor)
+func (mgr *BufferManager) RegisterMemory(vf common.IVFile, spillable bool, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
+	pNode := mgr.makePoolNode(vf, false, constructor)
 	if pNode == nil {
 		return nil
 	}
@@ -73,13 +73,14 @@ func (mgr *BufferManager) RegisterMemory(capacity uint64, spillable bool, constr
 		Buff:        node.NewNodeBuffer(id, pNode),
 		Spillable:   spillable,
 		Constructor: constructor,
+		File:        vf,
 		Dir:         mgr.Dir,
 	}
 	handle := node.NewNodeHandle(&ctx)
 	return handle
 }
 
-func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
+func (mgr *BufferManager) RegisterSpillableNode(vf common.IVFile, node_id uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
 	// log.Infof("RegisterSpillableNode %s", node_id.String())
 	{
 		mgr.RLock()
@@ -93,7 +94,7 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64,
 		mgr.RUnlock()
 	}
 
-	pNode := mgr.makePoolNode(capacity, constructor)
+	pNode := mgr.makePoolNode(vf, false, constructor)
 	if pNode == nil {
 		return nil
 	}
@@ -102,6 +103,7 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64,
 		Manager:     mgr,
 		Buff:        node.NewNodeBuffer(node_id, pNode),
 		Spillable:   true,
+		File:        vf,
 		Constructor: constructor,
 		Dir:         mgr.Dir,
 	}
@@ -121,7 +123,7 @@ func (mgr *BufferManager) RegisterSpillableNode(capacity uint64, node_id uint64,
 	return handle
 }
 
-func (mgr *BufferManager) RegisterNode(capacity uint64, node_id uint64, reader io.Reader, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
+func (mgr *BufferManager) RegisterNode(vf common.IVFile, useCompress bool, node_id uint64, constructor buf.MemoryNodeConstructor) nif.INodeHandle {
 	mgr.Lock()
 	defer mgr.Unlock()
 	// log.Infof("RegisterNode %s", node_id.String())
@@ -135,9 +137,9 @@ func (mgr *BufferManager) RegisterNode(capacity uint64, node_id uint64, reader i
 	ctx := node.NodeHandleCtx{
 		ID:          node_id,
 		Manager:     mgr,
-		Size:        capacity,
 		Spillable:   false,
-		Reader:      reader,
+		File:        vf,
+		UseCompress: useCompress,
 		Constructor: constructor,
 	}
 	handle = node.NewNodeHandle(&ctx)
@@ -179,8 +181,8 @@ func (mgr *BufferManager) Unpin(handle nif.INodeHandle) {
 	}
 }
 
-func (mgr *BufferManager) makePoolNode(capacity uint64, constructor buf.MemoryNodeConstructor) buf.IMemoryNode {
-	node := mgr.Alloc(capacity, constructor)
+func (mgr *BufferManager) makePoolNode(vf common.IVFile, useCompress bool, constructor buf.MemoryNodeConstructor) buf.IMemoryNode {
+	node := mgr.Alloc(vf, useCompress, constructor)
 	if node != nil {
 		return node
 	}
@@ -213,7 +215,7 @@ func (mgr *BufferManager) makePoolNode(capacity uint64, constructor buf.MemoryNo
 			evict_node.Handle.Unload()
 			evict_node.Handle.Unlock()
 		}
-		node = mgr.Alloc(capacity, constructor)
+		node = mgr.Alloc(vf, useCompress, constructor)
 	}
 	return node
 }
@@ -222,7 +224,7 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 	handle.Lock()
 	defer handle.Unlock()
 	if handle.PrepareLoad() {
-		n := mgr.makePoolNode(handle.GetCapacity(), handle.GetNodeCreator())
+		n := mgr.makePoolNode(handle.GetFile(), handle.IsCompress(), handle.GetNodeCreator())
 		if n == nil {
 			handle.RollbackLoad()
 			// log.Warnf("Cannot makeSpace(%d,%d)", handle.GetCapacity(), mgr.GetCapacity())

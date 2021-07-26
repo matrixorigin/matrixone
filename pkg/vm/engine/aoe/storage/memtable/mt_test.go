@@ -3,6 +3,7 @@ package memtable
 import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -11,6 +12,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +25,7 @@ var WORK_DIR = "/tmp/memtable/mt_test"
 func init() {
 	dio.WRITER_FACTORY.Init(nil, WORK_DIR)
 	dio.READER_FACTORY.Init(nil, WORK_DIR)
+	os.RemoveAll(WORK_DIR)
 }
 
 func TestManager(t *testing.T) {
@@ -70,8 +73,7 @@ func TestCollection(t *testing.T) {
 	capacity := maxRows * 4 * uint64(cols) * 2 * 2
 	opts := new(engine.Options)
 	// opts.EventListener = e.NewLoggingEventListener()
-	dirname := "/tmp"
-	opts.FillDefaults(dirname)
+	opts.FillDefaults(WORK_DIR)
 	opts.Meta.Conf.BlockMaxRows = maxRows
 
 	opts.Meta.Updater.Start()
@@ -153,6 +155,7 @@ func TestCollection(t *testing.T) {
 	t.Log(indexBufMgr.String())
 	t.Log(fsMgr.String())
 	t.Log(manager)
+	t.Log(common.GPool.String())
 
 	opts.MemData.Updater.Stop()
 	opts.Data.Flusher.Stop()
