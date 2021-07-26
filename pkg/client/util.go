@@ -51,6 +51,14 @@ func MinInt64(a int64, b int64) int64{
 	}
 }
 
+func MinUint64(a uint64, b uint64) uint64{
+	if a < b {
+		return a
+	}else{
+		return b
+	}
+}
+
 func Max(a int, b int) int{
 	if a < b {
 		return b
@@ -65,6 +73,28 @@ func MaxInt64(a int64, b int64) int64{
 	}else{
 		return a
 	}
+}
+
+func MaxUint64(a uint64, b uint64) uint64{
+	if a < b {
+		return b
+	}else{
+		return a
+	}
+}
+
+type Uint64List []uint64
+
+func (ul Uint64List) Len() int {
+	return len(ul)
+}
+
+func (ul Uint64List) Less(i,j int) bool {
+	return ul[i] < ul[j]
+}
+
+func (ul Uint64List) Swap(i,j int) {
+	ul[i],ul[j] = ul[j],ul[i]
 }
 
 //get the outine id
