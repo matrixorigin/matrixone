@@ -8,14 +8,12 @@ import (
 	"github.com/matrixorigin/matrixcube/pb"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
-	stdLog "log"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"time"
 )
 
 func (h *aoeStorage) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
@@ -43,8 +41,6 @@ func (h *aoeStorage) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, 
 }
 
 func (h *aoeStorage) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
-	stdLog.Printf("[QQQ]call append handler")
-	t0 := time.Now()
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.AppendRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -57,7 +53,6 @@ func (h *aoeStorage) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	err = store.Append(customReq.TabletName, bat, &md.LogIndex{
 		ID: ctx.LogIndex(),
 	})
-	stdLog.Printf("[QQQ]call append handler finished, error is %v, cost %d ms", err, time.Since(t0).Milliseconds())
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp

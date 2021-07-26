@@ -18,7 +18,7 @@ import (
 )
 
 var (
-	tmpDir    = "/tmp/aoe-cluster-test/"
+	tmpDir    = "/data1/tmp/aoe-cluster-test/"
 )
 
 
@@ -70,8 +70,8 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
 			},
 			Raft: cConfig.RaftConfig{
-				TickInterval: typeutil.NewDuration(time.Millisecond * 100),
-				MaxEntryBytes: 200 * 1024 * 1024,
+				TickInterval: typeutil.NewDuration(time.Second * 2),
+				MaxEntryBytes: 300 * 1024 * 1024,
 			},
 			Prophet: pConfig.Config{
 				Name: fmt.Sprintf("node-%d", i),

@@ -16,7 +16,6 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
-	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
@@ -29,7 +28,7 @@ import (
 )
 
 const (
-	defaultRPCTimeout = time.Second * 3
+	defaultRPCTimeout = time.Second * 10
 )
 
 // Storage storage
@@ -268,7 +267,6 @@ func (h *aoeStorage) SetIfNotExist(key, value []byte) error {
 		},
 	}
 	rsp, err := h.ExecWithGroup(req, pb.KVGroup)
-	stdLog.Printf("[QQQQQQ]%s, %s, %v", string(value), string(rsp), err)
 	if !bytes.Equal(rsp, []byte("OK")) {
 		err = errors.New(string(rsp))
 	}

@@ -3,7 +3,9 @@ package test
 import (
 	"bytes"
 	"fmt"
+	"github.com/fagongzi/log"
 	"github.com/fagongzi/util/format"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/assert"
@@ -27,7 +29,7 @@ import (
 )
 
 const (
-	blockRows          uint64 = 1000000
+	blockRows          uint64 = 5000000
 	blockCntPerSegment uint64 = 4
 	insertRows                = blockRows * blockCntPerSegment * 10
 	insertCnt          uint64 = 20
@@ -36,6 +38,9 @@ const (
 
 
 func TestAOEStorage(t *testing.T) {
+	log.SetHighlighting(false)
+	log.SetLevelByString("error")
+	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
 		opts     := &e.Options{}
 		mdCfg := &md.Configuration{

@@ -146,7 +146,6 @@ func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
 }
 
 func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
-	stdLog.Printf("[QQQ]Call catalog create table %d, %s", dbId, tbl.Name)
 	_, err := c.checkDBExists(dbId)
 	if err != nil {
 		return 0, err
@@ -191,7 +190,6 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		stdLog.Printf("[QQQ]Call catalog create table finished %d, %s, %d, %d", dbId, tbl.Name, tbl.Id, shardId)
 		return tbl.Id, nil
 	}
 	//No available situation
@@ -416,7 +414,6 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 	}
 }
 func (c *Catalog) EncodeTabletName(tableId uint64, groupId uint64) string {
-	stdLog.Printf("[AAAAAAAAAAAAAAAAAAAAAAAAAAA]%d, %d, %s", tableId, groupId, fmt.Sprintf("%d#%d", tableId, groupId))
 	return fmt.Sprintf("%d#%d", tableId, groupId)
 }
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {

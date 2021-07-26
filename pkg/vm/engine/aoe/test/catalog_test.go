@@ -88,10 +88,8 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	}()
 	select {
 	case <-completedC:
-		stdLog.Printf("[QSQ], create %s finished", tableInfo.Name)
 		break
 	case <-time.After(3 * time.Second):
-		stdLog.Printf("[QSQ], create %s failed, timeout", tableInfo.Name)
 	}
 	tb, err := c.GetTable(dbid, tableInfo.Name)
 	require.NoError(t, err)

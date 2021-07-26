@@ -2,6 +2,8 @@ package test
 
 import (
 	"bytes"
+	"github.com/fagongzi/log"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
@@ -27,7 +29,9 @@ const (
 )
 
 func TestAOEEngine(t *testing.T) {
-
+	log.SetHighlighting(false)
+	log.SetLevelByString("error")
+	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
 		opts     := &e.Options{}
 		mdCfg := &md.Configuration{
@@ -92,7 +96,6 @@ func TestAOEEngine(t *testing.T) {
 	tb, err := db.Relation(mockTbl.Name)
 	require.NoError(t, err)
 	require.Equal(t, tb.ID(), mockTbl.Name)
-	stdLog.Printf("[QQQ]target table is %s", tb.ID())
 
 	attrs := helper.Attribute(*mockTbl)
 	var typs []types.Type
@@ -103,7 +106,7 @@ func TestAOEEngine(t *testing.T) {
 	var buf bytes.Buffer
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)
-	stdLog.Printf("[QQQ]size of batch is  %d", buf.Len())
+	stdLog.Printf("size of batch is  %d", buf.Len())
 
 	err = tb.Write(ibat)
 	require.NoError(t, err)
@@ -115,8 +118,8 @@ func TestAOEEngine(t *testing.T) {
 	tbls = db.Relations()
 	require.Equal(t, 0, len(tbls))
 
-
 	time.Sleep(3 * time.Second )
+
 
 
 }
