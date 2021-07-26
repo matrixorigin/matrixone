@@ -211,7 +211,7 @@ func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo, ctx dbi.Tab
 	schema := &Schema{
 		Name:      tinfo.Name,
 		ColDefs:   make([]*ColDef, 0),
-		Indexes:   make([]*IndexInfo, 0),
+		Indices:   make([]*IndexInfo, 0),
 		NameIdMap: make(map[string]int),
 	}
 	for idx, colInfo := range tinfo.Columns {
@@ -223,7 +223,7 @@ func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo, ctx dbi.Tab
 		schema.NameIdMap[newInfo.Name] = len(schema.ColDefs)
 		schema.ColDefs = append(schema.ColDefs, newInfo)
 	}
-	for _, indexInfo := range tinfo.Indexes {
+	for _, indexInfo := range tinfo.Indices {
 		newInfo := &IndexInfo{
 			ID:      info.Sequence.GetIndexID(),
 			Type:    IndexType(indexInfo.Type),
@@ -232,7 +232,7 @@ func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo, ctx dbi.Tab
 		for _, col := range indexInfo.Columns {
 			newInfo.Columns = append(newInfo.Columns, uint16(col))
 		}
-		schema.Indexes = append(schema.Indexes, newInfo)
+		schema.Indices = append(schema.Indices, newInfo)
 	}
 	tbl, err := info.CreateTable(ctx.OpIndex, schema)
 	if err != nil {

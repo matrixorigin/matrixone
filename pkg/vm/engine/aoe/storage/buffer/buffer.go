@@ -9,17 +9,9 @@ func NewBuffer(node IMemoryNode) IBuffer {
 		return nil
 	}
 	buf := &Buffer{
-		Node:     node,
-		DataSize: node.GetMemoryCapacity(),
+		Node: node,
 	}
 	return buf
-}
-
-func (b *Buffer) GetNodeSize() uint64 {
-	if b.Node == nil {
-		return 0
-	}
-	return b.Node.GetMemorySize()
 }
 
 func (b *Buffer) Close() error {
@@ -28,10 +20,7 @@ func (b *Buffer) Close() error {
 }
 
 func (buf *Buffer) GetCapacity() uint64 {
-	if buf.Node == nil {
-		return 0
-	}
-	return buf.DataSize + buf.HeaderSize
+	return buf.Node.GetMemoryCapacity()
 }
 
 func (buf *Buffer) GetDataNode() IMemoryNode {

@@ -31,7 +31,7 @@ func NewColumnPart(fsMgr base.IManager, bufMgr bmgrif.IBufferManager, blk IColum
 	capacity uint64) IColumnPart {
 	defer blk.UnRef()
 	part := &ColumnPart{ID: id}
-	var vf bmgrif.IVFile
+	var vf common.IVFile
 	switch blk.GetBlockType() {
 	case base.TRANSIENT_BLK:
 	case base.PERSISTENT_BLK:
@@ -41,7 +41,7 @@ func NewColumnPart(fsMgr base.IManager, bufMgr bmgrif.IBufferManager, blk IColum
 	default:
 		panic("not support")
 	}
-	part.Node = bufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, capacity).(*bmgr.Node)
+	part.Node = bufMgr.CreateNode(vf, true, buf.RawMemoryNodeConstructor).(*bmgr.Node)
 	if part.Node == nil {
 		return nil
 	}
@@ -53,7 +53,7 @@ func NewColumnPart(fsMgr base.IManager, bufMgr bmgrif.IBufferManager, blk IColum
 func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager, fsMgr base.IManager) IColumnPart {
 	defer blk.UnRef()
 	cloned := &ColumnPart{ID: part.ID}
-	var vf bmgrif.IVFile
+	var vf common.IVFile
 	switch blk.GetBlockType() {
 	case base.TRANSIENT_BLK:
 		panic("logic error")
@@ -64,7 +64,7 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	default:
 		panic("not supported")
 	}
-	cloned.Node = sstBufMgr.CreateNode(vf, buf.RawMemoryNodeConstructor, part.Capacity).(*bmgr.Node)
+	cloned.Node = sstBufMgr.CreateNode(vf, true, buf.RawMemoryNodeConstructor).(*bmgr.Node)
 
 	return cloned
 }

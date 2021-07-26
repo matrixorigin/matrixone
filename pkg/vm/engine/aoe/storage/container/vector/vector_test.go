@@ -5,6 +5,7 @@ import (
 	v "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
@@ -204,7 +205,8 @@ func TestWrapper(t *testing.T) {
 	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
 	assert.Nil(t, err)
 	rw0 := NewEmptyWrapper(t0)
-	rw0.AllocSize = uint64(n)
+	// rw0.AllocSize = uint64(n)
+	rw0.File = common.NewMemFile(int64(n))
 	_, err = rw0.ReadFrom(f)
 	assert.Nil(t, err)
 
@@ -218,7 +220,8 @@ func TestWrapper(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, err)
 	ww0 := NewEmptyWrapper(t0)
-	ww0.AllocSize = uint64(n)
+	// ww0.AllocSize = uint64(n)
+	ww0.File = common.NewMemFile(int64(n))
 	ref := uint64(1)
 	nr, err := ww0.ReadWithProc(f, ref, proc)
 	assert.Equal(t, n, nr)

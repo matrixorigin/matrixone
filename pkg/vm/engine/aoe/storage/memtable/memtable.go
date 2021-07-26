@@ -43,7 +43,7 @@ func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IB
 
 	for idx, colIdx := range mt.Batch.GetAttrs() {
 		vec := mt.Batch.GetVectorByAttr(colIdx)
-		vec.PlacementNew(mt.Meta.Segment.Table.Schema.ColDefs[idx].Type, mt.Meta.Segment.Table.Conf.BlockMaxRows)
+		vec.PlacementNew(mt.Meta.Segment.Table.Schema.ColDefs[idx].Type)
 	}
 
 	mt.OnZeroCB = mt.close
@@ -59,7 +59,12 @@ func (mt *MemTable) String() string {
 	mt.RLock()
 	defer mt.RUnlock()
 	id := mt.GetID()
-	s := fmt.Sprintf("<MT[%s]>(Refs=%d)(Count=%d)", id.BlockString(), mt.RefCount(), mt.Batch.Length())
+	bat := mt.Batch
+	length := -1
+	if bat != nil {
+		length = bat.Length()
+	}
+	s := fmt.Sprintf("<MT[%s]>(Refs=%d)(Count=%d)", id.BlockString(), mt.RefCount(), length)
 	return s
 }
 
