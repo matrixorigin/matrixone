@@ -37,7 +37,7 @@ var (
 
 func TestCatalog(t *testing.T) {
 
-	c, err := testutil.NewTestClusterStore(t, nil)
+	c, err := testutil.NewTestClusterStore(t, true, nil)
 
 	defer c.Stop()
 

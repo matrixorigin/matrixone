@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/fagongzi/util/format"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,12 +18,16 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 const (
-	blockRows          uint64 = 10000
+	blockRows          uint64 = 1000000
 	blockCntPerSegment uint64 = 4
 	insertRows                = blockRows * blockCntPerSegment * 10
 	insertCnt          uint64 = 20
@@ -31,7 +36,7 @@ const (
 
 
 func TestAOEStorage(t *testing.T) {
-	c, err := testutil.NewTestClusterStore(t, func(path string) (storage.DataStorage, error) {
+	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
 		opts     := &e.Options{}
 		mdCfg := &md.Configuration{
 			Dir:              path,
@@ -55,18 +60,41 @@ func TestAOEStorage(t *testing.T) {
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
 
+	var wg sync.WaitGroup
+	count := 0
+	for i:=0; i<15; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var rsp []uint64
+			c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, address string) {
+				if len(rsp) > 0 {
+					return
+				}
+				err := c.Applications[0].SetIfNotExist(format.UInt64ToString(shard.ID), format.UInt64ToString(shard.ID))
+				if err == nil {
+					rsp = append(rsp, shard.ID)
+				}
+				return
+			})
+			if len(rsp) > 0 {
+				count += 1
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, 10, count)
 	//testKVStorage(t, c)
 	testAOEStorage(t, c)
 }
 
 func testKVStorage(t *testing.T, c *testutil.TestCluster) {
+
 	//Set Test
 	err := c.Applications[0].SetIfNotExist([]byte("Hello"), []byte("World"))
 	require.NoError(t, err)
 
 	err = c.Applications[0].SetIfNotExist([]byte("Hello"), []byte("World1"))
-	value1, err := c.Applications[0].Get([]byte("Hello"))
-	println("[QQQ]", string(value1))
 	require.NotNil(t, err)
 
 	//Get Test
@@ -104,10 +132,16 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 }
 
 func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
+	var sharids []uint64
+	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, address string) {
+		stdLog.Printf("shard id is %d, leader address is %s", shard.ID, address)
+		sharids = append(sharids, shard.ID)
+	})
+	require.Less(t, 0, len(sharids))
 	//CreateTableTest
 	colCnt := 4
 	tableInfo := md.MockTableInfo(colCnt)
-	toShard := uint64(0)
+	toShard := sharids[0]
 	err := c.Applications[0].CreateTablet(fmt.Sprintf("%d#%d", tableInfo.Id, toShard),toShard, tableInfo)
 	require.NoError(t, err)
 
@@ -132,5 +166,21 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	err = c.Applications[0].Append(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard, buf.Bytes())
 	require.NoError(t, err)
 
-	time.Sleep(3 * time.Second)
+	//time.Sleep(3 * time.Second)
+}
+
+func GetGoid() int64 {
+	var (
+		buf [64]byte
+		n   = runtime.Stack(buf[:], false)
+		stk = strings.TrimPrefix(string(buf[:n]), "goroutine ")
+	)
+
+	idField := strings.Fields(stk)[0]
+	id, err := strconv.Atoi(idField)
+	if err != nil {
+		panic(fmt.Errorf("can not get goroutine id: %v", err))
+	}
+
+	return int64(id)
 }

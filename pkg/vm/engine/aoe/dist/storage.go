@@ -3,6 +3,7 @@ package dist
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/aware"
@@ -15,6 +16,7 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
+	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
@@ -165,12 +167,6 @@ func NewStorageWithOptions(
 			if res.Data() == nil {
 				return
 			}
-			//Key Job名称，唯一
-			//Data Job内容
-			//JobHandler处理逻辑
-			//Remove Job
-			//逻辑需要保证幂等
-			//Job只会在etcd的leader执行
 			data := format.Uint64ToBytes(res.ID())
 			data = append(data, res.Data()...)
 			if err := h.RaftStore().Prophet().GetStorage().PutJob([]byte("test"), data); err != nil {
@@ -264,14 +260,18 @@ func (h *aoeStorage) SetWithGroup(key, value []byte, group pb.Group) error {
 
 func (h *aoeStorage) SetIfNotExist(key, value []byte) error {
 	req := pb.Request{
-		Type: pb.Set,
+		Type: pb.SetIfNotExist,
 		Group: pb.KVGroup,
 		Set: pb.SetRequest{
 			Key: key,
 			Value: value,
 		},
 	}
-	_, err := h.ExecWithGroup(req, pb.KVGroup)
+	rsp, err := h.ExecWithGroup(req, pb.KVGroup)
+	stdLog.Printf("[QQQQQQ]%s, %s, %v", string(value), string(rsp), err)
+	if !bytes.Equal(rsp, []byte("OK")) {
+		err = errors.New(string(rsp))
+	}
 	return err
 }
 
@@ -441,6 +441,9 @@ func (h *aoeStorage) Append(name string, shardId uint64, data []byte) error {
 		},
 	}
 	data, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if !bytes.Equal(data, []byte("OK")){
+		err = errors.New(string(data))
+	}
 	return err
 }
 

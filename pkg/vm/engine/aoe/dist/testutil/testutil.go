@@ -8,6 +8,7 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
+	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
@@ -26,9 +27,12 @@ type TestCluster struct {
 	Applications []dist.Storage
 }
 
-func NewTestClusterStore(t *testing.T,  f func(path string) (storage.DataStorage, error)) (*TestCluster, error) {
-	if err := recreateTestTempDir(); err != nil {
-		return nil, err
+func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (storage.DataStorage, error)) (*TestCluster, error) {
+	if reCreate {
+		stdLog.Printf("clean target dir")
+		if err := recreateTestTempDir(); err != nil {
+			return nil, err
+		}
 	}
 	c := &TestCluster{T: t}
 	for i := 0; i < 3; i++ {
@@ -55,18 +59,19 @@ func NewTestClusterStore(t *testing.T,  f func(path string) (storage.DataStorage
 			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
 		}
 		cfg.ClusterConfig = config.ClusterConfig{
-
+			PreAllocatedGroupNum: 10,
 		}
 		cfg.CubeConfig = cConfig.Config{
 			DataPath: fmt.Sprintf("%s/node-%d", tmpDir, i),
 			RaftAddr: fmt.Sprintf("127.0.0.1:1000%d", i),
 			ClientAddr: fmt.Sprintf("127.0.0.1:2000%d", i),
 			Replication: cConfig.ReplicationConfig{
-				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 100),
+				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 500),
 				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
 			},
 			Raft: cConfig.RaftConfig{
 				TickInterval: typeutil.NewDuration(time.Millisecond * 100),
+				MaxEntryBytes: 200 * 1024 * 1024,
 			},
 			Prophet: pConfig.Config{
 				Name: fmt.Sprintf("node-%d", i),

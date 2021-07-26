@@ -3,6 +3,7 @@ package engine
 import (
 	"github.com/fagongzi/util/format"
 	log "github.com/sirupsen/logrus"
+	stdLog "log"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
@@ -21,11 +22,13 @@ func (db *database) Delete(name string) error {
 }
 
 func (db *database) Create(name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
+	stdLog.Printf("[QQQ]Call engine create table %d, %s", db.id, name)
 	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
 	if err != nil {
 		return err
 	}
 	_, err = db.catalog.CreateTable(db.id, tbl)
+	stdLog.Printf("[QQQ]Call engine create table finished %d, %s, %v", db.id, name, err)
 	return err
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -64,6 +65,8 @@ type DB struct {
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
+
+	stdLog.Printf("[QQQ]call local append finished, tablet is %v", ctx.TableName)
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -98,6 +101,7 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 		Capacity: uint64(ctx.Data.Vecs[0].Length()),
 	}
 	defer collection.Unref()
+	stdLog.Printf("[QQQ]call local append finished, error is %v", err)
 	return collection.Append(ctx.Data, index)
 }
 
@@ -167,6 +171,7 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 }
 
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
+	stdLog.Printf("[QQQ]call local CreateTable TableName is %v", ctx.TableName)
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
