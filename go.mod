@@ -13,8 +13,8 @@ require (
 	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/gogo/protobuf v1.3.1
 	github.com/golang/protobuf v1.4.2
-	github.com/google/uuid v1.2.0
-	github.com/matrixorigin/matrixcube v0.0.0-20210720032330-a6748c431caf
+	github.com/google/uuid v1.2.0 // indirect
+	github.com/matrixorigin/matrixcube v0.0.0-20210726085505-d07cadc505eb
 	github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible

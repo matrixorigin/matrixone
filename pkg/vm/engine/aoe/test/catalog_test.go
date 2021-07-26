@@ -37,7 +37,7 @@ var (
 
 func TestCatalog(t *testing.T) {
 
-	c, err := testutil.NewTestClusterStore(t, nil)
+	c, err := testutil.NewTestClusterStore(t, true, nil)
 
 	defer c.Stop()
 
@@ -88,10 +88,8 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	}()
 	select {
 	case <-completedC:
-		stdLog.Printf("[QSQ], create %s finished", tableInfo.Name)
 		break
 	case <-time.After(3 * time.Second):
-		stdLog.Printf("[QSQ], create %s failed, timeout", tableInfo.Name)
 	}
 	tb, err := c.GetTable(dbid, tableInfo.Name)
 	require.NoError(t, err)

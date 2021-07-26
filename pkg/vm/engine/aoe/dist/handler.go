@@ -12,6 +12,7 @@ type cmdType uint64
 
 func (h *aoeStorage) init() {
 	h.AddWriteFunc(uint64(pb.Set), h.set)
+	h.AddWriteFunc(uint64(pb.SetIfNotExist), h.setIfNotExist)
 	h.AddWriteFunc(uint64(pb.Del), h.del)
 	h.AddWriteFunc(uint64(pb.Incr), h.incr)
 	h.AddReadFunc(uint64(pb.Get), h.get)
@@ -32,6 +33,13 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		req.Key = msg.Key
 		req.Group = uint64(customReq.Group)
 		req.CustemType = uint64(pb.Set)
+		req.Type = raftcmdpb.CMDType_Write
+		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.SetIfNotExist:
+		msg := customReq.Set
+		req.Key = msg.Key
+		req.Group = uint64(customReq.Group)
+		req.CustemType = uint64(pb.SetIfNotExist)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Del:

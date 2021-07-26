@@ -2,6 +2,8 @@ package test
 
 import (
 	"bytes"
+	"github.com/fagongzi/log"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
@@ -24,11 +26,14 @@ const (
 	testDBName = "db1"
 	testTableName = "t1"
 	colCnt = 4
+	batchCnt = 1
 )
 
 func TestAOEEngine(t *testing.T) {
-
-	c, err := testutil.NewTestClusterStore(t, func(path string) (storage.DataStorage, error) {
+	log.SetHighlighting(false)
+	log.SetLevelByString("error")
+	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
 		opts     := &e.Options{}
 		mdCfg := &md.Configuration{
 			Dir:              path,
@@ -102,16 +107,20 @@ func TestAOEEngine(t *testing.T) {
 	var buf bytes.Buffer
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)
+	stdLog.Printf("size of batch is  %d", buf.Len())
 
-	err = tb.Write(ibat)
-	require.NoError(t, err)
-
+	for i:=0; i<batchCnt; i++ {
+		err = tb.Write(ibat)
+		require.NoError(t, err)
+	}
 
 	err = db.Delete(testTableName)
 	require.NoError(t, err)
 
 	tbls = db.Relations()
 	require.Equal(t, 0, len(tbls))
+
+	time.Sleep(3 * time.Second )
 
 
 
