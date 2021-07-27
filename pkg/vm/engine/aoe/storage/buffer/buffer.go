@@ -16,6 +16,7 @@ func NewBuffer(node IMemoryNode) IBuffer {
 
 func (b *Buffer) Close() error {
 	b.Node.FreeMemory()
+	b.Node = nil
 	return nil
 }
 

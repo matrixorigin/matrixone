@@ -11,11 +11,15 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"strconv"
 	"sync"
@@ -64,8 +68,8 @@ func init() {
 	}
 	opts.CacheCfg = &e.CacheCfg{
 		IndexCapacity:  blockRows * blockCntPerSegment * 80,
-		InsertCapacity: blockRows * uint64(colCnt) * 2000,
-		DataCapacity:   blockRows * uint64(colCnt) * 2000,
+		InsertCapacity: blockRows * uint64(colCnt) * 400,
+		DataCapacity:   blockRows * uint64(colCnt) * 400,
 	}
 	opts.MetaCleanerCfg = &e.MetaCleanerCfg{
 		Interval: time.Duration(1) * time.Second,
@@ -125,6 +129,11 @@ func mockData() {
 	impl := makeDB()
 	creatTable(impl)
 	makeFiles(impl)
+	// {
+	// 	time.Sleep(time.Duration(4) * time.Second)
+	// 	log.Info(common.GPool.String())
+	// 	time.Sleep(time.Duration(100) * time.Second)
+	// }
 	impl.Close()
 }
 
@@ -191,11 +200,29 @@ func readData() {
 	}
 	wg.Wait()
 	log.Infof("Time: %s, Rows: %d", time.Since(now), totalRows)
-	log.Info(common.GPool.String())
 	log.Infof("MMU usage: %d", hm.Size())
+	// {
+	// 	time.Sleep(time.Duration(4) * time.Second)
+	// 	log.Info(common.GPool.String())
+	// 	time.Sleep(time.Duration(100) * time.Second)
+	// }
 }
 
+type gcHandle struct{}
+
+// func (h *gcHandle) OnExec()    { runtime.GC() }
+func (h *gcHandle) OnExec()    {}
+func (h *gcHandle) OnStopped() { runtime.GC() }
+
 func main() {
+	go func() {
+		http.ListenAndServe(":8080", nil)
+	}()
+	gc := w.NewHeartBeater(time.Duration(1)*time.Second, &gcHandle{})
+	gc.Start()
+
 	mockData()
 	// readData()
+
+	gc.Stop()
 }
