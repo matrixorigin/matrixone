@@ -54,6 +54,7 @@ type ServerCallbackImpl struct {
 	cubeconfig.StoreHeartbeatDataProcessor
 	server_epoch uint64
 	server_minimumRemovableEpoch uint64
+	//<epoch,query_cnt>
 	epoch_info map[uint64]uint64
 }
 
@@ -110,6 +111,7 @@ func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
 
+	//TODO:When the cluster runs initially, there is not keys any more.
 	//load cluster_epoch
 	//load minimumRemovableEpoch
 	//load kv<server,maximumRemovableEpoch>
@@ -185,7 +187,7 @@ id : the id of the node,
 data : the message that the node sent
 kv : the persistent storage
  */
-func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage.Storage) error{
+func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage.Storage) (responseData []byte, err error){
 
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
@@ -231,8 +233,11 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 
 	//step 4: response to the server
 	//TODO:
+	var rsp []byte = make([]byte,16)
+	binary.BigEndian.PutUint64(rsp,pci.cluter_epoch)
+	binary.BigEndian.PutUint64(rsp[8:],pci.minimumRemovableEpoch)
 
-	return nil
+	return rsp,nil
 }
 
 /**
@@ -307,11 +312,24 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 when the server receives a heartbeat response from the leader, the HandleHeartbeatRsp will be executed.
  */
 func (sci *ServerCallbackImpl) HandleHeartbeatRsp(data []byte) error {
-	//TODO:
+	cluster_epoch := binary.BigEndian.Uint64(data)
+	pd_mre := binary.BigEndian.Uint64(data[8:])
+	if cluster_epoch > sci.server_epoch {
+		sci.server_epoch = cluster_epoch
+	}
+
+	if pd_mre > sci.server_minimumRemovableEpoch {
+		sci.server_minimumRemovableEpoch = pd_mre
+	}
+
+	//TODO:clear epoch <= minimumRemovableEpoch
+	//TODO:start drop task
+	fmt.Println("drop task")
 	return nil
 }
 
 func (sci *ServerCallbackImpl) CollectData() []byte {
+	//get all epochs, sort them
 	var keys client.Uint64List= nil
 	for k,_ := range sci.epoch_info {
 		keys = append(keys,k)
@@ -320,6 +338,7 @@ func (sci *ServerCallbackImpl) CollectData() []byte {
 	sort.Sort(keys)
 
 	maxRE := uint64(0)
+	//calc the maximumRemovableEpoch until the first non-zero epoch
 	for _,k := range keys {
 		v,ok := sci.epoch_info[k]
 		if !ok{

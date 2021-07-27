@@ -2,6 +2,8 @@ package server
 
 import (
 	"fmt"
+	"github.com/fagongzi/log"
+	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	"github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
@@ -74,6 +76,8 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 			cfg.Prophet.EmbedEtcd.ClientUrls = fmt.Sprintf("http://127.0.0.1:4000%d", i)
 			cfg.Prophet.EmbedEtcd.PeerUrls = fmt.Sprintf("http://127.0.0.1:5000%d", i)
 			cfg.Prophet.Schedule.EnableJointConsensus = true
+			cfg.Prophet.ContainerHeartbeatDataProcessor = NewPDCallbackImpl(1000)
+			cfg.Customize.CustomStoreHeartbeatDataProcessor = NewServerCallbackImpl()
 
 		}, server.Cfg{
 			Addr: fmt.Sprintf("127.0.0.1:908%d", i),
@@ -90,6 +94,28 @@ func (c *testCluster) stop() {
 	for _, s := range c.applications {
 		s.Close()
 	}
+}
+
+func TestEpochGC(t *testing.T) {
+	log.SetLevelByString("error")
+	log.SetHighlighting(false)
+	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
+
+	defer func() {
+		err := cleanupTmpDir()
+		if err != nil {
+			t.Errorf("delete cube temp dir failed %v",err)
+		}
+	}()
+	c, err := newTestClusterStore(t)
+	if err != nil {
+		t.Errorf("new cube failed %v",err)
+		return
+	}
+
+	defer c.stop()
+
+	time.Sleep(30 * time.Second)
 }
 
 
