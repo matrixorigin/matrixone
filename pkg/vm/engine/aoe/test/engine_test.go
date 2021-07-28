@@ -26,7 +26,7 @@ const (
 	testDBName = "db1"
 	testTableName = "t1"
 	colCnt = 4
-	batchCnt = 1
+	batchCnt = 10
 )
 
 func TestAOEEngine(t *testing.T) {

@@ -8,11 +8,13 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
+	log "github.com/sirupsen/logrus"
 	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -35,7 +37,9 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 		}
 	}
 	c := &TestCluster{T: t}
+	var wg sync.WaitGroup
 	for i := 0; i < 3; i++ {
+
 		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
 		if err != nil {
 			return nil, err
@@ -59,7 +63,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
 		}
 		cfg.ClusterConfig = config.ClusterConfig{
-			PreAllocatedGroupNum: 10,
+			PreAllocatedGroupNum: 3,
 		}
 		cfg.CubeConfig = cConfig.Config{
 			DataPath: fmt.Sprintf("%s/node-%d", tmpDir, i),
@@ -89,12 +93,18 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 		if i != 0 {
 			cfg.CubeConfig.Prophet.EmbedEtcd.Join = "http://127.0.0.1:40000"
 		}
-		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
-		if err != nil {
-			return nil, err
-		}
-		c.Applications = append(c.Applications, a)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
+			if err != nil {
+				log.Fatal("create failed with %+v", err)
+			}
+			c.Applications = append(c.Applications, a)
+		}()
+		time.Sleep(2 * time.Second)
 	}
+	wg.Wait()
 	return c, nil
 }
 

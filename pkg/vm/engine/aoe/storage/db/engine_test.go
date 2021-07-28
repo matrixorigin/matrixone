@@ -21,10 +21,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var (
-	DIR = "/tmp/engine_test"
-)
-
 func TestEngine(t *testing.T) {
 	initDBTest()
 	inst := initDB()
