@@ -205,6 +205,7 @@ func TestReplay(t *testing.T) {
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.ID)
 	assert.Nil(t, err)
 	t.Logf("Row count: %d", tbl.GetRowCount())
+	assert.Equal(t, rows*uint64(insertCnt), tbl.GetRowCount())
 
 	inst.Close()
 
@@ -238,7 +239,13 @@ func TestReplay(t *testing.T) {
 
 	tbl, err = inst.Store.DataTables.WeakRefTable(replaytblMeta.ID)
 	assert.Nil(t, err)
-	t.Logf("Row count: %d", tbl.GetRowCount())
+	t.Logf("Row count: %d, %d", tbl.GetRowCount(), rows*uint64(insertCnt))
+	assert.Equal(t, rows*uint64(insertCnt)-tblMeta.Conf.BlockMaxRows, tbl.GetRowCount())
+
+	replayIndex := tbl.GetMeta().GetReplayIndex()
+	assert.Equal(t, tblMeta.Conf.BlockMaxRows, replayIndex.Count)
+	assert.False(t, replayIndex.IsApplied())
+	// t.Log(replayIndex)
 
 	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name})
 	assert.NotNil(t, err)
@@ -251,9 +258,11 @@ func TestReplay(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	time.Sleep(time.Duration(10) * time.Millisecond)
+	time.Sleep(time.Duration(20) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
+	t.Logf("Row count: %d", tbl.GetRowCount())
+	assert.Equal(t, 2*rows*uint64(insertCnt)-2*tblMeta.Conf.BlockMaxRows, tbl.GetRowCount())
 	inst.Close()
 }
 

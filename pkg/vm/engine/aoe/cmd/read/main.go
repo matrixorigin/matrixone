@@ -129,9 +129,9 @@ func mockData() {
 	impl := makeDB()
 	creatTable(impl)
 	makeFiles(impl)
+	log.Info(common.GPool.String())
 	// {
 	// 	time.Sleep(time.Duration(4) * time.Second)
-	// 	log.Info(common.GPool.String())
 	// 	time.Sleep(time.Duration(100) * time.Second)
 	// }
 	impl.Close()

@@ -227,6 +227,10 @@ func (td *TableData) GetSegmentedIndex() (id uint64, ok bool) {
 	return id, ok
 }
 
+func (td *TableData) GetReplayIndex() *md.LogIndex {
+	return td.Meta.ReplayIndex
+}
+
 func (td *TableData) SegmentIds() []uint64 {
 	ids := make([]uint64, 0, atomic.LoadUint32(&td.tree.SegmentCnt))
 	td.tree.RLock()
@@ -243,6 +247,20 @@ func (td *TableData) GetRowCount() uint64 {
 
 func (td *TableData) AddRows(rows uint64) uint64 {
 	return atomic.AddUint64(&td.tree.RowCount, rows)
+}
+
+func (td *TableData) initReplayCtx() {
+	if td.tree.SegmentCnt == 0 {
+		return
+	}
+	var ctx *md.LogIndex
+	for segIdx := int(td.tree.SegmentCnt) - 1; segIdx >= 0; segIdx-- {
+		seg := td.tree.Segments[segIdx]
+		if ctx = seg.GetReplayIndex(); ctx != nil {
+			break
+		}
+	}
+	td.Meta.ReplayIndex = ctx
 }
 
 func (td *TableData) initRowCount() {
@@ -441,6 +459,7 @@ func (ts *Tables) Replay(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr b
 			}
 		}
 		tbl.initRowCount()
+		tbl.initReplayCtx()
 		if err := ts.CreateTable(tbl); err != nil {
 			return err
 		}
