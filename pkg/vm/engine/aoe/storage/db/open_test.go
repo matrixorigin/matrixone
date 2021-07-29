@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
@@ -174,6 +175,10 @@ func TestOpen(t *testing.T) {
 }
 
 func TestReplay(t *testing.T) {
+	waitTime := time.Duration(20) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime = time.Duration(200) * time.Millisecond
+	}
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
@@ -194,7 +199,7 @@ func TestReplay(t *testing.T) {
 		})
 		assert.Nil(t, err)
 	}
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(waitTime)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 
@@ -264,7 +269,7 @@ func TestReplay(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(waitTime)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Logf("Row count: %d", tbl.GetRowCount())
