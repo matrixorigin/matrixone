@@ -194,7 +194,7 @@ func TestReplay(t *testing.T) {
 		})
 		assert.Nil(t, err)
 	}
-	time.Sleep(time.Duration(15) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 
@@ -264,7 +264,7 @@ func TestReplay(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	time.Sleep(time.Duration(20) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Logf("Row count: %d", tbl.GetRowCount())
