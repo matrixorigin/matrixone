@@ -109,6 +109,20 @@ func (seg *Segment) GetSegmentedIndex() (id uint64, ok bool) {
 	return id, ok
 }
 
+func (seg *Segment) GetReplayIndex() *md.LogIndex {
+	if seg.tree.BlockCnt == 0 {
+		return nil
+	}
+	var ctx *md.LogIndex
+	for blkIdx := int(seg.tree.BlockCnt) - 1; blkIdx >= 0; blkIdx-- {
+		blk := seg.tree.Blocks[blkIdx]
+		if ctx = blk.GetMeta().GetReplayIndex(); ctx != nil {
+			break
+		}
+	}
+	return ctx
+}
+
 func (seg *Segment) GetRowCount() uint64 {
 	if seg.Meta.DataState >= md.CLOSED {
 		return seg.Meta.Table.Conf.BlockMaxRows * seg.Meta.Table.Conf.SegmentMaxBlocks

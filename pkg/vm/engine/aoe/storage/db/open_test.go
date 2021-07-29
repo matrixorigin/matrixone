@@ -188,13 +188,13 @@ func TestReplay(t *testing.T) {
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(dbi.AppendCtx{
-			OpIndex:   uint64(i),
+			OpIndex:   uint64(i + 1),
 			Data:      ck,
 			TableName: tableInfo.Name,
 		})
 		assert.Nil(t, err)
 	}
-	time.Sleep(time.Duration(10) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 
@@ -204,7 +204,14 @@ func TestReplay(t *testing.T) {
 	lastIndexID := inst.Opts.Meta.Info.Sequence.NextIndexID
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.ID)
 	assert.Nil(t, err)
+
+	segmentedIdx, err := inst.GetSegmentedId([]string{tableInfo.Name})
+	assert.Nil(t, err)
+	t.Logf("SegmentedIdx: %d", segmentedIdx)
+	assert.Equal(t, uint64(insertCnt)-1, segmentedIdx)
+
 	t.Logf("Row count: %d", tbl.GetRowCount())
+	assert.Equal(t, rows*uint64(insertCnt), tbl.GetRowCount())
 
 	inst.Close()
 
@@ -238,11 +245,17 @@ func TestReplay(t *testing.T) {
 
 	tbl, err = inst.Store.DataTables.WeakRefTable(replaytblMeta.ID)
 	assert.Nil(t, err)
-	t.Logf("Row count: %d", tbl.GetRowCount())
+	t.Logf("Row count: %d, %d", tbl.GetRowCount(), rows*uint64(insertCnt))
+	assert.Equal(t, rows*uint64(insertCnt)-tblMeta.Conf.BlockMaxRows, tbl.GetRowCount())
+
+	replayIndex := tbl.GetMeta().GetReplayIndex()
+	assert.Equal(t, tblMeta.Conf.BlockMaxRows, replayIndex.Count)
+	assert.False(t, replayIndex.IsApplied())
+	// t.Log(replayIndex)
 
 	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name})
 	assert.NotNil(t, err)
-	for i := 0; i < insertCnt; i++ {
+	for i := int(segmentedIdx) + 1; i < int(segmentedIdx)+1+insertCnt; i++ {
 		err = inst.Append(dbi.AppendCtx{
 			TableName: tableInfo.Name,
 			Data:      ck,
@@ -251,9 +264,18 @@ func TestReplay(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	time.Sleep(time.Duration(10) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
+	t.Logf("Row count: %d", tbl.GetRowCount())
+	assert.Equal(t, 2*rows*uint64(insertCnt)-2*tblMeta.Conf.BlockMaxRows, tbl.GetRowCount())
+
+	preSegmentedIdx := segmentedIdx
+	segmentedIdx, err = inst.GetSegmentedId([]string{tableInfo.Name})
+	assert.Nil(t, err)
+	t.Logf("SegmentedIdx: %d", segmentedIdx)
+	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, segmentedIdx)
+
 	inst.Close()
 }
 
