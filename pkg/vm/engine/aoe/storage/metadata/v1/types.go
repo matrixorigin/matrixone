@@ -134,6 +134,7 @@ type Table struct {
 	IdMap         map[uint64]int `json:"-"`
 	Info          *MetaInfo      `json:"-"`
 	Stat          *Statstics     `json:"-"`
+	ReplayIndex   *LogIndex      `json:"-"`
 	Schema        *Schema
 	Conf          *Configuration
 	CheckPoint    uint64

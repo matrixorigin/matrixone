@@ -89,6 +89,26 @@ func (tbl *Table) GetRows() uint64 {
 	return (*Statstics)(ptr).Rows
 }
 
+func (tbl *Table) GetReplayIndex() *LogIndex {
+	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.ReplayIndex)))
+	if ptr == nil {
+		return nil
+	}
+	return (*LogIndex)(ptr)
+}
+
+func (tbl *Table) ResetReplayIndex() {
+	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.ReplayIndex)))
+	if ptr == nil {
+		panic("logic error")
+	}
+	var netIndex *LogIndex
+	nptr := (*unsafe.Pointer)(unsafe.Pointer(&netIndex))
+	if !atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.ReplayIndex)), ptr, *nptr) {
+		panic("logic error")
+	}
+}
+
 func (tbl *Table) AppendStat(rows, size uint64) *Statstics {
 	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
 	stat := (*Statstics)(ptr)
