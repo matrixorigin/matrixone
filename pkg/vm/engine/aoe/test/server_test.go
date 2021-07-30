@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
+	"matrixone/pkg/client"
 	"matrixone/pkg/config"
 	"matrixone/pkg/server"
 	"matrixone/pkg/util/signal"
@@ -79,7 +80,8 @@ func TestServer(t *testing.T) {
 
 func createServer() {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	svr = server.NewServer(address)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.StorageEngine, config.ClusterNodes)
+	svr = server.NewServer(address, pu, client.NewPDCallbackImpl(1000))
 }
 
 func runServer() {

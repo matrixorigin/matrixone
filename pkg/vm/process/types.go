@@ -41,4 +41,5 @@ type Process struct {
 	Gm    *guest.Mmu
 	Mp    *mempool.Mempool
 	Refer map[string]uint64
+	Epoch uint64
 }

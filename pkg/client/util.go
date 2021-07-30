@@ -2,9 +2,11 @@ package client
 
 import (
 	"bytes"
+	"fmt"
 	"runtime"
 	"strconv"
 	"sync/atomic"
+	"time"
 )
 
 //a convenient data structure for closing
@@ -105,4 +107,50 @@ func GetRoutineId() uint64 {
 	data = data[:bytes.IndexByte(data, ' ')]
 	id, _ := strconv.ParseUint(string(data), 10, 64)
 	return id
+}
+
+type DebugCounter struct {
+	length  int
+	counter []uint64
+	Cf      CloseFlag
+}
+
+func NewDebugCounter(l int) *DebugCounter {
+	return &DebugCounter{
+		length:  l,
+		counter: make([]uint64,l),
+	}
+}
+
+func (dc *DebugCounter) Add(i int,v uint64)  {
+	atomic.AddUint64(&dc.counter[i],v)
+}
+
+func (dc *DebugCounter) Set(i int, v uint64) {
+	atomic.StoreUint64(&dc.counter[i],v)
+}
+
+func (dc *DebugCounter) Get(i int) uint64 {
+	return atomic.LoadUint64(&dc.counter[i])
+}
+
+func (dc *DebugCounter) Len() int {
+	return dc.length
+}
+
+func (dc *DebugCounter) DCRoutine() {
+	dc.Cf.Open()
+
+	for dc.Cf.IsOpened() {
+		for i := 0; i < dc.length; i++ {
+			if i != 0 && i % 8 == 0 {
+				fmt.Printf("\n")
+			}
+			v := dc.Get(i)
+			fmt.Printf("[%4d %4d]",i,v)
+			dc.Set(i,0)
+		}
+		fmt.Printf("\n")
+		time.Sleep(5 * time.Second)
+	}
 }

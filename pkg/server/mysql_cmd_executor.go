@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"matrixone/pkg/client"
-	"matrixone/pkg/config"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/compile"
@@ -48,10 +47,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		fmt.Printf("bat: %v\n", bat)
 	}
 
-	var rowGroupSize = config.GlobalSystemVariables.GetCountOfRowsPerSendingToClient()
+	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
 	rowGroupSize = client.MaxInt64(rowGroupSize,1)
 
-	var choose bool = !config.GlobalSystemVariables.GetSendRow()
+	var choose bool = !ses.Pu.SV.GetSendRow()
 	if choose {
 		goID := client.GetRoutineId()
 
@@ -843,7 +842,7 @@ func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
 
 	//TODO: check meta data
 	var err error = nil
-	if _, err = config.StorageEngine.Database(name); err != nil {
+	if _, err = ses.Pu.StorageEngine.Database(name); err != nil {
 		//echo client. no such database
 		return client.NewMysqlError(client.ER_BAD_DB_ERROR,name)
 	}
@@ -875,21 +874,30 @@ func (mce *MysqlCmdExecutor) handleUse(use *tree.Use) error {
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.Routine.GetSession()
 	proto := mce.Routine.GetClientProtocol().(*client.MysqlClientProtocol)
+	pdHook := mce.Routine.GetPDCallback().(*client.PDCallbackImpl)
+	statement_count := uint64(1)
+
+	//pin the epoch with 1
+	epoch,_ := pdHook.IncQueryCountAtCurrentEpoch(statement_count)
+	defer func() {
+		pdHook.DecQueryCountAtEpoch(epoch,statement_count)
+	}()
 
 	proc := process.New(ses.GuestMmu, ses.Mempool)
 	proc.Id = mce.getNextProcessId()
-	proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
-	proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
-	proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
+	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
+	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
+	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
+	proc.Epoch = epoch
 
-	comp := compile.New(ses.Dbname, sql, ses.User, config.StorageEngine, config.ClusterNodes, proc)
+	comp := compile.New(ses.Dbname, sql, ses.User, ses.Pu.StorageEngine, ses.Pu.ClusterNodes, proc)
 	execs, err := comp.Compile()
 	if err != nil {
 		return err
 	}
 
-	var choose bool = !config.GlobalSystemVariables.GetSendRow()
+	var choose bool = !ses.Pu.SV.GetSendRow()
 
 	ses.Mrs = &client.MysqlResultSet{}
 
@@ -899,6 +907,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 	for _, exec := range execs {
 		stmt := exec.Statement()
+
+		//temp try 0 epoch
+		pdHook.IncQueryCountAtEpoch(epoch,1)
+		statement_count++
+
 		//check database
 		if ses.Dbname == "" {
 			//if none database has been selected, database operations must be failed.
@@ -1093,12 +1106,23 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			*tree.CreateRole,*tree.DropRole,
 			*tree.Revoke,*tree.Grant,
 			*tree.SetDefaultRole,*tree.SetRole,*tree.SetPassword:
+
 			/*
 				Step 1: Start
 			*/
 
 			if er := exec.Run(); er != nil {
 				return er
+			}
+
+			//record ddl drop xxx after the success
+			switch stmt.(type) {
+			case *tree.DropTable:
+				//test ddl
+				pdHook.AddMeta(epoch,client.NewMeta(epoch,client.META_TYPE_TABLE,1))
+			case *tree.DropDatabase:
+				//test ddl
+				pdHook.AddMeta(epoch,client.NewMeta(epoch,client.META_TYPE_DATABASE,2))
 			}
 
 			/*

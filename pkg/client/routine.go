@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"matrixone/pkg/config"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
@@ -22,6 +23,8 @@ type Session struct {
 	Mempool  *mempool.Mempool
 
 	sessionVars config.SystemVariables
+
+	Pu *config.ParameterUnit
 }
 
 //the routine is an abstract of handling something repeatedly.
@@ -43,6 +46,9 @@ type Routine interface {
 
 	//get the cmdexecutor
 	GetCmdExecutor()CmdExecutor
+
+	//get the server
+	GetPDCallback() pConfig.ContainerHeartbeatDataProcessor
 }
 
 //for test
@@ -61,6 +67,13 @@ type RoutineImpl struct {
 
 	//the related session
 	ses *Session
+
+	//pd callback
+	pdHook *PDCallbackImpl
+}
+
+func (ri *RoutineImpl) GetPDCallback() pConfig.ContainerHeartbeatDataProcessor {
+	return ri.pdHook
 }
 
 func (ri *RoutineImpl) GetClientProtocol() ClientProtocol {
@@ -131,11 +144,20 @@ func NewSession()*Session{
 	}
 }
 
-func NewRoutine(protocol ClientProtocol,executor CmdExecutor,session *Session)Routine{
+func NewSessionWithParameterUnit(pu *config.ParameterUnit) *Session {
+	return &Session{
+		GuestMmu: guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
+		Mempool:  mempool.New(int(pu.SV.GetMempoolMaxSize()), int(pu.SV.GetMempoolFactor())),
+		Pu:       pu,
+	}
+}
+
+func NewRoutine(protocol ClientProtocol, executor CmdExecutor, session *Session, pdCb *PDCallbackImpl) Routine {
 	ri := &RoutineImpl{
 		protocol: protocol,
 		executor: executor,
 		ses:session,
+		pdHook: pdCb,
 	}
 
 	if protocol != nil{

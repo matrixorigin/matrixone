@@ -1,4 +1,4 @@
-package server
+package client
 
 import (
 	"fmt"
@@ -9,6 +9,7 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage/mem"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
+	"math/rand"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	"os"
 	"testing"
@@ -40,12 +41,14 @@ type testCluster struct {
 	applications []dist.Storage
 }
 
-func newTestClusterStore(t *testing.T) (*testCluster, error) {
+var DC *DebugCounter = NewDebugCounter(32)
+
+func newTestClusterStore(t *testing.T, pcis []*PDCallbackImpl, nodeCnt int) (*testCluster, error) {
 	if err := recreateTestTempDir(); err != nil {
 		return nil, err
 	}
 	c := &testCluster{t: t}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < nodeCnt; i++ {
 		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
 		if err != nil {
 			return nil, err
@@ -76,8 +79,9 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 			cfg.Prophet.EmbedEtcd.ClientUrls = fmt.Sprintf("http://127.0.0.1:4000%d", i)
 			cfg.Prophet.EmbedEtcd.PeerUrls = fmt.Sprintf("http://127.0.0.1:5000%d", i)
 			cfg.Prophet.Schedule.EnableJointConsensus = true
-			cfg.Prophet.ContainerHeartbeatDataProcessor = NewPDCallbackImpl(1000)
-			cfg.Customize.CustomStoreHeartbeatDataProcessor = NewServerCallbackImpl()
+			if i < len(pcis){
+				cfg.Customize.CustomStoreHeartbeatDataProcessor = pcis[i]
+			}
 
 		}, server.Cfg{
 			Addr: fmt.Sprintf("127.0.0.1:908%d", i),
@@ -107,7 +111,22 @@ func TestEpochGC(t *testing.T) {
 			t.Errorf("delete cube temp dir failed %v",err)
 		}
 	}()
-	c, err := newTestClusterStore(t)
+
+	go DC.DCRoutine()
+
+	nodeCnt := 5
+
+	pcis := make([]*PDCallbackImpl, nodeCnt)
+	cf := make([]*CloseFlag, nodeCnt)
+	for i := 0 ; i < nodeCnt; i++ {
+		pcis[i] = NewPDCallbackImpl(100)
+		pcis[i].Id = i
+		cf[i] = &CloseFlag{}
+		go testPCI(i,cf[i],pcis[i])
+	}
+
+
+	c, err := newTestClusterStore(t, pcis, nodeCnt)
 	if err != nil {
 		t.Errorf("new cube failed %v",err)
 		return
@@ -115,7 +134,36 @@ func TestEpochGC(t *testing.T) {
 
 	defer c.stop()
 
-	time.Sleep(30 * time.Second)
+	time.Sleep(1 * time.Minute)
+
+	c.applications[0].Close()
+
+	fmt.Println("-------------------close node 0----------------")
+
+	time.Sleep(1 * time.Minute)
+	for i := 0 ; i < nodeCnt; i++ {
+		cf[i].Close()
+	}
+
+	DC.Cf.Close()
+}
+
+func testPCI(id int,f*CloseFlag, pci *PDCallbackImpl) {
+	f.Open()
+	for f.IsOpened() {
+		v := rand.Uint64() % 20
+		ep, _ := pci.IncQueryCountAtCurrentEpoch(v)
+		if ep == 0 {
+			continue
+		}
+		DC.Set(id,v)
+		time.Sleep(1000 * time.Millisecond)
+		if rand.Uint32() & 0x1 == 0x1 {
+			pci.AddMeta(ep,NewMeta(ep,META_TYPE_TABLE,v))
+		}
+		time.Sleep(1000 * time.Millisecond)
+		pci.DecQueryCountAtEpoch(ep,v)
+	}
 }
 
 
