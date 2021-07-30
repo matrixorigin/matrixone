@@ -210,7 +210,7 @@ func TestReplay(t *testing.T) {
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.ID)
 	assert.Nil(t, err)
 
-	segmentedIdx, err := inst.GetSegmentedId([]string{tableInfo.Name})
+	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, uint64(insertCnt)-1, segmentedIdx)
@@ -276,7 +276,7 @@ func TestReplay(t *testing.T) {
 	assert.Equal(t, 2*rows*uint64(insertCnt)-2*tblMeta.Conf.BlockMaxRows, tbl.GetRowCount())
 
 	preSegmentedIdx := segmentedIdx
-	segmentedIdx, err = inst.GetSegmentedId([]string{tableInfo.Name})
+	segmentedIdx, err = inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, segmentedIdx)

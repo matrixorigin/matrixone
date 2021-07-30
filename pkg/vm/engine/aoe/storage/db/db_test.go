@@ -502,6 +502,8 @@ func TestMultiTables(t *testing.T) {
 	}
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
+	tbls := inst.Store.MetaInfo.GetTablesByNamePrefix(prefix)
+	assert.Equal(t, tblCnt, len(tbls))
 	inst.Close()
 }
 

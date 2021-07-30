@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"github.com/google/btree"
 	"io"
 	"matrixone/pkg/container/types"
 	"sync"
@@ -154,6 +155,7 @@ type MetaInfo struct {
 	Tables     map[uint64]*Table
 	TableIds   map[uint64]bool   `json:"-"`
 	NameMap    map[string]uint64 `json:"-"`
+	NameTree   *btree.BTree      `json:"-"`
 	Tombstone  map[uint64]bool   `json:"-"`
 	CkpTime    int64
 }
