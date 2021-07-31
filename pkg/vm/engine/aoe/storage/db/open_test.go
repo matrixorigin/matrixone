@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
@@ -174,6 +175,10 @@ func TestOpen(t *testing.T) {
 }
 
 func TestReplay(t *testing.T) {
+	waitTime := time.Duration(20) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime = time.Duration(200) * time.Millisecond
+	}
 	initDBTest()
 	inst := initDB()
 	tableInfo := md.MockTableInfo(2)
@@ -194,7 +199,7 @@ func TestReplay(t *testing.T) {
 		})
 		assert.Nil(t, err)
 	}
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(waitTime)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 
@@ -205,7 +210,7 @@ func TestReplay(t *testing.T) {
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.ID)
 	assert.Nil(t, err)
 
-	segmentedIdx, err := inst.GetSegmentedId([]string{tableInfo.Name})
+	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, uint64(insertCnt)-1, segmentedIdx)
@@ -264,14 +269,14 @@ func TestReplay(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(waitTime)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Logf("Row count: %d", tbl.GetRowCount())
 	assert.Equal(t, 2*rows*uint64(insertCnt)-2*tblMeta.Conf.BlockMaxRows, tbl.GetRowCount())
 
 	preSegmentedIdx := segmentedIdx
-	segmentedIdx, err = inst.GetSegmentedId([]string{tableInfo.Name})
+	segmentedIdx, err = inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, segmentedIdx)

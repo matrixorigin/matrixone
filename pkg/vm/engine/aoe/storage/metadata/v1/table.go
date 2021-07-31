@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/google/btree"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -87,6 +88,10 @@ func (tbl *Table) GetID() uint64 {
 func (tbl *Table) GetRows() uint64 {
 	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
 	return (*Statstics)(ptr).Rows
+}
+
+func (tbl *Table) Less(item btree.Item) bool {
+	return tbl.Schema.Name < (item.(*Table)).Schema.Name
 }
 
 func (tbl *Table) GetReplayIndex() *LogIndex {
@@ -406,6 +411,7 @@ func (tbl *Table) Replay() {
 	} else {
 		tbl.Info.TableIds[tbl.ID] = true
 		tbl.Info.NameMap[tbl.Schema.Name] = tbl.ID
+		tbl.Info.NameTree.ReplaceOrInsert(tbl)
 	}
 	tbl.IdMap = make(map[uint64]int)
 	segFound := false
