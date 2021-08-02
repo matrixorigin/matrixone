@@ -179,6 +179,10 @@ func (v *VectorWrapper) CopyToVector() *base.Vector {
 	return &v.Vector
 }
 
+func (v *VectorWrapper) CopyToVectorWithProc(_ uint64, _ *process.Process) (*base.Vector, error) {
+	panic("not supported")
+}
+
 func (v *VectorWrapper) AppendVector(vec *base.Vector, offset int) (n int, err error) {
 	panic("not supported")
 }
