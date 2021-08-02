@@ -13,6 +13,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -180,6 +181,65 @@ func TestStrVector(t *testing.T) {
 	assert.Equal(t, 4, builtVec.Length())
 	assert.True(t, builtVec.IsReadonly())
 	f.Close()
+}
+
+func TestCopy(t *testing.T) {
+	hm := host.New(1 << 20)
+	gm := guest.New(1<<20, hm)
+	proc := process.New(gm, mempool.New(1<<32, 8))
+	t0 := types.Type{types.T(types.T_varchar), 24, 0, 0}
+	t1 := types.Type{types.T_int32, 4, 4, 0}
+	rows := uint64(100)
+	vec0 := MockVector(t0, rows)
+	vec1 := MockVector(t1, rows)
+
+	for i := 0; i < 4; i++ {
+		ref := uint64(1)
+		now := time.Now()
+		v0_0, err := vec0.CopyToVectorWithProc(ref, proc)
+		t.Logf("c1 takes: %s, size: %d", time.Since(now), proc.Size())
+		assert.Nil(t, err)
+		assert.NotNil(t, v0_0)
+		assert.Equal(t, int(rows), v0_0.Length())
+		v0_0.Free(proc)
+		assert.Equal(t, int64(0), proc.Size())
+		now = time.Now()
+		v0_1 := vec0.CopyToVector()
+		t.Logf("c2 takes: %s, size: %d", time.Since(now), proc.Size())
+		assert.Equal(t, int(rows), v0_1.Length())
+		for row := 0; row < int(rows); row++ {
+			expected := vec0.GetValue(row)
+			value0_0 := v0_0.Col.(*types.Bytes).Get(int64(row))
+			value0_1 := v0_1.Col.(*types.Bytes).Get(int64(row))
+			assert.Equal(t, expected, value0_0)
+			assert.Equal(t, expected, value0_1)
+			// t.Log(string(value0_0))
+			// t.Log(string(value0_1))
+		}
+	}
+
+	for i := 0; i < 4; i++ {
+		ref := uint64(1)
+		now := time.Now()
+		v1_0, err := vec1.CopyToVectorWithProc(ref, proc)
+		t.Logf("c1 takes: %s, size: %d", time.Since(now), proc.Size())
+		assert.Nil(t, err)
+		assert.NotNil(t, v1_0)
+		assert.Equal(t, int(rows), v1_0.Length())
+		v1_0.Free(proc)
+		assert.Equal(t, int64(0), proc.Size())
+		now = time.Now()
+		v1_1 := vec1.CopyToVector()
+		t.Logf("c2 takes: %s, size: %d", time.Since(now), proc.Size())
+		assert.Equal(t, int(rows), v1_1.Length())
+		for row := 0; row < int(rows); row++ {
+			expected := vec1.GetValue(row)
+			value1_0 := v1_0.Col.([]int32)[row]
+			value1_1 := v1_1.Col.([]int32)[row]
+			assert.Equal(t, expected, value1_0)
+			assert.Equal(t, expected, value1_1)
+		}
+	}
 }
 
 func TestWrapper(t *testing.T) {

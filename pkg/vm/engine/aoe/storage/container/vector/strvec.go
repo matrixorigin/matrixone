@@ -12,6 +12,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/process"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -281,6 +283,59 @@ func (v *StrVector) GetLatestView() IVector {
 		vec.VMask = &nulls.Nulls{}
 	}
 	return vec
+}
+
+func (v *StrVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
+		panic("should call in ro mode")
+	}
+	// |CountSize|TypeSize|BitmapSize[|Bitmap]| Rows [|lengths| strdata ]|
+	//      8         4        4         [?]     4     [lengths   data]
+	nullSize := 0
+	var nullbuf []byte
+	var err error
+	if v.VMask.Any() {
+		if nullbuf, err = v.VMask.Show(); err != nil {
+			panic(err)
+		}
+		nullSize = len(nullbuf)
+	}
+	capacity := encoding.TypeSize + 4 + nullSize + 4
+	rows := len(v.Data.Offsets)
+	capacity += rows
+	if rows > 0 {
+		capacity += 4 * rows
+		capacity += len(v.Data.Data)
+	}
+	vec := ro.New(v.Type)
+	data, err := proc.Alloc(int64(capacity))
+	if err != nil {
+		return nil, err
+	}
+	buf := data[mempool.CountSize : mempool.CountSize+capacity]
+	copy(buf, encoding.EncodeType(v.Type))
+	buf = buf[encoding.TypeSize:]
+	copy(buf, encoding.EncodeUint32(uint32(nullSize)))
+	buf = buf[4:]
+	if nullSize > 0 {
+		copy(buf, nullbuf)
+		buf = buf[nullSize:]
+	}
+	copy(buf, encoding.EncodeUint32(uint32(rows)))
+	buf = buf[4:]
+	if rows > 0 {
+		lenBuf := encoding.EncodeUint32Slice(v.Data.Lengths)
+		copy(buf, lenBuf)
+		buf = buf[len(lenBuf):]
+		copy(buf, v.Data.Data)
+	}
+
+	if err = vec.Read(data[:mempool.CountSize+capacity]); err != nil {
+		proc.Free(data)
+		return nil, err
+	}
+	copy(data, encoding.EncodeUint64(ref))
+	return vec, nil
 }
 
 func (v *StrVector) CopyToVector() *ro.Vector {
