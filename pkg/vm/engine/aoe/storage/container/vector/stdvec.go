@@ -394,8 +394,8 @@ func (v *StdVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro
 		copy(buf, nullbuf)
 		buf = buf[nullSize:]
 	}
-	copy(buf, v.Data[:capacity])
-	err = vec.Read(data)
+	copy(buf, v.Data)
+	err = vec.Read(data[:mempool.CountSize+capacity])
 	if err != nil {
 		proc.Free(data)
 		return nil, err

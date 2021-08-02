@@ -330,7 +330,7 @@ func (v *StrVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro
 		copy(buf, v.Data.Data)
 	}
 
-	if err = vec.Read(data); err != nil {
+	if err = vec.Read(data[:mempool.CountSize+capacity]); err != nil {
 		proc.Free(data)
 		return nil, err
 	}
