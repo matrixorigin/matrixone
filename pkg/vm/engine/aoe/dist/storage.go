@@ -52,6 +52,8 @@ type Storage interface {
 	GetWithGroup([]byte, pb.Group) ([]byte, error)
 	// Delete remove the key from the store
 	Delete([]byte) error
+	// DeleteIfExist remove the key from the store
+	DeleteIfExist([]byte) error
 	// Scan scan [start,end) data
 	Scan([]byte, []byte, uint64) ([][]byte, error)
 	// ScanWithGroup Scan scan [start,end) data
@@ -67,6 +69,7 @@ type Storage interface {
 	Append(string, uint64, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 	GetSegmentIds(string, uint64) (adb.IDS, error)
+	GetSegmentedId([]string, uint64) (uint64, error)
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	DropTablet(string) (uint64, error)
 	TabletIDs()([]uint64, error)
@@ -155,6 +158,7 @@ func NewStorageWithOptions(
 				Group: uint64(pb.AOEGroup),
 				Start: format.UInt64ToString(i),
 				End: format.UInt64ToString(i+1),
+				DisableSplit: true,
 			})
 		}
 		return initialGroups
@@ -166,35 +170,32 @@ func NewStorageWithOptions(
 			if res.Data() == nil {
 				return
 			}
-			data := format.Uint64ToBytes(res.ID())
+			data := format.UInt64ToString(res.ID())
 			data = append(data, res.Data()...)
-			if err := h.RaftStore().Prophet().GetStorage().PutJob([]byte("test"), data); err != nil {
-				//TODO: how to handle local create table failing
-			}else {
-				//h.RaftStore().Prophet().GetStorage().RemoveJob([]byte("test"))
+			if err := h.RaftStore().Prophet().GetStorage().PutJob(format.UInt64ToString(res.ID()), data); err != nil {
+				//TODO: put job failing
 			}
-
 		}
 	}
 
-	c.CubeConfig.Prophet.JobCheckerDuration = 1000 * time.Millisecond
+	c.CubeConfig.Prophet.JobCheckerDuration = 10 * time.Millisecond
 	c.CubeConfig.Prophet.JobHandler = func(key, data []byte) {
-		if bytes.Equal(key, []byte("test")) {
-			toShard := format.MustBytesToUint64(data[0:8])
-			header := format.MustBytesToUint64(data[8:16])
+		if bytes.Equal(key, data[0:8]) {
+			toShard,_ := format.ParseStrUInt64(string(data[0:8]))
+			header,_ := format.ParseStrUInt64(string(data[8:16]))
 			keys := bytes.Split(data[16:16+header], []byte("#"))
 			tKey := keys[0]
 			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), toShard))
 			t, _ := helper.DecodeTable(data[16+header:])
-			// TODO: Re-design group store and set value to <partition, segment_ids>
 			if err := h.CreateTablet(fmt.Sprintf("%d#%d", t.Id, toShard), toShard, &t); err != nil {
-				//TODO: how to handle local create table failing
+				//TODO: handle local create table failing
 			}else {
 				t.State = aoe.StatePublic
 				meta, _ := helper.EncodeTable(t)
 				_ = h.Set(tKey, meta)
 				_ = h.Set(rKey, []byte(t.Name))
 			}
+			h.RaftStore().Prophet().GetStorage().RemoveJob(key)
 		}
 	}
 
@@ -205,6 +206,8 @@ func NewStorageWithOptions(
 	c.CubeConfig.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
 		//TODO: 询问所有tablet
 		return func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
+			//Get all tablet in this shard
+
 			return newCompactIdx, err
 		}
 	}
@@ -212,6 +215,7 @@ func NewStorageWithOptions(
 	c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
 		//TODO:aoe group only
 		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
+			//TODO:Call getSegmentedId Interface
 			return adjustAppliedIndex
 		}
 	}
@@ -267,7 +271,7 @@ func (h *aoeStorage) SetIfNotExist(key, value []byte) error {
 		},
 	}
 	rsp, err := h.ExecWithGroup(req, pb.KVGroup)
-	if !bytes.Equal(rsp, []byte("OK")) {
+	if rsp != nil || len(rsp) != 0 {
 		err = errors.New(string(rsp))
 	}
 	return err
@@ -293,6 +297,18 @@ func (h *aoeStorage) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
 func (h *aoeStorage) Delete(key []byte) error {
 	req := pb.Request{
 		Type: pb.Del,
+		Group: pb.KVGroup,
+		Delete: pb.DeleteRequest{
+			Key: key,
+		},
+	}
+	_, err := h.ExecWithGroup(req, pb.KVGroup)
+	return err
+}
+
+func (h *aoeStorage) DeleteIfExist(key []byte) error {
+	req := pb.Request{
+		Type: pb.DelIfNotExist,
 		Group: pb.KVGroup,
 		Delete: pb.DeleteRequest{
 			Key: key,
@@ -427,7 +443,6 @@ func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {
 	return resp, nil
 }
 
-
 func (h *aoeStorage) Append(name string, shardId uint64, data []byte) error {
 	req := pb.Request{
 		Type: pb.Append,
@@ -438,8 +453,8 @@ func (h *aoeStorage) Append(name string, shardId uint64, data []byte) error {
 			TabletName: name,
 		},
 	}
-	data, err := h.ExecWithGroup(req, pb.AOEGroup)
-	if !bytes.Equal(data, []byte("OK")){
+	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if rsp == nil || len(rsp) == 0 {
 		err = errors.New(string(data))
 	}
 	return err
@@ -486,12 +501,28 @@ func (h *aoeStorage) GetSegmentIds(tabletName string, toShard uint64) (ids adb.I
 	return ids, nil
 }
 
-func (h *aoeStorage) CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) (err error) {
+func (h *aoeStorage) GetSegmentedId(tabletNames []string, toShard uint64) (index uint64, err error) {
+	req := pb.Request{
+		Type: pb.GetSegmentIds,
+		Group: pb.AOEGroup,
+		Shard: toShard,
+		GetSegmentedId: pb.GetSegmentedIdRequest{
+			TabletNames: tabletNames,
+		},
+	}
+	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	if err != nil {
+		return index, err
+	}
+	return format.ParseStrUInt64(string(value))
+}
+
+func (h *aoeStorage) CreateTablet(name string, toShard uint64, tbl *aoe.TableInfo) (err error) {
 	info, _ := helper.EncodeTable(*tbl)
 	req := pb.Request{
-		Shard: shardId,
+		Shard: toShard,
 		Group: pb.AOEGroup,
-		Type: pb.CreateTablet,
+		Type:  pb.CreateTablet,
 		CreateTablet: pb.CreateTabletRequest{
 			Name: name,
 			TableInfo: info,

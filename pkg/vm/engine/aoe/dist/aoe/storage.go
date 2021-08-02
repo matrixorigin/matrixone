@@ -48,9 +48,9 @@ func (s *Storage) Append(tabletName string, bat *batch.Batch, index *md.LogIndex
 	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
 	return s.db.Append(dbi.AppendCtx{
-		OpIndex: index.ID,
+		OpIndex:   index.ID,
 		TableName: tabletName,
-		Data: bat,
+		Data:      bat,
 	})
 }
 
@@ -66,13 +66,17 @@ func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids adb.IDS) {
 	return s.db.GetSegmentIds(ctx)
 }
 
+func (s *Storage) GetSegmentedId(tableNames []string) (index uint64, err error) {
+	return index, err
+}
+
 func (s *Storage) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (uint64, error) {
 	return s.db.CreateTable(info, ctx)
 }
 
 func (s *Storage) DropTable(name string, index *md.LogIndex) (uint64, error) {
 	return s.db.DropTable(dbi.DropTableCtx{
-		OpIndex: index.ID,
+		OpIndex:   index.ID,
 		TableName: name,
 	})
 }

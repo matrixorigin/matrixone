@@ -63,7 +63,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
 		}
 		cfg.ClusterConfig = config.ClusterConfig{
-			PreAllocatedGroupNum: 3,
+			PreAllocatedGroupNum: 20,
 		}
 		cfg.CubeConfig = cConfig.Config{
 			DataPath: fmt.Sprintf("%s/node-%d", tmpDir, i),
@@ -74,7 +74,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
 			},
 			Raft: cConfig.RaftConfig{
-				TickInterval: typeutil.NewDuration(time.Second * 2),
+				TickInterval: typeutil.NewDuration(time.Millisecond * 600),
 				MaxEntryBytes: 300 * 1024 * 1024,
 			},
 			Prophet: pConfig.Config{
@@ -102,6 +102,9 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 			}
 			c.Applications = append(c.Applications, a)
 		}()
+		if i == 0 {
+			time.Sleep(3 * time.Second)
+		}
 		time.Sleep(2 * time.Second)
 	}
 	wg.Wait()

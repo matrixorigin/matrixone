@@ -16,4 +16,5 @@ var (
 	// ErrTableNotExists is the error for table not exists.
 	ErrTableNotExists    = errors.New("table not exist")
 	ErrTableCreateFailed = errors.New("create table failed")
+	ErrTooMuchTableExists = errors.New("the maximum limit of tables has been exceeded")
 )

@@ -173,7 +173,6 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
 		if err := c.Store.CreateTablet(fmt.Sprintf("%d#%d", tbl.Id, shardId), shardId, &tbl); err != nil {
-			//TODO: remove shard's lock
 			return 0, ErrTableCreateFailed
 		}
 		if c.Store.Set(rkey, []byte(tbl.Name)) != nil {
@@ -193,8 +192,10 @@ func (c *Catalog) CreateTable(dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 		return tbl.Id, nil
 	}
 	//No available situation
-	tbl.State = aoe.StateNone
-	return c.CreateTable(dbId, tbl)
+	//TODO: wait cube support shard pool
+	//tbl.State = aoe.StateNone
+	//return c.createShardForTable(dbId, tbl)
+	return 0, ErrTooMuchTableExists
 }
 
 func (c *Catalog) DropTable(dbId uint64, tableName string) (uint64, error) {
@@ -347,6 +348,12 @@ func (c *Catalog) DispatchQueries(dbId, tid uint64) ([]aoe.RouteInfo, error) {
 	}
 	return resp, nil
 }
+func (c *Catalog) RemoveDeletedTable(dbId, tid uint64) (err error){
+	if err := c.Store.DeleteIfExist(c.tableKey(dbId, tid)); err != nil{
+		return ErrTableNotExists
+	}
+	return nil
+}
 func (c *Catalog) checkDBExists(id uint64) (*aoe.SchemaInfo, error) {
 	db := aoe.SchemaInfo{}
 	if v, err := c.Store.Get(c.dbKey(id)); err != nil {
@@ -416,6 +423,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 func (c *Catalog) EncodeTabletName(tableId uint64, groupId uint64) string {
 	return fmt.Sprintf("%d#%d", tableId, groupId)
 }
+
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	id, err := c.Store.AllocID(idKey)
 	if err != nil {
@@ -423,7 +431,6 @@ func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	}
 	return id, nil
 }
-//where to generate id
 func (c *Catalog) dbIDKey(dbName string) []byte {
 	return []byte(fmt.Sprintf("%s/%d/%s/%s", cPrefix, DefaultCatalogId, cDBIDPrefix, dbName))
 }
@@ -448,7 +455,6 @@ func (c *Catalog) routeKey(dbId uint64, tId uint64, gId uint64) []byte {
 func (c *Catalog) routePrefix(dbId uint64, tId uint64) []byte {
 	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/", cPrefix, DefaultCatalogId, cRoutePrefix, dbId, tId))
 }
-
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	var rsp []uint64
 	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, address string) {
@@ -466,7 +472,6 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	}
 	return shardid, errors.New("No available shards")
 }
-
 func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid uint64, err error) {
 	meta, err := helper.EncodeTable(tbl)
 	if err != nil {
@@ -491,13 +496,22 @@ func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid u
 	buf.Write([]byte("#"))
 	buf.Write(rKey)
 	buf.Write(meta)
+	//find an available range for new shard
+	start := uint64(0)
+	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, address string) {
+		end, _ := format.ParseStrUInt64(string(shard.End))
+		if end > start {
+			start = end
+		}
+	})
 	err = client.AsyncAddResources(raftstore.NewResourceAdapterWithShard(
 		bhmetapb.Shard{
-			Start:  format.Uint64ToBytes(tbl.Id),
-			End:    format.Uint64ToBytes(tbl.Id + 1),
+			Start:  format.Uint64ToBytes(start),
+			End:    format.Uint64ToBytes(start + 1),
 			Unique: string(format.Uint64ToBytes(tbl.Id)),
 			Group:  uint64(pb.AOEGroup),
 			Data:   buf.Bytes(),
+			DisableSplit: true,
 		}))
 	if err != nil {
 		return 0, err

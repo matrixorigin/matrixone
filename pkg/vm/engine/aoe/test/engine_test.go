@@ -2,6 +2,7 @@ package test
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/fagongzi/log"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/storage"
@@ -24,12 +25,13 @@ import (
 
 const (
 	testDBName = "db1"
-	testTableName = "t1"
+	testTableNamePrefix = "test-table-"
 	colCnt = 4
 	batchCnt = 10
 )
 
 func TestAOEEngine(t *testing.T) {
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	log.SetHighlighting(false)
 	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
@@ -86,9 +88,9 @@ func TestAOEEngine(t *testing.T) {
 	require.Equal(t, 0, len(tbls))
 
 	mockTbl := md.MockTableInfo(colCnt)
-	mockTbl.Name = testTableName
+	mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, 0)
 	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
-	err = db.Create(testTableName, defs, pdef, nil, comment)
+	err = db.Create(mockTbl.Name, defs, pdef, nil, comment)
 	require.NoError(t, err)
 
 	tbls = db.Relations()
@@ -114,16 +116,27 @@ func TestAOEEngine(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	err = db.Delete(testTableName)
+	err = db.Delete(mockTbl.Name)
 	require.NoError(t, err)
 
 	tbls = db.Relations()
 	require.Equal(t, 0, len(tbls))
 
+
+	//test multiple tables creating
+	for i := 0; i<19; i++ {
+		mockTbl := md.MockTableInfo(colCnt)
+		mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, i)
+		_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
+		err = db.Create(mockTbl.Name, defs, pdef, nil, comment)
+		//require.NoError(t, err)
+		if err != nil {
+			stdLog.Printf("create table %d failed, err is %v", i, err)
+		}
+	}
+
+	tbls = db.Relations()
+	require.Equal(t, 19, len(tbls))
 	time.Sleep(3 * time.Second )
 
-
-
 }
-
-
