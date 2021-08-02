@@ -72,7 +72,7 @@ type Storage interface {
 	GetSegmentedId([]string, uint64) (uint64, error)
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	DropTablet(string) (uint64, error)
-	TabletIDs()([]uint64, error)
+	TabletIDs() ([]uint64, error)
 	TabletNames(uint64) ([]string, error)
 	// Exec exec command
 	Exec(cmd interface{}) ([]byte, error)
@@ -153,17 +153,16 @@ func NewStorageWithOptions(
 		initialGroups = append(initialGroups, bhmetapb.Shard{
 			Group: uint64(pb.KVGroup),
 		})
-		for i:=uint64(0); i<c.ClusterConfig.PreAllocatedGroupNum; i++ {
+		for i := uint64(0); i < c.ClusterConfig.PreAllocatedGroupNum; i++ {
 			initialGroups = append(initialGroups, bhmetapb.Shard{
-				Group: uint64(pb.AOEGroup),
-				Start: format.UInt64ToString(i),
-				End: format.UInt64ToString(i+1),
+				Group:        uint64(pb.AOEGroup),
+				Start:        format.UInt64ToString(i),
+				End:          format.UInt64ToString(i + 1),
 				DisableSplit: true,
 			})
 		}
 		return initialGroups
 	}
-
 
 	c.CubeConfig.Prophet.ResourceStateChangedHandler = func(res metadata.Resource, from metapb.ResourceState, to metapb.ResourceState) {
 		if from == metapb.ResourceState_WaittingCreate && to == metapb.ResourceState_Running {
@@ -181,15 +180,15 @@ func NewStorageWithOptions(
 	c.CubeConfig.Prophet.JobCheckerDuration = 10 * time.Millisecond
 	c.CubeConfig.Prophet.JobHandler = func(key, data []byte) {
 		if bytes.Equal(key, data[0:8]) {
-			toShard,_ := format.ParseStrUInt64(string(data[0:8]))
-			header,_ := format.ParseStrUInt64(string(data[8:16]))
+			toShard, _ := format.ParseStrUInt64(string(data[0:8]))
+			header, _ := format.ParseStrUInt64(string(data[8:16]))
 			keys := bytes.Split(data[16:16+header], []byte("#"))
 			tKey := keys[0]
 			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), toShard))
 			t, _ := helper.DecodeTable(data[16+header:])
 			if err := h.CreateTablet(fmt.Sprintf("%d#%d", t.Id, toShard), toShard, &t); err != nil {
 				//TODO: handle local create table failing
-			}else {
+			} else {
 				t.State = aoe.StatePublic
 				meta, _ := helper.EncodeTable(t)
 				_ = h.Set(tKey, meta)
@@ -249,10 +248,10 @@ func (h *aoeStorage) Set(key, value []byte) error {
 
 func (h *aoeStorage) SetWithGroup(key, value []byte, group pb.Group) error {
 	req := pb.Request{
-		Type: pb.Set,
+		Type:  pb.Set,
 		Group: group,
 		Set: pb.SetRequest{
-			Key: key,
+			Key:   key,
 			Value: value,
 		},
 	}
@@ -260,13 +259,12 @@ func (h *aoeStorage) SetWithGroup(key, value []byte, group pb.Group) error {
 	return err
 }
 
-
 func (h *aoeStorage) SetIfNotExist(key, value []byte) error {
 	req := pb.Request{
-		Type: pb.SetIfNotExist,
+		Type:  pb.SetIfNotExist,
 		Group: pb.KVGroup,
 		Set: pb.SetRequest{
-			Key: key,
+			Key:   key,
 			Value: value,
 		},
 	}
@@ -284,7 +282,7 @@ func (h *aoeStorage) Get(key []byte) ([]byte, error) {
 // GetWithGroup returns the value of key
 func (h *aoeStorage) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
 	req := pb.Request{
-		Type: pb.Get,
+		Type:  pb.Get,
 		Group: group,
 		Get: pb.GetRequest{
 			Key: key,
@@ -296,7 +294,7 @@ func (h *aoeStorage) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
 
 func (h *aoeStorage) Delete(key []byte) error {
 	req := pb.Request{
-		Type: pb.Del,
+		Type:  pb.Del,
 		Group: pb.KVGroup,
 		Delete: pb.DeleteRequest{
 			Key: key,
@@ -308,7 +306,7 @@ func (h *aoeStorage) Delete(key []byte) error {
 
 func (h *aoeStorage) DeleteIfExist(key []byte) error {
 	req := pb.Request{
-		Type: pb.DelIfNotExist,
+		Type:  pb.DelIfNotExist,
 		Group: pb.KVGroup,
 		Delete: pb.DeleteRequest{
 			Key: key,
@@ -324,11 +322,11 @@ func (h *aoeStorage) Scan(start []byte, end []byte, limit uint64) ([][]byte, err
 
 func (h *aoeStorage) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.Group) ([][]byte, error) {
 	req := pb.Request{
-		Type: pb.Scan,
+		Type:  pb.Scan,
 		Group: group,
 		Scan: pb.ScanRequest{
 			Start: start,
-			End: end,
+			End:   end,
 			Limit: limit,
 		},
 	}
@@ -350,12 +348,12 @@ func (h *aoeStorage) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
 
 func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
 	req := pb.Request{
-		Type: pb.PrefixScan,
+		Type:  pb.PrefixScan,
 		Group: group,
 		PrefixScan: pb.PrefixScanRequest{
-			Prefix: prefix,
+			Prefix:   prefix,
 			StartKey: prefix,
-			Limit: limit,
+			Limit:    limit,
 		},
 	}
 	var pairs [][]byte
@@ -390,12 +388,12 @@ func (h *aoeStorage) PrefixKeys(prefix []byte, limit uint64) ([][]byte, error) {
 
 func (h *aoeStorage) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
 	req := pb.Request{
-		Type: pb.PrefixScan,
+		Type:  pb.PrefixScan,
 		Group: group,
 		PrefixScan: pb.PrefixScanRequest{
-			Prefix: prefix,
+			Prefix:   prefix,
 			StartKey: prefix,
-			Limit: limit,
+			Limit:    limit,
 		},
 	}
 	var values [][]byte
@@ -414,8 +412,8 @@ func (h *aoeStorage) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.G
 			break
 		}
 
-		for i:=0; i<len(kvs)-1; i+=2 {
-		 values = append(values, kvs[i])
+		for i := 0; i < len(kvs)-1; i += 2 {
+			values = append(values, kvs[i])
 		}
 
 		if len(kvs)%2 == 0 {
@@ -429,7 +427,7 @@ func (h *aoeStorage) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.G
 
 func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {
 	req := pb.Request{
-		Type: pb.Incr,
+		Type:  pb.Incr,
 		Group: pb.KVGroup,
 		AllocID: pb.AllocIDRequest{
 			Key: idkey,
@@ -445,16 +443,16 @@ func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {
 
 func (h *aoeStorage) Append(name string, shardId uint64, data []byte) error {
 	req := pb.Request{
-		Type: pb.Append,
+		Type:  pb.Append,
 		Group: pb.AOEGroup,
 		Shard: shardId,
 		Append: pb.AppendRequest{
-			Data: data,
+			Data:       data,
 			TabletName: name,
 		},
 	}
 	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
-	if rsp == nil || len(rsp) == 0 {
+	if rsp != nil || len(rsp) != 0 {
 		err = errors.New(string(data))
 	}
 	return err
@@ -463,7 +461,7 @@ func (h *aoeStorage) Append(name string, shardId uint64, data []byte) error {
 func (h *aoeStorage) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	ctxStr, err := json.Marshal(ctx)
 	req := pb.Request{
-		Type: pb.GetSnapshot,
+		Type:  pb.GetSnapshot,
 		Group: pb.AOEGroup,
 		GetSnapshot: pb.GetSnapshotRequest{
 			Ctx: ctxStr,
@@ -483,7 +481,7 @@ func (h *aoeStorage) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, erro
 
 func (h *aoeStorage) GetSegmentIds(tabletName string, toShard uint64) (ids adb.IDS, err error) {
 	req := pb.Request{
-		Type: pb.GetSegmentIds,
+		Type:  pb.GetSegmentIds,
 		Group: pb.AOEGroup,
 		Shard: toShard,
 		GetSegmentIds: pb.GetSegmentIdsRequest{
@@ -503,7 +501,7 @@ func (h *aoeStorage) GetSegmentIds(tabletName string, toShard uint64) (ids adb.I
 
 func (h *aoeStorage) GetSegmentedId(tabletNames []string, toShard uint64) (index uint64, err error) {
 	req := pb.Request{
-		Type: pb.GetSegmentIds,
+		Type:  pb.GetSegmentIds,
 		Group: pb.AOEGroup,
 		Shard: toShard,
 		GetSegmentedId: pb.GetSegmentedIdRequest{
@@ -524,7 +522,7 @@ func (h *aoeStorage) CreateTablet(name string, toShard uint64, tbl *aoe.TableInf
 		Group: pb.AOEGroup,
 		Type:  pb.CreateTablet,
 		CreateTablet: pb.CreateTabletRequest{
-			Name: name,
+			Name:      name,
 			TableInfo: info,
 		},
 	}
@@ -535,9 +533,9 @@ func (h *aoeStorage) CreateTablet(name string, toShard uint64, tbl *aoe.TableInf
 	return nil
 }
 
-func (h *aoeStorage) DropTablet(name string) (id uint64, err error){
+func (h *aoeStorage) DropTablet(name string) (id uint64, err error) {
 	req := pb.Request{
-		Type: pb.DropTablet,
+		Type:  pb.DropTablet,
 		Group: pb.AOEGroup,
 		DropTablet: pb.DropTabletRequest{
 			Name: name,
@@ -552,10 +550,9 @@ func (h *aoeStorage) DropTablet(name string) (id uint64, err error){
 
 func (h *aoeStorage) TabletIDs() ([]uint64, error) {
 	req := pb.Request{
-		Type: pb.TabletIds,
-		Group: pb.AOEGroup,
-		TabletIds: pb.TabletIDsRequest{
-		},
+		Type:      pb.TabletIds,
+		Group:     pb.AOEGroup,
+		TabletIds: pb.TabletIDsRequest{},
 	}
 	value, err := h.ExecWithGroup(req, pb.AOEGroup)
 	if err != nil {
@@ -571,11 +568,10 @@ func (h *aoeStorage) TabletIDs() ([]uint64, error) {
 
 func (h *aoeStorage) TabletNames(toShard uint64) ([]string, error) {
 	req := pb.Request{
-		Shard: toShard,
-		Group: pb.AOEGroup,
-		Type: pb.TabletNames,
-		TabletIds: pb.TabletIDsRequest{
-		},
+		Shard:     toShard,
+		Group:     pb.AOEGroup,
+		Type:      pb.TabletNames,
+		TabletIds: pb.TabletIDsRequest{},
 	}
 	value, err := h.ExecWithGroup(req, pb.AOEGroup)
 	if err != nil {
