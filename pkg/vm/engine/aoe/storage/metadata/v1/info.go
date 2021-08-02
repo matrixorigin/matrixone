@@ -5,6 +5,7 @@ import (
 	dump "encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/btree"
 	"io"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -19,6 +20,7 @@ func NewMetaInfo(conf *Configuration) *MetaInfo {
 		Conf:      conf,
 		TableIds:  make(map[uint64]bool),
 		NameMap:   make(map[string]uint64),
+		NameTree:  btree.New(2),
 		Tombstone: make(map[uint64]bool),
 	}
 	return info
@@ -43,6 +45,7 @@ func (info *MetaInfo) SoftDeleteTable(name string, logIndex uint64) (id uint64, 
 	delete(info.NameMap, name)
 	info.Tombstone[id] = true
 	table := info.Tables[id]
+	info.NameTree.Delete(table)
 	table.Delete(ts)
 	table.LogHistry.DeletedIndex = logIndex
 	atomic.AddUint64(&info.CheckPoint, uint64(1))
@@ -112,6 +115,26 @@ func (info *MetaInfo) UpdateCheckpointTime(ts int64) {
 
 func (info *MetaInfo) GetCheckpointTime() int64 {
 	return atomic.LoadInt64(&info.CkpTime)
+}
+
+func (info *MetaInfo) GetTablesByNamePrefix(prefix string) (tbls []*Table) {
+	ts := NowMicro()
+	upperBound := []byte(prefix)
+	upperBound = append(upperBound, byte(255))
+	info.RLock()
+	defer info.RUnlock()
+	info.NameTree.AscendRange(
+		&Table{Schema: &Schema{Name: prefix}},
+		&Table{Schema: &Schema{Name: string(upperBound)}},
+		func(item btree.Item) bool {
+			t := item.(*Table)
+			if !t.Select(ts) {
+				return false
+			}
+			tbls = append(tbls, t)
+			return true
+		})
+	return tbls
 }
 
 func (info *MetaInfo) TableNames(args ...int64) []string {
@@ -202,6 +225,7 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 
 	info.Tables[tbl.ID] = tbl
 	info.NameMap[tbl.Schema.Name] = tbl.ID
+	info.NameTree.ReplaceOrInsert(tbl)
 	info.TableIds[tbl.ID] = true
 	atomic.AddUint64(&info.CheckPoint, uint64(1))
 	return nil
