@@ -124,7 +124,7 @@ func TestEpochGC(t *testing.T) {
 	pcis := make([]*client.PDCallbackImpl, nodeCnt)
 	cf := make([]*client.CloseFlag, nodeCnt)
 	for i := 0 ; i < nodeCnt; i++ {
-		pcis[i] = client.NewPDCallbackImpl(3000)
+		pcis[i] = client.NewPDCallbackImpl(3000, 10,10)
 		pcis[i].Id = i
 		cf[i] = &client.CloseFlag{}
 		go testPCI(i,cf[i],pcis[i])
@@ -171,7 +171,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 
 	pcis := make([]*client.PDCallbackImpl, nodeCnt)
 	for i := 0 ; i < nodeCnt; i++ {
-		pcis[i] = client.NewPDCallbackImpl(100)
+		pcis[i] = client.NewPDCallbackImpl(100, 10,10)
 		pcis[i].Id = i
 	}
 
@@ -198,6 +198,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 
 	time.Sleep(2 * time.Minute)
 
+	//test performance
 	c.applications[0].Close()
 
 	fmt.Println("-------------------close node 0----------------")
@@ -206,7 +207,6 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 
 	DC.Cf.Close()
 }
-
 
 func testPCI(id int,f*client.CloseFlag, pci *client.PDCallbackImpl) {
 	f.Open()
@@ -265,7 +265,7 @@ func get_server(configFile string,port int,pd *client.PDCallbackImpl)(Server,err
 func Test_Multi_Server(t *testing.T) {
 	var svs []Server = nil
 	for _, port := range testPorts{
-		sv, err := get_server(testConfigFile, port, client.NewPDCallbackImpl(1000))
+		sv, err := get_server(testConfigFile, port, client.NewPDCallbackImpl(1000, 10,10))
 		if err != nil {
 			t.Error(err)
 			return
@@ -277,8 +277,4 @@ func Test_Multi_Server(t *testing.T) {
 	}
 
 	time.Sleep(2 * time.Minute)
-}
-
-func Test_mysql_client(t *testing.T) {
-
 }

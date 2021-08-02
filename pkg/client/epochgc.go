@@ -39,11 +39,16 @@ type PDCallbackImpl struct {
 	 */
 	msgChan chan *ChanMessage
 
+	//ms
 	periodOfTimer int
 	timerClose    CloseFlag
 
+	//second
+	periodOfPersist int
 	persistClose CloseFlag
 
+	//second
+	periodOfDelete int
 	ddlDeleteClose CloseFlag
 
 	/*
@@ -67,12 +72,14 @@ type PDCallbackImpl struct {
 
 }
 
-func NewPDCallbackImpl(p int) *PDCallbackImpl {
+func NewPDCallbackImpl(p int, pt int,pd int) *PDCallbackImpl {
 	return &PDCallbackImpl{
 		cluster_epoch: 1,
 		serverInfo:                      make(map[uint64]uint64),
 		msgChan:                         make(chan *ChanMessage),
 		periodOfTimer:                   p,
+		periodOfPersist:				pt,
+		periodOfDelete: 				pd,
 		epoch_info:                   make(map[uint64]uint64),
 		ddlQueue: make(map[uint64][]*Meta),
 	}
@@ -90,6 +97,7 @@ type ChanMessage struct {
 	tp MsgType
 	body []byte
 	body2 [][]byte
+	body3 [][]byte
 }
 
 const (
@@ -186,7 +194,6 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 
 	//persist cluster epoch, minimumRemovableEpoch, kv<server,maximumRemovableEpoch>
 	var buf [8]byte
-	var buf2 [8]byte
 
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
@@ -208,21 +215,28 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	}
 
 	//save kv<server,maximumRemovableEpoch>
-	for id,mre := range pci.serverInfo {
-		binary.BigEndian.PutUint64(buf[:],id)
-		binary.BigEndian.PutUint64(buf2[:],mre)
+	var keys [][]byte = nil
+	var b2 [][]byte = nil
+	var kk [8]byte
+	for k,v := range pci.serverInfo {
+		var k_buf []byte = nil
+		k_buf = append(k_buf, SERVER_PREFIX...)
+		binary.BigEndian.PutUint64(kk[:],k)
+		k_buf = append(k_buf, kk[:]...)
 
-		var key []byte = nil
-		key = append(key,SERVER_PREFIX...)
-		key = append(key,buf[:]...)
+		v_buf := make([]byte,8)
+		binary.BigEndian.PutUint64(v_buf,v)
 
-		err = kv.PutCustomData(key,buf2[:])
-		if err != nil {
-			return err
-		}
+		keys = append(keys,k_buf)
+		b2 = append(b2,v_buf)
 	}
 
-	return nil
+	err = kv.BatchPutCustomData(keys, b2)
+	if err != nil {
+		return err
+	}
+
+	return err
 }
 
 /*
@@ -252,16 +266,23 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 	When a server leaves,  its info will exist in the server_info in next several epochs.
 	It has no side effects also.
 	 */
+	var keys [][]byte = nil
 	var b2 [][]byte = nil
+	var kk [8]byte
 	for k,v := range pci.serverInfo {
 		minRE = MinUint64(minRE,v)
 
-		k_buf := make([]byte,8)
+		var k_buf []byte = nil
+		k_buf = append(k_buf, SERVER_PREFIX...)
+
+		binary.BigEndian.PutUint64(kk[:],k)
+		k_buf = append(k_buf, kk[:]...)
+
 		v_buf := make([]byte,8)
-		binary.BigEndian.PutUint64(k_buf,k)
 		binary.BigEndian.PutUint64(v_buf,v)
 
-		b2 = append(b2,k_buf,v_buf)
+		keys = append(keys,k_buf)
+		b2 = append(b2,v_buf)
 	}
 
 	pci.cluster_minimumRemovableEpoch = minRE
@@ -272,7 +293,8 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 	pci.msgChan <- &ChanMessage{
 		tp:   MSG_TYPE_SERVER_INFO,
 		body: nil,
-		body2: b2,
+		body2: keys,
+		body3: b2,
 	}
 
 	buf := make([]byte,8)
@@ -319,39 +341,57 @@ store the message into the kv
 func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv storage.Storage) {
 	pci.persistClose.Open()
 
+	var lastTime = [3]time.Time {
+		time.Now(),
+		time.Now(),
+		time.Now(),
+	}
+
+	//for second, for performance
+	var timeGap time.Duration = time.Duration(pci.periodOfPersist) * time.Second
+
 	//get the message
 	//put the body into kv
 	for msg := range pci.msgChan {
 		switch msg.tp {
 		case MSG_TYPE_CLUSTER_EPOCH:
 			//fmt.Printf("cluster epoch %v \n",msg.body)
+			if time.Since(lastTime[0]) <= timeGap {
+				continue
+			}
+			lastTime[0] = time.Now()
 
 			err := kv.PutCustomData(CLUSTER_EPOCH_KEY,msg.body)
 			if err != nil {
+				panic(err)
 				log.Fatal(err)
 			}
 
 		case MSG_TYPE_SERVER_INFO:
-
 			//fmt.Printf("server info %v \n",msg.body2)
+			if time.Since(lastTime[1]) <= timeGap {
+				continue
+			}
+			lastTime[1] = time.Now()
 
 			//save kv<server,maximumRemovableEpoch>
-			for i := 0; i < len(msg.body2); i += 2 {
-				var key []byte = nil
-				key = append(key,SERVER_PREFIX...)
-				key = append(key,msg.body2[i]...)
-				err := kv.PutCustomData(key, msg.body2[i + 1])
-				if err != nil {
-					log.Fatal(err)
-				}
+			err := kv.BatchPutCustomData(msg.body2,msg.body3)
+			if err != nil {
+				panic(err)
+				log.Fatal(err)
 			}
 		case MSG_TYPE_MINI_REM_EPOCH:
 
 			//fmt.Printf("minimum removable epoch %v \n",msg.body)
+			if time.Since(lastTime[2]) <= timeGap {
+				continue
+			}
+			lastTime[2] = time.Now()
 
 			//save minimumRemovableEpoch
 			err := kv.PutCustomData(MINI_REM_EPOCH_KEY,msg.body)
 			if err != nil {
+				panic(err)
 				log.Fatal(err)
 			}
 		}
@@ -367,7 +407,7 @@ func (pci *PDCallbackImpl) DeleteDDLPeriodicallyRoutine () {
 		//step 1: get ddls marked deleted from the catalog service
 		//step 2: delete these ddls
 		fmt.Printf("id %d delete ddl \n",pci.Id)
-		time.Sleep(10 * time.Second)
+		time.Sleep(time.Duration(pci.periodOfDelete) * time.Second)
 	}
 }
 

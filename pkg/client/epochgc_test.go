@@ -119,7 +119,7 @@ func TestEpochGC(t *testing.T) {
 	pcis := make([]*PDCallbackImpl, nodeCnt)
 	cf := make([]*CloseFlag, nodeCnt)
 	for i := 0 ; i < nodeCnt; i++ {
-		pcis[i] = NewPDCallbackImpl(100)
+		pcis[i] = NewPDCallbackImpl(100, 10,10)
 		pcis[i].Id = i
 		cf[i] = &CloseFlag{}
 		go testPCI(i,cf[i],pcis[i])
