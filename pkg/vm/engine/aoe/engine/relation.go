@@ -62,4 +62,3 @@ func (r *relation) Rows() int64 {
 func (r *relation) Size(_ string) int64 {
 	return 0
 }
-

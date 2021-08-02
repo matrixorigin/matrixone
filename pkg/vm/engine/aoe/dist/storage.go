@@ -233,7 +233,7 @@ func NewStorageWithOptions(
 			return proxy.Dispatch(req)
 		}
 		req.ToShard = args.Shard
-		return proxy.DispatchTo(req, args.Shard, h.store.GetRouter().LeaderAddress(req.ToShard))
+		return proxy.DispatchTo(req, args.Shard, h.store.GetRouter().LeaderPeerStore(req.ToShard).ClientAddr)
 	})
 	h.init()
 	if err := h.app.Start(); err != nil {

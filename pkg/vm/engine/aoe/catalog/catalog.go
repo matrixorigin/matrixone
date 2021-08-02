@@ -308,46 +308,6 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 	}
 
 }
-func (c *Catalog) DispatchQueries(dbId, tid uint64) ([]aoe.RouteInfo, error) {
-	items := make(map[uint64]map[uint64][]aoe.SegmentInfo)
-	if _, err := c.checkDBExists(dbId); err != nil {
-		return nil, err
-	} else {
-		tb, err := c.checkTableExists(dbId, tid)
-		if err != nil {
-			return nil, err
-		}
-		v, ok := c.gMutex.Get(string(c.tableIDKey(dbId, tb.Name)))
-		if !ok {
-			return nil, ErrTableNotExists
-		}
-		lock := v.(*sync.RWMutex)
-		lock.RLock()
-		defer lock.RUnlock()
-		values, err := c.Store.PrefixScan(c.routePrefix(dbId, tid), 0)
-		if err != nil {
-			return nil, err
-		}
-		for i := 0; i < len(values); i = i + 2 {
-			keys := bytes.Split(values[i], []byte("/"))
-			pId := format.MustBytesToUint64(keys[len(keys)-1])
-			gId := format.MustBytesToUint64(keys[len(keys)-2])
-			value := values[i+1]
-			seg := aoe.SegmentInfo{}
-			_ = json.Unmarshal(value, &seg)
-			items[gId][pId] = append(items[gId][pId], seg)
-		}
-	}
-	var resp []aoe.RouteInfo
-	for gId, p := range items {
-		resp = append(resp, aoe.RouteInfo{
-			Node:     []byte(c.Store.RaftStore().GetRouter().LeaderAddress(gId)),
-			GroupId:  gId,
-			Segments: p,
-		})
-	}
-	return resp, nil
-}
 func (c *Catalog) RemoveDeletedTable(dbId, tid uint64) (err error){
 	if err := c.Store.DeleteIfExist(c.tableKey(dbId, tid)); err != nil{
 		return ErrTableNotExists
@@ -457,7 +417,7 @@ func (c *Catalog) routePrefix(dbId uint64, tId uint64) []byte {
 }
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	var rsp []uint64
-	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, address string) {
+	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 		if len(rsp) > 0 {
 			return
 		}
@@ -498,7 +458,7 @@ func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid u
 	buf.Write(meta)
 	//find an available range for new shard
 	start := uint64(0)
-	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, address string) {
+	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 		end, _ := format.ParseStrUInt64(string(shard.End))
 		if end > start {
 			start = end

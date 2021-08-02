@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
+	"matrixone/pkg/vm/engine/aoe/dist/pb"
+	"strings"
 )
 
 func New() *aoeEngine {
@@ -21,8 +24,20 @@ func Mock(c *catalog.Catalog) *aoeEngine {
 	}
 }
 
-func (e *aoeEngine) Node(_ string) *engine.NodeInfo {
-	return nil
+func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
+	var ni *engine.NodeInfo
+	e.catalog.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+		if ni != nil {
+			return
+		}
+		if strings.HasPrefix(store.ClientAddr, ip) {
+			stats := e.catalog.Store.RaftStore().GetRouter().GetStoreStats(store.ID)
+			ni = &engine.NodeInfo{
+				Mcpu: len(stats.GetCpuUsages()),
+			}
+		}
+	})
+	return ni
 }
 
 func (e *aoeEngine) Delete(name string) error {

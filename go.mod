@@ -15,7 +15,7 @@ require (
 	github.com/golang/protobuf v1.4.2
 	github.com/google/btree v1.0.0
 	github.com/google/uuid v1.2.0 // indirect
-	github.com/matrixorigin/matrixcube v0.0.0-20210802030121-4efdd6a8d465
+	github.com/matrixorigin/matrixcube v0.0.0-20210802060145-384098fc35a9
 	github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible

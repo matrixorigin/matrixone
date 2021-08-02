@@ -20,9 +20,6 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	"runtime"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -72,7 +69,7 @@ func TestAOEStorage(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			var rsp []uint64
-			c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, address string) {
+			c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 				if len(rsp) > 0 {
 					return
 				}
@@ -138,8 +135,8 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 
 func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	var sharids []uint64
-	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, address string) {
-		stdLog.Printf("shard id is %d, leader address is %s", shard.ID, address)
+	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.Applications[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
 		sharids = append(sharids, shard.ID)
 	})
 	require.Less(t, 0, len(sharids))
@@ -151,7 +148,6 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	require.NoError(t, err)
 
 	names, err := c.Applications[0].TabletNames(toShard)
-
 	require.NoError(t, err)
 	require.Equal(t, 1, len(names))
 
@@ -172,20 +168,4 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	require.NoError(t, err)
 
 	time.Sleep(3 * time.Second)
-}
-
-func GetGoid() int64 {
-	var (
-		buf [64]byte
-		n   = runtime.Stack(buf[:], false)
-		stk = strings.TrimPrefix(string(buf[:n]), "goroutine ")
-	)
-
-	idField := strings.Fields(stk)[0]
-	id, err := strconv.Atoi(idField)
-	if err != nil {
-		panic(fmt.Errorf("can not get goroutine id: %v", err))
-	}
-
-	return int64(id)
 }
