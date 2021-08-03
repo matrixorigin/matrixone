@@ -5,6 +5,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"sync"
 	"sync/atomic"
+	// "runtime"
 )
 
 const (
@@ -24,7 +25,9 @@ var (
 var (
 	PageSizes = []uint64{
 		64,
+		128,
 		256,
+		512,
 		1 * K,
 		4 * K,
 		8 * K,
@@ -163,6 +166,7 @@ func (mp *Mempool) Alloc(size uint64) *MemNode {
 	if ok {
 		size = PageSizes[pageIdx]
 	}
+	// log.Infof("Alloc %d", size)
 	preusage := atomic.LoadUint64(&mp.usage)
 	postsize := preusage + size
 	if postsize > mp.capacity {
@@ -186,6 +190,9 @@ func (mp *Mempool) Alloc(size uint64) *MemNode {
 		node := new(MemNode)
 		node.idx = uint8(len(PageSizes))
 		node.Buf = make([]byte, size)
+		// runtime.SetFinalizer(node, func(o *MemNode) {
+		// 	log.Infof("[GC]: MemNode: %d", len(o.Buf))
+		// })
 		return node
 	}
 	return mp.pools[pageIdx].Get().(*MemNode)
@@ -223,6 +230,7 @@ func (mp *Mempool) Free(n *MemNode) {
 			mp.pools[n.PageIdx()].Put(n)
 		} else {
 			atomic.AddUint64(&mp.other, ^uint64(0))
+			n.Buf = nil
 			n = nil
 		}
 	}

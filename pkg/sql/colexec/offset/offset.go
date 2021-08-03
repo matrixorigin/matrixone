@@ -7,7 +7,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
-	"matrixone/pkg/vm/register"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -20,17 +19,16 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
+	n := arg.(*Argument)
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}
 	bat := proc.Reg.Ax.(*batch.Batch)
-	if bat.Attrs == nil {
+	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
-	n := arg.(*Argument)
 	if n.Seen > n.Offset {
 		proc.Reg.Ax = bat
-		register.FreeRegisters(proc)
 		return false, nil
 	}
 	if length := uint64(len(bat.Sels)); length > 0 {
@@ -38,7 +36,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			bat.Sels = bat.Sels[n.Offset-n.Seen:]
 			proc.Reg.Ax = bat
 			n.Seen += length
-			register.FreeRegisters(proc)
 			return false, nil
 		}
 		n.Seen += length
@@ -48,13 +45,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	length, err := bat.Length(proc)
 	if err != nil {
-		clean(bat, proc)
+		bat.Clean(proc)
 		return false, err
 	}
 	if n.Seen+uint64(length) > n.Offset {
 		data, sels, err := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen), proc)
 		if err != nil {
-			clean(bat, proc)
+			bat.Clean(proc)
 			return false, err
 		}
 		n.Seen += uint64(length)
@@ -79,8 +76,4 @@ func newSels(start, count int64, proc *process.Process) ([]byte, []int64, error)
 		sels[i] = start + i
 	}
 	return data, sels[:count], nil
-}
-
-func clean(bat *batch.Batch, proc *process.Process) {
-	bat.Clean(proc)
 }

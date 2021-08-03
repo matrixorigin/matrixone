@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"matrixone/pkg/sql/colexec/merge"
 	voffset "matrixone/pkg/sql/colexec/offset"
 	"matrixone/pkg/sql/colexec/transfer"
 	"matrixone/pkg/sql/op/offset"
@@ -14,15 +15,6 @@ func (c *compile) compileOffset(o *offset.Offset, mp map[string]uint64) ([]*Scop
 	ss, err := c.compile(o.Prev, mp)
 	if err != nil {
 		return nil, err
-	}
-	if len(ss) == 1 {
-		ss[0].Ins = append(ss[0].Ins, vm.Instruction{
-			Op: vm.Offset,
-			Arg: &voffset.Argument{
-				Offset: uint64(o.Offset),
-			},
-		})
-		return ss, nil
 	}
 	rs := new(Scope)
 	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
@@ -38,7 +30,7 @@ func (c *compile) compileOffset(o *offset.Offset, mp map[string]uint64) ([]*Scop
 		}
 	}
 	for i, s := range ss {
-		s.Ins = append(s.Ins, vm.Instruction{
+		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
 				Mmu: gm,
@@ -49,7 +41,8 @@ func (c *compile) compileOffset(o *offset.Offset, mp map[string]uint64) ([]*Scop
 	rs.Ss = ss
 	rs.Magic = Merge
 	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.Merge,
+		Op:  vm.Merge,
+		Arg: &merge.Argument{},
 	})
 	rs.Ins = append(rs.Ins, vm.Instruction{
 		Op: vm.Offset,

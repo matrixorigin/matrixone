@@ -13,6 +13,7 @@ type Extend struct {
 
 type Projection struct {
 	Prev  op.OP
+	IsPD  bool // can be push down?
 	ID    string
 	As    []string
 	Es    []*Extend

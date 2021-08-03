@@ -38,7 +38,7 @@ func (db *database) Relations() []string {
 	for _, tb := range tbs {
 		rs = append(rs, tb.Name)
 	}
-	return nil
+	return rs
 }
 
 func (db *database) Relation(name string) (engine.Relation, error) {
@@ -63,7 +63,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			if len(ids.Ids)==0{
 				continue
 			}
-			addr := db.catalog.Store.RaftStore().GetRouter().LeaderAddress(tbl.ShardId)
+			addr := db.catalog.Store.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
 
 			for _, id := range ids.Ids {
 				r.segments = append(r.segments, engine.SegmentInfo{

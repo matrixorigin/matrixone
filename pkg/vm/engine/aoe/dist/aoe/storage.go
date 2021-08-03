@@ -16,7 +16,7 @@ import (
 
 // Storage memory storage
 type Storage struct {
-	db    *adb.DB
+	DB    *adb.DB
 	stats stats.Stats
 }
 
@@ -32,7 +32,7 @@ func NewStorageWithOptions(dir string, opts *store.Options) (*Storage, error) {
 		return nil, err
 	}
 	return &Storage{
-		db: db,
+		DB: db,
 	}, nil
 }
 
@@ -47,42 +47,46 @@ func (s *Storage) Append(tabletName string, bat *batch.Batch, index *md.LogIndex
 	}
 	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
-	return s.db.Append(dbi.AppendCtx{
-		OpIndex: index.ID,
+	return s.DB.Append(dbi.AppendCtx{
+		OpIndex:   index.ID,
 		TableName: tabletName,
-		Data: bat,
+		Data:      bat,
 	})
 }
 
 func (s *Storage) Relation(tabletName string) (*adb.Relation, error) {
-	return s.db.Relation(tabletName)
+	return s.DB.Relation(tabletName)
 }
 
 func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
-	return s.db.GetSnapshot(ctx)
+	return s.DB.GetSnapshot(ctx)
 }
 
 func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids adb.IDS) {
-	return s.db.GetSegmentIds(ctx)
+	return s.DB.GetSegmentIds(ctx)
+}
+
+func (s *Storage) GetSegmentedId(tableNames []string) (index uint64, err error) {
+	return index, err
 }
 
 func (s *Storage) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (uint64, error) {
-	return s.db.CreateTable(info, ctx)
+	return s.DB.CreateTable(info, ctx)
 }
 
 func (s *Storage) DropTable(name string, index *md.LogIndex) (uint64, error) {
-	return s.db.DropTable(dbi.DropTableCtx{
-		OpIndex: index.ID,
+	return s.DB.DropTable(dbi.DropTableCtx{
+		OpIndex:   index.ID,
 		TableName: name,
 	})
 }
 
 func (s *Storage) TableIDs() (ids []uint64, err error) {
-	return s.db.TableIDs()
+	return s.DB.TableIDs()
 }
 
 func (s *Storage) TableNames() (ids []string) {
-	return s.db.TableNames()
+	return s.DB.TableNames()
 }
 
 // RemovedShardData remove shard data
@@ -107,5 +111,5 @@ func (s *Storage) ApplySnapshot(path string) error {
 }
 
 func (s *Storage) Stop() error {
-	return s.db.Close()
+	return s.DB.Close()
 }

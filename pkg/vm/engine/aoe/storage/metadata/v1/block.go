@@ -23,6 +23,18 @@ func NewBlock(id uint64, segment *Segment) *Block {
 	return blk
 }
 
+func (blk *Block) GetReplayIndex() *LogIndex {
+	if blk.Index == nil {
+		return nil
+	}
+	ctx := &LogIndex{
+		ID:       blk.Index.ID,
+		Count:    blk.Index.Count,
+		Capacity: blk.Index.Capacity,
+	}
+	return ctx
+}
+
 func (blk *Block) GetAppliedIndex() (uint64, bool) {
 	blk.RLock()
 	defer blk.RUnlock()

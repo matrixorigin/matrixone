@@ -1,15 +1,17 @@
 package vector
 
 import (
-	"github.com/cockroachdb/errors"
 	"io"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
+
+	"github.com/cockroachdb/errors"
 )
 
 var (
@@ -29,7 +31,7 @@ type IVector interface {
 	dbi.IVectorReader
 	IVectorWriter
 	GetLatestView() IVector
-	PlacementNew(t types.Type, capacity uint64)
+	PlacementNew(t types.Type)
 }
 
 type IVectorNode interface {
@@ -46,16 +48,20 @@ type BaseVector struct {
 
 type StdVector struct {
 	BaseVector
+	MNode        *common.MemNode
 	Data         []byte
 	FreeFunc     buf.MemoryFreeFunc
 	NodeCapacity uint64
-	AllocSize    uint64
+	File         common.IVFile
+	UseCompress  bool
 }
 
 type StrVector struct {
 	BaseVector
+	MNodes       []*common.MemNode
 	Data         *types.Bytes
 	FreeFunc     buf.MemoryFreeFunc
 	NodeCapacity uint64
-	AllocSize    uint64
+	File         common.IVFile
+	UseCompress  bool
 }

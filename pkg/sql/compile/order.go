@@ -21,6 +21,15 @@ func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, 
 	if err != nil {
 		return nil, err
 	}
+	fs := make([]vorder.Field, len(o.Gs))
+	{
+		for i, g := range o.Gs {
+			fs[i] = vorder.Field{
+				Attr: g.Name,
+				Type: vorder.Direction(g.Dirt),
+			}
+		}
+	}
 	rs := new(Scope)
 	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
 	rs.Proc = process.New(gm, c.proc.Mp)
@@ -34,23 +43,14 @@ func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, 
 			}
 		}
 	}
-	fs := make([]vorder.Field, len(o.Gs))
-	{
-		for i, g := range o.Gs {
-			fs[i] = vorder.Field{
-				Attr: g.Name,
-				Type: vorder.Direction(g.Dirt),
-			}
+	if o.IsPD {
+		arg := &vorder.Argument{Fs: fs}
+		for i, s := range ss {
+			ss[i] = pushOrder(s, arg)
 		}
 	}
 	for i, s := range ss {
-		s.Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Order,
-			Arg: &vorder.Argument{
-				Fs: fs,
-			},
-		})
-		s.Ins = append(s.Ins, vm.Instruction{
+		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
 				Mmu: gm,
@@ -76,4 +76,36 @@ func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, 
 		},
 	})
 	return []*Scope{rs}, nil
+}
+
+func pushOrder(s *Scope, arg *vorder.Argument) *Scope {
+	if s.Magic == Merge || s.Magic == Remote {
+		for i := range s.Ss {
+			s.Ss[i] = pushOrder(s.Ss[i], arg)
+		}
+		fs := make([]mergeorder.Field, len(arg.Fs))
+		{
+			for i, f := range arg.Fs {
+				fs[i] = mergeorder.Field{
+					Attr: f.Attr,
+					Type: mergeorder.Direction(f.Type),
+				}
+			}
+		}
+		s.Ins[len(s.Ins)-1] = vm.Instruction{
+			Op: vm.MergeOrder,
+			Arg: &mergeorder.Argument{
+				Fs:  fs,
+				Flg: true,
+			},
+		}
+	} else {
+		n := len(s.Ins) - 1
+		s.Ins = append(s.Ins, vm.Instruction{
+			Arg: arg,
+			Op:  vm.Order,
+		})
+		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+	}
+	return s
 }

@@ -12,6 +12,8 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
+func (r *relation) Close() {}
+
 func (r *relation) ID() string {
 	return r.tbl.Name
 }
@@ -37,11 +39,11 @@ func (r *relation) Write(bat *batch.Batch) error {
 		return errors.New("no tablets exists")
 	}
 	targetTbl := r.tablets[rand.Intn(len(r.tablets))]
-	var buf *bytes.Buffer
-	if err := protocol.EncodeBatch(bat, buf); err != nil {
+	var buf bytes.Buffer
+	if err := protocol.EncodeBatch(bat, &buf); err != nil {
 		return err
 	}
-	if buf == nil {
+	if buf.Len() == 0 {
 		return errors.New("empty batch")
 	}
 	return r.catalog.Store.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
@@ -62,4 +64,3 @@ func (r *relation) Rows() int64 {
 func (r *relation) Size(_ string) int64 {
 	return 0
 }
-

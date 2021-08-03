@@ -5,6 +5,12 @@ import (
 	"fmt"
 	"math/rand"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/mmu/host"
+	"matrixone/pkg/vm/process"
+
+	// "matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -190,7 +196,6 @@ func TestAppend(t *testing.T) {
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
-	t.Log(tbl.GetIndexHolder().String())
 	inst.Close()
 }
 
@@ -368,7 +373,7 @@ func TestConcurrency(t *testing.T) {
 
 	t.Logf("Takes %v", time.Since(now))
 	t.Log(tbl.String())
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 
 	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
@@ -376,6 +381,129 @@ func TestConcurrency(t *testing.T) {
 	t.Log(inst.MemTableMgr.String())
 	// t.Log(inst.IndexBufMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
+	// t.Log(common.GPool.String())
+	inst.Close()
+}
+
+func TestMultiTables(t *testing.T) {
+	initDBTest()
+	inst := initDB()
+	prefix := "mtable"
+	tblCnt := 4
+	var names []string
+	for i := 0; i < tblCnt; i++ {
+		name := fmt.Sprintf("%s_%d", prefix, i)
+		tInfo := md.MockTableInfo(2)
+		_, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name})
+		assert.Nil(t, err)
+		names = append(names, name)
+	}
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTableByName(names[0])
+	assert.Nil(t, err)
+	rows := uint64(tblMeta.Conf.BlockMaxRows / 2)
+	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	p1, _ := ants.NewPool(10)
+	p2, _ := ants.NewPool(10)
+	attrs := []string{}
+	for _, colDef := range tblMeta.Schema.ColDefs {
+		attrs = append(attrs, colDef.Name)
+	}
+	refs := make([]uint64, len(attrs))
+
+	tnames := inst.TableNames()
+	assert.Equal(t, len(names), len(tnames))
+	insertCnt := 7
+	searchCnt := 100
+	var wg sync.WaitGroup
+	for i := 0; i < insertCnt; i++ {
+		for _, name := range tnames {
+			task := func(opIdx uint64, tname string) func() {
+				return func() {
+					defer wg.Done()
+					inst.Append(dbi.AppendCtx{
+						TableName: tname,
+						OpIndex:   opIdx,
+						Data:      baseCk,
+					})
+				}
+			}
+			wg.Add(1)
+			p1.Submit(task(uint64(i), name))
+		}
+	}
+
+	hm := host.New(1 << 40)
+	doneCB := func() {
+		wg.Done()
+	}
+	for i := 0; i < searchCnt; i++ {
+		for _, name := range tnames {
+			task := func(opIdx uint64, tname string, donecb func()) func() {
+				return func() {
+					gm := guest.New(1<<40, hm)
+					proc := process.New(gm, mempool.New(1<<40, 8))
+					if donecb != nil {
+						defer donecb()
+					}
+					rel, err := inst.Relation(tname)
+					assert.Nil(t, err)
+					for _, segId := range rel.SegmentIds().Ids {
+						seg := rel.Segment(segId, proc)
+						for _, id := range seg.Blocks() {
+							blk := seg.Block(id, proc)
+							bat, err := blk.Prefetch(refs, attrs, proc)
+							assert.Nil(t, err)
+							for attri, attr := range attrs {
+								v, err := bat.GetVector(attr, proc)
+								assert.Nil(t, err)
+								if attri == 0 && v.Length() > 5000 {
+									edata := baseCk.Vecs[attri].Col.([]int32)
+									data := v.Col.([]int32)
+									assert.Equal(t, edata[4999], data[4999])
+									assert.Equal(t, edata[5000], data[5000])
+									// t.Logf("data[4999]=%d", data[4999])
+									// t.Logf("data[5000]=%d", data[5000])
+								}
+								assert.True(t, v.Length() <= int(tblMeta.Conf.BlockMaxRows))
+								// t.Logf("%s, seg=%v, blk=%v, attr=%s, len=%d", tname, segId, id, attr, v.Length())
+							}
+						}
+					}
+					rel.Close()
+				}
+			}
+			wg.Add(1)
+			p2.Submit(task(uint64(i), name, doneCB))
+		}
+	}
+	wg.Wait()
+	time.Sleep(time.Duration(300) * time.Millisecond)
+	{
+		gm := guest.New(1<<40, hm)
+		proc := process.New(gm, mempool.New(1<<40, 8))
+		for _, name := range names {
+			rel, err := inst.Relation(name)
+			assert.Nil(t, err)
+			sids := rel.SegmentIds().Ids
+			segId := sids[len(sids)-1]
+			seg := rel.Segment(segId, proc)
+			blks := seg.Blocks()
+			blk := seg.Block(blks[len(blks)-1], proc)
+			bat, err := blk.Prefetch(refs, attrs, proc)
+			assert.Nil(t, err)
+			for _, attr := range attrs {
+				v, err := bat.GetVector(attr, proc)
+				assert.Nil(t, err)
+				assert.Equal(t, int(rows), v.Length())
+				// t.Log(v.Length())
+				// t.Logf("%s, seg=%v, attr=%s, len=%d", name, segId, attr, v.Length())
+			}
+		}
+	}
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	tbls := inst.Store.MetaInfo.GetTablesByNamePrefix(prefix)
+	assert.Equal(t, tblCnt, len(tbls))
 	inst.Close()
 }
 

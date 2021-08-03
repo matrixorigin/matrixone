@@ -2,6 +2,7 @@ package buf
 
 import (
 	"errors"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
@@ -35,7 +36,13 @@ func (pool *SimpleMemoryPool) GetUsage() uint64 {
 }
 
 // Only for temp test
-func (pool *SimpleMemoryPool) Alloc(size uint64, constructor MemoryNodeConstructor) (node IMemoryNode) {
+func (pool *SimpleMemoryPool) Alloc(vf common.IVFile, useCompress bool, constructor MemoryNodeConstructor) (node IMemoryNode) {
+	var size uint64
+	if useCompress {
+		size = uint64(vf.Stat().Size())
+	} else {
+		size = uint64(vf.Stat().OriginSize())
+	}
 	capacity := atomic.LoadUint64(&(pool.Capacity))
 	currsize := atomic.LoadUint64(&(pool.Usage))
 	postsize := size + currsize
@@ -49,7 +56,7 @@ func (pool *SimpleMemoryPool) Alloc(size uint64, constructor MemoryNodeConstruct
 			return nil
 		}
 	}
-	return constructor(size, WithFreeWithPool(pool))
+	return constructor(vf, useCompress, WithFreeWithPool(pool))
 }
 
 func (pool *SimpleMemoryPool) Free(size uint64) {

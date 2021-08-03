@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"github.com/google/btree"
 	"io"
 	"matrixone/pkg/container/types"
 	"sync"
@@ -106,7 +107,7 @@ type ColDef struct {
 
 type Schema struct {
 	Name      string
-	Indexes   []*IndexInfo
+	Indices   []*IndexInfo
 	ColDefs   []*ColDef
 	NameIdMap map[string]int
 }
@@ -134,6 +135,7 @@ type Table struct {
 	IdMap         map[uint64]int `json:"-"`
 	Info          *MetaInfo      `json:"-"`
 	Stat          *Statstics     `json:"-"`
+	ReplayIndex   *LogIndex      `json:"-"`
 	Schema        *Schema
 	Conf          *Configuration
 	CheckPoint    uint64
@@ -153,6 +155,7 @@ type MetaInfo struct {
 	Tables     map[uint64]*Table
 	TableIds   map[uint64]bool   `json:"-"`
 	NameMap    map[string]uint64 `json:"-"`
+	NameTree   *btree.BTree      `json:"-"`
 	Tombstone  map[uint64]bool   `json:"-"`
 	CkpTime    int64
 }

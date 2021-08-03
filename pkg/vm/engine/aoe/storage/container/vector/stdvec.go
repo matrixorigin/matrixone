@@ -9,8 +9,11 @@ import (
 	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/process"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -18,8 +21,8 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
-func StdVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return NewStdVectorNode(capacity, freeFunc)
+func StdVectorConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+	return NewStdVectorNode(vf, useCompress, freeFunc)
 }
 
 func NewStdVector(t types.Type, capacity uint64) IVector {
@@ -32,12 +35,12 @@ func NewStdVector(t types.Type, capacity uint64) IVector {
 	}
 }
 
-func NewStdVectorNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+func NewStdVectorNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return &StdVector{
-		Data:         make([]byte, 0),
-		NodeCapacity: capacity,
-		AllocSize:    capacity,
-		FreeFunc:     freeFunc,
+		Data:        make([]byte, 0),
+		File:        vf,
+		UseCompress: useCompress,
+		FreeFunc:    freeFunc,
 		BaseVector: BaseVector{
 			VMask: &nulls.Nulls{},
 		},
@@ -53,9 +56,18 @@ func NewEmptyStdVector() *StdVector {
 	}
 }
 
-func (v *StdVector) PlacementNew(t types.Type, capacity uint64) {
+func (v *StdVector) PlacementNew(t types.Type) {
 	v.Type = t
-	v.Data = make([]byte, 0, capacity*uint64(t.Size))
+	capacity := uint64(v.File.Stat().OriginSize())
+	if v.MNode != nil {
+		common.GPool.Free(v.MNode)
+	}
+	v.MNode = common.GPool.Alloc(capacity)
+	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v.MNode.Buf))
+	hp.Len = 0
+	hp.Cap = int(capacity)
+	v.Data = *(*[]byte)(unsafe.Pointer(&hp))
+	// v.Data = make([]byte, 0, capacity*uint64(t.Size))
 }
 
 func (v *StdVector) GetType() dbi.VectorType {
@@ -77,6 +89,9 @@ func (v *StdVector) dataBytes() int {
 }
 
 func (v *StdVector) FreeMemory() {
+	if v.MNode != nil {
+		common.GPool.Free(v.MNode)
+	}
 	if v.FreeFunc != nil {
 		v.FreeFunc(v)
 	}
@@ -87,7 +102,11 @@ func (v *StdVector) GetMemorySize() uint64 {
 }
 
 func (v *StdVector) GetMemoryCapacity() uint64 {
-	return v.AllocSize
+	if v.UseCompress {
+		return uint64(v.File.Stat().Size())
+	} else {
+		return uint64(v.File.Stat().OriginSize())
+	}
 }
 
 func (v *StdVector) SetValue(idx int, val interface{}) {
@@ -344,6 +363,47 @@ func (v *StdVector) GetLatestView() IVector {
 	return vec
 }
 
+func (v *StdVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
+		panic("should call in ro mode")
+	}
+	// | CountSize | TypeSize | BitmapSize [| Bitmap ]| ColDataSize |
+	//      8           4         4           [?]     length*typesize
+	nullSize := 0
+	var nullbuf []byte
+	if v.VMask.Any() {
+		nullbuf, err := v.VMask.Show()
+		if err != nil {
+			panic(err)
+		}
+		nullSize = len(nullbuf)
+	}
+	length := v.Length()
+	vec := ro.New(v.Type)
+	capacity := encoding.TypeSize + 4 + nullSize + length*int(v.Type.Size)
+	data, err := proc.Alloc(int64(capacity))
+	if err != nil {
+		return nil, err
+	}
+	buf := data[mempool.CountSize : mempool.CountSize+capacity]
+	copy(buf, encoding.EncodeType(v.Type))
+	buf = buf[encoding.TypeSize:]
+	copy(buf, encoding.EncodeUint32(uint32(nullSize)))
+	buf = buf[4:]
+	if nullSize > 0 {
+		copy(buf, nullbuf)
+		buf = buf[nullSize:]
+	}
+	copy(buf, v.Data)
+	err = vec.Read(data[:mempool.CountSize+capacity])
+	if err != nil {
+		proc.Free(data)
+		return nil, err
+	}
+	copy(data, encoding.EncodeUint64(ref))
+	return vec, nil
+}
+
 func (v *StdVector) CopyToVector() *ro.Vector {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		panic("should call in ro mode")
@@ -510,4 +570,5 @@ func (vec *StdVector) Marshall() ([]byte, error) {
 }
 
 func (vec *StdVector) Reset() {
+	vec.Data = nil
 }

@@ -4,168 +4,60 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/colexec/extend/overload"
-	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/mmu/host"
+	"matrixone/pkg/vm/process"
 	"testing"
 )
 
-/*
-func TestEncode(t *testing.T) {
-	var buf bytes.Buffer
-
-	e := NewExtend()
-	fmt.Printf("e: %v\n", e)
-	if err := EncodeExtend(e, &buf); err != nil {
-		log.Fatal(err)
-	}
-	ne, data, err := DecodeExtend(buf.Bytes())
-	fmt.Printf("ne: %v, data: %v - %v\n", ne, data, err)
-	v := vector.New(types.Type{types.T(types.T_tuple), 24, 0, 0})
-	v.Append([][]interface{}{[]interface{}{1, 2, 3, 4}})
-	if err := EncodeVector(v, &buf); err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("v: %v\n", v)
-	buf.Write([]byte{1, 2, 3})
-	w, data, err := DecodeVector(buf.Bytes())
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("w: %v\n", w)
-	fmt.Printf("remaing: %v\n", data)
-}
-*/
-
-/*
 func TestBatch(t *testing.T) {
 	var buf bytes.Buffer
 
 	bat := batch.New(true, []string{"a", "b", "c"})
-	bat.Vecs[0] = NewVector(1.2)
-	bat.Vecs[1] = NewVector(2.1)
-	bat.Vecs[2] = NewVector(3.0)
+	bat.Vecs[0] = NewFloatVector(1.2)
+	bat.Vecs[1] = NewFloatVector(2.1)
+	bat.Vecs[2] = NewStrVector([]byte("x"))
 	fmt.Printf("bat: %v\n", bat)
 	if err := EncodeBatch(bat, &buf); err != nil {
 		log.Fatal(err)
 	}
-	nbat, data, err := DecodeBatch(buf.Bytes())
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm, mempool.New(1<<40, 8))
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	{
+		fmt.Printf("proc.Size: %v\n", proc.Size())
+	}
+	nbat, data, err := DecodeBatchWithProcess(buf.Bytes(), proc)
 	fmt.Printf("nbat: %v\n", nbat)
 	fmt.Printf("data: %v, err: %v\n", data, err)
-}
-*/
-
-func TestPartition(t *testing.T) {
-	var buf bytes.Buffer
-
-	def := NewPartition()
-	if err := EncodePartition(def, &buf); err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("def: %v\n", def)
-	ndef, data, err := DecodePartition(buf.Bytes())
-	fmt.Printf("ndef: %v, data: %v, err: %v\n", ndef, data, err)
-}
-
-/*
-func TestListPartition(t *testing.T) {
-	var buf bytes.Buffer
-
-	def := NewListPartition()
-	if err := EncodeListPartition(def, &buf); err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("def: %v\n", def)
-	ndef, data, err := DecodeListPartition(buf.Bytes())
-	fmt.Printf("ndef: %v, data: %v, err: %v\n", ndef, data, err)
-}
-*/
-
-/*
-func TestRangePartition(t *testing.T) {
-	var buf bytes.Buffer
-
-	def := NewRangePartition()
-	if err := EncodeRangePartition(def, &buf); err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("def: %v\n", def)
-	ndef, data, err := DecodeRangePartition(buf.Bytes())
-	fmt.Printf("ndef: %v, data: %v, err: %v\n", ndef, data, err)
-}
-*/
-
-func NewPartition() *engine.PartitionBy {
-	def := new(engine.PartitionBy)
-	def.Fields = []string{"a", "b"}
 	{
-		def.List = append(def.List, NewListPartition())
-		def.List = append(def.List, NewListPartition())
+		fmt.Printf("proc.Size: %v\n", proc.Size())
 	}
-	/*
-		{
-			def.Range = append(def.Range, NewRangePartition())
-			def.Range = append(def.Range, NewRangePartition())
-		}
-	*/
-	return def
-}
-
-func NewListPartition() engine.ListPartition {
-	var def engine.ListPartition
-
-	def.Name = "x"
-	def.Extends = append(def.Extends, NewValue(1.2))
-	def.Extends = append(def.Extends, NewValue(3.2))
-	return def
-}
-
-func NewRangePartition() engine.RangePartition {
-	var def engine.RangePartition
-
-	def.Name = "x"
+	nbat.Clean(proc)
 	{
-		def.From = append(def.From, NewValue(1.2))
-		def.From = append(def.From, NewValue(3.2))
+		fmt.Printf("proc.Size: %v\n", proc.Size())
 	}
-	{
-		def.To = append(def.To, NewValue(3.2))
-		def.To = append(def.To, NewValue(2.1))
-	}
-	return def
 }
 
-func NewVector(v float64) *vector.Vector {
-	vec := vector.New(types.Type{types.T(types.T_float64), 8, 0, 0})
-	vec.Append([]float64{v})
+func NewStrVector(v []byte) *vector.Vector {
+	vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+	vec.Append([][]byte{v, v, v})
 	return vec
 }
 
-func NewValue(v float64) extend.Extend {
+func NewFloatVector(v float64) *vector.Vector {
 	vec := vector.New(types.Type{types.T(types.T_float64), 8, 0, 0})
-	vec.Append([]float64{v})
-	return &extend.ValueExtend{vec}
-}
-
-func NewExtend() extend.Extend {
-	v := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
-	v.Append([][]byte{[]byte("1.2")})
-	le := &extend.BinaryExtend{
-		Op: overload.Plus,
-		Left: &extend.Attribute{
-			Name: "x",
-			Type: types.T_int8,
-		},
-		Right: &extend.ValueExtend{v},
-	}
-	return &extend.BinaryExtend{
-		Op:   overload.Minus,
-		Left: le,
-		Right: &extend.Attribute{
-			Name: "y",
-			Type: types.T_int8,
-		},
-	}
+	vec.Append([]float64{v, v, v})
+	return vec
 }

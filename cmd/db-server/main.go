@@ -7,7 +7,6 @@ import (
 	"matrixone/pkg/config"
 	"matrixone/pkg/server"
 	"matrixone/pkg/util/signal"
-	"matrixone/pkg/vm/engine/memEngine"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/host"
 	"os"
@@ -63,7 +62,7 @@ func main() {
 	if ! config.GlobalSystemVariables.GetDumpEnv() {
 		fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 		//test storage engine
-		config.StorageEngine = memEngine.NewTestEngine()
+		config.StorageEngine = nil
 
 		//test cluster nodes
 		config.ClusterNodes = metadata.Nodes{}

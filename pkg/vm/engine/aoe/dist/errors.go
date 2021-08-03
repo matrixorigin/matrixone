@@ -8,6 +8,7 @@ var (
 	ErrInvalidValue  = errors.New("value is invalid")
 	ErrShardNotExisted = errors.New("shard is not existed")
 	ErrDispatchFailed = errors.New("dispath raft query failed")
+	ErrKeyNotExisted = errors.New("request key is not existed")
 )
 
 func errorResp(err error) []byte {

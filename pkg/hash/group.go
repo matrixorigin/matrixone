@@ -2,46 +2,26 @@ package hash
 
 import (
 	"bytes"
-	"matrixone/pkg/container/block"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/vm/process"
 )
 
-func NewGroup(idx, sel int64, is []int, es []aggregation.Extend) *Group {
+func NewGroup(sel int64, is []int, es []aggregation.Extend) *Group {
 	aggs := make([]aggregation.Aggregation, len(es))
 	for i, e := range es {
 		aggs[i] = e.Agg.Dup()
 	}
 	return &Group{
 		Is:   is,
-		Idx:  idx,
 		Sel:  sel,
 		Aggs: aggs,
 	}
 }
 
-func (g *Group) Free(_ *process.Process) {
-}
-
-func (g *Group) Fill(sels, matched []int64, vecs []*vector.Vector, bats []*block.Block, diffs []bool, proc *process.Process) ([]int64, error) {
-	bat, err := bats[g.Idx].GetBatch(proc)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if len(bats[g.Idx].Seg.Id) > 0 && proc.Size() > proc.Lim.Size {
-			bat.Clean(proc)
-			bats[g.Idx].Bat = nil
-		} else {
-			bats[g.Idx].Bat = bat
-		}
-	}()
-	if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-		return nil, err
-	}
-	for i, gvec := range bat.Vecs {
+func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs []bool, proc *process.Process) ([]int64, error) {
+	for i, gvec := range gvecs {
 		switch gvec.Typ.Oid {
 		case types.T_int8:
 			vec := vecs[i]

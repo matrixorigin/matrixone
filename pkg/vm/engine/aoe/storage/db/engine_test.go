@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
@@ -18,10 +19,6 @@ import (
 	"github.com/panjf2000/ants/v2"
 
 	"github.com/stretchr/testify/assert"
-)
-
-var (
-	DIR = "/tmp/engine_test"
 )
 
 func TestEngine(t *testing.T) {
@@ -201,6 +198,7 @@ func TestEngine(t *testing.T) {
 	assert.Nil(t, err)
 	t.Logf("Rows: %d, Size: %d", rel.Rows(), rel.Size(tblMeta.Schema.ColDefs[0].Name))
 	t.Log(inst.GetSegmentIds(dbi.GetSegmentsCtx{TableName: tblMeta.Schema.Name}))
+	t.Log(common.GPool.String())
 	inst.Close()
 }
 
@@ -228,7 +226,7 @@ func TestLogIndex(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(time.Duration(400) * time.Millisecond)
 
 	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Nil(t, err)
@@ -243,7 +241,7 @@ func TestLogIndex(t *testing.T) {
 	dropLogIndex := md.NextGloablSeqnum()
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: dropLogIndex})
 	assert.Nil(t, err)
-	time.Sleep(time.Duration(10) * time.Millisecond)
+	time.Sleep(time.Duration(50) * time.Millisecond)
 	// tbl, err = inst.Store.DataTables.WeakRefTable(tid)
 	logIndex, ok = tbl.GetSegmentedIndex()
 	assert.True(t, ok)

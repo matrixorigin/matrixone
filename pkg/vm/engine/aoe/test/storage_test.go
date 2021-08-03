@@ -3,24 +3,30 @@ package test
 import (
 	"bytes"
 	"fmt"
+	"github.com/fagongzi/log"
 	"github.com/fagongzi/util/format"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
+	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"sync"
 	"testing"
 	"time"
 )
 
-var (
-	blockRows          uint64 = 100
+const (
+	blockRows          uint64 = 5
 	blockCntPerSegment uint64 = 4
 	insertRows                = blockRows * blockCntPerSegment * 10
 	insertCnt          uint64 = 20
@@ -29,36 +35,72 @@ var (
 
 
 func TestAOEStorage(t *testing.T) {
-	c, err := testutil.NewTestClusterStore(t)
+	log.SetHighlighting(false)
+	log.SetLevelByString("error")
+	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
+		opts     := &e.Options{}
+		mdCfg := &md.Configuration{
+			Dir:              path,
+			SegmentMaxBlocks: blockCntPerSegment,
+			BlockMaxRows:     blockRows,
+		}
+		opts.CacheCfg = &e.CacheCfg{
+			IndexCapacity:  blockRows * blockCntPerSegment * 80,
+			InsertCapacity: blockRows * uint64(colCnt) * 2000,
+			DataCapacity:   blockRows * uint64(colCnt) * 2000,
+		}
+		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+			Interval: time.Duration(1) * time.Second,
+		}
+		opts.Meta.Conf = mdCfg
+		return daoe.NewStorageWithOptions(path, opts)
+	})
 	defer c.Stop()
 	time.Sleep(2 * time.Second)
 
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
 
+	var wg sync.WaitGroup
+	count := 0
+	for i:=0; i<15; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var rsp []uint64
+			c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+				if len(rsp) > 0 {
+					return
+				}
+				err := c.Applications[0].SetIfNotExist(format.UInt64ToString(shard.ID), format.UInt64ToString(shard.ID))
+				if err == nil {
+					rsp = append(rsp, shard.ID)
+				}
+				return
+			})
+			if len(rsp) > 0 {
+				count += 1
+			}
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, 10, count)
 	//testKVStorage(t, c)
 	testAOEStorage(t, c)
 }
 
 func testKVStorage(t *testing.T, c *testutil.TestCluster) {
+
 	//Set Test
-	resp, err := c.Applications[0].Exec(pb.Request{
-		Type: pb.Set,
-		Set: pb.SetRequest{
-			Key:   []byte("Hello"),
-			Value: []byte("World"),
-		},
-	})
+	err := c.Applications[0].SetIfNotExist([]byte("Hello"), []byte("World"))
 	require.NoError(t, err)
-	require.Equal(t, "OK", string(resp))
+
+	err = c.Applications[0].SetIfNotExist([]byte("Hello"), []byte("World1"))
+	require.NotNil(t, err)
 
 	//Get Test
-	value, err := c.Applications[0].Exec(pb.Request{
-		Type: pb.Get,
-		Get: pb.GetRequest{
-			Key : []byte("Hello"),
-		},
-	})
+	value, err := c.Applications[0].Get([]byte("Hello"))
 	require.NoError(t, err)
 	require.Equal(t, value, []byte("World"))
 
@@ -92,19 +134,20 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 }
 
 func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
+	var sharids []uint64
+	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.Applications[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
+		sharids = append(sharids, shard.ID)
+	})
+	require.Less(t, 0, len(sharids))
 	//CreateTableTest
 	colCnt := 4
 	tableInfo := md.MockTableInfo(colCnt)
-	toShard := uint64(0)
-	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), false, func(shard *bhmetapb.Shard, address string){
-		toShard = shard.ID
-	})
-	require.Less(t, uint64(0), toShard)
+	toShard := sharids[0]
 	err := c.Applications[0].CreateTablet(fmt.Sprintf("%d#%d", tableInfo.Id, toShard),toShard, tableInfo)
 	require.NoError(t, err)
 
 	names, err := c.Applications[0].TabletNames(toShard)
-
 	require.NoError(t, err)
 	require.Equal(t, 1, len(names))
 
@@ -123,4 +166,6 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	fmt.Printf("SegmentIds is %v", ids)
 	err = c.Applications[0].Append(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard, buf.Bytes())
 	require.NoError(t, err)
+
+	time.Sleep(3 * time.Second)
 }

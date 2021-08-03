@@ -134,11 +134,11 @@ func TestCreateDropTable(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, tblInfo.Name, tbl.Schema.Name)
 
-	assert.Equal(t, len(tblInfo.Indexes), len(tbl.Schema.Indexes))
-	for idx, indexInfo := range tblInfo.Indexes {
-		assert.Equal(t, indexInfo.Type, uint64(tbl.Schema.Indexes[idx].Type))
+	assert.Equal(t, len(tblInfo.Indices), len(tbl.Schema.Indices))
+	for idx, indexInfo := range tblInfo.Indices {
+		assert.Equal(t, indexInfo.Type, uint64(tbl.Schema.Indices[idx].Type))
 		for iidx := range indexInfo.Columns {
-			assert.Equal(t, indexInfo.Columns[iidx], uint64(tbl.Schema.Indexes[idx].Columns[iidx]))
+			assert.Equal(t, indexInfo.Columns[iidx], uint64(tbl.Schema.Indices[idx].Columns[iidx]))
 		}
 	}
 	for idx, colInfo := range tblInfo.Columns {

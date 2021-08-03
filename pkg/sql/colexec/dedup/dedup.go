@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
 	"matrixone/pkg/hash"
 	"matrixone/pkg/intmap/fastmap"
 	"matrixone/pkg/vm/mempool"
@@ -25,22 +24,24 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("δ(%v)", n.Attrs))
 }
 
-func Prepare(proc *process.Process, arg interface{}) error {
-	n := arg.(*Argument)
-	n.Ctr = Container{
-		diffs:  make([]bool, UnitLimit),
-		matchs: make([]int64, UnitLimit),
-		hashs:  make([]uint64, UnitLimit),
-		sels:   make([][]int64, UnitLimit),
-	}
+func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	Prepare(proc, arg)
 	n := arg.(*Argument)
+	{
+		n.Ctr = Container{
+			n:      len(n.Attrs),
+			diffs:  make([]bool, UnitLimit),
+			matchs: make([]int64, UnitLimit),
+			hashs:  make([]uint64, UnitLimit),
+			sels:   make([][]int64, UnitLimit),
+			slots:  fastmap.Pool.Get().(*fastmap.Map),
+			groups: make(map[uint64][]*hash.SetGroup),
+		}
+	}
 	ctr := &n.Ctr
-	ctr.slots = fastmap.Pool.Get().(*fastmap.Map)
 	if proc.Reg.Ax == nil {
 		ctr.clean(proc)
 		return false, nil
@@ -50,33 +51,34 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		ctr.clean(proc)
 		return false, nil
 	}
-	ctr.groups = make(map[uint64][]*hash.DedupGroup)
-	vecs := make([]*vector.Vector, len(n.Attrs))
-	if err := bat.Prefetch(n.Attrs, vecs, proc); err != nil {
+	bat.Reorder(n.Attrs)
+	if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
 		bat.Clean(proc)
 		ctr.clean(proc)
 		return false, err
 	}
+	{
+		ctr.bat = batch.New(true, bat.Attrs)
+		for i, vec := range bat.Vecs {
+			ctr.bat.Vecs[i] = vector.New(vec.Typ)
+		}
+	}
 	if len(bat.Sels) == 0 {
-		if err := ctr.batchDedup(vecs, proc); err != nil {
+		if err := ctr.batchDedup(bat.Vecs, proc); err != nil {
 			bat.Clean(proc)
 			ctr.clean(proc)
 			return false, err
 		}
 	} else {
-		if err := ctr.batchDedupSels(bat.Sels, vecs, proc); err != nil {
+		if err := ctr.batchDedupSels(bat.Sels, bat.Vecs, proc); err != nil {
 			bat.Clean(proc)
 			ctr.clean(proc)
 			return false, err
 		}
-		proc.Free(bat.SelsData)
 	}
-	proc.Reg.Ax = bat
-	bat.Sels = ctr.dedupState.sels
-	bat.SelsData = ctr.dedupState.data
-	ctr.dedupState.sels = nil
-	ctr.dedupState.data = nil
-	proc.Reg.Ax = bat
+	proc.Reg.Ax = ctr.bat
+	ctr.bat = nil
+	bat.Clean(proc)
 	ctr.clean(proc)
 	return false, nil
 }
@@ -113,9 +115,9 @@ func (ctr *Container) unitDedup(start int, count int, sels []int64, vecs []*vect
 	{
 		copy(ctr.hashs[:count], OneUint64s[:count])
 		if len(sels) == 0 {
-			ctr.fillHash(start, count, vecs)
+			ctr.fillHash(start, count, vecs[:ctr.n])
 		} else {
-			ctr.fillHashSels(count, sels, vecs)
+			ctr.fillHashSels(count, sels, vecs[:ctr.n])
 		}
 	}
 	copy(ctr.diffs[:count], ZeroBools[:count])
@@ -124,34 +126,33 @@ func (ctr *Container) unitDedup(start int, count int, sels []int64, vecs []*vect
 			remaining := ctr.sels[ctr.slots.Vs[i][j]]
 			if gs, ok := ctr.groups[h]; ok {
 				for _, g := range gs {
-					if remaining, err = g.Fill(remaining, ctr.matchs, vecs, vecs, ctr.diffs, proc); err != nil {
+					if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs, proc); err != nil {
 						return err
 					}
 					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 				}
 			} else {
-				ctr.groups[h] = make([]*hash.DedupGroup, 0, 8)
+				ctr.groups[h] = make([]*hash.SetGroup, 0, 8)
 			}
 			for len(remaining) > 0 {
-				g := hash.NewDedupGroup(int64(remaining[0]))
-				ctr.groups[h] = append(ctr.groups[h], g)
+				g := hash.NewSetGroup(ctr.rows)
 				{
-					if n := len(ctr.dedupState.sels); cap(ctr.dedupState.sels) < n+1 {
-						data, err := proc.Alloc(int64(n+1) * 8)
-						if err != nil {
-							return err
+					for i, vec := range ctr.bat.Vecs {
+						if vec.Data == nil {
+							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+								return err
+							}
+							copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
+						} else {
+							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+								return err
+							}
 						}
-						if ctr.dedupState.data != nil {
-							copy(data[mempool.CountSize:], ctr.dedupState.data[mempool.CountSize:])
-							proc.Free(ctr.dedupState.data)
-						}
-						ctr.dedupState.sels = encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+n*8])
-						ctr.dedupState.data = data
-						ctr.dedupState.sels = ctr.dedupState.sels[:n]
 					}
-					ctr.dedupState.sels = append(ctr.dedupState.sels, remaining[0])
 				}
-				if remaining, err = g.Fill(remaining[1:], ctr.matchs, vecs, vecs, ctr.diffs, proc); err != nil {
+				ctr.rows++
+				ctr.groups[h] = append(ctr.groups[h], g)
+				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs, proc); err != nil {
 					return err
 				}
 				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
@@ -209,7 +210,8 @@ func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vecto
 
 func (ctr *Container) clean(proc *process.Process) {
 	fastmap.Pool.Put(ctr.slots)
-	if ctr.dedupState.data != nil {
-		proc.Free(ctr.dedupState.data)
+	if ctr.bat != nil {
+		ctr.bat.Clean(proc)
+		ctr.bat = nil
 	}
 }

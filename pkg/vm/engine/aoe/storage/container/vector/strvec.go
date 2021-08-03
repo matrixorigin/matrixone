@@ -9,15 +9,20 @@ import (
 	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/process"
 	"os"
+	"reflect"
 	"sync/atomic"
+	"unsafe"
 	// log "github.com/sirupsen/logrus"
 )
 
-func StrVectorConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return NewStrVectorNode(capacity, freeFunc)
+func StrVectorConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+	return NewStrVectorNode(vf, useCompress, freeFunc)
 }
 
 func NewStrVector(t types.Type, capacity uint64) IVector {
@@ -34,20 +39,21 @@ func NewStrVector(t types.Type, capacity uint64) IVector {
 	}
 }
 
-func NewStrVectorNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return &StrVector{
+func NewStrVectorNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+	n := &StrVector{
 		BaseVector: BaseVector{
 			VMask: &nulls.Nulls{},
 		},
-		NodeCapacity: capacity,
-		AllocSize:    capacity,
-		FreeFunc:     freeFunc,
-		Data: &types.Bytes{
-			Data:    make([]byte, 0),
-			Offsets: make([]uint32, 0),
-			Lengths: make([]uint32, 0),
-		},
+		File:        vf,
+		UseCompress: useCompress,
+		FreeFunc:    freeFunc,
+		// Data: &types.Bytes{
+		// 	Data:    make([]byte, 0),
+		// 	Offsets: make([]uint32, 0),
+		// 	Lengths: make([]uint32, 0),
+		// },
 	}
+	return n
 }
 
 func NewEmptyStrVector() IVector {
@@ -63,12 +69,28 @@ func NewEmptyStrVector() IVector {
 	}
 }
 
-func (v *StrVector) PlacementNew(t types.Type, capacity uint64) {
+func (v *StrVector) PlacementNew(t types.Type) {
 	v.Type = t
+	size := v.File.Stat().OriginSize()
+	offsetCap := uint64(size / 2)
+	lenCap := uint64(size / 2)
+	offsetNode := common.GPool.Alloc(offsetCap)
+	lenNode := common.GPool.Alloc(lenCap)
+	if v.MNodes == nil {
+		v.MNodes = make([]*common.MemNode, 2)
+	}
+	v.MNodes = append(v.MNodes, offsetNode)
+	v.MNodes = append(v.MNodes, lenNode)
+	offsetHp := *(*reflect.SliceHeader)(unsafe.Pointer(&(offsetNode.Buf)))
+	offsetHp.Len = 0
+	offsetHp.Cap = offsetHp.Cap * 4
+	lenHp := *(*reflect.SliceHeader)(unsafe.Pointer(&(lenNode.Buf)))
+	lenHp.Len = 0
+	lenHp.Cap = int(lenCap / 4)
 	v.Data = &types.Bytes{
 		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 0, capacity),
-		Lengths: make([]uint32, 0, capacity),
+		Offsets: *(*[]uint32)(unsafe.Pointer(&offsetHp)),
+		Lengths: *(*[]uint32)(unsafe.Pointer(&lenHp)),
 	}
 }
 
@@ -87,6 +109,11 @@ func (v *StrVector) Capacity() int {
 }
 
 func (v *StrVector) FreeMemory() {
+	if v.MNodes != nil {
+		for _, n := range v.MNodes {
+			common.GPool.Free(n)
+		}
+	}
 	if v.FreeFunc != nil {
 		v.FreeFunc(v)
 	}
@@ -99,7 +126,11 @@ func (v *StrVector) GetMemorySize() uint64 {
 }
 
 func (v *StrVector) GetMemoryCapacity() uint64 {
-	return v.AllocSize
+	if v.UseCompress {
+		return uint64(v.File.Stat().Size())
+	} else {
+		return uint64(v.File.Stat().OriginSize())
+	}
 }
 
 func (v *StrVector) SetValue(idx int, val interface{}) {
@@ -254,6 +285,59 @@ func (v *StrVector) GetLatestView() IVector {
 	return vec
 }
 
+func (v *StrVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
+		panic("should call in ro mode")
+	}
+	// |CountSize|TypeSize|BitmapSize[|Bitmap]| Rows [|lengths| strdata ]|
+	//      8         4        4         [?]     4     [lengths   data]
+	nullSize := 0
+	var nullbuf []byte
+	var err error
+	if v.VMask.Any() {
+		if nullbuf, err = v.VMask.Show(); err != nil {
+			panic(err)
+		}
+		nullSize = len(nullbuf)
+	}
+	capacity := encoding.TypeSize + 4 + nullSize + 4
+	rows := len(v.Data.Offsets)
+	capacity += rows
+	if rows > 0 {
+		capacity += 4 * rows
+		capacity += len(v.Data.Data)
+	}
+	vec := ro.New(v.Type)
+	data, err := proc.Alloc(int64(capacity))
+	if err != nil {
+		return nil, err
+	}
+	buf := data[mempool.CountSize : mempool.CountSize+capacity]
+	copy(buf, encoding.EncodeType(v.Type))
+	buf = buf[encoding.TypeSize:]
+	copy(buf, encoding.EncodeUint32(uint32(nullSize)))
+	buf = buf[4:]
+	if nullSize > 0 {
+		copy(buf, nullbuf)
+		buf = buf[nullSize:]
+	}
+	copy(buf, encoding.EncodeUint32(uint32(rows)))
+	buf = buf[4:]
+	if rows > 0 {
+		lenBuf := encoding.EncodeUint32Slice(v.Data.Lengths)
+		copy(buf, lenBuf)
+		buf = buf[len(lenBuf):]
+		copy(buf, v.Data.Data)
+	}
+
+	if err = vec.Read(data[:mempool.CountSize+capacity]); err != nil {
+		proc.Free(data)
+		return nil, err
+	}
+	copy(data, encoding.EncodeUint64(ref))
+	return vec, nil
+}
+
 func (v *StrVector) CopyToVector() *ro.Vector {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		panic("should call in ro mode")
@@ -324,7 +408,11 @@ func (vec *StrVector) Unmarshall(data []byte) error {
 	}
 	cnt := encoding.DecodeInt32(buf[:4])
 	buf = buf[4:]
-	vec.Data.Reset()
+	if vec.Data != nil {
+		vec.Data.Reset()
+	} else {
+		vec.Data = &types.Bytes{}
+	}
 	if cnt == 0 {
 		return nil
 	}
@@ -368,4 +456,5 @@ func (vec *StrVector) Marshall() ([]byte, error) {
 }
 
 func (vec *StrVector) Reset() {
+	vec.Data = nil
 }

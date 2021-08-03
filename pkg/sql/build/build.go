@@ -37,6 +37,7 @@ func (b *build) Build() ([]op.OP, error) {
 }
 
 func (b *build) BuildStatement(stmt tree.Statement) (op.OP, error) {
+	stmt = rewrite.Rewrite(stmt)
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		return b.buildSelect(stmt)

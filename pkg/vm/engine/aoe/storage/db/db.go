@@ -258,6 +258,35 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 	return ids, err
 }
 
+func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {
+	id = ^uint64(0)
+	for _, matcher := range ctx.Matchers {
+		switch matcher.Type {
+		case dbi.MTPrefix:
+			tbls := d.Store.MetaInfo.GetTablesByNamePrefix(matcher.Pattern)
+			for _, tbl := range tbls {
+				data, err := d.getTableData(tbl)
+				if err != nil {
+					return id, err
+				}
+				tmpId, ok := data.GetSegmentedIndex()
+				if !ok {
+					return 0, nil
+				}
+				if tmpId < id {
+					id = tmpId
+				}
+			}
+		default:
+			panic("not supported")
+		}
+	}
+	if id == ^uint64(0) {
+		return id, ErrNotFound
+	}
+	return id, err
+}
+
 func (d *DB) replayAndCleanData() {
 	expectFiles := make(map[string]bool)
 	for _, tbl := range d.Store.MetaInfo.Tables {

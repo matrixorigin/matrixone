@@ -1,11 +1,74 @@
 package build
 
 import (
+	"fmt"
+	"matrixone/pkg/errno"
+	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/projection"
 	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sqlerror"
 )
+
+func (b *build) checkProjection(ns tree.SelectExprs) error {
+	for _, n := range ns {
+		if attrs := b.checkProjectionExpr(n.Expr, []string{}); len(attrs) == 0 {
+			return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("invalid projection '%v'", n))
+		}
+	}
+	return nil
+}
+
+func (b *build) checkProjectionExpr(n tree.Expr, attrs []string) []string {
+	switch e := n.(type) {
+	case *tree.NumVal:
+		return attrs
+	case tree.UnqualifiedStar:
+		return append(attrs, "*")
+	case *tree.ParenExpr:
+		return b.checkProjectionExpr(e.Expr, attrs)
+	case *tree.OrExpr:
+		attrs = b.checkProjectionExpr(e.Left, attrs)
+		return b.checkProjectionExpr(e.Right, attrs)
+	case *tree.NotExpr:
+		return b.checkProjectionExpr(e.Expr, attrs)
+	case *tree.AndExpr:
+		attrs = b.checkProjectionExpr(e.Left, attrs)
+		return b.checkProjectionExpr(e.Right, attrs)
+	case *tree.UnaryExpr:
+		return b.checkProjectionExpr(e.Expr, attrs)
+	case *tree.BinaryExpr:
+		attrs = b.checkProjectionExpr(e.Left, attrs)
+		return b.checkProjectionExpr(e.Right, attrs)
+	case *tree.ComparisonExpr:
+		attrs = b.checkProjectionExpr(e.Left, attrs)
+		return b.checkProjectionExpr(e.Right, attrs)
+	case *tree.Tuple:
+		return attrs
+	case *tree.FuncExpr:
+		if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok {
+			if op, ok := AggFuncs[name.Parts[0]]; ok {
+				if op == aggregation.StarCount {
+					attrs = append(attrs, "*")
+				} else {
+					attrs = b.checkProjectionExpr(e.Exprs[0], attrs)
+				}
+			}
+		}
+		return attrs
+	case *tree.CastExpr:
+		return b.checkProjectionExpr(e.Expr, attrs)
+	case *tree.UnresolvedName:
+		if e.NumParts == 1 {
+			attrs = append(attrs, e.Parts[0])
+		} else {
+			attrs = append(attrs, e.Parts[1]+"."+e.Parts[0])
+		}
+		return attrs
+	}
+	return attrs
+}
 
 func (b *build) buildProjection(o op.OP, ns tree.SelectExprs) (op.OP, error) {
 	var es []*projection.Extend

@@ -12,12 +12,12 @@ import (
 //ID counter for the new connection
 var initConnectionID uint32 = 1000
 
-//the Server is an abstract of handling connections from clients repeatedly.
+// Server the Server is an abstract of handling connections from clients repeatedly.
 type Server interface {
-	//handle something repeatedly
+	// Loop handle something repeatedly
 	Loop()
 
-	//quit the execution loop
+	// Quit quit the execution loop
 	Quit()
 }
 
@@ -31,7 +31,7 @@ type ServerImpl struct {
 	listener net.Listener
 
 	//clients who has connected with server
-	clients map[uint64] client.Routine
+	clients map[uint64]client.Routine
 
 	//config
 	address string
@@ -44,8 +44,8 @@ type ServerImpl struct {
 
 //allocate resources for processing the connection
 func (si *ServerImpl) newConnection(cnn net.Conn) client.Routine {
-	var IO client.IOPackage = client.NewIOPackage(cnn,client.DefaultReadBufferSize,client.DefaultWriteBufferSize,true)
-	pro := client.NewMysqlClientProtocol(IO,nextConnectionID())
+	var IO client.IOPackage = client.NewIOPackage(cnn, client.DefaultReadBufferSize, client.DefaultWriteBufferSize, true)
+	pro := client.NewMysqlClientProtocol(IO, nextConnectionID())
 	exe := NewMysqlCmdExecutor()
 	ses := client.NewSessionWithParameterUnit(si.pu)
 	rt := client.NewRoutine(pro, exe, ses, si.pdHook)
@@ -68,11 +68,11 @@ func (si *ServerImpl) handleConnection(routine client.Routine) {
 }
 
 func (si *ServerImpl) Loop() {
-	fmt.Printf("Server Listening on : %s \n",si.address)
-	for si.IsOpened(){
-		cnn,err := si.listener.Accept()
-		if err != nil{
-			fmt.Printf("server listen failed. error:%v",err)
+	fmt.Printf("Server Listening on : %s \n", si.address)
+	for si.IsOpened() {
+		cnn, err := si.listener.Accept()
+		if err != nil {
+			fmt.Printf("server listen failed. error:%v", err)
 			break
 		}
 
@@ -86,33 +86,33 @@ func (si *ServerImpl) Quit() {
 	defer si.rwlock.Unlock()
 
 	si.Close()
-	if si.listener != nil{
-		if err := si.listener.Close(); err != nil{
-			fmt.Printf("close listener failed. error:%v ",err)
+	if si.listener != nil {
+		if err := si.listener.Close(); err != nil {
+			fmt.Printf("close listener failed. error:%v ", err)
 			si.listener = nil
 		}
 	}
 
-	for _,client := range si.clients {
+	for _, client := range si.clients {
 		client.Quit()
 	}
 }
 
-func nextConnectionID()uint32{
-	return atomic.AddUint32(&initConnectionID,1)
+func nextConnectionID() uint32 {
+	return atomic.AddUint32(&initConnectionID, 1)
 }
 
 func NewServer(address string, pu *config.ParameterUnit, pdHook *client.PDCallbackImpl) Server {
 	var err error
 	svr := &ServerImpl{
-		clients : make(map[uint64]client.Routine),
+		clients: make(map[uint64]client.Routine),
 		address: address,
 		pdHook: pdHook,
 		pu: pu,
 	}
 
-	if svr.listener,err = net.Listen("tcp",address);err!=nil{
-		fmt.Printf("server can not listen on the address - %s.error:%v",address,err)
+	if svr.listener, err = net.Listen("tcp", address); err != nil {
+		fmt.Printf("server can not listen on the address - %s.error:%v", address, err)
 		return nil
 	}
 	return svr

@@ -16,15 +16,16 @@ func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint
 					mp[name.Name]++
 					continue
 				}
-			}
-			attr := o.As[i]
-			if v, ok := mp[attr]; ok {
-				refer[attr] = v
-				delete(mp, attr)
 			} else {
-				refer[attr]++
+				attr := o.As[i]
+				if v, ok := mp[attr]; ok {
+					refer[attr] = v
+					delete(mp, attr)
+				} else {
+					refer[attr]++
+				}
+				IncRef(e.E, mp)
 			}
-			IncRef(e.E, mp)
 		}
 	}
 	ss, err := c.compile(o.Prev, mp)
@@ -42,11 +43,33 @@ func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint
 		}
 	}
 	arg.Refer = refer
-	for _, s := range ss {
+	if o.IsPD {
+		for i, s := range ss {
+			ss[i] = pushProjection(s, arg)
+		}
+	} else {
+		for i, s := range ss {
+			ss[i].Ins = append(s.Ins, vm.Instruction{
+				Arg: arg,
+				Op:  vm.Projection,
+			})
+		}
+	}
+	return ss, nil
+}
+
+func pushProjection(s *Scope, arg *vprojection.Argument) *Scope {
+	if s.Magic == Merge || s.Magic == Remote {
+		for i := range s.Ss {
+			s.Ss[i] = pushProjection(s.Ss[i], arg)
+		}
+	} else {
+		n := len(s.Ins) - 1
 		s.Ins = append(s.Ins, vm.Instruction{
 			Arg: arg,
 			Op:  vm.Projection,
 		})
+		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
 	}
-	return ss, nil
+	return s
 }

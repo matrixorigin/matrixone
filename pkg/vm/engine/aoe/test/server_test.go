@@ -2,6 +2,9 @@ package test
 
 import (
 	"fmt"
+	"github.com/fagongzi/log"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
+	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/client"
@@ -9,8 +12,11 @@ import (
 	"matrixone/pkg/server"
 	"matrixone/pkg/util/signal"
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	"matrixone/pkg/vm/engine/aoe/engine"
+	e "matrixone/pkg/vm/engine/aoe/storage"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/host"
 	"os"
@@ -25,7 +31,27 @@ var (
 
 func TestServer(t *testing.T) {
 
-	c, err := testutil.NewTestClusterStore(t)
+	log.SetHighlighting(false)
+	log.SetLevelByString("error")
+	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
+		opts     := &e.Options{}
+		mdCfg := &md.Configuration{
+			Dir:              path,
+			SegmentMaxBlocks: blockCntPerSegment,
+			BlockMaxRows:     blockRows,
+		}
+		opts.CacheCfg = &e.CacheCfg{
+			IndexCapacity:  blockRows * blockCntPerSegment * 80,
+			InsertCapacity: blockRows * uint64(colCnt) * 100,
+			DataCapacity:   blockRows * uint64(colCnt) * 100,
+		}
+		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+			Interval: time.Duration(1) * time.Second,
+		}
+		opts.Meta.Conf = mdCfg
+		return daoe.NewStorageWithOptions(path, opts)
+	})
 	require.NoError(t, err)
 	defer c.Stop()
 

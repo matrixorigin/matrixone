@@ -13,12 +13,11 @@ require (
 	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/gogo/protobuf v1.3.1
 	github.com/golang/protobuf v1.4.2
-	github.com/google/uuid v1.2.0
-	github.com/matrixorigin/matrixcube v0.0.0-20210727053138-24341bb5afea
-	github.com/orcaman/concurrent-map v0.0.0-20210501183033-44dafcb38ecc
+	github.com/google/btree v1.0.0
+	github.com/google/uuid v1.2.0 // indirect
+	github.com/matrixorigin/matrixcube v0.0.0-20210802074152-5fad9d980895
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
-	github.com/pilosa/pilosa v1.4.1
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
 	github.com/pkg/errors v0.9.1

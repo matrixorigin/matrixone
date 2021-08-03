@@ -16,6 +16,8 @@ import (
 	"github.com/pierrec/lz4"
 )
 
+func (r *relation) Close() {}
+
 func (r *relation) ID() string {
 	return r.id
 }

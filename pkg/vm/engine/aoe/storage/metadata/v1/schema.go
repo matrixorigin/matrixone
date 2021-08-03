@@ -42,7 +42,7 @@ func (s *Schema) GetColIdx(attr string) int {
 func (s *Schema) Clone() *Schema {
 	newSchema := &Schema{
 		ColDefs:   make([]*ColDef, 0),
-		Indexes:   make([]*IndexInfo, 0),
+		Indices:   make([]*IndexInfo, 0),
 		NameIdMap: make(map[string]int),
 		Name:      s.Name,
 	}
@@ -51,9 +51,9 @@ func (s *Schema) Clone() *Schema {
 		newSchema.NameIdMap[colDef.Name] = len(newSchema.ColDefs)
 		newSchema.ColDefs = append(newSchema.ColDefs, &newColDef)
 	}
-	for _, indexInfo := range s.Indexes {
+	for _, indexInfo := range s.Indices {
 		newInfo := *indexInfo
-		newSchema.Indexes = append(newSchema.Indexes, &newInfo)
+		newSchema.Indices = append(newSchema.Indices, &newInfo)
 	}
 	return newSchema
 }
@@ -61,7 +61,7 @@ func (s *Schema) Clone() *Schema {
 func MockSchema(colCnt int) *Schema {
 	schema := &Schema{
 		ColDefs:   make([]*ColDef, colCnt),
-		Indexes:   make([]*IndexInfo, 0),
+		Indices:   make([]*IndexInfo, 0),
 		NameIdMap: make(map[string]int),
 	}
 	prefix := "mock_"
@@ -82,7 +82,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 	tblInfo := &aoe.TableInfo{
 		Name:    "mocktbl",
 		Columns: make([]aoe.ColumnInfo, 0),
-		Indexes: make([]aoe.IndexInfo, 0),
+		Indices: make([]aoe.IndexInfo, 0),
 	}
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
@@ -97,7 +97,7 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 		}
 		indexInfo := aoe.IndexInfo{Type: uint64(ZoneMap), Columns: []uint64{uint64(i)}}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)
-		tblInfo.Indexes = append(tblInfo.Indexes, indexInfo)
+		tblInfo.Indices = append(tblInfo.Indices, indexInfo)
 	}
 	return tblInfo
 }

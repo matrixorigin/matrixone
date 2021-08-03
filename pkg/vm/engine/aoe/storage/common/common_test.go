@@ -18,7 +18,7 @@ func TestPool(t *testing.T) {
 	n1 := mp.Alloc(65)
 	assert.Equal(t, 1, n1.PageIdx())
 	n2 := mp.Alloc(257)
-	assert.Equal(t, 2, n2.PageIdx())
+	assert.Equal(t, 3, n2.PageIdx())
 	assert.Equal(t, uint64(n1.Size()+n2.Size()), mp.Usage())
 
 	mp.Free(n1)

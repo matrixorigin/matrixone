@@ -43,6 +43,7 @@ type ITableData interface {
 
 type ISegment interface {
 	common.IRef
+	GetReplayIndex() *md.LogIndex
 	GetMeta() *md.Segment
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager

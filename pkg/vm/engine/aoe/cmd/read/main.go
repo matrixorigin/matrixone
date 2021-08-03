@@ -2,19 +2,26 @@ package main
 
 import (
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/engine/aoe/local"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
+	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,11 +52,12 @@ var (
 	table    *aoe.TableInfo
 	readPool *ants.Pool
 	proc     *process.Process
+	hm       *host.Mmu
 )
 
 func init() {
 
-	hm := host.New(1 << 40)
+	hm = host.New(1 << 48)
 	gm := guest.New(1<<40, hm)
 	proc = process.New(gm, mempool.New(1<<48, 8))
 	readPool, _ = ants.NewPool(readPoolSize)
@@ -60,8 +68,8 @@ func init() {
 	}
 	opts.CacheCfg = &e.CacheCfg{
 		IndexCapacity:  blockRows * blockCntPerSegment * 80,
-		InsertCapacity: blockRows * uint64(colCnt) * 2000,
-		DataCapacity:   blockRows * uint64(colCnt) * 2000,
+		InsertCapacity: blockRows * uint64(colCnt) * 400,
+		DataCapacity:   blockRows * uint64(colCnt) * 400,
 	}
 	opts.MetaCleanerCfg = &e.MetaCleanerCfg{
 		Interval: time.Duration(1) * time.Second,
@@ -112,7 +120,7 @@ func makeFiles(impl *db.DB) {
 			panic(err)
 		}
 	}
-	waitTime := insertCnt * uint64(ibat.Vecs[0].Length()) * uint64(colCnt) / uint64(400000000) * 5000
+	waitTime := insertCnt * uint64(ibat.Vecs[0].Length()) * uint64(colCnt) / uint64(400000000) * 6000
 	time.Sleep(time.Duration(waitTime) * time.Millisecond)
 }
 
@@ -121,12 +129,22 @@ func mockData() {
 	impl := makeDB()
 	creatTable(impl)
 	makeFiles(impl)
+	log.Info(common.GPool.String())
+	// {
+	// 	time.Sleep(time.Duration(4) * time.Second)
+	// 	time.Sleep(time.Duration(100) * time.Second)
+	// }
 	impl.Close()
 }
 
 func readData() {
 	impl := makeDB()
-	rel, err := impl.Relation(tableName)
+	localEngine := local.NewLocalRoEngine(impl)
+	dbase, err := localEngine.Database("")
+	if err != nil {
+		panic(err)
+	}
+	rel, err := dbase.Relation(tableName)
 	if err != nil {
 		panic(err)
 	}
@@ -138,7 +156,12 @@ func readData() {
 		cols = append(cols, i)
 	}
 	refs := make([]uint64, len(attrs))
-	segIds := rel.SegmentIds()
+	var segIds db.IDS
+	{
+		dbrel, _ := impl.Relation(tableName)
+		segIds = dbrel.SegmentIds()
+		dbrel.Close()
+	}
 
 	totalRows := uint64(0)
 	startProfile()
@@ -146,7 +169,8 @@ func readData() {
 	now := time.Now()
 	var wg sync.WaitGroup
 	for _, segId := range segIds.Ids {
-		seg := rel.Segment(segId, proc)
+		idstr := strconv.FormatUint(segId, 10)
+		seg := rel.Segment(engine.SegmentInfo{Id: idstr}, proc)
 		for _, id := range seg.Blocks() {
 			blk := seg.Block(id, proc)
 			bat, err := blk.Prefetch(refs, attrs, proc)
@@ -157,10 +181,15 @@ func readData() {
 				wg.Add(1)
 				f := func(b *batch.Batch, col string) func() {
 					return func() {
+						gm := guest.New(1<<48, hm)
+						proc2 := process.New(gm, mempool.New(1<<48, 8))
 						defer wg.Done()
-						v, err := bat.GetVector(col, proc)
+						v, err := bat.GetVector(col, proc2)
 						if err != nil {
 							panic(err)
+						}
+						if v != nil {
+							v.Free(proc2)
 						}
 						atomic.AddUint64(&totalRows, uint64(v.Length()))
 					}
@@ -171,10 +200,29 @@ func readData() {
 	}
 	wg.Wait()
 	log.Infof("Time: %s, Rows: %d", time.Since(now), totalRows)
-	log.Info(common.GPool.String())
+	log.Infof("MMU usage: %d", hm.Size())
+	// {
+	// 	time.Sleep(time.Duration(4) * time.Second)
+	// 	log.Info(common.GPool.String())
+	// 	time.Sleep(time.Duration(100) * time.Second)
+	// }
 }
 
+type gcHandle struct{}
+
+// func (h *gcHandle) OnExec()    { runtime.GC() }
+func (h *gcHandle) OnExec()    {}
+func (h *gcHandle) OnStopped() { runtime.GC() }
+
 func main() {
+	go func() {
+		http.ListenAndServe(":8080", nil)
+	}()
+	gc := w.NewHeartBeater(time.Duration(1)*time.Second, &gcHandle{})
+	gc.Start()
+
 	mockData()
 	// readData()
+
+	gc.Stop()
 }

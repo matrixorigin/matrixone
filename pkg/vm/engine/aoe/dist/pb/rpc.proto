@@ -18,6 +18,8 @@ enum Type {
   PrefixScan = 3;
   Scan = 4;
   Incr = 5;
+  SetIfNotExist = 6;
+  DelIfNotExist = 7;
 
   Append = 100;
   GetSnapshot = 101;
@@ -27,6 +29,7 @@ enum Type {
   TabletIds = 105;
   TabletNames = 106;
   GetSegmentIds = 107;
+  GetSegmentedId = 108;
 }
 
 message Request {
@@ -47,6 +50,7 @@ message Request {
   CreateTabletRequest createTablet = 103 [(gogoproto.nullable) = false];
   DropTabletRequest dropTablet = 104 [(gogoproto.nullable) = false];
   GetSegmentIdsRequest getSegmentIds = 105 [(gogoproto.nullable) = false];
+  GetSegmentedIdRequest getSegmentedId = 106 [(gogoproto.nullable) = false];
 }
 
 
@@ -110,6 +114,10 @@ message GetSnapshotRequest {
 
 message GetSegmentIdsRequest {
   string name = 1;
+}
+
+message GetSegmentedIdRequest {
+  repeated string tabletNames = 1;
 }
 
 message TabletIDsRequest {

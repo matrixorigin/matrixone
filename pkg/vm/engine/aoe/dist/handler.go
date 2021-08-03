@@ -12,6 +12,7 @@ type cmdType uint64
 
 func (h *aoeStorage) init() {
 	h.AddWriteFunc(uint64(pb.Set), h.set)
+	h.AddWriteFunc(uint64(pb.SetIfNotExist), h.setIfNotExist)
 	h.AddWriteFunc(uint64(pb.Del), h.del)
 	h.AddWriteFunc(uint64(pb.Incr), h.incr)
 	h.AddReadFunc(uint64(pb.Get), h.get)
@@ -22,6 +23,7 @@ func (h *aoeStorage) init() {
 	h.AddWriteFunc(uint64(pb.Append), h.append)
 	h.AddReadFunc(uint64(pb.TabletNames), h.tableNames)
 	h.AddReadFunc(uint64(pb.GetSegmentIds), h.getSegmentIds)
+	h.AddReadFunc(uint64(pb.GetSegmentedId), h.getSegmentedId)
 }
 
 func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error {
@@ -34,11 +36,24 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		req.CustemType = uint64(pb.Set)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.SetIfNotExist:
+		msg := customReq.Set
+		req.Key = msg.Key
+		req.Group = uint64(customReq.Group)
+		req.CustemType = uint64(pb.SetIfNotExist)
+		req.Type = raftcmdpb.CMDType_Write
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Del:
 		msg := customReq.Delete
 		req.Key = msg.Key
 		req.Group = uint64(customReq.Group)
 		req.CustemType = uint64(pb.Del)
+		req.Type = raftcmdpb.CMDType_Write
+	case pb.DelIfNotExist:
+		msg := customReq.Delete
+		req.Key = msg.Key
+		req.Group = uint64(customReq.Group)
+		req.CustemType = uint64(pb.DelIfNotExist )
 		req.Type = raftcmdpb.CMDType_Write
 	case pb.Get:
 		msg := customReq.Get
@@ -86,6 +101,13 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
 		req.CustemType = uint64(pb.GetSegmentIds)
+		req.Type = raftcmdpb.CMDType_Read
+		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.GetSegmentedId:
+		msg := customReq.GetSegmentedId
+		req.Group = uint64(customReq.Group)
+		req.ToShard = customReq.Shard
+		req.CustemType = uint64(pb.GetSegmentedId)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
 	}

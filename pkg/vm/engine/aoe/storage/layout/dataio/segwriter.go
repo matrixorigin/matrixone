@@ -2,6 +2,7 @@ package dataio
 
 import (
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
@@ -27,6 +28,7 @@ func NewSegmentWriter(data []*batch.Batch, meta *md.Segment, dir string) *Segmen
 		meta: meta,
 		dir:  dir,
 	}
+	w.preprocessor = w.defaultPreprocessor
 	w.fileGetter = w.createFile
 	return w
 }
@@ -49,6 +51,11 @@ func (sw *SegmentWriter) SetIndexFlusher(f func(*os.File, []*batch.Batch, *md.Se
 
 func (sw *SegmentWriter) SetDataFlusher(f func(*os.File, []*batch.Batch, *md.Segment) error) {
 	sw.dataFlusher = f
+}
+
+func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *md.Segment) error {
+	err := mergesort.MergeBlocksToSegment(data, meta)
+	return err
 }
 
 func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, error) {

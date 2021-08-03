@@ -37,7 +37,7 @@ var (
 
 func TestCatalog(t *testing.T) {
 
-	c, err := testutil.NewTestClusterStore(t)
+	c, err := testutil.NewTestClusterStore(t, true, nil)
 
 	defer c.Stop()
 
@@ -65,43 +65,42 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 
 
 	colCnt := 4
-	tableInfo := md.MockTableInfo(colCnt)
-	tableInfo.Id = 101
+	t1 := md.MockTableInfo(colCnt)
+	t1.Name = "t1"
 
-	tid, err := c.CreateTable(dbid, *tableInfo)
-
+	tid, err := c.CreateTable(dbid, *t1)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), tid)
 
-	completedC := make(chan *aoe.TableInfo, 1)
-	defer close(completedC)
-	go func() {
-		i := 0
-		for {
-			tb, _ := c.GetTable(dbid, tableInfo.Name)
-			if tb != nil {
-				completedC <- tb
-				break
-			}
-			i += 1
-		}
-	}()
-	select {
-	case <-completedC:
-		stdLog.Printf("[QSQ], create %s finished", tableInfo.Name)
-		break
-	case <-time.After(3 * time.Second):
-		stdLog.Printf("[QSQ], create %s failed, timeout", tableInfo.Name)
-	}
-	tb, err := c.GetTable(dbid, tableInfo.Name)
+	tb, err := c.GetTable(dbid, t1.Name)
 	require.NoError(t, err)
 	require.NotNil(t, tb)
 	require.Equal(t, aoe.StatePublic, tb.State)
 
+	t2 := md.MockTableInfo(colCnt)
+	t2.Name = "t2"
+	_, err = c.CreateTable(dbid, *t2)
+	require.NoError(t, err)
 
+	tbls, err := c.GetTables(dbid)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(tbls))
+
+	err = c.DelDatabase(dbName)
+	require.NoError(t, err)
+
+	dbs, err := c.GetDBs()
+	require.NoError(t, err)
+	require.Nil(t, dbs)
+
+	deletedTbls, err := c.GetMarkedDeletedTables(0)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(deletedTbls))
 
 
 }
+
+
 func testDBDDL(t *testing.T, c catalog2.Catalog) {
 	dbs, err := c.GetDBs()
 	require.NoError(t, err)
@@ -122,9 +121,8 @@ func testDBDDL(t *testing.T, c catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Equal(t, dbName, db.Name)
 
-	id, err = c.DelDatabase(dbName)
+	err = c.DelDatabase(dbName)
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), id)
 
 	db, err = c.GetDB(dbName)
 	require.Error(t, catalog2.ErrDBNotExists, err)

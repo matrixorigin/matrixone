@@ -87,6 +87,7 @@ func (c *Collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
 }
 
 func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
+	tableMeta := c.TableData.GetMeta()
 	var mut imem.IMemTable
 	c.mem.Lock()
 	defer c.mem.Unlock()
@@ -101,6 +102,11 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 		mut.Ref()
 	}
 	offset := uint64(0)
+	replayIndex := tableMeta.GetReplayIndex()
+	if replayIndex != nil {
+		offset = replayIndex.Count
+		tableMeta.ResetReplayIndex()
+	}
 	for {
 		if mut.IsFull() {
 			mut.Unpin()
@@ -110,13 +116,16 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 				c.Opts.EventListener.BackgroundErrorCB(err)
 				return err
 			}
-			go func() {
+			{
 				c.Ref()
 				ctx := dops.OpCtx{Collection: c, Opts: c.Opts}
 				op := dops.NewFlushBlkOp(&ctx)
-				op.Push()
-				op.WaitDone()
-			}()
+				err = op.Push()
+				if err != nil {
+					return err
+				}
+				go op.WaitDone()
+			}
 		}
 		n, err := mut.Append(bat, offset, index)
 		if err != nil {

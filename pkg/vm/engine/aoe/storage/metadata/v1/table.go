@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/google/btree"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -87,6 +88,30 @@ func (tbl *Table) GetID() uint64 {
 func (tbl *Table) GetRows() uint64 {
 	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
 	return (*Statstics)(ptr).Rows
+}
+
+func (tbl *Table) Less(item btree.Item) bool {
+	return tbl.Schema.Name < (item.(*Table)).Schema.Name
+}
+
+func (tbl *Table) GetReplayIndex() *LogIndex {
+	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.ReplayIndex)))
+	if ptr == nil {
+		return nil
+	}
+	return (*LogIndex)(ptr)
+}
+
+func (tbl *Table) ResetReplayIndex() {
+	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.ReplayIndex)))
+	if ptr == nil {
+		panic("logic error")
+	}
+	var netIndex *LogIndex
+	nptr := (*unsafe.Pointer)(unsafe.Pointer(&netIndex))
+	if !atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.ReplayIndex)), ptr, *nptr) {
+		panic("logic error")
+	}
 }
 
 func (tbl *Table) AppendStat(rows, size uint64) *Statstics {
@@ -366,9 +391,9 @@ func (tbl *Table) Copy(ctx CopyCtx) *Table {
 
 func (tbl *Table) Replay() {
 	ts := NowMicro()
-	if len(tbl.Schema.Indexes) > 0 {
-		if tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID > tbl.Info.Sequence.NextIndexID {
-			tbl.Info.Sequence.NextIndexID = tbl.Schema.Indexes[len(tbl.Schema.Indexes)-1].ID
+	if len(tbl.Schema.Indices) > 0 {
+		if tbl.Schema.Indices[len(tbl.Schema.Indices)-1].ID > tbl.Info.Sequence.NextIndexID {
+			tbl.Info.Sequence.NextIndexID = tbl.Schema.Indices[len(tbl.Schema.Indices)-1].ID
 		}
 	}
 	max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()
@@ -386,6 +411,7 @@ func (tbl *Table) Replay() {
 	} else {
 		tbl.Info.TableIds[tbl.ID] = true
 		tbl.Info.NameMap[tbl.Schema.Name] = tbl.ID
+		tbl.Info.NameTree.ReplaceOrInsert(tbl)
 	}
 	tbl.IdMap = make(map[uint64]int)
 	segFound := false

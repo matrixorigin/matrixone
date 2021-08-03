@@ -7,7 +7,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
-	"matrixone/pkg/vm/register"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -24,7 +23,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 	bat := proc.Reg.Ax.(*batch.Batch)
-	if bat.Attrs == nil {
+	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
 	n := arg.(*Argument)
@@ -39,36 +38,32 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			bat.Sels = bat.Sels[:n.Limit-n.Seen]
 			proc.Reg.Ax = bat
 			n.Seen = newSeen
-			register.FreeRegisters(proc)
 			return true, nil
 		}
 		n.Seen = newSeen
 		proc.Reg.Ax = bat
-		register.FreeRegisters(proc)
 		return false, nil
 	}
 	length, err := bat.Length(proc)
 	if err != nil {
-		clean(bat, proc)
+		bat.Clean(proc)
 		return false, err
 	}
 	newSeen := n.Seen + uint64(length)
 	if newSeen >= n.Limit { // limit - seen
 		data, sels, err := newSels(int64(n.Limit-n.Seen), proc)
 		if err != nil {
-			clean(bat, proc)
+			bat.Clean(proc)
 			return true, err
 		}
 		bat.Sels = sels
 		bat.SelsData = data
 		proc.Reg.Ax = bat
 		n.Seen = newSeen
-		register.FreeRegisters(proc)
 		return true, nil
 	}
 	n.Seen = newSeen
 	proc.Reg.Ax = bat
-	register.FreeRegisters(proc)
 	return false, nil
 }
 
@@ -82,9 +77,4 @@ func newSels(count int64, proc *process.Process) ([]byte, []int64, error) {
 		sels[i] = i
 	}
 	return data, sels[:count], nil
-}
-
-func clean(bat *batch.Batch, proc *process.Process) {
-	bat.Clean(proc)
-	register.FreeRegisters(proc)
 }
