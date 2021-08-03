@@ -33,7 +33,7 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 
 	for _, in := range ins {
 		if ok, err = rFuncs[in.Op](proc, in.Arg); err != nil {
-			return false, err
+			return ok || end, err
 		}
 		if ok {
 			end = true

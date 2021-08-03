@@ -35,6 +35,7 @@ type Container struct {
 }
 
 type Argument struct {
+	Flg   bool // is local merge
 	Attrs []string
 	Ctr   Container
 }

@@ -3,6 +3,7 @@ package compile
 import (
 	vlimit "matrixone/pkg/sql/colexec/limit"
 	"matrixone/pkg/sql/colexec/merge"
+	voffset "matrixone/pkg/sql/colexec/offset"
 	"matrixone/pkg/sql/colexec/transfer"
 	"matrixone/pkg/sql/op/limit"
 	"matrixone/pkg/sql/op/offset"
@@ -12,11 +13,9 @@ import (
 	"sync"
 )
 
-func (c *compile) compileLimit(o *limit.Limit, mp map[string]uint64) ([]*Scope, error) {
-	if _, ok := o.Prev.(*offset.Offset); ok {
-		return c.compileFetch(o, mp)
-	}
-	ss, err := c.compile(o.Prev, mp)
+func (c *compile) compileFetch(o *limit.Limit, mp map[string]uint64) ([]*Scope, error) {
+	prev := o.Prev.(*offset.Offset)
+	ss, err := c.compile(prev.Prev, mp)
 	if err != nil {
 		return nil, err
 	}
@@ -31,12 +30,6 @@ func (c *compile) compileLimit(o *limit.Limit, mp map[string]uint64) ([]*Scope, 
 				Wg: new(sync.WaitGroup),
 				Ch: make(chan interface{}),
 			}
-		}
-	}
-	if o.IsPD {
-		arg := &vlimit.Argument{Limit: uint64(o.Limit)}
-		for i, s := range ss {
-			ss[i] = pushLimit(s, arg)
 		}
 	}
 	for i, s := range ss {
@@ -55,32 +48,16 @@ func (c *compile) compileLimit(o *limit.Limit, mp map[string]uint64) ([]*Scope, 
 		Arg: &merge.Argument{},
 	})
 	rs.Ins = append(rs.Ins, vm.Instruction{
+		Op: vm.Offset,
+		Arg: &voffset.Argument{
+			Offset: uint64(prev.Offset),
+		},
+	})
+	rs.Ins = append(rs.Ins, vm.Instruction{
 		Op: vm.Limit,
 		Arg: &vlimit.Argument{
 			Limit: uint64(o.Limit),
 		},
 	})
 	return []*Scope{rs}, nil
-}
-
-func pushLimit(s *Scope, arg *vlimit.Argument) *Scope {
-	if s.Magic == Merge || s.Magic == Remote {
-		for i := range s.Ss {
-			s.Ss[i] = pushLimit(s.Ss[i], arg)
-		}
-		s.Ins[len(s.Ins)-1] = vm.Instruction{
-			Op: vm.Limit,
-			Arg: &vlimit.Argument{
-				Limit: arg.Limit,
-			},
-		}
-	} else {
-		n := len(s.Ins) - 1
-		s.Ins = append(s.Ins, vm.Instruction{
-			Arg: arg,
-			Op:  vm.Limit,
-		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
-	}
-	return s
 }

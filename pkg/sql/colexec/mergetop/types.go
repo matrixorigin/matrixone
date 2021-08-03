@@ -38,6 +38,7 @@ type Field struct {
 }
 
 type Argument struct {
+	Flg   bool
 	Limit int64
 	Fs    []Field
 	Ctr   Container

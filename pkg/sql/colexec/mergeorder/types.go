@@ -34,6 +34,7 @@ type Field struct {
 }
 
 type Argument struct {
+	Flg bool // is local merge
 	Fs  []Field
 	Ctr Container
 }

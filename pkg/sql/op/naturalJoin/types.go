@@ -6,6 +6,7 @@ import (
 )
 
 type Join struct {
+	IsPD  bool // can be push down?
 	R     op.OP
 	S     op.OP
 	ID    string

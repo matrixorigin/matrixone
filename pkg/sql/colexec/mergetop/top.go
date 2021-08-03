@@ -159,7 +159,9 @@ func (ctr *Container) Eval(n *Argument, proc *process.Process) error {
 	ctr.sels = append(ctr.sels, sels...) // no expansion here
 	ctr.bat.Sels = ctr.sels
 	ctr.bat.SelsData = ctr.data
-	ctr.bat.Reduce(ctr.attrs, proc)
+	if !n.Flg {
+		ctr.bat.Reduce(ctr.attrs, proc)
+	}
 	proc.Reg.Ax = ctr.bat
 	ctr.bat = nil
 	ctr.data = nil

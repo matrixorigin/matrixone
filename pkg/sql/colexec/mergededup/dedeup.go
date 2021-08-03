@@ -52,7 +52,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			ctr.state = Eval
 		case Eval:
-			ctr.bat.Reduce(n.Attrs, proc)
+			if !n.Flg && ctr.bat != nil {
+				ctr.bat.Reduce(n.Attrs, proc)
+			}
 			proc.Reg.Ax = ctr.bat
 			ctr.bat = nil
 			ctr.clean(proc)
