@@ -118,9 +118,9 @@ func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 			}
 			vec = vec.GetLatestView()
 		}
-		ret = vec.CopyToVector()
+		ret, err := vec.CopyToVectorWithProc(ref, proc)
 		vec.Close()
-		return ret, nil
+		return ret, err
 	}
 	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
 	wrapper.File = part.VFile

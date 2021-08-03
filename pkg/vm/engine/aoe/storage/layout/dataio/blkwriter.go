@@ -3,15 +3,17 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/pierrec/lz4"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
+
+	"github.com/pierrec/lz4"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -50,6 +52,7 @@ func NewBlockWriter(data []*vector.Vector, meta *md.Block, dir string) *BlockWri
 		dir:  dir,
 	}
 	w.fileGetter = w.createIOWriter
+	w.preprocessor = w.defaultPreprocessor
 	w.indexSerializer = w.flushIndices
 	w.dataSerializer = defaultDataSerializer
 	return w
@@ -87,6 +90,11 @@ func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, err
 	}
 	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
 	return w, err
+}
+
+func (bw *BlockWriter) defaultPreprocessor(data []*vector.Vector, meta *md.Block) error {
+	err := mergesort.SortBlockColumns(data, meta)
+	return err
 }
 
 func (bw *BlockWriter) flushIndices(w *os.File, data []*vector.Vector, meta *md.Block) error {
