@@ -41,7 +41,7 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 }
 
 func (e *aoeEngine) Delete(name string) error {
-	_, err := e.catalog.DelDatabase(name)
+	err := e.catalog.DelDatabase(name)
 	return err
 }
 

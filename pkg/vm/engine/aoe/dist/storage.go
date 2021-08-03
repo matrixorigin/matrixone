@@ -65,7 +65,6 @@ type Storage interface {
 	PrefixKeys([]byte, uint64) ([][]byte, error)
 	PrefixKeysWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
 	AllocID([]byte) (uint64, error)
-
 	Append(string, uint64, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 	GetSegmentIds(string, uint64) (adb.IDS, error)

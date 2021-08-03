@@ -39,7 +39,6 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 	c := &TestCluster{T: t}
 	var wg sync.WaitGroup
 	for i := 0; i < 3; i++ {
-
 		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
 		if err != nil {
 			return nil, err
