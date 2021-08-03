@@ -9,6 +9,7 @@ import (
 
 type Group struct {
 	Prev  op.OP
+	IsPD  bool // can be push down?
 	ID    string
 	As    []string
 	Gs    []*extend.Attribute

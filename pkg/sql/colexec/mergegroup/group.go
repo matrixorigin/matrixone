@@ -106,7 +106,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				Attrs: ctr.rattrs,
 				Vecs:  append(ctr.bat.Vecs, vecs...),
 			}
-			rbat.Reduce(n.Gs, proc)
+			if !n.Flg {
+				rbat.Reduce(n.Gs, proc)
+			}
 			proc.Reg.Ax = rbat
 			ctr.bat = nil
 			ctr.state = End

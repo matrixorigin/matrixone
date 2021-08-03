@@ -38,10 +38,10 @@ func Prepare(proc *process.Process, arg interface{}) error {
 	}
 	{
 		for _, attr := range n.Rattrs {
-			n.Ctr.attrs = append(n.Ctr.attrs, n.R+"."+attr)
+			n.Ctr.rattrs = append(n.Ctr.rattrs, n.R+"."+attr)
 		}
 		for _, attr := range n.Sattrs {
-			n.Ctr.attrs = append(n.Ctr.attrs, n.S+"."+attr)
+			n.Ctr.rattrs = append(n.Ctr.rattrs, n.S+"."+attr)
 		}
 	}
 	return nil
@@ -216,7 +216,7 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 		}
 		reg.Wg.Done()
 		bat.Clean(proc)
-		ctr.Probe.bat.Reduce(ctr.attrs, proc)
+		ctr.Probe.bat.Reduce(ctr.rattrs, proc)
 		proc.Reg.Ax = ctr.Probe.bat
 		ctr.Probe.bat = nil
 		return false, nil

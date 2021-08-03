@@ -214,6 +214,6 @@ func sShufflePure(vs *types.Bytes, sels []int64) *types.Bytes {
 		os[i] = os[sel]
 		ns[i] = ns[sel]
 	}
-	vs.Offsets, vs.Lengths = os, ns
+	vs.Offsets, vs.Lengths = os[:len(sels)], ns[:len(sels)]
 	return vs
 }

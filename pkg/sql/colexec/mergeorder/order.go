@@ -54,7 +54,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				ctr.state = End
 				return true, err
 			}
-			ctr.bat.Reduce(ctr.attrs, proc)
+			if !n.Flg {
+				ctr.bat.Reduce(ctr.attrs, proc)
+			}
 			proc.Reg.Ax = ctr.bat
 			ctr.bat = nil
 			ctr.clean(proc)

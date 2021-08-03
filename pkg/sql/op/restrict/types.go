@@ -8,6 +8,7 @@ import (
 
 type Restrict struct {
 	Prev  op.OP
+	IsPD  bool // can be push down?
 	ID    string
 	E     extend.Extend
 	Attrs map[string]types.Type

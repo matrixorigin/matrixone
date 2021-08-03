@@ -23,6 +23,7 @@ type Attribute struct {
 
 type Order struct {
 	Prev  op.OP
+	IsPD  bool // can be push down?
 	ID    string
 	Gs    []Attribute
 	Attrs map[string]types.Type

@@ -1,12 +1,12 @@
 package rpcserver
 
 import (
-	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"matrixone/pkg/logger"
+	"matrixone/pkg/rpcserver/message"
 
 	"github.com/fagongzi/goetty"
 )
@@ -25,10 +25,14 @@ func TestServer(t *testing.T) {
 	h := new(hello)
 	h.cmd = srv.Register(h.process)
 	srv.Run()
-	time.Sleep(time.Second)
+	time.Sleep(10 * time.Second)
 }
 
-func (h *hello) process(_ uint64, val interface{}, _ goetty.IOSession) error {
-	fmt.Printf("%v: %s\n", h.cmd, val)
+func (h *hello) process(_ uint64, val interface{}, conn goetty.IOSession) error {
+	for i := 0; i < 10; i++ {
+		conn.WriteAndFlush(&message.Message{
+			Data: val.(*message.Message).Data,
+		})
+	}
 	return nil
 }

@@ -87,6 +87,8 @@ func (*IndexTableDef) tableDef() {}
 type Relation interface {
 	Statistics
 
+	Close()
+
 	ID() string
 
 	Segments() []SegmentInfo

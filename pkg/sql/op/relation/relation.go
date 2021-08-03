@@ -27,6 +27,7 @@ func New(s bool, name, schema string, r engine.Relation) *Relation {
 					IsRemote: false,
 					Id:       seg.Id,
 					Node:     seg.Node,
+					Version:  seg.Version,
 					GroupId:  seg.GroupId,
 					TabletId: seg.TabletId,
 				})
@@ -35,6 +36,7 @@ func New(s bool, name, schema string, r engine.Relation) *Relation {
 					IsRemote: false,
 					Id:       seg.Id,
 					Node:     seg.Node,
+					Version:  seg.Version,
 					GroupId:  seg.GroupId,
 					TabletId: seg.TabletId,
 				}}, seg.Node}

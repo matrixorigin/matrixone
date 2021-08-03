@@ -14,7 +14,7 @@ import (
 func (b *build) checkProjection(ns tree.SelectExprs) error {
 	for _, n := range ns {
 		if attrs := b.checkProjectionExpr(n.Expr, []string{}); len(attrs) == 0 {
-			return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("invalid expression '%v' in expr", n))
+			return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("invalid projection '%v'", n))
 		}
 	}
 	return nil

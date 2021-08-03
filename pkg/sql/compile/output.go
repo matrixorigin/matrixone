@@ -2,24 +2,34 @@ package compile
 
 import (
 	"matrixone/pkg/sql/colexec/merge"
-	voffset "matrixone/pkg/sql/colexec/offset"
+	"matrixone/pkg/sql/colexec/output"
 	"matrixone/pkg/sql/colexec/transfer"
-	"matrixone/pkg/sql/op/offset"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/process"
 	"sync"
 )
 
-func (c *compile) compileOffset(o *offset.Offset, mp map[string]uint64) ([]*Scope, error) {
-	ss, err := c.compile(o.Prev, mp)
-	if err != nil {
-		return nil, err
+func fillOutput(ss []*Scope, arg *output.Argument, proc *process.Process) []*Scope {
+	if len(ss) == 0 {
+		return ss
+	}
+	if ss[0].Magic > Remote {
+		return ss
+	}
+	if ss[0].Magic == Merge {
+		for i, s := range ss {
+			ss[i].Ins = append(s.Ins, vm.Instruction{
+				Arg: arg,
+				Op:  vm.Output,
+			})
+		}
+		return ss
 	}
 	rs := new(Scope)
-	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
-	rs.Proc = process.New(gm, c.proc.Mp)
-	rs.Proc.Lim = c.proc.Lim
+	gm := guest.New(proc.Gm.Limit, proc.Gm.Mmu)
+	rs.Proc = process.New(gm, proc.Mp)
+	rs.Proc.Lim = proc.Lim
 	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
 	{
 		for i, j := 0, len(ss); i < j; i++ {
@@ -45,10 +55,8 @@ func (c *compile) compileOffset(o *offset.Offset, mp map[string]uint64) ([]*Scop
 		Arg: &merge.Argument{},
 	})
 	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.Offset,
-		Arg: &voffset.Argument{
-			Offset: uint64(o.Offset),
-		},
+		Arg: arg,
+		Op:  vm.Output,
 	})
-	return []*Scope{rs}, nil
+	return []*Scope{rs}
 }

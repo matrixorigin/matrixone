@@ -12,6 +12,8 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
+func (r *relation) Close() {}
+
 func (r *relation) ID() string {
 	return r.tbl.Name
 }

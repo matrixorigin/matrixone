@@ -8,6 +8,7 @@ import (
 
 type Segment struct {
 	IsRemote bool
+	Version  uint64
 	Id       string
 	GroupId  string
 	TabletId string

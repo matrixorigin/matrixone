@@ -17,13 +17,35 @@ func (c *compile) compileRestrict(o *restrict.Restrict, mp map[string]uint64) ([
 	if err != nil {
 		return nil, err
 	}
-	for _, s := range ss {
-		s.Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Restrict,
-			Arg: &vrestrict.Argument{
-				E: o.E,
-			},
-		})
+	arg := &vrestrict.Argument{E: o.E}
+	if o.IsPD {
+		for i, s := range ss {
+			ss[i] = pushRestrict(s, arg)
+		}
+	} else {
+		for i, s := range ss {
+			ss[i].Ins = append(s.Ins, vm.Instruction{
+				Arg: arg,
+				Op:  vm.Restrict,
+			})
+		}
 	}
 	return ss, nil
+}
+
+func pushRestrict(s *Scope, arg *vrestrict.Argument) *Scope {
+	if s.Magic == Merge || s.Magic == Remote {
+		for i := range s.Ss {
+			s.Ss[i] = pushRestrict(s.Ss[i], arg)
+		}
+	} else {
+		n := len(s.Ins) - 1
+		s.Ins = append(s.Ins, vm.Instruction{
+			Arg: arg,
+			Op:  vm.Restrict,
+		})
+		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+	}
+	return s
+
 }
