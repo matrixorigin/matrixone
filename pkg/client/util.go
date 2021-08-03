@@ -154,3 +154,38 @@ func (dc *DebugCounter) DCRoutine() {
 		time.Sleep(5 * time.Second)
 	}
 }
+
+const (
+	TIMEOUT_TYPE_SECOND int = iota
+	TIMEOUT_TYPE_MILLISECOND
+)
+
+type Timeout struct {
+	//last record of the time
+	lastTime time.Time
+
+	//period
+	timeGap time.Duration
+}
+
+func NewTimeout(tg time.Duration) *Timeout {
+	return &Timeout{
+		lastTime: time.Now(),
+		timeGap:  tg,
+	}
+}
+
+/*
+----------+---------+------------------+--------
+      lastTime     Now         lastTime + timeGap
+
+return true  :  is timeout. the lastTime has been updated.
+return false :  is not timeout. the lastTime has not been updated.
+ */
+func (t *Timeout) isTimeout() bool {
+	if time.Since(t.lastTime) <= t.timeGap {
+		return false
+	}
+	t.lastTime = time.Now()
+	return true
+}
