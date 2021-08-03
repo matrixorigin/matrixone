@@ -2,6 +2,8 @@ package test
 
 import (
 	"fmt"
+	"github.com/fagongzi/log"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
@@ -28,6 +30,9 @@ var (
 
 func TestServer(t *testing.T) {
 
+	log.SetHighlighting(false)
+	log.SetLevelByString("error")
+	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
 		opts     := &e.Options{}
 		mdCfg := &md.Configuration{
@@ -37,8 +42,8 @@ func TestServer(t *testing.T) {
 		}
 		opts.CacheCfg = &e.CacheCfg{
 			IndexCapacity:  blockRows * blockCntPerSegment * 80,
-			InsertCapacity: blockRows * uint64(colCnt) * 2000,
-			DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			InsertCapacity: blockRows * uint64(colCnt) * 100,
+			DataCapacity:   blockRows * uint64(colCnt) * 100,
 		}
 		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
 			Interval: time.Duration(1) * time.Second,

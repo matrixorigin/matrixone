@@ -2,8 +2,10 @@ package test
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/fagongzi/log"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
@@ -12,6 +14,7 @@ import (
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	"matrixone/pkg/vm/engine/aoe/engine"
 	e "matrixone/pkg/vm/engine/aoe/storage"
@@ -24,12 +27,13 @@ import (
 
 const (
 	testDBName = "db1"
-	testTableName = "t1"
+	testTableNamePrefix = "test-table-"
 	colCnt = 4
 	batchCnt = 1
 )
 
 func TestAOEEngine(t *testing.T) {
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	log.SetHighlighting(false)
 	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
@@ -59,6 +63,10 @@ func TestAOEEngine(t *testing.T) {
 	require.NoError(t, err)
 	stdLog.Printf("app all started.")
 
+	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.Applications[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
+	})
+
 	catalog := catalog2.DefaultCatalog(c.Applications[0])
 	aoeEngine := engine.Mock(&catalog)
 
@@ -86,9 +94,9 @@ func TestAOEEngine(t *testing.T) {
 	require.Equal(t, 0, len(tbls))
 
 	mockTbl := md.MockTableInfo(colCnt)
-	mockTbl.Name = testTableName
+	mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, 0)
 	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
-	err = db.Create(testTableName, defs, pdef, nil, comment)
+	err = db.Create(mockTbl.Name, defs, pdef, nil, comment)
 	require.NoError(t, err)
 
 	tbls = db.Relations()
@@ -114,16 +122,26 @@ func TestAOEEngine(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	err = db.Delete(testTableName)
+	err = db.Delete(mockTbl.Name)
 	require.NoError(t, err)
 
 	tbls = db.Relations()
 	require.Equal(t, 0, len(tbls))
 
+	//test multiple tables creating
+	for i := 0; i<19; i++ {
+		mockTbl := md.MockTableInfo(colCnt)
+		mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, i)
+		_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
+		err = db.Create(mockTbl.Name, defs, pdef, nil, comment)
+		//require.NoError(t, err)
+		if err != nil {
+			stdLog.Printf("create table %d failed, err is %v", i, err)
+		}
+	}
+
+	tbls = db.Relations()
+	require.Equal(t, 19, len(tbls))
 	time.Sleep(3 * time.Second )
 
-
-
 }
-
-

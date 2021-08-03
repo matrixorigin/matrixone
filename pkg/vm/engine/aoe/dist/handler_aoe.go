@@ -59,8 +59,20 @@ func (h *aoeStorage) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	}
 	writtenBytes := uint64(len(req.Key) + len(customReq.Data))
 	changedBytes := int64(writtenBytes)
-	resp.Value = []byte("OK")
 	return writtenBytes, changedBytes, resp
+}
+
+func (h *aoeStorage) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
+	resp := pb.AcquireResponse()
+	customReq := &rpcpb.GetSegmentedIdRequest{}
+	protoc.MustUnmarshal(customReq, req.Cmd)
+	rsp, err := h.getStoreByGroup(shard.Group, req.ToShard).(*daoe.Storage).GetSegmentedId(customReq.TabletNames)
+	if err != nil {
+		resp.Value = errorResp(err)
+		return resp, 500
+	}
+	resp.Value = format.UInt64ToString(rsp)
+	return resp, 0
 }
 
 func (h *aoeStorage) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
