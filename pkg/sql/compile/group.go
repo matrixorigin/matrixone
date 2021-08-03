@@ -46,16 +46,13 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 			}
 		}
 	}
+	if o.IsPD {
+		for i, s := range ss {
+			ss[i] = pushGroup(s, refer, gs, o)
+		}
+	}
 	for i, s := range ss {
-		s.Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Group,
-			Arg: &vgroup.Argument{
-				Gs:    gs,
-				Refer: refer,
-				Es:    unitAggregates(o.Es),
-			},
-		})
-		s.Ins = append(s.Ins, vm.Instruction{
+		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
 				Mmu: gm,
@@ -65,13 +62,53 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 	}
 	rs.Ss = ss
 	rs.Magic = Merge
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.MergeGroup,
-		Arg: &mergegroup.Argument{
-			Gs:    gs,
-			Refer: refer,
-			Es:    mergeAggregates(o.Es),
-		},
-	})
+	if o.IsPD {
+		rs.Ins = append(rs.Ins, vm.Instruction{
+			Op: vm.MergeGroup,
+			Arg: &mergegroup.Argument{
+				Gs:    gs,
+				Refer: refer,
+				Es:    mergeAggregates(o.Es),
+			},
+		})
+	} else {
+		rs.Ins = append(rs.Ins, vm.Instruction{
+			Op: vm.MergeGroup,
+			Arg: &mergegroup.Argument{
+				Gs:    gs,
+				Refer: refer,
+				Es:    unitAggregates(o.Es),
+			},
+		})
+	}
 	return []*Scope{rs}, nil
+}
+
+func pushGroup(s *Scope, refer map[string]uint64, gs []string, o *group.Group) *Scope {
+	if s.Magic == Merge || s.Magic == Remote {
+		for i := range s.Ss {
+			s.Ss[i] = pushGroup(s.Ss[i], refer, gs, o)
+		}
+		s.Ins[len(s.Ins)-1] = vm.Instruction{
+			Op: vm.MergeGroup,
+			Arg: &mergegroup.Argument{
+				Gs:    gs,
+				Flg:   true,
+				Refer: refer,
+				Es:    remoteAggregates(o.Es),
+			},
+		}
+	} else {
+		n := len(s.Ins) - 1
+		s.Ins = append(s.Ins, vm.Instruction{
+			Op: vm.Group,
+			Arg: &vgroup.Argument{
+				Gs:    gs,
+				Refer: refer,
+				Es:    unitAggregates(o.Es),
+			},
+		})
+		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+	}
+	return s
 }

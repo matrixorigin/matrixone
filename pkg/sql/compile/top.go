@@ -21,6 +21,15 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 	if err != nil {
 		return nil, err
 	}
+	fs := make([]vtop.Field, len(o.Gs))
+	{
+		for i, g := range o.Gs {
+			fs[i] = vtop.Field{
+				Attr: g.Name,
+				Type: vtop.Direction(g.Dirt),
+			}
+		}
+	}
 	rs := new(Scope)
 	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
 	rs.Proc = process.New(gm, c.proc.Mp)
@@ -34,24 +43,14 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 			}
 		}
 	}
-	fs := make([]vtop.Field, len(o.Gs))
-	{
-		for i, g := range o.Gs {
-			fs[i] = vtop.Field{
-				Attr: g.Name,
-				Type: vtop.Direction(g.Dirt),
-			}
+	if o.IsPD {
+		arg := &vtop.Argument{Fs: fs, Limit: o.Limit}
+		for i, s := range ss {
+			ss[i] = pushTop(s, arg)
 		}
 	}
 	for i, s := range ss {
-		s.Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Top,
-			Arg: &vtop.Argument{
-				Fs:    fs,
-				Limit: o.Limit,
-			},
-		})
-		s.Ins = append(s.Ins, vm.Instruction{
+		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
 				Mmu: gm,
@@ -78,4 +77,37 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 		},
 	})
 	return []*Scope{rs}, nil
+}
+
+func pushTop(s *Scope, arg *vtop.Argument) *Scope {
+	if s.Magic == Merge || s.Magic == Remote {
+		for i := range s.Ss {
+			s.Ss[i] = pushTop(s.Ss[i], arg)
+		}
+		fs := make([]mergetop.Field, len(arg.Fs))
+		{
+			for i, f := range arg.Fs {
+				fs[i] = mergetop.Field{
+					Attr: f.Attr,
+					Type: mergetop.Direction(f.Type),
+				}
+			}
+		}
+		s.Ins[len(s.Ins)-1] = vm.Instruction{
+			Op: vm.MergeOrder,
+			Arg: &mergetop.Argument{
+				Fs:    fs,
+				Flg:   true,
+				Limit: arg.Limit,
+			},
+		}
+	} else {
+		n := len(s.Ins) - 1
+		s.Ins = append(s.Ins, vm.Instruction{
+			Arg: arg,
+			Op:  vm.Top,
+		})
+		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+	}
+	return s
 }

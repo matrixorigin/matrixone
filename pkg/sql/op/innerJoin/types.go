@@ -8,6 +8,7 @@ import (
 type Join struct {
 	R      op.OP
 	S      op.OP
+	IsPD   bool // can be push down?
 	ID     string
 	Rattrs []string
 	Sattrs []string

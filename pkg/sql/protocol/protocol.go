@@ -2,14 +2,602 @@ package protocol
 
 import (
 	"bytes"
+	"encoding/gob"
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
+	"matrixone/pkg/sql/colexec/aggregation"
+	"matrixone/pkg/sql/colexec/bag/inner"
+	"matrixone/pkg/sql/colexec/dedup"
 	"matrixone/pkg/sql/colexec/extend"
+	"matrixone/pkg/sql/colexec/group"
+	"matrixone/pkg/sql/colexec/limit"
+	"matrixone/pkg/sql/colexec/merge"
+	"matrixone/pkg/sql/colexec/mergededup"
+	"matrixone/pkg/sql/colexec/mergegroup"
+	"matrixone/pkg/sql/colexec/mergeorder"
+	"matrixone/pkg/sql/colexec/mergesum"
+	"matrixone/pkg/sql/colexec/mergetop"
+	"matrixone/pkg/sql/colexec/offset"
+	"matrixone/pkg/sql/colexec/order"
+	"matrixone/pkg/sql/colexec/projection"
+	"matrixone/pkg/sql/colexec/restrict"
+	"matrixone/pkg/sql/colexec/summarize"
+	"matrixone/pkg/sql/colexec/top"
+	"matrixone/pkg/sql/colexec/transfer"
+	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/process"
+	"reflect"
+	"unsafe"
 )
+
+func init() {
+	gob.Register(Field{})
+	gob.Register(Extend{})
+	gob.Register(TopArgument{})
+	gob.Register(JoinArgument{})
+	gob.Register(GroupArgument{})
+	gob.Register(ProjectionArgument{})
+
+	gob.Register(Source{})
+	gob.Register(Segment{})
+}
+
+func EncodeScope(s Scope, buf *bytes.Buffer) error {
+	buf.Write(encoding.EncodeUint32(uint32(s.Magic)))
+	{
+		data, err := encoding.Encode(s.Data)
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+	}
+	if err := EncodeInstructions(s.Ins, buf); err != nil {
+		return err
+	}
+	buf.Write(encoding.EncodeUint32(uint32(len(s.Ss))))
+	for i := range s.Ss {
+		if err := EncodeScope(s.Ss[i], buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func DecodeScope(data []byte) (Scope, []byte, error) {
+	var s Scope
+	var err error
+
+	s.Magic = int(encoding.DecodeUint32(data[:4]))
+	data = data[4:]
+	{
+		n := int(encoding.DecodeUint32(data[:4]))
+		data = data[4:]
+		if n > 0 {
+			if err = encoding.Decode(data, &s.Data); err != nil {
+				return s, nil, err
+			}
+			data = data[n:]
+		}
+	}
+	if s.Ins, data, err = DecodeInstructions(data); err != nil {
+		return s, nil, err
+	}
+	n := int(encoding.DecodeUint32(data[:4]))
+	data = data[4:]
+	s.Ss = make([]Scope, n)
+	for i := 0; i < n; i++ {
+		if s.Ss[i], data, err = DecodeScope(data); err != nil {
+			return s, nil, err
+		}
+	}
+	return s, data, nil
+}
+
+func EncodeInstructions(ins vm.Instructions, buf *bytes.Buffer) error {
+	buf.Write(encoding.EncodeUint32(uint32(len(ins))))
+	for _, in := range ins {
+		if err := EncodeInstruction(in, buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func DecodeInstructions(data []byte) (vm.Instructions, []byte, error) {
+	var ins vm.Instructions
+
+	n := encoding.DecodeUint32(data[:4])
+	data = data[4:]
+	ins = make(vm.Instructions, n)
+	for i := uint32(0); i < n; i++ {
+		in, rdata, err := DecodeInstruction(data)
+		if err != nil {
+			return ins, nil, err
+		}
+		ins[i] = in
+		data = rdata
+	}
+	return ins, data, nil
+}
+
+func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
+	buf.Write(encoding.EncodeUint32(uint32(in.Op)))
+	switch in.Op {
+	case vm.Top:
+		arg := in.Arg.(*top.Argument)
+		fs := make([]Field, len(arg.Fs))
+		{
+			for i, f := range arg.Fs {
+				fs[i].Attr = f.Attr
+				fs[i].Type = int8(f.Type)
+			}
+		}
+		data, err := encoding.Encode(TopArgument{Limit: arg.Limit, Fs: fs})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Dedup:
+		arg := in.Arg.(*dedup.Argument)
+		data, err := encoding.Encode(arg.Attrs)
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Limit:
+		arg := in.Arg.(*limit.Argument)
+		buf.Write(encoding.EncodeUint64(arg.Limit))
+		return nil
+	case vm.Group:
+		arg := in.Arg.(*group.Argument)
+		es := make([]Extend, len(arg.Es))
+		for i, e := range arg.Es {
+			es[i] = Extend{
+				Op:    e.Op,
+				Name:  e.Name,
+				Alias: e.Alias,
+			}
+		}
+		data, err := encoding.Encode(GroupArgument{Gs: arg.Gs, Es: es, Refer: arg.Refer})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Order:
+		arg := in.Arg.(*order.Argument)
+		fs := make([]Field, len(arg.Fs))
+		{
+			for i, f := range arg.Fs {
+				fs[i].Attr = f.Attr
+				fs[i].Type = int8(f.Type)
+			}
+		}
+		data, err := encoding.Encode(fs)
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Offset:
+		arg := in.Arg.(*offset.Argument)
+		buf.Write(encoding.EncodeUint64(arg.Offset))
+		return nil
+	case vm.Transfer:
+		return nil
+	case vm.Restrict:
+		arg := in.Arg.(*restrict.Argument)
+		return EncodeExtend(arg.E, buf)
+	case vm.Summarize:
+		arg := in.Arg.(*summarize.Argument)
+		es := make([]Extend, len(arg.Es))
+		for i, e := range arg.Es {
+			es[i] = Extend{
+				Op:    e.Op,
+				Name:  e.Name,
+				Alias: e.Alias,
+			}
+		}
+		data, err := encoding.Encode(GroupArgument{Es: es, Refer: arg.Refer})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Projection:
+		arg := in.Arg.(*projection.Argument)
+		data, err := encoding.Encode(ProjectionArgument{Attrs: arg.Attrs, Refer: arg.Refer})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		buf.Write(encoding.EncodeUint32(uint32(len(arg.Es))))
+		for _, e := range arg.Es {
+			if err = EncodeExtend(e, buf); err != nil {
+				return err
+			}
+		}
+		return nil
+	case vm.BagInnerJoin:
+		arg := in.Arg.(*inner.Argument)
+		data, err := encoding.Encode(JoinArgument{
+			R:      arg.R,
+			S:      arg.S,
+			Rattrs: arg.Rattrs,
+			Sattrs: arg.Sattrs,
+		})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.Merge:
+		return nil
+	case vm.MergeTop:
+		arg := in.Arg.(*mergetop.Argument)
+		fs := make([]Field, len(arg.Fs))
+		{
+			for i, f := range arg.Fs {
+				fs[i].Attr = f.Attr
+				fs[i].Type = int8(f.Type)
+			}
+		}
+		data, err := encoding.Encode(TopArgument{Limit: arg.Limit, Fs: fs})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.MergeDedup:
+		arg := in.Arg.(*mergededup.Argument)
+		data, err := encoding.Encode(arg.Attrs)
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.MergeOrder:
+		arg := in.Arg.(*mergeorder.Argument)
+		fs := make([]Field, len(arg.Fs))
+		{
+			for i, f := range arg.Fs {
+				fs[i].Attr = f.Attr
+				fs[i].Type = int8(f.Type)
+			}
+		}
+		data, err := encoding.Encode(fs)
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.MergeGroup:
+		arg := in.Arg.(*mergegroup.Argument)
+		es := make([]Extend, len(arg.Es))
+		for i, e := range arg.Es {
+			es[i] = Extend{
+				Op:    e.Op,
+				Name:  e.Name,
+				Alias: e.Alias,
+			}
+		}
+		data, err := encoding.Encode(GroupArgument{Gs: arg.Gs, Es: es, Refer: arg.Refer})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	case vm.MergeSummarize:
+		arg := in.Arg.(*mergesum.Argument)
+		es := make([]Extend, len(arg.Es))
+		for i, e := range arg.Es {
+			es[i] = Extend{
+				Op:    e.Op,
+				Name:  e.Name,
+				Alias: e.Alias,
+			}
+		}
+		data, err := encoding.Encode(GroupArgument{Es: es, Refer: arg.Refer})
+		if err != nil {
+			return err
+		}
+		buf.Write(encoding.EncodeUint32(uint32(len(data))))
+		buf.Write(data)
+		return nil
+	}
+	return nil
+}
+
+func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
+	var in vm.Instruction
+
+	switch in.Op = int(encoding.DecodeUint32(data[:4])); in.Op {
+	case vm.Top:
+		var arg TopArgument
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		fs := make([]top.Field, len(arg.Fs))
+		{
+			for i, f := range arg.Fs {
+				fs[i].Attr = f.Attr
+				fs[i].Type = top.Direction(f.Type)
+			}
+		}
+		in.Arg = &top.Argument{
+			Fs:    fs,
+			Limit: arg.Limit,
+		}
+		data = data[n:]
+	case vm.Dedup:
+		var attrs []string
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &attrs); err != nil {
+			return in, nil, err
+		}
+		in.Arg = &dedup.Argument{Attrs: attrs}
+		data = data[n:]
+	case vm.Limit:
+		data = data[4:]
+		n := encoding.DecodeUint64(data[:8])
+		in.Arg = &limit.Argument{Limit: n}
+		data = data[8:]
+	case vm.Group:
+		var arg GroupArgument
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		es := make([]aggregation.Extend, len(arg.Es))
+		{
+			for i, e := range arg.Es {
+				es[i].Op = e.Op
+				es[i].Name = e.Name
+				es[i].Alias = e.Alias
+			}
+		}
+		in.Arg = &group.Argument{
+			Es:    es,
+			Gs:    arg.Gs,
+			Refer: arg.Refer,
+		}
+		data = data[n:]
+	case vm.Order:
+		var arg []Field
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		fs := make([]order.Field, len(arg))
+		{
+			for i, f := range arg {
+				fs[i].Attr = f.Attr
+				fs[i].Type = order.Direction(f.Type)
+			}
+		}
+		in.Arg = &order.Argument{
+			Fs: fs,
+		}
+		data = data[n:]
+	case vm.Offset:
+		data = data[4:]
+		n := encoding.DecodeUint64(data[:8])
+		in.Arg = &offset.Argument{Offset: n}
+		data = data[8:]
+	case vm.Transfer:
+		data = data[4:]
+		in.Arg = &transfer.Argument{}
+	case vm.Restrict:
+		data = data[4:]
+		{
+			e, rdata, err := DecodeExtend(data)
+			if err != nil {
+				return in, nil, err
+			}
+			in.Arg = &restrict.Argument{E: e}
+			data = rdata
+		}
+	case vm.Summarize:
+		var arg GroupArgument
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		es := make([]aggregation.Extend, len(arg.Es))
+		{
+			for i, e := range arg.Es {
+				es[i].Op = e.Op
+				es[i].Name = e.Name
+				es[i].Alias = e.Alias
+			}
+		}
+		in.Arg = &summarize.Argument{
+			Es:    es,
+			Refer: arg.Refer,
+		}
+		data = data[n:]
+	case vm.Projection:
+		var arg ProjectionArgument
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		data = data[n:]
+		n = encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		es := make([]extend.Extend, n)
+		for i := uint32(0); i < n; i++ {
+			e, rdata, err := DecodeExtend(data)
+			if err != nil {
+				return in, nil, err
+			}
+			es[i] = e
+			data = rdata
+		}
+		in.Arg = &projection.Argument{
+			Es:    es,
+			Attrs: arg.Attrs,
+			Refer: arg.Refer,
+		}
+	case vm.BagInnerJoin:
+		var arg JoinArgument
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		in.Arg = &inner.Argument{
+			R:      arg.R,
+			S:      arg.S,
+			Rattrs: arg.Rattrs,
+			Sattrs: arg.Sattrs,
+		}
+		data = data[n:]
+	case vm.Merge:
+		data = data[4:]
+		in.Arg = &merge.Argument{}
+	case vm.MergeTop:
+		var arg TopArgument
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		fs := make([]mergetop.Field, len(arg.Fs))
+		{
+			for i, f := range arg.Fs {
+				fs[i].Attr = f.Attr
+				fs[i].Type = mergetop.Direction(f.Type)
+			}
+		}
+		in.Arg = &mergetop.Argument{
+			Fs:    fs,
+			Flg:   true,
+			Limit: arg.Limit,
+		}
+		data = data[n:]
+	case vm.MergeDedup:
+		var attrs []string
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &attrs); err != nil {
+			return in, nil, err
+		}
+		in.Arg = &mergededup.Argument{Flg: true, Attrs: attrs}
+		data = data[n:]
+	case vm.MergeOrder:
+		var arg []Field
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		fs := make([]mergeorder.Field, len(arg))
+		{
+			for i, f := range arg {
+				fs[i].Attr = f.Attr
+				fs[i].Type = mergeorder.Direction(f.Type)
+			}
+		}
+		in.Arg = &mergeorder.Argument{
+			Fs:  fs,
+			Flg: true,
+		}
+		data = data[n:]
+	case vm.MergeGroup:
+		var arg GroupArgument
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		es := make([]aggregation.Extend, len(arg.Es))
+		{
+			for i, e := range arg.Es {
+				es[i].Op = e.Op
+				es[i].Name = e.Name
+				es[i].Alias = e.Alias
+			}
+		}
+		in.Arg = &mergegroup.Argument{
+			Es:    es,
+			Flg:   true,
+			Gs:    arg.Gs,
+			Refer: arg.Refer,
+		}
+		data = data[n:]
+	case vm.MergeSummarize:
+		var arg GroupArgument
+
+		data = data[4:]
+		n := encoding.DecodeUint32(data[:4])
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &arg); err != nil {
+			return in, nil, err
+		}
+		es := make([]aggregation.Extend, len(arg.Es))
+		{
+			for i, e := range arg.Es {
+				es[i].Op = e.Op
+				es[i].Name = e.Name
+				es[i].Alias = e.Alias
+			}
+		}
+		in.Arg = &mergesum.Argument{
+			Es:    es,
+			Refer: arg.Refer,
+		}
+		data = data[n:]
+	}
+	return in, data, nil
+}
 
 func EncodePartition(def *engine.PartitionBy, buf *bytes.Buffer) error {
 	data, err := encoding.Encode(def.Fields)
@@ -353,6 +941,39 @@ func DecodeBatch(data []byte) (*batch.Batch, []byte, error) {
 		data = data[4:]
 		for i := uint32(0); i < n; i++ {
 			vec, remaing, err := DecodeVector(data)
+			if err != nil {
+				return nil, nil, err
+			}
+			bat.Vecs = append(bat.Vecs, vec)
+			data = remaing
+		}
+	} else {
+		data = data[4:]
+	}
+	return bat, data, nil
+}
+
+func DecodeBatchWithProcess(data []byte, proc *process.Process) (*batch.Batch, []byte, error) {
+	bat := batch.New(true, []string{})
+	sn := encoding.DecodeUint32(data[:4])
+	data = data[4:]
+	if sn > 0 {
+		bat.Sels = encoding.DecodeInt64Slice(data[:sn*8])
+		data = data[sn*8:]
+	}
+	if n := encoding.DecodeUint32(data); n > 0 {
+		data = data[4:]
+		if err := encoding.Decode(data[:n], &bat.Attrs); err != nil {
+			return nil, nil, err
+		}
+		data = data[n:]
+	} else {
+		data = data[4:]
+	}
+	if n := encoding.DecodeUint32(data); n > 0 {
+		data = data[4:]
+		for i := uint32(0); i < n; i++ {
+			vec, remaing, err := DecodeVectorWithProcess(data, proc)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -767,4 +1388,293 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	}
 	return nil, nil, fmt.Errorf("unsupport vector type '%s'", typ)
+}
+
+func DecodeVectorWithProcess(data []byte, proc *process.Process) (*vector.Vector, []byte, error) {
+	typ := encoding.DecodeType(data[:encoding.TypeSize])
+	data = data[encoding.TypeSize:]
+	switch typ.Oid {
+	case types.T_int8:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeInt8Slice(data[:n])
+			data = data[n:]
+		}
+		return v, data, nil
+	case types.T_int16:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n*2], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeInt16Slice(data[:n*2])
+			data = data[n*2:]
+		}
+		return v, data, nil
+	case types.T_int32:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n*4], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeInt32Slice(data[:n*4])
+			data = data[n*4:]
+		}
+		return v, data, nil
+	case types.T_int64, types.T_sel:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n*8], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeInt64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		return v, data, nil
+	case types.T_uint8:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeUint8Slice(data[:n])
+			data = data[n:]
+		}
+		return v, data, nil
+	case types.T_uint16:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n*2], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeUint16Slice(data[:n*2])
+			data = data[n*2:]
+		}
+		return v, data, nil
+	case types.T_uint32:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n*4], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeUint32Slice(data[:n*4])
+			data = data[n*4:]
+		}
+		return v, data, nil
+	case types.T_uint64:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n*8], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeUint64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		return v, data, nil
+	case types.T_float32:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n*4], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeFloat32Slice(data[:n*4])
+			data = data[n*4:]
+		}
+		return v, data, nil
+	case types.T_float64:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			v.Data = lseek(data[:n*8], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			v.Col = encoding.DecodeFloat64Slice(data[:n*8])
+			data = data[n*8:]
+		}
+		return v, data, nil
+	case types.T_char, types.T_varchar:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		col := new(types.Bytes)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			col.Lengths = encoding.DecodeUint32Slice(data[:4*n])
+			data = data[4*n:]
+			m := encoding.DecodeUint64(data[:8])
+			data = data[8:]
+			v.Data = lseek(data[:m], -8)
+			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
+				return nil, nil, err
+			}
+			col.Data = data[:m]
+			data = data[m:]
+			{
+				o := uint32(0)
+				col.Offsets = make([]uint32, n)
+				for i, n := range col.Lengths {
+					col.Offsets[i] = 0
+					o += n
+				}
+			}
+			v.Col = col
+		}
+		return v, data, nil
+	case types.T_tuple:
+		v := vector.New(typ)
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			if err := v.Nsp.Read(data[:n]); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+		} else {
+			data = data[4:]
+		}
+		if n := encoding.DecodeUint32(data[:4]); n > 0 {
+			data = data[4:]
+			col := v.Col.([][]interface{})
+			if err := encoding.Decode(data[:n], &col); err != nil {
+				return nil, nil, err
+			}
+			data = data[n:]
+			v.Col = col
+			{
+				var err error
+				if v.Data, err = proc.Alloc(0); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		return v, data, nil
+	}
+	return nil, nil, fmt.Errorf("unsupport vector type '%s'", typ)
+
+}
+
+func lseek(data []byte, off int) []byte {
+	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&data))
+	hp.Len -= off
+	hp.Cap -= off
+	hp.Data += uintptr(off)
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }

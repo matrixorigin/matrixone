@@ -13,7 +13,9 @@ func rewriteSelect(stmt *tree.Select) *tree.Select {
 
 func rewriteSelectCluase(stmt *tree.SelectClause) *tree.SelectClause {
 	stmt.Exprs = rewriteProjection(stmt.Exprs)
-	stmt.From.Tables = rewriteFrom(stmt.From.Tables)
+	if stmt.From != nil && len(stmt.From.Tables) > 0 {
+		stmt.From.Tables = rewriteFrom(stmt.From.Tables)
+	}
 	return stmt
 }
 

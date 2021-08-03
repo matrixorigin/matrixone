@@ -4,5 +4,6 @@ package message;
 message Message {
     uint64   sid = 1;
     uint64  cmd = 2;
-    bytes   data = 3;
+    bytes   code = 3;
+    bytes   data = 4;
 }

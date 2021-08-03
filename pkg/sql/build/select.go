@@ -130,6 +130,9 @@ func (b *build) buildSelectClause(stmt *tree.SelectClause, orderBy tree.OrderBy)
 	if err := b.checkProjection(stmt.Exprs); err != nil {
 		return nil, nil, err
 	}
+	if stmt.From == nil {
+		return nil, nil, sqlerror.New(errno.SQLStatementNotYetComplete, "need from clause")
+	}
 	if b.hasSummarize(stmt.Exprs) {
 		return b.buildSelectClauseWithSummarize(stmt)
 	}
@@ -140,9 +143,6 @@ func (b *build) buildSelectClauseWithSummarize(stmt *tree.SelectClause) (op.OP, 
 	var o op.OP
 	var err error
 
-	if stmt.From == nil {
-		return nil, nil, sqlerror.New(errno.SQLStatementNotYetComplete, "need from clause")
-	}
 	if o, err = b.buildFrom(stmt.From.Tables); err != nil {
 		return nil, nil, err
 	}
@@ -165,9 +165,6 @@ func (b *build) buildSelectClauseWithoutSummarize(stmt *tree.SelectClause, order
 	var err error
 	var es, pes []*projection.Extend
 
-	if stmt.From == nil {
-		return nil, nil, sqlerror.New(errno.SQLStatementNotYetComplete, "need from clause")
-	}
 	if o, err = b.buildFrom(stmt.From.Tables); err != nil {
 		return nil, nil, err
 	}

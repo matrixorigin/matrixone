@@ -21,6 +21,12 @@ func (c *compile) compileDedup(o *dedup.Dedup, mp map[string]uint64) ([]*Scope, 
 	if err != nil {
 		return nil, err
 	}
+	attrs := make([]string, len(o.Gs))
+	{
+		for i, g := range o.Gs {
+			attrs[i] = g.Name
+		}
+	}
 	rs := new(Scope)
 	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
 	rs.Proc = process.New(gm, c.proc.Mp)
@@ -34,24 +40,21 @@ func (c *compile) compileDedup(o *dedup.Dedup, mp map[string]uint64) ([]*Scope, 
 			}
 		}
 	}
-	attrs := make([]string, len(o.Gs))
-	{
-		for i, g := range o.Gs {
-			attrs[i] = g.Name
+	if o.IsPD {
+		arg := &vdedup.Argument{Attrs: attrs}
+		for i, s := range ss {
+			ss[i] = pushDedup(s, arg)
 		}
 	}
 	for i, s := range ss {
-		s.Ins = append(s.Ins, vm.Instruction{
-			Op:  vm.Dedup,
-			Arg: &vdedup.Argument{Attrs: attrs},
-		})
-		s.Ins = append(s.Ins, vm.Instruction{
+		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
 				Mmu: gm,
 				Reg: rs.Proc.Reg.Ws[i],
 			},
 		})
+
 	}
 	rs.Ss = ss
 	rs.Magic = Merge
@@ -60,4 +63,27 @@ func (c *compile) compileDedup(o *dedup.Dedup, mp map[string]uint64) ([]*Scope, 
 		Arg: &mergededup.Argument{Attrs: attrs},
 	})
 	return []*Scope{rs}, nil
+}
+
+func pushDedup(s *Scope, arg *vdedup.Argument) *Scope {
+	if s.Magic == Merge || s.Magic == Remote {
+		for i := range s.Ss {
+			s.Ss[i] = pushDedup(s.Ss[i], arg)
+		}
+		s.Ins[len(s.Ins)-1] = vm.Instruction{
+			Op: vm.MergeDedup,
+			Arg: &mergededup.Argument{
+				Flg:   true,
+				Attrs: arg.Attrs,
+			},
+		}
+	} else {
+		n := len(s.Ins) - 1
+		s.Ins = append(s.Ins, vm.Instruction{
+			Arg: arg,
+			Op:  vm.Dedup,
+		})
+		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+	}
+	return s
 }

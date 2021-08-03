@@ -41,7 +41,56 @@ func (c *compile) compileSummarize(o *summarize.Summarize, mp map[string]uint64)
 			}
 		}
 	}
+	if o.IsPD {
+		for i, s := range ss {
+			ss[i] = pushSummarize(s, refer, o)
+		}
+	}
 	for i, s := range ss {
+		ss[i].Ins = append(s.Ins, vm.Instruction{
+			Op: vm.Transfer,
+			Arg: &transfer.Argument{
+				Mmu: gm,
+				Reg: rs.Proc.Reg.Ws[i],
+			},
+		})
+	}
+	rs.Ss = ss
+	rs.Magic = Merge
+	if o.IsPD {
+		rs.Ins = append(rs.Ins, vm.Instruction{
+			Op: vm.MergeSummarize,
+			Arg: &mergesum.Argument{
+				Refer: refer,
+				Es:    mergeAggregates(o.Es),
+			},
+		})
+	} else {
+		rs.Ins = append(rs.Ins, vm.Instruction{
+			Op: vm.MergeSummarize,
+			Arg: &mergesum.Argument{
+				Refer: refer,
+				Es:    unitAggregates(o.Es),
+			},
+		})
+	}
+	return []*Scope{rs}, nil
+}
+
+func pushSummarize(s *Scope, refer map[string]uint64, o *summarize.Summarize) *Scope {
+	if s.Magic == Merge || s.Magic == Remote {
+		for i := range s.Ss {
+			s.Ss[i] = pushSummarize(s.Ss[i], refer, o)
+		}
+		s.Ins[len(s.Ins)-1] = vm.Instruction{
+			Op: vm.MergeSummarize,
+			Arg: &mergesum.Argument{
+				Refer: refer,
+				Es:    remoteAggregates(o.Es),
+			},
+		}
+	} else {
+		n := len(s.Ins) - 1
 		s.Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Summarize,
 			Arg: &vsummarize.Argument{
@@ -49,25 +98,9 @@ func (c *compile) compileSummarize(o *summarize.Summarize, mp map[string]uint64)
 				Es:    unitAggregates(o.Es),
 			},
 		})
-		s.Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
-			Arg: &transfer.Argument{
-				Mmu: gm,
-				Reg: rs.Proc.Reg.Ws[i],
-			},
-		})
-
+		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
 	}
-	rs.Ss = ss
-	rs.Magic = Merge
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.MergeSummarize,
-		Arg: &mergesum.Argument{
-			Refer: refer,
-			Es:    mergeAggregates(o.Es),
-		},
-	})
-	return []*Scope{rs}, nil
+	return s
 }
 
 func unitAggregates(es []aggregation.Extend) []aggregation.Extend {
@@ -94,6 +127,18 @@ func mergeAggregates(es []aggregation.Extend) []aggregation.Extend {
 	return rs
 }
 
+func remoteAggregates(es []aggregation.Extend) []aggregation.Extend {
+	rs := make([]aggregation.Extend, len(es))
+	for i, e := range es {
+		rs[i] = aggregation.Extend{
+			Name:  e.Alias,
+			Alias: e.Alias,
+			Op:    remoteAggFuncs[e.Op],
+		}
+	}
+	return rs
+}
+
 var unitAggFuncs map[int]int = map[int]int{
 	aggregation.Avg:       aggregation.SumCount,
 	aggregation.Max:       aggregation.Max,
@@ -105,6 +150,15 @@ var unitAggFuncs map[int]int = map[int]int{
 
 var mergeAggFuncs map[int]int = map[int]int{
 	aggregation.Avg:       aggregation.Avg,
+	aggregation.Max:       aggregation.Max,
+	aggregation.Min:       aggregation.Min,
+	aggregation.Sum:       aggregation.Sum,
+	aggregation.Count:     aggregation.Sum,
+	aggregation.StarCount: aggregation.Sum,
+}
+
+var remoteAggFuncs map[int]int = map[int]int{
+	aggregation.Avg:       aggregation.SumCount,
 	aggregation.Max:       aggregation.Max,
 	aggregation.Min:       aggregation.Min,
 	aggregation.Sum:       aggregation.Sum,

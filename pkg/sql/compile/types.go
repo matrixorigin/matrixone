@@ -15,6 +15,7 @@ import (
 const (
 	Normal = iota
 	Merge
+	Remote
 	Insert
 	Explain
 	DropTable
@@ -28,7 +29,6 @@ const (
 type Source struct {
 	ID   string
 	DB   string
-	N    metadata.Node
 	Refs map[string]uint64
 	Segs []*relation.Segment
 }
@@ -38,6 +38,7 @@ type Scope struct {
 	O     op.OP
 	Data  *Source
 	Ss    []*Scope
+	N     metadata.Node
 	Ins   vm.Instructions
 	Proc  *process.Process
 }
@@ -59,6 +60,7 @@ type Exec struct {
 }
 
 type compile struct {
+	port int
 	db   string
 	uid  string
 	sql  string

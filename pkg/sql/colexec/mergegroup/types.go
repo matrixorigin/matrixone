@@ -40,6 +40,7 @@ type Container struct {
 }
 
 type Argument struct {
+	Flg   bool // is local merge
 	Gs    []string
 	Ctr   Container
 	Refer map[string]uint64

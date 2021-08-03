@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/build"
 	"matrixone/pkg/sql/colexec/output"
@@ -33,10 +32,8 @@ import (
 	"matrixone/pkg/sql/opt"
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/sqlerror"
-	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/pipeline"
 	"matrixone/pkg/vm/process"
 	"sync"
 )
@@ -73,10 +70,7 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	if err != nil {
 		return err
 	}
-	o = opt.Optimize(o)
-	{
-		fmt.Printf("o: %v\n", o)
-	}
+	o = opt.Optimize(rewrite(o, mergeCount(o, 0)))
 	ss, err := e.c.compile(o, make(map[string]uint64))
 	if err != nil {
 		return err
@@ -107,21 +101,11 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Database"})
 		}
 	}
-	for _, s := range ss {
-		s.Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Output,
-			Arg: &output.Argument{
-				Data:  u,
-				Func:  fill,
-				Attrs: attrs,
-			},
-		})
-	}
-	e.cs = cs
-	e.ss = ss
-	e.e = e.c.e
 	e.u = u
+	e.cs = cs
+	e.e = e.c.e
 	e.fill = fill
+	e.ss = fillOutput(ss, &output.Argument{Data: u, Func: fill, Attrs: attrs}, e.c.proc)
 	return nil
 }
 
@@ -154,7 +138,7 @@ func (e *Exec) Run() error {
 		case Merge:
 			wg.Add(1)
 			go func(s *Scope) {
-				if err := s.MergeRun(e.e, wg); err != nil {
+				if err := s.MergeRun(e.e); err != nil {
 					e.err = err
 				}
 				wg.Done()
@@ -229,183 +213,6 @@ func (e *Exec) Run() error {
 	return e.err
 }
 
-func (s *Scope) Run(e engine.Engine) error {
-	segs := make([]engine.Segment, len(s.Data.Segs))
-	cs := make([]uint64, 0, len(s.Data.Refs))
-	attrs := make([]string, 0, len(s.Data.Refs))
-	{
-		for k, v := range s.Data.Refs {
-			cs = append(cs, v)
-			attrs = append(attrs, k)
-		}
-	}
-	p := pipeline.New(cs, attrs, s.Ins)
-	{
-		db, err := e.Database(s.Data.DB)
-		if err != nil {
-			return err
-		}
-		r, err := db.Relation(s.Data.ID)
-		if err != nil {
-			return err
-		}
-		for i, seg := range s.Data.Segs {
-			segs[i] = r.Segment(engine.SegmentInfo{
-				Id:       seg.Id,
-				GroupId:  seg.GroupId,
-				TabletId: seg.TabletId,
-				Node:     seg.Node,
-			}, s.Proc)
-		}
-	}
-	if _, err := p.Run(segs, s.Proc); err != nil {
-		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
-	}
-	return nil
-}
-
-func (s *Scope) MergeRun(e engine.Engine, wg sync.WaitGroup) error {
-	var err error
-
-	for i := range s.Ss {
-		switch s.Ss[i].Magic {
-		case Normal:
-			wg.Add(1)
-			go func(s *Scope) {
-				if rerr := s.Run(e); rerr != nil {
-					err = rerr
-				}
-				wg.Done()
-			}(s.Ss[i])
-		case Merge:
-			wg.Add(1)
-			go func(s *Scope) {
-				if rerr := s.MergeRun(e, wg); rerr != nil {
-					err = rerr
-				}
-				wg.Done()
-			}(s.Ss[i])
-		}
-	}
-	p := pipeline.NewMerge(s.Ins)
-	if _, rerr := p.RunMerge(s.Proc); rerr != nil {
-		err = rerr
-	}
-	if err != nil {
-		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
-	}
-	return nil
-}
-
-func (s *Scope) Insert() error {
-	o, _ := s.O.(*insert.Insert)
-	return o.R.Write(o.Bat)
-}
-
-func (s *Scope) Explain(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	bat := batch.New(true, []string{"Pipeline"})
-	{
-		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
-		if err := vec.Append([][]byte{[]byte(s.O.String())}); err != nil {
-			return err
-		}
-		bat.Vecs[0] = vec
-	}
-	return fill(u, bat)
-}
-
-func (s *Scope) CreateTable() error {
-	o, _ := s.O.(*createTable.CreateTable)
-	if _, err := o.Db.Relation(o.Id); err == nil {
-		if o.Flg {
-			return nil
-		}
-		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%v' already exists", o.Id))
-	}
-	return o.Db.Create(o.Id, o.Defs, o.Pdef, nil, "")
-}
-
-func (s *Scope) CreateDatabase() error {
-	o, _ := s.O.(*createDatabase.CreateDatabase)
-	if _, err := o.E.Database(o.Id); err == nil {
-		if o.Flg {
-			return nil
-		}
-		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database '%v' already exists", o.Id))
-	}
-	return o.E.Create(o.Id, 0)
-}
-
-func (s *Scope) DropTable() error {
-	o, _ := s.O.(*dropTable.DropTable)
-	for i := range o.Dbs {
-		db, err := o.E.Database(o.Dbs[i])
-		if err != nil {
-			if o.Flg {
-				continue
-			}
-			return err
-		}
-		if _, err := db.Relation(o.Ids[i]); err != nil {
-			if o.Flg {
-				continue
-			}
-			return err
-		}
-		if err := db.Delete(o.Ids[i]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Scope) DropDatabase() error {
-	o, _ := s.O.(*dropDatabase.DropDatabase)
-	if _, err := o.E.Database(o.Id); err != nil {
-		if o.Flg {
-			return nil
-		}
-		return err
-	}
-	return o.E.Delete(o.Id)
-}
-
-func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	o, _ := s.O.(*showTables.ShowTables)
-	bat := batch.New(true, []string{"Table"})
-	{
-		rs := o.Db.Relations()
-		vs := make([][]byte, len(rs))
-		for i, r := range rs {
-			vs[i] = []byte(r)
-		}
-		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[0] = vec
-	}
-	return fill(u, bat)
-}
-
-func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	o, _ := s.O.(*showDatabases.ShowDatabases)
-	bat := batch.New(true, []string{"Database"})
-	{
-		rs := o.E.Databases()
-		vs := make([][]byte, len(rs))
-		for i, r := range rs {
-			vs[i] = []byte(r)
-		}
-		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
-		if err := vec.Append(vs); err != nil {
-			return err
-		}
-		bat.Vecs[0] = vec
-	}
-	return fill(u, bat)
-}
-
 func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 	switch n := o.(type) {
 	case *insert.Insert:
@@ -441,6 +248,7 @@ func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 	case *innerJoin.Join:
 		return c.compileInnerJoin(n, mp)
 	case *naturalJoin.Join:
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%s' unsupprt now", o))
 	case *relation.Relation:
 		return c.compileRelation(n, mp)
 	case *restrict.Restrict:
