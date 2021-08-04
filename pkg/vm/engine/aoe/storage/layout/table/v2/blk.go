@@ -123,6 +123,7 @@ func (blk *Block) GetSegmentedIndex() (id uint64, ok bool) {
 }
 
 func (blk *Block) close() {
+	// panic(string(debug.Stack()))
 	if blk.IndexHolder != nil {
 		blk.IndexHolder.Unref()
 	}
@@ -181,6 +182,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
 			newIndexHolder = true
 		} else if indexHolder.Type < newType {
+			indexHolder.Unref()
 			indexHolder = host.GetIndexHolder().UpgradeBlock(meta.ID, newType)
 			newIndexHolder = true
 		}
@@ -190,6 +192,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
 			newIndexHolder = true
 		} else if indexHolder.Type < newType {
+			indexHolder.Unref()
 			indexHolder = host.GetIndexHolder().UpgradeBlock(meta.ID, newType)
 			newIndexHolder = true
 		}

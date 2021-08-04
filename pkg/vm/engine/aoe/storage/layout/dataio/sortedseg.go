@@ -28,7 +28,7 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	}
 
 	name := e.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID)
-	log.Infof("SegmentFile name %s", name)
+	// log.Infof("SegmentFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
 	}
@@ -183,6 +183,7 @@ func (sf *SortedSegmentFile) initBlkPointers(blkId uint64, pos uint32) {
 		sf.Parts[key].Offset = int64(currOffset)
 		currOffset += int(sf.Parts[key].Len)
 	}
+	sf.DataAlgo = int(algo)
 }
 
 func (sf *SortedSegmentFile) GetFileType() common.FileType {
@@ -258,8 +259,8 @@ func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if !ok {
 		panic("logic error")
 	}
-	if len(buf) != int(pointer.Len) {
-		panic("logic error")
+	if len(buf) > int(pointer.Len) {
+		panic(fmt.Sprintf("buf len is %d, but pointer len is %d", len(buf), pointer.Len))
 	}
 
 	sf.ReadPoint(pointer, buf)

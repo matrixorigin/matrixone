@@ -81,6 +81,7 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	seg.tree.AttrSize = make(map[string]uint64)
 	seg.OnZeroCB = seg.close
 	seg.SegmentFile = segFile
+	seg.SegmentFile.Ref()
 	seg.Ref()
 	return seg, nil
 }
@@ -159,8 +160,8 @@ func (seg *Segment) BlockIds() []uint64 {
 	if atomic.LoadUint32(&seg.tree.BlockCnt) == uint32(seg.Meta.Table.Conf.SegmentMaxBlocks) {
 		return seg.tree.BlockIds
 	}
-	ret := make([]uint64, 0, atomic.LoadUint32(&seg.tree.BlockCnt))
 	seg.tree.RLock()
+	ret := make([]uint64, 0, atomic.LoadUint32(&seg.tree.BlockCnt))
 	for _, blk := range seg.tree.Blocks {
 		ret = append(ret, blk.GetMeta().ID)
 	}
@@ -180,7 +181,9 @@ func (seg *Segment) close() {
 		seg.tree.Next.Unref()
 		seg.tree.Next = nil
 	}
-	// log.Infof("destroy seg %d", seg.Meta.ID)
+	if seg.SegmentFile != nil {
+		seg.SegmentFile.Unref()
+	}
 }
 
 func (seg *Segment) SetNext(next iface.ISegment) {
@@ -334,7 +337,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		}
 		cloned.tree.Helper[newBlkMeta.ID] = len(cloned.tree.Blocks)
 		cloned.tree.Blocks = append(cloned.tree.Blocks, cur)
-		seg.tree.BlockIds = append(seg.tree.BlockIds, cur.GetMeta().ID)
+		cloned.tree.BlockIds = append(cloned.tree.BlockIds, cur.GetMeta().ID)
 		cloned.tree.BlockCnt++
 		if prev != nil {
 			cur.Ref()
@@ -343,6 +346,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		prev = cur
 	}
 
+	cloned.SegmentFile.Ref()
 	cloned.Ref()
 	return cloned, nil
 }
