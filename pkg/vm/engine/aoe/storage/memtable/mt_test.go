@@ -3,7 +3,6 @@ package memtable
 import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -155,7 +154,7 @@ func TestCollection(t *testing.T) {
 	t.Log(indexBufMgr.String())
 	t.Log(fsMgr.String())
 	t.Log(manager)
-	t.Log(common.GPool.String())
+	// t.Log(common.GPool.String())
 
 	opts.MemData.Updater.Stop()
 	opts.Data.Flusher.Stop()

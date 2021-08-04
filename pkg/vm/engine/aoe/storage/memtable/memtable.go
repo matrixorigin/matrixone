@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	ro "matrixone/pkg/container/batch"
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -10,9 +11,9 @@ import (
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata/v2"
+	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
-	// log "github.com/sirupsen/logrus"
 )
 
 type MemTable struct {
@@ -160,6 +161,21 @@ func (mt *MemTable) Flush() error {
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 			return err
+		}
+		if upgradeBlkOp.SegmentClosed {
+			log.Infof("Segment %d is closed", newMeta.Segment.ID)
+			flushOp := dops.NewFlushSegOp(&dops.OpCtx{Opts: mt.Opts}, mt.TableData.StrongRefSegment(newMeta.Segment.ID))
+			err = flushOp.Push()
+			if err != nil {
+				mt.Opts.EventListener.BackgroundErrorCB(err)
+				return err
+			}
+			go func() {
+				err = flushOp.WaitDone()
+				if err != nil {
+					mt.Opts.EventListener.BackgroundErrorCB(err)
+				}
+			}()
 		}
 		upgradeBlkOp.Block.Unref()
 	}

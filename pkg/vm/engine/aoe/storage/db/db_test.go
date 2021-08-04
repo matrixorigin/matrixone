@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
@@ -317,6 +318,9 @@ func TestConcurrency(t *testing.T) {
 	cancel()
 	wg.Wait()
 	time.Sleep(time.Duration(100) * time.Millisecond)
+	if invariants.RaceEnabled {
+		time.Sleep(time.Duration(200) * time.Millisecond)
+	}
 	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	root := tbl.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
@@ -374,6 +378,9 @@ func TestConcurrency(t *testing.T) {
 	t.Logf("Takes %v", time.Since(now))
 	t.Log(tbl.String())
 	time.Sleep(time.Duration(200) * time.Millisecond)
+	if invariants.RaceEnabled {
+		time.Sleep(time.Duration(800) * time.Millisecond)
+	}
 
 	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())

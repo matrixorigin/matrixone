@@ -249,6 +249,14 @@ func (blk *Block) String() string {
 	return s
 }
 
+func (blk *Block) GetVectorWrapper(col int) (*vector.VectorWrapper, error) {
+	vec, err := blk.data.Columns[col].LoadVectorWrapper()
+	if err != nil {
+		return nil, err
+	}
+	return vec, nil
+}
+
 func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
 	colIdx := blk.Meta.Segment.Table.Schema.GetColIdx(attr)
 	vec, err := blk.data.Columns[colIdx].ForceLoad(ref, proc)
