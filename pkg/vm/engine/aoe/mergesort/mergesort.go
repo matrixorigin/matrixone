@@ -15,11 +15,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/mergesort/uint64s"
 	"matrixone/pkg/vm/engine/aoe/mergesort/uint8s"
 	"matrixone/pkg/vm/engine/aoe/mergesort/varchar"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
-func SortBlockColumns(cols []*vector.Vector, meta *md.Block) error {
-	sortedIdx := make([]uint32, meta.Count)
+func SortBlockColumns(cols []*vector.Vector) error {
+	sortedIdx := make([]uint32, cols[0].Length())
 
 	switch cols[0].Typ.Oid {
 	case types.T_int8:
@@ -49,35 +48,35 @@ func SortBlockColumns(cols []*vector.Vector, meta *md.Block) error {
 	for i := 1; i < len(cols); i++ {
 		switch cols[i].Typ.Oid {
 		case types.T_int8:
-			int8s.ShuffleBlock(cols[0].Col.([]int8), sortedIdx)
+			int8s.ShuffleBlock(cols[i].Col.([]int8), sortedIdx)
 		case types.T_int16:
-			int16s.ShuffleBlock(cols[0].Col.([]int16), sortedIdx)
+			int16s.ShuffleBlock(cols[i].Col.([]int16), sortedIdx)
 		case types.T_int32:
-			int32s.ShuffleBlock(cols[0].Col.([]int32), sortedIdx)
+			int32s.ShuffleBlock(cols[i].Col.([]int32), sortedIdx)
 		case types.T_int64:
-			int64s.ShuffleBlock(cols[0].Col.([]int64), sortedIdx)
+			int64s.ShuffleBlock(cols[i].Col.([]int64), sortedIdx)
 		case types.T_uint8:
-			uint8s.ShuffleBlock(cols[0].Col.([]uint8), sortedIdx)
+			uint8s.ShuffleBlock(cols[i].Col.([]uint8), sortedIdx)
 		case types.T_uint16:
-			uint16s.ShuffleBlock(cols[0].Col.([]uint16), sortedIdx)
+			uint16s.ShuffleBlock(cols[i].Col.([]uint16), sortedIdx)
 		case types.T_uint32:
-			uint32s.ShuffleBlock(cols[0].Col.([]uint32), sortedIdx)
+			uint32s.ShuffleBlock(cols[i].Col.([]uint32), sortedIdx)
 		case types.T_uint64:
-			uint64s.ShuffleBlock(cols[0].Col.([]uint64), sortedIdx)
+			uint64s.ShuffleBlock(cols[i].Col.([]uint64), sortedIdx)
 		case types.T_float32:
-			float32s.ShuffleBlock(cols[0].Col.([]float32), sortedIdx)
+			float32s.ShuffleBlock(cols[i].Col.([]float32), sortedIdx)
 		case types.T_float64:
-			float64s.ShuffleBlock(cols[0].Col.([]float64), sortedIdx)
+			float64s.ShuffleBlock(cols[i].Col.([]float64), sortedIdx)
 		case types.T_char, types.T_json, types.T_varchar:
-			varchar.ShuffleBlock(cols[0].Col.(*types.Bytes), sortedIdx)
+			varchar.ShuffleBlock(cols[i].Col.(*types.Bytes), sortedIdx)
 		}
 	}
 
 	return nil
 }
 
-func MergeBlocksToSegment(blks []*batch.Batch, meta *md.Segment) error {
-	n := len(meta.Blocks) * int(meta.Blocks[0].Count)
+func MergeBlocksToSegment(blks []*batch.Batch) error {
+	n := len(blks) * blks[0].Vecs[0].Length()
 	mergedSrc := make([]uint16, n)
 
 	switch blks[0].Vecs[0].Typ.Oid {
