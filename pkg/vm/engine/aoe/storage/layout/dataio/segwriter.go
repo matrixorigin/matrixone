@@ -54,7 +54,7 @@ func (sw *SegmentWriter) SetDataFlusher(f func(*os.File, []*batch.Batch, *md.Seg
 }
 
 func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *md.Segment) error {
-	err := mergesort.MergeBlocksToSegment(data, meta)
+	err := mergesort.MergeBlocksToSegment(data)
 	return err
 }
 
