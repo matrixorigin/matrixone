@@ -170,12 +170,23 @@ func (mt *MemTable) Flush() error {
 				mt.Opts.EventListener.BackgroundErrorCB(err)
 				return err
 			}
-			go func() {
+			mt.TableData.Ref()
+			go func(td iface.ITableData) {
+				defer td.Unref()
 				err = flushOp.WaitDone()
 				if err != nil {
 					mt.Opts.EventListener.BackgroundErrorCB(err)
+				} else {
+					ctx := cops.OpCtx{Opts: flushOp.Ctx.Opts}
+					op := cops.NewUpgradeSegOp(&ctx, newMeta.Segment.ID, td)
+					if err = op.Push(); err != nil {
+						mt.Opts.EventListener.BackgroundErrorCB(err)
+					}
+					if err = op.WaitDone(); err != nil {
+						mt.Opts.EventListener.BackgroundErrorCB(err)
+					}
 				}
-			}()
+			}(mt.TableData)
 		}
 		upgradeBlkOp.Block.Unref()
 	}

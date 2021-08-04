@@ -20,6 +20,7 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	sf := &SortedSegmentFile{
 		Parts:      make(map[base.Key]*base.Pointer),
 		ID:         id,
+		Meta:       NewFileMeta(),
 		BlocksMeta: make(map[common.ID]*FileMeta),
 		Info: &fileStat{
 			name: id.ToSegmentFilePath(),

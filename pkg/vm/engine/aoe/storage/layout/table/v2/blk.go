@@ -164,7 +164,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		panic("logic error")
 	}
 	if meta.DataState != md.FULL {
-		panic("logic error")
+		panic(fmt.Sprintf("blk data state is %d", meta.DataState))
 	}
 
 	blkId := meta.AsCommonID().AsBlockID()
