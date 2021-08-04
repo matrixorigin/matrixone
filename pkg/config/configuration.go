@@ -16,3 +16,25 @@ var StorageEngine engine.Engine
 
 //Cluster Nodes
 var ClusterNodes metadata.Nodes
+
+type ParameterUnit struct {
+	SV *SystemVariables
+
+	//host memory
+	HostMmu *host.Mmu
+
+	//Storage Engine
+	StorageEngine engine.Engine
+
+	//Cluster Nodes
+	ClusterNodes metadata.Nodes
+}
+
+func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, storageEngine engine.Engine, clusterNodes metadata.Nodes) *ParameterUnit {
+	return &ParameterUnit{
+		SV:            sv,
+		HostMmu:      hostMmu,
+		StorageEngine: storageEngine,
+		ClusterNodes:  clusterNodes,
+	}
+}

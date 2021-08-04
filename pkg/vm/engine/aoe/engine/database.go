@@ -9,18 +9,16 @@ import (
 	"matrixone/pkg/vm/metadata"
 )
 
-
-
 func (db *database) Type() int {
 	return db.typ
 }
 
-func (db *database) Delete(name string) error {
-	_, err :=  db.catalog.DropTable(db.id, name)
+func (db *database) Delete(_ uint64, name string) error {
+	_, err := db.catalog.DropTable(db.id, name)
 	return err
 }
 
-func (db *database) Create(name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
+func (db *database) Create(_ uint64, name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
 	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
 	if err != nil {
 		return err
@@ -59,8 +57,8 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 	for _, tbl := range tablets {
 		if ids, err := db.catalog.Store.GetSegmentIds(tbl.Name, tbl.ShardId); err != nil {
 			log.Errorf("get segmentInfos for tablet %s failed, %s", tbl.Name, err.Error())
-		}else {
-			if len(ids.Ids)==0{
+		} else {
+			if len(ids.Ids) == 0 {
 				continue
 			}
 			addr := db.catalog.Store.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
@@ -72,7 +70,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 					GroupId:  string(format.Uint64ToBytes(tbl.ShardId)),
 					TabletId: tbl.Name,
 					Node: metadata.Node{
-						Id: addr,
+						Id:   addr,
 						Addr: addr,
 					},
 				})
@@ -82,4 +80,3 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 	}
 	return r, nil
 }
-
