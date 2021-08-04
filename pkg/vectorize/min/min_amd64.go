@@ -12,7 +12,6 @@ func int16MinAvx2Asm([]int16, []int16)
 func int16MinAvx512Asm([]int16, []int16)
 func int32MinAvx2Asm([]int32, []int32)
 func int32MinAvx512Asm([]int32, []int32)
-func int64MinAvx2Asm([]int64, []int64)
 func int64MinAvx512Asm([]int64, []int64)
 func uint8MinAvx2Asm([]uint8, []uint8)
 func uint8MinAvx512Asm([]uint8, []uint8)
@@ -20,7 +19,6 @@ func uint16MinAvx2Asm([]uint16, []uint16)
 func uint16MinAvx512Asm([]uint16, []uint16)
 func uint32MinAvx2Asm([]uint32, []uint32)
 func uint32MinAvx512Asm([]uint32, []uint32)
-func uint64MinAvx2Asm([]uint64, []uint64)
 func uint64MinAvx512Asm([]uint64, []uint64)
 func float32MinAvx2Asm([]float32, []float32)
 func float32MinAvx512Asm([]float32, []float32)
@@ -43,11 +41,11 @@ func init() {
 		Int8Min = int8MinAvx2
 		Int16Min = int16MinAvx2
 		Int32Min = int32MinAvx2
-		Int64Min = int64MinAvx2
+		Int64Min = int64Min
 		Uint8Min = uint8MinAvx2
 		Uint16Min = uint16MinAvx2
 		Uint32Min = uint32MinAvx2
-		Uint64Min = uint64MinAvx2
+		Uint64Min = uint64Min
 		Float32Min = float32MinAvx2
 		Float64Min = float64MinAvx2
 	} else {
@@ -188,24 +186,6 @@ func int32MinAvx512(xs []int32) int32 {
 	return res
 }
 
-func int64MinAvx2(xs []int64) int64 {
-	n := len(xs) / 2
-	var rs [2]int64
-	int64MinAvx2Asm(xs[:n*2], rs[:])
-	res := rs[0]
-	for i := 1; i < 2; i++ {
-		if rs[i] < res {
-			res = rs[i]
-		}
-	}
-	for i, j := n*2, len(xs); i < j; i++ {
-		if xs[i] < res {
-			res = xs[i]
-		}
-	}
-	return res
-}
-
 func int64MinAvx512(xs []int64) int64 {
 	n := len(xs) / 2
 	var rs [2]int64
@@ -325,24 +305,6 @@ func uint32MinAvx512(xs []uint32) uint32 {
 		}
 	}
 	for i, j := n*4, len(xs); i < j; i++ {
-		if xs[i] < res {
-			res = xs[i]
-		}
-	}
-	return res
-}
-
-func uint64MinAvx2(xs []uint64) uint64 {
-	n := len(xs) / 2
-	var rs [2]uint64
-	uint64MinAvx2Asm(xs[:n*2], rs[:])
-	res := rs[0]
-	for i := 1; i < 2; i++ {
-		if rs[i] < res {
-			res = rs[i]
-		}
-	}
-	for i, j := n*2, len(xs); i < j; i++ {
 		if xs[i] < res {
 			res = xs[i]
 		}
