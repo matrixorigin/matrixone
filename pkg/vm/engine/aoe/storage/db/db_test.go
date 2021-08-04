@@ -193,10 +193,11 @@ func TestAppend(t *testing.T) {
 	ss.Close()
 
 	time.Sleep(time.Duration(50) * time.Millisecond)
-	t.Log(inst.FsMgr.String())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
+	// t.Log(inst.FsMgr.String())
+	// t.Log(tbl.GetIndexHolder().String())
 	inst.Close()
 }
 
@@ -317,7 +318,7 @@ func TestConcurrency(t *testing.T) {
 	searchWg.Wait()
 	cancel()
 	wg.Wait()
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 	if invariants.RaceEnabled {
 		time.Sleep(time.Duration(200) * time.Millisecond)
 	}

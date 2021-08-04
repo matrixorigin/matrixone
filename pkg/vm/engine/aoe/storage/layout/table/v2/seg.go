@@ -315,6 +315,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 		panic("logic error")
 	}
 	if indexHolder.Type == base.UNSORTED_SEG {
+		indexHolder.Unref()
 		indexHolder = td.GetIndexHolder().UpgradeSegment(seg.Meta.ID, base.SORTED_SEG)
 		seg.IndexHolder.Init(segFile)
 	}
