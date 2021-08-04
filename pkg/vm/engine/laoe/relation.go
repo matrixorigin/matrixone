@@ -36,15 +36,15 @@ func (r *relation) Attribute() []metadata.Attribute {
 	return nil
 }
 
-func (r *relation) Write(_ *batch.Batch) error {
+func (r *relation) Write(_ uint64, _ *batch.Batch) error {
 	return nil
 }
 
-func (r *relation) AddAttribute(_ engine.TableDef) error {
+func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) DelAttribute(_ engine.TableDef) error {
+func (r *relation) DelAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }
 
