@@ -4,11 +4,11 @@ package fastmap
 
 import "matrixone/pkg/internal/cpu"
 
-func findAvx2([]uint64, uint64) int
+func findAvx2Asm([]uint64, uint64) int
 
 func init() {
 	if cpu.X86.HasAVX2 {
-		Find = findAvx2
+		Find = findAvx2Asm
 	} else {
 		Find = find
 	}
