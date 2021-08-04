@@ -132,10 +132,10 @@ func (sf *SortedSegmentFile) initPointers() {
 	for i := 0; i < int(blkCnt); i++ {
 		sf.initBlkPointers(blkIds[i], blksPos[i])
 	}
-	log.Infof("parts cnt %d", len(sf.Parts))
-	for k, v := range sf.Parts {
-		log.Infof("blk=%s, col=%d, value=%v", k.ID.BlockString(), k.Col, v)
-	}
+	// log.Infof("parts cnt %d", len(sf.Parts))
+	// for k, v := range sf.Parts {
+	// 	log.Infof("blk=%s, col=%d, value=%v", k.ID.BlockString(), k.Col, v)
+	// }
 }
 
 func (sf *SortedSegmentFile) initBlkPointers(blkId uint64, pos uint32) {
@@ -162,7 +162,6 @@ func (sf *SortedSegmentFile) initBlkPointers(blkId uint64, pos uint32) {
 	if err = binary.Read(&sf.File, binary.BigEndian, &cols); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	log.Infof("blk %d colcnt %d", blkId, cols)
 	headSize := 3 + 2*8*int(cols)
 	currOffset := headSize + int(offset)
 	for i := uint16(0); i < cols; i++ {
@@ -240,7 +239,6 @@ func (sf *SortedSegmentFile) PartSize(colIdx uint64, id common.ID, isOrigin bool
 		Col: colIdx,
 		ID:  id,
 	}
-	log.Infof("key id=%s, col=%d", id.BlockString(), colIdx)
 	pointer, ok := sf.Parts[key]
 	if !ok {
 		panic("logic error")
