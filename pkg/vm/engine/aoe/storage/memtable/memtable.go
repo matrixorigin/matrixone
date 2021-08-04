@@ -184,6 +184,7 @@ func (mt *MemTable) Flush() error {
 					if err = op.WaitDone(); err != nil {
 						mt.Opts.EventListener.BackgroundErrorCB(err)
 					}
+					op.Segment.Unref()
 				}
 			}(mt.TableData)
 		}
