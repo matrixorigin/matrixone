@@ -1,7 +1,9 @@
+// +build amd64
+
 #include "textflag.h"
 
 // func findAvx(x []uint64, y uint64) int
-TEXT ·findAvx(SB), NOSPLIT, $0-40
+TEXT ·findAvx2(SB), NOSPLIT, $0-40
 	MOVQ        x_base+0(FP), DI
 	MOVQ 		y+24(FP), AX
 	MOVD 		 AX, X0
