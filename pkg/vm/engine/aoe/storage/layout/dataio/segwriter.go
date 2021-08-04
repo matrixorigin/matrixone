@@ -2,9 +2,9 @@ package dataio
 
 import (
 	"bytes"
+	"encoding/binary"
 	"io"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -13,8 +13,7 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
-//  BlkCnt | indices | DataEndPos |  Blk0 Pos | Blk1 Pos | ... | BlkEndPos | Blk0 Data | ...
-//  uint32      ?        uint32      uint32
+//  BlkCnt | Blk0 Pos | Blk1 Pos | ... | BlkEndPos | Blk0 Data | ...
 type SegmentWriter struct {
 	data         []*batch.Batch
 	meta         *md.Segment
@@ -115,6 +114,15 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	// Write Header
 	// Write Indice
 	// Write Blocks
+	err := binary.Write(w, binary.BigEndian, uint32(len(data)))
+	if err != nil {
+		return err
+	}
+	for _, blk := range meta.Blocks {
+		if err = binary.Write(w, binary.BigEndian, blk.ID); err != nil {
+			return err
+		}
+	}
 	startPos, err := w.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
@@ -141,9 +149,9 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	}
 	var buf bytes.Buffer
 	for _, pos := range blkMetaPos {
-		buf.Write(encoding.EncodeUint32(pos))
+		binary.Write(&buf, binary.BigEndian, pos)
 	}
-	buf.Write(encoding.EncodeUint32(uint32(blkEndPos)))
+	binary.Write(&buf, binary.BigEndian, uint32(blkEndPos))
 	if _, err = w.WriteAt(buf.Bytes(), startPos); err != nil {
 		return err
 	}

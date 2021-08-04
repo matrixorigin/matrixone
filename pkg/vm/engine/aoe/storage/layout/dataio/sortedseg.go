@@ -1,10 +1,13 @@
 package dataio
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"os"
 	"path/filepath"
 	"sync"
@@ -100,7 +103,86 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 }
 
 func (sf *SortedSegmentFile) initPointers() {
-	// TODO
+	blkCnt := uint32(0)
+	err := binary.Read(&sf.File, binary.BigEndian, &blkCnt)
+	if err != nil {
+		panic(err)
+	}
+	// log.Infof("blkCnt=%d", blkCnt)
+	blkIds := make([]uint64, blkCnt)
+	blksPos := make([]uint32, blkCnt)
+	for i := 0; i < int(blkCnt); i++ {
+		if err = binary.Read(&sf.File, binary.BigEndian, &blkIds[i]); err != nil {
+			panic(err)
+		}
+		// log.Infof("blkId=%d", blkIds[i])
+	}
+	for i := 0; i < int(blkCnt); i++ {
+		if err = binary.Read(&sf.File, binary.BigEndian, &blksPos[i]); err != nil {
+			panic(err)
+		}
+		// log.Infof("blkPos=%d", blksPos[i])
+	}
+	var endPos uint32
+	if err = binary.Read(&sf.File, binary.BigEndian, &endPos); err != nil {
+		panic(err)
+	}
+	// log.Infof("endPos=%d", endPos)
+	for i := 0; i < int(blkCnt); i++ {
+		sf.initBlkPointers(blkIds[i], blksPos[i])
+	}
+	log.Infof("parts cnt %d", len(sf.Parts))
+	for k, v := range sf.Parts {
+		log.Infof("blk=%s, col=%d, value=%v", k.ID.BlockString(), k.Col, v)
+	}
+}
+
+func (sf *SortedSegmentFile) initBlkPointers(blkId uint64, pos uint32) {
+	id := sf.ID.AsBlockID()
+	id.BlockID = blkId
+	_, err := sf.File.Seek(int64(pos), io.SeekStart)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = index.DefaultRWHelper.ReadIndicesMeta(sf.File)
+	if err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+
+	var (
+		cols uint16
+		algo uint8
+	)
+	offset, _ := sf.File.Seek(0, io.SeekCurrent)
+	if err = binary.Read(&sf.File, binary.BigEndian, &algo); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	if err = binary.Read(&sf.File, binary.BigEndian, &cols); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	log.Infof("blk %d colcnt %d", blkId, cols)
+	headSize := 3 + 2*8*int(cols)
+	currOffset := headSize + int(offset)
+	for i := uint16(0); i < cols; i++ {
+		key := base.Key{
+			Col: uint64(i),
+			ID:  id.AsBlockID(),
+		}
+		key.ID.Idx = i
+		sf.Parts[key] = &base.Pointer{}
+		err = binary.Read(&sf.File, binary.BigEndian, &sf.Parts[key].Len)
+		if err != nil {
+			panic(fmt.Sprintf("unexpect error: %s", err))
+		}
+		err = binary.Read(&sf.File, binary.BigEndian, &sf.Parts[key].OriginLen)
+		if err != nil {
+			panic(fmt.Sprintf("unexpect error: %s", err))
+		}
+		// log.Infof("(Len, OriginLen, Algo)=(%d, %d, %d)", sf.Parts[key].Len, sf.Parts[key].OriginLen, algo)
+		sf.Parts[key].Offset = int64(currOffset)
+		currOffset += int(sf.Parts[key].Len)
+	}
 }
 
 func (sf *SortedSegmentFile) GetFileType() common.FileType {
@@ -157,6 +239,7 @@ func (sf *SortedSegmentFile) PartSize(colIdx uint64, id common.ID, isOrigin bool
 		Col: colIdx,
 		ID:  id,
 	}
+	log.Infof("key id=%s, col=%d", id.BlockString(), colIdx)
 	pointer, ok := sf.Parts[key]
 	if !ok {
 		panic("logic error")

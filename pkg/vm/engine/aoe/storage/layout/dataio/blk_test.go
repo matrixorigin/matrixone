@@ -138,7 +138,22 @@ func TestSegmentWriter(t *testing.T) {
 		assert.Nil(t, err)
 		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
 	}
-	writer := NewSegmentWriter(batches, segment, "/tmp/testwriter")
+	path := "/tmp/testwriter"
+	writer := NewSegmentWriter(batches, segment, path)
 	err = writer.Execute()
 	assert.Nil(t, err)
+	// name := writer.GetFileName()
+	segFile := NewSortedSegmentFile(path, *segment.AsCommonID())
+	assert.NotNil(t, segFile)
+	col0Blk := segment.Blocks[0].AsCommonID().AsBlockID()
+	col1Blk := col0Blk
+	col1Blk.Idx = uint16(1)
+	col0Vf := segFile.MakeVirtualPartFile(&col0Blk)
+	col1Vf := segFile.MakeVirtualPartFile(&col1Blk)
+	assert.NotNil(t, col0Vf)
+	assert.NotNil(t, col1Vf)
+	stat0 := col0Vf.Stat()
+	stat1 := col1Vf.Stat()
+	t.Log(stat0.Name())
+	t.Log(stat1.Name())
 }
