@@ -35,6 +35,10 @@ func (r *localRoRelation) Size(attr string) int64 {
 	return r.impl.Size(attr)
 }
 
+func (r *localRoRelation) Close() {
+	r.impl.Close()
+}
+
 func (r *localRoRelation) Index() []*engine.IndexTableDef {
 	return r.impl.Index()
 }
