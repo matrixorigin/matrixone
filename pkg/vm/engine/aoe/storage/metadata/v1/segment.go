@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	// log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -106,7 +106,7 @@ func (seg *Segment) CreateBlock() (blk *Block, err error) {
 }
 
 func (seg *Segment) String() string {
-	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d]", seg.Table.ID, seg.ID, seg.ActiveBlk)
+	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d][State=%d]", seg.Table.ID, seg.ID, seg.ActiveBlk, seg.DataState)
 	s += "["
 	pos := 0
 	for _, blk := range seg.Blocks {
@@ -192,6 +192,7 @@ func (seg *Segment) TryClose() bool {
 				return false
 			}
 		}
+		seg.DataState = CLOSED
 		return true
 	}
 	return false

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/mempool"
@@ -225,8 +226,11 @@ func TestLogIndex(t *testing.T) {
 		})
 		assert.Nil(t, err)
 	}
-
-	time.Sleep(time.Duration(400) * time.Millisecond)
+	if invariants.RaceEnabled {
+		time.Sleep(time.Duration(800) * time.Millisecond)
+	} else {
+		time.Sleep(time.Duration(200) * time.Millisecond)
+	}
 
 	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Nil(t, err)

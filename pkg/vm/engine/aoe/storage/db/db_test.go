@@ -146,7 +146,7 @@ func TestAppend(t *testing.T) {
 	}
 	err = inst.Append(appendCtx)
 	assert.NotNil(t, err)
-	insertCnt := 4
+	insertCnt := 8
 	appendCtx.TableName = tblMeta.Schema.Name
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(appendCtx)
