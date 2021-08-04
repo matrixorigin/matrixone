@@ -50,7 +50,7 @@ func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.
 	return segment.New(si.Id, r.db, proc, r.mp)
 }
 
-func (r *relation) Write(bat *batch.Batch) error {
+func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	seg := key(int(r.md.Segs), r.id)
 	if n := len(bat.Sels); n > 0 {
 		if err := r.db.Set(seg, bat.SelsData[mempool.CountSize:mempool.CountSize+n*8]); err != nil {
@@ -90,11 +90,11 @@ func (r *relation) Write(bat *batch.Batch) error {
 	return nil
 }
 
-func (r *relation) AddAttribute(_ engine.TableDef) error {
+func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) DelAttribute(_ engine.TableDef) error {
+func (r *relation) DelAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }
 

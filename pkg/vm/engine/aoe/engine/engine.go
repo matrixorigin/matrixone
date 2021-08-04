@@ -40,12 +40,12 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 	return ni
 }
 
-func (e *aoeEngine) Delete(name string) error {
+func (e *aoeEngine) Delete(_ uint64, name string) error {
 	err := e.catalog.DelDatabase(name)
 	return err
 }
 
-func (e *aoeEngine) Create(name string, typ int) error {
+func (e *aoeEngine) Create(_ uint64, name string, typ int) error {
 	_, err := e.catalog.CreateDatabase(name, typ)
 	return err
 }

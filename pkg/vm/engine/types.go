@@ -98,10 +98,10 @@ type Relation interface {
 
 	Segment(SegmentInfo, *process.Process) Segment
 
-	Write(*batch.Batch) error
+	Write(uint64, *batch.Batch) error
 
-	AddAttribute(TableDef) error
-	DelAttribute(TableDef) error
+	AddAttribute(uint64, TableDef) error
+	DelAttribute(uint64, TableDef) error
 }
 
 type Filter interface {
@@ -158,13 +158,13 @@ type Database interface {
 	Relations() []string
 	Relation(string) (Relation, error)
 
-	Delete(string) error
-	Create(string, []TableDef, *PartitionBy, *DistributionBy, string) error // Create Table - (name, table define, partition define, distribution define, comment)
+	Delete(uint64, string) error
+	Create(uint64, string, []TableDef, *PartitionBy, *DistributionBy, string) error // Create Table - (name, table define, partition define, distribution define, comment)
 }
 
 type Engine interface {
-	Delete(string) error
-	Create(string, int) error // Create Database - (name, engine type)
+	Delete(uint64, string) error
+	Create(uint64, string, int) error // Create Database - (name, engine type)
 
 	Databases() []string
 	Database(string) (Database, error)
