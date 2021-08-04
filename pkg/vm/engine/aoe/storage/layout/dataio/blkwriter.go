@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"matrixone/pkg/compress"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
@@ -19,6 +20,7 @@ import (
 
 type BlkDataSerializer func(*os.File, []*vector.Vector, *md.Block) error
 type BlkIndexSerializer func(*os.File, []*vector.Vector, *md.Block) error
+type FileGetter func(string, *md.Block) (*os.File, error)
 
 var (
 	defaultDataSerializer = flushWithLz4Compression
@@ -29,8 +31,9 @@ type BlockWriter struct {
 	data       []*vector.Vector
 	meta       *md.Block
 	dir        string
+	embbed     bool
 	fileHandle *os.File
-	fileGetter func(string, *md.Block) (*os.File, error)
+	fileGetter FileGetter
 
 	// preprocessor preprocess data before writing, such as SORT
 	preprocessor func([]*vector.Vector, *md.Block) error
@@ -52,6 +55,19 @@ func NewBlockWriter(data []*vector.Vector, meta *md.Block, dir string) *BlockWri
 		dir:  dir,
 	}
 	w.fileGetter = w.createIOWriter
+	w.preprocessor = w.defaultPreprocessor
+	w.indexSerializer = w.flushIndices
+	w.dataSerializer = defaultDataSerializer
+	return w
+}
+
+func NewEmbbedBlockWriter(bat *batch.Batch, meta *md.Block, getter FileGetter) *BlockWriter {
+	w := &BlockWriter{
+		data:       bat.Vecs,
+		meta:       meta,
+		fileGetter: getter,
+		embbed:     true,
+	}
 	w.preprocessor = w.defaultPreprocessor
 	w.indexSerializer = w.flushIndices
 	w.dataSerializer = defaultDataSerializer
@@ -143,7 +159,9 @@ func (bw *BlockWriter) Execute() error {
 		return err
 	}
 	bw.fileHandle = w
-	defer w.Close()
+	if !bw.embbed {
+		defer w.Close()
+	}
 	if bw.preExecutor != nil {
 		bw.preExecutor()
 	}
