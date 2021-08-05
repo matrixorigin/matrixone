@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"matrixone/pkg/client"
-	"matrixone/pkg/config"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/compile"
@@ -48,7 +47,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		fmt.Printf("bat: %v\n", bat)
 	}
 
-	var choose bool = !config.GlobalSystemVariables.GetSendRow()
+	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
+	rowGroupSize = client.MaxInt64(rowGroupSize,1)
+
+	var choose bool = !ses.Pu.SV.GetSendRow()
 	if choose {
 		goID := client.GetRoutineId()
 
@@ -63,333 +65,354 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		mrs.Columns = ses.Mrs.Columns
 		mrs.Name2Index = ses.Mrs.Name2Index
 
-		//one row
-		row := make([]interface{}, len(bat.Vecs))
-		mrs.Data = make([][]interface{}, 1)
-		mrs.Data[0] = row
+		//group row
+		mrs.Data = make([][]interface{}, rowGroupSize)
+		for i := int64(0); i < rowGroupSize; i++ {
+			mrs.Data[i] = make([]interface{}, len(bat.Vecs))
+		}
 
 		if n := len(bat.Sels); n == 0 {
 			n = bat.Vecs[0].Length()
-			for j := int64(0); j < int64(n); j++ { //row index
-				for i, vec := range bat.Vecs { //col index
-					switch vec.Typ.Oid { //get col
-					case types.T_int8:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int8)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
+			groupCnt := int64(n) / rowGroupSize + 1
+			for g := int64(0); g < groupCnt; g++ {//group id
+				begin := g * rowGroupSize
+				end := client.MinInt64((g + 1) * rowGroupSize,int64(n))
+
+				r := uint64(0)
+				for j := int64(begin); j < int64(end); j++ { //row index
+					row := mrs.Data[r]
+					r++
+					for i, vec := range bat.Vecs { //col index
+						switch vec.Typ.Oid { //get col
+						case types.T_int8:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]int8)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_uint8:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint8)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]int8)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_uint8:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]uint8)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_int16:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int16)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]uint8)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_int16:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]int16)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_uint16:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint16)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]int16)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_uint16:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]uint16)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_int32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int32)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]uint16)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_int32:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]int32)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_uint32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint32)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]int32)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_uint32:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]uint32)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_int64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int64)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]uint32)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_int64:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]int64)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_uint64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint64)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]int64)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_uint64:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]uint64)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_float32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]float32)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]uint64)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_float32:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]float32)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_float64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]float64)
-							row[i] = vs[j]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]float32)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_float64:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]float64)
 								row[i] = vs[j]
-							}
-						}
-					case types.T_char:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(j)
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]float64)
+									row[i] = vs[j]
+								}
+							}
+						case types.T_char:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(j)
-							}
-						}
-					case types.T_varchar:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(j)
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.(*types.Bytes)
+									row[i] = vs.Get(j)
+								}
+							}
+						case types.T_varchar:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(j)
+							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.(*types.Bytes)
+									row[i] = vs.Get(j)
+								}
 							}
+						default:
+							fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+							return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 						}
-					default:
-						fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
-						return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 					}
 				}
 
-				//	fmt.Printf("row -+> %s \n", row[0])
+				fmt.Printf("row group -+> %v \n", mrs.Data[:r])
 
-				//send row
-				if err := proto.SendResultSetTextRow(mrs, 0); err != nil {
+				//send group of row
+				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
 					//return err
 					fmt.Printf("getDataFromPipeline error %v \n", err)
 					return err
 				}
 			}
+
 		} else {
-			for j := 0; j < n; j++ { //row index
-				for i, vec := range bat.Vecs { //col index
-					switch vec.Typ.Oid { //get col
-					case types.T_int8:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int8)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
-							} else {
+			n = bat.Vecs[0].Length()
+			groupCnt := int64(n) / rowGroupSize + 1
+			for g := int64(0); g < groupCnt;g++{//group id
+				begin := g * rowGroupSize
+				end := client.MinInt64((g + 1) * rowGroupSize,int64(n))
+
+				r := uint64(0)
+				for j := int64(begin); j < int64(end); j++ { //row index
+					row := mrs.Data[r]
+					r++
+					for i, vec := range bat.Vecs { //col index
+						switch vec.Typ.Oid { //get col
+						case types.T_int8:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]int8)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_uint8:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint8)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]int8)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_uint8:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]uint8)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_int16:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int16)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]uint8)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_int16:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]int16)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_uint16:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint16)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]int16)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_uint16:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]uint16)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_int32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int32)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]uint16)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_int32:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]int32)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_uint32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint32)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]int32)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_uint32:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]uint32)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_int64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]int64)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]uint32)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_int64:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]int64)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_uint64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]uint64)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]int64)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_uint64:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]uint64)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_float32:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]float32)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]uint64)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_float32:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]float32)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_float64:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.([]float64)
-							row[i] = vs[bat.Sels[j]]
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]float32)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_float64:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.([]float64)
 								row[i] = vs[bat.Sels[j]]
-							}
-						}
-					case types.T_char:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(bat.Sels[j])
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.([]float64)
+									row[i] = vs[bat.Sels[j]]
+								}
+							}
+						case types.T_char:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(bat.Sels[j])
-							}
-						}
-					case types.T_varchar:
-						if !vec.Nsp.Any() { //all data in this column are not null
-							vs := vec.Col.(*types.Bytes)
-							row[i] = vs.Get(bat.Sels[j])
-						} else {
-							if vec.Nsp.Contains(uint64(j)) { //is null
-								row[i] = nil
 							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.(*types.Bytes)
+									row[i] = vs.Get(bat.Sels[j])
+								}
+							}
+						case types.T_varchar:
+							if !vec.Nsp.Any() { //all data in this column are not null
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(bat.Sels[j])
+							} else {
+								if vec.Nsp.Contains(uint64(j)) { //is null
+									row[i] = nil
+								} else {
+									vs := vec.Col.(*types.Bytes)
+									row[i] = vs.Get(bat.Sels[j])
+								}
 							}
+						default:
+							fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+							return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 						}
-					default:
-						fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
-						return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 					}
 				}
 
-				fmt.Printf("row -*> %v \n", row)
+				fmt.Printf("row group -*> %v \n",mrs.Data[:r])
 
 				//send row
-				if err := proto.SendResultSetTextRow(mrs, 0); err != nil {
+				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
 					//return err
 					fmt.Printf("getDataFromPipeline error %v \n", err)
 					return err
@@ -819,9 +842,9 @@ func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
 
 	//TODO: check meta data
 	var err error = nil
-	if _, err = config.StorageEngine.Database(name); err != nil {
+	if _, err = ses.Pu.StorageEngine.Database(name); err != nil {
 		//echo client. no such database
-		return client.NewMysqlError(client.ER_BAD_DB_ERROR, name)
+		return client.NewMysqlError(client.ER_BAD_DB_ERROR,name)
 	}
 	oldname := ses.Dbname
 	ses.Dbname = name
@@ -851,21 +874,30 @@ func (mce *MysqlCmdExecutor) handleUse(use *tree.Use) error {
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.Routine.GetSession()
 	proto := mce.Routine.GetClientProtocol().(*client.MysqlClientProtocol)
+	pdHook := mce.Routine.GetPDCallback().(*client.PDCallbackImpl)
+	statement_count := uint64(1)
+
+	//pin the epoch with 1
+	epoch,_ := pdHook.IncQueryCountAtCurrentEpoch(statement_count)
+	defer func() {
+		pdHook.DecQueryCountAtEpoch(epoch,statement_count)
+	}()
 
 	proc := process.New(ses.GuestMmu, ses.Mempool)
 	proc.Id = mce.getNextProcessId()
-	proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
-	proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
-	proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
+	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
+	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
+	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
+	proc.Epoch = epoch
 
-	comp := compile.New(ses.Dbname, sql, ses.User, config.StorageEngine, config.ClusterNodes, proc)
+	comp := compile.New(ses.Dbname, sql, ses.User, ses.Pu.StorageEngine, ses.Pu.ClusterNodes, proc)
 	execs, err := comp.Compile()
 	if err != nil {
 		return err
 	}
 
-	var choose bool = !config.GlobalSystemVariables.GetSendRow()
+	var choose bool = !ses.Pu.SV.GetSendRow()
 
 	ses.Mrs = &client.MysqlResultSet{}
 
@@ -875,12 +907,17 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 	for _, exec := range execs {
 		stmt := exec.Statement()
+
+		//temp try 0 epoch
+		pdHook.IncQueryCountAtEpoch(epoch,1)
+		statement_count++
+
 		//check database
 		if ses.Dbname == "" {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
-			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus:
+			case *tree.ShowDatabases,*tree.CreateDatabase,*tree.ShowWarnings,*tree.ShowErrors,
+			*tree.ShowStatus:
 			default:
 				return client.NewMysqlError(client.ER_NO_DB_ERROR)
 			}
@@ -992,7 +1029,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					Producing the data row and sending the data row
 				*/
 
-				if er := exec.Run(0); er != nil {
+				if er := exec.Run(epoch); er != nil {
 					return er
 				}
 
@@ -1047,7 +1084,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					ses.Mrs.AddColumn(col)
 				}
 
-				if er := exec.Run(0); er != nil {
+				if er := exec.Run(epoch); er != nil {
 					return er
 				}
 
@@ -1060,21 +1097,32 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
-			*tree.CreateIndex, *tree.DropIndex,
+			*tree.CreateIndex,*tree.DropIndex,
 			*tree.Insert, *tree.Delete, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
 			*tree.Load,
-			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
-			*tree.CreateRole, *tree.DropRole,
-			*tree.Revoke, *tree.Grant,
-			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
+			*tree.CreateUser,*tree.DropUser,*tree.AlterUser,
+			*tree.CreateRole,*tree.DropRole,
+			*tree.Revoke,*tree.Grant,
+			*tree.SetDefaultRole,*tree.SetRole,*tree.SetPassword:
+
 			/*
 				Step 1: Start
 			*/
 
-			if er := exec.Run(0); er != nil {
+			if er := exec.Run(epoch); er != nil {
 				return er
+			}
+
+			//record ddl drop xxx after the success
+			switch stmt.(type) {
+			case *tree.DropTable:
+				//test ddl
+				pdHook.AddMeta(epoch,client.NewMeta(epoch,client.META_TYPE_TABLE,1))
+			case *tree.DropDatabase:
+				//test ddl
+				pdHook.AddMeta(epoch,client.NewMeta(epoch,client.META_TYPE_DATABASE,2))
 			}
 
 			/*
