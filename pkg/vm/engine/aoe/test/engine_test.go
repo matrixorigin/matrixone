@@ -24,12 +24,9 @@ import (
 	"time"
 )
 
-
 const (
-	testDBName = "db1"
+	testDBName          = "db1"
 	testTableNamePrefix = "test-table-"
-	colCnt = 4
-	batchCnt = 1
 )
 
 func TestAOEEngine(t *testing.T) {
@@ -38,7 +35,7 @@ func TestAOEEngine(t *testing.T) {
 	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
-		opts     := &e.Options{}
+		opts := &e.Options{}
 		mdCfg := &md.Configuration{
 			Dir:              path,
 			SegmentMaxBlocks: blockCntPerSegment,
@@ -70,13 +67,13 @@ func TestAOEEngine(t *testing.T) {
 	catalog := catalog2.DefaultCatalog(c.Applications[0])
 	aoeEngine := engine.Mock(&catalog)
 
-	err = aoeEngine.Create(testDBName, 0)
+	err = aoeEngine.Create(0, testDBName, 0)
 	require.NoError(t, err)
 
 	dbs := aoeEngine.Databases()
 	require.Equal(t, 1, len(dbs))
 
-	err = aoeEngine.Delete(testDBName)
+	err = aoeEngine.Delete(1, testDBName)
 	require.NoError(t, err)
 
 	dbs = aoeEngine.Databases()
@@ -85,7 +82,7 @@ func TestAOEEngine(t *testing.T) {
 	_, err = aoeEngine.Database(testDBName)
 	require.NotNil(t, err)
 
-	err = aoeEngine.Create(testDBName, 0)
+	err = aoeEngine.Create(2, testDBName, 0)
 	require.NoError(t, err)
 	db, err := aoeEngine.Database(testDBName)
 	require.NoError(t, err)
@@ -96,7 +93,7 @@ func TestAOEEngine(t *testing.T) {
 	mockTbl := md.MockTableInfo(colCnt)
 	mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, 0)
 	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
-	err = db.Create(mockTbl.Name, defs, pdef, nil, comment)
+	err = db.Create(3, mockTbl.Name, defs, pdef, nil, comment)
 	require.NoError(t, err)
 
 	tbls = db.Relations()
@@ -111,29 +108,29 @@ func TestAOEEngine(t *testing.T) {
 	for _, attr := range attrs {
 		typs = append(typs, attr.Type)
 	}
-	ibat := chunk.MockBatch(typs, batchInsertRows)
+	ibat := chunk.MockBatch(typs, blockRows)
 	var buf bytes.Buffer
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)
 	stdLog.Printf("size of batch is  %d", buf.Len())
 
-	for i:=0; i<batchCnt; i++ {
-		err = tb.Write(ibat)
+	for i := 0; i < batchCnt; i++ {
+		err = tb.Write(4, ibat)
 		require.NoError(t, err)
 	}
 
-	err = db.Delete(mockTbl.Name)
+	err = db.Delete(5, mockTbl.Name)
 	require.NoError(t, err)
 
 	tbls = db.Relations()
 	require.Equal(t, 0, len(tbls))
 
 	//test multiple tables creating
-	for i := 0; i<19; i++ {
+	for i := 0; i < 19; i++ {
 		mockTbl := md.MockTableInfo(colCnt)
 		mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, i)
 		_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
-		err = db.Create(mockTbl.Name, defs, pdef, nil, comment)
+		err = db.Create(6, mockTbl.Name, defs, pdef, nil, comment)
 		//require.NoError(t, err)
 		if err != nil {
 			stdLog.Printf("create table %d failed, err is %v", i, err)
@@ -142,6 +139,6 @@ func TestAOEEngine(t *testing.T) {
 
 	tbls = db.Relations()
 	require.Equal(t, 19, len(tbls))
-	time.Sleep(3 * time.Second )
+	time.Sleep(3 * time.Second)
 
 }

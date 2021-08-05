@@ -27,7 +27,7 @@ func (h *aoeStorage) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, 
 	}
 	store := h.getStoreByGroup(shard.Group, shard.ID).(*daoe.Storage)
 	id, err := store.CreateTable(&t, dbi.TableOpCtx{
-		OpIndex: ctx.LogIndex(),
+		OpIndex:   ctx.LogIndex(),
 		TableName: customReq.Name,
 	})
 	if err != nil {
@@ -35,6 +35,26 @@ func (h *aoeStorage) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, 
 		return 0, 0, resp
 	}
 	writtenBytes := uint64(len(req.Key) + len(customReq.TableInfo))
+	changedBytes := int64(writtenBytes)
+	resp.Value = format.Uint64ToBytes(id)
+	return writtenBytes, changedBytes, resp
+}
+
+func (h *aoeStorage) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+	resp := pb.AcquireResponse()
+	customReq := &rpcpb.DropTabletRequest{}
+	protoc.MustUnmarshal(customReq, req.Cmd)
+
+	store := h.getStoreByGroup(shard.Group, shard.ID).(*daoe.Storage)
+	id, err := store.DropTable(dbi.DropTableCtx{
+		OpIndex:   ctx.LogIndex(),
+		TableName: customReq.Name,
+	})
+	if err != nil {
+		resp.Value = errorResp(err)
+		return 0, 0, resp
+	}
+	writtenBytes := uint64(len(req.Key) + len(customReq.Name))
 	changedBytes := int64(writtenBytes)
 	resp.Value = format.Uint64ToBytes(id)
 	return writtenBytes, changedBytes, resp
@@ -62,7 +82,7 @@ func (h *aoeStorage) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *aoeStorage) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
+func (h *aoeStorage) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.GetSegmentedIdRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -75,7 +95,7 @@ func (h *aoeStorage) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request
 	return resp, 0
 }
 
-func (h *aoeStorage) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
+func (h *aoeStorage) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.GetSegmentIdsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -86,7 +106,7 @@ func (h *aoeStorage) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request,
 	return resp, 0
 }
 
-func (h *aoeStorage) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
+func (h *aoeStorage) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.GetSnapshotRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -104,7 +124,7 @@ func (h *aoeStorage) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, c
 	return resp, 0
 }
 
-func (h *aoeStorage) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
+func (h *aoeStorage) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.TabletIDsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -117,7 +137,7 @@ func (h *aoeStorage) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 	return resp, 0
 }
 
-func (h *aoeStorage) tableNames(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64){
+func (h *aoeStorage) tableNames(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.TabletIDsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)

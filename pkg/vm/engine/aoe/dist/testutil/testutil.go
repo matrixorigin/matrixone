@@ -20,9 +20,8 @@ import (
 )
 
 var (
-	tmpDir    = "/data1/tmp/aoe-cluster-test/"
+	tmpDir = "/tmp/aoe-cluster-test/"
 )
-
 
 type TestCluster struct {
 	T            *testing.T
@@ -65,24 +64,24 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 			PreAllocatedGroupNum: 20,
 		}
 		cfg.CubeConfig = cConfig.Config{
-			DataPath: fmt.Sprintf("%s/node-%d", tmpDir, i),
-			RaftAddr: fmt.Sprintf("127.0.0.1:1000%d", i),
+			DataPath:   fmt.Sprintf("%s/node-%d", tmpDir, i),
+			RaftAddr:   fmt.Sprintf("127.0.0.1:1000%d", i),
 			ClientAddr: fmt.Sprintf("127.0.0.1:2000%d", i),
 			Replication: cConfig.ReplicationConfig{
 				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 100),
 				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
 			},
 			Raft: cConfig.RaftConfig{
-				TickInterval: typeutil.NewDuration(time.Millisecond * 600),
+				TickInterval:  typeutil.NewDuration(time.Millisecond * 600),
 				MaxEntryBytes: 300 * 1024 * 1024,
 			},
 			Prophet: pConfig.Config{
-				Name: fmt.Sprintf("node-%d", i),
+				Name:        fmt.Sprintf("node-%d", i),
 				StorageNode: true,
-				RPCAddr: fmt.Sprintf("127.0.0.1:3000%d", i),
+				RPCAddr:     fmt.Sprintf("127.0.0.1:3000%d", i),
 				EmbedEtcd: pConfig.EmbedEtcdConfig{
 					ClientUrls: fmt.Sprintf("http://127.0.0.1:4000%d", i),
-					PeerUrls: fmt.Sprintf("http://127.0.0.1:5000%d", i),
+					PeerUrls:   fmt.Sprintf("http://127.0.0.1:5000%d", i),
 				},
 				Schedule: pConfig.ScheduleConfig{
 					EnableJointConsensus: true,

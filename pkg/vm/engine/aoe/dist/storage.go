@@ -70,7 +70,7 @@ type Storage interface {
 	GetSegmentIds(string, uint64) (adb.IDS, error)
 	GetSegmentedId([]string, uint64) (uint64, error)
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
-	DropTablet(string) (uint64, error)
+	DropTablet(string, uint64) (uint64, error)
 	TabletIDs() ([]uint64, error)
 	TabletNames(uint64) ([]string, error)
 	// Exec exec command
@@ -329,16 +329,30 @@ func (h *aoeStorage) ScanWithGroup(start []byte, end []byte, limit uint64, group
 			Limit: limit,
 		},
 	}
-	data, err := h.ExecWithGroup(req, group)
-	if err != nil {
-		return nil, err
-	}
 	var pairs [][]byte
-	err = json.Unmarshal(data, &pairs)
-	if err != nil {
-		return nil, err
+	var err error
+	var data []byte
+	i := 0
+	for {
+		i = i + 1
+		data, err = h.ExecWithGroup(req, group)
+		if data == nil || err != nil {
+			break
+		}
+		var kvs [][]byte
+		err = json.Unmarshal(data, &kvs)
+		if err != nil || kvs == nil || len(kvs) == 0 {
+			break
+		}
+		if len(kvs)%2 == 0 {
+			pairs = append(pairs, kvs...)
+			break
+		}
+
+		pairs = append(pairs, kvs[0:len(kvs)-1]...)
+		req.Scan.Start = raftstore.EncodeDataKey(uint64(group), kvs[len(kvs)-1])
 	}
-	return pairs, nil
+	return pairs, err
 }
 
 func (h *aoeStorage) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
@@ -532,8 +546,9 @@ func (h *aoeStorage) CreateTablet(name string, toShard uint64, tbl *aoe.TableInf
 	return nil
 }
 
-func (h *aoeStorage) DropTablet(name string) (id uint64, err error) {
+func (h *aoeStorage) DropTablet(name string, toShard uint64) (id uint64, err error) {
 	req := pb.Request{
+		Shard: toShard,
 		Type:  pb.DropTablet,
 		Group: pb.AOEGroup,
 		DropTablet: pb.DropTabletRequest{

@@ -13,17 +13,17 @@ func (db *database) Type() int {
 	return db.typ
 }
 
-func (db *database) Delete(_ uint64, name string) error {
-	_, err := db.catalog.DropTable(db.id, name)
+func (db *database) Delete(epoch uint64, name string) error {
+	_, err := db.catalog.DropTable(epoch, db.id, name)
 	return err
 }
 
-func (db *database) Create(_ uint64, name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
+func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
 	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
 	if err != nil {
 		return err
 	}
-	_, err = db.catalog.CreateTable(db.id, tbl)
+	_, err = db.catalog.CreateTable(epoch, db.id, tbl)
 	return err
 }
 

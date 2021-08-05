@@ -1,6 +1,7 @@
 package test
 
 import (
+	"fmt"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
@@ -48,14 +49,13 @@ func TestCatalog(t *testing.T) {
 	catalog := catalog2.DefaultCatalog(c.Applications[0])
 	//testDBDDL(t, catalog)
 	testTableDDL(t, catalog)
-
 }
 
 func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	tbs, err := c.GetTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
 
-	dbid, err := c.CreateDatabase(dbName, engine.AOE)
+	dbid, err := c.CreateDatabase(0, dbName, engine.AOE)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
@@ -63,12 +63,11 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 
-
 	colCnt := 4
 	t1 := md.MockTableInfo(colCnt)
 	t1.Name = "t1"
 
-	tid, err := c.CreateTable(dbid, *t1)
+	tid, err := c.CreateTable(1, dbid, *t1)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), tid)
 
@@ -79,51 +78,31 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 
 	t2 := md.MockTableInfo(colCnt)
 	t2.Name = "t2"
-	_, err = c.CreateTable(dbid, *t2)
+	_, err = c.CreateTable(2, dbid, *t2)
 	require.NoError(t, err)
 
 	tbls, err := c.GetTables(dbid)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(tbls))
 
-	err = c.DelDatabase(dbName)
+	err = c.DelDatabase(3, dbName)
 	require.NoError(t, err)
 
 	dbs, err := c.GetDBs()
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 
-	deletedTbls, err := c.GetMarkedDeletedTables(0)
+	v, err := c.Store.Get([]byte("123"))
 	require.NoError(t, err)
-	require.Equal(t, 2, len(deletedTbls))
+	println(v)
 
-
-}
-
-
-func testDBDDL(t *testing.T, c catalog2.Catalog) {
-	dbs, err := c.GetDBs()
+	kvs, err := c.Store.Scan([]byte("/DeletedTableQueue/"), []byte("/DeletedTableQueue/10/"), 0)
 	require.NoError(t, err)
-	require.Nil(t, dbs)
+	for i := 0; i < len(kvs); i += 2 {
+		fmt.Printf("%s, %s\n", string(kvs[i]), string(kvs[i+1]))
+	}
 
-	id, err := c.CreateDatabase(dbName, engine.AOE)
+	cnt, err := c.RemoveDeletedTable(10)
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), id)
-
-	id, err = c.CreateDatabase(dbName, engine.AOE)
-	require.Equal(t, catalog2.ErrDBCreateExists, err)
-
-	dbs, err = c.GetDBs()
-	require.NoError(t, err)
-	require.Equal(t, 1, len(dbs))
-
-	db, err := c.GetDB(dbName)
-	require.NoError(t, err)
-	require.Equal(t, dbName, db.Name)
-
-	err = c.DelDatabase(dbName)
-	require.NoError(t, err)
-
-	db, err = c.GetDB(dbName)
-	require.Error(t, catalog2.ErrDBNotExists, err)
+	require.Equal(t, 2, cnt)
 }
