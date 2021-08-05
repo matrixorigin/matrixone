@@ -2,13 +2,13 @@ package dist
 
 import (
 	"encoding/json"
-	"github.com/fagongzi/util/format"
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"matrixone/pkg/sql/protocol"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
@@ -36,7 +36,7 @@ func (h *aoeStorage) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, 
 	}
 	writtenBytes := uint64(len(req.Key) + len(customReq.TableInfo))
 	changedBytes := int64(writtenBytes)
-	resp.Value = format.Uint64ToBytes(id)
+	resp.Value = codec.Uint642Bytes(id)
 	return writtenBytes, changedBytes, resp
 }
 
@@ -56,7 +56,7 @@ func (h *aoeStorage) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 	}
 	writtenBytes := uint64(len(req.Key) + len(customReq.Name))
 	changedBytes := int64(writtenBytes)
-	resp.Value = format.Uint64ToBytes(id)
+	resp.Value = codec.Uint642Bytes(id)
 	return writtenBytes, changedBytes, resp
 }
 
@@ -91,7 +91,7 @@ func (h *aoeStorage) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request
 		resp.Value = errorResp(err)
 		return resp, 500
 	}
-	resp.Value = format.UInt64ToString(rsp)
+	resp.Value = codec.Uint642Bytes(rsp)
 	return resp, 0
 }
 

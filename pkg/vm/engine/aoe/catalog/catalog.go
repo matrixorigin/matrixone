@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/cockroachdb/errors"
-	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
@@ -51,7 +51,7 @@ func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (uint64, 
 	if err != nil {
 		return 0, err
 	}
-	if err = c.Store.Set(c.dbIDKey(dbName), format.Uint64ToBytes(id)); err != nil {
+	if err = c.Store.Set(c.dbIDKey(dbName), codec.Uint642Bytes(id)); err != nil {
 		return 0, err
 	}
 	info := aoe.SchemaInfo{
@@ -121,18 +121,13 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 	if err != nil {
 		return 0, err
 	}
-	err = c.Store.Set(c.tableIDKey(dbId, tbl.Name), format.Uint64ToBytes(tbl.Id))
+	err = c.Store.Set(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id))
 	if err != nil {
 		return 0, ErrTableCreateFailed
 	}
 	tbl.Epoch = epoch
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
-		rkey := c.routeKey(dbId, tbl.Id, shardId)
-		if err := c.Store.CreateTablet(fmt.Sprintf("%d#%d", tbl.Id, shardId), shardId, &tbl); err != nil {
-			return 0, ErrTableCreateFailed
-		}
-		if c.Store.Set(rkey, []byte(tbl.Name)) != nil {
-			//TODO: remove shard's lock
+		if err := c.Store.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
 			return 0, ErrTableCreateFailed
 		}
 		tbl.State = aoe.StatePublic
@@ -256,7 +251,7 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 		}
 		var tablets []aoe.TabletInfo
 		for _, shardId := range shardIds {
-			if sid, err := format.ParseStrUInt64(string(shardId[len(c.routePrefix(dbId, tb.Id)):])); err != nil {
+			if sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(dbId, tb.Id)):]); err != nil {
 				stdLog.Printf("convert shardid failed, %v", err)
 				continue
 			} else {
@@ -281,7 +276,6 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 		stdLog.Printf("scan error, %v", err)
 		return cnt, err
 	}
-	println("QQQQQ, ", len(rsp))
 	for i := 1; i < len(rsp); i += 2 {
 		if tbl, err := helper.DecodeTable(rsp[i]); err != nil {
 			stdLog.Printf("Decode err for table info, %v, %v", err, rsp[i])
@@ -294,7 +288,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 			}
 			success := true
 			for _, shardId := range shardIds {
-				if sid, err := format.ParseStrUInt64(string(shardId)); err != nil {
+				if sid, err := codec.Bytes2Uint64(shardId); err != nil {
 					stdLog.Printf("convert shardid failed, %v", err)
 					success = false
 					break
@@ -308,9 +302,14 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 				}
 			}
 			if success {
+				x, err := c.Store.Get(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id))
+				stdLog.Printf("[QSQ_DEBUG]get data before remove, %v, %v", x, err)
 				if c.Store.Delete(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id)) != nil {
 					stdLog.Printf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
 				} else {
+					x, err := c.Store.Get(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id))
+					stdLog.Printf("[QSQ_DEBUG]get data after remove, %v, %v", x, err)
+
 					cnt++
 				}
 			}
@@ -336,7 +335,7 @@ func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 	if value, err := c.Store.Get(c.dbIDKey(dbName)); err != nil || value == nil {
 		return nil, nil
 	} else {
-		id := format.MustBytesToUint64(value)
+		id, _ := codec.Bytes2Uint64(value)
 		db, err := c.checkDBExists(id)
 		if err == ErrDBNotExists {
 			return nil, nil
@@ -362,7 +361,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 	if value, err := c.Store.Get(c.tableIDKey(dbId, tableName)); err != nil || value == nil {
 		return nil, nil
 	} else {
-		id := format.MustBytesToUint64(value)
+		id, _ := codec.Bytes2Uint64(value)
 		tb, err := c.checkTableExists(dbId, id)
 		if err == ErrTableNotExists {
 			return nil, nil
@@ -381,37 +380,48 @@ func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	return id, nil
 }
 func (c *Catalog) dbIDKey(dbName string) []byte {
-	return []byte(fmt.Sprintf("%s/%d/%s/%s", cPrefix, defaultCatalogId, cDBIDPrefix, dbName))
+	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBIDPrefix, dbName)
+	//return []byte(fmt.Sprintf("%s/%d/%s/%s", cPrefix, defaultCatalogId, cDBIDPrefix, dbName))
 }
 func (c *Catalog) dbKey(id uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%d/%s/%d", cPrefix, defaultCatalogId, cDBPrefix, id))
+	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBPrefix, id)
+	//return []byte(fmt.Sprintf("%s/%d/%s/%d", cPrefix, defaultCatalogId, cDBPrefix, id))
 }
 func (c *Catalog) dbPrefix() []byte {
-	return []byte(fmt.Sprintf("%s/%d/%s", cPrefix, defaultCatalogId, cDBPrefix))
+	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBPrefix)
+	//return []byte(fmt.Sprintf("%s/%d/%s", cPrefix, defaultCatalogId, cDBPrefix))
 }
 func (c *Catalog) tableIDKey(dbId uint64, tableName string) []byte {
-	return []byte(fmt.Sprintf("%s/%d/%s/%d/%s", cPrefix, defaultCatalogId, cTableIDPrefix, dbId, tableName))
+	return codec.EncodeKey(cPrefix, defaultCatalogId, cTableIDPrefix, dbId, tableName)
+	//return []byte(fmt.Sprintf("%s/%d/%s/%d/%s", cPrefix, defaultCatalogId, cTableIDPrefix, dbId, tableName))
 }
 func (c *Catalog) tableKey(dbId, tId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d", cPrefix, defaultCatalogId, cTablePrefix, dbId, tId))
+	return codec.EncodeKey(cPrefix, defaultCatalogId, cTablePrefix, dbId, tId)
+	//return []byte(fmt.Sprintf("%s/%d/%s/%d/%d", cPrefix, defaultCatalogId, cTablePrefix, dbId, tId))
 }
 func (c *Catalog) tablePrefix(dbId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%d/%s/%d", cPrefix, defaultCatalogId, cTablePrefix, dbId))
+	return codec.EncodeKey(cPrefix, defaultCatalogId, cTablePrefix, dbId)
+	//return []byte(fmt.Sprintf("%s/%d/%s/%d", cPrefix, defaultCatalogId, cTablePrefix, dbId))
 }
 func (c *Catalog) routeKey(dbId, tId, gId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/%d", cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId, gId))
+	return codec.EncodeKey(cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId, gId)
+	//return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/%d", cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId, gId))
 }
 func (c *Catalog) routePrefix(dbId, tId uint64) []byte {
-	return []byte(fmt.Sprintf("%s/%d/%s/%d/%d", cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId))
+	return codec.EncodeKey(cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId)
+	//return []byte(fmt.Sprintf("%s/%d/%s/%d/%d", cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId))
 }
 func (c *Catalog) deletedTableKey(epoch, dbId, tId uint64) []byte {
-	return []byte(fmt.Sprintf("/%s/%d/%d/%d", cDeletedTablePrefix, epoch, dbId, tId))
+	return codec.EncodeKey(cDeletedTablePrefix, epoch, dbId, tId)
+	//return []byte(fmt.Sprintf("/%s/%d/%d/%d", cDeletedTablePrefix, epoch, dbId, tId))
 }
 func (c *Catalog) deletedEpochPrefix(epoch uint64) []byte {
-	return []byte(fmt.Sprintf("/%s/%d/", cDeletedTablePrefix, epoch))
+	return codec.EncodeKey(cDeletedTablePrefix, epoch)
+	//return []byte(fmt.Sprintf("/%s/%d/", cDeletedTablePrefix, epoch))
 }
 func (c *Catalog) deletedPrefix() []byte {
-	return []byte(fmt.Sprintf("/%s/", cDeletedTablePrefix))
+	return codec.EncodeKey(cDeletedTablePrefix)
+	//return []byte(fmt.Sprintf("/%s/", cDeletedTablePrefix))
 }
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	var rsp []uint64
@@ -419,7 +429,7 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 		if len(rsp) > 0 {
 			return
 		}
-		err := c.Store.SetIfNotExist(format.UInt64ToString(shard.ID), format.UInt64ToString(tid))
+		err := c.Store.SetIfNotExist(codec.Uint642Bytes(shard.ID), codec.Uint642Bytes(tid))
 		if err == nil {
 			rsp = append(rsp, shard.ID)
 		}
@@ -447,7 +457,7 @@ func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid u
 	client := c.Store.RaftStore().Prophet().GetClient()
 	tKey := c.tableKey(dbId, tbl.Id)
 	rKey := c.routePrefix(dbId, tbl.Id)
-	header := format.Uint64ToBytes(uint64(len(tKey) + len(rKey) + len([]byte("#"))))
+	header := codec.Uint642Bytes(uint64(len(tKey) + len(rKey) + len([]byte("#"))))
 	buf := bytes.Buffer{}
 	buf.Write(header)
 	buf.Write(tKey)
@@ -457,16 +467,16 @@ func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid u
 	//find an available range for new shard
 	start := uint64(0)
 	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
-		end, _ := format.ParseStrUInt64(string(shard.End))
+		end, _ := codec.Bytes2Uint64(shard.End)
 		if end > start {
 			start = end
 		}
 	})
 	err = client.AsyncAddResources(raftstore.NewResourceAdapterWithShard(
 		bhmetapb.Shard{
-			Start:        format.Uint64ToBytes(start),
-			End:          format.Uint64ToBytes(start + 1),
-			Unique:       string(format.Uint64ToBytes(tbl.Id)),
+			Start:        codec.Uint642Bytes(start),
+			End:          codec.Uint642Bytes(start + 1),
+			Unique:       string(codec.Uint642Bytes(tbl.Id)),
 			Group:        uint64(pb.AOEGroup),
 			Data:         buf.Bytes(),
 			DisableSplit: true,

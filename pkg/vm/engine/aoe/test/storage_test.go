@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/fagongzi/log"
-	"github.com/fagongzi/util/format"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/storage"
@@ -13,6 +12,7 @@ import (
 	stdLog "log"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/protocol"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
@@ -61,8 +61,29 @@ func TestStorage(t *testing.T) {
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
 
-	testKVStorage(t, c)
+	testCodec(t, c)
+	//testKVStorage(t, c)
 	//testAOEStorage(t, c)
+}
+
+func testCodec(t *testing.T, c *testutil.TestCluster) {
+
+	key := codec.String2Bytes("Hello")
+	err := c.Applications[0].Set(key, key)
+	require.NoError(t, err)
+
+	value, err := c.Applications[0].Get(key)
+	require.NoError(t, err)
+	require.Equal(t, value, key)
+
+	key1 := codec.EncodeKey("Hello", 1, 2)
+	err = c.Applications[0].Set(key1, key1)
+	require.NoError(t, err)
+
+	value1, err := c.Applications[0].Get(key1)
+	require.NoError(t, err)
+	require.Equal(t, value1, key1)
+
 }
 
 func testKVStorage(t *testing.T, c *testutil.TestCluster) {
@@ -80,13 +101,13 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 	require.Equal(t, value, []byte("World"))
 
 	//Prefix Test
-	for i := uint64(0); i < 200; i++ {
+	for i := uint64(0); i < 20; i++ {
 		key := fmt.Sprintf("prefix-%d", i)
 		_, err = c.Applications[0].Exec(pb.Request{
 			Type: pb.Set,
 			Set: pb.SetRequest{
 				Key:   []byte(key),
-				Value: format.Uint64ToBytes(i),
+				Value: codec.Uint642Bytes(i),
 			},
 		})
 		require.NoError(t, err)
@@ -94,19 +115,20 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 
 	keys, err := c.Applications[0].PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
-	require.Equal(t, 200, len(keys))
+	require.Equal(t, 20, len(keys))
 
 	kvs, err := c.Applications[0].PrefixScan([]byte("prefix-"), 0)
 	require.NoError(t, err)
-	require.Equal(t, 400, len(kvs))
+	require.Equal(t, 40, len(kvs))
 
 	err = c.Applications[0].Delete([]byte("prefix-0"))
 	require.NoError(t, err)
 	keys, err = c.Applications[0].PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
-	require.Equal(t, 199, len(keys))
+	require.Equal(t, 19, len(keys))
 
 	//Scan Test
+	t0 := time.Now()
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)
@@ -120,11 +142,27 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 		}
 		require.NoError(t, err)
 	}
+	fmt.Printf("time cost for 50 set is %d ms\n", time.Since(t0).Milliseconds())
+	t0 = time.Now()
 	kvs, err = c.Applications[0].Scan([]byte("/prefix/"), []byte("/prefix/2/"), 0)
 	require.NoError(t, err)
-	for i := 0; i < len(kvs); i += 2 {
-		fmt.Printf("%s, %s\n", string(kvs[i]), string(kvs[i+1]))
+	require.Equal(t, 20, len(kvs))
+	fmt.Printf("time cost for scan is %d ms\n", time.Since(t0).Milliseconds())
+	t0 = time.Now()
+	for i := uint64(0); i < 10; i++ {
+		for j := uint64(0); j < 5; j++ {
+			key := fmt.Sprintf("/prefix/%d/%d", i, j)
+			value, err = c.Applications[0].Exec(pb.Request{
+				Type: pb.Get,
+				Get: pb.GetRequest{
+					Key: []byte(key),
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, key, string(value))
+		}
 	}
+	fmt.Printf("time cost for 50 read is %d ms\n", time.Since(t0).Milliseconds())
 }
 
 func testAOEStorage(t *testing.T, c *testutil.TestCluster) {

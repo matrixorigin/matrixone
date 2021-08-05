@@ -1,10 +1,10 @@
 package engine
 
 import (
-	"github.com/fagongzi/util/format"
 	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/metadata"
 )
@@ -66,8 +66,8 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			for _, id := range ids.Ids {
 				r.segments = append(r.segments, engine.SegmentInfo{
 					Version:  ids.Version,
-					Id:       string(format.Uint64ToBytes(id)),
-					GroupId:  string(format.Uint64ToBytes(tbl.ShardId)),
+					Id:       string(codec.Uint642Bytes(id)),
+					GroupId:  string(codec.Uint642Bytes(tbl.ShardId)),
 					TabletId: tbl.Name,
 					Node: metadata.Node{
 						Id:   addr,

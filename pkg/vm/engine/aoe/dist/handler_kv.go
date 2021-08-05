@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/fagongzi/util/format"
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb"
@@ -12,6 +11,7 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 )
 
@@ -166,19 +166,19 @@ func (h *aoeStorage) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 
 	id := uint64(0)
 	if v, ok := ctx.Attrs()[string(req.Key)]; ok {
-		id = format.MustBytesToUint64(v.([]byte))
+		id, _ = codec.Bytes2Uint64(v.([]byte))
 	} else {
 		value, err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).Get(req.Key)
 		if err != nil {
 			return 0, 0, resp
 		}
 		if len(value) > 0 {
-			id = format.MustBytesToUint64(value)
+			id, _ = codec.Bytes2Uint64(value)
 		}
 	}
 
 	id++
-	newV := format.Uint64ToBytes(id)
+	newV := codec.Uint642Bytes(id)
 	ctx.Attrs()[string(req.Key)] = newV
 
 	err := ctx.WriteBatch().Set(req.Key, newV)

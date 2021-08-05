@@ -1,13 +1,14 @@
 package test
 
 import (
-	"fmt"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
+	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
@@ -92,17 +93,19 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 
-	v, err := c.Store.Get([]byte("123"))
-	require.NoError(t, err)
-	println(v)
-
-	kvs, err := c.Store.Scan([]byte("/DeletedTableQueue/"), []byte("/DeletedTableQueue/10/"), 0)
+	kvs, err := c.Store.Scan(codec.String2Bytes("DeletedTableQueue"), codec.String2Bytes("DeletedTableQueue10"), 0)
 	require.NoError(t, err)
 	for i := 0; i < len(kvs); i += 2 {
-		fmt.Printf("%s, %s\n", string(kvs[i]), string(kvs[i+1]))
+		tbl, err := helper.DecodeTable(kvs[i+1])
+		require.NoError(t, err)
+		require.Equal(t, uint64(3), tbl.Epoch)
 	}
 
 	cnt, err := c.RemoveDeletedTable(10)
 	require.NoError(t, err)
 	require.Equal(t, 2, cnt)
+
+	cnt, err = c.RemoveDeletedTable(11)
+	require.NoError(t, err)
+	require.Equal(t, 0, cnt)
 }
