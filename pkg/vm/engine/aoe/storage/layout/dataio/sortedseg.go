@@ -10,7 +10,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
@@ -43,7 +42,6 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 }
 
 type SortedSegmentFile struct {
-	sync.RWMutex
 	ID common.ID
 	os.File
 	Refs       int32
@@ -216,8 +214,6 @@ func (sf *SortedSegmentFile) Destory() {
 }
 
 func (sf *SortedSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
-	sf.Lock()
-	defer sf.Unlock()
 	n, err := sf.ReadAt(buf, ptr.Offset)
 	if err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
