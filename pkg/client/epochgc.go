@@ -475,9 +475,8 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 		sci.server_maximumRemovableEpoch = maxRE
 	}
 
-	if pd_mre > sci.server_minimumRemovableEpoch {
-		sci.server_minimumRemovableEpoch = pd_mre
-	}
+	//if there is no business, then it updates the minimumRemovableEpoch
+	sci.server_minimumRemovableEpoch = MinUint64(pd_mre, sci.server_maximumRemovableEpoch)
 
 	//fmt.Printf("id %d cluster_epoch %d minRE %d \n",sci.Id,cluster_epoch,pd_mre)
 
@@ -520,13 +519,13 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 		if there is a ddl in this epoch, then run async drop task
 		 */
 		var ddl_ep []uint64 = nil
-		var ddl_q []uint64 = nil
+		var ddl_max_ep uint64 = 0
 		for ep, ddlc := range sci.ddl_info {
 			if ep <= sci.server_minimumRemovableEpoch {
 				ddl_ep = append(ddl_ep, ep)
 
 				if ddlc > 0 {
-					ddl_q = append(ddl_q, ep)
+					ddl_max_ep = MaxUint64(ddl_max_ep, ep)
 				}
 			}
 		}
@@ -535,8 +534,8 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 			sci.removeDDLInfoUnsafe(ep)
 		}
 
-		if len(ddl_q) > 0 {
-			go sci.DeleteDDLPermanentlyRoutine(ddl_q)
+		if ddl_max_ep > 0 {
+			go sci.DeleteDDLPermanentlyRoutine(ddl_max_ep)
 		}
 	}
 
@@ -547,9 +546,9 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 drop task routine
 less than or equal to the epoch will be deleted.
  */
-func (sci *PDCallbackImpl) DeleteDDLPermanentlyRoutine(q []uint64) {
+func (sci *PDCallbackImpl) DeleteDDLPermanentlyRoutine(max_ep uint64) {
 	//drive catalog service DeleteDDL
-	fmt.Printf("async delete ddl\n")
+	fmt.Printf("async delete ddl epoch %d \n",max_ep)
 }
 
 func (sci *PDCallbackImpl) CollectData() []byte {

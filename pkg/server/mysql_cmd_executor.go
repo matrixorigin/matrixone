@@ -871,6 +871,31 @@ func (mce *MysqlCmdExecutor) handleUse(use *tree.Use) error {
 	return mce.handleUseDB(use.Name)
 }
 
+//handle SELECT DATABASE()
+func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error{
+	var err error = nil
+	ses := mce.Routine.GetSession()
+	proto := mce.Routine.GetClientProtocol().(*client.MysqlClientProtocol)
+
+	col := new(client.MysqlColumn)
+	col.SetName("DATABASE()")
+	col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
+	ses.Mrs.AddColumn(col)
+	val := ses.Dbname
+	if val == "" {
+		val = "NULL"
+	}
+	ses.Mrs.AddRow([]interface{}{val})
+
+	mer := client.NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := client.NewResponse(client.ResultResponse, 0, int(client.COM_QUERY), mer)
+
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.Routine.GetSession()
@@ -913,16 +938,33 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		pdHook.IncQueryCountAtEpoch(epoch,1)
 		statement_count++
 
+		switch st := stmt.(type) {
+		case *tree.Select:
+			if sc,ok := st.Select.(*tree.SelectClause) ; ok {
+				if len(sc.Exprs) == 1 {
+					if fe,ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
+						if un,ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
+							if strings.ToUpper(un.Parts[0]) == "DATABASE" {
+								err = mce.handleSelectDatabase(st)
+								if err != nil{
+									return err
+								}
+
+								//next statement
+								continue
+							}
+						}
+					}
+				}
+			}
+		}
+
 		//check database
 		if ses.Dbname == "" {
-			if strings.ToUpper(sql) == "SELECT DATABASE()" {
-				//TODO:add special handle
-
-			}
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases,*tree.CreateDatabase,*tree.ShowWarnings,*tree.ShowErrors,
-			*tree.ShowStatus:
+			*tree.ShowStatus,*tree.DropDatabase:
 			default:
 				return client.NewMysqlError(client.ER_NO_DB_ERROR)
 			}

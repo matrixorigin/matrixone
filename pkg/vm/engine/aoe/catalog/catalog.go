@@ -254,7 +254,7 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 		}
 		var tablets []aoe.TabletInfo
 		for _, shardId := range shardIds {
-			if sid, err := format.ParseStrUInt64(string(shardId[len(c.routePrefix(dbId, tb.Id)):])); err != nil {
+			if sid, err := format.ParseStrUInt64(string(shardId[len(c.routePrefix(dbId, tb.Id))+1:])); err != nil {
 				stdLog.Printf("convert shardid failed, %v", err)
 				continue
 			}else {

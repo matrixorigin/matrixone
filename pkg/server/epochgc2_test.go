@@ -276,9 +276,9 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	time.Sleep(2 * time.Minute)
 
 	//test performance
-	c.Applications[0].Close()
+	//c.Applications[0].Close()
 
-	fmt.Println("-------------------close node 0----------------")
+	//fmt.Println("-------------------close node 0----------------")
 
 	time.Sleep(5 * time.Minute)
 
