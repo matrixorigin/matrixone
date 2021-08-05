@@ -56,6 +56,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 		assert.Equal(t, base.PERSISTENT_BLK, blk.GetType())
 		blk.Unref()
 
+		segMeta.TryClose()
 		op2 := NewUpgradeSegOp(ctx, segID, tableData)
 		op2.Push()
 		err = op2.WaitDone()
@@ -95,6 +96,7 @@ func TestUpgradeSegOp(t *testing.T) {
 			blkMeta.DataState = md.FULL
 			blkMeta.Count = blkMeta.MaxRowCount
 		}
+		segMeta.TryClose()
 	}
 
 	for _, segID := range segIds {

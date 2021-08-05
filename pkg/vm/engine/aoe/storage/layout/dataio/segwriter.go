@@ -21,6 +21,7 @@ type SegmentWriter struct {
 	fileHandle   *os.File
 	preprocessor func([]*batch.Batch, *md.Segment) error
 	fileGetter   func(string, *md.Segment) (*os.File, error)
+	fileCommiter func(string) error
 	indexFlusher func(*os.File, []*batch.Batch, *md.Segment) error
 	dataFlusher  func(*os.File, []*batch.Batch, *md.Segment) error
 	preExecutor  func()
@@ -34,7 +35,7 @@ func NewSegmentWriter(data []*batch.Batch, meta *md.Segment, dir string) *Segmen
 		dir:  dir,
 	}
 	// w.preprocessor = w.defaultPreprocessor
-	w.fileGetter = w.createFile
+	w.fileGetter, w.fileCommiter = w.createFile, w.commitFile
 	w.dataFlusher = flushBlocks
 	w.indexFlusher = w.flushIndices
 	return w
@@ -65,9 +66,18 @@ func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *md.Segme
 	return err
 }
 
+func (sw *SegmentWriter) commitFile(fname string) error {
+	name, err := e.FilenameFromTmpfile(fname)
+	if err != nil {
+		return err
+	}
+	err = os.Rename(fname, name)
+	return err
+}
+
 func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, error) {
 	id := meta.AsCommonID()
-	filename := e.MakeSegmentFileName(dir, id.ToSegmentFileName(), meta.Table.ID)
+	filename := e.MakeSegmentFileName(dir, id.ToSegmentFileName(), meta.Table.ID, true)
 	fdir := filepath.Dir(filename)
 	if _, err := os.Stat(fdir); os.IsNotExist(err) {
 		err = os.MkdirAll(fdir, 0755)
@@ -94,20 +104,23 @@ func (sw *SegmentWriter) Execute() error {
 		return err
 	}
 	sw.fileHandle = w
-	defer w.Close()
 	if sw.preExecutor != nil {
 		sw.preExecutor()
 	}
 	if err = sw.indexFlusher(w, sw.data, sw.meta); err != nil {
+		w.Close()
 		return err
 	}
 	if err = sw.dataFlusher(w, sw.data, sw.meta); err != nil {
+		w.Close()
 		return err
 	}
 	if sw.postExecutor != nil {
 		sw.postExecutor()
 	}
-	return nil
+	filename, _ := filepath.Abs(w.Name())
+	w.Close()
+	return sw.fileCommiter(filename)
 }
 
 func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {

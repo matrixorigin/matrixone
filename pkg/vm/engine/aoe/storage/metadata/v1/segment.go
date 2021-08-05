@@ -198,6 +198,18 @@ func (seg *Segment) TryClose() bool {
 	return false
 }
 
+func (seg *Segment) TrySorted() {
+	seg.Lock()
+	defer seg.Unlock()
+	if seg.DataState == SORTED {
+		return
+	}
+	if seg.DataState != CLOSED {
+		panic("logic error")
+	}
+	seg.DataState = SORTED
+}
+
 func (seg *Segment) GetMaxBlkID() uint64 {
 	blkid := uint64(0)
 	for bid, _ := range seg.IdMap {
@@ -236,6 +248,8 @@ func (seg *Segment) Copy(ctx CopyCtx) *Segment {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
+	seg.RLock()
+	defer seg.RUnlock()
 	new_seg := NewSegment(seg.Table, seg.ID)
 	new_seg.TimeStamp = seg.TimeStamp
 	new_seg.MaxBlockCount = seg.MaxBlockCount

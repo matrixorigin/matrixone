@@ -24,5 +24,8 @@ type UpgradeSegOp struct {
 func (op *UpgradeSegOp) Execute() error {
 	var err error
 	op.Segment, err = op.TableData.UpgradeSegment(op.SegmentID)
+	if err == nil {
+		op.Segment.GetMeta().TrySorted()
+	}
 	return err
 }
