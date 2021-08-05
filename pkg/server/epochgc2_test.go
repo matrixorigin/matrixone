@@ -10,7 +10,6 @@ import (
 	cube_server "github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
-	"io/ioutil"
 	stdLog "log"
 	"math/rand"
 	"matrixone/pkg/client"
@@ -158,7 +157,7 @@ func (c *TestCluster) stop() {
 		s.Close()
 	}
 }
-
+/*
 func TestEpochGC(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
@@ -206,7 +205,7 @@ func TestEpochGC(t *testing.T) {
 
 	DC.Cf.Close()
 }
-
+*/
 func TestEpochGCWithMultiServer(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
@@ -340,6 +339,7 @@ func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engi
 	return sver,nil
 }
 
+/*
 func Test_Multi_Server(t *testing.T) {
 	var svs []Server = nil
 	for _, port := range testPorts{
@@ -373,3 +373,4 @@ func Test_openfile(t *testing.T) {
 	defer f.Close()
 
 }
+*/

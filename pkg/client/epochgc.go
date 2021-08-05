@@ -66,6 +66,8 @@ type PDCallbackImpl struct {
 	server_maximumRemovableEpoch uint64
 	//<epoch,query_cnt>
 	epoch_info map[uint64]uint64
+	//<epoch,ddl_cnt>
+	ddl_info map[uint64]uint64
 
 	/*
 	ddl queue
@@ -95,6 +97,7 @@ func NewPDCallbackImpl(p int, pt int,pd int) *PDCallbackImpl {
 		},
 		periodOfDelete: 				pd,
 		epoch_info:                   make(map[uint64]uint64),
+		ddl_info: make(map[uint64]uint64),
 		ddlQueue: make(map[uint64][]*Meta),
 	}
 }
@@ -505,16 +508,36 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 		start drop task.
 		clean metas in epochs less than minimumRemovableEpoch.
 		 */
-		var q []*Meta = nil
-		for ep := range sci.ddlQueue {
+		//var q []*Meta = nil
+		//for ep := range sci.ddlQueue {
+		//	if ep <= sci.server_minimumRemovableEpoch {
+		//		l := sci.removeEpochMetasUnsafe(ep)
+		//		q = append(q,l...)
+		//	}
+		//}
+
+		/*
+		if there is a ddl in this epoch, then run async drop task
+		 */
+		var ddl_ep []uint64 = nil
+		var ddl_q []uint64 = nil
+		for ep, ddlc := range sci.ddl_info {
 			if ep <= sci.server_minimumRemovableEpoch {
-				l := sci.removeEpochMetasUnsafe(ep)
-				q = append(q,l...)
+				ddl_ep = append(ddl_ep, ep)
+
+				if ddlc > 0 {
+					ddl_q = append(ddl_q, ep)
+				}
 			}
 		}
 
-		//run async drop task
-		go sci.DeleteDDLPermanentlyRoutine(sci.server_epoch, q)
+		for _,ep := range ddl_ep {
+			sci.removeDDLInfoUnsafe(ep)
+		}
+
+		if len(ddl_q) > 0 {
+			go sci.DeleteDDLPermanentlyRoutine(ddl_q)
+		}
 	}
 
 	return nil
@@ -522,15 +545,11 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 
 /*
 drop task routine
+less than or equal to the epoch will be deleted.
  */
-func (sci *PDCallbackImpl) DeleteDDLPermanentlyRoutine(epoch uint64, q []*Meta) {
-	for i := 0 ; i < len(q); i++ {
-		if q[i].MtEpoch > epoch {
-			panic(fmt.Errorf("remove something in the future. server_epoch %d, meta_epoch %d",epoch,q[i].MtEpoch))
-		}
-		//call catalog service to do the deletion
-		fmt.Printf("id %d delete meta %s\n",sci.Id,*q[i])
-	}
+func (sci *PDCallbackImpl) DeleteDDLPermanentlyRoutine(q []uint64) {
+	//drive catalog service DeleteDDL
+	fmt.Printf("async delete ddl\n")
 }
 
 func (sci *PDCallbackImpl) CollectData() []byte {
@@ -571,6 +590,17 @@ func (sci *PDCallbackImpl) IncQueryCountAtEpoch(ep,qc uint64) (uint64, uint64) {
 	}
 	sci.epoch_info[ep] += qc
 	return ep, sci.epoch_info[ep]
+}
+
+
+func (sci *PDCallbackImpl) IncDDLCountAtEpoch(ep,ddlc uint64) (uint64, uint64) {
+	sci.rwlock.Lock()
+	defer sci.rwlock.Unlock()
+	if ep == 0 {
+		return 0, 0
+	}
+	sci.ddl_info[ep] += ddlc
+	return ep, sci.ddl_info[ep]
 }
 
 /*
@@ -623,6 +653,11 @@ func (sci *PDCallbackImpl) removeEpochMetasUnsafe(ep uint64) []*Meta {
 //multi-thread unsafe
 func (sci *PDCallbackImpl) removeEpochInfoUnsafe(ep uint64) {
 	delete(sci.epoch_info,ep)
+}
+
+//multi-thread unsafe
+func (sci *PDCallbackImpl) removeDDLInfoUnsafe(ep uint64) {
+	delete(sci.ddl_info,ep)
 }
 
 //for test

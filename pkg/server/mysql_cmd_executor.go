@@ -8,6 +8,7 @@ import (
 	"matrixone/pkg/sql/compile"
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/vm/process"
+	"strings"
 )
 
 type MysqlCmdExecutor struct {
@@ -914,6 +915,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 		//check database
 		if ses.Dbname == "" {
+			if strings.ToUpper(sql) == "SELECT DATABASE()" {
+				//TODO:add special handle
+
+			}
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases,*tree.CreateDatabase,*tree.ShowWarnings,*tree.ShowErrors,
@@ -1117,12 +1122,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 			//record ddl drop xxx after the success
 			switch stmt.(type) {
-			case *tree.DropTable:
+			case *tree.DropTable, *tree.DropDatabase,
+					*tree.DropIndex, *tree.DropUser, *tree.DropRole:
 				//test ddl
-				pdHook.AddMeta(epoch,client.NewMeta(epoch,client.META_TYPE_TABLE,1))
-			case *tree.DropDatabase:
-				//test ddl
-				pdHook.AddMeta(epoch,client.NewMeta(epoch,client.META_TYPE_DATABASE,2))
+				pdHook.IncDDLCountAtEpoch(epoch,1)
 			}
 
 			/*
