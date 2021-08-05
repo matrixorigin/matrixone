@@ -61,8 +61,8 @@ func TestStorage(t *testing.T) {
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
 
-	testCodec(t, c)
-	//testKVStorage(t, c)
+	//testCodec(t, c)
+	testKVStorage(t, c)
 	//testAOEStorage(t, c)
 }
 
