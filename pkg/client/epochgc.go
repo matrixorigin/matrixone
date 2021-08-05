@@ -476,7 +476,7 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 		sci.server_minimumRemovableEpoch = pd_mre
 	}
 
-	fmt.Printf("id %d cluster_epoch %d minRE %d \n",sci.Id,cluster_epoch,pd_mre)
+	//fmt.Printf("id %d cluster_epoch %d minRE %d \n",sci.Id,cluster_epoch,pd_mre)
 
 	//cluster_epoch goes from 1.
 	//epoch 0 is invalid.

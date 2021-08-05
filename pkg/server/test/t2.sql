@@ -1,4 +1,3 @@
-use test;
 drop database if exists T;
 create database T;
 use T;

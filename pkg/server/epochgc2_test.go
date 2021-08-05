@@ -10,6 +10,7 @@ import (
 	cube_server "github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
+	"io/ioutil"
 	stdLog "log"
 	"math/rand"
 	"matrixone/pkg/client"
@@ -43,7 +44,7 @@ func recreateTestTempDir() (err error) {
 	if err != nil {
 		return err
 	}
-	err = os.Mkdir(tmpDir, os.ModePerm)
+	err = os.Mkdir(tmpDir, os.ModeDir)
 	return err
 }
 
@@ -218,7 +219,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		}
 	}()
 
-	go DC.DCRoutine()
+	//go DC.DCRoutine()
 
 	nodeCnt := 3
 
@@ -282,7 +283,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 
 	time.Sleep(5 * time.Minute)
 
-	DC.Cf.Close()
+	//DC.Cf.Close()
 }
 
 func testPCI(id int,f*client.CloseFlag, pci *client.PDCallbackImpl) {
@@ -354,4 +355,21 @@ func Test_Multi_Server(t *testing.T) {
 	}
 
 	time.Sleep(2 * time.Minute)
+}
+
+func Test_openfile(t *testing.T) {
+	f,err := os.OpenFile(testConfigFile,os.O_RDONLY | os.O_CREATE,0777)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	_, err = ioutil.ReadAll(f)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	defer f.Close()
+
 }

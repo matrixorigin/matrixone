@@ -3,7 +3,7 @@ package main
 import "fmt"
 
 func main() {
-	fmt.Printf("use test;\n")
+	//fmt.Printf("use test;\n")
 	generate_sql(100)
 }
 
