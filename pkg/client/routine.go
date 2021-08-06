@@ -6,6 +6,7 @@ import (
 	"matrixone/pkg/config"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
+	"time"
 )
 
 type Session struct {
@@ -107,6 +108,7 @@ func (ri *RoutineImpl) Loop() {
 			break
 		}
 
+		begin := time.Now()
 		if resp,err = ri.executor.ExecRequest(req); err!=nil{
 			fmt.Printf("routine execute request failed. error:%v ",err)
 			break
@@ -118,6 +120,9 @@ func (ri *RoutineImpl) Loop() {
 				break
 			}
 		}
+
+		len := time.Since(begin)
+		fmt.Printf("id %d time %s \n",ri.ID(),len.String())
 
 		//mysql client protocol: quit command
 		if _,ok := ri.protocol.(*MysqlClientProtocol); ok{
@@ -139,15 +144,14 @@ func (ri *RoutineImpl) GetSession() *Session {
 func NewSession()*Session{
 	return &Session{
 		GuestMmu: guest.New(config.GlobalSystemVariables.GetGuestMmuLimitation(), config.HostMmu),
-		Mempool:  mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()),
-			int(config.GlobalSystemVariables.GetMempoolFactor())),
+		Mempool:  config.Mempool,
 	}
 }
 
 func NewSessionWithParameterUnit(pu *config.ParameterUnit) *Session {
 	return &Session{
 		GuestMmu: guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
-		Mempool:  mempool.New(int(pu.SV.GetMempoolMaxSize()), int(pu.SV.GetMempoolFactor())),
+		Mempool:  pu.Mempool,
 		Pu:       pu,
 	}
 }

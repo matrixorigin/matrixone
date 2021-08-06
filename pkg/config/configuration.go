@@ -2,6 +2,7 @@ package config
 
 import (
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/host"
 )
@@ -10,6 +11,9 @@ var GlobalSystemVariables SystemVariables
 
 //host memory
 var HostMmu *host.Mmu = nil
+
+//mempool
+var Mempool  *mempool.Mempool = nil
 
 //Storage Engine
 var StorageEngine engine.Engine
@@ -23,6 +27,9 @@ type ParameterUnit struct {
 	//host memory
 	HostMmu *host.Mmu
 
+	//mempool
+	Mempool  *mempool.Mempool
+
 	//Storage Engine
 	StorageEngine engine.Engine
 
@@ -30,10 +37,11 @@ type ParameterUnit struct {
 	ClusterNodes metadata.Nodes
 }
 
-func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, storageEngine engine.Engine, clusterNodes metadata.Nodes) *ParameterUnit {
+func NewParameterUnit(sv *SystemVariables, hostMmu *host.Mmu, mempool *mempool.Mempool, storageEngine engine.Engine, clusterNodes metadata.Nodes) *ParameterUnit {
 	return &ParameterUnit{
 		SV:            sv,
 		HostMmu:      hostMmu,
+		Mempool: mempool,
 		StorageEngine: storageEngine,
 		ClusterNodes:  clusterNodes,
 	}

@@ -70,6 +70,10 @@ func (si *ServerImpl) handleConnection(routine client.Routine) {
 func (si *ServerImpl) Loop() {
 	fmt.Printf("Server Listening on : %s \n", si.address)
 	for si.IsOpened() {
+		if !si.pdHook.CanAcceptSomething() {
+			fmt.Printf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.")
+			break
+		}
 		cnn, err := si.listener.Accept()
 		if err != nil {
 			fmt.Printf("server listen failed. error:%v", err)
@@ -79,6 +83,7 @@ func (si *ServerImpl) Loop() {
 		rt := si.newConnection(cnn)
 		go si.handleConnection(rt)
 	}
+	fmt.Printf("Server Quit\n")
 }
 
 func (si *ServerImpl) Quit() {

@@ -1,10 +1,23 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"strconv"
+)
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Printf("Usage: gen_sql number")
+		os.Exit(-1)
+	}
+	n,err := strconv.ParseInt(os.Args[1],10,32)
+	if err != nil {
+		os.Exit(-1)
+	}
+
 	//fmt.Printf("use test;\n")
-	generate_sql(10)
+	generate_sql(int(n))
 }
 
 func generate_sql(cnt int){

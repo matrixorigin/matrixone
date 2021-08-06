@@ -166,13 +166,21 @@ type Timeout struct {
 
 	//period
 	timeGap time.Duration
+
+	//auto update
+	autoUpdate bool
 }
 
-func NewTimeout(tg time.Duration) *Timeout {
+func NewTimeout(tg time.Duration, autoUpdateWhenChecked bool) *Timeout {
 	return &Timeout{
 		lastTime: time.Now(),
 		timeGap:  tg,
+		autoUpdate: autoUpdateWhenChecked,
 	}
+}
+
+func (t *Timeout) UpdateTime(tn time.Time) {
+	t.lastTime = tn
 }
 
 /*
@@ -186,6 +194,10 @@ func (t *Timeout) isTimeout() bool {
 	if time.Since(t.lastTime) <= t.timeGap {
 		return false
 	}
-	t.lastTime = time.Now()
+
+	if t.autoUpdate {
+		t.lastTime = time.Now()
+	}
+
 	return true
 }

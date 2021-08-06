@@ -17,6 +17,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/engine"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/host"
 	"os"
@@ -77,6 +78,7 @@ func TestServer(t *testing.T) {
 	fmt.Println("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
+	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
 
 	if ! config.GlobalSystemVariables.GetDumpEnv() {
 		fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
@@ -106,8 +108,9 @@ func TestServer(t *testing.T) {
 
 func createServer() {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.StorageEngine, config.ClusterNodes)
-	svr = server.NewServer(address, pu, client.NewPDCallbackImpl(1000, 10,10))
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	ppu := client.NewPDCallbackParameterUnit(5,20,20,20)
+	svr = server.NewServer(address, pu, client.NewPDCallbackImpl(ppu))
 }
 
 func runServer() {

@@ -906,7 +906,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	//pin the epoch with 1
 	epoch,_ := pdHook.IncQueryCountAtCurrentEpoch(statement_count)
 	defer func() {
-		pdHook.DecQueryCountAtEpoch(epoch,statement_count)
+		ep,stmt_cnt := pdHook.DecQueryCountAtEpoch(epoch,statement_count)
+		if ep != epoch || stmt_cnt != 0{
+			panic(fmt.Errorf("statement_count needs zero, but actually it is %d at epoch %d \n",stmt_cnt,ep))
+		}
 	}()
 
 	proc := process.New(ses.GuestMmu, ses.Mempool)
@@ -915,7 +918,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
 	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
-	proc.Epoch = epoch
 
 	comp := compile.New(ses.Dbname, sql, ses.User, ses.Pu.StorageEngine, ses.Pu.ClusterNodes, proc)
 	execs, err := comp.Compile()
@@ -1193,6 +1195,19 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response, error) {
 	var resp *client.Response = nil
 	fmt.Printf("cmd %v \n", req.GetCmd())
+
+	//check
+	pdHook := mce.Routine.GetPDCallback().(*client.PDCallbackImpl)
+	if !pdHook.CanAcceptSomething() {
+		resp = client.NewResponse(
+			client.ErrorResponse,
+			0,
+			req.GetCmd(),
+			nil,
+		)
+		return resp,nil
+	}
+
 	switch uint8(req.GetCmd()) {
 	case client.COM_QUIT:
 		resp = client.NewResponse(

@@ -62,7 +62,7 @@ type TestCluster struct {
 
 var DC *client.DebugCounter = client.NewDebugCounter(32)
 
-func newTestClusterStore(t *testing.T, reCreate bool,
+func NewTestClusterStore(t *testing.T, reCreate bool,
 	f func(path string) (storage.DataStorage, error),
 	pcis []*client.PDCallbackImpl, nodeCnt int) (*TestCluster, error) {
 	if reCreate {
@@ -176,15 +176,16 @@ func TestEpochGC(t *testing.T) {
 
 	pcis := make([]*client.PDCallbackImpl, nodeCnt)
 	cf := make([]*client.CloseFlag, nodeCnt)
+	ppu := client.NewPDCallbackParameterUnit(5,20,20,20)
 	for i := 0 ; i < nodeCnt; i++ {
-		pcis[i] = client.NewPDCallbackImpl(3000, 10,10)
+		pcis[i] = client.NewPDCallbackImpl(ppu)
 		pcis[i].Id = i
 		cf[i] = &client.CloseFlag{}
 		go testPCI(i,cf[i],pcis[i])
 	}
 
 
-	c, err := newTestClusterStore(t,true,nil, pcis, nodeCnt)
+	c, err := NewTestClusterStore(t,true,nil, pcis, nodeCnt)
 	if err != nil {
 		t.Errorf("new cube failed %v",err)
 		return
@@ -206,6 +207,20 @@ func TestEpochGC(t *testing.T) {
 	DC.Cf.Close()
 }
 */
+
+/*
+test:
+
+boot server:
+% sudo go test -run TestEpochGCWithMultiServer -v
+
+client:
+
+% cd pkg/server
+% mysql -h 127.0.0.1 -P 6002 -udump -p
+
+mysql> source pathto/xxx.sql
+ */
 func TestEpochGCWithMultiServer(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
@@ -223,12 +238,13 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	nodeCnt := 3
 
 	pcis := make([]*client.PDCallbackImpl, nodeCnt)
+	ppu := client.NewPDCallbackParameterUnit(5,20,20,20)
 	for i := 0 ; i < nodeCnt; i++ {
-		pcis[i] = client.NewPDCallbackImpl(100, 10,10)
+		pcis[i] = client.NewPDCallbackImpl(ppu)
 		pcis[i].Id = i
 	}
 
-	c, err := newTestClusterStore(t,true,nil, pcis, nodeCnt)
+	c, err := NewTestClusterStore(t,true,nil, pcis, nodeCnt)
 	if err != nil {
 		t.Errorf("new cube failed %v",err)
 		return
@@ -239,7 +255,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
 	eng := aoe_engine.Mock(&catalog)
 
-	server_cnt := 1
+	server_cnt := 2
 	var svs []Server = nil
 	for i := 0 ; i < client.Min(server_cnt, client.Min(len(testPorts),nodeCnt)) ; i++ {
 		db := c.Storages[i].DB
@@ -323,6 +339,7 @@ func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engi
 	fmt.Println("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 
 	hostMmu := host.New(sv.GetHostMmuLimitation())
+	mempool := mempool.New(int(sv.GetMempoolMaxSize()),int(sv.GetMempoolFactor()))
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
@@ -332,7 +349,7 @@ func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engi
 	//test cluster nodes
 	clusterNodes := metadata.Nodes{}
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, storageEngine, clusterNodes)
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, storageEngine, clusterNodes)
 
 	address := fmt.Sprintf("%s:%d", sv.GetHost(), port)
 	sver := NewServer(address, pu, pd)
@@ -342,8 +359,9 @@ func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engi
 /*
 func Test_Multi_Server(t *testing.T) {
 	var svs []Server = nil
+	ppu := client.NewPDCallbackParameterUnit(5,20,20,20)
 	for _, port := range testPorts{
-		sv, err := get_server(testConfigFile, port, client.NewPDCallbackImpl(1000, 10, 10), nil)
+		sv, err := get_server(testConfigFile, port, client.NewPDCallbackImpl(ppu), nil)
 		if err != nil {
 			t.Error(err)
 			return

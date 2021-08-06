@@ -167,3 +167,51 @@
 #	UpdateMode:	dynamic
 	countOfRowsPerSendingToClient=10
 
+
+	
+#	Name:	periodOfEpochTimer
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[5]
+#	Comment:	the period of epoch timer in second
+#	UpdateMode:	dynamic
+	periodOfEpochTimer=5
+
+
+	
+#	Name:	periodOfPersistence
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[20]
+#	Comment:	the period of persistence in second
+#	UpdateMode:	dynamic
+	periodOfPersistence=20
+
+
+	
+#	Name:	periodOfDDLDeleteTimer
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[20]
+#	Comment:	the period of the ddl delete in second
+#	UpdateMode:	dynamic
+	periodOfDDLDeleteTimer=20
+
+
+	
+#	Name:	timeoutOfHeartbeat
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[20]
+#	Comment:	the timeout of heartbeat in second
+#	UpdateMode:	dynamic
+	timeoutOfHeartbeat=20
+

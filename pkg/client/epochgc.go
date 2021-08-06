@@ -52,8 +52,8 @@ type PDCallbackImpl struct {
 	persistClose CloseFlag
 
 	//second
-	periodOfDelete int
-	ddlDeleteClose CloseFlag
+	periodOfDDLDelete int
+	ddlDeleteClose    CloseFlag
 
 	/*
 	server structure
@@ -68,6 +68,8 @@ type PDCallbackImpl struct {
 	epoch_info map[uint64]uint64
 	//<epoch,ddl_cnt>
 	ddl_info map[uint64]uint64
+	//timeout of heartbeat response
+	heartbeatTimeout *Timeout
 
 	/*
 	ddl queue
@@ -80,25 +82,64 @@ type PDCallbackImpl struct {
 
 /*
 NewPDCallbackImpl
-timer : timer period, millisecond
-pt : persist timeout, second
-pd : delete timeout, second
  */
-func NewPDCallbackImpl(p int, pt int,pd int) *PDCallbackImpl {
+func NewPDCallbackImpl(pu *PDCallbackParameterUnit) *PDCallbackImpl {
 	return &PDCallbackImpl{
 		cluster_epoch: 1,
 		serverInfo:                      make(map[uint64]uint64),
 		msgChan:                         make(chan *ChanMessage),
-		periodOfTimer:                   p,
+		periodOfTimer:                   pu.timerPeriod,
 		persistTimeout: []*Timeout{
-			NewTimeout(time.Duration(pt) * time.Second),
-			NewTimeout(time.Duration(pt) * time.Second),
-			NewTimeout(time.Duration(pt) * time.Second),
+			NewTimeout(time.Duration(pu.persistencePeriod)*time.Second, true),
+			NewTimeout(time.Duration(pu.persistencePeriod)*time.Second, true),
+			NewTimeout(time.Duration(pu.persistencePeriod)*time.Second, true),
 		},
-		periodOfDelete: 				pd,
-		epoch_info:                   make(map[uint64]uint64),
-		ddl_info: make(map[uint64]uint64),
-		ddlQueue: make(map[uint64][]*Meta),
+		periodOfDDLDelete: pu.ddlDeletePeriod,
+		epoch_info:        make(map[uint64]uint64),
+		ddl_info:          make(map[uint64]uint64),
+		ddlQueue:          make(map[uint64][]*Meta),
+		heartbeatTimeout:  NewTimeout(time.Duration(pu.heartbeatTimeout)*time.Second, false),
+	}
+}
+
+type PDCallbackParameterUnit struct {
+	/*
+	the period of the epoch timer.
+	Second
+	 */
+	timerPeriod int
+
+	/*
+	the period of the persistence.
+	Second
+	 */
+	persistencePeriod int
+
+	/*
+	the period of the ddl delete.
+	Second
+	 */
+	ddlDeletePeriod int
+
+	/*
+	the timeout of heartbeat.
+	Second
+	 */
+	heartbeatTimeout int
+}
+
+/*
+tp : the period of the epoch timer. Second
+pp : the period of the persistence. Second
+ddp : 	the period of the ddl delete. Second
+ht : 	the timeout of heartbeat. Second
+ */
+func NewPDCallbackParameterUnit(tp,pp,ddp,ht int) *PDCallbackParameterUnit {
+	return &PDCallbackParameterUnit{
+		timerPeriod:       tp,
+		persistencePeriod: pp,
+		ddlDeletePeriod:   ddp,
+		heartbeatTimeout:  ht,
 	}
 }
 
@@ -364,7 +405,7 @@ func (pci *PDCallbackImpl) IncrementEpochPeriodlyRoutine(period int){
 			}
 		}
 
-		time.Sleep(time.Duration(pci.periodOfTimer) * time.Millisecond)
+		time.Sleep(time.Duration(pci.periodOfTimer) * time.Second)
 	}
 }
 
@@ -415,7 +456,7 @@ func (pci *PDCallbackImpl) DeleteDDLPeriodicallyRoutine () {
 		//step 1: get ddls marked deleted from the catalog service
 		//step 2: delete these ddls
 		fmt.Printf("id %d delete ddl \n",pci.Id)
-		time.Sleep(time.Duration(pci.periodOfDelete) * time.Second)
+		time.Sleep(time.Duration(pci.periodOfDDLDelete) * time.Second)
 	}
 }
 
@@ -426,6 +467,7 @@ data : the response from the leader
 func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
+	sci.heartbeatTimeout.UpdateTime(time.Now())
 
 	cluster_epoch := binary.BigEndian.Uint64(data)
 	pd_mre := binary.BigEndian.Uint64(data[8:])
@@ -439,8 +481,7 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 		sci.epoch_info[sci.server_epoch] = 0
 
 		//update maxRemovableEpoch
-		//get all epochs that less server_epoch, because their query_cnt can not be increased anymore.
-		//sort them
+		//get all epochs that less than server_epoch, because their query_cnt can not be increased anymore.
 		var eps Uint64List = nil
 		for k := range sci.epoch_info {
 			//careful
@@ -448,11 +489,12 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 				eps = append(eps,k)
 			}
 
-			if sci.epoch_info[k] > 0 {
-				fmt.Printf("node %d epoch %d query_cnt %d\n",sci.Id,k,sci.epoch_info[k])
-			}
+			//if sci.epoch_info[k] > 0 {
+			//	fmt.Printf("node %d epoch %d query_cnt %d\n",sci.Id,k,sci.epoch_info[k])
+			//}
 		}
 
+		//sort them ascendingly
 		sort.Sort(eps)
 
 		maxRE := uint64(0)
@@ -502,18 +544,6 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 
 			sci.removeEpochInfoUnsafe(ep)
 		}
-
-		/*
-		start drop task.
-		clean metas in epochs less than minimumRemovableEpoch.
-		 */
-		//var q []*Meta = nil
-		//for ep := range sci.ddlQueue {
-		//	if ep <= sci.server_minimumRemovableEpoch {
-		//		l := sci.removeEpochMetasUnsafe(ep)
-		//		q = append(q,l...)
-		//	}
-		//}
 
 		/*
 		if there is a ddl in this epoch, then run async drop task
@@ -618,6 +648,17 @@ func (sci *PDCallbackImpl) DecQueryCountAtEpoch(ep,qc uint64) (uint64, uint64) {
 	}
 	sci.epoch_info[ep] -= qc
 	return ep, sci.epoch_info[ep]
+}
+
+/**
+the server has the rights to accept something.
+false: if the heartbeat is timeout
+true: if the heartbeat is instant
+ */
+func (sci *PDCallbackImpl) CanAcceptSomething() bool{
+	sci.rwlock.RLock()
+	defer sci.rwlock.RUnlock()
+	return !sci.heartbeatTimeout.isTimeout()
 }
 
 /*
