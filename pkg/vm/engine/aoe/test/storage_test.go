@@ -113,9 +113,11 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 		require.NoError(t, err)
 	}
 
+	t0 := time.Now()
 	keys, err := c.Applications[0].PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 20, len(keys))
+	fmt.Printf("time cost for prefix is %d ms\n", time.Since(t0).Milliseconds())
 
 	kvs, err := c.Applications[0].PrefixScan([]byte("prefix-"), 0)
 	require.NoError(t, err)
@@ -128,7 +130,7 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 	require.Equal(t, 19, len(keys))
 
 	//Scan Test
-	t0 := time.Now()
+	t0 = time.Now()
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)

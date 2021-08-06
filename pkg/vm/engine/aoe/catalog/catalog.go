@@ -126,6 +126,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 		return 0, ErrTableCreateFailed
 	}
 	tbl.Epoch = epoch
+	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		if err := c.Store.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
 			return 0, ErrTableCreateFailed
@@ -271,7 +272,7 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 // RemoveDeletedTable trigger gc
 // TODO: handle duplicated remove
 func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
-	rsp, err := c.Store.Scan(c.deletedPrefix(), c.deletedEpochPrefix(epoch), 0)
+	rsp, err := c.Store.Scan(c.deletedPrefix(), c.deletedEpochPrefix(epoch+1), 0)
 	if err != nil {
 		stdLog.Printf("scan error, %v", err)
 		return cnt, err
@@ -303,7 +304,12 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 			}
 			if success {
 				x, err := c.Store.Get(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id))
-				stdLog.Printf("[QSQ_DEBUG]get data before remove, %v, %v", x, err)
+				stdLog.Printf("[QSQ_DEBUG]schema id of table is, %d", tbl.SchemaId)
+
+				stdLog.Printf("[QSQ_DEBUG]get data before remove using encode, %v, %v, %v", x, err, c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id))
+				y, err := c.Store.Get(rsp[i-1])
+				stdLog.Printf("[QSQ_DEBUG]get data before remove using rsp, %v, %v, %v", y, err, rsp[i-1])
+				stdLog.Printf("[QSQ_DEBUG]compare encode and rsp, %v, %v, %d", c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id), rsp[i-1], bytes.Compare(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id), rsp[i-1]))
 				if c.Store.Delete(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id)) != nil {
 					stdLog.Printf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
 				} else {

@@ -1,6 +1,7 @@
 package test
 
 import (
+	"fmt"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
@@ -108,4 +109,38 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	cnt, err = c.RemoveDeletedTable(11)
 	require.NoError(t, err)
 	require.Equal(t, 0, cnt)
+
+	dbid, err = c.CreateDatabase(5, dbName, engine.AOE)
+	require.NoError(t, err)
+	require.Less(t, uint64(0), dbid)
+
+	t1.Name = "t1"
+	for i := uint64(10); i < 20; i++ {
+		t1.Name = fmt.Sprintf("t%d", i)
+		tid, err := c.CreateTable(i, dbid, *t1)
+		require.NoError(t, err)
+		require.Less(t, uint64(0), tid)
+	}
+
+	tbls, err = c.GetTables(dbid)
+	require.NoError(t, err)
+	require.Equal(t, 10, len(tbls))
+
+	for i := uint64(10); i < 15; i++ {
+		_, err = c.DropTable(20+i, dbid, fmt.Sprintf("t%d", i))
+		require.NoError(t, err)
+	}
+
+	tbls, err = c.GetTables(dbid)
+	require.NoError(t, err)
+	require.Equal(t, 5, len(tbls))
+
+	cnt, err = c.RemoveDeletedTable(10)
+	require.NoError(t, err)
+	require.Equal(t, 0, cnt)
+
+	cnt, err = c.RemoveDeletedTable(33)
+	require.NoError(t, err)
+	require.Equal(t, 4, cnt)
+
 }
