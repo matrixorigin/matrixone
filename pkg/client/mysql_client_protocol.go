@@ -1376,7 +1376,7 @@ func (mcp *MysqlClientProtocol) SendResponse(resp *Response) error  {
 		case *MysqlError:
 			return mcp.sendErrPacket(myerr.ErrorCode,myerr.SqlState,myerr.Error())
 		}
-		return mcp.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,fmt.Sprintf("unkown error:%v",err))
+		return mcp.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,fmt.Sprintf("unknown error:%v",err))
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil{

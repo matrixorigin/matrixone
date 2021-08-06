@@ -8,6 +8,7 @@ import (
 	cubeconfig "github.com/matrixorigin/matrixcube/config"
 	"log"
 	"math"
+	"matrixone/pkg/vm/engine/aoe/catalog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -70,6 +71,8 @@ type PDCallbackImpl struct {
 	ddl_info map[uint64]uint64
 	//timeout of heartbeat response
 	heartbeatTimeout *Timeout
+	//catalog service
+	catalog *catalog.Catalog
 
 	/*
 	ddl queue
@@ -246,7 +249,15 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	pci.timerClose.Close()
 
 	//stop persistent worker
-	close(pci.msgChan)
+	/*
+	Do not close chan twice.
+	 */
+	if pci.msgChan != nil {
+		_,opened := <- pci.msgChan
+		if opened{
+			close(pci.msgChan)
+		}
+	}
 
 	//stop delete ddl worker
 	pci.ddlDeleteClose.Close()
@@ -423,7 +434,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			//fmt.Printf("cluster epoch %v \n",msg.body)
 			err := kv.PutCustomData(CLUSTER_EPOCH_KEY,msg.body)
 			if err != nil {
-				panic(err)
+				//panic(err)
 				log.Fatal(err)
 			}
 
@@ -432,7 +443,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			//save kv<server,maximumRemovableEpoch>
 			err := kv.BatchPutCustomData(msg.body2,msg.body3)
 			if err != nil {
-				panic(err)
+				//panic(err)
 				log.Fatal(err)
 			}
 		case MSG_TYPE_MINI_REM_EPOCH:
@@ -440,7 +451,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			//save minimumRemovableEpoch
 			err := kv.PutCustomData(MINI_REM_EPOCH_KEY,msg.body)
 			if err != nil {
-				panic(err)
+				//panic(err)
 				log.Fatal(err)
 			}
 		}
@@ -455,7 +466,16 @@ func (pci *PDCallbackImpl) DeleteDDLPeriodicallyRoutine () {
 	for pci.ddlDeleteClose.IsOpened() {
 		//step 1: get ddls marked deleted from the catalog service
 		//step 2: delete these ddls
-		fmt.Printf("id %d delete ddl \n",pci.Id)
+		if pci.catalog != nil {
+			epoch := pci.GetClusterMinimumRemovableEpoch()
+			if epoch > 0 {
+				fmt.Printf("id %d delete ddl at epoch %d \n",pci.Id, epoch)
+				_,err := pci.catalog.RemoveDeletedTable(epoch)
+				if err != nil {
+					fmt.Printf("catalog remove ddl timer failed. error :%v \n",err)
+				}
+			}
+		}
 		time.Sleep(time.Duration(pci.periodOfDDLDelete) * time.Second)
 	}
 }
@@ -578,7 +598,13 @@ less than or equal to the epoch will be deleted.
  */
 func (sci *PDCallbackImpl) DeleteDDLPermanentlyRoutine(max_ep uint64) {
 	//drive catalog service DeleteDDL
-	fmt.Printf("async delete ddl epoch %d \n",max_ep)
+	if sci.catalog != nil && max_ep > 0 {
+		fmt.Printf("async delete ddl epoch %d \n",max_ep)
+		_,err := sci.catalog.RemoveDeletedTable(max_ep)
+		if err != nil {
+			fmt.Printf("catalog remove ddl async failed. error :%v \n",err)
+		}
+	}
 }
 
 func (sci *PDCallbackImpl) CollectData() []byte {
@@ -659,6 +685,18 @@ func (sci *PDCallbackImpl) CanAcceptSomething() bool{
 	sci.rwlock.RLock()
 	defer sci.rwlock.RUnlock()
 	return !sci.heartbeatTimeout.isTimeout()
+}
+
+func (sci *PDCallbackImpl) SetCatalogService(cl *catalog.Catalog) {
+	sci.rwlock.Lock()
+	defer sci.rwlock.Unlock()
+	sci.catalog = cl
+}
+
+func (sci *PDCallbackImpl) GetClusterMinimumRemovableEpoch() uint64{
+	sci.rwlock.RLock()
+	defer sci.rwlock.RUnlock()
+	return sci.cluster_minimumRemovableEpoch
 }
 
 /*

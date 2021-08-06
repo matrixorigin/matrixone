@@ -1,4 +1,4 @@
-package main
+package test
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Printf("Usage: gen_sql number")
+		fmt.Printf("Usage: gen_sql number\n")
 		os.Exit(-1)
 	}
 	n,err := strconv.ParseInt(os.Args[1],10,32)

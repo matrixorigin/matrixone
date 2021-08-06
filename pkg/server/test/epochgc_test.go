@@ -1,27 +1,19 @@
-package server
+package test
 
 import (
 	"fmt"
 	"github.com/fagongzi/log"
-	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
-	cube_config "github.com/matrixorigin/matrixcube/config"
-	cube_server "github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage"
-	"github.com/matrixorigin/matrixcube/storage/pebble"
-	stdLog "log"
+	"io/ioutil"
 	"math/rand"
 	"matrixone/pkg/client"
 	mo_config "matrixone/pkg/config"
 	"matrixone/pkg/logger"
 	"matrixone/pkg/rpcserver"
+	"matrixone/pkg/server"
 	"matrixone/pkg/sql/handler"
 	"matrixone/pkg/vm/engine"
 	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
-	"matrixone/pkg/vm/engine/aoe/dist"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	aoe_dist_config "matrixone/pkg/vm/engine/aoe/dist/config"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
@@ -29,135 +21,12 @@ import (
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
 	"os"
-	"sync"
 	"testing"
 	"time"
 )
 
-var (
-	tmpDir = "./cube-test"
-)
-
-func recreateTestTempDir() (err error) {
-	err = os.RemoveAll(tmpDir)
-	if err != nil {
-		return err
-	}
-	err = os.Mkdir(tmpDir, os.ModeDir)
-	return err
-}
-
-func cleanupTmpDir() error {
-	if err := os.RemoveAll(tmpDir); err != nil {
-		return err
-	}
-	return nil
-}
-
-type TestCluster struct {
-	T            *testing.T
-	Applications []dist.Storage
-	Storages  	[]*daoe.Storage
-}
-
 var DC *client.DebugCounter = client.NewDebugCounter(32)
 
-func NewTestClusterStore(t *testing.T, reCreate bool,
-	f func(path string) (storage.DataStorage, error),
-	pcis []*client.PDCallbackImpl, nodeCnt int) (*TestCluster, error) {
-	if reCreate {
-		stdLog.Printf("clean target dir")
-		if err := recreateTestTempDir(); err != nil {
-			return nil, err
-		}
-	}
-	c := &TestCluster{T: t}
-	c.Storages = make([]*daoe.Storage,nodeCnt)
-	var wg sync.WaitGroup
-	for i := 0; i < nodeCnt; i++ {
-		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
-		if err != nil {
-			return nil, err
-		}
-		pebbleDataStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i))
-		var aoeDataStorage storage.DataStorage
-		if err != nil {
-			return nil, err
-		}
-		if f == nil {
-			c.Storages[i],err = daoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
-			aoeDataStorage = c.Storages[i]
-		} else {
-			aoeDataStorage, err = f(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
-		}
-
-		if err != nil {
-			return nil, err
-		}
-		cfg := aoe_dist_config.Config{}
-		cfg.ServerConfig = cube_server.Cfg{
-			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
-		}
-		cfg.ClusterConfig = aoe_dist_config.ClusterConfig{
-			PreAllocatedGroupNum: 20,
-		}
-		cfg.CubeConfig = cube_config.Config{
-			DataPath: fmt.Sprintf("%s/node-%d", tmpDir, i),
-			RaftAddr: fmt.Sprintf("127.0.0.1:1000%d", i),
-			ClientAddr: fmt.Sprintf("127.0.0.1:2000%d", i),
-			Replication: cube_config.ReplicationConfig{
-				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 100),
-				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
-			},
-			Raft: cube_config.RaftConfig{
-				TickInterval: typeutil.NewDuration(time.Millisecond * 600),
-				MaxEntryBytes: 300 * 1024 * 1024,
-			},
-			Prophet: pConfig.Config{
-				Name: fmt.Sprintf("node-%d", i),
-				StorageNode: true,
-				RPCAddr: fmt.Sprintf("127.0.0.1:3000%d", i),
-				EmbedEtcd: pConfig.EmbedEtcdConfig{
-					ClientUrls: fmt.Sprintf("http://127.0.0.1:4000%d", i),
-					PeerUrls: fmt.Sprintf("http://127.0.0.1:5000%d", i),
-				},
-				Schedule: pConfig.ScheduleConfig{
-					EnableJointConsensus: true,
-				},
-			},
-		}
-
-		if i < len(pcis){
-			cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pcis[i]
-		}
-
-		if i != 0 {
-			cfg.CubeConfig.Prophet.EmbedEtcd.Join = "http://127.0.0.1:40000"
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
-			if err != nil {
-				log.Fatal("create failed with %+v", err)
-			}
-			c.Applications = append(c.Applications, a)
-		}()
-		if i == 0 {
-			time.Sleep(3 * time.Second)
-		}
-		time.Sleep(2 * time.Second)
-	}
-	wg.Wait()
-	return c, nil
-}
-
-func (c *TestCluster) stop() {
-	for _, s := range c.Applications {
-		s.Close()
-	}
-}
-/*
 func TestEpochGC(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
@@ -206,7 +75,6 @@ func TestEpochGC(t *testing.T) {
 
 	DC.Cf.Close()
 }
-*/
 
 /*
 test:
@@ -255,8 +123,12 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
 	eng := aoe_engine.Mock(&catalog)
 
+	for i := 0 ; i < nodeCnt; i++ {
+		pcis[i].SetCatalogService(&catalog)
+	}
+
 	server_cnt := 2
-	var svs []Server = nil
+	var svs []server.Server = nil
 	for i := 0 ; i < client.Min(server_cnt, client.Min(len(testPorts),nodeCnt)) ; i++ {
 		db := c.Storages[i].DB
 		hm := host.New(1 << 40)
@@ -320,9 +192,9 @@ func testPCI(id int,f*client.CloseFlag, pci *client.PDCallbackImpl) {
 }
 
 var testPorts = []int{6002,6003,6004}
-var testConfigFile = "./test/system_vars_config.toml"
+var testConfigFile = "./system_vars_config.toml"
 
-func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engine.Engine) (Server, error) {
+func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engine.Engine) (server.Server, error) {
 	sv := &mo_config.SystemVariables{}
 
 	//before anything using the configuration
@@ -352,13 +224,12 @@ func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engi
 	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, storageEngine, clusterNodes)
 
 	address := fmt.Sprintf("%s:%d", sv.GetHost(), port)
-	sver := NewServer(address, pu, pd)
+	sver := server.NewServer(address, pu, pd)
 	return sver,nil
 }
 
-/*
 func Test_Multi_Server(t *testing.T) {
-	var svs []Server = nil
+	var svs []server.Server = nil
 	ppu := client.NewPDCallbackParameterUnit(5,20,20,20)
 	for _, port := range testPorts{
 		sv, err := get_server(testConfigFile, port, client.NewPDCallbackImpl(ppu), nil)
@@ -391,4 +262,3 @@ func Test_openfile(t *testing.T) {
 	defer f.Close()
 
 }
-*/
