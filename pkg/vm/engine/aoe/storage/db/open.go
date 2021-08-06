@@ -24,7 +24,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	opts.FillDefaults(dirname)
 	metaReplayHandle := NewMetaHandle(dirname)
 
-	opts.Meta.Info = metaReplayHandle.RebuildInfo(opts.Meta.Conf)
+	opts.Meta.Info = metaReplayHandle.RebuildInfo(&opts.Mu, opts.Meta.Conf)
 
 	// TODO: refactor needed
 	dio.WRITER_FACTORY.Init(opts, dirname)

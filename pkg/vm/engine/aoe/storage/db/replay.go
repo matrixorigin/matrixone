@@ -8,6 +8,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path"
+	"sync"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	log "github.com/sirupsen/logrus"
@@ -338,8 +339,8 @@ func (h *metaHandle) rebuildTable(tbl *md.Table) *md.Table {
 	return ret
 }
 
-func (h *metaHandle) RebuildInfo(cfg *md.Configuration) *md.MetaInfo {
-	info := md.NewMetaInfo(cfg)
+func (h *metaHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.MetaInfo {
+	info := md.NewMetaInfo(mu, cfg)
 	if h.infos == nil {
 		return info
 	}

@@ -15,7 +15,7 @@ import (
 
 func TestBasicOps(t *testing.T) {
 	opts := e.Options{}
-	info := md.MockInfo(md.BLOCK_ROW_COUNT, md.SEGMENT_BLOCK_COUNT)
+	info := md.MockInfo(&opts.Mu, md.BLOCK_ROW_COUNT, md.SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	opts.Meta.Info = info
 	opts.FillDefaults(info.Conf.Dir)

@@ -13,6 +13,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -120,8 +121,9 @@ func TestAll(t *testing.T) {
 }
 
 func TestSegmentWriter(t *testing.T) {
+	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
-	info := md.MockInfo(rowCount, blkCount)
+	info := md.MockInfo(mu, rowCount, blkCount)
 	schema := md.MockSchema(2)
 	segCnt, blkCnt := uint64(4), uint64(4)
 	table := md.MockTable(info, schema, segCnt*blkCnt)

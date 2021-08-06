@@ -148,7 +148,7 @@ type Configuration struct {
 }
 
 type MetaInfo struct {
-	sync.RWMutex
+	*sync.RWMutex
 	Sequence   Sequence       `json:"-"`
 	Conf       *Configuration `json:"-"`
 	CheckPoint uint64

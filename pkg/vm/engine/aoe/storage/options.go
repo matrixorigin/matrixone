@@ -7,6 +7,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"sync"
 	"time"
 )
 
@@ -39,6 +40,8 @@ type MetaCleanerCfg struct {
 
 type Options struct {
 	EventListener e.EventListener
+
+	Mu sync.RWMutex
 
 	Mon struct {
 		Collector iw.IOpWorker
@@ -96,7 +99,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 	if o.Meta.Info == nil {
-		o.Meta.Info = md.NewMetaInfo(o.Meta.Conf)
+		o.Meta.Info = md.NewMetaInfo(&o.Mu, o.Meta.Conf)
 	}
 
 	if o.Meta.Checkpointer == nil {
