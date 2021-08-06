@@ -74,11 +74,8 @@ func (s *Storage) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (uint64, 
 	return s.DB.CreateTable(info, ctx)
 }
 
-func (s *Storage) DropTable(name string, index *md.LogIndex) (uint64, error) {
-	return s.DB.DropTable(dbi.DropTableCtx{
-		OpIndex:   index.ID,
-		TableName: name,
-	})
+func (s *Storage) DropTable(ctx dbi.DropTableCtx) (uint64, error) {
+	return s.DB.DropTable(ctx)
 }
 
 func (s *Storage) TableIDs() (ids []uint64, err error) {

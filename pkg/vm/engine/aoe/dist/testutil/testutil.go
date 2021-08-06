@@ -6,7 +6,6 @@ import (
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	log "github.com/sirupsen/logrus"
 	stdLog "log"
@@ -20,16 +19,16 @@ import (
 )
 
 var (
-	tmpDir    = "/data1/tmp/aoe-cluster-test/"
+	tmpDir = "/tmp/aoe-cluster-test/"
 )
-
 
 type TestCluster struct {
 	T            *testing.T
 	Applications []dist.Storage
+	AOEDBs       []*daoe.Storage
 }
 
-func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (storage.DataStorage, error)) (*TestCluster, error) {
+func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe.Storage, error)) (*TestCluster, error) {
 	if reCreate {
 		stdLog.Printf("clean target dir")
 		if err := recreateTestTempDir(); err != nil {
@@ -44,7 +43,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 			return nil, err
 		}
 		pebbleDataStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i))
-		var aoeDataStorage storage.DataStorage
+		var aoeDataStorage *daoe.Storage
 		if err != nil {
 			return nil, err
 		}
@@ -65,24 +64,24 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 			PreAllocatedGroupNum: 20,
 		}
 		cfg.CubeConfig = cConfig.Config{
-			DataPath: fmt.Sprintf("%s/node-%d", tmpDir, i),
-			RaftAddr: fmt.Sprintf("127.0.0.1:1000%d", i),
+			DataPath:   fmt.Sprintf("%s/node-%d", tmpDir, i),
+			RaftAddr:   fmt.Sprintf("127.0.0.1:1000%d", i),
 			ClientAddr: fmt.Sprintf("127.0.0.1:2000%d", i),
 			Replication: cConfig.ReplicationConfig{
 				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 100),
 				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
 			},
 			Raft: cConfig.RaftConfig{
-				TickInterval: typeutil.NewDuration(time.Millisecond * 600),
+				TickInterval:  typeutil.NewDuration(time.Millisecond * 600),
 				MaxEntryBytes: 300 * 1024 * 1024,
 			},
 			Prophet: pConfig.Config{
-				Name: fmt.Sprintf("node-%d", i),
+				Name:        fmt.Sprintf("node-%d", i),
 				StorageNode: true,
-				RPCAddr: fmt.Sprintf("127.0.0.1:3000%d", i),
+				RPCAddr:     fmt.Sprintf("127.0.0.1:3000%d", i),
 				EmbedEtcd: pConfig.EmbedEtcdConfig{
 					ClientUrls: fmt.Sprintf("http://127.0.0.1:4000%d", i),
-					PeerUrls: fmt.Sprintf("http://127.0.0.1:5000%d", i),
+					PeerUrls:   fmt.Sprintf("http://127.0.0.1:5000%d", i),
 				},
 				Schedule: pConfig.ScheduleConfig{
 					EnableJointConsensus: true,
@@ -99,6 +98,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (stora
 			if err != nil {
 				log.Fatal("create failed with %+v", err)
 			}
+			c.AOEDBs = append(c.AOEDBs, aoeDataStorage)
 			c.Applications = append(c.Applications, a)
 		}()
 		if i == 0 {

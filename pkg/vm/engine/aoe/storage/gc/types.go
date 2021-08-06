@@ -110,8 +110,7 @@ func (wk *Worker) process() {
 		}
 		err := req.WaitDone()
 		if err != nil {
-			// TODO
-			log.Warningf("handle req err: %s", err)
+			log.Warningf("handle req err: %v", err)
 			req.IncIteration()
 			wk.Accept(req)
 		} else {

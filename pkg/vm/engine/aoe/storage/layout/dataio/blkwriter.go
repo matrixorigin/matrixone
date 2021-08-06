@@ -93,7 +93,7 @@ func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, err
 }
 
 func (bw *BlockWriter) defaultPreprocessor(data []*vector.Vector, meta *md.Block) error {
-	err := mergesort.SortBlockColumns(data, meta)
+	err := mergesort.SortBlockColumns(data)
 	return err
 }
 

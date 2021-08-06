@@ -1,15 +1,10 @@
 package dist
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixcube/aware"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
-	"github.com/matrixorigin/matrixcube/components/prophet/metadata"
-	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/proxy"
@@ -17,6 +12,7 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
 	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
@@ -70,7 +66,7 @@ type Storage interface {
 	GetSegmentIds(string, uint64) (adb.IDS, error)
 	GetSegmentedId([]string, uint64) (uint64, error)
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
-	DropTablet(string) (uint64, error)
+	DropTablet(string, uint64) (uint64, error)
 	TabletIDs() ([]uint64, error)
 	TabletNames(uint64) ([]string, error)
 	// Exec exec command
@@ -155,46 +151,12 @@ func NewStorageWithOptions(
 		for i := uint64(0); i < c.ClusterConfig.PreAllocatedGroupNum; i++ {
 			initialGroups = append(initialGroups, bhmetapb.Shard{
 				Group:        uint64(pb.AOEGroup),
-				Start:        format.UInt64ToString(i),
-				End:          format.UInt64ToString(i + 1),
+				Start:        codec.Uint642Bytes(i),
+				End:          codec.Uint642Bytes(i + 1),
 				DisableSplit: true,
 			})
 		}
 		return initialGroups
-	}
-
-	c.CubeConfig.Prophet.ResourceStateChangedHandler = func(res metadata.Resource, from metapb.ResourceState, to metapb.ResourceState) {
-		if from == metapb.ResourceState_WaittingCreate && to == metapb.ResourceState_Running {
-			if res.Data() == nil {
-				return
-			}
-			data := format.UInt64ToString(res.ID())
-			data = append(data, res.Data()...)
-			if err := h.RaftStore().Prophet().GetStorage().PutJob(format.UInt64ToString(res.ID()), data); err != nil {
-				//TODO: put job failing
-			}
-		}
-	}
-
-	c.CubeConfig.Prophet.JobCheckerDuration = 10 * time.Millisecond
-	c.CubeConfig.Prophet.JobHandler = func(key, data []byte) {
-		if bytes.Equal(key, data[0:8]) {
-			toShard, _ := format.ParseStrUInt64(string(data[0:8]))
-			header, _ := format.ParseStrUInt64(string(data[8:16]))
-			keys := bytes.Split(data[16:16+header], []byte("#"))
-			tKey := keys[0]
-			rKey := []byte(fmt.Sprintf("%s%d", string(keys[1]), toShard))
-			t, _ := helper.DecodeTable(data[16+header:])
-			if err := h.CreateTablet(fmt.Sprintf("%d#%d", t.Id, toShard), toShard, &t); err != nil {
-				//TODO: handle local create table failing
-			} else {
-				t.State = aoe.StatePublic
-				meta, _ := helper.EncodeTable(t)
-				_ = h.Set(tKey, meta)
-				_ = h.Set(rKey, []byte(t.Name))
-			}
-			h.RaftStore().Prophet().GetStorage().RemoveJob(key)
-		}
 	}
 
 	c.CubeConfig.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
@@ -329,16 +291,30 @@ func (h *aoeStorage) ScanWithGroup(start []byte, end []byte, limit uint64, group
 			Limit: limit,
 		},
 	}
-	data, err := h.ExecWithGroup(req, group)
-	if err != nil {
-		return nil, err
-	}
 	var pairs [][]byte
-	err = json.Unmarshal(data, &pairs)
-	if err != nil {
-		return nil, err
+	var err error
+	var data []byte
+	i := 0
+	for {
+		i = i + 1
+		data, err = h.ExecWithGroup(req, group)
+		if data == nil || err != nil {
+			break
+		}
+		var kvs [][]byte
+		err = json.Unmarshal(data, &kvs)
+		if err != nil || kvs == nil || len(kvs) == 0 {
+			break
+		}
+		if len(kvs)%2 == 0 {
+			pairs = append(pairs, kvs...)
+			break
+		}
+
+		pairs = append(pairs, kvs[0:len(kvs)-1]...)
+		req.Scan.Start = raftstore.EncodeDataKey(uint64(group), kvs[len(kvs)-1])
 	}
-	return pairs, nil
+	return pairs, err
 }
 
 func (h *aoeStorage) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
@@ -436,7 +412,10 @@ func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	resp := format.MustBytesToUint64(data)
+	resp, err := codec.Bytes2Uint64(data)
+	if err != nil {
+		return 0, err
+	}
 	return resp, nil
 }
 
@@ -511,7 +490,7 @@ func (h *aoeStorage) GetSegmentedId(tabletNames []string, toShard uint64) (index
 	if err != nil {
 		return index, err
 	}
-	return format.ParseStrUInt64(string(value))
+	return codec.Bytes2Uint64(value)
 }
 
 func (h *aoeStorage) CreateTablet(name string, toShard uint64, tbl *aoe.TableInfo) (err error) {
@@ -532,8 +511,9 @@ func (h *aoeStorage) CreateTablet(name string, toShard uint64, tbl *aoe.TableInf
 	return nil
 }
 
-func (h *aoeStorage) DropTablet(name string) (id uint64, err error) {
+func (h *aoeStorage) DropTablet(name string, toShard uint64) (id uint64, err error) {
 	req := pb.Request{
+		Shard: toShard,
 		Type:  pb.DropTablet,
 		Group: pb.AOEGroup,
 		DropTablet: pb.DropTabletRequest{
@@ -544,7 +524,7 @@ func (h *aoeStorage) DropTablet(name string) (id uint64, err error) {
 	if err != nil {
 		return id, err
 	}
-	return format.MustBytesToUint64(value), nil
+	return codec.Bytes2Uint64(value)
 }
 
 func (h *aoeStorage) TabletIDs() ([]uint64, error) {
