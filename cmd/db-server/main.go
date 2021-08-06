@@ -54,13 +54,12 @@ func main() {
 		fmt.Printf("Usage: %s configFile\n", os.Args[0])
 		os.Exit(-1)
 	}
+	flag.Parse()
 
 	//close cube print info
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
 	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
-
-	flag.Parse()
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
@@ -93,11 +92,12 @@ func main() {
 			pcis[i] = client.NewPDCallbackImpl(ppu)
 			pcis[i].Id = i
 		}
-
-		c, err := epoch_gc_test.NewTestClusterStore(nil,false,nil, pcis, nodeCnt)
+		fmt.Printf("B\n")
+		c, err := epoch_gc_test.NewTestClusterStore(nil,true,nil, pcis, nodeCnt)
 		if err != nil {
 			os.Exit(-2)
 		}
+		fmt.Printf("A\n")
 
 		catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
 		eng := aoe_engine.Mock(&catalog)
@@ -105,6 +105,7 @@ func main() {
 		for i := 0 ; i < nodeCnt; i++ {
 			pcis[i].SetCatalogService(&catalog)
 		}
+		fmt.Printf("C\n")
 
 		//one rpcserver per cube node
 		for i := 0 ; i < nodeCnt ; i++ {
@@ -129,6 +130,7 @@ func main() {
 			srv.Register(hp.Process)
 			go srv.Run()
 		}
+		fmt.Printf("D\n")
 
 		//test storage engine
 		config.StorageEngine = eng
@@ -146,6 +148,7 @@ func main() {
 
 	createServer(pcis[0])
 	registerSignalHandlers()
+	fmt.Printf("E\n")
 	runServer()
 	cleanup()
 	os.Exit(0)
