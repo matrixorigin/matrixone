@@ -6,7 +6,6 @@ import (
 	"github.com/fagongzi/log"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
@@ -37,7 +36,7 @@ func TestStorage(t *testing.T) {
 	log.SetHighlighting(false)
 	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
+	c, err := testutil.NewTestClusterStore(t, true, func(path string) (*daoe.Storage, error) {
 		opts := &e.Options{}
 		mdCfg := &md.Configuration{
 			Dir:              path,

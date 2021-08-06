@@ -143,4 +143,8 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Equal(t, 4, cnt)
 
+	tablets, err := c.GetTablets(dbid, "t16")
+	require.NoError(t, err)
+	require.Less(t, 0, len(tablets))
+
 }

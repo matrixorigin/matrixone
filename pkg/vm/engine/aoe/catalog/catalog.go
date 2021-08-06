@@ -128,7 +128,11 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
+		rkey := c.routeKey(dbId, tbl.Id, shardId)
 		if err := c.Store.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
+			return 0, ErrTableCreateFailed
+		}
+		if c.Store.Set(rkey, []byte(tbl.Name)) != nil {
 			return 0, ErrTableCreateFailed
 		}
 		tbl.State = aoe.StatePublic
@@ -246,14 +250,13 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 			return nil, ErrTableNotExists
 		}
 		shardIds, err := c.Store.PrefixKeys(c.routePrefix(dbId, tb.Id), 0)
-
 		if err != nil {
 			return nil, err
 		}
 		var tablets []aoe.TabletInfo
 		for _, shardId := range shardIds {
 			if sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(dbId, tb.Id)):]); err != nil {
-				stdLog.Printf("convert shardid failed, %v", err)
+				stdLog.Printf("convert shardid failed, %v, shardid is %d, prefix length is %d", err, len(shardId), len(c.routePrefix(dbId, tb.Id)))
 				continue
 			} else {
 				tablets = append(tablets, aoe.TabletInfo{
@@ -262,11 +265,9 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 					Table:   *tb,
 				})
 			}
-
 		}
 		return tablets, nil
 	}
-
 }
 
 // RemoveDeletedTable trigger gc
@@ -289,7 +290,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 			}
 			success := true
 			for _, shardId := range shardIds {
-				if sid, err := codec.Bytes2Uint64(shardId); err != nil {
+				if sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(tbl.SchemaId, tbl.Id)):]); err != nil {
 					stdLog.Printf("convert shardid failed, %v", err)
 					success = false
 					break
@@ -303,19 +304,9 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 				}
 			}
 			if success {
-				x, err := c.Store.Get(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id))
-				stdLog.Printf("[QSQ_DEBUG]schema id of table is, %d", tbl.SchemaId)
-
-				stdLog.Printf("[QSQ_DEBUG]get data before remove using encode, %v, %v, %v", x, err, c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id))
-				y, err := c.Store.Get(rsp[i-1])
-				stdLog.Printf("[QSQ_DEBUG]get data before remove using rsp, %v, %v, %v", y, err, rsp[i-1])
-				stdLog.Printf("[QSQ_DEBUG]compare encode and rsp, %v, %v, %d", c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id), rsp[i-1], bytes.Compare(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id), rsp[i-1]))
 				if c.Store.Delete(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id)) != nil {
 					stdLog.Printf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
 				} else {
-					x, err := c.Store.Get(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id))
-					stdLog.Printf("[QSQ_DEBUG]get data after remove, %v, %v", x, err)
-
 					cnt++
 				}
 			}
@@ -387,47 +378,36 @@ func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 }
 func (c *Catalog) dbIDKey(dbName string) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBIDPrefix, dbName)
-	//return []byte(fmt.Sprintf("%s/%d/%s/%s", cPrefix, defaultCatalogId, cDBIDPrefix, dbName))
 }
 func (c *Catalog) dbKey(id uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBPrefix, id)
-	//return []byte(fmt.Sprintf("%s/%d/%s/%d", cPrefix, defaultCatalogId, cDBPrefix, id))
 }
 func (c *Catalog) dbPrefix() []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBPrefix)
-	//return []byte(fmt.Sprintf("%s/%d/%s", cPrefix, defaultCatalogId, cDBPrefix))
 }
 func (c *Catalog) tableIDKey(dbId uint64, tableName string) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cTableIDPrefix, dbId, tableName)
-	//return []byte(fmt.Sprintf("%s/%d/%s/%d/%s", cPrefix, defaultCatalogId, cTableIDPrefix, dbId, tableName))
 }
 func (c *Catalog) tableKey(dbId, tId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cTablePrefix, dbId, tId)
-	//return []byte(fmt.Sprintf("%s/%d/%s/%d/%d", cPrefix, defaultCatalogId, cTablePrefix, dbId, tId))
 }
 func (c *Catalog) tablePrefix(dbId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cTablePrefix, dbId)
-	//return []byte(fmt.Sprintf("%s/%d/%s/%d", cPrefix, defaultCatalogId, cTablePrefix, dbId))
 }
 func (c *Catalog) routeKey(dbId, tId, gId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId, gId)
-	//return []byte(fmt.Sprintf("%s/%d/%s/%d/%d/%d", cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId, gId))
 }
 func (c *Catalog) routePrefix(dbId, tId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId)
-	//return []byte(fmt.Sprintf("%s/%d/%s/%d/%d", cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId))
 }
 func (c *Catalog) deletedTableKey(epoch, dbId, tId uint64) []byte {
 	return codec.EncodeKey(cDeletedTablePrefix, epoch, dbId, tId)
-	//return []byte(fmt.Sprintf("/%s/%d/%d/%d", cDeletedTablePrefix, epoch, dbId, tId))
 }
 func (c *Catalog) deletedEpochPrefix(epoch uint64) []byte {
 	return codec.EncodeKey(cDeletedTablePrefix, epoch)
-	//return []byte(fmt.Sprintf("/%s/%d/", cDeletedTablePrefix, epoch))
 }
 func (c *Catalog) deletedPrefix() []byte {
 	return codec.EncodeKey(cDeletedTablePrefix)
-	//return []byte(fmt.Sprintf("/%s/", cDeletedTablePrefix))
 }
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	var rsp []uint64
