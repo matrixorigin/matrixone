@@ -92,12 +92,12 @@ func main() {
 			pcis[i] = client.NewPDCallbackImpl(ppu)
 			pcis[i].Id = i
 		}
-		fmt.Printf("B\n")
+		fmt.Printf("BBBBBBBBBB\n")
 		c, err := epoch_gc_test.NewTestClusterStore(nil,true,nil, pcis, nodeCnt)
 		if err != nil {
 			os.Exit(-2)
 		}
-		fmt.Printf("A\n")
+		fmt.Printf("AAAAAAAAAA\n")
 
 		catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
 		eng := aoe_engine.Mock(&catalog)
@@ -105,11 +105,11 @@ func main() {
 		for i := 0 ; i < nodeCnt; i++ {
 			pcis[i].SetCatalogService(&catalog)
 		}
-		fmt.Printf("C\n")
+		fmt.Printf("CCCCCCCCCC\n")
 
 		//one rpcserver per cube node
 		for i := 0 ; i < nodeCnt ; i++ {
-			db := c.Storages[i].DB
+			db := c.AOEDBs[i].DB
 			hm := config.HostMmu
 			gm := guest.New(1<<40, hm)
 			proc := process.New(gm, config.Mempool)
@@ -130,7 +130,7 @@ func main() {
 			srv.Register(hp.Process)
 			go srv.Run()
 		}
-		fmt.Printf("D\n")
+		fmt.Printf("DDDDDDDDDDDD\n")
 
 		//test storage engine
 		config.StorageEngine = eng
@@ -148,7 +148,7 @@ func main() {
 
 	createServer(pcis[0])
 	registerSignalHandlers()
-	fmt.Printf("E\n")
+	fmt.Printf("EEEEEEEEE\n")
 	runServer()
 	cleanup()
 	os.Exit(0)

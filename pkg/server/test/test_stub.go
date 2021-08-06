@@ -2,18 +2,16 @@ package test
 
 import (
 	"fmt"
-	"github.com/fagongzi/log"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
-	cube_config "github.com/matrixorigin/matrixcube/config"
-	cube_server "github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage"
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	stdLog "log"
 	"matrixone/pkg/client"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	aoe_dist_config "matrixone/pkg/vm/engine/aoe/dist/config"
+	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"os"
 	"sync"
 	"testing"
@@ -24,30 +22,14 @@ var (
 	tmpDir = "./cube-test"
 )
 
-func recreateTestTempDir() (err error) {
-	err = os.RemoveAll(tmpDir)
-	if err != nil {
-		return err
-	}
-	err = os.Mkdir(tmpDir, os.ModeDir)
-	return err
-}
-
-func cleanupTmpDir() error {
-	if err := os.RemoveAll(tmpDir); err != nil {
-		return err
-	}
-	return nil
-}
-
 type TestCluster struct {
 	T            *testing.T
 	Applications []dist.Storage
-	Storages  	[]*daoe.Storage
+	AOEDBs       []*daoe.Storage
 }
 
 func NewTestClusterStore(t *testing.T, reCreate bool,
-	f func(path string) (storage.DataStorage, error),
+	f func(path string) (*daoe.Storage, error),
 	pcis []*client.PDCallbackImpl, nodeCnt int) (*TestCluster, error) {
 	if reCreate {
 		stdLog.Printf("clean target dir")
@@ -56,7 +38,6 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		}
 	}
 	c := &TestCluster{T: t}
-	c.Storages = make([]*daoe.Storage,nodeCnt)
 	var wg sync.WaitGroup
 	for i := 0; i < nodeCnt; i++ {
 		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
@@ -64,13 +45,12 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 			return nil, err
 		}
 		pebbleDataStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i))
-		var aoeDataStorage storage.DataStorage
+		var aoeDataStorage *daoe.Storage
 		if err != nil {
 			return nil, err
 		}
 		if f == nil {
-			c.Storages[i],err = daoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
-			aoeDataStorage = c.Storages[i]
+			aoeDataStorage, err = daoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
 		} else {
 			aoeDataStorage, err = f(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
 		}
@@ -78,32 +58,32 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		if err != nil {
 			return nil, err
 		}
-		cfg := aoe_dist_config.Config{}
-		cfg.ServerConfig = cube_server.Cfg{
+		cfg := config.Config{}
+		cfg.ServerConfig = server.Cfg{
 			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
 		}
-		cfg.ClusterConfig = aoe_dist_config.ClusterConfig{
+		cfg.ClusterConfig = config.ClusterConfig{
 			PreAllocatedGroupNum: 20,
 		}
-		cfg.CubeConfig = cube_config.Config{
-			DataPath: fmt.Sprintf("%s/node-%d", tmpDir, i),
-			RaftAddr: fmt.Sprintf("127.0.0.1:1000%d", i),
+		cfg.CubeConfig = cConfig.Config{
+			DataPath:   fmt.Sprintf("%s/node-%d", tmpDir, i),
+			RaftAddr:   fmt.Sprintf("127.0.0.1:1000%d", i),
 			ClientAddr: fmt.Sprintf("127.0.0.1:2000%d", i),
-			Replication: cube_config.ReplicationConfig{
+			Replication: cConfig.ReplicationConfig{
 				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 100),
 				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
 			},
-			Raft: cube_config.RaftConfig{
-				TickInterval: typeutil.NewDuration(time.Millisecond * 600),
+			Raft: cConfig.RaftConfig{
+				TickInterval:  typeutil.NewDuration(time.Millisecond * 600),
 				MaxEntryBytes: 300 * 1024 * 1024,
 			},
 			Prophet: pConfig.Config{
-				Name: fmt.Sprintf("node-%d", i),
+				Name:        fmt.Sprintf("node-%d", i),
 				StorageNode: true,
-				RPCAddr: fmt.Sprintf("127.0.0.1:3000%d", i),
+				RPCAddr:     fmt.Sprintf("127.0.0.1:3000%d", i),
 				EmbedEtcd: pConfig.EmbedEtcdConfig{
 					ClientUrls: fmt.Sprintf("http://127.0.0.1:4000%d", i),
-					PeerUrls: fmt.Sprintf("http://127.0.0.1:5000%d", i),
+					PeerUrls:   fmt.Sprintf("http://127.0.0.1:5000%d", i),
 				},
 				Schedule: pConfig.ScheduleConfig{
 					EnableJointConsensus: true,
@@ -123,8 +103,9 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 			defer wg.Done()
 			a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
 			if err != nil {
-				log.Fatal("create failed with %+v", err)
+				fmt.Printf("create failed with %v", err)
 			}
+			c.AOEDBs = append(c.AOEDBs, aoeDataStorage)
 			c.Applications = append(c.Applications, a)
 		}()
 		if i == 0 {
@@ -132,12 +113,27 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		}
 		time.Sleep(2 * time.Second)
 	}
+	fmt.Printf("=====================>\n")
 	wg.Wait()
+	fmt.Printf("--------------------->\n")
 	return c, nil
 }
 
-func (c *TestCluster) stop() {
+func (c *TestCluster) Stop() {
 	for _, s := range c.Applications {
 		s.Close()
 	}
+}
+
+func recreateTestTempDir() (err error) {
+	err = os.RemoveAll(tmpDir)
+	if err != nil {
+		return err
+	}
+	err = os.MkdirAll(tmpDir, os.ModeDir)
+	return err
+}
+
+func cleanupTmpDir() error {
+	return os.RemoveAll(tmpDir)
 }

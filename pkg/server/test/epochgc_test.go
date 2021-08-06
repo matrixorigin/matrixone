@@ -60,7 +60,7 @@ func TestEpochGC(t *testing.T) {
 		return
 	}
 
-	defer c.stop()
+	defer c.Stop()
 
 	time.Sleep(1 * time.Minute)
 
@@ -118,7 +118,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		return
 	}
 
-	defer c.stop()
+	defer c.Stop()
 
 	catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
 	eng := aoe_engine.Mock(&catalog)
@@ -130,7 +130,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	server_cnt := 2
 	var svs []server.Server = nil
 	for i := 0 ; i < client.Min(server_cnt, client.Min(len(testPorts),nodeCnt)) ; i++ {
-		db := c.Storages[i].DB
+		db := c.AOEDBs[i].DB
 		hm := host.New(1 << 40)
 		gm := guest.New(1<<40, hm)
 		proc := process.New(gm, mempool.New(1<<40, 8))
