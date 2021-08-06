@@ -43,7 +43,7 @@ type DB struct {
 	SSTBufMgr   bmgrif.IBufferManager
 
 	Store struct {
-		sync.RWMutex
+		Mu         *sync.RWMutex
 		MetaInfo   *md.MetaInfo
 		DataTables *table.Tables
 	}
@@ -57,8 +57,6 @@ type DB struct {
 
 	Closed  *atomic.Value
 	ClosedC chan struct{}
-
-	sync.RWMutex
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {

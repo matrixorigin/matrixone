@@ -48,6 +48,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		Closed:      new(atomic.Value),
 	}
 
+	db.Store.Mu = &opts.Mu
 	db.Store.DataTables = table.NewTables()
 	db.Store.MetaInfo = opts.Meta.Info
 	db.Cleaner.MetaFiles = w.NewHeartBeater(db.Opts.MetaCleanerCfg.Interval, NewMetaFileCleaner(db.Opts.Meta.Info))
