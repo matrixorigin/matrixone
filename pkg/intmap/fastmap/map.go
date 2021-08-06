@@ -1,6 +1,8 @@
 package fastmap
 
-import "sync"
+import (
+	"sync"
+)
 
 var Pool = sync.Pool{
 	New: func() interface{} {
@@ -34,16 +36,8 @@ func (m *Map) Set(k uint64, v int) {
 
 func (m *Map) Get(k uint64) (int, bool) {
 	slot := k & GroupMask
-	j := len(m.Ks[slot]) / Width
-	if j > 0 {
-		if i := Find(m.Ks[slot], k); i != -1 {
-			return m.Vs[slot][i], true
-		}
-	}
-	for i := j * Width; i < len(m.Ks[slot]); i++ {
-		if m.Ks[slot][i] == k {
-			return m.Vs[slot][i], true
-		}
+	if i := Find(m.Ks[slot], k); i != -1 {
+		return m.Vs[slot][i], true
 	}
 	return -1, false
 }

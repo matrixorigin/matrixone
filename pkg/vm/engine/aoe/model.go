@@ -32,6 +32,7 @@ type SchemaInfo struct {
 	Tables    []*TableInfo `json:"tables"` // Tables in the DB.
 	State     SchemaState  `json:"state"`
 	Type      int          `json:"type"` // Engine type of schema: RSE、AOE、Spill
+	Epoch     uint64       `json:"epoch"`
 }
 
 // TableInfo stores the information of a table or view.
@@ -45,6 +46,7 @@ type TableInfo struct {
 	Comment   []byte       `json:"comment"`
 	State     SchemaState  `json:"state"`
 	Partition []byte       `json:"partition"`
+	Epoch     uint64       `json:"epoch"`
 }
 
 type TabletInfo struct {
@@ -61,6 +63,7 @@ type ColumnInfo struct {
 	Name     string     `json:"name"`
 	Type     types.Type `json:"type"`
 	Alg      int        `json:"alg"`
+	Epoch    uint64     `json:"epoch"`
 }
 
 type IndexInfo struct {
@@ -70,6 +73,7 @@ type IndexInfo struct {
 	Id       uint64   `json:"id"`
 	Names    []string `json:"column_names"`
 	Type     uint64   `json:"type"`
+	Epoch    uint64   `json:"epoch"`
 }
 
 type SegmentInfo struct {
@@ -78,10 +82,5 @@ type SegmentInfo struct {
 	GroupId     uint64 `json:"group_id"`
 	TabletId    string `json:"tablet_id"`
 	PartitionId string `json:"partition_id"`
-}
-
-type RouteInfo struct {
-	GroupId  uint64 `json:"group_id"`
-	Node     []byte `json:"node"`
-	Segments map[uint64][]SegmentInfo
+	Epoch       uint64 `json:"epoch"`
 }

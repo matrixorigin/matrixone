@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"github.com/fagongzi/log"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/client"
 	"matrixone/pkg/config"
+	"matrixone/pkg/logger"
+	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/server"
+	"matrixone/pkg/sql/handler"
 	"matrixone/pkg/util/signal"
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
@@ -19,14 +21,16 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
+	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
+	"matrixone/pkg/vm/process"
 	"os"
 	"testing"
 	"time"
 )
 
 var (
-	svr      server.Server
+	svr        server.Server
 	configPath = "./system_vars_config.toml"
 )
 
@@ -35,8 +39,8 @@ func TestServer(t *testing.T) {
 	log.SetHighlighting(false)
 	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
-		opts     := &e.Options{}
+	c, err := testutil.NewTestClusterStore(t, true, func(path string) (*daoe.Storage, error) {
+		opts := &e.Options{}
 		mdCfg := &md.Configuration{
 			Dir:              path,
 			SegmentMaxBlocks: blockCntPerSegment,
@@ -66,12 +70,12 @@ func TestServer(t *testing.T) {
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n",err)
+		fmt.Printf("error:%v\n", err)
 		return
 	}
 
 	if err := config.LoadvarsConfigFromFile(configPath, &config.GlobalSystemVariables); err != nil {
-		fmt.Printf("error:%v\n",err)
+		fmt.Printf("error:%v\n", err)
 		return
 	}
 
@@ -80,14 +84,14 @@ func TestServer(t *testing.T) {
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
 
-	if ! config.GlobalSystemVariables.GetDumpEnv() {
+	if !config.GlobalSystemVariables.GetDumpEnv() {
 		fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 		//test storage engine
 		config.StorageEngine = aoeEngine
 
 		//test cluster nodes
 		config.ClusterNodes = metadata.Nodes{}
-	}else{
+	} else {
 		panic("The Official Storage Engine and Cluster Nodes are in the developing.")
 
 		//TODO:
@@ -95,7 +99,30 @@ func TestServer(t *testing.T) {
 
 		config.ClusterNodes = nil
 	}
-
+	{
+		for i := 0; i < 3; i++ {
+			db := c.AOEDBs[i]
+			hm := host.New(1 << 40)
+			gm := guest.New(1<<40, hm)
+			proc := process.New(gm, mempool.New(1<<40, 8))
+			{
+				proc.Id = "0"
+				proc.Lim.Size = 10 << 32
+				proc.Lim.BatchRows = 10 << 32
+				proc.Lim.PartitionRows = 10 << 32
+				proc.Refer = make(map[string]uint64)
+			}
+			log := logger.New(os.Stderr, fmt.Sprintf("rpc%v:", i))
+			log.SetLevel(logger.WARN)
+			srv, err := rpcserver.New(fmt.Sprintf("127.0.0.1:%v", 20000+i+100), 1<<30, log)
+			if err != nil {
+				log.Fatal(err)
+			}
+			hp := handler.New(db.DB, proc)
+			srv.Register(hp.Process)
+			go srv.Run()
+		}
+	}
 	createServer()
 	registerSignalHandlers()
 	runServer()
@@ -103,8 +130,6 @@ func TestServer(t *testing.T) {
 	os.Exit(0)
 
 }
-
-
 
 func createServer() {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
