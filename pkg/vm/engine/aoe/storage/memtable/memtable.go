@@ -10,6 +10,7 @@ import (
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata/v2"
+	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -160,6 +161,32 @@ func (mt *MemTable) Flush() error {
 		if err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 			return err
+		}
+		if upgradeBlkOp.SegmentClosed {
+			flushOp := dops.NewFlushSegOp(&dops.OpCtx{Opts: mt.Opts}, mt.TableData.StrongRefSegment(newMeta.Segment.ID))
+			err = flushOp.Push()
+			if err != nil {
+				mt.Opts.EventListener.BackgroundErrorCB(err)
+				return err
+			}
+			mt.TableData.Ref()
+			go func(td iface.ITableData) {
+				defer td.Unref()
+				err = flushOp.WaitDone()
+				if err != nil {
+					mt.Opts.EventListener.BackgroundErrorCB(err)
+				} else {
+					ctx := cops.OpCtx{Opts: flushOp.Ctx.Opts}
+					op := cops.NewUpgradeSegOp(&ctx, newMeta.Segment.ID, td)
+					if err = op.Push(); err != nil {
+						mt.Opts.EventListener.BackgroundErrorCB(err)
+					}
+					if err = op.WaitDone(); err != nil {
+						mt.Opts.EventListener.BackgroundErrorCB(err)
+					}
+					op.Segment.Unref()
+				}
+			}(mt.TableData)
 		}
 		upgradeBlkOp.Block.Unref()
 	}

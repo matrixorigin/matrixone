@@ -107,6 +107,10 @@ func (blk *StdColumnBlock) close() {
 	// log.Infof("destroy colblk %d, colidx %d", blk.Meta.ID, blk.ColIdx)
 }
 
+func (blk *StdColumnBlock) LoadVectorWrapper() (*vector.VectorWrapper, error) {
+	return blk.Part.LoadVectorWrapper()
+}
+
 func (blk *StdColumnBlock) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
 	return blk.Part.ForceLoad(ref, proc)
 }

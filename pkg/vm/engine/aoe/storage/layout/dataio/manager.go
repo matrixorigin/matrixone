@@ -95,12 +95,12 @@ func (mgr *Manager) UpgradeFile(id common.ID) base.ISegmentFile {
 		sf = NewSortedSegmentFile(mgr.Dir, id)
 	}
 	mgr.Lock()
-	staleFile, ok := mgr.UnsortedFiles[id]
+	_, ok := mgr.UnsortedFiles[id]
 	if !ok {
 		log.Info(mgr.stringNoLock())
 		panic(fmt.Sprintf("upgrade file %s not found", id.SegmentString()))
 	}
-	defer staleFile.Close()
+	// defer staleFile.Unref()
 	delete(mgr.UnsortedFiles, id)
 	_, ok = mgr.SortedFiles[id]
 	if ok {

@@ -23,6 +23,7 @@ type IColumnPart interface {
 	SetNext(IColumnPart)
 	GetID() uint64
 	GetColIdx() int
+	LoadVectorWrapper() (*vector.VectorWrapper, error)
 	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
 	GetVector() vector.IVector
@@ -105,6 +106,19 @@ func (part *ColumnPart) GetVector() vector.IVector {
 	handle := part.GetBufferHandle()
 	vec := wrapper.NewVector(handle)
 	return vec
+}
+
+func (part *ColumnPart) LoadVectorWrapper() (*vector.VectorWrapper, error) {
+	if part.VFile.GetFileType() == common.MemFile {
+		panic("logic error")
+	}
+	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
+	wrapper.File = part.VFile
+	_, err := wrapper.ReadFrom(part.VFile)
+	if err != nil {
+		return nil, err
+	}
+	return wrapper, nil
 }
 
 func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {

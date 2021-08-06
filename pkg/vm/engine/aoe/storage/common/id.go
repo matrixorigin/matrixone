@@ -1,8 +1,15 @@
 package common
 
 import (
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync/atomic"
+)
+
+var (
+	ErrParseBlockFileName = errors.New("aoe: parse block file name")
 )
 
 type ID struct {
@@ -131,4 +138,50 @@ func (id *ID) ToSegmentFileName() string {
 
 func (id *ID) ToSegmentFilePath() string {
 	return fmt.Sprintf("%d/%d/", id.TableID, id.SegmentID)
+}
+
+func ParseBlockFileName(name string) (ID, error) {
+	var (
+		id  ID
+		err error
+	)
+	strs := strings.Split(name, "_")
+	if len(strs) != 3 {
+		return id, ErrParseBlockFileName
+	}
+	tid, err := strconv.ParseUint(strs[0], 10, 64)
+	if err != nil {
+		return id, err
+	}
+	sid, err := strconv.ParseUint(strs[1], 10, 64)
+	if err != nil {
+		return id, err
+	}
+	bid, err := strconv.ParseUint(strs[2], 10, 64)
+	if err != nil {
+		return id, err
+	}
+	id.TableID, id.SegmentID, id.BlockID = tid, sid, bid
+	return id, nil
+}
+
+func ParseSegmentFileName(name string) (ID, error) {
+	var (
+		id  ID
+		err error
+	)
+	strs := strings.Split(name, "_")
+	if len(strs) != 2 {
+		return id, ErrParseBlockFileName
+	}
+	tid, err := strconv.ParseUint(strs[0], 10, 64)
+	if err != nil {
+		return id, err
+	}
+	sid, err := strconv.ParseUint(strs[1], 10, 64)
+	if err != nil {
+		return id, err
+	}
+	id.TableID, id.SegmentID = tid, sid
+	return id, nil
 }

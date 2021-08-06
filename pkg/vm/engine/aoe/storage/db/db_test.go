@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
@@ -146,7 +147,7 @@ func TestAppend(t *testing.T) {
 	}
 	err = inst.Append(appendCtx)
 	assert.NotNil(t, err)
-	insertCnt := 4
+	insertCnt := 8
 	appendCtx.TableName = tblMeta.Schema.Name
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(appendCtx)
@@ -192,10 +193,11 @@ func TestAppend(t *testing.T) {
 	ss.Close()
 
 	time.Sleep(time.Duration(50) * time.Millisecond)
-	t.Log(inst.FsMgr.String())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
+	// t.Log(inst.FsMgr.String())
+	// t.Log(tbl.GetIndexHolder().String())
 	inst.Close()
 }
 
@@ -316,7 +318,10 @@ func TestConcurrency(t *testing.T) {
 	searchWg.Wait()
 	cancel()
 	wg.Wait()
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
+	if invariants.RaceEnabled {
+		time.Sleep(time.Duration(200) * time.Millisecond)
+	}
 	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	root := tbl.WeakRefRoot()
 	assert.Equal(t, int64(1), root.RefCount())
@@ -374,6 +379,9 @@ func TestConcurrency(t *testing.T) {
 	t.Logf("Takes %v", time.Since(now))
 	t.Log(tbl.String())
 	time.Sleep(time.Duration(200) * time.Millisecond)
+	if invariants.RaceEnabled {
+		time.Sleep(time.Duration(800) * time.Millisecond)
+	}
 
 	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
