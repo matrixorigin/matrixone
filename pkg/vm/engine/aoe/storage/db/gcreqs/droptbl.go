@@ -10,6 +10,7 @@ import (
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
+	// log "github.com/sirupsen/logrus"
 )
 
 type dropTblRequest struct {
@@ -49,9 +50,14 @@ func (req *dropTblRequest) Execute() error {
 	}
 	c, err := req.MemTableMgr.UnregisterCollection(req.TableId)
 	if err != nil {
-		return err
+		if req.Iteration < 3 {
+			return err
+		}
+		err = nil
 	}
-	c.Unref()
+	if c != nil {
+		c.Unref()
+	}
 	if req.CB != nil {
 		req.CB(nil)
 	}
