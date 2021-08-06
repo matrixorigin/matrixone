@@ -4,15 +4,14 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/fagongzi/log"
-	"github.com/fagongzi/util/format"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/protocol"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
@@ -20,26 +19,25 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	"sync"
 	"testing"
 	"time"
 )
 
 const (
-	blockRows          uint64 = 5
-	blockCntPerSegment uint64 = 4
-	insertRows                = blockRows * blockCntPerSegment * 10
-	insertCnt          uint64 = 20
-	batchInsertRows           = insertRows / insertCnt
+	blockRows          = 100
+	blockCntPerSegment = 2
+	colCnt             = 4
+	segmentCnt         = 2
+	batchCnt           = blockCntPerSegment * segmentCnt
 )
 
-
-func TestAOEStorage(t *testing.T) {
+func TestStorage(t *testing.T) {
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	log.SetHighlighting(false)
 	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c, err := testutil.NewTestClusterStore(t, true, func(path string) (storage.DataStorage, error) {
-		opts     := &e.Options{}
+	c, err := testutil.NewTestClusterStore(t, true, func(path string) (*daoe.Storage, error) {
+		opts := &e.Options{}
 		mdCfg := &md.Configuration{
 			Dir:              path,
 			SegmentMaxBlocks: blockCntPerSegment,
@@ -62,32 +60,29 @@ func TestAOEStorage(t *testing.T) {
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
 
-	var wg sync.WaitGroup
-	count := 0
-	for i:=0; i<15; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var rsp []uint64
-			c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
-				if len(rsp) > 0 {
-					return
-				}
-				err := c.Applications[0].SetIfNotExist(format.UInt64ToString(shard.ID), format.UInt64ToString(shard.ID))
-				if err == nil {
-					rsp = append(rsp, shard.ID)
-				}
-				return
-			})
-			if len(rsp) > 0 {
-				count += 1
-			}
-		}()
-	}
-	wg.Wait()
-	require.Equal(t, 10, count)
-	//testKVStorage(t, c)
-	testAOEStorage(t, c)
+	//testCodec(t, c)
+	testKVStorage(t, c)
+	//testAOEStorage(t, c)
+}
+
+func testCodec(t *testing.T, c *testutil.TestCluster) {
+
+	key := codec.String2Bytes("Hello")
+	err := c.Applications[0].Set(key, key)
+	require.NoError(t, err)
+
+	value, err := c.Applications[0].Get(key)
+	require.NoError(t, err)
+	require.Equal(t, value, key)
+
+	key1 := codec.EncodeKey("Hello", 1, 2)
+	err = c.Applications[0].Set(key1, key1)
+	require.NoError(t, err)
+
+	value1, err := c.Applications[0].Get(key1)
+	require.NoError(t, err)
+	require.Equal(t, value1, key1)
+
 }
 
 func testKVStorage(t *testing.T, c *testutil.TestCluster) {
@@ -105,22 +100,23 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 	require.Equal(t, value, []byte("World"))
 
 	//Prefix Test
-	for i:=uint64(0); i< 20; i++ {
+	for i := uint64(0); i < 20; i++ {
 		key := fmt.Sprintf("prefix-%d", i)
 		_, err = c.Applications[0].Exec(pb.Request{
 			Type: pb.Set,
 			Set: pb.SetRequest{
-				Key: []byte(key),
-				Value: format.Uint64ToBytes(i),
+				Key:   []byte(key),
+				Value: codec.Uint642Bytes(i),
 			},
 		})
 		require.NoError(t, err)
 	}
 
+	t0 := time.Now()
 	keys, err := c.Applications[0].PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 20, len(keys))
-
+	fmt.Printf("time cost for prefix is %d ms\n", time.Since(t0).Milliseconds())
 
 	kvs, err := c.Applications[0].PrefixScan([]byte("prefix-"), 0)
 	require.NoError(t, err)
@@ -131,9 +127,46 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 	keys, err = c.Applications[0].PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 19, len(keys))
+
+	//Scan Test
+	t0 = time.Now()
+	for i := uint64(0); i < 10; i++ {
+		for j := uint64(0); j < 5; j++ {
+			key := fmt.Sprintf("/prefix/%d/%d", i, j)
+			_, err = c.Applications[0].Exec(pb.Request{
+				Type: pb.Set,
+				Set: pb.SetRequest{
+					Key:   []byte(key),
+					Value: []byte(key),
+				},
+			})
+		}
+		require.NoError(t, err)
+	}
+	fmt.Printf("time cost for 50 set is %d ms\n", time.Since(t0).Milliseconds())
+	t0 = time.Now()
+	kvs, err = c.Applications[0].Scan([]byte("/prefix/"), []byte("/prefix/2/"), 0)
+	require.NoError(t, err)
+	require.Equal(t, 20, len(kvs))
+	fmt.Printf("time cost for scan is %d ms\n", time.Since(t0).Milliseconds())
+	t0 = time.Now()
+	for i := uint64(0); i < 10; i++ {
+		for j := uint64(0); j < 5; j++ {
+			key := fmt.Sprintf("/prefix/%d/%d", i, j)
+			value, err = c.Applications[0].Exec(pb.Request{
+				Type: pb.Get,
+				Get: pb.GetRequest{
+					Key: []byte(key),
+				},
+			})
+			require.NoError(t, err)
+			require.Equal(t, key, string(value))
+		}
+	}
+	fmt.Printf("time cost for 50 read is %d ms\n", time.Since(t0).Milliseconds())
 }
 
-func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
+func testAOEStorage(t *testing.T, c *testutil.TestCluster) {
 	var sharids []uint64
 	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.Applications[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
@@ -144,7 +177,7 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	colCnt := 4
 	tableInfo := md.MockTableInfo(colCnt)
 	toShard := sharids[0]
-	err := c.Applications[0].CreateTablet(fmt.Sprintf("%d#%d", tableInfo.Id, toShard),toShard, tableInfo)
+	err := c.Applications[0].CreateTablet(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard, tableInfo)
 	require.NoError(t, err)
 
 	names, err := c.Applications[0].TabletNames(toShard)
@@ -157,7 +190,7 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster)  {
 	for _, attr := range attrs {
 		typs = append(typs, attr.Type)
 	}
-	ibat := chunk.MockBatch(typs, batchInsertRows)
+	ibat := chunk.MockBatch(typs, blockRows)
 	var buf bytes.Buffer
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)

@@ -186,3 +186,43 @@ domain-type = "set"
 values = ["10"]
 comment = "send the count of rows to the client"
 update-mode = "dynamic"
+
+[[parameter]]
+name = "periodOfEpochTimer"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["5"]
+comment = "the period of epoch timer in second"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "periodOfPersistence"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["20"]
+comment = "the period of persistence in second"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "periodOfDDLDeleteTimer"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["20"]
+comment = "the period of the ddl delete in second"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "timeoutOfHeartbeat"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["20"]
+comment = "the timeout of heartbeat in second"
+update-mode = "dynamic"

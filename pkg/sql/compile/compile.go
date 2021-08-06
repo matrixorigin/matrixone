@@ -122,7 +122,7 @@ func (e *Exec) Columns() []*Col {
 	return e.cs
 }
 
-func (e *Exec) Run() error {
+func (e *Exec) Run(ts uint64) error {
 	var wg sync.WaitGroup
 
 	for i := range e.ss {
@@ -146,7 +146,7 @@ func (e *Exec) Run() error {
 		case Insert:
 			wg.Add(1)
 			go func(s *Scope) {
-				if err := s.Insert(); err != nil {
+				if err := s.Insert(ts); err != nil {
 					e.err = err
 				}
 				wg.Done()
@@ -162,7 +162,7 @@ func (e *Exec) Run() error {
 		case DropTable:
 			wg.Add(1)
 			go func(s *Scope) {
-				if err := s.DropTable(); err != nil {
+				if err := s.DropTable(ts); err != nil {
 					e.err = err
 				}
 				wg.Done()
@@ -170,7 +170,7 @@ func (e *Exec) Run() error {
 		case DropDatabase:
 			wg.Add(1)
 			go func(s *Scope) {
-				if err := s.DropDatabase(); err != nil {
+				if err := s.DropDatabase(ts); err != nil {
 					e.err = err
 				}
 				wg.Done()
@@ -178,7 +178,7 @@ func (e *Exec) Run() error {
 		case CreateTable:
 			wg.Add(1)
 			go func(s *Scope) {
-				if err := s.CreateTable(); err != nil {
+				if err := s.CreateTable(ts); err != nil {
 					e.err = err
 				}
 				wg.Done()
@@ -186,7 +186,7 @@ func (e *Exec) Run() error {
 		case CreateDatabase:
 			wg.Add(1)
 			go func(s *Scope) {
-				if err := s.CreateDatabase(); err != nil {
+				if err := s.CreateDatabase(ts); err != nil {
 					e.err = err
 				}
 				wg.Done()

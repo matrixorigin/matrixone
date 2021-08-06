@@ -2,9 +2,11 @@ package client
 
 import (
 	"fmt"
+	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"matrixone/pkg/config"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
+	"time"
 )
 
 type Session struct {
@@ -22,6 +24,8 @@ type Session struct {
 	Mempool  *mempool.Mempool
 
 	sessionVars config.SystemVariables
+
+	Pu *config.ParameterUnit
 }
 
 //the routine is an abstract of handling something repeatedly.
@@ -43,6 +47,9 @@ type Routine interface {
 
 	//get the cmdexecutor
 	GetCmdExecutor()CmdExecutor
+
+	//get the server
+	GetPDCallback() pConfig.ContainerHeartbeatDataProcessor
 }
 
 //for test
@@ -61,6 +68,13 @@ type RoutineImpl struct {
 
 	//the related session
 	ses *Session
+
+	//pd callback
+	pdHook *PDCallbackImpl
+}
+
+func (ri *RoutineImpl) GetPDCallback() pConfig.ContainerHeartbeatDataProcessor {
+	return ri.pdHook
 }
 
 func (ri *RoutineImpl) GetClientProtocol() ClientProtocol {
@@ -94,6 +108,7 @@ func (ri *RoutineImpl) Loop() {
 			break
 		}
 
+		begin := time.Now()
 		if resp,err = ri.executor.ExecRequest(req); err!=nil{
 			fmt.Printf("routine execute request failed. error:%v ",err)
 			break
@@ -105,6 +120,9 @@ func (ri *RoutineImpl) Loop() {
 				break
 			}
 		}
+
+		len := time.Since(begin)
+		fmt.Printf("id %d time %s \n",ri.ID(),len.String())
 
 		//mysql client protocol: quit command
 		if _,ok := ri.protocol.(*MysqlClientProtocol); ok{
@@ -126,16 +144,24 @@ func (ri *RoutineImpl) GetSession() *Session {
 func NewSession()*Session{
 	return &Session{
 		GuestMmu: guest.New(config.GlobalSystemVariables.GetGuestMmuLimitation(), config.HostMmu),
-		Mempool:  mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()),
-			int(config.GlobalSystemVariables.GetMempoolFactor())),
+		Mempool:  config.Mempool,
 	}
 }
 
-func NewRoutine(protocol ClientProtocol,executor CmdExecutor,session *Session)Routine{
+func NewSessionWithParameterUnit(pu *config.ParameterUnit) *Session {
+	return &Session{
+		GuestMmu: guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
+		Mempool:  pu.Mempool,
+		Pu:       pu,
+	}
+}
+
+func NewRoutine(protocol ClientProtocol, executor CmdExecutor, session *Session, pdCb *PDCallbackImpl) Routine {
 	ri := &RoutineImpl{
 		protocol: protocol,
 		executor: executor,
 		ses:session,
+		pdHook: pdCb,
 	}
 
 	if protocol != nil{

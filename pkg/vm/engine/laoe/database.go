@@ -40,10 +40,10 @@ func (e *database) Relation(name string) (engine.Relation, error) {
 	}, nil
 }
 
-func (e *database) Delete(_ string) error {
+func (e *database) Delete(_ uint64, _ string) error {
 	return nil
 }
 
-func (e *database) Create(_ string, _ []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
+func (e *database) Create(_ uint64, _ string, _ []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
 	return nil
 }

@@ -229,6 +229,54 @@ type SystemVariables struct{
 	*/
 	countOfRowsPerSendingToClient    int64
 
+	/**
+	Name:	periodOfEpochTimer
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[5]
+	Comment:	the period of epoch timer in second
+	UpdateMode:	dynamic
+	*/
+	periodOfEpochTimer    int64
+
+	/**
+	Name:	periodOfPersistence
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[20]
+	Comment:	the period of persistence in second
+	UpdateMode:	dynamic
+	*/
+	periodOfPersistence    int64
+
+	/**
+	Name:	periodOfDDLDeleteTimer
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[20]
+	Comment:	the period of the ddl delete in second
+	UpdateMode:	dynamic
+	*/
+	periodOfDDLDeleteTimer    int64
+
+	/**
+	Name:	timeoutOfHeartbeat
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[20]
+	Comment:	the timeout of heartbeat in second
+	UpdateMode:	dynamic
+	*/
+	timeoutOfHeartbeat    int64
+
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -445,6 +493,66 @@ type varsConfig struct{
 
 	
 
+	
+	/**
+	Name:	periodOfEpochTimer
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[5]
+	Comment:	the period of epoch timer in second
+	UpdateMode:	dynamic
+	*/
+	PeriodOfEpochTimer    int64  `toml:"periodOfEpochTimer"`
+
+	
+
+	
+	/**
+	Name:	periodOfPersistence
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[20]
+	Comment:	the period of persistence in second
+	UpdateMode:	dynamic
+	*/
+	PeriodOfPersistence    int64  `toml:"periodOfPersistence"`
+
+	
+
+	
+	/**
+	Name:	periodOfDDLDeleteTimer
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[20]
+	Comment:	the period of the ddl delete in second
+	UpdateMode:	dynamic
+	*/
+	PeriodOfDDLDeleteTimer    int64  `toml:"periodOfDDLDeleteTimer"`
+
+	
+
+	
+	/**
+	Name:	timeoutOfHeartbeat
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[20]
+	Comment:	the timeout of heartbeat in second
+	UpdateMode:	dynamic
+	*/
+	TimeoutOfHeartbeat    int64  `toml:"timeoutOfHeartbeat"`
+
+	
+
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -504,6 +612,14 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["processLimitationPartitionRows"] = "	Name:	processLimitationPartitionRows	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[42949672960]	Comment:	process.Limitation.PartitionRows. default: 10 << 32 = 42949672960	UpdateMode:	dynamic	"
 	
 	ap.name2definition["countOfRowsPerSendingToClient"] = "	Name:	countOfRowsPerSendingToClient	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[10]	Comment:	send the count of rows to the client	UpdateMode:	dynamic	"
+	
+	ap.name2definition["periodOfEpochTimer"] = "	Name:	periodOfEpochTimer	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[5]	Comment:	the period of epoch timer in second	UpdateMode:	dynamic	"
+	
+	ap.name2definition["periodOfPersistence"] = "	Name:	periodOfPersistence	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[20]	Comment:	the period of persistence in second	UpdateMode:	dynamic	"
+	
+	ap.name2definition["periodOfDDLDeleteTimer"] = "	Name:	periodOfDDLDeleteTimer	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[20]	Comment:	the period of the ddl delete in second	UpdateMode:	dynamic	"
+	
+	ap.name2definition["timeoutOfHeartbeat"] = "	Name:	timeoutOfHeartbeat	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[20]	Comment:	the timeout of heartbeat in second	UpdateMode:	dynamic	"
 	
 }
 
@@ -896,6 +1012,86 @@ func (ap *SystemVariables) LoadInitialValues()error{
 			}
 		
 	
+		
+		
+			periodOfEpochTimerchoices :=[]int64 {
+				
+				5,
+					
+			}
+			if len(periodOfEpochTimerchoices) != 0{
+				if err = ap.setPeriodOfEpochTimer( periodOfEpochTimerchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","PeriodOfEpochTimer",err)
+				}
+			}else{
+				
+					if err = ap.setPeriodOfEpochTimer( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","PeriodOfEpochTimer",err)
+					}
+				
+			}
+		
+	
+		
+		
+			periodOfPersistencechoices :=[]int64 {
+				
+				20,
+					
+			}
+			if len(periodOfPersistencechoices) != 0{
+				if err = ap.setPeriodOfPersistence( periodOfPersistencechoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","PeriodOfPersistence",err)
+				}
+			}else{
+				
+					if err = ap.setPeriodOfPersistence( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","PeriodOfPersistence",err)
+					}
+				
+			}
+		
+	
+		
+		
+			periodOfDDLDeleteTimerchoices :=[]int64 {
+				
+				20,
+					
+			}
+			if len(periodOfDDLDeleteTimerchoices) != 0{
+				if err = ap.setPeriodOfDDLDeleteTimer( periodOfDDLDeleteTimerchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","PeriodOfDDLDeleteTimer",err)
+				}
+			}else{
+				
+					if err = ap.setPeriodOfDDLDeleteTimer( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","PeriodOfDDLDeleteTimer",err)
+					}
+				
+			}
+		
+	
+		
+		
+			timeoutOfHeartbeatchoices :=[]int64 {
+				
+				20,
+					
+			}
+			if len(timeoutOfHeartbeatchoices) != 0{
+				if err = ap.setTimeoutOfHeartbeat( timeoutOfHeartbeatchoices[0] ) ; err != nil{
+					return fmt.Errorf("set%s failed.error:%v","TimeoutOfHeartbeat",err)
+				}
+			}else{
+				
+					if err = ap.setTimeoutOfHeartbeat( 0 ) ; err != nil{
+						return fmt.Errorf("set%s failed.error:%v","TimeoutOfHeartbeat",err)
+					}
+				
+			}
+		
+	
 	return nil
 }
 
@@ -1063,6 +1259,42 @@ func (ap * SystemVariables ) GetCountOfRowsPerSendingToClient() int64 {
 	return ap.countOfRowsPerSendingToClient
 }
 
+/**
+Get the value of the parameter periodOfEpochTimer
+*/
+func (ap * SystemVariables ) GetPeriodOfEpochTimer() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.periodOfEpochTimer
+}
+
+/**
+Get the value of the parameter periodOfPersistence
+*/
+func (ap * SystemVariables ) GetPeriodOfPersistence() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.periodOfPersistence
+}
+
+/**
+Get the value of the parameter periodOfDDLDeleteTimer
+*/
+func (ap * SystemVariables ) GetPeriodOfDDLDeleteTimer() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.periodOfDDLDeleteTimer
+}
+
+/**
+Get the value of the parameter timeoutOfHeartbeat
+*/
+func (ap * SystemVariables ) GetTimeoutOfHeartbeat() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.timeoutOfHeartbeat
+}
+
 
 
 
@@ -1192,6 +1424,42 @@ Set the value of the parameter countOfRowsPerSendingToClient
 */
 func (ap * SystemVariables ) SetCountOfRowsPerSendingToClient(value int64)error {
 	return  ap.setCountOfRowsPerSendingToClient(value)
+}
+
+
+
+/**
+Set the value of the parameter periodOfEpochTimer
+*/
+func (ap * SystemVariables ) SetPeriodOfEpochTimer(value int64)error {
+	return  ap.setPeriodOfEpochTimer(value)
+}
+
+
+
+/**
+Set the value of the parameter periodOfPersistence
+*/
+func (ap * SystemVariables ) SetPeriodOfPersistence(value int64)error {
+	return  ap.setPeriodOfPersistence(value)
+}
+
+
+
+/**
+Set the value of the parameter periodOfDDLDeleteTimer
+*/
+func (ap * SystemVariables ) SetPeriodOfDDLDeleteTimer(value int64)error {
+	return  ap.setPeriodOfDDLDeleteTimer(value)
+}
+
+
+
+/**
+Set the value of the parameter timeoutOfHeartbeat
+*/
+func (ap * SystemVariables ) SetTimeoutOfHeartbeat(value int64)error {
+	return  ap.setTimeoutOfHeartbeat(value)
 }
 
 
@@ -1703,6 +1971,118 @@ func (ap * SystemVariables ) setCountOfRowsPerSendingToClient(value int64)error 
 	return nil
 }
 
+/**
+Set the value of the parameter periodOfEpochTimer
+*/
+func (ap * SystemVariables ) setPeriodOfEpochTimer(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				5,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setPeriodOfEpochTimer,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.periodOfEpochTimer = value
+	return nil
+}
+
+/**
+Set the value of the parameter periodOfPersistence
+*/
+func (ap * SystemVariables ) setPeriodOfPersistence(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				20,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setPeriodOfPersistence,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.periodOfPersistence = value
+	return nil
+}
+
+/**
+Set the value of the parameter periodOfDDLDeleteTimer
+*/
+func (ap * SystemVariables ) setPeriodOfDDLDeleteTimer(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				20,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setPeriodOfDDLDeleteTimer,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.periodOfDDLDeleteTimer = value
+	return nil
+}
+
+/**
+Set the value of the parameter timeoutOfHeartbeat
+*/
+func (ap * SystemVariables ) setTimeoutOfHeartbeat(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+
+	
+
+		
+			choices :=[]int64 {
+				
+				20,
+					
+			}
+			if len( choices ) != 0{
+				if !isInSliceInt64(value, choices){
+					return fmt.Errorf("setTimeoutOfHeartbeat,the value %d is not in set %v",value,choices)
+				}
+			}//else means any int64
+		
+
+	
+
+	ap.timeoutOfHeartbeat = value
+	return nil
+}
+
 
 
 /**
@@ -1783,6 +2163,22 @@ func (config *varsConfig) resetUpdatedFlags(){
 	
 	
 		config.name2updatedFlags["countOfRowsPerSendingToClient"] = false
+	
+	
+	
+		config.name2updatedFlags["periodOfEpochTimer"] = false
+	
+	
+	
+		config.name2updatedFlags["periodOfPersistence"] = false
+	
+	
+	
+		config.name2updatedFlags["periodOfDDLDeleteTimer"] = false
+	
+	
+	
+		config.name2updatedFlags["timeoutOfHeartbeat"] = false
 	
 	
 }
@@ -1971,6 +2367,38 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("countOfRowsPerSendingToClient"){
 		if err = ap.setCountOfRowsPerSendingToClient(config.CountOfRowsPerSendingToClient); err != nil{
 			return fmt.Errorf("update parameter countOfRowsPerSendingToClient failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("periodOfEpochTimer"){
+		if err = ap.setPeriodOfEpochTimer(config.PeriodOfEpochTimer); err != nil{
+			return fmt.Errorf("update parameter periodOfEpochTimer failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("periodOfPersistence"){
+		if err = ap.setPeriodOfPersistence(config.PeriodOfPersistence); err != nil{
+			return fmt.Errorf("update parameter periodOfPersistence failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("periodOfDDLDeleteTimer"){
+		if err = ap.setPeriodOfDDLDeleteTimer(config.PeriodOfDDLDeleteTimer); err != nil{
+			return fmt.Errorf("update parameter periodOfDDLDeleteTimer failed.error:%v",err)
+		}
+	}
+	
+	
+	
+	if config.getUpdatedFlag("timeoutOfHeartbeat"){
+		if err = ap.setTimeoutOfHeartbeat(config.TimeoutOfHeartbeat); err != nil{
+			return fmt.Errorf("update parameter timeoutOfHeartbeat failed.error:%v",err)
 		}
 	}
 	
