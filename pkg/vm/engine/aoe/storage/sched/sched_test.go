@@ -17,6 +17,12 @@ func TestMock(t *testing.T) {
 		err := scheduler.Schedule(e)
 		assert.Nil(t, err)
 	}
+	time.Sleep(time.Duration(800) * time.Millisecond)
 	scheduler.Stop()
+	for i := 0; i < 4; i++ {
+		e := &mockEvent{}
+		err := scheduler.Schedule(e)
+		assert.Nil(t, err)
+	}
 	time.Sleep(time.Duration(800) * time.Millisecond)
 }

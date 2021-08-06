@@ -23,6 +23,7 @@ type Event interface {
 	ID() uint64
 	Type() EventType
 	WaitDone() error
+	Cancel() error
 }
 
 type mockEvent struct {
@@ -33,3 +34,4 @@ func (e *mockEvent) AttachID(id uint64) { e.id = id }
 func (e *mockEvent) ID() uint64         { return e.id }
 func (e *mockEvent) Type() EventType    { return MockEvent }
 func (e *mockEvent) WaitDone() error    { return nil }
+func (e *mockEvent) Cancel() error      { return nil }
