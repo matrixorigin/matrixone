@@ -6,6 +6,7 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	svec "matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -80,6 +81,7 @@ type IBlock interface {
 	String() string
 	GetFullBatch() batch.IBatch
 	GetBatch(attrs []int) dbi.IBatchReader
+	GetVectorWrapper(col int) (*svec.VectorWrapper, error)
 	GetVectorCopy(attr string, ref uint64, proc *process.Process) (*vector.Vector, error)
 	GetRowCount() uint64
 	GetNext() IBlock

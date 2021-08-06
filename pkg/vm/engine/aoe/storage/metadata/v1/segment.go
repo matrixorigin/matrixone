@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	// log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -106,7 +106,7 @@ func (seg *Segment) CreateBlock() (blk *Block, err error) {
 }
 
 func (seg *Segment) String() string {
-	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d]", seg.Table.ID, seg.ID, seg.ActiveBlk)
+	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d][State=%d]", seg.Table.ID, seg.ID, seg.ActiveBlk, seg.DataState)
 	s += "["
 	pos := 0
 	for _, blk := range seg.Blocks {
@@ -192,9 +192,22 @@ func (seg *Segment) TryClose() bool {
 				return false
 			}
 		}
+		seg.DataState = CLOSED
 		return true
 	}
 	return false
+}
+
+func (seg *Segment) TrySorted() {
+	seg.Lock()
+	defer seg.Unlock()
+	if seg.DataState == SORTED {
+		return
+	}
+	if seg.DataState != CLOSED {
+		panic("logic error")
+	}
+	seg.DataState = SORTED
 }
 
 func (seg *Segment) GetMaxBlkID() uint64 {
@@ -235,6 +248,8 @@ func (seg *Segment) Copy(ctx CopyCtx) *Segment {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
+	seg.RLock()
+	defer seg.RUnlock()
 	new_seg := NewSegment(seg.Table, seg.ID)
 	new_seg.TimeStamp = seg.TimeStamp
 	new_seg.MaxBlockCount = seg.MaxBlockCount

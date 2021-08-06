@@ -3,15 +3,19 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/stretchr/testify/assert"
+	"matrixone/pkg/container/batch"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 var (
@@ -113,4 +117,43 @@ func TestAll(t *testing.T) {
 	t.Log(droppedBlocks)
 	assert.Equal(t, 1, len(droppedBlocks))
 	assert.Equal(t, droppedBlocks[0], dropblkid)
+}
+
+func TestSegmentWriter(t *testing.T) {
+	rowCount, blkCount := uint64(10), uint64(4)
+	info := md.MockInfo(rowCount, blkCount)
+	schema := md.MockSchema(2)
+	segCnt, blkCnt := uint64(4), uint64(4)
+	table := md.MockTable(info, schema, segCnt*blkCnt)
+	segment, err := table.CreateSegment()
+	assert.Nil(t, err)
+	err = table.RegisterSegment(segment)
+	assert.Nil(t, err)
+	batches := make([]*batch.Batch, 0)
+	for i := 0; i < int(blkCount); i++ {
+		block, err := segment.CreateBlock()
+		assert.Nil(t, err)
+		block.SetCount(rowCount)
+		err = segment.RegisterBlock(block)
+		assert.Nil(t, err)
+		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+	}
+	path := "/tmp/testwriter"
+	writer := NewSegmentWriter(batches, segment, path)
+	err = writer.Execute()
+	assert.Nil(t, err)
+	// name := writer.GetFileName()
+	segFile := NewSortedSegmentFile(path, *segment.AsCommonID())
+	assert.NotNil(t, segFile)
+	col0Blk := segment.Blocks[0].AsCommonID().AsBlockID()
+	col1Blk := col0Blk
+	col1Blk.Idx = uint16(1)
+	col0Vf := segFile.MakeVirtualPartFile(&col0Blk)
+	col1Vf := segFile.MakeVirtualPartFile(&col1Blk)
+	assert.NotNil(t, col0Vf)
+	assert.NotNil(t, col1Vf)
+	stat0 := col0Vf.Stat()
+	stat1 := col1Vf.Stat()
+	t.Log(stat0.Name())
+	t.Log(stat1.Name())
 }

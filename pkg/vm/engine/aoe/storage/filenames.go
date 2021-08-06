@@ -42,10 +42,10 @@ func MakeBlockFileName(dirname, name string, tableId uint64) string {
 	return MakeFilename(dir, FTBlock, name, false)
 }
 
-func MakeSegmentFileName(dirname, name string, tableId uint64) string {
+func MakeSegmentFileName(dirname, name string, tableId uint64, isTmp bool) string {
 	// dir := MakeTableDir(dirname, id)
 	dir := dirname
-	return MakeFilename(dir, FTSegment, name, false)
+	return MakeFilename(dir, FTSegment, name, isTmp)
 }
 
 func MakeTableCkpFileName(dirname, name string, tableId uint64, isTmp bool) string {
@@ -58,6 +58,22 @@ func MakeInfoCkpFileName(dirname, name string, isTmp bool) string {
 
 func MakeLockFileName(dirname, name string) string {
 	return MakeFilename(dirname, FTLock, name, false)
+}
+
+func ParseSegmentfileName(filename string) (name string, ok bool) {
+	name = strings.TrimSuffix(filename, ".seg")
+	if len(name) == len(filename) {
+		return name, false
+	}
+	return name, true
+}
+
+func ParseBlockfileName(filename string) (name string, ok bool) {
+	name = strings.TrimSuffix(filename, ".blk")
+	if len(name) == len(filename) {
+		return name, false
+	}
+	return name, true
 }
 
 func ParseInfoMetaName(filename string) (version int, ok bool) {
@@ -97,7 +113,6 @@ func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
 		isTmp = false
 	case FTSegment:
 		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s.seg", name))
-		isTmp = false
 	default:
 		panic(fmt.Sprintf("unsupported %d", ft))
 	}

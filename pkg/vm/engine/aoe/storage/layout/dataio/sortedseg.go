@@ -1,13 +1,15 @@
 package dataio
 
 import (
+	"encoding/binary"
 	"fmt"
+	"io"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
@@ -17,14 +19,15 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	sf := &SortedSegmentFile{
 		Parts:      make(map[base.Key]*base.Pointer),
 		ID:         id,
+		Meta:       NewFileMeta(),
 		BlocksMeta: make(map[common.ID]*FileMeta),
 		Info: &fileStat{
 			name: id.ToSegmentFilePath(),
 		},
 	}
 
-	name := e.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID)
-	log.Infof("SegmentFile name %s", name)
+	name := e.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
+	// log.Infof("SegmentFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
 	}
@@ -39,7 +42,6 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 }
 
 type SortedSegmentFile struct {
-	sync.RWMutex
 	ID common.ID
 	os.File
 	Refs       int32
@@ -100,7 +102,86 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 }
 
 func (sf *SortedSegmentFile) initPointers() {
-	// TODO
+	blkCnt := uint32(0)
+	err := binary.Read(&sf.File, binary.BigEndian, &blkCnt)
+	if err != nil {
+		panic(err)
+	}
+	// log.Infof("blkCnt=%d", blkCnt)
+	blkIds := make([]uint64, blkCnt)
+	blksPos := make([]uint32, blkCnt)
+	for i := 0; i < int(blkCnt); i++ {
+		if err = binary.Read(&sf.File, binary.BigEndian, &blkIds[i]); err != nil {
+			panic(err)
+		}
+		// log.Infof("blkId=%d", blkIds[i])
+	}
+	for i := 0; i < int(blkCnt); i++ {
+		if err = binary.Read(&sf.File, binary.BigEndian, &blksPos[i]); err != nil {
+			panic(err)
+		}
+		// log.Infof("blkPos=%d", blksPos[i])
+	}
+	var endPos uint32
+	if err = binary.Read(&sf.File, binary.BigEndian, &endPos); err != nil {
+		panic(err)
+	}
+	// log.Infof("endPos=%d", endPos)
+	for i := 0; i < int(blkCnt); i++ {
+		sf.initBlkPointers(blkIds[i], blksPos[i])
+	}
+	// log.Infof("parts cnt %d", len(sf.Parts))
+	// for k, v := range sf.Parts {
+	// 	log.Infof("blk=%s, col=%d, value=%v", k.ID.BlockString(), k.Col, v)
+	// }
+}
+
+func (sf *SortedSegmentFile) initBlkPointers(blkId uint64, pos uint32) {
+	id := sf.ID.AsBlockID()
+	id.BlockID = blkId
+	_, err := sf.File.Seek(int64(pos), io.SeekStart)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = index.DefaultRWHelper.ReadIndicesMeta(sf.File)
+	if err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+
+	var (
+		cols uint16
+		algo uint8
+	)
+	offset, _ := sf.File.Seek(0, io.SeekCurrent)
+	if err = binary.Read(&sf.File, binary.BigEndian, &algo); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	if err = binary.Read(&sf.File, binary.BigEndian, &cols); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	headSize := 3 + 2*8*int(cols)
+	currOffset := headSize + int(offset)
+	for i := uint16(0); i < cols; i++ {
+		key := base.Key{
+			Col: uint64(i),
+			ID:  id.AsBlockID(),
+		}
+		key.ID.Idx = i
+		sf.Parts[key] = &base.Pointer{}
+		err = binary.Read(&sf.File, binary.BigEndian, &sf.Parts[key].Len)
+		if err != nil {
+			panic(fmt.Sprintf("unexpect error: %s", err))
+		}
+		err = binary.Read(&sf.File, binary.BigEndian, &sf.Parts[key].OriginLen)
+		if err != nil {
+			panic(fmt.Sprintf("unexpect error: %s", err))
+		}
+		// log.Infof("(Len, OriginLen, Algo)=(%d, %d, %d)", sf.Parts[key].Len, sf.Parts[key].OriginLen, algo)
+		sf.Parts[key].Offset = int64(currOffset)
+		currOffset += int(sf.Parts[key].Len)
+	}
+	sf.DataAlgo = int(algo)
 }
 
 func (sf *SortedSegmentFile) GetFileType() common.FileType {
@@ -133,8 +214,6 @@ func (sf *SortedSegmentFile) Destory() {
 }
 
 func (sf *SortedSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
-	sf.Lock()
-	defer sf.Unlock()
 	n, err := sf.ReadAt(buf, ptr.Offset)
 	if err != nil {
 		panic(fmt.Sprintf("logic error: %s", err))
@@ -176,8 +255,8 @@ func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if !ok {
 		panic("logic error")
 	}
-	if len(buf) != int(pointer.Len) {
-		panic("logic error")
+	if len(buf) > int(pointer.Len) {
+		panic(fmt.Sprintf("buf len is %d, but pointer len is %d", len(buf), pointer.Len))
 	}
 
 	sf.ReadPoint(pointer, buf)

@@ -32,6 +32,7 @@ type IColumnBlock interface {
 	String() string
 	Size() uint64
 	GetVector() vector.IVector
+	LoadVectorWrapper() (*vector.VectorWrapper, error)
 	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
 	GetVectorReader() dbi.IVectorReader
 }

@@ -20,11 +20,9 @@ import (
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
-
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -288,68 +286,7 @@ func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {
 }
 
 func (d *DB) replayAndCleanData() {
-	expectFiles := make(map[string]bool)
-	for _, tbl := range d.Store.MetaInfo.Tables {
-		for _, seg := range tbl.Segments {
-			id := common.ID{
-				TableID:   seg.Table.ID,
-				SegmentID: seg.ID,
-			}
-			if seg.DataState == md.SORTED {
-				name := e.MakeSegmentFileName(d.Dir, id.ToSegmentFileName(), id.TableID)
-				expectFiles[name] = true
-			} else {
-				for _, blk := range seg.Blocks {
-					if blk.DataState == md.EMPTY && !blk.IsFull() {
-						continue
-					}
-					id.BlockID = blk.ID
-					name := e.MakeBlockFileName(d.Dir, id.ToBlockFileName(), id.TableID)
-					expectFiles[name] = true
-				}
-			}
-		}
-	}
-
-	dataDir := e.MakeDataDir(d.Dir)
-	if len(expectFiles) == 0 {
-		if _, err := os.Stat(dataDir); os.IsNotExist(err) {
-			err = os.MkdirAll(dataDir, 0755)
-			if err != nil {
-				panic(fmt.Sprintf("err: %s", err))
-			}
-			return
-		}
-	}
-
-	err := filepath.Walk(e.MakeDataDir(d.Dir), func(p string, info os.FileInfo, err error) error {
-		if info.IsDir() {
-			return nil
-		}
-		err = nil
-		if e.IsTempFile(info.Name()) {
-			log.Infof("Removing %s", p)
-			err = os.Remove(p)
-			return err
-		}
-		_, ok := expectFiles[p]
-		if !ok {
-			log.Infof("Removing %s", p)
-			err = os.Remove(p)
-		}
-		expectFiles[p] = false
-		return err
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	for name, ok := range expectFiles {
-		if ok {
-			panic(fmt.Sprintf("Missing %s", name))
-		}
-	}
-	err = d.Store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.Store.MetaInfo)
+	err := d.Store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.Store.MetaInfo)
 	if err != nil {
 		panic(err)
 	}

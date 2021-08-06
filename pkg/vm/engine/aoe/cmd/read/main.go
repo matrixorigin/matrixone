@@ -120,7 +120,7 @@ func makeFiles(impl *db.DB) {
 			panic(err)
 		}
 	}
-	waitTime := insertCnt * uint64(ibat.Vecs[0].Length()) * uint64(colCnt) / uint64(400000000) * 6000
+	waitTime := insertCnt * uint64(ibat.Vecs[0].Length()) * uint64(colCnt) / uint64(400000000) * 20000
 	time.Sleep(time.Duration(waitTime) * time.Millisecond)
 }
 

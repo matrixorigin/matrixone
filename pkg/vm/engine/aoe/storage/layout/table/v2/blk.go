@@ -123,6 +123,7 @@ func (blk *Block) GetSegmentedIndex() (id uint64, ok bool) {
 }
 
 func (blk *Block) close() {
+	// panic(string(debug.Stack()))
 	if blk.IndexHolder != nil {
 		blk.IndexHolder.Unref()
 	}
@@ -164,7 +165,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		panic("logic error")
 	}
 	if meta.DataState != md.FULL {
-		panic("logic error")
+		panic(fmt.Sprintf("blk data state is %d", meta.DataState))
 	}
 
 	blkId := meta.AsCommonID().AsBlockID()
@@ -181,6 +182,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
 			newIndexHolder = true
 		} else if indexHolder.Type < newType {
+			indexHolder.Unref()
 			indexHolder = host.GetIndexHolder().UpgradeBlock(meta.ID, newType)
 			newIndexHolder = true
 		}
@@ -190,6 +192,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
 			newIndexHolder = true
 		} else if indexHolder.Type < newType {
+			indexHolder.Unref()
 			indexHolder = host.GetIndexHolder().UpgradeBlock(meta.ID, newType)
 			newIndexHolder = true
 		}
@@ -247,6 +250,14 @@ func (blk *Block) String() string {
 		s = fmt.Sprintf("%s/n\t%s", s, colBlk.String())
 	}
 	return s
+}
+
+func (blk *Block) GetVectorWrapper(col int) (*vector.VectorWrapper, error) {
+	vec, err := blk.data.Columns[col].LoadVectorWrapper()
+	if err != nil {
+		return nil, err
+	}
+	return vec, nil
 }
 
 func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {

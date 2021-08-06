@@ -200,6 +200,9 @@ func TestReplay(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	time.Sleep(waitTime)
+	if invariants.RaceEnabled {
+		time.Sleep(waitTime)
+	}
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 
@@ -270,6 +273,9 @@ func TestReplay(t *testing.T) {
 	}
 
 	time.Sleep(waitTime)
+	if invariants.RaceEnabled {
+		time.Sleep(waitTime)
+	}
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Logf("Row count: %d", tbl.GetRowCount())

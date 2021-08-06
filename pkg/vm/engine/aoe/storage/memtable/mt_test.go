@@ -3,7 +3,6 @@ package memtable
 import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -96,7 +95,9 @@ func TestCollection(t *testing.T) {
 	indexBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity, flusher)
 	mtBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity, flusher)
 	sstBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity, flusher)
-	tableMeta := md.MockTable(nil, tbl.Schema, 10)
+	// tableMeta := md.MockTable(opts.Meta.Info, tbl.Schema, 10)
+	// tableMeta := md.MockTable(nil, tbl.Schema, 10)
+	tableMeta := tbl
 	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
@@ -155,7 +156,7 @@ func TestCollection(t *testing.T) {
 	t.Log(indexBufMgr.String())
 	t.Log(fsMgr.String())
 	t.Log(manager)
-	t.Log(common.GPool.String())
+	// t.Log(common.GPool.String())
 
 	opts.MemData.Updater.Stop()
 	opts.Data.Flusher.Stop()
