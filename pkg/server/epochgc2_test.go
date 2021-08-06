@@ -43,7 +43,7 @@ func recreateTestTempDir() (err error) {
 	if err != nil {
 		return err
 	}
-	err = os.Mkdir(tmpDir, os.ModePerm)
+	err = os.Mkdir(tmpDir, os.ModeDir)
 	return err
 }
 
@@ -157,7 +157,7 @@ func (c *TestCluster) stop() {
 		s.Close()
 	}
 }
-
+/*
 func TestEpochGC(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
@@ -205,7 +205,7 @@ func TestEpochGC(t *testing.T) {
 
 	DC.Cf.Close()
 }
-
+*/
 func TestEpochGCWithMultiServer(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
@@ -218,7 +218,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		}
 	}()
 
-	go DC.DCRoutine()
+	//go DC.DCRoutine()
 
 	nodeCnt := 3
 
@@ -276,13 +276,13 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	time.Sleep(2 * time.Minute)
 
 	//test performance
-	c.Applications[0].Close()
+	//c.Applications[0].Close()
 
-	fmt.Println("-------------------close node 0----------------")
+	//fmt.Println("-------------------close node 0----------------")
 
 	time.Sleep(5 * time.Minute)
 
-	DC.Cf.Close()
+	//DC.Cf.Close()
 }
 
 func testPCI(id int,f*client.CloseFlag, pci *client.PDCallbackImpl) {
@@ -339,6 +339,7 @@ func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engi
 	return sver,nil
 }
 
+/*
 func Test_Multi_Server(t *testing.T) {
 	var svs []Server = nil
 	for _, port := range testPorts{
@@ -355,3 +356,21 @@ func Test_Multi_Server(t *testing.T) {
 
 	time.Sleep(2 * time.Minute)
 }
+
+func Test_openfile(t *testing.T) {
+	f,err := os.OpenFile(testConfigFile,os.O_RDONLY | os.O_CREATE,0777)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	_, err = ioutil.ReadAll(f)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	defer f.Close()
+
+}
+*/

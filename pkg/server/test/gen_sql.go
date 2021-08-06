@@ -3,8 +3,8 @@ package main
 import "fmt"
 
 func main() {
-	fmt.Printf("use test;\n")
-	generate_sql(100)
+	//fmt.Printf("use test;\n")
+	generate_sql(10)
 }
 
 func generate_sql(cnt int){
