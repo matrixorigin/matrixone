@@ -89,6 +89,18 @@ func TestCreateDuplicateTable(t *testing.T) {
 	assert.NotNil(t, err)
 }
 
+func TestDropEmptyTable(t *testing.T) {
+	initDBTest()
+	inst := initDB()
+	defer inst.Close()
+	tableInfo := md.MockTableInfo(2)
+	_, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name})
+	assert.Nil(t, err)
+	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name})
+	assert.Nil(t, err)
+	time.Sleep(time.Duration(500) * time.Millisecond)
+}
+
 func TestDropTable(t *testing.T) {
 	initDBTest()
 	inst := initDB()

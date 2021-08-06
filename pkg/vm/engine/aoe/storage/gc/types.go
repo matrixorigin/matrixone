@@ -105,13 +105,15 @@ func (wk *Worker) process() {
 	wk.exec.Unlock()
 	for _, req := range reqs {
 		wk.exec.worker.SendOp(req)
-		if req.GetIteration() >= 1000 {
+		if req.GetIteration() >= 20 {
 			panic("cannot execute gc req")
 		}
 		err := req.WaitDone()
 		if err != nil {
 			// TODO
-			log.Warningf("handle req err: %s", err)
+			if req.GetIteration() > 3 {
+				log.Warningf("handle req err: %s", err)
+			}
 			req.IncIteration()
 			wk.Accept(req)
 		} else {
