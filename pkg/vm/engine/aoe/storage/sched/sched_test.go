@@ -34,7 +34,6 @@ func TestPoolHandler(t *testing.T) {
 	dis := newMockDispatcher()
 	dis.RegisterHandler(MockEvent, NewPoolHandler(4))
 	scheduler.RegisterDispatcher(MockEvent, dis)
-	waitings := make(chan Event, 1000)
 	wg := &sync.WaitGroup{}
 	exec := func(e Event) error {
 		time.Sleep(time.Duration(10) * time.Millisecond)
@@ -49,10 +48,8 @@ func TestPoolHandler(t *testing.T) {
 		e.exec = exec
 		err := scheduler.Schedule(e)
 		assert.Nil(t, err)
-		waitings <- e
 	}
 	scheduler.Stop()
-	close(waitings)
 	wg.Wait()
 	t.Logf("Time: %s", time.Since(now))
 }

@@ -43,7 +43,7 @@ func (d *BaseDispatcher) Dispatch(e Event) {
 	if !ok {
 		panic(ErrDispatchWrongEvent)
 	}
-	handler.Handle(e)
+	handler.Enqueue(e)
 }
 
 func (d *BaseDispatcher) RegisterHandler(t EventType, h EventHandler) {

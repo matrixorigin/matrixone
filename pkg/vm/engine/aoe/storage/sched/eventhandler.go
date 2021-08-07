@@ -10,12 +10,12 @@ import (
 )
 
 var (
-	ErrEventHandle = errors.New("aoe: event handle")
+	ErrEventHandleEnqueue = errors.New("aoe: event handle enqueue")
 )
 
 type EventHandler interface {
 	io.Closer
-	Handle(Event)
+	Enqueue(Event)
 }
 
 type mockEventHandler struct {
@@ -47,9 +47,9 @@ func NewBaseEventHandler(name string) *BaseEventHandler {
 	return h
 }
 
-func (h *BaseEventHandler) Handle(e Event) {
+func (h *BaseEventHandler) Enqueue(e Event) {
 	if !h.SendOp(e) {
-		e.SetError(ErrEventHandle)
+		e.SetError(ErrEventHandleEnqueue)
 		e.Cancel()
 	}
 }
