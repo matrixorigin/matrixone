@@ -8,21 +8,22 @@ import (
 )
 
 func TestMock(t *testing.T) {
-	scheduler := NewSequentialScheduler(10)
+	// scheduler := NewSequentialScheduler(10)
+	scheduler := NewBaseScheduler("xx")
 	assert.NotNil(t, scheduler)
 	dis := &mockDispatcher{}
 	scheduler.RegisterDispatcher(MockEvent, dis)
 	for i := 0; i < 4; i++ {
-		e := &mockEvent{}
+		e := newMockEvent()
 		err := scheduler.Schedule(e)
 		assert.Nil(t, err)
 	}
-	time.Sleep(time.Duration(800) * time.Millisecond)
+	time.Sleep(time.Duration(100) * time.Millisecond)
 	scheduler.Stop()
 	for i := 0; i < 4; i++ {
-		e := &mockEvent{}
+		e := newMockEvent()
 		err := scheduler.Schedule(e)
-		assert.Nil(t, err)
+		assert.Equal(t, ErrSchedule, err)
+		e.Cancel()
 	}
-	time.Sleep(time.Duration(800) * time.Millisecond)
 }

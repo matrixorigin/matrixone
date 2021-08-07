@@ -3,19 +3,61 @@ package sched
 import (
 	"errors"
 	"fmt"
+	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
+	"sync"
+
 	"github.com/panjf2000/ants/v2"
 	log "github.com/sirupsen/logrus"
-	"sync"
 )
 
 var (
 	ErrDispatcherNotFound = errors.New("aoe sched: dispatcher not found")
+	ErrSchedule           = errors.New("aoe sched: cannot schedule")
 )
 
 type Scheduler interface {
 	Start()
 	Stop()
 	Schedule(Event) error
+}
+
+type BaseScheduler struct {
+	ops.OpWorker
+	idAlloc     IDAllocFunc
+	dispatchers map[EventType]Dispatcher
+}
+
+func NewBaseScheduler(name string) *BaseScheduler {
+	scheduler := &BaseScheduler{
+		OpWorker:    *ops.NewOpWorker(name),
+		idAlloc:     GetNextEventId,
+		dispatchers: make(map[EventType]Dispatcher),
+	}
+	scheduler.ExecFunc = scheduler.doDispatch
+	scheduler.Start()
+	return scheduler
+}
+
+func (s *BaseScheduler) RegisterDispatcher(t EventType, dispatcher Dispatcher) {
+	s.dispatchers[t] = dispatcher
+}
+
+func (s *BaseScheduler) Schedule(e Event) error {
+	if !s.SendOp(e) {
+		return ErrSchedule
+	}
+	return nil
+}
+
+func (s *BaseScheduler) doDispatch(op iops.IOp) {
+	e := op.(Event)
+	e.AttachID(s.idAlloc())
+	dispatcher := s.dispatchers[e.Type()]
+	if dispatcher == nil {
+		panic(ErrDispatcherNotFound)
+	}
+	dispatcher.Dispatch(e)
 }
 
 type sequentialScheduler struct {

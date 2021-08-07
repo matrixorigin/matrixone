@@ -1,6 +1,10 @@
 package sched
 
-import "sync/atomic"
+import (
+	"matrixone/pkg/vm/engine/aoe/storage/ops"
+	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	"sync/atomic"
+)
 
 var (
 	eventId uint64 = 0
@@ -19,6 +23,7 @@ func GetNextEventId() uint64 {
 }
 
 type Event interface {
+	iops.IOp
 	AttachID(uint64)
 	ID() uint64
 	Type() EventType
@@ -27,7 +32,16 @@ type Event interface {
 }
 
 type mockEvent struct {
+	ops.Op
 	id uint64
+}
+
+func newMockEvent() *mockEvent {
+	e := &mockEvent{}
+	e.Op = ops.Op{
+		Impl: e,
+	}
+	return e
 }
 
 func (e *mockEvent) AttachID(id uint64) { e.id = id }
