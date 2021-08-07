@@ -60,6 +60,13 @@ func (s *BaseScheduler) doDispatch(op iops.IOp) {
 	dispatcher.Dispatch(e)
 }
 
+func (s *BaseScheduler) Stop() {
+	s.OpWorker.Stop()
+	for _, d := range s.dispatchers {
+		d.Close()
+	}
+}
+
 type sequentialScheduler struct {
 	wg          *sync.WaitGroup
 	idAlloc     IDAllocFunc

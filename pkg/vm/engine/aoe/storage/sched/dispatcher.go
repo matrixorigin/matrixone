@@ -1,12 +1,16 @@
 package sched
 
-import "errors"
+import (
+	"errors"
+	"io"
+)
 
 var (
 	ErrDispatchWrongEvent = errors.New("aoe: wrong event type")
 )
 
 type Dispatcher interface {
+	io.Closer
 	Dispatch(Event)
 }
 
@@ -18,7 +22,7 @@ func newMockDispatcher() *mockDispatcher {
 	d := &mockDispatcher{
 		BaseDispatcher: *NewBaseDispatcher(),
 	}
-	d.RegisterHandler(MockEvent, &mockEventHandler{})
+	d.RegisterHandler(MockEvent, newMockEventHandler("meh"))
 	return d
 }
 
@@ -43,4 +47,11 @@ func (d *BaseDispatcher) Dispatch(e Event) {
 
 func (d *BaseDispatcher) RegisterHandler(t EventType, h EventHandler) {
 	d.handlers[t] = h
+}
+
+func (d *BaseDispatcher) Close() error {
+	for _, h := range d.handlers {
+		h.Close()
+	}
+	return nil
 }
