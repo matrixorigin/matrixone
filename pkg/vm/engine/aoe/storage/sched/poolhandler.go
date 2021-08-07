@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	poolHandlerName = "FlushHandler"
+	poolHandlerName = "PoolHandler"
 )
 
 type poolHandler struct {

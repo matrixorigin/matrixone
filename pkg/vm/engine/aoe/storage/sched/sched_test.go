@@ -29,18 +29,6 @@ func TestMock(t *testing.T) {
 }
 
 func TestPoolHandler(t *testing.T) {
-	// {
-	// 	worker := w.NewOpWorker("xx")
-	// 	worker.Start()
-	// 	e := newMockEvent(MockEvent)
-	// 	e.Worker = worker
-	// 	err := e.Push()
-	// 	t.Log(err)
-	// 	err = e.WaitDone()
-	// 	t.Log(err)
-
-	// }
-	// return
 	scheduler := NewBaseScheduler("xx")
 	assert.NotNil(t, scheduler)
 	dis := newMockDispatcher()
