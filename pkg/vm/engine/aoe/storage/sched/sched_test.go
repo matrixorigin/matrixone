@@ -8,10 +8,9 @@ import (
 )
 
 func TestMock(t *testing.T) {
-	// scheduler := NewSequentialScheduler(10)
 	scheduler := NewBaseScheduler("xx")
 	assert.NotNil(t, scheduler)
-	dis := &mockDispatcher{}
+	dis := newMockDispatcher()
 	scheduler.RegisterDispatcher(MockEvent, dis)
 	for i := 0; i < 4; i++ {
 		e := newMockEvent()
