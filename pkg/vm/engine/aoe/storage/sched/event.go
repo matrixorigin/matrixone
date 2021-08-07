@@ -39,7 +39,6 @@ type Event interface {
 	AttachID(uint64)
 	ID() uint64
 	Type() EventType
-	WaitDone() error
 	Cancel() error
 }
 
@@ -50,11 +49,14 @@ type mockEvent struct {
 	exec func(Event) error
 }
 
-func newMockEvent(t EventType) *mockEvent {
+func newMockEvent(t EventType, doneCB func()) *mockEvent {
 	e := &mockEvent{t: t}
+	if doneCB == nil {
+		doneCB = e.onDone
+	}
 	e.Op = ops.Op{
 		Impl:   e,
-		ErrorC: make(chan error),
+		DoneCB: doneCB,
 	}
 	return e
 }
@@ -69,4 +71,7 @@ func (e *mockEvent) Execute() error {
 	}
 	log.Infof("Execute Event Type=%d, ID=%d", e.t, e.id)
 	return nil
+}
+func (e *mockEvent) onDone() {
+	log.Infof("Event %d is done: %v", e.id, e.Err)
 }

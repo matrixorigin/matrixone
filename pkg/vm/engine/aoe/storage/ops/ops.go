@@ -28,7 +28,14 @@ func (op *Op) Push() error {
 func (op *Op) SetError(err error) {
 	op.EndTime = time.Now()
 	op.Err = err
-	op.ErrorC <- err
+	if op.ErrorC != nil {
+		op.ErrorC <- err
+		return
+	} else if op.DoneCB != nil {
+		op.DoneCB()
+		return
+	}
+	panic("logic error")
 }
 
 func (op *Op) WaitDone() error {

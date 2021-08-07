@@ -16,4 +16,5 @@ type Op struct {
 	CreateTime time.Time
 	StartTime  time.Time
 	EndTime    time.Time
+	DoneCB     func()
 }
