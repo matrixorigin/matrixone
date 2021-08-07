@@ -45,8 +45,9 @@ type Event interface {
 
 type mockEvent struct {
 	ops.Op
-	id uint64
-	t  EventType
+	id   uint64
+	t    EventType
+	exec func(Event) error
 }
 
 func newMockEvent(t EventType) *mockEvent {
@@ -63,6 +64,9 @@ func (e *mockEvent) ID() uint64         { return e.id }
 func (e *mockEvent) Type() EventType    { return e.t }
 func (e *mockEvent) Cancel() error      { return nil }
 func (e *mockEvent) Execute() error {
+	if e.exec != nil {
+		return e.exec(e)
+	}
 	log.Infof("Execute Event Type=%d, ID=%d", e.t, e.id)
 	return nil
 }

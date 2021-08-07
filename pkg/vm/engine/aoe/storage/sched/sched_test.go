@@ -44,26 +44,31 @@ func TestPoolHandler(t *testing.T) {
 	scheduler := NewBaseScheduler("xx")
 	assert.NotNil(t, scheduler)
 	dis := newMockDispatcher()
-	dis.RegisterHandler(MockEvent, NewPoolHandler(2))
+	dis.RegisterHandler(MockEvent, NewPoolHandler(4))
 	scheduler.RegisterDispatcher(MockEvent, dis)
-	events := make(chan Event, 1000)
+	waitings := make(chan Event, 1000)
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
-		for event := range events {
-			t.Logf("e %d", event.ID())
+		for event := range waitings {
 			event.WaitDone()
 		}
 		wg.Done()
 	}()
-	for i := 0; i < 4; i++ {
+	exec := func(e Event) error {
+		time.Sleep(time.Duration(10) * time.Millisecond)
+		return nil
+	}
+	now := time.Now()
+	for i := 0; i < 8; i++ {
 		e := newMockEvent(MockEvent)
+		e.exec = exec
 		err := scheduler.Schedule(e)
 		assert.Nil(t, err)
-		events <- e
+		waitings <- e
 	}
-	time.Sleep(time.Duration(10) * time.Millisecond)
 	scheduler.Stop()
-	close(events)
+	close(waitings)
 	wg.Wait()
+	t.Logf("Time: %s", time.Since(now))
 }
