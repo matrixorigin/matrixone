@@ -11,6 +11,7 @@ type IMemTable interface {
 	Append(bat *batch.Batch, offset uint64, index *md.LogIndex) (n uint64, err error)
 	IsFull() bool
 	Flush() error
+	Commit() error
 	Unpin()
 	GetMeta() *md.Block
 	GetID() common.ID

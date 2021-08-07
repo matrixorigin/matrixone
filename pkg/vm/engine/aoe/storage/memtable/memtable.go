@@ -113,11 +113,11 @@ func (mt *MemTable) Flush() error {
 		return err
 	}
 	mt.Opts.EventListener.FlushBlockEndCB(mt)
-	err = mt.scheduleEvents()
+	// err = mt.scheduleEvents()
 	return err
 }
 
-func (mt *MemTable) scheduleEvents() error {
+func (mt *MemTable) Commit() error {
 	ctx := mops.OpCtx{Block: mt.Meta, Opts: mt.Opts}
 	op := mops.NewUpdateOp(&ctx)
 	op.Push()

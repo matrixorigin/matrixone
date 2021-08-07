@@ -35,12 +35,18 @@ func (op *FlushBlkOp) Execute() error {
 	} else {
 		return nil
 	}
+	defer mem.Unref()
 	err := mem.Flush()
 	if err != nil {
 		op.onFlushErr(mem)
 		log.Errorf("Flush memtable %d failed %s", mem.GetMeta().GetID(), err)
 		return err
 	}
-	mem.Unref()
+	err = mem.Commit()
+	if err != nil {
+		op.onFlushErr(mem)
+		log.Errorf("Commit memtable %d failed %s", mem.GetMeta().GetID(), err)
+		return err
+	}
 	return nil
 }

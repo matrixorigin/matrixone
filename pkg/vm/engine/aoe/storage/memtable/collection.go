@@ -119,12 +119,11 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 			{
 				c.Ref()
 				ctx := dops.OpCtx{Collection: c, Opts: c.Opts}
-				op := dops.NewFlushBlkOp(&ctx)
-				err = op.Push()
+				e := dops.NewFlushBlkEvent(&ctx)
+				err = c.Opts.Scheduler.Schedule(e)
 				if err != nil {
 					return err
 				}
-				go op.WaitDone()
 			}
 		}
 		n, err := mut.Append(bat, offset, index)

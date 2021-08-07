@@ -14,8 +14,8 @@ func NewScheduler(opts *Options) *scheduler {
 	}
 
 	dispatcher := sched.NewBaseDispatcher()
-	ioHandler := sched.NewPoolHandler(4)
-	cpuHandler := sched.NewPoolHandler(2)
+	ioHandler := sched.NewPoolHandler(1)
+	cpuHandler := sched.NewPoolHandler(1)
 	dispatcher.RegisterHandler(sched.DataIOBoundEvent, ioHandler)
 	dispatcher.RegisterHandler(sched.DataCpuBoundEvent, cpuHandler)
 	sch.RegisterDispatcher(sched.DataIOBoundEvent, dispatcher)
