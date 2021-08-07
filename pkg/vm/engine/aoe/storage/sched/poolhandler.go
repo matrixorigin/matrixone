@@ -1,12 +1,11 @@
 package sched
 
 import (
+	"github.com/panjf2000/ants/v2"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"sync"
-
-	"github.com/panjf2000/ants/v2"
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -39,8 +38,6 @@ func NewPoolHandler(num int) *poolHandler {
 func (h *poolHandler) doHandle(op iops.IOp) {
 	closure := func(o iops.IOp, wg *sync.WaitGroup) func() {
 		return func() {
-			e := op.(Event)
-			log.Infof("Pool Handling flush event type %v, id %d", e.Type(), e.ID())
 			h.opExec(o)
 			wg.Done()
 		}

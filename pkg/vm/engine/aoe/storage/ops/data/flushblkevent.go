@@ -15,7 +15,7 @@ func NewFlushBlkEvent(ctx *OpCtx) *FlushBlkEvent {
 	e := &FlushBlkEvent{
 		ctx: ctx,
 	}
-	e.BaseEvent = *sched.NewBaseEvent(e, sched.DataIOBoundEvent, func() {})
+	e.BaseEvent = *sched.NewBaseEvent(e, sched.IOBoundEvent, nil)
 	return e
 }
 

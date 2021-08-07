@@ -1,10 +1,10 @@
 package sched
 
 import (
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync/atomic"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -17,8 +17,8 @@ const (
 	EmptyEvent EventType = iota
 	MockEvent
 	StopEvent
-	DataIOBoundEvent
-	DataCpuBoundEvent
+	IOBoundEvent
+	CpuBoundEvent
 )
 
 func GetNextEventId() uint64 {
@@ -31,40 +31,6 @@ type Event interface {
 	ID() uint64
 	Type() EventType
 	Cancel() error
-}
-
-type mockEvent struct {
-	ops.Op
-	id   uint64
-	t    EventType
-	exec func(Event) error
-}
-
-func newMockEvent(t EventType, doneCB func()) *mockEvent {
-	e := &mockEvent{t: t}
-	if doneCB == nil {
-		doneCB = e.onDone
-	}
-	e.Op = ops.Op{
-		Impl:   e,
-		DoneCB: doneCB,
-	}
-	return e
-}
-
-func (e *mockEvent) AttachID(id uint64) { e.id = id }
-func (e *mockEvent) ID() uint64         { return e.id }
-func (e *mockEvent) Type() EventType    { return e.t }
-func (e *mockEvent) Cancel() error      { return nil }
-func (e *mockEvent) Execute() error {
-	if e.exec != nil {
-		return e.exec(e)
-	}
-	log.Infof("Execute Event Type=%d, ID=%d", e.t, e.id)
-	return nil
-}
-func (e *mockEvent) onDone() {
-	log.Infof("Event %d is done: %v", e.id, e.Err)
 }
 
 type BaseEvent struct {
@@ -97,9 +63,9 @@ func (e *BaseEvent) Execute() error {
 	if e.exec != nil {
 		return e.exec(e)
 	}
-	log.Infof("Execute Event Type=%d, ID=%d", e.t, e.id)
+	// log.Infof("Execute Event Type=%d, ID=%d", e.t, e.id)
 	return nil
 }
 func (e *BaseEvent) onDone() {
-	log.Infof("Event %d is done: %v", e.id, e.Err)
+	// log.Infof("Event %d is done: %v", e.id, e.Err)
 }
