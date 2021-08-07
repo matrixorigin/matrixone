@@ -12,7 +12,6 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata/v2"
 	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -136,31 +135,18 @@ func (mt *MemTable) Commit() error {
 	}
 
 	newMeta := e.NewMeta
-	{
-		ctx := mops.OpCtx{Opts: mt.Opts}
-		getssop := mops.NewGetTblSSOp(&ctx, mt.TableMeta)
-		err := getssop.Push()
-		if err != nil {
-			mt.Opts.EventListener.BackgroundErrorCB(err)
-			return err
-		}
-		err = getssop.WaitDone()
-		if err != nil {
-			mt.Opts.EventListener.BackgroundErrorCB(err)
-			return err
-		}
-		op := mops.NewFlushTblOp(&ctx, getssop.Result)
-		err = op.Push()
-		if err != nil {
-			mt.Opts.EventListener.BackgroundErrorCB(err)
-			return err
-		}
-		err = op.WaitDone()
-		if err != nil {
-			mt.Opts.EventListener.BackgroundErrorCB(err)
-			return err
-		}
+	cpCtx := md.CopyCtx{Ts: md.NowMicro(), Attached: true}
+	mt.TableMeta.RLock()
+	tblMetaCpy := mt.TableMeta.Copy(cpCtx)
+	mt.TableMeta.RUnlock()
+
+	eCtx = &meta.Context{Opts: mt.Opts}
+	flushEvent := meta.NewFlushTableEvent(eCtx, tblMetaCpy)
+	if err = mt.Opts.Scheduler.Schedule(flushEvent); err != nil {
+		mt.Opts.EventListener.BackgroundErrorCB(err)
+		return err
 	}
+
 	{
 		colCtx := cops.OpCtx{Opts: mt.Opts, BlkMeta: newMeta}
 		upgradeBlkOp := cops.NewUpgradeBlkOp(&colCtx, mt.TableData)
