@@ -17,18 +17,9 @@ const (
 	EmptyEvent EventType = iota
 	MockEvent
 	StopEvent
-	DQLEvent
-	InsertEvent
-	DeleteEvent
+	DataIOBoundEvent
+	DataCpuBoundEvent
 )
-
-func (et EventType) IsDML() bool {
-	switch et {
-	case InsertEvent, DeleteEvent:
-		return true
-	}
-	return false
-}
 
 func GetNextEventId() uint64 {
 	return atomic.AddUint64(&eventId, uint64(1))

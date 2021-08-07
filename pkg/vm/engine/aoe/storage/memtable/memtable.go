@@ -112,10 +112,16 @@ func (mt *MemTable) Flush() error {
 		mt.Opts.EventListener.BackgroundErrorCB(err)
 		return err
 	}
+	mt.Opts.EventListener.FlushBlockEndCB(mt)
+	err = mt.scheduleEvents()
+	return err
+}
+
+func (mt *MemTable) scheduleEvents() error {
 	ctx := mops.OpCtx{Block: mt.Meta, Opts: mt.Opts}
 	op := mops.NewUpdateOp(&ctx)
 	op.Push()
-	err = op.WaitDone()
+	err := op.WaitDone()
 	if err != nil {
 		mt.Opts.EventListener.BackgroundErrorCB(err)
 		return err
@@ -191,7 +197,6 @@ func (mt *MemTable) Flush() error {
 		upgradeBlkOp.Block.Unref()
 	}
 	// }()
-	mt.Opts.EventListener.FlushBlockEndCB(mt)
 	return nil
 }
 

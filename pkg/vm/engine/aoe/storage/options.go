@@ -5,6 +5,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync"
@@ -18,6 +19,7 @@ const (
 	DEFAULT_DATA_FLUSHER  = "DATA_FLUSHER"
 	DEFAULT_DATA_SORTER   = "DATA_SORTER"
 	DEFAULT_MDATA_UPDATER = "MDATA_UPDATER"
+	SchedulerName         = "AOEScheduler"
 )
 
 type IterOptions struct {
@@ -42,6 +44,8 @@ type Options struct {
 	EventListener e.EventListener
 
 	Mu sync.RWMutex
+
+	Scheduler sched.Scheduler
 
 	Mon struct {
 		Collector iw.IOpWorker
@@ -80,6 +84,10 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o = &Options{}
 	}
 	o.EventListener.FillDefaults()
+
+	if o.Scheduler == nil {
+		o.Scheduler = NewScheduler(o)
+	}
 
 	if o.Mon.Collector == nil {
 		o.Mon.Collector = w.NewOpWorker(DEFAULT_MON_COLLECTOR)

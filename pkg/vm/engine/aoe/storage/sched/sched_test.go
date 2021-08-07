@@ -11,6 +11,7 @@ import (
 func TestMock(t *testing.T) {
 	scheduler := NewBaseScheduler("xx")
 	assert.NotNil(t, scheduler)
+	scheduler.Start()
 	dis := newMockDispatcher()
 	scheduler.RegisterDispatcher(MockEvent, dis)
 	for i := 0; i < 4; i++ {
@@ -31,6 +32,7 @@ func TestMock(t *testing.T) {
 func TestPoolHandler(t *testing.T) {
 	scheduler := NewBaseScheduler("xx")
 	assert.NotNil(t, scheduler)
+	scheduler.Start()
 	dis := newMockDispatcher()
 	dis.RegisterHandler(MockEvent, NewPoolHandler(4))
 	scheduler.RegisterDispatcher(MockEvent, dis)

@@ -18,6 +18,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
 	"sync"
@@ -54,6 +55,8 @@ type DB struct {
 
 	DataDir  *os.File
 	DBLocker io.Closer
+
+	Scheduler sched.Scheduler
 
 	Closed  *atomic.Value
 	ClosedC chan struct{}
@@ -345,6 +348,7 @@ func (d *DB) Close() error {
 
 	d.Closed.Store(ErrClosed)
 	close(d.ClosedC)
+	d.Scheduler.Stop()
 	d.stopWorkers()
 	d.stopCleaner()
 	err := d.DBLocker.Close()

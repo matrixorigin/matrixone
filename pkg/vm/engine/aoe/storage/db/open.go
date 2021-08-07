@@ -40,6 +40,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		Dir:         dirname,
 		Opts:        opts,
 		FsMgr:       fsMgr,
+		Scheduler:   opts.Scheduler,
 		MemTableMgr: memtblMgr,
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mtBufMgr,

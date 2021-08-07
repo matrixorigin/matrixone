@@ -31,7 +31,6 @@ func NewBaseScheduler(name string) *BaseScheduler {
 		dispatchers: make(map[EventType]Dispatcher),
 	}
 	scheduler.ExecFunc = scheduler.doDispatch
-	scheduler.Start()
 	return scheduler
 }
 
