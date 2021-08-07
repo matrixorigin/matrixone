@@ -6,6 +6,7 @@ import (
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -118,16 +119,23 @@ func (mt *MemTable) Flush() error {
 }
 
 func (mt *MemTable) Commit() error {
-	ctx := mops.OpCtx{Block: mt.Meta, Opts: mt.Opts}
-	op := mops.NewUpdateOp(&ctx)
-	op.Push()
-	err := op.WaitDone()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	eCtx := &meta.Context{Opts: mt.Opts}
+	e := meta.NewCommitBlkEvent(eCtx, mt.Meta, func() {
+		wg.Done()
+	})
+	err := mt.Opts.Scheduler.Schedule(e)
 	if err != nil {
-		mt.Opts.EventListener.BackgroundErrorCB(err)
+		wg.Done()
 		return err
 	}
-	newMeta := op.NewMeta
-	// go func() {
+	wg.Wait()
+	if e.Err != nil {
+		return err
+	}
+
+	newMeta := e.NewMeta
 	{
 		ctx := mops.OpCtx{Opts: mt.Opts}
 		getssop := mops.NewGetTblSSOp(&ctx, mt.TableMeta)
@@ -153,8 +161,6 @@ func (mt *MemTable) Commit() error {
 			return err
 		}
 	}
-	// }()
-	// go func() {
 	{
 		colCtx := cops.OpCtx{Opts: mt.Opts, BlkMeta: newMeta}
 		upgradeBlkOp := cops.NewUpgradeBlkOp(&colCtx, mt.TableData)
@@ -196,7 +202,6 @@ func (mt *MemTable) Commit() error {
 		}
 		upgradeBlkOp.Block.Unref()
 	}
-	// }()
 	return nil
 }
 
