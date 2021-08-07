@@ -44,6 +44,7 @@ func (s *BaseScheduler) RegisterDispatcher(t EventType, dispatcher Dispatcher) {
 }
 
 func (s *BaseScheduler) Schedule(e Event) error {
+	e.AttachID(s.idAlloc())
 	if !s.SendOp(e) {
 		return ErrSchedule
 	}
@@ -52,7 +53,6 @@ func (s *BaseScheduler) Schedule(e Event) error {
 
 func (s *BaseScheduler) doDispatch(op iops.IOp) {
 	e := op.(Event)
-	e.AttachID(s.idAlloc())
 	dispatcher := s.dispatchers[e.Type()]
 	if dispatcher == nil {
 		panic(ErrDispatcherNotFound)

@@ -3,6 +3,7 @@ package sched
 import (
 	"errors"
 	"io"
+	// log "github.com/sirupsen/logrus"
 )
 
 var (

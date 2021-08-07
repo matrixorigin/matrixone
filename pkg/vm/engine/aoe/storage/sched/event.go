@@ -1,6 +1,7 @@
 package sched
 
 import (
+	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync/atomic"
@@ -45,18 +46,23 @@ type Event interface {
 type mockEvent struct {
 	ops.Op
 	id uint64
+	t  EventType
 }
 
-func newMockEvent() *mockEvent {
-	e := &mockEvent{}
+func newMockEvent(t EventType) *mockEvent {
+	e := &mockEvent{t: t}
 	e.Op = ops.Op{
-		Impl: e,
+		Impl:   e,
+		ErrorC: make(chan error),
 	}
 	return e
 }
 
 func (e *mockEvent) AttachID(id uint64) { e.id = id }
 func (e *mockEvent) ID() uint64         { return e.id }
-func (e *mockEvent) Type() EventType    { return MockEvent }
-func (e *mockEvent) WaitDone() error    { return nil }
+func (e *mockEvent) Type() EventType    { return e.t }
 func (e *mockEvent) Cancel() error      { return nil }
+func (e *mockEvent) Execute() error {
+	log.Infof("Execute Event Type=%d, ID=%d", e.t, e.id)
+	return nil
+}
