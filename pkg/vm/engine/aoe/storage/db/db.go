@@ -17,7 +17,6 @@ import (
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
@@ -177,31 +176,23 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 		panic(err)
 	}
 	info.Name = ctx.TableName
-	opCtx := &mops.OpCtx{Opts: d.Opts, TableInfo: info}
-	op := mops.NewCreateTblOp(opCtx, ctx)
-	op.Push()
-	err = op.WaitDone()
-	if err != nil {
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	eCtx := &meta.Context{Opts: d.Opts}
+	e := meta.NewCreateTableEvent(eCtx, ctx, info, func() {
+		wg.Done()
+	})
+	if err = d.Opts.Scheduler.Schedule(e); err != nil {
+		wg.Done()
 		return id, err
 	}
-	id = op.GetTable().GetID()
+	wg.Wait()
+	if e.Err != nil {
+		return id, e.Err
+	}
+	id = e.GetTable().GetID()
 	return id, nil
-	// var wg sync.WaitGroup
-	// wg.Add(1)
-	// eCtx := &meta.Context{Opts: d.Opts}
-	// e := meta.NewCreateTableEvent(eCtx, ctx, info, func() {
-	// 	wg.Done()
-	// })
-	// if err = d.Opts.Scheduler.Schedule(e); err != nil {
-	// 	wg.Done()
-	// 	return id, err
-	// }
-	// wg.Wait()
-	// if e.Err != nil {
-	// 	return id, e.Err
-	// }
-	// id = e.GetTable().GetID()
-	// return id, nil
 }
 
 func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {

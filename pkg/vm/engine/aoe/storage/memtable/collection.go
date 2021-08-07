@@ -5,11 +5,11 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -62,15 +62,23 @@ func (c *Collection) close() {
 }
 
 func (c *Collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) {
-	ctx := mops.OpCtx{Opts: c.Opts}
-	op := mops.NewCreateBlkOp(&ctx, c.ID, c.TableData)
-	op.Push()
-	err = op.WaitDone()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	eCtx := &me.Context{Opts: c.Opts}
+	e := me.NewCreateBlkEvent(eCtx, c.ID, c.TableData, func() {
+		wg.Done()
+	})
+	if err = c.Opts.Scheduler.Schedule(e); err != nil {
+		wg.Done()
+		return nil, nil, err
+	}
+	wg.Wait()
+	err = e.Err
 	if err != nil {
 		return nil, nil, err
 	}
-	meta = op.GetBlock()
-	return meta, op.Block, nil
+	meta = e.GetBlock()
+	return meta, e.Block, nil
 }
 
 func (c *Collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
