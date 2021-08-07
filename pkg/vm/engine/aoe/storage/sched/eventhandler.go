@@ -58,3 +58,15 @@ func (h *BaseEventHandler) Close() error {
 	h.Stop()
 	return nil
 }
+
+type singleWorkerHandler struct {
+	BaseEventHandler
+}
+
+func NewSingleWorkerHandler(name string) *singleWorkerHandler {
+	h := &singleWorkerHandler{
+		BaseEventHandler: *NewBaseEventHandler(name),
+	}
+	h.Start()
+	return h
+}

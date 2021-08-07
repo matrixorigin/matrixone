@@ -8,8 +8,8 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
@@ -156,13 +156,20 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	opCtx := &mops.OpCtx{Opts: d.Opts}
-	op := mops.NewDropTblOp(opCtx, ctx, d.Store.DataTables)
-	op.Push()
-	err = op.WaitDone()
-	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
-	d.Opts.GC.Acceptor.Accept(req)
-	return op.Id, err
+	eCtx := &meta.Context{
+		Opts: d.Opts,
+	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	e := meta.NewDropTableEvent(eCtx, ctx, d.MemTableMgr, d.Store.DataTables, func() {
+		wg.Done()
+	})
+	if err = d.Scheduler.Schedule(e); err != nil {
+		wg.Done()
+		return id, err
+	}
+	wg.Wait()
+	return e.Id, e.Err
 }
 
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {

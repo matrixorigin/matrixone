@@ -19,6 +19,8 @@ const (
 	StopEvent
 	IOBoundEvent
 	CpuBoundEvent
+	MetaUpdateEvent
+	MemdataUpdateEvent
 )
 
 func GetNextEventId() uint64 {
