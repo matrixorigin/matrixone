@@ -6,7 +6,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	meta "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
+	// meta "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	// log "github.com/sirupsen/logrus"
 )
@@ -40,12 +40,9 @@ func (e *dropTableEvent) Execute() error {
 	e.Id = id
 	ctx := md.CopyCtx{Ts: md.NowMicro() + 1, Attached: true}
 	info := e.Ctx.Opts.Meta.Info.Copy(ctx)
-	opCtx := meta.OpCtx{Opts: e.Ctx.Opts}
-	flushOp := meta.NewFlushInfoOp(&opCtx, info)
-	flushOp.Push()
-	go func() {
-		flushOp.WaitDone()
-	}()
+	eCtx := &Context{Opts: e.Ctx.Opts}
+	flushEvent := NewFlushInfoEvent(eCtx, info)
+	e.Ctx.Opts.Scheduler.Schedule(flushEvent)
 	gcReq := gcreqs.NewDropTblRequest(e.Ctx.Opts, id, e.Tables, e.MTMgr, e.reqCtx.OnFinishCB)
 	e.Ctx.Opts.GC.Acceptor.Accept(gcReq)
 	return err

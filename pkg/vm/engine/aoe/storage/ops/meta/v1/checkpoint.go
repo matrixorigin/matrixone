@@ -19,11 +19,12 @@ type CheckpointOp struct {
 
 func (op *CheckpointOp) Execute() (err error) {
 	op.Info.CheckPoint += 1
-	err = op.Ctx.Opts.Meta.Checkpointer.PreCommit(op.Info)
+	ck := op.Ctx.Opts.Meta.CKFactory.Create()
+	err = ck.PreCommit(op.Info)
 	if err != nil {
 		return err
 	}
-	err = op.Ctx.Opts.Meta.Checkpointer.Commit(op.Info)
+	err = ck.Commit(op.Info)
 	if err != nil {
 		return err
 	}

@@ -19,6 +19,7 @@ const (
 	StopEvent
 	IOBoundEvent
 	CpuBoundEvent
+	StatelessEvent
 	MetaUpdateEvent
 	MemdataUpdateEvent
 )

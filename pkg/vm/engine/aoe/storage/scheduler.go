@@ -16,17 +16,20 @@ func NewScheduler(opts *Options) *scheduler {
 	dispatcher := sched.NewBaseDispatcher()
 	ioHandler := sched.NewPoolHandler(1)
 	cpuHandler := sched.NewPoolHandler(1)
+	statelessHandler := sched.NewPoolHandler(2)
 	metaUpdateHandler := sched.NewSingleWorkerHandler("metaUpdateHandler")
 	memdataUpdateHandler := sched.NewSingleWorkerHandler("memdataUpdateEvent")
 	dispatcher.RegisterHandler(sched.IOBoundEvent, ioHandler)
 	dispatcher.RegisterHandler(sched.CpuBoundEvent, cpuHandler)
 	dispatcher.RegisterHandler(sched.MetaUpdateEvent, metaUpdateHandler)
 	dispatcher.RegisterHandler(sched.MemdataUpdateEvent, memdataUpdateHandler)
+	dispatcher.RegisterHandler(sched.StatelessEvent, statelessHandler)
 
 	sch.RegisterDispatcher(sched.IOBoundEvent, dispatcher)
 	sch.RegisterDispatcher(sched.CpuBoundEvent, dispatcher)
 	sch.RegisterDispatcher(sched.MetaUpdateEvent, dispatcher)
 	sch.RegisterDispatcher(sched.MemdataUpdateEvent, dispatcher)
+	sch.RegisterDispatcher(sched.StatelessEvent, dispatcher)
 	sch.Start()
 	return sch
 }
