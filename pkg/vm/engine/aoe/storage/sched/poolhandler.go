@@ -10,23 +10,23 @@ import (
 )
 
 var (
-	flushHandlerName = "FlushHandler"
+	poolHandlerName = "FlushHandler"
 )
 
-type flushHandler struct {
+type poolHandler struct {
 	BaseEventHandler
 	opExec ops.OpExecFunc
 	pool   *ants.Pool
 	wg     *sync.WaitGroup
 }
 
-func NewFlushHandler(num int) *flushHandler {
+func NewPoolHandler(num int) *poolHandler {
 	pool, err := ants.NewPool(num)
 	if err != nil {
 		panic(err)
 	}
-	h := &flushHandler{
-		BaseEventHandler: *NewBaseEventHandler(flushHandlerName),
+	h := &poolHandler{
+		BaseEventHandler: *NewBaseEventHandler(poolHandlerName),
 		pool:             pool,
 		wg:               &sync.WaitGroup{},
 	}
@@ -36,7 +36,7 @@ func NewFlushHandler(num int) *flushHandler {
 	return h
 }
 
-func (h *flushHandler) doHandle(op iops.IOp) {
+func (h *poolHandler) doHandle(op iops.IOp) {
 	closure := func(o iops.IOp, wg *sync.WaitGroup) func() {
 		return func() {
 			e := op.(Event)
@@ -49,7 +49,7 @@ func (h *flushHandler) doHandle(op iops.IOp) {
 	h.pool.Submit(closure(op, h.wg))
 }
 
-func (h *flushHandler) Close() error {
+func (h *poolHandler) Close() error {
 	h.BaseEventHandler.Close()
 	h.wg.Wait()
 	return nil

@@ -44,7 +44,7 @@ func TestPoolHandler(t *testing.T) {
 	scheduler := NewBaseScheduler("xx")
 	assert.NotNil(t, scheduler)
 	dis := newMockDispatcher()
-	dis.RegisterHandler(MockEvent, NewFlushHandler(2))
+	dis.RegisterHandler(MockEvent, NewPoolHandler(2))
 	scheduler.RegisterDispatcher(MockEvent, dis)
 	events := make(chan Event, 1000)
 	wg := &sync.WaitGroup{}
