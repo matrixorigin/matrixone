@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
+	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -42,7 +43,7 @@ func (req *dropTblRequest) Execute() error {
 	ctx := &memdata.Context{
 		Opts:   req.Opts,
 		Tables: req.Tables,
-		DoneCB: func() { wg.Done() }}
+		DoneCB: func(iops.IOp) { wg.Done() }}
 	e := memdata.NewDropTableEvent(ctx, req.TableId)
 	err := req.Opts.Scheduler.Schedule(e)
 	if err != nil {

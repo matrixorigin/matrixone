@@ -4,6 +4,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	// log "github.com/sirupsen/logrus"
 )
@@ -14,7 +15,7 @@ type createTableEvent struct {
 	tableInfo *aoe.TableInfo
 }
 
-func NewCreateTableEvent(ctx *Context, reqCtx dbi.TableOpCtx, tableInfo *aoe.TableInfo, doneCB func()) *createTableEvent {
+func NewCreateTableEvent(ctx *Context, reqCtx dbi.TableOpCtx, tableInfo *aoe.TableInfo, doneCB ops.OpDoneCB) *createTableEvent {
 	e := &createTableEvent{
 		reqCtx:    reqCtx,
 		tableInfo: tableInfo,

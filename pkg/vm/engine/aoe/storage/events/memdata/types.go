@@ -7,12 +7,13 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type Context struct {
 	Opts                             *e.Options
-	DoneCB                           func()
+	DoneCB                           ops.OpDoneCB
 	Tables                           *table.Tables
 	MTMgr                            mtif.IManager
 	IndexBufMgr, MTBufMgr, SSTBufMgr bmgrif.IBufferManager

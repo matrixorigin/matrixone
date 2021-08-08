@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 )
 
 func TestMock(t *testing.T) {
@@ -44,7 +45,7 @@ func TestPoolHandler(t *testing.T) {
 	now := time.Now()
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
-		e := NewBaseEvent(nil, MockEvent, func() {
+		e := NewBaseEvent(nil, MockEvent, func(iops.IOp) {
 			wg.Done()
 		})
 		e.exec = exec

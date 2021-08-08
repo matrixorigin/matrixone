@@ -22,6 +22,7 @@ const (
 	StatelessEvent
 	MetaUpdateEvent
 	MemdataUpdateEvent
+	MergeSortEvent
 )
 
 func GetNextEventId() uint64 {
@@ -43,7 +44,7 @@ type BaseEvent struct {
 	exec func(Event) error
 }
 
-func NewBaseEvent(impl iops.IOpInternal, t EventType, doneCB func()) *BaseEvent {
+func NewBaseEvent(impl iops.IOpInternal, t EventType, doneCB ops.OpDoneCB) *BaseEvent {
 	e := &BaseEvent{t: t}
 	if doneCB == nil {
 		doneCB = e.onDone
@@ -69,6 +70,6 @@ func (e *BaseEvent) Execute() error {
 	// log.Infof("Execute Event Type=%d, ID=%d", e.t, e.id)
 	return nil
 }
-func (e *BaseEvent) onDone() {
+func (e *BaseEvent) onDone(_ iops.IOp) {
 	// log.Infof("Event %d is done: %v", e.id, e.Err)
 }

@@ -5,11 +5,12 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/events/dataio"
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
+	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -65,7 +66,7 @@ func (c *Collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	eCtx := &me.Context{Opts: c.Opts}
-	e := me.NewCreateBlkEvent(eCtx, c.ID, c.TableData, func() {
+	e := me.NewCreateBlkEvent(eCtx, c.ID, c.TableData, func(iops.IOp) {
 		wg.Done()
 	})
 	if err = c.Opts.Scheduler.Schedule(e); err != nil {
@@ -126,8 +127,8 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 			}
 			{
 				c.Ref()
-				ctx := dops.OpCtx{Collection: c, Opts: c.Opts}
-				e := dops.NewFlushBlkEvent(&ctx)
+				ctx := &dataio.Context{Opts: c.Opts}
+				e := dataio.NewFlushBlkEvent(ctx, nil, c)
 				err = c.Opts.Scheduler.Schedule(e)
 				if err != nil {
 					return err

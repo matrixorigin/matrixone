@@ -17,6 +17,7 @@ import (
 	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
@@ -83,7 +84,7 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
 			Tables:      d.Store.DataTables,
-			DoneCB:      func() { wg.Done() },
+			DoneCB:      func(iops.IOp) { wg.Done() },
 		}
 		e := memdata.NewCreateTableEvent(eCtx)
 		err = d.Scheduler.Schedule(e)
@@ -120,7 +121,7 @@ func (d *DB) getTableData(meta *md.Table) (tiface.ITableData, error) {
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
 			Tables:      d.Store.DataTables,
-			DoneCB:      func() { wg.Done() },
+			DoneCB:      func(iops.IOp) { wg.Done() },
 		}
 		e := memdata.NewCreateTableEvent(eCtx)
 		err = d.Scheduler.Schedule(e)
@@ -174,7 +175,7 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
-	e := meta.NewDropTableEvent(eCtx, ctx, d.MemTableMgr, d.Store.DataTables, func() {
+	e := meta.NewDropTableEvent(eCtx, ctx, d.MemTableMgr, d.Store.DataTables, func(iops.IOp) {
 		wg.Done()
 	})
 	if err = d.Scheduler.Schedule(e); err != nil {
@@ -194,7 +195,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	var wg sync.WaitGroup
 	wg.Add(1)
 	eCtx := &meta.Context{Opts: d.Opts}
-	e := meta.NewCreateTableEvent(eCtx, ctx, info, func() {
+	e := meta.NewCreateTableEvent(eCtx, ctx, info, func(iops.IOp) {
 		wg.Done()
 	})
 	if err = d.Opts.Scheduler.Schedule(e); err != nil {

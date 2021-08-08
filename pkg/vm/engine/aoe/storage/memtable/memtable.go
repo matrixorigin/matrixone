@@ -6,13 +6,13 @@ import (
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/events/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	// cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata/v2"
-	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
+	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -122,7 +122,7 @@ func (mt *MemTable) Commit() error {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	eCtx := &meta.Context{Opts: mt.Opts}
-	e := meta.NewCommitBlkEvent(eCtx, mt.Meta, func() {
+	e := meta.NewCommitBlkEvent(eCtx, mt.Meta, func(iops.IOp) {
 		wg.Done()
 	})
 	err := mt.Opts.Scheduler.Schedule(e)
@@ -150,7 +150,7 @@ func (mt *MemTable) Commit() error {
 
 	{
 		wg.Add(1)
-		upgradeBlkCtx := &memdata.Context{Opts: mt.Opts, DoneCB: func() {
+		upgradeBlkCtx := &memdata.Context{Opts: mt.Opts, DoneCB: func(iops.IOp) {
 			wg.Done()
 		}}
 		upgradeBlkEvent := memdata.NewUpgradeBlkEvent(upgradeBlkCtx, newMeta, mt.TableData)
@@ -164,35 +164,40 @@ func (mt *MemTable) Commit() error {
 			return err
 		}
 		if upgradeBlkEvent.SegmentClosed {
-			flushOp := dops.NewFlushSegOp(&dops.OpCtx{Opts: mt.Opts}, mt.TableData.StrongRefSegment(newMeta.Segment.ID))
-			err = flushOp.Push()
-			if err != nil {
-				mt.Opts.EventListener.BackgroundErrorCB(err)
-				return err
-			}
 			mt.TableData.Ref()
-			go func(td iface.ITableData) {
-				defer td.Unref()
-				err = flushOp.WaitDone()
-				if err != nil {
-					mt.Opts.EventListener.BackgroundErrorCB(err)
-				} else {
-					var wg sync.WaitGroup
-					wg.Add(1)
-					ctx := &memdata.Context{Opts: flushOp.Ctx.Opts, DoneCB: func() {
-						wg.Done()
-					}}
-					e := memdata.NewUpgradeSegEvent(ctx, newMeta.Segment.ID, td)
-					if err = mt.Opts.Scheduler.Schedule(e); err != nil {
+			doneCB := func(td iface.ITableData) func(iops.IOp) {
+				return func(producer iops.IOp) {
+					defer td.Unref()
+					err := producer.GetError()
+					if err != nil {
 						mt.Opts.EventListener.BackgroundErrorCB(err)
+					} else {
+						var wg sync.WaitGroup
+						wg.Add(1)
+						ctx := &memdata.Context{Opts: mt.Opts, DoneCB: func(iops.IOp) {
+							wg.Done()
+						}}
+						e := memdata.NewUpgradeSegEvent(ctx, newMeta.Segment.ID, td)
+						if err = mt.Opts.Scheduler.Schedule(e); err != nil {
+							wg.Done()
+							mt.Opts.EventListener.BackgroundErrorCB(err)
+							return
+						}
+						wg.Wait()
+						if err = e.Err; err != nil {
+							mt.Opts.EventListener.BackgroundErrorCB(err)
+						}
+						e.Segment.Unref()
 					}
-					wg.Wait()
-					if err = e.Err; err != nil {
-						mt.Opts.EventListener.BackgroundErrorCB(err)
-					}
-					e.Segment.Unref()
 				}
 			}(mt.TableData)
+			flushCtx := &dataio.Context{Opts: mt.Opts, DoneCB: doneCB}
+			flushEvent := dataio.NewFlushSegEvent(flushCtx, mt.TableData.StrongRefSegment(newMeta.Segment.ID))
+			if err = mt.Opts.Scheduler.Schedule(flushEvent); err != nil {
+				mt.Opts.EventListener.BackgroundErrorCB(err)
+				mt.TableData.Unref()
+				return err
+			}
 		}
 		upgradeBlkEvent.Data.Unref()
 	}

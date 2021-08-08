@@ -4,6 +4,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/ops"
+	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -17,7 +19,7 @@ type createBlkEvent struct {
 	Block      iface.IBlock
 }
 
-func NewCreateBlkEvent(ctx *Context, tid uint64, tableData iface.ITableData, doneCB func()) *createBlkEvent {
+func NewCreateBlkEvent(ctx *Context, tid uint64, tableData iface.ITableData, doneCB ops.OpDoneCB) *createBlkEvent {
 	e := &createBlkEvent{
 		TableData: tableData,
 		TableID:   tid,
@@ -90,7 +92,7 @@ func (e *createBlkEvent) Execute() error {
 	if e.TableData != nil {
 		var wg sync.WaitGroup
 		wg.Add(1)
-		ctx := &memdata.Context{Opts: e.Ctx.Opts, DoneCB: func() { wg.Done() }}
+		ctx := &memdata.Context{Opts: e.Ctx.Opts, DoneCB: func(iops.IOp) { wg.Done() }}
 		event := memdata.NewCreateSegBlkEvent(ctx, e.NewSegment, cloned, e.TableData)
 		err = e.Ctx.Opts.Scheduler.Schedule(event)
 		if err != nil {
