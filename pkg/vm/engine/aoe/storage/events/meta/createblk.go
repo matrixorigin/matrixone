@@ -1,10 +1,11 @@
 package meta
 
 import (
+	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	mmop "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"sync"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -87,15 +88,21 @@ func (e *createBlkEvent) Execute() error {
 	}
 	e.Result = cloned
 	if e.TableData != nil {
-		ctx := new(mmop.OpCtx)
-		ctx.Opts = e.Ctx.Opts
-		segBlkOp := mmop.NewCreateSegBlkOp(ctx, e.NewSegment, cloned, e.TableData)
-		segBlkOp.Push()
-		err = segBlkOp.WaitDone()
+		var wg sync.WaitGroup
+		wg.Add(1)
+		ctx := &memdata.Context{Opts: e.Ctx.Opts, DoneCB: func() { wg.Done() }}
+		event := memdata.NewCreateSegBlkEvent(ctx, e.NewSegment, cloned, e.TableData)
+		err = e.Ctx.Opts.Scheduler.Schedule(event)
+		if err != nil {
+			wg.Done()
+			return err
+		}
+		wg.Wait()
+		err = event.Err
 		if err != nil {
 			return err
 		}
-		e.Block = segBlkOp.Block
+		e.Block = event.Block
 	}
 	return err
 }
