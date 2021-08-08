@@ -16,7 +16,7 @@ func NewFlushInfoEvent(ctx *Context, info *md.MetaInfo) *flushInfoEvent {
 	e.Info = info
 	e.baseEvent = baseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.StatelessEvent, nil),
+		BaseEvent: *sched.NewBaseEvent(e, sched.StatelessEvent, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

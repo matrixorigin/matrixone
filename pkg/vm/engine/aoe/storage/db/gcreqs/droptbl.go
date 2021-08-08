@@ -5,12 +5,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
-	"sync"
-
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -38,20 +35,17 @@ func NewDropTblRequest(opts *e.Options, id uint64, tables *table.Tables, mtMgr m
 }
 
 func (req *dropTblRequest) Execute() error {
-	var wg sync.WaitGroup
-	wg.Add(1)
 	ctx := &memdata.Context{
-		Opts:   req.Opts,
-		Tables: req.Tables,
-		DoneCB: func(iops.IOp) { wg.Done() }}
+		Opts:     req.Opts,
+		Tables:   req.Tables,
+		Waitable: true,
+	}
 	e := memdata.NewDropTableEvent(ctx, req.TableId)
 	err := req.Opts.Scheduler.Schedule(e)
 	if err != nil {
-		wg.Done()
 		return err
 	}
-	wg.Wait()
-	err = e.Err
+	err = e.WaitDone()
 	if err != nil && err != table.NotExistErr {
 		return err
 	} else if err != nil {

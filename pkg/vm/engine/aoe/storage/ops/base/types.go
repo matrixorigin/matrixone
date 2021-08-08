@@ -13,6 +13,7 @@ type IOp interface {
 	SetError(err error)
 	GetError() error
 	WaitDone() error
+	Waitable() bool
 	GetCreateTime() time.Time
 	GetStartTime() time.Time
 	GetEndTime() time.Time

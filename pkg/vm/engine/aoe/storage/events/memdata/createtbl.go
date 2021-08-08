@@ -15,7 +15,7 @@ type createTableEvent struct {
 func NewCreateTableEvent(ctx *Context) *createTableEvent {
 	e := &createTableEvent{}
 	e.baseEvent = baseEvent{
-		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
 		Ctx:       ctx,
 	}
 	return e

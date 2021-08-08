@@ -17,7 +17,6 @@ import (
 	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
@@ -73,8 +72,6 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 
 	collection := d.MemTableMgr.StrongRefCollection(tbl.GetID())
 	if collection == nil {
-		var wg sync.WaitGroup
-		wg.Add(1)
 		eCtx := &memdata.Context{
 			Opts:        d.Opts,
 			MTMgr:       d.MemTableMgr,
@@ -84,16 +81,13 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
 			Tables:      d.Store.DataTables,
-			DoneCB:      func(iops.IOp) { wg.Done() },
+			Waitable:    true,
 		}
 		e := memdata.NewCreateTableEvent(eCtx)
-		err = d.Scheduler.Schedule(e)
-		if err != nil {
+		if err = d.Scheduler.Schedule(e); err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
-		wg.Wait()
-		err = e.Err
-		if err != nil {
+		if err = e.WaitDone(); err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
 		collection = e.Collection
@@ -110,8 +104,6 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 func (d *DB) getTableData(meta *md.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.ID)
 	if err != nil {
-		var wg sync.WaitGroup
-		wg.Add(1)
 		eCtx := &memdata.Context{
 			Opts:        d.Opts,
 			MTMgr:       d.MemTableMgr,
@@ -121,16 +113,13 @@ func (d *DB) getTableData(meta *md.Table) (tiface.ITableData, error) {
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
 			Tables:      d.Store.DataTables,
-			DoneCB:      func(iops.IOp) { wg.Done() },
+			Waitable:    true,
 		}
 		e := memdata.NewCreateTableEvent(eCtx)
-		err = d.Scheduler.Schedule(e)
-		if err != nil {
+		if err = d.Scheduler.Schedule(e); err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
-		wg.Wait()
-		err = e.Err
-		if err != nil {
+		if err = e.WaitDone(); err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
 		collection := e.Collection
@@ -171,19 +160,15 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 		panic(err)
 	}
 	eCtx := &meta.Context{
-		Opts: d.Opts,
+		Opts:     d.Opts,
+		Waitable: true,
 	}
-	var wg sync.WaitGroup
-	wg.Add(1)
-	e := meta.NewDropTableEvent(eCtx, ctx, d.MemTableMgr, d.Store.DataTables, func(iops.IOp) {
-		wg.Done()
-	})
+	e := meta.NewDropTableEvent(eCtx, ctx, d.MemTableMgr, d.Store.DataTables)
 	if err = d.Scheduler.Schedule(e); err != nil {
-		wg.Done()
 		return id, err
 	}
-	wg.Wait()
-	return e.Id, e.Err
+	err = e.WaitDone()
+	return e.Id, err
 }
 
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
@@ -192,18 +177,12 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	}
 	info.Name = ctx.TableName
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	eCtx := &meta.Context{Opts: d.Opts}
-	e := meta.NewCreateTableEvent(eCtx, ctx, info, func(iops.IOp) {
-		wg.Done()
-	})
+	eCtx := &meta.Context{Opts: d.Opts, Waitable: true}
+	e := meta.NewCreateTableEvent(eCtx, ctx, info)
 	if err = d.Opts.Scheduler.Schedule(e); err != nil {
-		wg.Done()
 		return id, err
 	}
-	wg.Wait()
-	if e.Err != nil {
+	if err = e.WaitDone(); err != nil {
 		return id, e.Err
 	}
 	id = e.GetTable().GetID()

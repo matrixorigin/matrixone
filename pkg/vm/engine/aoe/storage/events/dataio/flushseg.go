@@ -18,7 +18,7 @@ func NewFlushSegEvent(ctx *Context, seg iface.ISegment) *flushSegEvent {
 	e := &flushSegEvent{Segment: seg}
 	e.baseEvent = baseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MergeSortEvent, ctx.DoneCB),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MergeSortEvent, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

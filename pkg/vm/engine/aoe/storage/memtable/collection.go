@@ -10,7 +10,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -63,19 +62,12 @@ func (c *Collection) close() {
 }
 
 func (c *Collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	eCtx := &me.Context{Opts: c.Opts}
-	e := me.NewCreateBlkEvent(eCtx, c.ID, c.TableData, func(iops.IOp) {
-		wg.Done()
-	})
+	eCtx := &me.Context{Opts: c.Opts, Waitable: true}
+	e := me.NewCreateBlkEvent(eCtx, c.ID, c.TableData)
 	if err = c.Opts.Scheduler.Schedule(e); err != nil {
-		wg.Done()
 		return nil, nil, err
 	}
-	wg.Wait()
-	err = e.Err
-	if err != nil {
+	if err = e.WaitDone(); err != nil {
 		return nil, nil, err
 	}
 	meta = e.GetBlock()

@@ -119,19 +119,13 @@ func (mt *MemTable) Flush() error {
 }
 
 func (mt *MemTable) Commit() error {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	eCtx := &meta.Context{Opts: mt.Opts}
-	e := meta.NewCommitBlkEvent(eCtx, mt.Meta, func(iops.IOp) {
-		wg.Done()
-	})
+	eCtx := &meta.Context{Opts: mt.Opts, Waitable: true}
+	e := meta.NewCommitBlkEvent(eCtx, mt.Meta)
 	err := mt.Opts.Scheduler.Schedule(e)
 	if err != nil {
-		wg.Done()
 		return err
 	}
-	wg.Wait()
-	if e.Err != nil {
+	if err = e.WaitDone(); err != nil {
 		return err
 	}
 
@@ -149,17 +143,13 @@ func (mt *MemTable) Commit() error {
 	}
 
 	{
-		wg.Add(1)
-		upgradeBlkCtx := &memdata.Context{Opts: mt.Opts, DoneCB: func(iops.IOp) {
-			wg.Done()
-		}}
+		upgradeBlkCtx := &memdata.Context{Opts: mt.Opts, Waitable: true}
 		upgradeBlkEvent := memdata.NewUpgradeBlkEvent(upgradeBlkCtx, newMeta, mt.TableData)
 		if err = mt.Opts.Scheduler.Schedule(upgradeBlkEvent); err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 			return err
 		}
-		wg.Wait()
-		if err = upgradeBlkEvent.Err; err != nil {
+		if err = upgradeBlkEvent.WaitDone(); err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 			return err
 		}
@@ -172,19 +162,13 @@ func (mt *MemTable) Commit() error {
 					if err != nil {
 						mt.Opts.EventListener.BackgroundErrorCB(err)
 					} else {
-						var wg sync.WaitGroup
-						wg.Add(1)
-						ctx := &memdata.Context{Opts: mt.Opts, DoneCB: func(iops.IOp) {
-							wg.Done()
-						}}
+						ctx := &memdata.Context{Opts: mt.Opts, Waitable: true}
 						e := memdata.NewUpgradeSegEvent(ctx, newMeta.Segment.ID, td)
 						if err = mt.Opts.Scheduler.Schedule(e); err != nil {
-							wg.Done()
 							mt.Opts.EventListener.BackgroundErrorCB(err)
 							return
 						}
-						wg.Wait()
-						if err = e.Err; err != nil {
+						if err = e.WaitDone(); err != nil {
 							mt.Opts.EventListener.BackgroundErrorCB(err)
 						}
 						e.Segment.Unref()

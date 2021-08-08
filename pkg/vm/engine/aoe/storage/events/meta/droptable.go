@@ -6,7 +6,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	// log "github.com/sirupsen/logrus"
 )
@@ -19,7 +18,7 @@ type dropTableEvent struct {
 	Tables *table.Tables
 }
 
-func NewDropTableEvent(ctx *Context, reqCtx dbi.DropTableCtx, mtMgr mtif.IManager, tables *table.Tables, doneCB ops.OpDoneCB) *dropTableEvent {
+func NewDropTableEvent(ctx *Context, reqCtx dbi.DropTableCtx, mtMgr mtif.IManager, tables *table.Tables) *dropTableEvent {
 	e := &dropTableEvent{
 		reqCtx: reqCtx,
 		Tables: tables,
@@ -27,7 +26,7 @@ func NewDropTableEvent(ctx *Context, reqCtx dbi.DropTableCtx, mtMgr mtif.IManage
 	}
 	e.baseEvent = baseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, doneCB),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

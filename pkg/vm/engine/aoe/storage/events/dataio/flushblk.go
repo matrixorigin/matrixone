@@ -19,7 +19,7 @@ func NewFlushBlkEvent(ctx *Context, memtable imem.IMemTable, collection imem.ICo
 	}
 	e.baseEvent = baseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.IOBoundEvent, ctx.DoneCB),
+		BaseEvent: *sched.NewBaseEvent(e, sched.IOBoundEvent, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

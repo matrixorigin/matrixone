@@ -12,8 +12,9 @@ import (
 )
 
 type Context struct {
-	Opts   *e.Options
-	DoneCB ops.OpDoneCB
+	Opts     *e.Options
+	DoneCB   ops.OpDoneCB
+	Waitable bool
 }
 
 type baseEvent struct {

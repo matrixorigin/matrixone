@@ -44,9 +44,9 @@ type BaseEvent struct {
 	exec func(Event) error
 }
 
-func NewBaseEvent(impl iops.IOpInternal, t EventType, doneCB ops.OpDoneCB) *BaseEvent {
+func NewBaseEvent(impl iops.IOpInternal, t EventType, doneCB ops.OpDoneCB, waitable bool) *BaseEvent {
 	e := &BaseEvent{t: t}
-	if doneCB == nil {
+	if doneCB == nil && !waitable {
 		doneCB = e.onDone
 	}
 	if impl == nil {
@@ -55,6 +55,9 @@ func NewBaseEvent(impl iops.IOpInternal, t EventType, doneCB ops.OpDoneCB) *Base
 	e.Op = ops.Op{
 		Impl:   impl,
 		DoneCB: doneCB,
+	}
+	if doneCB == nil {
+		e.Op.ErrorC = make(chan error)
 	}
 	return e
 }

@@ -19,7 +19,7 @@ func NewCreateSegBlkEvent(ctx *Context, newSeg bool, meta *md.Block, tableData i
 	e := &createSegBlkEvent{TableData: tableData, NewSegment: newSeg, BlkMeta: meta}
 	e.baseEvent = baseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

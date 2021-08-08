@@ -16,14 +16,14 @@ func TestMock(t *testing.T) {
 	dis := newMockDispatcher()
 	scheduler.RegisterDispatcher(MockEvent, dis)
 	for i := 0; i < 4; i++ {
-		e := NewBaseEvent(nil, MockEvent, nil)
+		e := NewBaseEvent(nil, MockEvent, nil, false)
 		err := scheduler.Schedule(e)
 		assert.Nil(t, err)
 	}
 	time.Sleep(time.Duration(10) * time.Millisecond)
 	scheduler.Stop()
 	for i := 0; i < 4; i++ {
-		e := NewBaseEvent(nil, MockEvent, nil)
+		e := NewBaseEvent(nil, MockEvent, nil, false)
 		err := scheduler.Schedule(e)
 		assert.Equal(t, ErrSchedule, err)
 		e.Cancel()
@@ -47,7 +47,7 @@ func TestPoolHandler(t *testing.T) {
 		wg.Add(1)
 		e := NewBaseEvent(nil, MockEvent, func(iops.IOp) {
 			wg.Done()
-		})
+		}, false)
 		e.exec = exec
 		err := scheduler.Schedule(e)
 		assert.Nil(t, err)

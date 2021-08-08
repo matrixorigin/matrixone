@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 
 	log "github.com/sirupsen/logrus"
@@ -16,11 +15,11 @@ type commitBlkEvent struct {
 	LocalMeta *md.Block
 }
 
-func NewCommitBlkEvent(ctx *Context, localMeta *md.Block, doneCB ops.OpDoneCB) *commitBlkEvent {
+func NewCommitBlkEvent(ctx *Context, localMeta *md.Block) *commitBlkEvent {
 	e := &commitBlkEvent{LocalMeta: localMeta}
 	e.baseEvent = baseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, doneCB),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

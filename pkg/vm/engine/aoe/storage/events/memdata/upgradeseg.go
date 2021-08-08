@@ -19,7 +19,7 @@ func NewUpgradeSegEvent(ctx *Context, segID uint64, td iface.ITableData) *upgrad
 		TableData: td,
 	}
 	e.baseEvent = baseEvent{
-		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, ctx.DoneCB),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

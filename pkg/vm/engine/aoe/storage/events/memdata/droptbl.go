@@ -14,7 +14,7 @@ type dropTableEvent struct {
 func NewDropTableEvent(ctx *Context, tableId uint64) *dropTableEvent {
 	e := &dropTableEvent{TableId: tableId}
 	e.baseEvent = baseEvent{
-		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
 		Ctx:       ctx,
 	}
 	return e

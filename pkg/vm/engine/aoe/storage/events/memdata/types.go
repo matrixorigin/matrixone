@@ -14,6 +14,7 @@ import (
 type Context struct {
 	Opts                             *e.Options
 	DoneCB                           ops.OpDoneCB
+	Waitable                         bool
 	Tables                           *table.Tables
 	MTMgr                            mtif.IManager
 	IndexBufMgr, MTBufMgr, SSTBufMgr bmgrif.IBufferManager

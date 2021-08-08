@@ -42,6 +42,10 @@ func (op *Op) SetError(err error) {
 	panic("logic error")
 }
 
+func (op *Op) Waitable() bool {
+	return op.DoneCB == nil
+}
+
 func (op *Op) WaitDone() error {
 	err := <-op.ErrorC
 	return err
