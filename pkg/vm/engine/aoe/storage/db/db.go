@@ -9,6 +9,7 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
@@ -16,7 +17,6 @@ import (
 	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
@@ -72,23 +72,30 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 
 	collection := d.MemTableMgr.StrongRefCollection(tbl.GetID())
 	if collection == nil {
-		opCtx := &mdops.OpCtx{
+		var wg sync.WaitGroup
+		wg.Add(1)
+		eCtx := &memdata.Context{
 			Opts:        d.Opts,
-			MTManager:   d.MemTableMgr,
+			MTMgr:       d.MemTableMgr,
 			TableMeta:   tbl,
 			IndexBufMgr: d.IndexBufMgr,
 			MTBufMgr:    d.MTBufMgr,
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
 			Tables:      d.Store.DataTables,
+			DoneCB:      func() { wg.Done() },
 		}
-		op := mdops.NewCreateTableOp(opCtx)
-		op.Push()
-		err = op.WaitDone()
+		e := memdata.NewCreateTableEvent(eCtx)
+		err = d.Scheduler.Schedule(e)
 		if err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
-		collection = op.Collection
+		wg.Wait()
+		err = e.Err
+		if err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection = e.Collection
 	}
 
 	index := &md.LogIndex{
@@ -102,23 +109,30 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 func (d *DB) getTableData(meta *md.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.ID)
 	if err != nil {
-		opCtx := &mdops.OpCtx{
+		var wg sync.WaitGroup
+		wg.Add(1)
+		eCtx := &memdata.Context{
 			Opts:        d.Opts,
-			MTManager:   d.MemTableMgr,
+			MTMgr:       d.MemTableMgr,
 			TableMeta:   meta,
 			IndexBufMgr: d.IndexBufMgr,
 			MTBufMgr:    d.MTBufMgr,
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
 			Tables:      d.Store.DataTables,
+			DoneCB:      func() { wg.Done() },
 		}
-		op := mdops.NewCreateTableOp(opCtx)
-		op.Push()
-		err = op.WaitDone()
+		e := memdata.NewCreateTableEvent(eCtx)
+		err = d.Scheduler.Schedule(e)
 		if err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
-		collection := op.Collection
+		wg.Wait()
+		err = e.Err
+		if err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection := e.Collection
 		if data, err = d.Store.DataTables.StrongRefTable(meta.ID); err != nil {
 			collection.Unref()
 			return nil, err
