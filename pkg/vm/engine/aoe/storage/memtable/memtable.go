@@ -6,11 +6,12 @@ import (
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata/v2"
+	// cops "matrixone/pkg/vm/engine/aoe/storage/ops/coldata/v2"
 	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
 	"sync"
 	// log "github.com/sirupsen/logrus"
@@ -148,19 +149,21 @@ func (mt *MemTable) Commit() error {
 	}
 
 	{
-		colCtx := cops.OpCtx{Opts: mt.Opts, BlkMeta: newMeta}
-		upgradeBlkOp := cops.NewUpgradeBlkOp(&colCtx, mt.TableData)
-		err := upgradeBlkOp.Push()
-		if err != nil {
+		wg.Add(1)
+		upgradeBlkCtx := &memdata.Context{Opts: mt.Opts, DoneCB: func() {
+			wg.Done()
+		}}
+		upgradeBlkEvent := memdata.NewUpgradeBlkEvent(upgradeBlkCtx, newMeta, mt.TableData)
+		if err = mt.Opts.Scheduler.Schedule(upgradeBlkEvent); err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 			return err
 		}
-		err = upgradeBlkOp.WaitDone()
-		if err != nil {
+		wg.Wait()
+		if err = upgradeBlkEvent.Err; err != nil {
 			mt.Opts.EventListener.BackgroundErrorCB(err)
 			return err
 		}
-		if upgradeBlkOp.SegmentClosed {
+		if upgradeBlkEvent.SegmentClosed {
 			flushOp := dops.NewFlushSegOp(&dops.OpCtx{Opts: mt.Opts}, mt.TableData.StrongRefSegment(newMeta.Segment.ID))
 			err = flushOp.Push()
 			if err != nil {
@@ -174,19 +177,24 @@ func (mt *MemTable) Commit() error {
 				if err != nil {
 					mt.Opts.EventListener.BackgroundErrorCB(err)
 				} else {
-					ctx := cops.OpCtx{Opts: flushOp.Ctx.Opts}
-					op := cops.NewUpgradeSegOp(&ctx, newMeta.Segment.ID, td)
-					if err = op.Push(); err != nil {
+					var wg sync.WaitGroup
+					wg.Add(1)
+					ctx := &memdata.Context{Opts: flushOp.Ctx.Opts, DoneCB: func() {
+						wg.Done()
+					}}
+					e := memdata.NewUpgradeSegEvent(ctx, newMeta.Segment.ID, td)
+					if err = mt.Opts.Scheduler.Schedule(e); err != nil {
 						mt.Opts.EventListener.BackgroundErrorCB(err)
 					}
-					if err = op.WaitDone(); err != nil {
+					wg.Wait()
+					if err = e.Err; err != nil {
 						mt.Opts.EventListener.BackgroundErrorCB(err)
 					}
-					op.Segment.Unref()
+					e.Segment.Unref()
 				}
 			}(mt.TableData)
 		}
-		upgradeBlkOp.Block.Unref()
+		upgradeBlkEvent.Data.Unref()
 	}
 	return nil
 }
