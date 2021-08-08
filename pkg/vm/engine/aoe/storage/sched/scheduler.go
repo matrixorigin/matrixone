@@ -12,12 +12,6 @@ var (
 	ErrSchedule           = errors.New("aoe sched: cannot schedule")
 )
 
-type Scheduler interface {
-	Start()
-	Stop()
-	Schedule(Event) error
-}
-
 type BaseScheduler struct {
 	ops.OpWorker
 	idAlloc     IDAllocFunc

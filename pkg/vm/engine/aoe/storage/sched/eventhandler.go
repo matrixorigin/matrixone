@@ -2,7 +2,6 @@ package sched
 
 import (
 	"errors"
-	"io"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
 
@@ -12,11 +11,6 @@ import (
 var (
 	ErrEventHandleEnqueue = errors.New("aoe: event handle enqueue")
 )
-
-type EventHandler interface {
-	io.Closer
-	Enqueue(Event)
-}
 
 type mockEventHandler struct {
 	BaseEventHandler

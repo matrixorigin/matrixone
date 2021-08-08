@@ -2,18 +2,12 @@ package sched
 
 import (
 	"errors"
-	"io"
 	// log "github.com/sirupsen/logrus"
 )
 
 var (
 	ErrDispatchWrongEvent = errors.New("aoe: wrong event type")
 )
-
-type Dispatcher interface {
-	io.Closer
-	Dispatch(Event)
-}
 
 type mockDispatcher struct {
 	BaseDispatcher

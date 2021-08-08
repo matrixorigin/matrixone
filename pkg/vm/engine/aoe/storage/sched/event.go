@@ -29,14 +29,6 @@ func GetNextEventId() uint64 {
 	return atomic.AddUint64(&eventId, uint64(1))
 }
 
-type Event interface {
-	iops.IOp
-	AttachID(uint64)
-	ID() uint64
-	Type() EventType
-	Cancel() error
-}
-
 type BaseEvent struct {
 	ops.Op
 	id   uint64
