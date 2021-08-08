@@ -3,13 +3,13 @@ package gcreqs
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
+	"sync"
 
-	// "matrixone/pkg/vm/engine/aoe/storage/gc/gci"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
-	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -37,16 +37,26 @@ func NewDropTblRequest(opts *e.Options, id uint64, tables *table.Tables, mtMgr m
 }
 
 func (req *dropTblRequest) Execute() error {
-	ctx := mdops.OpCtx{Opts: req.Opts, Tables: req.Tables}
-	op := mdops.NewDropTblOp(&ctx, req.TableId)
-	op.Push()
-	err := op.WaitDone()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	ctx := &memdata.Context{
+		Opts:   req.Opts,
+		Tables: req.Tables,
+		DoneCB: func() { wg.Done() }}
+	e := memdata.NewDropTableEvent(ctx, req.TableId)
+	err := req.Opts.Scheduler.Schedule(e)
+	if err != nil {
+		wg.Done()
+		return err
+	}
+	wg.Wait()
+	err = e.Err
 	if err != nil && err != table.NotExistErr {
 		return err
 	} else if err != nil {
 		err = nil
 	} else {
-		op.Table.Unref()
+		e.Data.Unref()
 	}
 	c, err := req.MemTableMgr.UnregisterCollection(req.TableId)
 	if err != nil {
