@@ -122,7 +122,7 @@ func (ri *RoutineImpl) Loop() {
 		}
 
 		len := time.Since(begin)
-		fmt.Printf("id %d time %s \n",ri.ID(),len.String())
+		fmt.Printf("connection id %d , the time of handling the request%s \n",ri.ID(),len.String())
 
 		//mysql client protocol: quit command
 		if _,ok := ri.protocol.(*MysqlClientProtocol); ok{

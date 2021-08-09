@@ -54,13 +54,12 @@ func main() {
 		fmt.Printf("Usage: %s configFile\n", os.Args[0])
 		os.Exit(-1)
 	}
+	flag.Parse()
 
 	//close cube print info
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
 	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
-
-	flag.Parse()
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
@@ -94,7 +93,7 @@ func main() {
 			pcis[i].Id = i
 		}
 
-		c, err := epoch_gc_test.NewTestClusterStore(nil,false,nil, pcis, nodeCnt)
+		c, err := epoch_gc_test.NewTestClusterStore(nil,true,nil, pcis, nodeCnt)
 		if err != nil {
 			os.Exit(-2)
 		}
@@ -108,7 +107,7 @@ func main() {
 
 		//one rpcserver per cube node
 		for i := 0 ; i < nodeCnt ; i++ {
-			db := c.Storages[i].DB
+			db := c.AOEDBs[i].DB
 			hm := config.HostMmu
 			gm := guest.New(1<<40, hm)
 			proc := process.New(gm, config.Mempool)
