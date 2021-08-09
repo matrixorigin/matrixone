@@ -49,7 +49,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	}
 
 	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
-	rowGroupSize = client.MaxInt64(rowGroupSize,1)
+	rowGroupSize = client.MaxInt64(rowGroupSize, 1)
 
 	var choose bool = !ses.Pu.SV.GetSendRow()
 	if choose {
@@ -74,10 +74,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 		if n := len(bat.Sels); n == 0 {
 			n = bat.Vecs[0].Length()
-			groupCnt := int64(n) / rowGroupSize + 1
-			for g := int64(0); g < groupCnt; g++ {//group id
+			groupCnt := int64(n)/rowGroupSize + 1
+			for g := int64(0); g < groupCnt; g++ { //group id
 				begin := g * rowGroupSize
-				end := client.MinInt64((g + 1) * rowGroupSize,int64(n))
+				end := client.MinInt64((g+1)*rowGroupSize, int64(n))
 
 				r := uint64(0)
 				for j := int64(begin); j < int64(end); j++ { //row index
@@ -248,10 +248,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 		} else {
 			n = bat.Vecs[0].Length()
-			groupCnt := int64(n) / rowGroupSize + 1
-			for g := int64(0); g < groupCnt;g++{//group id
+			groupCnt := int64(n)/rowGroupSize + 1
+			for g := int64(0); g < groupCnt; g++ { //group id
 				begin := g * rowGroupSize
-				end := client.MinInt64((g + 1) * rowGroupSize,int64(n))
+				end := client.MinInt64((g+1)*rowGroupSize, int64(n))
 
 				r := uint64(0)
 				for j := int64(begin); j < int64(end); j++ { //row index
@@ -410,7 +410,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 
-				fmt.Printf("row group -*> %v \n",mrs.Data[:r])
+				fmt.Printf("row group -*> %v \n", mrs.Data[:r])
 
 				//send row
 				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
@@ -845,7 +845,7 @@ func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
 	var err error = nil
 	if _, err = ses.Pu.StorageEngine.Database(name); err != nil {
 		//echo client. no such database
-		return client.NewMysqlError(client.ER_BAD_DB_ERROR,name)
+		return client.NewMysqlError(client.ER_BAD_DB_ERROR, name)
 	}
 	oldname := ses.Dbname
 	ses.Dbname = name
@@ -872,7 +872,7 @@ func (mce *MysqlCmdExecutor) handleUse(use *tree.Use) error {
 }
 
 //handle SELECT DATABASE()
-func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error{
+func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 	var err error = nil
 	ses := mce.Routine.GetSession()
 	proto := mce.Routine.GetClientProtocol().(*client.MysqlClientProtocol)
@@ -904,11 +904,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	statement_count := uint64(1)
 
 	//pin the epoch with 1
-	epoch,_ := pdHook.IncQueryCountAtCurrentEpoch(statement_count)
+	epoch, _ := pdHook.IncQueryCountAtCurrentEpoch(statement_count)
 	defer func() {
-		ep,stmt_cnt := pdHook.DecQueryCountAtEpoch(epoch,statement_count)
-		if ep != epoch || stmt_cnt != 0{
-			panic(fmt.Errorf("statement_count needs zero, but actually it is %d at epoch %d \n",stmt_cnt,ep))
+		ep, stmt_cnt := pdHook.DecQueryCountAtEpoch(epoch, statement_count)
+		if ep != epoch || stmt_cnt != 0 {
+			panic(fmt.Errorf("statement_count needs zero, but actually it is %d at epoch %d \n", stmt_cnt, ep))
 		}
 	}()
 
@@ -937,18 +937,18 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		stmt := exec.Statement()
 
 		//temp try 0 epoch
-		pdHook.IncQueryCountAtEpoch(epoch,1)
+		pdHook.IncQueryCountAtEpoch(epoch, 1)
 		statement_count++
 
 		switch st := stmt.(type) {
 		case *tree.Select:
-			if sc,ok := st.Select.(*tree.SelectClause) ; ok {
+			if sc, ok := st.Select.(*tree.SelectClause); ok {
 				if len(sc.Exprs) == 1 {
-					if fe,ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
-						if un,ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
+					if fe, ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
+						if un, ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
 							if strings.ToUpper(un.Parts[0]) == "DATABASE" {
 								err = mce.handleSelectDatabase(st)
-								if err != nil{
+								if err != nil {
 									return err
 								}
 
@@ -965,8 +965,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		if ses.Dbname == "" {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
-			case *tree.ShowDatabases,*tree.CreateDatabase,*tree.ShowWarnings,*tree.ShowErrors,
-			*tree.ShowStatus,*tree.DropDatabase:
+			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
+				*tree.ShowStatus, *tree.DropDatabase:
 			default:
 				return client.NewMysqlError(client.ER_NO_DB_ERROR)
 			}
@@ -1146,15 +1146,15 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
-			*tree.CreateIndex,*tree.DropIndex,
+			*tree.CreateIndex, *tree.DropIndex,
 			*tree.Insert, *tree.Delete, *tree.Update,
 			*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction,
 			*tree.SetVar,
 			*tree.Load,
-			*tree.CreateUser,*tree.DropUser,*tree.AlterUser,
-			*tree.CreateRole,*tree.DropRole,
-			*tree.Revoke,*tree.Grant,
-			*tree.SetDefaultRole,*tree.SetRole,*tree.SetPassword:
+			*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
+			*tree.CreateRole, *tree.DropRole,
+			*tree.Revoke, *tree.Grant,
+			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
 
 			/*
 				Step 1: Start
@@ -1167,9 +1167,9 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			//record ddl drop xxx after the success
 			switch stmt.(type) {
 			case *tree.DropTable, *tree.DropDatabase,
-					*tree.DropIndex, *tree.DropUser, *tree.DropRole:
+				*tree.DropIndex, *tree.DropUser, *tree.DropRole:
 				//test ddl
-				pdHook.IncDDLCountAtEpoch(epoch,1)
+				pdHook.IncDDLCountAtEpoch(epoch, 1)
 			}
 
 			/*
@@ -1205,7 +1205,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response,
 			req.GetCmd(),
 			nil,
 		)
-		return resp,nil
+		return resp, nil
 	}
 
 	switch uint8(req.GetCmd()) {

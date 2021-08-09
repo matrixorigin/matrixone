@@ -33,7 +33,6 @@ func (hp *Handler) Process(_ uint64, val interface{}, conn goetty.IOSession) err
 			Func: writeBack,
 		},
 	}
-	//e := laoe.New(hp.db, s.Segments(make(map[string]map[string][]engine.SegmentInfo)))
 	if err := s.MergeRun(hp.engine); err != nil {
 		conn.WriteAndFlush(&message.Message{Code: []byte(err.Error())})
 	}
