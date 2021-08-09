@@ -253,15 +253,18 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	Do not close chan twice.
 	 */
 	if pci.msgChan != nil {
-		_,opened := <- pci.msgChan
-		if opened{
+		var closeOnce sync.Once
+		closeChan := func() {
 			close(pci.msgChan)
+			pci.msgChan = nil
 		}
+		closeOnce.Do(closeChan)
 	}
 
 	//stop delete ddl worker
 	pci.ddlDeleteClose.Close()
 
+	/*
 	//persist cluster epoch, minimumRemovableEpoch, kv<server,maximumRemovableEpoch>
 	var buf [8]byte
 
@@ -305,8 +308,9 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	if err != nil {
 		return err
 	}
+	*/
 
-	return err
+	return nil
 }
 
 /*
@@ -318,7 +322,7 @@ kv : the persistent storage
 func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage.Storage) (responseData []byte, err error){
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
-
+	//fmt.Printf("%d leader receive heartbeat from %d \n",pci.Id,id)
 	//step 1: set [server,maximumRemovableEpoch]
 
 	maxre := binary.BigEndian.Uint64(data)
@@ -488,6 +492,7 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 	sci.heartbeatTimeout.UpdateTime(time.Now())
+	//fmt.Printf("time Gap %s \n",time.Since(sci.heartbeatTimeout.lastTime))
 
 	cluster_epoch := binary.BigEndian.Uint64(data)
 	pd_mre := binary.BigEndian.Uint64(data[8:])
@@ -614,6 +619,7 @@ func (sci *PDCallbackImpl) CollectData() []byte {
 	//TODO: atmoic read
 	var buf []byte = make([]byte,8)
 	binary.BigEndian.PutUint64(buf,sci.server_maximumRemovableEpoch)
+	//fmt.Printf("%d send heartbeat\n",sci.Id)
 	return buf
 }
 

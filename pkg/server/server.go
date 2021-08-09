@@ -68,7 +68,19 @@ func (si *ServerImpl) handleConnection(routine client.Routine) {
 }
 
 func (si *ServerImpl) Loop() {
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
 	fmt.Printf("Server Listening on : %s \n", si.address)
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
 	for si.IsOpened() {
 		if !si.pdHook.CanAcceptSomething() {
 			fmt.Printf("The Heartbeat From PDLeader Is Timeout. The Server Go Offline.")

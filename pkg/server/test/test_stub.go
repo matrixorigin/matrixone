@@ -113,9 +113,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		}
 		time.Sleep(2 * time.Second)
 	}
-	fmt.Printf("=====================>\n")
 	wg.Wait()
-	fmt.Printf("--------------------->\n")
 	return c, nil
 }
 
