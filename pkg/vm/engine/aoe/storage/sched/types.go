@@ -31,6 +31,7 @@ type EventHandler interface {
 	Start()
 	io.Closer
 	Enqueue(Event)
+	ExecuteEvent(Event)
 }
 
 type ResourceMgr interface {

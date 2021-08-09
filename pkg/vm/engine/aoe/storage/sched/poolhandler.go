@@ -38,6 +38,10 @@ func NewPoolHandler(num int, preSubmit PreSubmitExec) *poolHandler {
 	return h
 }
 
+func (h *poolHandler) ExecuteEvent(e Event) {
+	h.opExec(e)
+}
+
 func (h *poolHandler) doHandle(op iops.IOp) {
 	if h.preSubmit != nil {
 		ok := h.preSubmit(op)

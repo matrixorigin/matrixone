@@ -6,6 +6,7 @@ import (
 
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	// iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 
 	"github.com/stretchr/testify/assert"
@@ -37,20 +38,32 @@ func TestMeta(t *testing.T) {
 	cpuMgr.Start()
 	metaMgr.Start()
 
-	event := &metaEvent{}
-	event.BaseEvent = *sched.NewBaseEvent(event, sched.MockEvent, nil, true)
+	events := make([]MetaEvent, 0)
+	for i := uint64(1); i < uint64(3); i++ {
+		scope := common.ID{TableID: 1}
+		event := NewMetaEvent(scope, false, sched.MockEvent, true)
+		event.AttachID(i)
+		events = append(events, event)
+	}
 
 	var wg sync.WaitGroup
 	ob := &observer{t: t, num: 1, wg: &wg}
 	wg.Add(1)
 
-	event.AddObserver(ob)
-	metaMgr.Enqueue(event)
-	err := event.WaitDone()
-	assert.Nil(t, err)
+	for i, event := range events {
+		if i == 0 {
+			event.AddObserver(ob)
+		}
+		metaMgr.Enqueue(event)
+	}
+	for _, event := range events {
+		err := event.WaitDone()
+		assert.Nil(t, err)
+	}
 	wg.Wait()
 	ob.Check()
 
+	t.Log(metaMgr.String())
 	metaMgr.Close()
 	cpuMgr.Close()
 	diskMgr.Close()

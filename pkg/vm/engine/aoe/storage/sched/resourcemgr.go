@@ -75,6 +75,10 @@ func (mgr *BaseResourceMgr) ResourceCountByType(t ResourceType) int {
 	return len(pool)
 }
 
+func (mgr *BaseResourceMgr) ExecuteEvent(e Event) {
+	mgr.handler.ExecuteEvent(e)
+}
+
 func (mgr *BaseResourceMgr) Enqueue(e Event) {
 	mgr.handler.Enqueue(e)
 }

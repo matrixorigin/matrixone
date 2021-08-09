@@ -47,6 +47,10 @@ func (h *BaseEventHandler) Enqueue(e Event) {
 	}
 }
 
+func (h *BaseEventHandler) ExecuteEvent(e Event) {
+	h.ExecFunc(e)
+}
+
 func (h *BaseEventHandler) Close() error {
 	h.Stop()
 	return nil
