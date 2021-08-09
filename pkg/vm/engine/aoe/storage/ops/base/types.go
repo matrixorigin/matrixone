@@ -2,6 +2,10 @@ package base
 
 import "time"
 
+type Observer interface {
+	OnExecDone(IOp)
+}
+
 type IOpInternal interface {
 	PreExecute() error
 	Execute() error
@@ -18,4 +22,5 @@ type IOp interface {
 	GetStartTime() time.Time
 	GetEndTime() time.Time
 	GetExecutTime() int64
+	AddObserver(Observer)
 }

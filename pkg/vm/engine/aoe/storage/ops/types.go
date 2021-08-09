@@ -19,4 +19,5 @@ type Op struct {
 	StartTime  time.Time
 	EndTime    time.Time
 	DoneCB     OpDoneCB
+	Observers  []iops.Observer
 }

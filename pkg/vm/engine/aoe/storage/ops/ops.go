@@ -34,12 +34,16 @@ func (op *Op) SetError(err error) {
 	op.Err = err
 	if op.ErrorC != nil {
 		op.ErrorC <- err
-		return
 	} else if op.DoneCB != nil {
 		op.DoneCB(op)
-		return
+	} else {
+		panic("logic error")
 	}
-	panic("logic error")
+	if op.Observers != nil {
+		for _, observer := range op.Observers {
+			observer.OnExecDone(op)
+		}
+	}
 }
 
 func (op *Op) Waitable() bool {
@@ -65,19 +69,11 @@ func (op *Op) Execute() error {
 
 func (op *Op) OnExec() error {
 	op.StartTime = time.Now()
-	err := op.PreExecute()
-	if err != nil {
-		return err
-	}
-	err = op.Impl.PreExecute()
+	err := op.Impl.PreExecute()
 	if err != nil {
 		return err
 	}
 	err = op.Impl.Execute()
-	if err != nil {
-		return err
-	}
-	err = op.PostExecute()
 	if err != nil {
 		return err
 	}
@@ -99,4 +95,11 @@ func (op *Op) GetEndTime() time.Time {
 
 func (op *Op) GetExecutTime() int64 {
 	return op.EndTime.Sub(op.StartTime).Microseconds()
+}
+
+func (op *Op) AddObserver(o iops.Observer) {
+	if op.Observers == nil {
+		op.Observers = make([]iops.Observer, 0)
+	}
+	op.Observers = append(op.Observers, o)
 }
