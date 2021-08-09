@@ -14,13 +14,13 @@ func NewScheduler(opts *Options) *scheduler {
 	}
 
 	dispatcher := sched.NewBaseDispatcher()
-	ioHandler := sched.NewPoolHandler(1)
+	ioHandler := sched.NewPoolHandler(1, nil)
 	ioHandler.Start()
-	cpuHandler := sched.NewPoolHandler(1)
+	cpuHandler := sched.NewPoolHandler(1, nil)
 	cpuHandler.Start()
-	sortHandler := sched.NewPoolHandler(1)
+	sortHandler := sched.NewPoolHandler(1, nil)
 	sortHandler.Start()
-	statelessHandler := sched.NewPoolHandler(2)
+	statelessHandler := sched.NewPoolHandler(2, nil)
 	statelessHandler.Start()
 	metaUpdateHandler := sched.NewSingleWorkerHandler("metaUpdateHandler")
 	metaUpdateHandler.Start()

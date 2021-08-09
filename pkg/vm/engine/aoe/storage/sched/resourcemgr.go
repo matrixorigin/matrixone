@@ -13,15 +13,15 @@ type BaseResourceMgr struct {
 	typeindex map[ResourceType][]int
 	nameindex map[string]int
 	resources []Resource
-	scheduler Scheduler
+	handler   EventHandler
 }
 
-func NewBaseResourceMgr(scheduler Scheduler) *BaseResourceMgr {
+func NewBaseResourceMgr(handler EventHandler) *BaseResourceMgr {
 	return &BaseResourceMgr{
 		typeindex: make(map[ResourceType][]int),
 		nameindex: make(map[string]int),
 		resources: make([]Resource, 0),
-		scheduler: scheduler,
+		handler:   handler,
 	}
 }
 
@@ -29,11 +29,11 @@ func (mgr *BaseResourceMgr) Start() {
 	for _, res := range mgr.resources {
 		res.Start()
 	}
-	mgr.scheduler.Start()
+	mgr.handler.Start()
 }
 
 func (mgr *BaseResourceMgr) Close() {
-	mgr.scheduler.Stop()
+	mgr.handler.Close()
 	for _, res := range mgr.resources {
 		res.Close()
 	}
@@ -75,6 +75,6 @@ func (mgr *BaseResourceMgr) ResourceCountByType(t ResourceType) int {
 	return len(pool)
 }
 
-func (mgr *BaseResourceMgr) Enqueue(e Event) error {
-	return mgr.scheduler.Schedule(e)
+func (mgr *BaseResourceMgr) Enqueue(e Event) {
+	mgr.handler.Enqueue(e)
 }

@@ -33,6 +33,16 @@ type EventHandler interface {
 	Enqueue(Event)
 }
 
+type ResourceMgr interface {
+	Start()
+	Close()
+	GetResource(name string) Resource
+	ResourceCount() int
+	ResourceCountByType(ResourceType) int
+	Add(Resource) error
+	Enqueue(Event)
+}
+
 type Resource interface {
 	EventHandler
 	Type() ResourceType

@@ -35,7 +35,7 @@ func TestPoolHandler(t *testing.T) {
 	assert.NotNil(t, scheduler)
 	scheduler.Start()
 	dis := newMockDispatcher()
-	handler := NewPoolHandler(4)
+	handler := NewPoolHandler(4, nil)
 	handler.Start()
 	dis.RegisterHandler(MockEvent, handler)
 	scheduler.RegisterDispatcher(MockEvent, dis)
@@ -60,15 +60,13 @@ func TestPoolHandler(t *testing.T) {
 }
 
 func TestResourceMgr(t *testing.T) {
-	dis := newMockDispatcher()
-	scheduler := NewBaseScheduler("mgrScheduler")
-	scheduler.RegisterDispatcher(MockEvent, dis)
-	mgr := NewBaseResourceMgr(scheduler)
+	handler := NewPoolHandler(10, nil)
+	mgr := NewBaseResourceMgr(handler)
 	res1H := NewSingleWorkerHandler("res1H")
 	res1 := NewBaseResource("res1", ResT_IO, res1H)
 	res2H := NewSingleWorkerHandler("res1H")
 	res2 := NewBaseResource("res2", ResT_IO, res2H)
-	res3H := NewPoolHandler(2)
+	res3H := NewPoolHandler(2, nil)
 	res3 := NewBaseResource("res3", ResT_CPU, res3H)
 	err := mgr.Add(res1)
 	assert.Nil(t, err)
@@ -86,7 +84,8 @@ func TestResourceMgr(t *testing.T) {
 	mgr.Start()
 
 	event := NewBaseEvent(nil, MockEvent, nil, true)
-	err = mgr.Enqueue(event)
+	mgr.Enqueue(event)
+	err = event.WaitDone()
 	assert.Nil(t, err)
 
 	mgr.Close()
