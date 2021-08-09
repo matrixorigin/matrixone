@@ -9,17 +9,15 @@ import (
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/vm/engine/laoe"
 	"matrixone/pkg/vm/process"
 
 	"github.com/fagongzi/goetty"
 )
 
-func New(db *db.DB, proc *process.Process) *Handler {
+func New(engine engine.Engine, proc *process.Process) *Handler {
 	return &Handler{
-		db:   db,
-		proc: proc,
+		engine: engine,
+		proc:   proc,
 	}
 }
 
@@ -36,8 +34,8 @@ func (hp *Handler) Process(_ uint64, val interface{}, conn goetty.IOSession) err
 			Func: writeBack,
 		},
 	}
-	e := laoe.New(hp.db, s.Segments(make(map[string]map[string][]engine.SegmentInfo)))
-	if err := s.MergeRun(e); err != nil {
+	//e := laoe.New(hp.db, s.Segments(make(map[string]map[string][]engine.SegmentInfo)))
+	if err := s.MergeRun(hp.engine); err != nil {
 		conn.WriteAndFlush(&message.Message{Code: []byte(err.Error())})
 	}
 	return nil

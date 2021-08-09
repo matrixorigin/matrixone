@@ -6,6 +6,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/metadata"
 )
 
@@ -52,8 +53,10 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 		pid:     db.id,
 		tbl:     &tablets[0].Table,
 		catalog: db.catalog,
+		mp:      make(map[string]*adb.Relation),
 	}
 	r.tablets = tablets
+	ldb := db.catalog.Store.AOEStore()
 	for _, tbl := range tablets {
 		if ids, err := db.catalog.Store.GetSegmentIds(tbl.Name, tbl.ShardId); err != nil {
 			log.Errorf("get segmentInfos for tablet %s failed, %s", tbl.Name, err.Error())
@@ -62,7 +65,14 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Store.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
-
+			lRelation, err := ldb.Relation(tbl.Name)
+			if err != nil {
+				for _, v := range r.mp {
+					v.Close()
+				}
+				return nil, err
+			}
+			r.mp[tbl.Name] = lRelation
 			for _, id := range ids.Ids {
 				r.segments = append(r.segments, engine.SegmentInfo{
 					Version:  ids.Version,

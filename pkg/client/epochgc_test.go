@@ -38,7 +38,7 @@ func cleanupTmpDir() error {
 
 type testCluster struct {
 	t            *testing.T
-	applications []dist.Storage
+	applications []dist.CubeDriver
 }
 
 var DC *DebugCounter = NewDebugCounter(32)
@@ -79,7 +79,7 @@ func newTestClusterStore(t *testing.T, pcis []*PDCallbackImpl, nodeCnt int) (*te
 			cfg.Prophet.EmbedEtcd.ClientUrls = fmt.Sprintf("http://127.0.0.1:4000%d", i)
 			cfg.Prophet.EmbedEtcd.PeerUrls = fmt.Sprintf("http://127.0.0.1:5000%d", i)
 			cfg.Prophet.Schedule.EnableJointConsensus = true
-			if i < len(pcis){
+			if i < len(pcis) {
 				cfg.Customize.CustomStoreHeartbeatDataProcessor = pcis[i]
 			}
 
@@ -108,7 +108,7 @@ func TestEpochGC(t *testing.T) {
 	defer func() {
 		err := cleanupTmpDir()
 		if err != nil {
-			t.Errorf("delete cube temp dir failed %v",err)
+			t.Errorf("delete cube temp dir failed %v", err)
 		}
 	}()
 
@@ -118,17 +118,16 @@ func TestEpochGC(t *testing.T) {
 
 	pcis := make([]*PDCallbackImpl, nodeCnt)
 	cf := make([]*CloseFlag, nodeCnt)
-	for i := 0 ; i < nodeCnt; i++ {
+	for i := 0; i < nodeCnt; i++ {
 		pcis[i] = NewPDCallbackImpl(nil)
 		pcis[i].Id = i
 		cf[i] = &CloseFlag{}
-		go testPCI(i,cf[i],pcis[i])
+		go testPCI(i, cf[i], pcis[i])
 	}
-
 
 	c, err := newTestClusterStore(t, pcis, nodeCnt)
 	if err != nil {
-		t.Errorf("new cube failed %v",err)
+		t.Errorf("new cube failed %v", err)
 		return
 	}
 
@@ -141,14 +140,14 @@ func TestEpochGC(t *testing.T) {
 	fmt.Println("-------------------close node 0----------------")
 
 	time.Sleep(1 * time.Minute)
-	for i := 0 ; i < nodeCnt; i++ {
+	for i := 0; i < nodeCnt; i++ {
 		cf[i].Close()
 	}
 
 	DC.Cf.Close()
 }
 
-func testPCI(id int,f*CloseFlag, pci *PDCallbackImpl) {
+func testPCI(id int, f *CloseFlag, pci *PDCallbackImpl) {
 	f.Open()
 	for f.IsOpened() {
 		v := rand.Uint64() % 20
@@ -156,14 +155,12 @@ func testPCI(id int,f*CloseFlag, pci *PDCallbackImpl) {
 		if ep == 0 {
 			continue
 		}
-		DC.Set(id,v)
+		DC.Set(id, v)
 		time.Sleep(1000 * time.Millisecond)
-		if rand.Uint32() & 0x1 == 0x1 {
-			pci.AddMeta(ep,NewMeta(ep,META_TYPE_TABLE,v))
+		if rand.Uint32()&0x1 == 0x1 {
+			pci.AddMeta(ep, NewMeta(ep, META_TYPE_TABLE, v))
 		}
 		time.Sleep(1000 * time.Millisecond)
-		pci.DecQueryCountAtEpoch(ep,v)
+		pci.DecQueryCountAtEpoch(ep, v)
 	}
 }
-
-

@@ -15,7 +15,7 @@ import (
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 )
 
-func (h *aoeStorage) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -30,7 +30,7 @@ func (h *aoeStorage) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *aoeStorage) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -57,7 +57,7 @@ func (h *aoeStorage) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request,
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *aoeStorage) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+func (h *driver) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
 	err := h.getStoreByGroup(shard.Group, shard.ID).(*pebble.Storage).Delete(req.Key)
@@ -70,7 +70,7 @@ func (h *aoeStorage) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *aoeStorage) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+func (h *driver) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
 	v, err := h.getStoreByGroup(shard.Group, shard.ID).(*pebble.Storage).Get(req.Key)
@@ -88,7 +88,7 @@ func (h *aoeStorage) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+func (h *driver) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 
 	value, err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).Get(req.Key)
@@ -100,7 +100,7 @@ func (h *aoeStorage) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 	return resp, 0
 }
 
-func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.PrefixScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -130,7 +130,7 @@ func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 	return resp, 0
 }
 
-func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.ScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -161,7 +161,7 @@ func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 	return resp, 0
 }
 
-func (h *aoeStorage) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+func (h *driver) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
 	id := uint64(0)

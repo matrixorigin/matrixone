@@ -35,7 +35,7 @@ func TestEpochGC(t *testing.T) {
 	defer func() {
 		err := cleanupTmpDir()
 		if err != nil {
-			t.Errorf("delete cube temp dir failed %v",err)
+			t.Errorf("delete cube temp dir failed %v", err)
 		}
 	}()
 
@@ -45,18 +45,17 @@ func TestEpochGC(t *testing.T) {
 
 	pcis := make([]*client.PDCallbackImpl, nodeCnt)
 	cf := make([]*client.CloseFlag, nodeCnt)
-	ppu := client.NewPDCallbackParameterUnit(5,20,20,20)
-	for i := 0 ; i < nodeCnt; i++ {
+	ppu := client.NewPDCallbackParameterUnit(5, 20, 20, 20)
+	for i := 0; i < nodeCnt; i++ {
 		pcis[i] = client.NewPDCallbackImpl(ppu)
 		pcis[i].Id = i
 		cf[i] = &client.CloseFlag{}
-		go testPCI(i,cf[i],pcis[i])
+		go testPCI(i, cf[i], pcis[i])
 	}
 
-
-	c, err := NewTestClusterStore(t,true,nil, pcis, nodeCnt)
+	c, err := NewTestClusterStore(t, true, nil, pcis, nodeCnt)
 	if err != nil {
-		t.Errorf("new cube failed %v",err)
+		t.Errorf("new cube failed %v", err)
 		return
 	}
 
@@ -69,7 +68,7 @@ func TestEpochGC(t *testing.T) {
 	fmt.Println("-------------------close node 0----------------")
 
 	time.Sleep(1 * time.Minute)
-	for i := 0 ; i < nodeCnt; i++ {
+	for i := 0; i < nodeCnt; i++ {
 		cf[i].Close()
 	}
 
@@ -88,7 +87,7 @@ client:
 % mysql -h 127.0.0.1 -P 6002 -udump -p
 
 mysql> source pathto/xxx.sql
- */
+*/
 func TestEpochGCWithMultiServer(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
@@ -97,7 +96,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	defer func() {
 		err := cleanupTmpDir()
 		if err != nil {
-			t.Errorf("delete cube temp dir failed %v",err)
+			t.Errorf("delete cube temp dir failed %v", err)
 		}
 	}()
 
@@ -106,15 +105,15 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	nodeCnt := 3
 
 	pcis := make([]*client.PDCallbackImpl, nodeCnt)
-	ppu := client.NewPDCallbackParameterUnit(5,20,20,20)
-	for i := 0 ; i < nodeCnt; i++ {
+	ppu := client.NewPDCallbackParameterUnit(5, 20, 20, 20)
+	for i := 0; i < nodeCnt; i++ {
 		pcis[i] = client.NewPDCallbackImpl(ppu)
 		pcis[i].Id = i
 	}
 
-	c, err := NewTestClusterStore(t,true,nil, pcis, nodeCnt)
+	c, err := NewTestClusterStore(t, true, nil, pcis, nodeCnt)
 	if err != nil {
-		t.Errorf("new cube failed %v",err)
+		t.Errorf("new cube failed %v", err)
 		return
 	}
 
@@ -123,14 +122,13 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
 	eng := aoe_engine.Mock(&catalog)
 
-	for i := 0 ; i < nodeCnt; i++ {
+	for i := 0; i < nodeCnt; i++ {
 		pcis[i].SetCatalogService(&catalog)
 	}
 
 	server_cnt := 2
 	var svs []server.Server = nil
-	for i := 0 ; i < client.Min(server_cnt, client.Min(len(testPorts),nodeCnt)) ; i++ {
-		db := c.AOEDBs[i].DB
+	for i := 0; i < client.Min(server_cnt, client.Min(len(testPorts), nodeCnt)); i++ {
 		hm := host.New(1 << 40)
 		gm := guest.New(1<<40, hm)
 		proc := process.New(gm, mempool.New(1<<40, 8))
@@ -147,7 +145,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		hp := handler.New(db, proc)
+		hp := handler.New(eng, proc)
 		srv.Register(hp.Process)
 		go srv.Run()
 
@@ -156,7 +154,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		svs = append(svs,svr)
+		svs = append(svs, svr)
 
 		go svr.Loop()
 	}
@@ -173,7 +171,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	//DC.Cf.Close()
 }
 
-func testPCI(id int,f*client.CloseFlag, pci *client.PDCallbackImpl) {
+func testPCI(id int, f *client.CloseFlag, pci *client.PDCallbackImpl) {
 	f.Open()
 	for f.IsOpened() {
 		v := rand.Uint64() % 20
@@ -181,17 +179,17 @@ func testPCI(id int,f*client.CloseFlag, pci *client.PDCallbackImpl) {
 		if ep == 0 {
 			continue
 		}
-		DC.Set(id,v)
+		DC.Set(id, v)
 		time.Sleep(1000 * time.Millisecond)
-		if rand.Uint32() & 0x1 == 0x1 {
-			pci.AddMeta(ep,client.NewMeta(ep,client.META_TYPE_TABLE,v))
+		if rand.Uint32()&0x1 == 0x1 {
+			pci.AddMeta(ep, client.NewMeta(ep, client.META_TYPE_TABLE, v))
 		}
 		time.Sleep(1000 * time.Millisecond)
-		pci.DecQueryCountAtEpoch(ep,v)
+		pci.DecQueryCountAtEpoch(ep, v)
 	}
 }
 
-var testPorts = []int{6002,6003,6004}
+var testPorts = []int{6002, 6003, 6004}
 var testConfigFile = "./system_vars_config.toml"
 
 func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engine.Engine) (server.Server, error) {
@@ -199,19 +197,19 @@ func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engi
 
 	//before anything using the configuration
 	if err := sv.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n",err)
-		return nil,err
+		fmt.Printf("error:%v\n", err)
+		return nil, err
 	}
 
 	if err := mo_config.LoadvarsConfigFromFile(configFile, sv); err != nil {
-		fmt.Printf("error:%v\n",err)
-		return nil,err
+		fmt.Printf("error:%v\n", err)
+		return nil, err
 	}
 
 	fmt.Println("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 
 	hostMmu := host.New(sv.GetHostMmuLimitation())
-	mempool := mempool.New(int(sv.GetMempoolMaxSize()),int(sv.GetMempoolFactor()))
+	mempool := mempool.New(int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor()))
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
@@ -225,20 +223,20 @@ func get_server(configFile string, port int, pd *client.PDCallbackImpl, eng engi
 
 	address := fmt.Sprintf("%s:%d", sv.GetHost(), port)
 	sver := server.NewServer(address, pu, pd)
-	return sver,nil
+	return sver, nil
 }
 
 func Test_Multi_Server(t *testing.T) {
 	var svs []server.Server = nil
-	ppu := client.NewPDCallbackParameterUnit(5,20,20,20)
-	for _, port := range testPorts{
+	ppu := client.NewPDCallbackParameterUnit(5, 20, 20, 20)
+	for _, port := range testPorts {
 		sv, err := get_server(testConfigFile, port, client.NewPDCallbackImpl(ppu), nil)
 		if err != nil {
 			t.Error(err)
 			return
 		}
 
-		svs = append(svs,sv)
+		svs = append(svs, sv)
 
 		go sv.Loop()
 	}
@@ -247,7 +245,7 @@ func Test_Multi_Server(t *testing.T) {
 }
 
 func Test_openfile(t *testing.T) {
-	f,err := os.OpenFile(testConfigFile,os.O_RDONLY | os.O_CREATE,0777)
+	f, err := os.OpenFile(testConfigFile, os.O_RDONLY|os.O_CREATE, 0777)
 	if err != nil {
 		t.Error(err)
 		return

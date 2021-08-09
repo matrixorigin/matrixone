@@ -14,12 +14,12 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
-	"sync"
 	"time"
 )
 
@@ -27,8 +27,8 @@ const (
 	defaultRPCTimeout = time.Second * 10
 )
 
-// Storage storage
-type Storage interface {
+// CubeDriver storage
+type CubeDriver interface {
 	// Start the storage
 	Start() error
 	// Close close the storage
@@ -79,20 +79,21 @@ type Storage interface {
 	AsyncExecWithGroup(interface{}, pb.Group, func(interface{}, []byte, error), interface{})
 	// RaftStore returns the raft store
 	RaftStore() raftstore.Store
+	AOEStore() *adb.DB
 }
 
-type aoeStorage struct {
+type driver struct {
 	app   *server.Application
 	store raftstore.Store
-	locks sync.Map // key -> lock
+	aoeDB *adb.DB
 	cmds  map[uint64]raftcmdpb.CMDType
 }
 
-func (h *aoeStorage) Start() error {
+func (h *driver) Start() error {
 	return h.app.Start()
 }
 
-func (h *aoeStorage) Close() {
+func (h *driver) Close() {
 	h.app.Stop()
 }
 
@@ -100,7 +101,7 @@ func (h *aoeStorage) Close() {
 func NewStorage(
 	metadataStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
-	aoeDataStorage cstorage.DataStorage) (Storage, error) {
+	aoeDataStorage cstorage.DataStorage) (CubeDriver, error) {
 	return NewStorageWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, config.Config{})
 }
 
@@ -109,10 +110,11 @@ func NewStorageWithOptions(
 	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,
-	c config.Config) (Storage, error) {
+	c config.Config) (CubeDriver, error) {
 
-	h := &aoeStorage{
-		cmds: make(map[uint64]raftcmdpb.CMDType),
+	h := &driver{
+		aoeDB: aoeDataStorage.(*daoe.Storage).DB,
+		cmds:  make(map[uint64]raftcmdpb.CMDType),
 	}
 	c.CubeConfig.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
 		switch group {
@@ -203,11 +205,15 @@ func NewStorageWithOptions(
 	return h, nil
 }
 
-func (h *aoeStorage) Set(key, value []byte) error {
+func (h *driver) AOEStore() *adb.DB {
+	return h.aoeDB
+}
+
+func (h *driver) Set(key, value []byte) error {
 	return h.SetWithGroup(key, value, pb.KVGroup)
 }
 
-func (h *aoeStorage) SetWithGroup(key, value []byte, group pb.Group) error {
+func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 	req := pb.Request{
 		Type:  pb.Set,
 		Group: group,
@@ -220,7 +226,7 @@ func (h *aoeStorage) SetWithGroup(key, value []byte, group pb.Group) error {
 	return err
 }
 
-func (h *aoeStorage) SetIfNotExist(key, value []byte) error {
+func (h *driver) SetIfNotExist(key, value []byte) error {
 	req := pb.Request{
 		Type:  pb.SetIfNotExist,
 		Group: pb.KVGroup,
@@ -236,12 +242,12 @@ func (h *aoeStorage) SetIfNotExist(key, value []byte) error {
 	return err
 }
 
-func (h *aoeStorage) Get(key []byte) ([]byte, error) {
+func (h *driver) Get(key []byte) ([]byte, error) {
 	return h.GetWithGroup(key, pb.KVGroup)
 }
 
 // GetWithGroup returns the value of key
-func (h *aoeStorage) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
+func (h *driver) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
 	req := pb.Request{
 		Type:  pb.Get,
 		Group: group,
@@ -253,7 +259,7 @@ func (h *aoeStorage) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
 	return value, err
 }
 
-func (h *aoeStorage) Delete(key []byte) error {
+func (h *driver) Delete(key []byte) error {
 	req := pb.Request{
 		Type:  pb.Del,
 		Group: pb.KVGroup,
@@ -265,7 +271,7 @@ func (h *aoeStorage) Delete(key []byte) error {
 	return err
 }
 
-func (h *aoeStorage) DeleteIfExist(key []byte) error {
+func (h *driver) DeleteIfExist(key []byte) error {
 	req := pb.Request{
 		Type:  pb.DelIfNotExist,
 		Group: pb.KVGroup,
@@ -277,11 +283,11 @@ func (h *aoeStorage) DeleteIfExist(key []byte) error {
 	return err
 }
 
-func (h *aoeStorage) Scan(start []byte, end []byte, limit uint64) ([][]byte, error) {
+func (h *driver) Scan(start []byte, end []byte, limit uint64) ([][]byte, error) {
 	return h.ScanWithGroup(start, end, limit, pb.KVGroup)
 }
 
-func (h *aoeStorage) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.Group) ([][]byte, error) {
+func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.Group) ([][]byte, error) {
 	req := pb.Request{
 		Type:  pb.Scan,
 		Group: group,
@@ -317,11 +323,11 @@ func (h *aoeStorage) ScanWithGroup(start []byte, end []byte, limit uint64, group
 	return pairs, err
 }
 
-func (h *aoeStorage) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
+func (h *driver) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
 	return h.PrefixScanWithGroup(prefix, limit, pb.KVGroup)
 }
 
-func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
+func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
 	req := pb.Request{
 		Type:  pb.PrefixScan,
 		Group: group,
@@ -357,11 +363,11 @@ func (h *aoeStorage) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.G
 	return pairs, err
 }
 
-func (h *aoeStorage) PrefixKeys(prefix []byte, limit uint64) ([][]byte, error) {
+func (h *driver) PrefixKeys(prefix []byte, limit uint64) ([][]byte, error) {
 	return h.PrefixKeysWithGroup(prefix, limit, pb.KVGroup)
 }
 
-func (h *aoeStorage) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
+func (h *driver) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
 	req := pb.Request{
 		Type:  pb.PrefixScan,
 		Group: group,
@@ -400,7 +406,7 @@ func (h *aoeStorage) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.G
 	return values, err
 }
 
-func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {
+func (h *driver) AllocID(idkey []byte) (uint64, error) {
 	req := pb.Request{
 		Type:  pb.Incr,
 		Group: pb.KVGroup,
@@ -419,7 +425,7 @@ func (h *aoeStorage) AllocID(idkey []byte) (uint64, error) {
 	return resp, nil
 }
 
-func (h *aoeStorage) Append(name string, shardId uint64, data []byte) error {
+func (h *driver) Append(name string, shardId uint64, data []byte) error {
 	req := pb.Request{
 		Type:  pb.Append,
 		Group: pb.AOEGroup,
@@ -436,7 +442,7 @@ func (h *aoeStorage) Append(name string, shardId uint64, data []byte) error {
 	return err
 }
 
-func (h *aoeStorage) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
+func (h *driver) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	ctxStr, err := json.Marshal(ctx)
 	req := pb.Request{
 		Type:  pb.GetSnapshot,
@@ -457,7 +463,7 @@ func (h *aoeStorage) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, erro
 	return &s, nil
 }
 
-func (h *aoeStorage) GetSegmentIds(tabletName string, toShard uint64) (ids adb.IDS, err error) {
+func (h *driver) GetSegmentIds(tabletName string, toShard uint64) (ids adb.IDS, err error) {
 	req := pb.Request{
 		Type:  pb.GetSegmentIds,
 		Group: pb.AOEGroup,
@@ -477,7 +483,7 @@ func (h *aoeStorage) GetSegmentIds(tabletName string, toShard uint64) (ids adb.I
 	return ids, nil
 }
 
-func (h *aoeStorage) GetSegmentedId(tabletNames []string, toShard uint64) (index uint64, err error) {
+func (h *driver) GetSegmentedId(tabletNames []string, toShard uint64) (index uint64, err error) {
 	req := pb.Request{
 		Type:  pb.GetSegmentIds,
 		Group: pb.AOEGroup,
@@ -493,7 +499,7 @@ func (h *aoeStorage) GetSegmentedId(tabletNames []string, toShard uint64) (index
 	return codec.Bytes2Uint64(value)
 }
 
-func (h *aoeStorage) CreateTablet(name string, toShard uint64, tbl *aoe.TableInfo) (err error) {
+func (h *driver) CreateTablet(name string, toShard uint64, tbl *aoe.TableInfo) (err error) {
 	info, _ := helper.EncodeTable(*tbl)
 	req := pb.Request{
 		Shard: toShard,
@@ -511,7 +517,7 @@ func (h *aoeStorage) CreateTablet(name string, toShard uint64, tbl *aoe.TableInf
 	return nil
 }
 
-func (h *aoeStorage) DropTablet(name string, toShard uint64) (id uint64, err error) {
+func (h *driver) DropTablet(name string, toShard uint64) (id uint64, err error) {
 	req := pb.Request{
 		Shard: toShard,
 		Type:  pb.DropTablet,
@@ -527,7 +533,7 @@ func (h *aoeStorage) DropTablet(name string, toShard uint64) (id uint64, err err
 	return codec.Bytes2Uint64(value)
 }
 
-func (h *aoeStorage) TabletIDs() ([]uint64, error) {
+func (h *driver) TabletIDs() ([]uint64, error) {
 	req := pb.Request{
 		Type:      pb.TabletIds,
 		Group:     pb.AOEGroup,
@@ -545,7 +551,7 @@ func (h *aoeStorage) TabletIDs() ([]uint64, error) {
 	return rsp, nil
 }
 
-func (h *aoeStorage) TabletNames(toShard uint64) ([]string, error) {
+func (h *driver) TabletNames(toShard uint64) ([]string, error) {
 	req := pb.Request{
 		Shard:     toShard,
 		Group:     pb.AOEGroup,
@@ -564,26 +570,26 @@ func (h *aoeStorage) TabletNames(toShard uint64) ([]string, error) {
 	return rsp, nil
 }
 
-func (h *aoeStorage) Exec(cmd interface{}) ([]byte, error) {
+func (h *driver) Exec(cmd interface{}) ([]byte, error) {
 	return h.app.Exec(cmd, defaultRPCTimeout)
 }
 
-func (h *aoeStorage) AsyncExec(cmd interface{}, cb func(interface{}, []byte, error), arg interface{}) {
+func (h *driver) AsyncExec(cmd interface{}, cb func(interface{}, []byte, error), arg interface{}) {
 	h.app.AsyncExecWithTimeout(cmd, cb, defaultRPCTimeout, arg)
 }
 
-func (h *aoeStorage) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(interface{}, []byte, error), arg interface{}) {
+func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(interface{}, []byte, error), arg interface{}) {
 	h.app.AsyncExecWithGroupAndTimeout(cmd, uint64(group), cb, defaultRPCTimeout, arg)
 }
 
-func (h *aoeStorage) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
+func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
 	return h.app.ExecWithGroup(cmd, uint64(group), defaultRPCTimeout)
 }
 
-func (h *aoeStorage) RaftStore() raftstore.Store {
+func (h *driver) RaftStore() raftstore.Store {
 	return h.store
 }
 
-func (h *aoeStorage) getStoreByGroup(group uint64, shard uint64) cstorage.DataStorage {
+func (h *driver) getStoreByGroup(group uint64, shard uint64) cstorage.DataStorage {
 	return h.store.DataStorageByGroup(group, shard)
 }
