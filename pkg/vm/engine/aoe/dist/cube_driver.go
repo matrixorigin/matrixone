@@ -97,16 +97,16 @@ func (h *driver) Close() {
 	h.app.Stop()
 }
 
-// NewStorage returns a beehive request handler
-func NewStorage(
+// NewCubeDriver returns a aoe request handler
+func NewCubeDriver(
 	metadataStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage) (CubeDriver, error) {
-	return NewStorageWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, config.Config{})
+	return NewCubeDriverWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, config.Config{})
 }
 
-// NewStorageWithOptions returns a beehive request handler
-func NewStorageWithOptions(
+// NewCubeDriverWithOptions returns a aoe request handler
+func NewCubeDriverWithOptions(
 	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,

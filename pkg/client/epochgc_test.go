@@ -61,7 +61,7 @@ func newTestClusterStore(t *testing.T, pcis []*PDCallbackImpl, nodeCnt int) (*te
 		if err != nil {
 			return nil, err
 		}
-		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, memDataStorage, func(cfg *config.Config) {
+		a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, memDataStorage, func(cfg *config.Config) {
 			cfg.DataPath = fmt.Sprintf("%s/node-%d", tmpDir, i)
 			cfg.RaftAddr = fmt.Sprintf("127.0.0.1:1000%d", i)
 			cfg.ClientAddr = fmt.Sprintf("127.0.0.1:2000%d", i)

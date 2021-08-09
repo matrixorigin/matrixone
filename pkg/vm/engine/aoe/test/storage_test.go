@@ -36,7 +36,7 @@ func TestStorage(t *testing.T) {
 	log.SetHighlighting(false)
 	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c, err := testutil.NewTestClusterStore(t, false, func(path string) (*daoe.Storage, error) {
+	c, err := testutil.NewTestClusterStore(t, true, func(path string) (*daoe.Storage, error) {
 		opts := &e.Options{}
 		mdCfg := &md.Configuration{
 			Dir:              path,

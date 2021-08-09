@@ -94,7 +94,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
+			a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
 			if err != nil {
 				log.Fatal("create failed with %+v", err)
 			}
