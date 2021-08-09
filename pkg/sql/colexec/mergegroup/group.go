@@ -417,6 +417,9 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				bat.Clean(proc)
 				return err
 			}
+			{
+				fmt.Printf("*********bat: %v\n", bat)
+			}
 			if ctr.bat == nil {
 				ctr.bat = batch.New(true, n.Gs)
 				for i, attr := range n.Gs {
