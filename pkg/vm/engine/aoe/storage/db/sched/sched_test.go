@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	// iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +17,7 @@ type observer struct {
 	wg  *sync.WaitGroup
 }
 
-func (o *observer) OnExecDone(op iops.IOp) {
+func (o *observer) OnExecDone(interface{}) {
 	o.num = 100
 	o.wg.Done()
 }
@@ -37,7 +37,8 @@ func TestMeta(t *testing.T) {
 	cpuMgr.Start()
 	metaMgr.Start()
 
-	event := sched.NewBaseEvent(nil, sched.MockEvent, nil, true)
+	event := &metaEvent{}
+	event.BaseEvent = *sched.NewBaseEvent(event, sched.MockEvent, nil, true)
 
 	var wg sync.WaitGroup
 	ob := &observer{t: t, num: 1, wg: &wg}

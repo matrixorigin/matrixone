@@ -41,7 +41,7 @@ func (op *Op) SetError(err error) {
 	}
 	if op.Observers != nil {
 		for _, observer := range op.Observers {
-			observer.OnExecDone(op)
+			observer.OnExecDone(op.Impl)
 		}
 	}
 }

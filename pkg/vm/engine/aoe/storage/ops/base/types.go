@@ -3,7 +3,7 @@ package base
 import "time"
 
 type Observer interface {
-	OnExecDone(IOp)
+	OnExecDone(interface{})
 }
 
 type IOpInternal interface {
