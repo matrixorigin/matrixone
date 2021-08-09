@@ -1,11 +1,11 @@
 package handler
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/db"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/process"
 )
 
 type Handler struct {
-	db   *db.DB
-	proc *process.Process
+	engine engine.Engine
+	proc   *process.Process
 }

@@ -9,14 +9,14 @@ import (
 	"sync"
 )
 
-const(
-	tpEngineName string= "tp-atomic"
+const (
+	tpEngineName string = "tp-atomic"
 
 	//internal database
-	tpEngineDatabase0 string ="0xFEDCBAABCDEFDB0"
+	tpEngineDatabase0   string = "0xFEDCBAABCDEFDB0"
 	tpEngineDatabase0Id uint64 = 0
 
-	tpEngineSlash byte = '/' //ascii 47
+	tpEngineSlash  byte = '/' //ascii 47
 	tpEngineConcat byte = '-' //ascii 45
 	//the max length of string fields in the system table
 	tpEngineMaxLengthOfStringFieldInSystemTable int = 20
@@ -33,7 +33,7 @@ const (
 		------------------------
 		db0        0        "create database info"
 	*/
-	TABLE_DATABASES_ID uint64 = 0
+	TABLE_DATABASES_ID   uint64 = 0
 	TABLE_DATABASES_NAME string = "databases"
 
 	/*
@@ -50,7 +50,7 @@ const (
 		Meta1     3        "create table info"
 		Meta2     4        "create table info"
 	*/
-	TABLE_TABLES_ID uint64 = 1
+	TABLE_TABLES_ID   uint64 = 1
 	TABLE_TABLES_NAME string = "tables"
 
 	/*
@@ -68,8 +68,8 @@ const (
 		4          primary     0       "create index info"
 
 	*/
-	TABLE_INDEXES_ID uint64 = 2
-	TABLE_INDEXES_NAME string = "indexes"
+	TABLE_INDEXES_ID                uint64 = 2
+	TABLE_INDEXES_NAME              string = "indexes"
 	TABLE_INDEXES_PRIMARY_KEY_PART2 string = "primary"
 
 	/*
@@ -81,8 +81,8 @@ const (
 		------------------------------------------
 		pk                 1                LAST_TABLE_ID + 1
 	*/
-	TABLE_META1_ID uint64 = 3
-	TABLE_META1_NAME string = "meta1"
+	TABLE_META1_ID          uint64 = 3
+	TABLE_META1_NAME        string = "meta1"
 	TABLE_META1_PRIMARY_KEY string = "pk"
 
 	/*
@@ -99,7 +99,7 @@ const (
 		3                1
 		4                1
 	*/
-	TABLE_META2_ID uint64 = 4
+	TABLE_META2_ID   uint64 = 4
 	TABLE_META2_NAME string = "meta2"
 
 	/*
@@ -110,7 +110,7 @@ const (
 		viewname      viewId    viewInfo    schema
 		(Primary key)
 	*/
-	TABLE_VIEWS_ID uint64 = 5
+	TABLE_VIEWS_ID   uint64 = 5
 	TABLE_VIEWS_NAME string = "views"
 
 	LAST_TABLE_ID uint64 = TABLE_VIEWS_ID
@@ -130,13 +130,13 @@ var (
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
 		TP_ENCODE_TYPE_STRING,
-		)
+	)
 	TABLE_DATABASES_PRIMARY_KEY_SCHEMA *tpSchema = NewTpSchema(TP_ENCODE_TYPE_STRING)
-	TABLE_DATABASES_REST_SCHEMA *tpSchema = NewTpSchema(
+	TABLE_DATABASES_REST_SCHEMA        *tpSchema = NewTpSchema(
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
 		TP_ENCODE_TYPE_STRING,
-		)
+	)
 
 	//tables table
 	TABLE_TABLES_TUPLE_SCHEMA *tpSchema = NewTpSchema(
@@ -144,13 +144,13 @@ var (
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
 		TP_ENCODE_TYPE_BYTES,
-		)
+	)
 	TABLE_TABLES_PRIMARY_KEY_SCHEMA *tpSchema = NewTpSchema(TP_ENCODE_TYPE_STRING)
-	TABLE_TABLES_REST_SCHEMA *tpSchema = NewTpSchema(
+	TABLE_TABLES_REST_SCHEMA        *tpSchema = NewTpSchema(
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
 		TP_ENCODE_TYPE_BYTES,
-		)
+	)
 
 	//indexes table
 	TABLE_INDEXES_TUPLE_SCHEMA *tpSchema = NewTpSchema(
@@ -159,7 +159,7 @@ var (
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
 		TP_ENCODE_TYPE_STRING,
-		)
+	)
 	TABLE_INDEXES_PRIMARY_KEY_SCHEMA *tpSchema = NewTpSchema(
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING)
@@ -167,7 +167,7 @@ var (
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
 		TP_ENCODE_TYPE_STRING,
-		)
+	)
 
 	//META1 table
 	TABLE_META1_TUPLE_SCHEMA *tpSchema = NewTpSchema(
@@ -175,7 +175,7 @@ var (
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_UINT64)
 	TABLE_META1_PRIMARY_KEY_SCHEMA *tpSchema = NewTpSchema(TP_ENCODE_TYPE_STRING)
-	TABLE_META1_REST_SCHEMA *tpSchema = NewTpSchema(
+	TABLE_META1_REST_SCHEMA        *tpSchema = NewTpSchema(
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_UINT64)
 
@@ -184,7 +184,7 @@ var (
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_UINT64)
 	TABLE_META2_PRIMARY_KEY_SCHEMA *tpSchema = NewTpSchema(TP_ENCODE_TYPE_UINT64)
-	TABLE_META2_REST_SCHEMA *tpSchema = NewTpSchema(TP_ENCODE_TYPE_UINT64)
+	TABLE_META2_REST_SCHEMA        *tpSchema = NewTpSchema(TP_ENCODE_TYPE_UINT64)
 
 	//views table
 	TABLE_VIEWS_TUPLE_SCHEMA *tpSchema = NewTpSchema(
@@ -192,13 +192,13 @@ var (
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
 		TP_ENCODE_TYPE_STRING,
-		)
+	)
 	TABLE_VIEWS_PRIMARY_KEY_SCHEMA *tpSchema = NewTpSchema(TP_ENCODE_TYPE_STRING)
-	TABLE_VIEWS_REST_SCHEMA *tpSchema = NewTpSchema(
+	TABLE_VIEWS_REST_SCHEMA        *tpSchema = NewTpSchema(
 		TP_ENCODE_TYPE_UINT64,
 		TP_ENCODE_TYPE_STRING,
 		TP_ENCODE_TYPE_STRING,
-		)
+	)
 )
 
 /**
@@ -224,16 +224,16 @@ Secondary Index:
 	Value encoding:
 		row - (primary columns or indexed columns)
 
- */
+*/
 
 /**
 table tuple
- */
+*/
 type tpTuple interface {
 	fmt.Stringer
-	schema()*tpSchema
+	schema() *tpSchema
 	encode(data []byte) []byte
-	decode(data []byte) ([]byte,error)
+	decode(data []byte) ([]byte, error)
 }
 
 type tpTupleImpl struct {
@@ -245,26 +245,26 @@ type tpTupleImpl struct {
 func NewTpTupleImpl(sch *tpSchema, f ...interface{}) *tpTupleImpl {
 	return &tpTupleImpl{
 		schema: sch,
-		fields:      f,
+		fields: f,
 	}
 }
 
 /**
 TABLE_DATABASES_NAME row data
- */
+*/
 type tableDatabasesRow struct {
 	tpTupleImpl
 	/*
-	field 0: dbname
-	field 1: dbid
-	field 2: dbschema
-	 */
+		field 0: dbname
+		field 1: dbid
+		field 2: dbschema
+	*/
 }
 
 func NewTableDatabasesRow(n string, id uint64, sch string) *tableDatabasesRow {
 	return &tableDatabasesRow{
-		tpTupleImpl:tpTupleImpl{
-			fields:      []interface{}{n,id,sch},
+		tpTupleImpl: tpTupleImpl{
+			fields: []interface{}{n, id, sch},
 		},
 	}
 }
@@ -283,13 +283,13 @@ key: x2 value: db2
 key: x3 value: db3
 
 ......
- */
+*/
 type tpEngine struct {
 	engine.Engine
-	rwlock sync.RWMutex
+	rwlock  sync.RWMutex
 	engName string
-	kv dist.Storage
-	proc *process.Process
+	kv      dist.CubeDriver
+	proc    *process.Process
 
 	//db0 table meta1
 	nextDbNo    uint64
@@ -318,14 +318,14 @@ key: y2 value: rel2
 key: y3 value: rel3
 
 ......
- */
+*/
 type tpDatabase struct {
 	engine.Database
-	rwlock sync.RWMutex
-	dbName string
-	dbId uint64
+	rwlock     sync.RWMutex
+	dbName     string
+	dbId       uint64
 	createInfo string
-	schema string
+	schema     string
 	engineType int
 
 	//table meta1
@@ -335,7 +335,7 @@ type tpDatabase struct {
 	rels map[string]*tpTupleImpl
 
 	proc *process.Process
-	kv dist.Storage
+	kv   dist.CubeDriver
 }
 
 /*
@@ -352,18 +352,18 @@ key: z2 value: tuple2
 key: z3 value: tuple3
 
 ......
- */
+*/
 type tpRelation struct {
 	engine.Relation
-	rwlock sync.RWMutex
+	rwlock  sync.RWMutex
 	relName string
-	relId uint64
+	relId   uint64
 
 	createInfo string
 
 	md tpMetadata
 
-	kv dist.Storage
+	kv   dist.CubeDriver
 	proc *process.Process
 }
 
@@ -371,7 +371,7 @@ type tpSegment struct {
 	engine.Segment
 
 	id   string
-	kv   *dist.Storage
+	kv   *dist.CubeDriver
 	proc *process.Process
 	mp   map[string]metadata.Attribute
 }
@@ -380,7 +380,7 @@ type tpBlock struct {
 	engine.Block
 
 	id   string
-	kv   *dist.Storage
+	kv   *dist.CubeDriver
 	proc *process.Process
 	mp   map[string]metadata.Attribute
 }

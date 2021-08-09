@@ -24,7 +24,7 @@ var (
 
 type TestCluster struct {
 	T            *testing.T
-	Applications []dist.Storage
+	Applications []dist.CubeDriver
 	AOEDBs       []*daoe.Storage
 }
 

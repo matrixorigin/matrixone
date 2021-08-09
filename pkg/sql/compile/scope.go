@@ -261,29 +261,3 @@ func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch
 	}
 	return fill(u, bat)
 }
-
-func (s *Scope) Segments(mp map[string]map[string][]engine.SegmentInfo) map[string]map[string][]engine.SegmentInfo {
-	switch s.Magic {
-	case Normal:
-		segs := make([]engine.SegmentInfo, len(s.Data.Segs))
-		for i, seg := range s.Data.Segs {
-			segs[i] = engine.SegmentInfo{
-				Id:       seg.Id,
-				GroupId:  seg.GroupId,
-				TabletId: seg.TabletId,
-				Node:     seg.Node,
-			}
-		}
-		db, ok := mp[s.Data.DB]
-		if !ok {
-			db = make(map[string][]engine.SegmentInfo)
-			mp[s.Data.DB] = db
-		}
-		db[s.Data.ID] = append(db[s.Data.ID], segs...)
-	case Merge:
-		for i := range s.Ss {
-			mp = s.Ss[i].Segments(mp)
-		}
-	}
-	return mp
-}

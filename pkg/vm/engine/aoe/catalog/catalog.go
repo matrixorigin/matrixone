@@ -29,13 +29,13 @@ const (
 )
 
 type Catalog struct {
-	Store dist.Storage
+	Store dist.CubeDriver
 }
 
 var gCatalog Catalog
 var gInitOnce sync.Once
 
-func DefaultCatalog(store dist.Storage) Catalog {
+func DefaultCatalog(store dist.CubeDriver) Catalog {
 	gInitOnce.Do(func() {
 		gCatalog = Catalog{
 			Store: store,

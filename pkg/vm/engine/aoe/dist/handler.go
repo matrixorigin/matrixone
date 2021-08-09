@@ -10,7 +10,7 @@ import (
 
 type cmdType uint64
 
-func (h *aoeStorage) init() {
+func (h *driver) init() {
 	h.AddWriteFunc(uint64(pb.Set), h.set)
 	h.AddWriteFunc(uint64(pb.SetIfNotExist), h.setIfNotExist)
 	h.AddWriteFunc(uint64(pb.Del), h.del)
@@ -27,7 +27,7 @@ func (h *aoeStorage) init() {
 	h.AddReadFunc(uint64(pb.GetSegmentedId), h.getSegmentedId)
 }
 
-func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error {
+func (h *driver) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error {
 	customReq := cmd.(pb.Request)
 	switch customReq.Type {
 	case pb.Set:
@@ -129,18 +129,18 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 	return nil
 }
 
-func (h *aoeStorage) Codec() (codec.Encoder, codec.Decoder) {
+func (h *driver) Codec() (codec.Encoder, codec.Decoder) {
 	return nil, nil
 }
 
 // AddReadFunc add read handler func
-func (h *aoeStorage) AddReadFunc(cmdType uint64, cb command.ReadCommandFunc) {
+func (h *driver) AddReadFunc(cmdType uint64, cb command.ReadCommandFunc) {
 	h.cmds[cmdType] = raftcmdpb.CMDType_Read
 	h.store.RegisterReadFunc(cmdType, cb)
 }
 
 // AddWriteFunc add write handler func
-func (h *aoeStorage) AddWriteFunc(cmdType uint64, cb command.WriteCommandFunc) {
+func (h *driver) AddWriteFunc(cmdType uint64, cb command.WriteCommandFunc) {
 	h.cmds[cmdType] = raftcmdpb.CMDType_Write
 	h.store.RegisterWriteFunc(cmdType, cb)
 }
