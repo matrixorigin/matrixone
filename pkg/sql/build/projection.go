@@ -9,6 +9,7 @@ import (
 	"matrixone/pkg/sql/op/projection"
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/sqlerror"
+	"strings"
 )
 
 func (b *build) checkProjection(ns tree.SelectExprs) error {
@@ -48,6 +49,7 @@ func (b *build) checkProjectionExpr(n tree.Expr, attrs []string) []string {
 		return attrs
 	case *tree.FuncExpr:
 		if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok {
+			name.Parts[0] = strings.ToLower(name.Parts[0])
 			if op, ok := AggFuncs[name.Parts[0]]; ok {
 				if op == aggregation.StarCount {
 					attrs = append(attrs, "*")
