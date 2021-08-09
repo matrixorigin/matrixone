@@ -64,7 +64,7 @@ type Storage interface {
 	Append(string, uint64, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 	GetSegmentIds(string, uint64) (adb.IDS, error)
-	GetSegmentedId([]string, uint64) (uint64, error)
+	GetSegmentedId(uint64) (uint64, error)
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	DropTablet(string, uint64) (uint64, error)
 	TabletIDs() ([]uint64, error)
@@ -477,13 +477,13 @@ func (h *aoeStorage) GetSegmentIds(tabletName string, toShard uint64) (ids adb.I
 	return ids, nil
 }
 
-func (h *aoeStorage) GetSegmentedId(tabletNames []string, toShard uint64) (index uint64, err error) {
+func (h *aoeStorage) GetSegmentedId(shardId uint64) (index uint64, err error) {
 	req := pb.Request{
-		Type:  pb.GetSegmentIds,
+		Type:  pb.GetSegmentedId,
 		Group: pb.AOEGroup,
-		Shard: toShard,
+		Shard: shardId,
 		GetSegmentedId: pb.GetSegmentedIdRequest{
-			TabletNames: tabletNames,
+			ShardId: shardId,
 		},
 	}
 	value, err := h.ExecWithGroup(req, pb.AOEGroup)

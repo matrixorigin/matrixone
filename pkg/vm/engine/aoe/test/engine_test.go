@@ -113,7 +113,7 @@ func TestAOEEngine(t *testing.T) {
 	require.NoError(t, err)
 	stdLog.Printf("size of batch is  %d", buf.Len())
 
-	for i := 0; i < batchCnt; i++ {
+	for i := 0; i < blockCnt; i++ {
 		err = tb.Write(4, ibat)
 		require.NoError(t, err)
 	}

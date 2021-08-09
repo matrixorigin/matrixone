@@ -86,7 +86,7 @@ func (h *aoeStorage) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.GetSegmentedIdRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-	rsp, err := h.getStoreByGroup(shard.Group, req.ToShard).(*daoe.Storage).GetSegmentedId(customReq.TabletNames)
+	rsp, err := h.getStoreByGroup(shard.Group, req.ToShard).(*daoe.Storage).GetSegmentedId(codec.Uint642String(customReq.ShardId))
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500

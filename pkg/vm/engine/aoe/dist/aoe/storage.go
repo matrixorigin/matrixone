@@ -66,8 +66,15 @@ func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids adb.IDS) {
 	return s.DB.GetSegmentIds(ctx)
 }
 
-func (s *Storage) GetSegmentedId(tableNames []string) (index uint64, err error) {
-	return index, err
+func (s *Storage) GetSegmentedId(prefix string) (index uint64, err error) {
+	return s.DB.GetSegmentedId(dbi.GetSegmentedIdCtx{
+		Matchers: []*dbi.StringMatcher{
+			{
+				Type:    dbi.MTPrefix,
+				Pattern: prefix,
+			},
+		},
+	})
 }
 
 func (s *Storage) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (uint64, error) {

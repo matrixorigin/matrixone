@@ -28,7 +28,7 @@ const (
 	blockCntPerSegment = 2
 	colCnt             = 4
 	segmentCnt         = 2
-	batchCnt           = blockCntPerSegment * segmentCnt
+	blockCnt           = blockCntPerSegment * segmentCnt
 )
 
 func TestStorage(t *testing.T) {
@@ -60,29 +60,8 @@ func TestStorage(t *testing.T) {
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
 
-	//testCodec(t, c)
-	testKVStorage(t, c)
-	//testAOEStorage(t, c)
-}
-
-func testCodec(t *testing.T, c *testutil.TestCluster) {
-
-	key := codec.String2Bytes("Hello")
-	err := c.Applications[0].Set(key, key)
-	require.NoError(t, err)
-
-	value, err := c.Applications[0].Get(key)
-	require.NoError(t, err)
-	require.Equal(t, value, key)
-
-	key1 := codec.EncodeKey("Hello", 1, 2)
-	err = c.Applications[0].Set(key1, key1)
-	require.NoError(t, err)
-
-	value1, err := c.Applications[0].Get(key1)
-	require.NoError(t, err)
-	require.Equal(t, value1, key1)
-
+	//testKVStorage(t, c)
+	testAOEStorage(t, c)
 }
 
 func testKVStorage(t *testing.T, c *testutil.TestCluster) {
@@ -169,15 +148,15 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 func testAOEStorage(t *testing.T, c *testutil.TestCluster) {
 	var sharids []uint64
 	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
-		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.Applications[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
 		sharids = append(sharids, shard.ID)
 	})
 	require.Less(t, 0, len(sharids))
 	//CreateTableTest
 	colCnt := 4
 	tableInfo := md.MockTableInfo(colCnt)
+	tableInfo.Id = 100
 	toShard := sharids[0]
-	err := c.Applications[0].CreateTablet(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard, tableInfo)
+	err := c.Applications[0].CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, tableInfo)
 	require.NoError(t, err)
 
 	names, err := c.Applications[0].TabletNames(toShard)
@@ -190,15 +169,25 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster) {
 	for _, attr := range attrs {
 		typs = append(typs, attr.Type)
 	}
+
+	ids, err := c.Applications[0].GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
+	require.NoError(t, err)
+	require.Equal(t, 0, len(ids.Ids))
 	ibat := chunk.MockBatch(typs, blockRows)
 	var buf bytes.Buffer
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)
-	ids, err := c.Applications[0].GetSegmentIds(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard)
+	for i := 0; i < blockCnt; i++ {
+		err = c.Applications[0].Append(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, buf.Bytes())
+		require.NoError(t, err)
+		segmentedIndex, err := c.Applications[0].GetSegmentedId(toShard)
+		require.NoError(t, err)
+		stdLog.Printf("[Debug]call GetSegmentedId after write %d batch, result is %d", i, segmentedIndex)
+	}
+	ids, err = c.Applications[0].GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
 	require.NoError(t, err)
-	fmt.Printf("SegmentIds is %v", ids)
-	err = c.Applications[0].Append(fmt.Sprintf("%d#%d", tableInfo.Id, toShard), toShard, buf.Bytes())
-	require.NoError(t, err)
+	stdLog.Printf("[Debug]SegmentIds is %v\n", ids)
+	require.Equal(t, segmentCnt, len(ids.Ids))
 
 	time.Sleep(3 * time.Second)
 }
