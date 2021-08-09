@@ -20,6 +20,7 @@ func (h *aoeStorage) init() {
 	h.AddReadFunc(uint64(pb.Scan), h.scan)
 
 	h.AddWriteFunc(uint64(pb.CreateTablet), h.createTablet)
+	h.AddWriteFunc(uint64(pb.DropTablet), h.dropTablet)
 	h.AddWriteFunc(uint64(pb.Append), h.append)
 	h.AddReadFunc(uint64(pb.TabletNames), h.tableNames)
 	h.AddReadFunc(uint64(pb.GetSegmentIds), h.getSegmentIds)
@@ -53,7 +54,7 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		msg := customReq.Delete
 		req.Key = msg.Key
 		req.Group = uint64(customReq.Group)
-		req.CustemType = uint64(pb.DelIfNotExist )
+		req.CustemType = uint64(pb.DelIfNotExist)
 		req.Type = raftcmdpb.CMDType_Write
 	case pb.Get:
 		msg := customReq.Get
@@ -68,6 +69,13 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		req.CustemType = uint64(pb.PrefixScan)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.Scan:
+		msg := customReq.Scan
+		req.Key = msg.Start
+		req.Group = uint64(customReq.Group)
+		req.CustemType = uint64(pb.Scan)
+		req.Type = raftcmdpb.CMDType_Read
+		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Incr:
 		msg := customReq.AllocID
 		req.Key = msg.Key
@@ -80,6 +88,13 @@ func (h *aoeStorage) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error
 		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
 		req.CustemType = uint64(pb.CreateTablet)
+		req.Type = raftcmdpb.CMDType_Write
+		req.Cmd = protoc.MustMarshal(&msg)
+	case pb.DropTablet:
+		msg := customReq.DropTablet
+		req.Group = uint64(customReq.Group)
+		req.ToShard = customReq.Shard
+		req.CustemType = uint64(pb.DropTablet)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
 	case pb.Append:
@@ -129,4 +144,3 @@ func (h *aoeStorage) AddWriteFunc(cmdType uint64, cb command.WriteCommandFunc) {
 	h.cmds[cmdType] = raftcmdpb.CMDType_Write
 	h.store.RegisterWriteFunc(cmdType, cb)
 }
-

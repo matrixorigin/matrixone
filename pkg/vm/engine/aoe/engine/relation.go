@@ -34,7 +34,7 @@ func (r *relation) Attribute() []metadata.Attribute {
 	return helper.Attribute(*r.tbl)
 }
 
-func (r *relation) Write(bat *batch.Batch) error {
+func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	if len(r.tablets) == 0 {
 		return errors.New("no tablets exists")
 	}
@@ -49,11 +49,11 @@ func (r *relation) Write(bat *batch.Batch) error {
 	return r.catalog.Store.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
 }
 
-func (r *relation) AddAttribute(_ engine.TableDef) error {
+func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) DelAttribute(_ engine.TableDef) error {
+func (r *relation) DelAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }
 

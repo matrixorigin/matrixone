@@ -819,7 +819,7 @@ func resultsetHandler(in net.Conn){
 	fmt.Println("Server handling")
 	mysql := NewMysqlClientProtocol(io,0)
 	cmdExe := &CmdExecutorImpl{}
-	rt := NewRoutine(mysql,cmdExe,NewSession())
+	rt := NewRoutine(mysql, cmdExe, NewSession(), nil)
 
 	if err = mysql.Handshake(); err!=nil{
 		msg := fmt.Sprintf("handshake failed. error:%v",err)

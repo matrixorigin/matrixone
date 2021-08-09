@@ -14,11 +14,11 @@ func (e *aoeEngine) Node(_ string) *engine.NodeInfo {
 	return nil
 }
 
-func (e *aoeEngine) Delete(_ string) error {
+func (e *aoeEngine) Delete(_ uint64, _ string) error {
 	return nil
 }
 
-func (e *aoeEngine) Create(_ string, _ int) error {
+func (e *aoeEngine) Create(_ uint64, _ string, _ int) error {
 	return nil
 }
 

@@ -153,9 +153,9 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 	return nil
 }
 
-func (s *Scope) Insert() error {
+func (s *Scope) Insert(ts uint64) error {
 	o, _ := s.O.(*insert.Insert)
-	return o.R.Write(o.Bat)
+	return o.R.Write(ts, o.Bat)
 }
 
 func (s *Scope) Explain(u interface{}, fill func(interface{}, *batch.Batch) error) error {
@@ -170,7 +170,7 @@ func (s *Scope) Explain(u interface{}, fill func(interface{}, *batch.Batch) erro
 	return fill(u, bat)
 }
 
-func (s *Scope) CreateTable() error {
+func (s *Scope) CreateTable(ts uint64) error {
 	o, _ := s.O.(*createTable.CreateTable)
 	if _, err := o.Db.Relation(o.Id); err == nil {
 		if o.Flg {
@@ -178,10 +178,10 @@ func (s *Scope) CreateTable() error {
 		}
 		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%v' already exists", o.Id))
 	}
-	return o.Db.Create(o.Id, o.Defs, o.Pdef, nil, "")
+	return o.Db.Create(ts, o.Id, o.Defs, o.Pdef, nil, "")
 }
 
-func (s *Scope) CreateDatabase() error {
+func (s *Scope) CreateDatabase(ts uint64) error {
 	o, _ := s.O.(*createDatabase.CreateDatabase)
 	if _, err := o.E.Database(o.Id); err == nil {
 		if o.Flg {
@@ -189,10 +189,10 @@ func (s *Scope) CreateDatabase() error {
 		}
 		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database '%v' already exists", o.Id))
 	}
-	return o.E.Create(o.Id, 0)
+	return o.E.Create(ts, o.Id, 0)
 }
 
-func (s *Scope) DropTable() error {
+func (s *Scope) DropTable(ts uint64) error {
 	o, _ := s.O.(*dropTable.DropTable)
 	for i := range o.Dbs {
 		db, err := o.E.Database(o.Dbs[i])
@@ -208,14 +208,14 @@ func (s *Scope) DropTable() error {
 			}
 			return err
 		}
-		if err := db.Delete(o.Ids[i]); err != nil {
+		if err := db.Delete(ts, o.Ids[i]); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Scope) DropDatabase() error {
+func (s *Scope) DropDatabase(ts uint64) error {
 	o, _ := s.O.(*dropDatabase.DropDatabase)
 	if _, err := o.E.Database(o.Id); err != nil {
 		if o.Flg {
@@ -223,7 +223,7 @@ func (s *Scope) DropDatabase() error {
 		}
 		return err
 	}
-	return o.E.Delete(o.Id)
+	return o.E.Delete(ts, o.Id)
 }
 
 func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) error) error {
