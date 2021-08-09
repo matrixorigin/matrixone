@@ -1,21 +1,25 @@
 package db
 
 import (
+	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type observer struct {
 	t   *testing.T
 	num int
+	wg  *sync.WaitGroup
 }
 
 func (o *observer) OnExecDone(op iops.IOp) {
 	o.num = 100
+	o.wg.Done()
 }
 
 func (o *observer) Check() {
@@ -35,12 +39,15 @@ func TestMeta(t *testing.T) {
 
 	event := sched.NewBaseEvent(nil, sched.MockEvent, nil, true)
 
-	ob := &observer{t: t, num: 1}
+	var wg sync.WaitGroup
+	ob := &observer{t: t, num: 1, wg: &wg}
+	wg.Add(1)
 
 	event.AddObserver(ob)
 	metaMgr.Enqueue(event)
 	err := event.WaitDone()
 	assert.Nil(t, err)
+	wg.Wait()
 	ob.Check()
 
 	metaMgr.Close()

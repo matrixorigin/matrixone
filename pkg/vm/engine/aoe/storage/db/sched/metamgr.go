@@ -2,10 +2,10 @@ package db
 
 import (
 	"errors"
+	log "github.com/sirupsen/logrus"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
-	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -42,10 +42,15 @@ func NewMetaResourceMgr(opts *e.Options, disk, cpu sched.ResourceMgr) *metaResou
 	return mgr
 }
 
+func (mgr *metaResourceMgr) OnExecDone(op iops.IOp) {
+	log.Infof("OnExecDone %v", op)
+}
+
 func (mgr *metaResourceMgr) preSubmit(op iops.IOp) bool {
 	e := op.(sched.Event)
 	if !isMetaEvent(e.Type()) {
 		panic(ErrUnexpectEventType)
 	}
+	e.AddObserver(mgr)
 	return true
 }

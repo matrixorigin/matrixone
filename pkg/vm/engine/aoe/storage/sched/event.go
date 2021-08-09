@@ -23,6 +23,11 @@ const (
 	MetaUpdateEvent
 	MemdataUpdateEvent
 	MergeSortEvent
+
+	MetaCreateBlkTask
+	MetaUpdateBlkTask
+	MetaCreateTableTask
+	MetaDropTableTask
 )
 
 func GetNextEventId() uint64 {

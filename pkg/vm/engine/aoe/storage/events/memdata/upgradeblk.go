@@ -21,7 +21,7 @@ func NewUpgradeBlkEvent(ctx *Context, meta *md.Block, td iface.ITableData) *upgr
 		Meta:      meta,
 	}
 	e.baseEvent = baseEvent{
-		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, ctx.DoneCB, ctx.Waitable),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }
