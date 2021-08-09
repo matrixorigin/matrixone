@@ -2,6 +2,7 @@ package engine
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"math/rand"
 	"matrixone/pkg/container/batch"
@@ -12,14 +13,18 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
-func (r *relation) Close() {}
+func (r *relation) Close() {
+	for _, v := range r.mp {
+		v.Close()
+	}
+}
 
 func (r *relation) ID() string {
 	return r.tbl.Name
 }
 
 func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
-	return nil
+	return r.mp[si.TabletId].Segment(binary.BigEndian.Uint64([]byte(si.Id)), proc)
 }
 
 func (r *relation) Segments() []engine.SegmentInfo {

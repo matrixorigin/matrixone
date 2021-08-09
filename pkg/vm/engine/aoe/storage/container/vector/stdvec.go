@@ -219,13 +219,13 @@ func (v *StdVector) appendWithOffset(offset, n int, vals interface{}) error {
 	case types.T_int64:
 		data = encoding.EncodeInt64Slice(vals.([]int64)[offset : offset+n])
 	case types.T_uint8:
-		data = encoding.EncodeInt8Slice(vals.([]int8)[offset : offset+n])
+		data = encoding.EncodeUint8Slice(vals.([]uint8)[offset : offset+n])
 	case types.T_uint16:
-		data = encoding.EncodeInt16Slice(vals.([]int16)[offset : offset+n])
+		data = encoding.EncodeUint16Slice(vals.([]uint16)[offset : offset+n])
 	case types.T_uint32:
-		data = encoding.EncodeInt32Slice(vals.([]int32)[offset : offset+n])
+		data = encoding.EncodeUint32Slice(vals.([]uint32)[offset : offset+n])
 	case types.T_uint64:
-		data = encoding.EncodeInt64Slice(vals.([]int64)[offset : offset+n])
+		data = encoding.EncodeUint64Slice(vals.([]uint64)[offset : offset+n])
 
 	case types.T_decimal:
 		data = encoding.EncodeDecimalSlice(vals.([]types.Decimal)[offset : offset+n])

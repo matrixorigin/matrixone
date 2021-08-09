@@ -29,10 +29,10 @@ func Merge(data []*types.Bytes, idx []uint16) {
 			}
 		}
 
-		offset = 0
 		newData := make([]byte, offset)
 		newOffsets := make([]uint32, nElem)
 		newLengths := make([]uint32, nElem)
+		offset = 0
 		for j := 0; j < nElem; j++ {
 			newOffsets[j] = offset
 			l := uint32(len(strings[j]))
@@ -70,10 +70,10 @@ func ShuffleSegment(data []*types.Bytes, idx []uint16) {
 			k++
 		}
 
-		offset = 0
 		newData := make([]byte, offset)
 		newOffsets := make([]uint32, nElem)
 		newLengths := make([]uint32, nElem)
+		offset = 0
 		for j := 0; j < nElem; j++ {
 			newOffsets[j] = offset
 			l := uint32(len(strings[j]))

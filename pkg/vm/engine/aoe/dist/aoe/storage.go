@@ -114,6 +114,6 @@ func (s *Storage) ApplySnapshot(path string) error {
 	return nil
 }
 
-func (s *Storage) Stop() error {
+func (s *Storage) Close() error {
 	return s.DB.Close()
 }

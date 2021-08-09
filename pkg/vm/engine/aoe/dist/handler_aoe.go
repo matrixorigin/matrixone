@@ -16,7 +16,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
-func (h *aoeStorage) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -40,7 +40,7 @@ func (h *aoeStorage) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, 
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *aoeStorage) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.DropTabletRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -60,7 +60,7 @@ func (h *aoeStorage) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *aoeStorage) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.AppendRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -82,7 +82,7 @@ func (h *aoeStorage) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	return writtenBytes, changedBytes, resp
 }
 
-func (h *aoeStorage) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+func (h *driver) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.GetSegmentedIdRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -95,7 +95,7 @@ func (h *aoeStorage) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request
 	return resp, 0
 }
 
-func (h *aoeStorage) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+func (h *driver) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.GetSegmentIdsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -106,7 +106,7 @@ func (h *aoeStorage) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request,
 	return resp, 0
 }
 
-func (h *aoeStorage) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+func (h *driver) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.GetSnapshotRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -124,7 +124,7 @@ func (h *aoeStorage) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, c
 	return resp, 0
 }
 
-func (h *aoeStorage) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+func (h *driver) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.TabletIDsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -137,7 +137,7 @@ func (h *aoeStorage) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 	return resp, 0
 }
 
-func (h *aoeStorage) tableNames(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+func (h *driver) tableNames(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.TabletIDsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)

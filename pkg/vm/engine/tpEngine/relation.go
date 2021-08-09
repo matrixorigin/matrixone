@@ -8,7 +8,7 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
-func NewTpRelation(n string, id uint64, cinfo string,m tpMetadata, kv dist.Storage, proc *process.Process)*tpRelation {
+func NewTpRelation(n string, id uint64, cinfo string, m tpMetadata, kv dist.CubeDriver, proc *process.Process) *tpRelation {
 	return &tpRelation{
 		relName:    n,
 		relId:      id,
@@ -50,14 +50,14 @@ func (tr *tpRelation) Segment(engine.SegmentInfo, *process.Process) engine.Segme
 	return nil
 }
 
-func (tr *tpRelation) Write(batch *batch.Batch) error{
+func (tr *tpRelation) Write(batch *batch.Batch) error {
 	return nil
 }
 
-func (tr *tpRelation) AddAttribute(def engine.TableDef) error{
+func (tr *tpRelation) AddAttribute(def engine.TableDef) error {
 	return nil
 }
 
-func (tr *tpRelation) DelAttribute(def engine.TableDef) error{
+func (tr *tpRelation) DelAttribute(def engine.TableDef) error {
 	return nil
 }
