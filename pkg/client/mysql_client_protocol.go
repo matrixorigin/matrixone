@@ -5,7 +5,6 @@ import (
 	"crypto/sha1"
 	"fmt"
 	"math/rand"
-	"matrixone/pkg/config"
 	"strconv"
 	"time"
 )
@@ -419,11 +418,12 @@ func (mcp *MysqlClientProtocol) checkPassword(password,salt,auth []byte) bool{
 //the server authenticate that the client can connect and use the database
 func (mcp *MysqlClientProtocol) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
+	ses := mcp.routine.GetSession()
 
 	//TODO:get the user's password
 	var psw []byte
-	if mcp.username == config.GlobalSystemVariables.GetDumpuser(){//the user dump for test
-		psw = []byte(config.GlobalSystemVariables.GetDumppassword())
+	if mcp.username == ses.Pu.SV.GetDumpuser(){//the user dump for test
+		psw = []byte(ses.Pu.SV.GetDumppassword())
 	}
 
 	//TO Check password
@@ -1376,7 +1376,7 @@ func (mcp *MysqlClientProtocol) SendResponse(resp *Response) error  {
 		case *MysqlError:
 			return mcp.sendErrPacket(myerr.ErrorCode,myerr.SqlState,myerr.Error())
 		}
-		return mcp.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,fmt.Sprintf("unkown error:%v",err))
+		return mcp.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,fmt.Sprintf("unknown error:%v",err))
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil{

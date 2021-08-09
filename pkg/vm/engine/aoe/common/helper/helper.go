@@ -129,7 +129,6 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 
 func PartitionDef(def *engine.PartitionBy) ([]byte, error) {
 	var buf bytes.Buffer
-
 	if err := protocol.EncodePartition(def, &buf); err != nil {
 		return nil, err
 	}

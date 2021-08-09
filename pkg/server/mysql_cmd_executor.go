@@ -3,12 +3,12 @@ package server
 import (
 	"fmt"
 	"matrixone/pkg/client"
-	"matrixone/pkg/config"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/compile"
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/vm/process"
+	"strings"
 )
 
 type MysqlCmdExecutor struct {
@@ -48,10 +48,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		fmt.Printf("bat: %v\n", bat)
 	}
 
-	var rowGroupSize = config.GlobalSystemVariables.GetCountOfRowsPerSendingToClient()
+	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
 	rowGroupSize = client.MaxInt64(rowGroupSize,1)
 
-	var choose bool = !config.GlobalSystemVariables.GetSendRow()
+	var choose bool = !ses.Pu.SV.GetSendRow()
 	if choose {
 		goID := client.GetRoutineId()
 
@@ -843,7 +843,7 @@ func (mce *MysqlCmdExecutor) handleUseDB(name string) error {
 
 	//TODO: check meta data
 	var err error = nil
-	if _, err = config.StorageEngine.Database(name); err != nil {
+	if _, err = ses.Pu.StorageEngine.Database(name); err != nil {
 		//echo client. no such database
 		return client.NewMysqlError(client.ER_BAD_DB_ERROR,name)
 	}
@@ -871,25 +871,61 @@ func (mce *MysqlCmdExecutor) handleUse(use *tree.Use) error {
 	return mce.handleUseDB(use.Name)
 }
 
+//handle SELECT DATABASE()
+func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error{
+	var err error = nil
+	ses := mce.Routine.GetSession()
+	proto := mce.Routine.GetClientProtocol().(*client.MysqlClientProtocol)
+
+	col := new(client.MysqlColumn)
+	col.SetName("DATABASE()")
+	col.SetColumnType(client.MYSQL_TYPE_VAR_STRING)
+	ses.Mrs.AddColumn(col)
+	val := ses.Dbname
+	if val == "" {
+		val = "NULL"
+	}
+	ses.Mrs.AddRow([]interface{}{val})
+
+	mer := client.NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := client.NewResponse(client.ResultResponse, 0, int(client.COM_QUERY), mer)
+
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.Routine.GetSession()
 	proto := mce.Routine.GetClientProtocol().(*client.MysqlClientProtocol)
+	pdHook := mce.Routine.GetPDCallback().(*client.PDCallbackImpl)
+	statement_count := uint64(1)
+
+	//pin the epoch with 1
+	epoch,_ := pdHook.IncQueryCountAtCurrentEpoch(statement_count)
+	defer func() {
+		ep,stmt_cnt := pdHook.DecQueryCountAtEpoch(epoch,statement_count)
+		if ep != epoch || stmt_cnt != 0{
+			panic(fmt.Errorf("statement_count needs zero, but actually it is %d at epoch %d \n",stmt_cnt,ep))
+		}
+	}()
 
 	proc := process.New(ses.GuestMmu, ses.Mempool)
 	proc.Id = mce.getNextProcessId()
-	proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
-	proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
-	proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
+	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
+	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
+	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
 
-	comp := compile.New(ses.Dbname, sql, ses.User, config.StorageEngine, config.ClusterNodes, proc)
+	comp := compile.New(ses.Dbname, sql, ses.User, ses.Pu.StorageEngine, ses.Pu.ClusterNodes, proc)
 	execs, err := comp.Compile()
 	if err != nil {
 		return err
 	}
 
-	var choose bool = !config.GlobalSystemVariables.GetSendRow()
+	var choose bool = !ses.Pu.SV.GetSendRow()
 
 	ses.Mrs = &client.MysqlResultSet{}
 
@@ -899,12 +935,38 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 	for _, exec := range execs {
 		stmt := exec.Statement()
+
+		//temp try 0 epoch
+		pdHook.IncQueryCountAtEpoch(epoch,1)
+		statement_count++
+
+		switch st := stmt.(type) {
+		case *tree.Select:
+			if sc,ok := st.Select.(*tree.SelectClause) ; ok {
+				if len(sc.Exprs) == 1 {
+					if fe,ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
+						if un,ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
+							if strings.ToUpper(un.Parts[0]) == "DATABASE" {
+								err = mce.handleSelectDatabase(st)
+								if err != nil{
+									return err
+								}
+
+								//next statement
+								continue
+							}
+						}
+					}
+				}
+			}
+		}
+
 		//check database
 		if ses.Dbname == "" {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases,*tree.CreateDatabase,*tree.ShowWarnings,*tree.ShowErrors,
-			*tree.ShowStatus:
+			*tree.ShowStatus,*tree.DropDatabase:
 			default:
 				return client.NewMysqlError(client.ER_NO_DB_ERROR)
 			}
@@ -1016,7 +1078,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					Producing the data row and sending the data row
 				*/
 
-				if er := exec.Run(); er != nil {
+				if er := exec.Run(epoch); er != nil {
 					return er
 				}
 
@@ -1071,7 +1133,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					ses.Mrs.AddColumn(col)
 				}
 
-				if er := exec.Run(); er != nil {
+				if er := exec.Run(epoch); er != nil {
 					return er
 				}
 
@@ -1093,12 +1155,21 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			*tree.CreateRole,*tree.DropRole,
 			*tree.Revoke,*tree.Grant,
 			*tree.SetDefaultRole,*tree.SetRole,*tree.SetPassword:
+
 			/*
 				Step 1: Start
 			*/
 
-			if er := exec.Run(); er != nil {
+			if er := exec.Run(epoch); er != nil {
 				return er
+			}
+
+			//record ddl drop xxx after the success
+			switch stmt.(type) {
+			case *tree.DropTable, *tree.DropDatabase,
+					*tree.DropIndex, *tree.DropUser, *tree.DropRole:
+				//test ddl
+				pdHook.IncDDLCountAtEpoch(epoch,1)
 			}
 
 			/*
@@ -1124,6 +1195,19 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 func (mce *MysqlCmdExecutor) ExecRequest(req *client.Request) (*client.Response, error) {
 	var resp *client.Response = nil
 	fmt.Printf("cmd %v \n", req.GetCmd())
+
+	//check
+	pdHook := mce.Routine.GetPDCallback().(*client.PDCallbackImpl)
+	if !pdHook.CanAcceptSomething() {
+		resp = client.NewResponse(
+			client.ErrorResponse,
+			0,
+			req.GetCmd(),
+			nil,
+		)
+		return resp,nil
+	}
+
 	switch uint8(req.GetCmd()) {
 	case client.COM_QUIT:
 		resp = client.NewResponse(

@@ -53,11 +53,11 @@ func (e *spillEngine) Node(_ string) *engine.NodeInfo {
 	}
 }
 
-func (e *spillEngine) Delete(name string) error {
+func (e *spillEngine) Delete(_ uint64, name string) error {
 	return nil
 }
 
-func (e *spillEngine) Create(name string, _ int) error {
+func (e *spillEngine) Create(_ uint64, name string, _ int) error {
 	return nil
 }
 
@@ -73,11 +73,11 @@ func (e *database) Type() int {
 	return engine.Spill
 }
 
-func (e *database) Delete(name string) error {
+func (e *database) Delete(_ uint64, name string) error {
 	return os.RemoveAll(path.Join(e.path, name))
 }
 
-func (e *database) Create(name string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
+func (e *database) Create(_ uint64, name string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
 	var attrs []metadata.Attribute
 
 	{

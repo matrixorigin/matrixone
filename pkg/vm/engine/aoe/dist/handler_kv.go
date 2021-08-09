@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/fagongzi/util/format"
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb"
@@ -12,6 +11,7 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 )
 
@@ -19,7 +19,6 @@ func (h *aoeStorage) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comma
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-
 
 	err := h.getStoreByGroup(shard.Group, shard.ID).(*pebble.Storage).Set(req.Key, customReq.Value)
 	if err != nil {
@@ -121,9 +120,6 @@ func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 		resp.Value = errorResp(err)
 		return resp, 500
 	}
-	if data != nil && shard.End != nil {
-		data = append(data, shard.End)
-	}
 	if data != nil {
 		resp.Value, err = json.Marshal(data)
 	}
@@ -136,10 +132,19 @@ func (h *aoeStorage) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 
 func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
+	customReq := &rpcpb.ScanRequest{}
+	protoc.MustUnmarshal(customReq, req.Cmd)
+
+	startKey := raftstore.EncodeDataKey(shard.Group, customReq.Start)
+	endKey := raftstore.EncodeDataKey(shard.Group, customReq.End)
 	var data [][]byte
 
-	err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).PrefixScan(req.Key, func(key, value []byte) (bool, error) {
-		data = append(data, key)
+	err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).Scan(startKey, endKey, func(key, value []byte) (bool, error) {
+		if (shard.Start != nil && bytes.Compare(shard.Start, raftstore.DecodeDataKey(key)) > 0) ||
+			(shard.End != nil && bytes.Compare(shard.End, raftstore.DecodeDataKey(key)) <= 0) {
+			return true, nil
+		}
+		data = append(data, raftstore.DecodeDataKey(key))
 		data = append(data, value)
 		return true, nil
 	}, false)
@@ -147,15 +152,11 @@ func (h *aoeStorage) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 		resp.Value = errorResp(err)
 		return resp, 500
 	}
-
-	if data != nil && shard.End != nil {
-		/*		lastKey := data[len(data)-2]
-				if */
-	}
-	resp.Value, err = json.Marshal(data)
-	if err != nil {
-		resp.Value = errorResp(err)
-		return resp, 500
+	if data != nil {
+		if resp.Value, err = json.Marshal(data); err != nil {
+			resp.Value = errorResp(err)
+			return resp, 500
+		}
 	}
 	return resp, 0
 }
@@ -165,19 +166,19 @@ func (h *aoeStorage) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 
 	id := uint64(0)
 	if v, ok := ctx.Attrs()[string(req.Key)]; ok {
-		id = format.MustBytesToUint64(v.([]byte))
+		id, _ = codec.Bytes2Uint64(v.([]byte))
 	} else {
 		value, err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).Get(req.Key)
 		if err != nil {
 			return 0, 0, resp
 		}
 		if len(value) > 0 {
-			id = format.MustBytesToUint64(value)
+			id, _ = codec.Bytes2Uint64(value)
 		}
 	}
 
 	id++
-	newV := format.Uint64ToBytes(id)
+	newV := codec.Uint642Bytes(id)
 	ctx.Attrs()[string(req.Key)] = newV
 
 	err := ctx.WriteBatch().Set(req.Key, newV)

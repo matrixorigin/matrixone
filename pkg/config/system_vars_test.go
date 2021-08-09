@@ -106,6 +106,30 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 
 
 
+	if c1.PeriodOfEpochTimer != c2.PeriodOfEpochTimer {
+		return false
+	}
+
+
+
+	if c1.PeriodOfPersistence != c2.PeriodOfPersistence {
+		return false
+	}
+
+
+
+	if c1.PeriodOfDDLDeleteTimer != c2.PeriodOfDDLDeleteTimer {
+		return false
+	}
+
+
+
+	if c1.TimeoutOfHeartbeat != c2.TimeoutOfHeartbeat {
+		return false
+	}
+
+
+
 	return true
 }
 
@@ -147,6 +171,14 @@ processLimitationBatchSize=0
 processLimitationPartitionRows=42949672960
 
 countOfRowsPerSendingToClient=10
+
+periodOfEpochTimer=5
+
+periodOfPersistence=20
+
+periodOfDDLDeleteTimer=20
+
+timeoutOfHeartbeat=20
 		
 `
 	t1_config:=varsConfig{
@@ -188,6 +220,14 @@ ProcessLimitationBatchSize:0,
 ProcessLimitationPartitionRows:42949672960,
 
 CountOfRowsPerSendingToClient:10,
+
+PeriodOfEpochTimer:5,
+
+PeriodOfPersistence:20,
+
+PeriodOfDDLDeleteTimer:20,
+
+TimeoutOfHeartbeat:20,
 	
 
 		name2updatedFlags: nil,
