@@ -24,7 +24,7 @@ var (
 
 type TestCluster struct {
 	T            *testing.T
-	Applications []dist.Storage
+	Applications []dist.CubeDriver
 	AOEDBs       []*daoe.Storage
 }
 
@@ -91,7 +91,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 			},
 		}
 
-		if i < len(pcis){
+		if i < len(pcis) {
 			cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pcis[i]
 		}
 

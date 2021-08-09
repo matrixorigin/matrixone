@@ -11,15 +11,15 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
-func NewTpDatabase(n string, id uint64, cinfo string, sch string, t int, kv dist.Storage, proc *process.Process) *tpDatabase {
+func NewTpDatabase(n string, id uint64, cinfo string, sch string, t int, kv dist.CubeDriver, proc *process.Process) *tpDatabase {
 	return &tpDatabase{
 		dbName:      n,
 		dbId:        id,
-		createInfo: cinfo,
-		schema: sch,
+		createInfo:  cinfo,
+		schema:      sch,
 		engineType:  t,
-		nextDbNo:    0,//TODO:load from meta1
-		nextTableNo: 0,//TODO:load from meta1
+		nextDbNo:    0, //TODO:load from meta1
+		nextTableNo: 0, //TODO:load from meta1
 		proc:        proc,
 		kv:          kv,
 		rels:        make(map[string]*tpTupleImpl),
@@ -27,21 +27,21 @@ func NewTpDatabase(n string, id uint64, cinfo string, sch string, t int, kv dist
 }
 
 func (td *tpDatabase) hasRelation(name string) bool {
-	_,ok := td.rels[name]
+	_, ok := td.rels[name]
 	return ok
 }
 
-func (td *tpDatabase) saveRelation(name string,meta *tpTupleImpl) {
+func (td *tpDatabase) saveRelation(name string, meta *tpTupleImpl) {
 	td.rels[name] = meta
 }
 
 func (td *tpDatabase) removeRelation(name string) {
-	_,ok := td.rels[name]
-	if !ok{
+	_, ok := td.rels[name]
+	if !ok {
 		return
 	}
 
-	delete(td.rels,name)
+	delete(td.rels, name)
 	//TODO:
 	return
 }
@@ -56,9 +56,9 @@ func (td *tpDatabase) loadRelationList() error {
 		nil,
 		nil,
 		nil,
-		)
+	)
 	prefix_key := prefix.encodePrefix(nil)
-	value,err := td.kv.PrefixScan(prefix_key, math.MaxUint64)
+	value, err := td.kv.PrefixScan(prefix_key, math.MaxUint64)
 	if err != nil {
 		return err
 	}
@@ -66,20 +66,20 @@ func (td *tpDatabase) loadRelationList() error {
 	for i := 0; i < len(value); i += 2 {
 		k := value[i]
 		v := value[i+1]
-		if bytes.HasPrefix(k,prefix_key) {
-			_,keys,err := decodeKeys(k[len(prefix_key):],TABLE_TABLES_PRIMARY_KEY_SCHEMA)
+		if bytes.HasPrefix(k, prefix_key) {
+			_, keys, err := decodeKeys(k[len(prefix_key):], TABLE_TABLES_PRIMARY_KEY_SCHEMA)
 			if err != nil {
 				return err
 			}
 			db := keys[0].(string)
-			fmt.Printf("+++> rel: %v \n",db)
-			if !td.hasRelation(db){
+			fmt.Printf("+++> rel: %v \n", db)
+			if !td.hasRelation(db) {
 				dbRow := &tpTupleImpl{}
-				_,err = dbRow.decode(v)
+				_, err = dbRow.decode(v)
 				if err != nil {
 					return err
 				}
-				td.saveRelation(db,dbRow)
+				td.saveRelation(db, dbRow)
 			}
 		}
 
@@ -94,7 +94,7 @@ func (td *tpDatabase) Type() int {
 	return engine.RSE
 }
 
-func (td *tpDatabase) Relations() []string{
+func (td *tpDatabase) Relations() []string {
 	td.rwlock.Lock()
 	defer td.rwlock.Unlock()
 	err := td.loadRelationList()
@@ -102,9 +102,9 @@ func (td *tpDatabase) Relations() []string{
 		panic(err)
 	}
 
-	keys := make([]string,0, len(td.rels))
+	keys := make([]string, 0, len(td.rels))
 	for k := range td.rels {
-		keys = append(keys,k)
+		keys = append(keys, k)
 	}
 
 	return keys
@@ -120,22 +120,22 @@ func (td *tpDatabase) Relation(name string) (engine.Relation, error) {
 	}
 
 	if !td.hasRelation(name) {
-		return nil, fmt.Errorf("relation %v does not exist",name)
+		return nil, fmt.Errorf("relation %v does not exist", name)
 	}
 
 	relRow := td.rels[name]
-	relId := relRow.fields[0].(uint64) //rel id
+	relId := relRow.fields[0].(uint64)      //rel id
 	createInfo := relRow.fields[1].(string) //create info
-	sch := relRow.fields[2].([]byte) //sch
+	sch := relRow.fields[2].([]byte)        //sch
 	var md tpMetadata
 
 	//TODO: if it is the system table, the schema decode should be different.
-	err = encoding.Decode(sch,&md)
+	err = encoding.Decode(sch, &md)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewTpRelation(name,relId,createInfo,md,td.kv,td.proc), nil
+	return NewTpRelation(name, relId, createInfo, md, td.kv, td.proc), nil
 }
 
 func (td *tpDatabase) Delete(rel string) error {
@@ -181,7 +181,7 @@ func (td *tpDatabase) loadMeta1() error {
 		nil,
 		nil)
 	meta_key := meta_skey.encode(nil)
-	value,err := td.kv.Get(meta_key)
+	value, err := td.kv.Get(meta_key)
 	if err != nil {
 		return err
 	}
@@ -191,8 +191,8 @@ func (td *tpDatabase) loadMeta1() error {
 	}
 
 	row := &tpTupleImpl{}
-	_,err = row.decode(value)
-	if err != nil{
+	_, err = row.decode(value)
+	if err != nil {
 		return err
 	}
 
@@ -214,7 +214,7 @@ func (td *tpDatabase) storeMeta1() error {
 	metaRow := NewTpTupleImpl(TABLE_META1_REST_SCHEMA,
 		uint64(td.nextDbNo), uint64(td.nextTableNo))
 	meta_val := metaRow.encode(nil)
-	err := td.kv.Set(meta_key,meta_val)
+	err := td.kv.Set(meta_key, meta_val)
 	if err != nil {
 		return err
 	}
@@ -222,13 +222,13 @@ func (td *tpDatabase) storeMeta1() error {
 	return nil
 }
 
-func (td *tpDatabase) getNextTableNo()uint64{
+func (td *tpDatabase) getNextTableNo() uint64 {
 	n := td.nextTableNo
 	td.nextTableNo++
 	return n
 }
 
-func (td *tpDatabase) Create(rel string, defs []engine.TableDef,_ *engine.PartitionBy,_ *engine.DistributionBy,_ string) error {
+func (td *tpDatabase) Create(rel string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
 	td.rwlock.Lock()
 	defer td.rwlock.Unlock()
 
@@ -240,7 +240,7 @@ func (td *tpDatabase) Create(rel string, defs []engine.TableDef,_ *engine.Partit
 
 	//step 2: check if the relation has existed
 	if td.hasRelation(rel) {
-		return fmt.Errorf("relation %s has existed",rel)
+		return fmt.Errorf("relation %s has existed", rel)
 	}
 
 	err = td.loadMeta1()
@@ -281,8 +281,8 @@ func (td *tpDatabase) Create(rel string, defs []engine.TableDef,_ *engine.Partit
 	}
 
 	relRow := NewTpTupleImpl(TABLE_TABLES_REST_SCHEMA,
-		tabNo,"create table info",data,
-		)
+		tabNo, "create table info", data,
+	)
 
 	relValue := relRow.encode(nil)
 	err = td.kv.Set(rel_key, relValue)
