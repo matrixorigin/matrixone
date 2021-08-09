@@ -1,15 +1,12 @@
 package db
 
 import (
-	"sync"
-	"testing"
-
+	"github.com/stretchr/testify/assert"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	// iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
-
-	"github.com/stretchr/testify/assert"
+	"sync"
+	"testing"
 )
 
 type observer struct {
@@ -39,8 +36,9 @@ func TestMeta(t *testing.T) {
 	metaMgr.Start()
 
 	events := make([]MetaEvent, 0)
-	for i := uint64(1); i < uint64(3); i++ {
-		scope := common.ID{TableID: 1}
+	for i := uint64(1); i < uint64(10); i++ {
+		tableId := i%4 + 1
+		scope := common.ID{TableID: tableId}
 		event := NewMetaEvent(scope, false, sched.MockEvent, true)
 		event.AttachID(i)
 		events = append(events, event)
@@ -57,8 +55,10 @@ func TestMeta(t *testing.T) {
 		metaMgr.Enqueue(event)
 	}
 	for _, event := range events {
-		err := event.WaitDone()
-		assert.Nil(t, err)
+		go func(ee sched.Event) {
+			err := ee.WaitDone()
+			assert.Nil(t, err)
+		}(event)
 	}
 	wg.Wait()
 	ob.Check()

@@ -59,10 +59,9 @@ func NewMetaResourceMgr(opts *e.Options, disk, cpu sched.ResourceMgr) *metaResou
 
 func (mgr *metaResourceMgr) OnExecDone(op interface{}) {
 	e := op.(MetaEvent)
-	log.Infof("OnExecDone %d", e.ID())
 	mgr.mu.Lock()
+	log.Infof("OnExecDone %d: %s", e.ID(), mgr.stringLocked())
 	scope, all := e.GetScope()
-	log.Info(mgr.stringLocked())
 	delete(mgr.runings.events, e.ID())
 	if all {
 		mgr.runings.scopeall = false
@@ -82,11 +81,10 @@ func (mgr *metaResourceMgr) OnExecDone(op interface{}) {
 			break
 		}
 	}
-	if i < 0 {
-		panic("logic error")
-	}
 	mgr.mu.Unlock()
-	mgr.ExecuteEvent(schedEvent)
+	if i >= 0 {
+		mgr.ExecuteEvent(schedEvent)
+	}
 }
 
 func (mgr *metaResourceMgr) enqueueRunning(e MetaEvent) {
