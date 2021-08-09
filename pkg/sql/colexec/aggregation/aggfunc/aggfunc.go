@@ -103,6 +103,8 @@ func NewAvg(typ types.Type) aggregation.Aggregation {
 
 func NewSumCount(typ types.Type) aggregation.Aggregation {
 	switch typ.Oid {
+	case types.T_tuple:
+		return sum.NewSumCount(aggregation.ReturnType(aggregation.SumCount, typ))
 	case types.T_float32, types.T_float64:
 		return sum.NewFloatSumCount(aggregation.ReturnType(aggregation.SumCount, typ))
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:

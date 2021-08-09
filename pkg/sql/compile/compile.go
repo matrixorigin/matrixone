@@ -125,6 +125,9 @@ func (e *Exec) Columns() []*Col {
 func (e *Exec) Run(ts uint64) error {
 	var wg sync.WaitGroup
 
+	fmt.Printf("+++++++++\n")
+	Print(nil, e.ss)
+	fmt.Printf("+++++++++\n")
 	for i := range e.ss {
 		switch e.ss[i].Magic {
 		case Normal:

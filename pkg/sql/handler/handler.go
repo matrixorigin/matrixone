@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/rpcserver/message"
 	"matrixone/pkg/sql/colexec/output"
@@ -46,13 +45,7 @@ func writeBack(u interface{}, bat *batch.Batch) error {
 
 	conn := u.(goetty.IOSession)
 	if bat == nil {
-		{
-			fmt.Printf("write empty\n")
-		}
 		return conn.WriteAndFlush(&message.Message{Sid: 1})
-	}
-	{
-		fmt.Printf("remote bat: %v\n", bat)
 	}
 	if err := protocol.EncodeBatch(bat, &buf); err != nil {
 		return err

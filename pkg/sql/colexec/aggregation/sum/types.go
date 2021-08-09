@@ -20,6 +20,12 @@ type floatSum struct {
 	typ types.Type
 }
 
+type sumCount struct {
+	cnt int64
+	sum float64
+	typ types.Type
+}
+
 type intSumCount struct {
 	cnt int64
 	sum int64

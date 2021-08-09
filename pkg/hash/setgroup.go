@@ -393,10 +393,10 @@ func (g *SetGroup) Probe(sels, matched []int64, vecs, gvecs []*vector.Vector, di
 
 func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 	diffs []bool, proc *process.Process) ([]int64, error) {
-	for i, vec := range vecs {
-		switch vec.Typ.Oid {
+	for i, gvec := range gvecs {
+		switch gvec.Typ.Oid {
 		case types.T_int8:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -428,7 +428,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 				}
 			}
 		case types.T_int16:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -460,7 +460,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 				}
 			}
 		case types.T_int32:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -492,7 +492,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 				}
 			}
 		case types.T_int64:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -524,7 +524,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 				}
 			}
 		case types.T_uint8:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -556,7 +556,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 				}
 			}
 		case types.T_uint16:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -588,7 +588,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 				}
 			}
 		case types.T_uint32:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -620,7 +620,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 				}
 			}
 		case types.T_uint64:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -652,7 +652,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 				}
 			}
 		case types.T_float32:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -684,7 +684,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 				}
 			}
 		case types.T_float64:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
@@ -719,7 +719,7 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 		case types.T_date:
 		case types.T_datetime:
 		case types.T_char, types.T_json, types.T_varchar:
-			gvec := gvecs[i]
+			vec := vecs[i]
 			lnull := vec.Nsp.Any()
 			rnull := gvec.Nsp.Contains(uint64(g.Sel))
 			switch {
