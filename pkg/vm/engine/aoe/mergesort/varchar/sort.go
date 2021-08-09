@@ -502,7 +502,7 @@ func ShuffleBlock(data *types.Bytes, idx []uint32) {
 	var offset uint32
 
 	for i, j := range idx {
-		copy(newData[offset:], data.Get(int64(i)))
+		copy(newData[offset:], data.Get(int64(j)))
 		newOffsets[i] = offset
 		newLengths[i] = data.Lengths[j]
 		offset += newLengths[i]
