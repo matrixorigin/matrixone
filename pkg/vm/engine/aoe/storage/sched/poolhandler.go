@@ -12,17 +12,17 @@ var (
 	poolHandlerName = "PoolHandler"
 )
 
-type PreExecFunc func(iops.IOp) bool
+type PreSubmitExec func(iops.IOp) bool
 
 type poolHandler struct {
 	BaseEventHandler
-	opExec  ops.OpExecFunc
-	pool    *ants.Pool
-	wg      *sync.WaitGroup
-	preExec PreExecFunc
+	opExec    ops.OpExecFunc
+	pool      *ants.Pool
+	wg        *sync.WaitGroup
+	preSubmit PreSubmitExec
 }
 
-func NewPoolHandler(num int, preExec PreExecFunc) *poolHandler {
+func NewPoolHandler(num int, preSubmit PreSubmitExec) *poolHandler {
 	pool, err := ants.NewPool(num)
 	if err != nil {
 		panic(err)
@@ -32,15 +32,15 @@ func NewPoolHandler(num int, preExec PreExecFunc) *poolHandler {
 		pool:             pool,
 		wg:               &sync.WaitGroup{},
 	}
-	h.preExec = preExec
+	h.preSubmit = preSubmit
 	h.opExec = h.ExecFunc
 	h.ExecFunc = h.doHandle
 	return h
 }
 
 func (h *poolHandler) doHandle(op iops.IOp) {
-	if h.preExec != nil {
-		ok := h.preExec(op)
+	if h.preSubmit != nil {
+		ok := h.preSubmit(op)
 		if !ok {
 			return
 		}

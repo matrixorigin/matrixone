@@ -4,15 +4,17 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 func TestMeta(t *testing.T) {
+	opts := &e.Options{}
 	diskH := sched.NewPoolHandler(2, nil)
 	cpuH := sched.NewPoolHandler(2, nil)
 	diskMgr := sched.NewBaseResourceMgr(diskH)
 	cpuMgr := sched.NewBaseResourceMgr(cpuH)
-	metaMgr := NewMetaResourceMgr(diskMgr, cpuMgr)
+	metaMgr := NewMetaResourceMgr(opts, diskMgr, cpuMgr)
 	diskMgr.Start()
 	cpuMgr.Start()
 	metaMgr.Start()
