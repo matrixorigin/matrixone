@@ -166,18 +166,23 @@ func NewStorageWithOptions(
 	}
 
 	c.CubeConfig.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
-		//TODO: 询问所有tablet
 		return func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
-			//Get all tablet in this shard
-
-			return newCompactIdx, err
+			if group != uint64(pb.AOEGroup) {
+				return compactIndex, nil
+			}
+			return h.GetSegmentedId(shard.ID)
 		}
 	}
 
 	c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
-		//TODO:aoe group only
 		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
-			//TODO:Call getSegmentedId Interface
+			if group != uint64(pb.AOEGroup) {
+				return initAppliedIndex
+			}
+			adjustAppliedIndex, err := h.GetSegmentedId(shard.ID)
+			if err != nil {
+				panic(err)
+			}
 			return adjustAppliedIndex
 		}
 	}
