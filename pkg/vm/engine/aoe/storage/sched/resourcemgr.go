@@ -1,6 +1,9 @@
 package sched
 
-import "errors"
+import (
+	"errors"
+	// log "github.com/sirupsen/logrus"
+)
 
 var (
 	ErrDuplicateResource = errors.New("aoe: duplicate resource")
@@ -23,21 +26,17 @@ func NewBaseResourceMgr(scheduler Scheduler) *BaseResourceMgr {
 }
 
 func (mgr *BaseResourceMgr) Start() {
-	if mgr.scheduler != nil {
-		mgr.scheduler.Start()
+	for _, res := range mgr.resources {
+		res.Start()
 	}
-	// for _, res := range mgr.resources {
-	// 	res.Start()
-	// }
+	mgr.scheduler.Start()
 }
 
-func (mgr *BaseResourceMgr) Stop() {
-	if mgr.scheduler != nil {
-		mgr.scheduler.Stop()
+func (mgr *BaseResourceMgr) Close() {
+	mgr.scheduler.Stop()
+	for _, res := range mgr.resources {
+		res.Close()
 	}
-	// for _, res := range mgr.resources {
-	// 	res.Stop()
-	// }
 }
 
 func (mgr *BaseResourceMgr) Add(res Resource) error {
@@ -47,12 +46,12 @@ func (mgr *BaseResourceMgr) Add(res Resource) error {
 	pos := len(mgr.resources)
 	mgr.nameindex[res.Name()] = pos
 	mgr.resources = append(mgr.resources, res)
-	indices, ok := mgr.typeindex[res.Type()]
+	_, ok := mgr.typeindex[res.Type()]
 	if !ok {
-		indices = make([]int, 0)
-		mgr.typeindex[res.Type()] = indices
+		mgr.typeindex[res.Type()] = make([]int, 0)
 	}
-	indices = append(indices, pos)
+	mgr.typeindex[res.Type()] = append(mgr.typeindex[res.Type()], pos)
+
 	return nil
 }
 
@@ -62,4 +61,20 @@ func (mgr *BaseResourceMgr) GetResource(name string) Resource {
 		return nil
 	}
 	return mgr.resources[pos]
+}
+
+func (mgr *BaseResourceMgr) ResourceCount() int {
+	return len(mgr.resources)
+}
+
+func (mgr *BaseResourceMgr) ResourceCountByType(t ResourceType) int {
+	pool, ok := mgr.typeindex[t]
+	if !ok {
+		return 0
+	}
+	return len(pool)
+}
+
+func (mgr *BaseResourceMgr) Enqueue(e Event) error {
+	return mgr.scheduler.Schedule(e)
 }

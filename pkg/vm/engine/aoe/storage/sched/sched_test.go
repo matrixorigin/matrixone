@@ -58,3 +58,36 @@ func TestPoolHandler(t *testing.T) {
 	wg.Wait()
 	t.Logf("Time: %s", time.Since(now))
 }
+
+func TestResourceMgr(t *testing.T) {
+	dis := newMockDispatcher()
+	scheduler := NewBaseScheduler("mgrScheduler")
+	scheduler.RegisterDispatcher(MockEvent, dis)
+	mgr := NewBaseResourceMgr(scheduler)
+	res1H := NewSingleWorkerHandler("res1H")
+	res1 := NewBaseResource("res1", ResT_IO, res1H)
+	res2H := NewSingleWorkerHandler("res1H")
+	res2 := NewBaseResource("res2", ResT_IO, res2H)
+	res3H := NewPoolHandler(2)
+	res3 := NewBaseResource("res3", ResT_CPU, res3H)
+	err := mgr.Add(res1)
+	assert.Nil(t, err)
+	err = mgr.Add(res2)
+	assert.Nil(t, err)
+	err = mgr.Add(res3)
+	assert.Nil(t, err)
+	err = mgr.Add(res1)
+	assert.Equal(t, ErrDuplicateResource, err)
+	assert.Equal(t, 3, mgr.ResourceCount())
+	assert.Equal(t, 2, mgr.ResourceCountByType(ResT_IO))
+	assert.NotNil(t, mgr.GetResource("res1"))
+	assert.NotNil(t, mgr.GetResource("res2"))
+	assert.NotNil(t, mgr.GetResource("res3"))
+	mgr.Start()
+
+	event := NewBaseEvent(nil, MockEvent, nil, true)
+	err = mgr.Enqueue(event)
+	assert.Nil(t, err)
+
+	mgr.Close()
+}

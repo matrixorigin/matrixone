@@ -27,3 +27,14 @@ func NewBaseResource(name string, t ResourceType, handler EventHandler) *BaseRes
 
 func (r *BaseResource) Type() ResourceType { return r.t }
 func (r *BaseResource) Name() string       { return r.name }
+func (r *BaseResource) Start() {
+	if r.EventHandler != nil {
+		r.EventHandler.Start()
+	}
+}
+func (r *BaseResource) Close() error {
+	if r.EventHandler != nil {
+		r.EventHandler.Close()
+	}
+	return nil
+}
