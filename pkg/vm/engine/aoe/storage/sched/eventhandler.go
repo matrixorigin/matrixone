@@ -21,7 +21,6 @@ func newMockEventHandler(name string) *mockEventHandler {
 		BaseEventHandler: *NewBaseEventHandler(name),
 	}
 	h.ExecFunc = h.doHandle
-	h.Start()
 	return h
 }
 
@@ -61,6 +60,5 @@ func NewSingleWorkerHandler(name string) *singleWorkerHandler {
 	h := &singleWorkerHandler{
 		BaseEventHandler: *NewBaseEventHandler(name),
 	}
-	h.Start()
 	return h
 }

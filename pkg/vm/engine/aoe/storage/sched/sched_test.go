@@ -35,7 +35,9 @@ func TestPoolHandler(t *testing.T) {
 	assert.NotNil(t, scheduler)
 	scheduler.Start()
 	dis := newMockDispatcher()
-	dis.RegisterHandler(MockEvent, NewPoolHandler(4))
+	handler := NewPoolHandler(4)
+	handler.Start()
+	dis.RegisterHandler(MockEvent, handler)
 	scheduler.RegisterDispatcher(MockEvent, dis)
 	wg := &sync.WaitGroup{}
 	exec := func(e Event) error {

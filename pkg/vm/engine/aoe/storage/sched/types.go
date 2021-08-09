@@ -28,6 +28,13 @@ type Event interface {
 }
 
 type EventHandler interface {
+	Start()
 	io.Closer
 	Enqueue(Event)
+}
+
+type Resource interface {
+	EventHandler
+	Type() ResourceType
+	Name() string
 }

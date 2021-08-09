@@ -17,7 +17,9 @@ func newMockDispatcher() *mockDispatcher {
 	d := &mockDispatcher{
 		BaseDispatcher: *NewBaseDispatcher(),
 	}
-	d.RegisterHandler(MockEvent, newMockEventHandler("meh"))
+	handler := newMockEventHandler("meh")
+	handler.Start()
+	d.RegisterHandler(MockEvent, handler)
 	return d
 }
 

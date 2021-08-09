@@ -31,7 +31,6 @@ func NewPoolHandler(num int) *poolHandler {
 	}
 	h.opExec = h.ExecFunc
 	h.ExecFunc = h.doHandle
-	h.Start()
 	return h
 }
 
