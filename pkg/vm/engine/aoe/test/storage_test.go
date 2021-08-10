@@ -54,7 +54,7 @@ func TestStorage(t *testing.T) {
 		return daoe.NewStorageWithOptions(path, opts)
 	})
 	defer c.Stop()
-	time.Sleep(2 * time.Second)
+	time.Sleep(10 * time.Second)
 
 	assert.NoError(t, err)
 	stdLog.Printf("app all started.")
