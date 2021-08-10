@@ -31,10 +31,10 @@ func (d *localRoDatabase) Relation(name string) (engine.Relation, error) {
 	return NewLocalRoRelation(impl), nil
 }
 
-func (d *localRoDatabase) Delete(string) error {
+func (d *localRoDatabase) Delete(uint64, string) error {
 	panic("not supported")
 }
 
-func (d *localRoDatabase) Create(string, []engine.TableDef, *engine.PartitionBy, *engine.DistributionBy, string) error {
+func (d *localRoDatabase) Create(uint64, string, []engine.TableDef, *engine.PartitionBy, *engine.DistributionBy, string) error {
 	panic("not supported")
 }
