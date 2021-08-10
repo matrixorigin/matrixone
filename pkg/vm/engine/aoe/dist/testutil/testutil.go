@@ -98,6 +98,10 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 			if err != nil {
 				log.Fatal("create failed with %+v", err)
 			}
+			err = a.Start()
+			if err != nil {
+				log.Fatal("cube driver start failed with %+v", err)
+			}
 			c.AOEDBs = append(c.AOEDBs, aoeDataStorage)
 			c.Applications = append(c.Applications, a)
 		}()

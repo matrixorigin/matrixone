@@ -89,6 +89,10 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 		if err != nil {
 			return nil, err
 		}
+		err = a.Start()
+		if err != nil {
+			return nil, err
+		}
 		c.applications = append(c.applications, a)
 	}
 	return c, nil

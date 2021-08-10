@@ -105,6 +105,10 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 			if err != nil {
 				fmt.Printf("create failed with %v", err)
 			}
+			err = a.Start()
+			if err != nil {
+				fmt.Printf("cube driver start failed with %+v", err)
+			}
 			c.AOEDBs = append(c.AOEDBs, aoeDataStorage)
 			c.Applications = append(c.Applications, a)
 		}()

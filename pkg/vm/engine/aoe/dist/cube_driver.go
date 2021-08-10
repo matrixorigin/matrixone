@@ -217,9 +217,6 @@ func NewCubeDriverWithOptions(
 		return proxy.DispatchTo(req, args.Shard, h.store.GetRouter().LeaderPeerStore(req.ToShard).ClientAddr)
 	})
 	h.init()
-	if err := h.app.Start(); err != nil {
-		return nil, err
-	}
 	return h, nil
 }
 
