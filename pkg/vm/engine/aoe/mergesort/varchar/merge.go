@@ -2,7 +2,7 @@ package varchar
 
 import "matrixone/pkg/container/types"
 
-func Merge(data []*types.Bytes, idx []uint16) {
+func Merge(data []*types.Bytes, src []uint16) {
 	nElem := len(data[0].Offsets)
 	nBlk := len(data)
 	heap := make(heapSlice, nBlk)
@@ -22,7 +22,7 @@ func Merge(data []*types.Bytes, idx []uint16) {
 			top := heapPop(&heap)
 			offset += uint32(len(top.data))
 			strings[j] = top.data
-			idx[k] = top.src
+			src[k] = top.src
 			k++
 			if int(top.next) < nElem {
 				heapPush(&heap, heapElem{data: data[top.src].Get(int64(top.next)), src: top.src, next: top.next + 1})
@@ -48,10 +48,12 @@ func Merge(data []*types.Bytes, idx []uint16) {
 		}
 	}
 
-	copy(data, merged)
+	for i := 0; i < nBlk; i++ {
+		*data[i] = *merged[i]
+	}
 }
 
-func ShuffleSegment(data []*types.Bytes, idx []uint16) {
+func ShuffleSegment(data []*types.Bytes, src []uint16) {
 	nElem := len(data[0].Offsets)
 	nBlk := len(data)
 	cursors := make([]uint32, nBlk)
@@ -63,10 +65,11 @@ func ShuffleSegment(data []*types.Bytes, idx []uint16) {
 	for i := 0; i < nBlk; i++ {
 		offset = 0
 		for j := 0; j < nElem; j++ {
-			d, i := data[idx[k]], cursors[idx[k]]
-			strings[j] = d.Get(int64(i))
-			offset += d.Lengths[i]
-			cursors[idx[k]]++
+			s := src[k]
+			d, cur := data[s], cursors[s]
+			strings[j] = d.Get(int64(cur))
+			offset += d.Lengths[cur]
+			cursors[s]++
 			k++
 		}
 
@@ -88,5 +91,8 @@ func ShuffleSegment(data []*types.Bytes, idx []uint16) {
 			Lengths: newLengths,
 		}
 	}
-	copy(data, merged)
+
+	for i := 0; i < nBlk; i++ {
+		*data[i] = *merged[i]
+	}
 }
