@@ -6,7 +6,7 @@ func Merge(data []*types.Bytes, idx []uint16) {
 	nElem := len(data[0].Offsets)
 	nBlk := len(data)
 	heap := make(heapSlice, nBlk)
-	strings := make([][]byte, nBlk)
+	strings := make([][]byte, nElem)
 	merged := make([]*types.Bytes, nBlk)
 
 	for i := 0; i < nBlk; i++ {
@@ -55,7 +55,7 @@ func ShuffleSegment(data []*types.Bytes, idx []uint16) {
 	nElem := len(data[0].Offsets)
 	nBlk := len(data)
 	cursors := make([]uint32, nBlk)
-	strings := make([][]byte, nBlk)
+	strings := make([][]byte, nElem)
 	merged := make([]*types.Bytes, nBlk)
 
 	k := 0
