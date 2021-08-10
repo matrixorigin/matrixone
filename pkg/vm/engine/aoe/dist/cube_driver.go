@@ -176,15 +176,22 @@ func NewCubeDriverWithOptions(
 
 	c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
 		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
-			/*if group != uint64(pb.AOEGroup) {
+			if group != uint64(pb.AOEGroup) {
 				return initAppliedIndex
 			}
-			adjustAppliedIndex, err := h.GetSegmentedId(shard.ID)
+			adjustAppliedIndex, err := h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
+				Matchers: []*dbi.StringMatcher{
+					{
+						Type:    dbi.MTPrefix,
+						Pattern: codec.Uint642String(shard.ID),
+					},
+				},
+			})
 			if err != nil {
 				panic(err)
 			}
-			return adjustAppliedIndex*/
-			return initAppliedIndex
+			return adjustAppliedIndex
+			//return initAppliedIndex
 		}
 	}
 
