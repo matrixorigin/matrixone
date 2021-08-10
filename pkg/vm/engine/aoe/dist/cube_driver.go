@@ -11,6 +11,7 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
+	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
@@ -188,6 +189,10 @@ func NewCubeDriverWithOptions(
 				},
 			})
 			if err != nil {
+				if err == adb.ErrNotFound {
+					stdLog.Printf("shard not found, %d, %d", group, shard.ID)
+					return initAppliedIndex
+				}
 				panic(err)
 			}
 			return adjustAppliedIndex
