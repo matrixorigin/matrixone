@@ -227,9 +227,9 @@ func TestLogIndex(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(800) * time.Millisecond)
+		time.Sleep(time.Duration(1000) * time.Millisecond)
 	} else {
-		time.Sleep(time.Duration(200) * time.Millisecond)
+		time.Sleep(time.Duration(300) * time.Millisecond)
 	}
 
 	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
