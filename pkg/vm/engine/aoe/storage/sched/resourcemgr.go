@@ -32,11 +32,12 @@ func (mgr *BaseResourceMgr) Start() {
 	mgr.handler.Start()
 }
 
-func (mgr *BaseResourceMgr) Close() {
+func (mgr *BaseResourceMgr) Close() error {
 	mgr.handler.Close()
 	for _, res := range mgr.resources {
 		res.Close()
 	}
+	return nil
 }
 
 func (mgr *BaseResourceMgr) Add(res Resource) error {
