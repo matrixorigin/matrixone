@@ -55,14 +55,14 @@ func (r *localRoRelation) Attribute() []metadata.Attribute {
 	return r.impl.Attribute()
 }
 
-func (r *localRoRelation) Write(*batch.Batch) error {
+func (r *localRoRelation) Write(_ uint64, _ *batch.Batch) error {
 	panic("not supported")
 }
 
-func (r *localRoRelation) AddAttribute(engine.TableDef) error {
+func (r *localRoRelation) AddAttribute(_ uint64, _ engine.TableDef) error {
 	panic("not supported")
 }
 
-func (r *localRoRelation) DelAttribute(engine.TableDef) error {
+func (r *localRoRelation) DelAttribute(_ uint64, _ engine.TableDef) error {
 	panic("not supported")
 }
