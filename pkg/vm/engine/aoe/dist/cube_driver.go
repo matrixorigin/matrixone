@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/matrixorigin/matrixcube/aware"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
+	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/proxy"
@@ -34,6 +35,12 @@ type CubeDriver interface {
 	Start() error
 	// Close close the storage
 	Close()
+
+	// InitShardPool create ShardsPool in raftstore
+	InitShardPool(capacity uint64) error
+
+	// GetShardPool return ShardsPool instance
+	GetShardPool() raftstore.ShardsPool
 
 	// Set set key value
 	Set([]byte, []byte) error
@@ -86,16 +93,9 @@ type CubeDriver interface {
 type driver struct {
 	app   *server.Application
 	store raftstore.Store
+	spool raftstore.ShardsPool
 	aoeDB *adb.DB
 	cmds  map[uint64]raftcmdpb.CMDType
-}
-
-func (h *driver) Start() error {
-	return h.app.Start()
-}
-
-func (h *driver) Close() {
-	h.app.Stop()
 }
 
 // NewCubeDriver returns a aoe request handler
@@ -151,14 +151,14 @@ func NewCubeDriverWithOptions(
 		initialGroups = append(initialGroups, bhmetapb.Shard{
 			Group: uint64(pb.KVGroup),
 		})
-		for i := uint64(0); i < c.ClusterConfig.PreAllocatedGroupNum; i++ {
+		/*for i := uint64(0); i < c.ClusterConfig.PreAllocatedGroupNum; i++ {
 			initialGroups = append(initialGroups, bhmetapb.Shard{
 				Group:        uint64(pb.AOEGroup),
 				Start:        codec.Uint642Bytes(i),
 				End:          codec.Uint642Bytes(i + 1),
 				DisableSplit: true,
 			})
-		}
+		}*/
 		return initialGroups
 	}
 
@@ -220,10 +220,30 @@ func NewCubeDriverWithOptions(
 	return h, nil
 }
 
+func (h *driver) Start() error {
+	return h.app.Start()
+}
+
+func (h *driver) InitShardPool(capacity uint64) error {
+	p, err := h.store.CreateResourcePool(metapb.ResourcePool{Group: uint64(pb.AOEGroup), Capacity: capacity, RangePrefix: codec.String2Bytes("aoe-")})
+	if err != nil {
+		return err
+	}
+	h.spool = p
+	return nil
+}
+
+func (h *driver) Close() {
+	h.app.Stop()
+}
+
 func (h *driver) AOEStore() *adb.DB {
 	return h.aoeDB
 }
 
+func (h *driver) GetShardPool() raftstore.ShardsPool {
+	return h.spool
+}
 func (h *driver) Set(key, value []byte) error {
 	return h.SetWithGroup(key, value, pb.KVGroup)
 }

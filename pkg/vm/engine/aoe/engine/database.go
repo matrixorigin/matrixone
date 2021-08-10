@@ -56,15 +56,15 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 		mp:      make(map[string]*adb.Relation),
 	}
 	r.tablets = tablets
-	ldb := db.catalog.Store.AOEStore()
+	ldb := db.catalog.Driver.AOEStore()
 	for _, tbl := range tablets {
-		if ids, err := db.catalog.Store.GetSegmentIds(tbl.Name, tbl.ShardId); err != nil {
+		if ids, err := db.catalog.Driver.GetSegmentIds(tbl.Name, tbl.ShardId); err != nil {
 			log.Errorf("get segmentInfos for tablet %s failed, %s", tbl.Name, err.Error())
 		} else {
 			if len(ids.Ids) == 0 {
 				continue
 			}
-			addr := db.catalog.Store.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
+			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
 			lRelation, err := ldb.Relation(tbl.Name)
 			if err != nil {
 				for _, v := range r.mp {

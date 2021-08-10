@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/fagongzi/log"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
@@ -62,6 +61,51 @@ func TestStorage(t *testing.T) {
 
 	//testKVStorage(t, c)
 	testAOEStorage(t, c)
+}
+
+func testAOEStorage(t *testing.T, c *testutil.TestCluster) {
+
+	shard, err := c.Applications[0].GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("byte"))
+	require.NoError(t, err)
+	//CreateTableTest
+	colCnt := 4
+	tableInfo := md.MockTableInfo(colCnt)
+	tableInfo.Id = 100
+	toShard := shard.ShardID
+	err = c.Applications[0].CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, tableInfo)
+	require.NoError(t, err)
+
+	names, err := c.Applications[0].TabletNames(toShard)
+	require.NoError(t, err)
+	require.Equal(t, 1, len(names))
+
+	//AppendTest
+	attrs := helper.Attribute(*tableInfo)
+	var typs []types.Type
+	for _, attr := range attrs {
+		typs = append(typs, attr.Type)
+	}
+
+	ids, err := c.Applications[0].GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
+	require.NoError(t, err)
+	require.Equal(t, 0, len(ids.Ids))
+	ibat := chunk.MockBatch(typs, blockRows)
+	var buf bytes.Buffer
+	err = protocol.EncodeBatch(ibat, &buf)
+	require.NoError(t, err)
+	for i := 0; i < blockCnt; i++ {
+		err = c.Applications[0].Append(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, buf.Bytes())
+		require.NoError(t, err)
+		segmentedIndex, err := c.Applications[0].GetSegmentedId(toShard)
+		require.NoError(t, err)
+		stdLog.Printf("[Debug]call GetSegmentedId after write %d batch, result is %d", i, segmentedIndex)
+	}
+	ids, err = c.Applications[0].GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
+	require.NoError(t, err)
+	stdLog.Printf("[Debug]SegmentIds is %v\n", ids)
+	require.Equal(t, segmentCnt, len(ids.Ids))
+
+	time.Sleep(3 * time.Second)
 }
 
 func testKVStorage(t *testing.T, c *testutil.TestCluster) {
@@ -143,51 +187,4 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 		}
 	}
 	fmt.Printf("time cost for 50 read is %d ms\n", time.Since(t0).Milliseconds())
-}
-
-func testAOEStorage(t *testing.T, c *testutil.TestCluster) {
-	var sharids []uint64
-	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
-		sharids = append(sharids, shard.ID)
-	})
-	require.Less(t, 0, len(sharids))
-	//CreateTableTest
-	colCnt := 4
-	tableInfo := md.MockTableInfo(colCnt)
-	tableInfo.Id = 100
-	toShard := sharids[0]
-	err := c.Applications[0].CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, tableInfo)
-	require.NoError(t, err)
-
-	names, err := c.Applications[0].TabletNames(toShard)
-	require.NoError(t, err)
-	require.Equal(t, 1, len(names))
-
-	//AppendTest
-	attrs := helper.Attribute(*tableInfo)
-	var typs []types.Type
-	for _, attr := range attrs {
-		typs = append(typs, attr.Type)
-	}
-
-	ids, err := c.Applications[0].GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
-	require.NoError(t, err)
-	require.Equal(t, 0, len(ids.Ids))
-	ibat := chunk.MockBatch(typs, blockRows)
-	var buf bytes.Buffer
-	err = protocol.EncodeBatch(ibat, &buf)
-	require.NoError(t, err)
-	for i := 0; i < blockCnt; i++ {
-		err = c.Applications[0].Append(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, buf.Bytes())
-		require.NoError(t, err)
-		segmentedIndex, err := c.Applications[0].GetSegmentedId(toShard)
-		require.NoError(t, err)
-		stdLog.Printf("[Debug]call GetSegmentedId after write %d batch, result is %d", i, segmentedIndex)
-	}
-	ids, err = c.Applications[0].GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
-	require.NoError(t, err)
-	stdLog.Printf("[Debug]SegmentIds is %v\n", ids)
-	require.Equal(t, segmentCnt, len(ids.Ids))
-
-	time.Sleep(3 * time.Second)
 }

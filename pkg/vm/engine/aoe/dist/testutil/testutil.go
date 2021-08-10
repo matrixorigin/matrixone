@@ -61,7 +61,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
 		}
 		cfg.ClusterConfig = config.ClusterConfig{
-			PreAllocatedGroupNum: 20,
+			PreAllocatedGroupNum: 5,
 		}
 		cfg.CubeConfig = cConfig.Config{
 			DataPath:   fmt.Sprintf("%s/node-%d", tmpDir, i),
@@ -101,6 +101,10 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 			err = a.Start()
 			if err != nil {
 				log.Fatal("cube driver start failed with %+v", err)
+			}
+			err = a.InitShardPool(cfg.ClusterConfig.PreAllocatedGroupNum)
+			if err != nil {
+				log.Fatal("InitShardPool failed with %+v", err)
 			}
 			c.AOEDBs = append(c.AOEDBs, aoeDataStorage)
 			c.Applications = append(c.Applications, a)

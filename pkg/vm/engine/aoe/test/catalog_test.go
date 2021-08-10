@@ -94,7 +94,7 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 
-	kvs, err := c.Store.Scan(codec.String2Bytes("DeletedTableQueue"), codec.String2Bytes("DeletedTableQueue10"), 0)
+	kvs, err := c.Driver.Scan(codec.String2Bytes("DeletedTableQueue"), codec.String2Bytes("DeletedTableQueue10"), 0)
 	require.NoError(t, err)
 	for i := 0; i < len(kvs); i += 2 {
 		tbl, err := helper.DecodeTable(kvs[i+1])

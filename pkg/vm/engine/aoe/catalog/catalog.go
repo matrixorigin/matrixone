@@ -29,7 +29,7 @@ const (
 )
 
 type Catalog struct {
-	Store dist.CubeDriver
+	Driver dist.CubeDriver
 }
 
 var gCatalog Catalog
@@ -38,7 +38,7 @@ var gInitOnce sync.Once
 func DefaultCatalog(store dist.CubeDriver) Catalog {
 	gInitOnce.Do(func() {
 		gCatalog = Catalog{
-			Store: store,
+			Driver: store,
 		}
 	})
 	return gCatalog
@@ -51,7 +51,7 @@ func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (uint64, 
 	if err != nil {
 		return 0, err
 	}
-	if err = c.Store.Set(c.dbIDKey(dbName), codec.Uint642Bytes(id)); err != nil {
+	if err = c.Driver.Set(c.dbIDKey(dbName), codec.Uint642Bytes(id)); err != nil {
 		return 0, err
 	}
 	info := aoe.SchemaInfo{
@@ -62,7 +62,7 @@ func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (uint64, 
 		Type:      typ,
 	}
 	value, _ := json.Marshal(info)
-	if err = c.Store.Set(c.dbKey(id), value); err != nil {
+	if err = c.Driver.Set(c.dbKey(id), value); err != nil {
 		return 0, err
 	}
 	return id, nil
@@ -74,15 +74,15 @@ func (c *Catalog) DelDatabase(epoch uint64, dbName string) (err error) {
 		if err = c.dropTables(epoch, db.Id); err != nil {
 			return err
 		}
-		if err = c.Store.Delete(c.dbKey(db.Id)); err != nil {
+		if err = c.Driver.Delete(c.dbKey(db.Id)); err != nil {
 			return err
 		}
-		err = c.Store.Delete(c.dbIDKey(dbName))
+		err = c.Driver.Delete(c.dbIDKey(dbName))
 		return err
 	}
 }
 func (c *Catalog) GetDBs() ([]aoe.SchemaInfo, error) {
-	values, err := c.Store.PrefixScan(c.dbPrefix(), 0)
+	values, err := c.Driver.PrefixScan(c.dbPrefix(), 0)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 	if err != nil {
 		return 0, err
 	}
-	err = c.Store.Set(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id))
+	err = c.Driver.Set(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id))
 	if err != nil {
 		return 0, ErrTableCreateFailed
 	}
@@ -129,10 +129,10 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
-		if err := c.Store.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
+		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
 			return 0, ErrTableCreateFailed
 		}
-		if c.Store.Set(rkey, []byte(tbl.Name)) != nil {
+		if c.Driver.Set(rkey, []byte(tbl.Name)) != nil {
 			return 0, ErrTableCreateFailed
 		}
 		tbl.State = aoe.StatePublic
@@ -141,17 +141,13 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 			return 0, ErrTableCreateFailed
 		}
 		//save metadata to kv
-		err = c.Store.Set(c.tableKey(dbId, tbl.Id), meta)
+		err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
 		if err != nil {
 			return 0, err
 		}
 		return tbl.Id, nil
 	}
-	//No available situation
-	//TODO: wait cube support shard pool
-	//tbl.State = aoe.StateNone
-	//return c.createShardForTable(dbId, tbl)
-	return 0, ErrTooMuchTableExists
+	return 0, ErrNoAvailableShard
 }
 func (c *Catalog) DropTable(epoch, dbId uint64, tableName string) (tid uint64, err error) {
 	_, err = c.checkDBExists(dbId)
@@ -166,13 +162,13 @@ func (c *Catalog) DropTable(epoch, dbId uint64, tableName string) (tid uint64, e
 	tb.State = aoe.StateDeleteOnly
 	tb.Epoch = epoch
 	value, _ := helper.EncodeTable(*tb)
-	if err = c.Store.Set(c.deletedTableKey(epoch, dbId, tb.Id), value); err != nil {
+	if err = c.Driver.Set(c.deletedTableKey(epoch, dbId, tb.Id), value); err != nil {
 		return tid, err
 	}
-	if err = c.Store.Delete(c.tableIDKey(dbId, tableName)); err != nil {
+	if err = c.Driver.Delete(c.tableIDKey(dbId, tableName)); err != nil {
 		return tid, err
 	}
-	if err = c.Store.Delete(c.tableKey(dbId, tb.Id)); err != nil {
+	if err = c.Driver.Delete(c.tableKey(dbId, tb.Id)); err != nil {
 		return tid, err
 	}
 	return tb.Id, err
@@ -193,13 +189,13 @@ func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
 		tbl.State = aoe.StateDeleteOnly
 		tbl.Epoch = epoch
 		value, _ := helper.EncodeTable(tbl)
-		if err = c.Store.Set(c.deletedTableKey(epoch, dbId, tbl.Id), value); err != nil {
+		if err = c.Driver.Set(c.deletedTableKey(epoch, dbId, tbl.Id), value); err != nil {
 			return err
 		}
-		if err = c.Store.Delete(c.tableIDKey(dbId, tbl.Name)); err != nil {
+		if err = c.Driver.Delete(c.tableIDKey(dbId, tbl.Name)); err != nil {
 			return err
 		}
-		if err = c.Store.Delete(c.tableKey(dbId, tbl.Id)); err != nil {
+		if err = c.Driver.Delete(c.tableKey(dbId, tbl.Id)); err != nil {
 			return err
 		}
 	}
@@ -209,7 +205,7 @@ func (c *Catalog) GetTables(dbId uint64) ([]aoe.TableInfo, error) {
 	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
-		values, err := c.Store.PrefixScan(c.tablePrefix(dbId), 0)
+		values, err := c.Driver.PrefixScan(c.tablePrefix(dbId), 0)
 		if err != nil {
 			return nil, err
 		}
@@ -249,7 +245,7 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 		if tb.State != aoe.StatePublic {
 			return nil, ErrTableNotExists
 		}
-		shardIds, err := c.Store.PrefixKeys(c.routePrefix(dbId, tb.Id), 0)
+		shardIds, err := c.Driver.PrefixKeys(c.routePrefix(dbId, tb.Id), 0)
 		if err != nil {
 			return nil, err
 		}
@@ -273,7 +269,7 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 // RemoveDeletedTable trigger gc
 // TODO: handle duplicated remove
 func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
-	rsp, err := c.Store.Scan(c.deletedPrefix(), c.deletedEpochPrefix(epoch+1), 0)
+	rsp, err := c.Driver.Scan(c.deletedPrefix(), c.deletedEpochPrefix(epoch+1), 0)
 	if err != nil {
 		stdLog.Printf("scan error, %v", err)
 		return cnt, err
@@ -283,7 +279,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 			stdLog.Printf("Decode err for table info, %v, %v", err, rsp[i])
 			continue
 		} else {
-			shardIds, err := c.Store.PrefixKeys(c.routePrefix(tbl.SchemaId, tbl.Id), 0)
+			shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.SchemaId, tbl.Id), 0)
 			if err != nil {
 				stdLog.Printf("Failed to get shards for table %v, %v", rsp[i], err)
 				continue
@@ -295,7 +291,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 					success = false
 					break
 				} else {
-					_, err = c.Store.DropTablet(c.encodeTabletName(sid, tbl.Id), sid)
+					_, err = c.Driver.DropTablet(c.encodeTabletName(sid, tbl.Id), sid)
 					if err != nil {
 						stdLog.Printf("call local drop table failed, %v", err)
 						success = false
@@ -304,7 +300,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 				}
 			}
 			if success {
-				if c.Store.Delete(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id)) != nil {
+				if c.Driver.Delete(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id)) != nil {
 					stdLog.Printf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
 				} else {
 					cnt++
@@ -316,7 +312,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 }
 func (c *Catalog) checkDBExists(id uint64) (*aoe.SchemaInfo, error) {
 	db := aoe.SchemaInfo{}
-	if v, err := c.Store.Get(c.dbKey(id)); err != nil {
+	if v, err := c.Driver.Get(c.dbKey(id)); err != nil {
 		return nil, ErrDBNotExists
 	} else {
 		if err = json.Unmarshal(v, &db); err != nil {
@@ -329,7 +325,7 @@ func (c *Catalog) checkDBExists(id uint64) (*aoe.SchemaInfo, error) {
 	return &db, nil
 }
 func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
-	if value, err := c.Store.Get(c.dbIDKey(dbName)); err != nil || value == nil {
+	if value, err := c.Driver.Get(c.dbIDKey(dbName)); err != nil || value == nil {
 		return nil, nil
 	} else {
 		id, _ := codec.Bytes2Uint64(value)
@@ -341,7 +337,7 @@ func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 	}
 }
 func (c *Catalog) checkTableExists(dbId, id uint64) (*aoe.TableInfo, error) {
-	if v, err := c.Store.Get(c.tableKey(dbId, id)); err != nil {
+	if v, err := c.Driver.Get(c.tableKey(dbId, id)); err != nil {
 		return nil, ErrTableNotExists
 	} else {
 		if table, err := helper.DecodeTable(v); err != nil {
@@ -355,7 +351,7 @@ func (c *Catalog) checkTableExists(dbId, id uint64) (*aoe.TableInfo, error) {
 	}
 }
 func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.TableInfo, error) {
-	if value, err := c.Store.Get(c.tableIDKey(dbId, tableName)); err != nil || value == nil {
+	if value, err := c.Driver.Get(c.tableIDKey(dbId, tableName)); err != nil || value == nil {
 		return nil, nil
 	} else {
 		id, _ := codec.Bytes2Uint64(value)
@@ -370,7 +366,7 @@ func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
 	return fmt.Sprintf("%d#%d", groupId, tableId)
 }
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
-	id, err := c.Store.AllocID(idKey)
+	id, err := c.Driver.AllocID(idKey)
 	if err != nil {
 		return 0, err
 	}
@@ -410,12 +406,12 @@ func (c *Catalog) deletedPrefix() []byte {
 	return codec.EncodeKey(cDeletedTablePrefix)
 }
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
-	var rsp []uint64
-	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+	/*var rsp []uint64
+	c.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Driver) {
 		if len(rsp) > 0 {
 			return
 		}
-		err := c.Store.SetIfNotExist(codec.Uint642Bytes(shard.ID), codec.Uint642Bytes(tid))
+		err := c.Driver.SetIfNotExist(codec.Uint642Bytes(shard.ID), codec.Uint642Bytes(tid))
 		if err == nil {
 			rsp = append(rsp, shard.ID)
 		}
@@ -423,8 +419,12 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	})
 	if len(rsp) == 1 {
 		return rsp[0], nil
+	}*/
+	shard, err := c.Driver.GetShardPool().Alloc(uint64(pb.AOEGroup), codec.Uint642Bytes(tid))
+	if err != nil {
+		return shardid, err
 	}
-	return shardid, errors.New("No available shards")
+	return shard.ShardID, errors.New("No available shards")
 }
 func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid uint64, err error) {
 	meta, err := helper.EncodeTable(tbl)
@@ -433,14 +433,14 @@ func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid u
 	}
 
 	//save metadata to kv
-	err = c.Store.Set(c.tableKey(dbId, tbl.Id), meta)
+	err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
 	if err != nil {
 		return 0, err
 	}
 
 	// TODO: support shared tables
 	// created shards
-	client := c.Store.RaftStore().Prophet().GetClient()
+	client := c.Driver.RaftStore().Prophet().GetClient()
 	tKey := c.tableKey(dbId, tbl.Id)
 	rKey := c.routePrefix(dbId, tbl.Id)
 	header := codec.Uint642Bytes(uint64(len(tKey) + len(rKey) + len([]byte("#"))))
@@ -452,7 +452,7 @@ func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid u
 	buf.Write(meta)
 	//find an available range for new shard
 	start := uint64(0)
-	c.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+	c.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 		end, _ := codec.Bytes2Uint64(shard.End)
 		if end > start {
 			start = end
