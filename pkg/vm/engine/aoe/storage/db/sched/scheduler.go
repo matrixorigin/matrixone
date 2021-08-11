@@ -23,9 +23,9 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	}
 
 	dispatcher := sched.NewBaseDispatcher()
-	flushblkHandler := sched.NewPoolHandler(8, nil)
+	flushblkHandler := sched.NewPoolHandler(1, nil)
 	flushblkHandler.Start()
-	flushsegHandler := sched.NewPoolHandler(4, nil)
+	flushsegHandler := sched.NewPoolHandler(1, nil)
 	flushsegHandler.Start()
 	metaHandler := sched.NewSingleWorkerHandler("metaHandler")
 	metaHandler.Start()

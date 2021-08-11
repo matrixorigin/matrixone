@@ -202,9 +202,6 @@ func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {
 		return ids
 	}
 	ids.Ids = data.SegmentIds()
-	// for _, id := range ids {
-	// 	infos = append(infos, engine.SegmentInfo{Id: strconv.FormatUint(id, 10)})
-	// }
 	return ids
 }
 
@@ -307,11 +304,6 @@ func (d *DB) startCleaner() {
 
 func (d *DB) startWorkers() {
 	d.Opts.GC.Acceptor.Start()
-	d.Opts.MemData.Updater.Start()
-	d.Opts.Data.Flusher.Start()
-	d.Opts.Data.Sorter.Start()
-	d.Opts.Meta.Flusher.Start()
-	d.Opts.Meta.Updater.Start()
 }
 
 func (d *DB) EnsureNotClosed() {
@@ -329,24 +321,10 @@ func (d *DB) IsClosed() bool {
 
 func (d *DB) stopWorkers() {
 	d.Opts.GC.Acceptor.Stop()
-	d.Opts.MemData.Updater.Stop()
-	d.Opts.Data.Flusher.Stop()
-	d.Opts.Data.Sorter.Stop()
-	d.Opts.Meta.Flusher.Stop()
-	d.Opts.Meta.Updater.Stop()
 }
 
 func (d *DB) stopCleaner() {
 	d.Cleaner.MetaFiles.Stop()
-}
-
-func (d *DB) WorkersStatsString() string {
-	s := fmt.Sprintf("%s\n", d.Opts.MemData.Updater.StatsString())
-	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Flusher.StatsString())
-	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Sorter.StatsString())
-	s = fmt.Sprintf("%s%s\n", s, d.Opts.Meta.Updater.StatsString())
-	s = fmt.Sprintf("%s%s\n", s, d.Opts.Meta.Flusher.StatsString())
-	return s
 }
 
 func (d *DB) Close() error {

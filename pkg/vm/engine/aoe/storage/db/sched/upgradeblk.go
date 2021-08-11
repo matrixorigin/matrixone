@@ -32,10 +32,8 @@ func (e *upgradeBlkEvent) Execute() error {
 	if err != nil {
 		return err
 	}
-	if e.Meta.Segment.DataState == md.CLOSED {
-		if e.Data.WeakRefSegment().CanUpgrade() {
-			e.SegmentClosed = true
-		}
+	if e.Data.WeakRefSegment().CanUpgrade() {
+		e.SegmentClosed = true
 	}
 	return nil
 }
