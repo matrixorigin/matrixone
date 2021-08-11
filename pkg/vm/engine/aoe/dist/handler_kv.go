@@ -11,7 +11,6 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
-	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 )
@@ -105,16 +104,11 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.PrefixScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-
-	stdLog.Printf("enter prefixScan, %d\t %v\t%v\t%v\t%v\t%v\n", shard.ID, shard.Start, shard.End, raftstore.DecodeDataKey(req.Key), customReq.Prefix, customReq.StartKey)
-
 	prefix := raftstore.EncodeDataKey(shard.Group, customReq.Prefix)
 	var data [][]byte
 	err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).PrefixScan(prefix, func(key, value []byte) (bool, error) {
-		stdLog.Printf("QQQQQQ, %d, %v, %v, %v\n", shard.ID, req.Key, prefix, key)
 		if (shard.Start != nil && bytes.Compare(shard.Start, raftstore.DecodeDataKey(key)) > 0) ||
 			(shard.End != nil && bytes.Compare(shard.End, raftstore.DecodeDataKey(key)) <= 0) {
-			stdLog.Printf("PPPPPP, %v, %v, %v\n", shard.Start, shard.End, key)
 			return true, nil
 		}
 		data = append(data, raftstore.DecodeDataKey(key))
@@ -125,7 +119,8 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 		resp.Value = errorResp(err)
 		return resp, 500
 	}
-	if data != nil && shard.End != nil {
+
+	if shard.End != nil && bytes.HasPrefix(shard.End, customReq.Prefix) {
 		data = append(data, shard.End)
 	}
 	if data != nil {
@@ -160,7 +155,7 @@ func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.
 		resp.Value = errorResp(err)
 		return resp, 500
 	}
-	if data != nil && shard.End != nil {
+	if shard.End != nil && bytes.Compare(shard.End, customReq.End) <= 0 {
 		data = append(data, shard.End)
 	}
 	if data != nil {

@@ -126,7 +126,6 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
-	t1.Name = "t1"
 	for i := uint64(10); i < 20; i++ {
 		t1.Name = fmt.Sprintf("t%d", i)
 		tid, err := c.CreateTable(i, dbid, *t1)
