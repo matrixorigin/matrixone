@@ -50,6 +50,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			ctr.state = Eval
 		case Eval:
+			if ctr.bat == nil {
+				proc.Reg.Ax = nil
+				ctr.state = End
+				return true, nil
+			}
 			if err := ctr.eval(proc); err != nil {
 				ctr.state = End
 				return true, err
