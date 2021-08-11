@@ -46,7 +46,7 @@ func rewriteExpr(n tree.Expr) tree.Expr {
 	case *tree.Tuple:
 	case *tree.FuncExpr:
 		if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok {
-			if len(e.Exprs) > 1 {
+			if len(e.Exprs) > 0 {
 				name.Parts[0] = strings.ToLower(name.Parts[0])
 				if _, ok := e.Exprs[0].(*tree.NumVal); ok && name.Parts[0] == "count" {
 					e.Func.FunctionReference = &tree.UnresolvedName{
