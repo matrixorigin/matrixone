@@ -8,7 +8,8 @@ import (
 )
 
 var (
-	eventId uint64 = 0
+	eventId     uint64 = 0
+	EventPrefix string = "Event"
 )
 
 type EventType uint16

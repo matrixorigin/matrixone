@@ -1,10 +1,10 @@
 package db
 
 import (
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	// log "github.com/sirupsen/logrus"
 )
 
 type upgradeBlkEvent struct {
@@ -33,7 +33,6 @@ func (e *upgradeBlkEvent) Execute() error {
 		return err
 	}
 	if e.Meta.Segment.DataState == md.CLOSED {
-		log.Infof("kkkkkkkkkkkk %v", e.Data)
 		if e.Data.WeakRefSegment().CanUpgrade() {
 			e.SegmentClosed = true
 		}
