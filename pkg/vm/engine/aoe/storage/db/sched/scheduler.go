@@ -26,6 +26,12 @@ func newMetaBlkCommiter(scheduler sched.Scheduler) *metablkCommiter {
 	return c
 }
 
+func (p *metablkCommiter) IsEmpty() bool {
+	p.RLock()
+	defer p.RUnlock()
+	return len(p.pendings) == 0
+}
+
 func (p *metablkCommiter) Register(e *precommitBlockEvent) {
 	p.Lock()
 	p.pendings = append(p.pendings, e.Id.BlockID)
@@ -132,11 +138,8 @@ func (s *scheduler) onPrecommitBlkDone(e sched.Event) {
 		commiter = newMetaBlkCommiter(s)
 		s.commiters.blkmap[event.Id.TableID] = commiter
 	}
-	s.commiters.mu.Unlock()
 	commiter.Register(event)
-	// ctx := &Context{Opts: s.opts}
-	// newevent := NewFlushMemtableEvent(ctx, event.MemTable)
-	// s.Schedule(newevent)
+	s.commiters.mu.Unlock()
 }
 
 func (s *scheduler) onFlushMemtableDone(e sched.Event) {
@@ -145,14 +148,11 @@ func (s *scheduler) onFlushMemtableDone(e sched.Event) {
 	commiter := s.commiters.blkmap[event.Meta.Segment.Table.ID]
 	s.commiters.mu.RUnlock()
 	commiter.Accept(event)
-	// if event.Meta == nil {
-	// 	return
-	// }
-	// ctx := &Context{
-	// 	Opts: s.opts,
-	// }
-	// newevent := NewCommitBlkEvent(ctx, event.Meta)
-	// s.Schedule(newevent)
+	s.commiters.mu.Lock()
+	if commiter.IsEmpty() {
+		delete(s.commiters.blkmap, event.Meta.Segment.Table.ID)
+	}
+	s.commiters.mu.Unlock()
 }
 
 func (s *scheduler) onCommitBlkDone(e sched.Event) {

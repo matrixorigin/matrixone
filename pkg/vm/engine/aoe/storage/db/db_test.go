@@ -408,7 +408,7 @@ func TestMultiTables(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	prefix := "mtable"
-	tblCnt := 4
+	tblCnt := 40
 	var names []string
 	for i := 0; i < tblCnt; i++ {
 		name := fmt.Sprintf("%s_%d", prefix, i)
