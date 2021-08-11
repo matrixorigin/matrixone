@@ -388,7 +388,7 @@ func (ctr *Container) probeUnit(start, count int, sels []int64,
 			if gs, ok := ctr.groups[h]; ok {
 				for k := 0; k < len(gs); k++ {
 					g := gs[k]
-					matchs, remaining = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs)
+					matchs, remaining = g.Probe(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs)
 					if len(matchs) > 0 {
 						if err := ctr.product(matchs, g, vecs, proc); err != nil {
 							return err
