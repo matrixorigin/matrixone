@@ -1,4 +1,4 @@
-package client
+package frontend
 
 import (
 	"bytes"
@@ -519,7 +519,7 @@ func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
 			//}
 		}
 
-		//sort them ascendingly
+		//sort them ascending
 		sort.Sort(eps)
 
 		maxRE := uint64(0)

@@ -1,4 +1,4 @@
-package client
+package frontend
 
 import (
 	"bytes"
@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-//a convenient data structure for closing
 type CloseFlag struct {
 	//closed flag
 	closed uint32
@@ -99,7 +98,8 @@ func (ul Uint64List) Swap(i,j int) {
 	ul[i],ul[j] = ul[j],ul[i]
 }
 
-//get the outine id
+
+// GetRoutineId gets the routine id
 func GetRoutineId() uint64 {
 	data := make([]byte, 64)
 	data = data[:runtime.Stack(data, false)]
@@ -189,7 +189,7 @@ func (t *Timeout) UpdateTime(tn time.Time) {
 
 return true  :  is timeout. the lastTime has been updated.
 return false :  is not timeout. the lastTime has not been updated.
- */
+*/
 func (t *Timeout) isTimeout() bool {
 	if time.Since(t.lastTime) <= t.timeGap {
 		return false

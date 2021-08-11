@@ -1,7 +1,7 @@
 package tree
 
 import (
-	"matrixone/pkg/client"
+	"matrixone/pkg/defines"
 )
 
 type Family int32
@@ -123,41 +123,41 @@ var (
 		Family:                IntFamily,
 		Width:                 8,
 		Locale:                &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_TINY),
+		Oid: uint32(defines.MYSQL_TYPE_TINY),
 	}}
 
 	TYPE_SHORT     = &T{InternalType: InternalType{
 		Family:                IntFamily,
 		Width:                 16,
 		Locale:                &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_SHORT),
+		Oid: uint32(defines.MYSQL_TYPE_SHORT),
 	}}
 
 	TYPE_LONG      = &T{InternalType: InternalType{
 		Family:                IntFamily,
 		Width:                 32,
 		Locale:                &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_LONG),
+		Oid: uint32(defines.MYSQL_TYPE_LONG),
 	}}
 
 	TYPE_FLOAT     = &T{InternalType: InternalType{
 		Family: FloatFamily,
 		Width:  32,
 		Locale: &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_FLOAT),
+		Oid: uint32(defines.MYSQL_TYPE_FLOAT),
 	}}
 
 	TYPE_DOUBLE    = &T{InternalType: InternalType{
 		Family: FloatFamily,
 		Width:  64,
 		Locale: &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_DOUBLE),
+		Oid: uint32(defines.MYSQL_TYPE_DOUBLE),
 	}}
 
 	TYPE_NULL      = &T{InternalType: InternalType{
 		Family: UnknownFamily,
 		Locale: &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_NULL),
+		Oid: uint32(defines.MYSQL_TYPE_NULL),
 	}}
 
 	TYPE_TIMESTAMP = &T{InternalType: InternalType{
@@ -165,27 +165,27 @@ var (
 		Precision:          0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_TIMESTAMP),
+		Oid: uint32(defines.MYSQL_TYPE_TIMESTAMP),
 	}}
 
 	TYPE_LONGLONG  = &T{InternalType: InternalType{
 		Family:                IntFamily,
 		Width:                 64,
 		Locale:                &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_LONGLONG),
+		Oid: uint32(defines.MYSQL_TYPE_LONGLONG),
 	}}
 
 	TYPE_INT24     = &T{InternalType: InternalType{
 		Family:                IntFamily,
 		Width:                 24,
 		Locale:                &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_INT24),
+		Oid: uint32(defines.MYSQL_TYPE_INT24),
 	}}
 
 	TYPE_DATE      = &T{InternalType: InternalType{
 		Family:                DateFamily,
 		Locale:                &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_DATE),
+		Oid: uint32(defines.MYSQL_TYPE_DATE),
 	}}
 
 	TYPE_DURATION  = &T{InternalType: InternalType{
@@ -193,7 +193,7 @@ var (
 		Precision:          0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_TIME),
+		Oid: uint32(defines.MYSQL_TYPE_TIME),
 		IntervalDurationField: &IntervalDurationField{},
 	}}
 
@@ -202,7 +202,7 @@ var (
 		Precision:          0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_TIME),
+		Oid: uint32(defines.MYSQL_TYPE_TIME),
 	}}
 
 	TYPE_DATETIME  = &T{InternalType: InternalType{
@@ -210,95 +210,95 @@ var (
 		Precision:          0,
 		TimePrecisionIsSet: false,
 		Locale:             &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_DATETIME),
+		Oid: uint32(defines.MYSQL_TYPE_DATETIME),
 	}}
 
 	TYPE_YEAR      = &T{InternalType: InternalType{
 		Family:                IntFamily,
 		Width:                 16,
 		Locale:                &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_YEAR),
+		Oid: uint32(defines.MYSQL_TYPE_YEAR),
 	}}
 
 	TYPE_NEWDATE   = &T{InternalType: InternalType{
 		Family: DateFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_NEWDATE),
+		Oid:uint32(defines.MYSQL_TYPE_NEWDATE),
 	}}
 
 	TYPE_VARCHAR   = &T{InternalType: InternalType{
 		Family:StringFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_VARCHAR),
+		Oid:uint32(defines.MYSQL_TYPE_VARCHAR),
 	}}
 
 	TYPE_BIT       = &T{InternalType: InternalType{
 		Family: BitFamily,
 		Locale: &emptyLocale,
-		Oid: uint32(client.MYSQL_TYPE_BIT),
+		Oid: uint32(defines.MYSQL_TYPE_BIT),
 	}}
 
 	TYPE_BOOL        = &T{InternalType: InternalType{
 		Family: BoolFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_BOOL),
+		Oid:uint32(defines.MYSQL_TYPE_BOOL),
 	}}
 
 	TYPE_JSON        = &T{InternalType: InternalType{
 		Family: JsonFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_JSON)}}
+		Oid:uint32(defines.MYSQL_TYPE_JSON)}}
 
 	TYPE_ENUM        = &T{InternalType: InternalType{
 		Family: EnumFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_ENUM),
+		Oid:uint32(defines.MYSQL_TYPE_ENUM),
 	}}
 
 	TYPE_SET         = &T{InternalType: InternalType{
 		Family: SetFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_SET),
+		Oid:uint32(defines.MYSQL_TYPE_SET),
 	}}
 
 	TYPE_TINY_BLOB   = &T{InternalType: InternalType{
 		Family: BlobFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_TINY_BLOB)}}
+		Oid:uint32(defines.MYSQL_TYPE_TINY_BLOB)}}
 
 	TYPE_MEDIUM_BLOB = &T{InternalType: InternalType{
 		Family: BlobFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_MEDIUM_BLOB),
+		Oid:uint32(defines.MYSQL_TYPE_MEDIUM_BLOB),
 	}}
 
 	TYPE_LONG_BLOB   = &T{InternalType: InternalType{
 		Family: BlobFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_LONG_BLOB),
+		Oid:uint32(defines.MYSQL_TYPE_LONG_BLOB),
 	}}
 
 	TYPE_BLOB        = &T{InternalType: InternalType{
 		Family: BlobFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_BLOB),
+		Oid:uint32(defines.MYSQL_TYPE_BLOB),
 	}}
 
 	TYPE_VARSTRING   = &T{InternalType: InternalType{
 		Family: StringFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_VAR_STRING),
+		Oid:uint32(defines.MYSQL_TYPE_VAR_STRING),
 	}}
 
 	TYPE_STRING      = &T{InternalType: InternalType{
 		Family: StringFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_STRING),
+		Oid:uint32(defines.MYSQL_TYPE_STRING),
 	}}
 
 	TYPE_GEOMETRY    = &T{InternalType: InternalType{
 		Family: GeometryFamily,
 		Locale: &emptyLocale,
-		Oid:uint32(client.MYSQL_TYPE_GEOMETRY),
+		Oid:uint32(defines.MYSQL_TYPE_GEOMETRY),
 	}}
 )
