@@ -2,6 +2,7 @@ package test
 
 import (
 	"fmt"
+	"github.com/fagongzi/log"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
@@ -10,6 +11,8 @@ import (
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
@@ -40,15 +43,24 @@ var (
 
 func TestCatalog(t *testing.T) {
 
-	c, err := testutil.NewTestClusterStore(t, true, nil)
-
-	defer c.Stop()
-
-	time.Sleep(2 * time.Second)
-
-	require.NoError(t, err)
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 5
+			c.ServerConfig.ExternalServer = true
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+			return daoe.NewStorage(path)
+		}), testutil.WithTestAOEClusterUsePebble())
+	c.Start()
 	stdLog.Printf("app all started.")
-	catalog := catalog2.DefaultCatalog(c.Applications[0])
+
+	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
+	stdLog.Printf("app all started.")
+
+	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
 	//testDBDDL(t, catalog)
 	testTableDDL(t, catalog)
 }

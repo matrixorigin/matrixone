@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/cockroachdb/errors"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	stdLog "log"
@@ -145,6 +144,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 		if err != nil {
 			return 0, err
 		}
+		stdLog.Printf("Create Table finished, key is %v", c.tableKey(dbId, tbl.Id))
 		return tbl.Id, nil
 	}
 	return 0, ErrNoAvailableShard
@@ -205,10 +205,13 @@ func (c *Catalog) GetTables(dbId uint64) ([]aoe.TableInfo, error) {
 	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
+		stdLog.Printf("Call GetTables, prefix is %v", c.tablePrefix(dbId))
 		values, err := c.Driver.PrefixScan(c.tablePrefix(dbId), 0)
 		if err != nil {
+			stdLog.Printf("Call GetTables failed %v", err)
 			return nil, err
 		}
+		stdLog.Printf("Call GetTables, prefix result size is %d", len(values))
 		var tables []aoe.TableInfo
 		for i := 1; i < len(values); i = i + 2 {
 			t, _ := helper.DecodeTable(values[i])
@@ -424,7 +427,7 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	if err != nil {
 		return shardid, err
 	}
-	return shard.ShardID, errors.New("No available shards")
+	return shard.ShardID, nil
 }
 func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid uint64, err error) {
 	meta, err := helper.EncodeTable(tbl)

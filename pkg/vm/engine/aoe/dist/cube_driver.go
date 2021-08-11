@@ -240,7 +240,6 @@ func NewCubeDriverWithFactory(
 }
 
 func (h *driver) Start() error {
-	stdLog.Printf("[QSQ]server config is %v", h.cfg.ServerConfig)
 	err := h.app.Start()
 	if err != nil {
 		return err
@@ -403,6 +402,7 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 	i := 0
 	for {
 		i = i + 1
+		stdLog.Printf("[Debug]PrefixScanWithGroup cnt is %d, startkey is %v", i, req.PrefixScan.StartKey)
 		data, err = h.ExecWithGroup(req, group)
 		if data == nil || err != nil {
 			break
@@ -443,7 +443,7 @@ func (h *driver) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group
 	i := 0
 	for {
 		i = i + 1
-		stdLog.Printf("[Debug]search cnt is %d, startkey is %s", i, codec.Bytes2String(req.PrefixScan.StartKey))
+
 		data, err = h.ExecWithGroup(req, group)
 		if data == nil || err != nil {
 			break

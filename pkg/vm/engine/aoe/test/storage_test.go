@@ -67,13 +67,18 @@ func TestStorage(t *testing.T) {
 			return daoe.NewStorageWithOptions(path, opts)
 		}), testutil.WithTestAOEClusterUsePebble())
 	c.Start()
-	stdLog.Printf("app all started.")
 
 	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
 
+	stdLog.Printf("app all started.")
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
+
 	//testAOEStorage(t, c)
 	testKVStorage(t, c)
-	c.Stop()
+
 }
 
 func TestRestartStorage(t *testing.T) {
@@ -104,13 +109,12 @@ func TestRestartStorage(t *testing.T) {
 		testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterRecreate(false)))
 	c.Start()
 	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
-	defer c.Stop()
-	d := c.CubeDrivers[0]
-	shard, err := d.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
-	require.NoError(t, err)
-	ids, err := d.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(shard.ShardID, tableInfo.Id)), shard.ShardID)
-	require.NoError(t, err)
-	require.Less(t, 0, len(ids.Ids))
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
+	testAOEStorageAfterRestart(t, c)
+	//testKVStorageAfterRestart(t, c)
 }
 
 func testAOEStorage(t *testing.T, c *testutil.TestAOECluster) {
@@ -154,6 +158,15 @@ func testAOEStorage(t *testing.T, c *testutil.TestAOECluster) {
 	require.Equal(t, segmentCnt, len(ids.Ids))
 
 	time.Sleep(3 * time.Second)
+}
+
+func testAOEStorageAfterRestart(t *testing.T, c *testutil.TestAOECluster) {
+	d := c.CubeDrivers[0]
+	shard, err := d.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
+	require.NoError(t, err)
+	ids, err := d.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(shard.ShardID, tableInfo.Id)), shard.ShardID)
+	require.NoError(t, err)
+	require.Less(t, 0, len(ids.Ids))
 }
 
 func testKVStorage(t *testing.T, c *testutil.TestAOECluster) {
@@ -236,4 +249,12 @@ func testKVStorage(t *testing.T, c *testutil.TestAOECluster) {
 		}
 	}
 	fmt.Printf("time cost for 50 read is %d ms\n", time.Since(t0).Milliseconds())
+}
+
+func testKVStorageAfterRestart(t *testing.T, c *testutil.TestAOECluster) {
+	app := c.CubeDrivers[0]
+
+	kvs, err := app.Scan([]byte("/prefix/"), []byte("/prefix/2/"), 0)
+	require.NoError(t, err)
+	require.Equal(t, 20, len(kvs))
 }
