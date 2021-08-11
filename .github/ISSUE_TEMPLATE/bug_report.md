@@ -7,7 +7,10 @@ labels: kind/bug, needs-triage
 
 <!-- Please describe your issue in English. -->
 
-#### How to reproduce:
+#### Can be reproduced ?
+
+
+#### Steps:
 
 
 #### Expected behavior:
