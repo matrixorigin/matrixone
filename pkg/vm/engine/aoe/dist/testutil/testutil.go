@@ -109,7 +109,12 @@ func (opts *testAOEClusterOptions) adjust() {
 
 // TestAOECluster is a test cluster for testing.
 type TestAOECluster struct {
-	t                *testing.T
+	// init fields
+	t              *testing.T
+	initOpts       []TestAOEClusterOption
+	initCfgCreator func(node int) *config.Config
+
+	// reset fields
 	opts             *testAOEClusterOptions
 	RaftCluster      *raftstore.TestRaftCluster
 	CubeDrivers      []dist.CubeDriver
@@ -119,23 +124,36 @@ type TestAOECluster struct {
 }
 
 func NewTestAOECluster(t *testing.T, cfgCreator func(node int) *config.Config, opts ...TestAOEClusterOption) *TestAOECluster {
-	c := &TestAOECluster{t: t, opts: newTestAOEClusterOptions()}
-	for _, opt := range opts {
+	c := &TestAOECluster{t: t, initOpts: opts, initCfgCreator: cfgCreator}
+	c.reset()
+	return c
+}
+
+func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
+	c.RaftCluster = nil
+	c.CubeDrivers = nil
+	c.AOEStorages = nil
+	c.MetadataStorages = nil
+	c.DataStorages = nil
+	c.opts = newTestAOEClusterOptions()
+
+	for _, opt := range c.initOpts {
 		opt(c.opts)
 	}
 	c.opts.adjust()
+	c.opts.raftOptions = append(c.opts.raftOptions, opts...)
 
 	c.opts.raftOptions = append(c.opts.raftOptions, raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
 		meta, err := c.opts.metaFactoryFunc(fmt.Sprintf("%s/meta", cfg.DataPath))
-		assert.NoError(t, err)
+		assert.NoError(c.t, err)
 		c.MetadataStorages = append(c.MetadataStorages, meta)
 
 		data, err := c.opts.kvDataFactoryFunc(fmt.Sprintf("%s/data", cfg.DataPath))
-		assert.NoError(t, err)
+		assert.NoError(c.t, err)
 		c.DataStorages = append(c.DataStorages, data)
 
 		aoe, err := c.opts.aoeFactoryFunc(fmt.Sprintf("%s/aoe", cfg.DataPath))
-		assert.NoError(t, err)
+		assert.NoError(c.t, err)
 		c.AOEStorages = append(c.AOEStorages, aoe)
 
 		cfg.Replication.ShardHeartbeatDuration = typeutil.NewDuration(time.Millisecond * 100)
@@ -145,24 +163,30 @@ func NewTestAOECluster(t *testing.T, cfgCreator func(node int) *config.Config, o
 		cfg.Replication.ShardCapacityBytes = 100
 		cfg.Replication.ShardSplitCheckBytes = 80
 	}), raftstore.WithTestClusterStoreFactory(func(node int, cfg *cConfig.Config) raftstore.Store {
-		dCfg := cfgCreator(node)
+		dCfg := c.initCfgCreator(node)
 		dCfg.CubeConfig = *cfg
+		dCfg.ServerConfig.Addr = fmt.Sprintf("127.0.0.1:809%d", node)
 		d, err := dist.NewCubeDriverWithFactory(c.MetadataStorages[node], c.DataStorages[node], c.AOEStorages[node], dCfg, func(c *cConfig.Config) (raftstore.Store, error) {
 			return raftstore.NewStore(c), nil
 		})
-		assert.NoError(t, err)
+		assert.NoError(c.t, err)
 		c.CubeDrivers = append(c.CubeDrivers, d)
 		return d.RaftStore()
 	}), raftstore.WithTestClusterNodeStartFunc(func(node int, store raftstore.Store) {
-		assert.NoError(t, c.CubeDrivers[node].Start())
+		assert.NoError(c.t, c.CubeDrivers[node].Start())
 	}))
 
-	c.RaftCluster = raftstore.NewTestClusterStore(t, c.opts.raftOptions...)
-	return c
+	c.RaftCluster = raftstore.NewTestClusterStore(c.t, c.opts.raftOptions...)
 }
 
 func (c *TestAOECluster) Start() {
 	c.RaftCluster.Start()
+}
+
+func (c *TestAOECluster) Restart() {
+	c.Stop()
+	c.reset(raftstore.WithTestClusterRecreate(false))
+	c.Start()
 }
 
 func (c *TestAOECluster) Stop() {
@@ -220,7 +244,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 		}
 		cfg := &config.Config{}
 		cfg.ServerConfig = server.Cfg{
-			ExternalServer: true,
+			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
 		}
 		cfg.ClusterConfig = config.ClusterConfig{
 			PreAllocatedGroupNum: 5,
