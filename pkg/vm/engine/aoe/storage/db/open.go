@@ -6,9 +6,11 @@ import (
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"sync/atomic"
+	"time"
 )
 
 func Open(dirname string, opts *e.Options) (db *DB, err error) {
@@ -21,6 +23,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 			dbLocker.Close()
 		}
 	}()
+	logutil.SetupLogger()
 	opts.FillDefaults(dirname)
 	metaReplayHandle := NewMetaHandle(dirname)
 
@@ -58,5 +61,10 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	db.startCleaner()
 	db.startWorkers()
 	db.DBLocker, dbLocker = dbLocker, nil
+	for i := 0; i < 100; i++ {
+		logutil.Info("this is an info log")
+		logutil.Debugf("this is an formatted debug log  %d", i)
+		time.Sleep(1000 * time.Millisecond)
+	}
 	return db, err
 }

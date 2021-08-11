@@ -24,9 +24,11 @@ require (
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.7.0
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
+	go.uber.org/zap v1.15.0
 	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b // indirect
 	golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f
 	golang.org/x/tools v0.0.0-20201105001634-bc3cf281b174 // indirect
+	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
 replace go.etcd.io/etcd => github.com/deepfabric/etcd v1.4.15
