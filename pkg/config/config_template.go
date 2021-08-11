@@ -702,11 +702,11 @@ type {{.ParameterStructName}} struct{
 	//read and write lock
 	rwlock	sync.RWMutex
 {{range .Parameter}}
-	{{ printf "/**\n\tName:\t%s\n\tScope:\t%s\n\tAccess:\t%s\n\tDataType:\t%s\n\tDomainType:\t%s\n\tValues:\t%s\n\tComment:\t%s\n\tUpdateMode:\t%s\n\t*/"  
+	{{ printf "\n\t/**\n\tName:\t%s\n\tScope:\t%s\n\tAccess:\t%s\n\tDataType:\t%s\n\tDomainType:\t%s\n\tValues:\t%s\n\tComment:\t%s\n\tUpdateMode:\t%s\n\t*/"  
 			.Name .Scope .Access .DataType .DomainType .Values .Comment .UpdateMode
 	}}
 	{{ printf "%s    %s" .Name .DataType }}
-{{end}}
+{{- end}}
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -716,16 +716,14 @@ type {{.ParameterStructName}} struct{
 type {{.ConfigurationStructName}} struct{
 	//read and write lock
 	rwlock	sync.RWMutex
-
 {{range .Parameter}}
-	{{ if ne .UpdateMode "fix"}}
-	{{ printf "/**\n\tName:\t%s\n\tScope:\t%s\n\tAccess:\t%s\n\tDataType:\t%s\n\tDomainType:\t%s\n\tValues:\t%s\n\tComment:\t%s\n\tUpdateMode:\t%s\n\t*/"  
+	{{- if ne .UpdateMode "fix"}}
+	{{ printf "\n\t/**\n\tName:\t%s\n\tScope:\t%s\n\tAccess:\t%s\n\tDataType:\t%s\n\tDomainType:\t%s\n\tValues:\t%s\n\tComment:\t%s\n\tUpdateMode:\t%s\n\t*/"  
 			.Name .Scope .Access .DataType .DomainType .Values .Comment .UpdateMode
 	}}
 	{{ printf "%s    %s  `+"`toml:"+`\"%s\"`+"`"+`" .CapitalName .DataType .Name }}
-
-	{{end}}
-{{end}}
+	{{- end}}
+{{- end}}
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -763,10 +761,10 @@ func (ap *{{.ParameterStructName}}) GetDefinition(name string)(string,error){
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	ap.prepareAnything()
-	if p,ok := ap.name2definition[name];!ok{
-		return "",fmt.Errorf("there is no parameter %s",name)
-	}else{
-		return p,nil
+	if p,ok := ap.name2definition[name]; !ok {
+		return "", fmt.Errorf("there is no parameter %s",name)
+	} else {
+		return p, nil
 	}
 }
 
@@ -777,9 +775,9 @@ func (ap *{{.ParameterStructName}}) HasParameter(name string)bool{
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	ap.prepareAnything()
-	if _,ok := ap.name2definition[name];!ok{
+	if _,ok := ap.name2definition[name]; !ok{
 		return false
-	}else{
+	} else {
 		return true
 	}
 }
@@ -790,56 +788,51 @@ Load the initial values of all parameters.
 func (ap *{{.ParameterStructName}}) LoadInitialValues()error{
 	ap.PrepareDefinition()
 	var err error
-	{{range .Parameter}}
-		
-		{{if eq .DataType "string"}}
-			{{.Name}}choices :=[]{{.DataType}} {
-				{{range .Values}}
-				{{printf "\"%s\"" .}},
-				{{end}}	
-			}
-			if len({{.Name}}choices) != 0{
-				if err = ap.set{{.CapitalName}}( {{.Name}}choices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
-				}
-			}else{
-				//empty string
-				if err = ap.set{{.CapitalName}}( "" ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
-				}
-			}
-		{{else}}
-			{{.Name}}choices :=[]{{.DataType}} {
-				{{range .Values}}
-				{{printf "%s" .}},
-				{{end}}	
-			}
-			if len({{.Name}}choices) != 0{
-				if err = ap.set{{.CapitalName}}( {{.Name}}choices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
-				}
-			}else{
-				{{if eq .DataType "bool"}}
-					if err = ap.set{{.CapitalName}}( false ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
-					}	
-				{{else if  eq .DataType "int64"}}
-					if err = ap.set{{.CapitalName}}( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
-					}
-				{{else if eq .DataType "float64"}}
-					if err = ap.set{{.CapitalName}}( 0.0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
-					}
-				{{end}}
-			}
-		{{end}}
-	{{end}}
+	{{range .Parameter }}
+	{{if eq .DataType "string"}}
+	{{.Name}}choices := []{{.DataType}} {
+		{{range .Values -}}
+		{{printf "\"%s\"" .}},
+		{{- end}} 
+	}
+	if len({{.Name}}choices) != 0 {
+		if err = ap.set{{.CapitalName}}({{.Name}}choices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
+		}
+	} else {
+		//empty string
+		if err = ap.set{{.CapitalName}}("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
+		}
+	}{{else}}
+	{{.Name}}choices :=[]{{.DataType}} {
+		{{range .Values -}}
+		{{printf "%s" .}},
+		{{- end}}
+	}
+	if len({{.Name}}choices) != 0 {
+		if err = ap.set{{.CapitalName}}({{.Name}}choices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
+		}
+	} else { {{if eq .DataType "bool"}}
+		if err = ap.set{{.CapitalName}}(false) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
+		}
+	{{else if eq .DataType "int64"}}
+		if err = ap.set{{.CapitalName}}(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
+		}
+	{{else if eq .DataType "float64"}}
+		if err = ap.set{{.CapitalName}}(0.0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v",{{printf "\"%s\"" .CapitalName}},err)
+		}
+	{{- end -}} }
+	{{- end}}
+	{{- end}}
 	return nil
 }
-
 {{with $Params := .}}
-{{range $Params.Parameter}}
+{{- range $Params.Parameter}}
 /**
 Get the value of the parameter {{.Name}}
 */
@@ -849,98 +842,89 @@ func (ap * {{$Params.ParameterStructName}} ) Get{{.CapitalName}}() {{.DataType}}
 	return ap.{{.Name}}
 }
 {{end}}
-{{end}}
-
+{{end -}}
 
 {{with $Params := .}}
-{{range $Params.Parameter}}
-{{ if ne .UpdateMode "fix"}}
+{{- range $Params.Parameter}}
+{{- if ne .UpdateMode "fix"}}
 /**
 Set the value of the parameter {{.Name}}
 */
 func (ap * {{$Params.ParameterStructName}} ) Set{{.CapitalName}}(value {{.DataType}})error {
 	return  ap.set{{.CapitalName}}(value)
 }
-{{end}}
-{{end}}
-{{end}}
+{{end -}}
+{{end -}}
+{{end -}}
 
 {{with $Params := .}}
-{{range $Params.Parameter}}
+{{- range $Params.Parameter}}
 /**
 Set the value of the parameter {{.Name}}
 */
 func (ap * {{$Params.ParameterStructName}} ) set{{.CapitalName}}(value {{.DataType}})error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
-	{{if eq .DataType "bool"}}
-		
-		{{if eq .DomainType "set"}}
-			choices :=[]{{.DataType}} {
-				{{range .Values}}
-				{{printf "%s" .}},
-				{{end}}	
+	{{if eq .DataType "bool" -}}
+	{{if eq .DomainType "set" -}}
+		choices :=[]{{.DataType}} {
+			{{range .Values -}}
+			{{printf "%s" .}},
+			{{- end}}	
+		}
+		if len( choices ) != 0{
+			if !isInSliceBool(value, choices){
+				return fmt.Errorf("set{{.CapitalName}},the value %t is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceBool(value, choices){
-					return fmt.Errorf("set{{.CapitalName}},the value %t is not in set %v",value,choices)
-				}
-			}//else means any bool value: true or false
-		{{else}}
-			return fmt.Errorf("the bool type does not support domainType %s",{{printf "\"%s\"" .DomainType}})
-		{{end}}
-
-	{{else if eq .DataType "string"}}
-
-		{{if eq .DomainType "set"}}
-			choices :=[]{{.DataType}} {
-				{{range .Values}}
-				{{printf "\"%s\"" .}},
-				{{end}}	
+		}//else means any bool value: true or false
+	{{else}}
+		return fmt.Errorf("the bool type does not support domainType %s",{{printf "\"%s\"" .DomainType}})
+	{{- end}}
+	{{else if eq .DataType "string" -}}
+	{{if eq .DomainType "set"}}
+		choices :=[]{{.DataType}} {
+			{{range .Values -}}
+			{{printf "\"%s\"" .}},
+			{{- end}}	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("set{{.CapitalName}},the value %s is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSlice(value, choices){
-					return fmt.Errorf("set{{.CapitalName}},the value %s is not in set %v",value,choices)
-				}
-			}//else means any string
-		{{else}}
-			return fmt.Errorf("the string type does not support domainType %s",{{printf "\"%s\"" .DomainType}})
-		{{end}}
-
+		}//else means any string
+	{{else}}
+		return fmt.Errorf("the string type does not support domainType %s",{{printf "\"%s\"" .DomainType}})
+	{{- end}}
 	{{else if eq .DataType "int64"}}
-
-		{{if eq .DomainType "set"}}
-			choices :=[]{{.DataType}} {
-				{{range .Values}}
-				{{printf "%s" .}},
-				{{end}}	
+	{{if eq .DomainType "set"}}
+		choices :=[]{{.DataType}} {
+			{{range .Values -}}
+			{{printf "%s" .}},
+			{{- end}}	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("set{{.CapitalName}},the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("set{{.CapitalName}},the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		{{else if eq .DomainType "range"}}
-			choices :=[]{{.DataType}} {
-				{{range .Values}}
-				{{printf "%s" .}},
-				{{end}}	
-			}
-			if !(value >= choices[1] && value <= choices[2]){
-				return fmt.Errorf("set{{.CapitalName}},the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
-			}
-		{{else}}
-			return fmt.Errorf("the int64 type does not support domainType %s",{{printf "\"%s\"" .DomainType}})
-		{{end}}
-
+		}//else means any int64
+	{{else if eq .DomainType "range"}}
+		choices :=[]{{.DataType}} {
+			{{range .Values -}}
+			{{printf "%s" .}},
+			{{- end}}	
+		}
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("set{{.CapitalName}},the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
+	{{else}}
+		return fmt.Errorf("the int64 type does not support domainType %s",{{printf "\"%s\"" .DomainType}})
+	{{- end}}
 	{{else if eq .DataType "float64"}}
-
 		{{if eq .DomainType "set"}}
 			choices :=[]{{.DataType}} {
-				{{range .Values}}
+				{{range .Values -}}
 				{{printf "%s" .}},
-				{{end}}	
+				{{- end}}	
 			}
 			if len( choices ) != 0{
 				if !isInSliceFloat64(value, choices){
@@ -949,9 +933,9 @@ func (ap * {{$Params.ParameterStructName}} ) set{{.CapitalName}}(value {{.DataTy
 			}//else means any float64
 		{{else if eq .DomainType "range"}}
 			choices :=[]{{.DataType}} {
-				{{range .Values}}
+				{{range .Values -}}
 				{{printf "%s" .}},
-				{{end}}	
+				{{- end}}	
 			}
 			if !(value >= choices[1] && value <= choices[2]){
 				return fmt.Errorf("set{{.CapitalName}},the value %f is not in the range [%f,%f]",value,choices[1],choices[2])
@@ -959,8 +943,7 @@ func (ap * {{$Params.ParameterStructName}} ) set{{.CapitalName}}(value {{.DataTy
 		{{else}}
 			return fmt.Errorf("the float64 type does not support domainType %s",{{printf "\"%s\"" .DomainType}})
 		{{end}}
-	{{end}}
-
+	{{- end}}
 	ap.{{.Name}} = value
 	return nil
 }
@@ -984,11 +967,11 @@ func (config *{{.ConfigurationStructName}}) resetUpdatedFlags(){
 	config.rwlock.Lock()
 	defer config.rwlock.Unlock()
 	config.prepareAnything()
-	{{range .Parameter}}
-	{{ if ne .UpdateMode "fix"}}
-		{{ printf "config.name2updatedFlags[\"%s\"] = false" .Name}}
-	{{end}}
-	{{end}}
+	{{- range .Parameter}}
+	{{- if ne .UpdateMode "fix"}}
+	{{ printf "config.name2updatedFlags[\"%s\"] = false" .Name}}
+	{{- end}}
+	{{- end}}
 }
 
 /**
@@ -1064,15 +1047,15 @@ Update parameters' values with configuration.
 */
 func (ap * {{.ParameterStructName}} ) UpdateParametersWithConfiguration(config *{{.ConfigurationStructName}})error{
 	var err error
-	{{range .Parameter}}
-	{{ if ne .UpdateMode "fix"}}
+	{{- range .Parameter}}
+	{{- if ne .UpdateMode "fix"}}
 	if config.getUpdatedFlag("{{.Name}}"){
 		if err = ap.set{{.CapitalName}}(config.{{.CapitalName}}); err != nil{
 			return fmt.Errorf("update parameter {{.Name}} failed.error:%v",err)
 		}
 	}
-	{{end}}
-	{{end}}
+	{{- end}}
+	{{- end}}
 	return nil
 }
 
@@ -1093,10 +1076,9 @@ func Load{{.ConfigurationStructName}}FromFile(filename string,params *{{.Paramet
 }
 `
 
-var defaultConfigurationTemplate=`
-# Code generated by tool; DO NOT EDIT.
-{{range $index,$param := .Parameter}}
-{{ if ne .UpdateMode "fix"}}
+var defaultConfigurationTemplate=`# Code generated by tool; DO NOT EDIT.
+{{range $index, $param := .Parameter -}}
+{{ if ne .UpdateMode "fix" -}}
 	{{ printf "\n#\tName:\t%s\n#\tScope:\t%s\n#\tAccess:\t%s\n#\tDataType:\t%s\n#\tDomainType:\t%s\n#\tValues:\t%s\n#\tComment:\t%s\n#\tUpdateMode:\t%s\n\t"  
 			.Name .Scope .Access .DataType .DomainType .Values .Comment .UpdateMode
 	}}
@@ -1104,24 +1086,24 @@ var defaultConfigurationTemplate=`
 	{{- with $count := len .Values -}}
 		{{- if ne 0 $count -}}
 			{{- if eq $param.DataType "string" -}}
-				{{- $param.Name -}} = "{{- index $param.Values 0 -}}"
-			{{- else -}}
-				{{- $param.Name -}} = {{- index $param.Values 0 -}}
-			{{- end -}}
-		{{- end -}}
-	{{- else -}}
+				{{- $param.Name}} = "{{index $param.Values 0}}"
+			{{else}}
+				{{- $param.Name}} = {{index $param.Values 0}}
+			{{end}}
+		{{- end}}
+{{- else}}
 		{{- if eq $param.DataType "string" -}}
-			{{- $param.Name -}} = ""
+				{{- $param.Name}} = ""
 		{{- else if eq $param.DataType "bool" -}}
-			{{- $param.Name -}} = false
+				{{- $param.Name}} = false
 		{{- else if eq $param.DataType "int64" -}}
-			{{- $param.Name -}} = 0
+				{{- $param.Name}} = 0
 		{{- else if eq $param.DataType "float64" -}}
-			{{- $param.Name -}} = 0.0
-		{{- end -}}
-	{{- end -}}
-{{end}}
-{{end}}
+				{{- $param.Name}} = 0.0
+		{{- end}}
+	{{end}}
+{{- end}}
+{{- end}}
 `
 
 var defaultOperationTestTemplate=`
