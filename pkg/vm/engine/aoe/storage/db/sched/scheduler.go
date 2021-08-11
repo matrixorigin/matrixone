@@ -23,9 +23,9 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	}
 
 	dispatcher := sched.NewBaseDispatcher()
-	flushblkHandler := sched.NewPoolHandler(1, nil)
+	flushblkHandler := sched.NewPoolHandler(8, nil)
 	flushblkHandler.Start()
-	flushsegHandler := sched.NewPoolHandler(1, nil)
+	flushsegHandler := sched.NewPoolHandler(4, nil)
 	flushsegHandler.Start()
 	metaHandler := sched.NewSingleWorkerHandler("metaHandler")
 	metaHandler.Start()
@@ -40,7 +40,9 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	dispatcher.RegisterHandler(sched.CommitBlkTask, metaHandler)
 	dispatcher.RegisterHandler(sched.UpgradeBlkTask, memdataHandler)
 	dispatcher.RegisterHandler(sched.UpgradeSegTask, memdataHandler)
-	dispatcher.RegisterHandler(sched.MetaUpdateEvent, metaHandler)
+	dispatcher.RegisterHandler(sched.MetaCreateTableTask, metaHandler)
+	dispatcher.RegisterHandler(sched.MetaDropTableTask, metaHandler)
+	dispatcher.RegisterHandler(sched.MetaCreateBlkTask, metaHandler)
 	dispatcher.RegisterHandler(sched.MemdataUpdateEvent, memdataHandler)
 	dispatcher.RegisterHandler(sched.FlushTableMetaTask, metaHandler)
 
@@ -50,7 +52,9 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	s.RegisterDispatcher(sched.CommitBlkTask, dispatcher)
 	s.RegisterDispatcher(sched.UpgradeBlkTask, dispatcher)
 	s.RegisterDispatcher(sched.UpgradeSegTask, dispatcher)
-	s.RegisterDispatcher(sched.MetaUpdateEvent, dispatcher)
+	s.RegisterDispatcher(sched.MetaCreateTableTask, dispatcher)
+	s.RegisterDispatcher(sched.MetaDropTableTask, dispatcher)
+	s.RegisterDispatcher(sched.MetaCreateBlkTask, dispatcher)
 	s.RegisterDispatcher(sched.MemdataUpdateEvent, dispatcher)
 	s.RegisterDispatcher(sched.FlushTableMetaTask, dispatcher)
 	s.Start()

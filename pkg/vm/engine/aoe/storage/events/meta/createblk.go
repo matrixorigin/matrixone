@@ -23,7 +23,7 @@ func NewCreateBlkEvent(ctx *Context, tid uint64, tableData iface.ITableData) *cr
 	}
 	e.baseEvent = baseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, ctx.DoneCB, ctx.Waitable),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MetaCreateBlkTask, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

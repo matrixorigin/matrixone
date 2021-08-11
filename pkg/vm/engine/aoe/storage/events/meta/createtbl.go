@@ -21,7 +21,7 @@ func NewCreateTableEvent(ctx *Context, reqCtx dbi.TableOpCtx, tableInfo *aoe.Tab
 	}
 	e.baseEvent = baseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, ctx.DoneCB, ctx.Waitable),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MetaCreateTableTask, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

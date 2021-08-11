@@ -26,7 +26,7 @@ func NewDropTableEvent(ctx *Context, reqCtx dbi.DropTableCtx, mtMgr mtif.IManage
 	}
 	e.baseEvent = baseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.MetaUpdateEvent, ctx.DoneCB, ctx.Waitable),
+		BaseEvent: *sched.NewBaseEvent(e, sched.MetaDropTableTask, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

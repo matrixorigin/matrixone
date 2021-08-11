@@ -1,7 +1,7 @@
 package db
 
 import (
-	log "github.com/sirupsen/logrus"
+	// log "github.com/sirupsen/logrus"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
