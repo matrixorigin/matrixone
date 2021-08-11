@@ -1,0 +1,73 @@
+name: Bug Report
+description: Create a bug report to help us improve the product
+title: "[Bug]: "
+labels: [kind/bug, needs-triage]
+# assignees:
+#   - 'assignees-id'
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to fill out this bug report!
+
+  - type: input
+    id: contact
+    attributes:
+      label: Contact Details
+      description: How can we get in touch with you if we need more info?
+      placeholder: ex. email@example.com
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: reproduced
+    attributes:
+      label: Can this bug be reproduced
+      description: By submitting this issue, you agree to follow our [Code of Conduct](https://example.com)
+      options:
+        - label: reproducible
+        - label: intermittent
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Step to produce the bug
+      description: Also tell us, what did you expect to happen?
+      placeholder: Tell us what you see!
+      value: "A bug happened!"
+    validations:
+      required: true
+
+  - type: textarea
+    id: version
+    attributes:
+      label: Version
+      description: What version / commit-id of our software are you running?
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Hardware and OS parameters?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Please copy and paste any relevant log output. This will be automatically formatted into code, so no need for backticks.
+      render: shell
+
+  - type: textarea
+    id: additionalcontext
+    attributes:
+      label: Additional context
+      description: Please paste any information to help understand the issue.
+    validations:
+      required: false
+
