@@ -1,4 +1,4 @@
-package client
+package defines
 
 import (
 	"fmt"
@@ -605,7 +605,7 @@ func (mer *MysqlExecutionResult) SetStatus(status uint16) {
 	mer.status = status
 }
 
-func NewMysqlExecutionResult(status uint16,insertid,rows uint64,warnings uint16,mrs *MysqlResultSet)*MysqlExecutionResult{
+func NewMysqlExecutionResult(status uint16,insertid,rows uint64,warnings uint16,mrs *MysqlResultSet)*MysqlExecutionResult {
 	return &MysqlExecutionResult{
 		status:       status,
 		insertID:     insertid,

@@ -7,7 +7,7 @@ require (
 	github.com/RoaringBitmap/roaring v0.8.0
 	github.com/cockroachdb/errors v1.8.1
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
-	github.com/fagongzi/goetty v1.8.0
+	github.com/fagongzi/goetty v1.9.0
 	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287
 	github.com/fagongzi/util v0.0.0-20210409031311-a10fdf8fbd7a
 	github.com/frankban/quicktest v1.11.3 // indirect
