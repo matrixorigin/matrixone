@@ -6,11 +6,11 @@ import (
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"os"
 	"sync"
@@ -70,29 +70,23 @@ func TestManager(t *testing.T) {
 func TestCollection(t *testing.T) {
 	maxRows := uint64(1024)
 	cols := 2
-	capacity := maxRows * 4 * uint64(cols) * 2 * 2
+	capacity := maxRows * 4 * uint64(cols) * 2 * 2 * 4
 	opts := new(engine.Options)
-	// opts.EventListener = e.NewLoggingEventListener()
 	opts.FillDefaults(WORK_DIR)
 	opts.Meta.Conf.BlockMaxRows = maxRows
-
-	opts.Meta.Updater.Start()
-	opts.Meta.Flusher.Start()
-	opts.Data.Flusher.Start()
-	opts.Data.Sorter.Start()
-	opts.MemData.Updater.Start()
 
 	var mu sync.RWMutex
 	tables := table.NewTables(&mu)
 	opts.Scheduler = dbsched.NewScheduler(opts, tables)
 
 	tabletInfo := md.MockTableInfo(2)
-	opCtx := mops.OpCtx{Opts: opts, TableInfo: tabletInfo}
-	op := mops.NewCreateTblOp(&opCtx, dbi.TableOpCtx{TableName: tabletInfo.Name})
-	op.Push()
-	err := op.WaitDone()
+	eCtx := &meta.Context{Opts: opts, Waitable: true}
+	event := meta.NewCreateTableEvent(eCtx, dbi.TableOpCtx{TableName: tabletInfo.Name}, tabletInfo)
+	assert.NotNil(t, event)
+	opts.Scheduler.Schedule(event)
+	err := event.WaitDone()
 	assert.Nil(t, err)
-	tbl := op.GetTable()
+	tbl := event.GetTable()
 
 	manager := NewManager(opts)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
@@ -166,10 +160,5 @@ func TestCollection(t *testing.T) {
 	// t.Log(common.GPool.String())
 	t.Log(t0_data.String())
 
-	opts.MemData.Updater.Stop()
-	opts.Data.Flusher.Stop()
-	opts.Meta.Flusher.Stop()
-	opts.Meta.Updater.Stop()
-	opts.Data.Sorter.Stop()
 	opts.Scheduler.Stop()
 }
