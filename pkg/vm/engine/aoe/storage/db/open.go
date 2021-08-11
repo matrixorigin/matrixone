@@ -1,9 +1,11 @@
 package db
 
 import (
+	log "github.com/sirupsen/logrus"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable"
@@ -40,7 +42,6 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		Dir:         dirname,
 		Opts:        opts,
 		FsMgr:       fsMgr,
-		Scheduler:   opts.Scheduler,
 		MemTableMgr: memtblMgr,
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mtBufMgr,
@@ -53,6 +54,8 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	db.Store.DataTables = table.NewTables(&opts.Mu)
 	db.Store.MetaInfo = opts.Meta.Info
 	db.Cleaner.MetaFiles = w.NewHeartBeater(db.Opts.MetaCleanerCfg.Interval, NewMetaFileCleaner(db.Opts.Meta.Info))
+	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
+	db.Scheduler = db.Opts.Scheduler
 
 	metaReplayHandle.Cleanup()
 	db.replayAndCleanData()

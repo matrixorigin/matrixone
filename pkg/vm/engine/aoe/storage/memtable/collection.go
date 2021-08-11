@@ -2,16 +2,17 @@ package memtable
 
 import (
 	"fmt"
+	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/events/dataio"
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	// "matrixone/pkg/vm/engine/aoe/storage/events/dataio"
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
-	// log "github.com/sirupsen/logrus"
 )
 
 type Collection struct {
@@ -119,8 +120,10 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 			}
 			{
 				c.Ref()
-				ctx := &dataio.Context{Opts: c.Opts}
-				e := dataio.NewFlushBlkEvent(ctx, nil, c)
+				// ctx := &dataio.Context{Opts: c.Opts}
+				// e := dataio.NewFlushBlkEvent(ctx, nil, c)
+				ctx := &dbsched.Context{Opts: c.Opts}
+				e := dbsched.NewFlushMemtableEvent(ctx, nil, c)
 				err = c.Opts.Scheduler.Schedule(e)
 				if err != nil {
 					return err

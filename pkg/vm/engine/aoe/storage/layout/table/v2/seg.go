@@ -86,6 +86,21 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	return seg, nil
 }
 
+func (seg *Segment) CanUpgrade() bool {
+	if seg.Type == base.SORTED_SEG {
+		return false
+	}
+	if len(seg.tree.Blocks) < int(seg.Meta.Table.Conf.SegmentMaxBlocks) {
+		return false
+	}
+	for _, blk := range seg.tree.Blocks {
+		if blk.GetType() != base.PERSISTENT_BLK {
+			return false
+		}
+	}
+	return true
+}
+
 func (seg *Segment) GetSegmentedIndex() (id uint64, ok bool) {
 	ok = false
 	if seg.Type == base.SORTED_SEG {

@@ -297,7 +297,7 @@ func (td *TableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
 	}
 	old := td.tree.Segments[idx]
 	if old.GetType() != base.UNSORTED_SEG {
-		panic("logic error")
+		panic(fmt.Sprintf("old segment %d type is %d", id, old.GetType()))
 	}
 	if old.GetMeta().ID != id {
 		panic("logic error")

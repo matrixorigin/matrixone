@@ -85,9 +85,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	o.EventListener.FillDefaults()
 
-	if o.Scheduler == nil {
-		o.Scheduler = NewScheduler(o)
-	}
+	// if o.Scheduler == nil {
+	// 	o.Scheduler = NewScheduler(o)
+	// }
 
 	if o.Mon.Collector == nil {
 		o.Mon.Collector = w.NewOpWorker(DEFAULT_MON_COLLECTOR)
@@ -129,7 +129,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CacheCfg == nil {
 		o.CacheCfg = &CacheCfg{
 			IndexCapacity:  o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
-			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
+			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 800,
 			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
 		}
 	}

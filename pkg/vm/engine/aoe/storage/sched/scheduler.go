@@ -2,9 +2,9 @@ package sched
 
 import (
 	"errors"
+	log "github.com/sirupsen/logrus"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
-	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -44,6 +44,7 @@ func (s *BaseScheduler) doDispatch(op iops.IOp) {
 	e := op.(Event)
 	dispatcher := s.dispatchers[e.Type()]
 	if dispatcher == nil {
+		log.Error(e.Type())
 		panic(ErrDispatcherNotFound)
 	}
 	dispatcher.Dispatch(e)

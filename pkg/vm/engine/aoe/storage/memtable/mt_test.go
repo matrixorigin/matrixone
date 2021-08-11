@@ -4,6 +4,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
@@ -81,6 +82,10 @@ func TestCollection(t *testing.T) {
 	opts.Data.Sorter.Start()
 	opts.MemData.Updater.Start()
 
+	var mu sync.RWMutex
+	tables := table.NewTables(&mu)
+	opts.Scheduler = dbsched.NewScheduler(opts, tables)
+
 	tabletInfo := md.MockTableInfo(2)
 	opCtx := mops.OpCtx{Opts: opts, TableInfo: tabletInfo}
 	op := mops.NewCreateTblOp(&opCtx, dbi.TableOpCtx{TableName: tabletInfo.Name})
@@ -99,6 +104,8 @@ func TestCollection(t *testing.T) {
 	// tableMeta := md.MockTable(nil, tbl.Schema, 10)
 	tableMeta := tbl
 	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
+	err = tables.CreateTable(t0_data)
+	assert.Nil(t, err)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
 	expect_blks := blks
@@ -157,10 +164,12 @@ func TestCollection(t *testing.T) {
 	t.Log(fsMgr.String())
 	t.Log(manager)
 	// t.Log(common.GPool.String())
+	t.Log(t0_data.String())
 
 	opts.MemData.Updater.Stop()
 	opts.Data.Flusher.Stop()
 	opts.Meta.Flusher.Stop()
 	opts.Meta.Updater.Stop()
 	opts.Data.Sorter.Stop()
+	opts.Scheduler.Stop()
 }

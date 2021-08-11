@@ -28,6 +28,13 @@ const (
 	MetaUpdateBlkTask
 	MetaCreateTableTask
 	MetaDropTableTask
+
+	FlushMemtableTask
+	CommitBlkTask
+	FlushTableMetaTask
+	UpgradeBlkTask
+	UpgradeSegTask
+	FlushSegTask
 )
 
 func GetNextEventId() uint64 {
