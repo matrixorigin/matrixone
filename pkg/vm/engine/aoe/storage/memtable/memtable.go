@@ -6,13 +6,9 @@ import (
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage/events/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
-	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -116,76 +112,6 @@ func (mt *MemTable) Flush() error {
 	mt.Opts.EventListener.FlushBlockEndCB(mt)
 	// err = mt.scheduleEvents()
 	return err
-}
-
-func (mt *MemTable) Commit() error {
-	eCtx := &meta.Context{Opts: mt.Opts, Waitable: true}
-	e := meta.NewCommitBlkEvent(eCtx, mt.Meta)
-	err := mt.Opts.Scheduler.Schedule(e)
-	if err != nil {
-		return err
-	}
-	if err = e.WaitDone(); err != nil {
-		return err
-	}
-
-	newMeta := e.NewMeta
-	cpCtx := md.CopyCtx{Ts: md.NowMicro(), Attached: true}
-	mt.TableMeta.RLock()
-	tblMetaCpy := mt.TableMeta.Copy(cpCtx)
-	mt.TableMeta.RUnlock()
-
-	eCtx = &meta.Context{Opts: mt.Opts}
-	flushEvent := meta.NewFlushTableEvent(eCtx, tblMetaCpy)
-	if err = mt.Opts.Scheduler.Schedule(flushEvent); err != nil {
-		mt.Opts.EventListener.BackgroundErrorCB(err)
-		return err
-	}
-
-	{
-		upgradeBlkCtx := &memdata.Context{Opts: mt.Opts, Waitable: true}
-		upgradeBlkEvent := memdata.NewUpgradeBlkEvent(upgradeBlkCtx, newMeta, mt.TableData)
-		if err = mt.Opts.Scheduler.Schedule(upgradeBlkEvent); err != nil {
-			mt.Opts.EventListener.BackgroundErrorCB(err)
-			return err
-		}
-		if err = upgradeBlkEvent.WaitDone(); err != nil {
-			mt.Opts.EventListener.BackgroundErrorCB(err)
-			return err
-		}
-		if upgradeBlkEvent.SegmentClosed {
-			mt.TableData.Ref()
-			doneCB := func(td iface.ITableData) func(iops.IOp) {
-				return func(producer iops.IOp) {
-					defer td.Unref()
-					err := producer.GetError()
-					if err != nil {
-						mt.Opts.EventListener.BackgroundErrorCB(err)
-					} else {
-						ctx := &memdata.Context{Opts: mt.Opts, Waitable: true}
-						e := memdata.NewUpgradeSegEvent(ctx, newMeta.Segment.ID, td)
-						if err = mt.Opts.Scheduler.Schedule(e); err != nil {
-							mt.Opts.EventListener.BackgroundErrorCB(err)
-							return
-						}
-						if err = e.WaitDone(); err != nil {
-							mt.Opts.EventListener.BackgroundErrorCB(err)
-						}
-						e.Segment.Unref()
-					}
-				}
-			}(mt.TableData)
-			flushCtx := &dataio.Context{Opts: mt.Opts, DoneCB: doneCB}
-			flushEvent := dataio.NewFlushSegEvent(flushCtx, mt.TableData.StrongRefSegment(newMeta.Segment.ID))
-			if err = mt.Opts.Scheduler.Schedule(flushEvent); err != nil {
-				mt.Opts.EventListener.BackgroundErrorCB(err)
-				mt.TableData.Unref()
-				return err
-			}
-		}
-		upgradeBlkEvent.Data.Unref()
-	}
-	return nil
 }
 
 func (mt *MemTable) GetMeta() *md.Block {

@@ -17,7 +17,6 @@ type EventType uint16
 const (
 	EmptyEvent EventType = iota
 	MockEvent
-	StopEvent
 	IOBoundEvent
 	CpuBoundEvent
 	StatelessEvent
