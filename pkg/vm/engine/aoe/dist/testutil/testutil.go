@@ -2,12 +2,6 @@ package testutil
 
 import (
 	"fmt"
-	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
-	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
-	cConfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage/pebble"
-	log "github.com/sirupsen/logrus"
 	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
@@ -16,11 +10,179 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	log "github.com/fagongzi/log"
+	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
+	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/matrixorigin/matrixcube/server"
+	"github.com/matrixorigin/matrixcube/storage"
+	"github.com/matrixorigin/matrixcube/storage/mem"
+	"github.com/matrixorigin/matrixcube/storage/pebble"
+	"github.com/stretchr/testify/assert"
 )
 
 var (
 	tmpDir = "/tmp/aoe-cluster-test/"
 )
+
+// TestAOEClusterOption the option for create TestAOECluster
+type TestAOEClusterOption func(opts *testAOEClusterOptions)
+
+type testAOEClusterOptions struct {
+	raftOptions       []raftstore.TestClusterOption
+	aoeFactoryFunc    func(path string) (*daoe.Storage, error)
+	metaFactoryFunc   func(path string) (storage.MetadataStorage, error)
+	kvDataFactoryFunc func(path string) (storage.DataStorage, error)
+	usePebble         bool
+}
+
+// WithTestAOEClusterUsePebble set use pebble
+func WithTestAOEClusterUsePebble() TestAOEClusterOption {
+	return func(opts *testAOEClusterOptions) {
+		opts.usePebble = true
+	}
+}
+
+// WithTestAOEClusterRaftClusterOptions set raftstore test cluster options
+func WithTestAOEClusterRaftClusterOptions(values ...raftstore.TestClusterOption) TestAOEClusterOption {
+	return func(opts *testAOEClusterOptions) {
+		opts.raftOptions = values
+	}
+}
+
+// WithTestAOEClusterAOEStorageFunc set aoe storage func
+func WithTestAOEClusterAOEStorageFunc(value func(path string) (*daoe.Storage, error)) TestAOEClusterOption {
+	return func(opts *testAOEClusterOptions) {
+		opts.aoeFactoryFunc = value
+	}
+}
+
+// WithTestAOEClusterMetaStorageFunc set metadata storage func
+func WithTestAOEClusterMetaStorageFunc(value func(path string) (storage.MetadataStorage, error)) TestAOEClusterOption {
+	return func(opts *testAOEClusterOptions) {
+		opts.metaFactoryFunc = value
+	}
+}
+
+// WithTestAOEClusterKVDataStorageFunc set kv data storage func
+func WithTestAOEClusterKVDataStorageFunc(value func(path string) (storage.DataStorage, error)) TestAOEClusterOption {
+	return func(opts *testAOEClusterOptions) {
+		opts.kvDataFactoryFunc = value
+	}
+}
+
+func newTestAOEClusterOptions() *testAOEClusterOptions {
+	return &testAOEClusterOptions{}
+}
+
+func (opts *testAOEClusterOptions) adjust() {
+	if opts.aoeFactoryFunc == nil {
+		opts.aoeFactoryFunc = daoe.NewStorage
+	}
+
+	if opts.metaFactoryFunc == nil {
+		opts.metaFactoryFunc = func(path string) (storage.MetadataStorage, error) {
+			if opts.usePebble {
+				return pebble.NewStorage(path)
+			}
+
+			return mem.NewStorage(), nil
+		}
+	}
+
+	if opts.kvDataFactoryFunc == nil {
+		opts.kvDataFactoryFunc = func(path string) (storage.DataStorage, error) {
+			if opts.usePebble {
+				return pebble.NewStorage(path)
+			}
+
+			return mem.NewStorage(), nil
+		}
+	}
+
+	if opts.aoeFactoryFunc == nil {
+		opts.aoeFactoryFunc = daoe.NewStorage
+	}
+}
+
+// TestAOECluster is a test cluster for testing.
+type TestAOECluster struct {
+	t                *testing.T
+	opts             *testAOEClusterOptions
+	RaftCluster      *raftstore.TestRaftCluster
+	CubeDrivers      []dist.CubeDriver
+	AOEStorages      []*daoe.Storage
+	MetadataStorages []storage.MetadataStorage
+	DataStorages     []storage.DataStorage
+}
+
+func NewTestAOECluster(t *testing.T, cfgCreator func(node int) *config.Config, opts ...TestAOEClusterOption) *TestAOECluster {
+	c := &TestAOECluster{t: t, opts: newTestAOEClusterOptions()}
+	for _, opt := range opts {
+		opt(c.opts)
+	}
+	c.opts.adjust()
+
+	c.opts.raftOptions = append(c.opts.raftOptions, raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
+		meta, err := c.opts.metaFactoryFunc(fmt.Sprintf("%s/meta", cfg.DataPath))
+		assert.NoError(t, err)
+		c.MetadataStorages = append(c.MetadataStorages, meta)
+
+		data, err := c.opts.kvDataFactoryFunc(fmt.Sprintf("%s/data", cfg.DataPath))
+		assert.NoError(t, err)
+		c.DataStorages = append(c.DataStorages, data)
+
+		aoe, err := c.opts.aoeFactoryFunc(fmt.Sprintf("%s/aoe", cfg.DataPath))
+		assert.NoError(t, err)
+		c.AOEStorages = append(c.AOEStorages, aoe)
+
+		cfg.Replication.ShardHeartbeatDuration = typeutil.NewDuration(time.Millisecond * 100)
+		cfg.Replication.StoreHeartbeatDuration = typeutil.NewDuration(time.Second)
+		cfg.Raft.TickInterval = typeutil.NewDuration(time.Millisecond * 600)
+		cfg.Raft.MaxEntryBytes = 300 * 1024 * 1024
+		cfg.Replication.ShardCapacityBytes = 100
+		cfg.Replication.ShardSplitCheckBytes = 80
+	}), raftstore.WithTestClusterStoreFactory(func(node int, cfg *cConfig.Config) raftstore.Store {
+		dCfg := cfgCreator(node)
+		dCfg.CubeConfig = *cfg
+		d, err := dist.NewCubeDriverWithFactory(c.MetadataStorages[node], c.DataStorages[node], c.AOEStorages[node], dCfg, func(c *cConfig.Config) (raftstore.Store, error) {
+			return raftstore.NewStore(c), nil
+		})
+		assert.NoError(t, err)
+		c.CubeDrivers = append(c.CubeDrivers, d)
+		return d.RaftStore()
+	}), raftstore.WithTestClusterNodeStartFunc(func(node int, store raftstore.Store) {
+		assert.NoError(t, c.CubeDrivers[node].Start())
+	}))
+
+	c.RaftCluster = raftstore.NewTestClusterStore(t, c.opts.raftOptions...)
+	return c
+}
+
+func (c *TestAOECluster) Start() {
+	c.RaftCluster.Start()
+}
+
+func (c *TestAOECluster) Stop() {
+	c.RaftCluster.Stop()
+	for _, d := range c.CubeDrivers {
+		d.Close()
+	}
+
+	for _, s := range c.MetadataStorages {
+		assert.NoError(c.t, s.Close())
+	}
+
+	for _, s := range c.DataStorages {
+		assert.NoError(c.t, s.Close())
+	}
+
+	for _, s := range c.AOEStorages {
+		assert.NoError(c.t, s.Close())
+	}
+}
 
 type TestCluster struct {
 	T            *testing.T
@@ -56,9 +218,9 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 		if err != nil {
 			return nil, err
 		}
-		cfg := config.Config{}
+		cfg := &config.Config{}
 		cfg.ServerConfig = server.Cfg{
-			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
+			ExternalServer: true,
 		}
 		cfg.ClusterConfig = config.ClusterConfig{
 			PreAllocatedGroupNum: 5,
@@ -102,10 +264,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 			if err != nil {
 				log.Fatal("cube driver start failed with %+v", err)
 			}
-			err = a.InitShardPool(cfg.ClusterConfig.PreAllocatedGroupNum)
-			if err != nil {
-				log.Fatal("InitShardPool failed with %+v", err)
-			}
+
 			c.AOEDBs = append(c.AOEDBs, aoeDataStorage)
 			c.Applications = append(c.Applications, a)
 		}()

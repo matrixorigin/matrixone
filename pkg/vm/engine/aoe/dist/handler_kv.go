@@ -120,6 +120,9 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 		resp.Value = errorResp(err)
 		return resp, 500
 	}
+	if data != nil && shard.End != nil {
+		data = append(data, shard.End)
+	}
 	if data != nil {
 		resp.Value, err = json.Marshal(data)
 	}
@@ -151,6 +154,9 @@ func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
+	}
+	if data != nil && shard.End != nil {
+		data = append(data, shard.End)
 	}
 	if data != nil {
 		if resp.Value, err = json.Marshal(data); err != nil {

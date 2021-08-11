@@ -3,16 +3,15 @@ package test
 import (
 	"bytes"
 	"fmt"
-	"github.com/fagongzi/log"
-	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixcube/raftstore"
 	stdLog "log"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/protocol"
+	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
@@ -20,6 +19,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/log"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -30,52 +32,98 @@ const (
 	blockCnt           = blockCntPerSegment * segmentCnt
 )
 
-func TestStorage(t *testing.T) {
-	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
-	log.SetHighlighting(false)
-	log.SetLevelByString("error")
-	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c, err := testutil.NewTestClusterStore(t, true, func(path string) (*daoe.Storage, error) {
-		opts := &e.Options{}
-		mdCfg := &md.Configuration{
-			Dir:              path,
-			SegmentMaxBlocks: blockCntPerSegment,
-			BlockMaxRows:     blockRows,
-		}
-		opts.CacheCfg = &e.CacheCfg{
-			IndexCapacity:  blockRows * blockCntPerSegment * 80,
-			InsertCapacity: blockRows * uint64(colCnt) * 2000,
-			DataCapacity:   blockRows * uint64(colCnt) * 2000,
-		}
-		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
-			Interval: time.Duration(1) * time.Second,
-		}
-		opts.Meta.Conf = mdCfg
-		return daoe.NewStorageWithOptions(path, opts)
-	})
-	defer c.Stop()
-	time.Sleep(10 * time.Second)
+var tableInfo *aoe.TableInfo
 
-	assert.NoError(t, err)
-	stdLog.Printf("app all started.")
-
-	//testKVStorage(t, c)
-	testAOEStorage(t, c)
+func init() {
+	tableInfo = md.MockTableInfo(colCnt)
+	tableInfo.Id = 100
 }
 
-func testAOEStorage(t *testing.T, c *testutil.TestCluster) {
+func TestStorage(t *testing.T) {
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 5
+			c.ServerConfig.ExternalServer = true
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+			opts := &e.Options{}
+			mdCfg := &md.Configuration{
+				Dir:              path,
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &e.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return daoe.NewStorageWithOptions(path, opts)
+		}), testutil.WithTestAOEClusterUsePebble())
+	c.Start()
+	stdLog.Printf("app all started.")
 
-	shard, err := c.Applications[0].GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("byte"))
+	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
+
+	//testAOEStorage(t, c)
+	testKVStorage(t, c)
+	c.Stop()
+}
+
+func TestRestartStorage(t *testing.T) {
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 5
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+			opts := &e.Options{}
+			mdCfg := &md.Configuration{
+				Dir:              path,
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &e.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return daoe.NewStorageWithOptions(path, opts)
+		}), testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterRecreate(false)))
+	c.Start()
+	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
+	defer c.Stop()
+	d := c.CubeDrivers[0]
+	shard, err := d.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
+	require.NoError(t, err)
+	ids, err := d.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(shard.ShardID, tableInfo.Id)), shard.ShardID)
+	require.NoError(t, err)
+	require.Less(t, 0, len(ids.Ids))
+}
+
+func testAOEStorage(t *testing.T, c *testutil.TestAOECluster) {
+	d := c.CubeDrivers[0]
+
+	shard, err := d.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
 	//CreateTableTest
-	colCnt := 4
-	tableInfo := md.MockTableInfo(colCnt)
-	tableInfo.Id = 100
 	toShard := shard.ShardID
-	err = c.Applications[0].CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, tableInfo)
+	err = d.CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, tableInfo)
 	require.NoError(t, err)
 
-	names, err := c.Applications[0].TabletNames(toShard)
+	names, err := d.TabletNames(toShard)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(names))
 
@@ -86,7 +134,7 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster) {
 		typs = append(typs, attr.Type)
 	}
 
-	ids, err := c.Applications[0].GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
+	ids, err := d.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
 	require.NoError(t, err)
 	require.Equal(t, 0, len(ids.Ids))
 	ibat := chunk.MockBatch(typs, blockRows)
@@ -94,13 +142,13 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster) {
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)
 	for i := 0; i < blockCnt; i++ {
-		err = c.Applications[0].Append(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, buf.Bytes())
+		err = d.Append(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, buf.Bytes())
 		require.NoError(t, err)
-		segmentedIndex, err := c.Applications[0].GetSegmentedId(toShard)
+		segmentedIndex, err := d.GetSegmentedId(toShard)
 		require.NoError(t, err)
 		stdLog.Printf("[Debug]call GetSegmentedId after write %d batch, result is %d", i, segmentedIndex)
 	}
-	ids, err = c.Applications[0].GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
+	ids, err = d.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
 	require.NoError(t, err)
 	stdLog.Printf("[Debug]SegmentIds is %v\n", ids)
 	require.Equal(t, segmentCnt, len(ids.Ids))
@@ -108,24 +156,25 @@ func testAOEStorage(t *testing.T, c *testutil.TestCluster) {
 	time.Sleep(3 * time.Second)
 }
 
-func testKVStorage(t *testing.T, c *testutil.TestCluster) {
+func testKVStorage(t *testing.T, c *testutil.TestAOECluster) {
+	app := c.CubeDrivers[0]
 
 	//Set Test
-	err := c.Applications[0].SetIfNotExist([]byte("Hello"), []byte("World"))
+	err := app.SetIfNotExist([]byte("Hello"), []byte("World"))
 	require.NoError(t, err)
 
-	err = c.Applications[0].SetIfNotExist([]byte("Hello"), []byte("World1"))
+	err = app.SetIfNotExist([]byte("Hello"), []byte("World1"))
 	require.NotNil(t, err)
 
 	//Get Test
-	value, err := c.Applications[0].Get([]byte("Hello"))
+	value, err := app.Get([]byte("Hello"))
 	require.NoError(t, err)
 	require.Equal(t, value, []byte("World"))
 
 	//Prefix Test
 	for i := uint64(0); i < 20; i++ {
 		key := fmt.Sprintf("prefix-%d", i)
-		_, err = c.Applications[0].Exec(pb.Request{
+		_, err = app.Exec(pb.Request{
 			Type: pb.Set,
 			Set: pb.SetRequest{
 				Key:   []byte(key),
@@ -136,18 +185,18 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 	}
 
 	t0 := time.Now()
-	keys, err := c.Applications[0].PrefixKeys([]byte("prefix-"), 0)
+	keys, err := app.PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 20, len(keys))
 	fmt.Printf("time cost for prefix is %d ms\n", time.Since(t0).Milliseconds())
 
-	kvs, err := c.Applications[0].PrefixScan([]byte("prefix-"), 0)
+	kvs, err := app.PrefixScan([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 40, len(kvs))
 
-	err = c.Applications[0].Delete([]byte("prefix-0"))
+	err = app.Delete([]byte("prefix-0"))
 	require.NoError(t, err)
-	keys, err = c.Applications[0].PrefixKeys([]byte("prefix-"), 0)
+	keys, err = app.PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 19, len(keys))
 
@@ -156,7 +205,7 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)
-			_, err = c.Applications[0].Exec(pb.Request{
+			_, err = app.Exec(pb.Request{
 				Type: pb.Set,
 				Set: pb.SetRequest{
 					Key:   []byte(key),
@@ -168,7 +217,7 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 	}
 	fmt.Printf("time cost for 50 set is %d ms\n", time.Since(t0).Milliseconds())
 	t0 = time.Now()
-	kvs, err = c.Applications[0].Scan([]byte("/prefix/"), []byte("/prefix/2/"), 0)
+	kvs, err = app.Scan([]byte("/prefix/"), []byte("/prefix/2/"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 20, len(kvs))
 	fmt.Printf("time cost for scan is %d ms\n", time.Since(t0).Milliseconds())
@@ -176,7 +225,7 @@ func testKVStorage(t *testing.T, c *testutil.TestCluster) {
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)
-			value, err = c.Applications[0].Exec(pb.Request{
+			value, err = app.Exec(pb.Request{
 				Type: pb.Get,
 				Get: pb.GetRequest{
 					Key: []byte(key),

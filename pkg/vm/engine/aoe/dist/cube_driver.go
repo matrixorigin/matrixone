@@ -3,15 +3,6 @@ package dist
 import (
 	"encoding/json"
 	"errors"
-	"github.com/matrixorigin/matrixcube/aware"
-	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
-	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
-	"github.com/matrixorigin/matrixcube/proxy"
-	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/matrixorigin/matrixcube/server"
-	cstorage "github.com/matrixorigin/matrixcube/storage"
 	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
@@ -23,6 +14,17 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
 	"time"
+
+	"github.com/matrixorigin/matrixcube/aware"
+	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
+	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
+	"github.com/matrixorigin/matrixcube/proxy"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/matrixorigin/matrixcube/server"
+	cstorage "github.com/matrixorigin/matrixcube/storage"
 )
 
 const (
@@ -35,9 +37,6 @@ type CubeDriver interface {
 	Start() error
 	// Close close the storage
 	Close()
-
-	// InitShardPool create ShardsPool in raftstore
-	InitShardPool(capacity uint64) error
 
 	// GetShardPool return ShardsPool instance
 	GetShardPool() raftstore.ShardsPool
@@ -91,6 +90,7 @@ type CubeDriver interface {
 }
 
 type driver struct {
+	cfg   *config.Config
 	app   *server.Application
 	store raftstore.Store
 	spool raftstore.ShardsPool
@@ -103,7 +103,7 @@ func NewCubeDriver(
 	metadataStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage) (CubeDriver, error) {
-	return NewCubeDriverWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, config.Config{})
+	return NewCubeDriverWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, &config.Config{})
 }
 
 // NewCubeDriverWithOptions returns a aoe request handler
@@ -111,9 +111,23 @@ func NewCubeDriverWithOptions(
 	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,
-	c config.Config) (CubeDriver, error) {
+	c *config.Config) (CubeDriver, error) {
+
+	return NewCubeDriverWithFactory(metaStorage, kvDataStorage, aoeDataStorage, c, func(cfg *cConfig.Config) (raftstore.Store, error) {
+		return raftstore.NewStore(cfg), nil
+	})
+}
+
+// NewCubeDriverWithFactory creates the cube driver with  raftstore factory
+func NewCubeDriverWithFactory(
+	metaStorage cstorage.MetadataStorage,
+	kvDataStorage cstorage.DataStorage,
+	aoeDataStorage cstorage.DataStorage,
+	c *config.Config,
+	raftStoreFactory func(*cConfig.Config) (raftstore.Store, error)) (CubeDriver, error) {
 
 	h := &driver{
+		cfg:   c,
 		aoeDB: aoeDataStorage.(*daoe.Storage).DB,
 		cmds:  make(map[uint64]raftcmdpb.CMDType),
 	}
@@ -177,34 +191,39 @@ func NewCubeDriverWithOptions(
 
 	c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
 		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
-			if group != uint64(pb.AOEGroup) {
-				return initAppliedIndex
-			}
-			adjustAppliedIndex, err := h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
-				Matchers: []*dbi.StringMatcher{
-					{
-						Type:    dbi.MTPrefix,
-						Pattern: codec.Uint642String(shard.ID),
-					},
-				},
-			})
-			if err != nil {
-				if err == adb.ErrNotFound {
-					stdLog.Printf("shard not found, %d, %d", group, shard.ID)
-					return initAppliedIndex
-				}
-				panic(err)
-			}
-			return adjustAppliedIndex
-			//return initAppliedIndex
+			// if group != uint64(pb.AOEGroup) {
+			// 	return initAppliedIndex
+			// }
+			// adjustAppliedIndex, err := h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
+			// 	Matchers: []*dbi.StringMatcher{
+			// 		{
+			// 			Type:    dbi.MTPrefix,
+			// 			Pattern: codec.Uint642String(shard.ID),
+			// 		},
+			// 	},
+			// })
+			// if err != nil {
+			// 	if err == adb.ErrNotFound {
+			// 		stdLog.Printf("shard not found, %d, %d", group, shard.ID)
+			// 		return initAppliedIndex
+			// 	}
+			// 	panic(err)
+			// }
+			// return adjustAppliedIndex
+			return initAppliedIndex
 		}
 	}
 
-	h.store = raftstore.NewStore(&c.CubeConfig)
+	store, err := raftStoreFactory(&c.CubeConfig)
+	if err != nil {
+		return nil, err
+	}
+	h.store = store
 
 	c.ServerConfig.Store = h.store
 	c.ServerConfig.Handler = h
 	pConfig.DefaultSchedulers = nil
+
 	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req *raftcmdpb.Request, cmd interface{}, proxy proxy.ShardsProxy) error {
 		if req.Group == uint64(pb.KVGroup) {
 			return proxy.Dispatch(req)
@@ -214,18 +233,24 @@ func NewCubeDriverWithOptions(
 			return proxy.Dispatch(req)
 		}
 		req.ToShard = args.Shard
-		return proxy.DispatchTo(req, args.Shard, h.store.GetRouter().LeaderPeerStore(req.ToShard).ClientAddr)
+		return proxy.DispatchTo(req, args.Shard, c.ServerConfig.Store.GetRouter().LeaderPeerStore(req.ToShard).ClientAddr)
 	})
 	h.init()
 	return h, nil
 }
 
 func (h *driver) Start() error {
-	return h.app.Start()
+	stdLog.Printf("[QSQ]server config is %v", h.cfg.ServerConfig)
+	err := h.app.Start()
+	if err != nil {
+		return err
+	}
+
+	return h.initShardPool()
 }
 
-func (h *driver) InitShardPool(capacity uint64) error {
-	p, err := h.store.CreateResourcePool(metapb.ResourcePool{Group: uint64(pb.AOEGroup), Capacity: capacity, RangePrefix: codec.String2Bytes("aoe-")})
+func (h *driver) initShardPool() error {
+	p, err := h.store.CreateResourcePool(metapb.ResourcePool{Group: uint64(pb.AOEGroup), Capacity: h.cfg.ClusterConfig.PreAllocatedGroupNum, RangePrefix: codec.String2Bytes("aoe-")})
 	if err != nil {
 		return err
 	}
@@ -353,7 +378,7 @@ func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.
 		}
 
 		pairs = append(pairs, kvs[0:len(kvs)-1]...)
-		req.Scan.Start = raftstore.EncodeDataKey(uint64(group), kvs[len(kvs)-1])
+		req.Scan.Start = kvs[len(kvs)-1]
 	}
 	return pairs, err
 }
@@ -393,7 +418,7 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 		}
 
 		pairs = append(pairs, kvs[0:len(kvs)-1]...)
-		req.PrefixScan.StartKey = raftstore.EncodeDataKey(uint64(group), kvs[len(kvs)-1])
+		req.PrefixScan.StartKey = kvs[len(kvs)-1]
 	}
 	return pairs, err
 }
@@ -418,6 +443,7 @@ func (h *driver) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group
 	i := 0
 	for {
 		i = i + 1
+		stdLog.Printf("[Debug]search cnt is %d, startkey is %s", i, codec.Bytes2String(req.PrefixScan.StartKey))
 		data, err = h.ExecWithGroup(req, group)
 		if data == nil || err != nil {
 			break
@@ -435,8 +461,8 @@ func (h *driver) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group
 		if len(kvs)%2 == 0 {
 			break
 		}
-
-		req.PrefixScan.StartKey = raftstore.EncodeDataKey(uint64(group), kvs[len(kvs)-1])
+		//req.PrefixScan.StartKey = raftstore.EncodeDataKey(uint64(group), kvs[len(kvs)-1])
+		req.PrefixScan.StartKey = kvs[len(kvs)-1]
 	}
 	return values, err
 }
