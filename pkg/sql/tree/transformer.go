@@ -9,7 +9,7 @@ import (
 	"github.com/pingcap/parser/test_driver"
 	"github.com/pingcap/parser/types"
 	"go/constant"
-	"matrixone/pkg/client"
+	"matrixone/pkg/defines"
 	"strconv"
 )
 
@@ -694,10 +694,10 @@ func transformFieldTypeToResolvableTypeReference(ft *types.FieldType) Resolvable
 	tt.InternalType.Precision = int32(precision)
 
 	//unsigned
-	tt.InternalType.Unsigned = (uint32(ft.Flag) & client.UNSIGNED_FLAG) > 0
+	tt.InternalType.Unsigned = (uint32(ft.Flag) & defines.UNSIGNED_FLAG) > 0
 
 	//binary
-	tt.InternalType.Binary = (uint32(ft.Flag) & client.BINARY_FLAG) > 0
+	tt.InternalType.Binary = (uint32(ft.Flag) & defines.BINARY_FLAG) > 0
 
 	return tt
 }
