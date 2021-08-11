@@ -1,4 +1,4 @@
-package testutil
+package frontend
 
 import (
 	"fmt"
@@ -7,8 +7,8 @@ import (
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
-	log "github.com/sirupsen/logrus"
 	stdLog "log"
+	"matrixone/pkg/frontend"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
@@ -28,7 +28,10 @@ type TestCluster struct {
 	AOEDBs       []*daoe.Storage
 }
 
-func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe.Storage, error)) (*TestCluster, error) {
+
+func NewTestClusterStore(t *testing.T, reCreate bool,
+	f func(path string) (*daoe.Storage, error),
+	pcis []*frontend.PDCallbackImpl, nodeCnt int) (*TestCluster, error) {
 	if reCreate {
 		stdLog.Printf("clean target dir")
 		if err := recreateTestTempDir(); err != nil {
@@ -37,7 +40,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 	}
 	c := &TestCluster{T: t}
 	var wg sync.WaitGroup
-	for i := 0; i < 3; i++ {
+	for i := 0; i < nodeCnt; i++ {
 		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
 		if err != nil {
 			return nil, err
@@ -88,6 +91,11 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 				},
 			},
 		}
+
+		if i < len(pcis) {
+			cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pcis[i]
+		}
+
 		if i != 0 {
 			cfg.CubeConfig.Prophet.EmbedEtcd.Join = "http://127.0.0.1:40000"
 		}
@@ -96,7 +104,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool, f func(path string) (*daoe
 			defer wg.Done()
 			a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
 			if err != nil {
-				log.Fatal("create failed with %+v", err)
+				fmt.Printf("create failed with %v", err)
 			}
 			c.AOEDBs = append(c.AOEDBs, aoeDataStorage)
 			c.Applications = append(c.Applications, a)

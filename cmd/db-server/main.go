@@ -148,7 +148,8 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	registerSignalHandlers()
+	//registerSignalHandlers()
+
 	select {}
 	cleanup()
 	os.Exit(0)

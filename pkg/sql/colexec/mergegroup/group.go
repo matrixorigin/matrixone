@@ -95,6 +95,12 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			ctr.state = Eval
 		case Eval:
+			if n.Es[0].Agg == nil {
+				proc.Reg.Ax = nil
+				ctr.bat = nil
+				ctr.state = End
+				return true, nil
+			}
 			vecs, err := ctr.eval(ctr.rows, n.Es, proc)
 			if err != nil {
 				ctr.clean(proc)
