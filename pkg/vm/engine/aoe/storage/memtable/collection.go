@@ -111,19 +111,26 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 	}
 	for {
 		if mut.IsFull() {
+			prevId := mut.GetMeta().AsCommonID()
 			mut.Unpin()
 			mut.Unref()
+
+			ctx := &dbsched.Context{Opts: c.Opts}
+			e := dbsched.NewPrecommitBlockEvent(ctx, *prevId)
+			if err = c.Opts.Scheduler.Schedule(e); err != nil {
+				panic(err)
+			}
+
 			mut, err = c.onNoMutableTable()
 			if err != nil {
 				c.Opts.EventListener.BackgroundErrorCB(err)
 				return err
 			}
+
 			{
 				c.Ref()
-				// ctx := &dataio.Context{Opts: c.Opts}
-				// e := dataio.NewFlushBlkEvent(ctx, nil, c)
 				ctx := &dbsched.Context{Opts: c.Opts}
-				e := dbsched.NewFlushMemtableEvent(ctx, nil, c)
+				e := dbsched.NewFlushMemtableEvent(ctx, c)
 				err = c.Opts.Scheduler.Schedule(e)
 				if err != nil {
 					return err

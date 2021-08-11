@@ -5,14 +5,74 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"sync"
 
 	log "github.com/sirupsen/logrus"
 )
 
+type metablkCommiter struct {
+	sync.RWMutex
+	scheduler  sched.Scheduler
+	pendings   []uint64
+	flushdones map[uint64]*flushMemtableEvent
+}
+
+func newMetaBlkCommiter(scheduler sched.Scheduler) *metablkCommiter {
+	c := &metablkCommiter{
+		scheduler:  scheduler,
+		pendings:   make([]uint64, 0),
+		flushdones: make(map[uint64]*flushMemtableEvent),
+	}
+	return c
+}
+
+func (p *metablkCommiter) Register(e *precommitBlockEvent) {
+	p.Lock()
+	p.pendings = append(p.pendings, e.Id.BlockID)
+	p.Unlock()
+}
+
+func (p *metablkCommiter) doSchedule(e *flushMemtableEvent) {
+	ctx := &Context{Opts: e.Ctx.Opts}
+	commit := NewCommitBlkEvent(ctx, e.Meta)
+	p.scheduler.Schedule(commit)
+}
+
+func (p *metablkCommiter) Accept(e *flushMemtableEvent) {
+	// TODO: retry logic
+	if err := e.GetError(); err != nil {
+		panic(err)
+	}
+	if e.Meta == nil {
+		return
+	}
+	p.Lock()
+	if p.pendings[0] != e.Meta.ID {
+		p.flushdones[e.Meta.ID] = e
+	} else {
+		p.doSchedule(e)
+		var i int
+		for i = 1; i < len(p.pendings); i++ {
+			flushe, ok := p.flushdones[p.pendings[i]]
+			if !ok {
+				break
+			}
+			delete(p.flushdones, p.pendings[i])
+			p.doSchedule(flushe)
+		}
+		p.pendings = p.pendings[i:]
+	}
+	p.Unlock()
+}
+
 type scheduler struct {
 	sched.BaseScheduler
-	opts   *e.Options
-	tables *table.Tables
+	opts      *e.Options
+	tables    *table.Tables
+	commiters struct {
+		mu     sync.RWMutex
+		blkmap map[uint64]*metablkCommiter
+	}
 }
 
 func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
@@ -21,6 +81,7 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 		opts:          opts,
 		tables:        tables,
 	}
+	s.commiters.blkmap = make(map[uint64]*metablkCommiter)
 
 	dispatcher := sched.NewBaseDispatcher()
 	flushblkHandler := sched.NewPoolHandler(8, nil)
@@ -45,6 +106,7 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	dispatcher.RegisterHandler(sched.MetaCreateBlkTask, metaHandler)
 	dispatcher.RegisterHandler(sched.MemdataUpdateEvent, memdataHandler)
 	dispatcher.RegisterHandler(sched.FlushTableMetaTask, metaHandler)
+	dispatcher.RegisterHandler(sched.PrecommitBlkMetaTask, metaHandler)
 
 	s.RegisterDispatcher(sched.StatelessEvent, dispatcher)
 	s.RegisterDispatcher(sched.FlushSegTask, dispatcher)
@@ -57,20 +119,40 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	s.RegisterDispatcher(sched.MetaCreateBlkTask, dispatcher)
 	s.RegisterDispatcher(sched.MemdataUpdateEvent, dispatcher)
 	s.RegisterDispatcher(sched.FlushTableMetaTask, dispatcher)
+	s.RegisterDispatcher(sched.PrecommitBlkMetaTask, dispatcher)
 	s.Start()
 	return s
 }
 
+func (s *scheduler) onPrecommitBlkDone(e sched.Event) {
+	event := e.(*precommitBlockEvent)
+	s.commiters.mu.Lock()
+	commiter, ok := s.commiters.blkmap[event.Id.TableID]
+	if !ok {
+		commiter = newMetaBlkCommiter(s)
+		s.commiters.blkmap[event.Id.TableID] = commiter
+	}
+	s.commiters.mu.Unlock()
+	commiter.Register(event)
+	// ctx := &Context{Opts: s.opts}
+	// newevent := NewFlushMemtableEvent(ctx, event.MemTable)
+	// s.Schedule(newevent)
+}
+
 func (s *scheduler) onFlushMemtableDone(e sched.Event) {
 	event := e.(*flushMemtableEvent)
-	if event.Meta == nil {
-		return
-	}
-	ctx := &Context{
-		Opts: s.opts,
-	}
-	newevent := NewCommitBlkEvent(ctx, event.Meta)
-	s.Schedule(newevent)
+	s.commiters.mu.RLock()
+	commiter := s.commiters.blkmap[event.Meta.Segment.Table.ID]
+	s.commiters.mu.RUnlock()
+	commiter.Accept(event)
+	// if event.Meta == nil {
+	// 	return
+	// }
+	// ctx := &Context{
+	// 	Opts: s.opts,
+	// }
+	// newevent := NewCommitBlkEvent(ctx, event.Meta)
+	// s.Schedule(newevent)
 }
 
 func (s *scheduler) onCommitBlkDone(e sched.Event) {
@@ -160,6 +242,8 @@ func (s *scheduler) OnExecDone(op interface{}) {
 		s.onFlushSegDone(e)
 	case sched.UpgradeSegTask:
 		s.onUpgradeSegDone(e)
+	case sched.PrecommitBlkMetaTask:
+		s.onPrecommitBlkDone(e)
 	}
 }
 

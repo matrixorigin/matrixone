@@ -9,14 +9,12 @@ import (
 
 type flushMemtableEvent struct {
 	baseEvent
-	MemTable   imem.IMemTable
-	Collection imem.ICollection
 	Meta       *md.Block
+	Collection imem.ICollection
 }
 
-func NewFlushMemtableEvent(ctx *Context, memtable imem.IMemTable, collection imem.ICollection) *flushMemtableEvent {
+func NewFlushMemtableEvent(ctx *Context, collection imem.ICollection) *flushMemtableEvent {
 	e := &flushMemtableEvent{
-		MemTable:   memtable,
 		Collection: collection,
 	}
 	e.baseEvent = baseEvent{
@@ -27,25 +25,16 @@ func NewFlushMemtableEvent(ctx *Context, memtable imem.IMemTable, collection ime
 }
 
 func (e *flushMemtableEvent) Execute() error {
-	if e.Collection != nil {
-		defer e.Collection.Unref()
-	}
-	var mem imem.IMemTable
-	if e.MemTable != nil {
-		mem = e.MemTable
-	} else if e.Collection != nil {
-		mem = e.Collection.FetchImmuTable()
-		if mem == nil {
-			return nil
-		}
-	} else {
+	defer e.Collection.Unref()
+	mem := e.Collection.FetchImmuTable()
+	if mem == nil {
 		return nil
 	}
-	e.Meta = mem.GetMeta()
 	defer mem.Unref()
+	e.Meta = mem.GetMeta()
 	err := mem.Flush()
 	if err != nil {
-		log.Errorf("Flush memtable %d failed %s", mem.GetMeta().GetID(), err)
+		log.Errorf("Flush memtable %d failed %s", e.Meta.ID, err)
 		return err
 	}
 	return err
