@@ -99,6 +99,13 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	return nil
 }
 
+// only for test use
+func (holder *SegmentHolder) GetIndexNode(idx int) *Node {
+	node := holder.self.Indices[idx]
+	node.Ref()
+	return node
+}
+
 func (holder *SegmentHolder) stringNoLock() string {
 	s := fmt.Sprintf("<IndexSegmentHolder[%s]>[Ty=%v](Cnt=%d)(RefCount=%d)", holder.ID.SegmentString(), holder.Type,
 		holder.tree.BlockCnt, holder.RefCount())

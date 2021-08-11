@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"io"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
@@ -90,7 +92,227 @@ func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, err
 }
 
 func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *md.Segment) error {
-	return nil
+	var indices []index.Index
+	for idx, colDef := range meta.Table.Schema.ColDefs {
+		switch colDef.Type.Oid {
+		case types.T_int8:
+			var minv, maxv int8
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]int8)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_int16:
+			var minv, maxv int16
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]int16)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_int32:
+			var minv, maxv int32
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]int32)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_int64:
+			var minv, maxv int64
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]int64)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_uint8:
+			var minv, maxv uint8
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]uint8)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_uint16:
+			var minv, maxv uint16
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]uint16)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_uint32:
+			var minv, maxv uint32
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]uint32)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_uint64:
+			var minv, maxv uint64
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]uint64)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_float32:
+			var minv, maxv float32
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]float32)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_float64:
+			var minv, maxv float64
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]float64)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for _, v := range column {
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_char, types.T_json, types.T_varchar:
+			var minv, maxv []byte
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.(*types.Bytes)
+				if i == 0 {
+					minv = column.Get(0)
+					maxv = column.Get(0)
+				}
+				for j := 0; j < len(column.Lengths); j++ {
+					v := column.Get(int64(j))
+					if bytes.Compare(minv, v) > 0 {
+						minv = v
+					}
+					if bytes.Compare(maxv, v) < 0 {
+						maxv = v
+					}
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		}
+	}
+	buf, err := index.DefaultRWHelper.WriteIndices(indices)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write(buf)
+	return err
 }
 
 func (sw *SegmentWriter) Execute() error {

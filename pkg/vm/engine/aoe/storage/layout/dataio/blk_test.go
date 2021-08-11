@@ -156,4 +156,31 @@ func TestSegmentWriter(t *testing.T) {
 	stat1 := col1Vf.Stat()
 	t.Log(stat0.Name())
 	t.Log(stat1.Name())
+
+	bufMgr := bmgr.MockBufMgr(1000)
+	tblHolder := index.NewTableHolder(bufMgr, (*segment.AsCommonID()).TableID)
+	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
+	segHolder.Unref()
+	segHolder.Init(segFile)
+	for i := 0; i < len(schema.ColDefs); i++ {
+		node := segHolder.GetIndexNode(i)
+		mnode := node.GetManagedNode()
+		zm := mnode.DataNode.(*index.ZoneMapIndex)
+		assert.Equal(t, zm.MinV.(int32), int32(0))
+		assert.Equal(t, zm.MaxV.(int32), int32(9))
+		t.Logf("zm index: min=%v,max=%v", zm.MinV, zm.MaxV)
+		mnode.Close()
+		node.Unref()
+	}
+
+	ctx := &index.FilterCtx{}
+	ctx.Op = index.OpEq
+	ctx.Val = int32(5)
+	err = segHolder.EvalFilter(0, ctx)
+	assert.Nil(t, err)
+	assert.Equal(t, true, ctx.BoolRes)
+	ctx.Val = int32(10)
+	err = segHolder.EvalFilter(0, ctx)
+	assert.Nil(t, err)
+	assert.Equal(t, false, ctx.BoolRes)
 }
