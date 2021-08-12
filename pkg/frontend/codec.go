@@ -35,8 +35,24 @@ func (c *sqlCodec) Decode(in *buf.ByteBuf) (bool, interface{}, error) {
 		return false, nil, nil
 	}
 
-	in.Skip(PacketHeaderLength)
-	in.MarkN(int(length))
+	err = in.Skip(PacketHeaderLength)
+	if err != nil {
+		return true, nil, err
+	}
+
+	err = in.MarkN(int(length))
+	if err != nil {
+		if length == 0 {
+			packet := &Packet{
+				Length:     0,
+				SequenceID: sequenceID,
+				Payload:    make([]byte, 0),
+			}
+			return true, packet, nil
+		}
+		return false, nil, err
+	}
+
 	_, payload, err := in.ReadMarkedBytes()
 
 	packet := &Packet{
