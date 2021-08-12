@@ -13,6 +13,7 @@ import (
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	"matrixone/pkg/vm/engine/aoe/engine"
@@ -33,40 +34,43 @@ func TestAOEEngine(t *testing.T) {
 	log.SetHighlighting(false)
 	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c, err := testutil.NewTestClusterStore(t, true, func(path string) (*daoe.Storage, error) {
-		opts := &e.Options{}
-		mdCfg := &md.Configuration{
-			Dir:              path,
-			SegmentMaxBlocks: blockCntPerSegment,
-			BlockMaxRows:     blockRows,
-		}
-		opts.CacheCfg = &e.CacheCfg{
-			IndexCapacity:  blockRows * blockCntPerSegment * 80,
-			InsertCapacity: blockRows * uint64(colCnt) * 2000,
-			DataCapacity:   blockRows * uint64(colCnt) * 2000,
-		}
-		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
-			Interval: time.Duration(1) * time.Second,
-		}
-		opts.Meta.Conf = mdCfg
-		return daoe.NewStorageWithOptions(path, opts)
-	})
-	require.NoError(t, err)
-	defer c.Stop()
-
-	time.Sleep(2 * time.Second)
-
-	require.NoError(t, err)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 5
+			c.ServerConfig.ExternalServer = true
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+			opts := &e.Options{}
+			mdCfg := &md.Configuration{
+				Dir:              path,
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &e.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return daoe.NewStorageWithOptions(path, opts)
+		}), testutil.WithTestAOEClusterUsePebble())
+	c.Start()
+	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
 	stdLog.Printf("app all started.")
 
-	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
-		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.Applications[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
+	c.CubeDrivers[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.CubeDrivers[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
 	})
 
-	catalog := catalog2.DefaultCatalog(c.Applications[0])
+	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
 	aoeEngine := engine.Mock(&catalog)
 
-	err = aoeEngine.Create(0, testDBName, 0)
+	err := aoeEngine.Create(0, testDBName, 0)
 	require.NoError(t, err)
 
 	dbs := aoeEngine.Databases()
@@ -140,53 +144,4 @@ func TestAOEEngine(t *testing.T) {
 	require.Equal(t, 19, len(tbls))
 	time.Sleep(3 * time.Second)
 
-}
-
-func TestAOEEngineRestart(t *testing.T) {
-	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
-	log.SetHighlighting(false)
-	log.SetLevelByString("error")
-	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c, err := testutil.NewTestClusterStore(t, false, func(path string) (*daoe.Storage, error) {
-		opts := &e.Options{}
-		mdCfg := &md.Configuration{
-			Dir:              path,
-			SegmentMaxBlocks: blockCntPerSegment,
-			BlockMaxRows:     blockRows,
-		}
-		opts.CacheCfg = &e.CacheCfg{
-			IndexCapacity:  blockRows * blockCntPerSegment * 80,
-			InsertCapacity: blockRows * uint64(colCnt) * 2000,
-			DataCapacity:   blockRows * uint64(colCnt) * 2000,
-		}
-		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
-			Interval: time.Duration(1) * time.Second,
-		}
-		opts.Meta.Conf = mdCfg
-		return daoe.NewStorageWithOptions(path, opts)
-	})
-	require.NoError(t, err)
-	defer c.Stop()
-
-	time.Sleep(2 * time.Second)
-
-	require.NoError(t, err)
-	stdLog.Printf("app all started.")
-
-	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
-		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.Applications[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
-	})
-
-	catalog := catalog2.DefaultCatalog(c.Applications[0])
-	aoeEngine := engine.Mock(&catalog)
-
-	err = aoeEngine.Create(0, testDBName, 0)
-	require.NotNil(t, err)
-
-	db, err := aoeEngine.Database(testDBName)
-	require.NoError(t, err)
-
-	tbls := db.Relations()
-	require.Equal(t, 19, len(tbls))
-	time.Sleep(3 * time.Second)
 }

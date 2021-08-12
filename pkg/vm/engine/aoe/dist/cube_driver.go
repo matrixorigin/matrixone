@@ -3,7 +3,6 @@ package dist
 import (
 	"encoding/json"
 	"errors"
-	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
@@ -402,7 +401,6 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 	i := 0
 	for {
 		i = i + 1
-		stdLog.Printf("[Debug]PrefixScanWithGroup cnt is %d, startkey is %v", i, req.PrefixScan.StartKey)
 		data, err = h.ExecWithGroup(req, group)
 		if data == nil || err != nil {
 			break

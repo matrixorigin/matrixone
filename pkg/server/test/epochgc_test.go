@@ -5,6 +5,7 @@ import (
 	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"io/ioutil"
+	stdLog "log"
 	"math/rand"
 	"matrixone/pkg/client"
 	mo_config "matrixone/pkg/config"
@@ -14,7 +15,12 @@ import (
 	"matrixone/pkg/sql/handler"
 	"matrixone/pkg/vm/engine"
 	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/config"
+	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
+	e "matrixone/pkg/vm/engine/aoe/storage"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -27,7 +33,7 @@ import (
 
 var DC *client.DebugCounter = client.NewDebugCounter(32)
 
-func TestEpochGC(t *testing.T) {
+/*func TestEpochGC(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
 	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
@@ -73,7 +79,7 @@ func TestEpochGC(t *testing.T) {
 	}
 
 	DC.Cf.Close()
-}
+}*/
 
 /*
 test:
@@ -88,42 +94,70 @@ client:
 
 mysql> source pathto/xxx.sql
 */
+
+const (
+	blockRows          = 100
+	blockCntPerSegment = 2
+	colCnt             = 4
+	segmentCnt         = 2
+)
+
 func TestEpochGCWithMultiServer(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
 	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
-	defer func() {
-		err := cleanupTmpDir()
-		if err != nil {
-			t.Errorf("delete cube temp dir failed %v", err)
-		}
-	}()
-
-	//go DC.DCRoutine()
-
 	nodeCnt := 3
 
-	pcis := make([]*client.PDCallbackImpl, nodeCnt)
-	ppu := client.NewPDCallbackParameterUnit(5, 20, 20, 20)
-	for i := 0; i < nodeCnt; i++ {
-		pcis[i] = client.NewPDCallbackImpl(ppu)
-		pcis[i].Id = i
-	}
+	/*	pcis := make([]*client.PDCallbackImpl, nodeCnt)
+		ppu := client.NewPDCallbackParameterUnit(5, 20, 20, 20)
+		for i := 0; i < nodeCnt; i++ {
+			pcis[i] = client.NewPDCallbackImpl(ppu)
+			pcis[i].Id = i
+		}*/
 
-	c, err := NewTestClusterStore(t, true, nil, pcis, nodeCnt)
-	if err != nil {
-		t.Errorf("new cube failed %v", err)
-		return
-	}
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 10
+			c.ServerConfig.ExternalServer = true
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+			opts := &e.Options{}
+			mdCfg := &md.Configuration{
+				Dir:              path,
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &e.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return daoe.NewStorageWithOptions(path, opts)
+		}), testutil.WithTestAOEClusterUsePebble())
 
-	defer c.Stop()
+	c.Start()
 
-	catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
+	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
+
+	stdLog.Printf("app all started.")
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
+
+	catalog := aoe_catalog.DefaultCatalog(c.CubeDrivers[0])
 	eng := aoe_engine.Mock(&catalog)
 
 	for i := 0; i < nodeCnt; i++ {
-		pcis[i].SetCatalogService(&catalog)
+		c.PCIs[i].SetCatalogService(&catalog)
+		//pcis[i].SetCatalogService(&catalog)
 	}
 
 	server_cnt := 2
@@ -149,7 +183,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		srv.Register(hp.Process)
 		go srv.Run()
 
-		svr, err := get_server(testConfigFile, testPorts[i], pcis[i], eng)
+		svr, err := get_server(testConfigFile, testPorts[i], c.PCIs[i], eng)
 		if err != nil {
 			t.Error(err)
 			return

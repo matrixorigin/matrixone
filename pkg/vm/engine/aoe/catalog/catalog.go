@@ -122,26 +122,35 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 	}
 	err = c.Driver.Set(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id))
 	if err != nil {
-		return 0, ErrTableCreateFailed
+		stdLog.Printf("ErrTableCreateFailed, %v", err)
+		return 0, err
+		//return 0, ErrTableCreateFailed
 	}
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
 		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
-			return 0, ErrTableCreateFailed
+			stdLog.Printf("ErrTableCreateFailed, %v", err)
+			return 0, err
+			//return 0, ErrTableCreateFailed
 		}
 		if c.Driver.Set(rkey, []byte(tbl.Name)) != nil {
-			return 0, ErrTableCreateFailed
+			stdLog.Printf("ErrTableCreateFailed, %v", err)
+			return 0, err
+			//return 0, ErrTableCreateFailed
 		}
 		tbl.State = aoe.StatePublic
 		meta, err := helper.EncodeTable(tbl)
 		if err != nil {
-			return 0, ErrTableCreateFailed
+			stdLog.Printf("ErrTableCreateFailed, %v", err)
+			return 0, err
+			//return 0, ErrTableCreateFailed
 		}
 		//save metadata to kv
 		err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
 		if err != nil {
+			stdLog.Printf("ErrTableCreateFailed, %v", err)
 			return 0, err
 		}
 		stdLog.Printf("Create Table finished, key is %v", c.tableKey(dbId, tbl.Id))
@@ -296,7 +305,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 				} else {
 					_, err = c.Driver.DropTablet(c.encodeTabletName(sid, tbl.Id), sid)
 					if err != nil {
-						stdLog.Printf("call local drop table failed, %v", err)
+						stdLog.Printf("call local drop table failed %d, %d, %v", sid, tbl.Id, err)
 						success = false
 						break
 					}
@@ -425,6 +434,7 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	}*/
 	shard, err := c.Driver.GetShardPool().Alloc(uint64(pb.AOEGroup), codec.Uint642Bytes(tid))
 	if err != nil {
+		stdLog.Printf("GetShardPool failed, err is %v", err)
 		return shardid, err
 	}
 	return shard.ShardID, nil

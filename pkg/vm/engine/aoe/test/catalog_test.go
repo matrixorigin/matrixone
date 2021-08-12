@@ -55,8 +55,6 @@ func TestCatalog(t *testing.T) {
 			return daoe.NewStorage(path)
 		}), testutil.WithTestAOEClusterUsePebble())
 	c.Start()
-	stdLog.Printf("app all started.")
-
 	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
 	stdLog.Printf("app all started.")
 
@@ -66,6 +64,8 @@ func TestCatalog(t *testing.T) {
 }
 
 func testTableDDL(t *testing.T, c catalog2.Catalog) {
+	//Wait shard state change
+
 	tbs, err := c.GetTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
 
