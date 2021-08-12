@@ -18,11 +18,12 @@ type FlushInfoOp struct {
 }
 
 func (op *FlushInfoOp) Execute() (err error) {
-	err = op.Ctx.Opts.Meta.Checkpointer.PreCommit(op.Info)
+	ck := op.Ctx.Opts.Meta.CKFactory.Create()
+	err = ck.PreCommit(op.Info)
 	if err != nil {
 		return err
 	}
-	err = op.Ctx.Opts.Meta.Checkpointer.Commit(op.Info)
+	err = ck.Commit(op.Info)
 	if err != nil {
 		return err
 	}

@@ -5,17 +5,20 @@ import (
 	dump "encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/btree"
 	"io"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"sync"
 	"sync/atomic"
+
+	"github.com/google/btree"
 	// dump "github.com/vmihailenco/msgpack/v5"
 	// log "github.com/sirupsen/logrus"
 )
 
-func NewMetaInfo(conf *Configuration) *MetaInfo {
+func NewMetaInfo(mu *sync.RWMutex, conf *Configuration) *MetaInfo {
 	info := &MetaInfo{
+		RWMutex:   mu,
 		Tables:    make(map[uint64]*Table),
 		Conf:      conf,
 		TableIds:  make(map[uint64]bool),
@@ -26,8 +29,8 @@ func NewMetaInfo(conf *Configuration) *MetaInfo {
 	return info
 }
 
-func MockInfo(blkRows, blks uint64) *MetaInfo {
-	info := NewMetaInfo(&Configuration{
+func MockInfo(mu *sync.RWMutex, blkRows, blks uint64) *MetaInfo {
+	info := NewMetaInfo(mu, &Configuration{
 		BlockMaxRows:     blkRows,
 		SegmentMaxBlocks: blks,
 	})
@@ -332,7 +335,7 @@ func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
-	new_info := NewMetaInfo(info.Conf)
+	new_info := NewMetaInfo(info.RWMutex, info.Conf)
 	new_info.CheckPoint = info.CheckPoint
 	new_info.CkpTime = ctx.Ts
 	for k, v := range info.Tables {

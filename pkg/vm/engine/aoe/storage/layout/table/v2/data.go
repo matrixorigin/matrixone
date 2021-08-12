@@ -297,7 +297,7 @@ func (td *TableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
 	}
 	old := td.tree.Segments[idx]
 	if old.GetType() != base.UNSORTED_SEG {
-		panic("logic error")
+		panic(fmt.Sprintf("old segment %d type is %d", id, old.GetType()))
 	}
 	if old.GetMeta().ID != id {
 		panic("logic error")
@@ -352,14 +352,15 @@ func MockSegments(meta *md.Table, tblData iface.ITableData) []uint64 {
 }
 
 type Tables struct {
-	sync.RWMutex
+	Mu        *sync.RWMutex
 	Data      map[uint64]iface.ITableData
 	Ids       map[uint64]bool
 	Tombstone map[uint64]iface.ITableData
 }
 
-func NewTables() *Tables {
+func NewTables(mu *sync.RWMutex) *Tables {
 	return &Tables{
+		Mu:        mu,
 		Data:      make(map[uint64]iface.ITableData),
 		Ids:       make(map[uint64]bool),
 		Tombstone: make(map[uint64]iface.ITableData),
@@ -371,9 +372,9 @@ func (ts *Tables) TableIds() (ids map[uint64]bool) {
 }
 
 func (ts *Tables) DropTable(tid uint64) (tbl iface.ITableData, err error) {
-	ts.Lock()
+	ts.Mu.Lock()
 	tbl, err = ts.DropTableNoLock(tid)
-	ts.Unlock()
+	ts.Mu.Unlock()
 	return tbl, err
 }
 
@@ -398,26 +399,26 @@ func (ts *Tables) GetTableNoLock(tid uint64) (tbl iface.ITableData, err error) {
 }
 
 func (ts *Tables) WeakRefTable(tid uint64) (tbl iface.ITableData, err error) {
-	ts.RLock()
+	ts.Mu.RLock()
 	tbl, err = ts.GetTableNoLock(tid)
-	ts.RUnlock()
+	ts.Mu.RUnlock()
 	return tbl, err
 }
 
 func (ts *Tables) StrongRefTable(tid uint64) (tbl iface.ITableData, err error) {
-	ts.RLock()
+	ts.Mu.RLock()
 	tbl, err = ts.GetTableNoLock(tid)
 	if tbl != nil {
 		tbl.Ref()
 	}
-	ts.RUnlock()
+	ts.Mu.RUnlock()
 	return tbl, err
 }
 
 func (ts *Tables) CreateTable(tbl iface.ITableData) (err error) {
-	ts.Lock()
+	ts.Mu.Lock()
 	err = ts.CreateTableNoLock(tbl)
-	ts.Unlock()
+	ts.Mu.Unlock()
 	return err
 }
 

@@ -1358,7 +1358,7 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 				o := uint32(0)
 				col.Offsets = make([]uint32, n)
 				for i, n := range col.Lengths {
-					col.Offsets[i] = 0
+					col.Offsets[i] = o
 					o += n
 				}
 			}
@@ -1632,7 +1632,7 @@ func DecodeVectorWithProcess(data []byte, proc *process.Process) (*vector.Vector
 				o := uint32(0)
 				col.Offsets = make([]uint32, n)
 				for i, n := range col.Lengths {
-					col.Offsets[i] = 0
+					col.Offsets[i] = o
 					o += n
 				}
 			}
