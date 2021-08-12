@@ -26,7 +26,7 @@ func TestBase1(t *testing.T) {
 	blkCnt := uint64(4)
 	rowCount := uint64(10)
 	capacity := uint64(200)
-	info := md.MockInfo(rowCount, blkCnt)
+	info := md.MockInfo(&opts.Mu, rowCount, blkCnt)
 	schema := md.MockSchema(2)
 	tableMeta := md.MockTable(info, schema, segCnt*blkCnt)
 

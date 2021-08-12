@@ -8,16 +8,16 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
+	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
 	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	mdops "matrixone/pkg/vm/engine/aoe/storage/ops/memdata/v2"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
 	"sync"
@@ -43,7 +43,7 @@ type DB struct {
 	SSTBufMgr   bmgrif.IBufferManager
 
 	Store struct {
-		sync.RWMutex
+		Mu         *sync.RWMutex
 		MetaInfo   *md.MetaInfo
 		DataTables *table.Tables
 	}
@@ -55,10 +55,10 @@ type DB struct {
 	DataDir  *os.File
 	DBLocker io.Closer
 
+	Scheduler sched.Scheduler
+
 	Closed  *atomic.Value
 	ClosedC chan struct{}
-
-	sync.RWMutex
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
@@ -72,23 +72,25 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 
 	collection := d.MemTableMgr.StrongRefCollection(tbl.GetID())
 	if collection == nil {
-		opCtx := &mdops.OpCtx{
+		eCtx := &memdata.Context{
 			Opts:        d.Opts,
-			MTManager:   d.MemTableMgr,
+			MTMgr:       d.MemTableMgr,
 			TableMeta:   tbl,
 			IndexBufMgr: d.IndexBufMgr,
 			MTBufMgr:    d.MTBufMgr,
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
 			Tables:      d.Store.DataTables,
+			Waitable:    true,
 		}
-		op := mdops.NewCreateTableOp(opCtx)
-		op.Push()
-		err = op.WaitDone()
-		if err != nil {
+		e := memdata.NewCreateTableEvent(eCtx)
+		if err = d.Scheduler.Schedule(e); err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
-		collection = op.Collection
+		if err = e.WaitDone(); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection = e.Collection
 	}
 
 	index := &md.LogIndex{
@@ -102,23 +104,25 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 func (d *DB) getTableData(meta *md.Table) (tiface.ITableData, error) {
 	data, err := d.Store.DataTables.StrongRefTable(meta.ID)
 	if err != nil {
-		opCtx := &mdops.OpCtx{
+		eCtx := &memdata.Context{
 			Opts:        d.Opts,
-			MTManager:   d.MemTableMgr,
+			MTMgr:       d.MemTableMgr,
 			TableMeta:   meta,
 			IndexBufMgr: d.IndexBufMgr,
 			MTBufMgr:    d.MTBufMgr,
 			SSTBufMgr:   d.SSTBufMgr,
 			FsMgr:       d.FsMgr,
 			Tables:      d.Store.DataTables,
+			Waitable:    true,
 		}
-		op := mdops.NewCreateTableOp(opCtx)
-		op.Push()
-		err = op.WaitDone()
-		if err != nil {
+		e := memdata.NewCreateTableEvent(eCtx)
+		if err = d.Scheduler.Schedule(e); err != nil {
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
-		collection := op.Collection
+		if err = e.WaitDone(); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection := e.Collection
 		if data, err = d.Store.DataTables.StrongRefTable(meta.ID); err != nil {
 			collection.Unref()
 			return nil, err
@@ -155,13 +159,16 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	opCtx := &mops.OpCtx{Opts: d.Opts}
-	op := mops.NewDropTblOp(opCtx, ctx, d.Store.DataTables)
-	op.Push()
-	err = op.WaitDone()
-	req := gcreqs.NewDropTblRequest(d.Opts, op.Id, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
-	d.Opts.GC.Acceptor.Accept(req)
-	return op.Id, err
+	eCtx := &meta.Context{
+		Opts:     d.Opts,
+		Waitable: true,
+	}
+	e := meta.NewDropTableEvent(eCtx, ctx, d.MemTableMgr, d.Store.DataTables)
+	if err = d.Scheduler.Schedule(e); err != nil {
+		return id, err
+	}
+	err = e.WaitDone()
+	return e.Id, err
 }
 
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
@@ -169,14 +176,16 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 		panic(err)
 	}
 	info.Name = ctx.TableName
-	opCtx := &mops.OpCtx{Opts: d.Opts, TableInfo: info}
-	op := mops.NewCreateTblOp(opCtx, ctx)
-	op.Push()
-	err = op.WaitDone()
-	if err != nil {
+
+	eCtx := &meta.Context{Opts: d.Opts, Waitable: true}
+	e := meta.NewCreateTableEvent(eCtx, ctx, info)
+	if err = d.Opts.Scheduler.Schedule(e); err != nil {
 		return id, err
 	}
-	id = op.GetTable().GetID()
+	if err = e.WaitDone(); err != nil {
+		return id, e.Err
+	}
+	id = e.GetTable().GetID()
 	return id, nil
 }
 
@@ -193,9 +202,6 @@ func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {
 		return ids
 	}
 	ids.Ids = data.SegmentIds()
-	// for _, id := range ids {
-	// 	infos = append(infos, engine.SegmentInfo{Id: strconv.FormatUint(id, 10)})
-	// }
 	return ids
 }
 
@@ -298,11 +304,6 @@ func (d *DB) startCleaner() {
 
 func (d *DB) startWorkers() {
 	d.Opts.GC.Acceptor.Start()
-	d.Opts.MemData.Updater.Start()
-	d.Opts.Data.Flusher.Start()
-	d.Opts.Data.Sorter.Start()
-	d.Opts.Meta.Flusher.Start()
-	d.Opts.Meta.Updater.Start()
 }
 
 func (d *DB) EnsureNotClosed() {
@@ -320,24 +321,10 @@ func (d *DB) IsClosed() bool {
 
 func (d *DB) stopWorkers() {
 	d.Opts.GC.Acceptor.Stop()
-	d.Opts.MemData.Updater.Stop()
-	d.Opts.Data.Flusher.Stop()
-	d.Opts.Data.Sorter.Stop()
-	d.Opts.Meta.Flusher.Stop()
-	d.Opts.Meta.Updater.Stop()
 }
 
 func (d *DB) stopCleaner() {
 	d.Cleaner.MetaFiles.Stop()
-}
-
-func (d *DB) WorkersStatsString() string {
-	s := fmt.Sprintf("%s\n", d.Opts.MemData.Updater.StatsString())
-	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Flusher.StatsString())
-	s = fmt.Sprintf("%s%s\n", s, d.Opts.Data.Sorter.StatsString())
-	s = fmt.Sprintf("%s%s\n", s, d.Opts.Meta.Updater.StatsString())
-	s = fmt.Sprintf("%s%s\n", s, d.Opts.Meta.Flusher.StatsString())
-	return s
 }
 
 func (d *DB) Close() error {
@@ -347,6 +334,7 @@ func (d *DB) Close() error {
 
 	d.Closed.Store(ErrClosed)
 	close(d.ClosedC)
+	d.Scheduler.Stop()
 	d.stopWorkers()
 	d.stopCleaner()
 	err := d.DBLocker.Close()

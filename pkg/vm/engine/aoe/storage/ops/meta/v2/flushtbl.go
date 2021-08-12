@@ -18,11 +18,12 @@ type FlushTblOp struct {
 }
 
 func (op *FlushTblOp) Execute() (err error) {
-	err = op.Ctx.Opts.Meta.Checkpointer.PreCommit(op.Table)
+	ck := op.Ctx.Opts.Meta.CKFactory.Create()
+	err = ck.PreCommit(op.Table)
 	if err != nil {
 		return err
 	}
-	err = op.Ctx.Opts.Meta.Checkpointer.Commit(op.Table)
+	err = ck.Commit(op.Table)
 	if err != nil {
 		return err
 	}

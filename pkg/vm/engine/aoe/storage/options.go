@@ -5,8 +5,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"sync"
 	"time"
 )
 
@@ -17,6 +19,7 @@ const (
 	DEFAULT_DATA_FLUSHER  = "DATA_FLUSHER"
 	DEFAULT_DATA_SORTER   = "DATA_SORTER"
 	DEFAULT_MDATA_UPDATER = "MDATA_UPDATER"
+	SchedulerName         = "AOEScheduler"
 )
 
 type IterOptions struct {
@@ -40,16 +43,20 @@ type MetaCleanerCfg struct {
 type Options struct {
 	EventListener e.EventListener
 
+	Mu sync.RWMutex
+
+	Scheduler sched.Scheduler
+
 	Mon struct {
 		Collector iw.IOpWorker
 	}
 
 	Meta struct {
-		Flusher      iw.IOpWorker
-		Updater      iw.IOpWorker
-		Checkpointer *Checkpointer
-		Conf         *md.Configuration
-		Info         *md.MetaInfo
+		Flusher   iw.IOpWorker
+		Updater   iw.IOpWorker
+		CKFactory *checkpointerFactory
+		Conf      *md.Configuration
+		Info      *md.MetaInfo
 	}
 
 	Data struct {
@@ -78,6 +85,10 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	o.EventListener.FillDefaults()
 
+	// if o.Scheduler == nil {
+	// 	o.Scheduler = NewScheduler(o)
+	// }
+
 	if o.Mon.Collector == nil {
 		o.Mon.Collector = w.NewOpWorker(DEFAULT_MON_COLLECTOR)
 	}
@@ -96,22 +107,12 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 	if o.Meta.Info == nil {
-		o.Meta.Info = md.NewMetaInfo(o.Meta.Conf)
+		o.Meta.Info = md.NewMetaInfo(&o.Mu, o.Meta.Conf)
 	}
 
-	if o.Meta.Checkpointer == nil {
-		o.Meta.Checkpointer = NewCheckpointer(o, dirname)
+	if o.Meta.CKFactory == nil {
+		o.Meta.CKFactory = NewCheckpointerFactory(dirname)
 	}
-
-	// if o.Data.IOFactory == nil {
-	// 	dio.WRITER_FACTORY.Opts = o
-	// 	dio.WRITER_FACTORY.Dirname = dirname
-	// 	dio.READER_FACTORY.Opts = o
-	// 	dio.READER_FACTORY.Dirname = dirname
-	// o.Data.IOFactory = WRITER_FACTORY
-	// o.Data.WriterFactory.Opts = o
-	// o.Data.WriterFactory.Dirname = dirname
-	// }
 
 	if o.Data.Flusher == nil {
 		o.Data.Flusher = w.NewOpWorker(DEFAULT_DATA_FLUSHER)
@@ -128,7 +129,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.CacheCfg == nil {
 		o.CacheCfg = &CacheCfg{
 			IndexCapacity:  o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
-			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
+			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 800,
 			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
 		}
 	}

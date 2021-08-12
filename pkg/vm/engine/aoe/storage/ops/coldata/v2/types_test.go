@@ -25,7 +25,7 @@ func TestUpgradeBlkOp(t *testing.T) {
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
 
-	info := md.MockInfo(row_count, blk_cnt)
+	info := md.MockInfo(&opts.Mu, row_count, blk_cnt)
 	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
 	tableData := tbl.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
 	segIds := tbl.MockSegments(tableMeta, tableData)
@@ -84,7 +84,7 @@ func TestUpgradeSegOp(t *testing.T) {
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
 
-	info := md.MockInfo(row_count, blk_cnt)
+	info := md.MockInfo(&opts.Mu, row_count, blk_cnt)
 	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
 	tableData := tbl.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
 	segIds := tbl.MockSegments(tableMeta, tableData)
