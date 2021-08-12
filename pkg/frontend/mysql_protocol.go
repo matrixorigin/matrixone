@@ -737,7 +737,8 @@ func (mp *MysqlProtocol) negotiateAuthenticationMethod() ([]byte, error) {
 	}
 
 	read, err := mp.routine.io.Read()
-	data := read.([]byte)[4:]
+
+	data := read.(*Packet).Payload
 	mp.sequenceId++
 	return data, nil
 }
