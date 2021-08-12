@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"github.com/fagongzi/goetty"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
-	"matrixone/pkg/config"
 	"net"
 )
 
@@ -75,7 +74,7 @@ func (routine *Routine) Peer() (string, string) {
 func (routine *Routine) ChangeDB(db string) (*Response, error) {
 	//TODO: check meta data
 	var err error = nil
-	if _, err = config.StorageEngine.Database(db); err != nil {
+	if _, err = routine.ses.Pu.StorageEngine.Database(db); err != nil {
 		//echo client. no such database
 		return nil, NewMysqlError(ER_BAD_DB_ERROR, db)
 	}

@@ -8,7 +8,6 @@ import (
 	cubeconfig "github.com/matrixorigin/matrixcube/config"
 	"log"
 	"math"
-	"matrixone/pkg/vm/engine/aoe/catalog"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -71,8 +70,8 @@ type PDCallbackImpl struct {
 	ddl_info map[uint64]uint64
 	//timeout of heartbeat response
 	heartbeatTimeout *Timeout
-	//catalog service
-	catalog *catalog.Catalog
+	//the interface to remove epoch from catalog service
+	removeEpoch func(epoch uint64)
 
 	/*
 	ddl queue
@@ -102,6 +101,7 @@ func NewPDCallbackImpl(pu *PDCallbackParameterUnit) *PDCallbackImpl {
 		ddl_info:          make(map[uint64]uint64),
 		ddlQueue:          make(map[uint64][]*Meta),
 		heartbeatTimeout:  NewTimeout(time.Duration(pu.heartbeatTimeout)*time.Second, false),
+		removeEpoch: nil,
 	}
 }
 
@@ -468,18 +468,15 @@ pd leader start the routine.
 func (pci *PDCallbackImpl) DeleteDDLPeriodicallyRoutine () {
 	pci.ddlDeleteClose.Open()
 	for pci.ddlDeleteClose.IsOpened() {
-		//step 1: get ddls marked deleted from the catalog service
-		//step 2: delete these ddls
-		if pci.catalog != nil {
+		//step 1: delete these ddls
+		if pci.removeEpoch != nil {
 			epoch := pci.GetClusterMinimumRemovableEpoch()
 			if epoch > 0 {
-				fmt.Printf("id %d delete ddl at epoch %d \n",pci.Id, epoch)
-				_,err := pci.catalog.RemoveDeletedTable(epoch)
-				if err != nil {
-					fmt.Printf("catalog remove ddl timer failed. error :%v \n",err)
-				}
+				fmt.Printf("id %d delete ddl at epoch %d \n", pci.Id, epoch)
+				pci.removeEpoch(epoch)
 			}
 		}
+
 		time.Sleep(time.Duration(pci.periodOfDDLDelete) * time.Second)
 	}
 }
@@ -603,12 +600,9 @@ less than or equal to the epoch will be deleted.
  */
 func (sci *PDCallbackImpl) DeleteDDLPermanentlyRoutine(max_ep uint64) {
 	//drive catalog service DeleteDDL
-	if sci.catalog != nil && max_ep > 0 {
+	if sci.removeEpoch != nil && max_ep > 0 {
 		fmt.Printf("async delete ddl epoch %d \n",max_ep)
-		_,err := sci.catalog.RemoveDeletedTable(max_ep)
-		if err != nil {
-			fmt.Printf("catalog remove ddl async failed. error :%v \n",err)
-		}
+		sci.removeEpoch(max_ep)
 	}
 }
 
@@ -693,10 +687,10 @@ func (sci *PDCallbackImpl) CanAcceptSomething() bool{
 	return !sci.heartbeatTimeout.isTimeout()
 }
 
-func (sci *PDCallbackImpl) SetCatalogService(cl *catalog.Catalog) {
+func (sci *PDCallbackImpl) SetRemoveEpoch(f func(uint64)) {
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
-	sci.catalog = cl
+	sci.removeEpoch = f
 }
 
 func (sci *PDCallbackImpl) GetClusterMinimumRemovableEpoch() uint64{

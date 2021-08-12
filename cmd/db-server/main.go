@@ -22,6 +22,7 @@ import (
 )
 
 var (
+	catalog aoe_catalog.Catalog
 	mo   *frontend.MOServer
 	pcis []*frontend.PDCallbackImpl
 )
@@ -45,6 +46,16 @@ func registerSignalHandlers() {
 }
 
 func cleanup() {
+}
+
+/**
+call the catalog service to remove the epoch
+ */
+func removeEpoch(epoch uint64) {
+	_,err := catalog.RemoveDeletedTable(epoch)
+	if err != nil {
+		fmt.Printf("catalog remove ddl failed. error :%v \n",err)
+	}
 }
 
 func main() {
@@ -97,11 +108,11 @@ func main() {
 			os.Exit(-2)
 		}
 
-		catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
+		catalog = aoe_catalog.DefaultCatalog(c.Applications[0])
 		eng := aoe_engine.Mock(&catalog)
 
 		for i := 0 ; i < nodeCnt; i++ {
-			pcis[i].SetCatalogService(&catalog)
+			pcis[i].SetRemoveEpoch(removeEpoch)
 		}
 
 		//one rpcserver per cube node

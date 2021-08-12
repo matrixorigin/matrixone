@@ -8,8 +8,6 @@ import (
 	"matrixone/pkg/defines"
 	"strconv"
 	"time"
-
-	"matrixone/pkg/config"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -421,17 +419,17 @@ func (mp *MysqlProtocol) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
 
 	//TODO:get the user's password
-	var psw []byte
-	if mp.username == config.GlobalSystemVariables.GetDumpuser() { //the user dump for test
-		psw = []byte(config.GlobalSystemVariables.GetDumppassword())
-	}
-
-	//TO Check password
-	if mp.checkPassword(psw, mp.salt, authResponse) {
-		fmt.Printf("check password succeeded\n")
-	} else {
-		return fmt.Errorf("check password failed\n")
-	}
+	//var psw []byte
+	//if mp.username == config.GlobalSystemVariables.GetDumpuser() { //the user dump for test
+	//	psw = []byte(config.GlobalSystemVariables.GetDumppassword())
+	//}
+	//
+	////TO Check password
+	//if mp.checkPassword(psw, mp.salt, authResponse) {
+	//	fmt.Printf("check password succeeded\n")
+	//} else {
+	//	return fmt.Errorf("check password failed\n")
+	//}
 	return nil
 }
 
@@ -737,7 +735,7 @@ func (mp *MysqlProtocol) negotiateAuthenticationMethod() ([]byte, error) {
 	}
 
 	read, err := mp.routine.io.Read()
-	data := read.([]byte)[4:]
+	data := read.(*Packet).Payload
 	mp.sequenceId++
 	return data, nil
 }

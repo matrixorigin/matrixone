@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"matrixone/pkg/defines"
 	"matrixone/pkg/sql/compile"
+	"strings"
 
-	"matrixone/pkg/config"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/tree"
@@ -49,10 +49,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		fmt.Printf("bat: %v\n", bat)
 	}
 
-	var rowGroupSize = config.GlobalSystemVariables.GetCountOfRowsPerSendingToClient()
+	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
 	rowGroupSize = MaxInt64(rowGroupSize, 1)
 
-	var choose = !config.GlobalSystemVariables.GetSendRow()
+	var choose = !ses.Pu.SV.GetSendRow()
 	if choose {
 		goID := GetRoutineId()
 
@@ -838,6 +838,31 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	return nil
 }
 
+//handle SELECT DATABASE()
+func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error{
+	var err error = nil
+	ses := mce.routine.GetSession()
+	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+
+	col := new(defines.MysqlColumn)
+	col.SetName("DATABASE()")
+	col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	ses.Mrs.AddColumn(col)
+	val := mce.routine.db
+	if val == "" {
+		val = "NULL"
+	}
+	ses.Mrs.AddRow([]interface{}{val})
+
+	mer := defines.NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.routine.GetSession()
@@ -882,7 +907,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		return nil
 	}
 
-	comp := compile.New(mce.routine.db, sql, mce.routine.user, config.StorageEngine, config.ClusterNodes, proc)
+	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, ses.Pu.ClusterNodes, proc)
 	execs, err := comp.Compile()
 	if err != nil {
 		return err
@@ -903,12 +928,33 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		pdHook.IncQueryCountAtEpoch(epoch, 1)
 		statementCount++
 
+		switch st := stmt.(type) {
+		case *tree.Select:
+			if sc,ok := st.Select.(*tree.SelectClause) ; ok {
+				if len(sc.Exprs) == 1 {
+					if fe,ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
+						if un,ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
+							if strings.ToUpper(un.Parts[0]) == "DATABASE" {
+								err = mce.handleSelectDatabase(st)
+								if err != nil{
+									return err
+								}
+
+								//next statement
+								continue
+							}
+						}
+					}
+				}
+			}
+		}
+
 		//check database
 		if mce.routine.db == "" {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus:
+				*tree.ShowStatus,*tree.DropDatabase:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
@@ -1110,6 +1156,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return er
 			}
 
+			//record ddl drop xxx after the success
+			switch stmt.(type) {
+			case *tree.DropTable, *tree.DropDatabase,
+					*tree.DropIndex, *tree.DropUser, *tree.DropRole:
+				//test ddl
+				pdHook.IncDDLCountAtEpoch(epoch,1)
+			}
+
 			/*
 				Step 2: Echo client
 			*/
@@ -1133,16 +1187,16 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	var resp *Response = nil
 	fmt.Printf("cmd %v \n", req.GetCmd())
 
-	pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
-	if !pdHook.CanAcceptSomething() {
-		resp = NewResponse(
-			ErrorResponse,
-			0,
-			req.GetCmd(),
-			nil,
-		)
-		return resp, nil
-	}
+	//pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
+	//if !pdHook.CanAcceptSomething() {
+	//	resp = NewResponse(
+	//		ErrorResponse,
+	//		0,
+	//		req.GetCmd(),
+	//		nil,
+	//	)
+	//	return resp, nil
+	//}
 
 	switch uint8(req.GetCmd()) {
 	case COM_QUIT:
