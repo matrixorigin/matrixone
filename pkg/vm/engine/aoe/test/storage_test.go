@@ -108,13 +108,14 @@ func TestRestartStorage(t *testing.T) {
 		}), testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterRecreate(false)))
 	c.Start()
-	c.RaftCluster.WaitShardByCount(t, 2, time.Second*10)
+	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
 	testAOEStorageAfterRestart(t, c)
 	//testKVStorageAfterRestart(t, c)
+	//c.Restart()
 }
 
 func testAOEStorage(t *testing.T, c *testutil.TestAOECluster) {

@@ -2,7 +2,6 @@ package testutil
 
 import (
 	"fmt"
-	"matrixone/pkg/client"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
@@ -109,7 +108,6 @@ type TestAOECluster struct {
 	t              *testing.T
 	initOpts       []TestAOEClusterOption
 	initCfgCreator func(node int) *config.Config
-	PCIs           []*client.PDCallbackImpl
 
 	// reset fields
 	opts             *testAOEClusterOptions
@@ -160,11 +158,11 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 		cfg.Replication.ShardCapacityBytes = 100
 		cfg.Replication.ShardSplitCheckBytes = 80
 
-		ppu := client.NewPDCallbackParameterUnit(5, 20, 20, 20)
-		pci := client.NewPDCallbackImpl(ppu)
-		pci.Id = node
-		cfg.Customize.CustomStoreHeartbeatDataProcessor = pci
-		c.PCIs = append(c.PCIs, pci)
+		//ppu := client.NewPDCallbackParameterUnit(5, 20, 20, 20)
+		//pci := client.NewPDCallbackImpl(ppu)
+		//pci.Id = node
+		//cfg.Customize.CustomStoreHeartbeatDataProcessor = pci
+		//c.PCIs = append(c.PCIs, pci)
 	}), raftstore.WithTestClusterStoreFactory(func(node int, cfg *cConfig.Config) raftstore.Store {
 		dCfg := c.initCfgCreator(node)
 		dCfg.CubeConfig = *cfg
