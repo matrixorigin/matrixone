@@ -41,14 +41,14 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		if err != nil {
 			panic(err)
 		}
-		buf, err := index.DefaultRWHelper.WriteIndices(indices)
-		if err != nil {
-			panic(err)
-		}
-		_, err = w.Write(buf)
-		if err != nil {
-			panic(err)
-		}
+		//buf, err := index.DefaultRWHelper.WriteIndices(indices)
+		//if err != nil {
+		//	panic(err)
+		//}
+		//_, err = w.Write(buf)
+		//if err != nil {
+		//	panic(err)
+		//}
 		algo := uint8(0)
 		cols := uint16(0)
 		err = binary.Write(w, binary.BigEndian, &algo)
@@ -90,7 +90,7 @@ func TestAll(t *testing.T) {
 	}
 	t.Log(bufMgr.String())
 	t.Log(tblHolder.String())
-	assert.Equal(t, colCnt*blkCnt, bufMgr.NodeCount())
+	//assert.Equal(t, colCnt*blkCnt, bufMgr.NodeCount())
 	for bidx := 0; bidx < blkCnt; bidx++ {
 		blk := segHolder.StrongRefBlock(uint64(bidx))
 		for i, _ := range blk.Indices {
@@ -158,4 +158,29 @@ func TestSegmentWriter(t *testing.T) {
 	stat1 := col1Vf.Stat()
 	t.Log(stat0.Name())
 	t.Log(stat1.Name())
+
+	bufMgr := bmgr.MockBufMgr(1000)
+	tblHolder := index.NewTableHolder(bufMgr, (*segment.AsCommonID()).TableID)
+	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
+	segHolder.Unref()
+	segHolder.Init(segFile)
+
+	t.Log(tblHolder.String())
+	for i := 0; i < len(segment.Blocks); i++ {
+		t.Log(segFile.GetBlockIndicesMeta(segment.Blocks[i].AsCommonID().AsBlockID()).String())
+	}
+	t.Log(segFile.GetIndicesMeta().String())
+
+	ctx := &index.FilterCtx{}
+	ctx.Op = index.OpEq
+	ctx.Val = int32(5)
+	err = segHolder.EvalFilter(0, ctx)
+	assert.Nil(t, err)
+	assert.Equal(t, true, ctx.BoolRes)
+	ctx.Val = int32(10)
+	err = segHolder.EvalFilter(0, ctx)
+	assert.Nil(t, err)
+	assert.Equal(t, false, ctx.BoolRes)
+
+
 }

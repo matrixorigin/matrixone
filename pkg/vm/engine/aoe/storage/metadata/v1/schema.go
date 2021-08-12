@@ -36,7 +36,11 @@ func (s *Schema) Types() (ts []types.Type) {
 }
 
 func (s *Schema) GetColIdx(attr string) int {
-	return s.NameIdMap[attr]
+	idx, ok := s.NameIdMap[attr]
+	if !ok {
+		return -1
+	}
+	return idx
 }
 
 func (s *Schema) Clone() *Schema {

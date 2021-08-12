@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
+	"sync/atomic"
 
 	// "matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -172,6 +173,21 @@ func TestAppend(t *testing.T) {
 	cols := []int{0, 1}
 	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	segIds := tbl.SegmentIds()
+
+	//time.Sleep(2000 * time.Millisecond)
+
+	for _, segId := range segIds {
+		seg := tbl.StrongRefSegment(segId)
+		s := &Segment{
+			Data: seg,
+			Ids:  new(atomic.Value),
+		}
+		filter := NewSegmentSparseFilter(s)
+		ans, err := filter.Eq("mock_0", int32(100000))
+		assert.Nil(t, err)
+		t.Log(ans)
+	}
+
 	ssCtx := &dbi.GetSnapshotCtx{
 		TableName:  tableInfo.Name,
 		SegmentIds: segIds,

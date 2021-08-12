@@ -56,7 +56,7 @@ func NewBlockWriter(data []*vector.Vector, meta *md.Block, dir string) *BlockWri
 	}
 	w.fileGetter = w.createIOWriter
 	w.preprocessor = w.defaultPreprocessor
-	w.indexSerializer = w.flushIndices
+	//w.indexSerializer = w.flushBlkIndices
 	w.dataSerializer = defaultDataSerializer
 	return w
 }
@@ -69,7 +69,7 @@ func NewEmbbedBlockWriter(bat *batch.Batch, meta *md.Block, getter FileGetter) *
 		embbed:     true,
 	}
 	w.preprocessor = w.defaultPreprocessor
-	w.indexSerializer = w.flushIndices
+	w.indexSerializer = w.flushBlkIndices
 	w.dataSerializer = defaultDataSerializer
 	return w
 }
@@ -113,26 +113,194 @@ func (bw *BlockWriter) defaultPreprocessor(data []*vector.Vector, meta *md.Block
 	return err
 }
 
-func (bw *BlockWriter) flushIndices(w *os.File, data []*vector.Vector, meta *md.Block) error {
-	indices := []index.Index{}
-	hasBsi := false
-	for idx, t := range meta.Segment.Table.Schema.ColDefs {
-		if t.Type.Oid == types.T_int32 {
-			{
-				minv := int32(1) + int32(idx)*100
-				maxv := int32(99) + int32(idx)*100
-				zmi := index.NewZoneMap(t.Type, minv, maxv, int16(idx))
-				indices = append(indices, zmi)
+func (bw *BlockWriter) flushBlkIndices(w *os.File, data []*vector.Vector, meta *md.Block) error {
+	var indices []index.Index
+	for idx, colDef := range meta.Segment.Table.Schema.ColDefs {
+		switch colDef.Type.Oid {
+		case types.T_int8:
+			var minv, maxv int8
+			column := data[idx].Col.([]int8)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
 			}
-			if !hasBsi {
-				// column := data[idx].Col.([]int32)
-				// bsiIdx := index.NewNumericBsiIndex(t.Type, 32, int16(idx))
-				// for row, val := range column {
-				// 	bsiIdx.Set(uint64(row), int64(val))
-				// }
-				// indices = append(indices, bsiIdx)
-				hasBsi = true
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_int16:
+			var minv, maxv int16
+			column := data[idx].Col.([]int16)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
 			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_int32:
+			var minv, maxv int32
+			column := data[idx].Col.([]int32)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_int64:
+			var minv, maxv int64
+			column := data[idx].Col.([]int64)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_uint8:
+			var minv, maxv uint8
+			column := data[idx].Col.([]uint8)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_uint16:
+			var minv, maxv uint16
+			column := data[idx].Col.([]uint16)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_uint32:
+			var minv, maxv uint32
+			column := data[idx].Col.([]uint32)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_uint64:
+			var minv, maxv uint64
+			column := data[idx].Col.([]uint64)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_float32:
+			var minv, maxv float32
+			column := data[idx].Col.([]float32)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_float64:
+			var minv, maxv float64
+			column := data[idx].Col.([]float64)
+			for i, v := range column {
+				if i == 0 {
+					maxv = v
+					minv = v
+				}
+				if v > maxv {
+					maxv = v
+				}
+				if v < minv {
+					minv = v
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
+		case types.T_char, types.T_json, types.T_varchar:
+			var minv, maxv []byte
+			column := data[idx].Col.(*types.Bytes)
+			for i := 0; i < len(column.Lengths); i++ {
+				v := column.Get(int64(i))
+				if bytes.Compare(minv, v) > 0 {
+					minv = v
+				}
+				if bytes.Compare(maxv, v) < 0 {
+					maxv = v
+				}
+			}
+			zmi := index.NewZoneMap(colDef.Type, minv, maxv, int16(idx))
+			indices = append(indices, zmi)
 		}
 	}
 	buf, err := index.DefaultRWHelper.WriteIndices(indices)
@@ -165,8 +333,10 @@ func (bw *BlockWriter) Execute() error {
 	if bw.preExecutor != nil {
 		bw.preExecutor()
 	}
-	if err = bw.indexSerializer(w, bw.data, bw.meta); err != nil {
-		return err
+	if bw.indexSerializer != nil {
+		if err = bw.indexSerializer(w, bw.data, bw.meta); err != nil {
+			return err
+		}
 	}
 	if err = bw.dataSerializer(w, bw.data, bw.meta); err != nil {
 		return err

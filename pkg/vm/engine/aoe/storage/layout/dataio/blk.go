@@ -7,7 +7,6 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"os"
 	"path/filepath"
 
@@ -76,15 +75,16 @@ func (bf *BlockFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
-	indexMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
-	if err != nil {
-		panic(fmt.Sprintf("unexpect error: %s", err))
-	}
-	bf.Meta.Indices = indexMeta
+	//indexMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
+	//if err != nil {
+	//	panic(fmt.Sprintf("unexpect error: %s", err))
+	//}
+	//bf.Meta.Indices = indexMeta
 
 	var (
 		cols uint16
 		algo uint8
+		err error
 	)
 	offset, _ := bf.File.Seek(0, io.SeekCurrent)
 	if err = binary.Read(&bf.File, binary.BigEndian, &algo); err != nil {
