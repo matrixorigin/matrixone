@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,7 +34,8 @@ func TestLoadMetaInfo(t *testing.T) {
 		BlockMaxRows:     10,
 	}
 	handle := NewMetaHandle(cfg.Dir)
-	info := handle.RebuildInfo(cfg)
+	mu := &sync.RWMutex{}
+	info := handle.RebuildInfo(mu, cfg)
 	// info := loadMetaInfo(cfg)
 	assert.Equal(t, uint64(0), info.CheckPoint)
 	assert.Equal(t, uint64(0), info.Sequence.NextBlockID)
@@ -91,7 +93,8 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Nil(t, err)
 
 	handle2 := NewMetaHandle(cfg.Dir)
-	info2 := handle2.RebuildInfo(cfg)
+	mu2 := &sync.RWMutex{}
+	info2 := handle2.RebuildInfo(mu2, cfg)
 	assert.NotNil(t, info2)
 	assert.Equal(t, info.CheckPoint, info2.CheckPoint)
 	assert.Equal(t, info.Sequence.NextTableID, info2.Sequence.NextTableID)

@@ -53,10 +53,10 @@ func (sw *MemtableWriter) Flush() (err error) {
 	}
 	bw := dataio.NewBlockWriter(vecs, mt.Meta, sw.Dirname)
 	bw.SetPreExecutor(func() {
-		log.Infof("%s | Memtable | Flushing", bw.GetFileName())
+		log.Infof(" %s | Memtable | Flushing", bw.GetFileName())
 	})
 	bw.SetPostExecutor(func() {
-		log.Infof("%s | Memtable | Flushed", bw.GetFileName())
+		log.Infof(" %s | Memtable | Flushed", bw.GetFileName())
 	})
 	return bw.Execute()
 }

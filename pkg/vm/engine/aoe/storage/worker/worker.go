@@ -56,7 +56,9 @@ func (s *Stats) AddFailed() {
 
 func (s *Stats) RecordTime(t int64) {
 	procced := atomic.LoadUint64(&s.Processed)
-	atomic.StoreInt64(&s.AvgTime, (s.AvgTime*int64(procced-1)+t)/int64(procced))
+	avg := atomic.LoadInt64(&s.AvgTime)
+	//TODO: avgTime is wrong
+	atomic.StoreInt64(&s.AvgTime, (avg*int64(procced-1)+t)/int64(procced))
 }
 
 func (s *Stats) String() string {

@@ -176,7 +176,9 @@ func (seg *Segment) RegisterBlock(blk *Block) error {
 	} else {
 		seg.DataState = PARTIAL
 	}
+	seg.Table.Lock()
 	seg.Table.UpdateVersion()
+	seg.Table.Unlock()
 	return nil
 }
 

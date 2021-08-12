@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unsafe"
 
@@ -449,7 +450,7 @@ func (tbl *Table) Replay() {
 
 func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
 	if info == nil {
-		info = MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+		info = MockInfo(&sync.RWMutex{}, BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	}
 	if schema == nil {
 		schema = MockSchema(2)
