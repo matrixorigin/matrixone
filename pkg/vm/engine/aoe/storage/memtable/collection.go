@@ -2,16 +2,17 @@ package memtable
 
 import (
 	"fmt"
+	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	// "matrixone/pkg/vm/engine/aoe/storage/events/dataio"
+	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	dops "matrixone/pkg/vm/engine/aoe/storage/ops/data"
-	mops "matrixone/pkg/vm/engine/aoe/storage/ops/meta/v2"
 	"sync"
-	// log "github.com/sirupsen/logrus"
 )
 
 type Collection struct {
@@ -62,15 +63,16 @@ func (c *Collection) close() {
 }
 
 func (c *Collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) {
-	ctx := mops.OpCtx{Opts: c.Opts}
-	op := mops.NewCreateBlkOp(&ctx, c.ID, c.TableData)
-	op.Push()
-	err = op.WaitDone()
-	if err != nil {
+	eCtx := &me.Context{Opts: c.Opts, Waitable: true}
+	e := me.NewCreateBlkEvent(eCtx, c.ID, c.TableData)
+	if err = c.Opts.Scheduler.Schedule(e); err != nil {
 		return nil, nil, err
 	}
-	meta = op.GetBlock()
-	return meta, op.Block, nil
+	if err = e.WaitDone(); err != nil {
+		return nil, nil, err
+	}
+	meta = e.GetBlock()
+	return meta, e.Block, nil
 }
 
 func (c *Collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
@@ -109,22 +111,30 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 	}
 	for {
 		if mut.IsFull() {
+			prevId := mut.GetMeta().AsCommonID()
 			mut.Unpin()
 			mut.Unref()
+
+			ctx := &dbsched.Context{Opts: c.Opts}
+			e := dbsched.NewPrecommitBlockEvent(ctx, *prevId)
+			if err = c.Opts.Scheduler.Schedule(e); err != nil {
+				panic(err)
+			}
+
 			mut, err = c.onNoMutableTable()
 			if err != nil {
 				c.Opts.EventListener.BackgroundErrorCB(err)
 				return err
 			}
+
 			{
 				c.Ref()
-				ctx := dops.OpCtx{Collection: c, Opts: c.Opts}
-				op := dops.NewFlushBlkOp(&ctx)
-				err = op.Push()
+				ctx := &dbsched.Context{Opts: c.Opts}
+				e := dbsched.NewFlushMemtableEvent(ctx, c)
+				err = c.Opts.Scheduler.Schedule(e)
 				if err != nil {
 					return err
 				}
-				go op.WaitDone()
 			}
 		}
 		n, err := mut.Append(bat, offset, index)

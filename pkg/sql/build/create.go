@@ -2,7 +2,8 @@ package build
 
 import (
 	"fmt"
-	"matrixone/pkg/client"
+	"matrixone/pkg/defines"
+
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/errno"
@@ -67,33 +68,33 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
 func (b *build) getTableDefType(typ tree.ResolvableTypeReference) (*types.Type, error) {
 	if n, ok := typ.(*tree.T); ok {
 		switch uint8(n.InternalType.Oid) {
-		case client.MYSQL_TYPE_TINY:
+		case defines.MYSQL_TYPE_TINY:
 			if n.InternalType.Unsigned {
 				return &types.Type{Oid: types.T_uint8, Size: 1, Width: n.InternalType.Width}, nil
 			}
 			return &types.Type{Oid: types.T_int8, Size: 1, Width: n.InternalType.Width}, nil
-		case client.MYSQL_TYPE_SHORT:
+		case defines.MYSQL_TYPE_SHORT:
 			if n.InternalType.Unsigned {
 				return &types.Type{Oid: types.T_uint16, Size: 2, Width: n.InternalType.Width}, nil
 			}
 			return &types.Type{Oid: types.T_int16, Size: 2, Width: n.InternalType.Width}, nil
-		case client.MYSQL_TYPE_LONG:
+		case defines.MYSQL_TYPE_LONG:
 			if n.InternalType.Unsigned {
 				return &types.Type{Oid: types.T_uint32, Size: 4, Width: n.InternalType.Width}, nil
 			}
 			return &types.Type{Oid: types.T_int32, Size: 4, Width: n.InternalType.Width}, nil
-		case client.MYSQL_TYPE_LONGLONG:
+		case defines.MYSQL_TYPE_LONGLONG:
 			if n.InternalType.Unsigned {
 				return &types.Type{Oid: types.T_uint64, Size: 8, Width: n.InternalType.Width}, nil
 			}
 			return &types.Type{Oid: types.T_int64, Size: 8, Width: n.InternalType.Width}, nil
-		case client.MYSQL_TYPE_FLOAT:
+		case defines.MYSQL_TYPE_FLOAT:
 			return &types.Type{Oid: types.T_float32, Size: 4, Width: n.InternalType.Width}, nil
-		case client.MYSQL_TYPE_DOUBLE:
+		case defines.MYSQL_TYPE_DOUBLE:
 			return &types.Type{Oid: types.T_float64, Size: 8, Width: n.InternalType.Width}, nil
-		case client.MYSQL_TYPE_STRING:
+		case defines.MYSQL_TYPE_STRING:
 			return &types.Type{Oid: types.T_char, Size: 24, Width: n.InternalType.Width}, nil
-		case client.MYSQL_TYPE_VAR_STRING, client.MYSQL_TYPE_VARCHAR:
+		case defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VARCHAR:
 			return &types.Type{Oid: types.T_varchar, Size: 24, Width: n.InternalType.Width}, nil
 		}
 	}

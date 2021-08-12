@@ -181,7 +181,6 @@ func TestEngine(t *testing.T) {
 	cancel()
 	loopWg.Wait()
 	twg.Wait()
-	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.MemTableMgr.String())

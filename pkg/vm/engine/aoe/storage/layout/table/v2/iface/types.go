@@ -44,6 +44,7 @@ type ITableData interface {
 
 type ISegment interface {
 	common.IRef
+	CanUpgrade() bool
 	GetReplayIndex() *md.LogIndex
 	GetMeta() *md.Segment
 	GetMTBufMgr() bmgrif.IBufferManager
@@ -83,6 +84,7 @@ type IBlock interface {
 	GetBatch(attrs []int) dbi.IBatchReader
 	GetVectorWrapper(col int) (*svec.VectorWrapper, error)
 	GetVectorCopy(attr string, ref uint64, proc *process.Process) (*vector.Vector, error)
+	WeakRefSegment() ISegment
 	GetRowCount() uint64
 	GetNext() IBlock
 	SetNext(next IBlock)
