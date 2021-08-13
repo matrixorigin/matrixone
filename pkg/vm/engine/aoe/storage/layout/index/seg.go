@@ -54,7 +54,7 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 	for _, meta := range indicesMeta.Data {
 		vf := segFile.MakeVirtualIndexFile(meta)
 		col := int(meta.Cols.ToArray()[0])
-		node := newNode(holder.BufMgr, vf, false, ZoneMapIndexConstructor, meta.Cols, nil)
+		node := newNode(holder.BufMgr, vf, false, SegmentZoneMapIndexConstructor, meta.Cols, nil)
 		idxes, ok := holder.self.ColIndices[col]
 		if !ok {
 			idxes = make([]int, 0)
@@ -97,6 +97,30 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 		node.Close()
 	}
 	return nil
+}
+
+func (holder *SegmentHolder) CollectMinMax(colIdx int) (min []interface{}, max []interface{}, err error) {
+	idxes, ok := holder.self.ColIndices[colIdx]
+	if !ok {
+		return nil, nil, nil
+	}
+	//fmt.Println(len(idxes))
+	// we guess there is only a zone map index for one column currently
+	for _, idx := range idxes {
+		node := holder.self.Indices[idx].GetManagedNode()
+		index := node.DataNode.(*SegmentZoneMapIndex)
+		min = make([]interface{}, len(index.BlkMin))
+		max = make([]interface{}, len(index.BlkMax))
+		for i := 0; i < len(min); i++ {
+			min[i] = index.BlkMin[i]
+			max[i] = index.BlkMax[i]
+		}
+		err = node.Close()
+		if err != nil {
+			return
+		}
+	}
+	return
 }
 
 func (holder *SegmentHolder) stringNoLock() string {

@@ -102,8 +102,15 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 }
 
 func (sf *SortedSegmentFile) initPointers() {
+	meta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
+	if err != nil {
+		panic(err)
+	}
+	sf.Meta.Indices = meta
+	//log.Info(meta.String())
+
 	blkCnt := uint32(0)
-	err := binary.Read(&sf.File, binary.BigEndian, &blkCnt)
+	err = binary.Read(&sf.File, binary.BigEndian, &blkCnt)
 	if err != nil {
 		panic(err)
 	}
@@ -144,10 +151,10 @@ func (sf *SortedSegmentFile) initBlkPointers(blkId uint64, pos uint32) {
 		panic(err)
 	}
 
-	_, err = index.DefaultRWHelper.ReadIndicesMeta(sf.File)
-	if err != nil {
-		panic(fmt.Sprintf("unexpect error: %s", err))
-	}
+	//_, err = index.DefaultRWHelper.ReadIndicesMeta(sf.File)
+	//if err != nil {
+	//	panic(fmt.Sprintf("unexpect error: %s", err))
+	//}
 
 	var (
 		cols uint16

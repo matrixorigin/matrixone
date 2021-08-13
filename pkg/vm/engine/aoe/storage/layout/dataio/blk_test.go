@@ -147,6 +147,21 @@ func TestSegmentWriter(t *testing.T) {
 	// name := writer.GetFileName()
 	segFile := NewSortedSegmentFile(path, *segment.AsCommonID())
 	assert.NotNil(t, segFile)
+	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(1000), table.ID)
+	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
+	segHolder.Unref()
+	id := common.ID{}
+	for i := 0; i < int(blkCount); i++ {
+		id.BlockID = uint64(i)
+		blkHolder := segHolder.RegisterBlock(id, base.PERSISTENT_BLK, nil)
+		blkHolder.Unref()
+		blkHolder.Init(segFile)
+	}
+	segHolder.Init(segFile)
+	t.Log(tblHolder.String())
+	t.Log(segHolder.CollectMinMax(0))
+	t.Log(segHolder.CollectMinMax(1))
+	t.Log(segHolder.GetBlockCount())
 	col0Blk := segment.Blocks[0].AsCommonID().AsBlockID()
 	col1Blk := col0Blk
 	col1Blk.Idx = uint16(1)
