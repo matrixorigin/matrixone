@@ -847,7 +847,7 @@ func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error{
 
 	col := new(defines.MysqlColumn)
 	col.SetName("DATABASE()")
-	col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	ses.Mrs.AddColumn(col)
 	val := mce.routine.db
 	if val == "" {
@@ -1047,7 +1047,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					case types.T_char:
 						col.SetColumnType(defines.MYSQL_TYPE_STRING)
 					case types.T_varchar:
-						col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+						col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 					default:
 						return fmt.Errorf("RunWhileSend : unsupported type %d \n", c.Typ)
 					}
@@ -1128,7 +1128,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					case types.T_char:
 						col.SetColumnType(defines.MYSQL_TYPE_STRING)
 					case types.T_varchar:
-						col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+						col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 					default:
 						return fmt.Errorf("RunWhileSend : unsupported type %d \n", c.Typ)
 					}
