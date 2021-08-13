@@ -363,6 +363,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 
 	cloned.SegmentFile.Ref()
 	cloned.Ref()
+	cloned.OnZeroCB = cloned.close
 	return cloned, nil
 }
 
