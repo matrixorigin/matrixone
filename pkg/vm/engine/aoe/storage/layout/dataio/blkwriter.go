@@ -104,7 +104,7 @@ func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, err
 			return nil, err
 		}
 	}
-	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err := os.Create(filename)
 	return w, err
 }
 
