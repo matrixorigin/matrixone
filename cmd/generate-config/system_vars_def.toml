@@ -226,3 +226,23 @@ domain-type = "set"
 values = ["20"]
 comment = "the timeout of heartbeat in second"
 update-mode = "dynamic"
+
+[[parameter]]
+name = "rejectWhenHeartbeatFromPDLeaderIsTimeout"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["false"]
+comment = "default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout."
+update-mode = "dynamic"
+
+[[parameter]]
+name = "recordTimeElapsedOfSqlRequest"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["true"]
+comment = "record the time elapsed of executing sql request"
+update-mode = "dynamic"

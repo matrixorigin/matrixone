@@ -170,23 +170,3 @@
 #	UpdateMode:	dynamic
 	timeoutOfHeartbeat = 20
 			
-#	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	bool
-#	DomainType:	set
-#	Values:	[false]
-#	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.
-#	UpdateMode:	dynamic
-	rejectWhenHeartbeatFromPDLeaderIsTimeout = false
-			
-#	Name:	recordTimeElapsedOfSqlRequest
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	bool
-#	DomainType:	set
-#	Values:	[true]
-#	Comment:	record the time elapsed of executing sql request
-#	UpdateMode:	dynamic
-	recordTimeElapsedOfSqlRequest = true
-			

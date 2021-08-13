@@ -277,6 +277,30 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	timeoutOfHeartbeat    int64
+	
+	/**
+	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[false]
+	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.
+	UpdateMode:	dynamic
+	*/
+	rejectWhenHeartbeatFromPDLeaderIsTimeout    bool
+	
+	/**
+	Name:	recordTimeElapsedOfSqlRequest
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[true]
+	Comment:	record the time elapsed of executing sql request
+	UpdateMode:	dynamic
+	*/
+	recordTimeElapsedOfSqlRequest    bool
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -491,6 +515,30 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	TimeoutOfHeartbeat    int64  `toml:"timeoutOfHeartbeat"`
+	
+	/**
+	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[false]
+	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.
+	UpdateMode:	dynamic
+	*/
+	RejectWhenHeartbeatFromPDLeaderIsTimeout    bool  `toml:"rejectWhenHeartbeatFromPDLeaderIsTimeout"`
+	
+	/**
+	Name:	recordTimeElapsedOfSqlRequest
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[true]
+	Comment:	record the time elapsed of executing sql request
+	UpdateMode:	dynamic
+	*/
+	RecordTimeElapsedOfSqlRequest    bool  `toml:"recordTimeElapsedOfSqlRequest"`
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -558,6 +606,10 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["periodOfDDLDeleteTimer"] = "	Name:	periodOfDDLDeleteTimer	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[20]	Comment:	the period of the ddl delete in second	UpdateMode:	dynamic	"
 	
 	ap.name2definition["timeoutOfHeartbeat"] = "	Name:	timeoutOfHeartbeat	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[20]	Comment:	the timeout of heartbeat in second	UpdateMode:	dynamic	"
+	
+	ap.name2definition["rejectWhenHeartbeatFromPDLeaderIsTimeout"] = "	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[false]	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.	UpdateMode:	dynamic	"
+	
+	ap.name2definition["recordTimeElapsedOfSqlRequest"] = "	Name:	recordTimeElapsedOfSqlRequest	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[true]	Comment:	record the time elapsed of executing sql request	UpdateMode:	dynamic	"
 	
 }
 
@@ -888,6 +940,32 @@ func (ap *SystemVariables) LoadInitialValues()error{
 			return fmt.Errorf("set%s failed.error:%v","TimeoutOfHeartbeat",err)
 		}
 	}
+	
+	rejectWhenHeartbeatFromPDLeaderIsTimeoutchoices :=[]bool {
+		false,
+	}
+	if len(rejectWhenHeartbeatFromPDLeaderIsTimeoutchoices) != 0 {
+		if err = ap.setRejectWhenHeartbeatFromPDLeaderIsTimeout(rejectWhenHeartbeatFromPDLeaderIsTimeoutchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RejectWhenHeartbeatFromPDLeaderIsTimeout",err)
+		}
+	} else { 
+		if err = ap.setRejectWhenHeartbeatFromPDLeaderIsTimeout(false) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RejectWhenHeartbeatFromPDLeaderIsTimeout",err)
+		}
+	}
+	
+	recordTimeElapsedOfSqlRequestchoices :=[]bool {
+		true,
+	}
+	if len(recordTimeElapsedOfSqlRequestchoices) != 0 {
+		if err = ap.setRecordTimeElapsedOfSqlRequest(recordTimeElapsedOfSqlRequestchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RecordTimeElapsedOfSqlRequest",err)
+		}
+	} else { 
+		if err = ap.setRecordTimeElapsedOfSqlRequest(false) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RecordTimeElapsedOfSqlRequest",err)
+		}
+	}
 	return nil
 }
 
@@ -1089,6 +1167,24 @@ func (ap * SystemVariables ) GetTimeoutOfHeartbeat() int64 {
 	return ap.timeoutOfHeartbeat
 }
 
+/**
+Get the value of the parameter rejectWhenHeartbeatFromPDLeaderIsTimeout
+*/
+func (ap * SystemVariables ) GetRejectWhenHeartbeatFromPDLeaderIsTimeout() bool {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.rejectWhenHeartbeatFromPDLeaderIsTimeout
+}
+
+/**
+Get the value of the parameter recordTimeElapsedOfSqlRequest
+*/
+func (ap * SystemVariables ) GetRecordTimeElapsedOfSqlRequest() bool {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.recordTimeElapsedOfSqlRequest
+}
+
 
 /**
 Set the value of the parameter rootpassword
@@ -1207,6 +1303,20 @@ Set the value of the parameter timeoutOfHeartbeat
 */
 func (ap * SystemVariables ) SetTimeoutOfHeartbeat(value int64)error {
 	return  ap.setTimeoutOfHeartbeat(value)
+}
+
+/**
+Set the value of the parameter rejectWhenHeartbeatFromPDLeaderIsTimeout
+*/
+func (ap * SystemVariables ) SetRejectWhenHeartbeatFromPDLeaderIsTimeout(value bool)error {
+	return  ap.setRejectWhenHeartbeatFromPDLeaderIsTimeout(value)
+}
+
+/**
+Set the value of the parameter recordTimeElapsedOfSqlRequest
+*/
+func (ap * SystemVariables ) SetRecordTimeElapsedOfSqlRequest(value bool)error {
+	return  ap.setRecordTimeElapsedOfSqlRequest(value)
 }
 
 /**
@@ -1683,6 +1793,46 @@ func (ap * SystemVariables ) setTimeoutOfHeartbeat(value int64)error {
 	return nil
 }
 
+/**
+Set the value of the parameter rejectWhenHeartbeatFromPDLeaderIsTimeout
+*/
+func (ap * SystemVariables ) setRejectWhenHeartbeatFromPDLeaderIsTimeout(value bool)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	choices :=[]bool {
+			false,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceBool(value, choices){
+				return fmt.Errorf("setRejectWhenHeartbeatFromPDLeaderIsTimeout,the value %t is not in set %v",value,choices)
+			}
+		}//else means any bool value: true or false
+	
+	
+	ap.rejectWhenHeartbeatFromPDLeaderIsTimeout = value
+	return nil
+}
+
+/**
+Set the value of the parameter recordTimeElapsedOfSqlRequest
+*/
+func (ap * SystemVariables ) setRecordTimeElapsedOfSqlRequest(value bool)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	choices :=[]bool {
+			true,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceBool(value, choices){
+				return fmt.Errorf("setRecordTimeElapsedOfSqlRequest,the value %t is not in set %v",value,choices)
+			}
+		}//else means any bool value: true or false
+	
+	
+	ap.recordTimeElapsedOfSqlRequest = value
+	return nil
+}
+
 
 
 /**
@@ -1719,6 +1869,8 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.name2updatedFlags["periodOfPersistence"] = false
 	config.name2updatedFlags["periodOfDDLDeleteTimer"] = false
 	config.name2updatedFlags["timeoutOfHeartbeat"] = false
+	config.name2updatedFlags["rejectWhenHeartbeatFromPDLeaderIsTimeout"] = false
+	config.name2updatedFlags["recordTimeElapsedOfSqlRequest"] = false
 }
 
 /**
@@ -1877,6 +2029,16 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("timeoutOfHeartbeat"){
 		if err = ap.setTimeoutOfHeartbeat(config.TimeoutOfHeartbeat); err != nil{
 			return fmt.Errorf("update parameter timeoutOfHeartbeat failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("rejectWhenHeartbeatFromPDLeaderIsTimeout"){
+		if err = ap.setRejectWhenHeartbeatFromPDLeaderIsTimeout(config.RejectWhenHeartbeatFromPDLeaderIsTimeout); err != nil{
+			return fmt.Errorf("update parameter rejectWhenHeartbeatFromPDLeaderIsTimeout failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("recordTimeElapsedOfSqlRequest"){
+		if err = ap.setRecordTimeElapsedOfSqlRequest(config.RecordTimeElapsedOfSqlRequest); err != nil{
+			return fmt.Errorf("update parameter recordTimeElapsedOfSqlRequest failed.error:%v",err)
 		}
 	}
 	return nil
