@@ -3,6 +3,7 @@ package dist
 import (
 	"encoding/json"
 	"errors"
+	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
@@ -243,7 +244,7 @@ func (h *driver) Start() error {
 	if err != nil {
 		return err
 	}
-
+	stdLog.Printf("[QSQ] call initShardPool")
 	return h.initShardPool()
 }
 

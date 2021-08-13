@@ -37,7 +37,7 @@ func TestAOEEngine(t *testing.T) {
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
-			c.ClusterConfig.PreAllocatedGroupNum = 5
+			c.ClusterConfig.PreAllocatedGroupNum = 20
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
@@ -61,7 +61,7 @@ func TestAOEEngine(t *testing.T) {
 		}), testutil.WithTestAOEClusterUsePebble())
 	c.Start()
 	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
-	stdLog.Printf("app all started.")
+	stdLog.Printf("[QSQ]app all started.")
 
 	c.CubeDrivers[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.CubeDrivers[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
@@ -96,7 +96,16 @@ func TestAOEEngine(t *testing.T) {
 	mockTbl := md.MockTableInfo(colCnt)
 	mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, 0)
 	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
+
+	stdLog.Printf("[QSQ]sleep 10s before call create table")
+	time.Sleep(10 * time.Second)
+
 	err = db.Create(3, mockTbl.Name, defs, pdef, nil, comment)
+	if err != nil {
+		stdLog.Printf("[QSQ] %v", err)
+	}else {
+		stdLog.Printf("[QSQ] create table is succeeded")
+	}
 	require.NoError(t, err)
 
 	tbls = db.Relations()
@@ -136,8 +145,9 @@ func TestAOEEngine(t *testing.T) {
 		err = db.Create(6, mockTbl.Name, defs, pdef, nil, comment)
 		//require.NoError(t, err)
 		if err != nil {
-			stdLog.Printf("create table %d failed, err is %v", i, err)
+			stdLog.Printf("[QSQ]create table %d failed, err is %v", i, err)
 		}
+		//time.Sleep(200 * time.Millisecond)
 	}
 
 	tbls = db.Relations()

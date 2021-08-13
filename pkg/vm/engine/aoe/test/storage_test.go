@@ -73,11 +73,10 @@ func TestStorage(t *testing.T) {
 	stdLog.Printf("app all started.")
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
-		c.Stop()
+		//c.Stop()
 	}()
-
-	//testAOEStorage(t, c)
-	testKVStorage(t, c)
+	testAOEStorage(t, c)
+	//testKVStorage(t, c)
 
 }
 
@@ -108,13 +107,13 @@ func TestRestartStorage(t *testing.T) {
 		}), testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterRecreate(false)))
 	c.Start()
-	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
+	c.RaftCluster.WaitShardByCount(t, 2, time.Second*10)
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
-	testAOEStorageAfterRestart(t, c)
-	//testKVStorageAfterRestart(t, c)
+	//testAOEStorageAfterRestart(t, c)
+	testKVStorageAfterRestart(t, c)
 	//c.Restart()
 }
 
@@ -125,6 +124,7 @@ func testAOEStorage(t *testing.T, c *testutil.TestAOECluster) {
 	require.NoError(t, err)
 	//CreateTableTest
 	toShard := shard.ShardID
+	stdLog.Printf(">>>toShard %d", toShard)
 	err = d.CreateTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard, tableInfo)
 	require.NoError(t, err)
 
@@ -173,17 +173,21 @@ func testAOEStorageAfterRestart(t *testing.T, c *testutil.TestAOECluster) {
 func testKVStorage(t *testing.T, c *testutil.TestAOECluster) {
 	app := c.CubeDrivers[0]
 
+	t0 := time.Now()
 	//Set Test
 	err := app.SetIfNotExist([]byte("Hello"), []byte("World"))
 	require.NoError(t, err)
+	fmt.Printf("time cost for set is %d ms\n", time.Since(t0).Milliseconds())
 
 	err = app.SetIfNotExist([]byte("Hello"), []byte("World1"))
 	require.NotNil(t, err)
 
 	//Get Test
+	t0 = time.Now()
 	value, err := app.Get([]byte("Hello"))
 	require.NoError(t, err)
 	require.Equal(t, value, []byte("World"))
+	fmt.Printf("time cost for get is %d ms\n", time.Since(t0).Milliseconds())
 
 	//Prefix Test
 	for i := uint64(0); i < 20; i++ {
@@ -198,7 +202,7 @@ func testKVStorage(t *testing.T, c *testutil.TestAOECluster) {
 		require.NoError(t, err)
 	}
 
-	t0 := time.Now()
+
 	keys, err := app.PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)
 	require.Equal(t, 20, len(keys))
@@ -255,7 +259,20 @@ func testKVStorage(t *testing.T, c *testutil.TestAOECluster) {
 func testKVStorageAfterRestart(t *testing.T, c *testutil.TestAOECluster) {
 	app := c.CubeDrivers[0]
 
+	t0 := time.Now()
+	err := app.Set([]byte("Hello1"), []byte("World"))
+	require.NoError(t, err)
+	fmt.Printf("time cost for set is %d ms\n", time.Since(t0).Milliseconds())
+
+	t0 = time.Now()
+	value, err := app.Get([]byte("Hello1"))
+	require.NoError(t, err)
+	require.Equal(t, value, []byte("World"))
+	fmt.Printf("time cost for get is %d ms\n", time.Since(t0).Milliseconds())
+
+	t0 = time.Now()
 	kvs, err := app.Scan([]byte("/prefix/"), []byte("/prefix/2/"), 0)
+	fmt.Printf("time cost for scan is %d ms\n", time.Since(t0).Milliseconds())
 	require.NoError(t, err)
 	require.Equal(t, 20, len(kvs))
 }
