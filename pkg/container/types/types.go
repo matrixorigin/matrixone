@@ -54,11 +54,9 @@ type Bytes struct {
 	Lengths []uint32
 }
 
-type Date struct {
-}
+type Date int32
 
-type Datetime struct {
-}
+type Datetime int64
 
 type Decimal struct {
 }
