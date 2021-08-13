@@ -37,7 +37,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 			}
 		}
 		t.Log(name)
-		w, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY, 0666)
+		w, err := os.Create(name)
 		if err != nil {
 			panic(err)
 		}

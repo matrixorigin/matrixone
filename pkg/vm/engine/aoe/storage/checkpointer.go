@@ -61,7 +61,7 @@ func (ck *checkpointer) PreCommit(res md.Resource) error {
 			return err
 		}
 	}
-	w, err := os.OpenFile(fname, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err := os.Create(fname)
 	if err != nil {
 		return err
 	}

@@ -38,7 +38,7 @@ func (sw *NodeWriter) Flush() (err error) {
 		return err
 	}
 
-	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
