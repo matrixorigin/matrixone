@@ -417,19 +417,19 @@ func (mp *MysqlProtocol) checkPassword(password, salt, auth []byte) bool {
 //the server authenticate that the client can connect and use the database
 func (mp *MysqlProtocol) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
-
+	ses := mp.routine.GetSession()
 	//TODO:get the user's password
-	//var psw []byte
-	//if mp.username == config.GlobalSystemVariables.GetDumpuser() { //the user dump for test
-	//	psw = []byte(config.GlobalSystemVariables.GetDumppassword())
-	//}
-	//
-	////TO Check password
-	//if mp.checkPassword(psw, mp.salt, authResponse) {
-	//	fmt.Printf("check password succeeded\n")
-	//} else {
-	//	return fmt.Errorf("check password failed\n")
-	//}
+	var psw []byte
+	if mp.username == ses.Pu.SV.GetDumpuser() { //the user dump for test
+		psw = []byte(ses.Pu.SV.GetDumppassword())
+	}
+
+	//TO Check password
+	if mp.checkPassword(psw, mp.salt, authResponse) {
+		fmt.Printf("check password succeeded\n")
+	} else {
+		return fmt.Errorf("check password failed\n")
+	}
 	return nil
 }
 

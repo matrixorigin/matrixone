@@ -5,6 +5,7 @@ import (
 	"matrixone/pkg/defines"
 	"matrixone/pkg/sql/compile"
 	"strings"
+	"time"
 
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
@@ -984,8 +985,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			return err
 		}
 
+		cmpBegin := time.Now()
 		if err = exec.Compile(mce.routine, getDataFromPipeline); err != nil {
 			return err
+		}
+
+		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
+			fmt.Printf("time of Exec.Compile : %s \n",time.Since(cmpBegin).String())
 		}
 
 		switch stmt.(type) {
@@ -1070,6 +1076,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return err
 				}
 
+				runBegin := time.Now()
 				/*
 					Step 2: Start pipeline
 					Producing the data row and sending the data row
@@ -1077,7 +1084,9 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				if er := exec.Run(epoch); er != nil {
 					return er
 				}
-
+				if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
+					fmt.Printf("time of Exec.Run : %s \n",time.Since(runBegin).String())
+				}
 				/*
 					Step 3: Say goodbye
 					mysql COM_QUERY response: End after the data row has been sent.
@@ -1187,16 +1196,19 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	var resp *Response = nil
 	fmt.Printf("cmd %v \n", req.GetCmd())
 
-	//pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
-	//if !pdHook.CanAcceptSomething() {
-	//	resp = NewResponse(
-	//		ErrorResponse,
-	//		0,
-	//		req.GetCmd(),
-	//		nil,
-	//	)
-	//	return resp, nil
-	//}
+	ses := mce.routine.GetSession()
+	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
+		pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
+		if !pdHook.CanAcceptSomething() {
+			resp = NewResponse(
+				ErrorResponse,
+				0,
+				req.GetCmd(),
+				fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()),
+			)
+			return resp, nil
+		}
+	}
 
 	switch uint8(req.GetCmd()) {
 	case COM_QUIT:

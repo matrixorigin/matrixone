@@ -130,6 +130,18 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 
 
 
+	if c1.RejectWhenHeartbeatFromPDLeaderIsTimeout != c2.RejectWhenHeartbeatFromPDLeaderIsTimeout {
+		return false
+	}
+
+
+
+	if c1.RecordTimeElapsedOfSqlRequest != c2.RecordTimeElapsedOfSqlRequest {
+		return false
+	}
+
+
+
 	return true
 }
 
@@ -179,6 +191,10 @@ periodOfPersistence=20
 periodOfDDLDeleteTimer=20
 
 timeoutOfHeartbeat=20
+
+rejectWhenHeartbeatFromPDLeaderIsTimeout=false
+
+recordTimeElapsedOfSqlRequest=true
 		
 `
 	t1_config:=varsConfig{
@@ -228,6 +244,10 @@ PeriodOfPersistence:20,
 PeriodOfDDLDeleteTimer:20,
 
 TimeoutOfHeartbeat:20,
+
+RejectWhenHeartbeatFromPDLeaderIsTimeout:false,
+
+RecordTimeElapsedOfSqlRequest:true,
 	
 
 		name2updatedFlags: nil,

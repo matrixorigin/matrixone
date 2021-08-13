@@ -264,52 +264,6 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	//stop delete ddl worker
 	pci.ddlDeleteClose.Close()
 
-	/*
-	//persist cluster epoch, minimumRemovableEpoch, kv<server,maximumRemovableEpoch>
-	var buf [8]byte
-
-	pci.rwlock.Lock()
-	defer pci.rwlock.Unlock()
-
-	ce := atomic.LoadUint64(&pci.cluster_epoch)
-
-	//save cluster epoch
-	binary.BigEndian.PutUint64(buf[:],ce)
-	err := kv.PutCustomData(CLUSTER_EPOCH_KEY,buf[:])
-	if err != nil {
-		return err
-	}
-
-	//save minimumRemovableEpoch
-	binary.BigEndian.PutUint64(buf[:],pci.cluster_minimumRemovableEpoch)
-	err = kv.PutCustomData(MINI_REM_EPOCH_KEY,buf[:])
-	if err != nil {
-		return err
-	}
-
-	//save kv<server,maximumRemovableEpoch>
-	var keys [][]byte = nil
-	var b2 [][]byte = nil
-	var kk [8]byte
-	for k,v := range pci.serverInfo {
-		var k_buf []byte = nil
-		k_buf = append(k_buf, SERVER_PREFIX...)
-		binary.BigEndian.PutUint64(kk[:],k)
-		k_buf = append(k_buf, kk[:]...)
-
-		v_buf := make([]byte,8)
-		binary.BigEndian.PutUint64(v_buf,v)
-
-		keys = append(keys,k_buf)
-		b2 = append(b2,v_buf)
-	}
-
-	err = kv.BatchPutCustomData(keys, b2)
-	if err != nil {
-		return err
-	}
-	*/
-
 	return nil
 }
 

@@ -105,7 +105,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		pcis[i].Id = i
 	}
 
-	c, err := NewTestClusterStore(t, false, nil, pcis, nodeCnt)
+	c, err := NewTestClusterStore(t, true, nil, pcis, nodeCnt)
 	if err != nil {
 		t.Errorf("new cube failed : %v", err)
 		return
@@ -155,17 +155,20 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		}
 		svs = append(svs, svr)
 
-		svr.Start()
+		err = svr.Start()
+		if err != nil {
+			t.Errorf("start server: %v",err)
+			return
+		}
 	}
 
 	time.Sleep(1 * time.Minute)
 
+	fmt.Println("-------------------close node 0----------------")
 	//test performance
-	//c.Applications[0].Close()
+	c.Applications[0].Close()
 
-	//fmt.Println("-------------------close node 0----------------")
-
-	time.Sleep(5 * time.Minute)
+	time.Sleep(10 * time.Minute)
 
 	//DC.Cf.Close()
 	select {}
