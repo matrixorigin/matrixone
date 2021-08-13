@@ -34,12 +34,14 @@ func (e *createTableEvent) Execute() error {
 		tableData = table.NewTableData(e.Ctx.FsMgr, e.Ctx.IndexBufMgr, e.Ctx.MTBufMgr, e.Ctx.SSTBufMgr, meta)
 		err = e.Ctx.Tables.CreateTable(tableData)
 		if err != nil {
+			tableData.Unref()
 			return err
 		}
+		tableData.Ref()
 	}
-	tableData.Ref()
 	collection, err = e.Ctx.MTMgr.RegisterCollection(tableData)
 	if err != nil {
+		tableData.Unref()
 		return err
 	}
 

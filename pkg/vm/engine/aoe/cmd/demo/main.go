@@ -21,12 +21,12 @@ func main() {
 	metaConf := &md.Configuration{
 		Dir:              workDir,
 		BlockMaxRows:     10000,
-		SegmentMaxBlocks: 10,
+		SegmentMaxBlocks: 2,
 	}
 	cacheCfg := &e.CacheCfg{
 		IndexCapacity:  10000,
 		InsertCapacity: metaConf.BlockMaxRows * uint64(colCnt) * 100,
-		DataCapacity:   metaConf.BlockMaxRows * metaConf.SegmentMaxBlocks * uint64(colCnt) * 2,
+		DataCapacity:   metaConf.BlockMaxRows * metaConf.SegmentMaxBlocks * uint64(colCnt) * 20,
 	}
 	opts := e.Options{CacheCfg: cacheCfg}
 	opts.Meta.Conf = metaConf
@@ -53,7 +53,7 @@ func main() {
 		insertWg sync.WaitGroup
 		searchWg sync.WaitGroup
 	)
-	insertCnt := int(float32(metaConf.SegmentMaxBlocks*10) * (float32(rows) / float32(metaConf.BlockMaxRows)))
+	insertCnt := 16 * int(float32(metaConf.SegmentMaxBlocks*10)*(float32(rows)/float32(metaConf.BlockMaxRows)))
 	insertWg.Add(1)
 	go func() {
 		for i := 0; i < insertCnt; i++ {
@@ -116,10 +116,11 @@ func main() {
 	// time.Sleep(time.Duration(10) * time.Millisecond)
 	// _, err = inst.DropTablet(tName)
 
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 	log.Info(inst.IndexBufMgr.String())
 	log.Info(inst.MTBufMgr.String())
 	log.Info(inst.SSTBufMgr.String())
+	log.Info(inst.FsMgr.String())
 	log.Infof("drop err: %v", err)
 	inst.Close()
 }
