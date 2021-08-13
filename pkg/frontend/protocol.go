@@ -87,7 +87,7 @@ func (resp *Response) SetCategory(category int) {
 
 type Protocol interface {
 	// GetRequest gets Request from Packet
-	GetRequest(packet *Packet) *Request
+	GetRequest(payload []byte) *Request
 
 	// SendResponse sends a response to the client for the application request
 	SendResponse(*Response) error
@@ -127,12 +127,10 @@ func (cpi *ProtocolImpl) GetLock() sync.Locker {
 	return &cpi.lock
 }
 
-func (mp *MysqlProtocol) GetRequest(msg *Packet) *Request {
+func (mp *MysqlProtocol) GetRequest(payload []byte) *Request {
 	mp.GetLock().Lock()
 	mp.setSequenceID(1)
 	mp.GetLock().Unlock()
-
-	payload := msg.Payload
 
 	req := &Request{
 		cmd:  int(payload[0]),

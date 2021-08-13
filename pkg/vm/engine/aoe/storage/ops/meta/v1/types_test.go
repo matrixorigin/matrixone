@@ -78,7 +78,7 @@ func TestBasicOps(t *testing.T) {
 	info_copy := info.Copy(ctx)
 
 	fpath := path.Join(info.Conf.Dir, "tttttttt")
-	w, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err := os.Create(fpath)
 	assert.Equal(t, err, nil)
 	err = info_copy.Serialize(w)
 	assert.Nil(t, err)

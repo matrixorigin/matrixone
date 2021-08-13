@@ -163,7 +163,7 @@ func TestStrVector(t *testing.T) {
 	assert.Equal(t, []byte(str2), ref.GetValue(1))
 
 	fname := "/tmp/xxstrvec"
-	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, 0666)
+	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	_, err = nodeVec.WriteTo(f)
 	assert.Nil(t, err)
@@ -256,7 +256,7 @@ func TestWrapper(t *testing.T) {
 	assert.Equal(t, int(rows), w1.Length())
 
 	fname := "/tmp/vectorwrapper"
-	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, 0666)
+	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	n, err := w0.WriteTo(f)
 	assert.Nil(t, err)

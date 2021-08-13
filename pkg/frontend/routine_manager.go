@@ -72,10 +72,28 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return errors.New("message is not Packet")
 	}
 
+	length := packet.Length
+	payload := packet.Payload
+	for uint32(length) == MaxPayloadSize {
+		var err error
+		msg, err = routine.io.Read()
+		if err != nil {
+			return errors.New("read msg error")
+		}
+
+		packet, ok = msg.(*Packet)
+		if !ok {
+			return errors.New("message is not Packet")
+		}
+
+		protocol.sequenceId++
+		payload = append(payload, packet.Payload...)
+		length = packet.Length
+	}
+
 	// finish handshake process
 	if !routine.established {
 		fmt.Println("HANDLE HANDSHAKE")
-		payload := packet.Payload
 		err := routine.handleHandshake(payload)
 		if err != nil {
 			return err
@@ -86,7 +104,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	var err error
 	var resp *Response
 
-	req := routine.protocol.GetRequest(packet)
+	req := routine.protocol.GetRequest(payload)
 	reqBegin := time.Now()
 	if resp, err = routine.executor.ExecRequest(req); err != nil {
 		fmt.Printf("routine execute request failed. error:%v \n", err)
