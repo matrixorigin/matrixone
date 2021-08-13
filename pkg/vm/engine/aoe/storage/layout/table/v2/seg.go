@@ -185,6 +185,7 @@ func (seg *Segment) BlockIds() []uint64 {
 }
 
 func (seg *Segment) close() {
+	segId := seg.Meta.AsCommonID().AsSegmentID()
 	if seg.IndexHolder != nil {
 		seg.IndexHolder.Unref()
 	}
@@ -198,6 +199,11 @@ func (seg *Segment) close() {
 	}
 	if seg.SegmentFile != nil {
 		seg.SegmentFile.Unref()
+	}
+	if seg.Type == base.UNSORTED_SEG {
+		seg.FsMgr.UnregisterUnsortedFile(segId)
+	} else {
+		seg.FsMgr.UnregisterSortedFile(segId)
 	}
 }
 

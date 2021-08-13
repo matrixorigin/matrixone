@@ -46,6 +46,18 @@ func NewManager(dir string, mock bool) *Manager {
 	}
 }
 
+func (mgr *Manager) UnregisterUnsortedFile(id common.ID) {
+	mgr.Lock()
+	defer mgr.Unlock()
+	delete(mgr.UnsortedFiles, id)
+}
+
+func (mgr *Manager) UnregisterSortedFile(id common.ID) {
+	mgr.Lock()
+	defer mgr.Unlock()
+	delete(mgr.SortedFiles, id)
+}
+
 func (mgr *Manager) RegisterUnsortedFiles(id common.ID) (base.ISegmentFile, error) {
 	var usf base.ISegmentFile
 	if mgr.Mock {
