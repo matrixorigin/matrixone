@@ -220,7 +220,7 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 
 func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 	event := e.(*upgradeSegEvent)
-	// defer event.TableData.Unref()
+	defer event.TableData.Unref()
 	defer event.OldSegment.Unref()
 	if err := e.GetError(); err != nil {
 		s.opts.EventListener.BackgroundErrorCB(err)
