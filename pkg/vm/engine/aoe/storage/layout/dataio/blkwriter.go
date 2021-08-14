@@ -20,7 +20,7 @@ import (
 
 type BlkDataSerializer func(*os.File, []*vector.Vector, *md.Block) error
 type BlkIndexSerializer func(*os.File, []*vector.Vector, *md.Block) error
-type FileGetter func(string, *md.Block) (*os.File, error)
+type BlockfileGetter func(string, *md.Block) (*os.File, error)
 
 var (
 	defaultDataSerializer = flushWithLz4Compression
@@ -28,12 +28,13 @@ var (
 )
 
 type BlockWriter struct {
-	data       []*vector.Vector
-	meta       *md.Block
-	dir        string
-	embbed     bool
-	fileHandle *os.File
-	fileGetter FileGetter
+	data         []*vector.Vector
+	meta         *md.Block
+	dir          string
+	embbed       bool
+	fileHandle   *os.File
+	fileGetter   BlockfileGetter
+	fileCommiter func(string) error
 
 	// preprocessor preprocess data before writing, such as SORT
 	preprocessor func([]*vector.Vector, *md.Block) error
@@ -54,19 +55,20 @@ func NewBlockWriter(data []*vector.Vector, meta *md.Block, dir string) *BlockWri
 		meta: meta,
 		dir:  dir,
 	}
-	w.fileGetter = w.createIOWriter
+	w.fileGetter, w.fileCommiter = w.createIOWriter, w.commitFile
 	w.preprocessor = w.defaultPreprocessor
 	w.indexSerializer = w.flushIndices
 	w.dataSerializer = defaultDataSerializer
 	return w
 }
 
-func NewEmbbedBlockWriter(bat *batch.Batch, meta *md.Block, getter FileGetter) *BlockWriter {
+func NewEmbbedBlockWriter(bat *batch.Batch, meta *md.Block, getter BlockfileGetter) *BlockWriter {
 	w := &BlockWriter{
-		data:       bat.Vecs,
-		meta:       meta,
-		fileGetter: getter,
-		embbed:     true,
+		data:         bat.Vecs,
+		meta:         meta,
+		fileGetter:   getter,
+		fileCommiter: func(string) error { return nil },
+		embbed:       true,
 	}
 	w.preprocessor = w.defaultPreprocessor
 	w.indexSerializer = w.flushIndices
@@ -94,9 +96,18 @@ func (bw *BlockWriter) SetDataFlusher(f BlkDataSerializer) {
 	bw.dataSerializer = f
 }
 
+func (bw *BlockWriter) commitFile(fname string) error {
+	name, err := e.FilenameFromTmpfile(fname)
+	if err != nil {
+		return err
+	}
+	err = os.Rename(fname, name)
+	return err
+}
+
 func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, error) {
 	id := meta.AsCommonID()
-	filename := e.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID)
+	filename := e.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, true)
 	fdir := filepath.Dir(filename)
 	if _, err := os.Stat(fdir); os.IsNotExist(err) {
 		err = os.MkdirAll(fdir, 0755)
@@ -144,7 +155,9 @@ func (bw *BlockWriter) flushIndices(w *os.File, data []*vector.Vector, meta *md.
 }
 
 func (bw *BlockWriter) GetFileName() string {
+	fname := bw.fileHandle.Name()
 	s, _ := filepath.Abs(bw.fileHandle.Name())
+	s, _ = e.FilenameFromTmpfile(fname)
 	return s
 }
 
@@ -159,22 +172,29 @@ func (bw *BlockWriter) Execute() error {
 		return err
 	}
 	bw.fileHandle = w
-	if !bw.embbed {
-		defer w.Close()
+	closeFunc := w.Close
+	if bw.embbed {
+		closeFunc = func() error {
+			return nil
+		}
 	}
 	if bw.preExecutor != nil {
 		bw.preExecutor()
 	}
 	if err = bw.indexSerializer(w, bw.data, bw.meta); err != nil {
+		closeFunc()
 		return err
 	}
 	if err = bw.dataSerializer(w, bw.data, bw.meta); err != nil {
+		closeFunc()
 		return err
 	}
 	if bw.postExecutor != nil {
 		bw.postExecutor()
 	}
-	return nil
+	filename, _ := filepath.Abs(w.Name())
+	closeFunc()
+	return bw.fileCommiter(filename)
 }
 
 func flushWithLz4Compression(w *os.File, data []*vector.Vector, meta *md.Block) error {
