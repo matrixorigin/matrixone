@@ -63,5 +63,6 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	db.startCleaner()
 	db.startWorkers()
 	db.DBLocker, dbLocker = dbLocker, nil
+	replayHandle.DispatchEvents(db.Opts, db.Store.DataTables)
 	return db, err
 }

@@ -10,6 +10,7 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path"
+	"sort"
 	"sync"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
@@ -58,6 +59,10 @@ func (sf *sortedSegmentFile) clean() {
 func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string) {
 	usf.names = append(usf.names, name)
 	usf.blkids = append(usf.blkids, bid)
+}
+
+func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
+	return len(usf.names) == maxcnt
 }
 
 func (usf *unsortedSegmentFile) clean() {
@@ -159,14 +164,13 @@ func NewReplayHandle(workDir string) *replayHandle {
 	return fs
 }
 
-func (h *replayHandle) registerFlushSegCtx(ctx flushsegCtx) {
-
-}
-
 func (h *replayHandle) DispatchEvents(opts *e.Options, tables *table.Tables) {
 	for _, ctx := range h.flushsegs {
 		t, _ := tables.WeakRefTable(ctx.id.TableID)
 		segment := t.StrongRefSegment(ctx.id.SegmentID)
+		if segment == nil {
+			panic(fmt.Sprintf("segment %d is nil", ctx.id.SegmentID))
+		}
 		flushCtx := &dbsched.Context{Opts: opts}
 		flushEvent := dbsched.NewFlushSegEvent(flushCtx, segment)
 		opts.Scheduler.Schedule(flushEvent)
@@ -340,20 +344,24 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 		if file2 != nil {
 		}
 	}
-	minsorted := md.MAX_SEGMENTID
 	for id, _ := range tablesFiles.sortedfiles {
 		unsorted, ok := tablesFiles.unsortedfiles[id]
 		if ok {
 			h.addCleanable(unsorted)
 			delete(tablesFiles.unsortedfiles, id)
 		}
-		if minsorted > id.SegmentID {
-			minsorted = id.SegmentID
-		}
 	}
-	log.Infof("minsorted %d", minsorted)
-	// for id, unsorted := range tablesFiles.unsortedfiles {
-	// }
+	segids := make([]common.ID, 0)
+	for id, unsorted := range tablesFiles.unsortedfiles {
+		if !unsorted.isfull(int(meta.Conf.SegmentMaxBlocks)) {
+			continue
+		}
+		segids = append(segids, id)
+	}
+	sort.Slice(segids, func(i, j int) bool { return segids[i].SegmentID < segids[j].SegmentID })
+	for _, id := range segids {
+		h.flushsegs = append(h.flushsegs, flushsegCtx{id: id})
+	}
 }
 
 func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
@@ -400,7 +408,7 @@ func (h *replayHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.
 		if newTbl == nil {
 			continue
 		}
-		tbls[idx] = h.rebuildTable(tbl)
+		tbls[idx] = newTbl
 	}
 	info.Tables = tbls
 
