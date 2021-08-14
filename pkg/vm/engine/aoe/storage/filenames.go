@@ -36,10 +36,10 @@ func MakeTableDir(dirname string, id uint64) string {
 	return path.Join(dirname, fmt.Sprintf("%d", id))
 }
 
-func MakeBlockFileName(dirname, name string, tableId uint64) string {
+func MakeBlockFileName(dirname, name string, tableId uint64, isTmp bool) string {
 	// dir := MakeTableDir(dirname, id)
 	dir := dirname
-	return MakeFilename(dir, FTBlock, name, false)
+	return MakeFilename(dir, FTBlock, name, isTmp)
 }
 
 func MakeSegmentFileName(dirname, name string, tableId uint64, isTmp bool) string {
@@ -110,7 +110,6 @@ func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
 		isTmp = false
 	case FTBlock:
 		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s.blk", name))
-		isTmp = false
 	case FTSegment:
 		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s.seg", name))
 	default:
