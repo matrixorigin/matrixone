@@ -33,7 +33,7 @@ func TestLoadMetaInfo(t *testing.T) {
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
-	handle := NewMetaHandle(cfg.Dir)
+	handle := NewReplayHandle(cfg.Dir)
 	mu := &sync.RWMutex{}
 	info := handle.RebuildInfo(mu, cfg)
 	// info := loadMetaInfo(cfg)
@@ -92,7 +92,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.Serialize(w)
 	assert.Nil(t, err)
 
-	handle2 := NewMetaHandle(cfg.Dir)
+	handle2 := NewReplayHandle(cfg.Dir)
 	mu2 := &sync.RWMutex{}
 	info2 := handle2.RebuildInfo(mu2, cfg)
 	assert.NotNil(t, info2)
@@ -132,7 +132,7 @@ func TestCleanStaleMeta(t *testing.T) {
 		f.Close()
 
 		f1 := func() {
-			NewMetaHandle(cfg.Dir)
+			NewReplayHandle(cfg.Dir)
 		}
 		assert.Panics(t, f1)
 		err = os.Remove(fname)

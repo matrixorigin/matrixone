@@ -253,9 +253,9 @@ func (blk *Block) GetSegmentFile() base.ISegmentFile {
 
 func (blk *Block) String() string {
 	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(Refs=%d)", blk.Meta.ID, len(blk.data.Columns), blk.RefCount())
-	for _, colBlk := range blk.data.Columns {
-		s = fmt.Sprintf("%s/n\t%s", s, colBlk.String())
-	}
+	// for _, colBlk := range blk.data.Columns {
+	// 	s = fmt.Sprintf("%s\n\t%s", s, colBlk.String())
+	// }
 	return s
 }
 

@@ -1,10 +1,17 @@
 package metadata
 
 import (
-	"github.com/google/btree"
 	"io"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
+
+	"github.com/google/btree"
+)
+
+const (
+	MAX_SEGMENTID = common.MAX_UINT64
+	MAX_TABLEID   = common.MAX_UINT64
 )
 
 type Resource interface {

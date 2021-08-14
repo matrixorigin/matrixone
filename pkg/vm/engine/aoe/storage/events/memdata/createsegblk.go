@@ -25,13 +25,15 @@ func NewCreateSegBlkEvent(ctx *Context, newSeg bool, meta *md.Block, tableData i
 }
 
 func (e *createSegBlkEvent) Execute() error {
-	if e.NewSegment {
-		seg, err := e.TableData.RegisterSegment(e.BlkMeta.Segment)
+	var err error
+	seg := e.TableData.StrongRefSegment(e.BlkMeta.Segment.ID)
+	if seg == nil {
+		seg, err = e.TableData.RegisterSegment(e.BlkMeta.Segment)
 		if err != nil {
 			panic("should not happend")
 		}
-		seg.Unref()
 	}
+	seg.Unref()
 	blk, err := e.TableData.RegisterBlock(e.BlkMeta)
 	if err != nil {
 		panic(err)
