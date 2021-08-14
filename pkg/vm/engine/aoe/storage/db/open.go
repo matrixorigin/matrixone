@@ -24,9 +24,9 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		}
 	}()
 	opts.FillDefaults(dirname)
-	metaReplayHandle := NewMetaHandle(dirname)
+	replayHandle := NewReplayHandle(dirname)
 
-	opts.Meta.Info = metaReplayHandle.RebuildInfo(&opts.Mu, opts.Meta.Conf)
+	opts.Meta.Info = replayHandle.RebuildInfo(&opts.Mu, opts.Meta.Conf)
 
 	// TODO: refactor needed
 	dio.WRITER_FACTORY.Init(opts, dirname)
@@ -57,7 +57,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
 
-	metaReplayHandle.Cleanup()
+	replayHandle.Cleanup()
 	db.replayAndCleanData()
 
 	db.startCleaner()

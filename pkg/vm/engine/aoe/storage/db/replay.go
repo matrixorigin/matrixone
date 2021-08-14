@@ -5,6 +5,8 @@ import (
 	"io/ioutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path"
@@ -13,6 +15,10 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	log "github.com/sirupsen/logrus"
 )
+
+type flushsegCtx struct {
+	id common.ID
+}
 
 type cleanable interface {
 	clean()
@@ -89,7 +95,7 @@ func (tdf *tableDataFiles) clean() {
 	}
 }
 
-type metaHandle struct {
+type replayHandle struct {
 	infos         *infoFile
 	tables        map[uint64]*tableFile
 	others        []string
@@ -100,16 +106,18 @@ type metaHandle struct {
 	mask          *roaring.Bitmap
 	cleanables    []cleanable
 	files         map[uint64]*tableDataFiles
+	flushsegs     []flushsegCtx
 }
 
-func NewMetaHandle(workDir string) *metaHandle {
-	fs := &metaHandle{
+func NewReplayHandle(workDir string) *replayHandle {
+	fs := &replayHandle{
 		workDir:    workDir,
 		tables:     make(map[uint64]*tableFile),
 		others:     make([]string, 0),
 		mask:       roaring.NewBitmap(),
 		files:      make(map[uint64]*tableDataFiles),
 		cleanables: make([]cleanable, 0),
+		flushsegs:  make([]flushsegCtx, 0),
 	}
 	empty := false
 	var err error
@@ -151,11 +159,26 @@ func NewMetaHandle(workDir string) *metaHandle {
 	return fs
 }
 
-func (h *metaHandle) addCleanable(f cleanable) {
+func (h *replayHandle) registerFlushSegCtx(ctx flushsegCtx) {
+
+}
+
+func (h *replayHandle) DispatchEvents(opts *e.Options, tables *table.Tables) {
+	for _, ctx := range h.flushsegs {
+		t, _ := tables.WeakRefTable(ctx.id.TableID)
+		segment := t.StrongRefSegment(ctx.id.SegmentID)
+		flushCtx := &dbsched.Context{Opts: opts}
+		flushEvent := dbsched.NewFlushSegEvent(flushCtx, segment)
+		opts.Scheduler.Schedule(flushEvent)
+	}
+	h.flushsegs = h.flushsegs[:0]
+}
+
+func (h *replayHandle) addCleanable(f cleanable) {
 	h.cleanables = append(h.cleanables, f)
 }
 
-func (h *metaHandle) addTable(f *tableFile) {
+func (h *replayHandle) addTable(f *tableFile) {
 	head := h.tables[f.id]
 	if head == nil {
 		h.tables[f.id] = f
@@ -182,7 +205,7 @@ func (h *metaHandle) addTable(f *tableFile) {
 	prev.next = f
 }
 
-func (h *metaHandle) addInfo(f *infoFile) {
+func (h *replayHandle) addInfo(f *infoFile) {
 	var prev *infoFile
 	curr := h.infos
 	for curr != nil {
@@ -209,7 +232,7 @@ func (h *metaHandle) addInfo(f *infoFile) {
 	}
 }
 
-func (h *metaHandle) addBlock(id common.ID, name string) {
+func (h *replayHandle) addBlock(id common.ID, name string) {
 	tbl, ok := h.files[id.TableID]
 	if !ok {
 		tbl = &tableDataFiles{
@@ -227,7 +250,7 @@ func (h *metaHandle) addBlock(id common.ID, name string) {
 	file.addBlock(id, name)
 }
 
-func (h *metaHandle) addSegment(id common.ID, name string) {
+func (h *replayHandle) addSegment(id common.ID, name string) {
 	tbl, ok := h.files[id.TableID]
 	if !ok {
 		tbl = &tableDataFiles{
@@ -246,13 +269,14 @@ func (h *metaHandle) addSegment(id common.ID, name string) {
 	}
 }
 
-func (h *metaHandle) addDataFile(fname string) {
+func (h *replayHandle) addDataFile(fname string) {
 	if name, ok := e.ParseBlockfileName(fname); ok {
 		id, err := common.ParseBlockFileName(name)
 		if err != nil {
 			panic(err)
 		}
-		h.addBlock(id, fname)
+		fullname := path.Join(h.dataDir, fname)
+		h.addBlock(id, fullname)
 		return
 	}
 	if name, ok := e.ParseSegmentfileName(fname); ok {
@@ -260,13 +284,14 @@ func (h *metaHandle) addDataFile(fname string) {
 		if err != nil {
 			panic(err)
 		}
-		h.addSegment(id, fname)
+		fullname := path.Join(h.dataDir, fname)
+		h.addSegment(id, fullname)
 		return
 	}
 	h.others = append(h.others, path.Join(h.dataDir, fname))
 }
 
-func (h *metaHandle) addMetaFile(fname string) {
+func (h *replayHandle) addMetaFile(fname string) {
 	name, ok := e.ParseTableMetaName(fname)
 	if ok {
 		tid, version, err := md.ParseTableCkpFile(name)
@@ -292,7 +317,7 @@ func (h *metaHandle) addMetaFile(fname string) {
 	h.others = append(h.others, path.Join(h.metaDir, fname))
 }
 
-func (h *metaHandle) correctTable(meta *md.Table) {
+func (h *replayHandle) correctTable(meta *md.Table) {
 	tablesFiles, ok := h.files[meta.ID]
 	if !ok {
 		return
@@ -301,11 +326,9 @@ func (h *metaHandle) correctTable(meta *md.Table) {
 		h.addCleanable(tablesFiles)
 		return
 	}
-	// sortedUpperBound := uint64(0)
 	for i := len(meta.Segments) - 1; i >= 0; i-- {
 		segment := meta.Segments[i]
 		if segment.DataState == md.SORTED {
-			// sortedUpperBound = segment.ID
 			break
 		}
 		file := tablesFiles.sortedfiles[*segment.AsCommonID()]
@@ -315,12 +338,25 @@ func (h *metaHandle) correctTable(meta *md.Table) {
 		}
 		file2 := tablesFiles.unsortedfiles[*segment.AsCommonID()]
 		if file2 != nil {
-
 		}
 	}
+	minsorted := md.MAX_SEGMENTID
+	for id, _ := range tablesFiles.sortedfiles {
+		unsorted, ok := tablesFiles.unsortedfiles[id]
+		if ok {
+			h.addCleanable(unsorted)
+			delete(tablesFiles.unsortedfiles, id)
+		}
+		if minsorted > id.SegmentID {
+			minsorted = id.SegmentID
+		}
+	}
+	log.Infof("minsorted %d", minsorted)
+	// for id, unsorted := range tablesFiles.unsortedfiles {
+	// }
 }
 
-func (h *metaHandle) rebuildTable(tbl *md.Table) *md.Table {
+func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
 	head := h.tables[tbl.ID]
 	if head == nil {
 		return nil
@@ -339,7 +375,7 @@ func (h *metaHandle) rebuildTable(tbl *md.Table) *md.Table {
 	return ret
 }
 
-func (h *metaHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.MetaInfo {
+func (h *replayHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.MetaInfo {
 	info := md.NewMetaInfo(mu, cfg)
 	if h.infos == nil {
 		return info
@@ -371,12 +407,12 @@ func (h *metaHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.Me
 	return info
 }
 
-func (h *metaHandle) cleanupFile(fname string) {
+func (h *replayHandle) cleanupFile(fname string) {
 	os.Remove(fname)
 	log.Infof("%s | Removed", fname)
 }
 
-func (h *metaHandle) Cleanup() {
+func (h *replayHandle) Cleanup() {
 	for tid, head := range h.tables {
 		if !h.mask.Contains(tid) {
 			h.cleanupFile(head.name)
@@ -411,7 +447,7 @@ func (h *metaHandle) Cleanup() {
 	h.files = nil
 }
 
-func (h *metaHandle) CleanupWithCtx(maxVer int) {
+func (h *replayHandle) CleanupWithCtx(maxVer int) {
 	if maxVer <= 1 {
 		panic("logic error")
 	}
@@ -439,7 +475,7 @@ func (h *metaHandle) CleanupWithCtx(maxVer int) {
 	}
 }
 
-func (h *metaHandle) String() string {
+func (h *replayHandle) String() string {
 	s := fmt.Sprintf("[InfoFiles]:")
 	{
 		curr := h.infos
