@@ -12,9 +12,10 @@ import (
 )
 
 func TestBlock(t *testing.T) {
+	mu := &sync.RWMutex{}
 	ts1 := NowMicro()
 	time.Sleep(time.Duration(1) * time.Microsecond)
-	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	info := MockInfo(mu, BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
 	tbl := NewTable(NextGloablSeqnum(), info, schema)
@@ -40,7 +41,8 @@ func TestBlock(t *testing.T) {
 }
 
 func TestSegment(t *testing.T) {
-	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	mu := &sync.RWMutex{}
+	info := MockInfo(mu, BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
 	t1 := NowMicro()
@@ -76,7 +78,8 @@ func TestSegment(t *testing.T) {
 }
 
 func TestTable(t *testing.T) {
-	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	mu := &sync.RWMutex{}
+	info := MockInfo(mu, BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
 	tbl := NewTable(NextGloablSeqnum(), info, schema)
@@ -110,7 +113,8 @@ func TestTable(t *testing.T) {
 }
 
 func TestInfo(t *testing.T) {
-	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	mu := &sync.RWMutex{}
+	info := MockInfo(mu, BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
 	tbl, err := info.CreateTable(NextGloablSeqnum(), schema)
@@ -128,7 +132,8 @@ func TestCreateDropTable(t *testing.T) {
 	colCnt := 2
 	tblInfo := MockTableInfo(colCnt)
 
-	info := MockInfo(BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
+	mu := &sync.RWMutex{}
+	info := MockInfo(mu, BLOCK_ROW_COUNT, SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	tbl, err := info.CreateTableFromTableInfo(tblInfo, dbi.TableOpCtx{TableName: tblInfo.Name, OpIndex: NextGloablSeqnum()})
 	assert.Nil(t, err)

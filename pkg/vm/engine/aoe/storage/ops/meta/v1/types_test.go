@@ -15,7 +15,7 @@ import (
 
 func TestBasicOps(t *testing.T) {
 	opts := e.Options{}
-	info := md.MockInfo(md.BLOCK_ROW_COUNT, md.SEGMENT_BLOCK_COUNT)
+	info := md.MockInfo(&opts.Mu, md.BLOCK_ROW_COUNT, md.SEGMENT_BLOCK_COUNT)
 	info.Conf.Dir = "/tmp"
 	opts.Meta.Info = info
 	opts.FillDefaults(info.Conf.Dir)
@@ -78,7 +78,7 @@ func TestBasicOps(t *testing.T) {
 	info_copy := info.Copy(ctx)
 
 	fpath := path.Join(info.Conf.Dir, "tttttttt")
-	w, err := os.OpenFile(fpath, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err := os.Create(fpath)
 	assert.Equal(t, err, nil)
 	err = info_copy.Serialize(w)
 	assert.Nil(t, err)

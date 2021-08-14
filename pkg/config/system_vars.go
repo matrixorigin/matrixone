@@ -13,6 +13,7 @@ type SystemVariables struct{
 	//read and write lock
 	rwlock	sync.RWMutex
 
+	
 	/**
 	Name:	rootname
 	Scope:	[global]
@@ -24,7 +25,7 @@ type SystemVariables struct{
 	UpdateMode:	fix
 	*/
 	rootname    string
-
+	
 	/**
 	Name:	rootpassword
 	Scope:	[global]
@@ -36,7 +37,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	rootpassword    string
-
+	
 	/**
 	Name:	dumpuser
 	Scope:	[global]
@@ -48,7 +49,7 @@ type SystemVariables struct{
 	UpdateMode:	fix
 	*/
 	dumpuser    string
-
+	
 	/**
 	Name:	dumppassword
 	Scope:	[global]
@@ -60,7 +61,7 @@ type SystemVariables struct{
 	UpdateMode:	fix
 	*/
 	dumppassword    string
-
+	
 	/**
 	Name:	dumpdatabase
 	Scope:	[global]
@@ -72,7 +73,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	dumpdatabase    string
-
+	
 	/**
 	Name:	port
 	Scope:	[global]
@@ -84,7 +85,7 @@ type SystemVariables struct{
 	UpdateMode:	fix
 	*/
 	port    int64
-
+	
 	/**
 	Name:	host
 	Scope:	[global]
@@ -96,7 +97,7 @@ type SystemVariables struct{
 	UpdateMode:	fix
 	*/
 	host    string
-
+	
 	/**
 	Name:	sendRow
 	Scope:	[global]
@@ -108,7 +109,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	sendRow    bool
-
+	
 	/**
 	Name:	dumpEnv
 	Scope:	[global]
@@ -120,7 +121,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	dumpEnv    bool
-
+	
 	/**
 	Name:	hostMmuLimitation
 	Scope:	[global]
@@ -132,7 +133,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	hostMmuLimitation    int64
-
+	
 	/**
 	Name:	guestMmuLimitation
 	Scope:	[global]
@@ -144,7 +145,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	guestMmuLimitation    int64
-
+	
 	/**
 	Name:	mempoolMaxSize
 	Scope:	[global]
@@ -156,7 +157,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	mempoolMaxSize    int64
-
+	
 	/**
 	Name:	mempoolFactor
 	Scope:	[global]
@@ -168,7 +169,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	mempoolFactor    int64
-
+	
 	/**
 	Name:	processLimitationSize
 	Scope:	[global]
@@ -180,7 +181,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	processLimitationSize    int64
-
+	
 	/**
 	Name:	processLimitationBatchRows
 	Scope:	[global]
@@ -192,7 +193,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	processLimitationBatchRows    int64
-
+	
 	/**
 	Name:	processLimitationBatchSize
 	Scope:	[global]
@@ -204,7 +205,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	processLimitationBatchSize    int64
-
+	
 	/**
 	Name:	processLimitationPartitionRows
 	Scope:	[global]
@@ -216,7 +217,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	processLimitationPartitionRows    int64
-
+	
 	/**
 	Name:	countOfRowsPerSendingToClient
 	Scope:	[global]
@@ -228,7 +229,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	countOfRowsPerSendingToClient    int64
-
+	
 	/**
 	Name:	periodOfEpochTimer
 	Scope:	[global]
@@ -240,7 +241,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	periodOfEpochTimer    int64
-
+	
 	/**
 	Name:	periodOfPersistence
 	Scope:	[global]
@@ -252,7 +253,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	periodOfPersistence    int64
-
+	
 	/**
 	Name:	periodOfDDLDeleteTimer
 	Scope:	[global]
@@ -264,7 +265,7 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	periodOfDDLDeleteTimer    int64
-
+	
 	/**
 	Name:	timeoutOfHeartbeat
 	Scope:	[global]
@@ -276,7 +277,30 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	timeoutOfHeartbeat    int64
-
+	
+	/**
+	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[false]
+	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.
+	UpdateMode:	dynamic
+	*/
+	rejectWhenHeartbeatFromPDLeaderIsTimeout    bool
+	
+	/**
+	Name:	recordTimeElapsedOfSqlRequest
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[true]
+	Comment:	record the time elapsed of executing sql request
+	UpdateMode:	dynamic
+	*/
+	recordTimeElapsedOfSqlRequest    bool
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -286,9 +310,6 @@ type SystemVariables struct{
 type varsConfig struct{
 	//read and write lock
 	rwlock	sync.RWMutex
-
-
-	
 
 	
 	/**
@@ -302,13 +323,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	Rootpassword    string  `toml:"rootpassword"`
-
-	
-
-	
-
-	
-
 	
 	/**
 	Name:	dumpdatabase
@@ -321,13 +335,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	Dumpdatabase    string  `toml:"dumpdatabase"`
-
-	
-
-	
-
-	
-
 	
 	/**
 	Name:	sendRow
@@ -340,9 +347,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	SendRow    bool  `toml:"sendRow"`
-
-	
-
 	
 	/**
 	Name:	dumpEnv
@@ -355,9 +359,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	DumpEnv    bool  `toml:"dumpEnv"`
-
-	
-
 	
 	/**
 	Name:	hostMmuLimitation
@@ -370,9 +371,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	HostMmuLimitation    int64  `toml:"hostMmuLimitation"`
-
-	
-
 	
 	/**
 	Name:	guestMmuLimitation
@@ -385,9 +383,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	GuestMmuLimitation    int64  `toml:"guestMmuLimitation"`
-
-	
-
 	
 	/**
 	Name:	mempoolMaxSize
@@ -400,9 +395,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	MempoolMaxSize    int64  `toml:"mempoolMaxSize"`
-
-	
-
 	
 	/**
 	Name:	mempoolFactor
@@ -415,9 +407,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	MempoolFactor    int64  `toml:"mempoolFactor"`
-
-	
-
 	
 	/**
 	Name:	processLimitationSize
@@ -430,9 +419,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	ProcessLimitationSize    int64  `toml:"processLimitationSize"`
-
-	
-
 	
 	/**
 	Name:	processLimitationBatchRows
@@ -445,9 +431,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	ProcessLimitationBatchRows    int64  `toml:"processLimitationBatchRows"`
-
-	
-
 	
 	/**
 	Name:	processLimitationBatchSize
@@ -460,9 +443,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	ProcessLimitationBatchSize    int64  `toml:"processLimitationBatchSize"`
-
-	
-
 	
 	/**
 	Name:	processLimitationPartitionRows
@@ -475,9 +455,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	ProcessLimitationPartitionRows    int64  `toml:"processLimitationPartitionRows"`
-
-	
-
 	
 	/**
 	Name:	countOfRowsPerSendingToClient
@@ -490,9 +467,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	CountOfRowsPerSendingToClient    int64  `toml:"countOfRowsPerSendingToClient"`
-
-	
-
 	
 	/**
 	Name:	periodOfEpochTimer
@@ -505,9 +479,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	PeriodOfEpochTimer    int64  `toml:"periodOfEpochTimer"`
-
-	
-
 	
 	/**
 	Name:	periodOfPersistence
@@ -520,9 +491,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	PeriodOfPersistence    int64  `toml:"periodOfPersistence"`
-
-	
-
 	
 	/**
 	Name:	periodOfDDLDeleteTimer
@@ -535,9 +503,6 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	PeriodOfDDLDeleteTimer    int64  `toml:"periodOfDDLDeleteTimer"`
-
-	
-
 	
 	/**
 	Name:	timeoutOfHeartbeat
@@ -550,9 +515,30 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	TimeoutOfHeartbeat    int64  `toml:"timeoutOfHeartbeat"`
-
 	
-
+	/**
+	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[false]
+	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.
+	UpdateMode:	dynamic
+	*/
+	RejectWhenHeartbeatFromPDLeaderIsTimeout    bool  `toml:"rejectWhenHeartbeatFromPDLeaderIsTimeout"`
+	
+	/**
+	Name:	recordTimeElapsedOfSqlRequest
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[true]
+	Comment:	record the time elapsed of executing sql request
+	UpdateMode:	dynamic
+	*/
+	RecordTimeElapsedOfSqlRequest    bool  `toml:"recordTimeElapsedOfSqlRequest"`
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -621,6 +607,10 @@ func (ap *SystemVariables) PrepareDefinition(){
 	
 	ap.name2definition["timeoutOfHeartbeat"] = "	Name:	timeoutOfHeartbeat	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[20]	Comment:	the timeout of heartbeat in second	UpdateMode:	dynamic	"
 	
+	ap.name2definition["rejectWhenHeartbeatFromPDLeaderIsTimeout"] = "	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[false]	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.	UpdateMode:	dynamic	"
+	
+	ap.name2definition["recordTimeElapsedOfSqlRequest"] = "	Name:	recordTimeElapsedOfSqlRequest	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[true]	Comment:	record the time elapsed of executing sql request	UpdateMode:	dynamic	"
+	
 }
 
 /**
@@ -630,10 +620,10 @@ func (ap *SystemVariables) GetDefinition(name string)(string,error){
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	ap.prepareAnything()
-	if p,ok := ap.name2definition[name];!ok{
-		return "",fmt.Errorf("there is no parameter %s",name)
-	}else{
-		return p,nil
+	if p,ok := ap.name2definition[name]; !ok {
+		return "", fmt.Errorf("there is no parameter %s",name)
+	} else {
+		return p, nil
 	}
 }
 
@@ -644,9 +634,9 @@ func (ap *SystemVariables) HasParameter(name string)bool{
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	ap.prepareAnything()
-	if _,ok := ap.name2definition[name];!ok{
+	if _,ok := ap.name2definition[name]; !ok{
 		return false
-	}else{
+	} else {
 		return true
 	}
 }
@@ -658,444 +648,326 @@ func (ap *SystemVariables) LoadInitialValues()error{
 	ap.PrepareDefinition()
 	var err error
 	
-		
-		
-			rootnamechoices :=[]string {
-				
-				"root",
-					
-			}
-			if len(rootnamechoices) != 0{
-				if err = ap.setRootname( rootnamechoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Rootname",err)
-				}
-			}else{
-				//empty string
-				if err = ap.setRootname( "" ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Rootname",err)
-				}
-			}
-		
 	
-		
-		
-			rootpasswordchoices :=[]string {
-				
-				"",
-					
-			}
-			if len(rootpasswordchoices) != 0{
-				if err = ap.setRootpassword( rootpasswordchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Rootpassword",err)
-				}
-			}else{
-				//empty string
-				if err = ap.setRootpassword( "" ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Rootpassword",err)
-				}
-			}
-		
+	rootnamechoices := []string {
+		"root", 
+	}
+	if len(rootnamechoices) != 0 {
+		if err = ap.setRootname(rootnamechoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Rootname",err)
+		}
+	} else {
+		//empty string
+		if err = ap.setRootname("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Rootname",err)
+		}
+	}
 	
-		
-		
-			dumpuserchoices :=[]string {
-				
-				"dump",
-					
-			}
-			if len(dumpuserchoices) != 0{
-				if err = ap.setDumpuser( dumpuserchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Dumpuser",err)
-				}
-			}else{
-				//empty string
-				if err = ap.setDumpuser( "" ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Dumpuser",err)
-				}
-			}
-		
+	rootpasswordchoices := []string {
+		"", 
+	}
+	if len(rootpasswordchoices) != 0 {
+		if err = ap.setRootpassword(rootpasswordchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Rootpassword",err)
+		}
+	} else {
+		//empty string
+		if err = ap.setRootpassword("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Rootpassword",err)
+		}
+	}
 	
-		
-		
-			dumppasswordchoices :=[]string {
-				
-				"111",
-					
-			}
-			if len(dumppasswordchoices) != 0{
-				if err = ap.setDumppassword( dumppasswordchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Dumppassword",err)
-				}
-			}else{
-				//empty string
-				if err = ap.setDumppassword( "" ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Dumppassword",err)
-				}
-			}
-		
+	dumpuserchoices := []string {
+		"dump", 
+	}
+	if len(dumpuserchoices) != 0 {
+		if err = ap.setDumpuser(dumpuserchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Dumpuser",err)
+		}
+	} else {
+		//empty string
+		if err = ap.setDumpuser("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Dumpuser",err)
+		}
+	}
 	
-		
-		
-			dumpdatabasechoices :=[]string {
-				
-				"default",
-					
-			}
-			if len(dumpdatabasechoices) != 0{
-				if err = ap.setDumpdatabase( dumpdatabasechoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Dumpdatabase",err)
-				}
-			}else{
-				//empty string
-				if err = ap.setDumpdatabase( "" ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Dumpdatabase",err)
-				}
-			}
-		
+	dumppasswordchoices := []string {
+		"111", 
+	}
+	if len(dumppasswordchoices) != 0 {
+		if err = ap.setDumppassword(dumppasswordchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Dumppassword",err)
+		}
+	} else {
+		//empty string
+		if err = ap.setDumppassword("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Dumppassword",err)
+		}
+	}
 	
-		
-		
-			portchoices :=[]int64 {
-				
-				6001,
-					
-			}
-			if len(portchoices) != 0{
-				if err = ap.setPort( portchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Port",err)
-				}
-			}else{
-				
-					if err = ap.setPort( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","Port",err)
-					}
-				
-			}
-		
+	dumpdatabasechoices := []string {
+		"default", 
+	}
+	if len(dumpdatabasechoices) != 0 {
+		if err = ap.setDumpdatabase(dumpdatabasechoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Dumpdatabase",err)
+		}
+	} else {
+		//empty string
+		if err = ap.setDumpdatabase("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Dumpdatabase",err)
+		}
+	}
 	
-		
-		
-			hostchoices :=[]string {
-				
-				"localhost",
-				
-				"127.0.0.1",
-				
-				"0.0.0.0",
-					
-			}
-			if len(hostchoices) != 0{
-				if err = ap.setHost( hostchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Host",err)
-				}
-			}else{
-				//empty string
-				if err = ap.setHost( "" ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","Host",err)
-				}
-			}
-		
+	portchoices :=[]int64 {
+		6001,
+	}
+	if len(portchoices) != 0 {
+		if err = ap.setPort(portchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Port",err)
+		}
+	} else { 
+		if err = ap.setPort(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Port",err)
+		}
+	}
 	
-		
-		
-			sendRowchoices :=[]bool {
-					
-			}
-			if len(sendRowchoices) != 0{
-				if err = ap.setSendRow( sendRowchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","SendRow",err)
-				}
-			}else{
-				
-					if err = ap.setSendRow( false ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","SendRow",err)
-					}	
-				
-			}
-		
+	hostchoices := []string {
+		"localhost","127.0.0.1","0.0.0.0", 
+	}
+	if len(hostchoices) != 0 {
+		if err = ap.setHost(hostchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Host",err)
+		}
+	} else {
+		//empty string
+		if err = ap.setHost("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","Host",err)
+		}
+	}
 	
+	sendRowchoices :=[]bool {
 		
-		
-			dumpEnvchoices :=[]bool {
-					
-			}
-			if len(dumpEnvchoices) != 0{
-				if err = ap.setDumpEnv( dumpEnvchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","DumpEnv",err)
-				}
-			}else{
-				
-					if err = ap.setDumpEnv( false ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","DumpEnv",err)
-					}	
-				
-			}
-		
+	}
+	if len(sendRowchoices) != 0 {
+		if err = ap.setSendRow(sendRowchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","SendRow",err)
+		}
+	} else { 
+		if err = ap.setSendRow(false) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","SendRow",err)
+		}
+	}
 	
+	dumpEnvchoices :=[]bool {
 		
-		
-			hostMmuLimitationchoices :=[]int64 {
-				
-				1099511627776,
-					
-			}
-			if len(hostMmuLimitationchoices) != 0{
-				if err = ap.setHostMmuLimitation( hostMmuLimitationchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","HostMmuLimitation",err)
-				}
-			}else{
-				
-					if err = ap.setHostMmuLimitation( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","HostMmuLimitation",err)
-					}
-				
-			}
-		
+	}
+	if len(dumpEnvchoices) != 0 {
+		if err = ap.setDumpEnv(dumpEnvchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","DumpEnv",err)
+		}
+	} else { 
+		if err = ap.setDumpEnv(false) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","DumpEnv",err)
+		}
+	}
 	
-		
-		
-			guestMmuLimitationchoices :=[]int64 {
-				
-				1099511627776,
-					
-			}
-			if len(guestMmuLimitationchoices) != 0{
-				if err = ap.setGuestMmuLimitation( guestMmuLimitationchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","GuestMmuLimitation",err)
-				}
-			}else{
-				
-					if err = ap.setGuestMmuLimitation( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","GuestMmuLimitation",err)
-					}
-				
-			}
-		
+	hostMmuLimitationchoices :=[]int64 {
+		1099511627776,
+	}
+	if len(hostMmuLimitationchoices) != 0 {
+		if err = ap.setHostMmuLimitation(hostMmuLimitationchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","HostMmuLimitation",err)
+		}
+	} else { 
+		if err = ap.setHostMmuLimitation(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","HostMmuLimitation",err)
+		}
+	}
 	
-		
-		
-			mempoolMaxSizechoices :=[]int64 {
-				
-				1099511627776,
-					
-			}
-			if len(mempoolMaxSizechoices) != 0{
-				if err = ap.setMempoolMaxSize( mempoolMaxSizechoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","MempoolMaxSize",err)
-				}
-			}else{
-				
-					if err = ap.setMempoolMaxSize( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","MempoolMaxSize",err)
-					}
-				
-			}
-		
+	guestMmuLimitationchoices :=[]int64 {
+		1099511627776,
+	}
+	if len(guestMmuLimitationchoices) != 0 {
+		if err = ap.setGuestMmuLimitation(guestMmuLimitationchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","GuestMmuLimitation",err)
+		}
+	} else { 
+		if err = ap.setGuestMmuLimitation(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","GuestMmuLimitation",err)
+		}
+	}
 	
-		
-		
-			mempoolFactorchoices :=[]int64 {
-				
-				8,
-					
-			}
-			if len(mempoolFactorchoices) != 0{
-				if err = ap.setMempoolFactor( mempoolFactorchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","MempoolFactor",err)
-				}
-			}else{
-				
-					if err = ap.setMempoolFactor( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","MempoolFactor",err)
-					}
-				
-			}
-		
+	mempoolMaxSizechoices :=[]int64 {
+		1099511627776,
+	}
+	if len(mempoolMaxSizechoices) != 0 {
+		if err = ap.setMempoolMaxSize(mempoolMaxSizechoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","MempoolMaxSize",err)
+		}
+	} else { 
+		if err = ap.setMempoolMaxSize(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","MempoolMaxSize",err)
+		}
+	}
 	
-		
-		
-			processLimitationSizechoices :=[]int64 {
-				
-				42949672960,
-					
-			}
-			if len(processLimitationSizechoices) != 0{
-				if err = ap.setProcessLimitationSize( processLimitationSizechoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","ProcessLimitationSize",err)
-				}
-			}else{
-				
-					if err = ap.setProcessLimitationSize( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","ProcessLimitationSize",err)
-					}
-				
-			}
-		
+	mempoolFactorchoices :=[]int64 {
+		8,
+	}
+	if len(mempoolFactorchoices) != 0 {
+		if err = ap.setMempoolFactor(mempoolFactorchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","MempoolFactor",err)
+		}
+	} else { 
+		if err = ap.setMempoolFactor(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","MempoolFactor",err)
+		}
+	}
 	
-		
-		
-			processLimitationBatchRowschoices :=[]int64 {
-				
-				42949672960,
-					
-			}
-			if len(processLimitationBatchRowschoices) != 0{
-				if err = ap.setProcessLimitationBatchRows( processLimitationBatchRowschoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchRows",err)
-				}
-			}else{
-				
-					if err = ap.setProcessLimitationBatchRows( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchRows",err)
-					}
-				
-			}
-		
+	processLimitationSizechoices :=[]int64 {
+		42949672960,
+	}
+	if len(processLimitationSizechoices) != 0 {
+		if err = ap.setProcessLimitationSize(processLimitationSizechoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProcessLimitationSize",err)
+		}
+	} else { 
+		if err = ap.setProcessLimitationSize(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProcessLimitationSize",err)
+		}
+	}
 	
-		
-		
-			processLimitationBatchSizechoices :=[]int64 {
-				
-				0,
-					
-			}
-			if len(processLimitationBatchSizechoices) != 0{
-				if err = ap.setProcessLimitationBatchSize( processLimitationBatchSizechoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchSize",err)
-				}
-			}else{
-				
-					if err = ap.setProcessLimitationBatchSize( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchSize",err)
-					}
-				
-			}
-		
+	processLimitationBatchRowschoices :=[]int64 {
+		42949672960,
+	}
+	if len(processLimitationBatchRowschoices) != 0 {
+		if err = ap.setProcessLimitationBatchRows(processLimitationBatchRowschoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchRows",err)
+		}
+	} else { 
+		if err = ap.setProcessLimitationBatchRows(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchRows",err)
+		}
+	}
 	
-		
-		
-			processLimitationPartitionRowschoices :=[]int64 {
-				
-				42949672960,
-					
-			}
-			if len(processLimitationPartitionRowschoices) != 0{
-				if err = ap.setProcessLimitationPartitionRows( processLimitationPartitionRowschoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","ProcessLimitationPartitionRows",err)
-				}
-			}else{
-				
-					if err = ap.setProcessLimitationPartitionRows( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","ProcessLimitationPartitionRows",err)
-					}
-				
-			}
-		
+	processLimitationBatchSizechoices :=[]int64 {
+		0,
+	}
+	if len(processLimitationBatchSizechoices) != 0 {
+		if err = ap.setProcessLimitationBatchSize(processLimitationBatchSizechoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchSize",err)
+		}
+	} else { 
+		if err = ap.setProcessLimitationBatchSize(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProcessLimitationBatchSize",err)
+		}
+	}
 	
-		
-		
-			countOfRowsPerSendingToClientchoices :=[]int64 {
-				
-				10,
-					
-			}
-			if len(countOfRowsPerSendingToClientchoices) != 0{
-				if err = ap.setCountOfRowsPerSendingToClient( countOfRowsPerSendingToClientchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","CountOfRowsPerSendingToClient",err)
-				}
-			}else{
-				
-					if err = ap.setCountOfRowsPerSendingToClient( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","CountOfRowsPerSendingToClient",err)
-					}
-				
-			}
-		
+	processLimitationPartitionRowschoices :=[]int64 {
+		42949672960,
+	}
+	if len(processLimitationPartitionRowschoices) != 0 {
+		if err = ap.setProcessLimitationPartitionRows(processLimitationPartitionRowschoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProcessLimitationPartitionRows",err)
+		}
+	} else { 
+		if err = ap.setProcessLimitationPartitionRows(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProcessLimitationPartitionRows",err)
+		}
+	}
 	
-		
-		
-			periodOfEpochTimerchoices :=[]int64 {
-				
-				5,
-					
-			}
-			if len(periodOfEpochTimerchoices) != 0{
-				if err = ap.setPeriodOfEpochTimer( periodOfEpochTimerchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","PeriodOfEpochTimer",err)
-				}
-			}else{
-				
-					if err = ap.setPeriodOfEpochTimer( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","PeriodOfEpochTimer",err)
-					}
-				
-			}
-		
+	countOfRowsPerSendingToClientchoices :=[]int64 {
+		10,
+	}
+	if len(countOfRowsPerSendingToClientchoices) != 0 {
+		if err = ap.setCountOfRowsPerSendingToClient(countOfRowsPerSendingToClientchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CountOfRowsPerSendingToClient",err)
+		}
+	} else { 
+		if err = ap.setCountOfRowsPerSendingToClient(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CountOfRowsPerSendingToClient",err)
+		}
+	}
 	
-		
-		
-			periodOfPersistencechoices :=[]int64 {
-				
-				20,
-					
-			}
-			if len(periodOfPersistencechoices) != 0{
-				if err = ap.setPeriodOfPersistence( periodOfPersistencechoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","PeriodOfPersistence",err)
-				}
-			}else{
-				
-					if err = ap.setPeriodOfPersistence( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","PeriodOfPersistence",err)
-					}
-				
-			}
-		
+	periodOfEpochTimerchoices :=[]int64 {
+		5,
+	}
+	if len(periodOfEpochTimerchoices) != 0 {
+		if err = ap.setPeriodOfEpochTimer(periodOfEpochTimerchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","PeriodOfEpochTimer",err)
+		}
+	} else { 
+		if err = ap.setPeriodOfEpochTimer(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","PeriodOfEpochTimer",err)
+		}
+	}
 	
-		
-		
-			periodOfDDLDeleteTimerchoices :=[]int64 {
-				
-				20,
-					
-			}
-			if len(periodOfDDLDeleteTimerchoices) != 0{
-				if err = ap.setPeriodOfDDLDeleteTimer( periodOfDDLDeleteTimerchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","PeriodOfDDLDeleteTimer",err)
-				}
-			}else{
-				
-					if err = ap.setPeriodOfDDLDeleteTimer( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","PeriodOfDDLDeleteTimer",err)
-					}
-				
-			}
-		
+	periodOfPersistencechoices :=[]int64 {
+		20,
+	}
+	if len(periodOfPersistencechoices) != 0 {
+		if err = ap.setPeriodOfPersistence(periodOfPersistencechoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","PeriodOfPersistence",err)
+		}
+	} else { 
+		if err = ap.setPeriodOfPersistence(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","PeriodOfPersistence",err)
+		}
+	}
 	
-		
-		
-			timeoutOfHeartbeatchoices :=[]int64 {
-				
-				20,
-					
-			}
-			if len(timeoutOfHeartbeatchoices) != 0{
-				if err = ap.setTimeoutOfHeartbeat( timeoutOfHeartbeatchoices[0] ) ; err != nil{
-					return fmt.Errorf("set%s failed.error:%v","TimeoutOfHeartbeat",err)
-				}
-			}else{
-				
-					if err = ap.setTimeoutOfHeartbeat( 0 ) ; err != nil{
-						return fmt.Errorf("set%s failed.error:%v","TimeoutOfHeartbeat",err)
-					}
-				
-			}
-		
+	periodOfDDLDeleteTimerchoices :=[]int64 {
+		20,
+	}
+	if len(periodOfDDLDeleteTimerchoices) != 0 {
+		if err = ap.setPeriodOfDDLDeleteTimer(periodOfDDLDeleteTimerchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","PeriodOfDDLDeleteTimer",err)
+		}
+	} else { 
+		if err = ap.setPeriodOfDDLDeleteTimer(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","PeriodOfDDLDeleteTimer",err)
+		}
+	}
 	
+	timeoutOfHeartbeatchoices :=[]int64 {
+		20,
+	}
+	if len(timeoutOfHeartbeatchoices) != 0 {
+		if err = ap.setTimeoutOfHeartbeat(timeoutOfHeartbeatchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","TimeoutOfHeartbeat",err)
+		}
+	} else { 
+		if err = ap.setTimeoutOfHeartbeat(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","TimeoutOfHeartbeat",err)
+		}
+	}
+	
+	rejectWhenHeartbeatFromPDLeaderIsTimeoutchoices :=[]bool {
+		false,
+	}
+	if len(rejectWhenHeartbeatFromPDLeaderIsTimeoutchoices) != 0 {
+		if err = ap.setRejectWhenHeartbeatFromPDLeaderIsTimeout(rejectWhenHeartbeatFromPDLeaderIsTimeoutchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RejectWhenHeartbeatFromPDLeaderIsTimeout",err)
+		}
+	} else { 
+		if err = ap.setRejectWhenHeartbeatFromPDLeaderIsTimeout(false) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RejectWhenHeartbeatFromPDLeaderIsTimeout",err)
+		}
+	}
+	
+	recordTimeElapsedOfSqlRequestchoices :=[]bool {
+		true,
+	}
+	if len(recordTimeElapsedOfSqlRequestchoices) != 0 {
+		if err = ap.setRecordTimeElapsedOfSqlRequest(recordTimeElapsedOfSqlRequestchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RecordTimeElapsedOfSqlRequest",err)
+		}
+	} else { 
+		if err = ap.setRecordTimeElapsedOfSqlRequest(false) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RecordTimeElapsedOfSqlRequest",err)
+		}
+	}
 	return nil
 }
-
-
 
 /**
 Get the value of the parameter rootname
@@ -1295,12 +1167,23 @@ func (ap * SystemVariables ) GetTimeoutOfHeartbeat() int64 {
 	return ap.timeoutOfHeartbeat
 }
 
+/**
+Get the value of the parameter rejectWhenHeartbeatFromPDLeaderIsTimeout
+*/
+func (ap * SystemVariables ) GetRejectWhenHeartbeatFromPDLeaderIsTimeout() bool {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.rejectWhenHeartbeatFromPDLeaderIsTimeout
+}
 
-
-
-
-
-
+/**
+Get the value of the parameter recordTimeElapsedOfSqlRequest
+*/
+func (ap * SystemVariables ) GetRecordTimeElapsedOfSqlRequest() bool {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.recordTimeElapsedOfSqlRequest
+}
 
 
 /**
@@ -1310,24 +1193,12 @@ func (ap * SystemVariables ) SetRootpassword(value string)error {
 	return  ap.setRootpassword(value)
 }
 
-
-
-
-
-
-
 /**
 Set the value of the parameter dumpdatabase
 */
 func (ap * SystemVariables ) SetDumpdatabase(value string)error {
 	return  ap.setDumpdatabase(value)
 }
-
-
-
-
-
-
 
 /**
 Set the value of the parameter sendRow
@@ -1336,16 +1207,12 @@ func (ap * SystemVariables ) SetSendRow(value bool)error {
 	return  ap.setSendRow(value)
 }
 
-
-
 /**
 Set the value of the parameter dumpEnv
 */
 func (ap * SystemVariables ) SetDumpEnv(value bool)error {
 	return  ap.setDumpEnv(value)
 }
-
-
 
 /**
 Set the value of the parameter hostMmuLimitation
@@ -1354,16 +1221,12 @@ func (ap * SystemVariables ) SetHostMmuLimitation(value int64)error {
 	return  ap.setHostMmuLimitation(value)
 }
 
-
-
 /**
 Set the value of the parameter guestMmuLimitation
 */
 func (ap * SystemVariables ) SetGuestMmuLimitation(value int64)error {
 	return  ap.setGuestMmuLimitation(value)
 }
-
-
 
 /**
 Set the value of the parameter mempoolMaxSize
@@ -1372,16 +1235,12 @@ func (ap * SystemVariables ) SetMempoolMaxSize(value int64)error {
 	return  ap.setMempoolMaxSize(value)
 }
 
-
-
 /**
 Set the value of the parameter mempoolFactor
 */
 func (ap * SystemVariables ) SetMempoolFactor(value int64)error {
 	return  ap.setMempoolFactor(value)
 }
-
-
 
 /**
 Set the value of the parameter processLimitationSize
@@ -1390,16 +1249,12 @@ func (ap * SystemVariables ) SetProcessLimitationSize(value int64)error {
 	return  ap.setProcessLimitationSize(value)
 }
 
-
-
 /**
 Set the value of the parameter processLimitationBatchRows
 */
 func (ap * SystemVariables ) SetProcessLimitationBatchRows(value int64)error {
 	return  ap.setProcessLimitationBatchRows(value)
 }
-
-
 
 /**
 Set the value of the parameter processLimitationBatchSize
@@ -1408,16 +1263,12 @@ func (ap * SystemVariables ) SetProcessLimitationBatchSize(value int64)error {
 	return  ap.setProcessLimitationBatchSize(value)
 }
 
-
-
 /**
 Set the value of the parameter processLimitationPartitionRows
 */
 func (ap * SystemVariables ) SetProcessLimitationPartitionRows(value int64)error {
 	return  ap.setProcessLimitationPartitionRows(value)
 }
-
-
 
 /**
 Set the value of the parameter countOfRowsPerSendingToClient
@@ -1426,16 +1277,12 @@ func (ap * SystemVariables ) SetCountOfRowsPerSendingToClient(value int64)error 
 	return  ap.setCountOfRowsPerSendingToClient(value)
 }
 
-
-
 /**
 Set the value of the parameter periodOfEpochTimer
 */
 func (ap * SystemVariables ) SetPeriodOfEpochTimer(value int64)error {
 	return  ap.setPeriodOfEpochTimer(value)
 }
-
-
 
 /**
 Set the value of the parameter periodOfPersistence
@@ -1444,16 +1291,12 @@ func (ap * SystemVariables ) SetPeriodOfPersistence(value int64)error {
 	return  ap.setPeriodOfPersistence(value)
 }
 
-
-
 /**
 Set the value of the parameter periodOfDDLDeleteTimer
 */
 func (ap * SystemVariables ) SetPeriodOfDDLDeleteTimer(value int64)error {
 	return  ap.setPeriodOfDDLDeleteTimer(value)
 }
-
-
 
 /**
 Set the value of the parameter timeoutOfHeartbeat
@@ -1462,10 +1305,19 @@ func (ap * SystemVariables ) SetTimeoutOfHeartbeat(value int64)error {
 	return  ap.setTimeoutOfHeartbeat(value)
 }
 
+/**
+Set the value of the parameter rejectWhenHeartbeatFromPDLeaderIsTimeout
+*/
+func (ap * SystemVariables ) SetRejectWhenHeartbeatFromPDLeaderIsTimeout(value bool)error {
+	return  ap.setRejectWhenHeartbeatFromPDLeaderIsTimeout(value)
+}
 
-
-
-
+/**
+Set the value of the parameter recordTimeElapsedOfSqlRequest
+*/
+func (ap * SystemVariables ) SetRecordTimeElapsedOfSqlRequest(value bool)error {
+	return  ap.setRecordTimeElapsedOfSqlRequest(value)
+}
 
 /**
 Set the value of the parameter rootname
@@ -1473,24 +1325,17 @@ Set the value of the parameter rootname
 func (ap * SystemVariables ) setRootname(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]string {
-				
-				"root",
-					
+		choices :=[]string {
+			"root",	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("setRootname,the value %s is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSlice(value, choices){
-					return fmt.Errorf("setRootname,the value %s is not in set %v",value,choices)
-				}
-			}//else means any string
-		
-
+		}//else means any string
 	
-
+	
 	ap.rootname = value
 	return nil
 }
@@ -1501,24 +1346,17 @@ Set the value of the parameter rootpassword
 func (ap * SystemVariables ) setRootpassword(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]string {
-				
-				"",
-					
+		choices :=[]string {
+			"",	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("setRootpassword,the value %s is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSlice(value, choices){
-					return fmt.Errorf("setRootpassword,the value %s is not in set %v",value,choices)
-				}
-			}//else means any string
-		
-
+		}//else means any string
 	
-
+	
 	ap.rootpassword = value
 	return nil
 }
@@ -1529,24 +1367,17 @@ Set the value of the parameter dumpuser
 func (ap * SystemVariables ) setDumpuser(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]string {
-				
-				"dump",
-					
+		choices :=[]string {
+			"dump",	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("setDumpuser,the value %s is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSlice(value, choices){
-					return fmt.Errorf("setDumpuser,the value %s is not in set %v",value,choices)
-				}
-			}//else means any string
-		
-
+		}//else means any string
 	
-
+	
 	ap.dumpuser = value
 	return nil
 }
@@ -1557,24 +1388,17 @@ Set the value of the parameter dumppassword
 func (ap * SystemVariables ) setDumppassword(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]string {
-				
-				"111",
-					
+		choices :=[]string {
+			"111",	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("setDumppassword,the value %s is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSlice(value, choices){
-					return fmt.Errorf("setDumppassword,the value %s is not in set %v",value,choices)
-				}
-			}//else means any string
-		
-
+		}//else means any string
 	
-
+	
 	ap.dumppassword = value
 	return nil
 }
@@ -1585,24 +1409,17 @@ Set the value of the parameter dumpdatabase
 func (ap * SystemVariables ) setDumpdatabase(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]string {
-				
-				"default",
-					
+		choices :=[]string {
+			"default",	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("setDumpdatabase,the value %s is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSlice(value, choices){
-					return fmt.Errorf("setDumpdatabase,the value %s is not in set %v",value,choices)
-				}
-			}//else means any string
-		
-
+		}//else means any string
 	
-
+	
 	ap.dumpdatabase = value
 	return nil
 }
@@ -1613,24 +1430,18 @@ Set the value of the parameter port
 func (ap * SystemVariables ) setPort(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				6001,
-					
+	
+		choices :=[]int64 {
+			6001,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setPort,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setPort,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.port = value
 	return nil
 }
@@ -1641,28 +1452,17 @@ Set the value of the parameter host
 func (ap * SystemVariables ) setHost(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]string {
-				
-				"localhost",
-				
-				"127.0.0.1",
-				
-				"0.0.0.0",
-					
+		choices :=[]string {
+			"localhost","127.0.0.1","0.0.0.0",	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("setHost,the value %s is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSlice(value, choices){
-					return fmt.Errorf("setHost,the value %s is not in set %v",value,choices)
-				}
-			}//else means any string
-		
-
+		}//else means any string
 	
-
+	
 	ap.host = value
 	return nil
 }
@@ -1673,22 +1473,16 @@ Set the value of the parameter sendRow
 func (ap * SystemVariables ) setSendRow(value bool)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
-	
-		
-		
-			choices :=[]bool {
-					
+	choices :=[]bool {
+				
+		}
+		if len( choices ) != 0{
+			if !isInSliceBool(value, choices){
+				return fmt.Errorf("setSendRow,the value %t is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceBool(value, choices){
-					return fmt.Errorf("setSendRow,the value %t is not in set %v",value,choices)
-				}
-			}//else means any bool value: true or false
-		
-
+		}//else means any bool value: true or false
 	
-
+	
 	ap.sendRow = value
 	return nil
 }
@@ -1699,22 +1493,16 @@ Set the value of the parameter dumpEnv
 func (ap * SystemVariables ) setDumpEnv(value bool)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
-	
-		
-		
-			choices :=[]bool {
-					
+	choices :=[]bool {
+				
+		}
+		if len( choices ) != 0{
+			if !isInSliceBool(value, choices){
+				return fmt.Errorf("setDumpEnv,the value %t is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceBool(value, choices){
-					return fmt.Errorf("setDumpEnv,the value %t is not in set %v",value,choices)
-				}
-			}//else means any bool value: true or false
-		
-
+		}//else means any bool value: true or false
 	
-
+	
 	ap.dumpEnv = value
 	return nil
 }
@@ -1725,24 +1513,18 @@ Set the value of the parameter hostMmuLimitation
 func (ap * SystemVariables ) setHostMmuLimitation(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				1099511627776,
-					
+	
+		choices :=[]int64 {
+			1099511627776,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setHostMmuLimitation,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setHostMmuLimitation,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.hostMmuLimitation = value
 	return nil
 }
@@ -1753,24 +1535,18 @@ Set the value of the parameter guestMmuLimitation
 func (ap * SystemVariables ) setGuestMmuLimitation(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				1099511627776,
-					
+	
+		choices :=[]int64 {
+			1099511627776,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setGuestMmuLimitation,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setGuestMmuLimitation,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.guestMmuLimitation = value
 	return nil
 }
@@ -1781,24 +1557,18 @@ Set the value of the parameter mempoolMaxSize
 func (ap * SystemVariables ) setMempoolMaxSize(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				1099511627776,
-					
+	
+		choices :=[]int64 {
+			1099511627776,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setMempoolMaxSize,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setMempoolMaxSize,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.mempoolMaxSize = value
 	return nil
 }
@@ -1809,24 +1579,18 @@ Set the value of the parameter mempoolFactor
 func (ap * SystemVariables ) setMempoolFactor(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				8,
-					
+	
+		choices :=[]int64 {
+			8,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setMempoolFactor,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setMempoolFactor,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.mempoolFactor = value
 	return nil
 }
@@ -1837,24 +1601,18 @@ Set the value of the parameter processLimitationSize
 func (ap * SystemVariables ) setProcessLimitationSize(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				42949672960,
-					
+	
+		choices :=[]int64 {
+			42949672960,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setProcessLimitationSize,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setProcessLimitationSize,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.processLimitationSize = value
 	return nil
 }
@@ -1865,24 +1623,18 @@ Set the value of the parameter processLimitationBatchRows
 func (ap * SystemVariables ) setProcessLimitationBatchRows(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				42949672960,
-					
+	
+		choices :=[]int64 {
+			42949672960,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setProcessLimitationBatchRows,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setProcessLimitationBatchRows,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.processLimitationBatchRows = value
 	return nil
 }
@@ -1893,24 +1645,18 @@ Set the value of the parameter processLimitationBatchSize
 func (ap * SystemVariables ) setProcessLimitationBatchSize(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				0,
-					
+	
+		choices :=[]int64 {
+			0,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setProcessLimitationBatchSize,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setProcessLimitationBatchSize,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.processLimitationBatchSize = value
 	return nil
 }
@@ -1921,24 +1667,18 @@ Set the value of the parameter processLimitationPartitionRows
 func (ap * SystemVariables ) setProcessLimitationPartitionRows(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				42949672960,
-					
+	
+		choices :=[]int64 {
+			42949672960,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setProcessLimitationPartitionRows,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setProcessLimitationPartitionRows,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.processLimitationPartitionRows = value
 	return nil
 }
@@ -1949,24 +1689,18 @@ Set the value of the parameter countOfRowsPerSendingToClient
 func (ap * SystemVariables ) setCountOfRowsPerSendingToClient(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				10,
-					
+	
+		choices :=[]int64 {
+			10,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setCountOfRowsPerSendingToClient,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setCountOfRowsPerSendingToClient,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.countOfRowsPerSendingToClient = value
 	return nil
 }
@@ -1977,24 +1711,18 @@ Set the value of the parameter periodOfEpochTimer
 func (ap * SystemVariables ) setPeriodOfEpochTimer(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				5,
-					
+	
+		choices :=[]int64 {
+			5,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setPeriodOfEpochTimer,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setPeriodOfEpochTimer,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.periodOfEpochTimer = value
 	return nil
 }
@@ -2005,24 +1733,18 @@ Set the value of the parameter periodOfPersistence
 func (ap * SystemVariables ) setPeriodOfPersistence(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				20,
-					
+	
+		choices :=[]int64 {
+			20,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setPeriodOfPersistence,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setPeriodOfPersistence,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.periodOfPersistence = value
 	return nil
 }
@@ -2033,24 +1755,18 @@ Set the value of the parameter periodOfDDLDeleteTimer
 func (ap * SystemVariables ) setPeriodOfDDLDeleteTimer(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				20,
-					
+	
+		choices :=[]int64 {
+			20,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setPeriodOfDDLDeleteTimer,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setPeriodOfDDLDeleteTimer,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.periodOfDDLDeleteTimer = value
 	return nil
 }
@@ -2061,25 +1777,59 @@ Set the value of the parameter timeoutOfHeartbeat
 func (ap * SystemVariables ) setTimeoutOfHeartbeat(value int64)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
-
 	
-
-		
-			choices :=[]int64 {
-				
-				20,
-					
+	
+		choices :=[]int64 {
+			20,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setTimeoutOfHeartbeat,the value %d is not in set %v",value,choices)
 			}
-			if len( choices ) != 0{
-				if !isInSliceInt64(value, choices){
-					return fmt.Errorf("setTimeoutOfHeartbeat,the value %d is not in set %v",value,choices)
-				}
-			}//else means any int64
-		
-
+		}//else means any int64
 	
-
+	
 	ap.timeoutOfHeartbeat = value
+	return nil
+}
+
+/**
+Set the value of the parameter rejectWhenHeartbeatFromPDLeaderIsTimeout
+*/
+func (ap * SystemVariables ) setRejectWhenHeartbeatFromPDLeaderIsTimeout(value bool)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	choices :=[]bool {
+			false,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceBool(value, choices){
+				return fmt.Errorf("setRejectWhenHeartbeatFromPDLeaderIsTimeout,the value %t is not in set %v",value,choices)
+			}
+		}//else means any bool value: true or false
+	
+	
+	ap.rejectWhenHeartbeatFromPDLeaderIsTimeout = value
+	return nil
+}
+
+/**
+Set the value of the parameter recordTimeElapsedOfSqlRequest
+*/
+func (ap * SystemVariables ) setRecordTimeElapsedOfSqlRequest(value bool)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	choices :=[]bool {
+			true,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceBool(value, choices){
+				return fmt.Errorf("setRecordTimeElapsedOfSqlRequest,the value %t is not in set %v",value,choices)
+			}
+		}//else means any bool value: true or false
+	
+	
+	ap.recordTimeElapsedOfSqlRequest = value
 	return nil
 }
 
@@ -2102,85 +1852,25 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.rwlock.Lock()
 	defer config.rwlock.Unlock()
 	config.prepareAnything()
-	
-	
-	
-	
-		config.name2updatedFlags["rootpassword"] = false
-	
-	
-	
-	
-	
-	
-	
-		config.name2updatedFlags["dumpdatabase"] = false
-	
-	
-	
-	
-	
-	
-	
-		config.name2updatedFlags["sendRow"] = false
-	
-	
-	
-		config.name2updatedFlags["dumpEnv"] = false
-	
-	
-	
-		config.name2updatedFlags["hostMmuLimitation"] = false
-	
-	
-	
-		config.name2updatedFlags["guestMmuLimitation"] = false
-	
-	
-	
-		config.name2updatedFlags["mempoolMaxSize"] = false
-	
-	
-	
-		config.name2updatedFlags["mempoolFactor"] = false
-	
-	
-	
-		config.name2updatedFlags["processLimitationSize"] = false
-	
-	
-	
-		config.name2updatedFlags["processLimitationBatchRows"] = false
-	
-	
-	
-		config.name2updatedFlags["processLimitationBatchSize"] = false
-	
-	
-	
-		config.name2updatedFlags["processLimitationPartitionRows"] = false
-	
-	
-	
-		config.name2updatedFlags["countOfRowsPerSendingToClient"] = false
-	
-	
-	
-		config.name2updatedFlags["periodOfEpochTimer"] = false
-	
-	
-	
-		config.name2updatedFlags["periodOfPersistence"] = false
-	
-	
-	
-		config.name2updatedFlags["periodOfDDLDeleteTimer"] = false
-	
-	
-	
-		config.name2updatedFlags["timeoutOfHeartbeat"] = false
-	
-	
+	config.name2updatedFlags["rootpassword"] = false
+	config.name2updatedFlags["dumpdatabase"] = false
+	config.name2updatedFlags["sendRow"] = false
+	config.name2updatedFlags["dumpEnv"] = false
+	config.name2updatedFlags["hostMmuLimitation"] = false
+	config.name2updatedFlags["guestMmuLimitation"] = false
+	config.name2updatedFlags["mempoolMaxSize"] = false
+	config.name2updatedFlags["mempoolFactor"] = false
+	config.name2updatedFlags["processLimitationSize"] = false
+	config.name2updatedFlags["processLimitationBatchRows"] = false
+	config.name2updatedFlags["processLimitationBatchSize"] = false
+	config.name2updatedFlags["processLimitationPartitionRows"] = false
+	config.name2updatedFlags["countOfRowsPerSendingToClient"] = false
+	config.name2updatedFlags["periodOfEpochTimer"] = false
+	config.name2updatedFlags["periodOfPersistence"] = false
+	config.name2updatedFlags["periodOfDDLDeleteTimer"] = false
+	config.name2updatedFlags["timeoutOfHeartbeat"] = false
+	config.name2updatedFlags["rejectWhenHeartbeatFromPDLeaderIsTimeout"] = false
+	config.name2updatedFlags["recordTimeElapsedOfSqlRequest"] = false
 }
 
 /**
@@ -2256,153 +1946,101 @@ Update parameters' values with configuration.
 */
 func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfig)error{
 	var err error
-	
-	
-	
-	
 	if config.getUpdatedFlag("rootpassword"){
 		if err = ap.setRootpassword(config.Rootpassword); err != nil{
 			return fmt.Errorf("update parameter rootpassword failed.error:%v",err)
 		}
 	}
-	
-	
-	
-	
-	
-	
-	
 	if config.getUpdatedFlag("dumpdatabase"){
 		if err = ap.setDumpdatabase(config.Dumpdatabase); err != nil{
 			return fmt.Errorf("update parameter dumpdatabase failed.error:%v",err)
 		}
 	}
-	
-	
-	
-	
-	
-	
-	
 	if config.getUpdatedFlag("sendRow"){
 		if err = ap.setSendRow(config.SendRow); err != nil{
 			return fmt.Errorf("update parameter sendRow failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("dumpEnv"){
 		if err = ap.setDumpEnv(config.DumpEnv); err != nil{
 			return fmt.Errorf("update parameter dumpEnv failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("hostMmuLimitation"){
 		if err = ap.setHostMmuLimitation(config.HostMmuLimitation); err != nil{
 			return fmt.Errorf("update parameter hostMmuLimitation failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("guestMmuLimitation"){
 		if err = ap.setGuestMmuLimitation(config.GuestMmuLimitation); err != nil{
 			return fmt.Errorf("update parameter guestMmuLimitation failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("mempoolMaxSize"){
 		if err = ap.setMempoolMaxSize(config.MempoolMaxSize); err != nil{
 			return fmt.Errorf("update parameter mempoolMaxSize failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("mempoolFactor"){
 		if err = ap.setMempoolFactor(config.MempoolFactor); err != nil{
 			return fmt.Errorf("update parameter mempoolFactor failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("processLimitationSize"){
 		if err = ap.setProcessLimitationSize(config.ProcessLimitationSize); err != nil{
 			return fmt.Errorf("update parameter processLimitationSize failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("processLimitationBatchRows"){
 		if err = ap.setProcessLimitationBatchRows(config.ProcessLimitationBatchRows); err != nil{
 			return fmt.Errorf("update parameter processLimitationBatchRows failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("processLimitationBatchSize"){
 		if err = ap.setProcessLimitationBatchSize(config.ProcessLimitationBatchSize); err != nil{
 			return fmt.Errorf("update parameter processLimitationBatchSize failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("processLimitationPartitionRows"){
 		if err = ap.setProcessLimitationPartitionRows(config.ProcessLimitationPartitionRows); err != nil{
 			return fmt.Errorf("update parameter processLimitationPartitionRows failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("countOfRowsPerSendingToClient"){
 		if err = ap.setCountOfRowsPerSendingToClient(config.CountOfRowsPerSendingToClient); err != nil{
 			return fmt.Errorf("update parameter countOfRowsPerSendingToClient failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("periodOfEpochTimer"){
 		if err = ap.setPeriodOfEpochTimer(config.PeriodOfEpochTimer); err != nil{
 			return fmt.Errorf("update parameter periodOfEpochTimer failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("periodOfPersistence"){
 		if err = ap.setPeriodOfPersistence(config.PeriodOfPersistence); err != nil{
 			return fmt.Errorf("update parameter periodOfPersistence failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("periodOfDDLDeleteTimer"){
 		if err = ap.setPeriodOfDDLDeleteTimer(config.PeriodOfDDLDeleteTimer); err != nil{
 			return fmt.Errorf("update parameter periodOfDDLDeleteTimer failed.error:%v",err)
 		}
 	}
-	
-	
-	
 	if config.getUpdatedFlag("timeoutOfHeartbeat"){
 		if err = ap.setTimeoutOfHeartbeat(config.TimeoutOfHeartbeat); err != nil{
 			return fmt.Errorf("update parameter timeoutOfHeartbeat failed.error:%v",err)
 		}
 	}
-	
-	
+	if config.getUpdatedFlag("rejectWhenHeartbeatFromPDLeaderIsTimeout"){
+		if err = ap.setRejectWhenHeartbeatFromPDLeaderIsTimeout(config.RejectWhenHeartbeatFromPDLeaderIsTimeout); err != nil{
+			return fmt.Errorf("update parameter rejectWhenHeartbeatFromPDLeaderIsTimeout failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("recordTimeElapsedOfSqlRequest"){
+		if err = ap.setRecordTimeElapsedOfSqlRequest(config.RecordTimeElapsedOfSqlRequest); err != nil{
+			return fmt.Errorf("update parameter recordTimeElapsedOfSqlRequest failed.error:%v",err)
+		}
+	}
 	return nil
 }
 

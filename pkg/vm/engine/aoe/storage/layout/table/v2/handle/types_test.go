@@ -26,7 +26,7 @@ func TestSnapshot(t *testing.T) {
 	mtBufMgr := bmgr.MockBufMgr(capacity)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
 
-	info := md.MockInfo(row_count, uint64(blk_cnt))
+	info := md.MockInfo(&opts.Mu, row_count, uint64(blk_cnt))
 	tableMeta := md.MockTable(info, schema, uint64(blk_cnt*seg_cnt))
 
 	tableData := table.NewTableData(ldio.DefaultFsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)

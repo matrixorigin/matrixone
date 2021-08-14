@@ -116,7 +116,7 @@ func TestStrBsi(t *testing.T) {
 
 	fname := "/tmp/xxstringbsi"
 	os.Remove(fname)
-	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
 
@@ -191,7 +191,7 @@ func TestNumBsi(t *testing.T) {
 
 	fname := "/tmp/xxnumericbsi"
 	os.Remove(fname)
-	f, err := os.OpenFile(fname, os.O_CREATE|os.O_WRONLY, os.ModePerm)
+	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
 

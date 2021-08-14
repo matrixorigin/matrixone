@@ -13,21 +13,30 @@ var (
 	ErrAlreadyExist = errors.New("ckp already done")
 )
 
-type Checkpointer struct {
-	Opts    *Options
-	Dirname string
-	TmpFile string
+type checkpointerFactory struct {
+	dir string
 }
 
-func NewCheckpointer(opts *Options, dirname string) *Checkpointer {
-	ck := &Checkpointer{
-		Opts:    opts,
-		Dirname: dirname,
+func NewCheckpointerFactory(dir string) *checkpointerFactory {
+	factory := &checkpointerFactory{
+		dir: dir,
+	}
+	return factory
+}
+
+func (f *checkpointerFactory) Create() *checkpointer {
+	ck := &checkpointer{
+		factory: f,
 	}
 	return ck
 }
 
-func (ck *Checkpointer) PreCommit(res md.Resource) error {
+type checkpointer struct {
+	factory *checkpointerFactory
+	tmpfile string
+}
+
+func (ck *checkpointer) PreCommit(res md.Resource) error {
 	if res == nil {
 		log.Error("nil res")
 		return errors.New("nil res")
@@ -35,9 +44,9 @@ func (ck *Checkpointer) PreCommit(res md.Resource) error {
 	var fname string
 	switch res.GetResourceType() {
 	case md.ResInfo:
-		fname = MakeInfoCkpFileName(ck.Dirname, res.GetFileName(), true)
+		fname = MakeInfoCkpFileName(ck.factory.dir, res.GetFileName(), true)
 	case md.ResTable:
-		fname = MakeTableCkpFileName(ck.Dirname, res.GetFileName(), res.GetTableId(), true)
+		fname = MakeTableCkpFileName(ck.factory.dir, res.GetFileName(), res.GetTableId(), true)
 	default:
 		panic("not supported")
 	}
@@ -52,7 +61,7 @@ func (ck *Checkpointer) PreCommit(res md.Resource) error {
 			return err
 		}
 	}
-	w, err := os.OpenFile(fname, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err := os.Create(fname)
 	if err != nil {
 		return err
 	}
@@ -61,24 +70,24 @@ func (ck *Checkpointer) PreCommit(res md.Resource) error {
 	if err != nil {
 		return err
 	}
-	ck.TmpFile = fname
+	ck.tmpfile = fname
 	return nil
 }
 
-func (ck *Checkpointer) Commit(res md.Resource) error {
-	if len(ck.TmpFile) == 0 {
+func (ck *checkpointer) Commit(res md.Resource) error {
+	if len(ck.tmpfile) == 0 {
 		return errors.New("Cannot Commit checkpoint, should do PreCommit before")
 	}
-	fname, err := FilenameFromTmpfile(ck.TmpFile)
+	fname, err := FilenameFromTmpfile(ck.tmpfile)
 	if err != nil {
 		return err
 	}
 	// log.Infof("Commit CheckPoint: %s", fname)
-	err = os.Rename(ck.TmpFile, fname)
+	err = os.Rename(ck.tmpfile, fname)
 	return err
 }
 
-func (ck *Checkpointer) Load() error {
+func (ck *checkpointer) Load() error {
 	// TODO
 	return nil
 }

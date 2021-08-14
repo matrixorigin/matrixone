@@ -86,6 +86,21 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	return seg, nil
 }
 
+func (seg *Segment) CanUpgrade() bool {
+	if seg.Type == base.SORTED_SEG {
+		return false
+	}
+	if len(seg.tree.Blocks) < int(seg.Meta.Table.Conf.SegmentMaxBlocks) {
+		return false
+	}
+	for _, blk := range seg.tree.Blocks {
+		if blk.GetType() != base.PERSISTENT_BLK {
+			return false
+		}
+	}
+	return true
+}
+
 func (seg *Segment) GetSegmentedIndex() (id uint64, ok bool) {
 	ok = false
 	if seg.Type == base.SORTED_SEG {
@@ -170,6 +185,7 @@ func (seg *Segment) BlockIds() []uint64 {
 }
 
 func (seg *Segment) close() {
+	segId := seg.Meta.AsCommonID().AsSegmentID()
 	if seg.IndexHolder != nil {
 		seg.IndexHolder.Unref()
 	}
@@ -183,6 +199,11 @@ func (seg *Segment) close() {
 	}
 	if seg.SegmentFile != nil {
 		seg.SegmentFile.Unref()
+	}
+	if seg.Type == base.UNSORTED_SEG {
+		seg.FsMgr.UnregisterUnsortedFile(segId)
+	} else {
+		seg.FsMgr.UnregisterSortedFile(segId)
 	}
 }
 
@@ -348,6 +369,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 
 	cloned.SegmentFile.Ref()
 	cloned.Ref()
+	cloned.OnZeroCB = cloned.close
 	return cloned, nil
 }
 

@@ -395,7 +395,6 @@ func TestConcurrency(t *testing.T) {
 		time.Sleep(time.Duration(800) * time.Millisecond)
 	}
 
-	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.MemTableMgr.String())
@@ -409,7 +408,7 @@ func TestMultiTables(t *testing.T) {
 	initDBTest()
 	inst := initDB()
 	prefix := "mtable"
-	tblCnt := 4
+	tblCnt := 40
 	var names []string
 	for i := 0; i < tblCnt; i++ {
 		name := fmt.Sprintf("%s_%d", prefix, i)

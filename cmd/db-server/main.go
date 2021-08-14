@@ -5,12 +5,10 @@ import (
 	"fmt"
 	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
-	"matrixone/pkg/client"
 	"matrixone/pkg/config"
+	"matrixone/pkg/frontend"
 	"matrixone/pkg/logger"
 	"matrixone/pkg/rpcserver"
-	"matrixone/pkg/server"
-	epoch_gc_test "matrixone/pkg/server/test"
 	"matrixone/pkg/sql/handler"
 	"matrixone/pkg/util/signal"
 	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
@@ -24,22 +22,23 @@ import (
 )
 
 var (
-	svr      server.Server
-    pcis []*client.PDCallbackImpl
+	catalog aoe_catalog.Catalog
+	mo   *frontend.MOServer
+	pcis []*frontend.PDCallbackImpl
 )
 
-func createServer(callback *client.PDCallbackImpl) {
+func createMOServer(callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
-	svr = server.NewServer(address, pu, callback)
+	mo = frontend.NewMOServer(address, pu, callback)
 }
 
-func runServer() {
-	svr.Loop()
+func runMOServer() error {
+	return mo.Start()
 }
 
 func serverShutdown(isgraceful bool) {
-	svr.Quit()
+	mo.Stop()
 }
 
 func registerSignalHandlers() {
@@ -47,6 +46,16 @@ func registerSignalHandlers() {
 }
 
 func cleanup() {
+}
+
+/**
+call the catalog service to remove the epoch
+ */
+func removeEpoch(epoch uint64) {
+	_,err := catalog.RemoveDeletedTable(epoch)
+	if err != nil {
+		fmt.Printf("catalog remove ddl failed. error :%v \n",err)
+	}
 }
 
 func main() {
@@ -81,33 +90,34 @@ func main() {
 		fmt.Println("Using AOE Storage Engine, 3 Cluster Nodes, 1 SQL Server.")
 
 		nodeCnt := 3
-		pcis = make([]*client.PDCallbackImpl, nodeCnt)
-		ppu := client.NewPDCallbackParameterUnit(
+		pcis = make([]*frontend.PDCallbackImpl, nodeCnt)
+
+		ppu := frontend.NewPDCallbackParameterUnit(
 			int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()),
 			int(config.GlobalSystemVariables.GetPeriodOfPersistence()),
 			int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()),
 			int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()))
 
 		for i := 0 ; i < nodeCnt; i++ {
-			pcis[i] = client.NewPDCallbackImpl(ppu)
+			pcis[i] = frontend.NewPDCallbackImpl(ppu)
 			pcis[i].Id = i
 		}
 
-		c, err := epoch_gc_test.NewTestClusterStore(nil,true,nil, pcis, nodeCnt)
+		c, err := frontend.NewTestClusterStore(nil,true,nil, pcis, nodeCnt)
 		if err != nil {
 			os.Exit(-2)
 		}
 
-		catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
+		catalog = aoe_catalog.DefaultCatalog(c.Applications[0])
 		eng := aoe_engine.Mock(&catalog)
 
 		for i := 0 ; i < nodeCnt; i++ {
-			pcis[i].SetCatalogService(&catalog)
+			pcis[i].SetRemoveEpoch(removeEpoch)
 		}
 
 		//one rpcserver per cube node
 		for i := 0 ; i < nodeCnt ; i++ {
-			db := c.AOEDBs[i].DB
+			//db := c.AOEDBs[i].DB
 			hm := config.HostMmu
 			gm := guest.New(1<<40, hm)
 			proc := process.New(gm, config.Mempool)
@@ -124,7 +134,7 @@ func main() {
 			if err != nil {
 				log.Fatal(err)
 			}
-			hp := handler.New(db, proc)
+			hp := handler.New(eng, proc)
 			srv.Register(hp.Process)
 			go srv.Run()
 		}
@@ -142,10 +152,16 @@ func main() {
 
 		config.ClusterNodes = nil
 	}
+	fmt.Println("Create MOServer")
+	createMOServer(pcis[0])
+	err := runMOServer()
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	//registerSignalHandlers()
 
-	createServer(pcis[0])
-	registerSignalHandlers()
-	runServer()
+	select {}
 	cleanup()
 	os.Exit(0)
 }

@@ -35,6 +35,7 @@ type Block struct {
 	IndexHolder *index.BlockHolder
 	FsMgr       base.IManager
 	SegmentFile base.ISegmentFile
+	Segment     iface.ISegment
 	Type        base.BlockType
 }
 
@@ -44,6 +45,7 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 		MTBufMgr:  host.GetMTBufMgr(),
 		SSTBufMgr: host.GetSSTBufMgr(),
 		FsMgr:     host.GetFsManager(),
+		Segment:   host,
 	}
 
 	blk.data.Columns = make([]col.IColumnBlock, 0)
@@ -207,6 +209,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		IndexHolder: indexHolder,
 		Type:        newType,
 		SegmentFile: host.GetSegmentFile(),
+		Segment:     host,
 	}
 	cloned.data.Columns = make([]col.IColumnBlock, len(blk.data.Columns))
 	cloned.data.Helper = make(map[string]int)
@@ -227,6 +230,10 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 	}
 	host.Unref()
 	return cloned, nil
+}
+
+func (blk *Block) WeakRefSegment() iface.ISegment {
+	return blk.Segment
 }
 
 func (blk *Block) cloneWithUpgradeColumns(cloned *Block) {

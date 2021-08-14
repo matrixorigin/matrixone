@@ -181,7 +181,6 @@ func TestEngine(t *testing.T) {
 	cancel()
 	loopWg.Wait()
 	twg.Wait()
-	t.Log(inst.WorkersStatsString())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.MemTableMgr.String())
@@ -227,9 +226,9 @@ func TestLogIndex(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(800) * time.Millisecond)
+		time.Sleep(time.Duration(1000) * time.Millisecond)
 	} else {
-		time.Sleep(time.Duration(200) * time.Millisecond)
+		time.Sleep(time.Duration(300) * time.Millisecond)
 	}
 
 	tbl, err := inst.Store.DataTables.WeakRefTable(tid)

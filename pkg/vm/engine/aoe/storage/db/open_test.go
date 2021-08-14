@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,7 +34,8 @@ func TestLoadMetaInfo(t *testing.T) {
 		BlockMaxRows:     10,
 	}
 	handle := NewMetaHandle(cfg.Dir)
-	info := handle.RebuildInfo(cfg)
+	mu := &sync.RWMutex{}
+	info := handle.RebuildInfo(mu, cfg)
 	// info := loadMetaInfo(cfg)
 	assert.Equal(t, uint64(0), info.CheckPoint)
 	assert.Equal(t, uint64(0), info.Sequence.NextBlockID)
@@ -50,7 +52,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Nil(t, err)
 
 	filename := e.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
-	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err := os.Create(filename)
 	assert.Nil(t, err)
 	defer w.Close()
 	err = tbl.Serialize(w)
@@ -60,7 +62,7 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	filename = e.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 
-	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err = os.Create(filename)
 	assert.Nil(t, err)
 	err = info.Serialize(w)
 	assert.Nil(t, err)
@@ -73,7 +75,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Nil(t, err)
 
 	filename = e.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
-	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err = os.Create(filename)
 	assert.Nil(t, err)
 	defer w.Close()
 	err = tbl.Serialize(w)
@@ -84,14 +86,15 @@ func TestLoadMetaInfo(t *testing.T) {
 	filename = e.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 	w.Close()
 
-	w, err = os.OpenFile(filename, os.O_WRONLY|os.O_CREATE, 0666)
+	w, err = os.Create(filename)
 	assert.Nil(t, err)
 	defer w.Close()
 	err = info.Serialize(w)
 	assert.Nil(t, err)
 
 	handle2 := NewMetaHandle(cfg.Dir)
-	info2 := handle2.RebuildInfo(cfg)
+	mu2 := &sync.RWMutex{}
+	info2 := handle2.RebuildInfo(mu2, cfg)
 	assert.NotNil(t, info2)
 	assert.Equal(t, info.CheckPoint, info2.CheckPoint)
 	assert.Equal(t, info.Sequence.NextTableID, info2.Sequence.NextTableID)
@@ -225,7 +228,7 @@ func TestReplay(t *testing.T) {
 
 	dataDir := e.MakeDataDir(inst.Dir)
 	invalidFileName := filepath.Join(dataDir, "invalid")
-	f, err := os.OpenFile(invalidFileName, os.O_RDONLY|os.O_CREATE, 0666)
+	f, err := os.Create(invalidFileName)
 	assert.Nil(t, err)
 	f.Close()
 

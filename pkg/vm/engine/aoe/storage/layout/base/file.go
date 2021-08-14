@@ -51,6 +51,8 @@ type Key struct {
 type IManager interface {
 	RegisterSortedFiles(common.ID) (ISegmentFile, error)
 	RegisterUnsortedFiles(common.ID) (ISegmentFile, error)
+	UnregisterUnsortedFile(common.ID)
+	UnregisterSortedFile(common.ID)
 	UpgradeFile(common.ID) ISegmentFile
 	GetSortedFile(common.ID) ISegmentFile
 	GetUnsortedFile(common.ID) ISegmentFile
