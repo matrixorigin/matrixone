@@ -3,7 +3,10 @@ package test
 import (
 	"bytes"
 	"fmt"
+	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/stretchr/testify/require"
+
 	stdLog "log"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/protocol"
@@ -19,9 +22,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"testing"
 	"time"
-
-	"github.com/fagongzi/log"
-	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -75,8 +75,8 @@ func TestStorage(t *testing.T) {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		//c.Stop()
 	}()
-	testAOEStorage(t, c)
-	//testKVStorage(t, c)
+	//testAOEStorage(t, c)
+	testKVStorage(t, c)
 
 }
 
@@ -201,7 +201,6 @@ func testKVStorage(t *testing.T, c *testutil.TestAOECluster) {
 		})
 		require.NoError(t, err)
 	}
-
 
 	keys, err := app.PrefixKeys([]byte("prefix-"), 0)
 	require.NoError(t, err)

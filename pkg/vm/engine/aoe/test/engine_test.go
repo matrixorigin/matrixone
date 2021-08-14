@@ -60,7 +60,7 @@ func TestAOEEngine(t *testing.T) {
 			return daoe.NewStorageWithOptions(path, opts)
 		}), testutil.WithTestAOEClusterUsePebble())
 	c.Start()
-	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
+	c.RaftCluster.WaitShardByCount(t, 21, time.Second*10)
 	stdLog.Printf("[QSQ]app all started.")
 
 	c.CubeDrivers[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
@@ -103,7 +103,7 @@ func TestAOEEngine(t *testing.T) {
 	err = db.Create(3, mockTbl.Name, defs, pdef, nil, comment)
 	if err != nil {
 		stdLog.Printf("[QSQ] %v", err)
-	}else {
+	} else {
 		stdLog.Printf("[QSQ] create table is succeeded")
 	}
 	require.NoError(t, err)
