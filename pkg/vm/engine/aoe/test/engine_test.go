@@ -6,6 +6,7 @@ import (
 	"github.com/fagongzi/log"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
@@ -30,9 +31,6 @@ const (
 )
 
 func TestAOEEngine(t *testing.T) {
-	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
-	log.SetHighlighting(false)
-	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
@@ -58,9 +56,9 @@ func TestAOEEngine(t *testing.T) {
 			}
 			opts.Meta.Conf = mdCfg
 			return daoe.NewStorageWithOptions(path, opts)
-		}), testutil.WithTestAOEClusterUsePebble())
+		}), testutil.WithTestAOEClusterUsePebble(), testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("info")))
 	c.Start()
-	c.RaftCluster.WaitShardByCount(t, 21, time.Second*10)
+	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*10)
 	stdLog.Printf("[QSQ]app all started.")
 
 	c.CubeDrivers[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
