@@ -15,8 +15,8 @@ var DecimalSize int
 
 func init() {
 	TypeSize = int(unsafe.Sizeof(types.Type{}))
-	DateSize = int(unsafe.Sizeof(types.Date{}))
-	DatetimeSize = int(unsafe.Sizeof(types.Datetime{}))
+	DateSize = int(unsafe.Sizeof(types.Date(0)))
+	DatetimeSize = int(unsafe.Sizeof(types.Datetime(0)))
 	DecimalSize = int(unsafe.Sizeof(types.Decimal{}))
 }
 
