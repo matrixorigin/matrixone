@@ -291,7 +291,7 @@ func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {
 	return id, err
 }
 
-func (d *DB) replayAndCleanData() {
+func (d *DB) replayData() {
 	err := d.Store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.Store.MetaInfo)
 	if err != nil {
 		panic(err)

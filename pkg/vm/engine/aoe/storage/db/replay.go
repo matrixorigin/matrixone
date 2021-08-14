@@ -32,22 +32,30 @@ type tableFile struct {
 	next    *tableFile
 }
 
+type blockfile struct {
+	id   common.ID
+	name string
+}
+
+func (bf *blockfile) clean() {
+	os.Remove(bf.name)
+	log.Infof("%s | Removed", bf.name)
+}
+
 type sortedSegmentFile struct {
 	name string
 	id   common.ID
 }
 
 type unsortedSegmentFile struct {
-	id     common.ID
-	names  []string
-	blkids []common.ID
+	id    common.ID
+	files []*blockfile
 }
 
 func newUnsortedSegmentFile(id common.ID) *unsortedSegmentFile {
 	return &unsortedSegmentFile{
-		id:     id,
-		names:  make([]string, 0),
-		blkids: make([]common.ID, 0),
+		id:    id,
+		files: make([]*blockfile, 0),
 	}
 }
 
@@ -57,19 +65,34 @@ func (sf *sortedSegmentFile) clean() {
 }
 
 func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string) {
-	usf.names = append(usf.names, name)
-	usf.blkids = append(usf.blkids, bid)
+	usf.files = append(usf.files, &blockfile{id: bid, name: name})
 }
 
 func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
-	return len(usf.names) == maxcnt
+	return len(usf.files) == maxcnt
 }
 
 func (usf *unsortedSegmentFile) clean() {
-	for _, name := range usf.names {
-		os.Remove(name)
-		log.Infof("%s | Removed", name)
+	for _, f := range usf.files {
+		f.clean()
 	}
+}
+
+func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.Segment) {
+	files := make([]*blockfile, 0)
+	for _, file := range usf.files {
+		blk, err := meta.ReferenceBlock(file.id.BlockID)
+		if err != nil {
+			cleaner.addCleanable(file)
+			continue
+		}
+		if blk.DataState == md.EMPTY {
+			cleaner.addCleanable(file)
+			continue
+		}
+		files = append(files, file)
+	}
+	usf.files = files
 }
 
 func (f *tableFile) Open() *os.File {
@@ -164,7 +187,7 @@ func NewReplayHandle(workDir string) *replayHandle {
 	return fs
 }
 
-func (h *replayHandle) DispatchEvents(opts *e.Options, tables *table.Tables) {
+func (h *replayHandle) ScheduleEvents(opts *e.Options, tables *table.Tables) {
 	for _, ctx := range h.flushsegs {
 		t, _ := tables.WeakRefTable(ctx.id.TableID)
 		segment := t.StrongRefSegment(ctx.id.SegmentID)
@@ -351,15 +374,23 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 			delete(tablesFiles.unsortedfiles, id)
 		}
 	}
-	segids := make([]common.ID, 0)
+	flushsegs := make([]common.ID, 0)
 	for id, unsorted := range tablesFiles.unsortedfiles {
+		segMeta, err := meta.ReferenceSegment(id.SegmentID)
+		if err != nil {
+			h.addCleanable(unsorted)
+			continue
+		} else {
+			// log.Info(segMeta.String())
+			unsorted.tryCleanBlocks(h, segMeta)
+		}
 		if !unsorted.isfull(int(meta.Conf.SegmentMaxBlocks)) {
 			continue
 		}
-		segids = append(segids, id)
+		flushsegs = append(flushsegs, id)
 	}
-	sort.Slice(segids, func(i, j int) bool { return segids[i].SegmentID < segids[j].SegmentID })
-	for _, id := range segids {
+	sort.Slice(flushsegs, func(i, j int) bool { return flushsegs[i].SegmentID < flushsegs[j].SegmentID })
+	for _, id := range flushsegs {
 		h.flushsegs = append(h.flushsegs, flushsegCtx{id: id})
 	}
 }
