@@ -199,6 +199,7 @@ func readData() {
 		}
 	}
 	wg.Wait()
+	rel.Close()
 	log.Infof("Time: %s, Rows: %d", time.Since(now), totalRows)
 	log.Infof("MMU usage: %d", hm.Size())
 	// {
