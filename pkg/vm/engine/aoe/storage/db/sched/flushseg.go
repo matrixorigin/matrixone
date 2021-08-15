@@ -10,13 +10,13 @@ import (
 )
 
 type flushSegEvent struct {
-	baseEvent
+	BaseEvent
 	Segment iface.ISegment
 }
 
 func NewFlushSegEvent(ctx *Context, seg iface.ISegment) *flushSegEvent {
 	e := &flushSegEvent{Segment: seg}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.FlushSegTask, ctx.DoneCB, ctx.Waitable),
 	}

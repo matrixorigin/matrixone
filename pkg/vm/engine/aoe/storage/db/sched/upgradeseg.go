@@ -7,7 +7,7 @@ import (
 )
 
 type upgradeSegEvent struct {
-	baseEvent
+	BaseEvent
 	TableData  iface.ITableData
 	Segment    iface.ISegment
 	OldSegment iface.ISegment
@@ -18,7 +18,7 @@ func NewUpgradeSegEvent(ctx *Context, old iface.ISegment, td iface.ITableData) *
 		OldSegment: old,
 		TableData:  td,
 	}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		BaseEvent: *sched.NewBaseEvent(e, sched.UpgradeSegTask, ctx.DoneCB, ctx.Waitable),
 	}
 	return e

@@ -10,14 +10,14 @@ import (
 )
 
 type commitBlkEvent struct {
-	baseEvent
+	BaseEvent
 	NewMeta   *md.Block
 	LocalMeta *md.Block
 }
 
 func NewCommitBlkEvent(ctx *Context, localMeta *md.Block) *commitBlkEvent {
 	e := &commitBlkEvent{LocalMeta: localMeta}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.CommitBlkTask, ctx.DoneCB, ctx.Waitable),
 	}

@@ -1,4 +1,4 @@
-package coldata
+package db
 
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
@@ -7,16 +7,16 @@ import (
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	tbl "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestUpgradeBlkOp(t *testing.T) {
+func TestUpgradeBlk(t *testing.T) {
 	schema := md.MockSchema(2)
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
-	opts.MemData.Updater.Start()
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
@@ -29,6 +29,11 @@ func TestUpgradeBlkOp(t *testing.T) {
 	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
 	tableData := tbl.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
 	segIds := tbl.MockSegments(tableMeta, tableData)
+	tables := tbl.NewTables(new(sync.RWMutex))
+	opts.Scheduler = NewScheduler(opts, tables)
+
+	err := tables.CreateTable(tableData)
+	assert.Nil(t, err)
 
 	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())
 
@@ -39,43 +44,46 @@ func TestUpgradeBlkOp(t *testing.T) {
 		}
 	}
 
-	for _, segID := range segIds {
+	for _, segID := range segIds[:1] {
 		segMeta, err := tableMeta.ReferenceSegment(segID)
 		assert.Nil(t, err)
 		cpCtx := md.CopyCtx{}
 		blkMeta, err := segMeta.CloneBlock(segMeta.Blocks[0].ID, cpCtx)
 		assert.Nil(t, err)
-		ctx := new(OpCtx)
-		ctx.Opts = opts
-		ctx.BlkMeta = blkMeta
-		op := NewUpgradeBlkOp(ctx, tableData)
-		op.Push()
-		err = op.WaitDone()
+		ctx := &Context{
+			Opts:     opts,
+			Waitable: true,
+		}
+		ctx.RemoveDataScope()
+		tableData.Ref()
+		e := NewUpgradeBlkEvent(ctx, blkMeta, tableData)
+		opts.Scheduler.Schedule(e)
+		err = e.WaitDone()
 		assert.Nil(t, err)
-		blk := op.Block
+		blk := e.Data
 		assert.Equal(t, base.PERSISTENT_BLK, blk.GetType())
 		blk.Unref()
 
 		segMeta.TryClose()
-		op2 := NewUpgradeSegOp(ctx, segID, tableData)
-		op2.Push()
-		err = op2.WaitDone()
+		seg := tableData.StrongRefSegment(segID)
+		assert.NotNil(t, seg)
+		tableData.Ref()
+		upseg := NewUpgradeSegEvent(ctx, seg, tableData)
+		opts.Scheduler.Schedule(upseg)
+		err = upseg.WaitDone()
 		assert.Nil(t, err)
-		seg := op2.Segment
-		assert.Equal(t, base.SORTED_SEG, seg.GetType())
-		seg.Unref()
+		assert.Equal(t, base.SORTED_SEG, upseg.Segment.GetType())
 	}
 	t.Log(fsMgr.String())
 	t.Log(tableData.String())
 	t.Log(bufMgr.String())
-	opts.MemData.Updater.Stop()
+	opts.Scheduler.Stop()
 }
 
-func TestUpgradeSegOp(t *testing.T) {
+func TestUpgradeSeg(t *testing.T) {
 	schema := md.MockSchema(2)
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
-	opts.MemData.Updater.Start()
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
 	capacity := typeSize * row_count * 10000
@@ -89,6 +97,12 @@ func TestUpgradeSegOp(t *testing.T) {
 	tableData := tbl.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
 	segIds := tbl.MockSegments(tableMeta, tableData)
 
+	tables := tbl.NewTables(new(sync.RWMutex))
+	opts.Scheduler = NewScheduler(opts, tables)
+
+	err := tables.CreateTable(tableData)
+	assert.Nil(t, err)
+
 	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())
 
 	for _, segMeta := range tableMeta.Segments {
@@ -100,18 +114,21 @@ func TestUpgradeSegOp(t *testing.T) {
 	}
 
 	for _, segID := range segIds {
-		ctx := new(OpCtx)
-		ctx.Opts = opts
-		op := NewUpgradeSegOp(ctx, segID, tableData)
-		op.Push()
-		err := op.WaitDone()
+		ctx := &Context{
+			Waitable: true,
+			Opts:     opts,
+		}
+		old := tableData.StrongRefSegment(segID)
+		tableData.Ref()
+		e := NewUpgradeSegEvent(ctx, old, tableData)
+		opts.Scheduler.Schedule(e)
+		err = e.WaitDone()
 		assert.Nil(t, err)
-		seg := op.Segment
+		seg := e.Segment
 		assert.Equal(t, base.SORTED_SEG, seg.GetType())
-		seg.Unref()
 	}
 	t.Log(fsMgr.String())
 	t.Log(tableData.String())
 	// t.Log(bufMgr.String())
-	opts.MemData.Updater.Stop()
+	opts.Scheduler.Stop()
 }

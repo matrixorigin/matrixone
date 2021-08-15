@@ -167,6 +167,9 @@ func (s *scheduler) onCommitBlkDone(e sched.Event) {
 	flushEvent := NewFlushTableEvent(ctx, tblMetaCpy)
 	s.Schedule(flushEvent)
 
+	if !event.Ctx.HasDataScope() {
+		return
+	}
 	mctx := &Context{Opts: s.opts}
 	tableData, err := s.tables.StrongRefTable(newMeta.Segment.Table.ID)
 	if err != nil {
@@ -182,6 +185,9 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	defer event.TableData.Unref()
 	if err := e.GetError(); err != nil {
 		s.opts.EventListener.BackgroundErrorCB(err)
+		return
+	}
+	if !event.Ctx.HasDataScope() {
 		return
 	}
 	defer event.Data.Unref()

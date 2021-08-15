@@ -8,7 +8,7 @@ import (
 )
 
 type upgradeBlkEvent struct {
-	baseEvent
+	BaseEvent
 	TableData     iface.ITableData
 	Meta          *md.Block
 	Data          iface.IBlock
@@ -20,8 +20,9 @@ func NewUpgradeBlkEvent(ctx *Context, meta *md.Block, td iface.ITableData) *upgr
 		TableData: td,
 		Meta:      meta,
 	}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		BaseEvent: *sched.NewBaseEvent(e, sched.UpgradeBlkTask, ctx.DoneCB, ctx.Waitable),
+		Ctx:       ctx,
 	}
 	return e
 }

@@ -7,14 +7,14 @@ import (
 )
 
 type flushTableEvent struct {
-	baseEvent
+	BaseEvent
 	Table *md.Table
 }
 
 func NewFlushTableEvent(ctx *Context, tbl *md.Table) *flushTableEvent {
 	e := new(flushTableEvent)
 	e.Table = tbl
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.FlushTableMetaTask, ctx.DoneCB, ctx.Waitable),
 	}
