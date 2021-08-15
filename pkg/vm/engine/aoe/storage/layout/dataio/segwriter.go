@@ -87,7 +87,7 @@ func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, err
 			return nil, err
 		}
 	}
-	w, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	w, err := os.Create(filename)
 	return w, err
 }
 

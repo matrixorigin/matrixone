@@ -367,6 +367,16 @@ func NewTables(mu *sync.RWMutex) *Tables {
 	}
 }
 
+func (ts *Tables) String() string {
+	ts.Mu.RLock()
+	defer ts.Mu.RUnlock()
+	s := fmt.Sprintf("<Tables>[Cnt=%d]", len(ts.Data))
+	for _, td := range ts.Data {
+		s = fmt.Sprintf("%s\n%s", s, td.String())
+	}
+	return s
+}
+
 func (ts *Tables) TableIds() (ids map[uint64]bool) {
 	return ts.Ids
 }

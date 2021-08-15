@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"matrixone/pkg/defines"
 	"matrixone/pkg/sql/compile"
+	"strings"
+	"time"
 
-	"matrixone/pkg/config"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/tree"
@@ -49,10 +50,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		fmt.Printf("bat: %v\n", bat)
 	}
 
-	var rowGroupSize = config.GlobalSystemVariables.GetCountOfRowsPerSendingToClient()
+	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
 	rowGroupSize = MaxInt64(rowGroupSize, 1)
 
-	var choose = !config.GlobalSystemVariables.GetSendRow()
+	var choose = !ses.Pu.SV.GetSendRow()
 	if choose {
 		goID := GetRoutineId()
 
@@ -838,6 +839,31 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	return nil
 }
 
+//handle SELECT DATABASE()
+func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error{
+	var err error = nil
+	ses := mce.routine.GetSession()
+	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+
+	col := new(defines.MysqlColumn)
+	col.SetName("DATABASE()")
+	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	ses.Mrs.AddColumn(col)
+	val := mce.routine.db
+	if val == "" {
+		val = "NULL"
+	}
+	ses.Mrs.AddRow([]interface{}{val})
+
+	mer := defines.NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.routine.GetSession()
@@ -882,7 +908,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		return nil
 	}
 
-	comp := compile.New(mce.routine.db, sql, mce.routine.user, config.StorageEngine, config.ClusterNodes, proc)
+	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, ses.Pu.ClusterNodes, proc)
 	execs, err := comp.Compile()
 	if err != nil {
 		return err
@@ -903,12 +929,33 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		pdHook.IncQueryCountAtEpoch(epoch, 1)
 		statementCount++
 
+		switch st := stmt.(type) {
+		case *tree.Select:
+			if sc,ok := st.Select.(*tree.SelectClause) ; ok {
+				if len(sc.Exprs) == 1 {
+					if fe,ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
+						if un,ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
+							if strings.ToUpper(un.Parts[0]) == "DATABASE" {
+								err = mce.handleSelectDatabase(st)
+								if err != nil{
+									return err
+								}
+
+								//next statement
+								continue
+							}
+						}
+					}
+				}
+			}
+		}
+
 		//check database
 		if mce.routine.db == "" {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus:
+				*tree.ShowStatus,*tree.DropDatabase:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
@@ -938,8 +985,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			return err
 		}
 
+		cmpBegin := time.Now()
 		if err = exec.Compile(mce.routine, getDataFromPipeline); err != nil {
 			return err
+		}
+
+		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
+			fmt.Printf("time of Exec.Compile : %s \n",time.Since(cmpBegin).String())
 		}
 
 		switch stmt.(type) {
@@ -995,7 +1047,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					case types.T_char:
 						col.SetColumnType(defines.MYSQL_TYPE_STRING)
 					case types.T_varchar:
-						col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+						col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 					default:
 						return fmt.Errorf("RunWhileSend : unsupported type %d \n", c.Typ)
 					}
@@ -1024,6 +1076,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return err
 				}
 
+				runBegin := time.Now()
 				/*
 					Step 2: Start pipeline
 					Producing the data row and sending the data row
@@ -1031,7 +1084,9 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				if er := exec.Run(epoch); er != nil {
 					return er
 				}
-
+				if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
+					fmt.Printf("time of Exec.Run : %s \n",time.Since(runBegin).String())
+				}
 				/*
 					Step 3: Say goodbye
 					mysql COM_QUERY response: End after the data row has been sent.
@@ -1073,7 +1128,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					case types.T_char:
 						col.SetColumnType(defines.MYSQL_TYPE_STRING)
 					case types.T_varchar:
-						col.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+						col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 					default:
 						return fmt.Errorf("RunWhileSend : unsupported type %d \n", c.Typ)
 					}
@@ -1110,6 +1165,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return er
 			}
 
+			//record ddl drop xxx after the success
+			switch stmt.(type) {
+			case *tree.DropTable, *tree.DropDatabase,
+					*tree.DropIndex, *tree.DropUser, *tree.DropRole:
+				//test ddl
+				pdHook.IncDDLCountAtEpoch(epoch,1)
+			}
+
 			/*
 				Step 2: Echo client
 			*/
@@ -1133,15 +1196,18 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	var resp *Response = nil
 	fmt.Printf("cmd %v \n", req.GetCmd())
 
-	pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
-	if !pdHook.CanAcceptSomething() {
-		resp = NewResponse(
-			ErrorResponse,
-			0,
-			req.GetCmd(),
-			nil,
-		)
-		return resp, nil
+	ses := mce.routine.GetSession()
+	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
+		pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
+		if !pdHook.CanAcceptSomething() {
+			resp = NewResponse(
+				ErrorResponse,
+				0,
+				req.GetCmd(),
+				fmt.Errorf("heartbeat from pdleader is timeout. the server reject sql request. cmd %d \n", req.GetCmd()),
+			)
+			return resp, nil
+		}
 	}
 
 	switch uint8(req.GetCmd()) {

@@ -8,8 +8,6 @@ import (
 	"matrixone/pkg/defines"
 	"strconv"
 	"time"
-
-	"matrixone/pkg/config"
 )
 
 // DefaultCapability means default capabilities of the server
@@ -419,11 +417,11 @@ func (mp *MysqlProtocol) checkPassword(password, salt, auth []byte) bool {
 //the server authenticate that the client can connect and use the database
 func (mp *MysqlProtocol) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
-
+	ses := mp.routine.GetSession()
 	//TODO:get the user's password
 	var psw []byte
-	if mp.username == config.GlobalSystemVariables.GetDumpuser() { //the user dump for test
-		psw = []byte(config.GlobalSystemVariables.GetDumppassword())
+	if mp.username == ses.Pu.SV.GetDumpuser() { //the user dump for test
+		psw = []byte(ses.Pu.SV.GetDumppassword())
 	}
 
 	//TO Check password
