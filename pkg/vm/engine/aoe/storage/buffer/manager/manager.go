@@ -7,8 +7,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
-	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
 )
@@ -18,14 +16,13 @@ var (
 	TRANSIENT_START_ID                      = ^(uint64(0)) / 2
 )
 
-func NewBufferManager(dir string, capacity uint64, flusher iw.IOpWorker, evict_ctx ...interface{}) mgrif.IBufferManager {
+func NewBufferManager(dir string, capacity uint64, evict_ctx ...interface{}) mgrif.IBufferManager {
 	mgr := &BufferManager{
 		IMemoryPool:     buf.NewSimpleMemoryPool(capacity),
 		Nodes:           make(map[uint64]nif.INodeHandle),
 		EvictHolder:     NewSimpleEvictHolder(evict_ctx...),
 		NextID:          uint64(0),
 		NextTransientID: TRANSIENT_START_ID,
-		Flusher:         flusher,
 		Dir:             []byte(dir),
 	}
 
@@ -243,7 +240,6 @@ func (mgr *BufferManager) Pin(handle nif.INodeHandle) nif.IBufferHandle {
 }
 
 func MockBufMgr(capacity uint64) mgrif.IBufferManager {
-	flusher := w.NewOpWorker("MockFlusher")
 	dir := "/tmp/mockbufdir"
-	return NewBufferManager(dir, capacity, flusher)
+	return NewBufferManager(dir, capacity)
 }
