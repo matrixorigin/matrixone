@@ -1,4 +1,4 @@
-package db
+package sched
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"

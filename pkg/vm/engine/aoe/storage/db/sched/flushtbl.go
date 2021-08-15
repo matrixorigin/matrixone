@@ -1,4 +1,4 @@
-package db
+package sched
 
 import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"

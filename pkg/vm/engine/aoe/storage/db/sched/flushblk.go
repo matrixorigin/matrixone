@@ -1,4 +1,4 @@
-package db
+package sched
 
 import (
 	log "github.com/sirupsen/logrus"

@@ -1,4 +1,4 @@
-package db
+package sched
 
 import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
