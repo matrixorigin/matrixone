@@ -17,7 +17,6 @@ const (
 	DEFAULT_META_FLUSHER  = "META_FLUSER"
 	DEFAULT_META_UPDATER  = "META_UPDATER"
 	DEFAULT_DATA_FLUSHER  = "DATA_FLUSHER"
-	DEFAULT_DATA_SORTER   = "DATA_SORTER"
 	DEFAULT_MDATA_UPDATER = "MDATA_UPDATER"
 	SchedulerName         = "AOEScheduler"
 )
@@ -61,7 +60,6 @@ type Options struct {
 
 	Data struct {
 		Flusher iw.IOpWorker
-		Sorter  iw.IOpWorker
 		// IOFactory ioif.IOFactory
 	}
 
@@ -116,10 +114,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.Data.Flusher == nil {
 		o.Data.Flusher = w.NewOpWorker(DEFAULT_DATA_FLUSHER)
-	}
-
-	if o.Data.Sorter == nil {
-		o.Data.Sorter = w.NewOpWorker(DEFAULT_DATA_SORTER)
 	}
 
 	if o.MemData.Updater == nil {
