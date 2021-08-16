@@ -8,7 +8,7 @@ import (
 )
 
 type createSegBlkEvent struct {
-	baseEvent
+	BaseEvent
 	TableData  iface.ITableData
 	BlkMeta    *md.Block
 	NewSegment bool
@@ -17,7 +17,7 @@ type createSegBlkEvent struct {
 
 func NewCreateSegBlkEvent(ctx *Context, newSeg bool, meta *md.Block, tableData iface.ITableData) *createSegBlkEvent {
 	e := &createSegBlkEvent{TableData: tableData, NewSegment: newSeg, BlkMeta: meta}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
 	}

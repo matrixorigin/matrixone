@@ -1,4 +1,4 @@
-package db
+package sched
 
 import (
 	"github.com/stretchr/testify/assert"

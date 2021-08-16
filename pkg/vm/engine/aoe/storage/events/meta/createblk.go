@@ -1,6 +1,7 @@
 package meta
 
 import (
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -9,19 +10,19 @@ import (
 )
 
 type createBlkEvent struct {
-	baseEvent
+	dbsched.BaseEvent
 	NewSegment bool
 	TableID    uint64
 	TableData  iface.ITableData
 	Block      iface.IBlock
 }
 
-func NewCreateBlkEvent(ctx *Context, tid uint64, tableData iface.ITableData) *createBlkEvent {
+func NewCreateBlkEvent(ctx *dbsched.Context, tid uint64, tableData iface.ITableData) *createBlkEvent {
 	e := &createBlkEvent{
 		TableData: tableData,
 		TableID:   tid,
 	}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = dbsched.BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.MetaCreateBlkTask, ctx.DoneCB, ctx.Waitable),
 	}

@@ -63,7 +63,7 @@ func (c *Collection) close() {
 }
 
 func (c *Collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) {
-	eCtx := &me.Context{Opts: c.Opts, Waitable: true}
+	eCtx := &dbsched.Context{Opts: c.Opts, Waitable: true}
 	e := me.NewCreateBlkEvent(eCtx, c.ID, c.TableData)
 	if err = c.Opts.Scheduler.Schedule(e); err != nil {
 		return nil, nil, err
