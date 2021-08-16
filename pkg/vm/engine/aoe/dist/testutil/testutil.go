@@ -2,10 +2,10 @@ package testutil
 
 import (
 	"fmt"
+	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
-	"os"
 	"testing"
 	"time"
 
@@ -153,7 +153,7 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 
 		cfg.Replication.ShardHeartbeatDuration = typeutil.NewDuration(time.Millisecond * 100)
 		cfg.Replication.StoreHeartbeatDuration = typeutil.NewDuration(time.Second)
-		cfg.Raft.TickInterval = typeutil.NewDuration(time.Millisecond * 20)
+		cfg.Raft.TickInterval = typeutil.NewDuration(time.Millisecond * 100)
 		cfg.Raft.MaxEntryBytes = 300 * 1024 * 1024
 		//cfg.Replication.ShardCapacityBytes = 100
 		//cfg.Replication.ShardSplitCheckBytes = 80
@@ -174,7 +174,11 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 		c.CubeDrivers = append(c.CubeDrivers, d)
 		return d.RaftStore()
 	}), raftstore.WithTestClusterNodeStartFunc(func(node int, store raftstore.Store) {
-		assert.NoError(c.t, c.CubeDrivers[node].Start())
+		err := c.CubeDrivers[node].Start()
+		if err != nil {
+			stdLog.Printf("Node-%d start failed, %v", node, err)
+		}
+		assert.NoError(c.t, err)
 	}))
 
 	c.RaftCluster = raftstore.NewTestClusterStore(c.t, c.opts.raftOptions...)
@@ -219,17 +223,4 @@ func (c *TestCluster) Stop() {
 	for _, s := range c.Applications {
 		s.Close()
 	}
-}
-
-func recreateTestTempDir() (err error) {
-	err = os.RemoveAll(tmpDir)
-	if err != nil {
-		return err
-	}
-	err = os.MkdirAll(tmpDir, os.ModeDir)
-	return err
-}
-
-func cleanupTmpDir() error {
-	return os.RemoveAll(tmpDir)
 }

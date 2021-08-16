@@ -3,7 +3,6 @@ package dist
 import (
 	"encoding/json"
 	"errors"
-	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
@@ -189,31 +188,31 @@ func NewCubeDriverWithFactory(
 		}
 	}
 
-	c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
+	/*c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
 		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
-			// if group != uint64(pb.AOEGroup) {
-			// 	return initAppliedIndex
-			// }
-			// adjustAppliedIndex, err := h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
-			// 	Matchers: []*dbi.StringMatcher{
-			// 		{
-			// 			Type:    dbi.MTPrefix,
-			// 			Pattern: codec.Uint642String(shard.ID),
-			// 		},
-			// 	},
-			// })
-			// if err != nil {
-			// 	if err == adb.ErrNotFound {
-			// 		stdLog.Printf("shard not found, %d, %d", group, shard.ID)
-			// 		return initAppliedIndex
-			// 	}
-			// 	panic(err)
-			// }
-			// return adjustAppliedIndex
+			 if group != uint64(pb.AOEGroup) {
+			 	return initAppliedIndex
+			 }
+			 adjustAppliedIndex, err := h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
+			 	Matchers: []*dbi.StringMatcher{
+			 		{
+			 			Type:    dbi.MTPrefix,
+			 			Pattern: codec.Uint642String(shard.ID),
+			 		},
+			 	},
+			 })
+			 if err != nil {
+				if err == adb.ErrNotFound {
+			 		stdLog.Printf("shard not found, %d, %d", group, shard.ID)
+			 		return initAppliedIndex
+			 	}
+			 	panic(err)
+			 }
+			 return adjustAppliedIndex
 			return initAppliedIndex
 		}
 	}
-
+	*/
 	store, err := raftStoreFactory(&c.CubeConfig)
 	if err != nil {
 		return nil, err
@@ -244,7 +243,6 @@ func (h *driver) Start() error {
 	if err != nil {
 		return err
 	}
-	stdLog.Printf("[QSQ] call initShardPool")
 	return h.initShardPool()
 }
 
@@ -497,7 +495,7 @@ func (h *driver) Append(name string, shardId uint64, data []byte) error {
 	}
 	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
 	if rsp != nil || len(rsp) != 0 {
-		err = errors.New(string(data))
+		err = errors.New(string(rsp))
 	}
 	return err
 }

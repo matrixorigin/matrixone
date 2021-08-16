@@ -20,6 +20,14 @@ type Storage struct {
 	stats stats.Stats
 }
 
+func (s *Storage) Sync() error {
+	panic("implement me")
+}
+
+func (s *Storage) RemoveShardData(shard bhmetapb.Shard, encodedStartKey, encodedEndKey []byte) error {
+	panic("implement me")
+}
+
 // NewStorage returns pebble kv store on a default options
 func NewStorage(dir string) (*Storage, error) {
 	return NewStorageWithOptions(dir, &store.Options{})

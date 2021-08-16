@@ -56,9 +56,9 @@ func TestAOEEngine(t *testing.T) {
 			}
 			opts.Meta.Conf = mdCfg
 			return daoe.NewStorageWithOptions(path, opts)
-		}), testutil.WithTestAOEClusterUsePebble(), testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("info")))
+		}), testutil.WithTestAOEClusterUsePebble(), testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("debug")))
 	c.Start()
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*10)
+	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 	stdLog.Printf("[QSQ]app all started.")
 
 	c.CubeDrivers[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
@@ -102,7 +102,7 @@ func TestAOEEngine(t *testing.T) {
 	if err != nil {
 		stdLog.Printf("[QSQ] %v", err)
 	} else {
-		stdLog.Printf("[QSQ] create table is succeeded")
+		stdLog.Printf("create table is succeeded")
 	}
 	require.NoError(t, err)
 
