@@ -1,0 +1,192 @@
+package int8s
+
+import (
+	"matrixone/pkg/container/vector"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
+)
+
+func Sort(col *vector.Vector, idx []uint32) {
+	data := col.Col.([]int8)
+	n := len(idx)
+	dataWithIdx := make(sortSlice, n)
+
+	for i := 0; i < n; i++ {
+		dataWithIdx[i] = sortElem{data: data[i], idx: uint32(i)}
+	}
+
+	sortUnstable(dataWithIdx)
+
+	for i, v := range dataWithIdx {
+		data[i], idx[i] = v.data, v.idx
+	}
+}
+
+func Shuffle(col *vector.Vector, idx []uint32) {
+	if col.Nsp == nil {
+		shuffleBlock(col, idx)
+	} else {
+		shuffleNullableBlock(col, idx)
+	}
+}
+
+func shuffleBlock(col *vector.Vector, idx []uint32) {
+	data := col.Col.([]int8)
+	newData := make([]int8, len(idx))
+
+	for i, j := range idx {
+		newData[i] = data[j]
+	}
+
+	col.Col = newData
+}
+
+func shuffleNullableBlock(col *vector.Vector, idx []uint32) {
+	data := col.Col.([]int8)
+	nulls := col.Nsp.Np
+	newData := make([]int8, len(idx))
+	newNulls := roaring.New()
+
+	for i, j := range idx {
+		if nulls.Contains(uint64(j)) {
+			newNulls.AddInt(i)
+		} else {
+			newData[i] = data[j]
+		}
+	}
+
+	col.Col = newData
+	newNulls.RunOptimize()
+	col.Nsp.Np = newNulls
+}
+
+func Merge(col []*vector.Vector, src []uint16) {
+	data := make([][]int8, len(col))
+
+	for i, v := range col {
+		data[i] = v.Col.([]int8)
+	}
+
+	nElem := len(data[0])
+	nBlk := len(data)
+	heap := make(heapSlice, nBlk)
+	merged := make([][]int8, nBlk)
+
+	for i := 0; i < nBlk; i++ {
+		heap[i] = heapElem{data: data[i][0], src: uint16(i), next: 1}
+		merged[i] = make([]int8, nElem)
+	}
+	heapInit(heap)
+
+	k := 0
+	for i := 0; i < nBlk; i++ {
+		for j := 0; j < nElem; j++ {
+			top := heapPop(&heap)
+			merged[i][j], src[k] = top.data, top.src
+			k++
+			if int(top.next) < nElem {
+				heapPush(&heap, heapElem{data: data[top.src][top.next], src: top.src, next: top.next + 1})
+			}
+		}
+	}
+
+	for i := 0; i < nBlk; i++ {
+		col[i].Col = merged[i]
+	}
+}
+
+func Multiplex(col []*vector.Vector, src []uint16) {
+	if col[0].Nsp == nil {
+		multiplexBlocks(col, src)
+	} else {
+		multiplexNullableBlocks(col, src)
+	}
+}
+
+func multiplexBlocks(col []*vector.Vector, src []uint16) {
+	data := make([][]int8, len(col))
+	for i, v := range col {
+		data[i] = v.Col.([]int8)
+	}
+
+	nElem := len(data[0])
+	nBlk := len(data)
+	cursors := make([]int, nBlk)
+	merged := make([][]int8, nBlk)
+
+	for i := 0; i < nBlk; i++ {
+		merged[i] = make([]int8, nElem)
+	}
+
+	k := 0
+	for i := 0; i < nBlk; i++ {
+		for j := 0; j < nElem; j++ {
+			s := src[k]
+			merged[i][j] = data[s][cursors[s]]
+			cursors[s]++
+			k++
+		}
+	}
+
+	for i := 0; i < nBlk; i++ {
+		col[i].Col = merged[i]
+	}
+}
+
+func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
+	data := make([][]int8, len(col))
+	nElem := len(data[0])
+	nBlk := len(data)
+
+	nulls := make([]*roaring.Bitmap, nBlk)
+	nullIters := make([]roaring.IntIterable64, nBlk)
+	nextNulls := make([]int, nBlk)
+
+	for i, v := range col {
+		data[i] = v.Col.([]int8)
+		nulls[i] = v.Nsp.Np
+		nullIters[i] = nulls[i].Iterator()
+
+		if nullIters[i].HasNext() {
+			nextNulls[i] = int(nullIters[i].Next())
+		} else {
+			nextNulls[i] = -1
+		}
+	}
+
+	cursors := make([]int, nBlk)
+	merged := make([][]int8, nBlk)
+	newNulls := make([]*roaring.Bitmap, nBlk)
+
+	for i := 0; i < nBlk; i++ {
+		merged[i] = make([]int8, nElem)
+	}
+
+	k := 0
+	for i := 0; i < nBlk; i++ {
+		newNulls[i] = roaring.New()
+		for j := 0; j < nElem; j++ {
+			s := src[k]
+			if cursors[s] == nextNulls[s] {
+				newNulls[i].AddInt(j)
+
+				if nullIters[s].HasNext() {
+					nextNulls[s] = int(nullIters[s].Next())
+				} else {
+					nextNulls[s] = -1
+				}
+			} else {
+				merged[i][j] = data[s][cursors[s]]
+			}
+
+			cursors[s]++
+			k++
+		}
+	}
+
+	for i := 0; i < nBlk; i++ {
+		col[i].Col = merged[i]
+		col[i].Nsp.Np = newNulls[i]
+		col[i].Nsp.Np.RunOptimize()
+	}
+}

@@ -434,38 +434,15 @@ Calls to Swap O(n * log^2(n) - (t^2+t)/2*n) = O(n * log^2(n))
 // Sort sorts data.
 // It makes one call to data.Len to determine n and O(n*log(n)) calls to
 // data.Less and data.Swap. The sort is not guaranteed to be stable.
-func Sort(data []uint32, idx []uint32) {
+func sortUnstable(data sortSlice) {
 	n := len(data)
-	dataWithIdx := make(sortSlice, n)
-	for i := 0; i < n; i++ {
-		dataWithIdx[i] = sortElem{data: data[i], idx: uint32(i)}
-	}
-	quickSort(dataWithIdx, 0, n, maxDepth(n))
-	for i, v := range dataWithIdx {
-		data[i], idx[i] = v.data, v.idx
-	}
+	quickSort(data, 0, n, maxDepth(n))
 }
 
 // Stable sorts data while keeping the original order of equal elements.
 //
 // It makes one call to data.Len to determine n, O(n*log(n)) calls to
 // data.Less and O(n*log(n)*log(n)) calls to data.Swap.
-func Stable(data []uint32, idx []uint32) {
-	n := len(data)
-	dataWithIdx := make(sortSlice, n)
-	for i := 0; i < n; i++ {
-		dataWithIdx[i] = sortElem{data: data[i], idx: uint32(i)}
-	}
-	stable(dataWithIdx, n)
-	for i, v := range dataWithIdx {
-		data[i], idx[i] = v.data, v.idx
-	}
-}
-
-func ShuffleBlock(data []uint32, idx []uint32) {
-	tmp := make([]uint32, len(data))
-	for i, j := range idx {
-		tmp[i] = data[j]
-	}
-	copy(data, tmp)
+func sortStable(data sortSlice) {
+	stable(data, len(data))
 }
