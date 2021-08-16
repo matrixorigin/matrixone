@@ -96,7 +96,7 @@ func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
 	month = uint8(d / 31)
 	end := daysBefore[month+1]
 	var begin uint16
-	if yday >= end {
+	if uint16(d) >= end {
 		month++
 		begin = end
 	} else {
@@ -177,10 +177,26 @@ func (d Date) DayOfYear() uint16 {
 	return yday
 }
 
-func (d Date) WeekOfYear() uint8 {
-	yday := d.DayOfYear()
-	wday := uint16(d.DayOfWeek())
-	return uint8((yday+5-wday)/7 + 1)
+func (d Date) WeekOfYear() (year int32, week uint8) {
+	// According to the rule that the first calendar week of a calendar year is
+	// the week including the first Thursday of that year, and that the last one is
+	// the week immediately preceding the first calendar week of the next calendar year.
+	// See https://www.iso.org/obp/ui#iso:std:iso:8601:-1:ed-1:v1:en:term:3.1.1.23 for details.
+
+	// weeks start with Monday
+	// Monday Tuesday Wednesday Thursday Friday Saturday Sunday
+	// 1      2       3         4        5      6        7
+	// +3     +2      +1        0        -1     -2       -3
+	// the offset to Thursday
+	delta := 4 - int32(d.DayOfWeek())
+	// handle Sunday
+	if delta == 4 {
+		delta = -3
+	}
+	// find the Thursday of the calendar week
+	d = Date(int32(d) + delta)
+	year, _, _, yday := d.Calendar(false)
+	return year, uint8((yday-1)/7 + 1)
 }
 
 func isLeap(year int32) bool {
