@@ -2,6 +2,7 @@ package meta
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
@@ -11,20 +12,20 @@ import (
 )
 
 type dropTableEvent struct {
-	baseEvent
+	dbsched.BaseEvent
 	reqCtx dbi.DropTableCtx
 	Id     uint64
 	MTMgr  mtif.IManager
 	Tables *table.Tables
 }
 
-func NewDropTableEvent(ctx *Context, reqCtx dbi.DropTableCtx, mtMgr mtif.IManager, tables *table.Tables) *dropTableEvent {
+func NewDropTableEvent(ctx *dbsched.Context, reqCtx dbi.DropTableCtx, mtMgr mtif.IManager, tables *table.Tables) *dropTableEvent {
 	e := &dropTableEvent{
 		reqCtx: reqCtx,
 		Tables: tables,
 		MTMgr:  mtMgr,
 	}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = dbsched.BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.MetaDropTableTask, ctx.DoneCB, ctx.Waitable),
 	}
@@ -39,7 +40,7 @@ func (e *dropTableEvent) Execute() error {
 	e.Id = id
 	ctx := md.CopyCtx{Ts: md.NowMicro() + 1, Attached: true}
 	info := e.Ctx.Opts.Meta.Info.Copy(ctx)
-	eCtx := &Context{Opts: e.Ctx.Opts}
+	eCtx := &dbsched.Context{Opts: e.Ctx.Opts}
 	flushEvent := NewFlushInfoEvent(eCtx, info)
 	e.Ctx.Opts.Scheduler.Schedule(flushEvent)
 	gcReq := gcreqs.NewDropTblRequest(e.Ctx.Opts, id, e.Tables, e.MTMgr, e.reqCtx.OnFinishCB)

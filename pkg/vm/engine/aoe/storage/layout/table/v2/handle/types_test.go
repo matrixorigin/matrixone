@@ -16,7 +16,6 @@ func TestSnapshot(t *testing.T) {
 	schema := md.MockSchema(2)
 	opts := new(e.Options)
 	opts.FillDefaults("/tmp")
-	opts.MemData.Updater.Start()
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
 	seg_cnt := 4

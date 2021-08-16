@@ -1,20 +1,21 @@
 package meta
 
 import (
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	// log "github.com/sirupsen/logrus"
 )
 
 type flushTableEvent struct {
-	baseEvent
+	dbsched.BaseEvent
 	Table *md.Table
 }
 
-func NewFlushTableEvent(ctx *Context, tbl *md.Table) *flushTableEvent {
+func NewFlushTableEvent(ctx *dbsched.Context, tbl *md.Table) *flushTableEvent {
 	e := new(flushTableEvent)
 	e.Table = tbl
-	e.baseEvent = baseEvent{
+	e.BaseEvent = dbsched.BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.StatelessEvent, ctx.DoneCB, ctx.Waitable),
 	}

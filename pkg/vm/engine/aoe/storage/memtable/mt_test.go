@@ -78,7 +78,7 @@ func TestCollection(t *testing.T) {
 	opts.Scheduler = dbsched.NewScheduler(opts, tables)
 
 	tabletInfo := md.MockTableInfo(2)
-	eCtx := &meta.Context{Opts: opts, Waitable: true}
+	eCtx := &dbsched.Context{Opts: opts, Waitable: true}
 	event := meta.NewCreateTableEvent(eCtx, dbi.TableOpCtx{TableName: tabletInfo.Name}, tabletInfo)
 	assert.NotNil(t, event)
 	opts.Scheduler.Schedule(event)

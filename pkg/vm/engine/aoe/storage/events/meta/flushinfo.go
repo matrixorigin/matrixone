@@ -1,20 +1,21 @@
 package meta
 
 import (
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	// log "github.com/sirupsen/logrus"
 )
 
 type flushInfoEvent struct {
-	baseEvent
+	dbsched.BaseEvent
 	Info *md.MetaInfo
 }
 
-func NewFlushInfoEvent(ctx *Context, info *md.MetaInfo) *flushInfoEvent {
+func NewFlushInfoEvent(ctx *dbsched.Context, info *md.MetaInfo) *flushInfoEvent {
 	e := new(flushInfoEvent)
 	e.Info = info
-	e.baseEvent = baseEvent{
+	e.BaseEvent = dbsched.BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.StatelessEvent, ctx.DoneCB, ctx.Waitable),
 	}

@@ -1,4 +1,4 @@
-package db
+package sched
 
 import (
 	log "github.com/sirupsen/logrus"
@@ -8,7 +8,7 @@ import (
 )
 
 type flushMemtableEvent struct {
-	baseEvent
+	BaseEvent
 	Meta       *md.Block
 	Collection imem.ICollection
 }
@@ -17,7 +17,7 @@ func NewFlushMemtableEvent(ctx *Context, collection imem.ICollection) *flushMemt
 	e := &flushMemtableEvent{
 		Collection: collection,
 	}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.FlushMemtableTask, ctx.DoneCB, ctx.Waitable),
 	}

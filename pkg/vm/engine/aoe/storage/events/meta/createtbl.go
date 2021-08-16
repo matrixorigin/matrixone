@@ -2,6 +2,7 @@ package meta
 
 import (
 	"matrixone/pkg/vm/engine/aoe"
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -9,17 +10,17 @@ import (
 )
 
 type createTableEvent struct {
-	baseEvent
+	dbsched.BaseEvent
 	reqCtx    dbi.TableOpCtx
 	tableInfo *aoe.TableInfo
 }
 
-func NewCreateTableEvent(ctx *Context, reqCtx dbi.TableOpCtx, tableInfo *aoe.TableInfo) *createTableEvent {
+func NewCreateTableEvent(ctx *dbsched.Context, reqCtx dbi.TableOpCtx, tableInfo *aoe.TableInfo) *createTableEvent {
 	e := &createTableEvent{
 		reqCtx:    reqCtx,
 		tableInfo: tableInfo,
 	}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = dbsched.BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.MetaCreateTableTask, ctx.DoneCB, ctx.Waitable),
 	}
@@ -42,12 +43,12 @@ func (e *createTableEvent) Execute() error {
 		ctx := md.CopyCtx{Ts: md.NowMicro() + 1, Attached: true}
 		info := e.Ctx.Opts.Meta.Info.Copy(ctx)
 		table, _ = info.ReferenceTable(tbl.ID)
-		eCtx := &Context{Opts: e.Ctx.Opts}
+		eCtx := &dbsched.Context{Opts: e.Ctx.Opts}
 		flushEvent := NewFlushInfoEvent(eCtx, info)
 		e.Ctx.Opts.Scheduler.Schedule(flushEvent)
 	}
 	{
-		eCtx := &Context{Opts: e.Ctx.Opts}
+		eCtx := &dbsched.Context{Opts: e.Ctx.Opts}
 		flushEvent := NewFlushTableEvent(eCtx, table)
 		e.Ctx.Opts.Scheduler.Schedule(flushEvent)
 	}

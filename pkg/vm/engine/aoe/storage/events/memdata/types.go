@@ -22,7 +22,7 @@ type Context struct {
 	TableMeta                        *md.Table
 }
 
-type baseEvent struct {
+type BaseEvent struct {
 	sched.BaseEvent
 	Ctx *Context
 }

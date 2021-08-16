@@ -2,6 +2,7 @@ package meta
 
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
@@ -10,37 +11,39 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	// log "github.com/sirupsen/logrus"
+)
+
+var (
+	workDir = "/tmp/mevents"
 )
 
 func TestBasicOps(t *testing.T) {
 	opts := e.Options{}
 	info := md.MockInfo(&opts.Mu, md.BLOCK_ROW_COUNT, md.SEGMENT_BLOCK_COUNT)
-	info.Conf.Dir = "/tmp"
+	info.Conf.Dir = workDir
 	opts.Meta.Info = info
 	opts.FillDefaults(info.Conf.Dir)
-	opts.Meta.Updater.Start()
+	opts.Scheduler = dbsched.NewScheduler(&opts, nil)
 
 	now := time.Now()
 
 	tabletInfo := md.MockTableInfo(2)
-	opCtx := OpCtx{Opts: &opts, TableInfo: tabletInfo}
-	op := NewCreateTblOp(&opCtx, dbi.TableOpCtx{TableName: tabletInfo.Name})
-	op.Push()
-	err := op.WaitDone()
+	eCtx := &dbsched.Context{Opts: &opts, Waitable: true}
+	createTblE := NewCreateTableEvent(eCtx, dbi.TableOpCtx{TableName: tabletInfo.Name}, tabletInfo)
+	opts.Scheduler.Schedule(createTblE)
+	err := createTblE.WaitDone()
 	assert.Nil(t, err)
 
-	tbl := op.GetTable()
+	tbl := createTblE.GetTable()
 	assert.NotNil(t, tbl)
 
 	t.Log(info.String())
-	opCtx = OpCtx{Opts: &opts}
-	blkop := NewCreateBlkOp(&opCtx, tbl.ID, nil)
-	blkop.Push()
-	err = blkop.WaitDone()
+	createBlkE := NewCreateBlkEvent(eCtx, tbl.ID, nil)
+	opts.Scheduler.Schedule(createBlkE)
+	err = createBlkE.WaitDone()
 	assert.Nil(t, err)
 
-	blk1 := blkop.GetBlock()
+	blk1 := createBlkE.GetBlock()
 	assert.NotNil(t, blk1)
 	assert.Equal(t, blk1.GetBoundState(), md.Detatched)
 
@@ -53,10 +56,15 @@ func TestBasicOps(t *testing.T) {
 	assert.Equal(t, blk2.DataState, md.EMPTY)
 	assert.Equal(t, blk2.Count, uint64(0))
 
-	opCtx = OpCtx{Block: blk1, Opts: &opts}
-	updateop := NewUpdateOp(&opCtx)
-	updateop.Push()
-	err = updateop.WaitDone()
+	schedCtx := &dbsched.Context{
+		Opts:     &opts,
+		Waitable: true,
+	}
+	commitCtx := &dbsched.Context{Opts: &opts, Waitable: true}
+	commitCtx.AddMetaScope()
+	commitE := dbsched.NewCommitBlkEvent(commitCtx, blk1)
+	opts.Scheduler.Schedule(commitE)
+	err = commitE.WaitDone()
 	assert.Nil(t, err)
 
 	blk3, err := info.ReferenceBlock(blk1.Segment.Table.ID, blk1.Segment.ID, blk1.ID)
@@ -65,10 +73,9 @@ func TestBasicOps(t *testing.T) {
 	assert.Equal(t, blk1.Count, blk3.Count)
 
 	for i := 0; i < 100; i++ {
-		opCtx = OpCtx{Opts: &opts}
-		blkop = NewCreateBlkOp(&opCtx, blk1.Segment.Table.ID, nil)
-		blkop.Push()
-		err = blkop.WaitDone()
+		createBlkE = NewCreateBlkEvent(schedCtx, blk1.Segment.Table.ID, nil)
+		opts.Scheduler.Schedule(createBlkE)
+		err = createBlkE.WaitDone()
 		assert.Nil(t, err)
 	}
 	du := time.Since(now)
@@ -99,5 +106,5 @@ func TestBasicOps(t *testing.T) {
 	du = time.Since(now)
 	t.Log(du)
 
-	opts.Meta.Updater.Stop()
+	opts.Scheduler.Stop()
 }
