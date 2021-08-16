@@ -7,7 +7,9 @@ var pool = sync.Pool{
 }
 
 func Acquire() *Message {
-	return pool.Get().(*Message)
+	m := pool.Get().(*Message)
+	m.Reset()
+	return m
 }
 
 func Release(m *Message) {
