@@ -7,8 +7,6 @@
 // Package sort provides primitives for sorting slices and user-defined collections.
 package varchar
 
-import "matrixone/pkg/container/types"
-
 // insertionSort sorts data[a:b] using insertion sort.
 func insertionSort(data sortSlice, a, b int) {
 	for i := a + 1; i < b; i++ {
@@ -436,79 +434,15 @@ Calls to Swap O(n * log^2(n) - (t^2+t)/2*n) = O(n * log^2(n))
 // Sort sorts data.
 // It makes one call to data.Len to determine n and O(n*log(n)) calls to
 // data.Less and data.Swap. The sort is not guaranteed to be stable.
-func Sort(data *types.Bytes, idx []uint32) {
-	n := len(idx)
-	dataWithIdx := make([]sortElem, n)
-	for i := 0; i < n; i++ {
-		dataWithIdx[i] = sortElem{data: data.Get(int64(i)), idx: uint32(i)}
-	}
-	quickSort(dataWithIdx, 0, n, maxDepth(n))
-
-	newData := make([]byte, len(data.Data))
-	newOffsets := make([]uint32, n)
-	newLengths := make([]uint32, n)
-	var offset uint32
-
-	for i, v := range dataWithIdx {
-		copy(newData[offset:], v.data)
-		newOffsets[i] = offset
-		l := uint32(len(v.data))
-		newLengths[i] = l
-		offset += l
-		idx[i] = v.idx
-	}
-
-	data.Data = newData
-	data.Offsets = newOffsets
-	data.Lengths = newLengths
+func sortUnstable(data sortSlice) {
+	n := len(data)
+	quickSort(data, 0, n, maxDepth(n))
 }
 
 // Stable sorts data while keeping the original order of equal elements.
 //
 // It makes one call to data.Len to determine n, O(n*log(n)) calls to
 // data.Less and O(n*log(n)*log(n)) calls to data.Swap.
-func Stable(data *types.Bytes, idx []uint32) {
-	n := len(idx)
-	dataWithIdx := make([]sortElem, n)
-	for i := 0; i < n; i++ {
-		dataWithIdx[i] = sortElem{data: data.Get(int64(i)), idx: uint32(i)}
-	}
-	stable(dataWithIdx, n)
-
-	newData := make([]byte, len(data.Data))
-	newOffsets := make([]uint32, n)
-	newLengths := make([]uint32, n)
-	var offset uint32
-
-	for i, v := range dataWithIdx {
-		copy(newData[offset:], v.data)
-		newOffsets[i] = offset
-		l := uint32(len(v.data))
-		newLengths[i] = l
-		offset += l
-		idx[i] = v.idx
-	}
-
-	data.Data = newData
-	data.Offsets = newOffsets
-	data.Lengths = newLengths
-}
-
-func ShuffleBlock(data *types.Bytes, idx []uint32) {
-	n := len(idx)
-	newData := make([]byte, len(data.Data))
-	newOffsets := make([]uint32, n)
-	newLengths := make([]uint32, n)
-	var offset uint32
-
-	for i, j := range idx {
-		copy(newData[offset:], data.Get(int64(j)))
-		newOffsets[i] = offset
-		newLengths[i] = data.Lengths[j]
-		offset += newLengths[i]
-	}
-
-	data.Data = newData
-	data.Offsets = newOffsets
-	data.Lengths = newLengths
+func sortStable(data sortSlice) {
+	stable(data, len(data))
 }
