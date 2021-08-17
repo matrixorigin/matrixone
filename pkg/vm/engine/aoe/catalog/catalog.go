@@ -1,17 +1,15 @@
 package catalog
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/raftstore"
-	stdLog "log"
+	"matrixone/pkg/logger"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
+	"os"
 	"sync"
 	"time"
 )
@@ -25,7 +23,10 @@ const (
 	cTableIDPrefix      = "TID"
 	cRoutePrefix        = "Route"
 	cDeletedTablePrefix = "DeletedTableQueue"
+	timeout             = 300
 )
+
+var log = logger.New(os.Stderr, "catalog:")
 
 type Catalog struct {
 	Driver dist.CubeDriver
@@ -122,7 +123,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 	}
 	err = c.Driver.Set(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id))
 	if err != nil {
-		stdLog.Printf("ErrTableCreateFailed, %v", err)
+		log.Errorf("ErrTableCreateFailed, %v", err)
 		return 0, err
 		//return 0, ErrTableCreateFailed
 	}
@@ -131,29 +132,29 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
 		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
-			stdLog.Printf("ErrTableCreateFailed, %v", err)
+			log.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
 			//return 0, ErrTableCreateFailed
 		}
 		if c.Driver.Set(rkey, []byte(tbl.Name)) != nil {
-			stdLog.Printf("ErrTableCreateFailed, %v", err)
+			log.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
 			//return 0, ErrTableCreateFailed
 		}
 		tbl.State = aoe.StatePublic
 		meta, err := helper.EncodeTable(tbl)
 		if err != nil {
-			stdLog.Printf("ErrTableCreateFailed, %v", err)
+			log.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
 			//return 0, ErrTableCreateFailed
 		}
 		//save metadata to kv
 		err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
 		if err != nil {
-			stdLog.Printf("ErrTableCreateFailed, %v", err)
+			log.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
 		}
-		stdLog.Printf("Create Table finished, key is %v", c.tableKey(dbId, tbl.Id))
+		log.Infof("Create Table finished, key is %v", c.tableKey(dbId, tbl.Id))
 		return tbl.Id, nil
 	}
 	return 0, ErrNoAvailableShard
@@ -214,13 +215,13 @@ func (c *Catalog) GetTables(dbId uint64) ([]aoe.TableInfo, error) {
 	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
-		stdLog.Printf("Call GetTables, prefix is %v", c.tablePrefix(dbId))
+		log.Errorf("Call GetTables, prefix is %v", c.tablePrefix(dbId))
 		values, err := c.Driver.PrefixScan(c.tablePrefix(dbId), 0)
 		if err != nil {
-			stdLog.Printf("Call GetTables failed %v", err)
+			log.Errorf("Call GetTables failed %v", err)
 			return nil, err
 		}
-		stdLog.Printf("Call GetTables, prefix result size is %d", len(values))
+		log.Errorf("Call GetTables, prefix result size is %d", len(values))
 		var tables []aoe.TableInfo
 		for i := 1; i < len(values); i = i + 2 {
 			t, _ := helper.DecodeTable(values[i])
@@ -264,7 +265,7 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 		var tablets []aoe.TabletInfo
 		for _, shardId := range shardIds {
 			if sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(dbId, tb.Id)):]); err != nil {
-				stdLog.Printf("convert shardid failed, %v, shardid is %d, prefix length is %d", err, len(shardId), len(c.routePrefix(dbId, tb.Id)))
+				log.Errorf("convert shardid failed, %v, shardid is %d, prefix length is %d", err, len(shardId), len(c.routePrefix(dbId, tb.Id)))
 				continue
 			} else {
 				tablets = append(tablets, aoe.TabletInfo{
@@ -283,29 +284,29 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 	rsp, err := c.Driver.Scan(c.deletedPrefix(), c.deletedEpochPrefix(epoch+1), 0)
 	if err != nil {
-		stdLog.Printf("scan error, %v", err)
+		log.Errorf("scan error, %v", err)
 		return cnt, err
 	}
 	for i := 1; i < len(rsp); i += 2 {
 		if tbl, err := helper.DecodeTable(rsp[i]); err != nil {
-			stdLog.Printf("Decode err for table info, %v, %v", err, rsp[i])
+			log.Errorf("Decode err for table info, %v, %v", err, rsp[i])
 			continue
 		} else {
 			shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.SchemaId, tbl.Id), 0)
 			if err != nil {
-				stdLog.Printf("Failed to get shards for table %v, %v", rsp[i], err)
+				log.Errorf("Failed to get shards for table %v, %v", rsp[i], err)
 				continue
 			}
 			success := true
 			for _, shardId := range shardIds {
 				if sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(tbl.SchemaId, tbl.Id)):]); err != nil {
-					stdLog.Printf("convert shardid failed, %v", err)
+					log.Errorf("convert shardid failed, %v", err)
 					success = false
 					break
 				} else {
 					_, err = c.Driver.DropTablet(c.encodeTabletName(sid, tbl.Id), sid)
 					if err != nil {
-						stdLog.Printf("call local drop table failed %d, %d, %v", sid, tbl.Id, err)
+						log.Errorf("call local drop table failed %d, %d, %v", sid, tbl.Id, err)
 						success = false
 						break
 					}
@@ -313,7 +314,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 			}
 			if success {
 				if c.Driver.Delete(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id)) != nil {
-					stdLog.Printf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
+					log.Errorf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
 				} else {
 					cnt++
 				}
@@ -418,88 +419,18 @@ func (c *Catalog) deletedPrefix() []byte {
 	return codec.EncodeKey(cDeletedTablePrefix)
 }
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
-	/*var rsp []uint64
-	c.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Driver) {
-		if len(rsp) > 0 {
-			return
-		}
-		err := c.Driver.SetIfNotExist(codec.Uint642Bytes(shard.ID), codec.Uint642Bytes(tid))
-		if err == nil {
-			rsp = append(rsp, shard.ID)
-		}
-		return
-	})
-	if len(rsp) == 1 {
-		return rsp[0], nil
-	}*/
-	shard, err := c.Driver.GetShardPool().Alloc(uint64(pb.AOEGroup), codec.Uint642Bytes(tid))
-	if err != nil {
-		stdLog.Printf("GetShardPool failed, err is %v", err)
-		return shardid, err
-	}
-	return shard.ShardID, nil
-}
-func (c *Catalog) createShardForTable(dbId uint64, tbl aoe.TableInfo) (shardid uint64, err error) {
-	meta, err := helper.EncodeTable(tbl)
-	if err != nil {
-		return 0, ErrTableCreateFailed
-	}
-
-	//save metadata to kv
-	err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
-	if err != nil {
-		return 0, err
-	}
-
-	// TODO: support shared tables
-	// created shards
-	client := c.Driver.RaftStore().Prophet().GetClient()
-	tKey := c.tableKey(dbId, tbl.Id)
-	rKey := c.routePrefix(dbId, tbl.Id)
-	header := codec.Uint642Bytes(uint64(len(tKey) + len(rKey) + len([]byte("#"))))
-	buf := bytes.Buffer{}
-	buf.Write(header)
-	buf.Write(tKey)
-	buf.Write([]byte("#"))
-	buf.Write(rKey)
-	buf.Write(meta)
-	//find an available range for new shard
-	start := uint64(0)
-	c.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
-		end, _ := codec.Bytes2Uint64(shard.End)
-		if end > start {
-			start = end
-		}
-	})
-	err = client.AsyncAddResources(raftstore.NewResourceAdapterWithShard(
-		bhmetapb.Shard{
-			Start:        codec.Uint642Bytes(start),
-			End:          codec.Uint642Bytes(start + 1),
-			Unique:       string(codec.Uint642Bytes(tbl.Id)),
-			Group:        uint64(pb.AOEGroup),
-			Data:         buf.Bytes(),
-			DisableSplit: true,
-		}))
-	if err != nil {
-		return 0, err
-	}
-	completedC := make(chan *aoe.TableInfo, 1)
-	defer close(completedC)
-	go func() {
-		i := 0
-		for {
-			tb, _ := c.checkTableExists(dbId, tbl.Id)
-			if tb != nil && tb.State == aoe.StatePublic {
-				completedC <- tb
-				break
+	timeoutC := time.After(timeout)
+	for {
+		select {
+		case <-timeoutC:
+			log.Errorn("", "wait for available shard timeout")
+			return shardid, ErrTableCreateTimeout
+		default:
+			shard, err := c.Driver.GetShardPool().Alloc(uint64(pb.AOEGroup), codec.Uint642Bytes(tid))
+			if err == nil {
+				return shard.ShardID, err
 			}
-			i += 1
+			time.Sleep(time.Millisecond * 10)
 		}
-	}()
-	select {
-	case <-completedC:
-		return tbl.Id, nil
-	case <-time.After(3 * time.Second):
-		return tbl.Id, ErrTableCreateFailed
 	}
 }

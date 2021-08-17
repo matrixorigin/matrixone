@@ -7,7 +7,6 @@ import (
 	"github.com/matrixorigin/matrixcube/pb"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
-	stdLog "log"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
@@ -32,8 +31,7 @@ func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 		TableName: customReq.Name,
 	})
 	if err != nil {
-		stdLog.Printf("call CreateTable failed, %v", err)
-		resp.Value = errorResp(err)
+		resp.Value = errorResp(err, "Call CreateTable Failed")
 		return 0, 0, resp
 	}
 	writtenBytes := uint64(len(req.Key) + len(customReq.TableInfo))

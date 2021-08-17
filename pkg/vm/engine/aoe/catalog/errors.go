@@ -18,4 +18,5 @@ var (
 	ErrTableCreateFailed  = errors.New("create table failed")
 	ErrTooMuchTableExists = errors.New("the maximum limit of tables has been exceeded")
 	ErrNoAvailableShard   = errors.New("no available raft group")
+	ErrTableCreateTimeout = errors.New("create table timeout")
 )

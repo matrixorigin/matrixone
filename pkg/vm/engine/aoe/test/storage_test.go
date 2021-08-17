@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	stdLog "log"
@@ -65,10 +66,10 @@ func TestStorage(t *testing.T) {
 			}
 			opts.Meta.Conf = mdCfg
 			return daoe.NewStorageWithOptions(path, opts)
-		}), testutil.WithTestAOEClusterUsePebble(), testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("error")))
+		}), testutil.WithTestAOEClusterUsePebble(), testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("info")))
 	c.Start()
 
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*10)
+	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 
 	stdLog.Printf("driver all started.")
 
@@ -232,8 +233,8 @@ func TestRestartStorage(t *testing.T) {
 		}), testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterRecreate(false), raftstore.WithTestClusterLogLevel("info")))
 	c.Start()
-	c.RaftCluster.WaitShardByCounts(t, [3]int{21, 21, 21}, time.Second*10)
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*10)
+	c.RaftCluster.WaitShardByCounts(t, [3]int{21, 21, 21}, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
@@ -260,9 +261,12 @@ func TestRestartStorage(t *testing.T) {
 	stdLog.Printf("GetShardPool returns %v", pool)
 	shard, err := pool.Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
+	err = driver.CreateTablet(codec.Bytes2String(codec.EncodeKey(shard.ShardID, tableInfo.Id)), shard.ShardID, tableInfo)
+	assert.NotNil(t, err)
+	stdLog.Printf("[Debug]rsp of calling CreateTablet, %v", err)
 	ids, err := driver.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(shard.ShardID, tableInfo.Id)), shard.ShardID)
 	require.NoError(t, err)
 	stdLog.Printf("[Debug]SegmentIds is %v\n", ids)
-	require.Less(t, 0, len(ids.Ids))
+	assert.Equal(t, 2, len(ids.Ids))
 
 }

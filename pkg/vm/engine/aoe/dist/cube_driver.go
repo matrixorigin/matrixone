@@ -30,37 +30,44 @@ const (
 	defaultRPCTimeout = time.Second * 10
 )
 
-// CubeDriver storage
+// CubeDriver implements distributed kv and aoe.
 type CubeDriver interface {
-	// Start the storage
+	// Start the driver.
 	Start() error
-	// Close close the storage
+	// Close close the driver.
 	Close()
 
-	// GetShardPool return ShardsPool instance
+	// GetShardPool return ShardsPool instance.
 	GetShardPool() raftstore.ShardsPool
 
-	// Set set key value
+	// Set set key value.
 	Set([]byte, []byte) error
-	// SetWithGroup set key value
+
+	// SetWithGroup set key value in specific group.
 	SetWithGroup([]byte, []byte, pb.Group) error
 
-	// SetIfNotExist set key value if key is not exists.
+	// SetIfNotExist set key value if key not exists.
 	SetIfNotExist([]byte, []byte) error
 
-	// Get returns the value of key
+	// Get returns the value of key.
 	Get([]byte) ([]byte, error)
-	// GetWithGroup returns the value of key
+
+	// GetWithGroup returns the value of key from specific group.
 	GetWithGroup([]byte, pb.Group) ([]byte, error)
-	// Delete remove the key from the store
+
+	// Delete remove the key from the store.
 	Delete([]byte) error
-	// DeleteIfExist remove the key from the store
+
+	// DeleteIfExist remove the key from the store if key exists.
 	DeleteIfExist([]byte) error
+
 	// Scan scan [start,end) data
 	Scan([]byte, []byte, uint64) ([][]byte, error)
-	// ScanWithGroup Scan scan [start,end) data
+
+	// ScanWithGroup scan [start,end) data in specific group.
 	ScanWithGroup([]byte, []byte, uint64, pb.Group) ([][]byte, error)
-	// PrefixScan scan k-vs which k starts with prefix
+
+	// PrefixScan scan k-vs which k starts with prefix.
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
 	PrefixScanWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
@@ -203,7 +210,7 @@ func NewCubeDriverWithFactory(
 			 })
 			 if err != nil {
 				if err == adb.ErrNotFound {
-			 		stdLog.Printf("shard not found, %d, %d", group, shard.ID)
+			 		log.Errorf("shard not found, %d, %d", group, shard.ID)
 			 		return initAppliedIndex
 			 	}
 			 	panic(err)
@@ -568,11 +575,15 @@ func (h *driver) CreateTablet(name string, toShard uint64, tbl *aoe.TableInfo) (
 			TableInfo: info,
 		},
 	}
-	_, err = h.ExecWithGroup(req, pb.AOEGroup)
+	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
 	if err != nil {
 		return err
 	}
-	return nil
+	_, err = codec.Bytes2Uint64(rsp)
+	if err != nil {
+		err = errors.New(string(rsp))
+	}
+	return err
 }
 
 func (h *driver) DropTablet(name string, toShard uint64) (id uint64, err error) {
