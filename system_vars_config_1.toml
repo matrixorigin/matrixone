@@ -39,7 +39,7 @@
 #	Values:	[6001 6001 6010]
 #	Comment:	port
 #	UpdateMode:	dynamic
-	port = 6001
+	port = 6002
 			
 #	Name:	host
 #	Scope:	[global]
@@ -229,7 +229,7 @@
 #	Values:	[0 0 10]
 #	Comment:	the Node ID of the cube
 #	UpdateMode:	dynamic
-	nodeID = 0
+	nodeID = 1
 			
 #	Name:	cubeDir
 #	Scope:	[global]
@@ -249,7 +249,7 @@
 #	Values:	[10000 10000 10010]
 #	Comment:	the port of raft address of the cube
 #	UpdateMode:	dynamic
-	raftAddrPort = 10000
+	raftAddrPort = 10001
 			
 #	Name:	clientAddrPort
 #	Scope:	[global]
@@ -259,7 +259,7 @@
 #	Values:	[20000 20000 20010]
 #	Comment:	the port of client address of the cube
 #	UpdateMode:	dynamic
-	clientAddrPort = 20000
+	clientAddrPort = 20001
 			
 #	Name:	prophetRPCAddrPort
 #	Scope:	[global]
@@ -269,7 +269,7 @@
 #	Values:	[30000 30000 30010]
 #	Comment:	the port of RPC address of prophet of the cube
 #	UpdateMode:	dynamic
-	prophetRPCAddrPort = 30000
+	prophetRPCAddrPort = 30001
 			
 #	Name:	prophetClientUrlPort
 #	Scope:	[global]
@@ -279,7 +279,7 @@
 #	Values:	[40000 40000 40010]
 #	Comment:	the port of client's url of prophet of the cube
 #	UpdateMode:	dynamic
-	prophetClientUrlPort = 40000
+	prophetClientUrlPort = 40001
 			
 #	Name:	prophetPeerUrlPort
 #	Scope:	[global]
@@ -289,7 +289,7 @@
 #	Values:	[50000 50000 50010]
 #	Comment:	the port of peer's url of prophet of the cube
 #	UpdateMode:	dynamic
-	prophetPeerUrlPort = 50000
+	prophetPeerUrlPort = 50001
 			
 #	Name:	prophetEmbedEtcdJoinAddr
 #	Scope:	[global]

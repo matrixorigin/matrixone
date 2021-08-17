@@ -62,10 +62,10 @@ name = "port"
 scope = ["global"]
 access = ["file"]
 type = "int64"
-domain-type = "set"
-values = ["6001"]
+domain-type = "range"
+values = ["6001", "6001", "6010"]
 comment = "port"
-update-mode = "fix"
+update-mode = "dynamic"
 
 [[parameter]]
 name = "host"
@@ -75,7 +75,7 @@ type = "string"
 domain-type = "set"
 values = ["localhost","127.0.0.1","0.0.0.0"]
 comment = "listening ip"
-update-mode = "fix"
+update-mode = "dynamic"
 
 [[parameter]]
 name = "sendRow"
@@ -245,4 +245,84 @@ type = "bool"
 domain-type = "set"
 values = ["true"]
 comment = "record the time elapsed of executing sql request"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "nodeID"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["0", "0", "10"]
+comment = "the Node ID of the cube"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "cubeDir"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["./cube"]
+comment = "the root direction of the cube"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "raftAddrPort"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["10000", "10000", "10010"]
+comment = "the port of raft address of the cube"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "clientAddrPort"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["20000", "20000", "20010"]
+comment = "the port of client address of the cube"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "prophetRPCAddrPort"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["30000", "30000", "30010"]
+comment = "the port of RPC address of prophet of the cube"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "prophetClientUrlPort"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["40000", "40000", "40010"]
+comment = "the port of client's url of prophet of the cube"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "prophetPeerUrlPort"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["50000", "50000", "50010"]
+comment = "the port of peer's url of prophet of the cube"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "prophetEmbedEtcdJoinAddr"
+scope = ["global"]
+access = ["file"]
+type = "string"
+domain-type = "set"
+values = ["http://localhost:40000", "http://127.0.0.1:40000"]
+comment = "the join address of prophet of the cube"
 update-mode = "dynamic"
