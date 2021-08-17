@@ -24,9 +24,9 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		}
 	}()
 	opts.FillDefaults(dirname)
-	metaReplayHandle := NewMetaHandle(dirname)
+	replayHandle := NewReplayHandle(dirname)
 
-	opts.Meta.Info = metaReplayHandle.RebuildInfo(&opts.Mu, opts.Meta.Conf)
+	opts.Meta.Info = replayHandle.RebuildInfo(&opts.Mu, opts.Meta.Conf)
 
 	// TODO: refactor needed
 	dio.WRITER_FACTORY.Init(opts, dirname)
@@ -34,9 +34,9 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 
 	fsMgr := ldio.NewManager(dirname, false)
 	memtblMgr := mt.NewManager(opts)
-	indexBufMgr := bm.NewBufferManager(opts.Meta.Conf.Dir, opts.CacheCfg.IndexCapacity, opts.MemData.Updater)
-	mtBufMgr := bm.NewBufferManager(opts.Meta.Conf.Dir, opts.CacheCfg.InsertCapacity, opts.MemData.Updater)
-	sstBufMgr := bm.NewBufferManager(opts.Meta.Conf.Dir, opts.CacheCfg.DataCapacity, opts.MemData.Updater)
+	indexBufMgr := bm.NewBufferManager(opts.Meta.Conf.Dir, opts.CacheCfg.IndexCapacity)
+	mtBufMgr := bm.NewBufferManager(opts.Meta.Conf.Dir, opts.CacheCfg.InsertCapacity)
+	sstBufMgr := bm.NewBufferManager(opts.Meta.Conf.Dir, opts.CacheCfg.DataCapacity)
 
 	db = &DB{
 		Dir:         dirname,
@@ -57,11 +57,12 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
 
-	metaReplayHandle.Cleanup()
-	db.replayAndCleanData()
+	replayHandle.Cleanup()
+	db.replayData()
 
 	db.startCleaner()
 	db.startWorkers()
 	db.DBLocker, dbLocker = dbLocker, nil
+	replayHandle.ScheduleEvents(db.Opts, db.Store.DataTables)
 	return db, err
 }

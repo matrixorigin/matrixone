@@ -15,7 +15,7 @@ type Context struct {
 	Waitable bool
 }
 
-type baseEvent struct {
+type BaseEvent struct {
 	sched.BaseEvent
 	Ctx *Context
 }

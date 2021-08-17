@@ -8,6 +8,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
@@ -159,7 +160,7 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	eCtx := &meta.Context{
+	eCtx := &dbsched.Context{
 		Opts:     d.Opts,
 		Waitable: true,
 	}
@@ -177,7 +178,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	}
 	info.Name = ctx.TableName
 
-	eCtx := &meta.Context{Opts: d.Opts, Waitable: true}
+	eCtx := &dbsched.Context{Opts: d.Opts, Waitable: true}
 	e := meta.NewCreateTableEvent(eCtx, ctx, info)
 	if err = d.Opts.Scheduler.Schedule(e); err != nil {
 		return id, err
@@ -291,7 +292,7 @@ func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {
 	return id, err
 }
 
-func (d *DB) replayAndCleanData() {
+func (d *DB) replayData() {
 	err := d.Store.DataTables.Replay(d.FsMgr, d.IndexBufMgr, d.MTBufMgr, d.SSTBufMgr, d.Store.MetaInfo)
 	if err != nil {
 		panic(err)

@@ -21,7 +21,6 @@ func init() {
 func TestBase1(t *testing.T) {
 	opts := new(e.Options)
 	opts.FillDefaults(WORK_DIR)
-	opts.MemData.Updater.Start()
 	segCnt := uint64(4)
 	blkCnt := uint64(4)
 	rowCount := uint64(10)
@@ -140,10 +139,4 @@ func TestBase1(t *testing.T) {
 	t.Log(tblData.String())
 	t.Log(mtBufMgr.String())
 	t.Log(sstBufMgr.String())
-
-	opts.MemData.Updater.Stop()
-}
-
-func TestUpgrade(t *testing.T) {
-
 }

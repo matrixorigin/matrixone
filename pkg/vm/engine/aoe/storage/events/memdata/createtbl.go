@@ -8,13 +8,13 @@ import (
 )
 
 type createTableEvent struct {
-	baseEvent
+	BaseEvent
 	Collection imem.ICollection
 }
 
 func NewCreateTableEvent(ctx *Context) *createTableEvent {
 	e := &createTableEvent{}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
 		Ctx:       ctx,
 	}

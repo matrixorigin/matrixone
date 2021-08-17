@@ -8,7 +8,7 @@ import (
 )
 
 type createSegBlkEvent struct {
-	baseEvent
+	BaseEvent
 	TableData  iface.ITableData
 	BlkMeta    *md.Block
 	NewSegment bool
@@ -17,7 +17,7 @@ type createSegBlkEvent struct {
 
 func NewCreateSegBlkEvent(ctx *Context, newSeg bool, meta *md.Block, tableData iface.ITableData) *createSegBlkEvent {
 	e := &createSegBlkEvent{TableData: tableData, NewSegment: newSeg, BlkMeta: meta}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
 		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
 	}
@@ -25,13 +25,15 @@ func NewCreateSegBlkEvent(ctx *Context, newSeg bool, meta *md.Block, tableData i
 }
 
 func (e *createSegBlkEvent) Execute() error {
-	if e.NewSegment {
-		seg, err := e.TableData.RegisterSegment(e.BlkMeta.Segment)
+	var err error
+	seg := e.TableData.StrongRefSegment(e.BlkMeta.Segment.ID)
+	if seg == nil {
+		seg, err = e.TableData.RegisterSegment(e.BlkMeta.Segment)
 		if err != nil {
 			panic("should not happend")
 		}
-		seg.Unref()
 	}
+	seg.Unref()
 	blk, err := e.TableData.RegisterBlock(e.BlkMeta)
 	if err != nil {
 		panic(err)

@@ -11,7 +11,6 @@ import (
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"os"
 	"sync"
 	"testing"
@@ -33,11 +32,10 @@ func TestManager(t *testing.T) {
 	manager := NewManager(opts)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
-	flusher := w.NewOpWorker("Mock Flusher")
 	fsMgr := ldio.DefaultFsMgr
-	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity, flusher)
-	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity, flusher)
-	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity, flusher)
+	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	tableMeta := md.MockTable(nil, nil, 10)
 	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 
@@ -80,7 +78,7 @@ func TestCollection(t *testing.T) {
 	opts.Scheduler = dbsched.NewScheduler(opts, tables)
 
 	tabletInfo := md.MockTableInfo(2)
-	eCtx := &meta.Context{Opts: opts, Waitable: true}
+	eCtx := &dbsched.Context{Opts: opts, Waitable: true}
 	event := meta.NewCreateTableEvent(eCtx, dbi.TableOpCtx{TableName: tabletInfo.Name}, tabletInfo)
 	assert.NotNil(t, event)
 	opts.Scheduler.Schedule(event)
@@ -90,10 +88,9 @@ func TestCollection(t *testing.T) {
 
 	manager := NewManager(opts)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
-	flusher := w.NewOpWorker("Mock Flusher")
-	indexBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity, flusher)
-	mtBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity, flusher)
-	sstBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity, flusher)
+	indexBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity)
+	mtBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity)
+	sstBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity)
 	// tableMeta := md.MockTable(opts.Meta.Info, tbl.Schema, 10)
 	// tableMeta := md.MockTable(nil, tbl.Schema, 10)
 	tableMeta := tbl
