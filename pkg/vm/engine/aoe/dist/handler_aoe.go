@@ -31,7 +31,7 @@ func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 		TableName: customReq.Name,
 	})
 	if err != nil {
-		resp.Value = errorResp(err)
+		resp.Value = errorResp(err, "Call CreateTable Failed")
 		return 0, 0, resp
 	}
 	writtenBytes := uint64(len(req.Key) + len(customReq.TableInfo))
@@ -86,7 +86,7 @@ func (h *driver) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.GetSegmentedIdRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-	rsp, err := h.getStoreByGroup(shard.Group, req.ToShard).(*daoe.Storage).GetSegmentedId(customReq.TabletNames)
+	rsp, err := h.getStoreByGroup(shard.Group, req.ToShard).(*daoe.Storage).GetSegmentedId(codec.Uint642String(customReq.ShardId))
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500

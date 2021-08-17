@@ -104,7 +104,6 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.PrefixScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-
 	prefix := raftstore.EncodeDataKey(shard.Group, customReq.Prefix)
 	var data [][]byte
 	err := h.getStoreByGroup(shard.Group, req.ToShard).(*pebble.Storage).PrefixScan(prefix, func(key, value []byte) (bool, error) {
@@ -119,6 +118,10 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
+	}
+
+	if shard.End != nil && bytes.HasPrefix(shard.End, customReq.Prefix) {
+		data = append(data, shard.End)
 	}
 	if data != nil {
 		resp.Value, err = json.Marshal(data)
@@ -151,6 +154,9 @@ func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
+	}
+	if shard.End != nil && bytes.Compare(shard.End, customReq.End) <= 0 {
+		data = append(data, shard.End)
 	}
 	if data != nil {
 		if resp.Value, err = json.Marshal(data); err != nil {

@@ -26,12 +26,12 @@ func Mock(c *catalog.Catalog) *aoeEngine {
 
 func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 	var ni *engine.NodeInfo
-	e.catalog.Store.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+	e.catalog.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 		if ni != nil {
 			return
 		}
 		if strings.HasPrefix(store.ClientAddr, ip) {
-			stats := e.catalog.Store.RaftStore().GetRouter().GetStoreStats(store.ID)
+			stats := e.catalog.Driver.RaftStore().GetRouter().GetStoreStats(store.ID)
 			ni = &engine.NodeInfo{
 				Mcpu: len(stats.GetCpuUsages()),
 			}

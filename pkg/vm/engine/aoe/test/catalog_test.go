@@ -2,6 +2,7 @@ package test
 
 import (
 	"fmt"
+	"github.com/fagongzi/log"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
@@ -10,6 +11,8 @@ import (
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
@@ -40,20 +43,29 @@ var (
 
 func TestCatalog(t *testing.T) {
 
-	c, err := testutil.NewTestClusterStore(t, true, nil)
-
-	defer c.Stop()
-
-	time.Sleep(2 * time.Second)
-
-	require.NoError(t, err)
+	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 5
+			c.ServerConfig.ExternalServer = true
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+			return daoe.NewStorage(path)
+		}), testutil.WithTestAOEClusterUsePebble())
+	c.Start()
+	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
 	stdLog.Printf("app all started.")
-	catalog := catalog2.DefaultCatalog(c.Applications[0])
+
+	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
 	//testDBDDL(t, catalog)
 	testTableDDL(t, catalog)
 }
 
 func testTableDDL(t *testing.T, c catalog2.Catalog) {
+	//Wait shard state change
+
 	tbs, err := c.GetTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
 
@@ -94,7 +106,7 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 
-	kvs, err := c.Store.Scan(codec.String2Bytes("DeletedTableQueue"), codec.String2Bytes("DeletedTableQueue10"), 0)
+	kvs, err := c.Driver.Scan(codec.String2Bytes("DeletedTableQueue"), codec.String2Bytes("DeletedTableQueue10"), 0)
 	require.NoError(t, err)
 	for i := 0; i < len(kvs); i += 2 {
 		tbl, err := helper.DecodeTable(kvs[i+1])
@@ -114,7 +126,6 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
-	t1.Name = "t1"
 	for i := uint64(10); i < 20; i++ {
 		t1.Name = fmt.Sprintf("t%d", i)
 		tid, err := c.CreateTable(i, dbid, *t1)

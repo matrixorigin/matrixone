@@ -51,7 +51,7 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	if buf.Len() == 0 {
 		return errors.New("empty batch")
 	}
-	return r.catalog.Store.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
+	return r.catalog.Driver.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
 }
 
 func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {

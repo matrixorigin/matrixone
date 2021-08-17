@@ -134,3 +134,19 @@ func Bytes2Uint64(v []byte) (b uint64, err error) {
 	}
 	return binary.BigEndian.Uint64(v), nil
 }
+
+func Uint642String(v uint64) string {
+	var buf bytes.Buffer
+	data := pool.Get().([]byte)
+	binary.BigEndian.PutUint64(data, v)
+	buf.Write(data)
+	pool.Put(data)
+	return Bytes2String(buf.Bytes())
+}
+
+func String2Uint64(v string) (b uint64, err error) {
+	if len(String2Bytes(v)) != 8 {
+		return b, fmt.Errorf("invalid data, must 8 bytes, but %d", len(v))
+	}
+	return binary.BigEndian.Uint64(String2Bytes(v)), nil
+}

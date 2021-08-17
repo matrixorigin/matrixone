@@ -20,6 +20,16 @@ type Storage struct {
 	stats stats.Stats
 }
 
+func (s *Storage) Sync() error {
+	//TODO: implement me
+	return nil
+}
+
+func (s *Storage) RemoveShardData(shard bhmetapb.Shard, encodedStartKey, encodedEndKey []byte) error {
+	//TODO: implement me
+	return nil
+}
+
 // NewStorage returns pebble kv store on a default options
 func NewStorage(dir string) (*Storage, error) {
 	return NewStorageWithOptions(dir, &store.Options{})
@@ -66,8 +76,15 @@ func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids adb.IDS) {
 	return s.DB.GetSegmentIds(ctx)
 }
 
-func (s *Storage) GetSegmentedId(tableNames []string) (index uint64, err error) {
-	return index, err
+func (s *Storage) GetSegmentedId(prefix string) (index uint64, err error) {
+	return s.DB.GetSegmentedId(dbi.GetSegmentedIdCtx{
+		Matchers: []*dbi.StringMatcher{
+			{
+				Type:    dbi.MTPrefix,
+				Pattern: prefix,
+			},
+		},
+	})
 }
 
 func (s *Storage) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (uint64, error) {
@@ -84,11 +101,6 @@ func (s *Storage) TableIDs() (ids []uint64, err error) {
 
 func (s *Storage) TableNames() (ids []string) {
 	return s.DB.TableNames()
-}
-
-// RemovedShardData remove shard data
-func (s *Storage) RemovedShardData(shard bhmetapb.Shard, encodedStartKey, encodedEndKey []byte) error {
-	return nil
 }
 
 func (s *Storage) SplitCheck(start []byte, end []byte, size uint64) (currentSize uint64, currentKeys uint64, splitKeys [][]byte, err error) {

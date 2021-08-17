@@ -64,7 +64,7 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 		if err != nil {
 			return nil, err
 		}
-		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, memDataStorage, func(cfg *config.Config) {
+		a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, memDataStorage, func(cfg *config.Config) {
 			cfg.DataPath = fmt.Sprintf("%s/node-%d", tmpDir, i)
 			cfg.RaftAddr = fmt.Sprintf("127.0.0.1:1000%d", i)
 			cfg.ClientAddr = fmt.Sprintf("127.0.0.1:2000%d", i)
@@ -86,6 +86,10 @@ func newTestClusterStore(t *testing.T) (*testCluster, error) {
 		}, server.Cfg{
 			Addr: fmt.Sprintf("127.0.0.1:908%d", i),
 		})
+		if err != nil {
+			return nil, err
+		}
+		err = a.Start()
 		if err != nil {
 			return nil, err
 		}
