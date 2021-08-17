@@ -21,11 +21,13 @@ type Storage struct {
 }
 
 func (s *Storage) Sync() error {
-	panic("implement me")
+	//TODO: implement me
+	return nil
 }
 
 func (s *Storage) RemoveShardData(shard bhmetapb.Shard, encodedStartKey, encodedEndKey []byte) error {
-	panic("implement me")
+	//TODO: implement me
+	return nil
 }
 
 // NewStorage returns pebble kv store on a default options
@@ -99,11 +101,6 @@ func (s *Storage) TableIDs() (ids []uint64, err error) {
 
 func (s *Storage) TableNames() (ids []string) {
 	return s.DB.TableNames()
-}
-
-// RemovedShardData remove shard data
-func (s *Storage) RemovedShardData(shard bhmetapb.Shard, encodedStartKey, encodedEndKey []byte) error {
-	return nil
 }
 
 func (s *Storage) SplitCheck(start []byte, end []byte, size uint64) (currentSize uint64, currentKeys uint64, splitKeys [][]byte, err error) {
