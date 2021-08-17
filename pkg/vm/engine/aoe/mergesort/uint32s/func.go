@@ -23,7 +23,7 @@ func Sort(col *vector.Vector, idx []uint32) {
 }
 
 func Shuffle(col *vector.Vector, idx []uint32) {
-	if col.Nsp == nil {
+	if !col.Nsp.Any() {
 		shuffleBlock(col, idx)
 	} else {
 		shuffleNullableBlock(col, idx)
