@@ -27,7 +27,6 @@ type TestCluster struct {
 	AOEDBs       []*daoe.Storage
 }
 
-
 func NewTestClusterStore(t *testing.T, reCreate bool,
 	f func(path string) (*daoe.Storage, error),
 	pcis []*PDCallbackImpl, nodeCnt int) (*TestCluster, error) {
@@ -101,7 +100,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
+			a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 			if err != nil {
 				fmt.Printf("create failed with %v", err)
 			}
