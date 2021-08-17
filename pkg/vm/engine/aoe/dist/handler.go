@@ -64,7 +64,7 @@ func (h *driver) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error {
 		req.Type = raftcmdpb.CMDType_Read
 	case pb.PrefixScan:
 		msg := customReq.PrefixScan
-		req.Key = msg.Prefix
+		req.Key = msg.StartKey
 		req.Group = uint64(customReq.Group)
 		req.CustemType = uint64(pb.PrefixScan)
 		req.Type = raftcmdpb.CMDType_Read

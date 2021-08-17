@@ -1036,7 +1036,7 @@ var MySQLErrName = map[uint16]*mysql.ErrMessage{
 	ErrRegionUnavailable:         mysql.Message("Region is unavailable", nil),
 	ErrGCTooEarly:                mysql.Message("GC life time is shorter than transaction duration, transaction starts at %v, GC safe point is %v", nil),
 	ErrWriteConflict:             mysql.Message("Write conflict, txnStartTS=%d, conflictStartTS=%d, conflictCommitTS=%d, key=%s", []int{3}),
-	ErrTiKVStoreLimit:            mysql.Message("Store token is up to the limit, store id = %d", nil),
+	ErrTiKVStoreLimit:            mysql.Message("Driver token is up to the limit, store id = %d", nil),
 	ErrPrometheusAddrIsNotSet:    mysql.Message("Prometheus address is not set in PD and etcd", nil),
 	ErrTiKVStaleCommand:          mysql.Message("TiKV server reports stale command", nil),
 	ErrTiKVMaxTimestampNotSynced: mysql.Message("TiKV max timestamp is not synced", nil),

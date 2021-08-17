@@ -117,7 +117,7 @@ message GetSegmentIdsRequest {
 }
 
 message GetSegmentedIdRequest {
-  repeated string tabletNames = 1;
+  uint64 shardId = 1;
 }
 
 message TabletIDsRequest {

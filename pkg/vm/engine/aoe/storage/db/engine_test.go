@@ -245,7 +245,7 @@ func TestLogIndex(t *testing.T) {
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: dropLogIndex})
 	assert.Nil(t, err)
 	time.Sleep(time.Duration(50) * time.Millisecond)
-	// tbl, err = inst.Store.DataTables.WeakRefTable(tid)
+	// tbl, err = inst.Driver.DataTables.WeakRefTable(tid)
 	logIndex, ok = tbl.GetSegmentedIndex()
 	assert.True(t, ok)
 	assert.Equal(t, dropLogIndex, logIndex)

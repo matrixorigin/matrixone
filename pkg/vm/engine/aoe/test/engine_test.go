@@ -6,6 +6,7 @@ import (
 	"github.com/fagongzi/log"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
@@ -13,6 +14,7 @@ import (
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	"matrixone/pkg/vm/engine/aoe/engine"
@@ -29,44 +31,44 @@ const (
 )
 
 func TestAOEEngine(t *testing.T) {
-	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
-	log.SetHighlighting(false)
-	log.SetLevelByString("error")
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c, err := testutil.NewTestClusterStore(t, true, func(path string) (*daoe.Storage, error) {
-		opts := &e.Options{}
-		mdCfg := &md.Configuration{
-			Dir:              path,
-			SegmentMaxBlocks: blockCntPerSegment,
-			BlockMaxRows:     blockRows,
-		}
-		opts.CacheCfg = &e.CacheCfg{
-			IndexCapacity:  blockRows * blockCntPerSegment * 80,
-			InsertCapacity: blockRows * uint64(colCnt) * 2000,
-			DataCapacity:   blockRows * uint64(colCnt) * 2000,
-		}
-		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
-			Interval: time.Duration(1) * time.Second,
-		}
-		opts.Meta.Conf = mdCfg
-		return daoe.NewStorageWithOptions(path, opts)
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 20
+			c.ServerConfig.ExternalServer = true
+			return c
+		},
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+			opts := &e.Options{}
+			mdCfg := &md.Configuration{
+				Dir:              path,
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &e.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return daoe.NewStorageWithOptions(path, opts)
+		}), testutil.WithTestAOEClusterUsePebble(), testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("debug")))
+	c.Start()
+	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	stdLog.Printf("[QSQ]app all started.")
+
+	c.CubeDrivers[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.CubeDrivers[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
 	})
-	require.NoError(t, err)
-	defer c.Stop()
 
-	time.Sleep(2 * time.Second)
-
-	require.NoError(t, err)
-	stdLog.Printf("app all started.")
-
-	c.Applications[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
-		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.Applications[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
-	})
-
-	catalog := catalog2.DefaultCatalog(c.Applications[0])
+	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
 	aoeEngine := engine.Mock(&catalog)
 
-	err = aoeEngine.Create(0, testDBName, 0)
+	err := aoeEngine.Create(0, testDBName, 0)
 	require.NoError(t, err)
 
 	dbs := aoeEngine.Databases()
@@ -92,7 +94,16 @@ func TestAOEEngine(t *testing.T) {
 	mockTbl := md.MockTableInfo(colCnt)
 	mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, 0)
 	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
+
+	stdLog.Printf("[QSQ]sleep 10s before call create table")
+	time.Sleep(10 * time.Second)
+
 	err = db.Create(3, mockTbl.Name, defs, pdef, nil, comment)
+	if err != nil {
+		stdLog.Printf("[QSQ] %v", err)
+	} else {
+		stdLog.Printf("create table is succeeded")
+	}
 	require.NoError(t, err)
 
 	tbls = db.Relations()
@@ -113,7 +124,7 @@ func TestAOEEngine(t *testing.T) {
 	require.NoError(t, err)
 	stdLog.Printf("size of batch is  %d", buf.Len())
 
-	for i := 0; i < batchCnt; i++ {
+	for i := 0; i < blockCnt; i++ {
 		err = tb.Write(4, ibat)
 		require.NoError(t, err)
 	}
@@ -132,8 +143,9 @@ func TestAOEEngine(t *testing.T) {
 		err = db.Create(6, mockTbl.Name, defs, pdef, nil, comment)
 		//require.NoError(t, err)
 		if err != nil {
-			stdLog.Printf("create table %d failed, err is %v", i, err)
+			stdLog.Printf("[QSQ]create table %d failed, err is %v", i, err)
 		}
+		//time.Sleep(200 * time.Millisecond)
 	}
 
 	tbls = db.Relations()
