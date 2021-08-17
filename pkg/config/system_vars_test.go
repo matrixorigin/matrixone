@@ -36,7 +36,15 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 
 
 
+	if c1.Port != c2.Port {
+		return false
+	}
 
+
+
+	if c1.Host != c2.Host {
+		return false
+	}
 
 
 
@@ -142,6 +150,54 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 
 
 
+	if c1.NodeID != c2.NodeID {
+		return false
+	}
+
+
+
+	if c1.CubeDir != c2.CubeDir {
+		return false
+	}
+
+
+
+	if c1.RaftAddrPort != c2.RaftAddrPort {
+		return false
+	}
+
+
+
+	if c1.ClientAddrPort != c2.ClientAddrPort {
+		return false
+	}
+
+
+
+	if c1.ProphetRPCAddrPort != c2.ProphetRPCAddrPort {
+		return false
+	}
+
+
+
+	if c1.ProphetClientUrlPort != c2.ProphetClientUrlPort {
+		return false
+	}
+
+
+
+	if c1.ProphetPeerUrlPort != c2.ProphetPeerUrlPort {
+		return false
+	}
+
+
+
+	if c1.ProphetEmbedEtcdJoinAddr != c2.ProphetEmbedEtcdJoinAddr {
+		return false
+	}
+
+
+
 	return true
 }
 
@@ -158,9 +214,9 @@ rootpassword= ""
 
 dumpdatabase= "default"
 
+port=6001
 
-
-
+host= "localhost"
 
 sendRow= false
 
@@ -195,6 +251,22 @@ timeoutOfHeartbeat=20
 rejectWhenHeartbeatFromPDLeaderIsTimeout=false
 
 recordTimeElapsedOfSqlRequest=true
+
+nodeID=0
+
+cubeDir= "./cube"
+
+raftAddrPort=10000
+
+clientAddrPort=20000
+
+prophetRPCAddrPort=30000
+
+prophetClientUrlPort=40000
+
+prophetPeerUrlPort=50000
+
+prophetEmbedEtcdJoinAddr= "http://localhost:40000"
 		
 `
 	t1_config:=varsConfig{
@@ -211,9 +283,9 @@ Rootpassword: "" ,
 
 Dumpdatabase: "default" ,
 
+Port:6001,
 
-
-
+Host: "localhost" ,
 
 SendRow: false ,
 
@@ -248,6 +320,22 @@ TimeoutOfHeartbeat:20,
 RejectWhenHeartbeatFromPDLeaderIsTimeout:false,
 
 RecordTimeElapsedOfSqlRequest:true,
+
+NodeID:0,
+
+CubeDir: "./cube" ,
+
+RaftAddrPort:10000,
+
+ClientAddrPort:20000,
+
+ProphetRPCAddrPort:30000,
+
+ProphetClientUrlPort:40000,
+
+ProphetPeerUrlPort:50000,
+
+ProphetEmbedEtcdJoinAddr: "http://localhost:40000" ,
 	
 
 		name2updatedFlags: nil,
