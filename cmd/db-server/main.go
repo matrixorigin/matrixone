@@ -34,8 +34,8 @@ import (
 
 var (
 	catalog aoe_catalog.Catalog
-	mo   *frontend.MOServer
-	pci *frontend.PDCallbackImpl
+	mo      *frontend.MOServer
+	pci     *frontend.PDCallbackImpl
 )
 
 func createMOServer(callback *frontend.PDCallbackImpl) {
@@ -72,9 +72,9 @@ func recreateDir(dir string) (err error) {
 call the catalog service to remove the epoch
 */
 func removeEpoch(epoch uint64) {
-	_,err := catalog.RemoveDeletedTable(epoch)
+	_, err := catalog.RemoveDeletedTable(epoch)
 	if err != nil {
-		fmt.Printf("catalog remove ddl failed. error :%v \n",err)
+		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
 	}
 }
 
@@ -92,12 +92,12 @@ func main() {
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n",err)
+		fmt.Printf("error:%v\n", err)
 		return
 	}
 
 	if err := config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables); err != nil {
-		fmt.Printf("error:%v\n",err)
+		fmt.Printf("error:%v\n", err)
 		return
 	}
 
@@ -106,7 +106,7 @@ func main() {
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
 
-	if ! config.GlobalSystemVariables.GetDumpEnv() {
+	if !config.GlobalSystemVariables.GetDumpEnv() {
 		fmt.Println("Using AOE Storage Engine, 3 Cluster Nodes, 1 SQL Server.")
 		Host := config.GlobalSystemVariables.GetHost()
 		NodeId := config.GlobalSystemVariables.GetNodeID()
@@ -157,7 +157,7 @@ func main() {
 			Prophet: pConfig.Config{
 				Name:        "node" + strNodeId,
 				StorageNode: true,
-				RPCAddr:      fmt.Sprintf("%s:%d", Host, config.GlobalSystemVariables.GetProphetRPCAddrPort()),
+				RPCAddr:     fmt.Sprintf("%s:%d", Host, config.GlobalSystemVariables.GetProphetRPCAddrPort()),
 				EmbedEtcd: pConfig.EmbedEtcdConfig{
 					ClientUrls: fmt.Sprintf("http://%s:%d", Host, config.GlobalSystemVariables.GetProphetClientUrlPort()),
 					PeerUrls:   fmt.Sprintf("http://%s:%d", Host, config.GlobalSystemVariables.GetProphetPeerUrlPort()),
@@ -174,7 +174,7 @@ func main() {
 			cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
 		}
 
-		a, err := dist.NewStorageWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, cfg)
+		a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 		catalog = aoe_catalog.DefaultCatalog(a)
 		eng := aoe_engine.Mock(&catalog)
 		pci.SetRemoveEpoch(removeEpoch)
@@ -189,7 +189,7 @@ func main() {
 			proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
 			proc.Refer = make(map[string]uint64)
 		}
-		log := logger.New(os.Stderr, "rpc" + strNodeId + ": ")
+		log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
 		log.SetLevel(logger.WARN)
 		srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, log)
 		if err != nil {
@@ -203,7 +203,7 @@ func main() {
 
 		//test cluster nodes
 		config.ClusterNodes = metadata.Nodes{}
-	}else{
+	} else {
 		panic("The Official Storage Engine and Cluster Nodes are in the developing.")
 
 		//TODO:
