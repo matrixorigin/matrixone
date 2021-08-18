@@ -142,13 +142,11 @@ func (routine *Routine) handleHandshake(payload []byte) error {
 
 	if err := protocol.authenticateUser(authResponse); err != nil {
 		fail := errorMsgRefer[ER_ACCESS_DENIED_ERROR]
-		errPkt := protocol.makeErrPayload(fail.errorCode, fail.sqlStates[0], "Access denied for user")
-		_ = routine.io.WriteAndFlush(protocol.makePackets(errPkt))
+		_ = protocol.sendErrPacket(fail.errorCode, fail.sqlStates[0], "Access denied for user")
 		return err
 	}
 
-	okPkt := protocol.makeOKPayload(0, 0, 0, 0, "")
-	err := routine.io.WriteAndFlush(protocol.makePackets(okPkt))
+	err := protocol.sendOKPacket(0, 0, 0, 0, "")
 	if err != nil {
 		return err
 	}
