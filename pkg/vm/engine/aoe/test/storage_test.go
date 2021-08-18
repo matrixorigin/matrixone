@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/fagongzi/log"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,7 +67,9 @@ func TestStorage(t *testing.T) {
 			}
 			opts.Meta.Conf = mdCfg
 			return daoe.NewStorageWithOptions(path, opts)
-		}), testutil.WithTestAOEClusterUsePebble(), testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("info")))
+		}),
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("info")))
 	c.Start()
 
 	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
@@ -79,6 +82,11 @@ func TestStorage(t *testing.T) {
 	}()
 
 	driver := c.CubeDrivers[0]
+
+	driver.RaftStore().GetRouter().ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
+		stdLog.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
+		return true
+	})
 
 	t0 := time.Now()
 	//Set Test

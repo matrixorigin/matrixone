@@ -301,3 +301,13 @@
 #	UpdateMode:	dynamic
 	prophetEmbedEtcdJoinAddr = "http://localhost:40000"
 			
+#	Name:	maxReplicas
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	range
+#	Values:	[1 1 1]
+#	Comment:	the number of replicas for each resource
+#	UpdateMode:	dynamic
+	maxReplicas = 1
+			

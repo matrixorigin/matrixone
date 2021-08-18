@@ -59,7 +59,6 @@ func TestAOEEngine(t *testing.T) {
 		}), testutil.WithTestAOEClusterUsePebble(), testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("debug")))
 	c.Start()
 	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
-	stdLog.Printf("[QSQ]app all started.")
 
 	c.CubeDrivers[0].RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 		stdLog.Printf("shard id is %d, leader address is %s, MCpu is %d", shard.ID, store.ClientAddr, len(c.CubeDrivers[0].RaftStore().GetRouter().GetStoreStats(store.ID).GetCpuUsages()))
@@ -95,12 +94,11 @@ func TestAOEEngine(t *testing.T) {
 	mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, 0)
 	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
 
-	stdLog.Printf("[QSQ]sleep 10s before call create table")
 	time.Sleep(10 * time.Second)
 
 	err = db.Create(3, mockTbl.Name, defs, pdef, nil, comment)
 	if err != nil {
-		stdLog.Printf("[QSQ] %v", err)
+		stdLog.Printf("create table failed, %v", err)
 	} else {
 		stdLog.Printf("create table is succeeded")
 	}
@@ -143,7 +141,7 @@ func TestAOEEngine(t *testing.T) {
 		err = db.Create(6, mockTbl.Name, defs, pdef, nil, comment)
 		//require.NoError(t, err)
 		if err != nil {
-			stdLog.Printf("[QSQ]create table %d failed, err is %v", i, err)
+			stdLog.Printf("create table %d failed, err is %v", i, err)
 		}
 		//time.Sleep(200 * time.Millisecond)
 	}

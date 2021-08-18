@@ -326,3 +326,13 @@ domain-type = "set"
 values = ["http://localhost:40000", "http://127.0.0.1:40000"]
 comment = "the join address of prophet of the cube"
 update-mode = "dynamic"
+
+[[parameter]]
+name = "maxReplicas"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["1", "1", "1"]
+comment = "the number of replicas for each resource"
+update-mode = "dynamic"

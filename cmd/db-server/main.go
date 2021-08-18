@@ -1,15 +1,19 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"github.com/cockroachdb/pebble"
 	"github.com/fagongzi/log"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage/pebble"
+	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
+	"github.com/matrixorigin/matrixcube/vfs"
 	stdLog "log"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
@@ -21,6 +25,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	dconfig "matrixone/pkg/vm/engine/aoe/dist/config"
+	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
@@ -86,7 +91,7 @@ func main() {
 	flag.Parse()
 
 	//close cube print info
-	log.SetLevelByString("error")
+	log.SetLevelByString("info")
 	log.SetHighlighting(false)
 	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
@@ -128,15 +133,18 @@ func main() {
 			return
 		}
 
-		metaStorage, err := pebble.NewStorage(targetDir + "/pebble/meta")
-		pebbleDataStorage, err := pebble.NewStorage(targetDir + "/pebble/data")
+		metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
+			FS: vfs.NewPebbleFS(vfs.Default),
+		})
+		pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
+			FS: vfs.NewPebbleFS(vfs.Default),
+		})
 		var aoeDataStorage *daoe.Storage
 
 		aoeDataStorage, err = daoe.NewStorage(targetDir + "/aoe")
 
 		cfg := dconfig.Config{}
 		cfg.ServerConfig = server.Cfg{
-			//Addr: fmt.Sprintf("127.0.0.1:8092"),
 			ExternalServer: true,
 		}
 		cfg.ClusterConfig = dconfig.ClusterConfig{
@@ -165,9 +173,13 @@ func main() {
 				Schedule: pConfig.ScheduleConfig{
 					EnableJointConsensus: true,
 				},
+				Replication: pConfig.ReplicationConfig{
+					MaxReplicas: uint64(config.GlobalSystemVariables.GetMaxReplicas()),
+				},
 			},
 		}
 
+		fmt.Printf("QQQ,maxReplicas is %d\n", config.GlobalSystemVariables.GetMaxReplicas())
 		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
 
 		if cfg.CubeConfig.Prophet.EmbedEtcd.ClientUrls != config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr() {
@@ -176,13 +188,11 @@ func main() {
 
 		a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 		if err != nil {
-			fmt.Println(err)
-			return
+			panic(err)
 		}
 		err = a.Start()
 		if err != nil {
-			fmt.Println(err)
-			return
+			panic(err)
 		}
 		catalog = aoe_catalog.DefaultCatalog(a)
 		eng := aoe_engine.Mock(&catalog)
@@ -206,6 +216,13 @@ func main() {
 		}
 		hp := handler.New(eng, proc)
 		srv.Register(hp.Process)
+
+		err = waitClusterStartup(a, 10*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
+
+		if err != nil {
+			panic(err)
+		}
+
 		go srv.Run()
 		//test storage engine
 		config.StorageEngine = eng
@@ -232,4 +249,33 @@ func main() {
 	select {}
 	cleanup()
 	os.Exit(0)
+}
+
+func waitClusterStartup(driver dist.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
+	timeoutC := time.After(timeout)
+	for {
+		select {
+		case <-timeoutC:
+			return errors.New("wait for available shard timeout")
+		default:
+			router := driver.RaftStore().GetRouter()
+			if router != nil {
+				nodeCnt := 0
+				shardCnt := 0
+				router.ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
+					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
+					shardCnt++
+					if len(shard.Peers) > nodeCnt {
+						nodeCnt = len(shard.Peers)
+					}
+					return true
+				})
+				if nodeCnt >= maxReplicas && shardCnt >= minimalAvailableShard {
+					fmt.Printf("ClusterStatus is ok now")
+					return nil
+				}
+			}
+			time.Sleep(time.Millisecond * 10)
+		}
+	}
 }

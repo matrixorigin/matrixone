@@ -171,14 +171,6 @@ func NewCubeDriverWithFactory(
 		initialGroups = append(initialGroups, bhmetapb.Shard{
 			Group: uint64(pb.KVGroup),
 		})
-		/*for i := uint64(0); i < c.ClusterConfig.PreAllocatedGroupNum; i++ {
-			initialGroups = append(initialGroups, bhmetapb.Shard{
-				Group:        uint64(pb.AOEGroup),
-				Start:        codec.Uint642Bytes(i),
-				End:          codec.Uint642Bytes(i + 1),
-				DisableSplit: true,
-			})
-		}*/
 		return initialGroups
 	}
 
