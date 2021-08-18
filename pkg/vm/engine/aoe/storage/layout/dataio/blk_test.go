@@ -225,6 +225,7 @@ func TestTransientBlock(t *testing.T) {
 	rowCount, blkCount := uint64(10), uint64(4)
 	info := md.MockInfo(mu, rowCount, blkCount)
 	info.Conf.Dir = "/tmp/tblktest"
+	os.RemoveAll(info.Conf.Dir)
 	schema := md.MockSchema(2)
 	tbl := md.MockTable(info, schema, 1)
 
@@ -234,14 +235,21 @@ func TestTransientBlock(t *testing.T) {
 	segFile := NewUnsortedSegmentFile(info.Conf.Dir, *blkMeta.Segment.AsCommonID())
 
 	tblk := NewTBlockFile(segFile, *blkMeta.AsCommonID())
-	defer tblk.Unref()
+	defer tblk.Destory()
 	t.Log(tblk.NextVersion())
 
 	rows := uint64(2)
-	bat := chunk.MockBatch(schema.Types(), rows)
+	bat1 := chunk.MockBatch(schema.Types(), rows)
+	bat2 := chunk.MockBatch(schema.Types(), rowCount)
 
-	err = tblk.Write(bat.Vecs, blkMeta, blkMeta.Segment.Table.Conf.Dir)
+	ok := tblk.PreSync(uint32(bat1.Vecs[0].Length()))
+	assert.True(t, ok)
+	err = tblk.Sync(bat1.Vecs, blkMeta, blkMeta.Segment.Table.Conf.Dir)
 	assert.Nil(t, err)
-
-	// tblk.CommitFile()
+	ok = tblk.PreSync(uint32(bat2.Vecs[0].Length()))
+	assert.True(t, ok)
+	err = tblk.Sync(bat2.Vecs, blkMeta, blkMeta.Segment.Table.Conf.Dir)
+	assert.Nil(t, err)
+	ok = tblk.PreSync(uint32(bat2.Vecs[0].Length()))
+	assert.False(t, ok)
 }

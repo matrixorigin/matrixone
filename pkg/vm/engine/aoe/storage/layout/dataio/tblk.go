@@ -16,6 +16,7 @@ import (
 )
 
 type versionBlockFile struct {
+	common.RefHelper
 	*BlockFile
 	version uint32
 }
@@ -26,7 +27,14 @@ func newVersionBlockFile(version uint32, host base.ISegmentFile, id common.ID) *
 		version:   version,
 		BlockFile: NewBlockFile(host, id, getter.NameFactory),
 	}
+	vbf.OnZeroCB = vbf.close
+	vbf.Ref()
 	return vbf
+}
+
+func (f *versionBlockFile) close() {
+	f.Close()
+	f.Destory()
 }
 
 type tblkFileGetter struct {
@@ -56,12 +64,12 @@ func (getter *tblkFileGetter) Getter(dir string, meta *md.Block) (*os.File, erro
 }
 
 type transientBlockFile struct {
-	common.RefHelper
-	host   base.ISegmentFile
-	id     common.ID
-	maxver uint32
-	files  []*versionBlockFile
-	mu     sync.RWMutex
+	host    base.ISegmentFile
+	id      common.ID
+	maxver  uint32
+	files   []*versionBlockFile
+	currpos uint32
+	mu      sync.RWMutex
 }
 
 func NewTBlockFile(host base.ISegmentFile, id common.ID) *transientBlockFile {
@@ -70,8 +78,6 @@ func NewTBlockFile(host base.ISegmentFile, id common.ID) *transientBlockFile {
 		host: host,
 	}
 	tblk.files = make([]*versionBlockFile, 0)
-	tblk.OnZeroCB = tblk.close
-	tblk.Ref()
 	return tblk
 }
 
@@ -79,7 +85,17 @@ func (f *transientBlockFile) NextVersion() uint32 {
 	return atomic.AddUint32(&f.maxver, uint32(1)) - 1
 }
 
-func (f *transientBlockFile) Write(data []*vector.Vector, meta *md.Block, dir string) error {
+func (f *transientBlockFile) PreSync(pos uint32) bool {
+	f.mu.RLock()
+	if pos < f.currpos {
+		panic(fmt.Sprintf("PreSync %d but lastpos is %d", pos, f.currpos))
+	}
+	ret := pos > f.currpos
+	f.mu.RUnlock()
+	return ret
+}
+
+func (f *transientBlockFile) Sync(data []*vector.Vector, meta *md.Block, dir string) error {
 	writer := NewBlockWriter(data, meta, dir)
 	version := f.NextVersion()
 	getter := tblkFileGetter{version: version}
@@ -94,45 +110,27 @@ func (f *transientBlockFile) Write(data []*vector.Vector, meta *md.Block, dir st
 		return err
 	}
 	bf := newVersionBlockFile(version, f.host, f.id)
-	f.commit(bf)
+	f.commit(bf, uint32(data[0].Length()))
 	return nil
 }
 
-func (f *transientBlockFile) commit(bf *versionBlockFile) {
+func (f *transientBlockFile) commit(bf *versionBlockFile, pos uint32) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.files = append(f.files, bf)
-}
-
-func (f *transientBlockFile) CleanStales() {
-	f.mu.Lock()
+	f.currpos = pos
 	if len(f.files) <= 1 {
 		f.mu.Unlock()
 		return
 	}
 	files := f.files[:len(f.files)-1]
-	f.files = f.files[len(f.files)-2:]
+	f.files = f.files[len(f.files)-1:]
 	f.mu.Unlock()
 	for _, file := range files {
-		file.Close()
-		file.Destory()
+		file.Unref()
 	}
-}
-
-func (f *transientBlockFile) close() {
-	err := f.Close()
-	if err != nil {
-		panic(err)
-	}
-	f.Destory()
 }
 
 func (f *transientBlockFile) Close() error {
-	for _, file := range f.files {
-		if err := file.Close(); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -143,21 +141,25 @@ func (f *transientBlockFile) GetIndicesMeta() *base.IndexMeta {
 func (f *transientBlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	f.mu.RLock()
 	file := f.files[len(f.files)-1]
+	file.Ref()
 	f.mu.RUnlock()
 	file.ReadPoint(ptr, buf)
+	file.Unref()
 }
 
 func (f *transientBlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	f.mu.RLock()
 	file := f.files[len(f.files)-1]
+	file.Ref()
 	f.mu.RUnlock()
 	file.ReadPart(colIdx, id, buf)
+	file.Unref()
 }
 
 func (f *transientBlockFile) PartSize(colIdx uint64, id common.ID, isOrigin bool) int64 {
 	f.mu.RLock()
+	defer f.mu.RUnlock()
 	file := f.files[len(f.files)-1]
-	f.mu.RUnlock()
 	return file.PartSize(colIdx, id, isOrigin)
 }
 
@@ -167,11 +169,7 @@ func (f *transientBlockFile) DataCompressAlgo(common.ID) int {
 
 func (f *transientBlockFile) Destory() {
 	for _, file := range f.files {
-		name := file.Name()
-		log.Infof(" %s | TransientBlockFile | Destorying", name)
-		if err := os.Remove(name); err != nil {
-			panic(err)
-		}
+		file.Unref()
 	}
 }
 
