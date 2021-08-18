@@ -2,6 +2,8 @@ package testutil
 
 import (
 	"fmt"
+	"github.com/cockroachdb/pebble"
+	"github.com/matrixorigin/matrixcube/vfs"
 	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
@@ -14,7 +16,7 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage"
 	"github.com/matrixorigin/matrixcube/storage/mem"
-	"github.com/matrixorigin/matrixcube/storage/pebble"
+	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -80,20 +82,24 @@ func (opts *testAOEClusterOptions) adjust() {
 	if opts.metaFactoryFunc == nil {
 		opts.metaFactoryFunc = func(path string) (storage.MetadataStorage, error) {
 			if opts.usePebble {
-				return pebble.NewStorage(path)
+				return cPebble.NewStorage(path, &pebble.Options{
+					FS: vfs.NewPebbleFS(vfs.Default),
+				})
 			}
 
-			return mem.NewStorage(), nil
+			return mem.NewStorage(vfs.Default), nil
 		}
 	}
 
 	if opts.kvDataFactoryFunc == nil {
 		opts.kvDataFactoryFunc = func(path string) (storage.DataStorage, error) {
 			if opts.usePebble {
-				return pebble.NewStorage(path)
+				return cPebble.NewStorage(path, &pebble.Options{
+					FS: vfs.NewPebbleFS(vfs.Default),
+				})
 			}
 
-			return mem.NewStorage(), nil
+			return mem.NewStorage(vfs.Default), nil
 		}
 	}
 
@@ -157,6 +163,7 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 		cfg.Raft.MaxEntryBytes = 300 * 1024 * 1024
 		//cfg.Replication.ShardCapacityBytes = 100
 		//cfg.Replication.ShardSplitCheckBytes = 80
+		cfg.Prophet.Replication.MaxReplicas = 1
 
 		//ppu := client.NewPDCallbackParameterUnit(5, 20, 20, 20)
 		//pci := client.NewPDCallbackImpl(ppu)

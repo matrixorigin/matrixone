@@ -2,11 +2,13 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/cockroachdb/pebble"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
-	"github.com/matrixorigin/matrixcube/storage/pebble"
+	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
+	"github.com/matrixorigin/matrixcube/vfs"
 	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
@@ -39,11 +41,15 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 	c := &TestCluster{T: t}
 	var wg sync.WaitGroup
 	for i := 0; i < nodeCnt; i++ {
-		metaStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i))
+		metaStorage, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i), &pebble.Options{
+			FS: vfs.NewPebbleFS(vfs.Default),
+		})
 		if err != nil {
 			return nil, err
 		}
-		pebbleDataStorage, err := pebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i))
+		pebbleDataStorage, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), &pebble.Options{
+			FS: vfs.NewPebbleFS(vfs.Default),
+		})
 		var aoeDataStorage *daoe.Storage
 		if err != nil {
 			return nil, err
