@@ -716,7 +716,7 @@ func (mp *MysqlProtocol) handleClientResponse320(resp320 response320) error {
 //the server makes a AuthSwitchRequest that asks the client to authenticate the data with new method
 func (mp *MysqlProtocol) makeAuthSwitchRequestPayload(authMethodName string) []byte {
 	var data = make([]byte, 1+len(authMethodName)+1+len(mp.salt)+1)
-	pos := mp.io.WriteUint8(data, 0, 0xFE)
+	pos := mp.io.WriteUint8(data, 0, defines.EOFHeader)
 	pos = mp.writeStringNUL(data, pos, authMethodName)
 	pos = mp.writeCountOfBytes(data, pos, mp.salt)
 	pos = mp.io.WriteUint8(data, pos, 0)
@@ -729,7 +729,7 @@ func (mp *MysqlProtocol) makeAuthSwitchRequestPayload(authMethodName string) []b
 func (mp *MysqlProtocol) negotiateAuthenticationMethod() ([]byte, error) {
 	var err error
 	aswPkt := mp.makeAuthSwitchRequestPayload(AuthNativePassword)
-	err = mp.routine.io.WriteAndFlush(mp.makePackets(aswPkt))
+	err = mp.writePackets(aswPkt)
 	if err != nil {
 		return nil, err
 	}
@@ -745,7 +745,7 @@ func (mp *MysqlProtocol) negotiateAuthenticationMethod() ([]byte, error) {
 func (mp *MysqlProtocol) makeOKPayload(affectedRows, lastInsertId uint64, statusFlags, warnings uint16, message string) []byte {
 	var data = make([]byte, 128)
 	var pos = 0
-	pos = mp.io.WriteUint8(data, pos, 0)
+	pos = mp.io.WriteUint8(data, pos, defines.OKHeader)
 	pos = mp.writeIntLenEnc(data, pos, affectedRows)
 	pos = mp.writeIntLenEnc(data, pos, lastInsertId)
 	if (mp.capability & CLIENT_PROTOCOL_41) != 0 {
@@ -772,15 +772,15 @@ func (mp *MysqlProtocol) makeOKPayload(affectedRows, lastInsertId uint64, status
 }
 
 //send OK packet to the client
-func (mp *MysqlProtocol) makeOKPacket(affectedRows, lastInsertId uint64, status, warnings uint16, message string) []byte {
+func (mp *MysqlProtocol) sendOKPacket(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
 	okPkt := mp.makeOKPayload(affectedRows, lastInsertId, status, warnings, "")
-	return mp.makePackets(okPkt)
+	return mp.writePackets(okPkt)
 }
 
 //make Err packet
 func (mp *MysqlProtocol) makeErrPayload(errorCode uint16, sqlState, errorMessage string) []byte {
 	var data = make([]byte, 9+len(errorMessage))
-	pos := mp.io.WriteUint8(data, 0, 0xff)
+	pos := mp.io.WriteUint8(data, 0, defines.ErrHeader)
 	pos = mp.io.WriteUint16(data, pos, errorCode)
 	if mp.capability&CLIENT_PROTOCOL_41 != 0 {
 		pos = mp.io.WriteUint8(data, pos, '#')
@@ -806,14 +806,14 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 	SQLSTATE value: This value is a five-character string (for example, '42S02'). SQLSTATE values are taken from ANSI SQL and ODBC and are more standardized than the numeric error codes.
 	Message string: This string provides a textual description of the error.
 */
-func (mp *MysqlProtocol) makeErrPacket(errorCode uint16, sqlState, errorMessage string) []byte {
+func (mp *MysqlProtocol) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
-	return mp.makePackets(errPkt)
+	return mp.writePackets(errPkt)
 }
 
 func (mp *MysqlProtocol) makeEOFPayload(warnings, status uint16) []byte {
 	data := make([]byte, 10)
-	pos := mp.io.WriteUint8(data, 0, 0xFE)
+	pos := mp.io.WriteUint8(data, 0, defines.EOFHeader)
 	if mp.capability&CLIENT_PROTOCOL_41 != 0 {
 		pos = mp.io.WriteUint16(data, pos, warnings)
 		pos = mp.io.WriteUint16(data, pos, status)
@@ -821,32 +821,32 @@ func (mp *MysqlProtocol) makeEOFPayload(warnings, status uint16) []byte {
 	return data[:pos]
 }
 
-func (mp *MysqlProtocol) makeEOFPacket(warnings, status uint16) []byte {
+func (mp *MysqlProtocol) sendEOFPacket(warnings, status uint16) error {
 	data := mp.makeEOFPayload(warnings, status)
-	return mp.makePackets(data)
+	return mp.writePackets(data)
 }
 
-func (mp *MysqlProtocol) MakeEOFPacketIf(warnings, status uint16) []byte {
+func (mp *MysqlProtocol) SendEOFPacketIf(warnings, status uint16) error {
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is not set, EOF_Packet
 	if mp.capability&CLIENT_DEPRECATE_EOF == 0 {
-		return mp.makeEOFPacket(warnings, status)
+		return mp.sendEOFPacket(warnings, status)
 	}
 	return nil
 }
 
 //the OK or EOF packet
 //thread safe
-func (mp *MysqlProtocol) MakeEOFOrOkPacket(warnings, status uint16) []byte {
+func (mp *MysqlProtocol) sendEOFOrOkPacket(warnings, status uint16) error {
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
-		return mp.makeOKPacket(0, 0, status, 0, "")
+		return mp.sendOKPacket(0, 0, status, 0, "")
 	} else {
-		return mp.makeEOFPacket(warnings, status)
+		return mp.sendEOFPacket(warnings, status)
 	}
 }
 
 //make the column information with the format of column definition41
-func (mp *MysqlProtocol) makeColumnDefinition41Payload(column *defines.MysqlColumn, cmd int) []byte {
+func (mp *MysqlProtocol) makeColumnDefinition41Payload(column *MysqlColumn, cmd int) []byte {
 	space := 8*9 + //lenenc bytes of 8 fields
 		21 + //fixed-length fields
 		3 + // catalog "def"
@@ -907,11 +907,11 @@ func (mp *MysqlProtocol) makeColumnDefinition41Payload(column *defines.MysqlColu
 	return data[:pos]
 }
 
-// MakeColumnDefinitionPacket the server send the column definition to the client
-func (mp *MysqlProtocol) MakeColumnDefinitionPacket(column defines.Column, cmd int) ([]byte, error) {
-	mysqlColumn, ok := column.(*defines.MysqlColumn)
+// SendColumnDefinitionPacket the server send the column definition to the client
+func (mp *MysqlProtocol) SendColumnDefinitionPacket(column Column, cmd int) error {
+	mysqlColumn, ok := column.(*MysqlColumn)
 	if !ok {
-		return nil, fmt.Errorf("sendColumn need MysqlColumn")
+		return fmt.Errorf("sendColumn need MysqlColumn")
 	}
 
 	var data []byte
@@ -921,32 +921,27 @@ func (mp *MysqlProtocol) MakeColumnDefinitionPacket(column defines.Column, cmd i
 		//TODO: ColumnDefinition320
 	}
 
-	return mp.makePackets(data), nil
+	return mp.writePackets(data)
 }
 
-// MakeColumnCountPacket makes the column count packet
-func (mp *MysqlProtocol) MakeColumnCountPacket(count uint64) []byte {
+// SendColumnCountPacket makes the column count packet
+func (mp *MysqlProtocol) SendColumnCountPacket(count uint64) error {
 	data := make([]byte, 20)
 	pos := mp.writeIntLenEnc(data, 0, count)
 
-	return mp.makePackets(data[:pos])
+	return mp.writePackets(data[:pos])
 }
 
-func (mp *MysqlProtocol) sendColumns(mrs *defines.MysqlResultSet, cmd int, warnings, status uint16) error {
+func (mp *MysqlProtocol) sendColumns(mrs *MysqlResultSet, cmd int, warnings, status uint16) error {
 	//column_count * Protocol::ColumnDefinition packets
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-		var col defines.Column
+		var col Column
 		col, err := mrs.GetColumn(i)
 		if err != nil {
 			return err
 		}
 
-		packet, err := mp.MakeColumnDefinitionPacket(col, cmd)
-		if err != nil {
-			return err
-		}
-
-		err = mp.routine.io.WriteAndFlush(packet)
+		err = mp.SendColumnDefinitionPacket(col, cmd)
 		if err != nil {
 			return err
 		}
@@ -954,7 +949,7 @@ func (mp *MysqlProtocol) sendColumns(mrs *defines.MysqlResultSet, cmd int, warni
 
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is not set, EOF_Packet
 	if mp.capability&CLIENT_DEPRECATE_EOF == 0 {
-		err := mp.routine.io.WriteAndFlush(mp.makeEOFPacket(warnings, status))
+		err := mp.sendEOFPacket(warnings, status)
 		if err != nil {
 			return err
 		}
@@ -963,14 +958,14 @@ func (mp *MysqlProtocol) sendColumns(mrs *defines.MysqlResultSet, cmd int, warni
 }
 
 //the server convert every row of the result set into the format that mysql protocol needs
-func (mp *MysqlProtocol) makeResultSetTextRow(mrs *defines.MysqlResultSet, r uint64) ([]byte, error) {
+func (mp *MysqlProtocol) makeResultSetTextRow(mrs *MysqlResultSet, r uint64) ([]byte, error) {
 	var data []byte
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
 		column, err := mrs.GetColumn(i)
 		if err != nil {
 			return nil, err
 		}
-		mysqlColumn, ok := column.(*defines.MysqlColumn)
+		mysqlColumn, ok := column.(*MysqlColumn)
 		if !ok {
 			return nil, fmt.Errorf("sendColumn need MysqlColumn")
 		}
@@ -1043,7 +1038,7 @@ func (mp *MysqlProtocol) makeResultSetTextRow(mrs *defines.MysqlResultSet, r uin
 
 //the server send group row of the result set as an independent packet
 //thread safe
-func (mp *MysqlProtocol) SendResultSetTextBatchRow(mrs *defines.MysqlResultSet, cnt uint64) error {
+func (mp *MysqlProtocol) SendResultSetTextBatchRow(mrs *MysqlResultSet, cnt uint64) error {
 	if cnt == 0 {
 		return nil
 	}
@@ -1062,7 +1057,7 @@ func (mp *MysqlProtocol) SendResultSetTextBatchRow(mrs *defines.MysqlResultSet, 
 
 //the server send every row of the result set as an independent packet
 //thread safe
-func (mp *MysqlProtocol) SendResultSetTextRow(mrs *defines.MysqlResultSet, r uint64) error {
+func (mp *MysqlProtocol) SendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
 	mp.GetLock().Lock()
 	defer mp.GetLock().Unlock()
 
@@ -1070,19 +1065,19 @@ func (mp *MysqlProtocol) SendResultSetTextRow(mrs *defines.MysqlResultSet, r uin
 }
 
 //the server send every row of the result set as an independent packet
-func (mp *MysqlProtocol) sendResultSetTextRow(mrs *defines.MysqlResultSet, r uint64) error {
+func (mp *MysqlProtocol) sendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
 	var data []byte
 	var err error
 	if data, err = mp.makeResultSetTextRow(mrs, r); err != nil {
 		//ERR_Packet in case of error
-		err1 := mp.routine.io.WriteAndFlush(mp.makeErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error()))
+		err1 := mp.sendErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
 		if err1 != nil {
 			return err1
 		}
 		return err
 	}
 
-	err = mp.routine.io.WriteAndFlush(mp.makePackets(data))
+	err = mp.writePackets(data)
 	if err != nil {
 		return fmt.Errorf("send result set text row failed. error: %v", err)
 	}
@@ -1091,14 +1086,14 @@ func (mp *MysqlProtocol) sendResultSetTextRow(mrs *defines.MysqlResultSet, r uin
 
 //the server send the result set of execution the client
 //the routine follows the article: https://dev.mysql.com/doc/internals/en/com-query-response.html
-func (mp *MysqlProtocol) sendResultSet(set defines.ResultSet, cmd int, warnings, status uint16) error {
-	mysqlRS, ok := set.(*defines.MysqlResultSet)
+func (mp *MysqlProtocol) sendResultSet(set ResultSet, cmd int, warnings, status uint16) error {
+	mysqlRS, ok := set.(*MysqlResultSet)
 	if !ok {
 		return fmt.Errorf("sendResultSet need MysqlResultSet")
 	}
 
 	//A packet containing a Protocol::LengthEncodedInteger column_count
-	err := mp.routine.io.WriteAndFlush(mp.MakeColumnCountPacket(mysqlRS.GetColumnCount()))
+	err := mp.SendColumnCountPacket(mysqlRS.GetColumnCount())
 	if err != nil {
 		return err
 	}
@@ -1116,12 +1111,12 @@ func (mp *MysqlProtocol) sendResultSet(set defines.ResultSet, cmd int, warnings,
 
 	//If the CLIENT_DEPRECATE_EOF client capabilities flag is set, OK_Packet; else EOF_Packet.
 	if mp.capability&CLIENT_DEPRECATE_EOF != 0 {
-		err := mp.routine.io.WriteAndFlush(mp.makeOKPacket(0, 0, status, 0, ""))
+		err := mp.sendOKPacket(0, 0, status, 0, "")
 		if err != nil {
 			return err
 		}
 	} else {
-		err := mp.routine.io.WriteAndFlush(mp.makeEOFPacket(warnings, status))
+		err := mp.sendEOFPacket(warnings, status)
 		if err != nil {
 			return err
 		}
@@ -1131,12 +1126,12 @@ func (mp *MysqlProtocol) sendResultSet(set defines.ResultSet, cmd int, warnings,
 }
 
 //the server sends the payload to the client
-func (mp *MysqlProtocol) makePackets(data []byte) []byte {
-	var packets []byte
+func (mp *MysqlProtocol) writePackets(payload []byte) error {
 	var i = 0
-	var length = len(data)
+	var length = len(payload)
 	var curLen = 0
 	for ; i < length; i += curLen {
+		var packet []byte
 		curLen = Min(int(MaxPayloadSize), length-i)
 
 		//make mysql client protocol header
@@ -1148,17 +1143,13 @@ func (mp *MysqlProtocol) makePackets(data []byte) []byte {
 		//int<1> sequence id
 		mp.io.WriteUint8(header[:], 3, mp.sequenceId)
 
-		packets = append(packets, header[:]...)
-		//send header
-		//if err := mp.io.WritePacket(header[:]); err != nil {
-		//	return fmt.Errorf("write header failed. error:%v", err)
-		//}
-
-		//send payload
-		packets = append(packets, data...)
-		//if err := mp.io.WritePacket(data[i : i+curLen]); err != nil {
-		//	return fmt.Errorf("write payload failed. error:%v", err)
-		//}
+		//send packet
+		packet = append(packet, header[:]...)
+		packet = append(packet, payload[i : i + curLen]...)
+		err := mp.routine.io.WriteAndFlush(packet)
+		if err != nil {
+			return err
+		}
 
 		mp.sequenceId++
 
@@ -1170,16 +1161,15 @@ func (mp *MysqlProtocol) makePackets(data []byte) []byte {
 			header[3] = mp.sequenceId
 
 			//send header / zero-sized packet
-			packets = append(packets, header[:]...)
-			//if err := mp.io.WritePacket(header[:]); err != nil {
-			//	return fmt.Errorf("write header failed. error:%v", err)
-			//}
+			err := mp.routine.io.WriteAndFlush(header[:])
+			if err != nil {
+				return err
+			}
 
 			mp.sequenceId++
 		}
 	}
-	//mp.io.Flush()
-	return packets
+	return nil
 }
 
 //ther server reads a part of payload from the connection

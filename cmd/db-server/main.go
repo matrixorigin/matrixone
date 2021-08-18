@@ -175,6 +175,15 @@ func main() {
 		}
 
 		a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		err = a.Start()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
 		catalog = aoe_catalog.DefaultCatalog(a)
 		eng := aoe_engine.Mock(&catalog)
 		pci.SetRemoveEpoch(removeEpoch)
