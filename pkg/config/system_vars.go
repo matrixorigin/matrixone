@@ -79,10 +79,10 @@ type SystemVariables struct{
 	Scope:	[global]
 	Access:	[file]
 	DataType:	int64
-	DomainType:	set
-	Values:	[6001]
+	DomainType:	range
+	Values:	[6001 6001 6010]
 	Comment:	port
-	UpdateMode:	fix
+	UpdateMode:	dynamic
 	*/
 	port    int64
 	
@@ -94,7 +94,7 @@ type SystemVariables struct{
 	DomainType:	set
 	Values:	[localhost 127.0.0.1 0.0.0.0]
 	Comment:	listening ip
-	UpdateMode:	fix
+	UpdateMode:	dynamic
 	*/
 	host    string
 	
@@ -301,6 +301,102 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	recordTimeElapsedOfSqlRequest    bool
+	
+	/**
+	Name:	nodeID
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[0 0 10]
+	Comment:	the Node ID of the cube
+	UpdateMode:	dynamic
+	*/
+	nodeID    int64
+	
+	/**
+	Name:	cubeDir
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[./cube]
+	Comment:	the root direction of the cube
+	UpdateMode:	dynamic
+	*/
+	cubeDir    string
+	
+	/**
+	Name:	raftAddrPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[10000 10000 10010]
+	Comment:	the port of raft address of the cube
+	UpdateMode:	dynamic
+	*/
+	raftAddrPort    int64
+	
+	/**
+	Name:	clientAddrPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[20000 20000 20010]
+	Comment:	the port of client address of the cube
+	UpdateMode:	dynamic
+	*/
+	clientAddrPort    int64
+	
+	/**
+	Name:	prophetRPCAddrPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[30000 30000 30010]
+	Comment:	the port of RPC address of prophet of the cube
+	UpdateMode:	dynamic
+	*/
+	prophetRPCAddrPort    int64
+	
+	/**
+	Name:	prophetClientUrlPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[40000 40000 40010]
+	Comment:	the port of client's url of prophet of the cube
+	UpdateMode:	dynamic
+	*/
+	prophetClientUrlPort    int64
+	
+	/**
+	Name:	prophetPeerUrlPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[50000 50000 50010]
+	Comment:	the port of peer's url of prophet of the cube
+	UpdateMode:	dynamic
+	*/
+	prophetPeerUrlPort    int64
+	
+	/**
+	Name:	prophetEmbedEtcdJoinAddr
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[http://localhost:40000 http://127.0.0.1:40000]
+	Comment:	the join address of prophet of the cube
+	UpdateMode:	dynamic
+	*/
+	prophetEmbedEtcdJoinAddr    string
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -335,6 +431,30 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	Dumpdatabase    string  `toml:"dumpdatabase"`
+	
+	/**
+	Name:	port
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[6001 6001 6010]
+	Comment:	port
+	UpdateMode:	dynamic
+	*/
+	Port    int64  `toml:"port"`
+	
+	/**
+	Name:	host
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[localhost 127.0.0.1 0.0.0.0]
+	Comment:	listening ip
+	UpdateMode:	dynamic
+	*/
+	Host    string  `toml:"host"`
 	
 	/**
 	Name:	sendRow
@@ -539,6 +659,102 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	RecordTimeElapsedOfSqlRequest    bool  `toml:"recordTimeElapsedOfSqlRequest"`
+	
+	/**
+	Name:	nodeID
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[0 0 10]
+	Comment:	the Node ID of the cube
+	UpdateMode:	dynamic
+	*/
+	NodeID    int64  `toml:"nodeID"`
+	
+	/**
+	Name:	cubeDir
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[./cube]
+	Comment:	the root direction of the cube
+	UpdateMode:	dynamic
+	*/
+	CubeDir    string  `toml:"cubeDir"`
+	
+	/**
+	Name:	raftAddrPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[10000 10000 10010]
+	Comment:	the port of raft address of the cube
+	UpdateMode:	dynamic
+	*/
+	RaftAddrPort    int64  `toml:"raftAddrPort"`
+	
+	/**
+	Name:	clientAddrPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[20000 20000 20010]
+	Comment:	the port of client address of the cube
+	UpdateMode:	dynamic
+	*/
+	ClientAddrPort    int64  `toml:"clientAddrPort"`
+	
+	/**
+	Name:	prophetRPCAddrPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[30000 30000 30010]
+	Comment:	the port of RPC address of prophet of the cube
+	UpdateMode:	dynamic
+	*/
+	ProphetRPCAddrPort    int64  `toml:"prophetRPCAddrPort"`
+	
+	/**
+	Name:	prophetClientUrlPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[40000 40000 40010]
+	Comment:	the port of client's url of prophet of the cube
+	UpdateMode:	dynamic
+	*/
+	ProphetClientUrlPort    int64  `toml:"prophetClientUrlPort"`
+	
+	/**
+	Name:	prophetPeerUrlPort
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[50000 50000 50010]
+	Comment:	the port of peer's url of prophet of the cube
+	UpdateMode:	dynamic
+	*/
+	ProphetPeerUrlPort    int64  `toml:"prophetPeerUrlPort"`
+	
+	/**
+	Name:	prophetEmbedEtcdJoinAddr
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[http://localhost:40000 http://127.0.0.1:40000]
+	Comment:	the join address of prophet of the cube
+	UpdateMode:	dynamic
+	*/
+	ProphetEmbedEtcdJoinAddr    string  `toml:"prophetEmbedEtcdJoinAddr"`
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -573,9 +789,9 @@ func (ap *SystemVariables) PrepareDefinition(){
 	
 	ap.name2definition["dumpdatabase"] = "	Name:	dumpdatabase	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[default]	Comment:	dump database name	UpdateMode:	dynamic	"
 	
-	ap.name2definition["port"] = "	Name:	port	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[6001]	Comment:	port	UpdateMode:	fix	"
+	ap.name2definition["port"] = "	Name:	port	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[6001 6001 6010]	Comment:	port	UpdateMode:	dynamic	"
 	
-	ap.name2definition["host"] = "	Name:	host	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[localhost 127.0.0.1 0.0.0.0]	Comment:	listening ip	UpdateMode:	fix	"
+	ap.name2definition["host"] = "	Name:	host	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[localhost 127.0.0.1 0.0.0.0]	Comment:	listening ip	UpdateMode:	dynamic	"
 	
 	ap.name2definition["sendRow"] = "	Name:	sendRow	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[]	Comment:	send data row while producing	UpdateMode:	dynamic	"
 	
@@ -610,6 +826,22 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["rejectWhenHeartbeatFromPDLeaderIsTimeout"] = "	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[false]	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.	UpdateMode:	dynamic	"
 	
 	ap.name2definition["recordTimeElapsedOfSqlRequest"] = "	Name:	recordTimeElapsedOfSqlRequest	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[true]	Comment:	record the time elapsed of executing sql request	UpdateMode:	dynamic	"
+	
+	ap.name2definition["nodeID"] = "	Name:	nodeID	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[0 0 10]	Comment:	the Node ID of the cube	UpdateMode:	dynamic	"
+	
+	ap.name2definition["cubeDir"] = "	Name:	cubeDir	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[./cube]	Comment:	the root direction of the cube	UpdateMode:	dynamic	"
+	
+	ap.name2definition["raftAddrPort"] = "	Name:	raftAddrPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[10000 10000 10010]	Comment:	the port of raft address of the cube	UpdateMode:	dynamic	"
+	
+	ap.name2definition["clientAddrPort"] = "	Name:	clientAddrPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[20000 20000 20010]	Comment:	the port of client address of the cube	UpdateMode:	dynamic	"
+	
+	ap.name2definition["prophetRPCAddrPort"] = "	Name:	prophetRPCAddrPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[30000 30000 30010]	Comment:	the port of RPC address of prophet of the cube	UpdateMode:	dynamic	"
+	
+	ap.name2definition["prophetClientUrlPort"] = "	Name:	prophetClientUrlPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[40000 40000 40010]	Comment:	the port of client's url of prophet of the cube	UpdateMode:	dynamic	"
+	
+	ap.name2definition["prophetPeerUrlPort"] = "	Name:	prophetPeerUrlPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[50000 50000 50010]	Comment:	the port of peer's url of prophet of the cube	UpdateMode:	dynamic	"
+	
+	ap.name2definition["prophetEmbedEtcdJoinAddr"] = "	Name:	prophetEmbedEtcdJoinAddr	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[http://localhost:40000 http://127.0.0.1:40000]	Comment:	the join address of prophet of the cube	UpdateMode:	dynamic	"
 	
 }
 
@@ -720,7 +952,7 @@ func (ap *SystemVariables) LoadInitialValues()error{
 	}
 	
 	portchoices :=[]int64 {
-		6001,
+		6001,6001,6010,
 	}
 	if len(portchoices) != 0 {
 		if err = ap.setPort(portchoices[0]) ; err != nil {
@@ -966,6 +1198,112 @@ func (ap *SystemVariables) LoadInitialValues()error{
 			return fmt.Errorf("set%s failed.error:%v","RecordTimeElapsedOfSqlRequest",err)
 		}
 	}
+	
+	nodeIDchoices :=[]int64 {
+		0,0,10,
+	}
+	if len(nodeIDchoices) != 0 {
+		if err = ap.setNodeID(nodeIDchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","NodeID",err)
+		}
+	} else { 
+		if err = ap.setNodeID(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","NodeID",err)
+		}
+	}
+	
+	cubeDirchoices := []string {
+		"./cube", 
+	}
+	if len(cubeDirchoices) != 0 {
+		if err = ap.setCubeDir(cubeDirchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CubeDir",err)
+		}
+	} else {
+		//empty string
+		if err = ap.setCubeDir("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CubeDir",err)
+		}
+	}
+	
+	raftAddrPortchoices :=[]int64 {
+		10000,10000,10010,
+	}
+	if len(raftAddrPortchoices) != 0 {
+		if err = ap.setRaftAddrPort(raftAddrPortchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RaftAddrPort",err)
+		}
+	} else { 
+		if err = ap.setRaftAddrPort(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","RaftAddrPort",err)
+		}
+	}
+	
+	clientAddrPortchoices :=[]int64 {
+		20000,20000,20010,
+	}
+	if len(clientAddrPortchoices) != 0 {
+		if err = ap.setClientAddrPort(clientAddrPortchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ClientAddrPort",err)
+		}
+	} else { 
+		if err = ap.setClientAddrPort(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ClientAddrPort",err)
+		}
+	}
+	
+	prophetRPCAddrPortchoices :=[]int64 {
+		30000,30000,30010,
+	}
+	if len(prophetRPCAddrPortchoices) != 0 {
+		if err = ap.setProphetRPCAddrPort(prophetRPCAddrPortchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProphetRPCAddrPort",err)
+		}
+	} else { 
+		if err = ap.setProphetRPCAddrPort(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProphetRPCAddrPort",err)
+		}
+	}
+	
+	prophetClientUrlPortchoices :=[]int64 {
+		40000,40000,40010,
+	}
+	if len(prophetClientUrlPortchoices) != 0 {
+		if err = ap.setProphetClientUrlPort(prophetClientUrlPortchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProphetClientUrlPort",err)
+		}
+	} else { 
+		if err = ap.setProphetClientUrlPort(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProphetClientUrlPort",err)
+		}
+	}
+	
+	prophetPeerUrlPortchoices :=[]int64 {
+		50000,50000,50010,
+	}
+	if len(prophetPeerUrlPortchoices) != 0 {
+		if err = ap.setProphetPeerUrlPort(prophetPeerUrlPortchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProphetPeerUrlPort",err)
+		}
+	} else { 
+		if err = ap.setProphetPeerUrlPort(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProphetPeerUrlPort",err)
+		}
+	}
+	
+	prophetEmbedEtcdJoinAddrchoices := []string {
+		"http://localhost:40000","http://127.0.0.1:40000", 
+	}
+	if len(prophetEmbedEtcdJoinAddrchoices) != 0 {
+		if err = ap.setProphetEmbedEtcdJoinAddr(prophetEmbedEtcdJoinAddrchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProphetEmbedEtcdJoinAddr",err)
+		}
+	} else {
+		//empty string
+		if err = ap.setProphetEmbedEtcdJoinAddr("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","ProphetEmbedEtcdJoinAddr",err)
+		}
+	}
 	return nil
 }
 
@@ -1185,6 +1523,78 @@ func (ap * SystemVariables ) GetRecordTimeElapsedOfSqlRequest() bool {
 	return ap.recordTimeElapsedOfSqlRequest
 }
 
+/**
+Get the value of the parameter nodeID
+*/
+func (ap * SystemVariables ) GetNodeID() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.nodeID
+}
+
+/**
+Get the value of the parameter cubeDir
+*/
+func (ap * SystemVariables ) GetCubeDir() string {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.cubeDir
+}
+
+/**
+Get the value of the parameter raftAddrPort
+*/
+func (ap * SystemVariables ) GetRaftAddrPort() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.raftAddrPort
+}
+
+/**
+Get the value of the parameter clientAddrPort
+*/
+func (ap * SystemVariables ) GetClientAddrPort() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.clientAddrPort
+}
+
+/**
+Get the value of the parameter prophetRPCAddrPort
+*/
+func (ap * SystemVariables ) GetProphetRPCAddrPort() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.prophetRPCAddrPort
+}
+
+/**
+Get the value of the parameter prophetClientUrlPort
+*/
+func (ap * SystemVariables ) GetProphetClientUrlPort() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.prophetClientUrlPort
+}
+
+/**
+Get the value of the parameter prophetPeerUrlPort
+*/
+func (ap * SystemVariables ) GetProphetPeerUrlPort() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.prophetPeerUrlPort
+}
+
+/**
+Get the value of the parameter prophetEmbedEtcdJoinAddr
+*/
+func (ap * SystemVariables ) GetProphetEmbedEtcdJoinAddr() string {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.prophetEmbedEtcdJoinAddr
+}
+
 
 /**
 Set the value of the parameter rootpassword
@@ -1198,6 +1608,20 @@ Set the value of the parameter dumpdatabase
 */
 func (ap * SystemVariables ) SetDumpdatabase(value string)error {
 	return  ap.setDumpdatabase(value)
+}
+
+/**
+Set the value of the parameter port
+*/
+func (ap * SystemVariables ) SetPort(value int64)error {
+	return  ap.setPort(value)
+}
+
+/**
+Set the value of the parameter host
+*/
+func (ap * SystemVariables ) SetHost(value string)error {
+	return  ap.setHost(value)
 }
 
 /**
@@ -1320,6 +1744,62 @@ func (ap * SystemVariables ) SetRecordTimeElapsedOfSqlRequest(value bool)error {
 }
 
 /**
+Set the value of the parameter nodeID
+*/
+func (ap * SystemVariables ) SetNodeID(value int64)error {
+	return  ap.setNodeID(value)
+}
+
+/**
+Set the value of the parameter cubeDir
+*/
+func (ap * SystemVariables ) SetCubeDir(value string)error {
+	return  ap.setCubeDir(value)
+}
+
+/**
+Set the value of the parameter raftAddrPort
+*/
+func (ap * SystemVariables ) SetRaftAddrPort(value int64)error {
+	return  ap.setRaftAddrPort(value)
+}
+
+/**
+Set the value of the parameter clientAddrPort
+*/
+func (ap * SystemVariables ) SetClientAddrPort(value int64)error {
+	return  ap.setClientAddrPort(value)
+}
+
+/**
+Set the value of the parameter prophetRPCAddrPort
+*/
+func (ap * SystemVariables ) SetProphetRPCAddrPort(value int64)error {
+	return  ap.setProphetRPCAddrPort(value)
+}
+
+/**
+Set the value of the parameter prophetClientUrlPort
+*/
+func (ap * SystemVariables ) SetProphetClientUrlPort(value int64)error {
+	return  ap.setProphetClientUrlPort(value)
+}
+
+/**
+Set the value of the parameter prophetPeerUrlPort
+*/
+func (ap * SystemVariables ) SetProphetPeerUrlPort(value int64)error {
+	return  ap.setProphetPeerUrlPort(value)
+}
+
+/**
+Set the value of the parameter prophetEmbedEtcdJoinAddr
+*/
+func (ap * SystemVariables ) SetProphetEmbedEtcdJoinAddr(value string)error {
+	return  ap.setProphetEmbedEtcdJoinAddr(value)
+}
+
+/**
 Set the value of the parameter rootname
 */
 func (ap * SystemVariables ) setRootname(value string)error {
@@ -1433,13 +1913,11 @@ func (ap * SystemVariables ) setPort(value int64)error {
 	
 	
 		choices :=[]int64 {
-			6001,	
+			6001,6001,6010,	
 		}
-		if len( choices ) != 0{
-			if !isInSliceInt64(value, choices){
-				return fmt.Errorf("setPort,the value %d is not in set %v",value,choices)
-			}
-		}//else means any int64
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setPort,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
 	
 	
 	ap.port = value
@@ -1833,6 +2311,168 @@ func (ap * SystemVariables ) setRecordTimeElapsedOfSqlRequest(value bool)error {
 	return nil
 }
 
+/**
+Set the value of the parameter nodeID
+*/
+func (ap * SystemVariables ) setNodeID(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			0,0,10,	
+		}
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setNodeID,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
+	
+	
+	ap.nodeID = value
+	return nil
+}
+
+/**
+Set the value of the parameter cubeDir
+*/
+func (ap * SystemVariables ) setCubeDir(value string)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+		choices :=[]string {
+			"./cube",	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("setCubeDir,the value %s is not in set %v",value,choices)
+			}
+		}//else means any string
+	
+	
+	ap.cubeDir = value
+	return nil
+}
+
+/**
+Set the value of the parameter raftAddrPort
+*/
+func (ap * SystemVariables ) setRaftAddrPort(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			10000,10000,10010,	
+		}
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setRaftAddrPort,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
+	
+	
+	ap.raftAddrPort = value
+	return nil
+}
+
+/**
+Set the value of the parameter clientAddrPort
+*/
+func (ap * SystemVariables ) setClientAddrPort(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			20000,20000,20010,	
+		}
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setClientAddrPort,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
+	
+	
+	ap.clientAddrPort = value
+	return nil
+}
+
+/**
+Set the value of the parameter prophetRPCAddrPort
+*/
+func (ap * SystemVariables ) setProphetRPCAddrPort(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			30000,30000,30010,	
+		}
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setProphetRPCAddrPort,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
+	
+	
+	ap.prophetRPCAddrPort = value
+	return nil
+}
+
+/**
+Set the value of the parameter prophetClientUrlPort
+*/
+func (ap * SystemVariables ) setProphetClientUrlPort(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			40000,40000,40010,	
+		}
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setProphetClientUrlPort,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
+	
+	
+	ap.prophetClientUrlPort = value
+	return nil
+}
+
+/**
+Set the value of the parameter prophetPeerUrlPort
+*/
+func (ap * SystemVariables ) setProphetPeerUrlPort(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			50000,50000,50010,	
+		}
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setProphetPeerUrlPort,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
+	
+	
+	ap.prophetPeerUrlPort = value
+	return nil
+}
+
+/**
+Set the value of the parameter prophetEmbedEtcdJoinAddr
+*/
+func (ap * SystemVariables ) setProphetEmbedEtcdJoinAddr(value string)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+		choices :=[]string {
+			"http://localhost:40000","http://127.0.0.1:40000",	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("setProphetEmbedEtcdJoinAddr,the value %s is not in set %v",value,choices)
+			}
+		}//else means any string
+	
+	
+	ap.prophetEmbedEtcdJoinAddr = value
+	return nil
+}
+
 
 
 /**
@@ -1854,6 +2494,8 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.prepareAnything()
 	config.name2updatedFlags["rootpassword"] = false
 	config.name2updatedFlags["dumpdatabase"] = false
+	config.name2updatedFlags["port"] = false
+	config.name2updatedFlags["host"] = false
 	config.name2updatedFlags["sendRow"] = false
 	config.name2updatedFlags["dumpEnv"] = false
 	config.name2updatedFlags["hostMmuLimitation"] = false
@@ -1871,6 +2513,14 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.name2updatedFlags["timeoutOfHeartbeat"] = false
 	config.name2updatedFlags["rejectWhenHeartbeatFromPDLeaderIsTimeout"] = false
 	config.name2updatedFlags["recordTimeElapsedOfSqlRequest"] = false
+	config.name2updatedFlags["nodeID"] = false
+	config.name2updatedFlags["cubeDir"] = false
+	config.name2updatedFlags["raftAddrPort"] = false
+	config.name2updatedFlags["clientAddrPort"] = false
+	config.name2updatedFlags["prophetRPCAddrPort"] = false
+	config.name2updatedFlags["prophetClientUrlPort"] = false
+	config.name2updatedFlags["prophetPeerUrlPort"] = false
+	config.name2updatedFlags["prophetEmbedEtcdJoinAddr"] = false
 }
 
 /**
@@ -1956,6 +2606,16 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 			return fmt.Errorf("update parameter dumpdatabase failed.error:%v",err)
 		}
 	}
+	if config.getUpdatedFlag("port"){
+		if err = ap.setPort(config.Port); err != nil{
+			return fmt.Errorf("update parameter port failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("host"){
+		if err = ap.setHost(config.Host); err != nil{
+			return fmt.Errorf("update parameter host failed.error:%v",err)
+		}
+	}
 	if config.getUpdatedFlag("sendRow"){
 		if err = ap.setSendRow(config.SendRow); err != nil{
 			return fmt.Errorf("update parameter sendRow failed.error:%v",err)
@@ -2039,6 +2699,46 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("recordTimeElapsedOfSqlRequest"){
 		if err = ap.setRecordTimeElapsedOfSqlRequest(config.RecordTimeElapsedOfSqlRequest); err != nil{
 			return fmt.Errorf("update parameter recordTimeElapsedOfSqlRequest failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("nodeID"){
+		if err = ap.setNodeID(config.NodeID); err != nil{
+			return fmt.Errorf("update parameter nodeID failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("cubeDir"){
+		if err = ap.setCubeDir(config.CubeDir); err != nil{
+			return fmt.Errorf("update parameter cubeDir failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("raftAddrPort"){
+		if err = ap.setRaftAddrPort(config.RaftAddrPort); err != nil{
+			return fmt.Errorf("update parameter raftAddrPort failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("clientAddrPort"){
+		if err = ap.setClientAddrPort(config.ClientAddrPort); err != nil{
+			return fmt.Errorf("update parameter clientAddrPort failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("prophetRPCAddrPort"){
+		if err = ap.setProphetRPCAddrPort(config.ProphetRPCAddrPort); err != nil{
+			return fmt.Errorf("update parameter prophetRPCAddrPort failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("prophetClientUrlPort"){
+		if err = ap.setProphetClientUrlPort(config.ProphetClientUrlPort); err != nil{
+			return fmt.Errorf("update parameter prophetClientUrlPort failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("prophetPeerUrlPort"){
+		if err = ap.setProphetPeerUrlPort(config.ProphetPeerUrlPort); err != nil{
+			return fmt.Errorf("update parameter prophetPeerUrlPort failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("prophetEmbedEtcdJoinAddr"){
+		if err = ap.setProphetEmbedEtcdJoinAddr(config.ProphetEmbedEtcdJoinAddr); err != nil{
+			return fmt.Errorf("update parameter prophetEmbedEtcdJoinAddr failed.error:%v",err)
 		}
 	}
 	return nil

@@ -69,7 +69,8 @@ var BinOps = map[int][]*BinOp{
 				}
 				vec.Nsp = lv.Nsp.Or(rv.Nsp)
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
-				vec.SetCol(or.SelOr(lvs, rvs, rs))
+				rs = rs[:or.SelOr(lvs, rvs, rs)]
+				vec.SetCol(rs)
 				return vec, nil
 			},
 		},
@@ -91,8 +92,9 @@ var BinOps = map[int][]*BinOp{
 				}
 				vec.Nsp = lv.Nsp.Or(rv.Nsp)
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
-				vec.SetCol(and.SelAnd(lvs, rvs, rs))
-				return lv, nil
+				rs = rs[:and.SelAnd(lvs, rvs, rs)]
+				vec.SetCol(rs)
+				return vec, nil
 			},
 		},
 	},

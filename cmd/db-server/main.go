@@ -4,7 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"github.com/fagongzi/log"
+	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
+	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/server"
+	"github.com/matrixorigin/matrixcube/storage/pebble"
+	stdLog "log"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
 	"matrixone/pkg/logger"
@@ -12,6 +18,9 @@ import (
 	"matrixone/pkg/sql/handler"
 	"matrixone/pkg/util/signal"
 	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
+	"matrixone/pkg/vm/engine/aoe/dist"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	dconfig "matrixone/pkg/vm/engine/aoe/dist/config"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
@@ -19,12 +28,14 @@ import (
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
 	"os"
+	"strconv"
+	"time"
 )
 
 var (
 	catalog aoe_catalog.Catalog
-	mo   *frontend.MOServer
-	pcis []*frontend.PDCallbackImpl
+	mo      *frontend.MOServer
+	pci     *frontend.PDCallbackImpl
 )
 
 func createMOServer(callback *frontend.PDCallbackImpl) {
@@ -48,13 +59,22 @@ func registerSignalHandlers() {
 func cleanup() {
 }
 
+func recreateDir(dir string) (err error) {
+	err = os.RemoveAll(dir)
+	if err != nil {
+		return err
+	}
+	err = os.MkdirAll(dir, os.ModeDir)
+	return err
+}
+
 /**
 call the catalog service to remove the epoch
- */
+*/
 func removeEpoch(epoch uint64) {
-	_,err := catalog.RemoveDeletedTable(epoch)
+	_, err := catalog.RemoveDeletedTable(epoch)
 	if err != nil {
-		fmt.Printf("catalog remove ddl failed. error :%v \n",err)
+		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
 	}
 }
 
@@ -72,12 +92,12 @@ func main() {
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n",err)
+		fmt.Printf("error:%v\n", err)
 		return
 	}
 
 	if err := config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables); err != nil {
-		fmt.Printf("error:%v\n",err)
+		fmt.Printf("error:%v\n", err)
 		return
 	}
 
@@ -86,11 +106,11 @@ func main() {
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
 
-	if ! config.GlobalSystemVariables.GetDumpEnv() {
+	if !config.GlobalSystemVariables.GetDumpEnv() {
 		fmt.Println("Using AOE Storage Engine, 3 Cluster Nodes, 1 SQL Server.")
-
-		nodeCnt := 3
-		pcis = make([]*frontend.PDCallbackImpl, nodeCnt)
+		Host := config.GlobalSystemVariables.GetHost()
+		NodeId := config.GlobalSystemVariables.GetNodeID()
+		strNodeId := strconv.FormatInt(NodeId, 10)
 
 		ppu := frontend.NewPDCallbackParameterUnit(
 			int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()),
@@ -98,53 +118,101 @@ func main() {
 			int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()),
 			int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()))
 
-		for i := 0 ; i < nodeCnt; i++ {
-			pcis[i] = frontend.NewPDCallbackImpl(ppu)
-			pcis[i].Id = i
+		pci = frontend.NewPDCallbackImpl(ppu)
+		pci.Id = int(NodeId)
+
+		stdLog.Printf("clean target dir")
+
+		targetDir := config.GlobalSystemVariables.GetCubeDir() + strNodeId
+		if err := recreateDir(targetDir); err != nil {
+			return
 		}
 
-		c, err := frontend.NewTestClusterStore(nil,true,nil, pcis, nodeCnt)
+		metaStorage, err := pebble.NewStorage(targetDir + "/pebble/meta")
+		pebbleDataStorage, err := pebble.NewStorage(targetDir + "/pebble/data")
+		var aoeDataStorage *daoe.Storage
+
+		aoeDataStorage, err = daoe.NewStorage(targetDir + "/aoe")
+
+		cfg := dconfig.Config{}
+		cfg.ServerConfig = server.Cfg{
+			//Addr: fmt.Sprintf("127.0.0.1:8092"),
+			ExternalServer: true,
+		}
+		cfg.ClusterConfig = dconfig.ClusterConfig{
+			PreAllocatedGroupNum: 20,
+		}
+		cfg.CubeConfig = cConfig.Config{
+			DataPath:   targetDir + "/node",
+			RaftAddr:   fmt.Sprintf("%s:%d", Host, config.GlobalSystemVariables.GetRaftAddrPort()),
+			ClientAddr: fmt.Sprintf("%s:%d", Host, config.GlobalSystemVariables.GetClientAddrPort()),
+			Replication: cConfig.ReplicationConfig{
+				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 100),
+				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
+			},
+			Raft: cConfig.RaftConfig{
+				TickInterval:  typeutil.NewDuration(time.Millisecond * 600),
+				MaxEntryBytes: 300 * 1024 * 1024,
+			},
+			Prophet: pConfig.Config{
+				Name:        "node" + strNodeId,
+				StorageNode: true,
+				RPCAddr:     fmt.Sprintf("%s:%d", Host, config.GlobalSystemVariables.GetProphetRPCAddrPort()),
+				EmbedEtcd: pConfig.EmbedEtcdConfig{
+					ClientUrls: fmt.Sprintf("http://%s:%d", Host, config.GlobalSystemVariables.GetProphetClientUrlPort()),
+					PeerUrls:   fmt.Sprintf("http://%s:%d", Host, config.GlobalSystemVariables.GetProphetPeerUrlPort()),
+				},
+				Schedule: pConfig.ScheduleConfig{
+					EnableJointConsensus: true,
+				},
+			},
+		}
+
+		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
+
+		if cfg.CubeConfig.Prophet.EmbedEtcd.ClientUrls != config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr() {
+			cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
+		}
+
+		a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 		if err != nil {
-			os.Exit(-2)
+			fmt.Println(err)
+			return
 		}
-
-		catalog = aoe_catalog.DefaultCatalog(c.Applications[0])
+		err = a.Start()
+		if err != nil {
+			fmt.Println(err)
+			return
+		}
+		catalog = aoe_catalog.DefaultCatalog(a)
 		eng := aoe_engine.Mock(&catalog)
+		pci.SetRemoveEpoch(removeEpoch)
 
-		for i := 0 ; i < nodeCnt; i++ {
-			pcis[i].SetRemoveEpoch(removeEpoch)
+		hm := config.HostMmu
+		gm := guest.New(1<<40, hm)
+		proc := process.New(gm, config.Mempool)
+		{
+			proc.Id = "0"
+			proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
+			proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
+			proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
+			proc.Refer = make(map[string]uint64)
 		}
-
-		//one rpcserver per cube node
-		for i := 0 ; i < nodeCnt ; i++ {
-			//db := c.AOEDBs[i].DB
-			hm := config.HostMmu
-			gm := guest.New(1<<40, hm)
-			proc := process.New(gm, config.Mempool)
-			{
-				proc.Id = "0"
-				proc.Lim.Size = 10 << 32
-				proc.Lim.BatchRows = 10 << 32
-				proc.Lim.PartitionRows = 10 << 32
-				proc.Refer = make(map[string]uint64)
-			}
-			log := logger.New(os.Stderr, fmt.Sprintf("rpc%v:", i))
-			log.SetLevel(logger.WARN)
-			srv, err := rpcserver.New(fmt.Sprintf("127.0.0.1:%v", 20000+i+100), 1<<30, log)
-			if err != nil {
-				log.Fatal(err)
-			}
-			hp := handler.New(eng, proc)
-			srv.Register(hp.Process)
-			go srv.Run()
+		log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
+		log.SetLevel(logger.WARN)
+		srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, log)
+		if err != nil {
+			log.Fatal(err)
 		}
-
+		hp := handler.New(eng, proc)
+		srv.Register(hp.Process)
+		go srv.Run()
 		//test storage engine
 		config.StorageEngine = eng
 
 		//test cluster nodes
 		config.ClusterNodes = metadata.Nodes{}
-	}else{
+	} else {
 		panic("The Official Storage Engine and Cluster Nodes are in the developing.")
 
 		//TODO:
@@ -152,8 +220,8 @@ func main() {
 
 		config.ClusterNodes = nil
 	}
-	fmt.Println("Create MOServer")
-	createMOServer(pcis[0])
+
+	createMOServer(pci)
 	err := runMOServer()
 	if err != nil {
 		fmt.Println(err)

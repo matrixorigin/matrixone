@@ -6,14 +6,14 @@ import (
 )
 
 type dropTableEvent struct {
-	baseEvent
+	BaseEvent
 	TableId uint64
 	Data    iface.ITableData
 }
 
 func NewDropTableEvent(ctx *Context, tableId uint64) *dropTableEvent {
 	e := &dropTableEvent{TableId: tableId}
-	e.baseEvent = baseEvent{
+	e.BaseEvent = BaseEvent{
 		BaseEvent: *sched.NewBaseEvent(e, sched.MemdataUpdateEvent, ctx.DoneCB, ctx.Waitable),
 		Ctx:       ctx,
 	}

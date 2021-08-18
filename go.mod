@@ -15,18 +15,19 @@ require (
 	github.com/golang/protobuf v1.4.2
 	github.com/google/btree v1.0.0
 	github.com/google/uuid v1.2.0 // indirect
-	github.com/matrixorigin/matrixcube v0.0.0-20210810144726-953203a0848f
+	github.com/matrixorigin/matrixcube v0.0.0-20210816141818-5d69b76cebaa
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
-	github.com/pkg/errors v0.9.1
+	github.com/shirou/gopsutil v3.21.7+incompatible // indirect
 	github.com/sirupsen/logrus v1.4.2
 	github.com/stretchr/testify v1.7.0
+	github.com/tklauser/go-sysconf v0.3.7 // indirect
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
-	golang.org/x/net v0.0.0-20201110031124-69a78807bb2b // indirect
-	golang.org/x/sys v0.0.0-20200930185726-fdedc70b468f
-	golang.org/x/tools v0.0.0-20201105001634-bc3cf281b174 // indirect
+	golang.org/x/net v0.0.0-20210813160813-60bc85c4be6d // indirect
+	golang.org/x/sys v0.0.0-20210816071009-649d0fc2fce7
+	golang.org/x/tools v0.1.5 // indirect
 )
 
 replace go.etcd.io/etcd => github.com/deepfabric/etcd v1.4.15

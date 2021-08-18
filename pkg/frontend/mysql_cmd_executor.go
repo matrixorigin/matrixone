@@ -62,7 +62,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		proto := rt.GetClientProtocol().(*MysqlProtocol)
 
 		//Create a new temporary resultset per pipeline thread.
-		mrs := &defines.MysqlResultSet{}
+		mrs := &MysqlResultSet{}
 		//Warning: Don't change Columns in this.
 		//Reference the shared Columns of the session among multi-thread.
 		mrs.Columns = ses.Mrs.Columns
@@ -845,7 +845,7 @@ func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error{
 	ses := mce.routine.GetSession()
 	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
 
-	col := new(defines.MysqlColumn)
+	col := new(MysqlColumn)
 	col.SetName("DATABASE()")
 	col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	ses.Mrs.AddColumn(col)
@@ -855,7 +855,7 @@ func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error{
 	}
 	ses.Mrs.AddRow([]interface{}{val})
 
-	mer := defines.NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
 	if err = proto.SendResponse(resp); err != nil {
@@ -887,27 +887,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
 
-	if sql == "SELECT DATABASE()" {
-		ses.Mrs = &defines.MysqlResultSet{}
-		defer func() {ses.Mrs = nil} ()
-
-		col := new(defines.MysqlColumn)
-		col.SetColumnType(defines.MYSQL_TYPE_STRING)
-		col.SetName("database()")
-		ses.Mrs.AddColumn(col)
-
-		var data = make([]interface{}, 1)
-		data[0] = mce.routine.db
-		ses.Mrs.AddRow(data)
-		mer := defines.NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
-		resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
-		err := proto.SendResponse(resp)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
 	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, ses.Pu.ClusterNodes, proc)
 	execs, err := comp.Compile()
 	if err != nil {
@@ -916,7 +895,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 	var choose = !ses.Pu.SV.GetSendRow()
 
-	ses.Mrs = &defines.MysqlResultSet{}
+	ses.Mrs = &MysqlResultSet{}
 
 	defer func() {
 		ses.Mrs = nil
@@ -1009,7 +988,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				*/
 				//send column count
 				colCnt := uint64(len(columns))
-				err := mce.routine.io.WriteAndFlush(proto.MakeColumnCountPacket(colCnt))
+				err := proto.SendColumnCountPacket(colCnt)
 				if err != nil {
 					return err
 				}
@@ -1017,7 +996,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				//column_count * Protocol::ColumnDefinition packets
 				cmd := ses.Cmd
 				for _, c := range columns {
-					col := new(defines.MysqlColumn)
+					col := new(MysqlColumn)
 					col.SetName(c.Name)
 					switch c.Typ {
 					case types.T_int8:
@@ -1057,11 +1036,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					/*
 						mysql COM_QUERY response: send the column definition per column
 					*/
-					packet, err := proto.MakeColumnDefinitionPacket(col, cmd)
-					if err != nil {
-						return err
-					}
-					err = mce.routine.io.WriteAndFlush(packet)
+					err := proto.SendColumnDefinitionPacket(col, cmd)
 					if err != nil {
 						return err
 					}
@@ -1071,7 +1046,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					mysql COM_QUERY response: End after the column has been sent.
 					send EOF packet
 				*/
-				err = mce.routine.io.WriteAndFlush(proto.MakeEOFPacketIf(0, 0))
+				err = proto.SendEOFPacketIf(0, 0)
 				if err != nil {
 					return err
 				}
@@ -1092,13 +1067,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					mysql COM_QUERY response: End after the data row has been sent.
 					After all row data has been sent, it sends the EOF or OK packet.
 				*/
-				err = mce.routine.io.WriteAndFlush(proto.MakeEOFOrOkPacket(0, 0))
+				err = proto.sendEOFOrOkPacket(0, 0)
 				if err != nil {
 					return err
 				}
 			} else {
 				for _, c := range columns {
-					col := new(defines.MysqlColumn)
+					col := new(MysqlColumn)
 					col.SetName(c.Name)
 					switch c.Typ {
 					case types.T_int8:
@@ -1140,7 +1115,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return er
 				}
 
-				mer := defines.NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+				mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 				resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
 				if err = proto.SendResponse(resp); err != nil {

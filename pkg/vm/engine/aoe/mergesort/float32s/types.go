@@ -7,11 +7,8 @@ type sortElem struct {
 
 type sortSlice []sortElem
 
-func (x sortSlice) Less(i, j int) bool {
-	return x[i].data < x[j].data || (!isNaN(x[i].data) && isNaN(x[j].data))
-}
-
-func (x sortSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
+func (x sortSlice) Less(i, j int) bool { return x[i].data < x[j].data }
+func (x sortSlice) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }
 
 type heapElem struct {
 	data float32
@@ -21,12 +18,5 @@ type heapElem struct {
 
 type heapSlice []heapElem
 
-func (x heapSlice) Less(i, j int) bool {
-	return x[i].data < x[j].data || (!isNaN(x[i].data) && isNaN(x[j].data))
-}
-
-func (x heapSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
-
-func isNaN(f float32) bool {
-	return f != f
-}
+func (x heapSlice) Less(i, j int) bool { return x[i].data < x[j].data }
+func (x heapSlice) Swap(i, j int)      { x[i], x[j] = x[j], x[i] }

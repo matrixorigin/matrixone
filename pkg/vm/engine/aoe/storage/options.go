@@ -6,19 +6,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
-	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync"
 	"time"
-)
-
-const (
-	DEFAULT_MON_COLLECTOR = "MON_COLLECTOR"
-	DEFAULT_META_FLUSHER  = "META_FLUSER"
-	DEFAULT_META_UPDATER  = "META_UPDATER"
-	DEFAULT_DATA_FLUSHER  = "DATA_FLUSHER"
-	DEFAULT_MDATA_UPDATER = "MDATA_UPDATER"
-	SchedulerName         = "AOEScheduler"
 )
 
 type IterOptions struct {
@@ -46,25 +35,10 @@ type Options struct {
 
 	Scheduler sched.Scheduler
 
-	Mon struct {
-		Collector iw.IOpWorker
-	}
-
 	Meta struct {
-		Flusher   iw.IOpWorker
-		Updater   iw.IOpWorker
 		CKFactory *checkpointerFactory
 		Conf      *md.Configuration
 		Info      *md.MetaInfo
-	}
-
-	Data struct {
-		Flusher iw.IOpWorker
-		// IOFactory ioif.IOFactory
-	}
-
-	MemData struct {
-		Updater iw.IOpWorker
 	}
 
 	GC struct {
@@ -83,20 +57,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	o.EventListener.FillDefaults()
 
-	// if o.Scheduler == nil {
-	// 	o.Scheduler = NewScheduler(o)
-	// }
-
-	if o.Mon.Collector == nil {
-		o.Mon.Collector = w.NewOpWorker(DEFAULT_MON_COLLECTOR)
-	}
-
-	if o.Meta.Flusher == nil {
-		o.Meta.Flusher = w.NewOpWorker(DEFAULT_META_FLUSHER)
-	}
-	if o.Meta.Updater == nil {
-		o.Meta.Updater = w.NewOpWorker(DEFAULT_META_UPDATER)
-	}
 	if o.Meta.Conf == nil {
 		o.Meta.Conf = &md.Configuration{
 			BlockMaxRows:     md.BLOCK_ROW_COUNT,
@@ -110,14 +70,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.Meta.CKFactory == nil {
 		o.Meta.CKFactory = NewCheckpointerFactory(dirname)
-	}
-
-	if o.Data.Flusher == nil {
-		o.Data.Flusher = w.NewOpWorker(DEFAULT_DATA_FLUSHER)
-	}
-
-	if o.MemData.Updater == nil {
-		o.MemData.Updater = w.NewOpWorker(DEFAULT_MDATA_UPDATER)
 	}
 
 	if o.CacheCfg == nil {
