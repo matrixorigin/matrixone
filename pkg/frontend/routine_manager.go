@@ -29,7 +29,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	routine.pdHook = rm.pdHook
 
 	hsV10pkt := pro.makeHandshakeV10Payload()
-	err := routine.io.WriteAndFlush(pro.makePackets(hsV10pkt))
+	err := pro.writePackets(hsV10pkt)
 	if err != nil {
 		return
 	}

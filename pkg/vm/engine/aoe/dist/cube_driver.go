@@ -112,7 +112,7 @@ func NewCubeDriver(
 	return NewCubeDriverWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, &config.Config{})
 }
 
-// NewCubeDriverWithOptions returns a aoe request handler
+// NewCubeDriverWithOptions returns an aoe request handler
 func NewCubeDriverWithOptions(
 	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,

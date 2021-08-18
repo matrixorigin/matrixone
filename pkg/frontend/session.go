@@ -2,7 +2,6 @@ package frontend
 
 import (
 	"matrixone/pkg/config"
-	"matrixone/pkg/defines"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 )
@@ -12,7 +11,7 @@ type Session struct {
 	Cmd int
 
 	//for test
-	Mrs *defines.MysqlResultSet
+	Mrs *MysqlResultSet
 
 	GuestMmu *guest.Mmu
 	Mempool  *mempool.Mempool

@@ -2,7 +2,6 @@ package frontend
 
 import (
 	"fmt"
-	"matrixone/pkg/defines"
 	"sync"
 )
 
@@ -146,26 +145,26 @@ func (mp *MysqlProtocol) SendResponse(resp *Response) error {
 
 	switch resp.category {
 	case OkResponse:
-		return mp.routine.io.WriteAndFlush(mp.makeOKPacket(0, 0, uint16(resp.status), 0, ""))
+		return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 	case EoFResponse:
-		return mp.routine.io.WriteAndFlush(mp.makeEOFPacket(0, uint16(resp.status)))
+		return mp.sendEOFPacket(0, uint16(resp.status))
 	case ErrorResponse:
 		err := resp.data.(error)
 		if err == nil {
-			return mp.routine.io.WriteAndFlush(mp.makeOKPacket(0, 0, uint16(resp.status), 0, ""))
+			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
 		switch myerr := err.(type) {
 		case *MysqlError:
-			return mp.routine.io.WriteAndFlush(mp.makeErrPacket(myerr.ErrorCode, myerr.SqlState, myerr.Error()))
+			return mp.sendErrPacket(myerr.ErrorCode, myerr.SqlState, myerr.Error())
 		}
-		return mp.routine.io.WriteAndFlush(mp.makeErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("unkown error:%v", err)))
+		return mp.sendErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("unkown error:%v", err))
 	case ResultResponse:
-		mer := resp.data.(*defines.MysqlExecutionResult)
+		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil {
-			return mp.routine.io.WriteAndFlush(mp.makeOKPacket(0, 0, uint16(resp.status), 0, ""))
+			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
 		if mer.Mrs() == nil {
-			return mp.routine.io.WriteAndFlush(mp.makeOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), ""))
+			return mp.sendOKPacket(mer.AffectedRows(), mer.InsertID(), uint16(resp.status), mer.Warnings(), "")
 		}
 		return mp.sendResultSet(mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
 	default:
