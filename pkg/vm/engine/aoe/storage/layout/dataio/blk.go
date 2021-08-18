@@ -28,6 +28,8 @@ import (
 	"path/filepath"
 )
 
+type FileNameFactory = func(string, common.ID) string
+
 type BlockFile struct {
 	common.RefHelper
 	os.File
@@ -39,7 +41,11 @@ type BlockFile struct {
 	DataAlgo    int
 }
 
-func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
+func blockFileNameFactory(dir string, id common.ID) string {
+	return e.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, false)
+}
+
+func NewBlockFile(segFile base.ISegmentFile, id common.ID, nameFactory FileNameFactory) *BlockFile {
 	bf := &BlockFile{
 		Parts:       make(map[base.Key]*base.Pointer),
 		ID:          id,
@@ -48,7 +54,10 @@ func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
 	}
 
 	dirname := segFile.GetDir()
-	name := e.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID, false)
+	if nameFactory == nil {
+		nameFactory = blockFileNameFactory
+	}
+	name := nameFactory(dirname, id)
 	// log.Infof("BlockFile name %s", name)
 	var info os.FileInfo
 	var err error

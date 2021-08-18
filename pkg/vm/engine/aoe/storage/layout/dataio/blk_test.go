@@ -219,3 +219,29 @@ func TestSegmentWriter(t *testing.T) {
 	t.Log(stat0.Name())
 	t.Log(stat1.Name())
 }
+
+func TestTransientBlock(t *testing.T) {
+	mu := &sync.RWMutex{}
+	rowCount, blkCount := uint64(10), uint64(4)
+	info := md.MockInfo(mu, rowCount, blkCount)
+	info.Conf.Dir = "/tmp/tblktest"
+	schema := md.MockSchema(2)
+	tbl := md.MockTable(info, schema, 1)
+
+	blkMeta, err := tbl.ReferenceBlock(uint64(1), uint64(1))
+	assert.Nil(t, err)
+
+	segFile := NewUnsortedSegmentFile(info.Conf.Dir, *blkMeta.Segment.AsCommonID())
+
+	tblk := NewTBlockFile(segFile, *blkMeta.AsCommonID())
+	defer tblk.Unref()
+	t.Log(tblk.NextVersion())
+
+	rows := uint64(2)
+	bat := chunk.MockBatch(schema.Types(), rows)
+
+	err = tblk.Write(bat.Vecs, blkMeta, blkMeta.Segment.Table.Conf.Dir)
+	assert.Nil(t, err)
+
+	// tblk.CommitFile()
+}

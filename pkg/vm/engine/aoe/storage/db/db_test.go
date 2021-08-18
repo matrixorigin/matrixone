@@ -171,7 +171,7 @@ func TestAppend(t *testing.T) {
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(appendCtx)
 		assert.Nil(t, err)
-		// tbl, err := inst.Driver.DataTables.WeakRefTable(tid)
+		// tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 		// assert.Nil(t, err)
 		// t.Log(tbl.GetCollumn(0).ToString(1000))
 	}

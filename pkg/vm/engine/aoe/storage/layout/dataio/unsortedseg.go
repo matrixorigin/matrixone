@@ -61,7 +61,7 @@ func (sf *UnsortedSegmentFile) RefBlock(id common.ID) {
 	defer sf.Unlock()
 	_, ok := sf.Blocks[id]
 	if !ok {
-		bf := NewBlockFile(sf, id)
+		bf := NewBlockFile(sf, id, nil)
 		sf.AddBlock(id, bf)
 	}
 	sf.Ref()
