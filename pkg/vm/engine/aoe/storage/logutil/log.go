@@ -15,7 +15,6 @@ package logutil
 
 import (
 	"fmt"
-	"github.com/BurntSushi/toml"
 	"os"
 	"sync/atomic"
 
@@ -28,19 +27,19 @@ import (
 
 var _globalL, _globalP, _globalS atomic.Value
 
-// need config manually
-const configFile =  "/home/asuka/matrixone/pkg/vm/engine/aoe/storage/logutil/config.toml"
-
 func init() {
 	SetupDBLogger()
 }
-
+var defaultConfig = Config{
+	Level:               "info",
+	Format:              "text",
+}
 func SetupDBLogger() {
 	var conf Config
-	if _, err := toml.DecodeFile(configFile, &conf); err != nil {
-		panic(err)
-	}
-
+	//if _, err := toml.DecodeFile(configFile, &conf); err != nil {
+	//	panic(err)
+	//}
+	conf = defaultConfig
 	l, p, err := InitLogger(&conf)
 	if err != nil {
 		panic(err)
