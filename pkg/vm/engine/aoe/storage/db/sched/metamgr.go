@@ -4,11 +4,10 @@ import (
 	"errors"
 	"fmt"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -60,7 +59,7 @@ func NewMetaResourceMgr(opts *e.Options, disk, cpu sched.ResourceMgr) *metaResou
 func (mgr *metaResourceMgr) OnExecDone(op interface{}) {
 	e := op.(MetaEvent)
 	mgr.mu.Lock()
-	log.Infof("OnExecDone %d: %s", e.ID(), mgr.stringLocked())
+	logutil.Debugf("OnExecDone %d: %s", e.ID(), mgr.stringLocked())
 	scope, all := e.GetScope()
 	delete(mgr.runings.events, e.ID())
 	if all {
@@ -143,7 +142,7 @@ func (mgr *metaResourceMgr) preSubmit(op iops.IOp) bool {
 	}
 	e.AddObserver(mgr)
 	sched := mgr.trySchedule(e, false)
-	log.Info(mgr.String())
+	logutil.Debug(mgr.String())
 	return sched
 }
 

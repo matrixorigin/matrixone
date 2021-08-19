@@ -6,12 +6,11 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"runtime"
 
 	"sync"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type ISegmentTree interface {
@@ -47,7 +46,7 @@ func NewSegmentTree(indexHolder *index.TableHolder) ISegmentTree {
 	tree.data.Segments = make([]IColumnSegment, 0)
 	tree.data.Helper = make(map[common.ID]int)
 	runtime.SetFinalizer(tree, func(o *SegmentTree) {
-		log.Infof("[GC]: SegmentTree: %s", o.String())
+		logutil.Debugf("[GC]: SegmentTree: %s", o.String())
 		o.data.Segments = nil
 	})
 	return tree

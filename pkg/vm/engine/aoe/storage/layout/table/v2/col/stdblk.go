@@ -8,11 +8,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/process"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type StdColumnBlock struct {
@@ -77,7 +76,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
 	part := blk.Part.CloneWithUpgrade(cloned, host.GetSSTBufMgr())
 	blk.RUnlock()
 	if part == nil {
-		log.Errorf("logic error")
+		logutil.Error("logic error")
 		panic("logic error")
 	}
 	cloned.Part = part

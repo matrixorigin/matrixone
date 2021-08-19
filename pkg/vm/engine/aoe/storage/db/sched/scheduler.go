@@ -3,11 +3,10 @@ package sched
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type metablkCommiter struct {
@@ -196,10 +195,10 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	}
 	segment := event.TableData.StrongRefSegment(event.Meta.Segment.ID)
 	if segment == nil {
-		log.Warnf("Probably table %d is dropped", event.Meta.Segment.Table.ID)
+		logutil.Warnf("Probably table %d is dropped", event.Meta.Segment.Table.ID)
 		return
 	}
-	log.Infof(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, event.Meta.Segment.ID)
+	logutil.Debugf(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, event.Meta.Segment.ID)
 	flushCtx := &Context{Opts: s.opts}
 	flushEvent := NewFlushSegEvent(flushCtx, segment)
 	s.Schedule(flushEvent)
@@ -219,7 +218,7 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 		s.opts.EventListener.BackgroundErrorCB(err)
 		return
 	}
-	log.Infof(" %s | Segment %d | UpgradeSegEvent | Started", sched.EventPrefix, meta.ID)
+	logutil.Debugf(" %s | Segment %d | UpgradeSegEvent | Started", sched.EventPrefix, meta.ID)
 	newevent := NewUpgradeSegEvent(ctx, event.Segment, td)
 	s.Schedule(newevent)
 }

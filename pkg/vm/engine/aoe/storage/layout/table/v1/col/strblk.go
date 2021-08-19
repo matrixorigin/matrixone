@@ -3,11 +3,10 @@ package col
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"runtime"
 	"sync/atomic"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type StrColumnBlock struct {
@@ -28,7 +27,7 @@ func NewStrColumnBlock(seg IColumnSegment, id common.ID, blkType base.BlockType)
 	runtime.SetFinalizer(blk, func(o IColumnBlock) {
 		id := o.GetID()
 		o.SetNext(nil)
-		log.Infof("[GC]: StrColumnSegment %s [%d]", id.BlockString(), o.GetBlockType())
+		logutil.Debugf("[GC]: StrColumnSegment %s [%d]", id.BlockString(), o.GetBlockType())
 		o.Close()
 	})
 	return blk

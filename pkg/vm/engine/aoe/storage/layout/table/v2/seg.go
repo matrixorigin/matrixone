@@ -7,11 +7,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 	"sync/atomic"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type Segment struct {
@@ -382,7 +381,7 @@ func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 	}
 	idx, ok := seg.tree.Helper[meta.ID]
 	if !ok {
-		log.Errorf("")
+		logutil.Error("logic error")
 		panic("logic error")
 	}
 	old := seg.tree.Blocks[idx]
