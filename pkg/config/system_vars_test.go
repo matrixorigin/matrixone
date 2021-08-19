@@ -107,26 +107,6 @@ func isvarsConfigEqual(c1, c2 varsConfig) bool {
 		return false
 	}
 
-	if c1.RaftAddrPort != c2.RaftAddrPort {
-		return false
-	}
-
-	if c1.ClientAddrPort != c2.ClientAddrPort {
-		return false
-	}
-
-	if c1.ProphetRPCAddrPort != c2.ProphetRPCAddrPort {
-		return false
-	}
-
-	if c1.ProphetClientUrlPort != c2.ProphetClientUrlPort {
-		return false
-	}
-
-	if c1.ProphetPeerUrlPort != c2.ProphetPeerUrlPort {
-		return false
-	}
-
 	if c1.ProphetEmbedEtcdJoinAddr != c2.ProphetEmbedEtcdJoinAddr {
 		return false
 	}
@@ -193,16 +173,6 @@ nodeID=0
 
 cubeDir= "./cube"
 
-raftAddrPort=10000
-
-clientAddrPort=20000
-
-prophetRPCAddrPort=30000
-
-prophetClientUrlPort=40000
-
-prophetPeerUrlPort=50000
-
 prophetEmbedEtcdJoinAddr= "http://localhost:40000"
 
 maxReplicas=1
@@ -256,16 +226,6 @@ maxReplicas=1
 		NodeID: 0,
 
 		CubeDir: "./cube",
-
-		RaftAddrPort: 10000,
-
-		ClientAddrPort: 20000,
-
-		ProphetRPCAddrPort: 30000,
-
-		ProphetClientUrlPort: 40000,
-
-		ProphetPeerUrlPort: 50000,
 
 		ProphetEmbedEtcdJoinAddr: "http://localhost:40000",
 
