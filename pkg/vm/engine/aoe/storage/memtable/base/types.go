@@ -38,11 +38,19 @@ type ICollection interface {
 	String() string
 }
 
+type ILimiter interface {
+	ActiveCnt() uint32
+	ActiveSize() uint64
+	ApplySizeQuota(uint64) bool
+	ApplyCntQuota(uint32) bool
+}
+
 type IManager interface {
 	WeakRefCollection(id uint64) ICollection
 	StrongRefCollection(id uint64) ICollection
 	RegisterCollection(interface{}) (c ICollection, err error)
 	UnregisterCollection(id uint64) (c ICollection, err error)
 	CollectionIDs() map[uint64]uint64
+	GetLimiter() ILimiter
 	String() string
 }

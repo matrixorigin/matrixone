@@ -28,6 +28,7 @@ type manager struct {
 	opts        *engine.Options
 	collections map[uint64]imem.ICollection
 	tableData   iface.ITableData
+	Limiter     *memtableLimiter
 }
 
 var (
@@ -42,7 +43,11 @@ func NewManager(opts *engine.Options) imem.IManager {
 	return m
 }
 
-func (m *manager) CollectionIDs() map[uint64]uint64 {
+func (m *Manager) GetLimiter() imem.ILimiter {
+	return m.Limiter
+}
+
+func (m *Manager) CollectionIDs() map[uint64]uint64 {
 	ids := make(map[uint64]uint64)
 	m.RLock()
 	for k, _ := range m.collections {
