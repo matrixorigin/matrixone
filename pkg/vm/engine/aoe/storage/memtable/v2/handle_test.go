@@ -1,7 +1,7 @@
 package memtable
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"testing"
 
@@ -39,7 +39,7 @@ func TestHandle(t *testing.T) {
 	limiter := &memtableLimiter{
 		maxactivesize: maxsize,
 	}
-	evicter := manager.NewSimpleEvictHolder()
+	evicter := bm.NewSimpleEvictHolder()
 	mgr := newNodeManager(limiter, evicter)
 	baseId := common.ID{}
 	id1 := baseId.NextBlock()

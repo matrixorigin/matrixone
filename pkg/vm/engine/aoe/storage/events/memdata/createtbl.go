@@ -17,7 +17,6 @@ package memdata
 import (
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
-	// log "github.com/sirupsen/logrus"
 )
 
 type createTableEvent struct {

@@ -2,10 +2,10 @@ package memtable
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	"matrixone/pkg/vm/engine/aoe/storage/memtable/v2/base"
 	"sync"
 	"sync/atomic"
 	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
@@ -15,13 +15,13 @@ type nodeManager struct {
 	sync.RWMutex
 	limiter         *memtableLimiter
 	nodes           map[common.ID]base.INodeHandle
-	evicter         manager.IEvictHolder
+	evicter         bm.IEvictHolder
 	unregistertimes int64
 	loadtimes       int64
 	evicttimes      int64
 }
 
-func newNodeManager(limiter *memtableLimiter, evicter manager.IEvictHolder) *nodeManager {
+func newNodeManager(limiter *memtableLimiter, evicter bm.IEvictHolder) *nodeManager {
 	mgr := &nodeManager{
 		limiter: limiter,
 		nodes:   make(map[common.ID]base.INodeHandle),
@@ -138,7 +138,7 @@ func (mgr *nodeManager) Unpin(node base.INodeHandle) {
 	defer node.Unlock()
 	node.Unref()
 	if node.RefCount() == 0 {
-		toevict := &manager.EvictNode{Handle: node, Iter: node.IncIteration()}
+		toevict := &bm.EvictNode{Handle: node, Iter: node.IncIteration()}
 		mgr.evicter.Enqueue(toevict)
 		atomic.AddInt64(&mgr.evicttimes, int64(1))
 	}
