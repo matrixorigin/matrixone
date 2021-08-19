@@ -58,11 +58,9 @@ type ICollection interface {
 	String() string
 }
 
-type ILimiter interface {
-	ActiveCnt() uint32
+type ISizeLimiter interface {
 	ActiveSize() uint64
 	ApplySizeQuota(uint64) bool
-	ApplyCntQuota(uint32) bool
 }
 
 type IManager interface {
@@ -72,5 +70,4 @@ type IManager interface {
 	UnregisterCollection(id uint64) (c ICollection, err error)
 	CollectionIDs() map[uint64]uint64
 	String() string
-	// GetLimiter() ILimiter
 }

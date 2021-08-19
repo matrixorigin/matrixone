@@ -61,7 +61,7 @@ func (n *nodeHandle) Destroy() {
 	}
 }
 
-// Should held by lock
+// Should be guarded by lock
 func (n *nodeHandle) Load() {
 	if n.state == iface.NODE_LOADED {
 		return
@@ -72,7 +72,7 @@ func (n *nodeHandle) Load() {
 	n.state = iface.NODE_LOADED
 }
 
-// Should held by lock
+// Should be guarded by lock
 func (n *nodeHandle) Unload() {
 	if n.state == iface.NODE_UNLOAD {
 		return
@@ -83,7 +83,7 @@ func (n *nodeHandle) Unload() {
 	n.state = iface.NODE_LOADED
 }
 
-// Should held by lock
+// Should be guarded by lock
 func (n *nodeHandle) Unloadable() bool {
 	if n.state == iface.NODE_UNLOAD {
 		return false
@@ -98,10 +98,13 @@ func (n *nodeHandle) Unloadable() bool {
 	return ret
 }
 
+// Should be guarded by lock
 func (n *nodeHandle) IsLoaded() bool { return n.state == iface.NODE_LOADED }
+
 func (n *nodeHandle) IncIteration() uint64 {
 	return atomic.AddUint64(&n.iter, uint64(1))
 }
+
 func (n *nodeHandle) Iteration() uint64 {
 	return atomic.LoadUint64(&n.iter)
 }
