@@ -209,6 +209,36 @@ func flushWithLz4Compression(w *os.File, data []*vector.Vector, meta *md.Block) 
 	if err = binary.Write(&buf, binary.BigEndian, uint16(colCnt)); err != nil {
 		return err
 	}
+	count := meta.Count
+	if err = binary.Write(&buf, binary.BigEndian, count); err != nil {
+		return err
+	}
+	var preIdx []byte
+	if meta.PrevIndex != nil {
+		preIdx, err = meta.PrevIndex.Marshall()
+		if err != nil {
+			return err
+		}
+	}
+	if err = binary.Write(&buf, binary.BigEndian, int32(len(preIdx))); err != nil {
+		return err
+	}
+	if err = binary.Write(&buf, binary.BigEndian, preIdx); err != nil {
+		return err
+	}
+	var idx []byte
+	if meta.Index != nil {
+		idx, err = meta.Index.Marshall()
+		if err != nil {
+			return err
+		}
+	}
+	if err = binary.Write(&buf, binary.BigEndian, int32(len(idx))); err != nil {
+		return err
+	}
+	if err = binary.Write(&buf, binary.BigEndian, idx); err != nil {
+		return err
+	}
 	var colBufs [][]byte
 	for idx := 0; idx < colCnt; idx++ {
 		colBuf, err := data[idx].Show()

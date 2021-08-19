@@ -9,6 +9,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
 )
@@ -150,7 +151,35 @@ func (sf *SortedSegmentFile) initBlkPointers(blkId uint64, pos uint32) {
 	if err = binary.Read(&sf.File, binary.BigEndian, &cols); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	headSize := 3 + 2*8*int(cols)
+	var count uint64
+	if err = binary.Read(&sf.File, binary.BigEndian, &count); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	var sz int32
+	if err = binary.Read(&sf.File, binary.BigEndian, &sz); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	buf := make([]byte, sz)
+	if err = binary.Read(&sf.File, binary.BigEndian, &buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	prevIdx := metadata.LogIndex{}
+	if err = prevIdx.UnMarshall(buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	var sz_ int32
+	if err = binary.Read(&sf.File, binary.BigEndian, &sz_); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	buf = make([]byte, sz_)
+	if err = binary.Read(&sf.File, binary.BigEndian, &buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	idx := metadata.LogIndex{}
+	if err = idx.UnMarshall(buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	headSize := 8 + int(sz + sz_) + 3 + 8 + 2*8*int(cols)
 	currOffset := headSize + int(offset)
 	for i := uint16(0); i < cols; i++ {
 		key := base.Key{

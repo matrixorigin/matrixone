@@ -41,19 +41,50 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		if err != nil {
 			panic(err)
 		}
-		buf, err := index.DefaultRWHelper.WriteIndices(indices)
-		if err != nil {
-			panic(err)
-		}
-		_, err = w.Write(buf)
-		if err != nil {
-			panic(err)
-		}
+		//buf, err := index.DefaultRWHelper.WriteIndices(indices)
+		//if err != nil {
+		//	panic(err)
+		//}
+		//_, err = w.Write(buf)
+		//if err != nil {
+		//	panic(err)
+		//}
 		algo := uint8(0)
 		cols := uint16(0)
+		count := uint64(0)
 		err = binary.Write(w, binary.BigEndian, &algo)
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &cols)
+		assert.Nil(t, err)
+		err = binary.Write(w, binary.BigEndian, &count)
+		assert.Nil(t, err)
+		prevIdx := md.LogIndex{
+			ID:       uint64(0),
+			Start:    uint64(0),
+			Count:    uint64(0),
+			Capacity: uint64(0),
+		}
+		buf, err := prevIdx.Marshall()
+		assert.Nil(t, err)
+		var sz int32
+		sz = int32(len(buf))
+		err = binary.Write(w, binary.BigEndian, &sz)
+		assert.Nil(t, err)
+		err = binary.Write(w, binary.BigEndian, &buf)
+		assert.Nil(t, err)
+		idx := md.LogIndex{
+			ID:       uint64(0),
+			Start:    uint64(0),
+			Count:    uint64(0),
+			Capacity: uint64(0),
+		}
+		buf, err = idx.Marshall()
+		assert.Nil(t, err)
+		var sz_ int32
+		sz_ = int32(len(buf))
+		err = binary.Write(w, binary.BigEndian, &sz_)
+		assert.Nil(t, err)
+		err = binary.Write(w, binary.BigEndian, &buf)
 		assert.Nil(t, err)
 		w.Close()
 	}
