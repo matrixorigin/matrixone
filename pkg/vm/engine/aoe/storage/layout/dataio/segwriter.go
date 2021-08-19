@@ -3,7 +3,9 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/pierrec/lz4"
 	"io"
+	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
@@ -505,35 +507,81 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	if err != nil {
 		return err
 	}
-	if _, err = w.Seek(int64(4*(len(data)+1)), io.SeekCurrent); err != nil {
+	colDefs := meta.Table.Schema.ColDefs
+	if _, err = w.Seek(int64(4*(len(colDefs)+1)), io.SeekCurrent); err != nil {
 		return err
 	}
 
-	blkMetaPos := make([]uint32, len(data))
-	for i, bat := range data {
+	colPos := make([]uint32, len(colDefs))
+	var colBufs [][]byte
+	var buf bytes.Buffer
+	for i := 0; i < len(colPos); i++ {
 		pos, _ := w.Seek(0, io.SeekCurrent)
-		blkMetaPos[i] = uint32(pos)
-		getter := func(string, *md.Block) (*os.File, error) {
-			return w, nil
+		colPos[i] = uint32(pos)
+		for _, bat := range data {
+			colBuf, err := bat.Vecs[i].Show()
+			if err != nil {
+				return err
+			}
+			colSize := len(colBuf)
+			cbuf := make([]byte, lz4.CompressBlockBound(colSize))
+			if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
+				return err
+			}
+			if err = binary.Write(&buf, binary.BigEndian, uint64(len(cbuf))); err != nil {
+				return err
+			}
+			if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
+				return err
+			}
+			colBufs = append(colBufs, cbuf)
 		}
-		writer := NewEmbbedBlockWriter(bat, meta.Blocks[i], getter)
-		if err = writer.Execute(); err != nil {
+	}
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		return err
+	}
+	for idx := 0; idx < len(colPos); idx++ {
+		if _, err := w.Write(colBufs[idx]); err != nil {
 			return err
 		}
 	}
-	blkEndPos, err := w.Seek(0, io.SeekCurrent)
+	//blkMetaPos := make([]uint32, len(data))
+	//for i, bat := range data {
+	//	pos, _ := w.Seek(0, io.SeekCurrent)
+	//	blkMetaPos[i] = uint32(pos)
+	//	getter := func(string, *md.Block) (*os.File, error) {
+	//		return w, nil
+	//	}
+	//	writer := NewEmbbedBlockWriter(bat, meta.Blocks[i], getter)
+	//	if err = writer.Execute(); err != nil {
+	//		return err
+	//	}
+	//}
+	colEndPos, err := w.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}
-	var buf bytes.Buffer
-	for _, pos := range blkMetaPos {
-		binary.Write(&buf, binary.BigEndian, pos)
-	}
-	binary.Write(&buf, binary.BigEndian, uint32(blkEndPos))
-	if _, err = w.WriteAt(buf.Bytes(), startPos); err != nil {
+	_, err = w.Seek(startPos, io.SeekStart)
+	if err != nil {
 		return err
 	}
-	if _, err = w.Seek(blkEndPos, io.SeekStart); err != nil {
+	for _, pos := range colPos {
+		if err = binary.Write(w, binary.BigEndian, pos); err != nil {
+			return err
+		}
+	}
+	if err = binary.Write(w, binary.BigEndian, uint32(colEndPos)); err != nil {
+		return err
+	}
+	//var buf_ bytes.Buffer
+	//for _, pos := range colPos {
+	//	binary.Write(&buf_, binary.BigEndian, pos)
+	//}
+	//binary.Write(&buf_, binary.BigEndian, uint32(colEndPos))
+	//if _, err = w.WriteAt(buf_.Bytes(), startPos); err != nil {
+	//	return err
+	//}
+	if _, err = w.Seek(colEndPos, io.SeekStart); err != nil {
 		return err
 	}
 	return nil
