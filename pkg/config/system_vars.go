@@ -325,66 +325,6 @@ type SystemVariables struct {
 	cubeDir string
 
 	/**
-	Name:	raftAddrPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[10000 10000 10010]
-	Comment:	the port of raft address of the cube
-	UpdateMode:	dynamic
-	*/
-	raftAddrPort int64
-
-	/**
-	Name:	clientAddrPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[20000 20000 20010]
-	Comment:	the port of client address of the cube
-	UpdateMode:	dynamic
-	*/
-	clientAddrPort int64
-
-	/**
-	Name:	prophetRPCAddrPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[30000 30000 30010]
-	Comment:	the port of RPC address of prophet of the cube
-	UpdateMode:	dynamic
-	*/
-	prophetRPCAddrPort int64
-
-	/**
-	Name:	prophetClientUrlPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[40000 40000 40010]
-	Comment:	the port of client's url of prophet of the cube
-	UpdateMode:	dynamic
-	*/
-	prophetClientUrlPort int64
-
-	/**
-	Name:	prophetPeerUrlPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[50000 50000 50010]
-	Comment:	the port of peer's url of prophet of the cube
-	UpdateMode:	dynamic
-	*/
-	prophetPeerUrlPort int64
-
-	/**
 	Name:	prophetEmbedEtcdJoinAddr
 	Scope:	[global]
 	Access:	[file]
@@ -694,66 +634,6 @@ type varsConfig struct {
 	CubeDir string `toml:"cubeDir"`
 
 	/**
-	Name:	raftAddrPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[10000 10000 10010]
-	Comment:	the port of raft address of the cube
-	UpdateMode:	dynamic
-	*/
-	RaftAddrPort int64 `toml:"raftAddrPort"`
-
-	/**
-	Name:	clientAddrPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[20000 20000 20010]
-	Comment:	the port of client address of the cube
-	UpdateMode:	dynamic
-	*/
-	ClientAddrPort int64 `toml:"clientAddrPort"`
-
-	/**
-	Name:	prophetRPCAddrPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[30000 30000 30010]
-	Comment:	the port of RPC address of prophet of the cube
-	UpdateMode:	dynamic
-	*/
-	ProphetRPCAddrPort int64 `toml:"prophetRPCAddrPort"`
-
-	/**
-	Name:	prophetClientUrlPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[40000 40000 40010]
-	Comment:	the port of client's url of prophet of the cube
-	UpdateMode:	dynamic
-	*/
-	ProphetClientUrlPort int64 `toml:"prophetClientUrlPort"`
-
-	/**
-	Name:	prophetPeerUrlPort
-	Scope:	[global]
-	Access:	[file]
-	DataType:	int64
-	DomainType:	range
-	Values:	[50000 50000 50010]
-	Comment:	the port of peer's url of prophet of the cube
-	UpdateMode:	dynamic
-	*/
-	ProphetPeerUrlPort int64 `toml:"prophetPeerUrlPort"`
-
-	/**
 	Name:	prophetEmbedEtcdJoinAddr
 	Scope:	[global]
 	Access:	[file]
@@ -851,16 +731,6 @@ func (ap *SystemVariables) PrepareDefinition() {
 	ap.name2definition["nodeID"] = "	Name:	nodeID	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[0 0 10]	Comment:	the Node ID of the cube	UpdateMode:	dynamic	"
 
 	ap.name2definition["cubeDir"] = "	Name:	cubeDir	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[./cube]	Comment:	the root direction of the cube	UpdateMode:	dynamic	"
-
-	ap.name2definition["raftAddrPort"] = "	Name:	raftAddrPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[10000 10000 10010]	Comment:	the port of raft address of the cube	UpdateMode:	dynamic	"
-
-	ap.name2definition["clientAddrPort"] = "	Name:	clientAddrPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[20000 20000 20010]	Comment:	the port of client address of the cube	UpdateMode:	dynamic	"
-
-	ap.name2definition["prophetRPCAddrPort"] = "	Name:	prophetRPCAddrPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[30000 30000 30010]	Comment:	the port of RPC address of prophet of the cube	UpdateMode:	dynamic	"
-
-	ap.name2definition["prophetClientUrlPort"] = "	Name:	prophetClientUrlPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[40000 40000 40010]	Comment:	the port of client's url of prophet of the cube	UpdateMode:	dynamic	"
-
-	ap.name2definition["prophetPeerUrlPort"] = "	Name:	prophetPeerUrlPort	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[50000 50000 50010]	Comment:	the port of peer's url of prophet of the cube	UpdateMode:	dynamic	"
 
 	ap.name2definition["prophetEmbedEtcdJoinAddr"] = "	Name:	prophetEmbedEtcdJoinAddr	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[http://localhost:40000 http://127.0.0.1:40000]	Comment:	the join address of prophet of the cube	UpdateMode:	dynamic	"
 
@@ -1244,71 +1114,6 @@ func (ap *SystemVariables) LoadInitialValues() error {
 		}
 	}
 
-	raftAddrPortchoices := []int64{
-		10000, 10000, 10010,
-	}
-	if len(raftAddrPortchoices) != 0 {
-		if err = ap.setRaftAddrPort(raftAddrPortchoices[0]); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "RaftAddrPort", err)
-		}
-	} else {
-		if err = ap.setRaftAddrPort(0); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "RaftAddrPort", err)
-		}
-	}
-
-	clientAddrPortchoices := []int64{
-		20000, 20000, 20010,
-	}
-	if len(clientAddrPortchoices) != 0 {
-		if err = ap.setClientAddrPort(clientAddrPortchoices[0]); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "ClientAddrPort", err)
-		}
-	} else {
-		if err = ap.setClientAddrPort(0); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "ClientAddrPort", err)
-		}
-	}
-
-	prophetRPCAddrPortchoices := []int64{
-		30000, 30000, 30010,
-	}
-	if len(prophetRPCAddrPortchoices) != 0 {
-		if err = ap.setProphetRPCAddrPort(prophetRPCAddrPortchoices[0]); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "ProphetRPCAddrPort", err)
-		}
-	} else {
-		if err = ap.setProphetRPCAddrPort(0); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "ProphetRPCAddrPort", err)
-		}
-	}
-
-	prophetClientUrlPortchoices := []int64{
-		40000, 40000, 40010,
-	}
-	if len(prophetClientUrlPortchoices) != 0 {
-		if err = ap.setProphetClientUrlPort(prophetClientUrlPortchoices[0]); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "ProphetClientUrlPort", err)
-		}
-	} else {
-		if err = ap.setProphetClientUrlPort(0); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "ProphetClientUrlPort", err)
-		}
-	}
-
-	prophetPeerUrlPortchoices := []int64{
-		50000, 50000, 50010,
-	}
-	if len(prophetPeerUrlPortchoices) != 0 {
-		if err = ap.setProphetPeerUrlPort(prophetPeerUrlPortchoices[0]); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "ProphetPeerUrlPort", err)
-		}
-	} else {
-		if err = ap.setProphetPeerUrlPort(0); err != nil {
-			return fmt.Errorf("set%s failed.error:%v", "ProphetPeerUrlPort", err)
-		}
-	}
-
 	prophetEmbedEtcdJoinAddrchoices := []string{
 		"http://localhost:40000", "http://127.0.0.1:40000",
 	}
@@ -1573,51 +1378,6 @@ func (ap *SystemVariables) GetCubeDir() string {
 }
 
 /**
-Get the value of the parameter raftAddrPort
-*/
-func (ap *SystemVariables) GetRaftAddrPort() int64 {
-	ap.rwlock.RLock()
-	defer ap.rwlock.RUnlock()
-	return ap.raftAddrPort
-}
-
-/**
-Get the value of the parameter clientAddrPort
-*/
-func (ap *SystemVariables) GetClientAddrPort() int64 {
-	ap.rwlock.RLock()
-	defer ap.rwlock.RUnlock()
-	return ap.clientAddrPort
-}
-
-/**
-Get the value of the parameter prophetRPCAddrPort
-*/
-func (ap *SystemVariables) GetProphetRPCAddrPort() int64 {
-	ap.rwlock.RLock()
-	defer ap.rwlock.RUnlock()
-	return ap.prophetRPCAddrPort
-}
-
-/**
-Get the value of the parameter prophetClientUrlPort
-*/
-func (ap *SystemVariables) GetProphetClientUrlPort() int64 {
-	ap.rwlock.RLock()
-	defer ap.rwlock.RUnlock()
-	return ap.prophetClientUrlPort
-}
-
-/**
-Get the value of the parameter prophetPeerUrlPort
-*/
-func (ap *SystemVariables) GetProphetPeerUrlPort() int64 {
-	ap.rwlock.RLock()
-	defer ap.rwlock.RUnlock()
-	return ap.prophetPeerUrlPort
-}
-
-/**
 Get the value of the parameter prophetEmbedEtcdJoinAddr
 */
 func (ap *SystemVariables) GetProphetEmbedEtcdJoinAddr() string {
@@ -1794,41 +1554,6 @@ Set the value of the parameter cubeDir
 */
 func (ap *SystemVariables) SetCubeDir(value string) error {
 	return ap.setCubeDir(value)
-}
-
-/**
-Set the value of the parameter raftAddrPort
-*/
-func (ap *SystemVariables) SetRaftAddrPort(value int64) error {
-	return ap.setRaftAddrPort(value)
-}
-
-/**
-Set the value of the parameter clientAddrPort
-*/
-func (ap *SystemVariables) SetClientAddrPort(value int64) error {
-	return ap.setClientAddrPort(value)
-}
-
-/**
-Set the value of the parameter prophetRPCAddrPort
-*/
-func (ap *SystemVariables) SetProphetRPCAddrPort(value int64) error {
-	return ap.setProphetRPCAddrPort(value)
-}
-
-/**
-Set the value of the parameter prophetClientUrlPort
-*/
-func (ap *SystemVariables) SetProphetClientUrlPort(value int64) error {
-	return ap.setProphetClientUrlPort(value)
-}
-
-/**
-Set the value of the parameter prophetPeerUrlPort
-*/
-func (ap *SystemVariables) SetProphetPeerUrlPort(value int64) error {
-	return ap.setProphetPeerUrlPort(value)
 }
 
 /**
@@ -2354,96 +2079,6 @@ func (ap *SystemVariables) setCubeDir(value string) error {
 }
 
 /**
-Set the value of the parameter raftAddrPort
-*/
-func (ap *SystemVariables) setRaftAddrPort(value int64) error {
-	ap.rwlock.Lock()
-	defer ap.rwlock.Unlock()
-
-	choices := []int64{
-		10000, 10000, 10010,
-	}
-	if !(value >= choices[1] && value <= choices[2]) {
-		return fmt.Errorf("setRaftAddrPort,the value %d is not in the range [%d,%d]", value, choices[1], choices[2])
-	}
-
-	ap.raftAddrPort = value
-	return nil
-}
-
-/**
-Set the value of the parameter clientAddrPort
-*/
-func (ap *SystemVariables) setClientAddrPort(value int64) error {
-	ap.rwlock.Lock()
-	defer ap.rwlock.Unlock()
-
-	choices := []int64{
-		20000, 20000, 20010,
-	}
-	if !(value >= choices[1] && value <= choices[2]) {
-		return fmt.Errorf("setClientAddrPort,the value %d is not in the range [%d,%d]", value, choices[1], choices[2])
-	}
-
-	ap.clientAddrPort = value
-	return nil
-}
-
-/**
-Set the value of the parameter prophetRPCAddrPort
-*/
-func (ap *SystemVariables) setProphetRPCAddrPort(value int64) error {
-	ap.rwlock.Lock()
-	defer ap.rwlock.Unlock()
-
-	choices := []int64{
-		30000, 30000, 30010,
-	}
-	if !(value >= choices[1] && value <= choices[2]) {
-		return fmt.Errorf("setProphetRPCAddrPort,the value %d is not in the range [%d,%d]", value, choices[1], choices[2])
-	}
-
-	ap.prophetRPCAddrPort = value
-	return nil
-}
-
-/**
-Set the value of the parameter prophetClientUrlPort
-*/
-func (ap *SystemVariables) setProphetClientUrlPort(value int64) error {
-	ap.rwlock.Lock()
-	defer ap.rwlock.Unlock()
-
-	choices := []int64{
-		40000, 40000, 40010,
-	}
-	if !(value >= choices[1] && value <= choices[2]) {
-		return fmt.Errorf("setProphetClientUrlPort,the value %d is not in the range [%d,%d]", value, choices[1], choices[2])
-	}
-
-	ap.prophetClientUrlPort = value
-	return nil
-}
-
-/**
-Set the value of the parameter prophetPeerUrlPort
-*/
-func (ap *SystemVariables) setProphetPeerUrlPort(value int64) error {
-	ap.rwlock.Lock()
-	defer ap.rwlock.Unlock()
-
-	choices := []int64{
-		50000, 50000, 50010,
-	}
-	if !(value >= choices[1] && value <= choices[2]) {
-		return fmt.Errorf("setProphetPeerUrlPort,the value %d is not in the range [%d,%d]", value, choices[1], choices[2])
-	}
-
-	ap.prophetPeerUrlPort = value
-	return nil
-}
-
-/**
 Set the value of the parameter prophetEmbedEtcdJoinAddr
 */
 func (ap *SystemVariables) setProphetEmbedEtcdJoinAddr(value string) error {
@@ -2521,11 +2156,6 @@ func (config *varsConfig) resetUpdatedFlags() {
 	config.name2updatedFlags["recordTimeElapsedOfSqlRequest"] = false
 	config.name2updatedFlags["nodeID"] = false
 	config.name2updatedFlags["cubeDir"] = false
-	config.name2updatedFlags["raftAddrPort"] = false
-	config.name2updatedFlags["clientAddrPort"] = false
-	config.name2updatedFlags["prophetRPCAddrPort"] = false
-	config.name2updatedFlags["prophetClientUrlPort"] = false
-	config.name2updatedFlags["prophetPeerUrlPort"] = false
 	config.name2updatedFlags["prophetEmbedEtcdJoinAddr"] = false
 	config.name2updatedFlags["maxReplicas"] = false
 }
@@ -2588,7 +2218,7 @@ func (config *varsConfig) LoadConfigurationFromFile(fname string) error {
 		for _, item := range failed {
 			failedItems = append(failedItems, item.String())
 		}
-		return fmt.Errorf("decode failed %s. error:%v", failedItems, err)
+		//return fmt.Errorf("decode failed %s. error:%v",failedItems,err)
 	}
 
 	for _, k := range metadata.Keys() {
@@ -2716,31 +2346,6 @@ func (ap *SystemVariables) UpdateParametersWithConfiguration(config *varsConfig)
 	if config.getUpdatedFlag("cubeDir") {
 		if err = ap.setCubeDir(config.CubeDir); err != nil {
 			return fmt.Errorf("update parameter cubeDir failed.error:%v", err)
-		}
-	}
-	if config.getUpdatedFlag("raftAddrPort") {
-		if err = ap.setRaftAddrPort(config.RaftAddrPort); err != nil {
-			return fmt.Errorf("update parameter raftAddrPort failed.error:%v", err)
-		}
-	}
-	if config.getUpdatedFlag("clientAddrPort") {
-		if err = ap.setClientAddrPort(config.ClientAddrPort); err != nil {
-			return fmt.Errorf("update parameter clientAddrPort failed.error:%v", err)
-		}
-	}
-	if config.getUpdatedFlag("prophetRPCAddrPort") {
-		if err = ap.setProphetRPCAddrPort(config.ProphetRPCAddrPort); err != nil {
-			return fmt.Errorf("update parameter prophetRPCAddrPort failed.error:%v", err)
-		}
-	}
-	if config.getUpdatedFlag("prophetClientUrlPort") {
-		if err = ap.setProphetClientUrlPort(config.ProphetClientUrlPort); err != nil {
-			return fmt.Errorf("update parameter prophetClientUrlPort failed.error:%v", err)
-		}
-	}
-	if config.getUpdatedFlag("prophetPeerUrlPort") {
-		if err = ap.setProphetPeerUrlPort(config.ProphetPeerUrlPort); err != nil {
-			return fmt.Errorf("update parameter prophetPeerUrlPort failed.error:%v", err)
 		}
 	}
 	if config.getUpdatedFlag("prophetEmbedEtcdJoinAddr") {

@@ -241,56 +241,6 @@
 #	UpdateMode:	dynamic
 	cubeDir = "./cube"
 			
-#	Name:	raftAddrPort
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[10000 10000 10010]
-#	Comment:	the port of raft address of the cube
-#	UpdateMode:	dynamic
-	raftAddrPort = 10002
-			
-#	Name:	clientAddrPort
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[20000 20000 20010]
-#	Comment:	the port of client address of the cube
-#	UpdateMode:	dynamic
-	clientAddrPort = 20002
-			
-#	Name:	prophetRPCAddrPort
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[30000 30000 30010]
-#	Comment:	the port of RPC address of prophet of the cube
-#	UpdateMode:	dynamic
-	prophetRPCAddrPort = 30002
-			
-#	Name:	prophetClientUrlPort
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[40000 40000 40010]
-#	Comment:	the port of client's url of prophet of the cube
-#	UpdateMode:	dynamic
-	prophetClientUrlPort = 40002
-			
-#	Name:	prophetPeerUrlPort
-#	Scope:	[global]
-#	Access:	[file]
-#	DataType:	int64
-#	DomainType:	range
-#	Values:	[50000 50000 50010]
-#	Comment:	the port of peer's url of prophet of the cube
-#	UpdateMode:	dynamic
-	prophetPeerUrlPort = 50002
-			
 #	Name:	prophetEmbedEtcdJoinAddr
 #	Scope:	[global]
 #	Access:	[file]
@@ -301,3 +251,130 @@
 #	UpdateMode:	dynamic
 	prophetEmbedEtcdJoinAddr = "http://localhost:40000"
 			
+#	Name:	maxReplicas
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	range
+#	Values:	[1 1 1]
+#	Comment:	the number of replicas for each resource
+#	UpdateMode:	dynamic
+	maxReplicas = 1
+			
+addr-raft = "localhost:10002"
+addr-client = "localhost:20002"
+dir-data = "./cube2/node"
+dir-deploy = ""
+version = ""
+githash = ""
+capacity = 0
+use-memory-as-storage = false
+shard-groups = 0
+
+[replication]
+    max-peer-down-time = "0s"
+    shard-heartbeat-duration = "100ms"
+    store-heartbeat-duration = "1s"
+    shard-split-check-duration = "0s"
+    shard-state-check-duration = "0s"
+    disable-shard-split = false
+    allow-remove-leader = false
+    shard-capacity-bytes = 0
+    shard-split-check-bytes = 0
+
+[snapshot]
+    max-concurrency-snap-chunks = 0
+    snap-chunk-size = 0
+
+[raft]
+    enable-pre-vote = false
+    tick-interval = "600ms"
+    heartbeat-ticks = 0
+    election-timeout-ticks = 0
+    max-size-per-msg = 0
+    max-inflight-msgs = 0
+    max-entry-bytes = 314572800
+    send-raft-batch-size = 0
+    [raft.raft-log]
+        disable-sync = false
+        compact-duration = "0s"
+        compact-threshold = 0
+        max-allow-transfer-lag = 0
+        ForceCompactCount = 0
+        ForceCompactBytes = 0
+        CompactProtectLag = 0
+
+[worker]
+    raft-apply-worker = 0
+    raft-msg-worker = 0
+    raft-event-workers = 0
+
+[prophet]
+    name = "node2"
+    data-dir = ""
+    rpc-addr = "localhost:30002"
+    rpc-timeout = "0s"
+    storage-node = true
+    external-etcd = [""]
+    lease = 0
+
+    [prophet.embed-etcd]
+        join = ""
+        client-urls = "http://localhost:40002"
+        peer-urls = "http://localhost:50002"
+        advertise-client-urls = ""
+        advertise-peer-urls = ""
+        initial-cluster = ""
+        initial-cluster-state = ""
+        tick-interval = "0s"
+        election-interval = "0s"
+        enable-prevote = false
+        auto-compaction-mode = ""
+        auto-compaction-retention = ""
+        quota-backend-bytes = 0
+
+    [prophet.schedule]
+        max-snapshot-count = 0
+        max-pending-peer-count = 0
+        max-merge-resource-size = 0
+        max-merge-resource-keys = 0
+        split-merge-interval = "0s"
+        enable-one-way-merge = false
+        enable-cross-table-merge = false
+        patrol-resource-interval = "0s"
+        max-container-down-time = "0s"
+        leader-schedule-limit = 0
+        leader-schedule-policy = ""
+        resource-schedule-limit = 0
+        replica-schedule-limit = 0
+        merge-schedule-limit = 0
+        hot-resource-schedule-limit = 0
+        hot-resource-cache-hits-threshold = 0
+        tolerant-size-ratio = 0.0
+        low-space-ratio = 0.0
+        high-space-ratio = 0.0
+        resource-score-formula-version = ""
+        scheduler-max-waiting-operator = 0
+        enable-remove-down-replica = false
+        enable-replace-offline-replica = false
+        enable-make-up-replica = false
+        enable-remove-extra-replica = false
+        enable-location-replacement = false
+        enable-debug-metrics = false
+        enable-joint-consensus = true
+        container-limit-mode = ""
+
+    [prophet.replication]
+        max-replicas = 1
+        strictly-match-label = false
+        enable-placement-rules = false
+        isolation-level = ""
+
+[metric]
+    addr = ""
+    interval = 0
+    job = ""
+    instance = ""
+
+pre-allocated-group-num = 20
+max-group-num           = 0

@@ -4,12 +4,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
 	"github.com/fagongzi/log"
-	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
-	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/server"
 	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
@@ -144,39 +142,17 @@ func main() {
 		aoeDataStorage, err = daoe.NewStorage(targetDir + "/aoe")
 
 		cfg := dconfig.Config{}
+		_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
+		if err != nil {
+			panic(err)
+		}
+
+		_, err = toml.DecodeFile(os.Args[1], &cfg.ClusterConfig)
+		if err != nil {
+			panic(err)
+		}
 		cfg.ServerConfig = server.Cfg{
 			ExternalServer: true,
-		}
-		cfg.ClusterConfig = dconfig.ClusterConfig{
-			PreAllocatedGroupNum: 20,
-		}
-		cfg.CubeConfig = cConfig.Config{
-			DataPath:   targetDir + "/node",
-			RaftAddr:   fmt.Sprintf("%s:%d", Host, config.GlobalSystemVariables.GetRaftAddrPort()),
-			ClientAddr: fmt.Sprintf("%s:%d", Host, config.GlobalSystemVariables.GetClientAddrPort()),
-			Replication: cConfig.ReplicationConfig{
-				ShardHeartbeatDuration: typeutil.NewDuration(time.Millisecond * 100),
-				StoreHeartbeatDuration: typeutil.NewDuration(time.Second),
-			},
-			Raft: cConfig.RaftConfig{
-				TickInterval:  typeutil.NewDuration(time.Millisecond * 600),
-				MaxEntryBytes: 300 * 1024 * 1024,
-			},
-			Prophet: pConfig.Config{
-				Name:        "node" + strNodeId,
-				StorageNode: true,
-				RPCAddr:     fmt.Sprintf("%s:%d", Host, config.GlobalSystemVariables.GetProphetRPCAddrPort()),
-				EmbedEtcd: pConfig.EmbedEtcdConfig{
-					ClientUrls: fmt.Sprintf("http://%s:%d", Host, config.GlobalSystemVariables.GetProphetClientUrlPort()),
-					PeerUrls:   fmt.Sprintf("http://%s:%d", Host, config.GlobalSystemVariables.GetProphetPeerUrlPort()),
-				},
-				Schedule: pConfig.ScheduleConfig{
-					EnableJointConsensus: true,
-				},
-				Replication: pConfig.ReplicationConfig{
-					MaxReplicas: uint64(config.GlobalSystemVariables.GetMaxReplicas()),
-				},
-			},
 		}
 
 		fmt.Printf("QQQ,maxReplicas is %d\n", config.GlobalSystemVariables.GetMaxReplicas())
@@ -241,8 +217,7 @@ func main() {
 	createMOServer(pci)
 	err := runMOServer()
 	if err != nil {
-		fmt.Println(err)
-		return
+		panic(err)
 	}
 	//registerSignalHandlers()
 
@@ -271,7 +246,7 @@ func waitClusterStartup(driver dist.CubeDriver, timeout time.Duration, maxReplic
 					return true
 				})
 				if nodeCnt >= maxReplicas && shardCnt >= minimalAvailableShard {
-					fmt.Printf("ClusterStatus is ok now")
+					fmt.Println("ClusterStatus is ok now")
 					return nil
 				}
 			}
