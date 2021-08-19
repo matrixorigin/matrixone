@@ -494,7 +494,11 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	// Write Header
 	// Write Indice
 	// Write Blocks
-	err := binary.Write(w, binary.BigEndian, uint32(len(data)))
+	err := binary.Write(w, binary.BigEndian, uint8(compress.Lz4))
+	if err != nil {
+		return err
+	}
+	err = binary.Write(w, binary.BigEndian, uint32(len(data)))
 	if err != nil {
 		return err
 	}
@@ -502,22 +506,57 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 		if err = binary.Write(w, binary.BigEndian, blk.ID); err != nil {
 			return err
 		}
+		if err = binary.Write(w, binary.BigEndian, blk.Count); err != nil {
+			return err
+		}
+		var preIdx []byte
+		if blk.PrevIndex != nil {
+			preIdx, err = blk.PrevIndex.Marshall()
+			if err != nil {
+				return err
+			}
+		}
+		if err = binary.Write(w, binary.BigEndian, uint32(len(preIdx))); err != nil {
+			return err
+		}
+		if err = binary.Write(w, binary.BigEndian, preIdx); err != nil {
+			return err
+		}
+		var idx []byte
+		if blk.Index != nil {
+			idx, err = blk.Index.Marshall()
+			if err != nil {
+				return err
+			}
+		}
+		if err = binary.Write(w, binary.BigEndian, uint32(len(idx))); err != nil {
+			return err
+		}
+		if err = binary.Write(w, binary.BigEndian, idx); err != nil {
+			return err
+		}
 	}
+
+	colDefs := meta.Table.Schema.ColDefs
+	colCnt := len(colDefs)
+	if err = binary.Write(w, binary.BigEndian, uint32(colCnt)); err != nil {
+		return err
+	}
+
 	startPos, err := w.Seek(0, io.SeekCurrent)
 	if err != nil {
 		return err
 	}
-	colDefs := meta.Table.Schema.ColDefs
 	if _, err = w.Seek(int64(4*(len(colDefs)+1)), io.SeekCurrent); err != nil {
 		return err
 	}
 
 	colPos := make([]uint32, len(colDefs))
-	var colBufs [][]byte
-	var buf bytes.Buffer
+	//var buf bytes.Buffer
 	for i := 0; i < len(colPos); i++ {
 		pos, _ := w.Seek(0, io.SeekCurrent)
 		colPos[i] = uint32(pos)
+		var buf bytes.Buffer
 		for _, bat := range data {
 			colBuf, err := bat.Vecs[i].Show()
 			if err != nil {
@@ -534,17 +573,19 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 			if err = binary.Write(&buf, binary.BigEndian, uint64(colSize)); err != nil {
 				return err
 			}
-			colBufs = append(colBufs, cbuf)
+			if err = binary.Write(&buf, binary.BigEndian, cbuf); err != nil {
+				return err
+			}
 		}
-	}
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		return err
-	}
-	for idx := 0; idx < len(colPos); idx++ {
-		if _, err := w.Write(colBufs[idx]); err != nil {
+		if _, err := w.Write(buf.Bytes()); err != nil {
 			return err
 		}
 	}
+	//for idx := 0; idx < len(colPos); idx++ {
+	//	if _, err := w.Write(colBufs[idx]); err != nil {
+	//		return err
+	//	}
+	//}
 	//blkMetaPos := make([]uint32, len(data))
 	//for i, bat := range data {
 	//	pos, _ := w.Seek(0, io.SeekCurrent)
@@ -581,7 +622,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	//if _, err = w.WriteAt(buf_.Bytes(), startPos); err != nil {
 	//	return err
 	//}
-	if _, err = w.Seek(colEndPos, io.SeekStart); err != nil {
+	if _, err = w.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 	return nil
