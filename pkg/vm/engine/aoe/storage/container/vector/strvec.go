@@ -69,7 +69,7 @@ func NewStrVectorNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFre
 	return n
 }
 
-func NewEmptyStrVector() IVector {
+func NewEmptyStrVector() *StrVector {
 	return &StrVector{
 		BaseVector: BaseVector{
 			VMask: &nulls.Nulls{},

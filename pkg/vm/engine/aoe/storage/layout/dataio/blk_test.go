@@ -17,10 +17,14 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
-	"matrixone/pkg/container/batch"
+	"matrixone/pkg/compress"
+	gbatch "matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -176,7 +180,7 @@ func TestSegmentWriter(t *testing.T) {
 	assert.Nil(t, err)
 	err = table.RegisterSegment(segment)
 	assert.Nil(t, err)
-	batches := make([]*batch.Batch, 0)
+	batches := make([]*gbatch.Batch, 0)
 	for i := 0; i < int(blkCount); i++ {
 		block, err := segment.CreateBlock()
 		assert.Nil(t, err)
@@ -218,6 +222,63 @@ func TestSegmentWriter(t *testing.T) {
 	stat1 := col1Vf.Stat()
 	t.Log(stat0.Name())
 	t.Log(stat1.Name())
+}
+
+func TestIVectorNodeWriter(t *testing.T) {
+	dir := "/tmp/blktest"
+	os.RemoveAll(dir)
+	vecType := types.Type{types.T_int32, 4, 4, 0}
+	capacity := uint64(40)
+	vec0 := vector.NewStdVector(vecType, capacity)
+	vec1 := vector.NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, capacity)
+	err := vec0.Append(4, []int32{int32(0), int32(1), int32(2), int32(3)})
+	assert.Nil(t, err)
+	str0 := "str0"
+	str1 := "str1"
+	str2 := "str2"
+	str3 := "str3"
+	strs := [][]byte{[]byte(str0), []byte(str1), []byte(str2), []byte(str3)}
+	err = vec1.Append(len(strs), strs)
+
+	info := md.MockInfo(&sync.RWMutex{}, capacity, uint64(10))
+	schema := md.MockSchema(2)
+	tblMeta := md.MockTable(info, schema, 1)
+	meta, err := tblMeta.ReferenceBlock(uint64(1), uint64(1))
+	assert.Nil(t, err)
+	assert.NotNil(t, meta)
+	bat := batch.NewBatch([]int{0, 1}, []vector.IVector{vec0, vec1})
+	w := NewIBatchWriter(bat, meta, dir)
+	err = w.Execute()
+	assert.Nil(t, err)
+
+	id := *meta.AsCommonID()
+	segFile := NewUnsortedSegmentFile(dir, *meta.Segment.AsCommonID())
+	f := NewBlockFile(segFile, id, nil)
+	bufs := make([][]byte, 2)
+	for i, _ := range bufs {
+		sz := f.PartSize(uint64(i), id, false)
+		osz := f.PartSize(uint64(i), id, true)
+		node := common.GPool.Alloc(uint64(sz))
+		defer common.GPool.Free(node)
+		buf := node.Buf[:sz]
+		f.ReadPart(uint64(i), id, buf)
+		obuf := make([]byte, osz)
+		_, err = compress.Decompress(buf, obuf, compress.Lz4)
+		assert.Nil(t, err)
+		if i == 0 {
+			vec := vector.NewEmptyStdVector()
+			err = vec.Unmarshall(obuf)
+			assert.Nil(t, err)
+			t.Log(vec.GetLatestView().CopyToVector().String())
+			assert.Equal(t, 4, vec.Length())
+		} else {
+			vec := vector.NewEmptyStrVector()
+			err = vec.Unmarshall(obuf)
+			assert.Nil(t, err)
+			t.Log(vec.GetLatestView().CopyToVector().String())
+			assert.Equal(t, 4, vec.Length())
+		}
+	}
 }
 
 func TestTransientBlock(t *testing.T) {

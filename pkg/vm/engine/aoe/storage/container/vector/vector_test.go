@@ -145,10 +145,10 @@ func TestStrVector(t *testing.T) {
 	assert.Nil(t, err)
 
 	mirror := NewEmptyStrVector()
-	err = mirror.(buf.IMemoryNode).Unmarshall(marshalled)
+	err = mirror.Unmarshall(marshalled)
 	assert.Nil(t, err)
 
-	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), mirror.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), mirror.GetMemorySize())
 	assert.Equal(t, []byte(str0), mirror.GetValue(0))
 	assert.Equal(t, []byte(str1), mirror.GetValue(1))
 	assert.Equal(t, []byte(str2), mirror.GetValue(2))
@@ -179,7 +179,7 @@ func TestStrVector(t *testing.T) {
 
 	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
 	assert.Nil(t, err)
-	builtVec := NewEmptyStrVector().(IVectorNode)
+	builtVec := NewEmptyStrVector()
 	_, err = builtVec.ReadFrom(f)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte(str0), builtVec.GetValue(0))
