@@ -2,11 +2,10 @@ package engine
 
 import (
 	"errors"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -38,7 +37,7 @@ type checkpointer struct {
 
 func (ck *checkpointer) PreCommit(res md.Resource) error {
 	if res == nil {
-		log.Error("nil res")
+		logutil.Error("nil res")
 		return errors.New("nil res")
 	}
 	var fname string

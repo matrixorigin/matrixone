@@ -2,9 +2,10 @@ package sched
 
 import (
 	"errors"
-	log "github.com/sirupsen/logrus"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
+	"strconv"
 )
 
 var (
@@ -44,7 +45,7 @@ func (s *BaseScheduler) doDispatch(op iops.IOp) {
 	e := op.(Event)
 	dispatcher := s.dispatchers[e.Type()]
 	if dispatcher == nil {
-		log.Error(e.Type())
+		logutil.Error(strconv.Itoa(int(e.Type())))
 		panic(ErrDispatcherNotFound)
 	}
 	dispatcher.Dispatch(e)

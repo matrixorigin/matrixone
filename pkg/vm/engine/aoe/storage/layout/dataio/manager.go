@@ -3,10 +3,10 @@ package dataio
 import (
 	"errors"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"sync"
 )
 
@@ -109,7 +109,7 @@ func (mgr *Manager) UpgradeFile(id common.ID) base.ISegmentFile {
 	mgr.Lock()
 	_, ok := mgr.UnsortedFiles[id]
 	if !ok {
-		log.Info(mgr.stringNoLock())
+		logutil.Debug(mgr.stringNoLock())
 		panic(fmt.Sprintf("upgrade file %s not found", id.SegmentString()))
 	}
 	// defer staleFile.Unref()

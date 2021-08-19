@@ -5,10 +5,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -65,7 +64,7 @@ func (bh *BlockHandle) InitScanCursor() []col.ScanCursor {
 		colBlk.InitScanCursor(&cursors[idx])
 		err := cursors[idx].Init()
 		if err != nil {
-			log.Error(fmt.Sprintf("logic error: %s", err))
+			logutil.Error(fmt.Sprintf("logic error: %s", err))
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
 	}

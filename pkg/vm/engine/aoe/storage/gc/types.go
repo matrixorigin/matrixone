@@ -3,6 +3,7 @@ package gc
 import (
 	"context"
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
@@ -10,8 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/fagongzi/log"
 )
 
 const (
@@ -112,7 +111,7 @@ func (wk *Worker) process() {
 		if err != nil {
 			// TODO
 			if req.GetIteration() > 3 {
-				log.Warningf("handle req err: %s", err)
+				logutil.Warnf("handle req err: %s", err)
 			}
 			req.IncIteration()
 			wk.Accept(req)

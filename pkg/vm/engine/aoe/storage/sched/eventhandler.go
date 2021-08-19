@@ -2,10 +2,9 @@ package sched
 
 import (
 	"errors"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
-
-	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -26,7 +25,7 @@ func newMockEventHandler(name string) *mockEventHandler {
 
 func (h *mockEventHandler) doHandle(op iops.IOp) {
 	e := op.(Event)
-	log.Infof("Handling event type %v, id %d", e.Type(), e.ID())
+	logutil.Debugf("Handling event type %v, id %d", e.Type(), e.ID())
 }
 
 type BaseEventHandler struct {

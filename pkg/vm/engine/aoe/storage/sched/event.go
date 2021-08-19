@@ -1,7 +1,7 @@
 package sched
 
 import (
-	log "github.com/sirupsen/logrus"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync/atomic"
@@ -74,7 +74,7 @@ func (e *BaseEvent) Execute() error {
 	if e.exec != nil {
 		return e.exec(e)
 	}
-	log.Infof("Execute Event Type=%d, ID=%d", e.t, e.id)
+	logutil.Debugf("Execute Event Type=%d, ID=%d", e.t, e.id)
 	return nil
 }
 func (e *BaseEvent) onDone(_ iops.IOp) {
