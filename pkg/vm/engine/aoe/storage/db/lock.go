@@ -1,9 +1,9 @@
 package db
 
 import (
-	log "github.com/sirupsen/logrus"
 	"io"
 	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"os"
 	"syscall"
 )
@@ -32,7 +32,7 @@ func createDBLock(dir string) (io.Closer, error) {
 		Pid:    int32(os.Getpid()),
 	}
 	if err := syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &flockT); err != nil {
-		log.Errorf("error locking file: %s", err)
+		logutil.Errorf("error locking file: %s", err)
 		f.Close()
 		return nil, err
 	}

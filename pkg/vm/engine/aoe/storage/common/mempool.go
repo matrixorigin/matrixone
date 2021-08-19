@@ -2,7 +2,7 @@ package common
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"sync"
 	"sync/atomic"
 	// "runtime"
@@ -237,7 +237,7 @@ func (mp *Mempool) Free(n *MemNode) {
 	// log.Infof("Free size %d", size)
 	usage := atomic.AddUint64(&mp.usage, ^uint64(uint64(size)-1))
 	if usage > mp.capacity {
-		log.Error("logic error")
+		logutil.Error("logic error")
 		panic("")
 	}
 }

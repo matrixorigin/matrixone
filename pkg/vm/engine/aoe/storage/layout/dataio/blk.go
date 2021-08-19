@@ -7,11 +7,10 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type BlockFile struct {
@@ -68,7 +67,7 @@ func (bf *BlockFile) close() {
 
 func (bf *BlockFile) Destory() {
 	name := bf.Name()
-	log.Infof(" %s | BlockFile | Destorying", name)
+	logutil.Debugf(" %s | BlockFile | Destorying", name)
 	err := os.Remove(name)
 	if err != nil {
 		panic(err)

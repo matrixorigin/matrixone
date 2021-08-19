@@ -9,11 +9,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"runtime"
 	"sync"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type ITableData interface {
@@ -47,7 +46,7 @@ func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.I
 	}
 	runtime.SetFinalizer(data, func(o ITableData) {
 		id := o.GetID()
-		log.Infof("[GC]: TableData: %d", id)
+		logutil.Debugf("[GC]: TableData: %d", id)
 	})
 	return data
 }

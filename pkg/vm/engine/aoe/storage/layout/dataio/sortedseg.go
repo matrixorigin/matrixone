@@ -3,12 +3,12 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"io"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
@@ -221,7 +221,7 @@ func (sf *SortedSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta
 
 func (sf *SortedSegmentFile) Destory() {
 	name := sf.Name()
-	log.Infof(" %s | SegmentFile | Destorying", name)
+	logutil.Debugf(" %s | SegmentFile | Destorying", name)
 	err := os.Remove(name)
 	if err != nil {
 		panic(err)

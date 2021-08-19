@@ -2,11 +2,10 @@ package ops
 
 import (
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync/atomic"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type Cmd = uint8
@@ -88,7 +87,7 @@ func NewOpWorker(name string, args ...int) *OpWorker {
 	} else {
 		l = args[0]
 		if l < 0 {
-			log.Warnf("Create OpWorker with negtive queue size %d", l)
+			logutil.Warnf("Create OpWorker with negtive queue size %d", l)
 			l = QUEUE_SIZE
 		}
 	}
