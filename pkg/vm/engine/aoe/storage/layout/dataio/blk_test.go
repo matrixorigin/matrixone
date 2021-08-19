@@ -236,7 +236,7 @@ func TestTransientBlock(t *testing.T) {
 
 	tblk := NewTBlockFile(segFile, *blkMeta.AsCommonID())
 	defer tblk.Destory()
-	t.Log(tblk.NextVersion())
+	t.Log(tblk.nextVersion())
 
 	rows := uint64(2)
 	bat1 := chunk.MockBatch(schema.Types(), rows)

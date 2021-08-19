@@ -63,7 +63,7 @@ func (getter *tblkFileGetter) Getter(dir string, meta *md.Block) (*os.File, erro
 	return w, err
 }
 
-type transientBlockFile struct {
+type TransientBlockFile struct {
 	host    base.ISegmentFile
 	id      common.ID
 	maxver  uint32
@@ -72,8 +72,8 @@ type transientBlockFile struct {
 	mu      sync.RWMutex
 }
 
-func NewTBlockFile(host base.ISegmentFile, id common.ID) *transientBlockFile {
-	tblk := &transientBlockFile{
+func NewTBlockFile(host base.ISegmentFile, id common.ID) *TransientBlockFile {
+	tblk := &TransientBlockFile{
 		id:   id,
 		host: host,
 	}
@@ -81,11 +81,11 @@ func NewTBlockFile(host base.ISegmentFile, id common.ID) *transientBlockFile {
 	return tblk
 }
 
-func (f *transientBlockFile) NextVersion() uint32 {
+func (f *TransientBlockFile) nextVersion() uint32 {
 	return atomic.AddUint32(&f.maxver, uint32(1)) - 1
 }
 
-func (f *transientBlockFile) PreSync(pos uint32) bool {
+func (f *TransientBlockFile) PreSync(pos uint32) bool {
 	f.mu.RLock()
 	if pos < f.currpos {
 		panic(fmt.Sprintf("PreSync %d but lastpos is %d", pos, f.currpos))
@@ -95,9 +95,9 @@ func (f *transientBlockFile) PreSync(pos uint32) bool {
 	return ret
 }
 
-func (f *transientBlockFile) Sync(data []*vector.Vector, meta *md.Block, dir string) error {
+func (f *TransientBlockFile) Sync(data []*vector.Vector, meta *md.Block, dir string) error {
 	writer := NewBlockWriter(data, meta, dir)
-	version := f.NextVersion()
+	version := f.nextVersion()
 	getter := tblkFileGetter{version: version}
 	writer.SetFileGetter(getter.Getter)
 	writer.SetPreExecutor(func() {
@@ -114,7 +114,7 @@ func (f *transientBlockFile) Sync(data []*vector.Vector, meta *md.Block, dir str
 	return nil
 }
 
-func (f *transientBlockFile) commit(bf *versionBlockFile, pos uint32) {
+func (f *TransientBlockFile) commit(bf *versionBlockFile, pos uint32) {
 	f.mu.Lock()
 	f.files = append(f.files, bf)
 	f.currpos = pos
@@ -130,15 +130,15 @@ func (f *transientBlockFile) commit(bf *versionBlockFile, pos uint32) {
 	}
 }
 
-func (f *transientBlockFile) Close() error {
+func (f *TransientBlockFile) Close() error {
 	return nil
 }
 
-func (f *transientBlockFile) GetIndicesMeta() *base.IndexMeta {
+func (f *TransientBlockFile) GetIndicesMeta() *base.IndexMeta {
 	return nil
 }
 
-func (f *transientBlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
+func (f *TransientBlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	f.mu.RLock()
 	file := f.files[len(f.files)-1]
 	file.Ref()
@@ -147,7 +147,7 @@ func (f *transientBlockFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	file.Unref()
 }
 
-func (f *transientBlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
+func (f *TransientBlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	f.mu.RLock()
 	file := f.files[len(f.files)-1]
 	file.Ref()
@@ -156,34 +156,34 @@ func (f *transientBlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	file.Unref()
 }
 
-func (f *transientBlockFile) PartSize(colIdx uint64, id common.ID, isOrigin bool) int64 {
+func (f *TransientBlockFile) PartSize(colIdx uint64, id common.ID, isOrigin bool) int64 {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	file := f.files[len(f.files)-1]
 	return file.PartSize(colIdx, id, isOrigin)
 }
 
-func (f *transientBlockFile) DataCompressAlgo(common.ID) int {
+func (f *TransientBlockFile) DataCompressAlgo(common.ID) int {
 	return compress.None
 }
 
-func (f *transientBlockFile) Destory() {
+func (f *TransientBlockFile) Destory() {
 	for _, file := range f.files {
 		file.Unref()
 	}
 }
 
-func (f *transientBlockFile) Stat() common.FileInfo {
+func (f *TransientBlockFile) Stat() common.FileInfo {
 	f.mu.RLock()
 	file := f.files[len(f.files)-1]
 	f.mu.RUnlock()
 	return file.Stat()
 }
 
-func (f *transientBlockFile) MakeVirtualIndexFile(*base.IndexMeta) common.IVFile {
+func (f *TransientBlockFile) MakeVirtualIndexFile(*base.IndexMeta) common.IVFile {
 	return nil
 }
 
-func (f *transientBlockFile) GetDir() string {
+func (f *TransientBlockFile) GetDir() string {
 	return f.host.GetDir()
 }
