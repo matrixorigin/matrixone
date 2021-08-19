@@ -15,6 +15,7 @@ import (
 )
 
 type BlockFile struct {
+	common.RefHelper
 	os.File
 	ID          common.ID
 	Parts       map[base.Key]*base.Pointer
@@ -51,11 +52,18 @@ func NewBlockFile(segFile base.ISegmentFile, id common.ID) base.IBlockFile {
 
 	bf.File = *r
 	bf.initPointers(id)
+	bf.Ref()
+	bf.OnZeroCB = bf.close
 	return bf
 }
 
 func (bf *BlockFile) GetDir() string {
 	return filepath.Dir(bf.Name())
+}
+
+func (bf *BlockFile) close() {
+	bf.Close()
+	bf.Destory()
 }
 
 func (bf *BlockFile) Destory() {

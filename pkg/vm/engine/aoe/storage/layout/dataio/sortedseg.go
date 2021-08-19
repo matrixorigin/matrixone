@@ -11,7 +11,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 )
 
 func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
@@ -41,6 +40,7 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 }
 
 type SortedSegmentFile struct {
+	common.RefHelper
 	ID common.ID
 	os.File
 	Refs       int32
@@ -71,33 +71,17 @@ func (sf *SortedSegmentFile) GetDir() string {
 	return filepath.Dir(sf.Name())
 }
 
-func (sf *SortedSegmentFile) Ref() {
-	atomic.AddInt32(&sf.Refs, int32(1))
-}
-
-func (sf *SortedSegmentFile) Unref() {
-	v := atomic.AddInt32(&sf.Refs, int32(-1))
-	if v < int32(0) {
-		panic("logic error")
-	}
-	if v == int32(0) {
-		sf.Close()
-		sf.Destory()
-	}
+func (sf *SortedSegmentFile) close() {
+	sf.Close()
+	sf.Destory()
 }
 
 func (sf *SortedSegmentFile) RefBlock(id common.ID) {
-	atomic.AddInt32(&sf.Refs, int32(1))
+	sf.Ref()
 }
 
 func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
-	v := atomic.AddInt32(&sf.Refs, int32(-1))
-	if v == int32(0) {
-		sf.Destory()
-	}
-	if v < int32(0) {
-		panic("logic error")
-	}
+	sf.Unref()
 }
 
 func (sf *SortedSegmentFile) initPointers() {

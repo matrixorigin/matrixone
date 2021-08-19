@@ -1,19 +1,19 @@
 package dataio
 
 import (
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
+	// log "github.com/sirupsen/logrus"
 )
 
 type UnsortedSegmentFile struct {
 	sync.RWMutex
+	common.RefHelper
 	ID     common.ID
 	Blocks map[common.ID]base.IBlockFile
 	Dir    string
-	Refs   int32
 	Info   *fileStat
 }
 
@@ -26,23 +26,12 @@ func NewUnsortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 			name: id.ToSegmentFilePath(),
 		},
 	}
+	usf.OnZeroCB = usf.close
 	return usf
 }
 
-func (sf *UnsortedSegmentFile) Ref() {
-	atomic.AddInt32(&sf.Refs, int32(1))
-}
-
-func (sf *UnsortedSegmentFile) Unref() {
-	v := atomic.AddInt32(&sf.Refs, int32(-1))
-	if v < int32(0) {
-		log.Errorf("logic error")
-		panic("logic error")
-	}
-	if v == int32(0) {
-		sf.Close()
-		sf.Destory()
-	}
+func (sf *UnsortedSegmentFile) close() {
+	sf.Destory()
 }
 
 func (sf *UnsortedSegmentFile) GetFileType() common.FileType {
@@ -61,17 +50,11 @@ func (sf *UnsortedSegmentFile) RefBlock(id common.ID) {
 		bf := NewBlockFile(sf, id)
 		sf.AddBlock(id, bf)
 	}
-	atomic.AddInt32(&sf.Refs, int32(1))
+	sf.Ref()
 }
 
 func (sf *UnsortedSegmentFile) UnrefBlock(id common.ID) {
-	v := atomic.AddInt32(&sf.Refs, int32(-1))
-	if v == int32(0) {
-		sf.Destory()
-	}
-	if v < int32(0) {
-		panic("logic error")
-	}
+	sf.Unref()
 }
 
 func (sf *UnsortedSegmentFile) GetIndicesMeta() *base.IndicesMeta {
@@ -107,18 +90,12 @@ func (sf *UnsortedSegmentFile) Stat() common.FileInfo {
 }
 
 func (sf *UnsortedSegmentFile) Close() error {
-	for _, blkFile := range sf.Blocks {
-		err := blkFile.Close()
-		if err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func (sf *UnsortedSegmentFile) Destory() {
 	for _, blkFile := range sf.Blocks {
-		blkFile.Destory()
+		blkFile.Unref()
 	}
 	sf.Blocks = nil
 }

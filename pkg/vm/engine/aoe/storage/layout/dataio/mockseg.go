@@ -5,12 +5,12 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"path/filepath"
-	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
 )
 
 type MockSegmentFile struct {
+	common.RefHelper
 	FileName string
 	FileType FileType
 	TypeName string
@@ -35,6 +35,7 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegment
 	}
 	msf.FileName = e.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	log.Infof("%s:%s | Created", msf.TypeName, msf.FileName)
+	msf.OnZeroCB = msf.close
 	return msf
 }
 
@@ -85,19 +86,17 @@ func (msf *MockSegmentFile) Destory() {
 
 func (msf *MockSegmentFile) Ref() {
 	log.Infof("%s:%s | Ref All", msf.TypeName, msf.FileName)
-	atomic.AddInt32(&msf.Refs, int32(1))
+	msf.RefHelper.Ref()
+}
+
+func (msf *MockSegmentFile) close() {
+	msf.Close()
+	msf.Destory()
 }
 
 func (msf *MockSegmentFile) Unref() {
 	log.Infof("%s:%s | Unref All", msf.TypeName, msf.FileName)
-	v := atomic.AddInt32(&msf.Refs, int32(-1))
-	if v < int32(0) {
-		panic("logic error")
-	}
-	if v == int32(0) {
-		msf.Close()
-		msf.Destory()
-	}
+	msf.RefHelper.Unref()
 }
 
 func (msf *MockSegmentFile) RefBlock(id common.ID) {
@@ -105,7 +104,7 @@ func (msf *MockSegmentFile) RefBlock(id common.ID) {
 		panic("logic error")
 	}
 	log.Infof("%s:%s | Ref %s", msf.TypeName, msf.FileName, id.BlockString())
-	atomic.AddInt32(&msf.Refs, int32(1))
+	msf.RefHelper.Ref()
 }
 
 func (msf *MockSegmentFile) UnrefBlock(id common.ID) {
@@ -113,14 +112,7 @@ func (msf *MockSegmentFile) UnrefBlock(id common.ID) {
 		panic("logic error")
 	}
 	log.Infof("%s:%s | Unref %s", msf.TypeName, msf.FileName, id.BlockString())
-	v := atomic.AddInt32(&msf.Refs, int32(-1))
-	if v < int32(0) {
-		panic("logic error")
-	}
-	if v == int32(0) {
-		msf.Close()
-		msf.Destory()
-	}
+	msf.RefHelper.Unref()
 }
 
 func (msf *MockSegmentFile) GetDir() string {

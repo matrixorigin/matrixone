@@ -61,12 +61,12 @@ type IManager interface {
 
 type IBaseFile interface {
 	io.Closer
+	common.IRef
 	GetIndicesMeta() *IndicesMeta
 	ReadPoint(ptr *Pointer, buf []byte)
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 	PartSize(colIdx uint64, id common.ID, isOrigin bool) int64
 	DataCompressAlgo(common.ID) int
-	Destory()
 	Stat() common.FileInfo
 	MakeVirtualIndexFile(*IndexMeta) common.IVFile
 	GetDir() string
@@ -74,8 +74,6 @@ type IBaseFile interface {
 
 type ISegmentFile interface {
 	IBaseFile
-	Ref()
-	Unref()
 	RefBlock(blkId common.ID)
 	UnrefBlock(blkId common.ID)
 	ReadBlockPoint(id common.ID, ptr *Pointer, buf []byte)
