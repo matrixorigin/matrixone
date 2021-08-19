@@ -24,8 +24,16 @@ var (
 	MockVFile = mockVFile{}
 )
 
+type IEvictHandle interface {
+	sync.Locker
+	IsClosed() bool
+	Unload()
+	Unloadable() bool
+	Iteration() uint64
+}
+
 type EvictNode struct {
-	Handle iface.INodeHandle
+	Handle IEvictHandle
 	Iter   uint64
 }
 

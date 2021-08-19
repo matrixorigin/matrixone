@@ -15,10 +15,30 @@
 package base
 
 import (
+	"io"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"sync"
 )
+
+type INodeHandle interface {
+	sync.Locker
+	io.Closer
+	common.IRef
+	RLock()
+	RUnlock()
+	GetID() common.ID
+	Unload()
+	Unloadable() bool
+	IsLoaded() bool
+	Load()
+	Destroy()
+	Size() uint64
+	Iteration() uint64
+	IncIteration() uint64
+	IsClosed() bool
+}
 
 type IMemTable interface {
 	common.IRef
@@ -51,6 +71,6 @@ type IManager interface {
 	RegisterCollection(interface{}) (c ICollection, err error)
 	UnregisterCollection(id uint64) (c ICollection, err error)
 	CollectionIDs() map[uint64]uint64
-	GetLimiter() ILimiter
 	String() string
+	// GetLimiter() ILimiter
 }
