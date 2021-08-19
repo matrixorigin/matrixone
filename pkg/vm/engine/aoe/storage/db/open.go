@@ -20,7 +20,7 @@ import (
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mt "matrixone/pkg/vm/engine/aoe/storage/memtable"
+	mt "matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"sync/atomic"
 )
