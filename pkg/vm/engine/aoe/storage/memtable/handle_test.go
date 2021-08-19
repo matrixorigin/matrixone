@@ -76,4 +76,12 @@ func TestHandle(t *testing.T) {
 	assert.Equal(t, sz4, limiter.ActiveSize())
 
 	t.Log(mgr.String())
+
+	n1.Close()
+	n2.Close()
+	n3.Close()
+	mgr.Unpin(n4)
+	n4.Close()
+	assert.Equal(t, uint64(0), limiter.ActiveSize())
+	t.Log(mgr.String())
 }

@@ -45,6 +45,9 @@ func (n *nodeHandle) Close() error {
 		return nil
 	}
 	n.closed = true
+	if n.state == iface.NODE_LOADED {
+		n.Unload()
+	}
 	n.mgr.UnregisterNode(n)
 	return nil
 }
