@@ -23,8 +23,10 @@ func newEmbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) common.IVFi
 		Meta:        meta,
 		Info: &fileStat{
 			size: int64(meta.Ptr.Len),
+			osize: int64(meta.Ptr.Len),
 		},
 	}
+	f.Ref()
 	return f
 }
 
