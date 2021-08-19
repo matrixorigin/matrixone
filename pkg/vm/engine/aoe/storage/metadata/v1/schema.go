@@ -36,7 +36,11 @@ func (s *Schema) Types() (ts []types.Type) {
 }
 
 func (s *Schema) GetColIdx(attr string) int {
-	return s.NameIdMap[attr]
+	idx, ok := s.NameIdMap[attr]
+	if !ok {
+		return -1
+	}
+	return idx
 }
 
 func (s *Schema) Clone() *Schema {
@@ -71,6 +75,26 @@ func MockSchema(colCnt int) *Schema {
 			Idx:  i,
 			Name: name,
 			Type: types.Type{types.T_int32, 4, 4, 0},
+		}
+		schema.ColDefs[i] = colDef
+		schema.NameIdMap[colDef.Name] = i
+	}
+	return schema
+}
+
+func MockVarCharSchema(colCnt int) *Schema {
+	schema := &Schema{
+		ColDefs:   make([]*ColDef, colCnt),
+		Indices:   make([]*IndexInfo, 0),
+		NameIdMap: make(map[string]int),
+	}
+	prefix := "mock_"
+	for i := 0; i < colCnt; i++ {
+		name := fmt.Sprintf("%s%d", prefix, i)
+		colDef := &ColDef{
+			Idx:  i,
+			Name: name,
+			Type: types.Type{types.T_varchar, 24, 0, 0},
 		}
 		schema.ColDefs[i] = colDef
 		schema.NameIdMap[colDef.Name] = i

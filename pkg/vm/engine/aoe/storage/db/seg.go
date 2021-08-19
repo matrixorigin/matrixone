@@ -54,7 +54,7 @@ func (seg *Segment) NewSummarizer() engine.Summarizer {
 }
 
 func (seg *Segment) NewSparseFilter() engine.SparseFilter {
-	return nil
+	return NewSegmentSparseFilter(seg)
 }
 
 func (seg *Segment) Rows() int64 {

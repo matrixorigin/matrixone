@@ -5,11 +5,9 @@ import (
 	"encoding/binary"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
@@ -125,33 +123,34 @@ func (bw *BlockWriter) defaultPreprocessor(data []*vector.Vector, meta *md.Block
 }
 
 func (bw *BlockWriter) flushIndices(w *os.File, data []*vector.Vector, meta *md.Block) error {
-	indices := []index.Index{}
-	hasBsi := false
-	for idx, t := range meta.Segment.Table.Schema.ColDefs {
-		if t.Type.Oid == types.T_int32 {
-			{
-				minv := int32(1) + int32(idx)*100
-				maxv := int32(99) + int32(idx)*100
-				zmi := index.NewZoneMap(t.Type, minv, maxv, int16(idx))
-				indices = append(indices, zmi)
-			}
-			if !hasBsi {
-				// column := data[idx].Col.([]int32)
-				// bsiIdx := index.NewNumericBsiIndex(t.Type, 32, int16(idx))
-				// for row, val := range column {
-				// 	bsiIdx.Set(uint64(row), int64(val))
-				// }
-				// indices = append(indices, bsiIdx)
-				hasBsi = true
-			}
-		}
-	}
-	buf, err := index.DefaultRWHelper.WriteIndices(indices)
-	if err != nil {
-		return err
-	}
-	_, err = w.Write(buf)
-	return err
+	//indices := []index.Index{}
+	//hasBsi := false
+	//for idx, t := range meta.Segment.Table.Schema.ColDefs {
+	//	if t.Type.Oid == types.T_int32 {
+	//		{
+	//			minv := int32(1) + int32(idx)*100
+	//			maxv := int32(99) + int32(idx)*100
+	//			zmi := index.NewZoneMap(t.Type, minv, maxv, int16(idx))
+	//			indices = append(indices, zmi)
+	//		}
+	//		if !hasBsi {
+	//			// column := data[idx].Col.([]int32)
+	//			// bsiIdx := index.NewNumericBsiIndex(t.Type, 32, int16(idx))
+	//			// for row, val := range column {
+	//			// 	bsiIdx.Set(uint64(row), int64(val))
+	//			// }
+	//			// indices = append(indices, bsiIdx)
+	//			hasBsi = true
+	//		}
+	//	}
+	//}
+	//buf, err := index.DefaultRWHelper.WriteIndices(indices)
+	//if err != nil {
+	//	return err
+	//}
+	//_, err = w.Write(buf)
+	//return err
+	return nil
 }
 
 func (bw *BlockWriter) GetFileName() string {
@@ -208,6 +207,36 @@ func flushWithLz4Compression(w *os.File, data []*vector.Vector, meta *md.Block) 
 	}
 	colCnt := len(meta.Segment.Table.Schema.ColDefs)
 	if err = binary.Write(&buf, binary.BigEndian, uint16(colCnt)); err != nil {
+		return err
+	}
+	count := meta.Count
+	if err = binary.Write(&buf, binary.BigEndian, count); err != nil {
+		return err
+	}
+	var preIdx []byte
+	if meta.PrevIndex != nil {
+		preIdx, err = meta.PrevIndex.Marshall()
+		if err != nil {
+			return err
+		}
+	}
+	if err = binary.Write(&buf, binary.BigEndian, int32(len(preIdx))); err != nil {
+		return err
+	}
+	if err = binary.Write(&buf, binary.BigEndian, preIdx); err != nil {
+		return err
+	}
+	var idx []byte
+	if meta.Index != nil {
+		idx, err = meta.Index.Marshall()
+		if err != nil {
+			return err
+		}
+	}
+	if err = binary.Write(&buf, binary.BigEndian, int32(len(idx))); err != nil {
+		return err
+	}
+	if err = binary.Write(&buf, binary.BigEndian, idx); err != nil {
 		return err
 	}
 	var colBufs [][]byte

@@ -7,8 +7,8 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
 )
@@ -83,15 +83,16 @@ func (bf *BlockFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
-	indexMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
-	if err != nil {
-		panic(fmt.Sprintf("unexpect error: %s", err))
-	}
-	bf.Meta.Indices = indexMeta
+	//indexMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
+	//if err != nil {
+	//	panic(fmt.Sprintf("unexpect error: %s", err))
+	//}
+	//bf.Meta.Indices = indexMeta
 
 	var (
 		cols uint16
 		algo uint8
+		err error
 	)
 	offset, _ := bf.File.Seek(0, io.SeekCurrent)
 	if err = binary.Read(&bf.File, binary.BigEndian, &algo); err != nil {
@@ -100,7 +101,35 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	if err = binary.Read(&bf.File, binary.BigEndian, &cols); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	headSize := 3 + 2*8*int(cols)
+	var count uint64
+	if err = binary.Read(&bf.File, binary.BigEndian, &count); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	var sz int32
+	if err = binary.Read(&bf.File, binary.BigEndian, &sz); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	buf := make([]byte, sz)
+	if err = binary.Read(&bf.File, binary.BigEndian, &buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	prevIdx := metadata.LogIndex{}
+	if err = prevIdx.UnMarshall(buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	var sz_ int32
+	if err = binary.Read(&bf.File, binary.BigEndian, &sz_); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	buf = make([]byte, sz_)
+	if err = binary.Read(&bf.File, binary.BigEndian, &buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	idx := metadata.LogIndex{}
+	if err = idx.UnMarshall(buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	headSize := 8 + int(sz + sz_) + 3 + 8 + 2*8*int(cols)
 	currOffset := headSize + int(offset)
 	for i := uint16(0); i < cols; i++ {
 		key := base.Key{
