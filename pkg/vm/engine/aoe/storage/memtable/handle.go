@@ -77,10 +77,11 @@ func (n *nodeHandle) Unload() {
 	if n.state == iface.NODE_UNLOAD {
 		return
 	}
+	n.mgr.limiter.RetuernQuota(n.size)
 	if n.unloadFunc != nil {
 		n.unloadFunc()
 	}
-	n.state = iface.NODE_LOADED
+	n.state = iface.NODE_UNLOAD
 }
 
 // Should be guarded by lock
@@ -96,6 +97,11 @@ func (n *nodeHandle) Unloadable() bool {
 		ret = n.unloadableFunc()
 	}
 	return ret
+}
+
+// Should be guarded by lock
+func (n *nodeHandle) GetState() iface.NodeState {
+	return n.state
 }
 
 // Should be guarded by lock

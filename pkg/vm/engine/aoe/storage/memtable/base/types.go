@@ -17,6 +17,7 @@ package base
 import (
 	"io"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
@@ -38,6 +39,7 @@ type INodeHandle interface {
 	Iteration() uint64
 	IncIteration() uint64
 	IsClosed() bool
+	GetState() iface.NodeState
 }
 
 type IMemTable interface {
@@ -61,6 +63,7 @@ type ICollection interface {
 type ISizeLimiter interface {
 	ActiveSize() uint64
 	ApplySizeQuota(uint64) bool
+	RetuernQuota(uint64) uint64
 }
 
 type IManager interface {

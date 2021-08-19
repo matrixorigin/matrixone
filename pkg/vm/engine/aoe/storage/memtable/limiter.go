@@ -15,6 +15,10 @@ func newMemtableLimiter(maxactivesize uint64) *memtableLimiter {
 	}
 }
 
+func (l *memtableLimiter) RetuernQuota(size uint64) uint64 {
+	return atomic.AddUint64(&l.activesize, ^uint64(size-1))
+}
+
 func (l *memtableLimiter) ApplySizeQuota(size uint64) bool {
 	pre := atomic.LoadUint64(&l.activesize)
 	post := pre + size
