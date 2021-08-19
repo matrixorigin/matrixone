@@ -95,6 +95,8 @@ func (f *TransientBlockFile) PreSync(pos uint32) bool {
 	return ret
 }
 
+// func (f *TransientBlockFile) LoadBatch() bat
+
 func (f *TransientBlockFile) Sync(data []*vector.Vector, meta *md.Block, dir string) error {
 	writer := NewBlockWriter(data, meta, dir)
 	version := f.nextVersion()

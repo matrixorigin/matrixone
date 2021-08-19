@@ -14,11 +14,13 @@ type manager struct {
 	opts        *engine.Options
 	collections map[uint64]*collection
 	data        iface.ITableData
+	nodemgr     *nodeManager
 }
 
-func NewManager(opts *engine.Options) *manager {
+func NewManager(opts *engine.Options, nodemgr *nodeManager) *manager {
 	m := &manager{
 		opts:        opts,
+		nodemgr:     nodemgr,
 		collections: make(map[uint64]*collection),
 	}
 	return m
