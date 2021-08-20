@@ -74,10 +74,22 @@ func TestHandle(t *testing.T) {
 
 	t.Log(mgr.String())
 
+	h4.Close()
+	h3 = mgr.Pin(n3)
+	assert.NotNil(t, h3)
+	h3.Close()
+	h1 = mgr.Pin(n1)
+	err := h1.GetNode().Expand(uint64(100), nil)
+	assert.NotNil(t, err)
+	err = h1.GetNode().Expand(uint64(60), nil)
+	assert.Nil(t, err)
+	h2 = mgr.Pin(n2)
+	assert.Nil(t, h2)
+	t.Log(mgr.String())
+
 	n1.Close()
 	n2.Close()
 	n3.Close()
-	h4.Close()
 	n4.Close()
 	assert.Equal(t, uint64(0), mgr.Total())
 	t.Log(mgr.String())

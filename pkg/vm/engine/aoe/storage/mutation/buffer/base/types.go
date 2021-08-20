@@ -31,6 +31,7 @@ type INode interface {
 	IncIteration() uint64
 	IsClosed() bool
 	GetState() iface.NodeState
+	Expand(uint64, func() error) error
 }
 
 type INodeManager interface {
@@ -44,6 +45,7 @@ type INodeManager interface {
 	UnregisterNode(INode)
 	Pin(INode) INodeHandle
 	Unpin(INode)
+	MakeRoom(uint64) bool
 }
 
 type ISizeLimiter interface {

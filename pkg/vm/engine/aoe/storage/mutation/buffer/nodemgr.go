@@ -76,8 +76,8 @@ func (mgr *nodeManager) UnregisterNode(node base.INode) {
 	node.Destroy()
 }
 
-func (mgr *nodeManager) makeRoom(node base.INode) bool {
-	ok := mgr.sizeLimiter.ApplyQuota(node.Size())
+func (mgr *nodeManager) MakeRoom(size uint64) bool {
+	ok := mgr.sizeLimiter.ApplyQuota(size)
 	for !ok {
 		evicted := mgr.evicter.Dequeue()
 		if evicted == nil {
@@ -104,7 +104,7 @@ func (mgr *nodeManager) makeRoom(node base.INode) bool {
 			evicted.Handle.Unload()
 			evicted.Handle.Unlock()
 		}
-		ok = mgr.sizeLimiter.ApplyQuota(node.Size())
+		ok = mgr.sizeLimiter.ApplyQuota(size)
 	}
 
 	return ok
@@ -123,7 +123,7 @@ func (mgr *nodeManager) Pin(node base.INode) base.INodeHandle {
 	if node.IsLoaded() {
 		return node.MakeHandle()
 	}
-	ok := mgr.makeRoom(node)
+	ok := mgr.MakeRoom(node.Size())
 	if !ok {
 		return nil
 	}

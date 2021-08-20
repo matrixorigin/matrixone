@@ -6,6 +6,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync"
 	"sync/atomic"
+
+	"github.com/cockroachdb/errors"
 )
 
 type nodeHandle struct {
@@ -135,6 +137,32 @@ func (n *Node) Unloadable() bool {
 // Should be guarded by lock
 func (n *Node) GetState() iface.NodeState {
 	return n.state
+}
+
+func (n *Node) prepareExpand(delta uint64) bool {
+	return n.mgr.MakeRoom(delta)
+}
+
+func (n *Node) Expand(delta uint64, fn func() error) error {
+	if !n.prepareExpand(delta) {
+		return errors.New("aoe node expand: no enough space")
+	}
+	if fn != nil {
+		if err := fn(); err != nil {
+			n.rollbackExpand(delta)
+			return err
+		}
+	}
+	n.commitExpand(delta)
+	return nil
+}
+
+func (n *Node) commitExpand(delta uint64) {
+	n.size += delta
+}
+
+func (n *Node) rollbackExpand(delta uint64) {
+	n.mgr.RetuernQuota(delta)
 }
 
 // Should be guarded by lock
