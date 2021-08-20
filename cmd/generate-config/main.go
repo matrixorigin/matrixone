@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"matrixone/pkg/config"
 	"os"
 	"strings"
 )
@@ -15,11 +14,11 @@ func main() {
 		return
 	}
 
-	var gen config.ConfigurationFileGenerator
+	var gen ConfigurationFileGenerator
 	if argCnt == 2 {
-		gen = config.NewConfigurationFileGenerator(os.Args[1])
+		gen = NewConfigurationFileGenerator(os.Args[1])
 	} else if argCnt == 3 {
-		gen = config.NewConfigurationFileGeneratorWithOutputDirectory(os.Args[1], os.Args[2])
+		gen = NewConfigurationFileGeneratorWithOutputDirectory(os.Args[1], os.Args[2])
 	}
 
 	if err := gen.Generate(); err != nil {

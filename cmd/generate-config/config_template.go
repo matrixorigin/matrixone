@@ -1,4 +1,4 @@
-package config
+package main
 
 import (
 	"fmt"
@@ -1134,20 +1134,20 @@ func Test{{.ParameterStructName}}_LoadInitialValues(t *testing.T) {
 
 func is{{.ConfigurationStructName}}Equal(c1,c2 {{.ConfigurationStructName}}) bool {
 
-{{range .Parameter}}
+{{range .Parameter -}}
 {{ if ne .UpdateMode "fix"}}
 	if c1.{{.CapitalName}} != c2.{{.CapitalName}} {
 		return false
 	}
-{{end}}
-{{end}}
+{{- end}}
+{{- end}}
 
 	return true
 }
 
 func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T) {
 	t1 := ` + "`" + `
-{{range $index,$param := .Parameter}}
+{{range $index,$param := .Parameter -}}
 {{ if ne .UpdateMode "fix"}}
 	{{- with $count := len .Values -}}
 		{{- if ne 0 $count -}}
@@ -1174,7 +1174,7 @@ func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T)
 	t1_config:={{.ConfigurationStructName}}{
 		rwlock:            sync.RWMutex{},
 
-{{range $index,$param := .Parameter}}
+{{range $index,$param := .Parameter -}}
 {{ if ne .UpdateMode "fix"}}
 	{{- with $count := len .Values -}}
 		{{- if ne 0 $count -}}
