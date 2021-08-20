@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"matrixone/pkg/prefetch"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -203,4 +204,19 @@ func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 		panic(fmt.Sprintf("buf len is %d, but pointer len is %d", len(buf), pointer.Len))
 	}
 	bf.ReadPoint(pointer, buf)
+}
+
+func (bf *BlockFile) PrefetchPart(colIdx uint64, id common.ID) error {
+	key := base.Key{
+		Col: colIdx,
+		ID:  id.AsBlockID(),
+	}
+	pointer, ok := bf.Parts[key]
+	if !ok {
+		panic("logic error")
+	}
+	offset := pointer.Offset
+	sz := pointer.Len
+	// integrate vfs later
+	return prefetch.Prefetch(bf.Fd(), uintptr(offset), uintptr(sz))
 }

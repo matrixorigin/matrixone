@@ -1,6 +1,7 @@
 package table
 
 import (
+	"errors"
 	"fmt"
 	ro "matrixone/pkg/container/vector"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -274,6 +275,14 @@ func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) 
 		return nil, err
 	}
 	return vec, nil
+}
+
+func (blk *Block) Prefetch(attr string) error {
+	colIdx := blk.Meta.Segment.Table.Schema.GetColIdx(attr)
+	if colIdx == -1 {
+		return errors.New("column not found")
+	}
+	return blk.data.Columns[colIdx].Prefetch()
 }
 
 func (blk *Block) GetFullBatch() batch.IBatch {

@@ -84,6 +84,7 @@ type IBlock interface {
 	GetBatch(attrs []int) dbi.IBatchReader
 	GetVectorWrapper(col int) (*svec.VectorWrapper, error)
 	GetVectorCopy(attr string, ref uint64, proc *process.Process) (*vector.Vector, error)
+	Prefetch(attr string) error
 	WeakRefSegment() ISegment
 	GetRowCount() uint64
 	GetNext() IBlock

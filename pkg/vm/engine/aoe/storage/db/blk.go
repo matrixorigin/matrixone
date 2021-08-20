@@ -32,10 +32,19 @@ func (blk *Block) ID() string {
 
 func (blk *Block) Prefetch(cs []uint64, attrs []string, proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(true, attrs)
+	data := blk.Host.Data.StrongRefBlock(blk.Id)
+	if data == nil {
+		return nil, errors.New(fmt.Sprintf("Specified blk %d not found", blk.Id))
+	}
+	defer data.Unref()
 	bat.Is = make([]batch.Info, len(attrs))
-	for i, _ := range attrs {
+	for i, attr := range attrs {
+		if err := data.Prefetch(attr); err != nil {
+			return nil, err
+		}
 		bat.Is[i].R = blk
 		bat.Is[i].Ref = cs[i]
+		bat.Is[i].Len = blk.Size(attr)
 	}
 	return bat, nil
 }

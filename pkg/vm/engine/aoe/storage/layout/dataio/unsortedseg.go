@@ -159,3 +159,13 @@ func (sf *UnsortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte)
 	sf.RUnlock()
 	blk.ReadPart(colIdx, id, buf)
 }
+
+func (sf *UnsortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
+	sf.RLock()
+	blk, ok := sf.Blocks[id.AsBlockID()]
+	if !ok {
+		panic("logic error")
+	}
+	sf.RUnlock()
+	return blk.PrefetchPart(colIdx, id)
+}

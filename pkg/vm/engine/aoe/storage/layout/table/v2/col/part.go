@@ -25,6 +25,7 @@ type IColumnPart interface {
 	GetColIdx() int
 	LoadVectorWrapper() (*vector.VectorWrapper, error)
 	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
+	Prefetch() error
 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
 	GetVector() vector.IVector
 	Size() uint64
@@ -143,6 +144,19 @@ func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 		return nil, err
 	}
 	return &wrapper.Vector, nil
+}
+
+func (part *ColumnPart) Prefetch() error {
+	if part.VFile.GetFileType() == common.MemFile {
+		return nil
+	}
+	id := common.ID{
+		TableID:   part.Block.GetMeta().Segment.Table.GetID(),
+		SegmentID: part.Block.GetMeta().GetSegmentID(),
+		BlockID:   part.Block.GetID(),
+		Idx: uint16(part.GetColIdx()),
+	}
+	return part.Block.GetSegmentFile().PrefetchPart(uint64(part.GetColIdx()), id)
 }
 
 func (part *ColumnPart) Size() uint64 {

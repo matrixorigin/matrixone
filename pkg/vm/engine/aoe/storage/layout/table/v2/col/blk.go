@@ -34,6 +34,7 @@ type IColumnBlock interface {
 	GetVector() vector.IVector
 	LoadVectorWrapper() (*vector.VectorWrapper, error)
 	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
+	Prefetch() error
 	GetVectorReader() dbi.IVectorReader
 }
 
