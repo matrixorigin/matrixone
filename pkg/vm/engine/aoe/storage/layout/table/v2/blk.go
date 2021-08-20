@@ -276,6 +276,11 @@ func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) 
 	return vec, nil
 }
 
+func (blk *Block) Prefetch(attr string) error {
+	colIdx := blk.Meta.Segment.Table.Schema.GetColIdx(attr)
+	return blk.data.Columns[colIdx].Prefetch()
+}
+
 func (blk *Block) GetFullBatch() batch.IBatch {
 	vecs := make([]vector.IVector, len(blk.data.Columns))
 	attrs := make([]int, len(blk.data.Columns))

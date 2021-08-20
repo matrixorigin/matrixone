@@ -114,6 +114,10 @@ func (blk *StdColumnBlock) ForceLoad(ref uint64, proc *process.Process) (*ro.Vec
 	return blk.Part.ForceLoad(ref, proc)
 }
 
+func (blk *StdColumnBlock) Prefetch() error {
+	return blk.Part.Prefetch()
+}
+
 func (blk *StdColumnBlock) GetVector() vector.IVector {
 	return blk.Part.GetVector()
 }
