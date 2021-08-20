@@ -66,6 +66,10 @@ func (sf *MockSegmentFile) DataCompressAlgo(id common.ID) int {
 	return 0
 }
 
+func (sf *MockSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
+	return nil
+}
+
 func (msf *MockSegmentFile) PartSize(colIdx uint64, id common.ID, _ bool) int64 {
 	return 0
 }

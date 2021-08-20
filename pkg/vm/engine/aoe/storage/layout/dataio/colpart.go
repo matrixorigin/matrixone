@@ -64,3 +64,7 @@ type MockColPartFile struct {
 func (cpf *MockColPartFile) Read(buf []byte) (n int, err error) {
 	return len(buf), nil
 }
+
+func (cpf *ColPartFile) Name() string {
+	return cpf.Stat().(*colPartFileStat).Name()
+}

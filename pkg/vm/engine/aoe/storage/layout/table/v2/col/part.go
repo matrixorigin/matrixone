@@ -3,7 +3,6 @@ package col
 import (
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
-	"matrixone/pkg/prefetch"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -14,8 +13,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	"matrixone/pkg/vm/process"
 	"sync"
-	"syscall"
-
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -153,16 +150,13 @@ func (part *ColumnPart) Prefetch() error {
 	if part.VFile.GetFileType() == common.MemFile {
 		return nil
 	}
-	fd, err := syscall.Open(part.VFile.Stat().Name(), syscall.O_RDONLY, 0)
-	if err != nil {
-		return err
+	id := common.ID{
+		TableID:   part.Block.GetMeta().Segment.Table.GetID(),
+		SegmentID: part.Block.GetMeta().GetSegmentID(),
+		BlockID:   part.Block.GetID(),
+		Idx: uint16(part.GetColIdx()),
 	}
-	err = prefetch.Prefetch(uintptr(fd), 0, uintptr(part.Size()))
-	if err != nil {
-		return err
-	}
-	err = syscall.Close(fd)
-	return err
+	return part.Block.GetSegmentFile().PrefetchPart(uint64(part.GetColIdx()), id)
 }
 
 func (part *ColumnPart) Size() uint64 {

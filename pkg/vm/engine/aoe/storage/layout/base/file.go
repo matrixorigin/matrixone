@@ -65,6 +65,7 @@ type IBaseFile interface {
 	GetIndicesMeta() *IndicesMeta
 	ReadPoint(ptr *Pointer, buf []byte)
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
+	PrefetchPart(colIdx uint64, id common.ID) error
 	PartSize(colIdx uint64, id common.ID, isOrigin bool) int64
 	DataCompressAlgo(common.ID) int
 	Stat() common.FileInfo

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go.uber.org/zap"
 	"io"
+	"matrixone/pkg/prefetch"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -367,4 +368,19 @@ func (sf *SortedSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	}
 
 	sf.ReadPoint(pointer, buf)
+}
+
+func (sf *SortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
+	key := base.Key{
+		Col: colIdx,
+		ID:  id,
+	}
+	pointer, ok := sf.Parts[key]
+	if !ok {
+		panic("logic error")
+	}
+	offset := pointer.Offset
+	sz := pointer.Len
+	// integrate vfs later
+	return prefetch.Prefetch(sf.Fd(), uintptr(offset), uintptr(sz))
 }
