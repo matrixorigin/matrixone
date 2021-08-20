@@ -98,7 +98,7 @@ func (v *StdVector) FreeMemory() {
 }
 
 func (v *StdVector) GetMemorySize() uint64 {
-	return uint64(v.dataBytes())
+	return v.GetMemoryCapacity()
 }
 
 func (v *StdVector) GetMemoryCapacity() uint64 {
