@@ -6,6 +6,7 @@ import (
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/memtable/v2/base"
+	mbase "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync"
 )
 
@@ -14,10 +15,10 @@ type manager struct {
 	opts        *engine.Options
 	collections map[uint64]*collection
 	data        iface.ITableData
-	nodemgr     *nodeManager
+	nodemgr     mbase.INodeManager
 }
 
-func NewManager(opts *engine.Options, nodemgr *nodeManager) *manager {
+func NewManager(opts *engine.Options, nodemgr mbase.INodeManager) *manager {
 	m := &manager{
 		opts:        opts,
 		nodemgr:     nodemgr,

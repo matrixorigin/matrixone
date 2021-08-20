@@ -1,4 +1,4 @@
-package memtable
+package buffer
 
 import (
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
@@ -9,7 +9,7 @@ import (
 )
 
 type testNodeHandle struct {
-	node
+	Node
 	t *testing.T
 }
 
@@ -25,19 +25,19 @@ func (h *testNodeHandle) destory() {
 
 func newTestNodeHandle(mgr *nodeManager, id common.ID, size uint64, t *testing.T) *testNodeHandle {
 	n := &testNodeHandle{
-		node: *newNode(mgr, id, size),
+		Node: *NewNode(mgr, id, size),
 		t:    t,
 	}
-	n.loadFunc = n.load
-	n.unloadFunc = n.unload
-	n.destoryFunc = n.destory
+	n.LoadFunc = n.load
+	n.UnloadFunc = n.unload
+	n.DestroyFunc = n.destory
 	return n
 }
 
 func TestHandle(t *testing.T) {
 	maxsize := uint64(100)
 	evicter := bm.NewSimpleEvictHolder()
-	mgr := newNodeManager(maxsize, evicter)
+	mgr := NewNodeManager(maxsize, evicter)
 	baseId := common.ID{}
 	id1 := baseId.NextBlock()
 	id2 := baseId.NextBlock()

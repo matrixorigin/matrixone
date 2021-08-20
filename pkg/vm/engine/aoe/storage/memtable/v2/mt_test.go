@@ -7,14 +7,16 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	// "matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	mbase "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func createNodeMgr(maxsize uint64) *nodeManager {
+func createNodeMgr(maxsize uint64) mbase.INodeManager {
 	evicter := bm.NewSimpleEvictHolder()
-	nmgr := newNodeManager(maxsize, evicter)
+	nmgr := buffer.NewNodeManager(maxsize, evicter)
 	return nmgr
 }
 

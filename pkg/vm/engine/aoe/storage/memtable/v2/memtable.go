@@ -9,10 +9,11 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 )
 
 type memTable struct {
-	node
+	buffer.Node
 	mgr       *manager
 	TableData iface.ITableData
 	Meta      *md.Block
@@ -27,10 +28,10 @@ func newMemTable(mgr *manager, tableData iface.ITableData, data iface.IBlock) *m
 		TableData: tableData,
 		Block:     data,
 		Meta:      data.GetMeta(),
-		node:      *newNode(mgr.nodemgr, *data.GetMeta().AsCommonID(), uint64(0)),
+		Node:      *buffer.NewNode(mgr.nodemgr, *data.GetMeta().AsCommonID(), uint64(0)),
 	}
-	mt.loadFunc = mt.load
-	mt.unloadFunc = mt.unload
+	mt.LoadFunc = mt.load
+	mt.UnloadFunc = mt.unload
 	return mt
 }
 

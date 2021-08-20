@@ -1,19 +1,19 @@
-package memtable
+package buffer
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/memtable/v2/base"
+	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync"
 	"sync/atomic"
 )
 
 type nodeHandle struct {
-	n   *node
-	mgr *nodeManager
+	n   base.INode
+	mgr base.INodeManager
 }
 
-func newNodeHandle(n *node, mgr *nodeManager) *nodeHandle {
+func newNodeHandle(n *Node, mgr base.INodeManager) *nodeHandle {
 	return &nodeHandle{
 		n:   n,
 		mgr: mgr,
@@ -33,42 +33,42 @@ func (h *nodeHandle) Close() error {
 	return nil
 }
 
-type node struct {
+type Node struct {
 	common.RefHelper
 	sync.RWMutex
-	mgr            *nodeManager
+	mgr            base.INodeManager
 	id             common.ID
 	state          iface.NodeState
 	size           uint64
 	iter           uint64
 	closed         bool
-	destoryFunc    func()
-	loadFunc       func()
-	unloadableFunc func() bool
-	unloadFunc     func()
+	DestroyFunc    func()
+	LoadFunc       func()
+	UnloadableFunc func() bool
+	UnloadFunc     func()
 }
 
-func newNode(mgr *nodeManager, id common.ID, size uint64) *node {
-	return &node{
+func NewNode(mgr base.INodeManager, id common.ID, size uint64) *Node {
+	return &Node{
 		mgr:  mgr,
 		id:   id,
 		size: size,
 	}
 }
 
-func (n *node) Size() uint64 {
+func (n *Node) Size() uint64 {
 	return n.size
 }
 
-func (n *node) GetID() common.ID {
+func (n *Node) GetID() common.ID {
 	return n.id
 }
 
-func (n *node) MakeHandle() base.INodeHandle {
+func (n *Node) MakeHandle() base.INodeHandle {
 	return newNodeHandle(n, n.mgr)
 }
 
-func (n *node) Close() error {
+func (n *Node) Close() error {
 	n.Lock()
 	defer n.Unlock()
 	if n.closed == true {
@@ -82,43 +82,43 @@ func (n *node) Close() error {
 	return nil
 }
 
-func (n *node) IsClosed() bool {
+func (n *Node) IsClosed() bool {
 	n.RLock()
 	defer n.RUnlock()
 	return n.closed
 }
 
-func (n *node) Destroy() {
-	if n.destoryFunc != nil {
-		n.destoryFunc()
+func (n *Node) Destroy() {
+	if n.DestroyFunc != nil {
+		n.DestroyFunc()
 	}
 }
 
 // Should be guarded by lock
-func (n *node) Load() {
+func (n *Node) Load() {
 	if n.state == iface.NODE_LOADED {
 		return
 	}
-	if n.loadFunc != nil {
-		n.loadFunc()
+	if n.LoadFunc != nil {
+		n.LoadFunc()
 	}
 	n.state = iface.NODE_LOADED
 }
 
 // Should be guarded by lock
-func (n *node) Unload() {
+func (n *Node) Unload() {
 	if n.state == iface.NODE_UNLOAD {
 		return
 	}
 	n.mgr.RetuernQuota(n.size)
-	if n.unloadFunc != nil {
-		n.unloadFunc()
+	if n.UnloadFunc != nil {
+		n.UnloadFunc()
 	}
 	n.state = iface.NODE_UNLOAD
 }
 
 // Should be guarded by lock
-func (n *node) Unloadable() bool {
+func (n *Node) Unloadable() bool {
 	if n.state == iface.NODE_UNLOAD {
 		return false
 	}
@@ -126,24 +126,24 @@ func (n *node) Unloadable() bool {
 		return false
 	}
 	ret := true
-	if n.unloadableFunc != nil {
-		ret = n.unloadableFunc()
+	if n.UnloadableFunc != nil {
+		ret = n.UnloadableFunc()
 	}
 	return ret
 }
 
 // Should be guarded by lock
-func (n *node) GetState() iface.NodeState {
+func (n *Node) GetState() iface.NodeState {
 	return n.state
 }
 
 // Should be guarded by lock
-func (n *node) IsLoaded() bool { return n.state == iface.NODE_LOADED }
+func (n *Node) IsLoaded() bool { return n.state == iface.NODE_LOADED }
 
-func (n *node) IncIteration() uint64 {
+func (n *Node) IncIteration() uint64 {
 	return atomic.AddUint64(&n.iter, uint64(1))
 }
 
-func (n *node) Iteration() uint64 {
+func (n *Node) Iteration() uint64 {
 	return atomic.LoadUint64(&n.iter)
 }

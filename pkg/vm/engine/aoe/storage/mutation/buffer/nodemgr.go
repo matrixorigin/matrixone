@@ -1,11 +1,11 @@
-package memtable
+package buffer
 
 import (
 	"fmt"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/memtable/v2/base"
+	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync"
 	"sync/atomic"
 	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
@@ -21,7 +21,7 @@ type nodeManager struct {
 	evicttimes      int64
 }
 
-func newNodeManager(maxsize uint64, evicter bm.IEvictHolder) *nodeManager {
+func NewNodeManager(maxsize uint64, evicter bm.IEvictHolder) *nodeManager {
 	mgr := &nodeManager{
 		sizeLimiter: *newSizeLimiter(maxsize),
 		nodes:       make(map[common.ID]base.INode),
