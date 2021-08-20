@@ -30,11 +30,12 @@ func newMemTable(mgr *manager, tableData iface.ITableData, data iface.IBlock) *m
 		nodeHandle: *newNodeHandle(mgr.nodemgr, *data.GetMeta().AsCommonID(), uint64(0)),
 	}
 	mt.loadFunc = mt.load
+	mt.unloadFunc = mt.unload
 	return mt
 }
 
 func (mt *memTable) load() {
-	// mt.Data = mt.File.LoadBatch()
+	mt.Data = mt.File.LoadBatch(mt.Meta)
 }
 
 func (mt *memTable) unload() {
@@ -49,6 +50,8 @@ func (mt *memTable) unload() {
 	}
 	meta := mt.Meta.Copy()
 	mt.File.Sync(vecs, meta, meta.Segment.Table.Conf.Dir)
+	mt.Data.Close()
+	mt.Data = nil
 }
 
 func (mt *memTable) Append(bat *gbatch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error) {

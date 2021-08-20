@@ -2,17 +2,21 @@ package dataio
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"matrixone/pkg/compress"
-	"matrixone/pkg/container/vector"
+	"matrixone/pkg/container/types"
+	gvector "matrixone/pkg/container/vector"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type versionBlockFile struct {
@@ -95,9 +99,51 @@ func (f *TransientBlockFile) PreSync(pos uint32) bool {
 	return ret
 }
 
-// func (f *TransientBlockFile) LoadBatch() bat
+func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
+	f.mu.RLock()
+	file := f.files[len(f.files)-1]
+	file.Ref()
+	f.mu.RUnlock()
+	defer file.Unref()
+	id := *meta.AsCommonID()
+	colcnt := len(meta.Segment.Table.Schema.ColDefs)
+	vecs := make([]vector.IVector, colcnt)
+	cols := make([]int, colcnt)
+	for i, colDef := range meta.Segment.Table.Schema.ColDefs {
+		cols[i] = i
+		sz := file.PartSize(uint64(i), id, false)
+		osz := file.PartSize(uint64(i), id, false)
+		node := common.GPool.Alloc(uint64(sz))
+		defer common.GPool.Free(node)
+		buf := node.Buf[:sz]
+		file.ReadPart(uint64(i), id, buf)
+		obuf := make([]byte, osz)
+		_, err := compress.Decompress(buf, obuf, compress.Lz4)
+		if err != nil {
+			panic(err)
+		}
+		switch colDef.Type.Oid {
+		case types.T_char, types.T_varchar, types.T_json:
+			vec := vector.NewEmptyStrVector()
+			err = vec.Unmarshall(obuf)
+			if err != nil {
+				panic(err)
+			}
+			vecs[i] = vec
+		default:
+			vec := vector.NewEmptyStdVector()
+			err = vec.Unmarshall(obuf)
+			if err != nil {
+				panic(err)
+			}
+			vecs[i] = vec
+		}
+	}
+	meta.SetCount(uint64(vecs[0].Length()))
+	return batch.NewBatch(cols, vecs)
+}
 
-func (f *TransientBlockFile) Sync(data []*vector.Vector, meta *md.Block, dir string) error {
+func (f *TransientBlockFile) Sync(data []*gvector.Vector, meta *md.Block, dir string) error {
 	writer := NewBlockWriter(data, meta, dir)
 	version := f.nextVersion()
 	getter := tblkFileGetter{version: version}
@@ -166,7 +212,7 @@ func (f *TransientBlockFile) PartSize(colIdx uint64, id common.ID, isOrigin bool
 }
 
 func (f *TransientBlockFile) DataCompressAlgo(common.ID) int {
-	return compress.None
+	return compress.Lz4
 }
 
 func (f *TransientBlockFile) Destory() {
