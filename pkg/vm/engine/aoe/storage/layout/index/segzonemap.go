@@ -316,6 +316,38 @@ func (i *SegmentZoneMapIndex) Unmarshall(data []byte) error {
 			i.BlkMax[j] = maxBuf
 		}
 		return nil
+	case types.T_datetime:
+		i.MinV = encoding.DecodeDatetime(buf[:8])
+		buf = buf[8:]
+		i.MaxV = encoding.DecodeDatetime(buf[:8])
+		buf = buf[8:]
+		len := encoding.DecodeInt32(buf[:4])
+		buf = buf[4:]
+		i.BlkMax = make([]interface{}, len)
+		i.BlkMin = make([]interface{}, len)
+		for j := 0; j < int(len); j++ {
+			i.BlkMin[j] = encoding.DecodeDatetime(buf[:8])
+			buf = buf[8:]
+			i.BlkMax[j] = encoding.DecodeDatetime(buf[:8])
+			buf = buf[8:]
+		}
+		return nil
+	case types.T_date:
+		i.MinV = encoding.DecodeDate(buf[:4])
+		buf = buf[4:]
+		i.MaxV = encoding.DecodeDate(buf[:4])
+		buf = buf[4:]
+		len := encoding.DecodeInt32(buf[:4])
+		buf = buf[4:]
+		i.BlkMax = make([]interface{}, len)
+		i.BlkMin = make([]interface{}, len)
+		for j := 0; j < int(len); j++ {
+			i.BlkMin[j] = encoding.DecodeDate(buf[:4])
+			buf = buf[4:]
+			i.BlkMax[j] = encoding.DecodeDate(buf[:4])
+			buf = buf[4:]
+		}
+		return nil
 	}
 	panic("unsupported")
 }
@@ -440,6 +472,26 @@ func (i *SegmentZoneMapIndex) Marshall() ([]byte, error) {
 			buf.Write(i.BlkMax[j].([]byte))
 		}
 		return buf.Bytes(), nil
+	case types.T_datetime:
+		buf.Write(encoding.EncodeType(i.T))
+		buf.Write(encoding.EncodeDatetime(i.MinV.(types.Datetime)))
+		buf.Write(encoding.EncodeDatetime(i.MaxV.(types.Datetime)))
+		buf.Write(encoding.EncodeInt32(int32(len(i.BlkMin))))
+		for j := 0; j < len(i.BlkMin); j++ {
+			buf.Write(encoding.EncodeDatetime(i.BlkMin[j].(types.Datetime)))
+			buf.Write(encoding.EncodeDatetime(i.BlkMax[j].(types.Datetime)))
+		}
+		return buf.Bytes(), nil
+	case types.T_date:
+		buf.Write(encoding.EncodeType(i.T))
+		buf.Write(encoding.EncodeDate(i.MinV.(types.Date)))
+		buf.Write(encoding.EncodeDate(i.MaxV.(types.Date)))
+		buf.Write(encoding.EncodeInt32(int32(len(i.BlkMin))))
+		for j := 0; j < len(i.BlkMin); j++ {
+			buf.Write(encoding.EncodeDate(i.BlkMin[j].(types.Date)))
+			buf.Write(encoding.EncodeDate(i.BlkMax[j].(types.Date)))
+		}
+		return buf.Bytes(), nil
 	}
 	panic("unsupported")
 }
@@ -473,9 +525,9 @@ func (i *SegmentZoneMapIndex) Eq(v interface{}) bool {
 	case types.T_float64:
 		return v.(float64) >= i.MinV.(float64) && v.(float64) <= i.MaxV.(float64)
 	case types.T_date:
-		panic("not supported")
+		return v.(types.Date) >= i.MinV.(types.Date) && v.(types.Date) <= i.MaxV.(types.Date)
 	case types.T_datetime:
-		panic("not supported")
+		return v.(types.Datetime) >= i.MinV.(types.Datetime) && v.(types.Datetime) <= i.MaxV.(types.Datetime)
 	case types.T_sel:
 		return v.(int64) >= i.MinV.(int64) && v.(int64) <= i.MaxV.(int64)
 	case types.T_tuple:
@@ -521,9 +573,9 @@ func (i *SegmentZoneMapIndex) Lt(v interface{}) bool {
 	case types.T_float64:
 		return v.(float64) > i.MinV.(float64)
 	case types.T_date:
-		panic("not supported")
+		return v.(types.Date) > i.MinV.(types.Date)
 	case types.T_datetime:
-		panic("not supported")
+		return v.(types.Datetime) > i.MinV.(types.Datetime)
 	case types.T_sel:
 		return v.(int64) > i.MinV.(int64)
 	case types.T_tuple:
@@ -559,9 +611,9 @@ func (i *SegmentZoneMapIndex) Le(v interface{}) bool {
 	case types.T_float64:
 		return v.(float64) >= i.MinV.(float64)
 	case types.T_date:
-		panic("not supported")
+		return v.(types.Date) >= i.MinV.(types.Date)
 	case types.T_datetime:
-		panic("not supported")
+		return v.(types.Datetime) >= i.MinV.(types.Datetime)
 	case types.T_sel:
 		return v.(int64) >= i.MinV.(int64)
 	case types.T_tuple:
@@ -597,9 +649,9 @@ func (i *SegmentZoneMapIndex) Gt(v interface{}) bool {
 	case types.T_float64:
 		return v.(float64) < i.MaxV.(float64)
 	case types.T_date:
-		panic("not supported")
+		return v.(types.Date) < i.MaxV.(types.Date)
 	case types.T_datetime:
-		panic("not supported")
+		return v.(types.Datetime) < i.MaxV.(types.Datetime)
 	case types.T_sel:
 		return v.(int64) < i.MaxV.(int64)
 	case types.T_tuple:
@@ -635,9 +687,9 @@ func (i *SegmentZoneMapIndex) Ge(v interface{}) bool {
 	case types.T_float64:
 		return v.(float64) <= i.MaxV.(float64)
 	case types.T_date:
-		panic("not supported")
+		return v.(types.Date) <= i.MaxV.(types.Date)
 	case types.T_datetime:
-		panic("not supported")
+		return v.(types.Datetime) <= i.MaxV.(types.Datetime)
 	case types.T_sel:
 		return v.(int64) <= i.MaxV.(int64)
 	case types.T_tuple:

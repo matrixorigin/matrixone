@@ -450,6 +450,70 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *md.
 			}
 			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
 			indices = append(indices, zmi)
+		case types.T_datetime:
+			var minv, maxv, blkMaxv, blkMinv types.Datetime
+			var blkMin, blkMax []interface{}
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]types.Datetime)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for j, v := range column {
+					if j == 0 {
+						blkMaxv = v
+						blkMinv = v
+					}
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+					if blkMinv > v {
+						blkMinv = v
+					}
+					if blkMaxv < v {
+						blkMaxv = v
+					}
+				}
+				blkMin = append(blkMin, blkMinv)
+				blkMax = append(blkMax, blkMaxv)
+			}
+			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
+			indices = append(indices, zmi)
+		case types.T_date:
+			var minv, maxv, blkMaxv, blkMinv types.Date
+			var blkMin, blkMax []interface{}
+			for i, blk := range data {
+				column := blk.Vecs[idx].Col.([]types.Date)
+				if i == 0 {
+					minv = column[0]
+					maxv = column[0]
+				}
+				for j, v := range column {
+					if j == 0 {
+						blkMaxv = v
+						blkMinv = v
+					}
+					if minv > v {
+						minv = v
+					}
+					if maxv < v {
+						maxv = v
+					}
+					if blkMinv > v {
+						blkMinv = v
+					}
+					if blkMaxv < v {
+						blkMaxv = v
+					}
+				}
+				blkMin = append(blkMin, blkMinv)
+				blkMax = append(blkMax, blkMaxv)
+			}
+			zmi := index.NewSegmentZoneMap(colDef.Type, minv, maxv, int16(idx), blkMin, blkMax)
+			indices = append(indices, zmi)
 		}
 	}
 	buf, err := index.DefaultRWHelper.WriteIndices(indices)

@@ -132,6 +132,24 @@ func DecodeFloat64(v []byte) float64 {
 	return *(*float64)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeDate(v types.Date) []byte {
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
+	return *(*[]byte)(unsafe.Pointer(&hp))
+}
+
+func DecodeDate(v []byte) types.Date {
+	return *(*types.Date)(unsafe.Pointer(&v[0]))
+}
+
+func EncodeDatetime(v types.Datetime) []byte {
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
+	return *(*[]byte)(unsafe.Pointer(&hp))
+}
+
+func DecodeDatetime(v []byte) types.Datetime {
+	return *(*types.Datetime)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeInt8Slice(v []int8) []byte {
 	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
 	return *(*[]byte)(unsafe.Pointer(&hp))

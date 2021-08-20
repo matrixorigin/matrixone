@@ -268,6 +268,10 @@ func compare(val1, val2 interface{}, typ types.Type) int {
 		return int(val1.(float64) - val2.(float64))
 	case types.T_char, types.T_json, types.T_varchar:
 		return bytes.Compare(val1.([]byte), val2.([]byte))
+	case types.T_datetime:
+		return int(val1.(types.Datetime) - val2.(types.Datetime))
+	case types.T_date:
+		return int(val1.(types.Date) - val2.(types.Date))
 	}
 	panic("unsupported")
 }
