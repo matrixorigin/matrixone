@@ -840,7 +840,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 }
 
 //handle SELECT DATABASE()
-func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error{
+func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 	var err error = nil
 	ses := mce.routine.GetSession()
 	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
@@ -910,13 +910,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 		switch st := stmt.(type) {
 		case *tree.Select:
-			if sc,ok := st.Select.(*tree.SelectClause) ; ok {
+			if sc, ok := st.Select.(*tree.SelectClause); ok {
 				if len(sc.Exprs) == 1 {
-					if fe,ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
-						if un,ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
+					if fe, ok := sc.Exprs[0].Expr.(*tree.FuncExpr); ok {
+						if un, ok := fe.Func.FunctionReference.(*tree.UnresolvedName); ok {
 							if strings.ToUpper(un.Parts[0]) == "DATABASE" {
 								err = mce.handleSelectDatabase(st)
-								if err != nil{
+								if err != nil {
 									return err
 								}
 
@@ -934,7 +934,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus,*tree.DropDatabase:
+				*tree.ShowStatus, *tree.DropDatabase:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
@@ -945,15 +945,13 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		switch st := stmt.(type) {
 		case *tree.Use:
 			selfHandle = true
-			resp, err := mce.routine.ChangeDB(st.Name)
+			err := mce.routine.ChangeDB(st.Name)
 			if err != nil {
 				return err
 			}
-			if resp != nil {
-				err := proto.SendResponse(resp)
-				if err != nil {
-					return err
-				}
+			err = proto.sendOKPacket(0, 0, 0, 0, "")
+			if err != nil {
+				return err
 			}
 		}
 
@@ -970,7 +968,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-			fmt.Printf("time of Exec.Compile : %s \n",time.Since(cmpBegin).String())
+			fmt.Printf("time of Exec.Compile : %s \n", time.Since(cmpBegin).String())
 		}
 
 		switch stmt.(type) {
@@ -1060,7 +1058,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return er
 				}
 				if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-					fmt.Printf("time of Exec.Run : %s \n",time.Since(runBegin).String())
+					fmt.Printf("time of Exec.Run : %s \n", time.Since(runBegin).String())
 				}
 				/*
 					Step 3: Say goodbye
@@ -1133,19 +1131,23 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			*tree.CreateRole, *tree.DropRole,
 			*tree.Revoke, *tree.Grant,
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
+			runBegin := time.Now()
 			/*
 				Step 1: Start
 			*/
 			if er := exec.Run(epoch); er != nil {
 				return er
 			}
+			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
+				fmt.Printf("time of Exec.Run : %s \n", time.Since(runBegin).String())
+			}
 
 			//record ddl drop xxx after the success
 			switch stmt.(type) {
 			case *tree.DropTable, *tree.DropDatabase,
-					*tree.DropIndex, *tree.DropUser, *tree.DropRole:
+				*tree.DropIndex, *tree.DropUser, *tree.DropRole:
 				//test ddl
-				pdHook.IncDDLCountAtEpoch(epoch,1)
+				pdHook.IncDDLCountAtEpoch(epoch, 1)
 			}
 
 			/*
@@ -1210,22 +1212,14 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 		return resp, nil
 	case COM_INIT_DB:
 		var dbname = string(req.GetData().([]byte))
-		resp, err := mce.routine.ChangeDB(dbname)
+		err := mce.routine.ChangeDB(dbname)
 		if err != nil {
-			resp = NewResponse(
-				ErrorResponse,
-				0,
-				int(COM_INIT_DB),
-				err,
-			)
+			resp = NewResponse(ErrorResponse, 0, int(COM_INIT_DB), err)
 		} else {
-			err := mce.routine.protocol.SendResponse(resp)
-			if err != nil {
-				return nil, err
-			}
+			resp = NewResponse(OkResponse, 0, int(COM_INIT_DB), nil)
 		}
 
-		return nil, nil
+		return resp, nil
 	default:
 		err := fmt.Errorf("unsupported command. 0x%x \n", req.GetCmd())
 		resp = NewResponse(

@@ -3,7 +3,6 @@ package config
 
 import (
 	"fmt"
-	"github.com/BurntSushi/toml"
 	"sync"
 )
 
