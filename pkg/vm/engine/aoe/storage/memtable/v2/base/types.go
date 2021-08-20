@@ -10,6 +10,12 @@ import (
 )
 
 type INodeHandle interface {
+	io.Closer
+	GetID() common.ID
+	GetNode() INode
+}
+
+type INode interface {
 	sync.Locker
 	io.Closer
 	common.IRef
@@ -20,6 +26,7 @@ type INodeHandle interface {
 	Unloadable() bool
 	IsLoaded() bool
 	Load()
+	MakeHandle() INodeHandle
 	Destroy()
 	Size() uint64
 	Iteration() uint64

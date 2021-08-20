@@ -14,7 +14,7 @@ import (
 type nodeManager struct {
 	sync.RWMutex
 	limiter         *memtableLimiter
-	nodes           map[common.ID]base.INodeHandle
+	nodes           map[common.ID]base.INode
 	evicter         bm.IEvictHolder
 	unregistertimes int64
 	loadtimes       int64
@@ -24,7 +24,7 @@ type nodeManager struct {
 func newNodeManager(limiter *memtableLimiter, evicter bm.IEvictHolder) *nodeManager {
 	mgr := &nodeManager{
 		limiter: limiter,
-		nodes:   make(map[common.ID]base.INodeHandle),
+		nodes:   make(map[common.ID]base.INode),
 		evicter: evicter,
 	}
 	return mgr
@@ -56,7 +56,7 @@ func (mgr *nodeManager) Count() int {
 	return len(mgr.nodes)
 }
 
-func (mgr *nodeManager) RegisterNode(node base.INodeHandle) {
+func (mgr *nodeManager) RegisterNode(node base.INode) {
 	id := node.GetID()
 	mgr.Lock()
 	defer mgr.Unlock()
@@ -68,7 +68,7 @@ func (mgr *nodeManager) RegisterNode(node base.INodeHandle) {
 	return
 }
 
-func (mgr *nodeManager) UnregisterNode(node base.INodeHandle) {
+func (mgr *nodeManager) UnregisterNode(node base.INode) {
 	mgr.Lock()
 	defer mgr.Unlock()
 	atomic.AddInt64(&mgr.unregistertimes, int64(1))
@@ -76,7 +76,7 @@ func (mgr *nodeManager) UnregisterNode(node base.INodeHandle) {
 	node.Destroy()
 }
 
-func (mgr *nodeManager) makeRoom(node base.INodeHandle) bool {
+func (mgr *nodeManager) makeRoom(node base.INode) bool {
 	ok := mgr.limiter.ApplySizeQuota(node.Size())
 	for !ok {
 		evicted := mgr.evicter.Dequeue()
@@ -110,30 +110,30 @@ func (mgr *nodeManager) makeRoom(node base.INodeHandle) bool {
 	return ok
 }
 
-func (mgr *nodeManager) Pin(node base.INodeHandle) bool {
+func (mgr *nodeManager) Pin(node base.INode) base.INodeHandle {
 	node.RLock()
 	if node.IsLoaded() {
 		node.RUnlock()
-		return true
+		return node.MakeHandle()
 	}
 	node.RUnlock()
 
 	node.Lock()
 	defer node.Unlock()
 	if node.IsLoaded() {
-		return true
+		return node.MakeHandle()
 	}
 	ok := mgr.makeRoom(node)
 	if !ok {
-		return false
+		return nil
 	}
 	node.Load()
 	atomic.AddInt64(&mgr.loadtimes, int64(1))
 	node.Ref()
-	return true
+	return node.MakeHandle()
 }
 
-func (mgr *nodeManager) Unpin(node base.INodeHandle) {
+func (mgr *nodeManager) Unpin(node base.INode) {
 	node.Lock()
 	defer node.Unlock()
 	node.Unref()

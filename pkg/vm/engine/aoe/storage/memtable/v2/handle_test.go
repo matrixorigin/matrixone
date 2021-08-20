@@ -9,7 +9,7 @@ import (
 )
 
 type testNodeHandle struct {
-	nodeHandle
+	node
 	t *testing.T
 }
 
@@ -25,8 +25,8 @@ func (h *testNodeHandle) destory() {
 
 func newTestNodeHandle(mgr *nodeManager, id common.ID, size uint64, t *testing.T) *testNodeHandle {
 	n := &testNodeHandle{
-		nodeHandle: *newNodeHandle(mgr, id, size),
-		t:          t,
+		node: *newNode(mgr, id, size),
+		t:    t,
 	}
 	n.loadFunc = n.load
 	n.unloadFunc = n.unload
@@ -57,22 +57,22 @@ func TestHandle(t *testing.T) {
 	mgr.RegisterNode(n4)
 	assert.Equal(t, 4, mgr.Count())
 
-	ok := mgr.Pin(n1)
-	assert.True(t, ok)
-	ok = mgr.Pin(n2)
-	assert.True(t, ok)
+	h1 := mgr.Pin(n1)
+	assert.NotNil(t, h1)
+	h2 := mgr.Pin(n2)
+	assert.NotNil(t, h2)
 	assert.Equal(t, sz1+sz2, limiter.ActiveSize())
-	ok = mgr.Pin(n3)
-	assert.False(t, ok)
-	mgr.Unpin(n1)
-	ok = mgr.Pin(n3)
-	assert.True(t, ok)
+	h3 := mgr.Pin(n3)
+	assert.Nil(t, h3)
+	h1.Close()
+	h3 = mgr.Pin(n3)
+	assert.NotNil(t, h3)
 	assert.Equal(t, sz2+sz3, limiter.ActiveSize())
 
-	mgr.Unpin(n2)
-	mgr.Unpin(n3)
-	ok = mgr.Pin(n4)
-	assert.True(t, ok)
+	h2.Close()
+	h3.Close()
+	h4 := mgr.Pin(n4)
+	assert.NotNil(t, h4)
 	assert.Equal(t, sz4, limiter.ActiveSize())
 
 	t.Log(mgr.String())
@@ -80,7 +80,7 @@ func TestHandle(t *testing.T) {
 	n1.Close()
 	n2.Close()
 	n3.Close()
-	mgr.Unpin(n4)
+	h4.Close()
 	n4.Close()
 	assert.Equal(t, uint64(0), limiter.ActiveSize())
 	t.Log(mgr.String())

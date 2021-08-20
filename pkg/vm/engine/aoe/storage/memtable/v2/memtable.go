@@ -12,7 +12,7 @@ import (
 )
 
 type memTable struct {
-	nodeHandle
+	node
 	mgr       *manager
 	TableData iface.ITableData
 	Meta      *md.Block
@@ -23,11 +23,11 @@ type memTable struct {
 
 func newMemTable(mgr *manager, tableData iface.ITableData, data iface.IBlock) *memTable {
 	mt := &memTable{
-		mgr:        mgr,
-		TableData:  tableData,
-		Block:      data,
-		Meta:       data.GetMeta(),
-		nodeHandle: *newNodeHandle(mgr.nodemgr, *data.GetMeta().AsCommonID(), uint64(0)),
+		mgr:       mgr,
+		TableData: tableData,
+		Block:     data,
+		Meta:      data.GetMeta(),
+		node:      *newNode(mgr.nodemgr, *data.GetMeta().AsCommonID(), uint64(0)),
 	}
 	mt.loadFunc = mt.load
 	mt.unloadFunc = mt.unload
