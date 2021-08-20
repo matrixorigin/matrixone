@@ -35,6 +35,19 @@ type INode interface {
 	GetState() iface.NodeState
 }
 
+type INodeManager interface {
+	ISizeLimiter
+	sync.Locker
+	RLock()
+	RUnlock()
+	String() string
+	Count() int
+	RegisterNode(INode)
+	UnregisterNode(INode)
+	Pin(INode) INodeHandle
+	Unpin(INode)
+}
+
 type IMemTable interface {
 	common.IRef
 	Append(bat *batch.Batch, offset uint64, index *md.LogIndex) (n uint64, err error)

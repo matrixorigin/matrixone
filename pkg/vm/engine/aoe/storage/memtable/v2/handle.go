@@ -110,7 +110,7 @@ func (n *node) Unload() {
 	if n.state == iface.NODE_UNLOAD {
 		return
 	}
-	n.mgr.limiter.RetuernQuota(n.size)
+	n.mgr.RetuernQuota(n.size)
 	if n.unloadFunc != nil {
 		n.unloadFunc()
 	}

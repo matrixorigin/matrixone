@@ -60,12 +60,6 @@ type ICollection interface {
 	String() string
 }
 
-type ISizeLimiter interface {
-	Total() uint64
-	ApplyQuota(uint64) bool
-	RetuernQuota(uint64) uint64
-}
-
 type IManager interface {
 	WeakRefCollection(id uint64) ICollection
 	StrongRefCollection(id uint64) ICollection

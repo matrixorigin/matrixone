@@ -13,7 +13,7 @@ import (
 
 type nodeManager struct {
 	sync.RWMutex
-	limiter         *sizeLimiter
+	sizeLimiter
 	nodes           map[common.ID]base.INode
 	evicter         bm.IEvictHolder
 	unregistertimes int64
@@ -21,11 +21,11 @@ type nodeManager struct {
 	evicttimes      int64
 }
 
-func newNodeManager(limiter *sizeLimiter, evicter bm.IEvictHolder) *nodeManager {
+func newNodeManager(maxsize uint64, evicter bm.IEvictHolder) *nodeManager {
 	mgr := &nodeManager{
-		limiter: limiter,
-		nodes:   make(map[common.ID]base.INode),
-		evicter: evicter,
+		sizeLimiter: *newSizeLimiter(maxsize),
+		nodes:       make(map[common.ID]base.INode),
+		evicter:     evicter,
 	}
 	return mgr
 }
@@ -34,7 +34,7 @@ func (mgr *nodeManager) String() string {
 	mgr.RLock()
 	defer mgr.RUnlock()
 	loaded := 0
-	s := fmt.Sprintf("<nodeManager>[%s][Nodes:%d,LoadTimes:%d,EvictTimes:%d,UnregisterTimes:%d]:", mgr.limiter.String(), len(mgr.nodes),
+	s := fmt.Sprintf("<nodeManager>[%s][Nodes:%d,LoadTimes:%d,EvictTimes:%d,UnregisterTimes:%d]:", mgr.sizeLimiter.String(), len(mgr.nodes),
 		atomic.LoadInt64(&mgr.loadtimes), atomic.LoadInt64(&mgr.evicttimes), atomic.LoadInt64(&mgr.unregistertimes))
 	for _, node := range mgr.nodes {
 		id := node.GetID()
@@ -77,7 +77,7 @@ func (mgr *nodeManager) UnregisterNode(node base.INode) {
 }
 
 func (mgr *nodeManager) makeRoom(node base.INode) bool {
-	ok := mgr.limiter.ApplyQuota(node.Size())
+	ok := mgr.sizeLimiter.ApplyQuota(node.Size())
 	for !ok {
 		evicted := mgr.evicter.Dequeue()
 		if evicted == nil {
@@ -104,7 +104,7 @@ func (mgr *nodeManager) makeRoom(node base.INode) bool {
 			evicted.Handle.Unload()
 			evicted.Handle.Unlock()
 		}
-		ok = mgr.limiter.ApplyQuota(node.Size())
+		ok = mgr.sizeLimiter.ApplyQuota(node.Size())
 	}
 
 	return ok

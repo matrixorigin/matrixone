@@ -13,9 +13,8 @@ import (
 )
 
 func createNodeMgr(maxsize uint64) *nodeManager {
-	limiter := &sizeLimiter{maxactivesize: maxsize}
 	evicter := bm.NewSimpleEvictHolder()
-	nmgr := newNodeManager(limiter, evicter)
+	nmgr := newNodeManager(maxsize, evicter)
 	return nmgr
 }
 
