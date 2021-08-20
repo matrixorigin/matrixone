@@ -20,7 +20,6 @@ type RoutineManager struct {
 }
 
 func (rm *RoutineManager) Created(rs goetty.IOSession) {
-	fmt.Println("Created a new Routine")
 	IO := NewIOPackage(true)
 	pro := NewMysqlClientProtocol(IO, nextConnectionID())
 	exe := NewMysqlCmdExecutor()
@@ -31,7 +30,7 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	hsV10pkt := pro.makeHandshakeV10Payload()
 	err := pro.writePackets(hsV10pkt)
 	if err != nil {
-		return
+		panic(err)
 	}
 
 	rm.rwlock.Lock()
@@ -44,7 +43,6 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	rm.rwlock.Lock()
 	defer rm.rwlock.Unlock()
 
-	fmt.Println("Closed a Routine")
 	delete(rm.clients, rs)
 }
 
@@ -63,7 +61,6 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return errors.New("routine does not exist")
 	}
 
-	fmt.Println("Handler Received:", msg)
 	protocol := routine.protocol
 
 	packet, ok := msg.(*Packet)
@@ -119,13 +116,11 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	if rm.pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-		fmt.Printf("connection id %d , the time of handling the request %s \n",rs.ID(),time.Since(reqBegin).String())
+		fmt.Printf("connection id %d , the time of handling the request %s \n", rs.ID(), time.Since(reqBegin).String())
 	}
 
 	return nil
 }
-
-
 
 func NewRoutineManager(pu *config.ParameterUnit, pdHook *PDCallbackImpl) *RoutineManager {
 	rm := &RoutineManager{
