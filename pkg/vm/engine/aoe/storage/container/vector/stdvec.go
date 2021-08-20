@@ -138,8 +138,10 @@ func (v *StdVector) SetValue(idx int, val interface{}) {
 	case types.T_float64:
 		copy(v.Data[start:], encoding.EncodeFloat64(val.(float64)))
 	// case types.T_decimal:
-	// case types.T_date:
-	// case types.T_datetime:
+	case types.T_date:
+		copy(v.Data[start:], encoding.EncodeDate(val.(types.Date)))
+	case types.T_datetime:
+		copy(v.Data[start:], encoding.EncodeDatetime(val.(types.Datetime)))
 	default:
 		panic("not supported yet")
 	}
@@ -179,8 +181,10 @@ func (v *StdVector) GetValue(idx int) interface{} {
 	case types.T_float64:
 		return encoding.DecodeFloat64(data)
 	// case types.T_decimal:
-	// case types.T_date:
-	// case types.T_datetime:
+	case types.T_date:
+		return encoding.DecodeDate(data)
+	case types.T_datetime:
+		return encoding.DecodeDatetime(data)
 	default:
 		panic(fmt.Sprintf("type %v not supported yet", v.Type))
 	}
