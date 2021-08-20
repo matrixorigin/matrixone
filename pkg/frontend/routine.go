@@ -71,21 +71,18 @@ func (routine *Routine) Peer() (string, string) {
 	return host, port
 }
 
-func (routine *Routine) ChangeDB(db string) (*Response, error) {
+func (routine *Routine) ChangeDB(db string) error {
 	//TODO: check meta data
-	var err error = nil
-	if _, err = routine.ses.Pu.StorageEngine.Database(db); err != nil {
+	if _, err := routine.ses.Pu.StorageEngine.Database(db); err != nil {
 		//echo client. no such database
-		return nil, NewMysqlError(ER_BAD_DB_ERROR, db)
+		return NewMysqlError(ER_BAD_DB_ERROR, db)
 	}
 	oldDB := routine.db
 	routine.db = db
 
 	fmt.Printf("User %s change database from [%s] to [%s]\n", routine.user, oldDB, routine.db)
 
-	resp := NewResponse(OkResponse, 0, int(COM_INIT_DB), nil)
-
-	return resp, nil
+	return nil
 }
 
 func (routine *Routine) handleHandshake(payload []byte) error {

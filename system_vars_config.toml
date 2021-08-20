@@ -376,5 +376,6 @@ shard-groups = 0
     job = ""
     instance = ""
 
+# Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
