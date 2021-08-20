@@ -18,10 +18,13 @@ type MutableBlockNode struct {
 	Data      batch.IBatch
 }
 
-func NewMutableBlockNode(mgr base.INodeManager, File *dataio.TransientBlockFile,
-	TableData iface.ITableData, meta *metadata.Block) *MutableBlockNode {
+func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
+	tabledata iface.ITableData, meta *metadata.Block) *MutableBlockNode {
 	n := &MutableBlockNode{
-		Node: *buffer.NewNode(mgr, *meta.AsCommonID(), 0),
+		Node:      *buffer.NewNode(mgr, *meta.AsCommonID(), 0),
+		File:      file,
+		Meta:      meta,
+		TableData: tabledata,
 	}
 	n.UnloadFunc = n.unload
 	n.LoadFunc = n.load

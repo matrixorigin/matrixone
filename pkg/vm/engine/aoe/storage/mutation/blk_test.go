@@ -6,6 +6,7 @@ import (
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"os"
 	"sync"
@@ -28,6 +29,7 @@ func TestMutableBlockNode(t *testing.T) {
 
 	segfile := dataio.NewUnsortedSegmentFile(dir, *blkmeta.Segment.AsCommonID())
 	tblkfile := dataio.NewTBlockFile(segfile, *blkmeta.AsCommonID())
+	assert.NotNil(t, tblkfile)
 	capacity := uint64(4096)
 	fsMgr := ldio.DefaultFsMgr
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
@@ -42,6 +44,25 @@ func TestMutableBlockNode(t *testing.T) {
 	mgr.RegisterNode(blknode)
 	h := mgr.Pin(blknode)
 	assert.NotNil(t, h)
+	delta := uint64(10)
+
+	bat := chunk.MockBatch(schema.Types(), delta)
+	insert := func() error {
+		for idx, attr := range blknode.Data.GetAttrs() {
+			if _, err = blknode.Data.GetVectorByAttr(attr).AppendVector(bat.Vecs[idx], 0); err != nil {
+				return err
+			}
+			// assert.Nil(t, err)
+		}
+		return nil
+	}
+	err = blknode.Expand(delta*4, insert)
+	assert.Nil(t, err)
+	t.Logf("length=%d", blknode.Data.Length())
+	err = blknode.Expand(delta, insert)
+	assert.NotNil(t, err)
+	t.Logf("length=%d", blknode.Data.Length())
+	assert.Equal(t, delta*4, mgr.Total())
 
 	t.Log(mgr.String())
 }

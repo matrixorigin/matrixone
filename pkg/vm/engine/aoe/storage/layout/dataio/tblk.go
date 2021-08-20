@@ -102,10 +102,15 @@ func (f *TransientBlockFile) PreSync(pos uint32) bool {
 func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 	f.mu.RLock()
 	if len(f.files) == 0 {
-		vecs := make([]vector.IVector, len(meta.Segment.Table.Schema.ColDefs))
+		colcnt := len(meta.Segment.Table.Schema.ColDefs)
+		attrs := make([]int, colcnt)
+		vecs := make([]vector.IVector, colcnt)
 		for i, colDef := range meta.Segment.Table.Schema.ColDefs {
-			// vec := vector.NewEmptyStdVector
+			vec := vector.NewVector(colDef.Type, meta.Segment.Table.Conf.BlockMaxRows)
+			vecs[i] = vec
+			attrs[i] = i
 		}
+		return batch.NewBatch(attrs, vecs)
 	}
 	file := f.files[len(f.files)-1]
 	file.Ref()

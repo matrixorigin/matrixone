@@ -78,3 +78,12 @@ type StrVector struct {
 	File         common.IVFile
 	UseCompress  bool
 }
+
+func NewVector(t types.Type, capacity uint64) IVector {
+	switch t.Oid {
+	case types.T_char, types.T_varchar, types.T_json:
+		return NewStrVector(t, capacity)
+	default:
+		return NewStdVector(t, capacity)
+	}
+}
