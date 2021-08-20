@@ -36,7 +36,7 @@ func newTestNodeHandle(mgr *nodeManager, id common.ID, size uint64, t *testing.T
 
 func TestHandle(t *testing.T) {
 	maxsize := uint64(100)
-	limiter := &memtableLimiter{
+	limiter := &sizeLimiter{
 		maxactivesize: maxsize,
 	}
 	evicter := bm.NewSimpleEvictHolder()
@@ -61,19 +61,19 @@ func TestHandle(t *testing.T) {
 	assert.NotNil(t, h1)
 	h2 := mgr.Pin(n2)
 	assert.NotNil(t, h2)
-	assert.Equal(t, sz1+sz2, limiter.ActiveSize())
+	assert.Equal(t, sz1+sz2, limiter.Total())
 	h3 := mgr.Pin(n3)
 	assert.Nil(t, h3)
 	h1.Close()
 	h3 = mgr.Pin(n3)
 	assert.NotNil(t, h3)
-	assert.Equal(t, sz2+sz3, limiter.ActiveSize())
+	assert.Equal(t, sz2+sz3, limiter.Total())
 
 	h2.Close()
 	h3.Close()
 	h4 := mgr.Pin(n4)
 	assert.NotNil(t, h4)
-	assert.Equal(t, sz4, limiter.ActiveSize())
+	assert.Equal(t, sz4, limiter.Total())
 
 	t.Log(mgr.String())
 
@@ -82,6 +82,6 @@ func TestHandle(t *testing.T) {
 	n3.Close()
 	h4.Close()
 	n4.Close()
-	assert.Equal(t, uint64(0), limiter.ActiveSize())
+	assert.Equal(t, uint64(0), limiter.Total())
 	t.Log(mgr.String())
 }

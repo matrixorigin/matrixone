@@ -13,7 +13,7 @@ import (
 
 type nodeManager struct {
 	sync.RWMutex
-	limiter         *memtableLimiter
+	limiter         *sizeLimiter
 	nodes           map[common.ID]base.INode
 	evicter         bm.IEvictHolder
 	unregistertimes int64
@@ -21,7 +21,7 @@ type nodeManager struct {
 	evicttimes      int64
 }
 
-func newNodeManager(limiter *memtableLimiter, evicter bm.IEvictHolder) *nodeManager {
+func newNodeManager(limiter *sizeLimiter, evicter bm.IEvictHolder) *nodeManager {
 	mgr := &nodeManager{
 		limiter: limiter,
 		nodes:   make(map[common.ID]base.INode),
@@ -77,7 +77,7 @@ func (mgr *nodeManager) UnregisterNode(node base.INode) {
 }
 
 func (mgr *nodeManager) makeRoom(node base.INode) bool {
-	ok := mgr.limiter.ApplySizeQuota(node.Size())
+	ok := mgr.limiter.ApplyQuota(node.Size())
 	for !ok {
 		evicted := mgr.evicter.Dequeue()
 		if evicted == nil {
@@ -104,7 +104,7 @@ func (mgr *nodeManager) makeRoom(node base.INode) bool {
 			evicted.Handle.Unload()
 			evicted.Handle.Unlock()
 		}
-		ok = mgr.limiter.ApplySizeQuota(node.Size())
+		ok = mgr.limiter.ApplyQuota(node.Size())
 	}
 
 	return ok

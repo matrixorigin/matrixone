@@ -52,8 +52,8 @@ type ICollection interface {
 }
 
 type ISizeLimiter interface {
-	ActiveSize() uint64
-	ApplySizeQuota(uint64) bool
+	Total() uint64
+	ApplyQuota(uint64) bool
 	RetuernQuota(uint64) uint64
 }
 
