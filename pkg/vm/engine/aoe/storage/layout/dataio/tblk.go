@@ -102,6 +102,7 @@ func (f *TransientBlockFile) PreSync(pos uint32) bool {
 func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 	f.mu.RLock()
 	if len(f.files) == 0 {
+		f.mu.RUnlock()
 		colcnt := len(meta.Segment.Table.Schema.ColDefs)
 		attrs := make([]int, colcnt)
 		vecs := make([]vector.IVector, colcnt)
