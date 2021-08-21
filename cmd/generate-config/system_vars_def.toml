@@ -287,6 +287,10 @@ values = ["1", "1", "1"]
 comment = "the number of replicas for each resource"
 update-mode = "dynamic"
 
+# Cluster Configs
+pre-allocated-group-num = 20
+max-group-num           = 0
+
 # Cube Configs
 addr-raft = "localhost:10000"
 addr-client = "localhost:20000"
@@ -402,7 +406,3 @@ shard-groups = 0
     interval = 0
     job = ""
     instance = ""
-
-# Cluster Configs
-pre-allocated-group-num = 20
-max-group-num           = 0
