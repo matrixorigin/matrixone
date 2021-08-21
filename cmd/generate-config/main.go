@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"strings"
 )
 
 func main() {
@@ -38,13 +37,12 @@ func main() {
 	scanner := bufio.NewScanner(file)
 	isOtherConfigs := false
 	for scanner.Scan() {
-		if !isOtherConfigs && strings.HasPrefix(scanner.Text(), "addr") {
+		if !isOtherConfigs && scanner.Text() == "# Cluster Configs" {
 			isOtherConfigs = true
 		}
 		if isOtherConfigs {
-			_, err := openFile.WriteString(scanner.Text() + "\n")
-			if err != nil {
-				return
+			if _, err := openFile.WriteString(scanner.Text() + "\n"); err != nil {
+				panic(err)
 			}
 		}
 	}
