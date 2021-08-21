@@ -43,7 +43,7 @@ func (n *MutableBlockNode) unload() {
 	vecs := make([]*vector.Vector, len(n.Meta.Segment.Table.Schema.ColDefs))
 	for i, _ := range n.Meta.Segment.Table.Schema.ColDefs {
 		iv := n.Data.GetVectorByAttr(i)
-		vecs[i] = iv.CopyToVector()
+		vecs[i] = iv.GetLatestView().CopyToVector()
 	}
 	Meta := n.Meta.Copy()
 	n.File.Sync(vecs, Meta, Meta.Segment.Table.Conf.Dir)
