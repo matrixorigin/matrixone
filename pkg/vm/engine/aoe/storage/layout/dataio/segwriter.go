@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/pierrec/lz4"
+	"hash/crc32"
 	"io"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -631,6 +633,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 			if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
 				return err
 			}
+			cbuf = append(cbuf, encoding.EncodeUint32(crc32.Checksum(cbuf, crc32.IEEETable))...)
 			if err = binary.Write(&buf, binary.BigEndian, uint64(len(cbuf))); err != nil {
 				return err
 			}

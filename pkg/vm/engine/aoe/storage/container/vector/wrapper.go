@@ -1,7 +1,9 @@
 package vector
 
 import (
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
@@ -192,6 +194,7 @@ func (vec *VectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 	if err != nil {
 		return n, err
 	}
+	buf = append(buf, encoding.EncodeUint32(crc32.Checksum(buf, crc32.IEEETable))...)
 	nw, err := w.Write(buf)
 	return int64(nw), err
 }
@@ -222,6 +225,12 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 			common.GPool.Free(vec.MNode)
 			return n, err
 		}
+		{
+			if sum := crc32.Checksum(data[mempool.CountSize:mempool.CountSize+allocSize-4], crc32.IEEETable); sum != encoding.DecodeUint32(data[mempool.CountSize+allocSize-4:]) {
+				return int64(nr), errors.New("checksum mismatched")
+			}
+			data = data[:mempool.CountSize+allocSize-4]
+		}
 		t := encoding.DecodeType(data[mempool.CountSize : encoding.TypeSize+mempool.CountSize])
 		v := base.New(t)
 		vec.Col = v.Col
@@ -232,12 +241,19 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 		originSize := uint64(stat.OriginSize())
 		tmpNode := common.GPool.Alloc(loadSize)
 		defer common.GPool.Free(tmpNode)
-		nr, err := r.Read(tmpNode.Buf[:loadSize])
+		buf := tmpNode.Buf
+		nr, err := r.Read(buf[:loadSize])
 		if err != nil {
 			return n, err
 		}
+		{
+			if sum := crc32.Checksum(buf[:loadSize-4], crc32.IEEETable); sum != encoding.DecodeUint32(buf[loadSize-4:]) {
+				return int64(nr), errors.New("checksum mismatched")
+			}
+			buf = buf[:loadSize-4]
+		}
 		vec.MNode = common.GPool.Alloc(originSize + mempool.CountSize)
-		_, err = compress.Decompress(tmpNode.Buf[:loadSize], vec.MNode.Buf[mempool.CountSize:originSize+mempool.CountSize], compress.Lz4)
+		_, err = compress.Decompress(buf[:], vec.MNode.Buf[mempool.CountSize:originSize+mempool.CountSize], compress.Lz4)
 		if err != nil {
 			common.GPool.Free(vec.MNode)
 			return n, err
@@ -274,7 +290,12 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 			proc.Free(data)
 			return n, err
 		}
-		err = vec.Vector.Read(data[:mempool.CountSize+allocSize])
+		{
+			if sum := crc32.Checksum(data[mempool.CountSize:mempool.CountSize+allocSize-4], crc32.IEEETable); sum != encoding.DecodeUint32(data[mempool.CountSize+allocSize-4:]) {
+				return int64(nr), errors.New("checksum mismatched")
+			}
+		}
+		err = vec.Vector.Read(data[:mempool.CountSize+allocSize-4])
 		if err != nil {
 			proc.Free(data)
 			return n, err
@@ -287,14 +308,15 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 		originSize := stat.OriginSize()
 		tmpNode := common.GPool.Alloc(loadSize + mempool.CountSize)
 		defer common.GPool.Free(tmpNode)
-		nr, err := r.Read(tmpNode.Buf[mempool.CountSize : loadSize+mempool.CountSize])
+		buf := tmpNode.Buf
+		nr, err := r.Read(buf[mempool.CountSize : loadSize+mempool.CountSize])
 		if err != nil {
 			return n, err
 		}
 		// node := common.GPool.Alloc(uint64(originSize) + mempool.CountSize)
 		// data := node.Buf
 		data, err := proc.Alloc(originSize)
-		buf, err := compress.Decompress(tmpNode.Buf[mempool.CountSize:mempool.CountSize+loadSize], data[mempool.CountSize:originSize+mempool.CountSize], compress.Lz4)
+		buf, err = compress.Decompress(buf[mempool.CountSize:mempool.CountSize+loadSize-4], data[mempool.CountSize:originSize+mempool.CountSize], compress.Lz4)
 		if len(buf) != int(originSize) {
 			panic(fmt.Sprintf("invalid decompressed size: %d, %d is expected", len(buf), originSize))
 		}

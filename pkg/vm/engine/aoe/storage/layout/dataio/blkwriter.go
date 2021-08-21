@@ -3,9 +3,11 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"hash/crc32"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -250,6 +252,7 @@ func flushWithLz4Compression(w *os.File, data []*vector.Vector, meta *md.Block) 
 		if cbuf, err = compress.Compress(colBuf, cbuf, compress.Lz4); err != nil {
 			return err
 		}
+		cbuf = append(cbuf, encoding.EncodeUint32(crc32.Checksum(cbuf, crc32.IEEETable))...)
 		if err = binary.Write(&buf, binary.BigEndian, uint64(len(cbuf))); err != nil {
 			return err
 		}
