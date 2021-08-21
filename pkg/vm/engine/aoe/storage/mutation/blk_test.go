@@ -24,11 +24,13 @@ func TestMutableBlockNode(t *testing.T) {
 	schema := metadata.MockSchema(2)
 	tablemeta := metadata.MockTable(info, schema, 2)
 
-	blkmeta, err := tablemeta.ReferenceBlock(uint64(1), uint64(1))
+	meta1, err := tablemeta.ReferenceBlock(uint64(1), uint64(1))
+	assert.Nil(t, err)
+	meta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
 	assert.Nil(t, err)
 
-	segfile := dataio.NewUnsortedSegmentFile(dir, *blkmeta.Segment.AsCommonID())
-	tblkfile := dataio.NewTBlockFile(segfile, *blkmeta.AsCommonID())
+	segfile := dataio.NewUnsortedSegmentFile(dir, *meta1.Segment.AsCommonID())
+	tblkfile := dataio.NewTBlockFile(segfile, *meta1.AsCommonID())
 	assert.NotNil(t, tblkfile)
 	capacity := uint64(4096)
 	fsMgr := ldio.DefaultFsMgr
@@ -40,10 +42,10 @@ func TestMutableBlockNode(t *testing.T) {
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
-	blknode := NewMutableBlockNode(mgr, tblkfile, tabledata, blkmeta)
-	mgr.RegisterNode(blknode)
-	h := mgr.Pin(blknode)
-	assert.NotNil(t, h)
+	node1 := NewMutableBlockNode(mgr, tblkfile, tabledata, meta1)
+	mgr.RegisterNode(node1)
+	h1 := mgr.Pin(node1)
+	assert.NotNil(t, h1)
 	rows := uint64(10)
 	factor := uint64(4)
 
@@ -59,17 +61,17 @@ func TestMutableBlockNode(t *testing.T) {
 			return nil
 		}
 	}
-	err = blknode.Expand(rows*factor, insert(blknode))
+	err = node1.Expand(rows*factor, insert(node1))
 	assert.Nil(t, err)
-	t.Logf("length=%d", blknode.Data.Length())
-	err = blknode.Expand(rows*factor, insert(blknode))
+	t.Logf("length=%d", node1.Data.Length())
+	err = node1.Expand(rows*factor, insert(node1))
 	assert.Nil(t, err)
-	t.Logf("length=%d", blknode.Data.Length())
+	t.Logf("length=%d", node1.Data.Length())
 	assert.Equal(t, rows*factor*2, mgr.Total())
 
 	blkmeta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
 	assert.Nil(t, err)
-	tblkfile2 := dataio.NewTBlockFile(segfile, *blkmeta.AsCommonID())
+	tblkfile2 := dataio.NewTBlockFile(segfile, *meta2.AsCommonID())
 	node2 := NewMutableBlockNode(mgr, tblkfile2, tabledata, blkmeta2)
 	mgr.RegisterNode(node2)
 	h2 := mgr.Pin(node2)
@@ -80,10 +82,21 @@ func TestMutableBlockNode(t *testing.T) {
 	err = node2.Expand(rows*factor, insert(node2))
 	assert.NotNil(t, err)
 
-	h.Close()
+	h1.Close()
 
 	err = node2.Expand(rows*factor, insert(node2))
 	assert.Nil(t, err)
+
+	h2.Close()
+	h1 = mgr.Pin(node1)
+	assert.Equal(t, int(rows*2), node1.Data.Length())
+
+	err = node1.Expand(rows*factor, insert(node1))
+	assert.Nil(t, err)
+	h1.Close()
+	t.Log(mgr.String())
+	h2 = mgr.Pin(node2)
+	assert.NotNil(t, h2)
 
 	t.Log(mgr.String())
 }

@@ -2,7 +2,6 @@ package memtable
 
 import (
 	gbatch "matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -44,13 +43,8 @@ func (mt *memTable) unload() {
 	if !ok {
 		return
 	}
-	vecs := make([]*vector.Vector, len(mt.Meta.Segment.Table.Schema.ColDefs))
-	for i, _ := range mt.Meta.Segment.Table.Schema.ColDefs {
-		iv := mt.Data.GetVectorByAttr(i)
-		vecs[i] = iv.CopyToVector()
-	}
 	meta := mt.Meta.Copy()
-	mt.File.Sync(vecs, meta, meta.Segment.Table.Conf.Dir)
+	mt.File.Sync(mt.Data, meta, meta.Segment.Table.Conf.Dir)
 	mt.Data.Close()
 	mt.Data = nil
 }

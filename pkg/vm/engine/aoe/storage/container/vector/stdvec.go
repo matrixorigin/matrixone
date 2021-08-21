@@ -31,7 +31,7 @@ import (
 	"reflect"
 	"sync/atomic"
 	"unsafe"
-	// log "github.com/sirupsen/logrus"
+	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
 
 func StdVectorConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {

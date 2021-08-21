@@ -4,19 +4,17 @@ import (
 	"fmt"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
-	gvector "matrixone/pkg/container/vector"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type versionBlockFile struct {
@@ -124,7 +122,7 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 	for i, colDef := range meta.Segment.Table.Schema.ColDefs {
 		cols[i] = i
 		sz := file.PartSize(uint64(i), id, false)
-		osz := file.PartSize(uint64(i), id, false)
+		osz := file.PartSize(uint64(i), id, true)
 		node := common.GPool.Alloc(uint64(sz))
 		defer common.GPool.Free(node)
 		buf := node.Buf[:sz]
@@ -155,24 +153,43 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 	return batch.NewBatch(cols, vecs)
 }
 
-func (f *TransientBlockFile) Sync(data []*gvector.Vector, meta *md.Block, dir string) error {
-	writer := NewBlockWriter(data, meta, dir)
+func (f *TransientBlockFile) Sync(data batch.IBatch, meta *md.Block, dir string) error {
+	writer := NewIBatchWriter(data, meta, dir)
 	version := f.nextVersion()
 	getter := tblkFileGetter{version: version}
 	writer.SetFileGetter(getter.Getter)
 	writer.SetPreExecutor(func() {
-		log.Infof(" %s | TransientBlock | Flushing", writer.GetFileName())
+		logutil.S().Infof(" %s | TransientBlock | Flushing", writer.GetFileName())
 	})
 	writer.SetPostExecutor(func() {
-		log.Infof(" %s | TransientBlock | Flushed", writer.GetFileName())
+		logutil.S().Infof(" %s | TransientBlock | Flushed", writer.GetFileName())
 	})
 	if err := writer.Execute(); err != nil {
 		return err
 	}
 	bf := newVersionBlockFile(version, f.host, f.id)
-	f.commit(bf, uint32(data[0].Length()))
+	f.commit(bf, uint32(data.Length()))
 	return nil
 }
+
+// func (f *TransientBlockFile) Sync(data []*gvector.Vector, meta *md.Block, dir string) error {
+// 	writer := NewBlockWriter(data, meta, dir)
+// 	version := f.nextVersion()
+// 	getter := tblkFileGetter{version: version}
+// 	writer.SetFileGetter(getter.Getter)
+// 	writer.SetPreExecutor(func() {
+// 		logutil.S().Infof(" %s | TransientBlock | Flushing", writer.GetFileName())
+// 	})
+// 	writer.SetPostExecutor(func() {
+// 		logutil.S().Infof(" %s | TransientBlock | Flushed", writer.GetFileName())
+// 	})
+// 	if err := writer.Execute(); err != nil {
+// 		return err
+// 	}
+// 	bf := newVersionBlockFile(version, f.host, f.id)
+// 	f.commit(bf, uint32(data[0].Length()))
+// 	return nil
+// }
 
 func (f *TransientBlockFile) commit(bf *versionBlockFile, pos uint32) {
 	f.mu.Lock()

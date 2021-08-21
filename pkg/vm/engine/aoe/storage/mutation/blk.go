@@ -1,13 +1,13 @@
 package mutation
 
 import (
-	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
 
 type MutableBlockNode struct {
@@ -40,13 +40,8 @@ func (n *MutableBlockNode) unload() {
 	if !ok {
 		return
 	}
-	vecs := make([]*vector.Vector, len(n.Meta.Segment.Table.Schema.ColDefs))
-	for i, _ := range n.Meta.Segment.Table.Schema.ColDefs {
-		iv := n.Data.GetVectorByAttr(i)
-		vecs[i] = iv.GetLatestView().CopyToVector()
-	}
-	Meta := n.Meta.Copy()
-	n.File.Sync(vecs, Meta, Meta.Segment.Table.Conf.Dir)
+	meta := n.Meta.Copy()
+	n.File.Sync(n.Data, meta, meta.Segment.Table.Conf.Dir)
 	n.Data.Close()
 	n.Data = nil
 }
