@@ -6,11 +6,6 @@ import (
 	"fmt"
 
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	// log "github.com/sirupsen/logrus"
-)
-
-const (
-	SEGMENT_BLOCK_COUNT = 4
 )
 
 func NewSegment(table *Table, id uint64) *Segment {

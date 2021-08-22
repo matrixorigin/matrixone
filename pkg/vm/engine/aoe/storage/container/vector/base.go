@@ -70,6 +70,20 @@ func MockVector(t types.Type, rows uint64) IVector {
 			vals = append(vals, []byte(s))
 		}
 		vec.Append(len(vals), vals)
+	case types.T_datetime:
+		vec = NewStdVector(t, rows)
+		vals := make([]types.Datetime, 0, rows)
+		for i := uint64(1); i <= rows; i++ {
+			vals = append(vals, types.FromClock(int32(i*100), 1, 1, 1, 1, 1, 1))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_date:
+		vec = NewStdVector(t, rows)
+		vals := make([]types.Date, 0, rows)
+		for i := int32(1); i <= int32(rows); i++ {
+			vals = append(vals, types.FromCalendar(i*100, 1, 1))
+		}
+		vec.Append(len(vals), vals)
 	default:
 		panic("not supported")
 	}

@@ -1,10 +1,10 @@
 package meta
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"path"
 	"testing"
@@ -18,17 +18,14 @@ var (
 )
 
 func TestBasicOps(t *testing.T) {
-	opts := e.Options{}
-	info := md.MockInfo(&opts.Mu, md.BLOCK_ROW_COUNT, md.SEGMENT_BLOCK_COUNT)
-	info.Conf.Dir = workDir
-	opts.Meta.Info = info
-	opts.FillDefaults(info.Conf.Dir)
-	opts.Scheduler = dbsched.NewScheduler(&opts, nil)
+	opts := config.NewOptions(workDir, config.CST_Customize, config.BST_S, config.SST_S)
+	opts.Scheduler = dbsched.NewScheduler(opts, nil)
 
 	now := time.Now()
 
+	info := opts.Meta.Info
 	tabletInfo := md.MockTableInfo(2)
-	eCtx := &dbsched.Context{Opts: &opts, Waitable: true}
+	eCtx := &dbsched.Context{Opts: opts, Waitable: true}
 	createTblE := NewCreateTableEvent(eCtx, dbi.TableOpCtx{TableName: tabletInfo.Name}, tabletInfo)
 	opts.Scheduler.Schedule(createTblE)
 	err := createTblE.WaitDone()
@@ -57,10 +54,10 @@ func TestBasicOps(t *testing.T) {
 	assert.Equal(t, blk2.Count, uint64(0))
 
 	schedCtx := &dbsched.Context{
-		Opts:     &opts,
+		Opts:     opts,
 		Waitable: true,
 	}
-	commitCtx := &dbsched.Context{Opts: &opts, Waitable: true}
+	commitCtx := &dbsched.Context{Opts: opts, Waitable: true}
 	commitCtx.AddMetaScope()
 	commitE := dbsched.NewCommitBlkEvent(commitCtx, blk1)
 	opts.Scheduler.Schedule(commitE)

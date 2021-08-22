@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	// e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
@@ -36,13 +37,7 @@ func initDBTest() {
 
 func initDB() *DB {
 	rand.Seed(time.Now().UnixNano())
-	cfg := &md.Configuration{
-		Dir:              TEST_DB_DIR,
-		SegmentMaxBlocks: 2,
-		BlockMaxRows:     20000,
-	}
-	opts := &e.Options{}
-	opts.Meta.Conf = cfg
+	opts := config.NewCustomizedMetaOptions(TEST_DB_DIR, config.CST_Customize, uint64(20000), uint64(2))
 	inst, _ := Open(TEST_DB_DIR, opts)
 	return inst
 }

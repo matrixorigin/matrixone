@@ -3,11 +3,18 @@
 # These values must be different from each other:
 # port
 # nodeID
-# raftAddrPort
-# clientAddrPort
-# prophetRPCAddrPort
-# prophetClientUrlPort
-# prophetPeerUrlPort
+# prophetEmbedEtcdJoinAddr
+#
+# addr-raft
+# addr-client
+# dir-data
+#[prophet]
+#   name
+#   rpc-addr
+#   external-etcd
+#   [prophet.embed-etcd]
+#       client-urls
+#       peer-urls
 #
 
 
@@ -20,7 +27,7 @@
 #	Comment:	root password
 #	UpdateMode:	dynamic
 	rootpassword = ""
-			
+
 #	Name:	dumpdatabase
 #	Scope:	[global]
 #	Access:	[file]
@@ -30,7 +37,7 @@
 #	Comment:	dump database name
 #	UpdateMode:	dynamic
 	dumpdatabase = "default"
-			
+
 #	Name:	port
 #	Scope:	[global]
 #	Access:	[file]
@@ -40,7 +47,7 @@
 #	Comment:	port
 #	UpdateMode:	dynamic
 	port = 6001
-			
+
 #	Name:	host
 #	Scope:	[global]
 #	Access:	[file]
@@ -50,7 +57,7 @@
 #	Comment:	listening ip
 #	UpdateMode:	dynamic
 	host = "localhost"
-			
+
 #	Name:	sendRow
 #	Scope:	[global]
 #	Access:	[file]
@@ -60,7 +67,7 @@
 #	Comment:	send data row while producing
 #	UpdateMode:	dynamic
 	sendRow = false
-	
+
 #	Name:	dumpEnv
 #	Scope:	[global]
 #	Access:	[file]
@@ -70,7 +77,7 @@
 #	Comment:	dump Environment with memEngine Null nodes for testing
 #	UpdateMode:	dynamic
 	dumpEnv = false
-	
+
 #	Name:	hostMmuLimitation
 #	Scope:	[global]
 #	Access:	[file]
@@ -80,7 +87,7 @@
 #	Comment:	host mmu limitation. default: 1 << 40 = 1099511627776
 #	UpdateMode:	dynamic
 	hostMmuLimitation = 1099511627776
-			
+
 #	Name:	guestMmuLimitation
 #	Scope:	[global]
 #	Access:	[file]
@@ -90,7 +97,7 @@
 #	Comment:	guest mmu limitation. default: 1 << 40 = 1099511627776
 #	UpdateMode:	dynamic
 	guestMmuLimitation = 1099511627776
-			
+
 #	Name:	mempoolMaxSize
 #	Scope:	[global]
 #	Access:	[file]
@@ -100,7 +107,7 @@
 #	Comment:	mempool maxsize. default: 1 << 40 = 1099511627776
 #	UpdateMode:	dynamic
 	mempoolMaxSize = 1099511627776
-			
+
 #	Name:	mempoolFactor
 #	Scope:	[global]
 #	Access:	[file]
@@ -110,7 +117,7 @@
 #	Comment:	mempool factor. default: 8
 #	UpdateMode:	dynamic
 	mempoolFactor = 8
-			
+
 #	Name:	processLimitationSize
 #	Scope:	[global]
 #	Access:	[file]
@@ -120,7 +127,7 @@
 #	Comment:	process.Limitation.Size. default: 10 << 32 = 42949672960
 #	UpdateMode:	dynamic
 	processLimitationSize = 42949672960
-			
+
 #	Name:	processLimitationBatchRows
 #	Scope:	[global]
 #	Access:	[file]
@@ -130,7 +137,7 @@
 #	Comment:	process.Limitation.BatchRows. default: 10 << 32 = 42949672960
 #	UpdateMode:	dynamic
 	processLimitationBatchRows = 42949672960
-			
+
 #	Name:	processLimitationBatchSize
 #	Scope:	[global]
 #	Access:	[file]
@@ -140,7 +147,7 @@
 #	Comment:	process.Limitation.BatchSize. default: 0
 #	UpdateMode:	dynamic
 	processLimitationBatchSize = 0
-			
+
 #	Name:	processLimitationPartitionRows
 #	Scope:	[global]
 #	Access:	[file]
@@ -150,7 +157,7 @@
 #	Comment:	process.Limitation.PartitionRows. default: 10 << 32 = 42949672960
 #	UpdateMode:	dynamic
 	processLimitationPartitionRows = 42949672960
-			
+
 #	Name:	countOfRowsPerSendingToClient
 #	Scope:	[global]
 #	Access:	[file]
@@ -160,7 +167,7 @@
 #	Comment:	send the count of rows to the client
 #	UpdateMode:	dynamic
 	countOfRowsPerSendingToClient = 10
-			
+
 #	Name:	periodOfEpochTimer
 #	Scope:	[global]
 #	Access:	[file]
@@ -170,7 +177,7 @@
 #	Comment:	the period of epoch timer in second
 #	UpdateMode:	dynamic
 	periodOfEpochTimer = 5
-			
+
 #	Name:	periodOfPersistence
 #	Scope:	[global]
 #	Access:	[file]
@@ -180,7 +187,7 @@
 #	Comment:	the period of persistence in second
 #	UpdateMode:	dynamic
 	periodOfPersistence = 20
-			
+
 #	Name:	periodOfDDLDeleteTimer
 #	Scope:	[global]
 #	Access:	[file]
@@ -190,7 +197,7 @@
 #	Comment:	the period of the ddl delete in second
 #	UpdateMode:	dynamic
 	periodOfDDLDeleteTimer = 20
-			
+
 #	Name:	timeoutOfHeartbeat
 #	Scope:	[global]
 #	Access:	[file]
@@ -200,7 +207,7 @@
 #	Comment:	the timeout of heartbeat in second
 #	UpdateMode:	dynamic
 	timeoutOfHeartbeat = 20
-			
+
 #	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout
 #	Scope:	[global]
 #	Access:	[file]
@@ -210,7 +217,7 @@
 #	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.
 #	UpdateMode:	dynamic
 	rejectWhenHeartbeatFromPDLeaderIsTimeout = false
-			
+
 #	Name:	recordTimeElapsedOfSqlRequest
 #	Scope:	[global]
 #	Access:	[file]
@@ -220,7 +227,7 @@
 #	Comment:	record the time elapsed of executing sql request
 #	UpdateMode:	dynamic
 	recordTimeElapsedOfSqlRequest = true
-			
+
 #	Name:	nodeID
 #	Scope:	[global]
 #	Access:	[file]
@@ -230,7 +237,7 @@
 #	Comment:	the Node ID of the cube
 #	UpdateMode:	dynamic
 	nodeID = 0
-			
+
 #	Name:	cubeDir
 #	Scope:	[global]
 #	Access:	[file]
@@ -240,7 +247,7 @@
 #	Comment:	the root direction of the cube
 #	UpdateMode:	dynamic
 	cubeDir = "./cube"
-			
+
 #	Name:	prophetEmbedEtcdJoinAddr
 #	Scope:	[global]
 #	Access:	[file]
@@ -250,7 +257,7 @@
 #	Comment:	the join address of prophet of the cube
 #	UpdateMode:	dynamic
 	prophetEmbedEtcdJoinAddr = "http://localhost:40000"
-			
+
 #	Name:	maxReplicas
 #	Scope:	[global]
 #	Access:	[file]
@@ -260,7 +267,12 @@
 #	Comment:	the number of replicas for each resource
 #	UpdateMode:	dynamic
 	maxReplicas = 1
-			
+
+# Cluster Configs
+pre-allocated-group-num = 20
+max-group-num           = 0
+
+# Cube Configs
 addr-raft = "localhost:10000"
 addr-client = "localhost:20000"
 dir-data = "./cube0/node"
@@ -375,6 +387,3 @@ shard-groups = 0
     interval = 0
     job = ""
     instance = ""
-
-pre-allocated-group-num = 20
-max-group-num           = 0

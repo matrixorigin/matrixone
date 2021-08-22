@@ -159,24 +159,86 @@ func (v *Vector) Length() int {
 
 func (v *Vector) Window(start, end int) *Vector {
 	switch v.Typ.Oid {
+	case types.T_int8:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]int8)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_int16:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]int16)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_int32:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]int32)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_int64:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]int64)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_uint8:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]uint8)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_uint16:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]uint16)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_uint32:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]uint32)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_uint64:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]uint64)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_float32:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]float32)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_float64:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]float64)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_sel:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([]int64)[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
+	case types.T_tuple:
+		return &Vector{
+			Typ: v.Typ,
+			Col: v.Col.([][]interface{})[start:end],
+			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
+		}
 	case types.T_char, types.T_varchar, types.T_json:
 		return &Vector{
 			Typ: v.Typ,
 			Col: v.Col.(*types.Bytes).Window(start, end),
 			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
 		}
-	default:
-		col := v.Col
-		ptr := (*(*emptyInterface)(unsafe.Pointer(&col))).word
-		data := *(*uintptr)(unsafe.Pointer(uintptr(ptr)))
-		*(*uintptr)(unsafe.Pointer(uintptr(ptr))) = data + uintptr(v.Typ.Size)*uintptr(start)
-		*(*int)(unsafe.Pointer(uintptr(ptr) + uintptr(strconv.IntSize>>3))) = end - start
-		return &Vector{
-			Typ: v.Typ,
-			Col: col,
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
 	}
+	return nil
 }
 
 func (v *Vector) Append(arg interface{}) error {

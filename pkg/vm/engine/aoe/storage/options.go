@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	e "matrixone/pkg/vm/engine/aoe/storage/event"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
@@ -8,6 +9,17 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
 	"time"
+)
+
+const (
+	DefaultIndexCacheSize = 128 * common.M
+	DefaultMTCacheSize    = 4 * common.G
+	DefaultSSTCacheSize   = 4 * common.G
+
+	DefaultBlockMaxRows     = uint64(40000)
+	DefaultBlocksPerSegment = uint64(40)
+
+	DefaultCleanInterval = 5
 )
 
 type IterOptions struct {
@@ -59,8 +71,8 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.Meta.Conf == nil {
 		o.Meta.Conf = &md.Configuration{
-			BlockMaxRows:     md.BLOCK_ROW_COUNT,
-			SegmentMaxBlocks: md.SEGMENT_BLOCK_COUNT,
+			BlockMaxRows:     DefaultBlockMaxRows,
+			SegmentMaxBlocks: DefaultBlocksPerSegment,
 			Dir:              dirname,
 		}
 	}
@@ -74,9 +86,9 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.CacheCfg == nil {
 		o.CacheCfg = &CacheCfg{
-			IndexCapacity:  o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
-			InsertCapacity: o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 800,
-			DataCapacity:   o.Meta.Conf.BlockMaxRows * o.Meta.Conf.SegmentMaxBlocks * 80,
+			IndexCapacity:  DefaultIndexCacheSize,
+			InsertCapacity: DefaultMTCacheSize,
+			DataCapacity:   DefaultSSTCacheSize,
 		}
 	}
 
@@ -91,7 +103,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 
 	if o.MetaCleanerCfg == nil {
 		o.MetaCleanerCfg = &MetaCleanerCfg{
-			Interval: time.Duration(20) * time.Second,
+			Interval: time.Duration(DefaultCleanInterval) * time.Second,
 		}
 	}
 	return o

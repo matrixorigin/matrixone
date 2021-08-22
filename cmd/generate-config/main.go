@@ -3,9 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"matrixone/pkg/config"
 	"os"
-	"strings"
 )
 
 func main() {
@@ -15,11 +13,11 @@ func main() {
 		return
 	}
 
-	var gen config.ConfigurationFileGenerator
+	var gen ConfigurationFileGenerator
 	if argCnt == 2 {
-		gen = config.NewConfigurationFileGenerator(os.Args[1])
+		gen = NewConfigurationFileGenerator(os.Args[1])
 	} else if argCnt == 3 {
-		gen = config.NewConfigurationFileGeneratorWithOutputDirectory(os.Args[1], os.Args[2])
+		gen = NewConfigurationFileGeneratorWithOutputDirectory(os.Args[1], os.Args[2])
 	}
 
 	if err := gen.Generate(); err != nil {
@@ -39,13 +37,12 @@ func main() {
 	scanner := bufio.NewScanner(file)
 	isOtherConfigs := false
 	for scanner.Scan() {
-		if !isOtherConfigs && strings.HasPrefix(scanner.Text(), "addr") {
+		if !isOtherConfigs && scanner.Text() == "# Cluster Configs" {
 			isOtherConfigs = true
 		}
 		if isOtherConfigs {
-			_, err := openFile.WriteString(scanner.Text() + "\n")
-			if err != nil {
-				return
+			if _, err := openFile.WriteString(scanner.Text() + "\n"); err != nil {
+				panic(err)
 			}
 		}
 	}
