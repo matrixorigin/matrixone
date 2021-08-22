@@ -54,7 +54,16 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 	for _, meta := range indicesMeta.Data {
 		vf := segFile.MakeVirtualIndexFile(meta)
 		col := int(meta.Cols.ToArray()[0])
-		node := newNode(holder.BufMgr, vf, false, SegmentZoneMapIndexConstructor, meta.Cols, nil)
+		var node *Node
+		switch meta.Type {
+		case base.ZoneMap:
+			node = newNode(holder.BufMgr, vf, false, SegmentZoneMapIndexConstructor, meta.Cols, nil)
+		case base.NumBsi:
+			node = newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, meta.Cols, nil)
+		default:
+			// todo: str bsi
+			panic("unsupported index type")
+		}
 		idxes, ok := holder.self.ColIndices[col]
 		if !ok {
 			idxes = make([]int, 0)
@@ -104,10 +113,12 @@ func (holder *SegmentHolder) CollectMinMax(colIdx int) (min []interface{}, max [
 	if !ok {
 		return nil, nil, nil
 	}
-	//fmt.Println(len(idxes))
-	// we guess there is only a zone map index for one column currently
+
 	for _, idx := range idxes {
 		node := holder.self.Indices[idx].GetManagedNode()
+		if node.DataNode.(Index).Type() != base.ZoneMap {
+			continue
+		}
 		index := node.DataNode.(*SegmentZoneMapIndex)
 		min = make([]interface{}, len(index.BlkMin))
 		max = make([]interface{}, len(index.BlkMax))
