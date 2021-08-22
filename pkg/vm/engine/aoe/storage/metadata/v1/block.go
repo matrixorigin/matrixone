@@ -9,10 +9,6 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
-const (
-	BLOCK_ROW_COUNT = 16
-)
-
 func NewBlock(id uint64, segment *Segment) *Block {
 	blk := &Block{
 		ID:          id,

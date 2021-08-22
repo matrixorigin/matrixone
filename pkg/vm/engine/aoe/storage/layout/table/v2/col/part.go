@@ -13,7 +13,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	"matrixone/pkg/vm/process"
 	"sync"
-	// log "github.com/sirupsen/logrus"
+	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
 
 type IColumnPart interface {
@@ -154,18 +154,13 @@ func (part *ColumnPart) Prefetch() error {
 		TableID:   part.Block.GetMeta().Segment.Table.GetID(),
 		SegmentID: part.Block.GetMeta().GetSegmentID(),
 		BlockID:   part.Block.GetID(),
-		Idx: uint16(part.GetColIdx()),
+		Idx:       uint16(part.GetColIdx()),
 	}
 	return part.Block.GetSegmentFile().PrefetchPart(uint64(part.GetColIdx()), id)
 }
 
 func (part *ColumnPart) Size() uint64 {
-	if part.VFile.GetFileType() == common.DiskFile {
-		return part.BufNode.GetCapacity()
-	}
-	vec := part.GetVector()
-	defer vec.Close()
-	return vec.GetMemorySize()
+	return part.BufNode.GetCapacity()
 }
 
 func (part *ColumnPart) GetColIdx() int {
