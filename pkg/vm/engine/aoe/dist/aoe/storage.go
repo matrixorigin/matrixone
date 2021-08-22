@@ -3,6 +3,7 @@ package aoe
 import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/storage/stats"
+	stdLog "log"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
 	store "matrixone/pkg/vm/engine/aoe/storage"
@@ -51,6 +52,7 @@ func (s *Storage) Stats() stats.Stats {
 }
 
 func (s *Storage) Append(tabletName string, bat *batch.Batch, index *md.LogIndex) error {
+	stdLog.Printf("Call Dist Append, %s, batch vector size is %d", tabletName, len(bat.Vecs))
 	size := 0
 	for _, vec := range bat.Vecs {
 		size += len(vec.Data)
@@ -73,6 +75,7 @@ func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 }
 
 func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids adb.IDS) {
+	stdLog.Printf("[Debug]Call Local GetSegmentIds, %s", ctx.TableName)
 	return s.DB.GetSegmentIds(ctx)
 }
 

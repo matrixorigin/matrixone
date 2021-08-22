@@ -25,6 +25,8 @@ import (
 	dconfig "matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
+	e "matrixone/pkg/vm/engine/aoe/storage"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -139,7 +141,21 @@ func main() {
 		})
 		var aoeDataStorage *daoe.Storage
 
-		aoeDataStorage, err = daoe.NewStorage(targetDir + "/aoe")
+		opts := &e.Options{}
+		mdCfg := &md.Configuration{
+			Dir:              targetDir + "/aoe",
+			SegmentMaxBlocks: 10,
+			BlockMaxRows:     10000,
+		}
+		opts.CacheCfg = &e.CacheCfg{
+			InsertCapacity: 1 * 1024 * 1024 * 1024,
+		}
+		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+			Interval: time.Duration(1) * time.Second,
+		}
+		opts.Meta.Conf = mdCfg
+
+		aoeDataStorage, err = daoe.NewStorageWithOptions(targetDir+"/aoe", opts)
 
 		cfg := dconfig.Config{}
 		_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
@@ -155,7 +171,6 @@ func main() {
 			ExternalServer: true,
 		}
 
-		fmt.Printf("QQQ,maxReplicas is %d\n", config.GlobalSystemVariables.GetMaxReplicas())
 		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
 
 		if cfg.CubeConfig.Prophet.EmbedEtcd.ClientUrls != config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr() {
@@ -193,6 +208,8 @@ func main() {
 		hp := handler.New(eng, proc)
 		srv.Register(hp.Process)
 
+		stdLog.Printf("PreAllocatedGroupNum is %d\n", cfg.ClusterConfig.PreAllocatedGroupNum)
+
 		err = waitClusterStartup(a, 10*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
 
 		if err != nil {
@@ -227,6 +244,7 @@ func main() {
 }
 
 func waitClusterStartup(driver dist.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
+	fmt.Printf("call waitClusterStartup maxReplicas is %d, minimalAvailableShard is %d\n", maxReplicas, minimalAvailableShard)
 	timeoutC := time.After(timeout)
 	for {
 		select {

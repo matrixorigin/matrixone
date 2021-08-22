@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	stdLog "log"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -23,6 +24,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -63,6 +65,8 @@ type DB struct {
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
+	t0 := time.Now()
+	stdLog.Printf("[Debug]Call Local Append, %s, batch vector size is %d", ctx.TableName, len(ctx.Data.Vecs))
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -98,7 +102,10 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 		ID:       ctx.OpIndex,
 		Capacity: uint64(ctx.Data.Vecs[0].Length()),
 	}
-	defer collection.Unref()
+	defer func() {
+		stdLog.Printf("[Debug]Call Local Append %s finished, batch vector size is %d, cost %d ms", ctx.TableName, len(ctx.Data.Vecs), time.Since(t0).Milliseconds())
+		collection.Unref()
+	}()
 	return collection.Append(ctx.Data, index)
 }
 
@@ -191,6 +198,8 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 }
 
 func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {
+	t0 := time.Now()
+	stdLog.Printf("[Debug]Call Local GetSegmentIds, %s", ctx.TableName)
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -203,6 +212,8 @@ func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {
 		return ids
 	}
 	ids.Ids = data.SegmentIds()
+
+	stdLog.Printf("[Debug]Call Local GetSegmentIds finished, %s, cost %d ms", ctx.TableName, time.Since(t0).Milliseconds())
 	return ids
 }
 
