@@ -23,7 +23,7 @@ const (
 	cTableIDPrefix      = "TID"
 	cRoutePrefix        = "Route"
 	cDeletedTablePrefix = "DeletedTableQueue"
-	timeout             = 300
+	timeout             = 600 * time.Millisecond
 )
 
 var log = logger.New(os.Stderr, "catalog:")
@@ -423,7 +423,7 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	for {
 		select {
 		case <-timeoutC:
-			log.Errorn("", "wait for available shard timeout")
+			log.Errorn("wait for available shard timeout")
 			return shardid, ErrTableCreateTimeout
 		default:
 			shard, err := c.Driver.GetShardPool().Alloc(uint64(pb.AOEGroup), codec.Uint642Bytes(tid))

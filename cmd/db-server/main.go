@@ -155,7 +155,6 @@ func main() {
 			ExternalServer: true,
 		}
 
-		fmt.Printf("QQQ,maxReplicas is %d\n", config.GlobalSystemVariables.GetMaxReplicas())
 		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
 
 		if cfg.CubeConfig.Prophet.EmbedEtcd.ClientUrls != config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr() {
