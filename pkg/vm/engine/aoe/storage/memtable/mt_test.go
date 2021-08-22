@@ -1,7 +1,6 @@
 package memtable
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
@@ -11,6 +10,7 @@ import (
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
 	"testing"
@@ -28,7 +28,7 @@ func init() {
 }
 
 func TestManager(t *testing.T) {
-	opts := &engine.Options{}
+	opts := config.NewOptions("/tmp", config.CST_Customize, config.BST_S, config.SST_S)
 	manager := NewManager(opts)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
@@ -36,7 +36,8 @@ func TestManager(t *testing.T) {
 	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
-	tableMeta := md.MockTable(nil, nil, 10)
+	info := md.MockInfo(&sync.RWMutex{}, opts.Meta.Conf.BlockMaxRows, opts.Meta.Conf.SegmentMaxBlocks)
+	tableMeta := md.MockTable(info, nil, 10)
 	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
 
 	c0, err := manager.RegisterCollection(t0_data)
@@ -66,12 +67,11 @@ func TestManager(t *testing.T) {
 }
 
 func TestCollection(t *testing.T) {
-	maxRows := uint64(1024)
+	blockRows := uint64(1024)
 	cols := 2
-	capacity := maxRows * 4 * uint64(cols) * 2 * 2 * 4
-	opts := new(engine.Options)
-	opts.FillDefaults(WORK_DIR)
-	opts.Meta.Conf.BlockMaxRows = maxRows
+	capacity := blockRows * 4 * uint64(cols) * 2 * 2 * 4
+	blockCnt := uint64(4)
+	opts := config.NewCustomizedMetaOptions(WORK_DIR, config.CST_Customize, blockRows, blockCnt)
 
 	var mu sync.RWMutex
 	tables := table.NewTables(&mu)

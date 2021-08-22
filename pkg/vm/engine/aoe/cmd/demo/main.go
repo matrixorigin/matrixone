@@ -23,12 +23,7 @@ func main() {
 		BlockMaxRows:     10000,
 		SegmentMaxBlocks: 2,
 	}
-	cacheCfg := &e.CacheCfg{
-		IndexCapacity:  10000,
-		InsertCapacity: metaConf.BlockMaxRows * uint64(colCnt) * 100,
-		DataCapacity:   metaConf.BlockMaxRows * metaConf.SegmentMaxBlocks * uint64(colCnt) * 20,
-	}
-	opts := e.Options{CacheCfg: cacheCfg}
+	opts := e.Options{}
 	opts.Meta.Conf = metaConf
 	inst, err := db.Open(workDir, &opts)
 	if err != nil {
