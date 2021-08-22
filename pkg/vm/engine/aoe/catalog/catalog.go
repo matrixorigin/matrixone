@@ -3,7 +3,6 @@ package catalog
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"matrixone/pkg/logger"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
@@ -24,7 +23,7 @@ const (
 	cTableIDPrefix      = "TID"
 	cRoutePrefix        = "Route"
 	cDeletedTablePrefix = "DeletedTableQueue"
-	timeout             = 300
+	timeout             = 600 * time.Millisecond
 )
 
 var log = logger.New(os.Stderr, "catalog:")
@@ -424,14 +423,7 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	for {
 		select {
 		case <-timeoutC:
-			log.Errorn("", "wait for available shard timeout")
-			log.Errorn("[Debug]", "begin to iter shards")
-			c.Driver.RaftStore().GetRouter().ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
-				log.Errorn(shard.ID, shard.Peers, shard)
-				return true
-			})
-			_, err := c.Driver.GetShardPool().Alloc(uint64(pb.AOEGroup), codec.Uint642Bytes(tid))
-			log.Errorn("[Debug]", "call GetShardPool again, err is ", err)
+			log.Errorn("wait for available shard timeout")
 			return shardid, ErrTableCreateTimeout
 		default:
 			shard, err := c.Driver.GetShardPool().Alloc(uint64(pb.AOEGroup), codec.Uint642Bytes(tid))

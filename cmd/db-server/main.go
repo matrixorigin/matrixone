@@ -208,8 +208,6 @@ func main() {
 		hp := handler.New(eng, proc)
 		srv.Register(hp.Process)
 
-		stdLog.Printf("PreAllocatedGroupNum is %d\n", cfg.ClusterConfig.PreAllocatedGroupNum)
-
 		err = waitClusterStartup(a, 10*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
 
 		if err != nil {
@@ -244,7 +242,6 @@ func main() {
 }
 
 func waitClusterStartup(driver dist.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
-	fmt.Printf("call waitClusterStartup maxReplicas is %d, minimalAvailableShard is %d\n", maxReplicas, minimalAvailableShard)
 	timeoutC := time.After(timeout)
 	for {
 		select {
