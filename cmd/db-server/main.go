@@ -25,8 +25,6 @@ import (
 	dconfig "matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
-	e "matrixone/pkg/vm/engine/aoe/storage"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -141,21 +139,7 @@ func main() {
 		})
 		var aoeDataStorage *daoe.Storage
 
-		opts := &e.Options{}
-		mdCfg := &md.Configuration{
-			Dir:              targetDir + "/aoe",
-			SegmentMaxBlocks: 10,
-			BlockMaxRows:     10000,
-		}
-		opts.CacheCfg = &e.CacheCfg{
-			InsertCapacity: 1 * 1024 * 1024 * 1024,
-		}
-		opts.MetaCleanerCfg = &e.MetaCleanerCfg{
-			Interval: time.Duration(1) * time.Second,
-		}
-		opts.Meta.Conf = mdCfg
-
-		aoeDataStorage, err = daoe.NewStorageWithOptions(targetDir+"/aoe", opts)
+		aoeDataStorage, err = daoe.NewStorage(targetDir + "/aoe")
 
 		cfg := dconfig.Config{}
 		_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
