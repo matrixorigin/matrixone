@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/logutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
@@ -141,7 +141,7 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 			}
 			vecs[i] = vec
 		default:
-			vec := vector.NewEmptyStdVector()
+			vec := vector.NewStdVector(colDef.Type, meta.MaxRowCount)
 			err = vec.Unmarshall(obuf)
 			if err != nil {
 				panic(err)

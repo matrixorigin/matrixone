@@ -70,6 +70,7 @@ func MockBatch(types []types.Type, rows uint64) *batch.Batch {
 	for i, colType := range types {
 		vec := vector.MockVector(colType, rows)
 		bat.Vecs[i] = vec.CopyToVector()
+		vec.Close()
 	}
 
 	return bat

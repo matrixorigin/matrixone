@@ -18,7 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/prefetch"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -91,7 +91,7 @@ func (bf *BlockFile) close() {
 
 func (bf *BlockFile) Destory() {
 	name := bf.Name()
-	logutil2.Debugf(" %s | BlockFile | Destorying", name)
+	logutil.S().Infof(" %s | BlockFile | Destorying", name)
 	err := os.Remove(name)
 	if err != nil {
 		panic(err)
@@ -116,7 +116,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	var (
 		cols uint16
 		algo uint8
-		err error
+		err  error
 	)
 	offset, _ := bf.File.Seek(0, io.SeekCurrent)
 	if err = binary.Read(&bf.File, binary.BigEndian, &algo); err != nil {
@@ -153,7 +153,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	if err = idx.UnMarshall(buf); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	headSize := 8 + int(sz + sz_) + 3 + 8 + 2*8*int(cols)
+	headSize := 8 + int(sz+sz_) + 3 + 8 + 2*8*int(cols)
 	currOffset := headSize + int(offset)
 	for i := uint16(0); i < cols; i++ {
 		key := base.Key{

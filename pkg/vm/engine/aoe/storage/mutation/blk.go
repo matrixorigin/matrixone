@@ -33,9 +33,11 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 
 func (n *MutableBlockNode) load() {
 	n.Data = n.File.LoadBatch(n.Meta)
+	// logutil.S().Infof("%s loaded %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
 }
 
 func (n *MutableBlockNode) unload() {
+	// logutil.S().Infof("%s presyncing %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
 	ok := n.File.PreSync(uint32(n.Data.Length()))
 	if !ok {
 		return

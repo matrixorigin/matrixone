@@ -38,14 +38,21 @@ func StdVectorConstructor(vf common.IVFile, useCompress bool, freeFunc buf.Memor
 	return NewStdVectorNode(vf, useCompress, freeFunc)
 }
 
-func NewStdVector(t types.Type, capacity uint64) IVector {
-	return &StdVector{
+func NewStdVector(t types.Type, capacity uint64) *StdVector {
+	v := &StdVector{
 		BaseVector: BaseVector{
 			Type:  t,
 			VMask: &nulls.Nulls{},
 		},
-		Data: make([]byte, 0, capacity*uint64(t.Size)),
+		// Data: make([]byte, 0, capacity*uint64(t.Size)),
 	}
+	size := capacity * uint64(t.Size)
+	v.MNode = common.GPool.Alloc(size)
+	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v.MNode.Buf))
+	hp.Len = 0
+	hp.Cap = int(size)
+	v.Data = *(*[]byte)(unsafe.Pointer(&hp))
+	return v
 }
 
 func NewStdVectorNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
@@ -88,6 +95,9 @@ func (v *StdVector) GetType() dbi.VectorType {
 }
 
 func (v *StdVector) Close() error {
+	if v.MNode != nil {
+		common.GPool.Free(v.MNode)
+	}
 	v.VMask = nil
 	v.Data = nil
 	return nil
@@ -564,7 +574,14 @@ func (vec *StdVector) Unmarshall(data []byte) error {
 		}
 		buf = buf[nb:]
 	}
-	vec.Data = buf
+	if vec.MNode != nil {
+		hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data))
+		hp.Len = len(buf)
+		vec.Data = *(*[]byte)(unsafe.Pointer(&hp))
+		copy(vec.Data[0:], buf)
+	} else {
+		vec.Data = buf
+	}
 	return nil
 }
 

@@ -2,6 +2,7 @@ package mutation
 
 import (
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
@@ -99,4 +100,5 @@ func TestMutableBlockNode(t *testing.T) {
 	assert.NotNil(t, h2)
 
 	t.Log(mgr.String())
+	t.Log(common.GPool.String())
 }

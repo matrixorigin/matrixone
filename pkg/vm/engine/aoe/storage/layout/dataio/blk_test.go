@@ -230,7 +230,9 @@ func TestIVectorNodeWriter(t *testing.T) {
 	vecType := types.Type{types.T_int32, 4, 4, 0}
 	capacity := uint64(40)
 	vec0 := vector.NewStdVector(vecType, capacity)
+	defer vec0.Close()
 	vec1 := vector.NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, capacity)
+	defer vec1.Close()
 	err := vec0.Append(4, []int32{int32(0), int32(1), int32(2), int32(3)})
 	assert.Nil(t, err)
 	str0 := "str0"

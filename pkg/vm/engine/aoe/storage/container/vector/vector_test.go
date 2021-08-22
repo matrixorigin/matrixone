@@ -197,6 +197,8 @@ func TestCopy(t *testing.T) {
 	rows := uint64(100)
 	vec0 := MockVector(t0, rows)
 	vec1 := MockVector(t1, rows)
+	defer vec0.Close()
+	defer vec1.Close()
 
 	for i := 0; i < 4; i++ {
 		v0_0, err := vec0.CopyToVectorWithBuffer(bytes.NewBuffer(make([]byte, 0)), bytes.NewBuffer(make([]byte, 0)))
@@ -239,6 +241,8 @@ func TestWrapper(t *testing.T) {
 	rows := uint64(100)
 	vec0 := MockVector(t0, rows)
 	vec1 := MockVector(t1, rows)
+	defer vec0.Close()
+	defer vec1.Close()
 	v0 := vec0.CopyToVector()
 	v1 := vec1.CopyToVector()
 	w0 := NewVectorWrapper(v0)
