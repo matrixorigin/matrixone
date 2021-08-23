@@ -622,7 +622,7 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *md.
 			for _, blk := range data {
 				column := blk.Vecs[idx].Col.([]types.Datetime)
 				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
+					if err := bsiIdx.Set(uint64(row), int64(val)); err != nil {
 						return err
 					}
 					row++
@@ -667,7 +667,7 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *md.
 			for _, blk := range data {
 				column := blk.Vecs[idx].Col.([]types.Date)
 				for _, val := range column {
-					if err := bsiIdx.Set(uint64(row), val); err != nil {
+					if err := bsiIdx.Set(uint64(row), int32(val)); err != nil {
 						return err
 					}
 					row++

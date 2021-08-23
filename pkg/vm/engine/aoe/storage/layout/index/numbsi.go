@@ -2,6 +2,7 @@ package index
 
 import (
 	"bytes"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
@@ -62,7 +63,45 @@ func (i *NumericBsiIndex) GetCol() int16 {
 }
 
 func (i *NumericBsiIndex) Eval(ctx *FilterCtx) error {
-	return nil
+	var err error
+	switch ctx.Op {
+	case OpEq:
+		ctx.BMRes, err = i.Eq(ctx.Val, ctx.BMRes)
+	case OpNe:
+		ctx.BMRes, err = i.Ne(ctx.Val, ctx.BMRes)
+	case OpGe:
+		ctx.BMRes, err = i.Ge(ctx.Val, ctx.BMRes)
+	case OpGt:
+		ctx.BMRes, err = i.Gt(ctx.Val, ctx.BMRes)
+	case OpLe:
+		ctx.BMRes, err = i.Le(ctx.Val, ctx.BMRes)
+	case OpLt:
+		ctx.BMRes, err = i.Lt(ctx.Val, ctx.BMRes)
+	case OpIn:
+		bm := ctx.BMRes.Clone()
+		ctx.BMRes, err = i.Ge(ctx.ValMin, ctx.BMRes)
+		if err != nil {
+			return err
+		}
+		bm, err = i.Le(ctx.ValMax, bm)
+		if err != nil {
+			return err
+		}
+		ctx.BMRes.And(bm)
+	case OpOut:
+		bm := ctx.BMRes.Clone()
+		ctx.BMRes, err = i.Gt(ctx.ValMax, ctx.BMRes)
+		if err != nil {
+			return err
+		}
+		bm, err = i.Lt(ctx.ValMin, bm)
+		if err != nil {
+			return err
+		}
+		ctx.BMRes.Or(bm)
+	}
+	log.Info(ctx.BMRes)
+	return err
 }
 
 func (i *NumericBsiIndex) FreeMemory() {

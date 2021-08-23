@@ -60,6 +60,8 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 			node = newNode(holder.BufMgr, vf, false, SegmentZoneMapIndexConstructor, meta.Cols, nil)
 		case base.NumBsi:
 			node = newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, meta.Cols, nil)
+			//log.Info(node.GetManagedNode().DataNode.(*NumericBsiIndex).Get(uint64(39)))
+			//node.Close()
 		default:
 			// todo: str bsi
 			panic("unsupported index type")
@@ -117,6 +119,10 @@ func (holder *SegmentHolder) CollectMinMax(colIdx int) (min []interface{}, max [
 	for _, idx := range idxes {
 		node := holder.self.Indices[idx].GetManagedNode()
 		if node.DataNode.(Index).Type() != base.ZoneMap {
+			err = node.Close()
+			if err != nil {
+				return
+			}
 			continue
 		}
 		index := node.DataNode.(*SegmentZoneMapIndex)

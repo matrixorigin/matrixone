@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 )
 
@@ -11,7 +12,7 @@ type SegmentSparseFilter struct {
 	segment *Segment
 }
 
-func NewSegmentSparseFilter(s *Segment) *SegmentSparseFilter {
+func NewSegmentSparseFilter(s *Segment) engine.SparseFilter {
 	return &SegmentSparseFilter{segment: s}
 }
 
