@@ -96,12 +96,12 @@ func main() {
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
 		fmt.Printf("error:%v\n", err)
-		return
+		panic(err)
 	}
 
 	if err := config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables); err != nil {
 		fmt.Printf("error:%v\n", err)
-		return
+		panic(err)
 	}
 
 	fmt.Println("Shutdown The Server With Ctrl+C | Ctrl+\\.")
@@ -124,7 +124,7 @@ func main() {
 
 		targetDir := config.GlobalSystemVariables.GetCubeDir() + strNodeId
 		if err := recreateDir(targetDir); err != nil {
-			return
+			panic(err)
 		}
 
 		metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
@@ -159,10 +159,12 @@ func main() {
 
 		a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 		if err != nil {
+			fmt.Printf("Create cube driver failed, %v", err)
 			panic(err)
 		}
 		err = a.Start()
 		if err != nil {
+			fmt.Printf("Start cube driver failed, %v", err)
 			panic(err)
 		}
 		catalog = aoe_catalog.DefaultCatalog(a)
@@ -183,7 +185,8 @@ func main() {
 		log.SetLevel(logger.WARN)
 		srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, log)
 		if err != nil {
-			log.Fatal(err)
+			fmt.Printf("Create rpcserver failed, %v", err)
+			panic(err)
 		}
 		hp := handler.New(eng, proc)
 		srv.Register(hp.Process)
@@ -191,6 +194,7 @@ func main() {
 		err = waitClusterStartup(a, 10*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
 
 		if err != nil {
+			fmt.Printf("wait cube cluster startup failed, %v", err)
 			panic(err)
 		}
 
@@ -212,6 +216,7 @@ func main() {
 	createMOServer(pci)
 	err := runMOServer()
 	if err != nil {
+		fmt.Printf("Start MOServer failed, %v", err)
 		panic(err)
 	}
 	//registerSignalHandlers()

@@ -2,8 +2,8 @@ package col
 
 import (
 	"fmt"
+	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync/atomic"
 )
@@ -142,7 +142,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Bloc
 	part := blk.Part.CloneWithUpgrade(cloned.Ref(), seg.GetSSTBufMgr(), seg.GetFsManager())
 	blk.RUnlock()
 	if part == nil {
-		logutil.Error("logic error")
+		logutil2.Error("logic error")
 		panic("logic error")
 	}
 	if newIndexHolder {
