@@ -24,7 +24,7 @@ func Debug(msg string, fields ...zap.Field) {
 
 // Debugf only use in develop mode
 func Debugf(msg string, fields ...interface{}) {
-	L().WithOptions(zap.AddCallerSkip(1)).Sugar().Debugf(msg, fields)
+	L().WithOptions(zap.AddCallerSkip(1)).Sugar().Debugf(msg, fields...)
 }
 
 func Info(msg string, fields ...zap.Field) {
@@ -33,7 +33,7 @@ func Info(msg string, fields ...zap.Field) {
 
 // Infof only use in develop mode
 func Infof(msg string, fields ...interface{}) {
-	L().WithOptions(zap.AddCallerSkip(1)).Sugar().Infof(msg, fields)
+	L().WithOptions(zap.AddCallerSkip(1)).Sugar().Infof(msg, fields...)
 }
 
 func Warn(msg string, fields ...zap.Field) {
@@ -41,7 +41,7 @@ func Warn(msg string, fields ...zap.Field) {
 }
 
 func Warnf(msg string, fields ...interface{}) {
-	L().WithOptions(zap.AddCallerSkip(1)).Sugar().Warnf(msg, fields)
+	L().WithOptions(zap.AddCallerSkip(1)).Sugar().Warnf(msg, fields...)
 }
 
 func Error(msg string, fields ...zap.Field) {
