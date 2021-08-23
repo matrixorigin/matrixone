@@ -2,7 +2,7 @@ package sched
 
 import (
 	"errors"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
+	logutil2 "matrixone/pkg/logutil"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
 )
@@ -25,7 +25,7 @@ func newMockEventHandler(name string) *mockEventHandler {
 
 func (h *mockEventHandler) doHandle(op iops.IOp) {
 	e := op.(Event)
-	logutil.Debugf("Handling event type %v, id %d", e.Type(), e.ID())
+	logutil2.Debugf("Handling event type %v, id %d", e.Type(), e.ID())
 }
 
 type BaseEventHandler struct {

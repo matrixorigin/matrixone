@@ -3,10 +3,10 @@ package col
 import (
 	"errors"
 	"fmt"
+	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"runtime"
 
@@ -46,7 +46,7 @@ func NewSegmentTree(indexHolder *index.TableHolder) ISegmentTree {
 	tree.data.Segments = make([]IColumnSegment, 0)
 	tree.data.Helper = make(map[common.ID]int)
 	runtime.SetFinalizer(tree, func(o *SegmentTree) {
-		logutil.Debugf("[GC]: SegmentTree: %s", o.String())
+		logutil2.Debugf("[GC]: SegmentTree: %s", o.String())
 		o.data.Segments = nil
 	})
 	return tree

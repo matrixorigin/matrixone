@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
+	logutil2 "matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -462,7 +462,7 @@ func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
 		blk, _ := activeSeg.CreateBlock()
 		err := activeSeg.RegisterBlock(blk)
 		if err != nil {
-			logutil.Errorf("seg blks = %d, maxBlks = %d", len(activeSeg.Blocks), activeSeg.MaxBlockCount)
+			logutil2.Errorf("seg blks = %d, maxBlks = %d", len(activeSeg.Blocks), activeSeg.MaxBlockCount)
 			panic(err)
 		}
 		if len(activeSeg.Blocks) == int(info.Conf.SegmentMaxBlocks) {

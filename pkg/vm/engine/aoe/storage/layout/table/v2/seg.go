@@ -2,12 +2,12 @@ package table
 
 import (
 	"fmt"
+	logutil2 "matrixone/pkg/logutil"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 	"sync/atomic"
@@ -381,7 +381,7 @@ func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 	}
 	idx, ok := seg.tree.Helper[meta.ID]
 	if !ok {
-		logutil.Error("logic error")
+		logutil2.Error("logic error")
 		panic("logic error")
 	}
 	old := seg.tree.Blocks[idx]
