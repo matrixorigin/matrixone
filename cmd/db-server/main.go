@@ -16,9 +16,9 @@ import (
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
 	"matrixone/pkg/logger"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
-	"matrixone/pkg/util/signal"
 	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
@@ -31,7 +31,9 @@ import (
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -56,10 +58,17 @@ func serverShutdown(isgraceful bool) {
 }
 
 func registerSignalHandlers() {
-	signal.SetupSignalHandler(serverShutdown)
+//	signal.SetupSignalHandler(serverShutdown)
+}
+
+func waitSignal() {
+	sigchan := make(chan os.Signal)
+	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
+	<-sigchan
 }
 
 func cleanup() {
+	fmt.Println("\rBye!")
 }
 
 func recreateDir(dir string) (err error) {
@@ -108,6 +117,8 @@ func main() {
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
+
+	logutil.SetupLogger(os.Args[1])
 
 	if !config.GlobalSystemVariables.GetDumpEnv() {
 		fmt.Println("Using AOE Storage Engine, 3 Cluster Nodes, 1 SQL Server.")
@@ -225,7 +236,7 @@ func main() {
 	}
 	//registerSignalHandlers()
 
-	select {}
+	waitSignal()
 	cleanup()
 	os.Exit(0)
 }
