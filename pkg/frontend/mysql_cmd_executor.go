@@ -3,6 +3,7 @@ package frontend
 import (
 	"fmt"
 	"matrixone/pkg/defines"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/compile"
 	"strings"
 	"time"
@@ -45,9 +46,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	rt := obj.(*Routine)
 	ses := rt.GetSession()
 
-	fmt.Println("hello------")
+	logutil.Infof("hello------")
 	{
-		fmt.Printf("bat: %v\n", bat)
+		logutil.Infof("bat: %v\n", bat)
 	}
 
 	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
@@ -57,7 +58,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	if choose {
 		goID := GetRoutineId()
 
-		fmt.Printf("goid %d \n", goID)
+		logutil.Infof("goid %d \n", goID)
+
+		begin := time.Now()
 
 		proto := rt.GetClientProtocol().(*MysqlProtocol)
 
@@ -232,18 +235,18 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								}
 							}
 						default:
-							fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+							logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 							return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 						}
 					}
 				}
 
-				fmt.Printf("row group -+> %v \n", mrs.Data[:r])
+				//fmt.Printf("row group -+> %v \n", mrs.Data[:r])
 
 				//send group of row
 				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
 					//return err
-					fmt.Printf("getDataFromPipeline error %v \n", err)
+					logutil.Errorf("getDataFromPipeline error %v \n", err)
 					return err
 				}
 			}
@@ -406,22 +409,24 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								}
 							}
 						default:
-							fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+							logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 							return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 						}
 					}
 				}
 
-				fmt.Printf("row group -*> %v \n", mrs.Data[:r])
+				//fmt.Printf("row group -*> %v \n", mrs.Data[:r])
 
 				//send row
 				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
 					//return err
-					fmt.Printf("getDataFromPipeline error %v \n", err)
+					logutil.Errorf("getDataFromPipeline error %v \n", err)
 					return err
 				}
 			}
 		}
+
+		logutil.Infof("time of getDataFromPipeline : %s ",time.Since(begin).String())
 	} else {
 
 		if n := len(bat.Sels); n == 0 {
@@ -625,7 +630,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						}
 					}
 				default:
-					fmt.Printf("FillResult else1: unsupported type %d \n", vec.Typ.Oid)
+					logutil.Errorf("FillResult else1: unsupported type %d \n", vec.Typ.Oid)
 					return fmt.Errorf("FillResult else1: unsupported type %d \n", vec.Typ.Oid)
 				}
 			}
@@ -830,7 +835,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						}
 					}
 				default:
-					fmt.Printf("FillResult else2: unsupported type %d \n", vec.Typ.Oid)
+					logutil.Errorf("FillResult else2: unsupported type %d \n", vec.Typ.Oid)
 					return fmt.Errorf("FillResult else2: unsupported type %d \n", vec.Typ.Oid)
 				}
 			}
@@ -968,7 +973,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-			fmt.Printf("time of Exec.Compile : %s \n", time.Since(cmpBegin).String())
+			logutil.Infof("time of Exec.Compile : %s", time.Since(cmpBegin).String())
 		}
 
 		switch stmt.(type) {
@@ -1058,7 +1063,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return er
 				}
 				if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-					fmt.Printf("time of Exec.Run : %s \n", time.Since(runBegin).String())
+					logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 				}
 				/*
 					Step 3: Say goodbye
@@ -1139,7 +1144,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-				fmt.Printf("time of Exec.Run : %s \n", time.Since(runBegin).String())
+				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 
 			//record ddl drop xxx after the success
@@ -1159,8 +1164,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				int(COM_QUERY),
 				nil,
 			)
+			echoTime := time.Now()
 			if err = proto.SendResponse(resp); err != nil {
 				return err
+			}
+			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
+				logutil.Infof("time of SendResponse %s",time.Since(echoTime).String())
 			}
 		}
 	}
@@ -1171,7 +1180,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	var resp *Response = nil
-	fmt.Printf("cmd %v \n", req.GetCmd())
+	logutil.Infof("cmd %v", req.GetCmd())
 
 	ses := mce.routine.GetSession()
 	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
@@ -1199,7 +1208,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		fmt.Printf("query:%s \n", query)
+		logutil.Infof("query:%s", SubStringFromBegin(query,int(ses.Pu.SV.GetLengthOfQueryPrinted())))
 		err := mce.doComQuery(query)
 		if err != nil {
 			resp = NewResponse(

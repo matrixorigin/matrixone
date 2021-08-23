@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"matrixone/pkg/config"
+	"matrixone/pkg/logutil"
 	"sync/atomic"
 
 	"github.com/fagongzi/goetty"
@@ -50,6 +51,7 @@ func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) 
 	app, err := goetty.NewTCPApplication(addr, rm.Handler,
 		goetty.WithAppSessionOptions(
 			goetty.WithCodec(encoder, decoder),
+			goetty.WithLogger(&logutil.GoettyLogger{}),
 			goetty.WithEnableAsyncWrite(64)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {

@@ -35,7 +35,7 @@ func (f *SegmentFilter) Eq(attr string, val interface{}) (*roaring64.Bitmap, err
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
 	}
-	buf, err := bmRes.ToBase64()
+	buf, err := ctx.BMRes.ToBase64()
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +60,7 @@ func (f *SegmentFilter) Ne(attr string, val interface{}) (*roaring64.Bitmap, err
 	if err != nil {
 		return nil, err
 	}
-	buf, err := bmRes.ToBase64()
+	buf, err := ctx.BMRes.ToBase64()
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func (f *SegmentFilter) Lt(attr string, val interface{}) (*roaring64.Bitmap, err
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
 	}
-	buf, err := bmRes.ToBase64()
+	buf, err := ctx.BMRes.ToBase64()
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (f *SegmentFilter) Le(attr string, val interface{}) (*roaring64.Bitmap, err
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
 	}
-	buf, err := bmRes.ToBase64()
+	buf, err := ctx.BMRes.ToBase64()
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +144,7 @@ func (f *SegmentFilter) Gt(attr string, val interface{}) (*roaring64.Bitmap, err
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
 	}
-	buf, err := bmRes.ToBase64()
+	buf, err := ctx.BMRes.ToBase64()
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func (f *SegmentFilter) Ge(attr string, val interface{}) (*roaring64.Bitmap, err
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
 	}
-	buf, err := bmRes.ToBase64()
+	buf, err := ctx.BMRes.ToBase64()
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +201,7 @@ func (f *SegmentFilter) Btw(attr string, minv interface{}, maxv interface{}) (*r
 	if !ctx.BoolRes {
 		return roaring64.NewBitmap(), nil
 	}
-	buf, err := bmRes.ToBase64()
+	buf, err := ctx.BMRes.ToBase64()
 	if err != nil {
 		return nil, err
 	}

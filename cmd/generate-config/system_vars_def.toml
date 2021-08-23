@@ -238,6 +238,16 @@ comment = "default is false. the server will reject the connection and sql reque
 update-mode = "dynamic"
 
 [[parameter]]
+name = "enableEpochLogging"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["false"]
+comment = "default is false. Print logs when the server calls catalog service to run the ddl."
+update-mode = "dynamic"
+
+[[parameter]]
 name = "recordTimeElapsedOfSqlRequest"
 scope = ["global"]
 access = ["file"]
@@ -287,9 +297,38 @@ values = ["1", "1", "1"]
 comment = "the number of replicas for each resource"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "lengthOfQueryPrinted"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["50", "-1", "10000"]
+comment = "the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string."
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
+
+# Logger Configs
+# Log level: debug, info, warn, error, fatal.
+level = "info"
+
+# Log format, one of json or text.
+format = "console"
+
+# Enable automatic timestamps in log output, if not set, it will be defaulted to true.
+# enable-timestamp = true
+
+# Enable annotating logs with the full stack error message, if not set, it will be defaulted to false.
+# enable-error-stack = false
+
+# Encoding sets the logger's encoding. Valid values are "json" and
+# "console", as well as any third-party encodings registered via
+# RegisterEncoder.
+encoding = "console"
+
 
 # Cube Configs
 addr-raft = "localhost:10000"
@@ -406,3 +445,17 @@ shard-groups = 0
     interval = 0
     job = ""
     instance = ""
+
+# File logging.
+[file]
+# Log file name.
+filename = ""
+
+# Max log file size in MB (upper limit to 4096MB).
+max-size = 300
+
+# Max log file keep days. No clean up by default.
+max-days = 0
+
+# Maximum number of old log files to retain. No clean up by default.
+max-backups = 0

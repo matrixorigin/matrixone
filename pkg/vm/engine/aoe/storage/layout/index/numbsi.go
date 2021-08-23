@@ -2,7 +2,6 @@ package index
 
 import (
 	"bytes"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
@@ -100,7 +99,6 @@ func (i *NumericBsiIndex) Eval(ctx *FilterCtx) error {
 		}
 		ctx.BMRes.Or(bm)
 	}
-	log.Info(ctx.BMRes)
 	return err
 }
 

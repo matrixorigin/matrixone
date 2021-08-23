@@ -77,6 +77,9 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 	if c1.RejectWhenHeartbeatFromPDLeaderIsTimeout != c2.RejectWhenHeartbeatFromPDLeaderIsTimeout {
 		return false
 	}
+	if c1.EnableEpochLogging != c2.EnableEpochLogging {
+		return false
+	}
 	if c1.RecordTimeElapsedOfSqlRequest != c2.RecordTimeElapsedOfSqlRequest {
 		return false
 	}
@@ -90,6 +93,9 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 		return false
 	}
 	if c1.MaxReplicas != c2.MaxReplicas {
+		return false
+	}
+	if c1.LengthOfQueryPrinted != c2.LengthOfQueryPrinted {
 		return false
 	}
 
@@ -121,11 +127,13 @@ periodOfPersistence=20
 periodOfDDLDeleteTimer=20
 timeoutOfHeartbeat=20
 rejectWhenHeartbeatFromPDLeaderIsTimeout=false
+enableEpochLogging=false
 recordTimeElapsedOfSqlRequest=true
 nodeID=0
 cubeDir= "./cube"
 prophetEmbedEtcdJoinAddr= "http://localhost:40000"
 maxReplicas=1
+lengthOfQueryPrinted=50
 		
 `
 	t1_config:=varsConfig{
@@ -154,11 +162,13 @@ PeriodOfPersistence:20,
 PeriodOfDDLDeleteTimer:20,
 TimeoutOfHeartbeat:20,
 RejectWhenHeartbeatFromPDLeaderIsTimeout:false,
+EnableEpochLogging:false,
 RecordTimeElapsedOfSqlRequest:true,
 NodeID:0,
 CubeDir: "./cube" ,
 ProphetEmbedEtcdJoinAddr: "http://localhost:40000" ,
 MaxReplicas:1,
+LengthOfQueryPrinted:50,
 	
 
 		name2updatedFlags: nil,
