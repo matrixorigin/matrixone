@@ -58,7 +58,7 @@ func serverShutdown(isgraceful bool) {
 }
 
 func registerSignalHandlers() {
-//	signal.SetupSignalHandler(serverShutdown)
+	//	signal.SetupSignalHandler(serverShutdown)
 }
 
 func waitSignal() {
@@ -72,11 +72,26 @@ func cleanup() {
 }
 
 func recreateDir(dir string) (err error) {
+	_, err = os.Stat(dir)
+	if err != nil {
+		if os.IsExist(err) {
+			err = os.Chmod(dir, 0777)
+		} else {
+			err = nil
+		}
+	} else {
+		err = os.Chmod(dir, 0777)
+	}
+	if err != nil {
+		return err
+	}
 	err = os.RemoveAll(dir)
 	if err != nil {
 		return err
 	}
-	err = os.MkdirAll(dir, os.ModeDir)
+	mask := syscall.Umask(0)
+	defer syscall.Umask(mask)
+	err = os.MkdirAll(dir, os.FileMode(0755))
 	return err
 }
 
