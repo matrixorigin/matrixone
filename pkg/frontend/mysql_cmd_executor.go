@@ -46,9 +46,9 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	rt := obj.(*Routine)
 	ses := rt.GetSession()
 
-	fmt.Println("hello------")
+	logutil.Infof("hello------")
 	{
-		fmt.Printf("bat: %v\n", bat)
+		logutil.Infof("bat: %v\n", bat)
 	}
 
 	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
@@ -58,7 +58,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	if choose {
 		goID := GetRoutineId()
 
-		fmt.Printf("goid %d \n", goID)
+		logutil.Infof("goid %d \n", goID)
 
 		begin := time.Now()
 
@@ -235,7 +235,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								}
 							}
 						default:
-							fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+							logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 							return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 						}
 					}
@@ -246,7 +246,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				//send group of row
 				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
 					//return err
-					fmt.Printf("getDataFromPipeline error %v \n", err)
+					logutil.Errorf("getDataFromPipeline error %v \n", err)
 					return err
 				}
 			}
@@ -409,7 +409,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								}
 							}
 						default:
-							fmt.Printf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
+							logutil.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 							return fmt.Errorf("getDataFromPipeline : unsupported type %d \n", vec.Typ.Oid)
 						}
 					}
@@ -420,7 +420,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				//send row
 				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
 					//return err
-					fmt.Printf("getDataFromPipeline error %v \n", err)
+					logutil.Errorf("getDataFromPipeline error %v \n", err)
 					return err
 				}
 			}
@@ -630,7 +630,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						}
 					}
 				default:
-					fmt.Printf("FillResult else1: unsupported type %d \n", vec.Typ.Oid)
+					logutil.Errorf("FillResult else1: unsupported type %d \n", vec.Typ.Oid)
 					return fmt.Errorf("FillResult else1: unsupported type %d \n", vec.Typ.Oid)
 				}
 			}
@@ -835,7 +835,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 						}
 					}
 				default:
-					fmt.Printf("FillResult else2: unsupported type %d \n", vec.Typ.Oid)
+					logutil.Errorf("FillResult else2: unsupported type %d \n", vec.Typ.Oid)
 					return fmt.Errorf("FillResult else2: unsupported type %d \n", vec.Typ.Oid)
 				}
 			}
