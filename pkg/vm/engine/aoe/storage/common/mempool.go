@@ -2,7 +2,7 @@ package common
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
+	logutil2 "matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
 	// "runtime"
@@ -237,7 +237,7 @@ func (mp *Mempool) Free(n *MemNode) {
 	// log.Infof("Free size %d", size)
 	usage := atomic.AddUint64(&mp.usage, ^uint64(uint64(size)-1))
 	if usage > mp.capacity {
-		logutil.Error("logic error")
+		logutil2.Error("logic error")
 		panic("")
 	}
 }

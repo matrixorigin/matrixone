@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"go.uber.org/zap"
 	"io"
+	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/prefetch"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
@@ -158,21 +158,21 @@ func (sf *SortedSegmentFile) initPointers() {
 		panic(err)
 	}
 	colsPos := make([]uint32, colCnt)
-	logutil.Debugf("colCnt=%d", colCnt)
+	logutil2.Debugf("colCnt=%d", colCnt)
 	for i := 0; i < int(colCnt); i++ {
 		if err = binary.Read(&sf.File, binary.BigEndian, &colsPos[i]); err != nil {
 			panic(err)
 		}
-		logutil.Debugf("colPos=%d", colsPos[i])
+		logutil2.Debugf("colPos=%d", colsPos[i])
 	}
 	var endPos uint32
 	if err = binary.Read(&sf.File, binary.BigEndian, &endPos); err != nil {
 		panic(err)
 	}
-	logutil.Debugf("endPos=%d", endPos)
+	logutil2.Debugf("endPos=%d", endPos)
 
 	for i := 0; i < int(colCnt); i++ {
-		logutil.Debugf("Col=%d", i)
+		logutil2.Debugf("Col=%d", i)
 		for j := 0; j < int(blkCnt); j++ {
 			blkId := blkIds[j]
 			id := sf.ID.AsBlockID()
@@ -208,7 +208,7 @@ func (sf *SortedSegmentFile) initPointers() {
 			if err = binary.Read(&sf.File, binary.BigEndian, &blkCol); err != nil {
 				panic(err)
 			}
-			logutil.Debug("Read column block",
+			logutil2.Debug("Read column block",
 				zap.Int("Column", i),
 				zap.Int("Block", j),
 				zap.Uint64("Size", sf.Parts[key].Len),
@@ -314,7 +314,7 @@ func (sf *SortedSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta
 
 func (sf *SortedSegmentFile) Destory() {
 	name := sf.Name()
-	logutil.Debugf(" %s | SegmentFile | Destorying", name)
+	logutil2.Debugf(" %s | SegmentFile | Destorying", name)
 	err := os.Remove(name)
 	if err != nil {
 		panic(err)

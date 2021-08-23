@@ -3,11 +3,11 @@ package db
 import (
 	"fmt"
 	"io/ioutil"
+	logutil2 "matrixone/pkg/logutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path"
@@ -39,7 +39,7 @@ type blockfile struct {
 
 func (bf *blockfile) clean() {
 	os.Remove(bf.name)
-	logutil.Debugf("%s | Removed", bf.name)
+	logutil2.Debugf("%s | Removed", bf.name)
 }
 
 type sortedSegmentFile struct {
@@ -61,7 +61,7 @@ func newUnsortedSegmentFile(id common.ID) *unsortedSegmentFile {
 
 func (sf *sortedSegmentFile) clean() {
 	os.Remove(sf.name)
-	logutil.Debugf("%s | Removed", sf.name)
+	logutil2.Debugf("%s | Removed", sf.name)
 }
 
 func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string) {
@@ -410,7 +410,7 @@ func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
 	ret.Replay()
 	h.correctTable(ret)
 	// log.Info(ret.String())
-	logutil.Debugf(h.String())
+	logutil2.Debugf(h.String())
 	return ret
 }
 
@@ -448,7 +448,7 @@ func (h *replayHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.
 
 func (h *replayHandle) cleanupFile(fname string) {
 	os.Remove(fname)
-	logutil.Debugf("%s | Removed", fname)
+	logutil2.Debugf("%s | Removed", fname)
 }
 
 func (h *replayHandle) Cleanup() {
