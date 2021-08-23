@@ -218,6 +218,16 @@
 #	UpdateMode:	dynamic
 	rejectWhenHeartbeatFromPDLeaderIsTimeout = false
 
+#	Name:	enableEpochLogging
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	bool
+#	DomainType:	set
+#	Values:	[false]
+#	Comment:	default is false. Print logs when the server calls catalog service to run the ddl.
+#	UpdateMode:	dynamic
+	enableEpochLogging = false
+
 #	Name:	recordTimeElapsedOfSqlRequest
 #	Scope:	[global]
 #	Access:	[file]
@@ -267,6 +277,16 @@
 #	Comment:	the number of replicas for each resource
 #	UpdateMode:	dynamic
 	maxReplicas = 1
+
+#	Name:	lengthOfQueryPrinted
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	range
+#	Values:	[50 -1 10000]
+#	Comment:	the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
+#	UpdateMode:	dynamic
+	lengthOfQueryPrinted = 50
 
 # Cluster Configs
 pre-allocated-group-num = 20

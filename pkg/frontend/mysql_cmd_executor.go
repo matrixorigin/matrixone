@@ -1199,7 +1199,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		fmt.Printf("query:%s \n", query)
+		fmt.Printf("query:%s \n", SubStringFromBegin(query,int(ses.Pu.SV.GetLengthOfQueryPrinted())))
 		err := mce.doComQuery(query)
 		if err != nil {
 			resp = NewResponse(

@@ -115,11 +115,7 @@ func main() {
 		NodeId := config.GlobalSystemVariables.GetNodeID()
 		strNodeId := strconv.FormatInt(NodeId, 10)
 
-		ppu := frontend.NewPDCallbackParameterUnit(
-			int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()),
-			int(config.GlobalSystemVariables.GetPeriodOfPersistence()),
-			int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()),
-			int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()))
+		ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging())
 
 		pci = frontend.NewPDCallbackImpl(ppu)
 		pci.Id = int(NodeId)

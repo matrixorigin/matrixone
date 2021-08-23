@@ -238,6 +238,16 @@ comment = "default is false. the server will reject the connection and sql reque
 update-mode = "dynamic"
 
 [[parameter]]
+name = "enableEpochLogging"
+scope = ["global"]
+access = ["file"]
+type = "bool"
+domain-type = "set"
+values = ["false"]
+comment = "default is false. Print logs when the server calls catalog service to run the ddl."
+update-mode = "dynamic"
+
+[[parameter]]
 name = "recordTimeElapsedOfSqlRequest"
 scope = ["global"]
 access = ["file"]
@@ -285,6 +295,16 @@ type = "int64"
 domain-type = "range"
 values = ["1", "1", "1"]
 comment = "the number of replicas for each resource"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "lengthOfQueryPrinted"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "range"
+values = ["50", "-1", "10000"]
+comment = "the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string."
 update-mode = "dynamic"
 
 # Cluster Configs
