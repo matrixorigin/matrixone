@@ -3,6 +3,7 @@ package frontend
 import (
 	"fmt"
 	"matrixone/pkg/defines"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/compile"
 	"strings"
 	"time"
@@ -58,6 +59,8 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		goID := GetRoutineId()
 
 		fmt.Printf("goid %d \n", goID)
+
+		begin := time.Now()
 
 		proto := rt.GetClientProtocol().(*MysqlProtocol)
 
@@ -238,7 +241,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 
-				fmt.Printf("row group -+> %v \n", mrs.Data[:r])
+				//fmt.Printf("row group -+> %v \n", mrs.Data[:r])
 
 				//send group of row
 				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
@@ -412,7 +415,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 
-				fmt.Printf("row group -*> %v \n", mrs.Data[:r])
+				//fmt.Printf("row group -*> %v \n", mrs.Data[:r])
 
 				//send row
 				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
@@ -422,6 +425,8 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 				}
 			}
 		}
+
+		logutil.Info(fmt.Sprintf("time of getDataFromPipeline : %s ",time.Since(begin).String()))
 	} else {
 
 		if n := len(bat.Sels); n == 0 {
@@ -968,7 +973,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-			fmt.Printf("time of Exec.Compile : %s \n", time.Since(cmpBegin).String())
+			logutil.Info(fmt.Sprintf("time of Exec.Compile : %s", time.Since(cmpBegin).String()))
 		}
 
 		switch stmt.(type) {
@@ -1058,7 +1063,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return er
 				}
 				if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-					fmt.Printf("time of Exec.Run : %s \n", time.Since(runBegin).String())
+					logutil.Info(fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 				}
 				/*
 					Step 3: Say goodbye
@@ -1139,7 +1144,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-				fmt.Printf("time of Exec.Run : %s \n", time.Since(runBegin).String())
+				logutil.Info(fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
 			}
 
 			//record ddl drop xxx after the success
@@ -1171,7 +1176,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	var resp *Response = nil
-	fmt.Printf("cmd %v \n", req.GetCmd())
+	logutil.Info(fmt.Sprintf("cmd %v", req.GetCmd()))
 
 	ses := mce.routine.GetSession()
 	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
@@ -1199,7 +1204,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		fmt.Printf("query:%s \n", SubStringFromBegin(query,int(ses.Pu.SV.GetLengthOfQueryPrinted())))
+		logutil.Info(fmt.Sprintf("query:%s", SubStringFromBegin(query,int(ses.Pu.SV.GetLengthOfQueryPrinted()))))
 		err := mce.doComQuery(query)
 		if err != nil {
 			resp = NewResponse(
