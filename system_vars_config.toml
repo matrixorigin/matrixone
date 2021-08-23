@@ -277,13 +277,18 @@ max-group-num           = 0
 level = "info"
 
 # Log format, one of json or text.
-format = "text"
+format = "console"
 
 # Enable automatic timestamps in log output, if not set, it will be defaulted to true.
 # enable-timestamp = true
 
 # Enable annotating logs with the full stack error message, if not set, it will be defaulted to false.
 # enable-error-stack = false
+
+# Encoding sets the logger's encoding. Valid values are "json" and
+# "console", as well as any third-party encodings registered via
+# RegisterEncoder.
+encoding = "console"
 
 
 # Cube Configs

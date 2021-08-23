@@ -144,6 +144,9 @@ func NewTextEncoder(cfg *Config) zapcore.Encoder {
 		}
 	case "json":
 		return zapcore.NewJSONEncoder(cc)
+	case "console":
+		return zapcore.NewConsoleEncoder(cc)
+
 	default:
 		panic(fmt.Sprintf("unsupport log format: %s", cfg.Format))
 	}
