@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"matrixone/pkg/defines"
+	"matrixone/pkg/logutil"
 	"strconv"
 	"time"
 )
@@ -375,7 +376,7 @@ func (mp *MysqlProtocol) checkPassword(password, salt, auth []byte) bool {
 	sha := sha1.New()
 	_, err := sha.Write(password)
 	if err != nil {
-		fmt.Printf("SHA1(password) failed.")
+		logutil.Errorf("SHA1(password) failed.")
 		return false
 	}
 	hash1 := sha.Sum(nil)
@@ -384,7 +385,7 @@ func (mp *MysqlProtocol) checkPassword(password, salt, auth []byte) bool {
 	sha.Reset()
 	_, err = sha.Write(hash1)
 	if err != nil {
-		fmt.Printf("SHA1(SHA1(password)) failed.")
+		logutil.Errorf("SHA1(SHA1(password)) failed.")
 		return false
 	}
 	hash2 := sha.Sum(nil)
@@ -393,12 +394,12 @@ func (mp *MysqlProtocol) checkPassword(password, salt, auth []byte) bool {
 	sha.Reset()
 	_, err = sha.Write(salt)
 	if err != nil {
-		fmt.Printf("write salt failed.")
+		logutil.Errorf("write salt failed.")
 		return false
 	}
 	_, err = sha.Write(hash2)
 	if err != nil {
-		fmt.Printf("write SHA1(SHA1(password)) failed.")
+		logutil.Errorf("write SHA1(SHA1(password)) failed.")
 		return false
 	}
 	hash3 := sha.Sum(nil)
@@ -408,8 +409,8 @@ func (mp *MysqlProtocol) checkPassword(password, salt, auth []byte) bool {
 		hash1[i] ^= hash3[i]
 	}
 
-	fmt.Printf("server calculated %v\n", hash1)
-	fmt.Printf("client calculated %v\n", auth)
+	logutil.Infof("server calculated %v\n", hash1)
+	logutil.Infof("client calculated %v\n", auth)
 
 	return bytes.Equal(hash1, auth)
 }
@@ -426,7 +427,7 @@ func (mp *MysqlProtocol) authenticateUser(authResponse []byte) error {
 
 	//TO Check password
 	if mp.checkPassword(psw, mp.salt, authResponse) {
-		fmt.Printf("check password succeeded\n")
+		logutil.Infof("check password succeeded\n")
 	} else {
 		return fmt.Errorf("check password failed\n")
 	}
@@ -609,11 +610,11 @@ func (mp *MysqlProtocol) analyseHandshakeResponse41(data []byte) (bool, response
 //and other things
 func (mp *MysqlProtocol) handleClientResponse41(resp41 response41) error {
 	//to do something else
-	fmt.Printf("capabilities 0x%x\n", resp41.capabilities)
-	fmt.Printf("maxPacketSize %d\n", resp41.maxPacketSize)
-	fmt.Printf("collationID %d\n", resp41.collationID)
-	fmt.Printf("username %s\n", resp41.username)
-	fmt.Printf("authResponse: \n")
+	//fmt.Printf("capabilities 0x%x\n", resp41.capabilities)
+	//fmt.Printf("maxPacketSize %d\n", resp41.maxPacketSize)
+	//fmt.Printf("collationID %d\n", resp41.collationID)
+	//fmt.Printf("username %s\n", resp41.username)
+	//fmt.Printf("authResponse: \n")
 	//update the capabilities with client's capabilities
 	mp.capability = DefaultCapability & resp41.capabilities
 
@@ -630,9 +631,9 @@ func (mp *MysqlProtocol) handleClientResponse41(resp41 response41) error {
 	mp.username = resp41.username
 	mp.database = resp41.database
 
-	fmt.Printf("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
-	fmt.Printf("database %s \n", resp41.database)
-	fmt.Printf("clientPluginName %s \n", resp41.clientPluginName)
+	//fmt.Printf("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
+	//fmt.Printf("database %s \n", resp41.database)
+	//fmt.Printf("clientPluginName %s \n", resp41.clientPluginName)
 	return nil
 }
 
@@ -689,10 +690,10 @@ func (mp *MysqlProtocol) analyseHandshakeResponse320(data []byte) (bool, respons
 //and other things
 func (mp *MysqlProtocol) handleClientResponse320(resp320 response320) error {
 	//to do something else
-	fmt.Printf("capabilities 0x%x\n", resp320.capabilities)
-	fmt.Printf("maxPacketSize %d\n", resp320.maxPacketSize)
-	fmt.Printf("username %s\n", resp320.username)
-	fmt.Printf("authResponse: \n")
+	//fmt.Printf("capabilities 0x%x\n", resp320.capabilities)
+	//fmt.Printf("maxPacketSize %d\n", resp320.maxPacketSize)
+	//fmt.Printf("username %s\n", resp320.username)
+	//fmt.Printf("authResponse: \n")
 
 	//update the capabilities with client's capabilities
 	mp.capability = DefaultCapability & resp320.capabilities
@@ -708,8 +709,8 @@ func (mp *MysqlProtocol) handleClientResponse320(resp320 response320) error {
 	mp.username = resp320.username
 	mp.database = resp320.database
 
-	fmt.Printf("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
-	fmt.Printf("database %s \n", resp320.database)
+	//fmt.Printf("collationID %d collatonName %s charset %s \n", mp.collationID, mp.collationName, mp.charset)
+	//fmt.Printf("database %s \n", resp320.database)
 	return nil
 }
 

@@ -47,6 +47,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 			attrs[i] = string(col.Name)
 		}
 	}
+	for i, rows := range rows.Rows {
+		if len(attrs) != len(rows) {
+			return nil, sqlerror.New(errno.InvalidColumnReference, fmt.Sprintf("Column count doesn't match value count at row %v", i))
+		}
+	}
 	bat = batch.New(true, attrs)
 	for i, attr := range attrs {
 		typ, ok := mp[attr]

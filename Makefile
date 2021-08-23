@@ -1,4 +1,5 @@
 config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/generate-config/system_vars_def.toml
+	go mod tidy
 	go build -o gen_config cmd/generate-config/main.go cmd/generate-config/config_template.go
 	./gen_config cmd/generate-config/system_vars_def.toml
 	mv -f cmd/generate-config/system_vars_config.toml .
