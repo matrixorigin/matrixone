@@ -31,6 +31,11 @@ func Info(msg string, fields ...zap.Field) {
 	L().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
 }
 
+// Infof only use in develop mode
+func Infof(msg string, fields ...interface{}) {
+	L().WithOptions(zap.AddCallerSkip(1)).Sugar().Infof(msg, fields)
+}
+
 func Warn(msg string, fields ...zap.Field) {
 	L().WithOptions(zap.AddCallerSkip(1)).Warn(msg, fields...)
 }
@@ -56,6 +61,11 @@ func Fatal(msg string, fields ...zap.Field) {
 	L().WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
 }
 
+// Fatalf only use in develop mode
+func Fatalf(msg string, fields ...interface{}) {
+	L().WithOptions(zap.AddCallerSkip(1)).Sugar().Fatalf(msg, fields...)
+}
+
 // With creates a child logger and adds structured context to it.
 // Fields added to the child don't affect the parent, and vice versa.
 func With(fields ...zap.Field) *zap.Logger {
@@ -71,3 +81,20 @@ func handleLevelChange(port string, pattern string, level zap.AtomicLevel) {
 	}()
 }
 
+type GoettyLogger struct {}
+
+func (l *GoettyLogger) Infof(msg string, fields ...interface{}) {
+	Infof(msg, fields)
+}
+
+func (l *GoettyLogger) Debugf(msg string, fields ...interface{}) {
+	Debugf(msg, fields)
+}
+
+func (l *GoettyLogger) Errorf(msg string, fields ...interface{}) {
+	Errorf(msg, fields)
+}
+
+func (l *GoettyLogger) Fatalf(msg string, fields ...interface{}) {
+	Fatalf(msg, fields)
+}
