@@ -208,7 +208,7 @@ func TestSegmentSparseFilterDate(t *testing.T) {
 	// name := writer.GetFileName()
 	segFile := dataio.NewSortedSegmentFile(path, *segment.AsCommonID())
 	assert.NotNil(t, segFile)
-	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(1000), table.ID)
+	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(10000), table.ID)
 	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
 	segHolder.Unref()
 	id := common.ID{}
@@ -219,10 +219,10 @@ func TestSegmentSparseFilterDate(t *testing.T) {
 		blkHolder.Init(segFile)
 	}
 	segHolder.Init(segFile)
-	t.Log(tblHolder.String())
-	t.Log(segHolder.CollectMinMax(0))
-	t.Log(segHolder.CollectMinMax(1))
-	t.Log(segHolder.GetBlockCount())
+	//t.Log(tblHolder.String())
+	//t.Log(segHolder.CollectMinMax(0))
+	//t.Log(segHolder.CollectMinMax(1))
+	//t.Log(segHolder.GetBlockCount())
 	seg := &table2.Segment{
 		RefHelper:   common.RefHelper{},
 		Type:        base.SORTED_SEG,
@@ -241,8 +241,8 @@ func TestSegmentSparseFilterDate(t *testing.T) {
 	}
 	s.Ids.Store(strs)
 	filter := NewSegmentSparseFilter(s)
-	t.Log(s.Data.GetSegmentFile().GetIndicesMeta())
-	t.Log(filter.(*SegmentSparseFilter).segment.Data.GetIndexHolder().CollectMinMax(0))
+	//t.Log(s.Data.GetSegmentFile().GetIndicesMeta())
+	//t.Log(filter.(*SegmentSparseFilter).segment.Data.GetIndexHolder().CollectMinMax(0))
 	res, _ := filter.Eq("mock_0", types.FromCalendar(0, 1, 1))
 	assert.Equal(t, res, []string{})
 	res, _ = filter.Ne("mock_0", types.FromCalendar(0, 1, 1))
@@ -359,5 +359,87 @@ func TestSegmentFilterInt32(t *testing.T) {
 	mockBM.AddRange(33, 39)
 	mockBM.Xor(res)
 	assert.Equal(t, true, mockBM.IsEmpty())
+}
+
+func TestSummarizerInt32(t *testing.T) {
+	mu := &sync.RWMutex{}
+	rowCount, blkCount := uint64(10), uint64(4)
+	info := md.MockInfo(mu, rowCount, blkCount)
+	schema := md.MockSchema(2)
+	segCnt, blkCnt := uint64(4), uint64(4)
+	table := md.MockTable(info, schema, segCnt*blkCnt)
+	segment, err := table.CreateSegment()
+	assert.Nil(t, err)
+	err = table.RegisterSegment(segment)
+	assert.Nil(t, err)
+	batches := make([]*batch.Batch, 0)
+	blkIds := make([]uint64, 0)
+	for i := 0; i < int(blkCount); i++ {
+		block, err := segment.CreateBlock()
+		assert.Nil(t, err)
+		blkIds = append(blkIds, block.ID)
+		block.SetCount(rowCount)
+		err = segment.RegisterBlock(block)
+		assert.Nil(t, err)
+		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+	}
+	path := "/tmp/testwriter"
+	writer := dataio.NewSegmentWriter(batches, segment, path)
+	err = writer.Execute()
+	assert.Nil(t, err)
+	// name := writer.GetFileName()
+	segFile := dataio.NewSortedSegmentFile(path, *segment.AsCommonID())
+	assert.NotNil(t, segFile)
+	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(1000), table.ID)
+	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
+	segHolder.Unref()
+	id := common.ID{}
+	for i := 0; i < int(blkCount); i++ {
+		id.BlockID = uint64(i)
+		blkHolder := segHolder.RegisterBlock(id, base.PERSISTENT_BLK, nil)
+		blkHolder.Unref()
+		blkHolder.Init(segFile)
+	}
+	segHolder.Init(segFile)
+	t.Log(tblHolder.String())
+	t.Log(segHolder.GetBlockCount())
+	seg := &table2.Segment{
+		RefHelper:   common.RefHelper{},
+		Type:        base.SORTED_SEG,
+		Meta:        segment,
+		IndexHolder: segHolder,
+		SegmentFile: segFile,
+	}
+	s := &Segment{
+		Data: seg,
+		Ids:  new(atomic.Value),
+	}
+	ids := blkIds
+	strs := make([]string, len(ids))
+	for idx, id := range ids {
+		strs[idx] = strconv.FormatUint(id, 10)
+	}
+	s.Ids.Store(strs)
+	filter := NewSegmentSummarizer(s)
+	mockBM := roaring.NewBitmap()
+	mockBM.AddRange(0, 40)
+	sum, cnt, err := filter.Sum("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, sum, int64(45*4))
+	assert.Equal(t, cnt, uint64(40))
+	mockBM = roaring.NewBitmap()
+	mockBM.AddRange(3, 7)
+	min, err := filter.Min("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, min, int32(3))
+	max, err := filter.Max("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, max, int32(6))
+	nullCnt, err := filter.NullCount("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, nullCnt, uint64(0))
+	cnt, err = filter.Count("mock_0", mockBM)
+	assert.Nil(t, err)
+	assert.Equal(t, cnt, uint64(4))
 }
 

@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"errors"
+	"github.com/RoaringBitmap/roaring"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -24,6 +25,7 @@ func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpEq,
 		Val:     val,
+		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -82,6 +84,7 @@ func (f *SegmentSparseFilter) Lt(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpLt,
 		Val:     val,
+		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -116,6 +119,7 @@ func (f *SegmentSparseFilter) Le(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpLe,
 		Val:     val,
+		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -150,6 +154,7 @@ func (f *SegmentSparseFilter) Gt(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpGt,
 		Val:     val,
+		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -184,6 +189,7 @@ func (f *SegmentSparseFilter) Ge(attr string, val interface{}) ([]string, error)
 	ctx := index.FilterCtx{
 		Op:      index.OpGe,
 		Val:     val,
+		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {
@@ -219,6 +225,7 @@ func (f *SegmentSparseFilter) Btw(attr string, minv interface{}, maxv interface{
 		Op:      index.OpIn,
 		ValMin: minv,
 		ValMax: maxv,
+		BMRes: roaring.NewBitmap(),
 	}
 	err := f.segment.Data.GetIndexHolder().EvalFilter(colIdx, &ctx)
 	if err != nil {

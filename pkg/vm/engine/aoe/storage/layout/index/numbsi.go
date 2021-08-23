@@ -28,7 +28,7 @@ type NumericBsiIndex struct {
 func initNumericBsi(t types.Type, bitSize int) *bsi.NumericBSI {
 	var bsiIdx bsi.BitSlicedIndex
 	switch t.Oid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_date, types.T_datetime:
 		bsiIdx = bsi.NewNumericBSI(bitSize, bsi.SignedInt)
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		bsiIdx = bsi.NewNumericBSI(bitSize, bsi.UnsignedInt)
@@ -63,6 +63,24 @@ func (i *NumericBsiIndex) GetCol() int16 {
 
 func (i *NumericBsiIndex) Eval(ctx *FilterCtx) error {
 	var err error
+	if v, ok := ctx.Val.(types.Date); ok {
+		ctx.Val = int32(v)
+	}
+	if v, ok := ctx.ValMin.(types.Date); ok {
+		ctx.ValMin = int32(v)
+	}
+	if v, ok := ctx.ValMax.(types.Date); ok {
+		ctx.ValMax = int32(v)
+	}
+	if v, ok := ctx.Val.(types.Datetime); ok {
+		ctx.Val = int64(v)
+	}
+	if v, ok := ctx.ValMin.(types.Datetime); ok {
+		ctx.ValMin = int64(v)
+	}
+	if v, ok := ctx.ValMax.(types.Datetime); ok {
+		ctx.ValMax = int64(v)
+	}
 	switch ctx.Op {
 	case OpEq:
 		ctx.BMRes, err = i.Eq(ctx.Val, ctx.BMRes)
