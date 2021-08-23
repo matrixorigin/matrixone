@@ -2,10 +2,10 @@ package handle
 
 import (
 	"fmt"
+	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"sync"
 )
@@ -64,7 +64,7 @@ func (bh *BlockHandle) InitScanCursor() []col.ScanCursor {
 		colBlk.InitScanCursor(&cursors[idx])
 		err := cursors[idx].Init()
 		if err != nil {
-			logutil.Error(fmt.Sprintf("logic error: %s", err))
+			logutil2.Error(fmt.Sprintf("logic error: %s", err))
 			panic(fmt.Sprintf("logic error: %s", err))
 		}
 	}

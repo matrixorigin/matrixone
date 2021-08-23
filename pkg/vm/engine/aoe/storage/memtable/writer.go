@@ -3,11 +3,11 @@ package memtable
 import (
 	"context"
 	"matrixone/pkg/container/vector"
+	logutil2 "matrixone/pkg/logutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 )
 
@@ -52,10 +52,10 @@ func (sw *MemtableWriter) Flush() (err error) {
 	}
 	bw := dataio.NewBlockWriter(vecs, mt.Meta, sw.Dirname)
 	bw.SetPreExecutor(func() {
-		logutil.Debugf(" %s | Memtable | Flushing", bw.GetFileName())
+		logutil2.Debugf(" %s | Memtable | Flushing", bw.GetFileName())
 	})
 	bw.SetPostExecutor(func() {
-		logutil.Debugf(" %s | Memtable | Flushed", bw.GetFileName())
+		logutil2.Debugf(" %s | Memtable | Flushed", bw.GetFileName())
 	})
 	return bw.Execute()
 }

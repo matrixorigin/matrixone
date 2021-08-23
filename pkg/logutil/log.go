@@ -28,13 +28,17 @@ import (
 var _globalL, _globalP, _globalS atomic.Value
 
 func init() {
-	SetupDBLogger()
+	conf := &Config{Level: "info", File: FileLogConfig{}}
+	logger, props, _ := InitLogger(conf)
+	ReplaceGlobals(logger, props)
 }
+
 var defaultConfig = Config{
 	Level:               "info",
 	Format:              "text",
 }
-func SetupDBLogger() {
+
+func SetupLogger() {
 	var conf Config
 	//if _, err := toml.DecodeFile(configFile, &conf); err != nil {
 	//	panic(err)

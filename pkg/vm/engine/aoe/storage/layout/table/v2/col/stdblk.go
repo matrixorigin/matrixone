@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
+	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/process"
 	"time"
@@ -76,7 +76,7 @@ func (blk *StdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
 	part := blk.Part.CloneWithUpgrade(cloned, host.GetSSTBufMgr())
 	blk.RUnlock()
 	if part == nil {
-		logutil.Error("logic error")
+		logutil2.Error("logic error")
 		panic("logic error")
 	}
 	cloned.Part = part

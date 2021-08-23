@@ -1,7 +1,7 @@
 package sched
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
+	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync/atomic"
@@ -74,7 +74,7 @@ func (e *BaseEvent) Execute() error {
 	if e.exec != nil {
 		return e.exec(e)
 	}
-	logutil.Debugf("Execute Event Type=%d, ID=%d", e.t, e.id)
+	logutil2.Debugf("Execute Event Type=%d, ID=%d", e.t, e.id)
 	return nil
 }
 func (e *BaseEvent) onDone(_ iops.IOp) {

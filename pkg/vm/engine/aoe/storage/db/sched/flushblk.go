@@ -1,7 +1,7 @@
 package sched
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
+	logutil2 "matrixone/pkg/logutil"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -34,7 +34,7 @@ func (e *flushMemtableEvent) Execute() error {
 	e.Meta = mem.GetMeta()
 	err := mem.Flush()
 	if err != nil {
-		logutil.Errorf("Flush memtable %d failed %s", e.Meta.ID, err)
+		logutil2.Errorf("Flush memtable %d failed %s", e.Meta.ID, err)
 		return err
 	}
 	return err
