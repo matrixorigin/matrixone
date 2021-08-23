@@ -64,7 +64,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	protocol := routine.protocol
 
 	packet, ok := msg.(*Packet)
-	protocol.sequenceId++
+	protocol.sequenceId = uint8(packet.SequenceID + 1)
 	if !ok {
 		return errors.New("message is not Packet")
 	}
@@ -83,7 +83,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			return errors.New("message is not Packet")
 		}
 
-		protocol.sequenceId++
+		protocol.sequenceId = uint8(packet.SequenceID + 1)
 		payload = append(payload, packet.Payload...)
 		length = packet.Length
 	}
