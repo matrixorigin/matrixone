@@ -291,6 +291,18 @@ type SystemVariables struct{
 	rejectWhenHeartbeatFromPDLeaderIsTimeout    bool
 	
 	/**
+	Name:	enableEpochLogging
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[false]
+	Comment:	default is false. Print logs when the server calls catalog service to run the ddl.
+	UpdateMode:	dynamic
+	*/
+	enableEpochLogging    bool
+	
+	/**
 	Name:	recordTimeElapsedOfSqlRequest
 	Scope:	[global]
 	Access:	[file]
@@ -349,6 +361,18 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	maxReplicas    int64
+	
+	/**
+	Name:	lengthOfQueryPrinted
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[50 -1 10000]
+	Comment:	the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
+	UpdateMode:	dynamic
+	*/
+	lengthOfQueryPrinted    int64
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -601,6 +625,18 @@ type varsConfig struct{
 	RejectWhenHeartbeatFromPDLeaderIsTimeout    bool  `toml:"rejectWhenHeartbeatFromPDLeaderIsTimeout"`
 	
 	/**
+	Name:	enableEpochLogging
+	Scope:	[global]
+	Access:	[file]
+	DataType:	bool
+	DomainType:	set
+	Values:	[false]
+	Comment:	default is false. Print logs when the server calls catalog service to run the ddl.
+	UpdateMode:	dynamic
+	*/
+	EnableEpochLogging    bool  `toml:"enableEpochLogging"`
+	
+	/**
 	Name:	recordTimeElapsedOfSqlRequest
 	Scope:	[global]
 	Access:	[file]
@@ -659,6 +695,18 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	MaxReplicas    int64  `toml:"maxReplicas"`
+	
+	/**
+	Name:	lengthOfQueryPrinted
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[50 -1 10000]
+	Comment:	the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
+	UpdateMode:	dynamic
+	*/
+	LengthOfQueryPrinted    int64  `toml:"lengthOfQueryPrinted"`
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -729,6 +777,8 @@ func (ap *SystemVariables) PrepareDefinition(){
 	
 	ap.name2definition["rejectWhenHeartbeatFromPDLeaderIsTimeout"] = "	Name:	rejectWhenHeartbeatFromPDLeaderIsTimeout	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[false]	Comment:	default is false. the server will reject the connection and sql request when the heartbeat from pdleader is timeout.	UpdateMode:	dynamic	"
 	
+	ap.name2definition["enableEpochLogging"] = "	Name:	enableEpochLogging	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[false]	Comment:	default is false. Print logs when the server calls catalog service to run the ddl.	UpdateMode:	dynamic	"
+	
 	ap.name2definition["recordTimeElapsedOfSqlRequest"] = "	Name:	recordTimeElapsedOfSqlRequest	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[true]	Comment:	record the time elapsed of executing sql request	UpdateMode:	dynamic	"
 	
 	ap.name2definition["nodeID"] = "	Name:	nodeID	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[0 0 10]	Comment:	the Node ID of the cube	UpdateMode:	dynamic	"
@@ -738,6 +788,8 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["prophetEmbedEtcdJoinAddr"] = "	Name:	prophetEmbedEtcdJoinAddr	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[http://localhost:40000 http://127.0.0.1:40000]	Comment:	the join address of prophet of the cube	UpdateMode:	dynamic	"
 	
 	ap.name2definition["maxReplicas"] = "	Name:	maxReplicas	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[1 1 1]	Comment:	the number of replicas for each resource	UpdateMode:	dynamic	"
+	
+	ap.name2definition["lengthOfQueryPrinted"] = "	Name:	lengthOfQueryPrinted	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[50 -1 10000]	Comment:	the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.	UpdateMode:	dynamic	"
 	
 }
 
@@ -1082,6 +1134,19 @@ func (ap *SystemVariables) LoadInitialValues()error{
 		}
 	}
 	
+	enableEpochLoggingchoices :=[]bool {
+		false,
+	}
+	if len(enableEpochLoggingchoices) != 0 {
+		if err = ap.setEnableEpochLogging(enableEpochLoggingchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","EnableEpochLogging",err)
+		}
+	} else { 
+		if err = ap.setEnableEpochLogging(false) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","EnableEpochLogging",err)
+		}
+	}
+	
 	recordTimeElapsedOfSqlRequestchoices :=[]bool {
 		true,
 	}
@@ -1146,6 +1211,19 @@ func (ap *SystemVariables) LoadInitialValues()error{
 	} else { 
 		if err = ap.setMaxReplicas(0) ; err != nil {
 			return fmt.Errorf("set%s failed.error:%v","MaxReplicas",err)
+		}
+	}
+	
+	lengthOfQueryPrintedchoices :=[]int64 {
+		50,-1,10000,
+	}
+	if len(lengthOfQueryPrintedchoices) != 0 {
+		if err = ap.setLengthOfQueryPrinted(lengthOfQueryPrintedchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","LengthOfQueryPrinted",err)
+		}
+	} else { 
+		if err = ap.setLengthOfQueryPrinted(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","LengthOfQueryPrinted",err)
 		}
 	}
 	return nil
@@ -1359,6 +1437,15 @@ func (ap * SystemVariables ) GetRejectWhenHeartbeatFromPDLeaderIsTimeout() bool 
 }
 
 /**
+Get the value of the parameter enableEpochLogging
+*/
+func (ap * SystemVariables ) GetEnableEpochLogging() bool {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.enableEpochLogging
+}
+
+/**
 Get the value of the parameter recordTimeElapsedOfSqlRequest
 */
 func (ap * SystemVariables ) GetRecordTimeElapsedOfSqlRequest() bool {
@@ -1401,6 +1488,15 @@ func (ap * SystemVariables ) GetMaxReplicas() int64 {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
 	return ap.maxReplicas
+}
+
+/**
+Get the value of the parameter lengthOfQueryPrinted
+*/
+func (ap * SystemVariables ) GetLengthOfQueryPrinted() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.lengthOfQueryPrinted
 }
 
 
@@ -1545,6 +1641,13 @@ func (ap * SystemVariables ) SetRejectWhenHeartbeatFromPDLeaderIsTimeout(value b
 }
 
 /**
+Set the value of the parameter enableEpochLogging
+*/
+func (ap * SystemVariables ) SetEnableEpochLogging(value bool)error {
+	return  ap.setEnableEpochLogging(value)
+}
+
+/**
 Set the value of the parameter recordTimeElapsedOfSqlRequest
 */
 func (ap * SystemVariables ) SetRecordTimeElapsedOfSqlRequest(value bool)error {
@@ -1577,6 +1680,13 @@ Set the value of the parameter maxReplicas
 */
 func (ap * SystemVariables ) SetMaxReplicas(value int64)error {
 	return  ap.setMaxReplicas(value)
+}
+
+/**
+Set the value of the parameter lengthOfQueryPrinted
+*/
+func (ap * SystemVariables ) SetLengthOfQueryPrinted(value int64)error {
+	return  ap.setLengthOfQueryPrinted(value)
 }
 
 /**
@@ -2072,6 +2182,26 @@ func (ap * SystemVariables ) setRejectWhenHeartbeatFromPDLeaderIsTimeout(value b
 }
 
 /**
+Set the value of the parameter enableEpochLogging
+*/
+func (ap * SystemVariables ) setEnableEpochLogging(value bool)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	choices :=[]bool {
+			false,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceBool(value, choices){
+				return fmt.Errorf("setEnableEpochLogging,the value %t is not in set %v",value,choices)
+			}
+		}//else means any bool value: true or false
+	
+	
+	ap.enableEpochLogging = value
+	return nil
+}
+
+/**
 Set the value of the parameter recordTimeElapsedOfSqlRequest
 */
 func (ap * SystemVariables ) setRecordTimeElapsedOfSqlRequest(value bool)error {
@@ -2173,6 +2303,26 @@ func (ap * SystemVariables ) setMaxReplicas(value int64)error {
 	return nil
 }
 
+/**
+Set the value of the parameter lengthOfQueryPrinted
+*/
+func (ap * SystemVariables ) setLengthOfQueryPrinted(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			50,-1,10000,	
+		}
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setLengthOfQueryPrinted,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
+	
+	
+	ap.lengthOfQueryPrinted = value
+	return nil
+}
+
 
 
 /**
@@ -2212,11 +2362,13 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.name2updatedFlags["periodOfDDLDeleteTimer"] = false
 	config.name2updatedFlags["timeoutOfHeartbeat"] = false
 	config.name2updatedFlags["rejectWhenHeartbeatFromPDLeaderIsTimeout"] = false
+	config.name2updatedFlags["enableEpochLogging"] = false
 	config.name2updatedFlags["recordTimeElapsedOfSqlRequest"] = false
 	config.name2updatedFlags["nodeID"] = false
 	config.name2updatedFlags["cubeDir"] = false
 	config.name2updatedFlags["prophetEmbedEtcdJoinAddr"] = false
 	config.name2updatedFlags["maxReplicas"] = false
+	config.name2updatedFlags["lengthOfQueryPrinted"] = false
 }
 
 /**
@@ -2392,6 +2544,11 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 			return fmt.Errorf("update parameter rejectWhenHeartbeatFromPDLeaderIsTimeout failed.error:%v",err)
 		}
 	}
+	if config.getUpdatedFlag("enableEpochLogging"){
+		if err = ap.setEnableEpochLogging(config.EnableEpochLogging); err != nil{
+			return fmt.Errorf("update parameter enableEpochLogging failed.error:%v",err)
+		}
+	}
 	if config.getUpdatedFlag("recordTimeElapsedOfSqlRequest"){
 		if err = ap.setRecordTimeElapsedOfSqlRequest(config.RecordTimeElapsedOfSqlRequest); err != nil{
 			return fmt.Errorf("update parameter recordTimeElapsedOfSqlRequest failed.error:%v",err)
@@ -2415,6 +2572,11 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("maxReplicas"){
 		if err = ap.setMaxReplicas(config.MaxReplicas); err != nil{
 			return fmt.Errorf("update parameter maxReplicas failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("lengthOfQueryPrinted"){
+		if err = ap.setLengthOfQueryPrinted(config.LengthOfQueryPrinted); err != nil{
+			return fmt.Errorf("update parameter lengthOfQueryPrinted failed.error:%v",err)
 		}
 	}
 	return nil

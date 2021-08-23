@@ -43,7 +43,7 @@ func TestEpochGC(t *testing.T) {
 
 	pcis := make([]*PDCallbackImpl, nodeCnt)
 	cf := make([]*CloseFlag, nodeCnt)
-	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20)
+	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, false)
 	for i := 0; i < nodeCnt; i++ {
 		pcis[i] = NewPDCallbackImpl(ppu)
 		pcis[i].Id = i
@@ -99,7 +99,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	nodeCnt := 3
 
 	pcis := make([]*PDCallbackImpl, nodeCnt)
-	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20)
+	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, false)
 	for i := 0; i < nodeCnt; i++ {
 		pcis[i] = NewPDCallbackImpl(ppu)
 		pcis[i].Id = i
@@ -232,7 +232,7 @@ func get_server(configFile string, port int, pd *PDCallbackImpl, eng engine.Engi
 
 func Test_Multi_Server(t *testing.T) {
 	var svs []*MOServer = nil
-	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20)
+	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, false)
 	for _, port := range testPorts {
 		sv, err := get_server(testConfigFile, port, NewPDCallbackImpl(ppu), nil)
 		if err != nil {

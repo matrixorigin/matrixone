@@ -1,12 +1,8 @@
-package main
-/*
+package frontend
+
 import (
-"fmt"
-"matrixone/pkg/config"
-"net"
-"sync/atomic"
-"testing"
-"time"
+	"sync/atomic"
+	"testing"
 )
 
 func TestBasicIOPackage_WriteUint8(t *testing.T) {
@@ -213,6 +209,7 @@ func setServer(val int32){
 	atomic.StoreInt32(&svrRun,val)
 }
 
+/*
 func echoHandler(in net.Conn){
 	io := NewIOPackage(in,512,512,true)
 	fmt.Println("Server handling")
@@ -317,4 +314,4 @@ func TestIOPackageImpl_ReadPacket(t *testing.T) {
 	echoClient()
 
 }
-*/
+ */
