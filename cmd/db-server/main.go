@@ -72,19 +72,6 @@ func cleanup() {
 }
 
 func recreateDir(dir string) (err error) {
-	_, err = os.Stat(dir)
-	if err != nil {
-		if os.IsExist(err) {
-			err = os.Chmod(dir, 0777)
-		} else {
-			err = nil
-		}
-	} else {
-		err = os.Chmod(dir, 0777)
-	}
-	if err != nil {
-		return err
-	}
 	err = os.RemoveAll(dir)
 	if err != nil {
 		return err
