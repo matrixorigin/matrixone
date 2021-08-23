@@ -117,7 +117,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	if rm.pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-		logutil.Info(fmt.Sprintf("connection id %d , the time of handling the request %s", rs.ID(), time.Since(reqBegin).String()))
+		logutil.Infof("connection id %d , the time of handling the request %s", rs.ID(), time.Since(reqBegin).String())
 	}
 
 	return nil

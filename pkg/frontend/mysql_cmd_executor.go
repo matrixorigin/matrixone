@@ -426,7 +426,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			}
 		}
 
-		logutil.Info(fmt.Sprintf("time of getDataFromPipeline : %s ",time.Since(begin).String()))
+		logutil.Infof("time of getDataFromPipeline : %s ",time.Since(begin).String())
 	} else {
 
 		if n := len(bat.Sels); n == 0 {
@@ -973,7 +973,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-			logutil.Info(fmt.Sprintf("time of Exec.Compile : %s", time.Since(cmpBegin).String()))
+			logutil.Infof("time of Exec.Compile : %s", time.Since(cmpBegin).String())
 		}
 
 		switch stmt.(type) {
@@ -1063,7 +1063,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 					return er
 				}
 				if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-					logutil.Info(fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+					logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 				}
 				/*
 					Step 3: Say goodbye
@@ -1144,7 +1144,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return er
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-				logutil.Info(fmt.Sprintf("time of Exec.Run : %s", time.Since(runBegin).String()))
+				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 
 			//record ddl drop xxx after the success
@@ -1164,8 +1164,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				int(COM_QUERY),
 				nil,
 			)
+			echoTime := time.Now()
 			if err = proto.SendResponse(resp); err != nil {
 				return err
+			}
+			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
+				logutil.Infof("time of SendResponse %s",time.Since(echoTime).String())
 			}
 		}
 	}
@@ -1176,7 +1180,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 // ExecRequest the server execute the commands from the client following the mysql's routine
 func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	var resp *Response = nil
-	logutil.Info(fmt.Sprintf("cmd %v", req.GetCmd()))
+	logutil.Infof("cmd %v", req.GetCmd())
 
 	ses := mce.routine.GetSession()
 	if ses.Pu.SV.GetRejectWhenHeartbeatFromPDLeaderIsTimeout() {
@@ -1204,7 +1208,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logutil.Info(fmt.Sprintf("query:%s", SubStringFromBegin(query,int(ses.Pu.SV.GetLengthOfQueryPrinted()))))
+		logutil.Infof("query:%s", SubStringFromBegin(query,int(ses.Pu.SV.GetLengthOfQueryPrinted())))
 		err := mce.doComQuery(query)
 		if err != nil {
 			resp = NewResponse(
