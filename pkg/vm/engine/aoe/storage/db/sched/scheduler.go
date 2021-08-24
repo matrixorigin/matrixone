@@ -207,7 +207,7 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 func (s *scheduler) onFlushSegDone(e sched.Event) {
 	event := e.(*flushSegEvent)
 	if err := e.GetError(); err != nil {
-		s.opts.EventListener.BackgroundErrorCB(err)
+		// s.opts.EventListener.BackgroundErrorCB(err)
 		event.Segment.Unref()
 		return
 	}
@@ -215,7 +215,8 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 	meta := event.Segment.GetMeta()
 	td, err := s.tables.StrongRefTable(meta.Table.ID)
 	if err != nil {
-		s.opts.EventListener.BackgroundErrorCB(err)
+		// s.opts.EventListener.BackgroundErrorCB(err)
+		event.Segment.Unref()
 		return
 	}
 	logutil2.Debugf(" %s | Segment %d | UpgradeSegEvent | Started", sched.EventPrefix, meta.ID)
