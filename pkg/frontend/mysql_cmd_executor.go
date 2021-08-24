@@ -879,10 +879,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	//pin the epoch with 1
 	epoch, _ := pdHook.IncQueryCountAtCurrentEpoch(statementCount)
 	defer func() {
-		ep, stmtCnt := pdHook.DecQueryCountAtEpoch(epoch, statementCount)
-		if ep != epoch || stmtCnt != 0 {
-			panic(fmt.Errorf("statement_count needs zero, but actually it is %d at epoch %d \n", stmtCnt, ep))
-		}
+		pdHook.DecQueryCountAtEpoch(epoch, statementCount)
 	}()
 
 	proc := process.New(ses.GuestMmu, ses.Mempool)
