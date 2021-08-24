@@ -1,12 +1,12 @@
 package sched
 
 import (
-	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	// "matrixone/pkg/logutil"
 )
 
 type flushTransientBlockEvent struct {
@@ -32,6 +32,5 @@ func NewFlushTransientBlockEvent(ctx *Context, n base.INode, data batch.IBatch, 
 }
 
 func (e *flushTransientBlockEvent) Execute() error {
-	logutil.Infof("xxxxxxxxxxxxxxxx")
 	return e.File.Sync(e.Data, e.Meta, e.Meta.Segment.Table.Conf.Dir)
 }
