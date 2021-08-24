@@ -103,6 +103,8 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	s.commiters.blkmap = make(map[uint64]*metablkCommiter)
 
 	dispatcher := sched.NewBaseDispatcher()
+	flushtblkHandler := sched.NewPoolHandler(4, nil)
+	flushtblkHandler.Start()
 	flushblkHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.BlockWriters), nil)
 	flushblkHandler.Start()
 	flushsegHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.SegmentWriters), nil)
@@ -126,6 +128,7 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	dispatcher.RegisterHandler(sched.MemdataUpdateEvent, memdataHandler)
 	dispatcher.RegisterHandler(sched.FlushTableMetaTask, metaHandler)
 	dispatcher.RegisterHandler(sched.PrecommitBlkMetaTask, metaHandler)
+	dispatcher.RegisterHandler(sched.FlushTBlkTask, flushtblkHandler)
 
 	s.RegisterDispatcher(sched.StatelessEvent, dispatcher)
 	s.RegisterDispatcher(sched.FlushSegTask, dispatcher)
@@ -139,6 +142,7 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	s.RegisterDispatcher(sched.MemdataUpdateEvent, dispatcher)
 	s.RegisterDispatcher(sched.FlushTableMetaTask, dispatcher)
 	s.RegisterDispatcher(sched.PrecommitBlkMetaTask, dispatcher)
+	s.RegisterDispatcher(sched.FlushTBlkTask, dispatcher)
 	s.Start()
 	return s
 }

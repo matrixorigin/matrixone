@@ -3,12 +3,14 @@ package mutation
 import (
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
 	"testing"
@@ -18,9 +20,12 @@ import (
 
 func TestMutableBlockNode(t *testing.T) {
 	dir := "/tmp/mutableblk"
+	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
 	rowCount, blkCount := uint64(30), uint64(4)
 	info := metadata.MockInfo(&sync.RWMutex{}, rowCount, blkCount)
 	info.Conf.Dir = dir
+	opts.Meta.Info = info
+	opts.Scheduler = sched.NewScheduler(opts, nil)
 	os.RemoveAll(dir)
 	schema := metadata.MockSchema(2)
 	tablemeta := metadata.MockTable(info, schema, 2)
@@ -43,7 +48,7 @@ func TestMutableBlockNode(t *testing.T) {
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
-	node1 := NewMutableBlockNode(mgr, tblkfile, tabledata, meta1)
+	node1 := NewMutableBlockNode(opts, mgr, tblkfile, tabledata, meta1)
 	mgr.RegisterNode(node1)
 	h1 := mgr.Pin(node1)
 	assert.NotNil(t, h1)
@@ -73,7 +78,7 @@ func TestMutableBlockNode(t *testing.T) {
 	blkmeta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
 	assert.Nil(t, err)
 	tblkfile2 := dataio.NewTBlockFile(segfile, *meta2.AsCommonID())
-	node2 := NewMutableBlockNode(mgr, tblkfile2, tabledata, blkmeta2)
+	node2 := NewMutableBlockNode(opts, mgr, tblkfile2, tabledata, blkmeta2)
 	mgr.RegisterNode(node2)
 	h2 := mgr.Pin(node2)
 	assert.NotNil(t, h2)
