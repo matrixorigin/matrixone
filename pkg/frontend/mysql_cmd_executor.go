@@ -1198,12 +1198,12 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 
 	switch uint8(req.GetCmd()) {
 	case COM_QUIT:
-		resp = NewResponse(
+		/*resp = NewResponse(
 			OkResponse,
 			0,
 			int(COM_QUIT),
 			nil,
-		)
+		)*/
 		return resp, nil
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))

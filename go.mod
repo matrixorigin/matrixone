@@ -4,7 +4,7 @@ go 1.15
 
 require (
 	github.com/BurntSushi/toml v0.3.1
-	github.com/RoaringBitmap/roaring v0.8.0
+	github.com/RoaringBitmap/roaring v0.9.4
 	github.com/cockroachdb/errors v1.8.2
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
 	github.com/fagongzi/goetty v1.9.0
@@ -15,7 +15,7 @@ require (
 	github.com/golang/protobuf v1.4.2
 	github.com/google/btree v1.0.0
 	github.com/google/uuid v1.2.0 // indirect
-	github.com/matrixorigin/matrixcube v0.0.0-20210818131016-99b98faf7dcf
+	github.com/matrixorigin/matrixcube v0.0.0-20210824024740-556715aafe65
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
@@ -24,6 +24,8 @@ require (
 	github.com/stretchr/testify v1.7.0
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
 	go.uber.org/zap v1.15.0
+	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9 // indirect
+	golang.org/x/lint v0.0.0-20200302205851-738671d3881b // indirect
 	golang.org/x/net v0.0.0-20210813160813-60bc85c4be6d // indirect
 	golang.org/x/sys v0.0.0-20210816071009-649d0fc2fce7
 	golang.org/x/tools v0.1.5 // indirect
