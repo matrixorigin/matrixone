@@ -197,11 +197,31 @@ func (b *NumericBSI) Del(k uint64) error {
 func (b *NumericBSI) normalizeToUint64(v interface{}) (uint64, error) {
 	switch b.valType {
 	case UnsignedInt:
-		return v.(uint64), nil
+		sz := b.bitSize
+		if sz > 0 && sz <= 8 {
+			return uint64(v.(uint8)), nil
+		} else if sz > 8 && sz <= 16 {
+			return uint64(v.(uint16)), nil
+		} else if sz > 16 && sz <= 32 {
+			return uint64(v.(uint32)), nil
+		} else {
+			return uint64(v.(uint64)), nil
+		}
+		//return v.(uint64), nil
 
 	case SignedInt:
 		highBit := int64(-1) << (b.bitSize - 1)
-		return uint64(v.(int64) ^ highBit), nil
+		sz := b.bitSize
+		if sz > 0 && sz <= 8 {
+			return uint64(int64(v.(int8)) ^ highBit), nil
+		} else if sz > 8 && sz <= 16 {
+			return uint64(int64(v.(int16)) ^ highBit), nil
+		} else if sz > 16 && sz <= 32 {
+			return uint64(int64(v.(int32)) ^ highBit), nil
+		} else {
+			return uint64(int64(v.(int64)) ^ highBit), nil
+		}
+		//return uint64(v.(int64) ^ highBit), nil
 
 	case Float:
 		if b.bitSize == 32 {
@@ -234,11 +254,31 @@ func (b *NumericBSI) normalizeToUint64(v interface{}) (uint64, error) {
 func (b *NumericBSI) recoveryFromUint64(v uint64) interface{} {
 	switch b.valType {
 	case UnsignedInt:
-		return v
+		sz := b.bitSize
+		if sz > 0 && sz <= 8 {
+			return uint8(v)
+		} else if sz > 8 && sz <= 16 {
+			return uint16(v)
+		} else if sz > 16 && sz <= 32 {
+			return uint32(v)
+		} else {
+			return uint64(v)
+		}
+		//return v
 
 	case SignedInt:
 		highBit := int64(-1) << (b.bitSize - 1)
-		return int64(v) + highBit
+		sz := b.bitSize
+		if sz > 0 && sz <= 8 {
+			return int8(int64(v) + highBit)
+		} else if sz > 8 && sz <= 16 {
+			return int16(int64(v) + highBit)
+		} else if sz > 16 && sz <= 32 {
+			return int32(int64(v) + highBit)
+		} else {
+			return int64(int64(v) + highBit)
+		}
+		//return int64(v) + highBit
 
 	case Float:
 		if b.bitSize == 32 {

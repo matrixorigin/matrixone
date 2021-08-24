@@ -46,7 +46,7 @@ func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
 }
 
 func (seg *Segment) NewFilter() engine.Filter {
-	return nil
+	return NewSegmentFilter(seg)
 }
 
 func (seg *Segment) NewSummarizer() engine.Summarizer {

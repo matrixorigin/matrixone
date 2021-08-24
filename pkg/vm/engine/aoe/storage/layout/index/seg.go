@@ -1,7 +1,10 @@
 package index
 
 import (
+	"errors"
 	"fmt"
+	roaring2 "github.com/RoaringBitmap/roaring"
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	mgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -54,7 +57,18 @@ func (holder *SegmentHolder) Init(segFile base.ISegmentFile) {
 	for _, meta := range indicesMeta.Data {
 		vf := segFile.MakeVirtualIndexFile(meta)
 		col := int(meta.Cols.ToArray()[0])
-		node := newNode(holder.BufMgr, vf, false, SegmentZoneMapIndexConstructor, meta.Cols, nil)
+		var node *Node
+		switch meta.Type {
+		case base.ZoneMap:
+			node = newNode(holder.BufMgr, vf, false, SegmentZoneMapIndexConstructor, meta.Cols, nil)
+		case base.NumBsi:
+			node = newNode(holder.BufMgr, vf, false, NumericBsiIndexConstructor, meta.Cols, nil)
+			//log.Info(node.GetManagedNode().DataNode.(*NumericBsiIndex).Get(uint64(39)))
+			//node.Close()
+		default:
+			// todo: str bsi
+			panic("unsupported index type")
+		}
 		idxes, ok := holder.self.ColIndices[col]
 		if !ok {
 			idxes = make([]int, 0)
@@ -102,12 +116,18 @@ func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 func (holder *SegmentHolder) CollectMinMax(colIdx int) (min []interface{}, max []interface{}, err error) {
 	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
-		return nil, nil, nil
+		return nil, nil, errors.New("no index found")
 	}
-	//fmt.Println(len(idxes))
-	// we guess there is only a zone map index for one column currently
+
 	for _, idx := range idxes {
 		node := holder.self.Indices[idx].GetManagedNode()
+		if node.DataNode.(Index).Type() != base.ZoneMap {
+			err = node.Close()
+			if err != nil {
+				return
+			}
+			continue
+		}
 		index := node.DataNode.(*SegmentZoneMapIndex)
 		min = make([]interface{}, len(index.BlkMin))
 		max = make([]interface{}, len(index.BlkMax))
@@ -121,6 +141,166 @@ func (holder *SegmentHolder) CollectMinMax(colIdx int) (min []interface{}, max [
 		}
 	}
 	return
+}
+
+func (holder *SegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, error) {
+	idxes, ok := holder.self.ColIndices[colIdx]
+	if !ok {
+		return 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := holder.self.Indices[idx].GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			bm := roaring2.NewBitmap()
+			arr := filter.ToArray()
+			for _, v := range arr {
+				bm.Add(uint32(v))
+			}
+			count := index.Count(bm)
+			err := node.Close()
+			if err != nil {
+				return count, err
+			}
+			return count, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return 0, errors.New("bsi not found")
+}
+
+func (holder *SegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint64, error) {
+	idxes, ok := holder.self.ColIndices[colIdx]
+	if !ok {
+		return 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := holder.self.Indices[idx].GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			bm := roaring2.NewBitmap()
+			arr := filter.ToArray()
+			for _, v := range arr {
+				bm.Add(uint32(v))
+			}
+			count := index.NullCount(bm)
+			err := node.Close()
+			if err != nil {
+				return count, err
+			}
+			return count, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return 0, errors.New("bsi not found")
+}
+
+func (holder *SegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
+	idxes, ok := holder.self.ColIndices[colIdx]
+	if !ok {
+		return 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := holder.self.Indices[idx].GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			bm := roaring2.NewBitmap()
+			arr := filter.ToArray()
+			for _, v := range arr {
+				bm.Add(uint32(v))
+			}
+			min, _ := index.Min(bm)
+			err := node.Close()
+			if err != nil {
+				return min, err
+			}
+			return min, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+	return 0, errors.New("bsi not found")
+}
+
+func (holder *SegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (interface{}, error) {
+	idxes, ok := holder.self.ColIndices[colIdx]
+	if !ok {
+		return 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := holder.self.Indices[idx].GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			bm := roaring2.NewBitmap()
+			arr := filter.ToArray()
+			for _, v := range arr {
+				bm.Add(uint32(v))
+			}
+			max, _ := index.Max(bm)
+			err := node.Close()
+			if err != nil {
+				return max, err
+			}
+			return max, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, err
+		}
+	}
+	return 0, errors.New("bsi not found")
+}
+
+func (holder *SegmentHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, uint64, error) {
+	idxes, ok := holder.self.ColIndices[colIdx]
+	if !ok {
+		return 0, 0, errors.New("no index found")
+	}
+
+	for _, idx := range idxes {
+		node := holder.self.Indices[idx].GetManagedNode()
+		if node.DataNode.(Index).Type() == base.NumBsi {
+			index := node.DataNode.(*NumericBsiIndex)
+			bm := roaring2.NewBitmap()
+			arr := filter.ToArray()
+			for _, v := range arr {
+				bm.Add(uint32(v))
+			}
+			sum, cnt := index.Sum(bm)
+			res := int64(0)
+			if res, ok = sum.(int64); ok {
+
+			} else if ans, ok := sum.(uint64); ok {
+				res = int64(ans)
+			} else {
+				return 0, 0, errors.New("invalid sum value type")
+			}
+			err := node.Close()
+			if err != nil {
+				return res, cnt, nil
+			}
+			return res, cnt, nil
+		}
+		err := node.Close()
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	return 0, 0, errors.New("bsi not found")
 }
 
 func (holder *SegmentHolder) stringNoLock() string {

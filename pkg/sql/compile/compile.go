@@ -2,6 +2,7 @@ package compile
 
 import (
 	"fmt"
+	stdLog "log"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/errno"
@@ -36,6 +37,7 @@ import (
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"sync"
+	"time"
 )
 
 func New(db string, sql string, uid string,
@@ -125,6 +127,8 @@ func (e *Exec) Columns() []*Col {
 func (e *Exec) Run(ts uint64) error {
 	var wg sync.WaitGroup
 
+	t0 := time.Now()
+	stdLog.Printf("[Debug0820]query %s at epoch %d start to run", e.c.proc.Id, ts)
 	fmt.Printf("+++++++++\n")
 	Print(nil, e.ss)
 	fmt.Printf("+++++++++\n")
@@ -213,6 +217,7 @@ func (e *Exec) Run(ts uint64) error {
 		}
 	}
 	wg.Wait()
+	stdLog.Printf("[Debug0820]query %s at epoch %d finished, cost %d ms", e.c.proc.Id, ts, time.Since(t0).Milliseconds())
 	return e.err
 }
 
