@@ -65,7 +65,7 @@ func TestAOEEngine(t *testing.T) {
 	})
 
 	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
-	aoeEngine := engine.Mock(&catalog)
+	aoeEngine := engine.New(&catalog)
 
 	err := aoeEngine.Create(0, testDBName, 0)
 	require.NoError(t, err)

@@ -181,7 +181,7 @@ func main() {
 			panic(err)
 		}
 		catalog = aoe_catalog.DefaultCatalog(a)
-		eng := aoe_engine.Mock(&catalog)
+		eng := aoe_engine.New(&catalog)
 		pci.SetRemoveEpoch(removeEpoch)
 
 		hm := config.HostMmu

@@ -3,6 +3,7 @@ package dist
 import (
 	"encoding/json"
 	"errors"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
@@ -632,6 +633,10 @@ func (h *driver) TabletNames(toShard uint64) ([]string, error) {
 }
 
 func (h *driver) Exec(cmd interface{}) ([]byte, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0))
+	}()
 	return h.app.Exec(cmd, defaultRPCTimeout)
 }
 
@@ -649,8 +654,4 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) 
 
 func (h *driver) RaftStore() raftstore.Store {
 	return h.store
-}
-
-func (h *driver) getStoreByGroup(group uint64, shard uint64) cstorage.DataStorage {
-	return h.store.DataStorageByGroup(group, shard)
 }

@@ -6,11 +6,13 @@ import (
 	"errors"
 	"math/rand"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
+	"time"
 )
 
 func (r *relation) Close() {
@@ -24,6 +26,10 @@ func (r *relation) ID() string {
 }
 
 func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
 	return r.mp[si.TabletId].Segment(binary.BigEndian.Uint64([]byte(si.Id)), proc)
 }
 
@@ -40,6 +46,10 @@ func (r *relation) Attribute() []metadata.Attribute {
 }
 
 func (r *relation) Write(_ uint64, bat *batch.Batch) error {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
 	if len(r.tablets) == 0 {
 		return errors.New("no tablets exists")
 	}
