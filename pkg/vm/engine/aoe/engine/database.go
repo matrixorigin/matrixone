@@ -2,12 +2,14 @@ package engine
 
 import (
 	log "github.com/sirupsen/logrus"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/metadata"
+	"time"
 )
 
 func (db *database) Type() int {
@@ -15,11 +17,19 @@ func (db *database) Type() int {
 }
 
 func (db *database) Delete(epoch uint64, name string) error {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
 	_, err := db.catalog.DropTable(epoch, db.id, name)
 	return err
 }
 
 func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
 	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
 	if err != nil {
 		return err
@@ -29,8 +39,12 @@ func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, pd
 }
 
 func (db *database) Relations() []string {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
 	var rs []string
-	tbs, err := db.catalog.GetTables(db.id)
+	tbs, err := db.catalog.ListTables(db.id)
 	if err != nil {
 		return rs
 	}
@@ -41,6 +55,10 @@ func (db *database) Relations() []string {
 }
 
 func (db *database) Relation(name string) (engine.Relation, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
 	tablets, err := db.catalog.GetTablets(db.id, name)
 	if err != nil {
 		return nil, err

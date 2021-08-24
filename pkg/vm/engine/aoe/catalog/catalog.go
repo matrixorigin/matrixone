@@ -2,21 +2,19 @@ package catalog
 
 import (
 	"encoding/json"
-	"fmt"
-	"matrixone/pkg/logger"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
-	"os"
 	"sync"
 	"time"
 )
 
 const (
 	defaultCatalogId    = uint64(1)
-	cPrefix             = "/meta"
+	cPrefix             = "meta"
 	cDBPrefix           = "DB"
 	cDBIDPrefix         = "DBID"
 	cTablePrefix        = "Table"
@@ -26,8 +24,7 @@ const (
 	timeout             = 600 * time.Millisecond
 )
 
-var log = logger.New(os.Stderr, "catalog:")
-
+// Catalog is for handling meta information in a query.
 type Catalog struct {
 	Driver dist.CubeDriver
 }
@@ -35,6 +32,7 @@ type Catalog struct {
 var gCatalog Catalog
 var gInitOnce sync.Once
 
+// DefaultCatalog creates a Catalog.
 func DefaultCatalog(store dist.CubeDriver) Catalog {
 	gInitOnce.Do(func() {
 		gCatalog = Catalog{
@@ -43,7 +41,13 @@ func DefaultCatalog(store dist.CubeDriver) Catalog {
 	})
 	return gCatalog
 }
+
+// CreateDatabase creates a database with db info.
 func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (uint64, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("CreateDatabase cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	if _, err := c.checkDBNotExists(dbName); err != nil {
 		return 0, err
 	}
@@ -67,7 +71,14 @@ func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (uint64, 
 	}
 	return id, nil
 }
-func (c *Catalog) DelDatabase(epoch uint64, dbName string) (err error) {
+
+// DropDatabase drops whole database.
+// it will set schema status in meta of this database and all tables in this database to "DeleteOnly"
+func (c *Catalog) DropDatabase(epoch uint64, dbName string) (err error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("DropDatabase cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	if db, _ := c.checkDBNotExists(dbName); db == nil {
 		return ErrDBNotExists
 	} else {
@@ -81,7 +92,13 @@ func (c *Catalog) DelDatabase(epoch uint64, dbName string) (err error) {
 		return err
 	}
 }
-func (c *Catalog) GetDBs() ([]aoe.SchemaInfo, error) {
+
+// ListDatabases returns all databases.
+func (c *Catalog) ListDatabases() ([]aoe.SchemaInfo, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("ListDatabases cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	values, err := c.Driver.PrefixScan(c.dbPrefix(), 0)
 	if err != nil {
 		return nil, err
@@ -98,7 +115,13 @@ func (c *Catalog) GetDBs() ([]aoe.SchemaInfo, error) {
 	}
 	return dbs, nil
 }
-func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
+
+// GetDatabase gets the database meta with Name.
+func (c *Catalog) GetDatabase(dbName string) (*aoe.SchemaInfo, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("GetDatabase cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	db, _ := c.checkDBNotExists(dbName)
 	if db == nil {
 		return nil, ErrDBNotExists
@@ -108,7 +131,13 @@ func (c *Catalog) GetDB(dbName string) (*aoe.SchemaInfo, error) {
 	}
 	return db, nil
 }
+
+// CreateTable creates a table with tableInfo in database.
 func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("CreateTable cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	_, err := c.checkDBExists(dbId)
 	if err != nil {
 		return 0, err
@@ -123,43 +152,45 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 	}
 	err = c.Driver.Set(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id))
 	if err != nil {
-		log.Errorf("ErrTableCreateFailed, %v", err)
+		logutil.Errorf("ErrTableCreateFailed, %v", err)
 		return 0, err
-		//return 0, ErrTableCreateFailed
 	}
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
 		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
-			log.Errorf("ErrTableCreateFailed, %v", err)
+			logutil.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
-			//return 0, ErrTableCreateFailed
 		}
 		if c.Driver.Set(rkey, []byte(tbl.Name)) != nil {
-			log.Errorf("ErrTableCreateFailed, %v", err)
+			logutil.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
-			//return 0, ErrTableCreateFailed
 		}
 		tbl.State = aoe.StatePublic
 		meta, err := helper.EncodeTable(tbl)
 		if err != nil {
-			log.Errorf("ErrTableCreateFailed, %v", err)
+			logutil.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
-			//return 0, ErrTableCreateFailed
 		}
-		//save metadata to kv
 		err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
+		logutil.Errorf("Table Key is:\t%v", c.tableKey(dbId, tbl.Id))
 		if err != nil {
-			log.Errorf("ErrTableCreateFailed, %v", err)
+			logutil.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
 		}
-		log.Infof("Create Table finished, key is %v", c.tableKey(dbId, tbl.Id))
 		return tbl.Id, nil
 	}
 	return 0, ErrNoAvailableShard
 }
+
+// DropTable drops table in database.
+// it will set schema status in meta of this table to "DeleteOnly"
 func (c *Catalog) DropTable(epoch, dbId uint64, tableName string) (tid uint64, err error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("DropTable cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	_, err = c.checkDBExists(dbId)
 	if err != nil {
 		return tid, err
@@ -188,7 +219,7 @@ func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
 	if err != nil {
 		return err
 	}
-	tbs, err := c.GetTables(dbId)
+	tbs, err := c.ListTables(dbId)
 	if err != nil {
 		return err
 	}
@@ -211,17 +242,23 @@ func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
 	}
 	return err
 }
-func (c *Catalog) GetTables(dbId uint64) ([]aoe.TableInfo, error) {
+
+// ListTables returns all tables meta in database.
+func (c *Catalog) ListTables(dbId uint64) ([]aoe.TableInfo, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("ListTables cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
-		log.Errorf("Call GetTables, prefix is %v", c.tablePrefix(dbId))
+		logutil.Errorf("Call ListTables, prefix is %v", c.tablePrefix(dbId))
 		values, err := c.Driver.PrefixScan(c.tablePrefix(dbId), 0)
 		if err != nil {
-			log.Errorf("Call GetTables failed %v", err)
+			logutil.Errorf("Call ListTables failed %v", err)
 			return nil, err
 		}
-		log.Errorf("Call GetTables, prefix result size is %d", len(values))
+		logutil.Errorf("Call ListTables, prefix result size is %d", len(values))
 		var tables []aoe.TableInfo
 		for i := 1; i < len(values); i = i + 2 {
 			t, _ := helper.DecodeTable(values[i])
@@ -233,7 +270,13 @@ func (c *Catalog) GetTables(dbId uint64) ([]aoe.TableInfo, error) {
 		return tables, nil
 	}
 }
+
+// GetTable gets the table meta in database with dbId and tableName.
 func (c *Catalog) GetTable(dbId uint64, tableName string) (*aoe.TableInfo, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("GetTable cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
@@ -247,7 +290,13 @@ func (c *Catalog) GetTable(dbId uint64, tableName string) (*aoe.TableInfo, error
 		return tb, nil
 	}
 }
+
+// GetTablets gets all the tablets of the table in database with dbId and tableName.
 func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("GetTablets cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
@@ -265,7 +314,7 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 		var tablets []aoe.TabletInfo
 		for _, shardId := range shardIds {
 			if sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(dbId, tb.Id)):]); err != nil {
-				log.Errorf("convert shardid failed, %v, shardid is %d, prefix length is %d", err, len(shardId), len(c.routePrefix(dbId, tb.Id)))
+				logutil.Errorf("convert shardid failed, %v, shardid is %d, prefix length is %d", err, len(shardId), len(c.routePrefix(dbId, tb.Id)))
 				continue
 			} else {
 				tablets = append(tablets, aoe.TabletInfo{
@@ -282,31 +331,35 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 // RemoveDeletedTable trigger gc
 // TODO: handle duplicated remove
 func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("RemoveDeletedTable cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	rsp, err := c.Driver.Scan(c.deletedPrefix(), c.deletedEpochPrefix(epoch+1), 0)
 	if err != nil {
-		log.Errorf("scan error, %v", err)
+		logutil.Errorf("scan error, %v", err)
 		return cnt, err
 	}
 	for i := 1; i < len(rsp); i += 2 {
 		if tbl, err := helper.DecodeTable(rsp[i]); err != nil {
-			log.Errorf("Decode err for table info, %v, %v", err, rsp[i])
+			logutil.Errorf("Decode err for table info, %v, %v", err, rsp[i])
 			continue
 		} else {
 			shardIds, err := c.Driver.PrefixKeys(c.routePrefix(tbl.SchemaId, tbl.Id), 0)
 			if err != nil {
-				log.Errorf("Failed to get shards for table %v, %v", rsp[i], err)
+				logutil.Errorf("Failed to get shards for table %v, %v", rsp[i], err)
 				continue
 			}
 			success := true
 			for _, shardId := range shardIds {
 				if sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(tbl.SchemaId, tbl.Id)):]); err != nil {
-					log.Errorf("convert shardid failed, %v", err)
+					logutil.Errorf("convert shardid failed, %v", err)
 					success = false
 					break
 				} else {
 					_, err = c.Driver.DropTablet(c.encodeTabletName(sid, tbl.Id), sid)
 					if err != nil {
-						log.Errorf("call local drop table failed %d, %d, %v", sid, tbl.Id, err)
+						logutil.Errorf("call local drop table failed %d, %d, %v", sid, tbl.Id, err)
 						success = false
 						break
 					}
@@ -314,7 +367,7 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 			}
 			if success {
 				if c.Driver.Delete(c.deletedTableKey(tbl.Epoch, tbl.SchemaId, tbl.Id)) != nil {
-					log.Errorf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
+					logutil.Errorf("remove marked deleted tableinfo failed, %v, %v", err, tbl)
 				} else {
 					cnt++
 				}
@@ -376,7 +429,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 	}
 }
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
-	return fmt.Sprintf("%d#%d", groupId, tableId)
+	return codec.Bytes2String(codec.EncodeKey(groupId, tableId))
 }
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	id, err := c.Driver.AllocID(idKey)
@@ -423,7 +476,7 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	for {
 		select {
 		case <-timeoutC:
-			log.Errorn("wait for available shard timeout")
+			logutil.Error("wait for available shard timeout")
 			return shardid, ErrTableCreateTimeout
 		default:
 			shard, err := c.Driver.GetShardPool().Alloc(uint64(pb.AOEGroup), codec.Uint642Bytes(tid))

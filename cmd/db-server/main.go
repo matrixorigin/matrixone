@@ -122,7 +122,6 @@ func main() {
 
 	logutil.SetupLogger(os.Args[1])
 
-
 	Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
 	strNodeId := strconv.FormatInt(NodeId, 10)
@@ -180,7 +179,7 @@ func main() {
 		panic(err)
 	}
 	catalog = aoe_catalog.DefaultCatalog(a)
-	eng := aoe_engine.Mock(&catalog)
+	eng := aoe_engine.New(&catalog)
 	pci.SetRemoveEpoch(removeEpoch)
 
 	hm := config.HostMmu
@@ -216,7 +215,6 @@ func main() {
 
 	//test cluster nodes
 	config.ClusterNodes = metadata.Nodes{}
-
 
 	createMOServer(pci)
 	err = runMOServer()
