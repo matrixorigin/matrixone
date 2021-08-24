@@ -63,18 +63,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			ctr.bat.Vecs[i] = vector.New(vec.Typ)
 		}
 	}
-	if len(bat.Sels) == 0 {
-		if err := ctr.batchDedup(bat.Vecs, proc); err != nil {
-			bat.Clean(proc)
-			ctr.clean(proc)
-			return false, err
-		}
-	} else {
-		if err := ctr.batchDedupSels(bat.Sels, bat.Vecs, proc); err != nil {
-			bat.Clean(proc)
-			ctr.clean(proc)
-			return false, err
-		}
+	if len(bat.Sels) > 0 {
+		bat.Shuffle(proc)
+	}
+	if err := ctr.batchDedup(bat.Vecs, proc); err != nil {
+		bat.Clean(proc)
+		ctr.clean(proc)
+		return false, err
 	}
 	proc.Reg.Ax = ctr.bat
 	ctr.bat = nil

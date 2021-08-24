@@ -150,18 +150,14 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 	}
 	if len(bat.Sels) > 0 {
-		if err := ctr.batchGroupSels(bat.Sels, bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
-			bat.Clean(proc)
-			ctr.clean(proc)
-			return false, err
-		}
-	} else {
-		if err := ctr.batchGroup(bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
-			bat.Clean(proc)
-			ctr.clean(proc)
-			return false, err
-		}
+		bat.Shuffle(proc)
 	}
+	if err := ctr.batchGroup(bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
+		bat.Clean(proc)
+		ctr.clean(proc)
+		return false, err
+	}
+
 	bat.Clean(proc)
 	vecs, err := ctr.eval(ctr.rows, n.Es, proc)
 	if err != nil {

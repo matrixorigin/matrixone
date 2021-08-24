@@ -16,9 +16,9 @@ import (
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
 	"matrixone/pkg/logger"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
-	"matrixone/pkg/util/signal"
 	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/dist"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
@@ -31,7 +31,9 @@ import (
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 )
 
@@ -56,10 +58,17 @@ func serverShutdown(isgraceful bool) {
 }
 
 func registerSignalHandlers() {
-	signal.SetupSignalHandler(serverShutdown)
+	//	signal.SetupSignalHandler(serverShutdown)
+}
+
+func waitSignal() {
+	sigchan := make(chan os.Signal)
+	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
+	<-sigchan
 }
 
 func cleanup() {
+	fmt.Println("\rBye!")
 }
 
 func recreateDir(dir string) (err error) {
@@ -67,7 +76,9 @@ func recreateDir(dir string) (err error) {
 	if err != nil {
 		return err
 	}
-	err = os.MkdirAll(dir, os.ModeDir)
+	mask := syscall.Umask(0)
+	defer syscall.Umask(mask)
+	err = os.MkdirAll(dir, os.FileMode(0755))
 	return err
 }
 
@@ -96,12 +107,12 @@ func main() {
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
 		fmt.Printf("error:%v\n", err)
-		return
+		panic(err)
 	}
 
 	if err := config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables); err != nil {
 		fmt.Printf("error:%v\n", err)
-		return
+		panic(err)
 	}
 
 	fmt.Println("Shutdown The Server With Ctrl+C | Ctrl+\\.")
@@ -109,17 +120,15 @@ func main() {
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
 
+	logutil.SetupLogger(os.Args[1])
+
 	if !config.GlobalSystemVariables.GetDumpEnv() {
 		fmt.Println("Using AOE Storage Engine, 3 Cluster Nodes, 1 SQL Server.")
 		Host := config.GlobalSystemVariables.GetHost()
 		NodeId := config.GlobalSystemVariables.GetNodeID()
 		strNodeId := strconv.FormatInt(NodeId, 10)
 
-		ppu := frontend.NewPDCallbackParameterUnit(
-			int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()),
-			int(config.GlobalSystemVariables.GetPeriodOfPersistence()),
-			int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()),
-			int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()))
+		ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging())
 
 		pci = frontend.NewPDCallbackImpl(ppu)
 		pci.Id = int(NodeId)
@@ -128,7 +137,7 @@ func main() {
 
 		targetDir := config.GlobalSystemVariables.GetCubeDir() + strNodeId
 		if err := recreateDir(targetDir); err != nil {
-			return
+			panic(err)
 		}
 
 		metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
@@ -163,10 +172,12 @@ func main() {
 
 		a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 		if err != nil {
+			fmt.Printf("Create cube driver failed, %v", err)
 			panic(err)
 		}
 		err = a.Start()
 		if err != nil {
+			fmt.Printf("Start cube driver failed, %v", err)
 			panic(err)
 		}
 		catalog = aoe_catalog.DefaultCatalog(a)
@@ -187,7 +198,8 @@ func main() {
 		log.SetLevel(logger.WARN)
 		srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, log)
 		if err != nil {
-			log.Fatal(err)
+			fmt.Printf("Create rpcserver failed, %v", err)
+			panic(err)
 		}
 		hp := handler.New(eng, proc)
 		srv.Register(hp.Process)
@@ -195,6 +207,7 @@ func main() {
 		err = waitClusterStartup(a, 10*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
 
 		if err != nil {
+			fmt.Printf("wait cube cluster startup failed, %v", err)
 			panic(err)
 		}
 
@@ -216,11 +229,12 @@ func main() {
 	createMOServer(pci)
 	err := runMOServer()
 	if err != nil {
+		fmt.Printf("Start MOServer failed, %v", err)
 		panic(err)
 	}
 	//registerSignalHandlers()
 
-	select {}
+	waitSignal()
 	cleanup()
 	os.Exit(0)
 }

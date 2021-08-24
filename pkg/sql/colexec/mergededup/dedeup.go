@@ -104,20 +104,14 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 					ctr.bat.Vecs[i] = vector.New(vec.Typ)
 				}
 			}
-			if len(bat.Sels) == 0 {
-				if err := ctr.buildBatch(bat.Vecs, proc); err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-					bat.Clean(proc)
-					return err
-				}
-			} else {
-				if err := ctr.buildBatchSels(bat.Sels, bat.Vecs, proc); err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-					bat.Clean(proc)
-					return err
-				}
+			if len(bat.Sels) > 0 {
+				bat.Shuffle(proc)
+			}
+			if err := ctr.buildBatch(bat.Vecs, proc); err != nil {
+				reg.Ch = nil
+				reg.Wg.Done()
+				bat.Clean(proc)
+				return err
 			}
 			reg.Wg.Done()
 			bat.Clean(proc)

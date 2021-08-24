@@ -9,7 +9,7 @@ import (
 func TestIntBSI(t *testing.T) {
 	mp := NewNumericBSI(27, SignedInt)
 	{
-		xs := []int64{
+		xs := []int32{
 			10, 3, -7, 9, 0, 1, 9, -8, 2, -1, 12, -35435, 6545654, 2332, 2,
 		}
 		for i, x := range xs {
@@ -27,35 +27,35 @@ func TestIntBSI(t *testing.T) {
 			}
 		}
 		{
-			mq, err := mp.Eq(int64(3), nil)
+			mq, err := mp.Eq(int32(3), nil)
 			if err != nil {
 				log.Fatal(err)
 			}
 			fmt.Printf("\t(= 3) -> %v\n", mq.ToArray())
 		}
 		{
-			mq, err := mp.Lt(int64(-1), nil)
+			mq, err := mp.Lt(int32(-1), nil)
 			if err != nil {
 				log.Fatal(err)
 			}
 			fmt.Printf("\t(< -1) -> %v\n", mq.ToArray())
 		}
 		{
-			mq, err := mp.Le(int64(-1), nil)
+			mq, err := mp.Le(int32(-1), nil)
 			if err != nil {
 				log.Fatal(err)
 			}
 			fmt.Printf("\t(<= -1) -> %v\n", mq.ToArray())
 		}
 		{
-			mq, err := mp.Gt(int64(-1), nil)
+			mq, err := mp.Gt(int32(-1), nil)
 			if err != nil {
 				log.Fatal(err)
 			}
 			fmt.Printf("\t(> -1) -> %v\n", mq.ToArray())
 		}
 		{
-			mq, err := mp.Ge(int64(-1), nil)
+			mq, err := mp.Ge(int32(-1), nil)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -79,7 +79,7 @@ func TestIntBSI(t *testing.T) {
 		log.Fatal(err)
 	}
 	{
-		xs := []int64{
+		xs := []int32{
 			10, 3, -7, 9, 0, 1, 9, -8, 2, -1, 12, -35435, 6545654, 2332, 2,
 		}
 		{
@@ -92,35 +92,35 @@ func TestIntBSI(t *testing.T) {
 			}
 		}
 		{
-			m, err := mq.Eq(int64(-35435), nil)
+			m, err := mq.Eq(int32(-35435), nil)
 			if err != nil {
 				log.Fatal(err)
 			}
 			fmt.Printf("\t(= -35435) -> %v\n", m.ToArray())
 		}
 		{
-			m, err := mq.Lt(int64(-7), nil)
+			m, err := mq.Lt(int32(-7), nil)
 			if err != nil {
 				log.Fatal(err)
 			}
 			fmt.Printf("\t(< -7) -> %v\n", m.ToArray())
 		}
 		{
-			m, err := mq.Le(int64(-7), nil)
+			m, err := mq.Le(int32(-7), nil)
 			if err != nil {
 				log.Fatal(err)
 			}
 			fmt.Printf("\t(<= -7) -> %v\n", m.ToArray())
 		}
 		{
-			m, err := mq.Gt(int64(0), nil)
+			m, err := mq.Gt(int32(0), nil)
 			if err != nil {
 				log.Fatal(err)
 			}
 			fmt.Printf("\t(> 0) -> %v\n", m.ToArray())
 		}
 		{
-			m, err := mq.Ge(int64(0), nil)
+			m, err := mq.Ge(int32(0), nil)
 			if err != nil {
 				log.Fatal(err)
 			}

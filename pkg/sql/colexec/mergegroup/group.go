@@ -423,9 +423,6 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				bat.Clean(proc)
 				return err
 			}
-			{
-				fmt.Printf("*********bat: %v\n", bat)
-			}
 			if ctr.bat == nil {
 				ctr.bat = batch.New(true, n.Gs)
 				for i, attr := range n.Gs {
@@ -479,19 +476,13 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				}
 			}
 			if len(bat.Sels) > 0 {
-				if err := ctr.batchGroupSels(bat.Sels, bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-					bat.Clean(proc)
-					return err
-				}
-			} else {
-				if err := ctr.batchGroup(bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-					bat.Clean(proc)
-					return err
-				}
+				bat.Shuffle(proc)
+			}
+			if err := ctr.batchGroup(bat.Vecs[:len(ctr.attrs)], n.Es, proc); err != nil {
+				reg.Ch = nil
+				reg.Wg.Done()
+				bat.Clean(proc)
+				return err
 			}
 			reg.Wg.Done()
 			bat.Clean(proc)
