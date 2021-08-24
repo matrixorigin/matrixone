@@ -104,6 +104,16 @@ func TestMutableBlockNode(t *testing.T) {
 	h2 = mgr.Pin(node2)
 	assert.NotNil(t, h2)
 
+	err = node2.Expand(rows*factor, insert(node2))
+	assert.Nil(t, err)
+	t.Log(mgr.String())
+	err = node2.Flush()
+	assert.Nil(t, err)
+	t.Log(mgr.String())
+
+	h2.Close()
+	h1 = mgr.Pin(node1)
+
 	t.Log(mgr.String())
 	t.Log(common.GPool.String())
 }

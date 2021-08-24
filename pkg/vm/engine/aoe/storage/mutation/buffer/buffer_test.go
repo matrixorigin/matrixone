@@ -25,9 +25,9 @@ func (h *testNodeHandle) destory() {
 
 func newTestNodeHandle(mgr *nodeManager, id common.ID, size uint64, t *testing.T) *testNodeHandle {
 	n := &testNodeHandle{
-		Node: *NewNode(mgr, id, size),
-		t:    t,
+		t: t,
 	}
+	n.Node = *NewNode(n, mgr, id, size)
 	n.LoadFunc = n.load
 	n.UnloadFunc = n.unload
 	n.DestroyFunc = n.destory

@@ -27,8 +27,8 @@ func newMemTable(mgr *manager, tableData iface.ITableData, data iface.IBlock) *m
 		TableData: tableData,
 		Block:     data,
 		Meta:      data.GetMeta(),
-		Node:      *buffer.NewNode(mgr.nodemgr, *data.GetMeta().AsCommonID(), uint64(0)),
 	}
+	mt.Node = *buffer.NewNode(mt, mgr.nodemgr, *data.GetMeta().AsCommonID(), uint64(0))
 	mt.LoadFunc = mt.load
 	mt.UnloadFunc = mt.unload
 	return mt

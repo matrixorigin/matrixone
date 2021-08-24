@@ -24,12 +24,12 @@ type MutableBlockNode struct {
 func NewMutableBlockNode(opts *engine.Options, mgr base.INodeManager, file *dataio.TransientBlockFile,
 	tabledata iface.ITableData, meta *metadata.Block) *MutableBlockNode {
 	n := &MutableBlockNode{
-		Node:      *buffer.NewNode(mgr, *meta.AsCommonID(), 0),
 		File:      file,
 		Meta:      meta,
 		TableData: tabledata,
 		Opts:      opts,
 	}
+	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), 0)
 	n.UnloadFunc = n.unload
 	n.LoadFunc = n.load
 	return n

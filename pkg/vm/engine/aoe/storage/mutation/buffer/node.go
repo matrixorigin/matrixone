@@ -16,7 +16,7 @@ type nodeHandle struct {
 	mgr base.INodeManager
 }
 
-func newNodeHandle(n *Node, mgr base.INodeManager) *nodeHandle {
+func newNodeHandle(n base.INode, mgr base.INodeManager) *nodeHandle {
 	return &nodeHandle{
 		n:   n,
 		mgr: mgr,
@@ -45,17 +45,19 @@ type Node struct {
 	size           uint64
 	iter           uint64
 	closed         bool
+	impl           base.INode
 	DestroyFunc    func()
 	LoadFunc       func()
 	UnloadableFunc func() bool
 	UnloadFunc     func()
 }
 
-func NewNode(mgr base.INodeManager, id common.ID, size uint64) *Node {
+func NewNode(impl base.INode, mgr base.INodeManager, id common.ID, size uint64) *Node {
 	return &Node{
 		mgr:  mgr,
 		id:   id,
 		size: size,
+		impl: impl,
 	}
 }
 
@@ -68,6 +70,9 @@ func (n *Node) GetID() common.ID {
 }
 
 func (n *Node) MakeHandle() base.INodeHandle {
+	if n.impl != nil {
+		return newNodeHandle(n.impl, n.mgr)
+	}
 	return newNodeHandle(n, n.mgr)
 }
 
