@@ -2,7 +2,6 @@ package catalog
 
 import (
 	"encoding/json"
-	"fmt"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
@@ -15,7 +14,7 @@ import (
 
 const (
 	defaultCatalogId    = uint64(1)
-	cPrefix             = "/meta"
+	cPrefix             = "meta"
 	cDBPrefix           = "DB"
 	cDBIDPrefix         = "DBID"
 	cTablePrefix        = "Table"
@@ -175,6 +174,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 			return 0, err
 		}
 		err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
+		logutil.Errorf("Table Key is:\t%v", c.tableKey(dbId, tbl.Id))
 		if err != nil {
 			logutil.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
@@ -429,7 +429,7 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 	}
 }
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
-	return fmt.Sprintf("%d#%d", groupId, tableId)
+	return codec.Bytes2String(codec.EncodeKey(groupId, tableId))
 }
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	id, err := c.Driver.AllocID(idKey)

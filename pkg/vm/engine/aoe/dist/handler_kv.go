@@ -20,7 +20,7 @@ func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 	customReq := &rpcpb.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
-	err := h.store.DataStorageByGroup(shard.Group, shard.ID).(*pebble.Storage).Set(req.Key, customReq.Value)
+	err := ctx.WriteBatch().Set(req.Key, customReq.Value)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
@@ -47,7 +47,7 @@ func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx
 		return 0, 0, resp
 	}
 
-	err = h.store.DataStorageByGroup(shard.Group, shard.ID).(*pebble.Storage).Set(req.Key, customReq.Value)
+	err = ctx.WriteBatch().Set(req.Key, customReq.Value)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
@@ -60,7 +60,7 @@ func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx
 func (h *driver) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
-	err := h.store.DataStorageByGroup(shard.Group, shard.ID).(*pebble.Storage).Delete(req.Key)
+	err := ctx.WriteBatch().Delete(req.Key)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
@@ -78,7 +78,7 @@ func (h *driver) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 		resp.Value = errorResp(ErrKeyNotExisted)
 		return 0, 0, resp
 	}
-	err = h.store.DataStorageByGroup(shard.Group, shard.ID).(*pebble.Storage).Delete(req.Key)
+	err = ctx.WriteBatch().Delete(req.Key)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
