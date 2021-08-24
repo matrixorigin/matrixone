@@ -194,20 +194,14 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 			ctr.clean(proc)
 			return true, err
 		}
-		if len(bat.Sels) == 0 {
-			if err := ctr.probeBatch(bat.Vecs, proc); err != nil {
-				reg.Ch = nil
-				reg.Wg.Done()
-				bat.Clean(proc)
-				return true, err
-			}
-		} else {
-			if err := ctr.probeBatchSels(bat.Sels, bat.Vecs, proc); err != nil {
-				reg.Ch = nil
-				reg.Wg.Done()
-				bat.Clean(proc)
-				return true, err
-			}
+		if len(bat.Sels) > 0 {
+			bat.Shuffle(proc)
+		}
+		if err := ctr.probeBatch(bat.Vecs, proc); err != nil {
+			reg.Ch = nil
+			reg.Wg.Done()
+			bat.Clean(proc)
+			return true, err
 		}
 		if ctr.Probe.bat.Vecs[0].Length() == 0 {
 			reg.Wg.Done()

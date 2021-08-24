@@ -6,27 +6,29 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/index/bsi"
 	// log "github.com/sirupsen/logrus"
 )
 
-func NumericBsiIndexConstructor(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
-	return NewNumericBsiEmptyNode(capacity, freeFunc)
+func NumericBsiIndexConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+	return NewNumericBsiEmptyNode(vf, useCompress, freeFunc)
 }
 
 type NumericBsiIndex struct {
 	bsi.NumericBSI
 	T         types.Type
 	Col       int16
-	AllocSize uint64
+	File        common.IVFile
+	UseCompress bool
 	FreeFunc  buf.MemoryFreeFunc
 }
 
 func initNumericBsi(t types.Type, bitSize int) *bsi.NumericBSI {
 	var bsiIdx bsi.BitSlicedIndex
 	switch t.Oid {
-	case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_date, types.T_datetime:
 		bsiIdx = bsi.NewNumericBSI(bitSize, bsi.SignedInt)
 	case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 		bsiIdx = bsi.NewNumericBSI(bitSize, bsi.UnsignedInt)
@@ -47,9 +49,10 @@ func NewNumericBsiIndex(t types.Type, bitSize int, colIdx int16) *NumericBsiInde
 	}
 }
 
-func NewNumericBsiEmptyNode(capacity uint64, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
+func NewNumericBsiEmptyNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return &NumericBsiIndex{
-		AllocSize: capacity,
+		File: vf,
+		UseCompress: useCompress,
 		FreeFunc:  freeFunc,
 	}
 }
@@ -59,7 +62,62 @@ func (i *NumericBsiIndex) GetCol() int16 {
 }
 
 func (i *NumericBsiIndex) Eval(ctx *FilterCtx) error {
-	return nil
+	var err error
+	if v, ok := ctx.Val.(types.Date); ok {
+		ctx.Val = int32(v)
+	}
+	if v, ok := ctx.ValMin.(types.Date); ok {
+		ctx.ValMin = int32(v)
+	}
+	if v, ok := ctx.ValMax.(types.Date); ok {
+		ctx.ValMax = int32(v)
+	}
+	if v, ok := ctx.Val.(types.Datetime); ok {
+		ctx.Val = int64(v)
+	}
+	if v, ok := ctx.ValMin.(types.Datetime); ok {
+		ctx.ValMin = int64(v)
+	}
+	if v, ok := ctx.ValMax.(types.Datetime); ok {
+		ctx.ValMax = int64(v)
+	}
+	switch ctx.Op {
+	case OpEq:
+		ctx.BMRes, err = i.Eq(ctx.Val, ctx.BMRes)
+	case OpNe:
+		ctx.BMRes, err = i.Ne(ctx.Val, ctx.BMRes)
+	case OpGe:
+		ctx.BMRes, err = i.Ge(ctx.Val, ctx.BMRes)
+	case OpGt:
+		ctx.BMRes, err = i.Gt(ctx.Val, ctx.BMRes)
+	case OpLe:
+		ctx.BMRes, err = i.Le(ctx.Val, ctx.BMRes)
+	case OpLt:
+		ctx.BMRes, err = i.Lt(ctx.Val, ctx.BMRes)
+	case OpIn:
+		bm := ctx.BMRes.Clone()
+		ctx.BMRes, err = i.Ge(ctx.ValMin, ctx.BMRes)
+		if err != nil {
+			return err
+		}
+		bm, err = i.Le(ctx.ValMax, bm)
+		if err != nil {
+			return err
+		}
+		ctx.BMRes.And(bm)
+	case OpOut:
+		bm := ctx.BMRes.Clone()
+		ctx.BMRes, err = i.Gt(ctx.ValMax, ctx.BMRes)
+		if err != nil {
+			return err
+		}
+		bm, err = i.Lt(ctx.ValMin, bm)
+		if err != nil {
+			return err
+		}
+		ctx.BMRes.Or(bm)
+	}
+	return err
 }
 
 func (i *NumericBsiIndex) FreeMemory() {
@@ -73,26 +131,31 @@ func (i *NumericBsiIndex) Type() base.IndexType {
 }
 
 func (i *NumericBsiIndex) GetMemorySize() uint64 {
-	return i.AllocSize
+	if i.UseCompress {
+		return uint64(i.File.Stat().Size())
+	} else {
+		return uint64(i.File.Stat().OriginSize())
+	}
 }
 
 func (i *NumericBsiIndex) GetMemoryCapacity() uint64 {
-	return i.AllocSize
+	if i.UseCompress {
+		return uint64(i.File.Stat().Size())
+	} else {
+		return uint64(i.File.Stat().OriginSize())
+	}
 }
 
 func (i *NumericBsiIndex) Reset() {
 }
 
 func (i *NumericBsiIndex) ReadFrom(r io.Reader) (n int64, err error) {
-	data := make([]byte, i.AllocSize)
-	nr, err := r.Read(data)
+	buf := make([]byte, i.GetMemoryCapacity())
+	nr, err := r.Read(buf)
 	if err != nil {
-		return n, err
+		return int64(nr), err
 	}
-	buf := data[2 : 2+encoding.TypeSize]
-	i.T = encoding.DecodeType(buf)
-	i.NumericBSI = *initNumericBsi(i.T, 0)
-	err = i.Unmarshall(data)
+	err = i.Unmarshall(buf)
 	return int64(nr), err
 }
 

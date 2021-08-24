@@ -32,6 +32,17 @@ func (bat *Batch) Reorder(attrs []string) {
 	}
 }
 
+func (bat *Batch) Shuffle(proc *process.Process) {
+	if bat.SelsData != nil {
+		for i, vec := range bat.Vecs {
+			bat.Vecs[i] = vec.Shuffle(bat.Sels)
+		}
+		proc.Free(bat.SelsData)
+		bat.Sels = nil
+		bat.SelsData = nil
+	}
+}
+
 func (bat *Batch) Length(proc *process.Process) (int, error) {
 	vec, err := bat.GetVector(bat.Attrs[0], proc)
 	if err != nil {

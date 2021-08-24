@@ -36,6 +36,7 @@ jobs:
       - name: Build
         run: |
           cd $GITHUB_WORKSPACE && make config && make build
+          make test
           
       - name: Show system resource statistics
         if: ${{ always() }}

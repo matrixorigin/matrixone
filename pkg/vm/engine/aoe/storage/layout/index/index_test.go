@@ -154,7 +154,7 @@ func TestNumBsi(t *testing.T) {
 	col := int16(10)
 	bsiIdx := NewNumericBsiIndex(tp, bitSize, col)
 
-	xs := []int64{
+	xs := []int32{
 		10, 3, -7, 9, 0, 1, 9, -8, 2, -1, 12, -35435, 6545654, 2332, 2,
 	}
 
@@ -168,7 +168,7 @@ func TestNumBsi(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, x, v)
 	}
-	res, err := bsiIdx.Eq(int64(9), nil)
+	res, err := bsiIdx.Eq(int32(9), nil)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), res.GetCardinality())
 
@@ -185,7 +185,7 @@ func TestNumBsi(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, x, v)
 	}
-	res, err = bsiIdx2.Eq(int64(9), nil)
+	res, err = bsiIdx2.Eq(int32(9), nil)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), res.GetCardinality())
 
@@ -202,7 +202,9 @@ func TestNumBsi(t *testing.T) {
 	assert.Nil(t, err)
 	defer f.Close()
 
-	node := NewNumericBsiEmptyNode(uint64(capacity), nil)
+	stat, _ := f.Stat()
+	vf := common.NewMemFile(stat.Size())
+	node := NewNumericBsiEmptyNode(vf, false, nil)
 	_, err = node.ReadFrom(f)
 	assert.Nil(t, err)
 	t.Log(capacity)
@@ -215,7 +217,7 @@ func TestNumBsi(t *testing.T) {
 		assert.True(t, ok)
 		assert.Equal(t, x, v)
 	}
-	res, err = bsiIdx3.Eq(int64(9), nil)
+	res, err = bsiIdx3.Eq(int32(9), nil)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), res.GetCardinality())
 }

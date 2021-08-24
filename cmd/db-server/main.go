@@ -72,10 +72,10 @@ func cleanup() {
 }
 
 func recreateDir(dir string) (err error) {
-	/*	err = os.RemoveAll(dir)
-		if err != nil {
-			return err
-		}*/
+	//err = os.RemoveAll(dir)
+	//if err != nil {
+	//	return err
+	//}
 	mask := syscall.Umask(0)
 	defer syscall.Umask(mask)
 	err = os.MkdirAll(dir, os.FileMode(0755))
@@ -122,112 +122,104 @@ func main() {
 
 	logutil.SetupLogger(os.Args[1])
 
-	if !config.GlobalSystemVariables.GetDumpEnv() {
-		fmt.Println("Using AOE Storage Engine, 3 Cluster Nodes, 1 SQL Server.")
-		Host := config.GlobalSystemVariables.GetHost()
-		NodeId := config.GlobalSystemVariables.GetNodeID()
-		strNodeId := strconv.FormatInt(NodeId, 10)
 
-		ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging())
+	Host := config.GlobalSystemVariables.GetHost()
+	NodeId := config.GlobalSystemVariables.GetNodeID()
+	strNodeId := strconv.FormatInt(NodeId, 10)
 
-		pci = frontend.NewPDCallbackImpl(ppu)
-		pci.Id = int(NodeId)
+	ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging())
 
-		stdLog.Printf("clean target dir")
+	pci = frontend.NewPDCallbackImpl(ppu)
+	pci.Id = int(NodeId)
 
-		targetDir := config.GlobalSystemVariables.GetCubeDir() + strNodeId
-		if err := recreateDir(targetDir); err != nil {
-			panic(err)
-		}
+	stdLog.Printf("clean target dir")
 
-		metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
-			FS: vfs.NewPebbleFS(vfs.Default),
-		})
-		pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
-			FS: vfs.NewPebbleFS(vfs.Default),
-		})
-		var aoeDataStorage *daoe.Storage
-
-		aoeDataStorage, err = daoe.NewStorage(targetDir + "/aoe")
-
-		cfg := dconfig.Config{}
-		_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
-		if err != nil {
-			panic(err)
-		}
-
-		_, err = toml.DecodeFile(os.Args[1], &cfg.ClusterConfig)
-		if err != nil {
-			panic(err)
-		}
-		cfg.ServerConfig = server.Cfg{
-			ExternalServer: true,
-		}
-
-		cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
-
-		if cfg.CubeConfig.Prophet.EmbedEtcd.ClientUrls != config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr() {
-			cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
-		}
-
-		a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
-		if err != nil {
-			fmt.Printf("Create cube driver failed, %v", err)
-			panic(err)
-		}
-		err = a.Start()
-		if err != nil {
-			fmt.Printf("Start cube driver failed, %v", err)
-			panic(err)
-		}
-		catalog = aoe_catalog.DefaultCatalog(a)
-		eng := aoe_engine.New(&catalog)
-		pci.SetRemoveEpoch(removeEpoch)
-
-		hm := config.HostMmu
-		gm := guest.New(1<<40, hm)
-		proc := process.New(gm, config.Mempool)
-		{
-			proc.Id = "0"
-			proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
-			proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
-			proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
-			proc.Refer = make(map[string]uint64)
-		}
-		log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
-		log.SetLevel(logger.WARN)
-		srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, log)
-		if err != nil {
-			fmt.Printf("Create rpcserver failed, %v", err)
-			panic(err)
-		}
-		hp := handler.New(eng, proc)
-		srv.Register(hp.Process)
-
-		err = waitClusterStartup(a, 10*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
-
-		if err != nil {
-			fmt.Printf("wait cube cluster startup failed, %v", err)
-			panic(err)
-		}
-
-		go srv.Run()
-		//test storage engine
-		config.StorageEngine = eng
-
-		//test cluster nodes
-		config.ClusterNodes = metadata.Nodes{}
-	} else {
-		panic("The Official Storage Engine and Cluster Nodes are in the developing.")
-
-		//TODO:
-		config.StorageEngine = nil
-
-		config.ClusterNodes = nil
+	targetDir := config.GlobalSystemVariables.GetCubeDir() + strNodeId
+	if err := recreateDir(targetDir); err != nil {
+		panic(err)
 	}
 
+	metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
+		FS: vfs.NewPebbleFS(vfs.Default),
+	})
+	pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
+		FS: vfs.NewPebbleFS(vfs.Default),
+	})
+	var aoeDataStorage *daoe.Storage
+
+	aoeDataStorage, err = daoe.NewStorage(targetDir + "/aoe")
+
+	cfg := dconfig.Config{}
+	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = toml.DecodeFile(os.Args[1], &cfg.ClusterConfig)
+	if err != nil {
+		panic(err)
+	}
+	cfg.ServerConfig = server.Cfg{
+		ExternalServer: true,
+	}
+
+	cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
+
+	if cfg.CubeConfig.Prophet.EmbedEtcd.ClientUrls != config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr() {
+		cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
+	}
+
+	a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+	if err != nil {
+		fmt.Printf("Create cube driver failed, %v", err)
+		panic(err)
+	}
+	err = a.Start()
+	if err != nil {
+		fmt.Printf("Start cube driver failed, %v", err)
+		panic(err)
+	}
+	catalog = aoe_catalog.DefaultCatalog(a)
+	eng := aoe_engine.Mock(&catalog)
+	pci.SetRemoveEpoch(removeEpoch)
+
+	hm := config.HostMmu
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm, config.Mempool)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
+		proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
+		proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
+		proc.Refer = make(map[string]uint64)
+	}
+	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
+	log.SetLevel(logger.WARN)
+	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, log)
+	if err != nil {
+		fmt.Printf("Create rpcserver failed, %v", err)
+		panic(err)
+	}
+	hp := handler.New(eng, proc)
+	srv.Register(hp.Process)
+
+	err = waitClusterStartup(a, 10*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
+
+	if err != nil {
+		fmt.Printf("wait cube cluster startup failed, %v", err)
+		panic(err)
+	}
+
+	go srv.Run()
+	//test storage engine
+	config.StorageEngine = eng
+
+	//test cluster nodes
+	config.ClusterNodes = metadata.Nodes{}
+
+
 	createMOServer(pci)
-	err := runMOServer()
+	err = runMOServer()
 	if err != nil {
 		fmt.Printf("Start MOServer failed, %v", err)
 		panic(err)
@@ -235,6 +227,13 @@ func main() {
 	//registerSignalHandlers()
 
 	waitSignal()
+	srv.Stop()
+	serverShutdown(true)
+	a.Close()
+	aoeDataStorage.Close()
+	metaStorage.Close()
+	pebbleDataStorage.Close()
+
 	cleanup()
 	os.Exit(0)
 }
