@@ -127,10 +127,6 @@ func (cpi *ProtocolImpl) GetLock() sync.Locker {
 }
 
 func (mp *MysqlProtocol) GetRequest(payload []byte) *Request {
-	mp.GetLock().Lock()
-	mp.setSequenceID(1)
-	mp.GetLock().Unlock()
-
 	req := &Request{
 		cmd:  int(payload[0]),
 		data: payload[1:],

@@ -80,6 +80,10 @@ type PDCallbackImpl struct {
 	 */
 	ddlQueue map[uint64][]*Meta
 
+	/*
+	enableLogging
+	 */
+	enableLog bool
 }
 
 /*
@@ -102,6 +106,7 @@ func NewPDCallbackImpl(pu *PDCallbackParameterUnit) *PDCallbackImpl {
 		ddlQueue:          make(map[uint64][]*Meta),
 		heartbeatTimeout:  NewTimeout(time.Duration(pu.heartbeatTimeout)*time.Second, false),
 		removeEpoch: nil,
+		enableLog: pu.enableLog,
 	}
 }
 
@@ -129,6 +134,11 @@ type PDCallbackParameterUnit struct {
 	Second
 	 */
 	heartbeatTimeout int
+
+	/*
+	enable logging
+	 */
+	enableLog bool
 }
 
 /*
@@ -137,12 +147,13 @@ pp : the period of the persistence. Second
 ddp : 	the period of the ddl delete. Second
 ht : 	the timeout of heartbeat. Second
  */
-func NewPDCallbackParameterUnit(tp,pp,ddp,ht int) *PDCallbackParameterUnit {
+func NewPDCallbackParameterUnit(tp, pp, ddp, ht int, enableLog bool) *PDCallbackParameterUnit {
 	return &PDCallbackParameterUnit{
 		timerPeriod:       tp,
 		persistencePeriod: pp,
 		ddlDeletePeriod:   ddp,
 		heartbeatTimeout:  ht,
+		enableLog: enableLog,
 	}
 }
 
@@ -426,7 +437,9 @@ func (pci *PDCallbackImpl) DeleteDDLPeriodicallyRoutine () {
 		if pci.removeEpoch != nil {
 			epoch := pci.GetClusterMinimumRemovableEpoch()
 			if epoch > 0 {
-				fmt.Printf("id %d delete ddl at epoch %d \n", pci.Id, epoch)
+				if pci.enableLog {
+					fmt.Printf("id %d delete ddl at epoch %d \n", pci.Id, epoch)
+				}
 				pci.removeEpoch(epoch)
 			}
 		}
@@ -555,7 +568,9 @@ less than or equal to the epoch will be deleted.
 func (sci *PDCallbackImpl) DeleteDDLPermanentlyRoutine(max_ep uint64) {
 	//drive catalog service DeleteDDL
 	if sci.removeEpoch != nil && max_ep > 0 {
-		fmt.Printf("async delete ddl epoch %d \n",max_ep)
+		if sci.enableLog {
+			fmt.Printf("async delete ddl epoch %d \n",max_ep)
+		}
 		sci.removeEpoch(max_ep)
 	}
 }

@@ -201,3 +201,25 @@ func (t *Timeout) isTimeout() bool {
 
 	return true
 }
+
+/*
+length:
+-1, complete string.
+0, empty string
+>0 , length of characters at the header of the string.
+ */
+func SubStringFromBegin(str string,length int) string {
+	if length == 0 || length < -1{
+		return ""
+	}
+
+	if length == -1 {
+		return str
+	}
+
+	l := Min(len(str),length)
+	if l != len(str) {
+		return str[:l]+"..."
+	}
+	return str[:l]
+}

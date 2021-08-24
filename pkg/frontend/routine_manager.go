@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/fagongzi/goetty"
 	"matrixone/pkg/config"
+	"matrixone/pkg/logutil"
 	"sync"
 	"time"
 )
@@ -64,7 +65,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	protocol := routine.protocol
 
 	packet, ok := msg.(*Packet)
-	protocol.sequenceId++
+	protocol.sequenceId = uint8(packet.SequenceID + 1)
 	if !ok {
 		return errors.New("message is not Packet")
 	}
@@ -83,7 +84,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 			return errors.New("message is not Packet")
 		}
 
-		protocol.sequenceId++
+		protocol.sequenceId = uint8(packet.SequenceID + 1)
 		payload = append(payload, packet.Payload...)
 		length = packet.Length
 	}
@@ -116,7 +117,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	}
 
 	if rm.pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-		fmt.Printf("connection id %d , the time of handling the request %s \n", rs.ID(), time.Since(reqBegin).String())
+		logutil.Infof("connection id %d , the time of handling the request %s", rs.ID(), time.Since(reqBegin).String())
 	}
 
 	return nil

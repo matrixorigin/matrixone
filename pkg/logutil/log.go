@@ -15,6 +15,7 @@ package logutil
 
 import (
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"os"
 	"sync/atomic"
 
@@ -28,18 +29,22 @@ import (
 var _globalL, _globalP, _globalS atomic.Value
 
 func init() {
-	SetupDBLogger()
+	conf := &Config{Level: "info", File: FileLogConfig{}}
+	logger, props, _ := InitLogger(conf)
+	ReplaceGlobals(logger, props)
 }
+
 var defaultConfig = Config{
 	Level:               "info",
-	Format:              "text",
+	Format:              "console",
 }
-func SetupDBLogger() {
+
+func SetupLogger(configFile string) {
 	var conf Config
-	//if _, err := toml.DecodeFile(configFile, &conf); err != nil {
-	//	panic(err)
-	//}
-	conf = defaultConfig
+	if _, err := toml.DecodeFile(configFile, &conf); err != nil {
+		panic(err)
+	}
+	//conf = defaultConfig
 	l, p, err := InitLogger(&conf)
 	if err != nil {
 		panic(err)

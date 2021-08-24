@@ -3,8 +3,8 @@ package sched
 import (
 	"errors"
 	"fmt"
+	logutil2 "matrixone/pkg/logutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/logutil"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
@@ -59,7 +59,7 @@ func NewMetaResourceMgr(opts *e.Options, disk, cpu sched.ResourceMgr) *metaResou
 func (mgr *metaResourceMgr) OnExecDone(op interface{}) {
 	e := op.(MetaEvent)
 	mgr.mu.Lock()
-	logutil.Debugf("OnExecDone %d: %s", e.ID(), mgr.stringLocked())
+	logutil2.Debugf("OnExecDone %d: %s", e.ID(), mgr.stringLocked())
 	scope, all := e.GetScope()
 	delete(mgr.runings.events, e.ID())
 	if all {
@@ -142,7 +142,7 @@ func (mgr *metaResourceMgr) preSubmit(op iops.IOp) bool {
 	}
 	e.AddObserver(mgr)
 	sched := mgr.trySchedule(e, false)
-	logutil.Debug(mgr.String())
+	logutil2.Debug(mgr.String())
 	return sched
 }
 

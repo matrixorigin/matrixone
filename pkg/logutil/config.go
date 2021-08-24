@@ -67,6 +67,11 @@ type Config struct {
 	//
 	// Values configured here are per-second. See zapcore.NewSampler for details.
 	Sampling *zap.SamplingConfig `toml:"sampling" json:"sampling"`
+
+	// Encoding sets the logger's encoding. Valid values are "json" and
+	// "console", as well as any third-party encodings registered via
+	// RegisterEncoder.
+	Encoding string `json:"encoding" yaml:"encoding"`
 }
 
 // ZapProperties records some information about zap.
