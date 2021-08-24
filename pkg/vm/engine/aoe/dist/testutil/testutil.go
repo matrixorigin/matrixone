@@ -20,10 +20,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var (
-	tmpDir = "/tmp/aoe-cluster-test/"
-)
-
 // TestAOEClusterOption the option for create TestAOECluster
 type TestAOEClusterOption func(opts *testAOEClusterOptions)
 
@@ -163,7 +159,6 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 		cfg.Raft.MaxEntryBytes = 300 * 1024 * 1024
 		//cfg.Replication.ShardCapacityBytes = 100
 		//cfg.Replication.ShardSplitCheckBytes = 80
-		cfg.Prophet.Replication.MaxReplicas = 1
 
 		//ppu := client.NewPDCallbackParameterUnit(5, 20, 20, 20)
 		//pci := client.NewPDCallbackImpl(ppu)

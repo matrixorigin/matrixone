@@ -179,7 +179,6 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 			logutil.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
 		}
-		logutil.Infof("Create Table finished, key is %v", c.tableKey(dbId, tbl.Id))
 		return tbl.Id, nil
 	}
 	return 0, ErrNoAvailableShard

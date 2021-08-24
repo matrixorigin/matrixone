@@ -142,7 +142,7 @@ func NewCubeDriverWithFactory(
 		switch group {
 		case uint64(pb.AOEGroup):
 			return func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
-				//panic("not impl")
+				//TODO: Not impl
 			}
 		default:
 			return func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
@@ -175,44 +175,81 @@ func NewCubeDriverWithFactory(
 		return initialGroups
 	}
 
+	c.CubeConfig.Customize.CustomShardPoolShardFactory = func(g uint64, start, end []byte, unique string, offsetInPool uint64) bhmetapb.Shard {
+		return bhmetapb.Shard{
+			Group:        g,
+			Start:        start,
+			End:          end,
+			Unique:       unique,
+			DisableSplit: true,
+		}
+	}
+
 	c.CubeConfig.Customize.CustomShardStateAwareFactory = func() aware.ShardStateAware {
 		return h
 	}
 
-	/*c.CubeConfig.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
+	c.CubeConfig.Customize.CustomAdjustCompactFuncFactory = func(group uint64) func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
 		return func(shard bhmetapb.Shard, compactIndex uint64) (newCompactIdx uint64, err error) {
+			defer func() {
+				logutil.Debugf("CompactIndex of [%d]shard-%d is adjusted from %d to %d", group, shard.ID, compactIndex, newCompactIdx)
+			}()
 			if group != uint64(pb.AOEGroup) {
-				return compactIndex, nil
+				newCompactIdx = compactIndex
+			} else {
+				newCompactIdx, err = h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
+					Matchers: []*dbi.StringMatcher{
+						{
+							Type:    dbi.MTPrefix,
+							Pattern: codec.Uint642String(shard.ID),
+						},
+					},
+				})
+				if err != nil {
+					if err == adb.ErrNotFound {
+						logutil.Errorf("shard not found, %d, %d", group, shard.ID)
+						newCompactIdx = compactIndex
+					} else {
+						// TODO: Need panic here or not?
+						panic(err)
+					}
+				}
 			}
-			return h.GetSegmentedId(shard.ID)
-		}
-	}*/
-
-	/*c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
-		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
-			 if group != uint64(pb.AOEGroup) {
-			 	return initAppliedIndex
-			 }
-			 adjustAppliedIndex, err := h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
-			 	Matchers: []*dbi.StringMatcher{
-			 		{
-			 			Type:    dbi.MTPrefix,
-			 			Pattern: codec.Uint642String(shard.ID),
-			 		},
-			 	},
-			 })
-			 if err != nil {
-				if err == adb.ErrNotFound {
-			 		log.Errorf("shard not found, %d, %d", group, shard.ID)
-			 		return initAppliedIndex
-			 	}
-			 	panic(err)
-			 }
-			 return adjustAppliedIndex
-			return initAppliedIndex
+			return newCompactIdx, nil
 		}
 	}
-	*/
+
+	c.CubeConfig.Customize.CustomAdjustInitAppliedIndexFactory = func(group uint64) func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
+		return func(shard bhmetapb.Shard, initAppliedIndex uint64) (adjustAppliedIndex uint64) {
+			defer func() {
+				logutil.Debugf("InitAppliedIndex of [%d]shard-%d is adjusted from %d to %d", group, shard.ID, initAppliedIndex, adjustAppliedIndex)
+			}()
+			if group != uint64(pb.AOEGroup) {
+				adjustAppliedIndex = initAppliedIndex
+			} else {
+				var err error
+				adjustAppliedIndex, err = h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
+					Matchers: []*dbi.StringMatcher{
+						{
+							Type:    dbi.MTPrefix,
+							Pattern: codec.Uint642String(shard.ID),
+						},
+					},
+				})
+				if err != nil {
+					if err == adb.ErrNotFound {
+						logutil.Errorf("shard not found, %d, %d", group, shard.ID)
+						adjustAppliedIndex = initAppliedIndex
+					} else {
+						panic(err)
+					}
+				}
+			}
+
+			return adjustAppliedIndex
+		}
+	}
+
 	store, err := raftStoreFactory(&c.CubeConfig)
 	if err != nil {
 		return nil, err
@@ -635,7 +672,7 @@ func (h *driver) TabletNames(toShard uint64) ([]string, error) {
 func (h *driver) Exec(cmd interface{}) ([]byte, error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0))
+		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
 	return h.app.Exec(cmd, defaultRPCTimeout)
 }
