@@ -68,15 +68,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, nil
 	}
 	if len(bat.Sels) > 0 {
-		if err := ctr.batchExchangeSels(bat.Sels, bat, bat.Vecs[:len(n.Attrs)], proc); err != nil {
-			ctr.clean(bat, proc)
-			return false, nil
-		}
-	} else {
-		if err := ctr.batchExchange(bat, bat.Vecs[:len(n.Attrs)], proc); err != nil {
-			ctr.clean(bat, proc)
-			return false, nil
-		}
+		bat.Shuffle(proc)
+	}
+	if err := ctr.batchExchange(bat, bat.Vecs[:len(n.Attrs)], proc); err != nil {
+		ctr.clean(bat, proc)
+		return false, nil
 	}
 	bat.Clean(proc)
 	for i, reg := range n.Ws {
