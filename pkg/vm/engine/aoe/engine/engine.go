@@ -2,20 +2,15 @@ package engine
 
 import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"strings"
+	"time"
 )
 
-func New() *aoeEngine {
-	//1. Parse config
-	//2. New Storage
-	//3. New Catalog
-	return &aoeEngine{}
-}
-
-func Mock(c *catalog.Catalog) *aoeEngine {
+func New(c *catalog.Catalog) *aoeEngine {
 	//1. Parse config
 	//2. New Storage
 	//3. New Catalog
@@ -25,6 +20,10 @@ func Mock(c *catalog.Catalog) *aoeEngine {
 }
 
 func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
 	var ni *engine.NodeInfo
 	e.catalog.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 		if ni != nil {
@@ -41,18 +40,30 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 }
 
 func (e *aoeEngine) Delete(epoch uint64, name string) error {
-	err := e.catalog.DelDatabase(epoch, name)
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
+	err := e.catalog.DropDatabase(epoch, name)
 	return err
 }
 
 func (e *aoeEngine) Create(epoch uint64, name string, typ int) error {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
 	_, err := e.catalog.CreateDatabase(epoch, name, typ)
 	return err
 }
 
 func (e *aoeEngine) Databases() []string {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
 	var ds []string
-	if dbs, err := e.catalog.GetDBs(); err == nil {
+	if dbs, err := e.catalog.ListDatabases(); err == nil {
 		for _, db := range dbs {
 			ds = append(ds, db.Name)
 		}
@@ -61,7 +72,11 @@ func (e *aoeEngine) Databases() []string {
 }
 
 func (e *aoeEngine) Database(name string) (engine.Database, error) {
-	db, err := e.catalog.GetDB(name)
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("time cost %d ms", time.Since(t0))
+	}()
+	db, err := e.catalog.GetDatabase(name)
 	if err != nil {
 		return nil, err
 	}

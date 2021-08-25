@@ -114,7 +114,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	defer c.Stop()
 
 	catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
-	eng := aoe_engine.Mock(&catalog)
+	eng := aoe_engine.New(&catalog)
 
 	for i := 0; i < nodeCnt; i++ {
 		pcis[i].SetRemoveEpoch(func(epoch uint64) {

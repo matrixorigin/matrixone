@@ -8,6 +8,7 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"matrixone/pkg/logutil"
 
 	stdLog "log"
 	"matrixone/pkg/container/types"
@@ -27,10 +28,10 @@ import (
 )
 
 const (
-	blockRows          = 100
+	blockRows          = 10000
 	blockCntPerSegment = 2
 	colCnt             = 4
-	segmentCnt         = 2
+	segmentCnt         = 5
 	blockCnt           = blockCntPerSegment * segmentCnt
 )
 
@@ -69,7 +70,9 @@ func TestStorage(t *testing.T) {
 			return daoe.NewStorageWithOptions(path, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
-		testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterLogLevel("info")))
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterDataPath("./test")))
 	c.Start()
 
 	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
@@ -191,6 +194,7 @@ func TestStorage(t *testing.T) {
 	ids, err := driver.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
 	require.NoError(t, err)
 	require.Equal(t, 0, len(ids.Ids))
+
 	ibat := chunk.MockBatch(typs, blockRows)
 	var buf bytes.Buffer
 	err = protocol.EncodeBatch(ibat, &buf)
@@ -239,12 +243,15 @@ func TestRestartStorage(t *testing.T) {
 			opts.Meta.Conf = mdCfg
 			return daoe.NewStorageWithOptions(path, opts)
 		}), testutil.WithTestAOEClusterUsePebble(),
-		testutil.WithTestAOEClusterRaftClusterOptions(raftstore.WithTestClusterRecreate(false), raftstore.WithTestClusterLogLevel("info")))
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithTestClusterRecreate(false),
+			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterDataPath("./test")))
 	c.Start()
 	c.RaftCluster.WaitShardByCounts(t, [3]int{21, 21, 21}, time.Second*30)
 	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 	defer func() {
-		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		logutil.Debug(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
 
@@ -275,6 +282,6 @@ func TestRestartStorage(t *testing.T) {
 	ids, err := driver.GetSegmentIds(codec.Bytes2String(codec.EncodeKey(shard.ShardID, tableInfo.Id)), shard.ShardID)
 	require.NoError(t, err)
 	stdLog.Printf("[Debug]SegmentIds is %v\n", ids)
-	assert.Equal(t, 2, len(ids.Ids))
+	assert.Equal(t, segmentCnt, len(ids.Ids))
 
 }

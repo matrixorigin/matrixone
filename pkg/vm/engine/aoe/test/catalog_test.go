@@ -66,14 +66,14 @@ func TestCatalog(t *testing.T) {
 func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	//Wait shard state change
 
-	tbs, err := c.GetTables(99)
+	tbs, err := c.ListTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
 
 	dbid, err := c.CreateDatabase(0, dbName, engine.AOE)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
-	tbs, err = c.GetTables(dbid)
+	tbs, err = c.ListTables(dbid)
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 
@@ -95,14 +95,14 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	_, err = c.CreateTable(2, dbid, *t2)
 	require.NoError(t, err)
 
-	tbls, err := c.GetTables(dbid)
+	tbls, err := c.ListTables(dbid)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(tbls))
 
-	err = c.DelDatabase(3, dbName)
+	err = c.DropDatabase(3, dbName)
 	require.NoError(t, err)
 
-	dbs, err := c.GetDBs()
+	dbs, err := c.ListDatabases()
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 
@@ -133,7 +133,7 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 		require.Less(t, uint64(0), tid)
 	}
 
-	tbls, err = c.GetTables(dbid)
+	tbls, err = c.ListTables(dbid)
 	require.NoError(t, err)
 	require.Equal(t, 10, len(tbls))
 
@@ -142,7 +142,7 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 		require.NoError(t, err)
 	}
 
-	tbls, err = c.GetTables(dbid)
+	tbls, err = c.ListTables(dbid)
 	require.NoError(t, err)
 	require.Equal(t, 5, len(tbls))
 

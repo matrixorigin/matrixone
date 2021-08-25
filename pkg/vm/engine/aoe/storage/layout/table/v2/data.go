@@ -210,6 +210,7 @@ func (td *TableData) Size(attr string) uint64 {
 
 func (td *TableData) GetSegmentedIndex() (id uint64, ok bool) {
 	ts := td.Meta.Info.GetCheckpointTime()
+	id, ok = td.Meta.CreatedIndex, true
 	if td.Meta.IsDeleted(ts) {
 		return td.Meta.DeletedIndex, true
 	}
@@ -219,7 +220,7 @@ func (td *TableData) GetSegmentedIndex() (id uint64, ok bool) {
 		td.tree.RLock()
 		seg := td.tree.Segments[i]
 		td.tree.RUnlock()
-		id, ok = seg.GetSegmentedIndex()
+		id, ok := seg.GetSegmentedIndex()
 		if ok {
 			return id, ok
 		}
