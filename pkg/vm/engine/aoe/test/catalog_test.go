@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
@@ -54,6 +55,10 @@ func TestCatalog(t *testing.T) {
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
 			return daoe.NewStorage(path)
 		}), testutil.WithTestAOEClusterUsePebble())
+	defer func() {
+		logutil.Debug(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
 	c.Start()
 	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
 	stdLog.Printf("app all started.")

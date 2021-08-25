@@ -174,7 +174,6 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 			return 0, err
 		}
 		err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
-		logutil.Errorf("Table Key is:\t%v", c.tableKey(dbId, tbl.Id))
 		if err != nil {
 			logutil.Errorf("ErrTableCreateFailed, %v", err)
 			return 0, err
@@ -252,13 +251,11 @@ func (c *Catalog) ListTables(dbId uint64) ([]aoe.TableInfo, error) {
 	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
 	} else {
-		logutil.Errorf("Call ListTables, prefix is %v", c.tablePrefix(dbId))
 		values, err := c.Driver.PrefixScan(c.tablePrefix(dbId), 0)
 		if err != nil {
 			logutil.Errorf("Call ListTables failed %v", err)
 			return nil, err
 		}
-		logutil.Errorf("Call ListTables, prefix result size is %d", len(values))
 		var tables []aoe.TableInfo
 		for i := 1; i < len(values); i = i + 2 {
 			t, _ := helper.DecodeTable(values[i])
@@ -292,10 +289,10 @@ func (c *Catalog) GetTable(dbId uint64, tableName string) (*aoe.TableInfo, error
 }
 
 // GetTablets gets all the tablets of the table in database with dbId and tableName.
-func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, error) {
+func (c *Catalog) GetTablets(dbId uint64, tableName string) (tablets []aoe.TabletInfo, err error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("GetTablets cost %d ms", time.Since(t0).Milliseconds())
+		logutil.Debugf("GetTablets return %d tablets, cost %d ms", len(tablets), time.Since(t0).Milliseconds())
 	}()
 	if _, err := c.checkDBExists(dbId); err != nil {
 		return nil, err
@@ -311,7 +308,6 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) ([]aoe.TabletInfo, e
 		if err != nil {
 			return nil, err
 		}
-		var tablets []aoe.TabletInfo
 		for _, shardId := range shardIds {
 			if sid, err := codec.Bytes2Uint64(shardId[len(c.routePrefix(dbId, tb.Id)):]); err != nil {
 				logutil.Errorf("convert shardid failed, %v, shardid is %d, prefix length is %d", err, len(shardId), len(c.routePrefix(dbId, tb.Id)))

@@ -202,7 +202,7 @@ func main() {
 	hp := handler.New(eng, proc)
 	srv.Register(hp.Process)
 
-	err = waitClusterStartup(a, 10*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
+	err = waitClusterStartup(a, 60*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
 
 	if err != nil {
 		fmt.Printf("wait cube cluster startup failed, %v", err)

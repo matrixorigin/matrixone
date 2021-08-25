@@ -60,13 +60,13 @@ func TestAOEEngine(t *testing.T) {
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test")))
-	c.Start()
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
-
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
+	c.Start()
+
+	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 
 	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
 	aoeEngine := engine.New(&catalog)
@@ -209,13 +209,13 @@ func TestAOEEngineRestart(t *testing.T) {
 			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithTestClusterRecreate(false)))
-	c.Start()
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
-
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
+	c.Start()
+
+	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 
 	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
 	aoeEngine := engine.New(&catalog)
