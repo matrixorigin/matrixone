@@ -8,10 +8,9 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"matrixone/pkg/logutil"
-
 	stdLog "log"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
@@ -73,16 +72,15 @@ func TestStorage(t *testing.T) {
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterLogLevel("info"),
 			raftstore.WithTestClusterDataPath("./test")))
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
 	c.Start()
 
 	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 
 	stdLog.Printf("driver all started.")
-
-	defer func() {
-		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
-		c.Stop()
-	}()
 
 	driver := c.CubeDrivers[0]
 
@@ -247,13 +245,13 @@ func TestRestartStorage(t *testing.T) {
 			raftstore.WithTestClusterRecreate(false),
 			raftstore.WithTestClusterLogLevel("info"),
 			raftstore.WithTestClusterDataPath("./test")))
-	c.Start()
-	c.RaftCluster.WaitShardByCounts(t, [3]int{21, 21, 21}, time.Second*30)
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 	defer func() {
 		logutil.Debug(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
+	c.Start()
+	c.RaftCluster.WaitShardByCounts(t, [3]int{21, 21, 21}, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 
 	driver := c.CubeDrivers[0]
 	t0 := time.Now()
