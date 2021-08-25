@@ -229,7 +229,8 @@ kv : the persistent storage
 func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
-
+	fmt.Printf("-------PDC Start enter\n")
+	defer fmt.Printf("-------PDC Start exit\n")
 	//TODO:When the cluster runs initially, there is not keys any more.
 	//load cluster_epoch
 	//load minimumRemovableEpoch
@@ -237,6 +238,11 @@ func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 	err := kv.LoadCustomData(math.MaxInt64,pci.getCustomData)
 	if err != nil {
 		return err
+	}
+
+	//make new channel
+	if pci.msgChan == nil {
+		pci.msgChan = make(chan *ChanMessage)
 	}
 
 	//start timer for epoch increment
@@ -256,6 +262,12 @@ When the node changes from the leader to the follower, the Stop will be executed
 kv : the persistent storage
  */
 func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
+	fmt.Printf("-------PDC Stop enter\n")
+	defer fmt.Printf("-------PDC Stop exit\n")
+
+	pci.rwlock.Lock()
+	defer pci.rwlock.Unlock()
+
 	//stop timer
 	pci.timerClose.Close()
 
@@ -285,6 +297,8 @@ data : the message that the node sent
 kv : the persistent storage
  */
 func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage.Storage) (responseData []byte, err error){
+	fmt.Printf("-------PDC HandleHeartbeatReq enter\n")
+	defer fmt.Printf("-------PDC HandleHeartbeatReq exit\n")
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
 	//fmt.Printf("%d leader receive heartbeat from %d \n",pci.Id,id)
@@ -377,7 +391,7 @@ func (pci *PDCallbackImpl) IncrementEpochPeriodlyRoutine(period int){
 		if pci.persistTimeout[0].isTimeout() {
 			buf := make([]byte,8)
 			binary.BigEndian.PutUint64(buf,ce)
-
+			fmt.Printf("------- gen epoch %d\n",ce)
 			//step 2: put these values into the worker
 			pci.msgChan <- &ChanMessage{
 				tp:   MSG_TYPE_CLUSTER_EPOCH,
@@ -400,7 +414,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 	for msg := range pci.msgChan {
 		switch msg.tp {
 		case MSG_TYPE_CLUSTER_EPOCH:
-			//fmt.Printf("cluster epoch %v \n",msg.body)
+			fmt.Printf("-------cluster epoch %v \n",msg.body)
 			err := kv.PutCustomData(CLUSTER_EPOCH_KEY,msg.body)
 			if err != nil {
 				//panic(err)
@@ -408,7 +422,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			}
 
 		case MSG_TYPE_SERVER_INFO:
-			//fmt.Printf("server info %v \n",msg.body2)
+			fmt.Printf("-------server info %v \n",msg.body2)
 			//save kv<server,maximumRemovableEpoch>
 			err := kv.BatchPutCustomData(msg.body2,msg.body3)
 			if err != nil {
@@ -416,7 +430,7 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 				log.Fatal(err)
 			}
 		case MSG_TYPE_MINI_REM_EPOCH:
-			//fmt.Printf("minimum removable epoch %v \n",msg.body)
+			fmt.Printf("-------minimum removable epoch %v \n",msg.body)
 			//save minimumRemovableEpoch
 			err := kv.PutCustomData(MINI_REM_EPOCH_KEY,msg.body)
 			if err != nil {
