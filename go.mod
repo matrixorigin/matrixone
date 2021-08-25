@@ -11,25 +11,24 @@ require (
 	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287
 	github.com/fagongzi/util v0.0.0-20210409031311-a10fdf8fbd7a
 	github.com/frankban/quicktest v1.11.3 // indirect
-	github.com/gogo/protobuf v1.3.1
-	github.com/golang/protobuf v1.4.2
-	github.com/google/btree v1.0.0
-	github.com/google/uuid v1.2.0 // indirect
-	github.com/matrixorigin/matrixcube v0.0.0-20210824024740-556715aafe65
+	github.com/gogo/protobuf v1.3.2
+	github.com/golang/protobuf v1.5.2
+	github.com/google/btree v1.0.1
+	github.com/matrixorigin/matrixcube v0.0.0-20210825060323-cee4cc53a3c5
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
-	github.com/sirupsen/logrus v1.4.2
+	github.com/sirupsen/logrus v1.7.0
 	github.com/stretchr/testify v1.7.0
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
-	go.uber.org/zap v1.15.0
-	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9 // indirect
-	golang.org/x/lint v0.0.0-20200302205851-738671d3881b // indirect
+	go.uber.org/zap v1.17.0
 	golang.org/x/net v0.0.0-20210813160813-60bc85c4be6d // indirect
 	golang.org/x/sys v0.0.0-20210816071009-649d0fc2fce7
 	golang.org/x/tools v0.1.5 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
-replace go.etcd.io/etcd => github.com/deepfabric/etcd v1.4.15
+replace go.etcd.io/etcd/raft/v3 => github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2
+
+replace go.etcd.io/etcd/v3 => github.com/matrixorigin/etcd/v3 v3.5.1-0.20210824022435-0203115049c2

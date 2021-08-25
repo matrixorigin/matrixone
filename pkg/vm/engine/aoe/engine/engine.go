@@ -22,7 +22,7 @@ func New(c *catalog.Catalog) *aoeEngine {
 func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	var ni *engine.NodeInfo
 	e.catalog.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
@@ -42,7 +42,7 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 func (e *aoeEngine) Delete(epoch uint64, name string) error {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	err := e.catalog.DropDatabase(epoch, name)
 	return err
@@ -51,7 +51,7 @@ func (e *aoeEngine) Delete(epoch uint64, name string) error {
 func (e *aoeEngine) Create(epoch uint64, name string, typ int) error {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	_, err := e.catalog.CreateDatabase(epoch, name, typ)
 	return err
@@ -60,7 +60,7 @@ func (e *aoeEngine) Create(epoch uint64, name string, typ int) error {
 func (e *aoeEngine) Databases() []string {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	var ds []string
 	if dbs, err := e.catalog.ListDatabases(); err == nil {
@@ -74,7 +74,7 @@ func (e *aoeEngine) Databases() []string {
 func (e *aoeEngine) Database(name string) (engine.Database, error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	db, err := e.catalog.GetDatabase(name)
 	if err != nil {
