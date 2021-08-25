@@ -248,15 +248,15 @@
 #	UpdateMode:	dynamic
 	nodeID = 0
 
-#	Name:	cubeDir
+#	Name:	cubeDirPrefix
 #	Scope:	[global]
 #	Access:	[file]
 #	DataType:	string
 #	DomainType:	set
 #	Values:	[./cube]
-#	Comment:	the root direction of the cube
+#	Comment:	the root direction prefix of the cube. The actual dir is cubeDirPrefix + nodeID
 #	UpdateMode:	dynamic
-	cubeDir = "./cube"
+	cubeDirPrefix = "./cube"
 
 #	Name:	prophetEmbedEtcdJoinAddr
 #	Scope:	[global]

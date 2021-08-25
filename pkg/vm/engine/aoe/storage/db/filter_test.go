@@ -20,6 +20,9 @@ import (
 )
 
 func TestSegmentSparseFilterInt32(t *testing.T) {
+	if !dataio.FlushIndex {
+		return
+	}
 	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
 	info := md.MockInfo(mu, rowCount, blkCount)
@@ -99,6 +102,9 @@ func TestSegmentSparseFilterInt32(t *testing.T) {
 
 
 func TestSegmentSparseFilterVarchar(t *testing.T) {
+	if !dataio.FlushIndex {
+		return
+	}
 	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
 	info := md.MockInfo(mu, rowCount, blkCount)
@@ -179,6 +185,9 @@ func TestSegmentSparseFilterVarchar(t *testing.T) {
 
 
 func TestSegmentSparseFilterDate(t *testing.T) {
+	if !dataio.FlushIndex {
+		return
+	}
 	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
 	info := md.MockInfo(mu, rowCount, blkCount)
@@ -259,6 +268,9 @@ func TestSegmentSparseFilterDate(t *testing.T) {
 
 
 func TestSegmentFilterInt32(t *testing.T) {
+	if !dataio.FlushIndex {
+		return
+	}
 	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
 	info := md.MockInfo(mu, rowCount, blkCount)
@@ -362,6 +374,9 @@ func TestSegmentFilterInt32(t *testing.T) {
 }
 
 func TestSummarizerInt32(t *testing.T) {
+	if !dataio.FlushIndex {
+		return
+	}
 	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
 	info := md.MockInfo(mu, rowCount, blkCount)
@@ -441,5 +456,8 @@ func TestSummarizerInt32(t *testing.T) {
 	cnt, err = filter.Count("mock_0", mockBM)
 	assert.Nil(t, err)
 	assert.Equal(t, cnt, uint64(4))
+	cnt, err = filter.Count("mock_0", nil)
+	assert.Nil(t, err)
+	assert.Equal(t, cnt, uint64(40))
 }
 

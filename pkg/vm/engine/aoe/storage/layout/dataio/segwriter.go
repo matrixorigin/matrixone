@@ -32,6 +32,8 @@ type SegmentWriter struct {
 	postExecutor func()
 }
 
+var FlushIndex = false
+
 func NewSegmentWriter(data []*batch.Batch, meta *md.Segment, dir string) *SegmentWriter {
 	w := &SegmentWriter{
 		data: data,
@@ -94,6 +96,9 @@ func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, err
 }
 
 func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *md.Segment) error {
+	if !FlushIndex {
+		return nil
+	}
 	var indices []index.Index
 	for idx, colDef := range meta.Table.Schema.ColDefs {
 		switch colDef.Type.Oid {
