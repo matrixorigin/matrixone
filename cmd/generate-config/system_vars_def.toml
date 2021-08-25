@@ -268,13 +268,13 @@ comment = "the Node ID of the cube"
 update-mode = "dynamic"
 
 [[parameter]]
-name = "cubeDir"
+name = "cubeDirPrefix"
 scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
 values = ["./cube"]
-comment = "the root direction of the cube"
+comment = "the root direction prefix of the cube. The actual dir is cubeDirPrefix + nodeID"
 update-mode = "dynamic"
 
 [[parameter]]
