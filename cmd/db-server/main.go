@@ -12,7 +12,6 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
-	stdLog "log"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
 	"matrixone/pkg/logger"
@@ -25,6 +24,7 @@ import (
 	dconfig "matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
+	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -131,8 +131,6 @@ func main() {
 	pci = frontend.NewPDCallbackImpl(ppu)
 	pci.Id = int(NodeId)
 
-	stdLog.Printf("clean target dir")
-
 	targetDir := config.GlobalSystemVariables.GetCubeDirPrefix() + strNodeId
 	if err := recreateDir(targetDir); err != nil {
 		panic(err)
@@ -146,7 +144,12 @@ func main() {
 	})
 	var aoeDataStorage *daoe.Storage
 
-	aoeDataStorage, err = daoe.NewStorage(targetDir + "/aoe")
+	opt := engine.Options{}
+	_, err = toml.DecodeFile(os.Args[1], &opt)
+	if err != nil {
+		panic(err)
+	}
+	aoeDataStorage, err = daoe.NewStorageWithOptions(targetDir + "/aoe", &opt)
 
 	cfg := dconfig.Config{}
 	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)

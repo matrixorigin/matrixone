@@ -1,10 +1,10 @@
 package frontend
 
 import (
+	"errors"
 	"fmt"
 	"github.com/fagongzi/goetty"
 	"github.com/fagongzi/goetty/codec/simple"
-	"matrixone/pkg/config"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -214,61 +214,34 @@ func setServer(val int32) {
 	atomic.StoreInt32(&svrRun, val)
 }
 
-func echoHandler(session goetty.IOSession) {
-	fmt.Println("Server handling")
-	for {
-		data, err := session.Read()
-		if err != nil {
-			fmt.Println("read packet failed")
-			break
-		}
-
-		value, ok := data.(uint16)
-		if !ok {
-			fmt.Println("convert to uint16 failed.")
-			break
-		}
-
-		fmt.Printf("server read %d\n", value)
-
-		err = session.WriteAndFlush(value)
-		if err != nil {
-			fmt.Printf("write uint16 failed\n")
-			return
-		}
-
-		fmt.Printf("server send %d\n", value)
-		if value == 0 { //0 -- quit
-			break
-		}
+func echoHandler(session goetty.IOSession, msg interface{}, received uint64) error {
+	value, ok := msg.(string)
+	if !ok {
+		return errors.New("convert to string failed")
 	}
-	err := session.Close()
+
+	err := session.WriteAndFlush(value)
 	if err != nil {
-		return 
+		return err
 	}
+	return nil
 }
 
-func echoServer(handler func (conn goetty.IOSession)) {
-	server := NewMOServer("localhost:6001", nil, nil)
-	err := server.Start()
+func echoServer(handler func(goetty.IOSession, interface{}, uint64) error) {
+	encoder, decoder := simple.NewStringCodec()
+	echoServer, err := goetty.NewTCPApplication("localhost:6001", handler,
+		goetty.WithAppSessionOptions(goetty.WithCodec(encoder, decoder)))
 	if err != nil {
-		return
+		panic(err)
+	}
+	err = echoServer.Start()
+	if err != nil {
+		panic(err)
 	}
 	setServer(0)
-	err = config.GlobalSystemVariables.LoadInitialValues()
-	if err != nil {
-		return 
-	}
-	err = config.LoadvarsConfigFromFile("../config/system_vars_config.toml", &config.GlobalSystemVariables)
-	if err != nil {
-		return 
-	}
 
 	fmt.Println("Server started")
-	for !isClosed() {
-		session, _ := server.app.GetSession(0)
-		handler(session)
-	}
+	for !isClosed() {}
 	fmt.Println("Server exited")
 }
 
@@ -282,26 +255,28 @@ func echoClient() {
 		return
 	}
 
-	for i := 10; i >= 0; i-- {
-		err := io.WriteAndFlush(uint16(i))
+	alphabet := [10]string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}
+
+	for i := 0; i < 10; i++ {
+		err := io.WriteAndFlush(alphabet[i])
 		if err != nil {
-			fmt.Println("client write packet failed.", err.Error())
+			fmt.Println("client writes packet failed.", err.Error())
 			break
 		}
-		fmt.Printf("client write %d \n", i)
+		fmt.Printf("client writes %s.\n", alphabet[i])
 		data, err := io.Read()
 		if err != nil {
-			fmt.Println("client read packet failed.", err.Error())
+			fmt.Println("client reads packet failed.", err.Error())
 			break
 		}
-		value, ok := data.(uint16)
+		value, ok := data.(string)
 		if !ok {
-			fmt.Println("convert to uint16 failed.")
+			fmt.Println("convert to string failed.")
 			break
 		}
-		fmt.Printf("client read %d \n", value)
-		if value != uint16(i) {
-			fmt.Printf("echo failed. send %d but reponse %d\n", i, value)
+		fmt.Printf("client reads %s.\n", value)
+		if value != alphabet[i] {
+			fmt.Printf("echo failed. send %s but reponse %s\n", alphabet[i], value)
 			break
 		}
 	}
