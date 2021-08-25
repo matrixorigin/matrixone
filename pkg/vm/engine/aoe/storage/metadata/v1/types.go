@@ -150,8 +150,8 @@ type Table struct {
 
 type Configuration struct {
 	Dir              string
-	BlockMaxRows     uint64
-	SegmentMaxBlocks uint64
+	BlockMaxRows     uint64	`toml:"block-max-rows"`
+	SegmentMaxBlocks uint64	`toml:"segment-max-blocks"`
 }
 
 type MetaInfo struct {
