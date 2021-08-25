@@ -3,107 +3,193 @@ package gt
 import (
 	"bytes"
 	"matrixone/pkg/container/types"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 var (
-	int8Gt              func([]int8, []int8, []int64) []int64
-	int8GtSels          func([]int8, []int8, []int64, []int64) []int64
-	int8GtScalar        func(int8, []int8, []int64) []int64
-	int8GtScalarSels    func(int8, []int8, []int64, []int64) []int64
-	int16Gt             func([]int16, []int16, []int64) []int64
-	int16GtSels         func([]int16, []int16, []int64, []int64) []int64
-	int16GtScalar       func(int16, []int16, []int64) []int64
-	int16GtScalarSels   func(int16, []int16, []int64, []int64) []int64
-	int32Gt             func([]int32, []int32, []int64) []int64
-	int32GtSels         func([]int32, []int32, []int64, []int64) []int64
-	int32GtScalar       func(int32, []int32, []int64) []int64
-	int32GtScalarSels   func(int32, []int32, []int64, []int64) []int64
-	int64Gt             func([]int64, []int64, []int64) []int64
-	int64GtSels         func([]int64, []int64, []int64, []int64) []int64
-	int64GtScalar       func(int64, []int64, []int64) []int64
-	int64GtScalarSels   func(int64, []int64, []int64, []int64) []int64
-	uint8Gt             func([]uint8, []uint8, []int64) []int64
-	uint8GtSels         func([]uint8, []uint8, []int64, []int64) []int64
-	uint8GtScalar       func(uint8, []uint8, []int64) []int64
-	uint8GtScalarSels   func(uint8, []uint8, []int64, []int64) []int64
-	uint16Gt            func([]uint16, []uint16, []int64) []int64
-	uint16GtSels        func([]uint16, []uint16, []int64, []int64) []int64
-	uint16GtScalar      func(uint16, []uint16, []int64) []int64
-	uint16GtScalarSels  func(uint16, []uint16, []int64, []int64) []int64
-	uint32Gt            func([]uint32, []uint32, []int64) []int64
-	uint32GtSels        func([]uint32, []uint32, []int64, []int64) []int64
-	uint32GtScalar      func(uint32, []uint32, []int64) []int64
-	uint32GtScalarSels  func(uint32, []uint32, []int64, []int64) []int64
-	uint64Gt            func([]uint64, []uint64, []int64) []int64
-	uint64GtSels        func([]uint64, []uint64, []int64, []int64) []int64
-	uint64GtScalar      func(uint64, []uint64, []int64) []int64
-	uint64GtScalarSels  func(uint64, []uint64, []int64, []int64) []int64
-	float32Gt           func([]float32, []float32, []int64) []int64
-	float32GtSels       func([]float32, []float32, []int64, []int64) []int64
-	float32GtScalar     func(float32, []float32, []int64) []int64
-	float32GtScalarSels func(float32, []float32, []int64, []int64) []int64
-	float64Gt           func([]float64, []float64, []int64) []int64
-	float64GtSels       func([]float64, []float64, []int64, []int64) []int64
-	float64GtScalar     func(float64, []float64, []int64) []int64
-	float64GtScalarSels func(float64, []float64, []int64, []int64) []int64
-	strGt               func(*types.Bytes, *types.Bytes, []int64) []int64
-	strGtSels           func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
-	strGtScalar         func([]byte, *types.Bytes, []int64) []int64
-	strGtScalarSels     func([]byte, *types.Bytes, []int64, []int64) []int64
+	Int8Gt                      func([]int8, []int8, []int64) []int64
+	Int8GtNullable              func([]int8, []int8, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Int8GtSels                  func([]int8, []int8, []int64, []int64) []int64
+	Int8GtNullableSels          func([]int8, []int8, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Int8GtScalar                func(int8, []int8, []int64) []int64
+	Int8GtNullableScalar        func(int8, []int8, *roaring.Bitmap, []int64) []int64
+	Int8GtScalarSels            func(int8, []int8, []int64, []int64) []int64
+	Int8GtNullableScalarSels    func(int8, []int8, *roaring.Bitmap, []int64, []int64) []int64
+	Int16Gt                     func([]int16, []int16, []int64) []int64
+	Int16GtNullable             func([]int16, []int16, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Int16GtSels                 func([]int16, []int16, []int64, []int64) []int64
+	Int16GtNullableSels         func([]int16, []int16, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Int16GtScalar               func(int16, []int16, []int64) []int64
+	Int16GtNullableScalar       func(int16, []int16, *roaring.Bitmap, []int64) []int64
+	Int16GtScalarSels           func(int16, []int16, []int64, []int64) []int64
+	Int16GtNullableScalarSels   func(int16, []int16, *roaring.Bitmap, []int64, []int64) []int64
+	Int32Gt                     func([]int32, []int32, []int64) []int64
+	Int32GtNullable             func([]int32, []int32, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Int32GtSels                 func([]int32, []int32, []int64, []int64) []int64
+	Int32GtNullableSels         func([]int32, []int32, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Int32GtScalar               func(int32, []int32, []int64) []int64
+	Int32GtNullableScalar       func(int32, []int32, *roaring.Bitmap, []int64) []int64
+	Int32GtScalarSels           func(int32, []int32, []int64, []int64) []int64
+	Int32GtNullableScalarSels   func(int32, []int32, *roaring.Bitmap, []int64, []int64) []int64
+	Int64Gt                     func([]int64, []int64, []int64) []int64
+	Int64GtNullable             func([]int64, []int64, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Int64GtSels                 func([]int64, []int64, []int64, []int64) []int64
+	Int64GtNullableSels         func([]int64, []int64, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Int64GtScalar               func(int64, []int64, []int64) []int64
+	Int64GtNullableScalar       func(int64, []int64, *roaring.Bitmap, []int64) []int64
+	Int64GtScalarSels           func(int64, []int64, []int64, []int64) []int64
+	Int64GtNullableScalarSels   func(int64, []int64, *roaring.Bitmap, []int64, []int64) []int64
+	Uint8Gt                     func([]uint8, []uint8, []int64) []int64
+	Uint8GtNullable             func([]uint8, []uint8, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Uint8GtSels                 func([]uint8, []uint8, []int64, []int64) []int64
+	Uint8GtNullableSels         func([]uint8, []uint8, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Uint8GtScalar               func(uint8, []uint8, []int64) []int64
+	Uint8GtNullableScalar       func(uint8, []uint8, *roaring.Bitmap, []int64) []int64
+	Uint8GtScalarSels           func(uint8, []uint8, []int64, []int64) []int64
+	Uint8GtNullableScalarSels   func(uint8, []uint8, *roaring.Bitmap, []int64, []int64) []int64
+	Uint16Gt                    func([]uint16, []uint16, []int64) []int64
+	Uint16GtNullable            func([]uint16, []uint16, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Uint16GtSels                func([]uint16, []uint16, []int64, []int64) []int64
+	Uint16GtNullableSels        func([]uint16, []uint16, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Uint16GtScalar              func(uint16, []uint16, []int64) []int64
+	Uint16GtNullableScalar      func(uint16, []uint16, *roaring.Bitmap, []int64) []int64
+	Uint16GtScalarSels          func(uint16, []uint16, []int64, []int64) []int64
+	Uint16GtNullableScalarSels  func(uint16, []uint16, *roaring.Bitmap, []int64, []int64) []int64
+	Uint32Gt                    func([]uint32, []uint32, []int64) []int64
+	Uint32GtNullable            func([]uint32, []uint32, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Uint32GtSels                func([]uint32, []uint32, []int64, []int64) []int64
+	Uint32GtNullableSels        func([]uint32, []uint32, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Uint32GtScalar              func(uint32, []uint32, []int64) []int64
+	Uint32GtNullableScalar      func(uint32, []uint32, *roaring.Bitmap, []int64) []int64
+	Uint32GtScalarSels          func(uint32, []uint32, []int64, []int64) []int64
+	Uint32GtNullableScalarSels  func(uint32, []uint32, *roaring.Bitmap, []int64, []int64) []int64
+	Uint64Gt                    func([]uint64, []uint64, []int64) []int64
+	Uint64GtNullable            func([]uint64, []uint64, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Uint64GtSels                func([]uint64, []uint64, []int64, []int64) []int64
+	Uint64GtNullableSels        func([]uint64, []uint64, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Uint64GtScalar              func(uint64, []uint64, []int64) []int64
+	Uint64GtNullableScalar      func(uint64, []uint64, *roaring.Bitmap, []int64) []int64
+	Uint64GtScalarSels          func(uint64, []uint64, []int64, []int64) []int64
+	Uint64GtNullableScalarSels  func(uint64, []uint64, *roaring.Bitmap, []int64, []int64) []int64
+	Float32Gt                   func([]float32, []float32, []int64) []int64
+	Float32GtNullable           func([]float32, []float32, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Float32GtSels               func([]float32, []float32, []int64, []int64) []int64
+	Float32GtNullableSels       func([]float32, []float32, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Float32GtScalar             func(float32, []float32, []int64) []int64
+	Float32GtNullableScalar     func(float32, []float32, *roaring.Bitmap, []int64) []int64
+	Float32GtScalarSels         func(float32, []float32, []int64, []int64) []int64
+	Float32GtNullableScalarSels func(float32, []float32, *roaring.Bitmap, []int64, []int64) []int64
+	Float64Gt                   func([]float64, []float64, []int64) []int64
+	Float64GtNullable           func([]float64, []float64, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Float64GtSels               func([]float64, []float64, []int64, []int64) []int64
+	Float64GtNullableSels       func([]float64, []float64, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Float64GtScalar             func(float64, []float64, []int64) []int64
+	Float64GtNullableScalar     func(float64, []float64, *roaring.Bitmap, []int64) []int64
+	Float64GtScalarSels         func(float64, []float64, []int64, []int64) []int64
+	Float64GtNullableScalarSels func(float64, []float64, *roaring.Bitmap, []int64, []int64) []int64
+	StrGt                       func(*types.Bytes, *types.Bytes, []int64) []int64
+	StrGtNullable               func(*types.Bytes, *types.Bytes, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	StrGtSels                   func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
+	StrGtNullableSels           func(*types.Bytes, *types.Bytes, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	StrGtScalar                 func([]byte, *types.Bytes, []int64) []int64
+	StrGtNullableScalar         func([]byte, *types.Bytes, *roaring.Bitmap, []int64) []int64
+	StrGtScalarSels             func([]byte, *types.Bytes, []int64, []int64) []int64
+	StrGtNullableScalarSels     func([]byte, *types.Bytes, *roaring.Bitmap, []int64, []int64) []int64
 )
 
 func init() {
-	int8Gt = int8GtPure
-	int8GtSels = int8GtSelsPure
-	int8GtScalar = int8GtScalarPure
-	int8GtScalarSels = int8GtScalarSelsPure
-	int16Gt = int16GtPure
-	int16GtSels = int16GtSelsPure
-	int16GtScalar = int16GtScalarPure
-	int16GtScalarSels = int16GtScalarSelsPure
-	int32Gt = int32GtPure
-	int32GtSels = int32GtSelsPure
-	int32GtScalar = int32GtScalarPure
-	int32GtScalarSels = int32GtScalarSelsPure
-	int64Gt = int64GtPure
-	int64GtSels = int64GtSelsPure
-	int64GtScalar = int64GtScalarPure
-	int64GtScalarSels = int64GtScalarSelsPure
-	uint8Gt = uint8GtPure
-	uint8GtSels = uint8GtSelsPure
-	uint8GtScalar = uint8GtScalarPure
-	uint8GtScalarSels = uint8GtScalarSelsPure
-	uint16Gt = uint16GtPure
-	uint16GtSels = uint16GtSelsPure
-	uint16GtScalar = uint16GtScalarPure
-	uint16GtScalarSels = uint16GtScalarSelsPure
-	uint32Gt = uint32GtPure
-	uint32GtSels = uint32GtSelsPure
-	uint32GtScalar = uint32GtScalarPure
-	uint32GtScalarSels = uint32GtScalarSelsPure
-	uint64Gt = uint64GtPure
-	uint64GtSels = uint64GtSelsPure
-	uint64GtScalar = uint64GtScalarPure
-	uint64GtScalarSels = uint64GtScalarSelsPure
-	float32Gt = float32GtPure
-	float32GtSels = float32GtSelsPure
-	float32GtScalar = float32GtScalarPure
-	float32GtScalarSels = float32GtScalarSelsPure
-	float64Gt = float64GtPure
-	float64GtSels = float64GtSelsPure
-	float64GtScalar = float64GtScalarPure
-	float64GtScalarSels = float64GtScalarSelsPure
-	strGt = strGtPure
-	strGtSels = strGtSelsPure
-	strGtScalar = strGtScalarPure
-	strGtScalarSels = strGtScalarSelsPure
+	Int8Gt = int8Gt
+	Int8GtNullable = int8GtNullable
+	Int8GtSels = int8GtSels
+	Int8GtNullableSels = int8GtNullableSels
+	Int8GtScalar = int8GtScalar
+	Int8GtNullableScalar = int8GtNullableScalar
+	Int8GtScalarSels = int8GtScalarSels
+	Int8GtNullableScalarSels = int8GtNullableScalarSels
+	Int16Gt = int16Gt
+	Int16GtNullable = int16GtNullable
+	Int16GtSels = int16GtSels
+	Int16GtNullableSels = int16GtNullableSels
+	Int16GtScalar = int16GtScalar
+	Int16GtNullableScalar = int16GtNullableScalar
+	Int16GtScalarSels = int16GtScalarSels
+	Int16GtNullableScalarSels = int16GtNullableScalarSels
+	Int32Gt = int32Gt
+	Int32GtNullable = int32GtNullable
+	Int32GtSels = int32GtSels
+	Int32GtNullableSels = int32GtNullableSels
+	Int32GtScalar = int32GtScalar
+	Int32GtNullableScalar = int32GtNullableScalar
+	Int32GtScalarSels = int32GtScalarSels
+	Int32GtNullableScalarSels = int32GtNullableScalarSels
+	Int64Gt = int64Gt
+	Int64GtNullable = int64GtNullable
+	Int64GtSels = int64GtSels
+	Int64GtNullableSels = int64GtNullableSels
+	Int64GtScalar = int64GtScalar
+	Int64GtNullableScalar = int64GtNullableScalar
+	Int64GtScalarSels = int64GtScalarSels
+	Int64GtNullableScalarSels = int64GtNullableScalarSels
+	Uint8Gt = uint8Gt
+	Uint8GtNullable = uint8GtNullable
+	Uint8GtSels = uint8GtSels
+	Uint8GtNullableSels = uint8GtNullableSels
+	Uint8GtScalar = uint8GtScalar
+	Uint8GtNullableScalar = uint8GtNullableScalar
+	Uint8GtScalarSels = uint8GtScalarSels
+	Uint8GtNullableScalarSels = uint8GtNullableScalarSels
+	Uint16Gt = uint16Gt
+	Uint16GtNullable = uint16GtNullable
+	Uint16GtSels = uint16GtSels
+	Uint16GtNullableSels = uint16GtNullableSels
+	Uint16GtScalar = uint16GtScalar
+	Uint16GtNullableScalar = uint16GtNullableScalar
+	Uint16GtScalarSels = uint16GtScalarSels
+	Uint16GtNullableScalarSels = uint16GtNullableScalarSels
+	Uint32Gt = uint32Gt
+	Uint32GtNullable = uint32GtNullable
+	Uint32GtSels = uint32GtSels
+	Uint32GtNullableSels = uint32GtNullableSels
+	Uint32GtScalar = uint32GtScalar
+	Uint32GtNullableScalar = uint32GtNullableScalar
+	Uint32GtScalarSels = uint32GtScalarSels
+	Uint32GtNullableScalarSels = uint32GtNullableScalarSels
+	Uint64Gt = uint64Gt
+	Uint64GtNullable = uint64GtNullable
+	Uint64GtSels = uint64GtSels
+	Uint64GtNullableSels = uint64GtNullableSels
+	Uint64GtScalar = uint64GtScalar
+	Uint64GtNullableScalar = uint64GtNullableScalar
+	Uint64GtScalarSels = uint64GtScalarSels
+	Uint64GtNullableScalarSels = uint64GtNullableScalarSels
+	Float32Gt = float32Gt
+	Float32GtNullable = float32GtNullable
+	Float32GtSels = float32GtSels
+	Float32GtNullableSels = float32GtNullableSels
+	Float32GtScalar = float32GtScalar
+	Float32GtNullableScalar = float32GtNullableScalar
+	Float32GtScalarSels = float32GtScalarSels
+	Float32GtNullableScalarSels = float32GtNullableScalarSels
+	Float64Gt = float64Gt
+	Float64GtNullable = float64GtNullable
+	Float64GtSels = float64GtSels
+	Float64GtNullableSels = float64GtNullableSels
+	Float64GtScalar = float64GtScalar
+	Float64GtNullableScalar = float64GtNullableScalar
+	Float64GtScalarSels = float64GtScalarSels
+	Float64GtNullableScalarSels = float64GtNullableScalarSels
+	StrGt = strGt
+	StrGtNullable = strGtNullable
+	StrGtSels = strGtSels
+	StrGtNullableSels = strGtNullableSels
+	StrGtScalar = strGtScalar
+	StrGtNullableScalar = strGtNullableScalar
+	StrGtScalarSels = strGtScalarSels
+	StrGtNullableScalarSels = strGtNullableScalarSels
 }
 
-func Int8Gt(xs, ys []int8, rs []int64) []int64 {
-	return int8Gt(xs, ys, rs)
-}
-
-func int8GtPure(xs, ys []int8, rs []int64) []int64 {
+func int8Gt(xs, ys []int8, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -114,11 +200,34 @@ func int8GtPure(xs, ys []int8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int8GtSels(xs, ys []int8, rs, sels []int64) []int64 {
-	return int8GtSels(xs, ys, rs, sels)
+func int8GtNullable(xs, ys []int8, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int8GtSelsPure(xs, ys []int8, rs, sels []int64) []int64 {
+func int8GtSels(xs, ys []int8, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -129,11 +238,34 @@ func int8GtSelsPure(xs, ys []int8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int8GtScalar(x int8, ys []int8, rs []int64) []int64 {
-	return int8GtScalar(x, ys, rs)
+func int8GtNullableSels(xs, ys []int8, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int8GtScalarPure(x int8, ys []int8, rs []int64) []int64 {
+func int8GtScalar(x int8, ys []int8, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -144,11 +276,33 @@ func int8GtScalarPure(x int8, ys []int8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int8GtScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
-	return int8GtScalarSels(x, ys, rs, sels)
+func int8GtNullableScalar(x int8, ys []int8, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int8GtScalarSelsPure(x int8, ys []int8, rs, sels []int64) []int64 {
+func int8GtScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -159,11 +313,33 @@ func int8GtScalarSelsPure(x int8, ys []int8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int16Gt(xs, ys []int16, rs []int64) []int64 {
-	return int16Gt(xs, ys, rs)
+func int8GtNullableScalarSels(x int8, ys []int8, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int16GtPure(xs, ys []int16, rs []int64) []int64 {
+func int16Gt(xs, ys []int16, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -174,11 +350,34 @@ func int16GtPure(xs, ys []int16, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int16GtSels(xs, ys []int16, rs, sels []int64) []int64 {
-	return int16GtSels(xs, ys, rs, sels)
+func int16GtNullable(xs, ys []int16, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int16GtSelsPure(xs, ys []int16, rs, sels []int64) []int64 {
+func int16GtSels(xs, ys []int16, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -189,11 +388,34 @@ func int16GtSelsPure(xs, ys []int16, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int16GtScalar(x int16, ys []int16, rs []int64) []int64 {
-	return int16GtScalar(x, ys, rs)
+func int16GtNullableSels(xs, ys []int16, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int16GtScalarPure(x int16, ys []int16, rs []int64) []int64 {
+func int16GtScalar(x int16, ys []int16, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -204,11 +426,33 @@ func int16GtScalarPure(x int16, ys []int16, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int16GtScalarSels(x int16, ys []int16, rs, sels []int64) []int64 {
-	return int16GtScalarSels(x, ys, rs, sels)
+func int16GtNullableScalar(x int16, ys []int16, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int16GtScalarSelsPure(x int16, ys []int16, rs, sels []int64) []int64 {
+func int16GtScalarSels(x int16, ys []int16, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -219,11 +463,33 @@ func int16GtScalarSelsPure(x int16, ys []int16, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int32Gt(xs, ys []int32, rs []int64) []int64 {
-	return int32Gt(xs, ys, rs)
+func int16GtNullableScalarSels(x int16, ys []int16, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int32GtPure(xs, ys []int32, rs []int64) []int64 {
+func int32Gt(xs, ys []int32, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -234,11 +500,34 @@ func int32GtPure(xs, ys []int32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int32GtSels(xs, ys []int32, rs, sels []int64) []int64 {
-	return int32GtSels(xs, ys, rs, sels)
+func int32GtNullable(xs, ys []int32, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int32GtSelsPure(xs, ys []int32, rs, sels []int64) []int64 {
+func int32GtSels(xs, ys []int32, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -249,11 +538,34 @@ func int32GtSelsPure(xs, ys []int32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int32GtScalar(x int32, ys []int32, rs []int64) []int64 {
-	return int32GtScalar(x, ys, rs)
+func int32GtNullableSels(xs, ys []int32, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int32GtScalarPure(x int32, ys []int32, rs []int64) []int64 {
+func int32GtScalar(x int32, ys []int32, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -264,11 +576,33 @@ func int32GtScalarPure(x int32, ys []int32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int32GtScalarSels(x int32, ys []int32, rs, sels []int64) []int64 {
-	return int32GtScalarSels(x, ys, rs, sels)
+func int32GtNullableScalar(x int32, ys []int32, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int32GtScalarSelsPure(x int32, ys []int32, rs, sels []int64) []int64 {
+func int32GtScalarSels(x int32, ys []int32, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -279,11 +613,33 @@ func int32GtScalarSelsPure(x int32, ys []int32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int64Gt(xs, ys []int64, rs []int64) []int64 {
-	return int64Gt(xs, ys, rs)
+func int32GtNullableScalarSels(x int32, ys []int32, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int64GtPure(xs, ys []int64, rs []int64) []int64 {
+func int64Gt(xs, ys []int64, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -294,11 +650,34 @@ func int64GtPure(xs, ys []int64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int64GtSels(xs, ys []int64, rs, sels []int64) []int64 {
-	return int64GtSels(xs, ys, rs, sels)
+func int64GtNullable(xs, ys []int64, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int64GtSelsPure(xs, ys []int64, rs, sels []int64) []int64 {
+func int64GtSels(xs, ys []int64, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -309,11 +688,34 @@ func int64GtSelsPure(xs, ys []int64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int64GtScalar(x int64, ys []int64, rs []int64) []int64 {
-	return int64GtScalar(x, ys, rs)
+func int64GtNullableSels(xs, ys []int64, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int64GtScalarPure(x int64, ys []int64, rs []int64) []int64 {
+func int64GtScalar(x int64, ys []int64, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -324,11 +726,33 @@ func int64GtScalarPure(x int64, ys []int64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Int64GtScalarSels(x int64, ys []int64, rs, sels []int64) []int64 {
-	return int64GtScalarSels(x, ys, rs, sels)
+func int64GtNullableScalar(x int64, ys []int64, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func int64GtScalarSelsPure(x int64, ys []int64, rs, sels []int64) []int64 {
+func int64GtScalarSels(x int64, ys []int64, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -339,11 +763,33 @@ func int64GtScalarSelsPure(x int64, ys []int64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint8Gt(xs, ys []uint8, rs []int64) []int64 {
-	return uint8Gt(xs, ys, rs)
+func int64GtNullableScalarSels(x int64, ys []int64, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint8GtPure(xs, ys []uint8, rs []int64) []int64 {
+func uint8Gt(xs, ys []uint8, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -354,11 +800,34 @@ func uint8GtPure(xs, ys []uint8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint8GtSels(xs, ys []uint8, rs, sels []int64) []int64 {
-	return uint8GtSels(xs, ys, rs, sels)
+func uint8GtNullable(xs, ys []uint8, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint8GtSelsPure(xs, ys []uint8, rs, sels []int64) []int64 {
+func uint8GtSels(xs, ys []uint8, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -369,11 +838,34 @@ func uint8GtSelsPure(xs, ys []uint8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint8GtScalar(x uint8, ys []uint8, rs []int64) []int64 {
-	return uint8GtScalar(x, ys, rs)
+func uint8GtNullableSels(xs, ys []uint8, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint8GtScalarPure(x uint8, ys []uint8, rs []int64) []int64 {
+func uint8GtScalar(x uint8, ys []uint8, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -384,11 +876,33 @@ func uint8GtScalarPure(x uint8, ys []uint8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint8GtScalarSels(x uint8, ys []uint8, rs, sels []int64) []int64 {
-	return uint8GtScalarSels(x, ys, rs, sels)
+func uint8GtNullableScalar(x uint8, ys []uint8, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint8GtScalarSelsPure(x uint8, ys []uint8, rs, sels []int64) []int64 {
+func uint8GtScalarSels(x uint8, ys []uint8, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -399,11 +913,33 @@ func uint8GtScalarSelsPure(x uint8, ys []uint8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint16Gt(xs, ys []uint16, rs []int64) []int64 {
-	return uint16Gt(xs, ys, rs)
+func uint8GtNullableScalarSels(x uint8, ys []uint8, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint16GtPure(xs, ys []uint16, rs []int64) []int64 {
+func uint16Gt(xs, ys []uint16, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -414,11 +950,34 @@ func uint16GtPure(xs, ys []uint16, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint16GtSels(xs, ys []uint16, rs, sels []int64) []int64 {
-	return uint16GtSels(xs, ys, rs, sels)
+func uint16GtNullable(xs, ys []uint16, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint16GtSelsPure(xs, ys []uint16, rs, sels []int64) []int64 {
+func uint16GtSels(xs, ys []uint16, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -429,11 +988,34 @@ func uint16GtSelsPure(xs, ys []uint16, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint16GtScalar(x uint16, ys []uint16, rs []int64) []int64 {
-	return uint16GtScalar(x, ys, rs)
+func uint16GtNullableSels(xs, ys []uint16, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint16GtScalarPure(x uint16, ys []uint16, rs []int64) []int64 {
+func uint16GtScalar(x uint16, ys []uint16, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -444,11 +1026,33 @@ func uint16GtScalarPure(x uint16, ys []uint16, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint16GtScalarSels(x uint16, ys []uint16, rs, sels []int64) []int64 {
-	return uint16GtScalarSels(x, ys, rs, sels)
+func uint16GtNullableScalar(x uint16, ys []uint16, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint16GtScalarSelsPure(x uint16, ys []uint16, rs, sels []int64) []int64 {
+func uint16GtScalarSels(x uint16, ys []uint16, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -459,11 +1063,33 @@ func uint16GtScalarSelsPure(x uint16, ys []uint16, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint32Gt(xs, ys []uint32, rs []int64) []int64 {
-	return uint32Gt(xs, ys, rs)
+func uint16GtNullableScalarSels(x uint16, ys []uint16, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint32GtPure(xs, ys []uint32, rs []int64) []int64 {
+func uint32Gt(xs, ys []uint32, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -474,11 +1100,34 @@ func uint32GtPure(xs, ys []uint32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint32GtSels(xs, ys []uint32, rs, sels []int64) []int64 {
-	return uint32GtSels(xs, ys, rs, sels)
+func uint32GtNullable(xs, ys []uint32, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint32GtSelsPure(xs, ys []uint32, rs, sels []int64) []int64 {
+func uint32GtSels(xs, ys []uint32, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -489,11 +1138,34 @@ func uint32GtSelsPure(xs, ys []uint32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint32GtScalar(x uint32, ys []uint32, rs []int64) []int64 {
-	return uint32GtScalar(x, ys, rs)
+func uint32GtNullableSels(xs, ys []uint32, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint32GtScalarPure(x uint32, ys []uint32, rs []int64) []int64 {
+func uint32GtScalar(x uint32, ys []uint32, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -504,11 +1176,33 @@ func uint32GtScalarPure(x uint32, ys []uint32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint32GtScalarSels(x uint32, ys []uint32, rs, sels []int64) []int64 {
-	return uint32GtScalarSels(x, ys, rs, sels)
+func uint32GtNullableScalar(x uint32, ys []uint32, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint32GtScalarSelsPure(x uint32, ys []uint32, rs, sels []int64) []int64 {
+func uint32GtScalarSels(x uint32, ys []uint32, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -519,11 +1213,33 @@ func uint32GtScalarSelsPure(x uint32, ys []uint32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint64Gt(xs, ys []uint64, rs []int64) []int64 {
-	return uint64Gt(xs, ys, rs)
+func uint32GtNullableScalarSels(x uint32, ys []uint32, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint64GtPure(xs, ys []uint64, rs []int64) []int64 {
+func uint64Gt(xs, ys []uint64, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -534,11 +1250,34 @@ func uint64GtPure(xs, ys []uint64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint64GtSels(xs, ys []uint64, rs, sels []int64) []int64 {
-	return uint64GtSels(xs, ys, rs, sels)
+func uint64GtNullable(xs, ys []uint64, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint64GtSelsPure(xs, ys []uint64, rs, sels []int64) []int64 {
+func uint64GtSels(xs, ys []uint64, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -549,11 +1288,34 @@ func uint64GtSelsPure(xs, ys []uint64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint64GtScalar(x uint64, ys []uint64, rs []int64) []int64 {
-	return uint64GtScalar(x, ys, rs)
+func uint64GtNullableSels(xs, ys []uint64, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint64GtScalarPure(x uint64, ys []uint64, rs []int64) []int64 {
+func uint64GtScalar(x uint64, ys []uint64, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -564,11 +1326,33 @@ func uint64GtScalarPure(x uint64, ys []uint64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Uint64GtScalarSels(x uint64, ys []uint64, rs, sels []int64) []int64 {
-	return uint64GtScalarSels(x, ys, rs, sels)
+func uint64GtNullableScalar(x uint64, ys []uint64, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func uint64GtScalarSelsPure(x uint64, ys []uint64, rs, sels []int64) []int64 {
+func uint64GtScalarSels(x uint64, ys []uint64, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -579,11 +1363,33 @@ func uint64GtScalarSelsPure(x uint64, ys []uint64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Float32Gt(xs, ys []float32, rs []int64) []int64 {
-	return float32Gt(xs, ys, rs)
+func uint64GtNullableScalarSels(x uint64, ys []uint64, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func float32GtPure(xs, ys []float32, rs []int64) []int64 {
+func float32Gt(xs, ys []float32, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -594,11 +1400,34 @@ func float32GtPure(xs, ys []float32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Float32GtSels(xs, ys []float32, rs, sels []int64) []int64 {
-	return float32GtSels(xs, ys, rs, sels)
+func float32GtNullable(xs, ys []float32, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func float32GtSelsPure(xs, ys []float32, rs, sels []int64) []int64 {
+func float32GtSels(xs, ys []float32, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -609,11 +1438,34 @@ func float32GtSelsPure(xs, ys []float32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Float32GtScalar(x float32, ys []float32, rs []int64) []int64 {
-	return float32GtScalar(x, ys, rs)
+func float32GtNullableSels(xs, ys []float32, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func float32GtScalarPure(x float32, ys []float32, rs []int64) []int64 {
+func float32GtScalar(x float32, ys []float32, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -624,11 +1476,33 @@ func float32GtScalarPure(x float32, ys []float32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Float32GtScalarSels(x float32, ys []float32, rs, sels []int64) []int64 {
-	return float32GtScalarSels(x, ys, rs, sels)
+func float32GtNullableScalar(x float32, ys []float32, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func float32GtScalarSelsPure(x float32, ys []float32, rs, sels []int64) []int64 {
+func float32GtScalarSels(x float32, ys []float32, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -639,11 +1513,33 @@ func float32GtScalarSelsPure(x float32, ys []float32, rs, sels []int64) []int64 
 	return rs[:rsi]
 }
 
-func Float64Gt(xs, ys []float64, rs []int64) []int64 {
-	return float64Gt(xs, ys, rs)
+func float32GtNullableScalarSels(x float32, ys []float32, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func float64GtPure(xs, ys []float64, rs []int64) []int64 {
+func float64Gt(xs, ys []float64, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x > ys[i] {
@@ -654,11 +1550,34 @@ func float64GtPure(xs, ys []float64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Float64GtSels(xs, ys []float64, rs, sels []int64) []int64 {
-	return float64GtSels(xs, ys, rs, sels)
+func float64GtNullable(xs, ys []float64, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, x := range xs {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[i] {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func float64GtSelsPure(xs, ys []float64, rs, sels []int64) []int64 {
+func float64GtSels(xs, ys []float64, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] > ys[sel] {
@@ -669,11 +1588,34 @@ func float64GtSelsPure(xs, ys []float64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Float64GtScalar(x float64, ys []float64, rs []int64) []int64 {
-	return float64GtScalar(x, ys, rs)
+func float64GtNullableSels(xs, ys []float64, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if xs[sel] > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func float64GtScalarPure(x float64, ys []float64, rs []int64) []int64 {
+func float64GtScalar(x float64, ys []float64, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x > y {
@@ -684,11 +1626,33 @@ func float64GtScalarPure(x float64, ys []float64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func Float64GtScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
-	return float64GtScalarSels(x, ys, rs, sels)
+func float64GtNullableScalar(x float64, ys []float64, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, y := range ys {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > y {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func float64GtScalarSelsPure(x float64, ys []float64, rs, sels []int64) []int64 {
+func float64GtScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x > ys[sel] {
@@ -699,11 +1663,33 @@ func float64GtScalarSelsPure(x float64, ys []float64, rs, sels []int64) []int64 
 	return rs[:rsi]
 }
 
-func StrGt(xs, ys *types.Bytes, rs []int64) []int64 {
-	return strGt(xs, ys, rs)
+func float64GtNullableScalarSels(x float64, ys []float64, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if x > ys[sel] {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func strGtPure(xs, ys *types.Bytes, rs []int64) []int64 {
+func strGt(xs, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(xs.Offsets); i < n; i++ {
 		if bytes.Compare(xs.Get(int64(i)), ys.Get(int64(i))) > 0 {
@@ -714,11 +1700,34 @@ func strGtPure(xs, ys *types.Bytes, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func StrGtSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
-	return strGtSels(xs, ys, rs, sels)
+func strGtNullable(xs, ys *types.Bytes, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, n := 0, len(xs.Offsets); i < n; i++ {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if bytes.Compare(xs.Get(int64(i)), ys.Get(int64(i))) > 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func strGtSelsPure(xs, ys *types.Bytes, rs, sels []int64) []int64 {
+func strGtSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if bytes.Compare(xs.Get(sel), ys.Get(sel)) > 0 {
@@ -729,11 +1738,34 @@ func strGtSelsPure(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func StrGtScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
-	return strGtScalar(x, ys, rs)
+func strGtNullableSels(xs, ys *types.Bytes, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nulls := roaring.Or(xnulls, ynulls)
+	nullsIter := nulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if bytes.Compare(xs.Get(sel), ys.Get(sel)) > 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func strGtScalarPure(x []byte, ys *types.Bytes, rs []int64) []int64 {
+func strGtScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(ys.Offsets); i < n; i++ {
 		if bytes.Compare(x, ys.Get(int64(i))) > 0 {
@@ -744,14 +1776,62 @@ func strGtScalarPure(x []byte, ys *types.Bytes, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func StrGtScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
-	return strGtScalarSels(x, ys, rs, sels)
+func strGtNullableScalar(x []byte, ys *types.Bytes, ynulls *roaring.Bitmap, rs []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, n := 0, len(ys.Offsets); i < n; i++ {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if bytes.Compare(x, ys.Get(int64(i))) > 0 {
+			rs[rsi] = int64(i)
+			rsi++
+		}
+	}
+	return rs[:rsi]
 }
 
-func strGtScalarSelsPure(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
+func strGtScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if bytes.Compare(x, ys.Get(sel)) > 0 {
+			rs[rsi] = sel
+			rsi++
+		}
+	}
+	return rs[:rsi]
+}
+
+func strGtNullableScalarSels(x []byte, ys *types.Bytes, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+	rsi := 0
+	nullsIter := ynulls.Iterator()
+	nextNull := int64(0)
+
+	if nullsIter.HasNext() {
+		nextNull = int64(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for _, sel := range sels {
+		if sel == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int64(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else if bytes.Compare(x, ys.Get(sel)) > 0 {
 			rs[rsi] = sel
 			rsi++
 		}
