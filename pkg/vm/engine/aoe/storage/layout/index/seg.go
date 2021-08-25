@@ -154,9 +154,13 @@ func (holder *SegmentHolder) Count(colIdx int, filter *roaring.Bitmap) (uint64, 
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
 			bm := roaring2.NewBitmap()
-			arr := filter.ToArray()
-			for _, v := range arr {
-				bm.Add(uint32(v))
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
 			}
 			count := index.Count(bm)
 			err := node.Close()
@@ -185,9 +189,13 @@ func (holder *SegmentHolder) NullCount(colIdx int, filter *roaring.Bitmap) (uint
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
 			bm := roaring2.NewBitmap()
-			arr := filter.ToArray()
-			for _, v := range arr {
-				bm.Add(uint32(v))
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
 			}
 			count := index.NullCount(bm)
 			err := node.Close()
@@ -216,9 +224,13 @@ func (holder *SegmentHolder) Min(colIdx int, filter *roaring.Bitmap) (interface{
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
 			bm := roaring2.NewBitmap()
-			arr := filter.ToArray()
-			for _, v := range arr {
-				bm.Add(uint32(v))
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
 			}
 			min, _ := index.Min(bm)
 			err := node.Close()
@@ -246,9 +258,13 @@ func (holder *SegmentHolder) Max(colIdx int, filter *roaring.Bitmap) (interface{
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
 			bm := roaring2.NewBitmap()
-			arr := filter.ToArray()
-			for _, v := range arr {
-				bm.Add(uint32(v))
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
 			}
 			max, _ := index.Max(bm)
 			err := node.Close()
@@ -276,9 +292,13 @@ func (holder *SegmentHolder) Sum(colIdx int, filter *roaring.Bitmap) (int64, uin
 		if node.DataNode.(Index).Type() == base.NumBsi {
 			index := node.DataNode.(*NumericBsiIndex)
 			bm := roaring2.NewBitmap()
-			arr := filter.ToArray()
-			for _, v := range arr {
-				bm.Add(uint32(v))
+			if filter != nil {
+				arr := filter.ToArray()
+				for _, v := range arr {
+					bm.Add(uint32(v))
+				}
+			} else {
+				bm = nil
 			}
 			sum, cnt := index.Sum(bm)
 			res := int64(0)

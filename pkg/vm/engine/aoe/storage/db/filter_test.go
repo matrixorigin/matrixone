@@ -441,5 +441,8 @@ func TestSummarizerInt32(t *testing.T) {
 	cnt, err = filter.Count("mock_0", mockBM)
 	assert.Nil(t, err)
 	assert.Equal(t, cnt, uint64(4))
+	cnt, err = filter.Count("mock_0", nil)
+	assert.Nil(t, err)
+	assert.Equal(t, cnt, uint64(40))
 }
 
