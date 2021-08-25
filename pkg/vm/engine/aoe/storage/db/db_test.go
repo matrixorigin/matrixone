@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sync/atomic"
+
 	// e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
@@ -593,4 +595,73 @@ func TestDropTable2(t *testing.T) {
 	err = <-doneCh
 	assert.Equal(t, expectErr, err)
 	inst.Close()
+}
+
+func TestE2E(t *testing.T) {
+	initDBTest()
+	inst := initDB()
+	tableInfo := md.MockTableInfo(2)
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
+	assert.Nil(t, err)
+	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
+	assert.Nil(t, err)
+	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
+	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
+	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+
+	insertCnt := uint64(10)
+
+	var wg sync.WaitGroup
+	{
+		for i := uint64(0); i < insertCnt; i++ {
+			wg.Add(1)
+			go func() {
+				inst.Append(dbi.AppendCtx{
+					TableName: tableInfo.Name,
+					Data:      baseCk,
+					OpIndex:   uint64(1),
+				})
+				wg.Done()
+			}()
+		}
+	}
+	wg.Wait()
+	time.Sleep(time.Duration(200) * time.Millisecond)
+	tblData, err := inst.Store.DataTables.WeakRefTable(tid)
+	assert.Nil(t, err)
+	t.Log(tblData.String())
+	t.Log(tblData.GetIndexHolder().String())
+
+	segs := tblData.SegmentIds()
+	for _, segId := range segs {
+		seg := tblData.WeakRefSegment(segId)
+		seg.GetIndexHolder().Init(seg.GetSegmentFile())
+		//t.Log(seg.GetIndexHolder().Inited)
+		segment := &Segment{
+			Data: seg,
+			Ids:  new(atomic.Value),
+		}
+		spf := segment.NewSparseFilter()
+		f := segment.NewFilter()
+		sumr := segment.NewSummarizer()
+		t.Log(spf.Eq("mock_0", int32(1)))
+		t.Log(f == nil)
+		t.Log(sumr.Count("mock_0", nil))
+		//t.Log(spf.Eq("mock_0", int32(1)))
+		//t.Log(f.Eq("mock_0", int32(-1)))
+		//t.Log(sumr.Count("mock_0", nil))
+		t.Log(inst.IndexBufMgr.String())
+	}
+
+	time.Sleep(200*time.Millisecond)
+	t.Log(inst.IndexBufMgr.String())
+
+	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name})
+	assert.Nil(t, err)
+	time.Sleep(50*time.Millisecond)
+
+	t.Log(inst.FsMgr.String())
+	t.Log(inst.MTBufMgr.String())
+	t.Log(inst.SSTBufMgr.String())
+	t.Log(inst.IndexBufMgr.String())
 }
