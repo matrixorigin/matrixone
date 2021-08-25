@@ -9,89 +9,89 @@ import (
 
 var (
 	Int8Ne                      func([]int8, []int8, []int64) []int64
-	Int8NeNullable              func([]int8, []int8, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Int8NeNullable              func([]int8, []int8, *roaring.Bitmap, []int64) []int64
 	Int8NeSels                  func([]int8, []int8, []int64, []int64) []int64
-	Int8NeNullableSels          func([]int8, []int8, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Int8NeNullableSels          func([]int8, []int8, *roaring.Bitmap, []int64, []int64) []int64
 	Int8NeScalar                func(int8, []int8, []int64) []int64
 	Int8NeNullableScalar        func(int8, []int8, *roaring.Bitmap, []int64) []int64
 	Int8NeScalarSels            func(int8, []int8, []int64, []int64) []int64
 	Int8NeNullableScalarSels    func(int8, []int8, *roaring.Bitmap, []int64, []int64) []int64
 	Int16Ne                     func([]int16, []int16, []int64) []int64
-	Int16NeNullable             func([]int16, []int16, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Int16NeNullable             func([]int16, []int16, *roaring.Bitmap, []int64) []int64
 	Int16NeSels                 func([]int16, []int16, []int64, []int64) []int64
-	Int16NeNullableSels         func([]int16, []int16, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Int16NeNullableSels         func([]int16, []int16, *roaring.Bitmap, []int64, []int64) []int64
 	Int16NeScalar               func(int16, []int16, []int64) []int64
 	Int16NeNullableScalar       func(int16, []int16, *roaring.Bitmap, []int64) []int64
 	Int16NeScalarSels           func(int16, []int16, []int64, []int64) []int64
 	Int16NeNullableScalarSels   func(int16, []int16, *roaring.Bitmap, []int64, []int64) []int64
 	Int32Ne                     func([]int32, []int32, []int64) []int64
-	Int32NeNullable             func([]int32, []int32, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Int32NeNullable             func([]int32, []int32, *roaring.Bitmap, []int64) []int64
 	Int32NeSels                 func([]int32, []int32, []int64, []int64) []int64
-	Int32NeNullableSels         func([]int32, []int32, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Int32NeNullableSels         func([]int32, []int32, *roaring.Bitmap, []int64, []int64) []int64
 	Int32NeScalar               func(int32, []int32, []int64) []int64
 	Int32NeNullableScalar       func(int32, []int32, *roaring.Bitmap, []int64) []int64
 	Int32NeScalarSels           func(int32, []int32, []int64, []int64) []int64
 	Int32NeNullableScalarSels   func(int32, []int32, *roaring.Bitmap, []int64, []int64) []int64
 	Int64Ne                     func([]int64, []int64, []int64) []int64
-	Int64NeNullable             func([]int64, []int64, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Int64NeNullable             func([]int64, []int64, *roaring.Bitmap, []int64) []int64
 	Int64NeSels                 func([]int64, []int64, []int64, []int64) []int64
-	Int64NeNullableSels         func([]int64, []int64, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Int64NeNullableSels         func([]int64, []int64, *roaring.Bitmap, []int64, []int64) []int64
 	Int64NeScalar               func(int64, []int64, []int64) []int64
 	Int64NeNullableScalar       func(int64, []int64, *roaring.Bitmap, []int64) []int64
 	Int64NeScalarSels           func(int64, []int64, []int64, []int64) []int64
 	Int64NeNullableScalarSels   func(int64, []int64, *roaring.Bitmap, []int64, []int64) []int64
 	Uint8Ne                     func([]uint8, []uint8, []int64) []int64
-	Uint8NeNullable             func([]uint8, []uint8, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Uint8NeNullable             func([]uint8, []uint8, *roaring.Bitmap, []int64) []int64
 	Uint8NeSels                 func([]uint8, []uint8, []int64, []int64) []int64
-	Uint8NeNullableSels         func([]uint8, []uint8, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Uint8NeNullableSels         func([]uint8, []uint8, *roaring.Bitmap, []int64, []int64) []int64
 	Uint8NeScalar               func(uint8, []uint8, []int64) []int64
 	Uint8NeNullableScalar       func(uint8, []uint8, *roaring.Bitmap, []int64) []int64
 	Uint8NeScalarSels           func(uint8, []uint8, []int64, []int64) []int64
 	Uint8NeNullableScalarSels   func(uint8, []uint8, *roaring.Bitmap, []int64, []int64) []int64
 	Uint16Ne                    func([]uint16, []uint16, []int64) []int64
-	Uint16NeNullable            func([]uint16, []uint16, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Uint16NeNullable            func([]uint16, []uint16, *roaring.Bitmap, []int64) []int64
 	Uint16NeSels                func([]uint16, []uint16, []int64, []int64) []int64
-	Uint16NeNullableSels        func([]uint16, []uint16, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Uint16NeNullableSels        func([]uint16, []uint16, *roaring.Bitmap, []int64, []int64) []int64
 	Uint16NeScalar              func(uint16, []uint16, []int64) []int64
 	Uint16NeNullableScalar      func(uint16, []uint16, *roaring.Bitmap, []int64) []int64
 	Uint16NeScalarSels          func(uint16, []uint16, []int64, []int64) []int64
 	Uint16NeNullableScalarSels  func(uint16, []uint16, *roaring.Bitmap, []int64, []int64) []int64
 	Uint32Ne                    func([]uint32, []uint32, []int64) []int64
-	Uint32NeNullable            func([]uint32, []uint32, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Uint32NeNullable            func([]uint32, []uint32, *roaring.Bitmap, []int64) []int64
 	Uint32NeSels                func([]uint32, []uint32, []int64, []int64) []int64
-	Uint32NeNullableSels        func([]uint32, []uint32, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Uint32NeNullableSels        func([]uint32, []uint32, *roaring.Bitmap, []int64, []int64) []int64
 	Uint32NeScalar              func(uint32, []uint32, []int64) []int64
 	Uint32NeNullableScalar      func(uint32, []uint32, *roaring.Bitmap, []int64) []int64
 	Uint32NeScalarSels          func(uint32, []uint32, []int64, []int64) []int64
 	Uint32NeNullableScalarSels  func(uint32, []uint32, *roaring.Bitmap, []int64, []int64) []int64
 	Uint64Ne                    func([]uint64, []uint64, []int64) []int64
-	Uint64NeNullable            func([]uint64, []uint64, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Uint64NeNullable            func([]uint64, []uint64, *roaring.Bitmap, []int64) []int64
 	Uint64NeSels                func([]uint64, []uint64, []int64, []int64) []int64
-	Uint64NeNullableSels        func([]uint64, []uint64, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Uint64NeNullableSels        func([]uint64, []uint64, *roaring.Bitmap, []int64, []int64) []int64
 	Uint64NeScalar              func(uint64, []uint64, []int64) []int64
 	Uint64NeNullableScalar      func(uint64, []uint64, *roaring.Bitmap, []int64) []int64
 	Uint64NeScalarSels          func(uint64, []uint64, []int64, []int64) []int64
 	Uint64NeNullableScalarSels  func(uint64, []uint64, *roaring.Bitmap, []int64, []int64) []int64
 	Float32Ne                   func([]float32, []float32, []int64) []int64
-	Float32NeNullable           func([]float32, []float32, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Float32NeNullable           func([]float32, []float32, *roaring.Bitmap, []int64) []int64
 	Float32NeSels               func([]float32, []float32, []int64, []int64) []int64
-	Float32NeNullableSels       func([]float32, []float32, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Float32NeNullableSels       func([]float32, []float32, *roaring.Bitmap, []int64, []int64) []int64
 	Float32NeScalar             func(float32, []float32, []int64) []int64
 	Float32NeNullableScalar     func(float32, []float32, *roaring.Bitmap, []int64) []int64
 	Float32NeScalarSels         func(float32, []float32, []int64, []int64) []int64
 	Float32NeNullableScalarSels func(float32, []float32, *roaring.Bitmap, []int64, []int64) []int64
 	Float64Ne                   func([]float64, []float64, []int64) []int64
-	Float64NeNullable           func([]float64, []float64, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	Float64NeNullable           func([]float64, []float64, *roaring.Bitmap, []int64) []int64
 	Float64NeSels               func([]float64, []float64, []int64, []int64) []int64
-	Float64NeNullableSels       func([]float64, []float64, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	Float64NeNullableSels       func([]float64, []float64, *roaring.Bitmap, []int64, []int64) []int64
 	Float64NeScalar             func(float64, []float64, []int64) []int64
 	Float64NeNullableScalar     func(float64, []float64, *roaring.Bitmap, []int64) []int64
 	Float64NeScalarSels         func(float64, []float64, []int64, []int64) []int64
 	Float64NeNullableScalarSels func(float64, []float64, *roaring.Bitmap, []int64, []int64) []int64
 	StrNe                       func(*types.Bytes, *types.Bytes, []int64) []int64
-	StrNeNullable               func(*types.Bytes, *types.Bytes, *roaring.Bitmap, *roaring.Bitmap, []int64) []int64
+	StrNeNullable               func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64) []int64
 	StrNeSels                   func(*types.Bytes, *types.Bytes, []int64, []int64) []int64
-	StrNeNullableSels           func(*types.Bytes, *types.Bytes, *roaring.Bitmap, *roaring.Bitmap, []int64, []int64) []int64
+	StrNeNullableSels           func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64, []int64) []int64
 	StrNeScalar                 func([]byte, *types.Bytes, []int64) []int64
 	StrNeNullableScalar         func([]byte, *types.Bytes, *roaring.Bitmap, []int64) []int64
 	StrNeScalarSels             func([]byte, *types.Bytes, []int64, []int64) []int64
@@ -200,9 +200,8 @@ func int8Ne(xs, ys []int8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int8NeNullable(xs, ys []int8, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func int8NeNullable(xs, ys []int8, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -238,9 +237,8 @@ func int8NeSels(xs, ys []int8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int8NeNullableSels(xs, ys []int8, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func int8NeNullableSels(xs, ys []int8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -276,9 +274,9 @@ func int8NeScalar(x int8, ys []int8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int8NeNullableScalar(x int8, ys []int8, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func int8NeNullableScalar(x int8, ys []int8, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -313,9 +311,9 @@ func int8NeScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int8NeNullableScalarSels(x int8, ys []int8, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func int8NeNullableScalarSels(x int8, ys []int8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -350,9 +348,8 @@ func int16Ne(xs, ys []int16, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int16NeNullable(xs, ys []int16, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func int16NeNullable(xs, ys []int16, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -388,9 +385,8 @@ func int16NeSels(xs, ys []int16, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int16NeNullableSels(xs, ys []int16, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func int16NeNullableSels(xs, ys []int16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -426,9 +422,9 @@ func int16NeScalar(x int16, ys []int16, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int16NeNullableScalar(x int16, ys []int16, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func int16NeNullableScalar(x int16, ys []int16, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -463,9 +459,9 @@ func int16NeScalarSels(x int16, ys []int16, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int16NeNullableScalarSels(x int16, ys []int16, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func int16NeNullableScalarSels(x int16, ys []int16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -500,9 +496,8 @@ func int32Ne(xs, ys []int32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int32NeNullable(xs, ys []int32, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func int32NeNullable(xs, ys []int32, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -538,9 +533,8 @@ func int32NeSels(xs, ys []int32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int32NeNullableSels(xs, ys []int32, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func int32NeNullableSels(xs, ys []int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -576,9 +570,9 @@ func int32NeScalar(x int32, ys []int32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int32NeNullableScalar(x int32, ys []int32, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func int32NeNullableScalar(x int32, ys []int32, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -613,9 +607,9 @@ func int32NeScalarSels(x int32, ys []int32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int32NeNullableScalarSels(x int32, ys []int32, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func int32NeNullableScalarSels(x int32, ys []int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -650,9 +644,8 @@ func int64Ne(xs, ys []int64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int64NeNullable(xs, ys []int64, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func int64NeNullable(xs, ys []int64, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -688,9 +681,8 @@ func int64NeSels(xs, ys []int64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int64NeNullableSels(xs, ys []int64, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func int64NeNullableSels(xs, ys []int64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -726,9 +718,9 @@ func int64NeScalar(x int64, ys []int64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int64NeNullableScalar(x int64, ys []int64, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func int64NeNullableScalar(x int64, ys []int64, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -763,9 +755,9 @@ func int64NeScalarSels(x int64, ys []int64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int64NeNullableScalarSels(x int64, ys []int64, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func int64NeNullableScalarSels(x int64, ys []int64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -800,9 +792,8 @@ func uint8Ne(xs, ys []uint8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint8NeNullable(xs, ys []uint8, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func uint8NeNullable(xs, ys []uint8, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -838,9 +829,8 @@ func uint8NeSels(xs, ys []uint8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint8NeNullableSels(xs, ys []uint8, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func uint8NeNullableSels(xs, ys []uint8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -876,9 +866,9 @@ func uint8NeScalar(x uint8, ys []uint8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint8NeNullableScalar(x uint8, ys []uint8, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func uint8NeNullableScalar(x uint8, ys []uint8, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -913,9 +903,9 @@ func uint8NeScalarSels(x uint8, ys []uint8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint8NeNullableScalarSels(x uint8, ys []uint8, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func uint8NeNullableScalarSels(x uint8, ys []uint8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -950,9 +940,8 @@ func uint16Ne(xs, ys []uint16, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint16NeNullable(xs, ys []uint16, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func uint16NeNullable(xs, ys []uint16, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -988,9 +977,8 @@ func uint16NeSels(xs, ys []uint16, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint16NeNullableSels(xs, ys []uint16, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func uint16NeNullableSels(xs, ys []uint16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -1026,9 +1014,9 @@ func uint16NeScalar(x uint16, ys []uint16, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint16NeNullableScalar(x uint16, ys []uint16, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func uint16NeNullableScalar(x uint16, ys []uint16, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -1063,9 +1051,9 @@ func uint16NeScalarSels(x uint16, ys []uint16, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint16NeNullableScalarSels(x uint16, ys []uint16, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func uint16NeNullableScalarSels(x uint16, ys []uint16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -1100,9 +1088,8 @@ func uint32Ne(xs, ys []uint32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint32NeNullable(xs, ys []uint32, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func uint32NeNullable(xs, ys []uint32, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -1138,9 +1125,8 @@ func uint32NeSels(xs, ys []uint32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint32NeNullableSels(xs, ys []uint32, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func uint32NeNullableSels(xs, ys []uint32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -1176,9 +1162,9 @@ func uint32NeScalar(x uint32, ys []uint32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint32NeNullableScalar(x uint32, ys []uint32, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func uint32NeNullableScalar(x uint32, ys []uint32, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -1213,9 +1199,9 @@ func uint32NeScalarSels(x uint32, ys []uint32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint32NeNullableScalarSels(x uint32, ys []uint32, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func uint32NeNullableScalarSels(x uint32, ys []uint32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -1250,9 +1236,8 @@ func uint64Ne(xs, ys []uint64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint64NeNullable(xs, ys []uint64, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func uint64NeNullable(xs, ys []uint64, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -1288,9 +1273,8 @@ func uint64NeSels(xs, ys []uint64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint64NeNullableSels(xs, ys []uint64, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func uint64NeNullableSels(xs, ys []uint64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -1326,9 +1310,9 @@ func uint64NeScalar(x uint64, ys []uint64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint64NeNullableScalar(x uint64, ys []uint64, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func uint64NeNullableScalar(x uint64, ys []uint64, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -1363,9 +1347,9 @@ func uint64NeScalarSels(x uint64, ys []uint64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func uint64NeNullableScalarSels(x uint64, ys []uint64, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func uint64NeNullableScalarSels(x uint64, ys []uint64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -1400,9 +1384,8 @@ func float32Ne(xs, ys []float32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func float32NeNullable(xs, ys []float32, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func float32NeNullable(xs, ys []float32, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -1438,9 +1421,8 @@ func float32NeSels(xs, ys []float32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func float32NeNullableSels(xs, ys []float32, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func float32NeNullableSels(xs, ys []float32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -1476,9 +1458,9 @@ func float32NeScalar(x float32, ys []float32, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func float32NeNullableScalar(x float32, ys []float32, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func float32NeNullableScalar(x float32, ys []float32, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -1513,9 +1495,9 @@ func float32NeScalarSels(x float32, ys []float32, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func float32NeNullableScalarSels(x float32, ys []float32, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func float32NeNullableScalarSels(x float32, ys []float32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -1550,9 +1532,8 @@ func float64Ne(xs, ys []float64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func float64NeNullable(xs, ys []float64, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func float64NeNullable(xs, ys []float64, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -1588,9 +1569,8 @@ func float64NeSels(xs, ys []float64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func float64NeNullableSels(xs, ys []float64, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func float64NeNullableSels(xs, ys []float64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -1626,9 +1606,9 @@ func float64NeScalar(x float64, ys []float64, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func float64NeNullableScalar(x float64, ys []float64, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func float64NeNullableScalar(x float64, ys []float64, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -1663,9 +1643,9 @@ func float64NeScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func float64NeNullableScalarSels(x float64, ys []float64, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func float64NeNullableScalarSels(x float64, ys []float64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
@@ -1700,9 +1680,8 @@ func strNe(xs, ys *types.Bytes, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func strNeNullable(xs, ys *types.Bytes, xnulls, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func strNeNullable(xs, ys *types.Bytes, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := 0
 
@@ -1738,9 +1717,8 @@ func strNeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func strNeNullableSels(xs, ys *types.Bytes, xnulls, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func strNeNullableSels(xs, ys *types.Bytes, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nulls := roaring.Or(xnulls, ynulls)
 	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
@@ -1776,9 +1754,9 @@ func strNeScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func strNeNullableScalar(x []byte, ys *types.Bytes, ynulls *roaring.Bitmap, rs []int64) []int64 {
+func strNeNullableScalar(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := 0
 
 	if nullsIter.HasNext() {
@@ -1813,9 +1791,9 @@ func strNeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func strNeNullableScalarSels(x []byte, ys *types.Bytes, ynulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func strNeNullableScalarSels(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := ynulls.Iterator()
+	nullsIter := nulls.Iterator()
 	nextNull := int64(0)
 
 	if nullsIter.HasNext() {
