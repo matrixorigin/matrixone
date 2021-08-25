@@ -133,7 +133,7 @@ func main() {
 
 	stdLog.Printf("clean target dir")
 
-	targetDir := config.GlobalSystemVariables.GetCubeDir() + strNodeId
+	targetDir := config.GlobalSystemVariables.GetCubeDirPrefix() + strNodeId
 	if err := recreateDir(targetDir); err != nil {
 		panic(err)
 	}
