@@ -375,8 +375,9 @@ func (v *StdVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro
 	//      8           4         4           [?]     length*typesize
 	nullSize := 0
 	var nullbuf []byte
+	var err error
 	if v.VMask.Any() {
-		nullbuf, err := v.VMask.Show()
+		nullbuf, err = v.VMask.Show()
 		if err != nil {
 			panic(err)
 		}
