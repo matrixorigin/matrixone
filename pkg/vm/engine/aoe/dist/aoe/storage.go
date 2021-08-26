@@ -110,7 +110,7 @@ func (s *Storage) SplitCheck(start []byte, end []byte, size uint64) (currentSize
 
 func (s *Storage) CreateSnapshot(path string, start, end []byte) error {
 	if _, err := os.Stat(path); err != nil {
-		os.MkdirAll(path, os.ModeDir)
+		os.MkdirAll(path, os.FileMode(0755))
 	}
 	return nil
 }
