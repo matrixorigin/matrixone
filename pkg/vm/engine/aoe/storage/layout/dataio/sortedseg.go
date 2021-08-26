@@ -1,6 +1,8 @@
 package dataio
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/prefetch"
@@ -92,13 +94,49 @@ func (sf *SortedSegmentFile) initPointers() {
 		sf.Meta.Indices = meta
 	}
 
+	sz := 96 + 1 + 4 + 4 + 8 + 8
+	buf := make([]byte, sz)
+	metaBuf := bytes.NewBuffer(buf)
+	if err := binary.Read(&sf.File, binary.BigEndian, &metaBuf); err != nil {
+		panic(err)
+	}
 
-	
+	blkCnt := uint32(0)
+	colCnt := uint32(0)
+	algo := uint8(0)
+	header := make([]byte, 32)
+	reserved := make([]byte, 64)
+	startPos := int64(0)
+	endPos := int64(0)
+	var err error
+	if err = binary.Read(metaBuf, binary.BigEndian, &header); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(metaBuf, binary.BigEndian, &reserved); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(metaBuf, binary.BigEndian, &algo); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(metaBuf, binary.BigEndian, &blkCnt); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(metaBuf, binary.BigEndian, &colCnt); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(metaBuf, binary.BigEndian, &startPos); err != nil {
+		panic(err)
+	}if err = binary.Read(metaBuf, binary.BigEndian, &endPos); err != nil {
+		panic(err)
+	}
 
-	//blkCnt := uint32(0)
-	//colCnt := uint32(0)
-	//algo := uint8(0)
-	//var err error
+	sz = int(blkCnt*(8+8+32+32) + colCnt*(8+8+8))
+
+	buf = make([]byte, sz)
+	metaBuf = bytes.NewBuffer(buf)
+
+
+
 	//err = binary.Read(&sf.File, binary.BigEndian, &algo)
 	//if err != nil {
 	//	panic(err)
