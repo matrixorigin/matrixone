@@ -239,23 +239,8 @@ func int8LeSels(xs, ys []int8, rs, sels []int64) []int64 {
 
 func int8LeNullableSels(xs, ys []int8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -313,23 +298,8 @@ func int8LeScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
 
 func int8LeNullableScalarSels(x int8, ys []int8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -387,23 +357,8 @@ func int16LeSels(xs, ys []int16, rs, sels []int64) []int64 {
 
 func int16LeNullableSels(xs, ys []int16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -461,23 +416,8 @@ func int16LeScalarSels(x int16, ys []int16, rs, sels []int64) []int64 {
 
 func int16LeNullableScalarSels(x int16, ys []int16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -535,23 +475,8 @@ func int32LeSels(xs, ys []int32, rs, sels []int64) []int64 {
 
 func int32LeNullableSels(xs, ys []int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -609,23 +534,8 @@ func int32LeScalarSels(x int32, ys []int32, rs, sels []int64) []int64 {
 
 func int32LeNullableScalarSels(x int32, ys []int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -683,23 +593,8 @@ func int64LeSels(xs, ys []int64, rs, sels []int64) []int64 {
 
 func int64LeNullableSels(xs, ys []int64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -757,23 +652,8 @@ func int64LeScalarSels(x int64, ys []int64, rs, sels []int64) []int64 {
 
 func int64LeNullableScalarSels(x int64, ys []int64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -831,23 +711,8 @@ func uint8LeSels(xs, ys []uint8, rs, sels []int64) []int64 {
 
 func uint8LeNullableSels(xs, ys []uint8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -905,23 +770,8 @@ func uint8LeScalarSels(x uint8, ys []uint8, rs, sels []int64) []int64 {
 
 func uint8LeNullableScalarSels(x uint8, ys []uint8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -979,23 +829,8 @@ func uint16LeSels(xs, ys []uint16, rs, sels []int64) []int64 {
 
 func uint16LeNullableSels(xs, ys []uint16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1053,23 +888,8 @@ func uint16LeScalarSels(x uint16, ys []uint16, rs, sels []int64) []int64 {
 
 func uint16LeNullableScalarSels(x uint16, ys []uint16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1127,23 +947,8 @@ func uint32LeSels(xs, ys []uint32, rs, sels []int64) []int64 {
 
 func uint32LeNullableSels(xs, ys []uint32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1201,23 +1006,8 @@ func uint32LeScalarSels(x uint32, ys []uint32, rs, sels []int64) []int64 {
 
 func uint32LeNullableScalarSels(x uint32, ys []uint32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1275,23 +1065,8 @@ func uint64LeSels(xs, ys []uint64, rs, sels []int64) []int64 {
 
 func uint64LeNullableSels(xs, ys []uint64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1349,23 +1124,8 @@ func uint64LeScalarSels(x uint64, ys []uint64, rs, sels []int64) []int64 {
 
 func uint64LeNullableScalarSels(x uint64, ys []uint64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1423,23 +1183,8 @@ func float32LeSels(xs, ys []float32, rs, sels []int64) []int64 {
 
 func float32LeNullableSels(xs, ys []float32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1497,23 +1242,8 @@ func float32LeScalarSels(x float32, ys []float32, rs, sels []int64) []int64 {
 
 func float32LeNullableScalarSels(x float32, ys []float32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1571,23 +1301,8 @@ func float64LeSels(xs, ys []float64, rs, sels []int64) []int64 {
 
 func float64LeNullableSels(xs, ys []float64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if xs[sel] <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && xs[sel] <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1645,23 +1360,8 @@ func float64LeScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
 
 func float64LeNullableScalarSels(x float64, ys []float64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x <= ys[sel] {
+		if !nulls.Contains(uint64(sel)) && x <= ys[sel] {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1719,23 +1419,8 @@ func strLeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 
 func strLeNullableSels(xs, ys *types.Bytes, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if bytes.Compare(xs.Get(sel), ys.Get(sel)) <= 0 {
+		if !nulls.Contains(uint64(sel)) && bytes.Compare(xs.Get(sel), ys.Get(sel)) <= 0 {
 			rs[rsi] = sel
 			rsi++
 		}
@@ -1793,23 +1478,8 @@ func strLeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 
 func strLeNullableScalarSels(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := int64(0)
-
-	if nullsIter.HasNext() {
-		nextNull = int64(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
 	for _, sel := range sels {
-		if sel == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int64(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if bytes.Compare(x, ys.Get(sel)) <= 0 {
+		if !nulls.Contains(uint64(sel)) && bytes.Compare(x, ys.Get(sel)) <= 0 {
 			rs[rsi] = sel
 			rsi++
 		}
