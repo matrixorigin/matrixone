@@ -477,6 +477,8 @@ when the server receives a heartbeat response from the leader, the HandleHeartbe
 data : the response from the leader
  */
 func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
+	fmt.Printf("-------PDC HandleHeartbeatRsp enter\n")
+	defer fmt.Printf("-------PDC HandleHeartbeatRsp exit\n")
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 	sci.heartbeatTimeout.UpdateTime(time.Now())
