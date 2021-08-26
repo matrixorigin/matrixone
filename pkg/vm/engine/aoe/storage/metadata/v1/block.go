@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
+	// "matrixone/pkg/logutil"
 )
 
 func NewBlock(id uint64, segment *Segment) *Block {
@@ -25,6 +25,7 @@ func (blk *Block) GetReplayIndex() *LogIndex {
 	}
 	ctx := &LogIndex{
 		ID:       blk.Index.ID,
+		Start:    blk.Index.Start,
 		Count:    blk.Index.Count,
 		Capacity: blk.Index.Capacity,
 	}
