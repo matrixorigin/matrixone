@@ -329,7 +329,7 @@ func TestConcurrency(t *testing.T) {
 	wg.Wait()
 	time.Sleep(time.Duration(200) * time.Millisecond)
 	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(200) * time.Millisecond)
+		time.Sleep(time.Duration(500) * time.Millisecond)
 	}
 	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	root := tbl.WeakRefRoot()
@@ -630,7 +630,7 @@ func TestE2E(t *testing.T) {
 	tblData, err := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Nil(t, err)
 	t.Log(tblData.String())
-	t.Log(tblData.GetIndexHolder().String())
+	// t.Log(tblData.GetIndexHolder().String())
 
 	segs := tblData.SegmentIds()
 	for _, segId := range segs {
@@ -653,15 +653,16 @@ func TestE2E(t *testing.T) {
 		t.Log(inst.IndexBufMgr.String())
 	}
 
-	time.Sleep(200*time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	t.Log(inst.IndexBufMgr.String())
 
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name})
 	assert.Nil(t, err)
-	time.Sleep(50*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	t.Log(inst.FsMgr.String())
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
+	inst.Close()
 }
