@@ -84,6 +84,11 @@ type PDCallbackImpl struct {
 	enableLogging
 	 */
 	enableLog bool
+
+	/*
+	close
+	 */
+	closeOnce sync.Once
 }
 
 /*
@@ -267,7 +272,7 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
-
+	fmt.Printf("-------PDC Stop Get Lock\n")
 	//stop timer
 	pci.timerClose.Close()
 
@@ -275,14 +280,15 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	/*
 	Do not close chan twice.
 	 */
-	if pci.msgChan != nil {
-		var closeOnce sync.Once
+	fmt.Printf("-------PDC Stop close channel\n")
+	//if pci.msgChan != nil {
 		closeChan := func() {
 			close(pci.msgChan)
 			pci.msgChan = nil
 		}
-		closeOnce.Do(closeChan)
-	}
+		pci.closeOnce.Do(closeChan)
+	//}
+	fmt.Printf("-------PDC Stop close channel done\n")
 
 	//stop delete ddl worker
 	pci.ddlDeleteClose.Close()
@@ -303,7 +309,7 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 	defer pci.rwlock.Unlock()
 	//fmt.Printf("%d leader receive heartbeat from %d \n",pci.Id,id)
 	//step 1: set [server,maximumRemovableEpoch]
-
+	fmt.Printf("-------PDC HandleHeartbeatReq Get Lock\n")
 	maxre := binary.BigEndian.Uint64(data)
 	pci.serverInfo[id] = maxre
 
@@ -342,7 +348,7 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 			keys = append(keys,k_buf)
 			b2 = append(b2,v_buf)
 		}
-
+		fmt.Printf("-------PDC HandleHeartbeatReq server_info to channel\n")
 		//step 3: put these values into the worker
 		pci.msgChan <- &ChanMessage{
 			tp:   MSG_TYPE_SERVER_INFO,
@@ -350,6 +356,8 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 			body2: keys,
 			body3: b2,
 		}
+
+		fmt.Printf("-------PDC HandleHeartbeatReq enter server_info to channel done\n")
 	}else{
 		for _, v := range pci.serverInfo {
 			minRE = MinUint64(minRE,v)
@@ -363,10 +371,12 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 	if pci.persistTimeout[2].isTimeout() {
 		buf := make([]byte,8)
 		binary.BigEndian.PutUint64(buf,pci.cluster_minimumRemovableEpoch)
+		fmt.Printf("-------PDC HandleHeartbeatReq epoch to channel\n")
 		pci.msgChan <- &ChanMessage{
 			tp:   MSG_TYPE_MINI_REM_EPOCH,
 			body: buf,
 		}
+		fmt.Printf("-------PDC HandleHeartbeatReq epoch to channel done\n")
 	}
 
 	//step 4: response to the server
