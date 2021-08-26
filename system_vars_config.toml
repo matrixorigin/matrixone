@@ -248,15 +248,15 @@
 #	UpdateMode:	dynamic
 	nodeID = 0
 
-#	Name:	cubeDir
+#	Name:	cubeDirPrefix
 #	Scope:	[global]
 #	Access:	[file]
 #	DataType:	string
 #	DomainType:	set
 #	Values:	[./cube]
-#	Comment:	the root direction of the cube
+#	Comment:	the root direction prefix of the cube. The actual dir is cubeDirPrefix + nodeID
 #	UpdateMode:	dynamic
-	cubeDir = "./cube"
+	cubeDirPrefix = "./cube"
 
 #	Name:	prophetEmbedEtcdJoinAddr
 #	Scope:	[global]
@@ -440,3 +440,13 @@ max-days = 0
 
 # Maximum number of old log files to retain. No clean up by default.
 max-backups = 0
+
+# Storage Configs
+[meta.conf]
+block-max-rows = 40000
+segment-max-blocks = 40
+
+[cache-cfg]
+index-cache-size = 134217728        # 128M
+insert-cache-size = 4294967296      # 4G
+data-cache-size = 4294967296        # 4G

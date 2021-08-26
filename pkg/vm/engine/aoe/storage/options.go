@@ -31,9 +31,9 @@ type IterOptions struct {
 }
 
 type CacheCfg struct {
-	IndexCapacity  uint64
-	InsertCapacity uint64
-	DataCapacity   uint64
+	IndexCapacity  uint64 `toml:"index-cache-size"`
+	InsertCapacity uint64 `toml:"insert-cache-size"`
+	DataCapacity   uint64 `toml:"data-cache-size"`
 }
 
 type MetaCleanerCfg struct {
@@ -58,7 +58,7 @@ type Options struct {
 		Acceptor gci.IAcceptor
 	}
 
-	CacheCfg *CacheCfg
+	CacheCfg *CacheCfg `toml:"cache-cfg"`
 
 	MetaCleanerCfg *MetaCleanerCfg
 }
@@ -75,6 +75,8 @@ func (o *Options) FillDefaults(dirname string) *Options {
 			SegmentMaxBlocks: DefaultBlocksPerSegment,
 			Dir:              dirname,
 		}
+	} else {
+		o.Meta.Conf.Dir = dirname
 	}
 	if o.Meta.Info == nil {
 		o.Meta.Info = md.NewMetaInfo(&o.Mu, o.Meta.Conf)

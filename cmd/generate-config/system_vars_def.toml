@@ -268,13 +268,13 @@ comment = "the Node ID of the cube"
 update-mode = "dynamic"
 
 [[parameter]]
-name = "cubeDir"
+name = "cubeDirPrefix"
 scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
 values = ["./cube"]
-comment = "the root direction of the cube"
+comment = "the root direction prefix of the cube. The actual dir is cubeDirPrefix + nodeID"
 update-mode = "dynamic"
 
 [[parameter]]
@@ -459,3 +459,13 @@ max-days = 0
 
 # Maximum number of old log files to retain. No clean up by default.
 max-backups = 0
+
+# Storage Configs
+[meta.conf]
+block-max-rows = 40000
+segment-max-blocks = 40
+
+[cache-cfg]
+index-cache-size = 134217728        # 128M
+insert-cache-size = 4294967296      # 4G
+data-cache-size = 4294967296        # 4G

@@ -207,7 +207,7 @@ func NewCubeDriverWithFactory(
 				})
 				if err != nil {
 					if err == adb.ErrNotFound {
-						logutil.Errorf("shard not found, %d, %d", group, shard.ID)
+						logutil.Debugf("shard not found, %d, %d", group, shard.ID)
 						newCompactIdx = compactIndex
 					} else {
 						// TODO: Need panic here or not?
@@ -238,7 +238,7 @@ func NewCubeDriverWithFactory(
 				})
 				if err != nil {
 					if err == adb.ErrNotFound {
-						logutil.Errorf("shard not found, %d, %d", group, shard.ID)
+						logutil.Debugf("shard not found, %d, %d", group, shard.ID)
 						adjustAppliedIndex = initAppliedIndex
 					} else {
 						panic(err)
@@ -686,6 +686,10 @@ func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(int
 }
 
 func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
+	}()
 	return h.app.ExecWithGroup(cmd, uint64(group), defaultRPCTimeout)
 }
 
