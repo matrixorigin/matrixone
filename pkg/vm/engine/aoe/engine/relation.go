@@ -48,7 +48,7 @@ func (r *relation) Attribute() []metadata.Attribute {
 func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	if len(r.tablets) == 0 {
 		return errors.New("no tablets exists")
