@@ -24,6 +24,8 @@ import (
 	"matrixone/pkg/vm/process"
 	"matrixone/pkg/vm/register"
 	"sync"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 var pool = sync.Pool{
@@ -2872,8 +2874,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Int8EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Int8EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Int8EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -2882,8 +2887,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Int8EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Int8EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Int8EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -2892,8 +2900,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Int8Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Int8EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Int8EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Int8EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Int8Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -2911,8 +2927,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Int16EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Int16EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Int16EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -2921,8 +2940,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Int16EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Int16EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Int16EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -2931,8 +2953,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Int16Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Int16EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Int16EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Int16EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Int16Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -2950,8 +2980,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Int32EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Int32EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Int32EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -2960,8 +2993,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Int32EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Int32EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Int32EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -2970,8 +3006,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Int32Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Int32EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Int32EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Int32EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Int32Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -2989,8 +3033,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Int64EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Int64EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Int64EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -2999,8 +3046,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Int64EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Int64EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Int64EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3009,8 +3059,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Int64Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Int64EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Int64EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Int64EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Int64Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3028,8 +3086,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Uint8EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Uint8EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Uint8EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3038,8 +3099,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Uint8EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Uint8EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Uint8EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3048,8 +3112,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Uint8Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Uint8EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Uint8EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Uint8EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Uint8Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3067,8 +3139,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Uint16EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Uint16EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Uint16EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3077,8 +3152,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Uint16EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Uint16EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Uint16EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3087,8 +3165,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Uint16Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Uint16EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Uint16EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Uint16EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Uint16Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3106,8 +3192,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Uint32EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Uint32EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Uint32EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3116,8 +3205,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Uint32EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Uint32EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Uint32EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3126,8 +3218,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Uint32Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Uint32EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Uint32EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Uint32EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Uint32Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3145,8 +3245,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Uint64EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Uint64EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Uint64EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3155,8 +3258,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Uint64EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Uint64EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Uint64EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3165,8 +3271,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Uint64Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Uint64EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Uint64EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Uint64EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Uint64Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3184,8 +3298,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Float32EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Float32EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Float32EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3194,8 +3311,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Float32EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Float32EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Float32EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3204,8 +3324,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Float32Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Float32EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Float32EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Float32EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Float32Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3223,8 +3351,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.Float64EqScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.Float64EqNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Float64EqScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3233,8 +3364,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.Float64EqScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.Float64EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.Float64EqScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3243,8 +3377,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.Float64Eq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Float64EqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.Float64EqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.Float64EqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.Float64Eq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3262,8 +3404,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.StrEqScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.StrEqNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.StrEqScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3272,8 +3417,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.StrEqScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.StrEqNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.StrEqScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3282,8 +3430,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.StrEq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.StrEqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.StrEqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.StrEqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.StrEq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3301,8 +3457,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(eq.StrEqScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(eq.StrEqNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.StrEqScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3311,8 +3470,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(eq.StrEqScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(eq.StrEqNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(eq.StrEqScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3321,8 +3483,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(eq.StrEq(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.StrEqNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(eq.StrEqNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(eq.StrEqNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(eq.StrEq(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3342,8 +3512,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.Int8LtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Int8LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Int8LtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3352,8 +3525,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Int8GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Int8LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Int8LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3362,8 +3538,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Int8Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Int8LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Int8LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Int8LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Int8Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3381,8 +3565,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.Int16LtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Int16LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Int16LtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3391,8 +3578,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Int16GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Int16LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Int16LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3401,8 +3591,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Int16Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Int16LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Int16LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Int16LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Int16Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3420,8 +3618,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.Int32LtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Int32LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Int32LtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3430,8 +3631,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Int32GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Int32LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Int32LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3440,8 +3644,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Int32Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Int32LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Int32LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Int32LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Int32Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3459,6 +3671,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Int64LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Int64LtScalar(lvs[0], rvs, rs))
+					}
 					vec.Nsp = rv.Nsp
 					vec.SetCol(lt.Int64LtScalar(lvs[0], rvs, rs))
 					return vec, nil
@@ -3469,8 +3686,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Int64GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Int64LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Int64LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3479,8 +3699,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Int64Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Int64LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Int64LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Int64LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Int64Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3498,8 +3726,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.Uint8LtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Uint8LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Uint8LtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3508,8 +3739,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Uint8GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Uint8LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Uint8LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3518,8 +3752,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Uint8Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Uint8LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Uint8LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Uint8LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Uint8Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3537,8 +3779,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.Uint16LtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Uint16LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Uint16LtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3547,8 +3792,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Uint16GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Uint16LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Uint16LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3557,8 +3805,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Uint16Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Uint16LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Uint16LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Uint16LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Uint16Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3576,8 +3832,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.Uint32LtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Uint32LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Uint32LtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3586,8 +3845,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Uint32GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Uint32LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Uint32LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3596,8 +3858,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Uint32Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Uint32LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Uint32LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Uint32LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Uint32Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3615,8 +3885,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.Uint64LtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Uint64LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Uint64LtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3625,8 +3898,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Uint64GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Uint64LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Uint64LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3635,8 +3911,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Uint64Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Uint64LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Uint64LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Uint64LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Uint64Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3654,8 +3938,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.Float32LtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Float32LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Float32LtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3664,8 +3951,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Float32GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Float32LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Float32LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3674,8 +3964,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Float32Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Float32LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Float32LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Float32LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Float32Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3693,8 +3991,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.Float64LtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.Float64LtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Float64LtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3703,8 +4004,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.Float64GtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.Float64LtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.Float64LtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3713,8 +4017,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.Float64Lt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Float64LtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.Float64LtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.Float64LtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.Float64Lt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3732,8 +4044,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(lt.StrLtScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.StrLtNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.StrLtScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3742,8 +4057,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.StrGtScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.StrLtNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.StrLtScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3752,8 +4070,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.StrLt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.StrLtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.StrLtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.StrLtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.StrLt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3771,6 +4097,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
+					if rv.Nsp.Any() {
+						vec.SetCol(lt.StrLtNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.StrLtScalar(lvs.Data, rvs, rs))
+					}
 					vec.Nsp = rv.Nsp
 					vec.SetCol(lt.StrLtScalar(lvs.Data, rvs, rs))
 					return vec, nil
@@ -3781,8 +4112,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(gt.StrGtScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(lt.StrLtNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(lt.StrLtScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3791,8 +4125,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(lt.StrLt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.StrLtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(lt.StrLtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(lt.StrLtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(lt.StrLt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3812,8 +4154,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Int8LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Int8LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Int8LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3822,8 +4167,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Int8GeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.Int8LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Int8LeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3832,8 +4180,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Int8Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Int8LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Int8LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Int8LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Int8Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3851,8 +4207,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Int16LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Int16LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Int16LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3861,8 +4220,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Int16GeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.Int16LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Int16LeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3871,8 +4233,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Int16Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Int16LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Int16LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Int16LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Int16Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3890,8 +4260,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Int32LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Int32LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Int32LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3900,8 +4273,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Int32GeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.Int32LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Int32LeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3910,8 +4286,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Int32Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Int32LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Int32LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Int32LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Int32Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3929,8 +4313,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Int64LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Int64LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Int64LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3939,8 +4326,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Int64GeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.Int64LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Int64LeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3949,8 +4339,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Int64Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Int64LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Int64LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Int64LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Int64Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -3968,8 +4366,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Uint8LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Uint8LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Uint8LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3978,8 +4379,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Uint8GeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.Uint8LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Uint8LeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -3988,8 +4392,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Uint8Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Uint8LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Uint8LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Uint8LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Uint8Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4007,8 +4419,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Uint16LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Uint16LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Uint16LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4017,8 +4432,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Uint16GeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.Uint16LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Uint16LeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4027,8 +4445,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Uint16Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Uint16LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Uint16LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Uint16LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Uint16Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4046,8 +4472,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Uint32LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Uint32LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Uint32LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4066,8 +4495,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Uint32Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Uint32LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Uint32LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Uint32LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Uint32Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4085,8 +4522,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Uint64LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Uint64LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Uint64LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4095,8 +4535,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Uint64GeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.Uint64LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Uint64LeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4105,8 +4548,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Uint64Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Uint64LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Uint64LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Uint64LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Uint64Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4124,8 +4575,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Float32LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Float32LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Float32LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4134,8 +4588,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Float32GeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.Float32LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Float32LeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4144,8 +4601,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Float32Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Float32LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Float32LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Float32LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Float32Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4163,8 +4628,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.Float64LeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.Float64LeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Float64LeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4173,8 +4641,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.Float64GeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.Float64LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.Float64LeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4183,8 +4654,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.Float64Le(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Float64LeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.Float64LeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.Float64LeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.Float64Le(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4202,8 +4681,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.StrLeScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.StrLeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.StrLeScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4212,8 +4694,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.StrGeScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.StrLeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.StrLeScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4222,8 +4707,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.StrLe(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.StrLeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.StrLeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.StrLeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.StrLe(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4241,8 +4734,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(le.StrLeScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(le.StrLeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.StrLeScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4251,8 +4747,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ge.StrGeScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(le.StrLeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(le.StrLeScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4261,8 +4760,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(le.StrLe(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.StrLeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(le.StrLeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(le.StrLeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(le.StrLe(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4282,8 +4789,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Int8GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Int8GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Int8GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4292,8 +4802,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Int8LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Int8GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Int8GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4302,8 +4815,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Int8Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Int8GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Int8GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Int8GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Int8Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4321,8 +4842,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Int16GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Int16GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Int16GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4331,8 +4855,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Int16LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Int16GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Int16GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4341,8 +4868,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Int16Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Int16GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Int16GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Int16GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Int16Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4360,8 +4895,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Int32GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Int32GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Int32GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4370,8 +4908,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Int32LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Int32GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Int32GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4380,8 +4921,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Int32Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Int32GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Int32GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Int32GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Int32Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4399,8 +4948,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Int64GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Int64GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Int64GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4409,8 +4961,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Int64LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Int64GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Int64GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4419,8 +4974,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Int64Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Int64GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Int64GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Int64GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Int64Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4438,8 +5001,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Uint8GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Uint8GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Uint8GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4448,8 +5014,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Uint8LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Uint8GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Uint8GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4458,8 +5027,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Uint8Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Uint8GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Uint8GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Uint8GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Uint8Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4477,8 +5054,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Uint16GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Uint16GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Uint16GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4487,8 +5067,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Uint16LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Uint16GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Uint16GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4497,8 +5080,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Uint16Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Uint16GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Uint16GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Uint16GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Uint16Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4516,8 +5107,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Uint32GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Uint32GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Uint32GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4526,8 +5120,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Uint32LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Uint32GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Uint32GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4536,8 +5133,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Uint32Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Uint32GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Uint32GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Uint32GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Uint32Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4555,8 +5160,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Uint64GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Uint64GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Uint64GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4565,8 +5173,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Uint64LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Uint64GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Uint64GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4575,8 +5186,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Uint64Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Uint64GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Uint64GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Uint64GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Uint64Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4594,8 +5213,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Float32GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Float32GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Float32GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4604,8 +5226,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Float32LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Float32GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Float32GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4614,8 +5239,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Float32Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Float32GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Float32GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Float32GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Float32Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4633,8 +5266,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.Float64GtScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.Float64GtNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Float64GtScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4643,8 +5279,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.Float64LtScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.Float64GtNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.Float64GtScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4653,8 +5292,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.Float64Gt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Float64GtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.Float64GtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.Float64GtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.Float64Gt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4672,8 +5319,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.StrGtScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.StrGtNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.StrGtScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4682,8 +5332,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.StrLtScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.StrGtNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.StrGtScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4692,8 +5345,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.StrGt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.StrGtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.StrGtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.StrGtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.StrGt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4711,8 +5372,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(gt.StrGtScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(gt.StrGtNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.StrGtScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4721,8 +5385,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(lt.StrLtScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(gt.StrGtNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(gt.StrGtScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4731,8 +5398,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(gt.StrGt(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.StrGtNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(gt.StrGtNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(gt.StrGtNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(gt.StrGt(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4752,8 +5427,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Int8GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Int8GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Int8GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4762,8 +5440,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Int8LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Int8GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Int8GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4772,8 +5453,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Int8Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Int8GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Int8GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Int8GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Int8Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4791,8 +5480,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Int16GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Int16GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Int16GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4801,8 +5493,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Int16LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Int16GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Int16GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4811,8 +5506,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Int16Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Int16GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Int16GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Int16GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Int16Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4830,8 +5533,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Int32GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Int32GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Int32GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4840,8 +5546,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Int32LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Int32GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Int32GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4850,8 +5559,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Int32Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Int32GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Int32GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Int32GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Int32Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4869,8 +5586,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Int64GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Int64GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Int64GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4879,8 +5599,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Int64LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Int64GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Int64GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4889,8 +5612,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Int64Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Int64GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Int64GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Int64GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Int64Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4908,8 +5639,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Uint8GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Uint8GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Uint8GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4918,8 +5652,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Uint8LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Uint8GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Uint8GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4928,8 +5665,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Uint8Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Uint8GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Uint8GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Uint8GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Uint8Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4947,8 +5692,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Uint16GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Uint16GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Uint16GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4957,8 +5705,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Uint16LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Uint16GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Uint16GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4967,8 +5718,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Uint16Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Uint16GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Uint16GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Uint16GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Uint16Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -4986,8 +5745,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Uint32GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Uint32GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Uint32GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -4996,8 +5758,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Uint32LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Uint32GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Uint32GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5006,8 +5771,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Uint32Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Uint32GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Uint32GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Uint32GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Uint32Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5025,8 +5798,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Uint64GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Uint64GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Uint64GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5035,8 +5811,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Uint64LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Uint64GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Uint64GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5045,8 +5824,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Uint64Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Uint64GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Uint64GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Uint64GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Uint64Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5064,8 +5851,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Float32GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Float32GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Float32GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5074,8 +5864,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Float32LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Float32GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Float32GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5084,8 +5877,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Float32Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Float32GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Float32GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Float32GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Float32Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5103,8 +5904,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.Float64GeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.Float64GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Float64GeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5113,8 +5917,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.Float64LeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.Float64GeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.Float64GeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5123,8 +5930,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.Float64Ge(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Float64GeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.Float64GeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.Float64GeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.Float64Ge(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5142,8 +5957,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.StrGeScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.StrGeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.StrGeScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5152,8 +5970,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.StrLeScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.StrGeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.StrGeScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5162,8 +5983,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.StrGe(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.StrGeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.StrGeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.StrGeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.StrGe(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5181,8 +6010,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ge.StrGeScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ge.StrGeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.StrGeScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5191,8 +6023,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(le.StrLeScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ge.StrGeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ge.StrGeScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5201,8 +6036,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ge.StrGe(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.StrGeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ge.StrGeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ge.StrGeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ge.StrGe(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5222,8 +6065,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Int8NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Int8NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Int8NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5232,8 +6078,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.Int8NeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Int8NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Int8NeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5242,8 +6091,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Int8Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Int8NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Int8NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Int8NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Int8Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5261,8 +6118,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Int16NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Int16NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Int16NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5271,8 +6131,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.Int16NeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Int16NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Int16NeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5281,8 +6144,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Int16Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Int16NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Int16NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Int16NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Int16Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5300,8 +6171,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Int32NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Int32NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Int32NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5310,8 +6184,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.Int32NeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Int32NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Int32NeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5320,8 +6197,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Int32Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Int32NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Int32NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Int32NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Int32Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5339,8 +6224,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Int64NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Int64NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Int64NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5349,8 +6237,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.Int64NeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Int64NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Int64NeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5359,8 +6250,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Int64Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Int64NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Int64NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Int64NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Int64Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5378,8 +6277,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Uint8NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Uint8NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Uint8NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5388,8 +6290,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.Uint8NeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Uint8NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Uint8NeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5398,8 +6303,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Uint8Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Uint8NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Uint8NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Uint8NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Uint8Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5417,8 +6330,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Uint16NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Uint16NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Uint16NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5427,8 +6343,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.Uint16NeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Uint16NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Uint16NeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5437,8 +6356,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Uint16Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Uint16NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Uint16NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Uint16NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Uint16Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5456,8 +6383,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Uint32NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Uint32NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Uint32NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5466,8 +6396,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.Uint32NeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Uint32NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Uint32NeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5476,8 +6409,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Uint32Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Uint32NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Uint32NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Uint32NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Uint32Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5495,8 +6436,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Uint64NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Uint64NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Uint64NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5505,6 +6449,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Uint64NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Uint64NeScalar(rvs[0], lvs, rs))
+					}
 					vec.Nsp = lv.Nsp
 					vec.SetCol(ne.Uint64NeScalar(rvs[0], lvs, rs))
 					return vec, nil
@@ -5515,8 +6464,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Uint64Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Uint64NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Uint64NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Uint64NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Uint64Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5534,8 +6491,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Float32NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Float32NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Float32NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5544,8 +6504,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.Float32NeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Float32NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Float32NeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5554,8 +6517,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Float32Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Float32NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Float32NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Float32NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Float32Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5573,8 +6544,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.Float64NeScalar(lvs[0], rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.Float64NeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Float64NeScalar(lvs[0], rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5583,8 +6557,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.Float64NeScalar(rvs[0], lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.Float64NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.Float64NeScalar(rvs[0], lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5593,8 +6570,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.Float64Ne(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Float64NeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.Float64NeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.Float64NeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.Float64Ne(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5612,8 +6597,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.StrNeScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.StrNeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.StrNeScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5622,8 +6610,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.StrNeScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.StrNeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.StrNeScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5632,8 +6623,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.StrNe(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.StrNeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.StrNeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.StrNeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.StrNe(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
@@ -5651,8 +6650,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(rvs.Lengths)]
-					vec.Nsp = rv.Nsp
-					vec.SetCol(ne.StrNeScalar(lvs.Data, rvs, rs))
+					if rv.Nsp.Any() {
+						vec.SetCol(ne.StrNeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.StrNeScalar(lvs.Data, rvs, rs))
+					}
 					return vec, nil
 				case !lc && rc:
 					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5661,8 +6663,11 @@ var BinOps = map[int][]*BinOp{
 					}
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
-					vec.Nsp = lv.Nsp
-					vec.SetCol(ne.StrNeScalar(rvs.Data, lvs, rs))
+					if lv.Nsp.Any() {
+						vec.SetCol(ne.StrNeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+					} else {
+						vec.SetCol(ne.StrNeScalar(rvs.Data, lvs, rs))
+					}
 					return vec, nil
 				}
 				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
@@ -5671,8 +6676,16 @@ var BinOps = map[int][]*BinOp{
 				}
 				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 				rs = rs[:len(lvs.Lengths)]
-				vec.Nsp = lv.Nsp.Or(rv.Nsp)
-				vec.SetCol(ne.StrNe(lvs, rvs, rs))
+				switch {
+				case lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.StrNeNullable(lvs, rvs, roaring.Or(lv.Nsp.Np, rv.Nsp.Np), rs))
+				case !lv.Nsp.Any() && rv.Nsp.Any():
+					vec.SetCol(ne.StrNeNullable(lvs, rvs, rv.Nsp.Np, rs))
+				case lv.Nsp.Any() && !rv.Nsp.Any():
+					vec.SetCol(ne.StrNeNullable(lvs, rvs, lv.Nsp.Np, rs))
+				default:
+					vec.SetCol(ne.StrNe(lvs, rvs, rs))
+				}
 				return vec, nil
 			},
 		},
