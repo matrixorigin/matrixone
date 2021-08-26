@@ -30,7 +30,7 @@ func recreateTestTempDir() (err error) {
 	if err != nil {
 		return err
 	}
-	err = os.MkdirAll(tmpDir, os.ModeDir)
+	err = os.MkdirAll(tmpDir, 0755)
 	return err
 }
 

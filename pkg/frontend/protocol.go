@@ -141,7 +141,11 @@ func (mp *MysqlProtocol) SendResponse(resp *Response) error {
 
 	switch resp.category {
 	case OkResponse:
-		return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+		s,ok := resp.data.(string)
+		if !ok {
+			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+		}
+		return mp.sendOKPacket(0, 0, uint16(resp.status), 0, s)
 	case EoFResponse:
 		return mp.sendEOFPacket(0, uint16(resp.status))
 	case ErrorResponse:

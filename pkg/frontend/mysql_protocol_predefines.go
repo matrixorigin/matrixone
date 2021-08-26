@@ -6220,7 +6220,7 @@ var errorMsgRefer = map[uint16]errorMsgItem{
 	ER_BLOBS_AND_NO_TERMINATED:       {1084, []string{"42000", "S1009"}, "You can't use fixed rowlength with BLOBs; please use 'fields terminated by'"},
 	ER_TEXTFILE_NOT_READABLE:         {1085, []string{"HY000"}, "The file '%-.128s' must be in the database directory or be readable by all"},
 	ER_FILE_EXISTS_ERROR:             {1086, []string{"HY000"}, "File '%-.200s' already exists"},
-	ER_LOAD_INFO:                     {1087, []string{"HY000"}, "Records: %ld  Deleted: %ld  Skipped: %ld  Warnings: %ld"},
+	ER_LOAD_INFO:                     {1087, []string{"HY000"}, "Records: %d  Deleted: %d  Skipped: %d  Warnings: %d"},
 	ER_ALTER_INFO:                    {1088, []string{"HY000"}, "Records: %ld  Duplicates: %ld"},
 	ER_WRONG_SUB_KEY:                 {1089, []string{"HY000"}, "Incorrect prefix key; the used key part isn't a string, the used length is longer than the key part, or the storage engine doesn't support unique prefix keys"},
 	ER_CANT_REMOVE_ALL_FIELDS:        {1090, []string{"42000"}, "You can't delete all columns with ALTER TABLE; use DROP TABLE instead"},

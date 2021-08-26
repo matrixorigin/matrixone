@@ -869,6 +869,27 @@ func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 	return nil
 }
 
+/*
+handle Load Data statement
+ */
+func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error  {
+	var err error = nil
+	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+
+	logutil.Infof("+++++load data")
+
+	records := 10
+	deleted := 1
+	skipped := 2
+	warnings := 3
+	info := NewMysqlError(ER_LOAD_INFO,records,deleted,skipped,warnings).Error()
+	resp := NewResponse(OkResponse, 0, int(COM_QUERY), info)
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.routine.GetSession()
@@ -952,6 +973,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return err
 			}
 			err = proto.sendOKPacket(0, 0, 0, 0, "")
+			if err != nil {
+				return err
+			}
+		case *tree.Load:
+			selfHandle = true
+			err = mce.handleLoadData(st)
 			if err != nil {
 				return err
 			}
