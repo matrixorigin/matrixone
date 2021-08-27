@@ -32,6 +32,7 @@ const (
 	colCnt             = 4
 	segmentCnt         = 5
 	blockCnt           = blockCntPerSegment * segmentCnt
+	restart            = false
 )
 
 var tableInfo *aoe.TableInfo
@@ -214,9 +215,13 @@ func TestStorage(t *testing.T) {
 
 	time.Sleep(3 * time.Second)
 
+	if restart {
+		doRestartEngine(t)
+	}
+
 }
 
-func TestRestartStorage(t *testing.T) {
+func doRestartStorage(t *testing.T) {
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}

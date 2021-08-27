@@ -175,9 +175,14 @@ func TestAOEEngine(t *testing.T) {
 		require.Equal(t, segmentCnt, len(tb.Segments()))
 		logutil.Infof("table name is %s, segment size is %d, segments is %v\n", tName, len(tb.Segments()), tb.Segments())
 	}
+
+	if restart {
+		time.Sleep(3 * time.Second)
+		doRestartEngine(t)
+	}
 }
 
-func TestAOEEngineRestart(t *testing.T) {
+func doRestartEngine(t *testing.T) {
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {

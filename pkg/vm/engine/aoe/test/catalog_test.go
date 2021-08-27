@@ -3,6 +3,7 @@ package test
 import (
 	"fmt"
 	"github.com/fagongzi/log"
+	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
@@ -15,6 +16,7 @@ import (
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/testutil"
+	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
 	"testing"
@@ -48,19 +50,39 @@ func TestCatalog(t *testing.T) {
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
-			c.ClusterConfig.PreAllocatedGroupNum = 5
+			c.ClusterConfig.PreAllocatedGroupNum = 20
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
-			return daoe.NewStorage(path)
-		}), testutil.WithTestAOEClusterUsePebble())
+			opts := &e.Options{}
+			mdCfg := &md.Configuration{
+				Dir:              path,
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &e.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return daoe.NewStorageWithOptions(path, opts)
+		}),
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterDataPath("./test")))
+
 	defer func() {
 		logutil.Debug(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
 	c.Start()
-	c.RaftCluster.WaitShardByCount(t, 1, time.Second*10)
+	c.RaftCluster.WaitLeadersByCount(t, 20, time.Second*30)
 	stdLog.Printf("app all started.")
 
 	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
