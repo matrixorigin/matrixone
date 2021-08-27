@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/pierrec/lz4"
+	"io"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -856,7 +858,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	//	return err
 	//}
 
-	metaSize := 32+64+1+4+4+8+8+len(data)*(8+8+32+32)+colCnt*(8+8+8)
+	metaSize := 32+64+1+4+4+8+8+len(data)*(8+8+32+32)+colCnt*(8+8)*len(data) + colCnt*8
 	startPos := int64(metaSize)
 	curPos := startPos
 	colPoses := make([]int64, colCnt)
@@ -890,19 +892,24 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	//if _, err = w.Seek(0, io.SeekStart); err != nil {
 	//	return err
 	//}
-
-	if err = binary.Write(w, binary.BigEndian, metaBuf.Bytes()); err != nil {
-		return err
-	}
+	//
+	//if err = binary.Write(w, binary.BigEndian, metaBuf.Bytes()); err != nil {
+	//	return err
+	//}
 
 	//footer := make([]byte, 64)
 	//if err = binary.Write(&dataBuf, binary.BigEndian, footer); err != nil {
 	//	return err
 	//}
 
-	if err = binary.Write(w, binary.BigEndian, dataBuf.Bytes()); err != nil {
-		return err
-	}
+	//if err = binary.Write(w, binary.BigEndian, dataBuf.Bytes()); err != nil {
+	//	return err
+	//}
+
+	w.Write(metaBuf.Bytes())
+	p, _ := w.Seek(0, io.SeekCurrent)
+	logutil.Infof("%d %d", p, startPos)
+	w.Write(dataBuf.Bytes())
 
 
 	return nil
