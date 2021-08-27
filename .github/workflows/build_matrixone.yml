@@ -35,8 +35,10 @@ jobs:
 
       - name: Build
         run: |
-          cd $GITHUB_WORKSPACE && make config && make build
+          cd $GITHUB_WORKSPACE && make clean
+          make config && make build
           make test
+          make bvt 
           
       - name: Show system resource statistics
         if: ${{ always() }}
