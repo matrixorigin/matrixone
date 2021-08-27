@@ -17,12 +17,10 @@ UT_RESULT=$2
 
 BUILD_WKS="$(pwd)/../"
 UT_TIMEOUT=15
-UT_FILTER="ut_filter"
-UT_COUNT="ut_count"
+UT_FILTER="/tmp/ut_filter"
+UT_COUNT="/tmp/ut_count"
 
 cd $BUILD_WKS
-[[ -f $UT_RESULT ]] && rm $UT_RESULT
-[[ -f $VET_RESULT ]] && rm $VET_RESULT
 
 function msl() {
     str='*'
@@ -43,8 +41,14 @@ function run_tests(){
     echo "* Running UT"
     msl
     go clean -testcache
+
+    [[ -f $UT_RESULT ]] && rm $UT_RESULT
+    [[ -f $VET_RESULT ]] && rm $VET_RESULT
+    [[ -f $UT_FILTER ]] && rm $UT_FILTER
+    [[ -f $UT_COUNT ]] && rm $UT_COUNT
+
     go test -v -race -timeout "${UT_TIMEOUT}m" -v $(go list ./... | egrep -v "frontend") | tee $UT_RESULT
-    egrep '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test'  $UT_RESULT > $UT_FILTER
+    egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test'  $UT_RESULT > $UT_FILTER
 }
 
 run_vet
@@ -62,9 +66,6 @@ EOF
 msl
 cat $UT_COUNT
 msl
-
-[[ -f $UT_FILTER ]] && rm $UT_FILTER
-[[ -f $UT_COUNT ]] && rm $UT_COUNT
 
 if (( $fail > 0 )) || (( $unknown > 0 )); then
   echo "Unit Testing FAILED !!!"
