@@ -7,6 +7,7 @@ import (
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -30,6 +31,8 @@ const (
 	colSizeSize = 8
 	colPosSize = 8
 )
+
+const Version uint64 = 1
 
 //  BlkCnt | Blk0 Pos | Blk1 Pos | ... | BlkEndPos | Blk0 Data | ...
 type SegmentWriter struct {
@@ -740,6 +743,7 @@ func (sw *SegmentWriter) Execute() error {
 func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	var metaBuf bytes.Buffer
 	header := make([]byte, 32)
+	copy(header, encoding.EncodeUint64(Version))
 	err := binary.Write(&metaBuf, binary.BigEndian, header)
 	if err != nil {
 		return err

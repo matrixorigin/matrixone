@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"matrixone/pkg/encoding"
 	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/prefetch"
 	e "matrixone/pkg/vm/engine/aoe/storage"
@@ -103,6 +104,9 @@ func (sf *SortedSegmentFile) initPointers() {
 	var err error
 	if err = binary.Read(metaBuf, binary.BigEndian, &header); err != nil {
 		panic(err)
+	}
+	if version := encoding.DecodeUint64(header); version != Version {
+		panic("version mismatched")
 	}
 	if err = binary.Read(metaBuf, binary.BigEndian, &reserved); err != nil {
 		panic(err)
