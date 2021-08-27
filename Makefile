@@ -17,6 +17,13 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 build: cmd/db-server/main.go
 	go build -o mo-server cmd/db-server/main.go
 
+# Building mo-server binary for debugging, it uses the latest MatrixCube from master.
+.PHONY: debug
+debug: cmd/db-server/main.go
+	go get github.com/matrixorigin/matrixcube
+	go mod tidy
+	go build -tags debug -o mo-server cmd/db-server/main.go
+
 # Running unit test cases
 # Set test timeout to 15 minutes
 # Excluding frontend test cases temporarily

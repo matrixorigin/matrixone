@@ -7,6 +7,7 @@ import (
 	"github.com/matrixorigin/matrixcube/pb"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
@@ -14,6 +15,7 @@ import (
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"time"
 )
 
 func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
@@ -61,6 +63,10 @@ func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 }
 
 func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("[logIndex:%d]append handler cost %d ms", ctx.LogIndex(), time.Since(t0).Milliseconds())
+	}()
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.AppendRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
