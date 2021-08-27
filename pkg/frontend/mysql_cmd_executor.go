@@ -46,11 +46,6 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	rt := obj.(*Routine)
 	ses := rt.GetSession()
 
-	logutil.Infof("hello------")
-	{
-		logutil.Infof("bat: %v\n", bat)
-	}
-
 	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
 	rowGroupSize = MaxInt64(rowGroupSize, 1)
 

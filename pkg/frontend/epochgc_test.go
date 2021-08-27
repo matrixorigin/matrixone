@@ -1,10 +1,15 @@
 package frontend
 
 import (
+	"encoding/binary"
 	"fmt"
 	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/components/prophet/util"
+	"github.com/matrixorigin/matrixcube/components/prophet/storage"
+	cube_prophet_util "github.com/matrixorigin/matrixcube/components/prophet/util"
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
 	"io/ioutil"
+	stdLog "log"
 	"math/rand"
 	mo_config "matrixone/pkg/config"
 	"matrixone/pkg/logger"
@@ -12,7 +17,12 @@ import (
 	"matrixone/pkg/sql/handler"
 	"matrixone/pkg/vm/engine"
 	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
+	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
+	aoe_dist_config "matrixone/pkg/vm/engine/aoe/dist/config"
+	aoe_dist_testutil "matrixone/pkg/vm/engine/aoe/dist/testutil"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
+	e "matrixone/pkg/vm/engine/aoe/storage"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -28,7 +38,7 @@ var DC *DebugCounter = NewDebugCounter(32)
 func TestEpochGC(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
-	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	cube_prophet_util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
 	defer func() {
 		err := cleanupTmpDir()
@@ -73,6 +83,14 @@ func TestEpochGC(t *testing.T) {
 	DC.Cf.Close()
 }
 
+const (
+	blockRows          = 10000
+	blockCntPerSegment = 2
+	colCnt             = 4
+	segmentCnt         = 5
+	blockCnt           = blockCntPerSegment * segmentCnt
+)
+
 /*
 test:
 boot server:
@@ -85,7 +103,7 @@ mysql> source pathto/xxx.sql
 func TestEpochGCWithMultiServer(t *testing.T) {
 	log.SetLevelByString("error")
 	log.SetHighlighting(false)
-	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	cube_prophet_util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
 	defer func() {
 		err := cleanupTmpDir()
@@ -97,23 +115,55 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	//go DC.DCRoutine()
 
 	nodeCnt := 3
+	pci_id := 0
+	var	pcis []*PDCallbackImpl
+	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, true)
 
-	pcis := make([]*PDCallbackImpl, nodeCnt)
-	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, false)
-	for i := 0; i < nodeCnt; i++ {
-		pcis[i] = NewPDCallbackImpl(ppu)
-		pcis[i].Id = i
-	}
+	c := aoe_dist_testutil.NewTestAOECluster(t,
+		func(node int) *aoe_dist_config.Config {
+			c := &aoe_dist_config.Config{}
+			c.ClusterConfig.PreAllocatedGroupNum = 20
+			c.ServerConfig.ExternalServer = true
+			return c
+		},
+		aoe_dist_testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+			opts := &e.Options{}
+			mdCfg := &md.Configuration{
+				Dir:              path,
+				SegmentMaxBlocks: blockCntPerSegment,
+				BlockMaxRows:     blockRows,
+			}
+			opts.CacheCfg = &e.CacheCfg{
+				IndexCapacity:  blockRows * blockCntPerSegment * 80,
+				InsertCapacity: blockRows * uint64(colCnt) * 2000,
+				DataCapacity:   blockRows * uint64(colCnt) * 2000,
+			}
+			opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+				Interval: time.Duration(1) * time.Second,
+			}
+			opts.Meta.Conf = mdCfg
+			return daoe.NewStorageWithOptions(path, opts)
+		}),
+		aoe_dist_testutil.WithTestAOEClusterUsePebble(),
+		aoe_dist_testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithTestClusterLogLevel("error"),
+			raftstore.WithTestClusterDataPath("./test"),
+			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
+				pci_id++
+				pci := NewPDCallbackImpl(ppu)
+				pci.Id = pci_id
+				pcis = append(pcis,pci)
+				cfg.Customize.CustomStoreHeartbeatDataProcessor =  pci
+			})))
+	c.Start()
+	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 
-	c, err := NewTestClusterStore(t, true, nil, pcis, nodeCnt)
-	if err != nil {
-		t.Errorf("new cube failed : %v", err)
-		return
-	}
+	defer func() {
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		c.Stop()
+	}()
 
-	defer c.Stop()
-
-	catalog := aoe_catalog.DefaultCatalog(c.Applications[0])
+	catalog := aoe_catalog.DefaultCatalog(c.CubeDrivers[0])
 	eng := aoe_engine.New(&catalog)
 
 	for i := 0; i < nodeCnt; i++ {
@@ -166,7 +216,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 
 	fmt.Println("-------------------close node 0----------------")
 	//test performance
-	c.Applications[0].Close()
+	c.CubeDrivers[0].Close()
 
 	time.Sleep(10 * time.Minute)
 
@@ -263,4 +313,68 @@ func Test_openfile(t *testing.T) {
 
 	defer f.Close()
 
+}
+
+func run_pci(id uint64,close *CloseFlag,pci *PDCallbackImpl,
+	kv storage.Storage) {
+	close.Open()
+	var buf [8]byte
+	c := uint64(0)
+	cell := time.Duration(100)
+	for close.IsOpened() {
+		fmt.Printf("++++%d++++loop again\n",id)
+		err := pci.Start(kv)
+		if err != nil {
+			fmt.Printf("A %v\n",err)
+		}
+		time.Sleep(cell * time.Millisecond)
+
+		for k := 0; k < 3; k++ {
+			c++
+			binary.BigEndian.PutUint64(buf[:],c)
+			rsp,err := pci.HandleHeartbeatReq(id,buf[:],kv)
+			if err != nil {
+				fmt.Printf("B %v\n",err)
+			}
+			time.Sleep(cell * time.Millisecond)
+
+			err = pci.HandleHeartbeatRsp(rsp)
+			if err != nil {
+				fmt.Printf("C %v\n",err)
+			}
+
+			time.Sleep(cell * time.Millisecond)
+		}
+
+		for j := 0; j < 3; j++ {
+			err = pci.Stop(kv)
+			if err != nil {
+				fmt.Printf("D %v\n",err)
+			}
+
+			time.Sleep(cell * time.Millisecond)
+		}
+
+		time.Sleep(cell * time.Millisecond)
+	}
+	fmt.Printf("%d to exit \n",id)
+}
+
+func Test_PCI_stall(t *testing.T) {
+	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, false)
+	pci := NewPDCallbackImpl(ppu)
+
+	kv := storage.NewTestStorage()
+
+	cnt := 5
+	var closeHandle []*CloseFlag = make([]*CloseFlag,cnt)
+	for i := 0; i < cnt; i++ {
+		closeHandle[i] = &CloseFlag{}
+		go run_pci(uint64(i),closeHandle[i],pci,kv)
+	}
+	time.Sleep(1 * time.Minute)
+	for i := 0; i < cnt; i++ {
+		closeHandle[i].Close()
+	}
+	time.Sleep(1* time.Minute)
 }
