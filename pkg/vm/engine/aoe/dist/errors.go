@@ -13,6 +13,7 @@ var (
 	ErrShardNotExisted = errors.New("shard is not existed")
 	ErrDispatchFailed  = errors.New("dispath raft query failed")
 	ErrKeyNotExisted   = errors.New("request key is not existed")
+	ErrStartupTimeout  = errors.New("driver startup timeout")
 )
 
 func errorResp(err error, infos ...string) []byte {
