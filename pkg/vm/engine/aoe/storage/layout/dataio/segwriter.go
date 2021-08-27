@@ -4,11 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/pierrec/lz4"
-	"io"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
-	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -858,14 +856,18 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	}
 	for _, colPos := range colPoses {
 		if err = binary.Write(&metaBuf, binary.BigEndian, colPos); err != nil {
-			panic(err)
+			return err
 		}
 	}
 
+	if _, err = w.Write(metaBuf.Bytes()); err != nil {
+		return err
+	}
 
-	w.Write(metaBuf.Bytes())
-	p, _ := w.Seek(0, io.SeekCurrent)
-	w.Write(dataBuf.Bytes())
+	if _, err = w.Write(dataBuf.Bytes()); err != nil {
+		return err
+
+	}
 
 
 	return nil
