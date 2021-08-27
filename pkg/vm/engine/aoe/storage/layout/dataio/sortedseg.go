@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
 )
@@ -86,18 +87,11 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 }
 
 func (sf *SortedSegmentFile) initPointers() {
-	if FlushIndex {
-		meta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
-		if err != nil {
-			panic(err)
-		}
-		sf.Meta.Indices = meta
-	}
 
-	sz := 96 + 1 + 4 + 4 + 8 + 8
+	sz := 96+1+4+4
 	buf := make([]byte, sz)
 	metaBuf := bytes.NewBuffer(buf)
-	if err := binary.Read(&sf.File, binary.BigEndian, &metaBuf); err != nil {
+	if err := binary.Read(&sf.File, binary.BigEndian, metaBuf.Bytes()); err != nil {
 		panic(err)
 	}
 
@@ -106,8 +100,6 @@ func (sf *SortedSegmentFile) initPointers() {
 	algo := uint8(0)
 	header := make([]byte, 32)
 	reserved := make([]byte, 64)
-	startPos := int64(0)
-	endPos := int64(0)
 	var err error
 	if err = binary.Read(metaBuf, binary.BigEndian, &header); err != nil {
 		panic(err)
@@ -124,75 +116,142 @@ func (sf *SortedSegmentFile) initPointers() {
 	if err = binary.Read(metaBuf, binary.BigEndian, &colCnt); err != nil {
 		panic(err)
 	}
-	if err = binary.Read(metaBuf, binary.BigEndian, &startPos); err != nil {
-		panic(err)
-	}if err = binary.Read(metaBuf, binary.BigEndian, &endPos); err != nil {
-		panic(err)
-	}
 
-	sz = int(blkCnt*(8+8+32+32) + colCnt*(8+8+8))
+	logutil2.Infof("%d %d %d", algo, blkCnt, colCnt)
+
+	sz = int(blkCnt*(8+8+32+32) + blkCnt*colCnt*(8+8) +colCnt*8) + 16
 
 	buf = make([]byte, sz)
 	metaBuf = bytes.NewBuffer(buf)
+	if err = binary.Read(&sf.File, binary.BigEndian, metaBuf.Bytes()); err != nil {
+		panic(err)
+	}
 
+	blkIds := make([]uint64, blkCnt)
+	blkCounts := make([]uint64, blkCnt)
+	idxBuf := make([]byte, 32)
+	preIndices := make([]*metadata.LogIndex, blkCnt)
+	indices := make([]*metadata.LogIndex, blkCnt)
 
+	for i := uint32(0); i < blkCnt; i++ {
+		if err = binary.Read(metaBuf, binary.BigEndian, &blkIds[i]); err != nil {
+			panic(err)
+		}
+		if err = binary.Read(metaBuf, binary.BigEndian, &blkCounts[i]); err != nil {
+			panic(err)
+		}
+		if err = binary.Read(metaBuf, binary.BigEndian, &idxBuf); err != nil {
+			panic(err)
+		}
+		if !bytes.Equal(idxBuf, []byte{}) {
+			preIndices[i] = &metadata.LogIndex{
+				ID:       0,
+				Start:    0,
+				Count:    0,
+				Capacity: 0,
+			}
+			if err = preIndices[i].UnMarshall(idxBuf); err != nil {
+				panic(err)
+			}
+		}
+		if err = binary.Read(metaBuf, binary.BigEndian, &idxBuf); err != nil {
+			panic(err)
+		}
+		if !bytes.Equal(idxBuf, []byte{}) {
+			indices[i] = &metadata.LogIndex{
+				ID:       0,
+				Start:    0,
+				Count:    0,
+				Capacity: 0,
+			}
+			if err = indices[i].UnMarshall(idxBuf); err != nil {
+				panic(err)
+			}
+		}
+	}
 
-	//err = binary.Read(&sf.File, binary.BigEndian, &algo)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//sf.DataAlgo = int(algo)
-	//err = binary.Read(&sf.File, binary.BigEndian, &blkCnt)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//// log.Infof("blkCnt=%d", blkCnt)
-	//blkIds := make([]uint64, blkCnt)
-	//Counts := make([]uint64, blkCnt)
-	//var prevIdxSz uint32
-	//var idxSz uint32
-	//prevIndices, indices := make([]*metadata.LogIndex, blkCnt), make([]*metadata.LogIndex, blkCnt)
-	//for i := 0; i < int(blkCnt); i++ {
-	//	if err = binary.Read(&sf.File, binary.BigEndian, &blkIds[i]); err != nil {
-	//		panic(err)
-	//	}
-	//	if err = binary.Read(&sf.File, binary.BigEndian, &Counts[i]); err != nil {
-	//		panic(err)
-	//	}
-	//	if err = binary.Read(&sf.File, binary.BigEndian, &prevIdxSz); err != nil {
-	//		panic(err)
-	//	}
-	//	buf := make([]byte, prevIdxSz)
-	//	if err = binary.Read(&sf.File, binary.BigEndian, &buf); err != nil {
-	//		panic(err)
-	//	}
-	//	prevIndices[i] = &metadata.LogIndex{
-	//		ID:       uint64(0),
-	//		Start:    uint64(0),
-	//		Count:    uint64(0),
-	//		Capacity: uint64(0),
-	//	}
-	//	if err = prevIndices[i].UnMarshall(buf); err != nil {
-	//		panic(err)
-	//	}
-	//	if err = binary.Read(&sf.File, binary.BigEndian, &idxSz); err != nil {
-	//		panic(err)
-	//	}
-	//	buf = make([]byte, idxSz)
-	//	if err = binary.Read(&sf.File, binary.BigEndian, &buf); err != nil {
-	//		panic(err)
-	//	}
-	//	indices[i] = &metadata.LogIndex{
-	//		ID:       uint64(0),
-	//		Start:    uint64(0),
-	//		Count:    uint64(0),
-	//		Capacity: uint64(0),
-	//	}
-	//	if err = indices[i].UnMarshall(buf); err != nil {
-	//		panic(err)
-	//	}
-	//	// log.Infof("blkId=%d", blkIds[i])
-	//}
+	for i := uint32(0); i < colCnt; i++ {
+		for j := uint32(0); j < blkCnt; j++ {
+			blkId := blkIds[j]
+			id := sf.ID.AsBlockID()
+			id.BlockID = blkId
+			key := base.Key{
+				Col: uint64(i),
+				ID:  id,
+			}
+			key.ID.Idx = uint16(i)
+			sf.Parts[key] = &base.Pointer{}
+			if err = binary.Read(metaBuf, binary.BigEndian, &sf.Parts[key].Len); err != nil {
+				panic(err)
+			}
+			if err = binary.Read(metaBuf, binary.BigEndian, &sf.Parts[key].OriginLen); err != nil {
+				panic(err)
+			}
+			//if err = binary.Read(metaBuf, binary.BigEndian, &sf.Parts[key].Offset); err != nil {
+			//	panic(err)
+			//}
+		}
+	}
+
+	startPos := int64(0)
+	endPos := int64(0)
+	colPos := make([]int64, colCnt)
+
+	if err = binary.Read(metaBuf, binary.BigEndian, &startPos); err != nil {
+		panic(err)
+	}
+	if err = binary.Read(metaBuf, binary.BigEndian, &endPos); err != nil {
+		panic(err)
+	}
+	for i := 0; i < int(colCnt); i++ {
+		if err = binary.Read(metaBuf, binary.BigEndian, &colPos[i]); err != nil {
+			panic(err)
+		}
+		logutil2.Infof("col pos: %d", colPos[i])
+	}
+
+	logutil2.Infof("start pos: %d   end pos: %d", startPos, endPos)
+
+	curOffset := startPos
+	for i := 0; i < int(colCnt); i++ {
+		for j := 0; j < int(blkCnt); j++ {
+			blkId := blkIds[j]
+			id := sf.ID.AsBlockID()
+			id.BlockID = blkId
+			key := base.Key{
+				Col: uint64(i),
+				ID:  id,
+			}
+			key.ID.Idx = uint16(i)
+			sf.Parts[key].Offset = curOffset
+			curOffset += int64(sf.Parts[key].Len)
+		}
+	}
+
+	for k, p := range sf.Parts {
+		logutil2.Infof("%v : %v %v", k, p.Offset, p.Len)
+	}
+
+	data := make([]byte, endPos - startPos)
+	if err = binary.Read(&sf.File, binary.BigEndian, &data); err != nil {
+		panic(err)
+	}
+
+	if FlushIndex {
+		meta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
+		if err != nil {
+			panic(err)
+		}
+		sf.Meta.Indices = meta
+	}
+
+	footer := make([]byte, 64)
+	if err = binary.Read(&sf.File, binary.BigEndian, &footer); err != nil {
+		panic(err)
+	}
+
+	logutil2.Infof("%s", footer)
+
 	//if err = binary.Read(&sf.File, binary.BigEndian, &colCnt); err != nil {
 	//	panic(err)
 	//}

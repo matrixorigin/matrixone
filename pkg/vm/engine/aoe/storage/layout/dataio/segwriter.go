@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/pierrec/lz4"
-	"io"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
@@ -764,14 +763,14 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 			if err != nil {
 				return err
 			}
-			if err = binary.Write(&metaBuf, binary.BigEndian, uint8(1)); err != nil {
-				return err
-			}
+			//if err = binary.Write(&metaBuf, binary.BigEndian, uint8(1)); err != nil {
+			//	return err
+			//}
 		} else {
 			preIdx = make([]byte, 32)
-			if err = binary.Write(&metaBuf, binary.BigEndian, uint8(0)); err != nil {
-				return err
-			}
+			//if err = binary.Write(&metaBuf, binary.BigEndian, uint8(0)); err != nil {
+			//	return err
+			//}
 		}
 		//if err = binary.Write(w, binary.BigEndian, uint32(len(preIdx))); err != nil {
 		//	return err
@@ -785,14 +784,14 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 			if err != nil {
 				return err
 			}
-			if err = binary.Write(&metaBuf, binary.BigEndian, uint8(1)); err != nil {
-				return err
-			}
+			//if err = binary.Write(&metaBuf, binary.BigEndian, uint8(1)); err != nil {
+			//	return err
+			//}
 		} else {
 			idx = make([]byte, 32)
-			if err = binary.Write(&metaBuf, binary.BigEndian, uint8(0)); err != nil {
-				return err
-			}
+			//if err = binary.Write(&metaBuf, binary.BigEndian, uint8(0)); err != nil {
+			//	return err
+			//}
 		}
 		//if err = binary.Write(w, binary.BigEndian, uint32(len(idx))); err != nil {
 		//	return err
@@ -802,10 +801,10 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 		}
 	}
 
-	startPos, err := w.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return err
-	}
+	//startPos, err := w.Seek(0, io.SeekCurrent)
+	//if err != nil {
+	//	return err
+	//}
 	//if _, err = w.Seek(int64(4*(len(colDefs)+1)), io.SeekCurrent); err != nil {
 	//	return err
 	//}
@@ -813,9 +812,11 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	//colPos := make([]uint32, len(colDefs))
 	//var buf bytes.Buffer
 	var dataBuf bytes.Buffer
+	colSizes := make([]int, colCnt)
 	for i := 0; i < colCnt; i++ {
-		pos, _ := w.Seek(0, io.SeekCurrent)
+		//pos, _ := w.Seek(0, io.SeekCurrent)
 		//colPos[i] = uint32(pos)
+		colSz := 0
 		for _, bat := range data {
 			colBuf, err := bat.Vecs[i].Show()
 			if err != nil {
@@ -832,31 +833,48 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 			if err = binary.Write(&metaBuf, binary.BigEndian, uint64(colSize)); err != nil {
 				return err
 			}
-			if err = binary.Write(&metaBuf, binary.BigEndian, pos); err != nil {
-				return err
-			}
+			//if err = binary.Write(&metaBuf, binary.BigEndian, pos); err != nil {
+			//	return err
+			//}
 			if err = binary.Write(&dataBuf, binary.BigEndian, cbuf); err != nil {
 				return err
 			}
+			colSz += len(cbuf)
 		}
 		//if _, err := w.Write(buf.Bytes()); err != nil {
 		//	return err
 		//}
+		colSizes[i] = colSz
 	}
 
-	colEndPos, err := w.Seek(0, io.SeekCurrent)
-	if err != nil {
-		return err
-	}
+	//colEndPos, err := w.Seek(0, io.SeekCurrent)
+	//if err != nil {
+	//	return err
+	//}
 	//_, err = w.Seek(startPos, io.SeekStart)
 	//if err != nil {
 	//	return err
 	//}
+
+	metaSize := 32+64+1+4+4+8+8+len(data)*(8+8+32+32)+colCnt*(8+8+8)
+	startPos := int64(metaSize)
+	curPos := startPos
+	colPoses := make([]int64, colCnt)
+	for i, colSz := range colSizes {
+		colPoses[i] = curPos
+		curPos += int64(colSz)
+	}
+	endPos := curPos
 	if err = binary.Write(&metaBuf, binary.BigEndian, startPos); err != nil {
 		return err
 	}
-	if err = binary.Write(&metaBuf, binary.BigEndian, colEndPos); err != nil {
+	if err = binary.Write(&metaBuf, binary.BigEndian, endPos); err != nil {
 		return err
+	}
+	for _, colPos := range colPoses {
+		if err = binary.Write(&metaBuf, binary.BigEndian, colPos); err != nil {
+			panic(err)
+		}
 	}
 
 	//for _, pos := range colPos {
@@ -869,9 +887,9 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	//	return err
 	//}
 
-	if _, err = w.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
+	//if _, err = w.Seek(0, io.SeekStart); err != nil {
+	//	return err
+	//}
 
 	if err = binary.Write(w, binary.BigEndian, metaBuf.Bytes()); err != nil {
 		return err
