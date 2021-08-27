@@ -252,6 +252,8 @@ func (sf *SortedSegmentFile) initPointers() {
 
 	logutil2.Infof("%s", footer)
 
+	sf.DataAlgo = int(algo)
+
 	//if err = binary.Read(&sf.File, binary.BigEndian, &colCnt); err != nil {
 	//	panic(err)
 	//}
