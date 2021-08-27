@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fagongzi/goetty"
+	"github.com/fagongzi/goetty/codec"
 	"github.com/fagongzi/goetty/codec/simple"
 	"sync/atomic"
 	"testing"
@@ -227,10 +228,11 @@ func echoHandler(session goetty.IOSession, msg interface{}, received uint64) err
 	return nil
 }
 
-func echoServer(handler func(goetty.IOSession, interface{}, uint64) error) {
-	encoder, decoder := simple.NewStringCodec()
-	echoServer, err := goetty.NewTCPApplication("localhost:6001", handler,
-		goetty.WithAppSessionOptions(goetty.WithCodec(encoder, decoder)))
+func echoServer(handler func(goetty.IOSession, interface{}, uint64) error, aware goetty.IOSessionAware,
+	encoder codec.Encoder, decoder codec.Decoder) {
+	echoServer, err := goetty.NewTCPApplication("127.0.0.1:6001", handler,
+		goetty.WithAppSessionOptions(goetty.WithCodec(encoder, decoder)),
+		goetty.WithAppSessionAware(aware))
 	if err != nil {
 		panic(err)
 	}
@@ -287,7 +289,8 @@ func echoClient() {
 }
 
 func TestIOPackageImpl_ReadPacket(t *testing.T) {
-	go echoServer(echoHandler)
+	encoder, decoder := simple.NewStringCodec()
+	go echoServer(echoHandler, nil, encoder, decoder)
 	time.Sleep(1 * time.Second)
 	echoClient()
 }
