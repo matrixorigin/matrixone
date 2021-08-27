@@ -15,7 +15,7 @@ type Pipeline struct {
 type block struct {
 	siz int64
 	bat *batch.Batch
-	blk engine.Block
+	blk engine.Segment
 }
 
 type queue struct {

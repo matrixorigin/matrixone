@@ -3,8 +3,13 @@ package batch
 import (
 	"bytes"
 	"fmt"
+	"matrixone/pkg/compress"
 	"matrixone/pkg/container/vector"
+	"matrixone/pkg/encoding"
+	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
+
+	"golang.org/x/sys/unix"
 )
 
 func New(ro bool, attrs []string) *Batch {
@@ -67,15 +72,34 @@ func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector,
 		if attr != name {
 			continue
 		}
-		if len(bat.Is) <= i || bat.Is[i].R == nil {
+		if len(bat.Is) <= i || bat.Is[i].Wg == nil {
 			return bat.Vecs[i], nil
 		}
-		vec, err := bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc)
-		if err != nil {
+		data := bat.Vecs[i].Data
+		if bat.Is[i].Alg == compress.Lz4 {
+			var err error
+
+			n := int(encoding.DecodeInt32(data[len(data)-4:]))
+			buf, err := proc.Alloc(int64(n))
+			if err != nil {
+				return nil, err
+			}
+			tm, err := compress.Decompress(data[:len(data)-4], buf[mempool.CountSize:], bat.Is[i].Alg)
+			if err != nil {
+				unix.Munmap(data)
+				proc.Free(buf)
+				return nil, err
+			}
+			buf = buf[:mempool.CountSize+len(tm)]
+			unix.Munmap(data)
+			data = buf[:mempool.CountSize+n]
+			bat.Vecs[i].Data = data
+		}
+		if err := bat.Vecs[i].Read(data); err != nil {
 			return nil, err
 		}
-		bat.Is[i].R = nil
-		bat.Vecs[i] = vec
+		copy(data, encoding.EncodeUint64(bat.Is[i].Ref))
+		bat.Is[i].Wg = nil
 		return bat.Vecs[i], nil
 	}
 	return nil, fmt.Errorf("attribute '%s' not exist", name)

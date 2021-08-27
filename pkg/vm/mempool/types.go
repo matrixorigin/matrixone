@@ -1,6 +1,9 @@
 package mempool
 
-import "matrixone/pkg/internal/cpu"
+import (
+	"matrixone/pkg/internal/cpu"
+	"unsafe"
+)
 
 const (
 	CountSize = 8
@@ -15,7 +18,8 @@ type Mempool struct {
 }
 
 type bucket struct {
+	cnt   int
 	size  int
 	nslot int
-	slots [][]byte
+	slots []unsafe.Pointer
 }

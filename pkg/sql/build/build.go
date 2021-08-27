@@ -43,22 +43,6 @@ func (b *build) BuildStatement(stmt tree.Statement) (op.OP, error) {
 		return b.buildSelect(stmt)
 	case *tree.ParenSelect:
 		return b.buildSelect(stmt.Select)
-	case *tree.Insert:
-		return b.buildInsert(stmt)
-	case *tree.DropTable:
-		return b.buildDropTable(stmt)
-	case *tree.DropDatabase:
-		return b.buildDropDatabase(stmt)
-	case *tree.CreateTable:
-		return b.buildCreateTable(stmt)
-	case *tree.CreateDatabase:
-		return b.buildCreateDatabase(stmt)
-	case *tree.ExplainStmt, *tree.ExplainFor, *tree.ExplainAnalyze:
-		return b.buildExplain(stmt)
-	case *tree.ShowTables:
-		return b.buildShowTables(stmt)
-	case *tree.ShowDatabases:
-		return b.buildShowDatabases(stmt)
 	}
 	return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", stmt))
 }

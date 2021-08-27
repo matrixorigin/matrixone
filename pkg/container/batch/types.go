@@ -2,17 +2,15 @@ package batch
 
 import (
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
 )
 
-type Reader interface {
-	Read(int64, uint64, string, *process.Process) (*vector.Vector, error)
+type Info struct {
+	Alg int
+	Ref uint64
+	Wg  *WaitGroup
 }
 
-type Info struct {
-	Len int64
-	Ref uint64
-	R   Reader
+type WaitGroup struct {
 }
 
 type Batch struct {

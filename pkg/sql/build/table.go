@@ -9,20 +9,13 @@ import (
 )
 
 func (b *build) buildTable(stmt *tree.TableName) (op.OP, error) {
-	if len(stmt.SchemaName) == 0 {
-		return b.getTable(true, b.db, string(stmt.ObjectName))
-	}
-	return b.getTable(false, string(stmt.SchemaName), string(stmt.ObjectName))
+	return b.getTable(string(stmt.ObjectName))
 }
 
-func (b *build) getTable(s bool, schema string, name string) (op.OP, error) {
-	db, err := b.e.Database(schema)
-	if err != nil {
-		return nil, sqlerror.New(errno.InvalidSchemaName, err.Error())
-	}
-	r, err := db.Relation(name)
+func (b *build) getTable(name string) (op.OP, error) {
+	r, err := b.e.Relation(name)
 	if err != nil {
 		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
 	}
-	return relation.New(s, name, schema, r), nil
+	return relation.New(name, r), nil
 }

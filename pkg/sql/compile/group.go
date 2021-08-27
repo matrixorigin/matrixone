@@ -42,7 +42,7 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 		for i, j := 0, len(ss); i < j; i++ {
 			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
-				Ch: make(chan interface{}),
+				Ch: make(chan interface{}, 10),
 			}
 		}
 	}
@@ -99,7 +99,6 @@ func pushGroup(s *Scope, refer map[string]uint64, gs []string, o *group.Group) *
 			},
 		}
 	} else {
-		n := len(s.Ins) - 1
 		s.Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Group,
 			Arg: &vgroup.Argument{
@@ -108,7 +107,6 @@ func pushGroup(s *Scope, refer map[string]uint64, gs []string, o *group.Group) *
 				Es:    unitAggregates(o.Es),
 			},
 		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
 	}
 	return s
 }

@@ -2,22 +2,14 @@ package compile
 
 import (
 	"fmt"
-	stdLog "log"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/build"
 	"matrixone/pkg/sql/colexec/output"
 	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/createDatabase"
-	"matrixone/pkg/sql/op/createTable"
 	"matrixone/pkg/sql/op/dedup"
-	"matrixone/pkg/sql/op/dropDatabase"
-	"matrixone/pkg/sql/op/dropTable"
-	"matrixone/pkg/sql/op/explain"
 	"matrixone/pkg/sql/op/group"
 	"matrixone/pkg/sql/op/innerJoin"
-	"matrixone/pkg/sql/op/insert"
 	"matrixone/pkg/sql/op/limit"
 	"matrixone/pkg/sql/op/naturalJoin"
 	"matrixone/pkg/sql/op/offset"
@@ -26,26 +18,21 @@ import (
 	"matrixone/pkg/sql/op/projection"
 	"matrixone/pkg/sql/op/relation"
 	"matrixone/pkg/sql/op/restrict"
-	"matrixone/pkg/sql/op/showDatabases"
-	"matrixone/pkg/sql/op/showTables"
 	"matrixone/pkg/sql/op/summarize"
 	"matrixone/pkg/sql/op/top"
 	"matrixone/pkg/sql/opt"
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/sqlerror"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"sync"
-	"time"
 )
 
 func New(db string, sql string, uid string,
-	e engine.Engine, ns metadata.Nodes, proc *process.Process) *compile {
+	e engine.Engine, proc *process.Process) *compile {
 	return &compile{
 		e:    e,
 		db:   db,
-		ns:   ns,
 		uid:  uid,
 		sql:  sql,
 		proc: proc,
@@ -77,31 +64,11 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	if err != nil {
 		return err
 	}
-	{
-		switch o.(type) {
-		case *explain.Explain:
-			e.cs = append(e.cs, &Col{Typ: types.T_varchar, Name: "Pipeline"})
-		case *showTables.ShowTables:
-			e.cs = append(e.cs, &Col{Typ: types.T_varchar, Name: "Table"})
-		case *showDatabases.ShowDatabases:
-			e.cs = append(e.cs, &Col{Typ: types.T_varchar, Name: "Database"})
-		}
-	}
 	mp := o.Attribute()
 	attrs := o.Columns()
 	cs := make([]*Col, 0, len(mp))
 	for _, attr := range attrs {
 		cs = append(cs, &Col{mp[attr].Oid, attr})
-	}
-	{
-		switch o.(type) {
-		case *explain.Explain:
-			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Pipeline"})
-		case *showTables.ShowTables:
-			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Table"})
-		case *showDatabases.ShowDatabases:
-			cs = append(cs, &Col{Typ: types.T_varchar, Name: "Database"})
-		}
 	}
 	e.u = u
 	e.cs = cs
@@ -124,11 +91,9 @@ func (e *Exec) Columns() []*Col {
 	return e.cs
 }
 
-func (e *Exec) Run(ts uint64) error {
+func (e *Exec) Run() error {
 	var wg sync.WaitGroup
 
-	t0 := time.Now()
-	stdLog.Printf("[Debug0820]query %s at epoch %d start to run", e.c.proc.Id, ts)
 	fmt.Printf("+++++++++\n")
 	Print(nil, e.ss)
 	fmt.Printf("+++++++++\n")
@@ -150,95 +115,14 @@ func (e *Exec) Run(ts uint64) error {
 				}
 				wg.Done()
 			}(e.ss[i])
-		case Insert:
-			wg.Add(1)
-			go func(s *Scope) {
-				if err := s.Insert(ts); err != nil {
-					e.err = err
-				}
-				wg.Done()
-			}(e.ss[i])
-		case Explain:
-			wg.Add(1)
-			go func(s *Scope) {
-				if err := s.Explain(e.u, e.fill); err != nil {
-					e.err = err
-				}
-				wg.Done()
-			}(e.ss[i])
-		case DropTable:
-			wg.Add(1)
-			go func(s *Scope) {
-				if err := s.DropTable(ts); err != nil {
-					e.err = err
-				}
-				wg.Done()
-			}(e.ss[i])
-		case DropDatabase:
-			wg.Add(1)
-			go func(s *Scope) {
-				if err := s.DropDatabase(ts); err != nil {
-					e.err = err
-				}
-				wg.Done()
-			}(e.ss[i])
-		case CreateTable:
-			wg.Add(1)
-			go func(s *Scope) {
-				if err := s.CreateTable(ts); err != nil {
-					e.err = err
-				}
-				wg.Done()
-			}(e.ss[i])
-		case CreateDatabase:
-			wg.Add(1)
-			go func(s *Scope) {
-				if err := s.CreateDatabase(ts); err != nil {
-					e.err = err
-				}
-				wg.Done()
-			}(e.ss[i])
-		case ShowTables:
-			wg.Add(1)
-			go func(s *Scope) {
-				if err := s.ShowTables(e.u, e.fill); err != nil {
-					e.err = err
-				}
-				wg.Done()
-			}(e.ss[i])
-		case ShowDatabases:
-			wg.Add(1)
-			go func(s *Scope) {
-				if err := s.ShowDatabases(e.u, e.fill); err != nil {
-					e.err = err
-				}
-				wg.Done()
-			}(e.ss[i])
 		}
 	}
 	wg.Wait()
-	stdLog.Printf("[Debug0820]query %s at epoch %d finished, cost %d ms", e.c.proc.Id, ts, time.Since(t0).Milliseconds())
 	return e.err
 }
 
 func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 	switch n := o.(type) {
-	case *insert.Insert:
-		return []*Scope{&Scope{Magic: Insert, O: o}}, nil
-	case *explain.Explain:
-		return []*Scope{&Scope{Magic: Explain, O: o}}, nil
-	case *dropTable.DropTable:
-		return []*Scope{&Scope{Magic: DropTable, O: o}}, nil
-	case *dropDatabase.DropDatabase:
-		return []*Scope{&Scope{Magic: DropDatabase, O: o}}, nil
-	case *createTable.CreateTable:
-		return []*Scope{&Scope{Magic: CreateTable, O: o}}, nil
-	case *createDatabase.CreateDatabase:
-		return []*Scope{&Scope{Magic: CreateDatabase, O: o}}, nil
-	case *showTables.ShowTables:
-		return []*Scope{&Scope{Magic: ShowTables, O: o}}, nil
-	case *showDatabases.ShowDatabases:
-		return []*Scope{&Scope{Magic: ShowDatabases, O: o}}, nil
 	case *top.Top:
 		return c.compileTop(n, mp)
 	case *dedup.Dedup:

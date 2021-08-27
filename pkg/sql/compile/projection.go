@@ -63,12 +63,10 @@ func pushProjection(s *Scope, arg *vprojection.Argument) *Scope {
 			s.Ss[i] = pushProjection(s.Ss[i], arg)
 		}
 	} else {
-		n := len(s.Ins) - 1
 		s.Ins = append(s.Ins, vm.Instruction{
 			Arg: arg,
 			Op:  vm.Projection,
 		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
 	}
 	return s
 }

@@ -2,7 +2,12 @@ package mempool
 
 import (
 	"matrixone/pkg/encoding"
+	"reflect"
+	"sync/atomic"
+	"unsafe"
 )
+
+var NullPointer unsafe.Pointer
 
 func init() {
 	var PageOffsets = map[int]int{
@@ -31,8 +36,8 @@ func New(maxSize, factor int) *Mempool {
 	for size := PageSize; size <= maxSize; size *= factor {
 		m.buckets = append(m.buckets, bucket{
 			size:  size,
-			slots: make([][]byte, 0, 16),
-			nslot: ((maxSize/size + 3) >> 2) << 2,
+			nslot: 8,
+			slots: make([]unsafe.Pointer, 8),
 		})
 	}
 	return m
@@ -67,11 +72,17 @@ func (m *Mempool) Alloc(size int) []byte {
 	if size <= m.maxSize {
 		for _, b := range m.buckets {
 			if b.size >= size {
-				if len(b.slots) > 0 {
-					data := b.slots[0]
-					b.slots = b.slots[1:]
-					copy(data, OneCount)
-					return data
+				for i := 0; i < b.nslot; i++ {
+					old := b.slots[i]
+					if old == NullPointer {
+						continue
+					}
+					if atomic.CompareAndSwapPointer(&b.slots[i], old, NullPointer) {
+						hp := *(*reflect.SliceHeader)(old)
+						data := *(*[]byte)(unsafe.Pointer(&hp))
+						copy(data, OneCount)
+						return data[:size]
+					}
 				}
 				data := make([]byte, size)
 				copy(data, OneCount)
@@ -92,11 +103,11 @@ func (m *Mempool) Free(data []byte) bool {
 	}
 	size := cap(data)
 	if size <= m.maxSize {
-		for _, b := range m.buckets {
-			if b.size == size {
-				if len(b.slots) < b.nslot {
-					b.slots = append(b.slots, data)
-				}
+		for i, j := 0, len(m.buckets)-1; i < j; i++ {
+			b := m.buckets[i]
+			if size >= b.size && size < m.buckets[i+1].size {
+				b.cnt = (b.cnt + 1) % b.nslot
+				b.slots[b.cnt] = unsafe.Pointer(&data)
 				return true
 			}
 		}

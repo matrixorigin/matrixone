@@ -4,7 +4,6 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/relation"
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
@@ -28,9 +27,8 @@ const (
 
 type Source struct {
 	ID   string
-	DB   string
+	Segs []string
 	Refs map[string]uint64
-	Segs []*relation.Segment
 }
 
 type Scope struct {
@@ -65,6 +63,5 @@ type compile struct {
 	uid  string
 	sql  string
 	e    engine.Engine
-	ns   metadata.Nodes
 	proc *process.Process
 }

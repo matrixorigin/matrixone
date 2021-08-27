@@ -50,14 +50,6 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 		if err := q.prefetch(p.cs, p.attrs, proc); err != nil {
 			return false, err
 		}
-		if q.bs[i].bat == nil {
-			bat, err := q.bs[i].blk.Prefetch(p.cs, p.attrs, proc)
-			if err != nil {
-				return false, err
-			}
-			q.bs[i].bat = bat
-			q.pi = i + 1
-		}
 		proc.Reg.Ax = q.bs[i].bat
 		if end, err = vm.Run(p.ins, proc); err != nil {
 			return end, err
@@ -94,17 +86,7 @@ func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) (*queu
 	q.bs = make([]block, 0, 8) // prefetch block list
 	{
 		for _, seg := range segs {
-			ids := seg.Blocks()
-			for _, id := range ids {
-				b := seg.Block(id, proc)
-				var siz int64
-				{
-					for _, attr := range p.attrs {
-						siz += b.Size(attr)
-					}
-				}
-				q.bs = append(q.bs, block{siz: siz, blk: b})
-			}
+			q.bs = append(q.bs, block{siz: 0, blk: seg})
 		}
 	}
 	if err := q.prefetch(p.cs, p.attrs, proc); err != nil {
@@ -117,11 +99,12 @@ func (q *queue) prefetch(cs []uint64, attrs []string, proc *process.Process) err
 	if q.pi == len(q.bs) {
 		return nil
 	}
+	start := q.pi
 	for i, j := q.pi, len(q.bs); i < j; i++ {
-		if q.siz >= proc.Lim.BatchSize {
+		if i > 8+start {
 			break
 		}
-		bat, err := q.bs[i].blk.Prefetch(cs, attrs, proc)
+		bat, err := q.bs[i].blk.Read(cs, attrs, proc)
 		if err != nil {
 			return err
 		}
