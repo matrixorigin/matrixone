@@ -16,6 +16,21 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
+const (
+	headerSize = 32
+	reservedSize = 64
+	algoSize = 1
+	blkCntSize = 4
+	colCntSize = 4
+	startPosSize = 8
+	endPosSize = 8
+	blkIdSize = 8
+	blkCountSize = 8
+	blkIdxSize = 32
+	colSizeSize = 8
+	colPosSize = 8
+)
+
 //  BlkCnt | Blk0 Pos | Blk1 Pos | ... | BlkEndPos | Blk0 Data | ...
 type SegmentWriter struct {
 	data         []*batch.Batch
@@ -723,9 +738,6 @@ func (sw *SegmentWriter) Execute() error {
 }
 
 func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
-	// Write Header
-	// Write Indice
-	// Write Blocks
 	var metaBuf bytes.Buffer
 	header := make([]byte, 32)
 	err := binary.Write(&metaBuf, binary.BigEndian, header)
@@ -763,18 +775,9 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 			if err != nil {
 				return err
 			}
-			//if err = binary.Write(&metaBuf, binary.BigEndian, uint8(1)); err != nil {
-			//	return err
-			//}
 		} else {
 			preIdx = make([]byte, 32)
-			//if err = binary.Write(&metaBuf, binary.BigEndian, uint8(0)); err != nil {
-			//	return err
-			//}
 		}
-		//if err = binary.Write(w, binary.BigEndian, uint32(len(preIdx))); err != nil {
-		//	return err
-		//}
 		if err = binary.Write(&metaBuf, binary.BigEndian, preIdx); err != nil {
 			return err
 		}
@@ -784,30 +787,17 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 			if err != nil {
 				return err
 			}
-			//if err = binary.Write(&metaBuf, binary.BigEndian, uint8(1)); err != nil {
-			//	return err
-			//}
 		} else {
 			idx = make([]byte, 32)
-			//if err = binary.Write(&metaBuf, binary.BigEndian, uint8(0)); err != nil {
-			//	return err
-			//}
 		}
-		//if err = binary.Write(w, binary.BigEndian, uint32(len(idx))); err != nil {
-		//	return err
-		//}
 		if err = binary.Write(&metaBuf, binary.BigEndian, idx); err != nil {
 			return err
 		}
 	}
 
-	//colPos := make([]uint32, len(colDefs))
-	//var buf bytes.Buffer
 	var dataBuf bytes.Buffer
 	colSizes := make([]int, colCnt)
 	for i := 0; i < colCnt; i++ {
-		//pos, _ := w.Seek(0, io.SeekCurrent)
-		//colPos[i] = uint32(pos)
 		colSz := 0
 		for _, bat := range data {
 			colBuf, err := bat.Vecs[i].Show()
@@ -825,21 +815,25 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 			if err = binary.Write(&metaBuf, binary.BigEndian, uint64(colSize)); err != nil {
 				return err
 			}
-			//if err = binary.Write(&metaBuf, binary.BigEndian, pos); err != nil {
-			//	return err
-			//}
 			if err = binary.Write(&dataBuf, binary.BigEndian, cbuf); err != nil {
 				return err
 			}
 			colSz += len(cbuf)
 		}
-		//if _, err := w.Write(buf.Bytes()); err != nil {
-		//	return err
-		//}
 		colSizes[i] = colSz
 	}
 
-	metaSize := 32+64+1+4+4+8+8+len(data)*(8+8+32+32)+colCnt*(8+8)*len(data) + colCnt*8
+	metaSize := headerSize +
+				reservedSize +
+				algoSize +
+				blkCntSize +
+				colCntSize +
+				startPosSize +
+				endPosSize +
+				len(data) * (blkCountSize+blkIdSize+2*blkIdxSize) +
+				len(data) * colCnt * (colSizeSize*2) +
+				colCnt * colPosSize
+
 	startPos := int64(metaSize)
 	curPos := startPos
 	colPoses := make([]int64, colCnt)

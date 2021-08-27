@@ -88,7 +88,7 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 
 func (sf *SortedSegmentFile) initPointers() {
 
-	sz := 96 + 1 + 4 + 4
+	sz := headerSize + reservedSize + algoSize + blkCntSize + colCntSize
 	buf := make([]byte, sz)
 	metaBuf := bytes.NewBuffer(buf)
 	if err := binary.Read(&sf.File, binary.BigEndian, metaBuf.Bytes()); err != nil {
@@ -117,7 +117,11 @@ func (sf *SortedSegmentFile) initPointers() {
 		panic(err)
 	}
 
-	sz = int(blkCnt*(8+8+32+32)+blkCnt*colCnt*(8+8)+colCnt*8) + 16
+	sz = startPosSize +
+		 endPosSize +
+		 int(blkCnt) * (blkCountSize+blkIdSize+2*blkIdxSize) +
+		 int(blkCnt * colCnt) * (colSizeSize*2) +
+		 int(colCnt) * colPosSize
 
 	buf = make([]byte, sz)
 	metaBuf = bytes.NewBuffer(buf)
@@ -185,9 +189,6 @@ func (sf *SortedSegmentFile) initPointers() {
 			if err = binary.Read(metaBuf, binary.BigEndian, &sf.Parts[key].OriginLen); err != nil {
 				panic(err)
 			}
-			//if err = binary.Read(metaBuf, binary.BigEndian, &sf.Parts[key].Offset); err != nil {
-			//	panic(err)
-			//}
 		}
 	}
 
