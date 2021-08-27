@@ -84,6 +84,11 @@ type PDCallbackImpl struct {
 	enableLogging
 	 */
 	enableLog bool
+
+	/*
+	close
+	 */
+	closeOnce sync.Once
 }
 
 /*
@@ -229,7 +234,10 @@ kv : the persistent storage
 func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
-
+	if pci.enableLog {
+		fmt.Printf("-------PDC Start enter\n")
+		defer fmt.Printf("-------PDC Start exit\n")
+	}
 	//TODO:When the cluster runs initially, there is not keys any more.
 	//load cluster_epoch
 	//load minimumRemovableEpoch
@@ -237,6 +245,11 @@ func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 	err := kv.LoadCustomData(math.MaxInt64,pci.getCustomData)
 	if err != nil {
 		return err
+	}
+
+	//make new channel
+	if pci.msgChan == nil {
+		pci.msgChan = make(chan *ChanMessage)
 	}
 
 	//start timer for epoch increment
@@ -256,6 +269,16 @@ When the node changes from the leader to the follower, the Stop will be executed
 kv : the persistent storage
  */
 func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
+	if pci.enableLog {
+		fmt.Printf("-------PDC Stop enter\n")
+		defer fmt.Printf("-------PDC Stop exit\n")
+	}
+	pci.rwlock.Lock()
+	defer pci.rwlock.Unlock()
+	if pci.enableLog{
+		fmt.Printf("-------PDC Stop Get Lock\n")
+	}
+
 	//stop timer
 	pci.timerClose.Close()
 
@@ -263,15 +286,17 @@ func (pci *PDCallbackImpl) Stop(kv storage.Storage) error {
 	/*
 	Do not close chan twice.
 	 */
-	if pci.msgChan != nil {
-		var closeOnce sync.Once
-		closeChan := func() {
-			close(pci.msgChan)
-			pci.msgChan = nil
-		}
-		closeOnce.Do(closeChan)
+	if pci.enableLog {
+		fmt.Printf("-------PDC Stop close channel\n")
 	}
-
+	closeChan := func() {
+		close(pci.msgChan)
+		pci.msgChan = nil
+	}
+	pci.closeOnce.Do(closeChan)
+	if pci.enableLog {
+		fmt.Printf("-------PDC Stop close channel done\n")
+	}
 	//stop delete ddl worker
 	pci.ddlDeleteClose.Close()
 
@@ -284,12 +309,18 @@ id : the id of the node,
 data : the message that the node sent
 kv : the persistent storage
  */
-func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage.Storage) (responseData []byte, err error){
+func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage.Storage) (responseData []byte, err error) {
+	if pci.enableLog {
+		fmt.Printf("-------PDC HandleHeartbeatReq enter\n")
+		defer fmt.Printf("-------PDC HandleHeartbeatReq exit\n")
+	}
 	pci.rwlock.Lock()
 	defer pci.rwlock.Unlock()
 	//fmt.Printf("%d leader receive heartbeat from %d \n",pci.Id,id)
 	//step 1: set [server,maximumRemovableEpoch]
-
+	if pci.enableLog {
+		fmt.Printf("-------PDC HandleHeartbeatReq Get Lock\n")
+	}
 	maxre := binary.BigEndian.Uint64(data)
 	pci.serverInfo[id] = maxre
 
@@ -328,13 +359,18 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 			keys = append(keys,k_buf)
 			b2 = append(b2,v_buf)
 		}
-
+		if pci.enableLog {
+			fmt.Printf("-------PDC HandleHeartbeatReq server_info to channel\n")
+		}
 		//step 3: put these values into the worker
 		pci.msgChan <- &ChanMessage{
 			tp:   MSG_TYPE_SERVER_INFO,
 			body: nil,
 			body2: keys,
 			body3: b2,
+		}
+		if pci.enableLog {
+			fmt.Printf("-------PDC HandleHeartbeatReq enter server_info to channel done\n")
 		}
 	}else{
 		for _, v := range pci.serverInfo {
@@ -349,9 +385,15 @@ func (pci *PDCallbackImpl) HandleHeartbeatReq(id uint64, data []byte, kv storage
 	if pci.persistTimeout[2].isTimeout() {
 		buf := make([]byte,8)
 		binary.BigEndian.PutUint64(buf,pci.cluster_minimumRemovableEpoch)
+		if pci.enableLog {
+			fmt.Printf("-------PDC HandleHeartbeatReq epoch to channel\n")
+		}
 		pci.msgChan <- &ChanMessage{
 			tp:   MSG_TYPE_MINI_REM_EPOCH,
 			body: buf,
+		}
+		if pci.enableLog {
+			fmt.Printf("-------PDC HandleHeartbeatReq epoch to channel done\n")
 		}
 	}
 
@@ -377,7 +419,9 @@ func (pci *PDCallbackImpl) IncrementEpochPeriodlyRoutine(period int){
 		if pci.persistTimeout[0].isTimeout() {
 			buf := make([]byte,8)
 			binary.BigEndian.PutUint64(buf,ce)
-
+			if pci.enableLog {
+				fmt.Printf("------- gen epoch %d\n",ce)
+			}
 			//step 2: put these values into the worker
 			pci.msgChan <- &ChanMessage{
 				tp:   MSG_TYPE_CLUSTER_EPOCH,
@@ -400,7 +444,9 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 	for msg := range pci.msgChan {
 		switch msg.tp {
 		case MSG_TYPE_CLUSTER_EPOCH:
-			//fmt.Printf("cluster epoch %v \n",msg.body)
+			if pci.enableLog {
+				fmt.Printf("-------cluster epoch %v \n", msg.body)
+			}
 			err := kv.PutCustomData(CLUSTER_EPOCH_KEY,msg.body)
 			if err != nil {
 				//panic(err)
@@ -408,7 +454,9 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 			}
 
 		case MSG_TYPE_SERVER_INFO:
-			//fmt.Printf("server info %v \n",msg.body2)
+			if pci.enableLog {
+				fmt.Printf("-------server info %v \n", msg.body2)
+			}
 			//save kv<server,maximumRemovableEpoch>
 			err := kv.BatchPutCustomData(msg.body2,msg.body3)
 			if err != nil {
@@ -416,7 +464,9 @@ func (pci *PDCallbackImpl) PersistentWorkerRoutine(msgChan chan *ChanMessage, kv
 				log.Fatal(err)
 			}
 		case MSG_TYPE_MINI_REM_EPOCH:
-			//fmt.Printf("minimum removable epoch %v \n",msg.body)
+			if pci.enableLog {
+				fmt.Printf("-------minimum removable epoch %v \n",msg.body)
+			}
 			//save minimumRemovableEpoch
 			err := kv.PutCustomData(MINI_REM_EPOCH_KEY,msg.body)
 			if err != nil {
@@ -453,6 +503,10 @@ when the server receives a heartbeat response from the leader, the HandleHeartbe
 data : the response from the leader
  */
 func (sci *PDCallbackImpl) HandleHeartbeatRsp(data []byte) error {
+	if sci.enableLog {
+		fmt.Printf("-------PDC HandleHeartbeatRsp enter\n")
+		defer fmt.Printf("-------PDC HandleHeartbeatRsp exit\n")
+	}
 	sci.rwlock.Lock()
 	defer sci.rwlock.Unlock()
 	sci.heartbeatTimeout.UpdateTime(time.Now())

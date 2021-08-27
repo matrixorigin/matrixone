@@ -232,10 +232,6 @@ func (sf *SortedSegmentFile) initPointers() {
 		logutil2.Infof("%v : %v %v", k, p.Offset, p.Len)
 	}
 
-	data := make([]byte, endPos - startPos)
-	if err = binary.Read(&sf.File, binary.BigEndian, &data); err != nil {
-		panic(err)
-	}
 
 	if FlushIndex {
 		meta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)

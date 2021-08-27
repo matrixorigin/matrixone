@@ -28,7 +28,8 @@ import (
 )
 
 const (
-	defaultRPCTimeout = time.Second * 10
+	defaultRPCTimeout     = time.Second * 10
+	defalutStartupTimeout = time.Second * 300
 )
 
 // CubeDriver implements distributed kv and aoe.
@@ -280,7 +281,20 @@ func (h *driver) Start() error {
 	if err != nil {
 		return err
 	}
-	return h.initShardPool()
+	timeoutC := time.After(defalutStartupTimeout)
+	for {
+		select {
+		case <-timeoutC:
+			logutil.Error("wait for available shard timeout")
+			return ErrStartupTimeout
+		default:
+			err := h.initShardPool()
+			if err == nil {
+				return err
+			}
+			time.Sleep(time.Millisecond * 100)
+		}
+	}
 }
 
 func (h *driver) initShardPool() error {
