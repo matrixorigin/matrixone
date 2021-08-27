@@ -1,8 +1,10 @@
 package frontend
 
 import (
+	"encoding/binary"
 	"fmt"
 	"github.com/fagongzi/log"
+	"github.com/matrixorigin/matrixcube/components/prophet/storage"
 	cube_prophet_util "github.com/matrixorigin/matrixcube/components/prophet/util"
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
@@ -311,4 +313,68 @@ func Test_openfile(t *testing.T) {
 
 	defer f.Close()
 
+}
+
+func run_pci(id uint64,close *CloseFlag,pci *PDCallbackImpl,
+	kv storage.Storage) {
+	close.Open()
+	var buf [8]byte
+	c := uint64(0)
+	cell := time.Duration(100)
+	for close.IsOpened() {
+		fmt.Printf("++++%d++++loop again\n",id)
+		err := pci.Start(kv)
+		if err != nil {
+			fmt.Printf("A %v\n",err)
+		}
+		time.Sleep(cell * time.Millisecond)
+
+		for k := 0; k < 3; k++ {
+			c++
+			binary.BigEndian.PutUint64(buf[:],c)
+			rsp,err := pci.HandleHeartbeatReq(id,buf[:],kv)
+			if err != nil {
+				fmt.Printf("B %v\n",err)
+			}
+			time.Sleep(cell * time.Millisecond)
+
+			err = pci.HandleHeartbeatRsp(rsp)
+			if err != nil {
+				fmt.Printf("C %v\n",err)
+			}
+
+			time.Sleep(cell * time.Millisecond)
+		}
+
+		for j := 0; j < 3; j++ {
+			err = pci.Stop(kv)
+			if err != nil {
+				fmt.Printf("D %v\n",err)
+			}
+
+			time.Sleep(cell * time.Millisecond)
+		}
+
+		time.Sleep(cell * time.Millisecond)
+	}
+	fmt.Printf("%d to exit \n",id)
+}
+
+func Test_PCI_stall(t *testing.T) {
+	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, false)
+	pci := NewPDCallbackImpl(ppu)
+
+	kv := storage.NewTestStorage()
+
+	cnt := 5
+	var closeHandle []*CloseFlag = make([]*CloseFlag,cnt)
+	for i := 0; i < cnt; i++ {
+		closeHandle[i] = &CloseFlag{}
+		go run_pci(uint64(i),closeHandle[i],pci,kv)
+	}
+	time.Sleep(1 * time.Minute)
+	for i := 0; i < cnt; i++ {
+		closeHandle[i].Close()
+	}
+	time.Sleep(1* time.Minute)
 }
