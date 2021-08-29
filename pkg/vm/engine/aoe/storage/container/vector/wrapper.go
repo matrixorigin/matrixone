@@ -179,8 +179,19 @@ func (v *VectorWrapper) CopyToVector() *base.Vector {
 	return &v.Vector
 }
 
-func (v *VectorWrapper) CopyToVectorWithProc(_ uint64, _ *process.Process) (*base.Vector, error) {
-	panic("not supported")
+func (v *VectorWrapper) CopyToVectorWithProc(ref uint64, proc *process.Process) (*base.Vector, error) {
+	ret := base.New(v.Vector.Typ)
+	data, err := proc.Alloc(int64(len(v.Vector.Data)))
+	if err != nil {
+		return nil, err
+	}
+	copy(data, v.Vector.Data)
+	if err = ret.Read(data[:len(v.Vector.Data)]); err != nil {
+		proc.Free(data)
+		return nil, err
+	}
+	copy(ret.Data, encoding.EncodeUint64(ref))
+	return ret, nil
 }
 
 func (v *VectorWrapper) AppendVector(vec *base.Vector, offset int) (n int, err error) {

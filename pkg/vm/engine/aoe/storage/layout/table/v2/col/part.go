@@ -16,6 +16,22 @@ import (
 	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
 
+type loadFunc = func(uint64, *process.Process) (*ro.Vector, error)
+type partLoadFunc = func(*ColumnPart) loadFunc
+
+var (
+	defalutPartLoadFunc partLoadFunc
+)
+
+func init() {
+	defalutPartLoadFunc = func(part *ColumnPart) loadFunc {
+		return part.loadFromDisk
+	}
+	// defalutPartLoadFunc = func(part *ColumnPart) loadFunc {
+	// 	return part.loadFromBuf
+	// }
+}
+
 type IColumnPart interface {
 	bmgrif.INode
 	common.IRef
@@ -122,6 +138,26 @@ func (part *ColumnPart) LoadVectorWrapper() (*vector.VectorWrapper, error) {
 	return wrapper, nil
 }
 
+func (part *ColumnPart) loadFromBuf(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	iv := part.GetVector()
+	v, err := iv.CopyToVectorWithProc(ref, proc)
+	if err != nil {
+		return nil, err
+	}
+	iv.Close()
+	return v, nil
+}
+
+func (part *ColumnPart) loadFromDisk(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
+	wrapper.File = part.VFile
+	_, err := wrapper.ReadWithProc(part.VFile, ref, proc)
+	if err != nil {
+		return nil, err
+	}
+	return &wrapper.Vector, nil
+}
+
 func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
 	if part.VFile.GetFileType() == common.MemFile {
 		var ret *ro.Vector
@@ -137,13 +173,7 @@ func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 		vec.Close()
 		return ret, err
 	}
-	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
-	wrapper.File = part.VFile
-	_, err := wrapper.ReadWithProc(part.VFile, ref, proc)
-	if err != nil {
-		return nil, err
-	}
-	return &wrapper.Vector, nil
+	return defalutPartLoadFunc(part)(ref, proc)
 }
 
 func (part *ColumnPart) Prefetch() error {
