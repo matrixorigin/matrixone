@@ -36,7 +36,7 @@ func Decode(data []byte, v interface{}) error {
 }
 
 func EncodeType(v types.Type) []byte {
-	hp := make([]byte, 13)
+	hp := make([]byte, TypeSize)
 	hp[0] = byte(v.Oid)
 	binary.LittleEndian.PutUint32(hp[1:], uint32(v.Size))
 	binary.LittleEndian.PutUint32(hp[5:], uint32(v.Width))
