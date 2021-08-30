@@ -21,27 +21,27 @@ function usage() {
 }
 
 function msl() {
-    str='*'
-    num=80
+    str='#'
+    num=60
     v=$(printf "%-${num}s" "$str")
-    echo "${v// /*}"
+    echo "${v// /#}"
 }
 
 function run_vet(){
     msl
-    echo "* Examining Go source code"
+    echo "# Examining Go source code"
     msl
+    [[ -f $VET_RESULT ]] && rm $VET_RESULT
     go vet ./pkg/... 2>&1 | tee $VET_RESULT
 }
 
 function run_tests(){
     msl
-    echo "* Running UT"
+    echo "# Running UT"
     msl
     go clean -testcache
 
     [[ -f $UT_RESULT ]] && rm $UT_RESULT
-    [[ -f $VET_RESULT ]] && rm $VET_RESULT
     [[ -f $UT_FILTER ]] && rm $UT_FILTER
     [[ -f $UT_COUNT ]] && rm $UT_COUNT
 
@@ -85,16 +85,28 @@ if (( $# < 3 )); then
     usage
 fi
 
-VET_RESULT=$1
-UT_RESULT=$2
+VET_REPORT=$1
+UT_REPORT=$2
 SKIP_TESTS=$3
 
-BUILD_WKS="$(pwd)/../"
+BUILD_WKS="$(pwd)/.."
+BUILD_LOGS="$BUILD_WKS/logs"
 UT_TIMEOUT=15
-UT_FILTER="/tmp/ut_filter"
-UT_COUNT="/tmp/ut_count"
+
+VET_RESULT="$BUILD_LOGS/$VET_REPORT"
+UT_RESULT="$BUILD_LOGS/$UT_REPORT"
+UT_FILTER="$BUILD_LOGS/ut_filter"
+UT_COUNT="$BUILD_LOGS/ut_count"
 
 cd $BUILD_WKS
+
+[[ -d $BUILD_LOGS ]] || mkdir $BUILD_LOGS
+
+msl
+echo "# [Build workspace]: $BUILD_WKS"
+echo "# [Go vet report]: $VET_RESULT"
+echo "# [Unit test report]: $UT_RESULT"
+msl
 
 run_vet
 run_tests
