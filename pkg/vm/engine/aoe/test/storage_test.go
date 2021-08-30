@@ -71,14 +71,14 @@ func TestStorage(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel("error"),
-			raftstore.WithTestClusterDataPath("./test")))
+			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterDataPath("./test2")))
+
+	c.Start()
 	defer func() {
-		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		stdLog.Printf("3>>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
-	c.Start()
-
 	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 
 	stdLog.Printf("driver all started.")

@@ -11,7 +11,10 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/protocol"
+	vengine "matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe"
 	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	"matrixone/pkg/vm/engine/aoe/dist/config"
@@ -20,6 +23,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/metadata"
 	"testing"
 	"time"
 )
@@ -27,6 +31,27 @@ import (
 const (
 	testDBName          = "db1"
 	testTableNamePrefix = "test-table-"
+)
+
+var (
+	dbName    = "test_db1"
+	tableName = "test_tb"
+	cols      = []vengine.TableDef{
+		&vengine.AttributeDef{
+			Attr: metadata.Attribute{
+				Name: "col1",
+				Type: types.Type{},
+				Alg:  0,
+			},
+		},
+		&vengine.AttributeDef{
+			Attr: metadata.Attribute{
+				Name: "col2",
+				Type: types.Type{},
+				Alg:  0,
+			},
+		},
+	}
 )
 
 func TestAOEEngine(t *testing.T) {
@@ -58,21 +83,28 @@ func TestAOEEngine(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel("error"),
-			raftstore.WithTestClusterDataPath("./test")))
+			raftstore.WithTestClusterRecreate(true),
+			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterDataPath("./test1")))
+
+	c.Start()
 	defer func() {
-		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		stdLog.Printf("2>>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
-	c.Start()
-
 	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	stdLog.Printf("app started.")
+	time.Sleep(3 * time.Second)
 
 	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
 	aoeEngine := engine.New(&catalog)
 
+	testTableDDL(t, catalog)
+
+	t0 := time.Now()
 	err := aoeEngine.Create(0, testDBName, 0)
 	require.NoError(t, err)
+	logutil.Infof("Create cost %d ms", time.Since(t0).Milliseconds())
 
 	dbs := aoeEngine.Databases()
 	require.Equal(t, 1, len(dbs))
@@ -240,4 +272,108 @@ func doRestartEngine(t *testing.T) {
 		require.Equal(t, segmentCnt, len(tb.Segments()))
 		logutil.Infof("table name is %s, segment size is %d, segments is %v\n", tName, len(tb.Segments()), tb.Segments())
 	}
+}
+
+func testTableDDL(t *testing.T, c catalog2.Catalog) {
+	//Wait shard state change
+
+	tbs, err := c.ListTables(99)
+	require.Error(t, catalog2.ErrDBNotExists, err)
+
+	dbid, err := c.CreateDatabase(0, dbName, vengine.AOE)
+	require.NoError(t, err)
+	require.Less(t, uint64(0), dbid)
+
+	tbs, err = c.ListTables(dbid)
+	require.NoError(t, err)
+	require.Nil(t, tbs)
+
+	colCnt := 4
+	t1 := md.MockTableInfo(colCnt)
+	t1.Name = "t1"
+
+	tid, err := c.CreateTable(1, dbid, *t1)
+	require.NoError(t, err)
+	require.Less(t, uint64(0), tid)
+
+	tb, err := c.GetTable(dbid, t1.Name)
+	require.NoError(t, err)
+	require.NotNil(t, tb)
+	require.Equal(t, aoe.StatePublic, tb.State)
+
+	t2 := md.MockTableInfo(colCnt)
+	t2.Name = "t2"
+	_, err = c.CreateTable(2, dbid, *t2)
+	require.NoError(t, err)
+
+	tbls, err := c.ListTables(dbid)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(tbls))
+
+	err = c.DropDatabase(3, dbName)
+	require.NoError(t, err)
+
+	dbs, err := c.ListDatabases()
+	require.NoError(t, err)
+	require.Nil(t, dbs)
+
+	kvs, err := c.Driver.Scan(codec.String2Bytes("DeletedTableQueue"), codec.String2Bytes("DeletedTableQueue10"), 0)
+	require.NoError(t, err)
+	for i := 0; i < len(kvs); i += 2 {
+		tbl, err := helper.DecodeTable(kvs[i+1])
+		require.NoError(t, err)
+		require.Equal(t, uint64(3), tbl.Epoch)
+	}
+
+	cnt, err := c.RemoveDeletedTable(10)
+	require.NoError(t, err)
+	require.Equal(t, 2, cnt)
+
+	cnt, err = c.RemoveDeletedTable(11)
+	require.NoError(t, err)
+	require.Equal(t, 0, cnt)
+
+	dbid, err = c.CreateDatabase(5, dbName, vengine.AOE)
+	require.NoError(t, err)
+	require.Less(t, uint64(0), dbid)
+
+	for i := uint64(10); i < 20; i++ {
+		t1.Name = fmt.Sprintf("t%d", i)
+		tid, err := c.CreateTable(i, dbid, *t1)
+		require.NoError(t, err)
+		require.Less(t, uint64(0), tid)
+	}
+
+	tbls, err = c.ListTables(dbid)
+	require.NoError(t, err)
+	require.Equal(t, 10, len(tbls))
+
+	for i := uint64(10); i < 15; i++ {
+		_, err = c.DropTable(20+i, dbid, fmt.Sprintf("t%d", i))
+		require.NoError(t, err)
+	}
+
+	tbls, err = c.ListTables(dbid)
+	require.NoError(t, err)
+	require.Equal(t, 5, len(tbls))
+
+	cnt, err = c.RemoveDeletedTable(10)
+	require.NoError(t, err)
+	require.Equal(t, 0, cnt)
+
+	cnt, err = c.RemoveDeletedTable(33)
+	require.NoError(t, err)
+	require.Equal(t, 4, cnt)
+
+	tablets, err := c.GetTablets(dbid, "t16")
+	require.NoError(t, err)
+	require.Less(t, 0, len(tablets))
+
+	err = c.DropDatabase(10, dbName)
+	require.NoError(t, err)
+
+	dbs, err = c.ListDatabases()
+	require.NoError(t, err)
+	require.Nil(t, dbs)
+
 }
