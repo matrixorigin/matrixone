@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/fagongzi/goetty"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
+	"matrixone/pkg/logutil"
 	"net"
 )
 
@@ -65,7 +66,7 @@ func (routine *Routine) Peer() (string, string) {
 	addr := routine.io.RemoteAddr()
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		fmt.Printf("get peer host:port failed. error:%v ", err)
+		logutil.Errorf("get peer host:port failed. error:%v ", err)
 		return "failed", "0"
 	}
 	return host, port
@@ -80,7 +81,7 @@ func (routine *Routine) ChangeDB(db string) error {
 	oldDB := routine.db
 	routine.db = db
 
-	fmt.Printf("User %s change database from [%s] to [%s]\n", routine.user, oldDB, routine.db)
+	logutil.Infof("User %s change database from [%s] to [%s]\n", routine.user, oldDB, routine.db)
 
 	return nil
 }
@@ -147,7 +148,7 @@ func (routine *Routine) handleHandshake(payload []byte) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("SWITCH ESTABLISHED to true")
+	logutil.Infof("SWITCH ESTABLISHED to true")
 	routine.established = true
 	return nil
 }

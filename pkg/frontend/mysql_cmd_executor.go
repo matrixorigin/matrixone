@@ -874,10 +874,76 @@ handle Load Data statement
  */
 func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error  {
 	var err error = nil
+	routine := mce.routine
+	//ses := mce.routine.GetSession()
 	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
 
 	logutil.Infof("+++++load data")
 
+	/*
+	TODO:support LOCAL
+	 */
+	if load.Local {
+		return fmt.Errorf("LOCAL is unsupported now")
+	}
+
+	/*
+	check file
+	 */
+	exist,isfile,err := PathExists(load.File)
+	if err != nil || !exist{
+		return fmt.Errorf("file %s does exist. err:%v",load.File,err)
+	}
+
+	if !isfile {
+		return fmt.Errorf("file %s is a directory.",load.File)
+	}
+
+	/*
+	check database
+	*/
+	loadDb := string(load.Table.Schema())
+	loadTable := string(load.Table.Name())
+	if loadDb == "" {
+		if routine.db == "" {
+			return fmt.Errorf("load data need database")
+		}
+
+		//then, it uses the database name in the session
+		loadDb = routine.db
+	}
+
+	dbHandler, err := routine.ses.Pu.StorageEngine.Database(loadDb)
+	if err != nil {
+		//echo client. no such database
+		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
+	}
+
+	//change db to the database in the LOAD DATA statement if necessary
+	if loadDb != routine.db {
+		oldDB := routine.db
+		routine.db = loadDb
+		logutil.Infof("User %s change database from [%s] to [%s] in LOAD DATA\n", routine.user, oldDB, routine.db)
+	}
+
+	/*
+	check table
+	 */
+	_, err = dbHandler.Relation(loadTable)
+	if err != nil {
+		//echo client. no such table
+		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb,loadTable)
+	}
+
+	/*
+	execute load data
+	 */
+
+
+
+	/*
+	response
+	 */
 	records := 10
 	deleted := 1
 	skipped := 2
@@ -957,7 +1023,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus, *tree.DropDatabase:
+				*tree.ShowStatus, *tree.DropDatabase,*tree.Load:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}

@@ -157,7 +157,7 @@ func (mp *MysqlProtocol) SendResponse(resp *Response) error {
 		case *MysqlError:
 			return mp.sendErrPacket(myerr.ErrorCode, myerr.SqlState, myerr.Error())
 		}
-		return mp.sendErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("unkown error:%v", err))
+		return mp.sendErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("unknown error:%v", err))
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil {
