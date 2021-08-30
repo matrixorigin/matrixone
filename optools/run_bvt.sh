@@ -3,7 +3,6 @@
 ###################################################################
 # Title	 : run_bvt.sh
 # Desc.  : Executing build verification testing.
-# Usage  : run_bvt.sh
 # Author : Matthew Li (lignay@me.com)
 ###################################################################
 

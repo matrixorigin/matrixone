@@ -22,12 +22,19 @@ build: cmd/db-server/main.go
 	$(info >>> Building mo-server)
 	@go build -o $(BIN_ID) cmd/db-server/main.go
 
-# Set test timeout to 15 minutes
+# Building mo-server binary for debugging, it uses the latest MatrixCube from master.
+.PHONY: debug
+debug: cmd/db-server/main.go
+	go get github.com/matrixorigin/matrixcube
+	go mod tidy
+	go build -tags debug -o $(BIN_ID) cmd/db-server/main.go
+
 # Excluding frontend test cases temporarily
+# Argument SKIP_TEST to skip a specific go test
 .PHONY: test
 test:
 	$(info >>> Running vet and UT)
-	@cd optools && ./run_unit_test.sh $(VET_REPORT) $(UT_REPORT)
+	@cd optools && ./run_unit_test.sh $(VET_REPORT) $(UT_REPORT) $(SKIP_TEST)
 
 # Running build verification tests
 .PHONY: bvt
