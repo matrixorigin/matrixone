@@ -71,7 +71,7 @@ func TestStorage(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test")))
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
@@ -248,7 +248,7 @@ func doRestartStorage(t *testing.T) {
 		}), testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(false),
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test")))
 	defer func() {
 		logutil.Debug(">>>>>>>>>>>>>>>>> call stop")
