@@ -193,6 +193,7 @@ func main() {
 		proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
 		proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
 		proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
+		proc.Lim.BatchSize = config.GlobalSystemVariables.GetProcessLimitationBatchSize()
 		proc.Refer = make(map[string]uint64)
 	}
 	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")

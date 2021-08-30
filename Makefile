@@ -2,8 +2,8 @@
 
 BIN_ID = mo-server
 BUILD_OUT = gen_config
-UT_REPORT = ut_reports
-VET_REPORT = vet_reports
+UT_REPORT = ut_reports.txt
+VET_REPORT = vet_reports.txt
 
 # Creating build config
 .PHONY: config
