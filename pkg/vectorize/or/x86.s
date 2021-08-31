@@ -12,19 +12,19 @@ TEXT ·orX86Asm(SB), NOSPLIT, $0-80
 	MOVQ x_len+8(FP), AX
 	MOVQ y_len+32(FP), BX
 	MOVQ SI, CX
-	MOVQ DX, BP
+	MOVQ DX, R11
 	MOVQ DI, R8
 	SHLQ $0x03, AX
 	SHLQ $0x03, BX
 	ADDQ AX, CX
-	ADDQ BX, BP
+	ADDQ BX, R11
 	XORQ AX, AX
 	XORQ BX, BX
 
 loop:
 	CMPQ    SI, CX
 	JE      tail2
-	CMPQ    DX, BP
+	CMPQ    DX, R11
 	JE      tail1
 	MOVQ    (SI), R9
 	MOVQ    (DX), R10
@@ -42,7 +42,7 @@ loop:
 
 tail2:
 	MOVQ DX, SI
-	MOVQ BP, CX
+	MOVQ R11, CX
 
 tail1:
 	SUBQ SI, CX
