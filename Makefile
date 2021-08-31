@@ -1,9 +1,10 @@
 # This Makefile is to build MatrixOne
 
-BIN_ID = mo-server
+BIN_NAME = mo-server
 BUILD_OUT = gen_config
-UT_REPORT = ut_reports
-VET_REPORT = vet_reports
+BUILD_LOGS = logs
+VET_REPORT = vt_report.txt
+UT_REPORT = ut_report.txt
 
 # Creating build config
 .PHONY: config
@@ -20,14 +21,21 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 .PHONY: build
 build: cmd/db-server/main.go
 	$(info >>> Building mo-server)
-	@go build -o $(BIN_ID) cmd/db-server/main.go
+	@go build -o $(BIN_NAME) cmd/db-server/main.go
 
-# Set test timeout to 15 minutes
+# Building mo-server binary for debugging, it uses the latest MatrixCube from master.
+.PHONY: debug
+debug: cmd/db-server/main.go
+	go get github.com/matrixorigin/matrixcube
+	go mod tidy
+	go build -tags debug -o $(BIN_NAME) cmd/db-server/main.go
+
 # Excluding frontend test cases temporarily
+# Argument SKIP_TEST to skip a specific go test
 .PHONY: test
 test:
 	$(info >>> Running vet and UT)
-	@cd optools && ./run_unit_test.sh $(VET_REPORT) $(UT_REPORT)
+	@cd optools && ./run_unit_test.sh $(VET_REPORT) $(UT_REPORT) $(SKIP_TEST)
 
 # Running build verification tests
 .PHONY: bvt
@@ -37,10 +45,15 @@ bvt: mo-server
 
 # Tear down
 .PHONY: clean
+AOE_TEST_TMP = pkg/vm/engine/aoe/test/test
 clean:
 	$(info >>> Cleaning up)
 	@go clean -testcache
-	@TMP_FILES=($(BUILD_OUT) $(BIN_ID) $(UT_REPORT) $(VET_REPORT)); \
+	@TMP_FILES=($(BUILD_OUT) $(BIN_ID)); \
 	for file in $${TMP_FILES[@]}; do \
-		if [ -f "$$file" ]; then echo "Removing $$file"; rm "$$file"; fi \
+		if [ -f "$$file" ]; then echo "Deleting file $$file"; rm "$$file"; fi \
+	done
+	@TMP_DIRS=($(BUILD_LOGS) $(AOE_TEST_TMP)); \
+	for dir in $${TMP_DIRS[@]}; do \
+		if [ -d "$$dir" ]; then echo "Deleting directory $$dir"; rm -rf ./"$$dir"; fi \
 	done

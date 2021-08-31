@@ -32,6 +32,7 @@ const (
 	colCnt             = 4
 	segmentCnt         = 5
 	blockCnt           = blockCntPerSegment * segmentCnt
+	restart            = false
 )
 
 var tableInfo *aoe.TableInfo
@@ -71,13 +72,13 @@ func TestStorage(t *testing.T) {
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterLogLevel("info"),
-			raftstore.WithTestClusterDataPath("./test")))
+			raftstore.WithTestClusterDataPath("./test2")))
+
+	c.Start()
 	defer func() {
-		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
+		stdLog.Printf("3>>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
-	c.Start()
-
 	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
 
 	stdLog.Printf("driver all started.")
@@ -214,9 +215,13 @@ func TestStorage(t *testing.T) {
 
 	time.Sleep(3 * time.Second)
 
+	if restart {
+		doRestartEngine(t)
+	}
+
 }
 
-func TestRestartStorage(t *testing.T) {
+func doRestartStorage(t *testing.T) {
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
@@ -243,7 +248,7 @@ func TestRestartStorage(t *testing.T) {
 		}), testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(false),
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test")))
 	defer func() {
 		logutil.Debug(">>>>>>>>>>>>>>>>> call stop")

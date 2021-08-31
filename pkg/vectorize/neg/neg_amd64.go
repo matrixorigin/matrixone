@@ -1,3 +1,4 @@
+//go:build amd64
 // +build amd64
 
 package neg
@@ -6,18 +7,18 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-func int8NegAvx2Asm([]int8, []int8)
-func int8NegAvx512Asm([]int8, []int8)
-func int16NegAvx2Asm([]int16, []int16)
-func int16NegAvx512Asm([]int16, []int16)
-func int32NegAvx2Asm([]int32, []int32)
-func int32NegAvx512Asm([]int32, []int32)
-func int64NegAvx2Asm([]int64, []int64)
-func int64NegAvx512Asm([]int64, []int64)
-func float32NegAvx2Asm([]float32, []float32)
-func float32NegAvx512Asm([]float32, []float32)
-func float64NegAvx2Asm([]float64, []float64)
-func float64NegAvx512Asm([]float64, []float64)
+func int8NegAvx2Asm(x []int8, r []int8)
+func int8NegAvx512Asm(x []int8, r []int8)
+func int16NegAvx2Asm(x []int16, r []int16)
+func int16NegAvx512Asm(x []int16, r []int16)
+func int32NegAvx2Asm(x []int32, r []int32)
+func int32NegAvx512Asm(x []int32, r []int32)
+func int64NegAvx2Asm(x []int64, r []int64)
+func int64NegAvx512Asm(x []int64, r []int64)
+func float32NegAvx2Asm(x []float32, r []float32)
+func float32NegAvx512Asm(x []float32, r []float32)
+func float64NegAvx2Asm(x []float64, r []float64)
+func float64NegAvx512Asm(x []float64, r []float64)
 
 func init() {
 	if cpu.X86.HasAVX512 {
