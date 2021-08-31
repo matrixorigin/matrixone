@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"matrixone/pkg/encoding"
 	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/prefetch"
@@ -88,7 +89,7 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 }
 
 func (sf *SortedSegmentFile) initPointers() {
-
+	// read metadata-1
 	sz := headerSize + reservedSize + algoSize + blkCntSize + colCntSize
 	buf := make([]byte, sz)
 	metaBuf := bytes.NewBuffer(buf)
@@ -121,6 +122,7 @@ func (sf *SortedSegmentFile) initPointers() {
 		panic(err)
 	}
 
+	// read metadata-2
 	sz = startPosSize +
 		 endPosSize +
 		 int(blkCnt) * (blkCountSize+blkIdSize+2*blkIdxSize) +
@@ -228,14 +230,19 @@ func (sf *SortedSegmentFile) initPointers() {
 		}
 	}
 
-	if FlushIndex {
-		meta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
-		if err != nil {
-			panic(err)
-		}
-		sf.Meta.Indices = meta
+	// skip data
+	if _, err = sf.Seek(curOffset, io.SeekStart); err != nil {
+		panic(err)
 	}
 
+	// read index
+	meta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
+	if err != nil {
+		panic(err)
+	}
+	sf.Meta.Indices = meta
+
+	// read footer
 	footer := make([]byte, 64)
 	if err = binary.Read(&sf.File, binary.BigEndian, &footer); err != nil {
 		panic(err)

@@ -114,7 +114,12 @@ func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, err
 
 func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	if !FlushIndex {
-		return nil
+		buf, err := index.DefaultRWHelper.WriteIndices([]index.Index{})
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(buf)
+		return err
 	}
 	var indices []index.Index
 	for idx, colDef := range meta.Table.Schema.ColDefs {
