@@ -1,7 +1,7 @@
 package sched
 
 import (
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -195,10 +195,10 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	}
 	segment := event.TableData.StrongRefSegment(event.Meta.Segment.ID)
 	if segment == nil {
-		logutil2.Warnf("Probably table %d is dropped", event.Meta.Segment.Table.ID)
+		logutil.Warnf("Probably table %d is dropped", event.Meta.Segment.Table.ID)
 		return
 	}
-	logutil2.Debugf(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, event.Meta.Segment.ID)
+	logutil.Infof(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, event.Meta.Segment.ID)
 	flushCtx := &Context{Opts: s.opts}
 	flushEvent := NewFlushSegEvent(flushCtx, segment)
 	s.Schedule(flushEvent)
@@ -219,7 +219,7 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 		event.Segment.Unref()
 		return
 	}
-	logutil2.Debugf(" %s | Segment %d | UpgradeSegEvent | Started", sched.EventPrefix, meta.ID)
+	logutil.Infof(" %s | Segment %d | UpgradeSegEvent | Started", sched.EventPrefix, meta.ID)
 	newevent := NewUpgradeSegEvent(ctx, event.Segment, td)
 	s.Schedule(newevent)
 }

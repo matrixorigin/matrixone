@@ -9,8 +9,6 @@ import (
 	"matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
-	// "strconv"
 )
 
 type Relation struct {
@@ -75,10 +73,6 @@ func (r *Relation) Attribute() []metadata.Attribute {
 }
 
 func (r *Relation) Segment(id uint64, proc *process.Process) engine.Segment {
-	// id, err := strconv.ParseUint(info.Id, 10, 64)
-	// if err != nil {
-	// 	return nil
-	// }
 	r.tree.RLock()
 	seg := r.tree.Segments[id]
 	if seg != nil {

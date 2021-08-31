@@ -156,7 +156,7 @@ func readData() {
 		cols = append(cols, i)
 	}
 	refs := make([]uint64, len(attrs))
-	var segIds db.IDS
+	var segIds dbi.IDS
 	{
 		dbrel, _ := impl.Relation(tableName)
 		segIds = dbrel.SegmentIds()
