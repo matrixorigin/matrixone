@@ -184,10 +184,7 @@ func readData() {
 						gm := guest.New(1<<48, hm)
 						proc2 := process.New(gm, mempool.New(1<<48, 8))
 						defer wg.Done()
-						v, err := bat.GetVector(col, proc2)
-						if err != nil {
-							panic(err)
-						}
+						v := bat.GetVector(col, proc2)
 						if v != nil {
 							v.Free(proc2)
 						}
