@@ -1,3 +1,4 @@
+//go:build amd64
 // +build amd64
 
 package min
@@ -6,24 +7,24 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-func int8MinAvx2Asm([]int8, []int8)
-func int8MinAvx512Asm([]int8, []int8)
-func int16MinAvx2Asm([]int16, []int16)
-func int16MinAvx512Asm([]int16, []int16)
-func int32MinAvx2Asm([]int32, []int32)
-func int32MinAvx512Asm([]int32, []int32)
-func int64MinAvx512Asm([]int64, []int64)
-func uint8MinAvx2Asm([]uint8, []uint8)
-func uint8MinAvx512Asm([]uint8, []uint8)
-func uint16MinAvx2Asm([]uint16, []uint16)
-func uint16MinAvx512Asm([]uint16, []uint16)
-func uint32MinAvx2Asm([]uint32, []uint32)
-func uint32MinAvx512Asm([]uint32, []uint32)
-func uint64MinAvx512Asm([]uint64, []uint64)
-func float32MinAvx2Asm([]float32, []float32)
-func float32MinAvx512Asm([]float32, []float32)
-func float64MinAvx2Asm([]float64, []float64)
-func float64MinAvx512Asm([]float64, []float64)
+func int8MinAvx2Asm(x []int8, r []int8)
+func int8MinAvx512Asm(x []int8, r []int8)
+func int16MinAvx2Asm(x []int16, r []int16)
+func int16MinAvx512Asm(x []int16, r []int16)
+func int32MinAvx2Asm(x []int32, r []int32)
+func int32MinAvx512Asm(x []int32, r []int32)
+func int64MinAvx512Asm(x []int64, r []int64)
+func uint8MinAvx2Asm(x []uint8, r []uint8)
+func uint8MinAvx512Asm(x []uint8, r []uint8)
+func uint16MinAvx2Asm(x []uint16, r []uint16)
+func uint16MinAvx512Asm(x []uint16, r []uint16)
+func uint32MinAvx2Asm(x []uint32, r []uint32)
+func uint32MinAvx512Asm(x []uint32, r []uint32)
+func uint64MinAvx512Asm(x []uint64, r []uint64)
+func float32MinAvx2Asm(x []float32, r []float32)
+func float32MinAvx512Asm(x []float32, r []float32)
+func float64MinAvx2Asm(x []float64, r []float64)
+func float64MinAvx512Asm(x []float64, r []float64)
 
 func init() {
 	if cpu.X86.HasAVX512 {

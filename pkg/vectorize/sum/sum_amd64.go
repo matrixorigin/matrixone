@@ -1,3 +1,4 @@
+//go:build amd64
 // +build amd64
 
 package sum
@@ -6,26 +7,26 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-func int8SumAvx2Asm([]int8) int64
-func int8SumAvx512Asm([]int8) int64
-func int16SumAvx2Asm([]int16) int64
-func int16SumAvx512Asm([]int16) int64
-func int32SumAvx2Asm([]int32) int64
-func int32SumAvx512Asm([]int32) int64
-func int64SumAvx2Asm([]int64) int64
-func int64SumAvx512Asm([]int64) int64
-func uint8SumAvx2Asm([]uint8) uint64
-func uint8SumAvx512Asm([]uint8) uint64
-func uint16SumAvx2Asm([]uint16) uint64
-func uint16SumAvx512Asm([]uint16) uint64
-func uint32SumAvx2Asm([]uint32) uint64
-func uint32SumAvx512Asm([]uint32) uint64
-func uint64SumAvx2Asm([]uint64) uint64
-func uint64SumAvx512Asm([]uint64) uint64
-func float32SumAvx2Asm([]float32) float32
-func float32SumAvx512Asm([]float32) float32
-func float64SumAvx2Asm([]float64) float64
-func float64SumAvx512Asm([]float64) float64
+func int8SumAvx2Asm(x []int8) int64
+func int8SumAvx512Asm(x []int8) int64
+func int16SumAvx2Asm(x []int16) int64
+func int16SumAvx512Asm(x []int16) int64
+func int32SumAvx2Asm(x []int32) int64
+func int32SumAvx512Asm(x []int32) int64
+func int64SumAvx2Asm(x []int64) int64
+func int64SumAvx512Asm(x []int64) int64
+func uint8SumAvx2Asm(x []uint8) uint64
+func uint8SumAvx512Asm(x []uint8) uint64
+func uint16SumAvx2Asm(x []uint16) uint64
+func uint16SumAvx512Asm(x []uint16) uint64
+func uint32SumAvx2Asm(x []uint32) uint64
+func uint32SumAvx512Asm(x []uint32) uint64
+func uint64SumAvx2Asm(x []uint64) uint64
+func uint64SumAvx512Asm(x []uint64) uint64
+func float32SumAvx2Asm(x []float32) float32
+func float32SumAvx512Asm(x []float32) float32
+func float64SumAvx2Asm(x []float64) float64
+func float64SumAvx512Asm(x []float64) float64
 
 func init() {
 	if cpu.X86.HasAVX512 {
