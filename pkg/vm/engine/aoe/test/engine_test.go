@@ -3,10 +3,6 @@ package test
 import (
 	"bytes"
 	"fmt"
-	"github.com/fagongzi/log"
-	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/stretchr/testify/require"
 	stdLog "log"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/logutil"
@@ -26,6 +22,11 @@ import (
 	"matrixone/pkg/vm/metadata"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/log"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/stretchr/testify/require"
 )
 
 const (
@@ -65,8 +66,7 @@ func TestAOEEngine(t *testing.T) {
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
 			opts := &e.Options{}
-			mdCfg := &md.Configuration{
-				Dir:              path,
+			mdCfg := &e.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
 				BlockMaxRows:     blockRows,
 			}

@@ -2,7 +2,6 @@ package config
 
 import (
 	engine "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type CacheSizeType uint8
@@ -48,8 +47,7 @@ func NewOptions(dir string, cst CacheSizeType, bst BlockSizeType, sst SegmentSiz
 	blockSize := blockSizes[bst]
 	segmentSize := segmentSizes[sst]
 	opts := new(engine.Options)
-	metaCfg := new(metadata.Configuration)
-	metaCfg.Dir = dir
+	metaCfg := new(engine.MetaCfg)
 	metaCfg.BlockMaxRows = blockSize
 	metaCfg.SegmentMaxBlocks = segmentSize
 	opts.Meta.Conf = metaCfg
@@ -67,8 +65,7 @@ func NewOptions(dir string, cst CacheSizeType, bst BlockSizeType, sst SegmentSiz
 
 func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows, blockCnt uint64) *engine.Options {
 	opts := new(engine.Options)
-	metaCfg := &metadata.Configuration{
-		Dir:              dir,
+	metaCfg := &engine.MetaCfg{
 		BlockMaxRows:     blockRows,
 		SegmentMaxBlocks: blockCnt,
 	}

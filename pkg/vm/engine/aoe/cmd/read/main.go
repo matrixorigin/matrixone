@@ -61,8 +61,7 @@ func init() {
 	gm := guest.New(1<<40, hm)
 	proc = process.New(gm, mempool.New(1<<48, 8))
 	readPool, _ = ants.NewPool(readPoolSize)
-	mdCfg := &md.Configuration{
-		Dir:              workDir,
+	mdCfg := &e.MetaCfg{
 		SegmentMaxBlocks: blockCntPerSegment,
 		BlockMaxRows:     blockRows,
 	}

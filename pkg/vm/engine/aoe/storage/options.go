@@ -36,6 +36,11 @@ type CacheCfg struct {
 	DataCapacity   uint64 `toml:"data-cache-size"`
 }
 
+type MetaCfg struct {
+	BlockMaxRows     uint64 `toml:"block-max-rows"`
+	SegmentMaxBlocks uint64 `toml:"segment-max-blocks"`
+}
+
 type MetaCleanerCfg struct {
 	Interval time.Duration
 }
@@ -49,7 +54,7 @@ type Options struct {
 
 	Meta struct {
 		CKFactory *checkpointerFactory
-		Conf      *md.Configuration
+		Conf      *MetaCfg
 		Info      *md.MetaInfo
 	}
 
@@ -69,17 +74,18 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	o.EventListener.FillDefaults()
 
-	if o.Meta.Conf == nil {
-		o.Meta.Conf = &md.Configuration{
-			BlockMaxRows:     DefaultBlockMaxRows,
-			SegmentMaxBlocks: DefaultBlocksPerSegment,
-			Dir:              dirname,
-		}
-	} else {
-		o.Meta.Conf.Dir = dirname
-	}
 	if o.Meta.Info == nil {
-		o.Meta.Info = md.NewMetaInfo(&o.Mu, o.Meta.Conf)
+		metaCfg := &md.Configuration{
+			Dir: dirname,
+		}
+		if o.Meta.Conf == nil {
+			metaCfg.BlockMaxRows = DefaultBlockMaxRows
+			metaCfg.SegmentMaxBlocks = DefaultBlocksPerSegment
+		} else {
+			metaCfg.BlockMaxRows = o.Meta.Conf.BlockMaxRows
+			metaCfg.SegmentMaxBlocks = o.Meta.Conf.SegmentMaxBlocks
+		}
+		o.Meta.Info = md.NewMetaInfo(&o.Mu, metaCfg)
 	}
 
 	if o.Meta.CKFactory == nil {
