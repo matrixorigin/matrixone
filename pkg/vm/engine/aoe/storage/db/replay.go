@@ -403,7 +403,7 @@ func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
 	h.mask.Add(tbl.ID)
 	r := head.Open()
 	ret := &md.Table{}
-	if err := ret.ReadFrom(r); err != nil {
+	if _, err := ret.ReadFrom(r); err != nil {
 		panic(err)
 	}
 	ret.Info = tbl.Info
@@ -425,7 +425,7 @@ func (h *replayHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.
 		panic(err)
 	}
 	defer r.Close()
-	if err = info.ReadFrom(r); err != nil {
+	if _, err = info.ReadFrom(r); err != nil {
 		panic(err)
 	}
 	ts := md.NowMicro()

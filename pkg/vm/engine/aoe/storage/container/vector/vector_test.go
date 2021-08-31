@@ -19,7 +19,7 @@ import (
 )
 
 func TestStdVector(t *testing.T) {
-	vecType := types.Type{types.T_int32, 4, 4, 0}
+	vecType := types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 	capacity := uint64(4)
 	vec := NewStdVector(vecType, capacity)
 	assert.False(t, vec.IsReadonly())
@@ -97,7 +97,7 @@ func TestStdVector(t *testing.T) {
 
 func TestStrVector(t *testing.T) {
 	size := uint64(4)
-	vec := NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, size)
+	vec := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
 	assert.Equal(t, int(size), vec.Capacity())
 	assert.Equal(t, 0, vec.Length())
 
@@ -187,8 +187,8 @@ func TestCopy(t *testing.T) {
 	hm := host.New(1 << 20)
 	gm := guest.New(1<<20, hm)
 	proc := process.New(gm, mempool.New(1<<32, 8))
-	t0 := types.Type{types.T(types.T_varchar), 24, 0, 0}
-	t1 := types.Type{types.T_int32, 4, 4, 0}
+	t0 := types.Type{Oid: types.T(types.T_varchar), Size: 24}
+	t1 := types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 	rows := uint64(100)
 	vec0 := MockVector(t0, rows)
 	vec1 := MockVector(t1, rows)
@@ -243,8 +243,8 @@ func TestCopy(t *testing.T) {
 }
 
 func TestWrapper(t *testing.T) {
-	t0 := types.Type{types.T(types.T_varchar), 24, 0, 0}
-	t1 := types.Type{types.T_int32, 4, 4, 0}
+	t0 := types.Type{Oid: types.T(types.T_varchar), Size: 24}
+	t1 := types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 	rows := uint64(100)
 	vec0 := MockVector(t0, rows)
 	vec1 := MockVector(t1, rows)

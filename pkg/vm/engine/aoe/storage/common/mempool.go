@@ -39,12 +39,13 @@ var (
 		512 * K,
 		M,
 	}
-	pools = []sync.Pool{}
+	pools []sync.Pool
 )
 
 func init() {
+	pools = make([]sync.Pool, len(PageSizes))
 	for idx, _ := range PageSizes {
-		pool := sync.Pool{
+		pools[idx] = sync.Pool{
 			New: func(i int) func() interface{} {
 				return func() interface{} {
 					n := &MemNode{
@@ -55,7 +56,6 @@ func init() {
 				}
 			}(idx),
 		}
-		pools = append(pools, pool)
 	}
 	GPool = NewMempool(UNLIMIT)
 }
@@ -155,7 +155,8 @@ func NewMempool(capacity uint64) *Mempool {
 
 	for idx, _ := range PageSizes {
 		mp.pools[idx].idx = idx
-		mp.pools[idx].Pool = pools[idx]
+		mp.pools[idx].Pool = sync.Pool{New: pools[idx].New}
+		mp.pools[idx].Pool.Put(pools[idx].Get())
 	}
 
 	return mp
@@ -254,8 +255,8 @@ func (mp *Mempool) String() string {
 	usage := atomic.LoadUint64(&mp.usage)
 	peak := atomic.LoadUint64(&mp.peakusage)
 	s := fmt.Sprintf("<Mempool>(Cap=%s)(Usage=%s)(Quota=%s)(Peak=%s)", ToH(mp.capacity), ToH(usage), ToH(atomic.LoadUint64(&mp.quotausage)), ToH(peak))
-	for _, pool := range mp.pools {
-		s = fmt.Sprintf("%s\nPage: %s, Count: %d", s, ToH(PageSizes[pool.idx]), pool.Count())
+	for idx := range mp.pools {
+		s = fmt.Sprintf("%s\nPage: %s, Count: %d", s, ToH(PageSizes[idx]), mp.pools[idx].Count())
 	}
 	s = fmt.Sprintf("%s\nPage: [UDEF], Count: %d", s, atomic.LoadUint64(&mp.other))
 	return s

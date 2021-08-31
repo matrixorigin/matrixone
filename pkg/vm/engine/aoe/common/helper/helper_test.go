@@ -85,7 +85,7 @@ func NewListPartition() engine.ListPartition {
 }
 
 func NewValue(v float64) extend.Extend {
-	vec := vector.New(types.Type{types.T(types.T_float64), 8, 0, 0})
+	vec := vector.New(types.Type{Oid: types.T(types.T_float64), Size: 8})
 	vec.Append([]float64{v})
-	return &extend.ValueExtend{vec}
+	return &extend.ValueExtend{V: vec}
 }

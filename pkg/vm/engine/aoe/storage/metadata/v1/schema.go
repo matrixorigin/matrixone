@@ -74,7 +74,7 @@ func MockSchema(colCnt int) *Schema {
 		colDef := &ColDef{
 			Idx:  i,
 			Name: name,
-			Type: types.Type{types.T_int32, 4, 4, 0},
+			Type: types.Type{Oid: types.T_int32, Size: 4, Width: 4},
 		}
 		schema.ColDefs[i] = colDef
 		schema.NameIdMap[colDef.Name] = i
@@ -94,7 +94,7 @@ func MockVarCharSchema(colCnt int) *Schema {
 		colDef := &ColDef{
 			Idx:  i,
 			Name: name,
-			Type: types.Type{types.T_varchar, 24, 0, 0},
+			Type: types.Type{Oid: types.T_varchar, Size: 24},
 		}
 		schema.ColDefs[i] = colDef
 		schema.NameIdMap[colDef.Name] = i
@@ -154,9 +154,9 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 			Name: name,
 		}
 		if i == 1 {
-			colInfo.Type = types.Type{types.T(types.T_varchar), 24, 0, 0}
+			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
 		} else {
-			colInfo.Type = types.Type{types.T_int32, 4, 4, 0}
+			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 		}
 		indexInfo := aoe.IndexInfo{Type: uint64(ZoneMap), Columns: []uint64{uint64(i)}}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)
@@ -165,26 +165,3 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 	return tblInfo
 }
 
-func MockTableInfoDate(colCnt int) *aoe.TableInfo {
-	tblInfo := &aoe.TableInfo{
-		Name:    "mocktbl",
-		Columns: make([]aoe.ColumnInfo, 0),
-		Indices: make([]aoe.IndexInfo, 0),
-	}
-	prefix := "mock_"
-	for i := 0; i < colCnt; i++ {
-		name := fmt.Sprintf("%s%d", prefix, i)
-		colInfo := aoe.ColumnInfo{
-			Name: name,
-		}
-		if i == 1 {
-			colInfo.Type = types.Type{types.T_datetime, 8, 8, 0}
-		} else {
-			colInfo.Type = types.Type{types.T_int32, 4, 4, 0}
-		}
-		indexInfo := aoe.IndexInfo{Type: uint64(ZoneMap), Columns: []uint64{uint64(i)}}
-		tblInfo.Columns = append(tblInfo.Columns, colInfo)
-		tblInfo.Indices = append(tblInfo.Indices, indexInfo)
-	}
-	return tblInfo
-}
