@@ -22,9 +22,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			if len(ap.Attrs) > 0 {
 				bat.Reorder(ap.Attrs)
 			}
-			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-				return false, err
-			}
 			if err := ap.Func(ap.Data, bat); err != nil {
 				bat.Clean(proc)
 				return true, err

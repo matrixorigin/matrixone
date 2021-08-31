@@ -29,7 +29,7 @@ func (c *compile) compileLimit(o *limit.Limit, mp map[string]uint64) ([]*Scope, 
 		for i, j := 0, len(ss); i < j; i++ {
 			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
-				Ch: make(chan interface{}),
+				Ch: make(chan interface{}, 8),
 			}
 		}
 	}

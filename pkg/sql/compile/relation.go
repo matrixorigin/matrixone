@@ -49,7 +49,7 @@ func (c *compile) compileUnit(u *relation.Unit, o *relation.Relation, mp map[str
 			for i, j := 0, len(ss); i < j; i++ {
 				rs.Proc.Reg.Ws[i] = &process.WaitRegister{
 					Wg: new(sync.WaitGroup),
-					Ch: make(chan interface{}),
+					Ch: make(chan interface{}, 8),
 				}
 			}
 		}
@@ -110,7 +110,7 @@ func (c *compile) compileUnit(u *relation.Unit, o *relation.Relation, mp map[str
 		for i, j := 0, len(ss); i < j; i++ {
 			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
-				Ch: make(chan interface{}),
+				Ch: make(chan interface{}, 8),
 			}
 		}
 	}

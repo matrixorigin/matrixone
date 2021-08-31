@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
-	"matrixone/pkg/encoding"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
+	"reflect"
+	"unsafe"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -119,18 +120,16 @@ func (ctr *Container) eval(es []aggregation.Extend, proc *process.Process) error
 			}
 			ctr.bat.Vecs[i].Data = data[:mempool.CountSize]
 		}
-		copy(ctr.bat.Vecs[i].Data, encoding.EncodeUint64(ctr.refer[e.Alias]))
+		count := ctr.refer[e.Alias]
+		hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&count)), Len: 8, Cap: 8}
+		copy(ctr.bat.Vecs[i].Data, *(*[]byte)(unsafe.Pointer(&hp)))
 	}
 	return nil
 }
 
 func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, proc *process.Process) error {
 	for i, e := range es {
-		vec, err := bat.GetVector(e.Name, proc)
-		if err != nil {
-			ctr.bat.Vecs = ctr.bat.Vecs[:i]
-			return err
-		}
+		vec := bat.GetVector(e.Name, proc)
 		{
 			if e.Agg == nil {
 				switch e.Op {

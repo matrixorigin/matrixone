@@ -59,11 +59,14 @@ func (a *int16Max) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 	vec := vector.New(a.typ)
 	if a.cnt == 0 {
 		vec.Nsp.Add(0)
-		copy(data[mempool.CountSize:], encoding.EncodeInt16(0))
+		vs := []int16{0}
+		copy(data[mempool.CountSize:], encoding.EncodeInt16Slice(vs))
+		vec.Col = vs
 	} else {
-		copy(data[mempool.CountSize:], encoding.EncodeInt16(a.v))
+		vs := []int16{a.v}
+		copy(data[mempool.CountSize:], encoding.EncodeInt16Slice(vs))
+		vec.Col = vs
 	}
 	vec.Data = data
-	vec.Col = encoding.DecodeInt16Slice(data[mempool.CountSize : mempool.CountSize+2])
 	return vec, nil
 }

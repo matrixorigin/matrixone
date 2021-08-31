@@ -14,6 +14,8 @@ import (
 	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
+	"reflect"
+	"unsafe"
 )
 
 func init() {
@@ -72,12 +74,12 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		rattrs: rattrs,
 		refer:  n.Refer,
 		n:      len(n.Gs),
+		slots:  fastmap.New(),
 		diffs:  make([]bool, UnitLimit),
 		matchs: make([]int64, UnitLimit),
 		hashs:  make([]uint64, UnitLimit),
 		sels:   make([][]int64, UnitLimit),
 		groups: make(map[uint64][]*hash.Group),
-		slots:  fastmap.Pool.Get().(*fastmap.Map),
 	}
 	return nil
 }
@@ -391,7 +393,9 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 		}
 	}
 	for i, e := range es {
-		copy(vecs[i].Data, encoding.EncodeUint64(ctr.refer[e.Alias]))
+		count := ctr.refer[e.Alias]
+		hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&count)), Len: 8, Cap: 8}
+		copy(vecs[i].Data, *(*[]byte)(unsafe.Pointer(&hp)))
 	}
 	return vecs, nil
 }
@@ -417,32 +421,14 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				continue
 			}
 			bat.Reorder(ctr.attrs)
-			if err := bat.Prefetch(ctr.attrs, bat.Vecs[:len(ctr.attrs)], proc); err != nil {
-				reg.Ch = nil
-				reg.Wg.Done()
-				bat.Clean(proc)
-				return err
-			}
 			if ctr.bat == nil {
 				ctr.bat = batch.New(true, n.Gs)
 				for i, attr := range n.Gs {
-					vec, err := bat.GetVector(attr, proc)
-					if err != nil {
-						reg.Ch = nil
-						reg.Wg.Done()
-						bat.Clean(proc)
-						return err
-					}
+					vec := bat.GetVector(attr, proc)
 					ctr.bat.Vecs[i] = vector.New(vec.Typ)
 				}
 				for i, e := range n.Es {
-					vec, err := bat.GetVector(ctr.attrs[ctr.is[i]], proc)
-					if err != nil {
-						reg.Ch = nil
-						reg.Wg.Done()
-						bat.Clean(proc)
-						return err
-					}
+					vec := bat.GetVector(ctr.attrs[ctr.is[i]], proc)
 					if e.Agg == nil {
 						switch e.Op {
 						case aggregation.Avg:
@@ -497,46 +483,25 @@ func (ctr *Container) batchGroup(vecs []*vector.Vector, es []aggregation.Extend,
 		if length > UnitLimit {
 			length = UnitLimit
 		}
-		if err := ctr.unitGroup(i, length, nil, vecs, es, proc); err != nil {
+		if err := ctr.unitGroup(i, length, vecs, es, proc); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (ctr *Container) batchGroupSels(sels []int64, vecs []*vector.Vector, es []aggregation.Extend, proc *process.Process) error {
-	for i, j := 0, len(sels); i < j; i += UnitLimit {
-		length := j - i
-		if length > UnitLimit {
-			length = UnitLimit
-		}
-		if err := ctr.unitGroup(0, length, sels[i:i+length], vecs, es, proc); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vector.Vector, es []aggregation.Extend, proc *process.Process) error {
+func (ctr *Container) unitGroup(start int, count int, vecs []*vector.Vector, es []aggregation.Extend, proc *process.Process) error {
 	var err error
 
-	{
-		copy(ctr.hashs[:count], OneUint64s[:count])
-		if len(sels) == 0 {
-			ctr.fillHash(start, count, vecs[:ctr.n])
-		} else {
-			ctr.fillHashSels(count, sels, vecs[:ctr.n])
-		}
-	}
+	copy(ctr.hashs[:count], OneUint64s[:count])
+	ctr.fillHash(start, count, vecs[:ctr.n])
 	copy(ctr.diffs[:count], ZeroBools[:count])
 	for i, hs := range ctr.slots.Ks {
 		for j, h := range hs {
 			remaining := ctr.sels[ctr.slots.Vs[i][j]]
 			if gs, ok := ctr.groups[h]; ok {
 				for _, g := range gs {
-					if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs, proc); err != nil {
-						return err
-					}
+					remaining = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs, proc)
 					copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 				}
 			} else {
@@ -560,9 +525,7 @@ func (ctr *Container) unitGroup(start int, count int, sels []int64, vecs []*vect
 				}
 				ctr.rows++
 				ctr.groups[h] = append(ctr.groups[h], g)
-				if remaining, err = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs, proc); err != nil {
-					return err
-				}
+				remaining = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs, proc)
 				copy(ctr.diffs[:len(remaining)], ZeroBools[:len(remaining)])
 				if proc.Size() > proc.Lim.Size {
 					return errors.New("out of memory")
@@ -592,35 +555,7 @@ func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	}
 }
 
-func (ctr *Container) fillHashSels(count int, sels []int64, vecs []*vector.Vector) {
-	var cnt int64
-
-	{
-		for i, sel := range sels {
-			if i == 0 || sel > cnt {
-				cnt = sel
-			}
-		}
-	}
-	ctr.hashs = ctr.hashs[:cnt+1]
-	for _, vec := range vecs {
-		hash.RehashSels(sels[:count], ctr.hashs, vec)
-	}
-	nextslot := 0
-	for _, sel := range sels {
-		h := ctr.hashs[sel]
-		slot, ok := ctr.slots.Get(h)
-		if !ok {
-			slot = nextslot
-			ctr.slots.Set(h, slot)
-			nextslot++
-		}
-		ctr.sels[slot] = append(ctr.sels[slot], sel)
-	}
-}
-
 func (ctr *Container) clean(proc *process.Process) {
-	fastmap.Pool.Put(ctr.slots)
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc)
 		ctr.bat = nil

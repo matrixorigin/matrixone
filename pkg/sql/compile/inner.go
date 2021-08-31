@@ -60,11 +60,11 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 	{
 		s.Proc.Reg.Ws[0] = &process.WaitRegister{
 			Wg: new(sync.WaitGroup),
-			Ch: make(chan interface{}),
+			Ch: make(chan interface{}, 8),
 		}
 		s.Proc.Reg.Ws[1] = &process.WaitRegister{
 			Wg: new(sync.WaitGroup),
-			Ch: make(chan interface{}),
+			Ch: make(chan interface{}, 8),
 		}
 	}
 	rms := new(Scope)
@@ -77,7 +77,7 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 			for i, j := 0, len(rs); i < j; i++ {
 				rms.Proc.Reg.Ws[i] = &process.WaitRegister{
 					Wg: new(sync.WaitGroup),
-					Ch: make(chan interface{}),
+					Ch: make(chan interface{}, 8),
 				}
 			}
 		}
@@ -116,7 +116,7 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 			for i, j := 0, len(ss); i < j; i++ {
 				sms.Proc.Reg.Ws[i] = &process.WaitRegister{
 					Wg: new(sync.WaitGroup),
-					Ch: make(chan interface{}),
+					Ch: make(chan interface{}, 8),
 				}
 			}
 		}
