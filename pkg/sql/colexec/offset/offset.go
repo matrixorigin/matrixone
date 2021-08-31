@@ -43,11 +43,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		proc.Reg.Ax = batch.New(true, nil)
 		return false, nil
 	}
-	length, err := bat.Length(proc)
-	if err != nil {
-		bat.Clean(proc)
-		return false, err
-	}
+	length := bat.Length(proc)
 	if n.Seen+uint64(length) > n.Offset {
 		data, sels, err := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen), proc)
 		if err != nil {

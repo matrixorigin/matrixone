@@ -59,11 +59,14 @@ func (a *float64Min) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 	vec := vector.New(a.typ)
 	if a.cnt == 0 {
 		vec.Nsp.Add(0)
-		copy(data[mempool.CountSize:], encoding.EncodeFloat64(0))
+		vs := []float64{0}
+		copy(data[mempool.CountSize:], encoding.EncodeFloat64Slice(vs))
+		vec.Col = vs
 	} else {
-		copy(data[mempool.CountSize:], encoding.EncodeFloat64(a.v))
+		vs := []float64{a.v}
+		copy(data[mempool.CountSize:], encoding.EncodeFloat64Slice(vs))
+		vec.Col = vs
 	}
 	vec.Data = data
-	vec.Col = encoding.DecodeFloat64Slice(data[mempool.CountSize : mempool.CountSize+8])
 	return vec, nil
 }

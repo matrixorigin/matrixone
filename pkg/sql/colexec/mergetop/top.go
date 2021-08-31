@@ -101,12 +101,6 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 			} else {
 				bat.Reorder(ctr.bat.Attrs)
 			}
-			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-				reg.Ch = nil
-				reg.Wg.Done()
-				bat.Clean(proc)
-				return err
-			}
 			if ctr.bat == nil {
 				ctr.bat = batch.New(true, bat.Attrs)
 				for i, vec := range bat.Vecs {
@@ -120,20 +114,14 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 					n.Ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, false)
 				}
 			}
-			if len(bat.Sels) == 0 {
-				if err := ctr.processBatch(n.Limit, bat, proc); err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-					bat.Clean(proc)
-					return err
-				}
-			} else {
-				if err := ctr.processBatchSels(n.Limit, bat, proc); err != nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-					bat.Clean(proc)
-					return err
-				}
+			if len(bat.Sels) > 0 {
+				bat.Shuffle(proc)
+			}
+			if err := ctr.processBatch(n.Limit, bat, proc); err != nil {
+				reg.Ch = nil
+				reg.Wg.Done()
+				bat.Clean(proc)
+				return err
 			}
 			bat.Clean(proc)
 			reg.Wg.Done()
@@ -211,59 +199,6 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		if ctr.compare(1, 0, i, ctr.sels[0]) < 0 {
 			for _, cmp := range ctr.cmps {
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
-					return err
-				}
-			}
-			heap.Fix(ctr, 0)
-		}
-	}
-	return nil
-}
-
-func (ctr *Container) processBatchSels(limit int64, bat *batch.Batch, proc *process.Process) error {
-	var start int64
-
-	length := int64(len(bat.Sels))
-	if n := int64(len(ctr.sels)); n < limit {
-		start = limit - n
-		if start > length {
-			start = length
-		}
-		for i := int64(0); i < start; i++ {
-			for j, vec := range ctr.bat.Vecs {
-				if vec.Data == nil {
-					if err := vec.UnionOne(bat.Vecs[j], bat.Sels[i], proc); err != nil {
-						return err
-					}
-					copy(vec.Data[:mempool.CountSize], bat.Vecs[j].Data[:mempool.CountSize])
-				} else {
-					if err := vec.UnionOne(bat.Vecs[j], bat.Sels[i], proc); err != nil {
-						return err
-					}
-				}
-			}
-			ctr.sels = append(ctr.sels, n)
-			n++
-		}
-		if n == limit {
-			for i, cmp := range ctr.cmps {
-				cmp.Set(0, ctr.bat.Vecs[i])
-			}
-			heap.Init(ctr)
-		}
-	}
-	if start == length {
-		return nil
-	}
-	for i, cmp := range ctr.cmps {
-		cmp.Set(1, bat.Vecs[i])
-		cmp.Set(0, ctr.bat.Vecs[i])
-	}
-	for i, j := start, length; i < j; i++ {
-		sel := bat.Sels[i]
-		if ctr.compare(1, 0, sel, ctr.sels[0]) < 0 {
-			for _, cmp := range ctr.cmps {
-				if err := cmp.Copy(1, 0, sel, ctr.sels[0], proc); err != nil {
 					return err
 				}
 			}

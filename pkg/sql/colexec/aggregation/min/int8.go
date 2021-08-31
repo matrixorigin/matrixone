@@ -59,11 +59,14 @@ func (a *int8Min) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 	vec := vector.New(a.typ)
 	if a.cnt == 0 {
 		vec.Nsp.Add(0)
-		copy(data[mempool.CountSize:], encoding.EncodeInt8(0))
+		vs := []int8{0}
+		copy(data[mempool.CountSize:], encoding.EncodeInt8Slice(vs))
+		vec.Col = vs
 	} else {
-		copy(data[mempool.CountSize:], encoding.EncodeInt8(a.v))
+		vs := []int8{a.v}
+		copy(data[mempool.CountSize:], encoding.EncodeInt8Slice(vs))
+		vec.Col = vs
 	}
 	vec.Data = data
-	vec.Col = encoding.DecodeInt8Slice(data[mempool.CountSize : mempool.CountSize+1])
 	return vec, nil
 }

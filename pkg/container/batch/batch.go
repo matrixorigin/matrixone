@@ -43,42 +43,24 @@ func (bat *Batch) Shuffle(proc *process.Process) {
 	}
 }
 
-func (bat *Batch) Length(proc *process.Process) (int, error) {
-	vec, err := bat.GetVector(bat.Attrs[0], proc)
-	if err != nil {
-		return -1, err
-	}
-	return vec.Length(), nil
+func (bat *Batch) Length(proc *process.Process) int {
+	return bat.Vecs[0].Length()
 }
 
-func (bat *Batch) Prefetch(attrs []string, vecs []*vector.Vector, proc *process.Process) error {
-	var err error
-
+func (bat *Batch) Prefetch(attrs []string, vecs []*vector.Vector, proc *process.Process) {
 	for i, attr := range attrs {
-		if vecs[i], err = bat.GetVector(attr, proc); err != nil {
-			return err
-		}
+		vecs[i] = bat.GetVector(attr, proc)
 	}
-	return nil
 }
 
-func (bat *Batch) GetVector(name string, proc *process.Process) (*vector.Vector, error) {
+func (bat *Batch) GetVector(name string, proc *process.Process) *vector.Vector {
 	for i, attr := range bat.Attrs {
 		if attr != name {
 			continue
 		}
-		if len(bat.Is) <= i || bat.Is[i].R == nil {
-			return bat.Vecs[i], nil
-		}
-		vec, err := bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc)
-		if err != nil {
-			return nil, err
-		}
-		bat.Is[i].R = nil
-		bat.Vecs[i] = vec
-		return bat.Vecs[i], nil
+		return bat.Vecs[i]
 	}
-	return nil, fmt.Errorf("attribute '%s' not exist", name)
+	return nil
 }
 
 func (bat *Batch) Clean(proc *process.Process) {

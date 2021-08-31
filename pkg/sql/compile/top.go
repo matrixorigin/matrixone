@@ -39,7 +39,7 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 		for i, j := 0, len(ss); i < j; i++ {
 			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
-				Ch: make(chan interface{}),
+				Ch: make(chan interface{}, 8),
 			}
 		}
 	}

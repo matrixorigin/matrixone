@@ -5,7 +5,6 @@ import (
 	binner "matrixone/pkg/sql/colexec/bag/inner"
 	bunion "matrixone/pkg/sql/colexec/bag/union"
 	"matrixone/pkg/sql/colexec/dedup"
-	"matrixone/pkg/sql/colexec/exchange"
 	"matrixone/pkg/sql/colexec/group"
 	"matrixone/pkg/sql/colexec/limit"
 	"matrixone/pkg/sql/colexec/merge"
@@ -54,7 +53,6 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	BagInnerJoin:      binner.String,
 	BagNaturalJoin:    nil,
 	Output:            output.String,
-	Exchange:          exchange.String,
 	Merge:             merge.String,
 	MergeTop:          mergetop.String,
 	MergeDedup:        mergededup.String,
@@ -92,7 +90,6 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	BagInnerJoin:      binner.Prepare,
 	BagNaturalJoin:    nil,
 	Output:            output.Prepare,
-	Exchange:          exchange.Prepare,
 	Merge:             merge.Prepare,
 	MergeTop:          mergetop.Prepare,
 	MergeDedup:        mergededup.Prepare,
@@ -130,7 +127,6 @@ var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
 	BagInnerJoin:      binner.Call,
 	BagNaturalJoin:    nil,
 	Output:            output.Call,
-	Exchange:          exchange.Call,
 	Merge:             merge.Call,
 	MergeTop:          mergetop.Call,
 	MergeDedup:        mergededup.Call,

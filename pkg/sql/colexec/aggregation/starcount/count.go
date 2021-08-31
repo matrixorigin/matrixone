@@ -44,8 +44,9 @@ func (a *count) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 		return nil, err
 	}
 	vec := vector.New(a.typ)
-	copy(data[mempool.CountSize:], encoding.EncodeInt64(a.cnt))
+	vs := []int64{a.cnt}
+	copy(data[mempool.CountSize:], encoding.EncodeInt64Slice(vs))
+	vec.Col = vs
 	vec.Data = data
-	vec.Col = encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+8])
 	return vec, nil
 }
