@@ -81,7 +81,7 @@ EOF
     fi
 }
 
-if (( $# < 3 )); then
+if (( $# < 2 )); then
     usage
 fi
 
@@ -106,6 +106,8 @@ msl
 echo "# [Build workspace]: $BUILD_WKS"
 echo "# [Go vet report]: $VET_RESULT"
 echo "# [Unit test report]: $UT_RESULT"
+echo "# [UT timeout]: $UT_TIMEOUT"
+echo "# [Skipped cases]: $SKIP_TESTS"
 msl
 
 run_vet
