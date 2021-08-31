@@ -1,10 +1,8 @@
 package db
 
 import (
-	// log "github.com/sirupsen/logrus"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
@@ -27,10 +25,6 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	replayHandle := NewReplayHandle(dirname)
 
 	opts.Meta.Info = replayHandle.RebuildInfo(&opts.Mu, opts.Meta.Conf)
-
-	// TODO: refactor needed
-	dio.WRITER_FACTORY.Init(opts, dirname)
-	dio.READER_FACTORY.Init(opts, dirname)
 
 	fsMgr := ldio.NewManager(dirname, false)
 	memtblMgr := mt.NewManager(opts)

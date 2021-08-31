@@ -1,8 +1,6 @@
 package aoe
 
 import (
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/storage/stats"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
 	store "matrixone/pkg/vm/engine/aoe/storage"
@@ -12,6 +10,9 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/storage/stats"
 )
 
 // Storage memory storage
@@ -72,7 +73,7 @@ func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 	return s.DB.GetSnapshot(ctx)
 }
 
-func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids adb.IDS) {
+func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
 	return s.DB.GetSegmentIds(ctx)
 }
 

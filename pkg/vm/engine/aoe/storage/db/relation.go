@@ -13,11 +13,6 @@ import (
 	// "strconv"
 )
 
-type IDS struct {
-	Version uint64
-	Ids     []uint64
-}
-
 type Relation struct {
 	Data   iface.ITableData
 	DBImpl *DB
@@ -60,8 +55,8 @@ func (r *Relation) Close() error {
 	return nil
 }
 
-func (r *Relation) SegmentIds() IDS {
-	return IDS{Ids: r.Data.SegmentIds()}
+func (r *Relation) SegmentIds() dbi.IDS {
+	return dbi.IDS{Ids: r.Data.SegmentIds()}
 }
 
 func (r *Relation) Index() []*engine.IndexTableDef {
