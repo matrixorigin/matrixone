@@ -83,14 +83,9 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
-			lRelation, err := ldb.Relation(tbl.Name)
-			if err != nil {
-				for _, v := range r.mp {
-					v.Close()
-				}
-				return nil, err
+			if lRelation, err := ldb.Relation(tbl.Name); err == nil {
+				r.mp[tbl.Name] = lRelation
 			}
-			r.mp[tbl.Name] = lRelation
 			for _, id := range ids.Ids {
 				r.segments = append(r.segments, engine.SegmentInfo{
 					Version:  ids.Version,
