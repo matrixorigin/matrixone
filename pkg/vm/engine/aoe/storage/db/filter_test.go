@@ -461,3 +461,87 @@ func TestSummarizerInt32(t *testing.T) {
 	assert.Equal(t, cnt, uint64(40))
 }
 
+func TestAll(t *testing.T) {
+	if !dataio.FlushIndex {
+		return
+	}
+	mu := &sync.RWMutex{}
+	rowCount, blkCount := uint64(10), uint64(4)
+	info := md.MockInfo(mu, rowCount, blkCount)
+	schema := md.MockSchemaAll(14)
+	segCnt, blkCnt := uint64(4), uint64(4)
+	table := md.MockTable(info, schema, segCnt*blkCnt)
+	segment, err := table.CreateSegment()
+	assert.Nil(t, err)
+	err = table.RegisterSegment(segment)
+	assert.Nil(t, err)
+	batches := make([]*batch.Batch, 0)
+	blkIds := make([]uint64, 0)
+	for i := 0; i < int(blkCount); i++ {
+		block, err := segment.CreateBlock()
+		assert.Nil(t, err)
+		blkIds = append(blkIds, block.ID)
+		block.SetCount(rowCount)
+		err = segment.RegisterBlock(block)
+		assert.Nil(t, err)
+		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+	}
+	path := "/tmp/testfilter"
+	writer := dataio.NewSegmentWriter(batches, segment, path)
+	err = writer.Execute()
+	assert.Nil(t, err)
+	segFile := dataio.NewSortedSegmentFile(path, *segment.AsCommonID())
+	assert.NotNil(t, segFile)
+	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(10000), table.ID)
+	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
+	segHolder.Unref()
+	id := common.ID{}
+	for i := 0; i < int(blkCount); i++ {
+		id.BlockID = uint64(i)
+		blkHolder := segHolder.RegisterBlock(id, base.PERSISTENT_BLK, nil)
+		blkHolder.Unref()
+		blkHolder.Init(segFile)
+	}
+	segHolder.Init(segFile)
+	t.Log(tblHolder.String())
+	t.Log(segHolder.GetBlockCount())
+	seg := &table2.Segment{
+		RefHelper:   common.RefHelper{},
+		Type:        base.SORTED_SEG,
+		Meta:        segment,
+		IndexHolder: segHolder,
+		SegmentFile: segFile,
+	}
+	s := &Segment{
+		Data: seg,
+		Ids:  new(atomic.Value),
+	}
+	ids := blkIds
+	strs := make([]string, len(ids))
+	for idx, id := range ids {
+		strs[idx] = strconv.FormatUint(id, 10)
+	}
+	s.Ids.Store(strs)
+	summarizer := NewSegmentSummarizer(s)
+	sparseFilter := NewSegmentSparseFilter(s)
+	filter := NewSegmentFilter(s)
+
+	// test sparse filter
+	res, _ := sparseFilter.Eq("mock_0", int8(-1))
+	assert.Equal(t, res, []string{})
+	res, _ = sparseFilter.Ne("mock_0", int8(-1))
+	assert.Equal(t, res, []string{"17", "18", "19", "20"})
+	res, _ = sparseFilter.Btw("mock_0", int8(1), int8(7))
+	assert.Equal(t, res, []string{"17", "18", "19", "20"})
+	res, _ = sparseFilter.Btw("mock_0", int8(-1), int8(8))
+	assert.Equal(t, res, []string{})
+	res, _ = sparseFilter.Lt("mock_0", int8(0))
+	assert.Equal(t, res, []string{})
+	res, _ = sparseFilter.Gt("mock_0", int8(8))
+	assert.Equal(t, res, []string{"17", "18", "19", "20"})
+	res, _ = sparseFilter.Le("mock_0", int8(0))
+	assert.Equal(t, res, []string{"17", "18", "19", "20"})
+	res, _ = sparseFilter.Ge("mock_0", int8(9))
+	assert.Equal(t, res, []string{"17", "18", "19", "20"})
+}
+
