@@ -88,9 +88,9 @@ func TestCollection(t *testing.T) {
 
 	manager := NewManager(opts)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
-	indexBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity)
-	mtBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity)
-	sstBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity)
+	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	// tableMeta := md.MockTable(opts.Meta.Info, tbl.Schema, 10)
 	// tableMeta := md.MockTable(nil, tbl.Schema, 10)
 	tableMeta := tbl

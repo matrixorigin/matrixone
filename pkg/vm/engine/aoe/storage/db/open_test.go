@@ -163,8 +163,7 @@ func TestCleanStaleMeta(t *testing.T) {
 
 func TestOpen(t *testing.T) {
 	initTest()
-	cfg := &md.Configuration{
-		Dir:              TEST_OPEN_DIR,
+	cfg := &e.MetaCfg{
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}

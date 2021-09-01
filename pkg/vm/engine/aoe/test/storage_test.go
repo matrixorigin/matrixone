@@ -53,8 +53,7 @@ func TestStorage(t *testing.T) {
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
 			opts := &e.Options{}
-			mdCfg := &md.Configuration{
-				Dir:              path,
+			mdCfg := &e.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
 				BlockMaxRows:     blockRows,
 			}
@@ -230,8 +229,7 @@ func doRestartStorage(t *testing.T) {
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
 			opts := &e.Options{}
-			mdCfg := &md.Configuration{
-				Dir:              path,
+			mdCfg := &e.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
 				BlockMaxRows:     blockRows,
 			}
