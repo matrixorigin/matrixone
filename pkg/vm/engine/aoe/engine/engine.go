@@ -2,10 +2,10 @@ package engine
 
 import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"matrixone/pkg/catalog"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/catalog"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
+	pb2 "matrixone/pkg/vm/engine/dist/pb"
 	"strings"
 	"time"
 )
@@ -25,7 +25,7 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	var ni *engine.NodeInfo
-	e.catalog.Driver.RaftStore().GetRouter().Every(uint64(pb.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
+	e.catalog.Driver.RaftStore().GetRouter().Every(uint64(pb2.AOEGroup), true, func(shard *bhmetapb.Shard, store bhmetapb.Store) {
 		if ni != nil {
 			return
 		}

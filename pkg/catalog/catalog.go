@@ -6,8 +6,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	"matrixone/pkg/vm/engine/aoe/dist"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
+	dist2 "matrixone/pkg/vm/engine/dist"
+	pb2 "matrixone/pkg/vm/engine/dist/pb"
 	"sync"
 	"time"
 )
@@ -26,14 +26,14 @@ const (
 
 // Catalog is for handling meta information in a query.
 type Catalog struct {
-	Driver dist.CubeDriver
+	Driver dist2.CubeDriver
 }
 
 var gCatalog Catalog
 var gInitOnce sync.Once
 
 // DefaultCatalog creates a Catalog.
-func DefaultCatalog(store dist.CubeDriver) Catalog {
+func DefaultCatalog(store dist2.CubeDriver) Catalog {
 	gInitOnce.Do(func() {
 		gCatalog = Catalog{
 			Driver: store,
@@ -329,7 +329,7 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) (tablets []aoe.Table
 func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("RemoveDeletedTable cost %d ms", time.Since(t0).Milliseconds())
+		logutil.Debugf("[RemoveDeletedTable] epoch is %d, removed %d tables, cost %d ms", epoch, cnt, time.Since(t0).Milliseconds())
 	}()
 	rsp, err := c.Driver.Scan(c.deletedPrefix(), c.deletedEpochPrefix(epoch+1), 0)
 	if err != nil {
@@ -468,6 +468,10 @@ func (c *Catalog) deletedPrefix() []byte {
 	return codec.EncodeKey(cDeletedTablePrefix)
 }
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("[getAvailableShard] get shard for %d, returns %d, %v, cost %d ms", tid, shardid, err, time.Since(t0).Milliseconds())
+	}()
 	timeoutC := time.After(timeout)
 	for {
 		select {
@@ -475,7 +479,7 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 			logutil.Error("wait for available shard timeout")
 			return shardid, ErrTableCreateTimeout
 		default:
-			shard, err := c.Driver.GetShardPool().Alloc(uint64(pb.AOEGroup), codec.Uint642Bytes(tid))
+			shard, err := c.Driver.GetShardPool().Alloc(uint64(pb2.AOEGroup), codec.Uint642Bytes(tid))
 			if err == nil {
 				return shard.ShardID, err
 			}

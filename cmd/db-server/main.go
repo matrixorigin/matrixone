@@ -12,19 +12,19 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
+	catalog3 "matrixone/pkg/catalog"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
 	"matrixone/pkg/logger"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
-	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
-	"matrixone/pkg/vm/engine/aoe/dist"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	dconfig "matrixone/pkg/vm/engine/aoe/dist/config"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
 	engine "matrixone/pkg/vm/engine/aoe/storage"
+	dist2 "matrixone/pkg/vm/engine/dist"
+	"matrixone/pkg/vm/engine/dist/aoe"
+	config2 "matrixone/pkg/vm/engine/dist/config"
+	pb2 "matrixone/pkg/vm/engine/dist/pb"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -38,7 +38,7 @@ import (
 )
 
 var (
-	catalog aoe_catalog.Catalog
+	catalog catalog3.Catalog
 	mo      *frontend.MOServer
 	pci     *frontend.PDCallbackImpl
 )
@@ -142,16 +142,16 @@ func main() {
 	pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
 		FS: vfs.NewPebbleFS(vfs.Default),
 	})
-	var aoeDataStorage *daoe.Storage
+	var aoeDataStorage *aoe.Storage
 
 	opt := engine.Options{}
 	_, err = toml.DecodeFile(os.Args[1], &opt)
 	if err != nil {
 		panic(err)
 	}
-	aoeDataStorage, err = daoe.NewStorageWithOptions(targetDir+"/aoe", &opt)
+	aoeDataStorage, err = aoe.NewStorageWithOptions(targetDir+"/aoe", &opt)
 
-	cfg := dconfig.Config{}
+	cfg := config2.Config{}
 	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
 	if err != nil {
 		panic(err)
@@ -171,7 +171,7 @@ func main() {
 		cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
 	}
 
-	a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+	a, err := dist2.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {
 		fmt.Printf("Create cube driver failed, %v", err)
 		panic(err)
@@ -181,7 +181,7 @@ func main() {
 		fmt.Printf("Start cube driver failed, %v", err)
 		panic(err)
 	}
-	catalog = aoe_catalog.DefaultCatalog(a)
+	catalog = catalog3.DefaultCatalog(a)
 	eng := aoe_engine.New(&catalog)
 	pci.SetRemoveEpoch(removeEpoch)
 
@@ -240,7 +240,7 @@ func main() {
 	os.Exit(0)
 }
 
-func waitClusterStartup(driver dist.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
+func waitClusterStartup(driver dist2.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
 	timeoutC := time.After(timeout)
 	for {
 		select {
@@ -251,7 +251,7 @@ func waitClusterStartup(driver dist.CubeDriver, timeout time.Duration, maxReplic
 			if router != nil {
 				nodeCnt := 0
 				shardCnt := 0
-				router.ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
+				router.ForeachShards(uint64(pb2.AOEGroup), func(shard *bhmetapb.Shard) bool {
 					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
 					shardCnt++
 					if len(shard.Peers) > nodeCnt {

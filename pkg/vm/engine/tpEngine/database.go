@@ -6,12 +6,12 @@ import (
 	"math"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/dist"
+	dist2 "matrixone/pkg/vm/engine/dist"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 )
 
-func NewTpDatabase(n string, id uint64, cinfo string, sch string, t int, kv dist.CubeDriver, proc *process.Process) *tpDatabase {
+func NewTpDatabase(n string, id uint64, cinfo string, sch string, t int, kv dist2.CubeDriver, proc *process.Process) *tpDatabase {
 	return &tpDatabase{
 		dbName:      n,
 		dbId:        id,

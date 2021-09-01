@@ -11,18 +11,18 @@ import (
 	"io/ioutil"
 	stdLog "log"
 	"math/rand"
+	catalog3 "matrixone/pkg/catalog"
 	mo_config "matrixone/pkg/config"
 	"matrixone/pkg/logger"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
 	"matrixone/pkg/vm/engine"
-	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	aoe_dist_config "matrixone/pkg/vm/engine/aoe/dist/config"
-	aoe_dist_testutil "matrixone/pkg/vm/engine/aoe/dist/testutil"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/dist/aoe"
+	"matrixone/pkg/vm/engine/dist/config"
+	"matrixone/pkg/vm/engine/dist/testutil"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -116,17 +116,17 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 
 	nodeCnt := 3
 	pci_id := 0
-	var	pcis []*PDCallbackImpl
+	var pcis []*PDCallbackImpl
 	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, true)
 
-	c := aoe_dist_testutil.NewTestAOECluster(t,
-		func(node int) *aoe_dist_config.Config {
-			c := &aoe_dist_config.Config{}
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
-		aoe_dist_testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &md.Configuration{
 				Dir:              path,
@@ -142,18 +142,18 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return daoe.NewStorageWithOptions(path, opts)
+			return aoe.NewStorageWithOptions(path, opts)
 		}),
-		aoe_dist_testutil.WithTestAOEClusterUsePebble(),
-		aoe_dist_testutil.WithTestAOEClusterRaftClusterOptions(
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
 				pci_id++
 				pci := NewPDCallbackImpl(ppu)
 				pci.Id = pci_id
-				pcis = append(pcis,pci)
-				cfg.Customize.CustomStoreHeartbeatDataProcessor =  pci
+				pcis = append(pcis, pci)
+				cfg.Customize.CustomStoreHeartbeatDataProcessor = pci
 			})))
 	c.Start()
 	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
@@ -163,14 +163,14 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		c.Stop()
 	}()
 
-	catalog := aoe_catalog.DefaultCatalog(c.CubeDrivers[0])
+	catalog := catalog3.DefaultCatalog(c.CubeDrivers[0])
 	eng := aoe_engine.New(&catalog)
 
 	for i := 0; i < nodeCnt; i++ {
 		pcis[i].SetRemoveEpoch(func(epoch uint64) {
-			_,err := catalog.RemoveDeletedTable(epoch)
+			_, err := catalog.RemoveDeletedTable(epoch)
 			if err != nil {
-				fmt.Printf("catalog remove ddl async failed. error :%v \n",err)
+				fmt.Printf("catalog remove ddl async failed. error :%v \n", err)
 			}
 		})
 	}
@@ -207,7 +207,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 
 		err = svr.Start()
 		if err != nil {
-			t.Errorf("start server: %v",err)
+			t.Errorf("start server: %v", err)
 			return
 		}
 	}
@@ -315,32 +315,32 @@ func Test_openfile(t *testing.T) {
 
 }
 
-func run_pci(id uint64,close *CloseFlag,pci *PDCallbackImpl,
+func run_pci(id uint64, close *CloseFlag, pci *PDCallbackImpl,
 	kv storage.Storage) {
 	close.Open()
 	var buf [8]byte
 	c := uint64(0)
 	cell := time.Duration(100)
 	for close.IsOpened() {
-		fmt.Printf("++++%d++++loop again\n",id)
+		fmt.Printf("++++%d++++loop again\n", id)
 		err := pci.Start(kv)
 		if err != nil {
-			fmt.Printf("A %v\n",err)
+			fmt.Printf("A %v\n", err)
 		}
 		time.Sleep(cell * time.Millisecond)
 
 		for k := 0; k < 3; k++ {
 			c++
-			binary.BigEndian.PutUint64(buf[:],c)
-			rsp,err := pci.HandleHeartbeatReq(id,buf[:],kv)
+			binary.BigEndian.PutUint64(buf[:], c)
+			rsp, err := pci.HandleHeartbeatReq(id, buf[:], kv)
 			if err != nil {
-				fmt.Printf("B %v\n",err)
+				fmt.Printf("B %v\n", err)
 			}
 			time.Sleep(cell * time.Millisecond)
 
 			err = pci.HandleHeartbeatRsp(rsp)
 			if err != nil {
-				fmt.Printf("C %v\n",err)
+				fmt.Printf("C %v\n", err)
 			}
 
 			time.Sleep(cell * time.Millisecond)
@@ -349,7 +349,7 @@ func run_pci(id uint64,close *CloseFlag,pci *PDCallbackImpl,
 		for j := 0; j < 3; j++ {
 			err = pci.Stop(kv)
 			if err != nil {
-				fmt.Printf("D %v\n",err)
+				fmt.Printf("D %v\n", err)
 			}
 
 			time.Sleep(cell * time.Millisecond)
@@ -357,7 +357,7 @@ func run_pci(id uint64,close *CloseFlag,pci *PDCallbackImpl,
 
 		time.Sleep(cell * time.Millisecond)
 	}
-	fmt.Printf("%d to exit \n",id)
+	fmt.Printf("%d to exit \n", id)
 }
 
 func Test_PCI_stall(t *testing.T) {
@@ -367,14 +367,14 @@ func Test_PCI_stall(t *testing.T) {
 	kv := storage.NewTestStorage()
 
 	cnt := 5
-	var closeHandle []*CloseFlag = make([]*CloseFlag,cnt)
+	var closeHandle []*CloseFlag = make([]*CloseFlag, cnt)
 	for i := 0; i < cnt; i++ {
 		closeHandle[i] = &CloseFlag{}
-		go run_pci(uint64(i),closeHandle[i],pci,kv)
+		go run_pci(uint64(i), closeHandle[i], pci, kv)
 	}
 	time.Sleep(1 * time.Minute)
 	for i := 0; i < cnt; i++ {
 		closeHandle[i].Close()
 	}
-	time.Sleep(1* time.Minute)
+	time.Sleep(1 * time.Minute)
 }

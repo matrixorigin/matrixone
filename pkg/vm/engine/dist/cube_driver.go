@@ -7,12 +7,12 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	"matrixone/pkg/vm/engine/aoe/dist/config"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
+	aoe2 "matrixone/pkg/vm/engine/dist/aoe"
+	config2 "matrixone/pkg/vm/engine/dist/config"
+	pb2 "matrixone/pkg/vm/engine/dist/pb"
 	"time"
 
 	"github.com/matrixorigin/matrixcube/aware"
@@ -46,7 +46,7 @@ type CubeDriver interface {
 	Set([]byte, []byte) error
 
 	// SetWithGroup set key value in specific group.
-	SetWithGroup([]byte, []byte, pb.Group) error
+	SetWithGroup([]byte, []byte, pb2.Group) error
 
 	// SetIfNotExist set key value if key not exists.
 	SetIfNotExist([]byte, []byte) error
@@ -55,7 +55,7 @@ type CubeDriver interface {
 	Get([]byte) ([]byte, error)
 
 	// GetWithGroup returns the value of key from specific group.
-	GetWithGroup([]byte, pb.Group) ([]byte, error)
+	GetWithGroup([]byte, pb2.Group) ([]byte, error)
 
 	// Delete remove the key from the store.
 	Delete([]byte) error
@@ -67,14 +67,14 @@ type CubeDriver interface {
 	Scan([]byte, []byte, uint64) ([][]byte, error)
 
 	// ScanWithGroup scan [start,end) data in specific group.
-	ScanWithGroup([]byte, []byte, uint64, pb.Group) ([][]byte, error)
+	ScanWithGroup([]byte, []byte, uint64, pb2.Group) ([][]byte, error)
 
 	// PrefixScan scan k-vs which k starts with prefix.
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
-	PrefixScanWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
+	PrefixScanWithGroup([]byte, uint64, pb2.Group) ([][]byte, error)
 	PrefixKeys([]byte, uint64) ([][]byte, error)
-	PrefixKeysWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
+	PrefixKeysWithGroup([]byte, uint64, pb2.Group) ([][]byte, error)
 	AllocID([]byte) (uint64, error)
 	Append(string, uint64, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
@@ -89,16 +89,16 @@ type CubeDriver interface {
 	// AsyncExec async exec command
 	AsyncExec(interface{}, func(interface{}, []byte, error), interface{})
 	// ExecWithGroup exec command with group
-	ExecWithGroup(interface{}, pb.Group) ([]byte, error)
+	ExecWithGroup(interface{}, pb2.Group) ([]byte, error)
 	// AsyncExecWithGroup async exec command with group
-	AsyncExecWithGroup(interface{}, pb.Group, func(interface{}, []byte, error), interface{})
+	AsyncExecWithGroup(interface{}, pb2.Group, func(interface{}, []byte, error), interface{})
 	// RaftStore returns the raft store
 	RaftStore() raftstore.Store
 	AOEStore() *adb.DB
 }
 
 type driver struct {
-	cfg   *config.Config
+	cfg   *config2.Config
 	app   *server.Application
 	store raftstore.Store
 	spool raftstore.ShardsPool
@@ -111,7 +111,7 @@ func NewCubeDriver(
 	metadataStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage) (CubeDriver, error) {
-	return NewCubeDriverWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, &config.Config{})
+	return NewCubeDriverWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, &config2.Config{})
 }
 
 // NewCubeDriverWithOptions returns an aoe request handler
@@ -119,7 +119,7 @@ func NewCubeDriverWithOptions(
 	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,
-	c *config.Config) (CubeDriver, error) {
+	c *config2.Config) (CubeDriver, error) {
 
 	return NewCubeDriverWithFactory(metaStorage, kvDataStorage, aoeDataStorage, c, func(cfg *cConfig.Config) (raftstore.Store, error) {
 		return raftstore.NewStore(cfg), nil
@@ -131,17 +131,17 @@ func NewCubeDriverWithFactory(
 	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,
-	c *config.Config,
+	c *config2.Config,
 	raftStoreFactory func(*cConfig.Config) (raftstore.Store, error)) (CubeDriver, error) {
 
 	h := &driver{
 		cfg:   c,
-		aoeDB: aoeDataStorage.(*daoe.Storage).DB,
+		aoeDB: aoeDataStorage.(*aoe2.Storage).DB,
 		cmds:  make(map[uint64]raftcmdpb.CMDType),
 	}
 	c.CubeConfig.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
 		switch group {
-		case uint64(pb.AOEGroup):
+		case uint64(pb2.AOEGroup):
 			return func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
 				//TODO: Not impl
 			}
@@ -154,9 +154,9 @@ func NewCubeDriverWithFactory(
 	c.CubeConfig.Storage.MetaStorage = metaStorage
 	c.CubeConfig.Storage.DataStorageFactory = func(group, shardID uint64) cstorage.DataStorage {
 		switch group {
-		case uint64(pb.KVGroup):
+		case uint64(pb2.KVGroup):
 			return kvDataStorage
-		case uint64(pb.AOEGroup):
+		case uint64(pb2.AOEGroup):
 			return aoeDataStorage
 		}
 		return nil
@@ -165,13 +165,13 @@ func NewCubeDriverWithFactory(
 		cb(kvDataStorage)
 		cb(aoeDataStorage)
 	}
-	c.CubeConfig.Prophet.Replication.Groups = []uint64{uint64(pb.KVGroup), uint64(pb.AOEGroup)}
+	c.CubeConfig.Prophet.Replication.Groups = []uint64{uint64(pb2.KVGroup), uint64(pb2.AOEGroup)}
 	c.CubeConfig.ShardGroups = 2
 
 	c.CubeConfig.Customize.CustomInitShardsFactory = func() []bhmetapb.Shard {
 		var initialGroups []bhmetapb.Shard
 		initialGroups = append(initialGroups, bhmetapb.Shard{
-			Group: uint64(pb.KVGroup),
+			Group: uint64(pb2.KVGroup),
 		})
 		return initialGroups
 	}
@@ -195,7 +195,7 @@ func NewCubeDriverWithFactory(
 			defer func() {
 				logutil.Debugf("CompactIndex of [%d]shard-%d is adjusted from %d to %d", group, shard.ID, compactIndex, newCompactIdx)
 			}()
-			if group != uint64(pb.AOEGroup) {
+			if group != uint64(pb2.AOEGroup) {
 				newCompactIdx = compactIndex
 			} else {
 				newCompactIdx, err = h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
@@ -225,7 +225,7 @@ func NewCubeDriverWithFactory(
 			defer func() {
 				logutil.Debugf("InitAppliedIndex of [%d]shard-%d is adjusted from %d to %d", group, shard.ID, initAppliedIndex, adjustAppliedIndex)
 			}()
-			if group != uint64(pb.AOEGroup) {
+			if group != uint64(pb2.AOEGroup) {
 				adjustAppliedIndex = initAppliedIndex
 			} else {
 				var err error
@@ -262,10 +262,10 @@ func NewCubeDriverWithFactory(
 	pConfig.DefaultSchedulers = nil
 
 	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req *raftcmdpb.Request, cmd interface{}, proxy proxy.ShardsProxy) error {
-		if req.Group == uint64(pb.KVGroup) {
+		if req.Group == uint64(pb2.KVGroup) {
 			return proxy.Dispatch(req)
 		}
-		args := cmd.(pb.Request)
+		args := cmd.(pb2.Request)
 		if args.Shard == 0 {
 			return proxy.Dispatch(req)
 		}
@@ -298,7 +298,7 @@ func (h *driver) Start() error {
 }
 
 func (h *driver) initShardPool() error {
-	p, err := h.store.CreateResourcePool(metapb.ResourcePool{Group: uint64(pb.AOEGroup), Capacity: h.cfg.ClusterConfig.PreAllocatedGroupNum, RangePrefix: codec.String2Bytes("aoe-")})
+	p, err := h.store.CreateResourcePool(metapb.ResourcePool{Group: uint64(pb2.AOEGroup), Capacity: h.cfg.ClusterConfig.PreAllocatedGroupNum, RangePrefix: codec.String2Bytes("aoe-")})
 	if err != nil {
 		return err
 	}
@@ -318,14 +318,14 @@ func (h *driver) GetShardPool() raftstore.ShardsPool {
 	return h.spool
 }
 func (h *driver) Set(key, value []byte) error {
-	return h.SetWithGroup(key, value, pb.KVGroup)
+	return h.SetWithGroup(key, value, pb2.KVGroup)
 }
 
-func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
-	req := pb.Request{
-		Type:  pb.Set,
+func (h *driver) SetWithGroup(key, value []byte, group pb2.Group) error {
+	req := pb2.Request{
+		Type:  pb2.Set,
 		Group: group,
-		Set: pb.SetRequest{
+		Set: pb2.SetRequest{
 			Key:   key,
 			Value: value,
 		},
@@ -335,15 +335,15 @@ func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 }
 
 func (h *driver) SetIfNotExist(key, value []byte) error {
-	req := pb.Request{
-		Type:  pb.SetIfNotExist,
-		Group: pb.KVGroup,
-		Set: pb.SetRequest{
+	req := pb2.Request{
+		Type:  pb2.SetIfNotExist,
+		Group: pb2.KVGroup,
+		Set: pb2.SetRequest{
 			Key:   key,
 			Value: value,
 		},
 	}
-	rsp, err := h.ExecWithGroup(req, pb.KVGroup)
+	rsp, err := h.ExecWithGroup(req, pb2.KVGroup)
 	if rsp != nil || len(rsp) != 0 {
 		err = errors.New(string(rsp))
 	}
@@ -351,15 +351,15 @@ func (h *driver) SetIfNotExist(key, value []byte) error {
 }
 
 func (h *driver) Get(key []byte) ([]byte, error) {
-	return h.GetWithGroup(key, pb.KVGroup)
+	return h.GetWithGroup(key, pb2.KVGroup)
 }
 
 // GetWithGroup returns the value of key
-func (h *driver) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
-	req := pb.Request{
-		Type:  pb.Get,
+func (h *driver) GetWithGroup(key []byte, group pb2.Group) ([]byte, error) {
+	req := pb2.Request{
+		Type:  pb2.Get,
 		Group: group,
-		Get: pb.GetRequest{
+		Get: pb2.GetRequest{
 			Key: key,
 		},
 	}
@@ -368,38 +368,38 @@ func (h *driver) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
 }
 
 func (h *driver) Delete(key []byte) error {
-	req := pb.Request{
-		Type:  pb.Del,
-		Group: pb.KVGroup,
-		Delete: pb.DeleteRequest{
+	req := pb2.Request{
+		Type:  pb2.Del,
+		Group: pb2.KVGroup,
+		Delete: pb2.DeleteRequest{
 			Key: key,
 		},
 	}
-	_, err := h.ExecWithGroup(req, pb.KVGroup)
+	_, err := h.ExecWithGroup(req, pb2.KVGroup)
 	return err
 }
 
 func (h *driver) DeleteIfExist(key []byte) error {
-	req := pb.Request{
-		Type:  pb.DelIfNotExist,
-		Group: pb.KVGroup,
-		Delete: pb.DeleteRequest{
+	req := pb2.Request{
+		Type:  pb2.DelIfNotExist,
+		Group: pb2.KVGroup,
+		Delete: pb2.DeleteRequest{
 			Key: key,
 		},
 	}
-	_, err := h.ExecWithGroup(req, pb.KVGroup)
+	_, err := h.ExecWithGroup(req, pb2.KVGroup)
 	return err
 }
 
 func (h *driver) Scan(start []byte, end []byte, limit uint64) ([][]byte, error) {
-	return h.ScanWithGroup(start, end, limit, pb.KVGroup)
+	return h.ScanWithGroup(start, end, limit, pb2.KVGroup)
 }
 
-func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.Group) ([][]byte, error) {
-	req := pb.Request{
-		Type:  pb.Scan,
+func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb2.Group) ([][]byte, error) {
+	req := pb2.Request{
+		Type:  pb2.Scan,
 		Group: group,
-		Scan: pb.ScanRequest{
+		Scan: pb2.ScanRequest{
 			Start: start,
 			End:   end,
 			Limit: limit,
@@ -432,14 +432,14 @@ func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.
 }
 
 func (h *driver) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
-	return h.PrefixScanWithGroup(prefix, limit, pb.KVGroup)
+	return h.PrefixScanWithGroup(prefix, limit, pb2.KVGroup)
 }
 
-func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
-	req := pb.Request{
-		Type:  pb.PrefixScan,
+func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb2.Group) ([][]byte, error) {
+	req := pb2.Request{
+		Type:  pb2.PrefixScan,
 		Group: group,
-		PrefixScan: pb.PrefixScanRequest{
+		PrefixScan: pb2.PrefixScanRequest{
 			Prefix:   prefix,
 			StartKey: prefix,
 			Limit:    limit,
@@ -472,14 +472,14 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 }
 
 func (h *driver) PrefixKeys(prefix []byte, limit uint64) ([][]byte, error) {
-	return h.PrefixKeysWithGroup(prefix, limit, pb.KVGroup)
+	return h.PrefixKeysWithGroup(prefix, limit, pb2.KVGroup)
 }
 
-func (h *driver) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
-	req := pb.Request{
-		Type:  pb.PrefixScan,
+func (h *driver) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb2.Group) ([][]byte, error) {
+	req := pb2.Request{
+		Type:  pb2.PrefixScan,
 		Group: group,
-		PrefixScan: pb.PrefixScanRequest{
+		PrefixScan: pb2.PrefixScanRequest{
 			Prefix:   prefix,
 			StartKey: prefix,
 			Limit:    limit,
@@ -516,14 +516,14 @@ func (h *driver) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group
 }
 
 func (h *driver) AllocID(idkey []byte) (uint64, error) {
-	req := pb.Request{
-		Type:  pb.Incr,
-		Group: pb.KVGroup,
-		AllocID: pb.AllocIDRequest{
+	req := pb2.Request{
+		Type:  pb2.Incr,
+		Group: pb2.KVGroup,
+		AllocID: pb2.AllocIDRequest{
 			Key: idkey,
 		},
 	}
-	data, err := h.ExecWithGroup(req, pb.KVGroup)
+	data, err := h.ExecWithGroup(req, pb2.KVGroup)
 	if err != nil {
 		return 0, err
 	}
@@ -535,16 +535,16 @@ func (h *driver) AllocID(idkey []byte) (uint64, error) {
 }
 
 func (h *driver) Append(name string, shardId uint64, data []byte) error {
-	req := pb.Request{
-		Type:  pb.Append,
-		Group: pb.AOEGroup,
+	req := pb2.Request{
+		Type:  pb2.Append,
+		Group: pb2.AOEGroup,
 		Shard: shardId,
-		Append: pb.AppendRequest{
+		Append: pb2.AppendRequest{
 			Data:       data,
 			TabletName: name,
 		},
 	}
-	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
+	rsp, err := h.ExecWithGroup(req, pb2.AOEGroup)
 	if rsp != nil || len(rsp) != 0 {
 		err = errors.New(string(rsp))
 	}
@@ -553,14 +553,14 @@ func (h *driver) Append(name string, shardId uint64, data []byte) error {
 
 func (h *driver) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	ctxStr, err := json.Marshal(ctx)
-	req := pb.Request{
-		Type:  pb.GetSnapshot,
-		Group: pb.AOEGroup,
-		GetSnapshot: pb.GetSnapshotRequest{
+	req := pb2.Request{
+		Type:  pb2.GetSnapshot,
+		Group: pb2.AOEGroup,
+		GetSnapshot: pb2.GetSnapshotRequest{
 			Ctx: ctxStr,
 		},
 	}
-	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	value, err := h.ExecWithGroup(req, pb2.AOEGroup)
 	if err != nil {
 		return nil, err
 	}
@@ -573,15 +573,15 @@ func (h *driver) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 }
 
 func (h *driver) GetSegmentIds(tabletName string, toShard uint64) (ids adb.IDS, err error) {
-	req := pb.Request{
-		Type:  pb.GetSegmentIds,
-		Group: pb.AOEGroup,
+	req := pb2.Request{
+		Type:  pb2.GetSegmentIds,
+		Group: pb2.AOEGroup,
 		Shard: toShard,
-		GetSegmentIds: pb.GetSegmentIdsRequest{
+		GetSegmentIds: pb2.GetSegmentIdsRequest{
 			Name: tabletName,
 		},
 	}
-	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	value, err := h.ExecWithGroup(req, pb2.AOEGroup)
 	if err != nil {
 		return ids, err
 	}
@@ -593,15 +593,15 @@ func (h *driver) GetSegmentIds(tabletName string, toShard uint64) (ids adb.IDS, 
 }
 
 func (h *driver) GetSegmentedId(shardId uint64) (index uint64, err error) {
-	req := pb.Request{
-		Type:  pb.GetSegmentedId,
-		Group: pb.AOEGroup,
+	req := pb2.Request{
+		Type:  pb2.GetSegmentedId,
+		Group: pb2.AOEGroup,
 		Shard: shardId,
-		GetSegmentedId: pb.GetSegmentedIdRequest{
+		GetSegmentedId: pb2.GetSegmentedIdRequest{
 			ShardId: shardId,
 		},
 	}
-	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	value, err := h.ExecWithGroup(req, pb2.AOEGroup)
 	if err != nil {
 		return index, err
 	}
@@ -610,16 +610,16 @@ func (h *driver) GetSegmentedId(shardId uint64) (index uint64, err error) {
 
 func (h *driver) CreateTablet(name string, toShard uint64, tbl *aoe.TableInfo) (err error) {
 	info, _ := helper.EncodeTable(*tbl)
-	req := pb.Request{
+	req := pb2.Request{
 		Shard: toShard,
-		Group: pb.AOEGroup,
-		Type:  pb.CreateTablet,
-		CreateTablet: pb.CreateTabletRequest{
+		Group: pb2.AOEGroup,
+		Type:  pb2.CreateTablet,
+		CreateTablet: pb2.CreateTabletRequest{
 			Name:      name,
 			TableInfo: info,
 		},
 	}
-	rsp, err := h.ExecWithGroup(req, pb.AOEGroup)
+	rsp, err := h.ExecWithGroup(req, pb2.AOEGroup)
 	if err != nil {
 		return err
 	}
@@ -631,15 +631,15 @@ func (h *driver) CreateTablet(name string, toShard uint64, tbl *aoe.TableInfo) (
 }
 
 func (h *driver) DropTablet(name string, toShard uint64) (id uint64, err error) {
-	req := pb.Request{
+	req := pb2.Request{
 		Shard: toShard,
-		Type:  pb.DropTablet,
-		Group: pb.AOEGroup,
-		DropTablet: pb.DropTabletRequest{
+		Type:  pb2.DropTablet,
+		Group: pb2.AOEGroup,
+		DropTablet: pb2.DropTabletRequest{
 			Name: name,
 		},
 	}
-	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	value, err := h.ExecWithGroup(req, pb2.AOEGroup)
 	if err != nil {
 		return id, err
 	}
@@ -647,12 +647,12 @@ func (h *driver) DropTablet(name string, toShard uint64) (id uint64, err error) 
 }
 
 func (h *driver) TabletIDs() ([]uint64, error) {
-	req := pb.Request{
-		Type:      pb.TabletIds,
-		Group:     pb.AOEGroup,
-		TabletIds: pb.TabletIDsRequest{},
+	req := pb2.Request{
+		Type:      pb2.TabletIds,
+		Group:     pb2.AOEGroup,
+		TabletIds: pb2.TabletIDsRequest{},
 	}
-	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	value, err := h.ExecWithGroup(req, pb2.AOEGroup)
 	if err != nil {
 		return nil, err
 	}
@@ -665,13 +665,13 @@ func (h *driver) TabletIDs() ([]uint64, error) {
 }
 
 func (h *driver) TabletNames(toShard uint64) ([]string, error) {
-	req := pb.Request{
+	req := pb2.Request{
 		Shard:     toShard,
-		Group:     pb.AOEGroup,
-		Type:      pb.TabletNames,
-		TabletIds: pb.TabletIDsRequest{},
+		Group:     pb2.AOEGroup,
+		Type:      pb2.TabletNames,
+		TabletIds: pb2.TabletIDsRequest{},
 	}
-	value, err := h.ExecWithGroup(req, pb.AOEGroup)
+	value, err := h.ExecWithGroup(req, pb2.AOEGroup)
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +686,7 @@ func (h *driver) TabletNames(toShard uint64) ([]string, error) {
 func (h *driver) Exec(cmd interface{}) ([]byte, error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
+		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb2.Request).Type, time.Since(t0).Milliseconds())
 	}()
 	return h.app.Exec(cmd, defaultRPCTimeout)
 }
@@ -695,14 +695,14 @@ func (h *driver) AsyncExec(cmd interface{}, cb func(interface{}, []byte, error),
 	h.app.AsyncExecWithTimeout(cmd, cb, defaultRPCTimeout, arg)
 }
 
-func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(interface{}, []byte, error), arg interface{}) {
+func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb2.Group, cb func(interface{}, []byte, error), arg interface{}) {
 	h.app.AsyncExecWithGroupAndTimeout(cmd, uint64(group), cb, defaultRPCTimeout, arg)
 }
 
-func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
+func (h *driver) ExecWithGroup(cmd interface{}, group pb2.Group) ([]byte, error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
+		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb2.Request).Type, time.Since(t0).Milliseconds())
 	}()
 	return h.app.ExecWithGroup(cmd, uint64(group), defaultRPCTimeout)
 }

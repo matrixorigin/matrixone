@@ -12,12 +12,12 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
-	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
+	pb2 "matrixone/pkg/vm/engine/dist/pb"
 )
 
 func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.SetRequest{}
+	customReq := &pb2.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
 	err := ctx.WriteBatch().Set(req.Key, customReq.Value)
@@ -32,7 +32,7 @@ func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 
 func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.SetRequest{}
+	customReq := &pb2.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
 	value, err := h.store.DataStorageByGroup(shard.Group, shard.ID).(*pebble.Storage).Get(req.Key)
@@ -102,7 +102,7 @@ func (h *driver) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 
 func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.PrefixScanRequest{}
+	customReq := &pb2.PrefixScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 	prefix := raftstore.EncodeDataKey(shard.Group, customReq.Prefix)
 	var data [][]byte
@@ -135,7 +135,7 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 
 func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.ScanRequest{}
+	customReq := &pb2.ScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
 	startKey := raftstore.EncodeDataKey(shard.Group, customReq.Start)

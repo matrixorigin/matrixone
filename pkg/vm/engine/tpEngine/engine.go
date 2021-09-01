@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"math"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/dist"
+	dist2 "matrixone/pkg/vm/engine/dist"
 	"matrixone/pkg/vm/process"
 )
 
-func NewTpEngine(eng string, kv dist.CubeDriver, proc *process.Process) *tpEngine {
+func NewTpEngine(eng string, kv dist2.CubeDriver, proc *process.Process) *tpEngine {
 	//TODO:load persisted status
 	return &tpEngine{
 		engName:     eng,

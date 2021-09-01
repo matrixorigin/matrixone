@@ -5,124 +5,124 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
+	pb2 "matrixone/pkg/vm/engine/dist/pb"
 )
 
 type cmdType uint64
 
 func (h *driver) init() {
-	h.AddWriteFunc(uint64(pb.Set), h.set)
-	h.AddWriteFunc(uint64(pb.SetIfNotExist), h.setIfNotExist)
-	h.AddWriteFunc(uint64(pb.Del), h.del)
-	h.AddWriteFunc(uint64(pb.Incr), h.incr)
-	h.AddReadFunc(uint64(pb.Get), h.get)
-	h.AddReadFunc(uint64(pb.PrefixScan), h.prefixScan)
-	h.AddReadFunc(uint64(pb.Scan), h.scan)
+	h.AddWriteFunc(uint64(pb2.Set), h.set)
+	h.AddWriteFunc(uint64(pb2.SetIfNotExist), h.setIfNotExist)
+	h.AddWriteFunc(uint64(pb2.Del), h.del)
+	h.AddWriteFunc(uint64(pb2.Incr), h.incr)
+	h.AddReadFunc(uint64(pb2.Get), h.get)
+	h.AddReadFunc(uint64(pb2.PrefixScan), h.prefixScan)
+	h.AddReadFunc(uint64(pb2.Scan), h.scan)
 
-	h.AddWriteFunc(uint64(pb.CreateTablet), h.createTablet)
-	h.AddWriteFunc(uint64(pb.DropTablet), h.dropTablet)
-	h.AddWriteFunc(uint64(pb.Append), h.append)
-	h.AddReadFunc(uint64(pb.TabletNames), h.tableNames)
-	h.AddReadFunc(uint64(pb.GetSegmentIds), h.getSegmentIds)
-	h.AddReadFunc(uint64(pb.GetSegmentedId), h.getSegmentedId)
+	h.AddWriteFunc(uint64(pb2.CreateTablet), h.createTablet)
+	h.AddWriteFunc(uint64(pb2.DropTablet), h.dropTablet)
+	h.AddWriteFunc(uint64(pb2.Append), h.append)
+	h.AddReadFunc(uint64(pb2.TabletNames), h.tableNames)
+	h.AddReadFunc(uint64(pb2.GetSegmentIds), h.getSegmentIds)
+	h.AddReadFunc(uint64(pb2.GetSegmentedId), h.getSegmentedId)
 }
 
 func (h *driver) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error {
-	customReq := cmd.(pb.Request)
+	customReq := cmd.(pb2.Request)
 	switch customReq.Type {
-	case pb.Set:
+	case pb2.Set:
 		msg := customReq.Set
 		req.Key = msg.Key
 		req.Group = uint64(customReq.Group)
-		req.CustemType = uint64(pb.Set)
+		req.CustemType = uint64(pb2.Set)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.SetIfNotExist:
+	case pb2.SetIfNotExist:
 		msg := customReq.Set
 		req.Key = msg.Key
 		req.Group = uint64(customReq.Group)
-		req.CustemType = uint64(pb.SetIfNotExist)
+		req.CustemType = uint64(pb2.SetIfNotExist)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.Del:
+	case pb2.Del:
 		msg := customReq.Delete
 		req.Key = msg.Key
 		req.Group = uint64(customReq.Group)
-		req.CustemType = uint64(pb.Del)
+		req.CustemType = uint64(pb2.Del)
 		req.Type = raftcmdpb.CMDType_Write
-	case pb.DelIfNotExist:
+	case pb2.DelIfNotExist:
 		msg := customReq.Delete
 		req.Key = msg.Key
 		req.Group = uint64(customReq.Group)
-		req.CustemType = uint64(pb.DelIfNotExist)
+		req.CustemType = uint64(pb2.DelIfNotExist)
 		req.Type = raftcmdpb.CMDType_Write
-	case pb.Get:
+	case pb2.Get:
 		msg := customReq.Get
 		req.Key = msg.Key
 		req.Group = uint64(customReq.Group)
-		req.CustemType = uint64(pb.Get)
+		req.CustemType = uint64(pb2.Get)
 		req.Type = raftcmdpb.CMDType_Read
-	case pb.PrefixScan:
+	case pb2.PrefixScan:
 		msg := customReq.PrefixScan
 		req.Key = msg.StartKey
 		req.Group = uint64(customReq.Group)
-		req.CustemType = uint64(pb.PrefixScan)
+		req.CustemType = uint64(pb2.PrefixScan)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.Scan:
+	case pb2.Scan:
 		msg := customReq.Scan
 		req.Key = msg.Start
 		req.Group = uint64(customReq.Group)
-		req.CustemType = uint64(pb.Scan)
+		req.CustemType = uint64(pb2.Scan)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.Incr:
+	case pb2.Incr:
 		msg := customReq.AllocID
 		req.Key = msg.Key
 		req.Group = uint64(customReq.Group)
-		req.CustemType = uint64(pb.Incr)
+		req.CustemType = uint64(pb2.Incr)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.CreateTablet:
+	case pb2.CreateTablet:
 		msg := customReq.CreateTablet
 		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
-		req.CustemType = uint64(pb.CreateTablet)
+		req.CustemType = uint64(pb2.CreateTablet)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.DropTablet:
+	case pb2.DropTablet:
 		msg := customReq.DropTablet
 		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
-		req.CustemType = uint64(pb.DropTablet)
+		req.CustemType = uint64(pb2.DropTablet)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.Append:
+	case pb2.Append:
 		msg := customReq.Append
 		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
-		req.CustemType = uint64(pb.Append)
+		req.CustemType = uint64(pb2.Append)
 		req.Type = raftcmdpb.CMDType_Write
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.TabletNames:
+	case pb2.TabletNames:
 		msg := customReq.TabletIds
 		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
-		req.CustemType = uint64(pb.TabletNames)
+		req.CustemType = uint64(pb2.TabletNames)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.GetSegmentIds:
+	case pb2.GetSegmentIds:
 		msg := customReq.GetSegmentIds
 		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
-		req.CustemType = uint64(pb.GetSegmentIds)
+		req.CustemType = uint64(pb2.GetSegmentIds)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
-	case pb.GetSegmentedId:
+	case pb2.GetSegmentedId:
 		msg := customReq.GetSegmentedId
 		req.Group = uint64(customReq.Group)
 		req.ToShard = customReq.Shard
-		req.CustemType = uint64(pb.GetSegmentedId)
+		req.CustemType = uint64(pb2.GetSegmentedId)
 		req.Type = raftcmdpb.CMDType_Read
 		req.Cmd = protoc.MustMarshal(&msg)
 	}

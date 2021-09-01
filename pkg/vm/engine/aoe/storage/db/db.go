@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -157,6 +158,9 @@ func (d *DB) HasTable(name string) bool {
 }
 
 func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
+	defer func() {
+		logutil.Debugf("call aoe DropTable, input is %v, output is %d, %v", ctx, id, err)
+	}()
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}

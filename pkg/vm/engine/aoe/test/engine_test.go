@@ -8,21 +8,21 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
+	catalog2 "matrixone/pkg/catalog"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/protocol"
 	vengine "matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
-	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	"matrixone/pkg/vm/engine/aoe/dist/config"
-	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	"matrixone/pkg/vm/engine/aoe/engine"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	aoe2 "matrixone/pkg/vm/engine/dist/aoe"
+	config2 "matrixone/pkg/vm/engine/dist/config"
+	testutil2 "matrixone/pkg/vm/engine/dist/testutil"
 	"matrixone/pkg/vm/metadata"
 	"testing"
 	"time"
@@ -56,14 +56,14 @@ var (
 
 func TestAOEEngine(t *testing.T) {
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c := testutil.NewTestAOECluster(t,
-		func(node int) *config.Config {
-			c := &config.Config{}
+	c := testutil2.NewTestAOECluster(t,
+		func(node int) *config2.Config {
+			c := &config2.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+		testutil2.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe2.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &md.Configuration{
 				Dir:              path,
@@ -79,10 +79,10 @@ func TestAOEEngine(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return daoe.NewStorageWithOptions(path, opts)
+			return aoe2.NewStorageWithOptions(path, opts)
 		}),
-		testutil.WithTestAOEClusterUsePebble(),
-		testutil.WithTestAOEClusterRaftClusterOptions(
+		testutil2.WithTestAOEClusterUsePebble(),
+		testutil2.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(true),
 			raftstore.WithTestClusterLogLevel("info"),
 			raftstore.WithTestClusterDataPath("./test1")))
@@ -216,14 +216,14 @@ func TestAOEEngine(t *testing.T) {
 
 func doRestartEngine(t *testing.T) {
 	putil.SetLogger(log.NewLoggerWithPrefix("prophet"))
-	c := testutil.NewTestAOECluster(t,
-		func(node int) *config.Config {
-			c := &config.Config{}
+	c := testutil2.NewTestAOECluster(t,
+		func(node int) *config2.Config {
+			c := &config2.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+		testutil2.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe2.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &md.Configuration{
 				Dir:              path,
@@ -239,10 +239,10 @@ func doRestartEngine(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return daoe.NewStorageWithOptions(path, opts)
+			return aoe2.NewStorageWithOptions(path, opts)
 		}),
-		testutil.WithTestAOEClusterUsePebble(),
-		testutil.WithTestAOEClusterRaftClusterOptions(
+		testutil2.WithTestAOEClusterUsePebble(),
+		testutil2.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithTestClusterRecreate(false)))

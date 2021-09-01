@@ -11,23 +11,23 @@ import (
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/dist/aoe"
+	pb2 "matrixone/pkg/vm/engine/dist/pb"
 	"time"
 )
 
 func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.CreateTabletRequest{}
+	customReq := &pb2.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 	t, err := helper.DecodeTable(customReq.TableInfo)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
-	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*daoe.Storage)
+	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe.Storage)
 	id, err := store.CreateTable(&t, dbi.TableOpCtx{
 		OpIndex:   ctx.LogIndex(),
 		TableName: customReq.Name,
@@ -44,10 +44,10 @@ func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 
 func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.DropTabletRequest{}
+	customReq := &pb2.DropTabletRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
-	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*daoe.Storage)
+	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe.Storage)
 	id, err := store.DropTable(dbi.DropTableCtx{
 		OpIndex:   ctx.LogIndex(),
 		TableName: customReq.Name,
@@ -68,14 +68,14 @@ func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comman
 		logutil.Debugf("[logIndex:%d]append handler cost %d ms", ctx.LogIndex(), time.Since(t0).Milliseconds())
 	}()
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.AppendRequest{}
+	customReq := &pb2.AppendRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 	bat, _, err := protocol.DecodeBatch(customReq.Data)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
-	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*daoe.Storage)
+	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe.Storage)
 	err = store.Append(customReq.TabletName, bat, &md.LogIndex{
 		ID: ctx.LogIndex(),
 	})
@@ -90,9 +90,9 @@ func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comman
 
 func (h *driver) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.GetSegmentedIdRequest{}
+	customReq := &pb2.GetSegmentedIdRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-	rsp, err := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*daoe.Storage).GetSegmentedId(codec.Uint642String(customReq.ShardId))
+	rsp, err := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*aoe.Storage).GetSegmentedId(codec.Uint642String(customReq.ShardId))
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
@@ -103,9 +103,9 @@ func (h *driver) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 
 func (h *driver) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.GetSegmentIdsRequest{}
+	customReq := &pb2.GetSegmentIdsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-	rsp := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*daoe.Storage).GetSegmentIds(dbi.GetSegmentsCtx{
+	rsp := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*aoe.Storage).GetSegmentIds(dbi.GetSegmentsCtx{
 		TableName: customReq.Name,
 	})
 	resp.Value, _ = json.Marshal(rsp)
@@ -114,14 +114,14 @@ func (h *driver) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx
 
 func (h *driver) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.GetSnapshotRequest{}
+	customReq := &pb2.GetSnapshotRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 	var c dbi.GetSnapshotCtx
 	if err := json.Unmarshal(customReq.Ctx, &c); err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
 	}
-	rsp, err := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*daoe.Storage).GetSnapshot(&c)
+	rsp, err := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*aoe.Storage).GetSnapshot(&c)
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
@@ -132,9 +132,9 @@ func (h *driver) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx c
 
 func (h *driver) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.TabletIDsRequest{}
+	customReq := &pb2.TabletIDsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-	rsp, err := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*daoe.Storage).TableIDs()
+	rsp, err := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*aoe.Storage).TableIDs()
 	if err != nil {
 		resp.Value = errorResp(err)
 		return resp, 500
@@ -145,9 +145,9 @@ func (h *driver) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 
 func (h *driver) tableNames(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.TabletIDsRequest{}
+	customReq := &pb2.TabletIDsRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-	rsp := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*daoe.Storage).TableNames()
+	rsp := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*aoe.Storage).TableNames()
 	resp.Value, _ = json.Marshal(rsp)
 	return resp, 0
 }

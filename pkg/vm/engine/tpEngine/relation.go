@@ -3,12 +3,12 @@ package tpEngine
 import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/dist"
+	dist2 "matrixone/pkg/vm/engine/dist"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 )
 
-func NewTpRelation(n string, id uint64, cinfo string, m tpMetadata, kv dist.CubeDriver, proc *process.Process) *tpRelation {
+func NewTpRelation(n string, id uint64, cinfo string, m tpMetadata, kv dist2.CubeDriver, proc *process.Process) *tpRelation {
 	return &tpRelation{
 		relName:    n,
 		relId:      id,

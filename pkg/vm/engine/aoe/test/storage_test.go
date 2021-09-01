@@ -15,13 +15,13 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	"matrixone/pkg/vm/engine/aoe/dist/config"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
-	"matrixone/pkg/vm/engine/aoe/dist/testutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	aoe2 "matrixone/pkg/vm/engine/dist/aoe"
+	config2 "matrixone/pkg/vm/engine/dist/config"
+	pb2 "matrixone/pkg/vm/engine/dist/pb"
+	testutil2 "matrixone/pkg/vm/engine/dist/testutil"
 	"testing"
 	"time"
 )
@@ -44,14 +44,14 @@ func init() {
 
 func TestStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
-	c := testutil.NewTestAOECluster(t,
-		func(node int) *config.Config {
-			c := &config.Config{}
+	c := testutil2.NewTestAOECluster(t,
+		func(node int) *config2.Config {
+			c := &config2.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+		testutil2.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe2.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &md.Configuration{
 				Dir:              path,
@@ -67,10 +67,10 @@ func TestStorage(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return daoe.NewStorageWithOptions(path, opts)
+			return aoe2.NewStorageWithOptions(path, opts)
 		}),
-		testutil.WithTestAOEClusterUsePebble(),
-		testutil.WithTestAOEClusterRaftClusterOptions(
+		testutil2.WithTestAOEClusterUsePebble(),
+		testutil2.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterLogLevel("info"),
 			raftstore.WithTestClusterDataPath("./test2")))
 
@@ -85,7 +85,7 @@ func TestStorage(t *testing.T) {
 
 	driver := c.CubeDrivers[0]
 
-	driver.RaftStore().GetRouter().ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
+	driver.RaftStore().GetRouter().ForeachShards(uint64(pb2.AOEGroup), func(shard *bhmetapb.Shard) bool {
 		stdLog.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
 		return true
 	})
@@ -109,9 +109,9 @@ func TestStorage(t *testing.T) {
 	//Prefix Test
 	for i := uint64(0); i < 20; i++ {
 		key := fmt.Sprintf("prefix-%d", i)
-		_, err = driver.Exec(pb.Request{
-			Type: pb.Set,
-			Set: pb.SetRequest{
+		_, err = driver.Exec(pb2.Request{
+			Type: pb2.Set,
+			Set: pb2.SetRequest{
 				Key:   []byte(key),
 				Value: codec.Uint642Bytes(i),
 			},
@@ -139,9 +139,9 @@ func TestStorage(t *testing.T) {
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)
-			_, err = driver.Exec(pb.Request{
-				Type: pb.Set,
-				Set: pb.SetRequest{
+			_, err = driver.Exec(pb2.Request{
+				Type: pb2.Set,
+				Set: pb2.SetRequest{
 					Key:   []byte(key),
 					Value: []byte(key),
 				},
@@ -159,9 +159,9 @@ func TestStorage(t *testing.T) {
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)
-			value, err = driver.Exec(pb.Request{
-				Type: pb.Get,
-				Get: pb.GetRequest{
+			value, err = driver.Exec(pb2.Request{
+				Type: pb2.Get,
+				Get: pb2.GetRequest{
 					Key: []byte(key),
 				},
 			})
@@ -171,7 +171,7 @@ func TestStorage(t *testing.T) {
 	}
 	fmt.Printf("time cost for 50 read is %d ms\n", time.Since(t0).Milliseconds())
 
-	shard, err := driver.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
+	shard, err := driver.GetShardPool().Alloc(uint64(pb2.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
 	//CreateTableTest
 	toShard := shard.ShardID
@@ -222,13 +222,13 @@ func TestStorage(t *testing.T) {
 }
 
 func doRestartStorage(t *testing.T) {
-	c := testutil.NewTestAOECluster(t,
-		func(node int) *config.Config {
-			c := &config.Config{}
+	c := testutil2.NewTestAOECluster(t,
+		func(node int) *config2.Config {
+			c := &config2.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+		testutil2.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe2.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &md.Configuration{
 				Dir:              path,
@@ -244,9 +244,9 @@ func doRestartStorage(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return daoe.NewStorageWithOptions(path, opts)
-		}), testutil.WithTestAOEClusterUsePebble(),
-		testutil.WithTestAOEClusterRaftClusterOptions(
+			return aoe2.NewStorageWithOptions(path, opts)
+		}), testutil2.WithTestAOEClusterUsePebble(),
+		testutil2.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(false),
 			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test")))
@@ -277,7 +277,7 @@ func doRestartStorage(t *testing.T) {
 	require.Equal(t, 20, len(kvs))
 	pool := driver.GetShardPool()
 	stdLog.Printf("GetShardPool returns %v", pool)
-	shard, err := pool.Alloc(uint64(pb.AOEGroup), []byte("test-1"))
+	shard, err := pool.Alloc(uint64(pb2.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
 	err = driver.CreateTablet(codec.Bytes2String(codec.EncodeKey(shard.ShardID, tableInfo.Id)), shard.ShardID, tableInfo)
 	assert.NotNil(t, err)
