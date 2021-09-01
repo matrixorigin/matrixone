@@ -39,26 +39,22 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 		}
 	}()
 	if err = vm.Prepare(p.ins, proc); err != nil {
-		vm.Clean(p.ins, proc)
 		return false, err
 	}
-	q, err := p.prefetch(segs, proc)
-	if err != nil {
-		return false, err
-	}
+	q := p.prefetch(segs, proc)
 	for i, j := 0, len(q.bs); i < j; i++ {
 		if err := q.prefetch(p.cs, p.attrs, proc); err != nil {
 			return false, err
 		}
-		if q.bs[i].bat == nil {
-			bat, err := q.bs[i].blk.Prefetch(p.cs, p.attrs, proc)
-			if err != nil {
-				return false, err
+		bat := q.bs[i].bat
+		{
+			for i, attr := range bat.Attrs {
+				if bat.Vecs[i], err = bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc); err != nil {
+					return false, err
+				}
 			}
-			q.bs[i].bat = bat
-			q.pi = i + 1
 		}
-		proc.Reg.Ax = q.bs[i].bat
+		proc.Reg.Ax = bat
 		if end, err = vm.Run(p.ins, proc); err != nil {
 			return end, err
 		}
@@ -89,7 +85,7 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	return false, nil
 }
 
-func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) (*queue, error) {
+func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) *queue {
 	q := new(queue)
 	q.bs = make([]block, 0, 8) // prefetch block list
 	{
@@ -107,18 +103,16 @@ func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) (*queu
 			}
 		}
 	}
-	if err := q.prefetch(p.cs, p.attrs, proc); err != nil {
-		return nil, err
-	}
-	return q, nil
+	return q
 }
 
 func (q *queue) prefetch(cs []uint64, attrs []string, proc *process.Process) error {
 	if q.pi == len(q.bs) {
 		return nil
 	}
+	start := q.pi
 	for i, j := q.pi, len(q.bs); i < j; i++ {
-		if q.siz >= proc.Lim.BatchSize {
+		if i > PrefetchNum+start {
 			break
 		}
 		bat, err := q.bs[i].blk.Prefetch(cs, attrs, proc)

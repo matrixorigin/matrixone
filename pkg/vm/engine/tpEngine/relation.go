@@ -50,14 +50,14 @@ func (tr *tpRelation) Segment(engine.SegmentInfo, *process.Process) engine.Segme
 	return nil
 }
 
-func (tr *tpRelation) Write(batch *batch.Batch) error {
+func (tr *tpRelation) Write(_ uint64, batch *batch.Batch) error {
 	return nil
 }
 
-func (tr *tpRelation) AddAttribute(def engine.TableDef) error {
+func (tr *tpRelation) AddTableDef(_ uint64, def engine.TableDef) error {
 	return nil
 }
 
-func (tr *tpRelation) DelAttribute(def engine.TableDef) error {
+func (tr *tpRelation) DelTableDef(_ uint64, def engine.TableDef) error {
 	return nil
 }

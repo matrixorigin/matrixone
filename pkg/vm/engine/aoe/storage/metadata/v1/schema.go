@@ -180,7 +180,7 @@ func MockSchema(colCnt int) *Schema {
 		colDef := &ColDef{
 			Idx:  i,
 			Name: name,
-			Type: types.Type{types.T_int32, 4, 4, 0},
+			Type: types.Type{Oid: types.T_int32, Size: 4, Width: 4},
 		}
 		schema.ColDefs[i] = colDef
 		schema.NameIdMap[colDef.Name] = i
@@ -200,7 +200,7 @@ func MockVarCharSchema(colCnt int) *Schema {
 		colDef := &ColDef{
 			Idx:  i,
 			Name: name,
-			Type: types.Type{types.T_varchar, 24, 0, 0},
+			Type: types.Type{Oid: types.T_varchar, Size: 24},
 		}
 		schema.ColDefs[i] = colDef
 		schema.NameIdMap[colDef.Name] = i
@@ -260,9 +260,9 @@ func MockTableInfo(colCnt int) *aoe.TableInfo {
 			Name: name,
 		}
 		if i == 1 {
-			colInfo.Type = types.Type{types.T(types.T_varchar), 24, 0, 0}
+			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
 		} else {
-			colInfo.Type = types.Type{types.T_int32, 4, 4, 0}
+			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 		}
 		indexInfo := aoe.IndexInfo{Type: uint64(ZoneMap), Columns: []uint64{uint64(i)}}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)

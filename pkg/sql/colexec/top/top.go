@@ -23,7 +23,18 @@ func String(arg interface{}, buf *bytes.Buffer) {
 	buf.WriteString(fmt.Sprintf("], %v)", n.Limit))
 }
 
-func Prepare(_ *process.Process, _ interface{}) error {
+func Prepare(_ *process.Process, arg interface{}) error {
+	n := arg.(*Argument)
+	ctr := &n.Ctr
+	{
+		ctr.attrs = make([]string, len(n.Fs))
+		for i, f := range n.Fs {
+			ctr.attrs[i] = f.Attr
+		}
+	}
+	ctr.n = len(n.Fs)
+	ctr.sels = make([]int64, n.Limit)
+	ctr.cmps = make([]compare.Compare, len(n.Fs))
 	return nil
 }
 
@@ -39,23 +50,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	n := arg.(*Argument)
 	ctr := &n.Ctr
-	{
-		{
-			ctr.attrs = make([]string, len(n.Fs))
-			for i, f := range n.Fs {
-				ctr.attrs[i] = f.Attr
-			}
-		}
-		ctr.n = len(n.Fs)
-		ctr.sels = make([]int64, n.Limit)
-		ctr.cmps = make([]compare.Compare, len(n.Fs))
-
-	}
 	bat.Reorder(ctr.attrs)
-	if err := bat.Prefetch(ctr.attrs, bat.Vecs[:len(ctr.attrs)], proc); err != nil {
-		bat.Clean(proc)
-		return false, err
-	}
 	{
 		for i := int64(0); i < n.Limit; i++ {
 			ctr.sels[i] = i

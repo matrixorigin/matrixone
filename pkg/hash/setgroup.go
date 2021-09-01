@@ -392,7 +392,7 @@ func (g *SetGroup) Probe(sels, matched []int64, vecs, gvecs []*vector.Vector, di
 }
 
 func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
-	diffs []bool, proc *process.Process) ([]int64, error) {
+	diffs []bool, proc *process.Process) []int64 {
 	for i, gvec := range gvecs {
 		switch gvec.Typ.Oid {
 		case types.T_int8:
@@ -761,5 +761,5 @@ func (g *SetGroup) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector,
 			remaining = append(remaining, sels[i])
 		}
 	}
-	return remaining, nil
+	return remaining
 }

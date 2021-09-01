@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand"
 	"sync/atomic"
 
@@ -468,10 +469,16 @@ func TestMultiTables(t *testing.T) {
 						for _, id := range seg.Blocks() {
 							blk := seg.Block(id, proc)
 							bat, err := blk.Prefetch(refs, attrs, proc)
+							{
+								for i, attr := range bat.Attrs {
+									if bat.Vecs[i], err = bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc); err != nil {
+										log.Fatal(err)
+									}
+								}
+							}
 							assert.Nil(t, err)
 							for attri, attr := range attrs {
-								v, err := bat.GetVector(attr, proc)
-								assert.Nil(t, err)
+								v := bat.GetVector(attr, proc)
 								if attri == 0 && v.Length() > 5000 {
 									// edata := baseCk.Vecs[attri].Col.([]int32)
 
@@ -512,10 +519,16 @@ func TestMultiTables(t *testing.T) {
 			blks := seg.Blocks()
 			blk := seg.Block(blks[len(blks)-1], proc)
 			bat, err := blk.Prefetch(refs, attrs, proc)
+			{
+				for i, attr := range bat.Attrs {
+					if bat.Vecs[i], err = bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc); err != nil {
+						log.Fatal(err)
+					}
+				}
+			}
 			assert.Nil(t, err)
 			for _, attr := range attrs {
-				v, err := bat.GetVector(attr, proc)
-				assert.Nil(t, err)
+				v := bat.GetVector(attr, proc)
 				assert.Equal(t, int(rows), v.Length())
 				// t.Log(v.Length())
 				// t.Logf("%s, seg=%v, attr=%s, len=%d", name, segId, attr, v.Length())

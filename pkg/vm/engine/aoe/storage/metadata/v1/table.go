@@ -76,9 +76,10 @@ func (tbl *Table) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, tbl)
 }
 
-func (tbl *Table) ReadFrom(r io.Reader) error {
-	err := json.NewDecoder(r).Decode(tbl)
-	return err
+func (tbl *Table) ReadFrom(r io.Reader) (int64, error) {
+	decoder := json.NewDecoder(r)
+	err := decoder.Decode(tbl)
+	return decoder.InputOffset(), err
 }
 
 func (tbl *Table) GetID() uint64 {

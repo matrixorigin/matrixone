@@ -37,7 +37,8 @@ type Vector interface {
  *  			count || vector
  */
 type Vector struct {
-	Or   bool   // true: origin
+	Or   bool // true: origin
+	Ref  uint64
 	Data []byte // raw data
 	Typ  types.Type
 	Col  interface{}

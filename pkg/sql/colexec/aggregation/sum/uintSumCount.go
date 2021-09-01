@@ -55,7 +55,7 @@ func (a *uintSumCount) Fill(sels []int64, vec *vector.Vector) error {
 }
 
 func (a *uintSumCount) Eval() interface{} {
-	return [][]interface{}{[]interface{}{a.cnt, float64(a.sum)}}
+	return []interface{}{a.cnt, float64(a.sum)}
 }
 
 func (a *uintSumCount) EvalCopy(proc *process.Process) (*vector.Vector, error) {

@@ -71,8 +71,12 @@ func (mt *MemTable) Append(bat *ro.Batch, offset uint64, index *md.LogIndex) (n 
 	defer mt.Unlock()
 	var na int
 	for idx, attr := range mt.Batch.GetAttrs() {
-		if na, err = mt.Batch.GetVectorByAttr(attr).AppendVector(bat.Vecs[idx], int(offset)); err != nil {
-			return n, err
+		for i, a := range bat.Attrs {
+			if a == mt.TableMeta.Schema.ColDefs[idx].Name {
+				if na, err = mt.Batch.GetVectorByAttr(attr).AppendVector(bat.Vecs[i], int(offset)); err != nil {
+					return n, err
+				}
+			}
 		}
 	}
 	n = uint64(na)

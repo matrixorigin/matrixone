@@ -100,62 +100,33 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 			} else {
 				bat.Reorder(ctr.bat.Attrs)
 			}
-			if err := bat.Prefetch(bat.Attrs, bat.Vecs, proc); err != nil {
-				reg.Ch = nil
-				reg.Wg.Done()
-				bat.Clean(proc)
-				return err
-			}
 			if ctr.bat == nil {
 				ctr.bat = batch.New(true, bat.Attrs)
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vector.New(vec.Typ)
 				}
 			}
-			if len(bat.Sels) == 0 {
-				for sel, nsel := int64(0), int64(bat.Vecs[0].Length()); sel < nsel; sel++ {
-					{
-						for i, vec := range ctr.bat.Vecs {
-							if vec.Data == nil {
-								if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
-									reg.Ch = nil
-									reg.Wg.Done()
-									bat.Clean(proc)
-									return err
-								}
-								copy(vec.Data[:mempool.CountSize], bat.Vecs[i].Data[:mempool.CountSize])
-							} else {
-								if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
-									reg.Ch = nil
-									reg.Wg.Done()
-									bat.Clean(proc)
-									return err
-								}
+			if len(bat.Sels) > 0 {
+				bat.Shuffle(proc)
+			}
+			for sel, nsel := int64(0), int64(bat.Vecs[0].Length()); sel < nsel; sel++ {
+				{
+					for i, vec := range ctr.bat.Vecs {
+						if vec.Data == nil {
+							if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
+								reg.Ch = nil
+								reg.Wg.Done()
+								bat.Clean(proc)
+								return err
 							}
-						}
-					}
-				}
-			} else {
-				for _, sel := range bat.Sels {
-					{
-						for i, vec := range ctr.bat.Vecs {
-							if vec.Data == nil {
-								if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
-									reg.Ch = nil
-									reg.Wg.Done()
-									bat.Clean(proc)
-									return err
-								}
-								copy(vec.Data[:mempool.CountSize], bat.Vecs[i].Data[:mempool.CountSize])
-							} else {
-								if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
-									reg.Ch = nil
-									reg.Wg.Done()
-									bat.Clean(proc)
-									return err
-								}
+							copy(vec.Data[:mempool.CountSize], bat.Vecs[i].Data[:mempool.CountSize])
+						} else {
+							if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
+								reg.Ch = nil
+								reg.Wg.Done()
+								bat.Clean(proc)
+								return err
 							}
-							ctr.bat.Vecs[i] = vec
 						}
 					}
 				}
@@ -211,7 +182,6 @@ func (ctr *Container) eval(proc *process.Process) error {
 	ctr.bat.Sels = sels
 	ctr.bat.SelsData = data
 	return nil
-
 }
 
 func (ctr *Container) clean(proc *process.Process) {
