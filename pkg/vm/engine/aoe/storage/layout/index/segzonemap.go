@@ -235,9 +235,9 @@ func (i *SegmentZoneMapIndex) Unmarshall(data []byte) error {
 		}
 		return nil
 	case types.T_uint64:
-		i.MinV = encoding.DecodeUint32(buf[:8])
+		i.MinV = encoding.DecodeUint64(buf[:8])
 		buf = buf[8:]
-		i.MaxV = encoding.DecodeUint32(buf[:8])
+		i.MaxV = encoding.DecodeUint64(buf[:8])
 		buf = buf[8:]
 		len := encoding.DecodeInt32(buf[:4])
 		buf = buf[4:]

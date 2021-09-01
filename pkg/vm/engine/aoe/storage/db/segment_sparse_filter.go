@@ -263,13 +263,13 @@ func compare(val1, val2 interface{}, typ types.Type) int {
 	case types.T_int64:
 		return int(val1.(int64) - val2.(int64))
 	case types.T_uint8:
-		return int(val1.(uint8) - val2.(uint8))
+		return int(val1.(uint8)) - int(val2.(uint8))
 	case types.T_uint16:
-		return int(val1.(uint16) - val2.(uint16))
+		return int(val1.(uint16)) - int(val2.(uint16))
 	case types.T_uint32:
-		return int(val1.(uint32) - val2.(uint32))
+		return int(val1.(uint32)) - int(val2.(uint32))
 	case types.T_uint64:
-		return int(val1.(uint64) - val2.(uint64))
+		return int(val1.(uint64)) - int(val2.(uint64))
 	case types.T_float32:
 		return int(val1.(float32) - val2.(float32))
 	case types.T_float64:

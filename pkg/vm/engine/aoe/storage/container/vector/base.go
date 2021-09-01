@@ -47,21 +47,77 @@ func (v *BaseVector) IsNull(idx int) bool {
 func MockVector(t types.Type, rows uint64) IVector {
 	var vec IVector
 	switch t.Oid {
+	case types.T_int8:
+		vec = NewStdVector(t, rows)
+		var vals []int8
+		for i := uint64(0); i < rows; i++ {
+			vals = append(vals, int8(i%5000))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_int16:
+		vec = NewStdVector(t, rows)
+		var vals []int16
+		for i := uint64(0); i < rows; i++ {
+			vals = append(vals, int16(i%5000))
+		}
+		vec.Append(len(vals), vals)
 	case types.T_int32:
 		vec = NewStdVector(t, rows)
-		vals := []int32{}
+		var vals []int32
 		for i := uint64(0); i < rows; i++ {
-			vals = append(vals, int32(i)%5000)
+			vals = append(vals, int32(i%5000))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_int64:
+		vec = NewStdVector(t, rows)
+		var vals []int64
+		for i := uint64(0); i < rows; i++ {
+			vals = append(vals, int64(i%5000))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint8:
+		vec = NewStdVector(t, rows)
+		var vals []uint8
+		for i := uint64(0); i < rows; i++ {
+			vals = append(vals, uint8(i%5000))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint16:
+		vec = NewStdVector(t, rows)
+		var vals []uint16
+		for i := uint64(0); i < rows; i++ {
+			vals = append(vals, uint16(i%5000))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint32:
+		vec = NewStdVector(t, rows)
+		var vals []uint32
+		for i := uint64(0); i < rows; i++ {
+			vals = append(vals, uint32(i%5000))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_uint64:
+		vec = NewStdVector(t, rows)
+		var vals []uint64
+		for i := uint64(0); i < rows; i++ {
+			vals = append(vals, uint64(i%5000))
+		}
+		vec.Append(len(vals), vals)
+	case types.T_float32:
+		vec = NewStdVector(t, rows)
+		var vals []float32
+		for i := uint64(0); i < rows; i++ {
+			vals = append(vals, float32(i%5000))
 		}
 		vec.Append(len(vals), vals)
 	case types.T_float64:
 		vec = NewStdVector(t, rows)
-		vals := []float64{}
+		var vals []float64
 		for i := uint64(0); i < rows; i++ {
-			vals = append(vals, float64(i))
+			vals = append(vals, float64(i%5000))
 		}
 		vec.Append(len(vals), vals)
-	case types.T_varchar:
+	case types.T_varchar, types.T_char:
 		vec = NewStrVector(t, rows)
 		vals := make([][]byte, 0, rows)
 		prefix := "str"
