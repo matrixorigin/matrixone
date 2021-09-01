@@ -1,17 +1,17 @@
 package aoe
 
 import (
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/storage/stats"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe"
 	store "matrixone/pkg/vm/engine/aoe/storage"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/storage/stats"
 )
 
 // Storage memory storage
@@ -50,7 +50,7 @@ func (s *Storage) Stats() stats.Stats {
 	return s.stats
 }
 
-func (s *Storage) Append(tabletName string, bat *batch.Batch, index *md.LogIndex) error {
+func (s *Storage) Append(tabletName string, bat *batch.Batch, index uint64) error {
 	size := 0
 	for _, vec := range bat.Vecs {
 		size += len(vec.Data)
@@ -58,7 +58,7 @@ func (s *Storage) Append(tabletName string, bat *batch.Batch, index *md.LogIndex
 	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
 	return s.DB.Append(dbi.AppendCtx{
-		OpIndex:   index.ID,
+		OpIndex:   index,
 		TableName: tabletName,
 		Data:      bat,
 	})
@@ -72,7 +72,7 @@ func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 	return s.DB.GetSnapshot(ctx)
 }
 
-func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids adb.IDS) {
+func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
 	return s.DB.GetSegmentIds(ctx)
 }
 

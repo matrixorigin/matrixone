@@ -150,12 +150,8 @@ func (part *ColumnPart) Prefetch() error {
 	if part.VFile.GetFileType() == common.MemFile {
 		return nil
 	}
-	id := common.ID{
-		TableID:   part.Block.GetMeta().Segment.Table.GetID(),
-		SegmentID: part.Block.GetMeta().GetSegmentID(),
-		BlockID:   part.Block.GetID(),
-		Idx:       uint16(part.GetColIdx()),
-	}
+	id := *part.Block.GetMeta().AsCommonID()
+	id.Idx = uint16(part.Block.GetColIdx())
 	return part.Block.GetSegmentFile().PrefetchPart(uint64(part.GetColIdx()), id)
 }
 

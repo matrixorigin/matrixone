@@ -23,7 +23,6 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -190,7 +189,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	return id, nil
 }
 
-func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {
+func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
