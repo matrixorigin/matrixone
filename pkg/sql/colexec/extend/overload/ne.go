@@ -4,7 +4,6 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
-	"matrixone/pkg/vectorize/eq"
 	"matrixone/pkg/vectorize/ne"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
@@ -44,9 +43,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Int8EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Int8NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Int8EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Int8NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -100,9 +99,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Int16EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Int16NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Int16EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Int16NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -156,9 +155,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Int32EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Int32NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Int32EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Int32NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -212,9 +211,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Int64EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Int64NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Int64EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Int64NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -268,9 +267,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Uint8EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Uint8NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Uint8EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Uint8NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -324,9 +323,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Uint16EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Uint16NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Uint16EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Uint16NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -380,9 +379,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Uint32EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Uint32NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Uint32EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Uint32NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -436,9 +435,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Uint64EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Uint64NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Uint64EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Uint64NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -492,9 +491,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Float32EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Float32NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Float32EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Float32NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -548,9 +547,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.Float64EqNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.Float64NeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.Float64EqScalar(rvs[0], lvs, rs))
+						vec.SetCol(ne.Float64NeScalar(rvs[0], lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -604,9 +603,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.StrEqNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.StrNeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.StrEqScalar(rvs.Data, lvs, rs))
+						vec.SetCol(ne.StrNeScalar(rvs.Data, lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil
@@ -660,9 +659,9 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
 					rs = rs[:len(lvs.Lengths)]
 					if lv.Nsp.Any() {
-						vec.SetCol(eq.StrEqNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
+						vec.SetCol(ne.StrNeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
 					} else {
-						vec.SetCol(eq.StrEqScalar(rvs.Data, lvs, rs))
+						vec.SetCol(ne.StrNeScalar(rvs.Data, lvs, rs))
 					}
 					copy(vec.Data, mempool.OneCount)
 					return vec, nil

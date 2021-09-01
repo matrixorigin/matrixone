@@ -420,8 +420,11 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				reg.Wg.Done()
 				continue
 			}
-			bat.Reorder(ctr.attrs)
+			{
+				fmt.Printf("******rows: %v\n", ctr.rows)
+			}
 			if ctr.bat == nil {
+				bat.Reorder(ctr.attrs)
 				ctr.bat = batch.New(true, n.Gs)
 				for i, attr := range n.Gs {
 					vec := bat.GetVector(attr, proc)
@@ -460,6 +463,8 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 						n.Es[i].Agg = e.Agg
 					}
 				}
+			} else {
+				bat.Reorder(ctr.bat.Attrs)
 			}
 			if len(bat.Sels) > 0 {
 				bat.Shuffle(proc)
@@ -482,6 +487,9 @@ func (ctr *Container) batchGroup(vecs []*vector.Vector, es []aggregation.Extend,
 		length := j - i
 		if length > UnitLimit {
 			length = UnitLimit
+		}
+		{
+			fmt.Printf("++++++i: %v, length: %v\n", i, length)
 		}
 		if err := ctr.unitGroup(i, length, vecs, es, proc); err != nil {
 			return err
