@@ -420,9 +420,6 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				reg.Wg.Done()
 				continue
 			}
-			{
-				fmt.Printf("******rows: %v\n", ctr.rows)
-			}
 			if ctr.bat == nil {
 				bat.Reorder(ctr.attrs)
 				ctr.bat = batch.New(true, n.Gs)
@@ -487,9 +484,6 @@ func (ctr *Container) batchGroup(vecs []*vector.Vector, es []aggregation.Extend,
 		length := j - i
 		if length > UnitLimit {
 			length = UnitLimit
-		}
-		{
-			fmt.Printf("++++++i: %v, length: %v\n", i, length)
 		}
 		if err := ctr.unitGroup(i, length, vecs, es, proc); err != nil {
 			return err
