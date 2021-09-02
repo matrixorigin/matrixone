@@ -62,6 +62,112 @@ func (s *Schema) Clone() *Schema {
 	return newSchema
 }
 
+// MockSchemaAll if char/varchar is needed, colCnt = 14, otherwise colCnt = 12
+func MockSchemaAll(colCnt int) *Schema {
+	schema := &Schema{
+		Indices:   make([]*IndexInfo, 0),
+		ColDefs:   make([]*ColDef, colCnt),
+		NameIdMap: make(map[string]int),
+	}
+	prefix := "mock_"
+	for i := 0; i < colCnt; i++ {
+		name := fmt.Sprintf("%s%d", prefix, i)
+		colDef := &ColDef{
+			Name: name,
+			Idx:  i,
+		}
+		schema.ColDefs[i] = colDef
+		schema.NameIdMap[colDef.Name] = i
+		switch i {
+		case 0:
+			colDef.Type = types.Type{
+				Oid:       types.T_int8,
+				Size:      1,
+				Width:     8,
+			}
+		case 1:
+			colDef.Type = types.Type{
+				Oid:       types.T_int16,
+				Size:      2,
+				Width:     16,
+			}
+		case 2:
+			colDef.Type = types.Type{
+				Oid:       types.T_int32,
+				Size:      4,
+				Width:     32,
+			}
+		case 3:
+			colDef.Type = types.Type{
+				Oid:       types.T_int64,
+				Size:      8,
+				Width:     64,
+			}
+		case 4:
+			colDef.Type = types.Type{
+				Oid:       types.T_uint8,
+				Size:      1,
+				Width:     8,
+			}
+		case 5:
+			colDef.Type = types.Type{
+				Oid:       types.T_uint16,
+				Size:      2,
+				Width:     16,
+			}
+		case 6:
+			colDef.Type = types.Type{
+				Oid:       types.T_uint32,
+				Size:      4,
+				Width:     32,
+			}
+		case 7:
+			colDef.Type = types.Type{
+				Oid:       types.T_uint64,
+				Size:      8,
+				Width:     64,
+			}
+		case 8:
+			colDef.Type = types.Type{
+				Oid:       types.T_float32,
+				Size:      4,
+				Width:     32,
+			}
+		case 9:
+			colDef.Type = types.Type{
+				Oid:       types.T_float64,
+				Size:      8,
+				Width:     64,
+			}
+		case 10:
+			colDef.Type = types.Type{
+				Oid:       types.T_date,
+				Size:      4,
+				Width:     32,
+			}
+		case 11:
+			colDef.Type = types.Type{
+				Oid:       types.T_datetime,
+				Size:      8,
+				Width:     64,
+			}
+		case 12:
+			colDef.Type = types.Type{
+				Oid:       types.T_varchar,
+				Size:      24,
+				Width:     100,
+			}
+		case 13:
+			colDef.Type = types.Type{
+				Oid:       types.T_char,
+				Size:      24,
+				Width:     100,
+			}
+		}
+	}
+	return schema
+}
+
 func MockSchema(colCnt int) *Schema {
 	schema := &Schema{
 		ColDefs:   make([]*ColDef, colCnt),
