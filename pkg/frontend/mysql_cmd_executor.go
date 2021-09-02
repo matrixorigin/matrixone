@@ -929,7 +929,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error  {
 	/*
 	check table
 	 */
-	_, err = dbHandler.Relation(loadTable)
+	tableHandler, err := dbHandler.Relation(loadTable)
 	if err != nil {
 		//echo client. no such table
 		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb,loadTable)
@@ -939,16 +939,15 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error  {
 	execute load data
 	 */
 
-
+	result, err := mce.LoadLoop(load,dbHandler,tableHandler)
+	if err != nil {
+		return err
+	}
 
 	/*
 	response
 	 */
-	records := 10
-	deleted := 1
-	skipped := 2
-	warnings := 3
-	info := NewMysqlError(ER_LOAD_INFO,records,deleted,skipped,warnings).Error()
+	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Warnings,result.Skipped).Error()
 	resp := NewResponse(OkResponse, 0, int(COM_QUERY), info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)

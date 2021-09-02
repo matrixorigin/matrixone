@@ -4,15 +4,20 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/nulls"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/vm/engine"
 	"os"
+	"strconv"
 	"sync"
 )
 
 type LoadResult struct {
-	Records, Deleted, Skipped, Warnings int
+	Records, Deleted, Skipped, Warnings uint64
 }
 
 /*
@@ -341,14 +346,32 @@ type ParseLineHandler struct {
 	//blocks has been used. for recycling them
 	popedBlocks []*Block
 
+	//load reference
+	load *tree.Load
 	fields *tree.Fields
 	lines *tree.Lines
 
-	//
+	//parsed lines, fields, partial field, skipped bytes
 	lineArray [][][]byte
 	fieldsArray [][]byte
 	fieldData []byte
 	skipBytes []byte
+	lineCount uint64
+
+	//batch
+	batchSize int
+	batchData *batch.Batch
+	batchFilled int
+	//map column id in from data to column id in table
+	dataColumnId2TableColumnId []int
+	timestamp uint64
+
+	//storage
+	dbHandler engine.Database
+	tableHandler engine.Relation
+
+	//result of load
+	result *LoadResult
 
 	//for debug
 	packLine func([][][]byte)
@@ -801,6 +824,385 @@ func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byt
 }
 
 /*
+prepare batch
+ */
+func prepareBatch(handler *ParseLineHandler) error {
+	relation := handler.tableHandler
+	load := handler.load
+	batchSize := handler.batchSize
+
+	cols := relation.Attribute()
+	attrName := make([]string,len(cols))
+	tableName2ColumnId := make(map[string]int)
+	for i, col := range cols {
+		attrName[i] = col.Name
+		tableName2ColumnId[col.Name] = i
+	}
+
+	//define the peer column for LOAD DATA's column list.
+	var dataColumnId2TableColumnId []int = nil
+	if len(load.ColumnList) == 0{
+		dataColumnId2TableColumnId = make([]int,len(cols))
+		for i := 0; i < len(cols); i++ {
+			dataColumnId2TableColumnId[i] = i
+		}
+	}else{
+		dataColumnId2TableColumnId = make([]int,len(load.ColumnList))
+		for i, col := range load.ColumnList {
+			switch realCol := col.(type) {
+			case *tree.UnresolvedName:
+				tid,ok := tableName2ColumnId[realCol.Parts[0]]
+				if !ok {
+					return fmt.Errorf("no such column %s in table %s ")
+				}
+				dataColumnId2TableColumnId[i] = tid
+			case *tree.VarExpr:
+				//NOTE:variable like '@abc' will be passed by.
+				dataColumnId2TableColumnId[i] = -1
+			default:
+				return fmt.Errorf("unsupported column type %v",realCol)
+			}
+		}
+	}
+
+	handler.dataColumnId2TableColumnId = dataColumnId2TableColumnId
+
+	batchData := batch.New(true,attrName)
+
+	//alloc space for vector
+	for i := 0; i < len(attrName); i++ {
+		vec := vector.New(cols[i].Type)
+		switch vec.Typ.Oid {
+		case types.T_int8:
+			vec.Col = make([]int8, batchSize)
+		case types.T_int16:
+			vec.Col = make([]int16, batchSize)
+		case types.T_int32:
+			vec.Col = make([]int32, batchSize)
+		case types.T_int64:
+			vec.Col = make([]int64, batchSize)
+		case types.T_uint8:
+			vec.Col = make([]uint8, batchSize)
+		case types.T_uint16:
+			vec.Col = make([]uint16, batchSize)
+		case types.T_uint32:
+			vec.Col = make([]uint32, batchSize)
+		case types.T_uint64:
+			vec.Col = make([]uint64, batchSize)
+		case types.T_float32:
+			vec.Col = make([]float32, batchSize)
+		case types.T_float64:
+			vec.Col = make([]float64, batchSize)
+		case types.T_char, types.T_varchar:
+			charArrary := make([][]byte,batchSize)
+			vbytes := &types.Bytes{}
+			err := vbytes.Append(charArrary)
+			if err != nil {
+				return err
+			}
+			vec.Col = vbytes
+
+		default:
+			panic("unsupported vector type")
+		}
+		batchData.Vecs[i] = vec
+	}
+	handler.batchData = batchData
+
+
+
+	return nil
+}
+
+/*
+save parsed lines into the storage engine
+ */
+func saveParsedLinesToBatch(handler *ParseLineHandler) error {
+	//drop ignored lines
+	if handler.lineCount < handler.load.IgnoredLines {
+		ignoredCnt := handler.load.IgnoredLines - handler.lineCount
+		ignoredCnt = MinUint64(ignoredCnt,uint64(len(handler.lineArray)))
+		ignoredCnt = MaxUint64(ignoredCnt,0)
+
+		handler.lineArray = handler.lineArray[ignoredCnt:]
+		handler.lineCount += ignoredCnt
+		handler.result.Skipped += ignoredCnt
+	}
+
+	countOfLineArray := len(handler.lineArray)
+	if countOfLineArray == 0 {
+		return nil
+	}
+
+	//batch is full.
+	if handler.batchFilled >= handler.batchSize {
+		return nil
+	}
+
+	fetchCnt := Min(countOfLineArray,handler.batchSize - handler.batchFilled)
+	fetchLines := handler.lineArray[:fetchCnt]
+	handler.lineArray = handler.lineArray[fetchCnt:]
+	batchData := handler.batchData
+
+	/*
+	fill the batch.
+	row to column
+	 */
+	batchBegin := handler.batchFilled
+	for i, line := range fetchLines {
+		rowIdx := batchBegin + i
+		for j, field := range line {
+			//where will column j go ?
+			colIdx := -1
+			if j < len(handler.dataColumnId2TableColumnId) {
+				colIdx = handler.dataColumnId2TableColumnId[j]
+			}
+			//drop this field
+			if colIdx == -1 {
+				continue
+			}
+
+			isNullOrEmpty := field == nil || len(field) == 0
+
+			//put it into batch
+			vec := batchData.Vecs[colIdx]
+			switch vec.Typ.Oid {
+			case types.T_int8:
+				cols := vec.Col.([]int8)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseInt(string(field),10,8)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = int8(d)
+				}
+			case types.T_int16:
+				cols := vec.Col.([]int16)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseInt(string(field),10,16)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = int16(d)
+				}
+			case types.T_int32:
+				cols := vec.Col.([]int32)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseInt(string(field),10,32)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = int32(d)
+				}
+			case types.T_int64:
+				cols := vec.Col.([]int64)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseInt(string(field),10,64)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = d
+				}
+			case types.T_uint8:
+				cols := vec.Col.([]uint8)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseInt(string(field),10,8)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = uint8(d)
+				}
+			case types.T_uint16:
+				cols := vec.Col.([]uint16)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseInt(string(field),10,16)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = uint16(d)
+				}
+			case types.T_uint32:
+				cols := vec.Col.([]uint32)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseInt(string(field),10,32)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = uint32(d)
+				}
+			case types.T_uint64:
+				cols := vec.Col.([]uint64)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseInt(string(field),10,64)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = uint64(d)
+				}
+			case types.T_float32:
+				cols := vec.Col.([]float32)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseFloat(string(field),32)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = float32(d)
+				}
+			case types.T_float64:
+				cols := vec.Col.([]float64)
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					d,err := strconv.ParseFloat(string(field),64)
+					if err != nil {
+						logutil.Errorf("parse err:%v",d)
+						d = 0
+						//break
+					}
+					cols[rowIdx] = d
+				}
+			case types.T_char, types.T_varchar:
+				if isNullOrEmpty {
+					vec.Nsp.Add(uint64(rowIdx))
+				}else{
+					err := vec.Col.(*types.Bytes).Append([][]byte{field})
+					if err != nil {
+						logutil.Errorf("parse err:%v",err)
+						//TODO:
+					}
+				}
+			default:
+				panic("unsupported oid")
+			}
+		}
+		handler.lineCount++
+	}
+
+	handler.batchFilled = batchBegin + fetchCnt
+
+	return nil
+}
+
+/*
+save batch to storage.
+when force is true, batchsize will be changed.
+ */
+func saveBatchToStorage(handler *ParseLineHandler,force bool) error {
+	if handler.batchFilled == handler.batchSize{
+		err := handler.tableHandler.Write(handler.timestamp,handler.batchData)
+		if err != nil {
+			logutil.Errorf("write failed. err: %v",err)
+			return err
+		}
+
+		handler.result.Records += uint64(handler.batchSize)
+
+		//clear batch
+		//clear vector.nulls.Nulls
+		for _, vec := range handler.batchData.Vecs {
+			vec.Nsp = &nulls.Nulls{}
+			switch vec.Typ.Oid {
+			case types.T_char, types.T_varchar:
+				vec.Col.(*types.Bytes).Reset()
+			}
+		}
+		handler.batchFilled = 0
+	}else{
+		if force {
+			//first, remove redundant rows at last
+			needLen := handler.batchFilled
+			for i, vec := range handler.batchData.Vecs {
+				fmt.Printf("%d type %d %s \n",i,vec.Typ.Oid,vec.Typ.String())
+				//remove nulls.NUlls
+				for i := uint64(handler.batchFilled); i < uint64(handler.batchSize); i++ {
+					vec.Nsp.Del(i)
+				}
+				//remove row
+				switch vec.Typ.Oid {
+				case types.T_int8:
+					cols := vec.Col.([]int8)
+					vec.Col = cols[:needLen]
+				case types.T_int16:
+					cols := vec.Col.([]int16)
+					vec.Col = cols[:needLen]
+				case types.T_int32:
+					cols := vec.Col.([]int32)
+					vec.Col = cols[:needLen]
+				case types.T_int64:
+					cols := vec.Col.([]int64)
+					vec.Col = cols[:needLen]
+				case types.T_uint8:
+					cols := vec.Col.([]uint8)
+					vec.Col = cols[:needLen]
+				case types.T_uint16:
+					cols := vec.Col.([]uint16)
+					vec.Col = cols[:needLen]
+				case types.T_uint32:
+					cols := vec.Col.([]uint32)
+					vec.Col = cols[:needLen]
+				case types.T_uint64:
+					cols := vec.Col.([]uint64)
+					vec.Col = cols[:needLen]
+				case types.T_float32:
+					cols := vec.Col.([]float32)
+					vec.Col = cols[:needLen]
+				case types.T_float64:
+					cols := vec.Col.([]float64)
+					vec.Col = cols[:needLen]
+				case types.T_char, types.T_varchar:
+					vec.Col = vec.Col.(*types.Bytes).Window(0,needLen)
+					//vec.Col = &types.Bytes{}
+				}
+			}
+
+			err := handler.tableHandler.Write(handler.timestamp,handler.batchData)
+			if err != nil {
+				return err
+			}
+
+			handler.result.Records += uint64(needLen)
+		}
+	}
+	return nil
+}
+
+/*
 process block
  */
 func processBlock(handler *ParseLineHandler,blk *Block) error {
@@ -822,9 +1224,10 @@ func processBlock(handler *ParseLineHandler,blk *Block) error {
 				if handler.packLine != nil {
 					handler.packLine(handler.lineArray)
 				}
-				handler.ClearLineArray()
 			}
 			done = true
+		default:
+			panic(fmt.Errorf("unsupported line state %d",handler.Status()))
 		}
 
 	}
@@ -836,6 +1239,27 @@ func processBlock(handler *ParseLineHandler,blk *Block) error {
 LoadLoop reads data from stream, extracts the fields, and saves into the table
  */
 func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Database,tableHandler engine.Relation) (*LoadResult,error){
+	var err error
+	result := &LoadResult{}
+	handler := &ParseLineHandler{
+		status:       LINE_STATE_PROCESS_PREFIX,
+		partialBlocks: nil,
+		load: load,
+		fields:       load.Fields,
+		lines:        load.Lines,
+		dbHandler: dbHandler,
+		tableHandler: tableHandler,
+		lineCount: 0,
+		batchSize: 100,
+		result: result,
+	}
+
+	//allocate batch space
+	err = prepareBatch(handler)
+	if err != nil {
+		return nil, err
+	}
+
 	/*
 	step1 : read block from file
 	 */
@@ -868,13 +1292,6 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		}
 	}()
 
-	handler := &ParseLineHandler{
-		status:       LINE_STATE_PROCESS_PREFIX,
-		partialBlocks: nil,
-		fields:       load.Fields,
-		lines:        load.Lines,
-	}
-
 	//process block
 	for {
 		blk,ok := <- blockChannel
@@ -886,7 +1303,7 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		}
 
 		//process block
-		//TODO:
+		//TODO:row to column, put into engine
 		err = processBlock(handler,blk)
 		if err != nil {
 			logutil.Errorf("processBlock failed. err:%v",err)
@@ -900,30 +1317,30 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			}
 			handler.ClearPopedBlocks()
 		}
+
+		/*
+			step6 : append column to a batch
+		*/
+		err = saveParsedLinesToBatch(handler)
+		if err != nil {
+			logutil.Errorf("saveParsedLinesToBatch failed. err:%v",err)
+		}
+
+		/*
+			step7 : write batch into the engine
+		*/
+		//the second parameter must be FALSE here
+		err = saveBatchToStorage(handler,false)
+		if err != nil {
+			logutil.Errorf("saveBatchToStorage failed. err:%v",err)
+		}
 	}
 
-	/*
-	step2 : split into lines
-	 */
+	//the second parameter must be TRUE here
+	err = saveBatchToStorage(handler,true)
+	if err != nil {
+		logutil.Errorf("saveBatchToStorage failed. err:%v",err)
+	}
 
-	/*
-	step3 : for every line, split into fields
-	 */
-
-	/*
-	step4 : fields converted into column
-	 */
-
-	/*
-	step5 : row of fields converted into column format
-	 */
-
-	/*
-	step6 : append column to a batch
-	 */
-
-	/*
-	step7 : write batch into the engine
-	 */
-	return nil, nil
+	return result, nil
 }
