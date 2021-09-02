@@ -288,6 +288,36 @@
 #	UpdateMode:	dynamic
 	lengthOfQueryPrinted = 50
 
+#	Name:	batchSizeInLoadData
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[10000]
+#	Comment:	the count of rows in vector of batch in load data
+#	UpdateMode:	dynamic
+	batchSizeInLoadData = 10000
+
+#	Name:	blockCountInLoadData
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	range
+#	Values:	[20 2 100000]
+#	Comment:	count of read buffer in load data
+#	UpdateMode:	dynamic
+	blockCountInLoadData = 20
+
+#	Name:	blockSizeInLoadData
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[4194304]
+#	Comment:	defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data
+#	UpdateMode:	dynamic
+	blockSizeInLoadData = 4194304
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

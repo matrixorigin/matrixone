@@ -98,6 +98,15 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 	if c1.LengthOfQueryPrinted != c2.LengthOfQueryPrinted {
 		return false
 	}
+	if c1.BatchSizeInLoadData != c2.BatchSizeInLoadData {
+		return false
+	}
+	if c1.BlockCountInLoadData != c2.BlockCountInLoadData {
+		return false
+	}
+	if c1.BlockSizeInLoadData != c2.BlockSizeInLoadData {
+		return false
+	}
 
 	return true
 }
@@ -134,6 +143,9 @@ cubeDirPrefix= "./cube"
 prophetEmbedEtcdJoinAddr= "http://localhost:40000"
 maxReplicas=1
 lengthOfQueryPrinted=50
+batchSizeInLoadData=10000
+blockCountInLoadData=20
+blockSizeInLoadData=4194304
 		
 `
 	t1_config:=varsConfig{
@@ -169,6 +181,9 @@ CubeDirPrefix: "./cube" ,
 ProphetEmbedEtcdJoinAddr: "http://localhost:40000" ,
 MaxReplicas:1,
 LengthOfQueryPrinted:50,
+BatchSizeInLoadData:10000,
+BlockCountInLoadData:20,
+BlockSizeInLoadData:4194304,
 	
 
 		name2updatedFlags: nil,

@@ -19,6 +19,10 @@ type MysqlCmdExecutor struct {
 
 	//the count of sql has been processed
 	sqlCount uint64
+
+	//for load data closing
+	closeLoadDataRoutine *CloseFlag
+	closeProcessBlock *CloseFlag
 }
 
 //get new process id
@@ -864,6 +868,93 @@ func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 	return nil
 }
 
+/*
+handle Load Data statement
+ */
+func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error  {
+	var err error = nil
+	routine := mce.routine
+	//ses := mce.routine.GetSession()
+	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+
+	logutil.Infof("+++++load data")
+
+	/*
+	TODO:support LOCAL
+	 */
+	if load.Local {
+		return fmt.Errorf("LOCAL is unsupported now")
+	}
+
+	/*
+	check file
+	 */
+	exist,isfile,err := PathExists(load.File)
+	if err != nil || !exist{
+		return fmt.Errorf("file %s does exist. err:%v",load.File,err)
+	}
+
+	if !isfile {
+		return fmt.Errorf("file %s is a directory.",load.File)
+	}
+
+	/*
+	check database
+	*/
+	loadDb := string(load.Table.Schema())
+	loadTable := string(load.Table.Name())
+	if loadDb == "" {
+		if routine.db == "" {
+			return fmt.Errorf("load data need database")
+		}
+
+		//then, it uses the database name in the session
+		loadDb = routine.db
+	}
+
+	dbHandler, err := routine.ses.Pu.StorageEngine.Database(loadDb)
+	if err != nil {
+		//echo client. no such database
+		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
+	}
+
+	//change db to the database in the LOAD DATA statement if necessary
+	if loadDb != routine.db {
+		oldDB := routine.db
+		routine.db = loadDb
+		logutil.Infof("User %s change database from [%s] to [%s] in LOAD DATA\n", routine.user, oldDB, routine.db)
+	}
+
+	/*
+	check table
+	 */
+	tableHandler, err := dbHandler.Relation(loadTable)
+	if err != nil {
+		//echo client. no such table
+		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb,loadTable)
+	}
+
+	/*
+	execute load data
+	 */
+
+	result, err := mce.LoadLoop(load,dbHandler,tableHandler)
+	if err != nil {
+		return err
+	}
+
+	/*
+	response
+	 */
+	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Skipped,result.Warnings).Error()
+	logutil.Infof("====> [%s]",info)
+	resp := NewResponse(OkResponse, 0, int(COM_QUERY), info)
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.routine.GetSession()
@@ -931,7 +1022,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus, *tree.DropDatabase:
+				*tree.ShowStatus, *tree.DropDatabase,*tree.Load:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
@@ -947,6 +1038,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return err
 			}
 			err = proto.sendOKPacket(0, 0, 0, 0, "")
+			if err != nil {
+				return err
+			}
+		case *tree.Load:
+			selfHandle = true
+			err = mce.handleLoadData(st)
 			if err != nil {
 				return err
 			}
@@ -998,22 +1095,22 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 						col.SetColumnType(defines.MYSQL_TYPE_TINY)
 					case types.T_uint8:
 						col.SetColumnType(defines.MYSQL_TYPE_TINY)
-						col.SetSigned(true)
+						col.SetSigned(false)
 					case types.T_int16:
 						col.SetColumnType(defines.MYSQL_TYPE_SHORT)
 					case types.T_uint16:
 						col.SetColumnType(defines.MYSQL_TYPE_SHORT)
-						col.SetSigned(true)
+						col.SetSigned(false)
 					case types.T_int32:
 						col.SetColumnType(defines.MYSQL_TYPE_LONG)
 					case types.T_uint32:
 						col.SetColumnType(defines.MYSQL_TYPE_LONG)
-						col.SetSigned(true)
+						col.SetSigned(false)
 					case types.T_int64:
 						col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 					case types.T_uint64:
 						col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-						col.SetSigned(true)
+						col.SetSigned(false)
 					case types.T_float32:
 						col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
 					case types.T_float64:
@@ -1234,7 +1331,15 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	//TODO:
+	if mce.closeLoadDataRoutine != nil {
+		logutil.Infof("close process load data")
+		mce.closeLoadDataRoutine.Close()
+	}
+
+	if mce.closeProcessBlock != nil {
+		logutil.Infof("close process block")
+		mce.closeProcessBlock.Close()
+	}
 }
 
 func NewMysqlCmdExecutor() *MysqlCmdExecutor {
