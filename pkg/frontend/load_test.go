@@ -1322,7 +1322,7 @@ func Test_loadAndProcess(t *testing.T) {
 	supplier.tbl
 	lineorder.tbl
 	 */
-	f1 := "../../../mo-test/lineorder.tbl"
+	f1 := "../../../mo-test/part.tbl"
 	t1 := &tree.Load{
 		Local:             false,
 		File:              f1,

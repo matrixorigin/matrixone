@@ -373,6 +373,42 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	lengthOfQueryPrinted    int64
+	
+	/**
+	Name:	batchSizeInLoadData
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[10000]
+	Comment:	the count of rows in vector of batch in load data
+	UpdateMode:	dynamic
+	*/
+	batchSizeInLoadData    int64
+	
+	/**
+	Name:	blockCountInLoadData
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[20 2 100000]
+	Comment:	count of read buffer in load data
+	UpdateMode:	dynamic
+	*/
+	blockCountInLoadData    int64
+	
+	/**
+	Name:	blockSizeInLoadData
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[4194304]
+	Comment:	defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data
+	UpdateMode:	dynamic
+	*/
+	blockSizeInLoadData    int64
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -707,6 +743,42 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	LengthOfQueryPrinted    int64  `toml:"lengthOfQueryPrinted"`
+	
+	/**
+	Name:	batchSizeInLoadData
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[10000]
+	Comment:	the count of rows in vector of batch in load data
+	UpdateMode:	dynamic
+	*/
+	BatchSizeInLoadData    int64  `toml:"batchSizeInLoadData"`
+	
+	/**
+	Name:	blockCountInLoadData
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	range
+	Values:	[20 2 100000]
+	Comment:	count of read buffer in load data
+	UpdateMode:	dynamic
+	*/
+	BlockCountInLoadData    int64  `toml:"blockCountInLoadData"`
+	
+	/**
+	Name:	blockSizeInLoadData
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[4194304]
+	Comment:	defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data
+	UpdateMode:	dynamic
+	*/
+	BlockSizeInLoadData    int64  `toml:"blockSizeInLoadData"`
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -790,6 +862,12 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["maxReplicas"] = "	Name:	maxReplicas	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[1 1 1]	Comment:	the number of replicas for each resource	UpdateMode:	dynamic	"
 	
 	ap.name2definition["lengthOfQueryPrinted"] = "	Name:	lengthOfQueryPrinted	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[50 -1 10000]	Comment:	the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.	UpdateMode:	dynamic	"
+	
+	ap.name2definition["batchSizeInLoadData"] = "	Name:	batchSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[10000]	Comment:	the count of rows in vector of batch in load data	UpdateMode:	dynamic	"
+	
+	ap.name2definition["blockCountInLoadData"] = "	Name:	blockCountInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[20 2 100000]	Comment:	count of read buffer in load data	UpdateMode:	dynamic	"
+	
+	ap.name2definition["blockSizeInLoadData"] = "	Name:	blockSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[4194304]	Comment:	defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data	UpdateMode:	dynamic	"
 	
 }
 
@@ -1226,6 +1304,45 @@ func (ap *SystemVariables) LoadInitialValues()error{
 			return fmt.Errorf("set%s failed.error:%v","LengthOfQueryPrinted",err)
 		}
 	}
+	
+	batchSizeInLoadDatachoices :=[]int64 {
+		10000,
+	}
+	if len(batchSizeInLoadDatachoices) != 0 {
+		if err = ap.setBatchSizeInLoadData(batchSizeInLoadDatachoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","BatchSizeInLoadData",err)
+		}
+	} else { 
+		if err = ap.setBatchSizeInLoadData(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","BatchSizeInLoadData",err)
+		}
+	}
+	
+	blockCountInLoadDatachoices :=[]int64 {
+		20,2,100000,
+	}
+	if len(blockCountInLoadDatachoices) != 0 {
+		if err = ap.setBlockCountInLoadData(blockCountInLoadDatachoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","BlockCountInLoadData",err)
+		}
+	} else { 
+		if err = ap.setBlockCountInLoadData(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","BlockCountInLoadData",err)
+		}
+	}
+	
+	blockSizeInLoadDatachoices :=[]int64 {
+		4194304,
+	}
+	if len(blockSizeInLoadDatachoices) != 0 {
+		if err = ap.setBlockSizeInLoadData(blockSizeInLoadDatachoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","BlockSizeInLoadData",err)
+		}
+	} else { 
+		if err = ap.setBlockSizeInLoadData(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","BlockSizeInLoadData",err)
+		}
+	}
 	return nil
 }
 
@@ -1499,6 +1616,33 @@ func (ap * SystemVariables ) GetLengthOfQueryPrinted() int64 {
 	return ap.lengthOfQueryPrinted
 }
 
+/**
+Get the value of the parameter batchSizeInLoadData
+*/
+func (ap * SystemVariables ) GetBatchSizeInLoadData() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.batchSizeInLoadData
+}
+
+/**
+Get the value of the parameter blockCountInLoadData
+*/
+func (ap * SystemVariables ) GetBlockCountInLoadData() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.blockCountInLoadData
+}
+
+/**
+Get the value of the parameter blockSizeInLoadData
+*/
+func (ap * SystemVariables ) GetBlockSizeInLoadData() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.blockSizeInLoadData
+}
+
 
 /**
 Set the value of the parameter rootpassword
@@ -1687,6 +1831,27 @@ Set the value of the parameter lengthOfQueryPrinted
 */
 func (ap * SystemVariables ) SetLengthOfQueryPrinted(value int64)error {
 	return  ap.setLengthOfQueryPrinted(value)
+}
+
+/**
+Set the value of the parameter batchSizeInLoadData
+*/
+func (ap * SystemVariables ) SetBatchSizeInLoadData(value int64)error {
+	return  ap.setBatchSizeInLoadData(value)
+}
+
+/**
+Set the value of the parameter blockCountInLoadData
+*/
+func (ap * SystemVariables ) SetBlockCountInLoadData(value int64)error {
+	return  ap.setBlockCountInLoadData(value)
+}
+
+/**
+Set the value of the parameter blockSizeInLoadData
+*/
+func (ap * SystemVariables ) SetBlockSizeInLoadData(value int64)error {
+	return  ap.setBlockSizeInLoadData(value)
 }
 
 /**
@@ -2323,6 +2488,70 @@ func (ap * SystemVariables ) setLengthOfQueryPrinted(value int64)error {
 	return nil
 }
 
+/**
+Set the value of the parameter batchSizeInLoadData
+*/
+func (ap * SystemVariables ) setBatchSizeInLoadData(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			10000,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setBatchSizeInLoadData,the value %d is not in set %v",value,choices)
+			}
+		}//else means any int64
+	
+	
+	ap.batchSizeInLoadData = value
+	return nil
+}
+
+/**
+Set the value of the parameter blockCountInLoadData
+*/
+func (ap * SystemVariables ) setBlockCountInLoadData(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			20,2,100000,	
+		}
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setBlockCountInLoadData,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
+	
+	
+	ap.blockCountInLoadData = value
+	return nil
+}
+
+/**
+Set the value of the parameter blockSizeInLoadData
+*/
+func (ap * SystemVariables ) setBlockSizeInLoadData(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			4194304,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setBlockSizeInLoadData,the value %d is not in set %v",value,choices)
+			}
+		}//else means any int64
+	
+	
+	ap.blockSizeInLoadData = value
+	return nil
+}
+
 
 
 /**
@@ -2369,6 +2598,9 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.name2updatedFlags["prophetEmbedEtcdJoinAddr"] = false
 	config.name2updatedFlags["maxReplicas"] = false
 	config.name2updatedFlags["lengthOfQueryPrinted"] = false
+	config.name2updatedFlags["batchSizeInLoadData"] = false
+	config.name2updatedFlags["blockCountInLoadData"] = false
+	config.name2updatedFlags["blockSizeInLoadData"] = false
 }
 
 /**
@@ -2577,6 +2809,21 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("lengthOfQueryPrinted"){
 		if err = ap.setLengthOfQueryPrinted(config.LengthOfQueryPrinted); err != nil{
 			return fmt.Errorf("update parameter lengthOfQueryPrinted failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("batchSizeInLoadData"){
+		if err = ap.setBatchSizeInLoadData(config.BatchSizeInLoadData); err != nil{
+			return fmt.Errorf("update parameter batchSizeInLoadData failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("blockCountInLoadData"){
+		if err = ap.setBlockCountInLoadData(config.BlockCountInLoadData); err != nil{
+			return fmt.Errorf("update parameter blockCountInLoadData failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("blockSizeInLoadData"){
+		if err = ap.setBlockSizeInLoadData(config.BlockSizeInLoadData); err != nil{
+			return fmt.Errorf("update parameter blockSizeInLoadData failed.error:%v",err)
 		}
 	}
 	return nil

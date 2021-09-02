@@ -19,6 +19,10 @@ type MysqlCmdExecutor struct {
 
 	//the count of sql has been processed
 	sqlCount uint64
+
+	//for load data closing
+	closeLoadDataRoutine *CloseFlag
+	closeProcessBlock *CloseFlag
 }
 
 //get new process id
@@ -45,11 +49,6 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	rt := obj.(*Routine)
 	ses := rt.GetSession()
-
-	logutil.Infof("hello------")
-	{
-		logutil.Infof("bat: %v\n", bat)
-	}
 
 	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
 	rowGroupSize = MaxInt64(rowGroupSize, 1)
@@ -947,7 +946,8 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error  {
 	/*
 	response
 	 */
-	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Warnings,result.Skipped).Error()
+	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Skipped,result.Warnings).Error()
+	logutil.Infof("====> [%s]",info)
 	resp := NewResponse(OkResponse, 0, int(COM_QUERY), info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
@@ -1095,22 +1095,22 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 						col.SetColumnType(defines.MYSQL_TYPE_TINY)
 					case types.T_uint8:
 						col.SetColumnType(defines.MYSQL_TYPE_TINY)
-						col.SetSigned(true)
+						col.SetSigned(false)
 					case types.T_int16:
 						col.SetColumnType(defines.MYSQL_TYPE_SHORT)
 					case types.T_uint16:
 						col.SetColumnType(defines.MYSQL_TYPE_SHORT)
-						col.SetSigned(true)
+						col.SetSigned(false)
 					case types.T_int32:
 						col.SetColumnType(defines.MYSQL_TYPE_LONG)
 					case types.T_uint32:
 						col.SetColumnType(defines.MYSQL_TYPE_LONG)
-						col.SetSigned(true)
+						col.SetSigned(false)
 					case types.T_int64:
 						col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 					case types.T_uint64:
 						col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-						col.SetSigned(true)
+						col.SetSigned(false)
 					case types.T_float32:
 						col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
 					case types.T_float64:
@@ -1331,7 +1331,15 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	//TODO:
+	if mce.closeLoadDataRoutine != nil {
+		logutil.Infof("close process load data")
+		mce.closeLoadDataRoutine.Close()
+	}
+
+	if mce.closeProcessBlock != nil {
+		logutil.Infof("close process block")
+		mce.closeProcessBlock.Close()
+	}
 }
 
 func NewMysqlCmdExecutor() *MysqlCmdExecutor {

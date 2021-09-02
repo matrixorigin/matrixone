@@ -59,6 +59,9 @@ func (routine *Routine) getConnID() uint32 {
 
 func (routine *Routine) Quit() {
 	_ = routine.io.Close()
+	if routine.executor != nil {
+		routine.executor.Close()
+	}
 }
 
 // Peer gets the address [Host:Port] of the client
