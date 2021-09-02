@@ -138,7 +138,7 @@ func (td *tpDatabase) Relation(name string) (engine.Relation, error) {
 	return NewTpRelation(name, relId, createInfo, md, td.kv, td.proc), nil
 }
 
-func (td *tpDatabase) Delete(rel string) error {
+func (td *tpDatabase) Delete(_ uint64, rel string) error {
 	td.rwlock.Lock()
 	defer td.rwlock.Unlock()
 
@@ -228,7 +228,7 @@ func (td *tpDatabase) getNextTableNo() uint64 {
 	return n
 }
 
-func (td *tpDatabase) Create(rel string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
+func (td *tpDatabase) Create(_ uint64, rel string, defs []engine.TableDef, _ *engine.PartitionBy, _ *engine.DistributionBy, _ string) error {
 	td.rwlock.Lock()
 	defer td.rwlock.Unlock()
 

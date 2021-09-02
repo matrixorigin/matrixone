@@ -62,3 +62,8 @@ func NewTabletSegmentedIdCtx(tablet string) *GetSegmentedIdCtx {
 	}
 	return ctx
 }
+
+type IDS struct {
+	Version uint64
+	Ids     []uint64
+}

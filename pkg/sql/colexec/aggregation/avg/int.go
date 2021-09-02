@@ -71,11 +71,14 @@ func (a *intAvg) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 	vec := vector.New(a.typ)
 	if a.cnt == 0 {
 		vec.Nsp.Add(0)
-		copy(data[mempool.CountSize:], encoding.EncodeFloat64(0))
+		vs := []float64{0}
+		copy(data[mempool.CountSize:], encoding.EncodeFloat64Slice(vs))
+		vec.Col = vs
 	} else {
-		copy(data[mempool.CountSize:], encoding.EncodeFloat64(float64(a.sum)/float64(a.cnt)))
+		vs := []float64{float64(a.sum) / float64(a.cnt)}
+		copy(data[mempool.CountSize:], encoding.EncodeFloat64Slice(vs))
+		vec.Col = vs
 	}
 	vec.Data = data
-	vec.Col = encoding.DecodeFloat64Slice(data[mempool.CountSize : mempool.CountSize+8])
 	return vec, nil
 }

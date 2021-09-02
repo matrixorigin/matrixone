@@ -1,30 +1,79 @@
 package frontend
 
 import (
+	"errors"
+	"fmt"
+	"math"
+	"sync"
 	"testing"
+
+	"github.com/fagongzi/goetty"
+	"matrixone/pkg/config"
+	"matrixone/pkg/defines"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/mmu/host"
 )
+
+type TestRoutineManager struct {
+	rwlock  sync.RWMutex
+	clients map[goetty.IOSession]*Routine
+
+	pu *config.ParameterUnit
+}
+
+func (tRM *TestRoutineManager) Created(rs goetty.IOSession) {
+	IO := NewIOPackage(true)
+	pro := NewMysqlClientProtocol(IO, nextConnectionID())
+	exe := NewMysqlCmdExecutor()
+	ses := NewSessionWithParameterUnit(tRM.pu)
+	routine := NewRoutine(rs, pro, exe, ses)
+
+	hsV10pkt := pro.makeHandshakeV10Payload()
+	err := pro.writePackets(hsV10pkt)
+	if err != nil {
+		panic(err)
+	}
+
+	tRM.rwlock.Lock()
+	defer tRM.rwlock.Unlock()
+	tRM.clients[rs] = routine
+}
+
+func (tRM *TestRoutineManager) Closed(rs goetty.IOSession) {
+	tRM.rwlock.Lock()
+	defer tRM.rwlock.Unlock()
+	delete(tRM.clients, rs)
+}
+
+func NewTestRoutineManager(pu *config.ParameterUnit) *TestRoutineManager {
+	rm := &TestRoutineManager{
+		clients: make(map[goetty.IOSession]*Routine),
+		pu: pu,
+	}
+	return rm
+}
 
 func TestReadIntLenEnc(t *testing.T) {
 	var intEnc MysqlProtocol
-	var data=make([]byte,24)
-	var cases=[][]uint64{
-		{0,123,250},
-		{251, 10000,1 << 16 - 1},
-		{1 << 16,1 << 16 + 10000,1 << 24 - 1},
-		{1 << 24,1 << 24 + 10000,1 << 64 - 1},
+	var data = make([]byte, 24)
+	var cases = [][]uint64{
+		{0, 123, 250},
+		{251, 10000, 1<<16 - 1},
+		{1 << 16, 1<<16 + 10000, 1<<24 - 1},
+		{1 << 24, 1<<24 + 10000, 1<<64 - 1},
 	}
-	var caseLens =[]int{1,3,4,9}
-	for j:=0; j < len(cases);j++{
-		for i:=0 ; i < len(cases[j]);i++{
+	var caseLens = []int{1, 3, 4, 9}
+	for j := 0; j < len(cases); j++ {
+		for i := 0; i < len(cases[j]); i++ {
 			value := cases[j][i]
-			p1 := intEnc.writeIntLenEnc(data,0,value)
-			val,p2,ok := intEnc.readIntLenEnc(data,0)
-			if !ok || p1 != caseLens[j] || p1 != p2 || val != value{
-				t.Errorf("IntLenEnc %d failed.",value)
+			p1 := intEnc.writeIntLenEnc(data, 0, value)
+			val, p2, ok := intEnc.readIntLenEnc(data, 0)
+			if !ok || p1 != caseLens[j] || p1 != p2 || val != value {
+				t.Errorf("IntLenEnc %d failed.", value)
 				break
 			}
-			val,p2,ok = intEnc.readIntLenEnc(data[0:caseLens[j]-1],0)
-			if ok{
+			val, p2, ok = intEnc.readIntLenEnc(data[0:caseLens[j]-1], 0)
+			if ok {
 				t.Errorf("read IntLenEnc failed.")
 				break
 			}
@@ -34,33 +83,33 @@ func TestReadIntLenEnc(t *testing.T) {
 
 func TestReadCountOfBytes(t *testing.T) {
 	var client MysqlProtocol
-	var data=make([]byte,24)
-	var length int = 10
-	for i:= 0; i < length;i++{
+	var data = make([]byte, 24)
+	var length = 10
+	for i := 0; i < length; i++ {
 		data[i] = byte(length - i)
 	}
 
-	r,pos,ok := client.readCountOfBytes(data,0, length)
+	r, pos, ok := client.readCountOfBytes(data, 0, length)
 	if !ok || pos != length {
 		t.Error("read bytes failed.")
 		return
 	}
 
-	for i:=0;i< length;i++{
-		if r[i] != data[i]{
+	for i := 0; i < length; i++ {
+		if r[i] != data[i] {
 			t.Error("read != write")
 			break
 		}
 	}
 
-	r,pos,ok = client.readCountOfBytes(data,0,100)
-	if ok{
+	r, pos, ok = client.readCountOfBytes(data, 0, 100)
+	if ok {
 		t.Error("read bytes failed.")
 		return
 	}
 
-	r,pos,ok = client.readCountOfBytes(data,0,0)
-	if !ok || pos != 0{
+	r, pos, ok = client.readCountOfBytes(data, 0, 0)
+	if !ok || pos != 0 {
 		t.Error("read bytes failed.")
 		return
 	}
@@ -68,29 +117,29 @@ func TestReadCountOfBytes(t *testing.T) {
 
 func TestReadStringFix(t *testing.T) {
 	var client MysqlProtocol
-	var data=make([]byte,24)
-	var length int = 10
-	var s string="haha, test read string fix function"
-	pos := client.writeStringFix(data,0,s,length)
-	if pos != length{
+	var data = make([]byte, 24)
+	var length = 10
+	var s = "haha, test read string fix function"
+	pos := client.writeStringFix(data, 0, s, length)
+	if pos != length {
 		t.Error("write string fix failed.")
 		return
 	}
 	var x string
 	var ok bool
 
-	x,pos,ok=client.readStringFix(data,0,length)
-	if !ok || pos != length || x != s[0:length]{
+	x, pos, ok = client.readStringFix(data, 0, length)
+	if !ok || pos != length || x != s[0:length] {
 		t.Error("read string fix failed.")
 		return
 	}
-	var sLen =[]int{
-		length+10,
-		length+20,
-		length+30,
+	var sLen = []int{
+		length + 10,
+		length + 20,
+		length + 30,
 	}
-	for i:=0; i < len(sLen);i++{
-		x,pos,ok = client.readStringFix(data,0,sLen[i])
+	for i := 0; i < len(sLen); i++ {
+		x, pos, ok = client.readStringFix(data, 0, sLen[i])
 		if ok && pos == sLen[i] && x == s[0:sLen[i]] {
 			t.Error("read string fix failed.")
 			return
@@ -98,14 +147,14 @@ func TestReadStringFix(t *testing.T) {
 	}
 
 	//empty string
-	pos = client.writeStringFix(data,0,s,0)
-	if pos != 0{
+	pos = client.writeStringFix(data, 0, s, 0)
+	if pos != 0 {
 		t.Error("write string fix failed.")
 		return
 	}
 
-	x,pos,ok=client.readStringFix(data,0,0)
-	if !ok || pos != 0 || x != ""{
+	x, pos, ok = client.readStringFix(data, 0, 0)
+	if !ok || pos != 0 || x != "" {
 		t.Error("read string fix failed.")
 		return
 	}
@@ -113,29 +162,29 @@ func TestReadStringFix(t *testing.T) {
 
 func TestReadStringNUL(t *testing.T) {
 	var client MysqlProtocol
-	var data=make([]byte,24)
-	var length int = 10
-	var s string="haha, test read string fix function"
-	pos := client.writeStringNUL(data,0,s[0:length])
-	if pos != length+1{
+	var data = make([]byte, 24)
+	var length = 10
+	var s = "haha, test read string fix function"
+	pos := client.writeStringNUL(data, 0, s[0:length])
+	if pos != length+1 {
 		t.Error("write string NUL failed.")
 		return
 	}
 	var x string
 	var ok bool
 
-	x,pos,ok=client.readStringNUL(data,0)
-	if !ok || pos != length+1 || x != s[0:length]{
+	x, pos, ok = client.readStringNUL(data, 0)
+	if !ok || pos != length+1 || x != s[0:length] {
 		t.Error("read string NUL failed.")
 		return
 	}
-	var sLen =[]int{
-		length+10,
-		length+20,
-		length+30,
+	var sLen = []int{
+		length + 10,
+		length + 20,
+		length + 30,
 	}
-	for i:=0; i < len(sLen);i++{
-		x,pos,ok = client.readStringNUL(data,0)
+	for i := 0; i < len(sLen); i++ {
+		x, pos, ok = client.readStringNUL(data, 0)
 		if ok && pos == sLen[i]+1 && x == s[0:sLen[i]] {
 			t.Error("read string NUL failed.")
 			return
@@ -143,104 +192,71 @@ func TestReadStringNUL(t *testing.T) {
 	}
 }
 
-/*
 func TestReadStringLenEnc(t *testing.T) {
 	var client MysqlProtocol
-	var data=make([]byte,24)
-	var length int = 10
-	var s string="haha, test read string fix function"
-	pos := client.writeStringLenEnc(data,0,s[0:length])
-	if pos != length+1{
+	var data = make([]byte, 24)
+	var length = 10
+	var s = "haha, test read string fix function"
+	pos := client.writeStringLenEnc(data, 0, s[0:length])
+	if pos != length+1 {
 		t.Error("write string lenenc failed.")
 		return
 	}
 	var x string
 	var ok bool
 
-	x,pos,ok=client.readStringLenEnc(data,0)
-	if !ok || pos != length+1 || x != s[0:length]{
+	x, pos, ok = client.readStringLenEnc(data, 0)
+	if !ok || pos != length+1 || x != s[0:length] {
 		t.Error("read string lenenc failed.")
 		return
 	}
 
 	//empty string
-	pos = client.writeStringLenEnc(data,0,s[0:0])
-	if pos != 1{
+	pos = client.writeStringLenEnc(data, 0, s[0:0])
+	if pos != 1 {
 		t.Error("write string lenenc failed.")
 		return
 	}
 
-	x,pos,ok=client.readStringLenEnc(data,0)
-	if !ok || pos != 1 || x != s[0:0]{
+	x, pos, ok = client.readStringLenEnc(data, 0)
+	if !ok || pos != 1 || x != s[0:0] {
 		t.Error("read string lenenc failed.")
 		return
 	}
 }
 
-func handshakeHandler(in net.Conn){
-	var err error
-	io := NewIOPackage(true)
-	defer io.Close()
-	fmt.Println("Server handling")
-	mysql := NewMysqlClientProtocol(io,0)
-	if err = mysql.Handshake(); err!=nil{
-		msg := fmt.Sprintf("handshake failed. error:%v",err)
-		mysql.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,msg)
-		return
-	}
-
-	var req *Request
-	var resp *Response
-	for{
-		//The sequence-id is incremented with each packet and may wrap around.
-		//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
-		mysql.setSequenceID(0)
-
-		if req,err =mysql.ReadRequest(); err!=nil{
-			fmt.Printf("read request failed. error:%v",err)
-			break
-		}
-		switch uint8(req.GetCmd()){
-		case COM_QUIT:
-			resp = &Response{
-				category: OkResponse,
-				status:   0,
-				data:     nil,
-			}
-			if err = mysql.SendResponse(resp); err != nil{
-				fmt.Printf("send response failed. error:%v",err)
-				break
-			}
-		case COM_QUERY:
-			var query =string(req.GetData().([]byte))
-			fmt.Printf("query: %s \n",query)
-			resp = &Response{
-				category: OkResponse,
-				status:   0,
-				data:     nil,
-			}
-			if err = mysql.SendResponse(resp); err != nil{
-				fmt.Printf("send response failed. error:%v",err)
-				break
-			}
-		default:
-			fmt.Printf("unsupported command. 0x%x \n",req.Cmd)
-		}
-		if uint8(req.Cmd) == COM_QUIT{
-			break
-		}
-	}
-
-}
-
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
-	echoServer(handshakeHandler)
+	//echoServer(handshakeHandler)
+
+	//before anything using the configuration
+	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
+		fmt.Printf("error:%v\n", err)
+		panic(err)
+	}
+
+	if err := config.LoadvarsConfigFromFile("../../system_vars_config.toml",
+		&config.GlobalSystemVariables); err != nil {
+		fmt.Printf("error:%v\n", err)
+		panic(err)
+	}
+
+	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
+	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+
+	ppu := NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging())
+	pci := NewPDCallbackImpl(ppu)
+	pci.Id = 0
+	rm := NewRoutineManager(pu, pci)
+
+	encoder, decoder := NewSqlCodec()
+	echoServer(rm.Handler, rm, encoder, decoder)
 }
 
 func makeMysqlTinyIntResultSet(unsigned bool)*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Tiny"
 	if unsigned{
@@ -252,7 +268,7 @@ func makeMysqlTinyIntResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_TINY)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_TINY)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -284,7 +300,7 @@ func makeMysqlTinyResult(unsigned bool) *MysqlExecutionResult {
 }
 
 func makeMysqlShortResultSet(unsigned bool)*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Short"
 	if unsigned{
@@ -295,7 +311,7 @@ func makeMysqlShortResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_SHORT)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -327,7 +343,7 @@ func makeMysqlShortResult(unsigned bool) *MysqlExecutionResult {
 }
 
 func makeMysqlLongResultSet(unsigned bool)*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Long"
 	if unsigned{
@@ -338,7 +354,7 @@ func makeMysqlLongResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_LONG)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_LONG)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -370,7 +386,7 @@ func makeMysqlLongResult(unsigned bool) *MysqlExecutionResult {
 }
 
 func makeMysqlLongLongResultSet(unsigned bool)*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "LongLong"
 	if unsigned{
@@ -381,7 +397,7 @@ func makeMysqlLongLongResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_LONGLONG)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -413,7 +429,7 @@ func makeMysqlLongLongResult(unsigned bool) *MysqlExecutionResult {
 }
 
 func makeMysqlInt24ResultSet(unsigned bool)*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Int24"
 	if unsigned{
@@ -424,7 +440,7 @@ func makeMysqlInt24ResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_INT24)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_INT24)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -458,7 +474,7 @@ func makeMysqlInt24Result(unsigned bool) *MysqlExecutionResult {
 }
 
 func makeMysqlYearResultSet(unsigned bool)*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Year"
 	if unsigned{
@@ -469,7 +485,7 @@ func makeMysqlYearResultSet(unsigned bool)*MysqlResultSet {
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_YEAR)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_YEAR)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -501,14 +517,14 @@ func makeMysqlYearResult(unsigned bool) *MysqlExecutionResult {
 }
 
 func makeMysqlVarcharResultSet()*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Varchar"
 
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_VARCHAR)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -531,14 +547,14 @@ func makeMysqlVarcharResult() *MysqlExecutionResult {
 }
 
 func makeMysqlVarStringResultSet()*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Varstring"
 
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_VAR_STRING)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -561,14 +577,14 @@ func makeMysqlVarStringResult() *MysqlExecutionResult {
 }
 
 func makeMysqlStringResultSet()*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "String"
 
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_STRING)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_STRING)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -591,14 +607,14 @@ func makeMysqlStringResult() *MysqlExecutionResult {
 }
 
 func makeMysqlFloatResultSet()*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Float"
 
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_FLOAT)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_FLOAT)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -606,7 +622,7 @@ func makeMysqlFloatResultSet()*MysqlResultSet {
 
 	rs.AddColumn(mysqlCol)
 
-	var cases=[]float32{math.MaxFloat32,math.SmallestNonzeroFloat32,-math.MaxFloat32,-math.SmallestNonzeroFloat32,}
+	var cases=[]float32{math.MaxFloat32,math.SmallestNonzeroFloat32,-math.MaxFloat32,-math.SmallestNonzeroFloat32}
 	for _,v := range cases{
 		var data = make([]interface{},1)
 		data[0] = v
@@ -621,14 +637,14 @@ func makeMysqlFloatResult() *MysqlExecutionResult {
 }
 
 func makeMysqlDoubleResultSet()*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Double"
 
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_DOUBLE)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -636,7 +652,7 @@ func makeMysqlDoubleResultSet()*MysqlResultSet {
 
 	rs.AddColumn(mysqlCol)
 
-	var cases=[]float64{math.MaxFloat64,math.SmallestNonzeroFloat64,-math.MaxFloat64,-math.SmallestNonzeroFloat64,}
+	var cases=[]float64{math.MaxFloat64,math.SmallestNonzeroFloat64,-math.MaxFloat64,-math.SmallestNonzeroFloat64}
 	for _,v := range cases{
 		var data = make([]interface{},1)
 		data[0] = v
@@ -651,15 +667,15 @@ func makeMysqlDoubleResult() *MysqlExecutionResult {
 }
 
 func make8ColumnsResultSet()*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	var columnTypes = []uint8{
-		MYSQL_TYPE_TINY,
-		MYSQL_TYPE_SHORT,
-		MYSQL_TYPE_LONG,
-		MYSQL_TYPE_LONGLONG,
-		MYSQL_TYPE_VARCHAR,
-		MYSQL_TYPE_FLOAT}
+		defines.MYSQL_TYPE_TINY,
+		defines.MYSQL_TYPE_SHORT,
+		defines.MYSQL_TYPE_LONG,
+		defines.MYSQL_TYPE_LONGLONG,
+		defines.MYSQL_TYPE_VARCHAR,
+		defines.MYSQL_TYPE_FLOAT}
 
 	var names=[]string{
 		"Tiny",
@@ -703,12 +719,12 @@ func makeMysql8ColumnsResult() *MysqlExecutionResult {
 }
 
 func makeMoreThan16MBResultSet()*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	var columnTypes = []uint8{
-		MYSQL_TYPE_LONGLONG,
-		MYSQL_TYPE_DOUBLE,
-		MYSQL_TYPE_VARCHAR,
+		defines.MYSQL_TYPE_LONGLONG,
+		defines.MYSQL_TYPE_DOUBLE,
+		defines.MYSQL_TYPE_VARCHAR,
 	}
 
 	var names=[]string{
@@ -747,14 +763,14 @@ func makeMoreThan16MBResult() *MysqlExecutionResult {
 }
 
 func make16MBRowResultSet()*MysqlResultSet {
-	var rs *MysqlResultSet = &MysqlResultSet{}
+	var rs = &MysqlResultSet{}
 
 	name := "Varstring"
 
 	mysqlCol := new(MysqlColumn)
 	mysqlCol.SetName(name)
 	mysqlCol.SetOrgName(name + "OrgName")
-	mysqlCol.SetColumnType(MYSQL_TYPE_VAR_STRING)
+	mysqlCol.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	mysqlCol.SetSchema(name + "Schema")
 	mysqlCol.SetTable(name + "Table")
 	mysqlCol.SetOrgTable(name + "Table")
@@ -783,11 +799,11 @@ func make16MBRowResultSet()*MysqlResultSet {
 			shell execution: mysql max-allowed-packet=xxxxx ....
 	*/
 
-/*
+
 	//test in shell : mysql -h 127.0.0.1 -P 6001 -udump -p111 -e "16mbrow" > 16mbrow.txt
 	//max data size : 16 * 1024 * 1024 - 5
 	var stuff = make([]byte, 16 * 1024 * 1024 - 5)
-	for i,_ := range stuff{
+	for i := range stuff{
 		stuff[i] = 'a'
 	}
 
@@ -804,190 +820,210 @@ func make16MBRowResult() *MysqlExecutionResult {
 	return NewMysqlExecutionResult(0,0,0,0,make16MBRowResultSet())
 }
 
-func resultsetHandler(in net.Conn){
-	var err error
-	io := NewIOPackage(in,512,512,true)
-	defer io.Close()
-	fmt.Println("Server handling")
-	mysql := NewMysqlClientProtocol(io,0)
-	cmdExe := &CmdExecutorImpl{}
-	rt := NewRoutine(mysql, cmdExe, NewSession(), nil)
+func (tRM *TestRoutineManager)resultsetHandler(rs goetty.IOSession, msg interface{}, _ uint64) error {
+	tRM.rwlock.RLock()
+	routine, ok := tRM.clients[rs]
+	tRM.rwlock.RUnlock()
 
-	if err = mysql.Handshake(); err!=nil{
-		msg := fmt.Sprintf("handshake failed. error:%v",err)
-		mysql.sendErrPacket(ER_UNKNOWN_ERROR,DefaultMySQLState,msg)
-		return
+	pro := routine.protocol
+	if !ok {
+		return errors.New("routine does not exist")
+	}
+	packet, ok := msg.(*Packet)
+	pro.sequenceId = uint8(packet.SequenceID + 1)
+	if !ok {
+		return errors.New("message is not Packet")
+	}
+
+	length := packet.Length
+	payload := packet.Payload
+	for uint32(length) == MaxPayloadSize {
+		var err error
+		msg, err = routine.io.Read()
+		if err != nil {
+			return errors.New("read msg error")
+		}
+
+		packet, ok = msg.(*Packet)
+		if !ok {
+			return errors.New("message is not Packet")
+		}
+
+		pro.sequenceId = uint8(packet.SequenceID + 1)
+		payload = append(payload, packet.Payload...)
+		length = packet.Length
+	}
+
+	// finish handshake process
+	if !routine.established {
+		err := routine.handleHandshake(payload)
+		if err != nil {
+			return err
+		}
+		return nil
 	}
 
 	var req *Request
 	var resp *Response
-	for{
-		//The sequence-id is incremented with each packet and may wrap around.
-		//It starts at 0 and is reset to 0 when a new command begins in the Command Phase.
-		mysql.setSequenceID(0)
-
-		if req,err =mysql.ReadRequest(); err!=nil{
-			fmt.Printf("read request failed. error:%v",err)
+	req = pro.GetRequest(payload)
+	switch uint8(req.GetCmd()) {
+	case COM_QUIT:
+		resp = &Response{
+			category: OkResponse,
+			status:   0,
+			data:     nil,
+		}
+		if err := pro.SendResponse(resp); err != nil {
+			fmt.Printf("send response failed. error:%v", err)
 			break
 		}
-		switch uint8(req.GetCmd()){
-		case COM_QUIT:
+	case COM_QUERY:
+		var query = string(req.GetData().([]byte))
+
+		switch query {
+		case "tiny":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				cmd:      0,
+				data:     makeMysqlTinyResult(false),
+			}
+		case "tinyu":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlTinyResult(true),
+			}
+		case "short":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlShortResult(false),
+			}
+		case "shortu":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlShortResult(true),
+			}
+		case "long":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlLongResult(false),
+			}
+		case "longu":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlLongResult(true),
+			}
+		case "longlong":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlLongLongResult(false),
+			}
+		case "longlongu":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlLongLongResult(true),
+			}
+		case "int24":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlInt24Result(false),
+			}
+		case "int24u":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlInt24Result(true),
+			}
+		case "year":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlYearResult(false),
+			}
+		case "yearu":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlYearResult(true),
+			}
+		case "varchar":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlVarcharResult(),
+			}
+		case "varstring":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlVarStringResult(),
+			}
+		case "string":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlStringResult(),
+			}
+		case "float":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlFloatResult(),
+			}
+		case "double":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysqlDoubleResult(),
+			}
+		case "8columns":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMysql8ColumnsResult(),
+			}
+		case "16mb":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     makeMoreThan16MBResult(),
+			}
+		case "16mbrow":
+			resp = &Response{
+				category: ResultResponse,
+				status:   0,
+				data:     make16MBRowResult(),
+			}
+		default:
 			resp = &Response{
 				category: OkResponse,
 				status:   0,
 				data:     nil,
 			}
-			if err = mysql.SendResponse(resp); err != nil{
-				fmt.Printf("send response failed. error:%v",err)
-				break
-			}
-		case COM_QUERY:
-			var query =string(req.GetData().([]byte))
-
-			switch query {
-			case "tiny":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					cmd:      0,
-					data:     makeMysqlTinyResult(false),
-				}
-			case "tinyu":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlTinyResult(true),
-				}
-			case "short":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlShortResult(false),
-				}
-			case "shortu":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlShortResult(true),
-				}
-			case "long":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlLongResult(false),
-				}
-			case "longu":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlLongResult(true),
-				}
-			case "longlong":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlLongLongResult(false),
-				}
-			case "longlongu":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlLongLongResult(true),
-				}
-			case "int24":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlInt24Result(false),
-				}
-			case "int24u":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlInt24Result(true),
-				}
-			case "year":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlYearResult(false),
-				}
-			case "yearu":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlYearResult(true),
-				}
-			case "varchar":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlVarcharResult(),
-				}
-			case "varstring":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlVarStringResult(),
-				}
-			case "string":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlStringResult(),
-				}
-			case "float":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlFloatResult(),
-				}
-			case "double":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysqlDoubleResult(),
-				}
-			case "8columns":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMysql8ColumnsResult(),
-				}
-			case "16mb":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     makeMoreThan16MBResult(),
-				}
-			case "16mbrow":
-				resp = &Response{
-					category: ResultResponse,
-					status:   0,
-					data:     make16MBRowResult(),
-				}
-			default:
-				resp = &Response{
-					category: OkResponse,
-					status:   0,
-					data:     nil,
-				}
-			}
-
-			if err = mysql.SendResponse(resp); err != nil{
-				fmt.Printf("send response failed. error:%v",err)
-				break
-			}
-
-		default:
-			fmt.Printf("unsupported command. 0x%x \n",req.Cmd)
 		}
-		if uint8(req.Cmd) == COM_QUIT{
+
+		if err := pro.SendResponse(resp); err != nil {
+			fmt.Printf("send response failed. error:%v", err)
 			break
 		}
+
+	default:
+		fmt.Printf("unsupported command. 0x%x \n", req.cmd)
 	}
-	rt.Quit()
+	if uint8(req.cmd) == COM_QUIT {
+		return nil
+	}
+	return nil
 }
+
 
 func TestMysqlResultSet(t *testing.T){
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
@@ -1000,6 +1036,22 @@ func TestMysqlResultSet(t *testing.T){
 	//	mysql-8.0.23 success
 	//./mysql-test-run 1st --extern user=root --extern port=6001 --extern host=127.0.0.1
 	//	matrixone failed: mysql-test-run: *** ERROR: Could not connect to extern server using command: '/Users/pengzhen/Documents/mysql-server-mysql-8.0.23/bld/runtime_output_directory//mysql --no-defaults --user=root --user=root --port=6001 --host=127.0.0.1 --silent --database=mysql --execute="SHOW GLOBAL VARIABLES"'
-	echoServer(resultsetHandler)
+	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
+		fmt.Printf("error:%v\n", err)
+		panic(err)
+	}
+
+	if err := config.LoadvarsConfigFromFile("../../system_vars_config.toml",
+		&config.GlobalSystemVariables); err != nil {
+		fmt.Printf("error:%v\n", err)
+		panic(err)
+	}
+
+	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
+	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+
+	encoder, decoder := NewSqlCodec()
+	trm := NewTestRoutineManager(pu)
+	echoServer(trm.resultsetHandler, trm, encoder, decoder)
 }
-*/

@@ -69,9 +69,10 @@ func (a *uintSum) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 		return nil, err
 	}
 	vec := vector.New(a.typ)
-	copy(data[mempool.CountSize:], encoding.EncodeUint64(a.sum))
+	vs := []uint64{a.sum}
+	copy(data[mempool.CountSize:], encoding.EncodeUint64Slice(vs))
+	vec.Col = vs
 	vec.Data = data
-	vec.Col = encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+8])
 	if a.cnt == 0 {
 		vec.Nsp.Add(0)
 	}

@@ -28,7 +28,8 @@ import (
 )
 
 const (
-	defaultRPCTimeout = time.Second * 10
+	defaultRPCTimeout     = time.Second * 10
+	defalutStartupTimeout = time.Second * 300
 )
 
 // CubeDriver implements distributed kv and aoe.
@@ -77,7 +78,7 @@ type CubeDriver interface {
 	AllocID([]byte) (uint64, error)
 	Append(string, uint64, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
-	GetSegmentIds(string, uint64) (adb.IDS, error)
+	GetSegmentIds(string, uint64) (dbi.IDS, error)
 	GetSegmentedId(uint64) (uint64, error)
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	DropTablet(string, uint64) (uint64, error)
@@ -207,7 +208,7 @@ func NewCubeDriverWithFactory(
 				})
 				if err != nil {
 					if err == adb.ErrNotFound {
-						logutil.Errorf("shard not found, %d, %d", group, shard.ID)
+						logutil.Debugf("shard not found, %d, %d", group, shard.ID)
 						newCompactIdx = compactIndex
 					} else {
 						// TODO: Need panic here or not?
@@ -238,7 +239,7 @@ func NewCubeDriverWithFactory(
 				})
 				if err != nil {
 					if err == adb.ErrNotFound {
-						logutil.Errorf("shard not found, %d, %d", group, shard.ID)
+						logutil.Debugf("shard not found, %d, %d", group, shard.ID)
 						adjustAppliedIndex = initAppliedIndex
 					} else {
 						panic(err)
@@ -280,7 +281,20 @@ func (h *driver) Start() error {
 	if err != nil {
 		return err
 	}
-	return h.initShardPool()
+	timeoutC := time.After(defalutStartupTimeout)
+	for {
+		select {
+		case <-timeoutC:
+			logutil.Error("wait for available shard timeout")
+			return ErrStartupTimeout
+		default:
+			err := h.initShardPool()
+			if err == nil {
+				return err
+			}
+			time.Sleep(time.Millisecond * 100)
+		}
+	}
 }
 
 func (h *driver) initShardPool() error {
@@ -558,7 +572,7 @@ func (h *driver) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	return &s, nil
 }
 
-func (h *driver) GetSegmentIds(tabletName string, toShard uint64) (ids adb.IDS, err error) {
+func (h *driver) GetSegmentIds(tabletName string, toShard uint64) (ids dbi.IDS, err error) {
 	req := pb.Request{
 		Type:  pb.GetSegmentIds,
 		Group: pb.AOEGroup,
@@ -686,6 +700,10 @@ func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(int
 }
 
 func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
+	}()
 	return h.app.ExecWithGroup(cmd, uint64(group), defaultRPCTimeout)
 }
 

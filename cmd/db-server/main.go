@@ -12,7 +12,6 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
-	stdLog "log"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
 	"matrixone/pkg/logger"
@@ -25,6 +24,7 @@ import (
 	dconfig "matrixone/pkg/vm/engine/aoe/dist/config"
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
+	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -131,9 +131,7 @@ func main() {
 	pci = frontend.NewPDCallbackImpl(ppu)
 	pci.Id = int(NodeId)
 
-	stdLog.Printf("clean target dir")
-
-	targetDir := config.GlobalSystemVariables.GetCubeDir() + strNodeId
+	targetDir := config.GlobalSystemVariables.GetCubeDirPrefix() + strNodeId
 	if err := recreateDir(targetDir); err != nil {
 		panic(err)
 	}
@@ -146,7 +144,12 @@ func main() {
 	})
 	var aoeDataStorage *daoe.Storage
 
-	aoeDataStorage, err = daoe.NewStorage(targetDir + "/aoe")
+	opt := engine.Options{}
+	_, err = toml.DecodeFile(os.Args[1], &opt)
+	if err != nil {
+		panic(err)
+	}
+	aoeDataStorage, err = daoe.NewStorageWithOptions(targetDir+"/aoe", &opt)
 
 	cfg := dconfig.Config{}
 	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
@@ -190,6 +193,7 @@ func main() {
 		proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
 		proc.Lim.BatchRows = config.GlobalSystemVariables.GetProcessLimitationBatchRows()
 		proc.Lim.PartitionRows = config.GlobalSystemVariables.GetProcessLimitationPartitionRows()
+		proc.Lim.BatchSize = config.GlobalSystemVariables.GetProcessLimitationBatchSize()
 		proc.Refer = make(map[string]uint64)
 	}
 	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
@@ -202,7 +206,7 @@ func main() {
 	hp := handler.New(eng, proc)
 	srv.Register(hp.Process)
 
-	err = waitClusterStartup(a, 10*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
+	err = waitClusterStartup(a, 300*time.Second, int(cfg.CubeConfig.Prophet.Replication.MaxReplicas), int(cfg.ClusterConfig.PreAllocatedGroupNum))
 
 	if err != nil {
 		fmt.Printf("wait cube cluster startup failed, %v", err)

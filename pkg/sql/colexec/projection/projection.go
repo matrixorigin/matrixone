@@ -3,11 +3,11 @@ package projection
 import (
 	"bytes"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/encoding"
 	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 	"matrixone/pkg/vm/register"
+	"reflect"
+	"unsafe"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -45,7 +45,9 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			return false, err
 		}
 		if _, ok := n.Es[i].(*extend.Attribute); !ok {
-			copy(rbat.Vecs[i].Data[:mempool.CountSize], encoding.EncodeUint64(n.Refer[n.Attrs[i]]))
+			count := n.Refer[n.Attrs[i]]
+			hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&count)), Len: 8, Cap: 8}
+			copy(rbat.Vecs[i].Data, *(*[]byte)(unsafe.Pointer(&hp)))
 		}
 	}
 	if bat.SelsData != nil {

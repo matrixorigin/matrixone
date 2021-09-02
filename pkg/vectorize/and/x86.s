@@ -6,12 +6,12 @@
 // func andX86Asm(x []int64, y []int64, r []int64) int64
 TEXT ·andX86Asm(SB), NOSPLIT, $0-80
 	MOVQ x_base+0(FP), DX
-	MOVQ y_base+24(FP), BP
+	MOVQ y_base+24(FP), R11
 	MOVQ r_base+48(FP), SI
 	MOVQ x_len+8(FP), AX
 	MOVQ y_len+32(FP), CX
 	MOVQ DX, DI
-	MOVQ BP, R8
+	MOVQ R11, R8
 	MOVQ SI, R9
 	SHLQ $0x03, AX
 	SHLQ $0x03, CX
@@ -24,11 +24,11 @@ TEXT ·andX86Asm(SB), NOSPLIT, $0-80
 loop:
 	CMPQ  DX, DI
 	JE    done
-	CMPQ  BP, R8
+	CMPQ  R11, R8
 	JE    done
 	MOVQ  (DX), R10
 	MOVQ  R10, (SI)
-	CMPQ  R10, (BP)
+	CMPQ  R10, (R11)
 	SETLE AL
 	SETGE BL
 	SETEQ CL
@@ -36,7 +36,7 @@ loop:
 	SHLB  $0x03, BL
 	SHLB  $0x03, CL
 	ADDQ  AX, DX
-	ADDQ  BX, BP
+	ADDQ  BX, R11
 	ADDQ  CX, SI
 	JMP   loop
 

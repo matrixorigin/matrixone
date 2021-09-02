@@ -322,9 +322,10 @@ func (info *MetaInfo) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func (info *MetaInfo) ReadFrom(r io.Reader) error {
-	err := dump.NewDecoder(r).Decode(info)
-	return err
+func (info *MetaInfo) ReadFrom(r io.Reader) (int64, error) {
+	decoder := dump.NewDecoder(r)
+	err := decoder.Decode(info)
+	return decoder.InputOffset(), err
 }
 
 func (info *MetaInfo) GetTableId() uint64 {

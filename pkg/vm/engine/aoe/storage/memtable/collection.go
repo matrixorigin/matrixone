@@ -2,12 +2,11 @@ package memtable
 
 import (
 	"fmt"
-	// log "github.com/sirupsen/logrus"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	// "matrixone/pkg/vm/engine/aoe/storage/events/dataio"
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
@@ -106,8 +105,10 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 	offset := uint64(0)
 	replayIndex := tableMeta.GetReplayIndex()
 	if replayIndex != nil {
-		offset = replayIndex.Count
+		offset = replayIndex.Count + replayIndex.Start
 		tableMeta.ResetReplayIndex()
+		index.Start = offset
+		logutil.Infof("Table %d ReplayIndex %s", tableMeta.ID, replayIndex.String())
 	}
 	for {
 		if mut.IsFull() {

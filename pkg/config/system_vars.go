@@ -327,16 +327,16 @@ type SystemVariables struct{
 	nodeID    int64
 	
 	/**
-	Name:	cubeDir
+	Name:	cubeDirPrefix
 	Scope:	[global]
 	Access:	[file]
 	DataType:	string
 	DomainType:	set
 	Values:	[./cube]
-	Comment:	the root direction of the cube
+	Comment:	the root direction prefix of the cube. The actual dir is cubeDirPrefix + nodeID
 	UpdateMode:	dynamic
 	*/
-	cubeDir    string
+	cubeDirPrefix    string
 	
 	/**
 	Name:	prophetEmbedEtcdJoinAddr
@@ -697,16 +697,16 @@ type varsConfig struct{
 	NodeID    int64  `toml:"nodeID"`
 	
 	/**
-	Name:	cubeDir
+	Name:	cubeDirPrefix
 	Scope:	[global]
 	Access:	[file]
 	DataType:	string
 	DomainType:	set
 	Values:	[./cube]
-	Comment:	the root direction of the cube
+	Comment:	the root direction prefix of the cube. The actual dir is cubeDirPrefix + nodeID
 	UpdateMode:	dynamic
 	*/
-	CubeDir    string  `toml:"cubeDir"`
+	CubeDirPrefix    string  `toml:"cubeDirPrefix"`
 	
 	/**
 	Name:	prophetEmbedEtcdJoinAddr
@@ -855,7 +855,7 @@ func (ap *SystemVariables) PrepareDefinition(){
 	
 	ap.name2definition["nodeID"] = "	Name:	nodeID	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[0 0 10]	Comment:	the Node ID of the cube	UpdateMode:	dynamic	"
 	
-	ap.name2definition["cubeDir"] = "	Name:	cubeDir	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[./cube]	Comment:	the root direction of the cube	UpdateMode:	dynamic	"
+	ap.name2definition["cubeDirPrefix"] = "	Name:	cubeDirPrefix	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[./cube]	Comment:	the root direction prefix of the cube. The actual dir is cubeDirPrefix + nodeID	UpdateMode:	dynamic	"
 	
 	ap.name2definition["prophetEmbedEtcdJoinAddr"] = "	Name:	prophetEmbedEtcdJoinAddr	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[http://localhost:40000 http://127.0.0.1:40000]	Comment:	the join address of prophet of the cube	UpdateMode:	dynamic	"
 	
@@ -1251,17 +1251,17 @@ func (ap *SystemVariables) LoadInitialValues()error{
 		}
 	}
 	
-	cubeDirchoices := []string {
+	cubeDirPrefixchoices := []string {
 		"./cube", 
 	}
-	if len(cubeDirchoices) != 0 {
-		if err = ap.setCubeDir(cubeDirchoices[0]) ; err != nil {
-			return fmt.Errorf("set%s failed.error:%v","CubeDir",err)
+	if len(cubeDirPrefixchoices) != 0 {
+		if err = ap.setCubeDirPrefix(cubeDirPrefixchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CubeDirPrefix",err)
 		}
 	} else {
 		//empty string
-		if err = ap.setCubeDir("") ; err != nil {
-			return fmt.Errorf("set%s failed.error:%v","CubeDir",err)
+		if err = ap.setCubeDirPrefix("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CubeDirPrefix",err)
 		}
 	}
 	
@@ -1581,12 +1581,12 @@ func (ap * SystemVariables ) GetNodeID() int64 {
 }
 
 /**
-Get the value of the parameter cubeDir
+Get the value of the parameter cubeDirPrefix
 */
-func (ap * SystemVariables ) GetCubeDir() string {
+func (ap * SystemVariables ) GetCubeDirPrefix() string {
 	ap.rwlock.RLock()
 	defer ap.rwlock.RUnlock()
-	return ap.cubeDir
+	return ap.cubeDirPrefix
 }
 
 /**
@@ -1806,10 +1806,10 @@ func (ap * SystemVariables ) SetNodeID(value int64)error {
 }
 
 /**
-Set the value of the parameter cubeDir
+Set the value of the parameter cubeDirPrefix
 */
-func (ap * SystemVariables ) SetCubeDir(value string)error {
-	return  ap.setCubeDir(value)
+func (ap * SystemVariables ) SetCubeDirPrefix(value string)error {
+	return  ap.setCubeDirPrefix(value)
 }
 
 /**
@@ -2407,9 +2407,9 @@ func (ap * SystemVariables ) setNodeID(value int64)error {
 }
 
 /**
-Set the value of the parameter cubeDir
+Set the value of the parameter cubeDirPrefix
 */
-func (ap * SystemVariables ) setCubeDir(value string)error {
+func (ap * SystemVariables ) setCubeDirPrefix(value string)error {
 	ap.rwlock.Lock()
 	defer ap.rwlock.Unlock()
 	
@@ -2418,12 +2418,12 @@ func (ap * SystemVariables ) setCubeDir(value string)error {
 		}
 		if len( choices ) != 0{
 			if !isInSlice(value, choices){
-				return fmt.Errorf("setCubeDir,the value %s is not in set %v",value,choices)
+				return fmt.Errorf("setCubeDirPrefix,the value %s is not in set %v",value,choices)
 			}
 		}//else means any string
 	
 	
-	ap.cubeDir = value
+	ap.cubeDirPrefix = value
 	return nil
 }
 
@@ -2594,7 +2594,7 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.name2updatedFlags["enableEpochLogging"] = false
 	config.name2updatedFlags["recordTimeElapsedOfSqlRequest"] = false
 	config.name2updatedFlags["nodeID"] = false
-	config.name2updatedFlags["cubeDir"] = false
+	config.name2updatedFlags["cubeDirPrefix"] = false
 	config.name2updatedFlags["prophetEmbedEtcdJoinAddr"] = false
 	config.name2updatedFlags["maxReplicas"] = false
 	config.name2updatedFlags["lengthOfQueryPrinted"] = false
@@ -2791,9 +2791,9 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 			return fmt.Errorf("update parameter nodeID failed.error:%v",err)
 		}
 	}
-	if config.getUpdatedFlag("cubeDir"){
-		if err = ap.setCubeDir(config.CubeDir); err != nil{
-			return fmt.Errorf("update parameter cubeDir failed.error:%v",err)
+	if config.getUpdatedFlag("cubeDirPrefix"){
+		if err = ap.setCubeDirPrefix(config.CubeDirPrefix); err != nil{
+			return fmt.Errorf("update parameter cubeDirPrefix failed.error:%v",err)
 		}
 	}
 	if config.getUpdatedFlag("prophetEmbedEtcdJoinAddr"){

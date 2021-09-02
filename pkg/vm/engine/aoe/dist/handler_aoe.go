@@ -2,18 +2,20 @@ package dist
 
 import (
 	"encoding/json"
-	"github.com/fagongzi/util/protoc"
-	"github.com/matrixorigin/matrixcube/command"
-	"github.com/matrixorigin/matrixcube/pb"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
 	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"time"
+
+	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixcube/command"
+	"github.com/matrixorigin/matrixcube/pb"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 )
 
 func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
@@ -61,6 +63,10 @@ func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 }
 
 func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("[logIndex:%d]append handler cost %d ms", ctx.LogIndex(), time.Since(t0).Milliseconds())
+	}()
 	resp := pb.AcquireResponse()
 	customReq := &rpcpb.AppendRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -70,9 +76,7 @@ func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comman
 		return 0, 0, resp
 	}
 	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*daoe.Storage)
-	err = store.Append(customReq.TabletName, bat, &md.LogIndex{
-		ID: ctx.LogIndex(),
-	})
+	err = store.Append(customReq.TabletName, bat, ctx.LogIndex())
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp

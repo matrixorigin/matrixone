@@ -48,7 +48,7 @@ func (a *strMin) Eval() interface{} {
 	if a.cnt == 0 {
 		return nil
 	}
-	return a.v
+	return []byte(a.v)
 }
 
 func (a *strMin) EvalCopy(proc *process.Process) (*vector.Vector, error) {

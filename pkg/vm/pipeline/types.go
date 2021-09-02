@@ -6,6 +6,10 @@ import (
 	"matrixone/pkg/vm/engine"
 )
 
+const (
+	PrefetchNum = 4
+)
+
 type Pipeline struct {
 	cs    []uint64
 	attrs []string

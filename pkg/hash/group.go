@@ -20,7 +20,7 @@ func NewGroup(sel int64, is []int, es []aggregation.Extend) *Group {
 	}
 }
 
-func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs []bool, proc *process.Process) ([]int64, error) {
+func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs []bool, proc *process.Process) []int64 {
 	for i, gvec := range gvecs {
 		switch gvec.Typ.Oid {
 		case types.T_int8:
@@ -397,5 +397,5 @@ func (g *Group) Fill(sels, matched []int64, vecs, gvecs []*vector.Vector, diffs 
 			agg.Fill(matched, vecs[g.Is[i]])
 		}
 	}
-	return remaining, nil
+	return remaining
 }

@@ -1,3 +1,4 @@
+//go:build amd64
 // +build amd64
 
 package max
@@ -6,24 +7,24 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-func int8MaxAvx2Asm([]int8, []int8)
-func int8MaxAvx512Asm([]int8, []int8)
-func int16MaxAvx2Asm([]int16, []int16)
-func int16MaxAvx512Asm([]int16, []int16)
-func int32MaxAvx2Asm([]int32, []int32)
-func int32MaxAvx512Asm([]int32, []int32)
-func int64MaxAvx512Asm([]int64, []int64)
-func uint8MaxAvx2Asm([]uint8, []uint8)
-func uint8MaxAvx512Asm([]uint8, []uint8)
-func uint16MaxAvx2Asm([]uint16, []uint16)
-func uint16MaxAvx512Asm([]uint16, []uint16)
-func uint32MaxAvx2Asm([]uint32, []uint32)
-func uint32MaxAvx512Asm([]uint32, []uint32)
-func uint64MaxAvx512Asm([]uint64, []uint64)
-func float32MaxAvx2Asm([]float32, []float32)
-func float32MaxAvx512Asm([]float32, []float32)
-func float64MaxAvx2Asm([]float64, []float64)
-func float64MaxAvx512Asm([]float64, []float64)
+func int8MaxAvx2Asm(x []int8, r []int8)
+func int8MaxAvx512Asm(x []int8, r []int8)
+func int16MaxAvx2Asm(x []int16, r []int16)
+func int16MaxAvx512Asm(x []int16, r []int16)
+func int32MaxAvx2Asm(x []int32, r []int32)
+func int32MaxAvx512Asm(x []int32, r []int32)
+func int64MaxAvx512Asm(x []int64, r []int64)
+func uint8MaxAvx2Asm(x []uint8, r []uint8)
+func uint8MaxAvx512Asm(x []uint8, r []uint8)
+func uint16MaxAvx2Asm(x []uint16, r []uint16)
+func uint16MaxAvx512Asm(x []uint16, r []uint16)
+func uint32MaxAvx2Asm(x []uint32, r []uint32)
+func uint32MaxAvx512Asm(x []uint32, r []uint32)
+func uint64MaxAvx512Asm(x []uint64, r []uint64)
+func float32MaxAvx2Asm(x []float32, r []float32)
+func float32MaxAvx512Asm(x []float32, r []float32)
+func float64MaxAvx2Asm(x []float64, r []float64)
+func float64MaxAvx512Asm(x []float64, r []float64)
 
 func init() {
 	if cpu.X86.HasAVX512 {

@@ -53,6 +53,6 @@ func (e *flushSegEvent) Execute() error {
 	}
 	defer release()
 
-	w := dataio.NewSegmentWriter(batches, meta, e.Ctx.Opts.Meta.Conf.Dir)
+	w := dataio.NewSegmentWriter(batches, meta, meta.Table.Conf.Dir)
 	return w.Execute()
 }

@@ -19,7 +19,7 @@ func (db *database) Type() int {
 func (db *database) Delete(epoch uint64, name string) error {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	_, err := db.catalog.DropTable(epoch, db.id, name)
 	return err
@@ -28,7 +28,7 @@ func (db *database) Delete(epoch uint64, name string) error {
 func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
 	if err != nil {
@@ -41,7 +41,7 @@ func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, pd
 func (db *database) Relations() []string {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	var rs []string
 	tbs, err := db.catalog.ListTables(db.id)
@@ -57,7 +57,7 @@ func (db *database) Relations() []string {
 func (db *database) Relation(name string) (engine.Relation, error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("time cost %d ms", time.Since(t0))
+		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
 	tablets, err := db.catalog.GetTablets(db.id, name)
 	if err != nil {
@@ -83,14 +83,9 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
-			lRelation, err := ldb.Relation(tbl.Name)
-			if err != nil {
-				for _, v := range r.mp {
-					v.Close()
-				}
-				return nil, err
+			if lRelation, err := ldb.Relation(tbl.Name); err == nil {
+				r.mp[tbl.Name] = lRelation
 			}
-			r.mp[tbl.Name] = lRelation
 			for _, id := range ids.Ids {
 				r.segments = append(r.segments, engine.SegmentInfo{
 					Version:  ids.Version,

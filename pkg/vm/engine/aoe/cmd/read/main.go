@@ -61,8 +61,7 @@ func init() {
 	gm := guest.New(1<<40, hm)
 	proc = process.New(gm, mempool.New(1<<48, 8))
 	readPool, _ = ants.NewPool(readPoolSize)
-	mdCfg := &md.Configuration{
-		Dir:              workDir,
+	mdCfg := &e.MetaCfg{
 		SegmentMaxBlocks: blockCntPerSegment,
 		BlockMaxRows:     blockRows,
 	}
@@ -156,7 +155,7 @@ func readData() {
 		cols = append(cols, i)
 	}
 	refs := make([]uint64, len(attrs))
-	var segIds db.IDS
+	var segIds dbi.IDS
 	{
 		dbrel, _ := impl.Relation(tableName)
 		segIds = dbrel.SegmentIds()
@@ -184,10 +183,7 @@ func readData() {
 						gm := guest.New(1<<48, hm)
 						proc2 := process.New(gm, mempool.New(1<<48, 8))
 						defer wg.Done()
-						v, err := bat.GetVector(col, proc2)
-						if err != nil {
-							panic(err)
-						}
+						v := bat.GetVector(col, proc2)
 						if v != nil {
 							v.Free(proc2)
 						}

@@ -1,10 +1,10 @@
 package db
 
 import (
+	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/process"
-	"strconv"
 	"sync/atomic"
 )
 
@@ -15,7 +15,7 @@ type Segment struct {
 
 func (seg *Segment) ID() string {
 	id := seg.Data.GetMeta().GetID()
-	return strconv.FormatUint(id, 10)
+	return string(encoding.EncodeUint64(id))
 }
 
 func (seg *Segment) Blocks() []string {
@@ -25,14 +25,14 @@ func (seg *Segment) Blocks() []string {
 	ids := seg.Data.BlockIds()
 	strs := make([]string, len(ids))
 	for idx, id := range ids {
-		strs[idx] = strconv.FormatUint(id, 10)
+		strs[idx] = string(encoding.EncodeUint64(id))
 	}
 	seg.Ids.Store(strs)
 	return strs
 }
 
 func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
-	iid, _ := strconv.ParseUint(id, 10, 64)
+	iid := encoding.DecodeUint64(([]byte)(id))
 	data := seg.Data.WeakRefBlock(iid)
 	if data == nil {
 		return nil
@@ -50,7 +50,7 @@ func (seg *Segment) NewFilter() engine.Filter {
 }
 
 func (seg *Segment) NewSummarizer() engine.Summarizer {
-	return nil
+	return NewSegmentSummarizer(seg)
 }
 
 func (seg *Segment) NewSparseFilter() engine.SparseFilter {

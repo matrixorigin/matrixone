@@ -1,3 +1,5 @@
+// +build !debug
+
 package encoding
 
 import (
@@ -57,7 +59,7 @@ func EncodeUint8(v uint8) []byte {
 }
 
 func DecodeUint8(v []byte) uint8 {
-	return *(*uint8)(unsafe.Pointer(&v[0]))
+	return v[0]
 }
 
 func EncodeInt16(v int16) []byte {
@@ -151,23 +153,19 @@ func DecodeDatetime(v []byte) types.Datetime {
 }
 
 func EncodeInt8Slice(v []int8) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return *(*[]byte)(unsafe.Pointer(&v))
 }
 
 func DecodeInt8Slice(v []byte) []int8 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	return *(*[]int8)(unsafe.Pointer(&hp))
+	return *(*[]int8)(unsafe.Pointer(&v))
 }
 
 func EncodeUint8Slice(v []uint8) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return v
 }
 
 func DecodeUint8Slice(v []byte) []uint8 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	return *(*[]uint8)(unsafe.Pointer(&hp))
+	return v
 }
 
 func EncodeInt16Slice(v []int16) []byte {

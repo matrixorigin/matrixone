@@ -86,7 +86,7 @@ func isvarsConfigEqual(c1,c2 varsConfig) bool {
 	if c1.NodeID != c2.NodeID {
 		return false
 	}
-	if c1.CubeDir != c2.CubeDir {
+	if c1.CubeDirPrefix != c2.CubeDirPrefix {
 		return false
 	}
 	if c1.ProphetEmbedEtcdJoinAddr != c2.ProphetEmbedEtcdJoinAddr {
@@ -139,7 +139,7 @@ rejectWhenHeartbeatFromPDLeaderIsTimeout=false
 enableEpochLogging=false
 recordTimeElapsedOfSqlRequest=true
 nodeID=0
-cubeDir= "./cube"
+cubeDirPrefix= "./cube"
 prophetEmbedEtcdJoinAddr= "http://localhost:40000"
 maxReplicas=1
 lengthOfQueryPrinted=50
@@ -177,7 +177,7 @@ RejectWhenHeartbeatFromPDLeaderIsTimeout:false,
 EnableEpochLogging:false,
 RecordTimeElapsedOfSqlRequest:true,
 NodeID:0,
-CubeDir: "./cube" ,
+CubeDirPrefix: "./cube" ,
 ProphetEmbedEtcdJoinAddr: "http://localhost:40000" ,
 MaxReplicas:1,
 LengthOfQueryPrinted:50,
