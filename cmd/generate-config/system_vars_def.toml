@@ -313,7 +313,7 @@ scope = ["global"]
 access = ["file"]
 type = "int64"
 domain-type = "set"
-values = ["10000"]
+values = ["40000"]
 comment = "the count of rows in vector of batch in load data"
 update-mode = "dynamic"
 

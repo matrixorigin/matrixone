@@ -12,8 +12,10 @@ import (
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/vm/engine"
 	"os"
+	"runtime/pprof"
 	"strconv"
 	"sync"
+	"time"
 )
 
 type LoadResult struct {
@@ -69,7 +71,7 @@ func (b *Block) GetSpaceLen() int {
 }
 
 func (b *Block) GetDataLen() int {
-	b.AssertLegal()
+	//b.AssertLegal()
 	return b.writeIdx - b.readIdx
 }
 
@@ -81,7 +83,7 @@ func (b *Block) GetData() []byte {
 get the slice [readIdx,writeIdx]
  */
 func (b *Block) GetDataSlice() []byte{
-	b.AssertLegal()
+	//b.AssertLegal()
 	return b.data[b.readIdx:b.writeIdx]
 }
 
@@ -121,10 +123,10 @@ func (b *Block) Get() (bool,byte) {
 		return false, 0
 	}
 
-	b.AssertLegal()
+	//b.AssertLegal()
 	d := b.data[b.readIdx]
 	b.readIdx++
-	b.AssertLegal()
+	//b.AssertLegal()
 	return true,d
 }
 
@@ -295,24 +297,41 @@ func loadDataFromFileRoutine(close *CloseFlag,dataFile *os.File,pool *BlockPool,
 	close.Open()
 	var reads int
 	var err error
+	wait_pool := time.Duration(0)
+	read_block := time.Duration(0)
+	defer func() {
+		fmt.Printf("wait pool %s read block %s \n",wait_pool.String(),read_block.String())
+	}()
+
+	x := 0
 	for close.IsOpened() {
+		x++
+		fmt.Printf("wait a block %d\n",x)
+		wait := time.Now()
 		blk := pool.GetBlock()
 		if blk == nil {
 			continue
 		}
 
+		wait_pool += time.Since(wait)
+		fmt.Printf("get a block read data %d\n",x)
+
+		read := time.Now()
 		reads,err = dataFile.Read(blk.GetData())
+		read_block += time.Since(read)
 		if reads == 0 && err == io.EOF{
 			//end of file
 			//write a nil to notice that reading data is over
+			fmt.Printf("write block into channel 3 %d\n",x)
 			outChan <- nil
 			return nil
 		}else if err != nil {
+			fmt.Printf("write block into channel 2 %d\n",x)
 			outChan <- nil
 			return err
 		}
 		blk.SetIdx(0,reads)
-
+		fmt.Printf("write block into channel 1 %d\n",x)
 		//output data block into channel
 		outChan <- blk
 	}
@@ -375,6 +394,13 @@ type ParseLineHandler struct {
 
 	//for debug
 	packLine func([][][]byte)
+
+	row2col time.Duration
+	fillBlank  time.Duration
+	toStorage time.Duration
+
+	writeBatch time.Duration
+	resetBatch time.Duration
 }
 
 func (plh *ParseLineHandler) Status() LINE_STATE {
@@ -570,6 +596,26 @@ const (
 )
 
 /*
+find substring bytes at the end of another bytes.
+ */
+func findSubBytesAtEnd(s []byte,sub string) bool {
+	sLen := len(s)
+	subLen := len(sub)
+	if subLen > sLen{
+		return false
+	}
+
+	offset := sLen - subLen
+	for i := subLen - 1; i >= 0 ; i-- {
+		if sub[i] != s[ offset + i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+/*
 TODO:refine performance
 find FIELD TERMINATED BY : return FIELD_END
 find LINE TERMINATED BY : return LINE_END
@@ -581,8 +627,7 @@ func handleTerminatedBy(handler *ParseLineHandler,fieldData []byte,fieldTerminat
 	fieldLen := len(fieldData)
 	found := NO_FOUND
 	if fieldLen >= lenOfFieldTerminated {//check FIELDS "TERMINATED BY"
-		ret := bytes.Index(fieldData,[]byte(fieldTerminatedBy))
-		if ret != -1 {//find "TERMINATED BY"
+		if findSubBytesAtEnd(fieldData,fieldTerminatedBy) {//find "TERMINATED BY"
 			//remove "TERMINATED BY" part
 			//state changes
 			fieldData = fieldData[:fieldLen - lenOfFieldTerminated]
@@ -591,8 +636,7 @@ func handleTerminatedBy(handler *ParseLineHandler,fieldData []byte,fieldTerminat
 		}
 	}
 	if fieldLen >= lenOfLineTerminated {//check FIELDS "TERMINATED BY"
-		ret := bytes.Index(fieldData,[]byte(lineTerminatedBy))
-		if ret != -1 {//find "TERMINATED BY"
+		if findSubBytesAtEnd(fieldData,lineTerminatedBy) {//find "TERMINATED BY"
 			//remove "TERMINATED BY" part
 			//state changes
 			fieldData = fieldData[:fieldLen - lenOfLineTerminated]
@@ -918,6 +962,10 @@ func prepareBatch(handler *ParseLineHandler) error {
 save parsed lines into the storage engine
  */
 func saveParsedLinesToBatch(handler *ParseLineHandler) error {
+	begin := time.Now()
+	defer func() {
+		fmt.Printf("-----saveParsedLinesToBach %s\n",time.Since(begin))
+	}()
 	//drop ignored lines
 	if handler.lineCount < handler.load.IgnoredLines {
 		ignoredCnt := handler.load.IgnoredLines - handler.lineCount
@@ -940,6 +988,10 @@ func saveParsedLinesToBatch(handler *ParseLineHandler) error {
 	var err error
 	allFetchCnt := 0
 
+
+	row2col := time.Duration(0)
+	fillBlank := time.Duration(0)
+	toStorage := time.Duration(0)
 	//write these lines
 	for lineIdx := 0; lineIdx < countOfLineArray; lineIdx += fetchCnt {
 		//fill batch
@@ -952,6 +1004,7 @@ func saveParsedLinesToBatch(handler *ParseLineHandler) error {
 
 		batchBegin := handler.batchFilled
 		for i, line := range fetchLines {
+			wait_a := time.Now()
 			rowIdx := batchBegin + i
 			//record missing column
 			for k := 0; k < len(columnFLags); k++ {
@@ -1128,7 +1181,9 @@ func saveParsedLinesToBatch(handler *ParseLineHandler) error {
 					panic("unsupported oid")
 				}
 			}
+			row2col += time.Since(wait_a)
 
+			wait_b := time.Now()
 			//the row does not have field
 			for k := 0; k < len(columnFLags); k++ {
 				if 0 == columnFLags[k] {
@@ -1142,8 +1197,9 @@ func saveParsedLinesToBatch(handler *ParseLineHandler) error {
 					vec.Nsp.Add(uint64(rowIdx))
 				}
 			}
-
+			fillBlank += time.Since(wait_b)
 		}
+
 		handler.lineCount += uint64(fetchCnt)
 		handler.batchFilled = batchBegin + fetchCnt
 
@@ -1162,6 +1218,7 @@ func saveParsedLinesToBatch(handler *ParseLineHandler) error {
 		//	}
 		//}
 
+		wait_c := time.Now()
 		/*
 		write batch into the engine
 		*/
@@ -1171,9 +1228,17 @@ func saveParsedLinesToBatch(handler *ParseLineHandler) error {
 			logutil.Errorf("saveBatchToStorage failed. err:%v",err)
 			return err
 		}
+		toStorage += time.Since(wait_c)
 
 		allFetchCnt += fetchCnt
 	}
+
+	handler.row2col += row2col
+	handler.fillBlank += fillBlank
+	handler.toStorage += toStorage
+
+	fmt.Printf("----- row2col %s fillBlank %s toStorage %s\n",
+		row2col,fillBlank,toStorage)
 
 	if allFetchCnt != countOfLineArray {
 		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ",allFetchCnt,countOfLineArray)
@@ -1192,14 +1257,18 @@ func saveBatchToStorage(handler *ParseLineHandler,force bool) error {
 		//for _, vec := range handler.batchData.Vecs {
 		//	fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
 		//}
+		wait_a := time.Now()
 		err := handler.tableHandler.Write(handler.timestamp,handler.batchData)
 		if err != nil {
 			logutil.Errorf("write failed. err: %v",err)
 			return err
 		}
 
+		handler.writeBatch += time.Since(wait_a)
+
 		handler.result.Records += uint64(handler.batchSize)
 
+		wait_b := time.Now()
 		//clear batch
 		//clear vector.nulls.Nulls
 		for _, vec := range handler.batchData.Vecs {
@@ -1211,6 +1280,8 @@ func saveBatchToStorage(handler *ParseLineHandler,force bool) error {
 			}
 		}
 		handler.batchFilled = 0
+
+		handler.resetBatch += time.Since(wait_b)
 	}else{
 		if force {
 			//first, remove redundant rows at last
@@ -1319,6 +1390,11 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 	var err error
 	ses := mce.routine.GetSession()
 
+	begin:=  time.Now()
+	defer func() {
+		fmt.Printf("-----load loop exit %s\n",time.Since(begin))
+	}()
+
 	result := &LoadResult{}
 	handler := &ParseLineHandler{
 		status:       LINE_STATE_PROCESS_PREFIX,
@@ -1331,13 +1407,21 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		lineCount: 0,
 		batchSize: int(ses.Pu.SV.GetBatchSizeInLoadData()),
 		result: result,
+		row2col: 0,
+		fillBlank: 0,
+		toStorage: 0,
+		writeBatch: 0,
+		resetBatch: 0,
 	}
 
+	prepareTime := time.Now()
 	//allocate batch space
 	err = prepareBatch(handler)
 	if err != nil {
 		return nil, err
 	}
+
+	fmt.Printf("-----prepare batch %s\n",time.Since(prepareTime))
 
 	/*
 	step1 : read block from file
@@ -1354,6 +1438,7 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		}
 	}()
 
+	initBlock := time.Now()
 	//create blocks for loading data
 	blockCnt := int(ses.Pu.SV.GetBlockCountInLoadData())
 	blockSize := int(ses.Pu.SV.GetBlockSizeInLoadData())
@@ -1364,26 +1449,46 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 	closeLoadFile := &CloseFlag{}
 	closeProcessBlock := &CloseFlag{}
 
-	defer func() {
-		closeLoadFile.Close()
-		closeProcessBlock.Close()
-	}()
+	fmt.Printf("----- init block %s\n",time.Since(initBlock))
 
 	//load data from file asynchronously
 	go func() {
-		err := loadDataFromFileRoutine(closeLoadFile,dataFile,blockPoolWithoutData,blockChannel)
+
+
+		err = loadDataFromFileRoutine(closeLoadFile,dataFile,blockPoolWithoutData,blockChannel)
 		if err != nil {
 			logutil.Errorf("load data filed.err:%v",err)
 		}
+
+		fmt.Printf("exit load data routine\n")
 	}()
 
 	cnt := 0
 	alllineCnt := 0
 
+	processTime := time.Now()
+
 	closeProcessBlock.Open()
+	wait_block := time.Duration(0)
+	process_blcok := time.Duration(0)
+	pop_block := time.Duration(0)
+	save_batch := time.Duration(0)
+	//add profile
+	cpuProf,err := os.Create("load_profile")
+	if err != nil {
+		logutil.Errorf("create cpu profile")
+		return nil,err
+	}
+	pprof.StartCPUProfile(cpuProf)
+
 	//process block
 	for closeProcessBlock.IsOpened(){
+		fmt.Printf("-----wait block\n")
+
+		wait_a := time.Now()
 		blk,ok := <- blockChannel
+		wait_block += time.Since(wait_a)
+
 		if !ok {
 			break
 		}
@@ -1391,18 +1496,21 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			break
 		}
 		cnt++
-		logutil.Infof("process blk %d , count of used block %d",blk.id,cnt)
+		fmt.Printf("process blk %d , count of used block %d\n",blk.id,cnt)
 
+		wait_b := time.Now()
 		//process block
 		//TODO:row to column, put into engine
 		err = processBlock(handler,blk)
 		if err != nil {
 			logutil.Errorf("processBlock failed. err:%v",err)
 		}
+		process_blcok += time.Since(wait_b)
 
 		alllineCnt += len(handler.lineArray)
-		logutil.Infof("get lines %d, all line count %d ",len(handler.lineArray),alllineCnt)
+		fmt.Printf("get lines %d, all line count %d \n",len(handler.lineArray),alllineCnt)
 
+		wait_c := time.Now()
 		//recycle poped blocks
 		popedBlocks := handler.GetPopedBlocks()
 		if len(popedBlocks) != 0{
@@ -1412,6 +1520,9 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			handler.ClearPopedBlocks()
 		}
 
+		pop_block += time.Since(wait_c)
+
+		wait_d := time.Now()
 		/*
 			step6 : append column to a batch
 		*/
@@ -1419,13 +1530,31 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		if err != nil {
 			logutil.Errorf("saveParsedLinesToBatch failed. err:%v",err)
 		}
+		save_batch += time.Since(wait_d)
 	}
+	fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
+		handler.row2col,handler.fillBlank,handler.toStorage)
+	fmt.Printf("-----write batch %s reset batch %s\n",
+		handler.writeBatch,handler.resetBatch)
+	fmt.Printf("-----wait_block %s process_block %s pop_block %s save_batch %s\n",
+		wait_block,process_blcok,pop_block,save_batch)
+	fmt.Printf("-----process time %s \n",time.Since(processTime))
 
+	lastSave := time.Now()
 	//the second parameter must be TRUE here
 	err = saveBatchToStorage(handler,true)
 	if err != nil {
 		logutil.Errorf("saveBatchToStorage failed. err:%v",err)
 	}
+
+	fmt.Printf("----- lastSave %s\n",time.Since(lastSave))
+	pprof.StopCPUProfile()
+
+	//close something
+	closeLoadFile.Close()
+	closeProcessBlock.Close()
+	close(blockChannel)
+	blockPoolWithoutData.Release()
 
 	return result, nil
 }

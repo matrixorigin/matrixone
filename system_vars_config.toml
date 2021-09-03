@@ -293,10 +293,10 @@
 #	Access:	[file]
 #	DataType:	int64
 #	DomainType:	set
-#	Values:	[10000]
+#	Values:	[40000]
 #	Comment:	the count of rows in vector of batch in load data
 #	UpdateMode:	dynamic
-	batchSizeInLoadData = 10000
+	batchSizeInLoadData = 40000
 
 #	Name:	blockCountInLoadData
 #	Scope:	[global]

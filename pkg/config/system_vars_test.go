@@ -143,7 +143,7 @@ cubeDirPrefix= "./cube"
 prophetEmbedEtcdJoinAddr= "http://localhost:40000"
 maxReplicas=1
 lengthOfQueryPrinted=50
-batchSizeInLoadData=10000
+batchSizeInLoadData=40000
 blockCountInLoadData=20
 blockSizeInLoadData=4194304
 		
@@ -181,7 +181,7 @@ CubeDirPrefix: "./cube" ,
 ProphetEmbedEtcdJoinAddr: "http://localhost:40000" ,
 MaxReplicas:1,
 LengthOfQueryPrinted:50,
-BatchSizeInLoadData:10000,
+BatchSizeInLoadData:40000,
 BlockCountInLoadData:20,
 BlockSizeInLoadData:4194304,
 	
