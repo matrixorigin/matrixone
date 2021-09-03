@@ -20,6 +20,10 @@ const (
 	DefaultBlocksPerSegment = uint64(40)
 
 	DefaultCleanInterval = 5
+
+	DefaultBlockWriters     = uint16(8)
+	DefaultSegmentWriters   = uint16(4)
+	DefaultStatelessWorkers = uint16(1)
 )
 
 type IterOptions struct {
@@ -41,6 +45,12 @@ type MetaCfg struct {
 	SegmentMaxBlocks uint64 `toml:"segment-max-blocks"`
 }
 
+type SchedulerCfg struct {
+	BlockWriters     uint16 `toml:"block-writers"`
+	SegmentWriters   uint16 `toml:"segment-writers"`
+	StatelessWorkers uint16 `toml:"stateless-workers"`
+}
+
 type MetaCleanerCfg struct {
 	Interval time.Duration
 }
@@ -50,7 +60,8 @@ type Options struct {
 
 	Mu sync.RWMutex
 
-	Scheduler sched.Scheduler
+	Scheduler    sched.Scheduler
+	SchedulerCfg *SchedulerCfg `toml:"scheduler-cfg"`
 
 	Meta struct {
 		CKFactory *checkpointerFactory
@@ -73,6 +84,24 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o = &Options{}
 	}
 	o.EventListener.FillDefaults()
+
+	if o.SchedulerCfg == nil {
+		o.SchedulerCfg = &SchedulerCfg{
+			BlockWriters:     DefaultBlockWriters,
+			SegmentWriters:   DefaultSegmentWriters,
+			StatelessWorkers: DefaultStatelessWorkers,
+		}
+	} else {
+		if o.SchedulerCfg.BlockWriters == 0 {
+			o.SchedulerCfg.BlockWriters = DefaultBlockWriters
+		}
+		if o.SchedulerCfg.SegmentWriters == 0 {
+			o.SchedulerCfg.SegmentWriters = DefaultSegmentWriters
+		}
+		if o.SchedulerCfg.StatelessWorkers == 0 {
+			o.SchedulerCfg.StatelessWorkers = DefaultStatelessWorkers
+		}
+	}
 
 	if o.Meta.Info == nil {
 		metaCfg := &md.Configuration{
