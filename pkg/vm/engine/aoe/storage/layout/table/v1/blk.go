@@ -4,288 +4,164 @@ import (
 	"errors"
 	"fmt"
 	ro "matrixone/pkg/container/vector"
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/process"
-	// log "github.com/sirupsen/logrus"
 )
 
-type Block struct {
+type block struct {
 	common.BaseMvcc
-	common.SLLNode
+	baseBlock
 	data struct {
-		Columns  []col.IColumnBlock
-		Helper   map[string]int
-		AttrSize []uint64
+		cols  []col.IColumnBlock
+		sizes []uint64
 	}
-	Meta        *md.Block
-	MTBufMgr    bmgrif.IBufferManager
-	SSTBufMgr   bmgrif.IBufferManager
-	IndexHolder *index.BlockHolder
-	FsMgr       base.IManager
-	SegmentFile base.ISegmentFile
-	Segment     iface.ISegment
-	Type        base.BlockType
 }
 
-func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
-	blk := &Block{
-		Meta:      meta,
-		MTBufMgr:  host.GetMTBufMgr(),
-		SSTBufMgr: host.GetSSTBufMgr(),
-		FsMgr:     host.GetFsManager(),
-		Segment:   host,
-		SLLNode:   *common.NewSLLNode(nil),
+func newBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
+	blk := &block{
+		baseBlock: *newBaseBlock(host, meta),
 	}
-
-	blk.data.Columns = make([]col.IColumnBlock, 0)
-	blk.data.Helper = make(map[string]int)
+	blk.data.cols = make([]col.IColumnBlock, 0)
 	blk.OnZeroCB = blk.close
-
-	var blkType base.BlockType
-	if meta.DataState < md.FULL {
-		blkType = base.TRANSIENT_BLK
-	} else if host.GetType() == base.UNSORTED_SEG {
-		blkType = base.PERSISTENT_BLK
-	} else {
-		blkType = base.PERSISTENT_SORTED_BLK
-	}
-	blk.Type = blkType
-	indexHolder := host.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
-
-	blk.SegmentFile = host.GetSegmentFile()
-	blk.IndexHolder = indexHolder
 	blk.Ref()
-	err := blk.initColumns()
-	if err != nil {
+
+	if err := blk.initColumns(); err != nil {
 		return nil, err
 	}
-	blk.GetObject = func() interface{} {
-		return blk
-	}
-	blk.Pin = func(o interface{}) {
-		o.(*Block).Ref()
-	}
-	blk.Unpin = func(o interface{}) {
-		o.(*Block).Unref()
-	}
-	indexHolder.Init(blk.SegmentFile)
 
+	blk.GetObject = func() interface{} { return blk }
+	blk.Pin = func(o interface{}) { o.(iface.IBlock).Ref() }
+	blk.Unpin = func(o interface{}) { o.(iface.IBlock).Unref() }
+
+	if blk.indexholder != nil {
+		blk.indexholder.Init(blk.GetSegmentFile())
+	}
 	return blk, nil
 }
 
-func (blk *Block) initColumns() error {
-	blk.data.AttrSize = make([]uint64, 0)
-	for idx, colDef := range blk.Meta.Segment.Table.Schema.ColDefs {
+func (blk *block) initColumns() error {
+	blk.data.sizes = make([]uint64, 0)
+	for idx, _ := range blk.meta.Segment.Table.Schema.ColDefs {
 		blk.Ref()
 		colBlk := col.NewStdColumnBlock(blk, idx)
-		blk.data.Helper[colDef.Name] = len(blk.data.Columns)
-		blk.data.Columns = append(blk.data.Columns, colBlk)
-		if blk.Type >= base.PERSISTENT_BLK {
-			blk.data.AttrSize = append(blk.data.AttrSize, colBlk.Size())
+		blk.data.cols = append(blk.data.cols, colBlk)
+		if blk.typ >= base.PERSISTENT_BLK {
+			blk.data.sizes = append(blk.data.sizes, colBlk.Size())
 		}
 	}
 	return nil
 }
 
-func (blk *Block) GetType() base.BlockType {
-	return blk.Type
-}
-
-func (blk *Block) GetRowCount() uint64 {
-	return blk.Meta.GetCount()
-}
-
-func (blk *Block) Size(attr string) uint64 {
-	idx, ok := blk.data.Helper[attr]
-	if !ok {
-		panic("logic error")
-	}
-	if blk.Type >= base.PERSISTENT_BLK {
-		return blk.data.AttrSize[idx]
-	}
-	return blk.data.Columns[idx].Size()
-}
-
-func (blk *Block) GetSegmentedIndex() (id uint64, ok bool) {
-	if blk.Type == base.TRANSIENT_BLK {
-		return id, ok
-	}
-	return blk.Meta.GetAppliedIndex()
-}
-
-func (blk *Block) close() {
-	// panic(string(debug.Stack()))
-	if blk.IndexHolder != nil {
-		blk.IndexHolder.Unref()
-	}
-	for _, colBlk := range blk.data.Columns {
-		// log.Infof("destroy blk %d, col %d, refs %d", blk.Meta.ID, idx, colBlk.RefCount())
+func (blk *block) close() {
+	blk.baseBlock.release()
+	for _, colBlk := range blk.data.cols {
 		colBlk.Unref()
 	}
-
-	blk.SLLNode.ReleaseNextNode()
-
 	blk.OnVersionStale()
 }
 
-func (blk *Block) GetMTBufMgr() bmgrif.IBufferManager {
-	return blk.MTBufMgr
+func (blk *block) Size(attr string) uint64 {
+	idx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
+	if idx < 0 {
+		panic(fmt.Sprintf("Specified attr %s not found", attr))
+	}
+	if !blk.IsMutable() {
+		return blk.data.sizes[idx]
+	}
+	return blk.data.cols[idx].Size()
 }
 
-func (blk *Block) GetSSTBufMgr() bmgrif.IBufferManager {
-	return blk.SSTBufMgr
+func (blk *block) GetSegmentedIndex() (id uint64, ok bool) {
+	if blk.typ == base.TRANSIENT_BLK {
+		return id, ok
+	}
+	return blk.meta.GetAppliedIndex()
 }
 
-func (blk *Block) GetFsManager() base.IManager {
-	return blk.FsMgr
+func (blk *block) cloneWithUpgradeColumns(upgraded *block) {
+	for idx, colBlk := range blk.data.cols {
+		upgraded.Ref()
+		upgradedCol := colBlk.CloneWithUpgrade(upgraded)
+		upgraded.data.cols[idx] = upgradedCol
+		upgraded.data.sizes = append(upgraded.data.sizes, upgradedCol.Size())
+	}
 }
 
-func (blk *Block) GetIndexHolder() *index.BlockHolder {
-	blk.IndexHolder.Ref()
-	return blk.IndexHolder
-}
-
-func (blk *Block) GetMeta() *md.Block {
-	return blk.Meta
-}
-
-func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
-	if blk.Type == base.PERSISTENT_SORTED_BLK {
-		panic("logic error")
-	}
-	if meta.DataState != md.FULL {
-		panic(fmt.Sprintf("blk data state is %d", meta.DataState))
+func (blk *block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
+	newBase, err := blk.upgrade(host, meta)
+	if err != nil {
+		return nil, err
 	}
 
-	blkId := meta.AsCommonID().AsBlockID()
-	var (
-		newType base.BlockType
-	)
-	indexHolder := host.GetIndexHolder().StrongRefBlock(meta.ID)
-	newIndexHolder := false
+	upgraded := &block{
+		baseBlock: *newBase,
+	}
 
-	switch blk.Type {
-	case base.TRANSIENT_BLK:
-		newType = base.PERSISTENT_BLK
-		if indexHolder == nil {
-			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
-			newIndexHolder = true
-		} else if indexHolder.Type < newType {
-			indexHolder.Unref()
-			indexHolder = host.GetIndexHolder().UpgradeBlock(meta.ID, newType)
-			newIndexHolder = true
-		}
-	case base.PERSISTENT_BLK:
-		newType = base.PERSISTENT_SORTED_BLK
-		if indexHolder == nil {
-			indexHolder = host.GetIndexHolder().RegisterBlock(blkId, newType, nil)
-			newIndexHolder = true
-		} else if indexHolder.Type < newType {
-			indexHolder.Unref()
-			indexHolder = host.GetIndexHolder().UpgradeBlock(meta.ID, newType)
-			newIndexHolder = true
-		}
-	default:
-		panic("logic error")
+	upgraded.data.cols = make([]col.IColumnBlock, len(blk.data.cols))
+	blk.cloneWithUpgradeColumns(upgraded)
+
+	upgraded.OnZeroCB = upgraded.close
+
+	upgraded.Ref()
+
+	upgraded.GetObject = func() interface{} { return upgraded }
+	upgraded.Pin = func(o interface{}) { o.(iface.IBlock).Ref() }
+	upgraded.Unpin = func(o interface{}) { o.(iface.IBlock).Unref() }
+
+	if upgraded.indexholder != nil {
+		upgraded.indexholder.Init(upgraded.GetSegmentFile())
 	}
-	cloned := &Block{
-		Meta:        meta,
-		MTBufMgr:    blk.MTBufMgr,
-		SSTBufMgr:   blk.SSTBufMgr,
-		FsMgr:       blk.FsMgr,
-		IndexHolder: indexHolder,
-		Type:        newType,
-		SegmentFile: host.GetSegmentFile(),
-		Segment:     host,
-		SLLNode:     *common.NewSLLNode(nil),
-	}
-	cloned.data.Columns = make([]col.IColumnBlock, len(blk.data.Columns))
-	cloned.data.Helper = make(map[string]int)
-	blk.cloneWithUpgradeColumns(cloned)
-	cloned.OnZeroCB = cloned.close
-	cloned.Ref()
-	cloned.GetObject = func() interface{} {
-		return cloned
-	}
-	cloned.Pin = func(o interface{}) {
-		o.(*Block).Ref()
-	}
-	cloned.Unpin = func(o interface{}) {
-		o.(*Block).Unref()
-	}
-	if newIndexHolder {
-		indexHolder.Init(cloned.SegmentFile)
-	}
+
 	host.Unref()
-	return cloned, nil
+	return upgraded, nil
 }
 
-func (blk *Block) WeakRefSegment() iface.ISegment {
-	return blk.Segment
-}
-
-func (blk *Block) cloneWithUpgradeColumns(cloned *Block) {
-	for name, idx := range blk.data.Helper {
-		colBlk := blk.data.Columns[idx]
-		cloned.Ref()
-		clonedCol := colBlk.CloneWithUpgrade(cloned)
-		cloned.data.Helper[name] = idx
-		cloned.data.Columns[idx] = clonedCol
-		cloned.data.AttrSize = append(cloned.data.AttrSize, clonedCol.Size())
-	}
-}
-
-func (blk *Block) GetSegmentFile() base.ISegmentFile {
-	return blk.SegmentFile
-}
-
-func (blk *Block) String() string {
-	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(Refs=%d)", blk.Meta.ID, len(blk.data.Columns), blk.RefCount())
-	// for _, colBlk := range blk.data.Columns {
+func (blk *block) String() string {
+	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(Refs=%d)", blk.meta.ID, len(blk.data.cols), blk.RefCount())
+	// for _, colBlk := range blk.data.cols {
 	// 	s = fmt.Sprintf("%s\n\t%s", s, colBlk.String())
 	// }
 	return s
 }
 
-func (blk *Block) GetVectorWrapper(col int) (*vector.VectorWrapper, error) {
-	vec, err := blk.data.Columns[col].LoadVectorWrapper()
+func (blk *block) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
+	vec, err := blk.data.cols[attrid].LoadVectorWrapper()
 	if err != nil {
 		return nil, err
 	}
 	return vec, nil
 }
 
-func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
-	colIdx := blk.Meta.Segment.Table.Schema.GetColIdx(attr)
-	vec, err := blk.data.Columns[colIdx].ForceLoad(ref, proc)
+func (blk *block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
+	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
+	vec, err := blk.data.cols[colIdx].ForceLoad(ref, proc)
 	if err != nil {
 		return nil, err
 	}
 	return vec, nil
 }
 
-func (blk *Block) Prefetch(attr string) error {
-	colIdx := blk.Meta.Segment.Table.Schema.GetColIdx(attr)
+func (blk *block) Prefetch(attr string) error {
+	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
 		return errors.New("column not found")
 	}
-	return blk.data.Columns[colIdx].Prefetch()
+	return blk.data.cols[colIdx].Prefetch()
 }
 
-func (blk *Block) GetFullBatch() batch.IBatch {
-	vecs := make([]vector.IVector, len(blk.data.Columns))
-	attrs := make([]int, len(blk.data.Columns))
-	for idx, colBlk := range blk.data.Columns {
+func (blk *block) GetFullBatch() batch.IBatch {
+	vecs := make([]vector.IVector, len(blk.data.cols))
+	attrs := make([]int, len(blk.data.cols))
+	for idx, colBlk := range blk.data.cols {
 		vecs[idx] = colBlk.GetVector()
 		attrs[idx] = colBlk.GetColIdx()
 	}
@@ -293,26 +169,14 @@ func (blk *Block) GetFullBatch() batch.IBatch {
 	return wrapper.NewBatch(blk, attrs, vecs)
 }
 
-func (blk *Block) GetBatch(attrs []int) dbi.IBatchReader {
+func (blk *block) GetBatch(attrs []int) dbi.IBatchReader {
 	// TODO: check attrs validity
 	vecs := make([]vector.IVector, len(attrs))
 	clonedAttrs := make([]int, len(attrs))
 	for idx, attr := range attrs {
 		clonedAttrs[idx] = attr
-		vecs[idx] = blk.data.Columns[attr].GetVector()
+		vecs[idx] = blk.data.cols[attr].GetVector()
 	}
 	blk.Ref()
 	return wrapper.NewBatch(blk, attrs, vecs).(dbi.IBatchReader)
-}
-
-func (blk *Block) SetNext(next iface.IBlock) {
-	blk.SLLNode.SetNextNode(next)
-}
-
-func (blk *Block) GetNext() iface.IBlock {
-	r := blk.SLLNode.GetNextNode()
-	if r == nil {
-		return nil
-	}
-	return r.(iface.IBlock)
 }

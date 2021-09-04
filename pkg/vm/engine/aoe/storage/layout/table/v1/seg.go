@@ -257,7 +257,7 @@ func (seg *Segment) String() string {
 		for prev != nil {
 			s = fmt.Sprintf("%s V%d", s, v)
 			v++
-			prev = prev.(*Block).GetPrevVersion()
+			prev = prev.(iface.IBlock).GetPrevVersion()
 		}
 		s = fmt.Sprintf("%s V%d", s, v)
 	}
@@ -265,7 +265,7 @@ func (seg *Segment) String() string {
 }
 
 func (seg *Segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
-	blk, err = NewBlock(seg, blkMeta)
+	blk, err = newBlock(seg, blkMeta)
 	if err != nil {
 		return nil, err
 	}
