@@ -12,7 +12,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"time"
 
 	"github.com/matrixorigin/matrixcube/aware"

@@ -7,23 +7,22 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 	"sync/atomic"
 )
 
 type Segment struct {
-	common.RefHelper
+	common.SLLNode
 	Type base.SegmentType
 	tree struct {
-		sync.RWMutex
+		*sync.RWMutex
 		Blocks   []iface.IBlock
 		Helper   map[uint64]int
 		BlockIds []uint64
 		BlockCnt uint32
 		AttrSize map[string]uint64
-		Next     iface.ISegment
 	}
 	MTBufMgr    bmgrif.IBufferManager
 	SSTBufMgr   bmgrif.IBufferManager
@@ -39,12 +38,14 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	if meta.DataState == md.SORTED {
 		segType = base.SORTED_SEG
 	}
+	mu := new(sync.RWMutex)
 	seg := &Segment{
 		Type:      segType,
 		MTBufMgr:  host.GetMTBufMgr(),
 		SSTBufMgr: host.GetSSTBufMgr(),
 		FsMgr:     host.GetFsManager(),
 		Meta:      meta,
+		SLLNode:   *common.NewSLLNode(mu),
 	}
 
 	segId := meta.AsCommonID().AsSegmentID()
@@ -74,6 +75,7 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 		seg.IndexHolder.Init(segFile)
 	}
 
+	seg.tree.RWMutex = mu
 	seg.tree.Blocks = make([]iface.IBlock, 0)
 	seg.tree.Helper = make(map[uint64]int)
 	seg.tree.BlockIds = make([]uint64, 0)
@@ -192,10 +194,8 @@ func (seg *Segment) close() {
 		blk.Unref()
 		// log.Infof("blk refs=%d", blk.RefCount())
 	}
-	if seg.tree.Next != nil {
-		seg.tree.Next.Unref()
-		seg.tree.Next = nil
-	}
+	seg.SLLNode.ReleaseNextNode()
+
 	if seg.SegmentFile != nil {
 		seg.SegmentFile.Unref()
 	}
@@ -207,22 +207,15 @@ func (seg *Segment) close() {
 }
 
 func (seg *Segment) SetNext(next iface.ISegment) {
-	seg.tree.Lock()
-	defer seg.tree.Unlock()
-	if seg.tree.Next != nil {
-		seg.tree.Next.Unref()
-	}
-	seg.tree.Next = next
+	seg.SLLNode.SetNextNode(next)
 }
 
 func (seg *Segment) GetNext() iface.ISegment {
-	seg.tree.RLock()
-	if seg.tree.Next != nil {
-		seg.tree.Next.Ref()
+	r := seg.SLLNode.GetNextNode()
+	if r == nil {
+		return nil
 	}
-	r := seg.tree.Next
-	seg.tree.RUnlock()
-	return r
+	return r.(iface.ISegment)
 }
 
 func (seg *Segment) GetMeta() *md.Segment {
@@ -316,13 +309,16 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	if seg.Type != base.UNSORTED_SEG {
 		panic("logic error")
 	}
+	mu := new(sync.RWMutex)
 	cloned := &Segment{
 		Type:      base.SORTED_SEG,
 		MTBufMgr:  seg.MTBufMgr,
 		SSTBufMgr: seg.SSTBufMgr,
 		FsMgr:     seg.FsMgr,
 		Meta:      meta,
+		SLLNode:   *common.NewSLLNode(mu),
 	}
+	cloned.tree.RWMutex = mu
 	cloned.tree.Blocks = make([]iface.IBlock, 0)
 	cloned.tree.Helper = make(map[uint64]int)
 	cloned.tree.BlockIds = make([]uint64, 0)

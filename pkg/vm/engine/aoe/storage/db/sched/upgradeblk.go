@@ -1,10 +1,9 @@
 package sched
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
-	// log "github.com/sirupsen/logrus"
 )
 
 type upgradeBlkEvent struct {

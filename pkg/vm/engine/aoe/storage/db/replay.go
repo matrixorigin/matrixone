@@ -7,7 +7,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path"

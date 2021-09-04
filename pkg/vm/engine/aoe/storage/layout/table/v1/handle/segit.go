@@ -1,49 +1,57 @@
 package handle
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle/base"
-	// log "github.com/sirupsen/logrus"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 )
 
 var (
-	_ base.ISegmentIterator = (*SegmentIt)(nil)
+	EmptySegmentIt = new(SegmentIt)
 )
 
-var EmptySegmentIt = &SegmentIt{}
+var (
+	_ dbi.ISegmentIt = (*SegmentIt)(nil)
+)
 
 type SegmentIt struct {
-	Handle *SegmentsHandle
-	Pos    int
+	OnCloseCB CloseSegmentItCB
+	Snapshot  *Snapshot
+	Pos       int
 }
 
-func (ssit *SegmentIt) Valid() bool {
-	if ssit.Handle == nil {
+func NewSegmentIt(ss *Snapshot) dbi.ISegmentIt {
+	it := &SegmentIt{
+		Snapshot:  ss,
+		OnCloseCB: ss.removeIt,
+	}
+	return it
+}
+
+func (it *SegmentIt) Next() {
+	it.Pos++
+}
+
+func (it *SegmentIt) Valid() bool {
+	if it.Snapshot == nil {
 		return false
 	}
-	if ssit.Pos >= len(ssit.Handle.IDS) {
+	if it.Snapshot.Ids == nil {
+		return false
+	}
+	if it.Pos >= len(it.Snapshot.Ids) {
 		return false
 	}
 	return true
 }
 
-func (ssit *SegmentIt) Next() {
-	ssit.Pos++
+func (it *SegmentIt) GetHandle() dbi.ISegment {
+	seg := it.Snapshot.GetSegment(it.Snapshot.Ids[it.Pos])
+	return seg
 }
 
-func (ssit *SegmentIt) Close() error {
-	// if ssit.Handle != nil {
-	// 	ssit.Handle.Close
-	// }
-	return nil
-}
-
-func (ssit *SegmentIt) GetSegmentHandle() base.ISegmentHandle {
-	h := segHandlePool.Get().(*SegmentHandle)
-	h.ID = ssit.Handle.IDS[ssit.Pos]
-	for idx := range ssit.Handle.ColIdxes {
-		colData := ssit.Handle.TableData.GetCollumn(idx)
-		h.Cols = append(h.Cols, colData.GetSegment(h.ID))
+func (it *SegmentIt) Close() error {
+	if it.OnCloseCB != nil {
+		it.OnCloseCB(it)
+		it.OnCloseCB = nil
 	}
-	h.IndexHolder = h.Cols[0].GetIndexHolder()
-	return h
+	return nil
 }

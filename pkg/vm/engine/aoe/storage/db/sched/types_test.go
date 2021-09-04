@@ -5,7 +5,7 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	tbl "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 	"testing"
@@ -27,9 +27,9 @@ func TestUpgradeBlk(t *testing.T) {
 
 	info := md.MockInfo(&opts.Mu, row_count, blk_cnt)
 	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
-	tableData := tbl.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
-	segIds := tbl.MockSegments(tableMeta, tableData)
-	tables := tbl.NewTables(new(sync.RWMutex))
+	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
+	segIds := table.MockSegments(tableMeta, tableData)
+	tables := table.NewTables(new(sync.RWMutex))
 	opts.Scheduler = NewScheduler(opts, tables)
 
 	err := tables.CreateTable(tableData)
@@ -94,10 +94,10 @@ func TestUpgradeSeg(t *testing.T) {
 
 	info := md.MockInfo(&opts.Mu, row_count, blk_cnt)
 	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
-	tableData := tbl.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
-	segIds := tbl.MockSegments(tableMeta, tableData)
+	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
+	segIds := table.MockSegments(tableMeta, tableData)
 
-	tables := tbl.NewTables(new(sync.RWMutex))
+	tables := table.NewTables(new(sync.RWMutex))
 	opts.Scheduler = NewScheduler(opts, tables)
 
 	err := tables.CreateTable(tableData)
