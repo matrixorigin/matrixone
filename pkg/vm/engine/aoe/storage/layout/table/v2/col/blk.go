@@ -13,7 +13,6 @@ import (
 	"matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 type IColumnBlock interface {
@@ -28,7 +27,6 @@ type IColumnBlock interface {
 	GetColIdx() int
 	GetSegmentFile() base.ISegmentFile
 	CloneWithUpgrade(iface.IBlock) IColumnBlock
-	// EvalFilter(*index.FilterCtx) error
 	String() string
 	Size() uint64
 	GetVector() vector.IVector
@@ -41,17 +39,12 @@ type IColumnBlock interface {
 type ColumnBlock struct {
 	sync.RWMutex
 	common.RefHelper
-	// Next        IColumnBlock
 	ColIdx      int
 	Meta        *md.Block
 	SegmentFile base.ISegmentFile
 	IndexHolder *index.BlockHolder
 	Type        base.BlockType
 }
-
-// func (blk *ColumnBlock) EvalFilter(ctx *index.FilterCtx) error {
-// 	return blk.IndexHolder.EvalFilter(blk.ColIdx, ctx)
-// }
 
 func (blk *ColumnBlock) GetSegmentFile() base.ISegmentFile {
 	return blk.SegmentFile
@@ -80,25 +73,6 @@ func (blk *ColumnBlock) GetType() base.BlockType {
 func (blk *ColumnBlock) GetRowCount() uint64 {
 	return atomic.LoadUint64(&blk.Meta.Count)
 }
-
-// func (blk *ColumnBlock) SetNext(next IColumnBlock) {
-// 	blk.Lock()
-// 	defer blk.Unlock()
-// 	if blk.Next != nil {
-// 		blk.Next.UnRef()
-// 	}
-// 	blk.Next = next
-// }
-
-// func (blk *ColumnBlock) GetNext() IColumnBlock {
-// 	blk.RLock()
-// 	if blk.Next != nil {
-// 		blk.Next.Ref()
-// 	}
-// 	r := blk.Next
-// 	blk.RUnlock()
-// 	return r
-// }
 
 func (blk *ColumnBlock) GetID() uint64 {
 	return blk.Meta.ID

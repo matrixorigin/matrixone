@@ -16,19 +16,16 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/process"
-	"sync"
 	// log "github.com/sirupsen/logrus"
 )
 
 type Block struct {
 	common.BaseMvcc
-	common.RefHelper
+	common.SLLNode
 	data struct {
-		sync.RWMutex
 		Columns  []col.IColumnBlock
 		Helper   map[string]int
 		AttrSize []uint64
-		Next     iface.IBlock
 	}
 	Meta        *md.Block
 	MTBufMgr    bmgrif.IBufferManager
@@ -47,6 +44,7 @@ func NewBlock(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
 		SSTBufMgr: host.GetSSTBufMgr(),
 		FsMgr:     host.GetFsManager(),
 		Segment:   host,
+		SLLNode:   *common.NewSLLNode(nil),
 	}
 
 	blk.data.Columns = make([]col.IColumnBlock, 0)
@@ -134,10 +132,8 @@ func (blk *Block) close() {
 		// log.Infof("destroy blk %d, col %d, refs %d", blk.Meta.ID, idx, colBlk.RefCount())
 		colBlk.Unref()
 	}
-	if blk.data.Next != nil {
-		blk.data.Next.Unref()
-		blk.data.Next = nil
-	}
+
+	blk.SLLNode.ReleaseNextNode()
 
 	blk.OnVersionStale()
 }
@@ -211,6 +207,7 @@ func (blk *Block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		Type:        newType,
 		SegmentFile: host.GetSegmentFile(),
 		Segment:     host,
+		SLLNode:     *common.NewSLLNode(nil),
 	}
 	cloned.data.Columns = make([]col.IColumnBlock, len(blk.data.Columns))
 	cloned.data.Helper = make(map[string]int)
@@ -309,20 +306,13 @@ func (blk *Block) GetBatch(attrs []int) dbi.IBatchReader {
 }
 
 func (blk *Block) SetNext(next iface.IBlock) {
-	blk.data.Lock()
-	defer blk.data.Unlock()
-	if blk.data.Next != nil {
-		blk.data.Next.Unref()
-	}
-	blk.data.Next = next
+	blk.SLLNode.SetNextNode(next)
 }
 
 func (blk *Block) GetNext() iface.IBlock {
-	blk.data.RLock()
-	if blk.data.Next != nil {
-		blk.data.Next.Ref()
+	r := blk.SLLNode.GetNextNode()
+	if r == nil {
+		return nil
 	}
-	r := blk.data.Next
-	blk.data.RUnlock()
-	return r
+	return r.(iface.IBlock)
 }
