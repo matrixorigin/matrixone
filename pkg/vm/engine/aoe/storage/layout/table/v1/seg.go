@@ -7,7 +7,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 	"sync/atomic"

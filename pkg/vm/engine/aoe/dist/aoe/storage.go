@@ -6,7 +6,7 @@ import (
 	store "matrixone/pkg/vm/engine/aoe/storage"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"os"
 	"sync/atomic"
 

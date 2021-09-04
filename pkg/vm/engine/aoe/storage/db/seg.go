@@ -3,7 +3,7 @@ package db
 import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/process"
 	"sync/atomic"
 )

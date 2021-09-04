@@ -5,7 +5,7 @@ import (
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"sync/atomic"

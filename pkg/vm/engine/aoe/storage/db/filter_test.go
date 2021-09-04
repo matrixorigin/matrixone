@@ -8,7 +8,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	table2 "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	table2 "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"strconv"

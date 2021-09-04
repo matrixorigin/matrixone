@@ -3,11 +3,10 @@ package memtable
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"sync"
-	// log "github.com/sirupsen/logrus"
 )
 
 type Manager struct {

@@ -1,50 +1,48 @@
 package handle
 
 import (
-	// log "github.com/sirupsen/logrus"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle/base"
-	"sync"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 )
 
 var (
-	// shAllocTimes  = 0
-	segHandlePool = sync.Pool{
-		New: func() interface{} {
-			// shAllocTimes++
-			// log.Infof("Alloc seg handle: %d", shAllocTimes)
-			h := new(SegmentHandle)
-			h.Cols = make([]col.IColumnSegment, 0)
-			return h
-		},
-	}
+	_ dbi.ISegment = (*Segment)(nil)
 )
 
-type SegmentHandle struct {
-	ID          common.ID
-	Cols        []col.IColumnSegment
-	IndexHolder *index.SegmentHolder
+type Segment struct {
+	Data iface.ISegment
+	Attr []int
 }
 
-func (sh *SegmentHandle) Close() error {
-	if shh := sh; shh != nil {
-		for _, col := range shh.Cols {
-			col.UnRef()
-		}
-		shh.Cols = shh.Cols[:0]
-		segHandlePool.Put(shh)
-		sh = nil
-	}
-	return nil
+func (seg *Segment) BlockIds() []uint64 {
+	return seg.Data.BlockIds()
 }
 
-func (sh *SegmentHandle) NewIterator() base.IBlockIterator {
-	buf := itBlkAllocPool.Get().(*itBlkAlloc)
-	buf.It.Alloc = buf
-	for _, colSeg := range sh.Cols {
-		buf.It.Cols = append(buf.It.Cols, colSeg.GetBlockRoot())
+func (seg *Segment) GetID() uint64 {
+	return seg.Data.GetMeta().ID
+}
+
+func (seg *Segment) GetTableID() uint64 {
+	return seg.Data.GetMeta().Table.ID
+}
+
+func (seg *Segment) NewIt() dbi.IBlockIt {
+	it := &BlockIt{
+		Segment: seg,
+		Ids:     seg.Data.BlockIds(),
 	}
-	return &buf.It
+	return it
+}
+
+func (seg *Segment) GetBlock(id uint64) dbi.IBlock {
+	data := seg.Data.WeakRefBlock(id)
+	if data == nil {
+		return nil
+	}
+	blk := &Block{
+		Id: id,
+		// Data: data,
+		Host: seg,
+	}
+	return blk
 }
