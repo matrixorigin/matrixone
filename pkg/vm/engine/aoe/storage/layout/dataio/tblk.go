@@ -159,10 +159,10 @@ func (f *TransientBlockFile) Sync(data batch.IBatch, meta *md.Block, dir string)
 	getter := tblkFileGetter{version: version}
 	writer.SetFileGetter(getter.Getter)
 	writer.SetPreExecutor(func() {
-		logutil.S().Infof(" %s | TransientBlock | Flushing", writer.GetFileName())
+		logutil.Infof(" %s | TransientBlock | Flushing", writer.GetFileName())
 	})
 	writer.SetPostExecutor(func() {
-		logutil.S().Infof(" %s | TransientBlock | Flushed", writer.GetFileName())
+		logutil.Infof(" %s | TransientBlock | Flushed", writer.GetFileName())
 	})
 	if err := writer.Execute(); err != nil {
 		return err
@@ -171,25 +171,6 @@ func (f *TransientBlockFile) Sync(data batch.IBatch, meta *md.Block, dir string)
 	f.commit(bf, uint32(data.Length()))
 	return nil
 }
-
-// func (f *TransientBlockFile) Sync(data []*gvector.Vector, meta *md.Block, dir string) error {
-// 	writer := NewBlockWriter(data, meta, dir)
-// 	version := f.nextVersion()
-// 	getter := tblkFileGetter{version: version}
-// 	writer.SetFileGetter(getter.Getter)
-// 	writer.SetPreExecutor(func() {
-// 		logutil.S().Infof(" %s | TransientBlock | Flushing", writer.GetFileName())
-// 	})
-// 	writer.SetPostExecutor(func() {
-// 		logutil.S().Infof(" %s | TransientBlock | Flushed", writer.GetFileName())
-// 	})
-// 	if err := writer.Execute(); err != nil {
-// 		return err
-// 	}
-// 	bf := newVersionBlockFile(version, f.host, f.id)
-// 	f.commit(bf, uint32(data[0].Length()))
-// 	return nil
-// }
 
 func (f *TransientBlockFile) commit(bf *versionBlockFile, pos uint32) {
 	f.mu.Lock()
