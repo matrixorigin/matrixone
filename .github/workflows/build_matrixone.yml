@@ -28,32 +28,18 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
       - uses: actions/checkout@v2
       
-      - name: Pre-configue build environment
-        run: |
-          echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
-          sudo yum -y install dstat
-          SRS_LOG="$HOME/stage/srs-lnx.log"
-          nohup dstat -tcmdngspy 2 > "$SRS_LOG" 2>&1 &
-      - name: Install compiler Go 
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.17
-
       - name: Build
         run: |
           cd $GITHUB_WORKSPACE && make clean
           make config && make build
-          if [[ 'schedule' == ${{ github.event_name }} ]]; then
-            make test
-          else
-            make test SKIP_TEST="race"
-          fi
-          make bvt 
-          
-      - name: Show system resource statistics
-        if: ${{ always() }}
+
+      - name: Run UT
         run: |
-          SRS_LOG="$HOME/stage/srs-lnx.log"
-          if [ -f "$SRS_LOG" ]; then
-            cat "$SRS_LOG"
+          if [[ 'schedule' == ${{ github.event_name }} ]]; then
+            make ut 
+          else
+            make ut SKIP_TEST="race"
           fi
+      - name: Run BVT
+        run: |
+          make bvt 

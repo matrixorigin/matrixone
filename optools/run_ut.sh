@@ -7,7 +7,7 @@
 ###################################################################
 
 function usage() {
-	echo "Usage:"
+    echo "Usage:"
     echo "./run_unit_test.sh VetTestReportName UnitTestReportName SkipTests"
     echo ""
     echo "Options:"
@@ -89,6 +89,8 @@ VET_REPORT=$1
 UT_REPORT=$2
 SKIP_TESTS=$3
 
+source $HOME/.bash_profile
+
 BUILD_WKS="$(pwd)/.."
 BUILD_LOGS="$BUILD_WKS/logs"
 UT_TIMEOUT=15
@@ -103,11 +105,11 @@ cd $BUILD_WKS
 [[ -d $BUILD_LOGS ]] || mkdir $BUILD_LOGS
 
 msl
-echo "# [Build workspace]: $BUILD_WKS"
-echo "# [Go vet report]: $VET_RESULT"
-echo "# [Unit test report]: $UT_RESULT"
-echo "# [UT timeout]: $UT_TIMEOUT"
-echo "# [Skipped cases]: $SKIP_TESTS"
+echo "# Build workspace:  $BUILD_WKS"
+echo "# Unit test report: $UT_RESULT"
+echo "# Vet report:    $VET_RESULT"
+echo "# Skipped cases:    $SKIP_TESTS"
+echo "# UT timeout:       $UT_TIMEOUT"
 msl
 
 run_vet

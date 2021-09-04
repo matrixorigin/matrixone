@@ -32,16 +32,16 @@ debug: cmd/db-server/main.go
 
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
-.PHONY: test
-test:
+.PHONY: ut 
+ut:
 	$(info >>> Running vet and UT)
-	@cd optools && ./run_unit_test.sh $(VET_REPORT) $(UT_REPORT) $(SKIP_TEST)
+	@cd optools && ./run_ut.sh $(VET_REPORT) $(UT_REPORT) $(SKIP_TEST)
 
 # Running build verification tests
 .PHONY: bvt
 bvt: mo-server
 	$(info >>> Running BVT)
-	@cd optools && ./run_bvt.sh
+	@cd optools && timeout 30m ./run_bvt.sh BVT True
 
 # Tear down
 .PHONY: clean
