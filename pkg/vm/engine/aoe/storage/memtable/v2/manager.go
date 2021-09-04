@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 	engine "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/memtable/v2/base"
 	mbase "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync"
