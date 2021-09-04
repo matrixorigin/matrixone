@@ -318,6 +318,16 @@
 #	UpdateMode:	dynamic
 	blockSizeInLoadData = 4194304
 
+#	Name:	loadDataParserType
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[0 1]
+#	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten
+#	UpdateMode:	dynamic
+	loadDataParserType = 0
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

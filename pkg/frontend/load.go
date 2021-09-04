@@ -372,6 +372,11 @@ type ParseLineHandler struct {
 
 	//parsed lines, fields, partial field, skipped bytes
 	lineArray [][][]byte
+	capacityOfLineAarray int
+	//index of line in line array
+	lineIdx int
+	colIdx int
+
 	fieldsArray [][]byte
 	fieldData []byte
 	skipBytes []byte
@@ -401,6 +406,21 @@ type ParseLineHandler struct {
 
 	writeBatch time.Duration
 	resetBatch time.Duration
+
+	prefix time.Duration
+	skip_bytes time.Duration
+
+
+	process_field time.Duration
+	split_field time.Duration
+	split_before_loop time.Duration
+	wait_loop time.Duration
+	handler_get time.Duration
+	wait_switch time.Duration
+	field_first_byte time.Duration
+	field_enclosed time.Duration
+	field_without time.Duration
+	field_skip_bytes time.Duration
 }
 
 func (plh *ParseLineHandler) Status() LINE_STATE {
@@ -421,11 +441,111 @@ func (plh *ParseLineHandler) ClearLineArray() {
 	}
 }
 
+func (plh *ParseLineHandler) CountOfLines () int {
+	return plh.lineIdx
+}
+
+//drop ignored lines
+func (plh *ParseLineHandler)IgnoreLine() bool {
+	return plh.lineCount < plh.load.IgnoredLines
+}
+
+func (plh *ParseLineHandler) PrintLastLine(pre string)  {
+	fmt.Printf("%s",pre)
+	for i := 0; i < plh.colIdx; i++ {
+		fmt.Printf("[%d %v] ",i,string(plh.lineArray[plh.lineIdx][i]))
+	}
+	fmt.Printf("\n")
+}
+
+func (plh *ParseLineHandler) PrintLineArray(pre string)  {
+	fmt.Printf("len %d %s\n",plh.CountOfLines(),pre)
+	for i := 0; i < plh.lineIdx; i++ {
+		for j := 0; j < len(plh.lineArray[i]); j++ {
+			fmt.Printf("[%d %d %v] ",i,j,string(plh.lineArray[i][j]))
+		}
+		fmt.Printf("\n")
+	}
+
+	plh.PrintLastLine("")
+}
+
+func (plh *ParseLineHandler) AppendField(field []byte) {
+	if plh.IgnoreLine() {
+		return
+	}
+	//fmt.Printf("-[%v][%s] \n",field,string(field))
+	if plh.lineIdx >= len(plh.lineArray) {
+		plh.lineArray = append(plh.lineArray,nil)
+	}
+
+	if plh.colIdx >= len(plh.lineArray[plh.lineIdx]) {
+		dst := make([]byte,len(field))
+		dst = append(dst[:0],field...)
+		plh.lineArray[plh.lineIdx] = append(plh.lineArray[plh.lineIdx],dst)
+		plh.colIdx = len(plh.lineArray[plh.lineIdx])
+	}else{
+		dst := plh.lineArray[plh.lineIdx][plh.colIdx]
+		if field == nil {
+			dst = dst[:0]
+		}else {
+			dst = dst[:0]
+			dst = append(dst,field...)
+		}
+		plh.lineArray[plh.lineIdx][plh.colIdx] = dst
+		plh.colIdx++
+	}
+	//fmt.Printf("+[%v][%s] \n",
+	//	plh.lineArray[plh.lineIdx][plh.colIdx-1],
+	//	string(plh.lineArray[plh.lineIdx][plh.colIdx-1]))
+	//plh.PrintLineArray("===>")
+}
+
+func (plh *ParseLineHandler) ResetLineArray(){
+	plh.lineIdx=0
+	plh.colIdx=0
+	//for i := 0; i < plh.capacityOfLineAarray; i++ {
+	//	plh.lineArray = plh.lineArray[:0]
+	//}
+}
+
+func (plh *ParseLineHandler) Newline() error{
+	if plh.IgnoreLine() {
+		plh.lineCount++
+		return nil
+	}
+
+	plh.lineArray[plh.lineIdx] = plh.lineArray[plh.lineIdx][:plh.colIdx]
+
+	plh.lineCount++
+	plh.lineIdx++
+	plh.colIdx=0
+
+	//line array is full, save it to the storage
+	if plh.CountOfLines() == plh.capacityOfLineAarray {
+		//fmt.Printf("-----newline linecount %d lineidx %d cap %d\n",
+		//	plh.lineCount,plh.lineIdx,plh.capacityOfLineAarray)
+		//fmt.Printf("-----\n")
+		err := saveParsedLinesToBatchImprove(plh, false)
+		if err != nil{
+			return err
+		}
+		plh.ResetLineArray()
+	}
+
+	//plh.PrintLineArray(">>>>")
+	return nil
+}
+
 /*
 read next byte.
 readidx changes in the block.
  */
 func (plh *ParseLineHandler) Get() (bool,byte) {
+	//wait_a := time.Now()
+	//defer func() {
+	//	plh.handler_get += time.Since(wait_a)
+	//}()
 	popCnt := 0
 	for _, pBlk := range plh.partialBlocks {
 		if pBlk.GetDataLen() == 0{
@@ -651,6 +771,10 @@ func handleTerminatedBy(handler *ParseLineHandler,fieldData []byte,fieldTerminat
 split blocks into fields
  */
 func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byte) {
+	wait_split := time.Now()
+	defer func() {
+		handler.split_field += time.Since(wait_split)
+	}()
 	if !(handler.Status() == LINE_STATE_PROCESS_FIELD_FIRST_BYTE ||
 		handler.Status() == LINE_STATE_PROCESS_FIELD_ENCLOSED ||
 		handler.Status() == LINE_STATE_PROCESS_FIELD_WITHOUT_ENCLOSED ||
@@ -669,6 +793,9 @@ func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byt
 		return nil,nil,nil
 	}
 
+	handler.split_before_loop += time.Since(wait_split)
+
+	wait_loop := time.Now()
 	/*
 	reading bytes across blocks
 	step 1 : read a byte
@@ -687,6 +814,7 @@ func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byt
 			break
 		}
 
+		wait_switch := time.Now()
 		switch handler.Status() {
 		case LINE_STATE_PROCESS_FIELD_FIRST_BYTE://first byte
 			//if fieldData != nil {
@@ -694,6 +822,7 @@ func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byt
 			//	fieldsArray = append(fieldsArray,fieldData)
 			//	fieldData = nil
 			//}
+			wait_a := time.Now()
 			if d == fields.EnclosedBy {//first byte == "ENCLOSED BY"
 				//drop first byte
 				handler.SwitchStatusTo(LINE_STATE_PROCESS_FIELD_ENCLOSED)
@@ -725,7 +854,9 @@ func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byt
 					}
 				}
 			}
+			handler.field_first_byte += time.Since(wait_a)
 		case LINE_STATE_PROCESS_FIELD_SKIP_BYTES:
+			wait_a := time.Now()
 			skipBytes = append(skipBytes,d)
 			found := NO_FOUND
 			found,_ = handleTerminatedBy(handler,skipBytes,fields.Terminated,lines.TerminatedBy)
@@ -755,7 +886,9 @@ func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byt
 				}
 				skipBytes = nil
 			}
+			handler.field_skip_bytes += time.Since(wait_a)
 		case LINE_STATE_PROCESS_FIELD_ENCLOSED://within "ENCLOSED BY"
+			wait_a := time.Now()
 			//check escape
 			if d == fields.EscapedBy {//escape characters
 				ok, nextByte := handler.Get()
@@ -799,7 +932,9 @@ func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byt
 			}else{//normal character
 				fieldData = append(fieldData,d)
 			}
+			handler.field_enclosed += time.Since(wait_a)
 		case LINE_STATE_PROCESS_FIELD_WITHOUT_ENCLOSED://without "ENCLOSED BY"
+			wait_a := time.Now()
 			/*
 			anything excludes "ESCAPED BY" and "TERMINATED BY" are bytes of field.
 			 */
@@ -851,7 +986,9 @@ func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byt
 					fieldData = nil
 				}
 			}
+			handler.field_without += time.Since(wait_a)
 		}
+		handler.wait_switch += time.Since(wait_switch)
 	}
 
 	//do not forget the last field
@@ -864,7 +1001,241 @@ func splitFields(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byt
 	handler.fieldsArray = fieldsArray
 	handler.fieldData = fieldData
 	handler.skipBytes = skipBytes
+	handler.wait_loop += time.Since(wait_loop)
 	return handler.lineArray,handler.fieldsArray,handler.fieldData
+}
+
+/*
+split blocks into fields
+*/
+func splitFieldsImproved(handler *ParseLineHandler,blk *Block)([][][]byte,[][]byte,[]byte,error) {
+	wait_split := time.Now()
+	defer func() {
+		handler.split_field += time.Since(wait_split)
+	}()
+	if !(handler.Status() == LINE_STATE_PROCESS_FIELD_FIRST_BYTE ||
+		handler.Status() == LINE_STATE_PROCESS_FIELD_ENCLOSED ||
+		handler.Status() == LINE_STATE_PROCESS_FIELD_WITHOUT_ENCLOSED ||
+		handler.Status() == LINE_STATE_PROCESS_FIELD_SKIP_BYTES) {
+		return nil,nil,nil,nil
+	}
+	fields := handler.fields
+	lines := handler.lines
+
+	if blk != nil {
+		handler.PushBlock(blk)
+	}
+
+	dataLen := handler.GetDataLenInPartialBlocks()
+	if dataLen == 0{
+		return nil,nil,nil,nil
+	}
+
+	handler.split_before_loop += time.Since(wait_split)
+
+	wait_loop := time.Now()
+	/*
+		reading bytes across blocks
+		step 1 : read a byte
+		step 2 : if the byte == "ENCLOSED BY", then anything behind it and before next
+			"ENCLOSED BY" is a field.
+		step 3 : if the byte != "ENCLOSED BY", then anything includes it ,behind it and before
+			next "ENCLOSED BY" is a field.
+	*/
+	//lineArray := handler.lineArray
+	fieldsArray := handler.fieldsArray
+	fieldData := handler.fieldData
+	skipBytes := handler.skipBytes
+
+	var err error
+	for  {
+		ok,d := handler.Get()
+		if !ok {
+			break
+		}
+		//wait_switch := time.Now()
+		if d == fields.EnclosedBy {
+			//wait_a := time.Now()
+			//field started with "ENCLOSED BY"
+			//drop first "ENCLOSED BY" byte
+			for  {
+				ok,d = handler.Get()
+				if !ok {
+					break
+				}
+
+				if d == fields.EscapedBy {//escape characters
+					ok, nextByte := handler.Get()
+					if !ok {
+						break
+					}
+					switch nextByte {
+					case fields.EnclosedBy://escape "ESCAPED BY" "ENCLOSED BY"
+						fieldData = append(fieldData,nextByte)
+					case fields.EscapedBy://escape "ESCAPED BY" "ESCAPED BY"
+						fieldData = append(fieldData,nextByte)
+					case 0://escape "ESCAPED BY" 0
+						fieldData = append(fieldData,byte(0))
+					case 'b'://escape "ESCAPED BY" b
+						fieldData = append(fieldData,byte(8))
+					case 'n'://escape "ESCAPED BY" n
+						fieldData = append(fieldData,byte(10))
+					case 'r'://escape "ESCAPED BY" r
+						fieldData = append(fieldData,byte(13))
+					case 't'://escape "ESCAPED BY" t
+						fieldData = append(fieldData,byte(9))
+					case 'Z'://escape "ESCAPED BY" Z
+						fieldData = append(fieldData,byte(26))
+					case 'N'://escape "ESCAPED BY" N -> NULL
+						fieldData = append(fieldData,'N','U','L','L')
+					default:
+						logutil.Errorf("unsupported escape. escape by %v , byte %v",d,nextByte)
+					}
+				}else if d == fields.EnclosedBy {//get second "ENCLOSED BY"
+					//two "ENCLOSED BY" define a field.
+					//drop d
+					//go to next field
+					//++++
+					//if len(fieldData) != 0 {
+					//	//append fieldData into fieldsArray
+					//	fieldsArray = append(fieldsArray,fieldData)
+					//	fieldData = nil
+					//}
+					//skip bytes
+					for  {
+						ok,d = handler.Get()
+						if !ok {
+							break
+						}
+						skipBytes = append(skipBytes,d)
+						found := NO_FOUND
+						found,_ = handleTerminatedBy(handler,skipBytes,fields.Terminated,lines.TerminatedBy)
+						if found == FIELD_END {
+							//if len(fieldData) != 0, then a field with bytes
+							//if len(fieldData) == 0, then a empty string field like ",,"
+							//if len(fieldData) != 0 {
+							//append fieldData into fieldsArray
+							handler.AppendField(fieldData)
+							fieldData = fieldData[:0]
+							//}
+							skipBytes = skipBytes[:0]
+
+							break
+						}else if found == LINE_END {
+							if len(fieldData) != 0 {
+								//append fieldData into fieldsArray
+								handler.AppendField(fieldData)
+								fieldData = fieldData[:0]
+							}
+							//if len(fieldsArray) != 0 {
+								err = handler.Newline()
+								if err != nil{
+									return nil, nil, nil, err
+								}
+								//fieldsArray = fieldsArray[:0]
+								fieldData = fieldData[:0]
+							//}
+							skipBytes = skipBytes[:0]
+
+							break
+						}
+					}
+
+					//quit skip bytes
+					break
+				}else{//normal character
+					fieldData = append(fieldData,d)
+				}
+			}
+			//handler.field_enclosed += time.Since(wait_a)
+		}else{
+			//wait_a := time.Now()
+			//without "ENCLOSED BY"
+			for {
+				/*
+					anything excludes "ESCAPED BY" and "TERMINATED BY" are bytes of field.
+				*/
+				if d == fields.EscapedBy {//escape characters
+					ok, nextByte := handler.Get()
+					if !ok {
+						break
+					}
+					switch nextByte {
+					case fields.EscapedBy://escape "ESCAPED BY" "ESCAPED BY"
+						fieldData = append(fieldData,nextByte)
+					case 0://escape "ESCAPED BY" 0
+						fieldData = append(fieldData,byte(0))
+					case 'b'://escape "ESCAPED BY" b
+						fieldData = append(fieldData,byte(8))
+					case 'n'://escape "ESCAPED BY" n
+						fieldData = append(fieldData,byte(10))
+					case 'r'://escape "ESCAPED BY" r
+						fieldData = append(fieldData,byte(13))
+					case 't'://escape "ESCAPED BY" t
+						fieldData = append(fieldData,byte(9))
+					case 'Z'://escape "ESCAPED BY" Z
+						fieldData = append(fieldData,byte(26))
+					case 'N'://escape "ESCAPED BY" N -> NULL
+						fieldData = append(fieldData,'N','U','L','L')
+					default:
+						logutil.Errorf("unsupported escape. escape by %v , byte %v",d,nextByte)
+					}
+				}else {
+					fieldData = append(fieldData,d)
+				}
+
+				found := NO_FOUND
+				found,fieldData = handleTerminatedBy(handler,fieldData,fields.Terminated,lines.TerminatedBy)
+				if found == FIELD_END {
+					//if len(fieldData) != 0 {
+					//append fieldData into fieldsArray
+					handler.AppendField(fieldData)
+					fieldData = fieldData[:0]
+					//}
+
+					break
+				}else if found == LINE_END {
+					if len(fieldData) != 0 {
+						//append fieldData into fieldsArray
+						handler.AppendField(fieldData)
+						fieldData = fieldData[:0]
+					}
+					//if len(fieldsArray) != 0 {
+						err = handler.Newline()
+						if err != nil{
+							return nil, nil, nil, err
+						}
+						//fieldsArray = fieldsArray[:0]
+						fieldData = fieldData[:0]
+					//}
+
+					break
+				}
+
+				ok,d = handler.Get()
+				if !ok {
+					break
+				}
+			}
+			//handler.field_without += time.Since(wait_a)
+		}
+		//handler.wait_switch += time.Since(wait_switch)
+	}
+
+	//handler.PrintLineArray("++++>")
+
+	//do not forget the last field
+	//if len(fieldData) != 0 {
+	//	//append fieldData into fieldsArray
+	//	fieldsArray = append(fieldsArray,fieldData)
+	//	fieldData = nil
+	//}
+	//handler.lineArray = lineArray
+	handler.fieldsArray = fieldsArray
+	handler.fieldData = fieldData
+	handler.skipBytes = skipBytes
+	handler.wait_loop += time.Since(wait_loop)
+	return handler.lineArray,handler.fieldsArray,handler.fieldData,nil
 }
 
 /*
@@ -955,8 +1326,6 @@ func prepareBatch(handler *ParseLineHandler) error {
 
 	return nil
 }
-
-
 
 /*
 save parsed lines into the storage engine
@@ -1249,6 +1618,290 @@ func saveParsedLinesToBatch(handler *ParseLineHandler) error {
 }
 
 /*
+save parsed lines into the storage engine
+*/
+func saveParsedLinesToBatchImprove(handler *ParseLineHandler, forceConvert bool) error {
+	begin := time.Now()
+	defer func() {
+		fmt.Printf("-----saveParsedLinesToBatchImprove %s\n",time.Since(begin))
+	}()
+
+	countOfLineArray := handler.CountOfLines()
+	if !forceConvert {
+		if countOfLineArray != handler.capacityOfLineAarray {
+			panic("-----write a batch")
+		}
+	}
+
+	batchData := handler.batchData
+	columnFLags := make([]byte,len(batchData.Vecs))
+	fetchCnt := 0
+	var err error
+	allFetchCnt := 0
+
+
+	row2col := time.Duration(0)
+	fillBlank := time.Duration(0)
+	toStorage := time.Duration(0)
+	//write batch of  lines
+	//for lineIdx := 0; lineIdx < countOfLineArray; lineIdx += fetchCnt {
+		//fill batch
+		fetchCnt = countOfLineArray
+		//fmt.Printf("-----fetchCnt %d len(lineArray) %d\n",fetchCnt,len(handler.lineArray))
+		fetchLines := handler.lineArray[:fetchCnt]
+
+		/*
+			row to column
+		*/
+
+		batchBegin := handler.batchFilled
+		for i, line := range fetchLines {
+			//fmt.Printf("line %d %v \n",i,line)
+			wait_a := time.Now()
+			rowIdx := batchBegin + i
+			//record missing column
+			for k := 0; k < len(columnFLags); k++ {
+				columnFLags[k] = 0
+			}
+
+			for j, field := range line {
+				//fmt.Printf("data col %d : %v \n",j,field)
+				//where will column j go ?
+				colIdx := -1
+				if j < len(handler.dataColumnId2TableColumnId) {
+					colIdx = handler.dataColumnId2TableColumnId[j]
+				}
+				//drop this field
+				if colIdx == -1 {
+					continue
+				}
+
+				isNullOrEmpty := field == nil || len(field) == 0
+
+				//put it into batch
+				vec := batchData.Vecs[colIdx]
+
+				//record colIdx
+				columnFLags[colIdx] = 1
+
+				//fmt.Printf("data set col %d : %v \n",j,field)
+
+				switch vec.Typ.Oid {
+				case types.T_int8:
+					cols := vec.Col.([]int8)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						d,err := strconv.ParseInt(string(field),10,8)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = int8(d)
+					}
+				case types.T_int16:
+					cols := vec.Col.([]int16)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						d,err := strconv.ParseInt(string(field),10,16)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = int16(d)
+					}
+				case types.T_int32:
+					cols := vec.Col.([]int32)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						d,err := strconv.ParseInt(string(field),10,32)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = int32(d)
+					}
+				case types.T_int64:
+					cols := vec.Col.([]int64)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						d,err := strconv.ParseInt(string(field),10,64)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_uint8:
+					cols := vec.Col.([]uint8)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						d,err := strconv.ParseInt(string(field),10,8)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = uint8(d)
+					}
+				case types.T_uint16:
+					cols := vec.Col.([]uint16)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						d,err := strconv.ParseInt(string(field),10,16)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = uint16(d)
+					}
+				case types.T_uint32:
+					cols := vec.Col.([]uint32)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						d,err := strconv.ParseInt(string(field),10,32)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = uint32(d)
+					}
+				case types.T_uint64:
+					cols := vec.Col.([]uint64)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						d,err := strconv.ParseInt(string(field),10,64)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = uint64(d)
+					}
+				case types.T_float32:
+					cols := vec.Col.([]float32)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						d,err := strconv.ParseFloat(string(field),32)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = float32(d)
+					}
+				case types.T_float64:
+					cols := vec.Col.([]float64)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					}else{
+						fs := string(field)
+						//fmt.Printf("==== > field string [%s] \n",fs)
+						d,err := strconv.ParseFloat(fs,64)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v",field,err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_char, types.T_varchar:
+					vBytes :=vec.Col.(*types.Bytes)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						vBytes.Lengths[rowIdx] = uint32(len(field))
+					}else{
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						vBytes.Data = append(vBytes.Data,field...)
+						vBytes.Lengths[rowIdx] = uint32(len(field))
+					}
+				default:
+					panic("unsupported oid")
+				}
+			}
+			row2col += time.Since(wait_a)
+
+			wait_b := time.Now()
+			//the row does not have field
+			for k := 0; k < len(columnFLags); k++ {
+				if 0 == columnFLags[k] {
+					vec := batchData.Vecs[k]
+					switch vec.Typ.Oid {
+					case types.T_char, types.T_varchar:
+						vBytes :=vec.Col.(*types.Bytes)
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						vBytes.Lengths[rowIdx] = uint32(0)
+					}
+					vec.Nsp.Add(uint64(rowIdx))
+				}
+			}
+			fillBlank += time.Since(wait_b)
+		}
+
+		handler.lineCount += uint64(fetchCnt)
+		handler.batchFilled = batchBegin + fetchCnt
+
+		//if handler.batchFilled == handler.batchSize {
+		//	minLen := math.MaxInt64
+		//	maxLen := 0
+		//	for _, vec := range batchData.Vecs {
+		//		fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
+		//		minLen = Min(vec.Length(),int(minLen))
+		//		maxLen = Max(vec.Length(),int(maxLen))
+		//	}
+		//
+		//	if minLen != maxLen{
+		//		logutil.Errorf("vector length mis equal %d %d",minLen,maxLen)
+		//		return fmt.Errorf("vector length mis equal %d %d",minLen,maxLen)
+		//	}
+		//}
+
+		wait_c := time.Now()
+		/*
+			write batch into the engine
+		*/
+		//the second parameter must be FALSE here
+		err = saveBatchToStorage(handler,forceConvert)
+		if err != nil {
+			logutil.Errorf("saveBatchToStorage failed. err:%v",err)
+			return err
+		}
+		toStorage += time.Since(wait_c)
+
+		allFetchCnt += fetchCnt
+	//}
+
+	handler.row2col += row2col
+	handler.fillBlank += fillBlank
+	handler.toStorage += toStorage
+
+	fmt.Printf("----- row2col %s fillBlank %s toStorage %s\n",
+		row2col,fillBlank,toStorage)
+
+	if allFetchCnt != countOfLineArray {
+		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ",allFetchCnt,countOfLineArray)
+	}
+
+	return nil
+}
+
+
+/*
 save batch to storage.
 when force is true, batchsize will be changed.
  */
@@ -1360,20 +2013,27 @@ func processBlock(handler *ParseLineHandler,blk *Block) error {
 	for !done {
 		switch handler.Status() {
 		case LINE_STATE_PROCESS_PREFIX:
+			wait_a := time.Now()
 			findStringAmongBlocks(handler,blk,lines.StartingBy,LINE_STATE_PROCESS_FIELD_FIRST_BYTE)
 			//block has been pushed already
 			blk = nil
+			handler.prefix += time.Since(wait_a)
 		case LINE_STATE_PROCESS_FIELD_FIRST_BYTE,
 			LINE_STATE_PROCESS_FIELD_ENCLOSED,
 			LINE_STATE_PROCESS_FIELD_WITHOUT_ENCLOSED,
 			LINE_STATE_PROCESS_FIELD_SKIP_BYTES:
-			splitFields(handler,blk)
+			wait_a := time.Now()
+			_,_,_,err := splitFieldsImproved(handler,blk)
+			if err != nil {
+				return err
+			}
 			if len(handler.lineArray) != 0 {
 				if handler.packLine != nil {
 					handler.packLine(handler.lineArray)
 				}
 			}
 			done = true
+			handler.process_field += time.Since(wait_a)
 		default:
 			panic(fmt.Errorf("unsupported line state %d",handler.Status()))
 		}
@@ -1405,6 +2065,9 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		dbHandler: dbHandler,
 		tableHandler: tableHandler,
 		lineCount: 0,
+		capacityOfLineAarray: int(ses.Pu.SV.GetBatchSizeInLoadData()),
+		lineIdx: 0,
+		colIdx: 0,
 		batchSize: int(ses.Pu.SV.GetBatchSizeInLoadData()),
 		result: result,
 		row2col: 0,
@@ -1450,6 +2113,14 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 	closeProcessBlock := &CloseFlag{}
 
 	fmt.Printf("----- init block %s\n",time.Since(initBlock))
+
+	if ses.Pu.SV.GetLoadDataParserType() == 0 {
+		//simdcsv
+
+	}else if ses.Pu.SV.GetLoadDataParserType() == 1 {
+		//handwritten
+
+	}
 
 	//load data from file asynchronously
 	go func() {
@@ -1522,29 +2193,41 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 
 		pop_block += time.Since(wait_c)
 
-		wait_d := time.Now()
-		/*
-			step6 : append column to a batch
-		*/
-		err = saveParsedLinesToBatch(handler)
-		if err != nil {
-			logutil.Errorf("saveParsedLinesToBatch failed. err:%v",err)
-		}
-		save_batch += time.Since(wait_d)
+		//wait_d := time.Now()
+		///*
+		//	step6 : append column to a batch
+		//*/
+		//err = saveParsedLinesToBatch(handler)
+		//if err != nil {
+		//	logutil.Errorf("saveParsedLinesToBatch failed. err:%v",err)
+		//}
+		//save_batch += time.Since(wait_d)
 	}
 	fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
 		handler.row2col,handler.fillBlank,handler.toStorage)
 	fmt.Printf("-----write batch %s reset batch %s\n",
 		handler.writeBatch,handler.resetBatch)
+	fmt.Printf("-----prefix %s skip_unused_bytes %s process_field %s split_field %s split_before_loop %s wait_loop %s " +
+		" wait_loop - toStorage %s handler_get %s" +
+		" wait_switch %s field_first_byte %s field_enclosed %s field_without_enclosed %s field_skip_bytes %s\n",
+		handler.prefix,handler.skip_bytes,
+		handler.process_field,handler.split_field,
+		handler.split_before_loop,
+		handler.wait_loop,
+		handler.wait_loop - handler.toStorage,
+		handler.handler_get,
+		handler.wait_switch,
+		handler.field_first_byte,handler.field_enclosed,
+		handler.field_without,handler.field_skip_bytes)
 	fmt.Printf("-----wait_block %s process_block %s pop_block %s save_batch %s\n",
 		wait_block,process_blcok,pop_block,save_batch)
 	fmt.Printf("-----process time %s \n",time.Since(processTime))
 
 	lastSave := time.Now()
 	//the second parameter must be TRUE here
-	err = saveBatchToStorage(handler,true)
+	err = saveParsedLinesToBatchImprove(handler,true)
 	if err != nil {
-		logutil.Errorf("saveBatchToStorage failed. err:%v",err)
+		return nil, err
 	}
 
 	fmt.Printf("----- lastSave %s\n",time.Since(lastSave))

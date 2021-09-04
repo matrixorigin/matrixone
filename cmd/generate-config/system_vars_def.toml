@@ -337,6 +337,15 @@ values = ["4194304"]
 comment = "defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "loadDataParserType"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["0", "1"]
+comment = "default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten"
+update-mode = "dynamic"
 
 # Cluster Configs
 pre-allocated-group-num = 20

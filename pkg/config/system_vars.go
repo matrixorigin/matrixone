@@ -409,6 +409,18 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	blockSizeInLoadData    int64
+	
+	/**
+	Name:	loadDataParserType
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[0 1]
+	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten
+	UpdateMode:	dynamic
+	*/
+	loadDataParserType    int64
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -779,6 +791,18 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	BlockSizeInLoadData    int64  `toml:"blockSizeInLoadData"`
+	
+	/**
+	Name:	loadDataParserType
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[0 1]
+	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten
+	UpdateMode:	dynamic
+	*/
+	LoadDataParserType    int64  `toml:"loadDataParserType"`
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -868,6 +892,8 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["blockCountInLoadData"] = "	Name:	blockCountInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[20 2 100000]	Comment:	count of read buffer in load data	UpdateMode:	dynamic	"
 	
 	ap.name2definition["blockSizeInLoadData"] = "	Name:	blockSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[4194304]	Comment:	defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data	UpdateMode:	dynamic	"
+	
+	ap.name2definition["loadDataParserType"] = "	Name:	loadDataParserType	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[0 1]	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten	UpdateMode:	dynamic	"
 	
 }
 
@@ -1343,6 +1369,19 @@ func (ap *SystemVariables) LoadInitialValues()error{
 			return fmt.Errorf("set%s failed.error:%v","BlockSizeInLoadData",err)
 		}
 	}
+	
+	loadDataParserTypechoices :=[]int64 {
+		0,1,
+	}
+	if len(loadDataParserTypechoices) != 0 {
+		if err = ap.setLoadDataParserType(loadDataParserTypechoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","LoadDataParserType",err)
+		}
+	} else { 
+		if err = ap.setLoadDataParserType(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","LoadDataParserType",err)
+		}
+	}
 	return nil
 }
 
@@ -1643,6 +1682,15 @@ func (ap * SystemVariables ) GetBlockSizeInLoadData() int64 {
 	return ap.blockSizeInLoadData
 }
 
+/**
+Get the value of the parameter loadDataParserType
+*/
+func (ap * SystemVariables ) GetLoadDataParserType() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.loadDataParserType
+}
+
 
 /**
 Set the value of the parameter rootpassword
@@ -1852,6 +1900,13 @@ Set the value of the parameter blockSizeInLoadData
 */
 func (ap * SystemVariables ) SetBlockSizeInLoadData(value int64)error {
 	return  ap.setBlockSizeInLoadData(value)
+}
+
+/**
+Set the value of the parameter loadDataParserType
+*/
+func (ap * SystemVariables ) SetLoadDataParserType(value int64)error {
+	return  ap.setLoadDataParserType(value)
 }
 
 /**
@@ -2552,6 +2607,28 @@ func (ap * SystemVariables ) setBlockSizeInLoadData(value int64)error {
 	return nil
 }
 
+/**
+Set the value of the parameter loadDataParserType
+*/
+func (ap * SystemVariables ) setLoadDataParserType(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			0,1,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setLoadDataParserType,the value %d is not in set %v",value,choices)
+			}
+		}//else means any int64
+	
+	
+	ap.loadDataParserType = value
+	return nil
+}
+
 
 
 /**
@@ -2601,6 +2678,7 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.name2updatedFlags["batchSizeInLoadData"] = false
 	config.name2updatedFlags["blockCountInLoadData"] = false
 	config.name2updatedFlags["blockSizeInLoadData"] = false
+	config.name2updatedFlags["loadDataParserType"] = false
 }
 
 /**
@@ -2824,6 +2902,11 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("blockSizeInLoadData"){
 		if err = ap.setBlockSizeInLoadData(config.BlockSizeInLoadData); err != nil{
 			return fmt.Errorf("update parameter blockSizeInLoadData failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("loadDataParserType"){
+		if err = ap.setLoadDataParserType(config.LoadDataParserType); err != nil{
+			return fmt.Errorf("update parameter loadDataParserType failed.error:%v",err)
 		}
 	}
 	return nil
