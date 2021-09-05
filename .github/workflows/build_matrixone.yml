@@ -6,6 +6,7 @@ on:
   # Triggers the workflow on push or pull request events but only for the main branch.
   pull_request:
     branches: main
+
   # Allows dev to run this workflow manually from the Actions tab
   workflow_dispatch:
 
@@ -28,18 +29,27 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
       - uses: actions/checkout@v2
       
-      - name: Build
+      - name: Build Configure
         run: |
-          cd $GITHUB_WORKSPACE && make clean
-          make config && make build
+          cd $GITHUB_WORKSPACE && make clean && make config
 
-      - name: Run UT
+      - name: Static Code Analysis
+        run: |
+          make sca 
+
+      - name: Unit Testing
         run: |
           if [[ 'schedule' == ${{ github.event_name }} ]]; then
             make ut 
           else
             make ut SKIP_TEST="race"
           fi
-      - name: Run BVT
+
+      - name: Build Binary
+        run: |
+          make build
+
+      - name: Build Verification Testing
         run: |
           make bvt 
+

@@ -1,58 +1,76 @@
 #!/bin/bash
+#===============================================================================
+#
+#          FILE: run_bvt.sh
+#   DESCRIPTION: 
+#        AUTHOR: Matthew Li, lignay@me.com
+#  ORGANIZATION: 
+#       CREATED: 09/01/2021
+#      REVISION:  ---
+#===============================================================================
 
-###################################################################
-# Title	 : run_unit_test.sh
-# Desc.  : Executing unit test cases.
-# Author : Matthew Li (lignay@me.com)
-###################################################################
+set -o nounset                                  # Treat unset variables as an error
+#set -exuo pipefail
 
-function usage() {
-    echo "Usage:"
-    echo "./run_unit_test.sh VetTestReportName UnitTestReportName SkipTests"
-    echo ""
-    echo "Options:"
-    echo "    VetTestReportName  vet testing report name"
-    echo "    UnitTestReportName MatrixOne unit test report name"
-    echo "    SkipTests          Skipping test list."
-    echo ""
-    echo "Example:"
-    echo "    $0 vt_reports ut_reports race"
+if (( $# == 0 )); then
+    echo "Usage: $0 TestType SkipTest"
+    echo "  TestType: UT|SCA"
+    echo "  SkipTest: race"
     exit 1
-}
+fi
 
-function msl() {
-    str='#'
-    num=60
-    v=$(printf "%-${num}s" "$str")
-    echo "${v// /#}"
+TEST_TYPE=$1
+if [[ $# == 2 ]]; then 
+	SKIP_TESTS=$2; 
+else
+	SKIP_TESTS="";
+fi
+
+source $HOME/.bash_profile
+source ./utilities.sh
+
+BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
+
+UT_TIMEOUT=15
+LOG="$G_TS-$TEST_TYPE.log"
+SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.txt"
+UT_REPORT="$G_WKSP/$G_TS-UT-Report.txt"
+UT_FILTER="$G_WKSP/$G_TS-UT-Filter"
+UT_COUNT="$G_WKSP/$G_TS-UT-Count"
+
+if [[ -f $SCA_REPORT ]]; then rm $SCA_REPORT; fi
+if [[ -f $UT_REPORT ]]; then rm $UT_REPORT; fi
+if [[ -f $UT_FILTER ]]; then rm $UT_FILTER; fi
+if [[ -f $UT_COUNT ]]; then rm $UT_COUNT; fi
+
+
+function logger(){
+    local level=$1
+    local msg=$2
+    local log=$LOG
+    logger_base "$level" "$msg" "$log"
 }
 
 function run_vet(){
-    msl
-    echo "# Examining Go source code"
-    msl
-    [[ -f $VET_RESULT ]] && rm $VET_RESULT
-    go vet ./pkg/... 2>&1 | tee $VET_RESULT
+    if [[ -f $SCA_REPORT ]]; then rm $SCA_REPORT; fi
+	logger "INF" "Test is in progress... "
+    go vet ./pkg/... 2>&1 | tee $SCA_REPORT
+	logger "INF" "Refer to $SCA_REPORT for details"
 }
 
 function run_tests(){
-    msl
-    echo "# Running UT"
-    msl
+	logger "INF" "Clean go test cache"
     go clean -testcache
 
-    [[ -f $UT_RESULT ]] && rm $UT_RESULT
-    [[ -f $UT_FILTER ]] && rm $UT_FILTER
-    [[ -f $UT_COUNT ]] && rm $UT_COUNT
-
     if [[ $SKIP_TESTS == 'race' ]]; then
-		echo "Run UT without race check"
-        go test -v -timeout "${UT_TIMEOUT}m" -v $(go list ./... | egrep -v "frontend") | tee $UT_RESULT
+        logger "INF" "Run UT without race check"
+        go test -v -timeout "${UT_TIMEOUT}m" -v $(go list ./... | egrep -v "frontend") | tee $UT_REPORT
     else
-		echo "Run UT with race check"
-        go test -v -race -timeout "${UT_TIMEOUT}m" -v $(go list ./... | egrep -v "frontend") | tee $UT_RESULT
+        logger "INF" "Run UT with race check"
+        go test -v -race -timeout "${UT_TIMEOUT}m" -v $(go list ./... | egrep -v "frontend") | tee $UT_REPORT
     fi
-    egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test'  $UT_RESULT > $UT_FILTER
+    egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test'  $UT_REPORT > $UT_FILTER
+	logger "INF" "Refer to $UT_REPORT for details"
 }
 
 function ut_summary(){
@@ -61,59 +79,62 @@ function ut_summary(){
     local fail=$(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test" | wc -l | xargs)
     local unknown=$(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$' | wc -l | xargs)
     cat << EOF > $UT_COUNT
-Total: $total; Passed: $pass; Failed: $fail; Unknown: $unknown
-
-FAILED CASES:
-$(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test")
-
-UNKNOWN CASES:
-$(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$')
+# Total: $total; Passed: $pass; Failed: $fail; Unknown: $unknown
+# 
+# FAILED CASES:
+# $(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test" | xargs)
+# 
+# UNKNOWN CASES:
+# $(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$' | xargs)
 EOF
-    msl
+    horiz_rule
     cat $UT_COUNT
-    msl
-
+    horiz_rule
     if (( $fail > 0 )) || (( $unknown > 0 )); then
-      echo "Unit Testing FAILED !!!"
+      logger "INF" "UNIT TESTING FAILED !!!"
       exit 3
     else
-      echo "Unit Testing SUCCEEDED !!!"
+      logger "INF" "UNIT TESTING SUCCEEDED !!!"
     fi
 }
 
-if (( $# < 2 )); then
-    usage
+function teardown(){
+	local aoe_test=$(find  pkg/vm/engine/aoe/test/* -type d -maxdepth 0)
+	for dir in ${aoe_test[@]}; do
+		logger "WRN" "Remove $dir"
+		rm -rf $dir
+	done
+}
+horiz_rule
+echo "#  BUILD WORKSPACE: $BUILD_WKSP"
+echo "#  UT REPORT:       $UT_REPORT"
+echo "#  SCA REPORT:      $SCA_REPORT"
+echo "#  SKIPPED TEST:    $SKIP_TESTS"
+echo "#  CONTAINER ID:    $G_CONT_ID"
+echo "#  UT TIMEOUT:      $UT_TIMEOUT"
+horiz_rule
+
+if [[ 'SCA' == $TEST_TYPE ]]; then
+    horiz_rule
+    echo "# Examining source code"
+    horiz_rule
+    run_vet
+elif [[ 'UT' == $TEST_TYPE ]]; then
+    horiz_rule
+    echo "# Running UT"
+    horiz_rule
+    run_tests
+
+    horiz_rule
+    echo "# Teardown UT"
+    horiz_rule
+	teardown    
+
+    ut_summary || exit $?
+else
+    logger "ERR" "Wrong test type"
+    exit 1
 fi
 
-VET_REPORT=$1
-UT_REPORT=$2
-SKIP_TESTS=$3
-
-source $HOME/.bash_profile
-
-BUILD_WKS="$(pwd)/.."
-BUILD_LOGS="$BUILD_WKS/logs"
-UT_TIMEOUT=15
-
-VET_RESULT="$BUILD_LOGS/$VET_REPORT"
-UT_RESULT="$BUILD_LOGS/$UT_REPORT"
-UT_FILTER="$BUILD_LOGS/ut_filter"
-UT_COUNT="$BUILD_LOGS/ut_count"
-
-cd $BUILD_WKS
-
-[[ -d $BUILD_LOGS ]] || mkdir $BUILD_LOGS
-
-msl
-echo "# Build workspace:  $BUILD_WKS"
-echo "# Unit test report: $UT_RESULT"
-echo "# Vet report:    $VET_RESULT"
-echo "# Skipped cases:    $SKIP_TESTS"
-echo "# UT timeout:       $UT_TIMEOUT"
-msl
-
-run_vet
-run_tests
-ut_summary || exit $?
 
 exit 0
