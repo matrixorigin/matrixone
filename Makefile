@@ -59,9 +59,15 @@ endif
 # Tear down
 .PHONY: clean
 clean:
-	$(info [Post build])
+	$(info [Clean up])
+	$(info Clean go test cache)
 	@go clean -testcache
-	@TMP_FILES=($(BUILD_CFG) $(BIN_NAME)); \
-	for file in $${TMP_FILES[@]}; do \
-		if [ -f "$$file" ]; then echo "  Remove file $$file"; rm "$$file"; fi \
-	done
+ifneq ($(wildcard $(BIN_NAME)),)
+	$(info Remove file $(BIN_NAME))
+	@rm -f $(BIN_NAME)
+endif
+ifneq ($(wildcard $(BUILD_CFG)),)
+	$(info Remove file $(BUILD_CFG))
+	@rm -f $(BUILD_CFG)
+endif
+
