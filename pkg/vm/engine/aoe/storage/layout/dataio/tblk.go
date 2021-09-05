@@ -153,8 +153,8 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 	return batch.NewBatch(cols, vecs)
 }
 
-func (f *TransientBlockFile) Sync(data batch.IBatch, meta *md.Block, dir string) error {
-	writer := NewIBatchWriter(data, meta, dir)
+func (f *TransientBlockFile) Sync(data batch.IBatch, meta *md.Block) error {
+	writer := NewIBatchWriter(data, meta, meta.Segment.Table.Conf.Dir)
 	version := f.nextVersion()
 	getter := tblkFileGetter{version: version}
 	writer.SetFileGetter(getter.Getter)

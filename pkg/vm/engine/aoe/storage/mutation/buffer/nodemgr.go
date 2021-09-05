@@ -8,7 +8,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync"
 	"sync/atomic"
-	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
 
 type nodeManager struct {

@@ -1,18 +1,16 @@
-package mutation
+package factories
 
 import (
-	engine "matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mutation"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
@@ -21,32 +19,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type blockFlusher struct {
-	opts *engine.Options
-}
-
-func (f blockFlusher) flush(node base.INode, data batch.IBatch, meta *metadata.Block, file *dataio.TransientBlockFile) error {
-	ctx := &sched.Context{Opts: f.opts, Waitable: true}
-	node.Ref()
-	defer node.Unref()
-	e := sched.NewFlushTransientBlockEvent(ctx, node, data, meta, file)
-	f.opts.Scheduler.Schedule(e)
-	return e.WaitDone()
-}
-
-func TestMutableBlockNode(t *testing.T) {
-	dir := "/tmp/mutableblk"
+func TestMutBlockNodeFactory(t *testing.T) {
+	dir := "/tmp/mublknodefactory"
+	os.RemoveAll(dir)
 	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
 	rowCount, blkCount := uint64(30), uint64(4)
 	info := metadata.MockInfo(&sync.RWMutex{}, rowCount, blkCount)
 	info.Conf.Dir = dir
 	opts.Meta.Info = info
 	opts.Scheduler = sched.NewScheduler(opts, nil)
-	os.RemoveAll(dir)
 	schema := metadata.MockSchema(2)
 	tablemeta := metadata.MockTable(info, schema, 2)
-
-	flusher := blockFlusher{opts: opts}
 
 	meta1, err := tablemeta.ReferenceBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)
@@ -54,8 +37,7 @@ func TestMutableBlockNode(t *testing.T) {
 	assert.Nil(t, err)
 
 	segfile := dataio.NewUnsortedSegmentFile(dir, *meta1.Segment.AsCommonID())
-	tblkfile := dataio.NewTBlockFile(segfile, *meta1.AsCommonID())
-	assert.NotNil(t, tblkfile)
+
 	capacity := uint64(4096)
 	fsMgr := ldio.DefaultFsMgr
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
@@ -66,7 +48,10 @@ func TestMutableBlockNode(t *testing.T) {
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
-	node1 := NewMutableBlockNode(mgr, tblkfile, tabledata, meta1, flusher.flush)
+
+	factory := NewMutBlockNodeFactory(opts, mgr, tabledata)
+	node1 := factory.CreateNode(segfile, meta1)
+
 	mgr.RegisterNode(node1)
 	h1 := mgr.Pin(node1)
 	assert.NotNil(t, h1)
@@ -74,7 +59,7 @@ func TestMutableBlockNode(t *testing.T) {
 	factor := uint64(4)
 
 	bat := chunk.MockBatch(schema.Types(), rows)
-	insert := func(n *MutableBlockNode) func() error {
+	insert := func(n *mutation.MutableBlockNode) func() error {
 		return func() error {
 			for idx, attr := range n.Data.GetAttrs() {
 				if _, err = n.Data.GetVectorByAttr(attr).AppendVector(bat.Vecs[idx], 0); err != nil {
@@ -93,10 +78,7 @@ func TestMutableBlockNode(t *testing.T) {
 	t.Logf("length=%d", node1.Data.Length())
 	assert.Equal(t, rows*factor*2, mgr.Total())
 
-	blkmeta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
-	assert.Nil(t, err)
-	tblkfile2 := dataio.NewTBlockFile(segfile, *meta2.AsCommonID())
-	node2 := NewMutableBlockNode(mgr, tblkfile2, tabledata, blkmeta2, flusher.flush)
+	node2 := factory.CreateNode(segfile, meta2)
 	mgr.RegisterNode(node2)
 	h2 := mgr.Pin(node2)
 	assert.NotNil(t, h2)

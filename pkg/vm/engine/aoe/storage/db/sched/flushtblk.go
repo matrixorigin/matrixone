@@ -32,5 +32,5 @@ func NewFlushTransientBlockEvent(ctx *Context, n base.INode, data batch.IBatch, 
 }
 
 func (e *flushTransientBlockEvent) Execute() error {
-	return e.File.Sync(e.Data, e.Meta, e.Meta.Segment.Table.Conf.Dir)
+	return e.File.Sync(e.Data, e.Meta)
 }

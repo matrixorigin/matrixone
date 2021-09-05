@@ -44,7 +44,7 @@ func (mt *memTable) unload() {
 		return
 	}
 	meta := mt.Meta.Copy()
-	mt.File.Sync(mt.Data, meta, meta.Segment.Table.Conf.Dir)
+	mt.File.Sync(mt.Data, meta)
 	mt.Data.Close()
 	mt.Data = nil
 }

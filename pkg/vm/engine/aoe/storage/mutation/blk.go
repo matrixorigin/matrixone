@@ -1,10 +1,8 @@
 package mutation
 
 import (
-	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -12,22 +10,24 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
+type BlockFlusher = func(base.INode, batch.IBatch, *metadata.Block, *dataio.TransientBlockFile) error
+
 type MutableBlockNode struct {
 	buffer.Node
 	TableData iface.ITableData
 	Meta      *metadata.Block
 	File      *dataio.TransientBlockFile
 	Data      batch.IBatch
-	Opts      *engine.Options
+	Flusher   BlockFlusher
 }
 
-func NewMutableBlockNode(opts *engine.Options, mgr base.INodeManager, file *dataio.TransientBlockFile,
-	tabledata iface.ITableData, meta *metadata.Block) *MutableBlockNode {
+func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
+	tabledata iface.ITableData, meta *metadata.Block, flusher BlockFlusher) *MutableBlockNode {
 	n := &MutableBlockNode{
 		File:      file,
 		Meta:      meta,
 		TableData: tabledata,
-		Opts:      opts,
+		Flusher:   flusher,
 	}
 	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), 0)
 	n.UnloadFunc = n.unload
@@ -52,30 +52,29 @@ func (n *MutableBlockNode) Flush() error {
 	data := batch.NewBatch(attrs, vecs)
 	meta := n.Meta.Copy()
 	n.RUnlock()
-	return n.doFlush(data, meta)
+	return n.Flusher(n, data, meta, n.File)
 }
 
 func (n *MutableBlockNode) load() {
 	n.Data = n.File.LoadBatch(n.Meta)
-	// logutil.S().Infof("%s loaded %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
-}
-
-func (n *MutableBlockNode) doFlush(data batch.IBatch, meta *metadata.Block) error {
-	ctx := &sched.Context{Opts: n.Opts, Waitable: true}
-	n.Ref()
-	defer n.Unref()
-	e := sched.NewFlushTransientBlockEvent(ctx, n, data, meta, n.File)
-	n.Opts.Scheduler.Schedule(e)
-	return e.WaitDone()
+	// logutil.Infof("%s loaded %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
 }
 
 func (n *MutableBlockNode) unload() {
-	// logutil.S().Infof("%s presyncing %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
+	// logutil.Infof("%s presyncing %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
 	if ok := n.File.PreSync(uint32(n.Data.Length())); ok {
-		if err := n.doFlush(n.Data, n.Meta.Copy()); err != nil {
+		if err := n.Flusher(n, n.Data, n.Meta.Copy(), n.File); err != nil {
 			panic(err)
 		}
 	}
 	n.Data.Close()
 	n.Data = nil
+}
+
+func (n *MutableBlockNode) GetData() batch.IBatch {
+	return n.Data
+}
+
+func (n *MutableBlockNode) GetFile() batch.IBatch {
+	return n.Data
 }
