@@ -1,9 +1,6 @@
 package factories
 
 import (
-	engine "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
-	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
@@ -12,41 +9,24 @@ import (
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
-type mutBlockFlusher struct {
-	opts *engine.Options
+type mutNodeFactory struct {
+	host  *mutFactory
+	tdata iface.ITableData
 }
 
-func (f mutBlockFlusher) flush(node bb.INode, data batch.IBatch, meta *metadata.Block, file *dataio.TransientBlockFile) error {
-	ctx := &sched.Context{Opts: f.opts, Waitable: true}
-	node.Ref()
-	defer node.Unref()
-	e := sched.NewFlushTransientBlockEvent(ctx, node, data, meta, file)
-	f.opts.Scheduler.Schedule(e)
-	return e.WaitDone()
-}
-
-type mutBlockNodeFactory struct {
-	flusher *mutBlockFlusher
-	mgr     bb.INodeManager
-	tdata   iface.ITableData
-}
-
-func NewMutBlockNodeFactory(opts *engine.Options, mgr bb.INodeManager, tdata iface.ITableData) *mutBlockNodeFactory {
-	f := &mutBlockNodeFactory{
-		mgr:   mgr,
+func newMutNodeFactory(host *mutFactory, tdata iface.ITableData) *mutNodeFactory {
+	f := &mutNodeFactory{
 		tdata: tdata,
-		flusher: &mutBlockFlusher{
-			opts: opts,
-		},
+		host:  host,
 	}
 	return f
 }
 
-func (f *mutBlockNodeFactory) GetManager() bb.INodeManager {
-	return f.mgr
+func (f *mutNodeFactory) GetManager() bb.INodeManager {
+	return f.host.mgr
 }
 
-func (f *mutBlockNodeFactory) CreateNode(segfile base.ISegmentFile, meta *metadata.Block) *mutation.MutableBlockNode {
+func (f *mutNodeFactory) CreateNode(segfile base.ISegmentFile, meta *metadata.Block) bb.INode {
 	blkfile := dataio.NewTBlockFile(segfile, *meta.AsCommonID())
-	return mutation.NewMutableBlockNode(f.mgr, blkfile, f.tdata, meta, f.flusher.flush)
+	return mutation.NewMutableBlockNode(f.host.mgr, blkfile, f.tdata, meta, f.host.flusher.flush)
 }

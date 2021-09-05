@@ -49,8 +49,10 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
 
-	factory := NewMutBlockNodeFactory(opts, mgr, tabledata)
-	node1 := factory.CreateNode(segfile, meta1)
+	factory := NewMutFactory(opts, mgr)
+	nodeFactory := factory.CreateNodeFactory(tabledata)
+
+	node1 := nodeFactory.CreateNode(segfile, meta1).(*mutation.MutableBlockNode)
 
 	mgr.RegisterNode(node1)
 	h1 := mgr.Pin(node1)
@@ -78,7 +80,7 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	t.Logf("length=%d", node1.Data.Length())
 	assert.Equal(t, rows*factor*2, mgr.Total())
 
-	node2 := factory.CreateNode(segfile, meta2)
+	node2 := nodeFactory.CreateNode(segfile, meta2).(*mutation.MutableBlockNode)
 	mgr.RegisterNode(node2)
 	h2 := mgr.Pin(node2)
 	assert.NotNil(t, h2)
