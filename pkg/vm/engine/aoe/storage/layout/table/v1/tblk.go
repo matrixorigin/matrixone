@@ -4,6 +4,7 @@ import (
 	gvec "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -17,6 +18,15 @@ type tBlock struct {
 	baseBlock
 	node    bb.INode
 	nodeMgr bb.INodeManager
+}
+
+func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory) (*tBlock, error) {
+	blk := &tBlock{
+		baseBlock: *newBaseBlock(host, meta),
+		node:      factory.CreateNode(host.GetSegmentFile(), meta),
+		nodeMgr:   factory.GetManager(),
+	}
+	return blk, nil
 }
 
 func (blk *tBlock) getHandle() bb.INodeHandle {

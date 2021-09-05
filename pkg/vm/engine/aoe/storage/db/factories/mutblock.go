@@ -42,6 +42,10 @@ func NewMutBlockNodeFactory(opts *engine.Options, mgr bb.INodeManager, tdata ifa
 	return f
 }
 
+func (f *mutBlockNodeFactory) GetManager() bb.INodeManager {
+	return f.mgr
+}
+
 func (f *mutBlockNodeFactory) CreateNode(segfile base.ISegmentFile, meta *metadata.Block) *mutation.MutableBlockNode {
 	blkfile := dataio.NewTBlockFile(segfile, *meta.AsCommonID())
 	return mutation.NewMutableBlockNode(f.mgr, blkfile, f.tdata, meta, f.flusher.flush)

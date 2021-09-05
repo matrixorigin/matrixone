@@ -1,7 +1,6 @@
 package mutation
 
 import (
-	engine "matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -21,17 +20,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-type blockFlusher struct {
-	opts *engine.Options
-}
+type blockFlusher struct{}
 
 func (f blockFlusher) flush(node base.INode, data batch.IBatch, meta *metadata.Block, file *dataio.TransientBlockFile) error {
-	ctx := &sched.Context{Opts: f.opts, Waitable: true}
-	node.Ref()
-	defer node.Unref()
-	e := sched.NewFlushTransientBlockEvent(ctx, node, data, meta, file)
-	f.opts.Scheduler.Schedule(e)
-	return e.WaitDone()
+	return file.Sync(data, meta)
 }
 
 func TestMutableBlockNode(t *testing.T) {
@@ -46,7 +38,7 @@ func TestMutableBlockNode(t *testing.T) {
 	schema := metadata.MockSchema(2)
 	tablemeta := metadata.MockTable(info, schema, 2)
 
-	flusher := blockFlusher{opts: opts}
+	flusher := blockFlusher{}
 
 	meta1, err := tablemeta.ReferenceBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)
