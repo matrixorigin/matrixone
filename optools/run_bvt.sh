@@ -149,6 +149,7 @@ function make_one(){
 }
 
 function patch_one(){
+	local current_pwd=$(pwd)
     cd $G_STAGE
 	if [[ -f patch_one.sh ]]; then
 		logger "INF" "Patch issue fix"
@@ -156,7 +157,7 @@ function patch_one(){
 	else
 		logger "INF" "Not found patch"
 	fi
-
+	cd $current_pwd
 }
 
 function run_bvt(){
