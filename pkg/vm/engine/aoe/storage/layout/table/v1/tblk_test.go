@@ -45,13 +45,11 @@ func TestTBlock(t *testing.T) {
 
 	meta1, err := tablemeta.ReferenceBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)
-	// meta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
-	// assert.Nil(t, err)
-
-	// segfile := dataio.NewUnsortedSegmentFile(dir, *meta1.Segment.AsCommonID())
+	meta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
+	assert.Nil(t, err)
 
 	capacity := uint64(4096)
-	fsMgr := ldio.DefaultFsMgr
+	fsMgr := ldio.NewManager(dir, false)
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
@@ -100,56 +98,39 @@ func TestTBlock(t *testing.T) {
 
 	err = blk1.WithPinedContext(appendFn)
 	assert.Nil(t, err)
+	err = blk1.WithPinedContext(appendFn)
+	assert.Nil(t, err)
+	assert.Equal(t, rows*factor*2, mgr.Total())
+
+	blk2, err := newTBlock(segdata, meta2, nodeFactory)
+	assert.Nil(t, err)
+	assert.NotNil(t, blk2)
+	assert.False(t, blk2.node.IsLoaded())
+
+	err = blk2.WithPinedContext(appendFn)
+	assert.Nil(t, err)
+	err = blk2.WithPinedContext(appendFn)
+	assert.Nil(t, err)
+
+	err = blk1.WithPinedContext(func(node bb.INode) error {
+		n := node.(*mutation.MutableBlockNode)
+		assert.Equal(t, int(rows*2), n.Data.Length())
+		return nil
+	})
+	assert.Nil(t, err)
 
 	err = blk1.WithPinedContext(appendFn)
 	assert.Nil(t, err)
 
-	assert.Equal(t, rows*factor*2, mgr.Total())
-
-	// err = blk1.Expand(rows*factor, insert(blk1))
-	// assert.Nil(t, err)
-	// t.Logf("length=%d", blk1.Data.Length())
-	// err = blk1.Expand(rows*factor, insert(blk1))
-	// assert.Nil(t, err)
-	// t.Logf("length=%d", blk1.Data.Length())
-	// assert.Equal(t, rows*factor*2, mgr.Total())
-
-	// node2 := nodeFactory.CreateNode(segfile, meta2).(*mutation.MutableBlockNode)
-	// mgr.RegisterNode(node2)
-	// h2 := mgr.Pin(node2)
-	// assert.NotNil(t, h2)
-
-	// err = node2.Expand(rows*factor, insert(node2))
-	// assert.Nil(t, err)
-	// err = node2.Expand(rows*factor, insert(node2))
-	// assert.NotNil(t, err)
-
-	// h1.Close()
-
-	// err = node2.Expand(rows*factor, insert(node2))
-	// assert.Nil(t, err)
-
-	// h2.Close()
-	// h1 = mgr.Pin(blk1)
-	// assert.Equal(t, int(rows*2), blk1.Data.Length())
-
-	// err = blk1.Expand(rows*factor, insert(blk1))
-	// assert.Nil(t, err)
-	// h1.Close()
-	// t.Log(mgr.String())
-	// h2 = mgr.Pin(node2)
-	// assert.NotNil(t, h2)
-
-	// err = node2.Expand(rows*factor, insert(node2))
-	// assert.Nil(t, err)
-	// t.Log(mgr.String())
-	// err = node2.Flush()
-	// assert.Nil(t, err)
-	// t.Log(mgr.String())
-
-	// h2.Close()
-	// h1 = mgr.Pin(blk1)
-
 	t.Log(mgr.String())
+
+	err = blk1.WithPinedContext(func(node bb.INode) error {
+		n := node.(*mutation.MutableBlockNode)
+		return n.Flush()
+	})
+	assert.Nil(t, err)
+
 	t.Log(common.GPool.String())
+	blk1.Unref()
+	blk2.Unref()
 }

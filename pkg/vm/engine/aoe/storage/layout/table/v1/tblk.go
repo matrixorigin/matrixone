@@ -28,6 +28,7 @@ func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory
 		nodeMgr:   factory.GetManager(),
 	}
 	blk.OnZeroCB = blk.close
+	blk.Ref()
 	return blk, nil
 }
 
