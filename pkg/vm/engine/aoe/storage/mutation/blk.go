@@ -41,7 +41,12 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), 0)
 	n.UnloadFunc = n.unload
 	n.LoadFunc = n.load
+	n.DestroyFunc = n.destroy
 	return n
+}
+
+func (n *MutableBlockNode) destroy() {
+	n.File.Unref()
 }
 
 func (n *MutableBlockNode) Flush() error {

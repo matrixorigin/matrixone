@@ -298,7 +298,8 @@ func TestTransientBlock(t *testing.T) {
 	segFile := NewUnsortedSegmentFile(info.Conf.Dir, *blkMeta.Segment.AsCommonID())
 
 	tblk := NewTBlockFile(segFile, *blkMeta.AsCommonID())
-	defer tblk.Destory()
+	// defer tblk.Destory()
+	defer tblk.Unref()
 	t.Log(tblk.nextVersion())
 
 	// rows := uint64(2)

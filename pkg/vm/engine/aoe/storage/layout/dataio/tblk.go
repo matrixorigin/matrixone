@@ -66,6 +66,7 @@ func (getter *tblkFileGetter) Getter(dir string, meta *md.Block) (*os.File, erro
 }
 
 type TransientBlockFile struct {
+	common.RefHelper
 	host    base.ISegmentFile
 	id      common.ID
 	maxver  uint32
@@ -80,7 +81,14 @@ func NewTBlockFile(host base.ISegmentFile, id common.ID) *TransientBlockFile {
 		host: host,
 	}
 	tblk.files = make([]*versionBlockFile, 0)
+	tblk.Ref()
+	tblk.OnZeroCB = tblk.close
 	return tblk
+}
+
+func (f *TransientBlockFile) close() {
+	f.Close()
+	f.Destory()
 }
 
 func (f *TransientBlockFile) nextVersion() uint32 {
