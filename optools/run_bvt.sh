@@ -149,15 +149,14 @@ function make_one(){
 }
 
 function patch_one(){
-    cd $ONE_REPO
-    logger  "INF" "Patch fix issue to select max_allowed_packet"
-	if [[ ! -f $G_STAGE/patches/max_allowed_packet.txt ]]; then
-		logger "ERR" "Not found patch file to fix issue \"select max_allowed_packet\""
-		exit 1
+    cd $G_STAGE
+	if [[ -f patch_one.sh ]]; then
+		logger "INF" "Patch issue fix"
+		./patch_one.sh
+	else
+		logger "INF" "Not found patch"
 	fi
-    cp -f pkg/frontend/mysql_cmd_executor.go $G_STAGE/mysql_cmd_executor.go.orig
-    sed -i "855 r $G_STAGE/patches/max_allowed_packet.txt" pkg/frontend/mysql_cmd_executor.go
-    cp -f pkg/frontend/mysql_cmd_executor.go $G_STAGE/mysql_cmd_executor.go.patched
+
 }
 
 function run_bvt(){
@@ -185,12 +184,14 @@ function clean_up(){
 
 
 horiz_rule
-echo "#  OS TYPE:   $G_OSTYPE"
-echo "#  CASE TYPE: $CASE_TYPE"
-echo "#  BUILD BIN: $MAKE_ONE"
-echo "#  LOG PATH:  $G_WKSP"
-echo "#  GO ROOT:   $GOROOT"
-echo "#  GO PATH:   $GOPATH"
+echo "#  OS TYPE:      $G_OSTYPE"
+echo "#  CASE TYPE:    $CASE_TYPE"
+echo "#  BUILD BINARY: $MAKE_ONE"
+echo "#  GO ROOT:      $GOROOT"
+echo "#  GO PATH:      $GOPATH"
+echo "#  SRV LOG PATH: $SRV_LOG"
+echo "#  SRS LOG PATH: $SRS_LOG"
+echo "#  TST LOG PATH: $TST_LOG"
 horiz_rule
 
 clean_up
