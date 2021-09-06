@@ -19,6 +19,7 @@ import (
 )
 
 func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
+	logutil.Debugf("QSQ, do DCreateTablet")
 	resp := pb.AcquireResponse()
 	customReq := &pb3.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -27,6 +28,7 @@ func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
+	logutil.Debugf("QSQ, do DCreateTablet, %v", t)
 	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe2.Storage)
 	id, err := store.CreateTable(&t, dbi.TableOpCtx{
 		OpIndex:   ctx.LogIndex(),
