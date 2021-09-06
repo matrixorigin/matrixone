@@ -12,16 +12,17 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/protocol"
+	aoe3 "matrixone/pkg/vm/driver/aoe"
+	"matrixone/pkg/vm/driver/config"
+	"matrixone/pkg/vm/driver/pb"
+	"matrixone/pkg/vm/driver/testutil"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	aoe2 "matrixone/pkg/vm/engine/dist/aoe"
-	config2 "matrixone/pkg/vm/engine/dist/config"
-	pb2 "matrixone/pkg/vm/engine/dist/pb"
-	testutil2 "matrixone/pkg/vm/engine/dist/testutil"
+	"sync"
 	"testing"
 	"time"
 )
@@ -44,14 +45,14 @@ func init() {
 
 func TestStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
-	c := testutil2.NewTestAOECluster(t,
-		func(node int) *config2.Config {
-			c := &config2.Config{}
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
-		testutil2.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe2.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &md.Configuration{
 				Dir:              path,
@@ -67,12 +68,12 @@ func TestStorage(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return aoe2.NewStorageWithOptions(path, opts)
+			return aoe3.NewStorageWithOptions(path, opts)
 		}),
-		testutil2.WithTestAOEClusterUsePebble(),
-		testutil2.WithTestAOEClusterRaftClusterOptions(
+		testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterLogLevel("info"),
-			raftstore.WithTestClusterDataPath("./test2")))
+			raftstore.WithTestClusterDataPath("./test")))
 
 	c.Start()
 	defer func() {
@@ -85,7 +86,7 @@ func TestStorage(t *testing.T) {
 
 	driver := c.CubeDrivers[0]
 
-	driver.RaftStore().GetRouter().ForeachShards(uint64(pb2.AOEGroup), func(shard *bhmetapb.Shard) bool {
+	driver.RaftStore().GetRouter().ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
 		stdLog.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
 		return true
 	})
@@ -109,9 +110,9 @@ func TestStorage(t *testing.T) {
 	//Prefix Test
 	for i := uint64(0); i < 20; i++ {
 		key := fmt.Sprintf("prefix-%d", i)
-		_, err = driver.Exec(pb2.Request{
-			Type: pb2.Set,
-			Set: pb2.SetRequest{
+		_, err = driver.Exec(pb.Request{
+			Type: pb.Set,
+			Set: pb.SetRequest{
 				Key:   []byte(key),
 				Value: codec.Uint642Bytes(i),
 			},
@@ -139,9 +140,9 @@ func TestStorage(t *testing.T) {
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)
-			_, err = driver.Exec(pb2.Request{
-				Type: pb2.Set,
-				Set: pb2.SetRequest{
+			_, err = driver.Exec(pb.Request{
+				Type: pb.Set,
+				Set: pb.SetRequest{
 					Key:   []byte(key),
 					Value: []byte(key),
 				},
@@ -159,9 +160,9 @@ func TestStorage(t *testing.T) {
 	for i := uint64(0); i < 10; i++ {
 		for j := uint64(0); j < 5; j++ {
 			key := fmt.Sprintf("/prefix/%d/%d", i, j)
-			value, err = driver.Exec(pb2.Request{
-				Type: pb2.Get,
-				Get: pb2.GetRequest{
+			value, err = driver.Exec(pb.Request{
+				Type: pb.Get,
+				Get: pb.GetRequest{
 					Key: []byte(key),
 				},
 			})
@@ -171,7 +172,31 @@ func TestStorage(t *testing.T) {
 	}
 	fmt.Printf("time cost for 50 read is %d ms\n", time.Since(t0).Milliseconds())
 
-	shard, err := driver.GetShardPool().Alloc(uint64(pb2.AOEGroup), []byte("test-1"))
+	//AllocId Test
+	req := pb.Request{
+		Type:  pb.Incr,
+		Group: pb.KVGroup,
+		AllocID: pb.AllocIDRequest{
+			Key: []byte("alloc-key"),
+		},
+	}
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	driver.AsyncExec(req, func(i interface{}, data []byte, err error) {
+		wg.Done()
+		if err != nil {
+			logutil.Errorf("call AllocId failed, %v\n", err)
+			return
+		}
+		resp, err := codec.Bytes2Uint64(data)
+		if err != nil {
+			logutil.Errorf("get result of AllocId failed, %v\n", err)
+			return
+		}
+		logutil.Infof("Alloc id is %d\n", resp)
+	}, nil)
+
+	shard, err := driver.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
 	//CreateTableTest
 	toShard := shard.ShardID
@@ -216,19 +241,19 @@ func TestStorage(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	if restart {
-		doRestartEngine(t)
+		doRestartStorage(t)
 	}
 
 }
 
 func doRestartStorage(t *testing.T) {
-	c := testutil2.NewTestAOECluster(t,
-		func(node int) *config2.Config {
-			c := &config2.Config{}
+	c := testutil.NewTestAOECluster(t,
+		func(node int) *config.Config {
+			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			return c
 		},
-		testutil2.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe2.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &md.Configuration{
 				Dir:              path,
@@ -244,9 +269,9 @@ func doRestartStorage(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return aoe2.NewStorageWithOptions(path, opts)
-		}), testutil2.WithTestAOEClusterUsePebble(),
-		testutil2.WithTestAOEClusterRaftClusterOptions(
+			return aoe3.NewStorageWithOptions(path, opts)
+		}), testutil.WithTestAOEClusterUsePebble(),
+		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(false),
 			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test")))
@@ -275,9 +300,10 @@ func doRestartStorage(t *testing.T) {
 	fmt.Printf("time cost for scan is %d ms\n", time.Since(t0).Milliseconds())
 	require.NoError(t, err)
 	require.Equal(t, 20, len(kvs))
+
 	pool := driver.GetShardPool()
 	stdLog.Printf("GetShardPool returns %v", pool)
-	shard, err := pool.Alloc(uint64(pb2.AOEGroup), []byte("test-1"))
+	shard, err := pool.Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
 	err = driver.CreateTablet(codec.Bytes2String(codec.EncodeKey(shard.ShardID, tableInfo.Id)), shard.ShardID, tableInfo)
 	assert.NotNil(t, err)

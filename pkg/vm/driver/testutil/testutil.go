@@ -5,9 +5,9 @@ import (
 	"github.com/cockroachdb/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
 	stdLog "log"
-	dist2 "matrixone/pkg/vm/engine/dist"
-	"matrixone/pkg/vm/engine/dist/aoe"
-	config2 "matrixone/pkg/vm/engine/dist/config"
+	"matrixone/pkg/vm/driver"
+	aoe2 "matrixone/pkg/vm/driver/aoe"
+	"matrixone/pkg/vm/driver/config"
 	"testing"
 	"time"
 
@@ -25,7 +25,7 @@ type TestAOEClusterOption func(opts *testAOEClusterOptions)
 
 type testAOEClusterOptions struct {
 	raftOptions       []raftstore.TestClusterOption
-	aoeFactoryFunc    func(path string) (*aoe.Storage, error)
+	aoeFactoryFunc    func(path string) (*aoe2.Storage, error)
 	metaFactoryFunc   func(path string) (storage.MetadataStorage, error)
 	kvDataFactoryFunc func(path string) (storage.DataStorage, error)
 	usePebble         bool
@@ -46,7 +46,7 @@ func WithTestAOEClusterRaftClusterOptions(values ...raftstore.TestClusterOption)
 }
 
 // WithTestAOEClusterAOEStorageFunc set aoe storage func
-func WithTestAOEClusterAOEStorageFunc(value func(path string) (*aoe.Storage, error)) TestAOEClusterOption {
+func WithTestAOEClusterAOEStorageFunc(value func(path string) (*aoe2.Storage, error)) TestAOEClusterOption {
 	return func(opts *testAOEClusterOptions) {
 		opts.aoeFactoryFunc = value
 	}
@@ -72,7 +72,7 @@ func newTestAOEClusterOptions() *testAOEClusterOptions {
 
 func (opts *testAOEClusterOptions) adjust() {
 	if opts.aoeFactoryFunc == nil {
-		opts.aoeFactoryFunc = aoe.NewStorage
+		opts.aoeFactoryFunc = aoe2.NewStorage
 	}
 
 	if opts.metaFactoryFunc == nil {
@@ -100,7 +100,7 @@ func (opts *testAOEClusterOptions) adjust() {
 	}
 
 	if opts.aoeFactoryFunc == nil {
-		opts.aoeFactoryFunc = aoe.NewStorage
+		opts.aoeFactoryFunc = aoe2.NewStorage
 	}
 }
 
@@ -109,18 +109,18 @@ type TestAOECluster struct {
 	// init fields
 	t              *testing.T
 	initOpts       []TestAOEClusterOption
-	initCfgCreator func(node int) *config2.Config
+	initCfgCreator func(node int) *config.Config
 
 	// reset fields
 	opts             *testAOEClusterOptions
 	RaftCluster      *raftstore.TestRaftCluster
-	CubeDrivers      []dist2.CubeDriver
-	AOEStorages      []*aoe.Storage
+	CubeDrivers      []driver.CubeDriver
+	AOEStorages      []*aoe2.Storage
 	MetadataStorages []storage.MetadataStorage
 	DataStorages     []storage.DataStorage
 }
 
-func NewTestAOECluster(t *testing.T, cfgCreator func(node int) *config2.Config, opts ...TestAOEClusterOption) *TestAOECluster {
+func NewTestAOECluster(t *testing.T, cfgCreator func(node int) *config.Config, opts ...TestAOEClusterOption) *TestAOECluster {
 	c := &TestAOECluster{t: t, initOpts: opts, initCfgCreator: cfgCreator}
 	c.reset()
 	return c
@@ -169,7 +169,7 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 		dCfg := c.initCfgCreator(node)
 		dCfg.CubeConfig = *cfg
 		dCfg.ServerConfig.ExternalServer = true
-		d, err := dist2.NewCubeDriverWithFactory(c.MetadataStorages[node], c.DataStorages[node], c.AOEStorages[node], dCfg, func(c *cConfig.Config) (raftstore.Store, error) {
+		d, err := driver.NewCubeDriverWithFactory(c.MetadataStorages[node], c.DataStorages[node], c.AOEStorages[node], dCfg, func(c *cConfig.Config) (raftstore.Store, error) {
 			return raftstore.NewStore(c), nil
 		})
 		assert.NoError(c.t, err)
@@ -217,8 +217,8 @@ func (c *TestAOECluster) Stop() {
 
 type TestCluster struct {
 	T            *testing.T
-	Applications []dist2.CubeDriver
-	AOEDBs       []*aoe.Storage
+	Applications []driver.CubeDriver
+	AOEDBs       []*aoe2.Storage
 }
 
 func (c *TestCluster) Stop() {

@@ -19,12 +19,12 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
+	"matrixone/pkg/vm/driver"
+	aoe2 "matrixone/pkg/vm/driver/aoe"
+	config3 "matrixone/pkg/vm/driver/config"
+	"matrixone/pkg/vm/driver/pb"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
 	engine "matrixone/pkg/vm/engine/aoe/storage"
-	dist2 "matrixone/pkg/vm/engine/dist"
-	"matrixone/pkg/vm/engine/dist/aoe"
-	config2 "matrixone/pkg/vm/engine/dist/config"
-	pb2 "matrixone/pkg/vm/engine/dist/pb"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -142,16 +142,16 @@ func main() {
 	pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
 		FS: vfs.NewPebbleFS(vfs.Default),
 	})
-	var aoeDataStorage *aoe.Storage
+	var aoeDataStorage *aoe2.Storage
 
 	opt := engine.Options{}
 	_, err = toml.DecodeFile(os.Args[1], &opt)
 	if err != nil {
 		panic(err)
 	}
-	aoeDataStorage, err = aoe.NewStorageWithOptions(targetDir+"/aoe", &opt)
+	aoeDataStorage, err = aoe2.NewStorageWithOptions(targetDir+"/aoe", &opt)
 
-	cfg := config2.Config{}
+	cfg := config3.Config{}
 	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
 	if err != nil {
 		panic(err)
@@ -171,7 +171,7 @@ func main() {
 		cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
 	}
 
-	a, err := dist2.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+	a, err := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {
 		fmt.Printf("Create cube driver failed, %v", err)
 		panic(err)
@@ -240,7 +240,7 @@ func main() {
 	os.Exit(0)
 }
 
-func waitClusterStartup(driver dist2.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
+func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
 	timeoutC := time.After(timeout)
 	for {
 		select {
@@ -251,7 +251,7 @@ func waitClusterStartup(driver dist2.CubeDriver, timeout time.Duration, maxRepli
 			if router != nil {
 				nodeCnt := 0
 				shardCnt := 0
-				router.ForeachShards(uint64(pb2.AOEGroup), func(shard *bhmetapb.Shard) bool {
+				router.ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
 					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
 					shardCnt++
 					if len(shard.Peers) > nodeCnt {

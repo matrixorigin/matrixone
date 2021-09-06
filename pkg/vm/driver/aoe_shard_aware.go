@@ -1,4 +1,4 @@
-package dist
+package driver
 
 import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"

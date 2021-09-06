@@ -2,8 +2,8 @@ package tpEngine
 
 import (
 	"fmt"
+	"matrixone/pkg/vm/driver"
 	"matrixone/pkg/vm/engine"
-	dist2 "matrixone/pkg/vm/engine/dist"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"sync"
@@ -288,7 +288,7 @@ type tpEngine struct {
 	engine.Engine
 	rwlock  sync.RWMutex
 	engName string
-	kv      dist2.CubeDriver
+	kv      driver.CubeDriver
 	proc    *process.Process
 
 	//db0 table meta1
@@ -335,7 +335,7 @@ type tpDatabase struct {
 	rels map[string]*tpTupleImpl
 
 	proc *process.Process
-	kv   dist2.CubeDriver
+	kv   driver.CubeDriver
 }
 
 /*
@@ -363,7 +363,7 @@ type tpRelation struct {
 
 	md tpMetadata
 
-	kv   dist2.CubeDriver
+	kv   driver.CubeDriver
 	proc *process.Process
 }
 
@@ -371,7 +371,7 @@ type tpSegment struct {
 	engine.Segment
 
 	id   string
-	kv   *dist2.CubeDriver
+	kv   *driver.CubeDriver
 	proc *process.Process
 	mp   map[string]metadata.Attribute
 }
@@ -380,7 +380,7 @@ type tpBlock struct {
 	engine.Block
 
 	id   string
-	kv   *dist2.CubeDriver
+	kv   *driver.CubeDriver
 	proc *process.Process
 	mp   map[string]metadata.Attribute
 }
