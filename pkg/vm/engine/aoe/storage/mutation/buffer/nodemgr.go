@@ -112,6 +112,7 @@ func (mgr *nodeManager) MakeRoom(size uint64) bool {
 func (mgr *nodeManager) Pin(node base.INode) base.INodeHandle {
 	node.RLock()
 	if node.IsLoaded() {
+		node.Ref()
 		node.RUnlock()
 		return node.MakeHandle()
 	}
@@ -120,6 +121,7 @@ func (mgr *nodeManager) Pin(node base.INode) base.INodeHandle {
 	node.Lock()
 	defer node.Unlock()
 	if node.IsLoaded() {
+		node.Ref()
 		return node.MakeHandle()
 	}
 	ok := mgr.MakeRoom(node.Size())

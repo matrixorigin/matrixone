@@ -5,12 +5,14 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
+	"matrixone/pkg/vm/engine/aoe/storage/mutation"
+	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 
 	// "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
-	// "matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	// "matrixone/pkg/vm/engine/aoe/storage/mutation"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
@@ -66,41 +68,50 @@ func TestTBlock(t *testing.T) {
 	factory := factories.NewMutFactory(opts, mgr, nil)
 	nodeFactory := factory.CreateNodeFactory(tabledata)
 
-	node1, err := newTBlock(segdata, meta1, nodeFactory)
+	blk1, err := newTBlock(segdata, meta1, nodeFactory)
 	assert.Nil(t, err)
-	assert.NotNil(t, node1)
-
-	fn := func(bat batch.IBatch) {
-		assert.True(t, node1.node.IsLoaded())
+	assert.NotNil(t, blk1)
+	assert.False(t, blk1.node.IsLoaded())
+	fn := func(bat batch.IBatch) error {
+		assert.True(t, blk1.node.IsLoaded())
+		return nil
 	}
-	node1.ProcessData(fn)
+	blk1.ProcessData(fn)
 
-	// node1 := nodeFactory.CreateNode(segfile, meta1).(*mutation.MutableBlockNode)
+	rows := uint64(10)
+	factor := uint64(4)
 
-	// mgr.RegisterNode(node1)
-	// h1 := mgr.Pin(node1)
-	// assert.NotNil(t, h1)
-	// rows := uint64(10)
-	// factor := uint64(4)
+	insertBat := chunk.MockBatch(schema.Types(), rows)
 
-	// bat := chunk.MockBatch(schema.Types(), rows)
-	// insert := func(n *mutation.MutableBlockNode) func() error {
-	// 	return func() error {
-	// 		for idx, attr := range n.Data.GetAttrs() {
-	// 			if _, err = n.Data.GetVectorByAttr(attr).AppendVector(bat.Vecs[idx], 0); err != nil {
-	// 				return err
-	// 			}
-	// 			// assert.Nil(t, err)
-	// 		}
-	// 		return nil
-	// 	}
-	// }
-	// err = node1.Expand(rows*factor, insert(node1))
+	insertFn := func(n *mutation.MutableBlockNode) func() error {
+		return func() error {
+			for idx, attr := range n.Data.GetAttrs() {
+				if _, err = n.Data.GetVectorByAttr(attr).AppendVector(insertBat.Vecs[idx], 0); err != nil {
+					assert.NotNil(t, err)
+				}
+			}
+			return nil
+		}
+	}
+	appendFn := func(node bb.INode) error {
+		n := node.(*mutation.MutableBlockNode)
+		return n.Expand(rows*factor, insertFn(n))
+	}
+
+	err = blk1.WithPinedContext(appendFn)
+	assert.Nil(t, err)
+
+	err = blk1.WithPinedContext(appendFn)
+	assert.Nil(t, err)
+
+	assert.Equal(t, rows*factor*2, mgr.Total())
+
+	// err = blk1.Expand(rows*factor, insert(blk1))
 	// assert.Nil(t, err)
-	// t.Logf("length=%d", node1.Data.Length())
-	// err = node1.Expand(rows*factor, insert(node1))
+	// t.Logf("length=%d", blk1.Data.Length())
+	// err = blk1.Expand(rows*factor, insert(blk1))
 	// assert.Nil(t, err)
-	// t.Logf("length=%d", node1.Data.Length())
+	// t.Logf("length=%d", blk1.Data.Length())
 	// assert.Equal(t, rows*factor*2, mgr.Total())
 
 	// node2 := nodeFactory.CreateNode(segfile, meta2).(*mutation.MutableBlockNode)
@@ -119,10 +130,10 @@ func TestTBlock(t *testing.T) {
 	// assert.Nil(t, err)
 
 	// h2.Close()
-	// h1 = mgr.Pin(node1)
-	// assert.Equal(t, int(rows*2), node1.Data.Length())
+	// h1 = mgr.Pin(blk1)
+	// assert.Equal(t, int(rows*2), blk1.Data.Length())
 
-	// err = node1.Expand(rows*factor, insert(node1))
+	// err = blk1.Expand(rows*factor, insert(blk1))
 	// assert.Nil(t, err)
 	// h1.Close()
 	// t.Log(mgr.String())
@@ -137,7 +148,7 @@ func TestTBlock(t *testing.T) {
 	// t.Log(mgr.String())
 
 	// h2.Close()
-	// h1 = mgr.Pin(node1)
+	// h1 = mgr.Pin(blk1)
 
 	t.Log(mgr.String())
 	t.Log(common.GPool.String())

@@ -12,6 +12,7 @@ import (
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/process"
 	"runtime"
+	// "matrixone/pkg/logutil"
 )
 
 type tblock struct {
@@ -26,7 +27,13 @@ func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory
 		node:      factory.CreateNode(host.GetSegmentFile(), meta),
 		nodeMgr:   factory.GetManager(),
 	}
+	blk.OnZeroCB = blk.close
 	return blk, nil
+}
+
+func (blk *tblock) close() {
+	blk.baseBlock.release()
+	blk.node.Close()
 }
 
 func (blk *tblock) getHandle() bb.INodeHandle {
@@ -38,12 +45,21 @@ func (blk *tblock) getHandle() bb.INodeHandle {
 	return h
 }
 
-func (blk *tblock) ProcessData(fn func(batch.IBatch)) {
+func (blk *tblock) WithPinedContext(fn func(bb.INode) error) error {
+	h := blk.getHandle()
+	n := h.GetNode()
+	err := fn(n)
+	h.Close()
+	return err
+}
+
+func (blk *tblock) ProcessData(fn func(batch.IBatch) error) error {
 	h := blk.getHandle()
 	n := h.GetNode()
 	data := n.(mb.IMutableBlock).GetData()
-	fn(data)
+	err := fn(data)
 	h.Close()
+	return err
 }
 
 func (blk *tblock) Size(attr string) uint64 {
