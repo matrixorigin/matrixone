@@ -14,14 +14,14 @@ import (
 	"runtime"
 )
 
-type tBlock struct {
+type tblock struct {
 	baseBlock
 	node    bb.INode
 	nodeMgr bb.INodeManager
 }
 
-func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory) (*tBlock, error) {
-	blk := &tBlock{
+func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory) (*tblock, error) {
+	blk := &tblock{
 		baseBlock: *newBaseBlock(host, meta),
 		node:      factory.CreateNode(host.GetSegmentFile(), meta),
 		nodeMgr:   factory.GetManager(),
@@ -29,7 +29,7 @@ func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory
 	return blk, nil
 }
 
-func (blk *tBlock) getHandle() bb.INodeHandle {
+func (blk *tblock) getHandle() bb.INodeHandle {
 	h := blk.nodeMgr.Pin(blk.node)
 	for h == nil {
 		runtime.Gosched()
@@ -38,7 +38,7 @@ func (blk *tBlock) getHandle() bb.INodeHandle {
 	return h
 }
 
-func (blk *tBlock) ProcessData(fn func(batch.IBatch)) {
+func (blk *tblock) ProcessData(fn func(batch.IBatch)) {
 	h := blk.getHandle()
 	n := h.GetNode()
 	data := n.(mb.IMutableBlock).GetData()
@@ -46,31 +46,31 @@ func (blk *tBlock) ProcessData(fn func(batch.IBatch)) {
 	h.Close()
 }
 
-func (blk *tBlock) Size(attr string) uint64 {
+func (blk *tblock) Size(attr string) uint64 {
 	// TODO
 	return 0
 }
 
-func (blk *tBlock) GetSegmentedIndex() (id uint64, ok bool) {
+func (blk *tblock) GetSegmentedIndex() (id uint64, ok bool) {
 	// TODO
 	return id, ok
 }
 
-func (blk *tBlock) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
+func (blk *tblock) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
 	// TODO
 	return nil, nil
 }
 
-func (blk *tBlock) String() string {
+func (blk *tblock) String() string {
 	// TODO
 	return ""
 }
 
-func (blk *tBlock) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
+func (blk *tblock) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
 	panic("not implemented")
 }
 
-func (blk *tBlock) getVectorCopyFactory(attr string, ref uint64, proc *process.Process) func(batch.IBatch) (*gvec.Vector, error) {
+func (blk *tblock) getVectorCopyFactory(attr string, ref uint64, proc *process.Process) func(batch.IBatch) (*gvec.Vector, error) {
 	return func(bat batch.IBatch) (*gvec.Vector, error) {
 		colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
 		raw := bat.GetVectorByAttr(colIdx).GetLatestView()
@@ -78,7 +78,7 @@ func (blk *tBlock) getVectorCopyFactory(attr string, ref uint64, proc *process.P
 	}
 }
 
-func (blk *tBlock) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*gvec.Vector, error) {
+func (blk *tblock) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*gvec.Vector, error) {
 	fn := blk.getVectorCopyFactory(attr, ref, proc)
 	h := blk.getHandle()
 	n := h.GetNode()
@@ -88,15 +88,15 @@ func (blk *tBlock) GetVectorCopy(attr string, ref uint64, proc *process.Process)
 	return v, err
 }
 
-func (blk *tBlock) Prefetch(attr string) error {
+func (blk *tblock) Prefetch(attr string) error {
 	return nil
 }
 
-func (blk *tBlock) GetFullBatch() batch.IBatch {
+func (blk *tblock) GetFullBatch() batch.IBatch {
 	panic("not supported")
 }
 
-func (blk *tBlock) GetBatch(attrids []int) dbi.IBatchReader {
+func (blk *tblock) GetBatch(attrids []int) dbi.IBatchReader {
 	// TODO
 	return nil
 }

@@ -6,11 +6,16 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
-type BlockFlusher = func(base.INode, batch.IBatch, *metadata.Block, *dataio.TransientBlockFile) error
+type blockFlusher struct{}
+
+func (f blockFlusher) flush(node base.INode, data batch.IBatch, meta *metadata.Block, file *dataio.TransientBlockFile) error {
+	return file.Sync(data, meta)
+}
 
 type MutableBlockNode struct {
 	buffer.Node
@@ -18,11 +23,15 @@ type MutableBlockNode struct {
 	Meta      *metadata.Block
 	File      *dataio.TransientBlockFile
 	Data      batch.IBatch
-	Flusher   BlockFlusher
+	Flusher   mb.BlockFlusher
 }
 
 func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
-	tabledata iface.ITableData, meta *metadata.Block, flusher BlockFlusher) *MutableBlockNode {
+	tabledata iface.ITableData, meta *metadata.Block, flusher mb.BlockFlusher) *MutableBlockNode {
+	if flusher == nil {
+		t := blockFlusher{}
+		flusher = t.flush
+	}
 	n := &MutableBlockNode{
 		File:      file,
 		Meta:      meta,

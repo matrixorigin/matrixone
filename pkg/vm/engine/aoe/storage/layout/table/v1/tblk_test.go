@@ -1,12 +1,11 @@
-package factories
+package table
 
 import (
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation"
@@ -19,15 +18,14 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestMutBlockNodeFactory(t *testing.T) {
-	dir := "/tmp/mublknodefactory"
+func TestTBlock(t *testing.T) {
+	dir := "/tmp/table/tblk"
 	os.RemoveAll(dir)
 	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
 	rowCount, blkCount := uint64(30), uint64(4)
 	info := metadata.MockInfo(&sync.RWMutex{}, rowCount, blkCount)
 	info.Conf.Dir = dir
 	opts.Meta.Info = info
-	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)
 	tablemeta := metadata.MockTable(info, schema, 2)
 
@@ -43,13 +41,13 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
-	tabledata := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tablemeta)
+	tabledata := NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tablemeta)
 
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
 
-	factory := NewMutFactory(opts, mgr, nil)
+	factory := factories.NewMutFactory(opts, mgr, nil)
 	nodeFactory := factory.CreateNodeFactory(tabledata)
 
 	node1 := nodeFactory.CreateNode(segfile, meta1).(*mutation.MutableBlockNode)

@@ -3,7 +3,6 @@ package mutation
 import (
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -11,7 +10,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
@@ -19,12 +17,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
-
-type blockFlusher struct{}
-
-func (f blockFlusher) flush(node base.INode, data batch.IBatch, meta *metadata.Block, file *dataio.TransientBlockFile) error {
-	return file.Sync(data, meta)
-}
 
 func TestMutableBlockNode(t *testing.T) {
 	dir := "/tmp/mutableblk"
@@ -37,8 +29,6 @@ func TestMutableBlockNode(t *testing.T) {
 	os.RemoveAll(dir)
 	schema := metadata.MockSchema(2)
 	tablemeta := metadata.MockTable(info, schema, 2)
-
-	flusher := blockFlusher{}
 
 	meta1, err := tablemeta.ReferenceBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)
@@ -58,7 +48,7 @@ func TestMutableBlockNode(t *testing.T) {
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
-	node1 := NewMutableBlockNode(mgr, tblkfile, tabledata, meta1, flusher.flush)
+	node1 := NewMutableBlockNode(mgr, tblkfile, tabledata, meta1, nil)
 	mgr.RegisterNode(node1)
 	h1 := mgr.Pin(node1)
 	assert.NotNil(t, h1)
@@ -88,7 +78,7 @@ func TestMutableBlockNode(t *testing.T) {
 	blkmeta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
 	assert.Nil(t, err)
 	tblkfile2 := dataio.NewTBlockFile(segfile, *meta2.AsCommonID())
-	node2 := NewMutableBlockNode(mgr, tblkfile2, tabledata, blkmeta2, flusher.flush)
+	node2 := NewMutableBlockNode(mgr, tblkfile2, tabledata, blkmeta2, nil)
 	mgr.RegisterNode(node2)
 	h2 := mgr.Pin(node2)
 	assert.NotNil(t, h2)
