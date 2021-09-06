@@ -54,7 +54,6 @@ func TestMutBlockNodeFactory(t *testing.T) {
 
 	node1 := nodeFactory.CreateNode(segfile, meta1).(*mutation.MutableBlockNode)
 
-	mgr.RegisterNode(node1)
 	h1 := mgr.Pin(node1)
 	assert.NotNil(t, h1)
 	rows := uint64(10)
@@ -81,7 +80,6 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	assert.Equal(t, rows*factor*2, mgr.Total())
 
 	node2 := nodeFactory.CreateNode(segfile, meta2).(*mutation.MutableBlockNode)
-	mgr.RegisterNode(node2)
 	h2 := mgr.Pin(node2)
 	assert.NotNil(t, h2)
 
