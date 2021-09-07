@@ -130,6 +130,11 @@ type chunkIn struct {
 	last bool
 }
 
+type LineOut struct {
+	Lines [][]string
+	Line  []string
+}
+
 // readAllStreaming reads all the remaining records from r.
 func (r *Reader) readAllStreaming() (out chan recordsOutput) {
 
@@ -458,7 +463,7 @@ func (r *Reader) ReadAll() ([][]string, error) {
 
 // ReadLoop reads all the remaining records from r.
 //Output records into the callback
-func (r *Reader) ReadLoop(callback func(lines [][]string,line []string) error) error {
+func (r *Reader) ReadLoop(lineOutChan chan LineOut, callback func(lines [][]string, line []string) error) error {
 	if !SupportedCPU() {
 		rCsv := csv.NewReader(r.r)
 		rCsv.LazyQuotes = r.LazyQuotes
@@ -491,6 +496,9 @@ func (r *Reader) ReadLoop(callback func(lines [][]string,line []string) error) e
 					return err
 				}
 			}
+			if lineOutChan != nil {
+				lineOutChan <- LineOut{nil, record}
+			}
 		}
 
 		return nil
@@ -522,6 +530,9 @@ func (r *Reader) ReadLoop(callback func(lines [][]string,line []string) error) e
 				return err
 			}
 		}
+		if lineOutChan != nil {
+			lineOutChan <- LineOut{rcrds.records, nil}
+		}
 		sequence++
 
 		// check if we already received higher sequence numbers
@@ -540,6 +551,9 @@ func (r *Reader) ReadLoop(callback func(lines [][]string,line []string) error) e
 				break
 			}
 		}
+	}
+	if lineOutChan != nil {
+		lineOutChan <- LineOut{nil, nil}
 	}
 	return nil
 }

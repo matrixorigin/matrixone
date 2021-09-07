@@ -394,6 +394,8 @@ type ParseLineHandler struct {
 	//simd csv
 	simdCsvLineArray [][]string
 	simdCsvReader *simdcsv.Reader
+	simdCsvLineOutChan chan simdcsv.LineOut
+	simdCsvLineOutRoutineClose *CloseFlag
 
 	//storage
 	dbHandler engine.Database
@@ -428,6 +430,7 @@ type ParseLineHandler struct {
 	field_skip_bytes time.Duration
 
 	callback  time.Duration
+	asyncChan time.Duration
 }
 
 func (plh *ParseLineHandler) Status() LINE_STATE {
@@ -677,6 +680,73 @@ func (plh *ParseLineHandler) Callback (lines [][]string, line []string) error {
 	return nil
 }
 
+func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) error{
+	plh.simdCsvLineOutRoutineClose.Open()
+	defer wg.Done()
+	wait_a := time.Now()
+	defer func() {
+		plh.asyncChan += time.Since(wait_a)
+	}()
+	for lineOut :=range plh.simdCsvLineOutChan {
+		if lineOut.Line == nil  && lineOut.Lines == nil {
+			break
+		}
+		if lineOut.Line != nil {
+			//step 1 : skip dropped lines
+			if plh.lineCount < plh.load.IgnoredLines {
+				plh.lineCount++
+				return nil
+			}
+
+			plh.lineCount++
+
+			//step 2 : append line into line array
+			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
+			plh.lineIdx++
+
+			if plh.lineIdx == plh.batchSize {
+				//step 3 : save into storage
+				err := saveParsedLinesToBatchSimdCsv(plh,false)
+				if err != nil {
+					return err
+				}
+
+				plh.lineIdx = 0
+			}
+
+		}else if lineOut.Lines != nil {
+			from := 0
+			countOfLines := len(lineOut.Lines)
+			//step 1 : skip dropped lines
+			if plh.lineCount < plh.load.IgnoredLines {
+				skipped := MinUint64(uint64(countOfLines), plh.load.IgnoredLines - plh.lineCount)
+				plh.lineCount += skipped
+				from += int(skipped)
+			}
+
+			fill := 0
+			//step 2 : append lines into line array
+			for i := from; i < countOfLines;  i += fill {
+				fill = Min(countOfLines - i, plh.batchSize - plh.lineIdx)
+				for j := 0; j < fill; j++ {
+					plh.simdCsvLineArray[plh.lineIdx] = lineOut.Lines[i + j]
+					plh.lineIdx++
+				}
+
+				if plh.lineIdx == plh.batchSize {
+					//step 3 : save into storage
+					err := saveParsedLinesToBatchSimdCsv(plh,false)
+					if err != nil {
+						return err
+					}
+
+					plh.lineIdx = 0
+				}
+			}
+		}
+	}
+	return nil
+}
 /*
 find substring among multiple blocks
  */
@@ -2446,8 +2516,9 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 				dataFile,
 				rune(load.Fields.Terminated[0]),
 				'#',
-				false,
-				),
+				false),
+				simdCsvLineOutChan: make(chan simdcsv.LineOut,100 * int(ses.Pu.SV.GetBatchSizeInLoadData())),
+				simdCsvLineOutRoutineClose: &CloseFlag{},
 			dbHandler: dbHandler,
 			tableHandler: tableHandler,
 			lineCount: 0,
@@ -2468,23 +2539,36 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		}
 
 		fmt.Printf("-----prepare batch %s\n",time.Since(prepareTime))
+		wg := sync.WaitGroup{}
+		go func() {
+			wg.Add(1)
+			err = handler.getLineOutFromSimdCsvRoutine(&wg)
+			if err != nil {
+				logutil.Errorf("get line from simdcsv failed. err:%v",err)
+			}
+		}()
 
 		wait_b := time.Now()
-		err = handler.simdCsvReader.ReadLoop(handler.Callback)
+		err = handler.simdCsvReader.ReadLoop(handler.simdCsvLineOutChan, nil)
 		if err != nil {
 			return result, err
 		}
-
 		process_blcok += time.Since(wait_b)
+
+		wg.Wait()
+
 
 		fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
 			handler.row2col,handler.fillBlank,handler.toStorage)
 		fmt.Printf("-----write batch %s reset batch %s\n",
 			handler.writeBatch,handler.resetBatch)
 		fmt.Printf("-----call_back %s " +
-			"process_block - callback %s \n",
+			"process_block - callback %s " +
+			"asyncChan %s \n",
 			handler.callback,
-			process_blcok - handler.callback)
+			process_blcok - handler.callback,
+			handler.asyncChan,
+			)
 
 
 		lastSave := time.Now()
