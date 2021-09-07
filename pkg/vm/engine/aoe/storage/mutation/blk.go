@@ -9,6 +9,7 @@ import (
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
+	"sync/atomic"
 )
 
 type blockFlusher struct{}
@@ -24,6 +25,7 @@ type MutableBlockNode struct {
 	File      *dataio.TransientBlockFile
 	Data      batch.IBatch
 	Flusher   mb.BlockFlusher
+	Applied   uint64
 }
 
 func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
@@ -66,7 +68,26 @@ func (n *MutableBlockNode) Flush() error {
 	data := batch.NewBatch(attrs, vecs)
 	meta := n.Meta.Copy()
 	n.RUnlock()
-	return n.Flusher(n, data, meta, n.File)
+	if err := n.Flusher(n, data, meta, n.File); err != nil {
+		return err
+	}
+	n.updateApplied(meta)
+	return nil
+}
+
+func (n *MutableBlockNode) updateApplied(meta *metadata.Block) {
+	applied, ok := meta.GetAppliedIndex()
+	if ok {
+		atomic.StoreUint64(&n.Applied, applied)
+	}
+}
+
+func (n *MutableBlockNode) GetSegmentedIndex() (uint64, bool) {
+	idx := atomic.LoadUint64(&n.Applied)
+	if idx == uint64(0) {
+		return idx, false
+	}
+	return idx, true
 }
 
 func (n *MutableBlockNode) load() {
@@ -77,9 +98,11 @@ func (n *MutableBlockNode) load() {
 func (n *MutableBlockNode) unload() {
 	// logutil.Infof("%s presyncing %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
 	if ok := n.File.PreSync(uint32(n.Data.Length())); ok {
-		if err := n.Flusher(n, n.Data, n.Meta.Copy(), n.File); err != nil {
+		meta := n.Meta.Copy()
+		if err := n.Flusher(n, n.Data, meta, n.File); err != nil {
 			panic(err)
 		}
+		n.updateApplied(meta)
 	}
 	n.Data.Close()
 	n.Data = nil

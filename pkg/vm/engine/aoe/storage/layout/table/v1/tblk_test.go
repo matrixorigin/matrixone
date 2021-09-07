@@ -109,6 +109,10 @@ func TestTBlock(t *testing.T) {
 	}
 	err = blk1.WithPinedContext(appendFn(idx1))
 	assert.Nil(t, err)
+
+	idx, ok := blk1.GetSegmentedIndex()
+	assert.False(t, ok)
+
 	idx2 := &metadata.LogIndex{
 		ID:       uint64(2),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
@@ -116,6 +120,9 @@ func TestTBlock(t *testing.T) {
 	err = blk1.WithPinedContext(appendFn(idx2))
 	assert.Nil(t, err)
 	assert.Equal(t, rows*factor*2, mgr.Total())
+
+	idx, ok = blk1.GetSegmentedIndex()
+	assert.False(t, ok)
 
 	blk2, err := newTBlock(segdata, meta2, nodeFactory)
 	assert.Nil(t, err)
@@ -134,6 +141,10 @@ func TestTBlock(t *testing.T) {
 	}
 	err = blk2.WithPinedContext(appendFn(idx4))
 	assert.Nil(t, err)
+
+	idx, ok = blk1.GetSegmentedIndex()
+	assert.True(t, ok)
+	assert.Equal(t, idx2.ID, idx)
 
 	err = blk1.WithPinedContext(func(node bb.INode) error {
 		n := node.(*mutation.MutableBlockNode)
@@ -158,7 +169,7 @@ func TestTBlock(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Log(common.GPool.String())
-	idx, ok := blk1.GetSegmentedIndex()
+	idx, ok = blk1.GetSegmentedIndex()
 	assert.True(t, ok)
 	assert.Equal(t, idx5.ID, idx)
 	idx, ok = blk2.GetSegmentedIndex()

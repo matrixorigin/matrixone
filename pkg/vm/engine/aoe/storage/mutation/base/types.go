@@ -12,4 +12,5 @@ type BlockFlusher = func(base.INode, batch.IBatch, *metadata.Block, *dataio.Tran
 type IMutableBlock interface {
 	GetData() batch.IBatch
 	GetFile() *dataio.TransientBlockFile
+	GetSegmentedIndex() (uint64, bool)
 }

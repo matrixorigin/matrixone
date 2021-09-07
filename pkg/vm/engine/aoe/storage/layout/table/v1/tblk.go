@@ -70,7 +70,8 @@ func (blk *tblock) Size(attr string) uint64 {
 }
 
 func (blk *tblock) GetSegmentedIndex() (id uint64, ok bool) {
-	return blk.meta.GetAppliedIndex()
+	n := blk.node.(mb.IMutableBlock)
+	return n.GetSegmentedIndex()
 }
 
 func (blk *tblock) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
