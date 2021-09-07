@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -79,6 +80,15 @@ type Reader struct {
 	TrailingComma bool // Deprecated: No longer used.
 
 	r *bufio.Reader
+
+	//for debug
+	Begin                  time.Time
+	Stage1_first_chunk     time.Duration
+	Stage1_end time.Duration
+	Stage2_first_chunkinfo [5]time.Duration
+	Stage2_end [5]time.Duration
+	ReadLoop_first_records time.Duration
+	End                    time.Duration
 }
 
 var errInvalidDelim = errors.New("csv: invalid field or comment delimiter")
@@ -231,7 +241,7 @@ func (r *Reader) readAllStreaming() (out chan recordsOutput) {
 		fieldsPerRecord := int64(r.FieldsPerRecord)
 
 		for parallel := 0; parallel < cores; parallel++ {
-			go r.stage2Streaming(chunks, &wg, &fieldsPerRecord, fallback, out)
+			go r.stage2Streaming(chunks, &wg, &fieldsPerRecord, fallback, out, parallel)
 		}
 
 		wg.Wait()
@@ -250,8 +260,12 @@ func (r *Reader) stage1Streaming(bufchan chan chunkIn, chunkSize int, masksSize 
 
 	splitRow := make([]byte, 0, 256)
 
+	first := true
 	for chunk := range bufchan {
-
+		if first {
+			r.Stage1_first_chunk = time.Since(r.Begin)
+			first = false
+		}
 		postProcStream := make([]uint64, 0, ((chunkSize>>6)+1)*2)
 		masksStream := make([]uint64, masksSize)
 
@@ -300,15 +314,20 @@ func (r *Reader) stage1Streaming(bufchan chan chunkIn, chunkSize int, masksSize 
 
 		sequence++
 	}
+	r.Stage1_end = time.Since(r.Begin)
 }
 
-func (r *Reader) stage2Streaming(chunks chan chunkInfo, wg *sync.WaitGroup, fieldsPerRecord *int64, fallback func(ioReader io.Reader) recordsOutput, out chan recordsOutput) {
+func (r *Reader) stage2Streaming(chunks chan chunkInfo, wg *sync.WaitGroup, fieldsPerRecord *int64, fallback func(ioReader io.Reader) recordsOutput, out chan recordsOutput, id int) {
 	defer wg.Done()
 
 	simdlines, rowsSize, columnsSize := 1024, 500, 50000
 
+	first := true
 	for chunkInfo := range chunks {
-
+		if first {
+			r.Stage2_first_chunkinfo[id] = time.Since(r.Begin)
+			first = false
+		}
 		simdrecords := make([][]string, 0, simdlines)
 
 		rows := make([]uint64, rowsSize, rowsSize)
@@ -398,6 +417,7 @@ func (r *Reader) stage2Streaming(chunks chan chunkInfo, wg *sync.WaitGroup, fiel
 
 		out <- recordsOutput{chunkInfo.sequence, simdrecords, nil}
 	}
+	r.Stage2_end[id] = time.Since(r.Begin)
 }
 
 // ReadAll reads all the remaining records from r.
@@ -464,6 +484,7 @@ func (r *Reader) ReadAll() ([][]string, error) {
 // ReadLoop reads all the remaining records from r.
 //Output records into the callback
 func (r *Reader) ReadLoop(lineOutChan chan LineOut, callback func(lines [][]string, line []string) error) error {
+	r.Begin = time.Now()
 	if !SupportedCPU() {
 		rCsv := csv.NewReader(r.r)
 		rCsv.LazyQuotes = r.LazyQuotes
@@ -509,7 +530,12 @@ func (r *Reader) ReadLoop(lineOutChan chan LineOut, callback func(lines [][]stri
 	hash := make(map[int][][]string)
 	sequence := 0
 
+	first := true
 	for rcrds := range out {
+		if first {
+			r.ReadLoop_first_records = time.Since(r.Begin)
+			first = false
+		}
 		if rcrds.err != nil {
 			// upon encountering an error ...
 			for _ = range out {
@@ -555,6 +581,8 @@ func (r *Reader) ReadLoop(lineOutChan chan LineOut, callback func(lines [][]stri
 	if lineOutChan != nil {
 		lineOutChan <- LineOut{nil, nil}
 	}
+
+	r.End = time.Since(r.Begin)
 	return nil
 }
 
