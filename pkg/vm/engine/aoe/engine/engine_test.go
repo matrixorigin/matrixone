@@ -74,8 +74,7 @@ func TestAOEEngine(t *testing.T) {
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
 			opts := &e.Options{}
-			mdCfg := &md.Configuration{
-				Dir:              path,
+			mdCfg := &e.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
 				BlockMaxRows:     blockRows,
 			}
@@ -242,8 +241,7 @@ func doRestartEngine(t *testing.T) {
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
 			opts := &e.Options{}
-			mdCfg := &md.Configuration{
-				Dir:              path,
+			mdCfg := &e.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
 				BlockMaxRows:     blockRows,
 			}
@@ -398,5 +396,12 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 	tbls, err = c[0].ListTables(dbid)
 	require.NoError(t, err)
 	require.Equal(t, 185, len(tbls))
+
+	err = c[0].DropDatabase(3, dbName)
+	require.NoError(t, err)
+
+	dbs, err = c[0].ListDatabases()
+	require.NoError(t, err)
+	require.Nil(t, dbs)
 
 }

@@ -14,12 +14,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"time"
 )
 
 func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
-	logutil.Debugf("QSQ, do DCreateTablet")
 	resp := pb.AcquireResponse()
 	customReq := &pb3.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
@@ -28,7 +26,6 @@ func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 		resp.Value = errorResp(err)
 		return 0, 0, resp
 	}
-	logutil.Debugf("QSQ, do DCreateTablet, %v", t)
 	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe2.Storage)
 	id, err := store.CreateTable(&t, dbi.TableOpCtx{
 		OpIndex:   ctx.LogIndex(),
@@ -78,9 +75,7 @@ func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comman
 		return 0, 0, resp
 	}
 	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe2.Storage)
-	err = store.Append(customReq.TabletName, bat, &md.LogIndex{
-		ID: ctx.LogIndex(),
-	})
+	err = store.Append(customReq.TabletName, bat, ctx.LogIndex())
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp

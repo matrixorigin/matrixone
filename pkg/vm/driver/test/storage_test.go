@@ -79,7 +79,7 @@ func TestStorage(t *testing.T) {
 		stdLog.Printf("3>>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
 	stdLog.Printf("driver all started.")
 
@@ -278,8 +278,7 @@ func doRestartStorage(t *testing.T) {
 		c.Stop()
 	}()
 	c.Start()
-	c.RaftCluster.WaitShardByCounts(t, [3]int{21, 21, 21}, time.Second*30)
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
 	driver := c.CubeDrivers[0]
 	t0 := time.Now()
