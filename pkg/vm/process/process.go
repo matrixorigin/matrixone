@@ -34,7 +34,7 @@ func (p *Process) Alloc(size int64) ([]byte, error) {
 		p.Mp.Free(data)
 		return nil, err
 	}
-	return data, nil
+	return data[:mempool.CountSize+size], nil
 }
 
 func (p *Process) Grow(old []byte, size int64) ([]byte, error) {
@@ -60,5 +60,5 @@ func (p *Process) Grow(old []byte, size int64) ([]byte, error) {
 		return nil, err
 	}
 	copy(data[mempool.CountSize:], old)
-	return data, nil
+	return data[:mempool.CountSize+size], nil
 }
