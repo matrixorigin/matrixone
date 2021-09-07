@@ -68,19 +68,12 @@ func pushLimit(s *Scope, arg *vlimit.Argument) *Scope {
 		for i := range s.Ss {
 			s.Ss[i] = pushLimit(s.Ss[i], arg)
 		}
-		s.Ins[len(s.Ins)-1] = vm.Instruction{
-			Op: vm.Limit,
-			Arg: &vlimit.Argument{
-				Limit: arg.Limit,
-			},
-		}
-	} else {
-		n := len(s.Ins) - 1
-		s.Ins = append(s.Ins, vm.Instruction{
-			Arg: arg,
-			Op:  vm.Limit,
-		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
 	}
+	n := len(s.Ins) - 1
+	s.Ins = append(s.Ins, vm.Instruction{
+		Arg: arg,
+		Op:  vm.Limit,
+	})
+	s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
 	return s
 }
