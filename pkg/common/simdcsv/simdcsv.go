@@ -523,6 +523,9 @@ func (r *Reader) ReadLoop(lineOutChan chan LineOut, callback func(lines [][]stri
 						return err
 					}
 				}
+				if lineOutChan != nil {
+					lineOutChan <- LineOut{nil, record}
+				}
 				return nil
 			}
 
@@ -595,6 +598,9 @@ func (r *Reader) ReadLoop(lineOutChan chan LineOut, callback func(lines [][]stri
 					if err != nil {
 						return err
 					}
+				}
+				if lineOutChan != nil {
+					lineOutChan <- LineOut{val, nil}
 				}
 
 				delete(hash, sequence)
