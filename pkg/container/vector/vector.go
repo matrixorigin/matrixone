@@ -675,9 +675,9 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		vs = append(vs, ws[sel])
 		v.Col = vs
 	case types.T_char, types.T_varchar, types.T_json:
-		vs := w.Col.(*types.Bytes)
-		from := vs.Data[vs.Offsets[sel] : vs.Offsets[sel]+vs.Lengths[sel]]
-		col := v.Col.(*types.Bytes)
+		ws := w.Col.(*types.Bytes)
+		from := ws.Get(sel)
+		vs := v.Col.(*types.Bytes)
 		if len(v.Data) == 0 {
 			data, err := proc.Alloc(int64(len(from)))
 			if err != nil {
@@ -685,30 +685,30 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			}
 			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
 			v.Data = data
-			col.Data = data[mempool.CountSize:mempool.CountSize]
+			vs.Data = data[mempool.CountSize:mempool.CountSize]
 		} else {
-			if n := len(col.Data); n+len(from) >= cap(col.Data) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+len(from)))
+			if n := len(vs.Data); n+len(from) >= cap(vs.Data) {
+				data, err := proc.Grow(vs.Data, int64(n+len(from)))
 				if err != nil {
 					return err
 				}
 				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
 				v.Data = data
-				col.Data = data[mempool.CountSize : mempool.CountSize+n]
+				vs.Data = data[mempool.CountSize : mempool.CountSize+n]
 			}
 		}
-		col.Lengths = append(col.Lengths, uint32(len(from)))
+		vs.Lengths = append(vs.Lengths, uint32(len(from)))
 		{
-			n := len(col.Offsets)
+			n := len(vs.Offsets)
 			if n > 0 {
-				col.Offsets = append(col.Offsets, col.Offsets[n-1]+col.Lengths[n-1])
+				vs.Offsets = append(vs.Offsets, vs.Offsets[n-1]+vs.Lengths[n-1])
 			} else {
-				col.Offsets = append(col.Offsets, 0)
+				vs.Offsets = append(vs.Offsets, 0)
 			}
 		}
-		col.Data = append(col.Data, from...)
-		v.Col = col
+		vs.Data = append(vs.Data, from...)
+		v.Col = vs
 	}
 	if w.Nsp.Any() && w.Nsp.Contains(uint64(sel)) {
 		v.Nsp.Add(uint64(v.Length() - 1))

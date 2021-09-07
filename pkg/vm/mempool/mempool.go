@@ -54,7 +54,7 @@ func (m *Mempool) Free(data []byte) bool {
 	count := *(*uint64)(unsafe.Pointer(&data[0])) - 1
 	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&count)), Len: 8, Cap: 8}
 	copy(data, *(*[]byte)(unsafe.Pointer(&hp)))
-	if count > 1 {
+	if count != 0 {
 		return false
 	}
 	size := cap(data)
