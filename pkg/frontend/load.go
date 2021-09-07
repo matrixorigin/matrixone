@@ -431,6 +431,8 @@ type ParseLineHandler struct {
 
 	callback  time.Duration
 	asyncChan time.Duration
+	csvLineArray1 time.Duration
+	csvLineArray2 time.Duration
 }
 
 func (plh *ParseLineHandler) Status() LINE_STATE {
@@ -698,11 +700,12 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 				return nil
 			}
 
-			plh.lineCount++
-
+			wait_b := time.Now()
 			//step 2 : append line into line array
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
+
+			plh.csvLineArray1 += time.Since(wait_b)
 
 			if plh.lineIdx == plh.batchSize {
 				//step 3 : save into storage
@@ -728,10 +731,12 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 			//step 2 : append lines into line array
 			for i := from; i < countOfLines;  i += fill {
 				fill = Min(countOfLines - i, plh.batchSize - plh.lineIdx)
+				wait_c := time.Now()
 				for j := 0; j < fill; j++ {
 					plh.simdCsvLineArray[plh.lineIdx] = lineOut.Lines[i + j]
 					plh.lineIdx++
 				}
+				plh.csvLineArray2 += time.Since(wait_c)
 
 				if plh.lineIdx == plh.batchSize {
 					//step 3 : save into storage
@@ -2564,10 +2569,13 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			handler.writeBatch,handler.resetBatch)
 		fmt.Printf("-----call_back %s " +
 			"process_block - callback %s " +
-			"asyncChan %s \n",
+			"asyncChan %s " +
+			"csvLineArray1 %s csvLineArray2 %s\n",
 			handler.callback,
 			process_blcok - handler.callback,
 			handler.asyncChan,
+			handler.csvLineArray1,
+			handler.csvLineArray2,
 			)
 
 
