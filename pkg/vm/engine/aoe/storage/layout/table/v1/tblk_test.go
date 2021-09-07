@@ -81,24 +81,40 @@ func TestTBlock(t *testing.T) {
 
 	insertBat := chunk.MockBatch(schema.Types(), rows)
 
-	insertFn := func(n *mutation.MutableBlockNode) func() error {
+	insertFn := func(n *mutation.MutableBlockNode, idx *metadata.LogIndex) func() error {
 		return func() error {
+			var na int
 			for idx, attr := range n.Data.GetAttrs() {
-				if _, err = n.Data.GetVectorByAttr(attr).AppendVector(insertBat.Vecs[idx], 0); err != nil {
+				if na, err = n.Data.GetVectorByAttr(attr).AppendVector(insertBat.Vecs[idx], 0); err != nil {
 					assert.NotNil(t, err)
 				}
 			}
+			num := uint64(na)
+			idx.Count = num
+			n.Meta.SetIndex(*idx)
+			n.Meta.AddCount(num)
 			return nil
 		}
 	}
-	appendFn := func(node bb.INode) error {
-		n := node.(*mutation.MutableBlockNode)
-		return n.Expand(rows*factor, insertFn(n))
+
+	appendFn := func(idx *metadata.LogIndex) func(bb.INode) error {
+		return func(node bb.INode) error {
+			n := node.(*mutation.MutableBlockNode)
+			return n.Expand(rows*factor, insertFn(n, idx))
+		}
 	}
 
-	err = blk1.WithPinedContext(appendFn)
+	idx1 := &metadata.LogIndex{
+		ID:       uint64(1),
+		Capacity: uint64(insertBat.Vecs[0].Length()),
+	}
+	err = blk1.WithPinedContext(appendFn(idx1))
 	assert.Nil(t, err)
-	err = blk1.WithPinedContext(appendFn)
+	idx2 := &metadata.LogIndex{
+		ID:       uint64(2),
+		Capacity: uint64(insertBat.Vecs[0].Length()),
+	}
+	err = blk1.WithPinedContext(appendFn(idx2))
 	assert.Nil(t, err)
 	assert.Equal(t, rows*factor*2, mgr.Total())
 
@@ -107,9 +123,17 @@ func TestTBlock(t *testing.T) {
 	assert.NotNil(t, blk2)
 	assert.False(t, blk2.node.IsLoaded())
 
-	err = blk2.WithPinedContext(appendFn)
+	idx3 := &metadata.LogIndex{
+		ID:       uint64(3),
+		Capacity: uint64(insertBat.Vecs[0].Length()),
+	}
+	err = blk2.WithPinedContext(appendFn(idx3))
 	assert.Nil(t, err)
-	err = blk2.WithPinedContext(appendFn)
+	idx4 := &metadata.LogIndex{
+		ID:       uint64(4),
+		Capacity: uint64(insertBat.Vecs[0].Length()),
+	}
+	err = blk2.WithPinedContext(appendFn(idx4))
 	assert.Nil(t, err)
 
 	err = blk1.WithPinedContext(func(node bb.INode) error {
@@ -119,7 +143,11 @@ func TestTBlock(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	err = blk1.WithPinedContext(appendFn)
+	idx5 := &metadata.LogIndex{
+		ID:       uint64(5),
+		Capacity: uint64(insertBat.Vecs[0].Length()),
+	}
+	err = blk1.WithPinedContext(appendFn(idx5))
 	assert.Nil(t, err)
 
 	t.Log(mgr.String())
@@ -131,6 +159,12 @@ func TestTBlock(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Log(common.GPool.String())
+	idx, ok := blk1.GetSegmentedIndex()
+	assert.True(t, ok)
+	assert.Equal(t, idx5.ID, idx)
+	idx, ok = blk2.GetSegmentedIndex()
+	assert.True(t, ok)
+	assert.Equal(t, idx4.ID, idx)
 	blk1.Unref()
 	blk2.Unref()
 }

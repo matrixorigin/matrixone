@@ -1,6 +1,7 @@
 package table
 
 import (
+	"fmt"
 	gvec "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
@@ -69,18 +70,16 @@ func (blk *tblock) Size(attr string) uint64 {
 }
 
 func (blk *tblock) GetSegmentedIndex() (id uint64, ok bool) {
-	// TODO
-	return id, ok
+	return blk.meta.GetAppliedIndex()
 }
 
 func (blk *tblock) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
-	// TODO
-	return nil, nil
+	return newBlock(host, meta)
 }
 
 func (blk *tblock) String() string {
-	// TODO
-	return ""
+	s := fmt.Sprintf("<TBlk[%d]>(Refs=%d)", blk.meta.ID, blk.RefCount())
+	return s
 }
 
 func (blk *tblock) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
