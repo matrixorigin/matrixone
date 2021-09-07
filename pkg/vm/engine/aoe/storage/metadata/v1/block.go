@@ -64,6 +64,16 @@ func (blk *Block) GetID() uint64 {
 	return blk.ID
 }
 
+func (blk *Block) TryUpgrade() bool {
+	blk.Lock()
+	defer blk.Unlock()
+	if blk.Count == blk.MaxRowCount {
+		blk.DataState = FULL
+		return true
+	}
+	return false
+}
+
 func (blk *Block) GetSegmentID() uint64 {
 	return blk.Segment.ID
 }

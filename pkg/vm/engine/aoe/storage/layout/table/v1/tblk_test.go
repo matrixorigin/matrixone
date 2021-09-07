@@ -1,20 +1,19 @@
 package table
 
 import (
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/logutil"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
-	"matrixone/pkg/vm/engine/aoe/storage/mutation"
-	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
-
-	// "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	// "matrixone/pkg/vm/engine/aoe/storage/mutation"
+	"matrixone/pkg/vm/engine/aoe/storage/mutation"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
@@ -165,6 +164,34 @@ func TestTBlock(t *testing.T) {
 	idx, ok = blk2.GetSegmentedIndex()
 	assert.True(t, ok)
 	assert.Equal(t, idx4.ID, idx)
+
+	blk1.WithPinedContext(func(node bb.INode) error {
+		n := node.(*mutation.MutableBlockNode)
+		n.Meta.TryUpgrade()
+		var vecs []*vector.Vector
+		for attri, _ := range n.Data.GetAttrs() {
+			v := n.Data.GetVectorByAttr(attri)
+			vecs = append(vecs, v.CopyToVector())
+		}
+
+		bw := dataio.NewBlockWriter(vecs, n.Meta, n.Meta.Segment.Table.Conf.Dir)
+		bw.SetPreExecutor(func() {
+			logutil.Infof(" %s | Memtable | Flushing", bw.GetFileName())
+		})
+		bw.SetPostExecutor(func() {
+			logutil.Infof(" %s | Memtable | Flushed", bw.GetFileName())
+		})
+		return bw.Execute()
+	})
+
+	t.Logf(mtBufMgr.String())
+	nblk1, err := blk1.CloneWithUpgrade(blk1.host, blk1.meta)
+	assert.Nil(t, err)
+	t.Logf("Reference count %d", nblk1.RefCount())
+
+	t.Logf(blk1.meta.Segment.String())
+	t.Logf(mtBufMgr.String())
+	t.Logf(sstBufMgr.String())
 	blk1.Unref()
 	blk2.Unref()
 }
