@@ -177,7 +177,6 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 }
 
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
-	logutil.Debugf("QSQ, do local CreateTable, %v", info)
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}

@@ -248,19 +248,31 @@ func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxRepl
 		default:
 			router := driver.RaftStore().GetRouter()
 			if router != nil {
-				nodeCnt := 0
+				nodeCnt := maxReplicas
 				shardCnt := 0
 				router.ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
 					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
 					shardCnt++
-					if len(shard.Peers) > nodeCnt {
+					if len(shard.Peers) < nodeCnt {
 						nodeCnt = len(shard.Peers)
 					}
 					return true
 				})
 				if nodeCnt >= maxReplicas && shardCnt >= minimalAvailableShard {
-					fmt.Println("ClusterStatus is ok now")
-					return nil
+					kvNodeCnt := maxReplicas
+					kvCnt := 0
+					router.ForeachShards(uint64(pb.KVGroup), func(shard *bhmetapb.Shard) bool {
+						kvCnt++
+						if len(shard.Peers) < kvNodeCnt {
+							kvNodeCnt = len(shard.Peers)
+						}
+						return true
+					})
+					if kvCnt >= 1 && kvNodeCnt >= maxReplicas {
+						fmt.Println("ClusterStatus is ok now")
+						return nil
+					}
+
 				}
 			}
 			time.Sleep(time.Millisecond * 10)
