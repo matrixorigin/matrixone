@@ -202,6 +202,7 @@ func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
 		return ids
 	}
 	ids.Ids = data.SegmentIds()
+	data.Unref()
 	return ids
 }
 

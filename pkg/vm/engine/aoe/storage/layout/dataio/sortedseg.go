@@ -40,6 +40,7 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 
 	sf.File = *r
 	sf.initPointers()
+	sf.OnZeroCB = sf.close
 	return sf
 }
 
@@ -124,10 +125,10 @@ func (sf *SortedSegmentFile) initPointers() {
 
 	// read metadata-2
 	sz = startPosSize +
-		 endPosSize +
-		 int(blkCnt) * (blkCountSize+blkIdSize+2*blkIdxSize) +
-		 int(blkCnt * colCnt) * (colSizeSize*2) +
-		 int(colCnt) * colPosSize
+		endPosSize +
+		int(blkCnt)*(blkCountSize+blkIdSize+2*blkIdxSize) +
+		int(blkCnt*colCnt)*(colSizeSize*2) +
+		int(colCnt)*colPosSize
 
 	buf = make([]byte, sz)
 	metaBuf = bytes.NewBuffer(buf)
