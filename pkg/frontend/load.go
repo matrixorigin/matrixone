@@ -433,6 +433,7 @@ type ParseLineHandler struct {
 	asyncChan time.Duration
 	csvLineArray1 time.Duration
 	csvLineArray2 time.Duration
+	asyncChanLoop time.Duration
 }
 
 func (plh *ParseLineHandler) Status() LINE_STATE {
@@ -690,6 +691,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 		plh.asyncChan += time.Since(wait_a)
 	}()
 	for lineOut :=range plh.simdCsvLineOutChan {
+		wait_d := time.Now()
 		if lineOut.Line == nil  && lineOut.Lines == nil {
 			break
 		}
@@ -749,6 +751,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 				}
 			}
 		}
+		plh.asyncChanLoop += time.Since(wait_d)
 	}
 	return nil
 }
@@ -2569,11 +2572,13 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			handler.writeBatch,handler.resetBatch)
 		fmt.Printf("-----call_back %s " +
 			"process_block - callback %s " +
-			"asyncChan %s " +
+			"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s" +
 			"csvLineArray1 %s csvLineArray2 %s\n",
 			handler.callback,
 			process_blcok - handler.callback,
 			handler.asyncChan,
+			handler.asyncChanLoop,
+			handler.asyncChan -	handler.asyncChanLoop,
 			handler.csvLineArray1,
 			handler.csvLineArray2,
 			)
