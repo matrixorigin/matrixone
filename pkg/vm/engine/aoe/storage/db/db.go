@@ -14,9 +14,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
-	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
+	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -24,7 +24,6 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -194,7 +193,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	return id, nil
 }
 
-func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {
+func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -207,6 +206,7 @@ func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids IDS) {
 		return ids
 	}
 	ids.Ids = data.SegmentIds()
+	data.Unref()
 	return ids
 }
 

@@ -420,8 +420,8 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				reg.Wg.Done()
 				continue
 			}
-			bat.Reorder(ctr.attrs)
 			if ctr.bat == nil {
+				bat.Reorder(ctr.attrs)
 				ctr.bat = batch.New(true, n.Gs)
 				for i, attr := range n.Gs {
 					vec := bat.GetVector(attr, proc)
@@ -460,6 +460,8 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 						n.Es[i].Agg = e.Agg
 					}
 				}
+			} else {
+				bat.Reorder(ctr.bat.Attrs)
 			}
 			if len(bat.Sels) > 0 {
 				bat.Shuffle(proc)

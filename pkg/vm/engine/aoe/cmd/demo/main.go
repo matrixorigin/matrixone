@@ -18,8 +18,7 @@ func main() {
 	workDir := "/tmp/myDemo"
 	os.RemoveAll(workDir)
 	colCnt := 4
-	metaConf := &md.Configuration{
-		Dir:              workDir,
+	metaConf := &e.MetaCfg{
 		BlockMaxRows:     10000,
 		SegmentMaxBlocks: 2,
 	}

@@ -20,6 +20,10 @@ const (
 	DefaultBlocksPerSegment = uint64(40)
 
 	DefaultCleanInterval = 5
+
+	DefaultBlockWriters     = uint16(8)
+	DefaultSegmentWriters   = uint16(4)
+	DefaultStatelessWorkers = uint16(1)
 )
 
 type IterOptions struct {
@@ -36,6 +40,17 @@ type CacheCfg struct {
 	DataCapacity   uint64 `toml:"data-cache-size"`
 }
 
+type MetaCfg struct {
+	BlockMaxRows     uint64 `toml:"block-max-rows"`
+	SegmentMaxBlocks uint64 `toml:"segment-max-blocks"`
+}
+
+type SchedulerCfg struct {
+	BlockWriters     uint16 `toml:"block-writers"`
+	SegmentWriters   uint16 `toml:"segment-writers"`
+	StatelessWorkers uint16 `toml:"stateless-workers"`
+}
+
 type MetaCleanerCfg struct {
 	Interval time.Duration
 }
@@ -45,11 +60,12 @@ type Options struct {
 
 	Mu sync.RWMutex
 
-	Scheduler sched.Scheduler
+	Scheduler    sched.Scheduler
+	SchedulerCfg *SchedulerCfg `toml:"scheduler-cfg"`
 
 	Meta struct {
 		CKFactory *checkpointerFactory
-		Conf      *md.Configuration
+		Conf      *MetaCfg
 		Info      *md.MetaInfo
 	}
 
@@ -69,17 +85,36 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 	o.EventListener.FillDefaults()
 
-	if o.Meta.Conf == nil {
-		o.Meta.Conf = &md.Configuration{
-			BlockMaxRows:     DefaultBlockMaxRows,
-			SegmentMaxBlocks: DefaultBlocksPerSegment,
-			Dir:              dirname,
+	if o.SchedulerCfg == nil {
+		o.SchedulerCfg = &SchedulerCfg{
+			BlockWriters:     DefaultBlockWriters,
+			SegmentWriters:   DefaultSegmentWriters,
+			StatelessWorkers: DefaultStatelessWorkers,
 		}
 	} else {
-		o.Meta.Conf.Dir = dirname
+		if o.SchedulerCfg.BlockWriters == 0 {
+			o.SchedulerCfg.BlockWriters = DefaultBlockWriters
+		}
+		if o.SchedulerCfg.SegmentWriters == 0 {
+			o.SchedulerCfg.SegmentWriters = DefaultSegmentWriters
+		}
+		if o.SchedulerCfg.StatelessWorkers == 0 {
+			o.SchedulerCfg.StatelessWorkers = DefaultStatelessWorkers
+		}
 	}
+
 	if o.Meta.Info == nil {
-		o.Meta.Info = md.NewMetaInfo(&o.Mu, o.Meta.Conf)
+		metaCfg := &md.Configuration{
+			Dir: dirname,
+		}
+		if o.Meta.Conf == nil {
+			metaCfg.BlockMaxRows = DefaultBlockMaxRows
+			metaCfg.SegmentMaxBlocks = DefaultBlocksPerSegment
+		} else {
+			metaCfg.BlockMaxRows = o.Meta.Conf.BlockMaxRows
+			metaCfg.SegmentMaxBlocks = o.Meta.Conf.SegmentMaxBlocks
+		}
+		o.Meta.Info = md.NewMetaInfo(&o.Mu, metaCfg)
 	}
 
 	if o.Meta.CKFactory == nil {

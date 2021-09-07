@@ -7,7 +7,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
@@ -88,9 +88,9 @@ func TestCollection(t *testing.T) {
 
 	manager := NewManager(opts)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
-	indexBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity)
-	mtBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity)
-	sstBufMgr := bmgr.NewBufferManager(opts.Meta.Conf.Dir, capacity)
+	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	// tableMeta := md.MockTable(opts.Meta.Info, tbl.Schema, 10)
 	// tableMeta := md.MockTable(nil, tbl.Schema, 10)
 	tableMeta := tbl

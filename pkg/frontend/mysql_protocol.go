@@ -774,7 +774,7 @@ func (mp *MysqlProtocol) makeOKPayload(affectedRows, lastInsertId uint64, status
 
 //send OK packet to the client
 func (mp *MysqlProtocol) sendOKPacket(affectedRows, lastInsertId uint64, status, warnings uint16, message string) error {
-	okPkt := mp.makeOKPayload(affectedRows, lastInsertId, status, warnings, "")
+	okPkt := mp.makeOKPayload(affectedRows, lastInsertId, status, warnings, message)
 	return mp.writePackets(okPkt)
 }
 

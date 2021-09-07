@@ -3,20 +3,13 @@ package db
 import (
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
-	// "strconv"
 )
-
-type IDS struct {
-	Version uint64
-	Ids     []uint64
-}
 
 type Relation struct {
 	Data   iface.ITableData
@@ -60,8 +53,8 @@ func (r *Relation) Close() error {
 	return nil
 }
 
-func (r *Relation) SegmentIds() IDS {
-	return IDS{Ids: r.Data.SegmentIds()}
+func (r *Relation) SegmentIds() dbi.IDS {
+	return dbi.IDS{Ids: r.Data.SegmentIds()}
 }
 
 func (r *Relation) Index() []*engine.IndexTableDef {
@@ -80,10 +73,6 @@ func (r *Relation) Attribute() []metadata.Attribute {
 }
 
 func (r *Relation) Segment(id uint64, proc *process.Process) engine.Segment {
-	// id, err := strconv.ParseUint(info.Id, 10, 64)
-	// if err != nil {
-	// 	return nil
-	// }
 	r.tree.RLock()
 	seg := r.tree.Segments[id]
 	if seg != nil {

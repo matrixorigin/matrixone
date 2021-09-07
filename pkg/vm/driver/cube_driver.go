@@ -12,7 +12,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"time"
 
 	"github.com/matrixorigin/matrixcube/aware"
@@ -70,7 +70,7 @@ type CubeDriver interface {
 	AsyncAllocID([]byte, uint64, func(interface{}, []byte, error), interface{})
 	Append(string, uint64, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
-	GetSegmentIds(string, uint64) (adb.IDS, error)
+	GetSegmentIds(string, uint64) (dbi.IDS, error)
 	GetSegmentedId(uint64) (uint64, error)
 	CreateTablet(name string, shardId uint64, tbl *aoe.TableInfo) error
 	DropTablet(string, uint64) (uint64, error)
@@ -593,7 +593,7 @@ func (h *driver) GetSnapshot(ctx dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	return &s, nil
 }
 
-func (h *driver) GetSegmentIds(tabletName string, toShard uint64) (ids adb.IDS, err error) {
+func (h *driver) GetSegmentIds(tabletName string, toShard uint64) (ids dbi.IDS, err error) {
 	req := pb.Request{
 		Type:  pb.GetSegmentIds,
 		Group: pb.AOEGroup,

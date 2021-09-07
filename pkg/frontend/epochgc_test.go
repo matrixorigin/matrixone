@@ -3,11 +3,6 @@ package frontend
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/components/prophet/storage"
-	cube_prophet_util "github.com/matrixorigin/matrixcube/components/prophet/util"
-	cConfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/raftstore"
 	"io/ioutil"
 	stdLog "log"
 	"math/rand"
@@ -23,7 +18,6 @@ import (
 	"matrixone/pkg/vm/engine"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -32,6 +26,12 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/fagongzi/log"
+	"github.com/matrixorigin/matrixcube/components/prophet/storage"
+	cube_prophet_util "github.com/matrixorigin/matrixcube/components/prophet/util"
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
 )
 
 var DC *DebugCounter = NewDebugCounter(32)
@@ -129,8 +129,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		},
 		testutil2.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe2.Storage, error) {
 			opts := &e.Options{}
-			mdCfg := &md.Configuration{
-				Dir:              path,
+			mdCfg := &e.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
 				BlockMaxRows:     blockRows,
 			}

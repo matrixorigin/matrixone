@@ -3,6 +3,7 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"runtime"
 	"strconv"
 	"sync/atomic"
@@ -16,23 +17,23 @@ type CloseFlag struct {
 
 //1 for closed
 //0 for others
-func (cf CloseFlag) setClosed(value uint32)  {
+func (cf *CloseFlag) setClosed(value uint32)  {
 	atomic.StoreUint32(&cf.closed,value)
 }
 
-func (cf CloseFlag) Open() {
+func (cf *CloseFlag) Open() {
 	cf.setClosed(0)
 }
 
-func (cf CloseFlag) Close() {
+func (cf *CloseFlag) Close() {
 	cf.setClosed(1)
 }
 
-func (cf CloseFlag) IsClosed() bool {
+func (cf *CloseFlag) IsClosed() bool {
 	return atomic.LoadUint32(&cf.closed) !=0
 }
 
-func (cf CloseFlag) IsOpened() bool {
+func (cf *CloseFlag) IsOpened() bool {
 	return atomic.LoadUint32(&cf.closed) == 0
 }
 
@@ -222,4 +223,23 @@ func SubStringFromBegin(str string,length int) string {
 		return str[:l]+"..."
 	}
 	return str[:l]
+}
+
+/*
+path exists in the system
+return:
+true/false - exists or not.
+true/false - file or directory
+error
+ */
+func PathExists(path string) (bool, bool, error) {
+	fi, err := os.Stat(path)
+	if err == nil {
+		return true, !fi.IsDir(),nil
+	}
+	if os.IsNotExist(err) {
+		return false, false, err
+	}
+
+	return false, false, err
 }

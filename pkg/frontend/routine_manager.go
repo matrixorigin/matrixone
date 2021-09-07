@@ -43,8 +43,14 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	rm.rwlock.Lock()
 	defer rm.rwlock.Unlock()
+	defer delete(rm.clients, rs)
 
-	delete(rm.clients, rs)
+	rt, ok :=rm.clients[rs]
+	if !ok {
+		return
+	}
+	logutil.Infof("will close iosession")
+	rt.Quit()
 }
 
 func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received uint64) error {

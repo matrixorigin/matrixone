@@ -1,10 +1,10 @@
+// +build !debug
+
 package encoding
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/gob"
-	"math"
 	"matrixone/pkg/container/types"
 	"reflect"
 	"unsafe"
@@ -36,37 +36,26 @@ func Decode(data []byte, v interface{}) error {
 }
 
 func EncodeType(v types.Type) []byte {
-	hp := make([]byte, TypeSize)
-	hp[0] = byte(v.Oid)
-	binary.LittleEndian.PutUint32(hp[1:], uint32(v.Size))
-	binary.LittleEndian.PutUint32(hp[5:], uint32(v.Width))
-	binary.LittleEndian.PutUint32(hp[9:], uint32(v.Precision))
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: TypeSize, Cap: TypeSize}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeType(v []byte) types.Type {
-	return types.Type{
-		Oid:       types.T(v[0]),
-		Size:      int32(binary.LittleEndian.Uint32(v[1:])),
-		Width:     int32(binary.LittleEndian.Uint32(v[5:])),
-		Precision: int32(binary.LittleEndian.Uint32(v[9:])),
-	}
+	return *(*types.Type)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeInt8(v int8) []byte {
-	hp := make([]byte, 1)
-	hp[0] = byte(v)
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 1, Cap: 1}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeInt8(v []byte) int8 {
-	return int8(v[0])
+	return *(*int8)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeUint8(v uint8) []byte {
-	hp := make([]byte, 1)
-	hp[0] = v
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 1, Cap: 1}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeUint8(v []byte) uint8 {
@@ -74,119 +63,109 @@ func DecodeUint8(v []byte) uint8 {
 }
 
 func EncodeInt16(v int16) []byte {
-	hp := make([]byte, 2)
-	binary.LittleEndian.PutUint16(hp, uint16(v))
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 2, Cap: 2}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeInt16(v []byte) int16 {
-	return int16(binary.LittleEndian.Uint16(v))
+	return *(*int16)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeUint16(v uint16) []byte {
-	hp := make([]byte, 2)
-	binary.LittleEndian.PutUint16(hp, v)
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 2, Cap: 2}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeUint16(v []byte) uint16 {
-	return binary.LittleEndian.Uint16(v)
+	return *(*uint16)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeInt32(v int32) []byte {
-	hp := make([]byte, 4)
-	binary.LittleEndian.PutUint32(hp, uint32(v))
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeInt32(v []byte) int32 {
-	return int32(binary.LittleEndian.Uint32(v))
+	return *(*int32)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeUint32(v uint32) []byte {
-	hp := make([]byte, 4)
-	binary.LittleEndian.PutUint32(hp, v)
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeUint32(v []byte) uint32 {
-	return binary.LittleEndian.Uint32(v)
+	return *(*uint32)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeInt64(v int64) []byte {
-	hp := make([]byte, 8)
-	binary.LittleEndian.PutUint64(hp, uint64(v))
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeInt64(v []byte) int64 {
-	return int64(binary.LittleEndian.Uint64(v))
+	return *(*int64)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeUint64(v uint64) []byte {
-	hp := make([]byte, 8)
-	binary.LittleEndian.PutUint64(hp, v)
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeUint64(v []byte) uint64 {
-	return binary.LittleEndian.Uint64(v)
+	return *(*uint64)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeFloat32(v float32) []byte {
-	hp := make([]byte, 4)
-	binary.LittleEndian.PutUint32(hp, math.Float32bits(v))
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeFloat32(v []byte) float32 {
-	return math.Float32frombits(binary.LittleEndian.Uint32(v))
+	return *(*float32)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeFloat64(v float64) []byte {
-	hp := make([]byte, 8)
-	binary.LittleEndian.PutUint64(hp, math.Float64bits(v))
-	return hp
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeFloat64(v []byte) float64 {
-	return math.Float64frombits(binary.LittleEndian.Uint64(v))
+	return *(*float64)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeDate(v types.Date) []byte {
-	return EncodeInt32(int32(v))
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeDate(v []byte) types.Date {
-	return types.Date(DecodeInt32(v))
+	return *(*types.Date)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeDatetime(v types.Datetime) []byte {
-	return EncodeInt64(int64(v))
+	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
+	return *(*[]byte)(unsafe.Pointer(&hp))
 }
 
 func DecodeDatetime(v []byte) types.Datetime {
-	return types.Datetime(DecodeInt64(v))
+	return *(*types.Datetime)(unsafe.Pointer(&v[0]))
 }
 
 func EncodeInt8Slice(v []int8) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return *(*[]byte)(unsafe.Pointer(&v))
 }
 
 func DecodeInt8Slice(v []byte) []int8 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	return *(*[]int8)(unsafe.Pointer(&hp))
+	return *(*[]int8)(unsafe.Pointer(&v))
 }
 
 func EncodeUint8Slice(v []uint8) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return v
 }
 
 func DecodeUint8Slice(v []byte) []uint8 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	return *(*[]uint8)(unsafe.Pointer(&hp))
+	return v
 }
 
 func EncodeInt16Slice(v []int16) []byte {
