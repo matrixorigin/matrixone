@@ -7,7 +7,7 @@
 # Quick Start
 
 # Contributing
-See [Contributing Guide](CONTRIBUTING) for details on contribution workflows.
+See [Contributing Guide](CONTRIBUTING.md) for details on contribution workflows.
 
 ## Roadmap
 
