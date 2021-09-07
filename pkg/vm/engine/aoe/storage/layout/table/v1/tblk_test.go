@@ -203,6 +203,9 @@ func TestTBlock(t *testing.T) {
 	t.Logf(blk1.meta.Segment.String())
 	t.Logf(mtBufMgr.String())
 	t.Logf(sstBufMgr.String())
+	for _, colDef := range blk1.meta.Segment.Table.Schema.ColDefs {
+		t.Logf("col %s size= %d", colDef.Name, blk1.Size(colDef.Name))
+	}
 	blk1.Unref()
 	blk2.Unref()
 }

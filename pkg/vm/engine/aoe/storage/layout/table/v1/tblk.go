@@ -7,6 +7,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
@@ -18,15 +19,20 @@ import (
 
 type tblock struct {
 	baseBlock
-	node    bb.INode
-	nodeMgr bb.INodeManager
+	node       bb.INode
+	nodeMgr    bb.INodeManager
+	coarseSize map[string]uint64
 }
 
 func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory) (*tblock, error) {
 	blk := &tblock{
-		baseBlock: *newBaseBlock(host, meta),
-		node:      factory.CreateNode(host.GetSegmentFile(), meta),
-		nodeMgr:   factory.GetManager(),
+		baseBlock:  *newBaseBlock(host, meta),
+		node:       factory.CreateNode(host.GetSegmentFile(), meta),
+		nodeMgr:    factory.GetManager(),
+		coarseSize: make(map[string]uint64),
+	}
+	for i, colDef := range meta.Segment.Table.Schema.ColDefs {
+		blk.coarseSize[colDef.Name] = col.EstimateStdColumnCapacity(i, meta)
 	}
 	blk.OnZeroCB = blk.close
 	blk.Ref()
@@ -65,8 +71,7 @@ func (blk *tblock) ProcessData(fn func(batch.IBatch) error) error {
 }
 
 func (blk *tblock) Size(attr string) uint64 {
-	// TODO
-	return 0
+	return blk.coarseSize[attr]
 }
 
 func (blk *tblock) GetSegmentedIndex() (id uint64, ok bool) {
