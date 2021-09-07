@@ -106,12 +106,12 @@ func NewReader(r io.Reader) *Reader {
 }
 
 // NewReader returns a new Reader with options that reads from r.
-func NewReaderWithOptions(r io.Reader,cma,cmnt rune,tls bool) *Reader {
+func NewReaderWithOptions(r io.Reader, cma, cmnt rune, lazyQt, tls bool) *Reader {
 	return &Reader{
 		Comma: cma,
 		Comment: cmnt,
 		FieldsPerRecord: -1,
-		LazyQuotes: true,
+		LazyQuotes: lazyQt,
 		TrimLeadingSpace: tls,
 		ReuseRecord: false,
 		TrailingComma: false,
@@ -169,6 +169,12 @@ func (r *Reader) readAllStreaming() (out chan recordsOutput) {
 		}()
 		return
 	}
+
+	fmt.Printf("]]]]> %v %v %v \n",
+		r.LazyQuotes,
+		r.Comma != 0 && r.Comma > unicode.MaxLatin1,
+		r.Comment != 0 && r.Comment > unicode.MaxLatin1,
+		)
 
 	if r.LazyQuotes ||
 		r.Comma != 0 && r.Comma > unicode.MaxLatin1 ||
@@ -261,7 +267,14 @@ func (r *Reader) stage1Streaming(bufchan chan chunkIn, chunkSize int, masksSize 
 	splitRow := make([]byte, 0, 256)
 
 	first := true
+
+	cnt := 0
+
 	for chunk := range bufchan {
+		//fmt.Printf("====> chunk cnt %d \n",cnt)
+
+		cnt++
+
 		if first {
 			r.Stage1_first_chunk = time.Since(r.Begin)
 			first = false
@@ -323,7 +336,13 @@ func (r *Reader) stage2Streaming(chunks chan chunkInfo, wg *sync.WaitGroup, fiel
 	simdlines, rowsSize, columnsSize := 1024, 500, 50000
 
 	first := true
+	cnt := 0
+
 	for chunkInfo := range chunks {
+		//fmt.Printf("++++> %d chunk %d cnt %d \n",id,chunkInfo.sequence,cnt)
+
+		cnt++
+
 		if first {
 			r.Stage2_first_chunkinfo[id] = time.Since(r.Begin)
 			first = false
@@ -531,7 +550,14 @@ func (r *Reader) ReadLoop(lineOutChan chan LineOut, callback func(lines [][]stri
 	sequence := 0
 
 	first := true
+
+	cnt :=0
+
 	for rcrds := range out {
+		//fmt.Printf(">>>>< cnt %d \n",cnt)
+
+		cnt++
+
 		if first {
 			r.ReadLoop_first_records = time.Since(r.Begin)
 			first = false

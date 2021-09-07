@@ -2520,10 +2520,10 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			lines:        load.Lines,
 			lineIdx: 0,
 			simdCsvLineArray: make([][]string, int(ses.Pu.SV.GetBatchSizeInLoadData())),
-			simdCsvReader: simdcsv.NewReaderWithOptions(
-				dataFile,
+			simdCsvReader: simdcsv.NewReaderWithOptions(dataFile,
 				rune(load.Fields.Terminated[0]),
 				'#',
+				false,
 				false),
 				simdCsvLineOutChan: make(chan simdcsv.LineOut,100 * int(ses.Pu.SV.GetBatchSizeInLoadData())),
 				simdCsvLineOutRoutineClose: &CloseFlag{},
