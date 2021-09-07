@@ -113,7 +113,7 @@ type TestAOECluster struct {
 
 	// reset fields
 	opts             *testAOEClusterOptions
-	RaftCluster      *raftstore.TestRaftCluster
+	RaftCluster      raftstore.TestRaftCluster
 	CubeDrivers      []driver.CubeDriver
 	AOEStorages      []*aoe2.Storage
 	MetadataStorages []storage.MetadataStorage

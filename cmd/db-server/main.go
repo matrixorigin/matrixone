@@ -15,7 +15,6 @@ import (
 	catalog3 "matrixone/pkg/catalog"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
-	"matrixone/pkg/logger"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
@@ -181,7 +180,7 @@ func main() {
 		fmt.Printf("Start cube driver failed, %v", err)
 		panic(err)
 	}
-	catalog = catalog3.DefaultCatalog(a)
+	catalog = catalog3.NewCatalog(a)
 	eng := aoe_engine.New(&catalog)
 	pci.SetRemoveEpoch(removeEpoch)
 
@@ -196,9 +195,9 @@ func main() {
 		proc.Lim.BatchSize = config.GlobalSystemVariables.GetProcessLimitationBatchSize()
 		proc.Refer = make(map[string]uint64)
 	}
-	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
-	log.SetLevel(logger.WARN)
-	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, log)
+	/*	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
+		log.SetLevel(logger.WARN)*/
+	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, logutil.L())
 	if err != nil {
 		fmt.Printf("Create rpcserver failed, %v", err)
 		panic(err)

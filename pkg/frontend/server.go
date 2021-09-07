@@ -40,8 +40,8 @@ func (mo *MOServer) Stop() error {
 	return mo.app.Stop()
 }
 
-func nextConnectionID()uint32{
-	return atomic.AddUint32(&initConnectionID,1)
+func nextConnectionID() uint32 {
+	return atomic.AddUint32(&initConnectionID, 1)
 }
 
 func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) *MOServer {
@@ -51,7 +51,7 @@ func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) 
 	app, err := goetty.NewTCPApplication(addr, rm.Handler,
 		goetty.WithAppSessionOptions(
 			goetty.WithCodec(encoder, decoder),
-			goetty.WithLogger(&logutil.GoettyLogger{}),
+			goetty.WithLogger(logutil.L()),
 			goetty.WithEnableAsyncWrite(64)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {

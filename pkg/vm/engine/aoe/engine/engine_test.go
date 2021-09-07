@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/fagongzi/log"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
+	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
@@ -92,21 +93,24 @@ func TestAOEEngine(t *testing.T) {
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(true),
-			raftstore.WithTestClusterLogLevel("error"),
-			raftstore.WithTestClusterDataPath("./test")))
+			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterDataPath("./test"),
+			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
+				cfg.Worker.RaftEventWorkers = uint64(32)
+			})))
 
 	c.Start()
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 	stdLog.Printf("app started.")
 	time.Sleep(3 * time.Second)
 
 	var catalogs []catalog2.Catalog
 	for i := 0; i < 3; i++ {
-		catalogs = append(catalogs, catalog2.DefaultCatalog(c.CubeDrivers[i]))
+		catalogs = append(catalogs, catalog2.NewCatalog(c.CubeDrivers[i]))
 	}
 
 	testTableDDL(t, catalogs)
@@ -256,7 +260,7 @@ func doRestartEngine(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel("error"),
+			raftstore.WithTestClusterLogLevel("info"),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithTestClusterRecreate(false)))
 	defer func() {
@@ -265,9 +269,9 @@ func doRestartEngine(t *testing.T) {
 	}()
 	c.Start()
 
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
-	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
+	catalog := catalog2.NewCatalog(c.CubeDrivers[0])
 	aoeEngine := New(&catalog)
 
 	dbs := aoeEngine.Databases()
@@ -357,6 +361,8 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 		wg.Add(1)
 		cc := c[index]
 		i := index
+
+		//time.Sleep(100 * time.Millisecond)
 		go func() {
 			defer func() {
 				wg.Done()

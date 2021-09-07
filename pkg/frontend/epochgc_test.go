@@ -14,6 +14,7 @@ import (
 	catalog3 "matrixone/pkg/catalog"
 	mo_config "matrixone/pkg/config"
 	"matrixone/pkg/logger"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
 	aoe2 "matrixone/pkg/vm/driver/aoe"
@@ -156,14 +157,14 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 				cfg.Customize.CustomStoreHeartbeatDataProcessor = pci
 			})))
 	c.Start()
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
 
-	catalog := catalog3.DefaultCatalog(c.CubeDrivers[0])
+	catalog := catalog3.NewCatalog(c.CubeDrivers[0])
 	eng := aoe_engine.New(&catalog)
 
 	for i := 0; i < nodeCnt; i++ {
@@ -190,7 +191,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		}
 		log := logger.New(os.Stderr, fmt.Sprintf("rpc%v:", i))
 		log.SetLevel(logger.WARN)
-		srv, err := rpcserver.New(fmt.Sprintf("127.0.0.1:%v", 20000+i+100), 1<<30, log)
+		srv, err := rpcserver.New(fmt.Sprintf("127.0.0.1:%v", 20000+i+100), 1<<30, logutil.L())
 		if err != nil {
 			log.Fatal(err)
 		}

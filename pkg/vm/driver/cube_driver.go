@@ -21,7 +21,6 @@ import (
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
-	"github.com/matrixorigin/matrixcube/proxy"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
@@ -44,6 +43,9 @@ type CubeDriver interface {
 	Set([]byte, []byte) error
 	// SetWithGroup set key value in specific group.
 	SetWithGroup([]byte, []byte, pb.Group) error
+
+	AsyncSet([]byte, []byte, func(interface{}, []byte, error), interface{})
+	AsyncSetWithGroup([]byte, []byte, pb.Group, func(interface{}, []byte, error), interface{})
 	// SetIfNotExist set key value if key not exists.
 	SetIfNotExist([]byte, []byte) error
 	// Get returns the value of key.
@@ -251,7 +253,7 @@ func NewCubeDriverWithFactory(
 	c.ServerConfig.Handler = h
 	pConfig.DefaultSchedulers = nil
 
-	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req *raftcmdpb.Request, cmd interface{}, proxy proxy.ShardsProxy) error {
+	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req *raftcmdpb.Request, cmd interface{}, proxy raftstore.ShardsProxy) error {
 		if req.Group == uint64(pb.KVGroup) {
 			return proxy.Dispatch(req)
 		}
@@ -322,6 +324,22 @@ func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 	}
 	_, err := h.ExecWithGroup(req, group)
 	return err
+}
+
+func (h *driver) AsyncSet(key, value []byte, cb func(interface{}, []byte, error), data interface{}) {
+	h.AsyncSetWithGroup(key, value, pb.KVGroup, cb, data)
+}
+
+func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(interface{}, []byte, error), data interface{}) {
+	req := pb.Request{
+		Type:  pb.Set,
+		Group: group,
+		Set: pb.SetRequest{
+			Key:   key,
+			Value: value,
+		},
+	}
+	h.AsyncExecWithGroup(req, group, cb, data)
 }
 
 func (h *driver) SetIfNotExist(key, value []byte) error {

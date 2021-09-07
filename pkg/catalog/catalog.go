@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -34,28 +35,29 @@ type Catalog struct {
 	dbIdEnd   uint64
 	tidStart  uint64
 	tidEnd    uint64
+	pLock     int32 //
 }
 
-// DefaultCatalog creates a Catalog.
-func DefaultCatalog(store driver.CubeDriver) Catalog {
-	gCatalog := Catalog{
+// NewCatalog creates a Catalog.
+func NewCatalog(store driver.CubeDriver) Catalog {
+	catalog := Catalog{
 		Driver: store,
 	}
 	tmpId, err := store.AllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize)
 	if err != nil {
 		panic(fmt.Sprintf("init db id pool failed. %v", err))
 	}
-	gCatalog.dbIdEnd = tmpId
-	gCatalog.dbIdStart = tmpId - idPoolSize + 1
+	catalog.dbIdEnd = tmpId
+	catalog.dbIdStart = tmpId - idPoolSize + 1
 	tmpId, err = store.AllocID(codec.String2Bytes(cTableIDPrefix), idPoolSize)
 	if err != nil {
 		panic(fmt.Sprintf("init table id pool failed. %v", err))
 	}
-	gCatalog.tidEnd = tmpId
-	gCatalog.tidStart = tmpId - idPoolSize + 1
-	logutil.Debugf("Catalog initialize finished, db id range is [%d, %d), table id range is [%d, %d)", gCatalog.dbIdStart, gCatalog.dbIdEnd, gCatalog.tidStart, gCatalog.tidEnd)
+	catalog.tidEnd = tmpId
+	catalog.tidStart = tmpId - idPoolSize + 1
+	logutil.Debugf("Catalog initialize finished, db id range is [%d, %d), table id range is [%d, %d)", catalog.dbIdStart, catalog.dbIdEnd, catalog.tidStart, catalog.tidEnd)
 
-	return gCatalog
+	return catalog
 }
 
 // CreateDatabase creates a database with db info.
@@ -204,7 +206,7 @@ func (c *Catalog) CreateTableBak(epoch, dbId uint64, tbl aoe.TableInfo) (uint64,
 func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("1CreateTable finished, table id is %d, cost %d ms", tid, time.Since(t0).Milliseconds())
+		logutil.Debugf("CreateTable finished, table id is %d, cost %d ms", tid, time.Since(t0).Milliseconds())
 	}()
 	_, err = c.checkDBExists(dbId)
 	if err != nil {
@@ -214,18 +216,21 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	if err != nil {
 		return tid, err
 	}
-	//tbl.Id, err = c.genGlobalUniqIDs([]byte(cTableIDPrefix))
 	tid, err = c.allocId(cTableIDPrefix)
 	if err != nil {
 		return tid, err
 	}
 	tbl.Id = tid
-	err = c.Driver.Set(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id))
-	logutil.Errorf("set tid in kv, %v, %v, %v", tbl.Id, c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id))
-	if err != nil {
-		logutil.Errorf("ErrTableCreateFailed, %v", err)
-		return 0, err
-	}
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	var errs []error
+	c.Driver.AsyncSet(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id), func(i interface{}, bytes []byte, err error) {
+		defer wg.Done()
+		if err != nil {
+			errs = append(errs, err)
+			return
+		}
+	}, nil)
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
@@ -234,19 +239,31 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			logutil.Errorf("ErrTableCreateFailed, %v", err)
 			return tid, err
 		}
-		if c.Driver.Set(rkey, []byte(tbl.Name)) != nil {
-			logutil.Errorf("ErrTableCreateFailed, %v", err)
-			return tid, err
-		}
+		wg.Add(1)
+		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i interface{}, bytes []byte, err error) {
+			defer wg.Done()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+		}, nil)
 		tbl.State = aoe.StatePublic
 		meta, err := helper.EncodeTable(tbl)
 		if err != nil {
 			logutil.Errorf("ErrTableCreateFailed, %v", err)
 			return tid, err
 		}
-		err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
-		if err != nil {
-			logutil.Errorf("ErrTableCreateFailed, %v", err)
+		wg.Add(1)
+		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i interface{}, bytes []byte, err error) {
+			defer wg.Done()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+		}, nil)
+		wg.Wait()
+		if len(errs) > 0 {
+			logutil.Errorf("ErrTableCreateFailed, %v", errs)
 			return tid, err
 		}
 		return tbl.Id, nil
@@ -487,8 +504,6 @@ func (c *Catalog) checkTableExists(dbId, id uint64) (*aoe.TableInfo, error) {
 }
 func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.TableInfo, error) {
 	if value, err := c.Driver.Get(c.tableIDKey(dbId, tableName)); err != nil || value == nil {
-
-		logutil.Errorf("321, %v", c.tableIDKey(dbId, tableName))
 		return nil, nil
 	} else {
 		id, _ := codec.Bytes2Uint64(value)
@@ -569,22 +584,6 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 	timeoutC := time.After(timeout)
 	switch key {
 	case cDBIDPrefix:
-		if c.dbIdEnd <= c.dbIdStart {
-			c.Driver.AsyncAllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
-				if err != nil {
-					logutil.Errorf("refresh db id failed, checkpoint is %d, %d", c.dbIdStart, c.dbIdEnd)
-					return
-				}
-				id, err := codec.Bytes2Uint64(data)
-				if err != nil {
-					logutil.Errorf("get result of AllocId failed, %v\n", err)
-					return
-				}
-				atomic.SwapUint64(&c.dbIdEnd, id)
-				atomic.SwapUint64(&c.dbIdStart, id-idPoolSize)
-				logutil.Debugf("refresh db id finished, id from kv is %d, dbIdEnd is %d", id, c.dbIdEnd)
-			}, nil)
-		}
 		func() {
 			for {
 				select {
@@ -593,46 +592,31 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 					err = ErrTableCreateTimeout
 					return
 				default:
-					if c.dbIdStart <= c.tidEnd {
+					if c.dbIdStart <= c.dbIdEnd {
 						id = c.dbIdStart
 						atomic.AddUint64(&c.dbIdStart, 1)
-						logutil.Infof("alloc db id finished, id is %d, endId is %d", id, c.dbIdEnd)
+						logutil.Debugf("alloc db id finished, id is %d, endId is %d", id, c.dbIdEnd)
 						return
 					}
+					c.refreshDBIDCache()
 					time.Sleep(time.Millisecond * 10)
 				}
 			}
 		}()
 	case cTableIDPrefix:
-		if c.tidEnd-c.tidStart < idPoolSize*0.3 {
-			c.Driver.AsyncAllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
-				if err != nil {
-					logutil.Errorf("refresh table id failed, checkpoint is %d, %d", c.tidStart, c.tidEnd)
-					return
-				}
-				id, err := codec.Bytes2Uint64(data)
-				if err != nil {
-					logutil.Errorf("get result of AllocId failed, %v\n", err)
-					return
-				}
-
-				atomic.SwapUint64(&c.tidEnd, id)
-				atomic.SwapUint64(&c.tidStart, id-idPoolSize)
-				logutil.Debugf("refresh table id finished, id from kv is %d, tidEnd is %d", id, c.tidEnd)
-			}, nil)
-		}
 		func() {
 			for {
 				select {
 				case <-timeoutC:
-					logutil.Error("wait for available id timeout")
+					logutil.Errorf("wait for available id timeout, current cache range is [%d, %d)", c.tidStart, c.tidEnd)
 					err = ErrTableCreateTimeout
 					return
 				default:
-					if c.tidStart < c.tidEnd {
+					if c.tidStart <= c.tidEnd {
 						id = c.tidStart
 						atomic.AddUint64(&c.tidStart, 1)
 						logutil.Infof("alloc table id finished, id is %d, endId is %d", id, c.tidEnd)
+						go c.refreshTableIDCache()
 						return
 					}
 					time.Sleep(time.Millisecond * 10)
@@ -643,4 +627,68 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 		return id, errors.New("unsupported id category")
 	}
 	return id, err
+}
+
+func (c *Catalog) refreshTableIDCache() {
+	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
+		fmt.Println("failed to acquired pLock")
+		return
+	}
+	t0 := time.Now()
+	defer func() {
+		atomic.StoreInt32(&c.pLock, 0)
+		logutil.Debugf("refresh table id cache finished, cost %d, new range is [%d, %d)", time.Since(t0).Milliseconds(), c.tidStart, c.tidEnd)
+	}()
+	if c.tidStart <= c.tidEnd {
+		logutil.Debugf("enter refreshTableIDCache, no need, return, [%d, %d)", c.tidStart, c.tidEnd)
+		return
+	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	c.Driver.AsyncAllocID(codec.String2Bytes(cTableIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
+		defer wg.Done()
+		if err != nil {
+			logutil.Errorf("refresh table id failed, checkpoint is %d, %d", c.tidStart, c.tidEnd)
+			return
+		}
+		id, err := codec.Bytes2Uint64(data)
+		if err != nil {
+			logutil.Errorf("get result of AllocId failed, %v\n", err)
+			return
+		}
+
+		atomic.SwapUint64(&c.tidEnd, id)
+		atomic.SwapUint64(&c.tidStart, id-idPoolSize+1)
+	}, nil)
+	wg.Wait()
+}
+
+func (c *Catalog) refreshDBIDCache() {
+	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
+		fmt.Println("failed to acquired pLock")
+		return
+	}
+	t0 := time.Now()
+	defer func() {
+		atomic.StoreInt32(&c.pLock, 0)
+		logutil.Debugf("refresh db id cache finished, cost %d, new range is [%d, %d)", time.Since(t0).Milliseconds(), c.dbIdStart, c.dbIdEnd)
+	}()
+	if c.dbIdStart <= c.dbIdEnd {
+		logutil.Debugf("enter refreshDBIDCache, no need, return")
+		return
+	}
+	c.Driver.AsyncAllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
+		if err != nil {
+			logutil.Errorf("refresh db id failed, checkpoint is %d, %d", c.dbIdStart, c.dbIdEnd)
+			return
+		}
+		id, err := codec.Bytes2Uint64(data)
+		if err != nil {
+			logutil.Errorf("get result of AllocId failed, %v\n", err)
+			return
+		}
+		atomic.SwapUint64(&c.dbIdEnd, id)
+		atomic.SwapUint64(&c.dbIdStart, id-idPoolSize)
+	}, nil)
 }
