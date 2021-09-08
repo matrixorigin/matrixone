@@ -1139,7 +1139,7 @@ func Test{{.ParameterStructName}}_LoadInitialValues(t *testing.T) {
 	}
 }
 
-func is{{.ConfigurationStructName}}Equal(c1,c2 {{.ConfigurationStructName}}) bool {
+func is{{.ConfigurationStructName}}Equal(c1,c2 *{{.ConfigurationStructName}}) bool {
 
 {{range .Parameter}}
 {{ if ne .UpdateMode "fix"}}
@@ -1178,7 +1178,7 @@ func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T)
 {{end}}
 {{end}}		
 ` + "`" + `
-	t1_config:={{.ConfigurationStructName}}{
+	t1_config:=&{{.ConfigurationStructName}}{
 		rwlock:            sync.RWMutex{},
 
 {{range $index,$param := .Parameter}}
@@ -1210,7 +1210,7 @@ func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T)
 
 	type args struct {
 		input string
-		config {{.ConfigurationStructName}}
+		config *{{.ConfigurationStructName}}
 	}
 	tests := []struct {
 		name    string
@@ -1238,8 +1238,8 @@ func Test_{{.ConfigurationStructName}}_LoadConfigurationFromString(t *testing.T)
 				t.Errorf("UpdateParametersWithConfiguration failed. error:%v",err)
 			}
 
-			if ( is{{.ConfigurationStructName}}Equal(*config,tt.args.config) != true ) != tt.wantErr3{
-				t.Errorf("Configuration are not equal. %v vs %v ",*config,tt.args.config)
+			if ( is{{.ConfigurationStructName}}Equal(config,tt.args.config) != true ) != tt.wantErr3{
+				t.Errorf("Configuration are not equal. %v vs %v ",config,tt.args.config)
 				return
 			}
 		})

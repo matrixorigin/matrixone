@@ -14,7 +14,7 @@ func TestSystemVariables_LoadInitialValues(t *testing.T) {
 	}
 }
 
-func isvarsConfigEqual(c1,c2 varsConfig) bool {
+func isvarsConfigEqual(c1,c2 *varsConfig) bool {
 
 
 	if c1.Rootpassword != c2.Rootpassword {
@@ -148,7 +148,7 @@ blockCountInLoadData=20
 blockSizeInLoadData=4194304
 		
 `
-	t1_config:=varsConfig{
+	t1_config := &varsConfig{
 		rwlock:            sync.RWMutex{},
 
 
@@ -184,14 +184,14 @@ LengthOfQueryPrinted:50,
 BatchSizeInLoadData:10000,
 BlockCountInLoadData:20,
 BlockSizeInLoadData:4194304,
-	
+
 
 		name2updatedFlags: nil,
 	}
 
 	type args struct {
 		input string
-		config varsConfig
+		config *varsConfig
 	}
 	tests := []struct {
 		name    string
@@ -219,8 +219,8 @@ BlockSizeInLoadData:4194304,
 				t.Errorf("UpdateParametersWithConfiguration failed. error:%v",err)
 			}
 
-			if ( isvarsConfigEqual(*config,tt.args.config) != true ) != tt.wantErr3{
-				t.Errorf("Configuration are not equal. %v vs %v ",*config,tt.args.config)
+			if ( isvarsConfigEqual(config,tt.args.config) != true ) != tt.wantErr3{
+				t.Errorf("Configuration are not equal. %v vs %v ",config,tt.args.config)
 				return
 			}
 		})

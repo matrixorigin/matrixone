@@ -13,8 +13,8 @@ import (
 )
 
 func TestVector(t *testing.T) {
-	v := New(types.Type{types.T(types.T_varchar), 24, 0, 0})
-	w := New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+    v := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
+    w := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
 	{
 		vs := make([][]byte, 10)
 		for i := 0; i < 10; i++ {
