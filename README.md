@@ -7,19 +7,21 @@ MatrixOne is a planet scale, cloud-edge native big data engine crafted for heter
 ## Features
 
 ### Planet Scalability
-By adding nodes, MatrixOne cluster can easily expand SQL processing, computation and storage capacity without turning off any functions.
+MatrixOne cluster can easily expand capacity in SQL processing, computation, and storage, by adding nodes and without the need to disable any function.
 
 ### Cloud-Edge Native
-MatrixOne can leverage effectively benefits of different infrastructure, not limited to public clouds, on-premise server, hybrid cloud and smart devices etc., to provide services with low latency and high throughput.
+Not limited to public clouds, hybrid clouds, on-premise servers, or smart devices, MatrixOne accommodates itself to myriads of infrastructure while still providing top services with low latency and high throughput.
 
 ### Hybrid Streaming, Transaction and Analytical Processing Engine
-By converging multiple engine tightly, MatrixOne can support hybrid streaming, analytical and transactional workloads. And the pluggable architecture also support MatrixOne integrating third-party engine easily.
+By converging multiple engines, MatrixOne can support hybrid streaming, analytical and transactional workloads; with its pluggable architecture, MatrixOne allows for easy integration with third-party engines.
 
 ### High Availability
-MatrixOne currently uses RAFT based consensus algorithm to provide fault tolerance in one zone. We plan to use cutting edge state-machine replication protocol to achieve GEO-distributed active-active.
+MatrixOne uses RAFT-based consensus algorithm to provide fault tolerance in one zone, and plans to use more advanced state-machine replication protocol to achieve geo-distributed active-active.
 
 ### Ease of use
-MatrixOne's principle is to download, install and startup without any dependency. Rebalancing, failover and system tuning are all automatic. MatrixOne supports MySQL compatible syntax.
+- MatrixOne does not require dependency to download, install, or start up.
+- Re-balancing, failover and system tuning are automatic.
+- MatrixOne supports MySQL-compatible syntax.
 
 ### End to End Data Science automation
 By streaming SQL and user defined function, MatrixOne provides end-end data processing pipeline.
@@ -28,24 +30,23 @@ By streaming SQL and user defined function, MatrixOne provides end-end data proc
 ![Architecture](https://github.com/matrixorigin/artwork/blob/main/diagram/overall-architecture.png)
 
 ### Query Parser Layer
--   **Parser** parse SQL, Streaming Query or Python language into abstract syntax tree for further processing.
--   Planner: also be considered as optimizer to transfer abstract syntax tree to plan tree. Planner use rule based optimization and cost based optimization to find the best execution plan.
--   **IR Generator**: For python language, MatrixOne will use IR code generator to transfer Python code to intermediate representation.
+-   **Parser** parse SQL, Streaming Query or Python language into an abstract syntax tree for further processing.
+-   **Planner**: Finds the best execution plan through rule-based, cost-based optimization **algorithms**, and transfers abstract syntax tree to plan tree.
+-   **IR Generator**: Converts Python code into intermediate representation.
 ### Computation Layer
--   **JIT compilation**: This module will use LLVM to turn SQL plan tree or IR code into a native program at run time.
--   **Vectorized Execution**: MatrixOne leverages SIMD instructions to construct vectorized execution pipeline.
--   **Cache**: multiple versions data, indexes and metadata are cached for query execution.
+-   **JIT compilation**: Turns SQL plan tree or IR code into a native program using LLVM, during run time.
+-   **Vectorized Execution**: MatrixOne leverages SIMD instructions to construct vectorized execution pipelines.
+-   **Cache**: Multiple versions of data, indexes and metadata are cached for queries.
 ### Cluster Management Layer
-MatrixCube is a fundamental library to build distributed systems without considering reliability, consistency as well as scalability, it facilitates building the distributed stateful applications since the developers only need to care about business logic on single node. Currently, it's based on multi-raft to provide replicated state machine and would evolve to paxos families to be more friendly for scenarios across multiple datacenters.
+MatrixCube is a fundamental library for building distributed systems without the need to consider reliability, consistency or scalability. It is designed to facilitate distributed, stateful application building because developers only need to care about the business logic on a single node. MatrixCube is currently built upon multi-raft to provide replicated state machine and will migrate to Paxos families to increase friendliness to scenarios spanning multiple data centers.
 -   **Prophet**: Used by MatrixCube to manage and schedule the MatrixOne cluster.
 -   **Transaction Manager**: MatrixOne supports distributed transaction of snapshot isolation level.
--   **Replicated State Machine**: MatrixOne currently uses RAFT based consensus algorithm and hyper logic clocks to archive strong consistency of the clusters. Cutting edge state-machine replication protocol will be used in the future.
+-   **Replicated State Machine**: MatrixOne uses RAFT-based consensus algorithms and hyper logic clocks to implement strong consistency of the clusters. Introduction of more advanced state-machine replication protocols is yet to come.
 ### Replicated Storage Layer
--   **Row Storage**: Serving workload, metadata and catalog are stored in row storage.
--   **Column Storage**: Analytical workload, materialized view are stored in columnar storage.
+-   **Row Storage**: stores serving workload, metadata and catalog.
+-   **Column Storage**: stores analytical workload, materialized views.
 ### Storage Provision Layer
-MatrixOne data can be stored in shared storage of S3 / HDFS, even in local disk of public clouds, on-premise server, hybrid cloud and smart devices
-
+MatrixOne stores data in shared storage of S3 / HDFS, or even in the local disk, public clouds, on-premise server, hybrid cloud, or smart devices.
 ## Quick Start
 ### Building
 
