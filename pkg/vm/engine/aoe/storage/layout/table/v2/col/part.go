@@ -1,6 +1,7 @@
 package col
 
 import (
+	"bytes"
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
@@ -11,7 +12,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
-	"matrixone/pkg/vm/process"
 	"sync"
 	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
@@ -24,7 +24,7 @@ type IColumnPart interface {
 	GetID() uint64
 	GetColIdx() int
 	LoadVectorWrapper() (*vector.VectorWrapper, error)
-	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
+	ForceLoad(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error)
 	Prefetch() error
 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
 	GetVector() vector.IVector
@@ -122,7 +122,7 @@ func (part *ColumnPart) LoadVectorWrapper() (*vector.VectorWrapper, error) {
 	return wrapper, nil
 }
 
-func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
+func (part *ColumnPart) ForceLoad(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	if part.VFile.GetFileType() == common.MemFile {
 		var ret *ro.Vector
 		vec := part.GetVector()
@@ -133,13 +133,13 @@ func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 			}
 			vec = vec.GetLatestView()
 		}
-		ret, err := vec.CopyToVectorWithProc(ref, proc)
+		ret, err := vec.CopyToVectorWithBuffer(compressed, deCompressed)
 		vec.Close()
 		return ret, err
 	}
 	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
 	wrapper.File = part.VFile
-	_, err := wrapper.ReadWithProc(part.VFile, ref, proc)
+	_, err := wrapper.ReadWithBuffer(part.VFile, compressed, deCompressed)
 	if err != nil {
 		return nil, err
 	}

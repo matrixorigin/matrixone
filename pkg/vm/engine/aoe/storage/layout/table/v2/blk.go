@@ -1,6 +1,7 @@
 package table
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	ro "matrixone/pkg/container/vector"
@@ -15,7 +16,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/wrapper"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/process"
 	"sync"
 	// log "github.com/sirupsen/logrus"
 )
@@ -268,9 +268,9 @@ func (blk *Block) GetVectorWrapper(col int) (*vector.VectorWrapper, error) {
 	return vec, nil
 }
 
-func (blk *Block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
+func (blk *Block) GetVectorCopy(attr string, compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	colIdx := blk.Meta.Segment.Table.Schema.GetColIdx(attr)
-	vec, err := blk.data.Columns[colIdx].ForceLoad(ref, proc)
+	vec, err := blk.data.Columns[colIdx].ForceLoad(compressed, deCompressed)
 	if err != nil {
 		return nil, err
 	}

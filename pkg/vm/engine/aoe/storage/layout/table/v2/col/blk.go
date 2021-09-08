@@ -1,6 +1,7 @@
 package col
 
 import (
+	"bytes"
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -10,7 +11,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
 	// log "github.com/sirupsen/logrus"
@@ -33,7 +33,7 @@ type IColumnBlock interface {
 	Size() uint64
 	GetVector() vector.IVector
 	LoadVectorWrapper() (*vector.VectorWrapper, error)
-	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
+	ForceLoad(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error)
 	Prefetch() error
 	GetVectorReader() dbi.IVectorReader
 }

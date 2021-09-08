@@ -1,6 +1,7 @@
 package col
 
 import (
+	"bytes"
 	"fmt"
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
@@ -10,7 +11,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/process"
 	"time"
 )
 
@@ -110,8 +110,8 @@ func (blk *StdColumnBlock) LoadVectorWrapper() (*vector.VectorWrapper, error) {
 	return blk.Part.LoadVectorWrapper()
 }
 
-func (blk *StdColumnBlock) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
-	return blk.Part.ForceLoad(ref, proc)
+func (blk *StdColumnBlock) ForceLoad(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
+	return blk.Part.ForceLoad(compressed, deCompressed)
 }
 
 func (blk *StdColumnBlock) Prefetch() error {
