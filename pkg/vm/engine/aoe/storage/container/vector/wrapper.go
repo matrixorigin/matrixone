@@ -278,7 +278,7 @@ func (vec *VectorWrapper) ReadWithBuffer(r io.Reader, compressed *bytes.Buffer, 
 		deCompressed.Reset()
 		vsize := int(vec.GetMemoryCapacity())
 		if vsize > deCompressed.Cap() {
-			deCompressed.Grow(vsize - deCompressed.Cap())
+			deCompressed.Grow(vsize)
 		}
 		buf := deCompressed.Bytes()
 		buf = buf[:vsize]
@@ -297,10 +297,10 @@ func (vec *VectorWrapper) ReadWithBuffer(r io.Reader, compressed *bytes.Buffer, 
 		compressed.Reset()
 		deCompressed.Reset()
 		if int(loadSize) > compressed.Cap() {
-			compressed.Grow(int(loadSize) - compressed.Cap())
+			compressed.Grow(int(loadSize))
 		}
 		if int(originSize) > deCompressed.Cap() {
-			deCompressed.Grow(int(originSize) - deCompressed.Cap())
+			deCompressed.Grow(int(originSize))
 		}
 		tmpBuf := compressed.Bytes()
 		tmpBuf = tmpBuf[:loadSize]

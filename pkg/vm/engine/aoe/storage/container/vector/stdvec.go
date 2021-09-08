@@ -8,6 +8,7 @@ import (
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
+	"matrixone/pkg/logutil"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
@@ -384,10 +385,13 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	vec := ro.New(v.Type)
 	capacity := encoding.TypeSize + 4 + nullSize + length*int(v.Type.Size)
 	deCompressed.Reset()
+	logutil.Infof("%d %d %d", cap(deCompressed.Bytes()), capacity, deCompressed.Cap())
 	if capacity > deCompressed.Cap() {
-		deCompressed.Grow(capacity - deCompressed.Cap())
+		deCompressed.Grow(capacity)
+		logutil.Infof("%d %d %d", cap(deCompressed.Bytes()), capacity, deCompressed.Cap())
 	}
 	buf := deCompressed.Bytes()
+	logutil.Infof("%d %d %d", cap(buf), capacity, deCompressed.Cap())
 	buf = buf[:capacity]
 	dBuf := buf
 	copy(dBuf, encoding.EncodeType(v.Type))

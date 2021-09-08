@@ -307,7 +307,7 @@ func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	vec := ro.New(v.Type)
 	deCompressed.Reset()
 	if capacity > deCompressed.Cap() {
-		deCompressed.Grow(capacity - deCompressed.Cap())
+		deCompressed.Grow(capacity)
 	}
 	buf := deCompressed.Bytes()
 	buf = buf[:capacity]
