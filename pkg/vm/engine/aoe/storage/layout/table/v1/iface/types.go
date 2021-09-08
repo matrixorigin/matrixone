@@ -27,6 +27,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
+	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
 type ITableData interface {
@@ -111,6 +112,7 @@ type IBlock interface {
 type IMutBlock interface {
 	IBlock
 	WithPinedContext(func(mb.IMutableBlock) error) error
+	Pin() bb.INodeHandle
 }
 
 type IColBlockHandle interface {

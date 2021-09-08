@@ -61,6 +61,10 @@ func (blk *tblock) WithPinedContext(fn func(mb.IMutableBlock) error) error {
 	return err
 }
 
+func (blk *tblock) Pin() bb.INodeHandle {
+	return blk.getHandle()
+}
+
 func (blk *tblock) ProcessData(fn func(batch.IBatch) error) error {
 	h := blk.getHandle()
 	n := h.GetNode()
