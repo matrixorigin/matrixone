@@ -53,8 +53,7 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 		return nil, err
 	}
 	s := new(Scope)
-	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
-	s.Proc = process.New(gm, c.proc.Mp)
+	s.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	s.Proc.Lim = c.proc.Lim
 	s.Proc.Reg.Ws = make([]*process.WaitRegister, 2)
 	{
@@ -69,8 +68,7 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 	}
 	rms := new(Scope)
 	{
-		gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
-		rms.Proc = process.New(gm, c.proc.Mp)
+		rms.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 		rms.Proc.Lim = c.proc.Lim
 		rms.Proc.Reg.Ws = make([]*process.WaitRegister, len(rs))
 		{
@@ -86,8 +84,8 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 				s.Ins = append(s.Ins, vm.Instruction{
 					Op: vm.Transfer,
 					Arg: &transfer.Argument{
-						Mmu: gm,
-						Reg: rms.Proc.Reg.Ws[i],
+						Proc: rms.Proc,
+						Reg:  rms.Proc.Reg.Ws[i],
 					},
 				})
 			}
@@ -101,15 +99,14 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 		rms.Ins = append(rms.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
-				Mmu: gm,
-				Reg: s.Proc.Reg.Ws[0],
+				Proc: s.Proc,
+				Reg:  s.Proc.Reg.Ws[0],
 			},
 		})
 	}
 	sms := new(Scope)
 	{
-		gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
-		sms.Proc = process.New(gm, c.proc.Mp)
+		sms.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 		sms.Proc.Lim = c.proc.Lim
 		sms.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
 		{
@@ -125,8 +122,8 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 				s.Ins = append(s.Ins, vm.Instruction{
 					Op: vm.Transfer,
 					Arg: &transfer.Argument{
-						Mmu: gm,
-						Reg: sms.Proc.Reg.Ws[i],
+						Proc: sms.Proc,
+						Reg:  sms.Proc.Reg.Ws[i],
 					},
 				})
 			}
@@ -140,8 +137,8 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 		sms.Ins = append(sms.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
-				Mmu: gm,
-				Reg: s.Proc.Reg.Ws[1],
+				Proc: s.Proc,
+				Reg:  s.Proc.Reg.Ws[1],
 			},
 		})
 	}

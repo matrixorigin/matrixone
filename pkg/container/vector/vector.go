@@ -8,7 +8,6 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vectorize/shuffle"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 	"reflect"
 	"strconv"
@@ -127,19 +126,19 @@ func (v *Vector) Reset() {
 }
 
 func (v *Vector) Free(p *process.Process) {
-	if v.Data != nil {
-		if p.Free(v.Data) {
+	v.Ref--
+	if !v.Or && v.Data != nil {
+		if v.Ref == 0 {
+			p.Free(v.Data)
 			v.Data = nil
 		}
 	}
 }
 
 func (v *Vector) Clean(p *process.Process) {
-	if v.Data != nil {
-		copy(v.Data, mempool.OneCount)
-		if p.Free(v.Data) {
-			v.Data = nil
-		}
+	if !v.Or && v.Data != nil {
+		p.Free(v.Data)
+		v.Data = nil
 	}
 }
 
@@ -157,88 +156,287 @@ func (v *Vector) Length() int {
 	}
 }
 
-func (v *Vector) Window(start, end int) *Vector {
+func (v *Vector) SetLength(n int) {
 	switch v.Typ.Oid {
 	case types.T_int8:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]int8)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]int8)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_int16:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]int16)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]int16)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_int32:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]int32)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]int32)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_int64:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]int64)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]int64)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_uint8:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]uint8)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]uint8)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_uint16:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]uint16)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]uint16)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_uint32:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]uint32)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]uint32)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_uint64:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]uint64)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]uint64)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_float32:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]float32)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]float32)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_float64:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]float64)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]float64)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_sel:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([]int64)[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([]int64)
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_tuple:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.([][]interface{})[start:end],
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.([][]interface{})
+		m := len(vs)
+		v.Col = vs[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	case types.T_char, types.T_varchar, types.T_json:
-		return &Vector{
-			Typ: v.Typ,
-			Col: v.Col.(*types.Bytes).Window(start, end),
-			Nsp: v.Nsp.Range(uint64(start), uint64(end)),
-		}
+		vs := v.Col.(*types.Bytes)
+		m := len(vs.Offsets)
+		vs.Data = vs.Data[:vs.Offsets[n]+vs.Lengths[n]]
+		vs.Offsets = vs.Offsets[:n]
+		vs.Lengths = vs.Lengths[:n]
+		v.Nsp.RemoveRange(uint64(n), uint64(m))
 	}
-	return nil
+}
+
+func (v *Vector) Dup(proc *process.Process) (*Vector, error) {
+	switch v.Typ.Oid {
+	case types.T_int8:
+		vs := v.Col.([]int8)
+		data, err := proc.Alloc(int64(len(vs)))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeInt8Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_int16:
+		vs := v.Col.([]int16)
+		data, err := proc.Alloc(int64(len(vs) * 2))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeInt16Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_int32:
+		vs := v.Col.([]int32)
+		data, err := proc.Alloc(int64(len(vs) * 4))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeInt32Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_int64:
+		vs := v.Col.([]int64)
+		data, err := proc.Alloc(int64(len(vs) * 8))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeInt64Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_uint8:
+		vs := v.Col.([]uint8)
+		data, err := proc.Alloc(int64(len(vs)))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeUint8Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_uint16:
+		vs := v.Col.([]uint16)
+		data, err := proc.Alloc(int64(len(vs) * 2))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeUint16Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_uint32:
+		vs := v.Col.([]uint32)
+		data, err := proc.Alloc(int64(len(vs) * 4))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeUint32Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_uint64:
+		vs := v.Col.([]uint64)
+		data, err := proc.Alloc(int64(len(vs) * 8))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeUint64Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_float32:
+		vs := v.Col.([]float32)
+		data, err := proc.Alloc(int64(len(vs) * 4))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeFloat32Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_float64:
+		vs := v.Col.([]float64)
+		data, err := proc.Alloc(int64(len(vs) * 8))
+		if err != nil {
+			return nil, err
+		}
+		ws := encoding.DecodeFloat64Slice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	case types.T_char, types.T_varchar, types.T_json:
+		vs := v.Col.(*types.Bytes)
+		data, err := proc.Alloc(int64(len(vs.Data)))
+		if err != nil {
+			return nil, err
+		}
+		ws := &types.Bytes{
+			Data:    data,
+			Offsets: make([]uint32, len(vs.Offsets)),
+			Lengths: make([]uint32, len(vs.Lengths)),
+		}
+		copy(ws.Data, vs.Data)
+		copy(ws.Offsets, vs.Offsets)
+		copy(ws.Lengths, vs.Lengths)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+		}, nil
+	}
+	return nil, fmt.Errorf("unsupport type %v", v.Typ)
+}
+
+func (v *Vector) Window(start, end int, w *Vector) *Vector {
+	switch v.Typ.Oid {
+	case types.T_int8:
+		w.Col = v.Col.([]int8)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_int16:
+		w.Col = v.Col.([]int16)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_int32:
+		w.Col = v.Col.([]int32)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_int64:
+		w.Col = v.Col.([]int64)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_uint8:
+		w.Col = v.Col.([]uint8)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_uint16:
+		w.Col = v.Col.([]uint16)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_uint32:
+		w.Col = v.Col.([]uint32)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_uint64:
+		w.Col = v.Col.([]uint64)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_float32:
+		w.Col = v.Col.([]float32)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_float64:
+		w.Col = v.Col.([]float64)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_sel:
+		w.Col = v.Col.([]int64)[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_tuple:
+		w.Col = v.Col.([][]interface{})[start:end]
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	case types.T_char, types.T_varchar, types.T_json:
+		w.Col = v.Col.(*types.Bytes).Window(start, end)
+		w.Nsp = v.Nsp.Range(uint64(start), uint64(end), w.Nsp)
+	}
+	return w
 }
 
 func (v *Vector) Append(arg interface{}) error {
@@ -363,14 +561,13 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	copy(buf[:mempool.CountSize], v.Data[:mempool.CountSize])
-	copy(buf[mempool.CountSize:], vs.Data[:vs.Offsets[vi]])
-	copy(buf[mempool.CountSize+vs.Offsets[vi]:], data)
+	copy(buf, vs.Data[:vs.Offsets[vi]])
+	copy(buf[vs.Offsets[vi]:], data)
 	o := vs.Offsets[vi] + vs.Lengths[vi]
-	copy(buf[mempool.CountSize+o+diff:], vs.Data[o:])
+	copy(buf[o+diff:], vs.Data[o:])
 	proc.Free(v.Data)
 	v.Data = buf
-	vs.Data = buf[mempool.CountSize : mempool.CountSize+len(vs.Data)+int(diff)]
+	vs.Data = buf[:len(vs.Data)+int(diff)]
 	vs.Lengths[vi] = ws.Lengths[wi]
 	for i, j := vi+1, int64(len(vs.Offsets)); i < j; i++ {
 		vs.Offsets[i] += diff
@@ -389,21 +586,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeInt8Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeInt8Slice(data)
 			vs[0] = w.Col.([]int8)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]int8)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1))
+				data, err := proc.Grow(v.Data, int64(n+1))
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeInt8Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeInt8Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -417,21 +613,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeInt16Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeInt16Slice(data)
 			vs[0] = w.Col.([]int16)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]int16)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1)*2)
+				data, err := proc.Grow(v.Data, int64(n+1)*2)
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeInt16Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeInt16Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -445,21 +640,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeInt32Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeInt32Slice(data)
 			vs[0] = w.Col.([]int32)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]int32)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1)*4)
+				data, err := proc.Grow(v.Data, int64(n+1)*4)
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeInt32Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeInt32Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -473,21 +667,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeInt64Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeInt64Slice(data)
 			vs[0] = w.Col.([]int64)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]int64)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1)*8)
+				data, err := proc.Grow(v.Data, int64(n+1)*8)
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeInt64Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeInt64Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -501,21 +694,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeUint8Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeUint8Slice(data)
 			vs[0] = w.Col.([]uint8)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]uint8)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1))
+				data, err := proc.Grow(v.Data, int64(n+1))
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeUint8Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeUint8Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -529,21 +721,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeUint16Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeUint16Slice(data)
 			vs[0] = w.Col.([]uint16)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]uint16)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1)*2)
+				data, err := proc.Grow(v.Data, int64(n+1)*2)
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeUint16Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeUint16Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -557,21 +748,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeUint32Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeUint32Slice(data)
 			vs[0] = w.Col.([]uint32)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]uint32)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1)*4)
+				data, err := proc.Grow(v.Data, int64(n+1)*4)
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeUint32Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeUint32Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -585,21 +775,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeUint64Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeUint64Slice(data)
 			vs[0] = w.Col.([]uint64)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]uint64)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1)*8)
+				data, err := proc.Grow(v.Data, int64(n+1)*8)
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeUint64Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeUint64Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -613,21 +802,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeFloat32Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeFloat32Slice(data)
 			vs[0] = w.Col.([]float32)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]float32)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1)*4)
+				data, err := proc.Grow(v.Data, int64(n+1)*4)
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeFloat32Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeFloat32Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -641,21 +829,20 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
-			vs := encoding.DecodeFloat64Slice(data[mempool.CountSize:])
+			v.Ref = w.Ref
+			vs := encoding.DecodeFloat64Slice(data)
 			vs[0] = w.Col.([]float64)[sel]
 			v.Col = vs[:1]
 			v.Data = data
 		} else {
 			vs := v.Col.([]float64)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+1)*8)
+				data, err := proc.Grow(v.Data, int64(n+1)*8)
 				if err != nil {
 					return err
 				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
 				proc.Free(v.Data)
-				vs = encoding.DecodeFloat64Slice(data[mempool.CountSize:])
+				vs = encoding.DecodeFloat64Slice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data
@@ -664,51 +851,41 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			v.Col = vs
 		}
 	case types.T_tuple:
-		if len(v.Data) == 0 {
-			data, err := proc.Alloc(0)
-			if err != nil {
-				return err
-			}
-			v.Data = data
-		}
+		v.Ref = w.Ref
 		vs, ws := v.Col.([][]interface{}), w.Col.([][]interface{})
 		vs = append(vs, ws[sel])
 		v.Col = vs
 	case types.T_char, types.T_varchar, types.T_json:
-		vs := w.Col.(*types.Bytes)
-		from := vs.Data[vs.Offsets[sel] : vs.Offsets[sel]+vs.Lengths[sel]]
-		col := v.Col.(*types.Bytes)
+		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
+		from := ws.Get(sel)
 		if len(v.Data) == 0 {
 			data, err := proc.Alloc(int64(len(from)))
 			if err != nil {
 				return err
 			}
-			copy(data[:mempool.CountSize], w.Data[:mempool.CountSize])
+			v.Ref = w.Ref
 			v.Data = data
-			col.Data = data[mempool.CountSize:mempool.CountSize]
-		} else {
-			if n := len(col.Data); n+len(from) >= cap(col.Data) {
-				data, err := proc.Grow(v.Data[mempool.CountSize:], int64(n+len(from)))
-				if err != nil {
-					return err
-				}
-				copy(data[:mempool.CountSize], v.Data[:mempool.CountSize])
-				proc.Free(v.Data)
-				v.Data = data
-				col.Data = data[mempool.CountSize : mempool.CountSize+n]
+			vs.Data = data[:0]
+		} else if n := len(vs.Data); n+len(from) >= cap(vs.Data) {
+			data, err := proc.Grow(v.Data, int64(n+len(from)))
+			if err != nil {
+				return err
 			}
+			proc.Free(v.Data)
+			v.Data = data
+			vs.Data = data[:n]
 		}
-		col.Lengths = append(col.Lengths, uint32(len(from)))
+		vs.Lengths = append(vs.Lengths, uint32(len(from)))
 		{
-			n := len(col.Offsets)
+			n := len(vs.Offsets)
 			if n > 0 {
-				col.Offsets = append(col.Offsets, col.Offsets[n-1]+col.Lengths[n-1])
+				vs.Offsets = append(vs.Offsets, vs.Offsets[n-1]+vs.Lengths[n-1])
 			} else {
-				col.Offsets = append(col.Offsets, 0)
+				vs.Offsets = append(vs.Offsets, 0)
 			}
 		}
-		col.Data = append(col.Data, from...)
-		v.Col = col
+		vs.Data = append(vs.Data, from...)
+		v.Col = vs
 	}
 	if w.Nsp.Any() && w.Nsp.Contains(uint64(sel)) {
 		v.Nsp.Add(uint64(v.Length() - 1))
@@ -930,7 +1107,6 @@ func (v *Vector) Show() ([]byte, error) {
 
 func (v *Vector) Read(data []byte) error {
 	v.Data = data
-	data = data[mempool.CountSize:]
 	typ := encoding.DecodeType(data[:encoding.TypeSize])
 	data = data[encoding.TypeSize:]
 	v.Typ = typ
@@ -1273,7 +1449,6 @@ func (v *Vector) String() string {
 				return fmt.Sprintf("%s", col.Data[:col.Lengths[0]])
 			}
 		}
-
 	}
 	return fmt.Sprintf("%v-%s", v.Col, v.Nsp)
 }

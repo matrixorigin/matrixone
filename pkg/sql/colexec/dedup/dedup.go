@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/hash"
 	"matrixone/pkg/intmap/fastmap"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -26,15 +26,14 @@ func String(arg interface{}, buf *bytes.Buffer) {
 
 func Prepare(_ *process.Process, arg interface{}) error {
 	n := arg.(*Argument)
-	{
-		n.Ctr = Container{
-			n:      len(n.Attrs),
-			slots:  fastmap.New(),
-			diffs:  make([]bool, UnitLimit),
-			matchs: make([]int64, UnitLimit),
-			hashs:  make([]uint64, UnitLimit),
-			sels:   make([][]int64, UnitLimit),
-		}
+	n.Ctr = Container{
+		n:      len(n.Attrs),
+		slots:  fastmap.New(),
+		diffs:  make([]bool, UnitLimit),
+		matchs: make([]int64, UnitLimit),
+		hashs:  make([]uint64, UnitLimit),
+		sels:   make([][]int64, UnitLimit),
+		vec:    vector.New(types.Type{Oid: types.T_int8}),
 	}
 	return nil
 }
@@ -42,10 +41,6 @@ func Prepare(_ *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
-	{
-		ctr.rows = 0
-		ctr.groups = make(map[uint64][]*hash.SetGroup)
-	}
 	if proc.Reg.Ax == nil {
 		ctr.clean(proc)
 		return false, nil
@@ -54,6 +49,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if bat == nil || bat.Attrs == nil {
 		ctr.clean(proc)
 		return false, nil
+	}
+	{
+		ctr.rows = 0
+		ctr.groups = make(map[uint64][]*hash.SetGroup)
 	}
 	bat.Reorder(n.Attrs)
 	{
@@ -111,15 +110,8 @@ func (ctr *Container) unitDedup(start int, count int, vecs []*vector.Vector, pro
 				g := hash.NewSetGroup(ctr.rows)
 				{
 					for i, vec := range ctr.bat.Vecs {
-						if vec.Data == nil {
-							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-								return err
-							}
-							copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
-						} else {
-							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-								return err
-							}
+						if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+							return err
 						}
 					}
 				}
@@ -138,7 +130,7 @@ func (ctr *Container) unitDedup(start int, count int, vecs []*vector.Vector, pro
 func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
-		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count))
+		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count, ctr.vec))
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

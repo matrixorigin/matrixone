@@ -421,7 +421,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			}
 		}
 
-		logutil.Infof("time of getDataFromPipeline : %s ",time.Since(begin).String())
+		logutil.Infof("time of getDataFromPipeline : %s ", time.Since(begin).String())
 	} else {
 
 		if n := len(bat.Sels); n == 0 {
@@ -877,7 +877,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		pdHook.DecQueryCountAtEpoch(epoch, statementCount)
 	}()
 
-	proc := process.New(ses.GuestMmu, ses.Mempool)
+	proc := process.New(ses.GuestMmu)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
 	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
@@ -1161,7 +1161,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return err
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-				logutil.Infof("time of SendResponse %s",time.Since(echoTime).String())
+				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
 		}
 	}
@@ -1200,7 +1200,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logutil.Infof("query:%s", SubStringFromBegin(query,int(ses.Pu.SV.GetLengthOfQueryPrinted())))
+		logutil.Infof("query:%s", SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
 		err := mce.doComQuery(query)
 		if err != nil {
 			resp = NewResponse(

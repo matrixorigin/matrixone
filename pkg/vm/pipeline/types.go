@@ -1,24 +1,26 @@
 package pipeline
 
 import (
-	"matrixone/pkg/container/batch"
+	"bytes"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
 )
 
 const (
-	PrefetchNum = 4
+	PrefetchNum           = 4
+	CompressedBlockSize   = 1024
+	UncompressedBlockSize = 4096
 )
 
 type Pipeline struct {
 	cs    []uint64
 	attrs []string
+	cds   []*bytes.Buffer
+	dds   []*bytes.Buffer
 	ins   vm.Instructions
 }
 
 type block struct {
-	siz int64
-	bat *batch.Batch
 	blk engine.Block
 }
 

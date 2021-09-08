@@ -7,7 +7,6 @@ import (
 	"matrixone/pkg/compare"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -67,8 +66,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		bat.Clean(proc)
 		return false, err
 	}
-	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
-	sels = sels[:len(ctr.sels)]
+	sels := encoding.DecodeInt64Slice(data)
 	for i, j := 0, len(ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}

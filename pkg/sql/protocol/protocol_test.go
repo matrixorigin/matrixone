@@ -7,7 +7,6 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -27,7 +26,7 @@ func TestBatch(t *testing.T) {
 	}
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
-	proc := process.New(gm, mempool.New(1<<40, 8))
+	proc := process.New(gm)
 	{
 		proc.Id = "0"
 		proc.Lim.Size = 10 << 32
@@ -38,7 +37,7 @@ func TestBatch(t *testing.T) {
 	{
 		fmt.Printf("proc.Size: %v\n", proc.Size())
 	}
-	nbat, data, err := DecodeBatchWithProcess(buf.Bytes(), proc)
+	nbat, data, err := DecodeBatch(buf.Bytes())
 	fmt.Printf("nbat: %v\n", nbat)
 	fmt.Printf("data: %v, err: %v\n", data, err)
 	{
