@@ -83,14 +83,14 @@ function run_tests(){
     local test_scope=$(go list ./... | egrep -v "frontend")
     if [[ $SKIP_TESTS == 'race' ]]; then
         logger "INF" "Run UT without race check"
-        go test -v -parallel 1 -timeout "${UT_TIMEOUT}m" -covermode=count -coverprofile=$RAW_COVERAGE $test_scope | tee $UT_REPORT
+        go test -v -p 1 -timeout "${UT_TIMEOUT}m" -covermode=count -coverprofile=$RAW_COVERAGE $test_scope | tee $UT_REPORT
         local html_coverage="coverage.html"
         logger "INF" "Check on code coverage"
         go tool cover -o $CODE_COVERAGE -html=$RAW_COVERAGE
         cp -f $CODE_COVERAGE $html_coverage
     else
         logger "INF" "Run UT with race check"
-        go test -v -parallel 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
+        go test -v -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
     egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test'  $UT_REPORT > $UT_FILTER
     logger "INF" "Refer to $UT_REPORT for details"
