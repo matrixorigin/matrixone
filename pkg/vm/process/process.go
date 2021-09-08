@@ -39,5 +39,5 @@ func (p *Process) Grow(old []byte, size int64) ([]byte, error) {
 		return nil, err
 	}
 	copy(data, old)
-	return data, nil
+	return data[:size], nil
 }

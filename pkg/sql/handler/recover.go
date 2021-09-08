@@ -25,7 +25,7 @@ func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 		for i, j := 0, len(ps.Ss); i < j; i++ {
 			s.Proc.Reg.Ws[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
-				Ch: make(chan interface{}),
+				Ch: make(chan interface{}, 8),
 			}
 		}
 	}

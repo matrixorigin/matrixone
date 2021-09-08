@@ -43,7 +43,10 @@ func writeBack(u interface{}, bat *batch.Batch) error {
 	var buf bytes.Buffer
 
 	up := u.(*userdata)
-	if bat == nil && up.conn != nil {
+	if bat == nil {
+		if up.conn == nil {
+			return nil
+		}
 		defer func() { up.conn = nil }()
 		return up.conn.WriteAndFlush(&message.Message{Sid: 1})
 	}

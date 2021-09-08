@@ -31,11 +31,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return true, nil
 	}
 	if proc.Reg.Ax == nil {
-		mempool.Pool.Put(proc.Mp)
-		register.FreeRegisters(proc)
 		reg.Wg.Add(1)
 		reg.Ch <- nil
 		reg.Wg.Wait()
+		mempool.Pool.Put(proc.Mp)
+		register.FreeRegisters(proc)
 		return true, nil
 	}
 	bat := proc.Reg.Ax.(*batch.Batch)

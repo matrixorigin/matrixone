@@ -50,6 +50,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	rt := obj.(*Routine)
 	ses := rt.GetSession()
 
+	if bat == nil {
+		return nil
+	}
+
 	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
 	rowGroupSize = MaxInt64(rowGroupSize, 1)
 
@@ -1002,7 +1006,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
 
-	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, ses.Pu.ClusterNodes, proc)
+	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, proc)
 	execs, err := comp.Compile()
 	if err != nil {
 		return err

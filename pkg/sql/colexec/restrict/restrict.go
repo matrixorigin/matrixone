@@ -54,7 +54,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		}
 		for _, vec := range bat.Vecs { // reset reference count of vector
 			if vec.Ref == 0 {
-				vec.Ref = 1
+				vec.Ref = 2
 			}
 		}
 		bat.Reduce(n.Attrs, proc)
