@@ -365,7 +365,7 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 			defer func() {
 				wg.Done()
 			}()
-			for j := 10; j < 200; j++ {
+			for j := 10; j < 50; j++ {
 				if j%3 != i {
 					continue
 				}
@@ -386,7 +386,7 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 
 	tbls, err = c[0].ListTables(dbid)
 	require.NoError(t, err)
-	require.Equal(t, 190, len(tbls))
+	require.Equal(t, 40, len(tbls))
 
 	for i := uint64(10); i < 15; i++ {
 		_, err = c[0].DropTable(20+i, dbid, fmt.Sprintf("t%d", i))
@@ -395,7 +395,7 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 
 	tbls, err = c[0].ListTables(dbid)
 	require.NoError(t, err)
-	require.Equal(t, 185, len(tbls))
+	require.Equal(t, 35, len(tbls))
 
 	err = c[0].DropDatabase(3, dbName)
 	require.NoError(t, err)
