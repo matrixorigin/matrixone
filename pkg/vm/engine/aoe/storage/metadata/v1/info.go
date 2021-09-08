@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
@@ -236,7 +235,6 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 }
 
 func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo, ctx dbi.TableOpCtx) (*Table, error) {
-	logutil.Infof("CreateTableFromTableInfo, %v", tinfo.Name)
 	schema := &Schema{
 		Name:      tinfo.Name,
 		ColDefs:   make([]*ColDef, 0),
