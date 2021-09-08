@@ -384,8 +384,11 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	vec := ro.New(v.Type)
 	capacity := encoding.TypeSize + 4 + nullSize + length*int(v.Type.Size)
 	deCompressed.Reset()
-	deCompressed.Write(make([]byte, capacity))
+	if capacity > deCompressed.Cap() {
+		deCompressed.Grow(capacity - deCompressed.Cap())
+	}
 	buf := deCompressed.Bytes()
+	buf = buf[:capacity]
 	dBuf := buf
 	copy(dBuf, encoding.EncodeType(v.Type))
 	dBuf = dBuf[encoding.TypeSize:]
