@@ -272,8 +272,14 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 	// log.Infof("%d, %d, %d", stat.CompressAlgo(), stat.Size(), stat.OriginSize())
 	switch stat.CompressAlgo() {
 	case compress.None:
-		allocSize := int64(vec.GetMemoryCapacity())
-		data, err := proc.Alloc(allocSize)
+		deCompressed.Reset()
+		vsize := int(vec.GetMemoryCapacity())
+		if vsize > deCompressed.Cap() {
+			deCompressed.Grow(vsize - deCompressed.Cap())
+		}
+		buf := deCompressed.Bytes()
+		buf = buf[:vsize]
+		nr, err := r.Read(buf)
 		if err != nil {
 			return n, err
 		}
@@ -285,7 +291,23 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 			proc.Free(data)
 			return n, err
 		}
-		err = vec.Vector.Read(data[:mempool.CountSize+allocSize])
+		return int64(nr), err
+	case compress.Lz4:
+		loadSize := stat.Size()
+		originSize := stat.OriginSize()
+		compressed.Reset()
+		deCompressed.Reset()
+		if int(loadSize) > compressed.Cap() {
+			compressed.Grow(int(loadSize) - compressed.Cap())
+		}
+		if int(originSize) > deCompressed.Cap() {
+			deCompressed.Grow(int(originSize) - deCompressed.Cap())
+		}
+		tmpBuf := compressed.Bytes()
+		tmpBuf = tmpBuf[:loadSize]
+		buf := deCompressed.Bytes()
+		buf = buf[:originSize]
+		nr, err := r.Read(tmpBuf)
 		if err != nil {
 			proc.Free(data)
 			return n, err

@@ -386,15 +386,17 @@ func (v *StdVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro
 	length := v.Length()
 	vec := ro.New(v.Type)
 	capacity := encoding.TypeSize + 4 + nullSize + length*int(v.Type.Size)
-	data, err := proc.Alloc(int64(capacity))
-	if err != nil {
-		return nil, err
+	deCompressed.Reset()
+	if capacity > deCompressed.Cap() {
+		deCompressed.Grow(capacity - deCompressed.Cap())
 	}
-	buf := data[mempool.CountSize : mempool.CountSize+capacity]
-	copy(buf, encoding.EncodeType(v.Type))
-	buf = buf[encoding.TypeSize:]
-	copy(buf, encoding.EncodeUint32(uint32(nullSize)))
-	buf = buf[4:]
+	buf := deCompressed.Bytes()
+	buf = buf[:capacity]
+	dBuf := buf
+	copy(dBuf, encoding.EncodeType(v.Type))
+	dBuf = dBuf[encoding.TypeSize:]
+	copy(dBuf, encoding.EncodeUint32(uint32(nullSize)))
+	dBuf = dBuf[4:]
 	if nullSize > 0 {
 		copy(buf, nullbuf)
 		buf = buf[nullSize:]
