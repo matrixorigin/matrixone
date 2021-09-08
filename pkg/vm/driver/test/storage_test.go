@@ -43,7 +43,7 @@ func init() {
 	tableInfo.Id = 100
 }
 
-func TestStorage(t *testing.T) {
+func TestAOEStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {

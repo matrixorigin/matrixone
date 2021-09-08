@@ -114,7 +114,6 @@ func TestAOEEngine(t *testing.T) {
 
 	testTableDDL(t, catalogs)
 
-	return
 	aoeEngine := New(&catalogs[0])
 
 	t0 := time.Now()
