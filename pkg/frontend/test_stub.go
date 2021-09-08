@@ -10,9 +10,9 @@ import (
 	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
 	stdLog "log"
-	"matrixone/pkg/vm/engine/aoe/dist"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	"matrixone/pkg/vm/engine/aoe/dist/config"
+	"matrixone/pkg/vm/driver"
+	aoe2 "matrixone/pkg/vm/driver/aoe"
+	"matrixone/pkg/vm/driver/config"
 	"os"
 	"sync"
 	"testing"
@@ -25,12 +25,12 @@ var (
 
 type TestCluster struct {
 	T            *testing.T
-	Applications []dist.CubeDriver
-	AOEDBs       []*daoe.Storage
+	Applications []driver.CubeDriver
+	AOEDBs       []*aoe2.Storage
 }
 
 func NewTestClusterStore(t *testing.T, reCreate bool,
-	f func(path string) (*daoe.Storage, error),
+	f func(path string) (*aoe2.Storage, error),
 	pcis []*PDCallbackImpl, nodeCnt int) (*TestCluster, error) {
 	if reCreate {
 		stdLog.Printf("clean target dir")
@@ -50,12 +50,12 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		pebbleDataStorage, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), &pebble.Options{
 			FS: vfs.NewPebbleFS(vfs.Default),
 		})
-		var aoeDataStorage *daoe.Storage
+		var aoeDataStorage *aoe2.Storage
 		if err != nil {
 			return nil, err
 		}
 		if f == nil {
-			aoeDataStorage, err = daoe.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
+			aoeDataStorage, err = aoe2.NewStorage(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
 		} else {
 			aoeDataStorage, err = f(fmt.Sprintf("%s/aoe-%d", tmpDir, i))
 		}
@@ -106,7 +106,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+			a, err := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 			if err != nil {
 				fmt.Printf("create failed with %v", err)
 			}

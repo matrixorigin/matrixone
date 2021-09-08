@@ -1,37 +1,45 @@
-package test
+package engine
 
 import (
 	"bytes"
 	"fmt"
+	"github.com/fagongzi/log"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/stretchr/testify/require"
 	stdLog "log"
+	catalog2 "matrixone/pkg/catalog"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/protocol"
+	aoe3 "matrixone/pkg/vm/driver/aoe"
+	"matrixone/pkg/vm/driver/config"
+	"matrixone/pkg/vm/driver/testutil"
 	vengine "matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
-	catalog2 "matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	"matrixone/pkg/vm/engine/aoe/dist/config"
-	"matrixone/pkg/vm/engine/aoe/dist/testutil"
-	"matrixone/pkg/vm/engine/aoe/engine"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"sync"
+
 	"matrixone/pkg/vm/metadata"
 	"testing"
 	"time"
-
-	"github.com/fagongzi/log"
-	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/stretchr/testify/require"
 )
 
 const (
 	testDBName          = "db1"
 	testTableNamePrefix = "test-table-"
+
+	blockRows          = 10000
+	blockCntPerSegment = 2
+	colCnt             = 4
+	segmentCnt         = 5
+	blockCnt           = blockCntPerSegment * segmentCnt
+	restart            = false
 )
 
 var (
@@ -64,7 +72,7 @@ func TestAOEEngine(t *testing.T) {
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &e.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -79,27 +87,34 @@ func TestAOEEngine(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return daoe.NewStorageWithOptions(path, opts)
+			return aoe3.NewStorageWithOptions(path, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(true),
 			raftstore.WithTestClusterLogLevel("info"),
-			raftstore.WithTestClusterDataPath("./test1")))
+			raftstore.WithTestClusterDataPath("./test"),
+			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
+				cfg.Worker.RaftEventWorkers = uint64(32)
+			})))
 
 	c.Start()
 	defer func() {
-		stdLog.Printf("2>>>>>>>>>>>>>>>>> call stop")
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 	stdLog.Printf("app started.")
 	time.Sleep(3 * time.Second)
 
-	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
-	aoeEngine := engine.New(&catalog)
+	var catalogs []catalog2.Catalog
+	for i := 0; i < 3; i++ {
+		catalogs = append(catalogs, catalog2.NewCatalog(c.CubeDrivers[i]))
+	}
 
-	testTableDDL(t, catalog)
+	testTableDDL(t, catalogs)
+
+	aoeEngine := New(&catalogs[0])
 
 	t0 := time.Now()
 	err := aoeEngine.Create(0, testDBName, 0)
@@ -223,7 +238,7 @@ func doRestartEngine(t *testing.T) {
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
-		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &e.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -238,11 +253,11 @@ func doRestartEngine(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return daoe.NewStorageWithOptions(path, opts)
+			return aoe3.NewStorageWithOptions(path, opts)
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel("error"),
+			raftstore.WithTestClusterLogLevel("info"),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithTestClusterRecreate(false)))
 	defer func() {
@@ -251,10 +266,10 @@ func doRestartEngine(t *testing.T) {
 	}()
 	c.Start()
 
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
-	catalog := catalog2.DefaultCatalog(c.CubeDrivers[0])
-	aoeEngine := engine.New(&catalog)
+	catalog := catalog2.NewCatalog(c.CubeDrivers[0])
+	aoeEngine := New(&catalog)
 
 	dbs := aoeEngine.Databases()
 	require.Equal(t, 1, len(dbs))
@@ -273,17 +288,17 @@ func doRestartEngine(t *testing.T) {
 	}
 }
 
-func testTableDDL(t *testing.T, c catalog2.Catalog) {
+func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 	//Wait shard state change
 
-	tbs, err := c.ListTables(99)
+	tbs, err := c[0].ListTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
 
-	dbid, err := c.CreateDatabase(0, dbName, vengine.AOE)
+	dbid, err := c[0].CreateDatabase(0, dbName, vengine.AOE)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
-	tbs, err = c.ListTables(dbid)
+	tbs, err = c[0].ListTables(dbid)
 	require.NoError(t, err)
 	require.Nil(t, tbs)
 
@@ -291,32 +306,33 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 	t1 := md.MockTableInfo(colCnt)
 	t1.Name = "t1"
 
-	tid, err := c.CreateTable(1, dbid, *t1)
+	tid, err := c[0].CreateTable(1, dbid, *t1)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), tid)
 
-	tb, err := c.GetTable(dbid, t1.Name)
+	tb, err := c[0].GetTable(dbid, t1.Name)
 	require.NoError(t, err)
 	require.NotNil(t, tb)
 	require.Equal(t, aoe.StatePublic, tb.State)
 
 	t2 := md.MockTableInfo(colCnt)
 	t2.Name = "t2"
-	_, err = c.CreateTable(2, dbid, *t2)
+	_, err = c[0].CreateTable(2, dbid, *t2)
 	require.NoError(t, err)
 
-	tbls, err := c.ListTables(dbid)
+	tbls, err := c[0].ListTables(dbid)
 	require.NoError(t, err)
 	require.Equal(t, 2, len(tbls))
 
-	err = c.DropDatabase(3, dbName)
+	err = c[0].DropDatabase(3, dbName)
 	require.NoError(t, err)
 
-	dbs, err := c.ListDatabases()
+	dbs, err := c[0].ListDatabases()
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 
-	kvs, err := c.Driver.Scan(codec.String2Bytes("DeletedTableQueue"), codec.String2Bytes("DeletedTableQueue10"), 0)
+	logutil.Infof("Scan DeletedTableQueue")
+	kvs, err := c[0].Driver.Scan(codec.String2Bytes("DeletedTableQueue"), codec.String2Bytes("DeletedTableQueue10"), 0)
 	require.NoError(t, err)
 	for i := 0; i < len(kvs); i += 2 {
 		tbl, err := helper.DecodeTable(kvs[i+1])
@@ -324,54 +340,66 @@ func testTableDDL(t *testing.T, c catalog2.Catalog) {
 		require.Equal(t, uint64(3), tbl.Epoch)
 	}
 
-	cnt, err := c.RemoveDeletedTable(10)
+	cnt, err := c[0].RemoveDeletedTable(10)
 	require.NoError(t, err)
 	require.Equal(t, 2, cnt)
 
-	cnt, err = c.RemoveDeletedTable(11)
+	cnt, err = c[0].RemoveDeletedTable(11)
 	require.NoError(t, err)
 	require.Equal(t, 0, cnt)
 
-	dbid, err = c.CreateDatabase(5, dbName, vengine.AOE)
+	dbid, err = c[0].CreateDatabase(5, dbName, vengine.AOE)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
-	for i := uint64(10); i < 20; i++ {
-		t1.Name = fmt.Sprintf("t%d", i)
-		tid, err := c.CreateTable(i, dbid, *t1)
-		require.NoError(t, err)
-		require.Less(t, uint64(0), tid)
-	}
+	wg := sync.WaitGroup{}
 
-	tbls, err = c.ListTables(dbid)
+	for index := range c {
+		wg.Add(1)
+		cc := c[index]
+		i := index
+
+		//time.Sleep(100 * time.Millisecond)
+		go func() {
+			defer func() {
+				wg.Done()
+			}()
+			for j := 10; j < 50; j++ {
+				if j%3 != i {
+					continue
+				}
+				t1.Name = fmt.Sprintf("t%d", j)
+				tid, err := cc.CreateTable(uint64(j), dbid, *t1)
+				if err != nil {
+					logutil.Infof("create table failed, catalog-%d, j is %d, tid is %d", i, j, tid)
+				} else {
+					logutil.Infof("create table finished, catalog-%d, j is %d, tid is %d", i, j, tid)
+				}
+				require.NoError(t, err)
+				require.Less(t, uint64(0), tid)
+				time.Sleep(100 * time.Millisecond)
+			}
+		}()
+	}
+	wg.Wait()
+
+	tbls, err = c[0].ListTables(dbid)
 	require.NoError(t, err)
-	require.Equal(t, 10, len(tbls))
+	require.Equal(t, 40, len(tbls))
 
 	for i := uint64(10); i < 15; i++ {
-		_, err = c.DropTable(20+i, dbid, fmt.Sprintf("t%d", i))
+		_, err = c[0].DropTable(20+i, dbid, fmt.Sprintf("t%d", i))
 		require.NoError(t, err)
 	}
 
-	tbls, err = c.ListTables(dbid)
+	tbls, err = c[0].ListTables(dbid)
 	require.NoError(t, err)
-	require.Equal(t, 5, len(tbls))
+	require.Equal(t, 35, len(tbls))
 
-	cnt, err = c.RemoveDeletedTable(10)
-	require.NoError(t, err)
-	require.Equal(t, 0, cnt)
-
-	cnt, err = c.RemoveDeletedTable(33)
-	require.NoError(t, err)
-	require.Equal(t, 4, cnt)
-
-	tablets, err := c.GetTablets(dbid, "t16")
-	require.NoError(t, err)
-	require.Less(t, 0, len(tablets))
-
-	err = c.DropDatabase(10, dbName)
+	err = c[0].DropDatabase(3, dbName)
 	require.NoError(t, err)
 
-	dbs, err = c.ListDatabases()
+	dbs, err = c[0].ListDatabases()
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 

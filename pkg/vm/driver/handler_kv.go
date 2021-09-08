@@ -1,9 +1,10 @@
-package dist
+package driver
 
 import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb"
@@ -11,13 +12,13 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
+	pb3 "matrixone/pkg/vm/driver/pb"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
-	rpcpb "matrixone/pkg/vm/engine/aoe/dist/pb"
 )
 
 func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.SetRequest{}
+	customReq := &pb3.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
 	err := ctx.WriteBatch().Set(req.Key, customReq.Value)
@@ -32,7 +33,7 @@ func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 
 func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.SetRequest{}
+	customReq := &pb3.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
 	value, err := h.store.DataStorageByGroup(shard.Group, shard.ID).(*pebble.Storage).Get(req.Key)
@@ -102,7 +103,7 @@ func (h *driver) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 
 func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.PrefixScanRequest{}
+	customReq := &pb3.PrefixScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 	prefix := raftstore.EncodeDataKey(shard.Group, customReq.Prefix)
 	var data [][]byte
@@ -134,12 +135,22 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 }
 
 func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
+
 	resp := pb.AcquireResponse()
-	customReq := &rpcpb.ScanRequest{}
+	customReq := &pb3.ScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
 	startKey := raftstore.EncodeDataKey(shard.Group, customReq.Start)
 	endKey := raftstore.EncodeDataKey(shard.Group, customReq.End)
+
+	if customReq.Start == nil {
+		startKey = nil
+	}
+	if customReq.End == nil {
+		endKey = nil
+	}
+
+	fmt.Printf("Call DScan %v, %v, current shard range is [%v, %v)\n", customReq.Start, customReq.End, shard.Start, shard.End)
 	var data [][]byte
 
 	err := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*pebble.Storage).Scan(startKey, endKey, func(key, value []byte) (bool, error) {
@@ -169,6 +180,8 @@ func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.
 
 func (h *driver) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
+	customReq := &pb3.AllocIDRequest{}
+	protoc.MustUnmarshal(customReq, req.Cmd)
 
 	id := uint64(0)
 	if v, ok := ctx.Attrs()[string(req.Key)]; ok {
@@ -183,7 +196,12 @@ func (h *driver) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.
 		}
 	}
 
-	id++
+	if customReq.Batch <= 1 {
+		id++
+	} else {
+		id += customReq.Batch
+	}
+
 	newV := codec.Uint642Bytes(id)
 	ctx.Attrs()[string(req.Key)] = newV
 

@@ -6,15 +6,16 @@ import (
 	"io/ioutil"
 	stdLog "log"
 	"math/rand"
+	catalog3 "matrixone/pkg/catalog"
 	mo_config "matrixone/pkg/config"
 	"matrixone/pkg/logger"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
+	aoe2 "matrixone/pkg/vm/driver/aoe"
+	config2 "matrixone/pkg/vm/driver/config"
+	testutil2 "matrixone/pkg/vm/driver/testutil"
 	"matrixone/pkg/vm/engine"
-	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	aoe_dist_config "matrixone/pkg/vm/engine/aoe/dist/config"
-	aoe_dist_testutil "matrixone/pkg/vm/engine/aoe/dist/testutil"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/mempool"
@@ -119,14 +120,14 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	var pcis []*PDCallbackImpl
 	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, true)
 
-	c := aoe_dist_testutil.NewTestAOECluster(t,
-		func(node int) *aoe_dist_config.Config {
-			c := &aoe_dist_config.Config{}
+	c := testutil2.NewTestAOECluster(t,
+		func(node int) *config2.Config {
+			c := &config2.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
-		aoe_dist_testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*daoe.Storage, error) {
+		testutil2.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe2.Storage, error) {
 			opts := &e.Options{}
 			mdCfg := &e.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
@@ -141,10 +142,10 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
-			return daoe.NewStorageWithOptions(path, opts)
+			return aoe2.NewStorageWithOptions(path, opts)
 		}),
-		aoe_dist_testutil.WithTestAOEClusterUsePebble(),
-		aoe_dist_testutil.WithTestAOEClusterRaftClusterOptions(
+		testutil2.WithTestAOEClusterUsePebble(),
+		testutil2.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterLogLevel("error"),
 			raftstore.WithTestClusterDataPath("./test"),
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
@@ -155,14 +156,14 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 				cfg.Customize.CustomStoreHeartbeatDataProcessor = pci
 			})))
 	c.Start()
-	c.RaftCluster.WaitLeadersByCount(t, 21, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
 	defer func() {
 		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
 
-	catalog := aoe_catalog.DefaultCatalog(c.CubeDrivers[0])
+	catalog := catalog3.NewCatalog(c.CubeDrivers[0])
 	eng := aoe_engine.New(&catalog)
 
 	for i := 0; i < nodeCnt; i++ {
@@ -189,7 +190,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		}
 		log := logger.New(os.Stderr, fmt.Sprintf("rpc%v:", i))
 		log.SetLevel(logger.WARN)
-		srv, err := rpcserver.New(fmt.Sprintf("127.0.0.1:%v", 20000+i+100), 1<<30, log)
+		srv, err := rpcserver.New(fmt.Sprintf("127.0.0.1:%v", 20000+i+100), 1<<30, logutil.L())
 		if err != nil {
 			log.Fatal(err)
 		}

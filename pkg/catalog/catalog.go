@@ -2,13 +2,16 @@ package catalog
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/driver"
+	"matrixone/pkg/vm/driver/pb"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	"matrixone/pkg/vm/engine/aoe/dist"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,54 +25,70 @@ const (
 	cRoutePrefix        = "Route"
 	cDeletedTablePrefix = "DeletedTableQueue"
 	timeout             = 600 * time.Millisecond
+	idPoolSize          = 20
 )
 
 // Catalog is for handling meta information in a query.
 type Catalog struct {
-	Driver dist.CubeDriver
+	Driver    driver.CubeDriver
+	dbIdStart uint64
+	dbIdEnd   uint64
+	tidStart  uint64
+	tidEnd    uint64
+	pLock     int32 //
 }
 
-var gCatalog Catalog
-var gInitOnce sync.Once
+// NewCatalog creates a Catalog.
+func NewCatalog(store driver.CubeDriver) Catalog {
+	catalog := Catalog{
+		Driver: store,
+	}
+	tmpId, err := store.AllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize)
+	if err != nil {
+		panic(fmt.Sprintf("init db id pool failed. %v", err))
+	}
+	catalog.dbIdEnd = tmpId
+	catalog.dbIdStart = tmpId - idPoolSize + 1
+	tmpId, err = store.AllocID(codec.String2Bytes(cTableIDPrefix), idPoolSize)
+	if err != nil {
+		panic(fmt.Sprintf("init table id pool failed. %v", err))
+	}
+	catalog.tidEnd = tmpId
+	catalog.tidStart = tmpId - idPoolSize + 1
+	logutil.Debugf("Catalog initialize finished, db id range is [%d, %d), table id range is [%d, %d)", catalog.dbIdStart, catalog.dbIdEnd, catalog.tidStart, catalog.tidEnd)
 
-// DefaultCatalog creates a Catalog.
-func DefaultCatalog(store dist.CubeDriver) Catalog {
-	gInitOnce.Do(func() {
-		gCatalog = Catalog{
-			Driver: store,
-		}
-	})
-	return gCatalog
+	return catalog
 }
 
 // CreateDatabase creates a database with db info.
-func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (uint64, error) {
+func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (dbid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("CreateDatabase cost %d ms", time.Since(t0).Milliseconds())
+		logutil.Debugf("CreateDatabase finished, db id is %d, cost %d ms", dbid, time.Since(t0).Milliseconds())
 	}()
 	if _, err := c.checkDBNotExists(dbName); err != nil {
 		return 0, err
 	}
-	id, err := c.genGlobalUniqIDs([]byte(cDBIDPrefix))
+	//id, err := c.genGlobalUniqIDs([]byte(cDBIDPrefix))
+	dbid, err = c.allocId(cDBIDPrefix)
 	if err != nil {
 		return 0, err
 	}
-	if err = c.Driver.Set(c.dbIDKey(dbName), codec.Uint642Bytes(id)); err != nil {
+	if err = c.Driver.Set(c.dbIDKey(dbName), codec.Uint642Bytes(dbid)); err != nil {
 		return 0, err
 	}
 	info := aoe.SchemaInfo{
 		State:     aoe.StatePublic,
 		Name:      dbName,
-		Id:        id,
+		Id:        dbid,
 		CatalogId: 1,
 		Type:      typ,
 	}
 	value, _ := json.Marshal(info)
-	if err = c.Driver.Set(c.dbKey(id), value); err != nil {
+	if err = c.Driver.Set(c.dbKey(dbid), value); err != nil {
 		return 0, err
 	}
-	return id, nil
+	return dbid, nil
 }
 
 // DropDatabase drops whole database.
@@ -132,8 +151,8 @@ func (c *Catalog) GetDatabase(dbName string) (*aoe.SchemaInfo, error) {
 	return db, nil
 }
 
-// CreateTable creates a table with tableInfo in database.
-func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, error) {
+// CreateTableBak creates a table with tableInfo in database.
+func (c *Catalog) CreateTableBak(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, error) {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("CreateTable cost %d ms", time.Since(t0).Milliseconds())
@@ -183,6 +202,75 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, er
 	return 0, ErrNoAvailableShard
 }
 
+// CreateTable creates a table with tableInfo in database.
+func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64, err error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("CreateTable finished, table id is %d, cost %d ms", tid, time.Since(t0).Milliseconds())
+	}()
+	_, err = c.checkDBExists(dbId)
+	if err != nil {
+		return tid, err
+	}
+	_, err = c.checkTableNotExists(dbId, tbl.Name)
+	if err != nil {
+		return tid, err
+	}
+	tid, err = c.allocId(cTableIDPrefix)
+	if err != nil {
+		return tid, err
+	}
+	tbl.Id = tid
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	var errs []error
+	c.Driver.AsyncSet(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id), func(i interface{}, bytes []byte, err error) {
+		defer wg.Done()
+		if err != nil {
+			errs = append(errs, err)
+			return
+		}
+	}, nil)
+	tbl.Epoch = epoch
+	tbl.SchemaId = dbId
+	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
+		rkey := c.routeKey(dbId, tbl.Id, shardId)
+		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
+			logutil.Errorf("ErrTableCreateFailed, %v", err)
+			return tid, err
+		}
+		wg.Add(1)
+		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i interface{}, bytes []byte, err error) {
+			defer wg.Done()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+		}, nil)
+		tbl.State = aoe.StatePublic
+		meta, err := helper.EncodeTable(tbl)
+		if err != nil {
+			logutil.Errorf("ErrTableCreateFailed, %v", err)
+			return tid, err
+		}
+		wg.Add(1)
+		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i interface{}, bytes []byte, err error) {
+			defer wg.Done()
+			if err != nil {
+				errs = append(errs, err)
+				return
+			}
+		}, nil)
+		wg.Wait()
+		if len(errs) > 0 {
+			logutil.Errorf("ErrTableCreateFailed, %v", errs)
+			return tid, err
+		}
+		return tbl.Id, nil
+	}
+	return tid, ErrNoAvailableShard
+}
+
 // DropTable drops table in database.
 // it will set schema status in meta of this table to "DeleteOnly"
 func (c *Catalog) DropTable(epoch, dbId uint64, tableName string) (tid uint64, err error) {
@@ -212,34 +300,6 @@ func (c *Catalog) DropTable(epoch, dbId uint64, tableName string) (tid uint64, e
 		return tid, err
 	}
 	return tb.Id, err
-}
-func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
-	_, err = c.checkDBExists(dbId)
-	if err != nil {
-		return err
-	}
-	tbs, err := c.ListTables(dbId)
-	if err != nil {
-		return err
-	}
-	if tbs == nil || len(tbs) == 0 {
-		return nil
-	}
-	for _, tbl := range tbs {
-		tbl.State = aoe.StateDeleteOnly
-		tbl.Epoch = epoch
-		value, _ := helper.EncodeTable(tbl)
-		if err = c.Driver.Set(c.deletedTableKey(epoch, dbId, tbl.Id), value); err != nil {
-			return err
-		}
-		if err = c.Driver.Delete(c.tableIDKey(dbId, tbl.Name)); err != nil {
-			return err
-		}
-		if err = c.Driver.Delete(c.tableKey(dbId, tbl.Id)); err != nil {
-			return err
-		}
-	}
-	return err
 }
 
 // ListTables returns all tables meta in database.
@@ -279,9 +339,11 @@ func (c *Catalog) GetTable(dbId uint64, tableName string) (*aoe.TableInfo, error
 	} else {
 		tb, _ := c.checkTableNotExists(dbId, tableName)
 		if tb == nil {
+			logutil.Errorf("123")
 			return nil, ErrTableNotExists
 		}
 		if tb.State != aoe.StatePublic {
+			logutil.Errorf("456")
 			return nil, ErrTableNotExists
 		}
 		return tb, nil
@@ -329,7 +391,7 @@ func (c *Catalog) GetTablets(dbId uint64, tableName string) (tablets []aoe.Table
 func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("RemoveDeletedTable cost %d ms", time.Since(t0).Milliseconds())
+		logutil.Debugf("[RemoveDeletedTable] epoch is %d, removed %d tables, cost %d ms", epoch, cnt, time.Since(t0).Milliseconds())
 	}()
 	rsp, err := c.Driver.Scan(c.deletedPrefix(), c.deletedEpochPrefix(epoch+1), 0)
 	if err != nil {
@@ -386,6 +448,34 @@ func (c *Catalog) checkDBExists(id uint64) (*aoe.SchemaInfo, error) {
 	}
 	return &db, nil
 }
+func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
+	_, err = c.checkDBExists(dbId)
+	if err != nil {
+		return err
+	}
+	tbs, err := c.ListTables(dbId)
+	if err != nil {
+		return err
+	}
+	if tbs == nil || len(tbs) == 0 {
+		return nil
+	}
+	for _, tbl := range tbs {
+		tbl.State = aoe.StateDeleteOnly
+		tbl.Epoch = epoch
+		value, _ := helper.EncodeTable(tbl)
+		if err = c.Driver.Set(c.deletedTableKey(epoch, dbId, tbl.Id), value); err != nil {
+			return err
+		}
+		if err = c.Driver.Delete(c.tableIDKey(dbId, tbl.Name)); err != nil {
+			return err
+		}
+		if err = c.Driver.Delete(c.tableKey(dbId, tbl.Id)); err != nil {
+			return err
+		}
+	}
+	return err
+}
 func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 	if value, err := c.Driver.Get(c.dbIDKey(dbName)); err != nil || value == nil {
 		return nil, nil
@@ -428,7 +518,7 @@ func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
 	return codec.Bytes2String(codec.EncodeKey(groupId, tableId))
 }
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
-	id, err := c.Driver.AllocID(idKey)
+	id, err := c.Driver.AllocID(idKey, 1)
 	if err != nil {
 		return 0, err
 	}
@@ -468,6 +558,10 @@ func (c *Catalog) deletedPrefix() []byte {
 	return codec.EncodeKey(cDeletedTablePrefix)
 }
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("[getAvailableShard] get shard for %d, returns %d, %v, cost %d ms", tid, shardid, err, time.Since(t0).Milliseconds())
+	}()
 	timeoutC := time.After(timeout)
 	for {
 		select {
@@ -482,4 +576,119 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 			time.Sleep(time.Millisecond * 10)
 		}
 	}
+}
+func (c *Catalog) allocId(key string) (id uint64, err error) {
+	defer func() {
+		logutil.Debugf("allocId finished, idKey is %v, id is %d, err is %v", key, id, err)
+	}()
+	timeoutC := time.After(timeout)
+	switch key {
+	case cDBIDPrefix:
+		func() {
+			for {
+				select {
+				case <-timeoutC:
+					logutil.Error("wait for available id timeout")
+					err = ErrTableCreateTimeout
+					return
+				default:
+					if c.dbIdStart <= c.dbIdEnd {
+						id = c.dbIdStart
+						atomic.AddUint64(&c.dbIdStart, 1)
+						logutil.Debugf("alloc db id finished, id is %d, endId is %d", id, c.dbIdEnd)
+						return
+					}
+					c.refreshDBIDCache()
+					time.Sleep(time.Millisecond * 10)
+				}
+			}
+		}()
+	case cTableIDPrefix:
+		func() {
+			for {
+				select {
+				case <-timeoutC:
+					logutil.Errorf("wait for available id timeout, current cache range is [%d, %d)", c.tidStart, c.tidEnd)
+					err = ErrTableCreateTimeout
+					return
+				default:
+					if c.tidStart <= c.tidEnd {
+						id = c.tidStart
+						atomic.AddUint64(&c.tidStart, 1)
+						logutil.Infof("alloc table id finished, id is %d, endId is %d", id, c.tidEnd)
+						go c.refreshTableIDCache()
+						return
+					}
+					time.Sleep(time.Millisecond * 10)
+				}
+			}
+		}()
+	default:
+		return id, errors.New("unsupported id category")
+	}
+	return id, err
+}
+
+func (c *Catalog) refreshTableIDCache() {
+	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
+		fmt.Println("failed to acquired pLock")
+		return
+	}
+	t0 := time.Now()
+	defer func() {
+		atomic.StoreInt32(&c.pLock, 0)
+		logutil.Debugf("refresh table id cache finished, cost %d, new range is [%d, %d)", time.Since(t0).Milliseconds(), c.tidStart, c.tidEnd)
+	}()
+	if c.tidStart <= c.tidEnd {
+		logutil.Debugf("enter refreshTableIDCache, no need, return, [%d, %d)", c.tidStart, c.tidEnd)
+		return
+	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	c.Driver.AsyncAllocID(codec.String2Bytes(cTableIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
+		defer wg.Done()
+		if err != nil {
+			logutil.Errorf("refresh table id failed, checkpoint is %d, %d", c.tidStart, c.tidEnd)
+			return
+		}
+		id, err := codec.Bytes2Uint64(data)
+		if err != nil {
+			logutil.Errorf("get result of AllocId failed, %v\n", err)
+			return
+		}
+
+		atomic.SwapUint64(&c.tidEnd, id)
+		atomic.SwapUint64(&c.tidStart, id-idPoolSize+1)
+	}, nil)
+	wg.Wait()
+}
+
+func (c *Catalog) refreshDBIDCache() {
+	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
+		fmt.Println("failed to acquired pLock")
+		return
+	}
+	t0 := time.Now()
+	defer func() {
+		atomic.StoreInt32(&c.pLock, 0)
+		logutil.Debugf("refresh db id cache finished, cost %d, new range is [%d, %d)", time.Since(t0).Milliseconds(), c.dbIdStart, c.dbIdEnd)
+	}()
+	if c.dbIdStart <= c.dbIdEnd {
+		logutil.Debugf("enter refreshDBIDCache, no need, return")
+		return
+	}
+	c.Driver.AsyncAllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
+		if err != nil {
+			logutil.Errorf("refresh db id failed, checkpoint is %d, %d", c.dbIdStart, c.dbIdEnd)
+			return
+		}
+		id, err := codec.Bytes2Uint64(data)
+		if err != nil {
+			logutil.Errorf("get result of AllocId failed, %v\n", err)
+			return
+		}
+		atomic.SwapUint64(&c.dbIdEnd, id)
+		atomic.SwapUint64(&c.dbIdStart, id-idPoolSize)
+	}, nil)
 }

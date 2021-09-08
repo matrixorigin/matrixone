@@ -155,6 +155,7 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 
 func (s *Scope) Insert(ts uint64) error {
 	o, _ := s.O.(*insert.Insert)
+	defer o.R.Close()
 	return o.R.Write(ts, o.Bat)
 }
 
@@ -172,7 +173,8 @@ func (s *Scope) Explain(u interface{}, fill func(interface{}, *batch.Batch) erro
 
 func (s *Scope) CreateTable(ts uint64) error {
 	o, _ := s.O.(*createTable.CreateTable)
-	if _, err := o.Db.Relation(o.Id); err == nil {
+	if r, err := o.Db.Relation(o.Id); err == nil {
+		r.Close()
 		if o.Flg {
 			return nil
 		}
@@ -202,11 +204,13 @@ func (s *Scope) DropTable(ts uint64) error {
 			}
 			return err
 		}
-		if _, err := db.Relation(o.Ids[i]); err != nil {
+		if r, err := db.Relation(o.Ids[i]); err != nil {
 			if o.Flg {
 				continue
 			}
 			return err
+		} else {
+			r.Close()
 		}
 		if err := db.Delete(ts, o.Ids[i]); err != nil {
 			return err

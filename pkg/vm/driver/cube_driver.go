@@ -1,15 +1,15 @@
-package dist
+package driver
 
 import (
 	"encoding/json"
 	"errors"
 	"matrixone/pkg/logutil"
+	aoe3 "matrixone/pkg/vm/driver/aoe"
+	"matrixone/pkg/vm/driver/config"
+	"matrixone/pkg/vm/driver/pb"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	"matrixone/pkg/vm/engine/aoe/dist/config"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
@@ -21,7 +21,6 @@ import (
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
-	"github.com/matrixorigin/matrixcube/proxy"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/server"
 	cstorage "github.com/matrixorigin/matrixcube/storage"
@@ -38,44 +37,37 @@ type CubeDriver interface {
 	Start() error
 	// Close close the driver.
 	Close()
-
 	// GetShardPool return ShardsPool instance.
 	GetShardPool() raftstore.ShardsPool
-
 	// Set set key value.
 	Set([]byte, []byte) error
-
 	// SetWithGroup set key value in specific group.
 	SetWithGroup([]byte, []byte, pb.Group) error
 
+	AsyncSet([]byte, []byte, func(interface{}, []byte, error), interface{})
+	AsyncSetWithGroup([]byte, []byte, pb.Group, func(interface{}, []byte, error), interface{})
 	// SetIfNotExist set key value if key not exists.
 	SetIfNotExist([]byte, []byte) error
-
 	// Get returns the value of key.
 	Get([]byte) ([]byte, error)
-
 	// GetWithGroup returns the value of key from specific group.
 	GetWithGroup([]byte, pb.Group) ([]byte, error)
-
 	// Delete remove the key from the store.
 	Delete([]byte) error
-
 	// DeleteIfExist remove the key from the store if key exists.
 	DeleteIfExist([]byte) error
-
 	// Scan scan [start,end) data
 	Scan([]byte, []byte, uint64) ([][]byte, error)
-
 	// ScanWithGroup scan [start,end) data in specific group.
 	ScanWithGroup([]byte, []byte, uint64, pb.Group) ([][]byte, error)
-
 	// PrefixScan scan k-vs which k starts with prefix.
 	PrefixScan([]byte, uint64) ([][]byte, error)
 	// PrefixScanWithGroup scan k-vs which k starts with prefix
 	PrefixScanWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
 	PrefixKeys([]byte, uint64) ([][]byte, error)
 	PrefixKeysWithGroup([]byte, uint64, pb.Group) ([][]byte, error)
-	AllocID([]byte) (uint64, error)
+	AllocID([]byte, uint64) (uint64, error)
+	AsyncAllocID([]byte, uint64, func(interface{}, []byte, error), interface{})
 	Append(string, uint64, []byte) error
 	GetSnapshot(dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 	GetSegmentIds(string, uint64) (dbi.IDS, error)
@@ -136,7 +128,7 @@ func NewCubeDriverWithFactory(
 
 	h := &driver{
 		cfg:   c,
-		aoeDB: aoeDataStorage.(*daoe.Storage).DB,
+		aoeDB: aoeDataStorage.(*aoe3.Storage).DB,
 		cmds:  make(map[uint64]raftcmdpb.CMDType),
 	}
 	c.CubeConfig.Customize.CustomSplitCompletedFuncFactory = func(group uint64) func(old *bhmetapb.Shard, news []bhmetapb.Shard) {
@@ -261,7 +253,7 @@ func NewCubeDriverWithFactory(
 	c.ServerConfig.Handler = h
 	pConfig.DefaultSchedulers = nil
 
-	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req *raftcmdpb.Request, cmd interface{}, proxy proxy.ShardsProxy) error {
+	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req *raftcmdpb.Request, cmd interface{}, proxy raftstore.ShardsProxy) error {
 		if req.Group == uint64(pb.KVGroup) {
 			return proxy.Dispatch(req)
 		}
@@ -332,6 +324,22 @@ func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 	}
 	_, err := h.ExecWithGroup(req, group)
 	return err
+}
+
+func (h *driver) AsyncSet(key, value []byte, cb func(interface{}, []byte, error), data interface{}) {
+	h.AsyncSetWithGroup(key, value, pb.KVGroup, cb, data)
+}
+
+func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(interface{}, []byte, error), data interface{}) {
+	req := pb.Request{
+		Type:  pb.Set,
+		Group: group,
+		Set: pb.SetRequest{
+			Key:   key,
+			Value: value,
+		},
+	}
+	h.AsyncExecWithGroup(req, group, cb, data)
 }
 
 func (h *driver) SetIfNotExist(key, value []byte) error {
@@ -515,12 +523,13 @@ func (h *driver) PrefixKeysWithGroup(prefix []byte, limit uint64, group pb.Group
 	return values, err
 }
 
-func (h *driver) AllocID(idkey []byte) (uint64, error) {
+func (h *driver) AllocID(idkey []byte, batch uint64) (uint64, error) {
 	req := pb.Request{
 		Type:  pb.Incr,
 		Group: pb.KVGroup,
 		AllocID: pb.AllocIDRequest{
-			Key: idkey,
+			Key:   idkey,
+			Batch: batch,
 		},
 	}
 	data, err := h.ExecWithGroup(req, pb.KVGroup)
@@ -532,6 +541,18 @@ func (h *driver) AllocID(idkey []byte) (uint64, error) {
 		return 0, err
 	}
 	return resp, nil
+}
+
+func (h *driver) AsyncAllocID(idkey []byte, batch uint64, cb func(interface{}, []byte, error), param interface{}) {
+	req := pb.Request{
+		Type:  pb.Incr,
+		Group: pb.KVGroup,
+		AllocID: pb.AllocIDRequest{
+			Key:   idkey,
+			Batch: batch,
+		},
+	}
+	h.AsyncExecWithGroup(req, pb.KVGroup, cb, param)
 }
 
 func (h *driver) Append(name string, shardId uint64, data []byte) error {

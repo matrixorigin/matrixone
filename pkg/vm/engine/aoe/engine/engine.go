@@ -2,10 +2,10 @@ package engine
 
 import (
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"matrixone/pkg/catalog"
 	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/driver/pb"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/catalog"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
 	"strings"
 	"time"
 )

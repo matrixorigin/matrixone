@@ -1,14 +1,12 @@
-package dist
+package driver
 
 import (
 	"github.com/fagongzi/goetty/codec"
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
+	"matrixone/pkg/vm/driver/pb"
 )
-
-type cmdType uint64
 
 func (h *driver) init() {
 	h.AddWriteFunc(uint64(pb.Set), h.set)
