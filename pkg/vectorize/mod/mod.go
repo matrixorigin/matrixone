@@ -134,8 +134,8 @@ func int8Mod(xs, ys, rs []int8) []int8 {
 }
 
 func int8ModSels(xs, ys, rs []int8, sels []int64) []int8 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] % ys[sel]
 	}
 	return rs
 }
@@ -148,8 +148,22 @@ func int8ModScalar(x int8, ys, rs []int8) []int8 {
 }
 
 func int8ModScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
-	for i, sel := range sels {
-		rs[i] = x % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x % ys[sel]
+	}
+	return rs
+}
+
+func int8ModByScalar(x int8, ys, rs []int8) []int8 {
+	for i, y := range ys {
+		rs[i] = y % x
+	}
+	return rs
+}
+
+func int8ModByScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] % x
 	}
 	return rs
 }
@@ -176,8 +190,8 @@ func int16Mod(xs, ys, rs []int16) []int16 {
 }
 
 func int16ModSels(xs, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] % ys[sel]
 	}
 	return rs
 }
@@ -190,8 +204,22 @@ func int16ModScalar(x int16, ys, rs []int16) []int16 {
 }
 
 func int16ModScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = x % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x % ys[sel]
+	}
+	return rs
+}
+
+func int16ModByScalar(x int16, ys, rs []int16) []int16 {
+	for i, y := range ys {
+		rs[i] = y % x
+	}
+	return rs
+}
+
+func int16ModByScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] % x
 	}
 	return rs
 }
@@ -218,8 +246,8 @@ func int32Mod(xs, ys, rs []int32) []int32 {
 }
 
 func int32ModSels(xs, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] % ys[sel]
 	}
 	return rs
 }
@@ -232,8 +260,22 @@ func int32ModScalar(x int32, ys, rs []int32) []int32 {
 }
 
 func int32ModScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = x % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x % ys[sel]
+	}
+	return rs
+}
+
+func int32ModByScalar(x int32, ys, rs []int32) []int32 {
+	for i, y := range ys {
+		rs[i] = y % x
+	}
+	return rs
+}
+
+func int32ModByScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] % x
 	}
 	return rs
 }
@@ -260,8 +302,8 @@ func int64Mod(xs, ys, rs []int64) []int64 {
 }
 
 func int64ModSels(xs, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] % ys[sel]
 	}
 	return rs
 }
@@ -274,8 +316,22 @@ func int64ModScalar(x int64, ys, rs []int64) []int64 {
 }
 
 func int64ModScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = x % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x % ys[sel]
+	}
+	return rs
+}
+
+func int64ModByScalar(x int64, ys, rs []int64) []int64 {
+	for i, y := range ys {
+		rs[i] = y % x
+	}
+	return rs
+}
+
+func int64ModByScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] % x
 	}
 	return rs
 }
@@ -302,8 +358,8 @@ func uint8Mod(xs, ys, rs []uint8) []uint8 {
 }
 
 func uint8ModSels(xs, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] % ys[sel]
 	}
 	return rs
 }
@@ -316,8 +372,22 @@ func uint8ModScalar(x uint8, ys, rs []uint8) []uint8 {
 }
 
 func uint8ModScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = x % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x % ys[sel]
+	}
+	return rs
+}
+
+func uint8ModByScalar(x uint8, ys, rs []uint8) []uint8 {
+	for i, y := range ys {
+		rs[i] = y % x
+	}
+	return rs
+}
+
+func uint8ModByScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] % x
 	}
 	return rs
 }
@@ -344,8 +414,8 @@ func uint16Mod(xs, ys, rs []uint16) []uint16 {
 }
 
 func uint16ModSels(xs, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] % ys[sel]
 	}
 	return rs
 }
@@ -358,8 +428,22 @@ func uint16ModScalar(x uint16, ys, rs []uint16) []uint16 {
 }
 
 func uint16ModScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = x % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x % ys[sel]
+	}
+	return rs
+}
+
+func uint16ModByScalar(x uint16, ys, rs []uint16) []uint16 {
+	for i, y := range ys {
+		rs[i] = y % x
+	}
+	return rs
+}
+
+func uint16ModByScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] % x
 	}
 	return rs
 }
@@ -386,8 +470,8 @@ func uint32Mod(xs, ys, rs []uint32) []uint32 {
 }
 
 func uint32ModSels(xs, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] % ys[sel]
 	}
 	return rs
 }
@@ -400,8 +484,22 @@ func uint32ModScalar(x uint32, ys, rs []uint32) []uint32 {
 }
 
 func uint32ModScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = x % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x % ys[sel]
+	}
+	return rs
+}
+
+func uint32ModByScalar(x uint32, ys, rs []uint32) []uint32 {
+	for i, y := range ys {
+		rs[i] = y % x
+	}
+	return rs
+}
+
+func uint32ModByScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] % x
 	}
 	return rs
 }
@@ -428,8 +526,8 @@ func uint64Mod(xs, ys, rs []uint64) []uint64 {
 }
 
 func uint64ModSels(xs, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] % ys[sel]
 	}
 	return rs
 }
@@ -442,8 +540,106 @@ func uint64ModScalar(x uint64, ys, rs []uint64) []uint64 {
 }
 
 func uint64ModScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = x % ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x % ys[sel]
+	}
+	return rs
+}
+
+func uint64ModByScalar(x uint64, ys, rs []uint64) []uint64 {
+	for i, y := range ys {
+		rs[i] = y % x
+	}
+	return rs
+}
+
+func uint64ModByScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] % x
+	}
+	return rs
+}
+
+func float32Mod(xs, ys, rs []float32) []float32 {
+	for i, x := range xs {
+		rs[i] = x - x/ys[i]*ys[i]
+	}
+	return rs
+}
+
+func float32ModSels(xs, ys, rs []float32, sels []int64) []float32 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - xs[sel]/ys[sel]*ys[sel]
+	}
+	return rs
+}
+
+func float32ModScalar(x float32, ys, rs []float32) []float32 {
+	for i, y := range ys {
+		rs[i] = x - x/y*y
+	}
+	return rs
+}
+
+func float32ModScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
+	for _, sel := range sels {
+		rs[sel] = x - x/ys[sel]*ys[sel]
+	}
+	return rs
+}
+
+func float32ModByScalar(x float32, ys, rs []float32) []float32 {
+	for i, y := range ys {
+		rs[i] = y - y/x*x
+	}
+	return rs
+}
+
+func float32ModByScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] - ys[sel]/x*x
+	}
+	return rs
+}
+
+func float64Mod(xs, ys, rs []float64) []float64 {
+	for i, x := range xs {
+		rs[i] = x - x/ys[i]*ys[i]
+	}
+	return rs
+}
+
+func float64ModSels(xs, ys, rs []float64, sels []int64) []float64 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - xs[sel]/ys[sel]*ys[sel]
+	}
+	return rs
+}
+
+func float64ModScalar(x float64, ys, rs []float64) []float64 {
+	for i, y := range ys {
+		rs[i] = x - x/y*y
+	}
+	return rs
+}
+
+func float64ModScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
+	for _, sel := range sels {
+		rs[sel] = x - x/ys[sel]*ys[sel]
+	}
+	return rs
+}
+
+func float64ModByScalar(x float64, ys, rs []float64) []float64 {
+	for i, y := range ys {
+		rs[i] = y - y/x*x
+	}
+	return rs
+}
+
+func float64ModByScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
+	for _, sel := range sels {
+		rs[sel] = ys[sel] - ys[sel]/x*x
 	}
 	return rs
 }

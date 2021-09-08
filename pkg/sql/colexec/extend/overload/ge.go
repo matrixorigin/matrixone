@@ -6,7 +6,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vectorize/ge"
 	"matrixone/pkg/vectorize/le"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 	"matrixone/pkg/vm/register"
 
@@ -23,39 +22,49 @@ func init() {
 				lvs, rvs := lv.Col.([]int8), rv.Col.([]int8)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Int8GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Int8GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Int8LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Int8LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -67,7 +76,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Int8Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -79,39 +93,49 @@ func init() {
 				lvs, rvs := lv.Col.([]int16), rv.Col.([]int16)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Int16GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Int16GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Int16LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Int16LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -123,7 +147,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Int16Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -135,39 +164,49 @@ func init() {
 				lvs, rvs := lv.Col.([]int32), rv.Col.([]int32)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Int32GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Int32GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Int32LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Int32LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -179,7 +218,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Int32Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -191,39 +235,49 @@ func init() {
 				lvs, rvs := lv.Col.([]int64), rv.Col.([]int64)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Int64GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Int64GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Int64LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Int64LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -235,7 +289,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Int64Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -247,39 +306,49 @@ func init() {
 				lvs, rvs := lv.Col.([]uint8), rv.Col.([]uint8)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Uint8GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Uint8GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Uint8LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Uint8LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -291,7 +360,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Uint8Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -303,39 +377,49 @@ func init() {
 				lvs, rvs := lv.Col.([]uint16), rv.Col.([]uint16)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Uint16GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Uint16GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Uint16LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Uint16LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -347,7 +431,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Uint16Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -359,39 +448,49 @@ func init() {
 				lvs, rvs := lv.Col.([]uint32), rv.Col.([]uint32)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Uint32GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Uint32GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Uint32LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Uint32LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -403,7 +502,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Uint32Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -415,39 +519,49 @@ func init() {
 				lvs, rvs := lv.Col.([]uint64), rv.Col.([]uint64)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Uint64GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Uint64GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Uint64LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Uint64LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -459,7 +573,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Uint64Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -471,39 +590,49 @@ func init() {
 				lvs, rvs := lv.Col.([]float32), rv.Col.([]float32)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Float32GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Float32GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Float32LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Float32LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -515,7 +644,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Float32Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -527,39 +661,49 @@ func init() {
 				lvs, rvs := lv.Col.([]float64), rv.Col.([]float64)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.Float64GeNullableScalar(lvs[0], rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.Float64GeScalar(lvs[0], rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.Float64LeNullableScalar(rvs[0], lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.Float64LeScalar(rvs[0], lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -571,7 +715,12 @@ func init() {
 				default:
 					vec.SetCol(ge.Float64Ge(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -583,39 +732,49 @@ func init() {
 				lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs.Lengths))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs.Lengths)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.StrGeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.StrGeScalar(lvs.Data, rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs.Lengths)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.StrLeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.StrLeScalar(rvs.Data, lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs.Lengths)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -627,7 +786,12 @@ func init() {
 				default:
 					vec.SetCol(ge.StrGe(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},
@@ -639,39 +803,49 @@ func init() {
 				lvs, rvs := lv.Col.(*types.Bytes), rv.Col.(*types.Bytes)
 				switch {
 				case lc && !rc:
-					vec, err := register.Get(proc, int64(len(rvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(rvs.Lengths))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(rvs.Lengths)]
 					if rv.Nsp.Any() {
 						vec.SetCol(ge.StrGeNullableScalar(lvs.Data, rvs, rv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(ge.StrGeScalar(lvs.Data, rvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				case !lc && rc:
-					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
+					vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, SelsType)
 					if err != nil {
 						return nil, err
 					}
-					rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs.Lengths)]
 					if lv.Nsp.Any() {
 						vec.SetCol(le.StrLeNullableScalar(rvs.Data, lvs, lv.Nsp.Np, rs))
 					} else {
 						vec.SetCol(le.StrLeScalar(rvs.Data, lvs, rs))
 					}
-					copy(vec.Data, mempool.OneCount)
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+					if rv.Ref == 0 {
+						register.Put(proc, rv)
+					}
 					return vec, nil
 				}
-				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, types.Type{Oid: types.T_sel, Size: 8})
+				vec, err := register.Get(proc, int64(len(lvs.Lengths))*8, SelsType)
 				if err != nil {
 					return nil, err
 				}
-				rs := encoding.DecodeInt64Slice(vec.Data[mempool.CountSize:])
+				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:len(lvs.Lengths)]
 				switch {
 				case lv.Nsp.Any() && rv.Nsp.Any():
@@ -683,7 +857,12 @@ func init() {
 				default:
 					vec.SetCol(ge.StrGe(lvs, rvs, rs))
 				}
-				copy(vec.Data, mempool.OneCount)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
 				return vec, nil
 			},
 		},

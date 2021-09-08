@@ -28,8 +28,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			bat.Clean(proc)
 		}
-	} else if len(ap.Attrs) == 0 {
-		ap.Func(ap.Data, nil)
 	}
 	return false, nil
 }

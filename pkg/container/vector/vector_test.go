@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"matrixone/pkg/container/types"
-	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
@@ -24,11 +23,11 @@ func TestVector(t *testing.T) {
 		if err := v.Append(vs); err != nil {
 			log.Fatal(err)
 		}
-		v.Data = encoding.EncodeInt64(1)
 	}
 	hm := host.New(1 << 20)
 	gm := guest.New(1<<20, hm)
-	proc := process.New(gm, mempool.New(1<<32, 8))
+	proc := process.New(gm)
+	proc.Mp = mempool.New()
 	for i := 0; i < 5; i++ {
 		if err := w.UnionOne(v, int64(i), proc); err != nil {
 			log.Fatal(err)
@@ -44,6 +43,7 @@ func TestVector(t *testing.T) {
 		}
 		fmt.Printf("w[1] = v[9]: %v\n", w)
 	}
+	w.Ref = 1
 	w.Free(proc)
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
 }
