@@ -53,3 +53,10 @@ jobs:
         run: |
           make bvt 
 
+      - uses: actions/upload-artifact@v2
+        if: ${{ always() }}
+        with:
+          name: test_reports
+          path: |
+            ${{ github.workspace }}/coverage.html
+            ${{ github.workspace }}/coverage.out
