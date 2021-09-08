@@ -26,6 +26,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 )
 
 type ITableData interface {
@@ -105,6 +106,11 @@ type IBlock interface {
 	GetNext() IBlock
 	SetNext(next IBlock)
 	Size(string) uint64
+}
+
+type IMutBlock interface {
+	IBlock
+	WithPinedContext(func(mb.IMutableBlock) error) error
 }
 
 type IColBlockHandle interface {

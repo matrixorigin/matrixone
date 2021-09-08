@@ -53,9 +53,9 @@ func (blk *tblock) getHandle() bb.INodeHandle {
 	return h
 }
 
-func (blk *tblock) WithPinedContext(fn func(bb.INode) error) error {
+func (blk *tblock) WithPinedContext(fn func(mb.IMutableBlock) error) error {
 	h := blk.getHandle()
-	n := h.GetNode()
+	n := h.GetNode().(mb.IMutableBlock)
 	err := fn(n)
 	h.Close()
 	return err

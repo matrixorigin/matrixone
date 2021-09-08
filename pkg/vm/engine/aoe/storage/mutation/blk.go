@@ -112,6 +112,10 @@ func (n *MutableBlockNode) GetData() batch.IBatch {
 	return n.Data
 }
 
+func (n *MutableBlockNode) GetMeta() *metadata.Block {
+	return n.Meta
+}
+
 func (n *MutableBlockNode) GetFile() *dataio.TransientBlockFile {
 	return n.File
 }

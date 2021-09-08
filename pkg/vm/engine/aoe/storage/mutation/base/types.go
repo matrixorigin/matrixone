@@ -13,4 +13,5 @@ type IMutableBlock interface {
 	GetData() batch.IBatch
 	GetFile() *dataio.TransientBlockFile
 	GetSegmentedIndex() (uint64, bool)
+	GetMeta() *metadata.Block
 }

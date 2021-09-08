@@ -12,8 +12,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation"
+	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
@@ -96,8 +96,8 @@ func TestTBlock(t *testing.T) {
 		}
 	}
 
-	appendFn := func(idx *metadata.LogIndex) func(bb.INode) error {
-		return func(node bb.INode) error {
+	appendFn := func(idx *metadata.LogIndex) func(mb.IMutableBlock) error {
+		return func(node mb.IMutableBlock) error {
 			n := node.(*mutation.MutableBlockNode)
 			return n.Expand(rows*factor, insertFn(n, idx))
 		}
@@ -146,7 +146,7 @@ func TestTBlock(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, idx2.ID, idx)
 
-	err = blk1.WithPinedContext(func(node bb.INode) error {
+	err = blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)
 		assert.Equal(t, int(rows*2), n.Data.Length())
 		return nil
@@ -162,7 +162,7 @@ func TestTBlock(t *testing.T) {
 
 	t.Log(mgr.String())
 
-	err = blk1.WithPinedContext(func(node bb.INode) error {
+	err = blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)
 		return n.Flush()
 	})
@@ -176,7 +176,7 @@ func TestTBlock(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, idx4.ID, idx)
 
-	blk1.WithPinedContext(func(node bb.INode) error {
+	blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)
 		n.Meta.TryUpgrade()
 		var vecs []*vector.Vector
