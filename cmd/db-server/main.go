@@ -12,18 +12,18 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
-	catalog3 "matrixone/pkg/catalog"
+	"matrixone/pkg/catalog"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
 	"matrixone/pkg/vm/driver"
-	aoe2 "matrixone/pkg/vm/driver/aoe"
-	config3 "matrixone/pkg/vm/driver/config"
+	aoeDriver "matrixone/pkg/vm/driver/aoe"
+	dConfig "matrixone/pkg/vm/driver/config"
 	"matrixone/pkg/vm/driver/pb"
-	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	aoeEngine "matrixone/pkg/vm/engine/aoe/engine"
+	aoeStorage "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -37,9 +37,9 @@ import (
 )
 
 var (
-	catalog catalog3.Catalog
-	mo      *frontend.MOServer
-	pci     *frontend.PDCallbackImpl
+	c   catalog.Catalog
+	mo  *frontend.MOServer
+	pci *frontend.PDCallbackImpl
 )
 
 func createMOServer(callback *frontend.PDCallbackImpl) {
@@ -85,7 +85,7 @@ func recreateDir(dir string) (err error) {
 call the catalog service to remove the epoch
 */
 func removeEpoch(epoch uint64) {
-	_, err := catalog.RemoveDeletedTable(epoch)
+	_, err := c.RemoveDeletedTable(epoch)
 	if err != nil {
 		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
 	}
@@ -141,16 +141,16 @@ func main() {
 	pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
 		FS: vfs.NewPebbleFS(vfs.Default),
 	})
-	var aoeDataStorage *aoe2.Storage
+	var aoeDataStorage *aoeDriver.Storage
 
-	opt := engine.Options{}
+	opt := aoeStorage.Options{}
 	_, err = toml.DecodeFile(os.Args[1], &opt)
 	if err != nil {
 		panic(err)
 	}
-	aoeDataStorage, err = aoe2.NewStorageWithOptions(targetDir+"/aoe", &opt)
+	aoeDataStorage, err = aoeDriver.NewStorageWithOptions(targetDir+"/aoe", &opt)
 
-	cfg := config3.Config{}
+	cfg := dConfig.Config{}
 	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
 	if err != nil {
 		panic(err)
@@ -180,8 +180,8 @@ func main() {
 		fmt.Printf("Start cube driver failed, %v", err)
 		panic(err)
 	}
-	catalog = catalog3.NewCatalog(a)
-	eng := aoe_engine.New(&catalog)
+	c = catalog.NewCatalog(a)
+	eng := aoeEngine.New(&c)
 	pci.SetRemoveEpoch(removeEpoch)
 
 	hm := config.HostMmu
@@ -213,7 +213,7 @@ func main() {
 	}
 
 	go srv.Run()
-	//test storage engine
+	//test storage aoe_storage
 	config.StorageEngine = eng
 
 	//test cluster nodes
