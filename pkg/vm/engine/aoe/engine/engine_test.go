@@ -250,6 +250,7 @@ func doRestartEngine(t *testing.T) {
 
 func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 	//Wait shard state change
+	logutil.Infof("ddl test begin")
 
 	tbs, err := c[0].ListTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
@@ -362,5 +363,7 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 	dbs, err = c[0].ListDatabases()
 	require.NoError(t, err)
 	require.Nil(t, dbs)
+
+	logutil.Infof("ddl test is finished")
 
 }
