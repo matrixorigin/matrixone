@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Merge Pull Request
-        if: ${{ github.event.issue.pull_request }}
+        if: ${{ github.event_name == 'pull_request' }}
         uses: juliangruber/merge-pull-request-action@v1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
