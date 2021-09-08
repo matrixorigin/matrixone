@@ -363,4 +363,6 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Nil(t, dbs)
 
+	logutil.Infof("ddl test is finished")
+
 }
