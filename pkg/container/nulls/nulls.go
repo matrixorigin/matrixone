@@ -125,7 +125,7 @@ func (n *Nulls) RemoveRange(start, end uint64) {
 func (n *Nulls) Range(start, end uint64, m *Nulls) *Nulls {
 	switch {
 	case n.Np == nil && m.Np == nil:
-		m.Np.Clear()
+		//m.Np.Clear()
 	case n.Np != nil && m.Np == nil:
 		m.Np = roaring.NewBitmap()
 		for ; start < end; start++ {

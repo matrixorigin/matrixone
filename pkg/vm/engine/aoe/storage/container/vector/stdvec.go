@@ -12,7 +12,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 	"os"
 	"reflect"
@@ -305,7 +304,7 @@ func (v *StdVector) SliceReference(start, end int) dbi.IVectorReader {
 		Data: v.Data[startIdx:endIdx],
 	}
 	if v.VMask.Np != nil {
-		vmask := v.VMask.Range(uint64(start), uint64(end))
+		vmask := v.VMask.Range(uint64(start), uint64(end), &nulls.Nulls{})
 		vec.VMask = vmask
 		if vmask.Any() {
 			mask = mask | container.HasNullMask
@@ -354,9 +353,9 @@ func (v *StdVector) GetLatestView() IVector {
 	}
 	if mask&container.HasNullMask != 0 {
 		if mask&container.ReadonlyMask == 0 {
-			vec.VMask = v.VMask.Range(0, uint64(endPos))
+			vec.VMask = v.VMask.Range(0, uint64(endPos), &nulls.Nulls{})
 		} else {
-			vec.VMask = v.VMask.Range(0, uint64(endPos))
+			vec.VMask = v.VMask.Range(0, uint64(endPos), &nulls.Nulls{})
 		}
 	} else {
 		vec.VMask = &nulls.Nulls{}
@@ -367,12 +366,10 @@ func (v *StdVector) GetLatestView() IVector {
 	return vec
 }
 
-func (v *StdVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
+func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		panic("should call in ro mode")
 	}
-	// | CountSize | TypeSize | BitmapSize [| Bitmap ]| ColDataSize |
-	//      8           4         4           [?]     length*typesize
 	nullSize := 0
 	var nullbuf []byte
 	var err error
@@ -387,28 +384,27 @@ func (v *StdVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro
 	vec := ro.New(v.Type)
 	capacity := encoding.TypeSize + 4 + nullSize + length*int(v.Type.Size)
 	deCompressed.Reset()
-	if capacity > deCompressed.Cap() {
-		deCompressed.Grow(capacity - deCompressed.Cap())
-	}
+	deCompressed.Write(make([]byte, capacity))
 	buf := deCompressed.Bytes()
-	buf = buf[:capacity]
 	dBuf := buf
 	copy(dBuf, encoding.EncodeType(v.Type))
 	dBuf = dBuf[encoding.TypeSize:]
 	copy(dBuf, encoding.EncodeUint32(uint32(nullSize)))
 	dBuf = dBuf[4:]
 	if nullSize > 0 {
-		copy(buf, nullbuf)
-		buf = buf[nullSize:]
+		copy(dBuf, nullbuf)
+		dBuf = dBuf[nullSize:]
 	}
-	copy(buf, v.Data)
-	err = vec.Read(data[:mempool.CountSize+capacity])
+	copy(dBuf, v.Data)
+	err = vec.Read(buf)
 	if err != nil {
-		proc.Free(data)
 		return nil, err
 	}
-	copy(data, encoding.EncodeUint64(ref))
 	return vec, nil
+}
+
+func (v *StdVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	return nil, nil
 }
 
 func (v *StdVector) CopyToVector() *ro.Vector {
@@ -423,80 +419,80 @@ func (v *StdVector) CopyToVector() *ro.Vector {
 		curCol := encoding.DecodeInt8Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_int16:
 		col := make([]int16, length)
 		curCol := encoding.DecodeInt16Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_int32:
 		col := make([]int32, length)
 		curCol := encoding.DecodeInt32Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_int64:
 		col := make([]int64, length)
 		curCol := encoding.DecodeInt64Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_uint8:
 		col := make([]uint8, length)
 		curCol := encoding.DecodeUint8Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_uint16:
 		col := make([]uint16, length)
 		curCol := encoding.DecodeUint16Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_uint32:
 		col := make([]uint32, length)
 		curCol := encoding.DecodeUint32Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_uint64:
 		col := make([]uint64, length)
 		curCol := encoding.DecodeUint64Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 
 	case types.T_decimal:
 		col := make([]types.Decimal, length)
 		curCol := encoding.DecodeDecimalSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_float32:
 		col := make([]float32, length)
 		curCol := encoding.DecodeFloat32Slice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_float64:
 		col := make([]float64, length)
 		curCol := encoding.DecodeFloat64Slice(v.Data)
 		copy(col[0:], curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_date:
 		col := make([]types.Date, length)
 		curCol := encoding.DecodeDateSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	case types.T_datetime:
 		col := make([]types.Datetime, length)
 		curCol := encoding.DecodeDatetimeSlice(v.Data)
 		copy(col, curCol[:length])
 		vec.Col = col
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(length))
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	default:
 		panic(fmt.Sprintf("%s not supported yet", v.Type))
 	}
