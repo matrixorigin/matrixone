@@ -693,7 +693,7 @@ func TestStage1MasksLoop(t *testing.T) {
 		simdrecords = append(simdrecords, columns[rows[i]:rows[i]+rows[i+1]])
 	}
 
-	records, _ := encodingCsv(buf)
+	records, _ := encodingCsv(buf, ',')
 
 	// skip checking last row -- not properly terminated when called stage2_parse_masks directly
 	for i := range records[:len(records)-1] {

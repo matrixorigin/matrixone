@@ -147,7 +147,7 @@ field"`,
 	}, {
 		Name:  "BadDoubleQuotes",
 		Input: `a""b,c`,
-		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 1, Err: csv.ErrBareQuote},
+		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 2, Err: csv.ErrBareQuote},
 	}, {
 		Name:             "TrimQuote",
 		Input:            ` "a"," b",c`,
@@ -156,25 +156,25 @@ field"`,
 	}, {
 		Name:  "BadBareQuote",
 		Input: `a "word","b"`,
-		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 2, Err: csv.ErrBareQuote},
+		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 3, Err: csv.ErrBareQuote},
 	}, {
 		Name:  "BadTrailingQuote",
 		Input: `"a word",b"`,
-		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 10, Err: csv.ErrBareQuote},
+		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 11, Err: csv.ErrBareQuote},
 	}, {
 		Name:  "ExtraneousQuote",
 		Input: `"a "word","b"`,
-		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 3, Err: csv.ErrQuote},
+		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 4, Err: csv.ErrQuote},
 	}, {
 		Name:               "BadFieldCount",
 		Input:              "a,b,c\nd,e",
-		Error:              &csv.ParseError{StartLine: 2, Line: 2, Err: csv.ErrFieldCount},
+		Error:              &csv.ParseError{StartLine: 2, Line: 2, Err: csv.ErrFieldCount, Column: 1},
 		UseFieldsPerRecord: true,
 		FieldsPerRecord:    0,
 	}, {
 		Name:               "BadFieldCount1",
 		Input:              `a,b,c`,
-		Error:              &csv.ParseError{StartLine: 1, Line: 1, Err: csv.ErrFieldCount},
+		Error:              &csv.ParseError{StartLine: 1, Line: 1, Err: csv.ErrFieldCount, Column: 1},
 		UseFieldsPerRecord: true,
 		FieldsPerRecord:    2,
 	}, {
@@ -252,11 +252,11 @@ x,,,
 	}, {
 		Name:  "StartLine1", // Issue 19019
 		Input: "a,\"b\nc\"d,e",
-		Error: &csv.ParseError{StartLine: 1, Line: 2, Column: 1, Err: csv.ErrQuote},
+		Error: &csv.ParseError{StartLine: 1, Line: 2, Column: 2, Err: csv.ErrQuote},
 	}, {
 		Name:  "StartLine2",
 		Input: "a,b\n\"d\n\n,e",
-		Error: &csv.ParseError{StartLine: 2, Line: 5, Column: 0, Err: csv.ErrQuote},
+		Error: &csv.ParseError{StartLine: 2, Line: 4, Column: 3, Err: csv.ErrQuote},
 	}, {
 		Name:  "CRLFInQuotedField", // Issue 21201
 		Input: "A,\"Hello\r\nHi\",B\r\n",
@@ -278,7 +278,7 @@ x,,,
 	}, {
 		Name:  "QuotedTrailingCRCR",
 		Input: "\"field\"\r\r",
-		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 6, Err: csv.ErrQuote},
+		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 7, Err: csv.ErrQuote},
 	}, {
 		Name:   "FieldCR",
 		Input:  "field\rfield\r",
@@ -350,7 +350,7 @@ x,,,
 	}, {
 		Name:  "QuoteWithTrailingCRLF",
 		Input: "\"foo\"bar\"\r\n",
-		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 4, Err: csv.ErrQuote},
+		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 5, Err: csv.ErrQuote},
 	}, {
 		Name:       "LazyQuoteWithTrailingCRLF",
 		Input:      "\"foo\"bar\"\r\n",
@@ -367,7 +367,7 @@ x,,,
 	}, {
 		Name:  "OddQuotes",
 		Input: `"""""""`,
-		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 7, Err: csv.ErrQuote},
+		Error: &csv.ParseError{StartLine: 1, Line: 1, Column: 8, Err: csv.ErrQuote},
 	}, {
 		Name:       "LazyOddQuotes",
 		Input:      `"""""""`,
@@ -433,7 +433,7 @@ x,,,
 			var err error
 			out, err = r.ReadAll()
 			if !reflect.DeepEqual(err, tt.Error) {
-				t.Errorf("ReadAll() error:\ngot  %v\nwant %v", err, tt.Error)
+				t.Errorf("ReadAll() error:\ngot  %#v\nwant %#v", err, tt.Error)
 			} else if !reflect.DeepEqual(out, tt.Output) {
 				t.Errorf("ReadAll() output:\ngot  %q\nwant %q", out, tt.Output)
 			}
@@ -446,7 +446,7 @@ func TestLosAngelesParkingCitations(t *testing.T) {
 	t.Run("single-line", func(t *testing.T) {
 		const test = `4277258042,2016-02-09T00:00:00.000,459,,,NJ,,,KW,CM,RD,"3772 MARTIN LUTHER KING, JR BLVD W",00500,55,80.69B,NO PARKING,73,99999,99999,,,
 `
-		compareAgainstEncodingCsv(t, []byte(test))
+		compareAgainstEncodingCsv(t, []byte(test), ',')
 	})
 
 	t.Run("multiple-lines", func(t *testing.T) {
@@ -460,7 +460,7 @@ func TestLosAngelesParkingCitations(t *testing.T) {
 1106500463,2015-12-17T00:00:00.000,1710,,,CA,201602,,TOYO,PA,BK,SUNSET/ALVARADO,00217,1,8070,PARK IN GRID LOCK ZN,163,99999,99999,,,
 1106506402,2015-12-22T00:00:00.000,945,,,CA,201605,,CHEV,PA,BR,721 S WESTLAKE,2A75,1,8069AA,NO STOP/STAND AM,93,99999,99999,,,
 `
-		compareAgainstEncodingCsv(t, []byte(test))
+		compareAgainstEncodingCsv(t, []byte(test), ',')
 	})
 
 	t.Run("multiple-lines-with-header", func(t *testing.T) {
@@ -475,7 +475,7 @@ func TestLosAngelesParkingCitations(t *testing.T) {
 1106500463,2015-12-17T00:00:00.000,1710,,,CA,201602,,TOYO,PA,BK,SUNSET/ALVARADO,00217,1,8070,PARK IN GRID LOCK ZN,163,99999,99999,,,
 1106506402,2015-12-22T00:00:00.000,945,,,CA,201605,,CHEV,PA,BR,721 S WESTLAKE,2A75,1,8069AA,NO STOP/STAND AM,93,99999,99999,,,
 `
-		compareAgainstEncodingCsv(t, []byte(test))
+		compareAgainstEncodingCsv(t, []byte(test), ',')
 	})
 
 	t.Run("quoted-lines", func(t *testing.T) {
@@ -493,7 +493,7 @@ func TestLosAngelesParkingCitations(t *testing.T) {
 4284911094,2016-06-21T00:00:00.000,1520,,,CA,6,,KIA,PA,BK,"3171, OLYMPIC BLVD",00456,54,80.70,NO STOPPING/ANTI-GRI,163,99999,99999,,,
 4277258042,2016-02-09T00:00:00.000,459,,,NJ,,,KW,CM,RD,"3772 MARTIN LUTHER KING, JR BLVD W",00500,55,80.69B,NO PARKING,73,99999,99999,,,
 `
-		compareAgainstEncodingCsv(t, []byte(test))
+		compareAgainstEncodingCsv(t, []byte(test), ',')
 	})
 
 	t.Run("all-and-long", func(t *testing.T) {
@@ -518,7 +518,7 @@ func TestLosAngelesParkingCitations(t *testing.T) {
 			}
 
 			test := bytes.Join(lines[:ln], []byte{0x0a})
-			compareAgainstEncodingCsv(t, test)
+			compareAgainstEncodingCsv(t, test, ',')
 
 			lines = lines[ln:]
 
@@ -529,31 +529,35 @@ func TestLosAngelesParkingCitations(t *testing.T) {
 
 func TestSimdCsv(t *testing.T) {
 	t.Run("parking-citations-100K", func(t *testing.T) {
-		testSimdCsv(t, "testdata/parking-citations-100K.csv")
+		testSimdCsv(t, "testdata/parking-citations-100K.csv", ',')
 	})
 	t.Run("worldcitiespop-100K", func(t *testing.T) {
-		testSimdCsv(t, "testdata/worldcitiespop-100K.csv")
+		testSimdCsv(t, "testdata/worldcitiespop-100K.csv", ',')
 	})
 	t.Run("nyc-taxi-100K", func(t *testing.T) {
-		testSimdCsv(t, "testdata/nyc-taxi-data-100K.csv")
+		testSimdCsv(t, "testdata/nyc-taxi-data-100K.csv", ',')
+	})
+	t.Run("part.tbl", func(t *testing.T) {
+		testSimdCsv(t, "testdata/part.tbl", '|')
 	})
 }
 
-func testSimdCsv(t *testing.T, filename string) {
+func testSimdCsv(t *testing.T, filename string, sep rune) {
 	buf, err := ioutil.ReadFile(filename)
 	if err != nil {
 		t.Errorf("%v", err)
 	}
-	compareAgainstEncodingCsv(t, buf)
+	compareAgainstEncodingCsv(t, buf, sep)
 }
 
-func compareAgainstEncodingCsv(t *testing.T, test []byte) {
+func compareAgainstEncodingCsv(t *testing.T, test []byte, sep rune) {
 
-	records, err := encodingCsv(test)
+	records, err := encodingCsv(test, sep)
 	if err != nil {
 		log.Fatalf("%v", err)
 	}
 	r := NewReader(bytes.NewReader(test))
+	r.Comma = sep
 	simdrecords, err := r.ReadAll()
 	if err != nil {
 		log.Fatalf("%v", err)

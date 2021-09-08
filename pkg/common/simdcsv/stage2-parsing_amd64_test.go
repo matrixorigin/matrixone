@@ -278,7 +278,7 @@ func TestStage2MissingLastDelimiter(t *testing.T) {
 	const file = `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,ccccccccccccccccccccccccccccccc,ddddddddddddddddddddddddddddddd
 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee,fffffffffffffffffffffffffffffff,ggggggggggggggggggggggggggggggg,hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh`
 
-	max := 1000
+	max := 100
 	if testing.Short() {
 		max = 1
 	}
@@ -296,8 +296,6 @@ eeeeeeeeeeeeeeeeeeeeeeeeeeeeeee,fffffffffffffffffffffffffffffff,gggggggggggggggg
 			r := csv.NewReader(bytes.NewReader(buf))
 			r.FieldsPerRecord = -1
 			records, _ := r.ReadAll()
-
-			runtime.GC()
 
 			if !reflect.DeepEqual(simdrecords, records) {
 				t.Errorf("TestStage2MissingLastDelimiter: got: %v want: %v", simdrecords, records)

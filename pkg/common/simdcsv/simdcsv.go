@@ -355,7 +355,7 @@ func (r *Reader) stage2Streaming(chunks chan chunkInfo, wg *sync.WaitGroup, fiel
 
 		skipRowsForPostProcessing := 0
 		if len(chunkInfo.splitRow) > 0 { // first append the row split between chunks
-			records, err := encodingCsv(chunkInfo.splitRow)
+			records, err := encodingCsv(chunkInfo.splitRow, r.Comma)
 			if err != nil {
 				out <- recordsOutput{-1, nil, err}
 				break
@@ -466,7 +466,7 @@ func (r *Reader) ReadAll() ([][]string, error) {
 	for rcrds := range out {
 		if rcrds.err != nil {
 			// upon encountering an error ...
-			for _ = range out {
+			for range out {
 				// ... drain channel
 			}
 			return nil, rcrds.err
@@ -664,7 +664,8 @@ func allocMasks(buf []byte) []uint64 {
 	return make([]uint64, ((len(buf)>>6)+4)*3)
 }
 
-func encodingCsv(csvData []byte) ([][]string, error) {
+func encodingCsv(csvData []byte, sep rune) ([][]string, error) {
 	r := csv.NewReader(bytes.NewReader(csvData))
+	r.Comma = sep
 	return r.ReadAll()
 }
