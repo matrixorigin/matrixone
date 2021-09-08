@@ -148,9 +148,9 @@ func TestAOEEngine(t *testing.T) {
 
 	err = db.Create(3, mockTbl.Name, defs, pdef, nil, comment)
 	if err != nil {
-		stdLog.Printf("create table failed, %v", err)
+		stdLog.Printf("create table %v failed, %v", mockTbl.Name, err)
 	} else {
-		stdLog.Printf("create table is succeeded")
+		stdLog.Printf("create table %v is succeeded", mockTbl.Name)
 	}
 	require.NoError(t, err)
 
