@@ -155,6 +155,7 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 
 func (s *Scope) Insert(ts uint64) error {
 	o, _ := s.O.(*insert.Insert)
+	defer o.R.Close()
 	return o.R.Write(ts, o.Bat)
 }
 
@@ -173,12 +174,11 @@ func (s *Scope) Explain(u interface{}, fill func(interface{}, *batch.Batch) erro
 func (s *Scope) CreateTable(ts uint64) error {
 	o, _ := s.O.(*createTable.CreateTable)
 	if r, err := o.Db.Relation(o.Id); err == nil {
+		r.Close()
 		if o.Flg {
 			return nil
 		}
 		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%v' already exists", o.Id))
-	} else {
-		r.Close()
 	}
 	return o.Db.Create(ts, o.Id, o.Defs, o.Pdef, nil, "")
 }
