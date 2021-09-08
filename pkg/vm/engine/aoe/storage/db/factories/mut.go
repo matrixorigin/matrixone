@@ -1,7 +1,6 @@
 package factories
 
 import (
-	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
@@ -13,7 +12,7 @@ type mutFactory struct {
 	mgr     bb.INodeManager
 }
 
-func NewMutFactory(opts *engine.Options, mgr bb.INodeManager, flusher mb.BlockFlusher) *mutFactory {
+func NewMutFactory(mgr bb.INodeManager, flusher mb.BlockFlusher) *mutFactory {
 	f := &mutFactory{
 		mgr:     mgr,
 		flusher: flusher,
@@ -21,6 +20,6 @@ func NewMutFactory(opts *engine.Options, mgr bb.INodeManager, flusher mb.BlockFl
 	return f
 }
 
-func (f *mutFactory) CreateNodeFactory(tdata iface.ITableData) base.NodeFactory {
-	return newMutNodeFactory(f, tdata)
+func (f *mutFactory) CreateNodeFactory(tdata interface{}) base.NodeFactory {
+	return newMutNodeFactory(f, tdata.(iface.ITableData))
 }

@@ -43,13 +43,13 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
-	tabledata := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tablemeta)
+	tabledata := table.NewTableData(nil, fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tablemeta)
 
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
 
-	factory := NewMutFactory(opts, mgr, nil)
+	factory := NewMutFactory(mgr, nil)
 	nodeFactory := factory.CreateNodeFactory(tabledata)
 
 	node1 := nodeFactory.CreateNode(segfile, meta1).(*mutation.MutableBlockNode)

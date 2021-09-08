@@ -25,6 +25,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
@@ -34,6 +35,7 @@ type ITableData interface {
 	common.IRef
 	GetID() uint64
 	GetName() string
+	GetBlockFactory() IBlockFactory
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager
 	GetFsManager() base.IManager
@@ -107,6 +109,10 @@ type IBlock interface {
 	GetNext() IBlock
 	SetNext(next IBlock)
 	Size(string) uint64
+}
+
+type IBlockFactory interface {
+	CreateBlock(ISegment, *metadata.Block) (IBlock, error)
 }
 
 type IMutBlock interface {

@@ -52,7 +52,7 @@ func TestTBlock(t *testing.T) {
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
-	tabledata := NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tablemeta)
+	tabledata := NewTableData(nil, fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tablemeta)
 
 	segmeta := meta1.Segment
 	segdata, err := tabledata.RegisterSegment(segmeta)
@@ -62,7 +62,7 @@ func TestTBlock(t *testing.T) {
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
-	factory := factories.NewMutFactory(opts, mgr, nil)
+	factory := factories.NewMutFactory(mgr, nil)
 	nodeFactory := factory.CreateNodeFactory(tabledata)
 
 	blk1, err := newTBlock(segdata, meta1, nodeFactory)

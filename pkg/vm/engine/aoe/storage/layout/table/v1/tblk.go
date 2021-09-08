@@ -3,6 +3,7 @@ package table
 import (
 	"fmt"
 	gvec "matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
@@ -18,6 +19,7 @@ import (
 )
 
 type tblock struct {
+	common.BaseMvcc
 	baseBlock
 	node       bb.INode
 	nodeMgr    bb.INodeManager

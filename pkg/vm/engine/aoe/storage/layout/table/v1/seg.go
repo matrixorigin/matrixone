@@ -16,7 +16,7 @@ package table
 
 import (
 	"fmt"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -284,8 +284,13 @@ func (seg *segment) String() string {
 	return s
 }
 
-func (seg *segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
-	blk, err = newBlock(seg, blkMeta)
+func (seg *Segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
+	factory := seg.host.GetBlockFactory()
+	if factory == nil {
+		blk, err = newBlock(seg, blkMeta)
+	} else {
+		blk, err = factory.CreateBlock(seg, blkMeta)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -395,7 +400,7 @@ func (seg *segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 	}
 	idx, ok := seg.tree.helper[meta.ID]
 	if !ok {
-		logutil2.Error("logic error")
+		logutil.Error("logic error")
 		panic("logic error")
 	}
 	old := seg.tree.blocks[idx]

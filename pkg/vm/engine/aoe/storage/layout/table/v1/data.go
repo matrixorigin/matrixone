@@ -38,6 +38,9 @@ func newTableData(host *Tables, meta *md.Table) *tableData {
 		host:        host,
 		indexHolder: index.NewTableHolder(host.IndexBufMgr, meta.ID),
 	}
+	if mutFactory != nil {
+		data.blkFactory = newAltBlockFactory(mutFactory, data)
+	}
 	data.tree.segments = make([]iface.ISegment, 0)
 	data.tree.helper = make(map[uint64]int)
 	data.tree.ids = make([]uint64, 0)
@@ -59,6 +62,7 @@ type tableData struct {
 	host        *Tables
 	meta        *md.Table
 	indexHolder *index.TableHolder
+	blkFactory  iface.IBlockFactory
 }
 
 func (td *tableData) close() {
@@ -120,6 +124,10 @@ func (td *tableData) GetColTypeSize(idx int) uint64 {
 
 func (td *tableData) GetMTBufMgr() bmgrif.IBufferManager {
 	return td.host.MTBufMgr
+}
+
+func (td *TableData) GetBlockFactory() iface.IBlockFactory {
+	return td.blkFactory
 }
 
 func (td *tableData) GetSSTBufMgr() bmgrif.IBufferManager {
