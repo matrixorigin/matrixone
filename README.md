@@ -1,3 +1,6 @@
+[![LICENSE](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Language](https://img.shields.io/badge/Language-Go-blue.svg)](https://golang.org/)
+
 ## What is MatrixOne?
 MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. With minimal operation and management, MatrixOne can provide end-to-end data processing automation to help users store, manipulate and analyze data cross devices, zones, regions and clouds.
 
@@ -24,32 +27,32 @@ By streaming SQL and user defined function, MatrixOne provides end-end data proc
 ## Architecture
 ![Architecture](https://github.com/matrixorigin/artwork/blob/main/diagram/overall-architecture.png)
 
-### Query parser layer
--   Parser: parse SQL, Streaming Query or Python language into abstract syntax tree for further processing.
+### Query Parser Layer
+-   **Parser** parse SQL, Streaming Query or Python language into abstract syntax tree for further processing.
 -   Planner: also be considered as optimizer to transfer abstract syntax tree to plan tree. Planner use rule based optimization and cost based optimization to find the best execution plan.
--   IR generator: For python language, MatrixOne will use IR code generator to transfer Python code to intermediate representation.
-### Computation layer
--   JIT compilation: This module will use LLVM to turn SQL plan tree or IR code into a native program at run time.
--   Vectorized Execution: MatrixOne leverages SIMD instructions to construct vectorized execution pipeline.
--   Cache: multiple version data, indexes and meta data are cached for query execution.
-### Cluster management layer
+-   **IR Generator**: For python language, MatrixOne will use IR code generator to transfer Python code to intermediate representation.
+### Computation Layer
+-   **JIT compilation**: This module will use LLVM to turn SQL plan tree or IR code into a native program at run time.
+-   **Vectorized Execution**: MatrixOne leverages SIMD instructions to construct vectorized execution pipeline.
+-   **Cache**: multiple versions data, indexes and metadata are cached for query execution.
+### Cluster Management Layer
 MatrixCube is a fundamental library to build distributed systems without considering reliability, consistency as well as scalability, it facilitates building the distributed stateful applications since the developers only need to care about business logic on single node. Currently, it's based on multi-raft to provide replicated state machine and would evolve to paxos families to be more friendly for scenarios across multiple datacenters.
--   Prophet: Used by MatrixCube to manage and schedule the MatrixOne cluster.
--   Transaction Management: MatrixOne supports distributed transaction of snapshot isolation level.
--   Replicated State Machine: MatrixOne currently uses RAFT based consensus algorithm and hyper logic clocks to archive strong consistency of the clusters. Cutting edge state-machine replication protocol will be used in the future.
-### Replicated storage layer
--   Row storage: Serving workload, meta data and catalog are stored in row storage.
--   Column storage: Analytical workload, materialized view are stored in columnar storage.
-### Storage provision layer
+-   **Prophet**: Used by MatrixCube to manage and schedule the MatrixOne cluster.
+-   **Transaction Manager**: MatrixOne supports distributed transaction of snapshot isolation level.
+-   **Replicated State Machine**: MatrixOne currently uses RAFT based consensus algorithm and hyper logic clocks to archive strong consistency of the clusters. Cutting edge state-machine replication protocol will be used in the future.
+### Replicated Storage Layer
+-   **Row Storage**: Serving workload, metadata and catalog are stored in row storage.
+-   **Column Storage**: Analytical workload, materialized view are stored in columnar storage.
+### Storage Provision Layer
 MatrixOne data can be stored in shared storage of S3 / HDFS, even in local disk of public clouds, on-premise server, hybrid cloud and smart devices
 
 ## Quick Start
 ### Building
 
-**Get the MatrxiOne code:**
+**Get the MatrixOne code:**
 
 ```
-git clone https://github.com/matrixorigin/matrixone.git matrixone
+git clone https://github.com/matrixorigin/matrixone.git
 cd matrixone
 ```
 
@@ -68,15 +71,15 @@ make build
 
 - MySQL client
 
-  MatrxiOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages.
+  MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages.
 
-**Boot MatrxiOne server:**
+**Boot MatrixOne server:**
 
 ```
 ./mo-server system_vars_config.toml
 ```
 
-**Connect MatrxiOne server:**
+**Connect MatrixOne server:**
 
 ```
 mysql -h IP -P PORT -uUsername -p
