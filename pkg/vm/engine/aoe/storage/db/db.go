@@ -176,7 +176,7 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
 	buf := make([]byte, 4096)
 	runtime.Stack(buf, true)
-	logutil.Infof("call local createtable, %v, %v, %v, %v", info.Name, info.Id, ctx.TableName, buf)
+	logutil.Infof("call local createtable, %v, %v, %v, %v", info.Name, info.Id, ctx.TableName, string(buf))
 
 	if err := d.Closed.Load(); err != nil {
 		panic(err)

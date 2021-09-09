@@ -214,7 +214,7 @@ func (info *MetaInfo) String() string {
 func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	buf := make([]byte, 4096)
 	runtime.Stack(buf, true)
-	logutil.Infof("call local RegisterTable, %v", tbl.Schema.Name)
+	logutil.Infof("call local RegisterTable, %v, %v", tbl.Schema.Name, string(buf))
 	info.Lock()
 	defer info.Unlock()
 
