@@ -284,7 +284,7 @@ func (seg *segment) String() string {
 	return s
 }
 
-func (seg *Segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
+func (seg *segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
 	factory := seg.host.GetBlockFactory()
 	if factory == nil {
 		blk, err = newBlock(seg, blkMeta)

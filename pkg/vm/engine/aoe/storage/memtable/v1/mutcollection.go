@@ -15,13 +15,13 @@ import (
 
 type mutableCollection struct {
 	common.RefHelper
-	mgr    *Manager
+	mgr    *manager
 	data   iface.ITableData
 	mu     *sync.RWMutex
 	mutBlk iface.IMutBlock
 }
 
-func newMutableCollection(mgr *Manager, data iface.ITableData) *mutableCollection {
+func newMutableCollection(mgr *manager, data iface.ITableData) *mutableCollection {
 	c := &mutableCollection{
 		mgr:  mgr,
 		data: data,
@@ -52,9 +52,9 @@ func (c *mutableCollection) FetchImmuTable() imem.IMemTable {
 }
 
 func (c *mutableCollection) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
-	ctx := &sched.Context{Opts: c.mgr.Opts, Waitable: true}
+	ctx := &sched.Context{Opts: c.mgr.opts, Waitable: true}
 	e := me.NewCreateBlkEvent(ctx, c.data.GetID(), c.data)
-	c.mgr.Opts.Scheduler.Schedule(e)
+	c.mgr.opts.Scheduler.Schedule(e)
 	if err = e.WaitDone(); err != nil {
 		return nil, nil, err
 	}
@@ -72,9 +72,9 @@ func (c *mutableCollection) onNoMut() error {
 }
 
 func (c *mutableCollection) onImmut() {
-	ctx := &sched.Context{Opts: c.mgr.Opts}
+	ctx := &sched.Context{Opts: c.mgr.opts}
 	e := sched.NewFlushMemBlockEvent(ctx, c.mutBlk)
-	c.mgr.Opts.Scheduler.Schedule(e)
+	c.mgr.opts.Scheduler.Schedule(e)
 	c.onNoMut()
 }
 

@@ -52,7 +52,9 @@ func TestTBlock(t *testing.T) {
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
-	tabledata := NewTableData(nil, fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tablemeta)
+	tables := NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tabledata, err := tables.RegisterTable(tablemeta)
+	assert.Nil(t, err)
 
 	segmeta := meta1.Segment
 	segdata, err := tabledata.RegisterSegment(segmeta)

@@ -34,7 +34,7 @@ var (
 	_ imem.IManager = (*manager)(nil)
 )
 
-func NewManager(opts *engine.Options) imem.IManager {
+func NewManager(opts *engine.Options) *manager {
 	m := &manager{
 		opts:        opts,
 		collections: make(map[uint64]imem.ICollection),
@@ -46,7 +46,7 @@ func NewManager(opts *engine.Options) imem.IManager {
 // 	return m.Limiter
 // }
 
-func (m *Manager) CollectionIDs() map[uint64]uint64 {
+func (m *manager) CollectionIDs() map[uint64]uint64 {
 	ids := make(map[uint64]uint64)
 	m.RLock()
 	for k, _ := range m.collections {

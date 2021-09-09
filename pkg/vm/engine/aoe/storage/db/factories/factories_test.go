@@ -43,7 +43,9 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)
-	tabledata := table.NewTableData(nil, fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tablemeta)
+	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tabledata, err := tables.RegisterTable(tablemeta)
+	assert.Nil(t, err)
 
 	maxsize := uint64(140)
 	evicter := bm.NewSimpleEvictHolder()

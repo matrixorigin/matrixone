@@ -29,8 +29,13 @@ func TestMutCollection(t *testing.T) {
 
 	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt)
 
-	var mu sync.RWMutex
-	tables := table.NewTables(&mu)
+	capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
+	manager := NewManager(opts)
+	fsMgr := ldio.NewManager(dir, false)
+	indexBufMgr := bmgr.NewBufferManager(dir, capacity)
+	mtBufMgr := bmgr.NewBufferManager(dir, capacity)
+	sstBufMgr := bmgr.NewBufferManager(dir, capacity)
+	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
 	opts.Scheduler = sched.NewScheduler(opts, tables)
 
 	tabletInfo := metadata.MockTableInfo(colcnt)
@@ -41,21 +46,14 @@ func TestMutCollection(t *testing.T) {
 	err := event.WaitDone()
 	assert.Nil(t, err)
 	tbl := event.GetTable()
-	capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
-
-	manager := NewManager(opts)
-	fsMgr := ldio.NewManager(dir, false)
-	indexBufMgr := bmgr.NewBufferManager(dir, capacity)
-	mtBufMgr := bmgr.NewBufferManager(dir, capacity)
-	sstBufMgr := bmgr.NewBufferManager(dir, capacity)
 
 	maxsize := uint64(capacity)
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
 	factory := factories.NewMutFactory(mgr, nil)
+	tables.MutFactory = factory
 
-	t0 := table.NewTableData(factory, fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tbl)
-	err = tables.CreateTable(t0)
+	t0, err := tables.RegisterTable(tbl)
 	assert.Nil(t, err)
 
 	c0 := newMutableCollection(manager, t0)

@@ -20,6 +20,7 @@ import (
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
@@ -38,8 +39,8 @@ func newTableData(host *Tables, meta *md.Table) *tableData {
 		host:        host,
 		indexHolder: index.NewTableHolder(host.IndexBufMgr, meta.ID),
 	}
-	if mutFactory != nil {
-		data.blkFactory = newAltBlockFactory(mutFactory, data)
+	if host.MutFactory != nil {
+		data.blkFactory = newAltBlockFactory(host.MutFactory, data)
 	}
 	data.tree.segments = make([]iface.ISegment, 0)
 	data.tree.helper = make(map[uint64]int)
@@ -126,7 +127,7 @@ func (td *tableData) GetMTBufMgr() bmgrif.IBufferManager {
 	return td.host.MTBufMgr
 }
 
-func (td *TableData) GetBlockFactory() iface.IBlockFactory {
+func (td *tableData) GetBlockFactory() iface.IBlockFactory {
 	return td.blkFactory
 }
 
@@ -388,9 +389,10 @@ type Tables struct {
 	ids       map[uint64]bool
 	Tombstone map[uint64]iface.ITableData
 
-	FsMgr base.IManager
-
+	FsMgr                            base.IManager
 	MTBufMgr, SSTBufMgr, IndexBufMgr bmgrif.IBufferManager
+
+	MutFactory fb.MutFactory
 }
 
 func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager) *Tables {
