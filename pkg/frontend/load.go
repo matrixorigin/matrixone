@@ -3,8 +3,8 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/simdcsv"
 	"io"
-	"matrixone/pkg/common/simdcsv"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
@@ -377,6 +377,7 @@ type ParseLineHandler struct {
 	//index of line in line array
 	lineIdx int
 	colIdx int
+	maxFieldCnt int
 
 	fieldsArray [][]byte
 	fieldData []byte
@@ -706,6 +707,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 			//step 2 : append line into line array
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
+			plh.maxFieldCnt = Max(plh.maxFieldCnt,len(lineOut.Line))
 
 			plh.csvLineArray1 += time.Since(wait_b)
 
@@ -717,6 +719,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 				}
 
 				plh.lineIdx = 0
+				plh.maxFieldCnt = 0
 			}
 
 		}else if lineOut.Lines != nil {
@@ -737,6 +740,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 				for j := 0; j < fill; j++ {
 					plh.simdCsvLineArray[plh.lineIdx] = lineOut.Lines[i + j]
 					plh.lineIdx++
+					plh.maxFieldCnt = Max(plh.maxFieldCnt,len(lineOut.Lines[i + j]))
 				}
 				plh.csvLineArray2 += time.Since(wait_c)
 
@@ -748,6 +752,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 					}
 
 					plh.lineIdx = 0
+					plh.maxFieldCnt = 0
 				}
 			}
 		}
@@ -2081,17 +2086,216 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 	*/
 
 	batchBegin := handler.batchFilled
-	for i, line := range fetchLines {
-		//fmt.Printf("line %d %v \n",i,line)
-		wait_a := time.Now()
-		rowIdx := batchBegin + i
+
+	chose := false
+
+	if chose {
+		for i, line := range fetchLines {
+			//fmt.Printf("line %d %v \n",i,line)
+			wait_a := time.Now()
+			rowIdx := batchBegin + i
+			//record missing column
+			for k := 0; k < len(columnFLags); k++ {
+				columnFLags[k] = 0
+			}
+
+			for j, field := range line {
+				//fmt.Printf("data col %d : %v \n",j,field)
+				//where will column j go ?
+				colIdx := -1
+				if j < len(handler.dataColumnId2TableColumnId) {
+					colIdx = handler.dataColumnId2TableColumnId[j]
+				}
+				//drop this field
+				if colIdx == -1 {
+					continue
+				}
+
+				isNullOrEmpty := len(field) == 0
+
+				//put it into batch
+				vec := batchData.Vecs[colIdx]
+
+				//record colIdx
+				columnFLags[colIdx] = 1
+
+				//fmt.Printf("data set col %d : %v \n",j,field)
+
+				switch vec.Typ.Oid {
+				case types.T_int8:
+					cols := vec.Col.([]int8)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						d, err := strconv.ParseInt(string(field), 10, 8)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = int8(d)
+					}
+				case types.T_int16:
+					cols := vec.Col.([]int16)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						d, err := strconv.ParseInt(string(field), 10, 16)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = int16(d)
+					}
+				case types.T_int32:
+					cols := vec.Col.([]int32)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						d, err := strconv.ParseInt(string(field), 10, 32)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = int32(d)
+					}
+				case types.T_int64:
+					cols := vec.Col.([]int64)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						d, err := strconv.ParseInt(string(field), 10, 64)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_uint8:
+					cols := vec.Col.([]uint8)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						d, err := strconv.ParseInt(string(field), 10, 8)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = uint8(d)
+					}
+				case types.T_uint16:
+					cols := vec.Col.([]uint16)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						d, err := strconv.ParseInt(string(field), 10, 16)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = uint16(d)
+					}
+				case types.T_uint32:
+					cols := vec.Col.([]uint32)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						d, err := strconv.ParseInt(string(field), 10, 32)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = uint32(d)
+					}
+				case types.T_uint64:
+					cols := vec.Col.([]uint64)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						d, err := strconv.ParseInt(string(field), 10, 64)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = uint64(d)
+					}
+				case types.T_float32:
+					cols := vec.Col.([]float32)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						d, err := strconv.ParseFloat(string(field), 32)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = float32(d)
+					}
+				case types.T_float64:
+					cols := vec.Col.([]float64)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+					} else {
+						fs := string(field)
+						//fmt.Printf("==== > field string [%s] \n",fs)
+						d, err := strconv.ParseFloat(fs, 64)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_char, types.T_varchar:
+					vBytes := vec.Col.(*types.Bytes)
+					if isNullOrEmpty {
+						vec.Nsp.Add(uint64(rowIdx))
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						vBytes.Lengths[rowIdx] = uint32(len(field))
+					} else {
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						vBytes.Data = append(vBytes.Data, field...)
+						vBytes.Lengths[rowIdx] = uint32(len(field))
+					}
+				default:
+					panic("unsupported oid")
+				}
+			}
+			row2col += time.Since(wait_a)
+
+			wait_b := time.Now()
+			//the row does not have field
+			for k := 0; k < len(columnFLags); k++ {
+				if 0 == columnFLags[k] {
+					vec := batchData.Vecs[k]
+					switch vec.Typ.Oid {
+					case types.T_char, types.T_varchar:
+						vBytes := vec.Col.(*types.Bytes)
+						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+						vBytes.Lengths[rowIdx] = uint32(0)
+					}
+					vec.Nsp.Add(uint64(rowIdx))
+				}
+			}
+			fillBlank += time.Since(wait_b)
+		}
+	} else{
 		//record missing column
 		for k := 0; k < len(columnFLags); k++ {
 			columnFLags[k] = 0
 		}
 
-		for j, field := range line {
-			//fmt.Printf("data col %d : %v \n",j,field)
+		wait_a := time.Now()
+		//column
+		for j := 0; j < handler.maxFieldCnt; j++ {
 			//where will column j go ?
 			colIdx := -1
 			if j < len(handler.dataColumnId2TableColumnId) {
@@ -2102,159 +2306,208 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 				continue
 			}
 
-			isNullOrEmpty := len(field) == 0
-
 			//put it into batch
 			vec := batchData.Vecs[colIdx]
 
-			//record colIdx
-			columnFLags[colIdx] = 1
-
-			//fmt.Printf("data set col %d : %v \n",j,field)
+			columnFLags[j] = 1
 
 			switch vec.Typ.Oid {
 			case types.T_int8:
 				cols := vec.Col.([]int8)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					d,err := strconv.ParseInt(string(field),10,8)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						d, err := strconv.ParseInt(field, 10, 8)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = int8(d)
 					}
-					cols[rowIdx] = int8(d)
 				}
 			case types.T_int16:
 				cols := vec.Col.([]int16)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					d,err := strconv.ParseInt(string(field),10,16)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						d, err := strconv.ParseInt(field, 10, 16)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = int16(d)
 					}
-					cols[rowIdx] = int16(d)
 				}
 			case types.T_int32:
 				cols := vec.Col.([]int32)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					d,err := strconv.ParseInt(string(field),10,32)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						d, err := strconv.ParseInt(field, 10, 32)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = int32(d)
 					}
-					cols[rowIdx] = int32(d)
 				}
 			case types.T_int64:
 				cols := vec.Col.([]int64)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					d,err := strconv.ParseInt(string(field),10,64)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						d, err := strconv.ParseInt(field, 10, 64)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = d
 					}
-					cols[rowIdx] = d
 				}
 			case types.T_uint8:
 				cols := vec.Col.([]uint8)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					d,err := strconv.ParseInt(string(field),10,8)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						d, err := strconv.ParseInt(field, 10, 8)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = uint8(d)
 					}
-					cols[rowIdx] = uint8(d)
 				}
 			case types.T_uint16:
 				cols := vec.Col.([]uint16)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					d,err := strconv.ParseInt(string(field),10,16)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						d, err := strconv.ParseInt(field, 10, 16)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = uint16(d)
 					}
-					cols[rowIdx] = uint16(d)
 				}
 			case types.T_uint32:
 				cols := vec.Col.([]uint32)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					d,err := strconv.ParseInt(string(field),10,32)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						d, err := strconv.ParseInt(field, 10, 32)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = uint32(d)
 					}
-					cols[rowIdx] = uint32(d)
 				}
 			case types.T_uint64:
 				cols := vec.Col.([]uint64)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					d,err := strconv.ParseInt(string(field),10,64)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						d, err := strconv.ParseInt(field, 10, 64)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = uint64(d)
 					}
-					cols[rowIdx] = uint64(d)
 				}
 			case types.T_float32:
 				cols := vec.Col.([]float32)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					d,err := strconv.ParseFloat(string(field),32)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						d, err := strconv.ParseFloat(field, 32)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = float32(d)
 					}
-					cols[rowIdx] = float32(d)
 				}
 			case types.T_float64:
 				cols := vec.Col.([]float64)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-				}else{
-					fs := string(field)
-					//fmt.Printf("==== > field string [%s] \n",fs)
-					d,err := strconv.ParseFloat(fs,64)
-					if err != nil {
-						logutil.Errorf("parse field[%v] err:%v",field,err)
-						d = 0
-						//break
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+					} else {
+						field := line[j]
+						//fmt.Printf("==== > field string [%s] \n",fs)
+						d, err := strconv.ParseFloat(field, 64)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							d = 0
+							//break
+						}
+						cols[i] = d
 					}
-					cols[rowIdx] = d
 				}
 			case types.T_char, types.T_varchar:
-				vBytes :=vec.Col.(*types.Bytes)
-				if isNullOrEmpty {
-					vec.Nsp.Add(uint64(rowIdx))
-					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-					vBytes.Lengths[rowIdx] = uint32(len(field))
-				}else{
-					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-					vBytes.Data = append(vBytes.Data,field...)
-					vBytes.Lengths[rowIdx] = uint32(len(field))
+				vBytes := vec.Col.(*types.Bytes)
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						vec.Nsp.Add(uint64(i))
+						vBytes.Offsets[i] = uint32(len(vBytes.Data))
+						vBytes.Lengths[i] = uint32(len(line[j]))
+					} else {
+						field := line[j]
+						vBytes.Offsets[i] = uint32(len(vBytes.Data))
+						vBytes.Data = append(vBytes.Data, field...)
+						vBytes.Lengths[i] = uint32(len(field))
+					}
 				}
 			default:
 				panic("unsupported oid")
@@ -2267,18 +2520,20 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 		for k := 0; k < len(columnFLags); k++ {
 			if 0 == columnFLags[k] {
 				vec := batchData.Vecs[k]
-				switch vec.Typ.Oid {
-				case types.T_char, types.T_varchar:
-					vBytes :=vec.Col.(*types.Bytes)
-					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-					vBytes.Lengths[rowIdx] = uint32(0)
+				//row
+				for i := 0; i < countOfLineArray; i++ {
+					switch vec.Typ.Oid {
+					case types.T_char, types.T_varchar:
+						vBytes := vec.Col.(*types.Bytes)
+						vBytes.Offsets[i] = uint32(len(vBytes.Data))
+						vBytes.Lengths[i] = uint32(0)
+					}
+					vec.Nsp.Add(uint64(i))
 				}
-				vec.Nsp.Add(uint64(rowIdx))
 			}
 		}
 		fillBlank += time.Since(wait_b)
 	}
-
 	handler.lineCount += uint64(fetchCnt)
 	handler.batchFilled = batchBegin + fetchCnt
 
@@ -2333,9 +2588,9 @@ when force is true, batchsize will be changed.
  */
 func saveBatchToStorage(handler *ParseLineHandler,force bool) error {
 	if handler.batchFilled == handler.batchSize{
-		//for _, vec := range handler.batchData.Vecs {
-		//	fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
-		//}
+		for _, vec := range handler.batchData.Vecs {
+			fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
+		}
 		wait_a := time.Now()
 		err := handler.tableHandler.Write(handler.timestamp,handler.batchData)
 		if err != nil {
@@ -2415,6 +2670,10 @@ func saveBatchToStorage(handler *ParseLineHandler,force bool) error {
 						//fmt.Printf("saveBatchToStorage after data %s \n",vBytes.String())
 					}
 				}
+
+				//for _, vec := range handler.batchData.Vecs {
+				//	fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
+				//}
 
 				err := handler.tableHandler.Write(handler.timestamp, handler.batchData)
 				if err != nil {
@@ -2557,7 +2816,7 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		}()
 
 		wait_b := time.Now()
-		err = handler.simdCsvReader.ReadLoop(handler.simdCsvLineOutChan, nil)
+		err = handler.simdCsvReader.ReadLoop(handler.simdCsvLineOutChan)
 		if err != nil {
 			return result, err
 		}
