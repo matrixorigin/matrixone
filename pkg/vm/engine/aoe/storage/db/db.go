@@ -271,6 +271,7 @@ func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {
 			tbls := d.Store.MetaInfo.GetTablesByNamePrefix(matcher.Pattern)
 			for _, tbl := range tbls {
 				data, err := d.getTableData(tbl)
+				defer data.Unref()
 				if err != nil {
 					return id, err
 				}
