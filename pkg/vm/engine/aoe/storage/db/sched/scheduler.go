@@ -45,9 +45,9 @@ func (p *metablkCommiter) IsEmpty() bool {
 	return len(p.pendings) == 0
 }
 
-func (p *metablkCommiter) Register(e *precommitBlockEvent) {
+func (p *metablkCommiter) Register(blkid uint64) {
 	p.Lock()
-	p.pendings = append(p.pendings, e.Id.BlockID)
+	p.pendings = append(p.pendings, blkid)
 	p.Unlock()
 }
 
@@ -157,7 +157,7 @@ func (s *scheduler) onPrecommitBlkDone(e sched.Event) {
 		commiter = newMetaBlkCommiter(s)
 		s.commiters.blkmap[event.Id.TableID] = commiter
 	}
-	commiter.Register(event)
+	commiter.Register(event.Id.BlockID)
 	s.commiters.mu.Unlock()
 }
 
@@ -288,7 +288,27 @@ func (s *scheduler) OnExecDone(op interface{}) {
 	}
 }
 
-func (s *scheduler) Schedule(e sched.Event) error {
+func (s *scheduler) onPreScheduleFlushBlkTask(e sched.Event) {
+	event := e.(*flushMemblockEvent)
+	s.commiters.mu.Lock()
+	commiter, ok := s.commiters.blkmap[event.Meta.Segment.Table.ID]
+	if !ok {
+		commiter = newMetaBlkCommiter(s)
+		s.commiters.blkmap[event.Meta.Segment.Table.ID] = commiter
+	}
+	commiter.Register(event.Meta.ID)
+	s.commiters.mu.Unlock()
+}
+
+func (s *scheduler) preprocess(e sched.Event) {
+	switch e.Type() {
+	case sched.FlushBlkTask:
+		s.onPreScheduleFlushBlkTask(e)
+	}
 	e.AddObserver(s)
+}
+
+func (s *scheduler) Schedule(e sched.Event) error {
+	s.preprocess(e)
 	return s.BaseScheduler.Schedule(e)
 }

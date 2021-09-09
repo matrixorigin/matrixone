@@ -20,6 +20,7 @@ type flushMemblockEvent struct {
 func NewFlushMemBlockEvent(ctx *Context, blk iface.IMutBlock) *flushMemblockEvent {
 	e := &flushMemblockEvent{
 		Block: blk,
+		Meta:  blk.GetMeta(),
 	}
 	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
@@ -30,7 +31,6 @@ func NewFlushMemBlockEvent(ctx *Context, blk iface.IMutBlock) *flushMemblockEven
 
 func (e *flushMemblockEvent) Execute() error {
 	defer e.Block.Unref()
-	e.Meta = e.Block.GetMeta()
 	return e.Block.WithPinedContext(func(mut mb.IMutableBlock) error {
 		meta := mut.GetMeta()
 		data := mut.GetData()
