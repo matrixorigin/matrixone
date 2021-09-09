@@ -435,6 +435,7 @@ type ParseLineHandler struct {
 	csvLineArray1 time.Duration
 	csvLineArray2 time.Duration
 	asyncChanLoop time.Duration
+	saveParsedLine time.Duration
 }
 
 func (plh *ParseLineHandler) Status() LINE_STATE {
@@ -2054,7 +2055,8 @@ func saveParsedLinesToBatchImprove(handler *ParseLineHandler, forceConvert bool)
 func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool) error {
 	begin := time.Now()
 	defer func() {
-		fmt.Printf("-----saveParsedLinesToBatchSimdCsv %s\n",time.Since(begin))
+		handler.saveParsedLine += time.Since(begin)
+		//fmt.Printf("-----saveParsedLinesToBatchSimdCsv %s\n",time.Since(begin))
 	}()
 
 	countOfLineArray := handler.lineIdx
@@ -2571,8 +2573,8 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 	handler.fillBlank += fillBlank
 	handler.toStorage += toStorage
 
-	fmt.Printf("----- row2col %s fillBlank %s toStorage %s\n",
-		row2col,fillBlank,toStorage)
+	//fmt.Printf("----- row2col %s fillBlank %s toStorage %s\n",
+	//	row2col,fillBlank,toStorage)
 
 	if allFetchCnt != countOfLineArray {
 		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ",allFetchCnt,countOfLineArray)
@@ -2847,7 +2849,7 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		fmt.Printf("-----call_back %s " +
 			"process_block - callback %s " +
 			"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
-			"csvLineArray1 %s csvLineArray2 %s\n",
+			"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s \n",
 			handler.callback,
 			process_blcok - handler.callback,
 			handler.asyncChan,
@@ -2855,6 +2857,7 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			handler.asyncChan -	handler.asyncChanLoop,
 			handler.csvLineArray1,
 			handler.csvLineArray2,
+			handler.saveParsedLine,
 			)
 
 
