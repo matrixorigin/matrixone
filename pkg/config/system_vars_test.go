@@ -148,7 +148,7 @@ blockCountInLoadData=20
 blockSizeInLoadData=4194304
 		
 `
-	t1_config := &varsConfig{
+	t1_config:=&varsConfig{
 		rwlock:            sync.RWMutex{},
 
 
@@ -184,7 +184,7 @@ LengthOfQueryPrinted:50,
 BatchSizeInLoadData:10000,
 BlockCountInLoadData:20,
 BlockSizeInLoadData:4194304,
-
+	
 
 		name2updatedFlags: nil,
 	}

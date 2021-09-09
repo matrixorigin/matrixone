@@ -14,7 +14,7 @@ func TestAllParameters_LoadInitialValues(t *testing.T) {
 	}
 }
 
-func isconfigurationEqual(c1,c2 configuration) bool {
+func isconfigurationEqual(c1,c2 *configuration) bool {
 
 
 
@@ -121,7 +121,7 @@ float64set3= 0.0
 float64Range1=1000.01
 		
 `
-	t1_config:=configuration{
+	t1_config:=&configuration{
 		rwlock:            sync.RWMutex{},
 
 
@@ -157,7 +157,7 @@ Float64Range1:1000.01,
 
 	type args struct {
 		input string
-		config configuration
+		config *configuration
 	}
 	tests := []struct {
 		name    string
@@ -185,8 +185,8 @@ Float64Range1:1000.01,
 				t.Errorf("UpdateParametersWithConfiguration failed. error:%v",err)
 			}
 
-			if ( isconfigurationEqual(*config,tt.args.config) != true ) != tt.wantErr3{
-				t.Errorf("Configuration are not equal. %v vs %v ",*config,tt.args.config)
+			if ( isconfigurationEqual(config,tt.args.config) != true ) != tt.wantErr3{
+				t.Errorf("Configuration are not equal. %v vs %v ",config,tt.args.config)
 				return
 			}
 		})

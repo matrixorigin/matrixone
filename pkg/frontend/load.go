@@ -853,7 +853,7 @@ func prepareBatch(handler *ParseLineHandler) error {
 			case *tree.UnresolvedName:
 				tid,ok := tableName2ColumnId[realCol.Parts[0]]
 				if !ok {
-					return fmt.Errorf("no such column %s in table %s ")
+					return fmt.Errorf("no such column %s", realCol.Parts[0])
 				}
 				dataColumnId2TableColumnId[i] = tid
 			case *tree.VarExpr:

@@ -24,13 +24,13 @@ func makeFbuffer(l int) []float64 {
 func TestF64Add(t *testing.T) {
 	xs := makeFbuffer(13)
 	res := make([]float64, 13)
-	fmt.Printf("sum:\n\t%v\n", float64AddAvx2(xs, xs, res))
+	fmt.Printf("sum:\n\t%v\n", Float64Add(xs, xs, res))
 	fmt.Printf("pure sum:\n\t%v\n", float64Add(xs, xs, res))
 }
 
 func TestI64Add(t *testing.T) {
 	xs := makeIbuffer(100)
 	res := make([]int64, 50)
-	fmt.Printf("sum: %v\n", int64AddAvx2(xs[:50], xs[50:], res))
+	fmt.Printf("sum: %v\n", Int64Add(xs[:50], xs[50:], res))
 	fmt.Printf("pure sum: %v\n", int64Add(xs[:50], xs[50:], res))
 }
