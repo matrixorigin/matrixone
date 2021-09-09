@@ -55,6 +55,14 @@ func (td *tableData) close() {
 	// log.Infof("table %d noref", td.meta.ID)
 }
 
+func (td *tableData) Ref() {
+	td.RefHelper.Ref()
+}
+
+func (td *tableData) Unref() {
+	td.RefHelper.Unref()
+}
+
 func (td *tableData) GetIndexHolder() *index.TableHolder {
 	return td.indexHolder
 }
