@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -210,6 +212,9 @@ func (info *MetaInfo) String() string {
 }
 
 func (info *MetaInfo) RegisterTable(tbl *Table) error {
+	buf := make([]byte, 4096)
+	runtime.Stack(buf, true)
+	logutil.Infof("call local RegisterTable, %v", tbl.Schema.Name)
 	info.Lock()
 	defer info.Unlock()
 

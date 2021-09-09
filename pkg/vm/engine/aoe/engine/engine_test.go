@@ -111,7 +111,7 @@ func TestAOEEngine(t *testing.T) {
 		catalogs = append(catalogs, catalog2.NewCatalog(c.CubeDrivers[i]))
 	}
 
-	//testTableDDL(t, catalogs)
+	testTableDDL(t, catalogs)
 
 	aoeEngine := New(&catalogs[0])
 
