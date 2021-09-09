@@ -14,6 +14,7 @@ import (
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
 	"os"
+	"runtime"
 	"runtime/pprof"
 	"strconv"
 	"sync"
@@ -401,6 +402,7 @@ type ParseLineHandler struct {
 	simdCsvLineOutChan chan simdcsv.LineOut
 	simdCsvLineOutRoutineClose *CloseFlag
 	simdCsvConcurrencyCount int
+	simdCsvConcurrencyCountSemaphore chan int
 	simdCsvOutputChan chan *WriteBatchHandler
 	simdCsvWaitGroup *sync.WaitGroup
 
@@ -808,29 +810,10 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 			plh.csvLineArray1 += time.Since(wait_b)
 
 			if plh.lineIdx == plh.batchSize {
-				writeHandler := &WriteBatchHandler{
-					lineIdx: plh.lineIdx,
-					simdCsvLineArray: plh.simdCsvLineArray[:plh.lineIdx],
-					maxFieldCnt: plh.maxFieldCnt,
-				}
-				err := prepareBatchConcurrent(plh,writeHandler)
+				err := doWriteBatch(plh, false)
 				if err != nil {
-					writeHandler.simdCsvErr =err
 					return err
 				}
-
-				go func() {
-					plh.simdCsvWaitGroup.Add(1)
-					defer plh.simdCsvWaitGroup.Done()
-
-					//step 3 : save into storage
-					err = saveParsedLinesToBatchSimdCsvConcurrentWrite(writeHandler,false)
-					writeHandler.simdCsvErr = err
-
-					//output handler
-					plh.simdCsvOutputChan <- writeHandler
-				}()
-
 
 				plh.lineIdx = 0
 				plh.maxFieldCnt = 0
@@ -859,28 +842,10 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 				plh.csvLineArray2 += time.Since(wait_c)
 
 				if plh.lineIdx == plh.batchSize {
-					writeHandler := &WriteBatchHandler{
-						lineIdx: plh.lineIdx,
-						simdCsvLineArray: plh.simdCsvLineArray[:plh.lineIdx],
-						maxFieldCnt: plh.maxFieldCnt,
-					}
-					err := prepareBatchConcurrent(plh,writeHandler)
+					err := doWriteBatch(plh, false)
 					if err != nil {
-						writeHandler.simdCsvErr =err
 						return err
 					}
-
-					go func() {
-						plh.simdCsvWaitGroup.Add(1)
-						defer plh.simdCsvWaitGroup.Done()
-
-						//step 3 : save into storage
-						err = saveParsedLinesToBatchSimdCsvConcurrentWrite(writeHandler,false)
-						writeHandler.simdCsvErr = err
-
-						//output handler
-						plh.simdCsvOutputChan <- writeHandler
-					}()
 
 					plh.lineIdx = 0
 					plh.maxFieldCnt = 0
@@ -891,28 +856,10 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine(wg *sync.WaitGroup) er
 	}
 
 	//last batch
-	writeHandler := &WriteBatchHandler{
-		lineIdx: plh.lineIdx,
-		simdCsvLineArray: plh.simdCsvLineArray[:plh.lineIdx],
-		maxFieldCnt: plh.maxFieldCnt,
-	}
-	err := prepareBatchConcurrent(plh,writeHandler)
+	err := doWriteBatch(plh, true)
 	if err != nil {
-		writeHandler.simdCsvErr =err
 		return err
 	}
-
-	go func() {
-		plh.simdCsvWaitGroup.Add(1)
-		defer plh.simdCsvWaitGroup.Done()
-
-		//step 3 : save into storage
-		err = saveParsedLinesToBatchSimdCsvConcurrentWrite(writeHandler,true)
-		writeHandler.simdCsvErr = err
-
-		//output handler
-		plh.simdCsvOutputChan <- writeHandler
-	}()
 	return nil
 }
 /*
@@ -3548,6 +3495,38 @@ func saveBatchToStorageConcurrentWrite(handler *WriteBatchHandler,force bool) er
 	return nil
 }
 
+func doWriteBatch(handler *ParseLineHandler, force bool) error {
+	writeHandler := &WriteBatchHandler{
+		lineIdx: handler.lineIdx,
+		simdCsvLineArray: handler.simdCsvLineArray[:handler.lineIdx],
+		maxFieldCnt: handler.maxFieldCnt,
+	}
+	err := prepareBatchConcurrent(handler,writeHandler)
+	if err != nil {
+		writeHandler.simdCsvErr =err
+		return err
+	}
+
+	//acquire semaphore
+	handler.simdCsvConcurrencyCountSemaphore <- 1
+	defer func() {
+		//release semaphore
+		<- handler.simdCsvConcurrencyCountSemaphore
+	}()
+
+	go func() {
+		handler.simdCsvWaitGroup.Add(1)
+		defer handler.simdCsvWaitGroup.Done()
+
+		//step 3 : save into storage
+		err = saveParsedLinesToBatchSimdCsvConcurrentWrite(writeHandler,force)
+		writeHandler.simdCsvErr = err
+
+		//output handler
+		handler.simdCsvOutputChan <- writeHandler
+	}()
+	return nil
+}
 
 /*
 process block
@@ -3661,6 +3640,10 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			writeBatch: 0,
 			resetBatch: 0,
 		}
+
+		handler.simdCsvConcurrencyCount = Min(handler.simdCsvConcurrencyCount,runtime.NumCPU())
+		handler.simdCsvConcurrencyCount = Max(1,handler.simdCsvConcurrencyCount)
+		handler.simdCsvConcurrencyCountSemaphore = make(chan int,handler.simdCsvConcurrencyCount)
 
 		prepareTime := time.Now()
 		//allocate batch space
