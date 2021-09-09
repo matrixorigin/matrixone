@@ -45,7 +45,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	}
 
 	db.Store.Mu = &opts.Mu
-	db.Store.DataTables = table.NewTables(&opts.Mu)
+	db.Store.DataTables = table.NewTables(&opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
 	db.Store.MetaInfo = opts.Meta.Info
 	db.Cleaner.MetaFiles = w.NewHeartBeater(db.Opts.MetaCleanerCfg.Interval, NewMetaFileCleaner(db.Opts.Meta.Info))
 	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)

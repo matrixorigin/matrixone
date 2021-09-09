@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/logutil"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -18,13 +19,11 @@ var (
 	NotExistErr = errors.New("not exist error")
 )
 
-func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) *TableData {
+func newTableData(host *Tables, meta *md.Table) *TableData {
 	data := &TableData{
-		MTBufMgr:    mtBufMgr,
-		SSTBufMgr:   sstBufMgr,
 		Meta:        meta,
-		FsMgr:       fsMgr,
-		IndexHolder: index.NewTableHolder(indexBufMgr, meta.ID),
+		Host:        host,
+		IndexHolder: index.NewTableHolder(host.IndexBufMgr, meta.ID),
 	}
 	data.tree.Segments = make([]iface.ISegment, 0)
 	data.tree.Helper = make(map[uint64]int)
@@ -44,11 +43,14 @@ type TableData struct {
 		SegmentCnt uint32
 		RowCount   uint64
 	}
-	MTBufMgr    bmgrif.IBufferManager
-	SSTBufMgr   bmgrif.IBufferManager
+	Host        *Tables
 	Meta        *md.Table
 	IndexHolder *index.TableHolder
-	FsMgr       base.IManager
+}
+
+func (td *TableData) Ref() {
+	td.RefHelper.Ref()
+	logutil.Errorf("xxxxxxxxxxxxxx %d", td.RefCount())
 }
 
 func (td *TableData) close() {
@@ -101,15 +103,15 @@ func (td *TableData) GetColTypeSize(idx int) uint64 {
 }
 
 func (td *TableData) GetMTBufMgr() bmgrif.IBufferManager {
-	return td.MTBufMgr
+	return td.Host.MTBufMgr
 }
 
 func (td *TableData) GetSSTBufMgr() bmgrif.IBufferManager {
-	return td.SSTBufMgr
+	return td.Host.SSTBufMgr
 }
 
 func (td *TableData) GetFsManager() base.IManager {
-	return td.FsMgr
+	return td.Host.FsMgr
 }
 
 func (td *TableData) GetSegmentCount() uint32 {
@@ -170,7 +172,7 @@ func (td *TableData) StrongRefBlock(segId, blkId uint64) iface.IBlock {
 }
 
 func (td *TableData) RegisterSegment(meta *md.Segment) (seg iface.ISegment, err error) {
-	seg, err = NewSegment(td, meta)
+	seg, err = newSegment(td, meta)
 	if err != nil {
 		panic(err)
 	}
@@ -261,6 +263,11 @@ func (td *TableData) initReplayCtx() {
 		}
 	}
 	td.Meta.ReplayIndex = ctx
+}
+
+func (td *TableData) InitReplay() {
+	td.initRowCount()
+	td.initReplayCtx()
 }
 
 func (td *TableData) initRowCount() {
@@ -356,14 +363,22 @@ type Tables struct {
 	Data      map[uint64]iface.ITableData
 	Ids       map[uint64]bool
 	Tombstone map[uint64]iface.ITableData
+
+	FsMgr base.IManager
+
+	MTBufMgr, SSTBufMgr, IndexBufMgr bmgrif.IBufferManager
 }
 
-func NewTables(mu *sync.RWMutex) *Tables {
+func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager) *Tables {
 	return &Tables{
-		Mu:        mu,
-		Data:      make(map[uint64]iface.ITableData),
-		Ids:       make(map[uint64]bool),
-		Tombstone: make(map[uint64]iface.ITableData),
+		Mu:          mu,
+		Data:        make(map[uint64]iface.ITableData),
+		Ids:         make(map[uint64]bool),
+		Tombstone:   make(map[uint64]iface.ITableData),
+		MTBufMgr:    mtBufMgr,
+		SSTBufMgr:   sstBufMgr,
+		IndexBufMgr: indexBufMgr,
+		FsMgr:       fsMgr,
 	}
 }
 
@@ -425,11 +440,15 @@ func (ts *Tables) StrongRefTable(tid uint64) (tbl iface.ITableData, err error) {
 	return tbl, err
 }
 
-func (ts *Tables) CreateTable(tbl iface.ITableData) (err error) {
+func (ts *Tables) RegisterTable(meta *md.Table) (iface.ITableData, error) {
+	tbl := newTableData(ts, meta)
 	ts.Mu.Lock()
-	err = ts.CreateTableNoLock(tbl)
-	ts.Mu.Unlock()
-	return err
+	defer ts.Mu.Unlock()
+	if err := ts.CreateTableNoLock(tbl); err != nil {
+		tbl.Unref()
+		return nil, err
+	}
+	return tbl, nil
 }
 
 func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
@@ -444,7 +463,10 @@ func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
 
 func (ts *Tables) Replay(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.MetaInfo) error {
 	for _, meta := range info.Tables {
-		tbl := NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, meta)
+		tbl, err := ts.RegisterTable(meta)
+		if err != nil {
+			return err
+		}
 		activeSeg := meta.GetActiveSegment()
 		for _, segMeta := range meta.Segments {
 			if activeSeg != nil && activeSeg.ID < segMeta.ID {
@@ -469,11 +491,7 @@ func (ts *Tables) Replay(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr b
 				defer blk.Unref()
 			}
 		}
-		tbl.initRowCount()
-		tbl.initReplayCtx()
-		if err := ts.CreateTable(tbl); err != nil {
-			return err
-		}
+		tbl.InitReplay()
 	}
 	return nil
 }

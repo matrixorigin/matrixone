@@ -25,15 +25,13 @@ func TestUpgradeBlk(t *testing.T) {
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
 
+	tables := table.NewTables(new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
 	info := md.MockInfo(&opts.Mu, row_count, blk_cnt)
 	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
-	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
-	segIds := table.MockSegments(tableMeta, tableData)
-	tables := table.NewTables(new(sync.RWMutex))
-	opts.Scheduler = NewScheduler(opts, tables)
-
-	err := tables.CreateTable(tableData)
+	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
+	segIds := table.MockSegments(tableMeta, tableData)
+	opts.Scheduler = NewScheduler(opts, tables)
 
 	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())
 
@@ -92,16 +90,14 @@ func TestUpgradeSeg(t *testing.T) {
 	seg_cnt := uint64(4)
 	blk_cnt := uint64(4)
 
+	tables := table.NewTables(new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
 	info := md.MockInfo(&opts.Mu, row_count, blk_cnt)
 	tableMeta := md.MockTable(info, schema, seg_cnt*blk_cnt)
-	tableData := table.NewTableData(fsMgr, bufMgr, bufMgr, bufMgr, tableMeta)
+	tableData, err := tables.RegisterTable(tableMeta)
+	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)
 
-	tables := table.NewTables(new(sync.RWMutex))
 	opts.Scheduler = NewScheduler(opts, tables)
-
-	err := tables.CreateTable(tableData)
-	assert.Nil(t, err)
 
 	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())
 

@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 )
 
-type Segment struct {
+type segment struct {
 	sllnode
 	typ  base.SegmentType
 	tree struct {
@@ -30,14 +30,14 @@ type Segment struct {
 	segFile     base.ISegmentFile
 }
 
-func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error) {
+func newSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error) {
 	var err error
 	segType := base.UNSORTED_SEG
 	if meta.DataState == md.SORTED {
 		segType = base.SORTED_SEG
 	}
 	mu := new(sync.RWMutex)
-	seg := &Segment{
+	seg := &segment{
 		typ:     segType,
 		host:    host,
 		meta:    meta,
@@ -84,8 +84,8 @@ func NewSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	return seg, nil
 }
 
-func NewSimpleSegment(typ base.SegmentType, meta *md.Segment, indexHolder *index.SegmentHolder, segFile base.ISegmentFile) *Segment {
-	return &Segment{
+func NewSimpleSegment(typ base.SegmentType, meta *md.Segment, indexHolder *index.SegmentHolder, segFile base.ISegmentFile) *segment {
+	return &segment{
 		typ:         typ,
 		meta:        meta,
 		indexHolder: indexHolder,
@@ -93,7 +93,7 @@ func NewSimpleSegment(typ base.SegmentType, meta *md.Segment, indexHolder *index
 	}
 }
 
-func (seg *Segment) CanUpgrade() bool {
+func (seg *segment) CanUpgrade() bool {
 	if seg.typ == base.SORTED_SEG {
 		return false
 	}
@@ -108,7 +108,7 @@ func (seg *Segment) CanUpgrade() bool {
 	return true
 }
 
-func (seg *Segment) GetSegmentedIndex() (id uint64, ok bool) {
+func (seg *segment) GetSegmentedIndex() (id uint64, ok bool) {
 	ok = false
 	if seg.typ == base.SORTED_SEG {
 		for i := len(seg.tree.blocks) - 1; i >= 0; i-- {
@@ -132,7 +132,7 @@ func (seg *Segment) GetSegmentedIndex() (id uint64, ok bool) {
 	return id, ok
 }
 
-func (seg *Segment) GetReplayIndex() *md.LogIndex {
+func (seg *segment) GetReplayIndex() *md.LogIndex {
 	if seg.tree.blockcnt == 0 {
 		return nil
 	}
@@ -146,7 +146,7 @@ func (seg *Segment) GetReplayIndex() *md.LogIndex {
 	return ctx
 }
 
-func (seg *Segment) GetRowCount() uint64 {
+func (seg *segment) GetRowCount() uint64 {
 	if seg.meta.DataState >= md.CLOSED {
 		return seg.meta.Table.Conf.BlockMaxRows * seg.meta.Table.Conf.SegmentMaxBlocks
 	}
@@ -159,7 +159,7 @@ func (seg *Segment) GetRowCount() uint64 {
 	return ret
 }
 
-func (seg *Segment) Size(attr string) uint64 {
+func (seg *segment) Size(attr string) uint64 {
 	if seg.typ >= base.SORTED_SEG {
 		return seg.tree.attrsizes[attr]
 	}
@@ -175,7 +175,7 @@ func (seg *Segment) Size(attr string) uint64 {
 	return size
 }
 
-func (seg *Segment) BlockIds() []uint64 {
+func (seg *segment) BlockIds() []uint64 {
 	if seg.typ == base.SORTED_SEG {
 		return seg.tree.blockids
 	}
@@ -191,7 +191,7 @@ func (seg *Segment) BlockIds() []uint64 {
 	return ret
 }
 
-func (seg *Segment) close() {
+func (seg *segment) close() {
 	segId := seg.meta.AsCommonID().AsSegmentID()
 	if seg.indexHolder != nil {
 		seg.indexHolder.Unref()
@@ -212,11 +212,11 @@ func (seg *Segment) close() {
 	}
 }
 
-func (seg *Segment) SetNext(next iface.ISegment) {
+func (seg *segment) SetNext(next iface.ISegment) {
 	seg.sllnode.SetNextNode(next)
 }
 
-func (seg *Segment) GetNext() iface.ISegment {
+func (seg *segment) GetNext() iface.ISegment {
 	r := seg.sllnode.GetNextNode()
 	if r == nil {
 		return nil
@@ -224,38 +224,38 @@ func (seg *Segment) GetNext() iface.ISegment {
 	return r.(iface.ISegment)
 }
 
-func (seg *Segment) GetMeta() *md.Segment {
+func (seg *segment) GetMeta() *md.Segment {
 	return seg.meta
 }
 
-func (seg *Segment) GetSegmentFile() base.ISegmentFile {
+func (seg *segment) GetSegmentFile() base.ISegmentFile {
 	return seg.segFile
 }
 
-func (seg *Segment) GetType() base.SegmentType {
+func (seg *segment) GetType() base.SegmentType {
 	return seg.typ
 }
 
-func (seg *Segment) GetMTBufMgr() bmgrif.IBufferManager {
+func (seg *segment) GetMTBufMgr() bmgrif.IBufferManager {
 	return seg.host.GetMTBufMgr()
 }
 
-func (seg *Segment) GetSSTBufMgr() bmgrif.IBufferManager {
+func (seg *segment) GetSSTBufMgr() bmgrif.IBufferManager {
 	return seg.host.GetSSTBufMgr()
 }
 
-func (seg *Segment) GetFsManager() base.IManager {
+func (seg *segment) GetFsManager() base.IManager {
 	return seg.host.GetFsManager()
 }
 
-func (seg *Segment) GetIndexHolder() *index.SegmentHolder {
+func (seg *segment) GetIndexHolder() *index.SegmentHolder {
 	return seg.indexHolder
 }
 
-func (seg *Segment) String() string {
+func (seg *segment) String() string {
 	seg.tree.RLock()
 	defer seg.tree.RUnlock()
-	s := fmt.Sprintf("<Segment[%d]>(BlkCnt=%d)(Refs=%d)(IndexRefs=%d)", seg.meta.ID, seg.tree.blockcnt, seg.RefCount(), seg.indexHolder.RefCount())
+	s := fmt.Sprintf("<segment[%d]>(BlkCnt=%d)(Refs=%d)(IndexRefs=%d)", seg.meta.ID, seg.tree.blockcnt, seg.RefCount(), seg.indexHolder.RefCount())
 	for _, blk := range seg.tree.blocks {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.String())
 		prev := blk.GetPrevVersion()
@@ -270,7 +270,7 @@ func (seg *Segment) String() string {
 	return s
 }
 
-func (seg *Segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
+func (seg *segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
 	blk, err = newBlock(seg, blkMeta)
 	if err != nil {
 		return nil, err
@@ -290,7 +290,7 @@ func (seg *Segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err erro
 	return blk, err
 }
 
-func (seg *Segment) WeakRefBlock(id uint64) iface.IBlock {
+func (seg *segment) WeakRefBlock(id uint64) iface.IBlock {
 	seg.tree.RLock()
 	defer seg.tree.RUnlock()
 	idx, ok := seg.tree.helper[id]
@@ -300,7 +300,7 @@ func (seg *Segment) WeakRefBlock(id uint64) iface.IBlock {
 	return seg.tree.blocks[idx]
 }
 
-func (seg *Segment) StrongRefBlock(id uint64) iface.IBlock {
+func (seg *segment) StrongRefBlock(id uint64) iface.IBlock {
 	seg.tree.RLock()
 	defer seg.tree.RUnlock()
 	idx, ok := seg.tree.helper[id]
@@ -311,12 +311,12 @@ func (seg *Segment) StrongRefBlock(id uint64) iface.IBlock {
 	blk.Ref()
 	return blk
 }
-func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (iface.ISegment, error) {
+func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (iface.ISegment, error) {
 	if seg.typ != base.UNSORTED_SEG {
 		panic("logic error")
 	}
 	mu := new(sync.RWMutex)
-	cloned := &Segment{
+	cloned := &segment{
 		typ:     base.SORTED_SEG,
 		host:    td,
 		meta:    meta,
@@ -372,7 +372,7 @@ func (seg *Segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	return cloned, nil
 }
 
-func (seg *Segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
+func (seg *segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 	if seg.typ != base.UNSORTED_SEG {
 		panic("logic error")
 	}
