@@ -25,16 +25,18 @@ import (
 
 type metablkCommiter struct {
 	sync.RWMutex
+	opts       *e.Options
 	scheduler  sched.Scheduler
 	pendings   []uint64
-	flushdones map[uint64]*flushMemtableEvent
+	flushdones map[uint64]*md.Block
 }
 
-func newMetaBlkCommiter(scheduler sched.Scheduler) *metablkCommiter {
+func newMetaBlkCommiter(opts *e.Options, scheduler sched.Scheduler) *metablkCommiter {
 	c := &metablkCommiter{
+		opts:       opts,
 		scheduler:  scheduler,
 		pendings:   make([]uint64, 0),
-		flushdones: make(map[uint64]*flushMemtableEvent),
+		flushdones: make(map[uint64]*md.Block),
 	}
 	return c
 }
@@ -51,9 +53,9 @@ func (p *metablkCommiter) Register(blkid uint64) {
 	p.Unlock()
 }
 
-func (p *metablkCommiter) doSchedule(e *flushMemtableEvent) {
-	ctx := &Context{Opts: e.Ctx.Opts}
-	commit := NewCommitBlkEvent(ctx, e.Meta)
+func (p *metablkCommiter) doSchedule(meta *md.Block) {
+	ctx := &Context{Opts: p.opts}
+	commit := NewCommitBlkEvent(ctx, meta)
 	p.scheduler.Schedule(commit)
 }
 
@@ -67,17 +69,17 @@ func (p *metablkCommiter) Accept(e *flushMemtableEvent) {
 	}
 	p.Lock()
 	if p.pendings[0] != e.Meta.ID {
-		p.flushdones[e.Meta.ID] = e
+		p.flushdones[e.Meta.ID] = e.Meta
 	} else {
-		p.doSchedule(e)
+		p.doSchedule(e.Meta)
 		var i int
 		for i = 1; i < len(p.pendings); i++ {
-			flushe, ok := p.flushdones[p.pendings[i]]
+			meta, ok := p.flushdones[p.pendings[i]]
 			if !ok {
 				break
 			}
 			delete(p.flushdones, p.pendings[i])
-			p.doSchedule(flushe)
+			p.doSchedule(meta)
 		}
 		p.pendings = p.pendings[i:]
 	}
@@ -154,7 +156,7 @@ func (s *scheduler) onPrecommitBlkDone(e sched.Event) {
 	s.commiters.mu.Lock()
 	commiter, ok := s.commiters.blkmap[event.Id.TableID]
 	if !ok {
-		commiter = newMetaBlkCommiter(s)
+		commiter = newMetaBlkCommiter(s.opts, s)
 		s.commiters.blkmap[event.Id.TableID] = commiter
 	}
 	commiter.Register(event.Id.BlockID)
@@ -293,7 +295,7 @@ func (s *scheduler) onPreScheduleFlushBlkTask(e sched.Event) {
 	s.commiters.mu.Lock()
 	commiter, ok := s.commiters.blkmap[event.Meta.Segment.Table.ID]
 	if !ok {
-		commiter = newMetaBlkCommiter(s)
+		commiter = newMetaBlkCommiter(s.opts, s)
 		s.commiters.blkmap[event.Meta.Segment.Table.ID] = commiter
 	}
 	commiter.Register(event.Meta.ID)
