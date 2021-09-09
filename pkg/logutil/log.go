@@ -29,7 +29,7 @@ import (
 var _globalL, _globalP, _globalS atomic.Value
 
 func init() {
-	conf := &Config{Level: "debug", File: FileLogConfig{}}
+	conf := &Config{Level: "info", File: FileLogConfig{}}
 	logger, props, _ := InitLogger(conf)
 	ReplaceGlobals(logger, props)
 }

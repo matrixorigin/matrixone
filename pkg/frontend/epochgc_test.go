@@ -164,7 +164,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	}()
 
 	catalog := catalog3.NewCatalog(c.CubeDrivers[0])
-	eng := aoe_engine.New(&catalog)
+	eng := aoe_engine.New(catalog)
 
 	for i := 0; i < nodeCnt; i++ {
 		pcis[i].SetRemoveEpoch(func(epoch uint64) {

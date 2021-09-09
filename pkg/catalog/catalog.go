@@ -24,7 +24,7 @@ const (
 	cTableIDPrefix      = "TID"
 	cRoutePrefix        = "Route"
 	cDeletedTablePrefix = "DeletedTableQueue"
-	timeout             = 600 * time.Millisecond
+	timeout             = 2000 * time.Millisecond
 	idPoolSize          = 20
 )
 
@@ -35,11 +35,11 @@ type Catalog struct {
 	dbIdEnd   uint64
 	tidStart  uint64
 	tidEnd    uint64
-	pLock     int32 //
+	pLock     int32
 }
 
 // NewCatalog creates a Catalog.
-func NewCatalog(store driver.CubeDriver) Catalog {
+func NewCatalog(store driver.CubeDriver) *Catalog {
 	catalog := Catalog{
 		Driver: store,
 	}
@@ -57,7 +57,7 @@ func NewCatalog(store driver.CubeDriver) Catalog {
 	catalog.tidStart = tmpId - idPoolSize + 1
 	logutil.Debugf("Catalog initialize finished, db id range is [%d, %d), table id range is [%d, %d)", catalog.dbIdStart, catalog.dbIdEnd, catalog.tidStart, catalog.tidEnd)
 
-	return catalog
+	return &catalog
 }
 
 // CreateDatabase creates a database with db info.
@@ -69,7 +69,6 @@ func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (dbid uin
 	if _, err := c.checkDBNotExists(dbName); err != nil {
 		return 0, err
 	}
-	//id, err := c.genGlobalUniqIDs([]byte(cDBIDPrefix))
 	dbid, err = c.allocId(cDBIDPrefix)
 	if err != nil {
 		return 0, err
@@ -151,62 +150,11 @@ func (c *Catalog) GetDatabase(dbName string) (*aoe.SchemaInfo, error) {
 	return db, nil
 }
 
-// CreateTableBak creates a table with tableInfo in database.
-func (c *Catalog) CreateTableBak(epoch, dbId uint64, tbl aoe.TableInfo) (uint64, error) {
-	t0 := time.Now()
-	defer func() {
-		logutil.Debugf("CreateTable cost %d ms", time.Since(t0).Milliseconds())
-	}()
-	_, err := c.checkDBExists(dbId)
-	if err != nil {
-		return 0, err
-	}
-	_, err = c.checkTableNotExists(dbId, tbl.Name)
-	if err != nil {
-		return 0, err
-	}
-	tbl.Id, err = c.genGlobalUniqIDs([]byte(cTableIDPrefix))
-	if err != nil {
-		return 0, err
-	}
-	err = c.Driver.Set(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id))
-	if err != nil {
-		logutil.Errorf("ErrTableCreateFailed, %v", err)
-		return 0, err
-	}
-	tbl.Epoch = epoch
-	tbl.SchemaId = dbId
-	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
-		rkey := c.routeKey(dbId, tbl.Id, shardId)
-		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
-			logutil.Errorf("ErrTableCreateFailed, %v", err)
-			return 0, err
-		}
-		if c.Driver.Set(rkey, []byte(tbl.Name)) != nil {
-			logutil.Errorf("ErrTableCreateFailed, %v", err)
-			return 0, err
-		}
-		tbl.State = aoe.StatePublic
-		meta, err := helper.EncodeTable(tbl)
-		if err != nil {
-			logutil.Errorf("ErrTableCreateFailed, %v", err)
-			return 0, err
-		}
-		err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
-		if err != nil {
-			logutil.Errorf("ErrTableCreateFailed, %v", err)
-			return 0, err
-		}
-		return tbl.Id, nil
-	}
-	return 0, ErrNoAvailableShard
-}
-
 // CreateTable creates a table with tableInfo in database.
 func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("CreateTable finished, table id is %d, cost %d ms", tid, time.Since(t0).Milliseconds())
+		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, sid is %d, cost %d ms", tbl.Name, tid, time.Since(t0).Milliseconds())
 	}()
 	_, err = c.checkDBExists(dbId)
 	if err != nil {
@@ -592,13 +540,15 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 					err = ErrTableCreateTimeout
 					return
 				default:
-					if c.dbIdStart <= c.dbIdEnd {
-						id = c.dbIdStart
-						atomic.AddUint64(&c.dbIdStart, 1)
-						logutil.Debugf("alloc db id finished, id is %d, endId is %d", id, c.dbIdEnd)
-						return
+					if atomic.LoadInt32(&c.pLock) == 0 {
+						id = atomic.AddUint64(&c.dbIdStart, 1) - 1
+						if id <= atomic.LoadUint64(&c.dbIdEnd) {
+							logutil.Debugf("alloc db id finished, id is %d, endId is %d", id, c.dbIdEnd)
+							return
+						} else {
+							c.refreshDBIDCache()
+						}
 					}
-					c.refreshDBIDCache()
 					time.Sleep(time.Millisecond * 10)
 				}
 			}
@@ -612,12 +562,14 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 					err = ErrTableCreateTimeout
 					return
 				default:
-					if c.tidStart <= c.tidEnd {
-						id = c.tidStart
-						atomic.AddUint64(&c.tidStart, 1)
-						logutil.Infof("alloc table id finished, id is %d, endId is %d", id, c.tidEnd)
-						go c.refreshTableIDCache()
-						return
+					if atomic.LoadInt32(&c.pLock) == 0 {
+						id = atomic.AddUint64(&c.tidStart, 1) - 1
+						if id <= atomic.LoadUint64(&c.tidEnd) {
+							logutil.Debugf("alloc table id finished, id is %d, endId is %d", id, c.tidEnd)
+							return
+						} else {
+							c.refreshTableIDCache()
+						}
 					}
 					time.Sleep(time.Millisecond * 10)
 				}
