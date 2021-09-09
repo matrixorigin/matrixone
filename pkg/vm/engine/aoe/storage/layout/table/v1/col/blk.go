@@ -36,44 +36,44 @@ type IColumnBlock interface {
 	GetVectorReader() dbi.IVectorReader
 }
 
-type ColumnBlock struct {
+type columnBlock struct {
 	sync.RWMutex
 	common.RefHelper
-	ColIdx      int
-	Meta        *md.Block
-	SegmentFile base.ISegmentFile
-	IndexHolder *index.BlockHolder
-	Type        base.BlockType
+	colIdx      int
+	meta        *md.Block
+	segFile     base.ISegmentFile
+	indexHolder *index.BlockHolder
+	typ         base.BlockType
 }
 
-func (blk *ColumnBlock) GetSegmentFile() base.ISegmentFile {
-	return blk.SegmentFile
+func (blk *columnBlock) GetSegmentFile() base.ISegmentFile {
+	return blk.segFile
 }
 
-func (blk *ColumnBlock) GetIndexHolder() *index.BlockHolder {
-	return blk.IndexHolder
+func (blk *columnBlock) GetIndexHolder() *index.BlockHolder {
+	return blk.indexHolder
 }
 
-func (blk *ColumnBlock) GetColIdx() int {
-	return blk.ColIdx
+func (blk *columnBlock) GetColIdx() int {
+	return blk.colIdx
 }
 
-func (blk *ColumnBlock) GetColType() types.Type {
-	return blk.Meta.Segment.Table.Schema.ColDefs[blk.ColIdx].Type
+func (blk *columnBlock) GetColType() types.Type {
+	return blk.meta.Segment.Table.Schema.ColDefs[blk.colIdx].Type
 }
 
-func (blk *ColumnBlock) GetMeta() *md.Block {
-	return blk.Meta
+func (blk *columnBlock) GetMeta() *md.Block {
+	return blk.meta
 }
 
-func (blk *ColumnBlock) GetType() base.BlockType {
-	return blk.Type
+func (blk *columnBlock) GetType() base.BlockType {
+	return blk.typ
 }
 
-func (blk *ColumnBlock) GetRowCount() uint64 {
-	return atomic.LoadUint64(&blk.Meta.Count)
+func (blk *columnBlock) GetRowCount() uint64 {
+	return atomic.LoadUint64(&blk.meta.Count)
 }
 
-func (blk *ColumnBlock) GetID() uint64 {
-	return blk.Meta.ID
+func (blk *columnBlock) GetID() uint64 {
+	return blk.meta.ID
 }

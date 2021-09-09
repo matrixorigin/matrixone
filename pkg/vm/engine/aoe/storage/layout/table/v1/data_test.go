@@ -6,6 +6,7 @@ import (
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,7 +34,9 @@ func TestBase1(t *testing.T) {
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(2000)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
-	tblData := NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
+	tables := NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tblData, err := tables.RegisterTable(tableMeta)
+	assert.Nil(t, err)
 
 	idx := 0
 	segIds := tableMeta.SegmentIDs()

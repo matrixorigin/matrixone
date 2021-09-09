@@ -176,21 +176,21 @@ func readData() {
 			if err != nil {
 				panic(err)
 			}
-			for _, attr := range attrs {
+			for coli, attr := range attrs {
 				wg.Add(1)
-				f := func(b *batch.Batch, col string) func() {
+				f := func(b *batch.Batch, i int, col string) func() {
 					return func() {
 						gm := guest.New(1<<48, hm)
 						proc2 := process.New(gm, mempool.New(1<<48, 8))
 						defer wg.Done()
-						v := bat.GetVector(col, proc2)
+						v, _ := b.Is[i].R.Read(b.Is[i].Len, b.Is[i].Ref, attr, proc)
 						if v != nil {
 							v.Free(proc2)
 						}
 						atomic.AddUint64(&totalRows, uint64(v.Length()))
 					}
 				}
-				readPool.Submit(f(bat, attr))
+				readPool.Submit(f(bat, coli, attr))
 			}
 		}
 	}

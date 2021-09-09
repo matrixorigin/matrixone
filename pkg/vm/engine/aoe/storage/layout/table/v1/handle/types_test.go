@@ -6,6 +6,7 @@ import (
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,11 +25,13 @@ func TestSnapshot(t *testing.T) {
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(capacity)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
+	tables := table.NewTables(new(sync.RWMutex), ldio.DefaultFsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
 
 	info := md.MockInfo(&opts.Mu, row_count, uint64(blk_cnt))
 	tableMeta := md.MockTable(info, schema, uint64(blk_cnt*seg_cnt))
 
-	tableData := table.NewTableData(ldio.DefaultFsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
+	tableData, err := tables.RegisterTable(tableMeta)
+	assert.Nil(t, err)
 	t.Logf("TableData Refs=%d", tableData.RefCount())
 	segIDs := table.MockSegments(tableMeta, tableData)
 	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())

@@ -64,12 +64,11 @@ func TestAll(t *testing.T) {
 	segHolder.Init(segFile)
 	t.Log(tblHolder.String())
 	t.Log(segHolder.GetBlockCount())
-	seg := &table2.Segment{
-		Type:        base.SORTED_SEG,
-		Meta:        segment,
-		IndexHolder: segHolder,
-		SegmentFile: segFile,
-	}
+	seg := table2.NewSimpleSegment(
+		base.SORTED_SEG,
+		segment,
+		segHolder,
+		segFile)
 	s := &Segment{
 		Data: seg,
 		Ids:  new(atomic.Value),

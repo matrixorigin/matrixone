@@ -24,6 +24,7 @@ type ITableData interface {
 	GetSegmentCount() uint32
 	GetSegmentedIndex() (uint64, bool)
 	GetIndexHolder() *index.TableHolder
+	InitReplay()
 	RegisterSegment(meta *md.Segment) (seg ISegment, err error)
 	RegisterBlock(meta *md.Block) (blk IBlock, err error)
 	StrongRefSegment(id uint64) ISegment

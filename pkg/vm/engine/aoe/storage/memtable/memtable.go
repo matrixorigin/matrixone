@@ -2,7 +2,7 @@ package memtable
 
 import (
 	"fmt"
-	ro "matrixone/pkg/container/batch"
+	gBatch "matrixone/pkg/container/batch"
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -12,35 +12,35 @@ import (
 	"sync"
 )
 
-type MemTable struct {
+type memTable struct {
 	sync.RWMutex
 	common.RefHelper
-	Opts      *engine.Options
-	TableData iface.ITableData
-	Full      bool
-	Batch     batch.IBatch
-	Meta      *md.Block
-	TableMeta *md.Table
-	Block     iface.IBlock
+	opts      *engine.Options
+	tableData iface.ITableData
+	full      bool
+	ibat      batch.IBatch
+	meta      *md.Block
+	tableMeta *md.Table
+	iblk      iface.IBlock
 }
 
 var (
-	_ imem.IMemTable = (*MemTable)(nil)
+	_ imem.IMemTable = (*memTable)(nil)
 )
 
 func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IBlock) imem.IMemTable {
-	mt := &MemTable{
-		Opts:      opts,
-		TableData: tableData,
-		Batch:     data.GetFullBatch(),
-		Block:     data,
-		Meta:      data.GetMeta(),
-		TableMeta: tableData.GetMeta(),
+	mt := &memTable{
+		opts:      opts,
+		tableData: tableData,
+		ibat:      data.GetFullBatch(),
+		iblk:      data,
+		meta:      data.GetMeta(),
+		tableMeta: tableData.GetMeta(),
 	}
 
-	for idx, colIdx := range mt.Batch.GetAttrs() {
-		vec := mt.Batch.GetVectorByAttr(colIdx)
-		vec.PlacementNew(mt.Meta.Segment.Table.Schema.ColDefs[idx].Type)
+	for idx, colIdx := range mt.ibat.GetAttrs() {
+		vec := mt.ibat.GetVectorByAttr(colIdx)
+		vec.PlacementNew(mt.meta.Segment.Table.Schema.ColDefs[idx].Type)
 	}
 
 	mt.OnZeroCB = mt.close
@@ -48,15 +48,15 @@ func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IB
 	return mt
 }
 
-func (mt *MemTable) GetID() common.ID {
-	return mt.Meta.AsCommonID().AsBlockID()
+func (mt *memTable) GetID() common.ID {
+	return mt.meta.AsCommonID().AsBlockID()
 }
 
-func (mt *MemTable) String() string {
+func (mt *memTable) String() string {
 	mt.RLock()
 	defer mt.RUnlock()
 	id := mt.GetID()
-	bat := mt.Batch
+	bat := mt.ibat
 	length := -1
 	if bat != nil {
 		length = bat.Length()
@@ -65,14 +65,14 @@ func (mt *MemTable) String() string {
 	return s
 }
 
-func (mt *MemTable) Append(bat *ro.Batch, offset uint64, index *md.LogIndex) (n uint64, err error) {
+func (mt *memTable) Append(bat *gBatch.Batch, offset uint64, index *md.LogIndex) (n uint64, err error) {
 	mt.Lock()
 	defer mt.Unlock()
 	var na int
-	for idx, attr := range mt.Batch.GetAttrs() {
+	for idx, attr := range mt.ibat.GetAttrs() {
 		for i, a := range bat.Attrs {
-			if a == mt.TableMeta.Schema.ColDefs[idx].Name {
-				if na, err = mt.Batch.GetVectorByAttr(attr).AppendVector(bat.Vecs[i], int(offset)); err != nil {
+			if a == mt.tableMeta.Schema.ColDefs[idx].Name {
+				if na, err = mt.ibat.GetVectorByAttr(attr).AppendVector(bat.Vecs[i], int(offset)); err != nil {
 					return n, err
 				}
 			}
@@ -80,19 +80,19 @@ func (mt *MemTable) Append(bat *ro.Batch, offset uint64, index *md.LogIndex) (n 
 	}
 	n = uint64(na)
 	index.Count = n
-	mt.Meta.SetIndex(*index)
-	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
-	mt.Meta.AddCount(n)
-	mt.TableData.AddRows(n)
-	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
-	if uint64(mt.Batch.Length()) == mt.Meta.MaxRowCount {
-		mt.Full = true
-		mt.Meta.DataState = md.FULL
+	mt.meta.SetIndex(*index)
+	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.meta.GetCount())
+	mt.meta.AddCount(n)
+	mt.tableData.AddRows(n)
+	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.meta.GetCount())
+	if uint64(mt.ibat.Length()) == mt.meta.MaxRowCount {
+		mt.full = true
+		mt.meta.DataState = md.FULL
 	}
 	return n, err
 }
 
-// A flush worker call this Flush API. When a MemTable is ready to flush. It immutable.
+// A flush worker call this Flush API. When a memTable is ready to flush. It immutable.
 // Steps:
 // 1. Serialize mt.Data to block_file (dir/$table_id_$segment_id_$block_id.blk)
 // 2. Create a UpdateBlockOp and excute it
@@ -100,49 +100,47 @@ func (mt *MemTable) Append(bat *ro.Batch, offset uint64, index *md.LogIndex) (n 
 // If crashed before Step 1, all data from last checkpoint will be restored from WAL
 // If crashed before Step 2, the untracked block file will be cleanup at startup.
 // If crashed before Step 3, same as above.
-func (mt *MemTable) Flush() error {
-	mt.Opts.EventListener.FlushBlockBeginCB(mt)
-	writer := &MemtableWriter{
-		Opts:     mt.Opts,
-		Dirname:  mt.Meta.Segment.Table.Conf.Dir,
-		Memtable: mt,
+func (mt *memTable) Flush() error {
+	mt.opts.EventListener.FlushBlockBeginCB(mt)
+	writer := &memTableWriter{
+		memTable: mt,
 	}
 	err := writer.Flush()
 	if err != nil {
-		mt.Opts.EventListener.BackgroundErrorCB(err)
+		mt.opts.EventListener.BackgroundErrorCB(err)
 		return err
 	}
-	mt.Opts.EventListener.FlushBlockEndCB(mt)
+	mt.opts.EventListener.FlushBlockEndCB(mt)
 	// err = mt.scheduleEvents()
 	return err
 }
 
-func (mt *MemTable) GetMeta() *md.Block {
-	return mt.Meta
+func (mt *memTable) GetMeta() *md.Block {
+	return mt.meta
 }
 
-func (mt *MemTable) Unpin() {
-	if mt.Batch != nil {
-		mt.Batch.Close()
-		mt.Batch = nil
-	}
-}
-
-func (mt *MemTable) close() {
-	if mt.Batch != nil {
-		mt.Batch.Close()
-		mt.Batch = nil
-	}
-	if mt.Block != nil {
-		mt.Block.Unref()
-		mt.Block = nil
-	}
-	if mt.TableData != nil {
-		mt.TableData.Unref()
-		mt.TableData = nil
+func (mt *memTable) Unpin() {
+	if mt.ibat != nil {
+		mt.ibat.Close()
+		mt.ibat = nil
 	}
 }
 
-func (mt *MemTable) IsFull() bool {
-	return mt.Full
+func (mt *memTable) close() {
+	if mt.ibat != nil {
+		mt.ibat.Close()
+		mt.ibat = nil
+	}
+	if mt.iblk != nil {
+		mt.iblk.Unref()
+		mt.iblk = nil
+	}
+	if mt.tableData != nil {
+		mt.tableData.Unref()
+		mt.tableData = nil
+	}
+}
+
+func (mt *memTable) IsFull() bool {
+	return mt.full
 }
