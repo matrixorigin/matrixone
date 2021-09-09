@@ -118,7 +118,7 @@ type IBlockFactory interface {
 type IMutBlock interface {
 	IBlock
 	WithPinedContext(func(mb.IMutableBlock) error) error
-	Pin() bb.INodeHandle
+	MakeHandle() bb.INodeHandle
 }
 
 type IColBlockHandle interface {

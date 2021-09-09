@@ -59,19 +59,19 @@ func (p *metablkCommiter) doSchedule(meta *md.Block) {
 	p.scheduler.Schedule(commit)
 }
 
-func (p *metablkCommiter) Accept(e *flushMemtableEvent) {
+func (p *metablkCommiter) Accept(meta *md.Block) {
 	// TODO: retry logic
-	if err := e.GetError(); err != nil {
-		panic(err)
-	}
-	if e.Meta == nil {
+	// if err := e.GetError(); err != nil {
+	// 	panic(err)
+	// }
+	if meta == nil {
 		return
 	}
 	p.Lock()
-	if p.pendings[0] != e.Meta.ID {
-		p.flushdones[e.Meta.ID] = e.Meta
+	if p.pendings[0] != meta.ID {
+		p.flushdones[meta.ID] = meta
 	} else {
-		p.doSchedule(e.Meta)
+		p.doSchedule(meta)
 		var i int
 		for i = 1; i < len(p.pendings); i++ {
 			meta, ok := p.flushdones[p.pendings[i]]
@@ -164,16 +164,16 @@ func (s *scheduler) onPrecommitBlkDone(e sched.Event) {
 }
 
 func (s *scheduler) onFlushBlkDone(e sched.Event) {
-	// event := e.(*flushMemblockEvent)
-	// s.commiters.mu.RLock()
-	// commiter := s.commiters.blkmap[event.Meta.Segment.Table.ID]
-	// s.commiters.mu.RUnlock()
-	// commiter.Accept(event)
-	// s.commiters.mu.Lock()
-	// if commiter.IsEmpty() {
-	// 	delete(s.commiters.blkmap, event.Meta.Segment.Table.ID)
-	// }
-	// s.commiters.mu.Unlock()
+	event := e.(*flushMemblockEvent)
+	s.commiters.mu.RLock()
+	commiter := s.commiters.blkmap[event.Meta.Segment.Table.ID]
+	s.commiters.mu.RUnlock()
+	commiter.Accept(event.Meta)
+	s.commiters.mu.Lock()
+	if commiter.IsEmpty() {
+		delete(s.commiters.blkmap, event.Meta.Segment.Table.ID)
+	}
+	s.commiters.mu.Unlock()
 }
 
 func (s *scheduler) onFlushMemtableDone(e sched.Event) {
@@ -181,7 +181,7 @@ func (s *scheduler) onFlushMemtableDone(e sched.Event) {
 	s.commiters.mu.RLock()
 	commiter := s.commiters.blkmap[event.Meta.Segment.Table.ID]
 	s.commiters.mu.RUnlock()
-	commiter.Accept(event)
+	commiter.Accept(event.Meta)
 	s.commiters.mu.Lock()
 	if commiter.IsEmpty() {
 		delete(s.commiters.blkmap, event.Meta.Segment.Table.ID)

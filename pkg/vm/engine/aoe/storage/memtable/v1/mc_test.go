@@ -25,7 +25,7 @@ func TestMutCollection(t *testing.T) {
 	dir := "/tmp/memtable/mc"
 	os.RemoveAll(dir)
 	colcnt := 2
-	blockRows, blockCnt := uint64(1024), uint64(4)
+	blockRows, blockCnt := uint64(64), uint64(4)
 
 	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt)
 
@@ -57,9 +57,9 @@ func TestMutCollection(t *testing.T) {
 	assert.Nil(t, err)
 
 	c0 := newMutableCollection(manager, t0)
-	blks := uint64(20)
+	blks := uint64(10)
 	expectBlks := blks
-	batchSize := uint64(8)
+	batchSize := uint64(4)
 	step := expectBlks / batchSize
 	var wg sync.WaitGroup
 	seq := uint64(0)
@@ -86,9 +86,12 @@ func TestMutCollection(t *testing.T) {
 		}(logId, &wg)
 	}
 	wg.Wait()
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	t.Log(mgr.String())
+	time.Sleep(time.Duration(50) * time.Millisecond)
 	c0.Unref()
+	time.Sleep(time.Duration(50) * time.Millisecond)
 	assert.Equal(t, int64(0), t0.RefCount())
+	t.Log(mgr.String())
+	t.Log(sstBufMgr.String())
+	t.Log(t0.String())
 	assert.Equal(t, 0, mgr.Count())
 }

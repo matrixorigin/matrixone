@@ -120,12 +120,12 @@ func (c *mutableCollection) Append(bat *batch.Batch, index *metadata.LogIndex) (
 		offset = replayIndex.Count
 		tableMeta.ResetReplayIndex()
 	}
-	blkHandle := c.mutBlk.Pin()
+	blkHandle := c.mutBlk.MakeHandle()
 	for {
 		if c.mutBlk.GetMeta().IsFull() {
 			c.onImmut()
 			blkHandle.Close()
-			blkHandle = c.mutBlk.Pin()
+			blkHandle = c.mutBlk.MakeHandle()
 		}
 		blk := blkHandle.GetNode().(mb.IMutableBlock)
 		n, err := c.doAppend(blk, bat, offset, index)

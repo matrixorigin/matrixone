@@ -36,6 +36,10 @@ func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory
 	for i, colDef := range meta.Segment.Table.Schema.ColDefs {
 		blk.coarseSize[colDef.Name] = col.EstimateStdColumnCapacity(i, meta)
 	}
+	blk.GetObject = func() interface{} { return blk }
+	blk.Pin = func(o interface{}) { o.(iface.IBlock).Ref() }
+	blk.Unpin = func(o interface{}) { o.(iface.IBlock).Unref() }
+
 	blk.OnZeroCB = blk.close
 	blk.Ref()
 	return blk, nil
@@ -45,6 +49,7 @@ func (blk *tblock) close() {
 	blk.baseBlock.release()
 	blk.node.SetStale()
 	blk.node.Close()
+	blk.OnVersionStale()
 }
 
 func (blk *tblock) getHandle() bb.INodeHandle {
@@ -63,7 +68,7 @@ func (blk *tblock) WithPinedContext(fn func(mb.IMutableBlock) error) error {
 	return err
 }
 
-func (blk *tblock) Pin() bb.INodeHandle {
+func (blk *tblock) MakeHandle() bb.INodeHandle {
 	return blk.getHandle()
 }
 
@@ -84,6 +89,7 @@ func (blk *tblock) GetSegmentedIndex() (id uint64, ok bool) {
 }
 
 func (blk *tblock) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
+	defer host.Unref()
 	return newBlock(host, meta)
 }
 
