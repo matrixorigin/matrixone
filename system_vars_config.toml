@@ -328,6 +328,16 @@
 #	UpdateMode:	dynamic
 	loadDataParserType = 0
 
+#	Name:	loadDataConcurrencyCount
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[16]
+#	Comment:	default is 16. The count of go routine writing batch into the storage.
+#	UpdateMode:	dynamic
+	loadDataConcurrencyCount = 16
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

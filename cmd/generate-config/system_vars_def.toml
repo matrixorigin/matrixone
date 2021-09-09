@@ -347,6 +347,16 @@ values = ["0", "1"]
 comment = "default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "loadDataConcurrencyCount"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["16"]
+comment = "default is 16. The count of go routine writing batch into the storage."
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

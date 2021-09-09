@@ -2097,7 +2097,7 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 		wait_d := time.Now()
 		for i, line := range fetchLines {
 			//fmt.Printf("line %d %v \n",i,line)
-			wait_a := time.Now()
+			//wait_a := time.Now()
 			rowIdx := batchBegin + i
 			//record missing column
 			for k := 0; k < len(columnFLags); k++ {
@@ -2274,9 +2274,9 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 					panic("unsupported oid")
 				}
 			}
-			row2col += time.Since(wait_a)
+			//row2col += time.Since(wait_a)
 
-			wait_b := time.Now()
+			//wait_b := time.Now()
 			//the row does not have field
 			for k := 0; k < len(columnFLags); k++ {
 				if 0 == columnFLags[k] {
@@ -2290,7 +2290,7 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 					vec.Nsp.Add(uint64(rowIdx))
 				}
 			}
-			fillBlank += time.Since(wait_b)
+			//fillBlank += time.Since(wait_b)
 		}
 		handler.choose_true += time.Since(wait_d)
 	} else{
@@ -2524,7 +2524,7 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 
 		wait_b := time.Now()
 		//the row does not have field
-		for k := 0; k < len(columnFLags); k++ {
+		for k := 0; k < len(columnFLags	); k++ {
 			if 0 == columnFLags[k] {
 				vec := batchData.Vecs[k]
 				//row
