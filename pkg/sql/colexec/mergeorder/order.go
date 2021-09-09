@@ -71,8 +71,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			proc.Reg.Ax = nil
 			return true, nil
 		}
+	    return false, nil
 	}
-	return false, nil
 }
 
 func (ctr *Container) build(n *Argument, proc *process.Process) error {
