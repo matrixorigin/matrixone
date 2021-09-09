@@ -10,8 +10,10 @@ import (
 type BlockFlusher = func(base.INode, batch.IBatch, *metadata.Block, *dataio.TransientBlockFile) error
 
 type IMutableBlock interface {
+	base.INode
 	GetData() batch.IBatch
 	GetFile() *dataio.TransientBlockFile
 	GetSegmentedIndex() (uint64, bool)
 	GetMeta() *metadata.Block
+	SetStale()
 }

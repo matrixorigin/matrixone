@@ -21,7 +21,7 @@ import (
 type tblock struct {
 	common.BaseMvcc
 	baseBlock
-	node       bb.INode
+	node       mb.IMutableBlock
 	nodeMgr    bb.INodeManager
 	coarseSize map[string]uint64
 }
@@ -29,7 +29,7 @@ type tblock struct {
 func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory) (*tblock, error) {
 	blk := &tblock{
 		baseBlock:  *newBaseBlock(host, meta),
-		node:       factory.CreateNode(host.GetSegmentFile(), meta),
+		node:       factory.CreateNode(host.GetSegmentFile(), meta).(mb.IMutableBlock),
 		nodeMgr:    factory.GetManager(),
 		coarseSize: make(map[string]uint64),
 	}
@@ -43,6 +43,7 @@ func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory
 
 func (blk *tblock) close() {
 	blk.baseBlock.release()
+	blk.node.SetStale()
 	blk.node.Close()
 }
 
@@ -57,8 +58,7 @@ func (blk *tblock) getHandle() bb.INodeHandle {
 
 func (blk *tblock) WithPinedContext(fn func(mb.IMutableBlock) error) error {
 	h := blk.getHandle()
-	n := h.GetNode().(mb.IMutableBlock)
-	err := fn(n)
+	err := fn(blk.node)
 	h.Close()
 	return err
 }
@@ -69,8 +69,7 @@ func (blk *tblock) Pin() bb.INodeHandle {
 
 func (blk *tblock) ProcessData(fn func(batch.IBatch) error) error {
 	h := blk.getHandle()
-	n := h.GetNode()
-	data := n.(mb.IMutableBlock).GetData()
+	data := blk.node.GetData()
 	err := fn(data)
 	h.Close()
 	return err
@@ -81,8 +80,7 @@ func (blk *tblock) Size(attr string) uint64 {
 }
 
 func (blk *tblock) GetSegmentedIndex() (id uint64, ok bool) {
-	n := blk.node.(mb.IMutableBlock)
-	return n.GetSegmentedIndex()
+	return blk.node.GetSegmentedIndex()
 }
 
 func (blk *tblock) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
@@ -109,8 +107,7 @@ func (blk *tblock) getVectorCopyFactory(attr string, ref uint64, proc *process.P
 func (blk *tblock) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*gvec.Vector, error) {
 	fn := blk.getVectorCopyFactory(attr, ref, proc)
 	h := blk.getHandle()
-	n := h.GetNode()
-	data := n.(mb.IMutableBlock).GetData()
+	data := blk.node.GetData()
 	v, err := fn(data)
 	h.Close()
 	return v, err

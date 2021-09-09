@@ -41,6 +41,7 @@ const (
 	PrepareCommitBlockTask
 	PrecommitBlkMetaTask
 	FlushMemtableTask
+	FlushBlkTask
 	FlushTBlkTask
 	MetaCreateTableTask
 	MetaDropTableTask

@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync/atomic"
+	// "matrixone/pkg/logutil"
 )
 
 type blockFlusher struct{}
@@ -20,12 +21,13 @@ func (f blockFlusher) flush(node base.INode, data batch.IBatch, meta *metadata.B
 
 type MutableBlockNode struct {
 	buffer.Node
-	TableData iface.ITableData
-	Meta      *metadata.Block
-	File      *dataio.TransientBlockFile
-	Data      batch.IBatch
-	Flusher   mb.BlockFlusher
-	Applied   uint64
+	TableData    iface.ITableData
+	Meta         *metadata.Block
+	File         *dataio.TransientBlockFile
+	Data         batch.IBatch
+	Flusher      mb.BlockFlusher
+	AppliedIndex uint64
+	Stale        *atomic.Value
 }
 
 func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
@@ -39,6 +41,7 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 		Meta:      meta,
 		TableData: tabledata,
 		Flusher:   flusher,
+		Stale:     new(atomic.Value),
 	}
 	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), 0)
 	n.UnloadFunc = n.unload
@@ -47,11 +50,18 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 	return n
 }
 
+func (n *MutableBlockNode) SetStale() {
+	n.Stale.Store(true)
+}
+
 func (n *MutableBlockNode) destroy() {
 	n.File.Unref()
 }
 
 func (n *MutableBlockNode) Flush() error {
+	if n.Stale.Load() == true {
+		return nil
+	}
 	n.RLock()
 	currSize := n.Data.Length()
 	if ok := n.File.PreSync(uint32(currSize)); !ok {
@@ -78,12 +88,12 @@ func (n *MutableBlockNode) Flush() error {
 func (n *MutableBlockNode) updateApplied(meta *metadata.Block) {
 	applied, ok := meta.GetAppliedIndex()
 	if ok {
-		atomic.StoreUint64(&n.Applied, applied)
+		atomic.StoreUint64(&n.AppliedIndex, applied)
 	}
 }
 
 func (n *MutableBlockNode) GetSegmentedIndex() (uint64, bool) {
-	idx := atomic.LoadUint64(&n.Applied)
+	idx := atomic.LoadUint64(&n.AppliedIndex)
 	if idx == uint64(0) {
 		return idx, false
 	}
@@ -97,6 +107,9 @@ func (n *MutableBlockNode) load() {
 
 func (n *MutableBlockNode) unload() {
 	// logutil.Infof("%s presyncing %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
+	if n.Stale.Load() == true {
+		return
+	}
 	if ok := n.File.PreSync(uint32(n.Data.Length())); ok {
 		meta := n.Meta.Copy()
 		if err := n.Flusher(n, n.Data, meta, n.File); err != nil {

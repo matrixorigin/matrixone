@@ -23,7 +23,7 @@ func NewFlushMemBlockEvent(ctx *Context, blk iface.IMutBlock) *flushMemblockEven
 	}
 	e.BaseEvent = BaseEvent{
 		Ctx:       ctx,
-		BaseEvent: *sched.NewBaseEvent(e, sched.FlushMemtableTask, ctx.DoneCB, ctx.Waitable),
+		BaseEvent: *sched.NewBaseEvent(e, sched.FlushBlkTask, ctx.DoneCB, ctx.Waitable),
 	}
 	return e
 }

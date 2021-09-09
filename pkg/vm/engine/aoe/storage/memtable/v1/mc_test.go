@@ -1,7 +1,9 @@
 package memtable
 
 import (
+	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
@@ -9,16 +11,17 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestMutCollection(t *testing.T) {
-	return
 	dir := "/tmp/memtable/mc"
 	os.RemoveAll(dir)
 	colcnt := 2
@@ -46,7 +49,12 @@ func TestMutCollection(t *testing.T) {
 	mtBufMgr := bmgr.NewBufferManager(dir, capacity)
 	sstBufMgr := bmgr.NewBufferManager(dir, capacity)
 
-	t0 := table.NewTableData(nil, fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tbl)
+	maxsize := uint64(capacity)
+	evicter := bm.NewSimpleEvictHolder()
+	mgr := buffer.NewNodeManager(maxsize, evicter)
+	factory := factories.NewMutFactory(mgr, nil)
+
+	t0 := table.NewTableData(factory, fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tbl)
 	err = tables.CreateTable(t0)
 	assert.Nil(t, err)
 
@@ -80,4 +88,9 @@ func TestMutCollection(t *testing.T) {
 		}(logId, &wg)
 	}
 	wg.Wait()
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	t.Log(mgr.String())
+	c0.Unref()
+	assert.Equal(t, int64(0), t0.RefCount())
+	assert.Equal(t, 0, mgr.Count())
 }

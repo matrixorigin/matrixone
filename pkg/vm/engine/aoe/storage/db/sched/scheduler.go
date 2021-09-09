@@ -119,6 +119,7 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	dispatcher.RegisterHandler(sched.StatelessEvent, statelessHandler)
 	dispatcher.RegisterHandler(sched.FlushSegTask, flushsegHandler)
 	dispatcher.RegisterHandler(sched.FlushMemtableTask, flushblkHandler)
+	dispatcher.RegisterHandler(sched.FlushBlkTask, flushblkHandler)
 	dispatcher.RegisterHandler(sched.CommitBlkTask, metaHandler)
 	dispatcher.RegisterHandler(sched.UpgradeBlkTask, memdataHandler)
 	dispatcher.RegisterHandler(sched.UpgradeSegTask, memdataHandler)
@@ -133,6 +134,7 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	s.RegisterDispatcher(sched.StatelessEvent, dispatcher)
 	s.RegisterDispatcher(sched.FlushSegTask, dispatcher)
 	s.RegisterDispatcher(sched.FlushMemtableTask, dispatcher)
+	s.RegisterDispatcher(sched.FlushBlkTask, dispatcher)
 	s.RegisterDispatcher(sched.CommitBlkTask, dispatcher)
 	s.RegisterDispatcher(sched.UpgradeBlkTask, dispatcher)
 	s.RegisterDispatcher(sched.UpgradeSegTask, dispatcher)
@@ -157,6 +159,19 @@ func (s *scheduler) onPrecommitBlkDone(e sched.Event) {
 	}
 	commiter.Register(event)
 	s.commiters.mu.Unlock()
+}
+
+func (s *scheduler) onFlushBlkDone(e sched.Event) {
+	// event := e.(*flushMemblockEvent)
+	// s.commiters.mu.RLock()
+	// commiter := s.commiters.blkmap[event.Meta.Segment.Table.ID]
+	// s.commiters.mu.RUnlock()
+	// commiter.Accept(event)
+	// s.commiters.mu.Lock()
+	// if commiter.IsEmpty() {
+	// 	delete(s.commiters.blkmap, event.Meta.Segment.Table.ID)
+	// }
+	// s.commiters.mu.Unlock()
 }
 
 func (s *scheduler) onFlushMemtableDone(e sched.Event) {
@@ -258,6 +273,8 @@ func (s *scheduler) OnExecDone(op interface{}) {
 	switch e.Type() {
 	case sched.FlushMemtableTask:
 		s.onFlushMemtableDone(e)
+	case sched.FlushBlkTask:
+		s.onFlushBlkDone(e)
 	case sched.CommitBlkTask:
 		s.onCommitBlkDone(e)
 	case sched.UpgradeBlkTask:

@@ -91,7 +91,7 @@ func (bf *BlockFile) close() {
 
 func (bf *BlockFile) Destory() {
 	name := bf.Name()
-	logutil.S().Infof(" %s | BlockFile | Destorying", name)
+	logutil.Infof(" %s | BlockFile | Destorying", name)
 	err := os.Remove(name)
 	if err != nil {
 		panic(err)

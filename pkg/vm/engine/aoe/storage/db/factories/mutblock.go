@@ -28,7 +28,7 @@ func (f *mutNodeFactory) GetManager() bb.INodeManager {
 
 func (f *mutNodeFactory) CreateNode(segfile base.ISegmentFile, meta *metadata.Block) bb.INode {
 	blkfile := dataio.NewTBlockFile(segfile, *meta.AsCommonID())
-	f.tdata.Ref()
+	// f.tdata.Ref()
 	n := mutation.NewMutableBlockNode(f.host.mgr, blkfile, f.tdata, meta, f.host.flusher)
 	f.host.mgr.RegisterNode(n)
 	return n
