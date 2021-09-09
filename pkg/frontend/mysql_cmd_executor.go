@@ -425,7 +425,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 			}
 		}
 
-		logutil.Infof("time of getDataFromPipeline : %s ",time.Since(begin).String())
+		logutil.Infof("time of getDataFromPipeline : %s ", time.Since(begin).String())
 	} else {
 
 		if n := len(bat.Sels); n == 0 {
@@ -869,9 +869,36 @@ func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 }
 
 /*
+handle "SELECT @@max_allowed_packet"
+*/
+func (mce *MysqlCmdExecutor) handleMaxAllowedPacket() error {
+	var err error = nil
+	ses := mce.routine.GetSession()
+	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+
+	col := new(MysqlColumn)
+	col.SetColumnType(defines.MYSQL_TYPE_LONG)
+	col.SetName("@@max_allowed_packet")
+	ses.Mrs.AddColumn(col)
+
+	var data = make([]interface{}, 1)
+	//16MB
+	data[0] = 16777216
+	ses.Mrs.AddRow(data)
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
+/*
 handle Load Data statement
- */
-func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error  {
+*/
+func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	var err error = nil
 	routine := mce.routine
 	//ses := mce.routine.GetSession()
@@ -880,26 +907,26 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error  {
 	logutil.Infof("+++++load data")
 
 	/*
-	TODO:support LOCAL
-	 */
+		TODO:support LOCAL
+	*/
 	if load.Local {
 		return fmt.Errorf("LOCAL is unsupported now")
 	}
 
 	/*
-	check file
-	 */
-	exist,isfile,err := PathExists(load.File)
-	if err != nil || !exist{
-		return fmt.Errorf("file %s does exist. err:%v",load.File,err)
+		check file
+	*/
+	exist, isfile, err := PathExists(load.File)
+	if err != nil || !exist {
+		return fmt.Errorf("file %s does exist. err:%v", load.File, err)
 	}
 
 	if !isfile {
-		return fmt.Errorf("file %s is a directory.",load.File)
+		return fmt.Errorf("file %s is a directory.", load.File)
 	}
 
 	/*
-	check database
+		check database
 	*/
 	loadDb := string(load.Table.Schema())
 	loadTable := string(load.Table.Name())
@@ -1012,6 +1039,16 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 								continue
 							}
 						}
+					} else if ve, ok := sc.Exprs[0].Expr.(*tree.VarExpr); ok {
+						if strings.ToLower(ve.Name) == "max_allowed_packet" {
+							err = mce.handleMaxAllowedPacket()
+							if err != nil {
+								return err
+							}
+
+							//next statement
+							continue
+						}
 					}
 				}
 			}
@@ -1022,13 +1059,15 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus, *tree.DropDatabase,*tree.Load:
+				*tree.ShowStatus, *tree.DropDatabase, *tree.Load:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
 		}
 
 		var selfHandle = false
+
+
 
 		switch st := stmt.(type) {
 		case *tree.Use:
@@ -1040,6 +1079,11 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			err = proto.sendOKPacket(0, 0, 0, 0, "")
 			if err != nil {
 				return err
+			}
+		case *tree.DropDatabase:
+			// if the droped database is the same as the one in use, database must be reseted to empty.
+			if string(st.Name) == mce.routine.db {
+				mce.routine.db = ""
 			}
 		case *tree.Load:
 			selfHandle = true
@@ -1258,7 +1302,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				return err
 			}
 			if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-				logutil.Infof("time of SendResponse %s",time.Since(echoTime).String())
+				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
 		}
 	}
@@ -1297,7 +1341,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	case COM_QUERY:
 		var query = string(req.GetData().([]byte))
 		mce.addSqlCount(1)
-		logutil.Infof("query:%s", SubStringFromBegin(query,int(ses.Pu.SV.GetLengthOfQueryPrinted())))
+		logutil.Infof("query:%s", SubStringFromBegin(query, int(ses.Pu.SV.GetLengthOfQueryPrinted())))
 		err := mce.doComQuery(query)
 		if err != nil {
 			resp = NewResponse(

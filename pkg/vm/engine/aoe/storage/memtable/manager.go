@@ -3,45 +3,44 @@ package memtable
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	"sync"
-	// log "github.com/sirupsen/logrus"
 )
 
-type Manager struct {
+type manager struct {
 	sync.RWMutex
-	Opts        *engine.Options
-	Collections map[uint64]imem.ICollection
-	TableData   iface.ITableData
+	opts        *engine.Options
+	collections map[uint64]imem.ICollection
+	tableData   iface.ITableData
 }
 
 var (
-	_ imem.IManager = (*Manager)(nil)
+	_ imem.IManager = (*manager)(nil)
 )
 
 func NewManager(opts *engine.Options) imem.IManager {
-	m := &Manager{
-		Opts:        opts,
-		Collections: make(map[uint64]imem.ICollection),
+	m := &manager{
+		opts:        opts,
+		collections: make(map[uint64]imem.ICollection),
 	}
 	return m
 }
 
-func (m *Manager) CollectionIDs() map[uint64]uint64 {
+func (m *manager) CollectionIDs() map[uint64]uint64 {
 	ids := make(map[uint64]uint64)
 	m.RLock()
-	for k, _ := range m.Collections {
+	for k, _ := range m.collections {
 		ids[k] = k
 	}
 	m.RUnlock()
 	return ids
 }
 
-func (m *Manager) WeakRefCollection(id uint64) imem.ICollection {
+func (m *manager) WeakRefCollection(id uint64) imem.ICollection {
 	m.RLock()
-	c, ok := m.Collections[id]
+	c, ok := m.collections[id]
 	m.RUnlock()
 	if !ok {
 		return nil
@@ -49,9 +48,9 @@ func (m *Manager) WeakRefCollection(id uint64) imem.ICollection {
 	return c
 }
 
-func (m *Manager) StrongRefCollection(id uint64) imem.ICollection {
+func (m *manager) StrongRefCollection(id uint64) imem.ICollection {
 	m.RLock()
-	c, ok := m.Collections[id]
+	c, ok := m.collections[id]
 	if ok {
 		c.Ref()
 	}
@@ -62,36 +61,36 @@ func (m *Manager) StrongRefCollection(id uint64) imem.ICollection {
 	return c
 }
 
-func (m *Manager) String() string {
+func (m *manager) String() string {
 	m.RLock()
 	defer m.RUnlock()
-	s := fmt.Sprintf("<MTManager>(TableCnt=%d)", len(m.Collections))
-	for _, c := range m.Collections {
+	s := fmt.Sprintf("<MTManager>(TableCnt=%d)", len(m.collections))
+	for _, c := range m.collections {
 		s = fmt.Sprintf("%s\n\t%s", s, c.String())
 	}
 	return s
 }
 
-func (m *Manager) RegisterCollection(td interface{}) (c imem.ICollection, err error) {
+func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err error) {
 	m.Lock()
 	tableData := td.(iface.ITableData)
-	_, ok := m.Collections[tableData.GetID()]
+	_, ok := m.collections[tableData.GetID()]
 	if ok {
 		m.Unlock()
 		return nil, errors.New("logic error")
 	}
-	c = NewCollection(tableData, m.Opts)
-	m.Collections[tableData.GetID()] = c
+	c = NewCollection(tableData, m.opts)
+	m.collections[tableData.GetID()] = c
 	m.Unlock()
 	c.Ref()
 	return c, err
 }
 
-func (m *Manager) UnregisterCollection(id uint64) (c imem.ICollection, err error) {
+func (m *manager) UnregisterCollection(id uint64) (c imem.ICollection, err error) {
 	m.Lock()
-	c, ok := m.Collections[id]
+	c, ok := m.collections[id]
 	if ok {
-		delete(m.Collections, id)
+		delete(m.collections, id)
 	} else {
 		m.Unlock()
 		return nil, errors.New("logic error")

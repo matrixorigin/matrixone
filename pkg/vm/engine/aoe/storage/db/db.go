@@ -13,9 +13,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/handle"
-	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
+	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -202,6 +202,7 @@ func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
 		return ids
 	}
 	ids.Ids = data.SegmentIds()
+	data.Unref()
 	return ids
 }
 
@@ -270,6 +271,7 @@ func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {
 			tbls := d.Store.MetaInfo.GetTablesByNamePrefix(matcher.Pattern)
 			for _, tbl := range tbls {
 				data, err := d.getTableData(tbl)
+				defer data.Unref()
 				if err != nil {
 					return id, err
 				}

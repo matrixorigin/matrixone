@@ -2,216 +2,135 @@ package col
 
 import (
 	"fmt"
+	"matrixone/pkg/container/types"
+	ro "matrixone/pkg/container/vector"
 	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"sync/atomic"
+	"matrixone/pkg/vm/process"
+	"time"
 )
 
-type StdColumnBlock struct {
-	ColumnBlock
-	Part IColumnPart
+type stdColumnBlock struct {
+	columnBlock
+	part IColumnPart
 }
 
-func NewStdColumnBlock(seg IColumnSegment, meta *md.Block) IColumnBlock {
-	var (
-		blkType base.BlockType
-		segFile base.ISegmentFile
-		err     error
-	)
-	fsMgr := seg.GetFsManager()
-	indexHolder := seg.GetIndexHolder().StrongRefBlock(meta.ID)
-	newIndexHolder := false
-
-	if meta.DataState < md.FULL {
-		blkType = base.TRANSIENT_BLK
-		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
-			newIndexHolder = true
-		}
-	} else if seg.GetSegmentType() == base.UNSORTED_SEG {
-		blkType = base.PERSISTENT_BLK
-		segFile = fsMgr.GetUnsortedFile(seg.GetID())
-		if segFile == nil {
-			segFile, err = fsMgr.RegisterUnsortedFiles(seg.GetID())
-			if err != nil {
-				panic(err)
-			}
-		}
-		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
-			newIndexHolder = true
-		}
-	} else {
-		blkType = base.PERSISTENT_SORTED_BLK
-		segFile = fsMgr.GetUnsortedFile(seg.GetID())
-		if segFile != nil {
-			fsMgr.UpgradeFile(seg.GetID())
-		} else {
-			segFile = fsMgr.GetSortedFile(seg.GetID())
-			if segFile == nil {
-				_, err := fsMgr.RegisterSortedFiles(seg.GetID())
-				if err != nil {
-					panic(err)
-				}
-			}
-		}
-		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(meta.AsCommonID().AsBlockID(), blkType, nil)
-			newIndexHolder = true
-		}
+func EstimateStdColumnCapacity(colIdx int, meta *md.Block) uint64 {
+	switch meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
+	case types.T_json, types.T_char, types.T_varchar:
+		return meta.Segment.Table.Conf.BlockMaxRows * 2 * 4
+	default:
+		return meta.Segment.Table.Conf.BlockMaxRows * uint64(meta.Segment.Table.Schema.ColDefs[colIdx].Type.Size)
 	}
-	blk := &StdColumnBlock{
-		ColumnBlock: ColumnBlock{
-			ID:          *meta.AsCommonID(),
-			Type:        blkType,
-			ColIdx:      seg.GetColIdx(),
-			Meta:        meta,
-			IndexHolder: indexHolder,
+}
+
+func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
+	defer host.Unref()
+	blk := &stdColumnBlock{
+		columnBlock: columnBlock{
+			colIdx:  colIdx,
+			meta:    host.GetMeta(),
+			segFile: host.GetSegmentFile(),
+			typ:     host.GetType(),
 		},
 	}
-
-	if newIndexHolder && segFile != nil {
-		indexHolder.Init(segFile)
+	capacity := EstimateStdColumnCapacity(colIdx, blk.meta)
+	host.Ref()
+	blk.Ref()
+	part := NewColumnPart(host, blk, capacity)
+	for part == nil {
+		blk.Ref()
+		host.Ref()
+		part = NewColumnPart(host, blk, capacity)
+		time.Sleep(time.Duration(1) * time.Millisecond)
 	}
-	return blk.Ref()
+	part.Unref()
+	blk.OnZeroCB = blk.close
+	blk.Ref()
+	return blk
 }
 
-func (blk *StdColumnBlock) CloneWithUpgrade(seg IColumnSegment, newMeta *md.Block) IColumnBlock {
-	if blk.Type == base.PERSISTENT_SORTED_BLK {
+func (blk *stdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
+	defer host.Unref()
+	if blk.typ == base.PERSISTENT_SORTED_BLK {
 		panic("logic error")
 	}
-	if newMeta.DataState != md.FULL {
-		panic(fmt.Sprintf("logic error: blk %s DataState=%d", newMeta.AsCommonID().BlockString(), newMeta.DataState))
+	if host.GetMeta().DataState != md.FULL {
+		panic(fmt.Sprintf("logic error: blk %s DataState=%d", host.GetMeta().AsCommonID().BlockString(), host.GetMeta().DataState))
 	}
-	fsMgr := seg.GetFsManager()
-	indexHolder := seg.GetIndexHolder().StrongRefBlock(newMeta.ID)
-	newIndexHolder := false
-	var err error
-	var newType base.BlockType
-	var segFile base.ISegmentFile
-	switch blk.Type {
-	case base.TRANSIENT_BLK:
-		newType = base.PERSISTENT_BLK
-		segFile = fsMgr.GetUnsortedFile(seg.GetID())
-		if segFile == nil {
-			segFile, err = fsMgr.RegisterUnsortedFiles(seg.GetID())
-			if err != nil {
-				panic(err)
-			}
-		}
-		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(newMeta.AsCommonID().AsBlockID(), newType, nil)
-			newIndexHolder = true
-		} else if indexHolder.Type < newType {
-			indexHolder = seg.GetIndexHolder().UpgradeBlock(newMeta.ID, newType)
-			newIndexHolder = true
-		}
-	case base.PERSISTENT_BLK:
-		newType = base.PERSISTENT_SORTED_BLK
-		segFile = fsMgr.GetUnsortedFile(seg.GetID())
-		if segFile != nil {
-			segFile = fsMgr.UpgradeFile(seg.GetID())
-		} else {
-			segFile = fsMgr.GetSortedFile(seg.GetID())
-		}
-		if segFile == nil {
-			panic("logic error")
-		}
-		if indexHolder == nil {
-			indexHolder = seg.GetIndexHolder().RegisterBlock(newMeta.AsCommonID().AsBlockID(), newType, nil)
-			newIndexHolder = true
-		} else if indexHolder.Type < newType {
-			indexHolder = seg.GetIndexHolder().UpgradeBlock(newMeta.ID, newType)
-			newIndexHolder = true
-		}
-	default:
-		panic("logic error")
-	}
-	cloned := &StdColumnBlock{
-		ColumnBlock: ColumnBlock{
-			ID:          blk.ID,
-			Type:        newType,
-			ColIdx:      seg.GetColIdx(),
-			Meta:        newMeta,
-			IndexHolder: indexHolder,
+	cloned := &stdColumnBlock{
+		columnBlock: columnBlock{
+			typ:         host.GetType(),
+			colIdx:      blk.colIdx,
+			meta:        host.GetMeta(),
+			indexHolder: host.GetIndexHolder(),
+			segFile:     host.GetSegmentFile(),
 		},
 	}
 	cloned.Ref()
 	blk.RLock()
-	part := blk.Part.CloneWithUpgrade(cloned.Ref(), seg.GetSSTBufMgr(), seg.GetFsManager())
+	part := blk.part.CloneWithUpgrade(cloned, host.GetSSTBufMgr())
 	blk.RUnlock()
 	if part == nil {
 		logutil2.Error("logic error")
 		panic("logic error")
 	}
-	if newIndexHolder {
-		indexHolder.Init(segFile)
-	}
-	cloned.Part = part
-	seg.UnRef()
+	cloned.part = part
+	cloned.OnZeroCB = cloned.close
+	cloned.Ref()
 	return cloned
 }
 
-func (blk *StdColumnBlock) Ref() IColumnBlock {
-	atomic.AddInt64(&blk.Refs, int64(1))
-	// newRef := atomic.AddInt64(&blk.Refs, int64(1))
-	// log.Infof("StdColumnBlock %s Ref to %d, %p", blk.ID.BlockString(), newRef, blk)
-	return blk
-}
-
-func (blk *StdColumnBlock) UnRef() {
-	newRef := atomic.AddInt64(&blk.Refs, int64(-1))
-	// log.Infof("StdColumnBlock %s Unref to %d, %p", blk.ID.BlockString(), newRef, blk)
-	if newRef == 0 {
-		blk.Close()
-	}
-}
-
-func (blk *StdColumnBlock) GetPartRoot() IColumnPart {
-	blk.RLock()
-	p := blk.Part
-	blk.RUnlock()
-	return p
-}
-
-func (blk *StdColumnBlock) Append(part IColumnPart) {
+func (blk *stdColumnBlock) RegisterPart(part IColumnPart) {
 	blk.Lock()
 	defer blk.Unlock()
-	if !blk.ID.IsSameBlock(part.GetID()) || blk.Part != nil {
+	if blk.meta.ID != part.GetID() || blk.part != nil {
 		panic("logic error")
 	}
-	blk.Part = part
+	blk.part = part
 }
 
-func (blk *StdColumnBlock) Close() error {
-	// log.Infof("Close StdBlk %s Refs=%d, %p", blk.ID.BlockString(), blk.Refs, blk)
-	if blk.IndexHolder != nil {
-		blk.IndexHolder.Unref()
-		blk.IndexHolder = nil
+func (blk *stdColumnBlock) close() {
+	if blk.indexHolder != nil {
+		blk.indexHolder.Unref()
+		blk.indexHolder = nil
 	}
-	if blk.Next != nil {
-		blk.Next.UnRef()
-		blk.Next = nil
+	if blk.part != nil {
+		blk.part.Close()
 	}
-	if blk.Part != nil {
-		blk.Part.Close()
-	}
-	blk.Part = nil
-	return nil
+	blk.part = nil
+	// log.Infof("destroy colblk %d, colidx %d", blk.meta.ID, blk.colIdx)
 }
 
-func (blk *StdColumnBlock) InitScanCursor(cursor *ScanCursor) error {
-	blk.RLock()
-	defer blk.RUnlock()
-	if blk.Part != nil {
-		cursor.Current = blk.Part
-		// return blk.Part.InitScanCursor(cursor)
-	}
-	return nil
+func (blk *stdColumnBlock) LoadVectorWrapper() (*vector.VectorWrapper, error) {
+	return blk.part.LoadVectorWrapper()
 }
 
-func (blk *StdColumnBlock) String() string {
-	s := fmt.Sprintf("<Std[%s](T=%s)(Refs=%d)(Size=%d)>", blk.Meta.String(), blk.Type.String(), blk.GetRefs(), blk.Meta.Count)
+func (blk *stdColumnBlock) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	return blk.part.ForceLoad(ref, proc)
+}
+
+func (blk *stdColumnBlock) Prefetch() error {
+	return blk.part.Prefetch()
+}
+
+func (blk *stdColumnBlock) GetVector() vector.IVector {
+	return blk.part.GetVector()
+}
+
+func (blk *stdColumnBlock) GetVectorReader() dbi.IVectorReader {
+	return blk.part.GetVector().(dbi.IVectorReader)
+}
+
+func (blk *stdColumnBlock) Size() uint64 {
+	return blk.part.Size()
+}
+
+func (blk *stdColumnBlock) String() string {
+	s := fmt.Sprintf("<Std[%s](T=%s)(Refs=%d)(Size=%d)>", blk.meta.String(), blk.typ.String(), blk.RefCount(), blk.meta.Count)
 	return s
 }

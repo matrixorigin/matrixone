@@ -2,9 +2,9 @@ package engine
 
 import (
 	log "github.com/sirupsen/logrus"
+	"matrixone/pkg/catalog"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/catalog"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"

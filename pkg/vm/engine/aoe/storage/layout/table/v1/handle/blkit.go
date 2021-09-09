@@ -1,100 +1,50 @@
 package handle
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle/base"
-	"sync"
-	// "sync/atomic"
-	// log "github.com/sirupsen/logrus"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 )
 
 var (
-	_ base.IBlockIterator = (*BlockIt)(nil)
+	_ dbi.IBlockIt = (*BlockIt)(nil)
 )
 
-var itAllocCnt int32 = 0
-var itReleaseCnt = 0
-
-type itBlkAlloc struct {
-	It BlockIt
-}
-
-var itBlkAllocPool = sync.Pool{
-	New: func() interface{} {
-		// cnt := atomic.AddInt32(&itAllocCnt, int32(1))
-		// log.Infof("Alloc blk it %d", cnt)
-		return &itBlkAlloc{It: BlockIt{Cols: make([]col.IColumnBlock, 0)}}
-	},
-}
-
-var EmptyBlockIt = &BlockIt{
-	Cols: make([]col.IColumnBlock, 0),
-}
-
 type BlockIt struct {
-	Invalid bool
-	Cols    []col.IColumnBlock
-	Alloc   *itBlkAlloc
+	Segment *Segment
+	Ids     []uint64
+	Pos     int
 }
 
-func (it *BlockIt) Next() {
-	for i, colBlk := range it.Cols {
-		newBlk := colBlk.GetNext()
-		if newBlk == nil {
-			it.Invalid = true
-			return
-		}
-		it.Cols[i].UnRef()
-		it.Cols[i] = newBlk
+func NewBlockIt(segment *Segment, blkIds []uint64) dbi.IBlockIt {
+	it := &BlockIt{
+		Ids:     blkIds,
+		Segment: segment,
 	}
+	return it
+}
+
+func (it *BlockIt) GetHandle() dbi.IBlock {
+	h := &Block{
+		// Data: it.Segment.Data.WeakRefBlock(it.Ids[it.Pos]),
+		Id:   it.Ids[it.Pos],
+		Host: it.Segment,
+	}
+	return h
 }
 
 func (it *BlockIt) Valid() bool {
-	if it == nil {
+	if it.Segment == nil {
 		return false
 	}
-	if it.Invalid {
+	if it.Pos >= len(it.Ids) {
 		return false
-	}
-	if it.Cols == nil {
-		return false
-	}
-	if len(it.Cols) == 0 {
-		return false
-	}
-	for _, col := range it.Cols {
-		if col == nil {
-			return false
-		}
 	}
 	return true
 }
 
-func (it *BlockIt) GetBlockHandle() base.IBlockHandle {
-	// TODO
-	// blkHandle := blkHandlePool.Get().(*BlockHandle)
-	blkHandle := BlockHandle{
-		Cols: make([]col.IColumnBlock, 0, len(it.Cols)),
-	}
-	blkHandle.ID = it.Cols[0].GetID()
-	for _, col := range it.Cols {
-		blkHandle.Cols = append(blkHandle.Cols, col.Ref())
-	}
-	blkHandle.IndexHolder = blkHandle.Cols[0].GetIndexHolder()
-	return &blkHandle
+func (it *BlockIt) Next() {
+	it.Pos++
 }
 
 func (it *BlockIt) Close() error {
-	if alloc := it.Alloc; alloc != nil {
-		for _, col := range it.Cols {
-			if col != nil {
-				col.UnRef()
-			}
-		}
-		*it = BlockIt{Cols: it.Cols[:0]}
-		// itReleaseCnt++
-		// log.Infof("Release %d", itReleaseCnt)
-		itBlkAllocPool.Put(alloc)
-	}
 	return nil
 }

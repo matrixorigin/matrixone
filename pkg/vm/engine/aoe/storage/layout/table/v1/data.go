@@ -4,176 +4,420 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/container/types"
-	logutil2 "matrixone/pkg/logutil"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"runtime"
 	"sync"
+	"sync/atomic"
 )
 
-type ITableData interface {
-	sync.Locker
-	GetRowCount() uint64
-	GetID() uint64
-	GetCollumns() []col.IColumnData
-	GetCollumn(int) col.IColumnData
-	GetColTypeSize(idx int) uint64
-	GetColTypes() []types.Type
-	GetMTBufMgr() bmgrif.IBufferManager
-	GetSSTBufMgr() bmgrif.IBufferManager
-	GetSegmentCount() uint64
-	GetIndexHolder() *index.TableHolder
+var (
+	NotExistErr = errors.New("not exist error")
+)
 
-	UpgradeBlock(*md.Block) (blks []col.IColumnBlock)
-	UpgradeSegment(segID common.ID) (segs []col.IColumnSegment)
-	AppendColSegments(colSegs []col.IColumnSegment)
-}
-
-func NewTableData(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table) ITableData {
-	data := &TableData{
-		Columns:     make([]col.IColumnData, 0),
-		MTBufMgr:    mtBufMgr,
-		SSTBufMgr:   sstBufMgr,
-		Meta:        meta,
-		IndexHolder: index.NewTableHolder(indexBufMgr, meta.ID),
+func newTableData(host *Tables, meta *md.Table) *tableData {
+	data := &tableData{
+		meta:        meta,
+		host:        host,
+		indexHolder: index.NewTableHolder(host.IndexBufMgr, meta.ID),
 	}
-	for idx, colDef := range meta.Schema.ColDefs {
-		data.Columns = append(data.Columns, col.NewColumnData(data.IndexHolder, fsMgr, mtBufMgr, sstBufMgr, colDef.Type, idx))
-	}
-	runtime.SetFinalizer(data, func(o ITableData) {
-		id := o.GetID()
-		logutil2.Debugf("[GC]: TableData: %d", id)
-	})
+	data.tree.segments = make([]iface.ISegment, 0)
+	data.tree.helper = make(map[uint64]int)
+	data.tree.ids = make([]uint64, 0)
+	data.OnZeroCB = data.close
+	data.Ref()
 	return data
 }
 
-type TableData struct {
-	sync.Mutex
-	RowCount    uint64
-	Columns     []col.IColumnData
-	MTBufMgr    bmgrif.IBufferManager
-	SSTBufMgr   bmgrif.IBufferManager
-	Meta        *md.Table
-	IndexHolder *index.TableHolder
+type tableData struct {
+	common.RefHelper
+	tree struct {
+		sync.RWMutex
+		segments   []iface.ISegment
+		ids        []uint64
+		helper     map[uint64]int
+		segmentCnt uint32
+		rowCount   uint64
+	}
+	host        *Tables
+	meta        *md.Table
+	indexHolder *index.TableHolder
 }
 
-func (td *TableData) GetRowCount() uint64 {
-	return td.RowCount
+func (td *tableData) close() {
+	td.indexHolder.Unref()
+	for _, segment := range td.tree.segments {
+		segment.Unref()
+	}
+	// log.Infof("table %d noref", td.meta.ID)
 }
 
-func (td *TableData) GetIndexHolder() *index.TableHolder {
-	return td.IndexHolder
+func (td *tableData) Ref() {
+	td.RefHelper.Ref()
 }
 
-func (td *TableData) GetID() uint64 {
-	return td.Meta.ID
+func (td *tableData) Unref() {
+	td.RefHelper.Unref()
 }
 
-func (td *TableData) GetColTypes() []types.Type {
-	return td.Meta.Schema.Types()
+func (td *tableData) GetIndexHolder() *index.TableHolder {
+	return td.indexHolder
 }
 
-func (td *TableData) GetCollumn(idx int) col.IColumnData {
-	if idx >= len(td.Meta.Schema.ColDefs) {
+func (td *tableData) WeakRefRoot() iface.ISegment {
+	if atomic.LoadUint32(&td.tree.segmentCnt) == 0 {
+		return nil
+	}
+	td.tree.RLock()
+	root := td.tree.segments[0]
+	td.tree.RUnlock()
+	return root
+}
+
+func (td *tableData) StongRefRoot() iface.ISegment {
+	if atomic.LoadUint32(&td.tree.segmentCnt) == 0 {
+		return nil
+	}
+	td.tree.RLock()
+	root := td.tree.segments[0]
+	td.tree.RUnlock()
+	root.Ref()
+	return root
+}
+
+func (td *tableData) GetID() uint64 {
+	return td.meta.ID
+}
+
+func (td *tableData) GetName() string {
+	return td.meta.Schema.Name
+}
+
+func (td *tableData) GetColTypes() []types.Type {
+	return td.meta.Schema.Types()
+}
+
+func (td *tableData) GetColTypeSize(idx int) uint64 {
+	return uint64(td.meta.Schema.ColDefs[idx].Type.Size)
+}
+
+func (td *tableData) GetMTBufMgr() bmgrif.IBufferManager {
+	return td.host.MTBufMgr
+}
+
+func (td *tableData) GetSSTBufMgr() bmgrif.IBufferManager {
+	return td.host.SSTBufMgr
+}
+
+func (td *tableData) GetFsManager() base.IManager {
+	return td.host.FsMgr
+}
+
+func (td *tableData) GetSegmentCount() uint32 {
+	return atomic.LoadUint32(&td.tree.segmentCnt)
+}
+
+func (td *tableData) GetMeta() *md.Table {
+	return td.meta
+}
+
+func (td *tableData) String() string {
+	td.tree.RLock()
+	defer td.tree.RUnlock()
+	s := fmt.Sprintf("<Table[%d]>(SegCnt=%d)(Refs=%d)", td.meta.ID, td.tree.segmentCnt, td.RefCount())
+	for _, seg := range td.tree.segments {
+		s = fmt.Sprintf("%s\n\t%s", s, seg.String())
+	}
+
+	return s
+}
+
+func (td *tableData) WeakRefSegment(id uint64) iface.ISegment {
+	td.tree.RLock()
+	defer td.tree.RUnlock()
+	idx, ok := td.tree.helper[id]
+	if !ok {
+		return nil
+	}
+	return td.tree.segments[idx]
+}
+
+func (td *tableData) StrongRefSegment(id uint64) iface.ISegment {
+	td.tree.RLock()
+	defer td.tree.RUnlock()
+	idx, ok := td.tree.helper[id]
+	if !ok {
+		return nil
+	}
+	seg := td.tree.segments[idx]
+	seg.Ref()
+	return seg
+}
+
+func (td *tableData) WeakRefBlock(segId, blkId uint64) iface.IBlock {
+	seg := td.WeakRefSegment(segId)
+	if seg == nil {
+		return nil
+	}
+	return seg.WeakRefBlock(blkId)
+}
+
+func (td *tableData) StrongRefBlock(segId, blkId uint64) iface.IBlock {
+	seg := td.WeakRefSegment(segId)
+	if seg == nil {
+		return nil
+	}
+	return seg.StrongRefBlock(blkId)
+}
+
+func (td *tableData) RegisterSegment(meta *md.Segment) (seg iface.ISegment, err error) {
+	seg, err = newSegment(td, meta)
+	if err != nil {
+		panic(err)
+	}
+	td.tree.Lock()
+	defer td.tree.Unlock()
+	_, ok := td.tree.helper[meta.ID]
+	if ok {
+		return nil, errors.New("Duplicate seg")
+	}
+
+	if len(td.tree.segments) != 0 {
+		seg.Ref()
+		td.tree.segments[len(td.tree.segments)-1].SetNext(seg)
+	}
+
+	td.tree.segments = append(td.tree.segments, seg)
+	td.tree.ids = append(td.tree.ids, seg.GetMeta().ID)
+	td.tree.helper[meta.ID] = int(td.tree.segmentCnt)
+	atomic.AddUint32(&td.tree.segmentCnt, uint32(1))
+	seg.Ref()
+	return seg, err
+}
+
+func (td *tableData) Size(attr string) uint64 {
+	size := uint64(0)
+	segCnt := atomic.LoadUint32(&td.tree.segmentCnt)
+	var seg iface.ISegment
+	for i := 0; i < int(segCnt); i++ {
+		td.tree.RLock()
+		seg = td.tree.segments[i]
+		td.tree.RUnlock()
+		size += seg.Size(attr)
+	}
+	return size
+}
+
+func (td *tableData) GetSegmentedIndex() (id uint64, ok bool) {
+	ts := td.meta.Info.GetCheckpointTime()
+	id, ok = td.meta.CreatedIndex, true
+	if td.meta.IsDeleted(ts) {
+		return td.meta.DeletedIndex, true
+	}
+
+	segCnt := atomic.LoadUint32(&td.tree.segmentCnt)
+	for i := int(segCnt) - 1; i >= 0; i-- {
+		td.tree.RLock()
+		seg := td.tree.segments[i]
+		td.tree.RUnlock()
+		id, ok := seg.GetSegmentedIndex()
+		if ok {
+			return id, ok
+		}
+	}
+	return id, ok
+}
+
+func (td *tableData) GetReplayIndex() *md.LogIndex {
+	return td.meta.ReplayIndex
+}
+
+func (td *tableData) SegmentIds() []uint64 {
+	ids := make([]uint64, 0, atomic.LoadUint32(&td.tree.segmentCnt))
+	td.tree.RLock()
+	for _, seg := range td.tree.segments {
+		ids = append(ids, seg.GetMeta().ID)
+	}
+	td.tree.RUnlock()
+	return ids
+}
+
+func (td *tableData) GetRowCount() uint64 {
+	return atomic.LoadUint64(&td.tree.rowCount)
+}
+
+func (td *tableData) AddRows(rows uint64) uint64 {
+	return atomic.AddUint64(&td.tree.rowCount, rows)
+}
+
+func (td *tableData) initReplayCtx() {
+	if td.tree.segmentCnt == 0 {
+		return
+	}
+	var ctx *md.LogIndex
+	for segIdx := int(td.tree.segmentCnt) - 1; segIdx >= 0; segIdx-- {
+		seg := td.tree.segments[segIdx]
+		if ctx = seg.GetReplayIndex(); ctx != nil {
+			break
+		}
+	}
+	td.meta.ReplayIndex = ctx
+}
+
+func (td *tableData) InitReplay() {
+	td.initRowCount()
+	td.initReplayCtx()
+}
+
+func (td *tableData) initRowCount() {
+	for _, seg := range td.tree.segments {
+		td.tree.rowCount += seg.GetRowCount()
+	}
+}
+
+func (td *tableData) RegisterBlock(meta *md.Block) (blk iface.IBlock, err error) {
+	td.tree.RLock()
+	defer td.tree.RUnlock()
+	idx, ok := td.tree.helper[meta.Segment.ID]
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("seg %d not found", meta.Segment.ID))
+	}
+	seg := td.tree.segments[idx]
+	blk, err = seg.RegisterBlock(meta)
+	return blk, err
+}
+
+func (td *tableData) UpgradeBlock(meta *md.Block) (blk iface.IBlock, err error) {
+	idx, ok := td.tree.helper[meta.Segment.ID]
+	if !ok {
+		return nil, errors.New("seg not found")
+	}
+	seg := td.tree.segments[idx]
+	return seg.UpgradeBlock(meta)
+}
+
+func (td *tableData) UpgradeSegment(id uint64) (seg iface.ISegment, err error) {
+	idx, ok := td.tree.helper[id]
+	if !ok {
 		panic("logic error")
 	}
-	return td.Columns[idx]
-}
-
-func (td *TableData) GetCollumns() []col.IColumnData {
-	return td.Columns
-}
-
-func (td *TableData) GetColTypeSize(idx int) uint64 {
-	return uint64(td.Meta.Schema.ColDefs[idx].Type.Size)
-}
-
-func (td *TableData) GetMTBufMgr() bmgrif.IBufferManager {
-	return td.MTBufMgr
-}
-
-func (td *TableData) GetSSTBufMgr() bmgrif.IBufferManager {
-	return td.SSTBufMgr
-}
-
-func (td *TableData) GetSegmentCount() uint64 {
-	return td.Columns[0].SegmentCount()
-}
-
-func (td *TableData) UpgradeBlock(newMeta *md.Block) (blks []col.IColumnBlock) {
-	for _, column := range td.Columns {
-		blk := column.UpgradeBlock(newMeta)
-		blks = append(blks, blk)
+	old := td.tree.segments[idx]
+	if old.GetType() != base.UNSORTED_SEG {
+		panic(fmt.Sprintf("old segment %d type is %d", id, old.GetType()))
 	}
-	return blks
+	if old.GetMeta().ID != id {
+		panic("logic error")
+	}
+	meta, err := td.meta.ReferenceSegment(id)
+	if err != nil {
+		return nil, err
+	}
+	upgradeSeg, err := old.CloneWithUpgrade(td, meta)
+	if err != nil {
+		panic(err)
+	}
+
+	var oldNext iface.ISegment
+	if idx != len(td.tree.segments)-1 {
+		oldNext = old.GetNext()
+	}
+	upgradeSeg.SetNext(oldNext)
+
+	td.tree.Lock()
+	defer td.tree.Unlock()
+	td.tree.segments[idx] = upgradeSeg
+	if idx > 0 {
+		upgradeSeg.Ref()
+		td.tree.segments[idx-1].SetNext(upgradeSeg)
+	}
+	// old.SetNext(nil)
+	upgradeSeg.Ref()
+	old.Unref()
+	return upgradeSeg, nil
 }
 
-func (td *TableData) UpgradeSegment(segID common.ID) (segs []col.IColumnSegment) {
-	for _, column := range td.Columns {
-		seg := column.UpgradeSegment(segID)
-		segs = append(segs, seg)
+func MockSegments(meta *md.Table, tblData iface.ITableData) []uint64 {
+	segs := make([]uint64, 0)
+	for _, segMeta := range meta.Segments {
+		seg, err := tblData.RegisterSegment(segMeta)
+		if err != nil {
+			panic(err)
+		}
+		for _, blkMeta := range segMeta.Blocks {
+			blk, err := seg.RegisterBlock(blkMeta)
+			if err != nil {
+				panic(err)
+			}
+			blk.Unref()
+		}
+		segs = append(segs, seg.GetMeta().ID)
+		seg.Unref()
 	}
+
 	return segs
 }
 
-// Only be called at engine startup.
-func (td *TableData) AppendColSegments(colSegs []col.IColumnSegment) {
-	if len(colSegs) != len(td.Meta.Schema.ColDefs) {
-		panic("logic error")
-	}
-	for idx, column := range td.Columns {
-		if idx != column.GetColIdx() {
-			panic("logic error")
-		}
-		err := column.Append(colSegs[idx])
-		if err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-	}
-}
-
 type Tables struct {
-	sync.RWMutex
-	Data      map[uint64]ITableData
-	Ids       map[uint64]bool
-	Tombstone map[uint64]ITableData
+	Mu        *sync.RWMutex
+	Data      map[uint64]iface.ITableData
+	ids       map[uint64]bool
+	Tombstone map[uint64]iface.ITableData
+
+	FsMgr base.IManager
+
+	MTBufMgr, SSTBufMgr, IndexBufMgr bmgrif.IBufferManager
 }
 
-func NewTables() *Tables {
+func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager) *Tables {
 	return &Tables{
-		Data:      make(map[uint64]ITableData),
-		Ids:       make(map[uint64]bool),
-		Tombstone: make(map[uint64]ITableData),
+		Mu:          mu,
+		Data:        make(map[uint64]iface.ITableData),
+		ids:         make(map[uint64]bool),
+		Tombstone:   make(map[uint64]iface.ITableData),
+		MTBufMgr:    mtBufMgr,
+		SSTBufMgr:   sstBufMgr,
+		IndexBufMgr: indexBufMgr,
+		FsMgr:       fsMgr,
 	}
+}
+
+func (ts *Tables) String() string {
+	ts.Mu.RLock()
+	defer ts.Mu.RUnlock()
+	s := fmt.Sprintf("<Tables>[Cnt=%d]", len(ts.Data))
+	for _, td := range ts.Data {
+		s = fmt.Sprintf("%s\n%s", s, td.String())
+	}
+	return s
 }
 
 func (ts *Tables) TableIds() (ids map[uint64]bool) {
-	return ts.Ids
+	return ts.ids
 }
 
-func (ts *Tables) DropTable(tid uint64) (err error) {
-	ts.Lock()
-	err = ts.DropTableNoLock(tid)
-	ts.Unlock()
-	return err
+func (ts *Tables) DropTable(tid uint64) (tbl iface.ITableData, err error) {
+	ts.Mu.Lock()
+	tbl, err = ts.DropTableNoLock(tid)
+	ts.Mu.Unlock()
+	return tbl, err
 }
 
-func (ts *Tables) DropTableNoLock(tid uint64) (err error) {
+func (ts *Tables) DropTableNoLock(tid uint64) (tbl iface.ITableData, err error) {
 	tbl, ok := ts.Data[tid]
 	if !ok {
-		return errors.New(fmt.Sprintf("Specified table %d not found", tid))
+		// return errors.New(fmt.Sprintf("Specified table %d not found", tid))
+		return tbl, NotExistErr
 	}
-	ts.Tombstone[tid] = tbl
-	delete(ts.Ids, tid)
+	// ts.Tombstone[tid] = tbl
+	delete(ts.ids, tid)
 	delete(ts.Data, tid)
-	return nil
+	return tbl, nil
 }
 
-func (ts *Tables) GetTableNoLock(tid uint64) (tbl ITableData, err error) {
+func (ts *Tables) GetTableNoLock(tid uint64) (tbl iface.ITableData, err error) {
 	tbl, ok := ts.Data[tid]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("Specified table %d not found", tid))
@@ -181,110 +425,75 @@ func (ts *Tables) GetTableNoLock(tid uint64) (tbl ITableData, err error) {
 	return tbl, err
 }
 
-func (ts *Tables) GetTable(tid uint64) (tbl ITableData, err error) {
-	ts.RLock()
+func (ts *Tables) WeakRefTable(tid uint64) (tbl iface.ITableData, err error) {
+	ts.Mu.RLock()
 	tbl, err = ts.GetTableNoLock(tid)
-	ts.RUnlock()
+	ts.Mu.RUnlock()
 	return tbl, err
 }
 
-func (ts *Tables) CreateTable(tbl ITableData) (err error) {
-	ts.Lock()
-	err = ts.CreateTableNoLock(tbl)
-	ts.Unlock()
-	return err
+func (ts *Tables) StrongRefTable(tid uint64) (tbl iface.ITableData, err error) {
+	ts.Mu.RLock()
+	tbl, err = ts.GetTableNoLock(tid)
+	if tbl != nil {
+		tbl.Ref()
+	}
+	ts.Mu.RUnlock()
+	return tbl, err
 }
 
-func (ts *Tables) CreateTableNoLock(tbl ITableData) (err error) {
+func (ts *Tables) RegisterTable(meta *md.Table) (iface.ITableData, error) {
+	tbl := newTableData(ts, meta)
+	ts.Mu.Lock()
+	defer ts.Mu.Unlock()
+	if err := ts.CreateTableNoLock(tbl); err != nil {
+		tbl.Unref()
+		return nil, err
+	}
+	return tbl, nil
+}
+
+func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
 	_, ok := ts.Data[tbl.GetID()]
 	if ok {
 		return errors.New(fmt.Sprintf("Dup table %d found", tbl.GetID()))
 	}
-	ts.Ids[tbl.GetID()] = true
+	ts.ids[tbl.GetID()] = true
 	ts.Data[tbl.GetID()] = tbl
 	return nil
 }
 
 func (ts *Tables) Replay(fsMgr base.IManager, indexBufMgr, mtBufMgr, sstBufMgr bmgrif.IBufferManager, info *md.MetaInfo) error {
 	for _, meta := range info.Tables {
-		tbl := NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, meta)
-		colTypes := meta.Schema.Types()
-		activeSeg := meta.GetActiveSegment()
-		for _, segMeta := range meta.Segments {
-			if activeSeg != nil {
-				if activeSeg.ID < segMeta.ID {
-					break
-				}
-			}
-			segType := base.UNSORTED_SEG
-			if segMeta.DataState == md.SORTED {
-				segType = base.SORTED_SEG
-			}
-			activeBlk := segMeta.GetActiveBlk()
-			for colIdx, colType := range colTypes {
-				colSeg := col.NewColumnSegment(tbl.GetIndexHolder(), fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
-				defer colSeg.UnRef()
-				for _, blkMeta := range segMeta.Blocks {
-					if activeBlk != nil {
-						if activeBlk.ID <= blkMeta.ID {
-							break
-						}
-					}
-					blkId := *blkMeta.AsCommonID()
-					bufMgr := mtBufMgr
-					if segType == base.SORTED_SEG {
-						bufMgr = sstBufMgr
-					} else if blkMeta.DataState == md.FULL {
-						bufMgr = sstBufMgr
-					}
-					// TODO: strblk
-					// Only stdblk now
-					colBlk := col.NewStdColumnBlock(colSeg.Ref(), blkMeta)
-					colSeg.Append(colBlk.Ref())
-					defer colBlk.UnRef()
-					colPart := col.NewColumnPart(colSeg.GetFsManager(), bufMgr, colBlk.Ref(), blkId, info.Conf.BlockMaxRows*uint64(colType.Size))
-					if colPart == nil {
-						return errors.New(fmt.Sprintf("data replay error"))
-					}
-					// TODO: How to handle more than 1 empty blk or segment
-					// if blkMeta.DataState == md.EMPTY {
-					// 	break
-					// }
-				}
-				if err := tbl.GetCollumn(colIdx).Append(colSeg.Ref()); err != nil {
-					return err
-				}
-			}
-		}
-		if err := ts.CreateTable(tbl); err != nil {
+		tbl, err := ts.RegisterTable(meta)
+		if err != nil {
 			return err
 		}
+		activeSeg := meta.GetActiveSegment()
+		for _, segMeta := range meta.Segments {
+			if activeSeg != nil && activeSeg.ID < segMeta.ID {
+				break
+			}
+
+			seg, err := tbl.RegisterSegment(segMeta)
+			if err != nil {
+				panic(err)
+			}
+			defer seg.Unref()
+
+			activeBlk := segMeta.GetActiveBlk()
+			for _, blkMeta := range segMeta.Blocks {
+				if activeBlk != nil && activeBlk.ID <= blkMeta.ID {
+					break
+				}
+				blk, err := seg.RegisterBlock(blkMeta)
+				if err != nil {
+					panic(err)
+				}
+				defer blk.Unref()
+			}
+		}
+		tbl.InitReplay()
 	}
 	return nil
-}
-
-func MockSegment(indexHolder *index.TableHolder, fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, colIdx int, meta *md.Segment) col.IColumnSegment {
-	seg := col.NewColumnSegment(indexHolder, fsMgr, mtBufMgr, sstBufMgr, colIdx, meta)
-	for _, blkMeta := range meta.Blocks {
-		blk, err := seg.RegisterBlock(blkMeta)
-		if err != nil {
-			panic(err)
-		}
-		blk.UnRef()
-	}
-	return seg
-}
-
-func MockSegments(fsMgr base.IManager, mtBufMgr, sstBufMgr bmgrif.IBufferManager, meta *md.Table, tblData ITableData) []common.ID {
-	var segIDs []common.ID
-	for _, segMeta := range meta.Segments {
-		var colSegs []col.IColumnSegment
-		for colIdx, _ := range segMeta.Table.Schema.ColDefs {
-			colSeg := MockSegment(tblData.GetIndexHolder(), fsMgr, mtBufMgr, sstBufMgr, colIdx, segMeta)
-			colSegs = append(colSegs, colSeg)
-		}
-		tblData.AppendColSegments(colSegs)
-		segIDs = append(segIDs, *segMeta.AsCommonID())
-	}
-	return segIDs
 }

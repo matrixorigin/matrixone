@@ -189,7 +189,6 @@ func decodeKey(data []byte,keyType byte)([]byte,interface{},error){
 	default:
 		panic(fmt.Errorf("unsupported key type %v",keyType))
 	}
-	return nil,nil,nil
 }
 
 /**
@@ -244,7 +243,6 @@ func encodeStringKeyLimited(data []byte, s string, length int) []byte {
 		return append(data, string2bytes(s)...)
 	}else{
 		panic("the string key is too much long")
-		return append(data, string2bytes(s[:length])...)
 	}
 }
 

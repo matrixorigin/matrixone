@@ -1,93 +1,79 @@
 package col
 
 import (
-	"io"
+	"matrixone/pkg/container/types"
+	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 type IColumnBlock interface {
-	io.Closer
-	GetNext() IColumnBlock
-	SetNext(next IColumnBlock)
-	GetID() common.ID
+	common.IRef
+	GetID() uint64
+	GetMeta() *md.Block
 	GetRowCount() uint64
-	InitScanCursor(cusor *ScanCursor) error
-	Append(part IColumnPart)
-	GetPartRoot() IColumnPart
-	GetBlockType() base.BlockType
+	RegisterPart(part IColumnPart)
+	GetType() base.BlockType
+	GetColType() types.Type
 	GetIndexHolder() *index.BlockHolder
 	GetColIdx() int
-	CloneWithUpgrade(IColumnSegment, *md.Block) IColumnBlock
-	EvalFilter(*index.FilterCtx) error
+	GetSegmentFile() base.ISegmentFile
+	CloneWithUpgrade(iface.IBlock) IColumnBlock
 	String() string
-	Ref() IColumnBlock
-	UnRef()
-	GetRefs() int64
+	Size() uint64
+	GetVector() vector.IVector
+	LoadVectorWrapper() (*vector.VectorWrapper, error)
+	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
+	Prefetch() error
+	GetVectorReader() dbi.IVectorReader
 }
 
-type ColumnBlock struct {
+type columnBlock struct {
 	sync.RWMutex
-	ID          common.ID
-	Next        IColumnBlock
-	Type        base.BlockType
-	ColIdx      int
-	Refs        int64
-	Meta        *md.Block
-	File        base.ISegmentFile
-	IndexHolder *index.BlockHolder
+	common.RefHelper
+	colIdx      int
+	meta        *md.Block
+	segFile     base.ISegmentFile
+	indexHolder *index.BlockHolder
+	typ         base.BlockType
 }
 
-func (blk *ColumnBlock) EvalFilter(ctx *index.FilterCtx) error {
-	return blk.IndexHolder.EvalFilter(blk.ColIdx, ctx)
+func (blk *columnBlock) GetSegmentFile() base.ISegmentFile {
+	return blk.segFile
 }
 
-func (blk *ColumnBlock) GetRefs() int64 {
-	return atomic.LoadInt64(&blk.Refs)
+func (blk *columnBlock) GetIndexHolder() *index.BlockHolder {
+	return blk.indexHolder
 }
 
-func (blk *ColumnBlock) GetIndexHolder() *index.BlockHolder {
-	return blk.IndexHolder
+func (blk *columnBlock) GetColIdx() int {
+	return blk.colIdx
 }
 
-func (blk *ColumnBlock) GetColIdx() int {
-	return blk.ColIdx
+func (blk *columnBlock) GetColType() types.Type {
+	return blk.meta.Segment.Table.Schema.ColDefs[blk.colIdx].Type
 }
 
-func (blk *ColumnBlock) GetBlockType() base.BlockType {
-	blk.RLock()
-	defer blk.RUnlock()
-	return blk.Type
+func (blk *columnBlock) GetMeta() *md.Block {
+	return blk.meta
 }
 
-func (blk *ColumnBlock) GetRowCount() uint64 {
-	return atomic.LoadUint64(&blk.Meta.Count)
+func (blk *columnBlock) GetType() base.BlockType {
+	return blk.typ
 }
 
-func (blk *ColumnBlock) SetNext(next IColumnBlock) {
-	blk.Lock()
-	defer blk.Unlock()
-	if blk.Next != nil {
-		blk.Next.UnRef()
-	}
-	blk.Next = next
+func (blk *columnBlock) GetRowCount() uint64 {
+	return atomic.LoadUint64(&blk.meta.Count)
 }
 
-func (blk *ColumnBlock) GetNext() IColumnBlock {
-	blk.RLock()
-	if blk.Next != nil {
-		blk.Next.Ref()
-	}
-	r := blk.Next
-	blk.RUnlock()
-	return r
-}
-
-func (blk *ColumnBlock) GetID() common.ID {
-	return blk.ID
+func (blk *columnBlock) GetID() uint64 {
+	return blk.meta.ID
 }

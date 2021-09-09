@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"math"
 	"matrixone/pkg/encoding"
+	"matrixone/pkg/vm/driver"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/dist"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 )
 
-func NewTpDatabase(n string, id uint64, cinfo string, sch string, t int, kv dist.CubeDriver, proc *process.Process) *tpDatabase {
+func NewTpDatabase(n string, id uint64, cinfo string, sch string, t int, kv driver.CubeDriver, proc *process.Process) *tpDatabase {
 	return &tpDatabase{
 		dbName:      n,
 		dbId:        id,

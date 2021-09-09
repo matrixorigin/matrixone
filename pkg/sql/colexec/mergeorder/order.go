@@ -71,8 +71,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			proc.Reg.Ax = nil
 			return true, nil
 		}
+	    return false, nil
 	}
-	return false, nil
 }
 
 func (ctr *Container) build(n *Argument, proc *process.Process) error {
@@ -112,21 +112,11 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 			for sel, nsel := int64(0), int64(bat.Vecs[0].Length()); sel < nsel; sel++ {
 				{
 					for i, vec := range ctr.bat.Vecs {
-						if vec.Data == nil {
-							if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
-								reg.Ch = nil
-								reg.Wg.Done()
-								bat.Clean(proc)
-								return err
-							}
-							copy(vec.Data[:mempool.CountSize], bat.Vecs[i].Data[:mempool.CountSize])
-						} else {
-							if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
-								reg.Ch = nil
-								reg.Wg.Done()
-								bat.Clean(proc)
-								return err
-							}
+						if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
+							reg.Ch = nil
+							reg.Wg.Done()
+							bat.Clean(proc)
+							return err
 						}
 					}
 				}

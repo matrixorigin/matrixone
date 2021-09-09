@@ -1,8 +1,6 @@
 package db
 
 import (
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
@@ -10,13 +8,16 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	table2 "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	table2 "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestAll(t *testing.T) {
@@ -63,13 +64,11 @@ func TestAll(t *testing.T) {
 	segHolder.Init(segFile)
 	t.Log(tblHolder.String())
 	t.Log(segHolder.GetBlockCount())
-	seg := &table2.Segment{
-		RefHelper:   common.RefHelper{},
-		Type:        base.SORTED_SEG,
-		Meta:        segment,
-		IndexHolder: segHolder,
-		SegmentFile: segFile,
-	}
+	seg := table2.NewSimpleSegment(
+		base.SORTED_SEG,
+		segment,
+		segHolder,
+		segFile)
 	s := &Segment{
 		Data: seg,
 		Ids:  new(atomic.Value),
@@ -1251,4 +1250,3 @@ func TestAll(t *testing.T) {
 
 	// todo: varchar / char support
 }
-

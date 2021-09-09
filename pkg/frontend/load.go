@@ -481,6 +481,7 @@ type WriteBatchHandler struct {
 	batchFilled int
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
+
 	cols []metadata.Attribute
 	attrName []string
 	timestamp uint64
@@ -1524,7 +1525,7 @@ func prepareBatch(handler *ParseLineHandler) error {
 			case *tree.UnresolvedName:
 				tid,ok := tableName2ColumnId[realCol.Parts[0]]
 				if !ok {
-					return fmt.Errorf("no such column %s in table %s ")
+					return fmt.Errorf("no such column %s", realCol.Parts[0])
 				}
 				dataColumnId2TableColumnId[i] = tid
 			case *tree.VarExpr:
@@ -1668,7 +1669,6 @@ func saveParsedLinesToBatch(handler *ParseLineHandler) error {
 	fetchCnt := 0
 	var err error
 	allFetchCnt := 0
-
 
 	row2col := time.Duration(0)
 	fillBlank := time.Duration(0)
@@ -3747,7 +3747,7 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			"process_block - callback %s " +
 			"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
 			"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
-			"choose_true %s choose_false %s \n",
+			"choo>>>>se_true %s choose_false %s \n",
 			handler.callback,
 			process_blcok - handler.callback,
 			handler.asyncChan,

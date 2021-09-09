@@ -910,17 +910,16 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["maxReplicas"] = "	Name:	maxReplicas	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[1 1 1]	Comment:	the number of replicas for each resource	UpdateMode:	dynamic	"
 	
 	ap.name2definition["lengthOfQueryPrinted"] = "	Name:	lengthOfQueryPrinted	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[50 -1 10000]	Comment:	the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.	UpdateMode:	dynamic	"
-	
+
 	ap.name2definition["batchSizeInLoadData"] = "	Name:	batchSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[40000]	Comment:	the count of rows in vector of batch in load data	UpdateMode:	dynamic	"
 	
 	ap.name2definition["blockCountInLoadData"] = "	Name:	blockCountInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[20 2 100000]	Comment:	count of read buffer in load data	UpdateMode:	dynamic	"
 	
 	ap.name2definition["blockSizeInLoadData"] = "	Name:	blockSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[4194304]	Comment:	defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data	UpdateMode:	dynamic	"
-	
+
 	ap.name2definition["loadDataParserType"] = "	Name:	loadDataParserType	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[0 1]	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten	UpdateMode:	dynamic	"
 	
 	ap.name2definition["loadDataConcurrencyCount"] = "	Name:	loadDataConcurrencyCount	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[16]	Comment:	default is 16. The count of go routine writing batch into the storage.	UpdateMode:	dynamic	"
-	
 }
 
 /**
@@ -1738,7 +1737,6 @@ func (ap * SystemVariables ) GetLoadDataConcurrencyCount() int64 {
 	defer ap.rwlock.RUnlock()
 	return ap.loadDataConcurrencyCount
 }
-
 
 /**
 Set the value of the parameter rootpassword
@@ -2607,7 +2605,7 @@ func (ap * SystemVariables ) setBatchSizeInLoadData(value int64)error {
 	
 	
 		choices :=[]int64 {
-			40000,	
+			40000,
 		}
 		if len( choices ) != 0{
 			if !isInSliceInt64(value, choices){
@@ -2705,7 +2703,6 @@ func (ap * SystemVariables ) setLoadDataConcurrencyCount(value int64)error {
 	ap.loadDataConcurrencyCount = value
 	return nil
 }
-
 
 
 /**

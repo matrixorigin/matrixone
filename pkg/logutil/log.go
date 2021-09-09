@@ -35,8 +35,8 @@ func init() {
 }
 
 var defaultConfig = Config{
-	Level:               "info",
-	Format:              "console",
+	Level:  "info",
+	Format: "console",
 }
 
 func SetupLogger(configFile string) {

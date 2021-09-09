@@ -496,6 +496,10 @@ max-backups = 0
 block-max-rows = 40000
 segment-max-blocks = 40
 
+[scheduler-cfg]
+block-writers = 8
+segment-writers = 4
+
 [cache-cfg]
 index-cache-size = 134217728        # 128M
 insert-cache-size = 4294967296      # 4G

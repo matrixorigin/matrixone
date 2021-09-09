@@ -14,7 +14,7 @@ func TestVariables_LoadInitialValues(t *testing.T) {
 	}
 }
 
-func isvconfigEqual(c1,c2 vconfig) bool {
+func isvconfigEqual(c1,c2 *vconfig) bool {
 
 
 
@@ -81,7 +81,7 @@ port=9000
 ip= "localhost"
 		
 `
-	t1_config:=vconfig{
+	t1_config:=&vconfig{
 		rwlock:            sync.RWMutex{},
 
 
@@ -105,7 +105,7 @@ Ip: "localhost" ,
 
 	type args struct {
 		input string
-		config vconfig
+		config *vconfig
 	}
 	tests := []struct {
 		name    string
@@ -133,8 +133,8 @@ Ip: "localhost" ,
 				t.Errorf("UpdateParametersWithConfiguration failed. error:%v",err)
 			}
 
-			if ( isvconfigEqual(*config,tt.args.config) != true ) != tt.wantErr3{
-				t.Errorf("Configuration are not equal. %v vs %v ",*config,tt.args.config)
+			if ( isvconfigEqual(config,tt.args.config) != true ) != tt.wantErr3{
+				t.Errorf("Configuration are not equal. %v vs %v ",config,tt.args.config)
 				return
 			}
 		})

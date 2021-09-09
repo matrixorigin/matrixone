@@ -3,7 +3,7 @@ package sched
 import (
 	"matrixone/pkg/logutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
@@ -89,15 +89,15 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	s.commiters.blkmap = make(map[uint64]*metablkCommiter)
 
 	dispatcher := sched.NewBaseDispatcher()
-	flushblkHandler := sched.NewPoolHandler(8, nil)
+	flushblkHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.BlockWriters), nil)
 	flushblkHandler.Start()
-	flushsegHandler := sched.NewPoolHandler(4, nil)
+	flushsegHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.SegmentWriters), nil)
 	flushsegHandler.Start()
 	metaHandler := sched.NewSingleWorkerHandler("metaHandler")
 	metaHandler.Start()
 	memdataHandler := sched.NewSingleWorkerHandler("memdataHandler")
 	memdataHandler.Start()
-	statelessHandler := sched.NewPoolHandler(1, nil)
+	statelessHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.StatelessWorkers), nil)
 	statelessHandler.Start()
 
 	dispatcher.RegisterHandler(sched.StatelessEvent, statelessHandler)

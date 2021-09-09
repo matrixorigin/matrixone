@@ -14,7 +14,7 @@ func TestSystemVariables_LoadInitialValues(t *testing.T) {
 	}
 }
 
-func isvarsConfigEqual(c1,c2 varsConfig) bool {
+func isvarsConfigEqual(c1,c2 *varsConfig) bool {
 
 
 
@@ -53,7 +53,7 @@ rootpassword= ""
 
 		
 `
-	t1_config:=varsConfig{
+	t1_config:=&varsConfig{
 		rwlock:            sync.RWMutex{},
 
 
@@ -75,7 +75,7 @@ Rootpassword: "" ,
 
 	type args struct {
 		input string
-		config varsConfig
+		config *varsConfig
 	}
 	tests := []struct {
 		name    string
@@ -103,8 +103,8 @@ Rootpassword: "" ,
 				t.Errorf("UpdateParametersWithConfiguration failed. error:%v",err)
 			}
 
-			if ( isvarsConfigEqual(*config,tt.args.config) != true ) != tt.wantErr3{
-				t.Errorf("Configuration are not equal. %v vs %v ",*config,tt.args.config)
+			if ( isvarsConfigEqual(config,tt.args.config) != true ) != tt.wantErr3{
+				t.Errorf("Configuration are not equal. %v vs %v ",config,tt.args.config)
 				return
 			}
 		})

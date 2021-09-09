@@ -1,126 +1,107 @@
-MatrixBase is an open-source distributed OLAP database.
+[![LICENSE](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Language](https://img.shields.io/badge/Language-Go-blue.svg)](https://golang.org/)
 
-# Build & Run & Shutdown
-## Build
-**1. change the root directory of the matrixone**
+## What is MatrixOne?
+MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. With minimal operation and management, MatrixOne can provide end-to-end data processing automation to help users store, manipulate and analyze data cross devices, zones, regions and clouds.
+
+## Features
+
+### Planet Scalability
+MatrixOne cluster can easily expand capacity in SQL processing, computation, and storage, by adding nodes and without the need to disable any function.
+
+### Cloud-Edge Native
+Not limited to public clouds, hybrid clouds, on-premise servers, or smart devices, MatrixOne accommodates itself to myriads of infrastructure while still providing top services with low latency and high throughput.
+
+### Hybrid Streaming, Transaction and Analytical Processing Engine
+By converging multiple engines, MatrixOne can support hybrid streaming, analytical and transactional workloads; with its pluggable architecture, MatrixOne allows for easy integration with third-party engines.
+
+### High Availability
+MatrixOne uses RAFT-based consensus algorithm to provide fault tolerance in one zone, and plans to use more advanced state-machine replication protocol to achieve geo-distributed active-active.
+
+### Ease of use
+- MatrixOne does not require dependency to download, install, or start up.
+- Re-balancing, failover and system tuning are automatic.
+- MatrixOne supports MySQL-compatible syntax.
+
+### End to End Data Science automation
+By streaming SQL and user defined function, MatrixOne provides end-end data processing pipeline.
+
+## Architecture
+![Architecture](https://github.com/matrixorigin/artwork/blob/main/diagram/overall-architecture.png)
+
+### Query Parser Layer
+-   **Parser** parse SQL, Streaming Query or Python language into an abstract syntax tree for further processing.
+-   **Planner**: Finds the best execution plan through rule-based, cost-based optimization **algorithms**, and transfers abstract syntax tree to plan tree.
+-   **IR Generator**: Converts Python code into intermediate representation.
+### Computation Layer
+-   **JIT compilation**: Turns SQL plan tree or IR code into a native program using LLVM, during run time.
+-   **Vectorized Execution**: MatrixOne leverages SIMD instructions to construct vectorized execution pipelines.
+-   **Cache**: Multiple versions of data, indexes and metadata are cached for queries.
+### Cluster Management Layer
+MatrixCube is a fundamental library for building distributed systems without the need to consider reliability, consistency or scalability. It is designed to facilitate distributed, stateful application building because developers only need to care about the business logic on a single node. MatrixCube is currently built upon multi-raft to provide replicated state machine and will migrate to Paxos families to increase friendliness to scenarios spanning multiple data centers.
+-   **Prophet**: Used by MatrixCube to manage and schedule the MatrixOne cluster.
+-   **Transaction Manager**: MatrixOne supports distributed transaction of snapshot isolation level.
+-   **Replicated State Machine**: MatrixOne uses RAFT-based consensus algorithms and hyper logic clocks to implement strong consistency of the clusters. Introduction of more advanced state-machine replication protocols is yet to come.
+### Replicated Storage Layer
+-   **Row Storage**: stores serving workload, metadata and catalog.
+-   **Column Storage**: stores analytical workload, materialized views.
+### Storage Provision Layer
+MatrixOne stores data in shared storage of S3 / HDFS, or even in the local disk, public clouds, on-premise server, hybrid cloud, or smart devices.
+## Quick Start
+### Building
+
+**Get the MatrixOne code:**
+
 ```
-% cd matrixone
-% pwd
-/pathto/matrixone
+git clone https://github.com/matrixorigin/matrixone.git
+cd matrixone
 ```
 
-**2. generate the configuration file**
+**Run make:**
+
+Run `make debug`, `make clean`, or anything else our Makefile offers. You can just run the following command to build quickly.
 
 ```
 make config
-```
-It does things following:
-
-Generate the configuration generator bin `gen_config`.
-
-`gen_config` reads the configuration definition file `cmd/generate-config/system_vars_def.toml` 
-
-and generates the configuration file `cmd/generate-config/system_vars_config.toml `.
-
-Then, it moves the configuration file `cmd/generate-config/system_vars_config.toml ` to the 
-matrixone root directory.
-
-It moves `cmd/generate-config/system_vars.go ` to `pkg/config`.
-
-It moves `cmd/generate-config/system_vars_test.go ` to `pkg/config`.
-
-**3. generate the `main` bin**
-
-```
 make build
 ```
 
-It makes an execution bin - `main` for the `matrixone`.
+### Starting
 
-## Run
-**1. Boot the server**
+**Prerequisites**
 
-The `ip` and `port` in the `system_vars_config.toml` can be changed.
+- MySQL client
 
-Change to the root directory of the `matrixone`.
+  MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages.
+
+**Boot MatrixOne server:**
 
 ```
-% ./main system_vars_config.toml
+./mo-server system_vars_config.toml
 ```
 
-**2. Connect the server**
+**Connect MatrixOne server:**
 
+```
+mysql -h IP -P PORT -uUsername -p
+```
 
-We need to install the mysql client first.
+**For example:**
 
 Test Account:
 
-user : `dump`
-
-password : `111`
-
-```
-% mysql -h IP -P PORT -udump -p
-```
-
-
-For example:
-```
-% mysql -h 127.0.0.1 -P 6001 -udump -p
-```
-
-## Shutdown
-
-Use shell command to send a close signal to the server.
+- user: dump
+- password: 111
 
 ```
-Ctr+C or Ctr+\.
+mysql -h 127.0.0.1 -P 6001 -udump -p
 ```
 
-# The Configuration Specification
+## Contributing
+See [Contributing Guide](CONTRIBUTING.md) for details on contribution workflows.
 
-In this system, the configuration logic starts from a definition file.
-In the definition file, many system parameters can be well-defined.
+## Roadmap
+Check out [Roadmap](https://github.com/matrixorigin/matrixone/issues/613) for MatrixOne development plan.
 
-## Define the parameter
-
-The definition of the parameter has the form following:
-
-```
-[[parameter]]
-name = "xxxx"
-scope = ["xxxx"]
-access = ["xxxx"]
-type = "xxxx"
-domain-type = "xxxx"
-values = ["xxxx"]
-comment = "xxxx"
-update-mode = "xxxx"
-```
-
-1. `name` denotes the unique name of the parameter in the definition file. It must be a **valid Go identifier**. And, the first letter of it must be the **low case Ascii char or '_'**. The rest letters can be the Ascii char, digit or '_'.
-
-That is :
-```
-identifier = low-case-letter { letter | digit } *
-low-case-letter = "a" ... "z" | "_"
-letter     = "a" ... "z" | "A" ... "Z" | "_"
-digit      = "0" ... "9"
-```
-
-2. `scope` denotes `session` parameter or `global` parameter. The `session` parameter only affects the activity in only one session. The `global` parameter effects activity in all sessions. The parameter belongs to the **only one** of the two. 
-
-3. `access` denotes where you can change the value of the parameter. `cmd` means the update can happen in the command line option. `file` means the update can happen in the configuration file. `env` means the update can happen in the environment variable. Now, only `file` really works.
-
-4. `type` denotes the data type of the parameter includes `string`,`int64`,`float64`,`bool`. 
-
-5. `domain-type` denotes the parameter can be the set or the range. `set` means the parameter must be the one element in the set. It is a enum type. `range` means the parameter can be any value in a range.
-
-6. `values` denotes the initial value for the parameter. 
-    When the `domain-type` is `set`, `values` contains all alternatives of the parameter.
-    When the `domain-type` is `range`, `values` only contains three values. the first one is the initial value of the parameter.
-   The second one and the third one forms a range. So,in math, the non-equation `the second one ` <= `the first one` <= `the third one` holds.
-   
-7. `comment` denotes the comment for clarification.
-
-8. `update-mode` denotes the parameter can be changed or not. `dynamic` means it can be changed. `fix` means it can not be changed. it only holds the initial value. `hotload` means it can be changed during the system running.
+## License
+MatrixOne is licensed under the [Apache License, Version 2.0](LICENSE)

@@ -4,67 +4,67 @@ import (
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage"
+	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v2/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 )
 
-type Collection struct {
+type collection struct {
 	common.RefHelper
-	ID        uint64
-	Opts      *engine.Options
-	TableData iface.ITableData
+	id        uint64
+	opts      *engine.Options
+	tableData iface.ITableData
 	mem       struct {
 		sync.RWMutex
-		MemTables []imem.IMemTable
+		memTables []imem.IMemTable
 	}
 }
 
 var (
-	_ imem.ICollection = (*Collection)(nil)
+	_ imem.ICollection = (*collection)(nil)
 )
 
 func NewCollection(tableData iface.ITableData, opts *engine.Options) imem.ICollection {
-	c := &Collection{
-		ID:        tableData.GetID(),
-		Opts:      opts,
-		TableData: tableData,
+	c := &collection{
+		id:        tableData.GetID(),
+		opts:      opts,
+		tableData: tableData,
 	}
-	c.mem.MemTables = make([]imem.IMemTable, 0)
+	c.mem.memTables = make([]imem.IMemTable, 0)
 	c.OnZeroCB = c.close
 	c.Ref()
 	return c
 }
 
-func (c *Collection) String() string {
+func (c *collection) String() string {
 	c.mem.RLock()
 	defer c.mem.RUnlock()
-	s := fmt.Sprintf("<Collection[%d]>(Refs=%d)(MTCnt=%d)", c.ID, c.RefCount(), len(c.mem.MemTables))
-	for _, mt := range c.mem.MemTables {
+	s := fmt.Sprintf("<collection[%d]>(Refs=%d)(MTCnt=%d)", c.id, c.RefCount(), len(c.mem.memTables))
+	for _, mt := range c.mem.memTables {
 		s = fmt.Sprintf("%s\n\t%s", s, mt.String())
 	}
 	return s
 }
 
-func (c *Collection) close() {
-	if c.TableData != nil {
-		c.TableData.Unref()
+func (c *collection) close() {
+	if c.tableData != nil {
+		c.tableData.Unref()
 	}
-	for _, mt := range c.mem.MemTables {
+	for _, mt := range c.mem.memTables {
 		mt.Unref()
 	}
 	return
 }
 
-func (c *Collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) {
-	eCtx := &dbsched.Context{Opts: c.Opts, Waitable: true}
-	e := me.NewCreateBlkEvent(eCtx, c.ID, c.TableData)
-	if err = c.Opts.Scheduler.Schedule(e); err != nil {
+func (c *collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) {
+	eCtx := &sched.Context{Opts: c.opts, Waitable: true}
+	e := me.NewCreateBlkEvent(eCtx, c.id, c.tableData)
+	if err = c.opts.Scheduler.Schedule(e); err != nil {
 		return nil, nil, err
 	}
 	if err = e.WaitDone(); err != nil {
@@ -74,32 +74,32 @@ func (c *Collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) 
 	return meta, e.Block, nil
 }
 
-func (c *Collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
+func (c *collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
 	_, data, err := c.onNoBlock()
 	if err != nil {
 		return nil, err
 	}
 
-	c.TableData.Ref()
-	tbl = NewMemTable(c.Opts, c.TableData, data)
-	c.mem.MemTables = append(c.mem.MemTables, tbl)
+	c.tableData.Ref()
+	tbl = NewMemTable(c.opts, c.tableData, data)
+	c.mem.memTables = append(c.mem.memTables, tbl)
 	tbl.Ref()
 	return tbl, err
 }
 
-func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
-	tableMeta := c.TableData.GetMeta()
+func (c *collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
+	tableMeta := c.tableData.GetMeta()
 	var mut imem.IMemTable
 	c.mem.Lock()
 	defer c.mem.Unlock()
-	size := len(c.mem.MemTables)
+	size := len(c.mem.memTables)
 	if size == 0 {
 		mut, err = c.onNoMutableTable()
 		if err != nil {
 			return err
 		}
 	} else {
-		mut = c.mem.MemTables[size-1]
+		mut = c.mem.memTables[size-1]
 		mut.Ref()
 	}
 	offset := uint64(0)
@@ -116,23 +116,23 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 			mut.Unpin()
 			mut.Unref()
 
-			ctx := &dbsched.Context{Opts: c.Opts}
-			e := dbsched.NewPrecommitBlockEvent(ctx, *prevId)
-			if err = c.Opts.Scheduler.Schedule(e); err != nil {
+			ctx := &sched.Context{Opts: c.opts}
+			e := sched.NewPrecommitBlockEvent(ctx, *prevId)
+			if err = c.opts.Scheduler.Schedule(e); err != nil {
 				panic(err)
 			}
 
 			mut, err = c.onNoMutableTable()
 			if err != nil {
-				c.Opts.EventListener.BackgroundErrorCB(err)
+				c.opts.EventListener.BackgroundErrorCB(err)
 				return err
 			}
 
 			{
 				c.Ref()
-				ctx := &dbsched.Context{Opts: c.Opts}
-				e := dbsched.NewFlushMemtableEvent(ctx, c)
-				err = c.Opts.Scheduler.Schedule(e)
+				ctx := &sched.Context{Opts: c.opts}
+				e := sched.NewFlushMemtableEvent(ctx, c)
+				err = c.opts.Scheduler.Schedule(e)
 				if err != nil {
 					return err
 				}
@@ -157,13 +157,13 @@ func (c *Collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 	return nil
 }
 
-func (c *Collection) FetchImmuTable() imem.IMemTable {
+func (c *collection) FetchImmuTable() imem.IMemTable {
 	c.mem.Lock()
 	defer c.mem.Unlock()
-	if len(c.mem.MemTables) <= 1 {
+	if len(c.mem.memTables) <= 1 {
 		return nil
 	}
 	var immu imem.IMemTable
-	immu, c.mem.MemTables = c.mem.MemTables[0], c.mem.MemTables[1:]
+	immu, c.mem.memTables = c.mem.memTables[0], c.mem.memTables[1:]
 	return immu
 }

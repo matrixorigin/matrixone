@@ -2,13 +2,13 @@ package rpcserver
 
 import (
 	"fmt"
-	"matrixone/pkg/logger"
+	"go.uber.org/zap"
 	"matrixone/pkg/rpcserver/message"
 
 	"github.com/fagongzi/goetty"
 )
 
-func New(addr string, maxsize int, log logger.Log) (Server, error) {
+func New(addr string, maxsize int, log *zap.Logger) (Server, error) {
 	var err error
 
 	s := new(server)

@@ -12,19 +12,18 @@ import (
 	"github.com/matrixorigin/matrixcube/server"
 	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
+	"matrixone/pkg/catalog"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
-	"matrixone/pkg/logger"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/rpcserver"
 	"matrixone/pkg/sql/handler"
-	aoe_catalog "matrixone/pkg/vm/engine/aoe/catalog"
-	"matrixone/pkg/vm/engine/aoe/dist"
-	daoe "matrixone/pkg/vm/engine/aoe/dist/aoe"
-	dconfig "matrixone/pkg/vm/engine/aoe/dist/config"
-	"matrixone/pkg/vm/engine/aoe/dist/pb"
-	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/driver"
+	aoeDriver "matrixone/pkg/vm/driver/aoe"
+	dConfig "matrixone/pkg/vm/driver/config"
+	"matrixone/pkg/vm/driver/pb"
+	aoeEngine "matrixone/pkg/vm/engine/aoe/engine"
+	aoeStorage "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -38,9 +37,9 @@ import (
 )
 
 var (
-	catalog aoe_catalog.Catalog
-	mo      *frontend.MOServer
-	pci     *frontend.PDCallbackImpl
+	c   *catalog.Catalog
+	mo  *frontend.MOServer
+	pci *frontend.PDCallbackImpl
 )
 
 func createMOServer(callback *frontend.PDCallbackImpl) {
@@ -86,7 +85,7 @@ func recreateDir(dir string) (err error) {
 call the catalog service to remove the epoch
 */
 func removeEpoch(epoch uint64) {
-	_, err := catalog.RemoveDeletedTable(epoch)
+	_, err := c.RemoveDeletedTable(epoch)
 	if err != nil {
 		fmt.Printf("catalog remove ddl failed. error :%v \n", err)
 	}
@@ -142,16 +141,16 @@ func main() {
 	pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
 		FS: vfs.NewPebbleFS(vfs.Default),
 	})
-	var aoeDataStorage *daoe.Storage
+	var aoeDataStorage *aoeDriver.Storage
 
-	opt := engine.Options{}
+	opt := aoeStorage.Options{}
 	_, err = toml.DecodeFile(os.Args[1], &opt)
 	if err != nil {
 		panic(err)
 	}
-	aoeDataStorage, err = daoe.NewStorageWithOptions(targetDir+"/aoe", &opt)
+	aoeDataStorage, err = aoeDriver.NewStorageWithOptions(targetDir+"/aoe", &opt)
 
-	cfg := dconfig.Config{}
+	cfg := dConfig.Config{}
 	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
 	if err != nil {
 		panic(err)
@@ -171,7 +170,7 @@ func main() {
 		cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
 	}
 
-	a, err := dist.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+	a, err := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {
 		fmt.Printf("Create cube driver failed, %v", err)
 		panic(err)
@@ -181,8 +180,8 @@ func main() {
 		fmt.Printf("Start cube driver failed, %v", err)
 		panic(err)
 	}
-	catalog = aoe_catalog.DefaultCatalog(a)
-	eng := aoe_engine.New(&catalog)
+	c = catalog.NewCatalog(a)
+	eng := aoeEngine.New(c)
 	pci.SetRemoveEpoch(removeEpoch)
 
 	hm := config.HostMmu
@@ -196,9 +195,9 @@ func main() {
 		proc.Lim.BatchSize = config.GlobalSystemVariables.GetProcessLimitationBatchSize()
 		proc.Refer = make(map[string]uint64)
 	}
-	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
-	log.SetLevel(logger.WARN)
-	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, log)
+	/*	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
+		log.SetLevel(logger.WARN)*/
+	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, logutil.L())
 	if err != nil {
 		fmt.Printf("Create rpcserver failed, %v", err)
 		panic(err)
@@ -214,7 +213,7 @@ func main() {
 	}
 
 	go srv.Run()
-	//test storage engine
+	//test storage aoe_storage
 	config.StorageEngine = eng
 
 	//test cluster nodes
@@ -251,7 +250,7 @@ func main() {
 	os.Exit(0)
 }
 
-func waitClusterStartup(driver dist.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
+func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
 	timeoutC := time.After(timeout)
 	for {
 		select {
@@ -260,19 +259,31 @@ func waitClusterStartup(driver dist.CubeDriver, timeout time.Duration, maxReplic
 		default:
 			router := driver.RaftStore().GetRouter()
 			if router != nil {
-				nodeCnt := 0
+				nodeCnt := maxReplicas
 				shardCnt := 0
 				router.ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
 					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
 					shardCnt++
-					if len(shard.Peers) > nodeCnt {
+					if len(shard.Peers) < nodeCnt {
 						nodeCnt = len(shard.Peers)
 					}
 					return true
 				})
 				if nodeCnt >= maxReplicas && shardCnt >= minimalAvailableShard {
-					fmt.Println("ClusterStatus is ok now")
-					return nil
+					kvNodeCnt := maxReplicas
+					kvCnt := 0
+					router.ForeachShards(uint64(pb.KVGroup), func(shard *bhmetapb.Shard) bool {
+						kvCnt++
+						if len(shard.Peers) < kvNodeCnt {
+							kvNodeCnt = len(shard.Peers)
+						}
+						return true
+					})
+					if kvCnt >= 1 && kvNodeCnt >= maxReplicas {
+						fmt.Println("ClusterStatus is ok now")
+						return nil
+					}
+
 				}
 			}
 			time.Sleep(time.Millisecond * 10)

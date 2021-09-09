@@ -7,7 +7,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
@@ -36,9 +36,11 @@ func TestManager(t *testing.T) {
 	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
 	info := md.MockInfo(&sync.RWMutex{}, opts.Meta.Conf.BlockMaxRows, opts.Meta.Conf.SegmentMaxBlocks)
 	tableMeta := md.MockTable(info, nil, 10)
-	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
+	t0_data, err := tables.RegisterTable(tableMeta)
+	assert.Nil(t, err)
 
 	c0, err := manager.RegisterCollection(t0_data)
 	assert.Nil(t, err)
@@ -73,8 +75,12 @@ func TestCollection(t *testing.T) {
 	blockCnt := uint64(4)
 	opts := config.NewCustomizedMetaOptions(WORK_DIR, config.CST_Customize, blockRows, blockCnt)
 
-	var mu sync.RWMutex
-	tables := table.NewTables(&mu)
+	manager := NewManager(opts)
+	fsMgr := ldio.NewManager(WORK_DIR, false)
+	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
+	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
 	opts.Scheduler = dbsched.NewScheduler(opts, tables)
 
 	tabletInfo := md.MockTableInfo(2)
@@ -86,16 +92,8 @@ func TestCollection(t *testing.T) {
 	assert.Nil(t, err)
 	tbl := event.GetTable()
 
-	manager := NewManager(opts)
-	fsMgr := ldio.NewManager(WORK_DIR, false)
-	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
-	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
-	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
-	// tableMeta := md.MockTable(opts.Meta.Info, tbl.Schema, 10)
-	// tableMeta := md.MockTable(nil, tbl.Schema, 10)
 	tableMeta := tbl
-	t0_data := table.NewTableData(fsMgr, indexBufMgr, mtBufMgr, sstBufMgr, tableMeta)
-	err = tables.CreateTable(t0_data)
+	t0_data, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	c0, _ := manager.RegisterCollection(t0_data)
 	blks := uint64(20)
