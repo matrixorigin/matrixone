@@ -29,14 +29,6 @@ jobs:
       # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
       - uses: actions/checkout@v2
 
-      - name: Merge Pull Request
-        if: ${{ github.event.issue.pull_request }}
-        uses: juliangruber/merge-pull-request-action@v1
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          number: 1
-          method: squash
-
       - name: Build Configure
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
