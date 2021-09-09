@@ -436,6 +436,8 @@ type ParseLineHandler struct {
 	csvLineArray2 time.Duration
 	asyncChanLoop time.Duration
 	saveParsedLine time.Duration
+	choose_true time.Duration
+	choose_false time.Duration
 }
 
 func (plh *ParseLineHandler) Status() LINE_STATE {
@@ -2089,9 +2091,10 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 
 	batchBegin := handler.batchFilled
 
-	chose := false
+	chose := true
 
 	if chose {
+		wait_d := time.Now()
 		for i, line := range fetchLines {
 			//fmt.Printf("line %d %v \n",i,line)
 			wait_a := time.Now()
@@ -2289,7 +2292,9 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 			}
 			fillBlank += time.Since(wait_b)
 		}
+		handler.choose_true += time.Since(wait_d)
 	} else{
+		wait_d := time.Now()
 		//record missing column
 		for k := 0; k < len(columnFLags); k++ {
 			columnFLags[k] = 0
@@ -2535,6 +2540,7 @@ func saveParsedLinesToBatchSimdCsv(handler *ParseLineHandler, forceConvert bool)
 			}
 		}
 		fillBlank += time.Since(wait_b)
+		handler.choose_false += time.Since(wait_d)
 	}
 	handler.lineCount += uint64(fetchCnt)
 	handler.batchFilled = batchBegin + fetchCnt
@@ -2849,7 +2855,8 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		fmt.Printf("-----call_back %s " +
 			"process_block - callback %s " +
 			"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
-			"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s \n",
+			"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
+			"choose_true %s choose_false %s \n",
 			handler.callback,
 			process_blcok - handler.callback,
 			handler.asyncChan,
@@ -2858,6 +2865,8 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 			handler.csvLineArray1,
 			handler.csvLineArray2,
 			handler.saveParsedLine,
+			handler.choose_true,
+			handler.choose_false,
 			)
 
 
