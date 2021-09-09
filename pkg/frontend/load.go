@@ -2588,9 +2588,9 @@ when force is true, batchsize will be changed.
  */
 func saveBatchToStorage(handler *ParseLineHandler,force bool) error {
 	if handler.batchFilled == handler.batchSize{
-		for _, vec := range handler.batchData.Vecs {
-			fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
-		}
+		//for _, vec := range handler.batchData.Vecs {
+		//	fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
+		//}
 		wait_a := time.Now()
 		err := handler.tableHandler.Write(handler.timestamp,handler.batchData)
 		if err != nil {
