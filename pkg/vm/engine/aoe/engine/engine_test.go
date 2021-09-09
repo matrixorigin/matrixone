@@ -31,8 +31,7 @@ import (
 )
 
 const (
-	testDBName          = "db1"
-	testTableNamePrefix = "test-table-"
+	testDBName = "db1"
 
 	blockRows          = 10000
 	blockCntPerSegment = 2
@@ -112,7 +111,7 @@ func TestAOEEngine(t *testing.T) {
 		catalogs = append(catalogs, catalog2.NewCatalog(c.CubeDrivers[i]))
 	}
 
-	testTableDDL(t, catalogs)
+	//testTableDDL(t, catalogs)
 
 	aoeEngine := New(&catalogs[0])
 
@@ -142,16 +141,16 @@ func TestAOEEngine(t *testing.T) {
 	require.Equal(t, 0, len(tbls))
 
 	mockTbl := md.MockTableInfo(colCnt)
-	mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, 0)
+	mockTbl.Name = fmt.Sprintf("%s%d", tableName, time.Now().Unix())
 	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
 
 	time.Sleep(10 * time.Second)
 
 	err = db.Create(3, mockTbl.Name, defs, pdef, nil, comment)
 	if err != nil {
-		stdLog.Printf("create table failed, %v", err)
+		stdLog.Printf("create table %v failed, %v", mockTbl.Name, err)
 	} else {
-		stdLog.Printf("create table is succeeded")
+		stdLog.Printf("create table %v is succeeded", mockTbl.Name)
 	}
 	require.NoError(t, err)
 
@@ -183,45 +182,6 @@ func TestAOEEngine(t *testing.T) {
 
 	tbls = db.Relations()
 	require.Equal(t, 0, len(tbls))
-
-	//test multiple tables creating
-	for i := 0; i < 9; i++ {
-		mockTbl := md.MockTableInfo(colCnt)
-		mockTbl.Name = fmt.Sprintf("%s%d", testTableNamePrefix, i)
-		_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
-		err = db.Create(6, mockTbl.Name, defs, pdef, nil, comment)
-		//require.NoError(t, err)
-		if err != nil {
-			stdLog.Printf("create table %d failed, err is %v", i, err)
-		} else {
-			tb, err := db.Relation(mockTbl.Name)
-			require.NoError(t, err)
-			require.Equal(t, tb.ID(), mockTbl.Name)
-			attrs := helper.Attribute(*mockTbl)
-			var typs []types.Type
-			for _, attr := range attrs {
-				typs = append(typs, attr.Type)
-			}
-			ibat := chunk.MockBatch(typs, blockRows)
-			var buf bytes.Buffer
-			err = protocol.EncodeBatch(ibat, &buf)
-			require.NoError(t, err)
-			stdLog.Printf("size of batch is  %d", buf.Len())
-			for i := 0; i < blockCnt; i++ {
-				err = tb.Write(4, ibat)
-				require.NoError(t, err)
-			}
-		}
-	}
-	tbls = db.Relations()
-	require.Equal(t, 9, len(tbls))
-
-	for _, tName := range tbls {
-		tb, err := db.Relation(tName)
-		require.NoError(t, err)
-		require.Equal(t, segmentCnt, len(tb.Segments()))
-		logutil.Infof("table name is %s, segment size is %d, segments is %v\n", tName, len(tb.Segments()), tb.Segments())
-	}
 
 	if restart {
 		time.Sleep(3 * time.Second)
@@ -290,6 +250,7 @@ func doRestartEngine(t *testing.T) {
 
 func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 	//Wait shard state change
+	logutil.Infof("ddl test begin")
 
 	tbs, err := c[0].ListTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
@@ -402,5 +363,7 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 	dbs, err = c[0].ListDatabases()
 	require.NoError(t, err)
 	require.Nil(t, dbs)
+
+	logutil.Infof("ddl test is finished")
 
 }

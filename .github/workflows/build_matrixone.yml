@@ -5,6 +5,7 @@ name: Build MatrixOne
 on:
   # Triggers the workflow on push or pull request events but only for the main branch.
   pull_request:
+    types: [ assigned, edited, opened, synchronize, reopened ]
     branches: main
 
   # Allows dev to run this workflow manually from the Actions tab
@@ -28,7 +29,7 @@ jobs:
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
       - uses: actions/checkout@v2
-      
+
       - name: Build Configure
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
