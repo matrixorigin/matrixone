@@ -16,25 +16,27 @@ import (
 	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
 
+type sllnode = common.SLLNode
+
 type loadFunc = func(uint64, *process.Process) (*ro.Vector, error)
-type partLoadFunc = func(*ColumnPart) loadFunc
+type partLoadFunc = func(*columnPart) loadFunc
 
 var (
 	defalutPartLoadFunc partLoadFunc
 )
 
 func init() {
-	defalutPartLoadFunc = func(part *ColumnPart) loadFunc {
+	defalutPartLoadFunc = func(part *columnPart) loadFunc {
 		return part.loadFromDisk
 	}
-	// defalutPartLoadFunc = func(part *ColumnPart) loadFunc {
+	// defalutPartLoadFunc = func(part *columnPart) loadFunc {
 	// 	return part.loadFromBuf
 	// }
 }
 
 type IColumnPart interface {
 	bmgrif.INode
-	common.IRef
+	common.ISLLNode
 	GetNext() IColumnPart
 	SetNext(IColumnPart)
 	GetID() uint64
@@ -47,19 +49,20 @@ type IColumnPart interface {
 	Size() uint64
 }
 
-type ColumnPart struct {
-	sync.RWMutex
-	common.RefHelper
+type columnPart struct {
+	sllnode
 	*bmgr.Node
-	Block IColumnBlock
-	Next  IColumnPart
+	host IColumnBlock
 }
 
 func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumnPart {
 	defer host.Unref()
 	defer blk.Unref()
 	var bufMgr bmgrif.IBufferManager
-	part := &ColumnPart{Block: blk}
+	part := &columnPart{
+		host:    blk,
+		sllnode: *common.NewSLLNode(new(sync.RWMutex)),
+	}
 	blkId := blk.GetMeta().AsCommonID().AsBlockID()
 	blkId.Idx = uint16(blk.GetColIdx())
 	var vf common.IVFile
@@ -98,9 +101,9 @@ func NewColumnPart(host iface.IBlock, blk IColumnBlock, capacity uint64) IColumn
 	return part
 }
 
-func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager) IColumnPart {
+func (part *columnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBufferManager) IColumnPart {
 	defer blk.Unref()
-	cloned := &ColumnPart{Block: blk}
+	cloned := &columnPart{host: blk}
 	blkId := blk.GetMeta().AsCommonID().AsBlockID()
 	blkId.Idx = uint16(blk.GetColIdx())
 	var vf common.IVFile
@@ -119,17 +122,17 @@ func (part *ColumnPart) CloneWithUpgrade(blk IColumnBlock, sstBufMgr bmgrif.IBuf
 	return cloned
 }
 
-func (part *ColumnPart) GetVector() vector.IVector {
+func (part *columnPart) GetVector() vector.IVector {
 	handle := part.GetBufferHandle()
 	vec := wrapper.NewVector(handle)
 	return vec
 }
 
-func (part *ColumnPart) LoadVectorWrapper() (*vector.VectorWrapper, error) {
+func (part *columnPart) LoadVectorWrapper() (*vector.VectorWrapper, error) {
 	if part.VFile.GetFileType() == common.MemFile {
 		panic("logic error")
 	}
-	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
+	wrapper := vector.NewEmptyWrapper(part.host.GetColType())
 	wrapper.File = part.VFile
 	_, err := wrapper.ReadFrom(part.VFile)
 	if err != nil {
@@ -138,7 +141,7 @@ func (part *ColumnPart) LoadVectorWrapper() (*vector.VectorWrapper, error) {
 	return wrapper, nil
 }
 
-func (part *ColumnPart) loadFromBuf(ref uint64, proc *process.Process) (*ro.Vector, error) {
+func (part *columnPart) loadFromBuf(ref uint64, proc *process.Process) (*ro.Vector, error) {
 	iv := part.GetVector()
 	v, err := iv.CopyToVectorWithProc(ref, proc)
 	if err != nil {
@@ -148,8 +151,8 @@ func (part *ColumnPart) loadFromBuf(ref uint64, proc *process.Process) (*ro.Vect
 	return v, nil
 }
 
-func (part *ColumnPart) loadFromDisk(ref uint64, proc *process.Process) (*ro.Vector, error) {
-	wrapper := vector.NewEmptyWrapper(part.Block.GetColType())
+func (part *columnPart) loadFromDisk(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	wrapper := vector.NewEmptyWrapper(part.host.GetColType())
 	wrapper.File = part.VFile
 	_, err := wrapper.ReadWithProc(part.VFile, ref, proc)
 	if err != nil {
@@ -158,14 +161,14 @@ func (part *ColumnPart) loadFromDisk(ref uint64, proc *process.Process) (*ro.Vec
 	return &wrapper.Vector, nil
 }
 
-func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
+func (part *columnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
 	if part.VFile.GetFileType() == common.MemFile {
 		var ret *ro.Vector
 		vec := part.GetVector()
 		if !vec.IsReadonly() {
 			if vec.Length() == 0 {
 				vec.Close()
-				return ro.New(part.Block.GetColType()), nil
+				return ro.New(part.host.GetColType()), nil
 			}
 			vec = vec.GetLatestView()
 		}
@@ -176,35 +179,35 @@ func (part *ColumnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 	return defalutPartLoadFunc(part)(ref, proc)
 }
 
-func (part *ColumnPart) Prefetch() error {
+func (part *columnPart) Prefetch() error {
 	if part.VFile.GetFileType() == common.MemFile {
 		return nil
 	}
-	id := *part.Block.GetMeta().AsCommonID()
-	id.Idx = uint16(part.Block.GetColIdx())
-	return part.Block.GetSegmentFile().PrefetchPart(uint64(part.GetColIdx()), id)
+	id := *part.host.GetMeta().AsCommonID()
+	id.Idx = uint16(part.host.GetColIdx())
+	return part.host.GetSegmentFile().PrefetchPart(uint64(part.GetColIdx()), id)
 }
 
-func (part *ColumnPart) Size() uint64 {
+func (part *columnPart) Size() uint64 {
 	return part.BufNode.GetCapacity()
 }
 
-func (part *ColumnPart) GetColIdx() int {
-	return part.Block.GetColIdx()
+func (part *columnPart) GetColIdx() int {
+	return part.host.GetColIdx()
 }
 
-func (part *ColumnPart) GetID() uint64 {
-	return part.Block.GetMeta().ID
+func (part *columnPart) GetID() uint64 {
+	return part.host.GetMeta().ID
 }
 
-func (part *ColumnPart) SetNext(next IColumnPart) {
-	part.Lock()
-	defer part.Unlock()
-	part.Next = next
+func (part *columnPart) SetNext(next IColumnPart) {
+	part.sllnode.SetNextNode(next)
 }
 
-func (part *ColumnPart) GetNext() IColumnPart {
-	part.RLock()
-	defer part.RUnlock()
-	return part.Next
+func (part *columnPart) GetNext() IColumnPart {
+	r := part.sllnode.GetNextNode()
+	if r == nil {
+		return nil
+	}
+	return r.(IColumnPart)
 }
