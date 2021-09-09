@@ -3509,10 +3509,6 @@ func doWriteBatch(handler *ParseLineHandler, force bool) error {
 
 	//acquire semaphore
 	handler.simdCsvConcurrencyCountSemaphore <- 1
-	defer func() {
-		//release semaphore
-		<- handler.simdCsvConcurrencyCountSemaphore
-	}()
 
 	go func() {
 		handler.simdCsvWaitGroup.Add(1)
@@ -3521,6 +3517,9 @@ func doWriteBatch(handler *ParseLineHandler, force bool) error {
 		//step 3 : save into storage
 		err = saveParsedLinesToBatchSimdCsvConcurrentWrite(writeHandler,force)
 		writeHandler.simdCsvErr = err
+
+		//release semaphore
+		<- handler.simdCsvConcurrencyCountSemaphore
 
 		//output handler
 		handler.simdCsvOutputChan <- writeHandler
@@ -3645,6 +3644,8 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		handler.simdCsvConcurrencyCount = Max(1,handler.simdCsvConcurrencyCount)
 		handler.simdCsvConcurrencyCountSemaphore = make(chan int,handler.simdCsvConcurrencyCount)
 
+		//fmt.Printf("-----write concurrent count %d \n",handler.simdCsvConcurrencyCount)
+
 		prepareTime := time.Now()
 		//allocate batch space
 		err = prepareBatch(handler)
@@ -3768,7 +3769,7 @@ func (mce *MysqlCmdExecutor) LoadLoop (load *tree.Load, dbHandler engine.Databas
 		//}
 		//
 		//fmt.Printf("----- lastSave %s\n",time.Since(lastSave))
-		//fmt.Printf("-----process time %s \n",time.Since(processTime))
+//		fmt.Printf("-----process time %s \n",time.Since(processTime))
 		pprof.StopCPUProfile()
 	}else if ses.Pu.SV.GetLoadDataParserType() == 1 {
 		handler := &ParseLineHandler{
