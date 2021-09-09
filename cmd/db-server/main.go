@@ -37,7 +37,7 @@ import (
 )
 
 var (
-	c   catalog.Catalog
+	c   *catalog.Catalog
 	mo  *frontend.MOServer
 	pci *frontend.PDCallbackImpl
 )
@@ -181,7 +181,7 @@ func main() {
 		panic(err)
 	}
 	c = catalog.NewCatalog(a)
-	eng := aoeEngine.New(&c)
+	eng := aoeEngine.New(c)
 	pci.SetRemoveEpoch(removeEpoch)
 
 	hm := config.HostMmu

@@ -106,14 +106,14 @@ func TestAOEEngine(t *testing.T) {
 	stdLog.Printf("app started.")
 	time.Sleep(3 * time.Second)
 
-	var catalogs []catalog2.Catalog
+	var catalogs []*catalog2.Catalog
 	for i := 0; i < 3; i++ {
 		catalogs = append(catalogs, catalog2.NewCatalog(c.CubeDrivers[i]))
 	}
 
 	testTableDDL(t, catalogs)
 
-	aoeEngine := New(&catalogs[0])
+	aoeEngine := New(catalogs[0])
 
 	t0 := time.Now()
 	err := aoeEngine.Create(0, testDBName, 0)
@@ -229,7 +229,7 @@ func doRestartEngine(t *testing.T) {
 	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
 
 	catalog := catalog2.NewCatalog(c.CubeDrivers[0])
-	aoeEngine := New(&catalog)
+	aoeEngine := New(catalog)
 
 	dbs := aoeEngine.Databases()
 	require.Equal(t, 1, len(dbs))
@@ -248,7 +248,7 @@ func doRestartEngine(t *testing.T) {
 	}
 }
 
-func testTableDDL(t *testing.T, c []catalog2.Catalog) {
+func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	//Wait shard state change
 	logutil.Infof("ddl test begin")
 
@@ -317,36 +317,33 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 
 	for index := range c {
 		wg.Add(1)
-		cc := c[index]
-		i := index
 
-		//time.Sleep(100 * time.Millisecond)
-		go func() {
+		go func(idx int) {
 			defer func() {
 				wg.Done()
 			}()
-			for j := 10; j < 50; j++ {
-				if j%3 != i {
+			for j := 10; j < 200; j++ {
+				if j%3 != idx {
 					continue
 				}
 				t1.Name = fmt.Sprintf("t%d", j)
-				tid, err := cc.CreateTable(uint64(j), dbid, *t1)
+				tid, err := c[idx].CreateTable(uint64(j), dbid, *t1)
 				if err != nil {
-					logutil.Infof("create table failed, catalog-%d, j is %d, tid is %d", i, j, tid)
+					logutil.Infof("create table failed, catalog-%d, j is %d, tid is %d", idx, j, tid)
 				} else {
-					logutil.Infof("create table finished, catalog-%d, j is %d, tid is %d", i, j, tid)
+					logutil.Infof("create table finished, catalog-%d, j is %d, tid is %d", idx, j, tid)
 				}
 				require.NoError(t, err)
 				require.Less(t, uint64(0), tid)
 				time.Sleep(100 * time.Millisecond)
 			}
-		}()
+		}(index)
 	}
 	wg.Wait()
 
 	tbls, err = c[0].ListTables(dbid)
 	require.NoError(t, err)
-	require.Equal(t, 40, len(tbls))
+	require.Equal(t, 190, len(tbls))
 
 	for i := uint64(10); i < 15; i++ {
 		_, err = c[0].DropTable(20+i, dbid, fmt.Sprintf("t%d", i))
@@ -355,7 +352,7 @@ func testTableDDL(t *testing.T, c []catalog2.Catalog) {
 
 	tbls, err = c[0].ListTables(dbid)
 	require.NoError(t, err)
-	require.Equal(t, 35, len(tbls))
+	require.Equal(t, 185, len(tbls))
 
 	err = c[0].DropDatabase(3, dbName)
 	require.NoError(t, err)
