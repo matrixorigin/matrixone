@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -21,6 +22,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 )
@@ -172,6 +174,10 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 }
 
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
+	buf := make([]byte, 4096)
+	runtime.Stack(buf, true)
+	logutil.Infof("call local createtable, %v, %v, %v, %v", info.Name, info.Id, ctx.TableName, buf)
+
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
