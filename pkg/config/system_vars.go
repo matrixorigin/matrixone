@@ -380,7 +380,7 @@ type SystemVariables struct{
 	Access:	[file]
 	DataType:	int64
 	DomainType:	set
-	Values:	[10000]
+	Values:	[40000]
 	Comment:	the count of rows in vector of batch in load data
 	UpdateMode:	dynamic
 	*/
@@ -409,6 +409,30 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	blockSizeInLoadData    int64
+	
+	/**
+	Name:	loadDataParserType
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[0 1]
+	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten
+	UpdateMode:	dynamic
+	*/
+	loadDataParserType    int64
+	
+	/**
+	Name:	loadDataConcurrencyCount
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[16]
+	Comment:	default is 16. The count of go routine writing batch into the storage.
+	UpdateMode:	dynamic
+	*/
+	loadDataConcurrencyCount    int64
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -750,7 +774,7 @@ type varsConfig struct{
 	Access:	[file]
 	DataType:	int64
 	DomainType:	set
-	Values:	[10000]
+	Values:	[40000]
 	Comment:	the count of rows in vector of batch in load data
 	UpdateMode:	dynamic
 	*/
@@ -779,6 +803,30 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	BlockSizeInLoadData    int64  `toml:"blockSizeInLoadData"`
+	
+	/**
+	Name:	loadDataParserType
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[0 1]
+	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten
+	UpdateMode:	dynamic
+	*/
+	LoadDataParserType    int64  `toml:"loadDataParserType"`
+	
+	/**
+	Name:	loadDataConcurrencyCount
+	Scope:	[global]
+	Access:	[file]
+	DataType:	int64
+	DomainType:	set
+	Values:	[16]
+	Comment:	default is 16. The count of go routine writing batch into the storage.
+	UpdateMode:	dynamic
+	*/
+	LoadDataConcurrencyCount    int64  `toml:"loadDataConcurrencyCount"`
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -862,13 +910,16 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["maxReplicas"] = "	Name:	maxReplicas	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[1 1 1]	Comment:	the number of replicas for each resource	UpdateMode:	dynamic	"
 	
 	ap.name2definition["lengthOfQueryPrinted"] = "	Name:	lengthOfQueryPrinted	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[50 -1 10000]	Comment:	the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.	UpdateMode:	dynamic	"
-	
-	ap.name2definition["batchSizeInLoadData"] = "	Name:	batchSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[10000]	Comment:	the count of rows in vector of batch in load data	UpdateMode:	dynamic	"
+
+	ap.name2definition["batchSizeInLoadData"] = "	Name:	batchSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[40000]	Comment:	the count of rows in vector of batch in load data	UpdateMode:	dynamic	"
 	
 	ap.name2definition["blockCountInLoadData"] = "	Name:	blockCountInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[20 2 100000]	Comment:	count of read buffer in load data	UpdateMode:	dynamic	"
 	
 	ap.name2definition["blockSizeInLoadData"] = "	Name:	blockSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[4194304]	Comment:	defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data	UpdateMode:	dynamic	"
+
+	ap.name2definition["loadDataParserType"] = "	Name:	loadDataParserType	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[0 1]	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten	UpdateMode:	dynamic	"
 	
+	ap.name2definition["loadDataConcurrencyCount"] = "	Name:	loadDataConcurrencyCount	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[16]	Comment:	default is 16. The count of go routine writing batch into the storage.	UpdateMode:	dynamic	"
 }
 
 /**
@@ -1306,7 +1357,7 @@ func (ap *SystemVariables) LoadInitialValues()error{
 	}
 	
 	batchSizeInLoadDatachoices :=[]int64 {
-		10000,
+		40000,
 	}
 	if len(batchSizeInLoadDatachoices) != 0 {
 		if err = ap.setBatchSizeInLoadData(batchSizeInLoadDatachoices[0]) ; err != nil {
@@ -1341,6 +1392,32 @@ func (ap *SystemVariables) LoadInitialValues()error{
 	} else { 
 		if err = ap.setBlockSizeInLoadData(0) ; err != nil {
 			return fmt.Errorf("set%s failed.error:%v","BlockSizeInLoadData",err)
+		}
+	}
+	
+	loadDataParserTypechoices :=[]int64 {
+		0,1,
+	}
+	if len(loadDataParserTypechoices) != 0 {
+		if err = ap.setLoadDataParserType(loadDataParserTypechoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","LoadDataParserType",err)
+		}
+	} else { 
+		if err = ap.setLoadDataParserType(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","LoadDataParserType",err)
+		}
+	}
+	
+	loadDataConcurrencyCountchoices :=[]int64 {
+		16,
+	}
+	if len(loadDataConcurrencyCountchoices) != 0 {
+		if err = ap.setLoadDataConcurrencyCount(loadDataConcurrencyCountchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","LoadDataConcurrencyCount",err)
+		}
+	} else { 
+		if err = ap.setLoadDataConcurrencyCount(0) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","LoadDataConcurrencyCount",err)
 		}
 	}
 	return nil
@@ -1643,6 +1720,23 @@ func (ap * SystemVariables ) GetBlockSizeInLoadData() int64 {
 	return ap.blockSizeInLoadData
 }
 
+/**
+Get the value of the parameter loadDataParserType
+*/
+func (ap * SystemVariables ) GetLoadDataParserType() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.loadDataParserType
+}
+
+/**
+Get the value of the parameter loadDataConcurrencyCount
+*/
+func (ap * SystemVariables ) GetLoadDataConcurrencyCount() int64 {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.loadDataConcurrencyCount
+}
 
 /**
 Set the value of the parameter rootpassword
@@ -1852,6 +1946,20 @@ Set the value of the parameter blockSizeInLoadData
 */
 func (ap * SystemVariables ) SetBlockSizeInLoadData(value int64)error {
 	return  ap.setBlockSizeInLoadData(value)
+}
+
+/**
+Set the value of the parameter loadDataParserType
+*/
+func (ap * SystemVariables ) SetLoadDataParserType(value int64)error {
+	return  ap.setLoadDataParserType(value)
+}
+
+/**
+Set the value of the parameter loadDataConcurrencyCount
+*/
+func (ap * SystemVariables ) SetLoadDataConcurrencyCount(value int64)error {
+	return  ap.setLoadDataConcurrencyCount(value)
 }
 
 /**
@@ -2497,7 +2605,7 @@ func (ap * SystemVariables ) setBatchSizeInLoadData(value int64)error {
 	
 	
 		choices :=[]int64 {
-			10000,	
+			40000,
 		}
 		if len( choices ) != 0{
 			if !isInSliceInt64(value, choices){
@@ -2552,6 +2660,49 @@ func (ap * SystemVariables ) setBlockSizeInLoadData(value int64)error {
 	return nil
 }
 
+/**
+Set the value of the parameter loadDataParserType
+*/
+func (ap * SystemVariables ) setLoadDataParserType(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			0,1,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setLoadDataParserType,the value %d is not in set %v",value,choices)
+			}
+		}//else means any int64
+	
+	
+	ap.loadDataParserType = value
+	return nil
+}
+
+/**
+Set the value of the parameter loadDataConcurrencyCount
+*/
+func (ap * SystemVariables ) setLoadDataConcurrencyCount(value int64)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+	
+		choices :=[]int64 {
+			16,	
+		}
+		if len( choices ) != 0{
+			if !isInSliceInt64(value, choices){
+				return fmt.Errorf("setLoadDataConcurrencyCount,the value %d is not in set %v",value,choices)
+			}
+		}//else means any int64
+	
+	
+	ap.loadDataConcurrencyCount = value
+	return nil
+}
 
 
 /**
@@ -2601,6 +2752,8 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.name2updatedFlags["batchSizeInLoadData"] = false
 	config.name2updatedFlags["blockCountInLoadData"] = false
 	config.name2updatedFlags["blockSizeInLoadData"] = false
+	config.name2updatedFlags["loadDataParserType"] = false
+	config.name2updatedFlags["loadDataConcurrencyCount"] = false
 }
 
 /**
@@ -2824,6 +2977,16 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("blockSizeInLoadData"){
 		if err = ap.setBlockSizeInLoadData(config.BlockSizeInLoadData); err != nil{
 			return fmt.Errorf("update parameter blockSizeInLoadData failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("loadDataParserType"){
+		if err = ap.setLoadDataParserType(config.LoadDataParserType); err != nil{
+			return fmt.Errorf("update parameter loadDataParserType failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("loadDataConcurrencyCount"){
+		if err = ap.setLoadDataConcurrencyCount(config.LoadDataConcurrencyCount); err != nil{
+			return fmt.Errorf("update parameter loadDataConcurrencyCount failed.error:%v",err)
 		}
 	}
 	return nil

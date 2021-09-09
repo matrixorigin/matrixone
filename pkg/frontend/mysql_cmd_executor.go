@@ -22,7 +22,7 @@ type MysqlCmdExecutor struct {
 
 	//for load data closing
 	closeLoadDataRoutine *CloseFlag
-	closeProcessBlock    *CloseFlag
+	closeProcessBlock *CloseFlag
 }
 
 //get new process id
@@ -953,28 +953,28 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	}
 
 	/*
-		check table
-	*/
+	check table
+	 */
 	tableHandler, err := dbHandler.Relation(loadTable)
 	if err != nil {
 		//echo client. no such table
-		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb, loadTable)
+		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb,loadTable)
 	}
 
 	/*
-		execute load data
-	*/
+	execute load data
+	 */
 
-	result, err := mce.LoadLoop(load, dbHandler, tableHandler)
+	result, err := mce.LoadLoop(load,dbHandler,tableHandler)
 	if err != nil {
 		return err
 	}
 
 	/*
-		response
-	*/
-	info := NewMysqlError(ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings).Error()
-	logutil.Infof("====> [%s]", info)
+	response
+	 */
+	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Skipped,result.Warnings).Error()
+	logutil.Infof("====> [%s]",info)
 	resp := NewResponse(OkResponse, 0, int(COM_QUERY), info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
@@ -1066,6 +1066,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		var selfHandle = false
+
+
 
 		switch st := stmt.(type) {
 		case *tree.Use:

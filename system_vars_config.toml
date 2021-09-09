@@ -293,10 +293,10 @@
 #	Access:	[file]
 #	DataType:	int64
 #	DomainType:	set
-#	Values:	[10000]
+#	Values:	[40000]
 #	Comment:	the count of rows in vector of batch in load data
 #	UpdateMode:	dynamic
-	batchSizeInLoadData = 10000
+	batchSizeInLoadData = 40000
 
 #	Name:	blockCountInLoadData
 #	Scope:	[global]
@@ -317,6 +317,26 @@
 #	Comment:	defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data
 #	UpdateMode:	dynamic
 	blockSizeInLoadData = 4194304
+
+#	Name:	loadDataParserType
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[0 1]
+#	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten
+#	UpdateMode:	dynamic
+	loadDataParserType = 0
+
+#	Name:	loadDataConcurrencyCount
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	int64
+#	DomainType:	set
+#	Values:	[16]
+#	Comment:	default is 16. The count of go routine writing batch into the storage.
+#	UpdateMode:	dynamic
+	loadDataConcurrencyCount = 16
 
 # Cluster Configs
 pre-allocated-group-num = 20

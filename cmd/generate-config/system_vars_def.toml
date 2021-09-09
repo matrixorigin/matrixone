@@ -313,7 +313,7 @@ scope = ["global"]
 access = ["file"]
 type = "int64"
 domain-type = "set"
-values = ["10000"]
+values = ["40000"]
 comment = "the count of rows in vector of batch in load data"
 update-mode = "dynamic"
 
@@ -337,6 +337,25 @@ values = ["4194304"]
 comment = "defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data"
 update-mode = "dynamic"
 
+[[parameter]]
+name = "loadDataParserType"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["0", "1"]
+comment = "default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten"
+update-mode = "dynamic"
+
+[[parameter]]
+name = "loadDataConcurrencyCount"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["16"]
+comment = "default is 16. The count of go routine writing batch into the storage."
+update-mode = "dynamic"
 
 # Cluster Configs
 pre-allocated-group-num = 20
