@@ -118,7 +118,7 @@ func main() {
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 
-	logutil.SetupLogger(os.Args[1])
+	logutil.SetupMOLogger(os.Args[1])
 
 	Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
@@ -196,7 +196,7 @@ func main() {
 	}
 	/*	log := logger.New(os.Stderr, "rpc"+strNodeId+": ")
 		log.SetLevel(logger.WARN)*/
-	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, logutil.L())
+	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, logutil.GetGlobalLogger())
 	if err != nil {
 		fmt.Printf("Create rpcserver failed, %v", err)
 		panic(err)

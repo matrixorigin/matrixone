@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync/atomic"
@@ -20,7 +21,6 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
-	"github.com/pingcap/errors"
 
 	"github.com/stretchr/testify/assert"
 )

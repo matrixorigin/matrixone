@@ -5,7 +5,6 @@ go 1.15
 require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/RoaringBitmap/roaring v0.9.4
-	github.com/cockroachdb/errors v1.8.2
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
 	github.com/fagongzi/goetty v1.11.0
 	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287
@@ -18,7 +17,6 @@ require (
 	github.com/matrixorigin/simdcsv v0.0.0-20210908110534-32715d863896
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
-	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7
 	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
 	github.com/sirupsen/logrus v1.7.0
 	github.com/stretchr/testify v1.7.0
