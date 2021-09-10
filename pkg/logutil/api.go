@@ -23,35 +23,16 @@ func Debug(msg string, fields ...zap.Field) {
 	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Debug(msg, fields...)
 }
 
-// Debugf only use in develop mode
-func Debugf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Debugf(msg, fields...)
-}
-
 func Info(msg string, fields ...zap.Field) {
 	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
-}
-
-// Infof only use in develop mode
-func Infof(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Infof(msg, fields...)
 }
 
 func Warn(msg string, fields ...zap.Field) {
 	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Warn(msg, fields...)
 }
 
-func Warnf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Warnf(msg, fields...)
-}
-
 func Error(msg string, fields ...zap.Field) {
 	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Error(msg, fields...)
-}
-
-// Errorf only use in develop mode
-func Errorf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Errorf(msg, fields...)
 }
 
 func Panic(msg string, fields ...zap.Field) {
@@ -60,6 +41,31 @@ func Panic(msg string, fields ...zap.Field) {
 
 func Fatal(msg string, fields ...zap.Field) {
 	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
+}
+
+// Debugf only use in develop mode
+func Debugf(msg string, fields ...interface{}) {
+	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Debugf(msg, fields...)
+}
+
+// Infof only use in develop mode
+func Infof(msg string, fields ...interface{}) {
+	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Infof(msg, fields...)
+}
+
+// Warnf only use in develop mode
+func Warnf(msg string, fields ...interface{}) {
+	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Warnf(msg, fields...)
+}
+
+// Errorf only use in develop mode
+func Errorf(msg string, fields ...interface{}) {
+	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Errorf(msg, fields...)
+}
+
+// Panicf only use in develop mode
+func Panicf(msg string, fields ...interface{}) {
+	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Panicf(msg, fields...)
 }
 
 // Fatalf only use in develop mode
