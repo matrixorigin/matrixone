@@ -76,7 +76,7 @@ func handleLevelChange(port string, pattern string, level zap.AtomicLevel) {
 	}()
 }
 
-type GoettyLogger struct {}
+type GoettyLogger struct{}
 
 func (l *GoettyLogger) Infof(msg string, fields ...interface{}) {
 	Infof(msg, fields...)

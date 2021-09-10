@@ -119,7 +119,7 @@ func main() {
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
 
-	logutil.SetupLogger(os.Args[1])
+	logutil.SetupMOLogger(os.Args[1])
 
 	Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
@@ -228,7 +228,6 @@ func main() {
 	//}
 	//
 	//pprof.StartCPUProfile(cpuProf)
-
 
 	err = runMOServer()
 	if err != nil {
