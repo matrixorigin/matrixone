@@ -10,6 +10,7 @@ type Dedup struct {
 	Prev  op.OP
 	IsPD  bool // can be push down?
 	ID    string
+	Cs    []string // columns
 	Gs    []*extend.Attribute
 	Attrs map[string]types.Type
 }

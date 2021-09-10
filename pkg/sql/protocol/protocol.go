@@ -821,6 +821,7 @@ func EncodeExtend(e extend.Extend, buf *bytes.Buffer) error {
 	case *extend.ValueExtend:
 		buf.WriteByte(Value)
 		return EncodeVector(v.V, buf)
+		return nil
 	case *extend.BinaryExtend:
 		buf.WriteByte(Binary)
 		buf.Write(encoding.EncodeUint32(uint32(v.Op)))

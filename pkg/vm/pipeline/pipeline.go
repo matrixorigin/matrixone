@@ -103,7 +103,7 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 		if end, err := vm.Run(p.ins, proc); err != nil || end {
 			return end, err
 		}
-	    return false, nil
+		return false, nil
 	}
 }
 

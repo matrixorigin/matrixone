@@ -8,13 +8,16 @@ import (
 )
 
 func New(prev op.OP, gs []*extend.Attribute) *Dedup {
+	cs := make([]string, 0, len(gs))
 	attrs := make(map[string]types.Type)
 	{
 		for _, g := range gs {
+			cs = append(cs, g.Name)
 			attrs[g.Name] = g.Type.ToType()
 		}
 	}
 	return &Dedup{
+		Cs:    cs,
 		Gs:    gs,
 		Prev:  prev,
 		Attrs: attrs,
@@ -44,7 +47,7 @@ func (n *Dedup) Rename(name string) {
 }
 
 func (n *Dedup) Columns() []string {
-	return n.Prev.Columns()
+	return n.Cs
 }
 
 func (n *Dedup) Attribute() map[string]types.Type {

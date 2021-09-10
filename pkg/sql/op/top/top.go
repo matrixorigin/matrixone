@@ -12,7 +12,6 @@ func New(prev op.OP, limit int64, gs []order.Attribute) *Top {
 		Gs:    gs,
 		Prev:  prev,
 		Limit: limit,
-		Attrs: prev.Attribute(),
 	}
 }
 
@@ -43,5 +42,5 @@ func (n *Top) Columns() []string {
 }
 
 func (n *Top) Attribute() map[string]types.Type {
-	return n.Attrs
+	return n.Prev.Attribute()
 }
