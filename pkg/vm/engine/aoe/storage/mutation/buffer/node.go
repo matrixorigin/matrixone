@@ -1,14 +1,12 @@
 package buffer
 
 import (
+	"errors"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync"
 	"sync/atomic"
-
-	"github.com/cockroachdb/errors"
-	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
 
 type nodeHandle struct {
