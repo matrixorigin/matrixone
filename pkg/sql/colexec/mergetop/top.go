@@ -33,7 +33,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		}
 	}
 	ctr.n = len(n.Fs)
-	ctr.sels = make([]int64, n.Limit)
+	ctr.sels = make([]int64, 0, n.Limit)
 	return nil
 }
 

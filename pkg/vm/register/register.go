@@ -28,7 +28,8 @@ func Get(proc *process.Process, size int64, typ types.Type) (*vector.Vector, err
 			v.Typ = typ
 			v.Nsp.Reset()
 			v.Data = v.Data[:size]
-			proc.Reg.Ts = append(proc.Reg.Ts[:i], proc.Reg.Ts[i+1:])
+			proc.Reg.Ts[i] = proc.Reg.Ts[len(proc.Reg.Ts)-1]
+			proc.Reg.Ts = proc.Reg.Ts[:len(proc.Reg.Ts)-1]
 			return v, nil
 		}
 	}

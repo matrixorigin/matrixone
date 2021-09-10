@@ -29,15 +29,20 @@ func (bat *Batch) Reorder(attrs []string) {
 	}
 }
 
-func (bat *Batch) Shuffle(proc *process.Process) {
+func (bat *Batch) Shuffle(proc *process.Process) error {
+	var err error
+
 	if bat.SelsData != nil {
 		for i, vec := range bat.Vecs {
-			bat.Vecs[i] = vec.Shuffle(bat.Sels)
+			if bat.Vecs[i], err = vec.Shuffle(bat.Sels, proc); err != nil {
+				return err
+			}
 		}
 		proc.Free(bat.SelsData)
 		bat.Sels = nil
 		bat.SelsData = nil
 	}
+	return nil
 }
 
 func (bat *Batch) Length() int {

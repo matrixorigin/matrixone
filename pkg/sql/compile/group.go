@@ -28,6 +28,9 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 			gs = append(gs, g.Name)
 			mp[g.Name]++
 		}
+		for _, e := range o.Es {
+			mp[e.Name]++
+		}
 	}
 	ss, err := c.compile(o.Prev, mp)
 	if err != nil {

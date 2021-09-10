@@ -67,7 +67,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	reg.Wg.Add(1)
 	reg.Ch <- bat
-	n.Proc.Alloc(size)
+	n.Proc.Gm.Alloc(size)
 	proc.Gm.Free(size)
 	reg.Wg.Wait()
 	return false, nil

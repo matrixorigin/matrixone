@@ -48,6 +48,13 @@ func init() {
 				rs = rs[:and.SelAnd(lvs, rvs, rs)]
 				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
 				vec.Nsp.Filter(rs)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
+				vec.Col = rs
 				return vec, nil
 			},
 		},

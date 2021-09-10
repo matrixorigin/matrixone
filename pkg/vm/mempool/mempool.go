@@ -53,7 +53,8 @@ func (m *Mempool) Alloc(size int) []byte {
 			if b.size >= size {
 				if len(b.slots) > 0 {
 					data := b.slots[0]
-					m.buckets[i].slots = m.buckets[i].slots[1:]
+					b.slots = b.slots[1:]
+					m.buckets[i] = b
 					return data[:size]
 				}
 				return rawalloc.New(size, size)

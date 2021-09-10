@@ -33,9 +33,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Int8GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -54,9 +51,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -104,9 +98,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Int16GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -125,9 +116,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -175,9 +163,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Int32GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -196,9 +181,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -246,9 +228,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Int64GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -267,9 +246,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -317,9 +293,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Uint8GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -338,9 +311,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -388,9 +358,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Uint16GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -409,9 +376,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -459,9 +423,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Uint32GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -480,9 +441,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -530,9 +488,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Uint64GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -551,9 +506,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -601,9 +553,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Float32GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -622,9 +571,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -672,9 +618,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.Float64GeScalar(lvs[0], rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -693,9 +636,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -743,9 +683,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.StrGeScalar(lvs.Data, rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -764,9 +701,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}
@@ -814,9 +748,6 @@ func init() {
 					} else {
 						vec.SetCol(ge.StrGeScalar(lvs.Data, rvs, rs))
 					}
-					if lv.Ref == 0 {
-						register.Put(proc, lv)
-					}
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
@@ -835,9 +766,6 @@ func init() {
 					}
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
-					}
-					if rv.Ref == 0 {
-						register.Put(proc, rv)
 					}
 					return vec, nil
 				}

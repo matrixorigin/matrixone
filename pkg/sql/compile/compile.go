@@ -68,8 +68,12 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	if err != nil {
 		return err
 	}
+	o = prune(o)
 	o = opt.Optimize(rewrite(o, mergeCount(o, 0)))
-	ss, err := e.c.compile(o, make(map[string]uint64))
+	{
+		fmt.Printf("+++++++++o: %v\n", o)
+	}
+	ss, err := e.c.compileAlgebar(o)
 	if err != nil {
 		return err
 	}
@@ -214,7 +218,7 @@ func (e *Exec) Run(ts uint64) error {
 	return e.err
 }
 
-func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
+func (c *compile) compileAlgebar(o op.OP) ([]*Scope, error) {
 	switch n := o.(type) {
 	case *insert.Insert:
 		return []*Scope{&Scope{Magic: Insert, O: o}}, nil
@@ -232,6 +236,19 @@ func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 		return []*Scope{&Scope{Magic: ShowTables, O: o}}, nil
 	case *showDatabases.ShowDatabases:
 		return []*Scope{&Scope{Magic: ShowDatabases, O: o}}, nil
+	case *projection.Projection:
+		return c.compileOutput(n, make(map[string]uint64))
+	case *top.Top:
+		return c.compileTopOutput(n, make(map[string]uint64))
+	case *order.Order:
+		return c.compileOrderOutput(n, make(map[string]uint64))
+	}
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%s' unsupprt now", o))
+
+}
+
+func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
+	switch n := o.(type) {
 	case *top.Top:
 		return c.compileTop(n, mp)
 	case *dedup.Dedup:

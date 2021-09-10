@@ -45,10 +45,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				bat.Clean(proc)
 				bat.Attrs = nil
 				proc.Reg.Ax = bat
+				register.Put(proc, vec)
 				return false, nil
 			}
 			for i, vec := range bat.Vecs {
-				bat.Vecs[i] = vec.Shuffle(sels)
+				if bat.Vecs[i], err = vec.Shuffle(sels, proc); err != nil {
+					return false, err
+				}
 			}
 			register.Put(proc, vec)
 		}
@@ -66,15 +69,21 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		bat.Clean(proc)
 		return false, err
 	}
-	bat.SelsData = vec.Data
-	bat.Sels = vec.Col.([]int64)
-	if len(bat.Sels) > 0 {
-		bat.Reduce(n.Attrs, proc)
-		proc.Reg.Ax = bat
-	} else {
+	sels := vec.Col.([]int64)
+	if len(sels) == 0 {
 		bat.Clean(proc)
 		bat.Attrs = nil
 		proc.Reg.Ax = bat
+		register.Put(proc, vec)
+		return false, nil
 	}
+	for i, vec := range bat.Vecs {
+		if bat.Vecs[i], err = vec.Shuffle(sels, proc); err != nil {
+			return false, err
+		}
+	}
+	register.Put(proc, vec)
+	bat.Reduce(n.Attrs, proc)
+	proc.Reg.Ax = bat
 	return false, nil
 }

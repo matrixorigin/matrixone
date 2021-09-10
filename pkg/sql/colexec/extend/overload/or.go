@@ -25,6 +25,13 @@ func init() {
 				rs := encoding.DecodeInt64Slice(vec.Data)
 				rs = rs[:or.SelOr(lvs, rvs, rs)]
 				nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+				if lv.Ref == 0 {
+					register.Put(proc, lv)
+				}
+				if rv.Ref == 0 {
+					register.Put(proc, rv)
+				}
+				vec.Col = rs
 				return vec, nil
 			},
 		},
