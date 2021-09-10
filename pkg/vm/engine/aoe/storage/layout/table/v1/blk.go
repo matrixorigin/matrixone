@@ -15,7 +15,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/process"
 )
 
 type block struct {
