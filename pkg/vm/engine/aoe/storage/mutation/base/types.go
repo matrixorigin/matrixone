@@ -9,6 +9,19 @@ import (
 
 type BlockFlusher = func(base.INode, batch.IBatch, *metadata.Block, *dataio.TransientBlockFile) error
 
+type MockSize struct {
+	size uint64
+}
+
+func NewMockSize(size uint64) *MockSize {
+	s := &MockSize{size: size}
+	return s
+}
+
+func (mz *MockSize) Size() uint64 {
+	return mz.size
+}
+
 type IMutableBlock interface {
 	base.INode
 	GetData() batch.IBatch

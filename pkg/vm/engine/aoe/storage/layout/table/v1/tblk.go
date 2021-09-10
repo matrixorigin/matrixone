@@ -9,7 +9,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
@@ -26,15 +25,15 @@ type tblock struct {
 	coarseSize map[string]uint64
 }
 
-func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory) (*tblock, error) {
+func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory, mockSize *mb.MockSize) (*tblock, error) {
 	blk := &tblock{
 		baseBlock:  *newBaseBlock(host, meta),
-		node:       factory.CreateNode(host.GetSegmentFile(), meta).(mb.IMutableBlock),
+		node:       factory.CreateNode(host.GetSegmentFile(), meta, mockSize).(mb.IMutableBlock),
 		nodeMgr:    factory.GetManager(),
 		coarseSize: make(map[string]uint64),
 	}
 	for i, colDef := range meta.Segment.Table.Schema.ColDefs {
-		blk.coarseSize[colDef.Name] = col.EstimateStdColumnCapacity(i, meta)
+		blk.coarseSize[colDef.Name] = metadata.EstimateColumnBlockSize(i, meta)
 	}
 	blk.GetObject = func() interface{} { return blk }
 	blk.Pin = func(o interface{}) { o.(iface.IBlock).Ref() }

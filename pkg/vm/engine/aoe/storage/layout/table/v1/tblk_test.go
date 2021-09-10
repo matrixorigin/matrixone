@@ -67,7 +67,8 @@ func TestTBlock(t *testing.T) {
 	factory := factories.NewMutFactory(mgr, nil)
 	nodeFactory := factory.CreateNodeFactory(tabledata)
 
-	blk1, err := newTBlock(segdata, meta1, nodeFactory)
+	mockSize := mb.NewMockSize(uint64(0))
+	blk1, err := newTBlock(segdata, meta1, nodeFactory, mockSize)
 	assert.Nil(t, err)
 	assert.NotNil(t, blk1)
 	assert.False(t, blk1.node.IsLoaded())
@@ -126,7 +127,7 @@ func TestTBlock(t *testing.T) {
 	idx, ok = blk1.GetSegmentedIndex()
 	assert.False(t, ok)
 
-	blk2, err := newTBlock(segdata, meta2, nodeFactory)
+	blk2, err := newTBlock(segdata, meta2, nodeFactory, mockSize)
 	assert.Nil(t, err)
 	assert.NotNil(t, blk2)
 	assert.False(t, blk2.node.IsLoaded())

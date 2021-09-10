@@ -31,7 +31,7 @@ type MutableBlockNode struct {
 }
 
 func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
-	tabledata iface.ITableData, meta *metadata.Block, flusher mb.BlockFlusher) *MutableBlockNode {
+	tabledata iface.ITableData, meta *metadata.Block, flusher mb.BlockFlusher, initSize uint64) *MutableBlockNode {
 	if flusher == nil {
 		t := blockFlusher{}
 		flusher = t.flush
@@ -43,7 +43,7 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 		Flusher:   flusher,
 		Stale:     new(atomic.Value),
 	}
-	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), 0)
+	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), initSize)
 	n.UnloadFunc = n.unload
 	n.LoadFunc = n.load
 	n.DestroyFunc = n.destroy

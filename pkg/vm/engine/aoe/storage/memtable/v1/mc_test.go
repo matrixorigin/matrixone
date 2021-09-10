@@ -24,12 +24,13 @@ import (
 func TestMutCollection(t *testing.T) {
 	dir := "/tmp/memtable/mc"
 	os.RemoveAll(dir)
-	colcnt := 2
+	colcnt := 4
 	blockRows, blockCnt := uint64(64), uint64(4)
 
 	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt)
 
-	capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
+	capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4 / 2
+	// capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
 	manager := NewManager(opts)
 	fsMgr := ldio.NewManager(dir, false)
 	indexBufMgr := bmgr.NewBufferManager(dir, capacity)
@@ -57,7 +58,7 @@ func TestMutCollection(t *testing.T) {
 	assert.Nil(t, err)
 
 	c0 := newMutableCollection(manager, t0)
-	blks := uint64(10)
+	blks := uint64(20)
 	expectBlks := blks
 	batchSize := uint64(4)
 	step := expectBlks / batchSize
@@ -86,12 +87,12 @@ func TestMutCollection(t *testing.T) {
 		}(logId, &wg)
 	}
 	wg.Wait()
+	t.Log(mgr.String())
 	time.Sleep(time.Duration(50) * time.Millisecond)
 	c0.Unref()
 	time.Sleep(time.Duration(50) * time.Millisecond)
 	assert.Equal(t, int64(0), t0.RefCount())
 	t.Log(mgr.String())
 	t.Log(sstBufMgr.String())
-	t.Log(t0.String())
 	assert.Equal(t, 0, mgr.Count())
 }

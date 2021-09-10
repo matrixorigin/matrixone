@@ -26,7 +26,7 @@ func newAltBlockFactory(mutFactory fb.MutFactory, tabledata iface.ITableData) *a
 
 func (af *altBlockFactory) CreateBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
 	if meta.DataState < metadata.FULL {
-		return newTBlock(host, meta, af.nodeFactory)
+		return newTBlock(host, meta, af.nodeFactory, nil)
 	}
 	return newBlock(host, meta)
 }

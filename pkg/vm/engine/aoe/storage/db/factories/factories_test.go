@@ -10,6 +10,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation"
+	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
@@ -54,7 +55,8 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	factory := NewMutFactory(mgr, nil)
 	nodeFactory := factory.CreateNodeFactory(tabledata)
 
-	node1 := nodeFactory.CreateNode(segfile, meta1).(*mutation.MutableBlockNode)
+	mockSize := mb.NewMockSize(uint64(0))
+	node1 := nodeFactory.CreateNode(segfile, meta1, mockSize).(*mutation.MutableBlockNode)
 
 	h1 := mgr.Pin(node1)
 	assert.NotNil(t, h1)
@@ -81,7 +83,7 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	t.Logf("length=%d", node1.Data.Length())
 	assert.Equal(t, rows*factor*2, mgr.Total())
 
-	node2 := nodeFactory.CreateNode(segfile, meta2).(*mutation.MutableBlockNode)
+	node2 := nodeFactory.CreateNode(segfile, meta2, mockSize).(*mutation.MutableBlockNode)
 	h2 := mgr.Pin(node2)
 	assert.NotNil(t, h2)
 
