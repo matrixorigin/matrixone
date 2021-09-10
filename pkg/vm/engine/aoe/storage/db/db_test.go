@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -25,7 +26,6 @@ import (
 	"time"
 
 	"github.com/panjf2000/ants/v2"
-	"github.com/pingcap/errors"
 
 	"github.com/stretchr/testify/assert"
 )
