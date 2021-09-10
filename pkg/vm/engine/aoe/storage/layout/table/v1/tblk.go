@@ -1,6 +1,7 @@
 package table
 
 import (
+	"bytes"
 	"fmt"
 	gvec "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -13,7 +14,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
-	"matrixone/pkg/vm/process"
 	"runtime"
 	// "matrixone/pkg/logutil"
 )
@@ -102,16 +102,16 @@ func (blk *tblock) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
 	panic("not implemented")
 }
 
-func (blk *tblock) getVectorCopyFactory(attr string, ref uint64, proc *process.Process) func(batch.IBatch) (*gvec.Vector, error) {
+func (blk *tblock) getVectorCopyFactory(attr string, compressed, deCompressed *bytes.Buffer) func(batch.IBatch) (*gvec.Vector, error) {
 	return func(bat batch.IBatch) (*gvec.Vector, error) {
 		colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
 		raw := bat.GetVectorByAttr(colIdx).GetLatestView()
-		return raw.CopyToVectorWithProc(ref, proc)
+		return raw.CopyToVectorWithBuffer(compressed, deCompressed)
 	}
 }
 
-func (blk *tblock) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*gvec.Vector, error) {
-	fn := blk.getVectorCopyFactory(attr, ref, proc)
+func (blk *tblock) GetVectorCopy(attr string, compressed, deCompressed *bytes.Buffer) (*gvec.Vector, error) {
+	fn := blk.getVectorCopyFactory(attr, compressed, deCompressed)
 	h := blk.getHandle()
 	data := blk.node.GetData()
 	v, err := fn(data)
