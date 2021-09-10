@@ -294,11 +294,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 		case types.T_float64:
 			vec.Col = make([]float64, len(rows.Rows))
 		case types.T_char, types.T_varchar:
-			col := &types.Bytes{}
-			if err = col.Append(make([][]byte, len(rows.Rows))); err != nil {
-				return nil, err
-			}
-			vec.Col = col
+			vec.Col = make([][]byte, len(rows.Rows))
 		}
 		bat.Vecs = append(bat.Vecs, vec)
 	}

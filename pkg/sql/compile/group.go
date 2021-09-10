@@ -16,6 +16,10 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 
 	refer := make(map[string]uint64)
 	{
+		for _, g := range o.Gs {
+			gs = append(gs, g.Name)
+			mp[g.Name]++
+		}
 		for _, attr := range o.As {
 			if v, ok := mp[attr]; ok {
 				refer[attr] = v + 1
@@ -23,10 +27,6 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 			} else {
 				refer[attr]++
 			}
-		}
-		for _, g := range o.Gs {
-			gs = append(gs, g.Name)
-			mp[g.Name]++
 		}
 		for _, e := range o.Es {
 			mp[e.Name]++

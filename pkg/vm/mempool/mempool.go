@@ -1,7 +1,7 @@
 package mempool
 
 import (
-	"matrixone/pkg/internal/rawalloc"
+	"matrixone/pkg/vm/malloc"
 	"sync"
 )
 
@@ -53,11 +53,10 @@ func (m *Mempool) Alloc(size int) []byte {
 			if b.size >= size {
 				if len(b.slots) > 0 {
 					data := b.slots[0]
-					b.slots = b.slots[1:]
-					m.buckets[i] = b
+					m.buckets[i].slots = m.buckets[i].slots[1:]
 					return data[:size]
 				}
-				return rawalloc.New(size, size)
+				return malloc.Malloc(size)
 			}
 		}
 	}
@@ -68,7 +67,7 @@ func (m *Mempool) Alloc(size int) []byte {
 			return buf[:size]
 		}
 	}
-	return rawalloc.New(size, size)
+	return malloc.Malloc(size)
 }
 
 func (m *Mempool) Free(data []byte) {

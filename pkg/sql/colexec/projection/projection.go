@@ -33,6 +33,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
+	bat.Shuffle(proc)
 	n := arg.(*Argument)
 	rbat := batch.New(true, n.Attrs)
 	for i := range n.Attrs {
@@ -43,16 +44,11 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			return false, err
 		}
 	}
-	if bat.SelsData != nil {
-		proc.Free(bat.SelsData)
-		bat.Sels = nil
-		bat.SelsData = nil
-	}
 	for i, e := range n.Es {
 		if _, ok := e.(*extend.Attribute); !ok {
 			bat.Reduce(e.Attributes(), proc)
 		}
-		if _, ok := e.(*extend.Attribute); !ok {
+		if name, ok := e.(*extend.Attribute); !ok || name.Name != n.Attrs[i] {
 			rbat.Vecs[i].Ref = n.Refer[n.Attrs[i]]
 		}
 	}

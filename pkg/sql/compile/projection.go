@@ -10,9 +10,10 @@ import (
 func (c *compile) compileOutput(o *projection.Projection, mp map[string]uint64) ([]*Scope, error) {
 	refer := make(map[string]uint64)
 	{
+		mq := make(map[string]uint64)
 		for i, e := range o.Es {
-			if name, ok := e.E.(*extend.Attribute); ok {
-				mp[name.Name]++
+			if name, ok := e.E.(*extend.Attribute); ok && name.Name == o.As[i] {
+				mq[name.Name]++
 				continue
 			}
 			attr := o.As[i]
@@ -21,8 +22,11 @@ func (c *compile) compileOutput(o *projection.Projection, mp map[string]uint64) 
 				delete(mp, attr)
 			} else {
 				refer[attr]++
-				IncRef(e.E, mp)
 			}
+			IncRef(e.E, mq)
+		}
+		for k, v := range mq {
+			mp[k] += v
 		}
 	}
 	ss, err := c.compile(o.Prev, mp)
@@ -58,8 +62,9 @@ func (c *compile) compileOutput(o *projection.Projection, mp map[string]uint64) 
 func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint64) ([]*Scope, error) {
 	refer := make(map[string]uint64)
 	{
+		mq := make(map[string]uint64)
 		for i, e := range o.Es {
-			if _, ok := e.E.(*extend.Attribute); ok {
+			if name, ok := e.E.(*extend.Attribute); ok && name.Name == o.As[i] {
 				continue
 			}
 			attr := o.As[i]
@@ -68,8 +73,11 @@ func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint
 				delete(mp, attr)
 			} else {
 				refer[attr]++
-				IncRef(e.E, mp)
 			}
+			IncRef(e.E, mq)
+		}
+		for k, v := range mq {
+			mp[k] += v
 		}
 	}
 	ss, err := c.compile(o.Prev, mp)

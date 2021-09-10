@@ -27,7 +27,7 @@ func RewriteExtend(e extend.Extend) extend.Extend {
 func rewriteNot(e extend.Extend) extend.Extend {
 	switch v := e.(type) {
 	case *extend.ParenExtend:
-        return &extend.ParenExtend{ E: rewriteNot(v.E) }
+		return &extend.ParenExtend{rewriteNot(v.E)}
 	case *extend.UnaryExtend:
 		return rewriteNotUnary(v)
 	case *extend.BinaryExtend:
@@ -59,7 +59,7 @@ func negation(e extend.Extend, isParen bool) extend.Extend {
 	case *extend.UnaryExtend:
 		return rewriteNotUnary(v)
 	case *extend.ParenExtend:
-        return &extend.ParenExtend{ E: negation(v.E, true) }
+		return &extend.ParenExtend{negation(v.E, true)}
 	case *extend.BinaryExtend:
 		if !isParen && (v.Op == overload.And || v.Op == overload.Or) {
 			v.Left = negation(v.Left, isParen)

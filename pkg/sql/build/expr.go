@@ -62,7 +62,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 		if err != nil {
 			return nil, err
 		}
-        return &extend.ParenExtend{ E: ext }, nil
+		return &extend.ParenExtend{ext}, nil
 	case *tree.OrExpr:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -72,13 +72,13 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.Or, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.Or, left, right}, nil
 	case *tree.NotExpr:
 		ext, err := b.buildExpr(o, e.Expr)
 		if err != nil {
 			return nil, err
 		}
-        return &extend.UnaryExtend{ Op: overload.Not, E: ext }, nil
+		return &extend.UnaryExtend{overload.Not, ext}, nil
 	case *tree.AndExpr:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -88,7 +88,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.And, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.And, left, right}, nil
 	case *tree.XorExpr:
 		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Xor is not support now"))
 	case *tree.UnaryExpr:
@@ -141,7 +141,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 		return &extend.BinaryExtend{
 			Op:    overload.Typecast,
 			Left:  left,
-            Right: &extend.ValueExtend{ V: vector.New(typ) },
+			Right: &extend.ValueExtend{vector.New(typ)},
 		}, nil
 	case *tree.RangeCond:
 		left, err := b.buildExpr(o, e.Left)
@@ -197,7 +197,7 @@ func (b *build) buildUnary(o op.OP, e *tree.UnaryExpr) (extend.Extend, error) {
 		if err != nil {
 			return nil, err
 		}
-        return &extend.UnaryExtend{ Op: overload.UnaryMinus, E: ext }, nil
+		return &extend.UnaryExtend{overload.UnaryMinus, ext}, nil
 	case tree.UNARY_PLUS:
 		return b.buildExpr(o, e.Expr)
 	}
@@ -215,7 +215,7 @@ func (b *build) buildBinary(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) 
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.Plus, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.Plus, left, right}, nil
 	case tree.MINUS:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -225,7 +225,7 @@ func (b *build) buildBinary(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) 
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.Minus, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.Minus, left, right}, nil
 	case tree.MULTI:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -235,7 +235,7 @@ func (b *build) buildBinary(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) 
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.Mult, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.Mult, left, right}, nil
 	case tree.MOD:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -245,7 +245,7 @@ func (b *build) buildBinary(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) 
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.Mod, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.Mod, left, right}, nil
 	case tree.DIV, tree.INTEGER_DIV:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -255,7 +255,7 @@ func (b *build) buildBinary(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) 
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.Div, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.Div, left, right}, nil
 	}
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }
@@ -271,7 +271,7 @@ func (b *build) buildComparison(o op.OP, e *tree.ComparisonExpr) (extend.Extend,
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.EQ, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.EQ, left, right}, nil
 	case tree.LESS_THAN:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -281,7 +281,7 @@ func (b *build) buildComparison(o op.OP, e *tree.ComparisonExpr) (extend.Extend,
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.LT, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.LT, left, right}, nil
 	case tree.LESS_THAN_EQUAL:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -291,7 +291,7 @@ func (b *build) buildComparison(o op.OP, e *tree.ComparisonExpr) (extend.Extend,
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.LE, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.LE, left, right}, nil
 	case tree.GREAT_THAN:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -301,7 +301,7 @@ func (b *build) buildComparison(o op.OP, e *tree.ComparisonExpr) (extend.Extend,
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op:overload.GT, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.GT, left, right}, nil
 	case tree.GREAT_THAN_EQUAL:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -311,7 +311,7 @@ func (b *build) buildComparison(o op.OP, e *tree.ComparisonExpr) (extend.Extend,
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.GE, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.GE, left, right}, nil
 	case tree.NOT_EQUAL:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -321,7 +321,7 @@ func (b *build) buildComparison(o op.OP, e *tree.ComparisonExpr) (extend.Extend,
 		if err != nil {
 			return nil, err
 		}
-        return &extend.BinaryExtend{ Op: overload.NE, Left: left, Right: right }, nil
+		return &extend.BinaryExtend{overload.NE, left, right}, nil
 	}
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }
@@ -406,13 +406,13 @@ func buildValue(val constant.Value) (extend.Extend, error) {
 		vec.Ref = 1
 		v, _ := constant.Int64Val(val)
 		vec.Col = []int64{v}
-        return &extend.ValueExtend{ V: vec }, nil
+		return &extend.ValueExtend{vec}, nil
 	case constant.Float:
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		v, _ := constant.Float64Val(val)
 		vec.Col = []float64{v}
-        return &extend.ValueExtend{ V: vec }, nil
+		return &extend.ValueExtend{vec}, nil
 	case constant.String:
 		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
 		vec.Ref = 1
@@ -422,7 +422,7 @@ func buildValue(val constant.Value) (extend.Extend, error) {
 			Offsets: []uint32{0},
 			Lengths: []uint32{uint32(len(v))},
 		}
-        return &extend.ValueExtend{ V: vec }, nil
+		return &extend.ValueExtend{vec}, nil
 	default:
 		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport value: %v", val))
 	}

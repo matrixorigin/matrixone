@@ -9,9 +9,8 @@ import (
 
 func New(prev op.OP, e extend.Extend) *Restrict {
 	return &Restrict{
-		E:     e,
-		Prev:  prev,
-		Attrs: prev.Attribute(),
+		E:    e,
+		Prev: prev,
 	}
 }
 
@@ -32,5 +31,5 @@ func (n *Restrict) Columns() []string {
 }
 
 func (n *Restrict) Attribute() map[string]types.Type {
-	return n.Attrs
+	return n.Prev.Attribute()
 }

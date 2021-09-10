@@ -123,8 +123,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			proc.Reg.Ax = nil
 			return true, nil
 		}
-	    return true, nil
 	}
+	return true, nil
 }
 
 func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.Process) ([]*vector.Vector, error) {
