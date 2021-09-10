@@ -15,6 +15,7 @@
 package col
 
 import (
+	"bytes"
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
@@ -25,14 +26,12 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
-	"matrixone/pkg/vm/process"
 	"sync"
-	// "matrixone/pkg/vm/engine/aoe/storage/logutil"
 )
 
 type sllnode = common.SLLNode
 
-type loadFunc = func(uint64, *process.Process) (*ro.Vector, error)
+type loadFunc = func(*bytes.Buffer, *bytes.Buffer) (*ro.Vector, error)
 type partLoadFunc = func(*columnPart) loadFunc
 
 var (
@@ -56,7 +55,7 @@ type IColumnPart interface {
 	GetID() uint64
 	GetColIdx() int
 	LoadVectorWrapper() (*vector.VectorWrapper, error)
-	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
+	ForceLoad(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error)
 	Prefetch() error
 	CloneWithUpgrade(IColumnBlock, bmgrif.IBufferManager) IColumnPart
 	GetVector() vector.IVector
@@ -155,27 +154,27 @@ func (part *columnPart) LoadVectorWrapper() (*vector.VectorWrapper, error) {
 	return wrapper, nil
 }
 
-func (part *columnPart) loadFromBuf(ref uint64, proc *process.Process) (*ro.Vector, error) {
-	iv := part.GetVector()
-	v, err := iv.CopyToVectorWithProc(ref, proc)
-	if err != nil {
-		return nil, err
-	}
-	iv.Close()
-	return v, nil
-}
+// func (part *columnPart) loadFromBuf(ref uint64, proc *process.Process) (*ro.Vector, error) {
+// 	iv := part.GetVector()
+// 	v, err := iv.CopyToVectorWithProc(ref, proc)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+// 	iv.Close()
+// 	return v, nil
+// }
 
-func (part *columnPart) loadFromDisk(ref uint64, proc *process.Process) (*ro.Vector, error) {
+func (part *columnPart) loadFromDisk(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	wrapper := vector.NewEmptyWrapper(part.host.GetColType())
 	wrapper.File = part.VFile
-	_, err := wrapper.ReadWithProc(part.VFile, ref, proc)
+	_, err := wrapper.ReadWithBuffer(part.VFile, compressed, deCompressed)
 	if err != nil {
 		return nil, err
 	}
 	return &wrapper.Vector, nil
 }
 
-func (part *columnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
+func (part *columnPart) ForceLoad(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	if part.VFile.GetFileType() == common.MemFile {
 		var ret *ro.Vector
 		vec := part.GetVector()
@@ -186,11 +185,11 @@ func (part *columnPart) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector
 			}
 			vec = vec.GetLatestView()
 		}
-		ret, err := vec.CopyToVectorWithProc(ref, proc)
+		ret, err := vec.CopyToVectorWithBuffer(compressed, deCompressed)
 		vec.Close()
 		return ret, err
 	}
-	return defalutPartLoadFunc(part)(ref, proc)
+	return defalutPartLoadFunc(part)(compressed, deCompressed)
 }
 
 func (part *columnPart) Prefetch() error {

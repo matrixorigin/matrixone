@@ -51,12 +51,12 @@ type Vector interface {
  *  			count || vector
  */
 type Vector struct {
-	Or   bool // true: origin
-	Ref  uint64
+	Or   bool   // true: origin
+	Ref  uint64 // reference count
 	Data []byte // raw data
 	Typ  types.Type
-	Col  interface{}
-	Nsp  *nulls.Nulls
+	Col  interface{}  // column data
+	Nsp  *nulls.Nulls // nulls list
 }
 
 // emptyInterface is the header for an interface{} value.

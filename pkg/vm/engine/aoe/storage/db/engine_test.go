@@ -22,7 +22,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -57,10 +56,9 @@ func TestEngine(t *testing.T) {
 		attrs = append(attrs, colDef.Name)
 		cols = append(cols, i)
 	}
-	refs := make([]uint64, len(attrs))
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
-	proc := process.New(gm, mempool.New(1<<48, 8))
+	proc := process.New(gm)
 
 	tableCnt := 100
 	var twg sync.WaitGroup
@@ -93,12 +91,12 @@ func TestEngine(t *testing.T) {
 				seg := rel.Segment(segId, proc)
 				for _, id := range seg.Blocks() {
 					blk := seg.Block(id, proc)
-					bat, err := blk.Prefetch(refs, attrs, proc)
-					assert.Nil(t, err)
-					for _, attr := range attrs {
-						bat.GetVector(attr, proc)
-						atomic.AddUint32(&loadCnt, uint32(1))
-					}
+					blk.Prefetch(attrs)
+					//assert.Nil(t, err)
+					//for _, attr := range attrs {
+					//	bat.GetVector(attr, proc)
+					//	atomic.AddUint32(&loadCnt, uint32(1))
+					//}
 				}
 			}
 			rel.Close()

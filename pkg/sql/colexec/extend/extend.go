@@ -140,3 +140,34 @@ var BinaryStrings = map[int]func(Extend, Extend) string{
 }
 
 var MultiStrings = map[int]func([]Extend) string{}
+
+func AndExtends(e Extend, es []Extend) []Extend {
+	switch v := e.(type) {
+	case *UnaryExtend:
+		return nil
+	case *ParenExtend:
+		return AndExtends(v.E, es)
+	case *Attribute:
+		return es
+	case *ValueExtend:
+		return es
+	case *BinaryExtend:
+		switch v.Op {
+		case overload.EQ:
+			return append(es, v)
+		case overload.NE:
+			return append(es, v)
+		case overload.LT:
+			return append(es, v)
+		case overload.LE:
+			return append(es, v)
+		case overload.GT:
+			return append(es, v)
+		case overload.GE:
+			return append(es, v)
+		case overload.And:
+			return append(AndExtends(v.Left, es), AndExtends(v.Right, es)...)
+		}
+	}
+	return nil
+}

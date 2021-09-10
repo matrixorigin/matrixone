@@ -19,10 +19,10 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/hash"
 	"matrixone/pkg/intmap/fastmap"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -49,6 +49,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		hashs:  make([]uint64, UnitLimit),
 		sels:   make([][]int64, UnitLimit),
 		groups: make(map[uint64][]*hash.BagGroup),
+		vec:    vector.New(types.Type{Oid: types.T_int8}),
 	}
 	{
 		for _, attr := range n.Rattrs {
@@ -109,7 +110,7 @@ func (ctr *Container) build(attrs []string, proc *process.Process) error {
 			bat.Reorder(attrs)
 			ctr.bat = batch.New(true, bat.Attrs)
 			for i, attr := range bat.Attrs {
-				vec := bat.GetVector(attr, proc)
+				vec := bat.GetVector(attr)
 				ctr.bat.Vecs[i] = vector.New(vec.Typ)
 			}
 		} else {
@@ -166,7 +167,7 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 		{
 			ctr.Probe.bat = batch.New(true, ctr.attrs)
 			for i, attr := range bat.Attrs {
-				vec := bat.GetVector(attr, proc)
+				vec := bat.GetVector(attr)
 				ctr.Probe.bat.Vecs[i] = vector.New(vec.Typ)
 			}
 			j := len(bat.Attrs)
@@ -225,15 +226,8 @@ func (ctr *Container) buildUnit(start, count int, vecs []*vector.Vector, proc *p
 					matchs, remaining = g.Fill(remaining, ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs)
 					for len(matchs) > 0 {
 						for i, vec := range ctr.bat.Vecs {
-							if vec.Data == nil {
-								if err = vec.UnionOne(vecs[i], matchs[0], proc); err != nil {
-									return err
-								}
-								copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
-							} else {
-								if err = vec.UnionOne(vecs[i], matchs[0], proc); err != nil {
-									return err
-								}
+							if err = vec.UnionOne(vecs[i], matchs[0], proc); err != nil {
+								return err
 							}
 						}
 						ctr.rows++
@@ -251,15 +245,8 @@ func (ctr *Container) buildUnit(start, count int, vecs []*vector.Vector, proc *p
 				g := hash.NewBagGroup(ctr.rows)
 				{
 					for i, vec := range ctr.bat.Vecs {
-						if vec.Data == nil {
-							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-								return err
-							}
-							copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
-						} else {
-							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-								return err
-							}
+						if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+							return err
 						}
 					}
 					if proc.Size() > proc.Lim.Size {
@@ -271,15 +258,8 @@ func (ctr *Container) buildUnit(start, count int, vecs []*vector.Vector, proc *p
 				matchs, remaining = g.Fill(remaining[1:], ctr.matchs, vecs, ctr.bat.Vecs[:ctr.n], ctr.diffs)
 				for len(matchs) > 0 {
 					for i, vec := range ctr.bat.Vecs {
-						if vec.Data == nil {
-							if err = vec.UnionOne(vecs[i], matchs[0], proc); err != nil {
-								return err
-							}
-							copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
-						} else {
-							if err = vec.UnionOne(vecs[i], matchs[0], proc); err != nil {
-								return err
-							}
+						if err = vec.UnionOne(vecs[i], matchs[0], proc); err != nil {
+							return err
 						}
 					}
 					ctr.rows++
@@ -345,28 +325,14 @@ func (ctr *Container) product(sels []int64, g *hash.BagGroup, vecs []*vector.Vec
 	for _, sel := range sels {
 		for _, gsel := range g.Sels {
 			for i, vec := range vecs {
-				if ctr.Probe.bat.Vecs[i].Data == nil {
-					if err := ctr.Probe.bat.Vecs[i].UnionOne(vec, sel, proc); err != nil {
-						return err
-					}
-					copy(ctr.Probe.bat.Vecs[i].Data[:mempool.CountSize], vec.Data[:mempool.CountSize])
-				} else {
-					if err := ctr.Probe.bat.Vecs[i].UnionOne(vec, sel, proc); err != nil {
-						return err
-					}
+				if err := ctr.Probe.bat.Vecs[i].UnionOne(vec, sel, proc); err != nil {
+					return err
 				}
 			}
 			j := len(vecs)
 			for i, vec := range ctr.bat.Vecs {
-				if ctr.Probe.bat.Vecs[i+j].Data == nil {
-					if err := ctr.Probe.bat.Vecs[i+j].UnionOne(vec, gsel, proc); err != nil {
-						return err
-					}
-					copy(ctr.Probe.bat.Vecs[i+j].Data[:mempool.CountSize], vec.Data[:mempool.CountSize])
-				} else {
-					if err := ctr.Probe.bat.Vecs[i+j].UnionOne(vec, gsel, proc); err != nil {
-						return err
-					}
+				if err := ctr.Probe.bat.Vecs[i+j].UnionOne(vec, gsel, proc); err != nil {
+					return err
 				}
 			}
 		}
@@ -377,7 +343,7 @@ func (ctr *Container) product(sels []int64, g *hash.BagGroup, vecs []*vector.Vec
 func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
-		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count))
+		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count, ctr.vec))
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

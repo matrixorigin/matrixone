@@ -42,8 +42,7 @@ func (c *compile) compileDedup(o *dedup.Dedup, mp map[string]uint64) ([]*Scope, 
 		}
 	}
 	rs := new(Scope)
-	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
-	rs.Proc = process.New(gm, c.proc.Mp)
+	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
 	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
 	{
@@ -64,8 +63,8 @@ func (c *compile) compileDedup(o *dedup.Dedup, mp map[string]uint64) ([]*Scope, 
 		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
-				Mmu: gm,
-				Reg: rs.Proc.Reg.Ws[i],
+				Proc: rs.Proc,
+				Reg:  rs.Proc.Reg.Ws[i],
 			},
 		})
 

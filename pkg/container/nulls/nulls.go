@@ -23,6 +23,36 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
+func Or(n, m, r *Nulls) {
+	if (n == nil || (n != nil && n.Np == nil)) && m != nil && m.Np != nil {
+		if r.Np == nil {
+			r.Np = roaring.NewBitmap()
+		}
+		r.Np.Or(n.Np)
+		return
+	}
+	if (m == nil || m != nil && m.Np == nil) && n != nil && n.Np != nil {
+		if r.Np == nil {
+			r.Np = roaring.NewBitmap()
+		}
+		r.Np.Or(m.Np)
+		return
+	}
+	if m != nil && m.Np != nil && n != nil && n.Np != nil {
+		if r.Np == nil {
+			r.Np = roaring.NewBitmap()
+		}
+		r.Np.Or(n.Np)
+		r.Np.Or(m.Np)
+	}
+}
+
+func (n *Nulls) Reset() {
+	if n.Np != nil {
+		n.Np.Clear()
+	}
+}
+
 func (n *Nulls) Any() bool {
 	if n.Np == nil {
 		return false
@@ -75,6 +105,15 @@ func (n *Nulls) Del(rows ...uint64) {
 	}
 }
 
+func (n *Nulls) Set(m *Nulls) {
+	if m != nil || m.Np != nil {
+		if n.Np == nil {
+			n.Np = roaring.NewBitmap()
+		}
+		n.Np.Or(m.Np)
+	}
+}
+
 func (n *Nulls) FilterCount(sels []int64) int {
 	var cnt int
 
@@ -91,22 +130,36 @@ func (n *Nulls) FilterCount(sels []int64) int {
 	return cnt
 }
 
-func (n *Nulls) Range(start, end uint64) *Nulls {
-	if n.Np == nil {
-		return &Nulls{}
+func (n *Nulls) RemoveRange(start, end uint64) {
+	if n.Np != nil {
+		n.Np.RemoveRange(start, end)
 	}
-	np := roaring.NewBitmap()
-	for ; start < end; start++ {
-		if n.Np.Contains(start) {
-			np.Add(start)
+}
+
+func (n *Nulls) Range(start, end uint64, m *Nulls) *Nulls {
+	switch {
+	case n.Np == nil && m.Np == nil:
+	case n.Np != nil && m.Np == nil:
+		m.Np = roaring.NewBitmap()
+		for ; start < end; start++ {
+			if n.Np.Contains(start) {
+				m.Np.Add(start)
+			}
+		}
+	case n.Np != nil && m.Np != nil:
+		m.Np.Clear()
+		for ; start < end; start++ {
+			if n.Np.Contains(start) {
+				m.Np.Add(start)
+			}
 		}
 	}
-	return &Nulls{np}
+	return m
 }
 
 func (n *Nulls) Filter(sels []int64) *Nulls {
 	if n.Np == nil {
-		return &Nulls{}
+		return n
 	}
 	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&sels))
 	sp := *(*[]uint64)(unsafe.Pointer(&hp))
@@ -116,7 +169,8 @@ func (n *Nulls) Filter(sels []int64) *Nulls {
 			np.Add(uint64(i))
 		}
 	}
-	return &Nulls{np}
+	n.Np = np
+	return n
 }
 
 func (n *Nulls) Show() ([]byte, error) {
@@ -146,14 +200,15 @@ func (n *Nulls) Read(data []byte) error {
 func (n *Nulls) Or(m *Nulls) *Nulls {
 	switch {
 	case m == nil:
-		return &Nulls{n.Np}
+		return n
 	case n.Np == nil && m.Np == nil:
-		return &Nulls{}
+		return n
 	case n.Np != nil && m.Np == nil:
-		return &Nulls{n.Np}
+		return n
 	case n.Np == nil && m.Np != nil:
-		return &Nulls{m.Np}
+		return m
 	default:
-		return &Nulls{roaring.Or(n.Np, m.Np)}
+		n.Np.Or(m.Np)
+		return n
 	}
 }

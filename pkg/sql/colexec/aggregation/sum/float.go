@@ -20,7 +20,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/vectorize/sum"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -75,12 +74,12 @@ func (a *floatSum) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 		return nil, err
 	}
 	vec := vector.New(a.typ)
-	vs := []float64{a.sum}
-	copy(data[mempool.CountSize:], encoding.EncodeFloat64Slice(vs))
-	vec.Col = vs
-	vec.Data = data
+	vs := encoding.DecodeFloat64Slice(data[:8])
+	vs[0] = a.sum
 	if a.cnt == 0 {
 		vec.Nsp.Add(0)
 	}
+	vec.Col = vs
+	vec.Data = data
 	return vec, nil
 }

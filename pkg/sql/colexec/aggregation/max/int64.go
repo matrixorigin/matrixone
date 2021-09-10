@@ -20,7 +20,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/vectorize/max"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -71,16 +70,12 @@ func (a *int64Max) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 		return nil, err
 	}
 	vec := vector.New(a.typ)
+	vs := encoding.DecodeInt64Slice(data[:8])
+	vs[0] = a.v
 	if a.cnt == 0 {
 		vec.Nsp.Add(0)
-		vs := []int64{0}
-		copy(data[mempool.CountSize:], encoding.EncodeInt64Slice(vs))
-		vec.Col = vs
-	} else {
-		vs := []int64{a.v}
-		copy(data[mempool.CountSize:], encoding.EncodeInt64Slice(vs))
-		vec.Col = vs
 	}
+	vec.Col = vs
 	vec.Data = data
 	return vec, nil
 }

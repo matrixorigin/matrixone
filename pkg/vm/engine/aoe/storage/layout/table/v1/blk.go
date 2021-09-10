@@ -15,6 +15,7 @@
 package table
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	ro "matrixone/pkg/container/vector"
@@ -28,7 +29,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/process"
 )
 
 type block struct {
@@ -155,9 +155,9 @@ func (blk *block) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
 	return vec, nil
 }
 
-func (blk *block) GetVectorCopy(attr string, ref uint64, proc *process.Process) (*ro.Vector, error) {
+func (blk *block) GetVectorCopy(attr string, compressed, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
-	vec, err := blk.data.cols[colIdx].ForceLoad(ref, proc)
+	vec, err := blk.data.cols[colIdx].ForceLoad(compressed, deCompressed)
 	if err != nil {
 		return nil, err
 	}

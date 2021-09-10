@@ -42,6 +42,10 @@ func (_ *MultiExtend) Eval(_ *batch.Batch, _ *process.Process) (*vector.Vector, 
 	return nil, 0, nil
 }
 
+func (_ *MultiExtend) Eq(_ Extend) bool {
+	return false
+}
+
 func (_ *MultiExtend) String() string {
 	return ""
 }

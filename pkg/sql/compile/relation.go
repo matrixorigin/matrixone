@@ -41,7 +41,7 @@ func (c *compile) compileUnit(u *relation.Unit, o *relation.Relation, mp map[str
 	if n < mcpu {
 		ss := make([]*Scope, n)
 		for i, seg := range u.Segs {
-			proc := process.New(c.proc.Gm, c.proc.Mp)
+			proc := process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 			proc.Lim = c.proc.Lim
 			ss[i] = &Scope{
 				Proc:  proc,
@@ -55,8 +55,7 @@ func (c *compile) compileUnit(u *relation.Unit, o *relation.Relation, mp map[str
 			}
 		}
 		rs := new(Scope)
-		gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
-		rs.Proc = process.New(gm, c.proc.Mp)
+		rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 		rs.Proc.Lim = c.proc.Lim
 		rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
 		{
@@ -71,8 +70,8 @@ func (c *compile) compileUnit(u *relation.Unit, o *relation.Relation, mp map[str
 			ss[i].Ins = append(s.Ins, vm.Instruction{
 				Op: vm.Transfer,
 				Arg: &transfer.Argument{
-					Mmu: gm,
-					Reg: rs.Proc.Reg.Ws[i],
+					Proc: rs.Proc,
+					Reg:  rs.Proc.Reg.Ws[i],
 				},
 			})
 		}
@@ -89,7 +88,7 @@ func (c *compile) compileUnit(u *relation.Unit, o *relation.Relation, mp map[str
 	segs := u.Segs
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
-		proc := process.New(c.proc.Gm, c.proc.Mp)
+		proc := process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 		proc.Lim = c.proc.Lim
 		if i == mcpu-1 {
 			ss[i] = &Scope{
@@ -116,8 +115,7 @@ func (c *compile) compileUnit(u *relation.Unit, o *relation.Relation, mp map[str
 		}
 	}
 	rs := new(Scope)
-	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
-	rs.Proc = process.New(gm, c.proc.Mp)
+	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
 	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
 	{
@@ -132,8 +130,8 @@ func (c *compile) compileUnit(u *relation.Unit, o *relation.Relation, mp map[str
 		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
-				Mmu: gm,
-				Reg: rs.Proc.Reg.Ws[i],
+				Proc: rs.Proc,
+				Reg:  rs.Proc.Reg.Ws[i],
 			},
 		})
 	}

@@ -25,10 +25,7 @@ import (
 	"matrixone/pkg/intmap/fastmap"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
-	"reflect"
-	"unsafe"
 )
 
 func init() {
@@ -93,6 +90,7 @@ func Prepare(_ *process.Process, arg interface{}) error {
 			matchs: make([]int64, UnitLimit),
 			hashs:  make([]uint64, UnitLimit),
 			sels:   make([][]int64, UnitLimit),
+			vec:    vector.New(types.Type{Oid: types.T_int8}),
 		}
 	}
 	return nil
@@ -101,10 +99,6 @@ func Prepare(_ *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	ctr := &n.Ctr
-	{
-		ctr.rows = 0
-		ctr.groups = make(map[uint64][]*hash.Group)
-	}
 	if proc.Reg.Ax == nil {
 		ctr.clean(proc)
 		return false, nil
@@ -114,15 +108,19 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		ctr.clean(proc)
 		return false, nil
 	}
+	{
+		ctr.rows = 0
+		ctr.groups = make(map[uint64][]*hash.Group)
+	}
 	bat.Reorder(ctr.attrs)
 	{
 		ctr.bat = batch.New(true, n.Gs)
 		for i, attr := range n.Gs {
-			vec := bat.GetVector(attr, proc)
+			vec := bat.GetVector(attr)
 			ctr.bat.Vecs[i] = vector.New(vec.Typ)
 		}
 		for i, e := range n.Es {
-			vec := bat.GetVector(ctr.attrs[ctr.is[i]], proc)
+			vec := bat.GetVector(ctr.attrs[ctr.is[i]])
 			if e.Agg == nil {
 				switch e.Op {
 				case aggregation.Avg:
@@ -191,7 +189,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeInt8Slice(data[mempool.CountSize : mempool.CountSize+length])
+			vs := encoding.DecodeInt8Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -211,7 +209,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeInt16Slice(data[mempool.CountSize : mempool.CountSize+length*2])
+			vs := encoding.DecodeInt16Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -231,7 +229,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeInt32Slice(data[mempool.CountSize : mempool.CountSize+length*4])
+			vs := encoding.DecodeInt32Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -251,7 +249,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+length*8])
+			vs := encoding.DecodeInt64Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -271,7 +269,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeUint8Slice(data[mempool.CountSize : mempool.CountSize+length])
+			vs := encoding.DecodeUint8Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -291,7 +289,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeUint16Slice(data[mempool.CountSize : mempool.CountSize+length*2])
+			vs := encoding.DecodeUint16Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -311,7 +309,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeUint32Slice(data[mempool.CountSize : mempool.CountSize+length*4])
+			vs := encoding.DecodeUint32Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -331,7 +329,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeUint64Slice(data[mempool.CountSize : mempool.CountSize+length*8])
+			vs := encoding.DecodeUint64Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -351,7 +349,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeFloat32Slice(data[mempool.CountSize : mempool.CountSize+length*4])
+			vs := encoding.DecodeFloat32Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -371,7 +369,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 				return nil, err
 			}
-			vs := encoding.DecodeFloat64Slice(data[mempool.CountSize : mempool.CountSize+length*8])
+			vs := encoding.DecodeFloat64Slice(data)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
 					if v := g.Aggs[i].Eval(); v == nil {
@@ -383,7 +381,7 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 			}
 			vecs[i].Col = vs
 			vecs[i].Data = data
-		case types.T_varchar:
+		case types.T_char, types.T_varchar:
 			size := 0
 			vs := make([][]byte, length)
 			for _, gs := range ctr.groups {
@@ -406,9 +404,9 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 			col := vecs[i].Col.(*types.Bytes)
 			{
 				o := uint32(0)
+				col.Data = data[:0]
 				col.Offsets = make([]uint32, 0, length)
 				col.Lengths = make([]uint32, 0, length)
-				col.Data = data[mempool.CountSize:mempool.CountSize]
 				for _, v := range vs {
 					col.Offsets = append(col.Offsets, o)
 					col.Lengths = append(col.Lengths, uint32(len(v)))
@@ -419,13 +417,6 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 			vecs[i].Col = col
 			vecs[i].Data = data
 		case types.T_tuple:
-			data, err := proc.Alloc(0)
-			if err != nil {
-				for j := 0; j < i; j++ {
-					vecs[j].Free(proc)
-				}
-				return nil, err
-			}
 			vs := make([][]interface{}, length)
 			for _, gs := range ctr.groups {
 				for _, g := range gs {
@@ -437,13 +428,10 @@ func (ctr *Container) eval(length int64, es []aggregation.Extend, proc *process.
 				}
 			}
 			vecs[i].Col = vs
-			vecs[i].Data = data[:mempool.CountSize]
 		}
 	}
 	for i, e := range es {
-		count := ctr.refer[e.Alias]
-		hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&count)), Len: 8, Cap: 8}
-		copy(vecs[i].Data, *(*[]byte)(unsafe.Pointer(&hp)))
+		vecs[i].Ref = ctr.refer[e.Alias]
 	}
 	return vecs, nil
 }
@@ -480,18 +468,9 @@ func (ctr *Container) unitGroup(start int, count int, vecs []*vector.Vector, es 
 			}
 			for len(remaining) > 0 {
 				g := hash.NewGroup(ctr.rows, ctr.is, es)
-				{
-					for i, vec := range ctr.bat.Vecs {
-						if vec.Data == nil {
-							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-								return err
-							}
-							copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
-						} else {
-							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-								return err
-							}
-						}
+				for i, vec := range ctr.bat.Vecs {
+					if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+						return err
 					}
 				}
 				ctr.rows++
@@ -509,7 +488,7 @@ func (ctr *Container) unitGroup(start int, count int, vecs []*vector.Vector, es 
 func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
-		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count))
+		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count, ctr.vec))
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

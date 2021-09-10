@@ -30,7 +30,6 @@ func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
-// sql union all is just a fake bag union
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	for {
 		if len(proc.Reg.Ws) == 0 {

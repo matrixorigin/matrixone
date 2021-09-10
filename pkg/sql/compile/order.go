@@ -25,9 +25,10 @@ import (
 	"sync"
 )
 
-func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, error) {
+func (c *compile) compileOrderOutput(o *order.Order, mp map[string]uint64) ([]*Scope, error) {
 	{
 		for _, g := range o.Gs {
+			mp[g.Name]++
 			mp[g.Name]++
 		}
 	}
@@ -45,8 +46,7 @@ func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, 
 		}
 	}
 	rs := new(Scope)
-	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
-	rs.Proc = process.New(gm, c.proc.Mp)
+	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
 	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
 	{
@@ -67,8 +67,74 @@ func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, 
 		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
-				Mmu: gm,
-				Reg: rs.Proc.Reg.Ws[i],
+				Proc: rs.Proc,
+				Reg:  rs.Proc.Reg.Ws[i],
+			},
+		})
+	}
+	rs.Ss = ss
+	rs.Magic = Merge
+	mfs := make([]mergeorder.Field, len(o.Gs))
+	{
+		for i, g := range o.Gs {
+			mfs[i] = mergeorder.Field{
+				Attr: g.Name,
+				Type: mergeorder.Direction(g.Dirt),
+			}
+		}
+	}
+	rs.Ins = append(rs.Ins, vm.Instruction{
+		Op: vm.MergeOrder,
+		Arg: &mergeorder.Argument{
+			Fs: mfs,
+		},
+	})
+	return []*Scope{rs}, nil
+}
+
+func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, error) {
+	{
+		for _, g := range o.Gs {
+			mp[g.Name]++
+		}
+	}
+	ss, err := c.compile(o.Prev, mp)
+	if err != nil {
+		return nil, err
+	}
+	fs := make([]vorder.Field, len(o.Gs))
+	{
+		for i, g := range o.Gs {
+			fs[i] = vorder.Field{
+				Attr: g.Name,
+				Type: vorder.Direction(g.Dirt),
+			}
+		}
+	}
+	rs := new(Scope)
+	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
+	rs.Proc.Lim = c.proc.Lim
+	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
+	{
+		for i, j := 0, len(ss); i < j; i++ {
+			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
+				Wg: new(sync.WaitGroup),
+				Ch: make(chan interface{}, 8),
+			}
+		}
+	}
+	if o.IsPD {
+		arg := &vorder.Argument{Fs: fs}
+		for i, s := range ss {
+			ss[i] = pushOrder(s, arg)
+		}
+	}
+	for i, s := range ss {
+		ss[i].Ins = append(s.Ins, vm.Instruction{
+			Op: vm.Transfer,
+			Arg: &transfer.Argument{
+				Proc: rs.Proc,
+				Reg:  rs.Proc.Reg.Ws[i],
 			},
 		})
 	}

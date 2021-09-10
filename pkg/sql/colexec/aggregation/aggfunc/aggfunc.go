@@ -55,7 +55,7 @@ func NewMax(typ types.Type) aggregation.Aggregation {
 		return max.NewFloat32(aggregation.ReturnType(aggregation.Max, typ))
 	case types.T_float64:
 		return max.NewFloat64(aggregation.ReturnType(aggregation.Max, typ))
-	case types.T_varchar:
+	case types.T_char, types.T_varchar:
 		return max.NewStr(aggregation.ReturnType(aggregation.Max, typ))
 	}
 	return nil
@@ -83,7 +83,7 @@ func NewMin(typ types.Type) aggregation.Aggregation {
 		return min.NewFloat32(aggregation.ReturnType(aggregation.Max, typ))
 	case types.T_float64:
 		return min.NewFloat64(aggregation.ReturnType(aggregation.Max, typ))
-	case types.T_varchar:
+	case types.T_char, types.T_varchar:
 		return min.NewStr(aggregation.ReturnType(aggregation.Max, typ))
 	}
 	return nil

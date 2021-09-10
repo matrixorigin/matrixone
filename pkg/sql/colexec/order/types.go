@@ -29,8 +29,8 @@ const (
 )
 
 type Container struct {
-	ds    []bool
-	attrs []string
+	ds    []bool   // ds[i] == true: the attrs[i] are in descending order
+	attrs []string // sorted list of attributes
 }
 
 type Field struct {

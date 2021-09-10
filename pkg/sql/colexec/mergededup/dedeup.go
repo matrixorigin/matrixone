@@ -19,10 +19,10 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/hash"
 	"matrixone/pkg/intmap/fastmap"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -49,6 +49,7 @@ func Prepare(proc *process.Process, arg interface{}) error {
 		hashs:  make([]uint64, UnitLimit),
 		sels:   make([][]int64, UnitLimit),
 		groups: make(map[uint64][]*hash.SetGroup),
+		vec:    vector.New(types.Type{Oid: types.T_int8}),
 	}
 	return nil
 }
@@ -103,14 +104,12 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 			}
 			if ctr.bat == nil {
 				bat.Reorder(n.Attrs)
-			} else {
-				bat.Reorder(ctr.bat.Attrs)
-			}
-			if ctr.bat == nil {
 				ctr.bat = batch.New(true, bat.Attrs)
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vector.New(vec.Typ)
 				}
+			} else {
+				bat.Reorder(ctr.bat.Attrs)
 			}
 			if len(bat.Sels) > 0 {
 				bat.Shuffle(proc)
@@ -163,15 +162,8 @@ func (ctr *Container) unitDedup(start int, count int, vecs []*vector.Vector, pro
 				g := hash.NewSetGroup(ctr.rows)
 				{
 					for i, vec := range ctr.bat.Vecs {
-						if vec.Data == nil {
-							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-								return err
-							}
-							copy(vec.Data[:mempool.CountSize], vecs[i].Data[:mempool.CountSize])
-						} else {
-							if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
-								return err
-							}
+						if err = vec.UnionOne(vecs[i], remaining[0], proc); err != nil {
+							return err
 						}
 					}
 				}
@@ -193,7 +185,7 @@ func (ctr *Container) unitDedup(start int, count int, vecs []*vector.Vector, pro
 func (ctr *Container) fillHash(start, count int, vecs []*vector.Vector) {
 	ctr.hashs = ctr.hashs[:count]
 	for _, vec := range vecs {
-		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count))
+		hash.Rehash(count, ctr.hashs, vec.Window(start, start+count, ctr.vec))
 	}
 	nextslot := 0
 	for i, h := range ctr.hashs {

@@ -15,11 +15,11 @@
 package db
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
 )
 
 type Block struct {
@@ -44,31 +44,36 @@ func (blk *Block) ID() string {
 	return blk.StrId
 }
 
-func (blk *Block) Prefetch(cs []uint64, attrs []string, proc *process.Process) (*batch.Batch, error) {
-	bat := batch.New(true, attrs)
+func (blk *Block) Prefetch(attrs []string) {
+	data := blk.Host.Data.StrongRefBlock(blk.Id)
+	if data == nil {
+		return
+	}
+	defer data.Unref()
+	for _, attr := range attrs {
+		if err := data.Prefetch(attr); err != nil {
+			// TODO
+			panic(err)
+		}
+	}
+}
+
+func (blk *Block) Read(cs []uint64, attrs []string, compressed []*bytes.Buffer, deCompressed []*bytes.Buffer) (*batch.Batch, error) {
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
 	if data == nil {
 		return nil, errors.New(fmt.Sprintf("Specified blk %d not found", blk.Id))
 	}
 	defer data.Unref()
-	bat.Is = make([]batch.Info, len(attrs))
+	bat := batch.New(true, attrs)
+	bat.Vecs = make([]*vector.Vector, len(attrs))
 	for i, attr := range attrs {
-		if err := data.Prefetch(attr); err != nil {
+		vec, err := data.GetVectorCopy(attr, compressed[i], deCompressed[i])
+		if err != nil {
 			return nil, err
 		}
-		bat.Is[i].R = blk
-		bat.Is[i].Ref = cs[i]
-		bat.Is[i].Len = blk.Size(attr)
+		vec.Ref = cs[i]
+		bat.Vecs[i] = vec
 	}
 	return bat, nil
 }
 
-func (blk *Block) Read(size int64, ref uint64, attr string, proc *process.Process) (*vector.Vector, error) {
-	data := blk.Host.Data.StrongRefBlock(blk.Id)
-	if data != nil {
-		defer data.Unref()
-		vec, err := data.GetVectorCopy(attr, ref, proc)
-		return vec, err
-	}
-	return nil, errors.New(fmt.Sprintf("Specified blk %d not found", blk.Id))
-}

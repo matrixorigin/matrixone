@@ -21,7 +21,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/partition"
 	"matrixone/pkg/sort"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -73,14 +72,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 }
 
 func (ctr *Container) processBatch(bat *batch.Batch, proc *process.Process) error {
-	ovec := bat.GetVector(ctr.attrs[0], proc)
+	ovec := bat.GetVector(ctr.attrs[0])
 	n := ovec.Length()
 	data, err := proc.Alloc(int64(n * 8))
 	if err != nil {
 		return err
 	}
-	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
-	sels = sels[:n]
+	sels := encoding.DecodeInt64Slice(data)
 	{
 		for i := range sels {
 			sels[i] = int64(i)
@@ -97,7 +95,7 @@ func (ctr *Container) processBatch(bat *batch.Batch, proc *process.Process) erro
 	for i, j := 1, len(ctr.attrs); i < j; i++ {
 		desc := ctr.ds[i]
 		ps = partition.Partition(sels, ds, ps, ovec)
-		vec := bat.GetVector(ctr.attrs[i], proc)
+		vec := bat.GetVector(ctr.attrs[i])
 		for i, j := 0, len(ps); i < j; i++ {
 			if i == j-1 {
 				sort.Sort(desc, sels[ps[i]:], vec)

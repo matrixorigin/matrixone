@@ -18,14 +18,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/BurntSushi/toml"
-	"github.com/cockroachdb/pebble"
-	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/server"
-	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
-	"github.com/matrixorigin/matrixcube/vfs"
 	"matrixone/pkg/catalog"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
@@ -38,7 +30,6 @@ import (
 	"matrixone/pkg/vm/driver/pb"
 	aoeEngine "matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
@@ -48,6 +39,15 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/BurntSushi/toml"
+	"github.com/cockroachdb/pebble"
+	"github.com/fagongzi/log"
+	"github.com/matrixorigin/matrixcube/components/prophet/util"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/server"
+	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
+	"github.com/matrixorigin/matrixcube/vfs"
 )
 
 var (
@@ -131,7 +131,6 @@ func main() {
 	fmt.Println("Shutdown The Server With Ctrl+C | Ctrl+\\.")
 
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
-	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
 
 	logutil.SetupLogger(os.Args[1])
 
@@ -200,7 +199,7 @@ func main() {
 
 	hm := config.HostMmu
 	gm := guest.New(1<<40, hm)
-	proc := process.New(gm, config.Mempool)
+	proc := process.New(gm)
 	{
 		proc.Id = "0"
 		proc.Lim.Size = config.GlobalSystemVariables.GetProcessLimitationSize()
@@ -242,7 +241,6 @@ func main() {
 	//}
 	//
 	//pprof.StartCPUProfile(cpuProf)
-
 
 	err = runMOServer()
 	if err != nil {

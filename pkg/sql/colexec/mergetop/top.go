@@ -22,7 +22,6 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -47,19 +46,8 @@ func Prepare(proc *process.Process, arg interface{}) error {
 			ctr.attrs[i] = f.Attr
 		}
 	}
-	{
-		data, err := proc.Alloc(n.Limit * 8)
-		if err != nil {
-			return err
-		}
-		sels := encoding.DecodeInt64Slice(data[mempool.CountSize : mempool.CountSize+n.Limit*8])
-		for i := int64(0); i < n.Limit; i++ {
-			sels[i] = i
-		}
-		ctr.data = data
-		ctr.sels = sels[:0]
-	}
 	ctr.n = len(n.Fs)
+	ctr.sels = make([]int64, 0, n.Limit)
 	return nil
 }
 
@@ -112,10 +100,6 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 			}
 			if ctr.bat == nil {
 				bat.Reorder(ctr.attrs)
-			} else {
-				bat.Reorder(ctr.bat.Attrs)
-			}
-			if ctr.bat == nil {
 				ctr.bat = batch.New(true, bat.Attrs)
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vector.New(vec.Typ)
@@ -127,6 +111,8 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 				for i, j := len(n.Fs), len(bat.Attrs); i < j; i++ {
 					n.Ctr.cmps[i] = compare.New(bat.Vecs[i].Typ.Oid, false)
 				}
+			} else {
+				bat.Reorder(ctr.bat.Attrs)
 			}
 			if len(bat.Sels) > 0 {
 				bat.Shuffle(proc)
@@ -154,13 +140,16 @@ func (ctr *Container) Eval(n *Argument, proc *process.Process) error {
 	for i, cmp := range ctr.cmps {
 		ctr.bat.Vecs[i] = cmp.Vector()
 	}
-	sels := make([]int64, len(ctr.sels))
+	data, err := proc.Alloc(int64(len(ctr.sels) * 8))
+	if err != nil {
+		return err
+	}
+	sels := encoding.DecodeInt64Slice(data)
 	for i, j := 0, len(ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
-	ctr.sels = append(ctr.sels, sels...) // no expansion here
-	ctr.bat.Sels = ctr.sels
-	ctr.bat.SelsData = ctr.data
+	ctr.bat.Sels = sels
+	ctr.bat.SelsData = data
 	if !n.Flg {
 		ctr.bat.Reduce(ctr.attrs, proc)
 	}
@@ -181,15 +170,8 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		}
 		for i := int64(0); i < start; i++ {
 			for j, vec := range ctr.bat.Vecs {
-				if vec.Data == nil {
-					if err := vec.UnionOne(bat.Vecs[j], int64(i), proc); err != nil {
-						return err
-					}
-					copy(vec.Data[:mempool.CountSize], bat.Vecs[j].Data[:mempool.CountSize])
-				} else {
-					if err := vec.UnionOne(bat.Vecs[j], int64(i), proc); err != nil {
-						return err
-					}
+				if err := vec.UnionOne(bat.Vecs[j], int64(i), proc); err != nil {
+					return err
 				}
 			}
 			ctr.sels = append(ctr.sels, n)
@@ -225,11 +207,6 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 func (ctr *Container) clean(proc *process.Process) {
 	if ctr.bat != nil {
 		ctr.bat.Clean(proc)
-	}
-	if ctr.data != nil {
-		proc.Free(ctr.data)
-		ctr.data = nil
-		ctr.sels = nil
 	}
 	{
 		for _, reg := range proc.Reg.Ws {

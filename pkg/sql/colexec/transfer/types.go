@@ -15,11 +15,12 @@
 package transfer
 
 import (
-	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/process"
 )
 
 type Argument struct {
-	Mmu *guest.Mmu
-	Reg *process.WaitRegister
+	vecs []*vector.Vector
+	Proc *process.Process
+	Reg  *process.WaitRegister
 }

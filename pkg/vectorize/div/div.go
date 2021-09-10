@@ -148,8 +148,8 @@ func int8Div(xs, ys, rs []int8) []int8 {
 }
 
 func int8DivSels(xs, ys, rs []int8, sels []int64) []int8 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -162,8 +162,8 @@ func int8DivScalar(x int8, ys, rs []int8) []int8 {
 }
 
 func int8DivScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -176,8 +176,8 @@ func int8DivByScalar(x int8, ys, rs []int8) []int8 {
 }
 
 func int8DivByScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }
@@ -190,8 +190,8 @@ func int16Div(xs, ys, rs []int16) []int16 {
 }
 
 func int16DivSels(xs, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -204,8 +204,8 @@ func int16DivScalar(x int16, ys, rs []int16) []int16 {
 }
 
 func int16DivScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -218,8 +218,8 @@ func int16DivByScalar(x int16, ys, rs []int16) []int16 {
 }
 
 func int16DivByScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }
@@ -232,8 +232,8 @@ func int32Div(xs, ys, rs []int32) []int32 {
 }
 
 func int32DivSels(xs, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -246,8 +246,8 @@ func int32DivScalar(x int32, ys, rs []int32) []int32 {
 }
 
 func int32DivScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -260,8 +260,8 @@ func int32DivByScalar(x int32, ys, rs []int32) []int32 {
 }
 
 func int32DivByScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }
@@ -274,8 +274,8 @@ func int64Div(xs, ys, rs []int64) []int64 {
 }
 
 func int64DivSels(xs, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -288,8 +288,8 @@ func int64DivScalar(x int64, ys, rs []int64) []int64 {
 }
 
 func int64DivScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -302,8 +302,8 @@ func int64DivByScalar(x int64, ys, rs []int64) []int64 {
 }
 
 func int64DivByScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }
@@ -316,8 +316,8 @@ func uint8Div(xs, ys, rs []uint8) []uint8 {
 }
 
 func uint8DivSels(xs, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -330,8 +330,8 @@ func uint8DivScalar(x uint8, ys, rs []uint8) []uint8 {
 }
 
 func uint8DivScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -344,8 +344,8 @@ func uint8DivByScalar(x uint8, ys, rs []uint8) []uint8 {
 }
 
 func uint8DivByScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }
@@ -358,8 +358,8 @@ func uint16Div(xs, ys, rs []uint16) []uint16 {
 }
 
 func uint16DivSels(xs, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -372,8 +372,8 @@ func uint16DivScalar(x uint16, ys, rs []uint16) []uint16 {
 }
 
 func uint16DivScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -386,8 +386,8 @@ func uint16DivByScalar(x uint16, ys, rs []uint16) []uint16 {
 }
 
 func uint16DivByScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }
@@ -400,8 +400,8 @@ func uint32Div(xs, ys, rs []uint32) []uint32 {
 }
 
 func uint32DivSels(xs, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -414,8 +414,8 @@ func uint32DivScalar(x uint32, ys, rs []uint32) []uint32 {
 }
 
 func uint32DivScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -428,8 +428,8 @@ func uint32DivByScalar(x uint32, ys, rs []uint32) []uint32 {
 }
 
 func uint32DivByScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }
@@ -442,8 +442,8 @@ func uint64Div(xs, ys, rs []uint64) []uint64 {
 }
 
 func uint64DivSels(xs, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -456,8 +456,8 @@ func uint64DivScalar(x uint64, ys, rs []uint64) []uint64 {
 }
 
 func uint64DivScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -470,8 +470,8 @@ func uint64DivByScalar(x uint64, ys, rs []uint64) []uint64 {
 }
 
 func uint64DivByScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }
@@ -484,8 +484,8 @@ func float32Div(xs, ys, rs []float32) []float32 {
 }
 
 func float32DivSels(xs, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -498,8 +498,8 @@ func float32DivScalar(x float32, ys, rs []float32) []float32 {
 }
 
 func float32DivScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -512,8 +512,8 @@ func float32DivByScalar(x float32, ys, rs []float32) []float32 {
 }
 
 func float32DivByScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }
@@ -526,8 +526,8 @@ func float64Div(xs, ys, rs []float64) []float64 {
 }
 
 func float64DivSels(xs, ys, rs []float64, sels []int64) []float64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
@@ -540,8 +540,8 @@ func float64DivScalar(x float64, ys, rs []float64) []float64 {
 }
 
 func float64DivScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
-	for i, sel := range sels {
-		rs[i] = x / ys[sel]
+	for _, sel := range sels {
+		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
@@ -554,8 +554,8 @@ func float64DivByScalar(x float64, ys, rs []float64) []float64 {
 }
 
 func float64DivByScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] / x
+	for _, sel := range sels {
+		rs[sel] = ys[sel] / x
 	}
 	return rs
 }

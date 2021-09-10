@@ -15,6 +15,7 @@
 package dbi
 
 import (
+	"bytes"
 	"io"
 	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/process"
@@ -51,4 +52,5 @@ type IVectorReader interface {
 	SliceReference(start, end int) IVectorReader
 	CopyToVector() *ro.Vector
 	CopyToVectorWithProc(uint64, *process.Process) (*ro.Vector, error)
+	CopyToVectorWithBuffer(*bytes.Buffer, *bytes.Buffer) (*ro.Vector, error)
 }

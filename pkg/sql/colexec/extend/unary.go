@@ -53,6 +53,13 @@ func (e *UnaryExtend) Eval(bat *batch.Batch, proc *process.Process) (*vector.Vec
 	return vec, e.ReturnType(), nil
 }
 
+func (a *UnaryExtend) Eq(e Extend) bool {
+	if b, ok := e.(*UnaryExtend); ok {
+		return a.Op == b.Op && a.E.Eq(b.E)
+	}
+	return false
+}
+
 func (e *UnaryExtend) String() string {
 	if fn, ok := UnaryStrings[e.Op]; ok {
 		return fn(e.E)

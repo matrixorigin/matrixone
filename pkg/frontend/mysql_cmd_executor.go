@@ -64,6 +64,10 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	rt := obj.(*Routine)
 	ses := rt.GetSession()
 
+	if bat == nil {
+		return nil
+	}
+
 	var rowGroupSize = ses.Pu.SV.GetCountOfRowsPerSendingToClient()
 	rowGroupSize = MaxInt64(rowGroupSize, 1)
 
@@ -1009,14 +1013,14 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		pdHook.DecQueryCountAtEpoch(epoch, statementCount)
 	}()
 
-	proc := process.New(ses.GuestMmu, ses.Mempool)
+	proc := process.New(ses.GuestMmu)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
 	proc.Lim.BatchRows = ses.Pu.SV.GetProcessLimitationBatchRows()
 	proc.Lim.PartitionRows = ses.Pu.SV.GetProcessLimitationPartitionRows()
 	proc.Refer = make(map[string]uint64)
 
-	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, ses.Pu.ClusterNodes, proc)
+	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, proc)
 	execs, err := comp.Compile()
 	if err != nil {
 		return err

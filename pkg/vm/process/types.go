@@ -36,6 +36,7 @@ type WaitRegister struct {
 }
 
 type Register struct {
+	Ss [][]int64
 	Ax interface{}
 	Ts []interface{}
 	Ws []*WaitRegister

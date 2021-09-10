@@ -19,7 +19,6 @@ import (
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/sql/colexec/aggregation"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -58,8 +57,8 @@ func (a *count) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 		return nil, err
 	}
 	vec := vector.New(a.typ)
-	vs := []int64{a.cnt}
-	copy(data[mempool.CountSize:], encoding.EncodeInt64Slice(vs))
+	vs := encoding.DecodeInt64Slice(data[:8])
+	vs[0] = a.cnt
 	vec.Col = vs
 	vec.Data = data
 	return vec, nil

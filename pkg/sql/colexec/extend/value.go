@@ -41,6 +41,13 @@ func (a *ValueExtend) Eval(_ *batch.Batch, _ *process.Process) (*vector.Vector, 
 	return a.V, a.V.Typ.Oid, nil
 }
 
+func (a *ValueExtend) Eq(e Extend) bool {
+	if b, ok := e.(*ValueExtend); ok {
+		return a.V.String() == b.V.String()
+	}
+	return false
+}
+
 func (a *ValueExtend) String() string {
 	return a.V.String()
 }
