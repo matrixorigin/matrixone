@@ -19,7 +19,7 @@ type altBlockFactory struct {
 
 func newAltBlockFactory(mutFactory fb.MutFactory, tabledata iface.ITableData) *altBlockFactory {
 	f := &altBlockFactory{
-		nodeFactory: mutFactory.CreateNodeFactory(tabledata),
+		nodeFactory: mutFactory.GetNodeFactroy(tabledata),
 	}
 	return f
 }

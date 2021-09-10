@@ -65,7 +65,7 @@ func TestTBlock(t *testing.T) {
 	evicter := bm.NewSimpleEvictHolder()
 	mgr := buffer.NewNodeManager(maxsize, evicter)
 	factory := factories.NewMutFactory(mgr, nil)
-	nodeFactory := factory.CreateNodeFactory(tabledata)
+	nodeFactory := factory.GetNodeFactroy(tabledata)
 
 	mockSize := mb.NewMockSize(uint64(0))
 	blk1, err := newTBlock(segdata, meta1, nodeFactory, mockSize)

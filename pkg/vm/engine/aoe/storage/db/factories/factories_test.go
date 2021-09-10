@@ -53,7 +53,7 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	mgr := buffer.NewNodeManager(maxsize, evicter)
 
 	factory := NewMutFactory(mgr, nil)
-	nodeFactory := factory.CreateNodeFactory(tabledata)
+	nodeFactory := factory.GetNodeFactroy(tabledata)
 
 	mockSize := mb.NewMockSize(uint64(0))
 	node1 := nodeFactory.CreateNode(segfile, meta1, mockSize).(*mutation.MutableBlockNode)

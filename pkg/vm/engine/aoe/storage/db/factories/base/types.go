@@ -2,13 +2,26 @@ package base
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
+type FactoryType uint16
+
+const (
+	NORMAL FactoryType = iota
+	MUTABLE
+)
+
+type CollectionFactory = func(iface.ITableData) imem.ICollection
+
 type MutFactory interface {
-	CreateNodeFactory(interface{}) NodeFactory
+	GetNodeFactroy(interface{}) NodeFactory
+	GetType() FactoryType
+	// GetCollectionFactory() CollectionFactory
 }
 
 type NodeFactory interface {

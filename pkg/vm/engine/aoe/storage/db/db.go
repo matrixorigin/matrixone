@@ -32,6 +32,7 @@ import (
 	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
@@ -52,9 +53,10 @@ type DB struct {
 	FsMgr       base.IManager
 	MemTableMgr mtif.IManager
 
-	IndexBufMgr bmgrif.IBufferManager
-	MTBufMgr    bmgrif.IBufferManager
-	SSTBufMgr   bmgrif.IBufferManager
+	IndexBufMgr    bmgrif.IBufferManager
+	MTBufMgr       bmgrif.IBufferManager
+	SSTBufMgr      bmgrif.IBufferManager
+	MutationBufMgr bb.INodeManager
 
 	Store struct {
 		Mu         *sync.RWMutex

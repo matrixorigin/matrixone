@@ -21,6 +21,9 @@ type nodeManager struct {
 }
 
 func NewNodeManager(maxsize uint64, evicter bm.IEvictHolder) *nodeManager {
+	if evicter == nil {
+		evicter = bm.NewSimpleEvictHolder()
+	}
 	mgr := &nodeManager{
 		sizeLimiter: *newSizeLimiter(maxsize),
 		nodes:       make(map[common.ID]base.INode),

@@ -39,7 +39,7 @@ func newTableData(host *Tables, meta *md.Table) *tableData {
 		host:        host,
 		indexHolder: index.NewTableHolder(host.IndexBufMgr, meta.ID),
 	}
-	if host.MutFactory != nil {
+	if host.MutFactory != nil && host.MutFactory.GetType() == fb.MUTABLE {
 		data.blkFactory = newAltBlockFactory(host.MutFactory, data)
 	}
 	data.tree.segments = make([]iface.ISegment, 0)

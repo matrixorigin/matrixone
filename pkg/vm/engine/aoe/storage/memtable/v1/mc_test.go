@@ -29,9 +29,9 @@ func TestMutCollection(t *testing.T) {
 
 	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt)
 
-	capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4 / 2
+	capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
 	// capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
-	manager := NewManager(opts)
+	manager := NewManager(opts, nil)
 	fsMgr := ldio.NewManager(dir, false)
 	indexBufMgr := bmgr.NewBufferManager(dir, capacity)
 	mtBufMgr := bmgr.NewBufferManager(dir, capacity)
