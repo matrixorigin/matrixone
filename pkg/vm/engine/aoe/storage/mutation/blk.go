@@ -105,8 +105,16 @@ func (n *MutableBlockNode) load() {
 	// logutil.Infof("%s loaded %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
 }
 
+func (n MutableBlockNode) releaseData() {
+	if n.Data != nil {
+		n.Data.Close()
+		n.Data = nil
+	}
+}
+
 func (n *MutableBlockNode) unload() {
 	// logutil.Infof("%s presyncing %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
+	defer n.releaseData()
 	if n.Stale.Load() == true {
 		return
 	}
@@ -117,8 +125,6 @@ func (n *MutableBlockNode) unload() {
 		}
 		n.updateApplied(meta)
 	}
-	n.Data.Close()
-	n.Data = nil
 }
 
 func (n *MutableBlockNode) GetData() batch.IBatch {
