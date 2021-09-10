@@ -94,7 +94,7 @@ func NewZapEncoder(cfg *Config) zapcore.Encoder {
 		LineEnding:     zapcore.DefaultLineEnding,
 		EncodeLevel:    zapcore.CapitalLevelEncoder,
 		EncodeTime:     zapcore.TimeEncoder(func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-			enc.AppendString(t.UTC().Format("2006-01-02T15:04:05Z0700"))
+			enc.AppendString(t.Format("2006-01-02T15:04:05Z0700"))
 		}),
 		EncodeDuration: zapcore.StringDurationEncoder,
 		EncodeCaller:   zapcore.FullCallerEncoder,
