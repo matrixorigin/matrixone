@@ -23,6 +23,9 @@ func (c *compile) compileSummarize(o *summarize.Summarize, mp map[string]uint64)
 				refer[attr]++
 			}
 		}
+		for _, e := range o.Es {
+			mp[e.Name]++
+		}
 	}
 	ss, err := c.compile(o.Prev, mp)
 	if err != nil {
