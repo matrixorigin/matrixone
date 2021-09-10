@@ -1,6 +1,7 @@
 package col
 
 import (
+	"bytes"
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -31,7 +32,7 @@ type IColumnBlock interface {
 	Size() uint64
 	GetVector() vector.IVector
 	LoadVectorWrapper() (*vector.VectorWrapper, error)
-	ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error)
+	ForceLoad(*bytes.Buffer, *bytes.Buffer) (*ro.Vector, error)
 	Prefetch() error
 	GetVectorReader() dbi.IVectorReader
 }

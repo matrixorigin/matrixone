@@ -1,6 +1,7 @@
 package col
 
 import (
+	"bytes"
 	"fmt"
 	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
@@ -110,8 +111,8 @@ func (blk *stdColumnBlock) LoadVectorWrapper() (*vector.VectorWrapper, error) {
 	return blk.part.LoadVectorWrapper()
 }
 
-func (blk *stdColumnBlock) ForceLoad(ref uint64, proc *process.Process) (*ro.Vector, error) {
-	return blk.part.ForceLoad(ref, proc)
+func (blk *stdColumnBlock) ForceLoad(compressed, deCompressed *bytes.Buffer) (*ro.Vector, error) {
+	return blk.part.ForceLoad(compressed, deCompressed)
 }
 
 func (blk *stdColumnBlock) Prefetch() error {
