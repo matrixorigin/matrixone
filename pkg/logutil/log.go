@@ -1,111 +1,124 @@
-// Copyright 2019 PingCAP, Inc.
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//     http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
 package logutil
 
 import (
+	"errors"
 	"fmt"
 	"github.com/BurntSushi/toml"
-	"os"
-	"sync/atomic"
-
-	"errors"
-
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
+	"os"
+	"sync/atomic"
+	"time"
 )
 
-var _globalL, _globalP, _globalS atomic.Value
+var _globalLogger atomic.Value
 
+// init a default zap logger before set up logger.
 func init() {
 	conf := &Config{Level: "info", File: FileLogConfig{}}
-	logger, props, _ := InitLogger(conf)
-	ReplaceGlobals(logger, props)
+	logger, _ := InitLogger(conf)
+	ReplaceGlobalLogger(logger)
 }
 
-var defaultConfig = Config{
-	Level:  "info",
-	Format: "console",
-}
-
+// SetupLogger sets up the global logger for MO Server
 func SetupLogger(configFile string) {
 	var conf Config
 	if _, err := toml.DecodeFile(configFile, &conf); err != nil {
 		panic(err)
 	}
-	//conf = defaultConfig
-	l, p, err := InitLogger(&conf)
+	logger, err := InitLogger(&conf)
 	if err != nil {
 		panic(err)
 	}
-	ReplaceGlobals(l, p)
+	ReplaceGlobalLogger(logger)
 	Debugf("db logger init, level=%s, log file=%s", conf.Level, conf.File.Filename)
 }
 
-// InitLogger initializes a zap logger.
-func InitLogger(cfg *Config, opts ...zap.Option) (*zap.Logger, *ZapProperties, error) {
-	var output zapcore.WriteSyncer
+// InitLogger initializes a zap Logger.
+func InitLogger(cfg *Config) (*zap.Logger, error) {
+	var syncer zapcore.WriteSyncer
+
+	// add output for zap logger.
 	if len(cfg.File.Filename) > 0 {
-		lg, err := initFileLog(&cfg.File)
+		ll, err := getLL(&cfg.File)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		output = zapcore.AddSync(lg)
+		syncer = zapcore.AddSync(ll)
 	} else {
 		stdOut, _, err := zap.Open([]string{"stdout"}...)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
-		output = stdOut
+		syncer = stdOut
 	}
-	return InitLoggerWithWriteSyncer(cfg, output, opts...)
-}
 
-// InitLoggerWithWriteSyncer initializes a zap logger with specified  write syncer.
-func InitLoggerWithWriteSyncer(cfg *Config, output zapcore.WriteSyncer, opts ...zap.Option) (*zap.Logger, *ZapProperties, error) {
 	level := zap.NewAtomicLevel()
 	// don't handle change level request currently, cause tests would not
 	// pass if running together (panic: listen tcp :9090: bind: address already in use)
 	//
-	//handleLevelChange(port, pattern, level)
+	// handleLevelChange(port, pattern, level)
 	err := level.UnmarshalText([]byte(cfg.Level))
 	if err != nil {
-		return nil, nil, fmt.Errorf("InitLoggerWithWriteSyncer UnmarshalText cfg.Level err:%w", err)
+		return nil, err
 	}
-	core := NewTextCore(newZapTextEncoder(cfg), output, level)
-	opts = append(cfg.buildOptions(output), opts...)
-	lg := zap.New(core, opts...)
-	r := &ZapProperties{
-		Core:   core,
-		Syncer: output,
-		Level:  level,
-	}
-	return lg, r, nil
+	core := zapcore.NewCore(NewZapEncoder(cfg), syncer, level)
+	logger := zap.New(core)
+	return logger, nil
 }
 
-// initFileLog initializes file based logging options.
-func initFileLog(cfg *FileLogConfig) (*lumberjack.Logger, error) {
-	if st, err := os.Stat(cfg.Filename); err == nil {
-		if st.IsDir() {
-			return nil, errors.New("can't use directory as log file name")
+// NewZapEncoder creates a json/console zap Encoder.
+func NewZapEncoder(cfg *Config) zapcore.Encoder {
+	cc := zapcore.EncoderConfig{
+		TimeKey:        "time",
+		LevelKey:       "level",
+		NameKey:        "name",
+		CallerKey:      "caller",
+		MessageKey:     "message",
+		StacktraceKey:  "stacktrace",
+		LineEnding:     zapcore.DefaultLineEnding,
+		EncodeLevel:    zapcore.CapitalLevelEncoder,
+		EncodeTime:     zapcore.TimeEncoder(func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
+			enc.AppendString(t.UTC().Format("2006-01-02T15:04:05Z0700"))
+		}),
+		EncodeDuration: zapcore.StringDurationEncoder,
+		EncodeCaller:   zapcore.FullCallerEncoder,
+	}
+	switch cfg.Format {
+	case "json", "":
+		return zapcore.NewJSONEncoder(cc)
+	case "console":
+		return zapcore.NewConsoleEncoder(cc)
+	default:
+		panic(fmt.Sprintf("unsupport log format: %s", cfg.Format))
+	}
+}
+
+// getLL returns a lumberjack Logger based on file log config.
+func getLL(cfg *FileLogConfig) (*lumberjack.Logger, error) {
+	if stat, err := os.Stat(cfg.Filename); err == nil {
+		if stat.IsDir() {
+			return nil, errors.New("log file can't be a directory")
 		}
 	}
 	if cfg.MaxSize == 0 {
 		cfg.MaxSize = defaultLogMaxSize
 	}
-
-	// use lumberjack to logrotate
 	return &lumberjack.Logger{
 		Filename:   cfg.Filename,
 		MaxSize:    cfg.MaxSize,
@@ -115,31 +128,12 @@ func initFileLog(cfg *FileLogConfig) (*lumberjack.Logger, error) {
 	}, nil
 }
 
-// L returns the global Logger, which can be reconfigured with ReplaceGlobals.
-// It's safe for concurrent use.
-func L() *zap.Logger {
-	return _globalL.Load().(*zap.Logger)
+// GetGlobalLogger returns the current global zap Logger.
+func GetGlobalLogger() *zap.Logger {
+	return _globalLogger.Load().(*zap.Logger)
 }
 
-// S returns the global SugaredLogger, which can be reconfigured with
-// ReplaceGlobals. It's safe for concurrent use.
-func S() *zap.SugaredLogger {
-	return _globalS.Load().(*zap.SugaredLogger)
-}
-
-// ReplaceGlobals replaces the global Logger and SugaredLogger.
-// It's safe for concurrent use.
-func ReplaceGlobals(logger *zap.Logger, props *ZapProperties) {
-	_globalL.Store(logger)
-	_globalS.Store(logger.Sugar())
-	_globalP.Store(props)
-}
-
-// Sync flushes any buffered log entries.
-func Sync() error {
-	err := L().Sync()
-	if err != nil {
-		return err
-	}
-	return S().Sync()
+// ReplaceGlobalLogger replaces the current global zap Logger.
+func ReplaceGlobalLogger(logger *zap.Logger) {
+	_globalLogger.Store(logger)
 }

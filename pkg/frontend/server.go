@@ -51,7 +51,7 @@ func NewMOServer(addr string, pu *config.ParameterUnit, pdHook *PDCallbackImpl) 
 	app, err := goetty.NewTCPApplication(addr, rm.Handler,
 		goetty.WithAppSessionOptions(
 			goetty.WithCodec(encoder, decoder),
-			goetty.WithLogger(logutil.L()),
+			goetty.WithLogger(logutil.GetGlobalLogger()),
 			goetty.WithEnableAsyncWrite(64)),
 		goetty.WithAppSessionAware(rm))
 	if err != nil {
