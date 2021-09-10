@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+
 func TestAll(t *testing.T) {
 	if !dataio.FlushIndex {
 		return
