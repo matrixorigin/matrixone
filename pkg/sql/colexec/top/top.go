@@ -7,7 +7,6 @@ import (
 	"matrixone/pkg/compare"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -61,22 +60,22 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 		}
 	}
+	if len(bat.Sels) > 0 {
+		bat.Shuffle(proc)
+	}
 	ctr.processBatch(n.Limit, bat)
 	data, err := proc.Alloc(int64(len(ctr.sels) * 8))
 	if err != nil {
 		bat.Clean(proc)
 		return false, err
 	}
-	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
-	sels = sels[:len(ctr.sels)]
+	sels := encoding.DecodeInt64Slice(data)
 	for i, j := 0, len(ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
-	if len(bat.Sels) > 0 {
-		proc.Free(bat.SelsData)
-	}
 	bat.Sels = sels
 	bat.SelsData = data
+	bat.Shuffle(proc)
 	proc.Reg.Ax = bat
 	return false, nil
 }
@@ -85,27 +84,6 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch) {
 	for i, cmp := range ctr.cmps {
 		cmp.Set(0, bat.Vecs[i])
 		cmp.Set(1, bat.Vecs[i])
-	}
-	if length := int64(len(bat.Sels)); length > 0 {
-		if length < limit {
-			for i := int64(0); i < length; i++ {
-				ctr.sels[i] = bat.Sels[i]
-			}
-			ctr.sels = ctr.sels[:length]
-			heap.Init(ctr)
-			return
-		}
-		for i := int64(0); i < limit; i++ {
-			ctr.sels[i] = bat.Sels[i]
-		}
-		heap.Init(ctr)
-		for i, j := limit, length; i < j; i++ {
-			if ctr.compare(bat.Sels[i], ctr.sels[0]) < 0 {
-				ctr.sels[0] = bat.Sels[i]
-			}
-			heap.Fix(ctr, 0)
-		}
-		return
 	}
 	length := int64(bat.Vecs[0].Length())
 	if length < limit {

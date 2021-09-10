@@ -43,6 +43,13 @@ func (e *BinaryExtend) Eval(bat *batch.Batch, proc *process.Process) (*vector.Ve
 	return vec, e.ReturnType(), nil
 }
 
+func (a *BinaryExtend) Eq(e Extend) bool {
+	if b, ok := e.(*BinaryExtend); ok {
+		return a.Op == b.Op && a.Left.Eq(b.Left) && a.Right.Eq(b.Right)
+	}
+	return false
+}
+
 func (e *BinaryExtend) String() string {
 	if fn, ok := BinaryStrings[e.Op]; ok {
 		return fn(e.Left, e.Right)

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -31,19 +30,10 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		proc.Reg.Ax = bat
 		return false, nil
 	}
-	if length := uint64(len(bat.Sels)); length > 0 {
-		if n.Seen+length > n.Offset {
-			bat.Sels = bat.Sels[n.Offset-n.Seen:]
-			proc.Reg.Ax = bat
-			n.Seen += length
-			return false, nil
-		}
-		n.Seen += length
-		bat.Clean(proc)
-		proc.Reg.Ax = batch.New(true, nil)
-		return false, nil
+	if len(bat.Sels) > 0 {
+		bat.Shuffle(proc)
 	}
-	length := bat.Length(proc)
+	length := bat.Length()
 	if n.Seen+uint64(length) > n.Offset {
 		data, sels, err := newSels(int64(n.Offset-n.Seen), int64(length)-int64(n.Offset-n.Seen), proc)
 		if err != nil {
@@ -58,7 +48,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	n.Seen += uint64(length)
 	bat.Clean(proc)
-	proc.Reg.Ax = batch.New(true, nil)
+	bat.Attrs = nil
+	proc.Reg.Ax = bat
 	return false, nil
 }
 
@@ -67,7 +58,7 @@ func newSels(start, count int64, proc *process.Process) ([]byte, []int64, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
+	sels := encoding.DecodeInt64Slice(data)
 	for i := int64(0); i < count; i++ {
 		sels[i] = start + i
 	}

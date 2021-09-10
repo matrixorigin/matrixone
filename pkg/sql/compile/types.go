@@ -60,11 +60,9 @@ type Exec struct {
 }
 
 type compile struct {
-	port int
-	db   string
+	db   string // current database name
 	uid  string
 	sql  string
 	e    engine.Engine
-	ns   metadata.Nodes
 	proc *process.Process
 }

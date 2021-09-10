@@ -1,6 +1,7 @@
 package iface
 
 import (
+	"bytes"
 	"io"
 	"matrixone/pkg/container/vector"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -11,7 +12,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/process"
 )
 
 type ITableData interface {
@@ -84,7 +84,7 @@ type IBlock interface {
 	GetFullBatch() batch.IBatch
 	GetBatch(attrs []int) dbi.IBatchReader
 	GetVectorWrapper(col int) (*svec.VectorWrapper, error)
-	GetVectorCopy(attr string, ref uint64, proc *process.Process) (*vector.Vector, error)
+	GetVectorCopy(attr string, compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*vector.Vector, error)
 	Prefetch(attr string) error
 	WeakRefSegment() ISegment
 	GetRowCount() uint64

@@ -4,13 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
-	"reflect"
-	"unsafe"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -38,8 +34,6 @@ func Prepare(_ *process.Process, arg interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	n := arg.(*Argument)
-	ctr := &n.Ctr
 	if proc.Reg.Ax == nil {
 		return false, nil
 	}
@@ -47,6 +41,8 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
+	n := arg.(*Argument)
+	ctr := &n.Ctr
 	if err := ctr.processBatch(bat, n.Es, proc); err != nil {
 		bat.Clean(proc)
 		ctr.clean(proc)
@@ -63,7 +59,7 @@ func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, pr
 
 	ctr.bat = batch.New(true, ctr.attrs)
 	for i, e := range es {
-		vec := bat.GetVector(e.Name, proc)
+		vec := bat.GetVector(e.Name)
 		{
 			switch e.Op {
 			case aggregation.Avg:
@@ -90,7 +86,7 @@ func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, pr
 			}
 			es[i].Agg = e.Agg
 		}
-		if err := e.Agg.Fill(bat.Sels, vec); err != nil {
+		if err = e.Agg.Fill(bat.Sels, vec); err != nil {
 			ctr.bat.Vecs = ctr.bat.Vecs[:i]
 			return err
 		}
@@ -98,18 +94,7 @@ func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, pr
 			ctr.bat.Vecs = ctr.bat.Vecs[:i]
 			return err
 		}
-		switch e.Agg.Type().Oid {
-		case types.T_tuple:
-			data, err := proc.Alloc(0)
-			if err != nil {
-				ctr.bat.Vecs = ctr.bat.Vecs[:i]
-				return err
-			}
-			ctr.bat.Vecs[i].Data = data[:mempool.CountSize]
-		}
-		count := ctr.refer[e.Alias]
-		hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&count)), Len: 8, Cap: 8}
-		copy(ctr.bat.Vecs[i].Data, *(*[]byte)(unsafe.Pointer(&hp)))
+		ctr.bat.Vecs[i].Ref = ctr.refer[e.Alias]
 	}
 	return nil
 }

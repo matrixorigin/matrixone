@@ -22,9 +22,6 @@ func (bat *Batch) Reorder(attrs []string) {
 	for i, name := range attrs {
 		for j, attr := range bat.Attrs {
 			if name == attr {
-				if len(bat.Is) > j {
-					bat.Is[i], bat.Is[j] = bat.Is[j], bat.Is[i]
-				}
 				bat.Vecs[i], bat.Vecs[j] = bat.Vecs[j], bat.Vecs[i]
 				bat.Attrs[i], bat.Attrs[j] = bat.Attrs[j], bat.Attrs[i]
 			}
@@ -32,28 +29,39 @@ func (bat *Batch) Reorder(attrs []string) {
 	}
 }
 
-func (bat *Batch) Shuffle(proc *process.Process) {
+func (bat *Batch) Shuffle(proc *process.Process) error {
+	var err error
+
 	if bat.SelsData != nil {
 		for i, vec := range bat.Vecs {
-			bat.Vecs[i] = vec.Shuffle(bat.Sels)
+			if bat.Vecs[i], err = vec.Shuffle(bat.Sels, proc); err != nil {
+				return err
+			}
 		}
 		proc.Free(bat.SelsData)
 		bat.Sels = nil
 		bat.SelsData = nil
 	}
+	return nil
 }
 
-func (bat *Batch) Length(proc *process.Process) int {
+func (bat *Batch) Length() int {
 	return bat.Vecs[0].Length()
 }
 
-func (bat *Batch) Prefetch(attrs []string, vecs []*vector.Vector, proc *process.Process) {
-	for i, attr := range attrs {
-		vecs[i] = bat.GetVector(attr, proc)
+func (bat *Batch) SetLength(n int) {
+	for _, vec := range bat.Vecs {
+		vec.SetLength(n)
 	}
 }
 
-func (bat *Batch) GetVector(name string, proc *process.Process) *vector.Vector {
+func (bat *Batch) Prefetch(attrs []string, vecs []*vector.Vector) {
+	for i, attr := range attrs {
+		vecs[i] = bat.GetVector(attr)
+	}
+}
+
+func (bat *Batch) GetVector(name string) *vector.Vector {
 	for i, attr := range bat.Attrs {
 		if attr != name {
 			continue
@@ -85,11 +93,10 @@ func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
 			if bat.Attrs[i] != attr {
 				continue
 			}
-			bat.Vecs[i].Free(proc)
-			if bat.Vecs[i].Data == nil {
-				if len(bat.Is) > i {
-					bat.Is = append(bat.Is[:i], bat.Is[i+1:]...)
-				}
+			if bat.Vecs[i].Ref != 0 {
+				bat.Vecs[i].Free(proc)
+			}
+			if bat.Vecs[i].Ref == 0 {
 				bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
 				bat.Attrs = append(bat.Attrs[:i], bat.Attrs[i+1:]...)
 				i--

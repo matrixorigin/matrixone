@@ -24,11 +24,19 @@ func (a *Attribute) ReturnType() types.T {
 }
 
 func (a *Attribute) Eval(bat *batch.Batch, proc *process.Process) (*vector.Vector, types.T, error) {
-	vec := bat.GetVector(a.Name, proc)
+	vec := bat.GetVector(a.Name)
 	if len(bat.Sels) > 0 {
-		return vec.Shuffle(bat.Sels), a.Type, nil
+		vec, err := vec.Shuffle(bat.Sels, proc)
+		return vec, a.Type, err
 	}
 	return vec, a.Type, nil
+}
+
+func (a *Attribute) Eq(e Extend) bool {
+	if b, ok := e.(*Attribute); ok {
+		return a.Name == b.Name && a.Type == b.Type
+	}
+	return false
 }
 
 func (a *Attribute) String() string {

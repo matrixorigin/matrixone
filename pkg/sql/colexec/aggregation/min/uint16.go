@@ -6,7 +6,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/vectorize/min"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -57,16 +56,12 @@ func (a *uint16Min) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 		return nil, err
 	}
 	vec := vector.New(a.typ)
+	vs := encoding.DecodeUint16Slice(data[:2])
+	vs[0] = a.v
 	if a.cnt == 0 {
 		vec.Nsp.Add(0)
-		vs := []uint16{0}
-		copy(data[mempool.CountSize:], encoding.EncodeUint16Slice(vs))
-		vec.Col = vs
-	} else {
-		vs := []uint16{a.v}
-		copy(data[mempool.CountSize:], encoding.EncodeUint16Slice(vs))
-		vec.Col = vs
 	}
+	vec.Col = vs
 	vec.Data = data
 	return vec, nil
 }

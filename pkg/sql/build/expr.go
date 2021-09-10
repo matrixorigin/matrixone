@@ -158,7 +158,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 		}
 		if e.Not {
 			return &extend.BinaryExtend{
-				Op: overload.And,
+				Op: overload.Or,
 				Left: &extend.BinaryExtend{
 					Op:    overload.LT,
 					Left:  left,
@@ -403,16 +403,19 @@ func buildValue(val constant.Value) (extend.Extend, error) {
 	switch val.Kind() {
 	case constant.Int:
 		vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
+		vec.Ref = 1
 		v, _ := constant.Int64Val(val)
 		vec.Col = []int64{v}
         return &extend.ValueExtend{ V: vec }, nil
 	case constant.Float:
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
+		vec.Ref = 1
 		v, _ := constant.Float64Val(val)
 		vec.Col = []float64{v}
         return &extend.ValueExtend{ V: vec }, nil
 	case constant.String:
 		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
+		vec.Ref = 1
 		v := constant.StringVal(val)
 		vec.Col = &types.Bytes{
 			Data:    []byte(v),

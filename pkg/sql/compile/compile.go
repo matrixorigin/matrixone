@@ -2,7 +2,6 @@ package compile
 
 import (
 	"fmt"
-	stdLog "log"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/errno"
@@ -34,18 +33,15 @@ import (
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/sqlerror"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"sync"
-	"time"
 )
 
 func New(db string, sql string, uid string,
-	e engine.Engine, ns metadata.Nodes, proc *process.Process) *compile {
+	e engine.Engine, proc *process.Process) *compile {
 	return &compile{
 		e:    e,
 		db:   db,
-		ns:   ns,
 		uid:  uid,
 		sql:  sql,
 		proc: proc,
@@ -72,8 +68,12 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	if err != nil {
 		return err
 	}
+	o = prune(o)
 	o = opt.Optimize(rewrite(o, mergeCount(o, 0)))
-	ss, err := e.c.compile(o, make(map[string]uint64))
+	{
+		fmt.Printf("+++++++++o: %v\n", o)
+	}
+	ss, err := e.c.compileAlgebar(o)
 	if err != nil {
 		return err
 	}
@@ -127,8 +127,6 @@ func (e *Exec) Columns() []*Col {
 func (e *Exec) Run(ts uint64) error {
 	var wg sync.WaitGroup
 
-	t0 := time.Now()
-	stdLog.Printf("[Debug0820]query %s at epoch %d start to run", e.c.proc.Id, ts)
 	fmt.Printf("+++++++++\n")
 	Print(nil, e.ss)
 	fmt.Printf("+++++++++\n")
@@ -217,11 +215,10 @@ func (e *Exec) Run(ts uint64) error {
 		}
 	}
 	wg.Wait()
-	stdLog.Printf("[Debug0820]query %s at epoch %d finished, cost %d ms", e.c.proc.Id, ts, time.Since(t0).Milliseconds())
 	return e.err
 }
 
-func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
+func (c *compile) compileAlgebar(o op.OP) ([]*Scope, error) {
 	switch n := o.(type) {
 	case *insert.Insert:
 		return []*Scope{&Scope{Magic: Insert, O: o}}, nil
@@ -239,6 +236,19 @@ func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 		return []*Scope{&Scope{Magic: ShowTables, O: o}}, nil
 	case *showDatabases.ShowDatabases:
 		return []*Scope{&Scope{Magic: ShowDatabases, O: o}}, nil
+	case *projection.Projection:
+		return c.compileOutput(n, make(map[string]uint64))
+	case *top.Top:
+		return c.compileTopOutput(n, make(map[string]uint64))
+	case *order.Order:
+		return c.compileOrderOutput(n, make(map[string]uint64))
+	}
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%s' unsupprt now", o))
+
+}
+
+func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
+	switch n := o.(type) {
 	case *top.Top:
 		return c.compileTop(n, mp)
 	case *dedup.Dedup:

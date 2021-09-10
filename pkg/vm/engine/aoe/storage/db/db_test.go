@@ -1,20 +1,15 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"math/rand"
 	"sync/atomic"
 
 	// e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
-	"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/mmu/host"
-	"matrixone/pkg/vm/process"
-
 	// "matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -449,7 +444,6 @@ func TestMultiTables(t *testing.T) {
 		}
 	}
 
-	hm := host.New(1 << 40)
 	doneCB := func() {
 		wg.Done()
 	}
@@ -457,28 +451,32 @@ func TestMultiTables(t *testing.T) {
 		for _, name := range tnames {
 			task := func(opIdx uint64, tname string, donecb func()) func() {
 				return func() {
-					gm := guest.New(1<<40, hm)
-					proc := process.New(gm, mempool.New(1<<40, 8))
 					if donecb != nil {
 						defer donecb()
 					}
 					rel, err := inst.Relation(tname)
 					assert.Nil(t, err)
 					for _, segId := range rel.SegmentIds().Ids {
-						seg := rel.Segment(segId, proc)
+						seg := rel.Segment(segId, nil)
 						for _, id := range seg.Blocks() {
-							blk := seg.Block(id, proc)
-							bat, err := blk.Prefetch(refs, attrs, proc)
-							{
-								for i, attr := range bat.Attrs {
-									if bat.Vecs[i], err = bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc); err != nil {
-										log.Fatal(err)
-									}
-								}
+							blk := seg.Block(id, nil)
+							cds := make([]*bytes.Buffer, len(attrs))
+							dds := make([]*bytes.Buffer, len(attrs))
+							for i := range cds {
+								cds[i] = bytes.NewBuffer(make([]byte, 0))
+								dds[i] = bytes.NewBuffer(make([]byte, 0))
 							}
+							bat, err := blk.Read(refs, attrs, cds, dds)
+							//{
+							//	for i, attr := range bat.Attrs {
+							//		if bat.Vecs[i], err = bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc); err != nil {
+							//			log.Fatal(err)
+							//		}
+							//	}
+							//}
 							assert.Nil(t, err)
 							for attri, attr := range attrs {
-								v := bat.GetVector(attr, proc)
+								v := bat.GetVector(attr)
 								if attri == 0 && v.Length() > 5000 {
 									// edata := baseCk.Vecs[attri].Col.([]int32)
 
@@ -508,27 +506,31 @@ func TestMultiTables(t *testing.T) {
 	wg.Wait()
 	time.Sleep(time.Duration(300) * time.Millisecond)
 	{
-		gm := guest.New(1<<40, hm)
-		proc := process.New(gm, mempool.New(1<<40, 8))
 		for _, name := range names {
 			rel, err := inst.Relation(name)
 			assert.Nil(t, err)
 			sids := rel.SegmentIds().Ids
 			segId := sids[len(sids)-1]
-			seg := rel.Segment(segId, proc)
+			seg := rel.Segment(segId, nil)
 			blks := seg.Blocks()
-			blk := seg.Block(blks[len(blks)-1], proc)
-			bat, err := blk.Prefetch(refs, attrs, proc)
-			{
-				for i, attr := range bat.Attrs {
-					if bat.Vecs[i], err = bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc); err != nil {
-						log.Fatal(err)
-					}
-				}
+			blk := seg.Block(blks[len(blks)-1], nil)
+			cds := make([]*bytes.Buffer, len(attrs))
+			dds := make([]*bytes.Buffer, len(attrs))
+			for i := range cds {
+				cds[i] = bytes.NewBuffer(make([]byte, 0))
+				dds[i] = bytes.NewBuffer(make([]byte, 0))
 			}
+			bat, err := blk.Read(refs, attrs, cds, dds)
+			//{
+			//	for i, attr := range bat.Attrs {
+			//		if bat.Vecs[i], err = bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc); err != nil {
+			//			log.Fatal(err)
+			//		}
+			//	}
+			//}
 			assert.Nil(t, err)
 			for _, attr := range attrs {
-				v := bat.GetVector(attr, proc)
+				v := bat.GetVector(attr)
 				assert.Equal(t, int(rows), v.Length())
 				// t.Log(v.Length())
 				// t.Logf("%s, seg=%v, attr=%s, len=%d", name, segId, attr, v.Length())
