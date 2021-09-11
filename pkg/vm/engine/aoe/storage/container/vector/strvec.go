@@ -31,14 +31,13 @@ import (
 	"reflect"
 	"sync/atomic"
 	"unsafe"
-	// log "github.com/sirupsen/logrus"
 )
 
 func StrVectorConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return NewStrVectorNode(vf, useCompress, freeFunc)
 }
 
-func NewStrVector(t types.Type, capacity uint64) IVector {
+func NewStrVector(t types.Type, capacity uint64) *StrVector {
 	return &StrVector{
 		BaseVector: BaseVector{
 			Type:  t,
@@ -431,8 +430,23 @@ func (vec *StrVector) Unmarshall(data []byte) error {
 	if cnt == 0 {
 		return nil
 	}
-	vec.Data.Offsets = make([]uint32, cnt)
-	vec.Data.Lengths = encoding.DecodeUint32Slice(buf[:4*cnt])
+	lengths := encoding.DecodeUint32Slice(buf[:4*cnt])
+	if len(lengths) > cap(vec.Data.Lengths) {
+		vec.Data.Offsets = make([]uint32, cnt)
+		vec.Data.Lengths = lengths
+	} else {
+		{
+			hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data.Lengths))
+			hp.Len = len(lengths)
+			vec.Data.Lengths = *(*[]uint32)(unsafe.Pointer(&hp))
+		}
+		{
+			hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data.Offsets))
+			hp.Len = len(lengths)
+			vec.Data.Offsets = *(*[]uint32)(unsafe.Pointer(&hp))
+		}
+		copy(vec.Data.Lengths, lengths[0:])
+	}
 	vec.Data.Data = buf[4*cnt:]
 	offset := uint32(0)
 	for i, n := range vec.Data.Lengths {

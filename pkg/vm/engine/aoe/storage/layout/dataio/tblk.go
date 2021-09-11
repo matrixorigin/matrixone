@@ -142,7 +142,7 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 		}
 		switch colDef.Type.Oid {
 		case types.T_char, types.T_varchar, types.T_json:
-			vec := vector.NewEmptyStrVector()
+			vec := vector.NewStrVector(colDef.Type, meta.MaxRowCount)
 			err = vec.Unmarshall(obuf)
 			if err != nil {
 				panic(err)
