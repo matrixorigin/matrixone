@@ -12,7 +12,8 @@ import (
 type FactoryType uint16
 
 const (
-	NORMAL FactoryType = iota
+	INVALID FactoryType = iota
+	NORMAL
 	MUTABLE
 )
 

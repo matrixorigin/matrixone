@@ -18,6 +18,7 @@ import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
+	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -48,8 +49,12 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	sstBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.DataCapacity)
 	mutNodeMgr := mb.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 
-	// factory := factories.NewMutFactory(mutNodeMgr, nil)
-	factory := factories.NewNormalFactory()
+	var factory fb.MutFactory
+	if opts.FactoryType == e.MUTABLE_FT {
+		factory = factories.NewMutFactory(mutNodeMgr, nil)
+	} else {
+		factory = factories.NewNormalFactory()
+	}
 	memtblMgr := mt.NewManager(opts, factory)
 
 	db = &DB{
