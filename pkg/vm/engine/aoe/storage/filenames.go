@@ -87,6 +87,14 @@ func ParseSegmentfileName(filename string) (name string, ok bool) {
 	return name, true
 }
 
+func ParseTBlockfileName(filename string) (name string, ok bool) {
+	name = strings.TrimSuffix(filename, ".tblk")
+	if len(name) == len(filename) {
+		return name, false
+	}
+	return name, true
+}
+
 func ParseBlockfileName(filename string) (name string, ok bool) {
 	name = strings.TrimSuffix(filename, ".blk")
 	if len(name) == len(filename) {

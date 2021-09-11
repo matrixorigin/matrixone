@@ -23,7 +23,8 @@ import (
 )
 
 var (
-	ErrParseBlockFileName = errors.New("aoe: parse block file name")
+	ErrParseBlockFileName  = errors.New("aoe: parse block file name")
+	ErrParseTBlockFileName = errors.New("aoe: parse tblock file name")
 )
 
 type ID struct {
@@ -152,6 +153,38 @@ func (id *ID) ToSegmentFileName() string {
 
 func (id *ID) ToSegmentFilePath() string {
 	return fmt.Sprintf("%d/%d/", id.TableID, id.SegmentID)
+}
+
+func ParseTBlockfileName(name string) (ID, error) {
+	var (
+		id  ID
+		err error
+	)
+	strs := strings.Split(name, "_")
+	if len(strs) != 4 {
+		return id, ErrParseTBlockFileName
+	}
+	if tid, err := strconv.ParseUint(strs[0], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.TableID = tid
+	}
+	if sid, err := strconv.ParseUint(strs[1], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.SegmentID = sid
+	}
+	if bid, err := strconv.ParseUint(strs[2], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.BlockID = bid
+	}
+	if vid, err := strconv.ParseUint(strs[4], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.PartID = uint32(vid)
+	}
+	return id, err
 }
 
 func ParseBlockFileName(name string) (ID, error) {

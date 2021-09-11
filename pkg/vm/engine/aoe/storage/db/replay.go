@@ -17,7 +17,7 @@ package db
 import (
 	"fmt"
 	"io/ioutil"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
@@ -47,13 +47,27 @@ type tableFile struct {
 }
 
 type blockfile struct {
-	id   common.ID
-	name string
+	id        common.ID
+	name      string
+	transient bool
+	next      *blockfile
+}
+
+func (bf *blockfile) version() uint32 {
+	if bf.transient {
+		return bf.id.PartID
+	} else {
+		return ^uint32(0)
+	}
+}
+
+func (bf *blockfile) isTransient() bool {
+	return bf.transient
 }
 
 func (bf *blockfile) clean() {
 	os.Remove(bf.name)
-	logutil2.Debugf("%s | Removed", bf.name)
+	logutil.Infof("%s | Removed", bf.name)
 }
 
 type sortedSegmentFile struct {
@@ -63,23 +77,48 @@ type sortedSegmentFile struct {
 
 type unsortedSegmentFile struct {
 	id    common.ID
-	files []*blockfile
+	files map[common.ID]*blockfile
 }
 
 func newUnsortedSegmentFile(id common.ID) *unsortedSegmentFile {
 	return &unsortedSegmentFile{
 		id:    id,
-		files: make([]*blockfile, 0),
+		files: make(map[common.ID]*blockfile),
 	}
 }
 
 func (sf *sortedSegmentFile) clean() {
 	os.Remove(sf.name)
-	logutil2.Debugf("%s | Removed", sf.name)
+	logutil.Infof("%s | Removed", sf.name)
 }
 
-func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string) {
-	usf.files = append(usf.files, &blockfile{id: bid, name: name})
+func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string, transient bool) {
+	id := bid.AsBlockID()
+	bf := &blockfile{id: bid, name: name, transient: transient}
+	head := usf.files[id]
+	if head == nil {
+		usf.files[id] = bf
+		return
+	}
+	var prev *blockfile
+	curr := head
+	for curr != nil {
+		if curr.version() < bf.version() {
+			bf.next = curr
+			if prev == nil {
+				usf.files[id] = bf
+			} else {
+				prev.next = bf
+			}
+			return
+		} else if curr.version() > bf.version() {
+			prev = curr
+			curr = curr.next
+		} else {
+			panic("logic error")
+		}
+	}
+	prev.next = bf
 }
 
 func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
@@ -93,18 +132,31 @@ func (usf *unsortedSegmentFile) clean() {
 }
 
 func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.Segment) {
-	files := make([]*blockfile, 0)
-	for _, file := range usf.files {
+	files := make(map[common.ID]*blockfile)
+	for id, file := range usf.files {
 		blk, err := meta.ReferenceBlock(file.id.BlockID)
 		if err != nil {
-			cleaner.addCleanable(file)
+			head := file
+			for head != nil {
+				cleaner.addCleanable(file)
+				head = head.next
+			}
 			continue
 		}
 		if blk.DataState == md.EMPTY {
-			cleaner.addCleanable(file)
+			head := file
+			for head != nil {
+				cleaner.addCleanable(file)
+				head = head.next
+			}
 			continue
 		}
-		files = append(files, file)
+		head := file.next
+		for head != nil {
+			cleaner.addCleanable(file)
+			head = head.next
+		}
+		files[id] = file
 	}
 	usf.files = files
 }
@@ -273,7 +325,7 @@ func (h *replayHandle) addInfo(f *infoFile) {
 	}
 }
 
-func (h *replayHandle) addBlock(id common.ID, name string) {
+func (h *replayHandle) addBlock(id common.ID, name string, transient bool) {
 	tbl, ok := h.files[id.TableID]
 	if !ok {
 		tbl = &tableDataFiles{
@@ -288,7 +340,7 @@ func (h *replayHandle) addBlock(id common.ID, name string) {
 		tbl.unsortedfiles[segId] = newUnsortedSegmentFile(segId)
 		file = tbl.unsortedfiles[segId]
 	}
-	file.addBlock(id, name)
+	file.addBlock(id, name, transient)
 }
 
 func (h *replayHandle) addSegment(id common.ID, name string) {
@@ -311,13 +363,21 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 }
 
 func (h *replayHandle) addDataFile(fname string) {
+	if name, ok := e.ParseTBlockfileName(fname); ok {
+		id, err := common.ParseTBlockfileName(name)
+		if err != nil {
+			panic(err)
+		}
+		fullname := path.Join(h.dataDir, fname)
+		h.addBlock(id, fullname, true)
+	}
 	if name, ok := e.ParseBlockfileName(fname); ok {
 		id, err := common.ParseBlockFileName(name)
 		if err != nil {
 			panic(err)
 		}
 		fullname := path.Join(h.dataDir, fname)
-		h.addBlock(id, fullname)
+		h.addBlock(id, fullname, false)
 		return
 	}
 	if name, ok := e.ParseSegmentfileName(fname); ok {
@@ -424,7 +484,7 @@ func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
 	ret.Replay()
 	h.correctTable(ret)
 	// log.Info(ret.String())
-	logutil2.Debugf(h.String())
+	logutil.Infof(h.String())
 	return ret
 }
 
@@ -462,7 +522,7 @@ func (h *replayHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.
 
 func (h *replayHandle) cleanupFile(fname string) {
 	os.Remove(fname)
-	logutil2.Debugf("%s | Removed", fname)
+	logutil.Infof("%s | Removed", fname)
 }
 
 func (h *replayHandle) Cleanup() {
