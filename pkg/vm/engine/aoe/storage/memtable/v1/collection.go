@@ -15,6 +15,7 @@
 package memtable
 
 import (
+	"errors"
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/logutil"
@@ -99,6 +100,10 @@ func (c *collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
 	c.mem.memTables = append(c.mem.memTables, tbl)
 	tbl.Ref()
 	return tbl, err
+}
+
+func (c *collection) Flush() error {
+	return errors.New("cannot force flush")
 }
 
 func (c *collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {

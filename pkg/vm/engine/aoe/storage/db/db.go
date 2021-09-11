@@ -77,6 +77,40 @@ type DB struct {
 	ClosedC chan struct{}
 }
 
+func (d *DB) Flush(name string) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	tbl, err := d.Store.MetaInfo.ReferenceTableByName(name)
+	if err != nil {
+		return err
+	}
+	collection := d.MemTableMgr.StrongRefCollection(tbl.GetID())
+	if collection == nil {
+		eCtx := &memdata.Context{
+			Opts:        d.Opts,
+			MTMgr:       d.MemTableMgr,
+			TableMeta:   tbl,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.Store.DataTables,
+			Waitable:    true,
+		}
+		e := memdata.NewCreateTableEvent(eCtx)
+		if err = d.Scheduler.Schedule(e); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		if err = e.WaitDone(); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection = e.Collection
+	}
+	defer collection.Unref()
+	return collection.Flush()
+}
+
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)

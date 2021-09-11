@@ -41,6 +41,19 @@ func (c *mutableCollection) close() {
 	}
 }
 
+func (c *mutableCollection) Flush() error {
+	c.mu.RLock()
+	if c.mutBlk == nil {
+		c.mu.RUnlock()
+		return nil
+	}
+	blkHandle := c.mutBlk.MakeHandle()
+	c.mu.RUnlock()
+	defer blkHandle.Close()
+	blk := blkHandle.GetNode().(mb.IMutableBlock)
+	return blk.Flush()
+}
+
 func (c *mutableCollection) String() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

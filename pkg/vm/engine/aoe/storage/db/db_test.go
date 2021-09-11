@@ -20,22 +20,19 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"sync/atomic"
-
-	// e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
-	// "matrixone/pkg/vm/engine/aoe/storage/common"
+	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
-
 	"github.com/stretchr/testify/assert"
 )
 
@@ -47,16 +44,17 @@ func initDBTest() {
 	os.RemoveAll(TEST_DB_DIR)
 }
 
-func initDB() *DB {
+func initDB(ft engine.FactoryType) *DB {
 	rand.Seed(time.Now().UnixNano())
 	opts := config.NewCustomizedMetaOptions(TEST_DB_DIR, config.CST_Customize, uint64(20000), uint64(2))
+	opts.FactoryType = ft
 	inst, _ := Open(TEST_DB_DIR, opts)
 	return inst
 }
 
 func TestCreateTable(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	assert.NotNil(t, inst)
 	defer inst.Close()
 	tblCnt := rand.Intn(5) + 3
@@ -86,7 +84,7 @@ func TestCreateTable(t *testing.T) {
 
 func TestCreateDuplicateTable(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	defer inst.Close()
 
 	tableInfo := md.MockTableInfo(2)
@@ -98,7 +96,7 @@ func TestCreateDuplicateTable(t *testing.T) {
 
 func TestDropEmptyTable(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	defer inst.Close()
 	tableInfo := md.MockTableInfo(2)
 	_, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name})
@@ -110,7 +108,7 @@ func TestDropEmptyTable(t *testing.T) {
 
 func TestDropTable(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	defer inst.Close()
 
 	name := "t1"
@@ -147,7 +145,7 @@ func TestDropTable(t *testing.T) {
 
 func TestAppend(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl"})
 	assert.Nil(t, err)
@@ -224,7 +222,7 @@ func TestAppend(t *testing.T) {
 // the db will be stuck due to no more space. Need intruduce timeout mechanism later
 func TestConcurrency(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
@@ -413,7 +411,7 @@ func TestConcurrency(t *testing.T) {
 
 func TestMultiTables(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	prefix := "mtable"
 	tblCnt := 40
 	var names []string
@@ -560,7 +558,7 @@ func TestMultiTables(t *testing.T) {
 
 func TestDropTable2(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
@@ -628,7 +626,7 @@ func TestDropTable2(t *testing.T) {
 
 func TestE2E(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)

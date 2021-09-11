@@ -17,6 +17,7 @@ package db
 import (
 	"context"
 	"fmt"
+	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
@@ -37,7 +38,7 @@ import (
 
 func TestEngine(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
@@ -216,7 +217,7 @@ func TestEngine(t *testing.T) {
 
 func TestLogIndex(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(engine.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: md.NextGloablSeqnum()})
 	assert.Nil(t, err)

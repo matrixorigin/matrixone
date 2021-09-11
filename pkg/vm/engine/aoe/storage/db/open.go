@@ -55,8 +55,8 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 		mutNodeMgr bb.INodeManager
 	)
 	if opts.FactoryType == e.MUTABLE_FT {
-		factory = factories.NewMutFactory(mutNodeMgr, nil)
 		mutNodeMgr = mb.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
+		factory = factories.NewMutFactory(mutNodeMgr, nil)
 	} else {
 		factory = factories.NewNormalFactory()
 		mtBufMgr = bm.NewBufferManager(dirname, opts.CacheCfg.InsertCapacity)

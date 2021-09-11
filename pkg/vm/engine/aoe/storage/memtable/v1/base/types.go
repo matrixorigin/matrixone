@@ -56,6 +56,7 @@ type IMemTable interface {
 type ICollection interface {
 	common.IRef
 	Append(bat *batch.Batch, index *md.LogIndex) (err error)
+	Flush() error
 	FetchImmuTable() IMemTable
 	String() string
 }

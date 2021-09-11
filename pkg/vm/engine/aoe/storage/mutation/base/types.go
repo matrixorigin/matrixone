@@ -29,4 +29,5 @@ type IMutableBlock interface {
 	GetSegmentedIndex() (uint64, bool)
 	GetMeta() *metadata.Block
 	SetStale()
+	Flush() error
 }

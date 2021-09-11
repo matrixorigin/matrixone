@@ -210,6 +210,7 @@ func (s *scheduler) onCommitBlkDone(e sched.Event) {
 		s.opts.EventListener.BackgroundErrorCB(err)
 		return
 	}
+	logutil.Infof(" %s | Block %d | UpgradeBlkEvent | Started", sched.EventPrefix, newMeta.ID)
 	newevent := NewUpgradeBlkEvent(mctx, newMeta, tableData)
 	s.Schedule(newevent)
 }
