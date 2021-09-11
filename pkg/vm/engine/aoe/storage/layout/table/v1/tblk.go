@@ -10,6 +10,7 @@ import (
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
@@ -127,6 +128,14 @@ func (blk *tblock) GetFullBatch() batch.IBatch {
 }
 
 func (blk *tblock) GetBatch(attrids []int) dbi.IBatchReader {
-	// TODO
-	return nil
+	h := blk.getHandle()
+	data := blk.node.GetData()
+	attrs := make([]int, len(attrids))
+	vecs := make([]vector.IVector, len(attrids))
+	for idx, attr := range attrids {
+		attrs[idx] = attr
+		vecs[idx] = data.GetVectorByAttr(attr)
+	}
+	wrapped := batch.NewBatch(attrs, vecs)
+	return wrapper.NewBatch2(h, wrapped)
 }
