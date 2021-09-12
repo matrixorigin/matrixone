@@ -43,6 +43,7 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 		Flusher:   flusher,
 		Stale:     new(atomic.Value),
 	}
+	n.File.InitMeta(meta)
 	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), initSize)
 	n.UnloadFunc = n.unload
 	n.LoadFunc = n.load

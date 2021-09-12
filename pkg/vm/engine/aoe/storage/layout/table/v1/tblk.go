@@ -27,14 +27,15 @@ type tblock struct {
 }
 
 func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory, mockSize *mb.MockSize) (*tblock, error) {
+	clonedMeta := meta.Copy()
 	blk := &tblock{
-		baseBlock:  *newBaseBlock(host, meta),
-		node:       factory.CreateNode(host.GetSegmentFile(), meta, mockSize).(mb.IMutableBlock),
+		baseBlock:  *newBaseBlock(host, clonedMeta),
+		node:       factory.CreateNode(host.GetSegmentFile(), clonedMeta, mockSize).(mb.IMutableBlock),
 		nodeMgr:    factory.GetManager(),
 		coarseSize: make(map[string]uint64),
 	}
-	for i, colDef := range meta.Segment.Table.Schema.ColDefs {
-		blk.coarseSize[colDef.Name] = metadata.EstimateColumnBlockSize(i, meta)
+	for i, colDef := range clonedMeta.Segment.Table.Schema.ColDefs {
+		blk.coarseSize[colDef.Name] = metadata.EstimateColumnBlockSize(i, clonedMeta)
 	}
 	blk.GetObject = func() interface{} { return blk }
 	blk.Pin = func(o interface{}) { o.(iface.IBlock).Ref() }

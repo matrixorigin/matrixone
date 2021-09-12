@@ -39,6 +39,9 @@ type BlockFile struct {
 	SegmentFile base.ISegmentFile
 	Info        common.FileInfo
 	DataAlgo    int
+	Idx         *metadata.LogIndex
+	PrevIdx     *metadata.LogIndex
+	Count       uint64
 }
 
 func blockFileNameFactory(dir string, id common.ID) string {
@@ -107,12 +110,6 @@ func (bf *BlockFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
 }
 
 func (bf *BlockFile) initPointers(id common.ID) {
-	//indexMeta, err := index.DefaultRWHelper.ReadIndicesMeta(bf.File)
-	//if err != nil {
-	//	panic(fmt.Sprintf("unexpect error: %s", err))
-	//}
-	//bf.Meta.Indices = indexMeta
-
 	var (
 		cols uint16
 		algo uint8
@@ -125,8 +122,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	if err = binary.Read(&bf.File, binary.BigEndian, &cols); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	var count uint64
-	if err = binary.Read(&bf.File, binary.BigEndian, &count); err != nil {
+	if err = binary.Read(&bf.File, binary.BigEndian, &bf.Count); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
 	var sz int32
@@ -137,8 +133,8 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	if err = binary.Read(&bf.File, binary.BigEndian, &buf); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	prevIdx := metadata.LogIndex{}
-	if err = prevIdx.UnMarshall(buf); err != nil {
+	bf.PrevIdx = new(metadata.LogIndex)
+	if err = bf.PrevIdx.UnMarshall(buf); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
 	var sz_ int32
@@ -149,8 +145,8 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	if err = binary.Read(&bf.File, binary.BigEndian, &buf); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	idx := metadata.LogIndex{}
-	if err = idx.UnMarshall(buf); err != nil {
+	bf.Idx = new(metadata.LogIndex)
+	if err = bf.Idx.UnMarshall(buf); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
 	headSize := 8 + int(sz+sz_) + 3 + 8 + 2*8*int(cols)

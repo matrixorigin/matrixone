@@ -236,10 +236,6 @@ func (tbl *Table) NextActiveSegment() *Segment {
 	}
 	tbl.ActiveSegment++
 	return tbl.GetActiveSegment()
-	// if tbl.ActiveSegment <= len(tbl.Segments)-1 {
-	// 	seg = tbl.Segments[tbl.ActiveSegment]
-	// }
-	// return seg
 }
 
 func (tbl *Table) GetActiveSegment() *Segment {
@@ -252,24 +248,6 @@ func (tbl *Table) GetActiveSegment() *Segment {
 		return nil
 	}
 	return seg
-	// for i := len(tbl.Segments) - 1; i >= 0; i-- {
-	// 	seg := tbl.Segments[i]
-	// 	if seg.DataState >= CLOSED {
-	// 		break
-	// 	} else if seg.DataState == EMPTY {
-	// 		active = seg
-	// 	} else if seg.DataState == PARTIAL {
-	// 		active = seg
-	// 		break
-	// 	} else if seg.DataState == FULL {
-	// 		activeBlk := seg.GetActiveBlock()
-	// 		if activeBlk != nil {
-	// 			active = seg
-	// 		}
-	// 		break
-	// 	}
-	// }
-	// return active
 }
 
 func (tbl *Table) GetInfullSegment() (seg *Segment, err error) {

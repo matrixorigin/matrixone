@@ -76,14 +76,36 @@ type TransientBlockFile struct {
 }
 
 func NewTBlockFile(host base.ISegmentFile, id common.ID) *TransientBlockFile {
-	tblk := &TransientBlockFile{
+	f := &TransientBlockFile{
 		id:   id,
 		host: host,
 	}
-	tblk.files = make([]*versionBlockFile, 0)
-	tblk.Ref()
-	tblk.OnZeroCB = tblk.close
-	return tblk
+	f.files = make([]*versionBlockFile, 0)
+	f.init()
+	f.Ref()
+	f.OnZeroCB = f.close
+	return f
+}
+
+func (f *TransientBlockFile) init() {
+	pattern := filepath.Join(e.MakeDataDir(f.host.GetDir()), fmt.Sprintf("%s_*tblk", f.id.ToBlockFileName()))
+	files, _ := filepath.Glob(pattern)
+	if len(files) == 0 {
+		return
+	}
+	if len(files) > 1 {
+		panic("logic error")
+	}
+	name := filepath.Base(files[0])
+	logutil.Infof(name)
+	name, _ = e.ParseTBlockfileName(name)
+	if idv, err := common.ParseTBlockfileName(name); err != nil {
+		panic(err)
+	} else {
+		f.maxver = idv.PartID + 1
+	}
+	bf := newVersionBlockFile(f.maxver-1, f.host, f.id)
+	f.commit(bf, uint32(bf.Count))
 }
 
 func (f *TransientBlockFile) close() {
@@ -103,6 +125,15 @@ func (f *TransientBlockFile) PreSync(pos uint32) bool {
 	ret := pos > f.currpos
 	f.mu.RUnlock()
 	return ret
+}
+
+func (f *TransientBlockFile) InitMeta(meta *md.Block) {
+	if meta.DataState != md.PARTIAL {
+		return
+	}
+	meta.Count = f.files[0].Count
+	meta.PrevIndex = f.files[0].PrevIdx
+	meta.Index = f.files[0].Idx
 }
 
 func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {

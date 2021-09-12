@@ -146,6 +146,8 @@ type blockfile struct {
 	name      string
 	transient bool
 	next      *blockfile
+	commited  bool
+	meta      *md.Block
 }
 
 func (bf *blockfile) version() uint32 {
@@ -154,6 +156,14 @@ func (bf *blockfile) version() uint32 {
 	} else {
 		return ^uint32(0)
 	}
+}
+
+func (bf *blockfile) markCommited() {
+	bf.commited = true
+}
+
+func (bf *blockfile) isCommited() bool {
+	return bf.commited
 }
 
 func (bf *blockfile) isTransient() bool {
@@ -171,14 +181,17 @@ type sortedSegmentFile struct {
 }
 
 type unsortedSegmentFile struct {
-	id    common.ID
-	files map[common.ID]*blockfile
+	id         common.ID
+	files      map[common.ID]*blockfile
+	uncommited []*blockfile
+	meta       *md.Segment
 }
 
 func newUnsortedSegmentFile(id common.ID) *unsortedSegmentFile {
 	return &unsortedSegmentFile{
-		id:    id,
-		files: make(map[common.ID]*blockfile),
+		id:         id,
+		files:      make(map[common.ID]*blockfile),
+		uncommited: make([]*blockfile, 0),
 	}
 }
 
@@ -217,7 +230,15 @@ func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string, transient b
 }
 
 func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
-	return len(usf.files) == maxcnt
+	if len(usf.files) != maxcnt {
+		return false
+	}
+	for _, file := range usf.files {
+		if file.version() != ^uint32(0) {
+			return false
+		}
+	}
+	return true
 }
 
 func (usf *unsortedSegmentFile) clean() {
@@ -238,17 +259,16 @@ func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.S
 			}
 			continue
 		}
-		if blk.DataState == md.EMPTY {
-			head := file
-			for head != nil {
-				cleaner.addCleanable(file)
-				head = head.next
-			}
-			continue
+		if blk.DataState > md.PARTIAL {
+			file.markCommited()
+		} else {
+			file.meta = blk
+			usf.uncommited = append(usf.uncommited, file)
+			usf.meta = meta
 		}
 		head := file.next
 		for head != nil {
-			cleaner.addCleanable(file)
+			cleaner.addCleanable(head)
 			head = head.next
 		}
 		files[id] = file
@@ -533,9 +553,6 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 			segment.TrySorted()
 			continue
 		}
-		file2 := tablesFiles.unsortedfiles[*segment.AsCommonID()]
-		if file2 != nil {
-		}
 	}
 	for id, _ := range tablesFiles.sortedfiles {
 		unsorted, ok := tablesFiles.unsortedfiles[id]
@@ -544,7 +561,9 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 			delete(tablesFiles.unsortedfiles, id)
 		}
 	}
+
 	flushsegs := make([]common.ID, 0)
+	unclosedSegFiles := make([]*unsortedSegmentFile, 0)
 	for id, unsorted := range tablesFiles.unsortedfiles {
 		segMeta, err := meta.ReferenceSegment(id.SegmentID)
 		if err != nil {
@@ -555,14 +574,49 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 			unsorted.tryCleanBlocks(h, segMeta)
 		}
 		if !unsorted.isfull(int(meta.Conf.SegmentMaxBlocks)) {
+			unclosedSegFiles = append(unclosedSegFiles, unsorted)
 			continue
 		}
+
 		flushsegs = append(flushsegs, id)
 	}
 	sort.Slice(flushsegs, func(i, j int) bool { return flushsegs[i].SegmentID < flushsegs[j].SegmentID })
 	for _, id := range flushsegs {
 		h.flushsegs = append(h.flushsegs, flushsegCtx{id: id})
 	}
+	h.processUnclosedSegmentFiles(unclosedSegFiles)
+}
+
+func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
+	if len(file.uncommited) == 0 {
+		return
+	}
+	if len(file.uncommited) == 1 {
+		bf := file.uncommited[0]
+		if !bf.isTransient() {
+			h.addCleanable(bf)
+			return
+		}
+		bf.meta.DataState = md.PARTIAL
+		bf.meta.Segment.NextActiveBlk()
+		return
+	}
+	// sort.Slice(file.uncommited, func(i, j) bool {
+	// 	return file.uncommited[i].BlockID < file.uncommited[j].BlockID
+	// })
+}
+
+func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile) {
+	if len(files) == 0 {
+		return
+	}
+	if len(files) == 1 {
+		h.processUnclosedSegmentFile(files[0])
+		return
+	}
+	// sort.Slice(files, func(i, j int) bool {
+	// 	return files[i].id.SegmentID < files[j].id.SegmentID
+	// })
 }
 
 func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
