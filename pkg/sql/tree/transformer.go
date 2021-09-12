@@ -88,7 +88,6 @@ func transformUnaryOperatorExprToUnaryExpr(uoe *ast.UnaryOperationExpr) *UnaryEx
 
 	}
 	panic(fmt.Errorf("unsupported unary expr. op:%s \n", uoe.Op.String()))
-	return nil
 }
 
 //transform ast.UnaryOperationExpr to tree.NotExpr
@@ -99,7 +98,6 @@ func transformUnaryOperatorExprToNotExpr(uoe *ast.UnaryOperationExpr) *NotExpr {
 		return NewNotExpr(e)
 	}
 	panic(fmt.Errorf("unsupported not expr. op:%s \n", uoe.Op.String()))
-	return nil
 }
 
 //transform ast.BinaryOperationExpr to tree.BinaryExpr
@@ -154,7 +152,6 @@ func transformBinaryOperationExprToBinaryExpr(boe *ast.BinaryOperationExpr) *Bin
 		//logic operation
 	}
 	panic(fmt.Errorf("unsupported binary expr. op:%s \n", boe.Op.String()))
-	return nil
 }
 
 //transform ast.BinaryOperationExpr to tree.ComparisonExpr
@@ -187,7 +184,6 @@ func transformBinaryOperationExprToComparisonExpr(boe *ast.BinaryOperationExpr) 
 		return NewComparisonExpr(NOT_EQUAL, l, r)
 	}
 	panic(fmt.Errorf("unsupported comparison expr. op:%s \n", boe.Op.String()))
-	return nil
 }
 
 //transform ast.BinaryOperationExpr to tree.AndExpr
@@ -200,7 +196,6 @@ func transformBinaryOperationExprToAndExpr(boe *ast.BinaryOperationExpr) *AndExp
 		return NewAndExpr(l, r)
 	}
 	panic(fmt.Errorf("unsupported and expr. op:%s \n", boe.Op.String()))
-	return nil
 }
 
 //transform ast.BinaryOperationExpr to tree.OrExpr
@@ -213,7 +208,6 @@ func transformBinaryOperationExprToOrExpr(boe *ast.BinaryOperationExpr) *OrExpr 
 		return NewOrExpr(l, r)
 	}
 	panic(fmt.Errorf("unsupported or expr. op:%s \n", boe.Op.String()))
-	return nil
 }
 
 //transform ast.BinaryOperationExpr to tree.XorExpr
@@ -226,7 +220,6 @@ func transformBinaryOperationExprToXorExpr(boe *ast.BinaryOperationExpr) *XorExp
 		return NewXorExpr(l, r)
 	}
 	panic(fmt.Errorf("unsupported xor expr. op:%s \n", boe.Op.String()))
-	return nil
 }
 
 //transform ast.IsNullExpr to tree.IsNullExpr
@@ -236,7 +229,6 @@ func transformIsNullExprToIsNullExpr(ine *ast.IsNullExpr) *IsNullExpr {
 		return NewIsNullExpr(e)
 	}
 	panic(fmt.Errorf("unsupported is null expr. %v \n", ine))
-	return nil
 }
 
 //transform ast.IsNotNullExpr to tree.IsNotNullExpr
@@ -246,7 +238,6 @@ func transformIsNullExprToIsNotNullExpr(ine *ast.IsNullExpr) *IsNotNullExpr {
 		return NewIsNotNullExpr(e)
 	}
 	panic(fmt.Errorf("unsupported is not null expr. %v \n", ine))
-	return nil
 }
 
 //transform ast.PatternInExpr (in expression) to tree.ComparisonExpr.In
@@ -326,7 +317,6 @@ func transformResultSetNodeToSelectStatement(rsn ast.ResultSetNode) SelectStatem
 		return transformSetOprStmtToSelectStatement(n)
 	}
 	panic(fmt.Errorf("unsupported resultSetNode\n"))
-	return nil
 }
 
 //transform ast.SubqueryExpr to tree.Subquery
@@ -369,7 +359,6 @@ func transformCompareSubqueryExprToSubquery(cse *ast.CompareSubqueryExpr) *Compa
 		return NewComparisonExprWithSubop(NOT_EQUAL, subop, l, r)
 	}
 	panic(fmt.Errorf("unsupported CompareSubqueryExpr expr. op:%s \n", cse.Op.String()))
-	return nil
 }
 
 //transform ast.ParenthesesExpr to tree.ParenExpr
@@ -434,7 +423,6 @@ func transformResultSetNodeToTableExpr(rsn ast.ResultSetNode) TableExpr {
 		return transformSetOprStmtToSelectStatement(n)
 	}
 	panic(fmt.Errorf("unsupported ResultSetNode type:%v \n", rsn))
-	return nil
 }
 
 //transform []*ast.ColumnName to tree.IdentifierList
@@ -527,7 +515,6 @@ func transformJoinToParenTableExpr(j *ast.Join) *ParenTableExpr {
 		return NewParenTableExpr(jt)
 	}
 	panic(fmt.Errorf("Need ExplicitParens :%v \n", j))
-	return nil
 }
 
 //transform ast.Join to tree.TableExpr
@@ -797,7 +784,6 @@ func transformTimeUnitExprToIntervalExpr(tue *ast.TimeUnitExpr) *IntervalExpr {
 		return NewIntervalExpr(INTERVAL_TYPE_YEARMONTH)
 	}
 	panic(fmt.Errorf("unsupported time unit type %v \n", tue.Unit))
-	return nil
 }
 
 //transform ast.IsTruthExpr to tree.ComparisonExpr
@@ -929,7 +915,6 @@ func transformExprNodeToExpr(node ast.ExprNode) Expr {
 		return transformVariableExprToVarExpr(n)
 	}
 	panic(fmt.Errorf("unsupported node %v \n", node))
-	return nil
 }
 
 //transform ast.WildCardField to
@@ -1219,15 +1204,11 @@ func transformSelectArrayToSelectStatement(selects []ast.Node) SelectStatement {
 		//return NewSelect(uc,nil,nil)
 		return left
 	}
-	panic(fmt.Errorf("missing something\n"))
-	return nil
 }
 
 //transform ast.SetOprSelectList to tree.SelectStatement
 func transformSetOprSelectListToSelectStatement(sosl *ast.SetOprSelectList) SelectStatement {
 	return transformSelectArrayToSelectStatement(sosl.Selects)
-	panic(fmt.Errorf("missing something\n"))
-	return nil
 }
 
 //transform ast.SetOprStmt to tree.SelectStatement
@@ -1324,7 +1305,6 @@ func transformReferOptionTypeToReferenceOptionType(rot ast.ReferOptionType) Refe
 		return REFERENCE_OPTION_SET_DEFAULT
 	}
 	panic(fmt.Errorf("invalid reference option %v\n", rot))
-	return REFERENCE_OPTION_INVALID
 }
 
 //transform ast.ReferenceDef to tree.AttributeReference
@@ -1398,8 +1378,6 @@ func transformColumnOptionToColumnAttribute(co *ast.ColumnOption) ColumnAttribut
 	default:
 		panic(fmt.Errorf("invalid column option\n"))
 	}
-	panic(fmt.Errorf("invalid column option\n"))
-	return nil
 }
 
 //transform ast.ColumnDef to tree.ColumnTableDef
@@ -1516,7 +1494,6 @@ func transformConstraintToIndexTableDef(c *ast.Constraint) IndexTableDef {
 	default:
 		panic(fmt.Errorf("unsupported constraint %v\n", c.Tp))
 	}
-	return nil
 }
 
 //transform ast.RowFormat to tree.RowFormatType
@@ -1553,7 +1530,6 @@ func transformRowFormatToRowFormatType(rf uint64) RowFormatType {
 	default:
 		panic(fmt.Errorf("unsupported row format %v\n", rf))
 	}
-	return ROW_FORMAT_DEFAULT
 }
 
 //transform ast.TableOption to tree.TableOption
@@ -1805,7 +1781,6 @@ func transformDatabaseOptionToCreateOption(do *ast.DatabaseOption)CreateOption{
 		return NewCreateOptionEncryption(do.Value)
 	}
 	panic(fmt.Errorf("unsupported database option %v\n",do.Tp))
-	return nil
 }
 
 //transform ast.CreateDatabaseStmt to tree.CreateDatabase
@@ -1904,7 +1879,6 @@ func transformColumnNameOrUserVarToLoadColumn(cnouv *ast.ColumnNameOrUserVar) Lo
 		return transformVariableExprToVarExpr(cnouv.UserVar)
 	}
 	panic("Both of ColumnName and UserVar are nil")
-	return nil
 }
 
 //transform ast.LoadDataStmt to tree.Load
@@ -2085,7 +2059,6 @@ func transformShowStmtToShow(ss *ast.ShowStmt)Show{
 		return NewShowIndex(*t,w)
 	}
 	panic(fmt.Errorf("unsupported show %v\n",ss.Tp))
-	return nil
 }
 
 //transform ast.ExplainStmt to tree.Explain
@@ -2112,7 +2085,6 @@ func transformExplainStmtToExplain(es *ast.ExplainStmt) Explain {
 	}else{
 		return NewExplainStmt(stmt,es.Format)
 	}
-	return nil
 }
 
 //transform ast.ExplainForStmt to tree.Explain
@@ -2303,7 +2275,6 @@ func transformTLSOptionToTlsOption(t *ast.TLSOption) TlsOption {
 	default:
 		panic("unsupported tlsoption")
 	}
-	return nil
 }
 
 //transform ast.ResourceOption to tree.ResourceOption
@@ -2339,7 +2310,6 @@ func transformPasswordOrLockOptionToUserMiscOption(polo *ast.PasswordOrLockOptio
 	default:
 		panic("unsupported password or lock")
 	}
-	return nil
 }
 
 //transform ast.CreateUserStmt to tree.CreateUser

@@ -29,7 +29,7 @@ func (s *Segment) Blocks() []string {
 }
 
 func (s *Segment) Block(id string, proc *process.Process) engine.Block {
-	return block.New(id, s.db, proc, s.mp)
+	return /*block.New(id, s.db, proc, s.mp)*/nil
 }
 
 func (s *Segment) NewFilter() engine.Filter {

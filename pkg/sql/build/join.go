@@ -51,5 +51,4 @@ func (b *build) buildJoin(stmt *tree.JoinTableExpr) (op.OP, error) {
 	default:
 		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join condition '%v'", cond))
 	}
-	return nil, nil
 }
