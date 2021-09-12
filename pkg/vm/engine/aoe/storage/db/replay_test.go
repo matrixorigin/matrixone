@@ -57,5 +57,29 @@ func TestReplay1(t *testing.T) {
 	rel.Close()
 	inst.Close()
 
+	time.Sleep(time.Duration(20) * time.Millisecond)
+
+	inst = initDB(engine.MUTABLE_FT)
+	rel, err = inst.Relation(meta.Schema.Name)
+	assert.Nil(t, err)
+	assert.Equal(t, irows*3, uint64(rel.Rows()))
+	t.Log(rel.Rows())
+
+	insertFn()
+	t.Log(rel.Rows())
+	insertFn()
 	time.Sleep(time.Duration(10) * time.Millisecond)
+	t.Log(rel.Rows())
+	t.Log(inst.MutationBufMgr.String())
+
+	err = inst.Flush(meta.Schema.Name)
+	assert.Nil(t, err)
+	insertFn()
+	t.Log(rel.Rows())
+	insertFn()
+	t.Log(rel.Rows())
+
+	time.Sleep(time.Duration(10) * time.Millisecond)
+	defer rel.Close()
+	defer inst.Close()
 }

@@ -177,6 +177,7 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 			if err != nil {
 				panic(err)
 			}
+			vec.ResetReadonly()
 			vecs[i] = vec
 		default:
 			vec := vector.NewStdVector(colDef.Type, meta.MaxRowCount)
@@ -184,6 +185,7 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 			if err != nil {
 				panic(err)
 			}
+			vec.ResetReadonly()
 			vecs[i] = vec
 		}
 	}

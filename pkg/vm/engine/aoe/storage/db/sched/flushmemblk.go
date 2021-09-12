@@ -36,7 +36,7 @@ func (e *flushMemblockEvent) Execute() error {
 		data := mut.GetData()
 		var vecs []*vector.Vector
 		for attri, _ := range data.GetAttrs() {
-			v := data.GetVectorByAttr(attri)
+			v := data.GetVectorByAttr(attri).GetLatestView()
 			vecs = append(vecs, v.CopyToVector())
 		}
 
