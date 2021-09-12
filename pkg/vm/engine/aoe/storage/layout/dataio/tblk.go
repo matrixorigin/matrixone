@@ -97,7 +97,6 @@ func (f *TransientBlockFile) init() {
 		panic("logic error")
 	}
 	name := filepath.Base(files[0])
-	logutil.Infof(name)
 	name, _ = e.ParseTBlockfileName(name)
 	if idv, err := common.ParseTBlockfileName(name); err != nil {
 		panic(err)

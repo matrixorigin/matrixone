@@ -284,6 +284,17 @@ func (seg *segment) String() string {
 	return s
 }
 
+func (seg *segment) StrongRefLastBlock() iface.IBlock {
+	seg.tree.RLock()
+	if len(seg.tree.blocks) == 0 {
+		return nil
+	}
+	lastBlk := seg.tree.blocks[len(seg.tree.blocks)-1]
+	seg.tree.RUnlock()
+	lastBlk.Ref()
+	return lastBlk
+}
+
 func (seg *segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
 	factory := seg.host.GetBlockFactory()
 	if factory == nil {

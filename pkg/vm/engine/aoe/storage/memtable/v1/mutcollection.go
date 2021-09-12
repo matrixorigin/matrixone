@@ -5,6 +5,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -26,6 +27,14 @@ func newMutableCollection(mgr *manager, data iface.ITableData) *mutableCollectio
 		mgr:  mgr,
 		data: data,
 		mu:   &sync.RWMutex{},
+	}
+	mutBlk := data.StrongRefLastBlock()
+	if mutBlk != nil {
+		if mutBlk.GetType() == base.TRANSIENT_BLK {
+			c.mutBlk = mutBlk.(iface.IMutBlock)
+		} else {
+			mutBlk.Unref()
+		}
 	}
 	c.Ref()
 	c.OnZeroCB = c.close

@@ -59,6 +59,7 @@ type ITableData interface {
 	AddRows(uint64) uint64
 	GetMeta() *md.Table
 	Size(string) uint64
+	StrongRefLastBlock() IBlock
 }
 
 type ISegment interface {
@@ -84,6 +85,7 @@ type ISegment interface {
 	CloneWithUpgrade(ITableData, *md.Segment) (ISegment, error)
 	UpgradeBlock(*md.Block) (IBlock, error)
 	BlockIds() []uint64
+	StrongRefLastBlock() IBlock
 }
 
 type IBlock interface {

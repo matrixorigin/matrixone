@@ -66,6 +66,17 @@ type tableData struct {
 	blkFactory  iface.IBlockFactory
 }
 
+func (td *tableData) StrongRefLastBlock() iface.IBlock {
+	td.tree.RLock()
+	if len(td.tree.segments) == 0 {
+		td.tree.RUnlock()
+		return nil
+	}
+	lastSeg := td.tree.segments[len(td.tree.segments)-1]
+	td.tree.RUnlock()
+	return lastSeg.StrongRefLastBlock()
+}
+
 func (td *tableData) close() {
 	td.indexHolder.Unref()
 	for _, segment := range td.tree.segments {
