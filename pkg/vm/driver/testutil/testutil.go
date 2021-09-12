@@ -3,6 +3,8 @@ package testutil
 import (
 	"fmt"
 	"github.com/cockroachdb/pebble"
+	config2 "github.com/matrixorigin/matrixcube/components/prophet/config"
+	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
 	"github.com/matrixorigin/matrixcube/vfs"
 	stdLog "log"
 	"matrixone/pkg/vm/driver"
@@ -167,7 +169,55 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 		//c.PCIs = append(c.PCIs, pci)
 	}), raftstore.WithTestClusterStoreFactory(func(node int, cfg *cConfig.Config) raftstore.Store {
 		dCfg := c.initCfgCreator(node)
-		dCfg.CubeConfig = *cfg
+		dCfg.CubeConfig = cConfig.Config{
+			RaftAddr:           cfg.RaftAddr,
+			ClientAddr:         cfg.ClientAddr,
+			DataPath:           cfg.DataPath,
+			DeployPath:         cfg.DeployPath,
+			Version:            cfg.Version,
+			GitHash:            cfg.GitHash,
+			Labels:             cfg.Labels,
+			Capacity:           cfg.Capacity,
+			UseMemoryAsStorage: cfg.UseMemoryAsStorage,
+			ShardGroups:        cfg.ShardGroups,
+			Replication:        cfg.Replication,
+			Snapshot:           cfg.Snapshot,
+			Raft:               cfg.Raft,
+			Worker:             cfg.Worker,
+			Prophet:            config2.Config{
+				Name:                            cfg.Prophet.Name,
+				DataDir:                         cfg.Prophet.DataDir,
+				RPCAddr:                         cfg.Prophet.RPCAddr,
+				RPCTimeout:                      cfg.Prophet.RPCTimeout,
+				StorageNode:                     cfg.Prophet.StorageNode,
+				ExternalEtcd:                    cfg.Prophet.ExternalEtcd,
+				EmbedEtcd:                       cfg.Prophet.EmbedEtcd,
+				LeaderLease:                     cfg.Prophet.LeaderLease,
+				Schedule:                        cfg.Prophet.Schedule,
+				Replication:                     cfg.Prophet.Replication,
+				LabelProperty:                   cfg.Prophet.LabelProperty,
+				Handler:                         cfg.Prophet.Handler,
+				Adapter:                         cfg.Prophet.Adapter,
+				ResourceStateChangedHandler:     cfg.Prophet.ResourceStateChangedHandler,
+				ContainerHeartbeatDataProcessor: cfg.Prophet.ContainerHeartbeatDataProcessor,
+				DisableStrictReconfigCheck:      cfg.Prophet.DisableStrictReconfigCheck,
+				DisableResponse:                 cfg.Prophet.DisableResponse,
+				EnableResponseNotLeader:         cfg.Prophet.EnableResponseNotLeader,
+				TestCtx:                         cfg.Prophet.TestCtx,
+				FS:                              cfg.Prophet.FS,
+			},
+			Storage:            cfg.Storage,
+			Customize:          cfg.Customize,
+			Metric:             cfg.Metric,
+			FS:                 cfg.FS,
+			Test:               cfg.Test,
+		}
+		types := []metapb.JobType{metapb.JobType_RemoveResource, metapb.JobType_CreateResourcePool, metapb.JobType_CustomStartAt}
+		for _, t := range types {
+			if v := cfg.Prophet.GetJobProcessor(t); v != nil {
+				dCfg.CubeConfig.Prophet.RegisterJobProcessor(t, v)
+			}
+		}
 		dCfg.ServerConfig.ExternalServer = true
 		d, err := driver.NewCubeDriverWithFactory(c.MetadataStorages[node], c.DataStorages[node], c.AOEStorages[node], dCfg, func(c *cConfig.Config) (raftstore.Store, error) {
 			return raftstore.NewStore(c), nil

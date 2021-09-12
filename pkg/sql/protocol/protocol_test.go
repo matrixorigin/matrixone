@@ -50,13 +50,13 @@ func TestBatch(t *testing.T) {
 }
 
 func NewStrVector(v []byte) *vector.Vector {
-	vec := vector.New(types.Type{types.T(types.T_varchar), 24, 0, 0})
+	vec := vector.New(types.Type{Oid: types.T(types.T_varchar), Size: 24})
 	vec.Append([][]byte{v, v, v})
 	return vec
 }
 
 func NewFloatVector(v float64) *vector.Vector {
-	vec := vector.New(types.Type{types.T(types.T_float64), 8, 0, 0})
+	vec := vector.New(types.Type{Oid: types.T(types.T_float64), Size: 8})
 	vec.Append([]float64{v, v, v})
 	return vec
 }

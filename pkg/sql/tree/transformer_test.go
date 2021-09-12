@@ -636,9 +636,9 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 	//ColumnNameExpr
 	t51 := &ast.ColumnNameExpr{
 		Name:  &ast.ColumnName{
-			Schema: model.CIStr{"sch", "sch"},
-			Table: model.CIStr{"t1", "sch"},
-			Name: model.CIStr{"a", "sch"}},
+			Schema: model.CIStr{O: "sch", L: "sch"},
+			Table: model.CIStr{O: "t1", L: "sch"},
+			Name: model.CIStr{O: "a", L: "sch"}},
 		Refer: nil,
 	}
 
@@ -647,8 +647,8 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 	//FuncCallExpr
 	t52 := &ast.FuncCallExpr{
 		Tp:     ast.FuncCallExprTypeGeneric,
-		Schema: model.CIStr{"t1","t1"},
-		FnName: model.CIStr{"abs","abs"},
+		Schema: model.CIStr{O: "t1", L: "t1"},
+		FnName: model.CIStr{O: "abs", L: "abs"},
 		Args:   []ast.ExprNode{e1,e2,e3},
 	}
 
@@ -814,17 +814,17 @@ func Test_transformColumnNameListToNameList(t *testing.T) {
 		&ast.ColumnName{
 			Schema: model.CIStr{},
 			Table:  model.CIStr{},
-			Name:   model.CIStr{"A", "a"},
+			Name:   model.CIStr{O: "A", L: "a"},
 		},
 		&ast.ColumnName{
 			Schema: model.CIStr{},
 			Table:  model.CIStr{},
-			Name:   model.CIStr{"B", "b"},
+			Name:   model.CIStr{O: "B", L: "b"},
 		},
 		&ast.ColumnName{
 			Schema: model.CIStr{},
 			Table:  model.CIStr{},
-			Name:   model.CIStr{"C", "c"},
+			Name:   model.CIStr{O: "C", L: "c"},
 		},
 	}
 
@@ -853,8 +853,8 @@ func gen_transform_t1() (*ast.SelectStmt, *Select) {
 	//SELECT t.a FROM sa.t ;
 	//SELECT t.a FROM sa.t,u ;
 	t1TableName := &ast.TableName{
-		Schema:         model.CIStr{"sa", "sa"},
-		Name:           model.CIStr{"t", "t"},
+		Schema:         model.CIStr{O: "sa", L: "sa"},
+		Name:           model.CIStr{O: "t", L: "t"},
 		DBInfo:         nil,
 		TableInfo:      nil,
 		IndexHints:     nil,
@@ -869,7 +869,7 @@ func gen_transform_t1() (*ast.SelectStmt, *Select) {
 
 	t1TableName2 := &ast.TableName{
 		Schema:         model.CIStr{},
-		Name:           model.CIStr{"u", "u"},
+		Name:           model.CIStr{O: "u", L: "u"},
 		DBInfo:         nil,
 		TableInfo:      nil,
 		IndexHints:     nil,
@@ -896,8 +896,8 @@ func gen_transform_t1() (*ast.SelectStmt, *Select) {
 
 	t1ColumnName := &ast.ColumnName{
 		Schema: model.CIStr{},
-		Table:  model.CIStr{"t", "t"},
-		Name:   model.CIStr{"a", "a"},
+		Table:  model.CIStr{O: "t", L: "t"},
+		Name:   model.CIStr{O: "a", L: "a"},
 	}
 	t1ColumnNameExpr := &ast.ColumnNameExpr{
 		Name:  t1ColumnName,
@@ -1009,8 +1009,8 @@ func gen_transform_t1() (*ast.SelectStmt, *Select) {
 func gen_transform_t2() (*ast.SelectStmt, *Select) {
 	//SELECT t.a FROM sa.t,u,v
 	t1TableName := &ast.TableName{
-		Schema:         model.CIStr{"sa", "sa"},
-		Name:           model.CIStr{"t", "t"},
+		Schema:         model.CIStr{O: "sa", L: "sa"},
+		Name:           model.CIStr{O: "t", L: "t"},
 		DBInfo:         nil,
 		TableInfo:      nil,
 		IndexHints:     nil,
@@ -1025,7 +1025,7 @@ func gen_transform_t2() (*ast.SelectStmt, *Select) {
 
 	t1TableName2 := &ast.TableName{
 		Schema:         model.CIStr{},
-		Name:           model.CIStr{"u", "u"},
+		Name:           model.CIStr{O: "u", L: "u"},
 		DBInfo:         nil,
 		TableInfo:      nil,
 		IndexHints:     nil,
@@ -1040,7 +1040,7 @@ func gen_transform_t2() (*ast.SelectStmt, *Select) {
 
 	t1TableName3 := &ast.TableName{
 		Schema:         model.CIStr{},
-		Name:           model.CIStr{"v", "v"},
+		Name:           model.CIStr{O: "v", L: "v"},
 		DBInfo:         nil,
 		TableInfo:      nil,
 		IndexHints:     nil,
@@ -1079,8 +1079,8 @@ func gen_transform_t2() (*ast.SelectStmt, *Select) {
 
 	t1ColumnName := &ast.ColumnName{
 		Schema: model.CIStr{},
-		Table:  model.CIStr{"t", "t"},
-		Name:   model.CIStr{"a", "a"},
+		Table:  model.CIStr{O: "t", L: "t"},
+		Name:   model.CIStr{O: "a", L: "a"},
 	}
 	t1ColumnNameExpr := &ast.ColumnNameExpr{
 		Name:  t1ColumnName,
@@ -1219,8 +1219,8 @@ func gen_transform_t2() (*ast.SelectStmt, *Select) {
 func gen_transform_t3() (*ast.SelectStmt, *Select) {
 	//SELECT t.a,u.a FROM sa.t,u where t.a = u.a
 	t1TableName := &ast.TableName{
-		Schema:         model.CIStr{"sa", "sa"},
-		Name:           model.CIStr{"t", "t"},
+		Schema:         model.CIStr{O: "sa", L: "sa"},
+		Name:           model.CIStr{O: "t", L: "t"},
 		DBInfo:         nil,
 		TableInfo:      nil,
 		IndexHints:     nil,
@@ -1235,7 +1235,7 @@ func gen_transform_t3() (*ast.SelectStmt, *Select) {
 
 	t1TableName2 := &ast.TableName{
 		Schema:         model.CIStr{},
-		Name:           model.CIStr{"u", "u"},
+		Name:           model.CIStr{O: "u", L: "u"},
 		DBInfo:         nil,
 		TableInfo:      nil,
 		IndexHints:     nil,
@@ -1262,8 +1262,8 @@ func gen_transform_t3() (*ast.SelectStmt, *Select) {
 
 	t1ColumnName := &ast.ColumnName{
 		Schema: model.CIStr{},
-		Table:  model.CIStr{"t", "t"},
-		Name:   model.CIStr{"a", "a"},
+		Table:  model.CIStr{O: "t", L: "t"},
+		Name:   model.CIStr{O: "a", L: "a"},
 	}
 	t1ColumnNameExpr := &ast.ColumnNameExpr{
 		Name:  t1ColumnName,
@@ -1272,8 +1272,8 @@ func gen_transform_t3() (*ast.SelectStmt, *Select) {
 
 	t1ColumnName2 := &ast.ColumnName{
 		Schema: model.CIStr{},
-		Table:  model.CIStr{"u", "u"},
-		Name:   model.CIStr{"a", "a"},
+		Table:  model.CIStr{O: "u", L: "u"},
+		Name:   model.CIStr{O: "a", L: "a"},
 	}
 	t1ColumnNameExpr2 := &ast.ColumnNameExpr{
 		Name:  t1ColumnName2,
@@ -1301,8 +1301,8 @@ func gen_transform_t3() (*ast.SelectStmt, *Select) {
 
 	t1ColumnName3 := &ast.ColumnName{
 		Schema: model.CIStr{},
-		Table:  model.CIStr{"t", "t"},
-		Name:   model.CIStr{"a", "a"},
+		Table:  model.CIStr{O: "t", L: "t"},
+		Name:   model.CIStr{O: "a", L: "a"},
 	}
 	t1Where1 := &ast.ColumnNameExpr{
 		Name:  t1ColumnName3,
@@ -1311,8 +1311,8 @@ func gen_transform_t3() (*ast.SelectStmt, *Select) {
 
 	t1ColumnName4 := &ast.ColumnName{
 		Schema: model.CIStr{},
-		Table:  model.CIStr{"u", "u"},
-		Name:   model.CIStr{"a", "a"},
+		Table:  model.CIStr{O: "u", L: "u"},
+		Name:   model.CIStr{O: "a", L: "a"},
 	}
 	t1Where2 := &ast.ColumnNameExpr{
 		Name:  t1ColumnName4,
@@ -1432,9 +1432,9 @@ func gen_transform_t3() (*ast.SelectStmt, *Select) {
 
 func gen_var_ref(schema, table, name string) *ast.ColumnNameExpr {
 	var_name := &ast.ColumnName{
-		Schema: model.CIStr{schema, schema},
-		Table:  model.CIStr{table, table},
-		Name:   model.CIStr{name, name},
+		Schema: model.CIStr{O: schema, L: schema},
+		Table:  model.CIStr{O: table, L: table},
+		Name:   model.CIStr{O: name, L: name},
 	}
 	var_ := &ast.ColumnNameExpr{
 		Name:  var_name,
@@ -1453,8 +1453,8 @@ func gen_binary_expr(op opcode.Op, l, r ast.ExprNode) *ast.BinaryOperationExpr {
 
 func gen_table(sch, name string) *ast.TableSource {
 	sa_t_name := &ast.TableName{
-		Schema:         model.CIStr{sch, sch},
-		Name:           model.CIStr{name, name},
+		Schema:         model.CIStr{O: sch, L: sch},
+		Name:           model.CIStr{O: name, L: name},
 		DBInfo:         nil,
 		TableInfo:      nil,
 		IndexHints:     nil,
@@ -2637,7 +2637,7 @@ func gen_transform_t9() (*ast.SelectStmt, *Select) {
 			Offset:    0,
 			WildCard:  nil,
 			Expr:      t_b_multi_u_b,
-			AsName:    model.CIStr{"tubb", "tubb"},
+			AsName:    model.CIStr{O: "tubb", L: "tubb"},
 			Auxiliary: false,
 		},
 	}
@@ -3101,7 +3101,7 @@ func gen_transform_t12() (*ast.SelectStmt, *Select) {
 	t1_func_call := &ast.FuncCallExpr{
 		Tp:     0,
 		Schema: model.CIStr{},
-		FnName: model.CIStr{"abs", "abs"},
+		FnName: model.CIStr{O: "abs", L: "abs"},
 		Args:   t1_func_call_agg,
 	}
 
@@ -3764,10 +3764,10 @@ func gen_insert_t1()(*ast.InsertStmt,*Insert){
 	t1TableRef := &ast.TableRefsClause{TableRefs: t1Join}
 
 	colNames := []*ast.ColumnName{
-		&ast.ColumnName{Name: model.CIStr{"a","a"}},
-		&ast.ColumnName{Name: model.CIStr{"b","b"}},
-		&ast.ColumnName{Name: model.CIStr{"c","c"}},
-		&ast.ColumnName{Name: model.CIStr{"d","d"}},
+		{Name: model.CIStr{O: "a", L: "a"}},
+		{Name: model.CIStr{O: "b", L: "b"}},
+		{Name: model.CIStr{O: "c", L: "c"}},
+		{Name: model.CIStr{O: "d", L: "d"}},
 	}
 
 	lists := [][]ast.ExprNode{
@@ -3780,8 +3780,8 @@ func gen_insert_t1()(*ast.InsertStmt,*Insert){
 	}
 
 	partitionNames :=[]model.CIStr{
-		model.CIStr{"p1","p1"},
-		model.CIStr{"p2","p2"},
+		{O: "p1", L: "p1"},
+		{O: "p2", L: "p2"},
 	}
 
 	t1_insert :=&ast.InsertStmt{
@@ -7391,8 +7391,6 @@ PASSWORD EXPIRE INTERVAL 1 DAY PASSWORD EXPIRE DEFAULT ACCOUNT LOCK ACCOUNT UNLO
 	}
 
 	return n, want
-
-	return nil, nil
 }
 
 func generate_alter_user_2() (*ast.AlterUserStmt,*AlterUser) {

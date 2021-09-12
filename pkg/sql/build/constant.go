@@ -60,7 +60,7 @@ func Eq(x, y *extend.ValueExtend) (extend.Extend, error) {
 	default:
 		return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot eq %s", y.V.Typ, x.V.Typ))
 	}
-	return &extend.ValueExtend{vec}, nil
+	return &extend.ValueExtend{V: vec}, nil
 }
 
 func Ne(x, y *extend.ValueExtend) (extend.Extend, error) {
@@ -100,7 +100,7 @@ func Ne(x, y *extend.ValueExtend) (extend.Extend, error) {
 	default:
 		return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot eq %s", y.V.Typ, x.V.Typ))
 	}
-	return &extend.ValueExtend{vec}, nil
+	return &extend.ValueExtend{V: vec}, nil
 }
 
 func Lt(x, y *extend.ValueExtend) (extend.Extend, error) {
@@ -140,7 +140,7 @@ func Lt(x, y *extend.ValueExtend) (extend.Extend, error) {
 	default:
 		return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot eq %s", y.V.Typ, x.V.Typ))
 	}
-	return &extend.ValueExtend{vec}, nil
+	return &extend.ValueExtend{V: vec}, nil
 }
 
 func Le(x, y *extend.ValueExtend) (extend.Extend, error) {
@@ -180,7 +180,7 @@ func Le(x, y *extend.ValueExtend) (extend.Extend, error) {
 	default:
 		return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot eq %s", y.V.Typ, x.V.Typ))
 	}
-	return &extend.ValueExtend{vec}, nil
+	return &extend.ValueExtend{V: vec}, nil
 }
 
 func Gt(x, y *extend.ValueExtend) (extend.Extend, error) {
@@ -220,7 +220,7 @@ func Gt(x, y *extend.ValueExtend) (extend.Extend, error) {
 	default:
 		return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot eq %s", y.V.Typ, x.V.Typ))
 	}
-	return &extend.ValueExtend{vec}, nil
+	return &extend.ValueExtend{V: vec}, nil
 }
 
 func Ge(x, y *extend.ValueExtend) (extend.Extend, error) {
@@ -260,7 +260,7 @@ func Ge(x, y *extend.ValueExtend) (extend.Extend, error) {
 	default:
 		return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot eq %s", y.V.Typ, x.V.Typ))
 	}
-	return &extend.ValueExtend{vec}, nil
+	return &extend.ValueExtend{V: vec}, nil
 }
 
 func div(x, y *extend.ValueExtend) (extend.Extend, error) {
@@ -281,7 +281,7 @@ func div(x, y *extend.ValueExtend) (extend.Extend, error) {
 		return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot div %s", y.V.Typ, x.V.Typ))
 	}
 	vec.Col = []float64{xv / yv}
-	return &extend.ValueExtend{vec}, nil
+	return &extend.ValueExtend{V: vec}, nil
 }
 
 func mod(x, y *extend.ValueExtend) (extend.Extend, error) {
@@ -289,25 +289,25 @@ func mod(x, y *extend.ValueExtend) (extend.Extend, error) {
 		vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []int64{x.V.Col.([]int64)[0] % y.V.Col.([]int64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_int64 && y.V.Typ.Oid == types.T_float64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{math.Mod(float64(x.V.Col.([]int64)[0]), y.V.Col.([]float64)[0])}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_float64 && y.V.Typ.Oid == types.T_int64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{math.Mod(x.V.Col.([]float64)[0], float64(y.V.Col.([]int64)[0]))}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_float64 && y.V.Typ.Oid == types.T_float64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{math.Mod(x.V.Col.([]float64)[0], y.V.Col.([]float64)[0])}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot mod %s", y.V.Typ, x.V.Typ))
 }
@@ -317,25 +317,25 @@ func mul(x, y *extend.ValueExtend) (extend.Extend, error) {
 		vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []int64{x.V.Col.([]int64)[0] * y.V.Col.([]int64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_int64 && y.V.Typ.Oid == types.T_float64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{float64(x.V.Col.([]int64)[0]) * y.V.Col.([]float64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_float64 && y.V.Typ.Oid == types.T_int64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{x.V.Col.([]float64)[0] * float64(y.V.Col.([]int64)[0])}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_float64 && y.V.Typ.Oid == types.T_float64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{x.V.Col.([]float64)[0] * y.V.Col.([]float64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot mul %s", y.V.Typ, x.V.Typ))
 }
@@ -345,25 +345,25 @@ func plus(x, y *extend.ValueExtend) (extend.Extend, error) {
 		vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []int64{x.V.Col.([]int64)[0] + y.V.Col.([]int64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_int64 && y.V.Typ.Oid == types.T_float64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{float64(x.V.Col.([]int64)[0]) + y.V.Col.([]float64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_float64 && y.V.Typ.Oid == types.T_int64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{x.V.Col.([]float64)[0] + float64(y.V.Col.([]int64)[0])}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_float64 && y.V.Typ.Oid == types.T_float64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{x.V.Col.([]float64)[0] + y.V.Col.([]float64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot plus %s", y.V.Typ, x.V.Typ))
 }
@@ -373,25 +373,25 @@ func minus(x, y *extend.ValueExtend) (extend.Extend, error) {
 		vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []int64{x.V.Col.([]int64)[0] - y.V.Col.([]int64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_int64 && y.V.Typ.Oid == types.T_float64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{float64(x.V.Col.([]int64)[0]) - y.V.Col.([]float64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_float64 && y.V.Typ.Oid == types.T_int64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{x.V.Col.([]float64)[0] - float64(y.V.Col.([]int64)[0])}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	if x.V.Typ.Oid == types.T_float64 && y.V.Typ.Oid == types.T_float64 {
 		vec := vector.New(types.Type{Oid: types.T_float64, Size: 8})
 		vec.Ref = 1
 		vec.Col = []float64{x.V.Col.([]float64)[0] - y.V.Col.([]float64)[0]}
-		return &extend.ValueExtend{vec}, nil
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf(" %s cannot minus %s", y.V.Typ, x.V.Typ))
 }

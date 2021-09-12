@@ -180,7 +180,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 	for i := 0; i < Min(server_cnt, Min(len(testPorts), nodeCnt)); i++ {
 		hm := host.New(1 << 40)
 		gm := guest.New(1<<40, hm)
-		proc := process.New(gm, mempool.New(1<<40, 8))
+		proc := process.New(gm)
 		{
 			proc.Id = "0"
 			proc.Lim.Size = 10 << 32
@@ -190,7 +190,7 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 		}
 		log := logger.New(os.Stderr, fmt.Sprintf("rpc%v:", i))
 		log.SetLevel(logger.WARN)
-		srv, err := rpcserver.New(fmt.Sprintf("127.0.0.1:%v", 20000+i+100), 1<<30, logutil.L())
+		srv, err := rpcserver.New(fmt.Sprintf("127.0.0.1:%v", 20000+i+100), 1<<30, logutil.GetGlobalLogger())
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -263,7 +263,7 @@ func get_server(configFile string, port int, pd *PDCallbackImpl, eng engine.Engi
 	fmt.Println("Shutdown The *MOServer With Ctrl+C | Ctrl+\\.")
 
 	hostMmu := host.New(sv.GetHostMmuLimitation())
-	mempool := mempool.New(int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor()))
+	mempool := mempool.New(/*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/)
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
