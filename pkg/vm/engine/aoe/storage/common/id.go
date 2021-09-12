@@ -179,7 +179,7 @@ func ParseTBlockfileName(name string) (ID, error) {
 	} else {
 		id.BlockID = bid
 	}
-	if vid, err := strconv.ParseUint(strs[4], 10, 64); err != nil {
+	if vid, err := strconv.ParseUint(strs[3], 10, 64); err != nil {
 		return id, err
 	} else {
 		id.PartID = uint32(vid)

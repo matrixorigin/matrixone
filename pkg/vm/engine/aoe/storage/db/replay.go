@@ -31,6 +31,101 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
+// -------------------------------------------
+// **************** Meta Files ***************
+// -------------------------------------------
+// 4.ckp
+// |  |
+// |   --------> Global meta file suffix
+//  -----------> Version
+
+// 3_v2.tckp
+// |  |  |
+// |  |   -----> Table meta file suffix
+// |   --------> Version
+//  -----------> Table ID
+
+// -------------------------------------------
+// **************** Data Files ***************
+// -------------------------------------------
+// 2_4_3_0.tblk
+// | | | |  |
+// | | | |   --> Transient block file suffix
+// | | |   ----> Version
+// | |  -------> Block ID
+// |   --------> Segment ID
+//  -----------> Table ID
+
+// 2_4_3.blk
+// | | |  |
+// | | |   ----> Block file suffix
+// | |  -------> Block ID
+// |   --------> Segment ID
+//  -----------> Table ID
+
+// 2_4.seg
+// | |  |
+// | |   ------> Segment file suffix
+// |   --------> Segment ID
+//  -----------> Table ID
+
+// -------------------------------------------
+// ****** Possiable replay files layout ******
+// -------------------------------------------
+// {$db}/
+//   |-meta/
+//   |-data/
+// db just created
+
+// {$db}/
+//   |-meta/
+//   |   |- 1.ckp -----------> (will be gc'ed)
+//   |   |- 2.ckp
+//   |-data/
+// only ddl without dml
+
+// {$db}/
+//   |-meta/
+//   |   |- 2.ckp
+//   |   |- 1_v8.tckp --------> (seg1[blk1,blk2], seg2[blk3,blk4])
+//   |-data/
+//       |- 1_2_4.blk
+//       |- 1_2_3.blk
+//       |- 1_1.seg
+// One table with 2 segments(seg1, seg2). seg1 is a sorted seg while seg2 is an unsorted seg.
+
+// {$db}/
+//   |-meta/
+//   |   |- 1.ckp
+//   |   |- 1_v8.tckp
+//   |-data/
+//       |- 1_2_4.blk
+//       |- 1_1.seg
+// AOE supports parallel writing of block files, the sequence of block file flush is different
+// from the sequence of data. For example, blk3 and blk4 are both in flush queue and blk4 is
+// successfully flushed first. Then the db crashes. When restarting, it should replay from the
+// indx just before blk3, and erase all data files after blk3
+
+// {$db}/
+//   |-meta/
+//   |   |- 1.ckp
+//   |   |- 1_v8.tckp
+//   |-data/
+//       |- 1_2_4.blk
+//       |- 1_2_4_1.tblk
+//       |- 1_2_4_0.tblk
+//       |- 1_2_3_0.tblk
+//       |- 1_1.seg
+
+// {$db}/
+//   |-meta/
+//   |   |- 1.ckp
+//   |   |- 1_v8.tckp
+//   |-data/
+//       |- 1_2_4_1.tblk
+//       |- 1_2_3.tblk
+//       |- 1_1.seg
+
 type flushsegCtx struct {
 	id common.ID
 }
@@ -370,6 +465,7 @@ func (h *replayHandle) addDataFile(fname string) {
 		}
 		fullname := path.Join(h.dataDir, fname)
 		h.addBlock(id, fullname, true)
+		return
 	}
 	if name, ok := e.ParseBlockfileName(fname); ok {
 		id, err := common.ParseBlockFileName(name)
