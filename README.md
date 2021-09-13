@@ -103,5 +103,8 @@ See [Contributing Guide](CONTRIBUTING.md) for details on contribution workflows.
 ## Roadmap
 Check out [Roadmap](https://github.com/matrixorigin/matrixone/issues/613) for MatrixOne development plan.
 
+## Community
+You can join [MatrixOne community](https://join.slack.com/t/matrixoneworkspace/shared_invite/zt-voce6d82-C8vdyHNcv11l430D0QKZlw) on Slack to discuss and ask questions.
+
 ## License
-MatrixOne is licensed under the [Apache License, Version 2.0](LICENSE)
+MatrixOne is licensed under the [Apache License, Version 2.0](LICENSE).
