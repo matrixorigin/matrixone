@@ -53,8 +53,8 @@ MatrixOne stores data in shared storage of S3 / HDFS, or even in the local disk,
 **Get the MatrixOne code:**
 
 ```
-git clone https://github.com/matrixorigin/matrixone.git
-cd matrixone
+$ git clone https://github.com/matrixorigin/matrixone.git
+$ cd matrixone
 ```
 
 **Run make:**
@@ -62,8 +62,8 @@ cd matrixone
 Run `make debug`, `make clean`, or anything else our Makefile offers. You can just run the following command to build quickly.
 
 ```
-make config
-make build
+$ make config
+$ make build
 ```
 
 ### Starting
@@ -77,24 +77,24 @@ make build
 **Boot MatrixOne server:**
 
 ```
-./mo-server system_vars_config.toml
+$ ./mo-server system_vars_config.toml
 ```
 
 **Connect MatrixOne server:**
 
 ```
-mysql -h IP -P PORT -uUsername -p
+$ mysql -h IP -P PORT -uUsername -p
 ```
 
 **For example:**
 
-Test Account:
+Test account:
 
 - user: dump
 - password: 111
 
 ```
-mysql -h 127.0.0.1 -P 6001 -udump -p
+$ mysql -h 127.0.0.1 -P 6001 -udump -p
 ```
 
 ## Contributing
