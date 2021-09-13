@@ -119,10 +119,15 @@ func (c *collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 	offset := uint64(0)
 	replayIndex := tableMeta.GetReplayIndex()
 	if replayIndex != nil {
-		offset = replayIndex.Count + replayIndex.Start
-		tableMeta.ResetReplayIndex()
-		index.Start = offset
 		logutil.Infof("Table %d ReplayIndex %s", tableMeta.ID, replayIndex.String())
+		if !replayIndex.IsApplied() {
+			if replayIndex.ID != index.ID {
+				panic(fmt.Sprintf("replayIndex: %d, but %d received", replayIndex.ID, index.ID))
+			}
+			offset = replayIndex.Count + replayIndex.Start
+			index.Start = offset
+		}
+		tableMeta.ResetReplayIndex()
 	}
 	for {
 		if mut.IsFull() {
