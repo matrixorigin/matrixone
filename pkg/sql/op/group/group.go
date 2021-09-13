@@ -43,7 +43,7 @@ func New(prev op.OP, gs []*extend.Attribute, es []aggregation.Extend) (*Group, e
 			if _, ok := attrs[e.Alias]; ok {
 				return nil, sqlerror.New(errno.AmbiguousAlias, fmt.Sprintf("alias '%s' is ambiguous", e.Alias))
 			}
-			attrs[e.Alias] = e.Agg.Type()
+			attrs[e.Alias] = aggregation.ReturnType(e.Op, e.Agg.Type())
 			as = append(as, e.Alias)
 		}
 	}
