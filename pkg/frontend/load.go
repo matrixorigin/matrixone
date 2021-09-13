@@ -916,7 +916,7 @@ func saveBatchToStorageConcurrentWrite(handler *WriteBatchHandler,force bool) er
 			//first, remove redundant rows at last
 			needLen := handler.batchFilled
 			if needLen > 0{
-				logutil.Infof("needLen: %d batchSize %d", needLen, handler.batchSize)
+				//logutil.Infof("needLen: %d batchSize %d", needLen, handler.batchSize)
 				for _, vec := range handler.batchData.Vecs {
 					//fmt.Printf("needLen %d %d type %d %s \n",needLen,i,vec.Typ.Oid,vec.Typ.String())
 					//remove nulls.NUlls
@@ -1074,9 +1074,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	}
 
 	//enable close flag
-	handler.closeRef.Open()
+	//handler.closeRef.Open()
 
-	defer handler.close()
+	//defer handler.close()
 
 	handler.simdCsvConcurrencyCountOfWriteBatch = Min(handler.simdCsvConcurrencyCountOfWriteBatch,runtime.NumCPU())
 	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1,handler.simdCsvConcurrencyCountOfWriteBatch)
