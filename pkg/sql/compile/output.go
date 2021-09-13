@@ -27,8 +27,7 @@ func fillOutput(ss []*Scope, arg *output.Argument, proc *process.Process) []*Sco
 		return ss
 	}
 	rs := new(Scope)
-	gm := guest.New(proc.Gm.Limit, proc.Gm.Mmu)
-	rs.Proc = process.New(gm, proc.Mp)
+	rs.Proc = process.New(guest.New(proc.Gm.Limit, proc.Gm.Mmu))
 	rs.Proc.Lim = proc.Lim
 	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
 	{
@@ -43,8 +42,8 @@ func fillOutput(ss []*Scope, arg *output.Argument, proc *process.Process) []*Sco
 		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
-				Mmu: gm,
-				Reg: rs.Proc.Reg.Ws[i],
+				Proc: rs.Proc,
+				Reg:  rs.Proc.Reg.Ws[i],
 			},
 		})
 	}

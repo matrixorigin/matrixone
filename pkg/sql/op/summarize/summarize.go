@@ -53,7 +53,7 @@ func (n *Summarize) Rename(name string) {
 }
 
 func (n *Summarize) Columns() []string {
-	return n.Prev.Columns()
+	return n.As
 }
 
 func (n *Summarize) Attribute() map[string]types.Type {

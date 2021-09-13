@@ -8,9 +8,8 @@ import (
 
 func New(prev op.OP, gs []Attribute) *Order {
 	return &Order{
-		Gs:    gs,
-		Prev:  prev,
-		Attrs: prev.Attribute(),
+		Gs:   gs,
+		Prev: prev,
 	}
 }
 
@@ -41,5 +40,5 @@ func (n *Order) Columns() []string {
 }
 
 func (n *Order) Attribute() map[string]types.Type {
-	return n.Attrs
+	return n.Prev.Attribute()
 }

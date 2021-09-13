@@ -7,18 +7,32 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"testing"
+	"time"
 )
 
 const (
-	Num   = 10
-	Limit = 100
+	Num = 10
 )
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+var letterRunes = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+func RandString(n int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letterRunes[rand.Intn(len(letterRunes))]
+	}
+	return b
+}
 
 func generate() *vector.Vector {
 	vs := make([][]byte, Num)
 	{
 		for i := 0; i < Num; i++ {
-			vs[i] = []byte(fmt.Sprintf("%v", rand.Int63()%Limit))
+			vs[i] = RandString(10)
 		}
 	}
     vec := vector.New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
@@ -40,7 +54,7 @@ func TestSort(t *testing.T) {
 	for i, o := range os {
 		fmt.Printf("[%v] = %s\n", i, vs.Get(o))
 	}
-	Sort(vs, os[2:])
+	Sort(vs, os)
 	fmt.Printf("\n")
 	for i, o := range os {
 		fmt.Printf("[%v] = %s\n", i, vs.Get(o))

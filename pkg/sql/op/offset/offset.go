@@ -10,7 +10,6 @@ func New(prev op.OP, offset int64) *Offset {
 	return &Offset{
 		Prev:   prev,
 		Offset: offset,
-		Attrs:  prev.Attribute(),
 	}
 }
 
@@ -31,5 +30,5 @@ func (n *Offset) Columns() []string {
 }
 
 func (n *Offset) Attribute() map[string]types.Type {
-	return n.Attrs
+	return n.Prev.Attribute()
 }

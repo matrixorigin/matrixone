@@ -20,6 +20,7 @@ func New(s bool, name, schema string, r engine.Relation) *Relation {
 	}
 	{
 		segs := r.Segments()
+		defer r.Close()
 		mp := make(map[string]*Unit)
 		for _, seg := range segs {
 			if u, ok := mp[seg.Node.Addr]; ok {

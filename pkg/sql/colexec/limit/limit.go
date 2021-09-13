@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -18,6 +16,7 @@ func Prepare(_ *process.Process, _ interface{}) error {
 	return nil
 }
 
+// returning only the first n tuples from its input
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if proc.Reg.Ax == nil {
 		return false, nil
@@ -32,28 +31,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		bat.Clean(proc)
 		return true, nil
 	}
-	if length := uint64(len(bat.Sels)); length > 0 {
-		newSeen := n.Seen + length
-		if newSeen >= n.Limit { // limit - seen
-			bat.Sels = bat.Sels[:n.Limit-n.Seen]
-			proc.Reg.Ax = bat
-			n.Seen = newSeen
-			return true, nil
-		}
-		n.Seen = newSeen
-		proc.Reg.Ax = bat
-		return false, nil
+	if len(bat.Sels) > 0 {
+		bat.Shuffle(proc)
 	}
-	length := bat.Length(proc)
+	length := bat.Length()
 	newSeen := n.Seen + uint64(length)
 	if newSeen >= n.Limit { // limit - seen
-		data, sels, err := newSels(int64(n.Limit-n.Seen), proc)
-		if err != nil {
-			bat.Clean(proc)
-			return true, err
-		}
-		bat.Sels = sels
-		bat.SelsData = data
+		bat.SetLength(int(n.Limit - n.Seen))
 		proc.Reg.Ax = bat
 		n.Seen = newSeen
 		return true, nil
@@ -61,16 +45,4 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n.Seen = newSeen
 	proc.Reg.Ax = bat
 	return false, nil
-}
-
-func newSels(count int64, proc *process.Process) ([]byte, []int64, error) {
-	data, err := proc.Alloc(count * 8)
-	if err != nil {
-		return nil, nil, err
-	}
-	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
-	for i := int64(0); i < count; i++ {
-		sels[i] = i
-	}
-	return data, sels[:count], nil
 }

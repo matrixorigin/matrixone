@@ -10,7 +10,6 @@ func New(prev op.OP, limit int64) *Limit {
 	return &Limit{
 		Prev:  prev,
 		Limit: limit,
-		Attrs: prev.Attribute(),
 	}
 }
 
@@ -31,5 +30,5 @@ func (n *Limit) Columns() []string {
 }
 
 func (n *Limit) Attribute() map[string]types.Type {
-	return n.Attrs
+	return n.Prev.Attribute()
 }

@@ -6,7 +6,6 @@ import (
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/vectorize/max"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -62,7 +61,7 @@ func (a *strMax) EvalCopy(proc *process.Process) (*vector.Vector, error) {
 	}
 	vec := vector.New(a.typ)
 	col := vec.Col.(*types.Bytes)
-	col.Data = data[mempool.CountSize:mempool.CountSize]
+	col.Data = data
 	col.Offsets = append(col.Offsets, 0)
 	if a.cnt == 0 {
 		vec.Nsp.Add(0)

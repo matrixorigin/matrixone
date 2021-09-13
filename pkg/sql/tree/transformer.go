@@ -85,6 +85,7 @@ func transformUnaryOperatorExprToUnaryExpr(uoe *ast.UnaryOperationExpr) *UnaryEx
 	case opcode.Not2: //!
 		e := transformExprNodeToExpr(uoe.V)
 		return NewUnaryExpr(UNARY_MARK, e)
+
 	}
 	panic(fmt.Errorf("unsupported unary expr. op:%s \n", uoe.Op.String()))
 }

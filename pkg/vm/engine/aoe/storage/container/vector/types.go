@@ -1,6 +1,7 @@
 package vector
 
 import (
+	"errors"
 	"io"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
@@ -10,8 +11,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
-
-	"github.com/cockroachdb/errors"
 )
 
 var (

@@ -12,7 +12,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 	"os"
 	"reflect"
@@ -247,7 +246,7 @@ func (v *StrVector) SliceReference(start, end int) dbi.IVectorReader {
 		Data: v.Data.Window(start, end),
 	}
 	if v.VMask.Np != nil {
-		vmask := v.VMask.Range(uint64(start), uint64(end))
+		vmask := v.VMask.Range(uint64(start), uint64(end), &nulls.Nulls{})
 		vec.VMask = vmask
 		if vmask.Any() {
 			mask = mask | container.HasNullMask
@@ -275,9 +274,9 @@ func (v *StrVector) GetLatestView() IVector {
 	}
 	if mask&container.HasNullMask != 0 {
 		if mask&container.ReadonlyMask == 0 {
-			vec.VMask = v.VMask.Range(0, uint64(endPos))
+			vec.VMask = v.VMask.Range(0, uint64(endPos), &nulls.Nulls{})
 		} else {
-			vec.VMask = v.VMask.Range(0, uint64(endPos))
+			vec.VMask = v.VMask.Range(0, uint64(endPos), &nulls.Nulls{})
 		}
 	} else {
 		vec.VMask = &nulls.Nulls{}
@@ -285,12 +284,10 @@ func (v *StrVector) GetLatestView() IVector {
 	return vec
 }
 
-func (v *StrVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
+func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		panic("should call in ro mode")
 	}
-	// |CountSize|TypeSize|BitmapSize[|Bitmap]| Rows [|lengths| strdata ]|
-	//      8         4        4         [?]     4     [lengths   data]
 	nullSize := 0
 	var nullbuf []byte
 	var err error
@@ -302,40 +299,44 @@ func (v *StrVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro
 	}
 	capacity := encoding.TypeSize + 4 + nullSize + 4
 	rows := len(v.Data.Offsets)
-	capacity += rows
+	capacity += 4
 	if rows > 0 {
 		capacity += 4 * rows
 		capacity += len(v.Data.Data)
 	}
 	vec := ro.New(v.Type)
-	data, err := proc.Alloc(int64(capacity))
+	deCompressed.Reset()
+	if capacity > deCompressed.Cap() {
+		deCompressed.Grow(capacity)
+	}
+	buf := deCompressed.Bytes()
+	buf = buf[:capacity]
+	dBuf := buf
+	copy(dBuf, encoding.EncodeType(v.Type))
+	dBuf = dBuf[encoding.TypeSize:]
+	copy(dBuf, encoding.EncodeUint32(uint32(nullSize)))
+	dBuf = dBuf[4:]
+	if nullSize > 0 {
+		copy(dBuf, nullbuf)
+		dBuf = dBuf[nullSize:]
+	}
+	copy(dBuf, encoding.EncodeUint32(uint32(rows)))
+	dBuf = dBuf[4:]
+	if rows > 0 {
+		lenBuf := encoding.EncodeUint32Slice(v.Data.Lengths)
+		copy(dBuf, lenBuf)
+		dBuf = dBuf[len(lenBuf):]
+		copy(dBuf, v.Data.Data)
+	}
+	err = vec.Read(buf)
 	if err != nil {
 		return nil, err
 	}
-	buf := data[mempool.CountSize : mempool.CountSize+capacity]
-	copy(buf, encoding.EncodeType(v.Type))
-	buf = buf[encoding.TypeSize:]
-	copy(buf, encoding.EncodeUint32(uint32(nullSize)))
-	buf = buf[4:]
-	if nullSize > 0 {
-		copy(buf, nullbuf)
-		buf = buf[nullSize:]
-	}
-	copy(buf, encoding.EncodeUint32(uint32(rows)))
-	buf = buf[4:]
-	if rows > 0 {
-		lenBuf := encoding.EncodeUint32Slice(v.Data.Lengths)
-		copy(buf, lenBuf)
-		buf = buf[len(lenBuf):]
-		copy(buf, v.Data.Data)
-	}
-
-	if err = vec.Read(data[:mempool.CountSize+capacity]); err != nil {
-		proc.Free(data)
-		return nil, err
-	}
-	copy(data, encoding.EncodeUint64(ref))
 	return vec, nil
+}
+
+func (v *StrVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
+	return nil, nil
 }
 
 func (v *StrVector) CopyToVector() *ro.Vector {

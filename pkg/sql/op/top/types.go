@@ -1,7 +1,6 @@
 package top
 
 import (
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/op"
 	"matrixone/pkg/sql/op/order"
 )
@@ -12,5 +11,4 @@ type Top struct {
 	Limit int64
 	ID    string
 	Gs    []order.Attribute
-	Attrs map[string]types.Type
 }

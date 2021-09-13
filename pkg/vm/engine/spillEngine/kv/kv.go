@@ -2,7 +2,6 @@ package kv
 
 import (
 	"matrixone/pkg/prefetch"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 	"os"
 	"path"
@@ -71,8 +70,8 @@ func (a *KV) Get(k string, size int64, proc *process.Process) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	data = data[:mempool.CountSize+size]
-	if _, err := syscall.Read(fd, data[mempool.CountSize:]); err != nil {
+	data = data[:size]
+	if _, err := syscall.Read(fd, data[:]); err != nil {
 		proc.Free(data)
 		return nil, err
 	}
