@@ -973,13 +973,14 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			v.Data = data
 			vs.Data = data[:0]
 		} else if n := len(vs.Data); n+len(from) >= cap(vs.Data) {
-			data, err := proc.Grow(v.Data, int64(n+len(from)))
+			data, err := proc.Grow(vs.Data, int64(n+len(from)))
 			if err != nil {
 				return err
 			}
 			proc.Free(v.Data)
 			v.Data = data
-			vs.Data = data[:n]
+			n = len(vs.Offsets)
+			vs.Data = data[:vs.Offsets[n-1]+vs.Lengths[n-1]]
 		}
 		vs.Lengths = append(vs.Lengths, uint32(len(from)))
 		{
