@@ -620,6 +620,11 @@ func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
 			h.addCleanable(bf)
 			return
 		}
+		emeta := bf.meta.Segment.GetActiveBlk()
+		if emeta != bf.meta {
+			h.addCleanable(bf)
+			return
+		}
 		bf.meta.DataState = md.PARTIAL
 		bf.meta.Segment.NextActiveBlk()
 		return
