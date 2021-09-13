@@ -102,19 +102,29 @@ func TestCatalogWithUtil(t *testing.T){
 	//test ListTables
 	tables,err:=ctlg.ListTables(dbid)
 	assert.NoError(t,err,"ListTables Fail")
-	assert.Equal(t,len(tables),1,"ListTables: Wrong id")
+	assert.Equal(t,len(tables),1,"ListTables: Wrong len")
 	assert.Equal(t,tables[0].Id,createId,"ListTables: Wrong id")
-	assert.Equal(t,tables[0].Name,"mocktbl","ListTables: Wrong id")
+	assert.Equal(t,tables[0].Name,"mocktbl","ListTables: Wrong Name")
 	//test GetTable
 	table,err:=ctlg.GetTable(dbid,"mocktbl")
 	assert.NoError(t,err,"GetTable Fail")
-	assert.Equal(t,len(tables),1,"GetTable: Wrong id")
 	assert.Equal(t,table.Id,createId,"GetTable: Wrong id")
-	assert.Equal(t,table.Name,"mocktbl","GetTable: Wrong id")
+	assert.Equal(t,table.Name,"mocktbl","GetTable: Wrong Name")
+	//test GetTablets
+	tablets,err:=ctlg.GetTablets(dbid,"mocktbl")
+	assert.NoError(t,err,"GetTablets Fail")
+	for i := range tablets{
+		assert.Equal(t,tablets[i].Table.Id,createId,"GetTablets: Wrong id")
+		assert.Equal(t,tablets[i].Table.Name,"mocktbl","GetTablets: Wrong Name")
+	}
 	//test DropTable
 	dropId,err:=ctlg.DropTable(0,dbid,"mocktbl")
 	assert.NoError(t,err,"DropTable Fail")
 	assert.Equal(t,createId,dropId,"DropTable: Wrong id")
+	//test RemoveDeletedTable
+	cnt,err:=ctlg.RemoveDeletedTable(0)
+	assert.NoError(t,err,"RemoveDeletedTable Fail")
+	assert.Equal(t,cnt,1,"RemoveDeletedTable: Wrong id")
 	// fmt.Print(schema)
 	err=ctlg.DropDatabase(0,testDatabaceName)
 	assert.NoError(t,err,"DropDatabase Fail")
