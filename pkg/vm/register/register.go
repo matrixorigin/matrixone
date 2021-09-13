@@ -3,18 +3,34 @@ package register
 import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
+
+func GetSels(proc *process.Process) []int64 {
+	if len(proc.Reg.Ss) == 0 {
+		return make([]int64, 0, 16)
+	}
+	sels := proc.Reg.Ss[0]
+	proc.Reg.Ss = proc.Reg.Ss[1:]
+	return sels[:0]
+}
+
+func PutSels(sels []int64, proc *process.Process) {
+	proc.Reg.Ss = append(proc.Reg.Ss, sels)
+}
 
 func Get(proc *process.Process, size int64, typ types.Type) (*vector.Vector, error) {
 	for i, t := range proc.Reg.Ts {
 		v := t.(*vector.Vector)
-		if int64(cap(v.Data[mempool.CountSize:])) >= size {
-			vec := vector.New(typ)
-			vec.Data = v.Data
-			proc.Reg.Ts = append(proc.Reg.Ts[:i], proc.Reg.Ts[i+1:])
-			return vec, nil
+		if int64(cap(v.Data)) >= size {
+			v.Ref = 0
+			v.Or = false
+			v.Typ = typ
+			v.Nsp.Reset()
+			v.Data = v.Data[:size]
+			proc.Reg.Ts[i] = proc.Reg.Ts[len(proc.Reg.Ts)-1]
+			proc.Reg.Ts = proc.Reg.Ts[:len(proc.Reg.Ts)-1]
+			return v, nil
 		}
 	}
 	data, err := proc.Alloc(size)
@@ -35,6 +51,7 @@ func FreeRegisters(proc *process.Process) {
 
 	for _, t := range proc.Reg.Ts {
 		vec = t.(*vector.Vector)
+		vec.Ref = 0
 		vec.Free(proc)
 	}
 	proc.Reg.Ts = proc.Reg.Ts[:0]

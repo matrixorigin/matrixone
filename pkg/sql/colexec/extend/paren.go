@@ -27,6 +27,10 @@ func (e *ParenExtend) Eval(bat *batch.Batch, proc *process.Process) (*vector.Vec
 	return e.E.Eval(bat, proc)
 }
 
+func (a *ParenExtend) Eq(b Extend) bool {
+	return a.E.Eq(b)
+}
+
 func (e *ParenExtend) String() string {
 	return "(" + e.E.String() + ")"
 }

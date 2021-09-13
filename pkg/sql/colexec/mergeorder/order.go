@@ -9,7 +9,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/partition"
 	"matrixone/pkg/sort"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -71,7 +70,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			proc.Reg.Ax = nil
 			return true, nil
 		}
-	    return false, nil
 	}
 }
 
@@ -97,27 +95,23 @@ func (ctr *Container) build(n *Argument, proc *process.Process) error {
 			}
 			if ctr.bat == nil {
 				bat.Reorder(ctr.attrs)
-			} else {
-				bat.Reorder(ctr.bat.Attrs)
-			}
-			if ctr.bat == nil {
 				ctr.bat = batch.New(true, bat.Attrs)
 				for i, vec := range bat.Vecs {
 					ctr.bat.Vecs[i] = vector.New(vec.Typ)
 				}
+			} else {
+				bat.Reorder(ctr.bat.Attrs)
 			}
 			if len(bat.Sels) > 0 {
 				bat.Shuffle(proc)
 			}
 			for sel, nsel := int64(0), int64(bat.Vecs[0].Length()); sel < nsel; sel++ {
-				{
-					for i, vec := range ctr.bat.Vecs {
-						if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
-							reg.Ch = nil
-							reg.Wg.Done()
-							bat.Clean(proc)
-							return err
-						}
+				for i, vec := range ctr.bat.Vecs {
+					if err := vec.UnionOne(bat.Vecs[i], sel, proc); err != nil {
+						reg.Ch = nil
+						reg.Wg.Done()
+						bat.Clean(proc)
+						return err
 					}
 				}
 			}
@@ -141,8 +135,7 @@ func (ctr *Container) eval(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	sels := encoding.DecodeInt64Slice(data[mempool.CountSize:])
-	sels = sels[:n]
+	sels := encoding.DecodeInt64Slice(data)
 	{
 		for i := range sels {
 			sels[i] = int64(i)

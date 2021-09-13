@@ -30,7 +30,7 @@ func (sw *NodeWriter) Flush() (err error) {
 	node := sw.Handle.GetBuffer().GetDataNode()
 	filename := string(sw.Filename)
 	dir := filepath.Dir(filename)
-	logutil2.S().Infof(" %s | SpillNode | Flushing", sw.Filename)
+	logutil2.Infof(" %s | SpillNode | Flushing", sw.Filename)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
 	}

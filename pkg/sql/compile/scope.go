@@ -140,13 +140,11 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 		if msg.Sid == 1 {
 			break
 		}
-		bat, _, err := protocol.DecodeBatchWithProcess(val.(*message.Message).Data, s.Proc)
+		bat, _, err := protocol.DecodeBatch(val.(*message.Message).Data)
 		if err != nil {
 			return err
 		}
 		arg.Reg.Wg.Add(1)
-		arg.Mmu.Alloc(s.Proc.Size())
-		s.Proc.Gm.Free(s.Proc.Size())
 		arg.Reg.Ch <- bat
 		arg.Reg.Wg.Wait()
 	}

@@ -16,6 +16,10 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 
 	refer := make(map[string]uint64)
 	{
+		for _, g := range o.Gs {
+			gs = append(gs, g.Name)
+			mp[g.Name]++
+		}
 		for _, attr := range o.As {
 			if v, ok := mp[attr]; ok {
 				refer[attr] = v + 1
@@ -24,9 +28,8 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 				refer[attr]++
 			}
 		}
-		for _, g := range o.Gs {
-			gs = append(gs, g.Name)
-			mp[g.Name]++
+		for _, e := range o.Es {
+			mp[e.Name]++
 		}
 	}
 	ss, err := c.compile(o.Prev, mp)
@@ -34,8 +37,7 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 		return nil, err
 	}
 	rs := new(Scope)
-	gm := guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu)
-	rs.Proc = process.New(gm, c.proc.Mp)
+	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
 	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
 	{
@@ -55,8 +57,8 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 		ss[i].Ins = append(s.Ins, vm.Instruction{
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
-				Mmu: gm,
-				Reg: rs.Proc.Reg.Ws[i],
+				Proc: rs.Proc,
+				Reg:  rs.Proc.Reg.Ws[i],
 			},
 		})
 	}

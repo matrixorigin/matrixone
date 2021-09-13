@@ -21,11 +21,9 @@ type Session struct {
 	Pu *config.ParameterUnit
 }
 
-func NewSession()*Session {
+func NewSession() *Session {
 	return &Session{
 		GuestMmu: guest.New(config.GlobalSystemVariables.GetGuestMmuLimitation(), config.HostMmu),
-		Mempool: mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()),
-			int(config.GlobalSystemVariables.GetMempoolFactor())),
 	}
 }
 

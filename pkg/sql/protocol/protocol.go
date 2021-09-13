@@ -29,9 +29,6 @@ import (
 	"matrixone/pkg/sql/colexec/transfer"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/process"
-	"reflect"
-	"unsafe"
 )
 
 func init() {
@@ -952,43 +949,11 @@ func DecodeBatch(data []byte) (*batch.Batch, []byte, error) {
 	return bat, data, nil
 }
 
-func DecodeBatchWithProcess(data []byte, proc *process.Process) (*batch.Batch, []byte, error) {
-	bat := batch.New(true, []string{})
-	sn := encoding.DecodeUint32(data[:4])
-	data = data[4:]
-	if sn > 0 {
-		bat.Sels = encoding.DecodeInt64Slice(data[:sn*8])
-		data = data[sn*8:]
-	}
-	if n := encoding.DecodeUint32(data); n > 0 {
-		data = data[4:]
-		if err := encoding.Decode(data[:n], &bat.Attrs); err != nil {
-			return nil, nil, err
-		}
-		data = data[n:]
-	} else {
-		data = data[4:]
-	}
-	if n := encoding.DecodeUint32(data); n > 0 {
-		data = data[4:]
-		for i := uint32(0); i < n; i++ {
-			vec, remaing, err := DecodeVectorWithProcess(data, proc)
-			if err != nil {
-				return nil, nil, err
-			}
-			bat.Vecs = append(bat.Vecs, vec)
-			data = remaing
-		}
-	} else {
-		data = data[4:]
-	}
-	return bat, data, nil
-}
-
 func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 	switch v.Typ.Oid {
 	case types.T_int8:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1002,6 +967,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeInt8Slice(vs))
 	case types.T_int16:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1015,6 +981,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeInt16Slice(vs))
 	case types.T_int32:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1028,6 +995,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeInt32Slice(vs))
 	case types.T_int64, types.T_sel:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1041,6 +1009,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeInt64Slice(vs))
 	case types.T_uint8:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1054,6 +1023,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeUint8Slice(vs))
 	case types.T_uint16:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1067,6 +1037,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeUint16Slice(vs))
 	case types.T_uint32:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1080,6 +1051,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeUint32Slice(vs))
 	case types.T_uint64:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1093,6 +1065,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeUint64Slice(vs))
 	case types.T_float32:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1106,6 +1079,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeFloat32Slice(vs))
 	case types.T_float64:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1119,6 +1093,7 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		buf.Write(encoding.EncodeFloat64Slice(vs))
 	case types.T_char, types.T_varchar:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1127,16 +1102,23 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 		if len(nb) > 0 {
 			buf.Write(nb)
 		}
-		Col := v.Col.(*types.Bytes)
-		cnt := int32(len(Col.Offsets))
+		vs := v.Col.(*types.Bytes)
+		cnt := int32(len(vs.Offsets))
 		buf.Write(encoding.EncodeInt32(cnt))
 		if cnt != 0 {
-			buf.Write(encoding.EncodeUint32Slice(Col.Lengths))
-			buf.Write(encoding.EncodeUint64(uint64(len(Col.Data))))
-			buf.Write(Col.Data)
+			buf.Write(encoding.EncodeUint32Slice(vs.Lengths))
+			size := uint64(0)
+			for _, v := range vs.Lengths {
+				size += uint64(v)
+			}
+			buf.Write(encoding.EncodeUint64(size))
+			for i, j := int64(0), int64(cnt); i < j; i++ {
+				buf.Write(vs.Get(i))
+			}
 		}
 	case types.T_tuple:
 		buf.Write(encoding.EncodeType(v.Typ))
+		buf.Write(encoding.EncodeUint64(v.Ref))
 		nb, err := v.Nsp.Show()
 		if err != nil {
 			return err
@@ -1165,6 +1147,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 	switch typ.Oid {
 	case types.T_int8:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1182,6 +1167,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_int16:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1199,6 +1187,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_int32:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1216,6 +1207,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_int64, types.T_sel:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1233,6 +1227,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_uint8:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1250,6 +1247,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_uint16:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1267,6 +1267,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_uint32:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1284,6 +1287,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_uint64:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1301,6 +1307,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_float32:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1318,6 +1327,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_float64:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1335,6 +1347,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_char, types.T_varchar:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1366,6 +1381,9 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	case types.T_tuple:
 		v := vector.New(typ)
+		v.Or = true
+		v.Ref = encoding.DecodeUint64(data[:8])
+		data = data[8:]
 		if n := encoding.DecodeUint32(data[:4]); n > 0 {
 			data = data[4:]
 			if err := v.Nsp.Read(data[:n]); err != nil {
@@ -1387,293 +1405,4 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 		return v, data, nil
 	}
 	return nil, nil, fmt.Errorf("unsupport vector type '%s'", typ)
-}
-
-func DecodeVectorWithProcess(data []byte, proc *process.Process) (*vector.Vector, []byte, error) {
-	typ := encoding.DecodeType(data[:encoding.TypeSize])
-	data = data[encoding.TypeSize:]
-	switch typ.Oid {
-	case types.T_int8:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeInt8Slice(data[:n])
-			data = data[n:]
-		}
-		return v, data, nil
-	case types.T_int16:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n*2], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeInt16Slice(data[:n*2])
-			data = data[n*2:]
-		}
-		return v, data, nil
-	case types.T_int32:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n*4], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeInt32Slice(data[:n*4])
-			data = data[n*4:]
-		}
-		return v, data, nil
-	case types.T_int64, types.T_sel:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n*8], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeInt64Slice(data[:n*8])
-			data = data[n*8:]
-		}
-		return v, data, nil
-	case types.T_uint8:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeUint8Slice(data[:n])
-			data = data[n:]
-		}
-		return v, data, nil
-	case types.T_uint16:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n*2], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeUint16Slice(data[:n*2])
-			data = data[n*2:]
-		}
-		return v, data, nil
-	case types.T_uint32:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n*4], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeUint32Slice(data[:n*4])
-			data = data[n*4:]
-		}
-		return v, data, nil
-	case types.T_uint64:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n*8], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeUint64Slice(data[:n*8])
-			data = data[n*8:]
-		}
-		return v, data, nil
-	case types.T_float32:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n*4], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeFloat32Slice(data[:n*4])
-			data = data[n*4:]
-		}
-		return v, data, nil
-	case types.T_float64:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			v.Data = lseek(data[:n*8], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			v.Col = encoding.DecodeFloat64Slice(data[:n*8])
-			data = data[n*8:]
-		}
-		return v, data, nil
-	case types.T_char, types.T_varchar:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		col := new(types.Bytes)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			col.Lengths = encoding.DecodeUint32Slice(data[:4*n])
-			data = data[4*n:]
-			m := encoding.DecodeUint64(data[:8])
-			data = data[8:]
-			v.Data = lseek(data[:m], -8)
-			if err := proc.Gm.Alloc(int64(cap(v.Data))); err != nil {
-				return nil, nil, err
-			}
-			col.Data = data[:m]
-			data = data[m:]
-			{
-				o := uint32(0)
-				col.Offsets = make([]uint32, n)
-				for i, n := range col.Lengths {
-					col.Offsets[i] = o
-					o += n
-				}
-			}
-			v.Col = col
-		}
-		return v, data, nil
-	case types.T_tuple:
-		v := vector.New(typ)
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:n]); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-		} else {
-			data = data[4:]
-		}
-		if n := encoding.DecodeUint32(data[:4]); n > 0 {
-			data = data[4:]
-			col := v.Col.([][]interface{})
-			if err := encoding.Decode(data[:n], &col); err != nil {
-				return nil, nil, err
-			}
-			data = data[n:]
-			v.Col = col
-			{
-				var err error
-				if v.Data, err = proc.Alloc(0); err != nil {
-					return nil, nil, err
-				}
-			}
-		}
-		return v, data, nil
-	}
-	return nil, nil, fmt.Errorf("unsupport vector type '%s'", typ)
-
-}
-
-func lseek(data []byte, off int) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&data))
-	hp.Len -= off
-	hp.Cap -= off
-	hp.Data += uintptr(off)
-	return *(*[]byte)(unsafe.Pointer(&hp))
 }

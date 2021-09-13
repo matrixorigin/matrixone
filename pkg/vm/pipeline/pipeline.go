@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
@@ -32,27 +33,47 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 	var end bool
 	var err error
 
+	proc.Mp = mempool.Pool.Get().(*mempool.Mempool)
 	defer func() {
-		{
-			proc.Reg.Ax = nil
-			vm.Run(p.ins, proc)
+		proc.Reg.Ax = nil
+		vm.Run(p.ins, proc)
+		for i := range p.cds {
+			proc.Free(p.cds[i].Bytes())
 		}
+		for i := range p.cds {
+			proc.Free(p.dds[i].Bytes())
+		}
+		mempool.Pool.Put(proc.Mp)
+		proc.Mp = nil
 	}()
 	if err = vm.Prepare(p.ins, proc); err != nil {
 		return false, err
 	}
 	q := p.prefetch(segs, proc)
+	p.cds, p.dds = make([]*bytes.Buffer, 0, len(p.cs)), make([]*bytes.Buffer, 0, len(p.cs))
+	{
+		for _ = range p.cs {
+			data, err := proc.Alloc(CompressedBlockSize)
+			if err != nil {
+				return false, err
+			}
+			p.cds = append(p.cds, bytes.NewBuffer(data))
+		}
+		for _ = range p.cs {
+			data, err := proc.Alloc(CompressedBlockSize)
+			if err != nil {
+				return false, err
+			}
+			p.dds = append(p.dds, bytes.NewBuffer(data))
+		}
+	}
 	for i, j := 0, len(q.bs); i < j; i++ {
-		if err := q.prefetch(p.cs, p.attrs, proc); err != nil {
+		if err := q.prefetch(p.attrs); err != nil {
 			return false, err
 		}
-		bat := q.bs[i].bat
-		{
-			for i, attr := range bat.Attrs {
-				if bat.Vecs[i], err = bat.Is[i].R.Read(bat.Is[i].Len, bat.Is[i].Ref, attr, proc); err != nil {
-					return false, err
-				}
-			}
+		bat, err := q.bs[i].blk.Read(p.cs, p.attrs, p.cds, p.dds)
+		if err != nil {
+			return false, err
 		}
 		proc.Reg.Ax = bat
 		if end, err = vm.Run(p.ins, proc); err != nil {
@@ -66,11 +87,12 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 }
 
 func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
+	proc.Mp = mempool.Pool.Get().(*mempool.Mempool)
 	defer func() {
-		{
-			proc.Reg.Ax = nil
-			vm.Run(p.ins, proc)
-		}
+		proc.Reg.Ax = nil
+		vm.Run(p.ins, proc)
+		mempool.Pool.Put(proc.Mp)
+		proc.Mp = nil
 	}()
 	if err := vm.Prepare(p.ins, proc); err != nil {
 		vm.Clean(p.ins, proc)
@@ -81,7 +103,7 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 		if end, err := vm.Run(p.ins, proc); err != nil || end {
 			return end, err
 		}
-	    return false, nil
+		return false, nil
 	}
 }
 
@@ -92,21 +114,14 @@ func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) *queue
 		for _, seg := range segs {
 			ids := seg.Blocks()
 			for _, id := range ids {
-				b := seg.Block(id, proc)
-				var siz int64
-				{
-					for _, attr := range p.attrs {
-						siz += b.Size(attr)
-					}
-				}
-				q.bs = append(q.bs, block{siz: siz, blk: b})
+				q.bs = append(q.bs, block{blk: seg.Block(id, proc)})
 			}
 		}
 	}
 	return q
 }
 
-func (q *queue) prefetch(cs []uint64, attrs []string, proc *process.Process) error {
+func (q *queue) prefetch(attrs []string) error {
 	if q.pi == len(q.bs) {
 		return nil
 	}
@@ -115,11 +130,7 @@ func (q *queue) prefetch(cs []uint64, attrs []string, proc *process.Process) err
 		if i > PrefetchNum+start {
 			break
 		}
-		bat, err := q.bs[i].blk.Prefetch(cs, attrs, proc)
-		if err != nil {
-			return err
-		}
-		q.bs[i].bat = bat
+		q.bs[i].blk.Prefetch(attrs)
 		q.pi = i + 1
 	}
 	return nil

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
@@ -12,8 +13,6 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
-	"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
 	"net/http"
@@ -56,10 +55,6 @@ var (
 )
 
 func init() {
-
-	hm = host.New(1 << 48)
-	gm := guest.New(1<<40, hm)
-	proc = process.New(gm, mempool.New(1<<48, 8))
 	readPool, _ = ants.NewPool(readPoolSize)
 	mdCfg := &e.MetaCfg{
 		SegmentMaxBlocks: blockCntPerSegment,
@@ -161,7 +156,6 @@ func readData() {
 		segIds = dbrel.SegmentIds()
 		dbrel.Close()
 	}
-
 	totalRows := uint64(0)
 	startProfile()
 	defer stopProfile()
@@ -172,32 +166,31 @@ func readData() {
 		seg := rel.Segment(engine.SegmentInfo{Id: idstr}, proc)
 		for _, id := range seg.Blocks() {
 			blk := seg.Block(id, proc)
-			bat, err := blk.Prefetch(refs, attrs, proc)
+			blk.Prefetch(attrs)
 			if err != nil {
 				panic(err)
 			}
 			for coli, attr := range attrs {
 				wg.Add(1)
-				f := func(b *batch.Batch, i int, col string) func() {
+				f := func(src engine.Block, i int, col string) func() {
 					return func() {
-						gm := guest.New(1<<48, hm)
-						proc2 := process.New(gm, mempool.New(1<<48, 8))
 						defer wg.Done()
-						v, _ := b.Is[i].R.Read(b.Is[i].Len, b.Is[i].Ref, attr, proc)
-						if v != nil {
-							v.Free(proc2)
+						c := bytes.NewBuffer(make([]byte, 0))
+						dc := bytes.NewBuffer(make([]byte, 0))
+						gBat, err := src.Read(refs[i:i+1], attrs[i:i+1], []*bytes.Buffer{c}, []*bytes.Buffer{dc})
+						if err != nil {
+							panic(err)
 						}
-						atomic.AddUint64(&totalRows, uint64(v.Length()))
+						atomic.AddUint64(&totalRows, uint64(gBat.Vecs[0].Length()))
 					}
 				}
-				readPool.Submit(f(bat, coli, attr))
+				readPool.Submit(f(blk, coli, attr))
 			}
 		}
 	}
 	wg.Wait()
 	rel.Close()
 	log.Infof("Time: %s, Rows: %d", time.Since(now), totalRows)
-	log.Infof("MMU usage: %d", hm.Size())
 	// {
 	// 	time.Sleep(time.Duration(4) * time.Second)
 	// 	log.Info(common.GPool.String())

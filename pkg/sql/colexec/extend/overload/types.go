@@ -62,6 +62,8 @@ var OpName = map[int]string{
 	NE: "<>",
 }
 
+var SelsType = types.Type{Oid: types.T_sel, Size: 8}
+
 // UnaryOp is a unary operator.
 type UnaryOp struct {
 	Typ        types.T

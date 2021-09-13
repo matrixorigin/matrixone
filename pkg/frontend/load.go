@@ -62,6 +62,7 @@ type SharePart struct {
 	//index of line in line array
 	lineIdx int
 	maxFieldCnt int
+
 	lineCount uint64
 
 	//batch
@@ -69,6 +70,7 @@ type SharePart struct {
 
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
+
 	cols []metadata.Attribute
 	attrName []string
 	timestamp uint64
@@ -361,7 +363,6 @@ func saveParsedLinesToBatchSimdCsvConcurrentWrite(handler *WriteBatchHandler, fo
 	fetchCnt := 0
 	var err error
 	allFetchCnt := 0
-
 
 	row2col := time.Duration(0)
 	fillBlank := time.Duration(0)
@@ -870,6 +871,13 @@ func saveParsedLinesToBatchSimdCsvConcurrentWrite(handler *WriteBatchHandler, fo
 	//fmt.Printf("----- row2col %s fillBlank %s toStorage %s\n",
 	//	row2col,fillBlank,toStorage)
 
+	handler.row2col += row2col
+	handler.fillBlank += fillBlank
+	handler.toStorage += toStorage
+
+	fmt.Printf("----- row2col %s fillBlank %s toStorage %s\n",
+		row2col,fillBlank,toStorage)
+
 	if allFetchCnt != countOfLineArray {
 		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ",allFetchCnt,countOfLineArray)
 	}
@@ -1177,42 +1185,42 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//wait read and statistics to quit
 	wg.Wait()
 
-	fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
-		handler.row2col,handler.fillBlank,handler.toStorage)
-	fmt.Printf("-----write batch %s reset batch %s\n",
-		handler.writeBatch,handler.resetBatch)
-	fmt.Printf("----- simdcsv end %s " +
-		"stage1_first_chunk %s stage1_end %s " +
-		"stage2_first_chunkinfo - [begin end] [%s %s ] [%s %s ] [%s %s ] " +
-		"readLoop_first_records %s \n",
-		handler.simdCsvReader.End,
-		handler.simdCsvReader.Stage1_first_chunk,
-		handler.simdCsvReader.Stage1_end,
-		handler.simdCsvReader.Stage2_first_chunkinfo[0],
-		handler.simdCsvReader.Stage2_end[0],
-		handler.simdCsvReader.Stage2_first_chunkinfo[1],
-		handler.simdCsvReader.Stage2_end[1],
-		handler.simdCsvReader.Stage2_first_chunkinfo[2],
-		handler.simdCsvReader.Stage2_end[2],
-		handler.simdCsvReader.ReadLoop_first_records,
-		)
-
-	fmt.Printf("-----call_back %s " +
-		"process_block - callback %s " +
-		"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
-		"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
-		"choose_true %s choose_false %s \n",
-		handler.callback,
-		process_block - handler.callback,
-		handler.asyncChan,
-		handler.asyncChanLoop,
-		handler.asyncChan -	handler.asyncChanLoop,
-		handler.csvLineArray1,
-		handler.csvLineArray2,
-		handler.saveParsedLine,
-		handler.choose_true,
-		handler.choose_false,
-		)
+	//fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
+	//	handler.row2col,handler.fillBlank,handler.toStorage)
+	//fmt.Printf("-----write batch %s reset batch %s\n",
+	//	handler.writeBatch,handler.resetBatch)
+	//fmt.Printf("----- simdcsv end %s " +
+	//	"stage1_first_chunk %s stage1_end %s " +
+	//	"stage2_first_chunkinfo - [begin end] [%s %s ] [%s %s ] [%s %s ] " +
+	//	"readLoop_first_records %s \n",
+	//	handler.simdCsvReader.End,
+	//	handler.simdCsvReader.Stage1_first_chunk,
+	//	handler.simdCsvReader.Stage1_end,
+	//	handler.simdCsvReader.Stage2_first_chunkinfo[0],
+	//	handler.simdCsvReader.Stage2_end[0],
+	//	handler.simdCsvReader.Stage2_first_chunkinfo[1],
+	//	handler.simdCsvReader.Stage2_end[1],
+	//	handler.simdCsvReader.Stage2_first_chunkinfo[2],
+	//	handler.simdCsvReader.Stage2_end[2],
+	//	handler.simdCsvReader.ReadLoop_first_records,
+	//	)
+	//
+	//fmt.Printf("-----call_back %s " +
+	//	"process_block - callback %s " +
+	//	"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
+	//	"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
+	//	"choose_true %s choose_false %s \n",
+	//	handler.callback,
+	//	process_block - handler.callback,
+	//	handler.asyncChan,
+	//	handler.asyncChanLoop,
+	//	handler.asyncChan -	handler.asyncChanLoop,
+	//	handler.csvLineArray1,
+	//	handler.csvLineArray2,
+	//	handler.saveParsedLine,
+	//	handler.choose_true,
+	//	handler.choose_false,
+	//	)
 
 //		fmt.Printf("-----process time %s \n",time.Since(processTime))
 

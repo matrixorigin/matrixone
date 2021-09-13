@@ -1,33 +1,18 @@
 package mempool
 
-import (
-	"matrixone/pkg/internal/cpu"
-)
-
 const (
-	CountSize = 8
-	PageSize  = cpu.CacheLinePadSize
+	Factor     = 2
+	MaxSize    = 1 << 20
+	PageOffset = 6
+	PageSize   = 64
 )
-
-var PageOffset int
 
 type Mempool struct {
-	classes []class
-	minSize int
-	maxSize int
+	buckets []bucket
+	buffers [][]byte
 }
 
-type class struct {
-	size      int
-	page      []byte
-	pageBegin uintptr
-	pageEnd   uintptr
-	chunks    []chunk
-	head      uint64
-}
-
-type chunk struct {
-	mem  []byte
-	aba  uint32 // reslove ABA problem
-	next uint64
+type bucket struct {
+	size  int
+	slots [][]byte
 }

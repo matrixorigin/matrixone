@@ -4,13 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
-	"reflect"
-	"unsafe"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {
@@ -111,25 +107,14 @@ func (ctr *Container) eval(es []aggregation.Extend, proc *process.Process) error
 			ctr.bat.Vecs = ctr.bat.Vecs[:i]
 			return err
 		}
-		switch e.Agg.Type().Oid {
-		case types.T_tuple:
-			data, err := proc.Alloc(0)
-			if err != nil {
-				ctr.bat.Vecs = ctr.bat.Vecs[:i]
-				return err
-			}
-			ctr.bat.Vecs[i].Data = data[:mempool.CountSize]
-		}
-		count := ctr.refer[e.Alias]
-		hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&count)), Len: 8, Cap: 8}
-		copy(ctr.bat.Vecs[i].Data, *(*[]byte)(unsafe.Pointer(&hp)))
+		ctr.bat.Vecs[i].Ref = ctr.refer[e.Alias]
 	}
 	return nil
 }
 
 func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, proc *process.Process) error {
 	for i, e := range es {
-		vec := bat.GetVector(e.Name, proc)
+		vec := bat.GetVector(e.Name)
 		{
 			if e.Agg == nil {
 				switch e.Op {
@@ -148,18 +133,15 @@ func (ctr *Container) processBatch(bat *batch.Batch, es []aggregation.Extend, pr
 				case aggregation.SumCount:
 					e.Agg = aggfunc.NewSumCount(vec.Typ)
 				default:
-					ctr.bat.Vecs = ctr.bat.Vecs[:i]
 					return fmt.Errorf("unsupport aggregation operator '%v'", e.Op)
 				}
 				if e.Agg == nil {
-					ctr.bat.Vecs = ctr.bat.Vecs[:i]
 					return fmt.Errorf("unsupport sumcount aggregation operator '%v' for %s", e.Op, vec.Typ)
 				}
 				es[i].Agg = e.Agg
 			}
 		}
 		if err := e.Agg.Fill(bat.Sels, vec); err != nil {
-			ctr.bat.Vecs = ctr.bat.Vecs[:i]
 			return err
 		}
 	}

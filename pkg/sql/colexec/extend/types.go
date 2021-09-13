@@ -8,6 +8,7 @@ import (
 )
 
 type Extend interface {
+	Eq(Extend) bool
 	String() string
 	IsLogical() bool
 	IsConstant() bool

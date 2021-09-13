@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/vm/metadata"
@@ -146,10 +147,10 @@ type Segment interface {
 
 type Block interface {
 	Statistics
-	batch.Reader
 
 	ID() string
-	Prefetch([]uint64, []string, *process.Process) (*batch.Batch, error) // read only arguments
+	Prefetch([]string)
+	Read([]uint64, []string, []*bytes.Buffer, []*bytes.Buffer) (*batch.Batch, error) // read only arguments
 }
 
 type Database interface {

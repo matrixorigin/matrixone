@@ -18,15 +18,14 @@ func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 	if s.Magic == compile.Remote {
 		s.Magic = compile.Merge
 	}
-	gm := guest.New(proc.Gm.Limit, proc.Gm.Mmu)
-	s.Proc = process.New(gm, proc.Mp)
+	s.Proc = process.New(guest.New(proc.Gm.Limit, proc.Gm.Mmu))
 	s.Proc.Lim = proc.Lim
 	s.Proc.Reg.Ws = make([]*process.WaitRegister, len(ps.Ss))
 	{
 		for i, j := 0, len(ps.Ss); i < j; i++ {
 			s.Proc.Reg.Ws[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
-				Ch: make(chan interface{}),
+				Ch: make(chan interface{}, 8),
 			}
 		}
 	}
@@ -48,16 +47,16 @@ func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 	}
 	s.Ss = make([]*compile.Scope, len(ps.Ss))
 	for i := range ps.Ss {
-		ps.Ss[i].Ins = recoverInstructions(ps.Ss[i].Ins, gm, s.Proc.Reg.Ws[i])
+		ps.Ss[i].Ins = recoverInstructions(ps.Ss[i].Ins, s.Proc, s.Proc.Reg.Ws[i])
 		s.Ss[i] = recoverScope(ps.Ss[i], proc)
 	}
 	return s
 }
 
-func recoverInstructions(ins vm.Instructions, mmu *guest.Mmu, reg *process.WaitRegister) vm.Instructions {
+func recoverInstructions(ins vm.Instructions, proc *process.Process, reg *process.WaitRegister) vm.Instructions {
 	for i, in := range ins {
 		if in.Op == vm.Transfer {
-			in.Arg = &transfer.Argument{Mmu: mmu, Reg: reg}
+			in.Arg = &transfer.Argument{Proc: proc, Reg: reg}
 		}
 		ins[i] = in
 	}

@@ -128,16 +128,20 @@ func (b *build) buildProjectionWithOrder(o op.OP, ns tree.SelectExprs, es []*pro
 			if err != nil {
 				return nil, nil, err
 			}
+			alias := string(n.As)
+			if len(alias) == 0 {
+				alias = e.String()
+			}
 			if _, ok := mp[e.String()]; !ok {
 				mp[e.String()] = 0
 				es = append(es, &projection.Extend{
 					E:     e,
-					Alias: string(n.As),
+					Alias: alias,
 				})
 			}
 			pes = append(pes, &projection.Extend{
 				E: &extend.Attribute{
-					Name: e.String(),
+					Name: alias,
 					Type: e.ReturnType(),
 				},
 			})
