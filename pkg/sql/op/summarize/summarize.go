@@ -33,7 +33,7 @@ func New(prev op.OP, es []aggregation.Extend) (*Summarize, error) {
 		if _, ok := attrs[e.Alias]; ok {
 			return nil, sqlerror.New(errno.AmbiguousAlias, fmt.Sprintf("alias '%s' is ambiguous", e.Alias))
 		}
-		attrs[e.Alias] = e.Agg.Type()
+		attrs[e.Alias] = aggregation.ReturnType(e.Op, e.Agg.Type())
 		as = append(as, e.Alias)
 	}
 	return &Summarize{
