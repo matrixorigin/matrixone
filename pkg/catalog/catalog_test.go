@@ -2,12 +2,14 @@ package catalog
 
 import (
 	// "errors"
+	"fmt"
 	"testing"
 
 	"matrixone/pkg/vm/driver"
 	aoeDriver "matrixone/pkg/vm/driver/aoe"
 	dConfig "matrixone/pkg/vm/driver/config"
 	aoeStorage "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe"
 
 	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
@@ -19,6 +21,8 @@ import (
 
 var targetDir="."
 var configDir="../../cmd/generate-config/system_vars_def.toml"
+var testDatabaceName="test_db"
+var testTable=aoe.TableInfo{Name: "test_tb"}
 func TestCatalog(t *testing.T){
 	metaStorage, _ := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
 		FS: vfs.NewPebbleFS(vfs.Default),
@@ -34,12 +38,33 @@ func TestCatalog(t *testing.T){
 	a, _ := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 	a.Start()
 	c := NewCatalog(a)
-//test CreateDatabase
-	_,err:=c.CreateDatabase(0,"test_db",0)
+	shardid,err:=c.getAvailableShard(0)
+	fmt.Print(shardid)
+	assert.NoError(t,err,"getAvailableShard Fail")
+	//test CreateDatabase
+	dbid,err:=c.CreateDatabase(0,testDatabaceName,0)
 	assert.NoError(t,err,"CreateDatabase Fail")
-	// _,err=c.CreateDatabase(0,"test_db",0)
+	// _,err=c.CreateDatabase(0,testDatabaceName,0)
 	// assert.Equal(t,err,errors.New("db already exists"),"CreateExistingDatabase Fail")
-//test DropDatabase
-	err=c.DropDatabase(0,"test_db")
+	//test ListDatabases
+	schemas,err:=c.ListDatabases()
+	assert.NoError(t,err,"ListDatabases Fail")
+	assert.Equal(t,schemas[0].Name,testDatabaceName,"ListDatabases: Wrong name")
+	assert.Equal(t,schemas[0].Id,dbid,"ListDatabases: Wrong id")
+	// fmt.Print(schema)
+	//test GetDatabase
+	schema,err:=c.GetDatabase(testDatabaceName)
+	assert.NoError(t,err,"GetDatabase Fail")
+	assert.Equal(t,schema.Id,dbid,"GetDatabase: Wrong id")
+	//test CreateTable
+	_,err=c.CreateTable(0,dbid,testTable)
+	assert.NoError(t,err,"CreateTable Fail")
+	//test GetDatabase
+	// schema,err:=c.DropTable(testDatabaceName)
+	// assert.NoError(t,err,"GetDatabase Fail")
+	// assert.Equal(t,schema.Id,dbid,"GetDatabase: Wrong id")
+	// fmt.Print(schema)
+	//test DropDatabase
+	err=c.DropDatabase(0,testDatabaceName)
 	assert.NoError(t,err,"DropDatabase Fail")
 }
