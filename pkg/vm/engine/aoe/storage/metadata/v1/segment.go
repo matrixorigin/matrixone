@@ -116,7 +116,7 @@ func (seg *Segment) CreateBlock() (blk *Block, err error) {
 
 func (seg *Segment) String() string {
 	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d][State=%d]", seg.Table.ID, seg.ID, seg.ActiveBlk, seg.DataState)
-	s += "["
+	s += "\n["
 	pos := 0
 	for _, blk := range seg.Blocks {
 		if pos != 0 {

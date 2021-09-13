@@ -143,6 +143,10 @@ func (id *ID) ToBlockFileName() string {
 	return fmt.Sprintf("%d_%d_%d", id.TableID, id.SegmentID, id.BlockID)
 }
 
+func (id *ID) ToTBlockFileName(version uint32) string {
+	return fmt.Sprintf("%d_%d_%d_%d", id.TableID, id.SegmentID, id.BlockID, version)
+}
+
 func (id *ID) ToBlockFilePath() string {
 	return fmt.Sprintf("%d/%d/%d/", id.TableID, id.SegmentID, id.BlockID)
 }

@@ -43,17 +43,13 @@ type tblkFileGetter struct {
 	version uint32
 }
 
-func makeTransientBlockFileName(version uint32, id common.ID) string {
-	return fmt.Sprintf("%s_%d", id.ToBlockFileName(), version)
-}
-
 func (getter *tblkFileGetter) NameFactory(dir string, id common.ID) string {
-	return e.MakeTBlockFileName(dir, makeTransientBlockFileName(getter.version, id), false)
+	return e.MakeTBlockFileName(dir, id.ToTBlockFileName(getter.version), false)
 }
 
 func (getter *tblkFileGetter) Getter(dir string, meta *md.Block) (*os.File, error) {
 	id := meta.AsCommonID()
-	filename := e.MakeTBlockFileName(dir, makeTransientBlockFileName(getter.version, *id), true)
+	filename := e.MakeTBlockFileName(dir, id.ToTBlockFileName(getter.version), true)
 	fdir := filepath.Dir(filename)
 	if _, err := os.Stat(fdir); os.IsNotExist(err) {
 		err = os.MkdirAll(fdir, 0755)

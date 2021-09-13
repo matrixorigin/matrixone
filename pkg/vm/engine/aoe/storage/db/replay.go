@@ -126,6 +126,10 @@ import (
 //       |- 1_2_3.tblk
 //       |- 1_1.seg
 
+type IReplayObserver interface {
+	OnRemove(string)
+}
+
 type flushsegCtx struct {
 	id common.ID
 }
@@ -142,6 +146,7 @@ type tableFile struct {
 }
 
 type blockfile struct {
+	h         *replayHandle
 	id        common.ID
 	name      string
 	transient bool
@@ -171,24 +176,26 @@ func (bf *blockfile) isTransient() bool {
 }
 
 func (bf *blockfile) clean() {
-	os.Remove(bf.name)
-	logutil.Infof("%s | Removed", bf.name)
+	bf.h.doRemove(bf.name)
 }
 
 type sortedSegmentFile struct {
+	h    *replayHandle
 	name string
 	id   common.ID
 }
 
 type unsortedSegmentFile struct {
+	h          *replayHandle
 	id         common.ID
 	files      map[common.ID]*blockfile
 	uncommited []*blockfile
 	meta       *md.Segment
 }
 
-func newUnsortedSegmentFile(id common.ID) *unsortedSegmentFile {
+func newUnsortedSegmentFile(id common.ID, h *replayHandle) *unsortedSegmentFile {
 	return &unsortedSegmentFile{
+		h:          h,
 		id:         id,
 		files:      make(map[common.ID]*blockfile),
 		uncommited: make([]*blockfile, 0),
@@ -196,13 +203,12 @@ func newUnsortedSegmentFile(id common.ID) *unsortedSegmentFile {
 }
 
 func (sf *sortedSegmentFile) clean() {
-	os.Remove(sf.name)
-	logutil.Infof("%s | Removed", sf.name)
+	sf.h.doRemove(sf.name)
 }
 
 func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string, transient bool) {
 	id := bid.AsBlockID()
-	bf := &blockfile{id: bid, name: name, transient: transient}
+	bf := &blockfile{id: bid, name: name, transient: transient, h: usf.h}
 	head := usf.files[id]
 	if head == nil {
 		usf.files[id] = bf
@@ -316,9 +322,10 @@ type replayHandle struct {
 	cleanables    []cleanable
 	files         map[uint64]*tableDataFiles
 	flushsegs     []flushsegCtx
+	observer      IReplayObserver
 }
 
-func NewReplayHandle(workDir string) *replayHandle {
+func NewReplayHandle(workDir string, observer IReplayObserver) *replayHandle {
 	fs := &replayHandle{
 		workDir:    workDir,
 		tables:     make(map[uint64]*tableFile),
@@ -327,6 +334,7 @@ func NewReplayHandle(workDir string) *replayHandle {
 		files:      make(map[uint64]*tableDataFiles),
 		cleanables: make([]cleanable, 0),
 		flushsegs:  make([]flushsegCtx, 0),
+		observer:   observer,
 	}
 	empty := false
 	var err error
@@ -452,7 +460,7 @@ func (h *replayHandle) addBlock(id common.ID, name string, transient bool) {
 	segId := id.AsSegmentID()
 	file, ok := tbl.unsortedfiles[segId]
 	if !ok {
-		tbl.unsortedfiles[segId] = newUnsortedSegmentFile(segId)
+		tbl.unsortedfiles[segId] = newUnsortedSegmentFile(segId, h)
 		file = tbl.unsortedfiles[segId]
 	}
 	file.addBlock(id, name, transient)
@@ -472,6 +480,7 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 		panic("logic error")
 	}
 	tbl.sortedfiles[id] = &sortedSegmentFile{
+		h:    h,
 		id:   id,
 		name: name,
 	}
@@ -670,9 +679,16 @@ func (h *replayHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.
 	return info
 }
 
+func (h *replayHandle) doRemove(name string) {
+	os.Remove(name)
+	if h.observer != nil {
+		h.observer.OnRemove(name)
+	}
+	logutil.Infof("%s | Removed", name)
+}
+
 func (h *replayHandle) cleanupFile(fname string) {
-	os.Remove(fname)
-	logutil.Infof("%s | Removed", fname)
+	h.doRemove(fname)
 }
 
 func (h *replayHandle) Cleanup() {
