@@ -239,8 +239,12 @@ func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
 	if len(usf.files) != maxcnt {
 		return false
 	}
-	for _, file := range usf.files {
-		if file.version() != ^uint32(0) {
+	for id, _ := range usf.files {
+		meta, err := usf.meta.ReferenceBlock(id.BlockID)
+		if err != nil {
+			panic(err)
+		}
+		if meta.DataState < md.FULL {
 			return false
 		}
 	}
@@ -610,9 +614,11 @@ func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
 		bf.meta.Segment.NextActiveBlk()
 		return
 	}
-	// sort.Slice(file.uncommited, func(i, j) bool {
-	// 	return file.uncommited[i].BlockID < file.uncommited[j].BlockID
-	// })
+	// TODO: uncommited block file can be converted to committed
+	for _, f := range file.uncommited {
+		f.meta.DataState = md.EMPTY
+		h.addCleanable(f)
+	}
 }
 
 func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile) {
