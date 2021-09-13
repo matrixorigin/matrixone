@@ -1070,7 +1070,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			simdCsvConcurrencyCountOfWriteBatch: int(ses.Pu.SV.GetLoadDataConcurrencyCount()),
 			simdCsvResultsOfWriteBatchChan:      make(chan *WriteBatchHandler,100 * int(ses.Pu.SV.GetBatchSizeInLoadData())),
 			simdCsvWaitWriteRoutineToQuit:       &sync.WaitGroup{},
-			//closeRef: closeRef,
+			closeRef: closeRef,
 	}
 
 	//enable close flag
