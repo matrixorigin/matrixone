@@ -13,6 +13,7 @@ import (
 
 func TestReplay1(t *testing.T) {
 	initDBTest()
+	// inst := initDB(engine.NORMAL_FT)
 	inst := initDB(engine.MUTABLE_FT)
 	tInfo := metadata.MockTableInfo(2)
 	name := "mockcon"
@@ -60,6 +61,12 @@ func TestReplay1(t *testing.T) {
 	time.Sleep(time.Duration(20) * time.Millisecond)
 
 	inst = initDB(engine.MUTABLE_FT)
+	// inst = initDB(engine.NORMAL_FT)
+
+	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
+	assert.Nil(t, err)
+	assert.Equal(t, metadata.GetGloableSeqnum(), segmentedIdx)
+
 	rel, err = inst.Relation(meta.Schema.Name)
 	assert.Nil(t, err)
 	assert.Equal(t, irows*3, uint64(rel.Rows()))

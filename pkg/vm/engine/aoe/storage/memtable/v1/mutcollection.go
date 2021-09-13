@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
@@ -139,7 +140,13 @@ func (c *mutableCollection) Append(bat *batch.Batch, index *metadata.LogIndex) (
 	offset := uint64(0)
 	replayIndex := tableMeta.GetReplayIndex()
 	if replayIndex != nil {
-		offset = replayIndex.Count
+		if !replayIndex.IsApplied() {
+			if replayIndex.ID != index.ID {
+				panic(fmt.Sprintf("should replayIndex: %d, but %d received", replayIndex.ID, index.ID))
+			}
+			offset = replayIndex.Count + replayIndex.Start
+			index.Start = offset
+		}
 		tableMeta.ResetReplayIndex()
 	}
 	blkHandle := c.mutBlk.MakeHandle()

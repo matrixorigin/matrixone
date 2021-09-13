@@ -55,6 +55,10 @@ func NextGloablSeqnum() uint64 {
 	return atomic.AddUint64(&GloablSeqNum, uint64(1))
 }
 
+func GetGloableSeqnum() uint64 {
+	return atomic.LoadUint64(&GloablSeqNum)
+}
+
 type GenericTableWrapper struct {
 	ID uint64
 	TimeStamp

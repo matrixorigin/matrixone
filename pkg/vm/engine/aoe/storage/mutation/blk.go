@@ -44,6 +44,7 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 		Stale:     new(atomic.Value),
 	}
 	n.File.InitMeta(meta)
+	n.updateApplied(meta)
 	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), initSize)
 	n.UnloadFunc = n.unload
 	n.LoadFunc = n.load
@@ -106,7 +107,7 @@ func (n *MutableBlockNode) load() {
 	// logutil.Infof("%s loaded %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
 }
 
-func (n MutableBlockNode) releaseData() {
+func (n *MutableBlockNode) releaseData() {
 	if n.Data != nil {
 		n.Data.Close()
 		n.Data = nil
