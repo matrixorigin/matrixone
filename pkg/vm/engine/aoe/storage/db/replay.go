@@ -272,10 +272,20 @@ func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.S
 		if blk.DataState > md.PARTIAL {
 			file.markCommited()
 		} else {
-			file.meta = blk
-			usf.uncommited = append(usf.uncommited, file)
+			head := file
+			if !head.isTransient() {
+				cleaner.addCleanable(head)
+				head = head.next
+			}
+			if head == nil {
+				continue
+			}
+			head.meta = blk
+			usf.uncommited = append(usf.uncommited, head)
 			usf.meta = meta
+			file = head
 		}
+
 		head := file.next
 		for head != nil {
 			cleaner.addCleanable(head)
