@@ -338,6 +338,16 @@
 #	UpdateMode:	dynamic
 	loadDataConcurrencyCount = 16
 
+#	Name:	cubeLogLevel
+#	Scope:	[global]
+#	Access:	[file]
+#	DataType:	string
+#	DomainType:	set
+#	Values:	[error info debug warning warn fatal]
+#	Comment:	default is error. The log level for cube.
+#	UpdateMode:	dynamic
+	cubeLogLevel = "error"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0

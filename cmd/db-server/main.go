@@ -120,6 +120,7 @@ func main() {
 	config.Mempool = mempool.New(int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor()))
 
 	logutil.SetupLogger(os.Args[1])
+	log.SetLevelByString(config.GlobalSystemVariables.GetCubeLogLevel())
 
 	Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
