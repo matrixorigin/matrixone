@@ -84,9 +84,6 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	}
 	o = prune(o)
 	o = opt.Optimize(rewrite(o, mergeCount(o, 0)))
-	{
-		fmt.Printf("+++++++++o: %v\n", o)
-	}
 	ss, err := e.c.compileAlgebar(o)
 	if err != nil {
 		return err
