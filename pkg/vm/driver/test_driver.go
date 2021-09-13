@@ -34,4 +34,6 @@ func TestCatalog(t *testing.T){
 	toml.DecodeFile(configDir, &cfg.CubeConfig)
 	a, _ := NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 	a.Start()
+	a.GetShardPool()
+	a.Close()
 }
