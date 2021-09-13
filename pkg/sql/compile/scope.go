@@ -16,6 +16,7 @@ package compile
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
@@ -151,6 +152,9 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 			return err
 		}
 		msg := val.(*message.Message)
+		if len(msg.Code) > 0 {
+			return errors.New(string(msg.Code))
+		}
 		if msg.Sid == 1 {
 			break
 		}

@@ -43,29 +43,25 @@ func (hp *Handler) Process(_ uint64, val interface{}, conn goetty.IOSession) err
 	s.Ins[len(s.Ins)-1] = vm.Instruction{
 		Op: vm.Output,
 		Arg: &output.Argument{
+			Data: conn,
 			Func: writeBack,
-			Data: &userdata{conn: conn},
 		},
 	}
 	if err := s.MergeRun(hp.engine); err != nil {
 		conn.WriteAndFlush(&message.Message{Code: []byte(err.Error())})
 	}
-	return nil
+	return conn.WriteAndFlush(&message.Message{Sid: 1})
 }
 
 func writeBack(u interface{}, bat *batch.Batch) error {
 	var buf bytes.Buffer
 
-	up := u.(*userdata)
+	conn := u.(goetty.IOSession)
 	if bat == nil {
-		if up.conn == nil {
-			return nil
-		}
-		defer func() { up.conn = nil }()
-		return up.conn.WriteAndFlush(&message.Message{Sid: 1})
+		return nil
 	}
 	if err := protocol.EncodeBatch(bat, &buf); err != nil {
 		return err
 	}
-	return up.conn.WriteAndFlush(&message.Message{Data: buf.Bytes()})
+	return conn.WriteAndFlush(&message.Message{Data: buf.Bytes()})
 }

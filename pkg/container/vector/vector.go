@@ -235,7 +235,7 @@ func (v *Vector) SetLength(n int) {
 	case types.T_char, types.T_varchar, types.T_json:
 		vs := v.Col.(*types.Bytes)
 		m := len(vs.Offsets)
-		vs.Data = vs.Data[:vs.Offsets[n]+vs.Lengths[n]]
+		vs.Data = vs.Data[:vs.Offsets[n-1]+vs.Lengths[n-1]]
 		vs.Offsets = vs.Offsets[:n]
 		vs.Lengths = vs.Lengths[:n]
 		v.Nsp.RemoveRange(uint64(n), uint64(m))
