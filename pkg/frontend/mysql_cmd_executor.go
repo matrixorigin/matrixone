@@ -1381,7 +1381,7 @@ func (mce *MysqlCmdExecutor) Close() {
 	logutil.Infof("close executor")
 	if mce.loadDataClose != nil {
 		logutil.Infof("close process load data")
-		mce.loadDataClose.Close()
+		//mce.loadDataClose.Close()
 	}
 }
 

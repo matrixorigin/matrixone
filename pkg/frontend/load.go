@@ -138,7 +138,6 @@ func (cld *CloseLoadData) Open() {
 func (cld *CloseLoadData) Close() {
 	cld.closeReadParsedLines.Close()
 	cld.closeStatistics.Close()
-	logutil.Infof("-----close load data")
 	close(cld.stopLoadData)
 }
 
@@ -871,13 +870,6 @@ func saveParsedLinesToBatchSimdCsvConcurrentWrite(handler *WriteBatchHandler, fo
 	//fmt.Printf("----- row2col %s fillBlank %s toStorage %s\n",
 	//	row2col,fillBlank,toStorage)
 
-	handler.row2col += row2col
-	handler.fillBlank += fillBlank
-	handler.toStorage += toStorage
-
-	fmt.Printf("----- row2col %s fillBlank %s toStorage %s\n",
-		row2col,fillBlank,toStorage)
-
 	if allFetchCnt != countOfLineArray {
 		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ",allFetchCnt,countOfLineArray)
 	}
@@ -1032,10 +1024,10 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	var err error
 	ses := mce.routine.GetSession()
 
-	begin:=  time.Now()
-	defer func() {
-		fmt.Printf("-----load loop exit %s\n",time.Since(begin))
-	}()
+	//begin:=  time.Now()
+	//defer func() {
+	//	fmt.Printf("-----load loop exit %s\n",time.Since(begin))
+	//}()
 
 	result := &LoadResult{}
 
