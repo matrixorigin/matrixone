@@ -967,7 +967,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 	execute load data
 	 */
-	mce.loadDataClose = NewCloseLoadData()
+	//mce.loadDataClose = NewCloseLoadData()
 	result, err := mce.LoadLoop(load, dbHandler, tableHandler, mce.loadDataClose)
 	if err != nil {
 		return err
