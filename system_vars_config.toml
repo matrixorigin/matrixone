@@ -346,7 +346,7 @@
 #	Values:	[error info debug warning warn fatal]
 #	Comment:	default is error. The log level for cube.
 #	UpdateMode:	dynamic
-	cubeLogLevel = "error"
+	cubeLogLevel = "debug"
 
 # Cluster Configs
 pre-allocated-group-num = 20
@@ -354,7 +354,7 @@ max-group-num           = 0
 
 # Logger Configs
 
-level = "info" # debug, info, warn, error, fatal.
+level = "debug" # debug, info, warn, error, fatal.
 
 format = "console" # json, console.
 

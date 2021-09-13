@@ -30,16 +30,29 @@ type Process interface {
 }
 */
 
+// WaitRegister channel
 type WaitRegister struct {
 	Wg *sync.WaitGroup
 	Ch chan interface{}
 }
 
+/*
+{
+	// normal
+	bat = proc.Reg.Ax // 获取上一个算子的结果
+	rbat = process(bat)
+	proc.Reg.Ax = rba // 把结果喂给下一个算子
+
+	// merge
+	bat = proc.Reg.Ax // 获取上一个算子的结果
+	proc.Reg.Ws[i].Ch <- bat
+}
+*/
 type Register struct {
-	Ss [][]int64
-	Ax interface{}
-	Ts []interface{}
-	Ws []*WaitRegister
+	Ss [][]int64       // 临时数组，存放行号列表，为了内存复用
+	Ax interface{}     // 存放上一个算子产生的结果
+	Ts []interface{}   // 缓存列数据/向量
+	Ws []*WaitRegister // merge算子
 }
 
 type Limitation struct {
@@ -52,8 +65,10 @@ type Limitation struct {
 type Process struct {
 	Id    string // query id
 	Reg   Register
-	Lim   Limitation
+	Lim   Limitation // resource limits
 	Gm    *guest.Mmu
-	Mp    *mempool.Mempool
+	Mp    *mempool.Mempool // a pool for fast allocation and deallocation of objects.
 	Refer map[string]uint64
 }
+
+//一个query多个pipeline， 一个pipeline只有一个proc
