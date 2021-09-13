@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
@@ -119,6 +133,7 @@ func main() {
 	config.HostMmu = host.New(config.GlobalSystemVariables.GetHostMmuLimitation())
 
 	logutil.SetupMOLogger(os.Args[1])
+	log.SetLevelByString(config.GlobalSystemVariables.GetCubeLogLevel())
 
 	Host := config.GlobalSystemVariables.GetHost()
 	NodeId := config.GlobalSystemVariables.GetNodeID()
@@ -220,14 +235,6 @@ func main() {
 
 	createMOServer(pci)
 
-	//cpuProf,err := os.Create("load_profile")
-	//if err != nil {
-	//	logutil.Errorf("create cpu profile")
-	//	return
-	//}
-	//
-	//pprof.StartCPUProfile(cpuProf)
-
 	err = runMOServer()
 	if err != nil {
 		fmt.Printf("Start MOServer failed, %v", err)
@@ -243,7 +250,6 @@ func main() {
 	metaStorage.Close()
 	pebbleDataStorage.Close()
 
-	//pprof.StopCPUProfile()
 	cleanup()
 	os.Exit(0)
 }

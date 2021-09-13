@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package frontend
 
 import (
@@ -21,8 +35,7 @@ type MysqlCmdExecutor struct {
 	sqlCount uint64
 
 	//for load data closing
-	closeLoadDataRoutine *CloseFlag
-	closeProcessBlock *CloseFlag
+	loadDataClose *CloseLoadData
 }
 
 //get new process id
@@ -968,8 +981,8 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 	execute load data
 	 */
-
-	result, err := mce.LoadLoop(load,dbHandler,tableHandler)
+	loadDataClose := NewCloseLoadData()
+	result, err := mce.LoadLoop(load, dbHandler, tableHandler, loadDataClose)
 	if err != nil {
 		return err
 	}
@@ -978,7 +991,6 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	response
 	 */
 	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Skipped,result.Warnings).Error()
-	logutil.Infof("====> [%s]",info)
 	resp := NewResponse(OkResponse, 0, int(COM_QUERY), info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
@@ -1380,14 +1392,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	if mce.closeLoadDataRoutine != nil {
+	logutil.Infof("close executor")
+	if mce.loadDataClose != nil {
 		logutil.Infof("close process load data")
-		mce.closeLoadDataRoutine.Close()
-	}
-
-	if mce.closeProcessBlock != nil {
-		logutil.Infof("close process block")
-		mce.closeProcessBlock.Close()
+		//mce.loadDataClose.Close()
 	}
 }
 

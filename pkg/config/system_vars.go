@@ -433,6 +433,18 @@ type SystemVariables struct{
 	UpdateMode:	dynamic
 	*/
 	loadDataConcurrencyCount    int64
+	
+	/**
+	Name:	cubeLogLevel
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[error info debug warning warn fatal]
+	Comment:	default is error. The log level for cube.
+	UpdateMode:	dynamic
+	*/
+	cubeLogLevel    string
 
 	//parameter name -> parameter definition string
 	name2definition map[string]string
@@ -827,6 +839,18 @@ type varsConfig struct{
 	UpdateMode:	dynamic
 	*/
 	LoadDataConcurrencyCount    int64  `toml:"loadDataConcurrencyCount"`
+	
+	/**
+	Name:	cubeLogLevel
+	Scope:	[global]
+	Access:	[file]
+	DataType:	string
+	DomainType:	set
+	Values:	[error info debug warning warn fatal]
+	Comment:	default is error. The log level for cube.
+	UpdateMode:	dynamic
+	*/
+	CubeLogLevel    string  `toml:"cubeLogLevel"`
 
 	//parameter name -> updated flag
 	name2updatedFlags map[string]bool
@@ -920,6 +944,8 @@ func (ap *SystemVariables) PrepareDefinition(){
 	ap.name2definition["loadDataParserType"] = "	Name:	loadDataParserType	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[0 1]	Comment:	default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten	UpdateMode:	dynamic	"
 	
 	ap.name2definition["loadDataConcurrencyCount"] = "	Name:	loadDataConcurrencyCount	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[16]	Comment:	default is 16. The count of go routine writing batch into the storage.	UpdateMode:	dynamic	"
+	
+	ap.name2definition["cubeLogLevel"] = "	Name:	cubeLogLevel	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[error info debug warning warn fatal]	Comment:	default is error. The log level for cube.	UpdateMode:	dynamic	"
 	
 }
 
@@ -1421,6 +1447,20 @@ func (ap *SystemVariables) LoadInitialValues()error{
 			return fmt.Errorf("set%s failed.error:%v","LoadDataConcurrencyCount",err)
 		}
 	}
+	
+	cubeLogLevelchoices := []string {
+		"error","info","debug","warning","warn","fatal", 
+	}
+	if len(cubeLogLevelchoices) != 0 {
+		if err = ap.setCubeLogLevel(cubeLogLevelchoices[0]) ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CubeLogLevel",err)
+		}
+	} else {
+		//empty string
+		if err = ap.setCubeLogLevel("") ; err != nil {
+			return fmt.Errorf("set%s failed.error:%v","CubeLogLevel",err)
+		}
+	}
 	return nil
 }
 
@@ -1739,6 +1779,15 @@ func (ap * SystemVariables ) GetLoadDataConcurrencyCount() int64 {
 	return ap.loadDataConcurrencyCount
 }
 
+/**
+Get the value of the parameter cubeLogLevel
+*/
+func (ap * SystemVariables ) GetCubeLogLevel() string {
+	ap.rwlock.RLock()
+	defer ap.rwlock.RUnlock()
+	return ap.cubeLogLevel
+}
+
 
 /**
 Set the value of the parameter rootpassword
@@ -1962,6 +2011,13 @@ Set the value of the parameter loadDataConcurrencyCount
 */
 func (ap * SystemVariables ) SetLoadDataConcurrencyCount(value int64)error {
 	return  ap.setLoadDataConcurrencyCount(value)
+}
+
+/**
+Set the value of the parameter cubeLogLevel
+*/
+func (ap * SystemVariables ) SetCubeLogLevel(value string)error {
+	return  ap.setCubeLogLevel(value)
 }
 
 /**
@@ -2706,6 +2762,27 @@ func (ap * SystemVariables ) setLoadDataConcurrencyCount(value int64)error {
 	return nil
 }
 
+/**
+Set the value of the parameter cubeLogLevel
+*/
+func (ap * SystemVariables ) setCubeLogLevel(value string)error {
+	ap.rwlock.Lock()
+	defer ap.rwlock.Unlock()
+	
+		choices :=[]string {
+			"error","info","debug","warning","warn","fatal",	
+		}
+		if len( choices ) != 0{
+			if !isInSlice(value, choices){
+				return fmt.Errorf("setCubeLogLevel,the value %s is not in set %v",value,choices)
+			}
+		}//else means any string
+	
+	
+	ap.cubeLogLevel = value
+	return nil
+}
+
 
 
 /**
@@ -2757,6 +2834,7 @@ func (config *varsConfig) resetUpdatedFlags(){
 	config.name2updatedFlags["blockSizeInLoadData"] = false
 	config.name2updatedFlags["loadDataParserType"] = false
 	config.name2updatedFlags["loadDataConcurrencyCount"] = false
+	config.name2updatedFlags["cubeLogLevel"] = false
 }
 
 /**
@@ -2990,6 +3068,11 @@ func (ap * SystemVariables ) UpdateParametersWithConfiguration(config *varsConfi
 	if config.getUpdatedFlag("loadDataConcurrencyCount"){
 		if err = ap.setLoadDataConcurrencyCount(config.LoadDataConcurrencyCount); err != nil{
 			return fmt.Errorf("update parameter loadDataConcurrencyCount failed.error:%v",err)
+		}
+	}
+	if config.getUpdatedFlag("cubeLogLevel"){
+		if err = ap.setCubeLogLevel(config.CubeLogLevel); err != nil{
+			return fmt.Errorf("update parameter cubeLogLevel failed.error:%v",err)
 		}
 	}
 	return nil

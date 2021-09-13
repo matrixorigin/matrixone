@@ -113,6 +113,9 @@ func isvarsConfigEqual(c1,c2 *varsConfig) bool {
 	if c1.LoadDataConcurrencyCount != c2.LoadDataConcurrencyCount {
 		return false
 	}
+	if c1.CubeLogLevel != c2.CubeLogLevel {
+		return false
+	}
 
 	return true
 }
@@ -154,6 +157,7 @@ blockCountInLoadData=20
 blockSizeInLoadData=4194304
 loadDataParserType=0
 loadDataConcurrencyCount=16
+cubeLogLevel= "error"
 		
 `
 	t1_config:=&varsConfig{
@@ -194,6 +198,7 @@ BlockCountInLoadData:20,
 BlockSizeInLoadData:4194304,
 LoadDataParserType:0,
 LoadDataConcurrencyCount:16,
+CubeLogLevel: "error" ,
 	
 
 		name2updatedFlags: nil,
