@@ -221,15 +221,6 @@ func main() {
 
 	createMOServer(pci)
 
-	//cpuProf,err := os.Create("load_profile")
-	//if err != nil {
-	//	logutil.Errorf("create cpu profile")
-	//	return
-	//}
-	//
-	//pprof.StartCPUProfile(cpuProf)
-
-
 	err = runMOServer()
 	if err != nil {
 		fmt.Printf("Start MOServer failed, %v", err)
@@ -245,7 +236,6 @@ func main() {
 	metaStorage.Close()
 	pebbleDataStorage.Close()
 
-	//pprof.StopCPUProfile()
 	cleanup()
 	os.Exit(0)
 }

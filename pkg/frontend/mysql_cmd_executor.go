@@ -21,8 +21,7 @@ type MysqlCmdExecutor struct {
 	sqlCount uint64
 
 	//for load data closing
-	closeLoadDataRoutine *CloseFlag
-	closeProcessBlock *CloseFlag
+	loadDataClose *CloseLoadData
 }
 
 //get new process id
@@ -964,8 +963,8 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 	execute load data
 	 */
-
-	result, err := mce.LoadLoop(load,dbHandler,tableHandler)
+	mce.loadDataClose = NewCloseLoadData()
+	result, err := mce.LoadLoop(load, dbHandler, tableHandler, mce.loadDataClose)
 	if err != nil {
 		return err
 	}
@@ -1059,7 +1058,8 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			//if none database has been selected, database operations must be failed.
 			switch stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
-				*tree.ShowStatus, *tree.DropDatabase, *tree.Load:
+				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
+				*tree.Use:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
@@ -1375,14 +1375,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	if mce.closeLoadDataRoutine != nil {
+	logutil.Infof("close executor")
+	if mce.loadDataClose != nil {
 		logutil.Infof("close process load data")
-		mce.closeLoadDataRoutine.Close()
-	}
-
-	if mce.closeProcessBlock != nil {
-		logutil.Infof("close process block")
-		mce.closeProcessBlock.Close()
+		mce.loadDataClose.Close()
 	}
 }
 
