@@ -614,23 +614,25 @@ func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
 	if len(file.uncommited) == 0 {
 		return
 	}
-	if len(file.uncommited) == 1 {
-		bf := file.uncommited[0]
-		if !bf.isTransient() {
-			h.addCleanable(bf)
-			return
-		}
-		emeta := bf.meta.Segment.GetActiveBlk()
-		if emeta != bf.meta {
-			h.addCleanable(bf)
-			return
-		}
-		bf.meta.DataState = md.PARTIAL
-		bf.meta.Segment.NextActiveBlk()
+	sort.Slice(file.uncommited, func(i, j int) bool {
+		return file.uncommited[i].id.BlockID < file.uncommited[j].id.BlockID
+	})
+	bf := file.uncommited[0]
+	if !bf.isTransient() {
+		h.addCleanable(bf)
 		return
 	}
+	emeta := bf.meta.Segment.GetActiveBlk()
+	if emeta != bf.meta {
+		h.addCleanable(bf)
+		return
+	}
+	bf.meta.DataState = md.PARTIAL
+	bf.meta.Segment.NextActiveBlk()
+
+	files := file.uncommited[1:]
 	// TODO: uncommited block file can be converted to committed
-	for _, f := range file.uncommited {
+	for _, f := range files {
 		f.meta.DataState = md.EMPTY
 		h.addCleanable(f)
 	}
