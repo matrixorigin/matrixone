@@ -27,11 +27,16 @@ const (
 )
 
 type Pipeline struct {
-	cs    []uint64        // reference count for attribute
-	attrs []string        // attribute list
-	cds   []*bytes.Buffer // buffers for compressed data
-	dds   []*bytes.Buffer // buffers for decompressed data
-	ins   vm.Instructions // orders to be executed
+	// cs, reference count for attribute.
+	cs []uint64
+	// attrs, column list.
+	attrs []string
+	// compressedBytes, buffers for compressed data.
+	compressedBytes []*bytes.Buffer
+	// decompressedBytes, buffers for decompressed data.
+	decompressedBytes []*bytes.Buffer
+	// instructions, stores ordered instruction list that to be executed.
+	instructions vm.Instructions // orders to be executed.
 }
 
 type block struct {
@@ -39,7 +44,8 @@ type block struct {
 }
 
 type queue struct {
-	pi  int   // prefetch index
-	siz int64 // not used now
-	bs  []block
+	prefetchIndex int
+	// size, is not used now
+	siz    int64
+	blocks []block
 }
