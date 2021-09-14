@@ -27,6 +27,7 @@ import (
 	"matrixone/pkg/vm/metadata"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"sync"
 	"time"
@@ -116,6 +117,7 @@ type ParseLineHandler struct {
 	simdCsvResultsOfWriteBatchChan chan *WriteBatchHandler
 	//wait write routines to quit
 	simdCsvWaitWriteRoutineToQuit *sync.WaitGroup
+	simdCsvBatchPool chan *batch.Batch
 	closeOnce sync.Once
 
 	closeRef *CloseLoadData
@@ -305,11 +307,77 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 		}
 	}
 	handler.dataColumnId2TableColumnId = dataColumnId2TableColumnId
+
+	batchSize := handler.batchSize
+	//allocate batch
+	for j := 0; j < cap(handler.simdCsvBatchPool); j++ {
+		batchData := batch.New(true,handler.attrName)
+
+		//fmt.Printf("----- batchSize %d attrName %v \n",batchSize,handler.attrName)
+
+		//alloc space for vector
+		for i := 0; i < len(handler.attrName); i++ {
+			vec := vector.New(handler.cols[i].Type)
+			switch vec.Typ.Oid {
+			case types.T_int8:
+				vec.Col = make([]int8, batchSize)
+			case types.T_int16:
+				vec.Col = make([]int16, batchSize)
+			case types.T_int32:
+				vec.Col = make([]int32, batchSize)
+			case types.T_int64:
+				vec.Col = make([]int64, batchSize)
+			case types.T_uint8:
+				vec.Col = make([]uint8, batchSize)
+			case types.T_uint16:
+				vec.Col = make([]uint16, batchSize)
+			case types.T_uint32:
+				vec.Col = make([]uint32, batchSize)
+			case types.T_uint64:
+				vec.Col = make([]uint64, batchSize)
+			case types.T_float32:
+				vec.Col = make([]float32, batchSize)
+			case types.T_float64:
+				vec.Col = make([]float64, batchSize)
+			case types.T_char, types.T_varchar:
+				vBytes := &types.Bytes{
+					Offsets: make([]uint32,batchSize),
+					Lengths: make([]uint32,batchSize),
+					Data: nil,
+				}
+				vec.Col = vBytes
+			default:
+				panic("unsupported vector type")
+			}
+			batchData.Vecs[i] = vec
+		}
+
+		handler.simdCsvBatchPool <- batchData
+	}
 	return nil
 }
 
+func allocBatch(handler *ParseLineHandler ) *batch.Batch{
+	batchData := <- handler.simdCsvBatchPool
+	return batchData
+}
+
+func releaseBatch(handler *ParseLineHandler,bat *batch.Batch) {
+	//clear batch
+	//clear vector.nulls.Nulls
+	for _, vec := range bat.Vecs {
+		vec.Nsp = &nulls.Nulls{}
+		switch vec.Typ.Oid {
+		case types.T_char, types.T_varchar:
+			vBytes := vec.Col.(*types.Bytes)
+			vBytes.Data = vBytes.Data[:0]
+		}
+	}
+	handler.simdCsvBatchPool <- bat
+}
+
 func initWriteBatchHandler(handler *ParseLineHandler,wHandler *WriteBatchHandler,) error {
-	batchSize := handler.batchSize
+	//batchSize := handler.batchSize
 	wHandler.cols = handler.cols
 	wHandler.dataColumnId2TableColumnId = handler.dataColumnId2TableColumnId
 	wHandler.batchSize = handler.batchSize
@@ -320,47 +388,48 @@ func initWriteBatchHandler(handler *ParseLineHandler,wHandler *WriteBatchHandler
 	wHandler.result = &LoadResult{}
 	wHandler.closeRef = handler.closeRef
 
-	batchData := batch.New(true,handler.attrName)
-
-	//fmt.Printf("----- batchSize %d attrName %v \n",batchSize,handler.attrName)
-
-	//alloc space for vector
-	for i := 0; i < len(handler.attrName); i++ {
-		vec := vector.New(wHandler.cols[i].Type)
-		switch vec.Typ.Oid {
-		case types.T_int8:
-			vec.Col = make([]int8, batchSize)
-		case types.T_int16:
-			vec.Col = make([]int16, batchSize)
-		case types.T_int32:
-			vec.Col = make([]int32, batchSize)
-		case types.T_int64:
-			vec.Col = make([]int64, batchSize)
-		case types.T_uint8:
-			vec.Col = make([]uint8, batchSize)
-		case types.T_uint16:
-			vec.Col = make([]uint16, batchSize)
-		case types.T_uint32:
-			vec.Col = make([]uint32, batchSize)
-		case types.T_uint64:
-			vec.Col = make([]uint64, batchSize)
-		case types.T_float32:
-			vec.Col = make([]float32, batchSize)
-		case types.T_float64:
-			vec.Col = make([]float64, batchSize)
-		case types.T_char, types.T_varchar:
-			vBytes := &types.Bytes{
-				Offsets: make([]uint32,batchSize),
-				Lengths: make([]uint32,batchSize),
-				Data: nil,
-			}
-			vec.Col = vBytes
-		default:
-			panic("unsupported vector type")
-		}
-		batchData.Vecs[i] = vec
-	}
-	wHandler.batchData = batchData
+	//batchData := batch.New(true,handler.attrName)
+	//
+	////fmt.Printf("----- batchSize %d attrName %v \n",batchSize,handler.attrName)
+	//
+	////alloc space for vector
+	//for i := 0; i < len(handler.attrName); i++ {
+	//	vec := vector.New(wHandler.cols[i].Type)
+	//	switch vec.Typ.Oid {
+	//	case types.T_int8:
+	//		vec.Col = make([]int8, batchSize)
+	//	case types.T_int16:
+	//		vec.Col = make([]int16, batchSize)
+	//	case types.T_int32:
+	//		vec.Col = make([]int32, batchSize)
+	//	case types.T_int64:
+	//		vec.Col = make([]int64, batchSize)
+	//	case types.T_uint8:
+	//		vec.Col = make([]uint8, batchSize)
+	//	case types.T_uint16:
+	//		vec.Col = make([]uint16, batchSize)
+	//	case types.T_uint32:
+	//		vec.Col = make([]uint32, batchSize)
+	//	case types.T_uint64:
+	//		vec.Col = make([]uint64, batchSize)
+	//	case types.T_float32:
+	//		vec.Col = make([]float32, batchSize)
+	//	case types.T_float64:
+	//		vec.Col = make([]float64, batchSize)
+	//	case types.T_char, types.T_varchar:
+	//		vBytes := &types.Bytes{
+	//			Offsets: make([]uint32,batchSize),
+	//			Lengths: make([]uint32,batchSize),
+	//			Data: nil,
+	//		}
+	//		vec.Col = vBytes
+	//	default:
+	//		panic("unsupported vector type")
+	//	}
+	//	batchData.Vecs[i] = vec
+	//}
+	//wHandler.batchData = batchData
+	wHandler.batchData = allocBatch(handler)
 	return nil
 }
 
@@ -1041,6 +1110,8 @@ func doWriteBatch(handler *ParseLineHandler, force bool) error {
 		err = saveParsedLinesToBatchSimdCsvConcurrentWrite(writeHandler,force)
 		writeHandler.simdCsvErr = err
 
+		releaseBatch(handler,writeHandler.batchData)
+
 		//release semaphore
 		<- handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch
 
@@ -1083,8 +1154,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	process_block := time.Duration(0)
 
 	curBatchSize := int(ses.Pu.SV.GetBatchSizeInLoadData())
-	channelSize := Max(1,curBatchSize / 2)
-
+	channelSize := 100
 	//simdcsv
 	handler := &ParseLineHandler{
 		SharePart:SharePart{
@@ -1115,9 +1185,16 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.GetLoadDataConcurrencyCount()),runtime.NumCPU())
 	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1,handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch = make(chan int,handler.simdCsvConcurrencyCountOfWriteBatch)
+	handler.simdCsvBatchPool = make(chan *batch.Batch, handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvResultsOfWriteBatchChan = make(chan *WriteBatchHandler,handler.simdCsvConcurrencyCountOfWriteBatch)
 
 	fmt.Printf("-----write concurrent count %d \n",handler.simdCsvConcurrencyCountOfWriteBatch)
+
+	mf,err := os.Create("load_mem")
+	defer func() {
+		err = pprof.WriteHeapProfile(mf)
+		mf.Close()
+	}()
 
 	err = initParseLineHandler(handler)
 	if err != nil {
