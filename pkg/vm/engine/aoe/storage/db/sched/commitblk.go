@@ -17,9 +17,9 @@ package sched
 import (
 	"errors"
 	"fmt"
-	logutil2 "matrixone/pkg/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	// "matrixone/pkg/logutil"
 )
 
 type commitBlkEvent struct {
@@ -39,7 +39,6 @@ func NewCommitBlkEvent(ctx *Context, localMeta *md.Block) *commitBlkEvent {
 
 func (e *commitBlkEvent) updateBlock(blk *md.Block) error {
 	if blk.BoundSate != md.Detatched {
-		logutil2.Error("")
 		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d, but %d", blk.ID, md.Detatched, blk.BoundSate))
 	}
 

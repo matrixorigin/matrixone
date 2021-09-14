@@ -20,7 +20,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 )
 

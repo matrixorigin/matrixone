@@ -39,6 +39,12 @@ func (v *BaseVector) NullCnt() int {
 	return v.VMask.Length()
 }
 
+func (v *BaseVector) ResetReadonly() {
+	mask := atomic.LoadUint64(&v.StatMask)
+	mask &= ^container.ReadonlyMask
+	atomic.StoreUint64(&v.StatMask, mask)
+}
+
 func (v *BaseVector) IsReadonly() bool {
 	return atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask != 0
 }

@@ -23,7 +23,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 )
@@ -99,6 +99,10 @@ func (c *collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
 	c.mem.memTables = append(c.mem.memTables, tbl)
 	tbl.Ref()
 	return tbl, err
+}
+
+func (c *collection) Flush() error {
+	return nil
 }
 
 func (c *collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {

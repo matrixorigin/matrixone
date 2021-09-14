@@ -17,9 +17,7 @@ package col
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/types"
 	ro "matrixone/pkg/container/vector"
-	logutil2 "matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -33,15 +31,6 @@ type stdColumnBlock struct {
 	part IColumnPart
 }
 
-func EstimateStdColumnCapacity(colIdx int, meta *md.Block) uint64 {
-	switch meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
-	case types.T_json, types.T_char, types.T_varchar:
-		return meta.Segment.Table.Conf.BlockMaxRows * 2 * 4
-	default:
-		return meta.Segment.Table.Conf.BlockMaxRows * uint64(meta.Segment.Table.Schema.ColDefs[colIdx].Type.Size)
-	}
-}
-
 func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
 	defer host.Unref()
 	blk := &stdColumnBlock{
@@ -52,7 +41,7 @@ func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
 			typ:     host.GetType(),
 		},
 	}
-	capacity := EstimateStdColumnCapacity(colIdx, blk.meta)
+	capacity := md.EstimateColumnBlockSize(colIdx, blk.meta)
 	host.Ref()
 	blk.Ref()
 	part := NewColumnPart(host, blk, capacity)
@@ -90,7 +79,6 @@ func (blk *stdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
 	part := blk.part.CloneWithUpgrade(cloned, host.GetSSTBufMgr())
 	blk.RUnlock()
 	if part == nil {
-		logutil2.Error("logic error")
 		panic("logic error")
 	}
 	cloned.part = part

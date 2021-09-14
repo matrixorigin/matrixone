@@ -18,10 +18,28 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync/atomic"
 	// "matrixone/pkg/logutil"
 )
+
+func EstimateColumnBlockSize(colIdx int, meta *Block) uint64 {
+	switch meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
+	case types.T_json, types.T_char, types.T_varchar:
+		return meta.Segment.Table.Conf.BlockMaxRows * 2 * 4
+	default:
+		return meta.Segment.Table.Conf.BlockMaxRows * uint64(meta.Segment.Table.Schema.ColDefs[colIdx].Type.Size)
+	}
+}
+
+func EstimateBlockSize(meta *Block) uint64 {
+	size := uint64(0)
+	for colIdx, _ := range meta.Segment.Table.Schema.ColDefs {
+		size += EstimateColumnBlockSize(colIdx, meta)
+	}
+	return size
+}
 
 func NewBlock(id uint64, segment *Segment) *Block {
 	blk := &Block{
@@ -64,6 +82,16 @@ func (blk *Block) GetID() uint64 {
 	return blk.ID
 }
 
+func (blk *Block) TryUpgrade() bool {
+	blk.Lock()
+	defer blk.Unlock()
+	if blk.Count == blk.MaxRowCount {
+		blk.DataState = FULL
+		return true
+	}
+	return false
+}
+
 func (blk *Block) GetSegmentID() uint64 {
 	return blk.Segment.ID
 }
@@ -98,7 +126,7 @@ func (blk *Block) SetIndex(idx LogIndex) {
 }
 
 func (blk *Block) String() string {
-	s := fmt.Sprintf("Blk(%d-%d-%d)(%d)", blk.Segment.Table.ID, blk.Segment.ID, blk.ID, blk.DataState)
+	s := fmt.Sprintf("Blk(%d-%d-%d)(DataState=%d)", blk.Segment.Table.ID, blk.Segment.ID, blk.ID, blk.DataState)
 	if blk.IsDeleted(NowMicro()) {
 		s += "[D]"
 	}

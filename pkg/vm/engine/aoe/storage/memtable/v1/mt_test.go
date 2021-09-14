@@ -43,7 +43,7 @@ func init() {
 
 func TestManager(t *testing.T) {
 	opts := config.NewOptions("/tmp", config.CST_Customize, config.BST_S, config.SST_S)
-	manager := NewManager(opts)
+	manager := NewManager(opts, nil)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
 	fsMgr := ldio.DefaultFsMgr
@@ -89,7 +89,7 @@ func TestCollection(t *testing.T) {
 	blockCnt := uint64(4)
 	opts := config.NewCustomizedMetaOptions(WORK_DIR, config.CST_Customize, blockRows, blockCnt)
 
-	manager := NewManager(opts)
+	manager := NewManager(opts, nil)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
 	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)

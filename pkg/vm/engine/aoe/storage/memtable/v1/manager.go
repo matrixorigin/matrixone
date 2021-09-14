@@ -18,8 +18,9 @@ import (
 	"errors"
 	"fmt"
 	engine "matrixone/pkg/vm/engine/aoe/storage"
+	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"sync"
 )
 
@@ -28,16 +29,26 @@ type manager struct {
 	opts        *engine.Options
 	collections map[uint64]imem.ICollection
 	tableData   iface.ITableData
+	factory     fb.CollectionFactory
 }
 
 var (
 	_ imem.IManager = (*manager)(nil)
 )
 
-func NewManager(opts *engine.Options) imem.IManager {
+func NewManager(opts *engine.Options, factory fb.MutFactory) *manager {
 	m := &manager{
 		opts:        opts,
 		collections: make(map[uint64]imem.ICollection),
+	}
+	if factory == nil {
+		m.factory = m.createCollection
+	} else {
+		if factory.GetType() == fb.MUTABLE {
+			m.factory = m.createMutCollection
+		} else {
+			m.factory = m.createCollection
+		}
 	}
 	return m
 }
@@ -85,6 +96,14 @@ func (m *manager) String() string {
 	return s
 }
 
+func (m *manager) createCollection(td iface.ITableData) imem.ICollection {
+	return NewCollection(td, m.opts)
+}
+
+func (m *manager) createMutCollection(td iface.ITableData) imem.ICollection {
+	return newMutableCollection(m, td)
+}
+
 func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err error) {
 	m.Lock()
 	tableData := td.(iface.ITableData)
@@ -93,7 +112,7 @@ func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err er
 		m.Unlock()
 		return nil, errors.New("logic error")
 	}
-	c = NewCollection(tableData, m.opts)
+	c = m.factory(tableData)
 	m.collections[tableData.GetID()] = c
 	m.Unlock()
 	c.Ref()

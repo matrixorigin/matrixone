@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"io"
 	"matrixone/pkg/encoding"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/prefetch"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
@@ -284,7 +284,7 @@ func (sf *SortedSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta
 
 func (sf *SortedSegmentFile) Destory() {
 	name := sf.Name()
-	logutil2.Debugf(" %s | SegmentFile | Destorying", name)
+	logutil.Infof(" %s | SegmentFile | Destorying", name)
 	err := os.Remove(name)
 	if err != nil {
 		panic(err)

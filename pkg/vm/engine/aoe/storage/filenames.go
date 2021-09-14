@@ -28,6 +28,7 @@ const (
 	FTInfoCkp FileType = iota
 	FTTableCkp
 	FTLock
+	FTTBlock
 	FTBlock
 	FTSegment
 	FTSegmentIndex
@@ -48,6 +49,10 @@ func MakeMetaDir(dirname string) string {
 
 func MakeTableDir(dirname string, id uint64) string {
 	return path.Join(dirname, fmt.Sprintf("%d", id))
+}
+
+func MakeTBlockFileName(dirname, name string, isTmp bool) string {
+	return MakeFilename(dirname, FTTBlock, name, isTmp)
 }
 
 func MakeBlockFileName(dirname, name string, tableId uint64, isTmp bool) string {
@@ -76,6 +81,14 @@ func MakeLockFileName(dirname, name string) string {
 
 func ParseSegmentfileName(filename string) (name string, ok bool) {
 	name = strings.TrimSuffix(filename, ".seg")
+	if len(name) == len(filename) {
+		return name, false
+	}
+	return name, true
+}
+
+func ParseTBlockfileName(filename string) (name string, ok bool) {
+	name = strings.TrimSuffix(filename, ".tblk")
 	if len(name) == len(filename) {
 		return name, false
 	}
@@ -122,6 +135,8 @@ func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
 	case FTTransientNode:
 		s = path.Join(MakeSpillDir(dirname), fmt.Sprintf("%s.nod", name))
 		isTmp = false
+	case FTTBlock:
+		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s.tblk", name))
 	case FTBlock:
 		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s.blk", name))
 	case FTSegment:

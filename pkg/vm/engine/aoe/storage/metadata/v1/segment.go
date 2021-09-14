@@ -87,6 +87,21 @@ func (seg *Segment) BlockIDs(args ...interface{}) map[uint64]uint64 {
 	return ids
 }
 
+func (seg *Segment) HasUncommitted() bool {
+	if seg.DataState >= CLOSED {
+		return false
+	}
+	if seg.DataState < FULL {
+		return true
+	}
+	for _, blk := range seg.Blocks {
+		if blk.DataState != FULL {
+			return true
+		}
+	}
+	return false
+}
+
 func (seg *Segment) GetActiveBlk() *Block {
 	if seg.ActiveBlk >= len(seg.Blocks) {
 		return nil
@@ -116,7 +131,7 @@ func (seg *Segment) CreateBlock() (blk *Block, err error) {
 
 func (seg *Segment) String() string {
 	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d][State=%d]", seg.Table.ID, seg.ID, seg.ActiveBlk, seg.DataState)
-	s += "["
+	s += "\n["
 	pos := 0
 	for _, blk := range seg.Blocks {
 		if pos != 0 {

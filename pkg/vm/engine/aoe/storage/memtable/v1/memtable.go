@@ -21,7 +21,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 )
