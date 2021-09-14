@@ -47,17 +47,25 @@ var (
 )
 
 type DB struct {
+	// Working directory of DB
 	Dir  string
+	// Basic options of DB
 	Opts *e.Options
-
+	// FsMgr manages all file related usages including virtual file.
 	FsMgr       base.IManager
+	// MemTableMgr manages memtables.
 	MemTableMgr mtif.IManager
-
+	// IndexBufMgr manages all segment/block indices in memory.
 	IndexBufMgr    bmgrif.IBufferManager
+
+	// Those two managers not used currently.
 	MTBufMgr       bmgrif.IBufferManager
 	SSTBufMgr      bmgrif.IBufferManager
+
+	// MutationBufMgr is a replacement for MTBufMgr
 	MutationBufMgr bb.INodeManager
 
+	// Internal data storage of DB.
 	Store struct {
 		Mu         *sync.RWMutex
 		MetaInfo   *md.MetaInfo
@@ -71,6 +79,7 @@ type DB struct {
 	DataDir  *os.File
 	DBLocker io.Closer
 
+	// Scheduler schedules all the events happening like flush segment, drop table, etc.
 	Scheduler sched.Scheduler
 
 	Closed  *atomic.Value

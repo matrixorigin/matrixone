@@ -22,6 +22,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 )
 
+// SegmentFilter provides segment-level & dense interfaces with bitmap
+// support. (e.g. Eq(string, interface{}) (*roaring.Bitmap, error)
+// where inputs are column name and value, returns a bitmap telling
+// which rows have the same value.)
 type SegmentFilter struct {
 	segment *Segment
 }

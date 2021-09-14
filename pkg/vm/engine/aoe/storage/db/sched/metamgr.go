@@ -40,17 +40,20 @@ func isMetaEvent(t sched.EventType) bool {
 	return ok
 }
 
+// metaResourceMgr manages all the running/pending meta events.
 type metaResourceMgr struct {
 	sched.BaseResourceMgr
 	disk    sched.ResourceMgr
 	cpu     sched.ResourceMgr
 	opts    *e.Options
-	mu      sync.RWMutex
-	runings struct {
+	mu       sync.RWMutex
+	// Running meta events and their related info
+	runnings struct {
 		events     map[uint64]MetaEvent
 		tableindex map[uint64]bool
 		scopeall   bool
 	}
+	// Pending meta events
 	pendings struct {
 		events []MetaEvent
 	}
@@ -62,8 +65,8 @@ func NewMetaResourceMgr(opts *e.Options, disk, cpu sched.ResourceMgr) *metaResou
 		cpu:  cpu,
 		opts: opts,
 	}
-	mgr.runings.events = make(map[uint64]MetaEvent)
-	mgr.runings.tableindex = make(map[uint64]bool)
+	mgr.runnings.events = make(map[uint64]MetaEvent)
+	mgr.runnings.tableindex = make(map[uint64]bool)
 	mgr.pendings.events = make([]MetaEvent, 0)
 	handler := sched.NewPoolHandler(4, mgr.preSubmit)
 	mgr.BaseResourceMgr = *sched.NewBaseResourceMgr(handler)
@@ -75,11 +78,11 @@ func (mgr *metaResourceMgr) OnExecDone(op interface{}) {
 	mgr.mu.Lock()
 	logutil2.Debugf("OnExecDone %d: %s", e.ID(), mgr.stringLocked())
 	scope, all := e.GetScope()
-	delete(mgr.runings.events, e.ID())
+	delete(mgr.runnings.events, e.ID())
 	if all {
-		mgr.runings.scopeall = false
+		mgr.runnings.scopeall = false
 	} else {
-		delete(mgr.runings.tableindex, scope.TableID)
+		delete(mgr.runnings.tableindex, scope.TableID)
 	}
 	if len(mgr.pendings.events) == 0 {
 		mgr.mu.Unlock()
@@ -103,12 +106,12 @@ func (mgr *metaResourceMgr) OnExecDone(op interface{}) {
 func (mgr *metaResourceMgr) enqueueRunning(e MetaEvent) {
 	scope, all := e.GetScope()
 	if all {
-		mgr.runings.scopeall = true
-		mgr.runings.events[e.ID()] = e
+		mgr.runnings.scopeall = true
+		mgr.runnings.events[e.ID()] = e
 		return
 	}
-	mgr.runings.events[e.ID()] = e
-	mgr.runings.tableindex[scope.TableID] = true
+	mgr.runnings.events[e.ID()] = e
+	mgr.runnings.tableindex[scope.TableID] = true
 }
 
 func (mgr *metaResourceMgr) enqueuePending(e MetaEvent) {
@@ -124,7 +127,7 @@ func (mgr *metaResourceMgr) trySchedule(e MetaEvent, fromPending bool) bool {
 func (mgr *metaResourceMgr) tryScheduleLocked(e MetaEvent, fromPending bool) bool {
 	scope, all := e.GetScope()
 	if all {
-		if len(mgr.runings.events) > 0 {
+		if len(mgr.runnings.events) > 0 {
 			if !fromPending {
 				mgr.enqueuePending(e)
 			}
@@ -133,13 +136,13 @@ func (mgr *metaResourceMgr) tryScheduleLocked(e MetaEvent, fromPending bool) boo
 		mgr.enqueueRunning(e)
 		return true
 	}
-	if mgr.runings.scopeall {
+	if mgr.runnings.scopeall {
 		if !fromPending {
 			mgr.enqueuePending(e)
 		}
 		return false
 	}
-	if _, ok := mgr.runings.tableindex[scope.TableID]; !ok {
+	if _, ok := mgr.runnings.tableindex[scope.TableID]; !ok {
 		mgr.enqueueRunning(e)
 		return true
 	}
@@ -168,8 +171,8 @@ func (mgr *metaResourceMgr) String() string {
 
 func (mgr *metaResourceMgr) stringLocked() string {
 	s := fmt.Sprintf("<MetaResourceMgr>")
-	s = fmt.Sprintf("%s\nRunning: (ScopeAll=%v)(Events=[", s, mgr.runings.scopeall)
-	for eid, e := range mgr.runings.events {
+	s = fmt.Sprintf("%s\nRunning: (ScopeAll=%v)(Events=[", s, mgr.runnings.scopeall)
+	for eid, e := range mgr.runnings.events {
 		scope, _ := e.GetScope()
 		s = fmt.Sprintf("%s(%d,%d)", s, eid, scope.TableID)
 	}

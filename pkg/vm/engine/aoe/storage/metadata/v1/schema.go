@@ -49,6 +49,8 @@ func (s *Schema) Types() (ts []types.Type) {
 	return ts
 }
 
+// GetColIdx returns column index for the given column name
+// if found, otherwise returns -1.
 func (s *Schema) GetColIdx(attr string) int {
 	idx, ok := s.NameIdMap[attr]
 	if !ok {

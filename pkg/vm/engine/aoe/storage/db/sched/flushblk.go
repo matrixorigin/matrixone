@@ -23,7 +23,9 @@ import (
 
 type flushMemtableEvent struct {
 	BaseEvent
+	// Block metadata
 	Meta       *md.Block
+	// Collection that contains the flushed memtable
 	Collection imem.ICollection
 }
 

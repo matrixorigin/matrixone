@@ -25,6 +25,9 @@ import (
 	"sync/atomic"
 )
 
+// Relation is a high-level abstraction provided for
+// the upper layer, contains the table data, schema, and
+// the segments it refers to.
 type Relation struct {
 	Data   iface.ITableData
 	DBImpl *DB

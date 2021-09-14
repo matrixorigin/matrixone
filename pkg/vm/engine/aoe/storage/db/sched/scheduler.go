@@ -86,6 +86,12 @@ func (p *metablkCommiter) Accept(meta *md.Block) {
 	p.Unlock()
 }
 
+// scheduler is the global event scheduler for AOE. It wraps the
+// BaseScheduler with some DB metadata and block committers.
+//
+// This directory mainly focus on different events scheduled under
+// DB space. Basically you can refer to code under sched/ for more
+// implementation details for scheduler itself.
 type scheduler struct {
 	sched.BaseScheduler
 	opts      *e.Options
@@ -104,6 +110,7 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	}
 	s.commiters.blkmap = make(map[uint64]*metablkCommiter)
 
+	// Start different type of handlers
 	dispatcher := sched.NewBaseDispatcher()
 	flushtblkHandler := sched.NewPoolHandler(4, nil)
 	flushtblkHandler.Start()
@@ -118,6 +125,7 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	statelessHandler := sched.NewPoolHandler(int(opts.SchedulerCfg.StatelessWorkers), nil)
 	statelessHandler.Start()
 
+	// Register different events to its belonged handler
 	dispatcher.RegisterHandler(sched.StatelessEvent, statelessHandler)
 	dispatcher.RegisterHandler(sched.FlushSegTask, flushsegHandler)
 	dispatcher.RegisterHandler(sched.FlushMemtableTask, flushblkHandler)
@@ -133,6 +141,7 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	dispatcher.RegisterHandler(sched.PrecommitBlkMetaTask, metaHandler)
 	dispatcher.RegisterHandler(sched.FlushTBlkTask, flushtblkHandler)
 
+	// Register dispatcher
 	s.RegisterDispatcher(sched.StatelessEvent, dispatcher)
 	s.RegisterDispatcher(sched.FlushSegTask, dispatcher)
 	s.RegisterDispatcher(sched.FlushMemtableTask, dispatcher)
@@ -151,6 +160,8 @@ func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
 	return s
 }
 
+// onPreCommitBlkDone gets the block committer for the given table, and
+// register the given preCommit event for the committer.
 func (s *scheduler) onPrecommitBlkDone(e sched.Event) {
 	event := e.(*precommitBlockEvent)
 	s.commiters.mu.Lock()
@@ -176,6 +187,8 @@ func (s *scheduler) onFlushBlkDone(e sched.Event) {
 	s.commiters.mu.Unlock()
 }
 
+// onFlushMemtableDone handles the finished flush memtable event, and
+// adjusts some metadata if needed.
 func (s *scheduler) onFlushMemtableDone(e sched.Event) {
 	event := e.(*flushMemtableEvent)
 	s.commiters.mu.RLock()
@@ -189,6 +202,8 @@ func (s *scheduler) onFlushMemtableDone(e sched.Event) {
 	s.commiters.mu.Unlock()
 }
 
+// onCommitBlkDone handles the finished commit block event, schedules a
+// new flush table event and an upgrade block event.
 func (s *scheduler) onCommitBlkDone(e sched.Event) {
 	event := e.(*commitBlkEvent)
 	newMeta := event.NewMeta
@@ -215,6 +230,8 @@ func (s *scheduler) onCommitBlkDone(e sched.Event) {
 	s.Schedule(newevent)
 }
 
+// onUpgradeBlkDone handles the finished upgrade block event, and if segment
+// was closed, start a new flush segment event and schedule it.
 func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	event := e.(*upgradeBlkEvent)
 	defer event.TableData.Unref()
@@ -240,6 +257,8 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	s.Schedule(flushEvent)
 }
 
+// onFlushSegDone handles the finished flush segment event, generates a new
+// upgrade segment event and schedules it.
 func (s *scheduler) onFlushSegDone(e sched.Event) {
 	event := e.(*flushSegEvent)
 	if err := e.GetError(); err != nil {
@@ -260,6 +279,8 @@ func (s *scheduler) onFlushSegDone(e sched.Event) {
 	s.Schedule(newevent)
 }
 
+// onUpgradeSegDone handles the finished upgrade segment event and releases the
+// occupied resources.
 func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 	event := e.(*upgradeSegEvent)
 	defer event.TableData.Unref()
@@ -311,6 +332,7 @@ func (s *scheduler) preprocess(e sched.Event) {
 	e.AddObserver(s)
 }
 
+// Schedule schedules the given event via the internal scheduler.
 func (s *scheduler) Schedule(e sched.Event) error {
 	s.preprocess(e)
 	return s.BaseScheduler.Schedule(e)

@@ -26,6 +26,7 @@ const (
 	LockName string = "AOE"
 )
 
+// createDBLock creates a file lock on AOE's working directory.
 func createDBLock(dir string) (io.Closer, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
