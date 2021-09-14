@@ -32,20 +32,20 @@ func Prepare(_ *process.Process, _ interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	for {
-		if len(proc.Reg.Ws) == 0 {
-			proc.Reg.Ax = nil
+		if len(proc.Reg.MergeReceivers) == 0 {
+			proc.Reg.InputBatch = nil
 			return true, nil
 		}
-		reg := proc.Reg.Ws[0]
+		reg := proc.Reg.MergeReceivers[0]
 		v := <-reg.Ch
 		if v == nil {
 			reg.Ch = nil
 			reg.Wg.Done()
-			proc.Reg.Ws = proc.Reg.Ws[1:]
+			proc.Reg.MergeReceivers = proc.Reg.MergeReceivers[1:]
 			continue
 		}
 		reg.Wg.Done()
-		proc.Reg.Ax = v.(*batch.Batch)
+		proc.Reg.InputBatch = v.(*batch.Batch)
 		break
 	}
 	return false, nil

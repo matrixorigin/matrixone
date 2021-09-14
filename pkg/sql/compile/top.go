@@ -48,10 +48,10 @@ func (c *compile) compileTopOutput(o *top.Top, mp map[string]uint64) ([]*Scope, 
 	rs := new(Scope)
 	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 	{
 		for i, j := 0, len(ss); i < j; i++ {
-			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
 				Ch: make(chan interface{}, 8),
 			}
@@ -68,7 +68,7 @@ func (c *compile) compileTopOutput(o *top.Top, mp map[string]uint64) ([]*Scope, 
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
-				Reg:  rs.Proc.Reg.Ws[i],
+				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
@@ -115,10 +115,10 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 	rs := new(Scope)
 	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 	{
 		for i, j := 0, len(ss); i < j; i++ {
-			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
 				Ch: make(chan interface{}, 8),
 			}
@@ -135,7 +135,7 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 			Op: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
-				Reg:  rs.Proc.Reg.Ws[i],
+				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}

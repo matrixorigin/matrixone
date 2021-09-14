@@ -49,7 +49,7 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 
 	proc.Mp = mempool.Pool.Get().(*mempool.Mempool)
 	defer func() {
-		proc.Reg.Ax = nil
+		proc.Reg.InputBatch = nil
 		vm.Run(p.instructions, proc)
 		for i := range p.compressedBytes {
 			proc.Free(p.compressedBytes[i].Bytes())
@@ -89,7 +89,7 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 		if err != nil {
 			return false, err
 		}
-		proc.Reg.Ax = bat
+		proc.Reg.InputBatch = bat
 		if end, err = vm.Run(p.instructions, proc); err != nil {
 			return end, err
 		}
@@ -103,7 +103,7 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	proc.Mp = mempool.Pool.Get().(*mempool.Mempool)
 	defer func() {
-		proc.Reg.Ax = nil
+		proc.Reg.InputBatch = nil
 		vm.Run(p.instructions, proc)
 		mempool.Pool.Put(proc.Mp)
 		proc.Mp = nil
@@ -113,7 +113,7 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 		return false, err
 	}
 	for {
-		proc.Reg.Ax = nil
+		proc.Reg.InputBatch = nil
 		if end, err := vm.Run(p.instructions, proc); err != nil || end {
 			return end, err
 		}

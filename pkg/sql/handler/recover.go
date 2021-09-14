@@ -34,10 +34,10 @@ func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 	}
 	s.Proc = process.New(guest.New(proc.Gm.Limit, proc.Gm.Mmu))
 	s.Proc.Lim = proc.Lim
-	s.Proc.Reg.Ws = make([]*process.WaitRegister, len(ps.Ss))
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ps.Ss))
 	{
 		for i, j := 0, len(ps.Ss); i < j; i++ {
-			s.Proc.Reg.Ws[i] = &process.WaitRegister{
+			s.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
 				Ch: make(chan interface{}, 8),
 			}
@@ -61,7 +61,7 @@ func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 	}
 	s.Ss = make([]*compile.Scope, len(ps.Ss))
 	for i := range ps.Ss {
-		ps.Ss[i].Ins = recoverInstructions(ps.Ss[i].Ins, s.Proc, s.Proc.Reg.Ws[i])
+		ps.Ss[i].Ins = recoverInstructions(ps.Ss[i].Ins, s.Proc, s.Proc.Reg.MergeReceivers[i])
 		s.Ss[i] = recoverScope(ps.Ss[i], proc)
 	}
 	return s

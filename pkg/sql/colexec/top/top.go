@@ -54,10 +54,10 @@ func Prepare(_ *process.Process, arg interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	var err error
 
-	if proc.Reg.Ax == nil {
+	if proc.Reg.InputBatch == nil {
 		return false, nil
 	}
-	bat := proc.Reg.Ax.(*batch.Batch)
+	bat := proc.Reg.InputBatch.(*batch.Batch)
 	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
@@ -90,7 +90,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	bat.Sels = sels
 	bat.SelsData = data
 	bat.Shuffle(proc)
-	proc.Reg.Ax = bat
+	proc.Reg.InputBatch = bat
 	return false, nil
 }
 

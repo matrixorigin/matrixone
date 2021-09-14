@@ -30,8 +30,8 @@ func Prepare(_ *process.Process, _ interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	ap := arg.(*Argument)
-	if proc.Reg.Ax != nil {
-		if bat := proc.Reg.Ax.(*batch.Batch); bat != nil && bat.Attrs != nil {
+	if proc.Reg.InputBatch != nil {
+		if bat := proc.Reg.InputBatch.(*batch.Batch); bat != nil && bat.Attrs != nil {
 			if len(ap.Attrs) > 0 {
 				bat.Reorder(ap.Attrs)
 			}

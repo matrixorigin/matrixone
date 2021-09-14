@@ -41,14 +41,14 @@ type Register struct {
 	// Ss, temporarily stores the row number list in the execution of operators
 	// and it can be reused in the future execution.
 	Ss [][]int64
-	// Ax, stores the result of the previous operator.
-	Ax interface{}
+	// InputBatch, stores the result of the previous operator.
+	InputBatch interface{}
 	// Ts, temporarily stores the column data in the execution of operators
 	// and it can be reused in the future execution to avoid mem alloc and type casting overhead.
 	Ts []interface{}
-	// Ws, receives result of multi previous operators from other pipelines
+	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
-	Ws []*WaitRegister
+	MergeReceivers []*WaitRegister
 }
 
 //Limitation specifies the maximum resources that can be used in one query.
