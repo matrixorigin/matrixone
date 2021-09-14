@@ -700,7 +700,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]int8)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1))
+				data, err := proc.Grow(v.Data[:n], int64(n+1))
 				if err != nil {
 					return err
 				}
@@ -727,7 +727,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]int16)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*2)
+				data, err := proc.Grow(v.Data[:n*2], int64(n+1)*2)
 				if err != nil {
 					return err
 				}
@@ -754,7 +754,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]int32)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*4)
+				data, err := proc.Grow(v.Data[:n*4], int64(n+1)*4)
 				if err != nil {
 					return err
 				}
@@ -781,7 +781,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]int64)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*8)
+				data, err := proc.Grow(v.Data[:n*8], int64(n+1)*8)
 				if err != nil {
 					return err
 				}
@@ -808,7 +808,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]uint8)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1))
+				data, err := proc.Grow(v.Data[:n], int64(n+1))
 				if err != nil {
 					return err
 				}
@@ -835,7 +835,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]uint16)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*2)
+				data, err := proc.Grow(v.Data[:n*2], int64(n+1)*2)
 				if err != nil {
 					return err
 				}
@@ -862,7 +862,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]uint32)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*4)
+				data, err := proc.Grow(v.Data[:n*4], int64(n+1)*4)
 				if err != nil {
 					return err
 				}
@@ -889,7 +889,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]uint64)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*8)
+				data, err := proc.Grow(v.Data[:n*8], int64(n+1)*8)
 				if err != nil {
 					return err
 				}
@@ -916,7 +916,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]float32)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*4)
+				data, err := proc.Grow(v.Data[:n*4], int64(n+1)*4)
 				if err != nil {
 					return err
 				}
@@ -943,7 +943,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]float64)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*8)
+				data, err := proc.Grow(v.Data[:n*8], int64(n+1)*8)
 				if err != nil {
 					return err
 				}
