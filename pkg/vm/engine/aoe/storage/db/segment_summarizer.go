@@ -20,6 +20,13 @@ import (
 	"matrixone/pkg/vm/engine"
 )
 
+// SegmentSummarizer provides segment-level aggregations with bitmap
+// support. (e.g. Count(string, *roaring.Bitmap) (uint64, error)
+// where inputs are column name and row filter, returns a count
+// telling the number of rows filtered by input.
+// Sum(string, *roaring.Bitmap) (int64, uint64, error) where inputs
+// are column name and row filter, returns count of rows, sum of those
+// counted rows, and an error if returned. Others are similar.)
 type SegmentSummarizer struct {
 	segment *Segment
 }

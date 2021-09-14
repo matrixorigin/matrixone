@@ -29,7 +29,7 @@ func NewMetaFileCleaner(info *md.MetaInfo) *metaFileCleaner {
 }
 
 func (c *metaFileCleaner) OnExec() {
-	handle := NewReplayHandle(c.info.Conf.Dir)
+	handle := NewReplayHandle(c.info.Conf.Dir, nil)
 	handle.CleanupWithCtx(3)
 }
 

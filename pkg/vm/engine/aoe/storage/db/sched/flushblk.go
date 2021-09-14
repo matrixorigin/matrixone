@@ -15,15 +15,17 @@
 package sched
 
 import (
-	logutil2 "matrixone/pkg/logutil"
-	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	"matrixone/pkg/logutil"
+	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
 type flushMemtableEvent struct {
 	BaseEvent
+	// Block metadata
 	Meta       *md.Block
+	// Collection that contains the flushed memtable
 	Collection imem.ICollection
 }
 
@@ -48,7 +50,7 @@ func (e *flushMemtableEvent) Execute() error {
 	e.Meta = mem.GetMeta()
 	err := mem.Flush()
 	if err != nil {
-		logutil2.Errorf("Flush memtable %d failed %s", e.Meta.ID, err)
+		logutil.Errorf("Flush memtable %d failed %s", e.Meta.ID, err)
 		return err
 	}
 	return err

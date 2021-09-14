@@ -23,6 +23,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 )
 
+// SegmentSparseFilter provides segment-level & sparse interfaces with bitmap
+// support. (e.g. Eq(string, interface{}) ([]string, error)
+// where inputs are column name and value, returns a string array telling
+// which blocks *might* have the same value.)
 type SegmentSparseFilter struct {
 	segment *Segment
 }

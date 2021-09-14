@@ -29,14 +29,20 @@ const (
 	Scope_Data
 )
 
+// Scope is the scope of influenced space.
 type Scope struct {
 	mask *roaring.Bitmap
 }
 
+// Context is the general context of event.
 type Context struct {
+	// Options of DB
 	Opts     *e.Options
+	// Callback on event done
 	DoneCB   ops.OpDoneCB
+	// If the event is waitable
 	Waitable bool
+	// Influence scope
 	Scope    *Scope
 }
 

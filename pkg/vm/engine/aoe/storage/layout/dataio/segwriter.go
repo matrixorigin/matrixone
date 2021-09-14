@@ -17,7 +17,6 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/pierrec/lz4"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
@@ -28,22 +27,24 @@ import (
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
+
+	"github.com/pierrec/lz4"
 	// log "github.com/sirupsen/logrus"
 )
 
 const (
-	headerSize = 32
+	headerSize   = 32
 	reservedSize = 64
-	algoSize = 1
-	blkCntSize = 4
-	colCntSize = 4
+	algoSize     = 1
+	blkCntSize   = 4
+	colCntSize   = 4
 	startPosSize = 8
-	endPosSize = 8
-	blkIdSize = 8
+	endPosSize   = 8
+	blkIdSize    = 8
 	blkCountSize = 8
-	blkIdxSize = 32
-	colSizeSize = 8
-	colPosSize = 8
+	blkIdxSize   = 32
+	colSizeSize  = 8
+	colPosSize   = 8
 )
 
 const Version uint64 = 1
@@ -847,15 +848,15 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	}
 
 	metaSize := headerSize +
-				reservedSize +
-				algoSize +
-				blkCntSize +
-				colCntSize +
-				startPosSize +
-				endPosSize +
-				len(data) * (blkCountSize+blkIdSize+2*blkIdxSize) +
-				len(data) * colCnt * (colSizeSize*2) +
-				colCnt * colPosSize
+		reservedSize +
+		algoSize +
+		blkCntSize +
+		colCntSize +
+		startPosSize +
+		endPosSize +
+		len(data)*(blkCountSize+blkIdSize+2*blkIdxSize) +
+		len(data)*colCnt*(colSizeSize*2) +
+		colCnt*colPosSize
 
 	startPos := int64(metaSize)
 	curPos := startPos
@@ -885,7 +886,6 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 		return err
 
 	}
-
 
 	return nil
 }

@@ -27,11 +27,12 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
@@ -46,16 +47,25 @@ var (
 )
 
 type DB struct {
+	// Working directory of DB
 	Dir  string
+	// Basic options of DB
 	Opts *e.Options
-
+	// FsMgr manages all file related usages including virtual file.
 	FsMgr       base.IManager
+	// MemTableMgr manages memtables.
 	MemTableMgr mtif.IManager
+	// IndexBufMgr manages all segment/block indices in memory.
+	IndexBufMgr    bmgrif.IBufferManager
 
-	IndexBufMgr bmgrif.IBufferManager
-	MTBufMgr    bmgrif.IBufferManager
-	SSTBufMgr   bmgrif.IBufferManager
+	// Those two managers not used currently.
+	MTBufMgr       bmgrif.IBufferManager
+	SSTBufMgr      bmgrif.IBufferManager
 
+	// MutationBufMgr is a replacement for MTBufMgr
+	MutationBufMgr bb.INodeManager
+
+	// Internal data storage of DB.
 	Store struct {
 		Mu         *sync.RWMutex
 		MetaInfo   *md.MetaInfo
@@ -69,10 +79,45 @@ type DB struct {
 	DataDir  *os.File
 	DBLocker io.Closer
 
+	// Scheduler schedules all the events happening like flush segment, drop table, etc.
 	Scheduler sched.Scheduler
 
 	Closed  *atomic.Value
 	ClosedC chan struct{}
+}
+
+func (d *DB) Flush(name string) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	tbl, err := d.Store.MetaInfo.ReferenceTableByName(name)
+	if err != nil {
+		return err
+	}
+	collection := d.MemTableMgr.StrongRefCollection(tbl.GetID())
+	if collection == nil {
+		eCtx := &memdata.Context{
+			Opts:        d.Opts,
+			MTMgr:       d.MemTableMgr,
+			TableMeta:   tbl,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.Store.DataTables,
+			Waitable:    true,
+		}
+		e := memdata.NewCreateTableEvent(eCtx)
+		if err = d.Scheduler.Schedule(e); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		if err = e.WaitDone(); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection = e.Collection
+	}
+	defer collection.Unref()
+	return collection.Flush()
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {

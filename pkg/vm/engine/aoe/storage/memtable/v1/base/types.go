@@ -15,10 +15,32 @@
 package base
 
 import (
+	"io"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"sync"
 )
+
+type INodeHandle interface {
+	sync.Locker
+	io.Closer
+	common.IRef
+	RLock()
+	RUnlock()
+	GetID() common.ID
+	Unload()
+	Unloadable() bool
+	IsLoaded() bool
+	Load()
+	Destroy()
+	Size() uint64
+	Iteration() uint64
+	IncIteration() uint64
+	IsClosed() bool
+	GetState() iface.NodeState
+}
 
 type IMemTable interface {
 	common.IRef
@@ -34,6 +56,7 @@ type IMemTable interface {
 type ICollection interface {
 	common.IRef
 	Append(bat *batch.Batch, index *md.LogIndex) (err error)
+	Flush() error
 	FetchImmuTable() IMemTable
 	String() string
 }

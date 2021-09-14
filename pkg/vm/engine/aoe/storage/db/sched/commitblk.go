@@ -24,7 +24,9 @@ import (
 
 type commitBlkEvent struct {
 	BaseEvent
+	// Metadata of updated block
 	NewMeta   *md.Block
+	// Metadata of current block
 	LocalMeta *md.Block
 }
 
@@ -38,9 +40,9 @@ func NewCommitBlkEvent(ctx *Context, localMeta *md.Block) *commitBlkEvent {
 }
 
 func (e *commitBlkEvent) updateBlock(blk *md.Block) error {
-	if blk.BoundSate != md.Detatched {
+	if blk.BoundSate != md.Detached {
 		logutil2.Error("")
-		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d, but %d", blk.ID, md.Detatched, blk.BoundSate))
+		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d, but %d", blk.ID, md.Detached, blk.BoundSate))
 	}
 
 	table, err := e.Ctx.Opts.Meta.Info.ReferenceTable(blk.Segment.Table.ID)

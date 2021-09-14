@@ -16,7 +16,7 @@ package node
 
 import (
 	"fmt"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"os"
@@ -44,7 +44,7 @@ func (sw *NodeWriter) Flush() (err error) {
 	node := sw.Handle.GetBuffer().GetDataNode()
 	filename := string(sw.Filename)
 	dir := filepath.Dir(filename)
-	logutil2.Infof(" %s | SpillNode | Flushing", sw.Filename)
+	logutil.Infof(" %s | SpillNode | Flushing", sw.Filename)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
 	}
