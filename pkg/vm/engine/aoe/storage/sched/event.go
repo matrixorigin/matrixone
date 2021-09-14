@@ -38,8 +38,11 @@ const (
 	MemdataUpdateEvent
 	MergeSortEvent
 
+	PrepareCommitBlockTask
 	PrecommitBlkMetaTask
 	FlushMemtableTask
+	FlushBlkTask
+	FlushTBlkTask
 	MetaCreateTableTask
 	MetaDropTableTask
 	MetaCreateBlkTask

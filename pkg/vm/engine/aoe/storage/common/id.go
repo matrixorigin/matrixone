@@ -23,15 +23,28 @@ import (
 )
 
 var (
-	ErrParseBlockFileName = errors.New("aoe: parse block file name")
+	ErrParseBlockFileName  = errors.New("aoe: parse block file name")
+	ErrParseTBlockFileName = errors.New("aoe: parse tblock file name")
 )
 
+// ID is the general identifier type shared by different types like
+// table, segment, block, etc.
+//
+// We could wrap info from upper level via ID, for instance, get the table id,
+// segment id, and the block id for one block by ID.AsBlockID, which made
+// the resource management easier.
 type ID struct {
+	// Internal table id
 	TableID   uint64
-	Idx       uint16
+	// Internal segment id
 	SegmentID uint64
+	// Internal block id
 	BlockID   uint64
+	// Internal column part id
 	PartID    uint32
+	// Column index for the column part above
+	Idx       uint16
+	// Iter is used for MVCC
 	Iter      uint8
 }
 
@@ -142,6 +155,10 @@ func (id *ID) ToBlockFileName() string {
 	return fmt.Sprintf("%d_%d_%d", id.TableID, id.SegmentID, id.BlockID)
 }
 
+func (id *ID) ToTBlockFileName(version uint32) string {
+	return fmt.Sprintf("%d_%d_%d_%d", id.TableID, id.SegmentID, id.BlockID, version)
+}
+
 func (id *ID) ToBlockFilePath() string {
 	return fmt.Sprintf("%d/%d/%d/", id.TableID, id.SegmentID, id.BlockID)
 }
@@ -152,6 +169,38 @@ func (id *ID) ToSegmentFileName() string {
 
 func (id *ID) ToSegmentFilePath() string {
 	return fmt.Sprintf("%d/%d/", id.TableID, id.SegmentID)
+}
+
+func ParseTBlockfileName(name string) (ID, error) {
+	var (
+		id  ID
+		err error
+	)
+	strs := strings.Split(name, "_")
+	if len(strs) != 4 {
+		return id, ErrParseTBlockFileName
+	}
+	if tid, err := strconv.ParseUint(strs[0], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.TableID = tid
+	}
+	if sid, err := strconv.ParseUint(strs[1], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.SegmentID = sid
+	}
+	if bid, err := strconv.ParseUint(strs[2], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.BlockID = bid
+	}
+	if vid, err := strconv.ParseUint(strs[3], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.PartID = uint32(vid)
+	}
+	return id, err
 }
 
 func ParseBlockFileName(name string) (ID, error) {

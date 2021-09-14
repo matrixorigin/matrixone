@@ -18,10 +18,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync/atomic"
-	// "matrixone/pkg/logutil"
 )
+
+func EstimateColumnBlockSize(colIdx int, meta *Block) uint64 {
+	switch meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
+	case types.T_json, types.T_char, types.T_varchar:
+		return meta.Segment.Table.Conf.BlockMaxRows * 2 * 4
+	default:
+		return meta.Segment.Table.Conf.BlockMaxRows * uint64(meta.Segment.Table.Schema.ColDefs[colIdx].Type.Size)
+	}
+}
+
+func EstimateBlockSize(meta *Block) uint64 {
+	size := uint64(0)
+	for colIdx, _ := range meta.Segment.Table.Schema.ColDefs {
+		size += EstimateColumnBlockSize(colIdx, meta)
+	}
+	return size
+}
 
 func NewBlock(id uint64, segment *Segment) *Block {
 	blk := &Block{
@@ -33,6 +50,7 @@ func NewBlock(id uint64, segment *Segment) *Block {
 	return blk
 }
 
+// GetReplayIndex returns the clone of replay index for this block if exists.
 func (blk *Block) GetReplayIndex() *LogIndex {
 	if blk.Index == nil {
 		return nil
@@ -46,6 +64,8 @@ func (blk *Block) GetReplayIndex() *LogIndex {
 	return ctx
 }
 
+// GetAppliedIndex returns ID of the applied index (previous index or the current
+// index if it's applied) and true if exists, otherwise returns 0 and false.
 func (blk *Block) GetAppliedIndex() (uint64, bool) {
 	blk.RLock()
 	defer blk.RUnlock()
@@ -64,6 +84,16 @@ func (blk *Block) GetID() uint64 {
 	return blk.ID
 }
 
+func (blk *Block) TryUpgrade() bool {
+	blk.Lock()
+	defer blk.Unlock()
+	if blk.Count == blk.MaxRowCount {
+		blk.DataState = FULL
+		return true
+	}
+	return false
+}
+
 func (blk *Block) GetSegmentID() uint64 {
 	return blk.Segment.ID
 }
@@ -80,6 +110,8 @@ func (blk *Block) AddCount(n uint64) uint64 {
 	return newCnt
 }
 
+// SetIndex changes the current index to previous index if exists, and
+// sets the current index to idx.
 func (blk *Block) SetIndex(idx LogIndex) {
 	blk.Lock()
 	defer blk.Unlock()
@@ -98,7 +130,7 @@ func (blk *Block) SetIndex(idx LogIndex) {
 }
 
 func (blk *Block) String() string {
-	s := fmt.Sprintf("Blk(%d-%d-%d)(%d)", blk.Segment.Table.ID, blk.Segment.ID, blk.ID, blk.DataState)
+	s := fmt.Sprintf("Blk(%d-%d-%d)(DataState=%d)", blk.Segment.Table.ID, blk.Segment.ID, blk.ID, blk.DataState)
 	if blk.IsDeleted(NowMicro()) {
 		s += "[D]"
 	}
@@ -111,7 +143,8 @@ func (blk *Block) String() string {
 func (blk *Block) IsFull() bool {
 	return blk.Count == blk.MaxRowCount
 }
-
+// SetCount sets blk row count to count, changing its
+// DataState if needed.
 func (blk *Block) SetCount(count uint64) error {
 	blk.Lock()
 	defer blk.Unlock()
@@ -132,6 +165,7 @@ func (blk *Block) SetCount(count uint64) error {
 	return nil
 }
 
+// Update upgrades the current blk to target block if possible.
 func (blk *Block) Update(target *Block) error {
 	blk.Lock()
 	defer blk.Unlock()
@@ -156,6 +190,7 @@ func (blk *Block) Update(target *Block) error {
 	return nil
 }
 
+// AsCommonID generates the unique commonID for the block.
 func (blk *Block) AsCommonID() *common.ID {
 	return &common.ID{
 		TableID:   blk.Segment.Table.ID,
@@ -171,24 +206,24 @@ func (blk *Block) Marshal() ([]byte, error) {
 func (blk *Block) Copy() *Block {
 	blk.RLock()
 	defer blk.RUnlock()
-	var new_blk *Block
-	new_blk = blk.copyNoLock(new_blk)
-	return new_blk
+	var newBlk *Block
+	newBlk = blk.copyNoLock(newBlk)
+	return newBlk
 }
 
-func (blk *Block) copyNoLock(new_blk *Block) *Block {
-	if new_blk == nil {
-		new_blk = NewBlock(blk.ID, blk.Segment)
+func (blk *Block) copyNoLock(newBlk *Block) *Block {
+	if newBlk == nil {
+		newBlk = NewBlock(blk.ID, blk.Segment)
 	}
-	new_blk.Segment = blk.Segment
-	new_blk.ID = blk.ID
-	new_blk.TimeStamp = blk.TimeStamp
-	new_blk.MaxRowCount = blk.MaxRowCount
-	new_blk.BoundSate = blk.BoundSate
-	new_blk.Count = blk.Count
-	new_blk.Index = blk.Index
-	new_blk.PrevIndex = blk.PrevIndex
-	new_blk.DataState = blk.DataState
+	newBlk.Segment = blk.Segment
+	newBlk.ID = blk.ID
+	newBlk.TimeStamp = blk.TimeStamp
+	newBlk.MaxRowCount = blk.MaxRowCount
+	newBlk.BoundSate = blk.BoundSate
+	newBlk.Count = blk.Count
+	newBlk.Index = blk.Index
+	newBlk.PrevIndex = blk.PrevIndex
+	newBlk.DataState = blk.DataState
 
-	return new_blk
+	return newBlk
 }

@@ -16,11 +16,13 @@ package common
 
 import "sync"
 
-// SinglyLinkedList
+
 type ISLLNode interface {
 	IRef
 }
 
+// SLLNode represent a single node in linked list.
+// It is thread-safe.
 type SLLNode struct {
 	RefHelper
 	*sync.RWMutex

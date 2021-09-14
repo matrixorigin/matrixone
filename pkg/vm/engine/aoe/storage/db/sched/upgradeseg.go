@@ -21,8 +21,11 @@ import (
 
 type upgradeSegEvent struct {
 	BaseEvent
+	// Table data of the upgraded segment
 	TableData  iface.ITableData
+	// Data of the upgraded segment
 	Segment    iface.ISegment
+	// Data of the old segment
 	OldSegment iface.ISegment
 }
 

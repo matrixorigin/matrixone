@@ -27,18 +27,18 @@ type MetaEvent interface {
 type metaEvent struct {
 	sched.BaseEvent
 	scope    common.ID
-	scopeall bool
+	scopeAll bool
 }
 
-func NewMetaEvent(scope common.ID, scopeall bool, t sched.EventType, waitable bool) *metaEvent {
+func NewMetaEvent(scope common.ID, scopeAll bool, t sched.EventType, waitable bool) *metaEvent {
 	e := &metaEvent{
 		scope:    scope,
-		scopeall: scopeall,
+		scopeAll: scopeAll,
 	}
 	e.BaseEvent = *sched.NewBaseEvent(e, t, nil, waitable)
 	return e
 }
 
 func (e *metaEvent) GetScope() (common.ID, bool) {
-	return e.scope, e.scopeall
+	return e.scope, e.scopeAll
 }

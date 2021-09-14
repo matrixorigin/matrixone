@@ -22,6 +22,7 @@ import (
 
 type flushTableEvent struct {
 	BaseEvent
+	// Metadata of the table to be flushed
 	Table *md.Table
 }
 

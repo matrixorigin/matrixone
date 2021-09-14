@@ -55,13 +55,13 @@ func (a *uintSum) Fill(sels []int64, vec *vector.Vector) error {
 		a.cnt += int64(n - vec.Nsp.FilterCount(sels))
 	} else {
 		switch vec.Typ.Oid {
-		case types.T_int8:
+		case types.T_uint8:
 			a.sum += sum.Uint8Sum(vec.Col.([]uint8))
-		case types.T_int16:
+		case types.T_uint16:
 			a.sum += sum.Uint16Sum(vec.Col.([]uint16))
-		case types.T_int32:
+		case types.T_uint32:
 			a.sum += sum.Uint32Sum(vec.Col.([]uint32))
-		case types.T_int64:
+		case types.T_uint64:
 			a.sum += sum.Uint64Sum(vec.Col.([]uint64))
 		}
 		a.cnt += int64(vec.Length() - vec.Nsp.Length())

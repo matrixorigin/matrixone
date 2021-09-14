@@ -17,7 +17,7 @@ package db
 import (
 	"fmt"
 	"io/ioutil"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
@@ -30,6 +30,105 @@ import (
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
+
+// -------------------------------------------
+// **************** Meta Files ***************
+// -------------------------------------------
+// 4.ckp
+// |  |
+// |   --------> Global meta file suffix
+//  -----------> Version
+
+// 3_v2.tckp
+// |  |  |
+// |  |   -----> Table meta file suffix
+// |   --------> Version
+//  -----------> Table ID
+
+// -------------------------------------------
+// **************** Data Files ***************
+// -------------------------------------------
+// 2_4_3_0.tblk
+// | | | |  |
+// | | | |   --> Transient block file suffix
+// | | |   ----> Version
+// | |  -------> Block ID
+// |   --------> Segment ID
+//  -----------> Table ID
+
+// 2_4_3.blk
+// | | |  |
+// | | |   ----> Block file suffix
+// | |  -------> Block ID
+// |   --------> Segment ID
+//  -----------> Table ID
+
+// 2_4.seg
+// | |  |
+// | |   ------> Segment file suffix
+// |   --------> Segment ID
+//  -----------> Table ID
+
+// -------------------------------------------
+// ****** Possiable replay files layout ******
+// -------------------------------------------
+// {$db}/
+//   |-meta/
+//   |-data/
+// db just created
+
+// {$db}/
+//   |-meta/
+//   |   |- 1.ckp -----------> (will be gc'ed)
+//   |   |- 2.ckp
+//   |-data/
+// only ddl without dml
+
+// {$db}/
+//   |-meta/
+//   |   |- 2.ckp
+//   |   |- 1_v8.tckp --------> (seg1[blk1,blk2], seg2[blk3,blk4])
+//   |-data/
+//       |- 1_2_4.blk
+//       |- 1_2_3.blk
+//       |- 1_1.seg
+// One table with 2 segments(seg1, seg2). seg1 is a sorted seg while seg2 is an unsorted seg.
+
+// {$db}/
+//   |-meta/
+//   |   |- 1.ckp
+//   |   |- 1_v8.tckp
+//   |-data/
+//       |- 1_2_4.blk
+//       |- 1_1.seg
+// AOE supports parallel writing of block files, the sequence of block file flush is different
+// from the sequence of data. For example, blk3 and blk4 are both in flush queue and blk4 is
+// successfully flushed first. Then the db crashes. When restarting, it should replay from the
+// indx just before blk3, and erase all data files after blk3
+
+// {$db}/
+//   |-meta/
+//   |   |- 1.ckp
+//   |   |- 1_v8.tckp
+//   |-data/
+//       |- 1_2_4.blk
+//       |- 1_2_4_1.tblk
+//       |- 1_2_4_0.tblk
+//       |- 1_2_3_0.tblk
+//       |- 1_1.seg
+
+// {$db}/
+//   |-meta/
+//   |   |- 1.ckp
+//   |   |- 1_v8.tckp
+//   |-data/
+//       |- 1_2_4_1.tblk
+//       |- 1_2_3.tblk
+//       |- 1_1.seg
+
+type IReplayObserver interface {
+	OnRemove(string)
+}
 
 type flushsegCtx struct {
 	id common.ID
@@ -47,64 +146,155 @@ type tableFile struct {
 }
 
 type blockfile struct {
-	id   common.ID
-	name string
+	h         *replayHandle
+	id        common.ID
+	name      string
+	transient bool
+	next      *blockfile
+	commited  bool
+	meta      *md.Block
+}
+
+func (bf *blockfile) version() uint32 {
+	if bf.transient {
+		return bf.id.PartID
+	} else {
+		return ^uint32(0)
+	}
+}
+
+func (bf *blockfile) markCommited() {
+	bf.commited = true
+}
+
+func (bf *blockfile) isCommited() bool {
+	return bf.commited
+}
+
+func (bf *blockfile) isTransient() bool {
+	return bf.transient
 }
 
 func (bf *blockfile) clean() {
-	os.Remove(bf.name)
-	logutil2.Debugf("%s | Removed", bf.name)
+	bf.h.doRemove(bf.name)
 }
 
 type sortedSegmentFile struct {
+	h    *replayHandle
 	name string
 	id   common.ID
 }
 
 type unsortedSegmentFile struct {
-	id    common.ID
-	files []*blockfile
+	h          *replayHandle
+	id         common.ID
+	files      map[common.ID]*blockfile
+	uncommited []*blockfile
+	meta       *md.Segment
 }
 
-func newUnsortedSegmentFile(id common.ID) *unsortedSegmentFile {
+func newUnsortedSegmentFile(id common.ID, h *replayHandle) *unsortedSegmentFile {
 	return &unsortedSegmentFile{
-		id:    id,
-		files: make([]*blockfile, 0),
+		h:          h,
+		id:         id,
+		files:      make(map[common.ID]*blockfile),
+		uncommited: make([]*blockfile, 0),
 	}
 }
 
 func (sf *sortedSegmentFile) clean() {
-	os.Remove(sf.name)
-	logutil2.Debugf("%s | Removed", sf.name)
+	sf.h.doRemove(sf.name)
 }
 
-func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string) {
-	usf.files = append(usf.files, &blockfile{id: bid, name: name})
+func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string, transient bool) {
+	id := bid.AsBlockID()
+	bf := &blockfile{id: bid, name: name, transient: transient, h: usf.h}
+	head := usf.files[id]
+	if head == nil {
+		usf.files[id] = bf
+		return
+	}
+	var prev *blockfile
+	curr := head
+	for curr != nil {
+		if curr.version() < bf.version() {
+			bf.next = curr
+			if prev == nil {
+				usf.files[id] = bf
+			} else {
+				prev.next = bf
+			}
+			return
+		} else if curr.version() > bf.version() {
+			prev = curr
+			curr = curr.next
+		} else {
+			panic("logic error")
+		}
+	}
+	prev.next = bf
 }
 
 func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
-	return len(usf.files) == maxcnt
+	if len(usf.files) != maxcnt {
+		return false
+	}
+	for id, _ := range usf.files {
+		meta, err := usf.meta.ReferenceBlock(id.BlockID)
+		if err != nil {
+			panic(err)
+		}
+		if meta.DataState < md.FULL {
+			return false
+		}
+	}
+	return true
 }
 
 func (usf *unsortedSegmentFile) clean() {
 	for _, f := range usf.files {
-		f.clean()
+		for f != nil {
+			f.clean()
+			f = f.next
+		}
 	}
 }
 
 func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.Segment) {
-	files := make([]*blockfile, 0)
-	for _, file := range usf.files {
+	usf.meta = meta
+	files := make(map[common.ID]*blockfile)
+	for id, file := range usf.files {
 		blk, err := meta.ReferenceBlock(file.id.BlockID)
 		if err != nil {
-			cleaner.addCleanable(file)
+			head := file
+			for head != nil {
+				cleaner.addCleanable(file)
+				head = head.next
+			}
 			continue
 		}
-		if blk.DataState == md.EMPTY {
-			cleaner.addCleanable(file)
-			continue
+		if blk.DataState > md.PARTIAL {
+			file.markCommited()
+		} else {
+			head := file
+			if !head.isTransient() {
+				cleaner.addCleanable(head)
+				head = head.next
+			}
+			if head == nil {
+				continue
+			}
+			head.meta = blk
+			usf.uncommited = append(usf.uncommited, head)
+			file = head
 		}
-		files = append(files, file)
+
+		head := file.next
+		for head != nil {
+			cleaner.addCleanable(head)
+			head = head.next
+		}
+		files[id] = file
 	}
 	usf.files = files
 }
@@ -149,9 +339,10 @@ type replayHandle struct {
 	cleanables    []cleanable
 	files         map[uint64]*tableDataFiles
 	flushsegs     []flushsegCtx
+	observer      IReplayObserver
 }
 
-func NewReplayHandle(workDir string) *replayHandle {
+func NewReplayHandle(workDir string, observer IReplayObserver) *replayHandle {
 	fs := &replayHandle{
 		workDir:    workDir,
 		tables:     make(map[uint64]*tableFile),
@@ -160,6 +351,7 @@ func NewReplayHandle(workDir string) *replayHandle {
 		files:      make(map[uint64]*tableDataFiles),
 		cleanables: make([]cleanable, 0),
 		flushsegs:  make([]flushsegCtx, 0),
+		observer:   observer,
 	}
 	empty := false
 	var err error
@@ -273,7 +465,7 @@ func (h *replayHandle) addInfo(f *infoFile) {
 	}
 }
 
-func (h *replayHandle) addBlock(id common.ID, name string) {
+func (h *replayHandle) addBlock(id common.ID, name string, transient bool) {
 	tbl, ok := h.files[id.TableID]
 	if !ok {
 		tbl = &tableDataFiles{
@@ -285,10 +477,10 @@ func (h *replayHandle) addBlock(id common.ID, name string) {
 	segId := id.AsSegmentID()
 	file, ok := tbl.unsortedfiles[segId]
 	if !ok {
-		tbl.unsortedfiles[segId] = newUnsortedSegmentFile(segId)
+		tbl.unsortedfiles[segId] = newUnsortedSegmentFile(segId, h)
 		file = tbl.unsortedfiles[segId]
 	}
-	file.addBlock(id, name)
+	file.addBlock(id, name, transient)
 }
 
 func (h *replayHandle) addSegment(id common.ID, name string) {
@@ -305,19 +497,29 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 		panic("logic error")
 	}
 	tbl.sortedfiles[id] = &sortedSegmentFile{
+		h:    h,
 		id:   id,
 		name: name,
 	}
 }
 
 func (h *replayHandle) addDataFile(fname string) {
+	if name, ok := e.ParseTBlockfileName(fname); ok {
+		id, err := common.ParseTBlockfileName(name)
+		if err != nil {
+			panic(err)
+		}
+		fullname := path.Join(h.dataDir, fname)
+		h.addBlock(id, fullname, true)
+		return
+	}
 	if name, ok := e.ParseBlockfileName(fname); ok {
 		id, err := common.ParseBlockFileName(name)
 		if err != nil {
 			panic(err)
 		}
 		fullname := path.Join(h.dataDir, fname)
-		h.addBlock(id, fullname)
+		h.addBlock(id, fullname, false)
 		return
 	}
 	if name, ok := e.ParseSegmentfileName(fname); ok {
@@ -377,9 +579,6 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 			segment.TrySorted()
 			continue
 		}
-		file2 := tablesFiles.unsortedfiles[*segment.AsCommonID()]
-		if file2 != nil {
-		}
 	}
 	for id, _ := range tablesFiles.sortedfiles {
 		unsorted, ok := tablesFiles.unsortedfiles[id]
@@ -388,7 +587,9 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 			delete(tablesFiles.unsortedfiles, id)
 		}
 	}
+
 	flushsegs := make([]common.ID, 0)
+	unclosedSegFiles := make([]*unsortedSegmentFile, 0)
 	for id, unsorted := range tablesFiles.unsortedfiles {
 		segMeta, err := meta.ReferenceSegment(id.SegmentID)
 		if err != nil {
@@ -399,13 +600,81 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 			unsorted.tryCleanBlocks(h, segMeta)
 		}
 		if !unsorted.isfull(int(meta.Conf.SegmentMaxBlocks)) {
+			unclosedSegFiles = append(unclosedSegFiles, unsorted)
 			continue
 		}
+
 		flushsegs = append(flushsegs, id)
 	}
 	sort.Slice(flushsegs, func(i, j int) bool { return flushsegs[i].SegmentID < flushsegs[j].SegmentID })
 	for _, id := range flushsegs {
 		h.flushsegs = append(h.flushsegs, flushsegCtx{id: id})
+	}
+	h.processUnclosedSegmentFiles(unclosedSegFiles, meta)
+}
+
+func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
+	if len(file.uncommited) == 0 {
+		return
+	}
+	sort.Slice(file.uncommited, func(i, j int) bool {
+		return file.uncommited[i].id.BlockID < file.uncommited[j].id.BlockID
+	})
+	bf := file.uncommited[0]
+	if !bf.isTransient() {
+		h.addCleanable(bf)
+		return
+	}
+	emeta := bf.meta.Segment.GetActiveBlk()
+	if emeta != bf.meta {
+		h.addCleanable(bf)
+		return
+	}
+	bf.meta.DataState = md.PARTIAL
+	bf.meta.Segment.NextActiveBlk()
+
+	files := file.uncommited[1:]
+	// TODO: uncommited block file can be converted to committed
+	for _, f := range files {
+		f.meta.DataState = md.EMPTY
+		h.addCleanable(f)
+	}
+}
+
+func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile, meta *md.Table) {
+	if len(files) == 0 {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].id.SegmentID < files[j].id.SegmentID
+	})
+	// for _, file := range files {
+	// 	for _, f := range file.uncommited {
+	// 	}
+	// }
+	i := meta.ActiveSegment
+	for {
+		if i >= len(meta.Segments) || len(files) == 0 {
+			break
+		}
+		seg := meta.Segments[i]
+		if seg.HasUncommitted() {
+			file := files[0]
+			if file.meta == seg {
+				h.processUnclosedSegmentFile(file)
+				files = files[1:]
+			}
+			for _, file := range files {
+				h.addCleanable(file)
+			}
+			break
+		} else {
+			file := files[0]
+			if file.meta == seg {
+				files = files[1:]
+			}
+		}
+		i++
 	}
 }
 
@@ -424,7 +693,7 @@ func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
 	ret.Replay()
 	h.correctTable(ret)
 	// log.Info(ret.String())
-	logutil2.Debugf(h.String())
+	logutil.Infof(h.String())
 	return ret
 }
 
@@ -460,9 +729,16 @@ func (h *replayHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.
 	return info
 }
 
+func (h *replayHandle) doRemove(name string) {
+	os.Remove(name)
+	if h.observer != nil {
+		h.observer.OnRemove(name)
+	}
+	logutil.Infof("%s | Removed", name)
+}
+
 func (h *replayHandle) cleanupFile(fname string) {
-	os.Remove(fname)
-	logutil2.Debugf("%s | Removed", fname)
+	h.doRemove(fname)
 }
 
 func (h *replayHandle) Cleanup() {

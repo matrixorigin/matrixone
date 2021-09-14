@@ -24,6 +24,7 @@ const (
 	DiskFile
 )
 
+// FileInfo contains the basic info for a file.
 type FileInfo interface {
 	Name() string
 	Size() int64
@@ -31,6 +32,9 @@ type FileInfo interface {
 	CompressAlgo() int
 }
 
+// IVFile is the general in-memory representation of resources like
+// segment, block, index, column part, etc. that managed by buffer
+// manager.
 type IVFile interface {
 	io.Reader
 	Ref()
@@ -48,6 +52,8 @@ func (i *baseFileInfo) Size() int64       { return i.size }
 func (i *baseFileInfo) OriginSize() int64 { return i.size }
 func (i *baseFileInfo) CompressAlgo() int { return 0 }
 
+// baseMemFile is an abstraction of some pure in-memory resources.
+// It belongs to IVFile family.
 type baseMemFile struct {
 	stat baseFileInfo
 }

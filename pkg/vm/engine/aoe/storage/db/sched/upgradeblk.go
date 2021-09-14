@@ -22,9 +22,13 @@ import (
 
 type upgradeBlkEvent struct {
 	BaseEvent
+	// Table data of the upgraded block
 	TableData     iface.ITableData
+	// Metadata of the upgraded block
 	Meta          *md.Block
+	// Data of the upgraded block
 	Data          iface.IBlock
+	// Is the segment that block belongs to already closed or not
 	SegmentClosed bool
 }
 

@@ -15,8 +15,8 @@
 package event
 
 import (
-	logutil2 "matrixone/pkg/logutil"
-	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	"matrixone/pkg/logutil"
+	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
@@ -32,7 +32,7 @@ type EventListener struct {
 func (l *EventListener) FillDefaults() {
 	if l.BackgroundErrorCB == nil {
 		l.BackgroundErrorCB = func(err error) {
-			logutil2.Errorf("BackgroundError %v", err)
+			logutil.Errorf("BackgroundError %v", err)
 		}
 	}
 

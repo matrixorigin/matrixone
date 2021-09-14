@@ -19,7 +19,7 @@ import (
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"

@@ -19,6 +19,10 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
+// IRef is the general representation of the resources
+// that should be managed with a reference count.
+// Once the reference count reached 0, the OnZeroCB
+// would be called.
 type IRef interface {
 	RefCount() int64
 	Ref()

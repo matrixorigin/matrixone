@@ -19,7 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -33,9 +33,9 @@ var (
 	ErrParseTableCkpFile        = errors.New("parse table file name error")
 )
 
-func MakeTableCkpFile(tid, version uint64) string {
-	return fmt.Sprintf("%d_v%d", tid, version)
-}
+//func MakeTableCkpFile(tid, version uint64) string {
+//	return fmt.Sprintf("%d_v%d", tid, version)
+//}
 
 func ParseTableCkpFile(name string) (tid, version uint64, err error) {
 	strs := strings.Split(name, "_v")
@@ -58,7 +58,7 @@ func NextGloablSeqnum() uint64 {
 type GenericTableWrapper struct {
 	ID uint64
 	TimeStamp
-	LogHistry
+	LogHistory
 }
 
 func NewTable(logIdx uint64, info *MetaInfo, schema *Schema, ids ...uint64) *Table {
@@ -69,15 +69,15 @@ func NewTable(logIdx uint64, info *MetaInfo, schema *Schema, ids ...uint64) *Tab
 		id = ids[0]
 	}
 	tbl := &Table{
-		ID:        id,
-		Segments:  make([]*Segment, 0),
-		IdMap:     make(map[uint64]int),
-		TimeStamp: *NewTimeStamp(),
-		Info:      info,
-		Conf:      info.Conf,
-		Schema:    schema,
-		Stat:      new(Statstics),
-		LogHistry: LogHistry{CreatedIndex: logIdx},
+		ID:         id,
+		Segments:   make([]*Segment, 0),
+		IdMap:      make(map[uint64]int),
+		TimeStamp:  *NewTimeStamp(),
+		Info:       info,
+		Conf:       info.Conf,
+		Schema:     schema,
+		Stat:       new(Statistics),
+		LogHistory: LogHistory{CreatedIndex: logIdx},
 	}
 	return tbl
 }
@@ -102,7 +102,7 @@ func (tbl *Table) GetID() uint64 {
 
 func (tbl *Table) GetRows() uint64 {
 	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
-	return (*Statstics)(ptr).Rows
+	return (*Statistics)(ptr).Rows
 }
 
 func (tbl *Table) Less(item btree.Item) bool {
@@ -129,16 +129,16 @@ func (tbl *Table) ResetReplayIndex() {
 	}
 }
 
-func (tbl *Table) AppendStat(rows, size uint64) *Statstics {
+func (tbl *Table) AppendStat(rows, size uint64) *Statistics {
 	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
-	stat := (*Statstics)(ptr)
-	newStat := new(Statstics)
+	stat := (*Statistics)(ptr)
+	newStat := new(Statistics)
 	newStat.Rows = stat.Rows + rows
 	newStat.Size = stat.Size + size
 	nptr := (*unsafe.Pointer)(unsafe.Pointer(&newStat))
 	for !atomic.CompareAndSwapPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)), ptr, *nptr) {
 		ptr = atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
-		stat = (*Statstics)(ptr)
+		stat = (*Statistics)(ptr)
 		newStat.Rows = stat.Rows + rows
 		newStat.Size = stat.Size + size
 	}
@@ -147,12 +147,12 @@ func (tbl *Table) AppendStat(rows, size uint64) *Statstics {
 
 func (tbl *Table) GetSize() uint64 {
 	ptr := atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&tbl.Stat)))
-	return (*Statstics)(ptr).Size
+	return (*Statistics)(ptr).Size
 }
 
-func (tbl *Table) CloneSegment(segment_id uint64, ctx CopyCtx) (seg *Segment, err error) {
+func (tbl *Table) CloneSegment(segmentId uint64, ctx CopyCtx) (seg *Segment, err error) {
 	tbl.RLock()
-	seg, err = tbl.referenceSegmentNoLock(segment_id)
+	seg, err = tbl.referenceSegmentNoLock(segmentId)
 	if err != nil {
 		tbl.RUnlock()
 		return nil, err
@@ -165,39 +165,39 @@ func (tbl *Table) CloneSegment(segment_id uint64, ctx CopyCtx) (seg *Segment, er
 	return segCpy, err
 }
 
-func (tbl *Table) ReferenceBlock(segment_id, block_id uint64) (blk *Block, err error) {
+func (tbl *Table) ReferenceBlock(segmentId, blockId uint64) (blk *Block, err error) {
 	tbl.RLock()
-	seg, err := tbl.referenceSegmentNoLock(segment_id)
+	seg, err := tbl.referenceSegmentNoLock(segmentId)
 	if err != nil {
 		tbl.RUnlock()
 		return nil, err
 	}
 	tbl.RUnlock()
 
-	blk, err = seg.ReferenceBlock(block_id)
+	blk, err = seg.ReferenceBlock(blockId)
 
 	return blk, err
 }
 
-func (tbl *Table) ReferenceSegment(segment_id uint64) (seg *Segment, err error) {
+func (tbl *Table) ReferenceSegment(segmentId uint64) (seg *Segment, err error) {
 	tbl.RLock()
 	defer tbl.RUnlock()
-	seg, err = tbl.referenceSegmentNoLock(segment_id)
+	seg, err = tbl.referenceSegmentNoLock(segmentId)
 	return seg, err
 }
 
-func (tbl *Table) referenceSegmentNoLock(segment_id uint64) (seg *Segment, err error) {
-	idx, ok := tbl.IdMap[segment_id]
+func (tbl *Table) referenceSegmentNoLock(segmentId uint64) (seg *Segment, err error) {
+	idx, ok := tbl.IdMap[segmentId]
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("specified segment %d not found in table %d", segment_id, tbl.ID))
+		return nil, errors.New(fmt.Sprintf("specified segment %d not found in table %d", segmentId, tbl.ID))
 	}
 	seg = tbl.Segments[idx]
 	return seg, nil
 }
 
-func (tbl *Table) GetSegmentBlockIDs(segment_id uint64, args ...int64) map[uint64]uint64 {
+func (tbl *Table) GetSegmentBlockIDs(segmentId uint64, args ...int64) map[uint64]uint64 {
 	tbl.RLock()
-	seg, err := tbl.referenceSegmentNoLock(segment_id)
+	seg, err := tbl.referenceSegmentNoLock(segmentId)
 	tbl.RUnlock()
 	if err == nil {
 		return make(map[uint64]uint64, 0)
@@ -236,10 +236,6 @@ func (tbl *Table) NextActiveSegment() *Segment {
 	}
 	tbl.ActiveSegment++
 	return tbl.GetActiveSegment()
-	// if tbl.ActiveSegment <= len(tbl.Segments)-1 {
-	// 	seg = tbl.Segments[tbl.ActiveSegment]
-	// }
-	// return seg
 }
 
 func (tbl *Table) GetActiveSegment() *Segment {
@@ -252,24 +248,6 @@ func (tbl *Table) GetActiveSegment() *Segment {
 		return nil
 	}
 	return seg
-	// for i := len(tbl.Segments) - 1; i >= 0; i-- {
-	// 	seg := tbl.Segments[i]
-	// 	if seg.DataState >= CLOSED {
-	// 		break
-	// 	} else if seg.DataState == EMPTY {
-	// 		active = seg
-	// 	} else if seg.DataState == PARTIAL {
-	// 		active = seg
-	// 		break
-	// 	} else if seg.DataState == FULL {
-	// 		activeBlk := seg.GetActiveBlock()
-	// 		if activeBlk != nil {
-	// 			active = seg
-	// 		}
-	// 		break
-	// 	}
-	// }
-	// return active
 }
 
 func (tbl *Table) GetInfullSegment() (seg *Segment, err error) {
@@ -331,9 +309,9 @@ func (tbl *Table) GetMaxSegIDAndBlkID() (uint64, uint64) {
 	segid := uint64(0)
 	for _, seg := range tbl.Segments {
 		sid := seg.GetID()
-		max_blkid := seg.GetMaxBlkID()
-		if max_blkid > blkid {
-			blkid = max_blkid
+		maxBlkId := seg.GetMaxBlkID()
+		if maxBlkId > blkid {
+			blkid = maxBlkId
 		}
 		if sid > segid {
 			segid = sid
@@ -373,35 +351,35 @@ func (tbl *Table) GetTableId() uint64 {
 }
 
 func (tbl *Table) LiteCopy() *Table {
-	new_tbl := &Table{
-		ID:        tbl.ID,
-		TimeStamp: tbl.TimeStamp,
-		LogHistry: tbl.LogHistry,
+	newTbl := &Table{
+		ID:         tbl.ID,
+		TimeStamp:  tbl.TimeStamp,
+		LogHistory: tbl.LogHistory,
 	}
-	return new_tbl
+	return newTbl
 }
 
 func (tbl *Table) Copy(ctx CopyCtx) *Table {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
-	new_tbl := NewTable(tbl.CreatedIndex, tbl.Info, tbl.Schema, tbl.ID)
-	new_tbl.TimeStamp = tbl.TimeStamp
-	new_tbl.CheckPoint = tbl.CheckPoint
-	new_tbl.BoundSate = tbl.BoundSate
-	new_tbl.LogHistry = tbl.LogHistry
-	new_tbl.Conf = tbl.Conf
+	newTbl := NewTable(tbl.CreatedIndex, tbl.Info, tbl.Schema, tbl.ID)
+	newTbl.TimeStamp = tbl.TimeStamp
+	newTbl.CheckPoint = tbl.CheckPoint
+	newTbl.BoundSate = tbl.BoundSate
+	newTbl.LogHistory = tbl.LogHistory
+	newTbl.Conf = tbl.Conf
 	for _, v := range tbl.Segments {
 		if !v.Select(ctx.Ts) {
 			continue
 		}
 		seg, _ := tbl.CloneSegment(v.ID, ctx)
-		new_tbl.IdMap[seg.GetID()] = len(new_tbl.Segments)
-		new_tbl.Segments = append(new_tbl.Segments, seg)
+		newTbl.IdMap[seg.GetID()] = len(newTbl.Segments)
+		newTbl.Segments = append(newTbl.Segments, seg)
 	}
-	new_tbl.SegmentCnt = uint64(len(new_tbl.Segments))
+	newTbl.SegmentCnt = uint64(len(newTbl.Segments))
 
-	return new_tbl
+	return newTbl
 }
 
 func (tbl *Table) Replay() {
@@ -411,15 +389,15 @@ func (tbl *Table) Replay() {
 			tbl.Info.Sequence.NextIndexID = tbl.Schema.Indices[len(tbl.Schema.Indices)-1].ID
 		}
 	}
-	max_tbl_segid, max_tbl_blkid := tbl.GetMaxSegIDAndBlkID()
+	maxTblSegId, maxTblBlkId := tbl.GetMaxSegIDAndBlkID()
 	if tbl.ID > tbl.Info.Sequence.NextTableID {
 		tbl.Info.Sequence.NextTableID = tbl.ID
 	}
-	if max_tbl_segid > tbl.Info.Sequence.NextSegmentID {
-		tbl.Info.Sequence.NextSegmentID = max_tbl_segid
+	if maxTblSegId > tbl.Info.Sequence.NextSegmentID {
+		tbl.Info.Sequence.NextSegmentID = maxTblSegId
 	}
-	if max_tbl_blkid > tbl.Info.Sequence.NextBlockID {
-		tbl.Info.Sequence.NextBlockID = max_tbl_blkid
+	if maxTblBlkId > tbl.Info.Sequence.NextBlockID {
+		tbl.Info.Sequence.NextBlockID = maxTblBlkId
 	}
 	if tbl.IsDeleted(ts) {
 		tbl.Info.Tombstone[tbl.ID] = true
@@ -467,17 +445,21 @@ func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
 		schema = MockSchema(2)
 	}
 	tbl, _ := info.CreateTable(atomic.AddUint64(&GloablSeqNum, uint64(1)), schema)
-	info.RegisterTable(tbl)
+	if err := info.RegisterTable(tbl); err != nil {
+		panic(err)
+	}
 	var activeSeg *Segment
 	for i := uint64(0); i < blkCnt; i++ {
 		if activeSeg == nil {
 			activeSeg, _ = tbl.CreateSegment()
-			tbl.RegisterSegment(activeSeg)
+			if err := tbl.RegisterSegment(activeSeg); err != nil {
+				panic(err)
+			}
 		}
 		blk, _ := activeSeg.CreateBlock()
 		err := activeSeg.RegisterBlock(blk)
 		if err != nil {
-			logutil2.Errorf("seg blks = %d, maxBlks = %d", len(activeSeg.Blocks), activeSeg.MaxBlockCount)
+			logutil.Errorf("seg blks = %d, maxBlks = %d", len(activeSeg.Blocks), activeSeg.MaxBlockCount)
 			panic(err)
 		}
 		if len(activeSeg.Blocks) == int(info.Conf.SegmentMaxBlocks) {

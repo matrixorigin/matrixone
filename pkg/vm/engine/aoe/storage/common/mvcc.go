@@ -20,6 +20,9 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
+// MVCC offers some basic methods related to MVCC.
+// Every type expected to have multiple physical versions
+// should implement this.
 type MVCC interface {
 	GetPrevVersion() interface{}
 	SetPrevVersion(interface{})

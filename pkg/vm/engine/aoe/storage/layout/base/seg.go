@@ -17,7 +17,12 @@ package base
 type SegmentType uint8
 
 const (
+	// UNSORTED_SEG is logical segment file,
+	// only .blk&memtbale files have not been merged,
+	// or only memtbale block.
 	UNSORTED_SEG SegmentType = iota
+
+	// SORTED_SEG is (block count) Already FULL, merge sorted.
 	SORTED_SEG
 )
 

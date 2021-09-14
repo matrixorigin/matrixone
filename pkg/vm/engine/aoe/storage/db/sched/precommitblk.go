@@ -22,6 +22,7 @@ import (
 
 type precommitBlockEvent struct {
 	BaseEvent
+	// CommonID of the committed block meta
 	Id common.ID
 }
 

@@ -49,10 +49,10 @@ func (a *uint8Max) Fill(sels []int64, vec *vector.Vector) error {
 		a.cnt += int64(n - vec.Nsp.FilterCount(sels))
 	} else {
 		v := max.Uint8Max(vec.Col.([]uint8))
-		a.cnt += int64(vec.Length() - vec.Nsp.Length())
 		if a.cnt == 0 || v > a.v {
 			a.v = v
 		}
+		a.cnt += int64(vec.Length() - vec.Nsp.Length())
 	}
 	return nil
 }

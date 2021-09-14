@@ -24,6 +24,7 @@ import (
 
 type flushSegEvent struct {
 	BaseEvent
+	// Segment to be flushed
 	Segment iface.ISegment
 }
 
