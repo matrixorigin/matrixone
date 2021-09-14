@@ -1216,12 +1216,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//wait read and statistics to quit
 	wg.Wait()
 
-	close(handler.simdCsvGetParsedLinesChan)
-	close(handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch)
-	close(handler.simdCsvResultsOfWriteBatchChan)
-	handler.simdCsvLineArray = nil
-	handler.simdCsvReader = nil
-
 	fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
 		handler.row2col,handler.fillBlank,handler.toStorage)
 	fmt.Printf("-----write batch %s reset batch %s\n",
@@ -1260,6 +1254,12 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		)
 
 		fmt.Printf("-----process time %s \n",time.Since(processTime))
+
+	close(handler.simdCsvGetParsedLinesChan)
+	close(handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch)
+	close(handler.simdCsvResultsOfWriteBatchChan)
+	handler.simdCsvLineArray = nil
+	handler.simdCsvReader = nil
 
 	return result, nil
 }
