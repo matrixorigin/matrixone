@@ -287,6 +287,7 @@ func (seg *segment) String() string {
 func (seg *segment) StrongRefLastBlock() iface.IBlock {
 	seg.tree.RLock()
 	if len(seg.tree.blocks) == 0 {
+		seg.tree.RUnlock()
 		return nil
 	}
 	lastBlk := seg.tree.blocks[len(seg.tree.blocks)-1]
