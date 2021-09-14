@@ -1202,12 +1202,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 	fmt.Printf("-----write concurrent count %d \n",handler.simdCsvConcurrencyCountOfWriteBatch)
 
-	mf,err := os.Create("load_mem")
-	defer func() {
-		err = pprof.WriteHeapProfile(mf)
-		mf.Close()
-	}()
-
 	err = initParseLineHandler(handler)
 	if err != nil {
 		return nil, err
