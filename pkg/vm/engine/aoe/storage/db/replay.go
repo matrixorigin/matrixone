@@ -253,7 +253,10 @@ func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
 
 func (usf *unsortedSegmentFile) clean() {
 	for _, f := range usf.files {
-		f.clean()
+		for f != nil {
+			f.clean()
+			f = f.next
+		}
 	}
 }
 
