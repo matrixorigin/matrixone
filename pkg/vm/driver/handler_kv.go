@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb"
@@ -164,7 +163,6 @@ func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.
 		endKey = nil
 	}
 
-	fmt.Printf("Call DScan %v, %v, current shard range is [%v, %v)\n", customReq.Start, customReq.End, shard.Start, shard.End)
 	var data [][]byte
 
 	err := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*pebble.Storage).Scan(startKey, endKey, func(key, value []byte) (bool, error) {
