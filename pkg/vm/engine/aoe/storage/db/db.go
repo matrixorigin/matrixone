@@ -62,7 +62,7 @@ type DB struct {
 	MTBufMgr       bmgrif.IBufferManager
 	SSTBufMgr      bmgrif.IBufferManager
 
-	// MutationBufMgr is used for replay.
+	// MutationBufMgr is a replacement for MTBufMgr
 	MutationBufMgr bb.INodeManager
 
 	// Internal data storage of DB.

@@ -22,8 +22,8 @@ import (
 	// "matrixone/pkg/logutil"
 )
 
-// flushTransientBlockEvent only do a fsync for the transient block in memory,
-// that is to say, no actual block file would be generated.
+// flushTransientBlockEvent flushes transient block node in memory, and
+// generates a physical transient block file (.tblk).
 type flushTransientBlockEvent struct {
 	BaseEvent
 	Node base.INode

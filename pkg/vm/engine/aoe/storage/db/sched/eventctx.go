@@ -38,9 +38,9 @@ type Scope struct {
 type Context struct {
 	// Options of DB
 	Opts     *e.Options
-	// Call back when event done
+	// Callback on event done
 	DoneCB   ops.OpDoneCB
-	// If this event could wait
+	// If the event is waitable
 	Waitable bool
 	// Influence scope
 	Scope    *Scope

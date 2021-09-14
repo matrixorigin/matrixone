@@ -44,7 +44,7 @@ type ID struct {
 	PartID    uint32
 	// Column index for the column part above
 	Idx       uint16
-
+	// Iter is used for MVCC
 	Iter      uint8
 }
 
