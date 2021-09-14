@@ -95,6 +95,15 @@ func TestReplay1(t *testing.T) {
 	defer inst.Close()
 }
 
+func mockSegFile(id common.ID, dir string, t *testing.T) string {
+	name := id.ToSegmentFileName()
+	fname := engine.MakeSegmentFileName(dir, name, id.TableID, false)
+	f, err := os.Create(fname)
+	assert.Nil(t, err)
+	defer f.Close()
+	return fname
+}
+
 func mockBlkFile(id common.ID, dir string, t *testing.T) string {
 	name := id.ToBlockFileName()
 	fname := engine.MakeBlockFileName(dir, name, id.TableID, false)
@@ -510,6 +519,80 @@ func TestReplay8(t *testing.T) {
 	assert.Equal(t, 2, tbl2.Segments[0].ActiveBlk)
 
 	assert.Equal(t, 4, len(observer.removed))
+	sort.Slice(observer.removed, func(i, j int) bool {
+		return observer.removed[i] < observer.removed[j]
+	})
+	assert.Equal(t, toRemove, observer.removed)
+}
+
+func TestReplay9(t *testing.T) {
+	dir := "/tmp/testreplay9"
+	os.RemoveAll(dir)
+	initDataAndMetaDir(dir)
+	opts := buildOpts(dir)
+	info := opts.Meta.Info
+	totalBlks := info.Conf.SegmentMaxBlocks * 2
+
+	schema := metadata.MockSchema(2)
+	tbl := metadata.MockTable(info, schema, totalBlks)
+	blkfiles := make([]string, 0)
+	toRemove := make([]string, 0)
+	seg := tbl.Segments[0]
+	for i := 0; i < len(seg.Blocks)-3; i++ {
+		blk := seg.Blocks[i]
+		blk.DataState = metadata.FULL
+		name := mockBlkFile(*blk.AsCommonID(), dir, t)
+		blkfiles = append(blkfiles, name)
+	}
+	tblk := seg.Blocks[len(seg.Blocks)-4]
+	name := mockTBlkFile(*tblk.AsCommonID(), uint32(0), dir, t)
+	toRemove = append(toRemove, name)
+
+	blk := seg.Blocks[len(seg.Blocks)-3]
+	name = mockBlkFile(*blk.AsCommonID(), dir, t)
+	toRemove = append(toRemove, name)
+	name = mockTBlkFile(*blk.AsCommonID(), uint32(0), dir, t)
+
+	blk = seg.Blocks[len(seg.Blocks)-2]
+	name = mockTBlkFile(*blk.AsCommonID(), uint32(0), dir, t)
+	toRemove = append(toRemove, name)
+	name = mockTBlkFile(*blk.AsCommonID(), uint32(1), dir, t)
+	toRemove = append(toRemove, name)
+
+	blk = seg.Blocks[len(seg.Blocks)-1]
+	name = mockBlkFile(*blk.AsCommonID(), dir, t)
+	toRemove = append(toRemove, name)
+
+	seg = tbl.Segments[1]
+	for i := 0; i < len(seg.Blocks); i++ {
+		blk := seg.Blocks[i]
+		name := mockBlkFile(*blk.AsCommonID(), dir, t)
+		toRemove = append(toRemove, name)
+		name = mockTBlkFile(*blk.AsCommonID(), uint32(0), dir, t)
+		toRemove = append(toRemove, name)
+	}
+
+	sort.Slice(toRemove, func(i, j int) bool {
+		return toRemove[i] < toRemove[j]
+	})
+	t.Log(toRemove)
+
+	flushInfo(opts, info, t)
+	flushTable(opts, tbl, t)
+
+	observer := &replayObserver{
+		removed: make([]string, 0),
+	}
+	replayHandle := NewReplayHandle(dir, observer)
+	assert.NotNil(t, replayHandle)
+	info2 := replayHandle.RebuildInfo(&opts.Mu, opts.Meta.Info.Conf)
+	replayHandle.Cleanup()
+	t.Log(info2.String())
+	tbl2, err := info2.ReferenceTable(tbl.ID)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, tbl2.Segments[0].ActiveBlk)
+
+	assert.Equal(t, len(toRemove), len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
 		return observer.removed[i] < observer.removed[j]
 	})

@@ -87,6 +87,21 @@ func (seg *Segment) BlockIDs(args ...interface{}) map[uint64]uint64 {
 	return ids
 }
 
+func (seg *Segment) HasUncommitted() bool {
+	if seg.DataState >= CLOSED {
+		return false
+	}
+	if seg.DataState < FULL {
+		return true
+	}
+	for _, blk := range seg.Blocks {
+		if blk.DataState != FULL {
+			return true
+		}
+	}
+	return false
+}
+
 func (seg *Segment) GetActiveBlk() *Block {
 	if seg.ActiveBlk >= len(seg.Blocks) {
 		return nil

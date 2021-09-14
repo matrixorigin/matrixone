@@ -258,6 +258,7 @@ func (usf *unsortedSegmentFile) clean() {
 }
 
 func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.Segment) {
+	usf.meta = meta
 	files := make(map[common.ID]*blockfile)
 	for id, file := range usf.files {
 		blk, err := meta.ReferenceBlock(file.id.BlockID)
@@ -282,7 +283,6 @@ func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.S
 			}
 			head.meta = blk
 			usf.uncommited = append(usf.uncommited, head)
-			usf.meta = meta
 			file = head
 		}
 
@@ -607,7 +607,7 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 	for _, id := range flushsegs {
 		h.flushsegs = append(h.flushsegs, flushsegCtx{id: id})
 	}
-	h.processUnclosedSegmentFiles(unclosedSegFiles)
+	h.processUnclosedSegmentFiles(unclosedSegFiles, meta)
 }
 
 func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
@@ -638,17 +638,41 @@ func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
 	}
 }
 
-func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile) {
+func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile, meta *md.Table) {
 	if len(files) == 0 {
 		return
 	}
-	if len(files) == 1 {
-		h.processUnclosedSegmentFile(files[0])
-		return
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].id.SegmentID < files[j].id.SegmentID
+	})
+	// for _, file := range files {
+	// 	for _, f := range file.uncommited {
+	// 	}
+	// }
+	i := meta.ActiveSegment
+	for {
+		if i >= len(meta.Segments) || len(files) == 0 {
+			break
+		}
+		seg := meta.Segments[i]
+		if seg.HasUncommitted() {
+			file := files[0]
+			if file.meta == seg {
+				h.processUnclosedSegmentFile(file)
+				files = files[1:]
+			}
+			for _, file := range files {
+				h.addCleanable(file)
+			}
+			break
+		} else {
+			file := files[0]
+			if file.meta == seg {
+				files = files[1:]
+			}
+		}
+		i++
 	}
-	// sort.Slice(files, func(i, j int) bool {
-	// 	return files[i].id.SegmentID < files[j].id.SegmentID
-	// })
 }
 
 func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
