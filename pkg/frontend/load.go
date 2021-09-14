@@ -1111,6 +1111,7 @@ func doWriteBatch(handler *ParseLineHandler, force bool) error {
 		writeHandler.simdCsvErr = err
 
 		releaseBatch(handler,writeHandler.batchData)
+		writeHandler.batchData = nil
 
 		//release semaphore
 		<- handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch
@@ -1335,6 +1336,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	close(handler.simdCsvGetParsedLinesChan)
 	close(handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch)
 	close(handler.simdCsvResultsOfWriteBatchChan)
+	close(handler.simdCsvBatchPool)
 	handler.simdCsvLineArray = nil
 	handler.simdCsvReader = nil
 
