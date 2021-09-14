@@ -159,6 +159,7 @@ type Segment interface {
 	NewSparseFilter() SparseFilter
 }
 
+// A Block represents an implementation of block reader.
 type Block interface {
 	Statistics
 
@@ -167,12 +168,22 @@ type Block interface {
 	Read([]uint64, []string, []*bytes.Buffer, []*bytes.Buffer) (*batch.Batch, error) // read only arguments
 }
 
+// Database consists of functions that reference the session database
 type Database interface {
-	Type() int // engine type of database
+	// Type returns the engine type of database.
+	// For now, we only supported aoe engine.
+	Type() int
 
+	// Relations returns a string array containing all relations
+	// in the given database.
 	Relations() []string
+
+	// Relation looks up the relation with the given name
+	// returns a relation with properties if it exists,
+	// or returns error.
 	Relation(string) (Relation, error)
 
+	// Delete
 	Delete(uint64, string) error
 	Create(uint64, string, []TableDef, *PartitionBy, *DistributionBy, string) error // Create Table - (name, table define, partition define, distribution define, comment)
 }

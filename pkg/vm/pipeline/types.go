@@ -26,9 +26,66 @@ const (
 	UncompressedBlockSize = 4096
 )
 
+// Pipeline contains the information associated with a pipeline in a query execution plan.
+// A query execution may contains one or more pipelines.
+// As an example:
+//
+//  CREATE TABLE order
+//  (
+//        order_id    INT,
+//        uid          INT,
+//        item_id      INT,
+//        year         INT,
+//        nation       VARCHAR(100)
+//  );
+//
+//  CREATE TABLE customer
+//  (
+//        uid          INT,
+//        nation       VARCHAR(100),
+//        city         VARCHAR(100)
+//  );
+//
+//  CREATE TABLE supplier
+//  (
+//        item_id      INT,
+//        nation       VARCHAR(100),
+//        city         VARCHAR(100)
+//  );
+//
+// 	SELECT c.city, s.city, sum(o.revenue) AS revenue
+//  FROM customer c, order o, supplier s
+//  WHERE o.uid = c.uid
+//  AND o.item_id = s.item_id
+//  AND c.nation = 'CHINA'
+//  AND s.nation = 'CHINA'
+//  AND o.year >= 1992 and o.year <= 1997
+//  GROUP BY c.city, s.city, o.year
+//  ORDER BY o.year asc, revenue desc;
+//
+//  AST PLAN:
+//     order
+//       |
+//     group
+//       |
+//     filter
+//       |
+//     join
+//     /  \
+//    s   join
+//        /  \
+//       l   c
+//
+// In this example, a possible pipeline is as follows:
+//
+// pipeline 0: filter pushdown
+//    σ(l, year >= 1992 ∧  year <= 1997) ⨝ σ(c, nation = 'CHINA') ⨝ σ(s, nation = 'CHINA')
+//        -> γ([c.city, s.city, l.year, sum(l.revenue) as revenue], c.city, s.city, l.year)
+//        -> τ(l.year asc, revenue desc)
+//        -> π(c.city, s.city, revenue)
 type Pipeline struct {
-	// cs, reference count for attribute.
-	cs []uint64
+	// refCount, reference count for attribute.
+	refCount []uint64
 	// attrs, column list.
 	attrs []string
 	// compressedBytes, buffers for compressed data.
@@ -43,6 +100,7 @@ type block struct {
 	blk engine.Block
 }
 
+//queue contains prefetched blocks and the information of current prefetch index.
 type queue struct {
 	prefetchIndex int
 	// size, is not used now

@@ -24,7 +24,7 @@ import (
 
 func New(cs []uint64, attrs []string, ins vm.Instructions) *Pipeline {
 	return &Pipeline{
-		cs:           cs,
+		refCount:     cs,
 		instructions: ins,
 		attrs:        attrs,
 	}
@@ -64,16 +64,16 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 		return false, err
 	}
 	q := p.prefetch(segs, proc)
-	p.compressedBytes, p.decompressedBytes = make([]*bytes.Buffer, 0, len(p.cs)), make([]*bytes.Buffer, 0, len(p.cs))
+	p.compressedBytes, p.decompressedBytes = make([]*bytes.Buffer, 0, len(p.refCount)), make([]*bytes.Buffer, 0, len(p.refCount))
 	{
-		for _ = range p.cs {
+		for _ = range p.refCount {
 			data, err := proc.Alloc(CompressedBlockSize)
 			if err != nil {
 				return false, err
 			}
 			p.compressedBytes = append(p.compressedBytes, bytes.NewBuffer(data))
 		}
-		for _ = range p.cs {
+		for _ = range p.refCount {
 			data, err := proc.Alloc(CompressedBlockSize)
 			if err != nil {
 				return false, err
@@ -85,7 +85,7 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 		if err := q.prefetch(p.attrs); err != nil {
 			return false, err
 		}
-		bat, err := q.blocks[i].blk.Read(p.cs, p.attrs, p.compressedBytes, p.decompressedBytes)
+		bat, err := q.blocks[i].blk.Read(p.refCount, p.attrs, p.compressedBytes, p.decompressedBytes)
 		if err != nil {
 			return false, err
 		}
