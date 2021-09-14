@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package db
 
 import (
@@ -13,11 +27,12 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/base"
+	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
@@ -38,9 +53,10 @@ type DB struct {
 	FsMgr       base.IManager
 	MemTableMgr mtif.IManager
 
-	IndexBufMgr bmgrif.IBufferManager
-	MTBufMgr    bmgrif.IBufferManager
-	SSTBufMgr   bmgrif.IBufferManager
+	IndexBufMgr    bmgrif.IBufferManager
+	MTBufMgr       bmgrif.IBufferManager
+	SSTBufMgr      bmgrif.IBufferManager
+	MutationBufMgr bb.INodeManager
 
 	Store struct {
 		Mu         *sync.RWMutex
@@ -59,6 +75,40 @@ type DB struct {
 
 	Closed  *atomic.Value
 	ClosedC chan struct{}
+}
+
+func (d *DB) Flush(name string) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	tbl, err := d.Store.MetaInfo.ReferenceTableByName(name)
+	if err != nil {
+		return err
+	}
+	collection := d.MemTableMgr.StrongRefCollection(tbl.GetID())
+	if collection == nil {
+		eCtx := &memdata.Context{
+			Opts:        d.Opts,
+			MTMgr:       d.MemTableMgr,
+			TableMeta:   tbl,
+			IndexBufMgr: d.IndexBufMgr,
+			MTBufMgr:    d.MTBufMgr,
+			SSTBufMgr:   d.SSTBufMgr,
+			FsMgr:       d.FsMgr,
+			Tables:      d.Store.DataTables,
+			Waitable:    true,
+		}
+		e := memdata.NewCreateTableEvent(eCtx)
+		if err = d.Scheduler.Schedule(e); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		if err = e.WaitDone(); err != nil {
+			panic(fmt.Sprintf("logic error: %s", err))
+		}
+		collection = e.Collection
+	}
+	defer collection.Unref()
+	return collection.Flush()
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {

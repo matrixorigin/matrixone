@@ -1,5 +1,6 @@
 [![LICENSE](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/Language-Go-blue.svg)](https://golang.org/)
+[![CodeFactor](https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0)](https://www.codefactor.io/repository/github/matrixorigin/matrixone)
 
 ## What is MatrixOne?
 MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. With minimal operation and management, MatrixOne can provide end-to-end data processing automation to help users store, manipulate and analyze data cross devices, zones, regions and clouds.
@@ -53,8 +54,8 @@ MatrixOne stores data in shared storage of S3 / HDFS, or even in the local disk,
 **Get the MatrixOne code:**
 
 ```
-git clone https://github.com/matrixorigin/matrixone.git
-cd matrixone
+$ git clone https://github.com/matrixorigin/matrixone.git
+$ cd matrixone
 ```
 
 **Run make:**
@@ -62,8 +63,8 @@ cd matrixone
 Run `make debug`, `make clean`, or anything else our Makefile offers. You can just run the following command to build quickly.
 
 ```
-make config
-make build
+$ make config
+$ make build
 ```
 
 ### Starting
@@ -77,24 +78,24 @@ make build
 **Boot MatrixOne server:**
 
 ```
-./mo-server system_vars_config.toml
+$ ./mo-server system_vars_config.toml
 ```
 
 **Connect MatrixOne server:**
 
 ```
-mysql -h IP -P PORT -uUsername -p
+$ mysql -h IP -P PORT -uUsername -p
 ```
 
 **For example:**
 
-Test Account:
+Test account:
 
 - user: dump
 - password: 111
 
 ```
-mysql -h 127.0.0.1 -P 6001 -udump -p
+$ mysql -h 127.0.0.1 -P 6001 -udump -p
 ```
 
 ## Contributing
@@ -103,5 +104,8 @@ See [Contributing Guide](CONTRIBUTING.md) for details on contribution workflows.
 ## Roadmap
 Check out [Roadmap](https://github.com/matrixorigin/matrixone/issues/613) for MatrixOne development plan.
 
+## Community
+You can join [MatrixOne community](https://join.slack.com/t/matrixoneworkspace/shared_invite/zt-voce6d82-C8vdyHNcv11l430D0QKZlw) on Slack to discuss and ask questions.
+
 ## License
-MatrixOne is licensed under the [Apache License, Version 2.0](LICENSE)
+MatrixOne is licensed under the [Apache License, Version 2.0](LICENSE).

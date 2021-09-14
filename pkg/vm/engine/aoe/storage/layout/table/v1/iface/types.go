@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package iface
 
 import (
@@ -11,13 +25,17 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
+	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
 type ITableData interface {
 	common.IRef
 	GetID() uint64
 	GetName() string
+	GetBlockFactory() IBlockFactory
 	GetMTBufMgr() bmgrif.IBufferManager
 	GetSSTBufMgr() bmgrif.IBufferManager
 	GetFsManager() base.IManager
@@ -41,6 +59,7 @@ type ITableData interface {
 	AddRows(uint64) uint64
 	GetMeta() *md.Table
 	Size(string) uint64
+	StrongRefLastBlock() IBlock
 }
 
 type ISegment interface {
@@ -66,6 +85,7 @@ type ISegment interface {
 	CloneWithUpgrade(ITableData, *md.Segment) (ISegment, error)
 	UpgradeBlock(*md.Block) (IBlock, error)
 	BlockIds() []uint64
+	StrongRefLastBlock() IBlock
 }
 
 type IBlock interface {
@@ -91,6 +111,16 @@ type IBlock interface {
 	GetNext() IBlock
 	SetNext(next IBlock)
 	Size(string) uint64
+}
+
+type IBlockFactory interface {
+	CreateBlock(ISegment, *metadata.Block) (IBlock, error)
+}
+
+type IMutBlock interface {
+	IBlock
+	WithPinedContext(func(mb.IMutableBlock) error) error
+	MakeHandle() bb.INodeHandle
 }
 
 type IColBlockHandle interface {

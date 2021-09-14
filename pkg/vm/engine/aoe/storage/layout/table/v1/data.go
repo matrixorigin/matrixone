@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package table
 
 import (
@@ -6,6 +20,7 @@ import (
 	"matrixone/pkg/container/types"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
@@ -23,6 +38,9 @@ func newTableData(host *Tables, meta *md.Table) *tableData {
 		meta:        meta,
 		host:        host,
 		indexHolder: index.NewTableHolder(host.IndexBufMgr, meta.ID),
+	}
+	if host.MutFactory != nil && host.MutFactory.GetType() == fb.MUTABLE {
+		data.blkFactory = newAltBlockFactory(host.MutFactory, data)
 	}
 	data.tree.segments = make([]iface.ISegment, 0)
 	data.tree.helper = make(map[uint64]int)
@@ -45,6 +63,18 @@ type tableData struct {
 	host        *Tables
 	meta        *md.Table
 	indexHolder *index.TableHolder
+	blkFactory  iface.IBlockFactory
+}
+
+func (td *tableData) StrongRefLastBlock() iface.IBlock {
+	td.tree.RLock()
+	if len(td.tree.segments) == 0 {
+		td.tree.RUnlock()
+		return nil
+	}
+	lastSeg := td.tree.segments[len(td.tree.segments)-1]
+	td.tree.RUnlock()
+	return lastSeg.StrongRefLastBlock()
 }
 
 func (td *tableData) close() {
@@ -106,6 +136,10 @@ func (td *tableData) GetColTypeSize(idx int) uint64 {
 
 func (td *tableData) GetMTBufMgr() bmgrif.IBufferManager {
 	return td.host.MTBufMgr
+}
+
+func (td *tableData) GetBlockFactory() iface.IBlockFactory {
+	return td.blkFactory
 }
 
 func (td *tableData) GetSSTBufMgr() bmgrif.IBufferManager {
@@ -366,9 +400,10 @@ type Tables struct {
 	ids       map[uint64]bool
 	Tombstone map[uint64]iface.ITableData
 
-	FsMgr base.IManager
-
+	FsMgr                            base.IManager
 	MTBufMgr, SSTBufMgr, IndexBufMgr bmgrif.IBufferManager
+
+	MutFactory fb.MutFactory
 }
 
 func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager) *Tables {

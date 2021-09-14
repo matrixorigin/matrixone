@@ -1,8 +1,21 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package vector
 
 import (
 	"bytes"
-	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/container/types"
 	v "matrixone/pkg/container/vector"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
@@ -10,6 +23,8 @@ import (
 	"os"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestStdVector(t *testing.T) {
@@ -109,7 +124,7 @@ func TestStrVector(t *testing.T) {
 	for _, str := range strs {
 		s += len(str)
 	}
-	assert.Equal(t, uint64(len(strs)*2*4+s), vec.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, uint64(len(strs)*2*4+s), vec.GetMemorySize())
 	prevLen := len(strs)
 	strs = [][]byte{[]byte(str2), []byte(str3)}
 	err = vec.Append(len(strs), strs)
@@ -120,21 +135,20 @@ func TestStrVector(t *testing.T) {
 	for _, str := range strs {
 		s += len(str)
 	}
-	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), vec.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), vec.GetMemorySize())
 	assert.Equal(t, []byte(str0), vec.GetValue(0))
 	assert.Equal(t, []byte(str1), vec.GetValue(1))
 	assert.Equal(t, []byte(str2), vec.GetValue(2))
 	assert.Equal(t, []byte(str3), vec.GetValue(3))
 
-	nodeVec := vec.(buf.IMemoryNode)
-	marshalled, err := nodeVec.Marshall()
+	marshalled, err := vec.Marshall()
 	assert.Nil(t, err)
 
 	mirror := NewEmptyStrVector()
-	err = mirror.(buf.IMemoryNode).Unmarshall(marshalled)
+	err = mirror.Unmarshall(marshalled)
 	assert.Nil(t, err)
 
-	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), mirror.(buf.IMemoryNode).GetMemorySize())
+	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), mirror.GetMemorySize())
 	assert.Equal(t, []byte(str0), mirror.GetValue(0))
 	assert.Equal(t, []byte(str1), mirror.GetValue(1))
 	assert.Equal(t, []byte(str2), mirror.GetValue(2))
@@ -159,13 +173,13 @@ func TestStrVector(t *testing.T) {
 	fname := "/tmp/xxstrvec"
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
-	_, err = nodeVec.WriteTo(f)
+	_, err = vec.WriteTo(f)
 	assert.Nil(t, err)
 	f.Close()
 
 	f, err = os.OpenFile(fname, os.O_RDONLY, 0666)
 	assert.Nil(t, err)
-	builtVec := NewEmptyStrVector().(IVectorNode)
+	builtVec := NewEmptyStrVector()
 	_, err = builtVec.ReadFrom(f)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte(str0), builtVec.GetValue(0))
@@ -183,6 +197,8 @@ func TestCopy(t *testing.T) {
 	rows := uint64(100)
 	vec0 := MockVector(t0, rows)
 	vec1 := MockVector(t1, rows)
+	defer vec0.Close()
+	defer vec1.Close()
 
 	for i := 0; i < 4; i++ {
 		v0_0, err := vec0.CopyToVectorWithBuffer(bytes.NewBuffer(make([]byte, 0)), bytes.NewBuffer(make([]byte, 0)))
@@ -225,6 +241,8 @@ func TestWrapper(t *testing.T) {
 	rows := uint64(100)
 	vec0 := MockVector(t0, rows)
 	vec1 := MockVector(t1, rows)
+	defer vec0.Close()
+	defer vec1.Close()
 	v0 := vec0.CopyToVector()
 	v1 := vec1.CopyToVector()
 	w0 := NewVectorWrapper(v0)
@@ -261,4 +279,25 @@ func TestWrapper(t *testing.T) {
 
 	assert.Equal(t, int(rows), ww0.Length())
 	f.Close()
+}
+
+func TestStrVector2(t *testing.T) {
+	size := uint64(100)
+	vec := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
+	assert.Equal(t, int(size), vec.Capacity())
+	assert.Equal(t, 0, vec.Length())
+
+	str0 := "str0"
+	strs := [][]byte{[]byte(str0)}
+	err := vec.Append(len(strs), strs)
+	assert.Nil(t, err)
+	assert.Equal(t, len(strs), vec.Length())
+	assert.False(t, vec.IsReadonly())
+
+	buf, err := vec.Marshall()
+	assert.Nil(t, err)
+
+	vec2 := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
+	err = vec2.Unmarshall(buf)
+	assert.Nil(t, err)
 }

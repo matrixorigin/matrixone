@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package common
 
 import (
@@ -9,7 +23,8 @@ import (
 )
 
 var (
-	ErrParseBlockFileName = errors.New("aoe: parse block file name")
+	ErrParseBlockFileName  = errors.New("aoe: parse block file name")
+	ErrParseTBlockFileName = errors.New("aoe: parse tblock file name")
 )
 
 type ID struct {
@@ -128,6 +143,10 @@ func (id *ID) ToBlockFileName() string {
 	return fmt.Sprintf("%d_%d_%d", id.TableID, id.SegmentID, id.BlockID)
 }
 
+func (id *ID) ToTBlockFileName(version uint32) string {
+	return fmt.Sprintf("%d_%d_%d_%d", id.TableID, id.SegmentID, id.BlockID, version)
+}
+
 func (id *ID) ToBlockFilePath() string {
 	return fmt.Sprintf("%d/%d/%d/", id.TableID, id.SegmentID, id.BlockID)
 }
@@ -138,6 +157,38 @@ func (id *ID) ToSegmentFileName() string {
 
 func (id *ID) ToSegmentFilePath() string {
 	return fmt.Sprintf("%d/%d/", id.TableID, id.SegmentID)
+}
+
+func ParseTBlockfileName(name string) (ID, error) {
+	var (
+		id  ID
+		err error
+	)
+	strs := strings.Split(name, "_")
+	if len(strs) != 4 {
+		return id, ErrParseTBlockFileName
+	}
+	if tid, err := strconv.ParseUint(strs[0], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.TableID = tid
+	}
+	if sid, err := strconv.ParseUint(strs[1], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.SegmentID = sid
+	}
+	if bid, err := strconv.ParseUint(strs[2], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.BlockID = bid
+	}
+	if vid, err := strconv.ParseUint(strs[3], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.PartID = uint32(vid)
+	}
+	return id, err
 }
 
 func ParseBlockFileName(name string) (ID, error) {

@@ -1,8 +1,22 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package table
 
 import (
 	"fmt"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -120,13 +134,15 @@ func (seg *segment) GetSegmentedIndex() (id uint64, ok bool) {
 		return id, ok
 	}
 	blkCnt := atomic.LoadUint32(&seg.tree.blockcnt)
-	for i := int(blkCnt) - 1; i >= 0; i-- {
+	for i := 0; i <= int(blkCnt)-1; i++ {
 		seg.tree.RLock()
 		blk := seg.tree.blocks[i]
 		seg.tree.RUnlock()
-		id, ok = blk.GetSegmentedIndex()
-		if ok {
-			return id, ok
+		tmpId, tmpOk := blk.GetSegmentedIndex()
+		if tmpOk {
+			id, ok = tmpId, tmpOk
+		} else {
+			break
 		}
 	}
 	return id, ok
@@ -270,8 +286,25 @@ func (seg *segment) String() string {
 	return s
 }
 
+func (seg *segment) StrongRefLastBlock() iface.IBlock {
+	seg.tree.RLock()
+	if len(seg.tree.blocks) == 0 {
+		seg.tree.RUnlock()
+		return nil
+	}
+	lastBlk := seg.tree.blocks[len(seg.tree.blocks)-1]
+	seg.tree.RUnlock()
+	lastBlk.Ref()
+	return lastBlk
+}
+
 func (seg *segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
-	blk, err = newBlock(seg, blkMeta)
+	factory := seg.host.GetBlockFactory()
+	if factory == nil {
+		blk, err = newBlock(seg, blkMeta)
+	} else {
+		blk, err = factory.CreateBlock(seg, blkMeta)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +414,7 @@ func (seg *segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
 	}
 	idx, ok := seg.tree.helper[meta.ID]
 	if !ok {
-		logutil2.Error("logic error")
+		logutil.Error("logic error")
 		panic("logic error")
 	}
 	old := seg.tree.blocks[idx]

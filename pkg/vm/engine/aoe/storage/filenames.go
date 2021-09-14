@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package engine
 
 import (
@@ -14,6 +28,7 @@ const (
 	FTInfoCkp FileType = iota
 	FTTableCkp
 	FTLock
+	FTTBlock
 	FTBlock
 	FTSegment
 	FTSegmentIndex
@@ -34,6 +49,10 @@ func MakeMetaDir(dirname string) string {
 
 func MakeTableDir(dirname string, id uint64) string {
 	return path.Join(dirname, fmt.Sprintf("%d", id))
+}
+
+func MakeTBlockFileName(dirname, name string, isTmp bool) string {
+	return MakeFilename(dirname, FTTBlock, name, isTmp)
 }
 
 func MakeBlockFileName(dirname, name string, tableId uint64, isTmp bool) string {
@@ -62,6 +81,14 @@ func MakeLockFileName(dirname, name string) string {
 
 func ParseSegmentfileName(filename string) (name string, ok bool) {
 	name = strings.TrimSuffix(filename, ".seg")
+	if len(name) == len(filename) {
+		return name, false
+	}
+	return name, true
+}
+
+func ParseTBlockfileName(filename string) (name string, ok bool) {
+	name = strings.TrimSuffix(filename, ".tblk")
 	if len(name) == len(filename) {
 		return name, false
 	}
@@ -108,6 +135,8 @@ func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
 	case FTTransientNode:
 		s = path.Join(MakeSpillDir(dirname), fmt.Sprintf("%s.nod", name))
 		isTmp = false
+	case FTTBlock:
+		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s.tblk", name))
 	case FTBlock:
 		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s.blk", name))
 	case FTSegment:

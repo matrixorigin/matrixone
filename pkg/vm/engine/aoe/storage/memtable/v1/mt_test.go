@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package memtable
 
 import (
@@ -29,7 +43,7 @@ func init() {
 
 func TestManager(t *testing.T) {
 	opts := config.NewOptions("/tmp", config.CST_Customize, config.BST_S, config.SST_S)
-	manager := NewManager(opts)
+	manager := NewManager(opts, nil)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
 	fsMgr := ldio.DefaultFsMgr
@@ -75,7 +89,7 @@ func TestCollection(t *testing.T) {
 	blockCnt := uint64(4)
 	opts := config.NewCustomizedMetaOptions(WORK_DIR, config.CST_Customize, blockRows, blockCnt)
 
-	manager := NewManager(opts)
+	manager := NewManager(opts, nil)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
 	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)

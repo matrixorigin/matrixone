@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package vector
 
 import (
@@ -23,6 +37,12 @@ func (v *BaseVector) NullCnt() int {
 	}
 
 	return v.VMask.Length()
+}
+
+func (v *BaseVector) ResetReadonly() {
+	mask := atomic.LoadUint64(&v.StatMask)
+	mask &= ^container.ReadonlyMask
+	atomic.StoreUint64(&v.StatMask, mask)
 }
 
 func (v *BaseVector) IsReadonly() bool {

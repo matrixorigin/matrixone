@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
@@ -39,6 +53,10 @@ func ParseTableCkpFile(name string) (tid, version uint64, err error) {
 
 func NextGloablSeqnum() uint64 {
 	return atomic.AddUint64(&GloablSeqNum, uint64(1))
+}
+
+func GetGloableSeqnum() uint64 {
+	return atomic.LoadUint64(&GloablSeqNum)
 }
 
 type GenericTableWrapper struct {
@@ -222,10 +240,6 @@ func (tbl *Table) NextActiveSegment() *Segment {
 	}
 	tbl.ActiveSegment++
 	return tbl.GetActiveSegment()
-	// if tbl.ActiveSegment <= len(tbl.Segments)-1 {
-	// 	seg = tbl.Segments[tbl.ActiveSegment]
-	// }
-	// return seg
 }
 
 func (tbl *Table) GetActiveSegment() *Segment {
@@ -238,24 +252,6 @@ func (tbl *Table) GetActiveSegment() *Segment {
 		return nil
 	}
 	return seg
-	// for i := len(tbl.Segments) - 1; i >= 0; i-- {
-	// 	seg := tbl.Segments[i]
-	// 	if seg.DataState >= CLOSED {
-	// 		break
-	// 	} else if seg.DataState == EMPTY {
-	// 		active = seg
-	// 	} else if seg.DataState == PARTIAL {
-	// 		active = seg
-	// 		break
-	// 	} else if seg.DataState == FULL {
-	// 		activeBlk := seg.GetActiveBlock()
-	// 		if activeBlk != nil {
-	// 			active = seg
-	// 		}
-	// 		break
-	// 	}
-	// }
-	// return active
 }
 
 func (tbl *Table) GetInfullSegment() (seg *Segment, err error) {

@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
@@ -73,6 +87,21 @@ func (seg *Segment) BlockIDs(args ...interface{}) map[uint64]uint64 {
 	return ids
 }
 
+func (seg *Segment) HasUncommitted() bool {
+	if seg.DataState >= CLOSED {
+		return false
+	}
+	if seg.DataState < FULL {
+		return true
+	}
+	for _, blk := range seg.Blocks {
+		if blk.DataState != FULL {
+			return true
+		}
+	}
+	return false
+}
+
 func (seg *Segment) GetActiveBlk() *Block {
 	if seg.ActiveBlk >= len(seg.Blocks) {
 		return nil
@@ -102,7 +131,7 @@ func (seg *Segment) CreateBlock() (blk *Block, err error) {
 
 func (seg *Segment) String() string {
 	s := fmt.Sprintf("Seg(%d-%d) [blkPos=%d][State=%d]", seg.Table.ID, seg.ID, seg.ActiveBlk, seg.DataState)
-	s += "["
+	s += "\n["
 	pos := 0
 	for _, blk := range seg.Blocks {
 		if pos != 0 {

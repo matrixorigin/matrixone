@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package engine
 
 import (
@@ -34,6 +48,14 @@ type IterOptions struct {
 	SegmentIds []uint64
 }
 
+type FactoryType uint16
+
+const (
+	INVALID_FT FactoryType = iota
+	NORMAL_FT
+	MUTABLE_FT
+)
+
 type CacheCfg struct {
 	IndexCapacity  uint64 `toml:"index-cache-size"`
 	InsertCapacity uint64 `toml:"insert-cache-size"`
@@ -57,6 +79,8 @@ type MetaCleanerCfg struct {
 
 type Options struct {
 	EventListener e.EventListener
+
+	FactoryType FactoryType
 
 	Mu sync.RWMutex
 
@@ -84,6 +108,10 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o = &Options{}
 	}
 	o.EventListener.FillDefaults()
+
+	if o.FactoryType == INVALID_FT {
+		o.FactoryType = NORMAL_FT
+	}
 
 	if o.SchedulerCfg == nil {
 		o.SchedulerCfg = &SchedulerCfg{

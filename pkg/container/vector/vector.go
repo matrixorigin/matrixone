@@ -1,3 +1,17 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package vector
 
 import (
@@ -221,7 +235,7 @@ func (v *Vector) SetLength(n int) {
 	case types.T_char, types.T_varchar, types.T_json:
 		vs := v.Col.(*types.Bytes)
 		m := len(vs.Offsets)
-		vs.Data = vs.Data[:vs.Offsets[n]+vs.Lengths[n]]
+		vs.Data = vs.Data[:vs.Offsets[n-1]+vs.Lengths[n-1]]
 		vs.Offsets = vs.Offsets[:n]
 		vs.Lengths = vs.Lengths[:n]
 		v.Nsp.RemoveRange(uint64(n), uint64(m))
@@ -686,7 +700,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]int8)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1))
+				data, err := proc.Grow(v.Data[:n], int64(n+1))
 				if err != nil {
 					return err
 				}
@@ -713,7 +727,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]int16)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*2)
+				data, err := proc.Grow(v.Data[:n*2], int64(n+1)*2)
 				if err != nil {
 					return err
 				}
@@ -740,7 +754,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]int32)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*4)
+				data, err := proc.Grow(v.Data[:n*4], int64(n+1)*4)
 				if err != nil {
 					return err
 				}
@@ -767,7 +781,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]int64)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*8)
+				data, err := proc.Grow(v.Data[:n*8], int64(n+1)*8)
 				if err != nil {
 					return err
 				}
@@ -794,7 +808,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]uint8)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1))
+				data, err := proc.Grow(v.Data[:n], int64(n+1))
 				if err != nil {
 					return err
 				}
@@ -821,7 +835,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]uint16)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*2)
+				data, err := proc.Grow(v.Data[:n*2], int64(n+1)*2)
 				if err != nil {
 					return err
 				}
@@ -848,7 +862,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]uint32)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*4)
+				data, err := proc.Grow(v.Data[:n*4], int64(n+1)*4)
 				if err != nil {
 					return err
 				}
@@ -875,7 +889,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]uint64)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*8)
+				data, err := proc.Grow(v.Data[:n*8], int64(n+1)*8)
 				if err != nil {
 					return err
 				}
@@ -902,7 +916,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]float32)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*4)
+				data, err := proc.Grow(v.Data[:n*4], int64(n+1)*4)
 				if err != nil {
 					return err
 				}
@@ -929,7 +943,7 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 		} else {
 			vs := v.Col.([]float64)
 			if n := len(vs); n+1 >= cap(vs) {
-				data, err := proc.Grow(v.Data, int64(n+1)*8)
+				data, err := proc.Grow(v.Data[:n*8], int64(n+1)*8)
 				if err != nil {
 					return err
 				}
@@ -959,13 +973,14 @@ func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 			v.Data = data
 			vs.Data = data[:0]
 		} else if n := len(vs.Data); n+len(from) >= cap(vs.Data) {
-			data, err := proc.Grow(v.Data, int64(n+len(from)))
+			data, err := proc.Grow(vs.Data, int64(n+len(from)))
 			if err != nil {
 				return err
 			}
 			proc.Free(v.Data)
 			v.Data = data
-			vs.Data = data[:n]
+			n = len(vs.Offsets)
+			vs.Data = data[:vs.Offsets[n-1]+vs.Lengths[n-1]]
 		}
 		vs.Lengths = append(vs.Lengths, uint32(len(from)))
 		{
