@@ -39,13 +39,21 @@ var (
 	// defaultDataSerializer = flushNoCompression
 )
 
+// BlockWriter is New and executed at memtablewriter.fulsh()
+// write the data of a memtable to the block file
 type BlockWriter struct {
-	data         []*vector.Vector
-	meta         *md.Block
-	dir          string
-	embbed       bool
-	fileHandle   *os.File
-	fileGetter   BlockfileGetter
+	data       []*vector.Vector
+	meta       *md.Block
+	dir        string
+	embbed     bool
+	fileHandle *os.File
+
+	// fileGetter is createIOWriter，use dir&TableID&SegmentID&BlockID to
+	// create a tmp file for dataSerializer to flush data
+	fileGetter BlockfileGetter
+
+	// fileCommiter is commitFile，rename file name after
+	// dataSerializer is completed
 	fileCommiter func(string) error
 
 	// preprocessor preprocess data before writing, such as SORT
@@ -108,6 +116,7 @@ func (bw *BlockWriter) SetDataFlusher(f BlkDataSerializer) {
 	bw.dataSerializer = f
 }
 
+// commitFile is rename .tmp file to .blk file after flushWithLz4Compression
 func (bw *BlockWriter) commitFile(fname string) error {
 	name, err := e.FilenameFromTmpfile(fname)
 	if err != nil {
@@ -117,6 +126,7 @@ func (bw *BlockWriter) commitFile(fname string) error {
 	return err
 }
 
+// createIOWriter is create a .tmp file for flushWithLz4Compression
 func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, error) {
 	id := meta.AsCommonID()
 	filename := e.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, true)
@@ -174,6 +184,12 @@ func (bw *BlockWriter) GetFileName() string {
 	return s
 }
 
+// Execute steps as follows:
+// 1. Stor data in memtable.
+// 2. Create a temp block file.
+// 3. Flush indices that pre-defined in meta
+// 4. Compress column data and flush them
+// 5. Rename .tmp file to .blk file
 func (bw *BlockWriter) Execute() error {
 	if bw.preprocessor != nil {
 		if err := bw.preprocessor(bw.data, bw.meta); err != nil {
