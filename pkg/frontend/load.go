@@ -196,7 +196,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 			plh.csvLineArray1 += time.Since(wait_b)
 
 			if plh.lineIdx == plh.batchSize {
-				fmt.Printf("+++++ batch bytes %v B %v MB\n",plh.bytes,plh.bytes / 1024.0 / 1024.0)
+				//fmt.Printf("+++++ batch bytes %v B %v MB\n",plh.bytes,plh.bytes / 1024.0 / 1024.0)
 				err := doWriteBatch(plh, false)
 				if err != nil {
 					return err
@@ -230,7 +230,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 				plh.csvLineArray2 += time.Since(wait_c)
 
 				if plh.lineIdx == plh.batchSize {
-					fmt.Printf("+---+ batch bytes %v B %v MB\n",plh.bytes,plh.bytes / 1024.0 / 1024.0)
+					//fmt.Printf("+---+ batch bytes %v B %v MB\n",plh.bytes,plh.bytes / 1024.0 / 1024.0)
 					err := doWriteBatch(plh, false)
 					if err != nil {
 						return err
@@ -905,19 +905,20 @@ when force is true, batchsize will be changed.
 */
 func saveBatchToStorageConcurrentWrite(handler *WriteBatchHandler,force bool) error {
 	if handler.batchFilled == handler.batchSize{
-		batchBytes := 0
-		for _, vec := range handler.batchData.Vecs {
-			//fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
-			switch vec.Typ.Oid {
-			case types.T_char, types.T_varchar:
-				vBytes := vec.Col.(*types.Bytes)
-				batchBytes += len(vBytes.Data)
-			default:
-				batchBytes += vec.Length() * int(vec.Typ.Size)
-			}
-		}
-
-		fmt.Printf("----batchBytes %v B %v MB\n",batchBytes,batchBytes / 1024.0 / 1024.0)
+		//batchBytes := 0
+		//for _, vec := range handler.batchData.Vecs {
+		//	//fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
+		//	switch vec.Typ.Oid {
+		//	case types.T_char, types.T_varchar:
+		//		vBytes := vec.Col.(*types.Bytes)
+		//		batchBytes += len(vBytes.Data)
+		//	default:
+		//		batchBytes += vec.Length() * int(vec.Typ.Size)
+		//	}
+		//}
+		//
+		//fmt.Printf("----batchBytes %v B %v MB\n",batchBytes,batchBytes / 1024.0 / 1024.0)
+		//
 		wait_a := time.Now()
 		err := handler.tableHandler.Write(handler.timestamp,handler.batchData)
 		if err != nil {
@@ -1078,11 +1079,11 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		}
 	}()
 
-	//processTime := time.Now()
+	processTime := time.Now()
 	process_block := time.Duration(0)
 
 	curBatchSize := int(ses.Pu.SV.GetBatchSizeInLoadData())
-	channelSize := curBatchSize * 2
+	channelSize := Max(1,curBatchSize / 2)
 
 	//simdcsv
 	handler := &ParseLineHandler{
@@ -1111,7 +1112,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 	//defer handler.close()
 
-	handler.simdCsvConcurrencyCountOfWriteBatch = Min(handler.simdCsvConcurrencyCountOfWriteBatch,runtime.NumCPU())
+	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.GetLoadDataConcurrencyCount()),runtime.NumCPU())
 	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1,handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch = make(chan int,handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvResultsOfWriteBatchChan = make(chan *WriteBatchHandler,handler.simdCsvConcurrencyCountOfWriteBatch)
@@ -1163,12 +1164,12 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 
 			
-			fmt.Printf("++++> %d %d %d %d \n",
-				wh.result.Skipped,
-				wh.result.Deleted,
-				wh.result.Warnings,
-				wh.result.Records,
-				)
+			//fmt.Printf("++++> %d %d %d %d \n",
+			//	wh.result.Skipped,
+			//	wh.result.Deleted,
+			//	wh.result.Warnings,
+			//	wh.result.Records,
+			//	)
 			handler.result.Skipped += wh.result.Skipped
 			handler.result.Deleted += wh.result.Deleted
 			handler.result.Warnings += wh.result.Warnings
@@ -1191,6 +1192,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			handler.saveParsedLine += wh.saveParsedLine
 			handler.choose_true += wh.choose_true
 			handler.choose_false += wh.choose_false
+
+			wh.batchData = nil
+			wh.simdCsvLineArray = nil
 		}
 	}()
 
@@ -1212,44 +1216,49 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//wait read and statistics to quit
 	wg.Wait()
 
-	//fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
-	//	handler.row2col,handler.fillBlank,handler.toStorage)
-	//fmt.Printf("-----write batch %s reset batch %s\n",
-	//	handler.writeBatch,handler.resetBatch)
-	//fmt.Printf("----- simdcsv end %s " +
-	//	"stage1_first_chunk %s stage1_end %s " +
-	//	"stage2_first_chunkinfo - [begin end] [%s %s ] [%s %s ] [%s %s ] " +
-	//	"readLoop_first_records %s \n",
-	//	handler.simdCsvReader.End,
-	//	handler.simdCsvReader.Stage1_first_chunk,
-	//	handler.simdCsvReader.Stage1_end,
-	//	handler.simdCsvReader.Stage2_first_chunkinfo[0],
-	//	handler.simdCsvReader.Stage2_end[0],
-	//	handler.simdCsvReader.Stage2_first_chunkinfo[1],
-	//	handler.simdCsvReader.Stage2_end[1],
-	//	handler.simdCsvReader.Stage2_first_chunkinfo[2],
-	//	handler.simdCsvReader.Stage2_end[2],
-	//	handler.simdCsvReader.ReadLoop_first_records,
-	//	)
-	//
-	//fmt.Printf("-----call_back %s " +
-	//	"process_block - callback %s " +
-	//	"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
-	//	"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
-	//	"choose_true %s choose_false %s \n",
-	//	handler.callback,
-	//	process_block - handler.callback,
-	//	handler.asyncChan,
-	//	handler.asyncChanLoop,
-	//	handler.asyncChan -	handler.asyncChanLoop,
-	//	handler.csvLineArray1,
-	//	handler.csvLineArray2,
-	//	handler.saveParsedLine,
-	//	handler.choose_true,
-	//	handler.choose_false,
-	//	)
+	close(handler.simdCsvGetParsedLinesChan)
+	close(handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch)
+	close(handler.simdCsvResultsOfWriteBatchChan)
+	handler.simdCsvLineArray = nil
 
-//		fmt.Printf("-----process time %s \n",time.Since(processTime))
+	fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
+		handler.row2col,handler.fillBlank,handler.toStorage)
+	fmt.Printf("-----write batch %s reset batch %s\n",
+		handler.writeBatch,handler.resetBatch)
+	fmt.Printf("----- simdcsv end %s " +
+		"stage1_first_chunk %s stage1_end %s " +
+		"stage2_first_chunkinfo - [begin end] [%s %s ] [%s %s ] [%s %s ] " +
+		"readLoop_first_records %s \n",
+		handler.simdCsvReader.End,
+		handler.simdCsvReader.Stage1_first_chunk,
+		handler.simdCsvReader.Stage1_end,
+		handler.simdCsvReader.Stage2_first_chunkinfo[0],
+		handler.simdCsvReader.Stage2_end[0],
+		handler.simdCsvReader.Stage2_first_chunkinfo[1],
+		handler.simdCsvReader.Stage2_end[1],
+		handler.simdCsvReader.Stage2_first_chunkinfo[2],
+		handler.simdCsvReader.Stage2_end[2],
+		handler.simdCsvReader.ReadLoop_first_records,
+		)
+
+	fmt.Printf("-----call_back %s " +
+		"process_block - callback %s " +
+		"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
+		"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
+		"choose_true %s choose_false %s \n",
+		handler.callback,
+		process_block - handler.callback,
+		handler.asyncChan,
+		handler.asyncChanLoop,
+		handler.asyncChan -	handler.asyncChanLoop,
+		handler.csvLineArray1,
+		handler.csvLineArray2,
+		handler.saveParsedLine,
+		handler.choose_true,
+		handler.choose_false,
+		)
+
+		fmt.Printf("-----process time %s \n",time.Since(processTime))
 
 	return result, nil
 }
