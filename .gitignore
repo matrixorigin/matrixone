@@ -13,3 +13,4 @@ vendor/
 gen_config
 main
 mo-server
+*.toml
