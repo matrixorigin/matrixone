@@ -41,7 +41,7 @@ type tblock struct {
 
 func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory, mockSize *mb.MockSize) (*tblock, error) {
 	clonedMeta := meta.Copy()
-	if clonedMeta.BoundSate != metadata.Detatched {
+	if clonedMeta.BoundSate != metadata.Detached {
 		clonedMeta.Detach()
 	}
 	blk := &tblock{
