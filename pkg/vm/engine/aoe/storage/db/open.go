@@ -17,7 +17,6 @@ package db
 import (
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
@@ -25,7 +24,6 @@ import (
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"sync/atomic"
 )
@@ -49,17 +47,15 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	indexBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.IndexCapacity)
 	sstBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.DataCapacity)
 
+	mutNodeMgr := mb.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
+	mtBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.InsertCapacity)
 	var (
-		factory    fb.MutFactory
-		mtBufMgr   bmgrif.IBufferManager
-		mutNodeMgr bb.INodeManager
+		factory fb.MutFactory
 	)
 	if opts.FactoryType == e.MUTABLE_FT {
-		mutNodeMgr = mb.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 		factory = factories.NewMutFactory(mutNodeMgr, nil)
 	} else {
 		factory = factories.NewNormalFactory()
-		mtBufMgr = bm.NewBufferManager(dirname, opts.CacheCfg.InsertCapacity)
 	}
 	memtblMgr := mt.NewManager(opts, factory)
 

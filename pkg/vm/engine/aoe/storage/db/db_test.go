@@ -591,7 +591,9 @@ func TestDropTable2(t *testing.T) {
 
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
-	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	if inst.Opts.FactoryType == engine.NORMAL_FT {
+		assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	}
 	cols := make([]int, 0)
 	for i := 0; i < len(tblMeta.Schema.ColDefs); i++ {
 		cols = append(cols, i)
@@ -611,7 +613,9 @@ func TestDropTable2(t *testing.T) {
 	}
 	inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name, OnFinishCB: dropCB})
 	time.Sleep(time.Duration(100) * time.Millisecond)
-	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	if inst.Opts.FactoryType == engine.NORMAL_FT {
+		assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	}
 	ss.Close()
 	time.Sleep(time.Duration(100) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
