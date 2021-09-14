@@ -3,21 +3,23 @@ package catalog
 import (
 	// "errors"
 	"fmt"
-	"testing"
 	stdLog "log"
+	"strconv"
+	"testing"
 	"time"
 
-	"matrixone/pkg/vm/engine/aoe"
-	"matrixone/pkg/vm/driver/testutil"
-	"matrixone/pkg/vm/driver/config"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/container/types"
 	aoe3 "matrixone/pkg/vm/driver/aoe"
+	"matrixone/pkg/vm/driver/config"
+	"matrixone/pkg/vm/driver/testutil"
+	"matrixone/pkg/vm/engine/aoe"
+	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/fagongzi/log"
+	"github.com/stretchr/testify/assert"
 )
 const (
 	blockRows          = 10000
@@ -26,14 +28,41 @@ const (
 	segmentCnt         = 5
 	blockCnt           = blockCntPerSegment * segmentCnt
 	restart            = false
+	tableCount         = 50
+	databaseCount      = 50
 )
 var testDatabaceName="test_db"
-var testTable *aoe.TableInfo
+var testTables []*aoe.TableInfo
 func init() {
-	testTable = md.MockTableInfo(colCnt)
-	testTable.Id = 100
+	for i:=0;i<tableCount;i++{
+		testTable := MockTableInfo(colCnt,i)
+		testTable.Id = uint64(100+i)
+		testTables=append(testTables, testTable)
+	}
 }
-
+func MockTableInfo(colCnt int,i int) *aoe.TableInfo {
+	tblInfo := &aoe.TableInfo{
+		Name:    "mocktbl"+strconv.Itoa(i),
+		Columns: make([]aoe.ColumnInfo, 0),
+		Indices: make([]aoe.IndexInfo, 0),
+	}
+	prefix := "mock_"
+	for i := 0; i < colCnt; i++ {
+		name := fmt.Sprintf("%s%d", prefix, i)
+		colInfo := aoe.ColumnInfo{
+			Name: name,
+		}
+		if i == 1 {
+			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 24}
+		} else {
+			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
+		}
+		indexInfo := aoe.IndexInfo{Type: uint64(md.ZoneMap), Columns: []uint64{uint64(i)}}
+		tblInfo.Columns = append(tblInfo.Columns, colInfo)
+		tblInfo.Indices = append(tblInfo.Indices, indexInfo)
+	}
+	return tblInfo
+}
 func TestCatalogWithUtil(t *testing.T){
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
@@ -82,50 +111,57 @@ func TestCatalogWithUtil(t *testing.T){
 	fmt.Print(shardid)
 	assert.NoError(t,err,"getAvailableShard Fail")
 	//test CreateDatabase
-	dbid,err:=ctlg.CreateDatabase(0,testDatabaceName,0)
-	assert.NoError(t,err,"CreateDatabase Fail")
-	// _,err=c.CreateDatabase(0,testDatabaceName,0)
-	// assert.Equal(t,err,errors.New("db already exists"),"CreateExistingDatabase Fail")
+	var dbids []uint64
+	for i:=0;i<databaseCount;i++{
+		dbid,err:=ctlg.CreateDatabase(0,testDatabaceName+strconv.Itoa(i),0)
+		assert.NoError(t,err,"CreateDatabase%v Fail",i)
+		dbids=append(dbids, dbid)
+	}
+	_,err=ctlg.CreateDatabase(0,testDatabaceName+strconv.Itoa(0),0)
+	assert.Equal(t,ErrDBCreateExists,err,"CreateDatabase: wrong err")
 	//test ListDatabases
 	schemas,err:=ctlg.ListDatabases()
 	assert.NoError(t,err,"ListDatabases Fail")
-	assert.Equal(t,schemas[0].Name,testDatabaceName,"ListDatabases: Wrong name")
-	assert.Equal(t,schemas[0].Id,dbid,"ListDatabases: Wrong id")
+	assert.Equal(t,len(schemas),len(dbids),"ListDatabases: Wrong len")
 	// fmt.Print(schema)
 	//test GetDatabase
-	schema,err:=ctlg.GetDatabase(testDatabaceName)
+	schema,err:=ctlg.GetDatabase(testDatabaceName+"0")
 	assert.NoError(t,err,"GetDatabase Fail")
-	assert.Equal(t,schema.Id,dbid,"GetDatabase: Wrong id")
+	assert.Equal(t,schema.Id,dbids[0],"GetDatabase: Wrong id")
 	//test CreateTable
-	createId,err:=ctlg.CreateTable(0,dbid,*testTable)
-	assert.NoError(t,err,"CreateTable Fail")
+	var createIds [] uint64
+	for i:=0;i<tableCount;i++{
+		createId,err:=ctlg.CreateTable(0,dbids[0],*testTables[i])
+		assert.NoError(t,err,"CreateTable%v Fail",i)
+		createIds=append(createIds, createId)
+	}
 	//test ListTables
-	tables,err:=ctlg.ListTables(dbid)
+	tables,err:=ctlg.ListTables(dbids[0])
 	assert.NoError(t,err,"ListTables Fail")
-	assert.Equal(t,len(tables),1,"ListTables: Wrong len")
-	assert.Equal(t,tables[0].Id,createId,"ListTables: Wrong id")
-	assert.Equal(t,tables[0].Name,"mocktbl","ListTables: Wrong Name")
+	assert.Equal(t,len(tables),tableCount,"ListTables: Wrong len")
 	//test GetTable
-	table,err:=ctlg.GetTable(dbid,"mocktbl")
+	table,err:=ctlg.GetTable(dbids[0],"mocktbl0")
 	assert.NoError(t,err,"GetTable Fail")
-	assert.Equal(t,table.Id,createId,"GetTable: Wrong id")
-	assert.Equal(t,table.Name,"mocktbl","GetTable: Wrong Name")
+	assert.Equal(t,table.Id,createIds[0],"GetTable: Wrong id")
+	assert.Equal(t,table.Name,"mocktbl0","GetTable: Wrong Name")
 	//test GetTablets
-	tablets,err:=ctlg.GetTablets(dbid,"mocktbl")
+	tablets,err:=ctlg.GetTablets(dbids[0],"mocktbl0")
 	assert.NoError(t,err,"GetTablets Fail")
 	for i := range tablets{
-		assert.Equal(t,tablets[i].Table.Id,createId,"GetTablets: Wrong id")
-		assert.Equal(t,tablets[i].Table.Name,"mocktbl","GetTablets: Wrong Name")
+		assert.Equal(t,tablets[i].Table.Id,createIds[0],"GetTablets: Wrong id")
+		assert.Equal(t,tablets[i].Table.Name,"mocktbl0","GetTablets: Wrong Name")
 	}
 	//test DropTable
-	dropId,err:=ctlg.DropTable(0,dbid,"mocktbl")
+	dropId,err:=ctlg.DropTable(0,dbids[0],"mocktbl0")
 	assert.NoError(t,err,"DropTable Fail")
-	assert.Equal(t,createId,dropId,"DropTable: Wrong id")
+	assert.Equal(t,createIds[0],dropId,"DropTable: Wrong id")
 	//test RemoveDeletedTable
 	cnt,err:=ctlg.RemoveDeletedTable(0)
 	assert.NoError(t,err,"RemoveDeletedTable Fail")
 	assert.Equal(t,cnt,1,"RemoveDeletedTable: Wrong id")
 	// fmt.Print(schema)
-	err=ctlg.DropDatabase(0,testDatabaceName)
-	assert.NoError(t,err,"DropDatabase Fail")
+	for i:=0;i<databaseCount;i++{
+		err=ctlg.DropDatabase(0,testDatabaceName+strconv.Itoa(i))
+		assert.NoError(t,err,"DropDatabase%v Fail",i)
+	}
 }

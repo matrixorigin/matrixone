@@ -382,6 +382,9 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 	}
 	return cnt, nil
 }
+//checkDBExists checks whether db exists. 
+//If the db exists and its state is not aoe.StateDeleteOnly, checkDBExists returns the db.
+//If else, checkDBExists returns ErrDBNotExists.
 func (c *Catalog) checkDBExists(id uint64) (*aoe.SchemaInfo, error) {
 	db := aoe.SchemaInfo{}
 	if v, err := c.Driver.Get(c.dbKey(id)); err != nil {
@@ -396,6 +399,8 @@ func (c *Catalog) checkDBExists(id uint64) (*aoe.SchemaInfo, error) {
 	}
 	return &db, nil
 }
+//dropTables drops all tables in the database whose id is dbId.
+//The state of droped tables is set as aoe.StateDeleteOnly
 func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
 	_, err = c.checkDBExists(dbId)
 	if err != nil {
@@ -424,6 +429,9 @@ func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
 	}
 	return err
 }
+//checkDBNotExists checks wherher the database exists by calling checkDBExists.
+//If the database exists, it returns the database and ErrDBCreateExists.
+//If not, it returns nil.
 func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 	if value, err := c.Driver.Get(c.dbIDKey(dbName)); err != nil || value == nil {
 		return nil, nil
@@ -436,6 +444,9 @@ func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 		return db, ErrDBCreateExists
 	}
 }
+//checkTableExists checks whether the table exists in the database.
+//If the table exists and its state is not aoe.StateDeleteOnly, it returns the table.
+//If else, it returns ErrTableNotExists.
 func (c *Catalog) checkTableExists(dbId, id uint64) (*aoe.TableInfo, error) {
 	if v, err := c.Driver.Get(c.tableKey(dbId, id)); err != nil {
 		return nil, ErrTableNotExists
@@ -450,6 +461,9 @@ func (c *Catalog) checkTableExists(dbId, id uint64) (*aoe.TableInfo, error) {
 		}
 	}
 }
+//checkTableNotExists checks whether the table exists in the database by calling checkTableExists.
+//If the table exists, it returns the table and ErrTableCreateExists.
+//If not, it returns nil.
 func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.TableInfo, error) {
 	if value, err := c.Driver.Get(c.tableIDKey(dbId, tableName)); err != nil || value == nil {
 		return nil, nil
@@ -462,9 +476,11 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 		return tb, ErrTableCreateExists
 	}
 }
+//encodeTabletName encodes the groupId(the id of the shard) and tableId together to one string by calling codec.Bytes2String.
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
 	return codec.Bytes2String(codec.EncodeKey(groupId, tableId))
 }
+//genGlobalUniqIDs generates a global unique id by calling c.Driver.AllocID.
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	id, err := c.Driver.AllocID(idKey, 1)
 	if err != nil {
@@ -472,6 +488,7 @@ func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	}
 	return id, nil
 }
+//
 func (c *Catalog) dbIDKey(dbName string) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBIDPrefix, dbName)
 }
