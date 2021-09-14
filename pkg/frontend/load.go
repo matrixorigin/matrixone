@@ -1220,6 +1220,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	close(handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch)
 	close(handler.simdCsvResultsOfWriteBatchChan)
 	handler.simdCsvLineArray = nil
+	handler.simdCsvReader = nil
 
 	fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
 		handler.row2col,handler.fillBlank,handler.toStorage)
