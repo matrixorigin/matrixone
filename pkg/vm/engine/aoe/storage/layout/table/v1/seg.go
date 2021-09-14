@@ -134,13 +134,15 @@ func (seg *segment) GetSegmentedIndex() (id uint64, ok bool) {
 		return id, ok
 	}
 	blkCnt := atomic.LoadUint32(&seg.tree.blockcnt)
-	for i := int(blkCnt) - 1; i >= 0; i-- {
+	for i := 0; i <= int(blkCnt)-1; i++ {
 		seg.tree.RLock()
 		blk := seg.tree.blocks[i]
 		seg.tree.RUnlock()
-		id, ok = blk.GetSegmentedIndex()
-		if ok {
-			return id, ok
+		tmpId, tmpOk := blk.GetSegmentedIndex()
+		if tmpOk {
+			id, ok = tmpId, tmpOk
+		} else {
+			break
 		}
 	}
 	return id, ok

@@ -29,6 +29,7 @@ import (
 )
 
 func Open(dirname string, opts *e.Options) (db *DB, err error) {
+	// opts.FactoryType = e.MUTABLE_FT
 	dbLocker, err := createDBLock(dirname)
 	if err != nil {
 		return nil, err

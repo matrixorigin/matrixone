@@ -16,6 +16,7 @@ package memtable
 import (
 	"fmt"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
@@ -153,6 +154,8 @@ func (c *mutableCollection) Append(bat *batch.Batch, index *metadata.LogIndex) (
 	offset := uint64(0)
 	replayIndex := tableMeta.GetReplayIndex()
 	if replayIndex != nil {
+		logutil.Infof("Table %d ReplayIndex %s", tableMeta.ID, replayIndex.String())
+		logutil.Infof("Incoming Index %s", index.String())
 		if !replayIndex.IsApplied() {
 			if replayIndex.ID != index.ID {
 				panic(fmt.Sprintf("should replayIndex: %d, but %d received", replayIndex.ID, index.ID))
