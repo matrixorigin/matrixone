@@ -262,6 +262,56 @@ func (plh *ParseLineHandler) close() {
 }
 
 /*
+alloc space for the batch
+ */
+func makeBatch(handler *ParseLineHandler) *batch.Batch  {
+	batchData := batch.New(true,handler.attrName)
+
+	//fmt.Printf("----- batchSize %d attrName %v \n",batchSize,handler.attrName)
+
+	batchSize := handler.batchSize
+
+	//alloc space for vector
+	for i := 0; i < len(handler.attrName); i++ {
+		vec := vector.New(handler.cols[i].Type)
+		switch vec.Typ.Oid {
+		case types.T_int8:
+			vec.Col = make([]int8, batchSize)
+		case types.T_int16:
+			vec.Col = make([]int16, batchSize)
+		case types.T_int32:
+			vec.Col = make([]int32, batchSize)
+		case types.T_int64:
+			vec.Col = make([]int64, batchSize)
+		case types.T_uint8:
+			vec.Col = make([]uint8, batchSize)
+		case types.T_uint16:
+			vec.Col = make([]uint16, batchSize)
+		case types.T_uint32:
+			vec.Col = make([]uint32, batchSize)
+		case types.T_uint64:
+			vec.Col = make([]uint64, batchSize)
+		case types.T_float32:
+			vec.Col = make([]float32, batchSize)
+		case types.T_float64:
+			vec.Col = make([]float64, batchSize)
+		case types.T_char, types.T_varchar:
+			vBytes := &types.Bytes{
+				Offsets: make([]uint32,batchSize),
+				Lengths: make([]uint32,batchSize),
+				Data: nil,
+			}
+			vec.Col = vBytes
+		default:
+			panic("unsupported vector type")
+		}
+		batchData.Vecs[i] = vec
+	}
+
+	return batchData
+}
+
+/*
 Init ParseLineHandler
  */
 func initParseLineHandler(handler *ParseLineHandler) error {
@@ -306,50 +356,10 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 	}
 	handler.dataColumnId2TableColumnId = dataColumnId2TableColumnId
 
-	batchSize := handler.batchSize
+
 	//allocate batch
 	for j := 0; j < cap(handler.simdCsvBatchPool); j++ {
-		batchData := batch.New(true,handler.attrName)
-
-		//fmt.Printf("----- batchSize %d attrName %v \n",batchSize,handler.attrName)
-
-		//alloc space for vector
-		for i := 0; i < len(handler.attrName); i++ {
-			vec := vector.New(handler.cols[i].Type)
-			switch vec.Typ.Oid {
-			case types.T_int8:
-				vec.Col = make([]int8, batchSize)
-			case types.T_int16:
-				vec.Col = make([]int16, batchSize)
-			case types.T_int32:
-				vec.Col = make([]int32, batchSize)
-			case types.T_int64:
-				vec.Col = make([]int64, batchSize)
-			case types.T_uint8:
-				vec.Col = make([]uint8, batchSize)
-			case types.T_uint16:
-				vec.Col = make([]uint16, batchSize)
-			case types.T_uint32:
-				vec.Col = make([]uint32, batchSize)
-			case types.T_uint64:
-				vec.Col = make([]uint64, batchSize)
-			case types.T_float32:
-				vec.Col = make([]float32, batchSize)
-			case types.T_float64:
-				vec.Col = make([]float64, batchSize)
-			case types.T_char, types.T_varchar:
-				vBytes := &types.Bytes{
-					Offsets: make([]uint32,batchSize),
-					Lengths: make([]uint32,batchSize),
-					Data: nil,
-				}
-				vec.Col = vBytes
-			default:
-				panic("unsupported vector type")
-			}
-			batchData.Vecs[i] = vec
-		}
-
+		batchData := makeBatch(handler)
 		handler.simdCsvBatchPool <- batchData
 	}
 	return nil
