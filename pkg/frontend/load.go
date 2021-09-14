@@ -27,11 +27,9 @@ import (
 	"matrixone/pkg/vm/metadata"
 	"os"
 	"runtime"
-	"runtime/pprof"
 	"strconv"
 	"sync"
 	"time"
-	"unicode/utf8"
 )
 
 type LoadResult struct {
@@ -191,9 +189,9 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
 			plh.maxFieldCnt = Max(plh.maxFieldCnt,len(lineOut.Line))
-			for _, ll := range lineOut.Line {
-				plh.bytes += uint64(utf8.RuneCount([]byte(ll)))
-			}
+			//for _, ll := range lineOut.Line {
+			//	plh.bytes += uint64(utf8.RuneCount([]byte(ll)))
+			//}
 
 			plh.csvLineArray1 += time.Since(wait_b)
 
@@ -206,7 +204,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 
 				plh.lineIdx = 0
 				plh.maxFieldCnt = 0
-				plh.bytes = 0
+				//plh.bytes = 0
 			}
 
 		}else if lineOut.Lines != nil {
@@ -1151,18 +1149,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		}
 	}()
 
-	runtime.MemProfileRate = 1
-
-	mf,err := os.Create("load_mem")
-	defer func() {
-		err = pprof.WriteHeapProfile(mf)
-		err := mf.Close()
-		if err != nil {
-			return
-		}
-	}()
-
-	processTime := time.Now()
+	//processTime := time.Now()
 	process_block := time.Duration(0)
 
 	curBatchSize := int(ses.Pu.SV.GetBatchSizeInLoadData())
@@ -1200,7 +1187,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	handler.simdCsvBatchPool = make(chan *batch.Batch, handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvResultsOfWriteBatchChan = make(chan *WriteBatchHandler,handler.simdCsvConcurrencyCountOfWriteBatch)
 
-	fmt.Printf("-----write concurrent count %d \n",handler.simdCsvConcurrencyCountOfWriteBatch)
+	//fmt.Printf("-----write concurrent count %d \n",handler.simdCsvConcurrencyCountOfWriteBatch)
 
 	err = initParseLineHandler(handler)
 	if err != nil {
@@ -1299,44 +1286,44 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//wait read and statistics to quit
 	wg.Wait()
 
-	fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
-		handler.row2col,handler.fillBlank,handler.toStorage)
-	fmt.Printf("-----write batch %s reset batch %s\n",
-		handler.writeBatch,handler.resetBatch)
-	fmt.Printf("----- simdcsv end %s " +
-		"stage1_first_chunk %s stage1_end %s " +
-		"stage2_first_chunkinfo - [begin end] [%s %s ] [%s %s ] [%s %s ] " +
-		"readLoop_first_records %s \n",
-		handler.simdCsvReader.End,
-		handler.simdCsvReader.Stage1_first_chunk,
-		handler.simdCsvReader.Stage1_end,
-		handler.simdCsvReader.Stage2_first_chunkinfo[0],
-		handler.simdCsvReader.Stage2_end[0],
-		handler.simdCsvReader.Stage2_first_chunkinfo[1],
-		handler.simdCsvReader.Stage2_end[1],
-		handler.simdCsvReader.Stage2_first_chunkinfo[2],
-		handler.simdCsvReader.Stage2_end[2],
-		handler.simdCsvReader.ReadLoop_first_records,
-		)
-
-	fmt.Printf("-----call_back %s " +
-		"process_block - callback %s " +
-		"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
-		"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
-		"choose_true %s choose_false %s \n",
-		handler.callback,
-		process_block - handler.callback,
-		handler.asyncChan,
-		handler.asyncChanLoop,
-		handler.asyncChan -	handler.asyncChanLoop,
-		handler.csvLineArray1,
-		handler.csvLineArray2,
-		handler.saveParsedLine,
-		handler.choose_true,
-		handler.choose_false,
-		)
-
-		fmt.Printf("-----process time %s \n",time.Since(processTime))
+	//fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
+	//	handler.row2col,handler.fillBlank,handler.toStorage)
+	//fmt.Printf("-----write batch %s reset batch %s\n",
+	//	handler.writeBatch,handler.resetBatch)
+	//fmt.Printf("----- simdcsv end %s " +
+	//	"stage1_first_chunk %s stage1_end %s " +
+	//	"stage2_first_chunkinfo - [begin end] [%s %s ] [%s %s ] [%s %s ] " +
+	//	"readLoop_first_records %s \n",
+	//	handler.simdCsvReader.End,
+	//	handler.simdCsvReader.Stage1_first_chunk,
+	//	handler.simdCsvReader.Stage1_end,
+	//	handler.simdCsvReader.Stage2_first_chunkinfo[0],
+	//	handler.simdCsvReader.Stage2_end[0],
+	//	handler.simdCsvReader.Stage2_first_chunkinfo[1],
+	//	handler.simdCsvReader.Stage2_end[1],
+	//	handler.simdCsvReader.Stage2_first_chunkinfo[2],
+	//	handler.simdCsvReader.Stage2_end[2],
+	//	handler.simdCsvReader.ReadLoop_first_records,
+	//	)
+	//
+	//fmt.Printf("-----call_back %s " +
+	//	"process_block - callback %s " +
+	//	"asyncChan %s asyncChanLoop %s asyncChan - asyncChanLoop %s " +
+	//	"csvLineArray1 %s csvLineArray2 %s saveParsedLineToBatch %s " +
+	//	"choose_true %s choose_false %s \n",
+	//	handler.callback,
+	//	process_block - handler.callback,
+	//	handler.asyncChan,
+	//	handler.asyncChanLoop,
+	//	handler.asyncChan -	handler.asyncChanLoop,
+	//	handler.csvLineArray1,
+	//	handler.csvLineArray2,
+	//	handler.saveParsedLine,
+	//	handler.choose_true,
+	//	handler.choose_false,
+	//	)
+	//
+	//	fmt.Printf("-----process time %s \n",time.Since(processTime))
 
 	close(handler.simdCsvGetParsedLinesChan)
 	close(handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch)
