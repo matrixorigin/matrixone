@@ -118,7 +118,6 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 			return end, err
 		}
 	}
-	return false, nil
 }
 
 func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) *queue {
