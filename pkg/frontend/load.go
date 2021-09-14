@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type LoadResult struct {
@@ -76,6 +77,7 @@ type SharePart struct {
 	//index of line in line array
 	lineIdx int
 	maxFieldCnt int
+	bytes uint64
 
 	lineCount uint64
 
@@ -187,10 +189,14 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
 			plh.maxFieldCnt = Max(plh.maxFieldCnt,len(lineOut.Line))
+			for _, ll := range lineOut.Line {
+				plh.bytes += uint64(utf8.RuneCount([]byte(ll)))
+			}
 
 			plh.csvLineArray1 += time.Since(wait_b)
 
 			if plh.lineIdx == plh.batchSize {
+				fmt.Printf("+++++ batch bytes %v B %v MB\n",plh.bytes,plh.bytes / 1024.0 / 1024.0)
 				err := doWriteBatch(plh, false)
 				if err != nil {
 					return err
@@ -198,6 +204,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 
 				plh.lineIdx = 0
 				plh.maxFieldCnt = 0
+				plh.bytes = 0
 			}
 
 		}else if lineOut.Lines != nil {
@@ -223,6 +230,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 				plh.csvLineArray2 += time.Since(wait_c)
 
 				if plh.lineIdx == plh.batchSize {
+					fmt.Printf("+---+ batch bytes %v B %v MB\n",plh.bytes,plh.bytes / 1024.0 / 1024.0)
 					err := doWriteBatch(plh, false)
 					if err != nil {
 						return err
@@ -897,9 +905,19 @@ when force is true, batchsize will be changed.
 */
 func saveBatchToStorageConcurrentWrite(handler *WriteBatchHandler,force bool) error {
 	if handler.batchFilled == handler.batchSize{
-		//for _, vec := range handler.batchData.Vecs {
-		//	fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
-		//}
+		batchBytes := 0
+		for _, vec := range handler.batchData.Vecs {
+			//fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
+			switch vec.Typ.Oid {
+			case types.T_char, types.T_varchar:
+				vBytes := vec.Col.(*types.Bytes)
+				batchBytes += len(vBytes.Data)
+			default:
+				batchBytes += vec.Length() * int(vec.Typ.Size)
+			}
+		}
+
+		fmt.Printf("----batchBytes %v B %v MB\n",batchBytes,batchBytes / 1024.0 / 1024.0)
 		wait_a := time.Now()
 		err := handler.tableHandler.Write(handler.timestamp,handler.batchData)
 		if err != nil {
@@ -1063,16 +1081,19 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	//processTime := time.Now()
 	process_block := time.Duration(0)
 
+	curBatchSize := int(ses.Pu.SV.GetBatchSizeInLoadData())
+	channelSize := curBatchSize * 2
+
 	//simdcsv
 	handler := &ParseLineHandler{
 		SharePart:SharePart{
 			load: load,
 			lineIdx: 0,
-			simdCsvLineArray: make([][]string, int(ses.Pu.SV.GetBatchSizeInLoadData())),
+			simdCsvLineArray: make([][]string, curBatchSize),
 			dbHandler: dbHandler,
 			tableHandler: tableHandler,
 			lineCount: 0,
-			batchSize: int(ses.Pu.SV.GetBatchSizeInLoadData()),
+			batchSize: curBatchSize,
 			result: result,
 		},
 		simdCsvReader: simdcsv.NewReaderWithOptions(dataFile,
@@ -1080,9 +1101,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			'#',
 			false,
 			false),
-			simdCsvGetParsedLinesChan:           make(chan simdcsv.LineOut,100 * int(ses.Pu.SV.GetBatchSizeInLoadData())),
-			simdCsvConcurrencyCountOfWriteBatch: int(ses.Pu.SV.GetLoadDataConcurrencyCount()),
-			simdCsvResultsOfWriteBatchChan:      make(chan *WriteBatchHandler,100 * int(ses.Pu.SV.GetBatchSizeInLoadData())),
+			simdCsvGetParsedLinesChan:           make(chan simdcsv.LineOut,channelSize),
 			simdCsvWaitWriteRoutineToQuit:       &sync.WaitGroup{},
 			closeRef: closeRef,
 	}
@@ -1095,8 +1114,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	handler.simdCsvConcurrencyCountOfWriteBatch = Min(handler.simdCsvConcurrencyCountOfWriteBatch,runtime.NumCPU())
 	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1,handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvConcurrencyCountSemaphoreOfWriteBatch = make(chan int,handler.simdCsvConcurrencyCountOfWriteBatch)
+	handler.simdCsvResultsOfWriteBatchChan = make(chan *WriteBatchHandler,handler.simdCsvConcurrencyCountOfWriteBatch)
 
-	//fmt.Printf("-----write concurrent count %d \n",handler.simdCsvConcurrencyCountOfWriteBatch)
+	fmt.Printf("-----write concurrent count %d \n",handler.simdCsvConcurrencyCountOfWriteBatch)
 
 	err = initParseLineHandler(handler)
 	if err != nil {
@@ -1141,13 +1161,14 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 				break
 			}
 
-			//
-			//fmt.Printf("++++> %d %d %d %d \n",
-			//	wh.result.Skipped,
-			//	wh.result.Deleted,
-			//	wh.result.Warnings,
-			//	wh.result.Records,
-			//	)
+
+			
+			fmt.Printf("++++> %d %d %d %d \n",
+				wh.result.Skipped,
+				wh.result.Deleted,
+				wh.result.Warnings,
+				wh.result.Records,
+				)
 			handler.result.Skipped += wh.result.Skipped
 			handler.result.Deleted += wh.result.Deleted
 			handler.result.Warnings += wh.result.Warnings
