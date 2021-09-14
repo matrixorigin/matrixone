@@ -17,8 +17,15 @@ package base
 type BlockType uint8
 
 const (
+	// TRANSIENT_BLK means blk is in memtable
 	TRANSIENT_BLK BlockType = iota
+
+	// PERSISTENT_BLK means that blk has created a .blk file
+	// TOTO : don't create a .blk file, write it to a .seg file
 	PERSISTENT_BLK
+
+	// PERSISTENT_SORTED_BLK means that blk has been
+	// written or & merged in the .seg(segment) file
 	PERSISTENT_SORTED_BLK
 )
 
