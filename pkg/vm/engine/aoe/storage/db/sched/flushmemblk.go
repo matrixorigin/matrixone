@@ -24,9 +24,12 @@ import (
 	// "matrixone/pkg/logutil"
 )
 
+// flushMemblockEvent supports flushing not-full block.
 type flushMemblockEvent struct {
 	BaseEvent
+	// Block in memory that would be flushed
 	Block iface.IMutBlock
+	// Metadata of this block
 	Meta  *metadata.Block
 }
 

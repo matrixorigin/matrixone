@@ -27,12 +27,24 @@ var (
 	ErrParseTBlockFileName = errors.New("aoe: parse tblock file name")
 )
 
+// ID is the general identifier type shared by different types like
+// table, segment, block, etc.
+//
+// We could wrap info from upper level via ID, for instance, get the table id,
+// segment id, and the block id for one block by ID.AsBlockID, which made
+// the resource management easier.
 type ID struct {
+	// Internal table id
 	TableID   uint64
-	Idx       uint16
+	// Internal segment id
 	SegmentID uint64
+	// Internal block id
 	BlockID   uint64
+	// Internal column part id
 	PartID    uint32
+	// Column index for the column part above
+	Idx       uint16
+
 	Iter      uint8
 }
 

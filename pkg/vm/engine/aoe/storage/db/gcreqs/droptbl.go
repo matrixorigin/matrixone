@@ -26,7 +26,9 @@ import (
 
 type dropTblRequest struct {
 	gc.BaseRequest
+	// Tables' meta
 	Tables      *table.Tables
+	// Table id of the dropped table
 	TableId     uint64
 	MemTableMgr mtif.IManager
 	Opts        *e.Options
