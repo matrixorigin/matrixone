@@ -1151,6 +1151,17 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		}
 	}()
 
+	runtime.MemProfileRate = 1
+
+	mf,err := os.Create("load_mem")
+	defer func() {
+		err = pprof.WriteHeapProfile(mf)
+		err := mf.Close()
+		if err != nil {
+			return
+		}
+	}()
+
 	processTime := time.Now()
 	process_block := time.Duration(0)
 
