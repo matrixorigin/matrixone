@@ -78,6 +78,7 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 	default:
 		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
+	cs := o.Columns()
 	if len(orderBy) > 0 {
 		if fetch != nil && fetch.Offset == nil && fetch.Count != nil {
 			e, err := b.buildExtend(o, fetch.Count)
@@ -135,8 +136,11 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 		}
 	}
 	if len(es) > 0 {
-		return projection.New(o, es)
+		if o, err = projection.New(o, es); err != nil {
+			return nil, err
+		}
 	}
+	o.SetColumns(cs)
 	return o, nil
 }
 

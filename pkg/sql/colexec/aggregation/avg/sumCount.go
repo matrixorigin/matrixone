@@ -43,13 +43,17 @@ func (a *sumCountAvg) Fill(sels []int64, vec *vector.Vector) error {
 	vs := vec.Col.([][]interface{})
 	if n := len(sels); n > 0 {
 		for _, sel := range sels {
-			a.cnt += vs[sel][0].(int64)
-			a.sum += vs[sel][1].(float64)
+			if len(vs[sel]) > 0 {
+				a.cnt += vs[sel][0].(int64)
+				a.sum += vs[sel][1].(float64)
+			}
 		}
 	} else {
 		for _, v := range vs {
-			a.cnt += v[0].(int64)
-			a.sum += v[1].(float64)
+			if len(v) > 0 {
+				a.cnt += v[0].(int64)
+				a.sum += v[1].(float64)
+			}
 		}
 	}
 	return nil

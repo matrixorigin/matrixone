@@ -38,6 +38,7 @@ func New(prev op.OP, es []aggregation.Extend) (*Summarize, error) {
 	}
 	return &Summarize{
 		As:    as,
+		Rs:    as,
 		Es:    es,
 		Prev:  prev,
 		Attrs: attrs,
@@ -67,7 +68,11 @@ func (n *Summarize) Rename(name string) {
 }
 
 func (n *Summarize) Columns() []string {
-	return n.As
+	return n.Rs
+}
+
+func (n *Summarize) SetColumns(cs []string) {
+	n.Rs = cs
 }
 
 func (n *Summarize) Attribute() map[string]types.Type {
