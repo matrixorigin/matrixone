@@ -58,7 +58,7 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	schema := md.MockSchema(2)
 	schema.Name = "mock1"
-	tbl, err := info.CreateTable(md.NextGloablSeqnum(), schema)
+	tbl, err := info.CreateTable(md.NextGlobalSeqNum(), schema)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1), info.Sequence.NextTableID)
 
@@ -82,7 +82,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Nil(t, err)
 	schema2 := md.MockSchema(2)
 	schema2.Name = "mock2"
-	tbl, err = info.CreateTable(md.NextGloablSeqnum(), schema2)
+	tbl, err = info.CreateTable(md.NextGlobalSeqNum(), schema2)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), info.Sequence.NextTableID)
 	err = info.RegisterTable(tbl)

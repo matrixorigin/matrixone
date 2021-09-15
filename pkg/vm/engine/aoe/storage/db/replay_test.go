@@ -35,7 +35,7 @@ func TestReplay1(t *testing.T) {
 	inst := initDB(engine.MUTABLE_FT)
 	tInfo := metadata.MockTableInfo(2)
 	name := "mockcon"
-	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: metadata.NextGloablSeqnum()})
+	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: metadata.NextGlobalSeqNum()})
 	assert.Nil(t, err)
 
 	meta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
@@ -48,7 +48,7 @@ func TestReplay1(t *testing.T) {
 
 	insertFn := func() {
 		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   metadata.NextGloablSeqnum(),
+			OpIndex:   metadata.NextGlobalSeqNum(),
 			Data:      ibat,
 			TableName: meta.Schema.Name,
 		})
@@ -86,7 +86,7 @@ func TestReplay1(t *testing.T) {
 
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
 	assert.Nil(t, err)
-	assert.Equal(t, metadata.GetGloableSeqnum(), segmentedIdx)
+	assert.Equal(t, metadata.GetGlobalSeqNum(), segmentedIdx)
 
 	rel, err = inst.Relation(meta.Schema.Name)
 	assert.Nil(t, err)

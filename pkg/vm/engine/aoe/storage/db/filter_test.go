@@ -36,7 +36,10 @@ import (
 
 func TestAll(t *testing.T) {
 	if !dataio.FlushIndex {
-		return
+		dataio.FlushIndex = true
+		defer func() {
+			dataio.FlushIndex = false
+		}()
 	}
 	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
