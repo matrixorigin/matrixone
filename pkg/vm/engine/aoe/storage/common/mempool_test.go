@@ -35,9 +35,17 @@ func TestPool(t *testing.T) {
 	assert.Equal(t, 3, n2.PageIdx())
 	assert.Equal(t, uint64(n1.Size()+n2.Size()), mp.Usage())
 
+	n3 := mp.Alloc(M * K * 8)
+	assert.Equal(t, n3, (*MemNode)(nil))
+
+	n4 := mp.ApplyQuota(M * K * 8)
+	assert.Equal(t, n4, (*MemNode)(nil))
+
 	mp.Free(n1)
 	assert.Equal(t, uint64(n2.Size()), mp.Usage())
 	mp.Free(n2)
+	assert.Equal(t, uint64(0), mp.Usage())
+	mp.Free(nil)
 	assert.Equal(t, uint64(0), mp.Usage())
 
 	size := K * 4
