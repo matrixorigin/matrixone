@@ -171,7 +171,7 @@ type Block interface {
 // Database consists of functions that reference the session database
 type Database interface {
 	// Type returns the engine type of database.
-	// For now, we only supported aoe engine.
+	// For now, we only support aoe engine.
 	Type() int
 
 	// Relations returns a string array containing all relations

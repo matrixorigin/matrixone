@@ -79,9 +79,9 @@ const (
 // In this example, a possible pipeline is as follows:
 //
 // pipeline 0: filter pushdown
-//    σ(l, year >= 1992 ∧  year <= 1997) ⨝ σ(c, nation = 'CHINA') ⨝ σ(s, nation = 'CHINA')
-//        -> γ([c.city, s.city, l.year, sum(l.revenue) as revenue], c.city, s.city, l.year)
-//        -> τ(l.year asc, revenue desc)
+//    σ(o, year >= 1992 ∧  year <= 1997) ⨝ σ(c, nation = 'CHINA') ⨝ σ(s, nation = 'CHINA')
+//        -> γ([c.city, s.city, o.year, sum(o.revenue) as revenue], c.city, s.city, o.year)
+//        -> τ(o.year asc, revenue desc)
 //        -> π(c.city, s.city, revenue)
 type Pipeline struct {
 	// refCount, reference count for attribute.
