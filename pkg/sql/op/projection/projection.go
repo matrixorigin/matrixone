@@ -64,6 +64,7 @@ func New(prev op.OP, es []*Extend) (*Projection, error) {
 	}
 	return &Projection{
 		As:    as,
+		Rs:    as,
 		Es:    es,
 		Prev:  prev,
 		Attrs: attrs,
@@ -101,7 +102,11 @@ func (n *Projection) Rename(name string) {
 }
 
 func (n *Projection) Columns() []string {
-	return n.As
+	return n.Rs
+}
+
+func (n *Projection) SetColumns(cs []string) {
+	n.Rs = cs
 }
 
 func (n *Projection) Attribute() map[string]types.Type {

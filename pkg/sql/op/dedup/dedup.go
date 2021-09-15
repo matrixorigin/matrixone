@@ -31,6 +31,7 @@ func New(prev op.OP, gs []*extend.Attribute) *Dedup {
 		}
 	}
 	return &Dedup{
+		Rs:    cs,
 		Cs:    cs,
 		Gs:    gs,
 		Prev:  prev,
@@ -60,8 +61,12 @@ func (n *Dedup) Rename(name string) {
 	n.ID = name
 }
 
+func (n *Dedup) SetColumns(cs []string) {
+	n.Rs = cs
+}
+
 func (n *Dedup) Columns() []string {
-	return n.Cs
+	return n.Rs
 }
 
 func (n *Dedup) Attribute() map[string]types.Type {

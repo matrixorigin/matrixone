@@ -44,6 +44,10 @@ func (n *Restrict) Columns() []string {
 	return n.Prev.Columns()
 }
 
+func (n *Restrict) SetColumns(cs []string) {
+	n.Prev.SetColumns(cs)
+}
+
 func (n *Restrict) Attribute() map[string]types.Type {
 	return n.Prev.Attribute()
 }

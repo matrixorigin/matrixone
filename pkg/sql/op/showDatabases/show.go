@@ -30,4 +30,5 @@ func (n *ShowDatabases) String() string {
 func (n *ShowDatabases) Name() string                     { return "" }
 func (n *ShowDatabases) Rename(_ string)                  {}
 func (n *ShowDatabases) Columns() []string                { return nil }
+func (n *ShowDatabases) SetColumns(_ []string)            {}
 func (n *ShowDatabases) Attribute() map[string]types.Type { return nil }

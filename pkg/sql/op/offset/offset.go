@@ -43,6 +43,10 @@ func (n *Offset) Columns() []string {
 	return n.Prev.Columns()
 }
 
+func (n *Offset) SetColumns(cs []string) {
+	n.Prev.SetColumns(cs)
+}
+
 func (n *Offset) Attribute() map[string]types.Type {
 	return n.Prev.Attribute()
 }

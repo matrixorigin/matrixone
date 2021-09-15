@@ -26,6 +26,7 @@ type Group struct {
 	IsPD  bool // can be push down?
 	ID    string
 	As    []string
+	Rs    []string // result columns
 	Gs    []*extend.Attribute
 	Es    []aggregation.Extend
 	Attrs map[string]types.Type

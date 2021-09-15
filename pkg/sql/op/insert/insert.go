@@ -42,4 +42,5 @@ func (n *Insert) String() string {
 func (n *Insert) Name() string                     { return "" }
 func (n *Insert) Rename(_ string)                  {}
 func (n *Insert) Columns() []string                { return nil }
+func (n *Insert) SetColumns(_ []string)            {}
 func (n *Insert) Attribute() map[string]types.Type { return nil }
