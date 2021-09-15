@@ -28,14 +28,14 @@ func Or(n, m, r *Nulls) {
 		if r.Np == nil {
 			r.Np = roaring.NewBitmap()
 		}
-		r.Np.Or(roaring.NewBitmap())
+		r.Np.Or(m.Np)
 		return
 	}
 	if (m == nil || m != nil && m.Np == nil) && n != nil && n.Np != nil {
 		if r.Np == nil {
 			r.Np = roaring.NewBitmap()
 		}
-		r.Np.Or(roaring.NewBitmap())
+		r.Np.Or(n.Np)
 		return
 	}
 	if m != nil && m.Np != nil && n != nil && n.Np != nil {
@@ -46,6 +46,7 @@ func Or(n, m, r *Nulls) {
 		r.Np.Or(m.Np)
 	}
 }
+
 
 func (n *Nulls) Reset() {
 	if n.Np != nil {
