@@ -285,7 +285,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]int8)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]int8)
@@ -297,7 +297,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]uint8)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]uint8)
@@ -309,7 +309,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]int16)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]int16)
@@ -321,7 +321,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]uint16)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]uint16)
@@ -333,7 +333,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]int32)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]int32)
@@ -345,7 +345,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]uint32)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]uint32)
@@ -357,7 +357,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]int64)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]int64)
@@ -369,7 +369,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]uint64)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]uint64)
@@ -381,7 +381,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]float32)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]float32)
@@ -393,7 +393,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]float64)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]float64)
@@ -405,7 +405,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(bat.Sels[j])
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.(*types.Bytes)
@@ -417,7 +417,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(bat.Sels[j])
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.(*types.Bytes)
