@@ -105,7 +105,7 @@ func TestTable(t *testing.T) {
 	seg, err := tbl.CreateSegment()
 	assert.Nil(t, err)
 
-	assert.Equal(t, seg.GetBoundState(), STANDLONE)
+	assert.Equal(t, seg.GetBoundState(), STANDALONE)
 
 	err = tbl.RegisterSegment(seg)
 	assert.Nil(t, err)
@@ -139,7 +139,7 @@ func TestInfo(t *testing.T) {
 	tbl, err := info.CreateTable(NextGloablSeqnum(), schema)
 	assert.Nil(t, err)
 
-	assert.Equal(t, tbl.GetBoundState(), STANDLONE)
+	assert.Equal(t, tbl.GetBoundState(), STANDALONE)
 
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)

@@ -86,7 +86,7 @@ func TestReplay1(t *testing.T) {
 
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
 	assert.Nil(t, err)
-	assert.Equal(t, metadata.GetGloableSeqnum(), segmentedIdx)
+	assert.Equal(t, metadata.GlobalSeqNum, segmentedIdx)
 
 	rel, err = inst.Relation(meta.Schema.Name)
 	assert.Nil(t, err)

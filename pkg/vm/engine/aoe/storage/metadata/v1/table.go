@@ -29,7 +29,7 @@ import (
 )
 
 var (
-	GloablSeqNum         uint64 = 0
+	GlobalSeqNum         uint64 = 0
 	ErrParseTableCkpFile        = errors.New("parse table file name error")
 )
 
@@ -52,7 +52,7 @@ func ParseTableCkpFile(name string) (tid, version uint64, err error) {
 }
 
 func NextGloablSeqnum() uint64 {
-	return atomic.AddUint64(&GloablSeqNum, uint64(1))
+	return atomic.AddUint64(&GlobalSeqNum, uint64(1))
 }
 
 type GenericTableWrapper struct {
@@ -444,7 +444,7 @@ func MockTable(info *MetaInfo, schema *Schema, blkCnt uint64) *Table {
 	if schema == nil {
 		schema = MockSchema(2)
 	}
-	tbl, _ := info.CreateTable(atomic.AddUint64(&GloablSeqNum, uint64(1)), schema)
+	tbl, _ := info.CreateTable(atomic.AddUint64(&GlobalSeqNum, uint64(1)), schema)
 	if err := info.RegisterTable(tbl); err != nil {
 		panic(err)
 	}

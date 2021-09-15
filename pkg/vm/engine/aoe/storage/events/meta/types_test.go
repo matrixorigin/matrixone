@@ -56,7 +56,7 @@ func TestBasicOps(t *testing.T) {
 
 	blk1 := createBlkE.GetBlock()
 	assert.NotNil(t, blk1)
-	assert.Equal(t, blk1.GetBoundState(), md.Detatched)
+	assert.Equal(t, blk1.GetBoundState(), md.Detached)
 
 	assert.Equal(t, blk1.DataState, md.EMPTY)
 	blk1.SetCount(blk1.MaxRowCount)
