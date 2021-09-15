@@ -55,6 +55,10 @@ func (n *Top) Columns() []string {
 	return n.Prev.Columns()
 }
 
+func (n *Top) SetColumns(cs []string) {
+	n.Prev.SetColumns(cs)
+}
+
 func (n *Top) Attribute() map[string]types.Type {
 	return n.Prev.Attribute()
 }

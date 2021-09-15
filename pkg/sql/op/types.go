@@ -23,5 +23,6 @@ type OP interface {
 	Rename(string)
 	String() string
 	Columns() []string
+	SetColumns([]string)
 	Attribute() map[string]types.Type
 }
