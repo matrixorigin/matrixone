@@ -51,8 +51,12 @@ func ParseTableCkpFile(name string) (tid, version uint64, err error) {
 	return tid, version, err
 }
 
-func NextGloablSeqnum() uint64 {
+func NextGlobalSeqNum() uint64 {
 	return atomic.AddUint64(&GlobalSeqNum, uint64(1))
+}
+
+func GetGlobalSeqNum() uint64 {
+	return atomic.LoadUint64(&GlobalSeqNum)
 }
 
 type GenericTableWrapper struct {

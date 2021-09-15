@@ -37,7 +37,7 @@ func TestBlock(t *testing.T) {
 	info := MockInfo(mu, blockRowCount, segmentBlockCount)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	tbl := NewTable(NextGloablSeqnum(), info, schema)
+	tbl := NewTable(NextGlobalSeqNum(), info, schema)
 	seg := NewSegment(tbl, info.Sequence.GetSegmentID())
 	blk := NewBlock(info.Sequence.GetBlockID(), seg)
 	time.Sleep(time.Duration(1) * time.Microsecond)
@@ -65,7 +65,7 @@ func TestSegment(t *testing.T) {
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
 	t1 := NowMicro()
-	tbl := NewTable(NextGloablSeqnum(), info, schema)
+	tbl := NewTable(NextGlobalSeqNum(), info, schema)
 	seg1 := NewSegment(tbl, info.Sequence.GetSegmentID())
 	seg2 := NewSegment(tbl, info.Sequence.GetSegmentID())
 	blk1 := NewBlock(info.Sequence.GetBlockID(), seg2)
@@ -101,7 +101,7 @@ func TestTable(t *testing.T) {
 	info := MockInfo(mu, blockRowCount, segmentBlockCount)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	tbl := NewTable(NextGloablSeqnum(), info, schema)
+	tbl := NewTable(NextGlobalSeqNum(), info, schema)
 	seg, err := tbl.CreateSegment()
 	assert.Nil(t, err)
 
@@ -136,7 +136,7 @@ func TestInfo(t *testing.T) {
 	info := MockInfo(mu, blockRowCount, segmentBlockCount)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	tbl, err := info.CreateTable(NextGloablSeqnum(), schema)
+	tbl, err := info.CreateTable(NextGlobalSeqNum(), schema)
 	assert.Nil(t, err)
 
 	assert.Equal(t, tbl.GetBoundState(), STANDALONE)
@@ -154,7 +154,7 @@ func TestCreateDropTable(t *testing.T) {
 	mu := &sync.RWMutex{}
 	info := MockInfo(mu, blockRowCount, segmentBlockCount)
 	info.Conf.Dir = "/tmp"
-	tbl, err := info.CreateTableFromTableInfo(tblInfo, dbi.TableOpCtx{TableName: tblInfo.Name, OpIndex: NextGloablSeqnum()})
+	tbl, err := info.CreateTableFromTableInfo(tblInfo, dbi.TableOpCtx{TableName: tblInfo.Name, OpIndex: NextGlobalSeqNum()})
 	assert.Nil(t, err)
 	assert.Equal(t, tblInfo.Name, tbl.Schema.Name)
 
@@ -178,11 +178,11 @@ func TestCreateDropTable(t *testing.T) {
 	ts := NowMicro()
 	assert.False(t, rTbl.IsDeleted(ts))
 
-	tid, err := info.SoftDeleteTable(tbl.Schema.Name, NextGloablSeqnum())
+	tid, err := info.SoftDeleteTable(tbl.Schema.Name, NextGlobalSeqNum())
 	assert.Nil(t, err)
 	assert.Equal(t, rTbl.ID, tid)
 
-	_, err = info.SoftDeleteTable(tbl.Schema.Name, NextGloablSeqnum())
+	_, err = info.SoftDeleteTable(tbl.Schema.Name, NextGlobalSeqNum())
 	assert.NotNil(t, err)
 
 	rTbl2, err := info.ReferenceTableByName(tbl.Schema.Name)
