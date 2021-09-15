@@ -98,16 +98,16 @@ func (id *ID) IsSameBlock(o ID) bool {
 }
 
 func (id *ID) Next() *ID {
-	new_id := atomic.AddUint64(&id.TableID, uint64(1))
+	newId := atomic.AddUint64(&id.TableID, uint64(1))
 	return &ID{
-		TableID: new_id - 1,
+		TableID: newId - 1,
 	}
 }
 
 func (id *ID) NextPart() ID {
-	new_id := atomic.AddUint32(&id.PartID, uint32(1))
+	newId := atomic.AddUint32(&id.PartID, uint32(1))
 	bid := *id
-	bid.PartID = new_id - 1
+	bid.PartID = newId - 1
 	return bid
 }
 
@@ -123,16 +123,16 @@ func (id *ID) NextIter() ID {
 }
 
 func (id *ID) NextBlock() ID {
-	new_id := atomic.AddUint64(&id.BlockID, uint64(1))
+	newId := atomic.AddUint64(&id.BlockID, uint64(1))
 	bid := *id
-	bid.BlockID = new_id - 1
+	bid.BlockID = newId - 1
 	return bid
 }
 
 func (id *ID) NextSegment() ID {
-	new_id := atomic.AddUint64(&id.SegmentID, uint64(1))
+	newId := atomic.AddUint64(&id.SegmentID, uint64(1))
 	bid := *id
-	bid.SegmentID = new_id - 1
+	bid.SegmentID = newId - 1
 	return bid
 }
 
