@@ -22,6 +22,7 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
+// UnsortedSegmentFile is a logical file containing some block(.blk) files
 type UnsortedSegmentFile struct {
 	sync.RWMutex
 	common.RefHelper
