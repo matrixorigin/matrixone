@@ -89,14 +89,15 @@ func (n *Node) MakeHandle() base.INodeHandle {
 
 func (n *Node) Close() error {
 	n.Lock()
-	defer n.Unlock()
 	if n.closed == true {
+		n.Unlock()
 		return nil
 	}
 	n.closed = true
 	if n.state == iface.NODE_LOADED {
 		n.Unload()
 	}
+	n.Unlock()
 	n.mgr.UnregisterNode(n)
 	return nil
 }
