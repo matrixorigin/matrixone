@@ -50,13 +50,23 @@ const (
 const Version uint64 = 1
 
 //  BlkCnt | Blk0 Pos | Blk1 Pos | ... | BlkEndPos | Blk0 Data | ...
+// SegmentWriter writes block data into the created segment file
+// when flushSegEvent(.blk count == SegmentMaxBlocks) is triggered.
 type SegmentWriter struct {
+	// data is the data of the block file,
+	// SegmentWriter does not read from the block file
 	data         []*batch.Batch
 	meta         *md.Segment
 	dir          string
 	fileHandle   *os.File
 	preprocessor func([]*batch.Batch, *md.Segment) error
-	fileGetter   func(string, *md.Segment) (*os.File, error)
+
+	// fileGetter is createFile()，use dir&TableID&SegmentID to
+	// create a tmp file for dataFlusher to flush data
+	fileGetter func(string, *md.Segment) (*os.File, error)
+
+	// fileCommiter is commitFile()，rename file name after
+	// dataFlusher is completed
 	fileCommiter func(string) error
 	indexFlusher func(*os.File, []*batch.Batch, *md.Segment) error
 	dataFlusher  func(*os.File, []*batch.Batch, *md.Segment) error
@@ -66,6 +76,8 @@ type SegmentWriter struct {
 
 var FlushIndex = false
 
+// NewSegmentWriter make a SegmentWriter, which is
+// used when (block file count) == SegmentMaxBlocks
 func NewSegmentWriter(data []*batch.Batch, meta *md.Segment, dir string) *SegmentWriter {
 	w := &SegmentWriter{
 		data: data,
@@ -726,6 +738,11 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *md.
 	return err
 }
 
+// Execute steps as follows:
+// 1. Create a temp block file.
+// 3. Flush indices.
+// 4. Compress column data and flush them.
+// 5. Rename .tmp file to .blk file.
 func (sw *SegmentWriter) Execute() error {
 	if sw.preprocessor != nil {
 		if err := sw.preprocessor(sw.data, sw.meta); err != nil {
@@ -760,6 +777,8 @@ func (sw *SegmentWriter) Execute() error {
 	return sw.fileCommiter(filename)
 }
 
+// flushBlocks does not read the .blk file, and writes the incoming
+// data&meta into the segemnt file.
 func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	var metaBuf bytes.Buffer
 	header := make([]byte, 32)

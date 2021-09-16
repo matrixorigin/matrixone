@@ -74,6 +74,12 @@ func (getter *tblkFileGetter) Getter(dir string, meta *md.Block) (*os.File, erro
 	return w, err
 }
 
+// TransientBlockFile file structure:
+// algo | colCntlen | metaCnt | preIdxLen | preIdx | IdxLen | Idx
+// col01 : coldata len | coldata originlen |
+// col02 : coldata len | coldata originlen |
+// ...
+// col01 data | col02 data |  ...
 type TransientBlockFile struct {
 	common.RefHelper
 	host    base.ISegmentFile
