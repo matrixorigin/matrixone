@@ -57,14 +57,22 @@ func (e *createTableEvent) Execute() error {
 		ctx := md.CopyCtx{Ts: md.NowMicro() + 1, Attached: true}
 		info := e.Ctx.Opts.Meta.Info.Copy(ctx)
 		table, _ = info.ReferenceTable(tbl.ID)
-		eCtx := &dbsched.Context{Opts: e.Ctx.Opts}
+		eCtx := &dbsched.Context{Opts: e.Ctx.Opts, Waitable: true}
 		flushEvent := NewFlushInfoEvent(eCtx, info)
 		e.Ctx.Opts.Scheduler.Schedule(flushEvent)
+		if err = flushEvent.WaitDone(); err != nil {
+			// TODO: Drop table
+			return err
+		}
 	}
 	{
-		eCtx := &dbsched.Context{Opts: e.Ctx.Opts}
+		eCtx := &dbsched.Context{Opts: e.Ctx.Opts, Waitable: true}
 		flushEvent := NewFlushTableEvent(eCtx, table)
 		e.Ctx.Opts.Scheduler.Schedule(flushEvent)
+		if err = flushEvent.WaitDone(); err != nil {
+			// TODO: Drop table
+			return err
+		}
 	}
 	return err
 }
