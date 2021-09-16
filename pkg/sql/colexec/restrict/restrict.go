@@ -52,7 +52,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			vec, _, err := e.Eval(bat, proc)
 			if err != nil {
 				bat.Clean(proc)
-				return false, nil
+				return false, err
 			}
 			sels := vec.Col.([]int64)
 			if len(sels) == 0 {
