@@ -30,7 +30,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"time"
 )
-
+//createTablet responses the requests whose CustemType is CreateTablet.
+//The usage of shard is to fetch the Storage.
+//If fail, it returns the err in resp.Value.
+//If success, it returns the amount of the written bytes and returns the id of the table in resp.Value.
 func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.CreateTabletRequest{}
@@ -54,7 +57,10 @@ func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 	resp.Value = codec.Uint642Bytes(id)
 	return writtenBytes, changedBytes, resp
 }
-
+//dropTablet responses the requests whose CustemType is DropTablet.
+//The usage of shard is to fetch the Storage.
+//If fail, it returns the err in resp.Value.
+//If success, it returns the amount of the written bytes and returns the id of the table in resp.Value.
 func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.DropTabletRequest{}
@@ -74,7 +80,10 @@ func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	resp.Value = codec.Uint642Bytes(id)
 	return writtenBytes, changedBytes, resp
 }
-
+//append responses the requests whose CustemType is Append.
+//The usage of shard is to fetch the Storage.
+//If fail, it returns the err in resp.Value.
+//If success, it returns the amount of the written bytes.
 func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	t0 := time.Now()
 	defer func() {
@@ -98,7 +107,10 @@ func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comman
 	changedBytes := int64(writtenBytes)
 	return writtenBytes, changedBytes, resp
 }
-
+//getSegmentedId responses the requests whose CustemType is GetSegmentedId.
+//The usage of shard is to fetch the Storage.
+//If fail, it returns the err in resp.Value and returns 500.
+//If success, it returns the id in resp.Value and returns 0.
 func (h *driver) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.GetSegmentedIdRequest{}
@@ -111,7 +123,9 @@ func (h *driver) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 	resp.Value = codec.Uint642Bytes(rsp)
 	return resp, 0
 }
-
+//getSegmentIds responses the requests whose CustemType is GetSegmentIds.
+//The usage of shard is to fetch the Storage.
+//It returns the id in resp.Value and returns 0.
 func (h *driver) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.GetSegmentIdsRequest{}
@@ -122,7 +136,10 @@ func (h *driver) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx
 	resp.Value, _ = json.Marshal(rsp)
 	return resp, 0
 }
-
+//getSnapshot responses the requests.
+//The usage of shard is to fetch the Storage.
+//If fail, it returns the err in resp.Value and returns 500.
+//If success, it returns the snapshot in resp.Value and returns 0.
 func (h *driver) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.GetSnapshotRequest{}
@@ -140,7 +157,10 @@ func (h *driver) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx c
 	resp.Value, _ = json.Marshal(rsp)
 	return resp, 0
 }
-
+//tableIDs responses the requests.
+//The usage of shard is to fetch the Storage.
+//If fail, it returns the err in resp.Value and returns 500.
+//If success, it returns the ids in resp.Value and returns 0.
 func (h *driver) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.TabletIDsRequest{}
@@ -153,7 +173,9 @@ func (h *driver) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 	resp.Value, _ = json.Marshal(rsp)
 	return resp, 0
 }
-
+//tableNames responses the requests.
+//The usage of shard is to fetch the Storage.
+//It returns the names in resp.Value and returns 0.
 func (h *driver) tableNames(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.TabletIDsRequest{}

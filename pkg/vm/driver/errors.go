@@ -29,7 +29,7 @@ var (
 	ErrKeyNotExisted   = errors.New("request key is not existed")
 	ErrStartupTimeout  = errors.New("driver startup timeout")
 )
-
+//errorResp transforms the error into []byte fomat
 func errorResp(err error, infos ...string) []byte {
 	buf := bytes.Buffer{}
 	for _, info := range infos {

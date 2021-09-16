@@ -32,7 +32,7 @@ func New(c *catalog.Catalog) *aoeEngine {
 		catalog: c,
 	}
 }
-
+//
 func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 	t0 := time.Now()
 	defer func() {
@@ -52,7 +52,7 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 	})
 	return ni
 }
-
+//Delete drops the database by calling e.catalog.DropDatabase(epoch uint64, dbName string)
 func (e *aoeEngine) Delete(epoch uint64, name string) error {
 	t0 := time.Now()
 	defer func() {
@@ -61,7 +61,7 @@ func (e *aoeEngine) Delete(epoch uint64, name string) error {
 	err := e.catalog.DropDatabase(epoch, name)
 	return err
 }
-
+//Create creates database by calling e.catalog.CreateDatabase(epoch uint64, dbName string, typ int)
 func (e *aoeEngine) Create(epoch uint64, name string, typ int) error {
 	t0 := time.Now()
 	defer func() {
@@ -70,7 +70,7 @@ func (e *aoeEngine) Create(epoch uint64, name string, typ int) error {
 	_, err := e.catalog.CreateDatabase(epoch, name, typ)
 	return err
 }
-
+//Databases returns the names of the databases in the catalog
 func (e *aoeEngine) Databases() []string {
 	t0 := time.Now()
 	defer func() {
@@ -84,7 +84,8 @@ func (e *aoeEngine) Databases() []string {
 	}
 	return ds
 }
-
+//Database returns the database by calling e.catalog.GetDatabase
+//the field catalog of the returned database is the catalog of the aoeEngine
 func (e *aoeEngine) Database(name string) (engine.Database, error) {
 	t0 := time.Now()
 	defer func() {

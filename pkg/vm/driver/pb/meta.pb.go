@@ -38,11 +38,11 @@ var Group_value = map[string]int32{
 	"KVGroup":  0,
 	"AOEGroup": 1,
 }
-
+//String returns the Name of the group
 func (x Group) String() string {
 	return proto.EnumName(Group_name, int32(x))
 }
-
+//EnumDescriptor returns FileDescriptorProto and []int{0}
 func (Group) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_3b5ea8fe65782bcc, []int{0}
 }
