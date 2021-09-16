@@ -16,6 +16,7 @@ package db
 
 import (
 	"matrixone/pkg/encoding"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/process"
@@ -54,6 +55,7 @@ func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
 	iid := encoding.DecodeUint64(([]byte)(id))
 	data := seg.Data.WeakRefBlock(iid)
 	if data == nil {
+		logutil.Errorf("specified block %s not found", id)
 		return nil
 	}
 	blk := &Block{

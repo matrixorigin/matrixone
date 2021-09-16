@@ -17,6 +17,7 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"matrixone/pkg/encoding"
@@ -347,7 +348,7 @@ func (sf *SortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	}
 	pointer, ok := sf.Parts[key]
 	if !ok {
-		panic("logic error")
+		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found",id.BlockID, colIdx))
 	}
 	offset := pointer.Offset
 	sz := pointer.Len

@@ -94,9 +94,13 @@ func (mt *memTable) Append(bat *gBatch.Batch, offset uint64, index *md.LogIndex)
 	}
 	n = uint64(na)
 	index.Count = n
-	mt.meta.SetIndex(*index)
+	if err = mt.meta.SetIndex(*index); err != nil {
+		return 0, err
+	}
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.meta.GetCount())
-	mt.meta.AddCount(n)
+	if _, err = mt.meta.AddCount(n); err != nil {
+		return 0, err
+	}
 	mt.tableData.AddRows(n)
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.meta.GetCount())
 	if uint64(mt.ibat.Length()) == mt.meta.MaxRowCount {

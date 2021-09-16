@@ -130,9 +130,13 @@ func (c *mutableCollection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, 
 	}
 	n = uint64(na)
 	index.Count = n
-	meta.SetIndex(*index)
+	if err = meta.SetIndex(*index); err != nil {
+		return 0, err
+	}
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
-	meta.AddCount(n)
+	if _, err = meta.AddCount(n); err != nil {
+		return 0, err
+	}
 	c.data.AddRows(n)
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
 	if uint64(data.Length()) == meta.MaxRowCount {

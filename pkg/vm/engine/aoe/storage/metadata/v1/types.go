@@ -79,7 +79,7 @@ type TimeStamp struct {
 type BoundSate uint8
 
 const (
-	STANDALONE BoundSate = iota
+	Standalone BoundSate = iota
 	Attached
 	Detached
 )
