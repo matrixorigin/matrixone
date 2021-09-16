@@ -16,48 +16,17 @@ package metadata
 
 import (
 	"encoding/json"
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
 	blockRowCount     = uint64(16)
 	segmentBlockCount = uint64(4)
 )
-
-func TestBlock(t *testing.T) {
-	mu := &sync.RWMutex{}
-	ts1 := NowMicro()
-	time.Sleep(time.Duration(1) * time.Microsecond)
-	info := MockInfo(mu, blockRowCount, segmentBlockCount)
-	info.Conf.Dir = "/tmp"
-	schema := MockSchema(2)
-	tbl := NewTable(NextGlobalSeqNum(), info, schema)
-	seg := NewSegment(tbl, info.Sequence.GetSegmentID())
-	blk := NewBlock(info.Sequence.GetBlockID(), seg)
-	time.Sleep(time.Duration(1) * time.Microsecond)
-	ts2 := NowMicro()
-	t.Logf("%d %d %d", ts1, blk.CreatedOn, ts2)
-	assert.False(t, blk.Select(ts1))
-	assert.True(t, blk.Select(ts2))
-	time.Sleep(time.Duration(1) * time.Microsecond)
-	ts3 := NowMicro()
-
-	err := blk.Delete(ts3)
-	assert.Nil(t, err)
-	time.Sleep(time.Duration(1) * time.Microsecond)
-	ts4 := NowMicro()
-
-	assert.False(t, blk.Select(ts1))
-	assert.True(t, blk.Select(ts2))
-	assert.False(t, blk.Select(ts3))
-	assert.False(t, blk.Select(ts4))
-}
 
 func TestSegment(t *testing.T) {
 	mu := &sync.RWMutex{}
@@ -105,7 +74,7 @@ func TestTable(t *testing.T) {
 	seg, err := tbl.CreateSegment()
 	assert.Nil(t, err)
 
-	assert.Equal(t, seg.GetBoundState(), STANDALONE)
+	assert.Equal(t, seg.GetBoundState(), Standalone)
 
 	err = tbl.RegisterSegment(seg)
 	assert.Nil(t, err)
@@ -139,7 +108,7 @@ func TestInfo(t *testing.T) {
 	tbl, err := info.CreateTable(NextGlobalSeqNum(), schema)
 	assert.Nil(t, err)
 
-	assert.Equal(t, tbl.GetBoundState(), STANDALONE)
+	assert.Equal(t, tbl.GetBoundState(), Standalone)
 
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)

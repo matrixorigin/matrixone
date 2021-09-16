@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
+	"matrixone/pkg/logutil"
 )
 
 // Block is a high-level wrapper of the block type in memory. It
@@ -36,6 +37,10 @@ type Block struct {
 // Rows returns how many rows this block contains currently.
 func (blk *Block) Rows() int64 {
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
+	if data == nil {
+		logutil.Errorf("specified blk %d not found", blk.Id)
+		return 0
+	}
 	defer data.Unref()
 	return int64(data.GetRowCount())
 }
@@ -43,6 +48,10 @@ func (blk *Block) Rows() int64 {
 // Size returns the memory usage of the certain column in a block.
 func (blk *Block) Size(attr string) int64 {
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
+	if data == nil {
+		logutil.Errorf("specified blk %d not found", blk.Id)
+		return 0
+	}
 	defer data.Unref()
 	return int64(data.Size(attr))
 }
@@ -58,6 +67,7 @@ func (blk *Block) ID() string {
 func (blk *Block) Prefetch(attrs []string) {
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
 	if data == nil {
+		logutil.Errorf("specified blk %d not found", blk.Id)
 		return
 	}
 	defer data.Unref()
@@ -76,7 +86,7 @@ func (blk *Block) Prefetch(attrs []string) {
 func (blk *Block) Read(cs []uint64, attrs []string, compressed []*bytes.Buffer, deCompressed []*bytes.Buffer) (*batch.Batch, error) {
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
 	if data == nil {
-		return nil, errors.New(fmt.Sprintf("Specified blk %d not found", blk.Id))
+		return nil, errors.New(fmt.Sprintf("specified blk %d not found", blk.Id))
 	}
 	defer data.Unref()
 	bat := batch.New(true, attrs)
