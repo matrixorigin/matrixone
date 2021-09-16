@@ -63,6 +63,12 @@ type Response struct {
 	cmd int
 	//the data of the response
 	data interface{}
+
+	/*
+	ok response
+	 */
+	affectedRows, lastInsertId uint64
+	warnings uint16
 }
 
 func NewResponse(category,status,cmd int,d interface{})*Response {
@@ -72,6 +78,20 @@ func NewResponse(category,status,cmd int,d interface{})*Response {
 		cmd:      cmd,
 		data:     d,
 	}
+}
+
+func NewOkResponse(affectedRows, lastInsertId uint64, warnings uint16,status,cmd int,d interface{})*Response {
+	resp := &Response{
+		category: OkResponse,
+		status:   status,
+		cmd:      cmd,
+		data:     d,
+		affectedRows: affectedRows,
+		lastInsertId: lastInsertId,
+		warnings: warnings,
+	}
+
+	return resp
 }
 
 func (resp *Response) GetData() interface{} {
@@ -157,9 +177,9 @@ func (mp *MysqlProtocol) SendResponse(resp *Response) error {
 	case OkResponse:
 		s,ok := resp.data.(string)
 		if !ok {
-			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
+			return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, "")
 		}
-		return mp.sendOKPacket(0, 0, uint16(resp.status), 0, s)
+		return mp.sendOKPacket(resp.affectedRows, resp.lastInsertId, uint16(resp.status), resp.warnings, s)
 	case EoFResponse:
 		return mp.sendEOFPacket(0, uint16(resp.status))
 	case ErrorResponse:
