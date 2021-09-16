@@ -981,8 +981,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 	execute load data
 	 */
-	loadDataClose := NewCloseLoadData()
-	result, err := mce.LoadLoop(load, dbHandler, tableHandler, loadDataClose)
+	result, err := mce.LoadLoop(load, dbHandler, tableHandler, nil)
 	if err != nil {
 		return err
 	}
@@ -991,7 +990,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	response
 	 */
 	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Skipped,result.Warnings).Error()
-	resp := NewResponse(OkResponse, 0, int(COM_QUERY), info)
+	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings),0, int(COM_QUERY), info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
 	}
