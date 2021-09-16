@@ -30,6 +30,12 @@ import (
 
 type FileNameFactory = func(string, common.ID) string
 
+// BlockFile file structure:
+// algo | colCntlen | metaCnt | preIdxLen | preIdx | IdxLen | Idx
+// col01 : coldata len | coldata originlen |
+// col02 : coldata len | coldata originlen |
+// ...
+// col01 data | col02 data |  ...
 type BlockFile struct {
 	common.RefHelper
 	os.File

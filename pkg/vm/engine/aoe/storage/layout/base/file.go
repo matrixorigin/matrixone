@@ -70,30 +70,30 @@ type Key struct {
 // IManager is a segment file manager that maintains SortedFiles[]&UnsortedFiles[]
 // and can create a physical segment file
 type IManager interface {
-	// RegisterSortedFiles is add physical segment file(SORTED_SEG)
+	// RegisterSortedFiles adds physical segment file(SORTED_SEG)
 	// to Manager.SortedFiles[]
 	RegisterSortedFiles(common.ID) (ISegmentFile, error)
 
-	// RegisterUnsortedFiles is add logical segment file(UNSORTED_SEG)
+	// RegisterUnsortedFiles adds logical segment file(UNSORTED_SEG)
 	// to Manager.UnsortedFiles[]
 	RegisterUnsortedFiles(common.ID) (ISegmentFile, error)
 
-	// UnregisterUnsortedFile is delete a logical segment file
+	// UnregisterUnsortedFile deletes a logical segment file
 	// from Manager.UnsortedFiles[]
 	UnregisterUnsortedFile(common.ID)
 
-	// UnregisterSortedFile is delete a physical segment file
+	// UnregisterSortedFile deletes a physical segment file
 	// from Manager.SortedFiles[]
 	UnregisterSortedFile(common.ID)
 
-	// UpgradeFile is create a physical segment file based on common.ID and
+	// UpgradeFile creates a physical segment file based on common.ID and
 	// delete it from Manager.UnsortedFiles[] and add it to Manager.SortedFiles[]
 	UpgradeFile(common.ID) ISegmentFile
 
 	GetSortedFile(common.ID) ISegmentFile
 	GetUnsortedFile(common.ID) ISegmentFile
 
-	// String is to Sprintf every item of Manager.SortedFiles[]&Manager.UnsortedFiles[]
+	// String print every item of Manager.SortedFiles[]&Manager.UnsortedFiles[]
 	String() string
 }
 
@@ -106,7 +106,7 @@ type IBaseFile interface {
 	common.IRef
 	GetIndicesMeta() *IndicesMeta
 
-	// ReadPoint is reads Pointer to buf, and detects Pointer.Len
+	// ReadPoint reads Part to buf, and detects Pointer.Len
 	// in aoe, the Pointer is Column
 	ReadPoint(ptr *Pointer, buf []byte)
 
@@ -114,16 +114,16 @@ type IBaseFile interface {
 	// the external Read interface is implemented through ReadPart
 	ReadPart(colIdx uint64, id common.ID, buf []byte)
 
-	// PrefetchPart is prefetch a Pointer on a file using system calls
+	// PrefetchPart calls readahead in Linux
 	PrefetchPart(colIdx uint64, id common.ID) error
 
-	// PartSize is return a Pointer Len ro OriginLen
+	// PartSize returns a Pointer Len or OriginLen
 	PartSize(colIdx uint64, id common.ID, isOrigin bool) int64
 
-	// DataCompressAlgo is return the compress type of the BaseFIle
+	// DataCompressAlgo returns the compress type of the BaseFIle
 	DataCompressAlgo(common.ID) int
 
-	// Stat is retrun FileInfo of the BaseFile
+	// Stat retruns FileInfo of the BaseFile
 	// initialize at the time of new(BaseFIle)
 	Stat() common.FileInfo
 	MakeVirtualIndexFile(*IndexMeta) common.IVFile
@@ -133,21 +133,20 @@ type IBaseFile interface {
 type ISegmentFile interface {
 	IBaseFile
 
-	// RefBlock is ref SegmentFile, UnsortedSegmentFile adds
-	// a .blk file to UnsortedSegmentFile.Blocks[]
+	// RefBlock acquires a reference to the underlying block.
 	RefBlock(blkId common.ID)
 
-	// UnrefBlock is unref SegmentFile, UnsortedSegmentFile is unref all block file.
-	// TODO: unref block file of the blkId
+	// UnrefBlock releases the reference to the underlying block
 	UnrefBlock(blkId common.ID)
 
-	// ReadBlockPoint is reads Pointer to buf. Index will be use.
+	// ReadBlockPoint reads a Pointer data to buf,
+	// which called by EmbedBlockIndexFile.
 	ReadBlockPoint(id common.ID, ptr *Pointer, buf []byte)
 	GetBlockIndicesMeta(id common.ID) *IndicesMeta
 
 	MakeVirtualBlkIndexFile(id *common.ID, meta *IndexMeta) common.IVFile
 
-	// MakeVirtualPartFile is New a ColumnPart, ColumnPart provides external Read services
+	// MakeVirtualPartFile creates a new column part. ColumnPart provides external Read services
 	MakeVirtualPartFile(id *common.ID) common.IVFile
 }
 
