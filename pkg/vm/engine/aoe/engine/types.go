@@ -27,9 +27,9 @@ type aoeEngine struct {
 }
 
 type database struct {
-	id      uint64//id of the database
-	typ     int//type of the database
-	catalog *catalog3.Catalog//the catalog of the aoeEngine
+	id      uint64            //id of the database
+	typ     int               //type of the database
+	catalog *catalog3.Catalog //the catalog of the aoeEngine
 }
 
 type relation struct {

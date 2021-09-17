@@ -296,6 +296,7 @@ func NewCubeDriverWithFactory(
 	h.init()
 	return h, nil
 }
+
 //Start starts h.app add initial the shard pool
 func (h *driver) Start() error {
 	err := h.app.Start()
@@ -317,6 +318,7 @@ func (h *driver) Start() error {
 		}
 	}
 }
+
 //initShardPool creates a shard pool by h.store and record it in h.spool
 func (h *driver) initShardPool() error {
 	p, err := h.store.CreateResourcePool(metapb.ResourcePool{Group: uint64(pb.AOEGroup), Capacity: h.cfg.ClusterConfig.PreAllocatedGroupNum, RangePrefix: codec.String2Bytes("aoe-")})
@@ -326,22 +328,27 @@ func (h *driver) initShardPool() error {
 	h.spool = p
 	return nil
 }
+
 //Close stop h.app
 func (h *driver) Close() {
 	h.app.Stop()
 }
+
 //AOEStore returns h.aoeDB
 func (h *driver) AOEStore() *adb.DB {
 	return h.aoeDB
 }
+
 //GetShardPool returns h.spool
 func (h *driver) GetShardPool() raftstore.ShardsPool {
 	return h.spool
 }
+
 // Set set key value.
 func (h *driver) Set(key, value []byte) error {
 	return h.SetWithGroup(key, value, pb.KVGroup)
 }
+
 // SetWithGroup set key value in specific group.
 func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 	req := pb.Request{
@@ -355,10 +362,12 @@ func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 	_, err := h.ExecWithGroup(req, group)
 	return err
 }
+
 //AsyncSet sets key and value in KVGroup asynchronously.
 func (h *driver) AsyncSet(key, value []byte, cb func(interface{}, []byte, error), data interface{}) {
 	h.AsyncSetWithGroup(key, value, pb.KVGroup, cb, data)
 }
+
 //AsyncSetWithGroup sets key and value in specific group asynchronously by calling h.AsyncExecWithGroup.
 func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(interface{}, []byte, error), data interface{}) {
 	req := pb.Request{
@@ -371,6 +380,7 @@ func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(in
 	}
 	h.AsyncExecWithGroup(req, group, cb, data)
 }
+
 //SetIfNotExist sets key and value in KVGroup if the key doesn't exist.
 func (h *driver) SetIfNotExist(key, value []byte) error {
 	req := pb.Request{
@@ -387,6 +397,7 @@ func (h *driver) SetIfNotExist(key, value []byte) error {
 	}
 	return err
 }
+
 //Get gets the key from KVGroup
 func (h *driver) Get(key []byte) ([]byte, error) {
 	return h.GetWithGroup(key, pb.KVGroup)
@@ -404,6 +415,7 @@ func (h *driver) GetWithGroup(key []byte, group pb.Group) ([]byte, error) {
 	value, err := h.ExecWithGroup(req, group)
 	return value, err
 }
+
 //Delete deletes the key in KVGroup.
 func (h *driver) Delete(key []byte) error {
 	req := pb.Request{
@@ -416,6 +428,7 @@ func (h *driver) Delete(key []byte) error {
 	_, err := h.ExecWithGroup(req, pb.KVGroup)
 	return err
 }
+
 //DeleteIfExist deletes the key if it exists in KVGroup
 func (h *driver) DeleteIfExist(key []byte) error {
 	req := pb.Request{
@@ -428,11 +441,13 @@ func (h *driver) DeleteIfExist(key []byte) error {
 	_, err := h.ExecWithGroup(req, pb.KVGroup)
 	return err
 }
+
 //Scan scans in KVGroup.
 //It returns the keys and values whose key is between start and end.
 func (h *driver) Scan(start []byte, end []byte, limit uint64) ([][]byte, error) {
 	return h.ScanWithGroup(start, end, limit, pb.KVGroup)
 }
+
 //ScanWithGroup returns the keys and values whose key is between start and end.
 func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.Group) ([][]byte, error) {
 	req := pb.Request{
@@ -469,11 +484,13 @@ func (h *driver) ScanWithGroup(start []byte, end []byte, limit uint64, group pb.
 	}
 	return pairs, err
 }
+
 //PrefixScan scans in KVGroup
 //It returns the kv pairs with specific prefix
 func (h *driver) PrefixScan(prefix []byte, limit uint64) ([][]byte, error) {
 	return h.PrefixScanWithGroup(prefix, limit, pb.KVGroup)
 }
+
 //PrefixScanWithGroup scan the kv pairs with the prefix in specific group
 func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group) ([][]byte, error) {
 	req := pb.Request{
@@ -510,6 +527,7 @@ func (h *driver) PrefixScanWithGroup(prefix []byte, limit uint64, group pb.Group
 	}
 	return pairs, err
 }
+
 //PrefixKeys scans in KVGroup.
 //It returns the values whose key has specific prefix.
 func (h *driver) PrefixKeys(prefix []byte, limit uint64) ([][]byte, error) {

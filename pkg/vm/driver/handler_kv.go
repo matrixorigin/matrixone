@@ -28,6 +28,7 @@ import (
 	pb3 "matrixone/pkg/vm/driver/pb"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 )
+
 //set responses the requests whose CustemType is Set.
 //The usage of shard is to fetch the Storage.
 //If fail, it returns the err in resp.Value.
@@ -46,6 +47,7 @@ func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 	changedBytes := int64(writtenBytes)
 	return writtenBytes, changedBytes, resp
 }
+
 //setIfNotExist responses the requests whose CustemType is SetIfNotExist.
 //The usage of shard is to fetch the Storage.
 //If fail (including the condition that the key exists), it returns the err in resp.Value.
@@ -76,6 +78,7 @@ func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx
 	changedBytes := int64(writtenBytes)
 	return writtenBytes, changedBytes, resp
 }
+
 //del responses the requests whose CustemType is Del.
 //The usage of shard is to fetch the Storage.
 //If fail, it returns 0.
@@ -92,6 +95,7 @@ func (h *driver) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 	changedBytes := int64(writtenBytes)
 	return writtenBytes, changedBytes, resp
 }
+
 //delIfExist responses the requests.
 //The usage of shard is to fetch the Storage.
 //If fail (including the condition that the key doesn't exist), it returns the error in resp.Value.
@@ -113,6 +117,7 @@ func (h *driver) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	changedBytes := int64(writtenBytes)
 	return writtenBytes, changedBytes, resp
 }
+
 //get responses the requests whose CustemType is Get.
 //The usage of shard is to fetch the Storage.
 //If fail, it returns the error in resp.Value and returns 500.
@@ -128,6 +133,7 @@ func (h *driver) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 	resp.Value = value
 	return resp, 0
 }
+
 //prefixScan responses the requests whose CustemType is PrefixScan.
 //If fail, it returns the error in resp.Value and returns 500.
 //If success, it returns the kv-pairs in resp.Value and returns 0.
@@ -163,6 +169,7 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	}
 	return resp, 0
 }
+
 //scan responses the requests whose CustemType is Scan.
 //If fail, it returns the error in resp.Value and returns 500.
 //If success, it returns the kv-pairs in resp.Value and returns 0.
@@ -208,6 +215,7 @@ func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.
 	}
 	return resp, 0
 }
+
 //incr responses the requests whose CustemType is Incr.
 //If fail, it returns 0,0 and returns empty resp.
 //If success, it returns amount of the written bytes and returns the id in resp.Value.

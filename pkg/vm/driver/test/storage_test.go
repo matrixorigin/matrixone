@@ -15,8 +15,8 @@
 package test
 
 import (
-	"errors"
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
@@ -108,37 +108,37 @@ func TestAOEStorage(t *testing.T) {
 	t0 := time.Now()
 	//Set Test
 	err := driver.Set([]byte("Hello"), []byte("World"))
-	require.NoError(t, err,"Set fail")
+	require.NoError(t, err, "Set fail")
 	fmt.Printf("time cost for set is %d ms\n", time.Since(t0).Milliseconds())
 
 	err = driver.SetIfNotExist([]byte("Hello_IfNotExist"), []byte("World_IfNotExist1"))
-	require.NoError(t, err,"SetIfNotExist fail")
+	require.NoError(t, err, "SetIfNotExist fail")
 
 	err = driver.SetIfNotExist([]byte("Hello_IfNotExist"), []byte("World_IfNotExist2"))
-	require.Equal(t, err,errors.New("key is already existed"),"SetIfNotExist wrong")
+	require.Equal(t, err, errors.New("key is already existed"), "SetIfNotExist wrong")
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	driver.AsyncSet([]byte("Hello_Async"), []byte("World_Async"),func(i interface{}, data []byte, err error) {
-		require.NoError(t,err,"AsyncSet Fail")
+	driver.AsyncSet([]byte("Hello_Async"), []byte("World_Async"), func(i interface{}, data []byte, err error) {
+		require.NoError(t, err, "AsyncSet Fail")
 		wg.Done()
-	},nil)
+	}, nil)
 	wg.Wait()
 	//Get Test
 	t0 = time.Now()
 	value, err := driver.Get([]byte("Hello"))
-	require.NoError(t, err,"Get Fail")
-	require.Equal(t, []byte("World"), value,"Get wrong")
+	require.NoError(t, err, "Get Fail")
+	require.Equal(t, []byte("World"), value, "Get wrong")
 	fmt.Printf("time cost for get is %d ms\n", time.Since(t0).Milliseconds())
 	value, err = driver.Get([]byte("Hello_IfNotExist"))
-	require.NoError(t, err,"Get2 Fail")
-	require.Equal(t, []byte("World_IfNotExist1"),value ,"Get2 wrong")
+	require.NoError(t, err, "Get2 Fail")
+	require.Equal(t, []byte("World_IfNotExist1"), value, "Get2 wrong")
 	value, err = driver.Get([]byte("Hello_Async"))
-	require.NoError(t, err,"Get2 Fail")
-	require.Equal(t, []byte("World_Async"),value,"Get3 wrong")
+	require.NoError(t, err, "Get2 Fail")
+	require.Equal(t, []byte("World_Async"), value, "Get3 wrong")
 	value, err = driver.Get([]byte("NotExist"))
-	require.NoError(t, err,"Get NotExist Fail")
-	require.Equal(t,"",string(value), "Get NotExist wrong")
+	require.NoError(t, err, "Get NotExist Fail")
+	require.Equal(t, "", string(value), "Get NotExist wrong")
 	kvs, err := driver.Scan(nil, nil, 0)
 	require.NoError(t, err)
 	require.Equal(t, 6, len(kvs))
@@ -213,13 +213,13 @@ func TestAOEStorage(t *testing.T) {
 	//AllocId Test
 	shard, err := driver.GetShardPool().Alloc(uint64(pb.AOEGroup), []byte("test-1"))
 	require.NoError(t, err)
-	_,err=driver.AllocID([]byte("alloc_id"),0)
-	require.NoError(t, err,"AllocID fail")
+	_, err = driver.AllocID([]byte("alloc_id"), 0)
+	require.NoError(t, err, "AllocID fail")
 	wg.Add(1)
-	driver.AsyncAllocID([]byte("async_alloc_id"),0,func(i interface{}, data []byte, err error) {
-		require.NoError(t,err,"AsyncSet Fail")
+	driver.AsyncAllocID([]byte("async_alloc_id"), 0, func(i interface{}, data []byte, err error) {
+		require.NoError(t, err, "AsyncSet Fail")
 		wg.Done()
-	},nil)
+	}, nil)
 	wg.Wait()
 	//CreateTableTest
 	toShard := shard.ShardID
@@ -251,7 +251,7 @@ func TestAOEStorage(t *testing.T) {
 		if err != nil {
 			stdLog.Printf("%v", err)
 		}
-		require.NoError(t, err,"Append%d fail",i)
+		require.NoError(t, err, "Append%d fail", i)
 		segmentedIndex, err := driver.GetSegmentedId(toShard)
 		require.NoError(t, err)
 		stdLog.Printf("[Debug]call GetSegmentedId after write %d batch, result is %d", i, segmentedIndex)
@@ -262,8 +262,8 @@ func TestAOEStorage(t *testing.T) {
 	require.Equal(t, segmentCnt, len(ids.Ids))
 
 	//DropTableTest
-	_,err=driver.DropTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
-	require.NoError(t,err,"DropTablet fail")
+	_, err = driver.DropTablet(codec.Bytes2String(codec.EncodeKey(toShard, tableInfo.Id)), toShard)
+	require.NoError(t, err, "DropTablet fail")
 	time.Sleep(3 * time.Second)
 
 	if restart {

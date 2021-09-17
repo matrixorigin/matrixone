@@ -25,10 +25,12 @@ import (
 	"matrixone/pkg/vm/metadata"
 	"time"
 )
+
 //Type return the type of the database
 func (db *database) Type() int {
 	return db.typ
 }
+
 //Delete
 func (db *database) Delete(epoch uint64, name string) error {
 	t0 := time.Now()
