@@ -13,7 +13,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
-	github.com/matrixorigin/matrixcube v0.0.0-20210908132103-84de26a13f60
+	github.com/matrixorigin/matrixcube v0.0.0-20210916130634-a8d662d3cd96
 	github.com/matrixorigin/simdcsv v0.0.0-20210914071614-2566587f2d43
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
