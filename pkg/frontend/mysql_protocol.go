@@ -366,7 +366,7 @@ func (mp *MysqlProtocol) appendStringLenEncOfUint64(data []byte, value uint64) [
 //return the buffer
 func (mp *MysqlProtocol) appendStringLenEncOfFloat64(data []byte, value float64, bitSize int) []byte {
 	var tmp []byte
-	tmp = strconv.AppendFloat(tmp, value, 'f', -1, bitSize)
+	tmp = strconv.AppendFloat(tmp, value, 'f', 4, bitSize)
 	return mp.appendCountOfBytesLenEnc(data, tmp)
 }
 
