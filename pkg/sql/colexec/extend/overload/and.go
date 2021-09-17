@@ -39,6 +39,7 @@ func init() {
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
+					lv.Col = lvs
 					return lv, nil
 				}
 				if len(rvs) >= len(lvs) && (rv.Ref == 1 || rv.Ref == 0) {
@@ -48,6 +49,7 @@ func init() {
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
 					}
+					rv.Col = rvs
 					return rv, nil
 				}
 				n := len(lvs)
