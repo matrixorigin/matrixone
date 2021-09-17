@@ -102,31 +102,38 @@ func (blk *Block) GetCount() uint64 {
 	return atomic.LoadUint64(&blk.Count)
 }
 
-func (blk *Block) AddCount(n uint64) uint64 {
-	newCnt := atomic.AddUint64(&blk.Count, n)
-	if newCnt > blk.Segment.Table.Conf.BlockMaxRows {
-		panic("logic error")
+func (blk *Block) AddCount(n uint64) (uint64, error) {
+	curCnt := blk.GetCount()
+	if curCnt+n > blk.Segment.Table.Conf.BlockMaxRows {
+		return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, blk.Segment.Table.Conf.BlockMaxRows))
 	}
-	return newCnt
+	for !atomic.CompareAndSwapUint64(&blk.Count, curCnt, curCnt+n) {
+		curCnt = blk.GetCount()
+		if curCnt+n > blk.Segment.Table.Conf.BlockMaxRows {
+			return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, blk.Segment.Table.Conf.BlockMaxRows))
+		}
+	}
+	return curCnt+n, nil
 }
 
 // SetIndex changes the current index to previous index if exists, and
 // sets the current index to idx.
-func (blk *Block) SetIndex(idx LogIndex) {
+func (blk *Block) SetIndex(idx LogIndex) error {
 	blk.Lock()
 	defer blk.Unlock()
 	if blk.Index != nil {
 		if !blk.Index.IsApplied() {
-			panic("logic error")
+			return errors.New(fmt.Sprintf("block already has applied index: %d", blk.Index.ID))
 		}
 		blk.PrevIndex = blk.Index
 		blk.Index = &idx
 	} else {
 		if blk.PrevIndex != nil {
-			panic("logic error")
+			return errors.New(fmt.Sprintf("block has no index but has prev index: %d", blk.PrevIndex.ID))
 		}
 		blk.Index = &idx
 	}
+	return nil
 }
 
 func (blk *Block) String() string {
@@ -155,9 +162,7 @@ func (blk *Block) SetCount(count uint64) error {
 		return errors.New("SetCount cannot set smaller count")
 	}
 	blk.Count = count
-	if count == 0 {
-		blk.DataState = EMPTY
-	} else if count < blk.MaxRowCount {
+	if count < blk.MaxRowCount {
 		blk.DataState = PARTIAL
 	} else {
 		blk.DataState = FULL

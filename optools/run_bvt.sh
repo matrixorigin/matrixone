@@ -1,16 +1,20 @@
 #!/bin/bash
-#===============================================================================
-#
-#          FILE: run_bvt.sh
-#   DESCRIPTION: 
-#        AUTHOR: Matthew Li, lignay@me.com
-#  ORGANIZATION: 
-#       CREATED: 09/01/2021
-#      REVISION:  ---
-#===============================================================================
 
-set -o nounset                                  # Treat unset variables as an error
-#set -euxo pipefail
+# Copyright 2021 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -o nounset
 
 if [[ $# != 2 ]]; then
     echo "Usage: $0 CaseType BuildOne"
@@ -41,7 +45,7 @@ if [[ ! $MAKE_ONE =~ ^(True|False)$ ]]; then
     exit 1
 fi
 
-# This is a workaround before publishing matrixone as a open source project
+# This is a workaround before publishing matrixone as an open source project
 [[ 'X' == "X$REPO_TOKEN" ]] && (echo 'Not found repo token, please export environment variable "export REPO_TOKEN=<YourRepoToken>"'; exit 1)
 
 TESTER_REPO="$G_STAGE/mysql-tester"

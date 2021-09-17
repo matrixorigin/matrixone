@@ -16,13 +16,11 @@ package metadata
 
 import (
 	"encoding/json"
+	"github.com/panjf2000/ants/v2"
+	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
 	"testing"
-	"time"
-
-	"github.com/panjf2000/ants/v2"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -30,42 +28,13 @@ const (
 	segmentBlockCount = uint64(4)
 )
 
-func TestBlock(t *testing.T) {
-	mu := &sync.RWMutex{}
-	ts1 := NowMicro()
-	time.Sleep(time.Duration(1) * time.Microsecond)
-	info := MockInfo(mu, blockRowCount, segmentBlockCount)
-	info.Conf.Dir = "/tmp"
-	schema := MockSchema(2)
-	tbl := NewTable(NextGloablSeqnum(), info, schema)
-	seg := NewSegment(tbl, info.Sequence.GetSegmentID())
-	blk := NewBlock(info.Sequence.GetBlockID(), seg)
-	time.Sleep(time.Duration(1) * time.Microsecond)
-	ts2 := NowMicro()
-	t.Logf("%d %d %d", ts1, blk.CreatedOn, ts2)
-	assert.False(t, blk.Select(ts1))
-	assert.True(t, blk.Select(ts2))
-	time.Sleep(time.Duration(1) * time.Microsecond)
-	ts3 := NowMicro()
-
-	err := blk.Delete(ts3)
-	assert.Nil(t, err)
-	time.Sleep(time.Duration(1) * time.Microsecond)
-	ts4 := NowMicro()
-
-	assert.False(t, blk.Select(ts1))
-	assert.True(t, blk.Select(ts2))
-	assert.False(t, blk.Select(ts3))
-	assert.False(t, blk.Select(ts4))
-}
-
 func TestSegment(t *testing.T) {
 	mu := &sync.RWMutex{}
 	info := MockInfo(mu, blockRowCount, segmentBlockCount)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
 	t1 := NowMicro()
-	tbl := NewTable(NextGloablSeqnum(), info, schema)
+	tbl := NewTable(NextGlobalSeqNum(), info, schema)
 	seg1 := NewSegment(tbl, info.Sequence.GetSegmentID())
 	seg2 := NewSegment(tbl, info.Sequence.GetSegmentID())
 	blk1 := NewBlock(info.Sequence.GetBlockID(), seg2)
@@ -101,11 +70,11 @@ func TestTable(t *testing.T) {
 	info := MockInfo(mu, blockRowCount, segmentBlockCount)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	tbl := NewTable(NextGloablSeqnum(), info, schema)
+	tbl := NewTable(NextGlobalSeqNum(), info, schema)
 	seg, err := tbl.CreateSegment()
 	assert.Nil(t, err)
 
-	assert.Equal(t, seg.GetBoundState(), STANDLONE)
+	assert.Equal(t, seg.GetBoundState(), Standalone)
 
 	err = tbl.RegisterSegment(seg)
 	assert.Nil(t, err)
@@ -136,10 +105,10 @@ func TestInfo(t *testing.T) {
 	info := MockInfo(mu, blockRowCount, segmentBlockCount)
 	info.Conf.Dir = "/tmp"
 	schema := MockSchema(2)
-	tbl, err := info.CreateTable(NextGloablSeqnum(), schema)
+	tbl, err := info.CreateTable(NextGlobalSeqNum(), schema)
 	assert.Nil(t, err)
 
-	assert.Equal(t, tbl.GetBoundState(), STANDLONE)
+	assert.Equal(t, tbl.GetBoundState(), Standalone)
 
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
@@ -154,7 +123,7 @@ func TestCreateDropTable(t *testing.T) {
 	mu := &sync.RWMutex{}
 	info := MockInfo(mu, blockRowCount, segmentBlockCount)
 	info.Conf.Dir = "/tmp"
-	tbl, err := info.CreateTableFromTableInfo(tblInfo, dbi.TableOpCtx{TableName: tblInfo.Name, OpIndex: NextGloablSeqnum()})
+	tbl, err := info.CreateTableFromTableInfo(tblInfo, dbi.TableOpCtx{TableName: tblInfo.Name, OpIndex: NextGlobalSeqNum()})
 	assert.Nil(t, err)
 	assert.Equal(t, tblInfo.Name, tbl.Schema.Name)
 
@@ -178,11 +147,11 @@ func TestCreateDropTable(t *testing.T) {
 	ts := NowMicro()
 	assert.False(t, rTbl.IsDeleted(ts))
 
-	tid, err := info.SoftDeleteTable(tbl.Schema.Name, NextGloablSeqnum())
+	tid, err := info.SoftDeleteTable(tbl.Schema.Name, NextGlobalSeqNum())
 	assert.Nil(t, err)
 	assert.Equal(t, rTbl.ID, tid)
 
-	_, err = info.SoftDeleteTable(tbl.Schema.Name, NextGloablSeqnum())
+	_, err = info.SoftDeleteTable(tbl.Schema.Name, NextGlobalSeqNum())
 	assert.NotNil(t, err)
 
 	rTbl2, err := info.ReferenceTableByName(tbl.Schema.Name)

@@ -80,8 +80,8 @@ func (state *BoundSate) GetBoundState() BoundSate {
 }
 
 func (state *BoundSate) Detach() error {
-	if *state == Detached || *state == STANDALONE {
-		panic(fmt.Sprintf("detatched or stalone already: %d", *state))
+	if *state == Detached || *state == Standalone {
+		return errors.New(fmt.Sprintf("detatched or stalone already: %d", *state))
 	}
 	*state = Detached
 	return nil

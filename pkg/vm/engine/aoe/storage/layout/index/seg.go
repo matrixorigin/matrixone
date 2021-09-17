@@ -110,9 +110,8 @@ func (holder *SegmentHolder) close() {
 func (holder *SegmentHolder) EvalFilter(colIdx int, ctx *FilterCtx) error {
 	idxes, ok := holder.self.ColIndices[colIdx]
 	if !ok {
-		// TODO
 		ctx.BoolRes = true
-		return nil
+		return errors.New(fmt.Sprintf("index for column %d not found", colIdx))
 	}
 	var err error
 	for _, idx := range idxes {

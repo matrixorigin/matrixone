@@ -6513,7 +6513,7 @@ var errorMsgRefer = map[uint16]errorMsgItem{
 	ER_TRG_NO_SUCH_ROW_IN_TRG:          {1363, []string{"HY000"}, "There is no %s row in %s trigger"},
 	ER_NO_DEFAULT_FOR_FIELD:            {1364, []string{"HY000"}, "Field '%-.192s' doesn't have a default value"},
 	ER_DIVISION_BY_ZERO:                {1365, []string{"22012"}, "Division by 0"},
-	ER_TRUNCATED_WRONG_VALUE_FOR_FIELD: {1366, []string{"HY000"}, "Incorrect %-.32s value: '%-.128s' for column '%.192s' at row %ld"},
+	ER_TRUNCATED_WRONG_VALUE_FOR_FIELD: {1366, []string{"HY000"}, "Incorrect %-.32s value: '%-.128s' for column '%.192s' at row %d"},
 	ER_ILLEGAL_VALUE_FOR_TYPE:          {1367, []string{"22007"}, "Illegal %s '%-.192s' value found during parsing"},
 	ER_VIEW_NONUPD_CHECK:               {1368, []string{"HY000"}, "CHECK OPTION on non-updatable view '%-.192s.%-.192s'"},
 	ER_VIEW_CHECK_FAILED:               {1369, []string{"HY000"}, "CHECK OPTION failed '%-.192s.%-.192s'"},

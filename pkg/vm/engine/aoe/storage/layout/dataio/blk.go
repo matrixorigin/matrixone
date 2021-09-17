@@ -16,6 +16,7 @@ package dataio
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"matrixone/pkg/logutil"
@@ -30,6 +31,12 @@ import (
 
 type FileNameFactory = func(string, common.ID) string
 
+// BlockFile file structure:
+// algo | colCntlen | metaCnt | preIdxLen | preIdx | IdxLen | Idx
+// col01 : coldata len | coldata originlen |
+// col02 : coldata len | coldata originlen |
+// ...
+// col01 data | col02 data |  ...
 type BlockFile struct {
 	common.RefHelper
 	os.File
@@ -232,7 +239,7 @@ func (bf *BlockFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	}
 	pointer, ok := bf.Parts[key]
 	if !ok {
-		panic("logic error")
+		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found",id.BlockID, colIdx))
 	}
 	offset := pointer.Offset
 	sz := pointer.Len

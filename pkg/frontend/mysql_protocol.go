@@ -770,6 +770,10 @@ func (mp *MysqlProtocol) makeOKPayload(affectedRows, lastInsertId uint64, status
 		pos = mp.io.WriteUint16(data, pos, statusFlags)
 	}
 
+	//ensured by capturing packets
+	//it only works on MAC
+	//pos = mp.io.WriteUint8(data,pos,0x2f)
+
 	if mp.capability&CLIENT_SESSION_TRACK != 0 {
 		//TODO:implement it
 	} else {
