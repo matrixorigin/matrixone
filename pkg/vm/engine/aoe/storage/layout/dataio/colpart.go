@@ -20,10 +20,18 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
+// ColPartFile is a Reader instance of columnData in block,
+// which provides external read services
 type ColPartFile struct {
+
+	// SegmentFile is UnsortedSegmentFile or SortedSegmentFile
 	SegmentFile base.ISegmentFile
-	ID          *common.ID
-	Info        common.FileInfo
+
+	// ID is block id
+	ID *common.ID
+
+	// Info is block fileinfo
+	Info common.FileInfo
 }
 
 func newPartFile(id *common.ID, host base.ISegmentFile, isMock bool) common.IVFile {
@@ -36,7 +44,11 @@ func newPartFile(id *common.ID, host base.ISegmentFile, isMock bool) common.IVFi
 		vf.Info = &colPartFileStat{
 			id: id,
 			fileStat: fileStat{
-				size:  host.PartSize(uint64(id.Idx), *id, false),
+
+				// column data size
+				size: host.PartSize(uint64(id.Idx), *id, false),
+
+				// column data osize
 				osize: host.PartSize(uint64(id.Idx), *id, true),
 				algo:  uint8(host.DataCompressAlgo(*id)),
 			},
@@ -52,6 +64,9 @@ func newPartFile(id *common.ID, host base.ISegmentFile, isMock bool) common.IVFi
 }
 
 func (cpf *ColPartFile) Read(buf []byte) (n int, err error) {
+
+	// SortedSegmentFile read one of its own Point
+	// UnsortedSegmentFile calls BlockFile to read a Point of .blk
 	cpf.SegmentFile.ReadPart(uint64(cpf.ID.Idx), *cpf.ID, buf)
 	return len(buf), nil
 }

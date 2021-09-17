@@ -175,6 +175,27 @@ func (b *build) buildSelectClauseWithSummarize(stmt *tree.SelectClause) (op.OP, 
 			return nil, nil, err
 		}
 	}
+	if stmt.Distinct {
+		if o, err = b.buildDedup(o); err != nil {
+			return nil, nil, err
+		}
+		attrs := o.Columns()
+		mp := o.Attribute()
+		pes := make([]*projection.Extend, len(attrs))
+		for i, attr := range attrs {
+			pes[i] = &projection.Extend{
+				Alias: attr,
+				E: &extend.Attribute{
+					Name: attr,
+					Type: mp[attr].Oid,
+				},
+			}
+		}
+		if o, err = projection.New(o, pes); err != nil {
+			return nil, nil, err
+		}
+		return o, pes, nil
+	}
 	return o, nil, nil
 }
 

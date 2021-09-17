@@ -70,6 +70,7 @@ func TestMutCollection(t *testing.T) {
 	t0, err := tables.RegisterTable(tbl)
 	assert.Nil(t, err)
 
+	t0.Ref()
 	c0 := newMutableCollection(manager, t0)
 	blks := uint64(20)
 	expectBlks := blks
@@ -103,7 +104,8 @@ func TestMutCollection(t *testing.T) {
 	t.Log(mgr.String())
 	time.Sleep(time.Duration(50) * time.Millisecond)
 	c0.Unref()
-	time.Sleep(time.Duration(50) * time.Millisecond)
+	time.Sleep(time.Duration(100) * time.Millisecond)
+	t0.Unref()
 	assert.Equal(t, int64(0), t0.RefCount())
 	t.Log(mgr.String())
 	t.Log(sstBufMgr.String())

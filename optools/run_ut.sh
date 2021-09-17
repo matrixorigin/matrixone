@@ -14,18 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#===============================================================================
-#
-#          FILE: run_ut.sh
-#   DESCRIPTION: 
-#        AUTHOR: Matthew Li, lignay@me.com
-#  ORGANIZATION: 
-#       CREATED: 09/01/2021
-#      REVISION:  ---
-#===============================================================================
-
-set -o nounset                                  # Treat unset variables as an error
-#set -exuo pipefail
+set -o nounset
 
 if (( $# == 0 )); then
     echo "Usage: $0 TestType SkipTest"
@@ -54,6 +43,7 @@ UT_FILTER="$G_WKSP/$G_TS-UT-Filter.out"
 UT_COUNT="$G_WKSP/$G_TS-UT-Count.out"
 CODE_COVERAGE="$G_WKSP/$G_TS-UT-Coverage.html"
 RAW_COVERAGE="coverage.out"
+IS_BUILD_FAIL=""
 
 if [[ -f $SCA_REPORT ]]; then rm $SCA_REPORT; fi
 if [[ -f $UT_REPORT ]]; then rm $UT_REPORT; fi
@@ -107,6 +97,7 @@ function run_tests(){
         logger "INF" "Run UT with race check"
         go test -v -p 1 -timeout "${UT_TIMEOUT}m" -race $test_scope | tee $UT_REPORT
     fi
+    IS_BUILD_FAIL=$(egrep "^FAIL.*\ \[build\ failed\]$" $UT_REPORT)
     egrep -a '^=== RUN *Test[^\/]*$|^\-\-\- PASS: *Test|^\-\-\- FAIL: *Test'  $UT_REPORT > $UT_FILTER
     logger "INF" "Refer to $UT_REPORT for details"
 
@@ -120,22 +111,24 @@ function ut_summary(){
     local unknown=$(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$' | wc -l | xargs)
     cat << EOF > $UT_COUNT
 # Total: $total; Passed: $pass; Failed: $fail; Unknown: $unknown
-# 
+#
 # FAILED CASES:
-# $(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test" | xargs)
-# 
+$(cat "$UT_FILTER" | egrep "^\-\-\- FAIL: *Test")
+
 # UNKNOWN CASES:
-# $(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$' | xargs)
-#
-#
-# Code Coverage
-$(go tool cover -func=$RAW_COVERAGE)
-#
+$(cat "$UT_FILTER" | sed '/^=== RUN/{x;p;x;}' | sed -n '/=== RUN/N;/--- /!p' | grep -v '^$')
+
+# BUILD FAILED in UT:
+$(echo "${IS_BUILD_FAIL[@]}")
+
+# Code Coverage Summary:
+$(go tool cover -func=$RAW_COVERAGE | egrep "^total:\s*\(statements\)" | awk '{print $1, $3}')
+
 EOF
     horiz_rule
     cat $UT_COUNT
     horiz_rule
-    if (( $fail > 0 )) || (( $unknown > 0 )); then
+    if (( $fail > 0 )) || (( $unknown > 0 )) || [[ -n "$IS_BUILD_FAIL" ]]; then
       logger "INF" "UNIT TESTING FAILED !!!"
       exit 1
     else

@@ -44,14 +44,22 @@ var (
 	// defaultVecsSerializer = noCompressionVecs
 )
 
+// BlockWriter writes memTable data into
+// the created block file when memTable flush()
 type BlockWriter struct {
-	data         []*gvector.Vector
-	idata        batch.IBatch
-	meta         *md.Block
-	dir          string
-	embbed       bool
-	fileHandle   *os.File
-	fileGetter   blockFileGetter
+	data       []*gvector.Vector
+	idata      batch.IBatch
+	meta       *md.Block
+	dir        string
+	embbed     bool
+	fileHandle *os.File
+
+	// fileGetter is createIOWriter()，use dir&TableID&SegmentID&BlockID to
+	// create a tmp file for dataSerializer to flush data
+	fileGetter blockFileGetter
+
+	// fileCommiter is commitFile()，rename file name after
+	// dataSerializer is completed
 	fileCommiter func(string) error
 
 	// preprocessor preprocess data before writing, such as SORT
@@ -68,6 +76,7 @@ type BlockWriter struct {
 	postExecutor func()
 }
 
+// NewBlockWriter make a BlockWriter, which will be used when the memtable is full.
 func NewBlockWriter(data []*gvector.Vector, meta *md.Block, dir string) *BlockWriter {
 	w := &BlockWriter{
 		data: data,
@@ -82,6 +91,8 @@ func NewBlockWriter(data []*gvector.Vector, meta *md.Block, dir string) *BlockWr
 	return w
 }
 
+// NewIBatchWriter make a BlockWriter, which will be used
+// when the memtable is not full but needs to be flush()
 func NewIBatchWriter(bat batch.IBatch, meta *md.Block, dir string) *BlockWriter {
 	w := &BlockWriter{
 		idata: bat,
@@ -175,6 +186,11 @@ func (bw *BlockWriter) Execute() error {
 	panic("logic error")
 }
 
+// excuteIVecs steps as follows:
+// 1. Create a temp block file.
+// 2. Serialize clolumn data
+// 3. Compress column data and flush them.
+// 4. Rename .tmp file to .blk file.
 func (bw *BlockWriter) executeIVecs() error {
 	w, err := bw.fileGetter(bw.dir, bw.meta)
 	if err != nil {
@@ -201,6 +217,12 @@ func (bw *BlockWriter) executeIVecs() error {
 	return bw.fileCommiter(filename)
 }
 
+// excuteVecs steps as follows:
+// 1. Sort data in memtable.
+// 2. Create a temp block file.
+// 3. Flush indices.
+// 4. Compress column data and flush them.
+// 5. Rename .tmp file to .blk file.
 func (bw *BlockWriter) excuteVecs() error {
 	if bw.preprocessor != nil {
 		if err := bw.preprocessor(bw.data, bw.meta); err != nil {

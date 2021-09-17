@@ -89,7 +89,6 @@ func initMOLogger(cfg *loggerConfig) (*zap.Logger, error) {
 		TimeKey:       "time",
 		NameKey:       "name",
 		CallerKey:     "caller",
-		FunctionKey:   "func",
 		StacktraceKey: "stacktrace",
 		LineEnding:    zapcore.DefaultLineEnding,
 		EncodeLevel:   zapcore.CapitalLevelEncoder,
@@ -97,7 +96,7 @@ func initMOLogger(cfg *loggerConfig) (*zap.Logger, error) {
 			enc.AppendString(t.Format("2006/01/02 15:04:05.000000 -0700"))
 		}),
 		EncodeDuration:   zapcore.StringDurationEncoder,
-		EncodeCaller:     zapcore.FullCallerEncoder,
+		EncodeCaller:     zapcore.ShortCallerEncoder,
 		ConsoleSeparator: " ",
 	}
 
@@ -111,7 +110,7 @@ func initMOLogger(cfg *loggerConfig) (*zap.Logger, error) {
 		return nil, errors.New("unsupported log format")
 	}
 
-	return zap.New(zapcore.NewCore(encoder, syncer, level)), nil
+	return zap.New(zapcore.NewCore(encoder, syncer, level), zap.AddCaller()), nil
 }
 
 // global zap logger for MO server.

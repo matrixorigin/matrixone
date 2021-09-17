@@ -15,6 +15,8 @@
 package dataio
 
 import (
+	"errors"
+	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
@@ -22,6 +24,7 @@ import (
 	// log "github.com/sirupsen/logrus"
 )
 
+// UnsortedSegmentFile is a logical file containing some block(.blk) files
 type UnsortedSegmentFile struct {
 	sync.RWMutex
 	common.RefHelper
@@ -178,7 +181,7 @@ func (sf *UnsortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	sf.RLock()
 	blk, ok := sf.Blocks[id.AsBlockID()]
 	if !ok {
-		panic("logic error")
+		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found",id.BlockID, colIdx))
 	}
 	sf.RUnlock()
 	return blk.PrefetchPart(colIdx, id)
