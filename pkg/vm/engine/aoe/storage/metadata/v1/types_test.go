@@ -28,42 +28,6 @@ const (
 	segmentBlockCount = uint64(4)
 )
 
-func TestSegment(t *testing.T) {
-	mu := &sync.RWMutex{}
-	info := MockInfo(mu, blockRowCount, segmentBlockCount)
-	info.Conf.Dir = "/tmp"
-	schema := MockSchema(2)
-	t1 := NowMicro()
-	tbl := NewTable(NextGlobalSeqNum(), info, schema)
-	seg1 := NewSegment(tbl, info.Sequence.GetSegmentID())
-	seg2 := NewSegment(tbl, info.Sequence.GetSegmentID())
-	blk1 := NewBlock(info.Sequence.GetBlockID(), seg2)
-	err := seg1.RegisterBlock(blk1)
-	assert.Error(t, err)
-
-	for i := 0; i < int(seg1.MaxBlockCount); i++ {
-		blk1, err = seg1.CreateBlock()
-		assert.Nil(t, err)
-		err = seg1.RegisterBlock(blk1)
-		assert.Nil(t, err)
-	}
-	blk2 := NewBlock(info.Sequence.GetBlockID(), seg1)
-	err = seg1.RegisterBlock(blk2)
-	assert.Error(t, err)
-	t.Log(err)
-
-	_, err = seg1.ReferenceBlock(blk1.ID)
-	assert.Nil(t, err)
-	_, err = seg1.ReferenceBlock(blk2.ID)
-	assert.Error(t, err)
-	t.Log(seg1.String())
-
-	ids := seg1.BlockIDs(t1)
-	assert.Equal(t, len(ids), 0)
-	// ts := NowMicro()
-	ids = seg1.BlockIDs()
-	assert.Equal(t, len(ids), int(seg1.MaxBlockCount))
-}
 
 func TestTable(t *testing.T) {
 	mu := &sync.RWMutex{}
@@ -98,22 +62,6 @@ func TestTable(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, sizeStep*uint64(loopCnt), tbl.Stat.Size)
 	assert.Equal(t, rowStep*uint64(loopCnt), tbl.Stat.Rows)
-}
-
-func TestInfo(t *testing.T) {
-	mu := &sync.RWMutex{}
-	info := MockInfo(mu, blockRowCount, segmentBlockCount)
-	info.Conf.Dir = "/tmp"
-	schema := MockSchema(2)
-	tbl, err := info.CreateTable(NextGlobalSeqNum(), schema)
-	assert.Nil(t, err)
-
-	assert.Equal(t, tbl.GetBoundState(), Standalone)
-
-	err = info.RegisterTable(tbl)
-	assert.Nil(t, err)
-	t.Log(info.String())
-	assert.Equal(t, tbl.GetBoundState(), Attached)
 }
 
 func TestCreateDropTable(t *testing.T) {

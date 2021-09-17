@@ -107,7 +107,7 @@ func (t Type) String() string {
 }
 
 func (a Type) Eq(b Type) bool {
-	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Precision == b.Width
+	return a.Oid == b.Oid && a.Size == b.Size && a.Width == b.Width && a.Precision == b.Precision
 }
 
 func (t T) ToType() Type {

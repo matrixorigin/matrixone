@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
@@ -98,6 +98,7 @@ func (seg *Segment) HasUncommitted() bool {
 	}
 	for _, blk := range seg.Blocks {
 		if blk.DataState != FULL {
+			logutil.Infof("xxx")
 			return true
 		}
 	}
@@ -234,16 +235,14 @@ func (seg *Segment) TryClose() bool {
 	return false
 }
 
-func (seg *Segment) TrySorted() {
+func (seg *Segment) TrySorted() error {
 	seg.Lock()
 	defer seg.Unlock()
-	if seg.DataState == SORTED {
-		return
-	}
 	if seg.DataState != CLOSED {
-		panic("logic error")
+		return errors.New("segment not closed yet, can't be sorted")
 	}
 	seg.DataState = SORTED
+	return nil
 }
 
 func (seg *Segment) GetMaxBlkID() uint64 {
