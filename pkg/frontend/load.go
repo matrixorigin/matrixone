@@ -205,7 +205,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 			//step 1 : skip dropped lines
 			if plh.lineCount < plh.load.IgnoredLines {
 				plh.lineCount++
-				return nil
+				continue
 			}
 
 			wait_b := time.Now()
