@@ -21,7 +21,7 @@ import (
 	gbatch "matrixone/pkg/container/batch"
 	gvector "matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -29,7 +29,6 @@ import (
 	"path/filepath"
 
 	"github.com/pierrec/lz4"
-	// log "github.com/sirupsen/logrus"
 )
 
 type vecsSerializer func(*os.File, []*gvector.Vector, *md.Block) error
@@ -139,7 +138,7 @@ func (bw *BlockWriter) SetDataFlusher(f vecsSerializer) {
 }
 
 func (bw *BlockWriter) commitFile(fname string) error {
-	name, err := e.FilenameFromTmpfile(fname)
+	name, err := common.FilenameFromTmpfile(fname)
 	if err != nil {
 		return err
 	}
@@ -149,7 +148,7 @@ func (bw *BlockWriter) commitFile(fname string) error {
 
 func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, error) {
 	id := meta.AsCommonID()
-	filename := e.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, true)
+	filename := common.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, true)
 	fdir := filepath.Dir(filename)
 	if _, err := os.Stat(fdir); os.IsNotExist(err) {
 		err = os.MkdirAll(fdir, 0755)
@@ -173,7 +172,7 @@ func (bw *BlockWriter) flushIndices(w *os.File, data []*gvector.Vector, meta *md
 func (bw *BlockWriter) GetFileName() string {
 	fname := bw.fileHandle.Name()
 	s, _ := filepath.Abs(bw.fileHandle.Name())
-	s, _ = e.FilenameFromTmpfile(fname)
+	s, _ = common.FilenameFromTmpfile(fname)
 	return s
 }
 

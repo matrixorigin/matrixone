@@ -21,7 +21,6 @@ import (
 	"io"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/prefetch"
-	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -52,7 +51,7 @@ type BlockFile struct {
 }
 
 func blockFileNameFactory(dir string, id common.ID) string {
-	return e.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, false)
+	return common.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, false)
 }
 
 func NewBlockFile(segFile base.ISegmentFile, id common.ID, nameFactory FileNameFactory) *BlockFile {
@@ -239,7 +238,7 @@ func (bf *BlockFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	}
 	pointer, ok := bf.Parts[key]
 	if !ok {
-		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found",id.BlockID, colIdx))
+		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found", id.BlockID, colIdx))
 	}
 	offset := pointer.Offset
 	sz := pointer.Len

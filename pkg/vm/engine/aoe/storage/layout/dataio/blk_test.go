@@ -22,7 +22,6 @@ import (
 	"matrixone/pkg/container/types"
 	gvector "matrixone/pkg/container/vector"
 	"matrixone/pkg/logutil"
-	e "matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -48,7 +47,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 	var dir string
 	for i := 0; i < blkCnt; i++ {
 		id.BlockID = uint64(i)
-		name := e.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID, false)
+		name := common.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID, false)
 		dir = filepath.Dir(name)
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			err = os.MkdirAll(dir, 0755)

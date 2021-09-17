@@ -356,13 +356,13 @@ func NewReplayHandle(workDir string, observer IReplayObserver) *replayHandle {
 	empty := false
 	var err error
 	{
-		dataDir := e.MakeDataDir(workDir)
+		dataDir := common.MakeDataDir(workDir)
 		if _, err = os.Stat(dataDir); os.IsNotExist(err) {
 			err = os.MkdirAll(dataDir, os.ModePerm)
 		}
 		fs.dataDir = dataDir
 	}
-	metaDir := e.MakeMetaDir(workDir)
+	metaDir := common.MakeMetaDir(workDir)
 	if _, err = os.Stat(metaDir); os.IsNotExist(err) {
 		err = os.MkdirAll(metaDir, 0755)
 		empty = true
@@ -504,8 +504,8 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 }
 
 func (h *replayHandle) addDataFile(fname string) {
-	if name, ok := e.ParseTBlockfileName(fname); ok {
-		id, err := common.ParseTBlockfileName(name)
+	if name, ok := common.ParseTBlockfileName(fname); ok {
+		id, err := common.ParseTBlkNameToID(name)
 		if err != nil {
 			panic(err)
 		}
@@ -513,8 +513,8 @@ func (h *replayHandle) addDataFile(fname string) {
 		h.addBlock(id, fullname, true)
 		return
 	}
-	if name, ok := e.ParseBlockfileName(fname); ok {
-		id, err := common.ParseBlockFileName(name)
+	if name, ok := common.ParseBlockfileName(fname); ok {
+		id, err := common.ParseBlkNameToID(name)
 		if err != nil {
 			panic(err)
 		}
@@ -522,7 +522,7 @@ func (h *replayHandle) addDataFile(fname string) {
 		h.addBlock(id, fullname, false)
 		return
 	}
-	if name, ok := e.ParseSegmentfileName(fname); ok {
+	if name, ok := common.ParseSegmentfileName(fname); ok {
 		id, err := common.ParseSegmentFileName(name)
 		if err != nil {
 			panic(err)
@@ -535,7 +535,7 @@ func (h *replayHandle) addDataFile(fname string) {
 }
 
 func (h *replayHandle) addMetaFile(fname string) {
-	name, ok := e.ParseTableMetaName(fname)
+	name, ok := common.ParseTableMetaName(fname)
 	if ok {
 		tid, version, err := md.ParseTableCkpFile(name)
 		if err != nil {
@@ -549,7 +549,7 @@ func (h *replayHandle) addMetaFile(fname string) {
 		return
 	}
 
-	version, ok := e.ParseInfoMetaName(fname)
+	version, ok := common.ParseInfoMetaName(fname)
 	if ok {
 		f := new(infoFile)
 		f.name = path.Join(h.metaDir, fname)
