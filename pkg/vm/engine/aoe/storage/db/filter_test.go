@@ -36,7 +36,10 @@ import (
 
 func TestAll(t *testing.T) {
 	if !dataio.FlushIndex {
-		return
+		dataio.FlushIndex = true
+		defer func() {
+			dataio.FlushIndex = false
+		}()
 	}
 	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
@@ -114,6 +117,16 @@ func TestAll(t *testing.T) {
 	assert.Equal(t, res, []string{"17", "18", "19", "20"})
 	res, _ = sparseFilter.Ge("mock_0", int8(9))
 	assert.Equal(t, res, []string{"17", "18", "19", "20"})
+	res, _ = sparseFilter.Eq("mock_0", int8(1))
+	assert.Equal(t, res, []string{"17", "18", "19", "20"})
+	res, _ = sparseFilter.Lt("mock_0", int8(1))
+	assert.Equal(t, res, []string{"17", "18", "19", "20"})
+	res, _ = sparseFilter.Gt("mock_0", int8(9))
+	assert.Equal(t, res, []string{})
+	res, _ = sparseFilter.Le("mock_0", int8(-1))
+	assert.Equal(t, res, []string{})
+	res, _ = sparseFilter.Ge("mock_0", int8(10))
+	assert.Equal(t, res, []string{})
 
 	res, _ = sparseFilter.Eq("mock_1", int16(-1))
 	assert.Equal(t, res, []string{})
@@ -312,6 +325,21 @@ func TestAll(t *testing.T) {
 	assert.Equal(t, res, []string{})
 	res, _ = sparseFilter.Gt("mock_12", []byte("str8"))
 	assert.Equal(t, res, []string{"17", "18", "19", "20"})
+
+	_, err = sparseFilter.Eq("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Ne("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Gt("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Lt("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Ge("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Le("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Btw("xxxx", 0, 0)
+	assert.NotNil(t, err)
 
 	// test filter
 	mockBM := roaring.NewBitmap()
@@ -976,6 +1004,21 @@ func TestAll(t *testing.T) {
 
 	// todo: char / varchar
 
+	_, err = filter.Eq("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = filter.Ne("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = filter.Gt("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = filter.Lt("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = filter.Ge("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = filter.Le("xxxx", 0)
+	assert.NotNil(t, err)
+	_, err = filter.Btw("xxxx", 0, 0)
+	assert.NotNil(t, err)
+
 	// test summarizer
 	mockBM = roaring.NewBitmap()
 	mockBM.AddRange(0, 40)
@@ -1263,4 +1306,127 @@ func TestAll(t *testing.T) {
 	assert.Equal(t, cnt, uint64(40))
 
 	// todo: varchar / char support
+
+	_, err = summarizer.Min("xxxx", nil)
+	assert.NotNil(t, err)
+	_, err = summarizer.Max("xxxx", nil)
+	assert.NotNil(t, err)
+	_, _, err = summarizer.Sum("xxxx", nil)
+	assert.NotNil(t, err)
+	_, err = summarizer.Count("xxxx", nil)
+	assert.NotNil(t, err)
+	_, err = summarizer.NullCount("xxxx", nil)
+	assert.NotNil(t, err)
+}
+
+func TestNotBuild(t *testing.T) {
+	if dataio.FlushIndex {
+		dataio.FlushIndex = false
+		defer func() {
+			dataio.FlushIndex = true
+		}()
+	}
+	mu := &sync.RWMutex{}
+	rowCount, blkCount := uint64(10), uint64(4)
+	info := md.MockInfo(mu, rowCount, blkCount)
+	schema := md.MockSchemaAll(14)
+	segCnt, blkCnt := uint64(4), uint64(4)
+	table := md.MockTable(info, schema, segCnt*blkCnt)
+	segment, err := table.CreateSegment()
+	assert.Nil(t, err)
+	err = table.RegisterSegment(segment)
+	assert.Nil(t, err)
+	batches := make([]*batch.Batch, 0)
+	blkIds := make([]uint64, 0)
+	for i := 0; i < int(blkCount); i++ {
+		block, err := segment.CreateBlock()
+		assert.Nil(t, err)
+		blkIds = append(blkIds, block.ID)
+		block.SetCount(rowCount)
+		err = segment.RegisterBlock(block)
+		assert.Nil(t, err)
+		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+	}
+	path := "/tmp/testfilter"
+	writer := dataio.NewSegmentWriter(batches, segment, path)
+	err = writer.Execute()
+	assert.Nil(t, err)
+	segFile := dataio.NewSortedSegmentFile(path, *segment.AsCommonID())
+	assert.NotNil(t, segFile)
+	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(10000), table.ID)
+	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
+	segHolder.Unref()
+	id := common.ID{}
+	for i := 0; i < int(blkCount); i++ {
+		id.BlockID = uint64(i)
+		blkHolder := segHolder.RegisterBlock(id, base.PERSISTENT_BLK, nil)
+		blkHolder.Unref()
+		blkHolder.Init(segFile)
+	}
+	segHolder.Init(segFile)
+	t.Log(tblHolder.String())
+	t.Log(segHolder.GetBlockCount())
+	seg := table2.NewSimpleSegment(
+		base.SORTED_SEG,
+		segment,
+		segHolder,
+		segFile)
+	s := &Segment{
+		Data: seg,
+		Ids:  new(atomic.Value),
+	}
+	ids := blkIds
+	strs := make([]string, len(ids))
+	for idx, id := range ids {
+		strs[idx] = strconv.FormatUint(id, 10)
+	}
+	s.Ids.Store(strs)
+	summarizer := NewSegmentSummarizer(s)
+	sparseFilter := NewSegmentSparseFilter(s)
+	filter := NewSegmentFilter(s)
+
+	_, err = sparseFilter.Eq("mock_1", int16(-1))
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Ne("mock_1", int16(-1))
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Btw("mock_1", int16(1), int16(7))
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Btw("mock_1", int16(-1), int16(8))
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Lt("mock_1", int16(0))
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Gt("mock_1", int16(8))
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Le("mock_1", int16(0))
+	assert.NotNil(t, err)
+	_, err = sparseFilter.Ge("mock_1", int16(9))
+	assert.NotNil(t, err)
+
+	_, err = filter.Eq("mock_1", int16(-1))
+	assert.NotNil(t, err)
+	_, err = filter.Ne("mock_1", int16(-1))
+	assert.NotNil(t, err)
+	_, err = filter.Btw("mock_1", int16(1), int16(7))
+	assert.NotNil(t, err)
+	_, err = filter.Btw("mock_1", int16(-1), int16(8))
+	assert.NotNil(t, err)
+	_, err = filter.Lt("mock_1", int16(0))
+	assert.NotNil(t, err)
+	_, err = filter.Gt("mock_1", int16(8))
+	assert.NotNil(t, err)
+	_, err = filter.Le("mock_1", int16(0))
+	assert.NotNil(t, err)
+	_, err = filter.Ge("mock_1", int16(9))
+	assert.NotNil(t, err)
+
+	_, _, err = summarizer.Sum("mock_1", nil)
+	assert.NotNil(t, err)
+	_, err = summarizer.Count("mock_1", nil)
+	assert.NotNil(t, err)
+	_, err = summarizer.NullCount("mock_1", nil)
+	assert.NotNil(t, err)
+	_, err = summarizer.Max("mock_1", nil)
+	assert.NotNil(t, err)
+	_, err = summarizer.Min("mock_1", nil)
+	assert.NotNil(t, err)
 }

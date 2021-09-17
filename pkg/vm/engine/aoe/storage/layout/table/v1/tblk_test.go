@@ -106,8 +106,9 @@ func TestTBlock(t *testing.T) {
 			}
 			num := uint64(na)
 			idx.Count = num
-			n.Meta.SetIndex(*idx)
-			n.Meta.AddCount(num)
+			assert.Nil(t, n.Meta.SetIndex(*idx))
+			_, err = n.Meta.AddCount(num)
+			assert.Nil(t, err)
 			return nil
 		}
 	}

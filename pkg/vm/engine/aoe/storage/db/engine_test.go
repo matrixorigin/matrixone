@@ -219,7 +219,7 @@ func TestLogIndex(t *testing.T) {
 	initDBTest()
 	inst := initDB(engine.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: md.NextGloablSeqnum()})
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: md.NextGlobalSeqNum()})
 	assert.Nil(t, err)
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
@@ -232,7 +232,7 @@ func TestLogIndex(t *testing.T) {
 		rel, err := inst.Relation(tblMeta.Schema.Name)
 		assert.Nil(t, err)
 		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   md.NextGloablSeqnum(),
+			OpIndex:   md.NextGlobalSeqNum(),
 			Data:      baseCk,
 			TableName: tblMeta.Schema.Name,
 		})
@@ -254,7 +254,7 @@ func TestLogIndex(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, expectIdx, logIndex)
 
-	dropLogIndex := md.NextGloablSeqnum()
+	dropLogIndex := md.NextGlobalSeqNum()
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: dropLogIndex})
 	assert.Nil(t, err)
 	time.Sleep(time.Duration(50) * time.Millisecond)

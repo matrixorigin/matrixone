@@ -53,9 +53,12 @@ func (e *dropTableEvent) Execute() error {
 	e.Id = id
 	ctx := md.CopyCtx{Ts: md.NowMicro() + 1, Attached: true}
 	info := e.Ctx.Opts.Meta.Info.Copy(ctx)
-	eCtx := &dbsched.Context{Opts: e.Ctx.Opts}
+	eCtx := &dbsched.Context{Opts: e.Ctx.Opts, Waitable: true}
 	flushEvent := NewFlushInfoEvent(eCtx, info)
 	e.Ctx.Opts.Scheduler.Schedule(flushEvent)
+	if err = flushEvent.WaitDone(); err != nil {
+		return err
+	}
 	gcReq := gcreqs.NewDropTblRequest(e.Ctx.Opts, id, e.Tables, e.MTMgr, e.reqCtx.OnFinishCB)
 	e.Ctx.Opts.GC.Acceptor.Accept(gcReq)
 	return err

@@ -148,10 +148,7 @@ func (seg *Segment) String() string {
 	return s
 }
 
-// CloneBlock returns the clone of the block if exists, whose block id is id.
-func (seg *Segment) CloneBlock(id uint64, ctx CopyCtx) (blk *Block, err error) {
-	seg.RLock()
-	defer seg.RUnlock()
+func (seg *Segment) cloneBlockNoLock(id uint64, ctx CopyCtx) (blk *Block, err error) {
 	idx, ok := seg.IdMap[id]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("block %d not found in segment %d", id, seg.ID))
@@ -161,6 +158,13 @@ func (seg *Segment) CloneBlock(id uint64, ctx CopyCtx) (blk *Block, err error) {
 		err = blk.Detach()
 	}
 	return blk, err
+}
+
+// CloneBlock returns the clone of the block if exists, whose block id is id.
+func (seg *Segment) CloneBlock(id uint64, ctx CopyCtx) (blk *Block, err error) {
+	seg.RLock()
+	defer seg.RUnlock()
+	return seg.cloneBlockNoLock(id, ctx)
 }
 
 func (seg *Segment) ReferenceBlock(id uint64) (blk *Block, err error) {
@@ -291,7 +295,7 @@ func (seg *Segment) Copy(ctx CopyCtx) *Segment {
 		if !v.Select(ctx.Ts) {
 			continue
 		}
-		blk, _ := seg.CloneBlock(v.ID, ctx)
+		blk, _ := seg.cloneBlockNoLock(v.ID, ctx)
 		newSeg.IdMap[v.GetID()] = len(newSeg.Blocks)
 		newSeg.Blocks = append(newSeg.Blocks, blk)
 	}

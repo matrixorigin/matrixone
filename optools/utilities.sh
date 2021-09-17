@@ -1,17 +1,20 @@
-#!/bin/bash -
-#===============================================================================
+#!/bin/bash
+
+# Copyright 2021 Matrix Origin
 #
-#          FILE: utilities.sh
-#   DESCRIPTION: 
-#        AUTHOR: Matthew Li, lignay@me.com
-#  ORGANIZATION: 
-#       CREATED: 09/04/2021 19:20:11
-#      REVISION:  ---
-#===============================================================================
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 set -o nounset                                  # Treat unset variables as an error
-
-#set -euxo pipefail
 
 function logger_base() {
     local level=$1
@@ -32,9 +35,9 @@ function logger_base() {
 		touch $log
 	fi
     case $level in
-        "ERR") echo -e "[$(date +"%Y-%m-%d %H:%M:%S.%N %z" | cut -b 1-35)] [$fn_name] ERR $msg" | tee -a $log;;
-        "WRN") echo -e "[$(date +"%Y-%m-%d %H:%M:%S.%N %z" | cut -b 1-35)] [$fn_name] WRN $msg" | tee -a $log;;
-        "INF") echo -e "[$(date +"%Y-%m-%d %H:%M:%S.%N %z" | cut -b 1-35)] [$fn_name] INF $msg" | tee -a $log;;
+        "ERR") echo -e "[$(date +"%Y-%m-%d %H:%M:%S %z" | cut -b 1-35)] [$fn_name] ERR $msg" | tee -a $log;;
+        "WRN") echo -e "[$(date +"%Y-%m-%d %H:%M:%S %z" | cut -b 1-35)] [$fn_name] WRN $msg" | tee -a $log;;
+        "INF") echo -e "[$(date +"%Y-%m-%d %H:%M:%S %z" | cut -b 1-35)] [$fn_name] INF $msg" | tee -a $log;;
         *) echo "Msg level is incorrect"; exit 1;;
     esac
 }

@@ -23,6 +23,7 @@ import (
 	engine "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
@@ -629,6 +630,12 @@ func TestDropTable2(t *testing.T) {
 }
 
 func TestE2E(t *testing.T) {
+	if !dataio.FlushIndex {
+		dataio.FlushIndex = true
+		defer func() {
+			dataio.FlushIndex = false
+		}()
+	}
 	initDBTest()
 	inst := initDB(engine.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)

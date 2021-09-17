@@ -23,12 +23,15 @@ import (
 func (b *build) buildDedup(o op.OP) (op.OP, error) {
 	var gs []*extend.Attribute
 
-	attrs := o.Attribute()
-	for k, v := range attrs {
+	attrs := o.Columns()
+	mp := o.Attribute()
+	for _, attr := range attrs {
 		gs = append(gs, &extend.Attribute{
-			Name: k,
-			Type: v.Oid,
+			Name: attr,
+			Type: mp[attr].Oid,
 		})
+
 	}
 	return dedup.New(o, gs), nil
+
 }
