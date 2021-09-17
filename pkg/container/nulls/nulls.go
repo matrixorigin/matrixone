@@ -107,7 +107,7 @@ func (n *Nulls) Del(rows ...uint64) {
 }
 
 func (n *Nulls) Set(m *Nulls) {
-	if m != nil || m.Np != nil {
+	if m != nil && m.Np != nil {
 		if n.Np == nil {
 			n.Np = roaring.NewBitmap()
 		}
