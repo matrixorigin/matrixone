@@ -35,9 +35,9 @@ function logger_base() {
 		touch $log
 	fi
     case $level in
-        "ERR") echo -e "[$(date +"%Y-%m-%d %H:%M:%S %z" | cut -b 1-35)] [$fn_name] ERR $msg" | tee -a $log;;
-        "WRN") echo -e "[$(date +"%Y-%m-%d %H:%M:%S %z" | cut -b 1-35)] [$fn_name] WRN $msg" | tee -a $log;;
-        "INF") echo -e "[$(date +"%Y-%m-%d %H:%M:%S %z" | cut -b 1-35)] [$fn_name] INF $msg" | tee -a $log;;
+        "ERR") echo -e "[$(date +"%Y-%m-%d %H:%M:%S %z" | cut -b 1-35)] [$fn_name] [ERR] $msg" | tee -a $log;;
+        "WRN") echo -e "[$(date +"%Y-%m-%d %H:%M:%S %z" | cut -b 1-35)] [$fn_name] [WRN] $msg" | tee -a $log;;
+        "INF") echo -e "[$(date +"%Y-%m-%d %H:%M:%S %z" | cut -b 1-35)] [$fn_name] [INF] $msg" | tee -a $log;;
         *) echo "Msg level is incorrect"; exit 1;;
     esac
 }
