@@ -35,17 +35,17 @@ var (
 // the resource management easier.
 type ID struct {
 	// Internal table id
-	TableID   uint64
+	TableID uint64
 	// Internal segment id
 	SegmentID uint64
 	// Internal block id
-	BlockID   uint64
+	BlockID uint64
 	// Internal column part id
-	PartID    uint32
+	PartID uint32
 	// Column index for the column part above
-	Idx       uint16
+	Idx uint16
 	// Iter is used for MVCC
-	Iter      uint8
+	Iter uint8
 }
 
 const (
@@ -171,7 +171,7 @@ func (id *ID) ToSegmentFilePath() string {
 	return fmt.Sprintf("%d/%d/", id.TableID, id.SegmentID)
 }
 
-func ParseTBlockfileName(name string) (ID, error) {
+func ParseTBlkNameToID(name string) (ID, error) {
 	var (
 		id  ID
 		err error
@@ -203,7 +203,7 @@ func ParseTBlockfileName(name string) (ID, error) {
 	return id, err
 }
 
-func ParseBlockFileName(name string) (ID, error) {
+func ParseBlkNameToID(name string) (ID, error) {
 	var (
 		id  ID
 		err error

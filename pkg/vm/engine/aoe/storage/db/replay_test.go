@@ -114,7 +114,7 @@ func TestReplay1(t *testing.T) {
 
 func mockSegFile(id common.ID, dir string, t *testing.T) string {
 	name := id.ToSegmentFileName()
-	fname := engine.MakeSegmentFileName(dir, name, id.TableID, false)
+	fname := common.MakeSegmentFileName(dir, name, id.TableID, false)
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
@@ -123,7 +123,7 @@ func mockSegFile(id common.ID, dir string, t *testing.T) string {
 
 func mockBlkFile(id common.ID, dir string, t *testing.T) string {
 	name := id.ToBlockFileName()
-	fname := engine.MakeBlockFileName(dir, name, id.TableID, false)
+	fname := common.MakeBlockFileName(dir, name, id.TableID, false)
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
@@ -132,7 +132,7 @@ func mockBlkFile(id common.ID, dir string, t *testing.T) string {
 
 func mockTBlkFile(id common.ID, version uint32, dir string, t *testing.T) string {
 	name := id.ToTBlockFileName(version)
-	fname := engine.MakeTBlockFileName(dir, name, false)
+	fname := common.MakeTBlockFileName(dir, name, false)
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
@@ -140,9 +140,9 @@ func mockTBlkFile(id common.ID, version uint32, dir string, t *testing.T) string
 }
 
 func initDataAndMetaDir(dir string) {
-	dataDir := engine.MakeDataDir(dir)
+	dataDir := common.MakeDataDir(dir)
 	os.MkdirAll(dataDir, os.ModePerm)
-	metaDir := engine.MakeMetaDir(dir)
+	metaDir := common.MakeMetaDir(dir)
 	os.MkdirAll(metaDir, os.ModePerm)
 }
 

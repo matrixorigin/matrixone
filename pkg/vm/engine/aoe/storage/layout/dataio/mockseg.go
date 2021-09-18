@@ -15,8 +15,7 @@
 package dataio
 
 import (
-	logutil2 "matrixone/pkg/logutil"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"path/filepath"
@@ -46,8 +45,8 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegment
 	msf.Info = &fileStat{
 		name: id.ToSegmentFilePath(),
 	}
-	msf.FileName = e.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
-	logutil2.Debugf("%s:%s | Created", msf.TypeName, msf.FileName)
+	msf.FileName = common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
+	logutil.Debugf("%s:%s | Created", msf.TypeName, msf.FileName)
 	msf.OnZeroCB = msf.close
 	return msf
 }
@@ -69,11 +68,11 @@ func (msf *MockSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta 
 }
 
 func (msf *MockSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
-	logutil2.Debugf("(%s:%s) | ReadPoint (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, ptr.Offset, ptr.Len, len(buf), cap(buf))
+	logutil.Debugf("(%s:%s) | ReadPoint (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, ptr.Offset, ptr.Len, len(buf), cap(buf))
 }
 
 func (msf *MockSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {
-	logutil2.Debugf("(%s:%s) | ReadBlockPoint[%s] (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, id.BlockString(), ptr.Offset, ptr.Len, len(buf), cap(buf))
+	logutil.Debugf("(%s:%s) | ReadBlockPoint[%s] (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, id.BlockString(), ptr.Offset, ptr.Len, len(buf), cap(buf))
 }
 
 func (sf *MockSegmentFile) DataCompressAlgo(id common.ID) int {
@@ -89,20 +88,20 @@ func (msf *MockSegmentFile) PartSize(colIdx uint64, id common.ID, _ bool) int64 
 }
 
 func (msf *MockSegmentFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
-	logutil2.Debugf("(%s:%s) | ReadPart %d %s size: %d cap: %d", msf.TypeName, msf.FileName, colIdx, id.SegmentString(), len(buf), cap(buf))
+	logutil.Debugf("(%s:%s) | ReadPart %d %s size: %d cap: %d", msf.TypeName, msf.FileName, colIdx, id.SegmentString(), len(buf), cap(buf))
 }
 
 func (msf *MockSegmentFile) Close() error {
-	logutil2.Debugf("%s:%s | Close", msf.TypeName, msf.FileName)
+	logutil.Debugf("%s:%s | Close", msf.TypeName, msf.FileName)
 	return nil
 }
 
 func (msf *MockSegmentFile) Destory() {
-	logutil2.Debugf("%s:%s | Destory", msf.TypeName, msf.FileName)
+	logutil.Debugf("%s:%s | Destory", msf.TypeName, msf.FileName)
 }
 
 func (msf *MockSegmentFile) Ref() {
-	logutil2.Debugf("%s:%s | Ref All", msf.TypeName, msf.FileName)
+	logutil.Debugf("%s:%s | Ref All", msf.TypeName, msf.FileName)
 	msf.RefHelper.Ref()
 }
 
@@ -112,7 +111,7 @@ func (msf *MockSegmentFile) close() {
 }
 
 func (msf *MockSegmentFile) Unref() {
-	logutil2.Debugf("%s:%s | Unref All", msf.TypeName, msf.FileName)
+	logutil.Debugf("%s:%s | Unref All", msf.TypeName, msf.FileName)
 	msf.RefHelper.Unref()
 }
 
@@ -120,7 +119,7 @@ func (msf *MockSegmentFile) RefBlock(id common.ID) {
 	if !id.IsSameSegment(msf.ID) {
 		panic("logic error")
 	}
-	logutil2.Debugf("%s:%s | Ref %s", msf.TypeName, msf.FileName, id.BlockString())
+	logutil.Debugf("%s:%s | Ref %s", msf.TypeName, msf.FileName, id.BlockString())
 	msf.RefHelper.Ref()
 }
 
@@ -128,7 +127,7 @@ func (msf *MockSegmentFile) UnrefBlock(id common.ID) {
 	if !id.IsSameSegment(msf.ID) {
 		panic("logic error")
 	}
-	logutil2.Debugf("%s:%s | Unref %s", msf.TypeName, msf.FileName, id.BlockString())
+	logutil.Debugf("%s:%s | Unref %s", msf.TypeName, msf.FileName, id.BlockString())
 	msf.RefHelper.Unref()
 }
 

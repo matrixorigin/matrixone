@@ -23,7 +23,6 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/prefetch"
-	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -65,7 +64,7 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 		},
 	}
 
-	name := e.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
+	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	// log.Infof("SegmentFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
@@ -358,7 +357,7 @@ func (sf *SortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	}
 	pointer, ok := sf.Parts[key]
 	if !ok {
-		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found",id.BlockID, colIdx))
+		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found", id.BlockID, colIdx))
 	}
 	offset := pointer.Offset
 	sz := pointer.Len

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -65,7 +66,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
 
-	filename := engine.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
+	filename := common.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
 	w, err := os.Create(filename)
 	assert.Nil(t, err)
 	defer w.Close()
@@ -74,7 +75,7 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	info.CheckPoint++
 
-	filename = engine.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
+	filename = common.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 
 	w, err = os.Create(filename)
 	assert.Nil(t, err)
@@ -88,7 +89,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
 
-	filename = engine.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
+	filename = common.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
 	w, err = os.Create(filename)
 	assert.Nil(t, err)
 	defer w.Close()
@@ -97,7 +98,7 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	info.CheckPoint++
 
-	filename = engine.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
+	filename = common.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 	w.Close()
 
 	w, err = os.Create(filename)
@@ -131,7 +132,7 @@ func TestCleanStaleMeta(t *testing.T) {
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
-	dir := engine.MakeMetaDir(cfg.Dir)
+	dir := common.MakeMetaDir(cfg.Dir)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
 		assert.Nil(t, err)
@@ -139,7 +140,7 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	invalids := []string{"ds234", "234ds"}
 	for _, invalid := range invalids {
-		fname := engine.MakeInfoCkpFileName(cfg.Dir, invalid, false)
+		fname := common.MakeInfoCkpFileName(cfg.Dir, invalid, false)
 
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
@@ -155,7 +156,7 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	valids := []string{"1", "2", "3", "100"}
 	for _, valid := range valids {
-		fname := engine.MakeInfoCkpFileName(cfg.Dir, valid, false)
+		fname := common.MakeInfoCkpFileName(cfg.Dir, valid, false)
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
 		f.Close()
@@ -170,7 +171,7 @@ func TestCleanStaleMeta(t *testing.T) {
 	// assert.Nil(t, err)
 	// assert.Equal(t, 1, len(files))
 
-	fname := engine.MakeInfoCkpFileName(cfg.Dir, "100", false)
+	fname := common.MakeInfoCkpFileName(cfg.Dir, "100", false)
 	_, err = os.Stat(fname)
 	assert.Nil(t, err)
 }
@@ -239,7 +240,7 @@ func TestReplay(t *testing.T) {
 
 	inst.Close()
 
-	dataDir := engine.MakeDataDir(inst.Dir)
+	dataDir := common.MakeDataDir(inst.Dir)
 	invalidFileName := filepath.Join(dataDir, "invalid")
 	f, err := os.Create(invalidFileName)
 	assert.Nil(t, err)
