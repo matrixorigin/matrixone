@@ -61,7 +61,7 @@ func init() {
 					rs := encoding.DecodeInt8Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Int8SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Int8SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
@@ -132,7 +132,7 @@ func init() {
 					rs := encoding.DecodeInt16Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Int16SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Int16SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
@@ -203,7 +203,7 @@ func init() {
 					rs := encoding.DecodeInt32Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Int32SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Int32SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
@@ -274,7 +274,7 @@ func init() {
 					rs := encoding.DecodeInt64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Int64SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Int64SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
@@ -345,7 +345,7 @@ func init() {
 					rs := encoding.DecodeUint8Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Uint8SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Uint8SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
@@ -416,7 +416,7 @@ func init() {
 					rs := encoding.DecodeUint16Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Uint16SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Uint16SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
@@ -487,7 +487,7 @@ func init() {
 					rs := encoding.DecodeUint32Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Uint32SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Uint32SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
@@ -558,7 +558,7 @@ func init() {
 					rs := encoding.DecodeUint64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Uint64SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Uint64SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
@@ -629,7 +629,7 @@ func init() {
 					rs := encoding.DecodeFloat32Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Float32SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Float32SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
@@ -700,7 +700,7 @@ func init() {
 					rs := encoding.DecodeFloat64Slice(vec.Data)
 					rs = rs[:len(lvs)]
 					vec.Nsp.Set(lv.Nsp)
-					vec.SetCol(sub.Float64SubScalar(rvs[0], lvs, rs))
+					vec.SetCol(sub.Float64SubByScalar(rvs[0], lvs, rs))
 					return vec, nil
 				case lv.Ref == 1 || lv.Ref == 0:
 					lv.Ref = 0
