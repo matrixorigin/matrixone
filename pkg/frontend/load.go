@@ -132,6 +132,7 @@ type ParseLineHandler struct {
 	DebugTime
 
 	simdCsvReader                    *simdcsv.Reader
+	closeOnceGetParsedLinesChan sync.Once
 	//csv read put lines into the channel
 	simdCsvGetParsedLinesChan                    chan simdcsv.LineOut
 	//the count of writing routine
@@ -157,28 +158,23 @@ type WriteBatchHandler struct {
 }
 
 type CloseLoadData struct {
-	closeReadParsedLines *CloseFlag
-	closeStatistics      *CloseFlag
-	stopLoadData chan struct{}
+	stopLoadData chan interface{}
+	onceClose sync.Once
 }
 
-func NewCloseLoadData(chanSize int) *CloseLoadData {
+func NewCloseLoadData() *CloseLoadData {
 	return &CloseLoadData{
-		closeReadParsedLines: &CloseFlag{},
-		closeStatistics:      &CloseFlag{},
-		stopLoadData: make(chan struct{},chanSize),
+		stopLoadData: make(chan interface{}),
 	}
 }
 
 func (cld *CloseLoadData) Open() {
-	cld.closeReadParsedLines.Open()
-	cld.closeStatistics.Open()
 }
 
 func (cld *CloseLoadData) Close() {
-	cld.closeReadParsedLines.Close()
-	cld.closeStatistics.Close()
-	close(cld.stopLoadData)
+	cld.onceClose.Do(func() {
+		close(cld.stopLoadData)
+	})
 }
 
 func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
@@ -188,13 +184,17 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	}()
 
 	var lineOut simdcsv.LineOut
-	plh.closeRef.closeReadParsedLines.Open()
-	for plh.closeRef.closeReadParsedLines.IsOpened() {
+	for {
+		quit := false
 		select {
 		case <- plh.closeRef.stopLoadData:
-			logutil.Infof("----- read parsed lines close")
-			return nil
-			case lineOut = <- plh.simdCsvGetParsedLinesChan:
+			//fmt.Printf("----- get stop in getLineOutFromSimdCsvRoutine\n")
+			quit = true
+		case lineOut = <- plh.simdCsvGetParsedLinesChan:
+		}
+
+		if quit {
+			break
 		}
 
 		wait_d := time.Now()
@@ -277,10 +277,15 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 }
 
 func (plh *ParseLineHandler) close() {
-	plh.closeOnce.Do(func() {
+	plh.closeOnceGetParsedLinesChan.Do(func() {
 		close(plh.simdCsvGetParsedLinesChan)
-		plh.closeRef.Close()
 	})
+	plh.closeOnce.Do(func() {
+		close(plh.simdCsvBatchPool)
+		close(plh.simdCsvNotiyEventChan)
+		plh.simdCsvReader.Close()
+	})
+	plh.closeRef.Close()
 }
 
 /*
@@ -1271,8 +1276,7 @@ func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
  */
-func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database,
-		tableHandler engine.Relation, closeRef *CloseLoadData) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation) (*LoadResult, error) {
 	var err error
 	ses := mce.routine.GetSession()
 
@@ -1315,13 +1319,8 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 			batchSize: curBatchSize,
 			result: result,
 		},
-		simdCsvReader: simdcsv.NewReaderWithOptions(dataFile,
-			rune(load.Fields.Terminated[0]),
-			'#',
-			false,
-			false),
-			simdCsvGetParsedLinesChan:           make(chan simdcsv.LineOut,channelSize),
-			simdCsvWaitWriteRoutineToQuit:       &sync.WaitGroup{},
+		simdCsvGetParsedLinesChan:           make(chan simdcsv.LineOut,channelSize),
+		simdCsvWaitWriteRoutineToQuit:       &sync.WaitGroup{},
 	}
 
 	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.GetLoadDataConcurrencyCount()),runtime.NumCPU())
@@ -1347,21 +1346,24 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	/*
 	make close reference
 	 */
-	handler.closeRef = NewCloseLoadData(notifyChanSize)
+	handler.closeRef = NewCloseLoadData()
+
+	//put closeRef into the executor
+	mce.loadDataClose = handler.closeRef
+
+	handler.simdCsvReader = simdcsv.NewReaderWithOptions(dataFile,
+		rune(load.Fields.Terminated[0]),
+		'#',
+		false,
+		false)
 
 	/*
 	error channel
 	 */
 	handler.simdCsvNotiyEventChan = make(chan *notifyEvent,notifyChanSize)
 
-	defer func() {
-		close(handler.simdCsvGetParsedLinesChan)
-		close(handler.simdCsvBatchPool)
-		close(handler.simdCsvNotiyEventChan)
-		handler.simdCsvLineArray = nil
-		handler.simdCsvReader = nil
-	}()
-
+	//release resources of handler
+	defer handler.close()
 
 	err = initParseLineHandler(handler)
 	if err != nil {
@@ -1403,24 +1405,37 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		collect statistics from every batch.
 	*/
 	var ne *notifyEvent = nil
-	for ne = range handler.simdCsvNotiyEventChan{
+	for {
 		quit := false
-		switch ne.neType {
-		case NOTIFY_EVENT_WRITE_BATCH_RESULT:
-			collectWriteBatchResult(handler,ne.wbh)
-		case NOTIFY_EVENT_END:
-			err = nil
+		select {
+		case <- handler.closeRef.stopLoadData:
+			//get obvious cancel
 			quit = true
-		case NOTIFY_EVENT_READ_SIMDCSV_ERROR,
-			NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR,
-			NOTIFY_EVENT_WRITE_BATCH_ERROR:
+			//fmt.Printf("----- get stop in load \n")
+
+			handler.simdCsvReader.Close()
+			handler.closeOnceGetParsedLinesChan.Do(func() {
+				close(handler.simdCsvGetParsedLinesChan)
+			})
+
+		case ne = <- handler.simdCsvNotiyEventChan:
+			switch ne.neType {
+			case NOTIFY_EVENT_WRITE_BATCH_RESULT:
+				collectWriteBatchResult(handler,ne.wbh)
+			case NOTIFY_EVENT_END:
+				err = nil
+				quit = true
+			case NOTIFY_EVENT_READ_SIMDCSV_ERROR,
+				NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR,
+				NOTIFY_EVENT_WRITE_BATCH_ERROR:
 				if !errorCanBeIgnored(ne.err) {
 					err = ne.err
 					quit = true
 				}
-		default:
-			logutil.Errorf("get unsupported notify event %d",ne.neType)
-			quit = true
+			default:
+				logutil.Errorf("get unsupported notify event %d",ne.neType)
+				quit = true
+			}
 		}
 
 		if quit {
@@ -1428,7 +1443,6 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		}
 	}
 
-	//wait read and statistics to quit
 	wg.Wait()
 
 	//wait write to quit

@@ -21,7 +21,6 @@ import (
 	"matrixone/pkg/config"
 	"matrixone/pkg/logutil"
 	"sync"
-	"time"
 )
 
 type RoutineManager struct {
@@ -54,6 +53,9 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 	rm.clients[rs] = routine
 }
 
+/*
+When the io is closed, the Closed will be called.
+*/
 func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	rm.rwlock.Lock()
 	defer rm.rwlock.Unlock()
@@ -119,26 +121,8 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return nil
 	}
 
-	var err error
-	var resp *Response
-
 	req := routine.protocol.GetRequest(payload)
-	reqBegin := time.Now()
-	if resp, err = routine.executor.ExecRequest(req); err != nil {
-		fmt.Printf("routine execute request failed. error:%v \n", err)
-		return nil
-	}
-
-	if resp != nil {
-		if err = routine.protocol.SendResponse(resp); err != nil {
-			fmt.Printf("routine send response failed %v. error:%v ", resp, err)
-			return nil
-		}
-	}
-
-	if rm.pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-		logutil.Infof("connection id %d , the time of handling the request %s", rs.ID(), time.Since(reqBegin).String())
-	}
+	routine.requestChan <- req
 
 	return nil
 }
