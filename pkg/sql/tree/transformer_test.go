@@ -321,7 +321,7 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 		V:  e1,
 	}
 
-	t18Want := NewUnaryExpr(UNARY_MARK, f1)
+	t18Want := NewNotExpr(f1)
 
 	//1 | 2
 	t21 := &ast.BinaryOperationExpr{

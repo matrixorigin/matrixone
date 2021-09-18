@@ -107,7 +107,7 @@ func transformUnaryOperatorExprToUnaryExpr(uoe *ast.UnaryOperationExpr) *UnaryEx
 //transform ast.UnaryOperationExpr to tree.NotExpr
 func transformUnaryOperatorExprToNotExpr(uoe *ast.UnaryOperationExpr) *NotExpr {
 	switch uoe.Op {
-	case opcode.Not: //not,!
+	case opcode.Not,opcode.Not2: //not,!
 		e := transformExprNodeToExpr(uoe.V)
 		return NewNotExpr(e)
 	}
@@ -879,7 +879,7 @@ func transformExprNodeToExpr(node ast.ExprNode) Expr {
 
 	case *ast.UnaryOperationExpr:
 		switch n.Op {
-		case opcode.Not:
+		case opcode.Not,opcode.Not2:
 			return transformUnaryOperatorExprToNotExpr(n)
 		}
 		return transformUnaryOperatorExprToUnaryExpr(n)
