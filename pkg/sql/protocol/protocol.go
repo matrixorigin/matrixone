@@ -1391,6 +1391,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 				}
 			}
 			v.Col = col
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_tuple:
@@ -1415,6 +1417,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			}
 			data = data[n:]
 			v.Col = col
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	}

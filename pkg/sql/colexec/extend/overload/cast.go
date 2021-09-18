@@ -2967,5 +2967,332 @@ func init() {
 				return vec, nil
 			},
 		},
+		&BinOp{
+			LeftType:   types.T_int8,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]int8)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Int8ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_int16,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]int16)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Int16ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_int32,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]int32)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Int32ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_int64,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]int64)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Int64ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_uint8,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]uint8)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Uint8ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_uint16,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]uint16)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Uint16ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_uint32,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]uint32)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Uint32ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_uint64,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]uint64)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Uint64ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_float32,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]float32)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Float32ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_float64,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				var err error
+
+				defer func() {
+					if lv.Ref == 0 {
+						register.Put(proc, lv)
+					}
+				}()
+				vs := lv.Col.([]float64)
+				col := &types.Bytes{
+					Data:    make([]byte, 0, len(vs)),
+					Offsets: make([]uint32, 0, len(vs)),
+					Lengths: make([]uint32, 0, len(vs)),
+				}
+				if col, err = typecast.Float64ToBytes(vs, col); err != nil {
+					return nil, err
+				}
+				if err = proc.Gm.Alloc(int64(cap(col.Data))); err != nil {
+					return nil, err
+				}
+				vec := vector.New(rv.Typ)
+				vec.Data = col.Data
+				vec.Nsp.Set(lv.Nsp)
+				vec.SetCol(col)
+				return vec, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_char,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
+				lv.Typ = rv.Typ
+				return lv, nil
+			},
+		},
+		&BinOp{
+			LeftType:   types.T_varchar,
+			RightType:  types.T_varchar,
+			ReturnType: types.T_varchar,
+			Fn: func(lv, _ *vector.Vector, _ *process.Process, _, _ bool) (*vector.Vector, error) {
+				return lv, nil
+			},
+		},
 	}
 }
