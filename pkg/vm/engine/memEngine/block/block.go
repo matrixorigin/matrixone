@@ -53,10 +53,12 @@ func (b *Block) Read(cs []uint64, attrs []string, cds, dds []*bytes.Buffer) (*ba
 			data = buf
 		}
 		vec := vector.New(md.Type)
+		vec.Or = true
 		if err := vec.Read(data); err != nil {
 			return nil, err
 		}
 		vec.Ref = cs[i]
+		bat.Vecs[i] = vec
 	}
 	return bat, nil
 }

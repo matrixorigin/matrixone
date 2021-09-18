@@ -98,6 +98,14 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	mp := o.Attribute()
 	attrs := o.ResultColumns()
 	cs := make([]*Col, 0, len(mp))
+	{
+		for i := 0; i < len(attrs); i++ {
+			if _, ok := mp[attrs[i]]; !ok {
+				attrs = append(attrs[:i], attrs[i+1:]...)
+				i--
+			}
+		}
+	}
 	for _, attr := range attrs {
 		cs = append(cs, &Col{mp[attr].Oid, attr})
 	}

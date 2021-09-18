@@ -59,6 +59,15 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		reg.Wg.Wait()
 		return false, nil
 	}
+	{
+		for i := 0; i < len(bat.Attrs); i++ {
+			if bat.Vecs[i] == nil {
+				bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
+				bat.Attrs = append(bat.Attrs[:i], bat.Attrs[i+1:]...)
+				i--
+			}
+		}
+	}
 	size := int64(0)
 	vecs := n.vecs[:0]
 	for i := range bat.Vecs {
