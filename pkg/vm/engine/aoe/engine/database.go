@@ -31,7 +31,7 @@ func (db *database) Type() int {
 	return db.typ
 }
 
-//Delete
+//Delete deletes the table.
 func (db *database) Delete(epoch uint64, name string) error {
 	t0 := time.Now()
 	defer func() {
@@ -41,6 +41,7 @@ func (db *database) Delete(epoch uint64, name string) error {
 	return err
 }
 
+//Create creates the table
 func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
 	t0 := time.Now()
 	defer func() {
@@ -54,6 +55,7 @@ func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, pd
 	return err
 }
 
+//Relations returns names of all the tables in the database.
 func (db *database) Relations() []string {
 	t0 := time.Now()
 	defer func() {
@@ -70,6 +72,7 @@ func (db *database) Relations() []string {
 	return rs
 }
 
+//Relation returns an instance with the given name.
 func (db *database) Relation(name string) (engine.Relation, error) {
 	t0 := time.Now()
 	defer func() {

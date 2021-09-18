@@ -508,40 +508,62 @@ func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	return id, nil
 }
 
-//
+//dbIDKey returns encoded dbName with prefix "meta1DBID"
 func (c *Catalog) dbIDKey(dbName string) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBIDPrefix, dbName)
 }
+
+//dbKey returns encoded id with prefix "meta1DBINFO"
 func (c *Catalog) dbKey(id uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBPrefix, id)
 }
+
+//dbPrefix returns the prefix "meta1DBINFO"
 func (c *Catalog) dbPrefix() []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBPrefix)
 }
+
+//tableIDKey returns the encoded tableName with prefix "meta1TID$dbId$"
 func (c *Catalog) tableIDKey(dbId uint64, tableName string) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cTableIDPrefix, dbId, tableName)
 }
+
+//tableKey returns the encoded tID with prefix "meta1Table$dbId$"
 func (c *Catalog) tableKey(dbId, tId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cTablePrefix, dbId, tId)
 }
+
+//tablePrefix returns the prefix "meta1Table$dbId$"
 func (c *Catalog) tablePrefix(dbId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cTablePrefix, dbId)
 }
+
+//routeKey returns the encoded gId with prefix "meta1Route$dbId$$tId$"
 func (c *Catalog) routeKey(dbId, tId, gId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId, gId)
 }
+
+//routePrefix returns the prefix "meta1Route$dbId$$tId"
 func (c *Catalog) routePrefix(dbId, tId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId)
 }
+
+//deletedTableKey returns the encoded tId with the prefix "DeletedTableQueue$epoch$$dbId$"
 func (c *Catalog) deletedTableKey(epoch, dbId, tId uint64) []byte {
 	return codec.EncodeKey(cDeletedTablePrefix, epoch, dbId, tId)
 }
+
+//deletedEpochPrefix returns the prefix "DeletedTableQueue$epoch$"
 func (c *Catalog) deletedEpochPrefix(epoch uint64) []byte {
 	return codec.EncodeKey(cDeletedTablePrefix, epoch)
 }
+
+//deletedPrefix returns the prefix "DeletedTableQueue"
 func (c *Catalog) deletedPrefix() []byte {
 	return codec.EncodeKey(cDeletedTablePrefix)
 }
+
+//getAvailableShard get a shard from the shard pool and returns its id.
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
@@ -562,6 +584,8 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 		}
 	}
 }
+
+//allocId alloc an id from id cache
 func (c *Catalog) allocId(key string) (id uint64, err error) {
 	defer func() {
 		logutil.Debugf("allocId finished, idKey is %v, id is %d, err is %v", key, id, err)
@@ -618,6 +642,7 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 	return id, err
 }
 
+//refreshTableIDCache alloc table ids and refresh tidStart and tidEnd.
 func (c *Catalog) refreshTableIDCache() {
 	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
 		fmt.Println("failed to acquired pLock")
@@ -653,6 +678,7 @@ func (c *Catalog) refreshTableIDCache() {
 	wg.Wait()
 }
 
+//refreshDBIDCache alloc database ids and refresh dbIdStart and dbIdEnd.
 func (c *Catalog) refreshDBIDCache() {
 	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
 		fmt.Println("failed to acquired pLock")

@@ -148,6 +148,9 @@ func TestCatalogWithUtil(t *testing.T) {
 	_, err = ctlg.GetDatabase(testDatabaceName)
 	assert.Equal(t, ErrDBNotExists, err, "GetDatabase: wrong err")
 	//test CreateTable
+	tempTable := &aoe.TableInfo{Name: "mocktbl0"}
+	_, err = ctlg.CreateTable(0, dbids[0], *tempTable)
+	assert.NotNil(t, err, "CreateTable: create a table with 0 column.")
 	var createIds []uint64
 	for i := 0; i < tableCount; i++ {
 		createId, err := ctlg.CreateTable(0, dbids[0], *testTables[i])
@@ -186,6 +189,8 @@ func TestCatalogWithUtil(t *testing.T) {
 	assert.Equal(t, ErrTableNotExists, err, "DropTable: DropTable wrong err")
 	_, err = ctlg.GetTablets(dbids[0], "mocktbl0")
 	assert.Equal(t, ErrTableNotExists, err, "DropTable: GetTablets wrong err")
+	_, err = ctlg.checkTableExists(dbids[0], createIds[0])
+	assert.Equal(t, ErrTableNotExists, err, "DropTable: checkTableExists wrong err")
 	//test RemoveDeletedTable
 	cnt, err := ctlg.RemoveDeletedTable(0)
 	assert.NoError(t, err, "RemoveDeletedTable Fail")

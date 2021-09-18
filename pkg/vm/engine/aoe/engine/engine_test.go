@@ -17,11 +17,6 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"github.com/fagongzi/log"
-	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
-	cConfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/stretchr/testify/require"
 	stdLog "log"
 	catalog2 "matrixone/pkg/catalog"
 	"matrixone/pkg/container/types"
@@ -39,6 +34,12 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
 	"sync"
 
+	"github.com/fagongzi/log"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/stretchr/testify/require"
+
 	"matrixone/pkg/vm/metadata"
 	"testing"
 	"time"
@@ -53,6 +54,7 @@ const (
 	segmentCnt         = 5
 	blockCnt           = blockCntPerSegment * segmentCnt
 	restart            = false
+	tableDDL           = false
 )
 
 var (
@@ -125,9 +127,16 @@ func TestAOEEngine(t *testing.T) {
 		catalogs = append(catalogs, catalog2.NewCatalog(c.CubeDrivers[i]))
 	}
 
-	testTableDDL(t, catalogs)
+	if tableDDL {
+		time.Sleep(3 * time.Second)
+		testTableDDL(t, catalogs)
+	}
 
 	aoeEngine := New(catalogs[0])
+
+	//test engine
+	n := aoeEngine.Node("")
+	require.NotNil(t, n, "the result of Node()")
 
 	t0 := time.Now()
 	err := aoeEngine.Create(0, testDBName, 0)
@@ -151,6 +160,7 @@ func TestAOEEngine(t *testing.T) {
 	db, err := aoeEngine.Database(testDBName)
 	require.NoError(t, err)
 
+	//test database
 	tbls := db.Relations()
 	require.Equal(t, 0, len(tbls))
 
@@ -190,6 +200,31 @@ func TestAOEEngine(t *testing.T) {
 		err = tb.Write(4, ibat)
 		require.NoError(t, err)
 	}
+
+	tb.Close()
+
+	tb = &relation{}
+	err = tb.Write(4, ibat)
+	require.EqualError(t, err, "no tablets exists", "wrong err")
+
+	//test relation
+	tb, err = db.Relation(mockTbl.Name)
+	require.NoError(t, err)
+	require.Equal(t, tb.ID(), mockTbl.Name)
+
+	relationAttrs := tb.Attribute()
+	require.Equal(t, len(attrs), len(relationAttrs), "Attribute: wrong length")
+
+	index := tb.Index()
+	require.Equal(t, len(attrs), len(index), "Index: wrong len")
+
+	segments := tb.Segments()
+	for i := range segments {
+		segInfo := segments[i]
+		tb.Segment(segInfo, nil)
+	}
+
+	tb.Close()
 
 	err = db.Delete(5, mockTbl.Name)
 	require.NoError(t, err)
