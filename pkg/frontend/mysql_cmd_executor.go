@@ -981,7 +981,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 	execute load data
 	 */
-	result, err := mce.LoadLoop(load, dbHandler, tableHandler, nil)
+	result, err := mce.LoadLoop(load, dbHandler, tableHandler)
 	if err != nil {
 		return err
 	}
@@ -1391,10 +1391,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	logutil.Infof("close executor")
+	//fmt.Printf("close executor\n")
 	if mce.loadDataClose != nil {
-		logutil.Infof("close process load data")
-		//mce.loadDataClose.Close()
+		//fmt.Printf("close process load data\n")
+		mce.loadDataClose.Close()
 	}
 }
 
