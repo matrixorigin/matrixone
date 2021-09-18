@@ -30,7 +30,7 @@ import (
 )
 
 //set responses the requests whose CustemType is Set.
-//The usage of shard is to fetch the Storage.
+//It sets key value.
 //If fail, it returns the err in resp.Value.
 //If success, it returns the amount of the written bytes.
 func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
@@ -49,7 +49,7 @@ func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 }
 
 //setIfNotExist responses the requests whose CustemType is SetIfNotExist.
-//The usage of shard is to fetch the Storage.
+//It sets key value if the key doesn't exist.
 //If fail (including the condition that the key exists), it returns the err in resp.Value.
 //If success, it returns the amount of the written bytes.
 func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
@@ -80,7 +80,7 @@ func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx
 }
 
 //del responses the requests whose CustemType is Del.
-//The usage of shard is to fetch the Storage.
+//It removes the key
 //If fail, it returns 0.
 //If success, it returns the amount of the written bytes.
 func (h *driver) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
@@ -97,7 +97,7 @@ func (h *driver) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 }
 
 //delIfExist responses the requests.
-//The usage of shard is to fetch the Storage.
+//It deletes the key if it exists.
 //If fail (including the condition that the key doesn't exist), it returns the error in resp.Value.
 //If success, it returns the amount of the written bytes.
 func (h *driver) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
@@ -119,7 +119,6 @@ func (h *driver) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 }
 
 //get responses the requests whose CustemType is Get.
-//The usage of shard is to fetch the Storage.
 //If fail, it returns the error in resp.Value and returns 500.
 //If success, it returns the value got in resp.Value and returns 0.
 func (h *driver) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
