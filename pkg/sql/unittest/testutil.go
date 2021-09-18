@@ -9,12 +9,12 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
-func StartTestServer(port int, e engine.Engine, proc *process.Process) {
+func NewTestServer(port int, e engine.Engine, proc *process.Process) (rpcserver.Server, error) {
 	srv, err := rpcserver.New(fmt.Sprintf("127.0.0.1:%v", port), 1<<30, logutil.GetGlobalLogger())
 	if err != nil {
-		logutil.Fatal(err.Error())
+		return nil, err
 	}
 	hp := handler.New(e, proc)
 	srv.Register(hp.Process)
-	go srv.Run()
+	return srv, nil
 }

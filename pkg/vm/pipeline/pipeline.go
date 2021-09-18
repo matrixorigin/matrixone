@@ -53,7 +53,9 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 		proc.Reg.InputBatch = nil
 		// inform related OPs that current pipeline is finished.
 		// OP is asked to release its resources.
+		println("QSQ, ", p.String())
 		vm.Run(p.instructions, proc)
+		println("SQS, ", p.String())
 		for i := range p.compressedBytes {
 			proc.Free(p.compressedBytes[i].Bytes())
 		}
@@ -122,7 +124,6 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 		if end, err := vm.Run(p.instructions, proc); err != nil || end {
 			return end, err
 		}
-		return false, nil
 	}
 }
 

@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"fmt"
 	"matrixone/pkg/vm/process"
 )
 
@@ -46,6 +47,8 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
+	fmt.Printf("Enter run, %v \n", ins)
+
 	for _, in := range ins {
 		if ok, err = execFunc[in.Code](proc, in.Arg); err != nil {
 			return ok || end, err
@@ -54,5 +57,6 @@ func Run(ins Instructions, proc *process.Process) (bool, error) {
 			end = true
 		}
 	}
+	fmt.Printf("Leave run, %v \n", ins)
 	return end, nil
 }

@@ -132,6 +132,10 @@ func (bat *Batch) Cow() {
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
 
+	if bat == nil {
+		return ""
+	}
+
 	if len(bat.Sels) > 0 {
 		fmt.Printf("%v\n", bat.Sels)
 	}

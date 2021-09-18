@@ -97,13 +97,13 @@ type Exec struct {
 
 // compile contains all the information needed for compilation.
 type compile struct {
-	// db current database name
+	// db current database name.
 	db string
-	// uid the user who initiated the sql
+	// uid the user who initiated the sql.
 	uid string
-	// sql sql text
+	// sql sql text.
 	sql string
-	// e db engine instance
+	// e db engine instance.
 	e engine.Engine
 	// proc stores the execution context.
 	proc *process.Process

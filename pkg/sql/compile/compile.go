@@ -232,7 +232,10 @@ func (e *Exec) Run(ts uint64) error {
 			}(e.scopes[i])
 		}
 	}
+	fmt.Printf("321: %v\n", wg)
+
 	wg.Wait()
+	println(654)
 	return e.err
 }
 

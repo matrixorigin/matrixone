@@ -13,6 +13,7 @@ import (
 )
 
 func Print(_ interface{}, bat *batch.Batch) error {
+
 	fmt.Printf("%s\n", bat)
 	return nil
 }
@@ -32,7 +33,10 @@ func TestSql(t *testing.T) {
 	}
 	e := memEngine.NewTestEngine()
 	c := compile.New("test", sql, "tom", e, proc)
-	StartTestServer(40000+100, e, proc)
+	srv, err := NewTestServer(40000+100, e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
 	es, err := c.Build()
 	require.NoError(t, err)
 	for _, e := range es {
@@ -43,4 +47,5 @@ func TestSql(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+
 }
