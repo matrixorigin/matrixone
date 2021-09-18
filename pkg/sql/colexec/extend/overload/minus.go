@@ -51,7 +51,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Int8SubScalar(rvs[0], lvs, lvs)
+						sub.Int8SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs)), lv.Typ)
@@ -122,7 +122,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Int16SubScalar(rvs[0], lvs, lvs)
+						sub.Int16SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs))*2, lv.Typ)
@@ -193,7 +193,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Int32SubScalar(rvs[0], lvs, lvs)
+						sub.Int32SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs))*4, lv.Typ)
@@ -264,7 +264,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Int64SubScalar(rvs[0], lvs, lvs)
+						sub.Int64SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs))*8, lv.Typ)
@@ -335,7 +335,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Uint8SubScalar(rvs[0], lvs, lvs)
+						sub.Uint8SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs)), lv.Typ)
@@ -406,7 +406,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Uint16SubScalar(rvs[0], lvs, lvs)
+						sub.Uint16SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs))*2, lv.Typ)
@@ -477,7 +477,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Uint32SubScalar(rvs[0], lvs, lvs)
+						sub.Uint32SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs))*4, lv.Typ)
@@ -548,7 +548,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Uint64SubScalar(rvs[0], lvs, lvs)
+						sub.Uint64SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs))*8, lv.Typ)
@@ -619,7 +619,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Float32SubScalar(rvs[0], lvs, lvs)
+						sub.Float32SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs))*4, lv.Typ)
@@ -690,7 +690,7 @@ func init() {
 				case !lc && rc:
 					if lv.Ref == 1 || lv.Ref == 0 {
 						lv.Ref = 0
-						sub.Float64SubScalar(rvs[0], lvs, lvs)
+						sub.Float64SubByScalar(rvs[0], lvs, lvs)
 						return lv, nil
 					}
 					vec, err := register.Get(proc, int64(len(lvs))*8, lv.Typ)
