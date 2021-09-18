@@ -60,7 +60,7 @@ func (n *Dedup) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Dedup) Columns() []string {
+func (n *Dedup) ResultColumns() []string {
 	return n.Cs
 }
 

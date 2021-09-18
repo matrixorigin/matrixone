@@ -71,7 +71,7 @@ func (h *NodeHandle) GetBuffer() buf.IBuffer {
 }
 
 func (h *NodeHandle) String() string {
-	s := fmt.Sprintf("<NodeHandle>(Refs=%d)", atomic.LoadUint64(&h.Refs))
+	s := fmt.Sprintf("<NodeHandle>(RefCount=%d)", atomic.LoadUint64(&h.Refs))
 	return s
 }
 
@@ -89,7 +89,7 @@ func (h *NodeHandle) Unload() {
 	h.Buff.Close()
 	h.Buff = nil
 	nif.AtomicStoreState(&(h.State), nif.NODE_UNLOAD)
-	// log.Infof("Unload %s", h.ID.String())
+	// log.Infof("Unload %s", h.RelationName.String())
 }
 
 func (h *NodeHandle) GetNodeCreator() buf.MemoryNodeConstructor {
@@ -146,7 +146,7 @@ func (h *NodeHandle) Close() error {
 	if h.Buff != nil {
 		h.Buff.Close()
 	}
-	// log.Infof("UnregisterNode %v", h.ID)
+	// log.Infof("UnregisterNode %v", h.RelationName)
 	h.Manager.UnregisterNode(h)
 	return nil
 }
@@ -195,13 +195,13 @@ func (h *NodeHandle) CommitLoad() error {
 	}
 
 	if h.Spillable {
-		// log.Infof("loading transient node %v", h.ID)
+		// log.Infof("loading transient node %v", h.RelationName)
 		err := h.IO.Load()
 		if err != nil {
 			return err
 		}
 	} else {
-		// log.Infof("loading persistent node %v", h.ID)
+		// log.Infof("loading persistent node %v", h.RelationName)
 		err := h.IO.Load()
 		if err != nil {
 			return err

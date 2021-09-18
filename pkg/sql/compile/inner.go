@@ -95,8 +95,8 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 		}
 		{
 			for i, s := range rs {
-				s.Ins = append(s.Ins, vm.Instruction{
-					Op: vm.Transfer,
+				s.Instructions = append(s.Instructions, vm.Instruction{
+					Code: vm.Transfer,
 					Arg: &transfer.Argument{
 						Proc: rms.Proc,
 						Reg:  rms.Proc.Reg.MergeReceivers[i],
@@ -104,14 +104,14 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 				})
 			}
 		}
-		rms.Ss = rs
+		rms.PreScopes = rs
 		rms.Magic = Merge
-		rms.Ins = append(rms.Ins, vm.Instruction{
-			Op:  vm.Merge,
-			Arg: &merge.Argument{},
+		rms.Instructions = append(rms.Instructions, vm.Instruction{
+			Code: vm.Merge,
+			Arg:  &merge.Argument{},
 		})
-		rms.Ins = append(rms.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		rms.Instructions = append(rms.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: s.Proc,
 				Reg:  s.Proc.Reg.MergeReceivers[0],
@@ -133,8 +133,8 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 		}
 		{
 			for i, s := range ss {
-				s.Ins = append(s.Ins, vm.Instruction{
-					Op: vm.Transfer,
+				s.Instructions = append(s.Instructions, vm.Instruction{
+					Code: vm.Transfer,
 					Arg: &transfer.Argument{
 						Proc: sms.Proc,
 						Reg:  sms.Proc.Reg.MergeReceivers[i],
@@ -142,14 +142,14 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 				})
 			}
 		}
-		sms.Ss = ss
+		sms.PreScopes = ss
 		sms.Magic = Merge
-		sms.Ins = append(sms.Ins, vm.Instruction{
-			Op:  vm.Merge,
-			Arg: &merge.Argument{},
+		sms.Instructions = append(sms.Instructions, vm.Instruction{
+			Code: vm.Merge,
+			Arg:  &merge.Argument{},
 		})
-		sms.Ins = append(sms.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		sms.Instructions = append(sms.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: s.Proc,
 				Reg:  s.Proc.Reg.MergeReceivers[1],
@@ -157,9 +157,9 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 		})
 	}
 	s.Magic = Merge
-	s.Ss = []*Scope{rms, sms}
-	s.Ins = append(s.Ins, vm.Instruction{
-		Op: vm.BagInnerJoin,
+	s.PreScopes = []*Scope{rms, sms}
+	s.Instructions = append(s.Instructions, vm.Instruction{
+		Code: vm.BagInnerJoin,
 		Arg: &inner.Argument{
 			Rattrs: o.Rattrs,
 			Sattrs: o.Sattrs,

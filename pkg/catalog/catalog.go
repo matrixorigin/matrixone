@@ -32,7 +32,7 @@ import (
 const (
 	defaultCatalogId    = uint64(1)
 	cPrefix             = "meta"
-	cDBPrefix           = "DB"
+	cDBPrefix           = "DBName"
 	cDBIDPrefix         = "DBID"
 	cTablePrefix        = "Table"
 	cTableIDPrefix      = "TID"

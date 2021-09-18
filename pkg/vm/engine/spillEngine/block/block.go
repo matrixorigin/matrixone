@@ -93,7 +93,7 @@ func (b *Block) Read(siz int64, ref uint64, attr string, proc *process.Process) 
 	//		proc.Free(data)
 	//		return nil, err
 	//	}
-	//	vec.Data = data
+	//	vec.DataSource = data
 	//}
 	//copy(data, encoding.EncodeUint64(ref))
 	return vec, nil

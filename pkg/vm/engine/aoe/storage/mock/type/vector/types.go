@@ -71,9 +71,9 @@ func (v *StdVector) Append(o Vector, offset uint64) (n uint64, err error) {
 	}
 	start := int(offset) * tsize
 	end := int(offset)*tsize + to_write
-	// log.Infof("1. cap(v.Data)=%d, len(v.Data)=%d, v.Offset=%d, start=%d, end=%d\n", cap(v.Data), len(v.Data), v.Offset, start, end)
+	// log.Infof("1. cap(v.DataSource)=%d, len(v.DataSource)=%d, v.Offset=%d, start=%d, end=%d\n", cap(v.DataSource), len(v.DataSource), v.Offset, start, end)
 	copy(v.Data[v.Offset:], buf[start:end])
-	// log.Infof("2. cap(v.Data)=%d, len(v.Data)=%d, v.Offset=%d\n", cap(v.Data), len(v.Data), v.Offset)
+	// log.Infof("2. cap(v.DataSource)=%d, len(v.DataSource)=%d, v.Offset=%d\n", cap(v.DataSource), len(v.DataSource), v.Offset)
 	v.Offset += to_write
 	return uint64(to_write / tsize), nil
 }
@@ -82,7 +82,7 @@ func (v *StdVector) Append(o Vector, offset uint64) (n uint64, err error) {
 // 	vec := &StrVector{
 // 		BaseVector: BaseVector{
 // 			Type: t,
-// 			Data: dataBuf,
+// 			DataSource: dataBuf,
 // 		},
 // 		AuxData:  make([][]byte, 0),
 // 		AuxAlloc: alloc,
@@ -92,12 +92,12 @@ func (v *StdVector) Append(o Vector, offset uint64) (n uint64, err error) {
 // }
 
 // func (v *StrVector) GetData() []byte {
-// 	return v.Data
+// 	return v.DataSource
 // }
 
 // func (v *StrVector) Append(o Vector, offset uint64) (n uint64, err error) {
 // 	buf := o.GetData()
-// 	remaining := cap(v.Data) - len(v.Data)
+// 	remaining := cap(v.DataSource) - len(v.DataSource)
 // 	other_remaining := len(buf) - int(offset)
 // 	to_write := other_remaining
 // 	if other_remaining > remaining {

@@ -27,7 +27,7 @@ import (
 
 func (c *compile) compileOrderOutput(o *order.Order, mp map[string]uint64) ([]*Scope, error) {
 	{
-		for _, g := range o.Gs {
+		for _, g := range o.Attributes {
 			mp[g.Name]++
 			mp[g.Name]++
 		}
@@ -36,9 +36,9 @@ func (c *compile) compileOrderOutput(o *order.Order, mp map[string]uint64) ([]*S
 	if err != nil {
 		return nil, err
 	}
-	fs := make([]vorder.Field, len(o.Gs))
+	fs := make([]vorder.Field, len(o.Attributes))
 	{
-		for i, g := range o.Gs {
+		for i, g := range o.Attributes {
 			fs[i] = vorder.Field{
 				Attr: g.Name,
 				Type: vorder.Direction(g.Dirt),
@@ -64,27 +64,27 @@ func (c *compile) compileOrderOutput(o *order.Order, mp map[string]uint64) ([]*S
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
 				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
-	mfs := make([]mergeorder.Field, len(o.Gs))
+	mfs := make([]mergeorder.Field, len(o.Attributes))
 	{
-		for i, g := range o.Gs {
+		for i, g := range o.Attributes {
 			mfs[i] = mergeorder.Field{
 				Attr: g.Name,
 				Type: mergeorder.Direction(g.Dirt),
 			}
 		}
 	}
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.MergeOrder,
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.MergeOrder,
 		Arg: &mergeorder.Argument{
 			Fs: mfs,
 		},
@@ -94,7 +94,7 @@ func (c *compile) compileOrderOutput(o *order.Order, mp map[string]uint64) ([]*S
 
 func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, error) {
 	{
-		for _, g := range o.Gs {
+		for _, g := range o.Attributes {
 			mp[g.Name]++
 		}
 	}
@@ -102,9 +102,9 @@ func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, 
 	if err != nil {
 		return nil, err
 	}
-	fs := make([]vorder.Field, len(o.Gs))
+	fs := make([]vorder.Field, len(o.Attributes))
 	{
-		for i, g := range o.Gs {
+		for i, g := range o.Attributes {
 			fs[i] = vorder.Field{
 				Attr: g.Name,
 				Type: vorder.Direction(g.Dirt),
@@ -130,27 +130,27 @@ func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, 
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
 				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
-	mfs := make([]mergeorder.Field, len(o.Gs))
+	mfs := make([]mergeorder.Field, len(o.Attributes))
 	{
-		for i, g := range o.Gs {
+		for i, g := range o.Attributes {
 			mfs[i] = mergeorder.Field{
 				Attr: g.Name,
 				Type: mergeorder.Direction(g.Dirt),
 			}
 		}
 	}
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.MergeOrder,
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.MergeOrder,
 		Arg: &mergeorder.Argument{
 			Fs: mfs,
 		},
@@ -160,8 +160,8 @@ func (c *compile) compileOrder(o *order.Order, mp map[string]uint64) ([]*Scope, 
 
 func pushOrder(s *Scope, arg *vorder.Argument) *Scope {
 	if s.Magic == Merge || s.Magic == Remote {
-		for i := range s.Ss {
-			s.Ss[i] = pushOrder(s.Ss[i], arg)
+		for i := range s.PreScopes {
+			s.PreScopes[i] = pushOrder(s.PreScopes[i], arg)
 		}
 		fs := make([]mergeorder.Field, len(arg.Fs))
 		{
@@ -172,20 +172,20 @@ func pushOrder(s *Scope, arg *vorder.Argument) *Scope {
 				}
 			}
 		}
-		s.Ins[len(s.Ins)-1] = vm.Instruction{
-			Op: vm.MergeOrder,
+		s.Instructions[len(s.Instructions)-1] = vm.Instruction{
+			Code: vm.MergeOrder,
 			Arg: &mergeorder.Argument{
 				Fs:  fs,
 				Flg: true,
 			},
 		}
 	} else {
-		n := len(s.Ins) - 1
-		s.Ins = append(s.Ins, vm.Instruction{
-			Arg: arg,
-			Op:  vm.Order,
+		n := len(s.Instructions) - 1
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Arg:  arg,
+			Code: vm.Order,
 		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+		s.Instructions[n], s.Instructions[n+1] = s.Instructions[n+1], s.Instructions[n]
 	}
 	return s
 }

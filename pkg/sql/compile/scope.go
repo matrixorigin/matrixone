@@ -43,27 +43,27 @@ import (
 )
 
 func (s *Scope) Run(e engine.Engine) error {
-	segs := make([]engine.Segment, len(s.Data.Segs))
-	cs := make([]uint64, 0, len(s.Data.Refs))
-	attrs := make([]string, 0, len(s.Data.Refs))
+	segs := make([]engine.Segment, len(s.DataSource.Segments))
+	cs := make([]uint64, 0, len(s.DataSource.RefCount))
+	attrs := make([]string, 0, len(s.DataSource.RefCount))
 	{
-		for k, v := range s.Data.Refs {
+		for k, v := range s.DataSource.RefCount {
 			cs = append(cs, v)
 			attrs = append(attrs, k)
 		}
 	}
-	p := pipeline.New(cs, attrs, s.Ins)
+	p := pipeline.New(cs, attrs, s.Instructions)
 	{
-		db, err := e.Database(s.Data.DB)
+		db, err := e.Database(s.DataSource.DBName)
 		if err != nil {
 			return err
 		}
-		r, err := db.Relation(s.Data.ID)
+		r, err := db.Relation(s.DataSource.RelationName)
 		if err != nil {
 			return err
 		}
 		defer r.Close()
-		for i, seg := range s.Data.Segs {
+		for i, seg := range s.DataSource.Segments {
 			segs[i] = r.Segment(engine.SegmentInfo{
 				Id:       seg.Id,
 				GroupId:  seg.GroupId,
@@ -83,8 +83,8 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	var err error
 	var wg sync.WaitGroup
 
-	for i := range s.Ss {
-		switch s.Ss[i].Magic {
+	for i := range s.PreScopes {
+		switch s.PreScopes[i].Magic {
 		case Normal:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -92,7 +92,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 					err = rerr
 				}
 				wg.Done()
-			}(s.Ss[i])
+			}(s.PreScopes[i])
 		case Merge:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -100,7 +100,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 					err = rerr
 				}
 				wg.Done()
-			}(s.Ss[i])
+			}(s.PreScopes[i])
 		case Remote:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -108,10 +108,10 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 					err = rerr
 				}
 				wg.Done()
-			}(s.Ss[i])
+			}(s.PreScopes[i])
 		}
 	}
-	p := pipeline.NewMerge(s.Ins)
+	p := pipeline.NewMerge(s.Instructions)
 	if _, rerr := p.RunMerge(s.Proc); rerr != nil {
 		err = rerr
 	}
@@ -126,7 +126,7 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 func (s *Scope) RemoteRun(e engine.Engine) error {
 	var buf bytes.Buffer
 
-	arg := s.Ins[len(s.Ins)-1].Arg.(*transfer.Argument)
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*transfer.Argument)
 	defer func() {
 		arg.Reg.Wg.Add(1)
 		arg.Reg.Ch <- nil
@@ -135,7 +135,7 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 	encoder, decoder := rpcserver.NewCodec(1 << 30)
 	conn := goetty.NewIOSession(goetty.WithCodec(encoder, decoder))
 	defer conn.Close()
-	addr, _ := net.ResolveTCPAddr("tcp", s.N.Addr)
+	addr, _ := net.ResolveTCPAddr("tcp", s.NodeInfo.Addr)
 	if _, err := conn.Connect(fmt.Sprintf("%v:%v", addr.IP, addr.Port+100), time.Second*3); err != nil {
 		return err
 	}
@@ -166,7 +166,7 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 }
 
 func (s *Scope) Insert(ts uint64) error {
-	o, _ := s.O.(*insert.Insert)
+	o, _ := s.Operator.(*insert.Insert)
 	defer o.R.Close()
 	return o.R.Write(ts, o.Bat)
 }
@@ -175,7 +175,7 @@ func (s *Scope) Explain(u interface{}, fill func(interface{}, *batch.Batch) erro
 	bat := batch.New(true, []string{"Pipeline"})
 	{
 		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
-		if err := vec.Append([][]byte{[]byte(s.O.String())}); err != nil {
+		if err := vec.Append([][]byte{[]byte(s.Operator.String())}); err != nil {
 			return err
 		}
 		bat.Vecs[0] = vec
@@ -184,7 +184,7 @@ func (s *Scope) Explain(u interface{}, fill func(interface{}, *batch.Batch) erro
 }
 
 func (s *Scope) CreateTable(ts uint64) error {
-	o, _ := s.O.(*createTable.CreateTable)
+	o, _ := s.Operator.(*createTable.CreateTable)
 	if r, err := o.Db.Relation(o.Id); err == nil {
 		r.Close()
 		if o.Flg {
@@ -196,7 +196,7 @@ func (s *Scope) CreateTable(ts uint64) error {
 }
 
 func (s *Scope) CreateDatabase(ts uint64) error {
-	o, _ := s.O.(*createDatabase.CreateDatabase)
+	o, _ := s.Operator.(*createDatabase.CreateDatabase)
 	if _, err := o.E.Database(o.Id); err == nil {
 		if o.Flg {
 			return nil
@@ -207,7 +207,7 @@ func (s *Scope) CreateDatabase(ts uint64) error {
 }
 
 func (s *Scope) DropTable(ts uint64) error {
-	o, _ := s.O.(*dropTable.DropTable)
+	o, _ := s.Operator.(*dropTable.DropTable)
 	for i := range o.Dbs {
 		db, err := o.E.Database(o.Dbs[i])
 		if err != nil {
@@ -232,7 +232,7 @@ func (s *Scope) DropTable(ts uint64) error {
 }
 
 func (s *Scope) DropDatabase(ts uint64) error {
-	o, _ := s.O.(*dropDatabase.DropDatabase)
+	o, _ := s.Operator.(*dropDatabase.DropDatabase)
 	if _, err := o.E.Database(o.Id); err != nil {
 		if o.Flg {
 			return nil
@@ -243,7 +243,7 @@ func (s *Scope) DropDatabase(ts uint64) error {
 }
 
 func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	o, _ := s.O.(*showTables.ShowTables)
+	o, _ := s.Operator.(*showTables.ShowTables)
 	bat := batch.New(true, []string{"Table"})
 	{
 		rs := o.Db.Relations()
@@ -261,7 +261,7 @@ func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) e
 }
 
 func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch) error) error {
-	o, _ := s.O.(*showDatabases.ShowDatabases)
+	o, _ := s.Operator.(*showDatabases.ShowDatabases)
 	bat := batch.New(true, []string{"Database"})
 	{
 		rs := o.E.Databases()

@@ -66,7 +66,7 @@ func (td *tableData) close() {
 	for _, segment := range td.tree.segments {
 		segment.Unref()
 	}
-	// log.Infof("table %d noref", td.meta.ID)
+	// log.Infof("table %d noref", td.meta.RelationName)
 }
 
 func (td *tableData) Ref() {
@@ -141,7 +141,7 @@ func (td *tableData) GetMeta() *md.Table {
 func (td *tableData) String() string {
 	td.tree.RLock()
 	defer td.tree.RUnlock()
-	s := fmt.Sprintf("<Table[%d]>(SegCnt=%d)(Refs=%d)", td.meta.ID, td.tree.segmentCnt, td.RefCount())
+	s := fmt.Sprintf("<Table[%d]>(SegCnt=%d)(RefCount=%d)", td.meta.ID, td.tree.segmentCnt, td.RefCount())
 	for _, seg := range td.tree.segments {
 		s = fmt.Sprintf("%s\n\t%s", s, seg.String())
 	}

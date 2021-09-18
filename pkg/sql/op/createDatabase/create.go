@@ -37,5 +37,5 @@ func (n *CreateDatabase) String() string {
 
 func (n *CreateDatabase) Name() string                     { return "" }
 func (n *CreateDatabase) Rename(_ string)                  {}
-func (n *CreateDatabase) Columns() []string                { return nil }
+func (n *CreateDatabase) ResultColumns() []string          { return nil }
 func (n *CreateDatabase) Attribute() map[string]types.Type { return nil }

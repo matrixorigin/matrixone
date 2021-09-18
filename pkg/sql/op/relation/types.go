@@ -35,10 +35,10 @@ type Unit struct {
 }
 
 type Relation struct {
-	S     bool // is single
+	S     bool // 是否带dbname前缀
 	ID    string
 	DB    string
-	Rid   string // real id
+	Rid   string // renamed id
 	Us    []*Unit
 	Cols  []string
 	R     engine.Relation

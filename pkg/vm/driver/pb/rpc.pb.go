@@ -3117,7 +3117,7 @@ func (m *Request) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ID", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field RelationName", wireType)
 			}
 			m.ID = 0
 			for shift := uint(0); ; shift += 7 {
@@ -3673,7 +3673,7 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ID", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field RelationName", wireType)
 			}
 			m.ID = 0
 			for shift := uint(0); ; shift += 7 {
@@ -4713,7 +4713,7 @@ func (m *AppendRequest) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 2:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Data", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DataSource", wireType)
 			}
 			var byteLen int
 			for shift := uint(0); ; shift += 7 {

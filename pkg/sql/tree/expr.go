@@ -424,7 +424,7 @@ type CaseExpr struct {
 	Else  Expr
 }
 
-func NewCaseExpr(e Expr,w []*When,el Expr)*CaseExpr{
+func NewCaseExpr(e Expr, w []*When, el Expr) *CaseExpr {
 	return &CaseExpr{
 		Expr:  e,
 		Whens: w,
@@ -438,7 +438,7 @@ type When struct {
 	Val  Expr
 }
 
-func NewWhen(c,v Expr)*When{
+func NewWhen(c, v Expr) *When {
 	return &When{
 		Cond: c,
 		Val:  v,
@@ -499,18 +499,18 @@ type IntervalExpr struct {
 	Type IntervalType
 }
 
-func NewIntervalExpr(t IntervalType)*IntervalExpr{
+func NewIntervalExpr(t IntervalType) *IntervalExpr {
 	return &IntervalExpr{
-		Type:     t,
+		Type: t,
 	}
 }
 
 //the DEFAULT expression.
-type DefaultVal struct{
+type DefaultVal struct {
 	exprImpl
 }
 
-func NewDefaultVal()*DefaultVal{
+func NewDefaultVal() *DefaultVal {
 	return &DefaultVal{}
 }
 
@@ -518,32 +518,32 @@ type MaxValue struct {
 	exprImpl
 }
 
-func NewMaxValue()*MaxValue{
+func NewMaxValue() *MaxValue {
 	return &MaxValue{}
 }
 
 /*
 Variable Expression Used in Set Statement,
-Load Data statement, Show statement,etc.
+Load DataSource statement, Show statement,etc.
 Variable types:
 User-Defined Variable
 Local-Variable: DECLARE statement
 System Variable: Global System Variable, Session System Variable
- */
+*/
 
 type VarExpr struct {
 	exprImpl
-	Name string
+	Name   string
 	System bool
 	Global bool
-	Expr Expr
+	Expr   Expr
 }
 
-func NewVarExpr(n string,s bool,g bool,e Expr) *VarExpr {
+func NewVarExpr(n string, s bool, g bool, e Expr) *VarExpr {
 	return &VarExpr{
-		Name:     n,
-		System:   s,
-		Global:   g,
-		Expr:     e,
+		Name:   n,
+		System: s,
+		Global: g,
+		Expr:   e,
 	}
 }

@@ -19,7 +19,7 @@ package uint16s
 // Init establishes the heap invariants required by the other routines in this package.
 // Init is idempotent with respect to the heap invariants
 // and may be called whenever the heap invariants may have been invalidated.
-// The complexity is O(n) where n = len(h).
+// The complexity is Operator(n) where n = len(h).
 func heapInit(h heapSlice) {
 	// heapify
 	n := len(h)
@@ -29,14 +29,14 @@ func heapInit(h heapSlice) {
 }
 
 // Push pushes the element x onto the heap.
-// The complexity is O(log n) where n = len(h).
+// The complexity is Operator(log n) where n = len(h).
 func heapPush(h *heapSlice, x heapElem) {
 	*h = append(*h, x)
 	up(*h, len(*h)-1)
 }
 
 // Pop removes and returns the minimum element (according to Less) from the heap.
-// The complexity is O(log n) where n = len(h).
+// The complexity is Operator(log n) where n = len(h).
 // Pop is equivalent to Remove(h, 0).
 func heapPop(h *heapSlice) heapElem {
 	n := len(*h) - 1
@@ -48,7 +48,7 @@ func heapPop(h *heapSlice) heapElem {
 }
 
 // Remove removes and returns the element at index i from the heap.
-// The complexity is O(log n) where n = len(h).
+// The complexity is Operator(log n) where n = len(h).
 func heapRemove(h *heapSlice, i int) heapElem {
 	n := len(*h) - 1
 	if n != i {
@@ -65,7 +65,7 @@ func heapRemove(h *heapSlice, i int) heapElem {
 // Fix re-establishes the heap ordering after the element at index i has changed its value.
 // Changing the value of the element at index i and then calling Fix is equivalent to,
 // but less expensive than, calling Remove(h, i) followed by a Push of the new value.
-// The complexity is O(log n) where n = len(h).
+// The complexity is Operator(log n) where n = len(h).
 func heapFix(h heapSlice, i int) {
 	if !down(h, i, len(h)) {
 		up(h, i)

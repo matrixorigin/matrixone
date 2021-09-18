@@ -51,8 +51,8 @@ func (n *Top) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Top) Columns() []string {
-	return n.Prev.Columns()
+func (n *Top) ResultColumns() []string {
+	return n.Prev.ResultColumns()
 }
 
 func (n *Top) Attribute() map[string]types.Type {

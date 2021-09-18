@@ -22,9 +22,9 @@ import (
 func Print(prefix []byte, ss []*Scope) {
 	for _, s := range ss {
 		if s.Magic == Merge || s.Magic == Remote {
-			Print(append(prefix, '\t'), s.Ss)
+			Print(append(prefix, '\t'), s.PreScopes)
 		}
-		p := pipeline.NewMerge(s.Ins)
+		p := pipeline.NewMerge(s.Instructions)
 		fmt.Printf("%s:%v %v\n", prefix, s.Magic, p)
 	}
 }

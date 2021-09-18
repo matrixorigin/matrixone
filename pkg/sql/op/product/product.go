@@ -67,7 +67,7 @@ func (n *Product) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Product) Columns() []string {
+func (n *Product) ResultColumns() []string {
 	return nil
 }
 

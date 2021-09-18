@@ -40,8 +40,8 @@ func (hp *Handler) Process(_ uint64, val interface{}, conn goetty.IOSession) err
 		return err
 	}
 	s := recoverScope(ps, hp.proc)
-	s.Ins[len(s.Ins)-1] = vm.Instruction{
-		Op: vm.Output,
+	s.Instructions[len(s.Instructions)-1] = vm.Instruction{
+		Code: vm.Output,
 		Arg: &output.Argument{
 			Func: writeBack,
 			Data: &userdata{conn: conn},

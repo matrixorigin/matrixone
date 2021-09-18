@@ -106,7 +106,7 @@ func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs, where *tree.Where) 
 			es = append(es, aggregation.Extend{
 				Agg:   agg,
 				Alias: alias,
-				Name:  o.Columns()[0],
+				Name:  o.ResultColumns()[0],
 				Op:    aggregation.StarCount,
 			})
 		case *tree.UnresolvedName:
@@ -190,7 +190,7 @@ func (b *build) stripAggregate(o op.OP, n tree.Expr, fs *[]*tree.FuncExpr, es *[
 				switch e.Exprs[0].(type) {
 				case *tree.NumVal:
 					ext, err := b.buildExtend(o, &tree.UnresolvedName{
-						Parts: [4]string{o.Columns()[0]},
+						Parts: [4]string{o.ResultColumns()[0]},
 					})
 					if err != nil {
 						return nil, err

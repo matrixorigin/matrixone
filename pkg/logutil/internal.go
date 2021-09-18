@@ -119,7 +119,7 @@ var _globalLogger atomic.Value
 
 // init initializes a default zap logger before set up logger.
 func init() {
-	conf := &loggerConfig{Level: "info", Format: "console"}
+	conf := &loggerConfig{Level: "debug", Format: "console"}
 	logger, _ := initMOLogger(conf)
 	replaceGlobalLogger(logger)
 }

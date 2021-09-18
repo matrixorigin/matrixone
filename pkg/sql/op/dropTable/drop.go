@@ -49,5 +49,5 @@ func (n *DropTable) String() string {
 
 func (n *DropTable) Name() string                     { return "" }
 func (n *DropTable) Rename(_ string)                  {}
-func (n *DropTable) Columns() []string                { return nil }
+func (n *DropTable) ResultColumns() []string          { return nil }
 func (n *DropTable) Attribute() map[string]types.Type { return nil }

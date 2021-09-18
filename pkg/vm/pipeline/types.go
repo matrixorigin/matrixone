@@ -27,7 +27,7 @@ const (
 )
 
 // Pipeline contains the information associated with a pipeline in a query execution plan.
-// A query execution may contains one or more pipelines.
+// A query execution plan may contains one or more pipelines.
 // As an example:
 //
 //  CREATE TABLE order
@@ -78,11 +78,12 @@ const (
 //
 // In this example, a possible pipeline is as follows:
 //
-// pipeline 0: filter pushdown
-//    σ(o, year >= 1992 ∧  year <= 1997) ⨝ σ(c, nation = 'CHINA') ⨝ σ(s, nation = 'CHINA')
-//        -> γ([c.city, s.city, o.year, sum(o.revenue) as revenue], c.city, s.city, o.year)
-//        -> τ(o.year asc, revenue desc)
-//        -> π(c.city, s.city, revenue)
+// pipeline:
+// o ⨝ c ⨝ s
+//  -> σ(c.nation = 'CHINA' ∧  o.year >= 1992 ∧  o.year <= 1997 ∧  s.nation = 'CHINA')
+//  -> γ([c.city, s.city, o.year, sum(o.revenue) as revenue], c.city, s.city, o.year)
+//  -> τ(o.year asc, revenue desc)
+//  -> π(c.city, s.city, revenue)
 type Pipeline struct {
 	// refCount, reference count for attribute.
 	refCount []uint64

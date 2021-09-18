@@ -63,27 +63,27 @@ func (c *compile) compileSummarize(o *summarize.Summarize, mp map[string]uint64)
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
 				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
 	if o.IsPD {
-		rs.Ins = append(rs.Ins, vm.Instruction{
-			Op: vm.MergeSummarize,
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Code: vm.MergeSummarize,
 			Arg: &mergesum.Argument{
 				Refer: refer,
 				Es:    mergeAggregates(o.Es),
 			},
 		})
 	} else {
-		rs.Ins = append(rs.Ins, vm.Instruction{
-			Op: vm.MergeSummarize,
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Code: vm.MergeSummarize,
 			Arg: &mergesum.Argument{
 				Refer: refer,
 				Es:    unitAggregates(o.Es),
@@ -95,26 +95,26 @@ func (c *compile) compileSummarize(o *summarize.Summarize, mp map[string]uint64)
 
 func pushSummarize(s *Scope, refer map[string]uint64, o *summarize.Summarize) *Scope {
 	if s.Magic == Merge || s.Magic == Remote {
-		for i := range s.Ss {
-			s.Ss[i] = pushSummarize(s.Ss[i], refer, o)
+		for i := range s.PreScopes {
+			s.PreScopes[i] = pushSummarize(s.PreScopes[i], refer, o)
 		}
-		s.Ins[len(s.Ins)-1] = vm.Instruction{
-			Op: vm.MergeSummarize,
+		s.Instructions[len(s.Instructions)-1] = vm.Instruction{
+			Code: vm.MergeSummarize,
 			Arg: &mergesum.Argument{
 				Refer: refer,
 				Es:    remoteAggregates(o.Es),
 			},
 		}
 	} else {
-		n := len(s.Ins) - 1
-		s.Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Summarize,
+		n := len(s.Instructions) - 1
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Summarize,
 			Arg: &vsummarize.Argument{
 				Refer: refer,
 				Es:    unitAggregates(o.Es),
 			},
 		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+		s.Instructions[n], s.Instructions[n+1] = s.Instructions[n+1], s.Instructions[n]
 	}
 	return s
 }

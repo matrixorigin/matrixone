@@ -27,7 +27,7 @@ import (
 
 func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 	s := new(compile.Scope)
-	s.Ins = ps.Ins
+	s.Instructions = ps.Ins
 	s.Magic = ps.Magic
 	if s.Magic == compile.Remote {
 		s.Magic = compile.Merge
@@ -44,13 +44,13 @@ func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 		}
 	}
 	if len(ps.Data.Segs) > 0 {
-		s.Data = new(compile.Source)
-		s.Data.ID = ps.Data.ID
-		s.Data.DB = ps.Data.DB
-		s.Data.Refs = ps.Data.Refer
-		s.Data.Segs = make([]*relation.Segment, len(ps.Data.Segs))
+		s.DataSource = new(compile.Source)
+		s.DataSource.RelationName = ps.Data.ID
+		s.DataSource.DBName = ps.Data.DB
+		s.DataSource.RefCount = ps.Data.Refer
+		s.DataSource.Segments = make([]*relation.Segment, len(ps.Data.Segs))
 		for i, seg := range ps.Data.Segs {
-			s.Data.Segs[i] = &relation.Segment{
+			s.DataSource.Segments[i] = &relation.Segment{
 				Id:       seg.Id,
 				GroupId:  seg.GroupId,
 				Version:  seg.Version,
@@ -59,17 +59,17 @@ func recoverScope(ps protocol.Scope, proc *process.Process) *compile.Scope {
 			}
 		}
 	}
-	s.Ss = make([]*compile.Scope, len(ps.Ss))
+	s.PreScopes = make([]*compile.Scope, len(ps.Ss))
 	for i := range ps.Ss {
 		ps.Ss[i].Ins = recoverInstructions(ps.Ss[i].Ins, s.Proc, s.Proc.Reg.MergeReceivers[i])
-		s.Ss[i] = recoverScope(ps.Ss[i], proc)
+		s.PreScopes[i] = recoverScope(ps.Ss[i], proc)
 	}
 	return s
 }
 
 func recoverInstructions(ins vm.Instructions, proc *process.Process, reg *process.WaitRegister) vm.Instructions {
 	for i, in := range ins {
-		if in.Op == vm.Transfer {
+		if in.Code == vm.Transfer {
 			in.Arg = &transfer.Argument{Proc: proc, Reg: reg}
 		}
 		ins[i] = in

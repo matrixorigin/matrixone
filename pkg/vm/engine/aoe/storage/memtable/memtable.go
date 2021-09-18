@@ -75,7 +75,7 @@ func (mt *memTable) String() string {
 	if bat != nil {
 		length = bat.Length()
 	}
-	s := fmt.Sprintf("<MT[%s]>(Refs=%d)(Count=%d)", id.BlockString(), mt.RefCount(), length)
+	s := fmt.Sprintf("<MT[%s]>(RefCount=%d)(Count=%d)", id.BlockString(), mt.RefCount(), length)
 	return s
 }
 
@@ -108,7 +108,7 @@ func (mt *memTable) Append(bat *gBatch.Batch, offset uint64, index *md.LogIndex)
 
 // A flush worker call this Flush API. When a memTable is ready to flush. It immutable.
 // Steps:
-// 1. Serialize mt.Data to block_file (dir/$table_id_$segment_id_$block_id.blk)
+// 1. Serialize mt.DataSource to block_file (dir/$table_id_$segment_id_$block_id.blk)
 // 2. Create a UpdateBlockOp and excute it
 // 3. Start a checkpoint job
 // If crashed before Step 1, all data from last checkpoint will be restored from WAL

@@ -43,22 +43,22 @@ func (c *compile) compileOffset(o *offset.Offset, mp map[string]uint64) ([]*Scop
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
 				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op:  vm.Merge,
-		Arg: &merge.Argument{},
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.Merge,
+		Arg:  &merge.Argument{},
 	})
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.Offset,
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.Offset,
 		Arg: &voffset.Argument{
 			Offset: uint64(o.Offset),
 		},

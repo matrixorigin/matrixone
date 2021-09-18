@@ -28,11 +28,11 @@ func NewParser() *Parser {
 	return &Parser{p: parser.New()}
 }
 
-func (p *Parser) Parse(sql string) (tree_stmt []Statement,err error) {
+func (p *Parser) Parse(sql string) (tree_stmt []Statement, err error) {
 	defer func() {
-		if er := recover(); er != nil{
+		if er := recover(); er != nil {
 			tree_stmt = nil
-			err = fmt.Errorf("parse() panic %v",er)
+			err = fmt.Errorf("parse() panic %v", er)
 		}
 	}()
 
@@ -46,7 +46,7 @@ func (p *Parser) Parse(sql string) (tree_stmt []Statement,err error) {
 	tree_stmt = make([]Statement, len(stmtNodes))
 	for i, stmt := range stmtNodes {
 		switch st := stmt.(type) {
-		//Data Definition Statement DDL
+		//DataSource Definition Statement DDL
 		case *ast.CreateTableStmt:
 			tree_stmt[i] = transformCreateTableStmtToCreateTable(st)
 		case *ast.DropTableStmt:
@@ -59,7 +59,7 @@ func (p *Parser) Parse(sql string) (tree_stmt []Statement,err error) {
 			tree_stmt[i] = transformCreateIndexStmtToCreateIndex(st)
 		case *ast.DropIndexStmt:
 			tree_stmt[i] = transformDropIndexStmtToDropIndex(st)
-		//Data Manipulation Statement DML
+		//DataSource Manipulation Statement DML
 		case *ast.SelectStmt:
 			tree_stmt[i] = transformSelectStmtToSelect(st)
 		case *ast.SetOprStmt:
@@ -81,15 +81,15 @@ func (p *Parser) Parse(sql string) (tree_stmt []Statement,err error) {
 			tree_stmt[i] = transformRollbackStmtToRollbackTransaction(st)
 		//Database Administration Statement
 		case *ast.CreateUserStmt:
-			if st.IsCreateRole {//create role
+			if st.IsCreateRole { //create role
 				tree_stmt[i] = transformCreateUserStmtToCreateRole(st)
-			}else{
+			} else {
 				tree_stmt[i] = transformCreatUserStmtToCreateUser(st)
 			}
 		case *ast.DropUserStmt:
 			if st.IsDropRole {
 				tree_stmt[i] = transformDropUserStmtToDropRole(st)
-			}else{
+			} else {
 				tree_stmt[i] = transformDropUserStmtToDropUser(st)
 			}
 		case *ast.AlterUserStmt:

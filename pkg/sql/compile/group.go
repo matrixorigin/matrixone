@@ -68,19 +68,19 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
 				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
 	if o.IsPD {
-		rs.Ins = append(rs.Ins, vm.Instruction{
-			Op: vm.MergeGroup,
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Code: vm.MergeGroup,
 			Arg: &mergegroup.Argument{
 				Gs:    gs,
 				Refer: refer,
@@ -88,8 +88,8 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 			},
 		})
 	} else {
-		rs.Ins = append(rs.Ins, vm.Instruction{
-			Op: vm.MergeGroup,
+		rs.Instructions = append(rs.Instructions, vm.Instruction{
+			Code: vm.MergeGroup,
 			Arg: &mergegroup.Argument{
 				Gs:    gs,
 				Refer: refer,
@@ -102,11 +102,11 @@ func (c *compile) compileGroup(o *group.Group, mp map[string]uint64) ([]*Scope, 
 
 func pushGroup(s *Scope, refer map[string]uint64, gs []string, o *group.Group) *Scope {
 	if s.Magic == Merge || s.Magic == Remote {
-		for i := range s.Ss {
-			s.Ss[i] = pushGroup(s.Ss[i], refer, gs, o)
+		for i := range s.PreScopes {
+			s.PreScopes[i] = pushGroup(s.PreScopes[i], refer, gs, o)
 		}
-		s.Ins[len(s.Ins)-1] = vm.Instruction{
-			Op: vm.MergeGroup,
+		s.Instructions[len(s.Instructions)-1] = vm.Instruction{
+			Code: vm.MergeGroup,
 			Arg: &mergegroup.Argument{
 				Gs:    gs,
 				Flg:   true,
@@ -115,16 +115,16 @@ func pushGroup(s *Scope, refer map[string]uint64, gs []string, o *group.Group) *
 			},
 		}
 	} else {
-		n := len(s.Ins) - 1
-		s.Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Group,
+		n := len(s.Instructions) - 1
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Group,
 			Arg: &vgroup.Argument{
 				Gs:    gs,
 				Refer: refer,
 				Es:    unitAggregates(o.Es),
 			},
 		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+		s.Instructions[n], s.Instructions[n+1] = s.Instructions[n+1], s.Instructions[n]
 	}
 	return s
 }

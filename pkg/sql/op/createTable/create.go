@@ -39,5 +39,5 @@ func (n *CreateTable) String() string {
 
 func (n *CreateTable) Name() string                     { return "" }
 func (n *CreateTable) Rename(_ string)                  {}
-func (n *CreateTable) Columns() []string                { return nil }
+func (n *CreateTable) ResultColumns() []string          { return nil }
 func (n *CreateTable) Attribute() map[string]types.Type { return nil }

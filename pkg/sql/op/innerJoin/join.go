@@ -80,7 +80,7 @@ func (n *Join) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Join) Columns() []string {
+func (n *Join) ResultColumns() []string {
 	return nil
 }
 

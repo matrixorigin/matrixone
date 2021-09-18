@@ -88,7 +88,7 @@ func (e *BaseEvent) Execute() error {
 	if e.exec != nil {
 		return e.exec(e)
 	}
-	logutil2.Debugf("Execute Event Type=%d, ID=%d", e.t, e.id)
+	logutil2.Debugf("Execute Event Type=%d, RelationName=%d", e.t, e.id)
 	return nil
 }
 func (e *BaseEvent) onDone(_ iops.IOp) {

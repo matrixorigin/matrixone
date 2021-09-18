@@ -61,19 +61,19 @@ func (id *ID) AsSegmentID() ID {
 }
 
 func (id *ID) String() string {
-	return fmt.Sprintf("ID<%d:%d-%d-%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID, id.Iter)
+	return fmt.Sprintf("RelationName<%d:%d-%d-%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID, id.Iter)
 }
 
 func (id *ID) TableString() string {
-	return fmt.Sprintf("ID<%d>", id.TableID)
+	return fmt.Sprintf("RelationName<%d>", id.TableID)
 }
 
 func (id *ID) SegmentString() string {
-	return fmt.Sprintf("ID<%d:%d-%d>", id.Idx, id.TableID, id.SegmentID)
+	return fmt.Sprintf("RelationName<%d:%d-%d>", id.Idx, id.TableID, id.SegmentID)
 }
 
 func (id *ID) BlockString() string {
-	return fmt.Sprintf("ID<%d:%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID)
+	return fmt.Sprintf("RelationName<%d:%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID)
 }
 
 func (id *ID) IsSameSegment(o ID) bool {

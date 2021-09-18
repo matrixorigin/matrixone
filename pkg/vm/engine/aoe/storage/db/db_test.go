@@ -371,7 +371,7 @@ func TestConcurrency(t *testing.T) {
 			// 	assert.False(t, ctx.BoolRes)
 			// }
 			// ctx.Reset()
-			// ctx.Op = index.OpEq
+			// ctx.Code = index.OpEq
 			// ctx.Val = int32(1 + col0.GetColIdx()*100)
 			// err = col0.EvalFilter(ctx)
 			// assert.Nil(t, err)

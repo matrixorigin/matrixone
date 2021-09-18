@@ -44,12 +44,15 @@ func (p *Pipeline) String() string {
 }
 
 func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, error) {
-	var end bool
+	var end bool //退出标识
 	var err error
 
 	proc.Mp = mempool.Pool.Get().(*mempool.Mempool)
+	// release resources
 	defer func() {
 		proc.Reg.InputBatch = nil
+		// inform related OPs that current pipeline is finished.
+		// OP is asked to release its resources.
 		vm.Run(p.instructions, proc)
 		for i := range p.compressedBytes {
 			proc.Free(p.compressedBytes[i].Bytes())
@@ -64,6 +67,8 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 		return false, err
 	}
 	q := p.prefetch(segs, proc)
+	// alloc cache to compress/decompress.
+	// this cache can be reused during the execution.
 	p.compressedBytes, p.decompressedBytes = make([]*bytes.Buffer, 0, len(p.refCount)), make([]*bytes.Buffer, 0, len(p.refCount))
 	{
 		for _ = range p.refCount {
@@ -121,6 +126,7 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	}
 }
 
+// prefetch generates a prefetch queue
 func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) *queue {
 	q := new(queue)
 	q.blocks = make([]block, 0, 8) // prefetch block list
@@ -135,6 +141,7 @@ func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) *queue
 	return q
 }
 
+// prefetch
 func (q *queue) prefetch(attrs []string) error {
 	if q.prefetchIndex == len(q.blocks) {
 		return nil

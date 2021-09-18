@@ -87,7 +87,7 @@ func (n *Group) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Group) Columns() []string {
+func (n *Group) ResultColumns() []string {
 	return n.As
 }
 
