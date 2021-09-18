@@ -26,8 +26,6 @@ import (
 	"sync/atomic"
 
 	"github.com/google/btree"
-	// dump "github.com/vmihailenco/msgpack/v5"
-	// log "github.com/sirupsen/logrus"
 )
 
 func NewMetaInfo(mu *sync.RWMutex, conf *Configuration) *MetaInfo {
