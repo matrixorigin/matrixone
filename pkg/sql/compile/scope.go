@@ -116,11 +116,10 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	if _, rerr := p.RunMerge(s.Proc); rerr != nil {
 		err = rerr
 	}
+	wg.Wait()
 	if err != nil {
-		wg.Wait()
 		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
 	}
-	wg.Wait()
 	return nil
 }
 
