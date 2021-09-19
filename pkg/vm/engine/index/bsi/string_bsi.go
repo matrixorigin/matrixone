@@ -49,7 +49,7 @@ func (b *StringBSI) Clone() BitSlicedIndex {
 	}
 }
 
-func (b *StringBSI) Marshall() ([]byte, error) {
+func (b *StringBSI) Marshal() ([]byte, error) {
 	var body []byte
 	var buf bytes.Buffer
 
@@ -73,7 +73,7 @@ func (b *StringBSI) Marshall() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (b *StringBSI) Unmarshall(data []byte) error {
+func (b *StringBSI) Unmarshal(data []byte) error {
 	b.charWidth = int(data[0])
 	b.charSize = int(data[1])
 	data = data[2:]

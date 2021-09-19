@@ -84,12 +84,12 @@ func TestIntBSI(t *testing.T) {
 			fmt.Printf("\ttop 5 = %v\n", mq)
 		}
 	}
-	data, err := mp.Marshall()
+	data, err := mp.Marshal()
 	if err != nil {
 		log.Fatal(err)
 	}
 	mq := NewNumericBSI(0, SignedInt)
-	if err := mq.Unmarshall(data); err != nil {
+	if err := mq.Unmarshal(data); err != nil {
 		log.Fatal(err)
 	}
 	{
@@ -216,12 +216,12 @@ func TestUIntBSI(t *testing.T) {
 			fmt.Printf("\ttop 5 = %v\n", mq)
 		}
 	}
-	data, err := mp.Marshall()
+	data, err := mp.Marshal()
 	if err != nil {
 		log.Fatal(err)
 	}
 	mq := NewNumericBSI(0, UnsignedInt)
-	if err := mq.Unmarshall(data); err != nil {
+	if err := mq.Unmarshal(data); err != nil {
 		log.Fatal(err)
 	}
 	{
@@ -343,12 +343,12 @@ func TestFloatBsi(t *testing.T) {
 			fmt.Printf("\tmax = %v %v\n", mq, c)
 		}
 	}
-	data, err := mp.Marshall()
+	data, err := mp.Marshal()
 	if err != nil {
 		log.Fatal(err)
 	}
 	mq := NewNumericBSI(0, Float)
-	if err := mq.Unmarshall(data); err != nil {
+	if err := mq.Unmarshal(data); err != nil {
 		log.Fatal(err)
 	}
 	{
@@ -474,12 +474,12 @@ func TestStringBSI(t *testing.T) {
 			fmt.Printf("\tmax = \"%v\" %v\n", string(mq.([]byte)), c)
 		}
 	}
-	data, err := mp.Marshall()
+	data, err := mp.Marshal()
 	if err != nil {
 		log.Fatal(err)
 	}
 	mq := NewStringBSI(0, 0)
-	if err := mq.Unmarshall(data); err != nil {
+	if err := mq.Unmarshal(data); err != nil {
 		log.Fatal(err)
 	}
 	{

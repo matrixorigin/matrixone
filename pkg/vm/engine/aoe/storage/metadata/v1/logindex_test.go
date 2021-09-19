@@ -1,8 +1,9 @@
 package metadata
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestLogIndex(t *testing.T) {
@@ -15,7 +16,7 @@ func TestLogIndex(t *testing.T) {
 	assert.False(t, idx.IsApplied())
 	idx.Count = 4
 	assert.True(t, idx.IsApplied())
-	m, err := idx.Marshall()
+	m, err := idx.Marshal()
 	assert.Nil(t, err)
 	var idx1 LogIndex
 	assert.Nil(t, idx1.UnMarshall(make([]byte, 0)))

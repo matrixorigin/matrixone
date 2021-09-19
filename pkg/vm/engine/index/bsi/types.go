@@ -33,8 +33,8 @@ type BitSlicedIndex interface {
 	Clone() BitSlicedIndex
 	NotNull(*roaring.Bitmap) *roaring.Bitmap
 
-	Unmarshall([]byte) error
-	Marshall() ([]byte, error)
+	Unmarshal([]byte) error
+	Marshal() ([]byte, error)
 
 	Del(uint64) error
 	Set(uint64, interface{}) error

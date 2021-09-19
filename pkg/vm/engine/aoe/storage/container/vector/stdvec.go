@@ -527,7 +527,7 @@ func (v *StdVector) CopyToVector() *ro.Vector {
 }
 
 func (vec *StdVector) WriteTo(w io.Writer) (n int64, err error) {
-	buf, err := vec.Marshall()
+	buf, err := vec.Marshal()
 	if err != nil {
 		return n, err
 	}
@@ -554,11 +554,11 @@ func (vec *StdVector) ReadFrom(r io.Reader) (n int64, err error) {
 		return n, err
 	}
 	copy(buf[0:], capBuf)
-	err = vec.Unmarshall(buf)
+	err = vec.Unmarshal(buf)
 	return int64(realSize), err
 }
 
-func (vec *StdVector) Unmarshall(data []byte) error {
+func (vec *StdVector) Unmarshal(data []byte) error {
 	buf := data
 	vec.NodeCapacity = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
@@ -585,7 +585,7 @@ func (vec *StdVector) Unmarshall(data []byte) error {
 	return nil
 }
 
-func (vec *StdVector) Marshall() ([]byte, error) {
+func (vec *StdVector) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeUint64(uint64(0)))
 	buf.Write(encoding.EncodeUint64(vec.StatMask))

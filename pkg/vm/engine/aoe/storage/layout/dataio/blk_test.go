@@ -83,7 +83,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 			Count:    uint64(0),
 			Capacity: uint64(0),
 		}
-		buf, err := prevIdx.Marshall()
+		buf, err := prevIdx.Marshal()
 		assert.Nil(t, err)
 		var sz int32
 		sz = int32(len(buf))
@@ -97,7 +97,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 			Count:    uint64(0),
 			Capacity: uint64(0),
 		}
-		buf, err = idx.Marshall()
+		buf, err = idx.Marshal()
 		assert.Nil(t, err)
 		var sz_ int32
 		sz_ = int32(len(buf))
@@ -312,13 +312,13 @@ func TestIVectorNodeWriter(t *testing.T) {
 		assert.Nil(t, err)
 		if i == 0 {
 			vec := vector.NewEmptyStdVector()
-			err = vec.Unmarshall(obuf)
+			err = vec.Unmarshal(obuf)
 			assert.Nil(t, err)
 			t.Log(vec.GetLatestView().CopyToVector().String())
 			assert.Equal(t, 4, vec.Length())
 		} else {
 			vec := vector.NewEmptyStrVector()
-			err = vec.Unmarshall(obuf)
+			err = vec.Unmarshal(obuf)
 			assert.Nil(t, err)
 			t.Log(vec.GetLatestView().CopyToVector().String())
 			assert.Equal(t, 4, vec.Length())

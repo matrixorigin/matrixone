@@ -277,7 +277,7 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *md.Block) erro
 	}
 	var preIdx []byte
 	if meta.PrevIndex != nil {
-		preIdx, err = meta.PrevIndex.Marshall()
+		preIdx, err = meta.PrevIndex.Marshal()
 		if err != nil {
 			return err
 		}
@@ -290,7 +290,7 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *md.Block) erro
 	}
 	var idx []byte
 	if meta.Index != nil {
-		idx, err = meta.Index.Marshall()
+		idx, err = meta.Index.Marshal()
 		if err != nil {
 			return err
 		}
@@ -394,7 +394,7 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *md.Block) 
 	}
 	var preIdx []byte
 	if meta.PrevIndex != nil {
-		preIdx, err = meta.PrevIndex.Marshall()
+		preIdx, err = meta.PrevIndex.Marshal()
 		if err != nil {
 			return err
 		}
@@ -407,7 +407,7 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *md.Block) 
 	}
 	var idx []byte
 	if meta.Index != nil {
-		idx, err = meta.Index.Marshall()
+		idx, err = meta.Index.Marshal()
 		if err != nil {
 			return err
 		}
@@ -420,7 +420,7 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *md.Block) 
 	}
 	var colBufs [][]byte
 	for idx := 0; idx < colCnt; idx++ {
-		colBuf, err := data[idx].Marshall()
+		colBuf, err := data[idx].Marshal()
 		if err != nil {
 			return err
 		}

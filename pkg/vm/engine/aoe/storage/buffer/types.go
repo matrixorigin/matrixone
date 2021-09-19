@@ -34,8 +34,8 @@ type IMemoryPool interface {
 type IMemoryNode interface {
 	io.ReaderFrom
 	io.WriterTo
-	Marshall() ([]byte, error)
-	Unmarshall([]byte) error
+	Marshal() ([]byte, error)
+	Unmarshal([]byte) error
 	FreeMemory()
 	Reset()
 	GetMemorySize() uint64
