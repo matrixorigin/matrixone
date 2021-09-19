@@ -15,12 +15,13 @@
 package sched
 
 import (
-	"github.com/stretchr/testify/assert"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type observer struct {
@@ -39,7 +40,7 @@ func (o *observer) Check() {
 }
 
 func TestMeta(t *testing.T) {
-	opts := &e.Options{}
+	opts := &storage.Options{}
 	diskH := sched.NewPoolHandler(2, nil)
 	cpuH := sched.NewPoolHandler(2, nil)
 	diskMgr := sched.NewBaseResourceMgr(diskH)

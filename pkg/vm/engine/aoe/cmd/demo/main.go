@@ -15,8 +15,7 @@
 package main
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
-	// "matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -32,11 +31,11 @@ func main() {
 	workDir := "/tmp/myDemo"
 	os.RemoveAll(workDir)
 	colCnt := 4
-	metaConf := &e.MetaCfg{
+	metaConf := &storage.MetaCfg{
 		BlockMaxRows:     10000,
 		SegmentMaxBlocks: 2,
 	}
-	opts := e.Options{}
+	opts := storage.Options{}
 	opts.Meta.Conf = metaConf
 	inst, err := db.Open(workDir, &opts)
 	if err != nil {

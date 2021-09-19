@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"io"
 	"matrixone/pkg/vm/engine/aoe"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
@@ -48,19 +48,19 @@ var (
 
 type DB struct {
 	// Working directory of DB
-	Dir  string
+	Dir string
 	// Basic options of DB
-	Opts *e.Options
+	Opts *storage.Options
 	// FsMgr manages all file related usages including virtual file.
-	FsMgr       base.IManager
+	FsMgr base.IManager
 	// MemTableMgr manages memtables.
 	MemTableMgr mtif.IManager
 	// IndexBufMgr manages all segment/block indices in memory.
-	IndexBufMgr    bmgrif.IBufferManager
+	IndexBufMgr bmgrif.IBufferManager
 
 	// Those two managers not used currently.
-	MTBufMgr       bmgrif.IBufferManager
-	SSTBufMgr      bmgrif.IBufferManager
+	MTBufMgr  bmgrif.IBufferManager
+	SSTBufMgr bmgrif.IBufferManager
 
 	// MutationBufMgr is a replacement for MTBufMgr
 	MutationBufMgr bb.INodeManager

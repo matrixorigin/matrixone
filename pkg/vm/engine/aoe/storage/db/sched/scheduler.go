@@ -16,7 +16,7 @@ package sched
 
 import (
 	"matrixone/pkg/logutil"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
@@ -25,13 +25,13 @@ import (
 
 type metablkCommiter struct {
 	sync.RWMutex
-	opts       *e.Options
+	opts       *storage.Options
 	scheduler  sched.Scheduler
 	pendings   []uint64
 	flushdones map[uint64]*md.Block
 }
 
-func newMetaBlkCommiter(opts *e.Options, scheduler sched.Scheduler) *metablkCommiter {
+func newMetaBlkCommiter(opts *storage.Options, scheduler sched.Scheduler) *metablkCommiter {
 	c := &metablkCommiter{
 		opts:       opts,
 		scheduler:  scheduler,
@@ -94,7 +94,7 @@ func (p *metablkCommiter) Accept(meta *md.Block) {
 // implementation details for scheduler itself.
 type scheduler struct {
 	sched.BaseScheduler
-	opts      *e.Options
+	opts      *storage.Options
 	tables    *table.Tables
 	commiters struct {
 		mu     sync.RWMutex
@@ -102,7 +102,7 @@ type scheduler struct {
 	}
 }
 
-func NewScheduler(opts *e.Options, tables *table.Tables) *scheduler {
+func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	s := &scheduler{
 		BaseScheduler: *sched.NewBaseScheduler("scheduler"),
 		opts:          opts,

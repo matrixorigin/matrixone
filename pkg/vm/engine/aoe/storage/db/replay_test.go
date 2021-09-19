@@ -14,7 +14,7 @@
 package db
 
 import (
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
@@ -32,7 +32,7 @@ import (
 func TestReplay1(t *testing.T) {
 	initDBTest()
 	// inst := initDB(engine.NORMAL_FT)
-	inst := initDB(engine.MUTABLE_FT)
+	inst := initDB(storage.MUTABLE_FT)
 	tInfo := metadata.MockTableInfo(2)
 	name := "mockcon"
 	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: metadata.NextGlobalSeqNum()})
@@ -81,7 +81,7 @@ func TestReplay1(t *testing.T) {
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
 
-	inst = initDB(engine.MUTABLE_FT)
+	inst = initDB(storage.MUTABLE_FT)
 	// inst = initDB(engine.NORMAL_FT)
 
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
@@ -154,7 +154,7 @@ func (o *replayObserver) OnRemove(name string) {
 	o.removed = append(o.removed, name)
 }
 
-func flushInfo(opts *engine.Options, info *metadata.MetaInfo, t *testing.T) {
+func flushInfo(opts *storage.Options, info *metadata.MetaInfo, t *testing.T) {
 	ckpointer := opts.Meta.CKFactory.Create()
 	err := ckpointer.PreCommit(info)
 	assert.Nil(t, err)
@@ -162,7 +162,7 @@ func flushInfo(opts *engine.Options, info *metadata.MetaInfo, t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func flushTable(opts *engine.Options, meta *metadata.Table, t *testing.T) {
+func flushTable(opts *storage.Options, meta *metadata.Table, t *testing.T) {
 	ckpointer := opts.Meta.CKFactory.Create()
 	err := ckpointer.PreCommit(meta)
 	assert.Nil(t, err)
@@ -183,7 +183,7 @@ func TestReplay2(t *testing.T) {
 	schema := metadata.MockSchema(colCnt)
 	totalBlks := segBlkCount
 	tbl := metadata.MockTable(info, schema, totalBlks)
-	opts := new(engine.Options)
+	opts := new(storage.Options)
 	opts.Meta.Info = info
 	opts.FillDefaults(dir)
 
@@ -210,12 +210,12 @@ func TestReplay2(t *testing.T) {
 	assert.Equal(t, 0, len(observer.removed))
 }
 
-func buildOpts(dir string) *engine.Options {
+func buildOpts(dir string) *storage.Options {
 	mu := &sync.RWMutex{}
 	blkRowCount, segBlkCount := uint64(16), uint64(4)
 	info := metadata.MockInfo(mu, blkRowCount, segBlkCount)
 	info.Conf.Dir = dir
-	opts := new(engine.Options)
+	opts := new(storage.Options)
 	opts.Meta.Info = info
 	opts.FillDefaults(dir)
 	return opts

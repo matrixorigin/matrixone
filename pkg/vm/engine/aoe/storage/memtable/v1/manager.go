@@ -17,7 +17,7 @@ package memtable
 import (
 	"errors"
 	"fmt"
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
@@ -26,7 +26,7 @@ import (
 
 type manager struct {
 	sync.RWMutex
-	opts        *engine.Options
+	opts        *storage.Options
 	collections map[uint64]imem.ICollection
 	tableData   iface.ITableData
 	factory     fb.CollectionFactory
@@ -36,7 +36,7 @@ var (
 	_ imem.IManager = (*manager)(nil)
 )
 
-func NewManager(opts *engine.Options, factory fb.MutFactory) *manager {
+func NewManager(opts *storage.Options, factory fb.MutFactory) *manager {
 	m := &manager{
 		opts:        opts,
 		collections: make(map[uint64]imem.ICollection),

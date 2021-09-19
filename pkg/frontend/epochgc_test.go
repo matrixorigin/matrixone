@@ -31,7 +31,6 @@ import (
 	testutil2 "matrixone/pkg/vm/driver/testutil"
 	"matrixone/pkg/vm/engine"
 	aoe_engine "matrixone/pkg/vm/engine/aoe/engine"
-	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mmu/guest"
@@ -142,17 +141,17 @@ func TestEpochGCWithMultiServer(t *testing.T) {
 			return c
 		},
 		testutil2.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe2.Storage, error) {
-			opts := &e.Options{}
-			mdCfg := &e.MetaCfg{
+			opts := &storage.Options{}
+			mdCfg := &storage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
 				BlockMaxRows:     blockRows,
 			}
-			opts.CacheCfg = &e.CacheCfg{
+			opts.CacheCfg = &storage.CacheCfg{
 				IndexCapacity:  blockRows * blockCntPerSegment * 80,
 				InsertCapacity: blockRows * uint64(colCnt) * 2000,
 				DataCapacity:   blockRows * uint64(colCnt) * 2000,
 			}
-			opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg
@@ -277,7 +276,7 @@ func get_server(configFile string, port int, pd *PDCallbackImpl, eng engine.Engi
 	fmt.Println("Shutdown The *MOServer With Ctrl+C | Ctrl+\\.")
 
 	hostMmu := host.New(sv.GetHostMmuLimitation())
-	mempool := mempool.New(/*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/)
+	mempool := mempool.New( /*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/ )
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 

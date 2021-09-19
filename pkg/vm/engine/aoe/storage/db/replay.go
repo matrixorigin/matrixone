@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"matrixone/pkg/logutil"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -393,7 +393,7 @@ func NewReplayHandle(workDir string, observer IReplayObserver) *replayHandle {
 	return fs
 }
 
-func (h *replayHandle) ScheduleEvents(opts *e.Options, tables *table.Tables) {
+func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Tables) {
 	for _, ctx := range h.flushsegs {
 		t, _ := tables.WeakRefTable(ctx.id.TableID)
 		segment := t.StrongRefSegment(ctx.id.SegmentID)

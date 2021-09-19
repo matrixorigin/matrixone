@@ -14,7 +14,7 @@
 package db
 
 import (
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -23,7 +23,7 @@ import (
 )
 
 type nodeFlusher struct {
-	opts *engine.Options
+	opts *storage.Options
 }
 
 func (f nodeFlusher) flush(node bb.INode, data batch.IBatch, meta *metadata.Block, file *dataio.TransientBlockFile) error {

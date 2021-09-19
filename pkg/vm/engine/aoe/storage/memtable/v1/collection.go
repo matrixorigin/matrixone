@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/logutil"
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
@@ -31,7 +31,7 @@ import (
 type collection struct {
 	common.RefHelper
 	id        uint64
-	opts      *engine.Options
+	opts      *storage.Options
 	tableData iface.ITableData
 	mem       struct {
 		sync.RWMutex
@@ -43,7 +43,7 @@ var (
 	_ imem.ICollection = (*collection)(nil)
 )
 
-func NewCollection(tableData iface.ITableData, opts *engine.Options) imem.ICollection {
+func NewCollection(tableData iface.ITableData, opts *storage.Options) imem.ICollection {
 	c := &collection{
 		id:        tableData.GetID(),
 		opts:      opts,

@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/logutil"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
@@ -45,7 +45,7 @@ type metaResourceMgr struct {
 	sched.BaseResourceMgr
 	disk sched.ResourceMgr
 	cpu  sched.ResourceMgr
-	opts *e.Options
+	opts *storage.Options
 	mu   sync.RWMutex
 	// Running meta events and their related info
 	runnings struct {
@@ -59,7 +59,7 @@ type metaResourceMgr struct {
 	}
 }
 
-func NewMetaResourceMgr(opts *e.Options, disk, cpu sched.ResourceMgr) *metaResourceMgr {
+func NewMetaResourceMgr(opts *storage.Options, disk, cpu sched.ResourceMgr) *metaResourceMgr {
 	mgr := &metaResourceMgr{
 		disk: disk,
 		cpu:  cpu,
