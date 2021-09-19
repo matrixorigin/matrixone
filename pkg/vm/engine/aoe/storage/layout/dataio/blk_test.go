@@ -29,7 +29,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"path/filepath"
 	"sync"
@@ -83,7 +83,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 			Count:    uint64(0),
 			Capacity: uint64(0),
 		}
-		buf, err := prevIdx.Marshall()
+		buf, err := prevIdx.Marshal()
 		assert.Nil(t, err)
 		var sz int32
 		sz = int32(len(buf))
@@ -97,7 +97,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 			Count:    uint64(0),
 			Capacity: uint64(0),
 		}
-		buf, err = idx.Marshall()
+		buf, err = idx.Marshal()
 		assert.Nil(t, err)
 		var sz_ int32
 		sz_ = int32(len(buf))
@@ -200,7 +200,7 @@ func TestSegmentWriter(t *testing.T) {
 		block.SetCount(rowCount)
 		err = segment.RegisterBlock(block)
 		assert.Nil(t, err)
-		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+		batches = append(batches, mock.MockBatch(schema.Types(), rowCount))
 	}
 	path := "/tmp/testwriter"
 	writer := NewSegmentWriter(batches, segment, path)
@@ -312,13 +312,13 @@ func TestIVectorNodeWriter(t *testing.T) {
 		assert.Nil(t, err)
 		if i == 0 {
 			vec := vector.NewEmptyStdVector()
-			err = vec.Unmarshall(obuf)
+			err = vec.Unmarshal(obuf)
 			assert.Nil(t, err)
 			t.Log(vec.GetLatestView().CopyToVector().String())
 			assert.Equal(t, 4, vec.Length())
 		} else {
 			vec := vector.NewEmptyStrVector()
-			err = vec.Unmarshall(obuf)
+			err = vec.Unmarshal(obuf)
 			assert.Nil(t, err)
 			t.Log(vec.GetLatestView().CopyToVector().String())
 			assert.Equal(t, 4, vec.Length())
@@ -364,8 +364,8 @@ func TestTransientBlock(t *testing.T) {
 	t.Log(tblk.nextVersion())
 
 	// rows := uint64(2)
-	// bat1 := chunk.MockBatch(schema.Types(), rows)
-	// bat2 := chunk.MockBatch(schema.Types(), rowCount)
+	// bat1 := mock.MockBatch(schema.Types(), rows)
+	// bat2 := mock.MockBatch(schema.Types(), rowCount)
 
 	// ok := tblk.PreSync(uint32(bat1.Vecs[0].Length()))
 	// assert.True(t, ok)

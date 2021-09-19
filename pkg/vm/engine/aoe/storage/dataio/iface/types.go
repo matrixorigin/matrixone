@@ -16,7 +16,7 @@ package iface
 
 import (
 	"context"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 )
 
 type Reader interface {
@@ -32,18 +32,18 @@ type Cleaner interface {
 }
 
 type IReaderFactory interface {
-	Init(opts *e.Options, dirname string)
+	Init(opts *storage.Options, dirname string)
 	RegisterBuilder(name string, wb ReaderBuilder)
 	MakeReader(name string, ctx context.Context) Reader
-	GetOpts() *e.Options
+	GetOpts() *storage.Options
 	GetDir() string
 }
 
 type IWriterFactory interface {
-	Init(opts *e.Options, dirname string)
+	Init(opts *storage.Options, dirname string)
 	RegisterBuilder(name string, wb WriterBuilder)
 	MakeWriter(name string, ctx context.Context) Writer
-	GetOpts() *e.Options
+	GetOpts() *storage.Options
 	GetDir() string
 }
 

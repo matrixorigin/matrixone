@@ -15,7 +15,7 @@
 package sched
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -29,7 +29,7 @@ import (
 
 func TestUpgradeBlk(t *testing.T) {
 	schema := md.MockSchema(2)
-	opts := new(e.Options)
+	opts := new(storage.Options)
 	opts.FillDefaults("/tmp")
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
@@ -94,7 +94,7 @@ func TestUpgradeBlk(t *testing.T) {
 
 func TestUpgradeSeg(t *testing.T) {
 	schema := md.MockSchema(2)
-	opts := new(e.Options)
+	opts := new(storage.Options)
 	opts.FillDefaults("/tmp")
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)

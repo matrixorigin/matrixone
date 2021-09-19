@@ -27,7 +27,7 @@ import (
 	"matrixone/pkg/vm/driver/config"
 	"matrixone/pkg/vm/driver/testutil"
 	"matrixone/pkg/vm/engine/aoe"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
@@ -90,17 +90,17 @@ func TestCatalogWithUtil(t *testing.T) {
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
-			opts := &e.Options{}
-			mdCfg := &e.MetaCfg{
+			opts := &storage.Options{}
+			mdCfg := &storage.MetaCfg{
 				SegmentMaxBlocks: blockCntPerSegment,
 				BlockMaxRows:     blockRows,
 			}
-			opts.CacheCfg = &e.CacheCfg{
+			opts.CacheCfg = &storage.CacheCfg{
 				IndexCapacity:  blockRows * blockCntPerSegment * 80,
 				InsertCapacity: blockRows * uint64(colCnt) * 2000,
 				DataCapacity:   blockRows * uint64(colCnt) * 2000,
 			}
-			opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+			opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
 				Interval: time.Duration(1) * time.Second,
 			}
 			opts.Meta.Conf = mdCfg

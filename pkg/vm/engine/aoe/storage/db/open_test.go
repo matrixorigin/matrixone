@@ -17,12 +17,12 @@ package db
 import (
 	"fmt"
 	"io/ioutil"
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"path"
 	"path/filepath"
@@ -178,11 +178,11 @@ func TestCleanStaleMeta(t *testing.T) {
 
 func TestOpen(t *testing.T) {
 	initTest()
-	cfg := &engine.MetaCfg{
+	cfg := &storage.MetaCfg{
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
-	opts := &engine.Options{}
+	opts := &storage.Options{}
 	opts.Meta.Conf = cfg
 	inst, err := Open(TEST_OPEN_DIR, opts)
 	assert.Nil(t, err)
@@ -197,7 +197,7 @@ func TestReplay(t *testing.T) {
 		waitTime = time.Duration(200) * time.Millisecond
 	}
 	initDBTest()
-	inst := initDB(engine.NORMAL_FT)
+	inst := initDB(storage.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl"})
 	assert.Nil(t, err)
@@ -205,7 +205,7 @@ func TestReplay(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
@@ -246,7 +246,7 @@ func TestReplay(t *testing.T) {
 	assert.Nil(t, err)
 	f.Close()
 
-	inst = initDB(engine.NORMAL_FT)
+	inst = initDB(storage.NORMAL_FT)
 
 	os.Stat(invalidFileName)
 	_, err = os.Stat(invalidFileName)
@@ -316,7 +316,7 @@ func TestMultiInstance(t *testing.T) {
 	}
 	var insts []*DB
 	for _, d := range dirs {
-		opts := engine.Options{}
+		opts := storage.Options{}
 		inst, _ := Open(d, &opts)
 		insts = append(insts, inst)
 	}
@@ -328,7 +328,7 @@ func TestMultiInstance(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	meta, _ := insts[0].Opts.Meta.Info.ReferenceTableByName(info.Name)
-	bat := chunk.MockBatch(meta.Schema.Types(), 100)
+	bat := mock.MockBatch(meta.Schema.Types(), 100)
 	for _, inst := range insts {
 		err := inst.Append(dbi.AppendCtx{TableName: info.Name, Data: bat})
 		assert.Nil(t, err)

@@ -141,11 +141,11 @@ func TestStrVector(t *testing.T) {
 	assert.Equal(t, []byte(str2), vec.GetValue(2))
 	assert.Equal(t, []byte(str3), vec.GetValue(3))
 
-	marshalled, err := vec.Marshall()
+	marshalled, err := vec.Marshal()
 	assert.Nil(t, err)
 
 	mirror := NewEmptyStrVector()
-	err = mirror.Unmarshall(marshalled)
+	err = mirror.Unmarshal(marshalled)
 	assert.Nil(t, err)
 
 	assert.Equal(t, uint64((len(strs)+prevLen)*2*4+s), mirror.GetMemorySize())
@@ -294,10 +294,10 @@ func TestStrVector2(t *testing.T) {
 	assert.Equal(t, len(strs), vec.Length())
 	assert.False(t, vec.IsReadonly())
 
-	buf, err := vec.Marshall()
+	buf, err := vec.Marshal()
 	assert.Nil(t, err)
 
 	vec2 := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
-	err = vec2.Unmarshall(buf)
+	err = vec2.Unmarshal(buf)
 	assert.Nil(t, err)
 }

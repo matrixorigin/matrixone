@@ -15,7 +15,7 @@
 package db
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
@@ -28,7 +28,7 @@ import (
 	"sync/atomic"
 )
 
-func Open(dirname string, opts *e.Options) (db *DB, err error) {
+func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	// opts.FactoryType = e.MUTABLE_FT
 	dbLocker, err := createDBLock(dirname)
 	if err != nil {
@@ -53,7 +53,7 @@ func Open(dirname string, opts *e.Options) (db *DB, err error) {
 	var (
 		factory fb.MutFactory
 	)
-	if opts.FactoryType == e.MUTABLE_FT {
+	if opts.FactoryType == storage.MUTABLE_FT {
 		factory = factories.NewMutFactory(mutNodeMgr, nil)
 	} else {
 		factory = factories.NewNormalFactory()

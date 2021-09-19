@@ -15,7 +15,7 @@
 package table
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -34,7 +34,7 @@ func init() {
 }
 
 func TestBase1(t *testing.T) {
-	opts := new(e.Options)
+	opts := new(storage.Options)
 	opts.FillDefaults(WORK_DIR)
 	segCnt := uint64(4)
 	blkCnt := uint64(4)

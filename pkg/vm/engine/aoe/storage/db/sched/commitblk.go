@@ -17,7 +17,7 @@ package sched
 import (
 	"errors"
 	"fmt"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 )
@@ -25,7 +25,7 @@ import (
 type commitBlkEvent struct {
 	BaseEvent
 	// Metadata of updated block
-	NewMeta   *md.Block
+	NewMeta *md.Block
 	// Metadata of current block
 	LocalMeta *md.Block
 }
@@ -41,7 +41,7 @@ func NewCommitBlkEvent(ctx *Context, localMeta *md.Block) *commitBlkEvent {
 
 func (e *commitBlkEvent) updateBlock(blk *md.Block) error {
 	if blk.BoundSate != md.Detached {
-		logutil2.Error("")
+		logutil.Error("")
 		return errors.New(fmt.Sprintf("Block %d BoundSate should be %d, but %d", blk.ID, md.Detached, blk.BoundSate))
 	}
 

@@ -15,10 +15,11 @@
 package sched
 
 import (
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 type scopeType int
@@ -37,13 +38,13 @@ type Scope struct {
 // Context is the general context of event.
 type Context struct {
 	// Options of DB
-	Opts     *e.Options
+	Opts *storage.Options
 	// Callback on event done
-	DoneCB   ops.OpDoneCB
+	DoneCB ops.OpDoneCB
 	// If the event is waitable
 	Waitable bool
 	// Influence scope
-	Scope    *Scope
+	Scope *Scope
 }
 
 type BaseEvent struct {

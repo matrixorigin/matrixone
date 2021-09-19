@@ -17,9 +17,8 @@ package dio
 import (
 	"context"
 	"fmt"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	base "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -29,17 +28,17 @@ var (
 )
 
 type WriterFactory struct {
-	Opts     *e.Options
+	Opts     *storage.Options
 	Dirname  string
 	Builders map[string]base.WriterBuilder
 }
 
-func (wf *WriterFactory) Init(opts *e.Options, dirname string) {
+func (wf *WriterFactory) Init(opts *storage.Options, dirname string) {
 	wf.Opts = opts
 	wf.Dirname = dirname
 }
 
-func (wf *WriterFactory) GetOpts() *e.Options {
+func (wf *WriterFactory) GetOpts() *storage.Options {
 	return wf.Opts
 }
 

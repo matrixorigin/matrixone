@@ -15,11 +15,9 @@
 package dio
 
 import (
-	// e "matrixone/pkg/vm/engine/aoe/storage"
 	"context"
 	"fmt"
 	base "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	// log "github.com/sirupsen/logrus"
 )
 
 type emptyCleaner int
@@ -39,8 +37,6 @@ var (
 )
 
 type CleanerFactory struct {
-	// Opts     *e.Options
-	// Dirname  string
 	Builders map[string]base.CleanerBuilder
 }
 

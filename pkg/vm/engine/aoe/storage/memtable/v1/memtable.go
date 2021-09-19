@@ -17,7 +17,7 @@ package memtable
 import (
 	"fmt"
 	gBatch "matrixone/pkg/container/batch"
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
@@ -29,7 +29,7 @@ import (
 type memTable struct {
 	sync.RWMutex
 	common.RefHelper
-	opts      *engine.Options
+	opts      *storage.Options
 	tableData iface.ITableData
 	full      bool
 	ibat      batch.IBatch
@@ -42,7 +42,7 @@ var (
 	_ imem.IMemTable = (*memTable)(nil)
 )
 
-func NewMemTable(opts *engine.Options, tableData iface.ITableData, data iface.IBlock) imem.IMemTable {
+func NewMemTable(opts *storage.Options, tableData iface.ITableData, data iface.IBlock) imem.IMemTable {
 	mt := &memTable{
 		opts:      opts,
 		tableData: tableData,

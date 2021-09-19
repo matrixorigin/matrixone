@@ -813,7 +813,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 		}
 		var preIdx []byte
 		if blk.PrevIndex != nil {
-			preIdx, err = blk.PrevIndex.Marshall()
+			preIdx, err = blk.PrevIndex.Marshal()
 			if err != nil {
 				return err
 			}
@@ -825,7 +825,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 		}
 		var idx []byte
 		if blk.Index != nil {
-			idx, err = blk.Index.Marshall()
+			idx, err = blk.Index.Marshal()
 			if err != nil {
 				return err
 			}

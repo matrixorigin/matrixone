@@ -15,12 +15,11 @@
 package main
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
-	// "matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"sync"
 	"time"
@@ -32,11 +31,11 @@ func main() {
 	workDir := "/tmp/myDemo"
 	os.RemoveAll(workDir)
 	colCnt := 4
-	metaConf := &e.MetaCfg{
+	metaConf := &storage.MetaCfg{
 		BlockMaxRows:     10000,
 		SegmentMaxBlocks: 2,
 	}
-	opts := e.Options{}
+	opts := storage.Options{}
 	opts.Meta.Conf = metaConf
 	inst, err := db.Open(workDir, &opts)
 	if err != nil {
@@ -51,7 +50,7 @@ func main() {
 	}
 	rows := metaConf.BlockMaxRows / 8
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTableByName(tName)
-	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	cols := make([]int, 0)
 	for i := 0; i < len(tblMeta.Schema.ColDefs); i++ {
 		cols = append(cols, i)

@@ -17,8 +17,8 @@ package sched
 import (
 	"errors"
 	"fmt"
-	logutil2 "matrixone/pkg/logutil"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
@@ -43,10 +43,10 @@ func isMetaEvent(t sched.EventType) bool {
 // metaResourceMgr manages all the running/pending meta events.
 type metaResourceMgr struct {
 	sched.BaseResourceMgr
-	disk    sched.ResourceMgr
-	cpu     sched.ResourceMgr
-	opts    *e.Options
-	mu       sync.RWMutex
+	disk sched.ResourceMgr
+	cpu  sched.ResourceMgr
+	opts *storage.Options
+	mu   sync.RWMutex
 	// Running meta events and their related info
 	runnings struct {
 		events     map[uint64]MetaEvent
@@ -59,7 +59,7 @@ type metaResourceMgr struct {
 	}
 }
 
-func NewMetaResourceMgr(opts *e.Options, disk, cpu sched.ResourceMgr) *metaResourceMgr {
+func NewMetaResourceMgr(opts *storage.Options, disk, cpu sched.ResourceMgr) *metaResourceMgr {
 	mgr := &metaResourceMgr{
 		disk: disk,
 		cpu:  cpu,
@@ -76,7 +76,7 @@ func NewMetaResourceMgr(opts *e.Options, disk, cpu sched.ResourceMgr) *metaResou
 func (mgr *metaResourceMgr) OnExecDone(op interface{}) {
 	e := op.(MetaEvent)
 	mgr.mu.Lock()
-	logutil2.Debugf("OnExecDone %d: %s", e.ID(), mgr.stringLocked())
+	logutil.Debugf("OnExecDone %d: %s", e.ID(), mgr.stringLocked())
 	scope, all := e.GetScope()
 	delete(mgr.runnings.events, e.ID())
 	if all {
@@ -159,7 +159,7 @@ func (mgr *metaResourceMgr) preSubmit(op iops.IOp) bool {
 	}
 	e.AddObserver(mgr)
 	sched := mgr.trySchedule(e, false)
-	logutil2.Debug(mgr.String())
+	logutil.Debug(mgr.String())
 	return sched
 }
 

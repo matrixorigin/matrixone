@@ -15,7 +15,7 @@
 package config
 
 import (
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 )
 
 type CacheSizeType uint8
@@ -35,7 +35,7 @@ const (
 )
 
 var blockSizes map[BlockSizeType]uint64 = map[BlockSizeType]uint64{
-	BST_None: engine.DefaultBlockMaxRows,
+	BST_None: storage.DefaultBlockMaxRows,
 	BST_S:    uint64(16),
 	BST_M:    uint64(1600),
 	BST_L:    uint64(160000),
@@ -51,23 +51,23 @@ const (
 )
 
 var segmentSizes map[SegmentSizeType]uint64 = map[SegmentSizeType]uint64{
-	SST_None: engine.DefaultBlocksPerSegment,
+	SST_None: storage.DefaultBlocksPerSegment,
 	SST_S:    uint64(4),
 	SST_M:    uint64(40),
 	SST_L:    uint64(400),
 }
 
-func NewOptions(dir string, cst CacheSizeType, bst BlockSizeType, sst SegmentSizeType) *engine.Options {
+func NewOptions(dir string, cst CacheSizeType, bst BlockSizeType, sst SegmentSizeType) *storage.Options {
 	blockSize := blockSizes[bst]
 	segmentSize := segmentSizes[sst]
-	opts := new(engine.Options)
-	metaCfg := new(engine.MetaCfg)
+	opts := new(storage.Options)
+	metaCfg := new(storage.MetaCfg)
 	metaCfg.BlockMaxRows = blockSize
 	metaCfg.SegmentMaxBlocks = segmentSize
 	opts.Meta.Conf = metaCfg
 
 	if cst == CST_Customize {
-		cacheCfg := new(engine.CacheCfg)
+		cacheCfg := new(storage.CacheCfg)
 		cacheCfg.IndexCapacity = blockSize * segmentSize * 80
 		cacheCfg.InsertCapacity = blockSize * segmentSize * 800
 		cacheCfg.DataCapacity = blockSize * segmentSize * 80
@@ -77,15 +77,15 @@ func NewOptions(dir string, cst CacheSizeType, bst BlockSizeType, sst SegmentSiz
 	return opts
 }
 
-func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows, blockCnt uint64) *engine.Options {
-	opts := new(engine.Options)
-	metaCfg := &engine.MetaCfg{
+func NewCustomizedMetaOptions(dir string, cst CacheSizeType, blockRows, blockCnt uint64) *storage.Options {
+	opts := new(storage.Options)
+	metaCfg := &storage.MetaCfg{
 		BlockMaxRows:     blockRows,
 		SegmentMaxBlocks: blockCnt,
 	}
 	opts.Meta.Conf = metaCfg
 	if cst == CST_Customize {
-		cacheCfg := new(engine.CacheCfg)
+		cacheCfg := new(storage.CacheCfg)
 		cacheCfg.IndexCapacity = blockRows * blockCnt * 80
 		cacheCfg.InsertCapacity = blockRows * blockCnt * 800
 		cacheCfg.DataCapacity = blockRows * blockCnt * 80
