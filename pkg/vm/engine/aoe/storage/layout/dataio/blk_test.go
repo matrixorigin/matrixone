@@ -29,7 +29,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"path/filepath"
 	"sync"
@@ -200,7 +200,7 @@ func TestSegmentWriter(t *testing.T) {
 		block.SetCount(rowCount)
 		err = segment.RegisterBlock(block)
 		assert.Nil(t, err)
-		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+		batches = append(batches, mock.MockBatch(schema.Types(), rowCount))
 	}
 	path := "/tmp/testwriter"
 	writer := NewSegmentWriter(batches, segment, path)
@@ -364,8 +364,8 @@ func TestTransientBlock(t *testing.T) {
 	t.Log(tblk.nextVersion())
 
 	// rows := uint64(2)
-	// bat1 := chunk.MockBatch(schema.Types(), rows)
-	// bat2 := chunk.MockBatch(schema.Types(), rowCount)
+	// bat1 := mock.MockBatch(schema.Types(), rows)
+	// bat2 := mock.MockBatch(schema.Types(), rowCount)
 
 	// ok := tblk.PreSync(uint32(bat1.Vecs[0].Length()))
 	// assert.True(t, ok)

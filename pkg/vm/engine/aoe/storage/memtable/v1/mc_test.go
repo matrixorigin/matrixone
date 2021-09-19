@@ -23,7 +23,7 @@ import (
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
@@ -91,7 +91,7 @@ func TestMutCollection(t *testing.T) {
 		seq++
 		go func(id uint64, wgp *sync.WaitGroup) {
 			defer wgp.Done()
-			insert := chunk.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
+			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &metadata.LogIndex{
 				ID:       id,
 				Capacity: uint64(insert.Vecs[0].Length()),

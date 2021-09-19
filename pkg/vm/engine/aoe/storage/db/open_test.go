@@ -22,7 +22,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"path"
 	"path/filepath"
@@ -205,7 +205,7 @@ func TestReplay(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
@@ -328,7 +328,7 @@ func TestMultiInstance(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	meta, _ := insts[0].Opts.Meta.Info.ReferenceTableByName(info.Name)
-	bat := chunk.MockBatch(meta.Schema.Types(), 100)
+	bat := mock.MockBatch(meta.Schema.Types(), 100)
 	for _, inst := range insts {
 		err := inst.Append(dbi.AppendCtx{TableName: info.Name, Data: bat})
 		assert.Nil(t, err)

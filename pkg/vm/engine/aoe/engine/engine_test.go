@@ -17,11 +17,6 @@ package engine
 import (
 	"bytes"
 	"fmt"
-	"github.com/fagongzi/log"
-	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
-	cConfig "github.com/matrixorigin/matrixcube/config"
-	"github.com/matrixorigin/matrixcube/raftstore"
-	"github.com/stretchr/testify/require"
 	stdLog "log"
 	catalog2 "matrixone/pkg/catalog"
 	"matrixone/pkg/container/types"
@@ -36,8 +31,14 @@ import (
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	e "matrixone/pkg/vm/engine/aoe/storage"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"sync"
+
+	"github.com/fagongzi/log"
+	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
+	cConfig "github.com/matrixorigin/matrixcube/config"
+	"github.com/matrixorigin/matrixcube/raftstore"
+	"github.com/stretchr/testify/require"
 
 	"matrixone/pkg/vm/metadata"
 	"testing"
@@ -180,7 +181,7 @@ func TestAOEEngine(t *testing.T) {
 	for _, attr := range attrs {
 		typs = append(typs, attr.Type)
 	}
-	ibat := chunk.MockBatch(typs, blockRows)
+	ibat := mock.MockBatch(typs, blockRows)
 	var buf bytes.Buffer
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)

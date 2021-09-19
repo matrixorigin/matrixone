@@ -18,7 +18,7 @@ import (
 	"errors"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
 )
@@ -50,16 +50,16 @@ type checkpointer struct {
 	tmpfile string
 }
 
-func (ck *checkpointer) PreCommit(res md.Resource) error {
+func (ck *checkpointer) PreCommit(res metadata.Resource) error {
 	if res == nil {
 		logutil.Error("nil res")
 		return errors.New("nil res")
 	}
 	var fname string
 	switch res.GetResourceType() {
-	case md.ResInfo:
+	case metadata.ResInfo:
 		fname = common.MakeInfoCkpFileName(ck.factory.dir, res.GetFileName(), true)
-	case md.ResTable:
+	case metadata.ResTable:
 		fname = common.MakeTableCkpFileName(ck.factory.dir, res.GetFileName(), res.GetTableId(), true)
 	default:
 		panic("not supported")
@@ -88,7 +88,7 @@ func (ck *checkpointer) PreCommit(res md.Resource) error {
 	return nil
 }
 
-func (ck *checkpointer) Commit(res md.Resource) error {
+func (ck *checkpointer) Commit(res metadata.Resource) error {
 	if len(ck.tmpfile) == 0 {
 		return errors.New("Cannot Commit checkpoint, should do PreCommit before")
 	}

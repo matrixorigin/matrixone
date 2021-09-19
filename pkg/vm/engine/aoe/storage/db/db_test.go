@@ -25,7 +25,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
@@ -154,7 +154,7 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, int(rows), ck.Vecs[0].Length())
 	invalidName := "xxx"
 	// err = inst.Append(invalidName, ck, logIdx)
@@ -231,7 +231,7 @@ func TestConcurrency(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan dbi.AppendCtx)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
@@ -426,7 +426,7 @@ func TestMultiTables(t *testing.T) {
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTableByName(names[0])
 	assert.Nil(t, err)
 	rows := uint64(tblMeta.Conf.BlockMaxRows / 2)
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	p1, _ := ants.NewPool(10)
 	p2, _ := ants.NewPool(10)
 	attrs := []string{}
@@ -567,7 +567,7 @@ func TestDropTable2(t *testing.T) {
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
 	insertCnt := uint64(1)
 
@@ -645,7 +645,7 @@ func TestE2E(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
 	insertCnt := uint64(10)
 

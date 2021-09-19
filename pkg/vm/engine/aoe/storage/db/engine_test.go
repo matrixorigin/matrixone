@@ -22,7 +22,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -46,7 +46,7 @@ func TestEngine(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan dbi.AppendCtx)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
@@ -224,7 +224,7 @@ func TestLogIndex(t *testing.T) {
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * 2 / 5
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
 	// p, _ := ants.NewPool(40)
 

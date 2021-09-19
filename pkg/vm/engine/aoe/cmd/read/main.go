@@ -25,7 +25,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -88,7 +88,7 @@ func init() {
 }
 
 func getInsertBatch(meta *md.Table) *batch.Batch {
-	bat := chunk.MockBatch(meta.Schema.Types(), batchInsertRows)
+	bat := mock.MockBatch(meta.Schema.Types(), batchInsertRows)
 	return bat
 }
 

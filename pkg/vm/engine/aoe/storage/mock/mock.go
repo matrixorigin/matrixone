@@ -15,52 +15,24 @@
 package mock
 
 import (
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	// ops "aoe/pkg/metadata3/ops"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"strconv"
 )
 
-func NewChunk(capacity uint64, meta *md.Block) *Chunk {
-	c := &Chunk{
-		Capacity: capacity,
-		Count:    0,
+func MockBatch(types []types.Type, rows uint64) *batch.Batch {
+	var attrs []string
+	for idx := range types {
+		attrs = append(attrs, "mock_"+strconv.Itoa(idx))
 	}
-	return c
-}
 
-type Chunk struct {
-	Capacity uint64
-	Count    uint64
-}
-
-func (c *Chunk) Append(o *Chunk, offset uint64) (n uint64, err error) {
-	max := c.Capacity - c.Count
-	o_max := o.Count - offset
-	if max >= o_max {
-		n = o_max
-		c.Count += o_max
-	} else {
-		n = max
-		c.Count += max
+	bat := batch.New(true, attrs)
+	for i, colType := range types {
+		vec := vector.MockVector(colType, rows)
+		bat.Vecs[i] = vec.CopyToVector()
+		vec.Close()
 	}
-	return n, err
-}
 
-func (c *Chunk) GetCount() uint64 {
-	return c.Count
-}
-
-type DataWriter interface {
-	Write(obj interface{}) error
-}
-
-func NewDataWriter() DataWriter {
-	w := &MockDataWriter{}
-	return w
-}
-
-type MockDataWriter struct {
-}
-
-func (w *MockDataWriter) Write(obj interface{}) error {
-	return nil
+	return bat
 }

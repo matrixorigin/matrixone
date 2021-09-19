@@ -16,10 +16,10 @@ package engine
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	e "matrixone/pkg/vm/engine/aoe/storage/event"
+	"matrixone/pkg/vm/engine/aoe/storage/event"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
 	"time"
@@ -78,7 +78,7 @@ type MetaCleanerCfg struct {
 }
 
 type Options struct {
-	EventListener e.EventListener
+	EventListener event.EventListener
 
 	FactoryType FactoryType
 
@@ -90,7 +90,7 @@ type Options struct {
 	Meta struct {
 		CKFactory *checkpointerFactory
 		Conf      *MetaCfg
-		Info      *md.MetaInfo
+		Info      *metadata.MetaInfo
 	}
 
 	GC struct {
@@ -132,7 +132,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	}
 
 	if o.Meta.Info == nil {
-		metaCfg := &md.Configuration{
+		metaCfg := &metadata.Configuration{
 			Dir: dirname,
 		}
 		if o.Meta.Conf == nil {
@@ -142,7 +142,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 			metaCfg.BlockMaxRows = o.Meta.Conf.BlockMaxRows
 			metaCfg.SegmentMaxBlocks = o.Meta.Conf.SegmentMaxBlocks
 		}
-		o.Meta.Info = md.NewMetaInfo(&o.Mu, metaCfg)
+		o.Meta.Info = metadata.NewMetaInfo(&o.Mu, metaCfg)
 	}
 
 	if o.Meta.CKFactory == nil {

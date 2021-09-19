@@ -18,8 +18,6 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"strconv"
-
 	// log "github.com/sirupsen/logrus"
 )
 
@@ -58,20 +56,4 @@ func MockChunk(types []types.Type, rows uint64) *Chunk {
 	return &Chunk{
 		Vectors: vectors,
 	}
-}
-
-func MockBatch(types []types.Type, rows uint64) *batch.Batch {
-	var attrs []string
-	for idx := range types {
-		attrs = append(attrs, "mock_" + strconv.Itoa(idx))
-	}
-
-	bat := batch.New(true, attrs)
-	for i, colType := range types {
-		vec := vector.MockVector(colType, rows)
-		bat.Vecs[i] = vec.CopyToVector()
-		vec.Close()
-	}
-
-	return bat
 }

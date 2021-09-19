@@ -19,7 +19,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"sort"
 	"sync"
@@ -44,7 +44,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 
 	irows := inst.Store.MetaInfo.Conf.BlockMaxRows / 2
-	ibat := chunk.MockBatch(meta.Schema.Types(), irows)
+	ibat := mock.MockBatch(meta.Schema.Types(), irows)
 
 	insertFn := func() {
 		err = rel.Write(dbi.AppendCtx{
