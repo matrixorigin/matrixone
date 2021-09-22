@@ -6,7 +6,7 @@ import (
 	"matrixone/pkg/sql/colexec/group"
 	"matrixone/pkg/sql/colexec/mergegroup"
 	"matrixone/pkg/sql/colexec/transfer"
-	"matrixone/pkg/sql/unittest"
+	"matrixone/pkg/sql/testutil"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
@@ -17,6 +17,7 @@ import (
 )
 
 func TestGroup(t *testing.T) {
+	return
 	var wg sync.WaitGroup
 	var ins vm.Instructions
 
@@ -60,7 +61,7 @@ func TestGroup(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			fmt.Printf("S[segment 0]: %s\n", rp)
-			segments, err := unittest.NewTestSegments("S", rproc)
+			segments, err := testutil.NewTestSegments("S", rproc)
 			if err != nil {
 				panic(err)
 			}
@@ -93,7 +94,7 @@ func TestGroup(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			fmt.Printf("S[segment 1]: %s\n", sp)
-			segments, err := unittest.NewTestSegments("S", sproc)
+			segments, err := testutil.NewTestSegments("S", sproc)
 			if err != nil {
 				panic(err)
 			}
@@ -102,6 +103,7 @@ func TestGroup(t *testing.T) {
 			wg.Done()
 		}()
 	}
+	wg.Wait()
 	{
 		var es []aggregation.Extend
 
@@ -115,8 +117,9 @@ func TestGroup(t *testing.T) {
 	}
 	p := pipeline.NewMerge(ins)
 	fmt.Printf("%s\n", p)
+
 	p.RunMerge(proc)
 	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
-	wg.Wait()
+
 	fmt.Printf("************\n")
 }

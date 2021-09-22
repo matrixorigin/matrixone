@@ -13,13 +13,15 @@ type memEngine struct {
 }
 
 type database struct {
+	id string
 	db *kv.KV
 	n  metadata.Node
 }
 
 type relation struct {
-	id string
-	db *kv.KV
-	n  metadata.Node
-	md meta.Metadata
+	rid string
+	id  string
+	db  *kv.KV
+	n   metadata.Node
+	md  meta.Metadata
 }

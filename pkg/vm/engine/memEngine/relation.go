@@ -31,7 +31,7 @@ func (r *relation) Segments() []engine.SegmentInfo {
 	segs := make([]engine.SegmentInfo, r.md.Segs)
 	for i := range segs {
 		segs[i].Node = r.n
-		segs[i].Id = sKey(i, r.id)
+		segs[i].Id = r.sKey(i)
 	}
 	return segs
 }
@@ -41,7 +41,7 @@ func (r *relation) Segment(si engine.SegmentInfo, _ *process.Process) engine.Seg
 }
 
 func (r *relation) Write(_ uint64, bat *batch.Batch) error {
-	key := sKey(int(r.md.Segs), r.id)
+	key := r.sKey(int(r.md.Segs))
 	for i, attr := range bat.Attrs {
 		v, err := bat.Vecs[i].Show()
 		if err != nil {
@@ -65,15 +65,19 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		if err := r.db.Set(r.id, data); err != nil {
+		if err := r.db.Set(r.key(), data); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func sKey(num int, id string) string {
-	return fmt.Sprintf("%v.%v", id, num)
+func (r *relation) sKey(num int) string {
+	return fmt.Sprintf("%v.%v.%v", r.rid, r.id, num)
+}
+
+func (r *relation) key() string {
+	return fmt.Sprintf("%v.%v", r.rid, r.id)
 }
 
 func (r *relation) Index() []*engine.IndexTableDef {

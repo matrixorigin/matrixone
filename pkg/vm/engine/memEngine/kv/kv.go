@@ -33,3 +33,15 @@ func (a *KV) Get(k string, buf *bytes.Buffer) ([]byte, error) {
 	copy(data, v)
 	return data, nil
 }
+
+func (a *KV) Size() int {
+	return len(a.mp)
+}
+
+func (a *KV) Keys() []string {
+	var keys []string
+	for key, _ := range a.mp {
+		keys = append(keys, key)
+	}
+	return keys
+}

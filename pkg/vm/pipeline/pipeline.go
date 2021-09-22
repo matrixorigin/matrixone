@@ -117,7 +117,9 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 		vm.Clean(p.instructions, proc)
 		return false, err
 	}
+	i := 0
 	for {
+		i++
 		proc.Reg.InputBatch = nil
 		if end, err := vm.Run(p.instructions, proc); err != nil || end {
 			return end, err

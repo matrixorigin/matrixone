@@ -1,4 +1,4 @@
-package unittest
+package testutil
 
 import (
 	"fmt"
@@ -28,6 +28,10 @@ func NewTestServer(e engine.Engine, proc *process.Process) (rpcserver.Server, er
 
 func NewTestEngine() (engine.Engine, error) {
 	e := memEngine.New(kv.New(), metadata.Node{Id: "0", Addr: "127.0.0.1:40000"})
+	err := e.Create(0, "test", 0)
+	if err != nil {
+		return nil, err
+	}
 	db, _ := e.Database("test")
 	if err := CreateR(db); err != nil {
 		return nil, err
