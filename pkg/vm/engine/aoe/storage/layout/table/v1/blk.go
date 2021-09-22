@@ -157,6 +157,9 @@ func (blk *block) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
 
 func (blk *block) GetVectorCopy(attr string, compressed, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
+	if colIdx == -1 {
+		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+	}
 	vec, err := blk.data.cols[colIdx].ForceLoad(compressed, deCompressed)
 	if err != nil {
 		return nil, err
@@ -167,7 +170,7 @@ func (blk *block) GetVectorCopy(attr string, compressed, deCompressed *bytes.Buf
 func (blk *block) Prefetch(attr string) error {
 	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return errors.New("column not found")
+		return errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	return blk.data.cols[colIdx].Prefetch()
 }

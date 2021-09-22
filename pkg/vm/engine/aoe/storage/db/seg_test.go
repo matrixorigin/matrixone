@@ -1,7 +1,6 @@
 package db
 
 import (
-	"bytes"
 	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/storage"
@@ -14,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestBlock(t *testing.T) {
+func TestSegment(t *testing.T) {
 	schema := md.MockSchema(2)
 	opts := new(storage.Options)
 	opts.FillDefaults("/tmp")
@@ -42,30 +41,22 @@ func TestBlock(t *testing.T) {
 		segs = append(segs, seg)
 	}
 
-	blk1 := segs[0].Block(string(encoding.EncodeUint64(uint64(1))), nil)
-	assert.NotNil(t, blk1)
-	assert.Equal(t, string(encoding.EncodeUint64(uint64(1))), blk1.ID())
+	//for _, seg := range segs {
+	//	t.Log(fmt.Sprintf("%v\n", seg))
+	//}
+	assert.Equal(t, uint64(1), encoding.DecodeUint64([]byte(segs[0].ID())))
+	assert.Equal(t, uint64(5), encoding.DecodeUint64([]byte(segs[1].Blocks()[0])))
+	assert.Equal(t, uint64(6), encoding.DecodeUint64([]byte(segs[1].Blocks()[1])))
+	assert.NotNil(t, segs[0].Block(string(encoding.EncodeUint64(uint64(1))), nil))
+	assert.Nil(t, segs[0].Block(string(encoding.EncodeUint64(uint64(999))), nil))
+	assert.Equal(t, int64(0), segs[0].Rows())
 
-	assert.Equal(t, int64(0), blk1.Rows())
-	assert.Equal(t, int64(rowCount*typeSize), blk1.Size("mock_0"))
-	assert.NotPanics(t, func() {
-		blk1.Prefetch([]string{"mock_1"})
-	})
-	assert.Panics(t, func() {
-		blk1.Prefetch([]string{"xxxx"})
-	})
-	_, err = blk1.Read([]uint64{uint64(1)}, []string{"xxxx"}, []*bytes.Buffer{bytes.NewBuffer(nil)}, []*bytes.Buffer{bytes.NewBuffer(nil)})
-	assert.NotNil(t, err)
-	_, err = blk1.Read([]uint64{uint64(1)}, []string{"mock_0"}, []*bytes.Buffer{bytes.NewBuffer(nil)}, []*bytes.Buffer{bytes.NewBuffer(nil)})
-	assert.Nil(t, err)
+	segs[0].Data.GetIndexHolder().Inited = false
+	assert.NotNil(t, segs[0].NewSparseFilter())
+	segs[0].Data.GetIndexHolder().Inited = false
+	assert.NotNil(t, segs[0].NewFilter())
+	segs[0].Data.GetIndexHolder().Inited = false
+	assert.NotNil(t, segs[0].NewSummarizer())
 
-	segs[0].Data = table.NewSimpleSegment(segs[0].Data.GetType(), &md.Segment{}, nil, nil)
-
-	_, err = blk1.Read([]uint64{uint64(1)}, []string{"mock_0"}, []*bytes.Buffer{bytes.NewBuffer(nil)}, []*bytes.Buffer{bytes.NewBuffer(nil)})
-	assert.NotNil(t, err)
-	assert.NotPanics(t, func() {
-		blk1.Prefetch([]string{"mock_1"})
-	})
-	assert.Equal(t, int64(-1), blk1.Size("mock_1"))
-	assert.Equal(t, int64(-1), blk1.Rows())
+	assert.Equal(t, int64(rowCount*blkCnt*typeSize), segs[0].Size("mock_0"))
 }
