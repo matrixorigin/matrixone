@@ -237,9 +237,4 @@ func TestCreateTable(t *testing.T) {
 		}
 
 	}
-
-	{
-
-	}
-
 }
