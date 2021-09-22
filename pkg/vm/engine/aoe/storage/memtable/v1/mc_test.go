@@ -19,6 +19,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -110,4 +111,26 @@ func TestMutCollection(t *testing.T) {
 	t.Log(mgr.String())
 	t.Log(sstBufMgr.String())
 	assert.Equal(t, 0, mgr.Count())
+
+	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{TableName: tabletInfo.Name}, manager, tables)
+	opts.Scheduler.Schedule(dropBlkE)
+	err = dropBlkE.WaitDone()
+	assert.Nil(t, err)
+
+	eCtx := &memdata.Context{
+		Opts:      opts,
+		MTMgr:     manager,
+		Tables:    tables,
+		TableMeta: tbl,
+		Waitable:  true,
+	}
+	createTblE := memdata.NewCreateTableEvent(eCtx)
+	opts.Scheduler.Schedule(createTblE)
+	err = createTblE.WaitDone()
+	assert.Nil(t, err)
+
+	dropTblE := memdata.NewDropTableEvent(eCtx, tbl.ID)
+	opts.Scheduler.Schedule(dropTblE)
+	err = dropTblE.WaitDone()
+	assert.Nil(t, err)
 }

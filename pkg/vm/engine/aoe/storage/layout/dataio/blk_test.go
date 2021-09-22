@@ -183,10 +183,17 @@ func TestAll(t *testing.T) {
 }
 
 func TestSegmentWriter(t *testing.T) {
+	if !FlushIndex {
+		FlushIndex = true
+		defer func() {
+			FlushIndex = false
+		}()
+	}
 	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
 	info := md.MockInfo(mu, rowCount, blkCount)
-	schema := md.MockSchema(2)
+	//schema := md.MockSchema(2)
+	schema := md.MockSchemaAll(14)
 	segCnt, blkCnt := uint64(4), uint64(4)
 	table := md.MockTable(info, schema, segCnt*blkCnt)
 	segment, err := table.CreateSegment()
