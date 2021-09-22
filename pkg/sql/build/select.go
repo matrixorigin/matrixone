@@ -78,7 +78,7 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 	default:
 		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
-	cs := o.Columns()
+	cs := o.ResultColumns()
 	if len(orderBy) > 0 {
 		if fetch != nil && fetch.Offset == nil && fetch.Count != nil {
 			e, err := b.buildExtend(o, fetch.Count)
@@ -179,7 +179,7 @@ func (b *build) buildSelectClauseWithSummarize(stmt *tree.SelectClause) (op.OP, 
 		if o, err = b.buildDedup(o); err != nil {
 			return nil, nil, err
 		}
-		attrs := o.Columns()
+		attrs := o.ResultColumns()
 		mp := o.Attribute()
 		pes := make([]*projection.Extend, len(attrs))
 		for i, attr := range attrs {

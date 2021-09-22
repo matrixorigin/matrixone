@@ -7,7 +7,7 @@
 package uint8s
 
 // Sort sorts data.
-// It makes one call to data.Len to determine n, and O(n*log(n)) calls to
+// It makes one call to data.Len to determine n, and Operator(n*log(n)) calls to
 // data.Less and data.Swap. The sort is not guaranteed to be stable.
 func Sort(vs []uint8, os []int64) {
 	n := len(os)

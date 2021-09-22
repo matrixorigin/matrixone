@@ -20,7 +20,7 @@ package dataio
 // )
 
 // type PartReader struct {
-// 	ID          common.ID
+// 	RelationName          common.RelationName
 // 	SegmentFile ISegmentFile
 // }
 

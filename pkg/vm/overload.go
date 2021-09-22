@@ -38,7 +38,7 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
-var sFuncs = [...]func(interface{}, *bytes.Buffer){
+var formatFunc = [...]func(interface{}, *bytes.Buffer){
 	Top:               top.String,
 	Dedup:             dedup.String,
 	Limit:             limit.String,
@@ -75,7 +75,7 @@ var sFuncs = [...]func(interface{}, *bytes.Buffer){
 	MergeSummarize:    mergesum.String,
 }
 
-var pFuncs = [...]func(*process.Process, interface{}) error{
+var prepareFunc = [...]func(*process.Process, interface{}) error{
 	Top:               top.Prepare,
 	Dedup:             dedup.Prepare,
 	Limit:             limit.Prepare,
@@ -112,7 +112,7 @@ var pFuncs = [...]func(*process.Process, interface{}) error{
 	MergeSummarize:    mergesum.Prepare,
 }
 
-var rFuncs = [...]func(*process.Process, interface{}) (bool, error){
+var execFunc = [...]func(*process.Process, interface{}) (bool, error){
 	Top:               top.Call,
 	Dedup:             dedup.Call,
 	Limit:             limit.Call,

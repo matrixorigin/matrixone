@@ -85,7 +85,7 @@ func (holder *TableHolder) GetSegmentCount() int64 {
 func (holder *TableHolder) String() string {
 	holder.tree.RLock()
 	defer holder.tree.RUnlock()
-	s := fmt.Sprintf("<IndexTableHolder[%d]>[Cnt=%d](Refs=%d)", holder.ID, holder.tree.SegmentCnt, holder.RefCount())
+	s := fmt.Sprintf("<IndexTableHolder[%d]>[Cnt=%d](RefCount=%d)", holder.ID, holder.tree.SegmentCnt, holder.RefCount())
 	for _, seg := range holder.tree.Segments {
 		s = fmt.Sprintf("%s\n\t%s", s, seg.stringNoLock())
 	}

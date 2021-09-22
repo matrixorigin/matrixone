@@ -63,13 +63,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				ctr.state = End
 				return true, err
 			}
-			proc.Reg.Ax = ctr.bat
+			proc.Reg.InputBatch = ctr.bat
 			ctr.bat = nil
 			ctr.clean(proc)
 			ctr.state = End
 			return true, nil
 		case End:
-			proc.Reg.Ax = nil
+			proc.Reg.InputBatch = nil
 			return true, nil
 		}
 	}
@@ -77,16 +77,16 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 
 func (ctr *Container) build(n *Argument, proc *process.Process) error {
 	for {
-		if len(proc.Reg.Ws) == 0 {
+		if len(proc.Reg.MergeReceivers) == 0 {
 			break
 		}
-		for i := 0; i < len(proc.Reg.Ws); i++ {
-			reg := proc.Reg.Ws[i]
+		for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
+			reg := proc.Reg.MergeReceivers[i]
 			v := <-reg.Ch
 			if v == nil {
 				reg.Ch = nil
 				reg.Wg.Done()
-				proc.Reg.Ws = append(proc.Reg.Ws[:i], proc.Reg.Ws[i+1:]...)
+				proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
 				i--
 				continue
 			}
@@ -167,7 +167,7 @@ func (ctr *Container) clean(proc *process.Process) {
 		ctr.bat.Clean(proc)
 	}
 	{
-		for _, reg := range proc.Reg.Ws {
+		for _, reg := range proc.Reg.MergeReceivers {
 			if reg.Ch != nil {
 				v := <-reg.Ch
 				switch {

@@ -137,8 +137,8 @@ func DecodeInstructions(data []byte) (vm.Instructions, []byte, error) {
 }
 
 func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
-	buf.Write(encoding.EncodeUint32(uint32(in.Op)))
-	switch in.Op {
+	buf.Write(encoding.EncodeUint32(uint32(in.Code)))
+	switch in.Code {
 	case vm.Top:
 		arg := in.Arg.(*top.Argument)
 		fs := make([]Field, len(arg.Fs))
@@ -340,7 +340,7 @@ func EncodeInstruction(in vm.Instruction, buf *bytes.Buffer) error {
 func DecodeInstruction(data []byte) (vm.Instruction, []byte, error) {
 	var in vm.Instruction
 
-	switch in.Op = int(encoding.DecodeUint32(data[:4])); in.Op {
+	switch in.Code = int(encoding.DecodeUint32(data[:4])); in.Code {
 	case vm.Top:
 		var arg TopArgument
 

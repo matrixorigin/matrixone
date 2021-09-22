@@ -34,22 +34,22 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
 	reg := n.Reg
 	if reg.Ch == nil {
-		if proc.Reg.Ax != nil {
-			if bat := proc.Reg.Ax.(*batch.Batch); bat != nil {
+		if proc.Reg.InputBatch != nil {
+			if bat := proc.Reg.InputBatch.(*batch.Batch); bat != nil {
 				bat.Clean(proc)
 			}
 		}
 		register.FreeRegisters(proc)
 		return true, nil
 	}
-	if proc.Reg.Ax == nil {
+	if proc.Reg.InputBatch == nil {
 		reg.Wg.Add(1)
 		reg.Ch <- nil
 		reg.Wg.Wait()
 		register.FreeRegisters(proc)
 		return true, nil
 	}
-	bat := proc.Reg.Ax.(*batch.Batch)
+	bat := proc.Reg.InputBatch.(*batch.Batch)
 	if bat == nil || bat.Attrs == nil {
 		reg.Wg.Add(1)
 		reg.Ch <- bat

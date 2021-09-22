@@ -35,16 +35,16 @@ func Prepare(_ *process.Process, arg interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	if proc.Reg.Ax == nil {
+	if proc.Reg.InputBatch == nil {
 		return false, nil
 	}
-	bat := proc.Reg.Ax.(*batch.Batch)
+	bat := proc.Reg.InputBatch.(*batch.Batch)
 	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
 	n := arg.(*Argument)
 	if _, ok := n.E.(*extend.Attribute); ok { // mysql treats any attribute as true
-		proc.Reg.Ax = bat
+		proc.Reg.InputBatch = bat
 		return false, nil
 	}
 	if es := extend.AndExtends(n.E, []extend.Extend{}); len(es) > 0 {
@@ -58,7 +58,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			if len(sels) == 0 {
 				bat.Clean(proc)
 				bat.Attrs = nil
-				proc.Reg.Ax = bat
+				proc.Reg.InputBatch = bat
 				register.Put(proc, vec)
 				return false, nil
 			}
@@ -75,7 +75,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 		}
 		bat.Reduce(n.Attrs, proc)
-		proc.Reg.Ax = bat
+		proc.Reg.InputBatch = bat
 		return false, nil
 	}
 	vec, _, err := n.E.Eval(bat, proc)
@@ -87,7 +87,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	if len(sels) == 0 {
 		bat.Clean(proc)
 		bat.Attrs = nil
-		proc.Reg.Ax = bat
+		proc.Reg.InputBatch = bat
 		register.Put(proc, vec)
 		return false, nil
 	}
@@ -98,6 +98,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	}
 	register.Put(proc, vec)
 	bat.Reduce(n.Attrs, proc)
-	proc.Reg.Ax = bat
+	proc.Reg.InputBatch = bat
 	return false, nil
 }

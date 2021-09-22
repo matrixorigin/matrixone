@@ -59,8 +59,8 @@ func NewStrVectorNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFre
 		File:        vf,
 		UseCompress: useCompress,
 		FreeFunc:    freeFunc,
-		// Data: &types.Bytes{
-		// 	Data:    make([]byte, 0),
+		// DataSource: &types.Bytes{
+		// 	DataSource:    make([]byte, 0),
 		// 	Offsets: make([]uint32, 0),
 		// 	Lengths: make([]uint32, 0),
 		// },

@@ -20,6 +20,7 @@ import (
 	"matrixone/pkg/sql/op"
 )
 
+// Extended projection
 type Extend struct {
 	Alias string
 	E     extend.Extend

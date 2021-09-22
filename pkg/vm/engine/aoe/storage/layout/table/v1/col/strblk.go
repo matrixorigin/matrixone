@@ -29,10 +29,10 @@ package col
 // 	Parts []IColumnPart
 // }
 
-// func NewStrColumnBlock(seg IColumnSegment, id common.ID, blkType base.BlockType) IColumnBlock {
+// func NewStrColumnBlock(seg IColumnSegment, id common.RelationName, blkType base.BlockType) IColumnBlock {
 // 	blk := &StrColumnBlock{
 // 		ColumnBlock: ColumnBlock{
-// 			ID:     id,
+// 			RelationName:     id,
 // 			Type:   blkType,
 // 			ColIdx: seg.GetColIdx(),
 // 		},
@@ -49,12 +49,12 @@ package col
 // }
 
 // func (blk *StrColumnBlock) Ref() IColumnBlock {
-// 	atomic.AddInt64(&blk.Refs, int64(1))
+// 	atomic.AddInt64(&blk.RefCount, int64(1))
 // 	return blk
 // }
 
 // func (blk *StrColumnBlock) UnRef() {
-// 	if atomic.AddInt64(&blk.Refs, int64(-1)) == 0 {
+// 	if atomic.AddInt64(&blk.RefCount, int64(-1)) == 0 {
 // 		blk.Close()
 // 	}
 // }
@@ -81,7 +81,7 @@ package col
 // }
 
 // func (blk *StrColumnBlock) Append(part IColumnPart) {
-// 	if !blk.ID.IsSameBlock(part.GetID()) {
+// 	if !blk.RelationName.IsSameBlock(part.GetID()) {
 // 		panic("logic error")
 // 	}
 // 	if len(blk.Parts) != 0 {

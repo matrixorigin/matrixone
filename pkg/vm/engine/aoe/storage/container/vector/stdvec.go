@@ -87,7 +87,7 @@ func (v *StdVector) PlacementNew(t types.Type) {
 	hp.Len = 0
 	hp.Cap = int(capacity)
 	v.Data = *(*[]byte)(unsafe.Pointer(&hp))
-	// v.Data = make([]byte, 0, capacity*uint64(t.Size))
+	// v.DataSource = make([]byte, 0, capacity*uint64(t.Size))
 }
 
 func (v *StdVector) GetType() dbi.VectorType {

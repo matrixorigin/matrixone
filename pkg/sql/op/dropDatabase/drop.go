@@ -37,6 +37,6 @@ func (n *DropDatabase) String() string {
 
 func (n *DropDatabase) Name() string                     { return "" }
 func (n *DropDatabase) Rename(_ string)                  {}
-func (n *DropDatabase) Columns() []string                { return nil }
+func (n *DropDatabase) ResultColumns() []string          { return nil }
 func (n *DropDatabase) SetColumns(_ []string)            {}
 func (n *DropDatabase) Attribute() map[string]types.Type { return nil }

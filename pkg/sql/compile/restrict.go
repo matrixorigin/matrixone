@@ -38,9 +38,9 @@ func (c *compile) compileRestrict(o *restrict.Restrict, mp map[string]uint64) ([
 		}
 	} else {
 		for i, s := range ss {
-			ss[i].Ins = append(s.Ins, vm.Instruction{
-				Arg: arg,
-				Op:  vm.Restrict,
+			ss[i].Instructions = append(s.Instructions, vm.Instruction{
+				Arg:  arg,
+				Code: vm.Restrict,
 			})
 		}
 	}
@@ -49,16 +49,16 @@ func (c *compile) compileRestrict(o *restrict.Restrict, mp map[string]uint64) ([
 
 func pushRestrict(s *Scope, arg *vrestrict.Argument) *Scope {
 	if s.Magic == Merge || s.Magic == Remote {
-		for i := range s.Ss {
-			s.Ss[i] = pushRestrict(s.Ss[i], arg)
+		for i := range s.PreScopes {
+			s.PreScopes[i] = pushRestrict(s.PreScopes[i], arg)
 		}
 	} else {
-		n := len(s.Ins) - 1
-		s.Ins = append(s.Ins, vm.Instruction{
-			Arg: arg,
-			Op:  vm.Restrict,
+		n := len(s.Instructions) - 1
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Arg:  arg,
+			Code: vm.Restrict,
 		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+		s.Instructions[n], s.Instructions[n+1] = s.Instructions[n+1], s.Instructions[n]
 	}
 	return s
 

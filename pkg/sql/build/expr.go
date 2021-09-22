@@ -72,11 +72,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 	case *tree.NumVal:
 		return buildValue(e.Value)
 	case *tree.ParenExpr:
-		ext, err := b.buildExpr(o, e.Expr)
-		if err != nil {
-			return nil, err
-		}
-		return &extend.ParenExtend{E: ext}, nil
+		return b.buildExpr(o, e.Expr)
 	case *tree.OrExpr:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {

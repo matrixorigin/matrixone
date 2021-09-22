@@ -29,16 +29,16 @@ func Prepare(_ *process.Process, _ interface{}) error {
 }
 
 func Call(proc *process.Process, _ interface{}) (bool, error) {
-	if len(proc.Reg.Ws) == 0 {
+	if len(proc.Reg.MergeReceivers) == 0 {
 		return true, nil
 	}
-	for i := 0; i < len(proc.Reg.Ws); i++ {
-		reg := proc.Reg.Ws[i]
+	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
+		reg := proc.Reg.MergeReceivers[i]
 		v := <-reg.Ch
 		if v == nil {
 			reg.Ch = nil
 			reg.Wg.Done()
-			proc.Reg.Ws = append(proc.Reg.Ws[:i], proc.Reg.Ws[i+1:]...)
+			proc.Reg.MergeReceivers = append(proc.Reg.MergeReceivers[:i], proc.Reg.MergeReceivers[i+1:]...)
 			i--
 			continue
 		}
@@ -47,7 +47,7 @@ func Call(proc *process.Process, _ interface{}) (bool, error) {
 			reg.Wg.Done()
 			continue
 		}
-		proc.Reg.Ax = bat
+		proc.Reg.InputBatch = bat
 		reg.Wg.Done()
 		return false, nil
 	}

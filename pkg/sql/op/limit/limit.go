@@ -39,8 +39,8 @@ func (n *Limit) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Limit) Columns() []string {
-	return n.Prev.Columns()
+func (n *Limit) ResultColumns() []string {
+	return n.Prev.ResultColumns()
 }
 
 func (n *Limit) SetColumns(cs []string) {

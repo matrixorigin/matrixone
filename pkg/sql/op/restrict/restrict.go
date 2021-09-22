@@ -40,8 +40,8 @@ func (n *Restrict) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Restrict) Columns() []string {
-	return n.Prev.Columns()
+func (n *Restrict) ResultColumns() []string {
+	return n.Prev.ResultColumns()
 }
 
 func (n *Restrict) SetColumns(cs []string) {

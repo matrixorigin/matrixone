@@ -219,7 +219,7 @@ func maxDepth(n int) int {
 //    and Jukka Teuhola; Nordic Journal of Computing 3,1 (1996), 27-40:
 //    The given algorithms are in-place, number of Swap and Assignments
 //    grow as n log n but the algorithm is not stable.
-//  - "Fast Stable In-Place Sorting with O(n) Data Moves" J.I. Munro and
+//  - "Fast Stable In-Place Sorting with Operator(n) DataSource Moves" J.I. Munro and
 //    V. Raman in Algorithmica (1996) 16, 115-160:
 //    This algorithm either needs additional 2n bits or works only if there
 //    are enough different elements available to encode some permutations
@@ -262,15 +262,15 @@ func stable(data sortSlice, n int) {
 // Radzik, editors, Algorithms - ESA 2004, volume 3221 of Lecture Notes in
 // Computer Science, pages 714-723. Springer, 2004.
 //
-// Let M = m-a and N = b-n. Wolog M < N.
-// The recursion depth is bound by ceil(log(N+M)).
-// The algorithm needs O(M*log(N/M + 1)) calls to data.Less.
-// The algorithm needs O((M+N)*log(M)) calls to data.Swap.
+// Let M = m-a and NodeInfo = b-n. Wolog M < NodeInfo.
+// The recursion depth is bound by ceil(log(NodeInfo+M)).
+// The algorithm needs Operator(M*log(NodeInfo/M + 1)) calls to data.Less.
+// The algorithm needs Operator((M+NodeInfo)*log(M)) calls to data.Swap.
 //
-// The paper gives O((M+N)*log(M)) as the number of assignments assuming a
-// rotation algorithm which uses O(M+N+gcd(M+N)) assignments. The argumentation
+// The paper gives Operator((M+NodeInfo)*log(M)) as the number of assignments assuming a
+// rotation algorithm which uses Operator(M+NodeInfo+gcd(M+NodeInfo)) assignments. The argumentation
 // in the paper carries through for Swap operations, especially as the block
-// swapping rotate uses only O(M+N) Swaps.
+// swapping rotate uses only Operator(M+NodeInfo) Swaps.
 //
 // symMerge assumes non-degenerate arguments: a < m && m < b.
 // Having the caller check this condition eliminates many leaf recursion calls,
@@ -358,7 +358,7 @@ func symMerge(data sortSlice, a, m, b int) {
 }
 
 // rotate rotates two consecutive blocks u = data[a:m] and v = data[m:b] in data:
-// Data of the form 'x u v y' is changed to 'x v u y'.
+// DataSource of the form 'x u v y' is changed to 'x v u y'.
 // rotate performs at most b-a many calls to data.Swap,
 // and it assumes non-degenerate arguments: a < m && m < b.
 func rotate(data sortSlice, a, m, b int) {
@@ -392,15 +392,15 @@ This is best possible as each element might need a move.
 Pay attention when comparing to other optimal algorithms which
 typically count the number of assignments instead of swaps:
 E.g. the optimal algorithm of Dudzinski and Dydek for in-place
-rotations uses O(u + v + gcd(u,v)) assignments which is
-better than our O(3 * (u+v)) as gcd(u,v) <= u.
+rotations uses Operator(u + v + gcd(u,v)) assignments which is
+better than our Operator(3 * (u+v)) as gcd(u,v) <= u.
 
 
 Stable sorting by SymMerge and BlockSwap rotations
 
-SymMerg complexity for same size input M = N:
-Calls to Less:  O(M*log(N/M+1)) = O(N*log(2)) = O(N)
-Calls to Swap:  O((M+N)*log(M)) = O(2*N*log(N)) = O(N*log(N))
+SymMerg complexity for same size input M = NodeInfo:
+Calls to Less:  Operator(M*log(NodeInfo/M+1)) = Operator(NodeInfo*log(2)) = Operator(NodeInfo)
+Calls to Swap:  Operator((M+NodeInfo)*log(M)) = Operator(2*NodeInfo*log(NodeInfo)) = Operator(NodeInfo*log(NodeInfo))
 
 (The following argument does not fuzz over a missing -1 or
 other stuff which does not impact the final result).
@@ -411,28 +411,28 @@ Plain merge sort performs log(n) = k iterations.
 On iteration i the algorithm merges 2^(k-i) blocks, each of size 2^i.
 
 Thus iteration i of merge sort performs:
-Calls to Less  O(2^(k-i) * 2^i) = O(2^k) = O(2^log(n)) = O(n)
-Calls to Swap  O(2^(k-i) * 2^i * log(2^i)) = O(2^k * i) = O(n*i)
+Calls to Less  Operator(2^(k-i) * 2^i) = Operator(2^k) = Operator(2^log(n)) = Operator(n)
+Calls to Swap  Operator(2^(k-i) * 2^i * log(2^i)) = Operator(2^k * i) = Operator(n*i)
 
 In total k = log(n) iterations are performed; so in total:
-Calls to Less O(log(n) * n)
-Calls to Swap O(n + 2*n + 3*n + ... + (k-1)*n + k*n)
-   = O((k/2) * k * n) = O(n * k^2) = O(n * log^2(n))
+Calls to Less Operator(log(n) * n)
+Calls to Swap Operator(n + 2*n + 3*n + ... + (k-1)*n + k*n)
+   = Operator((k/2) * k * n) = Operator(n * k^2) = Operator(n * log^2(n))
 
 
 Above results should generalize to arbitrary n = 2^k + p
 and should not be influenced by the initial insertion sort phase:
-Insertion sort is O(n^2) on Swap and Less, thus O(bs^2) per block of
-size bs at n/bs blocks:  O(bs*n) Swaps and Less during insertion sort.
+Insertion sort is Operator(n^2) on Swap and Less, thus Operator(bs^2) per block of
+size bs at n/bs blocks:  Operator(bs*n) Swaps and Less during insertion sort.
 Merge sort iterations start at i = log(bs). With t = log(bs) constant:
-Calls to Less O((log(n)-t) * n + bs*n) = O(log(n)*n + (bs-t)*n)
-   = O(n * log(n))
-Calls to Swap O(n * log^2(n) - (t^2+t)/2*n) = O(n * log^2(n))
+Calls to Less Operator((log(n)-t) * n + bs*n) = Operator(log(n)*n + (bs-t)*n)
+   = Operator(n * log(n))
+Calls to Swap Operator(n * log^2(n) - (t^2+t)/2*n) = Operator(n * log^2(n))
 
 */
 
 // Sort sorts data.
-// It makes one call to data.Len to determine n and O(n*log(n)) calls to
+// It makes one call to data.Len to determine n and Operator(n*log(n)) calls to
 // data.Less and data.Swap. The sort is not guaranteed to be stable.
 func sortUnstable(data sortSlice) {
 	n := len(data)
@@ -441,8 +441,8 @@ func sortUnstable(data sortSlice) {
 
 // Stable sorts data while keeping the original order of equal elements.
 //
-// It makes one call to data.Len to determine n, O(n*log(n)) calls to
-// data.Less and O(n*log(n)*log(n)) calls to data.Swap.
+// It makes one call to data.Len to determine n, Operator(n*log(n)) calls to
+// data.Less and Operator(n*log(n)*log(n)) calls to data.Swap.
 func sortStable(data sortSlice) {
 	stable(data, len(data))
 }

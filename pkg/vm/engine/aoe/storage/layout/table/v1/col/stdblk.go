@@ -105,7 +105,7 @@ func (blk *stdColumnBlock) close() {
 		blk.part.Close()
 	}
 	blk.part = nil
-	// log.Infof("destroy colblk %d, colidx %d", blk.meta.ID, blk.colIdx)
+	// log.Infof("destroy colblk %d, colidx %d", blk.meta.RelationName, blk.colIdx)
 }
 
 func (blk *stdColumnBlock) LoadVectorWrapper() (*vector.VectorWrapper, error) {
@@ -133,6 +133,6 @@ func (blk *stdColumnBlock) Size() uint64 {
 }
 
 func (blk *stdColumnBlock) String() string {
-	s := fmt.Sprintf("<Std[%s](T=%s)(Refs=%d)(Size=%d)>", blk.meta.String(), blk.typ.String(), blk.RefCount(), blk.meta.Count)
+	s := fmt.Sprintf("<Std[%s](T=%s)(RefCount=%d)(Size=%d)>", blk.meta.String(), blk.typ.String(), blk.RefCount(), blk.meta.Count)
 	return s
 }

@@ -62,7 +62,8 @@ func New(db string, sql string, uid string,
 	}
 }
 
-func (c *compile) Compile() ([]*Exec, error) {
+// Build generates query execution list based on the result of sql parser.
+func (c *compile) Build() ([]*Exec, error) {
 	stmts, err := tree.NewParser().Parse(c.sql)
 	if err != nil {
 		return nil, err
@@ -77,29 +78,25 @@ func (c *compile) Compile() ([]*Exec, error) {
 	return es, nil
 }
 
+// Compile compiles ast tree to scope list.
+// A scope is an execution unit.
 func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	// generates relation algebra operator chain.
 	o, err := build.New(e.c.db, e.c.sql, e.c.e, e.c.proc).BuildStatement(e.stmt)
 	if err != nil {
 		return err
 	}
+	// remove useless operators.
 	o = prune(o)
+	// optimize is not implemented for now.
 	o = opt.Optimize(rewrite(o, mergeCount(o, 0)))
-	ss, err := e.c.compileAlgebar(o)
+	// generates scope list from the relation algebra operator chain.
+	ss, err := e.c.compileAlgebra(o)
 	if err != nil {
 		return err
 	}
-	{
-		switch o.(type) {
-		case *explain.Explain:
-			e.cs = append(e.cs, &Col{Typ: types.T_varchar, Name: "Pipeline"})
-		case *showTables.ShowTables:
-			e.cs = append(e.cs, &Col{Typ: types.T_varchar, Name: "Table"})
-		case *showDatabases.ShowDatabases:
-			e.cs = append(e.cs, &Col{Typ: types.T_varchar, Name: "Database"})
-		}
-	}
 	mp := o.Attribute()
-	attrs := o.Columns()
+	attrs := o.ResultColumns()
 	cs := make([]*Col, 0, len(mp))
 	{
 		for i := 0; i < len(attrs); i++ {
@@ -123,10 +120,10 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 		}
 	}
 	e.u = u
-	e.cs = cs
+	e.resultCols = cs
 	e.e = e.c.e
 	e.fill = fill
-	e.ss = fillOutput(ss, &output.Argument{Data: u, Func: fill, Attrs: attrs}, e.c.proc)
+	e.scopes = fillOutput(ss, &output.Argument{Data: u, Func: fill, Attrs: attrs}, e.c.proc)
 	return nil
 }
 
@@ -140,17 +137,19 @@ func (e *Exec) SetSchema(db string) error {
 }
 
 func (e *Exec) Columns() []*Col {
-	return e.cs
+	return e.resultCols
 }
 
+// Run applies the scopes to the specified data object
+// and run through the instruction in each of the scope.
 func (e *Exec) Run(ts uint64) error {
 	var wg sync.WaitGroup
 
 	fmt.Printf("+++++++++\n")
-	Print(nil, e.ss)
+	Print(nil, e.scopes)
 	fmt.Printf("+++++++++\n")
-	for i := range e.ss {
-		switch e.ss[i].Magic {
+	for i := range e.scopes {
+		switch e.scopes[i].Magic {
 		case Normal:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -158,7 +157,7 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		case Merge:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -166,7 +165,7 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		case Insert:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -174,7 +173,7 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		case Explain:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -182,7 +181,7 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		case DropTable:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -190,7 +189,7 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		case DropDatabase:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -198,7 +197,7 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		case CreateTable:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -206,7 +205,7 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		case CreateDatabase:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -214,7 +213,7 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		case ShowTables:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -222,7 +221,7 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		case ShowDatabases:
 			wg.Add(1)
 			go func(s *Scope) {
@@ -230,31 +229,33 @@ func (e *Exec) Run(ts uint64) error {
 					e.err = err
 				}
 				wg.Done()
-			}(e.ss[i])
+			}(e.scopes[i])
 		}
 	}
+
 	wg.Wait()
 	return e.err
 }
 
-func (c *compile) compileAlgebar(o op.OP) ([]*Scope, error) {
+// compileAlgebra compiles relation algebra operator to execution unit list(scope list).
+func (c *compile) compileAlgebra(o op.OP) ([]*Scope, error) {
 	switch n := o.(type) {
 	case *insert.Insert:
-		return []*Scope{&Scope{Magic: Insert, O: o}}, nil
+		return []*Scope{{Magic: Insert, Operator: o}}, nil
 	case *explain.Explain:
-		return []*Scope{&Scope{Magic: Explain, O: o}}, nil
+		return []*Scope{{Magic: Explain, Operator: o}}, nil
 	case *dropTable.DropTable:
-		return []*Scope{&Scope{Magic: DropTable, O: o}}, nil
+		return []*Scope{{Magic: DropTable, Operator: o}}, nil
 	case *dropDatabase.DropDatabase:
-		return []*Scope{&Scope{Magic: DropDatabase, O: o}}, nil
+		return []*Scope{{Magic: DropDatabase, Operator: o}}, nil
 	case *createTable.CreateTable:
-		return []*Scope{&Scope{Magic: CreateTable, O: o}}, nil
+		return []*Scope{{Magic: CreateTable, Operator: o}}, nil
 	case *createDatabase.CreateDatabase:
-		return []*Scope{&Scope{Magic: CreateDatabase, O: o}}, nil
+		return []*Scope{{Magic: CreateDatabase, Operator: o}}, nil
 	case *showTables.ShowTables:
-		return []*Scope{&Scope{Magic: ShowTables, O: o}}, nil
+		return []*Scope{{Magic: ShowTables, Operator: o}}, nil
 	case *showDatabases.ShowDatabases:
-		return []*Scope{&Scope{Magic: ShowDatabases, O: o}}, nil
+		return []*Scope{{Magic: ShowDatabases, Operator: o}}, nil
 	case *projection.Projection:
 		return c.compileOutput(n, make(map[string]uint64))
 	case *top.Top:
@@ -266,6 +267,7 @@ func (c *compile) compileAlgebar(o op.OP) ([]*Scope, error) {
 
 }
 
+// compile returns
 func (c *compile) compile(o op.OP, mp map[string]uint64) ([]*Scope, error) {
 	switch n := o.(type) {
 	case *top.Top:

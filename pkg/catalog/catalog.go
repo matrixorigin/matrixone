@@ -69,6 +69,8 @@ func NewCatalog(store driver.CubeDriver) *Catalog {
 	}
 	catalog.tidEnd = tmpId
 	catalog.tidStart = tmpId - idPoolSize + 1
+	logutil.Debugf("Catalog initialize finished, db id range is [%d, %d), table id range is [%d, %d)", catalog.dbIdStart, catalog.dbIdEnd, catalog.tidStart, catalog.tidEnd)
+
 	return &catalog
 }
 
@@ -507,8 +509,6 @@ func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	}
 	return id, nil
 }
-
-//
 func (c *Catalog) dbIDKey(dbName string) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBIDPrefix, dbName)
 }
@@ -573,8 +573,8 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 			for {
 				select {
 				case <-timeoutC:
-					logutil.Errorf("wait for available db id timeout, current cache range is [%d, %d)", c.tidStart, c.tidEnd)
-					err = ErrDBCreate
+					logutil.Error("wait for available id timeout")
+					err = ErrTableCreateTimeout
 					return
 				default:
 					if atomic.LoadInt32(&c.pLock) == 0 {

@@ -19,12 +19,15 @@ import (
 	"matrixone/pkg/vm/mmu/guest"
 )
 
+// New creates a new Process.
+// A process stores the execution context.
 func New(gm *guest.Mmu) *Process {
 	return &Process{
 		Gm: gm,
 	}
 }
 
+// Size returns
 func (p *Process) Size() int64 {
 	return p.Gm.Size()
 }

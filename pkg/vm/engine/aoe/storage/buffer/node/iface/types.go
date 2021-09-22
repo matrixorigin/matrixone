@@ -122,9 +122,9 @@ type INodeHandle interface {
 	// IsDestroyable() bool
 	IsClosed() bool
 	Ref()
-	// If the current Refs is already 0, it returns false, else true
+	// If the current RefCount is already 0, it returns false, else true
 	UnRef() bool
-	// If the current Refs is not 0, it returns true, else false
+	// If the current RefCount is not 0, it returns true, else false
 	HasRef() bool
 	SetBuffer(buffer buf.IBuffer) error
 	Iteration() uint64

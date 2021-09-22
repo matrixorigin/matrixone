@@ -48,10 +48,10 @@ func (c *compile) compileTopOutput(o *top.Top, mp map[string]uint64) ([]*Scope, 
 	rs := new(Scope)
 	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 	{
 		for i, j := 0, len(ss); i < j; i++ {
-			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
 				Ch: make(chan interface{}, 8),
 			}
@@ -64,15 +64,15 @@ func (c *compile) compileTopOutput(o *top.Top, mp map[string]uint64) ([]*Scope, 
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
-				Reg:  rs.Proc.Reg.Ws[i],
+				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
 	mfs := make([]mergetop.Field, len(o.Gs))
 	{
@@ -83,8 +83,8 @@ func (c *compile) compileTopOutput(o *top.Top, mp map[string]uint64) ([]*Scope, 
 			}
 		}
 	}
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.MergeTop,
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.MergeTop,
 		Arg: &mergetop.Argument{
 			Fs:    mfs,
 			Limit: o.Limit,
@@ -115,10 +115,10 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 	rs := new(Scope)
 	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 	{
 		for i, j := 0, len(ss); i < j; i++ {
-			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
 				Ch: make(chan interface{}, 8),
 			}
@@ -131,15 +131,15 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
-				Reg:  rs.Proc.Reg.Ws[i],
+				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
 	mfs := make([]mergetop.Field, len(o.Gs))
 	{
@@ -150,8 +150,8 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 			}
 		}
 	}
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.MergeTop,
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.MergeTop,
 		Arg: &mergetop.Argument{
 			Fs:    mfs,
 			Limit: o.Limit,
@@ -162,8 +162,8 @@ func (c *compile) compileTop(o *top.Top, mp map[string]uint64) ([]*Scope, error)
 
 func pushTop(s *Scope, arg *vtop.Argument) *Scope {
 	if s.Magic == Merge || s.Magic == Remote {
-		for i := range s.Ss {
-			s.Ss[i] = pushTop(s.Ss[i], arg)
+		for i := range s.PreScopes {
+			s.PreScopes[i] = pushTop(s.PreScopes[i], arg)
 		}
 		fs := make([]mergetop.Field, len(arg.Fs))
 		{
@@ -174,8 +174,8 @@ func pushTop(s *Scope, arg *vtop.Argument) *Scope {
 				}
 			}
 		}
-		s.Ins[len(s.Ins)-1] = vm.Instruction{
-			Op: vm.MergeTop,
+		s.Instructions[len(s.Instructions)-1] = vm.Instruction{
+			Code: vm.MergeTop,
 			Arg: &mergetop.Argument{
 				Fs:    fs,
 				Flg:   true,
@@ -183,12 +183,12 @@ func pushTop(s *Scope, arg *vtop.Argument) *Scope {
 			},
 		}
 	} else {
-		n := len(s.Ins) - 1
-		s.Ins = append(s.Ins, vm.Instruction{
-			Arg: arg,
-			Op:  vm.Top,
+		n := len(s.Instructions) - 1
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Arg:  arg,
+			Code: vm.Top,
 		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+		s.Instructions[n], s.Instructions[n+1] = s.Instructions[n+1], s.Instructions[n]
 	}
 	return s
 }

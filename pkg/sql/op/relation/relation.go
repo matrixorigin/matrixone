@@ -89,7 +89,7 @@ func (n *Relation) String() string {
 	return fmt.Sprintf("%s.%s", n.DB, n.Rid)
 }
 
-func (n *Relation) Columns() []string {
+func (n *Relation) ResultColumns() []string {
 	return n.Rs
 }
 

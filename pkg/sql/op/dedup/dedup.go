@@ -65,7 +65,7 @@ func (n *Dedup) SetColumns(cs []string) {
 	n.Rs = cs
 }
 
-func (n *Dedup) Columns() []string {
+func (n *Dedup) ResultColumns() []string {
 	return n.Rs
 }
 

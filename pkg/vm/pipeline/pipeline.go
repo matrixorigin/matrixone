@@ -24,58 +24,58 @@ import (
 
 func New(cs []uint64, attrs []string, ins vm.Instructions) *Pipeline {
 	return &Pipeline{
-		cs:    cs,
-		ins:   ins,
-		attrs: attrs,
+		refCount:     cs,
+		instructions: ins,
+		attrs:        attrs,
 	}
 }
 
 func NewMerge(ins vm.Instructions) *Pipeline {
 	return &Pipeline{
-		ins: ins,
+		instructions: ins,
 	}
 }
 
 func (p *Pipeline) String() string {
 	var buf bytes.Buffer
 
-	vm.String(p.ins, &buf)
+	vm.String(p.instructions, &buf)
 	return buf.String()
 }
 
 func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, error) {
-	var end bool
+	var end bool //退出标识
 	var err error
 
 	proc.Mp = mempool.New()
 	defer func() {
-		proc.Reg.Ax = nil
-		vm.Run(p.ins, proc)
+		proc.Reg.InputBatch = nil
+		vm.Run(p.instructions, proc)
 		proc.Mp = nil
 	}()
-	if err = vm.Prepare(p.ins, proc); err != nil {
+	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
 	q := p.prefetch(segs, proc)
-	p.cds, p.dds = make([]*bytes.Buffer, len(p.cs)), make([]*bytes.Buffer, len(p.cs))
+	p.compressedBytes, p.decompressedBytes = make([]*bytes.Buffer, len(p.refCount)), make([]*bytes.Buffer, len(p.refCount))
 	{
-		for i := range p.cs {
-			p.cds[i] = bytes.NewBuffer(make([]byte, 0, 8))
+		for i := range p.refCount {
+			p.compressedBytes[i] = bytes.NewBuffer(make([]byte, 0, 8))
 		}
-		for i := range p.cs {
-			p.dds[i] = bytes.NewBuffer(make([]byte, 0, 8))
+		for i := range p.refCount {
+			p.decompressedBytes[i] = bytes.NewBuffer(make([]byte, 0, 8))
 		}
 	}
-	for i, j := 0, len(q.bs); i < j; i++ {
+	for i, j := 0, len(q.blocks); i < j; i++ {
 		if err := q.prefetch(p.attrs); err != nil {
 			return false, err
 		}
-		bat, err := q.bs[i].blk.Read(p.cs, p.attrs, p.cds, p.dds)
+		bat, err := q.blocks[i].blk.Read(p.refCount, p.attrs, p.compressedBytes, p.decompressedBytes)
 		if err != nil {
 			return false, err
 		}
-		proc.Reg.Ax = bat
-		if end, err = vm.Run(p.ins, proc); err != nil {
+		proc.Reg.InputBatch = bat
+		if end, err = vm.Run(p.instructions, proc); err != nil {
 			return end, err
 		}
 		if end {
@@ -88,47 +88,51 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	proc.Mp = mempool.New()
 	defer func() {
-		proc.Reg.Ax = nil
-		vm.Run(p.ins, proc)
+		proc.Reg.InputBatch = nil
+		vm.Run(p.instructions, proc)
 		proc.Mp = nil
 	}()
-	if err := vm.Prepare(p.ins, proc); err != nil {
-		vm.Clean(p.ins, proc)
+	if err := vm.Prepare(p.instructions, proc); err != nil {
+		vm.Clean(p.instructions, proc)
 		return false, err
 	}
+	i := 0
 	for {
-		proc.Reg.Ax = nil
-		if end, err := vm.Run(p.ins, proc); err != nil || end {
+		i++
+		proc.Reg.InputBatch = nil
+		if end, err := vm.Run(p.instructions, proc); err != nil || end {
 			return end, err
 		}
 	}
 }
 
+// prefetch generates a prefetch queue
 func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) *queue {
 	q := new(queue)
-	q.bs = make([]block, 0, 8) // prefetch block list
+	q.blocks = make([]block, 0, 8) // prefetch block list
 	{
 		for _, seg := range segs {
 			ids := seg.Blocks()
 			for _, id := range ids {
-				q.bs = append(q.bs, block{blk: seg.Block(id, proc)})
+				q.blocks = append(q.blocks, block{blk: seg.Block(id, proc)})
 			}
 		}
 	}
 	return q
 }
 
+// prefetch
 func (q *queue) prefetch(attrs []string) error {
-	if q.pi == len(q.bs) {
+	if q.prefetchIndex == len(q.blocks) {
 		return nil
 	}
-	start := q.pi
-	for i, j := q.pi, len(q.bs); i < j; i++ {
+	start := q.prefetchIndex
+	for i, j := q.prefetchIndex, len(q.blocks); i < j; i++ {
 		if i > PrefetchNum+start {
 			break
 		}
-		q.bs[i].blk.Prefetch(attrs)
-		q.pi = i + 1
+		q.blocks[i].blk.Prefetch(attrs)
+		q.prefetchIndex = i + 1
 	}
 	return nil
 }

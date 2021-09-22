@@ -58,7 +58,7 @@ func NewCollection(tableData iface.ITableData, opts *storage.Options) imem.IColl
 func (c *collection) String() string {
 	c.mem.RLock()
 	defer c.mem.RUnlock()
-	s := fmt.Sprintf("<collection[%d]>(Refs=%d)(MTCnt=%d)", c.id, c.RefCount(), len(c.mem.memTables))
+	s := fmt.Sprintf("<collection[%d]>(RefCount=%d)(MTCnt=%d)", c.id, c.RefCount(), len(c.mem.memTables))
 	for _, mt := range c.mem.memTables {
 		s = fmt.Sprintf("%s\n\t%s", s, mt.String())
 	}

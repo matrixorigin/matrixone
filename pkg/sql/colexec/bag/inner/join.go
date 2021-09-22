@@ -83,7 +83,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			}
 			return ok, err
 		case End:
-			proc.Reg.Ax = nil
+			proc.Reg.InputBatch = nil
 			return true, nil
 		}
 	}
@@ -93,7 +93,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 func (ctr *Container) build(attrs []string, proc *process.Process) error {
 	var err error
 
-	reg := proc.Reg.Ws[1]
+	reg := proc.Reg.MergeReceivers[1]
 	for {
 		v := <-reg.Ch
 		if v == nil {
@@ -129,13 +129,13 @@ func (ctr *Container) build(attrs []string, proc *process.Process) error {
 }
 
 func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.Process) (bool, error) {
-	reg := proc.Reg.Ws[0]
+	reg := proc.Reg.MergeReceivers[0]
 	for {
 		v := <-reg.Ch
 		if v == nil {
 			reg.Ch = nil
 			reg.Wg.Done()
-			proc.Reg.Ax = nil
+			proc.Reg.InputBatch = nil
 			ctr.clean(proc)
 			return true, nil
 		}
@@ -147,7 +147,7 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 		if len(ctr.groups) == 0 {
 			reg.Ch = nil
 			reg.Wg.Done()
-			proc.Reg.Ax = nil
+			proc.Reg.InputBatch = nil
 			bat.Clean(proc)
 			return true, nil
 		}
@@ -192,7 +192,7 @@ func (ctr *Container) probe(rName, sName string, attrs []string, proc *process.P
 		reg.Wg.Done()
 		bat.Clean(proc)
 		ctr.Probe.bat.Reduce(ctr.rattrs, proc)
-		proc.Reg.Ax = ctr.Probe.bat
+		proc.Reg.InputBatch = ctr.Probe.bat
 		ctr.Probe.bat = nil
 		return false, nil
 	}
@@ -367,7 +367,7 @@ func (ctr *Container) clean(proc *process.Process) {
 		ctr.Probe.bat = nil
 	}
 	{
-		for _, reg := range proc.Reg.Ws {
+		for _, reg := range proc.Reg.MergeReceivers {
 			if reg.Ch != nil {
 				v := <-reg.Ch
 				switch {

@@ -18,11 +18,17 @@ import (
 	"matrixone/pkg/container/types"
 )
 
+// OP represents an action to be taken on a single relational algebra operator.
+// OP will generate a relation variable.
 type OP interface {
+	// Name returns the name of the variable, which is passed to the next op.
 	Name() string
+	// Rename applies an AS clause to the variable in this op.
 	Rename(string)
+	// String returns a format string to describe this operator.
 	String() string
-	Columns() []string
+	// ResultColumns returns the column names of final result to client.
+	ResultColumns() []string
 	SetColumns([]string)
 	Attribute() map[string]types.Type
 }

@@ -315,7 +315,7 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 	if err != nil {
 		return ids, err
 	}
-	// TODO: Refactor metainfo to 1. keep order 2. use common.ID
+	// TODO: Refactor metainfo to 1. keep order 2. use common.RelationName
 	for sid := range sids {
 		ids = append(ids, common.ID{TableID: tableID, SegmentID: sid})
 	}

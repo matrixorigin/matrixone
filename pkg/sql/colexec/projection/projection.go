@@ -40,10 +40,10 @@ func Prepare(_ *process.Process, _ interface{}) error {
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	var err error
 
-	if proc.Reg.Ax == nil {
+	if proc.Reg.InputBatch == nil {
 		return false, nil
 	}
-	bat := proc.Reg.Ax.(*batch.Batch)
+	bat := proc.Reg.InputBatch.(*batch.Batch)
 	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
@@ -66,6 +66,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 			rbat.Vecs[i].Ref = n.Refer[n.Attrs[i]]
 		}
 	}
-	proc.Reg.Ax = rbat
+	proc.Reg.InputBatch = rbat
 	return false, nil
 }

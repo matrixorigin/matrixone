@@ -140,7 +140,7 @@ func (blk *block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 }
 
 func (blk *block) String() string {
-	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(Refs=%d)", blk.meta.ID, len(blk.data.cols), blk.RefCount())
+	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(RefCount=%d)", blk.meta.ID, len(blk.data.cols), blk.RefCount())
 	// for _, colBlk := range blk.data.cols {
 	// 	s = fmt.Sprintf("%s\n\t%s", s, colBlk.String())
 	// }

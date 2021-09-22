@@ -44,10 +44,10 @@ func (c *compile) compileDedup(o *dedup.Dedup, mp map[string]uint64) ([]*Scope, 
 	rs := new(Scope)
 	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 	{
 		for i, j := 0, len(ss); i < j; i++ {
-			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
 				Ch: make(chan interface{}, 8),
 			}
@@ -60,43 +60,43 @@ func (c *compile) compileDedup(o *dedup.Dedup, mp map[string]uint64) ([]*Scope, 
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
-				Reg:  rs.Proc.Reg.Ws[i],
+				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op:  vm.MergeDedup,
-		Arg: &mergededup.Argument{Attrs: attrs},
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.MergeDedup,
+		Arg:  &mergededup.Argument{Attrs: attrs},
 	})
 	return []*Scope{rs}, nil
 }
 
 func pushDedup(s *Scope, arg *vdedup.Argument) *Scope {
 	if s.Magic == Merge || s.Magic == Remote {
-		for i := range s.Ss {
-			s.Ss[i] = pushDedup(s.Ss[i], arg)
+		for i := range s.PreScopes {
+			s.PreScopes[i] = pushDedup(s.PreScopes[i], arg)
 		}
-		s.Ins[len(s.Ins)-1] = vm.Instruction{
-			Op: vm.MergeDedup,
+		s.Instructions[len(s.Instructions)-1] = vm.Instruction{
+			Code: vm.MergeDedup,
 			Arg: &mergededup.Argument{
 				Flg:   true,
 				Attrs: arg.Attrs,
 			},
 		}
 	} else {
-		n := len(s.Ins) - 1
-		s.Ins = append(s.Ins, vm.Instruction{
-			Arg: arg,
-			Op:  vm.Dedup,
+		n := len(s.Instructions) - 1
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Arg:  arg,
+			Code: vm.Dedup,
 		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+		s.Instructions[n], s.Instructions[n+1] = s.Instructions[n+1], s.Instructions[n]
 	}
 	return s
 }
