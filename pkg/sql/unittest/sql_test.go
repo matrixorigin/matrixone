@@ -117,7 +117,11 @@ func TestDDLSql(t *testing.T) {
 }
 
 func TestSql(t *testing.T) {
-	sql := "SELECT SUM(price) x, MIN(orderId) y, MAX(orderId) z from R group by uid;"
+	sql := "SELECT uid, SUM(price), MIN(price), MAX(price), COUNT(price), AVG(price) FROM R GROUP BY uid ORDER BY uid;" +
+		"SELECT SUM(price), MIN(price), MAX(price), COUNT(price), AVG(price) FROM R;" +
+		"SELECT uid, SUM(price), MIN(price), MAX(price), COUNT(price), AVG(price) FROM R GROUP BY uid;" +
+		"SELECT uid FROM R ORDER BY uid;" +
+		"SELECT uid FROM R GROUP BY uid ORDER BY uid;"
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
 	proc := process.New(gm)
@@ -149,7 +153,7 @@ func TestSql(t *testing.T) {
 
 	println(">>>>>>>----------------------------------")
 
-	sql = "SELECT SUM(price) x, MIN(orderId) y, MAX(orderId) z from R group by uid;"
+	sql = "SELECT * FROM R; SELECT price FROM R; SELECT uid FROM R; SELECT orderId from R; SELECT uid, orderId from R;"
 	c = compile.New("test", sql, "tom", e, proc)
 	es, err = c.Build()
 	require.NoError(t, err)
@@ -180,6 +184,31 @@ func TestSql(t *testing.T) {
 	println(">>>>>>>----------------------------------")
 
 	sql = "SELECT DISTINCT price from R;"
+	c = compile.New("test", sql, "tom", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NoError(t, err)
+		}
+		if err := e.Run(1); err != nil {
+			require.NoError(t, err)
+		}
+	}
+
+	println(">>>>>>>----------------------------------")
+
+	sql = "SELECT unknownCol, price from R where uid = 1;"
+	c = compile.New("test", sql, "tom", e, proc)
+	es, err = c.Build()
+	require.NoError(t, err)
+	for _, e := range es {
+		if err := e.Compile(nil, Print); err != nil {
+			require.NotNil(t, err)
+		}
+	}
+
+	sql = "SELECT orderId, price from R where uid = '1';"
 	c = compile.New("test", sql, "tom", e, proc)
 	es, err = c.Build()
 	require.NoError(t, err)
