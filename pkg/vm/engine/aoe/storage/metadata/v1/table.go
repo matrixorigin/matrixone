@@ -203,10 +203,10 @@ func (tbl *Table) GetSegmentBlockIDs(segmentId uint64, args ...int64) map[uint64
 	tbl.RLock()
 	seg, err := tbl.referenceSegmentNoLock(segmentId)
 	tbl.RUnlock()
-	if err == nil {
+	if err != nil {
 		return make(map[uint64]uint64, 0)
 	}
-	return seg.BlockIDs(args)
+	return seg.BlockIDs(args...)
 }
 
 func (tbl *Table) SegmentIDs(args ...int64) map[uint64]uint64 {

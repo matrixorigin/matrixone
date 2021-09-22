@@ -46,9 +46,9 @@ func MakeMetaDir(dirname string) string {
 	return path.Join(dirname, "meta")
 }
 
-func MakeTableDir(dirname string, id uint64) string {
-	return path.Join(dirname, fmt.Sprintf("%d", id))
-}
+//func MakeTableDir(dirname string, id uint64) string {
+//	return path.Join(dirname, fmt.Sprintf("%d", id))
+//}
 
 func MakeTBlockFileName(dirname, name string, isTmp bool) string {
 	return MakeFilename(dirname, FTTBlock, name, isTmp)
