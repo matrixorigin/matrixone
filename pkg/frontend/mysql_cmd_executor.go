@@ -970,8 +970,8 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	}
 
 	/*
-	check table
-	 */
+		check table
+	*/
 	tableHandler, err := dbHandler.Relation(loadTable)
 	if err != nil {
 		//echo client. no such table
@@ -981,16 +981,16 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		execute load data
 	*/
-	result, err := mce.LoadLoop(load, dbHandler, tableHandler, loadDataClose)
+	result, err := mce.LoadLoop(load, dbHandler, tableHandler)
 	if err != nil {
 		return err
 	}
 
 	/*
-	response
-	 */
-	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Skipped,result.Warnings).Error()
-	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings),0, int(COM_QUERY), " "+info)
+		response
+	*/
+	info := NewMysqlError(ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings).Error()
+	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), " "+info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
 	}

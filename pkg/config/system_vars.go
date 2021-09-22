@@ -319,7 +319,7 @@ type SystemVariables struct {
 	DataType:	int64
 	DomainType:	range
 	Values:	[0 0 10]
-	Comment:	the Node RelationName of the cube
+	Comment:	the Node ID of the cube
 	UpdateMode:	dynamic
 	*/
 	nodeID int64
@@ -724,7 +724,7 @@ type varsConfig struct {
 	DataType:	int64
 	DomainType:	range
 	Values:	[0 0 10]
-	Comment:	the Node RelationName of the cube
+	Comment:	the Node ID of the cube
 	UpdateMode:	dynamic
 	*/
 	NodeID int64 `toml:"nodeID"`
@@ -922,7 +922,7 @@ func (ap *SystemVariables) PrepareDefinition() {
 
 	ap.name2definition["recordTimeElapsedOfSqlRequest"] = "	Name:	recordTimeElapsedOfSqlRequest	Scope:	[global]	Access:	[file]	DataType:	bool	DomainType:	set	Values:	[true]	Comment:	record the time elapsed of executing sql request	UpdateMode:	dynamic	"
 
-	ap.name2definition["nodeID"] = "	Name:	nodeID	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[0 0 10]	Comment:	the Node RelationName of the cube	UpdateMode:	dynamic	"
+	ap.name2definition["nodeID"] = "	Name:	nodeID	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[0 0 10]	Comment:	the Node ID of the cube	UpdateMode:	dynamic	"
 
 	ap.name2definition["cubeDirPrefix"] = "	Name:	cubeDirPrefix	Scope:	[global]	Access:	[file]	DataType:	string	DomainType:	set	Values:	[./cube]	Comment:	the root direction prefix of the cube. The actual dir is cubeDirPrefix + nodeID	UpdateMode:	dynamic	"
 
