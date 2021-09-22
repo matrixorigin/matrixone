@@ -119,6 +119,7 @@ func (h *driver) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 }
 
 //get responses the requests whose CustemType is Get.
+//It gets the value of the key
 //If fail, it returns the error in resp.Value and returns 500.
 //If success, it returns the value got in resp.Value and returns 0.
 func (h *driver) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
@@ -134,6 +135,7 @@ func (h *driver) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 }
 
 //prefixScan responses the requests whose CustemType is PrefixScan.
+//It scans the kv-pairs whose key starts with the prefix.
 //If fail, it returns the error in resp.Value and returns 500.
 //If success, it returns the kv-pairs in resp.Value and returns 0.
 func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
@@ -170,6 +172,7 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 }
 
 //scan responses the requests whose CustemType is Scan.
+//It scans all the kv-pairs in the store.
 //If fail, it returns the error in resp.Value and returns 500.
 //If success, it returns the kv-pairs in resp.Value and returns 0.
 func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
@@ -216,6 +219,7 @@ func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.
 }
 
 //incr responses the requests whose CustemType is Incr.
+//It allocates the id that increases the length of batch from the former id.
 //If fail, it returns 0,0 and returns empty resp.
 //If success, it returns amount of the written bytes and returns the id in resp.Value.
 func (h *driver) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
