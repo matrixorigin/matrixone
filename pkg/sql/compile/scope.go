@@ -16,6 +16,7 @@ package compile
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
@@ -115,11 +116,10 @@ func (s *Scope) MergeRun(e engine.Engine) error {
 	if _, rerr := p.RunMerge(s.Proc); rerr != nil {
 		err = rerr
 	}
+	wg.Wait()
 	if err != nil {
-		wg.Wait()
 		return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, err.Error())
 	}
-	wg.Wait()
 	return nil
 }
 
@@ -151,6 +151,9 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 			return err
 		}
 		msg := val.(*message.Message)
+		if len(msg.Code) > 0 {
+			return errors.New(string(msg.Code))
+		}
 		if msg.Sid == 1 {
 			break
 		}

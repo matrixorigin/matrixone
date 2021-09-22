@@ -15,7 +15,7 @@
 package sched
 
 import (
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync/atomic"
@@ -38,8 +38,11 @@ const (
 	MemdataUpdateEvent
 	MergeSortEvent
 
+	PrepareCommitBlockTask
 	PrecommitBlkMetaTask
 	FlushMemtableTask
+	FlushBlkTask
+	FlushTBlkTask
 	MetaCreateTableTask
 	MetaDropTableTask
 	MetaCreateBlkTask
@@ -88,7 +91,7 @@ func (e *BaseEvent) Execute() error {
 	if e.exec != nil {
 		return e.exec(e)
 	}
-	logutil2.Debugf("Execute Event Type=%d, RelationName=%d", e.t, e.id)
+	logutil.Debugf("Execute Event Type=%d, ID=%d", e.t, e.id)
 	return nil
 }
 func (e *BaseEvent) onDone(_ iops.IOp) {

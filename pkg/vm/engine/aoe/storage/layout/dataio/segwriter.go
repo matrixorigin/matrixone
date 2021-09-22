@@ -17,18 +17,18 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/pierrec/lz4"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
-	// log "github.com/sirupsen/logrus"
+
+	"github.com/pierrec/lz4"
 )
 
 const (
@@ -48,14 +48,24 @@ const (
 
 const Version uint64 = 1
 
-//  BlkCnt | Blk0 Pos | Blk1 Pos | ... | BlkEndPos | Blk0 DataSource | ...
+//  BlkCnt | Blk0 Pos | Blk1 Pos | ... | BlkEndPos | Blk0 Data | ...
+// SegmentWriter writes block data into the created segment file
+// when flushSegEvent(.blk count == SegmentMaxBlocks) is triggered.
 type SegmentWriter struct {
+	// data is the data of the block file,
+	// SegmentWriter does not read from the block file
 	data         []*batch.Batch
 	meta         *md.Segment
 	dir          string
 	fileHandle   *os.File
 	preprocessor func([]*batch.Batch, *md.Segment) error
-	fileGetter   func(string, *md.Segment) (*os.File, error)
+
+	// fileGetter is createFile()，use dir&TableID&SegmentID to
+	// create a tmp file for dataFlusher to flush data
+	fileGetter func(string, *md.Segment) (*os.File, error)
+
+	// fileCommiter is commitFile()，rename file name after
+	// dataFlusher is completed
 	fileCommiter func(string) error
 	indexFlusher func(*os.File, []*batch.Batch, *md.Segment) error
 	dataFlusher  func(*os.File, []*batch.Batch, *md.Segment) error
@@ -65,6 +75,8 @@ type SegmentWriter struct {
 
 var FlushIndex = false
 
+// NewSegmentWriter make a SegmentWriter, which is
+// used when (block file count) == SegmentMaxBlocks
 func NewSegmentWriter(data []*batch.Batch, meta *md.Segment, dir string) *SegmentWriter {
 	w := &SegmentWriter{
 		data: data,
@@ -104,7 +116,7 @@ func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *md.Segme
 }
 
 func (sw *SegmentWriter) commitFile(fname string) error {
-	name, err := e.FilenameFromTmpfile(fname)
+	name, err := common.FilenameFromTmpfile(fname)
 	if err != nil {
 		return err
 	}
@@ -114,7 +126,7 @@ func (sw *SegmentWriter) commitFile(fname string) error {
 
 func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, error) {
 	id := meta.AsCommonID()
-	filename := e.MakeSegmentFileName(dir, id.ToSegmentFileName(), meta.Table.ID, true)
+	filename := common.MakeSegmentFileName(dir, id.ToSegmentFileName(), meta.Table.ID, true)
 	fdir := filepath.Dir(filename)
 	if _, err := os.Stat(fdir); os.IsNotExist(err) {
 		err = os.MkdirAll(fdir, 0755)
@@ -725,6 +737,11 @@ func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *md.
 	return err
 }
 
+// Execute steps as follows:
+// 1. Create a temp block file.
+// 3. Flush indices.
+// 4. Compress column data and flush them.
+// 5. Rename .tmp file to .blk file.
 func (sw *SegmentWriter) Execute() error {
 	if sw.preprocessor != nil {
 		if err := sw.preprocessor(sw.data, sw.meta); err != nil {
@@ -759,6 +776,8 @@ func (sw *SegmentWriter) Execute() error {
 	return sw.fileCommiter(filename)
 }
 
+// flushBlocks does not read the .blk file, and writes the incoming
+// data&meta into the segemnt file.
 func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	var metaBuf bytes.Buffer
 	header := make([]byte, 32)
@@ -794,7 +813,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 		}
 		var preIdx []byte
 		if blk.PrevIndex != nil {
-			preIdx, err = blk.PrevIndex.Marshall()
+			preIdx, err = blk.PrevIndex.Marshal()
 			if err != nil {
 				return err
 			}
@@ -806,7 +825,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 		}
 		var idx []byte
 		if blk.Index != nil {
-			idx, err = blk.Index.Marshall()
+			idx, err = blk.Index.Marshal()
 			if err != nil {
 				return err
 			}

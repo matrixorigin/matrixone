@@ -18,6 +18,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	// "matrixone/pkg/logutil"
 )
 
 type createSegBlkEvent struct {
@@ -46,7 +47,7 @@ func (e *createSegBlkEvent) Execute() error {
 			panic("should not happend")
 		}
 	}
-	seg.Unref()
+	defer seg.Unref()
 	blk, err := e.TableData.RegisterBlock(e.BlkMeta)
 	if err != nil {
 		panic(err)

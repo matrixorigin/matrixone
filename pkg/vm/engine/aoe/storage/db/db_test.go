@@ -20,22 +20,20 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"sync/atomic"
-
-	// e "matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
-	// "matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/panjf2000/ants/v2"
-
 	"github.com/stretchr/testify/assert"
 )
 
@@ -47,16 +45,17 @@ func initDBTest() {
 	os.RemoveAll(TEST_DB_DIR)
 }
 
-func initDB() *DB {
+func initDB(ft storage.FactoryType) *DB {
 	rand.Seed(time.Now().UnixNano())
 	opts := config.NewCustomizedMetaOptions(TEST_DB_DIR, config.CST_Customize, uint64(20000), uint64(2))
+	opts.FactoryType = ft
 	inst, _ := Open(TEST_DB_DIR, opts)
 	return inst
 }
 
 func TestCreateTable(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	assert.NotNil(t, inst)
 	defer inst.Close()
 	tblCnt := rand.Intn(5) + 3
@@ -86,7 +85,7 @@ func TestCreateTable(t *testing.T) {
 
 func TestCreateDuplicateTable(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	defer inst.Close()
 
 	tableInfo := md.MockTableInfo(2)
@@ -98,7 +97,7 @@ func TestCreateDuplicateTable(t *testing.T) {
 
 func TestDropEmptyTable(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	defer inst.Close()
 	tableInfo := md.MockTableInfo(2)
 	_, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name})
@@ -110,7 +109,7 @@ func TestDropEmptyTable(t *testing.T) {
 
 func TestDropTable(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	defer inst.Close()
 
 	name := "t1"
@@ -147,7 +146,7 @@ func TestDropTable(t *testing.T) {
 
 func TestAppend(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl"})
 	assert.Nil(t, err)
@@ -155,7 +154,7 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, int(rows), ck.Vecs[0].Length())
 	invalidName := "xxx"
 	// err = inst.Append(invalidName, ck, logIdx)
@@ -171,7 +170,7 @@ func TestAppend(t *testing.T) {
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(appendCtx)
 		assert.Nil(t, err)
-		// tbl, err := inst.Driver.DataTables.WeakRefTable(tid)
+		// tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 		// assert.Nil(t, err)
 		// t.Log(tbl.GetCollumn(0).ToString(1000))
 	}
@@ -224,7 +223,7 @@ func TestAppend(t *testing.T) {
 // the db will be stuck due to no more space. Need intruduce timeout mechanism later
 func TestConcurrency(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
@@ -232,7 +231,7 @@ func TestConcurrency(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan dbi.AppendCtx)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
@@ -413,7 +412,7 @@ func TestConcurrency(t *testing.T) {
 
 func TestMultiTables(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	prefix := "mtable"
 	tblCnt := 40
 	var names []string
@@ -427,7 +426,7 @@ func TestMultiTables(t *testing.T) {
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTableByName(names[0])
 	assert.Nil(t, err)
 	rows := uint64(tblMeta.Conf.BlockMaxRows / 2)
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	p1, _ := ants.NewPool(10)
 	p2, _ := ants.NewPool(10)
 	attrs := []string{}
@@ -560,7 +559,7 @@ func TestMultiTables(t *testing.T) {
 
 func TestDropTable2(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
@@ -568,7 +567,7 @@ func TestDropTable2(t *testing.T) {
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
 	insertCnt := uint64(1)
 
@@ -593,7 +592,9 @@ func TestDropTable2(t *testing.T) {
 
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
-	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	if inst.Opts.FactoryType == storage.NORMAL_FT {
+		assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	}
 	cols := make([]int, 0)
 	for i := 0; i < len(tblMeta.Schema.ColDefs); i++ {
 		cols = append(cols, i)
@@ -613,7 +614,9 @@ func TestDropTable2(t *testing.T) {
 	}
 	inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name, OnFinishCB: dropCB})
 	time.Sleep(time.Duration(100) * time.Millisecond)
-	assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	if inst.Opts.FactoryType == storage.NORMAL_FT {
+		assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
+	}
 	ss.Close()
 	time.Sleep(time.Duration(100) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
@@ -627,8 +630,14 @@ func TestDropTable2(t *testing.T) {
 }
 
 func TestE2E(t *testing.T) {
+	if !dataio.FlushIndex {
+		dataio.FlushIndex = true
+		defer func() {
+			dataio.FlushIndex = false
+		}()
+	}
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
@@ -636,7 +645,7 @@ func TestE2E(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
 	insertCnt := uint64(10)
 

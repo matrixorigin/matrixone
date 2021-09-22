@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 	"matrixone/pkg/vm/register"
 )
@@ -40,7 +39,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 				bat.Clean(proc)
 			}
 		}
-		mempool.Pool.Put(proc.Mp)
 		register.FreeRegisters(proc)
 		return true, nil
 	}
@@ -48,7 +46,6 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		reg.Wg.Add(1)
 		reg.Ch <- nil
 		reg.Wg.Wait()
-		mempool.Pool.Put(proc.Mp)
 		register.FreeRegisters(proc)
 		return true, nil
 	}

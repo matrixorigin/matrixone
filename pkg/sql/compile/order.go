@@ -19,6 +19,7 @@ import (
 	vorder "matrixone/pkg/sql/colexec/order"
 	"matrixone/pkg/sql/colexec/transfer"
 	"matrixone/pkg/sql/op/order"
+	"matrixone/pkg/sql/op/projection"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/process"
@@ -29,10 +30,9 @@ func (c *compile) compileOrderOutput(o *order.Order, mp map[string]uint64) ([]*S
 	{
 		for _, g := range o.Attributes {
 			mp[g.Name]++
-			mp[g.Name]++
 		}
 	}
-	ss, err := c.compile(o.Prev, mp)
+	ss, err := c.compileOutput(o.Prev.(*projection.Projection), mp)
 	if err != nil {
 		return nil, err
 	}

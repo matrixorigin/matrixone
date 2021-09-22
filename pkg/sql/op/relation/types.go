@@ -40,6 +40,7 @@ type Relation struct {
 	DB    string
 	Rid   string // renamed id
 	Us    []*Unit
+	Rs    []string // result columns
 	Cols  []string
 	R     engine.Relation
 	Attrs map[string]types.Type

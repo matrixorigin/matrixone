@@ -23,16 +23,29 @@ import (
 )
 
 var (
-	ErrParseBlockFileName = errors.New("aoe: parse block file name")
+	ErrParseBlockFileName  = errors.New("aoe: parse block file name")
+	ErrParseTBlockFileName = errors.New("aoe: parse tblock file name")
 )
 
+// ID is the general identifier type shared by different types like
+// table, segment, block, etc.
+//
+// We could wrap info from upper level via ID, for instance, get the table id,
+// segment id, and the block id for one block by ID.AsBlockID, which made
+// the resource management easier.
 type ID struct {
-	TableID   uint64
-	Idx       uint16
+	// Internal table id
+	TableID uint64
+	// Internal segment id
 	SegmentID uint64
-	BlockID   uint64
-	PartID    uint32
-	Iter      uint8
+	// Internal block id
+	BlockID uint64
+	// Internal column part id
+	PartID uint32
+	// Column index for the column part above
+	Idx uint16
+	// Iter is used for MVCC
+	Iter uint8
 }
 
 const (
@@ -85,16 +98,16 @@ func (id *ID) IsSameBlock(o ID) bool {
 }
 
 func (id *ID) Next() *ID {
-	new_id := atomic.AddUint64(&id.TableID, uint64(1))
+	newId := atomic.AddUint64(&id.TableID, uint64(1))
 	return &ID{
-		TableID: new_id - 1,
+		TableID: newId - 1,
 	}
 }
 
 func (id *ID) NextPart() ID {
-	new_id := atomic.AddUint32(&id.PartID, uint32(1))
+	newId := atomic.AddUint32(&id.PartID, uint32(1))
 	bid := *id
-	bid.PartID = new_id - 1
+	bid.PartID = newId - 1
 	return bid
 }
 
@@ -110,16 +123,16 @@ func (id *ID) NextIter() ID {
 }
 
 func (id *ID) NextBlock() ID {
-	new_id := atomic.AddUint64(&id.BlockID, uint64(1))
+	newId := atomic.AddUint64(&id.BlockID, uint64(1))
 	bid := *id
-	bid.BlockID = new_id - 1
+	bid.BlockID = newId - 1
 	return bid
 }
 
 func (id *ID) NextSegment() ID {
-	new_id := atomic.AddUint64(&id.SegmentID, uint64(1))
+	newId := atomic.AddUint64(&id.SegmentID, uint64(1))
 	bid := *id
-	bid.SegmentID = new_id - 1
+	bid.SegmentID = newId - 1
 	return bid
 }
 
@@ -142,6 +155,10 @@ func (id *ID) ToBlockFileName() string {
 	return fmt.Sprintf("%d_%d_%d", id.TableID, id.SegmentID, id.BlockID)
 }
 
+func (id *ID) ToTBlockFileName(version uint32) string {
+	return fmt.Sprintf("%d_%d_%d_%d", id.TableID, id.SegmentID, id.BlockID, version)
+}
+
 func (id *ID) ToBlockFilePath() string {
 	return fmt.Sprintf("%d/%d/%d/", id.TableID, id.SegmentID, id.BlockID)
 }
@@ -154,7 +171,39 @@ func (id *ID) ToSegmentFilePath() string {
 	return fmt.Sprintf("%d/%d/", id.TableID, id.SegmentID)
 }
 
-func ParseBlockFileName(name string) (ID, error) {
+func ParseTBlkNameToID(name string) (ID, error) {
+	var (
+		id  ID
+		err error
+	)
+	strs := strings.Split(name, "_")
+	if len(strs) != 4 {
+		return id, ErrParseTBlockFileName
+	}
+	if tid, err := strconv.ParseUint(strs[0], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.TableID = tid
+	}
+	if sid, err := strconv.ParseUint(strs[1], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.SegmentID = sid
+	}
+	if bid, err := strconv.ParseUint(strs[2], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.BlockID = bid
+	}
+	if vid, err := strconv.ParseUint(strs[3], 10, 64); err != nil {
+		return id, err
+	} else {
+		id.PartID = uint32(vid)
+	}
+	return id, err
+}
+
+func ParseBlkNameToID(name string) (ID, error) {
 	var (
 		id  ID
 		err error

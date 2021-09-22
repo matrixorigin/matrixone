@@ -17,9 +17,8 @@ package dio
 import (
 	"context"
 	"fmt"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	base "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
-	// log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -29,12 +28,12 @@ var (
 )
 
 type ReaderFactory struct {
-	Opts     *e.Options
+	Opts     *storage.Options
 	Dirname  string
 	Builders map[string]base.ReaderBuilder
 }
 
-func (wf *ReaderFactory) GetOpts() *e.Options {
+func (wf *ReaderFactory) GetOpts() *storage.Options {
 	return wf.Opts
 }
 
@@ -42,7 +41,7 @@ func (wf *ReaderFactory) GetDir() string {
 	return wf.Dirname
 }
 
-func (wf *ReaderFactory) Init(opts *e.Options, dirname string) {
+func (wf *ReaderFactory) Init(opts *storage.Options, dirname string) {
 	wf.Opts = opts
 	wf.Dirname = dirname
 }

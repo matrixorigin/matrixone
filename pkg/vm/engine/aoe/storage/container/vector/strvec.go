@@ -31,14 +31,13 @@ import (
 	"reflect"
 	"sync/atomic"
 	"unsafe"
-	// log "github.com/sirupsen/logrus"
 )
 
 func StrVectorConstructor(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return NewStrVectorNode(vf, useCompress, freeFunc)
 }
 
-func NewStrVector(t types.Type, capacity uint64) IVector {
+func NewStrVector(t types.Type, capacity uint64) *StrVector {
 	return &StrVector{
 		BaseVector: BaseVector{
 			Type:  t,
@@ -69,7 +68,7 @@ func NewStrVectorNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFre
 	return n
 }
 
-func NewEmptyStrVector() IVector {
+func NewEmptyStrVector() *StrVector {
 	return &StrVector{
 		BaseVector: BaseVector{
 			VMask: &nulls.Nulls{},
@@ -374,7 +373,7 @@ func (v *StrVector) CopyToVector() *ro.Vector {
 }
 
 func (vec *StrVector) WriteTo(w io.Writer) (n int64, err error) {
-	buf, err := vec.Marshall()
+	buf, err := vec.Marshal()
 	if err != nil {
 		return n, err
 	}
@@ -401,11 +400,11 @@ func (vec *StrVector) ReadFrom(r io.Reader) (n int64, err error) {
 		return n, err
 	}
 	copy(buf[0:], capBuf)
-	err = vec.Unmarshall(buf)
+	err = vec.Unmarshal(buf)
 	return int64(realSize), err
 }
 
-func (vec *StrVector) Unmarshall(data []byte) error {
+func (vec *StrVector) Unmarshal(data []byte) error {
 	buf := data
 	vec.NodeCapacity = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
@@ -431,8 +430,23 @@ func (vec *StrVector) Unmarshall(data []byte) error {
 	if cnt == 0 {
 		return nil
 	}
-	vec.Data.Offsets = make([]uint32, cnt)
-	vec.Data.Lengths = encoding.DecodeUint32Slice(buf[:4*cnt])
+	lengths := encoding.DecodeUint32Slice(buf[:4*cnt])
+	if len(lengths) > cap(vec.Data.Lengths) {
+		vec.Data.Offsets = make([]uint32, cnt)
+		vec.Data.Lengths = lengths
+	} else {
+		{
+			hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data.Lengths))
+			hp.Len = len(lengths)
+			vec.Data.Lengths = *(*[]uint32)(unsafe.Pointer(&hp))
+		}
+		{
+			hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data.Offsets))
+			hp.Len = len(lengths)
+			vec.Data.Offsets = *(*[]uint32)(unsafe.Pointer(&hp))
+		}
+		copy(vec.Data.Lengths, lengths[0:])
+	}
 	vec.Data.Data = buf[4*cnt:]
 	offset := uint32(0)
 	for i, n := range vec.Data.Lengths {
@@ -443,7 +457,7 @@ func (vec *StrVector) Unmarshall(data []byte) error {
 	return nil
 }
 
-func (vec *StrVector) Marshall() ([]byte, error) {
+func (vec *StrVector) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeUint64(uint64(0)))
 	buf.Write(encoding.EncodeUint64(vec.StatMask))

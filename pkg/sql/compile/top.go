@@ -18,6 +18,7 @@ import (
 	"matrixone/pkg/sql/colexec/mergetop"
 	vtop "matrixone/pkg/sql/colexec/top"
 	"matrixone/pkg/sql/colexec/transfer"
+	"matrixone/pkg/sql/op/projection"
 	"matrixone/pkg/sql/op/top"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/mmu/guest"
@@ -29,10 +30,9 @@ func (c *compile) compileTopOutput(o *top.Top, mp map[string]uint64) ([]*Scope, 
 	{
 		for _, g := range o.Gs {
 			mp[g.Name]++
-			mp[g.Name]++
 		}
 	}
-	ss, err := c.compile(o.Prev, mp)
+	ss, err := c.compile(o.Prev.(*projection.Projection), mp)
 	if err != nil {
 		return nil, err
 	}

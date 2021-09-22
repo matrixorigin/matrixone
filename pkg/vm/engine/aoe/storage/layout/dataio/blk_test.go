@@ -17,14 +17,19 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
-	"matrixone/pkg/container/batch"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/compress"
+	gbatch "matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
+	gvector "matrixone/pkg/container/vector"
+	"matrixone/pkg/logutil"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"path/filepath"
 	"sync"
@@ -42,7 +47,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 	var dir string
 	for i := 0; i < blkCnt; i++ {
 		id.BlockID = uint64(i)
-		name := e.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID, false)
+		name := common.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID, false)
 		dir = filepath.Dir(name)
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			err = os.MkdirAll(dir, 0755)
@@ -78,7 +83,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 			Count:    uint64(0),
 			Capacity: uint64(0),
 		}
-		buf, err := prevIdx.Marshall()
+		buf, err := prevIdx.Marshal()
 		assert.Nil(t, err)
 		var sz int32
 		sz = int32(len(buf))
@@ -92,7 +97,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 			Count:    uint64(0),
 			Capacity: uint64(0),
 		}
-		buf, err = idx.Marshall()
+		buf, err = idx.Marshal()
 		assert.Nil(t, err)
 		var sz_ int32
 		sz_ = int32(len(buf))
@@ -163,6 +168,18 @@ func TestAll(t *testing.T) {
 	t.Log(droppedBlocks)
 	assert.Equal(t, 1, len(droppedBlocks))
 	assert.Equal(t, droppedBlocks[0], dropblkid)
+
+	fsMgr := NewManager(workDir, false)
+	segFile = fsMgr.GetUnsortedFile(id)
+	assert.Nil(t, segFile)
+	segFile, err := fsMgr.RegisterUnsortedFiles(id)
+	assert.Nil(t, err)
+	segFile = fsMgr.GetUnsortedFile(id)
+	assert.NotNil(t, segFile)
+	fsMgr.UnregisterUnsortedFile(id)
+	err = fsMgr.Close()
+	assert.Nil(t, err)
+	logutil.Infof(fsMgr.String())
 }
 
 func TestSegmentWriter(t *testing.T) {
@@ -176,14 +193,14 @@ func TestSegmentWriter(t *testing.T) {
 	assert.Nil(t, err)
 	err = table.RegisterSegment(segment)
 	assert.Nil(t, err)
-	batches := make([]*batch.Batch, 0)
+	batches := make([]*gbatch.Batch, 0)
 	for i := 0; i < int(blkCount); i++ {
 		block, err := segment.CreateBlock()
 		assert.Nil(t, err)
 		block.SetCount(rowCount)
 		err = segment.RegisterBlock(block)
 		assert.Nil(t, err)
-		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+		batches = append(batches, mock.MockBatch(schema.Types(), rowCount))
 	}
 	path := "/tmp/testwriter"
 	writer := NewSegmentWriter(batches, segment, path)
@@ -192,6 +209,9 @@ func TestSegmentWriter(t *testing.T) {
 	// name := writer.GetFileName()
 	segFile := NewSortedSegmentFile(path, *segment.AsCommonID())
 	assert.NotNil(t, segFile)
+	assert.NotNil(t, segFile.Stat().Name())
+	assert.NotNil(t, segFile.Stat().OriginSize())
+	assert.NotNil(t, segFile.Stat().CompressAlgo())
 	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(1000), table.ID)
 	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
 	segHolder.Unref()
@@ -218,4 +238,143 @@ func TestSegmentWriter(t *testing.T) {
 	stat1 := col1Vf.Stat()
 	t.Log(stat0.Name())
 	t.Log(stat1.Name())
+	buf := make([]byte, col1Vf.Stat().Size())
+	len, err := col1Vf.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(len), col1Vf.Stat().Size())
+	buf = make([]byte, col0Vf.Stat().Size())
+	len, err = col0Vf.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(len), col0Vf.Stat().Size())
+
+	fsMgr := NewManager(path, false)
+	segFile, err = fsMgr.RegisterUnsortedFiles(*segment.AsCommonID())
+	assert.Nil(t, err)
+	segFile = fsMgr.UpgradeFile(*segment.AsCommonID())
+	assert.NotNil(t, segFile)
+	segFile = fsMgr.GetUnsortedFile(*segment.AsCommonID())
+	assert.Nil(t, segFile)
+	fsMgr.UnregisterSortedFile(*segment.AsCommonID())
+	segFile, err = fsMgr.RegisterSortedFiles(*segment.AsCommonID())
+	assert.Nil(t, err)
+	segFile = fsMgr.GetSortedFile(*segment.AsCommonID())
+	fsMgr.UnregisterSortedFile(*segment.AsCommonID())
+	assert.NotNil(t, segFile)
+	err = fsMgr.Close()
+	assert.Nil(t, err)
+	logutil.Infof(fsMgr.String())
+	col0Vf.Unref()
+	col1Vf.Unref()
+}
+
+func TestIVectorNodeWriter(t *testing.T) {
+	dir := "/tmp/blktest"
+	os.RemoveAll(dir)
+	vecType := types.Type{types.T_int32, 4, 4, 0}
+	capacity := uint64(40)
+	vec0 := vector.NewStdVector(vecType, 4)
+	defer vec0.Close()
+	vec1 := vector.NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, 4)
+	defer vec1.Close()
+	err := vec0.Append(4, []int32{int32(0), int32(1), int32(2), int32(3)})
+	assert.Nil(t, err)
+	str0 := "str0"
+	str1 := "str1"
+	str2 := "str2"
+	str3 := "str3"
+	strs := [][]byte{[]byte(str0), []byte(str1), []byte(str2), []byte(str3)}
+	err = vec1.Append(len(strs), strs)
+
+	info := md.MockInfo(&sync.RWMutex{}, capacity, uint64(10))
+	schema := md.MockSchema(2)
+	tblMeta := md.MockTable(info, schema, 1)
+	meta, err := tblMeta.ReferenceBlock(uint64(1), uint64(1))
+	assert.Nil(t, err)
+	assert.NotNil(t, meta)
+	bat := batch.NewBatch([]int{0, 1}, []vector.IVector{vec0, vec1})
+	w := NewIBatchWriter(bat, meta, dir)
+	err = w.Execute()
+	assert.Nil(t, err)
+
+	id := *meta.AsCommonID()
+	segFile := NewUnsortedSegmentFile(dir, *meta.Segment.AsCommonID())
+	f := NewBlockFile(segFile, id, nil)
+	bufs := make([][]byte, 2)
+	for i, _ := range bufs {
+		sz := f.PartSize(uint64(i), id, false)
+		osz := f.PartSize(uint64(i), id, true)
+		node := common.GPool.Alloc(uint64(sz))
+		defer common.GPool.Free(node)
+		buf := node.Buf[:sz]
+		f.ReadPart(uint64(i), id, buf)
+		obuf := make([]byte, osz)
+		_, err = compress.Decompress(buf, obuf, compress.Lz4)
+		assert.Nil(t, err)
+		if i == 0 {
+			vec := vector.NewEmptyStdVector()
+			err = vec.Unmarshal(obuf)
+			assert.Nil(t, err)
+			t.Log(vec.GetLatestView().CopyToVector().String())
+			assert.Equal(t, 4, vec.Length())
+		} else {
+			vec := vector.NewEmptyStrVector()
+			err = vec.Unmarshal(obuf)
+			assert.Nil(t, err)
+			t.Log(vec.GetLatestView().CopyToVector().String())
+			assert.Equal(t, 4, vec.Length())
+		}
+	}
+
+	var vecs []*gvector.Vector
+	vecs = append(vecs, vec0.CopyToVector())
+	vecs = append(vecs, vec1.CopyToVector())
+	bw := NewBlockWriter(vecs, meta, dir)
+	err = bw.Execute()
+	assert.Nil(t, err)
+	logutil.Infof(" %s | Memtable | Flushing", bw.GetFileName())
+
+	col0Vf := segFile.MakeVirtualPartFile(&id)
+	assert.NotNil(t, col0Vf)
+	stat0 := col0Vf.Stat()
+	t.Log(stat0.Name())
+	buf := make([]byte, col0Vf.Stat().Size())
+	len, err := col0Vf.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(len), col0Vf.Stat().Size())
+	col0Vf.Unref()
+}
+
+func TestTransientBlock(t *testing.T) {
+	mu := &sync.RWMutex{}
+	rowCount, blkCount := uint64(10), uint64(4)
+	info := md.MockInfo(mu, rowCount, blkCount)
+	info.Conf.Dir = "/tmp/tblktest"
+	os.RemoveAll(info.Conf.Dir)
+	schema := md.MockSchema(2)
+	tbl := md.MockTable(info, schema, 1)
+
+	blkMeta, err := tbl.ReferenceBlock(uint64(1), uint64(1))
+	assert.Nil(t, err)
+
+	segFile := NewUnsortedSegmentFile(info.Conf.Dir, *blkMeta.Segment.AsCommonID())
+
+	tblk := NewTBlockFile(segFile, *blkMeta.AsCommonID())
+	// defer tblk.Destory()
+	defer tblk.Unref()
+	t.Log(tblk.nextVersion())
+
+	// rows := uint64(2)
+	// bat1 := mock.MockBatch(schema.Types(), rows)
+	// bat2 := mock.MockBatch(schema.Types(), rowCount)
+
+	// ok := tblk.PreSync(uint32(bat1.Vecs[0].Length()))
+	// assert.True(t, ok)
+	// err = tblk.Sync(bat1.Vecs, blkMeta, blkMeta.Segment.Table.Conf.Dir)
+	// assert.Nil(t, err)
+	// ok = tblk.PreSync(uint32(bat2.Vecs[0].Length()))
+	// assert.True(t, ok)
+	// err = tblk.Sync(bat2.Vecs, blkMeta, blkMeta.Segment.Table.Conf.Dir)
+	// assert.Nil(t, err)
+	// ok = tblk.PreSync(uint32(bat2.Vecs[0].Length()))
+	// assert.False(t, ok)
 }

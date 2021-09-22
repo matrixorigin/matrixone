@@ -43,6 +43,10 @@ func (n *Limit) ResultColumns() []string {
 	return n.Prev.ResultColumns()
 }
 
+func (n *Limit) SetColumns(cs []string) {
+	n.Prev.SetColumns(cs)
+}
+
 func (n *Limit) Attribute() map[string]types.Type {
 	return n.Prev.Attribute()
 }

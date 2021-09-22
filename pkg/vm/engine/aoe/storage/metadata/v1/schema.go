@@ -49,6 +49,8 @@ func (s *Schema) Types() (ts []types.Type) {
 	return ts
 }
 
+// GetColIdx returns column index for the given column name
+// if found, otherwise returns -1.
 func (s *Schema) GetColIdx(attr string) int {
 	idx, ok := s.NameIdMap[attr]
 	if !ok {
@@ -194,7 +196,7 @@ func MockSchema(colCnt int) *Schema {
 		colDef := &ColDef{
 			Idx:  i,
 			Name: name,
-			Type: types.Type{Oid: types.T_int32, Size: 4, Width: 4},
+			Type: types.Type{Oid: types.T_int32, Size: 4, Width: 32},
 		}
 		schema.ColDefs[i] = colDef
 		schema.NameIdMap[colDef.Name] = i
@@ -239,7 +241,7 @@ func MockDateSchema(colCnt int) *Schema {
 				Type: types.Type{
 					Oid:       types.T_date,
 					Size:      4,
-					Width:     4,
+					Width:     32,
 					Precision: 0,
 				},
 			}
@@ -250,7 +252,7 @@ func MockDateSchema(colCnt int) *Schema {
 				Type: types.Type{
 					Oid:       types.T_datetime,
 					Size:      8,
-					Width:     8,
+					Width:     64,
 					Precision: 0,
 				},
 			}

@@ -71,6 +71,9 @@ func (n *Product) ResultColumns() []string {
 	return nil
 }
 
+func (n *Product) SetColumns(_ []string) {
+}
+
 func (n *Product) Attribute() map[string]types.Type {
 	return n.Attrs
 }

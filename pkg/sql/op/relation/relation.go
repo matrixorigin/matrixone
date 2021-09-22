@@ -65,6 +65,7 @@ func New(s bool, name, schema string, r engine.Relation) *Relation {
 		S:     s,
 		R:     r,
 		Us:    us,
+		Rs:    cols,
 		Cols:  cols,
 		Rid:   name,
 		ID:    name,
@@ -89,7 +90,11 @@ func (n *Relation) String() string {
 }
 
 func (n *Relation) ResultColumns() []string {
-	return n.Cols
+	return n.Rs
+}
+
+func (n *Relation) SetColumns(cs []string) {
+	n.Rs = cs
 }
 
 func (n *Relation) Attribute() map[string]types.Type {

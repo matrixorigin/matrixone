@@ -16,10 +16,9 @@ package common
 
 import (
 	"fmt"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
-	// "runtime"
 )
 
 const (
@@ -33,9 +32,13 @@ const (
 )
 
 var (
+	// GPool is the global mem pool used by AOE storage.
+	// It's initialized automatically during init phase.
 	GPool *Mempool
 )
 
+// Here we defined different page sizes, and each size has a certain
+// pool managing all pages in that size.
 var (
 	PageSizes = []uint64{
 		64,
@@ -111,6 +114,8 @@ func findPageIdx(size uint64) (idx int, ok bool) {
 	return l, true
 }
 
+// poolWrapper wrapped a single pool for one certain page size.
+// It collects the current page count and idx in Mempool.
 type poolWrapper struct {
 	sync.Pool
 	count uint64
@@ -131,6 +136,10 @@ func (p *poolWrapper) Count() int {
 	return int(atomic.LoadUint64(&p.count))
 }
 
+// Mempool wraps an easy-to-use memory pool for the
+// AOE storage.
+//
+// It manages memory through different granularity.
 type Mempool struct {
 	pools      []poolWrapper
 	capacity   uint64
@@ -181,7 +190,6 @@ func (mp *Mempool) Alloc(size uint64) *MemNode {
 	if ok {
 		size = PageSizes[pageIdx]
 	}
-	// log.Infof("Alloc %d", size)
 	preusage := atomic.LoadUint64(&mp.usage)
 	postsize := preusage + size
 	if postsize > mp.capacity {
@@ -249,11 +257,9 @@ func (mp *Mempool) Free(n *MemNode) {
 			n = nil
 		}
 	}
-	// log.Infof("Free size %d", size)
 	usage := atomic.AddUint64(&mp.usage, ^uint64(uint64(size)-1))
 	if usage > mp.capacity {
-		logutil2.Error("logic error")
-		panic("")
+		logutil.Panicf("logic error")
 	}
 }
 

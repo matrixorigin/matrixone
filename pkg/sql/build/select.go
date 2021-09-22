@@ -78,6 +78,7 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 	default:
 		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
+	cs := o.Columns()
 	if len(orderBy) > 0 {
 		if fetch != nil && fetch.Offset == nil && fetch.Count != nil {
 			e, err := b.buildExtend(o, fetch.Count)
@@ -135,8 +136,11 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 		}
 	}
 	if len(es) > 0 {
-		return projection.New(o, es)
+		if o, err = projection.New(o, es); err != nil {
+			return nil, err
+		}
 	}
+	o.SetColumns(cs)
 	return o, nil
 }
 
@@ -170,6 +174,27 @@ func (b *build) buildSelectClauseWithSummarize(stmt *tree.SelectClause) (op.OP, 
 		if o, err = b.buildSummarize(o, stmt.Exprs, stmt.Where); err != nil {
 			return nil, nil, err
 		}
+	}
+	if stmt.Distinct {
+		if o, err = b.buildDedup(o); err != nil {
+			return nil, nil, err
+		}
+		attrs := o.Columns()
+		mp := o.Attribute()
+		pes := make([]*projection.Extend, len(attrs))
+		for i, attr := range attrs {
+			pes[i] = &projection.Extend{
+				Alias: attr,
+				E: &extend.Attribute{
+					Name: attr,
+					Type: mp[attr].Oid,
+				},
+			}
+		}
+		if o, err = projection.New(o, pes); err != nil {
+			return nil, nil, err
+		}
+		return o, pes, nil
 	}
 	return o, nil, nil
 }

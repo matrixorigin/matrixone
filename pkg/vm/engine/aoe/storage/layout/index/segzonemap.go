@@ -42,10 +42,10 @@ type SegmentZoneMapIndex struct {
 
 func NewSegmentZoneMap(t types.Type, minv, maxv interface{}, colIdx int16, blkMin []interface{}, blkMax []interface{}) Index {
 	return &SegmentZoneMapIndex{
-		T:    t,
-		MinV: minv,
-		MaxV: maxv,
-		Col:  colIdx,
+		T:      t,
+		MinV:   minv,
+		MaxV:   maxv,
+		Col:    colIdx,
 		BlkMax: blkMax,
 		BlkMin: blkMin,
 	}
@@ -116,12 +116,12 @@ func (i *SegmentZoneMapIndex) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return int64(nr), err
 	}
-	err = i.Unmarshall(buf)
+	err = i.Unmarshal(buf)
 	return int64(nr), err
 }
 
 func (i *SegmentZoneMapIndex) WriteTo(w io.Writer) (n int64, err error) {
-	buf, err := i.Marshall()
+	buf, err := i.Marshal()
 	if err != nil {
 		return n, err
 	}
@@ -129,7 +129,7 @@ func (i *SegmentZoneMapIndex) WriteTo(w io.Writer) (n int64, err error) {
 	return int64(nw), err
 }
 
-func (i *SegmentZoneMapIndex) Unmarshall(data []byte) error {
+func (i *SegmentZoneMapIndex) Unmarshal(data []byte) error {
 	buf := data
 	i.Col = encoding.DecodeInt16(buf[:2])
 	buf = buf[2:]
@@ -366,7 +366,7 @@ func (i *SegmentZoneMapIndex) Unmarshall(data []byte) error {
 	panic("unsupported")
 }
 
-func (i *SegmentZoneMapIndex) Marshall() ([]byte, error) {
+func (i *SegmentZoneMapIndex) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeInt16(i.Col))
 	switch i.T.Oid {
@@ -717,4 +717,3 @@ func (i *SegmentZoneMapIndex) Ge(v interface{}) bool {
 func (i *SegmentZoneMapIndex) Btw(v interface{}) bool {
 	panic("TODO")
 }
-

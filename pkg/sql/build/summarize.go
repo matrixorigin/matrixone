@@ -55,6 +55,7 @@ func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs, where *tree.Where) 
 	var fs []*tree.FuncExpr
 	var es []aggregation.Extend
 
+	prev := o
 	{
 		for _, n := range ns {
 			if !b.hasAggregate(n.Expr) {
@@ -106,7 +107,7 @@ func (b *build) buildSummarize(o op.OP, ns tree.SelectExprs, where *tree.Where) 
 			es = append(es, aggregation.Extend{
 				Agg:   agg,
 				Alias: alias,
-				Name:  o.ResultColumns()[0],
+				Name:  prev.ResultColumns()[0],
 				Op:    aggregation.StarCount,
 			})
 		case *tree.UnresolvedName:

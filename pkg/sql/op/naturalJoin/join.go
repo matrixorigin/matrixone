@@ -63,6 +63,9 @@ func (n *Join) ResultColumns() []string {
 	return nil
 }
 
+func (n *Join) SetColumns(_ []string) {
+}
+
 func (n *Join) Attribute() map[string]types.Type {
 	return n.Attrs
 }

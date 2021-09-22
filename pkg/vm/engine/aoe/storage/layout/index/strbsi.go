@@ -102,12 +102,12 @@ func (i *StringBsiIndex) ReadFrom(r io.Reader) (n int64, err error) {
 	buf := data[2 : 2+encoding.TypeSize]
 	i.T = encoding.DecodeType(buf)
 	i.StringBSI = *initStringBsi(i.T)
-	err = i.Unmarshall(data)
+	err = i.Unmarshal(data)
 	return int64(nr), err
 }
 
 func (i *StringBsiIndex) WriteTo(w io.Writer) (n int64, err error) {
-	buf, err := i.Marshall()
+	buf, err := i.Marshal()
 	if err != nil {
 		return n, err
 	}
@@ -116,20 +116,20 @@ func (i *StringBsiIndex) WriteTo(w io.Writer) (n int64, err error) {
 	return int64(nw), err
 }
 
-func (i *StringBsiIndex) Unmarshall(data []byte) error {
+func (i *StringBsiIndex) Unmarshal(data []byte) error {
 	buf := data
 	i.Col = encoding.DecodeInt16(buf[:2])
 	buf = buf[2:]
 	i.T = encoding.DecodeType(buf[:encoding.TypeSize])
 	buf = buf[encoding.TypeSize:]
-	return i.StringBSI.Unmarshall(buf)
+	return i.StringBSI.Unmarshal(buf)
 }
 
-func (i *StringBsiIndex) Marshall() ([]byte, error) {
+func (i *StringBsiIndex) Marshal() ([]byte, error) {
 	var bw bytes.Buffer
 	bw.Write(encoding.EncodeInt16(i.Col))
 	bw.Write(encoding.EncodeType(i.T))
-	indexBuf, err := i.StringBSI.Marshall()
+	indexBuf, err := i.StringBSI.Marshal()
 	if err != nil {
 		return nil, err
 	}

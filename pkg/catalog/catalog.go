@@ -32,7 +32,7 @@ import (
 const (
 	defaultCatalogId    = uint64(1)
 	cPrefix             = "meta"
-	cDBPrefix           = "DBName"
+	cDBPrefix           = "DBINFO"
 	cDBIDPrefix         = "DBID"
 	cTablePrefix        = "Table"
 	cTableIDPrefix      = "TID"
@@ -396,6 +396,10 @@ func (c *Catalog) RemoveDeletedTable(epoch uint64) (cnt int, err error) {
 	}
 	return cnt, nil
 }
+
+//checkDBExists checks whether db exists.
+//If the db exists and its state is not aoe.StateDeleteOnly, checkDBExists returns the db.
+//If else, checkDBExists returns ErrDBNotExists.
 func (c *Catalog) checkDBExists(id uint64) (*aoe.SchemaInfo, error) {
 	db := aoe.SchemaInfo{}
 	if v, err := c.Driver.Get(c.dbKey(id)); err != nil {
@@ -410,6 +414,9 @@ func (c *Catalog) checkDBExists(id uint64) (*aoe.SchemaInfo, error) {
 	}
 	return &db, nil
 }
+
+//dropTables drops all tables in the database whose id is dbId.
+//The state of droped tables is set as aoe.StateDeleteOnly
 func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
 	_, err = c.checkDBExists(dbId)
 	if err != nil {
@@ -438,6 +445,10 @@ func (c *Catalog) dropTables(epoch, dbId uint64) (err error) {
 	}
 	return err
 }
+
+//checkDBNotExists checks wherher the database exists by calling checkDBExists.
+//If the database exists, it returns the database and ErrDBCreateExists.
+//If not, it returns nil.
 func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 	if value, err := c.Driver.Get(c.dbIDKey(dbName)); err != nil || value == nil {
 		return nil, nil
@@ -450,6 +461,10 @@ func (c *Catalog) checkDBNotExists(dbName string) (*aoe.SchemaInfo, error) {
 		return db, ErrDBCreateExists
 	}
 }
+
+//checkTableExists checks whether the table exists in the database.
+//If the table exists and its state is not aoe.StateDeleteOnly, it returns the table.
+//If else, it returns ErrTableNotExists.
 func (c *Catalog) checkTableExists(dbId, id uint64) (*aoe.TableInfo, error) {
 	if v, err := c.Driver.Get(c.tableKey(dbId, id)); err != nil {
 		return nil, ErrTableNotExists
@@ -464,6 +479,10 @@ func (c *Catalog) checkTableExists(dbId, id uint64) (*aoe.TableInfo, error) {
 		}
 	}
 }
+
+//checkTableNotExists checks whether the table exists in the database by calling checkTableExists.
+//If the table exists, it returns the table and ErrTableCreateExists.
+//If not, it returns nil.
 func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.TableInfo, error) {
 	if value, err := c.Driver.Get(c.tableIDKey(dbId, tableName)); err != nil || value == nil {
 		return nil, nil
@@ -476,9 +495,13 @@ func (c *Catalog) checkTableNotExists(dbId uint64, tableName string) (*aoe.Table
 		return tb, ErrTableCreateExists
 	}
 }
+
+//encodeTabletName encodes the groupId(the id of the shard) and tableId together to one string by calling codec.Bytes2String.
 func (c *Catalog) encodeTabletName(groupId, tableId uint64) string {
 	return codec.Bytes2String(codec.EncodeKey(groupId, tableId))
 }
+
+//genGlobalUniqIDs generates a global unique id by calling c.Driver.AllocID.
 func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	id, err := c.Driver.AllocID(idKey, 1)
 	if err != nil {
@@ -572,7 +595,7 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 			for {
 				select {
 				case <-timeoutC:
-					logutil.Errorf("wait for available id timeout, current cache range is [%d, %d)", c.tidStart, c.tidEnd)
+					logutil.Errorf("wait for available tid timeout, current cache range is [%d, %d)", c.tidStart, c.tidEnd)
 					err = ErrTableCreateTimeout
 					return
 				default:
@@ -641,10 +664,14 @@ func (c *Catalog) refreshDBIDCache() {
 		logutil.Debugf("refresh db id cache finished, cost %d, new range is [%d, %d)", time.Since(t0).Milliseconds(), c.dbIdStart, c.dbIdEnd)
 	}()
 	if c.dbIdStart <= c.dbIdEnd {
-		logutil.Debugf("enter refreshDBIDCache, no need, return")
+		logutil.Debugf("enter refreshDBIDCache, no need, return, [%d, %d)", c.dbIdStart, c.dbIdEnd)
 		return
 	}
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
 	c.Driver.AsyncAllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
+		defer wg.Done()
 		if err != nil {
 			logutil.Errorf("refresh db id failed, checkpoint is %d, %d", c.dbIdStart, c.dbIdEnd)
 			return
@@ -654,7 +681,9 @@ func (c *Catalog) refreshDBIDCache() {
 			logutil.Errorf("get result of AllocId failed, %v\n", err)
 			return
 		}
+
 		atomic.SwapUint64(&c.dbIdEnd, id)
-		atomic.SwapUint64(&c.dbIdStart, id-idPoolSize)
+		atomic.SwapUint64(&c.dbIdStart, id-idPoolSize+1)
 	}, nil)
+	wg.Wait()
 }

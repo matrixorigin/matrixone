@@ -26,8 +26,6 @@ import (
 	"sync/atomic"
 
 	"github.com/google/btree"
-	// dump "github.com/vmihailenco/msgpack/v5"
-	// log "github.com/sirupsen/logrus"
 )
 
 func NewMetaInfo(mu *sync.RWMutex, conf *Configuration) *MetaInfo {
@@ -51,6 +49,7 @@ func MockInfo(mu *sync.RWMutex, blkRows, blks uint64) *MetaInfo {
 	return info
 }
 
+// SoftDeleteTable deletes the given table in meta space and marks it, but not deletes physically.
 func (info *MetaInfo) SoftDeleteTable(name string, logIndex uint64) (id uint64, err error) {
 	id, ok := info.NameMap[name]
 	if !ok {
@@ -63,8 +62,10 @@ func (info *MetaInfo) SoftDeleteTable(name string, logIndex uint64) (id uint64, 
 	info.Tombstone[id] = true
 	table := info.Tables[id]
 	info.NameTree.Delete(table)
-	table.Delete(ts)
-	table.LogHistry.DeletedIndex = logIndex
+	if err := table.Delete(ts); err != nil {
+		return 0, err
+	}
+	table.LogHistory.DeletedIndex = logIndex
 	atomic.AddUint64(&info.CheckPoint, uint64(1))
 	table.UpdateVersion()
 	return id, nil
@@ -80,25 +81,25 @@ func (info *MetaInfo) ReferenceTableByName(name string) (tbl *Table, err error) 
 	return info.Tables[id], nil
 }
 
-func (info *MetaInfo) ReferenceTable(table_id uint64) (tbl *Table, err error) {
+func (info *MetaInfo) ReferenceTable(tableId uint64) (tbl *Table, err error) {
 	info.RLock()
 	defer info.RUnlock()
-	tbl, ok := info.Tables[table_id]
+	tbl, ok := info.Tables[tableId]
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("specified table %d not found in info", table_id))
+		return nil, errors.New(fmt.Sprintf("specified table %d not found in info", tableId))
 	}
 	return tbl, nil
 }
 
-func (info *MetaInfo) ReferenceBlock(table_id, segment_id, block_id uint64) (blk *Block, err error) {
+func (info *MetaInfo) ReferenceBlock(tableId, segmentId, blockId uint64) (blk *Block, err error) {
 	info.RLock()
-	tbl, ok := info.Tables[table_id]
+	tbl, ok := info.Tables[tableId]
 	if !ok {
 		info.RUnlock()
-		return nil, errors.New(fmt.Sprintf("specified table %d not found in info", table_id))
+		return nil, errors.New(fmt.Sprintf("specified table %d not found in info", tableId))
 	}
 	info.RUnlock()
-	blk, err = tbl.ReferenceBlock(segment_id, block_id)
+	blk, err = tbl.ReferenceBlock(segmentId, blockId)
 
 	return blk, err
 }
@@ -223,6 +224,7 @@ func (info *MetaInfo) String() string {
 	return s
 }
 
+// RegisterTable add an existing table meta into meta info space.
 func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	info.Lock()
 	defer info.Unlock()
@@ -248,6 +250,7 @@ func (info *MetaInfo) RegisterTable(tbl *Table) error {
 	return nil
 }
 
+// CreateTableFromTableInfo creates a new table meta with the given table info.
 func (info *MetaInfo) CreateTableFromTableInfo(tinfo *aoe.TableInfo, ctx dbi.TableOpCtx) (*Table, error) {
 	schema := &Schema{
 		Name:      tinfo.Name,
@@ -321,9 +324,9 @@ func (info *MetaInfo) MarshalJSON() ([]byte, error) {
 	tables := make(map[uint64]GenericTableWrapper)
 	for _, tbl := range info.Tables {
 		tables[tbl.ID] = GenericTableWrapper{
-			ID:        tbl.ID,
-			TimeStamp: tbl.TimeStamp,
-			LogHistry: tbl.LogHistry,
+			ID:         tbl.ID,
+			TimeStamp:  tbl.TimeStamp,
+			LogHistory: tbl.LogHistory,
 		}
 	}
 	type Alias MetaInfo
@@ -350,9 +353,9 @@ func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 	if ctx.Ts == 0 {
 		ctx.Ts = NowMicro()
 	}
-	new_info := NewMetaInfo(info.RWMutex, info.Conf)
-	new_info.CheckPoint = info.CheckPoint
-	new_info.CkpTime = ctx.Ts
+	newInfo := NewMetaInfo(info.RWMutex, info.Conf)
+	newInfo.CheckPoint = info.CheckPoint
+	newInfo.CkpTime = ctx.Ts
 	for k, v := range info.Tables {
 		var tbl *Table
 		if !v.Select(ctx.Ts) {
@@ -361,10 +364,10 @@ func (info *MetaInfo) Copy(ctx CopyCtx) *MetaInfo {
 			tbl = v.Copy(ctx)
 		}
 
-		new_info.Tables[k] = tbl
+		newInfo.Tables[k] = tbl
 	}
 
-	return new_info
+	return newInfo
 }
 
 func (info *MetaInfo) Serialize(w io.Writer) error {

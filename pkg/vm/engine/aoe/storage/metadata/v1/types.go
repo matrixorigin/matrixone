@@ -28,6 +28,8 @@ const (
 	MAX_TABLEID   = common.MAX_UINT64
 )
 
+// Resource is an abstraction for two key types of resources
+// currently, MetaInfo and Table.
 type Resource interface {
 	GetResourceType() ResourceType
 	GetFileName() string
@@ -43,12 +45,17 @@ const (
 	ResTable
 )
 
+// IndexType tells the type of the index in schema.
 type IndexType uint16
 
 const (
 	ZoneMap IndexType = iota
+	NumBsi
+	FixStrBsi
 )
 
+// LogIndex records some block related info.
+// Used for replay.
 type LogIndex struct {
 	ID       uint64
 	Start    uint64
@@ -56,26 +63,29 @@ type LogIndex struct {
 	Capacity uint64
 }
 
-type LogHistry struct {
+type LogHistory struct {
 	CreatedIndex uint64
 	DeletedIndex uint64
 	AppliedIndex uint64
 }
 
+// TimeStamp contains the C/U/D time of a ts.
 type TimeStamp struct {
-	CreatedOn  int64
-	UpdatedOn  int64
-	DeltetedOn int64
+	CreatedOn int64
+	UpdatedOn int64
+	DeletedOn int64
 }
 
 type BoundSate uint8
 
 const (
-	STANDLONE BoundSate = iota
+	Standalone BoundSate = iota
 	Attached
-	Detatched
+	Detached
 )
 
+// DataState is the general representation for Block and Segment.
+// On its changing, some operations like flush would be triggered.
 type DataState = uint8
 
 const (
@@ -86,6 +96,7 @@ const (
 	SORTED            // Segment only. Merge sorted
 )
 
+// Block contains metadata for block.
 type Block struct {
 	sync.RWMutex
 	BoundSate
@@ -107,6 +118,7 @@ type Sequence struct {
 	NextIndexID     uint64
 }
 
+// Segment contains metadata for segment.
 type Segment struct {
 	BoundSate
 	sync.RWMutex
@@ -120,54 +132,68 @@ type Segment struct {
 	Table         *Table `json:"-"`
 }
 
+// ColDef defines a column in schema.
 type ColDef struct {
+	// Column name
 	Name string
+	// Column index in schema
 	Idx  int
+	// Column type
 	Type types.Type
 }
 
+// Schema is in representation of a table schema.
 type Schema struct {
+	// Table name
 	Name      string
+	// Indices' info
 	Indices   []*IndexInfo
+	// Column definitions
 	ColDefs   []*ColDef
+	// Column name -> column index mapping
 	NameIdMap map[string]int
 }
 
+// IndexInfo contains metadata for an index.
 type IndexInfo struct {
 	Type    IndexType
+	// Columns that the index works on
 	Columns []uint16
 	ID      uint64
 }
 
-type Statstics struct {
+type Statistics struct {
 	Rows uint64
 	Size uint64
 }
 
+// Table contains metadata for a table.
 type Table struct {
 	BoundSate
 	sync.RWMutex
 	TimeStamp
-	LogHistry
+	LogHistory
 	ID            uint64
 	Segments      []*Segment
 	SegmentCnt    uint64
 	ActiveSegment int            `json:"-"`
 	IdMap         map[uint64]int `json:"-"`
-	Info          *MetaInfo      `json:"-"`
-	Stat          *Statstics     `json:"-"`
-	ReplayIndex   *LogIndex      `json:"-"`
+	Info          *MetaInfo   `json:"-"`
+	Stat          *Statistics `json:"-"`
+	ReplayIndex   *LogIndex   `json:"-"`
 	Schema        *Schema
 	Conf          *Configuration
 	CheckPoint    uint64
 }
 
+// Configuration contains some basic configs for global DB.
 type Configuration struct {
 	Dir              string
 	BlockMaxRows     uint64	`toml:"block-max-rows"`
 	SegmentMaxBlocks uint64	`toml:"segment-max-blocks"`
 }
 
+// MetaInfo contains some basic metadata for global DB.
 type MetaInfo struct {
 	*sync.RWMutex
 	Sequence   Sequence       `json:"-"`

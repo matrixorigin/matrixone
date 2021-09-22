@@ -25,6 +25,7 @@ type Dedup struct {
 	IsPD  bool // can be push down?
 	ID    string
 	Cs    []string // columns
+	Rs    []string // result columns
 	Gs    []*extend.Attribute
 	Attrs map[string]types.Type
 }

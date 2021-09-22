@@ -53,6 +53,10 @@ func (n *Order) ResultColumns() []string {
 	return n.Prev.ResultColumns()
 }
 
+func (n *Order) SetColumns(cs []string) {
+	n.Prev.SetColumns(cs)
+}
+
 func (n *Order) Attribute() map[string]types.Type {
 	return n.Prev.Attribute()
 }

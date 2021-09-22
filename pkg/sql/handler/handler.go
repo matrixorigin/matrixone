@@ -56,10 +56,10 @@ func (hp *Handler) Process(_ uint64, val interface{}, conn goetty.IOSession) err
 func writeBack(u interface{}, bat *batch.Batch) error {
 	var buf bytes.Buffer
 
+	conn := u.(goetty.IOSession)
 	if bat == nil {
 		return nil
 	}
-	conn := u.(goetty.IOSession)
 	if err := protocol.EncodeBatch(bat, &buf); err != nil {
 		return err
 	}

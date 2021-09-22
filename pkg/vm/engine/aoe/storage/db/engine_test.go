@@ -17,11 +17,12 @@ package db
 import (
 	"context"
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -37,7 +38,7 @@ import (
 
 func TestEngine(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
 	assert.Nil(t, err)
@@ -45,7 +46,7 @@ func TestEngine(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := inst.Store.MetaInfo.Conf.SegmentMaxBlocks
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * blkCnt
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	insertCh := make(chan dbi.AppendCtx)
 	searchCh := make(chan *dbi.GetSnapshotCtx)
 
@@ -216,14 +217,14 @@ func TestEngine(t *testing.T) {
 
 func TestLogIndex(t *testing.T) {
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: md.NextGloablSeqnum()})
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: md.NextGlobalSeqNum()})
 	assert.Nil(t, err)
 	tblMeta, err := inst.Opts.Meta.Info.ReferenceTable(tid)
 	assert.Nil(t, err)
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * 2 / 5
-	baseCk := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
 	// p, _ := ants.NewPool(40)
 
@@ -231,7 +232,7 @@ func TestLogIndex(t *testing.T) {
 		rel, err := inst.Relation(tblMeta.Schema.Name)
 		assert.Nil(t, err)
 		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   md.NextGloablSeqnum(),
+			OpIndex:   md.NextGlobalSeqNum(),
 			Data:      baseCk,
 			TableName: tblMeta.Schema.Name,
 		})
@@ -253,11 +254,11 @@ func TestLogIndex(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, expectIdx, logIndex)
 
-	dropLogIndex := md.NextGloablSeqnum()
+	dropLogIndex := md.NextGlobalSeqNum()
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: dropLogIndex})
 	assert.Nil(t, err)
 	time.Sleep(time.Duration(50) * time.Millisecond)
-	// tbl, err = inst.Driver.DataTables.WeakRefTable(tid)
+	// tbl, err = inst.Store.DataTables.WeakRefTable(tid)
 	logIndex, ok = tbl.GetSegmentedIndex()
 	assert.True(t, ok)
 	assert.Equal(t, dropLogIndex, logIndex)

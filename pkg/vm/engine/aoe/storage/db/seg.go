@@ -16,22 +16,27 @@ package db
 
 import (
 	"matrixone/pkg/encoding"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/process"
 	"sync/atomic"
 )
 
+// Segment is a high-level wrapper of the segment type in memory. It
+// only provides some essential interfaces used by computation layer.
 type Segment struct {
 	Data iface.ISegment
 	Ids  *atomic.Value
 }
 
+// ID returns the string representation of this segment's id.
 func (seg *Segment) ID() string {
 	id := seg.Data.GetMeta().GetID()
 	return string(encoding.EncodeUint64(id))
 }
 
+// Blocks returns the list of block ids in string type.
 func (seg *Segment) Blocks() []string {
 	if ids := seg.Ids.Load(); ids != nil {
 		return ids.([]string)
@@ -45,10 +50,12 @@ func (seg *Segment) Blocks() []string {
 	return strs
 }
 
+// Block returns a block with the given block id.
 func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
 	iid := encoding.DecodeUint64(([]byte)(id))
 	data := seg.Data.WeakRefBlock(iid)
 	if data == nil {
+		logutil.Errorf("specified block %s not found", id)
 		return nil
 	}
 	blk := &Block{
@@ -59,22 +66,36 @@ func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
 	return blk
 }
 
+// NewFilter generates a Filter for segment.
 func (seg *Segment) NewFilter() engine.Filter {
+	if !seg.Data.GetIndexHolder().Inited {
+		seg.Data.GetIndexHolder().Init(seg.Data.GetSegmentFile())
+	}
 	return NewSegmentFilter(seg)
 }
 
+// NewSummarizer generates a Summarizer for segment.
 func (seg *Segment) NewSummarizer() engine.Summarizer {
+	if !seg.Data.GetIndexHolder().Inited {
+		seg.Data.GetIndexHolder().Init(seg.Data.GetSegmentFile())
+	}
 	return NewSegmentSummarizer(seg)
 }
 
+// NewSparseFilter generates a SparseFilter for segment.
 func (seg *Segment) NewSparseFilter() engine.SparseFilter {
+	if !seg.Data.GetIndexHolder().Inited {
+		seg.Data.GetIndexHolder().Init(seg.Data.GetSegmentFile())
+	}
 	return NewSegmentSparseFilter(seg)
 }
 
+// Rows returns how many rows this segment contains currently.
 func (seg *Segment) Rows() int64 {
 	return int64(seg.Data.GetRowCount())
 }
 
+// Size returns the memory usage of the certain column in a segment.
 func (seg *Segment) Size(attr string) int64 {
 	return int64(seg.Data.Size(attr))
 }

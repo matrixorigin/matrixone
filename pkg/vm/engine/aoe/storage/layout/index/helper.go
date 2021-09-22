@@ -51,7 +51,7 @@ func (h *RWHelper) WriteIndices(indices []Index) ([]byte, error) {
 		}
 	}
 	for _, i := range indices {
-		ibuf, _ := i.Marshall()
+		ibuf, _ := i.Marshal()
 		buf.Write(encoding.EncodeInt32(int32(len(ibuf))))
 		buf.Write(ibuf)
 	}
@@ -98,7 +98,7 @@ func (h *RWHelper) ReadIndices(f os.File) (indices []Index, err error) {
 		if err != nil {
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
-		indices[i].Unmarshall(buf)
+		indices[i].Unmarshal(buf)
 	}
 	return indices, err
 }

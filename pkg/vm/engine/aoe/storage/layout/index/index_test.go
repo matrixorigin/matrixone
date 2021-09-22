@@ -111,11 +111,11 @@ func TestStrBsi(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), res.GetCardinality())
 
-	buf, err := bsiIdx.Marshall()
+	buf, err := bsiIdx.Marshal()
 	assert.Nil(t, err)
 
 	bsiIdx2 := NewStringBsiIndex(tp, 0)
-	err = bsiIdx2.Unmarshall(buf)
+	err = bsiIdx2.Unmarshal(buf)
 	assert.Nil(t, err)
 	assert.Equal(t, col, bsiIdx2.Col)
 
@@ -186,11 +186,11 @@ func TestNumBsi(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), res.GetCardinality())
 
-	buf, err := bsiIdx.Marshall()
+	buf, err := bsiIdx.Marshal()
 	assert.Nil(t, err)
 
 	bsiIdx2 := NewNumericBsiIndex(tp, 0, 0)
-	err = bsiIdx2.Unmarshall(buf)
+	err = bsiIdx2.Unmarshal(buf)
 	assert.Nil(t, err)
 	assert.Equal(t, col, bsiIdx2.Col)
 

@@ -17,12 +17,12 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"matrixone/pkg/encoding"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/prefetch"
-	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
@@ -30,6 +30,28 @@ import (
 	"os"
 	"path/filepath"
 )
+
+// SortedSegmentFile file structure:
+// header | reserved | algo | datalen | colCntlen |
+// blkId 01 | blkCount 01| blkPreIdx 01| blkIdx 01| blkId 02 | blkCount 02...
+// col01 : blkdatalen 01 | blkdata originlen 01| blkdatalen 02 | blkdata originlen 02...
+// col02 : blkdatalen 01 | blkdata originlen 01| blkdatalen 02 | blkdata originlen 02...
+// ...
+// startPos | endPos | col01Pos | col02Pos ...
+// col01 : blkdata01 | blkdata02 | blkdata03 ...
+// col02 : blkdata01 | blkdata02 | blkdata03 ...
+// ...
+type SortedSegmentFile struct {
+	common.RefHelper
+	ID common.ID
+	os.File
+	Refs       int32
+	Parts      map[base.Key]*base.Pointer
+	Meta       *FileMeta
+	BlocksMeta map[common.ID]*FileMeta
+	Info       *fileStat
+	DataAlgo   int
+}
 
 func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	sf := &SortedSegmentFile{
@@ -42,7 +64,7 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 		},
 	}
 
-	name := e.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
+	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	// log.Infof("SegmentFile name %s", name)
 	if _, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
@@ -56,18 +78,6 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	sf.initPointers()
 	sf.OnZeroCB = sf.close
 	return sf
-}
-
-type SortedSegmentFile struct {
-	common.RefHelper
-	ID common.ID
-	os.File
-	Refs       int32
-	Parts      map[base.Key]*base.Pointer
-	Meta       *FileMeta
-	BlocksMeta map[common.ID]*FileMeta
-	Info       *fileStat
-	DataAlgo   int
 }
 
 func (sf *SortedSegmentFile) MakeVirtualIndexFile(meta *base.IndexMeta) common.IVFile {
@@ -284,7 +294,7 @@ func (sf *SortedSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta
 
 func (sf *SortedSegmentFile) Destory() {
 	name := sf.Name()
-	logutil2.Debugf(" %s | SegmentFile | Destorying", name)
+	logutil.Infof(" %s | SegmentFile | Destorying", name)
 	err := os.Remove(name)
 	if err != nil {
 		panic(err)
@@ -347,7 +357,7 @@ func (sf *SortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	}
 	pointer, ok := sf.Parts[key]
 	if !ok {
-		panic("logic error")
+		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found", id.BlockID, colIdx))
 	}
 	offset := pointer.Offset
 	sz := pointer.Len

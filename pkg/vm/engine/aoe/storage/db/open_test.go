@@ -17,11 +17,12 @@ package db
 import (
 	"fmt"
 	"io/ioutil"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"path"
 	"path/filepath"
@@ -47,7 +48,7 @@ func TestLoadMetaInfo(t *testing.T) {
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
-	handle := NewReplayHandle(cfg.Dir)
+	handle := NewReplayHandle(cfg.Dir, nil)
 	mu := &sync.RWMutex{}
 	info := handle.RebuildInfo(mu, cfg)
 	// info := loadMetaInfo(cfg)
@@ -58,14 +59,14 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	schema := md.MockSchema(2)
 	schema.Name = "mock1"
-	tbl, err := info.CreateTable(md.NextGloablSeqnum(), schema)
+	tbl, err := info.CreateTable(md.NextGlobalSeqNum(), schema)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(1), info.Sequence.NextTableID)
 
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
 
-	filename := e.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
+	filename := common.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
 	w, err := os.Create(filename)
 	assert.Nil(t, err)
 	defer w.Close()
@@ -74,7 +75,7 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	info.CheckPoint++
 
-	filename = e.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
+	filename = common.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 
 	w, err = os.Create(filename)
 	assert.Nil(t, err)
@@ -82,13 +83,13 @@ func TestLoadMetaInfo(t *testing.T) {
 	assert.Nil(t, err)
 	schema2 := md.MockSchema(2)
 	schema2.Name = "mock2"
-	tbl, err = info.CreateTable(md.NextGloablSeqnum(), schema2)
+	tbl, err = info.CreateTable(md.NextGlobalSeqNum(), schema2)
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), info.Sequence.NextTableID)
 	err = info.RegisterTable(tbl)
 	assert.Nil(t, err)
 
-	filename = e.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
+	filename = common.MakeTableCkpFileName(cfg.Dir, tbl.GetFileName(), tbl.GetID(), false)
 	w, err = os.Create(filename)
 	assert.Nil(t, err)
 	defer w.Close()
@@ -97,7 +98,7 @@ func TestLoadMetaInfo(t *testing.T) {
 
 	info.CheckPoint++
 
-	filename = e.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
+	filename = common.MakeInfoCkpFileName(cfg.Dir, info.GetFileName(), false)
 	w.Close()
 
 	w, err = os.Create(filename)
@@ -106,7 +107,7 @@ func TestLoadMetaInfo(t *testing.T) {
 	err = info.Serialize(w)
 	assert.Nil(t, err)
 
-	handle2 := NewReplayHandle(cfg.Dir)
+	handle2 := NewReplayHandle(cfg.Dir, nil)
 	mu2 := &sync.RWMutex{}
 	info2 := handle2.RebuildInfo(mu2, cfg)
 	assert.NotNil(t, info2)
@@ -131,7 +132,7 @@ func TestCleanStaleMeta(t *testing.T) {
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
-	dir := e.MakeMetaDir(cfg.Dir)
+	dir := common.MakeMetaDir(cfg.Dir)
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
 		assert.Nil(t, err)
@@ -139,14 +140,14 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	invalids := []string{"ds234", "234ds"}
 	for _, invalid := range invalids {
-		fname := e.MakeInfoCkpFileName(cfg.Dir, invalid, false)
+		fname := common.MakeInfoCkpFileName(cfg.Dir, invalid, false)
 
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
 		f.Close()
 
 		f1 := func() {
-			NewReplayHandle(cfg.Dir)
+			NewReplayHandle(cfg.Dir, nil)
 		}
 		assert.Panics(t, f1)
 		err = os.Remove(fname)
@@ -155,7 +156,7 @@ func TestCleanStaleMeta(t *testing.T) {
 
 	valids := []string{"1", "2", "3", "100"}
 	for _, valid := range valids {
-		fname := e.MakeInfoCkpFileName(cfg.Dir, valid, false)
+		fname := common.MakeInfoCkpFileName(cfg.Dir, valid, false)
 		f, err := os.Create(fname)
 		assert.Nil(t, err)
 		f.Close()
@@ -170,18 +171,18 @@ func TestCleanStaleMeta(t *testing.T) {
 	// assert.Nil(t, err)
 	// assert.Equal(t, 1, len(files))
 
-	fname := e.MakeInfoCkpFileName(cfg.Dir, "100", false)
+	fname := common.MakeInfoCkpFileName(cfg.Dir, "100", false)
 	_, err = os.Stat(fname)
 	assert.Nil(t, err)
 }
 
 func TestOpen(t *testing.T) {
 	initTest()
-	cfg := &e.MetaCfg{
+	cfg := &storage.MetaCfg{
 		SegmentMaxBlocks: 10,
 		BlockMaxRows:     10,
 	}
-	opts := &e.Options{}
+	opts := &storage.Options{}
 	opts.Meta.Conf = cfg
 	inst, err := Open(TEST_OPEN_DIR, opts)
 	assert.Nil(t, err)
@@ -196,7 +197,7 @@ func TestReplay(t *testing.T) {
 		waitTime = time.Duration(200) * time.Millisecond
 	}
 	initDBTest()
-	inst := initDB()
+	inst := initDB(storage.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl"})
 	assert.Nil(t, err)
@@ -204,7 +205,7 @@ func TestReplay(t *testing.T) {
 	assert.Nil(t, err)
 	blkCnt := 2
 	rows := inst.Store.MetaInfo.Conf.BlockMaxRows * uint64(blkCnt)
-	ck := chunk.MockBatch(tblMeta.Schema.Types(), rows)
+	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	assert.Equal(t, uint64(rows), uint64(ck.Vecs[0].Length()))
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
@@ -239,13 +240,13 @@ func TestReplay(t *testing.T) {
 
 	inst.Close()
 
-	dataDir := e.MakeDataDir(inst.Dir)
+	dataDir := common.MakeDataDir(inst.Dir)
 	invalidFileName := filepath.Join(dataDir, "invalid")
 	f, err := os.Create(invalidFileName)
 	assert.Nil(t, err)
 	f.Close()
 
-	inst = initDB()
+	inst = initDB(storage.NORMAL_FT)
 
 	os.Stat(invalidFileName)
 	_, err = os.Stat(invalidFileName)
@@ -315,7 +316,7 @@ func TestMultiInstance(t *testing.T) {
 	}
 	var insts []*DB
 	for _, d := range dirs {
-		opts := e.Options{}
+		opts := storage.Options{}
 		inst, _ := Open(d, &opts)
 		insts = append(insts, inst)
 	}
@@ -327,7 +328,7 @@ func TestMultiInstance(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	meta, _ := insts[0].Opts.Meta.Info.ReferenceTableByName(info.Name)
-	bat := chunk.MockBatch(meta.Schema.Types(), 100)
+	bat := mock.MockBatch(meta.Schema.Types(), 100)
 	for _, inst := range insts {
 		err := inst.Append(dbi.AppendCtx{TableName: info.Name, Data: bat})
 		assert.Nil(t, err)

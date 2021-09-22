@@ -16,8 +16,8 @@ package db
 
 import (
 	"io"
-	logutil2 "matrixone/pkg/logutil"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"syscall"
 )
@@ -26,6 +26,7 @@ const (
 	LockName string = "AOE"
 )
 
+// createDBLock creates a file lock on AOE's working directory.
 func createDBLock(dir string) (io.Closer, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		err = os.MkdirAll(dir, 0755)
@@ -33,7 +34,7 @@ func createDBLock(dir string) (io.Closer, error) {
 			return nil, err
 		}
 	}
-	fname := e.MakeLockFileName(dir, LockName)
+	fname := common.MakeLockFileName(dir, LockName)
 	f, err := os.Create(fname)
 	if err != nil {
 		return nil, err
@@ -46,7 +47,7 @@ func createDBLock(dir string) (io.Closer, error) {
 		Pid:    int32(os.Getpid()),
 	}
 	if err := syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &flockT); err != nil {
-		logutil2.Errorf("error locking file: %s", err)
+		logutil.Errorf("error locking file: %s", err)
 		f.Close()
 		return nil, err
 	}

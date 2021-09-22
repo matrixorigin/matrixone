@@ -124,12 +124,12 @@ func (i *ZoneMapIndex) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return int64(nr), err
 	}
-	err = i.Unmarshall(buf)
+	err = i.Unmarshal(buf)
 	return int64(nr), err
 }
 
 func (i *ZoneMapIndex) WriteTo(w io.Writer) (n int64, err error) {
-	buf, err := i.Marshall()
+	buf, err := i.Marshal()
 	if err != nil {
 		return n, err
 	}
@@ -137,7 +137,7 @@ func (i *ZoneMapIndex) WriteTo(w io.Writer) (n int64, err error) {
 	return int64(nw), err
 }
 
-func (i *ZoneMapIndex) Unmarshall(data []byte) error {
+func (i *ZoneMapIndex) Unmarshal(data []byte) error {
 	buf := data
 	i.Col = encoding.DecodeInt16(buf[:2])
 	buf = buf[2:]
@@ -212,7 +212,7 @@ func (i *ZoneMapIndex) Unmarshall(data []byte) error {
 	panic("unsupported")
 }
 
-func (i *ZoneMapIndex) Marshall() ([]byte, error) {
+func (i *ZoneMapIndex) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeInt16(i.Col))
 	switch i.T.Oid {

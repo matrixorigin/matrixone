@@ -111,6 +111,7 @@ func (blk *block) cloneWithUpgradeColumns(upgraded *block) {
 }
 
 func (blk *block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
+	defer host.Unref()
 	newBase, err := blk.upgrade(host, meta)
 	if err != nil {
 		return nil, err
@@ -135,7 +136,6 @@ func (blk *block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 		upgraded.indexholder.Init(upgraded.GetSegmentFile())
 	}
 
-	host.Unref()
 	return upgraded, nil
 }
 

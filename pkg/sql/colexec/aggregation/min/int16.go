@@ -49,10 +49,10 @@ func (a *int16Min) Fill(sels []int64, vec *vector.Vector) error {
 		a.cnt += int64(n - vec.Nsp.FilterCount(sels))
 	} else {
 		v := min.Int16Min(vec.Col.([]int16))
-		a.cnt += int64(vec.Length() - vec.Nsp.Length())
 		if a.cnt == 0 || v < a.v {
 			a.v = v
 		}
+		a.cnt += int64(vec.Length() - vec.Nsp.Length())
 	}
 	return nil
 }

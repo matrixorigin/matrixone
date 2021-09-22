@@ -49,6 +49,7 @@ func New(prev op.OP, gs []*extend.Attribute, es []aggregation.Extend) (*Group, e
 	}
 	return &Group{
 		As:    as,
+		Rs:    as,
 		Es:    es,
 		Gs:    gs,
 		Prev:  prev,
@@ -88,7 +89,11 @@ func (n *Group) Rename(name string) {
 }
 
 func (n *Group) ResultColumns() []string {
-	return n.As
+	return n.Rs
+}
+
+func (n *Group) SetColumns(cs []string) {
+	n.Rs = cs
 }
 
 func (n *Group) Attribute() map[string]types.Type {

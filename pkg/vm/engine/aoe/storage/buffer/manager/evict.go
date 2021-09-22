@@ -17,7 +17,6 @@ package manager
 import (
 	"fmt"
 	sq "github.com/yireyun/go-queue"
-	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"sync"
 )
 
@@ -64,7 +63,7 @@ func (node *EvictNode) String() string {
 	return fmt.Sprintf("EvictNode(%v, %d)", node.Handle, node.Iter)
 }
 
-func (node *EvictNode) Unloadable(h nif.INodeHandle) bool {
+func (node *EvictNode) Unloadable(h IEvictHandle) bool {
 	if node.Handle != h {
 		panic("Logic error")
 	}

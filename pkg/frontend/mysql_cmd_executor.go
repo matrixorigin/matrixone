@@ -285,7 +285,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]int8)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]int8)
@@ -297,7 +297,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]uint8)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]uint8)
@@ -309,7 +309,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]int16)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]int16)
@@ -321,7 +321,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]uint16)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]uint16)
@@ -333,7 +333,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]int32)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]int32)
@@ -345,7 +345,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]uint32)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]uint32)
@@ -357,7 +357,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]int64)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]int64)
@@ -369,7 +369,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]uint64)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]uint64)
@@ -381,7 +381,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]float32)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]float32)
@@ -393,7 +393,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.([]float64)
 								row[i] = vs[bat.Sels[j]]
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.([]float64)
@@ -405,7 +405,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(bat.Sels[j])
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.(*types.Bytes)
@@ -417,7 +417,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 								vs := vec.Col.(*types.Bytes)
 								row[i] = vs.Get(bat.Sels[j])
 							} else {
-								if vec.Nsp.Contains(uint64(j)) { //is null
+								if vec.Nsp.Contains(uint64(bat.Sels[j])) { //is null
 									row[i] = nil
 								} else {
 									vs := vec.Col.(*types.Bytes)
@@ -970,8 +970,8 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	}
 
 	/*
-		check table
-	*/
+	check table
+	 */
 	tableHandler, err := dbHandler.Relation(loadTable)
 	if err != nil {
 		//echo client. no such table
@@ -981,17 +981,16 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	/*
 		execute load data
 	*/
-	loadDataClose := NewCloseLoadData()
 	result, err := mce.LoadLoop(load, dbHandler, tableHandler, loadDataClose)
 	if err != nil {
 		return err
 	}
 
 	/*
-		response
-	*/
-	info := NewMysqlError(ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings).Error()
-	resp := NewResponse(OkResponse, 0, int(COM_QUERY), info)
+	response
+	 */
+	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Skipped,result.Warnings).Error()
+	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings),0, int(COM_QUERY), " "+info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
 	}
@@ -1011,7 +1010,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		pdHook.DecQueryCountAtEpoch(epoch, statementCount)
 	}()
 
-	//只有id和limitation会影响后续的pipeline
 	proc := process.New(ses.GuestMmu)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.GetProcessLimitationSize()
@@ -1391,10 +1389,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	logutil.Infof("close executor")
+	//fmt.Printf("close executor\n")
 	if mce.loadDataClose != nil {
-		logutil.Infof("close process load data")
-		//mce.loadDataClose.Close()
+		//fmt.Printf("close process load data\n")
+		mce.loadDataClose.Close()
 	}
 }
 

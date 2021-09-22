@@ -20,7 +20,7 @@ import (
 	"matrixone/pkg/sql/op"
 )
 
-//扩展投影
+// Extended projection
 type Extend struct {
 	Alias string
 	E     extend.Extend
@@ -31,6 +31,7 @@ type Projection struct {
 	IsPD  bool // can be push down?
 	ID    string
 	As    []string
-	Es    []*Extend //
+	Rs    []string // result columns
+	Es    []*Extend
 	Attrs map[string]types.Type
 }
