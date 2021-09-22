@@ -38,8 +38,9 @@ type Block struct {
 func (blk *Block) Rows() int64 {
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
 	if data == nil {
-		logutil.Errorf("specified blk %d not found", blk.Id)
-		return 0
+		// TODO: returns error
+		logutil.Warnf("specified blk %d not found", blk.Id)
+		return -1
 	}
 	defer data.Unref()
 	return int64(data.GetRowCount())
@@ -49,8 +50,9 @@ func (blk *Block) Rows() int64 {
 func (blk *Block) Size(attr string) int64 {
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
 	if data == nil {
-		logutil.Errorf("specified blk %d not found", blk.Id)
-		return 0
+		// TODO: returns error
+		logutil.Warnf("specified blk %d not found", blk.Id)
+		return -1
 	}
 	defer data.Unref()
 	return int64(data.Size(attr))
@@ -67,7 +69,8 @@ func (blk *Block) ID() string {
 func (blk *Block) Prefetch(attrs []string) {
 	data := blk.Host.Data.StrongRefBlock(blk.Id)
 	if data == nil {
-		logutil.Errorf("specified blk %d not found", blk.Id)
+		// TODO: returns error
+		logutil.Warnf("specified blk %d not found", blk.Id)
 		return
 	}
 	defer data.Unref()

@@ -104,6 +104,17 @@ func NewSimpleSegment(typ base.SegmentType, meta *md.Segment, indexHolder *index
 		meta:        meta,
 		indexHolder: indexHolder,
 		segFile:     segFile,
+		tree: struct {
+			*sync.RWMutex
+			blocks    []iface.IBlock
+			helper    map[uint64]int
+			blockids  []uint64
+			blockcnt  uint32
+			attrsizes map[string]uint64
+		} {
+			helper: make(map[uint64]int),
+			RWMutex: &sync.RWMutex{},
+		},
 	}
 }
 

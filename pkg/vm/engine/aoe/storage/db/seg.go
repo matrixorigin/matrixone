@@ -55,7 +55,8 @@ func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
 	iid := encoding.DecodeUint64(([]byte)(id))
 	data := seg.Data.WeakRefBlock(iid)
 	if data == nil {
-		logutil.Errorf("specified block %s not found", id)
+		// TODO: returns error
+		logutil.Warnf("specified block %s not found", id)
 		return nil
 	}
 	blk := &Block{
