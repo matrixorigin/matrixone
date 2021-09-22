@@ -54,7 +54,6 @@ func Realloc(data []byte, size int64) int64 {
 }
 
 func (m *Mempool) Alloc(size int) []byte {
-	size = ((size + PageSize - 1) >> PageOffset) << PageOffset
 	if size <= MaxSize {
 		for i, b := range m.buckets {
 			if b.size >= size {
@@ -63,9 +62,9 @@ func (m *Mempool) Alloc(size int) []byte {
 					m.buckets[i].slots[0] = m.buckets[i].slots[len(m.buckets[i].slots)-1]
 					m.buckets[i].slots[len(m.buckets[i].slots)-1] = nil
 					m.buckets[i].slots = m.buckets[i].slots[:len(m.buckets[i].slots)-1]
-					return data[:size]
+					return data
 				}
-				return malloc.Malloc(size)
+				return malloc.Malloc(b.size)
 			}
 		}
 	}
@@ -84,8 +83,8 @@ func (m *Mempool) Alloc(size int) []byte {
 func (m *Mempool) Free(data []byte) {
 	size := cap(data)
 	if size <= MaxSize {
-		for i := len(m.buckets) - 1; i >= 0; i-- {
-			if size >= m.buckets[i].size {
+		for i, j := 0, len(m.buckets); i < j; i++ {
+			if size == m.buckets[i].size {
 				m.buckets[i].slots = append(m.buckets[i].slots, data)
 				return
 			}
