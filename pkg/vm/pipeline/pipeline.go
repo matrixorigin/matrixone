@@ -47,38 +47,23 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 	var end bool
 	var err error
 
-	proc.Mp = mempool.Pool.Get().(*mempool.Mempool)
+	proc.Mp = mempool.New()
 	defer func() {
 		proc.Reg.Ax = nil
 		vm.Run(p.ins, proc)
-		for i := range p.cds {
-			proc.Free(p.cds[i].Bytes())
-		}
-		for i := range p.cds {
-			proc.Free(p.dds[i].Bytes())
-		}
-		mempool.Pool.Put(proc.Mp)
 		proc.Mp = nil
 	}()
 	if err = vm.Prepare(p.ins, proc); err != nil {
 		return false, err
 	}
 	q := p.prefetch(segs, proc)
-	p.cds, p.dds = make([]*bytes.Buffer, 0, len(p.cs)), make([]*bytes.Buffer, 0, len(p.cs))
+	p.cds, p.dds = make([]*bytes.Buffer, len(p.cs)), make([]*bytes.Buffer, len(p.cs))
 	{
-		for _ = range p.cs {
-			data, err := proc.Alloc(CompressedBlockSize)
-			if err != nil {
-				return false, err
-			}
-			p.cds = append(p.cds, bytes.NewBuffer(data))
+		for i := range p.cs {
+			p.cds[i] = bytes.NewBuffer(make([]byte, 0, 8))
 		}
-		for _ = range p.cs {
-			data, err := proc.Alloc(CompressedBlockSize)
-			if err != nil {
-				return false, err
-			}
-			p.dds = append(p.dds, bytes.NewBuffer(data))
+		for i := range p.cs {
+			p.dds[i] = bytes.NewBuffer(make([]byte, 0, 8))
 		}
 	}
 	for i, j := 0, len(q.bs); i < j; i++ {
@@ -101,11 +86,10 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 }
 
 func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
-	proc.Mp = mempool.Pool.Get().(*mempool.Mempool)
+	proc.Mp = mempool.New()
 	defer func() {
 		proc.Reg.Ax = nil
 		vm.Run(p.ins, proc)
-		mempool.Pool.Put(proc.Mp)
 		proc.Mp = nil
 	}()
 	if err := vm.Prepare(p.ins, proc); err != nil {
