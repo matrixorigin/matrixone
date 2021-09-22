@@ -179,7 +179,7 @@ func TestSql(t *testing.T) {
 
 	println(">>>>>>>----------------------------------")
 
-	sql = "SELECT DISTINCT(price) x from R;"
+	sql = "SELECT DISTINCT price from R;"
 	c = compile.New("test", sql, "tom", e, proc)
 	es, err = c.Build()
 	require.NoError(t, err)
