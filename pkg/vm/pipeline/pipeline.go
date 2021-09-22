@@ -47,43 +47,23 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 	var end bool //退出标识
 	var err error
 
-	proc.Mp = mempool.Pool.Get().(*mempool.Mempool)
-	// release resources
+	proc.Mp = mempool.New()
 	defer func() {
-		proc.Reg.InputBatch = nil
-		// inform related OPs that current pipeline is finished.
-		// OP is asked to release its resources.
-		vm.Run(p.instructions, proc)
-		for i := range p.compressedBytes {
-			proc.Free(p.compressedBytes[i].Bytes())
-		}
-		for i := range p.compressedBytes {
-			proc.Free(p.decompressedBytes[i].Bytes())
-		}
-		mempool.Pool.Put(proc.Mp)
+		proc.Reg.Ax = nil
+		vm.Run(p.ins, proc)
 		proc.Mp = nil
 	}()
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
 	q := p.prefetch(segs, proc)
-	// alloc cache to compress/decompress.
-	// this cache can be reused during the execution.
-	p.compressedBytes, p.decompressedBytes = make([]*bytes.Buffer, 0, len(p.refCount)), make([]*bytes.Buffer, 0, len(p.refCount))
+	p.cds, p.dds = make([]*bytes.Buffer, len(p.cs)), make([]*bytes.Buffer, len(p.cs))
 	{
-		for _ = range p.refCount {
-			data, err := proc.Alloc(CompressedBlockSize)
-			if err != nil {
-				return false, err
-			}
-			p.compressedBytes = append(p.compressedBytes, bytes.NewBuffer(data))
+		for i := range p.cs {
+			p.cds[i] = bytes.NewBuffer(make([]byte, 0, 8))
 		}
-		for _ = range p.refCount {
-			data, err := proc.Alloc(CompressedBlockSize)
-			if err != nil {
-				return false, err
-			}
-			p.decompressedBytes = append(p.decompressedBytes, bytes.NewBuffer(data))
+		for i := range p.cs {
+			p.dds[i] = bytes.NewBuffer(make([]byte, 0, 8))
 		}
 	}
 	for i, j := 0, len(q.blocks); i < j; i++ {
@@ -106,11 +86,10 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 }
 
 func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
-	proc.Mp = mempool.Pool.Get().(*mempool.Mempool)
+	proc.Mp = mempool.New()
 	defer func() {
-		proc.Reg.InputBatch = nil
-		vm.Run(p.instructions, proc)
-		mempool.Pool.Put(proc.Mp)
+		proc.Reg.Ax = nil
+		vm.Run(p.ins, proc)
 		proc.Mp = nil
 	}()
 	if err := vm.Prepare(p.instructions, proc); err != nil {

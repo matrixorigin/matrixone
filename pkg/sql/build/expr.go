@@ -368,6 +368,25 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:
 		return buildConstantValue(typ, e.Value)
+	case *tree.UnaryExpr:
+		if e.Op == tree.UNARY_PLUS {
+			return buildConstant(typ, e.Expr)
+		}
+		if e.Op == tree.UNARY_MINUS {
+			v, err := buildConstant(typ, e.Expr)
+			if err != nil {
+				return nil, err
+			}
+			switch val := v.(type) {
+			case int64:
+				return val * -1, nil
+			case float32:
+				return val * -1, nil
+			case float64:
+				return val * -1, nil
+			}
+			return v, nil
+		}
 	}
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }

@@ -828,7 +828,7 @@ func EncodeExtend(e extend.Extend, buf *bytes.Buffer) error {
 	case *extend.UnaryExtend:
 		buf.WriteByte(Unary)
 		buf.Write(encoding.EncodeUint32(uint32(v.Op)))
-		return nil
+		return EncodeExtend(v.E, buf)
 	case *extend.ParenExtend:
 		buf.WriteByte(Paren)
 		return EncodeExtend(v.E, buf)

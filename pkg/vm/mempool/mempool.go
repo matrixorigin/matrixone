@@ -16,14 +16,7 @@ package mempool
 
 import (
 	"matrixone/pkg/vm/malloc"
-	"sync"
 )
-
-var Pool = sync.Pool{
-	New: func() interface{} {
-		return New()
-	},
-}
 
 func New() *Mempool {
 	m := &Mempool{buckets: make([]bucket, 0, 10)}
@@ -61,22 +54,25 @@ func Realloc(data []byte, size int64) int64 {
 }
 
 func (m *Mempool) Alloc(size int) []byte {
-	size = ((size + PageSize - 1) >> PageOffset) << PageOffset
 	if size <= MaxSize {
 		for i, b := range m.buckets {
 			if b.size >= size {
 				if len(b.slots) > 0 {
 					data := b.slots[0]
-					m.buckets[i].slots = m.buckets[i].slots[1:]
-					return data[:size]
+					m.buckets[i].slots[0] = m.buckets[i].slots[len(m.buckets[i].slots)-1]
+					m.buckets[i].slots[len(m.buckets[i].slots)-1] = nil
+					m.buckets[i].slots = m.buckets[i].slots[:len(m.buckets[i].slots)-1]
+					return data
 				}
-				return malloc.Malloc(size)
+				return malloc.Malloc(b.size)
 			}
 		}
 	}
 	for i, buf := range m.buffers {
 		if cap(buf) >= size {
+			m.size -= cap(buf)
 			m.buffers[i] = m.buffers[len(m.buffers)-1]
+			m.buffers[len(m.buffers)-1] = nil
 			m.buffers = m.buffers[:len(m.buffers)-1]
 			return buf[:size]
 		}
@@ -87,14 +83,18 @@ func (m *Mempool) Alloc(size int) []byte {
 func (m *Mempool) Free(data []byte) {
 	size := cap(data)
 	if size <= MaxSize {
-		for i, b := range m.buckets {
-			if size >= b.size {
+		for i, j := 0, len(m.buckets); i < j; i++ {
+			if size == m.buckets[i].size {
 				m.buckets[i].slots = append(m.buckets[i].slots, data)
 				return
 			}
 		}
 		return
 	}
+	if m.size+cap(data) > Limit {
+		return
+	}
+	m.size += cap(data)
 	m.buffers = append(m.buffers, data)
 	return
 }
