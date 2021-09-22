@@ -47,7 +47,7 @@ func initDBTest() {
 
 func initDB(ft storage.FactoryType) *DB {
 	rand.Seed(time.Now().UnixNano())
-	opts := config.NewCustomizedMetaOptions(TEST_DB_DIR, config.CST_Customize, uint64(20000), uint64(2))
+	opts := config.NewCustomizedMetaOptions(TEST_DB_DIR, config.CST_Customize, uint64(2000), uint64(2))
 	opts.FactoryType = ft
 	inst, _ := Open(TEST_DB_DIR, opts)
 	return inst
@@ -104,7 +104,7 @@ func TestDropEmptyTable(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name})
 	assert.Nil(t, err)
-	time.Sleep(time.Duration(500) * time.Millisecond)
+	time.Sleep(time.Duration(200) * time.Millisecond)
 }
 
 func TestDropTable(t *testing.T) {
@@ -336,9 +336,9 @@ func TestConcurrency(t *testing.T) {
 	searchWg.Wait()
 	cancel()
 	wg.Wait()
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(time.Duration(100) * time.Millisecond)
 	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(500) * time.Millisecond)
+		time.Sleep(time.Duration(250) * time.Millisecond)
 	}
 	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	root := tbl.WeakRefRoot()
@@ -396,9 +396,9 @@ func TestConcurrency(t *testing.T) {
 
 	t.Logf("Takes %v", time.Since(now))
 	t.Log(tbl.String())
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(time.Duration(100) * time.Millisecond)
 	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(800) * time.Millisecond)
+		time.Sleep(time.Duration(400) * time.Millisecond)
 	}
 
 	t.Log(inst.MTBufMgr.String())
@@ -517,7 +517,7 @@ func TestMultiTables(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	time.Sleep(time.Duration(300) * time.Millisecond)
+	time.Sleep(time.Duration(100) * time.Millisecond)
 	{
 		for _, name := range names {
 			rel, err := inst.Relation(name)
@@ -586,7 +586,7 @@ func TestDropTable2(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(time.Duration(100) * time.Millisecond)
 	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	t.Log(tbl.String())
 
@@ -613,12 +613,12 @@ func TestDropTable2(t *testing.T) {
 		doneCh <- expectErr
 	}
 	inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name, OnFinishCB: dropCB})
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(time.Duration(50) * time.Millisecond)
 	if inst.Opts.FactoryType == storage.NORMAL_FT {
 		assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	}
 	ss.Close()
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(time.Duration(50) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
@@ -664,7 +664,7 @@ func TestE2E(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	time.Sleep(time.Duration(200) * time.Millisecond)
+	time.Sleep(time.Duration(100) * time.Millisecond)
 	tblData, err := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Nil(t, err)
 	t.Log(tblData.String())
@@ -691,7 +691,7 @@ func TestE2E(t *testing.T) {
 		t.Log(inst.IndexBufMgr.String())
 	}
 
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	t.Log(inst.IndexBufMgr.String())
 
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name})
