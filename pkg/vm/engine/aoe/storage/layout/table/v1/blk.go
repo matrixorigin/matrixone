@@ -170,7 +170,7 @@ func (blk *block) GetVectorCopy(attr string, compressed, deCompressed *bytes.Buf
 func (blk *block) Prefetch(attr string) error {
 	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return errors.New("column not found")
+		return errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	return blk.data.cols[colIdx].Prefetch()
 }
