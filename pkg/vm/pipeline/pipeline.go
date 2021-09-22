@@ -49,21 +49,21 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 
 	proc.Mp = mempool.New()
 	defer func() {
-		proc.Reg.Ax = nil
-		vm.Run(p.ins, proc)
+		proc.Reg.InputBatch = nil
+		vm.Run(p.instructions, proc)
 		proc.Mp = nil
 	}()
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
 	q := p.prefetch(segs, proc)
-	p.cds, p.dds = make([]*bytes.Buffer, len(p.cs)), make([]*bytes.Buffer, len(p.cs))
+	p.compressedBytes, p.decompressedBytes = make([]*bytes.Buffer, len(p.refCount)), make([]*bytes.Buffer, len(p.refCount))
 	{
-		for i := range p.cs {
-			p.cds[i] = bytes.NewBuffer(make([]byte, 0, 8))
+		for i := range p.refCount {
+			p.compressedBytes[i] = bytes.NewBuffer(make([]byte, 0, 8))
 		}
-		for i := range p.cs {
-			p.dds[i] = bytes.NewBuffer(make([]byte, 0, 8))
+		for i := range p.refCount {
+			p.decompressedBytes[i] = bytes.NewBuffer(make([]byte, 0, 8))
 		}
 	}
 	for i, j := 0, len(q.blocks); i < j; i++ {
@@ -88,8 +88,8 @@ func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, erro
 func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	proc.Mp = mempool.New()
 	defer func() {
-		proc.Reg.Ax = nil
-		vm.Run(p.ins, proc)
+		proc.Reg.InputBatch = nil
+		vm.Run(p.instructions, proc)
 		proc.Mp = nil
 	}()
 	if err := vm.Prepare(p.instructions, proc); err != nil {
