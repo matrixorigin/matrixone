@@ -192,7 +192,7 @@ func TestOpen(t *testing.T) {
 }
 
 func TestReplay(t *testing.T) {
-	waitTime := time.Duration(20) * time.Millisecond
+	waitTime := time.Duration(40) * time.Millisecond
 	if invariants.RaceEnabled {
 		waitTime = time.Duration(200) * time.Millisecond
 	}
