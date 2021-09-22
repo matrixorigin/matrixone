@@ -90,6 +90,13 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 	o = prune(o)
 	// optimize is not implemented for now.
 	o = opt.Optimize(rewrite(o, mergeCount(o, 0)))
+	if o == nil {
+		e.u = u
+		e.e = e.c.e
+		e.fill = fill
+		e.resultCols = []*Col{&Col{Typ: types.T_int8, Name: "test"}}
+		return nil
+	}
 	// generates scope list from the relation algebra operator chain.
 	ss, err := e.c.compileAlgebra(o)
 	if err != nil {
@@ -145,6 +152,9 @@ func (e *Exec) Columns() []*Col {
 func (e *Exec) Run(ts uint64) error {
 	var wg sync.WaitGroup
 
+	if len(e.scopes) == 0 {
+		return nil
+	}
 	fmt.Printf("+++++++++\n")
 	Print(nil, e.scopes)
 	fmt.Printf("+++++++++\n")
