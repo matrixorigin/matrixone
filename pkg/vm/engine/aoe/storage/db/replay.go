@@ -693,7 +693,6 @@ func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
 	ret.Replay()
 	h.correctTable(ret)
 	// log.Info(ret.String())
-	logutil.Infof(h.String())
 	return ret
 }
 
@@ -725,6 +724,7 @@ func (h *replayHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.
 		tbls[idx] = newTbl
 	}
 	info.Tables = tbls
+	logutil.Infof(h.String())
 
 	return info
 }
