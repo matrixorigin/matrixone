@@ -26,6 +26,16 @@ import (
 	"strings"
 )
 
+func (b *build) resultColumns(ns tree.SelectExprs) []string {
+	cs := make([]string, len(ns))
+	for i, n := range ns {
+		if len(n.As) > 0 {
+			cs[i] = string(n.As)
+		}
+	}
+	return cs
+}
+
 func (b *build) checkProjection(ns tree.SelectExprs) error {
 	for _, n := range ns {
 		if attrs := b.checkProjectionExpr(n.Expr, []string{}); len(attrs) == 0 {
@@ -86,30 +96,46 @@ func (b *build) checkProjectionExpr(n tree.Expr, attrs []string) []string {
 	return attrs
 }
 
+func (b *build) rewriteProjection(o op.OP, ns tree.SelectExprs) (tree.SelectExprs, error) {
+	var err error
+
+	rs := make([]tree.SelectExpr, 0, len(ns))
+	for i := range ns {
+		if _, ok := ns[i].Expr.(tree.UnqualifiedStar); ok {
+			attrs := o.ResultColumns()
+			for _, attr := range attrs {
+				rs = append(rs, tree.SelectExpr{
+					Expr: &tree.UnresolvedName{
+						NumParts: 1,
+						Parts:    tree.NameParts{attr},
+					},
+					As: tree.UnrestrictedIdentifier(attr),
+				})
+			}
+			continue
+		}
+		if len(ns[i].As) == 0 {
+			if ns[i].As, err = b.exprAlias(o, ns[i].Expr); err != nil {
+				return nil, err
+			}
+		}
+		rs = append(rs, ns[i])
+	}
+	return rs, nil
+}
+
 func (b *build) buildProjection(o op.OP, ns tree.SelectExprs) (op.OP, error) {
 	var es []*projection.Extend
 
 	for _, n := range ns {
-		if _, ok := n.Expr.(tree.UnqualifiedStar); ok {
-			attrs := o.Attribute()
-			for name, typ := range attrs {
-				es = append(es, &projection.Extend{
-					E: &extend.Attribute{
-						Name: name,
-						Type: typ.Oid,
-					},
-				})
-			}
-		} else {
-			e, err := b.buildExtend(o, n.Expr)
-			if err != nil {
-				return nil, err
-			}
-			es = append(es, &projection.Extend{
-				E:     e,
-				Alias: string(n.As),
-			})
+		e, err := b.buildExtend(o, n.Expr)
+		if err != nil {
+			return nil, err
 		}
+		es = append(es, &projection.Extend{
+			E:     e,
+			Alias: string(n.As),
+		})
 	}
 	return projection.New(o, es)
 }
@@ -118,48 +144,28 @@ func (b *build) buildProjectionWithOrder(o op.OP, ns tree.SelectExprs, es []*pro
 	var pes []*projection.Extend
 
 	for _, n := range ns {
-		if _, ok := n.Expr.(tree.UnqualifiedStar); ok {
-			attrs := o.Attribute()
-			for name, typ := range attrs {
-				if _, ok := mp[name]; !ok {
-					mp[name] = 0
-					es = append(es, &projection.Extend{
-						E: &extend.Attribute{
-							Name: name,
-							Type: typ.Oid,
-						},
-					})
-				}
-				pes = append(pes, &projection.Extend{
-					E: &extend.Attribute{
-						Name: name,
-						Type: typ.Oid,
-					},
-				})
-			}
-		} else {
-			e, err := b.buildExtend(o, n.Expr)
-			if err != nil {
-				return nil, nil, err
-			}
-			alias := string(n.As)
-			if len(alias) == 0 {
-				alias = e.String()
-			}
-			if _, ok := mp[e.String()]; !ok {
-				mp[e.String()] = 0
-				es = append(es, &projection.Extend{
-					E:     e,
-					Alias: alias,
-				})
-			}
-			pes = append(pes, &projection.Extend{
-				E: &extend.Attribute{
-					Name: alias,
-					Type: e.ReturnType(),
-				},
+		e, err := b.buildExtend(o, n.Expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		alias := string(n.As)
+		if len(alias) == 0 {
+			alias = e.String()
+		}
+		if _, ok := mp[e.String()]; !ok {
+			mp[e.String()] = 0
+			es = append(es, &projection.Extend{
+				E:     e,
+				Alias: e.String(),
 			})
 		}
+		pes = append(pes, &projection.Extend{
+			E: &extend.Attribute{
+				Name: e.String(),
+				Type: e.ReturnType(),
+			},
+			Alias: alias,
+		})
 	}
 	o, err := projection.New(o, es)
 	if err != nil {
