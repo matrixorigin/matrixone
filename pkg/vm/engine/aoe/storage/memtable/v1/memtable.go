@@ -53,7 +53,11 @@ func NewMemTable(opts *storage.Options, tableData iface.ITableData, data iface.I
 	}
 
 	for idx, colIdx := range mt.ibat.GetAttrs() {
-		vec := mt.ibat.GetVectorByAttr(colIdx)
+		vec, err := mt.ibat.GetVectorByAttr(colIdx)
+		if err != nil {
+			// TODO: returns error
+			panic(err)
+		}
 		vec.PlacementNew(mt.meta.Segment.Table.Schema.ColDefs[idx].Type)
 	}
 
@@ -86,7 +90,11 @@ func (mt *memTable) Append(bat *gBatch.Batch, offset uint64, index *md.LogIndex)
 	for idx, attr := range mt.ibat.GetAttrs() {
 		for i, a := range bat.Attrs {
 			if a == mt.tableMeta.Schema.ColDefs[idx].Name {
-				if na, err = mt.ibat.GetVectorByAttr(attr).AppendVector(bat.Vecs[i], int(offset)); err != nil {
+				vec, err := mt.ibat.GetVectorByAttr(attr)
+				if err != nil {
+					return 0, err
+				}
+				if na, err = vec.AppendVector(bat.Vecs[i], int(offset)); err != nil {
 					return n, err
 				}
 			}

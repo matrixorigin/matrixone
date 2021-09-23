@@ -29,7 +29,10 @@ func (mw *memTableWriter) Flush() (err error) {
 	defer bat.Close()
 	var vecs []*vector.Vector
 	for idx, _ := range bat.GetAttrs() {
-		node := bat.GetVectorByAttr(idx)
+		node, err := bat.GetVectorByAttr(idx)
+		if err != nil {
+			return err
+		}
 		vecs = append(vecs, node.CopyToVector())
 	}
 	bw := dataio.NewBlockWriter(vecs, mw.memTable.meta, mw.memTable.meta.Segment.Table.Conf.Dir)
