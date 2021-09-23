@@ -52,8 +52,12 @@ func (e *flushMemblockEvent) Execute() error {
 		data := mut.GetData()
 		var vecs []*vector.Vector
 		for attri, _ := range data.GetAttrs() {
-			v := data.GetVectorByAttr(attri).GetLatestView()
-			vecs = append(vecs, v.CopyToVector())
+			v, err := data.GetVectorByAttr(attri)
+			if err != nil {
+				return err
+			}
+			view := v.GetLatestView()
+			vecs = append(vecs, view.CopyToVector())
 		}
 
 		bw := dataio.NewBlockWriter(vecs, meta, meta.Segment.Table.Conf.Dir)

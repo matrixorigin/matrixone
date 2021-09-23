@@ -80,7 +80,11 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	insert := func(n *mutation.MutableBlockNode) func() error {
 		return func() error {
 			for idx, attr := range n.Data.GetAttrs() {
-				if _, err = n.Data.GetVectorByAttr(attr).AppendVector(bat.Vecs[idx], 0); err != nil {
+				vec, err := n.Data.GetVectorByAttr(attr)
+				if err != nil {
+					return err
+				}
+				if _, err = vec.AppendVector(bat.Vecs[idx], 0); err != nil {
 					return err
 				}
 				// assert.Nil(t, err)

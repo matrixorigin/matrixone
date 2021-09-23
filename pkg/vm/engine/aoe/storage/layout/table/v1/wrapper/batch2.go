@@ -36,11 +36,15 @@ func (bat *batchWrapper2) IsReadonly() bool             { return bat.wrapped.IsR
 func (bat *batchWrapper2) Length() int                  { return bat.wrapped.Length() }
 func (bat *batchWrapper2) GetAttrs() []int              { return bat.wrapped.GetAttrs() }
 func (bat *batchWrapper2) CloseVector(attr int) error   { return nil }
-func (bat *batchWrapper2) IsVectorClosed(attr int) bool { return false }
+func (bat *batchWrapper2) IsVectorClosed(attr int) (bool, error) { return false, nil }
 
 // TODO: Should return a vector wrapper that cannot be closed
-func (bat *batchWrapper2) GetReaderByAttr(attr int) dbi.IVectorReader {
-	return bat.wrapped.GetReaderByAttr(attr)
+func (bat *batchWrapper2) GetReaderByAttr(attr int) (dbi.IVectorReader, error) {
+	reader, err := bat.wrapped.GetReaderByAttr(attr)
+	if err != nil {
+		return nil, err
+	}
+	return reader, nil
 }
 
 func (bat *batchWrapper2) Close() error { return bat.closer.Close() }

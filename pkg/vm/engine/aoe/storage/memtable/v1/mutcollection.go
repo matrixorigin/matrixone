@@ -122,7 +122,11 @@ func (c *mutableCollection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, 
 	for idx, attr := range data.GetAttrs() {
 		for i, a := range bat.Attrs {
 			if a == meta.Segment.Table.Schema.ColDefs[idx].Name {
-				if na, err = data.GetVectorByAttr(attr).AppendVector(bat.Vecs[i], int(offset)); err != nil {
+				vec, err := data.GetVectorByAttr(attr)
+				if err != nil {
+					return 0, err
+				}
+				if na, err = vec.AppendVector(bat.Vecs[i], int(offset)); err != nil {
 					return n, err
 				}
 			}

@@ -201,7 +201,10 @@ func (bw *BlockWriter) executeIVecs() error {
 	}
 	data := make([]vector.IVectorNode, len(bw.meta.Segment.Table.Schema.ColDefs))
 	for i := 0; i < len(data); i++ {
-		ivec := bw.idata.GetVectorByAttr(i)
+		ivec, err := bw.idata.GetVectorByAttr(i)
+		if err != nil {
+			return err
+		}
 		data[i] = ivec.(vector.IVectorNode)
 	}
 	if err = bw.ivecsSerializer(w, data, bw.meta); err != nil {

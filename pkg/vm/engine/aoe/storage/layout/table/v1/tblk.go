@@ -122,7 +122,11 @@ func (blk *tblock) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
 func (blk *tblock) getVectorCopyFactory(attr string, compressed, deCompressed *bytes.Buffer) func(batch.IBatch) (*gvec.Vector, error) {
 	return func(bat batch.IBatch) (*gvec.Vector, error) {
 		colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
-		raw := bat.GetVectorByAttr(colIdx).GetLatestView()
+		vec, err := bat.GetVectorByAttr(colIdx)
+		if err != nil {
+			return nil, err
+		}
+		raw := vec.GetLatestView()
 		return raw.CopyToVectorWithBuffer(compressed, deCompressed)
 	}
 }
@@ -149,10 +153,19 @@ func (blk *tblock) GetBatch(attrids []int) dbi.IBatchReader {
 	data := blk.node.GetData()
 	attrs := make([]int, len(attrids))
 	vecs := make([]vector.IVector, len(attrids))
+	var err error
 	for idx, attr := range attrids {
 		attrs[idx] = attr
-		vecs[idx] = data.GetVectorByAttr(attr)
+		vecs[idx], err = data.GetVectorByAttr(attr)
+		if err != nil {
+			// TODO: returns error
+			panic(err)
+		}
 	}
-	wrapped := batch.NewBatch(attrs, vecs)
+	wrapped, err := batch.NewBatch(attrs, vecs)
+	if err != nil {
+		// TODO: returns error
+		panic(err)
+	}
 	return wrapper.NewBatch2(h, wrapped)
 }
