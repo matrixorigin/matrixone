@@ -1177,6 +1177,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeInt8Slice(data[:n])
 			data = data[n:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_int16:
@@ -1197,6 +1199,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeInt16Slice(data[:n*2])
 			data = data[n*2:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_int32:
@@ -1217,6 +1221,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeInt32Slice(data[:n*4])
 			data = data[n*4:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_int64, types.T_sel:
@@ -1237,6 +1243,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeInt64Slice(data[:n*8])
 			data = data[n*8:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_uint8:
@@ -1257,6 +1265,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeUint8Slice(data[:n])
 			data = data[n:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_uint16:
@@ -1277,6 +1287,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeUint16Slice(data[:n*2])
 			data = data[n*2:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_uint32:
@@ -1297,6 +1309,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeUint32Slice(data[:n*4])
 			data = data[n*4:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_uint64:
@@ -1317,6 +1331,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeUint64Slice(data[:n*8])
 			data = data[n*8:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_float32:
@@ -1337,6 +1353,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeFloat32Slice(data[:n*4])
 			data = data[n*4:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_float64:
@@ -1357,6 +1375,8 @@ func DecodeVector(data []byte) (*vector.Vector, []byte, error) {
 			data = data[4:]
 			v.Col = encoding.DecodeFloat64Slice(data[:n*8])
 			data = data[n*8:]
+		} else {
+			data = data[4:]
 		}
 		return v, data, nil
 	case types.T_char, types.T_varchar:
