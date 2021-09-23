@@ -33,15 +33,15 @@ func Prepare(_ *process.Process, _ interface{}) error {
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
 	n := arg.(*Argument)
-	if proc.Reg.Ax == nil {
+	if proc.Reg.InputBatch == nil {
 		return false, nil
 	}
-	bat := proc.Reg.Ax.(*batch.Batch)
+	bat := proc.Reg.InputBatch.(*batch.Batch)
 	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
 	if n.Seen > n.Offset {
-		proc.Reg.Ax = bat
+		proc.Reg.InputBatch = bat
 		return false, nil
 	}
 	if len(bat.Sels) > 0 {
@@ -57,13 +57,13 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		n.Seen += uint64(length)
 		bat.Sels = sels
 		bat.SelsData = data
-		proc.Reg.Ax = bat
+		proc.Reg.InputBatch = bat
 		return false, nil
 	}
 	n.Seen += uint64(length)
 	bat.Clean(proc)
 	bat.Attrs = nil
-	proc.Reg.Ax = bat
+	proc.Reg.InputBatch = bat
 	return false, nil
 }
 

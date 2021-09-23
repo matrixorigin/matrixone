@@ -20,6 +20,7 @@ import (
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"matrixone/pkg/logutil"
 	"net"
+	"time"
 )
 
 // Routine handles requests.
@@ -49,6 +50,12 @@ type Routine struct {
 
 	//epoch gc handler
 	pdHook *PDCallbackImpl
+
+	//channel of request
+	requestChan chan *Request
+
+	//channel of notify
+	notifyChan chan interface{}
 }
 
 func (routine *Routine) GetClientProtocol() Protocol {
@@ -71,8 +78,48 @@ func (routine *Routine) getConnID() uint32 {
 	return routine.protocol.ConnectionID()
 }
 
+/*
+After the handshake with the client is done, the routine goes into processing loop.
+ */
+func (routine *Routine) Loop() {
+	var req *Request = nil
+	var err error
+	var resp *Response
+	for{
+		quit := false
+		select {
+		case <- routine.notifyChan:
+			quit = true
+		case req = <- routine.requestChan:
+		}
+
+		if quit{
+			break
+		}
+
+		reqBegin := time.Now()
+		if resp, err = routine.executor.ExecRequest(req); err != nil {
+			logutil.Errorf("routine execute request failed. error:%v \n", err)
+		}
+
+		if resp != nil {
+			if err = routine.protocol.SendResponse(resp); err != nil {
+				logutil.Errorf("routine send response failed %v. error:%v ", resp, err)
+			}
+		}
+
+		if routine.ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
+			logutil.Infof("connection id %d , the time of handling the request %s", routine.io.ID(), time.Since(reqBegin).String())
+		}
+	}
+}
+
+/*
+When the io is closed, the Quit will be called.
+ */
 func (routine *Routine) Quit() {
 	_ = routine.io.Close()
+	close(routine.notifyChan)
 	if routine.executor != nil {
 		routine.executor.Close()
 	}
@@ -177,6 +224,8 @@ func NewRoutine(rs goetty.IOSession, protocol *MysqlProtocol, executor CmdExecut
 		ses:         session,
 		io:          rs,
 		established: false,
+		requestChan: make(chan *Request,1),
+		notifyChan: make(chan interface{}),
 	}
 
 	if protocol != nil {
@@ -186,6 +235,9 @@ func NewRoutine(rs goetty.IOSession, protocol *MysqlProtocol, executor CmdExecut
 	if executor != nil {
 		executor.SetRoutine(ri)
 	}
+
+	//async process request
+	go ri.Loop()
 
 	return ri
 }

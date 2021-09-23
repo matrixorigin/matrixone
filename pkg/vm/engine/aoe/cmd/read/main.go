@@ -20,12 +20,12 @@ import (
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/local"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -61,7 +61,7 @@ const (
 )
 
 var (
-	opts     = &e.Options{}
+	opts     = &storage.Options{}
 	table    *aoe.TableInfo
 	readPool *ants.Pool
 	proc     *process.Process
@@ -70,16 +70,16 @@ var (
 
 func init() {
 	readPool, _ = ants.NewPool(readPoolSize)
-	mdCfg := &e.MetaCfg{
+	mdCfg := &storage.MetaCfg{
 		SegmentMaxBlocks: blockCntPerSegment,
 		BlockMaxRows:     blockRows,
 	}
-	opts.CacheCfg = &e.CacheCfg{
+	opts.CacheCfg = &storage.CacheCfg{
 		IndexCapacity:  blockRows * blockCntPerSegment * 80,
 		InsertCapacity: blockRows * uint64(colCnt) * 400,
 		DataCapacity:   blockRows * uint64(colCnt) * 400,
 	}
-	opts.MetaCleanerCfg = &e.MetaCleanerCfg{
+	opts.MetaCleanerCfg = &storage.MetaCleanerCfg{
 		Interval: time.Duration(1) * time.Second,
 	}
 	opts.Meta.Conf = mdCfg
@@ -88,7 +88,7 @@ func init() {
 }
 
 func getInsertBatch(meta *md.Table) *batch.Batch {
-	bat := chunk.MockBatch(meta.Schema.Types(), batchInsertRows)
+	bat := mock.MockBatch(meta.Schema.Types(), batchInsertRows)
 	return bat
 }
 

@@ -14,14 +14,16 @@
 package mutation
 
 import (
+	"matrixone/pkg/compress"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
@@ -69,7 +71,7 @@ func TestMutableBlockNode(t *testing.T) {
 	rows := uint64(10)
 	factor := uint64(4)
 
-	bat := chunk.MockBatch(schema.Types(), rows)
+	bat := mock.MockBatch(schema.Types(), rows)
 	insert := func(n *MutableBlockNode) func() error {
 		return func() error {
 			for idx, attr := range n.Data.GetAttrs() {
@@ -130,4 +132,21 @@ func TestMutableBlockNode(t *testing.T) {
 
 	t.Log(mgr.String())
 	t.Log(common.GPool.String())
+
+	bufs := make([][]byte, 2)
+	for i, _ := range bufs {
+		sz := tblkfile2.PartSize(uint64(i), *meta2.AsCommonID(), false)
+		osz := tblkfile2.PartSize(uint64(i), *meta2.AsCommonID(), true)
+		node := common.GPool.Alloc(uint64(sz))
+		defer common.GPool.Free(node)
+		buf := node.Buf[:sz]
+		tblkfile2.ReadPart(uint64(i), *meta2.AsCommonID(), buf)
+		obuf := make([]byte, osz)
+		_, err = compress.Decompress(buf, obuf, compress.Lz4)
+		assert.Nil(t, err)
+		vec := vector.NewEmptyStrVector()
+		err = vec.Unmarshal(obuf)
+		assert.Nil(t, err)
+		assert.Equal(t, int(rowCount), vec.Length())
+	}
 }

@@ -140,7 +140,7 @@ func (blk *block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 }
 
 func (blk *block) String() string {
-	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(Refs=%d)", blk.meta.ID, len(blk.data.cols), blk.RefCount())
+	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(RefCount=%d)", blk.meta.ID, len(blk.data.cols), blk.RefCount())
 	// for _, colBlk := range blk.data.cols {
 	// 	s = fmt.Sprintf("%s\n\t%s", s, colBlk.String())
 	// }
@@ -157,6 +157,9 @@ func (blk *block) GetVectorWrapper(attrid int) (*vector.VectorWrapper, error) {
 
 func (blk *block) GetVectorCopy(attr string, compressed, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
+	if colIdx == -1 {
+		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
+	}
 	vec, err := blk.data.cols[colIdx].ForceLoad(compressed, deCompressed)
 	if err != nil {
 		return nil, err
@@ -167,7 +170,7 @@ func (blk *block) GetVectorCopy(attr string, compressed, deCompressed *bytes.Buf
 func (blk *block) Prefetch(attr string) error {
 	colIdx := blk.meta.Segment.Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return errors.New("column not found")
+		return errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	return blk.data.cols[colIdx].Prefetch()
 }

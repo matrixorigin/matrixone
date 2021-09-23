@@ -16,8 +16,12 @@ package guest
 
 import "matrixone/pkg/vm/mmu/host"
 
+// Mmu is container for a query execution
 type Mmu struct {
-	size  int64
+	// size, current usage of memory
+	size int64
+	// Limit, maximum memory can be used in this query execution
 	Limit int64
-	Mmu   *host.Mmu
+	// Mmu,
+	Mmu *host.Mmu
 }

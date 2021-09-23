@@ -15,13 +15,14 @@
 package mempool
 
 const (
-	Factor     = 2
-	MaxSize    = 1 << 20
-	PageOffset = 6
-	PageSize   = 64
+	Factor   = 2
+	PageSize = 64
+	Limit    = 1 << 30
+	MaxSize  = 1 << 20
 )
 
 type Mempool struct {
+	size    int
 	buckets []bucket
 	buffers [][]byte
 }

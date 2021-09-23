@@ -43,7 +43,7 @@ type SchemaInfo struct {
 	CatalogId uint64       `json:"catalog_id"`
 	Id        uint64       `json:"id"`
 	Name      string       `json:"name"`
-	Tables    []*TableInfo `json:"tables"` // Tables in the DB.
+	Tables    []*TableInfo `json:"tables"` // Tables in the DBName.
 	State     SchemaState  `json:"state"`
 	Type      int          `json:"type"` // Engine type of schema: RSE、AOE、Spill
 	Epoch     uint64       `json:"epoch"`

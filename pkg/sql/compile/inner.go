@@ -69,13 +69,13 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 	s := new(Scope)
 	s.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	s.Proc.Lim = c.proc.Lim
-	s.Proc.Reg.Ws = make([]*process.WaitRegister, 2)
+	s.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	{
-		s.Proc.Reg.Ws[0] = &process.WaitRegister{
+		s.Proc.Reg.MergeReceivers[0] = &process.WaitRegister{
 			Wg: new(sync.WaitGroup),
 			Ch: make(chan interface{}, 8),
 		}
-		s.Proc.Reg.Ws[1] = &process.WaitRegister{
+		s.Proc.Reg.MergeReceivers[1] = &process.WaitRegister{
 			Wg: new(sync.WaitGroup),
 			Ch: make(chan interface{}, 8),
 		}
@@ -84,10 +84,10 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 	{
 		rms.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 		rms.Proc.Lim = c.proc.Lim
-		rms.Proc.Reg.Ws = make([]*process.WaitRegister, len(rs))
+		rms.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(rs))
 		{
 			for i, j := 0, len(rs); i < j; i++ {
-				rms.Proc.Reg.Ws[i] = &process.WaitRegister{
+				rms.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 					Wg: new(sync.WaitGroup),
 					Ch: make(chan interface{}, 8),
 				}
@@ -95,26 +95,26 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 		}
 		{
 			for i, s := range rs {
-				s.Ins = append(s.Ins, vm.Instruction{
-					Op: vm.Transfer,
+				s.Instructions = append(s.Instructions, vm.Instruction{
+					Code: vm.Transfer,
 					Arg: &transfer.Argument{
 						Proc: rms.Proc,
-						Reg:  rms.Proc.Reg.Ws[i],
+						Reg:  rms.Proc.Reg.MergeReceivers[i],
 					},
 				})
 			}
 		}
-		rms.Ss = rs
+		rms.PreScopes = rs
 		rms.Magic = Merge
-		rms.Ins = append(rms.Ins, vm.Instruction{
-			Op:  vm.Merge,
-			Arg: &merge.Argument{},
+		rms.Instructions = append(rms.Instructions, vm.Instruction{
+			Code: vm.Merge,
+			Arg:  &merge.Argument{},
 		})
-		rms.Ins = append(rms.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		rms.Instructions = append(rms.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: s.Proc,
-				Reg:  s.Proc.Reg.Ws[0],
+				Reg:  s.Proc.Reg.MergeReceivers[0],
 			},
 		})
 	}
@@ -122,10 +122,10 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 	{
 		sms.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 		sms.Proc.Lim = c.proc.Lim
-		sms.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
+		sms.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 		{
 			for i, j := 0, len(ss); i < j; i++ {
-				sms.Proc.Reg.Ws[i] = &process.WaitRegister{
+				sms.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 					Wg: new(sync.WaitGroup),
 					Ch: make(chan interface{}, 8),
 				}
@@ -133,33 +133,33 @@ func (c *compile) compileInnerJoin(o *innerJoin.Join, mp map[string]uint64) ([]*
 		}
 		{
 			for i, s := range ss {
-				s.Ins = append(s.Ins, vm.Instruction{
-					Op: vm.Transfer,
+				s.Instructions = append(s.Instructions, vm.Instruction{
+					Code: vm.Transfer,
 					Arg: &transfer.Argument{
 						Proc: sms.Proc,
-						Reg:  sms.Proc.Reg.Ws[i],
+						Reg:  sms.Proc.Reg.MergeReceivers[i],
 					},
 				})
 			}
 		}
-		sms.Ss = ss
+		sms.PreScopes = ss
 		sms.Magic = Merge
-		sms.Ins = append(sms.Ins, vm.Instruction{
-			Op:  vm.Merge,
-			Arg: &merge.Argument{},
+		sms.Instructions = append(sms.Instructions, vm.Instruction{
+			Code: vm.Merge,
+			Arg:  &merge.Argument{},
 		})
-		sms.Ins = append(sms.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		sms.Instructions = append(sms.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: s.Proc,
-				Reg:  s.Proc.Reg.Ws[1],
+				Reg:  s.Proc.Reg.MergeReceivers[1],
 			},
 		})
 	}
 	s.Magic = Merge
-	s.Ss = []*Scope{rms, sms}
-	s.Ins = append(s.Ins, vm.Instruction{
-		Op: vm.BagInnerJoin,
+	s.PreScopes = []*Scope{rms, sms}
+	s.Instructions = append(s.Instructions, vm.Instruction{
+		Code: vm.BagInnerJoin,
 		Arg: &inner.Argument{
 			Rattrs: o.Rattrs,
 			Sattrs: o.Sattrs,

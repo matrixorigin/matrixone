@@ -104,6 +104,17 @@ func NewSimpleSegment(typ base.SegmentType, meta *md.Segment, indexHolder *index
 		meta:        meta,
 		indexHolder: indexHolder,
 		segFile:     segFile,
+		tree: struct {
+			*sync.RWMutex
+			blocks    []iface.IBlock
+			helper    map[uint64]int
+			blockids  []uint64
+			blockcnt  uint32
+			attrsizes map[string]uint64
+		} {
+			helper: make(map[uint64]int),
+			RWMutex: &sync.RWMutex{},
+		},
 	}
 }
 
@@ -271,7 +282,7 @@ func (seg *segment) GetIndexHolder() *index.SegmentHolder {
 func (seg *segment) String() string {
 	seg.tree.RLock()
 	defer seg.tree.RUnlock()
-	s := fmt.Sprintf("<segment[%d]>(BlkCnt=%d)(Refs=%d)(IndexRefs=%d)", seg.meta.ID, seg.tree.blockcnt, seg.RefCount(), seg.indexHolder.RefCount())
+	s := fmt.Sprintf("<segment[%d]>(BlkCnt=%d)(RefCount=%d)(IndexRefs=%d)", seg.meta.ID, seg.tree.blockcnt, seg.RefCount(), seg.indexHolder.RefCount())
 	for _, blk := range seg.tree.blocks {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.String())
 		prev := blk.GetPrevVersion()

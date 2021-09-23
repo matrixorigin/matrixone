@@ -15,7 +15,7 @@
 package memdata
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -26,7 +26,7 @@ import (
 )
 
 type Context struct {
-	Opts                             *e.Options
+	Opts                             *storage.Options
 	DoneCB                           ops.OpDoneCB
 	Waitable                         bool
 	Tables                           *table.Tables

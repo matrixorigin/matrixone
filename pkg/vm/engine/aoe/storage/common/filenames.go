@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package engine
+package common
 
 import (
 	"errors"
@@ -22,16 +22,15 @@ import (
 	"strings"
 )
 
-type FileType int
+type FileT int
 
 const (
-	FTInfoCkp FileType = iota
+	FTInfoCkp FileT = iota
 	FTTableCkp
 	FTLock
 	FTTBlock
 	FTBlock
 	FTSegment
-	FTSegmentIndex
 	FTTransientNode
 )
 
@@ -47,9 +46,9 @@ func MakeMetaDir(dirname string) string {
 	return path.Join(dirname, "meta")
 }
 
-func MakeTableDir(dirname string, id uint64) string {
-	return path.Join(dirname, fmt.Sprintf("%d", id))
-}
+//func MakeTableDir(dirname string, id uint64) string {
+//	return path.Join(dirname, fmt.Sprintf("%d", id))
+//}
 
 func MakeTBlockFileName(dirname, name string, isTmp bool) string {
 	return MakeFilename(dirname, FTTBlock, name, isTmp)
@@ -123,7 +122,7 @@ func ParseTableMetaName(filename string) (name string, ok bool) {
 	return name, true
 }
 
-func MakeFilename(dirname string, ft FileType, name string, isTmp bool) string {
+func MakeFilename(dirname string, ft FileT, name string, isTmp bool) string {
 	var s string
 	switch ft {
 	case FTLock:

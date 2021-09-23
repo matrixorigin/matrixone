@@ -23,7 +23,7 @@ import (
 func (b *build) buildDedup(o op.OP) (op.OP, error) {
 	var gs []*extend.Attribute
 
-	attrs := o.Columns()
+	attrs := o.ResultColumns()
 	mp := o.Attribute()
 	for _, attr := range attrs {
 		gs = append(gs, &extend.Attribute{

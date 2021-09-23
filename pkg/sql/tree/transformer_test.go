@@ -37,9 +37,8 @@ func TestParser(t *testing.T) {
 	p := parser.New()
 
 	sql := `
-grant proxy on u1
-to u2,u3,u4
-WITH GRANT OPTION
+insert into tbl2 select col_1c,max(col_1b), "K" from tbl1;
+insert into tbl2 values (1,2),(3,4);
 ;`
 
 	stmtNodes, _, err := p.Parse(sql, "", "")
@@ -322,7 +321,7 @@ func Test_transformExprNodeToExpr(t *testing.T) {
 		V:  e1,
 	}
 
-	t18Want := NewUnaryExpr(UNARY_MARK, f1)
+	t18Want := NewNotExpr(f1)
 
 	//1 | 2
 	t21 := &ast.BinaryOperationExpr{
@@ -3858,44 +3857,13 @@ func gen_insert_t1()(*ast.InsertStmt,*Insert){
 func gen_insert_t2()(*ast.InsertStmt,*Insert){
 	t1,t1_want := gen_insert_t1()
 
-	l := t1.Lists
-
-	t1_list := []*ast.RowExpr{
-		&ast.RowExpr{Values: l[0]},
-		&ast.RowExpr{Values: l[1]},
-	}
-
 	t1.Lists = nil
 
-	t1.Select = &ast.SelectStmt{
-		SelectStmtOpts:   nil,
-		Distinct:         false,
-		From:             nil,
-		Where:            nil,
-		Fields:           nil,
-		GroupBy:          nil,
-		Having:           nil,
-		WindowSpecs:      nil,
-		OrderBy:          nil,
-		Limit:            nil,
-		LockInfo:         nil,
-		TableHints:       nil,
-		IsInBraces:       false,
-		QueryBlockOffset: 0,
-		SelectIntoOpt:    nil,
-		AfterSetOperator: nil,
-		Kind:             0,
-		Lists:            t1_list,
-	}
+	t1_sel,t1_want_sel := gen_transform_t1()
 
-	t1_want_list,_ := t1_want.Rows.Select.(*ValuesClause)
+	t1.Select = t1_sel
 
-	var t1_want_rows =[]Exprs{
-		[]Expr{NewTuple(t1_want_list.Rows[0])},
-		[]Expr{NewTuple(t1_want_list.Rows[1])},
-	}
-
-	t1_want.Rows = NewSelect(NewValuesClause(t1_want_rows),nil,nil)
+	t1_want.Rows = NewSelect(t1_want_sel,nil,nil)
 	return t1,t1_want
 }
 

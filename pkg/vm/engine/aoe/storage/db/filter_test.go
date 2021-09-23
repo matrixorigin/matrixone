@@ -24,7 +24,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	table2 "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -60,7 +60,7 @@ func TestAll(t *testing.T) {
 		block.SetCount(rowCount)
 		err = segment.RegisterBlock(block)
 		assert.Nil(t, err)
-		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+		batches = append(batches, mock.MockBatch(schema.Types(), rowCount))
 	}
 	path := "/tmp/testfilter"
 	writer := dataio.NewSegmentWriter(batches, segment, path)
@@ -1345,7 +1345,7 @@ func TestNotBuild(t *testing.T) {
 		block.SetCount(rowCount)
 		err = segment.RegisterBlock(block)
 		assert.Nil(t, err)
-		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+		batches = append(batches, mock.MockBatch(schema.Types(), rowCount))
 	}
 	path := "/tmp/testfilter"
 	writer := dataio.NewSegmentWriter(batches, segment, path)

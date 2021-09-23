@@ -107,7 +107,7 @@ func transformUnaryOperatorExprToUnaryExpr(uoe *ast.UnaryOperationExpr) *UnaryEx
 //transform ast.UnaryOperationExpr to tree.NotExpr
 func transformUnaryOperatorExprToNotExpr(uoe *ast.UnaryOperationExpr) *NotExpr {
 	switch uoe.Op {
-	case opcode.Not: //not,!
+	case opcode.Not,opcode.Not2: //not,!
 		e := transformExprNodeToExpr(uoe.V)
 		return NewNotExpr(e)
 	}
@@ -879,7 +879,7 @@ func transformExprNodeToExpr(node ast.ExprNode) Expr {
 
 	case *ast.UnaryOperationExpr:
 		switch n.Op {
-		case opcode.Not:
+		case opcode.Not,opcode.Not2:
 			return transformUnaryOperatorExprToNotExpr(n)
 		}
 		return transformUnaryOperatorExprToUnaryExpr(n)
@@ -1249,6 +1249,7 @@ func transformInsertStmtToInsert(is *ast.InsertStmt) *Insert {
 	colums = transformColumnNameListToNameList(is.Columns)
 
 	var rows []Exprs = nil
+	var sel *Select = nil
 	if is.Lists != nil {
 		for _, row := range is.Lists {
 			var arr Exprs = nil
@@ -1258,23 +1259,20 @@ func transformInsertStmtToInsert(is *ast.InsertStmt) *Insert {
 			}
 			rows = append(rows, arr)
 		}
+		vc := NewValuesClause(rows)
+		sel = NewSelect(vc, nil, nil)
 	} else if is.Select != nil {
 		if ss, ok := is.Select.(*ast.SelectStmt); !ok {
 			panic(fmt.Errorf("needs selectstmt\n"))
 		} else {
-			for _, row := range ss.Lists {
-				e := transformExprNodeToExpr(row)
-				rows = append(rows, []Expr{e})
-			}
+			sss := transformSelectStmtToSelect(ss)
+			sel = NewSelect(sss,nil,nil)
 		}
 	} else {
 		panic(fmt.Errorf("empty insertstmt\n"))
 	}
 
 	partition := transformCIStrToIdentifierList(is.PartitionNames)
-
-	vc := NewValuesClause(rows)
-	sel := NewSelect(vc, nil, nil)
 	return NewInsert(table, colums, sel, partition)
 }
 

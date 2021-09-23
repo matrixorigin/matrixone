@@ -16,6 +16,7 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"matrixone/pkg/vm/engine"
@@ -37,7 +38,7 @@ func NewSegmentFilter(s *Segment) engine.Filter {
 func (f *SegmentFilter) Eq(attr string, val interface{}) (*roaring64.Bitmap, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New("attr not found")
+		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
@@ -65,7 +66,7 @@ func (f *SegmentFilter) Eq(attr string, val interface{}) (*roaring64.Bitmap, err
 func (f *SegmentFilter) Ne(attr string, val interface{}) (*roaring64.Bitmap, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New("attr not found")
+		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
@@ -90,7 +91,7 @@ func (f *SegmentFilter) Ne(attr string, val interface{}) (*roaring64.Bitmap, err
 func (f *SegmentFilter) Lt(attr string, val interface{}) (*roaring64.Bitmap, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New("attr not found")
+		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
@@ -118,7 +119,7 @@ func (f *SegmentFilter) Lt(attr string, val interface{}) (*roaring64.Bitmap, err
 func (f *SegmentFilter) Le(attr string, val interface{}) (*roaring64.Bitmap, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New("attr not found")
+		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
@@ -146,7 +147,7 @@ func (f *SegmentFilter) Le(attr string, val interface{}) (*roaring64.Bitmap, err
 func (f *SegmentFilter) Gt(attr string, val interface{}) (*roaring64.Bitmap, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New("attr not found")
+		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
@@ -174,7 +175,7 @@ func (f *SegmentFilter) Gt(attr string, val interface{}) (*roaring64.Bitmap, err
 func (f *SegmentFilter) Ge(attr string, val interface{}) (*roaring64.Bitmap, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New("attr not found")
+		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))
@@ -202,7 +203,7 @@ func (f *SegmentFilter) Ge(attr string, val interface{}) (*roaring64.Bitmap, err
 func (f *SegmentFilter) Btw(attr string, minv interface{}, maxv interface{}) (*roaring64.Bitmap, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return nil, errors.New("attr not found")
+		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	bmRes := roaring.NewBitmap()
 	bmRes.AddRange(0, uint64(f.segment.Rows()))

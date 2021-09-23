@@ -44,8 +44,8 @@ package data
 // 	return seg
 // }
 
-// func MakeSegments(fsMgr ldio.IManager, mtBufMgr, sstBufMgr mgrif.IBufferManager, meta *md.Table, tblData table.ITableData, t *testing.T) []common.ID {
-// 	var segIDs []common.ID
+// func MakeSegments(fsMgr ldio.IManager, mtBufMgr, sstBufMgr mgrif.IBufferManager, meta *md.Table, tblData table.ITableData, t *testing.T) []common.RelationName {
+// 	var segIDs []common.RelationName
 // 	for _, segMeta := range meta.Segments {
 // 		var colSegs []col.IColumnSegment
 // 		for colIdx, _ := range segMeta.Schema.ColDefs {

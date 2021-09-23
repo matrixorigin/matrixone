@@ -24,52 +24,57 @@ import (
 	"sync"
 )
 
+// fillOutput
 func fillOutput(ss []*Scope, arg *output.Argument, proc *process.Process) []*Scope {
 	if len(ss) == 0 {
 		return ss
 	}
+	// illegal Magic
+	// TODO: need refactor
 	if ss[0].Magic > Remote {
 		return ss
 	}
 	if ss[0].Magic == Merge {
+		// add output instruction for each scope.
 		for i, s := range ss {
-			ss[i].Ins = append(s.Ins, vm.Instruction{
-				Arg: arg,
-				Op:  vm.Output,
+			ss[i].Instructions = append(s.Instructions, vm.Instruction{
+				Arg:  arg,
+				Code: vm.Output,
 			})
 		}
 		return ss
 	}
+	// unreached code for now
 	rs := new(Scope)
 	rs.Proc = process.New(guest.New(proc.Gm.Limit, proc.Gm.Mmu))
 	rs.Proc.Lim = proc.Lim
-	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 	{
 		for i, j := 0, len(ss); i < j; i++ {
-			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
 				Ch: make(chan interface{}, 8),
 			}
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
-				Reg:  rs.Proc.Reg.Ws[i],
+				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op:  vm.Merge,
-		Arg: &merge.Argument{},
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.Merge,
+		Arg:  &merge.Argument{},
 	})
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Arg: arg,
-		Op:  vm.Output,
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Arg:  arg,
+		Code: vm.Output,
 	})
 	return []*Scope{rs}
 }

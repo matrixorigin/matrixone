@@ -48,10 +48,10 @@ func Prepare(_ *process.Process, arg interface{}) error {
 }
 
 func Call(proc *process.Process, arg interface{}) (bool, error) {
-	if proc.Reg.Ax == nil {
+	if proc.Reg.InputBatch == nil {
 		return false, nil
 	}
-	bat := proc.Reg.Ax.(*batch.Batch)
+	bat := proc.Reg.InputBatch.(*batch.Batch)
 	if bat == nil || bat.Attrs == nil {
 		return false, nil
 	}
@@ -63,7 +63,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 		return false, err
 	}
 	bat.Clean(proc)
-	proc.Reg.Ax = ctr.bat
+	proc.Reg.InputBatch = ctr.bat
 	ctr.bat = nil
 	return false, nil
 }

@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
@@ -98,4 +99,17 @@ func TestBlock(t *testing.T) {
 	assert.Equal(t, 223, len(n))
 
 	assert.Equal(t, blk2.MaxRowCount*8*2, EstimateBlockSize(blk2))
+
+	blk4 := NewBlock(info2.Sequence.GetBlockID(), seg2)
+	pool, _ := ants.NewPool(20)
+	var wg sync.WaitGroup
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		pool.Submit(func() {
+			blk4.AddCount(1)
+			wg.Done()
+		})
+	}
+	wg.Wait()
+	assert.Equal(t, uint64(1000), blk4.GetCount())
 }

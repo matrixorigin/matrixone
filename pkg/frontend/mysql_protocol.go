@@ -366,7 +366,7 @@ func (mp *MysqlProtocol) appendStringLenEncOfUint64(data []byte, value uint64) [
 //return the buffer
 func (mp *MysqlProtocol) appendStringLenEncOfFloat64(data []byte, value float64, bitSize int) []byte {
 	var tmp []byte
-	tmp = strconv.AppendFloat(tmp, value, 'f', -1, bitSize)
+	tmp = strconv.AppendFloat(tmp, value, 'f', 4, bitSize)
 	return mp.appendCountOfBytesLenEnc(data, tmp)
 }
 
@@ -771,7 +771,8 @@ func (mp *MysqlProtocol) makeOKPayload(affectedRows, lastInsertId uint64, status
 	}
 
 	//ensured by capturing packets
-	pos = mp.io.WriteUint8(data,pos,0x2f)
+	//it only works on MAC
+	//pos = mp.io.WriteUint8(data,pos,0x2f)
 
 	if mp.capability&CLIENT_SESSION_TRACK != 0 {
 		//TODO:implement it

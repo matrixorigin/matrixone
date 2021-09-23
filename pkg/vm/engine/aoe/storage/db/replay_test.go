@@ -14,12 +14,12 @@
 package db
 
 import (
-	engine "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"sort"
 	"sync"
@@ -32,7 +32,7 @@ import (
 func TestReplay1(t *testing.T) {
 	initDBTest()
 	// inst := initDB(engine.NORMAL_FT)
-	inst := initDB(engine.MUTABLE_FT)
+	inst := initDB(storage.MUTABLE_FT)
 	tInfo := metadata.MockTableInfo(2)
 	name := "mockcon"
 	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: metadata.NextGlobalSeqNum()})
@@ -44,7 +44,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 
 	irows := inst.Store.MetaInfo.Conf.BlockMaxRows / 2
-	ibat := chunk.MockBatch(meta.Schema.Types(), irows)
+	ibat := mock.MockBatch(meta.Schema.Types(), irows)
 
 	insertFn := func() {
 		err = rel.Write(dbi.AppendCtx{
@@ -81,7 +81,7 @@ func TestReplay1(t *testing.T) {
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
 
-	inst = initDB(engine.MUTABLE_FT)
+	inst = initDB(storage.MUTABLE_FT)
 	// inst = initDB(engine.NORMAL_FT)
 
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
@@ -114,7 +114,7 @@ func TestReplay1(t *testing.T) {
 
 func mockSegFile(id common.ID, dir string, t *testing.T) string {
 	name := id.ToSegmentFileName()
-	fname := engine.MakeSegmentFileName(dir, name, id.TableID, false)
+	fname := common.MakeSegmentFileName(dir, name, id.TableID, false)
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
@@ -123,7 +123,7 @@ func mockSegFile(id common.ID, dir string, t *testing.T) string {
 
 func mockBlkFile(id common.ID, dir string, t *testing.T) string {
 	name := id.ToBlockFileName()
-	fname := engine.MakeBlockFileName(dir, name, id.TableID, false)
+	fname := common.MakeBlockFileName(dir, name, id.TableID, false)
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
@@ -132,7 +132,7 @@ func mockBlkFile(id common.ID, dir string, t *testing.T) string {
 
 func mockTBlkFile(id common.ID, version uint32, dir string, t *testing.T) string {
 	name := id.ToTBlockFileName(version)
-	fname := engine.MakeTBlockFileName(dir, name, false)
+	fname := common.MakeTBlockFileName(dir, name, false)
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
@@ -140,9 +140,9 @@ func mockTBlkFile(id common.ID, version uint32, dir string, t *testing.T) string
 }
 
 func initDataAndMetaDir(dir string) {
-	dataDir := engine.MakeDataDir(dir)
+	dataDir := common.MakeDataDir(dir)
 	os.MkdirAll(dataDir, os.ModePerm)
-	metaDir := engine.MakeMetaDir(dir)
+	metaDir := common.MakeMetaDir(dir)
 	os.MkdirAll(metaDir, os.ModePerm)
 }
 
@@ -154,7 +154,7 @@ func (o *replayObserver) OnRemove(name string) {
 	o.removed = append(o.removed, name)
 }
 
-func flushInfo(opts *engine.Options, info *metadata.MetaInfo, t *testing.T) {
+func flushInfo(opts *storage.Options, info *metadata.MetaInfo, t *testing.T) {
 	ckpointer := opts.Meta.CKFactory.Create()
 	err := ckpointer.PreCommit(info)
 	assert.Nil(t, err)
@@ -162,7 +162,7 @@ func flushInfo(opts *engine.Options, info *metadata.MetaInfo, t *testing.T) {
 	assert.Nil(t, err)
 }
 
-func flushTable(opts *engine.Options, meta *metadata.Table, t *testing.T) {
+func flushTable(opts *storage.Options, meta *metadata.Table, t *testing.T) {
 	ckpointer := opts.Meta.CKFactory.Create()
 	err := ckpointer.PreCommit(meta)
 	assert.Nil(t, err)
@@ -183,7 +183,7 @@ func TestReplay2(t *testing.T) {
 	schema := metadata.MockSchema(colCnt)
 	totalBlks := segBlkCount
 	tbl := metadata.MockTable(info, schema, totalBlks)
-	opts := new(engine.Options)
+	opts := new(storage.Options)
 	opts.Meta.Info = info
 	opts.FillDefaults(dir)
 
@@ -210,12 +210,12 @@ func TestReplay2(t *testing.T) {
 	assert.Equal(t, 0, len(observer.removed))
 }
 
-func buildOpts(dir string) *engine.Options {
+func buildOpts(dir string) *storage.Options {
 	mu := &sync.RWMutex{}
 	blkRowCount, segBlkCount := uint64(16), uint64(4)
 	info := metadata.MockInfo(mu, blkRowCount, segBlkCount)
 	info.Conf.Dir = dir
-	opts := new(engine.Options)
+	opts := new(storage.Options)
 	opts.Meta.Info = info
 	opts.FillDefaults(dir)
 	return opts

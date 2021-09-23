@@ -39,8 +39,8 @@ func (n *Offset) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Offset) Columns() []string {
-	return n.Prev.Columns()
+func (n *Offset) ResultColumns() []string {
+	return n.Prev.ResultColumns()
 }
 
 func (n *Offset) SetColumns(cs []string) {

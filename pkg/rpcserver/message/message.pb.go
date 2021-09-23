@@ -309,7 +309,7 @@ func (m *Message) Unmarshal(dAtA []byte) error {
 			iNdEx = postIndex
 		case 4:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Data", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field DataSource", wireType)
 			}
 			var byteLen int
 			for shift := uint(0); ; shift += 7 {

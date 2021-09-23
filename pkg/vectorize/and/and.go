@@ -18,6 +18,7 @@ var (
 	SelAnd func([]int64, []int64, []int64) int64
 )
 
+// rs can't equal ys
 func selAnd(xs, ys, rs []int64) int64 {
 	cnt := 0
 	i, j, n, m := 0, 0, len(xs), len(ys)

@@ -23,7 +23,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
@@ -94,7 +94,7 @@ func TestTBlock(t *testing.T) {
 	rows := uint64(10)
 	factor := uint64(4)
 
-	insertBat := chunk.MockBatch(schema.Types(), rows)
+	insertBat := mock.MockBatch(schema.Types(), rows)
 
 	insertFn := func(n *mutation.MutableBlockNode, idx *metadata.LogIndex) func() error {
 		return func() error {

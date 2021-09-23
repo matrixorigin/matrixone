@@ -15,7 +15,7 @@
 package gcreqs
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
@@ -27,15 +27,15 @@ import (
 type dropTblRequest struct {
 	gc.BaseRequest
 	// Tables' meta
-	Tables      *table.Tables
+	Tables *table.Tables
 	// Table id of the dropped table
 	TableId     uint64
 	MemTableMgr mtif.IManager
-	Opts        *e.Options
+	Opts        *storage.Options
 	CB          dbi.OnTableDroppedCB
 }
 
-func NewDropTblRequest(opts *e.Options, id uint64, tables *table.Tables, mtMgr mtif.IManager, cb dbi.OnTableDroppedCB) *dropTblRequest {
+func NewDropTblRequest(opts *storage.Options, id uint64, tables *table.Tables, mtMgr mtif.IManager, cb dbi.OnTableDroppedCB) *dropTblRequest {
 	req := new(dropTblRequest)
 	req.TableId = id
 	req.Tables = tables

@@ -28,7 +28,7 @@ func (idx *LogIndex) IsApplied() bool {
 	return idx.Capacity == idx.Start+idx.Count
 }
 
-func (idx *LogIndex) Marshall() ([]byte, error) {
+func (idx *LogIndex) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
 	buf.Write(encoding.EncodeUint64(idx.ID))
 	buf.Write(encoding.EncodeUint64(idx.Count))

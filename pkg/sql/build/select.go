@@ -66,6 +66,7 @@ func (b *build) buildSelect(stmt *tree.Select) (op.OP, error) {
 func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree.OrderBy, fetch *tree.Limit) (op.OP, error) {
 	var o op.OP
 	var err error
+	var ns tree.SelectExprs
 	var es []*projection.Extend
 
 	switch stmt := stmt.(type) {
@@ -75,10 +76,13 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 		if o, es, err = b.buildSelectClause(stmt, orderBy); err != nil {
 			return nil, err
 		}
+		ns = stmt.Exprs
 	default:
 		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unknown select statement: %T", stmt))
 	}
-	cs := o.Columns()
+	if o == nil {
+		return nil, nil
+	}
 	if len(orderBy) > 0 {
 		if fetch != nil && fetch.Offset == nil && fetch.Count != nil {
 			e, err := b.buildExtend(o, fetch.Count)
@@ -140,7 +144,7 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 			return nil, err
 		}
 	}
-	o.SetColumns(cs)
+	o.SetColumns(b.resultColumns(ns))
 	return o, nil
 }
 
@@ -164,6 +168,18 @@ func (b *build) buildSelectClauseWithSummarize(stmt *tree.SelectClause) (op.OP, 
 	if o, err = b.buildFrom(stmt.From.Tables); err != nil {
 		return nil, nil, err
 	}
+	if stmt.Exprs, err = b.rewriteProjection(o, stmt.Exprs); err != nil {
+		{
+			fmt.Printf("+++++++rewrite failed: %v\n", err)
+		}
+		return nil, nil, err
+	}
+	{
+		fmt.Printf("++++++++rewrite %v\n", len(stmt.Exprs))
+		for i, n := range stmt.Exprs {
+			fmt.Printf("[%v] = %v\n", i, n.As)
+		}
+	}
 	if len(stmt.GroupBy) != 0 {
 		if len(stmt.Exprs) != 0 {
 			if o, err = b.buildGroupBy(o, stmt.Exprs, stmt.GroupBy, stmt.Where); err != nil {
@@ -179,7 +195,7 @@ func (b *build) buildSelectClauseWithSummarize(stmt *tree.SelectClause) (op.OP, 
 		if o, err = b.buildDedup(o); err != nil {
 			return nil, nil, err
 		}
-		attrs := o.Columns()
+		attrs := o.ResultColumns()
 		mp := o.Attribute()
 		pes := make([]*projection.Extend, len(attrs))
 		for i, attr := range attrs {
@@ -205,6 +221,9 @@ func (b *build) buildSelectClauseWithoutSummarize(stmt *tree.SelectClause, order
 	var es, pes []*projection.Extend
 
 	if o, err = b.buildFrom(stmt.From.Tables); err != nil {
+		return nil, nil, err
+	}
+	if stmt.Exprs, err = b.rewriteProjection(o, stmt.Exprs); err != nil {
 		return nil, nil, err
 	}
 	mp := make(map[string]uint8)

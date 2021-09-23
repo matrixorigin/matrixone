@@ -22,14 +22,14 @@ import (
 
 func New(prev op.OP, gs []Attribute) *Order {
 	return &Order{
-		Gs:   gs,
-		Prev: prev,
+		Attributes: gs,
+		Prev:       prev,
 	}
 }
 
 func (n *Order) String() string {
 	r := fmt.Sprintf("%s -> τ([", n.Prev)
-	for i, g := range n.Gs {
+	for i, g := range n.Attributes {
 		switch i {
 		case 0:
 			r += fmt.Sprintf("%s", g.Name)
@@ -49,8 +49,8 @@ func (n *Order) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Order) Columns() []string {
-	return n.Prev.Columns()
+func (n *Order) ResultColumns() []string {
+	return n.Prev.ResultColumns()
 }
 
 func (n *Order) SetColumns(cs []string) {

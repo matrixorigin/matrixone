@@ -26,20 +26,85 @@ const (
 	UncompressedBlockSize = 4096
 )
 
+// Pipeline contains the information associated with a pipeline in a query execution plan.
+// A query execution plan may contains one or more pipelines.
+// As an example:
+//
+//  CREATE TABLE order
+//  (
+//        order_id    INT,
+//        uid          INT,
+//        item_id      INT,
+//        year         INT,
+//        nation       VARCHAR(100)
+//  );
+//
+//  CREATE TABLE customer
+//  (
+//        uid          INT,
+//        nation       VARCHAR(100),
+//        city         VARCHAR(100)
+//  );
+//
+//  CREATE TABLE supplier
+//  (
+//        item_id      INT,
+//        nation       VARCHAR(100),
+//        city         VARCHAR(100)
+//  );
+//
+// 	SELECT c.city, s.city, sum(o.revenue) AS revenue
+//  FROM customer c, order o, supplier s
+//  WHERE o.uid = c.uid
+//  AND o.item_id = s.item_id
+//  AND c.nation = 'CHINA'
+//  AND s.nation = 'CHINA'
+//  AND o.year >= 1992 and o.year <= 1997
+//  GROUP BY c.city, s.city, o.year
+//  ORDER BY o.year asc, revenue desc;
+//
+//  AST PLAN:
+//     order
+//       |
+//     group
+//       |
+//     filter
+//       |
+//     join
+//     /  \
+//    s   join
+//        /  \
+//       l   c
+//
+// In this example, a possible pipeline is as follows:
+//
+// pipeline:
+// o ⨝ c ⨝ s
+//  -> σ(c.nation = 'CHINA' ∧  o.year >= 1992 ∧  o.year <= 1997 ∧  s.nation = 'CHINA')
+//  -> γ([c.city, s.city, o.year, sum(o.revenue) as revenue], c.city, s.city, o.year)
+//  -> τ(o.year asc, revenue desc)
+//  -> π(c.city, s.city, revenue)
 type Pipeline struct {
-	cs    []uint64        // reference count for attribute
-	attrs []string        // attribute list
-	cds   []*bytes.Buffer // buffers for compressed data
-	dds   []*bytes.Buffer // buffers for decompressed data
-	ins   vm.Instructions // orders to be executed
+	// refCount, reference count for attribute.
+	refCount []uint64
+	// attrs, column list.
+	attrs []string
+	// compressedBytes, buffers for compressed data.
+	compressedBytes []*bytes.Buffer
+	// decompressedBytes, buffers for decompressed data.
+	decompressedBytes []*bytes.Buffer
+	// instructions, stores ordered instruction list that to be executed.
+	instructions vm.Instructions // orders to be executed.
 }
 
 type block struct {
 	blk engine.Block
 }
 
+//queue contains prefetched blocks and the information of current prefetch index.
 type queue struct {
-	pi  int   // prefetch index
-	siz int64 // not used now
-	bs  []block
+	prefetchIndex int
+	// size, is not used now
+	siz    int64
+	blocks []block
 }

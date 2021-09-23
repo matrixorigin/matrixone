@@ -36,8 +36,8 @@ type Attribute struct {
 }
 
 type Order struct {
-	Prev op.OP
-	IsPD bool // can be push down?
-	ID   string
-	Gs   []Attribute
+	Prev       op.OP
+	IsPD       bool        // can be push down?
+	ID         string      // 关系变量的名称
+	Attributes []Attribute // 操作的列
 }

@@ -16,6 +16,7 @@ package db
 
 import (
 	"errors"
+	"fmt"
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"matrixone/pkg/vm/engine"
 )
@@ -38,7 +39,7 @@ func NewSegmentSummarizer(s *Segment) engine.Summarizer {
 func (s *SegmentSummarizer) Count(attr string, filter *roaring.Bitmap) (uint64, error) {
 	colIdx := s.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return 0, errors.New("attr not found")
+		return 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	return s.segment.Data.GetIndexHolder().Count(colIdx, filter)
 }
@@ -46,7 +47,7 @@ func (s *SegmentSummarizer) Count(attr string, filter *roaring.Bitmap) (uint64, 
 func (s *SegmentSummarizer) NullCount(attr string, filter *roaring.Bitmap) (uint64, error) {
 	colIdx := s.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return 0, errors.New("attr not found")
+		return 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	return s.segment.Data.GetIndexHolder().NullCount(colIdx, filter)
 }
@@ -54,7 +55,7 @@ func (s *SegmentSummarizer) NullCount(attr string, filter *roaring.Bitmap) (uint
 func (s *SegmentSummarizer) Max(attr string, filter *roaring.Bitmap) (interface{}, error) {
 	colIdx := s.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return 0, errors.New("attr not found")
+		return 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	return s.segment.Data.GetIndexHolder().Max(colIdx, filter)
 }
@@ -62,7 +63,7 @@ func (s *SegmentSummarizer) Max(attr string, filter *roaring.Bitmap) (interface{
 func (s *SegmentSummarizer) Min(attr string, filter *roaring.Bitmap) (interface{}, error) {
 	colIdx := s.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return 0, errors.New("attr not found")
+		return 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	return s.segment.Data.GetIndexHolder().Min(colIdx, filter)
 }
@@ -70,7 +71,7 @@ func (s *SegmentSummarizer) Min(attr string, filter *roaring.Bitmap) (interface{
 func (s *SegmentSummarizer) Sum(attr string, filter *roaring.Bitmap) (int64, uint64, error) {
 	colIdx := s.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
-		return 0, 0, errors.New("attr not found")
+		return 0, 0, errors.New(fmt.Sprintf("column %s not found", attr))
 	}
 	return s.segment.Data.GetIndexHolder().Sum(colIdx, filter)
 }

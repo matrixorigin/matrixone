@@ -2,8 +2,9 @@ package common
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestId(t *testing.T) {
@@ -11,7 +12,7 @@ func TestId(t *testing.T) {
 	assert.Equal(t, TRANSIENT_TABLE_START_ID, tid.TableID)
 	assert.Equal(t, true, tid.IsTransient())
 	assert.Equal(t, fmt.Sprintf("%d_0_0_0", TRANSIENT_TABLE_START_ID), tid.ToTBlockFileName(0))
-	newTid, err := ParseTBlockfileName(fmt.Sprintf("%d_0_0_0", TRANSIENT_TABLE_START_ID))
+	newTid, err := ParseTBlkNameToID(fmt.Sprintf("%d_0_0_0", TRANSIENT_TABLE_START_ID))
 	assert.Nil(t, err)
 	assert.Equal(t, true, tid.IsSameBlock(newTid))
 	assert.Equal(t, tid.PartID, newTid.PartID)
@@ -26,28 +27,28 @@ func TestId(t *testing.T) {
 		SegmentID: 1,
 	}
 	sid00 := ID{
-		TableID: 0,
+		TableID:   0,
 		SegmentID: 0,
 	}
-	assert.Equal(t, "ID<0:0-0-0-0-0>", sid0.String())
+	assert.Equal(t, "RelationName<0:0-0-0-0-0>", sid0.String())
 	assert.Equal(t, false, sid0.IsSameSegment(sid1))
 	assert.Equal(t, true, sid0.IsSameSegment(sid00))
 	sid00.NextSegment()
 	assert.Equal(t, uint64(1), sid00.NextSegment().SegmentID)
 	bid0 := ID{
-		TableID: 0,
+		TableID:   0,
 		SegmentID: 0,
-		BlockID: 0,
+		BlockID:   0,
 	}
 	bid1 := ID{
-		TableID: 0,
+		TableID:   0,
 		SegmentID: 0,
-		BlockID: 1,
+		BlockID:   1,
 	}
 	assert.Equal(t, false, bid0.IsSameBlock(bid1))
-	assert.Equal(t, "ID<0>", bid0.TableString())
-	assert.Equal(t, "ID<0:0-0>", bid0.SegmentString())
-	assert.Equal(t, "ID<0:0-0-0>", bid0.BlockString())
+	assert.Equal(t, "RelationName<0>", bid0.TableString())
+	assert.Equal(t, "RelationName<0:0-0>", bid0.SegmentString())
+	assert.Equal(t, "RelationName<0:0-0-0>", bid0.BlockString())
 	assert.Equal(t, uint64(0), bid0.AsSegmentID().SegmentID)
 	assert.Equal(t, uint64(0), bid0.AsBlockID().BlockID)
 	assert.Equal(t, uint64(0), bid0.NextBlock().BlockID)
@@ -62,25 +63,25 @@ func TestId(t *testing.T) {
 	assert.Equal(t, "2/0/1/", bid0.ToBlockFilePath())
 	assert.Equal(t, "2_0", bid0.ToSegmentFileName())
 	assert.Equal(t, "2/0/", bid0.ToSegmentFilePath())
-	_, err = ParseTBlockfileName("0_0_0")
+	_, err = ParseTBlkNameToID("0_0_0")
 	assert.NotNil(t, err)
-	_, err = ParseTBlockfileName("a_0_0_0")
+	_, err = ParseTBlkNameToID("a_0_0_0")
 	assert.NotNil(t, err)
-	_, err = ParseTBlockfileName("0_a_0_0")
+	_, err = ParseTBlkNameToID("0_a_0_0")
 	assert.NotNil(t, err)
-	_, err = ParseTBlockfileName("0_0_a_0")
+	_, err = ParseTBlkNameToID("0_0_a_0")
 	assert.NotNil(t, err)
-	_, err = ParseTBlockfileName("0_0_0_a")
+	_, err = ParseTBlkNameToID("0_0_0_a")
 	assert.NotNil(t, err)
-	_, err = ParseBlockFileName("0_0")
+	_, err = ParseBlkNameToID("0_0")
 	assert.NotNil(t, err)
-	_, err = ParseBlockFileName("a_0_0")
+	_, err = ParseBlkNameToID("a_0_0")
 	assert.NotNil(t, err)
-	_, err = ParseBlockFileName("0_a_0")
+	_, err = ParseBlkNameToID("0_a_0")
 	assert.NotNil(t, err)
-	_, err = ParseBlockFileName("0_0_a")
+	_, err = ParseBlkNameToID("0_0_a")
 	assert.NotNil(t, err)
-	_, err = ParseBlockFileName("0_0_0")
+	_, err = ParseBlkNameToID("0_0_0")
 	assert.Nil(t, err)
 	_, err = ParseSegmentFileName("0")
 	assert.NotNil(t, err)

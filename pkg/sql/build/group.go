@@ -94,7 +94,7 @@ func (b *build) buildGroupBy(o op.OP, ns tree.SelectExprs, grs tree.GroupBy, whe
 			es = append(es, aggregation.Extend{
 				Agg:   agg,
 				Alias: alias,
-				Name:  prev.Columns()[0],
+				Name:  prev.ResultColumns()[0],
 				Op:    aggregation.StarCount,
 			})
 		case *tree.UnresolvedName:

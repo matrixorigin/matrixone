@@ -20,7 +20,8 @@ import (
 	"matrixone/pkg/compress"
 	gbatch "matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	gvector "matrixone/pkg/container/vector"
+	"matrixone/pkg/logutil"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -28,7 +29,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/mock/type/chunk"
+	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"path/filepath"
 	"sync"
@@ -46,7 +47,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 	var dir string
 	for i := 0; i < blkCnt; i++ {
 		id.BlockID = uint64(i)
-		name := e.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID, false)
+		name := common.MakeBlockFileName(dirname, id.ToBlockFileName(), id.TableID, false)
 		dir = filepath.Dir(name)
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			err = os.MkdirAll(dir, 0755)
@@ -82,7 +83,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 			Count:    uint64(0),
 			Capacity: uint64(0),
 		}
-		buf, err := prevIdx.Marshall()
+		buf, err := prevIdx.Marshal()
 		assert.Nil(t, err)
 		var sz int32
 		sz = int32(len(buf))
@@ -96,7 +97,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 			Count:    uint64(0),
 			Capacity: uint64(0),
 		}
-		buf, err = idx.Marshall()
+		buf, err = idx.Marshal()
 		assert.Nil(t, err)
 		var sz_ int32
 		sz_ = int32(len(buf))
@@ -167,13 +168,32 @@ func TestAll(t *testing.T) {
 	t.Log(droppedBlocks)
 	assert.Equal(t, 1, len(droppedBlocks))
 	assert.Equal(t, droppedBlocks[0], dropblkid)
+
+	fsMgr := NewManager(workDir, false)
+	segFile = fsMgr.GetUnsortedFile(id)
+	assert.Nil(t, segFile)
+	segFile, err := fsMgr.RegisterUnsortedFiles(id)
+	assert.Nil(t, err)
+	segFile = fsMgr.GetUnsortedFile(id)
+	assert.NotNil(t, segFile)
+	fsMgr.UnregisterUnsortedFile(id)
+	err = fsMgr.Close()
+	assert.Nil(t, err)
+	logutil.Infof(fsMgr.String())
 }
 
 func TestSegmentWriter(t *testing.T) {
+	if !FlushIndex {
+		FlushIndex = true
+		defer func() {
+			FlushIndex = false
+		}()
+	}
 	mu := &sync.RWMutex{}
 	rowCount, blkCount := uint64(10), uint64(4)
 	info := md.MockInfo(mu, rowCount, blkCount)
-	schema := md.MockSchema(2)
+	//schema := md.MockSchema(2)
+	schema := md.MockSchemaAll(14)
 	segCnt, blkCnt := uint64(4), uint64(4)
 	table := md.MockTable(info, schema, segCnt*blkCnt)
 	segment, err := table.CreateSegment()
@@ -187,7 +207,7 @@ func TestSegmentWriter(t *testing.T) {
 		block.SetCount(rowCount)
 		err = segment.RegisterBlock(block)
 		assert.Nil(t, err)
-		batches = append(batches, chunk.MockBatch(schema.Types(), rowCount))
+		batches = append(batches, mock.MockBatch(schema.Types(), rowCount))
 	}
 	path := "/tmp/testwriter"
 	writer := NewSegmentWriter(batches, segment, path)
@@ -196,6 +216,9 @@ func TestSegmentWriter(t *testing.T) {
 	// name := writer.GetFileName()
 	segFile := NewSortedSegmentFile(path, *segment.AsCommonID())
 	assert.NotNil(t, segFile)
+	assert.NotNil(t, segFile.Stat().Name())
+	assert.NotNil(t, segFile.Stat().OriginSize())
+	assert.NotNil(t, segFile.Stat().CompressAlgo())
 	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(1000), table.ID)
 	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
 	segHolder.Unref()
@@ -222,6 +245,33 @@ func TestSegmentWriter(t *testing.T) {
 	stat1 := col1Vf.Stat()
 	t.Log(stat0.Name())
 	t.Log(stat1.Name())
+	buf := make([]byte, col1Vf.Stat().Size())
+	len, err := col1Vf.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(len), col1Vf.Stat().Size())
+	buf = make([]byte, col0Vf.Stat().Size())
+	len, err = col0Vf.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(len), col0Vf.Stat().Size())
+
+	fsMgr := NewManager(path, false)
+	segFile, err = fsMgr.RegisterUnsortedFiles(*segment.AsCommonID())
+	assert.Nil(t, err)
+	segFile = fsMgr.UpgradeFile(*segment.AsCommonID())
+	assert.NotNil(t, segFile)
+	segFile = fsMgr.GetUnsortedFile(*segment.AsCommonID())
+	assert.Nil(t, segFile)
+	fsMgr.UnregisterSortedFile(*segment.AsCommonID())
+	segFile, err = fsMgr.RegisterSortedFiles(*segment.AsCommonID())
+	assert.Nil(t, err)
+	segFile = fsMgr.GetSortedFile(*segment.AsCommonID())
+	fsMgr.UnregisterSortedFile(*segment.AsCommonID())
+	assert.NotNil(t, segFile)
+	err = fsMgr.Close()
+	assert.Nil(t, err)
+	logutil.Infof(fsMgr.String())
+	col0Vf.Unref()
+	col1Vf.Unref()
 }
 
 func TestIVectorNodeWriter(t *testing.T) {
@@ -229,9 +279,9 @@ func TestIVectorNodeWriter(t *testing.T) {
 	os.RemoveAll(dir)
 	vecType := types.Type{types.T_int32, 4, 4, 0}
 	capacity := uint64(40)
-	vec0 := vector.NewStdVector(vecType, capacity)
+	vec0 := vector.NewStdVector(vecType, 4)
 	defer vec0.Close()
-	vec1 := vector.NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, capacity)
+	vec1 := vector.NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, 4)
 	defer vec1.Close()
 	err := vec0.Append(4, []int32{int32(0), int32(1), int32(2), int32(3)})
 	assert.Nil(t, err)
@@ -269,18 +319,36 @@ func TestIVectorNodeWriter(t *testing.T) {
 		assert.Nil(t, err)
 		if i == 0 {
 			vec := vector.NewEmptyStdVector()
-			err = vec.Unmarshall(obuf)
+			err = vec.Unmarshal(obuf)
 			assert.Nil(t, err)
 			t.Log(vec.GetLatestView().CopyToVector().String())
 			assert.Equal(t, 4, vec.Length())
 		} else {
 			vec := vector.NewEmptyStrVector()
-			err = vec.Unmarshall(obuf)
+			err = vec.Unmarshal(obuf)
 			assert.Nil(t, err)
 			t.Log(vec.GetLatestView().CopyToVector().String())
 			assert.Equal(t, 4, vec.Length())
 		}
 	}
+
+	var vecs []*gvector.Vector
+	vecs = append(vecs, vec0.CopyToVector())
+	vecs = append(vecs, vec1.CopyToVector())
+	bw := NewBlockWriter(vecs, meta, dir)
+	err = bw.Execute()
+	assert.Nil(t, err)
+	logutil.Infof(" %s | Memtable | Flushing", bw.GetFileName())
+
+	col0Vf := segFile.MakeVirtualPartFile(&id)
+	assert.NotNil(t, col0Vf)
+	stat0 := col0Vf.Stat()
+	t.Log(stat0.Name())
+	buf := make([]byte, col0Vf.Stat().Size())
+	len, err := col0Vf.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, int64(len), col0Vf.Stat().Size())
+	col0Vf.Unref()
 }
 
 func TestTransientBlock(t *testing.T) {
@@ -303,8 +371,8 @@ func TestTransientBlock(t *testing.T) {
 	t.Log(tblk.nextVersion())
 
 	// rows := uint64(2)
-	// bat1 := chunk.MockBatch(schema.Types(), rows)
-	// bat2 := chunk.MockBatch(schema.Types(), rowCount)
+	// bat1 := mock.MockBatch(schema.Types(), rows)
+	// bat2 := mock.MockBatch(schema.Types(), rowCount)
 
 	// ok := tblk.PreSync(uint32(bat1.Vecs[0].Length()))
 	// assert.True(t, ok)

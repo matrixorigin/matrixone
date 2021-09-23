@@ -21,7 +21,7 @@ const (
 	Group
 	Order
 	Offset
-	Transfer
+	Transfer //push batch to channel
 	Restrict
 	Summarize
 	Projection
@@ -52,8 +52,11 @@ const (
 	MergeSummarize
 )
 
+// Instruction contains relational algebra
 type Instruction struct {
-	Op  int
+	// Code specified a specific instruction.
+	Code int
+	// Arg contains the operand of this instruction.
 	Arg interface{}
 }
 

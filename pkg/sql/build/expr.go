@@ -72,11 +72,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 	case *tree.NumVal:
 		return buildValue(e.Value)
 	case *tree.ParenExpr:
-		ext, err := b.buildExpr(o, e.Expr)
-		if err != nil {
-			return nil, err
-		}
-		return &extend.ParenExtend{E: ext}, nil
+		return b.buildExpr(o, e.Expr)
 	case *tree.OrExpr:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
@@ -146,7 +142,7 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 		case defines.MYSQL_TYPE_DOUBLE:
 			typ.Size = 8
 			typ.Oid = types.T_float64
-		case defines.MYSQL_TYPE_VARCHAR:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING:
 			typ.Size = 24
 			typ.Oid = types.T_varchar
 		default:
@@ -202,6 +198,289 @@ func (b *build) buildExpr(o op.OP, n tree.Expr) (extend.Extend, error) {
 		return b.buildAttribute(o, e)
 	}
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+}
+
+func (b *build) buildExprWithoutCheck(o op.OP, n tree.Expr) (extend.Extend, error) {
+	switch e := n.(type) {
+	case *tree.NumVal:
+		return buildValue(e.Value)
+	case *tree.ParenExpr:
+		return b.buildExprWithoutCheck(o, e.Expr)
+	case *tree.OrExpr:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.Or, Left: left, Right: right}, nil
+	case *tree.NotExpr:
+		ext, err := b.buildExprWithoutCheck(o, e.Expr)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.UnaryExtend{Op: overload.Not, E: ext}, nil
+	case *tree.AndExpr:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.And, Left: left, Right: right}, nil
+	case *tree.XorExpr:
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Xor is not support now"))
+	case *tree.UnaryExpr:
+		return b.buildUnaryWithoutCheck(o, e)
+	case *tree.BinaryExpr:
+		return b.buildBinaryWithoutCheck(o, e)
+	case *tree.ComparisonExpr:
+		return b.buildComparisonWithoutCheck(o, e)
+	case *tree.Tuple:
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+	case *tree.FuncExpr:
+		name, ok := e.Func.FunctionReference.(*tree.UnresolvedName)
+		if !ok {
+			return nil, sqlerror.New(errno.SyntaxError, fmt.Sprintf("illegal expression '%s'", e))
+		}
+		if _, ok := e.Exprs[0].(*tree.NumVal); ok {
+			return &extend.Attribute{Name: "count(*)"}, nil
+		}
+		ext, err := b.buildExprWithoutCheck(o, e.Exprs[0])
+		if err != nil {
+			return nil, err
+		}
+		return &extend.Attribute{Name: fmt.Sprintf("%s(%s)", name.Parts[0], ext)}, nil
+	case *tree.IsNullExpr:
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+	case *tree.IsNotNullExpr:
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+	case *tree.Subquery:
+		return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+	case *tree.CastExpr:
+		left, err := b.buildExprWithoutCheck(o, e.Expr)
+		if err != nil {
+			return nil, err
+		}
+		typ := types.Type{}
+		switch uint8(e.Type.(*tree.T).InternalType.Oid) {
+		case defines.MYSQL_TYPE_TINY:
+			typ.Size = 1
+			typ.Oid = types.T_int8
+		case defines.MYSQL_TYPE_SHORT:
+			typ.Size = 2
+			typ.Oid = types.T_int16
+		case defines.MYSQL_TYPE_LONG:
+			typ.Size = 4
+			typ.Oid = types.T_int32
+		case defines.MYSQL_TYPE_LONGLONG:
+			typ.Size = 8
+			typ.Oid = types.T_int64
+		case defines.MYSQL_TYPE_FLOAT:
+			typ.Size = 4
+			typ.Oid = types.T_float32
+		case defines.MYSQL_TYPE_DOUBLE:
+			typ.Size = 8
+			typ.Oid = types.T_float64
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING:
+			typ.Size = 24
+			typ.Oid = types.T_varchar
+		default:
+			return nil, sqlerror.New(errno.IndeterminateDatatype, fmt.Sprintf("'%v' is not support now", n))
+		}
+		return &extend.BinaryExtend{
+			Op:    overload.Typecast,
+			Left:  left,
+			Right: &extend.ValueExtend{V: vector.New(typ)},
+		}, nil
+	case *tree.RangeCond:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		from, err := b.buildExprWithoutCheck(o, e.From)
+		if err != nil {
+			return nil, err
+		}
+		to, err := b.buildExprWithoutCheck(o, e.To)
+		if err != nil {
+			return nil, err
+		}
+		if e.Not {
+			return &extend.BinaryExtend{
+				Op: overload.Or,
+				Left: &extend.BinaryExtend{
+					Op:    overload.LT,
+					Left:  left,
+					Right: from,
+				},
+				Right: &extend.BinaryExtend{
+					Op:    overload.GT,
+					Left:  left,
+					Right: to,
+				},
+			}, nil
+		}
+		return &extend.BinaryExtend{
+			Op: overload.And,
+			Left: &extend.BinaryExtend{
+				Op:    overload.GE,
+				Left:  left,
+				Right: from,
+			},
+			Right: &extend.BinaryExtend{
+				Op:    overload.LE,
+				Left:  left,
+				Right: to,
+			},
+		}, nil
+	case *tree.UnresolvedName:
+		if e.NumParts == 1 || len(e.Parts[1]) == 0 {
+			return &extend.Attribute{Name: e.Parts[0]}, nil
+		}
+		return &extend.Attribute{Name: e.Parts[1] + "." + e.Parts[0]}, nil
+	}
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+}
+
+func (b *build) buildUnaryWithoutCheck(o op.OP, e *tree.UnaryExpr) (extend.Extend, error) {
+	switch e.Op {
+	case tree.UNARY_MINUS:
+		ext, err := b.buildExprWithoutCheck(o, e.Expr)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.UnaryExtend{Op: overload.UnaryMinus, E: ext}, nil
+	case tree.UNARY_PLUS:
+		return b.buildExprWithoutCheck(o, e.Expr)
+	}
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
+}
+
+func (b *build) buildBinaryWithoutCheck(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) {
+	switch e.Op {
+	case tree.PLUS:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.Plus, Left: left, Right: right}, nil
+	case tree.MINUS:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.Minus, Left: left, Right: right}, nil
+	case tree.MULTI:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.Mult, Left: left, Right: right}, nil
+	case tree.MOD:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.Mod, Left: left, Right: right}, nil
+	case tree.DIV, tree.INTEGER_DIV:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.Div, Left: left, Right: right}, nil
+	}
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
+}
+
+func (b *build) buildComparisonWithoutCheck(o op.OP, e *tree.ComparisonExpr) (extend.Extend, error) {
+	switch e.Op {
+	case tree.EQUAL:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.EQ, Left: left, Right: right}, nil
+	case tree.LESS_THAN:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.LT, Left: left, Right: right}, nil
+	case tree.LESS_THAN_EQUAL:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.LE, Left: left, Right: right}, nil
+	case tree.GREAT_THAN:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.GT, Left: left, Right: right}, nil
+	case tree.GREAT_THAN_EQUAL:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.GE, Left: left, Right: right}, nil
+	case tree.NOT_EQUAL:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.NE, Left: left, Right: right}, nil
+	}
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }
 
 func (b *build) buildUnary(o op.OP, e *tree.UnaryExpr) (extend.Extend, error) {
@@ -361,6 +640,14 @@ func (b *build) buildAttribute(o op.OP, e *tree.UnresolvedName) (extend.Extend, 
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unknown column '%s' in expr", e.Parts[0]))
 }
 
+func (b *build) exprAlias(o op.OP, n tree.Expr) (tree.UnrestrictedIdentifier, error) {
+	e, err := b.buildExprWithoutCheck(o, n)
+	if err != nil {
+		return "", err
+	}
+	return tree.UnrestrictedIdentifier(e.String()), nil
+}
+
 func stripParens(expr tree.Expr) tree.Expr {
 	if p, ok := expr.(*tree.ParenExpr); ok {
 		return stripParens(p.Expr)
@@ -372,6 +659,25 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:
 		return buildConstantValue(typ, e.Value)
+	case *tree.UnaryExpr:
+		if e.Op == tree.UNARY_PLUS {
+			return buildConstant(typ, e.Expr)
+		}
+		if e.Op == tree.UNARY_MINUS {
+			v, err := buildConstant(typ, e.Expr)
+			if err != nil {
+				return nil, err
+			}
+			switch val := v.(type) {
+			case int64:
+				return val * -1, nil
+			case float32:
+				return val * -1, nil
+			case float64:
+				return val * -1, nil
+			}
+			return v, nil
+		}
 	}
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }

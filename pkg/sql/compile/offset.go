@@ -33,32 +33,32 @@ func (c *compile) compileOffset(o *offset.Offset, mp map[string]uint64) ([]*Scop
 	rs := new(Scope)
 	rs.Proc = process.New(guest.New(c.proc.Gm.Limit, c.proc.Gm.Mmu))
 	rs.Proc.Lim = c.proc.Lim
-	rs.Proc.Reg.Ws = make([]*process.WaitRegister, len(ss))
+	rs.Proc.Reg.MergeReceivers = make([]*process.WaitRegister, len(ss))
 	{
 		for i, j := 0, len(ss); i < j; i++ {
-			rs.Proc.Reg.Ws[i] = &process.WaitRegister{
+			rs.Proc.Reg.MergeReceivers[i] = &process.WaitRegister{
 				Wg: new(sync.WaitGroup),
 				Ch: make(chan interface{}, 8),
 			}
 		}
 	}
 	for i, s := range ss {
-		ss[i].Ins = append(s.Ins, vm.Instruction{
-			Op: vm.Transfer,
+		ss[i].Instructions = append(s.Instructions, vm.Instruction{
+			Code: vm.Transfer,
 			Arg: &transfer.Argument{
 				Proc: rs.Proc,
-				Reg:  rs.Proc.Reg.Ws[i],
+				Reg:  rs.Proc.Reg.MergeReceivers[i],
 			},
 		})
 	}
-	rs.Ss = ss
+	rs.PreScopes = ss
 	rs.Magic = Merge
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op:  vm.Merge,
-		Arg: &merge.Argument{},
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.Merge,
+		Arg:  &merge.Argument{},
 	})
-	rs.Ins = append(rs.Ins, vm.Instruction{
-		Op: vm.Offset,
+	rs.Instructions = append(rs.Instructions, vm.Instruction{
+		Code: vm.Offset,
 		Arg: &voffset.Argument{
 			Offset: uint64(o.Offset),
 		},

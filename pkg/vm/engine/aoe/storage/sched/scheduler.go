@@ -16,7 +16,7 @@ package sched
 
 import (
 	"errors"
-	logutil2 "matrixone/pkg/logutil"
+	"matrixone/pkg/logutil"
 	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"strconv"
@@ -59,7 +59,7 @@ func (s *BaseScheduler) doDispatch(op iops.IOp) {
 	e := op.(Event)
 	dispatcher := s.dispatchers[e.Type()]
 	if dispatcher == nil {
-		logutil2.Error(strconv.Itoa(int(e.Type())))
+		logutil.Error(strconv.Itoa(int(e.Type())))
 		panic(ErrDispatcherNotFound)
 	}
 	dispatcher.Dispatch(e)

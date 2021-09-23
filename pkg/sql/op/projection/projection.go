@@ -101,7 +101,7 @@ func (n *Projection) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Projection) Columns() []string {
+func (n *Projection) ResultColumns() []string {
 	return n.Rs
 }
 

@@ -21,10 +21,12 @@ import (
 	"matrixone/pkg/vm"
 )
 
+//mp 引用计数
 func (c *compile) compileOutput(o *projection.Projection, mp map[string]uint64) ([]*Scope, error) {
 	refer := make(map[string]uint64)
 	{
 		mq := make(map[string]uint64)
+		//遍历表达式列表，修改属性引用计数
 		for i, e := range o.Es {
 			if name, ok := e.E.(*extend.Attribute); ok && name.Name == o.As[i] {
 				mq[name.Name]++
@@ -43,6 +45,7 @@ func (c *compile) compileOutput(o *projection.Projection, mp map[string]uint64) 
 			mp[k] += v
 		}
 	}
+	//编译上一个关系运算符
 	ss, err := c.compile(o.Prev, mp)
 	if err != nil {
 		return nil, err
@@ -64,9 +67,9 @@ func (c *compile) compileOutput(o *projection.Projection, mp map[string]uint64) 
 		}
 	} else {
 		for i, s := range ss {
-			ss[i].Ins = append(s.Ins, vm.Instruction{
-				Arg: arg,
-				Op:  vm.Projection,
+			ss[i].Instructions = append(s.Instructions, vm.Instruction{
+				Arg:  arg,
+				Code: vm.Projection,
 			})
 		}
 	}
@@ -115,9 +118,9 @@ func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint
 		}
 	} else {
 		for i, s := range ss {
-			ss[i].Ins = append(s.Ins, vm.Instruction{
-				Arg: arg,
-				Op:  vm.Projection,
+			ss[i].Instructions = append(s.Instructions, vm.Instruction{
+				Arg:  arg,
+				Code: vm.Projection,
 			})
 		}
 	}
@@ -126,16 +129,16 @@ func (c *compile) compileProjection(o *projection.Projection, mp map[string]uint
 
 func pushProjection(s *Scope, arg *vprojection.Argument) *Scope {
 	if s.Magic == Merge || s.Magic == Remote {
-		for i := range s.Ss {
-			s.Ss[i] = pushProjection(s.Ss[i], arg)
+		for i := range s.PreScopes {
+			s.PreScopes[i] = pushProjection(s.PreScopes[i], arg)
 		}
 	} else {
-		n := len(s.Ins) - 1
-		s.Ins = append(s.Ins, vm.Instruction{
-			Arg: arg,
-			Op:  vm.Projection,
+		n := len(s.Instructions) - 1
+		s.Instructions = append(s.Instructions, vm.Instruction{
+			Arg:  arg,
+			Code: vm.Projection,
 		})
-		s.Ins[n], s.Ins[n+1] = s.Ins[n+1], s.Ins[n]
+		s.Instructions[n], s.Instructions[n+1] = s.Instructions[n+1], s.Instructions[n]
 	}
 	return s
 }

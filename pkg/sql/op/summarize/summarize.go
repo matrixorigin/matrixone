@@ -67,7 +67,7 @@ func (n *Summarize) Rename(name string) {
 	n.ID = name
 }
 
-func (n *Summarize) Columns() []string {
+func (n *Summarize) ResultColumns() []string {
 	return n.Rs
 }
 

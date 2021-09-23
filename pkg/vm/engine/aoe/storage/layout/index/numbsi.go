@@ -32,11 +32,11 @@ func NumericBsiIndexConstructor(vf common.IVFile, useCompress bool, freeFunc buf
 
 type NumericBsiIndex struct {
 	bsi.NumericBSI
-	T         types.Type
-	Col       int16
+	T           types.Type
+	Col         int16
 	File        common.IVFile
 	UseCompress bool
-	FreeFunc  buf.MemoryFreeFunc
+	FreeFunc    buf.MemoryFreeFunc
 }
 
 func initNumericBsi(t types.Type, bitSize int) *bsi.NumericBSI {
@@ -65,9 +65,9 @@ func NewNumericBsiIndex(t types.Type, bitSize int, colIdx int16) *NumericBsiInde
 
 func NewNumericBsiEmptyNode(vf common.IVFile, useCompress bool, freeFunc buf.MemoryFreeFunc) buf.IMemoryNode {
 	return &NumericBsiIndex{
-		File: vf,
+		File:        vf,
 		UseCompress: useCompress,
-		FreeFunc:  freeFunc,
+		FreeFunc:    freeFunc,
 	}
 }
 
@@ -169,12 +169,12 @@ func (i *NumericBsiIndex) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return int64(nr), err
 	}
-	err = i.Unmarshall(buf)
+	err = i.Unmarshal(buf)
 	return int64(nr), err
 }
 
 func (i *NumericBsiIndex) WriteTo(w io.Writer) (n int64, err error) {
-	buf, err := i.Marshall()
+	buf, err := i.Marshal()
 	if err != nil {
 		return n, err
 	}
@@ -183,20 +183,20 @@ func (i *NumericBsiIndex) WriteTo(w io.Writer) (n int64, err error) {
 	return int64(nw), err
 }
 
-func (i *NumericBsiIndex) Unmarshall(data []byte) error {
+func (i *NumericBsiIndex) Unmarshal(data []byte) error {
 	buf := data
 	i.Col = encoding.DecodeInt16(buf[:2])
 	buf = buf[2:]
 	i.T = encoding.DecodeType(buf[:encoding.TypeSize])
 	buf = buf[encoding.TypeSize:]
-	return i.NumericBSI.Unmarshall(buf)
+	return i.NumericBSI.Unmarshal(buf)
 }
 
-func (i *NumericBsiIndex) Marshall() ([]byte, error) {
+func (i *NumericBsiIndex) Marshal() ([]byte, error) {
 	var bw bytes.Buffer
 	bw.Write(encoding.EncodeInt16(i.Col))
 	bw.Write(encoding.EncodeType(i.T))
-	indexBuf, err := i.NumericBSI.Marshall()
+	indexBuf, err := i.NumericBSI.Marshal()
 	if err != nil {
 		return nil, err
 	}

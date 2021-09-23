@@ -15,7 +15,7 @@
 package handle
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -29,7 +29,7 @@ import (
 
 func TestSnapshot(t *testing.T) {
 	schema := md.MockSchema(2)
-	opts := new(e.Options)
+	opts := new(storage.Options)
 	opts.FillDefaults("/tmp")
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	row_count := uint64(64)
@@ -46,7 +46,7 @@ func TestSnapshot(t *testing.T) {
 
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
-	t.Logf("TableData Refs=%d", tableData.RefCount())
+	t.Logf("TableData RefCount=%d", tableData.RefCount())
 	segIDs := table.MockSegments(tableMeta, tableData)
 	assert.Equal(t, uint32(seg_cnt), tableData.GetSegmentCount())
 

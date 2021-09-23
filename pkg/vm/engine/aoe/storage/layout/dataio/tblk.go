@@ -18,7 +18,6 @@ import (
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/logutil"
-	e "matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
@@ -57,12 +56,12 @@ type tblkFileGetter struct {
 }
 
 func (getter *tblkFileGetter) NameFactory(dir string, id common.ID) string {
-	return e.MakeTBlockFileName(dir, id.ToTBlockFileName(getter.version), false)
+	return common.MakeTBlockFileName(dir, id.ToTBlockFileName(getter.version), false)
 }
 
 func (getter *tblkFileGetter) Getter(dir string, meta *md.Block) (*os.File, error) {
 	id := meta.AsCommonID()
-	filename := e.MakeTBlockFileName(dir, id.ToTBlockFileName(getter.version), true)
+	filename := common.MakeTBlockFileName(dir, id.ToTBlockFileName(getter.version), true)
 	fdir := filepath.Dir(filename)
 	if _, err := os.Stat(fdir); os.IsNotExist(err) {
 		err = os.MkdirAll(fdir, 0755)
@@ -103,7 +102,7 @@ func NewTBlockFile(host base.ISegmentFile, id common.ID) *TransientBlockFile {
 }
 
 func (f *TransientBlockFile) init() {
-	pattern := filepath.Join(e.MakeDataDir(f.host.GetDir()), fmt.Sprintf("%s_*tblk", f.id.ToBlockFileName()))
+	pattern := filepath.Join(common.MakeDataDir(f.host.GetDir()), fmt.Sprintf("%s_*tblk", f.id.ToBlockFileName()))
 	files, _ := filepath.Glob(pattern)
 	if len(files) == 0 {
 		return
@@ -112,8 +111,8 @@ func (f *TransientBlockFile) init() {
 		panic("logic error")
 	}
 	name := filepath.Base(files[0])
-	name, _ = e.ParseTBlockfileName(name)
-	if idv, err := common.ParseTBlockfileName(name); err != nil {
+	name, _ = common.ParseTBlockfileName(name)
+	if idv, err := common.ParseTBlkNameToID(name); err != nil {
 		panic(err)
 	} else {
 		f.maxver = idv.PartID + 1
@@ -188,7 +187,7 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 		switch colDef.Type.Oid {
 		case types.T_char, types.T_varchar, types.T_json:
 			vec := vector.NewStrVector(colDef.Type, meta.MaxRowCount)
-			err = vec.Unmarshall(obuf)
+			err = vec.Unmarshal(obuf)
 			if err != nil {
 				panic(err)
 			}
@@ -196,7 +195,7 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 			vecs[i] = vec
 		default:
 			vec := vector.NewStdVector(colDef.Type, meta.MaxRowCount)
-			err = vec.Unmarshall(obuf)
+			err = vec.Unmarshal(obuf)
 			if err != nil {
 				panic(err)
 			}

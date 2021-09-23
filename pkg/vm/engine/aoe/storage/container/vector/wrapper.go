@@ -246,7 +246,7 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 		allocSize := uint64(stat.Size())
 		vec.MNode = common.GPool.Alloc(allocSize)
 		data := vec.MNode.Buf
-		nr, err := r.Read(data[: allocSize])
+		nr, err := r.Read(data[:allocSize])
 		if err != nil {
 			common.GPool.Free(vec.MNode)
 			return n, err
@@ -272,7 +272,7 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 			return n, err
 		}
 		data := vec.MNode.Buf[:originSize]
-		t := encoding.DecodeType(data[: encoding.TypeSize])
+		t := encoding.DecodeType(data[:encoding.TypeSize])
 		v := base.New(t)
 		vec.Col = v.Col
 		err = vec.Vector.Read(data)
@@ -345,10 +345,10 @@ func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Pr
 	return 0, nil
 }
 
-func (vec *VectorWrapper) Marshall() ([]byte, error) {
+func (vec *VectorWrapper) Marshal() ([]byte, error) {
 	return vec.Show()
 }
 
-func (vec *VectorWrapper) Unmarshall(data []byte) error {
+func (vec *VectorWrapper) Unmarshal(data []byte) error {
 	return vec.Vector.Read(data)
 }

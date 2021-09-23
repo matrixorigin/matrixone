@@ -35,17 +35,17 @@ var (
 // the resource management easier.
 type ID struct {
 	// Internal table id
-	TableID   uint64
+	TableID uint64
 	// Internal segment id
 	SegmentID uint64
 	// Internal block id
-	BlockID   uint64
+	BlockID uint64
 	// Internal column part id
-	PartID    uint32
+	PartID uint32
 	// Column index for the column part above
-	Idx       uint16
+	Idx uint16
 	// Iter is used for MVCC
-	Iter      uint8
+	Iter uint8
 }
 
 const (
@@ -74,19 +74,19 @@ func (id *ID) AsSegmentID() ID {
 }
 
 func (id *ID) String() string {
-	return fmt.Sprintf("ID<%d:%d-%d-%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID, id.Iter)
+	return fmt.Sprintf("RelationName<%d:%d-%d-%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID, id.PartID, id.Iter)
 }
 
 func (id *ID) TableString() string {
-	return fmt.Sprintf("ID<%d>", id.TableID)
+	return fmt.Sprintf("RelationName<%d>", id.TableID)
 }
 
 func (id *ID) SegmentString() string {
-	return fmt.Sprintf("ID<%d:%d-%d>", id.Idx, id.TableID, id.SegmentID)
+	return fmt.Sprintf("RelationName<%d:%d-%d>", id.Idx, id.TableID, id.SegmentID)
 }
 
 func (id *ID) BlockString() string {
-	return fmt.Sprintf("ID<%d:%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID)
+	return fmt.Sprintf("RelationName<%d:%d-%d-%d>", id.Idx, id.TableID, id.SegmentID, id.BlockID)
 }
 
 func (id *ID) IsSameSegment(o ID) bool {
@@ -171,7 +171,7 @@ func (id *ID) ToSegmentFilePath() string {
 	return fmt.Sprintf("%d/%d/", id.TableID, id.SegmentID)
 }
 
-func ParseTBlockfileName(name string) (ID, error) {
+func ParseTBlkNameToID(name string) (ID, error) {
 	var (
 		id  ID
 		err error
@@ -203,7 +203,7 @@ func ParseTBlockfileName(name string) (ID, error) {
 	return id, err
 }
 
-func ParseBlockFileName(name string) (ID, error) {
+func ParseBlkNameToID(name string) (ID, error) {
 	var (
 		id  ID
 		err error

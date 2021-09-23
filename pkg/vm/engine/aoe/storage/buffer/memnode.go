@@ -75,12 +75,12 @@ func (mn *RawMemoryNode) ReadFrom(r io.Reader) (n int64, err error) {
 	return int64(nr), err
 }
 
-func (mn *RawMemoryNode) Marshall() (buf []byte, err error) {
+func (mn *RawMemoryNode) Marshal() (buf []byte, err error) {
 	buf = append(mn.Data[0:0:0], mn.Data...)
 	return buf, err
 }
 
-func (mn *RawMemoryNode) Unmarshall(buf []byte) error {
+func (mn *RawMemoryNode) Unmarshal(buf []byte) error {
 	length := cap(mn.Data)
 	if length > len(buf) {
 		length = len(buf)

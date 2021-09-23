@@ -22,14 +22,13 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/mergesort"
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
 
 	"github.com/pierrec/lz4"
-	// log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -117,7 +116,7 @@ func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *md.Segme
 }
 
 func (sw *SegmentWriter) commitFile(fname string) error {
-	name, err := e.FilenameFromTmpfile(fname)
+	name, err := common.FilenameFromTmpfile(fname)
 	if err != nil {
 		return err
 	}
@@ -127,7 +126,7 @@ func (sw *SegmentWriter) commitFile(fname string) error {
 
 func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, error) {
 	id := meta.AsCommonID()
-	filename := e.MakeSegmentFileName(dir, id.ToSegmentFileName(), meta.Table.ID, true)
+	filename := common.MakeSegmentFileName(dir, id.ToSegmentFileName(), meta.Table.ID, true)
 	fdir := filepath.Dir(filename)
 	if _, err := os.Stat(fdir); os.IsNotExist(err) {
 		err = os.MkdirAll(fdir, 0755)
@@ -814,7 +813,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 		}
 		var preIdx []byte
 		if blk.PrevIndex != nil {
-			preIdx, err = blk.PrevIndex.Marshall()
+			preIdx, err = blk.PrevIndex.Marshal()
 			if err != nil {
 				return err
 			}
@@ -826,7 +825,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 		}
 		var idx []byte
 		if blk.Index != nil {
-			idx, err = blk.Index.Marshall()
+			idx, err = blk.Index.Marshal()
 			if err != nil {
 				return err
 			}

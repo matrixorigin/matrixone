@@ -32,22 +32,24 @@ func init() {
 			ReturnType: types.T_sel,
 			Fn: func(lv, rv *vector.Vector, proc *process.Process, _, _ bool) (*vector.Vector, error) {
 				lvs, rvs := lv.Col.([]int64), rv.Col.([]int64)
-				if len(lvs) >= len(rvs) && (lv.Ref == 1 || lv.Ref == 0) {
+				if lv.Ref == 1 || lv.Ref == 0 {
 					lv.Ref = 0
 					lvs = lvs[:and.SelAnd(lvs, rvs, lvs)]
 					lv.Nsp = lv.Nsp.Or(rv.Nsp).Filter(lvs)
 					if rv.Ref == 0 {
 						register.Put(proc, rv)
 					}
+					lv.Col = lvs
 					return lv, nil
 				}
-				if len(rvs) >= len(lvs) && (rv.Ref == 1 || rv.Ref == 0) {
+				if rv.Ref == 1 || rv.Ref == 0 {
 					rv.Ref = 0
-					rvs = rvs[:and.SelAnd(lvs, rvs, rvs)]
+					rvs = rvs[:and.SelAnd(rvs, lvs, rvs)]
 					rv.Nsp = rv.Nsp.Or(lv.Nsp).Filter(rvs)
 					if lv.Ref == 0 {
 						register.Put(proc, lv)
 					}
+					rv.Col = rvs
 					return rv, nil
 				}
 				n := len(lvs)

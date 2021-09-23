@@ -55,7 +55,7 @@ func (seg *Segment) GetBlock(id uint64) dbi.IBlock {
 	}
 	blk := &Block{
 		Id: id,
-		// Data: data,
+		// DataSource: data,
 		Host: seg,
 	}
 	return blk

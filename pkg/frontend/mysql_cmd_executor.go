@@ -82,8 +82,8 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 		//Create a new temporary resultset per pipeline thread.
 		mrs := &MysqlResultSet{}
-		//Warning: Don't change Columns in this.
-		//Reference the shared Columns of the session among multi-thread.
+		//Warning: Don't change ResultColumns in this.
+		//Reference the shared ResultColumns of the session among multi-thread.
 		mrs.Columns = ses.Mrs.Columns
 		mrs.Name2Index = ses.Mrs.Name2Index
 
@@ -257,7 +257,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 
-				//fmt.Printf("row group -+> %v \n", mrs.Data[:r])
+				//fmt.Printf("row group -+> %v \n", mrs.DataSource[:r])
 
 				//send group of row
 				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
@@ -431,7 +431,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 					}
 				}
 
-				//fmt.Printf("row group -*> %v \n", mrs.Data[:r])
+				//fmt.Printf("row group -*> %v \n", mrs.DataSource[:r])
 
 				//send row
 				if err := proto.SendResultSetTextBatchRow(mrs, r); err != nil {
@@ -913,7 +913,7 @@ func (mce *MysqlCmdExecutor) handleMaxAllowedPacket() error {
 }
 
 /*
-handle Load Data statement
+handle Load DataSource statement
 */
 func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	var err error = nil
@@ -970,27 +970,27 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	}
 
 	/*
-	check table
-	 */
+		check table
+	*/
 	tableHandler, err := dbHandler.Relation(loadTable)
 	if err != nil {
 		//echo client. no such table
-		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb,loadTable)
+		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb, loadTable)
 	}
 
 	/*
-	execute load data
-	 */
-	result, err := mce.LoadLoop(load, dbHandler, tableHandler, nil)
+		execute load data
+	*/
+	result, err := mce.LoadLoop(load, dbHandler, tableHandler)
 	if err != nil {
 		return err
 	}
 
 	/*
-	response
-	 */
-	info := NewMysqlError(ER_LOAD_INFO,result.Records,result.Deleted,result.Skipped,result.Warnings).Error()
-	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings),0, int(COM_QUERY), info)
+		response
+	*/
+	info := NewMysqlError(ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings).Error()
+	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), " "+info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
 	}
@@ -1018,7 +1018,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	proc.Refer = make(map[string]uint64)
 
 	comp := compile.New(mce.routine.db, sql, mce.routine.user, ses.Pu.StorageEngine, proc)
-	execs, err := comp.Compile()
+	execs, err := comp.Build()
 	if err != nil {
 		return err
 	}
@@ -1083,8 +1083,6 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 
 		var selfHandle = false
 
-
-
 		switch st := stmt.(type) {
 		case *tree.Use:
 			selfHandle = true
@@ -1122,7 +1120,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		}
 
 		if ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-			logutil.Infof("time of Exec.Compile : %s", time.Since(cmpBegin).String())
+			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
 		switch stmt.(type) {
@@ -1391,10 +1389,10 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 }
 
 func (mce *MysqlCmdExecutor) Close() {
-	logutil.Infof("close executor")
+	//fmt.Printf("close executor\n")
 	if mce.loadDataClose != nil {
-		logutil.Infof("close process load data")
-		//mce.loadDataClose.Close()
+		//fmt.Printf("close process load data\n")
+		mce.loadDataClose.Close()
 	}
 }
 

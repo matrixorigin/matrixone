@@ -15,7 +15,7 @@
 package table
 
 import (
-	e "matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -34,7 +34,7 @@ func init() {
 }
 
 func TestBase1(t *testing.T) {
-	opts := new(e.Options)
+	opts := new(storage.Options)
 	opts.FillDefaults(WORK_DIR)
 	segCnt := uint64(4)
 	blkCnt := uint64(4)
@@ -148,6 +148,9 @@ func TestBase1(t *testing.T) {
 		for blkId, _ := range blkIds {
 			refBlk := tblData.WeakRefBlock(segId, blkId)
 			assert.NotNil(t, refBlk)
+			srefBlk := tblData.StrongRefBlock(segId, blkId)
+			assert.NotNil(t, srefBlk)
+			srefBlk.Unref()
 			// handle := refBlk.GetBlockHandle()
 			// handle.Close()
 		}
@@ -156,4 +159,18 @@ func TestBase1(t *testing.T) {
 	t.Log(tblData.String())
 	t.Log(mtBufMgr.String())
 	t.Log(sstBufMgr.String())
+
+	mutBlk := tblData.StrongRefLastBlock()
+	assert.NotNil(t, mutBlk)
+	mutBlk.Unref()
+	root := tblData.WeakRefRoot()
+	assert.Equal(t, int64(1), root.RefCount())
+	sroot := tblData.StongRefRoot()
+	assert.Equal(t, int64(2), sroot.RefCount())
+	sroot.Unref()
+	attr := schema.ColDefs[0].Name
+	t.Log(tblData.Size(attr))
+	index, ok := tblData.GetSegmentedIndex()
+	assert.True(t, ok)
+	assert.Equal(t, tableMeta.CreatedIndex, index)
 }

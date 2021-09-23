@@ -28,6 +28,12 @@ const (
 	MAX_TABLEID   = common.MAX_UINT64
 )
 
+// for test use
+const (
+	blockRowCount     = uint64(16)
+	segmentBlockCount = uint64(4)
+)
+
 // Resource is an abstraction for two key types of resources
 // currently, MetaInfo and Table.
 type Resource interface {

@@ -122,9 +122,9 @@ func (holder *BlockHolder) String() string {
 }
 
 func (holder *BlockHolder) stringNoLock() string {
-	s := fmt.Sprintf("<IndexBlkHolder[%s]>[Ty=%v](Cnt=%d)(Refs=%d)", holder.ID.BlockString(), holder.Type, len(holder.Indices), holder.RefCount())
+	s := fmt.Sprintf("<IndexBlkHolder[%s]>[Ty=%v](Cnt=%d)(RefCount=%d)", holder.ID.BlockString(), holder.Type, len(holder.Indices), holder.RefCount())
 	for _, i := range holder.Indices {
-		s = fmt.Sprintf("%s\n\tIndex: [Refs=%d]", s, i.RefCount())
+		s = fmt.Sprintf("%s\n\tIndex: [RefCount=%d]", s, i.RefCount())
 	}
 	// s = fmt.Sprintf("%s\n%vs, holder.ColIndices)
 	return s
