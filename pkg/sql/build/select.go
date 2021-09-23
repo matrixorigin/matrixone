@@ -270,11 +270,6 @@ func (b *build) buildSelectClauseWithoutSummarize(stmt *tree.SelectClause, order
 			}
 		}
 	}
-	if stmt.Having != nil {
-		if o, err = b.buildWhere(o, stmt.Having); err != nil {
-			return nil, nil, err
-		}
-	}
 	if stmt.Distinct {
 		if o, err = b.buildDedup(o); err != nil {
 			return nil, nil, err

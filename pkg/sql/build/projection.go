@@ -220,6 +220,8 @@ func (b *build) extractExtend(o op.OP, n tree.Expr, es *[]*projection.Extend, mp
 			(*es) = append((*es), &projection.Extend{E: ext})
 		}
 		return nil
+	case *tree.CastExpr:
+		return b.extractExtend(o, e.Expr, es, mp)
 	}
 	return nil
 }
