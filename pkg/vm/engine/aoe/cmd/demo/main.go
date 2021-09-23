@@ -86,7 +86,10 @@ func main() {
 			for blkIt.Valid() {
 				block := blkIt.GetHandle()
 				hh := block.Prefetch()
-				vec := hh.GetReaderByAttr(1)
+				vec, err := hh.GetReaderByAttr(1)
+				if err != nil {
+					panic(err)
+				}
 				if vec.Length() >= 2 {
 					log.Infof("vec[1]=%s, %d", vec.GetValue(1), vec.GetType())
 				}
