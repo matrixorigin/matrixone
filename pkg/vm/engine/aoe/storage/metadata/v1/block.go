@@ -113,7 +113,7 @@ func (blk *Block) AddCount(n uint64) (uint64, error) {
 			return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, blk.Segment.Table.Conf.BlockMaxRows))
 		}
 	}
-	return curCnt+n, nil
+	return curCnt + n, nil
 }
 
 // SetIndex changes the current index to previous index if exists, and
@@ -150,6 +150,7 @@ func (blk *Block) String() string {
 func (blk *Block) IsFull() bool {
 	return blk.Count == blk.MaxRowCount
 }
+
 // SetCount sets blk row count to count, changing its
 // DataState if needed.
 func (blk *Block) SetCount(count uint64) error {
@@ -158,7 +159,7 @@ func (blk *Block) SetCount(count uint64) error {
 	if count > blk.MaxRowCount {
 		return errors.New("SetCount exceeds max limit")
 	}
-	if count <= blk.Count {
+	if count < blk.Count {
 		return errors.New("SetCount cannot set smaller count")
 	}
 	blk.Count = count

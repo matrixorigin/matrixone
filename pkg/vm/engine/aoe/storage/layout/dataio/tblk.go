@@ -203,7 +203,9 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 			vecs[i] = vec
 		}
 	}
-	meta.SetCount(uint64(vecs[0].Length()))
+	if err := meta.SetCount(uint64(vecs[0].Length())); err != nil {
+		panic(err)
+	}
 	return batch.NewBatch(cols, vecs)
 }
 
