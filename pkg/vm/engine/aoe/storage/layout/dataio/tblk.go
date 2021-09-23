@@ -208,10 +208,9 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 			vecs[i] = vec
 		}
 	}
-	err := meta.SetCount(uint64(vecs[0].Length()))
-	if err != nil {
+	if err := meta.SetCount(uint64(vecs[0].Length())); err != nil {
 		// TODO: returns error
-		// do nothing temporally to pass UT
+		panic(err)
 	}
 	bat, err := batch.NewBatch(cols, vecs)
 	if err != nil {
