@@ -169,16 +169,7 @@ func (b *build) buildSelectClauseWithSummarize(stmt *tree.SelectClause) (op.OP, 
 		return nil, nil, err
 	}
 	if stmt.Exprs, err = b.rewriteProjection(o, stmt.Exprs); err != nil {
-		{
-			fmt.Printf("+++++++rewrite failed: %v\n", err)
-		}
 		return nil, nil, err
-	}
-	{
-		fmt.Printf("++++++++rewrite %v\n", len(stmt.Exprs))
-		for i, n := range stmt.Exprs {
-			fmt.Printf("[%v] = %v\n", i, n.As)
-		}
 	}
 	if len(stmt.GroupBy) != 0 {
 		if len(stmt.Exprs) != 0 {
