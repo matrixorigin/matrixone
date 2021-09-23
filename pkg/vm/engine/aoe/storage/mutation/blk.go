@@ -86,9 +86,14 @@ func (n *MutableBlockNode) Flush() error {
 	cols := len(n.Meta.Segment.Table.Schema.ColDefs)
 	attrs := make([]int, cols)
 	vecs := make([]vector.IVector, cols)
+	var err error
 	for i, _ := range n.Meta.Segment.Table.Schema.ColDefs {
 		attrs[i] = i
-		vecs[i] = n.Data.GetVectorByAttr(i).GetLatestView()
+		vec, err := n.Data.GetVectorByAttr(i)
+		if err != nil {
+			return err
+		}
+		vecs[i] = vec.GetLatestView()
 	}
 	data, err := batch.NewBatch(attrs, vecs)
 	if err != nil {
