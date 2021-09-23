@@ -30,7 +30,7 @@ var (
 
 type IBatch interface {
 	dbi.IBatchReader
-	GetVectorByAttr(attrId int) vector.IVector
+	GetVectorByAttr(attrId int) (vector.IVector, error)
 }
 
 type Batch struct {

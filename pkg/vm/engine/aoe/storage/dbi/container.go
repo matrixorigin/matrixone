@@ -35,8 +35,8 @@ type IBatchReader interface {
 	GetAttrs() []int
 	Close() error
 	CloseVector(idx int) error
-	IsVectorClosed(idx int) bool
-	GetReaderByAttr(attr int) IVectorReader
+	IsVectorClosed(idx int) (bool, error)
+	GetReaderByAttr(attr int) (IVectorReader, error)
 }
 
 type IVectorReader interface {

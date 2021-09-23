@@ -183,7 +183,12 @@ func (blk *block) GetFullBatch() batch.IBatch {
 		attrs[idx] = colBlk.GetColIdx()
 	}
 	blk.Ref()
-	return wrapper.NewBatch(blk, attrs, vecs)
+	bat, err := wrapper.NewBatch(blk, attrs, vecs)
+	if err != nil {
+		// TODO: returns error
+		panic(err)
+	}
+	return bat
 }
 
 func (blk *block) GetBatch(attrs []int) dbi.IBatchReader {
@@ -195,5 +200,10 @@ func (blk *block) GetBatch(attrs []int) dbi.IBatchReader {
 		vecs[idx] = blk.data.cols[attr].GetVector()
 	}
 	blk.Ref()
-	return wrapper.NewBatch(blk, attrs, vecs).(dbi.IBatchReader)
+	bat, err := wrapper.NewBatch(blk, attrs, vecs)
+	if err != nil {
+		// TODO: returns error
+		panic(err)
+	}
+	return bat.(dbi.IBatchReader)
 }

@@ -90,7 +90,10 @@ func (n *MutableBlockNode) Flush() error {
 		attrs[i] = i
 		vecs[i] = n.Data.GetVectorByAttr(i).GetLatestView()
 	}
-	data := batch.NewBatch(attrs, vecs)
+	data, err := batch.NewBatch(attrs, vecs)
+	if err != nil {
+		return err
+	}
 	meta := n.Meta.Copy()
 	n.RUnlock()
 	if err := n.Flusher(n, data, meta, n.File); err != nil {

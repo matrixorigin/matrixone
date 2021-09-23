@@ -153,6 +153,10 @@ func (blk *tblock) GetBatch(attrids []int) dbi.IBatchReader {
 		attrs[idx] = attr
 		vecs[idx] = data.GetVectorByAttr(attr)
 	}
-	wrapped := batch.NewBatch(attrs, vecs)
+	wrapped, err := batch.NewBatch(attrs, vecs)
+	if err != nil {
+		// TODO: returns error
+		panic(err)
+	}
 	return wrapper.NewBatch2(h, wrapped)
 }
