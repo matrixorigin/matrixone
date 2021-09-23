@@ -40,7 +40,7 @@ func (p *Parser) Parse(sql string) (tree_stmt []Statement, err error) {
 
 	stmtNodes, _, err = p.p.Parse(sql, "", "")
 	if err != nil {
-		return nil, fmt.Errorf("parser parse failed.error:%v", err)
+		return nil, err
 	}
 
 	tree_stmt = make([]Statement, len(stmtNodes))
