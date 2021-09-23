@@ -161,7 +161,12 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 			vecs[i] = vec
 			attrs[i] = i
 		}
-		return batch.NewBatch(attrs, vecs)
+		bat, err := batch.NewBatch(attrs, vecs)
+		if err != nil {
+			// TODO: returns error
+			panic(err)
+		}
+		return bat
 	}
 	file := f.files[len(f.files)-1]
 	file.Ref()
@@ -203,8 +208,16 @@ func (f *TransientBlockFile) LoadBatch(meta *md.Block) batch.IBatch {
 			vecs[i] = vec
 		}
 	}
-	meta.SetCount(uint64(vecs[0].Length()))
-	return batch.NewBatch(cols, vecs)
+	if err := meta.SetCount(uint64(vecs[0].Length())); err != nil {
+		// TODO: returns error
+		panic(err)
+	}
+	bat, err := batch.NewBatch(cols, vecs)
+	if err != nil {
+		// TODO: returns error
+		panic(err)
+	}
+	return bat
 }
 
 func (f *TransientBlockFile) Sync(data batch.IBatch, meta *md.Block) error {

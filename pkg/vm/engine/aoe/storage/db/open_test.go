@@ -192,9 +192,9 @@ func TestOpen(t *testing.T) {
 }
 
 func TestReplay(t *testing.T) {
-	waitTime := time.Duration(40) * time.Millisecond
+	waitTime := time.Duration(20) * time.Millisecond
 	if invariants.RaceEnabled {
-		waitTime = time.Duration(200) * time.Millisecond
+		waitTime = time.Duration(100) * time.Millisecond
 	}
 	initDBTest()
 	inst := initDB(storage.NORMAL_FT)
@@ -334,5 +334,5 @@ func TestMultiInstance(t *testing.T) {
 		assert.Nil(t, err)
 	}
 
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(time.Duration(50) * time.Millisecond)
 }

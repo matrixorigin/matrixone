@@ -15,19 +15,20 @@
 package batch
 
 import (
+	"errors"
+	"fmt"
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-
-	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
 var (
 	_ IBatch = (*Batch)(nil)
 )
 
-func NewBatch(attrs []int, vecs []vector.IVector) IBatch {
+func NewBatch(attrs []int, vecs []vector.IVector) (IBatch, error) {
 	if len(attrs) != len(vecs) || len(vecs) == 0 {
-		panic("logic error")
+		return nil, errors.New(fmt.Sprintf("invalid attrs and vectors length: %d %d", len(attrs), len(vecs)))
 	}
 	bat := &Batch{
 		ClosedMask: roaring.NewBitmap(),
@@ -40,10 +41,10 @@ func NewBatch(attrs []int, vecs []vector.IVector) IBatch {
 		bat.AttrsMap[idx] = i
 	}
 	if len(bat.AttrsMap) != len(attrs) {
-		panic("logic error")
+		return nil, errors.New(fmt.Sprintf("len(bat.AttrsMap) != len(attrs): %d %d", len(bat.Attrs), len(attrs)))
 	}
 
-	return bat
+	return bat, nil
 }
 
 func (bat *Batch) GetAttrs() []int {
@@ -58,42 +59,42 @@ func (bat *Batch) IsReadonly() bool {
 	return bat.Vecs[len(bat.Vecs)-1].IsReadonly()
 }
 
-func (bat *Batch) GetReaderByAttr(attr int) dbi.IVectorReader {
-	vec := bat.GetVectorByAttr(attr)
-	if vec == nil {
-		return vec
+func (bat *Batch) GetReaderByAttr(attr int) (dbi.IVectorReader, error) {
+	vec, err := bat.GetVectorByAttr(attr)
+	if err != nil {
+		return nil, err
 	}
-	return vec.(dbi.IVectorReader)
+	return vec.(dbi.IVectorReader), nil
 }
 
-func (bat *Batch) GetVectorByAttr(attr int) vector.IVector {
+func (bat *Batch) GetVectorByAttr(attr int) (vector.IVector, error) {
 	pos, ok := bat.AttrsMap[attr]
 	if !ok {
-		panic(BatNotFoundErr.Error())
+		return nil, BatNotFoundErr
 	}
 	bat.RLock()
 	if bat.ClosedMask.Contains(uint64(pos)) {
 		bat.RUnlock()
-		return nil
+		return nil, BatAlreadyClosedErr
 	}
 	bat.RUnlock()
-	return bat.Vecs[pos]
+	return bat.Vecs[pos], nil
 }
 
-func (bat *Batch) IsVectorClosed(attr int) bool {
+func (bat *Batch) IsVectorClosed(attr int) (bool, error) {
 	pos, ok := bat.AttrsMap[attr]
 	if !ok {
-		panic(BatNotFoundErr.Error())
+		return false, BatNotFoundErr
 	}
 	bat.RLock()
 	defer bat.RUnlock()
-	return bat.ClosedMask.Contains(uint64(pos))
+	return bat.ClosedMask.Contains(uint64(pos)), nil
 }
 
 func (bat *Batch) CloseVector(attr int) error {
 	pos, ok := bat.AttrsMap[attr]
 	if !ok {
-		panic(BatNotFoundErr.Error())
+		return BatNotFoundErr
 	}
 	bat.Lock()
 	defer bat.Unlock()
@@ -102,7 +103,7 @@ func (bat *Batch) CloseVector(attr int) error {
 	}
 	err := bat.Vecs[pos].Close()
 	if err != nil {
-		panic(err)
+		return err
 	}
 	bat.ClosedMask.Add(uint64(pos))
 	return nil
@@ -118,7 +119,7 @@ func (bat *Batch) Close() error {
 	for i := 0; i < len(bat.Attrs); i++ {
 		if !bat.ClosedMask.Contains(uint64(i)) {
 			if err = bat.Vecs[i].Close(); err != nil {
-				panic(err)
+				return err
 			}
 			bat.ClosedMask.Add(uint64(i))
 		}

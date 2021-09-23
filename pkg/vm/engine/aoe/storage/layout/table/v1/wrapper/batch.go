@@ -32,12 +32,16 @@ type batchWrapper struct {
 	closed int32
 }
 
-func NewBatch(host common.IRef, attrs []int, vecs []vector.IVector) batch.IBatch {
+func NewBatch(host common.IRef, attrs []int, vecs []vector.IVector) (batch.IBatch, error) {
+	ibat, err := batch.NewBatch(attrs, vecs)
+	if err != nil {
+		return nil, err
+	}
 	bat := &batchWrapper{
 		host:   host,
-		IBatch: batch.NewBatch(attrs, vecs),
+		IBatch: ibat,
 	}
-	return bat
+	return bat, nil
 }
 
 func (bat *batchWrapper) close() error {

@@ -100,7 +100,9 @@ func TestTBlock(t *testing.T) {
 		return func() error {
 			var na int
 			for idx, attr := range n.Data.GetAttrs() {
-				if na, err = n.Data.GetVectorByAttr(attr).AppendVector(insertBat.Vecs[idx], 0); err != nil {
+				vec, err := n.Data.GetVectorByAttr(attr)
+				assert.Nil(t, err)
+				if na, err = vec.AppendVector(insertBat.Vecs[idx], 0); err != nil {
 					assert.NotNil(t, err)
 				}
 			}
@@ -198,7 +200,10 @@ func TestTBlock(t *testing.T) {
 		n.Meta.TryUpgrade()
 		var vecs []*vector.Vector
 		for attri, _ := range n.Data.GetAttrs() {
-			v := n.Data.GetVectorByAttr(attri)
+			v, err := n.Data.GetVectorByAttr(attri)
+			if err != nil {
+				return err
+			}
 			vecs = append(vecs, v.CopyToVector())
 		}
 
