@@ -31,6 +31,10 @@ import (
 	"time"
 )
 
+//createTablet responses the requests whose CustemType is CreateTablet.
+//It creates a tablet for the table.
+//If fail, it returns the err in resp.Value.
+//If success, it returns the amount of the written bytes and returns the id of the table in resp.Value.
 func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.CreateTabletRequest{}
@@ -55,6 +59,10 @@ func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 	return writtenBytes, changedBytes, resp
 }
 
+//dropTablet responses the requests whose CustemType is DropTablet.
+//It drops the table.
+//If fail, it returns the err in resp.Value.
+//If success, it returns the amount of the written bytes and returns the id of the table in resp.Value.
 func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.DropTabletRequest{}
@@ -75,6 +83,10 @@ func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	return writtenBytes, changedBytes, resp
 }
 
+//append responses the requests whose CustemType is Append.
+//It appends data in the table.
+//If fail, it returns the err in resp.Value.
+//If success, it returns the amount of the written bytes.
 func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	t0 := time.Now()
 	defer func() {
@@ -99,6 +111,10 @@ func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comman
 	return writtenBytes, changedBytes, resp
 }
 
+//getSegmentedId responses the requests whose CustemType is GetSegmentedId.
+//It returns the id of one of the segments of the table.
+//If fail, it returns the err in resp.Value and returns 500.
+//If success, it returns the id in resp.Value and returns 0.
 func (h *driver) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.GetSegmentedIdRequest{}
@@ -112,6 +128,9 @@ func (h *driver) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 	return resp, 0
 }
 
+//getSegmentIds responses the requests whose CustemType is GetSegmentIds.
+//It gets the ids of all the segments of the table.
+//It returns the ids in resp.Value and returns 0.
 func (h *driver) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.GetSegmentIdsRequest{}
@@ -123,6 +142,10 @@ func (h *driver) getSegmentIds(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx
 	return resp, 0
 }
 
+//getSnapshot responses the requests.
+//It gets a snapshot of the table.
+//If fail, it returns the err in resp.Value and returns 500.
+//If success, it returns the snapshot in resp.Value and returns 0.
 func (h *driver) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.GetSnapshotRequest{}
@@ -141,6 +164,10 @@ func (h *driver) getSnapshot(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx c
 	return resp, 0
 }
 
+//tableIDs responses the requests.
+//It gets the ids of all the tables in the store.
+//If fail, it returns the err in resp.Value and returns 500.
+//If success, it returns the ids in resp.Value and returns 0.
 func (h *driver) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.TabletIDsRequest{}
@@ -154,6 +181,9 @@ func (h *driver) tableIDs(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comm
 	return resp, 0
 }
 
+//tableNames responses the requests.
+//It gets the names of all the tables in the store.
+//It returns the names in resp.Value and returns 0.
 func (h *driver) tableNames(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.TabletIDsRequest{}

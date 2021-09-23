@@ -28,9 +28,13 @@ var (
 	// ErrTableCreateExists is the error for table exists.
 	ErrTableCreateExists = errors.New("table already exists")
 	// ErrTableNotExists is the error for table not exists.
-	ErrTableNotExists     = errors.New("table not exist")
-	ErrTableCreateFailed  = errors.New("create table failed")
+	ErrTableNotExists = errors.New("table not exist")
+	//ErrTableCreateFailed is the error for fail in creating table.
+	ErrTableCreateFailed = errors.New("create table failed")
+	//ErrTooMuchTableExists is the error for the number of tables exceeds the limit.
 	ErrTooMuchTableExists = errors.New("the maximum limit of tables has been exceeded")
-	ErrNoAvailableShard   = errors.New("no available raft group")
+	//ErrNoAvailableShard is the error for fail in fetching a shard.
+	ErrNoAvailableShard = errors.New("no available raft group")
+	//ErrTableCreateTimeout is the error for timeout when creating a table.
 	ErrTableCreateTimeout = errors.New("create table timeout")
 )

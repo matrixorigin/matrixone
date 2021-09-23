@@ -723,6 +723,7 @@ func (m *PrefixScanRequest) GetLimit() uint64 {
 	return 0
 }
 
+//AppendRequest appends data in the table.
 type AppendRequest struct {
 	TabletName           string   `protobuf:"bytes,1,opt,name=tabletName,proto3" json:"tabletName,omitempty"`
 	Data                 []byte   `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
@@ -778,6 +779,7 @@ func (m *AppendRequest) GetData() []byte {
 	return nil
 }
 
+//GetSnapshotRequest gets a snapshot for the table.
 type GetSnapshotRequest struct {
 	Ctx                  []byte   `protobuf:"bytes,1,opt,name=ctx,proto3" json:"ctx,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
@@ -825,6 +827,7 @@ func (m *GetSnapshotRequest) GetCtx() []byte {
 	return nil
 }
 
+//GetSegmentIdsRequest gets the id of all the segments.
 type GetSegmentIdsRequest struct {
 	Name                 string   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
@@ -872,6 +875,7 @@ func (m *GetSegmentIdsRequest) GetName() string {
 	return ""
 }
 
+//GetSegmentedIdRequest gets id of one of the segments of the table.
 type GetSegmentedIdRequest struct {
 	ShardId              uint64   `protobuf:"varint,1,opt,name=shardId,proto3" json:"shardId,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
@@ -919,6 +923,7 @@ func (m *GetSegmentedIdRequest) GetShardId() uint64 {
 	return 0
 }
 
+//TabletIDsRequest gets the ids of all the tablets of the table.
 type TabletIDsRequest struct {
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -958,6 +963,7 @@ func (m *TabletIDsRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TabletIDsRequest proto.InternalMessageInfo
 
+//CreateTabletRequest create a tablet for the table.
 type CreateTabletRequest struct {
 	Name                 string   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	TableInfo            []byte   `protobuf:"bytes,2,opt,name=tableInfo,proto3" json:"tableInfo,omitempty"`
@@ -1013,6 +1019,7 @@ func (m *CreateTabletRequest) GetTableInfo() []byte {
 	return nil
 }
 
+//DropTabletRequest drop all the tablets of the table.
 type DropTabletRequest struct {
 	Name                 string   `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
