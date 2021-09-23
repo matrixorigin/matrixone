@@ -141,6 +141,8 @@ func (seg *segment) GetSegmentedIndex() (id uint64, ok bool) {
 		tmpId, tmpOk := blk.GetSegmentedIndex()
 		if tmpOk {
 			id, ok = tmpId, tmpOk
+		} else if blk.GetType() > base.TRANSIENT_BLK {
+			continue
 		} else {
 			break
 		}
