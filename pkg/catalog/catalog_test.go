@@ -122,63 +122,63 @@ func TestCatalogWithUtil(t *testing.T) {
 
 	driver := c.CubeDrivers[0]
 
-	ctlg := NewCatalog(driver)
+	catalog := NewCatalog(driver)
 
-	shardid, err := ctlg.getAvailableShard(0)
+	shardid, err := catalog.getAvailableShard(0)
 	fmt.Print(shardid)
 	assert.NoError(t, err, "getAvailableShard Fail")
 	//test CreateDatabase
 	var dbids []uint64
 	for i := 0; i < databaseCount; i++ {
-		dbid, err := ctlg.CreateDatabase(0, testDatabaceName+strconv.Itoa(i), 0)
+		dbid, err := catalog.CreateDatabase(0, testDatabaceName+strconv.Itoa(i), 0)
 		assert.NoError(t, err, "CreateDatabase%v Fail", i)
 		dbids = append(dbids, dbid)
 	}
-	_, err = ctlg.CreateDatabase(0, testDatabaceName+strconv.Itoa(0), 0)
+	_, err = catalog.CreateDatabase(0, testDatabaceName+strconv.Itoa(0), 0)
 	assert.Equal(t, ErrDBCreateExists, err, "CreateDatabase: wrong err")
 	//test ListDatabases
-	schemas, err := ctlg.ListDatabases()
+	schemas, err := catalog.ListDatabases()
 	assert.NoError(t, err, "ListDatabases Fail")
 	assert.Equal(t, len(schemas), len(dbids), "ListDatabases: Wrong len")
 	// fmt.Print(schema)
 	//test GetDatabase
-	schema, err := ctlg.GetDatabase(testDatabaceName + "0")
+	schema, err := catalog.GetDatabase(testDatabaceName + "0")
 	assert.NoError(t, err, "GetDatabase Fail")
 	assert.Equal(t, schema.Id, dbids[0], "GetDatabase: Wrong id")
 	//test CreateTable
 	var createIds []uint64
 	for i := 0; i < tableCount; i++ {
-		createId, err := ctlg.CreateTable(0, dbids[0], *testTables[i])
+		createId, err := catalog.CreateTable(0, dbids[0], *testTables[i])
 		assert.NoError(t, err, "CreateTable%v Fail", i)
 		createIds = append(createIds, createId)
 	}
 	//test ListTables
-	tables, err := ctlg.ListTables(dbids[0])
+	tables, err := catalog.ListTables(dbids[0])
 	assert.NoError(t, err, "ListTables Fail")
 	assert.Equal(t, len(tables), tableCount, "ListTables: Wrong len")
 	//test GetTable
-	table, err := ctlg.GetTable(dbids[0], "mocktbl0")
+	table, err := catalog.GetTable(dbids[0], "mocktbl0")
 	assert.NoError(t, err, "GetTable Fail")
 	assert.Equal(t, table.Id, createIds[0], "GetTable: Wrong id")
 	assert.Equal(t, table.Name, "mocktbl0", "GetTable: Wrong Name")
 	//test GetTablets
-	tablets, err := ctlg.GetTablets(dbids[0], "mocktbl0")
+	tablets, err := catalog.GetTablets(dbids[0], "mocktbl0")
 	assert.NoError(t, err, "GetTablets Fail")
 	for i := range tablets {
 		assert.Equal(t, tablets[i].Table.Id, createIds[0], "GetTablets: Wrong id")
 		assert.Equal(t, tablets[i].Table.Name, "mocktbl0", "GetTablets: Wrong Name")
 	}
 	//test DropTable
-	dropId, err := ctlg.DropTable(0, dbids[0], "mocktbl0")
+	dropId, err := catalog.DropTable(0, dbids[0], "mocktbl0")
 	assert.NoError(t, err, "DropTable Fail")
 	assert.Equal(t, createIds[0], dropId, "DropTable: Wrong id")
 	//test RemoveDeletedTable
-	cnt, err := ctlg.RemoveDeletedTable(0)
+	cnt, err := catalog.RemoveDeletedTable(0)
 	assert.NoError(t, err, "RemoveDeletedTable Fail")
 	assert.Equal(t, cnt, 1, "RemoveDeletedTable: Wrong id")
 	// fmt.Print(schema)
 	for i := 0; i < databaseCount; i++ {
-		err = ctlg.DropDatabase(0, testDatabaceName+strconv.Itoa(i))
+		err = catalog.DropDatabase(0, testDatabaceName+strconv.Itoa(i))
 		assert.NoError(t, err, "DropDatabase%v Fail", i)
 	}
 }

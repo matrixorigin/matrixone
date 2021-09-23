@@ -78,7 +78,7 @@ func NewCatalog(store driver.CubeDriver) *Catalog {
 func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (dbid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
-		logutil.Debugf("CreateDatabase finished, db id is %d, cost %d ms", dbid, time.Since(t0).Milliseconds())
+		logutil.Debugf("CreateDatabase finished, dbname is %v, db id is %d, cost %d ms", dbName, dbid, time.Since(t0).Milliseconds())
 	}()
 	if _, err := c.checkDBNotExists(dbName); err != nil {
 		return 0, err

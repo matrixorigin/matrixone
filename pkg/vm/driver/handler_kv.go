@@ -49,6 +49,13 @@ func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx
 	customReq := &pb3.SetRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
+	if _, ok := ctx.Attrs()[codec.Bytes2String(req.Key)]; ok {
+		resp.Value = errorResp(errors.New("key is already existed"))
+		return 0, 0, resp
+	} else {
+		ctx.Attrs()[codec.Bytes2String(req.Key)] = "1"
+	}
+
 	value, err := h.store.DataStorageByGroup(shard.Group, shard.ID).(*pebble.Storage).Get(req.Key)
 
 	if err != nil {
