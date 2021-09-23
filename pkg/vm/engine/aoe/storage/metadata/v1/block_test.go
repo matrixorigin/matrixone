@@ -89,7 +89,7 @@ func TestBlock(t *testing.T) {
 	assert.Equal(t, blk2.DataState, PARTIAL)
 
 	assert.Equal(t, blk2.ID, blk2.copyNoLock(nil).ID)
-	assert.NotNil(t, blk2.SetCount(1))
+	assert.NotNil(t, blk2.SetCount(0))
 	assert.NotNil(t, blk2.SetCount(88888))
 	assert.Nil(t, blk2.SetCount(1000))
 	assert.Equal(t, blk2.DataState, FULL)
