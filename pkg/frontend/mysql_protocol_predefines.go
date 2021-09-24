@@ -6211,7 +6211,7 @@ var errorMsgRefer = map[uint16]errorMsgItem{
 	ER_DUP_KEYNAME:               {1061, []string{"42000", "S1009"}, "Duplicate key name '%-.192s'"},
 	ER_DUP_ENTRY:                 {1062, []string{"23000", "S1009"}, "Duplicate entry '%-.192s' for key %d"},
 	ER_WRONG_FIELD_SPEC:          {1063, []string{"42000", "S1009"}, "Incorrect column specifier for column '%-.192s'"},
-	ER_PARSE_ERROR:               {1064, []string{"42000", "s1009"}, "%s near '%-.80s' at line %d"},
+	ER_PARSE_ERROR:               {1064, []string{"42000", "s1009"}, "%s %s"},
 	ER_EMPTY_QUERY:               {1065, []string{"42000"}, "Query was empty"},
 	ER_NONUNIQ_TABLE:             {1066, []string{"42000", "S1009"}, "Not unique table/alias: '%-.192s'"},
 	ER_INVALID_DEFAULT:           {1067, []string{"42000", "S1009"}, "Invalid default value for '%-.192s'"},
