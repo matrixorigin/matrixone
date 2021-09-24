@@ -19,6 +19,7 @@ import (
 	"matrixone/pkg/defines"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/compile"
+	"matrixone/pkg/vm/engine"
 	"strings"
 	"time"
 
@@ -997,6 +998,61 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	return nil
 }
 
+/*
+handler cmd CMD_FIELD_LIST
+ */
+func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
+	var err error = nil
+	ses := mce.routine.GetSession()
+	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+
+	db := mce.routine.db
+	if db == "" {
+		return NewMysqlError(ER_NO_DB_ERROR)
+	}
+
+	var dbHandler engine.Database
+	if dbHandler, err = ses.Pu.StorageEngine.Database(db); err != nil {
+		//echo client. no such database
+		return NewMysqlError(ER_BAD_DB_ERROR, db)
+	}
+
+	var tableHandler engine.Relation
+	if tableHandler, err = dbHandler.Relation(tableName) ; err != nil {
+		return NewMysqlError(ER_NO_SUCH_TABLE, db, tableName)
+	}
+
+	attrs := tableHandler.Attribute()
+	for _, c := range attrs {
+		col := new(MysqlColumn)
+		col.SetName(c.Name)
+		err = convertEngineTypeToMysqlType(uint8(c.Type.Oid),col)
+		if err != nil {
+			return err
+		}
+
+		/*
+			mysql CMD_FIELD_LIST response: send the column definition per column
+		*/
+		err = proto.SendColumnDefinitionPacket(col, int(COM_FIELD_LIST))
+		if err != nil {
+			return err
+		}
+	}
+
+	/*
+		mysql CMD_FIELD_LIST response: End after the column has been sent.
+		send EOF packet
+	*/
+	err = proto.SendEOFPacketIf(0, 0)
+	if err != nil {
+		return err
+	}
+
+	return err
+}
+
+
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.routine.GetSession()
@@ -1149,37 +1205,9 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				for _, c := range columns {
 					col := new(MysqlColumn)
 					col.SetName(c.Name)
-					switch c.Typ {
-					case types.T_int8:
-						col.SetColumnType(defines.MYSQL_TYPE_TINY)
-					case types.T_uint8:
-						col.SetColumnType(defines.MYSQL_TYPE_TINY)
-						col.SetSigned(false)
-					case types.T_int16:
-						col.SetColumnType(defines.MYSQL_TYPE_SHORT)
-					case types.T_uint16:
-						col.SetColumnType(defines.MYSQL_TYPE_SHORT)
-						col.SetSigned(false)
-					case types.T_int32:
-						col.SetColumnType(defines.MYSQL_TYPE_LONG)
-					case types.T_uint32:
-						col.SetColumnType(defines.MYSQL_TYPE_LONG)
-						col.SetSigned(false)
-					case types.T_int64:
-						col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-					case types.T_uint64:
-						col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-						col.SetSigned(false)
-					case types.T_float32:
-						col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
-					case types.T_float64:
-						col.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
-					case types.T_char:
-						col.SetColumnType(defines.MYSQL_TYPE_STRING)
-					case types.T_varchar:
-						col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-					default:
-						return fmt.Errorf("RunWhileSend : unsupported type %d \n", c.Typ)
+					err = convertEngineTypeToMysqlType(uint8(c.Typ),col)
+					if err != nil {
+						return err
 					}
 					ses.Mrs.AddColumn(col)
 
@@ -1226,39 +1254,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 				for _, c := range columns {
 					col := new(MysqlColumn)
 					col.SetName(c.Name)
-					switch c.Typ {
-					case types.T_int8:
-						col.SetColumnType(defines.MYSQL_TYPE_TINY)
-					case types.T_uint8:
-						col.SetColumnType(defines.MYSQL_TYPE_TINY)
-						col.SetSigned(true)
-					case types.T_int16:
-						col.SetColumnType(defines.MYSQL_TYPE_SHORT)
-					case types.T_uint16:
-						col.SetColumnType(defines.MYSQL_TYPE_SHORT)
-						col.SetSigned(true)
-					case types.T_int32:
-						col.SetColumnType(defines.MYSQL_TYPE_LONG)
-					case types.T_uint32:
-						col.SetColumnType(defines.MYSQL_TYPE_LONG)
-						col.SetSigned(true)
-					case types.T_int64:
-						col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-					case types.T_uint64:
-						col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-						col.SetSigned(true)
-					case types.T_float32:
-						col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
-					case types.T_float64:
-						col.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
-					case types.T_char:
-						col.SetColumnType(defines.MYSQL_TYPE_STRING)
-					case types.T_varchar:
-						col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-					default:
-						return fmt.Errorf("RunWhileSend : unsupported type %d \n", c.Typ)
+					err = convertEngineTypeToMysqlType(uint8(c.Typ),col)
+					if err != nil {
+						return err
 					}
-
 					ses.Mrs.AddColumn(col)
 				}
 
@@ -1377,6 +1376,33 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 		}
 
 		return resp, nil
+	case COM_FIELD_LIST:
+		var payload = string(req.GetData().([]byte))
+		//find null
+		nullIdx := strings.IndexRune(payload,rune(0))
+		var tableName string
+		if nullIdx < len(payload) {
+
+			tableName = payload[:nullIdx]
+			//wildcard := payload[nullIdx+1:]
+			//fmt.Printf("table name %s wildcard [%s] \n",tableName,wildcard)
+			err := mce.handleCmdFieldList(tableName)
+			if err != nil {
+				resp = NewResponse(
+					ErrorResponse,
+					0,
+					int(COM_FIELD_LIST),
+					err,
+				)
+			}
+		}else{
+			resp = NewResponse(ErrorResponse,
+				0,
+				int(COM_FIELD_LIST),
+				fmt.Errorf("wrong format for COM_FIELD_LIST"))
+		}
+
+		return resp, nil
 	default:
 		err := fmt.Errorf("unsupported command. 0x%x \n", req.GetCmd())
 		resp = NewResponse(
@@ -1399,4 +1425,43 @@ func (mce *MysqlCmdExecutor) Close() {
 
 func NewMysqlCmdExecutor() *MysqlCmdExecutor {
 	return &MysqlCmdExecutor{}
+}
+
+/*
+convert the type in computation engine to the type in mysql.
+ */
+func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
+	switch engineType {
+	case types.T_int8:
+		col.SetColumnType(defines.MYSQL_TYPE_TINY)
+	case types.T_uint8:
+		col.SetColumnType(defines.MYSQL_TYPE_TINY)
+		col.SetSigned(false)
+	case types.T_int16:
+		col.SetColumnType(defines.MYSQL_TYPE_SHORT)
+	case types.T_uint16:
+		col.SetColumnType(defines.MYSQL_TYPE_SHORT)
+		col.SetSigned(false)
+	case types.T_int32:
+		col.SetColumnType(defines.MYSQL_TYPE_LONG)
+	case types.T_uint32:
+		col.SetColumnType(defines.MYSQL_TYPE_LONG)
+		col.SetSigned(false)
+	case types.T_int64:
+		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	case types.T_uint64:
+		col.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+		col.SetSigned(false)
+	case types.T_float32:
+		col.SetColumnType(defines.MYSQL_TYPE_FLOAT)
+	case types.T_float64:
+		col.SetColumnType(defines.MYSQL_TYPE_DOUBLE)
+	case types.T_char:
+		col.SetColumnType(defines.MYSQL_TYPE_STRING)
+	case types.T_varchar:
+		col.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	default:
+		return fmt.Errorf("RunWhileSend : unsupported type %d \n", engineType)
+	}
+	return nil
 }
