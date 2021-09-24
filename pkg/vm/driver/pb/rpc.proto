@@ -103,31 +103,38 @@ message PrefixScanRequest {
   uint64       limit = 3;
 }
 
+//AppendRequest appends data in the table.
 message AppendRequest {
   string tabletName = 1;
   bytes data = 2;
 }
 
+//GetSnapshotRequest gets a snapshot for the table.
 message GetSnapshotRequest {
   bytes ctx = 1;
 }
 
+//GetSegmentIdsRequest gets the id of all the segments.
 message GetSegmentIdsRequest {
   string name = 1;
 }
 
+//GetSegmentedIdRequest gets id of one of the segments of the table.
 message GetSegmentedIdRequest {
   uint64 shardId = 1;
 }
 
+//TabletIDsRequest gets the ids of all the tablets of the table.
 message TabletIDsRequest {
 }
 
+//CreateTabletRequest create a tablet for the table.
 message CreateTabletRequest {
   string name = 1;
   bytes tableInfo = 2;
 }
 
+//DropTabletRequest drop all the tablets of the table.
 message DropTabletRequest {
   string name = 1;
 }
