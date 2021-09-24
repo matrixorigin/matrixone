@@ -60,4 +60,3 @@ jobs:
           name: test_reports
           path: |
             ${{ github.workspace }}/coverage.html
-            ${{ github.workspace }}/coverage.out
