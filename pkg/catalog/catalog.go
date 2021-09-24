@@ -87,7 +87,7 @@ func (c *Catalog) CreateDatabase(epoch uint64, dbName string, typ int) (dbid uin
 	if err != nil {
 		return 0, err
 	}
-	if err = c.Driver.Set(c.dbIDKey(dbName), codec.Uint642Bytes(dbid)); err != nil {
+	if err = c.Driver.SetIfNotExist(c.dbIDKey(dbName), codec.Uint642Bytes(dbid)); err != nil {
 		return 0, err
 	}
 	info := aoe.SchemaInfo{
