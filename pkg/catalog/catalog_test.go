@@ -243,6 +243,6 @@ func TestCatalogWithUtil(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	shemas,_:=catalog.ListDatabases()
-	assert.Equal(t, int(dbCnt), len(shemas), "parallel: Wrong len")
+	schemas,_=catalog.ListDatabases()
+	assert.Equal(t, n, len(schemas), "parallel: Wrong len")
 }
