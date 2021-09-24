@@ -50,6 +50,22 @@ import (
 	"github.com/matrixorigin/matrixcube/vfs"
 )
 
+const (
+	NormalExit              = 0
+	InitialValuesExit       = 1
+	LoadConfigExit          = 2
+	RecreateDirExit         = 3
+	DecodeAoeConfigExit     = 4
+	CreateAoeExit           = 5
+	DecodeCubeConfigExit    = 6
+	DecodeClusterConfigExit = 7
+	CreateCubeExit          = 8
+	StartCubeExit           = 9
+	CreateRPCExit           = 10
+	WaitCubeStartExit       = 11
+	StartMOExit             = 12
+)
+
 var (
 	c   *catalog.Catalog
 	mo  *frontend.MOServer
@@ -119,13 +135,13 @@ func main() {
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
-		fmt.Printf("error:%v\n", err)
-		panic(err)
+		fmt.Printf("Initial values error:%v\n", err)
+		os.Exit(InitialValuesExit)
 	}
 
 	if err := config.LoadvarsConfigFromFile(os.Args[1], &config.GlobalSystemVariables); err != nil {
-		fmt.Printf("error:%v\n", err)
-		panic(err)
+		fmt.Printf("Load config error:%v\n", err)
+		os.Exit(LoadConfigExit)
 	}
 
 	fmt.Println("Shutdown The Server With Ctrl+C | Ctrl+\\.")
@@ -146,7 +162,8 @@ func main() {
 
 	targetDir := config.GlobalSystemVariables.GetCubeDirPrefix() + strNodeId
 	if err := recreateDir(targetDir); err != nil {
-		panic(err)
+		fmt.Printf("Recreate dir error:%v\n", err)
+		os.Exit(RecreateDirExit)
 	}
 
 	metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
@@ -160,24 +177,27 @@ func main() {
 	opt := aoeStorage.Options{}
 	_, err = toml.DecodeFile(os.Args[1], &opt)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Decode aoe config error:%v\n", err)
+		os.Exit(DecodeAoeConfigExit)
 	}
 
 	aoeDataStorage, err = aoeDriver.NewStorageWithOptions(targetDir+"/aoe", &opt)
 	if err != nil {
-		fmt.Printf("Create aoe driver failed, %v\n", err)
-		os.Exit(0)
+		fmt.Printf("Create aoe driver error, %v\n", err)
+		os.Exit(CreateAoeExit)
 	}
 
 	cfg := dConfig.Config{}
 	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Decode cube config error:%v\n", err)
+		os.Exit(DecodeCubeConfigExit)
 	}
 
 	_, err = toml.DecodeFile(os.Args[1], &cfg.ClusterConfig)
 	if err != nil {
-		panic(err)
+		fmt.Printf("Decode cluster config error:%v\n", err)
+		os.Exit(DecodeClusterConfigExit)
 	}
 	cfg.ServerConfig = server.Cfg{
 		ExternalServer: true,
@@ -192,12 +212,12 @@ func main() {
 	a, err := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {
 		fmt.Printf("Create cube driver failed, %v", err)
-		panic(err)
+		os.Exit(CreateCubeExit)
 	}
 	err = a.Start()
 	if err != nil {
 		fmt.Printf("Start cube driver failed, %v", err)
-		panic(err)
+		os.Exit(StartCubeExit)
 	}
 	c = catalog.NewCatalog(a)
 	eng := aoeEngine.New(c)
@@ -219,7 +239,7 @@ func main() {
 	srv, err := rpcserver.New(fmt.Sprintf("%s:%d", Host, 20100+NodeId), 1<<30, logutil.GetGlobalLogger())
 	if err != nil {
 		fmt.Printf("Create rpcserver failed, %v", err)
-		panic(err)
+		os.Exit(CreateRPCExit)
 	}
 	hp := handler.New(eng, proc)
 	srv.Register(hp.Process)
@@ -228,7 +248,7 @@ func main() {
 
 	if err != nil {
 		fmt.Printf("wait cube cluster startup failed, %v", err)
-		panic(err)
+		os.Exit(WaitCubeStartExit)
 	}
 
 	go srv.Run()
@@ -243,7 +263,7 @@ func main() {
 	err = runMOServer()
 	if err != nil {
 		fmt.Printf("Start MOServer failed, %v", err)
-		panic(err)
+		os.Exit(StartMOExit)
 	}
 	//registerSignalHandlers()
 
@@ -256,7 +276,7 @@ func main() {
 	pebbleDataStorage.Close()
 
 	cleanup()
-	os.Exit(0)
+	os.Exit(NormalExit)
 }
 
 func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxReplicas int, minimalAvailableShard int) error {
