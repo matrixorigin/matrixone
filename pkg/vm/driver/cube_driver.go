@@ -42,7 +42,7 @@ import (
 
 const (
 	defaultRPCTimeout     = time.Second * 10
-	defalutStartupTimeout = time.Second * 300
+	defaultStartupTimeout = time.Second * 300
 )
 
 // CubeDriver implements distributed kv and aoe.
@@ -132,7 +132,7 @@ func NewCubeDriverWithOptions(
 	})
 }
 
-// NewCubeDriverWithFactory creates the cube driver with  raftstore factory
+// NewCubeDriverWithFactory creates the cube driver with raftstore factory
 func NewCubeDriverWithFactory(
 	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
@@ -287,7 +287,7 @@ func (h *driver) Start() error {
 	if err != nil {
 		return err
 	}
-	timeoutC := time.After(defalutStartupTimeout)
+	timeoutC := time.After(defaultStartupTimeout)
 	for {
 		select {
 		case <-timeoutC:
@@ -323,6 +323,7 @@ func (h *driver) AOEStore() *adb.DB {
 func (h *driver) GetShardPool() raftstore.ShardsPool {
 	return h.spool
 }
+
 func (h *driver) Set(key, value []byte) error {
 	return h.SetWithGroup(key, value, pb.KVGroup)
 }
