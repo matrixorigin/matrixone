@@ -162,7 +162,12 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
 	aoeDataStorage, err = aoeDriver.NewStorageWithOptions(targetDir+"/aoe", &opt)
+	if err != nil {
+		fmt.Printf("Create aoe driver failed, %v\n", err)
+		os.Exit(0)
+	}
 
 	cfg := dConfig.Config{}
 	_, err = toml.DecodeFile(os.Args[1], &cfg.CubeConfig)
