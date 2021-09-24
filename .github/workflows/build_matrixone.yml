@@ -61,3 +61,8 @@ jobs:
           path: |
             ${{ github.workspace }}/coverage.html
             ${{ github.workspace }}/coverage.out
+            
+      - name: Clean up older artifacts
+        uses: glassechidna/artifact-cleaner@master
+        with:
+          minimumAge: 604800
