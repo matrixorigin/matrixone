@@ -23,10 +23,19 @@ import (
 
 type createSegBlkEvent struct {
 	BaseEvent
-	TableData  iface.ITableData
-	BlkMeta    *md.Block
+
+	// TableData is Table's metadata in memory
+	TableData iface.ITableData
+
+	// BlkMeta is the metadata of the Block, which is
+	// created and registered during NewCreateBlkEvent
+	BlkMeta *md.Block
+
+	// Whether a new segment is created
 	NewSegment bool
-	Block      iface.IBlock
+
+	// Block is an instance registered to segment
+	Block iface.IBlock
 }
 
 func NewCreateSegBlkEvent(ctx *Context, newSeg bool, meta *md.Block, tableData iface.ITableData) *createSegBlkEvent {
@@ -38,6 +47,8 @@ func NewCreateSegBlkEvent(ctx *Context, newSeg bool, meta *md.Block, tableData i
 	return e
 }
 
+// 1. Create and register a segment in TableData
+// 2. Create and register a Block in TableData
 func (e *createSegBlkEvent) Execute() error {
 	var err error
 	seg := e.TableData.StrongRefSegment(e.BlkMeta.Segment.ID)

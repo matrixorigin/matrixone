@@ -25,10 +25,17 @@ import (
 
 type createTableEvent struct {
 	dbsched.BaseEvent
-	reqCtx    dbi.TableOpCtx
+
+	// reqCtx is Op context, record the raft log index and table name
+	reqCtx dbi.TableOpCtx
+
+	// tableInfo is Table's metadata info
 	tableInfo *aoe.TableInfo
 }
 
+// NewCreateTableEvent creates a logical table event,
+// records table's metadata to a .tckp file,
+// records table's info to a .ckp file
 func NewCreateTableEvent(ctx *dbsched.Context, reqCtx dbi.TableOpCtx, tableInfo *aoe.TableInfo) *createTableEvent {
 	e := &createTableEvent{
 		reqCtx:    reqCtx,
@@ -41,11 +48,15 @@ func NewCreateTableEvent(ctx *dbsched.Context, reqCtx dbi.TableOpCtx, tableInfo 
 	return e
 }
 
+// Return the table just created
 func (e *createTableEvent) GetTable() *md.Table {
 	tbl := e.Result.(*md.Table)
 	return tbl
 }
 
+// 1. Create and register a table in MetaInfo
+// 2. Modify MetaInfo's metadata file(.ckp)
+// 3. Create table's metadata file(.tckp)
 func (e *createTableEvent) Execute() error {
 	tbl, err := e.Ctx.Opts.Meta.Info.CreateTableFromTableInfo(e.tableInfo, e.reqCtx)
 	if err != nil {
