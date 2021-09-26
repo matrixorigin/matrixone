@@ -14,6 +14,7 @@
 package table
 
 import (
+	"bytes"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/logutil"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
