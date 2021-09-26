@@ -25,12 +25,21 @@ import (
 
 type createBlkEvent struct {
 	dbsched.BaseEvent
+
+	// Whether a new segment is created
 	NewSegment bool
-	TableID    uint64
-	TableData  iface.ITableData
-	Block      iface.IBlock
+
+	// TableID is Table's id, aoe is generated when the table is created
+	TableID uint64
+
+	// TableData is Table's metadata in memory
+	TableData iface.ITableData
+
+	// Block created by NewCreateBlkEvent
+	Block iface.IBlock
 }
 
+// NewCreateBlkEvent creates a logical Block event
 func NewCreateBlkEvent(ctx *dbsched.Context, tid uint64, tableData iface.ITableData) *createBlkEvent {
 	e := &createBlkEvent{
 		TableData: tableData,
@@ -46,6 +55,7 @@ func (e *createBlkEvent) HasNewSegment() bool {
 	return e.NewSegment
 }
 
+// Return the block just created
 func (e *createBlkEvent) GetBlock() *md.Block {
 	if e.Err != nil {
 		return nil

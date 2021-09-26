@@ -21,8 +21,12 @@ import (
 
 type dropTableEvent struct {
 	BaseEvent
+
+	// Table's id, aoe is generated when the table is created
 	TableId uint64
-	Data    iface.ITableData
+
+	// Data is Table's metadata in memory
+	Data iface.ITableData
 }
 
 func NewDropTableEvent(ctx *Context, tableId uint64) *dropTableEvent {
@@ -34,6 +38,7 @@ func NewDropTableEvent(ctx *Context, tableId uint64) *dropTableEvent {
 	return e
 }
 
+// Remove and release a table from Tables
 func (e *dropTableEvent) Execute() error {
 	tbl, err := e.Ctx.Tables.DropTable(e.TableId)
 	e.Data = tbl

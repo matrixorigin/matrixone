@@ -14,6 +14,7 @@
 package table
 
 import (
+	"bytes"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/logutil"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
@@ -228,6 +229,21 @@ func TestTBlock(t *testing.T) {
 	for _, colDef := range blk1.meta.Segment.Table.Schema.ColDefs {
 		t.Logf("col %s size= %d", colDef.Name, blk1.Size(colDef.Name))
 	}
+
+	attrs := []string{}
+	for _, colDef := range tablemeta.Schema.ColDefs {
+		attrs = append(attrs, colDef.Name)
+	}
+	cds := make([]*bytes.Buffer, len(attrs))
+	dds := make([]*bytes.Buffer, len(attrs))
+	for i, attr := range attrs {
+		cds[i] = bytes.NewBuffer(make([]byte, 0))
+		dds[i] = bytes.NewBuffer(make([]byte, 0))
+		vec, err := blk1.GetVectorCopy(attr, cds[i], dds[i])
+		assert.Nil(t, err)
+		assert.NotNil(t, vec)
+	}
+	t.Logf(blk1.String())
 	blk1.Unref()
 	blk2.Unref()
 }

@@ -26,9 +26,15 @@ import (
 
 type dropTableEvent struct {
 	dbsched.BaseEvent
+
+	// reqCtx is Op context, record the raft log index and table name
 	reqCtx dbi.DropTableCtx
-	Id     uint64
-	MTMgr  mtif.IManager
+
+	// Table's id, aoe is generated when the table is created
+	Id    uint64
+	MTMgr mtif.IManager
+
+	// The created table will be inserted into the Tables
 	Tables *table.Tables
 }
 
@@ -45,6 +51,9 @@ func NewDropTableEvent(ctx *dbsched.Context, reqCtx dbi.DropTableCtx, mtMgr mtif
 	return e
 }
 
+// 1. Modify MetaInfo and mark the table as deleted
+// 2. Modify the metadata file
+// 3. Modify the metadata info in the memeory and release resources
 func (e *dropTableEvent) Execute() error {
 	id, err := e.Ctx.Opts.Meta.Info.SoftDeleteTable(e.reqCtx.TableName, e.reqCtx.OpIndex)
 	if err != nil {

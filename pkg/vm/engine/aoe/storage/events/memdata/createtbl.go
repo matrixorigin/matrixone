@@ -21,6 +21,9 @@ import (
 
 type createTableEvent struct {
 	BaseEvent
+
+	// Collection manages the memTable data of a table(creates Block and
+	// creates memTable) and provides Append() interface externally
 	Collection imem.ICollection
 }
 
@@ -33,6 +36,9 @@ func NewCreateTableEvent(ctx *Context) *createTableEvent {
 	return e
 }
 
+// 1. Create a Collection
+// 2. Create and register a TableData
+// 3. Register Collection to the memTable manager
 func (e *createTableEvent) Execute() error {
 	collection := e.Ctx.MTMgr.StrongRefCollection(e.Ctx.TableMeta.ID)
 	if collection != nil {
