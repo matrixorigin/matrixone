@@ -28,13 +28,15 @@ import (
 )
 
 var (
+	VecNotRoErr = errors.New("should only be called in read-only mode")
 	VecWriteRoErr       = errors.New("write on readonly vector")
-	VecInvalidOffsetErr = errors.New("invalid error")
+	VecInvalidOffsetErr = errors.New("invalid offset error")
+	VecTypeNotSupportErr = errors.New("type not supported yet")
 )
 
 type IVectorWriter interface {
 	io.Closer
-	SetValue(int, interface{})
+	SetValue(int, interface{}) error
 	Append(int, interface{}) error
 	AppendVector(*ro.Vector, int) (int, error)
 }

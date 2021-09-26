@@ -322,20 +322,28 @@ func TestIVectorNodeWriter(t *testing.T) {
 			vec := vector.NewEmptyStdVector()
 			err = vec.Unmarshal(obuf)
 			assert.Nil(t, err)
-			t.Log(vec.GetLatestView().CopyToVector().String())
+			vc, err := vec.GetLatestView().CopyToVector()
+			assert.Nil(t, err)
+			t.Log(vc.String())
 			assert.Equal(t, 4, vec.Length())
 		} else {
 			vec := vector.NewEmptyStrVector()
 			err = vec.Unmarshal(obuf)
 			assert.Nil(t, err)
-			t.Log(vec.GetLatestView().CopyToVector().String())
+			vc, err := vec.GetLatestView().CopyToVector()
+			assert.Nil(t, err)
+			t.Log(vc.String())
 			assert.Equal(t, 4, vec.Length())
 		}
 	}
 
 	var vecs []*gvector.Vector
-	vecs = append(vecs, vec0.CopyToVector())
-	vecs = append(vecs, vec1.CopyToVector())
+	v0c, err := vec0.CopyToVector()
+	assert.Nil(t, err)
+	v1c, err := vec1.CopyToVector()
+	assert.Nil(t, err)
+	vecs = append(vecs, v0c)
+	vecs = append(vecs, v1c)
 	bw := NewBlockWriter(vecs, meta, dir)
 	err = bw.Execute()
 	assert.Nil(t, err)

@@ -33,7 +33,11 @@ func (mw *memTableWriter) Flush() (err error) {
 		if err != nil {
 			return err
 		}
-		vecs = append(vecs, node.CopyToVector())
+		vc, err := node.CopyToVector()
+		if err != nil {
+			return err
+		}
+		vecs = append(vecs, vc)
 	}
 	bw := dataio.NewBlockWriter(vecs, mw.memTable.meta, mw.memTable.meta.Segment.Table.Conf.Dir)
 	bw.SetPreExecutor(func() {

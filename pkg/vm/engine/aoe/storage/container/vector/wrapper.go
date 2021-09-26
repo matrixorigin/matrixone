@@ -65,7 +65,7 @@ func (v *VectorWrapper) PlacementNew(t types.Type) {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) SliceReference(start, end int) dbi.IVectorReader {
+func (v *VectorWrapper) SliceReference(start, end int) (dbi.IVectorReader, error) {
 	panic("not supported")
 }
 
@@ -122,54 +122,54 @@ func (v *VectorWrapper) GetMemoryCapacity() uint64 {
 	}
 }
 
-func (v *VectorWrapper) SetValue(idx int, val interface{}) {
+func (v *VectorWrapper) SetValue(idx int, val interface{}) error {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) GetValue(idx int) interface{} {
+func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
 	if idx >= v.Length() || idx < 0 {
-		panic(fmt.Sprintf("idx %d is out of range", idx))
+		return nil, VecInvalidOffsetErr
 	}
 	switch v.Typ.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
 		val := v.Col.(*types.Bytes)
-		return val.Data[val.Offsets[idx] : val.Offsets[idx]+val.Lengths[idx]]
+		return val.Data[val.Offsets[idx] : val.Offsets[idx]+val.Lengths[idx]], nil
 	case types.T_int8:
-		return v.Col.([]int8)[idx]
+		return v.Col.([]int8)[idx], nil
 	case types.T_int16:
-		return v.Col.([]int16)[idx]
+		return v.Col.([]int16)[idx], nil
 	case types.T_int32:
-		return v.Col.([]int32)[idx]
+		return v.Col.([]int32)[idx], nil
 	case types.T_int64:
-		return v.Col.([]int64)[idx]
+		return v.Col.([]int64)[idx], nil
 	case types.T_uint8:
-		return v.Col.([]uint8)[idx]
+		return v.Col.([]uint8)[idx], nil
 	case types.T_uint16:
-		return v.Col.([]uint16)[idx]
+		return v.Col.([]uint16)[idx], nil
 	case types.T_uint32:
-		return v.Col.([]uint32)[idx]
+		return v.Col.([]uint32)[idx], nil
 	case types.T_uint64:
-		return v.Col.([]uint64)[idx]
+		return v.Col.([]uint64)[idx], nil
 	case types.T_decimal:
-		return v.Col.([]types.Decimal)[idx]
+		return v.Col.([]types.Decimal)[idx], nil
 	case types.T_float32:
-		return v.Col.([]float32)[idx]
+		return v.Col.([]float32)[idx], nil
 	case types.T_float64:
-		return v.Col.([]float64)[idx]
+		return v.Col.([]float64)[idx], nil
 	case types.T_date:
-		return v.Col.([]types.Date)[idx]
+		return v.Col.([]types.Date)[idx], nil
 	case types.T_datetime:
-		return v.Col.([]types.Datetime)[idx]
+		return v.Col.([]types.Datetime)[idx], nil
 	case types.T_sel:
-		return v.Col.([]int64)[idx]
+		return v.Col.([]int64)[idx], nil
 	case types.T_tuple:
-		return v.Col.([][]interface{})[idx]
+		return v.Col.([][]interface{})[idx], nil
 	default:
-		panic("not supported")
+		return nil, VecTypeNotSupportErr
 	}
 }
 
-func (v *VectorWrapper) IsNull(idx int) bool {
+func (v *VectorWrapper) IsNull(idx int) (bool, error) {
 	panic("not supported")
 }
 
@@ -189,8 +189,8 @@ func (v *VectorWrapper) GetLatestView() IVector {
 	panic("not supported")
 }
 
-func (v *VectorWrapper) CopyToVector() *base.Vector {
-	return &v.Vector
+func (v *VectorWrapper) CopyToVector() (*base.Vector, error) {
+	return &v.Vector, nil
 }
 
 func (v *VectorWrapper) CopyToVectorWithProc(ref uint64, proc *process.Process) (*base.Vector, error) {

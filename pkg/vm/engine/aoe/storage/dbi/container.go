@@ -42,15 +42,15 @@ type IBatchReader interface {
 type IVectorReader interface {
 	io.Closer
 	GetType() VectorType
-	GetValue(int) interface{}
-	IsNull(int) bool
+	GetValue(int) (interface{}, error)
+	IsNull(int) (bool, error)
 	HasNull() bool
 	NullCnt() int
 	Length() int
 	Capacity() int
 	GetMemorySize() uint64
-	SliceReference(start, end int) IVectorReader
-	CopyToVector() *ro.Vector
+	SliceReference(start, end int) (IVectorReader, error)
+	CopyToVector() (*ro.Vector, error)
 	CopyToVectorWithProc(uint64, *process.Process) (*ro.Vector, error)
 	CopyToVectorWithBuffer(*bytes.Buffer, *bytes.Buffer) (*ro.Vector, error)
 }
