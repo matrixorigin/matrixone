@@ -152,21 +152,10 @@ func AndExtends(e Extend, es []Extend) []Extend {
 	case *ValueExtend:
 		return es
 	case *BinaryExtend:
-		switch v.Op {
-		case overload.EQ:
-			return append(es, v)
-		case overload.NE:
-			return append(es, v)
-		case overload.LT:
-			return append(es, v)
-		case overload.LE:
-			return append(es, v)
-		case overload.GT:
-			return append(es, v)
-		case overload.GE:
-			return append(es, v)
-		case overload.And:
+		if v.Op == overload.And {
 			return append(AndExtends(v.Left, es), AndExtends(v.Right, es)...)
+		} else {
+			return append(es, v)
 		}
 	}
 	return nil
