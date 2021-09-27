@@ -19,18 +19,16 @@ import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
-	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 )
 
-func NewNodeIOWithReader(nh iface.INodeHandle, reader io.Reader) ioif.IO {
-	nio := &dio.DefaultIO{}
+func NewNodeIOWithReader(nh iface.INodeHandle, reader io.Reader) iface.IOHandle {
+	nio := &iface.DefaultIOHandle{}
 	nio.Reader = NewNodeReader(nh, nil, reader)
 	return nio
 }
 
-func NewNodeIO(nh iface.INodeHandle, dir []byte) ioif.IO {
-	nio := &dio.DefaultIO{}
+func NewNodeIO(nh iface.INodeHandle, dir []byte) iface.IOHandle {
+	nio := &iface.DefaultIOHandle{}
 	id := nh.GetID()
 	filename := common.MakeFilename(string(dir), common.FTTransientNode, fmt.Sprintf("%d", id), false)
 	buf := []byte(filename)

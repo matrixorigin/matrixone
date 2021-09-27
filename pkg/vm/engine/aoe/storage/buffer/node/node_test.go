@@ -17,7 +17,6 @@ package node
 import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,37 +25,6 @@ import (
 )
 
 var WORK_DIR = "/tmp/buff/node_test"
-
-func init() {
-	dio.WRITER_FACTORY.Init(nil, WORK_DIR)
-	dio.READER_FACTORY.Init(nil, WORK_DIR)
-}
-
-// func TestWriter(t *testing.T) {
-// 	panic_func := func() {
-// 		e.WRITER_FACTORY.MakeWriter(NODE_WRITER, context.TODO())
-// 	}
-// 	assert.Panics(t, panic_func)
-// 	node_capacity := uint64(4096)
-// 	capacity := node_capacity * 4
-// 	pool := buf.NewSimpleMemoryPool(capacity)
-// 	assert.NotNil(t, pool)
-// 	node1 := pool.MakeNode(node_capacity)
-// 	assert.NotNil(t, node1)
-
-// 	id := layout.NewTransientID()
-// 	node_buff1 := NewNodeBuffer(*id, node1)
-
-// 	ctx := context.TODO()
-// 	ctx = context.WithValue(ctx, "buffer", node_buff1)
-// 	os.RemoveAll(e.WRITER_FACTORY.Dirname)
-// 	writer := e.WRITER_FACTORY.MakeWriter(NODE_WRITER, ctx)
-// 	assert.NotNil(t, writer)
-// 	err := writer.Flush()
-// 	assert.Nil(t, err)
-// 	_, err = os.Stat((writer.(*NodeWriter)).Filename)
-// 	assert.Nil(t, err)
-// }
 
 func TestNode(t *testing.T) {
 	node_capacity := uint64(4096)
