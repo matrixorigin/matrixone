@@ -29,16 +29,19 @@ import (
 	"time"
 )
 
+//Close closes the relation. It closes all relations of the tablet in the aoe store.
 func (r *relation) Close() {
 	for _, v := range r.mp {
 		v.Close()
 	}
 }
 
+//ID returns the name of the table.
 func (r *relation) ID() string {
 	return r.tbl.Name
 }
 
+//Segment returns the segment according to the segmentInfo.
 func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
 	t0 := time.Now()
 	defer func() {
@@ -47,18 +50,22 @@ func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.
 	return r.mp[si.TabletId].Segment(binary.BigEndian.Uint64([]byte(si.Id)), proc)
 }
 
+//Segments returns all the SegmentIfo in the relation.
 func (r *relation) Segments() []engine.SegmentInfo {
 	return r.segments
 }
 
+//Index returns all the indexes of the table.
 func (r *relation) Index() []*engine.IndexTableDef {
 	return helper.Index(*r.tbl)
 }
 
+//Attribute returns all the attributes of the table.
 func (r *relation) Attribute() []metadata.Attribute {
 	return helper.Attribute(*r.tbl)
 }
 
+//Attribute writes the batch into the table.
 func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	t0 := time.Now()
 	defer func() {

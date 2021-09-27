@@ -18,6 +18,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	pb3 "matrixone/pkg/vm/driver/pb"
+	"matrixone/pkg/vm/engine/aoe/common/codec"
+
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb"
@@ -25,10 +28,12 @@ import (
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage/pebble"
-	pb3 "matrixone/pkg/vm/driver/pb"
-	"matrixone/pkg/vm/engine/aoe/common/codec"
 )
 
+//set responses the requests whose CustemType is Set.
+//It sets key value.
+//If fail, it returns the err in resp.Value.
+//If success, it returns the amount of the written bytes.
 func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.SetRequest{}
@@ -44,6 +49,10 @@ func (h *driver) set(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 	return writtenBytes, changedBytes, resp
 }
 
+//setIfNotExist responses the requests whose CustemType is SetIfNotExist.
+//It sets key value if the key doesn't exist.
+//If fail (including the condition that the key exists), it returns the err in resp.Value.
+//If success, it returns the amount of the written bytes.
 func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.SetRequest{}
@@ -78,6 +87,10 @@ func (h *driver) setIfNotExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx
 	return writtenBytes, changedBytes, resp
 }
 
+//del responses the requests whose CustemType is Del.
+//It removes the key
+//If fail, it returns 0.
+//If success, it returns the amount of the written bytes.
 func (h *driver) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
@@ -91,6 +104,10 @@ func (h *driver) del(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 	return writtenBytes, changedBytes, resp
 }
 
+//delIfExist responses the requests.
+//It deletes the key if it exists.
+//If fail (including the condition that the key doesn't exist), it returns the error in resp.Value.
+//If success, it returns the amount of the written bytes.
 func (h *driver) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 
@@ -109,6 +126,10 @@ func (h *driver) delIfExist(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	return writtenBytes, changedBytes, resp
 }
 
+//get responses the requests whose CustemType is Get.
+//It gets the value of the key
+//If fail, it returns the error in resp.Value and returns 500.
+//If success, it returns the value got in resp.Value and returns 0.
 func (h *driver) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 
@@ -121,6 +142,10 @@ func (h *driver) get(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.C
 	return resp, 0
 }
 
+//prefixScan responses the requests whose CustemType is PrefixScan.
+//It scans the kv-pairs whose key starts with the prefix.
+//If fail, it returns the error in resp.Value and returns 500.
+//If success, it returns the kv-pairs in resp.Value and returns 0.
 func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.PrefixScanRequest{}
@@ -154,6 +179,10 @@ func (h *driver) prefixScan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 	return resp, 0
 }
 
+//scan responses the requests whose CustemType is Scan.
+//It scans all the kv-pairs in the store.
+//If fail, it returns the error in resp.Value and returns 500.
+//If success, it returns the kv-pairs in resp.Value and returns 0.
 func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (*raftcmdpb.Response, uint64) {
 
 	resp := pb.AcquireResponse()
@@ -197,6 +226,10 @@ func (h *driver) scan(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.
 	return resp, 0
 }
 
+//incr responses the requests whose CustemType is Incr.
+//It allocates the id that increases the length of batch from the former id.
+//If fail, it returns 0,0 and returns empty resp.
+//If success, it returns amount of the written bytes and returns the id in resp.Value.
 func (h *driver) incr(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx command.Context) (uint64, int64, *raftcmdpb.Response) {
 	resp := pb.AcquireResponse()
 	customReq := &pb3.AllocIDRequest{}
