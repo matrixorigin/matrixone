@@ -3,10 +3,13 @@ package vector
 import (
 	"bytes"
 	"github.com/stretchr/testify/assert"
+	"matrixone/pkg/container/nulls"
 	v "matrixone/pkg/container/vector"
+	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"os"
 	"sync"
 	"testing"
 )
@@ -137,7 +140,9 @@ func TestStdVector(t *testing.T) {
 	searchWg.Wait()
 	assert.Equal(t, vvec.Length()*loopCnt, vec01.Length())
 	assert.False(t, vec01.IsReadonly())
-	node := StdVectorConstructor(common.NewMemFile(4*100), false, nil)
+	node := StdVectorConstructor(common.NewMemFile(4*100), false, func(node buf.IMemoryNode) {
+		// do nothing
+	})
 	nvec := node.(*StdVector)
 	nvec.PlacementNew(schema.ColDefs[0].Type)
 	nvec.PlacementNew(schema.ColDefs[2].Type)
@@ -147,4 +152,52 @@ func TestStdVector(t *testing.T) {
 	nvec.UseCompress = true
 	assert.Equal(t, uint64(400), nvec.GetMemoryCapacity())
 	assert.Equal(t, uint64(400), nvec.GetMemorySize())
+	nvec.FreeMemory()
+	assert.Nil(t, nvec.Close())
+	assert.Equal(t, uint64(400), nvec.GetMemoryCapacity())
+	assert.Equal(t, 0, nvec.dataBytes())
+
+	vecs = make([]*StdVector, 0)
+	for _, colDef := range schema.ColDefs {
+		vec := NewStdVector(colDef.Type, capacity)
+		vecs = append(vecs, vec)
+		rov, err := MockVector(colDef.Type, 1000).CopyToVector()
+		assert.Nil(t, err)
+		rov.Nsp.Add(0, 1)
+		_, err = vec.AppendVector(rov, 0)
+		assert.Nil(t, err)
+		_, err = vec.GetValue(999)
+		assert.Nil(t, err)
+		_, err = vec.GetValue(1000)
+		assert.NotNil(t, err)
+		err = vec.Append(1000, rov.Col)
+		assert.Nil(t, err)
+		assert.Equal(t, 2000, vec.Length())
+	}
+
+	buf, err := vecs[0].Marshal()
+	assert.Nil(t, err)
+	tmpv := NewEmptyStdVector()
+	assert.Nil(t, tmpv.Unmarshal(buf))
+	assert.Equal(t, 2000, tmpv.Length())
+	assert.True(t, tmpv.HasNull())
+
+	nvec.VMask = &nulls.Nulls{}
+	buf, err = nvec.Marshal()
+	assert.Nil(t, err)
+	tmpv = NewEmptyStdVector()
+	assert.Nil(t, tmpv.Unmarshal(buf))
+	assert.True(t, tmpv.Type.Eq(schema.ColDefs[2].Type))
+
+	f, err := os.Create("/tmp/teststdvec")
+	_, err = vecs[1].WriteTo(f)
+	assert.Nil(t, err)
+	assert.Nil(t, f.Close())
+	f, err = os.Open("/tmp/teststdvec")
+	tmpv = NewEmptyStdVector()
+	_, err = tmpv.ReadFrom(f)
+	assert.Nil(t, f.Close())
+	assert.Nil(t, err)
+	assert.Equal(t, 2000, tmpv.Length())
+	assert.True(t, tmpv.HasNull())
 }

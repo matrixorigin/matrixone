@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
@@ -132,7 +133,7 @@ func (v *StdVector) GetMemoryCapacity() uint64 {
 }
 
 func (v *StdVector) SetValue(idx int, val interface{}) error {
-	panic("not supported")
+	return errors.New("not supported")
 }
 
 func (v *StdVector) GetValue(idx int) (interface{}, error) {
