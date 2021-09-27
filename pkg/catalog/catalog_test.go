@@ -15,15 +15,17 @@
 package catalog
 
 import (
-	"errors"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	stdLog "log"
+	"matrixone/pkg/logutil"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	cconfig "github.com/matrixorigin/matrixcube/config"
 	"matrixone/pkg/container/types"
 	aoe3 "matrixone/pkg/vm/driver/aoe"
 	"matrixone/pkg/vm/driver/config"
@@ -35,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 
 	"github.com/fagongzi/log"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -45,17 +46,21 @@ const (
 	segmentCnt         = 5
 	blockCnt           = blockCntPerSegment * segmentCnt
 	restart            = false
-	tableCount         = 50
+	tableCount         = 20
 	databaseCount      = 50
+	preAllocShardNum   = 50
 )
 
-var testDatabaceName = "test_db"
-var testTables []*aoe.TableInfo
+var (
+	testDatabaceName = "test_db"
+	testTableName    = "test_tbl"
+	testTables       []*aoe.TableInfo
+)
 
 func init() {
 	for i := 0; i < tableCount; i++ {
 		testTable := MockTableInfo(colCnt, i)
-		testTable.Id = uint64(100 + i)
+		testTable.Name = fmt.Sprintf("%v%v", testTableName, uint64(i))
 		testTables = append(testTables, testTable)
 	}
 }
@@ -87,7 +92,7 @@ func TestCatalogWithUtil(t *testing.T) {
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
-			c.ClusterConfig.PreAllocatedGroupNum = 20
+			c.ClusterConfig.PreAllocatedGroupNum = preAllocShardNum
 			c.ServerConfig.ExternalServer = true
 			return c
 		},
@@ -110,16 +115,19 @@ func TestCatalogWithUtil(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
+			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
+				cfg.Worker.RaftEventWorkers = 8
+			}),
 			raftstore.WithTestClusterLogLevel("info"),
 			raftstore.WithTestClusterDataPath("./test")))
 
 	c.Start()
 	defer func() {
-		stdLog.Printf("3>>>>>>>>>>>>>>>>> call stop")
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
 
-	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*30)
 
 	stdLog.Printf("driver all started.")
 
@@ -128,113 +136,126 @@ func TestCatalogWithUtil(t *testing.T) {
 	catalog := NewCatalog(driver)
 
 	_, err := catalog.getAvailableShard(0)
-	assert.NoError(t, err, "getAvailableShard Fail")
-	//test CreateDatabase
+	require.NoError(t, err, "getAvailableShard Fail")
+	//Test CreateDatabase
 	var dbids []uint64
 	for i := 0; i < databaseCount; i++ {
 		dbid, err := catalog.CreateDatabase(0, testDatabaceName+strconv.Itoa(i), 0)
-		assert.NoError(t, err, "CreateDatabase%v Fail", i)
+		require.NoError(t, err, "CreateDatabase%v Fail", i)
 		dbids = append(dbids, dbid)
 	}
 	_, err = catalog.CreateDatabase(0, testDatabaceName+strconv.Itoa(0), 0)
-	assert.Equal(t, ErrDBCreateExists, err, "CreateDatabase: wrong err")
-	//test ListDatabases
+	require.Equal(t, ErrDBCreateExists, err, "CreateDatabase: wrong err")
+
+	//Test ListDatabases
 	schemas, err := catalog.ListDatabases()
-	assert.NoError(t, err, "ListDatabases Fail")
-	assert.Equal(t, len(schemas), len(dbids), "ListDatabases: Wrong len")
-	// fmt.Print(schema)
-	//test GetDatabase
+	require.NoError(t, err, "ListDatabases Fail")
+	require.Equal(t, len(schemas), len(dbids), "ListDatabases: Wrong len")
+
+	//Test GetDatabase
 	schema, err := catalog.GetDatabase(testDatabaceName + "0")
-	assert.NoError(t, err, "GetDatabase Fail")
-	assert.Equal(t, schema.Id, dbids[0], "GetDatabase: Wrong id")
+	require.NoError(t, err, "GetDatabase Fail")
+	require.Equal(t, schema.Id, dbids[0], "GetDatabase: Wrong id")
 	_, err = catalog.GetDatabase(testDatabaceName)
-	assert.Equal(t, ErrDBNotExists, err, "GetDatabase: wrong err")
-	//test CreateTable
-	tempTable := &aoe.TableInfo{Name: "mocktbl0"}
-	_, err = catalog.CreateTable(0, dbids[0], *tempTable)
-	assert.NotNil(t, err, "CreateTable: create a table with 0 column.")
+	require.Equal(t, ErrDBNotExists, err, "GetDatabase: wrong err")
+
+	//Test CreateTableFailed
+	_, err = catalog.CreateTable(0, dbids[0], aoe.TableInfo{})
+	require.Equal(t, ErrTabletCreateFailed, err, "CreateTable: wrong err")
+
+	//Test CreateTable
 	var createIds []uint64
 	for i := 0; i < tableCount; i++ {
 		createId, err := catalog.CreateTable(0, dbids[0], *testTables[i])
-		assert.NoError(t, err, "CreateTable%v Fail", i)
+		require.NoError(t, err, "CreateTable%v Fail", i)
 		createIds = append(createIds, createId)
 	}
+
+	//Test CreateTableExists
 	_, err = catalog.CreateTable(0, dbids[0], *testTables[0])
-	assert.Equal(t, ErrTableCreateExists, err, "CreateTable: wrong err")
-	_, err = catalog.CreateTable(0, dbids[0], aoe.TableInfo{})
-	assert.Equal(t, errors.New("Call CreateTable Failed,invalid schema"), err, "CreateTable: wrong err")
+	require.Equal(t, ErrTableCreateExists, err, "CreateTable: wrong err")
+
 	//test ListTables
 	tables, err := catalog.ListTables(dbids[0])
-	assert.NoError(t, err, "ListTables Fail")
-	assert.Equal(t, len(tables), tableCount, "ListTables: Wrong len")
+	require.NoError(t, err, "ListTables Fail")
+	require.Equal(t, len(tables), tableCount, "ListTables: Wrong len")
+
 	//test GetTable
-	table, err := catalog.GetTable(dbids[0], "mocktbl0")
-	assert.NoError(t, err, "GetTable Fail")
-	assert.Equal(t, table.Id, createIds[0], "GetTable: Wrong id")
-	assert.Equal(t, table.Name, "mocktbl0", "GetTable: Wrong Name")
-	_, err = catalog.GetTable(dbids[0], "mocktbl")
-	assert.Equal(t, ErrTableNotExists, err, "GetTable: wrong err")
+	table, err := catalog.GetTable(dbids[0], testTables[0].Name)
+	require.NoError(t, err, "GetTable Fail")
+	require.Equal(t, table.Id, createIds[0], "GetTable: Wrong id")
+	require.Equal(t, table.Name, testTables[0].Name, "GetTable: Wrong Name")
+
+	_, err = catalog.GetTable(dbids[0], "wrong_name")
+	require.Equal(t, ErrTableNotExists, err, "GetTable: wrong err")
+
 	//test GetTablets
-	tablets, err := catalog.GetTablets(dbids[0], "mocktbl0")
-	assert.NoError(t, err, "GetTablets Fail")
+	tablets, err := catalog.GetTablets(dbids[0], testTables[0].Name)
+	require.NoError(t, err, "GetTablets Fail")
 	for i := range tablets {
-		assert.Equal(t, tablets[i].Table.Id, createIds[0], "GetTablets: Wrong id")
-		assert.Equal(t, tablets[i].Table.Name, "mocktbl0", "GetTablets: Wrong Name")
+		require.Equal(t, tablets[i].Table.Id, createIds[0], "GetTablets: Wrong id")
+		require.Equal(t, tablets[i].Table.Name, testTables[0].Name, "GetTablets: Wrong Name")
 	}
+
 	//test DropTable
-	dropId, err := catalog.DropTable(0, dbids[0], "mocktbl0")
-	assert.NoError(t, err, "DropTable Fail")
-	assert.Equal(t, createIds[0], dropId, "DropTable: Wrong id")
-	_, err = catalog.GetTable(dbids[0], "mocktbl0")
-	assert.Equal(t, ErrTableNotExists, err, "DropTable: GetTable wrong err")
-	_, err = catalog.DropTable(0, dbids[0], "mocktbl0")
-	assert.Equal(t, ErrTableNotExists, err, "DropTable: DropTable wrong err")
-	_, err = catalog.GetTablets(dbids[0], "mocktbl0")
-	assert.Equal(t, ErrTableNotExists, err, "DropTable: GetTablets wrong err")
+	dropId, err := catalog.DropTable(0, dbids[0], testTables[0].Name)
+	require.NoError(t, err, "DropTable Fail")
+	require.Equal(t, createIds[0], dropId, "DropTable: Wrong id")
+
+	_, err = catalog.GetTable(dbids[0], testTables[0].Name)
+	require.Equal(t, ErrTableNotExists, err, "DropTable: GetTable wrong err")
+
+	_, err = catalog.DropTable(0, dbids[0], testTables[0].Name)
+	require.Equal(t, ErrTableNotExists, err, "DropTable: DropTable wrong err")
+
+	_, err = catalog.GetTablets(dbids[0], testTables[0].Name)
+	require.Equal(t, ErrTableNotExists, err, "DropTable: GetTablets wrong err")
+
 	_, err = catalog.checkTableExists(dbids[0], createIds[0])
-	assert.Equal(t, ErrTableNotExists, err, "DropTable: checkTableExists wrong err")
+	require.Equal(t, ErrTableNotExists, err, "DropTable: checkTableExists wrong err")
+
 	//test RemoveDeletedTable
 	cnt, err := catalog.RemoveDeletedTable(0)
-	assert.NoError(t, err, "RemoveDeletedTable Fail")
-	assert.Equal(t, cnt, 1, "RemoveDeletedTable: Wrong id")
+	require.NoError(t, err, "RemoveDeletedTable Fail")
+	require.Equal(t, cnt, 1, "RemoveDeletedTable: Wrong id")
+
 	//test DropDatabase
 	for i := 0; i < databaseCount; i++ {
 		err = catalog.DropDatabase(0, testDatabaceName+strconv.Itoa(i))
-		assert.NoError(t, err, "DropDatabase%v Fail", i)
+		require.NoError(t, err, "DropDatabase%v Fail", i)
 	}
+
 	_, err = catalog.GetDatabase(testDatabaceName + "0")
-	assert.Equal(t, ErrDBNotExists, err, "DropDatabase: GetDatabase wrong err")
-	_, err = catalog.DropTable(0, dbids[0], "mocktbl0")
-	assert.Equal(t, ErrDBNotExists, err, "DropDatabase: DropTable wrong err")
+	require.Equal(t, ErrDBNotExists, err, "DropDatabase: GetDatabase wrong err")
+
+	_, err = catalog.DropTable(0, dbids[0], testTables[0].Name)
+	require.Equal(t, ErrDBNotExists, err, "DropDatabase: DropTable wrong err")
+
 	_, err = catalog.ListTables(dbids[0])
-	assert.Equal(t, ErrDBNotExists, err, "DropDatabase: ListTables wrong err")
-	_, err = catalog.GetTable(dbids[0], "mocktbl0")
-	assert.Equal(t, ErrDBNotExists, err, "DropDatabase: GetTable wrong err")
-	_, err = catalog.GetTablets(dbids[0], "mocktbl0")
-	assert.Equal(t, ErrDBNotExists, err, "DropDatabase: GetTablets wrong err")
+	require.Equal(t, ErrDBNotExists, err, "DropDatabase: ListTables wrong err")
+
+	_, err = catalog.GetTable(dbids[0], testTables[0].Name)
+	require.Equal(t, ErrDBNotExists, err, "DropDatabase: GetTable wrong err")
+
+	_, err = catalog.GetTablets(dbids[0], testTables[0].Name)
+	require.Equal(t, ErrDBNotExists, err, "DropDatabase: GetTablets wrong err")
+
 	_, err = catalog.CreateTable(0, dbids[0], *testTables[0])
-	assert.Equal(t, ErrDBNotExists, err, "CreateDatabase: wrong err")
+	require.Equal(t, ErrDBNotExists, err, "CreateDatabase: wrong err")
+
 	err = catalog.DropDatabase(0, testDatabaceName+strconv.Itoa(0))
-	assert.Equal(t, ErrDBNotExists, err, "DropDatabase: DropDatabase wrong err")
-	//test genGlobalUniqIDs
-	_, err = catalog.genGlobalUniqIDs([]byte(""))
-	assert.NoError(t, err, "genGlobalUniqIDs Fail")
-	//test dropTables
-	err = catalog.dropTables(0, dbids[0])
-	assert.Equal(t, ErrDBNotExists, err, "dropTables: wrong err")
-	//test allocId
-	_, err = catalog.allocId("unsupported")
-	assert.Equal(t, errors.New("unsupported id category"), err, "allocId: wrong err")
-	//test parallel
+	require.Equal(t, ErrDBNotExists, err, "DropDatabase: DropDatabase wrong err")
+
+	//Test parallel
 	wg := sync.WaitGroup{}
-	n := 50
+
 	m := 4
-	//database
+	//create database
 	dbCnt := int32(0)
 	wg.Add(m)
 	for j := 0; j < m; j++ {
 		go func() {
-			for i := 0; i < n; i++ {
+			for i := 0; i < databaseCount; i++ {
 				if _, err := catalog.CreateDatabase(0, testDatabaceName+strconv.Itoa(i), 0); err == nil {
 					atomic.AddInt32(&dbCnt, 1)
 				}
@@ -244,22 +265,26 @@ func TestCatalogWithUtil(t *testing.T) {
 	}
 	wg.Wait()
 	schemas, _ = catalog.ListDatabases()
-	assert.Equal(t, n, len(schemas), "parallel: CreateDatabase wrong len")
-	//table
+	require.Equal(t, databaseCount, len(schemas), "parallel: CreateDatabase wrong len")
+
+	// create table
 	tbCnt := int32(0)
 	wg.Add(m)
 	dbid := schemas[0].Id
+	tables, _ = catalog.ListTables(dbid)
 	for j := 0; j < m; j++ {
 		go func() {
-			for i := 0; i < n; i++ {
+			defer wg.Done()
+			for i := 0; i < tableCount; i++ {
 				if _, err := catalog.CreateTable(0, dbid, *testTables[i]); err == nil {
 					atomic.AddInt32(&tbCnt, 1)
+				} else {
+					logutil.Infof("create table failed, %v, %v", *testTables[i], err)
 				}
 			}
-			wg.Done()
 		}()
 	}
 	wg.Wait()
 	tables, _ = catalog.ListTables(dbid)
-	assert.Equal(t, n, len(tables), "parallel: CreateTable wrong len")
+	require.Equal(t, tableCount, len(tables), "parallel: CreateTable wrong len")
 }

@@ -37,4 +37,6 @@ var (
 	ErrNoAvailableShard = errors.New("no available raft group")
 	//ErrTableCreateTimeout is the error for timeout when creating a table.
 	ErrTableCreateTimeout = errors.New("create table timeout")
+	//ErrTableCreateFailed is the error for fail in creating tablet.
+	ErrTabletCreateFailed = errors.New("create tablet failed")
 )

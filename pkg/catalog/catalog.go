@@ -168,13 +168,15 @@ func (c *Catalog) GetDatabase(dbName string) (*aoe.SchemaInfo, error) {
 func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
+		if err != nil && err != ErrTableCreateExists {
+			if serr := c.Driver.Delete(c.tableIDKey(dbId, tbl.Name)); serr != nil {
+				//TODO: need strategy handle this situation
+				logutil.Errorf("delete meta for uncreated table, %v, %v, %v", dbId, tbl, serr)
+			}
+		}
 		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, sid is %d, cost %d ms", tbl.Name, tid, time.Since(t0).Milliseconds())
 	}()
 	_, err = c.checkDBExists(dbId)
-	if err != nil {
-		return tid, err
-	}
-	_, err = c.checkTableNotExists(dbId, tbl.Name)
 	if err != nil {
 		return tid, err
 	}
@@ -183,79 +185,46 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 		return tid, err
 	}
 	tbl.Id = tid
+	if err = c.Driver.SetIfNotExist(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id)); err != nil {
+		return tid, ErrTableCreateExists
+	}
+
 	wg := sync.WaitGroup{}
-	wg.Add(3)
-	errs := make(map[int]error)
-	noErr := true
-	c.Driver.AsyncSetIfNotExist(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id), func(i interface{}, bytes []byte, err error) {
-		defer wg.Done()
-		if err != nil {
-			errs[1] = err
-			noErr = false
-			return
-		}
-		errs[1] = nil
-	}, nil)
+
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
 		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
-			logutil.Errorf("ErrTableCreateFailed, %v", err)
-			wg.Done()
-			wg.Done()
-			wg.Wait()
-			c.Driver.Delete(c.tableIDKey(dbId, tbl.Name))
-			return tid, err
+			logutil.Errorf("ErrTableCreateFailed, %v, %v, %v", shardId, tbl, err)
+			return tid, ErrTabletCreateFailed
 		}
-		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i interface{}, bytes []byte, err error) {
-			defer wg.Done()
-			if err != nil {
-				errs[2] = err
-				noErr = false
-				return
-			}
-			errs[2] = nil
-		}, nil)
+
 		tbl.State = aoe.StatePublic
 		meta, err := helper.EncodeTable(tbl)
 		if err != nil {
 			logutil.Errorf("ErrTableCreateFailed, %v", err)
-			wg.Done()
-			wg.Wait()
-			c.Driver.Delete(c.tableIDKey(dbId, tbl.Name))
-			c.Driver.Delete(rkey)
 			return tid, err
 		}
-		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i interface{}, bytes []byte, err error) {
+		wg.Add(1)
+		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i interface{}, bytes []byte, rerr error) {
 			defer wg.Done()
-			if err != nil {
-				errs[3] = err
-				noErr = false
+			if rerr != nil {
+				err = rerr
 				return
 			}
-			errs[3] = nil
+		}, nil)
+		wg.Add(1)
+		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i interface{}, bytes []byte, rerr error) {
+			defer wg.Done()
+			if rerr != nil {
+				err = rerr
+				return
+			}
 		}, nil)
 		wg.Wait()
-		if noErr {
-			return tbl.Id, nil
-		}
-		if errs[1] == nil {
-			c.Driver.Delete(c.tableIDKey(dbId, tbl.Name))
-		} else {
-			err = errs[1]
-		}
-		if errs[2] == nil {
-			c.Driver.Delete(rkey)
-		} else {
-			err = errs[2]
-		}
-		if errs[3] == nil {
-			c.Driver.Delete(c.tableKey(dbId, tbl.Id))
-		} else {
-			err = errs[3]
-		}
-		return 0, err
+
+		return tbl.Id, err
 	}
 	return tid, ErrNoAvailableShard
 }
