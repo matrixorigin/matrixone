@@ -260,6 +260,16 @@ func (c *Catalog) DropTable(epoch, dbId uint64, tableName string) (tid uint64, e
 	return tb.Id, err
 }
 
+// ListTablesByName returns all tables meta in database.
+func (c *Catalog) ListTablesByName(dbName string) ([]aoe.TableInfo, error){
+	if value, err := c.Driver.Get(c.dbIDKey(dbName)); err != nil || value == nil {
+		return nil, ErrDBNotExists
+	} else {
+		id, _ := codec.Bytes2Uint64(value)
+		return c.ListTables(id)
+	}
+}
+
 // ListTables returns all tables meta in database.
 func (c *Catalog) ListTables(dbId uint64) ([]aoe.TableInfo, error) {
 	t0 := time.Now()

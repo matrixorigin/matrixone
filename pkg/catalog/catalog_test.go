@@ -180,6 +180,11 @@ func TestCatalogWithUtil(t *testing.T) {
 	require.NoError(t, err, "ListTables Fail")
 	require.Equal(t, len(tables), tableCount, "ListTables: Wrong len")
 
+	//test ListTablesByName
+	tables, err = catalog.ListTablesByName(testDatabaceName+strconv.Itoa(0))
+	require.NoError(t, err, "ListTablesByName Fail")
+	require.Equal(t, len(tables), tableCount, "ListTablesByName: Wrong len")
+
 	//test GetTable
 	table, err := catalog.GetTable(dbids[0], testTables[0].Name)
 	require.NoError(t, err, "GetTable Fail")
@@ -233,6 +238,9 @@ func TestCatalogWithUtil(t *testing.T) {
 
 	_, err = catalog.ListTables(dbids[0])
 	require.Equal(t, ErrDBNotExists, err, "DropDatabase: ListTables wrong err")
+
+	_, err = catalog.ListTablesByName(testDatabaceName+strconv.Itoa(0))
+	require.Equal(t, ErrDBNotExists, err, "DropDatabase: ListTablesByName wrong err")
 
 	_, err = catalog.GetTable(dbids[0], testTables[0].Name)
 	require.Equal(t, ErrDBNotExists, err, "DropDatabase: GetTable wrong err")
