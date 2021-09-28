@@ -55,7 +55,7 @@ type Vector struct {
 	Ref  uint64 // reference count
 	Data []byte // raw data
 	Typ  types.Type
-	Col  interface{}  // column data
+	Col  interface{}  // column data, encoded Data
 	Nsp  *nulls.Nulls // nulls list
 }
 

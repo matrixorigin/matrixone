@@ -94,7 +94,7 @@ func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error
 		e.u = u
 		e.e = e.c.e
 		e.fill = fill
-		e.resultCols = []*Col{&Col{Typ: types.T_int8, Name: "test"}}
+		e.resultCols = []*Col{{Typ: types.T_int8, Name: "test"}}
 		return nil
 	}
 	// generates scope list from the relation algebra operator chain.
