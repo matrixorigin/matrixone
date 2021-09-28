@@ -34,8 +34,8 @@ func TestStdVector(t *testing.T) {
 			go func(prev int) {
 				view := vec0.GetLatestView()
 				assert.True(t, view.Length() >= prev)
-				if prev >0 {
-					_, err := vec0.GetValue(prev-1)
+				if prev > 0 {
+					_, err := vec0.GetValue(prev - 1)
 					assert.Nil(t, err)
 				}
 				wg.Done()
@@ -115,7 +115,7 @@ func TestStdVector(t *testing.T) {
 	for i := 0; i < loopCnt; i++ {
 		wg.Add(1)
 		go func() {
-			_, err = vec01.AppendVector(vvec, 0)
+			_, err := vec01.AppendVector(vvec, 0)
 			assert.Nil(t, err)
 			wg.Done()
 		}()
