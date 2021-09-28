@@ -53,15 +53,15 @@ func (v *BaseVector) Length() int {
 	return int(atomic.LoadUint64(&v.StatMask) & container.PosMask)
 }
 
-func (v *BaseVector) IsNull(idx int) bool {
+func (v *BaseVector) IsNull(idx int) (bool, error) {
 	if idx >= v.Length() {
-		panic(VecInvalidOffsetErr.Error())
+		return false, VecInvalidOffsetErr
 	}
 	if !v.IsReadonly() {
 		v.RLock()
 		defer v.RUnlock()
 	}
-	return v.VMask.Contains(uint64(idx))
+	return v.VMask.Contains(uint64(idx)), nil
 }
 
 func MockVector(t types.Type, rows uint64) IVector {

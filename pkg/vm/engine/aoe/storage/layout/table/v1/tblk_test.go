@@ -205,7 +205,11 @@ func TestTBlock(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			vecs = append(vecs, v.CopyToVector())
+			vc, err := v.CopyToVector()
+			if err != nil {
+				return err
+			}
+			vecs = append(vecs, vc)
 		}
 
 		bw := dataio.NewBlockWriter(vecs, n.Meta, n.Meta.Segment.Table.Conf.Dir)

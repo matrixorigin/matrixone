@@ -57,7 +57,11 @@ func (e *flushMemblockEvent) Execute() error {
 				return err
 			}
 			view := v.GetLatestView()
-			vecs = append(vecs, view.CopyToVector())
+			ro, err := view.CopyToVector()
+			if err != nil {
+				return err
+			}
+			vecs = append(vecs, ro)
 		}
 
 		bw := dataio.NewBlockWriter(vecs, meta, meta.Segment.Table.Conf.Dir)
