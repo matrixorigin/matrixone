@@ -3,7 +3,7 @@
 [![CodeFactor](https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0)](https://www.codefactor.io/repository/github/matrixorigin/matrixone)
 
 ## What is MatrixOne?
-MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. With a whole new level of architecture, MatrixOne provides an end-to-end data processing platform that is highly autonomous and easy to use, to power users to store, manipulate, and analyze data across devices, edges, and clouds - at global scale.
+MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. It provides an end-to-end data processing platform that is highly autonomous and easy to use, to empower users to store, manipulate, and analyze data across devices, edges, and clouds, with minimum operational overheads.
 
 ## Features
 
@@ -17,7 +17,7 @@ Not limited to public clouds, hybrid clouds, on-premise servers, or smart device
 By converging multiple engines, MatrixOne can support hybrid streaming, transactional, and analytical workloads; with its pluggable architecture, MatrixOne allows for easy integration with third-party engines.
 
 ### High Availability
-MatrixOne uses a RAFT-based consensus algorithm to provide fault tolerance in one zone, allowing the system remains operational even when a minority of servers fail. And a more advanced state-machine replication protocol is planned for the future to achieve geo-distributed active-active.
+MatrixOne uses a RAFT-based consensus algorithm to provide fault tolerance in one zone. And a more advanced state-machine replication protocol is planned for the future to achieve geo-distributed active-active.
 
 ### Ease of Use
 An important goal of MatrixOne is to make it easy for users to operate and manage data, making daily work almost effortless.
@@ -25,8 +25,8 @@ An important goal of MatrixOne is to make it easy for users to operate and manag
 - **Simplify Administration**: Re-balancing, failover, system tuning, and other administrative tasks are fully automatic.
 - **MySQL-compatible Syntax**: MatrixOne allows you to query data using traditional SQL queries.
 
-### End-to-End Data Science Workflow
-By streaming SQL and user-defined functions, MatrixOne provides end-to-end data processing pipelines to speed up AI and machine learning projects.
+### End-to-End Automated Data Science
+By streaming SQL and user-defined functions, MatrixOne provides end-to-end data processing pipelines to deliver productive data science projects.
 
 ## Architecture
 ![Architecture](https://github.com/matrixorigin/artwork/blob/main/diagram/overall-architecture.png)
@@ -54,7 +54,7 @@ Get started with MatrixOne quickly by the following steps.
 
 ### Prerequisites
 Install the following prerequisites as necessary:
-- Go: Version 1.16 is required to build MatrixOne.
+- Go: Version 1.17 is required to build MatrixOne.
 - MySQL client: MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages.
 
 ### Building
@@ -90,7 +90,7 @@ $ mysql -h IP -P PORT -uUsername -p
 ```
 The connection string is the same format as MySQL accepts. You need to provide a user name and a password. 
 
-Use the built-in Test account for an example:
+Use the built-in test account for example:
 
 - user: dump
 - password: 111
