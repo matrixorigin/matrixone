@@ -3,64 +3,72 @@
 [![CodeFactor](https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0)](https://www.codefactor.io/repository/github/matrixorigin/matrixone)
 
 ## What is MatrixOne?
-MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. With minimal operation and management, MatrixOne can provide end-to-end data processing automation to help users store, manipulate and analyze data cross devices, zones, regions and clouds.
+MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. With a whole new level of architecture, MatrixOne provides an end-to-end data processing platform that is highly autonomous and easy to use, to power users to store, manipulate, and analyze data across devices, edges, and clouds - at global scale.
 
 ## Features
 
 ### Planet Scalability
-MatrixOne cluster can easily expand capacity in SQL processing, computation, and storage, by adding nodes and without the need to disable any function.
+MatrixOne cluster can easily expand capacity during SQL processing, computation, and storage, by adding nodes to the cluster on the fly.
 
 ### Cloud-Edge Native
 Not limited to public clouds, hybrid clouds, on-premise servers, or smart devices, MatrixOne accommodates itself to myriads of infrastructure while still providing top services with low latency and high throughput.
 
-### Hybrid Streaming, Transaction and Analytical Processing Engine
-By converging multiple engines, MatrixOne can support hybrid streaming, analytical and transactional workloads; with its pluggable architecture, MatrixOne allows for easy integration with third-party engines.
+### Hybrid Streaming, Transactional and Analytical Processing Engine
+By converging multiple engines, MatrixOne can support hybrid streaming, transactional, and analytical workloads; with its pluggable architecture, MatrixOne allows for easy integration with third-party engines.
 
 ### High Availability
-MatrixOne uses RAFT-based consensus algorithm to provide fault tolerance in one zone, and plans to use more advanced state-machine replication protocol to achieve geo-distributed active-active.
+MatrixOne uses a RAFT-based consensus algorithm to provide fault tolerance in one zone, allowing the system remains operational even when a minority of servers fail. And a more advanced state-machine replication protocol is planned for the future to achieve geo-distributed active-active.
 
-### Ease of use
-- MatrixOne does not require dependency to download, install, or start up.
-- Re-balancing, failover and system tuning are automatic.
-- MatrixOne supports MySQL-compatible syntax.
+### Ease of Use
+An important goal of MatrixOne is to make it easy for users to operate and manage data, making daily work almost effortless.
+- **No Dependency**: Download, install, or start MatrixOne straightforwardly without depending on external toolings.
+- **Simplify Administration**: Re-balancing, failover, system tuning, and other administrative tasks are fully automatic.
+- **MySQL-compatible Syntax**: MatrixOne allows you to query data using traditional SQL queries.
 
-### End to End Data Science automation
-By streaming SQL and user defined function, MatrixOne provides end-end data processing pipeline.
+### End-to-End Data Science Workflow
+By streaming SQL and user-defined functions, MatrixOne provides end-to-end data processing pipelines to speed up AI and machine learning projects.
 
 ## Architecture
 ![Architecture](https://github.com/matrixorigin/artwork/blob/main/diagram/overall-architecture.png)
 
 ### Query Parser Layer
--   **Parser** parse SQL, Streaming Query or Python language into an abstract syntax tree for further processing.
--   **Planner**: Finds the best execution plan through rule-based, cost-based optimization **algorithms**, and transfers abstract syntax tree to plan tree.
--   **IR Generator**: Converts Python code into intermediate representation.
+-   **Parser**: Parses SQL, Streaming Query, or Python language into an abstract syntax tree for further processing.
+-   **Planner**: Finds the best execution plan through rule-based, cost-based optimization algorithms, and transfers abstract syntax tree to plan tree.
+-   **IR Generator**: Converts Python code into an intermediate representation.
 ### Computation Layer
--   **JIT compilation**: Turns SQL plan tree or IR code into a native program using LLVM, during run time.
+-   **JIT Compilation**: Turns SQL plan tree or IR code into a native program using LLVM at runtime.
 -   **Vectorized Execution**: MatrixOne leverages SIMD instructions to construct vectorized execution pipelines.
--   **Cache**: Multiple versions of data, indexes and metadata are cached for queries.
+-   **Cache**: Multi-version cache of data, indexes, and metadata for queries.
 ### Cluster Management Layer
-MatrixCube is a fundamental library for building distributed systems without the need to consider reliability, consistency or scalability. It is designed to facilitate distributed, stateful application building because developers only need to care about the business logic on a single node. MatrixCube is currently built upon multi-raft to provide replicated state machine and will migrate to Paxos families to increase friendliness to scenarios spanning multiple data centers.
+MatrixCube is a fundamental library for building distributed systems, which offers guarantees about reliability, consistency, and scalability. It is designed to facilitate distributed, stateful application building to allow developers only need to focus on the business logic on a single node. MatrixCube is currently built upon multi-raft to provide replicated state machine and will migrate to Paxos families to increase friendliness to scenarios spanning multiple data centers.
 -   **Prophet**: Used by MatrixCube to manage and schedule the MatrixOne cluster.
 -   **Transaction Manager**: MatrixOne supports distributed transaction of snapshot isolation level.
 -   **Replicated State Machine**: MatrixOne uses RAFT-based consensus algorithms and hyper logic clocks to implement strong consistency of the clusters. Introduction of more advanced state-machine replication protocols is yet to come.
 ### Replicated Storage Layer
--   **Row Storage**: stores serving workload, metadata and catalog.
--   **Column Storage**: stores analytical workload, materialized views.
+-   **Row Storage**: Stores serving workload, metadata, and catalog.
+-   **Column Storage**: Stores analytical workload and materialized views.
 ### Storage Provision Layer
-MatrixOne stores data in shared storage of S3 / HDFS, or even in the local disk, public clouds, on-premise server, hybrid cloud, or smart devices.
+MatrixOne stores data in shared storage of S3 / HDFS, or the local disk, on-premise server, hybrid and any cloud, or even smart devices.
 ## Quick Start
+Get started with MatrixOne quickly by the following steps.
+
+### Prerequisites
+Install the following prerequisites as necessary:
+- Go: Version 1.16 is required to build MatrixOne.
+- MySQL client: MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages.
+
 ### Building
 
-**Get the MatrixOne code:**
+1. Get the MatrixOne code:
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
 $ cd matrixone
 ```
 
-**Run make:**
+2. Run make:
 
-Run `make debug`, `make clean`, or anything else our Makefile offers. You can just run the following command to build quickly.
+   You can run `make debug`, `make clean`, or anything else our Makefile offers.
 
 ```
 $ make config
@@ -69,33 +77,27 @@ $ make build
 
 ### Starting
 
-**Prerequisites**
-
-- MySQL client
-
-  MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages.
-
-**Boot MatrixOne server:**
+1. Boot MatrixOne server:
 
 ```
 $ ./mo-server system_vars_config.toml
 ```
 
-**Connect MatrixOne server:**
+2. Connect MatrixOne server:
 
 ```
 $ mysql -h IP -P PORT -uUsername -p
 ```
+The connection string is the same format as MySQL accepts. You need to provide a user name and a password. 
 
-**For example:**
-
-Test account:
+Use the built-in Test account for an example:
 
 - user: dump
 - password: 111
 
 ```
 $ mysql -h 127.0.0.1 -P 6001 -udump -p
+Enter password:
 ```
 
 ## Contributing
