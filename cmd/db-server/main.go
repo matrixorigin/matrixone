@@ -169,9 +169,15 @@ func main() {
 
 	metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
 		FS: vfs.NewPebbleFS(vfs.Default),
+		MemTableSize:                1024 * 1024 * 128,
+		MemTableStopWritesThreshold: 4,
+
 	})
 	pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
 		FS: vfs.NewPebbleFS(vfs.Default),
+		MemTableSize:                1024 * 1024 * 128,
+		MemTableStopWritesThreshold: 4,
+
 	})
 	var aoeDataStorage *aoeDriver.Storage
 

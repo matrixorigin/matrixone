@@ -92,7 +92,7 @@ func TestAOEStorage(t *testing.T) {
 
 	c.Start()
 	defer func() {
-		stdLog.Printf("3>>>>>>>>>>>>>>>>> call stop")
+		stdLog.Printf(">>>>>>>>>>>>>>>>> call stop")
 		c.Stop()
 	}()
 	c.RaftCluster.WaitLeadersByCount(21, time.Second*30)
