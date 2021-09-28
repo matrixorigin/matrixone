@@ -318,42 +318,12 @@ comment = "the count of rows in vector of batch in load data"
 update-mode = "dynamic"
 
 [[parameter]]
-name = "blockCountInLoadData"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "range"
-values = ["20", "2", "100000"]
-comment = "count of read buffer in load data"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "blockSizeInLoadData"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "set"
-values = ["4194304"]
-comment = "defaul is 4MB = 4194304 Bytes. bytes for every read buffer in load data"
-update-mode = "dynamic"
-
-[[parameter]]
-name = "loadDataParserType"
-scope = ["global"]
-access = ["file"]
-type = "int64"
-domain-type = "set"
-values = ["0", "1"]
-comment = "default is 0 . The parser type of load data. 0 - simdcsv; 1 - handwritten"
-update-mode = "dynamic"
-
-[[parameter]]
 name = "loadDataConcurrencyCount"
 scope = ["global"]
 access = ["file"]
 type = "int64"
-domain-type = "set"
-values = ["16"]
+domain-type = "range"
+values = ["16","1","16"]
 comment = "default is 16. The count of go routine writing batch into the storage."
 update-mode = "dynamic"
 

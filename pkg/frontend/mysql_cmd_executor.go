@@ -19,7 +19,7 @@ import (
 	"matrixone/pkg/defines"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/compile"
-	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe"
 	"strings"
 	"time"
 
@@ -29,8 +29,17 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
+//tableInfos of a database
+type TableInfoCache struct{
+	db string
+	tableInfos map[string]aoe.TableInfo
+}
+
 type MysqlCmdExecutor struct {
 	CmdExecutorImpl
+
+	//for cmd 0x4
+	TableInfoCache
 
 	//the count of sql has been processed
 	sqlCount uint64
@@ -1011,18 +1020,33 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 		return NewMysqlError(ER_NO_DB_ERROR)
 	}
 
-	var dbHandler engine.Database
-	if dbHandler, err = ses.Pu.StorageEngine.Database(db); err != nil {
-		//echo client. no such database
-		return NewMysqlError(ER_BAD_DB_ERROR, db)
+	//Get table infos for the database from the cube
+	//case 1: there are no table infos for the db
+	//case 2: db changed
+	if mce.tableInfos == nil || mce.db != db {
+		tableInfos, err := ses.Pu.ClusterCatalog.ListTablesByName(db)
+		if err != nil {
+			return err
+		}
+
+		mce.db = mce.routine.db
+		mce.tableInfos = make(map[string]aoe.TableInfo)
+
+		//cache these info in the executor
+		for _,table := range tableInfos{
+			mce.tableInfos[table.Name] = table
+		}
 	}
 
-	var tableHandler engine.Relation
-	if tableHandler, err = dbHandler.Relation(tableName) ; err != nil {
-		return NewMysqlError(ER_NO_SUCH_TABLE, db, tableName)
+	var attrs []aoe.ColumnInfo
+	table,ok := mce.tableInfos[tableName]
+	if !ok {
+		//just give the empty info when there is no such table.
+		attrs = make([]aoe.ColumnInfo,0)
+	}else{
+		attrs = table.Columns
 	}
 
-	attrs := tableHandler.Attribute()
 	for _, c := range attrs {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)

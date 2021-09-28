@@ -20,12 +20,12 @@ import (
 )
 
 type Config struct {
-	CubeConfig    cConfig.Config
-	ServerConfig  server.Cfg
-	ClusterConfig ClusterConfig
+	CubeConfig    cConfig.Config //config of cubeDriver
+	ServerConfig  server.Cfg     //config of the server
+	ClusterConfig ClusterConfig  //config of the cluster
 }
 
 type ClusterConfig struct {
-	PreAllocatedGroupNum uint64 `toml:"pre-allocated-group-num"`
-	MaxGroupNum          uint64 `toml:"max-group-num"`
+	PreAllocatedGroupNum uint64 `toml:"pre-allocated-group-num"` //the number of shards allocated in initiation
+	MaxGroupNum          uint64 `toml:"max-group-num"`           //the max number of shards
 }

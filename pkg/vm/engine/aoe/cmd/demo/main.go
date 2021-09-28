@@ -91,7 +91,11 @@ func main() {
 					panic(err)
 				}
 				if vec.Length() >= 2 {
-					log.Infof("vec[1]=%s, %d", vec.GetValue(1), vec.GetType())
+					val, err := vec.GetValue(1)
+					if err != nil {
+						panic(err)
+					}
+					log.Infof("vec[1]=%s, %d", val, vec.GetType())
 				}
 				hh.Close()
 				blkIt.Next()

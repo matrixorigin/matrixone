@@ -6,14 +6,14 @@ require (
 	github.com/BurntSushi/toml v0.3.1
 	github.com/RoaringBitmap/roaring v0.9.4
 	github.com/cockroachdb/pebble v0.0.0-20210526183633-dd2a545f5d75
-	github.com/fagongzi/goetty v1.11.0
+	github.com/fagongzi/goetty v1.11.1
 	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287
-	github.com/fagongzi/util v0.0.0-20210409031311-a10fdf8fbd7a
+	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
-	github.com/matrixorigin/matrixcube v0.0.0-20210918015916-eb3dad263a86
+	github.com/matrixorigin/matrixcube v0.0.0-20210925093411-1fda816cd2c2
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
@@ -25,6 +25,7 @@ require (
 	golang.org/x/net v0.0.0-20210813160813-60bc85c4be6d // indirect
 	golang.org/x/sys v0.0.0-20210816071009-649d0fc2fce7
 	golang.org/x/tools v0.1.5 // indirect
+	google.golang.org/protobuf v1.27.1 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 

@@ -100,6 +100,8 @@ $ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
+Now, MatrixOne only supports the TCP listen. 
+
 ## Contributing
 See [Contributing Guide](CONTRIBUTING.md) for details on contribution workflows.
 

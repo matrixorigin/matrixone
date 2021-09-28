@@ -101,15 +101,6 @@ func isvarsConfigEqual(c1,c2 *varsConfig) bool {
 	if c1.BatchSizeInLoadData != c2.BatchSizeInLoadData {
 		return false
 	}
-	if c1.BlockCountInLoadData != c2.BlockCountInLoadData {
-		return false
-	}
-	if c1.BlockSizeInLoadData != c2.BlockSizeInLoadData {
-		return false
-	}
-	if c1.LoadDataParserType != c2.LoadDataParserType {
-		return false
-	}
 	if c1.LoadDataConcurrencyCount != c2.LoadDataConcurrencyCount {
 		return false
 	}
@@ -153,9 +144,6 @@ prophetEmbedEtcdJoinAddr= "http://localhost:40000"
 maxReplicas=1
 lengthOfQueryPrinted=50
 batchSizeInLoadData=40000
-blockCountInLoadData=20
-blockSizeInLoadData=4194304
-loadDataParserType=0
 loadDataConcurrencyCount=16
 cubeLogLevel= "error"
 		
@@ -194,9 +182,6 @@ ProphetEmbedEtcdJoinAddr: "http://localhost:40000" ,
 MaxReplicas:1,
 LengthOfQueryPrinted:50,
 BatchSizeInLoadData:40000,
-BlockCountInLoadData:20,
-BlockSizeInLoadData:4194304,
-LoadDataParserType:0,
 LoadDataConcurrencyCount:16,
 CubeLogLevel: "error" ,
 	

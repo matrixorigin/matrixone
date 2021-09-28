@@ -60,10 +60,12 @@ func NewStorageWithOptions(dir string, opts *store.Options) (*Storage, error) {
 	}, nil
 }
 
+//Stats returns the stats of the Storage
 func (s *Storage) Stats() stats.Stats {
 	return s.stats
 }
 
+//Append appends batch in the table
 func (s *Storage) Append(tabletName string, bat *batch.Batch, index uint64) error {
 	size := 0
 	for _, vec := range bat.Vecs {
@@ -78,18 +80,23 @@ func (s *Storage) Append(tabletName string, bat *batch.Batch, index uint64) erro
 	})
 }
 
+//Relation  returns a relation of the db and the table
 func (s *Storage) Relation(tabletName string) (*adb.Relation, error) {
 	return s.DB.Relation(tabletName)
 }
 
+//GetSnapshot gets the snapshot from the table.
+//If there's no segment, it returns an empty snapshot.
 func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	return s.DB.GetSnapshot(ctx)
 }
 
+//GetSegmentIds returns the ids of segments of the table
 func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
 	return s.DB.GetSegmentIds(ctx)
 }
 
+//GetSegmentedId returns the smallest segmente id among the tables starts with prefix
 func (s *Storage) GetSegmentedId(prefix string) (index uint64, err error) {
 	return s.DB.GetSegmentedId(dbi.GetSegmentedIdCtx{
 		Matchers: []*dbi.StringMatcher{
@@ -101,27 +108,36 @@ func (s *Storage) GetSegmentedId(prefix string) (index uint64, err error) {
 	})
 }
 
+//CreateTable creates a table in the storage.
+//It returns the id of the created table.
+//If the storage is closed, it panics.
 func (s *Storage) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (uint64, error) {
 	return s.DB.CreateTable(info, ctx)
 }
 
+//DropTable drops the table in the storage.
+//If the storage is closed, it panics.
 func (s *Storage) DropTable(ctx dbi.DropTableCtx) (uint64, error) {
 	return s.DB.DropTable(ctx)
 }
 
+//TableIDs returns the ids of all the tables in the storage.
 func (s *Storage) TableIDs() (ids []uint64, err error) {
 	return s.DB.TableIDs()
 }
 
+//TableIDs returns the names of all the tables in the storage.
 func (s *Storage) TableNames() (ids []string) {
 	return s.DB.TableNames()
 }
 
+//TODO
 func (s *Storage) SplitCheck(start []byte, end []byte, size uint64) (currentSize uint64, currentKeys uint64, splitKeys [][]byte, err error) {
 	return 0, 0, nil, err
 
 }
 
+//TODO
 func (s *Storage) CreateSnapshot(path string, start, end []byte) error {
 	if _, err := os.Stat(path); err != nil {
 		os.MkdirAll(path, os.FileMode(0755))
@@ -129,10 +145,12 @@ func (s *Storage) CreateSnapshot(path string, start, end []byte) error {
 	return nil
 }
 
+//TODO
 func (s *Storage) ApplySnapshot(path string) error {
 	return nil
 }
 
+//Close closes the storage.
 func (s *Storage) Close() error {
 	return s.DB.Close()
 }

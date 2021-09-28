@@ -145,13 +145,13 @@ func (v *StrVector) GetMemoryCapacity() uint64 {
 	}
 }
 
-func (v *StrVector) SetValue(idx int, val interface{}) {
+func (v *StrVector) SetValue(idx int, val interface{}) error {
 	panic("not supported")
 }
 
-func (v *StrVector) GetValue(idx int) interface{} {
+func (v *StrVector) GetValue(idx int) (interface{}, error) {
 	if idx >= v.Length() || idx < 0 {
-		panic(fmt.Sprintf("idx %d is out of range", idx))
+		return nil, VecInvalidOffsetErr
 	}
 	if !v.IsReadonly() {
 		v.RLock()
@@ -160,7 +160,7 @@ func (v *StrVector) GetValue(idx int) interface{} {
 	if !v.IsReadonly() {
 		v.RUnlock()
 	}
-	return data
+	return data, nil
 }
 
 func (v *StrVector) Append(n int, vals interface{}) error {
@@ -247,9 +247,9 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	return n, err
 }
 
-func (v *StrVector) SliceReference(start, end int) dbi.IVectorReader {
+func (v *StrVector) SliceReference(start, end int) (dbi.IVectorReader, error) {
 	if !v.IsReadonly() {
-		panic("should call this in ro mode")
+		return nil, VecNotRoErr
 	}
 	mask := container.ReadonlyMask | (uint64(end-start) & container.PosMask)
 	vec := &StrVector{
@@ -268,7 +268,7 @@ func (v *StrVector) SliceReference(start, end int) dbi.IVectorReader {
 		vec.VMask = &nulls.Nulls{}
 	}
 	vec.StatMask = mask
-	return vec
+	return vec, nil
 }
 
 func (v *StrVector) GetLatestView() IVector {
@@ -299,14 +299,14 @@ func (v *StrVector) GetLatestView() IVector {
 
 func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
-		panic("should call in ro mode")
+		return nil, VecNotRoErr
 	}
 	nullSize := 0
 	var nullbuf []byte
 	var err error
 	if v.VMask.Any() {
 		if nullbuf, err = v.VMask.Show(); err != nil {
-			panic(err)
+			return nil, err
 		}
 		nullSize = len(nullbuf)
 	}
@@ -352,9 +352,9 @@ func (v *StrVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro
 	return nil, nil
 }
 
-func (v *StrVector) CopyToVector() *ro.Vector {
+func (v *StrVector) CopyToVector() (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
-		panic("should call in ro mode")
+		return nil, VecNotRoErr
 	}
 	vec := ro.New(v.Type)
 	switch v.Type.Oid {
@@ -367,9 +367,9 @@ func (v *StrVector) CopyToVector() *ro.Vector {
 		copy(col.Lengths[0:], v.Data.Lengths)
 		copy(col.Offsets[0:], v.Data.Offsets)
 	default:
-		panic("not supported yet")
+		return nil, VecTypeNotSupportErr
 	}
-	return vec
+	return vec, nil
 }
 
 func (vec *StrVector) WriteTo(w io.Writer) (n int64, err error) {
