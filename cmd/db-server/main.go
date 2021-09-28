@@ -74,7 +74,7 @@ var (
 
 func createMOServer(callback *frontend.PDCallbackImpl) {
 	address := fmt.Sprintf("%s:%d", config.GlobalSystemVariables.GetHost(), config.GlobalSystemVariables.GetPort())
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, config.ClusterCatalog)
 	mo = frontend.NewMOServer(address, pu, callback)
 }
 
@@ -221,6 +221,7 @@ func main() {
 		os.Exit(StartCubeExit)
 	}
 	c = catalog.NewCatalog(a)
+	config.ClusterCatalog = c
 	eng := aoeEngine.New(c)
 	pci.SetRemoveEpoch(removeEpoch)
 
