@@ -28,12 +28,23 @@ import (
 	"sync"
 )
 
+// collection is the collection of memTable
+// a table has only one collection, which can
+// manage multiple memeTables in the current table
 type collection struct {
 	common.RefHelper
-	id        uint64
-	opts      *storage.Options
+
+	// id is collection's id
+	id uint64
+
+	// opts is the options of aoe
+	opts *storage.Options
+
+	// TableData is Table's metadata in memory
 	tableData iface.ITableData
-	mem       struct {
+
+	// mem is containers of managed memTable
+	mem struct {
 		sync.RWMutex
 		memTables []imem.IMemTable
 	}
@@ -75,6 +86,7 @@ func (c *collection) close() {
 	return
 }
 
+// onNoBlock creates a logical Block
 func (c *collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) {
 	eCtx := &sched.Context{Opts: c.opts, Waitable: true}
 	e := me.NewCreateBlkEvent(eCtx, c.id, c.tableData)
@@ -88,6 +100,7 @@ func (c *collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) 
 	return meta, e.Block, nil
 }
 
+// onNoMutableTable Create a memeTable and append it to collection.mem
 func (c *collection) onNoMutableTable() (tbl imem.IMemTable, err error) {
 	_, data, err := c.onNoBlock()
 	if err != nil {
@@ -105,6 +118,8 @@ func (c *collection) Flush() error {
 	return nil
 }
 
+// Append is the external interface provided by storage.
+// Receive the batch data, and then store it in aoe.
 func (c *collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 	tableMeta := c.tableData.GetMeta()
 	var mut imem.IMemTable

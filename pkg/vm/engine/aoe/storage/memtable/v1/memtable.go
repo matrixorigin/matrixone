@@ -29,13 +29,30 @@ import (
 type memTable struct {
 	sync.RWMutex
 	common.RefHelper
-	opts      *storage.Options
+
+	// opts is the options of aoe
+	opts *storage.Options
+
+	// TableData is Table's metadata in memory
 	tableData iface.ITableData
-	full      bool
-	ibat      batch.IBatch
-	meta      *md.Block
+
+	// full represents whether the current memTable is full
+	full bool
+
+	// ibat is all batch data of the current Block
+	ibat batch.IBatch
+
+	// BlkMeta is the metadata of the Block, which is
+	// created and registered during NewCreateBlkEvent
+	meta *md.Block
+
+	// tableMeta is the metadata of the table, which is
+	// created and registered during NewCreateTableEvent
 	tableMeta *md.Table
-	iblk      iface.IBlock
+
+	// iblk is an instance registered to segment, which is
+	// created and registered during NewCreateSegBlkEvent
+	iblk iface.IBlock
 }
 
 var (
