@@ -53,7 +53,7 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	segfile := dataio.NewUnsortedSegmentFile(dir, *meta1.Segment.AsCommonID())
 
 	capacity := uint64(4096)
-	fsMgr := ldio.DefaultFsMgr
+	fsMgr := ldio.NewManager(dir, false)
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)

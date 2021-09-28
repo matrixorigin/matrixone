@@ -26,7 +26,7 @@ func (c *compile) compileOutput(o *projection.Projection, mp map[string]uint64) 
 	refer := make(map[string]uint64)
 	{
 		mq := make(map[string]uint64)
-		//遍历表达式列表，修改属性引用计数
+		// Iterate expression list, modify the refer count of attributes.
 		for i, e := range o.Es {
 			if name, ok := e.E.(*extend.Attribute); ok && name.Name == o.As[i] {
 				mq[name.Name]++
@@ -45,7 +45,7 @@ func (c *compile) compileOutput(o *projection.Projection, mp map[string]uint64) 
 			mp[k] += v
 		}
 	}
-	//编译上一个关系运算符
+	// Compile the previous op
 	ss, err := c.compile(o.Prev, mp)
 	if err != nil {
 		return nil, err

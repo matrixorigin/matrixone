@@ -17,8 +17,8 @@ package ops
 import (
 	"context"
 	"matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"sync"
 	"time"
-	// log "github.com/sirupsen/logrus"
 )
 
 type heartbeater struct {
@@ -26,6 +26,7 @@ type heartbeater struct {
 	interval time.Duration
 	ctx      context.Context
 	cancel   context.CancelFunc
+	wg       *sync.WaitGroup
 }
 
 func NewHeartBeater(interval time.Duration, handle base.IHBHandle) base.IHeartbeater {
@@ -38,7 +39,10 @@ func NewHeartBeater(interval time.Duration, handle base.IHBHandle) base.IHeartbe
 }
 
 func (c *heartbeater) Start() {
+	c.wg = &sync.WaitGroup{}
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		ticker := time.NewTicker(c.interval)
 		for {
 			select {
@@ -55,4 +59,5 @@ func (c *heartbeater) Start() {
 
 func (c *heartbeater) Stop() {
 	c.cancel()
+	c.wg.Wait()
 }

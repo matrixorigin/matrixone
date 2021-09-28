@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 )
@@ -34,14 +33,6 @@ const (
 	UnsortedSegFile FileType = iota
 	SortedSegFile
 )
-
-var DefaultFsMgr base.IManager
-var MockFsMgr base.IManager
-
-func init() {
-	DefaultFsMgr = NewManager(dio.WRITER_FACTORY.Dirname, false)
-	MockFsMgr = NewManager(dio.WRITER_FACTORY.Dirname, true)
-}
 
 type Manager struct {
 	sync.RWMutex

@@ -27,16 +27,16 @@ type aoeEngine struct {
 }
 
 type database struct {
-	id      uint64
-	typ     int
-	catalog *catalog3.Catalog
+	id      uint64            //id of the database
+	typ     int               //type of the database
+	catalog *catalog3.Catalog //the catalog of the aoeEngine
 }
 
 type relation struct {
-	pid      uint64
-	tbl      *aoe.TableInfo
-	catalog  *catalog3.Catalog
-	segments []engine.SegmentInfo
-	tablets  []aoe.TabletInfo
-	mp       map[string]*db.Relation
+	pid      uint64                  //database id
+	tbl      *aoe.TableInfo          //table of the tablets
+	catalog  *catalog3.Catalog       //the catalog
+	segments []engine.SegmentInfo    //segments of the table
+	tablets  []aoe.TabletInfo        //tablets of the table
+	mp       map[string]*db.Relation //a map of each tablet and its relation
 }

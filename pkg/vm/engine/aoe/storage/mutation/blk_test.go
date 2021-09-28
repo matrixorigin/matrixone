@@ -54,7 +54,7 @@ func TestMutableBlockNode(t *testing.T) {
 	tblkfile := dataio.NewTBlockFile(segfile, *meta1.AsCommonID())
 	assert.NotNil(t, tblkfile)
 	capacity := uint64(4096)
-	fsMgr := ldio.DefaultFsMgr
+	fsMgr := ldio.NewManager(dir, false)
 	indexBufMgr := bm.NewBufferManager(dir, capacity)
 	mtBufMgr := bm.NewBufferManager(dir, capacity)
 	sstBufMgr := bm.NewBufferManager(dir, capacity)

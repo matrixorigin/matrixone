@@ -12,18 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package iterator
 
-package aoe
+import ()
 
-import (
-	"testing"
+type ExecutorT func(interface{}, Iterator) error
+type HandleT func(interface{}) error
 
-	"github.com/stretchr/testify/assert"
-)
+type IResources interface {
+	IterResource(Iterator)
+	HandleResources(HandleT) error
+}
 
-var dir="../db"
-
-func TestStorage(t *testing.T){
-	_,err:=NewStorage(dir)
-	assert.NoError(t,err,"NewStorage fail")
+type Iterator interface {
+	PreIter() error
+	Iter()
+	PostIter() error
+	GetResult() interface{}
+	GetErr() error
+	SetResult(interface{})
+	SetErr(error)
+	Execute(interface{}) error
 }

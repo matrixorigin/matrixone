@@ -28,9 +28,13 @@ func MockBatch(types []types.Type, rows uint64) *batch.Batch {
 	}
 
 	bat := batch.New(true, attrs)
+	var err error
 	for i, colType := range types {
 		vec := vector.MockVector(colType, rows)
-		bat.Vecs[i] = vec.CopyToVector()
+		bat.Vecs[i], err = vec.CopyToVector()
+		if err != nil {
+			panic(err)
+		}
 		vec.Close()
 	}
 

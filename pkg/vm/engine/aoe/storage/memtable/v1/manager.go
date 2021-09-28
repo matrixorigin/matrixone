@@ -24,12 +24,23 @@ import (
 	"sync"
 )
 
+// manager is the collection manager, it's global,
+// created when open db
 type manager struct {
 	sync.RWMutex
-	opts        *storage.Options
+
+	// opts is the options of aoe
+	opts *storage.Options
+
+	// collections are containers of managed collection
 	collections map[uint64]imem.ICollection
-	tableData   iface.ITableData
-	factory     fb.CollectionFactory
+
+	// TableData is Table's metadata in memory
+	//tableData   iface.ITableData
+
+	// factory is the factory that produces
+	// different types of the collection
+	factory fb.CollectionFactory
 }
 
 var (

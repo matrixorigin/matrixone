@@ -168,13 +168,15 @@ func (c *Catalog) GetDatabase(dbName string) (*aoe.SchemaInfo, error) {
 func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
+		if err != nil && err != ErrTableCreateExists {
+			if serr := c.Driver.Delete(c.tableIDKey(dbId, tbl.Name)); serr != nil {
+				//TODO: need strategy handle this situation
+				logutil.Errorf("delete meta for uncreated table, %v, %v, %v", dbId, tbl, serr)
+			}
+		}
 		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, sid is %d, cost %d ms", tbl.Name, tid, time.Since(t0).Milliseconds())
 	}()
 	_, err = c.checkDBExists(dbId)
-	if err != nil {
-		return tid, err
-	}
-	_, err = c.checkTableNotExists(dbId, tbl.Name)
 	if err != nil {
 		return tid, err
 	}
@@ -183,32 +185,21 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 		return tid, err
 	}
 	tbl.Id = tid
+	if err = c.Driver.SetIfNotExist(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id)); err != nil {
+		return tid, ErrTableCreateExists
+	}
+
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	var errs []error
-	c.Driver.AsyncSet(c.tableIDKey(dbId, tbl.Name), codec.Uint642Bytes(tbl.Id), func(i interface{}, bytes []byte, err error) {
-		defer wg.Done()
-		if err != nil {
-			errs = append(errs, err)
-			return
-		}
-	}, nil)
+
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
 		rkey := c.routeKey(dbId, tbl.Id, shardId)
 		if err := c.Driver.CreateTablet(c.encodeTabletName(shardId, tbl.Id), shardId, &tbl); err != nil {
-			logutil.Errorf("ErrTableCreateFailed, %v", err)
-			return tid, err
+			logutil.Errorf("ErrTableCreateFailed, %v, %v, %v", shardId, tbl, err)
+			return tid, ErrTabletCreateFailed
 		}
-		wg.Add(1)
-		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i interface{}, bytes []byte, err error) {
-			defer wg.Done()
-			if err != nil {
-				errs = append(errs, err)
-				return
-			}
-		}, nil)
+
 		tbl.State = aoe.StatePublic
 		meta, err := helper.EncodeTable(tbl)
 		if err != nil {
@@ -216,19 +207,24 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			return tid, err
 		}
 		wg.Add(1)
-		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i interface{}, bytes []byte, err error) {
+		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i interface{}, bytes []byte, rerr error) {
 			defer wg.Done()
-			if err != nil {
-				errs = append(errs, err)
+			if rerr != nil {
+				err = rerr
+				return
+			}
+		}, nil)
+		wg.Add(1)
+		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i interface{}, bytes []byte, rerr error) {
+			defer wg.Done()
+			if rerr != nil {
+				err = rerr
 				return
 			}
 		}, nil)
 		wg.Wait()
-		if len(errs) > 0 {
-			logutil.Errorf("ErrTableCreateFailed, %v", errs)
-			return tid, err
-		}
-		return tbl.Id, nil
+
+		return tbl.Id, err
 	}
 	return tid, ErrNoAvailableShard
 }
@@ -262,6 +258,16 @@ func (c *Catalog) DropTable(epoch, dbId uint64, tableName string) (tid uint64, e
 		return tid, err
 	}
 	return tb.Id, err
+}
+
+// ListTablesByName returns all tables meta in database.
+func (c *Catalog) ListTablesByName(dbName string) ([]aoe.TableInfo, error){
+	if value, err := c.Driver.Get(c.dbIDKey(dbName)); err != nil || value == nil {
+		return nil, ErrDBNotExists
+	} else {
+		id, _ := codec.Bytes2Uint64(value)
+		return c.ListTables(id)
+	}
 }
 
 // ListTables returns all tables meta in database.
@@ -509,39 +515,63 @@ func (c *Catalog) genGlobalUniqIDs(idKey []byte) (uint64, error) {
 	}
 	return id, nil
 }
+
+//dbIDKey returns encoded dbName with prefix "meta1DBID"
 func (c *Catalog) dbIDKey(dbName string) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBIDPrefix, dbName)
 }
+
+//dbKey returns encoded id with prefix "meta1DBINFO"
 func (c *Catalog) dbKey(id uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBPrefix, id)
 }
+
+//dbPrefix returns the prefix "meta1DBINFO"
 func (c *Catalog) dbPrefix() []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cDBPrefix)
 }
+
+//tableIDKey returns the encoded tableName with prefix "meta1TID$dbId$"
 func (c *Catalog) tableIDKey(dbId uint64, tableName string) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cTableIDPrefix, dbId, tableName)
 }
+
+//tableKey returns the encoded tID with prefix "meta1Table$dbId$"
 func (c *Catalog) tableKey(dbId, tId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cTablePrefix, dbId, tId)
 }
+
+//tablePrefix returns the prefix "meta1Table$dbId$"
 func (c *Catalog) tablePrefix(dbId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cTablePrefix, dbId)
 }
+
+//routeKey returns the encoded gId with prefix "meta1Route$dbId$$tId$"
 func (c *Catalog) routeKey(dbId, tId, gId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId, gId)
 }
+
+//routePrefix returns the prefix "meta1Route$dbId$$tId"
 func (c *Catalog) routePrefix(dbId, tId uint64) []byte {
 	return codec.EncodeKey(cPrefix, defaultCatalogId, cRoutePrefix, dbId, tId)
 }
+
+//deletedTableKey returns the encoded tId with the prefix "DeletedTableQueue$epoch$$dbId$"
 func (c *Catalog) deletedTableKey(epoch, dbId, tId uint64) []byte {
 	return codec.EncodeKey(cDeletedTablePrefix, epoch, dbId, tId)
 }
+
+//deletedEpochPrefix returns the prefix "DeletedTableQueue$epoch$"
 func (c *Catalog) deletedEpochPrefix(epoch uint64) []byte {
 	return codec.EncodeKey(cDeletedTablePrefix, epoch)
 }
+
+//deletedPrefix returns the prefix "DeletedTableQueue"
 func (c *Catalog) deletedPrefix() []byte {
 	return codec.EncodeKey(cDeletedTablePrefix)
 }
+
+//getAvailableShard get a shard from the shard pool and returns its id.
 func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 	t0 := time.Now()
 	defer func() {
@@ -562,6 +592,8 @@ func (c *Catalog) getAvailableShard(tid uint64) (shardid uint64, err error) {
 		}
 	}
 }
+
+//allocId alloc an id from id cache
 func (c *Catalog) allocId(key string) (id uint64, err error) {
 	defer func() {
 		logutil.Debugf("allocId finished, idKey is %v, id is %d, err is %v", key, id, err)
@@ -618,6 +650,7 @@ func (c *Catalog) allocId(key string) (id uint64, err error) {
 	return id, err
 }
 
+//refreshTableIDCache alloc table ids and refresh tidStart and tidEnd.
 func (c *Catalog) refreshTableIDCache() {
 	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
 		fmt.Println("failed to acquired pLock")
@@ -653,6 +686,7 @@ func (c *Catalog) refreshTableIDCache() {
 	wg.Wait()
 }
 
+//refreshDBIDCache alloc database ids and refresh dbIdStart and dbIdEnd.
 func (c *Catalog) refreshDBIDCache() {
 	if !atomic.CompareAndSwapInt32(&c.pLock, 0, 1) {
 		fmt.Println("failed to acquired pLock")

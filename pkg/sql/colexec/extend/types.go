@@ -21,7 +21,7 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
-// sql表达式：一元操作符、二元操作符、属性、常数、括号等
+// Extend SQL expression: unary operators, binary operators, attributes, constants, parentheses, etc.
 type Extend interface {
 	Eq(Extend) bool
 	String() string

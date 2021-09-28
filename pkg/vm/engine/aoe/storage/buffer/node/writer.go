@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"os"
 	"path/filepath"
 )
@@ -28,7 +27,7 @@ type NodeWriter struct {
 	Filename []byte
 }
 
-func NewNodeWriter(nh iface.INodeHandle, filename []byte) ioif.Writer {
+func NewNodeWriter(nh iface.INodeHandle, filename []byte) iface.Writer {
 	w := &NodeWriter{
 		Handle:   nh,
 		Filename: filename,

@@ -683,7 +683,7 @@ func (v *Vector) Copy(w *Vector, vi, wi int64, proc *process.Process) error {
 
 func (v *Vector) UnionOne(w *Vector, sel int64, proc *process.Process) error {
 	if v.Or {
-		return errors.New("unionone operation cannot be performed for origin vector")
+		return errors.New("UnionOne operation cannot be performed for origin vector")
 	}
 	switch v.Typ.Oid {
 	case types.T_int8:

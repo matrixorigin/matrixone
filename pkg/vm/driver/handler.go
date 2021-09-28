@@ -22,6 +22,7 @@ import (
 	"matrixone/pkg/vm/driver/pb"
 )
 
+//init adds write and read functions to handle pb requests.
 func (h *driver) init() {
 	h.AddWriteFunc(uint64(pb.Set), h.set)
 	h.AddWriteFunc(uint64(pb.SetIfNotExist), h.setIfNotExist)
@@ -39,6 +40,7 @@ func (h *driver) init() {
 	h.AddReadFunc(uint64(pb.GetSegmentedId), h.getSegmentedId)
 }
 
+//BuildRequest build the request according to the command
 func (h *driver) BuildRequest(req *raftcmdpb.Request, cmd interface{}) error {
 	customReq := cmd.(pb.Request)
 	switch customReq.Type {

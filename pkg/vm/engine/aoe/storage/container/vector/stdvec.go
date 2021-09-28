@@ -16,7 +16,7 @@ package vector
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"io"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
@@ -132,47 +132,13 @@ func (v *StdVector) GetMemoryCapacity() uint64 {
 	}
 }
 
-func (v *StdVector) SetValue(idx int, val interface{}) {
-	v.Lock()
-	defer v.Unlock()
-	if idx >= v.Length() {
-		panic(fmt.Sprintf("idx %d is out of range", idx))
-	}
-	start := idx * int(v.Type.Size)
-	switch v.Type.Oid {
-	case types.T_int8:
-		copy(v.Data[start:], encoding.EncodeInt8(val.(int8)))
-	case types.T_int16:
-		copy(v.Data[start:], encoding.EncodeInt16(val.(int16)))
-	case types.T_int32:
-		copy(v.Data[start:], encoding.EncodeInt32(val.(int32)))
-	case types.T_int64:
-		copy(v.Data[start:], encoding.EncodeInt64(val.(int64)))
-	case types.T_uint8:
-		copy(v.Data[start:], encoding.EncodeUint8(val.(uint8)))
-	case types.T_uint16:
-		copy(v.Data[start:], encoding.EncodeUint16(val.(uint16)))
-	case types.T_uint32:
-		copy(v.Data[start:], encoding.EncodeUint32(val.(uint32)))
-	case types.T_uint64:
-		copy(v.Data[start:], encoding.EncodeUint64(val.(uint64)))
-	case types.T_float32:
-		copy(v.Data[start:], encoding.EncodeFloat32(val.(float32)))
-	case types.T_float64:
-		copy(v.Data[start:], encoding.EncodeFloat64(val.(float64)))
-	// case types.T_decimal:
-	case types.T_date:
-		copy(v.Data[start:], encoding.EncodeDate(val.(types.Date)))
-	case types.T_datetime:
-		copy(v.Data[start:], encoding.EncodeDatetime(val.(types.Datetime)))
-	default:
-		panic("not supported yet")
-	}
+func (v *StdVector) SetValue(idx int, val interface{}) error {
+	return errors.New("not supported")
 }
 
-func (v *StdVector) GetValue(idx int) interface{} {
+func (v *StdVector) GetValue(idx int) (interface{}, error) {
 	if idx >= v.Length() || idx < 0 {
-		panic(fmt.Sprintf("idx %d is out of range", idx))
+		return nil, VecInvalidOffsetErr
 	}
 	if !v.IsReadonly() {
 		v.RLock()
@@ -184,32 +150,32 @@ func (v *StdVector) GetValue(idx int) interface{} {
 	}
 	switch v.Type.Oid {
 	case types.T_int8:
-		return encoding.DecodeInt8(data)
+		return encoding.DecodeInt8(data), nil
 	case types.T_int16:
-		return encoding.DecodeInt16(data)
+		return encoding.DecodeInt16(data), nil
 	case types.T_int32:
-		return encoding.DecodeInt32(data)
+		return encoding.DecodeInt32(data), nil
 	case types.T_int64:
-		return encoding.DecodeInt64(data)
+		return encoding.DecodeInt64(data), nil
 	case types.T_uint8:
-		return encoding.DecodeUint8(data)
+		return encoding.DecodeUint8(data), nil
 	case types.T_uint16:
-		return encoding.DecodeUint16(data)
+		return encoding.DecodeUint16(data), nil
 	case types.T_uint32:
-		return encoding.DecodeUint32(data)
+		return encoding.DecodeUint32(data), nil
 	case types.T_uint64:
-		return encoding.DecodeUint64(data)
+		return encoding.DecodeUint64(data), nil
 	case types.T_float32:
-		return encoding.DecodeFloat32(data)
+		return encoding.DecodeFloat32(data), nil
 	case types.T_float64:
-		return encoding.DecodeFloat64(data)
+		return encoding.DecodeFloat64(data), nil
 	// case types.T_decimal:
 	case types.T_date:
-		return encoding.DecodeDate(data)
+		return encoding.DecodeDate(data), nil
 	case types.T_datetime:
-		return encoding.DecodeDatetime(data)
+		return encoding.DecodeDatetime(data), nil
 	default:
-		panic(fmt.Sprintf("type %v not supported yet", v.Type))
+		return nil, VecTypeNotSupportErr
 	}
 }
 
@@ -265,10 +231,10 @@ func (v *StdVector) appendWithOffset(offset, n int, vals interface{}) error {
 	case types.T_datetime:
 		data = encoding.EncodeDatetimeSlice(vals.([]types.Datetime)[offset : offset+n])
 	default:
-		panic("not supported yet")
+		return VecTypeNotSupportErr
 	}
 	if len(v.Data)+len(data) > cap(v.Data) {
-		panic(fmt.Sprintf("overflow: offset %d, %d + %d > %d", offset, len(v.Data), len(data), cap(v.Data)))
+		return VecInvalidOffsetErr
 	}
 	v.Data = append(v.Data, data...)
 	return nil
@@ -314,9 +280,9 @@ func (v *StdVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	return n, err
 }
 
-func (v *StdVector) SliceReference(start, end int) dbi.IVectorReader {
+func (v *StdVector) SliceReference(start, end int) (dbi.IVectorReader, error) {
 	if !v.IsReadonly() {
-		panic("should call this in ro mode")
+		return nil, VecNotRoErr
 	}
 	startIdx := start * int(v.Type.Size)
 	endIdx := end * int(v.Type.Size)
@@ -340,7 +306,7 @@ func (v *StdVector) SliceReference(start, end int) dbi.IVectorReader {
 	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&vec.Data))
 	hp.Cap = hp.Len
 	vec.Data = *(*[]byte)(unsafe.Pointer(&hp))
-	return vec
+	return vec, nil
 }
 
 // func (v *StdVector) SetNull(idx int) error {
@@ -379,7 +345,8 @@ func (v *StdVector) GetLatestView() IVector {
 		if mask&container.ReadonlyMask == 0 {
 			vec.VMask = v.VMask.Range(0, uint64(endPos), &nulls.Nulls{})
 		} else {
-			vec.VMask = v.VMask.Range(0, uint64(endPos), &nulls.Nulls{})
+			vec.VMask = &nulls.Nulls{}
+			vec.VMask.Np = v.VMask.Np.Clone()
 		}
 	} else {
 		vec.VMask = &nulls.Nulls{}
@@ -392,7 +359,7 @@ func (v *StdVector) GetLatestView() IVector {
 
 func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
-		panic("should call in ro mode")
+		return nil, VecNotRoErr
 	}
 	nullSize := 0
 	var nullbuf []byte
@@ -400,7 +367,7 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	if v.VMask.Any() {
 		nullbuf, err = v.VMask.Show()
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		nullSize = len(nullbuf)
 	}
@@ -434,9 +401,9 @@ func (v *StdVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro
 	return nil, nil
 }
 
-func (v *StdVector) CopyToVector() *ro.Vector {
+func (v *StdVector) CopyToVector() (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
-		panic("should call in ro mode")
+		return nil, VecNotRoErr
 	}
 	length := v.Length()
 	vec := ro.New(v.Type)
@@ -521,9 +488,9 @@ func (v *StdVector) CopyToVector() *ro.Vector {
 		vec.Col = col
 		vec.Nsp = v.VMask.Range(uint64(0), uint64(length), &nulls.Nulls{})
 	default:
-		panic(fmt.Sprintf("%s not supported yet", v.Type))
+		return nil, VecTypeNotSupportErr
 	}
-	return vec
+	return vec, nil
 }
 
 func (vec *StdVector) WriteTo(w io.Writer) (n int64, err error) {

@@ -286,7 +286,7 @@ func get_server(configFile string, port int, pd *PDCallbackImpl, eng engine.Engi
 	//test cluster nodes
 	clusterNodes := metadata.Nodes{}
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, storageEngine, clusterNodes)
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, storageEngine, clusterNodes, nil)
 
 	address := fmt.Sprintf("%s:%d", sv.GetHost(), port)
 	sver := NewMOServer(address, pu, pd)

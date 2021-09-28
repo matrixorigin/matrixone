@@ -17,10 +17,8 @@ package node
 import (
 	"io"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	ioif "matrixone/pkg/vm/engine/aoe/storage/dataio/iface"
 	"os"
 	"path/filepath"
-	// log "github.com/sirupsen/logrus"
 )
 
 type NodeReader struct {
@@ -29,7 +27,7 @@ type NodeReader struct {
 	Reader   io.Reader
 }
 
-func NewNodeReader(nh iface.INodeHandle, filename []byte, reader io.Reader) ioif.Reader {
+func NewNodeReader(nh iface.INodeHandle, filename []byte, reader io.Reader) iface.Reader {
 	nr := &NodeReader{
 		Handle: nh,
 		Reader: reader,
