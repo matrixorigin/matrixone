@@ -3,7 +3,7 @@
 [![CodeFactor](https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0)](https://www.codefactor.io/repository/github/matrixorigin/matrixone)
 
 ## What is MatrixOne?
-MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. It provides an end-to-end data processing platform that is highly autonomous and easy to use, to empower users to store, manipulate, and analyze data across devices, edges, and clouds, with minimum operational overheads.
+MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. It provides an end-to-end data processing platform that is highly autonomous and easy to use, to empower users to store, manipulate, and analyze data across devices, edges, and clouds, with minimal operational overheads.
 
 ## Features
 
@@ -26,7 +26,7 @@ An important goal of MatrixOne is to make it easy for users to operate and manag
 - **MySQL-compatible Syntax**: MatrixOne allows you to query data using traditional SQL queries.
 
 ### End-to-End Automated Data Science
-By streaming SQL and user-defined functions, MatrixOne provides end-to-end data processing pipelines to deliver productive data science projects.
+By streaming SQL and user-defined functions, MatrixOne provides end-to-end data processing pipelines to deliver productive data science applications.
 
 ## Architecture
 ![Architecture](https://github.com/matrixorigin/artwork/blob/main/diagram/overall-architecture.png)
