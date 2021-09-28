@@ -39,7 +39,7 @@ func TestSnapshot(t *testing.T) {
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(capacity)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
-	tables := table.NewTables(new(sync.RWMutex), ldio.DefaultFsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
+	tables := table.NewTables(new(sync.RWMutex), ldio.NewManager("/tmp", false), mtBufMgr, sstBufMgr, indexBufMgr)
 
 	info := md.MockInfo(&opts.Mu, row_count, uint64(blk_cnt))
 	tableMeta := md.MockTable(info, schema, uint64(blk_cnt*seg_cnt))

@@ -18,18 +18,12 @@ import (
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
 var WORK_DIR = "/tmp/buff/manager_test"
-
-func init() {
-	dio.WRITER_FACTORY.Init(nil, WORK_DIR)
-	dio.READER_FACTORY.Init(nil, WORK_DIR)
-}
 
 func TestManagerBasic(t *testing.T) {
 	mgr := MockBufMgr(uint64(1))

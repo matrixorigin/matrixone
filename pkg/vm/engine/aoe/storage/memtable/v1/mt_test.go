@@ -16,7 +16,6 @@ package memtable
 
 import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
@@ -36,8 +35,6 @@ import (
 var WORK_DIR = "/tmp/memtable/mt_test"
 
 func init() {
-	dio.WRITER_FACTORY.Init(nil, WORK_DIR)
-	dio.READER_FACTORY.Init(nil, WORK_DIR)
 	os.RemoveAll(WORK_DIR)
 }
 
@@ -46,7 +43,7 @@ func TestManager(t *testing.T) {
 	manager := NewManager(opts, nil)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
-	fsMgr := ldio.DefaultFsMgr
+	fsMgr := ldio.NewManager(WORK_DIR, false)
 	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)

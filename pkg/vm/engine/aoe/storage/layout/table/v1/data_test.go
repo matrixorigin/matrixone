@@ -17,7 +17,6 @@ package table
 import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	dio "matrixone/pkg/vm/engine/aoe/storage/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
@@ -27,11 +26,6 @@ import (
 )
 
 var WORK_DIR = "/tmp/layout/data_test"
-
-func init() {
-	dio.WRITER_FACTORY.Init(nil, WORK_DIR)
-	dio.READER_FACTORY.Init(nil, WORK_DIR)
-}
 
 func TestBase1(t *testing.T) {
 	opts := new(storage.Options)
