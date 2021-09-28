@@ -74,6 +74,8 @@ $ make build
 - MySQL client
 
   MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages.
+  
+  Currently, MatrixOne only keeps compatible with the Oracle Mysql client that is a little different from the MariaDB mysql client.
 
 **Boot MatrixOne server:**
 
@@ -97,6 +99,8 @@ Test account:
 ```
 $ mysql -h 127.0.0.1 -P 6001 -udump -p
 ```
+
+Now, MatrixOne only supports the TCP listen. 
 
 ## Contributing
 See [Contributing Guide](CONTRIBUTING.md) for details on contribution workflows.
