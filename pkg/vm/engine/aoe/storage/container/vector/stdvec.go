@@ -26,7 +26,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/process"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -399,16 +398,13 @@ func (v *StdVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	return vec, nil
 }
 
-func (v *StdVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
-	return nil, nil
-}
-
 func (v *StdVector) CopyToVector() (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		return nil, VecNotRoErr
 	}
 	length := v.Length()
 	vec := ro.New(v.Type)
+	vec.Data = v.Data
 	switch v.Type.Oid {
 	case types.T_int8:
 		col := make([]int8, length)

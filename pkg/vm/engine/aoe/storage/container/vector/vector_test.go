@@ -260,7 +260,7 @@ func TestCopy(t *testing.T) {
 	}
 }
 
-func TestWrapper(t *testing.T) {
+func testWrapperOld(t *testing.T) {
 	t0 := types.Type{Oid: types.T(types.T_varchar), Size: 24}
 	t1 := types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 	rows := uint64(100)

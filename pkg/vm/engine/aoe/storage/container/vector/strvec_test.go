@@ -201,6 +201,8 @@ func TestStrVector(t *testing.T) {
 		assert.Nil(t, err)
 		err = vec.Append(1, rov_.Col)
 		assert.NotNil(t, err)
+		err = vec.SetValue(0, []byte("xxx"))
+		assert.NotNil(t, err)
 	}
 
 	buf, err := vecs[0].Marshal()

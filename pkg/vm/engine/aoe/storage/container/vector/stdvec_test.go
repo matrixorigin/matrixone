@@ -67,6 +67,8 @@ func TestStdVector(t *testing.T) {
 	assert.NotNil(t, err)
 	_, err = vec1.AppendVector(vvec, 0)
 	assert.NotNil(t, err)
+	err = vec1.SetValue(0, int16(1))
+	assert.NotNil(t, err)
 	view := vec1.GetLatestView()
 	assert.True(t, view.HasNull())
 

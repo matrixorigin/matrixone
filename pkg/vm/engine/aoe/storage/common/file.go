@@ -52,6 +52,16 @@ func (i *baseFileInfo) Size() int64       { return i.size }
 func (i *baseFileInfo) OriginSize() int64 { return i.size }
 func (i *baseFileInfo) CompressAlgo() int { return 0 }
 
+type compressedFileInfo struct {
+	size int64
+	osize int64
+}
+
+func (i *compressedFileInfo) Name() string      { return "" }
+func (i *compressedFileInfo) Size() int64       { return i.size }
+func (i *compressedFileInfo) OriginSize() int64 { return i.osize }
+func (i *compressedFileInfo) CompressAlgo() int { return 1 }
+
 // baseMemFile is an abstraction of some pure in-memory resources.
 // It belongs to IVFile family.
 type baseMemFile struct {
@@ -71,3 +81,32 @@ func (f *baseMemFile) Unref()                           {}
 func (f *baseMemFile) Read(p []byte) (n int, err error) { return n, err }
 func (f *baseMemFile) Stat() FileInfo                   { return &f.stat }
 func (f *baseMemFile) GetFileType() FileType            { return MemFile }
+
+type mockCompressedFile struct {
+	stat compressedFileInfo
+}
+
+func (f *mockCompressedFile) Read(p []byte) (n int, err error) {
+	return n, err
+}
+
+func (f *mockCompressedFile) Ref() {
+}
+
+func (f *mockCompressedFile) Unref() {
+}
+
+func (f *mockCompressedFile) Stat() FileInfo {
+	return &f.stat
+}
+
+func (f *mockCompressedFile) GetFileType() FileType {
+	return MemFile
+}
+
+func MockCompressedFile(size int64, osize int64) IVFile {
+	return &mockCompressedFile{stat: compressedFileInfo{
+		size:  size,
+		osize: osize,
+	}}
+}

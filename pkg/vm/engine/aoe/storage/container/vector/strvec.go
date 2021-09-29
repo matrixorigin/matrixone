@@ -16,6 +16,7 @@ package vector
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
@@ -25,7 +26,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/process"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -145,7 +145,7 @@ func (v *StrVector) GetMemoryCapacity() uint64 {
 }
 
 func (v *StrVector) SetValue(idx int, val interface{}) error {
-	panic("not supported")
+	return errors.New("not supported")
 }
 
 func (v *StrVector) GetValue(idx int) (interface{}, error) {
@@ -348,15 +348,12 @@ func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	return vec, nil
 }
 
-func (v *StrVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
-	return nil, nil
-}
-
 func (v *StrVector) CopyToVector() (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		return nil, VecNotRoErr
 	}
 	vec := ro.New(v.Type)
+	vec.Data = v.Data.Data
 	switch v.Type.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
 		col := vec.Col.(*types.Bytes)
