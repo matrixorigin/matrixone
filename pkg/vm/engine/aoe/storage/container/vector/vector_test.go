@@ -109,7 +109,7 @@ func TestStdVectorOld(t *testing.T) {
 	assert.Equal(t, 2000, vec01.NullCnt())
 }
 
-func TestStrVector(t *testing.T) {
+func TestStrVectorOld(t *testing.T) {
 	size := uint64(4)
 	vec := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
 	assert.Equal(t, int(size), vec.Capacity())

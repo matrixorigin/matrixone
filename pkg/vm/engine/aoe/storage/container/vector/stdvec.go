@@ -121,7 +121,9 @@ func (v *StdVector) FreeMemory() {
 }
 
 func (v *StdVector) GetMemorySize() uint64 {
-	return v.GetMemoryCapacity()
+	v.RLock()
+	defer v.RUnlock()
+	return uint64(len(v.Data))
 }
 
 func (v *StdVector) GetMemoryCapacity() uint64 {

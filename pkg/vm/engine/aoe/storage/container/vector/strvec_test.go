@@ -4,32 +4,37 @@ import (
 	"bytes"
 	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/container/nulls"
+	"matrixone/pkg/container/types"
 	v "matrixone/pkg/container/vector"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 )
 
-func TestStdVector(t *testing.T) {
-	schema := metadata.MockSchemaAll(12)
+func TestStrVector(t *testing.T) {
+	schema := metadata.MockSchemaAll(14)
 	capacity := uint64(10000)
-	vecs := make([]*StdVector, 0)
-	for _, colDef := range schema.ColDefs {
-		vec := NewStdVector(colDef.Type, capacity)
+	vecs := make([]*StrVector, 0)
+	for i, colDef := range schema.ColDefs {
+		if i < 12 {
+			continue
+		}
+		vec := NewStrVector(colDef.Type, capacity)
 		vecs = append(vecs, vec)
 	}
-	assert.Equal(t, dbi.StdVec, NewVector(schema.ColDefs[0].Type, capacity).GetType())
+	assert.Equal(t, dbi.StrVec, NewVector(schema.ColDefs[12].Type, capacity).GetType())
 	vec0 := vecs[0]
 	assert.False(t, vec0.IsReadonly())
 	var wg sync.WaitGroup
 	for i := 0; i < 10000; i++ {
 		wg.Add(1)
 		go func(num int) {
-			assert.Nil(t, vec0.Append(1, []int8{int8(num)}))
+			assert.Nil(t, vec0.Append(1, [][]byte{[]byte(strconv.Itoa(num))}))
 			wg.Add(1)
 			go func(prev int) {
 				view := vec0.GetLatestView()
@@ -51,12 +56,12 @@ func TestStdVector(t *testing.T) {
 	ref, err := vec0.SliceReference(0, 4)
 	assert.Nil(t, err)
 	assert.Equal(t, 4, ref.Length())
-	assert.Equal(t, 4, ref.Capacity())
+	//assert.Equal(t, 4, ref.Capacity())
 	assert.True(t, ref.(IVector).IsReadonly())
 	assert.False(t, ref.HasNull())
 
-	vvec := v.New(schema.ColDefs[1].Type)
-	assert.Nil(t, vvec.Append(make([]int16, 10010)))
+	vvec := v.New(schema.ColDefs[13].Type)
+	assert.Nil(t, vvec.Append(make([][]byte, 10010)))
 	vvec.Nsp.Add(2, 3)
 	vec1 := vecs[1]
 	_, err = vec1.AppendVector(vvec, 0)
@@ -70,15 +75,21 @@ func TestStdVector(t *testing.T) {
 	view := vec1.GetLatestView()
 	assert.True(t, view.HasNull())
 
-	vvec = v.New(schema.ColDefs[2].Type)
-	assert.Nil(t, vvec.Append(make([]int32, 9999)))
+	vvec = v.New(schema.ColDefs[13].Type)
+	assert.Nil(t, vvec.Append(make([][]byte, 9999)))
 	vvec.Nsp.Add(0)
-	vec2 := vecs[2]
+	vecs[1] = NewStrVector(schema.ColDefs[13].Type, capacity)
+	vec2 := vecs[1]
 	_, err = vec2.AppendVector(vvec, 0)
 	assert.Nil(t, err)
 	_, err = vec2.SliceReference(0, 1)
 	assert.NotNil(t, err)
-	err = vec2.Append(4, vvec.Col)
+	col := make([][]byte, 4)
+	for i := 0; i < 4; i++ {
+		dat := vvec.Col.(*types.Bytes).Get(int64(i))
+		col = append(col, dat)
+	}
+	err = vec2.Append(4, col)
 	assert.NotNil(t, err)
 	_, err = vec2.GetValue(9999)
 	assert.NotNil(t, err)
@@ -101,16 +112,16 @@ func TestStdVector(t *testing.T) {
 	assert.True(t, rov2.Nsp.Any())
 
 	newCap := uint64(1024 * 1024)
-	vvec = v.New(schema.ColDefs[2].Type)
-	err = vvec.Append([]int32{0, 1, 2, 3, 4})
+	vvec = v.New(schema.ColDefs[13].Type)
+	err = vvec.Append([][]byte{[]byte(strconv.Itoa(0)), []byte(strconv.Itoa(1)), []byte(strconv.Itoa(2)), []byte(strconv.Itoa(3)), []byte(strconv.Itoa(4))})
 	assert.Nil(t, err)
 	vvec.Nsp.Add(2, 3)
 	var lens []int
-	var vals []int32
+	var vals [][]byte
 	var ro []bool
 	var searchWg sync.WaitGroup
 	var mtx sync.Mutex
-	vec01 := NewStdVector(schema.ColDefs[2].Type, newCap)
+	vec01 := NewStrVector(schema.ColDefs[13].Type, newCap)
 	loopCnt := 1000
 	for i := 0; i < loopCnt; i++ {
 		wg.Add(1)
@@ -125,10 +136,10 @@ func TestStdVector(t *testing.T) {
 			if view.Length() > 0 {
 				v, err := view.GetValue(view.Length() - 1)
 				assert.Nil(t, err)
-				assert.Equal(t, int32(4), v)
+				assert.Equal(t, []byte(strconv.Itoa(4)), v)
 				mtx.Lock()
 				ro = append(ro, view.IsReadonly())
-				vals = append(vals, v.(int32))
+				vals = append(vals, v.([]byte))
 				lens = append(lens, view.Length())
 				mtx.Unlock()
 			}
@@ -140,14 +151,13 @@ func TestStdVector(t *testing.T) {
 	searchWg.Wait()
 	assert.Equal(t, vvec.Length()*loopCnt, vec01.Length())
 	assert.False(t, vec01.IsReadonly())
-	node := StdVectorConstructor(common.NewMemFile(4*100), false, func(node buf.IMemoryNode) {
+	node := StrVectorConstructor(common.NewMemFile(4*100), false, func(node buf.IMemoryNode) {
 		// do nothing
 	})
-	nvec := node.(*StdVector)
-	nvec.PlacementNew(schema.ColDefs[0].Type)
-	nvec.PlacementNew(schema.ColDefs[2].Type)
-	assert.Equal(t, 100, nvec.Capacity())
-	assert.Equal(t, 400, nvec.dataBytes())
+	nvec := node.(*StrVector)
+	nvec.PlacementNew(schema.ColDefs[12].Type)
+	nvec.PlacementNew(schema.ColDefs[13].Type)
+	assert.Equal(t, 50, nvec.Capacity())
 	assert.Equal(t, uint64(400), nvec.GetMemoryCapacity())
 	nvec.UseCompress = true
 	assert.Equal(t, uint64(400), nvec.GetMemoryCapacity())
@@ -155,11 +165,13 @@ func TestStdVector(t *testing.T) {
 	nvec.FreeMemory()
 	assert.Nil(t, nvec.Close())
 	assert.Equal(t, uint64(400), nvec.GetMemoryCapacity())
-	assert.Equal(t, 0, nvec.dataBytes())
 
-	vecs = make([]*StdVector, 0)
-	for _, colDef := range schema.ColDefs {
-		vec := NewStdVector(colDef.Type, capacity)
+	vecs = make([]*StrVector, 0)
+	for i, colDef := range schema.ColDefs {
+		if i < 12 {
+			continue
+		}
+		vec := NewStrVector(colDef.Type, capacity)
 		vecs = append(vecs, vec)
 		rov, err := MockVector(colDef.Type, 1000).CopyToVector()
 		assert.Nil(t, err)
@@ -170,12 +182,22 @@ func TestStdVector(t *testing.T) {
 		assert.Nil(t, err)
 		_, err = vec.GetValue(1000)
 		assert.NotNil(t, err)
-		err = vec.Append(1000, rov.Col)
+		col := make([][]byte, 1000)
+		for i := 0; i < 1000; i++ {
+			dat := rov.Col.(*types.Bytes).Get(int64(i))
+			col = append(col, dat)
+		}
+		err = vec.Append(1000, col)
 		assert.Nil(t, err)
 		assert.Equal(t, 2000, vec.Length())
 		rov_, err := MockVector(colDef.Type, 8000).CopyToVector()
 		assert.Nil(t, err)
-		err = vec.Append(8000, rov_.Col)
+		col = make([][]byte, 8000)
+		for i := 0; i < 8000; i++ {
+			dat := rov_.Col.(*types.Bytes).Get(int64(i))
+			col = append(col, dat)
+		}
+		err = vec.Append(8000, col)
 		assert.Nil(t, err)
 		err = vec.Append(1, rov_.Col)
 		assert.NotNil(t, err)
@@ -183,24 +205,29 @@ func TestStdVector(t *testing.T) {
 
 	buf, err := vecs[0].Marshal()
 	assert.Nil(t, err)
-	tmpv := NewEmptyStdVector()
+	tmpv := NewEmptyStrVector()
 	assert.Nil(t, tmpv.Unmarshal(buf))
 	assert.Equal(t, 10000, tmpv.Length())
 	assert.True(t, tmpv.HasNull())
 
 	nvec.VMask = &nulls.Nulls{}
+	nvec.Data = &types.Bytes{
+		Data:    make([]byte, 0),
+		Offsets: make([]uint32, 0),
+		Lengths: make([]uint32, 0),
+	}
 	buf, err = nvec.Marshal()
 	assert.Nil(t, err)
-	tmpv = NewEmptyStdVector()
+	tmpv = NewEmptyStrVector()
 	assert.Nil(t, tmpv.Unmarshal(buf))
-	assert.True(t, tmpv.Type.Eq(schema.ColDefs[2].Type))
+	assert.True(t, tmpv.Type.Eq(schema.ColDefs[13].Type))
 
-	f, err := os.Create("/tmp/teststdvec")
+	f, err := os.Create("/tmp/teststrvec")
 	_, err = vecs[1].WriteTo(f)
 	assert.Nil(t, err)
 	assert.Nil(t, f.Close())
-	f, err = os.Open("/tmp/teststdvec")
-	tmpv = NewEmptyStdVector()
+	f, err = os.Open("/tmp/teststrvec")
+	tmpv = NewEmptyStrVector()
 	_, err = tmpv.ReadFrom(f)
 	assert.Nil(t, f.Close())
 	assert.Nil(t, err)
