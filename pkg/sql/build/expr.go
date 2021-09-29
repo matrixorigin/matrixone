@@ -694,12 +694,6 @@ func buildConstantValue(typ types.Type, val constant.Value) (interface{}, error)
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 			v, _ := constant.Uint64Val(val)
 			return uint64(v), nil
-		case types.T_float32:
-			v, _ := constant.Float32Val(val)
-			return float32(v), nil
-		case types.T_float64:
-			v, _ := constant.Float64Val(val)
-			return float64(v), nil
 		}
 	case constant.Float:
 		switch typ.Oid {
