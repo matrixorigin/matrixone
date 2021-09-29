@@ -15,6 +15,7 @@
 package build
 
 import (
+	"errors"
 	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
@@ -25,6 +26,7 @@ import (
 	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/sqlerror"
 	"matrixone/pkg/vm/engine"
+	"strconv"
 )
 
 func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
@@ -280,6 +282,9 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 			}
 		}
 	}
+	if err = insertValuesRangeCheck(bat.Vecs, bat.Attrs, rows.Rows); err != nil {
+		return nil, err
+	}
 	for k, v := range mp {
 		bat.Attrs = append(bat.Attrs, k)
 		vec := vector.New(v)
@@ -332,4 +337,44 @@ func (b *build) tableName(tbl *tree.TableName) (string, string, engine.Relation,
 		return "", "", nil, sqlerror.New(errno.UndefinedTable, err.Error())
 	}
 	return string(tbl.SchemaName), string(tbl.ObjectName), r, nil
+}
+
+// insertValuesRangeCheck returns error if final build result out of range.
+func insertValuesRangeCheck(vecs []*vector.Vector, columnNames []string, sourceInput []tree.Exprs) error {
+	var sourceValue, errString string
+
+	for colIndex, vec := range vecs {
+		for rowIndex := range sourceInput {
+			sourceValue = sourceInput[rowIndex][colIndex].String()
+			errString = ""
+
+			switch vec.Typ.Oid {
+				case types.T_int64, types.T_int32, types.T_int16, types.T_int8:
+					if _, err := strconv.ParseInt(sourceValue, 10, int(vec.Typ.Width)); err != nil {
+						errString = "Out of range value for column '%s' at row %d"
+					}
+				case types.T_uint64, types.T_uint32, types.T_uint16, types.T_uint8:
+					if _, err := strconv.ParseUint(sourceValue, 10, int(vec.Typ.Width)); err != nil {
+						errString = "Out of range value for column '%s' at row %d"
+					}
+				case types.T_float32, types.T_float64:
+					if _, err := strconv.ParseFloat(sourceValue, int(vec.Typ.Width)); err != nil {
+						errString = "Out of range value for column '%s' at row %d"
+					}
+				case types.T_char, types.T_varchar: // string family should compare the length but not value
+					column, ok := vec.Col.(*types.Bytes)
+					if !ok {
+						return errors.New("unexpected error while assert for char/varchar type")
+					}
+					if column.Lengths[rowIndex] > uint32(vec.Typ.Width) {
+						errString = "Date too long for column '%s' at row %d"
+					}
+			}
+
+			if len(errString) != 0 {
+				return sqlerror.New(errno.DataException, fmt.Sprintf(errString, columnNames[colIndex], rowIndex + 1))
+			}
+		}
+	}
+	return nil
 }
