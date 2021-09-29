@@ -66,6 +66,8 @@ TST_LOG="$G_WKSP/$G_TS-$CASE_TYPE-TST.log"
 declare -a RAW_RESULT
 SUMMARY_RESULT='PASS'
 
+BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
+
 if [[ ! -f $TST_LOG ]]; then touch $TST_LOG; fi
 if [[ ! -f $SRS_LOG ]]; then touch $SRS_LOG; fi
 if [[ ! -f $SRV_LOG ]]; then touch $SRV_LOG; fi
@@ -141,8 +143,8 @@ function make_tester(){
 
 function make_one(){
 	if [[ $MAKE_ONE == 'False' ]]; then
-		logger "INF" "Copying MartixOne binary from $SHARE_VOL"
-		cp -f $SHARE_VOL/{$BIN_NAME,$CONFIG_NAME} $G_STAGE	
+		logger "INF" "Copying MartixOne binary from $BUILD_WKSP"
+		cp -f $BUILD_WKSP/{$BIN_NAME,$CONFIG_NAME} $G_STAGE	
 	else	
 		logger "INF" "Making MatrixOne binary"
 		ping -c 5 github.com
