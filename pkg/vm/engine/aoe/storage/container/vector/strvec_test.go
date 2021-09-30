@@ -173,11 +173,18 @@ func TestStrVector(t *testing.T) {
 		}
 		vec := NewStrVector(colDef.Type, capacity)
 		vecs = append(vecs, vec)
+		assert.Equal(t, 0, vec.NullCnt())
+		_, err = vec.IsNull(10000)
+		assert.NotNil(t, err)
+		isn, err := vec.IsNull(0)
+		assert.False(t, isn)
 		rov, err := MockVector(colDef.Type, 1000).CopyToVector()
 		assert.Nil(t, err)
 		rov.Nsp.Add(0, 1)
 		_, err = vec.AppendVector(rov, 0)
 		assert.Nil(t, err)
+		isn, err = vec.IsNull(1)
+		assert.True(t, isn)
 		_, err = vec.GetValue(999)
 		assert.Nil(t, err)
 		_, err = vec.GetValue(1000)
@@ -203,6 +210,14 @@ func TestStrVector(t *testing.T) {
 		assert.NotNil(t, err)
 		err = vec.SetValue(0, []byte("xxx"))
 		assert.NotNil(t, err)
+		isn, err = vec.IsNull(1)
+		assert.True(t, isn)
+		vec.ResetReadonly()
+		assert.False(t, vec.IsReadonly())
+		isn, err = vec.IsNull(1)
+		assert.True(t, isn)
+		assert.Equal(t, 10000, vec.Length())
+		assert.Equal(t, 2, vec.NullCnt())
 	}
 
 	buf, err := vecs[0].Marshal()
@@ -223,6 +238,25 @@ func TestStrVector(t *testing.T) {
 	tmpv = NewEmptyStrVector()
 	assert.Nil(t, tmpv.Unmarshal(buf))
 	assert.True(t, tmpv.Type.Eq(schema.ColDefs[13].Type))
+
+	size := uint64(100)
+	vecm := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
+	assert.Equal(t, int(size), vecm.Capacity())
+	assert.Equal(t, 0, vecm.Length())
+
+	str0 := "str0"
+	strs := [][]byte{[]byte(str0)}
+	err = vecm.Append(len(strs), strs)
+	assert.Nil(t, err)
+	assert.Equal(t, len(strs), vecm.Length())
+	assert.False(t, vecm.IsReadonly())
+
+	buf, err = vecm.Marshal()
+	assert.Nil(t, err)
+
+	vecum := NewStrVector(types.Type{Oid: types.T(types.T_varchar), Size: 24}, size)
+	err = vecum.Unmarshal(buf)
+	assert.Nil(t, err)
 
 	f, err := os.Create("/tmp/teststrvec")
 	_, err = vecs[1].WriteTo(f)

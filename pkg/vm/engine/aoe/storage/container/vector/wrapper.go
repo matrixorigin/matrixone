@@ -23,7 +23,6 @@ import (
 	"matrixone/pkg/container/types"
 	base "matrixone/pkg/container/vector"
 	"matrixone/pkg/encoding"
-	"matrixone/pkg/logutil"
 	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -278,8 +277,6 @@ func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		data := vec.MNode.Buf[:originSize]
 		t := encoding.DecodeType(data[:encoding.TypeSize])
-		logutil.Infof("%v", t)
-		logutil.Infof("%v %v", loadSize, originSize)
 		v := base.New(t)
 		vec.Col = v.Col
 		err = vec.Vector.Read(data)

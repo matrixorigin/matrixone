@@ -15,3 +15,6 @@ main
 mo-server
 *.toml
 cube*/
+pkg/catalog/test/
+pkg/vm/driver/test/test/
+pkg/vm/engine/aoe/engine/test/
