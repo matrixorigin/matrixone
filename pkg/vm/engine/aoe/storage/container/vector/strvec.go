@@ -16,7 +16,7 @@ package vector
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"io"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
@@ -26,7 +26,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/process"
 	"os"
 	"reflect"
 	"sync/atomic"
@@ -146,7 +145,7 @@ func (v *StrVector) GetMemoryCapacity() uint64 {
 }
 
 func (v *StrVector) SetValue(idx int, val interface{}) error {
-	panic("not supported")
+	return errors.New("not supported")
 }
 
 func (v *StrVector) GetValue(idx int) (interface{}, error) {
@@ -190,13 +189,12 @@ func (v *StrVector) appendWithOffset(offset, n int, vals interface{}) error {
 	case types.T_char, types.T_varchar, types.T_json:
 		data = vals.([][]byte)[offset : offset+n]
 	default:
-		panic("not supported yet")
+		return VecTypeNotSupportErr
 	}
 	if len(v.Data.Offsets)+len(data) > cap(v.Data.Offsets) {
-		panic(fmt.Sprintf("overflow: offset %d, %d + %d > %d", offset, len(v.Data.Offsets), len(data), cap(v.Data.Offsets)))
+		return VecInvalidOffsetErr
 	}
-	v.Data.Append(vals.([][]byte)[offset : offset+n])
-	return nil
+	return v.Data.Append(vals.([][]byte)[offset : offset+n])
 }
 
 func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) {
@@ -268,6 +266,8 @@ func (v *StrVector) SliceReference(start, end int) (dbi.IVectorReader, error) {
 		vec.VMask = &nulls.Nulls{}
 	}
 	vec.StatMask = mask
+	// Here due to using v.Data.Window(), we can't modify the capacity of the
+	// internal byte slice, so the Capacity() would return wrong result.
 	return vec, nil
 }
 
@@ -348,15 +348,12 @@ func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	return vec, nil
 }
 
-func (v *StrVector) CopyToVectorWithProc(ref uint64, proc *process.Process) (*ro.Vector, error) {
-	return nil, nil
-}
-
 func (v *StrVector) CopyToVector() (*ro.Vector, error) {
 	if atomic.LoadUint64(&v.StatMask)&container.ReadonlyMask == 0 {
 		return nil, VecNotRoErr
 	}
 	vec := ro.New(v.Type)
+	vec.Data = v.Data.Data
 	switch v.Type.Oid {
 	case types.T_char, types.T_varchar, types.T_json:
 		col := vec.Col.(*types.Bytes)
@@ -366,6 +363,7 @@ func (v *StrVector) CopyToVector() (*ro.Vector, error) {
 		copy(col.Data[0:], v.Data.Data)
 		copy(col.Lengths[0:], v.Data.Lengths)
 		copy(col.Offsets[0:], v.Data.Offsets)
+		vec.Nsp = v.VMask.Range(uint64(0), uint64(v.Length()), &nulls.Nulls{})
 	default:
 		return nil, VecTypeNotSupportErr
 	}

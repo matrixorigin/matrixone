@@ -17,6 +17,7 @@ package vector
 import (
 	"bytes"
 	"fmt"
+	"github.com/pierrec/lz4"
 	"io"
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
@@ -107,7 +108,7 @@ func (v *VectorWrapper) FreeMemory() {
 }
 
 func (v *VectorWrapper) Append(n int, vals interface{}) error {
-	panic("readonly")
+	return VecWriteRoErr
 }
 
 func (v *VectorWrapper) GetMemorySize() uint64 {
@@ -123,7 +124,7 @@ func (v *VectorWrapper) GetMemoryCapacity() uint64 {
 }
 
 func (v *VectorWrapper) SetValue(idx int, val interface{}) error {
-	panic("not supported")
+	return VecWriteRoErr
 }
 
 func (v *VectorWrapper) GetValue(idx int) (interface{}, error) {
@@ -193,21 +194,6 @@ func (v *VectorWrapper) CopyToVector() (*base.Vector, error) {
 	return &v.Vector, nil
 }
 
-func (v *VectorWrapper) CopyToVectorWithProc(ref uint64, proc *process.Process) (*base.Vector, error) {
-	ret := base.New(v.Vector.Typ)
-	data, err := proc.Alloc(int64(len(v.Vector.Data)))
-	if err != nil {
-		return nil, err
-	}
-	copy(data, v.Vector.Data)
-	if err = ret.Read(data[:len(v.Vector.Data)]); err != nil {
-		proc.Free(data)
-		return nil, err
-	}
-	copy(ret.Data, encoding.EncodeUint64(ref))
-	return ret, nil
-}
-
 func (v *VectorWrapper) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompressed *bytes.Buffer) (*base.Vector, error) {
 	panic("not supported")
 }
@@ -221,8 +207,26 @@ func (vec *VectorWrapper) WriteTo(w io.Writer) (n int64, err error) {
 	if err != nil {
 		return n, err
 	}
-	nw, err := w.Write(buf)
-	return int64(nw), err
+	stat := vec.File.Stat()
+	switch stat.CompressAlgo() {
+	case compress.None:
+		nw, err := w.Write(buf)
+		return int64(nw), err
+	case compress.Lz4:
+		nb := lz4.CompressBlockBound(len(buf))
+		tmp := make([]byte, nb)
+		tmp, err = compress.Compress(buf, tmp, compress.Lz4)
+		if err != nil {
+			return 0, err
+		}
+		nw, err := w.Write(tmp)
+		if err != nil {
+			return 0, err
+		}
+		return int64(nw), nil
+	default:
+		panic("invalid compress algorithm")
+	}
 }
 
 func (vec *VectorWrapper) ReadFrom(r io.Reader) (n int64, err error) {
@@ -339,10 +343,6 @@ func (vec *VectorWrapper) ReadWithBuffer(r io.Reader, compressed *bytes.Buffer, 
 	default:
 		panic("not supported")
 	}
-}
-
-func (vec *VectorWrapper) ReadWithProc(r io.Reader, ref uint64, proc *process.Process) (n int64, err error) {
-	return 0, nil
 }
 
 func (vec *VectorWrapper) Marshal() ([]byte, error) {

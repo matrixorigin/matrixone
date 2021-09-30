@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"io"
 	ro "matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
 )
 
 type VectorType uint8
@@ -51,6 +50,5 @@ type IVectorReader interface {
 	GetMemorySize() uint64
 	SliceReference(start, end int) (IVectorReader, error)
 	CopyToVector() (*ro.Vector, error)
-	CopyToVectorWithProc(uint64, *process.Process) (*ro.Vector, error)
 	CopyToVectorWithBuffer(*bytes.Buffer, *bytes.Buffer) (*ro.Vector, error)
 }
