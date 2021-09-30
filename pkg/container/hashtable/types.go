@@ -18,12 +18,13 @@ type FixedTable struct {
 	inlineVal  bool
 	bucketCnt  uint32
 	valSize    uint8
-	occupied   []uint64
+	occupied   []byte
 	bucketData []byte
 }
 
 type FixedTableIterator struct {
 	table     *FixedTable
+	bitmap    []uint64
 	bitmapIdx uint32
 	bitmapVal uint64
 }
@@ -51,40 +52,11 @@ type HashTableIterator struct {
 }
 
 type StringHashTable struct {
-	inlineVal bool
-	H0        *FixedTable
-	H1        *HashTable
-	H2        *HashTable
-	H3        *HashTable
-	Hs        *HashTable
-}
-
-//type StringHashTableIterator struct {
-//	table     *StringHashTable
-//	tableIdx  int
-//	bucketIdx int
-//}
-
-type TwoLevelHashTable struct {
-	htables []*HashTable
-	agg     Aggregator
-}
-
-type TwoLevelHashTableIterator struct {
-	table     *TwoLevelHashTable
-	tableIdx  int
-	bucketIdx int
-}
-
-type TwoLevelStringHashTable struct {
-	htables []*StringHashTable
-	agg     Aggregator
-}
-
-type TwoLevelStringHashTableIterator struct {
-	table     *TwoLevelStringHashTable
-	tableIdx  int
-	bucketIdx int
+	H0 *FixedTable
+	H1 *HashTable
+	H2 *HashTable
+	H3 *HashTable
+	Hs *HashTable
 }
 
 type Aggregator interface {

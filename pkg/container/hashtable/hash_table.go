@@ -17,6 +17,7 @@ package hashtable
 import (
 	"bytes"
 	"fmt"
+	"matrixone/pkg/vm/process"
 	"unsafe"
 )
 
@@ -26,7 +27,7 @@ const (
 	defaultLoadFactor    = 0.5
 )
 
-func NewHashTable(inlineKey, inlineVal bool, keySize, valueSize uint8) *HashTable {
+func NewHashTable(inlineKey, inlineVal bool, keySize, valueSize uint8, proc process.Process) (*HashTable, error) {
 	var hashSize uint8
 	if !inlineKey {
 		hashSize = 8
@@ -40,7 +41,13 @@ func NewHashTable(inlineKey, inlineVal bool, keySize, valueSize uint8) *HashTabl
 		valueSize = 24
 	}
 
-	table := &HashTable{
+	bucketWidth := hashSize + keySize + valueSize
+	bucketData, err := proc.Alloc(int64(bucketWidth) * initialBucketCnt)
+	if err != nil {
+		return nil, err
+	}
+
+	return &HashTable{
 		inlineKey:     inlineKey,
 		inlineVal:     inlineVal,
 		bucketCntBits: initialBucketCntBits,
@@ -50,16 +57,16 @@ func NewHashTable(inlineKey, inlineVal bool, keySize, valueSize uint8) *HashTabl
 		keySize:       keySize,
 		valSize:       valueSize,
 		valOffset:     hashSize + keySize,
-		bucketWidth:   hashSize + keySize + valueSize,
-	}
-
-	table.bucketData = make([]byte, int(table.bucketWidth)*initialBucketCnt)
-
-	return table
+		bucketWidth:   bucketWidth,
+		bucketData:    bucketData,
+	}, nil
 }
 
-func (ht *HashTable) Insert(hashVal uint64, key []byte) (inserted bool, value []byte) {
-	ht.resizeOnDemand()
+func (ht *HashTable) Insert(hashVal uint64, key []byte, proc process.Process) (inserted bool, value []byte, err error) {
+	err = ht.resizeOnDemand(proc)
+	if err != nil {
+		return
+	}
 
 	if hashVal == 0 {
 		hashVal = Crc32Hash(key)
@@ -115,9 +122,9 @@ func (ht *HashTable) findBucket(hashVal uint64, key []byte) (empty bool, idx uin
 	return
 }
 
-func (ht *HashTable) resizeOnDemand() {
+func (ht *HashTable) resizeOnDemand(proc process.Process) error {
 	if ht.elemCnt < ht.maxElemCnt {
-		return
+		return nil
 	}
 
 	var newBucketCntBits uint8
@@ -130,8 +137,13 @@ func (ht *HashTable) resizeOnDemand() {
 	newBucketCnt := uint64(1) << newBucketCntBits
 	newMaxElemCnt := uint64(float64(newBucketCnt) * defaultLoadFactor)
 
-	newBucketData := make([]byte, uint64(ht.bucketWidth)*newBucketCnt)
+	newBucketData, err := proc.Alloc(int64(ht.bucketWidth) * int64(newBucketCnt))
+	if err != nil {
+		return err
+	}
+
 	copy(newBucketData, ht.bucketData)
+	proc.Free(ht.bucketData)
 
 	oldBucketCnt := ht.bucketCnt
 	ht.bucketCntBits = newBucketCntBits
@@ -152,6 +164,8 @@ func (ht *HashTable) resizeOnDemand() {
 		i++
 		offset += uint64(ht.bucketWidth)
 	}
+
+	return nil
 }
 
 func (ht *HashTable) reinsert(idx, offset uint64) {
@@ -181,6 +195,10 @@ func (ht *HashTable) Cardinality() uint64 {
 	return ht.elemCnt
 }
 
+func (ht *HashTable) Destroy(proc process.Process) {
+	proc.Free(ht.bucketData)
+}
+
 func NewHashTableIterator(ht *HashTable) *HashTableIterator {
 	return &HashTableIterator{
 		table:  ht,
@@ -190,18 +208,22 @@ func NewHashTableIterator(ht *HashTable) *HashTableIterator {
 }
 
 func (it *HashTableIterator) Next() (hashVal uint64, key, value []byte, err error) {
-	hashVal = *(*uint64)(unsafe.Pointer(&it.table.bucketData[it.offset]))
-	for hashVal == 0 {
+	probe := *(*uint64)(unsafe.Pointer(&it.table.bucketData[it.offset]))
+	for probe == 0 {
 		it.offset += uint64(it.table.bucketWidth)
 		if it.offset >= it.end {
 			break
 		}
-		hashVal = *(*uint64)(unsafe.Pointer(&it.table.bucketData[it.offset]))
+		probe = *(*uint64)(unsafe.Pointer(&it.table.bucketData[it.offset]))
 	}
 
 	if it.offset >= it.end {
 		err = fmt.Errorf("out of range")
 		return
+	}
+
+	if !it.table.inlineKey {
+		hashVal = probe
 	}
 
 	if it.table.inlineKey {
