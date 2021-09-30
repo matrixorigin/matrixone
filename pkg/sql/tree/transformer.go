@@ -674,7 +674,7 @@ func transformFieldTypeToResolvableTypeReference(ft *types.FieldType) Resolvable
 	tt := &T{InternalType: t.InternalType}
 
 	displayWith := ft.Flen
-	if displayWith == -1 {
+	if displayWith == -1 && tt.InternalType.Oid != TYPE_STRING.InternalType.Oid {
 		displayWith = 0
 	}
 
