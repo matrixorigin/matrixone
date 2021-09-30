@@ -14,32 +14,77 @@
 
 package hashtable
 
-func NewStringHashTable(inlineVal bool, valueSize uint8, agg Aggregator) *StringHashTable {
-	return &StringHashTable{
-		inlineVal: inlineVal,
-		H0:        NewFixedTable(inlineVal, 65536, valueSize),
-		H1:        NewHashTable(true, inlineVal, 8, valueSize),
-		H2:        NewHashTable(true, inlineVal, 16, valueSize),
-		H3:        NewHashTable(true, inlineVal, 24, valueSize),
-		Hs:        NewHashTable(false, inlineVal, 24, valueSize),
+import "matrixone/pkg/vm/process"
+
+func NewStringHashTable(inlineVal bool, valueSize uint8, proc process.Process) (*StringHashTable, error) {
+	H0, err := NewFixedTable(inlineVal, 65536, valueSize, proc)
+	if err != nil {
+		return nil, err
 	}
+
+	H1, err := NewHashTable(true, inlineVal, 8, valueSize, proc)
+	if err != nil {
+		H0.Destroy(proc)
+		return nil, err
+	}
+
+	H2, err := NewHashTable(true, inlineVal, 16, valueSize, proc)
+	if err != nil {
+		H0.Destroy(proc)
+		H1.Destroy(proc)
+		return nil, err
+	}
+
+	H3, err := NewHashTable(true, inlineVal, 24, valueSize, proc)
+	if err != nil {
+		H0.Destroy(proc)
+		H1.Destroy(proc)
+		H2.Destroy(proc)
+		return nil, err
+	}
+
+	Hs, err := NewHashTable(false, inlineVal, 24, valueSize, proc)
+	if err != nil {
+		H0.Destroy(proc)
+		H1.Destroy(proc)
+		H2.Destroy(proc)
+		H3.Destroy(proc)
+		return nil, err
+	}
+
+	return &StringHashTable{
+		H0: H0,
+		H1: H1,
+		H2: H2,
+		H3: H3,
+		Hs: Hs,
+	}, nil
 }
 
-func (ht *StringHashTable) Insert(hash uint64, key []byte) (inserted bool, value []byte) {
+func (ht *StringHashTable) Insert(hash uint64, key []byte, proc process.Process) (inserted bool, value []byte, err error) {
 	switch l := len(key); {
 	case l <= 2:
 		var intKey uint32
 		for i := 0; i < l; i++ {
 			intKey += uint32(key[i]) << (i * 8)
 		}
-		return ht.H0.Insert(intKey)
+		inserted, value = ht.H0.Insert(intKey)
+		return
 	case l <= 8:
-		return ht.H1.Insert(hash, key)
+		return ht.H1.Insert(hash, key, proc)
 	case l <= 16:
-		return ht.H2.Insert(hash, key)
+		return ht.H2.Insert(hash, key, proc)
 	case l <= 24:
-		return ht.H3.Insert(hash, key)
+		return ht.H3.Insert(hash, key, proc)
 	default:
-		return ht.Hs.Insert(hash, key)
+		return ht.Hs.Insert(hash, key, proc)
 	}
+}
+
+func (ht *StringHashTable) Destroy(proc process.Process) {
+	ht.H0.Destroy(proc)
+	ht.H1.Destroy(proc)
+	ht.H2.Destroy(proc)
+	ht.H3.Destroy(proc)
+	ht.Hs.Destroy(proc)
 }
