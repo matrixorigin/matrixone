@@ -127,6 +127,10 @@ func NewUnaryExpr(op UnaryOp, expr Expr) *UnaryExpr {
 	}
 }
 
+func (e *UnaryExpr) String() string {
+	return unaryOpName[e.Op] + e.Expr.String()
+}
+
 //comparion operation
 type ComparisonOp int
 

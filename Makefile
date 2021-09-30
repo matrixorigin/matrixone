@@ -51,9 +51,9 @@ endif
 bvt: mo-server
 	$(info [Build verification testing])
 ifeq ($(UNAME_S),Darwin)
-	@cd optools; ./run_bvt.sh BVT True
+	@cd optools; ./run_bvt.sh BVT False
 else
-	@cd optools; timeout 30m ./run_bvt.sh BVT True
+	@cd optools; timeout 30m ./run_bvt.sh BVT False
 endif
 
 # Tear down
