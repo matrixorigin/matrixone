@@ -16,7 +16,6 @@ package aggregator
 
 import (
 	"math"
-	"reflect"
 	"unsafe"
 )
 
@@ -39,13 +38,13 @@ func (agg *Int8Min) ResultSize() uint8 {
 	return 1
 }
 
-func (agg *Int8Min) Init(state []byte) {
-	*(*int8)(unsafe.Pointer(&state[0])) = math.MaxInt8
+func (agg *Int8Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Int8Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*int8)(unsafe.Pointer(&array[0])) = math.MaxInt8
+	for i := 1; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -54,7 +53,7 @@ func (agg *Int8Min) Aggregate(state, data []byte) {
 	lhs := (*int8)(unsafe.Pointer(&state[0]))
 	rhs := *(*int8)(unsafe.Pointer(&data[0]))
 	mask := *lhs - rhs
-	*lhs = rhs + (mask & mask >> 7)
+	*lhs = rhs + (mask & (mask >> 7))
 }
 
 func (agg *Int8Min) Merge(lstate, rstate []byte) {
@@ -62,17 +61,11 @@ func (agg *Int8Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Int8Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 1
-	lheader.Cap /= 1
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 1
-	rheader.Cap /= 1
-	lslice := *(*[]int8)(unsafe.Pointer(&lheader))
-	rslice := *(*[]int8)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*int8)(unsafe.Pointer(&larray[0])), len(larray)/1)
+	rslice := unsafe.Slice((*int8)(unsafe.Pointer(&rarray[0])), len(rarray)/1)
 	for i, v := range rslice {
 		mask := lslice[i] - v
-		lslice[i] = v + (mask & mask >> 7)
+		lslice[i] = v + (mask & (mask >> 7))
 	}
 }
 
@@ -88,13 +81,13 @@ func (agg *Int16Min) ResultSize() uint8 {
 	return 2
 }
 
-func (agg *Int16Min) Init(state []byte) {
-	*(*int16)(unsafe.Pointer(&state[0])) = math.MaxInt16
+func (agg *Int16Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Int16Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*int16)(unsafe.Pointer(&array[0])) = math.MaxInt16
+	for i := 2; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -103,7 +96,7 @@ func (agg *Int16Min) Aggregate(state, data []byte) {
 	lhs := (*int16)(unsafe.Pointer(&state[0]))
 	rhs := *(*int16)(unsafe.Pointer(&data[0]))
 	mask := *lhs - rhs
-	*lhs = rhs + (mask & mask >> 15)
+	*lhs = rhs + (mask & (mask >> 15))
 }
 
 func (agg *Int16Min) Merge(lstate, rstate []byte) {
@@ -111,17 +104,11 @@ func (agg *Int16Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Int16Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 2
-	lheader.Cap /= 2
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 2
-	rheader.Cap /= 2
-	lslice := *(*[]int16)(unsafe.Pointer(&lheader))
-	rslice := *(*[]int16)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*int16)(unsafe.Pointer(&larray[0])), len(larray)/2)
+	rslice := unsafe.Slice((*int16)(unsafe.Pointer(&rarray[0])), len(rarray)/2)
 	for i, v := range rslice {
 		mask := lslice[i] - v
-		lslice[i] = v + (mask & mask >> 15)
+		lslice[i] = v + (mask & (mask >> 15))
 	}
 }
 
@@ -137,13 +124,13 @@ func (agg *Int32Min) ResultSize() uint8 {
 	return 4
 }
 
-func (agg *Int32Min) Init(state []byte) {
-	*(*int32)(unsafe.Pointer(&state[0])) = math.MaxInt32
+func (agg *Int32Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Int32Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*int32)(unsafe.Pointer(&array[0])) = math.MaxInt32
+	for i := 4; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -152,7 +139,7 @@ func (agg *Int32Min) Aggregate(state, data []byte) {
 	lhs := (*int32)(unsafe.Pointer(&state[0]))
 	rhs := *(*int32)(unsafe.Pointer(&data[0]))
 	mask := *lhs - rhs
-	*lhs = rhs + (mask & mask >> 31)
+	*lhs = rhs + (mask & (mask >> 31))
 }
 
 func (agg *Int32Min) Merge(lstate, rstate []byte) {
@@ -160,17 +147,11 @@ func (agg *Int32Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Int32Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 4
-	lheader.Cap /= 4
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 4
-	rheader.Cap /= 4
-	lslice := *(*[]int32)(unsafe.Pointer(&lheader))
-	rslice := *(*[]int32)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*int32)(unsafe.Pointer(&larray[0])), len(larray)/4)
+	rslice := unsafe.Slice((*int32)(unsafe.Pointer(&rarray[0])), len(rarray)/4)
 	for i, v := range rslice {
 		mask := lslice[i] - v
-		lslice[i] = v + (mask & mask >> 31)
+		lslice[i] = v + (mask & (mask >> 31))
 	}
 }
 
@@ -186,13 +167,13 @@ func (agg *Int64Min) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Int64Min) Init(state []byte) {
-	*(*int64)(unsafe.Pointer(&state[0])) = math.MaxInt64
+func (agg *Int64Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Int64Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*int64)(unsafe.Pointer(&array[0])) = math.MaxInt64
+	for i := 8; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -201,7 +182,7 @@ func (agg *Int64Min) Aggregate(state, data []byte) {
 	lhs := (*int64)(unsafe.Pointer(&state[0]))
 	rhs := *(*int64)(unsafe.Pointer(&data[0]))
 	mask := *lhs - rhs
-	*lhs = rhs + (mask & mask >> 63)
+	*lhs = rhs + (mask & (mask >> 63))
 }
 
 func (agg *Int64Min) Merge(lstate, rstate []byte) {
@@ -209,17 +190,11 @@ func (agg *Int64Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Int64Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 8
-	lheader.Cap /= 8
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 8
-	rheader.Cap /= 8
-	lslice := *(*[]int64)(unsafe.Pointer(&lheader))
-	rslice := *(*[]int64)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*int64)(unsafe.Pointer(&larray[0])), len(larray)/8)
+	rslice := unsafe.Slice((*int64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
 	for i, v := range rslice {
 		mask := lslice[i] - v
-		lslice[i] = v + (mask & mask >> 63)
+		lslice[i] = v + (mask & (mask >> 63))
 	}
 }
 
@@ -235,13 +210,13 @@ func (agg *Uint8Min) ResultSize() uint8 {
 	return 1
 }
 
-func (agg *Uint8Min) Init(state []byte) {
-	*(*uint8)(unsafe.Pointer(&state[0])) = math.MaxUint8
+func (agg *Uint8Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Uint8Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*uint8)(unsafe.Pointer(&array[0])) = math.MaxUint8
+	for i := 1; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -258,14 +233,8 @@ func (agg *Uint8Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Uint8Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 1
-	lheader.Cap /= 1
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 1
-	rheader.Cap /= 1
-	lslice := *(*[]uint8)(unsafe.Pointer(&lheader))
-	rslice := *(*[]uint8)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*uint8)(unsafe.Pointer(&larray[0])), len(larray)/1)
+	rslice := unsafe.Slice((*uint8)(unsafe.Pointer(&rarray[0])), len(rarray)/1)
 	for i, v := range rslice {
 		mask := lslice[i] - v
 		lslice[i] = v + (mask & uint8(int8(mask)>>7))
@@ -284,13 +253,13 @@ func (agg *Uint16Min) ResultSize() uint8 {
 	return 2
 }
 
-func (agg *Uint16Min) Init(state []byte) {
-	*(*uint16)(unsafe.Pointer(&state[0])) = math.MaxUint16
+func (agg *Uint16Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Uint16Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*uint16)(unsafe.Pointer(&array[0])) = math.MaxUint16
+	for i := 2; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -307,14 +276,8 @@ func (agg *Uint16Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Uint16Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 2
-	lheader.Cap /= 2
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 2
-	rheader.Cap /= 2
-	lslice := *(*[]uint16)(unsafe.Pointer(&lheader))
-	rslice := *(*[]uint16)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*uint16)(unsafe.Pointer(&larray[0])), len(larray)/2)
+	rslice := unsafe.Slice((*uint16)(unsafe.Pointer(&rarray[0])), len(rarray)/2)
 	for i, v := range rslice {
 		mask := lslice[i] - v
 		lslice[i] = v + (mask & uint16(int16(mask)>>15))
@@ -333,13 +296,13 @@ func (agg *Uint32Min) ResultSize() uint8 {
 	return 4
 }
 
-func (agg *Uint32Min) Init(state []byte) {
-	*(*uint32)(unsafe.Pointer(&state[0])) = math.MaxUint32
+func (agg *Uint32Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Uint32Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*uint32)(unsafe.Pointer(&array[0])) = math.MaxUint32
+	for i := 4; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -356,14 +319,8 @@ func (agg *Uint32Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Uint32Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 4
-	lheader.Cap /= 4
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 4
-	rheader.Cap /= 4
-	lslice := *(*[]uint32)(unsafe.Pointer(&lheader))
-	rslice := *(*[]uint32)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*uint32)(unsafe.Pointer(&larray[0])), len(larray)/4)
+	rslice := unsafe.Slice((*uint32)(unsafe.Pointer(&rarray[0])), len(rarray)/4)
 	for i, v := range rslice {
 		mask := lslice[i] - v
 		lslice[i] = v + (mask & uint32(int32(mask)>>31))
@@ -382,13 +339,13 @@ func (agg *Uint64Min) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Uint64Min) Init(state []byte) {
-	*(*uint64)(unsafe.Pointer(&state[0])) = math.MaxUint64
+func (agg *Uint64Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Uint64Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*uint64)(unsafe.Pointer(&array[0])) = math.MaxUint64
+	for i := 8; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -405,14 +362,8 @@ func (agg *Uint64Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Uint64Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 8
-	lheader.Cap /= 8
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 8
-	rheader.Cap /= 8
-	lslice := *(*[]uint64)(unsafe.Pointer(&lheader))
-	rslice := *(*[]uint64)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*uint64)(unsafe.Pointer(&larray[0])), len(larray)/8)
+	rslice := unsafe.Slice((*uint64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
 	for i, v := range rslice {
 		mask := lslice[i] - v
 		lslice[i] = v + (mask & uint64(int64(mask)>>63))
@@ -431,13 +382,13 @@ func (agg *Float32Min) ResultSize() uint8 {
 	return 4
 }
 
-func (agg *Float32Min) Init(state []byte) {
-	*(*float32)(unsafe.Pointer(&state[0])) = float32(math.Inf(1))
+func (agg *Float32Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Float32Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*float32)(unsafe.Pointer(&array[0])) = float32(math.Inf(1))
+	for i := 4; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -455,14 +406,8 @@ func (agg *Float32Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Float32Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 4
-	lheader.Cap /= 4
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 4
-	rheader.Cap /= 4
-	lslice := *(*[]float32)(unsafe.Pointer(&lheader))
-	rslice := *(*[]float32)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*float32)(unsafe.Pointer(&larray[0])), len(larray)/4)
+	rslice := unsafe.Slice((*float32)(unsafe.Pointer(&rarray[0])), len(rarray)/4)
 	for i, v := range rslice {
 		if lslice[i] > v {
 			lslice[i] = v
@@ -482,13 +427,13 @@ func (agg *Float64Min) ResultSize() uint8 {
 	return 8
 }
 
-func (agg *Float64Min) Init(state []byte) {
-	*(*float64)(unsafe.Pointer(&state[0])) = math.Inf(1)
+func (agg *Float64Min) Init(state, data []byte) {
+	copy(state, data)
 }
 
 func (agg *Float64Min) ArrayInit(array []byte) {
-	agg.Init(array)
-	for i := int(agg.StateSize()); i < len(array); i++ {
+	*(*float64)(unsafe.Pointer(&array[0])) = math.Inf(1)
+	for i := 8; i < len(array); i *= 2 {
 		copy(array[i:], array[:i])
 	}
 }
@@ -496,7 +441,9 @@ func (agg *Float64Min) ArrayInit(array []byte) {
 func (agg *Float64Min) Aggregate(state, data []byte) {
 	lhs := (*float64)(unsafe.Pointer(&state[0]))
 	rhs := *(*float64)(unsafe.Pointer(&data[0]))
-	*lhs = math.Min(*lhs, rhs)
+	if *lhs > rhs {
+		*lhs = rhs
+	}
 }
 
 func (agg *Float64Min) Merge(lstate, rstate []byte) {
@@ -504,16 +451,12 @@ func (agg *Float64Min) Merge(lstate, rstate []byte) {
 }
 
 func (agg *Float64Min) ArrayMerge(larray, rarray []byte) {
-	lheader := *(*reflect.SliceHeader)(unsafe.Pointer(&larray))
-	lheader.Len /= 8
-	lheader.Cap /= 8
-	rheader := *(*reflect.SliceHeader)(unsafe.Pointer(&rarray))
-	rheader.Len /= 8
-	rheader.Cap /= 8
-	lslice := *(*[]float64)(unsafe.Pointer(&lheader))
-	rslice := *(*[]float64)(unsafe.Pointer(&rheader))
+	lslice := unsafe.Slice((*float64)(unsafe.Pointer(&larray[0])), len(larray)/8)
+	rslice := unsafe.Slice((*float64)(unsafe.Pointer(&rarray[0])), len(rarray)/8)
 	for i, v := range rslice {
-		lslice[i] = math.Min(lslice[i], v)
+		if lslice[i] > v {
+			lslice[i] = v
+		}
 	}
 }
 

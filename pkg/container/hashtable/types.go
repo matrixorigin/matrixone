@@ -15,67 +15,74 @@
 package hashtable
 
 type FixedTable struct {
+	inlineVal  bool
 	bucketCnt  uint32
-	valueSize  uint8
+	valSize    uint8
 	occupied   []uint64
 	bucketData []byte
-	agg        Aggregator
 }
 
 type FixedTableIterator struct {
 	table     *FixedTable
-	bitmapIdx int
+	bitmapIdx uint32
 	bitmapVal uint64
 }
 
-type CKHashTable struct {
-	bucketCnt uint
-	elemCnt   uint
-	//hashBits   uint32
-	keySize    uint32
-	valSize    uint32
-	bucketData []byte
-	agg        Aggregator
+type HashTable struct {
+	inlineKey     bool
+	inlineVal     bool
+	bucketCntBits uint8
+	bucketCnt     uint64
+	elemCnt       uint64
+	maxElemCnt    uint64
+	keySize       uint8
+	valSize       uint8
+	valOffset     uint8
+	bucketWidth   uint8
+	bucketData    []byte
+	keyHolder     [][]byte
+	valHolder     [][]byte
 }
 
-type CKHashTableIterator struct {
-	table     *CKHashTable
-	bucketIdx int
+type HashTableIterator struct {
+	table  *HashTable
+	offset uint64
+	end    uint64
 }
 
-type CKStringHashTable struct {
-	h0  *FixedTable
-	h1  *CKHashTable
-	h2  *CKHashTable
-	h3  *CKHashTable
-	hs  *CKHashTable
-	agg Aggregator
+type StringHashTable struct {
+	inlineVal bool
+	H0        *FixedTable
+	H1        *HashTable
+	H2        *HashTable
+	H3        *HashTable
+	Hs        *HashTable
 }
 
-type CKStringHashTableIterator struct {
-	table     *CKStringHashTable
+//type StringHashTableIterator struct {
+//	table     *StringHashTable
+//	tableIdx  int
+//	bucketIdx int
+//}
+
+type TwoLevelHashTable struct {
+	htables []*HashTable
+	agg     Aggregator
+}
+
+type TwoLevelHashTableIterator struct {
+	table     *TwoLevelHashTable
 	tableIdx  int
 	bucketIdx int
 }
 
-type TwoLevelCKHashTable struct {
-	htables []*CKHashTable
+type TwoLevelStringHashTable struct {
+	htables []*StringHashTable
 	agg     Aggregator
 }
 
-type TwoLevelCKHashTableIterator struct {
-	table     *TwoLevelCKHashTable
-	tableIdx  int
-	bucketIdx int
-}
-
-type TwoLevelCKStringHashTable struct {
-	htables []*CKStringHashTable
-	agg     Aggregator
-}
-
-type TwoLevelCKStringHashTableIterator struct {
-	table     *TwoLevelCKStringHashTable
+type TwoLevelStringHashTableIterator struct {
+	table     *TwoLevelStringHashTable
 	tableIdx  int
 	bucketIdx int
 }
@@ -84,7 +91,7 @@ type Aggregator interface {
 	StateSize() uint8
 	ResultSize() uint8
 
-	Init(state []byte)
+	Init(state, data []byte)
 	ArrayInit(array []byte)
 
 	Aggregate(state, data []byte)
