@@ -78,10 +78,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		err = binary.Write(w, binary.BigEndian, &count)
 		assert.Nil(t, err)
 		prevIdx := md.LogIndex{
-			ID:       uint64(0),
-			Start:    uint64(0),
-			Count:    uint64(0),
-			Capacity: uint64(0),
+			ID: md.MockLogBatchId(uint64(0)),
 		}
 		buf, err := prevIdx.Marshal()
 		assert.Nil(t, err)
@@ -92,10 +89,7 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		err = binary.Write(w, binary.BigEndian, &buf)
 		assert.Nil(t, err)
 		idx := md.LogIndex{
-			ID:       uint64(0),
-			Start:    uint64(0),
-			Count:    uint64(0),
-			Capacity: uint64(0),
+			ID: md.MockLogBatchId(uint64(0)),
 		}
 		buf, err = idx.Marshal()
 		assert.Nil(t, err)

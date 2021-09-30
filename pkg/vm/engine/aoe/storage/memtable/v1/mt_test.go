@@ -128,7 +128,7 @@ func TestCollection(t *testing.T) {
 			defer wg.Done()
 			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &md.LogIndex{
-				ID:       id,
+				ID:       md.MockLogBatchId(id),
 				Capacity: uint64(insert.Vecs[0].Length()),
 			}
 			err := c0.Append(insert, index)

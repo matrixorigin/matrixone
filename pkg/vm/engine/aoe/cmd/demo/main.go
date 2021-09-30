@@ -64,7 +64,7 @@ func main() {
 	insertWg.Add(1)
 	go func() {
 		for i := 0; i < insertCnt; i++ {
-			err = inst.Append(dbi.AppendCtx{TableName: tName, Data: ck, OpIndex: uint64(i)})
+			err = inst.Append(dbi.AppendCtx{TableName: tName, Data: ck, OpIndex: uint64(i), OpSize: 1})
 			if err != nil {
 				log.Warn(err)
 			}

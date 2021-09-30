@@ -49,6 +49,7 @@ func TestReplay1(t *testing.T) {
 	insertFn := func() {
 		err = rel.Write(dbi.AppendCtx{
 			OpIndex:   metadata.NextGlobalSeqNum(),
+			OpSize:    1,
 			Data:      ibat,
 			TableName: meta.Schema.Name,
 		})

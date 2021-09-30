@@ -162,7 +162,7 @@ func (sf *SortedSegmentFile) initPointers() {
 
 	blkIds := make([]uint64, blkCnt)
 	blkCounts := make([]uint64, blkCnt)
-	idxBuf := make([]byte, 32)
+	idxBuf := make([]byte, blkIdxSize)
 	preIndices := make([]*metadata.LogIndex, blkCnt)
 	indices := make([]*metadata.LogIndex, blkCnt)
 
@@ -177,12 +177,7 @@ func (sf *SortedSegmentFile) initPointers() {
 			panic(err)
 		}
 		if !bytes.Equal(idxBuf, []byte{}) {
-			preIndices[i] = &metadata.LogIndex{
-				ID:       0,
-				Start:    0,
-				Count:    0,
-				Capacity: 0,
-			}
+			preIndices[i] = &metadata.LogIndex{}
 			if err = preIndices[i].UnMarshall(idxBuf); err != nil {
 				panic(err)
 			}
@@ -191,12 +186,7 @@ func (sf *SortedSegmentFile) initPointers() {
 			panic(err)
 		}
 		if !bytes.Equal(idxBuf, []byte{}) {
-			indices[i] = &metadata.LogIndex{
-				ID:       0,
-				Start:    0,
-				Count:    0,
-				Capacity: 0,
-			}
+			indices[i] = &metadata.LogIndex{}
 			if err = indices[i].UnMarshall(idxBuf); err != nil {
 				panic(err)
 			}

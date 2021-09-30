@@ -124,7 +124,7 @@ func makeFiles(impl *db.DB) {
 	}
 	ibat := getInsertBatch(meta)
 	for i := uint64(0); i < insertCnt; i++ {
-		if err := impl.Append(dbi.AppendCtx{TableName: tableName, Data: ibat, OpIndex: uint64(i)}); err != nil {
+		if err := impl.Append(dbi.AppendCtx{TableName: tableName, Data: ibat, OpIndex: uint64(i), OpSize: 1}); err != nil {
 			panic(err)
 		}
 	}
@@ -152,6 +152,8 @@ func readData() {
 	if err != nil {
 		panic(err)
 	}
+	id, _ := impl.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableName))
+	log.Infof("segmented id: %d", id)
 	rel, err := dbase.Relation(tableName)
 	if err != nil {
 		panic(err)

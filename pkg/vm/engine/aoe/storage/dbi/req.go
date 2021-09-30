@@ -46,6 +46,8 @@ type GetSegmentsCtx struct {
 
 type AppendCtx struct {
 	OpIndex   uint64
+	OpOffset  int
+	OpSize    int
 	TableName string
 	Data      *batch.Batch
 }
