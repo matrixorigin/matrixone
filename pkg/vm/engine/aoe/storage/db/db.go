@@ -124,6 +124,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
+	if ctx.OpOffset >= ctx.OpSize {
+		panic(fmt.Sprintf("bad index %d: offset %d, size %d", ctx.OpIndex, ctx.OpOffset, ctx.OpSize))
+	}
 	tbl, err := d.Store.MetaInfo.ReferenceTableByName(ctx.TableName)
 	if err != nil {
 		return err
@@ -153,7 +156,11 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	}
 
 	index := &md.LogIndex{
-		ID:       ctx.OpIndex,
+		ID: md.LogBatchId{
+			Id:     ctx.OpIndex,
+			Offset: uint32(ctx.OpOffset),
+			Size:   uint32(ctx.OpSize),
+		},
 		Capacity: uint64(ctx.Data.Vecs[0].Length()),
 	}
 	defer collection.Unref()

@@ -69,12 +69,12 @@ func (blk *Block) GetReplayIndex() *LogIndex {
 func (blk *Block) GetAppliedIndex() (uint64, bool) {
 	blk.RLock()
 	defer blk.RUnlock()
-	if blk.Index != nil && blk.Index.IsApplied() {
-		return blk.Index.ID, true
+	if blk.Index != nil && blk.Index.IsBatchApplied() {
+		return blk.Index.ID.Id, true
 	}
 
-	if blk.PrevIndex != nil {
-		return blk.PrevIndex.ID, true
+	if blk.PrevIndex != nil && blk.PrevIndex.IsBatchApplied() {
+		return blk.PrevIndex.ID.Id, true
 	}
 
 	return 0, false
@@ -123,13 +123,13 @@ func (blk *Block) SetIndex(idx LogIndex) error {
 	defer blk.Unlock()
 	if blk.Index != nil {
 		if !blk.Index.IsApplied() {
-			return errors.New(fmt.Sprintf("block already has applied index: %d", blk.Index.ID))
+			return errors.New(fmt.Sprintf("block already has applied index: %s", blk.Index.ID.String()))
 		}
 		blk.PrevIndex = blk.Index
 		blk.Index = &idx
 	} else {
 		if blk.PrevIndex != nil {
-			return errors.New(fmt.Sprintf("block has no index but has prev index: %d", blk.PrevIndex.ID))
+			return errors.New(fmt.Sprintf("block has no index but has prev index: %s", blk.PrevIndex.ID.String()))
 		}
 		blk.Index = &idx
 	}

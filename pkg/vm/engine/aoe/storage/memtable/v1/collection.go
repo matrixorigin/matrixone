@@ -121,6 +121,7 @@ func (c *collection) Flush() error {
 // Append is the external interface provided by storage.
 // Receive the batch data, and then store it in aoe.
 func (c *collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
+	logutil.Infof("Append logindex: %s", index.String())
 	tableMeta := c.tableData.GetMeta()
 	var mut imem.IMemTable
 	c.mem.Lock()

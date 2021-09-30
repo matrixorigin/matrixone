@@ -101,7 +101,7 @@ func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comman
 		return 0, 0, resp
 	}
 	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe2.Storage)
-	err = store.Append(customReq.TabletName, bat, ctx.LogIndex())
+	err = store.Append(customReq.TabletName, bat, ctx.LogIndex(), ctx.Offset(), ctx.BatchSize())
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp

@@ -41,7 +41,7 @@ const (
 	endPosSize   = 8
 	blkIdSize    = 8
 	blkCountSize = 8
-	blkIdxSize   = 32
+	blkIdxSize   = 40
 	colSizeSize  = 8
 	colPosSize   = 8
 )
@@ -818,7 +818,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 				return err
 			}
 		} else {
-			preIdx = make([]byte, 32)
+			preIdx = make([]byte, blkIdxSize)
 		}
 		if err = binary.Write(&metaBuf, binary.BigEndian, preIdx); err != nil {
 			return err
@@ -830,7 +830,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 				return err
 			}
 		} else {
-			idx = make([]byte, 32)
+			idx = make([]byte, blkIdxSize)
 		}
 		if err = binary.Write(&metaBuf, binary.BigEndian, idx); err != nil {
 			return err

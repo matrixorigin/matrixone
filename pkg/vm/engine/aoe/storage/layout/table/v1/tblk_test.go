@@ -124,7 +124,7 @@ func TestTBlock(t *testing.T) {
 	}
 
 	idx1 := &metadata.LogIndex{
-		ID:       uint64(1),
+		ID:       metadata.MockLogBatchId(uint64(1)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk1.WithPinedContext(appendFn(idx1))
@@ -134,7 +134,7 @@ func TestTBlock(t *testing.T) {
 	assert.False(t, ok)
 
 	idx2 := &metadata.LogIndex{
-		ID:       uint64(2),
+		ID:       metadata.MockLogBatchId(uint64(2)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk1.WithPinedContext(appendFn(idx2))
@@ -150,13 +150,13 @@ func TestTBlock(t *testing.T) {
 	assert.False(t, blk2.node.IsLoaded())
 
 	idx3 := &metadata.LogIndex{
-		ID:       uint64(3),
+		ID:       metadata.MockLogBatchId(uint64(3)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk2.WithPinedContext(appendFn(idx3))
 	assert.Nil(t, err)
 	idx4 := &metadata.LogIndex{
-		ID:       uint64(4),
+		ID:       metadata.MockLogBatchId(uint64(4)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk2.WithPinedContext(appendFn(idx4))
@@ -164,7 +164,7 @@ func TestTBlock(t *testing.T) {
 
 	idx, ok = blk1.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, idx2.ID, idx)
+	assert.Equal(t, idx2.ID.Id, idx)
 
 	err = blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)
@@ -174,7 +174,7 @@ func TestTBlock(t *testing.T) {
 	assert.Nil(t, err)
 
 	idx5 := &metadata.LogIndex{
-		ID:       uint64(5),
+		ID:       metadata.MockLogBatchId(uint64(4)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk1.WithPinedContext(appendFn(idx5))
@@ -191,10 +191,10 @@ func TestTBlock(t *testing.T) {
 	t.Log(common.GPool.String())
 	idx, ok = blk1.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, idx5.ID, idx)
+	assert.Equal(t, idx5.ID.Id, idx)
 	idx, ok = blk2.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, idx4.ID, idx)
+	assert.Equal(t, idx4.ID.Id, idx)
 
 	blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)

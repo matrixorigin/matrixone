@@ -211,6 +211,8 @@ func TestReplay(t *testing.T) {
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(dbi.AppendCtx{
 			OpIndex:   uint64(i + 1),
+			OpOffset:  0,
+			OpSize:    1,
 			Data:      ck,
 			TableName: tableInfo.Name,
 		})
@@ -285,6 +287,7 @@ func TestReplay(t *testing.T) {
 			TableName: tableInfo.Name,
 			Data:      ck,
 			OpIndex:   uint64(i),
+			OpSize:    1,
 		})
 		assert.Nil(t, err)
 	}
@@ -330,7 +333,7 @@ func TestMultiInstance(t *testing.T) {
 	meta, _ := insts[0].Opts.Meta.Info.ReferenceTableByName(info.Name)
 	bat := mock.MockBatch(meta.Schema.Types(), 100)
 	for _, inst := range insts {
-		err := inst.Append(dbi.AppendCtx{TableName: info.Name, Data: bat})
+		err := inst.Append(dbi.AppendCtx{TableName: info.Name, Data: bat, OpIndex: common.NextGlobalSeqNum(), OpSize: 1})
 		assert.Nil(t, err)
 	}
 

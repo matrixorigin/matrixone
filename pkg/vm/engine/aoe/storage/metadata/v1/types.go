@@ -60,10 +60,16 @@ const (
 	FixStrBsi
 )
 
+type LogBatchId struct {
+	Id     uint64
+	Offset uint32
+	Size   uint32
+}
+
 // LogIndex records some block related info.
 // Used for replay.
 type LogIndex struct {
-	ID       uint64
+	ID       LogBatchId
 	Start    uint64
 	Count    uint64
 	Capacity uint64
@@ -143,7 +149,7 @@ type ColDef struct {
 	// Column name
 	Name string
 	// Column index in schema
-	Idx  int
+	Idx int
 	// Column type
 	Type types.Type
 }
@@ -151,18 +157,18 @@ type ColDef struct {
 // Schema is in representation of a table schema.
 type Schema struct {
 	// Table name
-	Name      string
+	Name string
 	// Indices' info
-	Indices   []*IndexInfo
+	Indices []*IndexInfo
 	// Column definitions
-	ColDefs   []*ColDef
+	ColDefs []*ColDef
 	// Column name -> column index mapping
 	NameIdMap map[string]int
 }
 
 // IndexInfo contains metadata for an index.
 type IndexInfo struct {
-	Type    IndexType
+	Type IndexType
 	// Columns that the index works on
 	Columns []uint16
 	ID      uint64
@@ -184,9 +190,9 @@ type Table struct {
 	SegmentCnt    uint64
 	ActiveSegment int            `json:"-"`
 	IdMap         map[uint64]int `json:"-"`
-	Info          *MetaInfo   `json:"-"`
-	Stat          *Statistics `json:"-"`
-	ReplayIndex   *LogIndex   `json:"-"`
+	Info          *MetaInfo      `json:"-"`
+	Stat          *Statistics    `json:"-"`
+	ReplayIndex   *LogIndex      `json:"-"`
 	Schema        *Schema
 	Conf          *Configuration
 	CheckPoint    uint64
@@ -195,8 +201,8 @@ type Table struct {
 // Configuration contains some basic configs for global DB.
 type Configuration struct {
 	Dir              string
-	BlockMaxRows     uint64	`toml:"block-max-rows"`
-	SegmentMaxBlocks uint64	`toml:"segment-max-blocks"`
+	BlockMaxRows     uint64 `toml:"block-max-rows"`
+	SegmentMaxBlocks uint64 `toml:"segment-max-blocks"`
 }
 
 // MetaInfo contains some basic metadata for global DB.

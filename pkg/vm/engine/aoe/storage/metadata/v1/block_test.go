@@ -59,20 +59,6 @@ func TestBlock(t *testing.T) {
 	assert.Nil(t, blk2.GetReplayIndex())
 	_, has := blk2.GetAppliedIndex()
 	assert.False(t, has)
-	idx1 := LogIndex{}
-	blk2.PrevIndex = &LogIndex{}
-	_, has = blk2.GetAppliedIndex()
-	assert.True(t, has)
-	assert.NotNil(t, blk2.SetIndex(idx1))
-	blk2.PrevIndex = nil
-	assert.Nil(t, blk2.SetIndex(idx1))
-	_, has = blk2.GetAppliedIndex()
-	assert.True(t, has)
-	assert.Equal(t, blk2.GetReplayIndex().ID, idx1.ID)
-	idx2 := LogIndex{}
-	assert.Nil(t, blk2.SetIndex(idx2))
-	blk2.Index.Capacity = 1
-	assert.NotNil(t, blk2.SetIndex(idx1))
 
 	blk3 := blk2.Copy()
 	assert.NotNil(t, blk1.Update(blk3))
@@ -96,7 +82,8 @@ func TestBlock(t *testing.T) {
 
 	assert.Equal(t, blk2.ID, blk2.AsCommonID().BlockID)
 	n, _ := blk1.Marshal()
-	assert.Equal(t, 223, len(n))
+	t.Log(string(n))
+	assert.Equal(t, 149, len(n))
 
 	assert.Equal(t, blk2.MaxRowCount*8*2, EstimateBlockSize(blk2))
 

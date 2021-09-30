@@ -94,7 +94,7 @@ func TestMutCollection(t *testing.T) {
 			defer wgp.Done()
 			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &metadata.LogIndex{
-				ID:       id,
+				ID:       metadata.MockLogBatchId(id),
 				Capacity: uint64(insert.Vecs[0].Length()),
 			}
 			err := c0.Append(insert, index)

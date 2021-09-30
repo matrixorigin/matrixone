@@ -160,6 +160,7 @@ func TestAppend(t *testing.T) {
 	// err = inst.Append(invalidName, ck, logIdx)
 	appendCtx := dbi.AppendCtx{
 		OpIndex:   uint64(1),
+		OpSize:    1,
 		TableName: invalidName,
 		Data:      ck,
 	}
@@ -302,6 +303,7 @@ func TestConcurrency(t *testing.T) {
 				TableName: tableInfo.Name,
 				Data:      baseCk,
 				OpIndex:   uint64(i),
+				OpSize:    1,
 			}
 			insertCh <- insertReq
 		}
@@ -451,6 +453,7 @@ func TestMultiTables(t *testing.T) {
 					inst.Append(dbi.AppendCtx{
 						TableName: tname,
 						OpIndex:   opIdx,
+						OpSize:    1,
 						Data:      baseCk,
 					})
 				}
@@ -583,6 +586,7 @@ func TestDropTable2(t *testing.T) {
 					TableName: tableInfo.Name,
 					Data:      baseCk,
 					OpIndex:   uint64(1),
+					OpSize:    1,
 				})
 				wg.Done()
 			}()
@@ -661,6 +665,7 @@ func TestE2E(t *testing.T) {
 					TableName: tableInfo.Name,
 					Data:      baseCk,
 					OpIndex:   uint64(1),
+					OpSize:    1,
 				})
 				wg.Done()
 			}()

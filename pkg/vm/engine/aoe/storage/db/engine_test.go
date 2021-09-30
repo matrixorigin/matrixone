@@ -169,6 +169,7 @@ func TestEngine(t *testing.T) {
 				TableName: tableInfo.Name,
 				Data:      baseCk,
 				OpIndex:   uint64(i),
+				OpSize:    1,
 			}
 			insertCh <- req
 		}
@@ -233,6 +234,8 @@ func TestLogIndex(t *testing.T) {
 		assert.Nil(t, err)
 		err = rel.Write(dbi.AppendCtx{
 			OpIndex:   md.NextGlobalSeqNum(),
+			OpOffset:  0,
+			OpSize:    1,
 			Data:      baseCk,
 			TableName: tblMeta.Schema.Name,
 		})
