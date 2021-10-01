@@ -107,14 +107,14 @@ func (info *CommitInfo) PString(level PPLevel) string {
 // TODO: remove it. Not be used later
 func (info *CommitInfo) GetAppliedIndex() (uint64, bool) {
 	if info.AppliedIndex != nil {
-		return info.AppliedIndex.Id, true
+		return info.AppliedIndex.Id.Id, true
 	}
-	if info.ExternalIndex != nil && info.ExternalIndex.IsApplied() {
-		return info.ExternalIndex.Id, true
+	if info.ExternalIndex != nil && info.ExternalIndex.IsBatchApplied() {
+		return info.ExternalIndex.Id.Id, true
 	}
 
-	if info.PrevIndex != nil {
-		return info.PrevIndex.Id, true
+	if info.PrevIndex != nil && info.PrevIndex.IsBatchApplied() {
+		return info.PrevIndex.Id.Id, true
 	}
 	return 0, false
 }

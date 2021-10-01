@@ -192,7 +192,7 @@ func (e *Block) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit boo
 		id, ok := e.BaseEntry.GetAppliedIndex()
 		if ok {
 			cInfo.AppliedIndex = &ExternalIndex{
-				Id: id,
+				Id: SimpleBatchId(id),
 			}
 		}
 	}

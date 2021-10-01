@@ -263,7 +263,7 @@ func (e *Segment) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit b
 		id, ok := e.calcAppliedIndex()
 		if ok {
 			cInfo.AppliedIndex = &ExternalIndex{
-				Id: id,
+				Id: SimpleBatchId(id),
 			}
 		}
 	} else {

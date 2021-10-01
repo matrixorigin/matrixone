@@ -338,7 +338,7 @@ func MockTable(catalog *Catalog, schema *Schema, blkCnt uint64, idx *LogIndex) *
 	}
 	if idx == nil {
 		idx = &LogIndex{
-			Id: common.NextGlobalSeqNum(),
+			Id: SimpleBatchId(common.NextGlobalSeqNum()),
 		}
 	}
 	tbl, err := catalog.SimpleCreateTable(schema, idx)
