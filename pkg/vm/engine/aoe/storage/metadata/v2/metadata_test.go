@@ -366,7 +366,7 @@ func TestReplay(t *testing.T) {
 			blk, prevSeg := tbl.SimpleCreateBlock(nil)
 			blk.SetCount(tbl.Schema.BlockMaxRows)
 			blk.SetIndex(LogIndex{
-				Id:       common.NextGlobalSeqNum(),
+				Id:       SimpleBatchId(common.NextGlobalSeqNum()),
 				Count:    tbl.Schema.BlockMaxRows,
 				Capacity: tbl.Schema.BlockMaxRows,
 			})
@@ -406,7 +406,7 @@ func TestAppliedIndex(t *testing.T) {
 	assert.NotNil(t, blk)
 	opIdx := common.NextGlobalSeqNum()
 	blk.SetIndex(LogIndex{
-		Id:       opIdx,
+		Id:       SimpleBatchId(opIdx),
 		Count:    blkRows,
 		Capacity: blkRows * 3 / 2,
 	})
@@ -428,7 +428,7 @@ func TestAppliedIndex(t *testing.T) {
 	assert.NotNil(t, blk)
 
 	blk.SetIndex(LogIndex{
-		Id:       opIdx,
+		Id:       SimpleBatchId(opIdx),
 		Start:    blkRows,
 		Count:    blkRows / 2,
 		Capacity: blkRows * 3 / 2,
@@ -440,7 +440,7 @@ func TestAppliedIndex(t *testing.T) {
 	blk.SetCount(blkRows)
 	opIdx = common.NextGlobalSeqNum()
 	blk.SetIndex(LogIndex{
-		Id:       opIdx,
+		Id:       SimpleBatchId(opIdx),
 		Start:    0,
 		Count:    blkRows / 2,
 		Capacity: blkRows,
@@ -474,7 +474,7 @@ func TestAppliedIndex(t *testing.T) {
 
 	opIdx = common.NextGlobalSeqNum()
 	tbl.SimpleSoftDelete(&LogIndex{
-		Id: opIdx,
+		Id: SimpleBatchId(opIdx),
 	})
 	id, ok = tbl.GetAppliedIndex(nil)
 	assert.True(t, ok)
