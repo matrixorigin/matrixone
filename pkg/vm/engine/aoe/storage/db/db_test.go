@@ -643,6 +643,10 @@ func TestE2E(t *testing.T) {
 			dataio.FlushIndex = false
 		}()
 	}
+	waitTime := time.Duration(100) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 2
+	}
 	initDBTest()
 	inst := initDB(storage.NORMAL_FT)
 	tableInfo := md.MockTableInfo(2)
@@ -672,7 +676,7 @@ func TestE2E(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	time.Sleep(time.Duration(100) * time.Millisecond)
+	time.Sleep(waitTime)
 	tblData, err := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Nil(t, err)
 	t.Log(tblData.String())
@@ -699,12 +703,12 @@ func TestE2E(t *testing.T) {
 		t.Log(inst.IndexBufMgr.String())
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(waitTime)
 	t.Log(inst.IndexBufMgr.String())
 
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name})
 	assert.Nil(t, err)
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(waitTime / 2)
 
 	t.Log(inst.FsMgr.String())
 	t.Log(inst.MTBufMgr.String())
