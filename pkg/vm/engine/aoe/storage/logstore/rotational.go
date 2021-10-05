@@ -176,6 +176,9 @@ func (r *Rotational) scheduleRotate() error {
 	file := r.file
 	r.file = nil
 	r.history.Append(file)
+	if r.observer != nil {
+		r.observer.OnRotated(file)
+	}
 
 	return r.scheduleNew()
 }

@@ -82,7 +82,7 @@ func (h *baseHistroy) Truncate(id uint64) error {
 		return VersionNotFoundErr
 	}
 	h.versions = append(h.versions[:pos], h.versions[pos+1:]...)
-	return nil
+	return version.Destroy()
 }
 
 func (h *baseHistroy) findVersion(id uint64) (int, *VersionFile) {

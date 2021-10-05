@@ -2,13 +2,13 @@ package logstore
 
 type Observer interface {
 	OnSynced()
-	OnRotated()
+	OnRotated(*VersionFile)
 }
 
 type emptyObserver struct{}
 
-func (o *emptyObserver) OnSynced()  {}
-func (o *emptyObserver) OnRotated() {}
+func (o *emptyObserver) OnSynced()              {}
+func (o *emptyObserver) OnRotated(*VersionFile) {}
 
 var (
 	defaultObserver = &emptyObserver{}
@@ -33,8 +33,8 @@ func (o *observers) OnSynced() {
 	}
 }
 
-func (o *observers) OnRotated() {
+func (o *observers) OnRotated(vf *VersionFile) {
 	for _, ob := range o.ers {
-		ob.OnRotated()
+		ob.OnRotated(vf)
 	}
 }

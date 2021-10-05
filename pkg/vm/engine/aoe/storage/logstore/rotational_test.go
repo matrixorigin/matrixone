@@ -2,6 +2,7 @@ package logstore
 
 import (
 	"bytes"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"testing"
 
@@ -72,4 +73,115 @@ func TestParse(t *testing.T) {
 	assert.Equal(t, uint64(9), v)
 	_, err = ParseVersion("stsss-s.dd", "stsss", ".dd")
 	assert.NotNil(t, err)
+}
+
+func TestVersionsMeta(t *testing.T) {
+	versions := newVersionsMeta(nil)
+	v := &versionMeta{
+		id: common.GetGlobalSeqNum(),
+		commit: Range{
+			left:  0,
+			right: 100,
+		},
+	}
+
+	versions.Append(v)
+	err := versions.TryTruncate(nil)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(versions.versions))
+
+	v = &versionMeta{
+		id: common.GetGlobalSeqNum(),
+		commit: Range{
+			left:  101,
+			right: 200,
+		},
+		ckp: &Range{
+			left:  0,
+			right: 150,
+		},
+	}
+	versions.Append(v)
+
+	cbCalled := false
+	cb := func(id uint64) {
+		cbCalled = true
+		assert.Equal(t, v.id, id)
+	}
+	err = versions.TryTruncate(cb)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(versions.versions))
+	assert.True(t, cbCalled)
+
+	v = &versionMeta{
+		id: common.GetGlobalSeqNum(),
+		commit: Range{
+			left:  201,
+			right: 300,
+		},
+		ckp: &Range{
+			left:  151,
+			right: 180,
+		},
+	}
+	versions.Append(v)
+	err = versions.TryTruncate(cb)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(versions.versions))
+
+	v = &versionMeta{
+		id: common.GetGlobalSeqNum(),
+		commit: Range{
+			left:  201,
+			right: 299,
+		},
+		ckp: &Range{
+			left:  181,
+			right: 190,
+		},
+	}
+	err = v.AppendCommit(200)
+	assert.NotNil(t, err)
+	err = v.AppendCommit(300)
+	assert.Nil(t, err)
+	err = v.UnionCheckpointRange(Range{left: 181, right: 199})
+	assert.Nil(t, err)
+	versions.Append(v)
+	err = versions.TryTruncate(cb)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, len(versions.versions))
+
+	v = &versionMeta{
+		id: common.GetGlobalSeqNum(),
+		commit: Range{
+			left:  301,
+			right: 400,
+		},
+		ckp: &Range{
+			left:  100,
+			right: 400,
+		},
+	}
+
+	versions.Append(v)
+	err = versions.TryTruncate(cb)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(versions.versions))
+
+	v = &versionMeta{
+		id: common.GetGlobalSeqNum(),
+		commit: Range{
+			left:  401,
+			right: 500,
+		},
+		ckp: &Range{
+			left:  0,
+			right: 400,
+		},
+	}
+
+	versions.Append(v)
+	err = versions.TryTruncate(cb)
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(versions.versions))
 }

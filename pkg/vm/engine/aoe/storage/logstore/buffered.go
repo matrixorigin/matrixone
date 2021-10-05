@@ -156,7 +156,9 @@ func (s *bufferedStore) OnSynced() {
 	s.SetSyncedId(unsynced)
 }
 
-func (s *bufferedStore) OnRotated() {}
+func (s *bufferedStore) OnRotated(vf *VersionFile) {
+	logutil.Infof("%s rotated", vf.Name())
+}
 
 func (s *bufferedStore) Sync() error {
 	if err := s.file.Sync(); err != nil {
