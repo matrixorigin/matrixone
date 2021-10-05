@@ -27,7 +27,7 @@ type Entry interface {
 	GetPayload() []byte
 	Unmarshal([]byte) error
 	ReadFrom(io.Reader) (int, error)
-	WriteTo(io.Writer, sync.Locker) (int, error)
+	WriteTo(StoreFileWriter, sync.Locker) (int, error)
 }
 
 type EntryType = uint16
@@ -154,9 +154,12 @@ func (e *BaseEntry) ReadFrom(r io.Reader) (int, error) {
 	return r.Read(e.Payload)
 }
 
-func (e *BaseEntry) WriteTo(w io.Writer, locker sync.Locker) (int, error) {
+func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int, error) {
 	locker.Lock()
 	defer locker.Unlock()
+	if err := w.PrepareWrite(EntryMetaSize + int(e.Meta.PayloadSize())); err != nil {
+		return 0, err
+	}
 	n1, err := e.Meta.WriteTo(w)
 	if err != nil {
 		return n1, err

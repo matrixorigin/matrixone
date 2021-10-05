@@ -3,6 +3,7 @@ package logstore
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path"
@@ -38,17 +39,21 @@ func ParseVersion(name, prefix, suffix string) (uint64, error) {
 }
 
 type Rotational struct {
+	sync.RWMutex
 	Dir         string
 	NamePrefix  string
 	NameSuffix  string
 	Checker     IRotateChecker
 	file        *VersionFile
-	mu          sync.RWMutex
 	currVersion uint64
 	history     IHistory
+	observer    Observer
 }
 
-func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, checker IRotateChecker) (*Rotational, error) {
+func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, checker IRotateChecker, observer Observer) (*Rotational, error) {
+	if observer == nil {
+		observer = defaultObserver
+	}
 	if historyFactory == nil {
 		historyFactory = DefaltHistoryFactory
 	}
@@ -67,7 +72,11 @@ func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, c
 			NamePrefix: prefix,
 			NameSuffix: suffix,
 			Checker:    checker,
+			observer:   observer,
 			history:    historyFactory(),
+		}
+		if err := rot.scheduleNew(); err != nil {
+			return nil, err
 		}
 		return rot, nil
 	}
@@ -99,9 +108,13 @@ func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, c
 		NamePrefix: prefix,
 		NameSuffix: suffix,
 		Checker:    checker,
+		observer:   observer,
 		history:    historyFactory(),
 	}
 	if len(versions) == 0 {
+		if err := rot.scheduleNew(); err != nil {
+			return nil, err
+		}
 		return rot, nil
 	}
 	idx := len(versions) - 1
@@ -110,6 +123,25 @@ func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, c
 
 	rot.history.Extend(versions[:idx])
 	return rot, nil
+}
+
+func (r *Rotational) ForLoopVersions(handler VersionHandler) error {
+	if err := r.ForLoopHistory(handler); err != nil {
+		return err
+	}
+	for {
+		if err := handler(r.file); err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Rotational) ForLoopHistory(handler VersionHandler) error {
+	return r.history.ForLoopVersions(handler)
 }
 
 func (r *Rotational) GetHistory() IHistory {
@@ -135,7 +167,7 @@ func (r *Rotational) scheduleNew() error {
 }
 
 func (r *Rotational) scheduleRotate() error {
-	if err := r.file.Sync(); err != nil {
+	if err := r.syncLocked(); err != nil {
 		return err
 	}
 	file := r.file
@@ -157,47 +189,57 @@ func (r *Rotational) currName() string {
 }
 
 func (r *Rotational) String() string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.RLock()
+	defer r.RUnlock()
 	s := fmt.Sprintf("<Rotational>[\"%s\"](history=%s)", r.currName(), r.history.String())
 	return s
 }
 
-func (r *Rotational) Write(buf []byte) (n int, err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delta := int64(len(buf))
+func (r *Rotational) PrepareWrite(size int) error {
 	var rotNeeded bool
-	if rotNeeded, err = r.Checker.PrepareAppend(r.file, delta); err != nil {
-		return n, err
+	var err error
+	if rotNeeded, err = r.Checker.PrepareAppend(r.file, int64(size)); err != nil {
+		return err
 	}
 	if r.file == nil {
-		if err = r.scheduleNew(); err != nil {
-			return n, err
+		if err := r.scheduleNew(); err != nil {
+			return err
 		}
 	}
 	if rotNeeded {
-		if err = r.scheduleRotate(); err != nil {
-			return n, err
+		if err := r.scheduleRotate(); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (r *Rotational) Write(buf []byte) (n int, err error) {
 	n, err = r.file.Write(buf)
 	r.file.Size += int64(n)
 	return n, err
 }
 
-func (r *Rotational) Sync() error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+func (r *Rotational) syncLocked() error {
 	if r.file != nil {
-		return r.file.Sync()
+		err := r.file.Sync()
+		if r.observer != nil {
+			r.observer.OnSynced()
+		}
+		return err
 	}
 	return nil
 }
 
+func (r *Rotational) Sync() error {
+	r.RLock()
+	defer r.RUnlock()
+	return r.syncLocked()
+}
+
 func (r *Rotational) Stat() (os.FileInfo, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	r.RLock()
+	defer r.RUnlock()
 	if r.file != nil {
 		return r.file.Stat()
 	}
@@ -205,8 +247,8 @@ func (r *Rotational) Stat() (os.FileInfo, error) {
 }
 
 func (r *Rotational) Truncate(size int64) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.Lock()
+	defer r.Unlock()
 	if r.file != nil {
 		return r.file.Truncate(size)
 	}
@@ -214,8 +256,8 @@ func (r *Rotational) Truncate(size int64) error {
 }
 
 func (r *Rotational) Close() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.Lock()
+	defer r.Unlock()
 	if r.file != nil {
 		return r.file.Close()
 	}

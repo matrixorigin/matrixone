@@ -16,7 +16,7 @@ func TestRotation(t *testing.T) {
 		"store",
 		".rot",
 		nil,
-		&MaxSizeRotationChecker{MaxSize: 10})
+		&MaxSizeRotationChecker{MaxSize: 10}, nil)
 	assert.Nil(t, err)
 
 	history := rot.GetHistory()
@@ -25,32 +25,37 @@ func TestRotation(t *testing.T) {
 	var bs bytes.Buffer
 	bs.WriteString("Hello ")
 	bs.WriteString("World")
-	_, err = rot.Write(bs.Bytes())
+	err = rot.PrepareWrite(len(bs.Bytes()))
 	assert.NotNil(t, err)
-	assert.True(t, history.Empty())
 
 	bs.Reset()
 	bs.WriteString("Hi")
 	bs.WriteString("World")
+	err = rot.PrepareWrite(len(bs.Bytes()))
+	assert.Nil(t, err)
 	_, err = rot.Write(bs.Bytes())
 	assert.Nil(t, err)
 
 	bs.Reset()
 	bs.WriteString("Hello")
 	bs.WriteString("World")
+	err = rot.PrepareWrite(len(bs.Bytes()))
+	assert.Nil(t, err)
 	_, err = rot.Write(bs.Bytes())
 	assert.Nil(t, err)
 	assert.Equal(t, uint64(2), rot.currVersion)
 	err = rot.Close()
 	assert.Nil(t, err)
 
-	rot, err = OpenRotational("/tmp/testrotation", "store", ".rot", nil, &MaxSizeRotationChecker{MaxSize: 10})
+	rot, err = OpenRotational("/tmp/testrotation", "store", ".rot", nil, &MaxSizeRotationChecker{MaxSize: 10}, nil)
 	assert.Nil(t, err)
 	assert.NotNil(t, rot)
 	defer rot.Close()
 
 	bs.Reset()
 	bs.WriteString("hi,matrix")
+	err = rot.PrepareWrite(len(bs.Bytes()))
+	assert.Nil(t, err)
 	_, err = rot.Write(bs.Bytes())
 	assert.Nil(t, err)
 	t.Log(rot.String())

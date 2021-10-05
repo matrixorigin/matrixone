@@ -63,20 +63,24 @@ func (h *syncHandler) OnStopped() {
 
 type bufferedStore struct {
 	store
-	committed    uint64
-	uncommitted  uint64
+	synced       uint64
+	unsynced     uint64
 	checkpointed uint64
 	state        state
 	syncer       base.IHeartbeater
 }
 
-func NewBufferedStore(dir, name string, syncerCfg *SyncerCfg) (*bufferedStore, error) {
-	ss, err := New(dir, name)
+func NewBufferedStore(dir, name string, observer Observer, syncerCfg *SyncerCfg) (*bufferedStore, error) {
+	s := &bufferedStore{}
+	if observer == nil {
+		observer = s
+	} else {
+		observer = NewObservers(observer, s)
+	}
+	ss, err := New(dir, name, observer)
+	s.store = *ss
 	if err != nil {
 		return nil, err
-	}
-	s := &bufferedStore{
-		store: *ss,
 	}
 	var handle base.IHBHandle
 	if syncerCfg == nil {
@@ -124,11 +128,11 @@ func (s *bufferedStore) GetCheckpointId() uint64 {
 }
 
 func (s *bufferedStore) GetSyncedId() uint64 {
-	return atomic.LoadUint64(&s.committed)
+	return atomic.LoadUint64(&s.synced)
 }
 
 func (s *bufferedStore) SetSyncedId(id uint64) {
-	atomic.StoreUint64(&s.committed, id)
+	atomic.StoreUint64(&s.synced, id)
 }
 
 func (s *bufferedStore) AppendEntry(entry Entry) error {
@@ -140,24 +144,23 @@ func (s *bufferedStore) AppendEntryWithCommitId(entry Entry, commitId uint64) er
 	if err != nil {
 		return err
 	}
-	atomic.StoreUint64(&s.uncommitted, commitId)
+	atomic.StoreUint64(&s.unsynced, commitId)
 	if entry.GetMeta().IsFlush() {
 		return s.Sync()
 	}
 	return nil
 }
 
+func (s *bufferedStore) OnSynced() {
+	unsynced := atomic.LoadUint64(&s.unsynced)
+	s.SetSyncedId(unsynced)
+}
+
+func (s *bufferedStore) OnRotated() {}
+
 func (s *bufferedStore) Sync() error {
-	uncommitted := atomic.LoadUint64(&s.uncommitted)
-	// if uncommitted == s.GetSyncedId() {
-	// 	return nil
-	// }
-	// if err := s.writer.Flush(); err != nil {
-	// 	return err
-	// }
 	if err := s.file.Sync(); err != nil {
 		return err
 	}
-	s.SetSyncedId(uncommitted)
 	return nil
 }

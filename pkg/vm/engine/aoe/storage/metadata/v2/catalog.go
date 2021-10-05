@@ -70,7 +70,7 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalo
 		catalog: catalog,
 	}
 	syncerCfg.Factory = factory.builder
-	store, err := logstore.NewBufferedStore(cfg.Dir, "store", syncerCfg)
+	store, err := logstore.NewBufferedStore(cfg.Dir, "store", nil, syncerCfg)
 	if err != nil {
 		panic(err)
 	}
@@ -231,7 +231,7 @@ func (catalog *Catalog) CreateTable(schema *Schema, tranId uint64, autoCommit bo
 	if !autoCommit {
 		return entry, nil
 	}
-	catalog.commitNoLock(entry, ETCreateTable, nil)
+	catalog.commitLocked(entry, ETCreateTable, nil)
 	return entry, nil
 }
 
@@ -279,10 +279,10 @@ func (catalog *Catalog) GetTable(id uint64) *Table {
 func (catalog *Catalog) Commit(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
 	catalog.Lock()
 	defer catalog.Unlock()
-	catalog.commitNoLock(entry, eType, rwlocker)
+	catalog.commitLocked(entry, eType, rwlocker)
 }
 
-func (catalog *Catalog) commitNoLock(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
+func (catalog *Catalog) commitLocked(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
 	commitId := catalog.NextCommitId()
 	var lentry LogEntry
 	if rwlocker == nil {

@@ -601,7 +601,7 @@ func TestUpgrade(t *testing.T) {
 	assert.Equal(t, segCnt, int(upgradedSegments))
 
 	t.Log(t1.PString(PPL1))
-	catalog.Store.AppendEntryWithCommitId(logstore.FlushEntry, uint64(100000))
+	catalog.Store.AppendEntryWithCommitId(logstore.FlushEntry, catalog.NextCommitId())
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.Nil(t, err)
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)

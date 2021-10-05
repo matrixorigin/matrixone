@@ -52,7 +52,7 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 	return replayer.catalog, nil
 }
 
-func (replayer *catalogReplayer) doReplay(r io.Reader) error {
+func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile) error {
 	meta := logstore.NewEntryMeta()
 	_, err := meta.ReadFrom(r)
 	if err != nil {
@@ -75,7 +75,7 @@ func (replayer *catalogReplayer) doReplay(r io.Reader) error {
 }
 
 func (replayer *catalogReplayer) Replay(s Store) error {
-	err := s.ForLoopEntries(replayer.doReplay)
+	err := s.ForLoopVersions(replayer.doReplay)
 	logutil.Infof("Total %d entries replayed", replayer.replayed)
 	return err
 }

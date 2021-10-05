@@ -3,6 +3,7 @@ package logstore
 import (
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 )
 
@@ -30,11 +31,26 @@ type IHistory interface {
 	Version(uint64) *VersionFile
 	GetOldest() *VersionFile
 	Empty() bool
+	ForLoopVersions(VersionHandler) error
 }
 
 type baseHistroy struct {
 	mu       sync.RWMutex
 	versions []*VersionFile
+}
+
+func (h *baseHistroy) ForLoopVersions(handler VersionHandler) error {
+	for _, version := range h.versions {
+		for {
+			if err := handler(version); err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (h *baseHistroy) GetOldest() *VersionFile {

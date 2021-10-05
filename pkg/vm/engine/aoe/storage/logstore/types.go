@@ -15,59 +15,75 @@
 package logstore
 
 import (
-	"errors"
 	"io"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
-	"path/filepath"
 	"sync"
 )
 
-type StoreEntryHandler = func(io.Reader) error
+const (
+	DefaultVersionFileSize = 300 * int(common.M)
+)
+
+type VersionHandler = func(*VersionFile) error
+
+type StoreFileWriter interface {
+	io.Writer
+	PrepareWrite(int) error
+}
+
+type StoreFile interface {
+	StoreFileWriter
+	io.Closer
+	sync.Locker
+	RLock()
+	RUnlock()
+	Sync() error
+	Truncate(int64) error
+	Stat() (os.FileInfo, error)
+	GetHistory() IHistory
+	ForLoopVersions(VersionHandler) error
+}
 
 type Store interface {
 	io.Closer
 	AppendEntry(Entry) error
 	Sync() error
-	ForLoopEntries(StoreEntryHandler) error
+	ForLoopVersions(VersionHandler) error
 	Truncate(int64) error
+	GetHistory() IHistory
 }
 
 type store struct {
-	mu     sync.RWMutex
-	dir    string
-	name   string
-	file   *os.File
-	pos    int64
-	writer io.Writer
-	// reader *bufio.Reader
-	reader io.Reader
+	dir  string
+	name string
+	file StoreFile
+	pos  int64
+	// writer io.Writer
 }
 
-func New(dir, name string) (*store, error) {
+func New(dir, name string, observer Observer) (*store, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		if err = os.MkdirAll(dir, os.ModePerm); err != nil {
 			return nil, err
 		}
 	}
-	f, err := os.OpenFile(filepath.Join(dir, name), os.O_RDWR|os.O_CREATE, os.ModePerm)
+	w, err := OpenRotational(dir, name, DefaultSuffix, nil, &MaxSizeRotationChecker{MaxSize: DefaultVersionFileSize}, observer)
 	if err != nil {
 		return nil, err
 	}
 	s := &store{
 		dir:  dir,
 		name: name,
-		file: f,
+		file: w,
 	}
 	stats, err := s.file.Stat()
 	if err != nil {
-		f.Close()
+		w.Close()
 		return nil, err
 	}
 	s.pos = stats.Size()
-	// s.writer = bufio.NewWriter(s.file)
-	s.writer = s.file
-	// s.reader = bufio.NewReader(s.file)
-	s.reader = s.file
+	// s.writer = s.file
 	return s, err
 }
 
@@ -85,8 +101,12 @@ func (s *store) Truncate(size int64) error {
 	return s.file.Truncate(size)
 }
 
+func (s *store) GetHistory() IHistory {
+	return s.file.GetHistory()
+}
+
 func (s *store) AppendEntry(entry Entry) error {
-	if _, err := entry.WriteTo(s.writer, &s.mu); err != nil {
+	if _, err := entry.WriteTo(s.file, s.file); err != nil {
 		return err
 	}
 	// logutil.Infof("WriteEntry %d, Size=%d", entry.Type(), entry.Size())
@@ -104,13 +124,6 @@ func (s *store) Sync() error {
 	return err
 }
 
-func (s *store) ForLoopEntries(handler StoreEntryHandler) error {
-	for {
-		if err := handler(s.reader); err != nil {
-			if errors.Is(err, io.EOF) {
-				return nil
-			}
-			return err
-		}
-	}
+func (s *store) ForLoopVersions(handler VersionHandler) error {
+	return s.file.ForLoopVersions(handler)
 }

@@ -73,7 +73,7 @@ func TestStore(t *testing.T) {
 	dir := "/tmp/teststore"
 	os.RemoveAll(dir)
 	name := "sstore"
-	store, err := New(dir, name)
+	store, err := New(dir, name, nil)
 	assert.Nil(t, err)
 
 	buf := make([]byte, 8)
@@ -95,7 +95,7 @@ func TestStore(t *testing.T) {
 	}
 	store.Close()
 
-	store, err = New(dir, name)
+	store, err = New(dir, name, nil)
 	assert.Nil(t, err)
 	defer store.Close()
 
