@@ -1,0 +1,123 @@
+package logstore
+
+import (
+	"errors"
+	"fmt"
+	"sync"
+)
+
+var (
+	VersionNotFoundErr = errors.New("aoe: version not found")
+)
+
+type HistoryFactory func() IHistory
+
+var (
+	DefaltHistoryFactory = func() IHistory {
+		return &baseHistroy{
+			versions: make([]*VersionFile, 0),
+		}
+	}
+)
+
+type IHistory interface {
+	String() string
+	Append(*VersionFile)
+	Extend([]*VersionFile)
+	Versions() []uint64
+	VersionCnt() int
+	Truncate(uint64) error
+	Version(uint64) *VersionFile
+	GetOldest() *VersionFile
+	Empty() bool
+}
+
+type baseHistroy struct {
+	mu       sync.RWMutex
+	versions []*VersionFile
+}
+
+func (h *baseHistroy) GetOldest() *VersionFile {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if len(h.versions) == 0 {
+		return nil
+	}
+	return h.versions[0]
+}
+
+func (h *baseHistroy) VersionCnt() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.versions)
+}
+
+func (h *baseHistroy) Empty() bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return len(h.versions) == 0
+}
+
+func (h *baseHistroy) Truncate(id uint64) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	pos, version := h.findVersion(id)
+	if version == nil {
+		return VersionNotFoundErr
+	}
+	h.versions = append(h.versions[:pos], h.versions[pos+1:]...)
+	return nil
+}
+
+func (h *baseHistroy) findVersion(id uint64) (int, *VersionFile) {
+	for pos, version := range h.versions {
+		if version.Version == id {
+			return pos, version
+		}
+	}
+	return 0, nil
+}
+
+func (h *baseHistroy) Version(id uint64) *VersionFile {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	_, v := h.findVersion(id)
+	return v
+}
+
+func (h *baseHistroy) Versions() []uint64 {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	ids := make([]uint64, len(h.versions))
+	for i, v := range h.versions {
+		ids[i] = v.Version
+	}
+	return ids
+}
+
+func (h *baseHistroy) Append(vf *VersionFile) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.versions = append(h.versions, vf)
+}
+
+func (h *baseHistroy) Extend(vf []*VersionFile) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.versions = append(h.versions, vf...)
+}
+
+func (h *baseHistroy) String() string {
+	s := fmt.Sprintf("{")
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, v := range h.versions {
+		s = fmt.Sprintf("%s\n%s", s, v.Name())
+	}
+	if len(h.versions) > 0 {
+		s = fmt.Sprintf("%s\n}", s)
+	} else {
+		s = fmt.Sprintf("%s}", s)
+	}
+	return s
+}
