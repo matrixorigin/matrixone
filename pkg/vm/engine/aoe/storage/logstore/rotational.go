@@ -51,6 +51,9 @@ type Rotational struct {
 }
 
 func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, checker IRotateChecker, observer Observer) (*Rotational, error) {
+	if checker == nil {
+		checker = &noRotationChecker{}
+	}
 	if observer == nil {
 		observer = defaultObserver
 	}

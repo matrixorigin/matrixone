@@ -25,3 +25,9 @@ func (c *MaxSizeRotationChecker) PrepareAppend(f *VersionFile, delta int64) (boo
 	}
 	return false, nil
 }
+
+type noRotationChecker struct{}
+
+func (c *noRotationChecker) PrepareAppend(_ *VersionFile, delta int64) (bool, error) {
+	return false, nil
+}

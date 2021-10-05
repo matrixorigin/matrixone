@@ -331,6 +331,7 @@ func TestReplay(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
+	cfg.RotationFileMaxSize = 100 * int(common.K)
 	syncerCfg := &SyncerCfg{
 		Interval: syncerInterval,
 	}
@@ -497,6 +498,7 @@ func TestUpgrade(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
+	cfg.RotationFileMaxSize = int(common.K)
 	syncerCfg := &SyncerCfg{
 		Interval: time.Duration(100) * time.Microsecond,
 	}

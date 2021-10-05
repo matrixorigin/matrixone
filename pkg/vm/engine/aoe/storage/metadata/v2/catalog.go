@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"sync"
 
@@ -33,9 +34,10 @@ var (
 )
 
 type CatalogCfg struct {
-	Dir              string `json:"-"`
-	BlockMaxRows     uint64 `toml:"block-max-rows"`
-	SegmentMaxBlocks uint64 `toml:"segment-max-blocks"`
+	Dir                 string `json:"-"`
+	BlockMaxRows        uint64 `toml:"block-max-rows"`
+	SegmentMaxBlocks    uint64 `toml:"segment-max-blocks"`
+	RotationFileMaxSize int    `toml:"rotation-file-max-size"`
 }
 
 type Catalog struct {
@@ -52,6 +54,10 @@ type Catalog struct {
 }
 
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalog {
+	if cfg.RotationFileMaxSize <= 0 {
+		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
+		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
+	}
 	catalog := &Catalog{
 		RWMutex:   mu,
 		Cfg:       cfg,
@@ -70,7 +76,11 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalo
 		catalog: catalog,
 	}
 	syncerCfg.Factory = factory.builder
-	store, err := logstore.NewBufferedStore(cfg.Dir, "store", nil, syncerCfg)
+	rotationCfg := &logstore.RotationCfg{}
+	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
+		MaxSize: cfg.RotationFileMaxSize,
+	}
+	store, err := logstore.NewBufferedStore(cfg.Dir, "store", rotationCfg, syncerCfg)
 	if err != nil {
 		panic(err)
 	}

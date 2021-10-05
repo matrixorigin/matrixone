@@ -70,14 +70,14 @@ type bufferedStore struct {
 	syncer       base.IHeartbeater
 }
 
-func NewBufferedStore(dir, name string, observer Observer, syncerCfg *SyncerCfg) (*bufferedStore, error) {
+func NewBufferedStore(dir, name string, rotationCfg *RotationCfg, syncerCfg *SyncerCfg) (*bufferedStore, error) {
 	s := &bufferedStore{}
-	if observer == nil {
-		observer = s
+	if rotationCfg.Observer == nil {
+		rotationCfg.Observer = s
 	} else {
-		observer = NewObservers(observer, s)
+		rotationCfg.Observer = NewObservers(rotationCfg.Observer, s)
 	}
-	ss, err := New(dir, name, observer)
+	ss, err := New(dir, name, rotationCfg)
 	s.store = *ss
 	if err != nil {
 		return nil, err

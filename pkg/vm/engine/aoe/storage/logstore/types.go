@@ -25,6 +25,12 @@ const (
 	DefaultVersionFileSize = 300 * int(common.M)
 )
 
+type RotationCfg struct {
+	RotateChecker  IRotateChecker
+	Observer       Observer
+	HistoryFactory HistoryFactory
+}
+
 type VersionHandler = func(*VersionFile) error
 
 type StoreFileWriter interface {
@@ -59,16 +65,15 @@ type store struct {
 	name string
 	file StoreFile
 	pos  int64
-	// writer io.Writer
 }
 
-func New(dir, name string, observer Observer) (*store, error) {
+func New(dir, name string, cfg *RotationCfg) (*store, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		if err = os.MkdirAll(dir, os.ModePerm); err != nil {
 			return nil, err
 		}
 	}
-	w, err := OpenRotational(dir, name, DefaultSuffix, nil, &MaxSizeRotationChecker{MaxSize: DefaultVersionFileSize}, observer)
+	w, err := OpenRotational(dir, name, DefaultSuffix, cfg.HistoryFactory, cfg.RotateChecker, cfg.Observer)
 	if err != nil {
 		return nil, err
 	}
