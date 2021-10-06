@@ -494,6 +494,11 @@ func TestAppliedIndex(t *testing.T) {
 func TestUpgrade(t *testing.T) {
 	dir := "/tmp/testupgradeblock"
 	os.RemoveAll(dir)
+	delta := DefaultCheckpointDelta
+	DefaultCheckpointDelta = uint64(10)
+	defer func() {
+		DefaultCheckpointDelta = delta
+	}()
 
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
@@ -601,10 +606,6 @@ func TestUpgrade(t *testing.T) {
 	assert.Equal(t, segCnt, int(upgradedSegments))
 
 	catalog.Store.AppendEntryWithCommitId(logstore.FlushEntry, catalog.NextCommitId())
-	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
-	assert.Nil(t, err)
-	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
-	assert.NotNil(t, err)
 
 	catalog.Close()
 	sequence := catalog.Sequence
@@ -627,6 +628,16 @@ func TestUpgrade(t *testing.T) {
 	// t.Logf("r - %d", catalog.Sequence.nextBlockId)
 
 	catalog.StartSyncer()
+
+	tmp := catalog.SimpleGetTable(t1.Id)
+	assert.NotNil(t, tmp)
+	tmp = catalog.SimpleGetTableByName(t1.Schema.Name)
+	assert.NotNil(t, tmp)
+
+	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
+	assert.Nil(t, err)
+	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
+	assert.NotNil(t, err)
 	err = catalog.HardDeleteTable(t1.Id)
 	assert.Nil(t, err)
 
@@ -644,7 +655,6 @@ func TestUpgrade(t *testing.T) {
 	replayer = newCatalogReplayer()
 	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	assert.Nil(t, err)
-	// t.Log(catalog.PString(PPL1))
 	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
 	assert.Equal(t, sequence.nextTableId, catalog.Sequence.nextTableId)
 	assert.Equal(t, sequence.nextSegmentId, catalog.Sequence.nextSegmentId)

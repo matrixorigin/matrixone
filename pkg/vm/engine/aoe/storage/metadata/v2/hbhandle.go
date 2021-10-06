@@ -19,14 +19,19 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
+var (
+	DefaultCheckpointDelta uint64 = 10000
+)
+
 type hbHandle struct {
 	catalog *Catalog
+	delta   uint64
 }
 
 func (h *hbHandle) OnExec() {
 	ckId := h.catalog.GetCheckpointId()
 	cId := h.catalog.GetSafeCommitId()
-	if cId > ckId && cId-ckId >= 1000 {
+	if cId > ckId && cId-ckId >= h.delta {
 		if err := h.catalog.Checkpoint(); err != nil {
 			logutil.Warn(err.Error())
 		} else {
@@ -51,6 +56,7 @@ type hbHandleFactory struct {
 
 func (factory *hbHandleFactory) builder(_ logstore.BufferedStore) base.IHBHandle {
 	return &hbHandle{
+		delta:   DefaultCheckpointDelta,
 		catalog: factory.catalog,
 	}
 }
