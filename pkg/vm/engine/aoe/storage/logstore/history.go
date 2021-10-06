@@ -29,7 +29,7 @@ type HistoryFactory func() IHistory
 
 var (
 	DefaltHistoryFactory = func() IHistory {
-		return &baseHistroy{
+		return &baseHistory{
 			versions: make([]*VersionFile, 0),
 		}
 	}
@@ -48,12 +48,12 @@ type IHistory interface {
 	ReplayVersions(VersionReplayHandler, ReplayObserver) error
 }
 
-type baseHistroy struct {
+type baseHistory struct {
 	mu       sync.RWMutex
 	versions []*VersionFile
 }
 
-func (h *baseHistroy) ReplayVersions(handler VersionReplayHandler, observer ReplayObserver) error {
+func (h *baseHistory) ReplayVersions(handler VersionReplayHandler, observer ReplayObserver) error {
 	for _, version := range h.versions {
 		observer.OnNewVersion(version.Version)
 		for {
@@ -68,7 +68,7 @@ func (h *baseHistroy) ReplayVersions(handler VersionReplayHandler, observer Repl
 	return nil
 }
 
-func (h *baseHistroy) GetOldest() *VersionFile {
+func (h *baseHistory) GetOldest() *VersionFile {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	if len(h.versions) == 0 {
@@ -77,19 +77,19 @@ func (h *baseHistroy) GetOldest() *VersionFile {
 	return h.versions[0]
 }
 
-func (h *baseHistroy) VersionCnt() int {
+func (h *baseHistory) VersionCnt() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.versions)
 }
 
-func (h *baseHistroy) Empty() bool {
+func (h *baseHistory) Empty() bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.versions) == 0
 }
 
-func (h *baseHistroy) Truncate(id uint64) error {
+func (h *baseHistory) Truncate(id uint64) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	pos, version := h.findVersion(id)
@@ -100,7 +100,7 @@ func (h *baseHistroy) Truncate(id uint64) error {
 	return version.Destroy()
 }
 
-func (h *baseHistroy) findVersion(id uint64) (int, *VersionFile) {
+func (h *baseHistory) findVersion(id uint64) (int, *VersionFile) {
 	for pos, version := range h.versions {
 		if version.Version == id {
 			return pos, version
@@ -109,14 +109,14 @@ func (h *baseHistroy) findVersion(id uint64) (int, *VersionFile) {
 	return 0, nil
 }
 
-func (h *baseHistroy) Version(id uint64) *VersionFile {
+func (h *baseHistory) Version(id uint64) *VersionFile {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	_, v := h.findVersion(id)
 	return v
 }
 
-func (h *baseHistroy) Versions() []uint64 {
+func (h *baseHistory) Versions() []uint64 {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	ids := make([]uint64, len(h.versions))
@@ -126,19 +126,19 @@ func (h *baseHistroy) Versions() []uint64 {
 	return ids
 }
 
-func (h *baseHistroy) Append(vf *VersionFile) {
+func (h *baseHistory) Append(vf *VersionFile) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.versions = append(h.versions, vf)
 }
 
-func (h *baseHistroy) Extend(vf []*VersionFile) {
+func (h *baseHistory) Extend(vf []*VersionFile) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.versions = append(h.versions, vf...)
 }
 
-func (h *baseHistroy) String() string {
+func (h *baseHistory) String() string {
 	s := fmt.Sprintf("{")
 	h.mu.RLock()
 	defer h.mu.RUnlock()
