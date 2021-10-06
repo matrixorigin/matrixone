@@ -51,6 +51,7 @@ type Rotational struct {
 	history     IHistory
 	observer    Observer
 	archived    *archivedHub
+	currInfo    *versionInfo
 }
 
 func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, checker IRotateChecker, observer Observer) (*Rotational, error) {
@@ -134,17 +135,27 @@ func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, c
 }
 
 func (r *Rotational) OnReplayCommit(id uint64) {
-	logutil.Infof("Replay Commit %d", id)
+	logutil.Infof("Replay Commit %d, version %d", id, r.currInfo.id)
+	r.currInfo.AppendCommit(id)
 }
 
 func (r *Rotational) OnReplayCheckpoint(rng common.Range) {
-	logutil.Infof("Replay Checkpoint %s", rng.String())
+	logutil.Infof("Replay Checkpoint %s, version %d", rng.String(), r.currInfo.id)
+	r.currInfo.UnionCheckpointRange(rng)
+}
+
+func (r *Rotational) OnNewVersion(id uint64) {
+	if r.currInfo != nil {
+		r.currInfo.Archive()
+	}
+	r.currInfo = newVersionInfo(r.archived, id)
 }
 
 func (r *Rotational) ReplayVersions(handler VersionReplayHandler) error {
 	if err := r.ReplayHistoryVersion(handler); err != nil {
 		return err
 	}
+	r.OnNewVersion(r.file.Version)
 	for {
 		if err := handler(r.file, r); err != nil {
 			if errors.Is(err, io.EOF) {

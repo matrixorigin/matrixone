@@ -41,6 +41,7 @@ type baseHistroy struct {
 
 func (h *baseHistroy) ReplayVersions(handler VersionReplayHandler, observer ReplayObserver) error {
 	for _, version := range h.versions {
+		observer.OnNewVersion(version.Version)
 		for {
 			if err := handler(version, observer); err != nil {
 				if errors.Is(err, io.EOF) {

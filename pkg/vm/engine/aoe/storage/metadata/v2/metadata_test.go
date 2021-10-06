@@ -206,8 +206,8 @@ func TestDropTable(t *testing.T) {
 	// catalog.StartSyncer()
 	replayer := newCatalogReplayer()
 	replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
-	err = replayer.Replay(catalog.Store)
-	t.Log(err)
+	// err = replayer.Replay(catalog.Store)
+	// t.Log(err)
 	catalog.Close()
 }
 
@@ -498,7 +498,7 @@ func TestUpgrade(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
-	cfg.RotationFileMaxSize = int(common.K)
+	cfg.RotationFileMaxSize = 10 * int(common.K)
 	syncerCfg := &SyncerCfg{
 		Interval: time.Duration(100) * time.Microsecond,
 	}
@@ -517,7 +517,7 @@ func TestUpgrade(t *testing.T) {
 	traceSegments := make(map[uint64]int)
 	upgradedBlocks := uint64(0)
 	upgradedSegments := uint64(0)
-	segCnt, blockCnt := 4, int(cfg.SegmentMaxBlocks)
+	segCnt, blockCnt := 40, int(cfg.SegmentMaxBlocks)
 
 	updateTrace := func(tableId, segmentId uint64) func() {
 		return func() {
@@ -602,17 +602,17 @@ func TestUpgrade(t *testing.T) {
 	assert.Equal(t, segCnt*blockCnt, int(upgradedBlocks))
 	assert.Equal(t, segCnt, int(upgradedSegments))
 
-	t.Log(t1.PString(PPL1))
+	// t.Log(t1.PString(PPL1))
 	catalog.Store.AppendEntryWithCommitId(logstore.FlushEntry, catalog.NextCommitId())
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.Nil(t, err)
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.NotNil(t, err)
-	t.Log(t1.PString(PPL1))
+	// t.Log(t1.PString(PPL1))
 
 	err = catalog.HardDeleteTable(t1.Id)
 	assert.Nil(t, err)
-	t.Log(t1.PString(PPL1))
+	// t.Log(t1.PString(PPL1))
 
 	viewId := uint64(40)
 	view := catalog.CommittedView(viewId)
@@ -630,7 +630,7 @@ func TestUpgrade(t *testing.T) {
 	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	assert.Nil(t, err)
 	t.Log(time.Since(now))
-	t.Log(replayer.GetOffset())
-	t.Log(replayer.String())
-	t.Log(catalog.PString(PPL1))
+	// t.Log(replayer.GetOffset())
+	// t.Log(replayer.String())
+	// t.Log(catalog.PString(PPL1))
 }

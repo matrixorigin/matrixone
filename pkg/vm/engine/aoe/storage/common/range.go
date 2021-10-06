@@ -33,6 +33,16 @@ func (r *Range) CanCover(o *Range) bool {
 	return r.Left <= o.Left && r.Right >= o.Right
 }
 
+func (r *Range) CommitLeft(left uint64) bool {
+	if left > r.Right {
+		return false
+	}
+	if left < r.Left {
+		r.Left = left
+	}
+	return true
+}
+
 func (r *Range) Union(o *Range) error {
 	if o.Left > r.Right+1 || r.Left > o.Right+1 {
 		return RangeNotContinousErr

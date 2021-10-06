@@ -8,6 +8,7 @@ type Observer interface {
 }
 
 type ReplayObserver interface {
+	OnNewVersion(uint64)
 	OnReplayCommit(uint64)
 	OnReplayCheckpoint(common.Range)
 }

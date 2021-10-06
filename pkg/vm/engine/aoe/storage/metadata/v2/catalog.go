@@ -545,6 +545,7 @@ func (catalog *Catalog) onReplayEntry(entry LogEntry, observer logstore.ReplayOb
 	case logstore.ETCheckpoint:
 		c := &catalogLogEntry{}
 		c.Unmarshal(entry.GetPayload())
+		observer.OnReplayCheckpoint(c.Range)
 	case logstore.ETFlush:
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.GetMeta().GetType()))
