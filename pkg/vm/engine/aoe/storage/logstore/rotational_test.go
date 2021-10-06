@@ -79,9 +79,9 @@ func TestVersionsMeta(t *testing.T) {
 	hub := newArchivedHub(nil)
 	v := &versionInfo{
 		id: common.GetGlobalSeqNum(),
-		commit: Range{
-			left:  0,
-			right: 100,
+		commit: common.Range{
+			Left:  0,
+			Right: 100,
 		},
 		hub: hub,
 	}
@@ -93,13 +93,13 @@ func TestVersionsMeta(t *testing.T) {
 
 	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
-		commit: Range{
-			left:  101,
-			right: 200,
+		commit: common.Range{
+			Left:  101,
+			Right: 200,
 		},
-		checkpoint: &Range{
-			left:  0,
-			right: 150,
+		checkpoint: &common.Range{
+			Left:  0,
+			Right: 150,
 		},
 		hub: hub,
 	}
@@ -117,13 +117,13 @@ func TestVersionsMeta(t *testing.T) {
 
 	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
-		commit: Range{
-			left:  201,
-			right: 300,
+		commit: common.Range{
+			Left:  201,
+			Right: 300,
 		},
-		checkpoint: &Range{
-			left:  151,
-			right: 180,
+		checkpoint: &common.Range{
+			Left:  151,
+			Right: 180,
 		},
 		hub: hub,
 	}
@@ -134,13 +134,13 @@ func TestVersionsMeta(t *testing.T) {
 
 	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
-		commit: Range{
-			left:  201,
-			right: 299,
+		commit: common.Range{
+			Left:  201,
+			Right: 299,
 		},
-		checkpoint: &Range{
-			left:  181,
-			right: 190,
+		checkpoint: &common.Range{
+			Left:  181,
+			Right: 190,
 		},
 		hub: hub,
 	}
@@ -148,7 +148,7 @@ func TestVersionsMeta(t *testing.T) {
 	assert.NotNil(t, err)
 	err = v.AppendCommit(300)
 	assert.Nil(t, err)
-	err = v.UnionCheckpointRange(Range{left: 181, right: 199})
+	err = v.UnionCheckpointRange(common.Range{Left: 181, Right: 199})
 	assert.Nil(t, err)
 	v.Archive()
 	err = hub.TryTruncate(cb)
@@ -157,13 +157,13 @@ func TestVersionsMeta(t *testing.T) {
 
 	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
-		commit: Range{
-			left:  301,
-			right: 400,
+		commit: common.Range{
+			Left:  301,
+			Right: 400,
 		},
-		checkpoint: &Range{
-			left:  100,
-			right: 400,
+		checkpoint: &common.Range{
+			Left:  100,
+			Right: 400,
 		},
 		hub: hub,
 	}
@@ -175,13 +175,13 @@ func TestVersionsMeta(t *testing.T) {
 
 	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
-		commit: Range{
-			left:  401,
-			right: 500,
+		commit: common.Range{
+			Left:  401,
+			Right: 500,
 		},
-		checkpoint: &Range{
-			left:  0,
-			right: 400,
+		checkpoint: &common.Range{
+			Left:  0,
+			Right: 400,
 		},
 		hub: hub,
 	}

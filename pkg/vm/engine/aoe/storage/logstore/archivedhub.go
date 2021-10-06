@@ -1,61 +1,16 @@
 package logstore
 
 import (
-	"errors"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
-)
-
-var (
-	RangeNotContinousErr = errors.New("aoe: range not continous")
-	RangeInvalidErr      = errors.New("aoe: invalid range")
 )
 
 type PostVersionDeleteCB = func(uint64)
 
-type Range struct {
-	left  uint64
-	right uint64
-}
-
-func (r *Range) Valid() bool {
-	return r.left <= r.right
-}
-
-func (r *Range) CanCover(o *Range) bool {
-	if r == nil {
-		return false
-	}
-	if o == nil {
-		return true
-	}
-	return r.left <= o.left && r.right >= o.right
-}
-
-func (r *Range) Union(o *Range) error {
-	if o.left > r.right+1 || r.left > o.right+1 {
-		return RangeNotContinousErr
-	}
-	if r.left > o.left {
-		r.left = o.left
-	}
-	if r.right < o.right {
-		r.right = o.right
-	}
-	return nil
-}
-
-func (r *Range) Append(right uint64) error {
-	if right < r.left || right > r.right+1 {
-		return RangeInvalidErr
-	}
-	r.right = right
-	return nil
-}
-
 type versionInfo struct {
 	id         uint64
-	commit     Range
-	checkpoint *Range
+	commit     common.Range
+	checkpoint *common.Range
 	offset     int
 	hub        *archivedHub
 }
@@ -75,7 +30,7 @@ func (info *versionInfo) AppendCheckpoint(id uint64) error {
 	return info.checkpoint.Append(id)
 }
 
-func (info *versionInfo) UnionCheckpointRange(r Range) error {
+func (info *versionInfo) UnionCheckpointRange(r common.Range) error {
 	if info.checkpoint == nil {
 		info.checkpoint = &r
 		return nil
@@ -115,7 +70,7 @@ func (vs *archivedHub) TryTruncate(cb PostVersionDeleteCB) error {
 		versions[i] = version
 	}
 	vs.RUnlock()
-	var globCkpRange *Range
+	var globCkpRange *common.Range
 	toDelete := make([]*versionInfo, 0, 4)
 	for i := len(versions) - 1; i >= 0; i-- {
 		version := versions[i]
@@ -127,9 +82,9 @@ func (vs *archivedHub) TryTruncate(cb PostVersionDeleteCB) error {
 
 		if version.checkpoint != nil {
 			if globCkpRange == nil {
-				globCkpRange = &Range{
-					left:  version.checkpoint.left,
-					right: version.checkpoint.right,
+				globCkpRange = &common.Range{
+					Left:  version.checkpoint.Left,
+					Right: version.checkpoint.Right,
 				}
 			} else {
 				if err := globCkpRange.Union(version.checkpoint); err != nil {

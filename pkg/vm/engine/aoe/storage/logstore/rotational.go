@@ -79,6 +79,7 @@ func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, c
 			observer:   observer,
 			history:    historyFactory(),
 		}
+		rot.archived = newArchivedHub(rot.history)
 		if err := rot.scheduleNew(); err != nil {
 			return nil, err
 		}
@@ -115,6 +116,7 @@ func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, c
 		observer:   observer,
 		history:    historyFactory(),
 	}
+	rot.archived = newArchivedHub(rot.history)
 	if len(versions) == 0 {
 		if err := rot.scheduleNew(); err != nil {
 			return nil, err
