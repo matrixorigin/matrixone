@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"sync"
 
@@ -40,10 +41,52 @@ type CatalogCfg struct {
 	RotationFileMaxSize int    `toml:"rotation-file-max-size"`
 }
 
+type catalogLogEntry struct {
+	Range   common.Range
+	Catalog *Catalog
+}
+
+func newCatalogLogEntry(id uint64) *catalogLogEntry {
+	e := &catalogLogEntry{
+		Catalog: &Catalog{
+			RWMutex:  &sync.RWMutex{},
+			TableSet: make(map[uint64]*Table),
+		},
+	}
+	e.Range.Right = id
+	return e
+}
+
+func (e *catalogLogEntry) CheckpointId() uint64 {
+	return e.Range.Right
+}
+
+func (e *catalogLogEntry) Marshal() ([]byte, error) {
+	buf, err := json.Marshal(e)
+	return buf, err
+}
+
+func (e *catalogLogEntry) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, e)
+}
+
+func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
+	switch eType {
+	case logstore.ETCheckpoint:
+		break
+	default:
+		panic("not supported")
+	}
+	buf, _ := e.Marshal()
+	logEntry := logstore.NewBaseEntry()
+	logEntry.Meta.SetType(eType)
+	logEntry.Unmarshal(buf)
+	return logEntry
+}
+
 type Catalog struct {
 	*sync.RWMutex `json:"-"`
 	Sequence      `json:"-"`
-	ckp           uint64                 `json:"-"`
 	Store         logstore.BufferedStore `json:"-"`
 	Cfg           *CatalogCfg            `json:"-"`
 	NameNodes     map[string]*tableNode  `json:"-"`
@@ -88,14 +131,6 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalo
 	return catalog
 }
 
-func newCompactCatalog(id uint64) *Catalog {
-	catalog := &Catalog{
-		TableSet: make(map[uint64]*Table),
-		ckp:      id,
-	}
-	return catalog
-}
-
 func (catalog *Catalog) StartSyncer() {
 	catalog.Store.Start()
 }
@@ -129,13 +164,13 @@ func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
 	return tbls
 }
 
-func (catalog *Catalog) LatestView() *Catalog {
+func (catalog *Catalog) LatestView() *catalogLogEntry {
 	commitId := catalog.Store.GetSyncedId()
 	return catalog.CommittedView(commitId)
 }
 
-func (catalog *Catalog) CommittedView(id uint64) *Catalog {
-	ss := newCompactCatalog(id)
+func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
+	ss := newCatalogLogEntry(id)
 	entries := make(map[uint64]*Table)
 	catalog.RLock()
 	for id, entry := range catalog.TableSet {
@@ -145,7 +180,7 @@ func (catalog *Catalog) CommittedView(id uint64) *Catalog {
 	for eid, entry := range entries {
 		committed := entry.CommittedView(id)
 		if committed != nil {
-			ss.TableSet[eid] = committed
+			ss.Catalog.TableSet[eid] = committed
 		}
 	}
 	return ss
@@ -353,7 +388,7 @@ func (catalog *Catalog) SimpleGetBlock(tableId, segmentId, blockId uint64) (*Blo
 
 func (catalog *Catalog) Checkpoint() error {
 	view := catalog.LatestView()
-	err := catalog.Store.Checkpoint(view.ToLogEntry(logstore.ETCheckpoint), view.ckp)
+	err := catalog.Store.Checkpoint(view.ToLogEntry(logstore.ETCheckpoint), view.CheckpointId())
 	return err
 }
 
@@ -508,9 +543,8 @@ func (catalog *Catalog) onReplayEntry(entry LogEntry, observer logstore.ReplayOb
 		observer.OnReplayCommit(seg.CommitInfo.CommitId)
 		catalog.onReplayUpgradeSegment(seg)
 	case logstore.ETCheckpoint:
-		c := &Catalog{}
+		c := &catalogLogEntry{}
 		c.Unmarshal(entry.GetPayload())
-		// logutil.Infof("%v", c)
 	case logstore.ETFlush:
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.GetMeta().GetType()))

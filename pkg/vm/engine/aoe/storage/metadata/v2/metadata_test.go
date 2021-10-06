@@ -616,11 +616,11 @@ func TestUpgrade(t *testing.T) {
 
 	viewId := uint64(40)
 	view := catalog.CommittedView(viewId)
-	for _, tbl := range view.TableSet {
+	for _, tbl := range view.Catalog.TableSet {
 		t.Log(len(tbl.SegmentSet))
 	}
 	view = catalog.LatestView()
-	assert.Equal(t, 0, len(view.TableSet))
+	assert.Equal(t, 0, len(view.Catalog.TableSet))
 
 	catalog.Close()
 
