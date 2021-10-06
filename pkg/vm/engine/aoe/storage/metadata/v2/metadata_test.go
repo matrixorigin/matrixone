@@ -498,7 +498,7 @@ func TestUpgrade(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
-	cfg.RotationFileMaxSize = 10 * int(common.K)
+	cfg.RotationFileMaxSize = 30 * int(common.K)
 	syncerCfg := &SyncerCfg{
 		Interval: time.Duration(100) * time.Microsecond,
 	}
@@ -633,4 +633,10 @@ func TestUpgrade(t *testing.T) {
 	// t.Log(replayer.GetOffset())
 	// t.Log(replayer.String())
 	// t.Log(catalog.PString(PPL1))
+	catalog.StartSyncer()
+	catalog.Close()
+
+	replayer = newCatalogReplayer()
+	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
+	assert.Nil(t, err)
 }

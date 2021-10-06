@@ -151,6 +151,7 @@ func (r *Rotational) OnNewVersion(id uint64) {
 	if r.currInfo != nil {
 		r.currInfo.Archive()
 	}
+	logutil.Infof("New version %d", id)
 	r.currInfo = newVersionInfo(r.archived, id)
 }
 
@@ -185,7 +186,7 @@ func (r *Rotational) GetHistory() IHistory {
 func (r *Rotational) nextFileName() (string, uint64) {
 	v := atomic.AddUint64(&r.currVersion, uint64(1))
 	base := MakeVersionFile(r.NamePrefix, r.NameSuffix, v-1)
-	return path.Join(r.Dir, base), v
+	return path.Join(r.Dir, base), v - 1
 }
 
 func (r *Rotational) scheduleNew() error {
@@ -197,6 +198,7 @@ func (r *Rotational) scheduleNew() error {
 	vf := &VersionFile{Version: v, File: f}
 
 	r.file = vf
+	r.OnNewVersion(r.file.Version)
 	return nil
 }
 
