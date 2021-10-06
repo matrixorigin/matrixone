@@ -16,6 +16,9 @@ type Range struct {
 }
 
 func (r *Range) String() string {
+	if r == nil {
+		return "[]"
+	}
 	return fmt.Sprintf("[%d, %d]", r.Left, r.Right)
 }
 
@@ -57,7 +60,13 @@ func (r *Range) Union(o *Range) error {
 }
 
 func (r *Range) Append(right uint64) error {
-	if right < r.Left || right > r.Right+1 {
+	if r.Left == r.Right && r.Right == 0 {
+		r.Right = right
+		r.Left = right
+		return nil
+	}
+	// if right < r.Left || right > r.Right+1 {
+	if right <= r.Right {
 		return RangeInvalidErr
 	}
 	r.Right = right

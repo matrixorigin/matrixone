@@ -136,7 +136,10 @@ func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, c
 
 func (r *Rotational) OnReplayCommit(id uint64) {
 	logutil.Infof("Replay Commit %d, version %d", id, r.currInfo.id)
-	r.currInfo.AppendCommit(id)
+	if err := r.currInfo.AppendCommit(id); err != nil {
+		logutil.Infof("%s, %d", r.currInfo.commit.String(), id)
+		panic(err)
+	}
 }
 
 func (r *Rotational) OnReplayCheckpoint(rng common.Range) {
@@ -149,6 +152,10 @@ func (r *Rotational) OnNewVersion(id uint64) {
 		r.currInfo.Archive()
 	}
 	r.currInfo = newVersionInfo(r.archived, id)
+}
+
+func (r *Rotational) TryCompact() {
+	r.archived.TryTruncate(nil)
 }
 
 func (r *Rotational) ReplayVersions(handler VersionReplayHandler) error {

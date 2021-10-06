@@ -49,6 +49,7 @@ type StoreFile interface {
 	Stat() (os.FileInfo, error)
 	GetHistory() IHistory
 	ReplayVersions(VersionReplayHandler) error
+	TryCompact()
 }
 
 type Store interface {
@@ -58,6 +59,7 @@ type Store interface {
 	ReplayVersions(VersionReplayHandler) error
 	Truncate(int64) error
 	GetHistory() IHistory
+	TryCompact()
 }
 
 type store struct {
@@ -131,4 +133,8 @@ func (s *store) Sync() error {
 
 func (s *store) ReplayVersions(handler VersionReplayHandler) error {
 	return s.file.ReplayVersions(handler)
+}
+
+func (s *store) TryCompact() {
+	s.file.TryCompact()
 }

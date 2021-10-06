@@ -1,6 +1,9 @@
 package logstore
 
-import "os"
+import (
+	"matrixone/pkg/logutil"
+	"os"
+)
 
 type VersionFile struct {
 	*os.File
@@ -21,6 +24,7 @@ func (vf *VersionFile) Destroy() error {
 		return err
 	}
 	name := vf.Name()
+	logutil.Infof("Removing version file: %s", name)
 	err := os.Remove(name)
 	return err
 }

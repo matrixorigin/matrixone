@@ -74,6 +74,7 @@ func (vs *archivedHub) TryTruncate(cb PostVersionDeleteCB) error {
 	toDelete := make([]*versionInfo, 0, 4)
 	for i := len(versions) - 1; i >= 0; i-- {
 		version := versions[i]
+		// logutil.Infof("%d, %s, %s", version.id, version.commit.String(), version.checkpoint.String())
 		if globCkpRange.CanCover(&version.commit) && globCkpRange.CanCover(version.checkpoint) {
 			version.offset = i
 			toDelete = append(toDelete, version)

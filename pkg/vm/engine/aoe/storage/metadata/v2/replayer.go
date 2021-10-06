@@ -49,6 +49,7 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 	if err := replayer.Replay(replayer.catalog.Store); err != nil {
 		return nil, err
 	}
+	replayer.catalog.Store.TryCompact()
 	return replayer.catalog, nil
 }
 
