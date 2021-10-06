@@ -149,7 +149,7 @@ func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, c
 }
 
 func (r *Rotational) OnReplayCommit(id uint64) {
-	logutil.Infof("Replay Commit %d, version %d", id, r.currInfo.id)
+	// logutil.Infof("Replay Commit %d, version %d", id, r.currInfo.id)
 	if err := r.currInfo.AppendCommit(id); err != nil {
 		logutil.Infof("%s, %d", r.currInfo.commit.String(), id)
 		panic(err)

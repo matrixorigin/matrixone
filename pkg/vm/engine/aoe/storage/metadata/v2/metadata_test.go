@@ -495,15 +495,15 @@ func TestUpgrade(t *testing.T) {
 	dir := "/tmp/testupgradeblock"
 	os.RemoveAll(dir)
 	delta := DefaultCheckpointDelta
-	DefaultCheckpointDelta = uint64(10)
+	DefaultCheckpointDelta = uint64(400)
 	defer func() {
 		DefaultCheckpointDelta = delta
 	}()
 
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
-	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
-	cfg.RotationFileMaxSize = 30 * int(common.K)
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(100)
+	cfg.RotationFileMaxSize = 5 * int(common.M)
 	syncerCfg := &SyncerCfg{
 		Interval: time.Duration(2) * time.Millisecond,
 	}
@@ -522,7 +522,7 @@ func TestUpgrade(t *testing.T) {
 	traceSegments := make(map[uint64]int)
 	upgradedBlocks := uint64(0)
 	upgradedSegments := uint64(0)
-	segCnt, blockCnt := 20, int(cfg.SegmentMaxBlocks)
+	segCnt, blockCnt := 100, int(cfg.SegmentMaxBlocks)
 
 	updateTrace := func(tableId, segmentId uint64) func() {
 		return func() {

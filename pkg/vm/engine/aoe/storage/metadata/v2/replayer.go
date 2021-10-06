@@ -186,6 +186,7 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 		return nil, err
 	}
 	replayer.catalog.Store.TryCompact()
+	replayer.cache = nil
 	return replayer.catalog, nil
 }
 
