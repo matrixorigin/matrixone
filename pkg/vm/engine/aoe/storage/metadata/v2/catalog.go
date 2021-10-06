@@ -20,6 +20,8 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	worker "matrixone/pkg/vm/engine/aoe/storage/worker"
+	wb "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sort"
 	"sync"
 
@@ -93,6 +95,7 @@ type Catalog struct {
 	NameNodes     map[string]*tableNode  `json:"-"`
 	NameIndex     *btree.BTree           `json:"-"`
 	nodesMu       sync.RWMutex           `json:"-"`
+	archiver      wb.IOpWorker           `json:"-"`
 
 	TableSet map[uint64]*Table
 }
@@ -129,6 +132,8 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalo
 		panic(err)
 	}
 	catalog.Store = store
+	catalog.archiver = worker.NewOpWorker("archiver")
+	catalog.archiver.Start()
 	return catalog
 }
 
@@ -211,7 +216,9 @@ func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
 }
 
 func (catalog *Catalog) Close() error {
-	return catalog.Store.Close()
+	catalog.Store.Close()
+	catalog.archiver.Stop()
+	return nil
 }
 
 func (catalog *Catalog) CommitLogEntry(entry logstore.Entry, commitId uint64, sync bool) error {

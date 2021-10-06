@@ -36,6 +36,8 @@ type VersionReplayHandler = func(*VersionFile, ReplayObserver) error
 type StoreFileWriter interface {
 	io.Writer
 	PrepareWrite(int) error
+	ApplyCommit(uint64)
+	ApplyCheckpoint(common.Range)
 }
 
 type StoreFile interface {
@@ -54,7 +56,7 @@ type StoreFile interface {
 
 type Store interface {
 	io.Closer
-	AppendEntry(Entry) error
+	AppendEntry(Entry, uint64) error
 	Sync() error
 	ReplayVersions(VersionReplayHandler) error
 	Truncate(int64) error
@@ -112,8 +114,8 @@ func (s *store) GetHistory() IHistory {
 	return s.file.GetHistory()
 }
 
-func (s *store) AppendEntry(entry Entry) error {
-	if _, err := entry.WriteTo(s.file, s.file); err != nil {
+func (s *store) AppendEntry(entry Entry, id uint64) error {
+	if _, err := entry.WriteTo(s.file, id, s.file); err != nil {
 		return err
 	}
 	// logutil.Infof("WriteEntry %d, Size=%d", entry.Type(), entry.Size())
@@ -121,7 +123,7 @@ func (s *store) AppendEntry(entry Entry) error {
 }
 
 func (s *store) Sync() error {
-	if err := s.AppendEntry(FlushEntry); err != nil {
+	if err := s.AppendEntry(FlushEntry, 0); err != nil {
 		return err
 	}
 	// if err := s.writer.Flush(); err != nil {

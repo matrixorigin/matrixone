@@ -142,6 +142,14 @@ func (r *Rotational) OnReplayCommit(id uint64) {
 	}
 }
 
+func (r *Rotational) ApplyCheckpoint(rng common.Range) {
+	r.currInfo.UnionCheckpointRange(rng)
+}
+
+func (r *Rotational) ApplyCommit(id uint64) {
+	r.currInfo.AppendCommit(id)
+}
+
 func (r *Rotational) OnReplayCheckpoint(rng common.Range) {
 	logutil.Infof("Replay Checkpoint %s, version %d", rng.String(), r.currInfo.id)
 	r.currInfo.UnionCheckpointRange(rng)
@@ -209,6 +217,9 @@ func (r *Rotational) scheduleRotate() error {
 	file := r.file
 	r.file = nil
 	r.history.Append(file)
+	if r.currInfo != nil {
+		logutil.Infof("%s rotated, commit range: %s, checkpoint range: %s", file.Name(), r.currInfo.commit.String(), r.currInfo.checkpoint.String())
+	}
 	if r.observer != nil {
 		r.observer.OnRotated(file)
 	}

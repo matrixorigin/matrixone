@@ -17,6 +17,7 @@ package logstore
 import (
 	"fmt"
 	"io"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	"unsafe"
 )
@@ -27,7 +28,7 @@ type Entry interface {
 	GetPayload() []byte
 	Unmarshal([]byte) error
 	ReadFrom(io.Reader) (int, error)
-	WriteTo(StoreFileWriter, sync.Locker) (int, error)
+	WriteTo(StoreFileWriter, uint64, sync.Locker) (int, error)
 }
 
 type EntryType = uint16
@@ -154,7 +155,7 @@ func (e *BaseEntry) ReadFrom(r io.Reader) (int, error) {
 	return r.Read(e.Payload)
 }
 
-func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int, error) {
+func (e *BaseEntry) WriteTo(w StoreFileWriter, id uint64, locker sync.Locker) (int, error) {
 	locker.Lock()
 	defer locker.Unlock()
 	if err := w.PrepareWrite(EntryMetaSize + int(e.Meta.PayloadSize())); err != nil {
@@ -167,6 +168,11 @@ func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int, error) 
 	n2, err := w.Write(e.Payload)
 	if err != nil {
 		return n2, err
+	}
+	if e.Meta.IsCheckpoint() {
+		w.ApplyCheckpoint(common.Range{Right: id})
+	} else if !e.Meta.IsFlush() {
+		w.ApplyCommit(id)
 	}
 	return n1 + n2, err
 }

@@ -114,7 +114,7 @@ func (s *bufferedStore) Checkpoint(entry Entry, id uint64) error {
 	if id <= curr {
 		return nil
 	}
-	if err := s.store.AppendEntry(entry); err != nil {
+	if err := s.store.AppendEntry(entry, id); err != nil {
 		return err
 	}
 	if err := s.Sync(); err != nil {
@@ -140,12 +140,12 @@ func (s *bufferedStore) SetSyncedId(id uint64) {
 	atomic.StoreUint64(&s.synced, id)
 }
 
-func (s *bufferedStore) AppendEntry(entry Entry) error {
+func (s *bufferedStore) AppendEntry(entry Entry, id uint64) error {
 	panic("not supported")
 }
 
 func (s *bufferedStore) AppendEntryWithCommitId(entry Entry, commitId uint64) error {
-	err := s.store.AppendEntry(entry)
+	err := s.store.AppendEntry(entry, commitId)
 	if err != nil {
 		return err
 	}
@@ -162,7 +162,7 @@ func (s *bufferedStore) OnSynced() {
 }
 
 func (s *bufferedStore) OnRotated(vf *VersionFile) {
-	logutil.Infof("%s rotated", vf.Name())
+	// logutil.Infof("%s rotated", vf.Name())
 }
 
 func (s *bufferedStore) Sync() error {
