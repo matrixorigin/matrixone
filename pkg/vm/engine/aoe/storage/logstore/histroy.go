@@ -31,7 +31,7 @@ type IHistory interface {
 	Version(uint64) *VersionFile
 	GetOldest() *VersionFile
 	Empty() bool
-	ForLoopVersions(VersionHandler) error
+	ReplayVersions(VersionReplayHandler, ReplayObserver) error
 }
 
 type baseHistroy struct {
@@ -39,10 +39,10 @@ type baseHistroy struct {
 	versions []*VersionFile
 }
 
-func (h *baseHistroy) ForLoopVersions(handler VersionHandler) error {
+func (h *baseHistroy) ReplayVersions(handler VersionReplayHandler, observer ReplayObserver) error {
 	for _, version := range h.versions {
 		for {
-			if err := handler(version); err != nil {
+			if err := handler(version, observer); err != nil {
 				if errors.Is(err, io.EOF) {
 					break
 				}

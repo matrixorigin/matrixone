@@ -1,8 +1,15 @@
 package logstore
 
+import "matrixone/pkg/vm/engine/aoe/storage/common"
+
 type Observer interface {
 	OnSynced()
 	OnRotated(*VersionFile)
+}
+
+type ReplayObserver interface {
+	OnReplayCommit(uint64)
+	OnReplayCheckpoint(common.Range)
 }
 
 type emptyObserver struct{}

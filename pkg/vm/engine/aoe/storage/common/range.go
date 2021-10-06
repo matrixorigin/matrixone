@@ -1,6 +1,9 @@
 package common
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	RangeNotContinousErr = errors.New("aoe: range not continous")
@@ -10,6 +13,10 @@ var (
 type Range struct {
 	Left  uint64
 	Right uint64
+}
+
+func (r *Range) String() string {
+	return fmt.Sprintf("[%d, %d]", r.Left, r.Right)
 }
 
 func (r *Range) Valid() bool {

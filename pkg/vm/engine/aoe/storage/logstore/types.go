@@ -31,7 +31,7 @@ type RotationCfg struct {
 	HistoryFactory HistoryFactory
 }
 
-type VersionHandler = func(*VersionFile) error
+type VersionReplayHandler = func(*VersionFile, ReplayObserver) error
 
 type StoreFileWriter interface {
 	io.Writer
@@ -48,14 +48,14 @@ type StoreFile interface {
 	Truncate(int64) error
 	Stat() (os.FileInfo, error)
 	GetHistory() IHistory
-	ForLoopVersions(VersionHandler) error
+	ReplayVersions(VersionReplayHandler) error
 }
 
 type Store interface {
 	io.Closer
 	AppendEntry(Entry) error
 	Sync() error
-	ForLoopVersions(VersionHandler) error
+	ReplayVersions(VersionReplayHandler) error
 	Truncate(int64) error
 	GetHistory() IHistory
 }
@@ -129,6 +129,6 @@ func (s *store) Sync() error {
 	return err
 }
 
-func (s *store) ForLoopVersions(handler VersionHandler) error {
-	return s.file.ForLoopVersions(handler)
+func (s *store) ReplayVersions(handler VersionReplayHandler) error {
+	return s.file.ReplayVersions(handler)
 }

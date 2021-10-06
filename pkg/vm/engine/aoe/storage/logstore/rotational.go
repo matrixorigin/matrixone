@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"path"
 	"sort"
@@ -131,12 +133,20 @@ func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, c
 	return rot, nil
 }
 
-func (r *Rotational) ForLoopVersions(handler VersionHandler) error {
-	if err := r.ForLoopHistory(handler); err != nil {
+func (r *Rotational) OnReplayCommit(id uint64) {
+	logutil.Infof("Replay Commit %d", id)
+}
+
+func (r *Rotational) OnReplayCheckpoint(rng common.Range) {
+	logutil.Infof("Replay Checkpoint %s", rng.String())
+}
+
+func (r *Rotational) ReplayVersions(handler VersionReplayHandler) error {
+	if err := r.ReplayHistoryVersion(handler); err != nil {
 		return err
 	}
 	for {
-		if err := handler(r.file); err != nil {
+		if err := handler(r.file, r); err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
@@ -146,8 +156,8 @@ func (r *Rotational) ForLoopVersions(handler VersionHandler) error {
 	return nil
 }
 
-func (r *Rotational) ForLoopHistory(handler VersionHandler) error {
-	return r.history.ForLoopVersions(handler)
+func (r *Rotational) ReplayHistoryVersion(handler VersionReplayHandler) error {
+	return r.history.ReplayVersions(handler, r)
 }
 
 func (r *Rotational) GetHistory() IHistory {

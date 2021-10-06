@@ -52,19 +52,19 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 	return replayer.catalog, nil
 }
 
-func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile) error {
+func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logstore.ReplayObserver) error {
 	meta := logstore.NewEntryMeta()
 	_, err := meta.ReadFrom(r)
 	if err != nil {
 		return err
 	}
 	if entry, n, err := defaultHandler(r, meta); err != nil {
-		return nil
+		return err
 	} else {
 		if n != int64(meta.PayloadSize()) {
 			return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
 		}
-		if err = replayer.catalog.onReplayEntry(entry); err != nil {
+		if err = replayer.catalog.onReplayEntry(entry, observer); err != nil {
 			return err
 		}
 	}
@@ -75,7 +75,7 @@ func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile) error {
 }
 
 func (replayer *catalogReplayer) Replay(s Store) error {
-	err := s.ForLoopVersions(replayer.doReplay)
+	err := s.ReplayVersions(replayer.doReplay)
 	logutil.Infof("Total %d entries replayed", replayer.replayed)
 	return err
 }

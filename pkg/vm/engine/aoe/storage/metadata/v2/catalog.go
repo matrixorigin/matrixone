@@ -470,35 +470,42 @@ func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) onReplayEntry(entry LogEntry) error {
+func (catalog *Catalog) onReplayEntry(entry LogEntry, observer logstore.ReplayObserver) error {
 	switch entry.GetMeta().GetType() {
 	case ETCreateBlock:
 		blk := &blockLogEntry{}
 		blk.Unmarshal(entry.GetPayload())
+		observer.OnReplayCommit(blk.CommitInfo.CommitId)
 		catalog.onReplayCreateBlock(blk)
 	case ETUpgradeBlock:
 		blk := &blockLogEntry{}
 		blk.Unmarshal(entry.GetPayload())
+		observer.OnReplayCommit(blk.CommitInfo.CommitId)
 		catalog.onReplayUpgradeBlock(blk)
 	case ETCreateTable:
 		tbl := &Table{}
 		tbl.Unmarshal(entry.GetPayload())
+		observer.OnReplayCommit(tbl.CommitInfo.CommitId)
 		catalog.onReplayCreateTable(tbl)
 	case ETSoftDeleteTable:
 		tbl := &tableLogEntry{}
 		tbl.Unmarshal(entry.GetPayload())
+		observer.OnReplayCommit(tbl.CommitInfo.CommitId)
 		catalog.onReplaySoftDeleteTable(tbl)
 	case ETHardDeleteTable:
 		tbl := &tableLogEntry{}
 		tbl.Unmarshal(entry.GetPayload())
+		observer.OnReplayCommit(tbl.CommitInfo.CommitId)
 		catalog.onReplayHardDeleteTable(tbl)
 	case ETCreateSegment:
 		seg := &segmentLogEntry{}
 		seg.Unmarshal(entry.GetPayload())
+		observer.OnReplayCommit(seg.CommitInfo.CommitId)
 		catalog.onReplayCreateSegment(seg)
 	case ETUpgradeSegment:
 		seg := &segmentLogEntry{}
 		seg.Unmarshal(entry.GetPayload())
+		observer.OnReplayCommit(seg.CommitInfo.CommitId)
 		catalog.onReplayUpgradeSegment(seg)
 	case logstore.ETCheckpoint:
 		c := &Catalog{}
