@@ -76,8 +76,8 @@ func TestParse(t *testing.T) {
 }
 
 func TestVersionsMeta(t *testing.T) {
-	versions := newVersionsMeta(nil)
-	v := &versionMeta{
+	versions := newArchivedInfo(nil)
+	v := &archivedVersion{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  0,
@@ -90,13 +90,13 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(versions.versions))
 
-	v = &versionMeta{
+	v = &archivedVersion{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  101,
 			right: 200,
 		},
-		ckp: &Range{
+		checkpoint: &Range{
 			left:  0,
 			right: 150,
 		},
@@ -113,13 +113,13 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Equal(t, 1, len(versions.versions))
 	assert.True(t, cbCalled)
 
-	v = &versionMeta{
+	v = &archivedVersion{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  201,
 			right: 300,
 		},
-		ckp: &Range{
+		checkpoint: &Range{
 			left:  151,
 			right: 180,
 		},
@@ -129,13 +129,13 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(versions.versions))
 
-	v = &versionMeta{
+	v = &archivedVersion{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  201,
 			right: 299,
 		},
-		ckp: &Range{
+		checkpoint: &Range{
 			left:  181,
 			right: 190,
 		},
@@ -151,13 +151,13 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(versions.versions))
 
-	v = &versionMeta{
+	v = &archivedVersion{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  301,
 			right: 400,
 		},
-		ckp: &Range{
+		checkpoint: &Range{
 			left:  100,
 			right: 400,
 		},
@@ -168,13 +168,13 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(versions.versions))
 
-	v = &versionMeta{
+	v = &archivedVersion{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  401,
 			right: 500,
 		},
-		ckp: &Range{
+		checkpoint: &Range{
 			left:  0,
 			right: 400,
 		},
@@ -184,4 +184,8 @@ func TestVersionsMeta(t *testing.T) {
 	err = versions.TryTruncate(cb)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(versions.versions))
+}
+
+func TestTruncate(t *testing.T) {
+
 }

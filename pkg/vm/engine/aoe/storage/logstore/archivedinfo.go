@@ -52,75 +52,75 @@ func (r *Range) Append(right uint64) error {
 	return nil
 }
 
-type versionMeta struct {
-	id     uint64
-	commit Range
-	ckp    *Range
-	offset int
+type archivedVersion struct {
+	id         uint64
+	commit     Range
+	checkpoint *Range
+	offset     int
 }
 
-func (meta *versionMeta) AppendCommit(id uint64) error {
+func (meta *archivedVersion) AppendCommit(id uint64) error {
 	return meta.commit.Append(id)
 }
 
-func (meta *versionMeta) AppendCheckpoint(id uint64) error {
-	return meta.ckp.Append(id)
+func (meta *archivedVersion) AppendCheckpoint(id uint64) error {
+	return meta.checkpoint.Append(id)
 }
 
-func (meta *versionMeta) UnionCheckpointRange(r Range) error {
-	if meta.ckp == nil {
-		meta.ckp = &r
+func (meta *archivedVersion) UnionCheckpointRange(r Range) error {
+	if meta.checkpoint == nil {
+		meta.checkpoint = &r
 		return nil
 	}
-	return meta.ckp.Union(&r)
+	return meta.checkpoint.Union(&r)
 }
 
-type versionsMeta struct {
+type archivedInfo struct {
 	sync.RWMutex
-	versions []*versionMeta
-	history  IHistory
+	versions []*archivedVersion
+	remote   IHistory
 	store    BufferedStore
 }
 
-func newVersionsMeta(history IHistory) *versionsMeta {
-	return &versionsMeta{
-		history:  history,
-		versions: make([]*versionMeta, 0),
+func newArchivedInfo(remote IHistory) *archivedInfo {
+	return &archivedInfo{
+		remote:   remote,
+		versions: make([]*archivedVersion, 0),
 	}
 }
 
-func (vs *versionsMeta) Append(version *versionMeta) {
+func (vs *archivedInfo) Append(version *archivedVersion) {
 	vs.Lock()
 	defer vs.Unlock()
 	vs.versions = append(vs.versions, version)
 }
 
 // Only one truncate worker
-func (vs *versionsMeta) TryTruncate(cb PostVersionDeleteCB) error {
+func (vs *archivedInfo) TryTruncate(cb PostVersionDeleteCB) error {
 	vs.RLock()
-	versions := make([]*versionMeta, len(vs.versions))
+	versions := make([]*archivedVersion, len(vs.versions))
 	for i, version := range vs.versions {
 		versions[i] = version
 	}
 	vs.RUnlock()
 	var globCkpRange *Range
-	toDelete := make([]*versionMeta, 0, 4)
+	toDelete := make([]*archivedVersion, 0, 4)
 	for i := len(versions) - 1; i >= 0; i-- {
 		version := versions[i]
-		if globCkpRange.CanCover(&version.commit) && globCkpRange.CanCover(version.ckp) {
+		if globCkpRange.CanCover(&version.commit) && globCkpRange.CanCover(version.checkpoint) {
 			version.offset = i
 			toDelete = append(toDelete, version)
 			continue
 		}
 
-		if version.ckp != nil {
+		if version.checkpoint != nil {
 			if globCkpRange == nil {
 				globCkpRange = &Range{
-					left:  version.ckp.left,
-					right: version.ckp.right,
+					left:  version.checkpoint.left,
+					right: version.checkpoint.right,
 				}
 			} else {
-				if err := globCkpRange.Union(version.ckp); err != nil {
+				if err := globCkpRange.Union(version.checkpoint); err != nil {
 					panic(err)
 				}
 			}
@@ -134,9 +134,9 @@ func (vs *versionsMeta) TryTruncate(cb PostVersionDeleteCB) error {
 		}
 	}
 	vs.Unlock()
-	if vs.history != nil {
+	if vs.remote != nil {
 		for _, version := range toDelete {
-			if err := vs.history.Truncate(version.id); err != nil {
+			if err := vs.remote.Truncate(version.id); err != nil {
 				return err
 			}
 		}
