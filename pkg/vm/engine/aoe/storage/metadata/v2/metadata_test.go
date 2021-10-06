@@ -505,7 +505,7 @@ func TestUpgrade(t *testing.T) {
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
 	cfg.RotationFileMaxSize = 30 * int(common.K)
 	syncerCfg := &SyncerCfg{
-		Interval: time.Duration(100) * time.Microsecond,
+		Interval: time.Duration(2) * time.Millisecond,
 	}
 	catalog := NewCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	catalog.StartSyncer()
@@ -615,6 +615,7 @@ func TestUpgrade(t *testing.T) {
 	replayer := newCatalogReplayer()
 	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	assert.Nil(t, err)
+	// t.Logf("%d - %d", catalog.Store.GetSyncedId(), catalog.Store.GetCheckpointId())
 	t.Log(time.Since(now))
 
 	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
@@ -646,8 +647,9 @@ func TestUpgrade(t *testing.T) {
 	for _, tbl := range view.Catalog.TableSet {
 		t.Log(len(tbl.SegmentSet))
 	}
+	time.Sleep(syncerCfg.Interval * 2)
 	view = catalog.LatestView()
-	assert.Equal(t, 0, len(view.Catalog.TableSet))
+	assert.Equal(t, 1, len(view.Catalog.TableSet))
 
 	sequence = catalog.Sequence
 	catalog.Close()
@@ -655,8 +657,11 @@ func TestUpgrade(t *testing.T) {
 	replayer = newCatalogReplayer()
 	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	assert.Nil(t, err)
+	// t.Logf("%d - %d", catalog.Store.GetSyncedId(), catalog.Store.GetCheckpointId())
+	catalog.StartSyncer()
 	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
 	assert.Equal(t, sequence.nextTableId, catalog.Sequence.nextTableId)
 	assert.Equal(t, sequence.nextSegmentId, catalog.Sequence.nextSegmentId)
 	assert.Equal(t, sequence.nextBlockId, catalog.Sequence.nextBlockId)
+	catalog.Close()
 }

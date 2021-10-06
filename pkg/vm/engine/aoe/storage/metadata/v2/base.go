@@ -122,9 +122,9 @@ func (e *BaseEntry) UseCommitted(id uint64) *BaseEntry {
 	curr = e.CommitInfo
 	for curr != nil {
 		info := curr.(*CommitInfo)
-		if info.IsHardDeleted() {
-			return nil
-		}
+		// if info.IsHardDeleted() {
+		// 	return nil
+		// }
 		if !IsTransientCommitId(info.CommitId) && info.CommitId <= id {
 			cInfo := *info
 			return &BaseEntry{

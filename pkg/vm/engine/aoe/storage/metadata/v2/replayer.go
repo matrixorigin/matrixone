@@ -149,16 +149,21 @@ func (cache *replayCache) applyNoCheckpoint() error {
 
 func (cache *replayCache) Apply() error {
 	if cache.checkpoint == nil {
-		return cache.applyNoCheckpoint()
-	}
-	if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, &cache.checkpoint.Range); err != nil {
-		return err
-	}
-	for _, entry := range cache.entries {
-		if err := cache.onApply(entry, cache.replayer.catalog, &cache.checkpoint.Range); err != nil {
+		if err := cache.applyNoCheckpoint(); err != nil {
 			return err
 		}
+	} else {
+		if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, &cache.checkpoint.Range); err != nil {
+			return err
+		}
+		for _, entry := range cache.entries {
+			if err := cache.onApply(entry, cache.replayer.catalog, &cache.checkpoint.Range); err != nil {
+				return err
+			}
+		}
+		cache.replayer.catalog.Store.SetCheckpointId(cache.checkpoint.Range.Right)
 	}
+	cache.replayer.catalog.Store.SetSyncedId(cache.replayer.catalog.Sequence.nextCommitId)
 	return nil
 }
 

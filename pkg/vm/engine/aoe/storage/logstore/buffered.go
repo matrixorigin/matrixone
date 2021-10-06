@@ -49,6 +49,7 @@ type BufferedStore interface {
 	GetSyncedId() uint64
 	SetSyncedId(uint64)
 	GetCheckpointId() uint64
+	SetCheckpointId(uint64)
 }
 
 type syncHandler struct {
@@ -125,6 +126,10 @@ func (s *bufferedStore) Checkpoint(entry Entry, id uint64) error {
 
 func (s *bufferedStore) GetCheckpointId() uint64 {
 	return atomic.LoadUint64(&s.checkpointed)
+}
+
+func (s *bufferedStore) SetCheckpointId(id uint64) {
+	atomic.StoreUint64(&s.checkpointed, id)
 }
 
 func (s *bufferedStore) GetSyncedId() uint64 {
