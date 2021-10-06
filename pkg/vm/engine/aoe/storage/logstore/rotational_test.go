@@ -76,8 +76,8 @@ func TestParse(t *testing.T) {
 }
 
 func TestVersionsMeta(t *testing.T) {
-	versions := newArchivedInfo(nil)
-	v := &archivedVersion{
+	versions := newArchivedHub(nil)
+	v := &versionInfo{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  0,
@@ -90,7 +90,7 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(versions.versions))
 
-	v = &archivedVersion{
+	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  101,
@@ -113,7 +113,7 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Equal(t, 1, len(versions.versions))
 	assert.True(t, cbCalled)
 
-	v = &archivedVersion{
+	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  201,
@@ -129,7 +129,7 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(versions.versions))
 
-	v = &archivedVersion{
+	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  201,
@@ -151,7 +151,7 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(versions.versions))
 
-	v = &archivedVersion{
+	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  301,
@@ -168,7 +168,7 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(versions.versions))
 
-	v = &archivedVersion{
+	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  401,

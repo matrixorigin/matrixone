@@ -48,7 +48,7 @@ type Rotational struct {
 	currVersion uint64
 	history     IHistory
 	observer    Observer
-	archived    *archivedInfo
+	archived    *archivedHub
 }
 
 func OpenRotational(dir, prefix, suffix string, historyFactory HistoryFactory, checker IRotateChecker, observer Observer) (*Rotational, error) {

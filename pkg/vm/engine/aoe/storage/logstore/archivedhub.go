@@ -52,22 +52,23 @@ func (r *Range) Append(right uint64) error {
 	return nil
 }
 
-type archivedVersion struct {
+type versionInfo struct {
 	id         uint64
 	commit     Range
 	checkpoint *Range
 	offset     int
+	archived   *archivedHub
 }
 
-func (meta *archivedVersion) AppendCommit(id uint64) error {
+func (meta *versionInfo) AppendCommit(id uint64) error {
 	return meta.commit.Append(id)
 }
 
-func (meta *archivedVersion) AppendCheckpoint(id uint64) error {
+func (meta *versionInfo) AppendCheckpoint(id uint64) error {
 	return meta.checkpoint.Append(id)
 }
 
-func (meta *archivedVersion) UnionCheckpointRange(r Range) error {
+func (meta *versionInfo) UnionCheckpointRange(r Range) error {
 	if meta.checkpoint == nil {
 		meta.checkpoint = &r
 		return nil
@@ -75,36 +76,36 @@ func (meta *archivedVersion) UnionCheckpointRange(r Range) error {
 	return meta.checkpoint.Union(&r)
 }
 
-type archivedInfo struct {
+type archivedHub struct {
 	sync.RWMutex
-	versions []*archivedVersion
+	versions []*versionInfo
 	remote   IHistory
 	store    BufferedStore
 }
 
-func newArchivedInfo(remote IHistory) *archivedInfo {
-	return &archivedInfo{
+func newArchivedHub(remote IHistory) *archivedHub {
+	return &archivedHub{
 		remote:   remote,
-		versions: make([]*archivedVersion, 0),
+		versions: make([]*versionInfo, 0),
 	}
 }
 
-func (vs *archivedInfo) Append(version *archivedVersion) {
+func (vs *archivedHub) Append(version *versionInfo) {
 	vs.Lock()
 	defer vs.Unlock()
 	vs.versions = append(vs.versions, version)
 }
 
 // Only one truncate worker
-func (vs *archivedInfo) TryTruncate(cb PostVersionDeleteCB) error {
+func (vs *archivedHub) TryTruncate(cb PostVersionDeleteCB) error {
 	vs.RLock()
-	versions := make([]*archivedVersion, len(vs.versions))
+	versions := make([]*versionInfo, len(vs.versions))
 	for i, version := range vs.versions {
 		versions[i] = version
 	}
 	vs.RUnlock()
 	var globCkpRange *Range
-	toDelete := make([]*archivedVersion, 0, 4)
+	toDelete := make([]*versionInfo, 0, 4)
 	for i := len(versions) - 1; i >= 0; i-- {
 		version := versions[i]
 		if globCkpRange.CanCover(&version.commit) && globCkpRange.CanCover(version.checkpoint) {
