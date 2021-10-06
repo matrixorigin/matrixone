@@ -101,6 +101,7 @@ func (e *Table) CommittedView(id uint64) *Table {
 		return nil
 	}
 	view := &Table{
+		Schema:     e.Schema,
 		BaseEntry:  *baseEntry,
 		SegmentSet: make([]*Segment, 0),
 	}
@@ -118,6 +119,16 @@ func (e *Table) CommittedView(id uint64) *Table {
 		view.SegmentSet = append(view.SegmentSet, segView)
 	}
 	return view
+}
+
+func (e *Table) rebuild(catalog *Catalog) {
+	e.Catalog = catalog
+	e.IdIndex = make(map[uint64]int)
+	for i, seg := range e.SegmentSet {
+		catalog.Sequence.TryUpdateSegmentId(seg.Id)
+		seg.rebuild(e)
+		e.IdIndex[seg.Id] = i
+	}
 }
 
 func (e *Table) HardDelete() {

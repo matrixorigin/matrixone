@@ -20,6 +20,7 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"sort"
 	"sync"
 
 	"github.com/google/btree"
@@ -133,6 +134,29 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalo
 
 func (catalog *Catalog) StartSyncer() {
 	catalog.Store.Start()
+}
+
+func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error {
+	catalog.Sequence.nextCommitId = r.Right
+	sorted := make([]*Table, len(tables))
+	idx := 0
+	for _, table := range tables {
+		sorted[idx] = table
+		idx++
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Id < sorted[j].Id
+	})
+	for _, table := range sorted {
+		table.rebuild(catalog)
+		if err := catalog.onNewTable(table); err != nil {
+			return err
+		}
+	}
+	if len(sorted) > 0 {
+		catalog.Sequence.nextTableId = sorted[len(sorted)-1].Id
+	}
+	return nil
 }
 
 func (catalog *Catalog) SimpleGetTableAppliedIdByName(name string) (uint64, bool) {

@@ -26,6 +26,14 @@ func (r *Range) Valid() bool {
 	return r.Left <= r.Right
 }
 
+func (r *Range) LT(id uint64) bool {
+	return r.Right < id
+}
+
+func (r *Range) GT(id uint64) bool {
+	return r.Left > id
+}
+
 func (r *Range) CanCover(o *Range) bool {
 	if r == nil {
 		return false

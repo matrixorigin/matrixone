@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"sync"
 )
@@ -62,21 +63,73 @@ func (cache *replayCache) Append(entry *replayEntry) {
 	}
 }
 
-func (cache *replayCache) onApply(entry *replayEntry, catalog *Catalog) error {
+func (cache *replayCache) onApply(entry *replayEntry, catalog *Catalog, r *common.Range) error {
 	switch entry.typ {
 	case ETCreateBlock:
+		if r != nil {
+			if !r.LT(entry.blkEntry.CommitInfo.CommitId) {
+				// logutil.Infof("%s - %d Skipped", r.String(), entry.blkEntry.CommitInfo.CommitId)
+				return nil
+			}
+		}
+		catalog.Sequence.TryUpdateCommitId(entry.blkEntry.CommitInfo.CommitId)
+		catalog.Sequence.TryUpdateBlockId(entry.blkEntry.Id)
 		catalog.onReplayCreateBlock(entry.blkEntry)
 	case ETUpgradeBlock:
+		if r != nil {
+			if !r.LT(entry.blkEntry.CommitInfo.CommitId) {
+				// logutil.Infof("%s - %d Skipped", r.String(), entry.blkEntry.CommitInfo.CommitId)
+				return nil
+			}
+		}
+		catalog.Sequence.TryUpdateCommitId(entry.blkEntry.CommitInfo.CommitId)
 		catalog.onReplayUpgradeBlock(entry.blkEntry)
 	case ETCreateTable:
+		if r != nil {
+			if !r.LT(entry.tbl.CommitInfo.CommitId) {
+				// logutil.Infof("%s - %d Skipped", r.String(), entry.tbl.CommitInfo.CommitId)
+				return nil
+			}
+		}
+		catalog.Sequence.TryUpdateCommitId(entry.tbl.CommitInfo.CommitId)
+		catalog.Sequence.TryUpdateTableId(entry.tbl.Id)
 		catalog.onReplayCreateTable(entry.tbl)
 	case ETSoftDeleteTable:
+		if r != nil {
+			if !r.LT(entry.tblEntry.CommitInfo.CommitId) {
+				// logutil.Infof("%s - %d Skipped", r.String(), entry.tblEntry.CommitInfo.CommitId)
+				return nil
+			}
+		}
+		catalog.Sequence.TryUpdateCommitId(entry.tblEntry.CommitInfo.CommitId)
 		catalog.onReplaySoftDeleteTable(entry.tblEntry)
 	case ETHardDeleteTable:
+		if r != nil {
+			if !r.LT(entry.tblEntry.CommitInfo.CommitId) {
+				// logutil.Infof("%s - %d Skipped", r.String(), entry.tblEntry.CommitInfo.CommitId)
+				return nil
+			}
+		}
+		catalog.Sequence.TryUpdateCommitId(entry.tblEntry.CommitInfo.CommitId)
 		catalog.onReplayHardDeleteTable(entry.tblEntry)
 	case ETCreateSegment:
+		if r != nil {
+			if !r.LT(entry.segEntry.CommitInfo.CommitId) {
+				// logutil.Infof("%s - %d Skipped", r.String(), entry.segEntry.CommitInfo.CommitId)
+				return nil
+			}
+		}
+		catalog.Sequence.TryUpdateCommitId(entry.segEntry.CommitInfo.CommitId)
+		catalog.Sequence.TryUpdateSegmentId(entry.segEntry.Id)
 		catalog.onReplayCreateSegment(entry.segEntry)
 	case ETUpgradeSegment:
+		if r != nil {
+			if !r.LT(entry.segEntry.CommitInfo.CommitId) {
+				// logutil.Infof("%s - %d Skipped", r.String(), entry.segEntry.CommitInfo.CommitId)
+				return nil
+			}
+		}
+		catalog.Sequence.TryUpdateCommitId(entry.segEntry.CommitInfo.CommitId)
 		catalog.onReplayUpgradeSegment(entry.segEntry)
 	case logstore.ETCheckpoint:
 	default:
@@ -87,7 +140,7 @@ func (cache *replayCache) onApply(entry *replayEntry, catalog *Catalog) error {
 
 func (cache *replayCache) applyNoCheckpoint() error {
 	for _, entry := range cache.entries {
-		if err := cache.onApply(entry, cache.replayer.catalog); err != nil {
+		if err := cache.onApply(entry, cache.replayer.catalog, nil); err != nil {
 			return err
 		}
 	}
@@ -98,9 +151,14 @@ func (cache *replayCache) Apply() error {
 	if cache.checkpoint == nil {
 		return cache.applyNoCheckpoint()
 	}
-	cache.replayer.catalog.TableSet = cache.checkpoint.Catalog.TableSet
-	// for _, entry := range cache.entries {
-	// }
+	if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, &cache.checkpoint.Range); err != nil {
+		return err
+	}
+	for _, entry := range cache.entries {
+		if err := cache.onApply(entry, cache.replayer.catalog, &cache.checkpoint.Range); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

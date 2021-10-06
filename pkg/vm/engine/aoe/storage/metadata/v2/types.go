@@ -169,6 +169,36 @@ func (s *Sequence) NextUncommitId() uint64 {
 	return nextUncommitId()
 }
 
+func (s *Sequence) TryUpdateTableId(id uint64) {
+	if s.nextTableId < id {
+		s.nextTableId = id
+	}
+}
+
+func (s *Sequence) TryUpdateCommitId(id uint64) {
+	if s.nextCommitId < id {
+		s.nextCommitId = id
+	}
+}
+
+func (s *Sequence) TryUpdateSegmentId(id uint64) {
+	if s.nextSegmentId < id {
+		s.nextSegmentId = id
+	}
+}
+
+func (s *Sequence) TryUpdateBlockId(id uint64) {
+	if s.nextBlockId < id {
+		s.nextBlockId = id
+	}
+}
+
+func (s *Sequence) TryUpdateIndexId(id uint64) {
+	if s.nextIndexId < id {
+		s.nextIndexId = id
+	}
+}
+
 func EstimateColumnBlockSize(colIdx int, meta *Block) uint64 {
 	switch meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
 	case types.T_json, types.T_char, types.T_varchar:

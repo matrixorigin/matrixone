@@ -88,6 +88,17 @@ func newCommittedSegmentEntry(catalog *Catalog, table *Table, base *BaseEntry) *
 	return e
 }
 
+func (e *Segment) rebuild(table *Table) {
+	e.Catalog = table.Catalog
+	e.Table = table
+	e.IdIndex = make(map[uint64]int)
+	for i, blk := range e.BlockSet {
+		e.Catalog.Sequence.TryUpdateBlockId(blk.Id)
+		blk.rebuild(e)
+		e.IdIndex[blk.Id] = i
+	}
+}
+
 func (e *Segment) AsCommonID() *common.ID {
 	return &common.ID{
 		TableID:   e.Table.Id,

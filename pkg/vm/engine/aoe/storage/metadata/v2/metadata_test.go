@@ -517,7 +517,7 @@ func TestUpgrade(t *testing.T) {
 	traceSegments := make(map[uint64]int)
 	upgradedBlocks := uint64(0)
 	upgradedSegments := uint64(0)
-	segCnt, blockCnt := 40, int(cfg.SegmentMaxBlocks)
+	segCnt, blockCnt := 20, int(cfg.SegmentMaxBlocks)
 
 	updateTrace := func(tableId, segmentId uint64) func() {
 		return func() {
@@ -597,22 +597,38 @@ func TestUpgrade(t *testing.T) {
 	wg2.Wait()
 	wg3.Wait()
 	wg4.Wait()
-	// t.Log(atomic.LoadUint64(&upgradedBlocks))
-	// t.Log(atomic.LoadUint64(&upgradedSegments))
 	assert.Equal(t, segCnt*blockCnt, int(upgradedBlocks))
 	assert.Equal(t, segCnt, int(upgradedSegments))
 
-	// t.Log(t1.PString(PPL1))
 	catalog.Store.AppendEntryWithCommitId(logstore.FlushEntry, catalog.NextCommitId())
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.Nil(t, err)
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.NotNil(t, err)
-	// t.Log(t1.PString(PPL1))
 
+	catalog.Close()
+	sequence := catalog.Sequence
+
+	t.Log("Start replay")
+	now := time.Now()
+	replayer := newCatalogReplayer()
+	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
+	assert.Nil(t, err)
+	t.Log(time.Since(now))
+
+	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
+	assert.Equal(t, sequence.nextTableId, catalog.Sequence.nextTableId)
+	assert.Equal(t, sequence.nextSegmentId, catalog.Sequence.nextSegmentId)
+	assert.Equal(t, sequence.nextBlockId, catalog.Sequence.nextBlockId)
+
+	// t.Logf("r - %d", catalog.Sequence.nextCommitId)
+	// t.Logf("r - %d", catalog.Sequence.nextTableId)
+	// t.Logf("r - %d", catalog.Sequence.nextSegmentId)
+	// t.Logf("r - %d", catalog.Sequence.nextBlockId)
+
+	catalog.StartSyncer()
 	err = catalog.HardDeleteTable(t1.Id)
 	assert.Nil(t, err)
-	// t.Log(t1.PString(PPL1))
 
 	viewId := uint64(40)
 	view := catalog.CommittedView(viewId)
@@ -622,21 +638,15 @@ func TestUpgrade(t *testing.T) {
 	view = catalog.LatestView()
 	assert.Equal(t, 0, len(view.Catalog.TableSet))
 
-	catalog.Close()
-
-	t.Log("Start replay")
-	now := time.Now()
-	replayer := newCatalogReplayer()
-	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
-	assert.Nil(t, err)
-	t.Log(time.Since(now))
-	// t.Log(replayer.GetOffset())
-	// t.Log(replayer.String())
-	// t.Log(catalog.PString(PPL1))
-	catalog.StartSyncer()
+	sequence = catalog.Sequence
 	catalog.Close()
 
 	replayer = newCatalogReplayer()
 	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	assert.Nil(t, err)
+	// t.Log(catalog.PString(PPL1))
+	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
+	assert.Equal(t, sequence.nextTableId, catalog.Sequence.nextTableId)
+	assert.Equal(t, sequence.nextSegmentId, catalog.Sequence.nextSegmentId)
+	assert.Equal(t, sequence.nextBlockId, catalog.Sequence.nextBlockId)
 }

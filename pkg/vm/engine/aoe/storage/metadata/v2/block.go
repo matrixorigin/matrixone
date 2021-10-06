@@ -84,6 +84,10 @@ func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
 	return e
 }
 
+func (e *Block) rebuild(segment *Segment) {
+	e.Segment = segment
+}
+
 func (e *Block) AsCommonID() *common.ID {
 	return &common.ID{
 		TableID:   e.Segment.Table.Id,
