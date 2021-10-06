@@ -57,23 +57,34 @@ type versionInfo struct {
 	commit     Range
 	checkpoint *Range
 	offset     int
-	archived   *archivedHub
+	hub        *archivedHub
 }
 
-func (meta *versionInfo) AppendCommit(id uint64) error {
-	return meta.commit.Append(id)
+func newVersionInfo(hub *archivedHub, id uint64) *versionInfo {
+	return &versionInfo{
+		id:  id,
+		hub: hub,
+	}
 }
 
-func (meta *versionInfo) AppendCheckpoint(id uint64) error {
-	return meta.checkpoint.Append(id)
+func (info *versionInfo) AppendCommit(id uint64) error {
+	return info.commit.Append(id)
 }
 
-func (meta *versionInfo) UnionCheckpointRange(r Range) error {
-	if meta.checkpoint == nil {
-		meta.checkpoint = &r
+func (info *versionInfo) AppendCheckpoint(id uint64) error {
+	return info.checkpoint.Append(id)
+}
+
+func (info *versionInfo) UnionCheckpointRange(r Range) error {
+	if info.checkpoint == nil {
+		info.checkpoint = &r
 		return nil
 	}
-	return meta.checkpoint.Union(&r)
+	return info.checkpoint.Union(&r)
+}
+
+func (info *versionInfo) Archive() {
+	info.hub.Append(info)
 }
 
 type archivedHub struct {

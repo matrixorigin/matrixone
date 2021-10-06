@@ -76,19 +76,20 @@ func TestParse(t *testing.T) {
 }
 
 func TestVersionsMeta(t *testing.T) {
-	versions := newArchivedHub(nil)
+	hub := newArchivedHub(nil)
 	v := &versionInfo{
 		id: common.GetGlobalSeqNum(),
 		commit: Range{
 			left:  0,
 			right: 100,
 		},
+		hub: hub,
 	}
 
-	versions.Append(v)
-	err := versions.TryTruncate(nil)
+	v.Archive()
+	err := hub.TryTruncate(nil)
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(versions.versions))
+	assert.Equal(t, 1, len(hub.versions))
 
 	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
@@ -100,17 +101,18 @@ func TestVersionsMeta(t *testing.T) {
 			left:  0,
 			right: 150,
 		},
+		hub: hub,
 	}
-	versions.Append(v)
+	v.Archive()
 
 	cbCalled := false
 	cb := func(id uint64) {
 		cbCalled = true
 		assert.Equal(t, v.id, id)
 	}
-	err = versions.TryTruncate(cb)
+	err = hub.TryTruncate(cb)
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(versions.versions))
+	assert.Equal(t, 1, len(hub.versions))
 	assert.True(t, cbCalled)
 
 	v = &versionInfo{
@@ -123,11 +125,12 @@ func TestVersionsMeta(t *testing.T) {
 			left:  151,
 			right: 180,
 		},
+		hub: hub,
 	}
-	versions.Append(v)
-	err = versions.TryTruncate(cb)
+	v.Archive()
+	err = hub.TryTruncate(cb)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(versions.versions))
+	assert.Equal(t, 2, len(hub.versions))
 
 	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
@@ -139,6 +142,7 @@ func TestVersionsMeta(t *testing.T) {
 			left:  181,
 			right: 190,
 		},
+		hub: hub,
 	}
 	err = v.AppendCommit(200)
 	assert.NotNil(t, err)
@@ -146,10 +150,10 @@ func TestVersionsMeta(t *testing.T) {
 	assert.Nil(t, err)
 	err = v.UnionCheckpointRange(Range{left: 181, right: 199})
 	assert.Nil(t, err)
-	versions.Append(v)
-	err = versions.TryTruncate(cb)
+	v.Archive()
+	err = hub.TryTruncate(cb)
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(versions.versions))
+	assert.Equal(t, 3, len(hub.versions))
 
 	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
@@ -161,12 +165,13 @@ func TestVersionsMeta(t *testing.T) {
 			left:  100,
 			right: 400,
 		},
+		hub: hub,
 	}
 
-	versions.Append(v)
-	err = versions.TryTruncate(cb)
+	v.Archive()
+	err = hub.TryTruncate(cb)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(versions.versions))
+	assert.Equal(t, 2, len(hub.versions))
 
 	v = &versionInfo{
 		id: common.GetGlobalSeqNum(),
@@ -178,12 +183,13 @@ func TestVersionsMeta(t *testing.T) {
 			left:  0,
 			right: 400,
 		},
+		hub: hub,
 	}
 
-	versions.Append(v)
-	err = versions.TryTruncate(cb)
+	v.Archive()
+	err = hub.TryTruncate(cb)
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(versions.versions))
+	assert.Equal(t, 1, len(hub.versions))
 }
 
 func TestTruncate(t *testing.T) {
