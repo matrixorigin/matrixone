@@ -28,7 +28,9 @@ type Entry interface {
 	GetPayload() []byte
 	Unmarshal([]byte) error
 	ReadFrom(io.Reader) (int, error)
-	WriteTo(StoreFileWriter, uint64, sync.Locker) (int, error)
+	WriteTo(StoreFileWriter, sync.Locker) (int, error)
+	GetAuxilaryInfo() interface{}
+	SetAuxilaryInfo(info interface{})
 }
 
 type EntryType = uint16
@@ -119,8 +121,9 @@ func (meta *EntryMeta) ReadFrom(r io.Reader) (int, error) {
 }
 
 type BaseEntry struct {
-	Meta    *EntryMeta
-	Payload []byte
+	Meta     *EntryMeta
+	Payload  []byte
+	Auxilary interface{}
 }
 
 func NewBaseEntry() *BaseEntry {
@@ -139,9 +142,11 @@ func NewBaseEntryWithMeta(meta *EntryMeta) *BaseEntry {
 	return e
 }
 
-func (e *BaseEntry) GetMeta() *EntryMeta     { return e.Meta }
-func (e *BaseEntry) SetMeta(meta *EntryMeta) { e.Meta = meta }
-func (e *BaseEntry) GetPayload() []byte      { return e.Payload }
+func (e *BaseEntry) GetAuxilaryInfo() interface{}     { return e.Auxilary }
+func (e *BaseEntry) SetAuxilaryInfo(info interface{}) { e.Auxilary = info }
+func (e *BaseEntry) GetMeta() *EntryMeta              { return e.Meta }
+func (e *BaseEntry) SetMeta(meta *EntryMeta)          { e.Meta = meta }
+func (e *BaseEntry) GetPayload() []byte               { return e.Payload }
 func (e *BaseEntry) Unmarshal(buf []byte) error {
 	e.Payload = make([]byte, len(buf))
 	copy(e.Payload, buf)
@@ -155,7 +160,7 @@ func (e *BaseEntry) ReadFrom(r io.Reader) (int, error) {
 	return r.Read(e.Payload)
 }
 
-func (e *BaseEntry) WriteTo(w StoreFileWriter, id uint64, locker sync.Locker) (int, error) {
+func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int, error) {
 	locker.Lock()
 	defer locker.Unlock()
 	if err := w.PrepareWrite(EntryMetaSize + int(e.Meta.PayloadSize())); err != nil {
@@ -169,9 +174,16 @@ func (e *BaseEntry) WriteTo(w StoreFileWriter, id uint64, locker sync.Locker) (i
 	if err != nil {
 		return n2, err
 	}
+	auxilary := e.GetAuxilaryInfo()
+	if auxilary == nil {
+		return n1 + n2, nil
+	}
+
 	if e.Meta.IsCheckpoint() {
-		w.ApplyCheckpoint(common.Range{Right: id})
-	} else if !e.Meta.IsFlush() {
+		r := auxilary.(*common.Range)
+		w.ApplyCheckpoint(*r)
+	} else {
+		id := auxilary.(uint64)
 		w.ApplyCommit(id)
 	}
 	return n1 + n2, err

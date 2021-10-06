@@ -84,7 +84,7 @@ func TestStore(t *testing.T) {
 	for i := 0; i < 13; i++ {
 		binary.BigEndian.PutUint64(buf, uint64(i))
 		e := newMockDDLEntry(mockCreateOp, buf)
-		err = store.AppendEntry(e, 0)
+		err = store.AppendEntry(e)
 		assert.Nil(t, err)
 		uncommitted = append(uncommitted, e)
 		if i%step == step-1 {

@@ -17,6 +17,7 @@ package logstore
 import (
 	"errors"
 	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync/atomic"
@@ -114,7 +115,8 @@ func (s *bufferedStore) Checkpoint(entry Entry, id uint64) error {
 	if id <= curr {
 		return nil
 	}
-	if err := s.store.AppendEntry(entry, id); err != nil {
+	entry.SetAuxilaryInfo(&common.Range{Right: id})
+	if err := s.store.AppendEntry(entry); err != nil {
 		return err
 	}
 	if err := s.Sync(); err != nil {
@@ -140,12 +142,13 @@ func (s *bufferedStore) SetSyncedId(id uint64) {
 	atomic.StoreUint64(&s.synced, id)
 }
 
-func (s *bufferedStore) AppendEntry(entry Entry, id uint64) error {
+func (s *bufferedStore) AppendEntry(entry Entry) error {
 	panic("not supported")
 }
 
 func (s *bufferedStore) AppendEntryWithCommitId(entry Entry, commitId uint64) error {
-	err := s.store.AppendEntry(entry, commitId)
+	entry.SetAuxilaryInfo(commitId)
+	err := s.store.AppendEntry(entry)
 	if err != nil {
 		return err
 	}
