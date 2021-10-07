@@ -36,13 +36,13 @@ type SyncerCfg struct {
 	Interval time.Duration
 }
 
-type HBHandleFactory = func(BufferedStore) base.IHBHandle
+type HBHandleFactory = func(AwareStore) base.IHBHandle
 
 var (
 	DefaultHBInterval = time.Duration(100) * time.Millisecond
 )
 
-type BufferedStore interface {
+type AwareStore interface {
 	Store
 	Start()
 	Checkpoint(Entry) error
@@ -53,7 +53,7 @@ type BufferedStore interface {
 }
 
 type syncHandler struct {
-	store *bufferedStore
+	store *syncAwareStore
 }
 
 func (h *syncHandler) OnExec() { h.store.Sync() }
@@ -62,7 +62,7 @@ func (h *syncHandler) OnStopped() {
 	logutil.Infof("syncHandler Stoped at: %d", h.store.GetSyncedId())
 }
 
-type bufferedStore struct {
+type syncAwareStore struct {
 	store
 	synced       uint64
 	unsynced     uint64
@@ -71,8 +71,8 @@ type bufferedStore struct {
 	syncer       base.IHeartbeater
 }
 
-func NewBufferedStore(dir, name string, rotationCfg *RotationCfg, syncerCfg *SyncerCfg) (*bufferedStore, error) {
-	s := &bufferedStore{}
+func NewSyncAwareStore(dir, name string, rotationCfg *RotationCfg, syncerCfg *SyncerCfg) (*syncAwareStore, error) {
+	s := &syncAwareStore{}
 	if rotationCfg.Observer == nil {
 		rotationCfg.Observer = s
 	} else {
@@ -96,16 +96,16 @@ func NewBufferedStore(dir, name string, rotationCfg *RotationCfg, syncerCfg *Syn
 	return s, nil
 }
 
-func (s *bufferedStore) Start() {
+func (s *syncAwareStore) Start() {
 	s.syncer.Start()
 }
 
-func (s *bufferedStore) Close() error {
+func (s *syncAwareStore) Close() error {
 	s.syncer.Stop()
 	return s.store.Close()
 }
 
-func (s *bufferedStore) Checkpoint(entry Entry) error {
+func (s *syncAwareStore) Checkpoint(entry Entry) error {
 	if !atomic.CompareAndSwapUint32(&s.state, stInited, stPreCheckpoint) {
 		return errors.New("Another checkpoint job is running")
 	}
@@ -125,23 +125,23 @@ func (s *bufferedStore) Checkpoint(entry Entry) error {
 	return nil
 }
 
-func (s *bufferedStore) GetCheckpointId() uint64 {
+func (s *syncAwareStore) GetCheckpointId() uint64 {
 	return atomic.LoadUint64(&s.checkpointed)
 }
 
-func (s *bufferedStore) SetCheckpointId(id uint64) {
+func (s *syncAwareStore) SetCheckpointId(id uint64) {
 	atomic.StoreUint64(&s.checkpointed, id)
 }
 
-func (s *bufferedStore) GetSyncedId() uint64 {
+func (s *syncAwareStore) GetSyncedId() uint64 {
 	return atomic.LoadUint64(&s.synced)
 }
 
-func (s *bufferedStore) SetSyncedId(id uint64) {
+func (s *syncAwareStore) SetSyncedId(id uint64) {
 	atomic.StoreUint64(&s.synced, id)
 }
 
-func (s *bufferedStore) AppendEntry(entry Entry) error {
+func (s *syncAwareStore) AppendEntry(entry Entry) error {
 	var commitId uint64
 	isFlush := entry.GetMeta().IsFlush()
 	if !isFlush {
@@ -158,16 +158,16 @@ func (s *bufferedStore) AppendEntry(entry Entry) error {
 	return nil
 }
 
-func (s *bufferedStore) OnSynced() {
+func (s *syncAwareStore) OnSynced() {
 	unsynced := atomic.LoadUint64(&s.unsynced)
 	s.SetSyncedId(unsynced)
 }
 
-func (s *bufferedStore) OnRotated(vf *VersionFile) {
+func (s *syncAwareStore) OnRotated(vf *VersionFile) {
 	// logutil.Infof("%s rotated", vf.Name())
 }
 
-func (s *bufferedStore) Sync() error {
+func (s *syncAwareStore) Sync() error {
 	if err := s.file.Sync(); err != nil {
 		return err
 	}

@@ -102,7 +102,7 @@ type hbHandleFactory struct {
 	catalog *Catalog
 }
 
-func (factory *hbHandleFactory) builder(_ logstore.BufferedStore) base.IHBHandle {
+func (factory *hbHandleFactory) builder(_ logstore.AwareStore) base.IHBHandle {
 	return &hbHandle{
 		delta:   DefaultCheckpointDelta,
 		catalog: factory.catalog,

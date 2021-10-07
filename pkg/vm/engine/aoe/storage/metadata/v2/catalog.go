@@ -91,12 +91,12 @@ func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 type Catalog struct {
 	*sync.RWMutex `json:"-"`
 	Sequence      `json:"-"`
-	Store         logstore.BufferedStore `json:"-"`
-	Cfg           *CatalogCfg            `json:"-"`
-	NameNodes     map[string]*tableNode  `json:"-"`
-	NameIndex     *btree.BTree           `json:"-"`
-	nodesMu       sync.RWMutex           `json:"-"`
-	archiver      wb.IOpWorker           `json:"-"`
+	Store         logstore.AwareStore   `json:"-"`
+	Cfg           *CatalogCfg           `json:"-"`
+	NameNodes     map[string]*tableNode `json:"-"`
+	NameIndex     *btree.BTree          `json:"-"`
+	nodesMu       sync.RWMutex          `json:"-"`
+	archiver      wb.IOpWorker          `json:"-"`
 
 	TableSet map[uint64]*Table
 }
@@ -128,7 +128,7 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalo
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
 		MaxSize: cfg.RotationFileMaxSize,
 	}
-	store, err := logstore.NewBufferedStore(cfg.Dir, "store", rotationCfg, syncerCfg)
+	store, err := logstore.NewSyncAwareStore(cfg.Dir, "store", rotationCfg, syncerCfg)
 	if err != nil {
 		panic(err)
 	}
