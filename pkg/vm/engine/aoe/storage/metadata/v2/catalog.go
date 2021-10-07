@@ -400,7 +400,7 @@ func (catalog *Catalog) commitLocked(entry IEntry, eType LogEntryType, rwlocker 
 		rwlocker.Unlock()
 		defer rwlocker.Lock()
 	}
-	err := catalog.CommitLogEntry(lentry, commitId, false)
+	err := catalog.CommitLogEntry(lentry, commitId, IsSyncDDLEntryType(eType))
 	if err != nil {
 		panic(err)
 	}
