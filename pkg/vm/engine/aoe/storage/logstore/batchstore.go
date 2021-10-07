@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	"sync/atomic"
 )
@@ -14,14 +15,16 @@ var (
 
 type batchStore struct {
 	store
-	synced       uint64
-	checkpointed uint64
-	flushWg      sync.WaitGroup
-	flushCtx     context.Context
-	flushCancel  context.CancelFunc
-	flushQueue   chan Entry
-	wg           sync.WaitGroup
-	closed       int32
+	synced            uint64
+	syncpending       uint64
+	checkpointpending uint64
+	checkpointed      uint64
+	flushWg           sync.WaitGroup
+	flushCtx          context.Context
+	flushCancel       context.CancelFunc
+	flushQueue        chan Entry
+	wg                sync.WaitGroup
+	closed            int32
 }
 
 func newBatchStore(dir, name string, rotationCfg *RotationCfg) (*batchStore, error) {
@@ -41,6 +44,10 @@ func newBatchStore(dir, name string, rotationCfg *RotationCfg) (*batchStore, err
 
 func (s *batchStore) IsClosed() bool {
 	return atomic.LoadInt32(&s.closed) == int32(1)
+}
+
+func (s *batchStore) Checkpoint(entry Entry) error {
+	return s.AppendEntry(entry)
 }
 
 func (s *batchStore) AppendEntry(entry Entry) error {
@@ -92,19 +99,52 @@ func (s *batchStore) flushLoop() {
 }
 
 func (s *batchStore) onEntries(entries []Entry, indice []int) {
+	var err error
 	for _, entry := range entries {
-		err := s.store.AppendEntry(entry)
+		err = s.store.AppendEntry(entry)
 		if err != nil {
 			panic(err)
 		}
+		if info := entry.GetAuxilaryInfo(); info != nil {
+			switch v := info.(type) {
+			case uint64:
+				s.syncpending = v
+			case *common.Range:
+				s.checkpointpending = v.Right
+			default:
+				panic("not supported")
+			}
+		}
 	}
-	err := s.store.Sync()
+	err = s.store.Sync()
 	if err != nil {
 		panic(err)
+	}
+	if s.checkpointpending > s.checkpointed {
+		s.SetCheckpointId(s.checkpointpending)
+	}
+	if s.syncpending > s.synced {
+		s.SetSyncedId(s.syncpending)
 	}
 	for _, idx := range indice {
 		entries[idx].(AsyncEntry).DoneWithErr(nil)
 	}
+}
+
+func (s *batchStore) GetCheckpointId() uint64 {
+	return atomic.LoadUint64(&s.checkpointed)
+}
+
+func (s *batchStore) SetCheckpointId(id uint64) {
+	atomic.StoreUint64(&s.checkpointed, id)
+}
+
+func (s *batchStore) GetSyncedId() uint64 {
+	return atomic.LoadUint64(&s.synced)
+}
+
+func (s *batchStore) SetSyncedId(id uint64) {
+	atomic.StoreUint64(&s.synced, id)
 }
 
 func (s *batchStore) Close() error {
