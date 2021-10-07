@@ -35,6 +35,7 @@ func GetEmptyEntry() *BaseEntry {
 }
 
 type Entry interface {
+	IsAsync() bool
 	GetMeta() *EntryMeta
 	SetMeta(*EntryMeta)
 	GetPayload() []byte
@@ -176,6 +177,7 @@ func (e *BaseEntry) Free() {
 	_entPool.Put(e)
 }
 
+func (e *BaseEntry) IsAsync() bool                    { return false }
 func (e *BaseEntry) GetAuxilaryInfo() interface{}     { return e.Auxilary }
 func (e *BaseEntry) SetAuxilaryInfo(info interface{}) { e.Auxilary = info }
 func (e *BaseEntry) GetMeta() *EntryMeta              { return e.Meta }
