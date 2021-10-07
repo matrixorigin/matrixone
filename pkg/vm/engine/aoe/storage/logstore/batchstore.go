@@ -59,6 +59,7 @@ func (s *batchStore) AppendEntry(entry Entry) error {
 func (s *batchStore) flushLoop() {
 	defer s.wg.Done()
 	entries := make([]Entry, 0, DefaultMaxBatchSize)
+	indice := make([]int, 0, DefaultMaxBatchSize)
 	for {
 		select {
 		case <-s.flushCtx.Done():
@@ -66,24 +67,31 @@ func (s *batchStore) flushLoop() {
 			return
 		case e := <-s.flushQueue:
 			entries = append(entries, e)
+			if e.IsAsync() {
+				indice = append(indice, len(entries)-1)
+			}
 		Left:
 			for i := 0; i < DefaultMaxBatchSize-1; i++ {
 				select {
 				case e = <-s.flushQueue:
 					entries = append(entries, e)
+					if e.IsAsync() {
+						indice = append(indice, len(entries)-1)
+					}
 				default:
 					break Left
 				}
 			}
 			cnt := len(entries)
-			s.onEntries(entries)
+			s.onEntries(entries, indice)
 			entries = entries[:0]
+			indice = indice[:0]
 			s.flushWg.Add(-1 * cnt)
 		}
 	}
 }
 
-func (s *batchStore) onEntries(entries []Entry) {
+func (s *batchStore) onEntries(entries []Entry, indice []int) {
 	for _, entry := range entries {
 		err := s.store.AppendEntry(entry)
 		if err != nil {
@@ -94,10 +102,8 @@ func (s *batchStore) onEntries(entries []Entry) {
 	if err != nil {
 		panic(err)
 	}
-	for _, entry := range entries {
-		if entry.IsAsync() {
-			entry.(AsyncEntry).DoneWithErr(nil)
-		}
+	for _, idx := range indice {
+		entries[idx].(AsyncEntry).DoneWithErr(nil)
 	}
 }
 

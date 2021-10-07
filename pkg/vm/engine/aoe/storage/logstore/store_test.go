@@ -187,13 +187,20 @@ func TestBatchStore(t *testing.T) {
 	f := func(i int) func() {
 		return func() {
 			defer wg.Done()
-			entry := NewAsyncBaseEntry()
-			entry.GetMeta().SetType(ETFlush)
-			err := s.AppendEntry(entry)
-			assert.Nil(t, err)
-			err = entry.WaitDone()
-			assert.Nil(t, err)
-			entry.Free()
+			if i%2 == 0 {
+				entry := NewAsyncBaseEntry()
+				entry.GetMeta().SetType(ETFlush)
+				err := s.AppendEntry(entry)
+				assert.Nil(t, err)
+				err = entry.WaitDone()
+				assert.Nil(t, err)
+				entry.Free()
+			} else {
+				entry := GetEmptyEntry()
+				entry.GetMeta().SetType(ETFlush)
+				err := s.AppendEntry(entry)
+				assert.Nil(t, err)
+			}
 		}
 	}
 
