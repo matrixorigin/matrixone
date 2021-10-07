@@ -25,8 +25,7 @@ import (
 
 type Store = logstore.Store
 
-func defaultHandler(r io.Reader, meta *LogEntryMeta) (LogEntry, int64, error) {
-	entry := logstore.NewBaseEntryWithMeta(meta)
+func defaultHandler(r io.Reader, entry LogEntry) (LogEntry, int64, error) {
 	n, err := entry.ReadFrom(r)
 	if err != nil {
 		return nil, int64(n), err
@@ -191,12 +190,14 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 }
 
 func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logstore.ReplayObserver) error {
-	meta := logstore.NewEntryMeta()
+	entry := logstore.GetEmptyEntry()
+	defer entry.Free()
+	meta := entry.GetMeta()
 	_, err := meta.ReadFrom(r)
 	if err != nil {
 		return err
 	}
-	if entry, n, err := defaultHandler(r, meta); err != nil {
+	if entry, n, err := defaultHandler(r, entry); err != nil {
 		return err
 	} else {
 		if n != int64(meta.PayloadSize()) {

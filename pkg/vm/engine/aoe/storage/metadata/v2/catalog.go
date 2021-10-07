@@ -81,7 +81,7 @@ func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := e.Marshal()
-	logEntry := logstore.NewBaseEntry()
+	logEntry := logstore.GetEmptyEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
@@ -456,7 +456,7 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := catalog.Marshal()
-	logEntry := logstore.NewBaseEntry()
+	logEntry := logstore.GetEmptyEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry

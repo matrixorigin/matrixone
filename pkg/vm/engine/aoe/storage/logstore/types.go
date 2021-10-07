@@ -115,6 +115,7 @@ func (s *store) GetHistory() IHistory {
 }
 
 func (s *store) AppendEntry(entry Entry) error {
+	defer entry.Free()
 	if _, err := entry.WriteTo(s.file, s.file); err != nil {
 		return err
 	}

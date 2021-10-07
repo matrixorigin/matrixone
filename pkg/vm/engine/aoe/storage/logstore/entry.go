@@ -22,6 +22,18 @@ import (
 	"unsafe"
 )
 
+var (
+	_entPool = sync.Pool{New: func() interface{} {
+		return newBaseEntry()
+	}}
+)
+
+func GetEmptyEntry() *BaseEntry {
+	e := _entPool.Get().(*BaseEntry)
+	e.p = &_entPool
+	return e
+}
+
 type Entry interface {
 	GetMeta() *EntryMeta
 	SetMeta(*EntryMeta)
@@ -31,6 +43,7 @@ type Entry interface {
 	WriteTo(StoreFileWriter, sync.Locker) (int, error)
 	GetAuxilaryInfo() interface{}
 	SetAuxilaryInfo(info interface{})
+	Free()
 }
 
 type EntryType = uint16
@@ -71,6 +84,11 @@ func NewEntryMeta() *EntryMeta {
 		Buf: make([]byte, EntryMetaSize),
 	}
 	return meta
+}
+
+func (meta *EntryMeta) reset() {
+	meta.SetType(ETInvalid)
+	meta.SetPayloadSize(0)
 }
 
 func (meta *EntryMeta) SetType(typ EntryType) {
@@ -124,9 +142,10 @@ type BaseEntry struct {
 	Meta     *EntryMeta
 	Payload  []byte
 	Auxilary interface{}
+	p        *sync.Pool
 }
 
-func NewBaseEntry() *BaseEntry {
+func newBaseEntry() *BaseEntry {
 	e := &BaseEntry{
 		Meta:    NewEntryMeta(),
 		Payload: make([]byte, 0),
@@ -142,14 +161,30 @@ func NewBaseEntryWithMeta(meta *EntryMeta) *BaseEntry {
 	return e
 }
 
+func (e *BaseEntry) reset() {
+	e.Meta.reset()
+	e.Payload = e.Payload[:0]
+	e.Auxilary = nil
+	e.p = nil
+}
+
+func (e *BaseEntry) Free() {
+	if e.p == nil {
+		return
+	}
+	e.reset()
+	_entPool.Put(e)
+}
+
 func (e *BaseEntry) GetAuxilaryInfo() interface{}     { return e.Auxilary }
 func (e *BaseEntry) SetAuxilaryInfo(info interface{}) { e.Auxilary = info }
 func (e *BaseEntry) GetMeta() *EntryMeta              { return e.Meta }
 func (e *BaseEntry) SetMeta(meta *EntryMeta)          { e.Meta = meta }
 func (e *BaseEntry) GetPayload() []byte               { return e.Payload }
 func (e *BaseEntry) Unmarshal(buf []byte) error {
-	e.Payload = make([]byte, len(buf))
-	copy(e.Payload, buf)
+	// e.Payload = make([]byte, len(buf))
+	// copy(e.Payload, buf)
+	e.Payload = buf
 	e.Meta.SetPayloadSize(uint32(len(buf)))
 	return nil
 }

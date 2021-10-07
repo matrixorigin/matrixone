@@ -212,7 +212,7 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 	default:
 		panic("not supported")
 	}
-	logEntry := logstore.NewBaseEntry()
+	logEntry := logstore.GetEmptyEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry

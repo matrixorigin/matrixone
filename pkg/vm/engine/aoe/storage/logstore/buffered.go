@@ -147,13 +147,14 @@ func (s *bufferedStore) AppendEntry(entry Entry) error {
 }
 
 func (s *bufferedStore) AppendEntryWithCommitId(entry Entry, commitId uint64) error {
+	isFlush := entry.GetMeta().IsFlush()
 	entry.SetAuxilaryInfo(commitId)
 	err := s.store.AppendEntry(entry)
 	if err != nil {
 		return err
 	}
 	atomic.StoreUint64(&s.unsynced, commitId)
-	if entry.GetMeta().IsFlush() {
+	if isFlush {
 		return s.Sync()
 	}
 	return nil

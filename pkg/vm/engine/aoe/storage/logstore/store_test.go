@@ -52,7 +52,7 @@ func newMockDDLEntry(op mockDDLOp, data []byte) *mockDDLEntry {
 func newEmptyDDLEntry(meta *EntryMeta) *mockDDLEntry {
 	entry := new(mockDDLEntry)
 	if meta == nil {
-		entry.BaseEntry = *NewBaseEntry()
+		entry.BaseEntry = *newBaseEntry()
 		entry.Meta.SetType(mockETDDL)
 	} else {
 		entry.BaseEntry = *NewBaseEntryWithMeta(meta)
