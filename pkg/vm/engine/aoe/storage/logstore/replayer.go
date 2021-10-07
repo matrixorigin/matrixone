@@ -75,7 +75,7 @@ func (replayer *simpleReplayer) RegisterEntryHandler(eType EntryType, handler En
 	return nil
 }
 
-func (replayer *simpleReplayer) doReplay(r io.Reader) error {
+func (replayer *simpleReplayer) doReplay(r *VersionFile, observer ReplayObserver) error {
 	meta := NewEntryMeta()
 	n, err := meta.ReadFrom(r)
 	if err != nil {
@@ -108,7 +108,7 @@ func (replayer *simpleReplayer) doReplay(r io.Reader) error {
 }
 
 func (replayer *simpleReplayer) Replay(s Store) error {
-	err := s.ForLoopEntries(replayer.doReplay)
+	err := s.ReplayVersions(replayer.doReplay)
 	logutil.Infof("replay count: %d", replayer.count)
 	return err
 }

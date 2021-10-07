@@ -17,9 +17,12 @@ package logstore
 import (
 	"encoding/binary"
 	"io"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
+	"sync"
 	"testing"
 
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -52,7 +55,7 @@ func newMockDDLEntry(op mockDDLOp, data []byte) *mockDDLEntry {
 func newEmptyDDLEntry(meta *EntryMeta) *mockDDLEntry {
 	entry := new(mockDDLEntry)
 	if meta == nil {
-		entry.BaseEntry = *NewBaseEntry()
+		entry.BaseEntry = *newBaseEntry()
 		entry.Meta.SetType(mockETDDL)
 	} else {
 		entry.BaseEntry = *NewBaseEntryWithMeta(meta)
@@ -73,7 +76,8 @@ func TestStore(t *testing.T) {
 	dir := "/tmp/teststore"
 	os.RemoveAll(dir)
 	name := "sstore"
-	store, err := New(dir, name)
+	roCfg := &RotationCfg{}
+	store, err := New(dir, name, roCfg)
 	assert.Nil(t, err)
 
 	buf := make([]byte, 8)
@@ -95,7 +99,8 @@ func TestStore(t *testing.T) {
 	}
 	store.Close()
 
-	store, err = New(dir, name)
+	roCfg = &RotationCfg{}
+	store, err = New(dir, name, roCfg)
 	assert.Nil(t, err)
 	defer store.Close()
 
@@ -109,4 +114,102 @@ func TestStore(t *testing.T) {
 
 	err = replayer.Truncate(store)
 	assert.Nil(t, err)
+}
+
+// func TestAynscEntry(t *testing.T) {
+// 	queue := make(chan *AsyncBaseEntry, 1000)
+// 	doneq := make(chan *AsyncBaseEntry, 1000)
+// 	var wg sync.WaitGroup
+// 	wg.Add(1)
+// 	ctx, cancel := context.WithCancel(context.Background())
+// 	ctx2, cancel2 := context.WithCancel(context.Background())
+// 	var wg1 sync.WaitGroup
+// 	var wg2 sync.WaitGroup
+// 	go func() {
+// 		defer wg.Done()
+// 		for {
+// 			select {
+// 			case <-ctx.Done():
+// 				return
+// 			case entry := <-queue:
+// 				// id := entry.GetPayload().(int)
+// 				// t.Logf("Processing request %d", id)
+// 				entry.DoneWithErr(nil)
+// 				wg1.Done()
+// 			}
+// 		}
+// 	}()
+// 	wg.Add(1)
+// 	go func() {
+// 		defer wg.Done()
+// 		for {
+// 			select {
+// 			case <-ctx2.Done():
+// 				return
+// 			case entry := <-doneq:
+// 				// id := entry.GetPayload().(int)
+// 				// t.Logf("Done request %d", id)
+// 				entry.WaitDone()
+// 				entry.Free()
+// 				wg2.Done()
+// 			}
+// 		}
+// 	}()
+
+// 	for i := 0; i < 1000; i++ {
+// 		entry := NewAsyncBaseEntry(i)
+// 		wg1.Add(1)
+// 		queue <- entry
+
+// 		wg2.Add(1)
+// 		doneq <- entry
+// 	}
+
+// 	wg1.Wait()
+// 	wg2.Wait()
+
+// 	cancel()
+// 	cancel2()
+// 	wg.Wait()
+// }
+
+func TestBatchStore(t *testing.T) {
+	dir := "/tmp/testbatchstore"
+	os.RemoveAll(dir)
+	var wg sync.WaitGroup
+	cfg := &RotationCfg{
+		RotateChecker: &MaxSizeRotationChecker{MaxSize: 100 * int(common.M)},
+	}
+	s, err := NewBatchStore(dir, "bstore", cfg)
+	assert.Nil(t, err)
+	s.Start()
+	pool, _ := ants.NewPool(100)
+
+	f := func(i int) func() {
+		return func() {
+			defer wg.Done()
+			if i%2 == 0 {
+				entry := NewAsyncBaseEntry()
+				entry.GetMeta().SetType(ETFlush)
+				err := s.AppendEntry(entry)
+				assert.Nil(t, err)
+				err = entry.WaitDone()
+				assert.Nil(t, err)
+				entry.Free()
+			} else {
+				entry := GetEmptyEntry()
+				entry.GetMeta().SetType(ETFlush)
+				err := s.AppendEntry(entry)
+				assert.Nil(t, err)
+			}
+		}
+	}
+
+	for i := 0; i < 10000; i++ {
+		wg.Add(1)
+		pool.Submit(f(i))
+	}
+
+	wg.Wait()
+	s.Close()
 }

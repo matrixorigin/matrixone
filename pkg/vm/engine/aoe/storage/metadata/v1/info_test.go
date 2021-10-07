@@ -1,7 +1,6 @@
 package metadata
 
 import (
-	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -9,9 +8,13 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestInfo(t *testing.T) {
+	dir := "/tmp/tbl"
+	os.RemoveAll(dir)
 	mu := &sync.RWMutex{}
 	info := MockInfo(mu, blockRowCount, segmentBlockCount)
 	assert.NotNil(t, info)
@@ -45,7 +48,7 @@ func TestInfo(t *testing.T) {
 	err = info1.RegisterTable(tbl2)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(info1.TableNames()))
-	assert.Equal(t, map[uint64]uint64{tbl1.ID:tbl1.ID, tbl2.ID:tbl2.ID}, info1.TableIDs())
+	assert.Equal(t, map[uint64]uint64{tbl1.ID: tbl1.ID, tbl2.ID: tbl2.ID}, info1.TableIDs())
 	assert.Equal(t, 2, len(info1.GetTablesByNamePrefix("tbl")))
 	assert.Panics(t, func() {
 		info1.GetTableId()
@@ -127,7 +130,7 @@ func TestInfo(t *testing.T) {
 	assert.NotNil(t, info1.UpdateCheckpoint(info1.CheckPoint-1))
 	assert.Nil(t, info1.UpdateCheckpoint(info1.CheckPoint+1))
 	info1.UpdateCheckpointTime(NowMicro())
-	info1.UpdateCheckpointTime(NowMicro()-10)
+	info1.UpdateCheckpointTime(NowMicro() - 10)
 	_, err = info1.CreateTableFromTableInfo(&aoe.TableInfo{}, dbi.TableOpCtx{})
 	assert.NotNil(t, err)
 	_, err = info1.CreateTableFromTableInfo(&aoe.TableInfo{Name: "tbl1", Columns: []aoe.ColumnInfo{{Name: "xxxx", Type: types.Type{}}}}, dbi.TableOpCtx{})

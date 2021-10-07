@@ -17,17 +17,34 @@ package logstore
 import (
 	"fmt"
 	"io"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	"unsafe"
 )
 
+var (
+	_entPool = sync.Pool{New: func() interface{} {
+		return newBaseEntry()
+	}}
+)
+
+func GetEmptyEntry() *BaseEntry {
+	e := _entPool.Get().(*BaseEntry)
+	e.p = &_entPool
+	return e
+}
+
 type Entry interface {
+	IsAsync() bool
 	GetMeta() *EntryMeta
 	SetMeta(*EntryMeta)
 	GetPayload() []byte
 	Unmarshal([]byte) error
 	ReadFrom(io.Reader) (int, error)
-	WriteTo(io.Writer, sync.Locker) (int, error)
+	WriteTo(StoreFileWriter, sync.Locker) (int, error)
+	GetAuxilaryInfo() interface{}
+	SetAuxilaryInfo(info interface{})
+	Free()
 }
 
 type EntryType = uint16
@@ -68,6 +85,11 @@ func NewEntryMeta() *EntryMeta {
 		Buf: make([]byte, EntryMetaSize),
 	}
 	return meta
+}
+
+func (meta *EntryMeta) reset() {
+	meta.SetType(ETInvalid)
+	meta.SetPayloadSize(0)
 }
 
 func (meta *EntryMeta) SetType(typ EntryType) {
@@ -118,11 +140,13 @@ func (meta *EntryMeta) ReadFrom(r io.Reader) (int, error) {
 }
 
 type BaseEntry struct {
-	Meta    *EntryMeta
-	Payload []byte
+	Meta     *EntryMeta
+	Payload  []byte
+	Auxilary interface{}
+	p        *sync.Pool
 }
 
-func NewBaseEntry() *BaseEntry {
+func newBaseEntry() *BaseEntry {
 	e := &BaseEntry{
 		Meta:    NewEntryMeta(),
 		Payload: make([]byte, 0),
@@ -138,12 +162,38 @@ func NewBaseEntryWithMeta(meta *EntryMeta) *BaseEntry {
 	return e
 }
 
-func (e *BaseEntry) GetMeta() *EntryMeta     { return e.Meta }
-func (e *BaseEntry) SetMeta(meta *EntryMeta) { e.Meta = meta }
-func (e *BaseEntry) GetPayload() []byte      { return e.Payload }
+func (e *BaseEntry) Clone(o Entry) {
+	e.Meta.SetType(o.GetMeta().GetType())
+	e.Meta.SetPayloadSize(o.GetMeta().PayloadSize())
+	e.Payload = o.GetPayload()
+	e.Auxilary = o.GetAuxilaryInfo()
+}
+
+func (e *BaseEntry) reset() {
+	e.Meta.reset()
+	e.Payload = e.Payload[:0]
+	e.Auxilary = nil
+	e.p = nil
+}
+
+func (e *BaseEntry) Free() {
+	if e.p == nil {
+		return
+	}
+	e.reset()
+	_entPool.Put(e)
+}
+
+func (e *BaseEntry) IsAsync() bool                    { return false }
+func (e *BaseEntry) GetAuxilaryInfo() interface{}     { return e.Auxilary }
+func (e *BaseEntry) SetAuxilaryInfo(info interface{}) { e.Auxilary = info }
+func (e *BaseEntry) GetMeta() *EntryMeta              { return e.Meta }
+func (e *BaseEntry) SetMeta(meta *EntryMeta)          { e.Meta = meta }
+func (e *BaseEntry) GetPayload() []byte               { return e.Payload }
 func (e *BaseEntry) Unmarshal(buf []byte) error {
-	e.Payload = make([]byte, len(buf))
-	copy(e.Payload, buf)
+	// e.Payload = make([]byte, len(buf))
+	// copy(e.Payload, buf)
+	e.Payload = buf
 	e.Meta.SetPayloadSize(uint32(len(buf)))
 	return nil
 }
@@ -154,9 +204,12 @@ func (e *BaseEntry) ReadFrom(r io.Reader) (int, error) {
 	return r.Read(e.Payload)
 }
 
-func (e *BaseEntry) WriteTo(w io.Writer, locker sync.Locker) (int, error) {
+func (e *BaseEntry) WriteTo(w StoreFileWriter, locker sync.Locker) (int, error) {
 	locker.Lock()
 	defer locker.Unlock()
+	if err := w.PrepareWrite(EntryMetaSize + int(e.Meta.PayloadSize())); err != nil {
+		return 0, err
+	}
 	n1, err := e.Meta.WriteTo(w)
 	if err != nil {
 		return n1, err
@@ -164,6 +217,18 @@ func (e *BaseEntry) WriteTo(w io.Writer, locker sync.Locker) (int, error) {
 	n2, err := w.Write(e.Payload)
 	if err != nil {
 		return n2, err
+	}
+	auxilary := e.GetAuxilaryInfo()
+	if auxilary == nil {
+		return n1 + n2, nil
+	}
+
+	if e.Meta.IsCheckpoint() {
+		r := auxilary.(*common.Range)
+		w.ApplyCheckpoint(*r)
+	} else {
+		id := auxilary.(uint64)
+		w.ApplyCommit(id)
 	}
 	return n1 + n2, err
 }

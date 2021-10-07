@@ -17,7 +17,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	worker "matrixone/pkg/vm/engine/aoe/storage/worker"
+	wb "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"sort"
 	"sync"
 
 	"github.com/google/btree"
@@ -33,25 +38,98 @@ var (
 )
 
 type CatalogCfg struct {
-	Dir              string `json:"-"`
-	BlockMaxRows     uint64 `toml:"block-max-rows"`
-	SegmentMaxBlocks uint64 `toml:"segment-max-blocks"`
+	Dir                 string `json:"-"`
+	BlockMaxRows        uint64 `toml:"block-max-rows"`
+	SegmentMaxBlocks    uint64 `toml:"segment-max-blocks"`
+	RotationFileMaxSize int    `toml:"rotation-file-max-size"`
+}
+
+type catalogLogEntry struct {
+	Range   common.Range
+	Catalog *Catalog
+}
+
+func newCatalogLogEntry(id uint64) *catalogLogEntry {
+	e := &catalogLogEntry{
+		Catalog: &Catalog{
+			RWMutex:  &sync.RWMutex{},
+			TableSet: make(map[uint64]*Table),
+		},
+	}
+	e.Range.Right = id
+	return e
+}
+
+func (e *catalogLogEntry) CheckpointId() uint64 {
+	return e.Range.Right
+}
+
+func (e *catalogLogEntry) Marshal() ([]byte, error) {
+	buf, err := json.Marshal(e)
+	return buf, err
+}
+
+func (e *catalogLogEntry) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, e)
+}
+
+func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
+	switch eType {
+	case logstore.ETCheckpoint:
+		break
+	default:
+		panic("not supported")
+	}
+	buf, _ := e.Marshal()
+	logEntry := logstore.GetEmptyEntry()
+	logEntry.Meta.SetType(eType)
+	logEntry.Unmarshal(buf)
+	logEntry.SetAuxilaryInfo(&e.Range)
+	return logEntry
 }
 
 type Catalog struct {
 	*sync.RWMutex `json:"-"`
 	Sequence      `json:"-"`
-	ckp           uint64                 `json:"-"`
-	Store         logstore.BufferedStore `json:"-"`
-	Cfg           *CatalogCfg            `json:"-"`
-	NameNodes     map[string]*tableNode  `json:"-"`
-	NameIndex     *btree.BTree           `json:"-"`
-	nodesMu       sync.RWMutex           `json:"-"`
+	Store         logstore.AwareStore   `json:"-"`
+	Cfg           *CatalogCfg           `json:"-"`
+	NameNodes     map[string]*tableNode `json:"-"`
+	NameIndex     *btree.BTree          `json:"-"`
+	nodesMu       sync.RWMutex          `json:"-"`
+	archiver      wb.IOpWorker          `json:"-"`
 
 	TableSet map[uint64]*Table
 }
 
+func NewCatalogWithBatchStore(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
+	if cfg.RotationFileMaxSize <= 0 {
+		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
+		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
+	}
+	catalog := &Catalog{
+		RWMutex:   mu,
+		Cfg:       cfg,
+		TableSet:  make(map[uint64]*Table),
+		NameNodes: make(map[string]*tableNode),
+		NameIndex: btree.New(2),
+	}
+	rotationCfg := &logstore.RotationCfg{}
+	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
+		MaxSize: cfg.RotationFileMaxSize,
+	}
+	store, err := logstore.NewBatchStore(cfg.Dir, "bstore", rotationCfg)
+	if err != nil {
+		panic(err)
+	}
+	catalog.Store = store
+	return catalog
+}
+
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalog {
+	if cfg.RotationFileMaxSize <= 0 {
+		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
+		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
+	}
 	catalog := &Catalog{
 		RWMutex:   mu,
 		Cfg:       cfg,
@@ -70,24 +148,45 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalo
 		catalog: catalog,
 	}
 	syncerCfg.Factory = factory.builder
-	store, err := logstore.NewBufferedStore(cfg.Dir, "store", syncerCfg)
+	rotationCfg := &logstore.RotationCfg{}
+	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
+		MaxSize: cfg.RotationFileMaxSize,
+	}
+	store, err := logstore.NewSyncAwareStore(cfg.Dir, "store", rotationCfg, syncerCfg)
 	if err != nil {
 		panic(err)
 	}
 	catalog.Store = store
-	return catalog
-}
-
-func newCompactCatalog(id uint64) *Catalog {
-	catalog := &Catalog{
-		TableSet: make(map[uint64]*Table),
-		ckp:      id,
-	}
+	catalog.archiver = worker.NewOpWorker("archiver")
+	catalog.archiver.Start()
 	return catalog
 }
 
 func (catalog *Catalog) StartSyncer() {
 	catalog.Store.Start()
+}
+
+func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error {
+	catalog.Sequence.nextCommitId = r.Right
+	sorted := make([]*Table, len(tables))
+	idx := 0
+	for _, table := range tables {
+		sorted[idx] = table
+		idx++
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Id < sorted[j].Id
+	})
+	for _, table := range sorted {
+		table.rebuild(catalog)
+		if err := catalog.onNewTable(table); err != nil {
+			return err
+		}
+	}
+	if len(sorted) > 0 {
+		catalog.Sequence.nextTableId = sorted[len(sorted)-1].Id
+	}
+	return nil
 }
 
 func (catalog *Catalog) SimpleGetTableAppliedIdByName(name string) (uint64, bool) {
@@ -119,13 +218,13 @@ func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
 	return tbls
 }
 
-func (catalog *Catalog) LatestView() *Catalog {
+func (catalog *Catalog) LatestView() *catalogLogEntry {
 	commitId := catalog.Store.GetSyncedId()
 	return catalog.CommittedView(commitId)
 }
 
-func (catalog *Catalog) CommittedView(id uint64) *Catalog {
-	ss := newCompactCatalog(id)
+func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
+	ss := newCatalogLogEntry(id)
 	entries := make(map[uint64]*Table)
 	catalog.RLock()
 	for id, entry := range catalog.TableSet {
@@ -135,19 +234,24 @@ func (catalog *Catalog) CommittedView(id uint64) *Catalog {
 	for eid, entry := range entries {
 		committed := entry.CommittedView(id)
 		if committed != nil {
-			ss.TableSet[eid] = committed
+			ss.Catalog.TableSet[eid] = committed
 		}
 	}
 	return ss
 }
 
 func (catalog *Catalog) Close() error {
-	return catalog.Store.Close()
+	catalog.Store.Close()
+	if catalog.archiver != nil {
+		catalog.archiver.Stop()
+	}
+	return nil
 }
 
 func (catalog *Catalog) CommitLogEntry(entry logstore.Entry, commitId uint64, sync bool) error {
 	var err error
-	if err = catalog.Store.AppendEntryWithCommitId(entry, commitId); err != nil {
+	entry.SetAuxilaryInfo(commitId)
+	if err = catalog.Store.AppendEntry(entry); err != nil {
 		return err
 	}
 	if sync {
@@ -231,7 +335,7 @@ func (catalog *Catalog) CreateTable(schema *Schema, tranId uint64, autoCommit bo
 	if !autoCommit {
 		return entry, nil
 	}
-	catalog.commitNoLock(entry, ETCreateTable, nil)
+	catalog.commitLocked(entry, ETCreateTable, nil)
 	return entry, nil
 }
 
@@ -279,10 +383,10 @@ func (catalog *Catalog) GetTable(id uint64) *Table {
 func (catalog *Catalog) Commit(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
 	catalog.Lock()
 	defer catalog.Unlock()
-	catalog.commitNoLock(entry, eType, rwlocker)
+	catalog.commitLocked(entry, eType, rwlocker)
 }
 
-func (catalog *Catalog) commitNoLock(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
+func (catalog *Catalog) commitLocked(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
 	commitId := catalog.NextCommitId()
 	var lentry LogEntry
 	if rwlocker == nil {
@@ -296,10 +400,11 @@ func (catalog *Catalog) commitNoLock(entry IEntry, eType LogEntryType, rwlocker 
 		rwlocker.Unlock()
 		defer rwlocker.Lock()
 	}
-	err := catalog.CommitLogEntry(lentry, commitId, false)
+	err := catalog.CommitLogEntry(lentry, commitId, IsSyncDDLEntryType(eType))
 	if err != nil {
 		panic(err)
 	}
+	lentry.Free()
 }
 
 func (catalog *Catalog) ForLoopTables(h func(*Table) error) error {
@@ -343,7 +448,7 @@ func (catalog *Catalog) SimpleGetBlock(tableId, segmentId, blockId uint64) (*Blo
 
 func (catalog *Catalog) Checkpoint() error {
 	view := catalog.LatestView()
-	err := catalog.Store.Checkpoint(view.ToLogEntry(logstore.ETCheckpoint), view.ckp)
+	err := catalog.Store.Checkpoint(view.ToLogEntry(logstore.ETCheckpoint))
 	return err
 }
 
@@ -380,7 +485,7 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := catalog.Marshal()
-	logEntry := logstore.NewBaseEntry()
+	logEntry := logstore.GetEmptyEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
@@ -457,47 +562,6 @@ func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
 	blkpos := seg.IdIndex[entry.Id]
 	blk := seg.BlockSet[blkpos]
 	blk.onNewCommit(entry.CommitInfo)
-	return nil
-}
-
-func (catalog *Catalog) onReplayEntry(entry LogEntry) error {
-	switch entry.GetMeta().GetType() {
-	case ETCreateBlock:
-		blk := &blockLogEntry{}
-		blk.Unmarshal(entry.GetPayload())
-		catalog.onReplayCreateBlock(blk)
-	case ETUpgradeBlock:
-		blk := &blockLogEntry{}
-		blk.Unmarshal(entry.GetPayload())
-		catalog.onReplayUpgradeBlock(blk)
-	case ETCreateTable:
-		tbl := &Table{}
-		tbl.Unmarshal(entry.GetPayload())
-		catalog.onReplayCreateTable(tbl)
-	case ETSoftDeleteTable:
-		tbl := &tableLogEntry{}
-		tbl.Unmarshal(entry.GetPayload())
-		catalog.onReplaySoftDeleteTable(tbl)
-	case ETHardDeleteTable:
-		tbl := &tableLogEntry{}
-		tbl.Unmarshal(entry.GetPayload())
-		catalog.onReplayHardDeleteTable(tbl)
-	case ETCreateSegment:
-		seg := &segmentLogEntry{}
-		seg.Unmarshal(entry.GetPayload())
-		catalog.onReplayCreateSegment(seg)
-	case ETUpgradeSegment:
-		seg := &segmentLogEntry{}
-		seg.Unmarshal(entry.GetPayload())
-		catalog.onReplayUpgradeSegment(seg)
-	case logstore.ETCheckpoint:
-		c := &Catalog{}
-		c.Unmarshal(entry.GetPayload())
-		// logutil.Infof("%v", c)
-	case logstore.ETFlush:
-	default:
-		panic(fmt.Sprintf("unkown entry type: %d", entry.GetMeta().GetType()))
-	}
 	return nil
 }
 

@@ -34,6 +34,13 @@ const (
 	ETDropBlock
 )
 
+func IsSyncDDLEntryType(et LogEntryType) bool {
+	if et == ETCreateTable || et == ETSoftDeleteTable {
+		return true
+	}
+	return false
+}
+
 type IEntry interface {
 	sync.Locker
 	Unmarshal([]byte) error

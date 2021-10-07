@@ -206,8 +206,8 @@ func TestDropTable(t *testing.T) {
 	// catalog.StartSyncer()
 	replayer := newCatalogReplayer()
 	replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
-	err = replayer.Replay(catalog.Store)
-	t.Log(err)
+	// err = replayer.Replay(catalog.Store)
+	// t.Log(err)
 	catalog.Close()
 }
 
@@ -331,6 +331,7 @@ func TestReplay(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
+	cfg.RotationFileMaxSize = 100 * int(common.K)
 	syncerCfg := &SyncerCfg{
 		Interval: syncerInterval,
 	}
@@ -493,12 +494,18 @@ func TestAppliedIndex(t *testing.T) {
 func TestUpgrade(t *testing.T) {
 	dir := "/tmp/testupgradeblock"
 	os.RemoveAll(dir)
+	delta := DefaultCheckpointDelta
+	DefaultCheckpointDelta = uint64(400)
+	defer func() {
+		DefaultCheckpointDelta = delta
+	}()
 
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
-	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(100)
+	cfg.RotationFileMaxSize = 5 * int(common.M)
 	syncerCfg := &SyncerCfg{
-		Interval: time.Duration(100) * time.Microsecond,
+		Interval: time.Duration(2) * time.Millisecond,
 	}
 	catalog := NewCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	catalog.StartSyncer()
@@ -515,7 +522,7 @@ func TestUpgrade(t *testing.T) {
 	traceSegments := make(map[uint64]int)
 	upgradedBlocks := uint64(0)
 	upgradedSegments := uint64(0)
-	segCnt, blockCnt := 4, int(cfg.SegmentMaxBlocks)
+	segCnt, blockCnt := 100, int(cfg.SegmentMaxBlocks)
 
 	updateTrace := func(tableId, segmentId uint64) func() {
 		return func() {
@@ -595,40 +602,118 @@ func TestUpgrade(t *testing.T) {
 	wg2.Wait()
 	wg3.Wait()
 	wg4.Wait()
-	// t.Log(atomic.LoadUint64(&upgradedBlocks))
-	// t.Log(atomic.LoadUint64(&upgradedSegments))
 	assert.Equal(t, segCnt*blockCnt, int(upgradedBlocks))
 	assert.Equal(t, segCnt, int(upgradedSegments))
 
-	t.Log(t1.PString(PPL1))
-	catalog.Store.AppendEntryWithCommitId(logstore.FlushEntry, uint64(100000))
-	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
-	assert.Nil(t, err)
-	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
-	assert.NotNil(t, err)
-	t.Log(t1.PString(PPL1))
-
-	err = catalog.HardDeleteTable(t1.Id)
-	assert.Nil(t, err)
-	t.Log(t1.PString(PPL1))
-
-	viewId := uint64(40)
-	view := catalog.CommittedView(viewId)
-	for _, tbl := range view.TableSet {
-		t.Log(len(tbl.SegmentSet))
-	}
-	view = catalog.LatestView()
-	assert.Equal(t, 0, len(view.TableSet))
+	catalog.Store.AppendEntry(logstore.FlushEntry)
 
 	catalog.Close()
+	sequence := catalog.Sequence
 
 	t.Log("Start replay")
 	now := time.Now()
 	replayer := newCatalogReplayer()
 	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	assert.Nil(t, err)
+	// t.Logf("%d - %d", catalog.Store.GetSyncedId(), catalog.Store.GetCheckpointId())
 	t.Log(time.Since(now))
-	t.Log(replayer.GetOffset())
-	t.Log(replayer.String())
-	t.Log(catalog.PString(PPL1))
+
+	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
+	assert.Equal(t, sequence.nextTableId, catalog.Sequence.nextTableId)
+	assert.Equal(t, sequence.nextSegmentId, catalog.Sequence.nextSegmentId)
+	assert.Equal(t, sequence.nextBlockId, catalog.Sequence.nextBlockId)
+
+	// t.Logf("r - %d", catalog.Sequence.nextCommitId)
+	// t.Logf("r - %d", catalog.Sequence.nextTableId)
+	// t.Logf("r - %d", catalog.Sequence.nextSegmentId)
+	// t.Logf("r - %d", catalog.Sequence.nextBlockId)
+
+	catalog.StartSyncer()
+
+	tmp := catalog.SimpleGetTable(t1.Id)
+	assert.NotNil(t, tmp)
+	tmp = catalog.SimpleGetTableByName(t1.Schema.Name)
+	assert.NotNil(t, tmp)
+
+	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
+	assert.Nil(t, err)
+	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
+	assert.NotNil(t, err)
+	err = catalog.HardDeleteTable(t1.Id)
+	assert.Nil(t, err)
+
+	viewId := uint64(40)
+	view := catalog.CommittedView(viewId)
+	for _, tbl := range view.Catalog.TableSet {
+		t.Log(len(tbl.SegmentSet))
+	}
+	time.Sleep(syncerCfg.Interval * 2)
+	view = catalog.LatestView()
+	assert.Equal(t, 1, len(view.Catalog.TableSet))
+
+	sequence = catalog.Sequence
+	catalog.Close()
+
+	replayer = newCatalogReplayer()
+	catalog, err = replayer.RebuildCatalog(new(sync.RWMutex), cfg, syncerCfg)
+	assert.Nil(t, err)
+	// t.Logf("%d - %d", catalog.Store.GetSyncedId(), catalog.Store.GetCheckpointId())
+	catalog.StartSyncer()
+	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
+	assert.Equal(t, sequence.nextTableId, catalog.Sequence.nextTableId)
+	assert.Equal(t, sequence.nextSegmentId, catalog.Sequence.nextSegmentId)
+	assert.Equal(t, sequence.nextBlockId, catalog.Sequence.nextBlockId)
+	catalog.Close()
+}
+
+func TestCatalogWithBatchStore(t *testing.T) {
+	dir := "/tmp/testcatalogwithbatchstore"
+	os.RemoveAll(dir)
+	delta := DefaultCheckpointDelta
+	DefaultCheckpointDelta = uint64(400000)
+	defer func() {
+		DefaultCheckpointDelta = delta
+	}()
+
+	cfg := new(CatalogCfg)
+	cfg.Dir = dir
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(100)
+	cfg.RotationFileMaxSize = 100 * int(common.K)
+	catalog := NewCatalogWithBatchStore(new(sync.RWMutex), cfg)
+	// catalog := NewCatalog(new(sync.RWMutex), cfg, nil)
+	catalog.StartSyncer()
+
+	pool, _ := ants.NewPool(10)
+	var wg sync.WaitGroup
+	f := func(i int) func() {
+		return func() {
+			defer wg.Done()
+			schema := MockSchema(2)
+			schema.Name = fmt.Sprintf("m%d", i)
+
+			t1, err := catalog.SimpleCreateTable(schema, nil)
+			assert.Nil(t, err)
+			assert.NotNil(t, t1)
+
+			s1 := t1.SimpleCreateSegment(nil)
+			s1.RLock()
+			assert.True(t, s1.HasCommitted())
+			s1.RUnlock()
+
+			rt1 := catalog.SimpleGetTableByName(schema.Name)
+			assert.NotNil(t, rt1)
+
+			b1 := s1.SimpleCreateBlock(nil)
+			b1.RLock()
+			assert.True(t, b1.HasCommitted())
+			b1.RUnlock()
+		}
+	}
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		pool.Submit(f(i))
+	}
+	wg.Wait()
+
+	catalog.Close()
 }

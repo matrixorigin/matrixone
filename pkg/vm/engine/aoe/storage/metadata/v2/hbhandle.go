@@ -16,41 +16,95 @@ package metadata
 import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"matrixone/pkg/vm/engine/aoe/storage/ops"
+	ob "matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"sync/atomic"
 )
 
+var (
+	DefaultCheckpointDelta uint64 = 10000
+)
+
+type checkpointOp struct {
+	ops.Op
+	handle *hbHandle
+}
+
+func newCheckpointOp(handle *hbHandle, waitable bool) *checkpointOp {
+	op := &checkpointOp{
+		handle: handle,
+	}
+	op.Op = ops.Op{
+		Impl:   op,
+		Worker: handle.catalog.archiver,
+	}
+	if !waitable {
+		op.DoneCB = op.onDone
+	} else {
+		op.ErrorC = make(chan error)
+	}
+	return op
+}
+
+func (op *checkpointOp) onDone(iop ob.IOp) {
+	if err := iop.GetError(); err != nil {
+		logutil.Warn(err.Error())
+	}
+	logutil.Infof("Checkpointed %d", op.handle.catalog.GetCheckpointId())
+	op.handle.onCheckpointDone()
+}
+
+func (op *checkpointOp) Execute() error {
+	if err := op.handle.catalog.Checkpoint(); err != nil {
+		return err
+	}
+	op.handle.catalog.Store.TryCompact()
+	return nil
+}
+
 type hbHandle struct {
-	catalog *Catalog
+	catalog   *Catalog
+	delta     uint64
+	scheduled int32
 }
 
 func (h *hbHandle) OnExec() {
-	ckId := h.catalog.GetCheckpointId()
-	cId := h.catalog.GetSafeCommitId()
-	if cId > ckId && cId-ckId >= 1000 {
-		if err := h.catalog.Checkpoint(); err != nil {
-			logutil.Warn(err.Error())
-		} else {
-			logutil.Infof("Checkpoint %d", h.catalog.GetCheckpointId())
-		}
-	} else {
-		if err := h.catalog.Store.Sync(); err != nil {
-			logutil.Warn(err.Error())
+	if atomic.LoadInt32(&h.scheduled) == 0 {
+		ckId := h.catalog.GetCheckpointId()
+		cId := h.catalog.GetSafeCommitId()
+		if cId > ckId && cId-ckId >= h.delta {
+			atomic.AddInt32(&h.scheduled, int32(1))
+			op := newCheckpointOp(h, false)
+			op.Push()
 		}
 	}
-}
-func (h *hbHandle) OnStopped() {
-	if err := h.catalog.Checkpoint(); err != nil {
+	if err := h.catalog.Store.Sync(); err != nil {
 		logutil.Warn(err.Error())
 	}
-	logutil.Infof("hbHandle Stoped at: %d", h.catalog.Store.GetSyncedId())
+}
+
+func (h *hbHandle) onCheckpointDone() {
+	v := atomic.AddInt32(&h.scheduled, int32(-1))
+	if v < 0 {
+		panic("logic error")
+	}
+}
+
+func (h *hbHandle) OnStopped() {
+	op := newCheckpointOp(h, true)
+	op.Push()
+	op.WaitDone()
+	logutil.Infof("Last synced id: %d ", h.catalog.Store.GetSyncedId())
 }
 
 type hbHandleFactory struct {
 	catalog *Catalog
 }
 
-func (factory *hbHandleFactory) builder(_ logstore.BufferedStore) base.IHBHandle {
+func (factory *hbHandleFactory) builder(_ logstore.AwareStore) base.IHBHandle {
 	return &hbHandle{
+		delta:   DefaultCheckpointDelta,
 		catalog: factory.catalog,
 	}
 }
