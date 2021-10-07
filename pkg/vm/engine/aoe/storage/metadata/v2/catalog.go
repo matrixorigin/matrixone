@@ -101,6 +101,30 @@ type Catalog struct {
 	TableSet map[uint64]*Table
 }
 
+func NewCatalogWithBatchStore(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
+	if cfg.RotationFileMaxSize <= 0 {
+		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
+		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
+	}
+	catalog := &Catalog{
+		RWMutex:   mu,
+		Cfg:       cfg,
+		TableSet:  make(map[uint64]*Table),
+		NameNodes: make(map[string]*tableNode),
+		NameIndex: btree.New(2),
+	}
+	rotationCfg := &logstore.RotationCfg{}
+	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
+		MaxSize: cfg.RotationFileMaxSize,
+	}
+	store, err := logstore.NewBatchStore(cfg.Dir, "bstore", rotationCfg)
+	if err != nil {
+		panic(err)
+	}
+	catalog.Store = store
+	return catalog
+}
+
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
 		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
@@ -218,7 +242,9 @@ func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
 
 func (catalog *Catalog) Close() error {
 	catalog.Store.Close()
-	catalog.archiver.Stop()
+	if catalog.archiver != nil {
+		catalog.archiver.Stop()
+	}
 	return nil
 }
 

@@ -27,7 +27,7 @@ type batchStore struct {
 	closed            int32
 }
 
-func newBatchStore(dir, name string, rotationCfg *RotationCfg) (*batchStore, error) {
+func NewBatchStore(dir, name string, rotationCfg *RotationCfg) (*batchStore, error) {
 	bs, err := New(dir, name, rotationCfg)
 	if err != nil {
 		return nil, err
@@ -37,9 +37,12 @@ func newBatchStore(dir, name string, rotationCfg *RotationCfg) (*batchStore, err
 		flushQueue: make(chan Entry, DefaultMaxBatchSize*100),
 	}
 	s.flushCtx, s.flushCancel = context.WithCancel(context.Background())
+	return s, nil
+}
+
+func (s *batchStore) Start() {
 	s.wg.Add(1)
 	go s.flushLoop()
-	return s, nil
 }
 
 func (s *batchStore) IsClosed() bool {
@@ -59,14 +62,21 @@ func (s *batchStore) AppendEntry(entry Entry) error {
 		s.flushWg.Done()
 		return errors.New("is closed")
 	}
-	s.flushQueue <- entry
+	if !entry.IsAsync() {
+		e := GetEmptyEntry()
+		e.Clone(entry)
+		s.flushQueue <- e
+	} else {
+		s.flushQueue <- entry
+	}
 	return nil
 }
 
 func (s *batchStore) flushLoop() {
 	defer s.wg.Done()
 	entries := make([]Entry, 0, DefaultMaxBatchSize)
-	indice := make([]int, 0, DefaultMaxBatchSize)
+	asyncIndice := make([]int, 0, DefaultMaxBatchSize)
+	syncIndice := make([]int, 0, DefaultMaxBatchSize)
 	for {
 		select {
 		case <-s.flushCtx.Done():
@@ -75,7 +85,9 @@ func (s *batchStore) flushLoop() {
 		case e := <-s.flushQueue:
 			entries = append(entries, e)
 			if e.IsAsync() {
-				indice = append(indice, len(entries)-1)
+				asyncIndice = append(asyncIndice, len(entries)-1)
+			} else {
+				syncIndice = append(syncIndice, len(entries)-1)
 			}
 		Left:
 			for i := 0; i < DefaultMaxBatchSize-1; i++ {
@@ -83,22 +95,25 @@ func (s *batchStore) flushLoop() {
 				case e = <-s.flushQueue:
 					entries = append(entries, e)
 					if e.IsAsync() {
-						indice = append(indice, len(entries)-1)
+						asyncIndice = append(asyncIndice, len(entries)-1)
+					} else {
+						syncIndice = append(syncIndice, len(entries)-1)
 					}
 				default:
 					break Left
 				}
 			}
 			cnt := len(entries)
-			s.onEntries(entries, indice)
+			s.onEntries(entries, syncIndice, asyncIndice)
 			entries = entries[:0]
-			indice = indice[:0]
+			syncIndice = syncIndice[:0]
+			asyncIndice = asyncIndice[:0]
 			s.flushWg.Add(-1 * cnt)
 		}
 	}
 }
 
-func (s *batchStore) onEntries(entries []Entry, indice []int) {
+func (s *batchStore) onEntries(entries []Entry, syncIndice []int, asyncIndice []int) {
 	var err error
 	for _, entry := range entries {
 		err = s.store.AppendEntry(entry)
@@ -126,8 +141,11 @@ func (s *batchStore) onEntries(entries []Entry, indice []int) {
 	if s.syncpending > s.synced {
 		s.SetSyncedId(s.syncpending)
 	}
-	for _, idx := range indice {
+	for _, idx := range asyncIndice {
 		entries[idx].(AsyncEntry).DoneWithErr(nil)
+	}
+	for _, idx := range syncIndice {
+		entries[idx].Free()
 	}
 }
 

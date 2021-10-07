@@ -180,9 +180,10 @@ func TestBatchStore(t *testing.T) {
 	cfg := &RotationCfg{
 		RotateChecker: &MaxSizeRotationChecker{MaxSize: 100 * int(common.M)},
 	}
-	s, err := newBatchStore(dir, "bstore", cfg)
+	s, err := NewBatchStore(dir, "bstore", cfg)
 	assert.Nil(t, err)
-	pool, _ := ants.NewPool(10)
+	s.Start()
+	pool, _ := ants.NewPool(100)
 
 	f := func(i int) func() {
 		return func() {
@@ -204,7 +205,7 @@ func TestBatchStore(t *testing.T) {
 		}
 	}
 
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 10000; i++ {
 		wg.Add(1)
 		pool.Submit(f(i))
 	}

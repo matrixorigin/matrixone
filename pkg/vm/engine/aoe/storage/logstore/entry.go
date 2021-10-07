@@ -162,6 +162,13 @@ func NewBaseEntryWithMeta(meta *EntryMeta) *BaseEntry {
 	return e
 }
 
+func (e *BaseEntry) Clone(o Entry) {
+	e.Meta.SetType(o.GetMeta().GetType())
+	e.Meta.SetPayloadSize(o.GetMeta().PayloadSize())
+	e.Payload = o.GetPayload()
+	e.Auxilary = o.GetAuxilaryInfo()
+}
+
 func (e *BaseEntry) reset() {
 	e.Meta.reset()
 	e.Payload = e.Payload[:0]

@@ -665,3 +665,55 @@ func TestUpgrade(t *testing.T) {
 	assert.Equal(t, sequence.nextBlockId, catalog.Sequence.nextBlockId)
 	catalog.Close()
 }
+
+func TestCatalogWithBatchStore(t *testing.T) {
+	dir := "/tmp/testcatalogwithbatchstore"
+	os.RemoveAll(dir)
+	delta := DefaultCheckpointDelta
+	DefaultCheckpointDelta = uint64(400000)
+	defer func() {
+		DefaultCheckpointDelta = delta
+	}()
+
+	cfg := new(CatalogCfg)
+	cfg.Dir = dir
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(100)
+	cfg.RotationFileMaxSize = 100 * int(common.K)
+	catalog := NewCatalogWithBatchStore(new(sync.RWMutex), cfg)
+	// catalog := NewCatalog(new(sync.RWMutex), cfg, nil)
+	catalog.StartSyncer()
+
+	pool, _ := ants.NewPool(10)
+	var wg sync.WaitGroup
+	f := func(i int) func() {
+		return func() {
+			defer wg.Done()
+			schema := MockSchema(2)
+			schema.Name = fmt.Sprintf("m%d", i)
+
+			t1, err := catalog.SimpleCreateTable(schema, nil)
+			assert.Nil(t, err)
+			assert.NotNil(t, t1)
+
+			s1 := t1.SimpleCreateSegment(nil)
+			s1.RLock()
+			assert.True(t, s1.HasCommitted())
+			s1.RUnlock()
+
+			rt1 := catalog.SimpleGetTableByName(schema.Name)
+			assert.NotNil(t, rt1)
+
+			b1 := s1.SimpleCreateBlock(nil)
+			b1.RLock()
+			assert.True(t, b1.HasCommitted())
+			b1.RUnlock()
+		}
+	}
+	for i := 0; i < 1000; i++ {
+		wg.Add(1)
+		pool.Submit(f(i))
+	}
+	wg.Wait()
+
+	catalog.Close()
+}
