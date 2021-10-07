@@ -45,7 +45,6 @@ var (
 type BufferedStore interface {
 	Store
 	Start()
-	AppendEntryWithCommitId(Entry, uint64) error
 	Checkpoint(Entry) error
 	GetSyncedId() uint64
 	SetSyncedId(uint64)
@@ -143,20 +142,19 @@ func (s *bufferedStore) SetSyncedId(id uint64) {
 }
 
 func (s *bufferedStore) AppendEntry(entry Entry) error {
-	panic("not supported")
-}
-
-func (s *bufferedStore) AppendEntryWithCommitId(entry Entry, commitId uint64) error {
+	var commitId uint64
 	isFlush := entry.GetMeta().IsFlush()
-	entry.SetAuxilaryInfo(commitId)
+	if !isFlush {
+		commitId = entry.GetAuxilaryInfo().(uint64)
+	}
 	err := s.store.AppendEntry(entry)
 	if err != nil {
 		return err
 	}
-	atomic.StoreUint64(&s.unsynced, commitId)
 	if isFlush {
 		return s.Sync()
 	}
+	atomic.StoreUint64(&s.unsynced, commitId)
 	return nil
 }
 

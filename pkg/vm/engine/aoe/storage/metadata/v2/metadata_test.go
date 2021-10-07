@@ -605,7 +605,7 @@ func TestUpgrade(t *testing.T) {
 	assert.Equal(t, segCnt*blockCnt, int(upgradedBlocks))
 	assert.Equal(t, segCnt, int(upgradedSegments))
 
-	catalog.Store.AppendEntryWithCommitId(logstore.FlushEntry, catalog.NextCommitId())
+	catalog.Store.AppendEntry(logstore.FlushEntry)
 
 	catalog.Close()
 	sequence := catalog.Sequence

@@ -224,7 +224,8 @@ func (catalog *Catalog) Close() error {
 
 func (catalog *Catalog) CommitLogEntry(entry logstore.Entry, commitId uint64, sync bool) error {
 	var err error
-	if err = catalog.Store.AppendEntryWithCommitId(entry, commitId); err != nil {
+	entry.SetAuxilaryInfo(commitId)
+	if err = catalog.Store.AppendEntry(entry); err != nil {
 		return err
 	}
 	if sync {
