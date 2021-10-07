@@ -46,7 +46,7 @@ type BufferedStore interface {
 	Store
 	Start()
 	AppendEntryWithCommitId(Entry, uint64) error
-	Checkpoint(Entry, uint64) error
+	Checkpoint(Entry) error
 	GetSyncedId() uint64
 	SetSyncedId(uint64)
 	GetCheckpointId() uint64
@@ -106,23 +106,23 @@ func (s *bufferedStore) Close() error {
 	return s.store.Close()
 }
 
-func (s *bufferedStore) Checkpoint(entry Entry, id uint64) error {
+func (s *bufferedStore) Checkpoint(entry Entry) error {
 	if !atomic.CompareAndSwapUint32(&s.state, stInited, stPreCheckpoint) {
 		return errors.New("Another checkpoint job is running")
 	}
 	defer atomic.StoreUint32(&s.state, stInited)
 	curr := atomic.LoadUint64(&s.checkpointed)
-	if id <= curr {
+	r := entry.GetAuxilaryInfo().(*common.Range)
+	if r.Right <= curr {
 		return nil
 	}
-	entry.SetAuxilaryInfo(&common.Range{Right: id})
 	if err := s.store.AppendEntry(entry); err != nil {
 		return err
 	}
 	if err := s.Sync(); err != nil {
 		return err
 	}
-	atomic.StoreUint64(&s.checkpointed, id)
+	s.SetCheckpointId(r.Right)
 	return nil
 }
 

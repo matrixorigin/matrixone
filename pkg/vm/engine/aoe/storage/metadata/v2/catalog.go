@@ -84,6 +84,7 @@ func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 	logEntry := logstore.GetEmptyEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
+	logEntry.SetAuxilaryInfo(&e.Range)
 	return logEntry
 }
 
@@ -419,7 +420,7 @@ func (catalog *Catalog) SimpleGetBlock(tableId, segmentId, blockId uint64) (*Blo
 
 func (catalog *Catalog) Checkpoint() error {
 	view := catalog.LatestView()
-	err := catalog.Store.Checkpoint(view.ToLogEntry(logstore.ETCheckpoint), view.CheckpointId())
+	err := catalog.Store.Checkpoint(view.ToLogEntry(logstore.ETCheckpoint))
 	return err
 }
 
