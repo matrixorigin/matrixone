@@ -378,6 +378,7 @@ func (catalog *Catalog) commitLocked(entry IEntry, eType LogEntryType, rwlocker 
 	if err != nil {
 		panic(err)
 	}
+	lentry.Free()
 }
 
 func (catalog *Catalog) ForLoopTables(h func(*Table) error) error {
