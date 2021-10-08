@@ -28,11 +28,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -77,8 +76,8 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &count)
 		assert.Nil(t, err)
-		prevIdx := md.LogIndex{
-			ID: md.MockLogBatchId(uint64(0)),
+		prevIdx := metadata.LogIndex{
+			Id: metadata.SimpleBatchId(uint64(0)),
 		}
 		buf, err := prevIdx.Marshal()
 		assert.Nil(t, err)
@@ -88,8 +87,8 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &buf)
 		assert.Nil(t, err)
-		idx := md.LogIndex{
-			ID: md.MockLogBatchId(uint64(0)),
+		idx := metadata.LogIndex{
+			Id: metadata.SimpleBatchId(uint64(0)),
 		}
 		buf, err = idx.Marshal()
 		assert.Nil(t, err)
@@ -183,37 +182,34 @@ func TestSegmentWriter(t *testing.T) {
 			FlushIndex = false
 		}()
 	}
-	mu := &sync.RWMutex{}
+	dir := "/tmp/testsegmentwriter"
+	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(10), uint64(4)
-	info := md.MockInfo(mu, rowCount, blkCount)
-	//schema := md.MockSchema(2)
-	schema := md.MockSchemaAll(14)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	defer catalog.Close()
+
+	schema := metadata.MockSchemaAll(14)
 	segCnt, blkCnt := uint64(4), uint64(4)
-	table := md.MockTable(info, schema, segCnt*blkCnt)
-	segment, err := table.CreateSegment()
-	assert.Nil(t, err)
-	err = table.RegisterSegment(segment)
-	assert.Nil(t, err)
+	table := metadata.MockTable(catalog, schema, segCnt*blkCnt, nil)
+	segment := table.SimpleCreateSegment(nil)
+	assert.NotNil(t, segment)
 	batches := make([]*gbatch.Batch, 0)
+	t.Log(schema.Types())
 	for i := 0; i < int(blkCount); i++ {
-		block, err := segment.CreateBlock()
-		assert.Nil(t, err)
-		block.SetCount(rowCount)
-		err = segment.RegisterBlock(block)
-		assert.Nil(t, err)
+		block := segment.SimpleCreateBlock(nil)
+		assert.NotNil(t, block)
+		block.SimpleUpgrade(nil)
 		batches = append(batches, mock.MockBatch(schema.Types(), rowCount))
 	}
-	path := "/tmp/testwriter"
-	writer := NewSegmentWriter(batches, segment, path)
-	err = writer.Execute()
+	writer := NewSegmentWriter(batches, segment, dir)
+	err := writer.Execute()
 	assert.Nil(t, err)
-	// name := writer.GetFileName()
-	segFile := NewSortedSegmentFile(path, *segment.AsCommonID())
+	segFile := NewSortedSegmentFile(dir, *segment.AsCommonID())
 	assert.NotNil(t, segFile)
 	assert.NotNil(t, segFile.Stat().Name())
 	assert.NotNil(t, segFile.Stat().OriginSize())
 	assert.NotNil(t, segFile.Stat().CompressAlgo())
-	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(1000), table.ID)
+	tblHolder := index.NewTableHolder(bmgr.MockBufMgr(1000), table.Id)
 	segHolder := tblHolder.RegisterSegment(*segment.AsCommonID(), base.SORTED_SEG, nil)
 	segHolder.Unref()
 	id := common.ID{}
@@ -228,7 +224,7 @@ func TestSegmentWriter(t *testing.T) {
 	t.Log(segHolder.CollectMinMax(0))
 	t.Log(segHolder.CollectMinMax(1))
 	t.Log(segHolder.GetBlockCount())
-	col0Blk := segment.Blocks[0].AsCommonID().AsBlockID()
+	col0Blk := segment.BlockSet[0].AsCommonID().AsBlockID()
 	col1Blk := col0Blk
 	col1Blk.Idx = uint16(1)
 	col0Vf := segFile.MakeVirtualPartFile(&col0Blk)
@@ -248,7 +244,7 @@ func TestSegmentWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, int64(len), col0Vf.Stat().Size())
 
-	fsMgr := NewManager(path, false)
+	fsMgr := NewManager(dir, false)
 	segFile, err = fsMgr.RegisterUnsortedFiles(*segment.AsCommonID())
 	assert.Nil(t, err)
 	segFile = fsMgr.UpgradeFile(*segment.AsCommonID())
@@ -286,12 +282,14 @@ func TestIVectorNodeWriter(t *testing.T) {
 	strs := [][]byte{[]byte(str0), []byte(str1), []byte(str2), []byte(str3)}
 	err = vec1.Append(len(strs), strs)
 
-	info := md.MockInfo(&sync.RWMutex{}, capacity, uint64(10))
-	schema := md.MockSchema(2)
-	tblMeta := md.MockTable(info, schema, 1)
-	meta, err := tblMeta.ReferenceBlock(uint64(1), uint64(1))
-	assert.Nil(t, err)
+	catalog := metadata.MockCatalog(dir, capacity, uint64(10))
+	schema := metadata.MockSchema(2)
+	tblMeta := metadata.MockTable(catalog, schema, 1, nil)
+	segMeta := tblMeta.SimpleGetSegment(uint64(1))
+	assert.NotNil(t, segMeta)
+	meta := segMeta.SimpleGetBlock(uint64(1))
 	assert.NotNil(t, meta)
+
 	bat, err := batch.NewBatch([]int{0, 1}, []vector.IVector{vec0, vec1})
 	assert.Nil(t, err)
 	w := NewIBatchWriter(bat, meta, dir)
@@ -355,21 +353,21 @@ func TestIVectorNodeWriter(t *testing.T) {
 }
 
 func TestTransientBlock(t *testing.T) {
-	mu := &sync.RWMutex{}
+	dir := "/tmp/tblktest"
+	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(10), uint64(4)
-	info := md.MockInfo(mu, rowCount, blkCount)
-	info.Conf.Dir = "/tmp/tblktest"
-	os.RemoveAll(info.Conf.Dir)
-	schema := md.MockSchema(2)
-	tbl := md.MockTable(info, schema, 1)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	schema := metadata.MockSchema(2)
+	tbl := metadata.MockTable(catalog, schema, 1, nil)
 
-	blkMeta, err := tbl.ReferenceBlock(uint64(1), uint64(1))
-	assert.Nil(t, err)
+	segMeta := tbl.SimpleGetSegment(uint64(1))
+	assert.NotNil(t, segMeta)
+	blkMeta := segMeta.SimpleGetBlock(uint64(1))
+	assert.NotNil(t, blkMeta)
 
-	segFile := NewUnsortedSegmentFile(info.Conf.Dir, *blkMeta.Segment.AsCommonID())
+	segFile := NewUnsortedSegmentFile(dir, *blkMeta.Segment.AsCommonID())
 
 	tblk := NewTBlockFile(segFile, *blkMeta.AsCommonID())
-	// defer tblk.Destory()
 	defer tblk.Unref()
 	t.Log(tblk.nextVersion())
 

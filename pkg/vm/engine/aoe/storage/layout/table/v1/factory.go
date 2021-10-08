@@ -17,14 +17,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 )
-
-// type blockFactory struct{}
-
-// func (f *blockFactory) CreateBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
-// 	return newBlock(host, meta)
-// }
 
 type altBlockFactory struct {
 	nodeFactory base.NodeFactory
@@ -38,7 +32,7 @@ func newAltBlockFactory(mutFactory fb.MutFactory, tabledata iface.ITableData) *a
 }
 
 func (af *altBlockFactory) CreateBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
-	if meta.DataState < metadata.FULL {
+	if meta.CommitInfo.Op < metadata.OpUpgradeFull {
 		return newTBlock(host, meta, af.nodeFactory, nil)
 	}
 	return newBlock(host, meta)

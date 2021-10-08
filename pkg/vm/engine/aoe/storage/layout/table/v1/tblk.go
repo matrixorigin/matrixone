@@ -24,11 +24,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"runtime"
-	// "matrixone/pkg/logutil"
 )
 
 type tblock struct {
@@ -40,18 +39,14 @@ type tblock struct {
 }
 
 func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory, mockSize *mb.MockSize) (*tblock, error) {
-	clonedMeta := meta.Copy()
-	if clonedMeta.BoundSate != metadata.Detached {
-		clonedMeta.Detach()
-	}
 	blk := &tblock{
-		baseBlock:  *newBaseBlock(host, clonedMeta),
-		node:       factory.CreateNode(host.GetSegmentFile(), clonedMeta, mockSize).(mb.IMutableBlock),
+		baseBlock:  *newBaseBlock(host, meta),
+		node:       factory.CreateNode(host.GetSegmentFile(), meta, mockSize).(mb.IMutableBlock),
 		nodeMgr:    factory.GetManager(),
 		coarseSize: make(map[string]uint64),
 	}
-	for i, colDef := range clonedMeta.Segment.Table.Schema.ColDefs {
-		blk.coarseSize[colDef.Name] = metadata.EstimateColumnBlockSize(i, clonedMeta)
+	for i, colDef := range meta.Segment.Table.Schema.ColDefs {
+		blk.coarseSize[colDef.Name] = metadata.EstimateColumnBlockSize(i, meta)
 	}
 	blk.GetObject = func() interface{} { return blk }
 	blk.Pin = func(o interface{}) { o.(iface.IBlock).Ref() }
@@ -111,7 +106,7 @@ func (blk *tblock) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (
 }
 
 func (blk *tblock) String() string {
-	s := fmt.Sprintf("<TBlk[%d]>(Refs=%d)", blk.meta.ID, blk.RefCount())
+	s := fmt.Sprintf("<TBlk[%d]>(Refs=%d)", blk.meta.Id, blk.RefCount())
 	return s
 }
 

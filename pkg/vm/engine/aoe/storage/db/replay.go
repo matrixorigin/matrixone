@@ -22,11 +22,10 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"os"
 	"path"
 	"sort"
-	"sync"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -138,13 +137,6 @@ type cleanable interface {
 	clean()
 }
 
-type tableFile struct {
-	name    string
-	version uint64
-	id      uint64
-	next    *tableFile
-}
-
 type blockfile struct {
 	h         *replayHandle
 	id        common.ID
@@ -152,7 +144,7 @@ type blockfile struct {
 	transient bool
 	next      *blockfile
 	commited  bool
-	meta      *md.Block
+	meta      *metadata.Block
 }
 
 func (bf *blockfile) version() uint32 {
@@ -190,7 +182,7 @@ type unsortedSegmentFile struct {
 	id         common.ID
 	files      map[common.ID]*blockfile
 	uncommited []*blockfile
-	meta       *md.Segment
+	meta       *metadata.Segment
 }
 
 func newUnsortedSegmentFile(id common.ID, h *replayHandle) *unsortedSegmentFile {
@@ -235,16 +227,21 @@ func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string, transient b
 	prev.next = bf
 }
 
+func (usf *unsortedSegmentFile) hasblock(id common.ID) bool {
+	_, ok := usf.files[id]
+	return ok
+}
+
 func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
 	if len(usf.files) != maxcnt {
 		return false
 	}
 	for id, _ := range usf.files {
-		meta, err := usf.meta.ReferenceBlock(id.BlockID)
-		if err != nil {
-			panic(err)
+		meta := usf.meta.SimpleGetBlock(id.BlockID)
+		if meta == nil {
+			panic(metadata.BlockNotFoundErr)
 		}
-		if meta.DataState < md.FULL {
+		if !meta.IsFull() {
 			return false
 		}
 	}
@@ -260,12 +257,14 @@ func (usf *unsortedSegmentFile) clean() {
 	}
 }
 
-func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.Segment) {
+func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *metadata.Segment) {
 	usf.meta = meta
 	files := make(map[common.ID]*blockfile)
 	for id, file := range usf.files {
-		blk, err := meta.ReferenceBlock(file.id.BlockID)
-		if err != nil {
+		blk := meta.SimpleGetBlock(file.id.BlockID)
+		if blk == nil {
+			// For block that not found in metadata, just remove it. This situation is only
+			// possible if the metadata and data are committed asynchronously
 			head := file
 			for head != nil {
 				cleaner.addCleanable(file)
@@ -273,11 +272,20 @@ func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.S
 			}
 			continue
 		}
-		if blk.DataState > md.PARTIAL {
+		if blk.CommitInfo.Op >= metadata.OpUpgradeFull {
+			// Block was committed as FULL
 			file.markCommited()
 		} else {
+			// Block was not committed as FULL.
+			// Multi-version compositions for a block file:
+			// 1. *.blk
+			// 2. *.blk -> *_0.tblk[T]
+			// 3. *.blk -> *_2.tblk[T] -> *_1.tblk[T] -> *_0.tblk[T]
+			// 4. *_0.tblk[T]
+			// 5. *_2.tblk[T] -> *_1.tblk[T] -> *_0.tblk[T]
 			head := file
 			if !head.isTransient() {
+				logutil.Infof("1. Add cleanable %s", head.name)
 				cleaner.addCleanable(head)
 				head = head.next
 			}
@@ -289,28 +297,17 @@ func (usf *unsortedSegmentFile) tryCleanBlocks(cleaner *replayHandle, meta *md.S
 			file = head
 		}
 
+		// Multi-version block files linked from latest to oldest. Here we just keep
+		// the latest version and remove others
 		head := file.next
 		for head != nil {
+			logutil.Infof("2. Add cleanable %s", head.name)
 			cleaner.addCleanable(head)
 			head = head.next
 		}
 		files[id] = file
 	}
 	usf.files = files
-}
-
-func (f *tableFile) Open() *os.File {
-	r, err := os.OpenFile(f.name, os.O_RDONLY, 06666)
-	if err != nil {
-		panic(err)
-	}
-	return r
-}
-
-type infoFile struct {
-	name    string
-	version uint64
-	next    *infoFile
 }
 
 type tableDataFiles struct {
@@ -328,24 +325,23 @@ func (tdf *tableDataFiles) clean() {
 }
 
 type replayHandle struct {
-	infos         *infoFile
-	tables        map[uint64]*tableFile
-	others        []string
-	workDir       string
-	metaDir       string
-	dataDir       string
-	tablesToClean map[uint64]*tableFile
-	mask          *roaring.Bitmap
-	cleanables    []cleanable
-	files         map[uint64]*tableDataFiles
-	flushsegs     []flushsegCtx
-	observer      IReplayObserver
+	catalog    *metadata.Catalog
+	tables     *table.Tables
+	others     []string
+	workDir    string
+	dataDir    string
+	mask       *roaring.Bitmap
+	cleanables []cleanable
+	files      map[uint64]*tableDataFiles
+	flushsegs  []flushsegCtx
+	observer   IReplayObserver
 }
 
-func NewReplayHandle(workDir string, observer IReplayObserver) *replayHandle {
+func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Tables, observer IReplayObserver) *replayHandle {
 	fs := &replayHandle{
+		catalog:    catalog,
+		tables:     tables,
 		workDir:    workDir,
-		tables:     make(map[uint64]*tableFile),
 		others:     make([]string, 0),
 		mask:       roaring.NewBitmap(),
 		files:      make(map[uint64]*tableDataFiles),
@@ -359,28 +355,15 @@ func NewReplayHandle(workDir string, observer IReplayObserver) *replayHandle {
 		dataDir := common.MakeDataDir(workDir)
 		if _, err = os.Stat(dataDir); os.IsNotExist(err) {
 			err = os.MkdirAll(dataDir, os.ModePerm)
+			empty = true
 		}
 		fs.dataDir = dataDir
 	}
-	metaDir := common.MakeMetaDir(workDir)
-	if _, err = os.Stat(metaDir); os.IsNotExist(err) {
-		err = os.MkdirAll(metaDir, 0755)
-		empty = true
-	}
-	fs.metaDir = metaDir
 	if err != nil {
 		panic(fmt.Sprintf("err: %s", err))
 	}
 	if empty {
 		return fs
-	}
-
-	metaFiles, err := ioutil.ReadDir(fs.metaDir)
-	if err != nil {
-		panic(fmt.Sprintf("err: %s", err))
-	}
-	for _, file := range metaFiles {
-		fs.addMetaFile(file.Name())
 	}
 
 	dataFiles, err := ioutil.ReadDir(fs.dataDir)
@@ -409,60 +392,6 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 
 func (h *replayHandle) addCleanable(f cleanable) {
 	h.cleanables = append(h.cleanables, f)
-}
-
-func (h *replayHandle) addTable(f *tableFile) {
-	head := h.tables[f.id]
-	if head == nil {
-		h.tables[f.id] = f
-		return
-	}
-	var prev *tableFile
-	curr := head
-	for curr != nil {
-		if curr.version < f.version {
-			f.next = curr
-			if prev == nil {
-				h.tables[f.id] = f
-			} else {
-				prev.next = f
-			}
-			return
-		} else if curr.version > f.version {
-			prev = curr
-			curr = curr.next
-		} else {
-			panic("logic error")
-		}
-	}
-	prev.next = f
-}
-
-func (h *replayHandle) addInfo(f *infoFile) {
-	var prev *infoFile
-	curr := h.infos
-	for curr != nil {
-		if curr.version > f.version {
-			prev = curr
-			curr = curr.next
-		} else if curr.version < f.version {
-			f.next = curr
-			if prev == nil {
-				h.infos = f
-			} else {
-				prev.next = f
-			}
-			return
-		} else {
-			panic(fmt.Sprintf("logic error: f.version=%d, curr.version=%d", f.version, curr.version))
-		}
-	}
-
-	if prev == nil {
-		h.infos = f
-	} else {
-		prev.next = f
-	}
 }
 
 func (h *replayHandle) addBlock(id common.ID, name string, transient bool) {
@@ -534,55 +463,46 @@ func (h *replayHandle) addDataFile(fname string) {
 	h.others = append(h.others, path.Join(h.dataDir, fname))
 }
 
-func (h *replayHandle) addMetaFile(fname string) {
-	name, ok := common.ParseTableMetaName(fname)
-	if ok {
-		tid, version, err := md.ParseTableCkpFile(name)
-		if err != nil {
-			panic(fmt.Sprintf("parse table ckp file %s err: %s", fname, err))
-		}
-		f := new(tableFile)
-		f.name = path.Join(h.metaDir, fname)
-		f.version = version
-		f.id = tid
-		h.addTable(f)
-		return
-	}
-
-	version, ok := common.ParseInfoMetaName(fname)
-	if ok {
-		f := new(infoFile)
-		f.name = path.Join(h.metaDir, fname)
-		f.version = uint64(version)
-		h.addInfo(f)
-		return
-	}
-	h.others = append(h.others, path.Join(h.metaDir, fname))
-}
-
-func (h *replayHandle) correctTable(meta *md.Table) {
-	tablesFiles, ok := h.files[meta.ID]
+func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
+	var err error
+	tablesFiles, ok := h.files[meta.Id]
 	if !ok {
-		return
+		// No need to change the table metadata if there is no table files
+		if h.tables != nil && !meta.IsDeleted() {
+			_, err = h.tables.RegisterTable(meta)
+		}
+		return err
 	}
-	if meta.IsDeleted(md.NowMicro()) {
+	if meta.IsDeleted() {
+		// TODO: If all resources are deleted, it should be marked as hard deleted and then
+		// removed from metadata
 		h.addCleanable(tablesFiles)
-		return
+		return nil
 	}
-	for i := len(meta.Segments) - 1; i >= 0; i-- {
-		segment := meta.Segments[i]
-		if segment.DataState == md.SORTED {
+
+	for i := len(meta.SegmentSet) - 1; i >= 0; i-- {
+		segment := meta.SegmentSet[i]
+		if segment.CommitInfo.Op == metadata.OpUpgradeSorted {
+			// The following segments should be all SORTED
 			break
 		}
 		file := tablesFiles.sortedfiles[*segment.AsCommonID()]
 		if file != nil {
-			segment.TrySorted()
+			// There exists segments with sorted segment files but their metadata were not committed
+			// as SORTED. For example, a crash happened after creating a sorted segment file and
+			// before committing the metadata as SORTED. These segments will be committed as SORTED
+			// during replaying.
+			segment.SimpleUpgrade(nil)
 			continue
 		}
 	}
 	for id, _ := range tablesFiles.sortedfiles {
 		unsorted, ok := tablesFiles.unsortedfiles[id]
 		if ok {
+			// There are multi versions for a segment (Ex. Unsorted -> Sorted). Under normal
+			// circumstances, once the Sorted version is generated, the Unsorted version will
+			// be GC'ed in a short period of time. When restarting, we need to check and
+			// delete the stale versions
 			h.addCleanable(unsorted)
 			delete(tablesFiles.unsortedfiles, id)
 		}
@@ -591,15 +511,17 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 	flushsegs := make([]common.ID, 0)
 	unclosedSegFiles := make([]*unsortedSegmentFile, 0)
 	for id, unsorted := range tablesFiles.unsortedfiles {
-		segMeta, err := meta.ReferenceSegment(id.SegmentID)
-		if err != nil {
+		segMeta := meta.SimpleGetSegment(id.SegmentID)
+		if segMeta == nil {
+			// For segment that not found in metadata, just remove it. This situation is only
+			// possible if the metadata and data are committed asynchronously
 			h.addCleanable(unsorted)
 			continue
 		} else {
 			// log.Info(segMeta.String())
 			unsorted.tryCleanBlocks(h, segMeta)
 		}
-		if !unsorted.isfull(int(meta.Conf.SegmentMaxBlocks)) {
+		if !unsorted.isfull(int(meta.Schema.SegmentMaxBlocks)) {
 			unclosedSegFiles = append(unclosedSegFiles, unsorted)
 			continue
 		}
@@ -611,6 +533,59 @@ func (h *replayHandle) correctTable(meta *md.Table) {
 		h.flushsegs = append(h.flushsegs, flushsegCtx{id: id})
 	}
 	h.processUnclosedSegmentFiles(unclosedSegFiles, meta)
+
+	if h.tables == nil {
+		return nil
+	}
+
+	tableData, err := h.tables.RegisterTable(meta)
+	if err != nil {
+		return err
+	}
+	for _, segMeta := range meta.SegmentSet {
+		if segMeta.IsSorted() || !segMeta.Appendable() {
+			segData, err := tableData.RegisterSegment(segMeta)
+			if err != nil {
+				return err
+			}
+			defer segData.Unref()
+
+			for _, blkMeta := range segMeta.BlockSet {
+				blkData, err := tableData.RegisterBlock(blkMeta)
+				if err != nil {
+					return err
+				}
+				defer blkData.Unref()
+			}
+			continue
+		}
+		id := segMeta.AsCommonID()
+		segFile := tablesFiles.unsortedfiles[*id]
+		if segFile == nil {
+			break
+		}
+		segData, err := tableData.RegisterSegment(segMeta)
+		if err != nil {
+			return err
+		}
+		defer segData.Unref()
+		for _, blkMeta := range segMeta.BlockSet {
+			id = blkMeta.AsCommonID()
+			if !segFile.hasblock(*id) {
+				break
+			}
+			blkData, err := tableData.RegisterBlock(blkMeta)
+			if err != nil {
+				return err
+			}
+			defer blkData.Unref()
+		}
+
+		break
+	}
+	tableData.InitReplay()
+	logutil.Info(tableData.String())
+	return nil
 }
 
 func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
@@ -625,40 +600,39 @@ func (h *replayHandle) processUnclosedSegmentFile(file *unsortedSegmentFile) {
 		h.addCleanable(bf)
 		return
 	}
-	emeta := bf.meta.Segment.GetActiveBlk()
+	emeta := bf.meta.Segment.FirstInFullBlock()
 	if emeta != bf.meta {
+		logutil.Infof("3. Add cleanable %s", bf.name)
+		logutil.Infof("%s -- %s", emeta.String(), bf.meta.String())
 		h.addCleanable(bf)
 		return
 	}
-	bf.meta.DataState = md.PARTIAL
-	bf.meta.Segment.NextActiveBlk()
 
 	files := file.uncommited[1:]
 	// TODO: uncommited block file can be converted to committed
 	for _, f := range files {
-		f.meta.DataState = md.EMPTY
 		h.addCleanable(f)
 	}
 }
 
-func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile, meta *md.Table) {
+func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile, meta *metadata.Table) {
 	if len(files) == 0 {
 		return
 	}
 	sort.Slice(files, func(i, j int) bool {
 		return files[i].id.SegmentID < files[j].id.SegmentID
 	})
-	// for _, file := range files {
-	// 	for _, f := range file.uncommited {
-	// 	}
-	// }
-	i := meta.ActiveSegment
-	for {
-		if i >= len(meta.Segments) || len(files) == 0 {
+	for i := 0; i < len(meta.SegmentSet); i++ {
+		if len(files) == 0 {
 			break
 		}
-		seg := meta.Segments[i]
-		if seg.HasUncommitted() {
+		seg := meta.SegmentSet[i]
+		if seg.IsSorted() || (seg.HasMaxBlocks() && seg.BlockSet[len(seg.BlockSet)-1].IsFull()) {
+			file := files[0]
+			if file.meta == seg {
+				files = files[1:]
+			}
+		} else {
 			file := files[0]
 			if file.meta == seg {
 				h.processUnclosedSegmentFile(file)
@@ -668,65 +642,19 @@ func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile,
 				h.addCleanable(file)
 			}
 			break
-		} else {
-			file := files[0]
-			if file.meta == seg {
-				files = files[1:]
-			}
 		}
-		i++
 	}
 }
 
-func (h *replayHandle) rebuildTable(tbl *md.Table) *md.Table {
-	head := h.tables[tbl.ID]
-	if head == nil {
-		return nil
-	}
-	h.mask.Add(tbl.ID)
-	r := head.Open()
-	ret := &md.Table{}
-	if _, err := ret.ReadFrom(r); err != nil {
-		panic(err)
-	}
-	ret.Info = tbl.Info
-	ret.Replay()
-	h.correctTable(ret)
-	// log.Info(ret.String())
-	return ret
-}
-
-func (h *replayHandle) RebuildInfo(mu *sync.RWMutex, cfg *md.Configuration) *md.MetaInfo {
-	info := md.NewMetaInfo(mu, cfg)
-	if h.infos == nil {
-		return info
-	}
-
-	r, err := os.OpenFile(h.infos.name, os.O_RDONLY, 06666)
-	if err != nil {
-		panic(err)
-	}
-	defer r.Close()
-	if _, err = info.ReadFrom(r); err != nil {
-		panic(err)
-	}
-	ts := md.NowMicro()
-	tbls := make(map[uint64]*md.Table)
-	for idx, tbl := range info.Tables {
-		tbl.Info = info
-		if tbl.IsDeleted(ts) {
-			continue
+func (h *replayHandle) Replay() error {
+	for _, tbl := range h.catalog.TableSet {
+		if err := h.rebuildTable(tbl); err != nil {
+			return err
 		}
-		newTbl := h.rebuildTable(tbl)
-		if newTbl == nil {
-			continue
-		}
-		tbls[idx] = newTbl
 	}
-	info.Tables = tbls
+	h.Cleanup()
 	logutil.Infof(h.String())
-
-	return info
+	return nil
 }
 
 func (h *replayHandle) doRemove(name string) {
@@ -742,26 +670,6 @@ func (h *replayHandle) cleanupFile(fname string) {
 }
 
 func (h *replayHandle) Cleanup() {
-	for tid, head := range h.tables {
-		if !h.mask.Contains(tid) {
-			h.cleanupFile(head.name)
-		}
-		next := head.next
-		for next != nil {
-			h.cleanupFile(next.name)
-			next = next.next
-		}
-	}
-	h.tables = nil
-
-	if h.infos != nil {
-		next := h.infos.next
-		for next != nil {
-			h.cleanupFile(next.name)
-			next = next.next
-		}
-		h.infos = nil
-	}
 	if h.cleanables != nil {
 		for _, f := range h.cleanables {
 			f.clean()
@@ -776,51 +684,8 @@ func (h *replayHandle) Cleanup() {
 	h.files = nil
 }
 
-func (h *replayHandle) CleanupWithCtx(maxVer int) {
-	if maxVer <= 1 {
-		panic("logic error")
-	}
-	for _, head := range h.tables {
-		depth := 0
-		next := head
-		for next != nil {
-			if depth >= maxVer {
-				h.cleanupFile(next.name)
-			}
-			next = next.next
-			depth++
-		}
-	}
-	if h.infos != nil {
-		depth := 0
-		next := h.infos
-		for next != nil {
-			if depth >= maxVer {
-				h.cleanupFile(next.name)
-			}
-			depth++
-			next = next.next
-		}
-	}
-}
-
 func (h *replayHandle) String() string {
 	s := fmt.Sprintf("[InfoFiles]:")
-	{
-		curr := h.infos
-		for curr != nil {
-			s = fmt.Sprintf("%s\n%s", s, curr.name)
-			curr = curr.next
-		}
-	}
-	s = fmt.Sprintf("%s\n[TableFiles]: %d", s, len(h.tables))
-	for _, fs := range h.tables {
-		curr := fs
-		for curr != nil {
-			s = fmt.Sprintf("%s\n%s", s, curr.name)
-			curr = curr.next
-		}
-	}
 	for tid, tbl := range h.files {
 		s = fmt.Sprintf("%s\nTable %d [Sorted]: %d", s, tid, len(tbl.sortedfiles))
 		for _, fs := range tbl.sortedfiles {

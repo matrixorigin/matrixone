@@ -1,33 +1,41 @@
 package db
 
 import (
-	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestSegment(t *testing.T) {
-	schema := md.MockSchema(2)
-	opts := new(storage.Options)
-	opts.FillDefaults("/tmp")
-	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	rowCount := uint64(64)
-	capacity := typeSize * rowCount * 10000
-	bufMgr := bmgr.MockBufMgr(capacity)
-	fsMgr := ldio.NewManager("/tmp", true)
 	segCnt := uint64(4)
 	blkCnt := uint64(4)
+	dir := "/tmp/testsegment"
+	os.RemoveAll(dir)
+	schema := metadata.MockSchema(2)
+	opts := new(storage.Options)
+	cfg := &storage.MetaCfg{
+		BlockMaxRows:     rowCount,
+		SegmentMaxBlocks: blkCnt,
+	}
+	opts.Meta.Conf = cfg
+	opts.FillDefaults(dir)
+	typeSize := uint64(schema.ColDefs[0].Type.Size)
+	capacity := typeSize * rowCount * 10000
+	bufMgr := bmgr.MockBufMgr(capacity)
+	fsMgr := ldio.NewManager(dir, true)
 
 	tables := table.NewTables(new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
-	info := md.MockInfo(&opts.Mu, rowCount, blkCnt)
-	tableMeta := md.MockTable(info, schema, segCnt*blkCnt)
+	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, segCnt*blkCnt, nil)
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)
@@ -36,7 +44,7 @@ func TestSegment(t *testing.T) {
 	for _, id := range segIds {
 		seg := &Segment{
 			Data: tableData.StrongRefSegment(id),
-			Ids: new(atomic.Value),
+			Ids:  new(atomic.Value),
 		}
 		segs = append(segs, seg)
 	}

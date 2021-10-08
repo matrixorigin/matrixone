@@ -23,7 +23,7 @@ import (
 	"matrixone/pkg/prefetch"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"os"
 	"path/filepath"
 )
@@ -140,7 +140,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
 	bf.PrevIdx = new(metadata.LogIndex)
-	if err = bf.PrevIdx.UnMarshall(buf); err != nil {
+	if err = bf.PrevIdx.UnMarshal(buf); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
 	var sz_ int32
@@ -152,7 +152,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
 	bf.Idx = new(metadata.LogIndex)
-	if err = bf.Idx.UnMarshall(buf); err != nil {
+	if err = bf.Idx.UnMarshal(buf); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
 	headSize := 8 + int(sz+sz_) + 3 + 8 + 2*8*int(cols)

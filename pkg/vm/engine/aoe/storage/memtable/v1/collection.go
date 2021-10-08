@@ -24,7 +24,7 @@ import (
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"sync"
 )
 
@@ -48,6 +48,8 @@ type collection struct {
 		sync.RWMutex
 		memTables []imem.IMemTable
 	}
+
+	PrevBlock *metadata.Block
 }
 
 var (
@@ -87,9 +89,9 @@ func (c *collection) close() {
 }
 
 // onNoBlock creates a logical Block
-func (c *collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) {
+func (c *collection) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
 	eCtx := &sched.Context{Opts: c.opts, Waitable: true}
-	e := me.NewCreateBlkEvent(eCtx, c.id, c.tableData)
+	e := me.NewCreateBlkEvent(eCtx, c.id, c.PrevBlock, c.tableData)
 	if err = c.opts.Scheduler.Schedule(e); err != nil {
 		return nil, nil, err
 	}
@@ -97,6 +99,7 @@ func (c *collection) onNoBlock() (meta *md.Block, data iface.IBlock, err error) 
 		return nil, nil, err
 	}
 	meta = e.GetBlock()
+	c.PrevBlock = meta
 	return meta, e.Block, nil
 }
 
@@ -120,9 +123,8 @@ func (c *collection) Flush() error {
 
 // Append is the external interface provided by storage.
 // Receive the batch data, and then store it in aoe.
-func (c *collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
+func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
 	logutil.Infof("Append logindex: %s", index.String())
-	tableMeta := c.tableData.GetMeta()
 	var mut imem.IMemTable
 	c.mem.Lock()
 	defer c.mem.Unlock()
@@ -137,22 +139,22 @@ func (c *collection) Append(bat *batch.Batch, index *md.LogIndex) (err error) {
 		mut.Ref()
 	}
 	offset := uint64(0)
-	replayIndex := tableMeta.GetReplayIndex()
+	replayIndex := c.tableData.GetReplayIndex()
 	if replayIndex != nil {
-		logutil.Infof("Table %d ReplayIndex %s", tableMeta.ID, replayIndex.String())
+		logutil.Infof("Table %d ReplayIndex %s", c.tableData.GetID(), replayIndex.String())
 		if !replayIndex.IsApplied() {
-			if (replayIndex.ID.Id != index.ID.Id) ||
-				(replayIndex.ID.Offset < index.ID.Offset) {
-				panic(fmt.Sprintf("replayIndex: %d, but %d received", replayIndex.ID, index.ID))
+			if (replayIndex.Id.Id != index.Id.Id) ||
+				(replayIndex.Id.Offset < index.Id.Offset) {
+				panic(fmt.Sprintf("replayIndex: %d, but %d received", replayIndex.Id, index.Id))
 			}
-			if replayIndex.ID.Offset > index.ID.Offset {
+			if replayIndex.Id.Offset > index.Id.Offset {
 				logutil.Infof("Index %s has been applied", index.String())
 				return nil
 			}
 			offset = replayIndex.Count + replayIndex.Start
 			index.Start = offset
 		}
-		tableMeta.ResetReplayIndex()
+		c.tableData.ResetReplayIndex()
 	}
 	for {
 		if mut.IsFull() {

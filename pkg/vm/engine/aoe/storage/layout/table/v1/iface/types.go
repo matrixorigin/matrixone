@@ -25,8 +25,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
@@ -65,11 +64,11 @@ type ITableData interface {
 	InitReplay()
 
 	// RegisterSegment creates and registers a logical segment
-	RegisterSegment(meta *md.Segment) (seg ISegment, err error)
+	RegisterSegment(meta *metadata.Segment) (seg ISegment, err error)
 
 	// RegisterBlock uses GetBlockFactory() to create a
 	// Block and append to the blocks of the segment
-	RegisterBlock(meta *md.Block) (blk IBlock, err error)
+	RegisterBlock(meta *metadata.Block) (blk IBlock, err error)
 
 	// StrongRefSegment requires UnRef segment
 	StrongRefSegment(id uint64) ISegment
@@ -91,7 +90,7 @@ type ITableData interface {
 
 	// UpgradeBlock upgrade various information of metadata in segment,
 	// and it will be called after the new Block file has been flushed.
-	UpgradeBlock(*md.Block) (IBlock, error)
+	UpgradeBlock(*metadata.Block) (IBlock, error)
 
 	// SegmentIds returns the id of all the segments in the TableData
 	SegmentIds() []uint64
@@ -107,13 +106,15 @@ type ITableData interface {
 	AddRows(uint64) uint64
 
 	// GetMeta to get the Table's metadate when the Table is created
-	GetMeta() *md.Table
+	GetMeta() *metadata.Table
 
 	// Size is the size of all segments in TableData
 	Size(string) uint64
 
-	//  StrongRefLastBlock Ref to the last Block in TableData
+	// StrongRefLastBlock Ref to the last Block in TableData
 	StrongRefLastBlock() IBlock
+	GetReplayIndex() *metadata.LogIndex
+	ResetReplayIndex()
 }
 
 type ISegment interface {
@@ -125,10 +126,10 @@ type ISegment interface {
 	CanUpgrade() bool
 
 	// GetReplayIndex gets the replay index of the last block in the segment
-	GetReplayIndex() *md.LogIndex
+	GetReplayIndex() *metadata.LogIndex
 
 	// GetMeta gets the metadata of the segment
-	GetMeta() *md.Segment
+	GetMeta() *metadata.Segment
 
 	// GetMTBufMgr to get the MTBufMgr of the DB
 	GetMTBufMgr() bmgrif.IBufferManager
@@ -150,7 +151,7 @@ type ISegment interface {
 
 	// RegisterBlock uses GetBlockFactory() to create a
 	// Block and append to the blocks of the segment
-	RegisterBlock(*md.Block) (blk IBlock, err error)
+	RegisterBlock(*metadata.Block) (blk IBlock, err error)
 
 	// StrongRefBlock requires UnRef Block
 	StrongRefBlock(id uint64) IBlock
@@ -173,11 +174,11 @@ type ISegment interface {
 
 	// CloneWithUpgrade clones a segment and to upgrade
 	// the UNSORTED type of segment to SORTED
-	CloneWithUpgrade(ITableData, *md.Segment) (ISegment, error)
+	CloneWithUpgrade(ITableData, *metadata.Segment) (ISegment, error)
 
 	// UpgradeBlock upgrade various information of metadata in segment,
 	// and it will be called after the new Block file has been flushed.
-	UpgradeBlock(*md.Block) (IBlock, error)
+	UpgradeBlock(*metadata.Block) (IBlock, error)
 
 	// BlockIds returns the id of all the Block in the segment
 	BlockIds() []uint64
@@ -206,14 +207,14 @@ type IBlock interface {
 
 	// GetMeta to get the metadata of the Block, the metadate is
 	// created and registered during NewCreateBlkEvent
-	GetMeta() *md.Block
+	GetMeta() *metadata.Block
 
 	// GetType gets the Block type,
 	// TRANSIENT_BLK , PERSISTENT_BLK or PERSISTENT_SORTED_BLK
 	GetType() base.BlockType
 
 	// CloneWithUpgrade clones a Block and to upgrade it
-	CloneWithUpgrade(ISegment, *md.Block) (IBlock, error)
+	CloneWithUpgrade(ISegment, *metadata.Block) (IBlock, error)
 
 	// GetSegmentFile gets the segment file of the Block
 	GetSegmentFile() base.ISegmentFile

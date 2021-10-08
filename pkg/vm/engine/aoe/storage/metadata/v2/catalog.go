@@ -35,6 +35,7 @@ var (
 	TableNotFoundErr   = errors.New("aoe: table not found")
 	SegmentNotFoundErr = errors.New("aoe: segment not found")
 	BlockNotFoundErr   = errors.New("aoe: block not found")
+	InvalidSchemaErr   = errors.New("aoe: invalid schema")
 )
 
 type CatalogCfg struct {
@@ -333,6 +334,9 @@ func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *ExternalIndex
 }
 
 func (catalog *Catalog) CreateTable(schema *Schema, tranId uint64, autoCommit bool, exIndex *ExternalIndex) (*Table, error) {
+	if !schema.Valid() {
+		return nil, InvalidSchemaErr
+	}
 	entry := NewTableEntry(catalog, schema, tranId, exIndex)
 	if err := catalog.onNewTable(entry); err != nil {
 		return nil, err

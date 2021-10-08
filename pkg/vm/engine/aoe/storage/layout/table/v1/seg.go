@@ -22,7 +22,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"sync"
 	"sync/atomic"
 )
@@ -39,15 +39,15 @@ type segment struct {
 		attrsizes map[string]uint64
 	}
 	host        iface.ITableData
-	meta        *md.Segment
+	meta        *metadata.Segment
 	indexHolder *index.SegmentHolder
 	segFile     base.ISegmentFile
 }
 
-func newSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error) {
+func newSegment(host iface.ITableData, meta *metadata.Segment) (iface.ISegment, error) {
 	var err error
 	segType := base.UNSORTED_SEG
-	if meta.DataState == md.SORTED {
+	if meta.CommitInfo.Op == metadata.OpUpgradeSorted {
 		segType = base.SORTED_SEG
 	}
 	mu := new(sync.RWMutex)
@@ -98,7 +98,7 @@ func newSegment(host iface.ITableData, meta *md.Segment) (iface.ISegment, error)
 	return seg, nil
 }
 
-func NewSimpleSegment(typ base.SegmentType, meta *md.Segment, indexHolder *index.SegmentHolder, segFile base.ISegmentFile) *segment {
+func NewSimpleSegment(typ base.SegmentType, meta *metadata.Segment, indexHolder *index.SegmentHolder, segFile base.ISegmentFile) *segment {
 	return &segment{
 		typ:         typ,
 		meta:        meta,
@@ -111,8 +111,8 @@ func NewSimpleSegment(typ base.SegmentType, meta *md.Segment, indexHolder *index
 			blockids  []uint64
 			blockcnt  uint32
 			attrsizes map[string]uint64
-		} {
-			helper: make(map[uint64]int),
+		}{
+			helper:  make(map[uint64]int),
 			RWMutex: &sync.RWMutex{},
 		},
 	}
@@ -122,7 +122,7 @@ func (seg *segment) CanUpgrade() bool {
 	if seg.typ == base.SORTED_SEG {
 		return false
 	}
-	if len(seg.tree.blocks) < int(seg.meta.Table.Conf.SegmentMaxBlocks) {
+	if len(seg.tree.blocks) < int(seg.meta.Table.Schema.SegmentMaxBlocks) {
 		return false
 	}
 	for _, blk := range seg.tree.blocks {
@@ -161,23 +161,25 @@ func (seg *segment) GetSegmentedIndex() (id uint64, ok bool) {
 	return id, ok
 }
 
-func (seg *segment) GetReplayIndex() *md.LogIndex {
-	if seg.tree.blockcnt == 0 {
-		return nil
-	}
-	var ctx *md.LogIndex
-	for blkIdx := int(seg.tree.blockcnt) - 1; blkIdx >= 0; blkIdx-- {
-		blk := seg.tree.blocks[blkIdx]
-		if ctx = blk.GetMeta().GetReplayIndex(); ctx != nil {
-			break
-		}
-	}
-	return ctx
+func (seg *segment) GetReplayIndex() *metadata.LogIndex {
+	// if seg.tree.blockcnt == 0 {
+	// 	return nil
+	// }
+	// var ctx *metadata.LogIndex
+	// for blkIdx := int(seg.tree.blockcnt) - 1; blkIdx >= 0; blkIdx-- {
+	// 	blk := seg.tree.blocks[blkIdx]
+	// 	if ctx = blk.GetMeta().GetReplayIndex(); ctx != nil {
+	// 		break
+	// 	}
+	// }
+	// return ctx
+	// TODO
+	return nil
 }
 
 func (seg *segment) GetRowCount() uint64 {
-	if seg.meta.DataState >= md.CLOSED {
-		return seg.meta.Table.Conf.BlockMaxRows * seg.meta.Table.Conf.SegmentMaxBlocks
+	if seg.meta.CommitInfo.Op >= metadata.OpUpgradeClose {
+		return seg.meta.Table.Schema.BlockMaxRows * seg.meta.Table.Schema.SegmentMaxBlocks
 	}
 	var ret uint64
 	seg.tree.RLock()
@@ -208,13 +210,13 @@ func (seg *segment) BlockIds() []uint64 {
 	if seg.typ == base.SORTED_SEG {
 		return seg.tree.blockids
 	}
-	if atomic.LoadUint32(&seg.tree.blockcnt) == uint32(seg.meta.Table.Conf.SegmentMaxBlocks) {
+	if atomic.LoadUint32(&seg.tree.blockcnt) == uint32(seg.meta.Table.Schema.SegmentMaxBlocks) {
 		return seg.tree.blockids
 	}
 	seg.tree.RLock()
 	ret := make([]uint64, 0, atomic.LoadUint32(&seg.tree.blockcnt))
 	for _, blk := range seg.tree.blocks {
-		ret = append(ret, blk.GetMeta().ID)
+		ret = append(ret, blk.GetMeta().Id)
 	}
 	seg.tree.RUnlock()
 	return ret
@@ -253,7 +255,7 @@ func (seg *segment) GetNext() iface.ISegment {
 	return r.(iface.ISegment)
 }
 
-func (seg *segment) GetMeta() *md.Segment {
+func (seg *segment) GetMeta() *metadata.Segment {
 	return seg.meta
 }
 
@@ -284,7 +286,7 @@ func (seg *segment) GetIndexHolder() *index.SegmentHolder {
 func (seg *segment) String() string {
 	seg.tree.RLock()
 	defer seg.tree.RUnlock()
-	s := fmt.Sprintf("<segment[%d]>(BlkCnt=%d)(RefCount=%d)(IndexRefs=%d)", seg.meta.ID, seg.tree.blockcnt, seg.RefCount(), seg.indexHolder.RefCount())
+	s := fmt.Sprintf("<segment[%d]>(BlkCnt=%d)(RefCount=%d)(IndexRefs=%d)", seg.meta.Id, seg.tree.blockcnt, seg.RefCount(), seg.indexHolder.RefCount())
 	for _, blk := range seg.tree.blocks {
 		s = fmt.Sprintf("%s\n\t%s", s, blk.String())
 		prev := blk.GetPrevVersion()
@@ -311,7 +313,7 @@ func (seg *segment) StrongRefLastBlock() iface.IBlock {
 	return lastBlk
 }
 
-func (seg *segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err error) {
+func (seg *segment) RegisterBlock(blkMeta *metadata.Block) (blk iface.IBlock, err error) {
 	factory := seg.host.GetBlockFactory()
 	if factory == nil {
 		blk, err = newBlock(seg, blkMeta)
@@ -329,8 +331,8 @@ func (seg *segment) RegisterBlock(blkMeta *md.Block) (blk iface.IBlock, err erro
 	}
 
 	seg.tree.blocks = append(seg.tree.blocks, blk)
-	seg.tree.blockids = append(seg.tree.blockids, blk.GetMeta().ID)
-	seg.tree.helper[blkMeta.ID] = int(seg.tree.blockcnt)
+	seg.tree.blockids = append(seg.tree.blockids, blk.GetMeta().Id)
+	seg.tree.helper[blkMeta.Id] = int(seg.tree.blockcnt)
 	atomic.AddUint32(&seg.tree.blockcnt, uint32(1))
 	blk.Ref()
 	return blk, err
@@ -357,7 +359,7 @@ func (seg *segment) StrongRefBlock(id uint64) iface.IBlock {
 	blk.Ref()
 	return blk
 }
-func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (iface.ISegment, error) {
+func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *metadata.Segment) (iface.ISegment, error) {
 	if seg.typ != base.UNSORTED_SEG {
 		panic("logic error")
 	}
@@ -373,7 +375,7 @@ func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	cloned.tree.helper = make(map[uint64]int)
 	cloned.tree.blockids = make([]uint64, 0)
 
-	indexHolder := td.GetIndexHolder().StrongRefSegment(seg.meta.ID)
+	indexHolder := td.GetIndexHolder().StrongRefSegment(seg.meta.Id)
 	if indexHolder == nil {
 		panic("logic error")
 	}
@@ -385,25 +387,25 @@ func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	}
 	if indexHolder.Type == base.UNSORTED_SEG {
 		indexHolder.Unref()
-		indexHolder = td.GetIndexHolder().UpgradeSegment(seg.meta.ID, base.SORTED_SEG)
+		indexHolder = td.GetIndexHolder().UpgradeSegment(seg.meta.Id, base.SORTED_SEG)
 		seg.indexHolder.Init(segFile)
 	}
 	cloned.indexHolder = indexHolder
 	cloned.segFile = segFile
 	var prev iface.IBlock
 	for _, blk := range seg.tree.blocks {
-		newBlkMeta, err := cloned.meta.ReferenceBlock(blk.GetMeta().ID)
-		if err != nil {
-			panic(err)
+		newBlkMeta := cloned.meta.SimpleGetBlock(blk.GetMeta().Id)
+		if newBlkMeta == nil {
+			panic(metadata.BlockNotFoundErr)
 		}
 		cloned.Ref()
 		cur, err := blk.CloneWithUpgrade(cloned, newBlkMeta)
 		if err != nil {
 			panic(err)
 		}
-		cloned.tree.helper[newBlkMeta.ID] = len(cloned.tree.blocks)
+		cloned.tree.helper[newBlkMeta.Id] = len(cloned.tree.blocks)
 		cloned.tree.blocks = append(cloned.tree.blocks, cur)
-		cloned.tree.blockids = append(cloned.tree.blockids, cur.GetMeta().ID)
+		cloned.tree.blockids = append(cloned.tree.blockids, cur.GetMeta().Id)
 		cloned.tree.blockcnt++
 		if prev != nil {
 			cur.Ref()
@@ -418,14 +420,14 @@ func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *md.Segment) (ifa
 	return cloned, nil
 }
 
-func (seg *segment) UpgradeBlock(meta *md.Block) (iface.IBlock, error) {
+func (seg *segment) UpgradeBlock(meta *metadata.Block) (iface.IBlock, error) {
 	if seg.typ != base.UNSORTED_SEG {
 		panic("logic error")
 	}
-	if seg.meta.ID != meta.Segment.ID {
+	if seg.meta.Id != meta.Segment.Id {
 		panic("logic error")
 	}
-	idx, ok := seg.tree.helper[meta.ID]
+	idx, ok := seg.tree.helper[meta.Id]
 	if !ok {
 		logutil.Error("logic error")
 		panic("logic error")

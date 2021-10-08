@@ -21,10 +21,11 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/local"
 	"matrixone/pkg/vm/engine/aoe/storage"
+	"matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"matrixone/pkg/vm/mmu/host"
@@ -83,11 +84,11 @@ func init() {
 		Interval: time.Duration(1) * time.Second,
 	}
 	opts.Meta.Conf = mdCfg
-	info := md.MockTableInfo(colCnt)
+	info := adaptor.MockTableInfo(colCnt)
 	table = info
 }
 
-func getInsertBatch(meta *md.Table) *batch.Batch {
+func getInsertBatch(meta *metadata.Table) *batch.Batch {
 	bat := mock.MockBatch(meta.Schema.Types(), batchInsertRows)
 	return bat
 }
@@ -118,9 +119,9 @@ func doRemove() {
 }
 
 func makeFiles(impl *db.DB) {
-	meta, err := impl.Opts.Meta.Info.ReferenceTableByName(tableName)
-	if err != nil {
-		panic(err)
+	meta := impl.Opts.Meta.Catalog.SimpleGetTableByName(tableName)
+	if meta == nil {
+		panic(metadata.TableNotFoundErr)
 	}
 	ibat := getInsertBatch(meta)
 	for i := uint64(0); i < insertCnt; i++ {
@@ -158,7 +159,7 @@ func readData() {
 	if err != nil {
 		panic(err)
 	}
-	tblMeta, _ := impl.Opts.Meta.Info.ReferenceTableByName(tableName)
+	tblMeta := impl.Opts.Meta.Catalog.SimpleGetTableByName(tableName)
 	var attrs []string
 	cols := make([]int, 0)
 	for i, colDef := range tblMeta.Schema.ColDefs {

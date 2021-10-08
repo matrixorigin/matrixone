@@ -22,7 +22,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"time"
 )
 
@@ -41,7 +41,7 @@ func NewStdColumnBlock(host iface.IBlock, colIdx int) IColumnBlock {
 			typ:     host.GetType(),
 		},
 	}
-	capacity := md.EstimateColumnBlockSize(colIdx, blk.meta)
+	capacity := metadata.EstimateColumnBlockSize(colIdx, blk.meta)
 	host.Ref()
 	blk.Ref()
 	part := NewColumnPart(host, blk, capacity)
@@ -62,8 +62,8 @@ func (blk *stdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
 	if blk.typ == base.PERSISTENT_SORTED_BLK {
 		panic("logic error")
 	}
-	if host.GetMeta().DataState != md.FULL {
-		panic(fmt.Sprintf("logic error: blk %s DataState=%d", host.GetMeta().AsCommonID().BlockString(), host.GetMeta().DataState))
+	if host.GetMeta().CommitInfo.Op != metadata.OpUpgradeFull {
+		panic(fmt.Sprintf("logic error: blk %s not upgraded", host.GetMeta().AsCommonID().BlockString()))
 	}
 	cloned := &stdColumnBlock{
 		columnBlock: columnBlock{
@@ -90,7 +90,7 @@ func (blk *stdColumnBlock) CloneWithUpgrade(host iface.IBlock) IColumnBlock {
 func (blk *stdColumnBlock) RegisterPart(part IColumnPart) {
 	blk.Lock()
 	defer blk.Unlock()
-	if blk.meta.ID != part.GetID() || blk.part != nil {
+	if blk.meta.Id != part.GetID() || blk.part != nil {
 		panic("logic error")
 	}
 	blk.part = part

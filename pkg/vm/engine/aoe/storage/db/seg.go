@@ -32,7 +32,7 @@ type Segment struct {
 
 // ID returns the string representation of this segment's id.
 func (seg *Segment) ID() string {
-	id := seg.Data.GetMeta().GetID()
+	id := seg.Data.GetMeta().Id
 	return string(encoding.EncodeUint64(id))
 }
 

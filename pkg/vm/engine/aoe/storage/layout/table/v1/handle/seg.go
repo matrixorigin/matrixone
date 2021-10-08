@@ -33,11 +33,11 @@ func (seg *Segment) BlockIds() []uint64 {
 }
 
 func (seg *Segment) GetID() uint64 {
-	return seg.Data.GetMeta().ID
+	return seg.Data.GetMeta().Id
 }
 
 func (seg *Segment) GetTableID() uint64 {
-	return seg.Data.GetMeta().Table.ID
+	return seg.Data.GetMeta().Table.Id
 }
 
 func (seg *Segment) NewIt() dbi.IBlockIt {

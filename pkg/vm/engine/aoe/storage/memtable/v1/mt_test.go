@@ -17,11 +17,9 @@ package memtable
 import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
@@ -39,7 +37,9 @@ func init() {
 }
 
 func TestManager(t *testing.T) {
-	opts := config.NewOptions("/tmp", config.CST_Customize, config.BST_S, config.SST_S)
+	dir := "/tmp/testmanager"
+	os.RemoveAll(dir)
+	opts := config.NewOptions(dir, config.CST_Customize, config.BST_S, config.SST_S)
 	manager := NewManager(opts, nil)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
@@ -48,8 +48,7 @@ func TestManager(t *testing.T) {
 	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	sstBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
-	info := md.MockInfo(&sync.RWMutex{}, opts.Meta.Conf.BlockMaxRows, opts.Meta.Conf.SegmentMaxBlocks)
-	tableMeta := md.MockTable(info, nil, 10)
+	tableMeta := metadata.MockTable(opts.Meta.Catalog, nil, 10, nil)
 	t0_data, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 
@@ -64,12 +63,12 @@ func TestManager(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
-	c00, err = manager.UnregisterCollection(tableMeta.ID + 1)
+	c00, err = manager.UnregisterCollection(tableMeta.Id + 1)
 	assert.NotNil(t, err)
 	assert.Nil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 1)
 	t.Log(manager.String())
-	c00, err = manager.UnregisterCollection(tableMeta.ID)
+	c00, err = manager.UnregisterCollection(tableMeta.Id)
 	assert.Nil(t, err)
 	assert.NotNil(t, c00)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
@@ -80,6 +79,7 @@ func TestManager(t *testing.T) {
 }
 
 func TestCollection(t *testing.T) {
+	os.RemoveAll(WORK_DIR)
 	blockRows := uint64(1024)
 	cols := 2
 	capacity := blockRows * 4 * uint64(cols) * 2 * 2 * 4
@@ -94,14 +94,9 @@ func TestCollection(t *testing.T) {
 	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
 	opts.Scheduler = dbsched.NewScheduler(opts, tables)
 
-	tabletInfo := md.MockTableInfo(2)
-	eCtx := &dbsched.Context{Opts: opts, Waitable: true}
-	event := meta.NewCreateTableEvent(eCtx, dbi.TableOpCtx{TableName: tabletInfo.Name}, tabletInfo)
-	assert.NotNil(t, event)
-	opts.Scheduler.Schedule(event)
-	err := event.WaitDone()
+	schema := metadata.MockSchema(2)
+	tbl, err := opts.Meta.Catalog.SimpleCreateTable(schema, nil)
 	assert.Nil(t, err)
-	tbl := event.GetTable()
 
 	tableMeta := tbl
 	t0_data, err := tables.RegisterTable(tableMeta)
@@ -127,8 +122,8 @@ func TestCollection(t *testing.T) {
 		go func(id uint64, wg *sync.WaitGroup) {
 			defer wg.Done()
 			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
-			index := &md.LogIndex{
-				ID:       md.MockLogBatchId(id),
+			index := &metadata.LogIndex{
+				Id:       metadata.SimpleBatchId(id),
 				Capacity: uint64(insert.Vecs[0].Length()),
 			}
 			err := c0.Append(insert, index)
@@ -137,7 +132,7 @@ func TestCollection(t *testing.T) {
 		}(logid, &waitgroup)
 	}
 	waitgroup.Wait()
-	assert.Equal(t, len(tbl.SegmentIDs()), int(blks/(opts.Meta.Info.Conf.SegmentMaxBlocks)))
+	assert.Equal(t, len(tbl.SimpleGetSegmentIds()), int(blks/(opts.Meta.Catalog.Cfg.SegmentMaxBlocks)))
 	time.Sleep(time.Duration(40) * time.Millisecond)
 
 	// for _, column := range t0_data.GetCollumns() {

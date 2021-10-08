@@ -61,6 +61,28 @@ func (s *Schema) Types() []types.Type {
 	return ts
 }
 
+func (s *Schema) Valid() bool {
+	if s == nil {
+		return false
+	}
+	if len(s.ColDefs) == 0 {
+		return false
+	}
+
+	names := make(map[string]bool)
+	for idx, colDef := range s.ColDefs {
+		if idx != colDef.Idx {
+			return false
+		}
+		_, ok := names[colDef.Name]
+		if ok {
+			return false
+		}
+		names[colDef.Name] = true
+	}
+	return true
+}
+
 // GetColIdx returns column index for the given column name
 // if found, otherwise returns -1.
 func (s *Schema) GetColIdx(attr string) int {

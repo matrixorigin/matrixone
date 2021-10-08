@@ -23,12 +23,11 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"sync"
 	"testing"
@@ -48,18 +47,18 @@ func (p *testProcessor) execute(bat batch.IBatch) {
 func TestTBlock(t *testing.T) {
 	dir := "/tmp/table/tblk"
 	os.RemoveAll(dir)
-	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
 	rowCount, blkCount := uint64(30), uint64(4)
-	info := metadata.MockInfo(&sync.RWMutex{}, rowCount, blkCount)
-	info.Conf.Dir = dir
-	opts.Meta.Info = info
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	defer catalog.Close()
 	schema := metadata.MockSchema(2)
-	tablemeta := metadata.MockTable(info, schema, 2)
+	tablemeta := metadata.MockTable(catalog, schema, 2, nil)
 
-	meta1, err := tablemeta.ReferenceBlock(uint64(1), uint64(1))
-	assert.Nil(t, err)
-	meta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
-	assert.Nil(t, err)
+	seg1 := tablemeta.SimpleGetSegment(uint64(1))
+	assert.NotNil(t, seg1)
+	meta1 := seg1.SimpleGetBlock(uint64(1))
+	assert.NotNil(t, meta1)
+	meta2 := seg1.SimpleGetBlock(uint64(2))
+	assert.NotNil(t, meta2)
 
 	capacity := uint64(4096)
 	fsMgr := ldio.NewManager(dir, false)
@@ -109,7 +108,7 @@ func TestTBlock(t *testing.T) {
 			}
 			num := uint64(na)
 			idx.Count = num
-			assert.Nil(t, n.Meta.SetIndex(*idx))
+			assert.Nil(t, n.Meta.CommitInfo.SetIndex(*idx))
 			_, err = n.Meta.AddCount(num)
 			assert.Nil(t, err)
 			return nil
@@ -124,7 +123,7 @@ func TestTBlock(t *testing.T) {
 	}
 
 	idx1 := &metadata.LogIndex{
-		ID:       metadata.MockLogBatchId(uint64(1)),
+		Id:       metadata.SimpleBatchId(uint64(1)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk1.WithPinedContext(appendFn(idx1))
@@ -134,7 +133,7 @@ func TestTBlock(t *testing.T) {
 	assert.False(t, ok)
 
 	idx2 := &metadata.LogIndex{
-		ID:       metadata.MockLogBatchId(uint64(2)),
+		Id:       metadata.SimpleBatchId(uint64(2)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk1.WithPinedContext(appendFn(idx2))
@@ -150,13 +149,13 @@ func TestTBlock(t *testing.T) {
 	assert.False(t, blk2.node.IsLoaded())
 
 	idx3 := &metadata.LogIndex{
-		ID:       metadata.MockLogBatchId(uint64(3)),
+		Id:       metadata.SimpleBatchId(uint64(3)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk2.WithPinedContext(appendFn(idx3))
 	assert.Nil(t, err)
 	idx4 := &metadata.LogIndex{
-		ID:       metadata.MockLogBatchId(uint64(4)),
+		Id:       metadata.SimpleBatchId(uint64(4)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk2.WithPinedContext(appendFn(idx4))
@@ -164,7 +163,7 @@ func TestTBlock(t *testing.T) {
 
 	idx, ok = blk1.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, idx2.ID.Id, idx)
+	assert.Equal(t, idx2.Id.Id, idx)
 
 	err = blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)
@@ -174,7 +173,7 @@ func TestTBlock(t *testing.T) {
 	assert.Nil(t, err)
 
 	idx5 := &metadata.LogIndex{
-		ID:       metadata.MockLogBatchId(uint64(4)),
+		Id:       metadata.SimpleBatchId(uint64(4)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk1.WithPinedContext(appendFn(idx5))
@@ -191,14 +190,14 @@ func TestTBlock(t *testing.T) {
 	t.Log(common.GPool.String())
 	idx, ok = blk1.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, idx5.ID.Id, idx)
+	assert.Equal(t, idx5.Id.Id, idx)
 	idx, ok = blk2.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, idx4.ID.Id, idx)
+	assert.Equal(t, idx4.Id.Id, idx)
 
 	blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)
-		n.Meta.TryUpgrade()
+		n.Meta.SimpleUpgrade(nil)
 		var vecs []*vector.Vector
 		for attri, _ := range n.Data.GetAttrs() {
 			v, err := n.Data.GetVectorByAttr(attri)
@@ -212,7 +211,7 @@ func TestTBlock(t *testing.T) {
 			vecs = append(vecs, vc)
 		}
 
-		bw := dataio.NewBlockWriter(vecs, n.Meta, n.Meta.Segment.Table.Conf.Dir)
+		bw := dataio.NewBlockWriter(vecs, n.Meta, n.Meta.Segment.Table.Catalog.Cfg.Dir)
 		bw.SetPreExecutor(func() {
 			logutil.Infof(" %s | Memtable | Flushing", bw.GetFileName())
 		})

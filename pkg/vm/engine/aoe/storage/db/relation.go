@@ -18,7 +18,7 @@ import (
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/process"
 	"sync"

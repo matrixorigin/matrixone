@@ -20,7 +20,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
@@ -34,20 +34,17 @@ import (
 )
 
 func TestMutBlockNodeFactory(t *testing.T) {
+	rowCount, blkCount := uint64(30), uint64(4)
 	dir := "/tmp/mublknodefactory"
 	os.RemoveAll(dir)
-	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
-	rowCount, blkCount := uint64(30), uint64(4)
-	info := metadata.MockInfo(&sync.RWMutex{}, rowCount, blkCount)
-	info.Conf.Dir = dir
-	opts.Meta.Info = info
+	opts := config.NewCustomizedMetaOptions(dir, config.CST_None, rowCount, blkCount)
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)
-	tablemeta := metadata.MockTable(info, schema, 2)
+	tablemeta := metadata.MockTable(opts.Meta.Catalog, schema, 2, nil)
 
-	meta1, err := tablemeta.ReferenceBlock(uint64(1), uint64(1))
+	meta1, err := tablemeta.SimpleGetBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)
-	meta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
+	meta2, err := tablemeta.SimpleGetBlock(uint64(1), uint64(2))
 	assert.Nil(t, err)
 
 	segfile := dataio.NewUnsortedSegmentFile(dir, *meta1.Segment.AsCommonID())
