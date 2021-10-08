@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package varchar
+package mergesort
 
 import (
 	"matrixone/pkg/container/types"
@@ -21,13 +21,13 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
-func Sort(col *vector.Vector, idx []uint32) {
+func strSort(col *vector.Vector, idx []uint32) {
 	data := col.Col.(*types.Bytes)
 	n := len(idx)
-	dataWithIdx := make(sortSlice, n)
+	dataWithIdx := make(stringSortSlice, n)
 
 	for i := 0; i < n; i++ {
-		dataWithIdx[i] = sortElem{data: data.Get(int64(i)), idx: uint32(i)}
+		dataWithIdx[i] = stringSortElem{data: data.Get(int64(i)), idx: uint32(i)}
 	}
 
 	sortUnstable(dataWithIdx)
@@ -52,15 +52,15 @@ func Sort(col *vector.Vector, idx []uint32) {
 	data.Lengths = newLengths
 }
 
-func Shuffle(col *vector.Vector, idx []uint32) {
+func strShuffle(col *vector.Vector, idx []uint32) {
 	if !col.Nsp.Any() {
-		shuffleBlock(col, idx)
+		strShuffleBlock(col, idx)
 	} else {
-		shuffleNullableBlock(col, idx)
+		strShuffleNullableBlock(col, idx)
 	}
 }
 
-func shuffleBlock(col *vector.Vector, idx []uint32) {
+func strShuffleBlock(col *vector.Vector, idx []uint32) {
 	data := col.Col.(*types.Bytes)
 	n := len(idx)
 	newData := make([]byte, len(data.Data))
@@ -81,7 +81,7 @@ func shuffleBlock(col *vector.Vector, idx []uint32) {
 	data.Lengths = newLengths
 }
 
-func shuffleNullableBlock(col *vector.Vector, idx []uint32) {
+func strShuffleNullableBlock(col *vector.Vector, idx []uint32) {
 	data := col.Col.(*types.Bytes)
 	nulls := col.Nsp.Np
 	n := len(idx)
@@ -110,7 +110,7 @@ func shuffleNullableBlock(col *vector.Vector, idx []uint32) {
 	col.Nsp.Np = newNulls
 }
 
-func Merge(col []*vector.Vector, src []uint16) {
+func strMerge(col []*vector.Vector, src []uint16) {
 	data := make([]*types.Bytes, len(col))
 
 	for i, v := range col {
@@ -119,27 +119,27 @@ func Merge(col []*vector.Vector, src []uint16) {
 
 	nElem := len(data[0].Offsets)
 	nBlk := len(data)
-	heap := make(heapSlice, nBlk)
+	heap := make(stringHeapSlice, nBlk)
 	strings := make([][]byte, nElem)
 	merged := make([]*types.Bytes, nBlk)
 
 	for i := 0; i < nBlk; i++ {
-		heap[i] = heapElem{data: data[i].Get(0), src: uint16(i), next: 1}
+		heap[i] = stringHeapElem{data: data[i].Get(0), src: uint16(i), next: 1}
 	}
-	heapInit(heap)
+	heapInit[stringHeapElem](&heap)
 
 	k := 0
 	var offset uint32
 	for i := 0; i < nBlk; i++ {
 		offset = 0
 		for j := 0; j < nElem; j++ {
-			top := heapPop(&heap)
+			top := heapPop[stringHeapElem](&heap)
 			offset += uint32(len(top.data))
 			strings[j] = top.data
 			src[k] = top.src
 			k++
 			if int(top.next) < nElem {
-				heapPush(&heap, heapElem{data: data[top.src].Get(int64(top.next)), src: top.src, next: top.next + 1})
+				heapPush(&heap, stringHeapElem{data: data[top.src].Get(int64(top.next)), src: top.src, next: top.next + 1})
 			}
 		}
 
@@ -168,15 +168,15 @@ func Merge(col []*vector.Vector, src []uint16) {
 	}
 }
 
-func Multiplex(col []*vector.Vector, src []uint16) {
+func strMultiplex(col []*vector.Vector, src []uint16) {
 	if col[0].Nsp == nil {
-		multiplexBlocks(col, src)
+		strMultiplexBlocks(col, src)
 	} else {
-		multiplexNullableBlocks(col, src)
+		strMultiplexNullableBlocks(col, src)
 	}
 }
 
-func multiplexBlocks(col []*vector.Vector, src []uint16) {
+func strMultiplexBlocks(col []*vector.Vector, src []uint16) {
 	data := make([]*types.Bytes, len(col))
 	for i, v := range col {
 		data[i] = v.Col.(*types.Bytes)
@@ -223,7 +223,7 @@ func multiplexBlocks(col []*vector.Vector, src []uint16) {
 	}
 }
 
-func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
+func strMultiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 	data := make([]*types.Bytes, len(col))
 	nElem := len(data[0].Offsets)
 	nBlk := len(data)

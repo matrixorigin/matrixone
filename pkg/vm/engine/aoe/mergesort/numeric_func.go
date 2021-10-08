@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package int16s
+package mergesort
 
 import (
 	"matrixone/pkg/container/vector"
@@ -20,13 +20,13 @@ import (
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
-func Sort(col *vector.Vector, idx []uint32) {
-	data := col.Col.([]int16)
+func numericSort[T numeric](col *vector.Vector, idx []uint32) {
+	data := col.Col.([]T)
 	n := len(idx)
-	dataWithIdx := make(sortSlice, n)
+	dataWithIdx := make(numericSortSlice[T], n)
 
 	for i := 0; i < n; i++ {
-		dataWithIdx[i] = sortElem{data: data[i], idx: uint32(i)}
+		dataWithIdx[i] = numericSortElem[T]{data: data[i], idx: uint32(i)}
 	}
 
 	sortUnstable(dataWithIdx)
@@ -36,17 +36,17 @@ func Sort(col *vector.Vector, idx []uint32) {
 	}
 }
 
-func Shuffle(col *vector.Vector, idx []uint32) {
+func numericShuffle[T numeric](col *vector.Vector, idx []uint32) {
 	if !col.Nsp.Any() {
-		shuffleBlock(col, idx)
+		numericShuffleBlock[T](col, idx)
 	} else {
-		shuffleNullableBlock(col, idx)
+		numericShuffleNullableBlock[T](col, idx)
 	}
 }
 
-func shuffleBlock(col *vector.Vector, idx []uint32) {
-	data := col.Col.([]int16)
-	newData := make([]int16, len(idx))
+func numericShuffleBlock[T numeric](col *vector.Vector, idx []uint32) {
+	data := col.Col.([]T)
+	newData := make([]T, len(idx))
 
 	for i, j := range idx {
 		newData[i] = data[j]
@@ -55,10 +55,10 @@ func shuffleBlock(col *vector.Vector, idx []uint32) {
 	col.Col = newData
 }
 
-func shuffleNullableBlock(col *vector.Vector, idx []uint32) {
-	data := col.Col.([]int16)
+func numericShuffleNullableBlock[T numeric](col *vector.Vector, idx []uint32) {
+	data := col.Col.([]T)
 	nulls := col.Nsp.Np
-	newData := make([]int16, len(idx))
+	newData := make([]T, len(idx))
 	newNulls := roaring.New()
 
 	for i, j := range idx {
@@ -74,32 +74,32 @@ func shuffleNullableBlock(col *vector.Vector, idx []uint32) {
 	col.Nsp.Np = newNulls
 }
 
-func Merge(col []*vector.Vector, src []uint16) {
-	data := make([][]int16, len(col))
+func numericMerge[T numeric](col []*vector.Vector, src []uint16) {
+	data := make([][]T, len(col))
 
 	for i, v := range col {
-		data[i] = v.Col.([]int16)
+		data[i] = v.Col.([]T)
 	}
 
 	nElem := len(data[0])
 	nBlk := len(data)
-	heap := make(heapSlice, nBlk)
-	merged := make([][]int16, nBlk)
+	heap := make(numericHeapSlice[T], nBlk)
+	merged := make([][]T, nBlk)
 
 	for i := 0; i < nBlk; i++ {
-		heap[i] = heapElem{data: data[i][0], src: uint16(i), next: 1}
-		merged[i] = make([]int16, nElem)
+		heap[i] = numericHeapElem[T]{data: data[i][0], src: uint16(i), next: 1}
+		merged[i] = make([]T, nElem)
 	}
-	heapInit(heap)
+	heapInit[numericHeapElem[T]](&heap)
 
 	k := 0
 	for i := 0; i < nBlk; i++ {
 		for j := 0; j < nElem; j++ {
-			top := heapPop(&heap)
+			top := heapPop[numericHeapElem[T]](&heap)
 			merged[i][j], src[k] = top.data, top.src
 			k++
 			if int(top.next) < nElem {
-				heapPush(&heap, heapElem{data: data[top.src][top.next], src: top.src, next: top.next + 1})
+				heapPush(&heap, numericHeapElem[T]{data: data[top.src][top.next], src: top.src, next: top.next + 1})
 			}
 		}
 	}
@@ -109,27 +109,27 @@ func Merge(col []*vector.Vector, src []uint16) {
 	}
 }
 
-func Multiplex(col []*vector.Vector, src []uint16) {
+func numericMultiplex[T numeric](col []*vector.Vector, src []uint16) {
 	if col[0].Nsp == nil {
-		multiplexBlocks(col, src)
+		numericMultiplexBlocks[T](col, src)
 	} else {
-		multiplexNullableBlocks(col, src)
+		numericMultiplexNullableBlocks[T](col, src)
 	}
 }
 
-func multiplexBlocks(col []*vector.Vector, src []uint16) {
-	data := make([][]int16, len(col))
+func numericMultiplexBlocks[T numeric](col []*vector.Vector, src []uint16) {
+	data := make([][]T, len(col))
 	for i, v := range col {
-		data[i] = v.Col.([]int16)
+		data[i] = v.Col.([]T)
 	}
 
 	nElem := len(data[0])
 	nBlk := len(data)
 	cursors := make([]int, nBlk)
-	merged := make([][]int16, nBlk)
+	merged := make([][]T, nBlk)
 
 	for i := 0; i < nBlk; i++ {
-		merged[i] = make([]int16, nElem)
+		merged[i] = make([]T, nElem)
 	}
 
 	k := 0
@@ -147,8 +147,8 @@ func multiplexBlocks(col []*vector.Vector, src []uint16) {
 	}
 }
 
-func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
-	data := make([][]int16, len(col))
+func numericMultiplexNullableBlocks[T numeric](col []*vector.Vector, src []uint16) {
+	data := make([][]T, len(col))
 	nElem := len(data[0])
 	nBlk := len(data)
 
@@ -157,7 +157,7 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 	nextNulls := make([]int, nBlk)
 
 	for i, v := range col {
-		data[i] = v.Col.([]int16)
+		data[i] = v.Col.([]T)
 		nulls[i] = v.Nsp.Np
 		nullIters[i] = nulls[i].Iterator()
 
@@ -169,11 +169,11 @@ func multiplexNullableBlocks(col []*vector.Vector, src []uint16) {
 	}
 
 	cursors := make([]int, nBlk)
-	merged := make([][]int16, nBlk)
+	merged := make([][]T, nBlk)
 	newNulls := make([]*roaring.Bitmap, nBlk)
 
 	for i := 0; i < nBlk; i++ {
-		merged[i] = make([]int16, nElem)
+		merged[i] = make([]T, nElem)
 	}
 
 	k := 0
