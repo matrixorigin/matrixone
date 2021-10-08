@@ -79,10 +79,10 @@ func NewSyncAwareStore(dir, name string, rotationCfg *RotationCfg, syncerCfg *Sy
 		rotationCfg.Observer = NewObservers(rotationCfg.Observer, s)
 	}
 	ss, err := New(dir, name, rotationCfg)
-	s.store = *ss
 	if err != nil {
 		return nil, err
 	}
+	s.store = *ss
 	var handle base.IHBHandle
 	if syncerCfg == nil {
 		syncerCfg = &SyncerCfg{
