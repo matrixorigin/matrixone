@@ -101,6 +101,11 @@ type Catalog struct {
 	TableSet map[uint64]*Table
 }
 
+func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) (*Catalog, error) {
+	replayer := newCatalogReplayer()
+	return replayer.RebuildCatalog(mu, cfg, syncerCfg)
+}
+
 func NewCatalogWithBatchStore(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
 		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
