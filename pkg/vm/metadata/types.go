@@ -14,7 +14,9 @@
 
 package metadata
 
-import "matrixone/pkg/container/types"
+import (
+	"matrixone/pkg/container/types"
+)
 
 type Nodes []Node
 
@@ -28,6 +30,9 @@ type Attribute struct {
 	Alg int
 	// Name name of attribute
 	Name string
+	// Default expression attributes of attribute
+	DefaultExpr string
+	DefaultIsNull bool
 	// type of attribute
 	Type types.Type
 }

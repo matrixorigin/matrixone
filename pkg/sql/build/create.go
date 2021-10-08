@@ -63,7 +63,13 @@ func (b *build) buildCreateDatabase(stmt *tree.CreateDatabase) (op.OP, error) {
 func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
 	switch n := def.(type) {
 	case *tree.ColumnTableDef:
+		var defaultExpr string
+		var isNull bool
 		typ, err := b.getTableDefType(n.Type)
+		if err != nil {
+			return nil, err
+		}
+		defaultExpr, isNull, err = getDefaultExprFromColumnDef(n, typ)
 		if err != nil {
 			return nil, err
 		}
@@ -72,6 +78,8 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
 				Type: *typ,
 				Alg:  compress.Lz4,
 				Name: n.Name.Parts[0],
+				DefaultExpr: defaultExpr,
+				DefaultIsNull: isNull,
 			},
 		}, nil
 	default:
@@ -127,4 +135,36 @@ func (b *build) tableInfo(stmt tree.TableExpr) (string, string, error) {
 		tbl.SchemaName = tree.Identifier(b.db)
 	}
 	return string(tbl.SchemaName), string(tbl.ObjectName), nil
+}
+
+// getDefaultExprFromColumnDef returns
+// column default expr string / is null expression / error msg
+// from column definition when create table
+// it will check default expression type and value, if default values does not adapt to column type
+// there will make a simple type conversion for values TODO: not implement
+// likes:
+// 		create table testTb1 (first int default 15.6) ==> create table testTb1 (first int default 16)
+//		create table testTb2 (first int default 'abc') ==> error(Invalid default value for 'first')
+func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (string, bool, error) {
+	var ret string
+
+	for _, attr := range column.Attributes {
+		if defaultExpr, ok := attr.(*tree.AttributeDefault); ok {
+			// if default expr is null, just returns.
+			if isNullExpr(defaultExpr.Expr) {
+				return "", true, nil
+			}
+			// check value and type, only support constant value for default expression now.
+			if _, err := buildConstant(*typ, defaultExpr.Expr); err != nil { // build constant failed
+				return "", false, err
+			} else {
+				ret = defaultExpr.Expr.String()
+				if errStr := valueRangeCheck(ret, *typ); len(errStr) != 0 { // value out of range
+					return "", false, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
+				}
+			}
+			return ret, false, nil
+		}
+	}
+	return ret, true, nil
 }

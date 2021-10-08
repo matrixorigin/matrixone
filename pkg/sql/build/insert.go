@@ -15,8 +15,8 @@
 package build
 
 import (
-	"errors"
 	"fmt"
+	"go/constant"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
@@ -63,6 +63,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 			attrs[i] = string(col.Name)
 		}
 	}
+	rows.Rows, err = rewriteInsertRows(r, stmt.Columns, attrs, rows.Rows)
 	for i, rows := range rows.Rows {
 		if len(attrs) != len(rows) {
 			return nil, sqlerror.New(errno.InvalidColumnReference, fmt.Sprintf("Column count doesn't match value count at row %v", i))
@@ -345,31 +346,12 @@ func insertValuesRangeCheck(vecs []*vector.Vector, columnNames []string, sourceI
 
 	for colIndex, vec := range vecs {
 		for rowIndex := range sourceInput {
-			sourceValue = sourceInput[rowIndex][colIndex].String()
-			errString = ""
-
-			switch vec.Typ.Oid {
-				case types.T_int64, types.T_int32, types.T_int16, types.T_int8:
-					if _, err := strconv.ParseInt(sourceValue, 10, int(vec.Typ.Width)); err != nil {
-						errString = "Out of range value for column '%s' at row %d"
-					}
-				case types.T_uint64, types.T_uint32, types.T_uint16, types.T_uint8:
-					if _, err := strconv.ParseUint(sourceValue, 10, int(vec.Typ.Width)); err != nil {
-						errString = "Out of range value for column '%s' at row %d"
-					}
-				case types.T_float32, types.T_float64:
-					if _, err := strconv.ParseFloat(sourceValue, int(vec.Typ.Width)); err != nil {
-						errString = "Out of range value for column '%s' at row %d"
-					}
-				case types.T_char, types.T_varchar: // string family should compare the length but not value
-					column, ok := vec.Col.(*types.Bytes)
-					if !ok {
-						return errors.New("unexpected error while assert for char/varchar type")
-					}
-					if column.Lengths[rowIndex] > uint32(vec.Typ.Width) {
-						errString = "Date too long for column '%s' at row %d"
-					}
+			// range check should ignore null value
+			if isNullExpr(sourceInput[rowIndex][colIndex]) {
+				continue
 			}
+			sourceValue = sourceInput[rowIndex][colIndex].String()
+			errString = valueRangeCheck(sourceValue, vec.Typ)
 
 			if len(errString) != 0 {
 				return sqlerror.New(errno.DataException, fmt.Sprintf(errString, columnNames[colIndex], rowIndex + 1))
@@ -377,4 +359,101 @@ func insertValuesRangeCheck(vecs []*vector.Vector, columnNames []string, sourceI
 		}
 	}
 	return nil
+}
+
+// valueRangeCheck returns error string if value is out of range of typ
+func valueRangeCheck(value string, typ types.Type) string {
+	switch typ.Oid {
+	case types.T_int64, types.T_int32, types.T_int16, types.T_int8:
+		if _, err := strconv.ParseInt(value, 10, int(typ.Width)); err != nil {
+			return "Out of range value for column '%s' at row %d"
+		}
+	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_uint8:
+		if _, err := strconv.ParseUint(value, 10, int(typ.Width)); err != nil {
+			return "Out of range value for column '%s' at row %d"
+		}
+	case types.T_float32, types.T_float64:
+		if _, err := strconv.ParseFloat(value, int(typ.Width)); err != nil {
+			return "Out of range value for column '%s' at row %d"
+		}
+	case types.T_char, types.T_varchar: // string family should compare the length but not value
+		if len(value) > int(typ.Width) {
+			return "Data too long for column '%s' at row %d"
+		}
+	}
+	return ""
+}
+
+// rewriteInsertRows rewrite default expressions in valueClause's Rows
+// and convert them to be column-default-expression.
+func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, finalInsertTargets []string, rows []tree.Exprs) ([]tree.Exprs, error) {
+	var ok bool
+	targetsNil := insertTargets == nil
+	allRowsNil := true
+	targetLen  := len(finalInsertTargets)
+
+	defaultExprs := make(map[string]tree.Expr)
+	for _, attr := range rel.Attribute() { // init a map from column name to its default expression
+		defaultExprs[attr.Name] = makeExprFromStr(attr.Type, attr.DefaultExpr, attr.DefaultIsNull)
+	}
+
+	for i := range rows {
+		if rows[i] != nil {
+			allRowsNil = false
+			break
+		}
+	}
+
+	for i := range rows {
+		// nil expr will convert to defaultExpr when all insertTargets and rows are nil.
+		if targetsNil && allRowsNil {
+			rows[i] = make(tree.Exprs, targetLen)
+			for j := 0; j < targetLen; j++{
+				rows[i][j] = tree.NewDefaultVal()
+			}
+		}
+		for j := range rows[i] {
+			if !isDefaultExpr(rows[i][j]) {
+				continue
+			}
+			rows[i][j], ok = defaultExprs[finalInsertTargets[j]]
+			if !ok { // unexpected error
+				return nil, sqlerror.New(errno.UndefinedColumn, "error happens when rewrite insert rows due to default expression")
+			}
+		}
+	}
+	return rows, nil
+}
+
+// makeExprFromStr make an expr from expression string and its type
+func makeExprFromStr(typ types.Type, str string, isNull bool) tree.Expr {
+	if isNull {
+		return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
+	}
+	switch typ.Oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			value, _ := strconv.ParseInt(str, 10, 64)
+			return tree.NewNumVal(constant.MakeInt64(value), str, value < 0)
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			value, _ := strconv.ParseUint(str, 10, 64)
+			return tree.NewNumVal(constant.MakeUint64(value), str, false)
+		case types.T_float32, types.T_float64:
+			value, _ := strconv.ParseFloat(str, 64)
+			return tree.NewNumVal(constant.MakeFloat64(value), str, value < 0)
+		case types.T_char, types.T_varchar:
+			return tree.NewNumVal(constant.MakeString(str), str, false)
+	}
+	return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
+}
+
+// isDefaultExpr returns true when input expression means default expr
+func isDefaultExpr(expr tree.Expr) bool {
+	_, ok := expr.(*tree.DefaultVal)
+	return ok
+}
+
+// isNullExpr returns true when input expression means null expr
+func isNullExpr(expr tree.Expr) bool {
+	v, ok := expr.(*tree.NumVal)
+	return ok && v.Value.Kind() == constant.Unknown
 }

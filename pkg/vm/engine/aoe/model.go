@@ -76,6 +76,8 @@ type ColumnInfo struct {
 	Id       uint64     `json:"column_id"`
 	Name     string     `json:"name"`
 	Type     types.Type `json:"type"`
+	DefaultExpr string  `json:"default_expr"`
+	DefaultIsNull bool  `json:"default_is_null"`
 	Alg      int        `json:"alg"`
 	Epoch    uint64     `json:"epoch"`
 }

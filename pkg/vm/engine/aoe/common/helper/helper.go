@@ -128,12 +128,14 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 	for _, def := range defs {
 		if v, ok := def.(*engine.AttributeDef); ok {
 			cols = append(cols, aoe.ColumnInfo{
-				SchemaId: sid,
-				TableID:  tid,
-				Id:       id,
-				Name:     v.Attr.Name,
-				Alg:      v.Attr.Alg,
-				Type:     v.Attr.Type,
+				SchemaId: 	 sid,
+				TableID:  	 tid,
+				Id:       	 id,
+				Name:     	 v.Attr.Name,
+				Alg:      	 v.Attr.Alg,
+				Type:     	 v.Attr.Type,
+				DefaultExpr: v.Attr.DefaultExpr,
+				DefaultIsNull: v.Attr.DefaultIsNull,
 			})
 			id++
 		}
@@ -167,6 +169,8 @@ func Attribute(tbl aoe.TableInfo) []metadata.Attribute {
 			Alg:  col.Alg,
 			Name: col.Name,
 			Type: col.Type,
+			DefaultExpr: col.DefaultExpr,
+			DefaultIsNull: col.DefaultIsNull,
 		}
 	}
 	return attrs
