@@ -156,7 +156,7 @@ func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (
 			}
 			// check value and type, only support constant value for default expression now.
 			if _, err := buildConstant(*typ, defaultExpr.Expr); err != nil { // build constant failed
-				return "", false, err
+				return "", false, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
 			} else {
 				ret = defaultExpr.Expr.String()
 				if errStr := valueRangeCheck(ret, *typ); len(errStr) != 0 { // value out of range
