@@ -14,65 +14,61 @@
 // highest-priority item from the queue. The Examples include such an
 // implementation; the file example_pq_test.go has the complete source.
 //
-package float64s
+package mergesort
 
 // Init establishes the heap invariants required by the other routines in this package.
 // Init is idempotent with respect to the heap invariants
 // and may be called whenever the heap invariants may have been invalidated.
 // The complexity is Operator(n) where n = len(h).
-func heapInit(h heapSlice) {
+func heapInit[TElem any, TSlice heapSlice[TElem]](h TSlice) {
 	// heapify
-	n := len(h)
+	n := h.Len()
 	for i := n/2 - 1; i >= 0; i-- {
-		down(h, i, n)
+		down[TElem](h, i, n)
 	}
 }
 
 // Push pushes the element x onto the heap.
 // The complexity is Operator(log n) where n = len(h).
-func heapPush(h *heapSlice, x heapElem) {
-	*h = append(*h, x)
-	up(*h, len(*h)-1)
+func heapPush[TElem any, TSlice heapSlice[TElem]](h TSlice, x TElem) {
+	h.Push(x)
+	up[TElem](h, h.Len()-1)
 }
 
 // Pop removes and returns the minimum element (according to Less) from the heap.
 // The complexity is Operator(log n) where n = len(h).
 // Pop is equivalent to Remove(h, 0).
-func heapPop(h *heapSlice) heapElem {
-	n := len(*h) - 1
-	(*h)[0], (*h)[n] = (*h)[n], (*h)[0]
-	down(*h, 0, n)
-	res := (*h)[n]
-	*h = (*h)[:n]
-	return res
+func heapPop[TElem any, TSlice heapSlice[TElem]](h TSlice) TElem {
+	n := h.Len() - 1
+	h.Swap(0, n)
+	down[TElem](h, 0, n)
+	return h.Pop()
 }
 
 // Remove removes and returns the element at index i from the heap.
 // The complexity is Operator(log n) where n = len(h).
-func heapRemove(h *heapSlice, i int) heapElem {
-	n := len(*h) - 1
+func heapRemove[TElem any, TSlice heapSlice[TElem]](h TSlice, i int) TElem {
+	n := h.Len() - 1
 	if n != i {
 		h.Swap(i, n)
-		if !down(*h, i, n) {
-			up(*h, i)
+		if !down[TElem](h, i, n) {
+			up[TElem](h, i)
 		}
 	}
-	res := (*h)[n]
-	*h = (*h)[:n]
-	return res
+	return h.Pop()
 }
 
 // Fix re-establishes the heap ordering after the element at index i has changed its value.
 // Changing the value of the element at index i and then calling Fix is equivalent to,
 // but less expensive than, calling Remove(h, i) followed by a Push of the new value.
 // The complexity is Operator(log n) where n = len(h).
-func heapFix(h heapSlice, i int) {
-	if !down(h, i, len(h)) {
-		up(h, i)
+func heapFix[TElem any, TSlice heapSlice[TElem]](h TSlice, i int) {
+	if !down[TElem](h, i, h.Len()) {
+		up[TElem](h, i)
 	}
 }
 
-func up(h heapSlice, j int) {
+func up[TElem any, TSlice heapSlice[TElem]](h TSlice, j int) {
 	for {
 		i := (j - 1) / 2 // parent
 		if i == j || !h.Less(j, i) {
@@ -83,7 +79,7 @@ func up(h heapSlice, j int) {
 	}
 }
 
-func down(h heapSlice, i0, n int) bool {
+func down[TElem any, TSlice heapSlice[TElem]](h TSlice, i0, n int) bool {
 	i := i0
 	for {
 		j1 := 2*i + 1

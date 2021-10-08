@@ -4,17 +4,6 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/engine/aoe/mergesort/float32s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/float64s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int16s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int32s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int64s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int8s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint16s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint32s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint64s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint8s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/varchar"
 )
 
 func SortBlockColumns(cols []*vector.Vector) error {
@@ -22,53 +11,53 @@ func SortBlockColumns(cols []*vector.Vector) error {
 
 	switch cols[0].Typ.Oid {
 	case types.T_int8:
-		int8s.Sort(cols[0], sortedIdx)
+		numericSort[int8](cols[0], sortedIdx)
 	case types.T_int16:
-		int16s.Sort(cols[0], sortedIdx)
+		numericSort[int16](cols[0], sortedIdx)
 	case types.T_int32:
-		int32s.Sort(cols[0], sortedIdx)
+		numericSort[int32](cols[0], sortedIdx)
 	case types.T_int64:
-		int64s.Sort(cols[0], sortedIdx)
+		numericSort[int64](cols[0], sortedIdx)
 	case types.T_uint8:
-		uint8s.Sort(cols[0], sortedIdx)
+		numericSort[uint8](cols[0], sortedIdx)
 	case types.T_uint16:
-		uint16s.Sort(cols[0], sortedIdx)
+		numericSort[uint16](cols[0], sortedIdx)
 	case types.T_uint32:
-		uint32s.Sort(cols[0], sortedIdx)
+		numericSort[uint32](cols[0], sortedIdx)
 	case types.T_uint64:
-		uint64s.Sort(cols[0], sortedIdx)
+		numericSort[uint64](cols[0], sortedIdx)
 	case types.T_float32:
-		float32s.Sort(cols[0], sortedIdx)
+		numericSort[float32](cols[0], sortedIdx)
 	case types.T_float64:
-		float64s.Sort(cols[0], sortedIdx)
+		numericSort[float64](cols[0], sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
-		varchar.Sort(cols[0], sortedIdx)
+		strSort(cols[0], sortedIdx)
 	}
 
 	for i := 1; i < len(cols); i++ {
 		switch cols[i].Typ.Oid {
 		case types.T_int8:
-			int8s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[int8](cols[i], sortedIdx)
 		case types.T_int16:
-			int16s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[int16](cols[i], sortedIdx)
 		case types.T_int32:
-			int32s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[int32](cols[i], sortedIdx)
 		case types.T_int64:
-			int64s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[int64](cols[i], sortedIdx)
 		case types.T_uint8:
-			uint8s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[uint8](cols[i], sortedIdx)
 		case types.T_uint16:
-			uint16s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[uint16](cols[i], sortedIdx)
 		case types.T_uint32:
-			uint32s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[uint32](cols[i], sortedIdx)
 		case types.T_uint64:
-			uint64s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[uint64](cols[i], sortedIdx)
 		case types.T_float32:
-			float32s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[float32](cols[i], sortedIdx)
 		case types.T_float64:
-			float64s.Shuffle(cols[i], sortedIdx)
+			numericShuffle[float64](cols[i], sortedIdx)
 		case types.T_char, types.T_json, types.T_varchar:
-			varchar.Shuffle(cols[i], sortedIdx)
+			strShuffle(cols[i], sortedIdx)
 		}
 	}
 
@@ -86,27 +75,27 @@ func MergeBlocksToSegment(blks []*batch.Batch) error {
 
 	switch blks[0].Vecs[0].Typ.Oid {
 	case types.T_int8:
-		int8s.Merge(col, mergedSrc)
+		numericMerge[int8](col, mergedSrc)
 	case types.T_int16:
-		int16s.Merge(col, mergedSrc)
+		numericMerge[int16](col, mergedSrc)
 	case types.T_int32:
-		int32s.Merge(col, mergedSrc)
+		numericMerge[int32](col, mergedSrc)
 	case types.T_int64:
-		int64s.Merge(col, mergedSrc)
+		numericMerge[int64](col, mergedSrc)
 	case types.T_uint8:
-		uint8s.Merge(col, mergedSrc)
+		numericMerge[uint8](col, mergedSrc)
 	case types.T_uint16:
-		uint16s.Merge(col, mergedSrc)
+		numericMerge[uint16](col, mergedSrc)
 	case types.T_uint32:
-		uint32s.Merge(col, mergedSrc)
+		numericMerge[uint32](col, mergedSrc)
 	case types.T_uint64:
-		uint64s.Merge(col, mergedSrc)
+		numericMerge[uint64](col, mergedSrc)
 	case types.T_float32:
-		float32s.Merge(col, mergedSrc)
+		numericMerge[float32](col, mergedSrc)
 	case types.T_float64:
-		float64s.Merge(col, mergedSrc)
+		numericMerge[float64](col, mergedSrc)
 	case types.T_char, types.T_json, types.T_varchar:
-		varchar.Merge(col, mergedSrc)
+		strMerge(col, mergedSrc)
 	}
 
 	for j := 1; j < len(blks); j++ {
@@ -116,27 +105,27 @@ func MergeBlocksToSegment(blks []*batch.Batch) error {
 
 		switch blks[0].Vecs[j].Typ.Oid {
 		case types.T_int8:
-			int8s.Multiplex(col, mergedSrc)
+			numericMultiplex[int8](col, mergedSrc)
 		case types.T_int16:
-			int16s.Multiplex(col, mergedSrc)
+			numericMultiplex[int16](col, mergedSrc)
 		case types.T_int32:
-			int32s.Multiplex(col, mergedSrc)
+			numericMultiplex[int32](col, mergedSrc)
 		case types.T_int64:
-			int64s.Multiplex(col, mergedSrc)
+			numericMultiplex[int64](col, mergedSrc)
 		case types.T_uint8:
-			uint8s.Multiplex(col, mergedSrc)
+			numericMultiplex[uint8](col, mergedSrc)
 		case types.T_uint16:
-			uint16s.Multiplex(col, mergedSrc)
+			numericMultiplex[uint16](col, mergedSrc)
 		case types.T_uint32:
-			uint32s.Multiplex(col, mergedSrc)
+			numericMultiplex[uint32](col, mergedSrc)
 		case types.T_uint64:
-			uint64s.Multiplex(col, mergedSrc)
+			numericMultiplex[uint64](col, mergedSrc)
 		case types.T_float32:
-			float32s.Multiplex(col, mergedSrc)
+			numericMultiplex[float32](col, mergedSrc)
 		case types.T_float64:
-			float64s.Multiplex(col, mergedSrc)
+			numericMultiplex[float64](col, mergedSrc)
 		case types.T_char, types.T_json, types.T_varchar:
-			varchar.Multiplex(col, mergedSrc)
+			strMultiplex(col, mergedSrc)
 		}
 	}
 

@@ -9,7 +9,7 @@ UNAME_S := $(shell uname -s)
 config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/generate-config/system_vars_def.toml
 	$(info [Create build config])
 	@go mod tidy
-	@go build -o $(BUILD_CFG) cmd/generate-config/main.go cmd/generate-config/config_template.go
+	@go build -gcflags=all=-G=3 -o $(BUILD_CFG) cmd/generate-config/main.go cmd/generate-config/config_template.go
 	@./$(BUILD_CFG) cmd/generate-config/system_vars_def.toml
 	@mv -f cmd/generate-config/system_vars_config.toml .
 	@mv -f cmd/generate-config/system_vars.go pkg/config
@@ -19,7 +19,7 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 .PHONY: build
 build: cmd/db-server/main.go
 	$(info [Build binary])
-	@go build -o $(BIN_NAME) cmd/db-server/main.go
+	@go build -gcflags=all=-G=3 -o $(BIN_NAME) cmd/db-server/main.go
 
 # Building mo-server binary for debugging, it uses the latest MatrixCube from master.
 .PHONY: debug
@@ -27,7 +27,7 @@ debug: cmd/db-server/main.go
 	$(info [Build binary for debug])
 	go get github.com/matrixorigin/matrixcube
 	go mod tidy
-	go build -tags debug -o $(BIN_NAME) cmd/db-server/main.go
+	go build -gcflags=all=-G=3 -tags debug -o $(BIN_NAME) cmd/db-server/main.go
 
 # Run Static Code Analysis
 .PHONY: sca
