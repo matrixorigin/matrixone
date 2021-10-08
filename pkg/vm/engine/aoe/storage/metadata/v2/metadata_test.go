@@ -338,7 +338,7 @@ func TestReplay(t *testing.T) {
 	catalog := NewCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	catalog.StartSyncer()
 
-	mockTbls := 10
+	mockTbls := 5
 	createBlkWorker, _ := ants.NewPool(mockTbls)
 	upgradeSegWorker, _ := ants.NewPool(4)
 
@@ -347,7 +347,7 @@ func TestReplay(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	mockBlocks := cfg.SegmentMaxBlocks*8 + cfg.SegmentMaxBlocks/2
+	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
 	upgradeSegHandle := func(seg *Segment) func() {
 		return func() {
@@ -495,17 +495,17 @@ func TestUpgrade(t *testing.T) {
 	dir := "/tmp/testupgradeblock"
 	os.RemoveAll(dir)
 	delta := DefaultCheckpointDelta
-	DefaultCheckpointDelta = uint64(400)
+	DefaultCheckpointDelta = uint64(10)
 	defer func() {
 		DefaultCheckpointDelta = delta
 	}()
 
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
-	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(100)
-	cfg.RotationFileMaxSize = 5 * int(common.M)
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(2)
+	cfg.RotationFileMaxSize = 20 * int(common.K)
 	syncerCfg := &SyncerCfg{
-		Interval: time.Duration(2) * time.Millisecond,
+		Interval: time.Duration(1) * time.Millisecond,
 	}
 	catalog := NewCatalog(new(sync.RWMutex), cfg, syncerCfg)
 	catalog.StartSyncer()
@@ -522,7 +522,7 @@ func TestUpgrade(t *testing.T) {
 	traceSegments := make(map[uint64]int)
 	upgradedBlocks := uint64(0)
 	upgradedSegments := uint64(0)
-	segCnt, blockCnt := 100, int(cfg.SegmentMaxBlocks)
+	segCnt, blockCnt := 20, int(cfg.SegmentMaxBlocks)
 
 	updateTrace := func(tableId, segmentId uint64) func() {
 		return func() {
@@ -678,7 +678,7 @@ func TestCatalogWithBatchStore(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(100)
-	cfg.RotationFileMaxSize = 100 * int(common.K)
+	cfg.RotationFileMaxSize = 10 * int(common.K)
 	catalog := NewCatalogWithBatchStore(new(sync.RWMutex), cfg)
 	// catalog := NewCatalog(new(sync.RWMutex), cfg, nil)
 	catalog.StartSyncer()
@@ -709,7 +709,7 @@ func TestCatalogWithBatchStore(t *testing.T) {
 			b1.RUnlock()
 		}
 	}
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		pool.Submit(f(i))
 	}
