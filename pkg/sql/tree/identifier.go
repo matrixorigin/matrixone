@@ -58,12 +58,23 @@ func NewUnresolvedName(parts ...string)(*UnresolvedName,error){
 	if l < 1 || l > 4{
 		return nil,fmt.Errorf("the count of name parts among [1,4]")
 	}
+	beg := 0
+	for i := 0; i < l; i++ {
+		if len(parts[i]) == 0 {
+			beg++
+		}else{
+			break
+		}
+	}
+	if beg >= l{
+		return nil,fmt.Errorf("name parts are all empty string")
+	}
 	u:= &UnresolvedName{
-		NumParts: len(parts),
+		NumParts: l - beg,
 		Star:     false,
 	}
-	for i:=0 ; i < len(parts);i++{
-		u.Parts[i] = parts[l - 1 - i]
+	for i:=beg ; i < len(parts);i++{
+		u.Parts[i - beg] = parts[l - 1 - (i - beg)]
 	}
 	return u,nil
 }
@@ -73,13 +84,24 @@ func NewUnresolvedNameWithStar(parts ...string)(*UnresolvedName,error){
 	if l < 1 || l > 3{
 		return nil,fmt.Errorf("the count of name parts among [1,3]")
 	}
+	beg := 0
+	for i := 0; i < l; i++ {
+		if len(parts[i]) == 0 {
+			beg++
+		}else{
+			break
+		}
+	}
+	if beg >= l{
+		return nil,fmt.Errorf("name parts are all empty string")
+	}
 	u:= &UnresolvedName{
-		NumParts: 1+len(parts),
+		NumParts: 1+l - beg,
 		Star:     true,
 	}
 	u.Parts[0] = ""
-	for i:=0 ; i < len(parts);i++{
-		u.Parts[i+1] = parts[l - 1 - i]
+	for i:=beg ; i < len(parts);i++{
+		u.Parts[i+1-beg] = parts[l - 1 - (i-beg)]
 	}
 	return u,nil
 }
