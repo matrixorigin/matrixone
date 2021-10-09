@@ -26,7 +26,7 @@ func numericSort[T numeric](col *vector.Vector, idx []uint32) {
 	dataWithIdx := make(numericSortSlice[T], n)
 
 	for i := 0; i < n; i++ {
-		dataWithIdx[i] = numericSortElem[T]{data: data[i], idx: uint32(i)}
+		dataWithIdx[i] = sortElem[T]{data: data[i], idx: uint32(i)}
 	}
 
 	sortUnstable(dataWithIdx)
@@ -87,19 +87,19 @@ func numericMerge[T numeric](col []*vector.Vector, src []uint16) {
 	merged := make([][]T, nBlk)
 
 	for i := 0; i < nBlk; i++ {
-		heap[i] = numericHeapElem[T]{data: data[i][0], src: uint16(i), next: 1}
+		heap[i] = heapElem[T]{data: data[i][0], src: uint16(i), next: 1}
 		merged[i] = make([]T, nElem)
 	}
-	heapInit[numericHeapElem[T]](&heap)
+	heapInit[heapElem[T]](&heap)
 
 	k := 0
 	for i := 0; i < nBlk; i++ {
 		for j := 0; j < nElem; j++ {
-			top := heapPop[numericHeapElem[T]](&heap)
+			top := heapPop[heapElem[T]](&heap)
 			merged[i][j], src[k] = top.data, top.src
 			k++
 			if int(top.next) < nElem {
-				heapPush(&heap, numericHeapElem[T]{data: data[top.src][top.next], src: top.src, next: top.next + 1})
+				heapPush(&heap, heapElem[T]{data: data[top.src][top.next], src: top.src, next: top.next + 1})
 			}
 		}
 	}

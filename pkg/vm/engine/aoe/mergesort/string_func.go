@@ -27,7 +27,7 @@ func strSort(col *vector.Vector, idx []uint32) {
 	dataWithIdx := make(stringSortSlice, n)
 
 	for i := 0; i < n; i++ {
-		dataWithIdx[i] = stringSortElem{data: data.Get(int64(i)), idx: uint32(i)}
+		dataWithIdx[i] = sortElem[[]byte]{data: data.Get(int64(i)), idx: uint32(i)}
 	}
 
 	sortUnstable(dataWithIdx)
@@ -124,22 +124,22 @@ func strMerge(col []*vector.Vector, src []uint16) {
 	merged := make([]*types.Bytes, nBlk)
 
 	for i := 0; i < nBlk; i++ {
-		heap[i] = stringHeapElem{data: data[i].Get(0), src: uint16(i), next: 1}
+		heap[i] = heapElem[[]byte]{data: data[i].Get(0), src: uint16(i), next: 1}
 	}
-	heapInit[stringHeapElem](&heap)
+	heapInit[heapElem[[]byte]](&heap)
 
 	k := 0
 	var offset uint32
 	for i := 0; i < nBlk; i++ {
 		offset = 0
 		for j := 0; j < nElem; j++ {
-			top := heapPop[stringHeapElem](&heap)
+			top := heapPop[heapElem[[]byte]](&heap)
 			offset += uint32(len(top.data))
 			strings[j] = top.data
 			src[k] = top.src
 			k++
 			if int(top.next) < nElem {
-				heapPush(&heap, stringHeapElem{data: data[top.src].Get(int64(top.next)), src: top.src, next: top.next + 1})
+				heapPush(&heap, heapElem[[]byte]{data: data[top.src].Get(int64(top.next)), src: top.src, next: top.next + 1})
 			}
 		}
 
