@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//      http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,16 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build arm64
-// +build arm64
+package vectorize
 
-package neg
+type SignedInt interface {
+	~int8 | ~int16 | ~int32 | ~int64
+}
 
-func init() {
-	Int8Neg = negGeneric[int8]
-	Int16Neg = negGeneric[int16]
-	Int32Neg = negGeneric[int32]
-	Int64Neg = negGeneric[int64]
-	Float32Neg = negGeneric[float32]
-	Float64Neg = negGeneric[float64]
+type UnsignedInt interface {
+	~uint8 | ~uint16 | ~uint32 | ~uint64
+}
+
+type Integer interface {
+	SignedInt | UnsignedInt
+}
+
+type Float interface {
+	~float32 | ~float64
+}
+
+type Numeric interface {
+	Integer | Float
 }

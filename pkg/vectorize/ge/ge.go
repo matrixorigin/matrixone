@@ -17,6 +17,7 @@ package ge
 import (
 	"bytes"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/vectorize"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -113,97 +114,107 @@ var (
 )
 
 func init() {
-	Int8Ge = int8Ge
-	Int8GeNullable = int8GeNullable
-	Int8GeSels = int8GeSels
-	Int8GeNullableSels = int8GeNullableSels
-	Int8GeScalar = int8GeScalar
-	Int8GeNullableScalar = int8GeNullableScalar
-	Int8GeScalarSels = int8GeScalarSels
-	Int8GeNullableScalarSels = int8GeNullableScalarSels
-	Int16Ge = int16Ge
-	Int16GeNullable = int16GeNullable
-	Int16GeSels = int16GeSels
-	Int16GeNullableSels = int16GeNullableSels
-	Int16GeScalar = int16GeScalar
-	Int16GeNullableScalar = int16GeNullableScalar
-	Int16GeScalarSels = int16GeScalarSels
-	Int16GeNullableScalarSels = int16GeNullableScalarSels
-	Int32Ge = int32Ge
-	Int32GeNullable = int32GeNullable
-	Int32GeSels = int32GeSels
-	Int32GeNullableSels = int32GeNullableSels
-	Int32GeScalar = int32GeScalar
-	Int32GeNullableScalar = int32GeNullableScalar
-	Int32GeScalarSels = int32GeScalarSels
-	Int32GeNullableScalarSels = int32GeNullableScalarSels
-	Int64Ge = int64Ge
-	Int64GeNullable = int64GeNullable
-	Int64GeSels = int64GeSels
-	Int64GeNullableSels = int64GeNullableSels
-	Int64GeScalar = int64GeScalar
-	Int64GeNullableScalar = int64GeNullableScalar
-	Int64GeScalarSels = int64GeScalarSels
-	Int64GeNullableScalarSels = int64GeNullableScalarSels
-	Uint8Ge = uint8Ge
-	Uint8GeNullable = uint8GeNullable
-	Uint8GeSels = uint8GeSels
-	Uint8GeNullableSels = uint8GeNullableSels
-	Uint8GeScalar = uint8GeScalar
-	Uint8GeNullableScalar = uint8GeNullableScalar
-	Uint8GeScalarSels = uint8GeScalarSels
-	Uint8GeNullableScalarSels = uint8GeNullableScalarSels
-	Uint16Ge = uint16Ge
-	Uint16GeNullable = uint16GeNullable
-	Uint16GeSels = uint16GeSels
-	Uint16GeNullableSels = uint16GeNullableSels
-	Uint16GeScalar = uint16GeScalar
-	Uint16GeNullableScalar = uint16GeNullableScalar
-	Uint16GeScalarSels = uint16GeScalarSels
-	Uint16GeNullableScalarSels = uint16GeNullableScalarSels
-	Uint32Ge = uint32Ge
-	Uint32GeNullable = uint32GeNullable
-	Uint32GeSels = uint32GeSels
-	Uint32GeNullableSels = uint32GeNullableSels
-	Uint32GeScalar = uint32GeScalar
-	Uint32GeNullableScalar = uint32GeNullableScalar
-	Uint32GeScalarSels = uint32GeScalarSels
-	Uint32GeNullableScalarSels = uint32GeNullableScalarSels
-	Uint64Ge = uint64Ge
-	Uint64GeNullable = uint64GeNullable
-	Uint64GeSels = uint64GeSels
-	Uint64GeNullableSels = uint64GeNullableSels
-	Uint64GeScalar = uint64GeScalar
-	Uint64GeNullableScalar = uint64GeNullableScalar
-	Uint64GeScalarSels = uint64GeScalarSels
-	Uint64GeNullableScalarSels = uint64GeNullableScalarSels
-	Float32Ge = float32Ge
-	Float32GeNullable = float32GeNullable
-	Float32GeSels = float32GeSels
-	Float32GeNullableSels = float32GeNullableSels
-	Float32GeScalar = float32GeScalar
-	Float32GeNullableScalar = float32GeNullableScalar
-	Float32GeScalarSels = float32GeScalarSels
-	Float32GeNullableScalarSels = float32GeNullableScalarSels
-	Float64Ge = float64Ge
-	Float64GeNullable = float64GeNullable
-	Float64GeSels = float64GeSels
-	Float64GeNullableSels = float64GeNullableSels
-	Float64GeScalar = float64GeScalar
-	Float64GeNullableScalar = float64GeNullableScalar
-	Float64GeScalarSels = float64GeScalarSels
-	Float64GeNullableScalarSels = float64GeNullableScalarSels
-	StrGe = strGe
-	StrGeNullable = strGeNullable
-	StrGeSels = strGeSels
-	StrGeNullableSels = strGeNullableSels
-	StrGeScalar = strGeScalar
-	StrGeNullableScalar = strGeNullableScalar
-	StrGeScalarSels = strGeScalarSels
-	StrGeNullableScalarSels = strGeNullableScalarSels
+	Int8Ge = GeNumericGeneric[int8]
+	Int8GeNullable = GeNumericNullableGeneric[int8]
+	Int8GeSels = GeNumericSelsGeneric[int8]
+	Int8GeNullableSels = GeNumericNullableSelsGeneric[int8]
+	Int8GeScalar = GeNumericScalarGeneric[int8]
+	Int8GeNullableScalar = GeNumericNullableScalarGeneric[int8]
+	Int8GeScalarSels = GeNumericScalarSelsGeneric[int8]
+	Int8GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[int8]
+
+	Int16Ge = GeNumericGeneric[int16]
+	Int16GeNullable = GeNumericNullableGeneric[int16]
+	Int16GeSels = GeNumericSelsGeneric[int16]
+	Int16GeNullableSels = GeNumericNullableSelsGeneric[int16]
+	Int16GeScalar = GeNumericScalarGeneric[int16]
+	Int16GeNullableScalar = GeNumericNullableScalarGeneric[int16]
+	Int16GeScalarSels = GeNumericScalarSelsGeneric[int16]
+	Int16GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[int16]
+
+	Int32Ge = GeNumericGeneric[int32]
+	Int32GeNullable = GeNumericNullableGeneric[int32]
+	Int32GeSels = GeNumericSelsGeneric[int32]
+	Int32GeNullableSels = GeNumericNullableSelsGeneric[int32]
+	Int32GeScalar = GeNumericScalarGeneric[int32]
+	Int32GeNullableScalar = GeNumericNullableScalarGeneric[int32]
+	Int32GeScalarSels = GeNumericScalarSelsGeneric[int32]
+	Int32GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[int32]
+
+	Int64Ge = GeNumericGeneric[int64]
+	Int64GeNullable = GeNumericNullableGeneric[int64]
+	Int64GeSels = GeNumericSelsGeneric[int64]
+	Int64GeNullableSels = GeNumericNullableSelsGeneric[int64]
+	Int64GeScalar = GeNumericScalarGeneric[int64]
+	Int64GeNullableScalar = GeNumericNullableScalarGeneric[int64]
+	Int64GeScalarSels = GeNumericScalarSelsGeneric[int64]
+	Int64GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[int64]
+
+	Uint8Ge = GeNumericGeneric[uint8]
+	Uint8GeNullable = GeNumericNullableGeneric[uint8]
+	Uint8GeSels = GeNumericSelsGeneric[uint8]
+	Uint8GeNullableSels = GeNumericNullableSelsGeneric[uint8]
+	Uint8GeScalar = GeNumericScalarGeneric[uint8]
+	Uint8GeNullableScalar = GeNumericNullableScalarGeneric[uint8]
+	Uint8GeScalarSels = GeNumericScalarSelsGeneric[uint8]
+	Uint8GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[uint8]
+
+	Uint16Ge = GeNumericGeneric[uint16]
+	Uint16GeNullable = GeNumericNullableGeneric[uint16]
+	Uint16GeSels = GeNumericSelsGeneric[uint16]
+	Uint16GeNullableSels = GeNumericNullableSelsGeneric[uint16]
+	Uint16GeScalar = GeNumericScalarGeneric[uint16]
+	Uint16GeNullableScalar = GeNumericNullableScalarGeneric[uint16]
+	Uint16GeScalarSels = GeNumericScalarSelsGeneric[uint16]
+	Uint16GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[uint16]
+
+	Uint32Ge = GeNumericGeneric[uint32]
+	Uint32GeNullable = GeNumericNullableGeneric[uint32]
+	Uint32GeSels = GeNumericSelsGeneric[uint32]
+	Uint32GeNullableSels = GeNumericNullableSelsGeneric[uint32]
+	Uint32GeScalar = GeNumericScalarGeneric[uint32]
+	Uint32GeNullableScalar = GeNumericNullableScalarGeneric[uint32]
+	Uint32GeScalarSels = GeNumericScalarSelsGeneric[uint32]
+	Uint32GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[uint32]
+
+	Uint64Ge = GeNumericGeneric[uint64]
+	Uint64GeNullable = GeNumericNullableGeneric[uint64]
+	Uint64GeSels = GeNumericSelsGeneric[uint64]
+	Uint64GeNullableSels = GeNumericNullableSelsGeneric[uint64]
+	Uint64GeScalar = GeNumericScalarGeneric[uint64]
+	Uint64GeNullableScalar = GeNumericNullableScalarGeneric[uint64]
+	Uint64GeScalarSels = GeNumericScalarSelsGeneric[uint64]
+	Uint64GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[uint64]
+
+	Float32Ge = GeNumericGeneric[float32]
+	Float32GeNullable = GeNumericNullableGeneric[float32]
+	Float32GeSels = GeNumericSelsGeneric[float32]
+	Float32GeNullableSels = GeNumericNullableSelsGeneric[float32]
+	Float32GeScalar = GeNumericScalarGeneric[float32]
+	Float32GeNullableScalar = GeNumericNullableScalarGeneric[float32]
+	Float32GeScalarSels = GeNumericScalarSelsGeneric[float32]
+	Float32GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[float32]
+
+	Float64Ge = GeNumericGeneric[float64]
+	Float64GeNullable = GeNumericNullableGeneric[float64]
+	Float64GeSels = GeNumericSelsGeneric[float64]
+	Float64GeNullableSels = GeNumericNullableSelsGeneric[float64]
+	Float64GeScalar = GeNumericScalarGeneric[float64]
+	Float64GeNullableScalar = GeNumericNullableScalarGeneric[float64]
+	Float64GeScalarSels = GeNumericScalarSelsGeneric[float64]
+	Float64GeNullableScalarSels = GeNumericNullableScalarSelsGeneric[float64]
+
+	StrGe = GeStringGeneric
+	StrGeNullable = GeStringNullableGeneric
+	StrGeSels = GeStringSelsGeneric
+	StrGeNullableSels = GeStringNullableSelsGeneric
+	StrGeScalar = GeStringScalarGeneric
+	StrGeNullableScalar = GeStringNullableScalarGeneric
+	StrGeScalarSels = GeStringScalarSelsGeneric
+	StrGeNullableScalarSels = GeStringNullableScalarSelsGeneric
 }
 
-func int8Ge(xs, ys []int8, rs []int64) []int64 {
+func GeNumericGeneric[T vectorize.Numeric](xs, ys []T, rs []int64) []int64 {
 	rsi := 0
 	for i, x := range xs {
 		if x >= ys[i] {
@@ -214,7 +225,7 @@ func int8Ge(xs, ys []int8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int8GeNullable(xs, ys []int8, nulls *roaring.Bitmap, rs []int64) []int64 {
+func GeNumericNullableGeneric[T vectorize.Numeric](xs, ys []T, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0
@@ -240,7 +251,7 @@ func int8GeNullable(xs, ys []int8, nulls *roaring.Bitmap, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int8GeSels(xs, ys []int8, rs, sels []int64) []int64 {
+func GeNumericSelsGeneric[T vectorize.Numeric](xs, ys []T, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if xs[sel] >= ys[sel] {
@@ -251,7 +262,7 @@ func int8GeSels(xs, ys []int8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int8GeNullableSels(xs, ys []int8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func GeNumericNullableSelsGeneric[T vectorize.Numeric](xs, ys []T, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
@@ -262,7 +273,7 @@ func int8GeNullableSels(xs, ys []int8, nulls *roaring.Bitmap, rs, sels []int64) 
 	return rs[:rsi]
 }
 
-func int8GeScalar(x int8, ys []int8, rs []int64) []int64 {
+func GeNumericScalarGeneric[T vectorize.Numeric](x T, ys []T, rs []int64) []int64 {
 	rsi := 0
 	for i, y := range ys {
 		if x >= y {
@@ -273,7 +284,7 @@ func int8GeScalar(x int8, ys []int8, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int8GeNullableScalar(x int8, ys []int8, nulls *roaring.Bitmap, rs []int64) []int64 {
+func GeNumericNullableScalarGeneric[T vectorize.Numeric](x T, ys []T, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0
@@ -299,7 +310,7 @@ func int8GeNullableScalar(x int8, ys []int8, nulls *roaring.Bitmap, rs []int64) 
 	return rs[:rsi]
 }
 
-func int8GeScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
+func GeNumericScalarSelsGeneric[T vectorize.Numeric](x T, ys []T, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if x >= ys[sel] {
@@ -310,7 +321,7 @@ func int8GeScalarSels(x int8, ys []int8, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func int8GeNullableScalarSels(x int8, ys []int8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func GeNumericNullableScalarSelsGeneric[T vectorize.Numeric](x T, ys []T, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
@@ -321,1069 +332,7 @@ func int8GeNullableScalarSels(x int8, ys []int8, nulls *roaring.Bitmap, rs, sels
 	return rs[:rsi]
 }
 
-func int16Ge(xs, ys []int16, rs []int64) []int64 {
-	rsi := 0
-	for i, x := range xs {
-		if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int16GeNullable(xs, ys []int16, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, x := range xs {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int16GeSels(xs, ys []int16, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int16GeNullableSels(xs, ys []int16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int16GeScalar(x int16, ys []int16, rs []int64) []int64 {
-	rsi := 0
-	for i, y := range ys {
-		if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int16GeNullableScalar(x int16, ys []int16, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, y := range ys {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int16GeScalarSels(x int16, ys []int16, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int16GeNullableScalarSels(x int16, ys []int16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int32Ge(xs, ys []int32, rs []int64) []int64 {
-	rsi := 0
-	for i, x := range xs {
-		if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int32GeNullable(xs, ys []int32, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, x := range xs {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int32GeSels(xs, ys []int32, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int32GeNullableSels(xs, ys []int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int32GeScalar(x int32, ys []int32, rs []int64) []int64 {
-	rsi := 0
-	for i, y := range ys {
-		if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int32GeNullableScalar(x int32, ys []int32, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, y := range ys {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int32GeScalarSels(x int32, ys []int32, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int32GeNullableScalarSels(x int32, ys []int32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int64Ge(xs, ys []int64, rs []int64) []int64 {
-	rsi := 0
-	for i, x := range xs {
-		if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int64GeNullable(xs, ys []int64, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, x := range xs {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int64GeSels(xs, ys []int64, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int64GeNullableSels(xs, ys []int64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int64GeScalar(x int64, ys []int64, rs []int64) []int64 {
-	rsi := 0
-	for i, y := range ys {
-		if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int64GeNullableScalar(x int64, ys []int64, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, y := range ys {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int64GeScalarSels(x int64, ys []int64, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func int64GeNullableScalarSels(x int64, ys []int64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint8Ge(xs, ys []uint8, rs []int64) []int64 {
-	rsi := 0
-	for i, x := range xs {
-		if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint8GeNullable(xs, ys []uint8, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, x := range xs {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint8GeSels(xs, ys []uint8, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint8GeNullableSels(xs, ys []uint8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint8GeScalar(x uint8, ys []uint8, rs []int64) []int64 {
-	rsi := 0
-	for i, y := range ys {
-		if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint8GeNullableScalar(x uint8, ys []uint8, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, y := range ys {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint8GeScalarSels(x uint8, ys []uint8, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint8GeNullableScalarSels(x uint8, ys []uint8, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint16Ge(xs, ys []uint16, rs []int64) []int64 {
-	rsi := 0
-	for i, x := range xs {
-		if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint16GeNullable(xs, ys []uint16, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, x := range xs {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint16GeSels(xs, ys []uint16, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint16GeNullableSels(xs, ys []uint16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint16GeScalar(x uint16, ys []uint16, rs []int64) []int64 {
-	rsi := 0
-	for i, y := range ys {
-		if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint16GeNullableScalar(x uint16, ys []uint16, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, y := range ys {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint16GeScalarSels(x uint16, ys []uint16, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint16GeNullableScalarSels(x uint16, ys []uint16, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint32Ge(xs, ys []uint32, rs []int64) []int64 {
-	rsi := 0
-	for i, x := range xs {
-		if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint32GeNullable(xs, ys []uint32, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, x := range xs {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint32GeSels(xs, ys []uint32, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint32GeNullableSels(xs, ys []uint32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint32GeScalar(x uint32, ys []uint32, rs []int64) []int64 {
-	rsi := 0
-	for i, y := range ys {
-		if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint32GeNullableScalar(x uint32, ys []uint32, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, y := range ys {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint32GeScalarSels(x uint32, ys []uint32, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint32GeNullableScalarSels(x uint32, ys []uint32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint64Ge(xs, ys []uint64, rs []int64) []int64 {
-	rsi := 0
-	for i, x := range xs {
-		if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint64GeNullable(xs, ys []uint64, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, x := range xs {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint64GeSels(xs, ys []uint64, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint64GeNullableSels(xs, ys []uint64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint64GeScalar(x uint64, ys []uint64, rs []int64) []int64 {
-	rsi := 0
-	for i, y := range ys {
-		if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint64GeNullableScalar(x uint64, ys []uint64, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, y := range ys {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint64GeScalarSels(x uint64, ys []uint64, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func uint64GeNullableScalarSels(x uint64, ys []uint64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float32Ge(xs, ys []float32, rs []int64) []int64 {
-	rsi := 0
-	for i, x := range xs {
-		if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float32GeNullable(xs, ys []float32, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, x := range xs {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float32GeSels(xs, ys []float32, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float32GeNullableSels(xs, ys []float32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float32GeScalar(x float32, ys []float32, rs []int64) []int64 {
-	rsi := 0
-	for i, y := range ys {
-		if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float32GeNullableScalar(x float32, ys []float32, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, y := range ys {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float32GeScalarSels(x float32, ys []float32, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float32GeNullableScalarSels(x float32, ys []float32, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float64Ge(xs, ys []float64, rs []int64) []int64 {
-	rsi := 0
-	for i, x := range xs {
-		if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float64GeNullable(xs, ys []float64, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, x := range xs {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= ys[i] {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float64GeSels(xs, ys []float64, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float64GeNullableSels(xs, ys []float64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && xs[sel] >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float64GeScalar(x float64, ys []float64, rs []int64) []int64 {
-	rsi := 0
-	for i, y := range ys {
-		if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float64GeNullableScalar(x float64, ys []float64, nulls *roaring.Bitmap, rs []int64) []int64 {
-	rsi := 0
-	nullsIter := nulls.Iterator()
-	nextNull := 0
-
-	if nullsIter.HasNext() {
-		nextNull = int(nullsIter.Next())
-	} else {
-		nextNull = -1
-	}
-
-	for i, y := range ys {
-		if i == nextNull {
-			if nullsIter.HasNext() {
-				nextNull = int(nullsIter.Next())
-			} else {
-				nextNull = -1
-			}
-		} else if x >= y {
-			rs[rsi] = int64(i)
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float64GeScalarSels(x float64, ys []float64, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func float64GeNullableScalarSels(x float64, ys []float64, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
-	rsi := 0
-	for _, sel := range sels {
-		if !nulls.Contains(uint64(sel)) && x >= ys[sel] {
-			rs[rsi] = sel
-			rsi++
-		}
-	}
-	return rs[:rsi]
-}
-
-func strGe(xs, ys *types.Bytes, rs []int64) []int64 {
+func GeStringGeneric(xs, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(xs.Offsets); i < n; i++ {
 		if bytes.Compare(xs.Get(int64(i)), ys.Get(int64(i))) >= 0 {
@@ -1394,7 +343,7 @@ func strGe(xs, ys *types.Bytes, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func strGeNullable(xs, ys *types.Bytes, nulls *roaring.Bitmap, rs []int64) []int64 {
+func GeStringNullableGeneric(xs, ys *types.Bytes, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0
@@ -1420,7 +369,7 @@ func strGeNullable(xs, ys *types.Bytes, nulls *roaring.Bitmap, rs []int64) []int
 	return rs[:rsi]
 }
 
-func strGeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
+func GeStringSelsGeneric(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if bytes.Compare(xs.Get(sel), ys.Get(sel)) >= 0 {
@@ -1431,7 +380,7 @@ func strGeSels(xs, ys *types.Bytes, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func strGeNullableSels(xs, ys *types.Bytes, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func GeStringNullableSelsGeneric(xs, ys *types.Bytes, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if !nulls.Contains(uint64(sel)) && bytes.Compare(xs.Get(sel), ys.Get(sel)) >= 0 {
@@ -1442,7 +391,7 @@ func strGeNullableSels(xs, ys *types.Bytes, nulls *roaring.Bitmap, rs, sels []in
 	return rs[:rsi]
 }
 
-func strGeScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
+func GeStringScalarGeneric(x []byte, ys *types.Bytes, rs []int64) []int64 {
 	rsi := 0
 	for i, n := 0, len(ys.Offsets); i < n; i++ {
 		if bytes.Compare(x, ys.Get(int64(i))) >= 0 {
@@ -1453,7 +402,7 @@ func strGeScalar(x []byte, ys *types.Bytes, rs []int64) []int64 {
 	return rs[:rsi]
 }
 
-func strGeNullableScalar(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, rs []int64) []int64 {
+func GeStringNullableScalarGeneric(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, rs []int64) []int64 {
 	rsi := 0
 	nullsIter := nulls.Iterator()
 	nextNull := 0
@@ -1479,7 +428,7 @@ func strGeNullableScalar(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, rs []
 	return rs[:rsi]
 }
 
-func strGeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
+func GeStringScalarSelsGeneric(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if bytes.Compare(x, ys.Get(sel)) >= 0 {
@@ -1490,7 +439,7 @@ func strGeScalarSels(x []byte, ys *types.Bytes, rs, sels []int64) []int64 {
 	return rs[:rsi]
 }
 
-func strGeNullableScalarSels(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
+func GeStringNullableScalarSelsGeneric(x []byte, ys *types.Bytes, nulls *roaring.Bitmap, rs, sels []int64) []int64 {
 	rsi := 0
 	for _, sel := range sels {
 		if !nulls.Contains(uint64(sel)) && bytes.Compare(x, ys.Get(sel)) >= 0 {

@@ -16,117 +16,62 @@ package shuffle
 
 import (
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/vectorize"
 )
 
 var (
-	i8Shuffle  func([]int8, []int8, []int64) []int8
-	i16Shuffle func([]int16, []int16, []int64) []int16
-	i32Shuffle func([]int32, []int32, []int64) []int32
-	i64Shuffle func([]int64, []int64, []int64) []int64
+	Int8Shuffle  func([]int8, []int8, []int64) []int8
+	Int16Shuffle func([]int16, []int16, []int64) []int16
+	Int32Shuffle func([]int32, []int32, []int64) []int32
+	Int64Shuffle func([]int64, []int64, []int64) []int64
 
-	ui8Shuffle  func([]uint8, []uint8, []int64) []uint8
-	ui16Shuffle func([]uint16, []uint16, []int64) []uint16
-	ui32Shuffle func([]uint32, []uint32, []int64) []uint32
-	ui64Shuffle func([]uint64, []uint64, []int64) []uint64
+	Uint8Shuffle  func([]uint8, []uint8, []int64) []uint8
+	Uint16Shuffle func([]uint16, []uint16, []int64) []uint16
+	Uint32Shuffle func([]uint32, []uint32, []int64) []uint32
+	Uint64Shuffle func([]uint64, []uint64, []int64) []uint64
 
-	float32Shuffle func([]float32, []float32, []int64) []float32
-	float64Shuffle func([]float64, []float64, []int64) []float64
+	Float32Shuffle func([]float32, []float32, []int64) []float32
+	Float64Shuffle func([]float64, []float64, []int64) []float64
 
-	decimalShuffle func([]types.Decimal, []int64) []types.Decimal
+	DecimalShuffle func([]types.Decimal, []types.Decimal, []int64) []types.Decimal
 
-	dateShuffle     func([]types.Date, []int64) []types.Date
-	datetimeShuffle func([]types.Datetime, []int64) []types.Datetime
+	DateShuffle     func([]types.Date, []types.Date, []int64) []types.Date
+	DatetimeShuffle func([]types.Datetime, []types.Datetime, []int64) []types.Datetime
 
-	tupleShuffle func([][]interface{}, [][]interface{}, []int64) [][]interface{}
+	TupleShuffle func([][]interface{}, [][]interface{}, []int64) [][]interface{}
 
-	sShuffle func(*types.Bytes, []uint32, []uint32, []int64) *types.Bytes
+	StrShuffle func(*types.Bytes, []uint32, []uint32, []int64) *types.Bytes
 )
 
 func init() {
-	i8Shuffle = i8ShufflePure
-	i16Shuffle = i16ShufflePure
-	i32Shuffle = i32ShufflePure
-	i64Shuffle = i64ShufflePure
+	Int8Shuffle = shuffleGeneric[int8]
+	Int16Shuffle = shuffleGeneric[int16]
+	Int32Shuffle = shuffleGeneric[int32]
+	Int64Shuffle = shuffleGeneric[int64]
 
-	ui8Shuffle = ui8ShufflePure
-	ui16Shuffle = ui16ShufflePure
-	ui32Shuffle = ui32ShufflePure
-	ui64Shuffle = ui64ShufflePure
+	Uint8Shuffle = shuffleGeneric[uint8]
+	Uint16Shuffle = shuffleGeneric[uint16]
+	Uint32Shuffle = shuffleGeneric[uint32]
+	Uint64Shuffle = shuffleGeneric[uint64]
 
-	float32Shuffle = float32ShufflePure
-	float64Shuffle = float64ShufflePure
+	Float32Shuffle = shuffleGeneric[float32]
+	Float64Shuffle = shuffleGeneric[float64]
 
-	decimalShuffle = decimalShufflePure
+	DecimalShuffle = shuffleGeneric[types.Decimal]
 
-	dateShuffle = dateShufflePure
-	datetimeShuffle = datetimeShufflePure
+	DateShuffle = shuffleGeneric[types.Date]
+	DatetimeShuffle = shuffleGeneric[types.Datetime]
 
-	tupleShuffle = tupleShufflePure
+	TupleShuffle = tupleShuffle
 
-	sShuffle = sShufflePure
+	StrShuffle = strShuffle
 }
 
-func I8Shuffle(vs, ws []int8, sels []int64) []int8 {
-	return i8Shuffle(vs, ws, sels)
+type primitive interface {
+	vectorize.Numeric | types.Decimal
 }
 
-func I16Shuffle(vs, ws []int16, sels []int64) []int16 {
-	return i16Shuffle(vs, ws, sels)
-}
-
-func I32Shuffle(vs, ws []int32, sels []int64) []int32 {
-	return i32Shuffle(vs, ws, sels)
-}
-
-func I64Shuffle(vs, ws []int64, sels []int64) []int64 {
-	return i64Shuffle(vs, ws, sels)
-}
-
-func Ui8Shuffle(vs, ws []uint8, sels []int64) []uint8 {
-	return ui8Shuffle(vs, ws, sels)
-}
-
-func Ui16Shuffle(vs, ws []uint16, sels []int64) []uint16 {
-	return ui16Shuffle(vs, ws, sels)
-}
-
-func Ui32Shuffle(vs, ws []uint32, sels []int64) []uint32 {
-	return ui32Shuffle(vs, ws, sels)
-}
-
-func Ui64Shuffle(vs, ws []uint64, sels []int64) []uint64 {
-	return ui64Shuffle(vs, ws, sels)
-}
-
-func Float32Shuffle(vs, ws []float32, sels []int64) []float32 {
-	return float32Shuffle(vs, ws, sels)
-}
-
-func Float64Shuffle(vs, ws []float64, sels []int64) []float64 {
-	return float64Shuffle(vs, ws, sels)
-}
-
-func DecimalShuffle(vs []types.Decimal, sels []int64) []types.Decimal {
-	return decimalShuffle(vs, sels)
-}
-
-func DateShuffle(vs []types.Date, sels []int64) []types.Date {
-	return dateShuffle(vs, sels)
-}
-
-func DatetimeShuffle(vs []types.Datetime, sels []int64) []types.Datetime {
-	return datetimeShuffle(vs, sels)
-}
-
-func TupleShuffle(vs, ws [][]interface{}, sels []int64) [][]interface{} {
-	return tupleShuffle(vs, ws, sels)
-}
-
-func SShuffle(vs *types.Bytes, os, ns []uint32, sels []int64) *types.Bytes {
-	return sShuffle(vs, os, ns, sels)
-}
-
-func i8ShufflePure(vs, ws []int8, sels []int64) []int8 {
+func shuffleGeneric[T primitive](vs, ws []T, sels []int64) []T {
 	for i, sel := range sels {
 		ws[i] = vs[sel]
 	}
@@ -134,107 +79,14 @@ func i8ShufflePure(vs, ws []int8, sels []int64) []int8 {
 	return vs[:len(sels)]
 }
 
-func i16ShufflePure(vs, ws []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		ws[i] = vs[sel]
-	}
-	copy(vs, ws)
-	return vs[:len(sels)]
-}
-
-func i32ShufflePure(vs, ws []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		ws[i] = vs[sel]
-	}
-	copy(vs, ws)
-	return vs[:len(sels)]
-}
-
-func i64ShufflePure(vs, ws []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		ws[i] = vs[sel]
-	}
-	copy(vs, ws)
-	return vs[:len(sels)]
-}
-
-func ui8ShufflePure(vs, ws []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		ws[i] = vs[sel]
-	}
-	copy(vs, ws)
-	return vs[:len(sels)]
-}
-
-func ui16ShufflePure(vs, ws []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		ws[i] = vs[sel]
-	}
-	copy(vs, ws)
-	return vs[:len(sels)]
-}
-
-func ui32ShufflePure(vs, ws []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		ws[i] = vs[sel]
-	}
-	copy(vs, ws)
-	return vs[:len(sels)]
-}
-
-func ui64ShufflePure(vs, ws []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		ws[i] = vs[sel]
-	}
-	copy(vs, ws)
-	return vs[:len(sels)]
-}
-
-func float32ShufflePure(vs, ws []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		ws[i] = vs[sel]
-	}
-	copy(vs, ws)
-	return vs[:len(sels)]
-}
-
-func float64ShufflePure(vs, ws []float64, sels []int64) []float64 {
-	for i, sel := range sels {
-		ws[i] = vs[sel]
-	}
-	copy(vs, ws)
-	return vs[:len(sels)]
-}
-
-func decimalShufflePure(vs []types.Decimal, sels []int64) []types.Decimal {
-	for i, sel := range sels {
-		vs[i] = vs[sel]
-	}
-	return vs[:len(sels)]
-}
-
-func dateShufflePure(vs []types.Date, sels []int64) []types.Date {
-	for i, sel := range sels {
-		vs[i] = vs[sel]
-	}
-	return vs[:len(sels)]
-}
-
-func datetimeShufflePure(vs []types.Datetime, sels []int64) []types.Datetime {
-	for i, sel := range sels {
-		vs[i] = vs[sel]
-	}
-	return vs[:len(sels)]
-}
-
-func tupleShufflePure(vs, ws [][]interface{}, sels []int64) [][]interface{} {
+func tupleShuffle(vs, ws [][]interface{}, sels []int64) [][]interface{} {
 	for i, sel := range sels {
 		ws[i] = vs[sel]
 	}
 	return ws[:len(sels)]
 }
 
-func sShufflePure(vs *types.Bytes, os, ns []uint32, sels []int64) *types.Bytes {
+func strShuffle(vs *types.Bytes, os, ns []uint32, sels []int64) *types.Bytes {
 	for i, sel := range sels {
 		os[i] = vs.Offsets[sel]
 		ns[i] = vs.Lengths[sel]

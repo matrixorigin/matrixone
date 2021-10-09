@@ -50,12 +50,12 @@ func init() {
 		Float32Neg = float32NegAvx2
 		Float64Neg = float64NegAvx2
 	} else {
-		Int8Neg = int8Neg
-		Int16Neg = int16Neg
-		Int32Neg = int32Neg
-		Int64Neg = int64Neg
-		Float32Neg = float32Neg
-		Float64Neg = float64Neg
+		Int8Neg = negGeneric[int8]
+		Int16Neg = negGeneric[int16]
+		Int32Neg = negGeneric[int32]
+		Int64Neg = negGeneric[int64]
+		Float32Neg = negGeneric[float32]
+		Float64Neg = negGeneric[float64]
 	}
 }
 

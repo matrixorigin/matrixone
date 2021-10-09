@@ -14,6 +14,8 @@
 
 package add
 
+import "matrixone/pkg/vectorize"
+
 var (
 	Int8Add              func([]int8, []int8, []int8) []int8
 	Int8AddSels          func([]int8, []int8, []int8, []int64) []int8
@@ -57,280 +59,28 @@ var (
 	Float64AddScalarSels func(float64, []float64, []float64, []int64) []float64
 )
 
-func int8Add(xs, ys, rs []int8) []int8 {
+func addGeneric[T vectorize.Numeric](xs, ys, rs []T) []T {
 	for i, x := range xs {
 		rs[i] = x + ys[i]
 	}
 	return rs
 }
 
-func int8AddSels(xs, ys, rs []int8, sels []int64) []int8 {
+func addSelsGeneric[T vectorize.Numeric](xs, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = xs[sel] + ys[sel]
 	}
 	return rs
 }
 
-func int8AddScalar(x int8, ys, rs []int8) []int8 {
+func addScalarGeneric[T vectorize.Numeric](x T, ys, rs []T) []T {
 	for i, y := range ys {
 		rs[i] = x + y
 	}
 	return rs
 }
 
-func int8AddScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func int16Add(xs, ys, rs []int16) []int16 {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func int16AddSels(xs, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func int16AddScalar(x int16, ys, rs []int16) []int16 {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func int16AddScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func int32Add(xs, ys, rs []int32) []int32 {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func int32AddSels(xs, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func int32AddScalar(x int32, ys, rs []int32) []int32 {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func int32AddScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func int64Add(xs, ys, rs []int64) []int64 {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func int64AddSels(xs, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func int64AddScalar(x int64, ys, rs []int64) []int64 {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func int64AddScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func uint8Add(xs, ys, rs []uint8) []uint8 {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func uint8AddSels(xs, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func uint8AddScalar(x uint8, ys, rs []uint8) []uint8 {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func uint8AddScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func uint16Add(xs, ys, rs []uint16) []uint16 {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func uint16AddSels(xs, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func uint16AddScalar(x uint16, ys, rs []uint16) []uint16 {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func uint16AddScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func uint32Add(xs, ys, rs []uint32) []uint32 {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func uint32AddSels(xs, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func uint32AddScalar(x uint32, ys, rs []uint32) []uint32 {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func uint32AddScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func uint64Add(xs, ys, rs []uint64) []uint64 {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func uint64AddSels(xs, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func uint64AddScalar(x uint64, ys, rs []uint64) []uint64 {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func uint64AddScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func float32Add(xs, ys, rs []float32) []float32 {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func float32AddSels(xs, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func float32AddScalar(x float32, ys, rs []float32) []float32 {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func float32AddScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = x + ys[sel]
-	}
-	return rs
-}
-
-func float64Add(xs, ys, rs []float64) []float64 {
-	for i, x := range xs {
-		rs[i] = x + ys[i]
-	}
-	return rs
-}
-
-func float64AddSels(xs, ys, rs []float64, sels []int64) []float64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] + ys[sel]
-	}
-	return rs
-}
-
-func float64AddScalar(x float64, ys, rs []float64) []float64 {
-	for i, y := range ys {
-		rs[i] = x + y
-	}
-	return rs
-}
-
-func float64AddScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
+func addScalarSelsGeneric[T vectorize.Numeric](x T, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = x + ys[sel]
 	}
