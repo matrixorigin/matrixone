@@ -14,6 +14,8 @@
 
 package sub
 
+import "matrixone/pkg/vectorize"
+
 var (
 	Int8Sub                func([]int8, []int8, []int8) []int8
 	Int8SubSels            func([]int8, []int8, []int8, []int64) []int8
@@ -77,420 +79,42 @@ var (
 	Float64SubByScalarSels func(float64, []float64, []float64, []int64) []float64
 )
 
-func int8Sub(xs, ys, rs []int8) []int8 {
+func subGeneric[T vectorize.Numeric](xs, ys, rs []T) []T {
 	for i, x := range xs {
 		rs[i] = x - ys[i]
 	}
 	return rs
 }
 
-func int8SubSels(xs, ys, rs []int8, sels []int64) []int8 {
+func subSelsGeneric[T vectorize.Numeric](xs, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = xs[sel] - ys[sel]
 	}
 	return rs
 }
 
-func int8SubScalar(x int8, ys, rs []int8) []int8 {
+func subScalarGeneric[T vectorize.Numeric](x T, ys, rs []T) []T {
 	for i, y := range ys {
 		rs[i] = x - y
 	}
 	return rs
 }
 
-func int8SubScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
+func subScalarSelsGeneric[T vectorize.Numeric](x T, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = x - ys[sel]
 	}
 	return rs
 }
 
-func int8SubByScalar(x int8, ys, rs []int8) []int8 {
+func subByScalarGeneric[T vectorize.Numeric](x T, ys, rs []T) []T {
 	for i, y := range ys {
 		rs[i] = y - x
 	}
 	return rs
 }
 
-func int8SubByScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] - x
-	}
-	return rs
-}
-
-func int16Sub(xs, ys, rs []int16) []int16 {
-	for i, x := range xs {
-		rs[i] = x - ys[i]
-	}
-	return rs
-}
-
-func int16SubSels(xs, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] - ys[sel]
-	}
-	return rs
-}
-
-func int16SubScalar(x int16, ys, rs []int16) []int16 {
-	for i, y := range ys {
-		rs[i] = x - y
-	}
-	return rs
-}
-
-func int16SubScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = x - ys[sel]
-	}
-	return rs
-}
-
-func int16SubByScalar(x int16, ys, rs []int16) []int16 {
-	for i, y := range ys {
-		rs[i] = y - x
-	}
-	return rs
-}
-
-func int16SubByScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] - x
-	}
-	return rs
-}
-
-func int32Sub(xs, ys, rs []int32) []int32 {
-	for i, x := range xs {
-		rs[i] = x - ys[i]
-	}
-	return rs
-}
-
-func int32SubSels(xs, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] - ys[sel]
-	}
-	return rs
-}
-
-func int32SubScalar(x int32, ys, rs []int32) []int32 {
-	for i, y := range ys {
-		rs[i] = x - y
-	}
-	return rs
-}
-
-func int32SubScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = x - ys[sel]
-	}
-	return rs
-}
-
-func int32SubByScalar(x int32, ys, rs []int32) []int32 {
-	for i, y := range ys {
-		rs[i] = y - x
-	}
-	return rs
-}
-
-func int32SubByScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] - x
-	}
-	return rs
-}
-
-func int64Sub(xs, ys, rs []int64) []int64 {
-	for i, x := range xs {
-		rs[i] = x - ys[i]
-	}
-	return rs
-}
-
-func int64SubSels(xs, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] - ys[sel]
-	}
-	return rs
-}
-
-func int64SubScalar(x int64, ys, rs []int64) []int64 {
-	for i, y := range ys {
-		rs[i] = x - y
-	}
-	return rs
-}
-
-func int64SubScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = x - ys[sel]
-	}
-	return rs
-}
-
-func int64SubByScalar(x int64, ys, rs []int64) []int64 {
-	for i, y := range ys {
-		rs[i] = y - x
-	}
-	return rs
-}
-
-func int64SubByScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] - x
-	}
-	return rs
-}
-
-func uint8Sub(xs, ys, rs []uint8) []uint8 {
-	for i, x := range xs {
-		rs[i] = x - ys[i]
-	}
-	return rs
-}
-
-func uint8SubSels(xs, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] - ys[sel]
-	}
-	return rs
-}
-
-func uint8SubScalar(x uint8, ys, rs []uint8) []uint8 {
-	for i, y := range ys {
-		rs[i] = x - y
-	}
-	return rs
-}
-
-func uint8SubScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = x - ys[sel]
-	}
-	return rs
-}
-
-func uint8SubByScalar(x uint8, ys, rs []uint8) []uint8 {
-	for i, y := range ys {
-		rs[i] = y - x
-	}
-	return rs
-}
-
-func uint8SubByScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] - x
-	}
-	return rs
-}
-
-func uint16Sub(xs, ys, rs []uint16) []uint16 {
-	for i, x := range xs {
-		rs[i] = x - ys[i]
-	}
-	return rs
-}
-
-func uint16SubSels(xs, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] - ys[sel]
-	}
-	return rs
-}
-
-func uint16SubScalar(x uint16, ys, rs []uint16) []uint16 {
-	for i, y := range ys {
-		rs[i] = x - y
-	}
-	return rs
-}
-
-func uint16SubScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = x - ys[sel]
-	}
-	return rs
-}
-
-func uint16SubByScalar(x uint16, ys, rs []uint16) []uint16 {
-	for i, y := range ys {
-		rs[i] = y - x
-	}
-	return rs
-}
-
-func uint16SubByScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] - x
-	}
-	return rs
-}
-
-func uint32Sub(xs, ys, rs []uint32) []uint32 {
-	for i, x := range xs {
-		rs[i] = x - ys[i]
-	}
-	return rs
-}
-
-func uint32SubSels(xs, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] - ys[sel]
-	}
-	return rs
-}
-
-func uint32SubScalar(x uint32, ys, rs []uint32) []uint32 {
-	for i, y := range ys {
-		rs[i] = x - y
-	}
-	return rs
-}
-
-func uint32SubScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = x - ys[sel]
-	}
-	return rs
-}
-
-func uint32SubByScalar(x uint32, ys, rs []uint32) []uint32 {
-	for i, y := range ys {
-		rs[i] = y - x
-	}
-	return rs
-}
-
-func uint32SubByScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] - x
-	}
-	return rs
-}
-
-func uint64Sub(xs, ys, rs []uint64) []uint64 {
-	for i, x := range xs {
-		rs[i] = x - ys[i]
-	}
-	return rs
-}
-
-func uint64SubSels(xs, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] - ys[sel]
-	}
-	return rs
-}
-
-func uint64SubScalar(x uint64, ys, rs []uint64) []uint64 {
-	for i, y := range ys {
-		rs[i] = x - y
-	}
-	return rs
-}
-
-func uint64SubScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = x - ys[sel]
-	}
-	return rs
-}
-
-func uint64SubByScalar(x uint64, ys, rs []uint64) []uint64 {
-	for i, y := range ys {
-		rs[i] = y - x
-	}
-	return rs
-}
-
-func uint64SubByScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] - x
-	}
-	return rs
-}
-
-func float32Sub(xs, ys, rs []float32) []float32 {
-	for i, x := range xs {
-		rs[i] = x - ys[i]
-	}
-	return rs
-}
-
-func float32SubSels(xs, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] - ys[sel]
-	}
-	return rs
-}
-
-func float32SubScalar(x float32, ys, rs []float32) []float32 {
-	for i, y := range ys {
-		rs[i] = x - y
-	}
-	return rs
-}
-
-func float32SubScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = x - ys[sel]
-	}
-	return rs
-}
-
-func float32SubByScalar(x float32, ys, rs []float32) []float32 {
-	for i, y := range ys {
-		rs[i] = y - x
-	}
-	return rs
-}
-
-func float32SubByScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
-	for i, sel := range sels {
-		rs[i] = ys[sel] - x
-	}
-	return rs
-}
-
-func float64Sub(xs, ys, rs []float64) []float64 {
-	for i, x := range xs {
-		rs[i] = x - ys[i]
-	}
-	return rs
-}
-
-func float64SubSels(xs, ys, rs []float64, sels []int64) []float64 {
-	for i, sel := range sels {
-		rs[i] = xs[sel] - ys[sel]
-	}
-	return rs
-}
-
-func float64SubScalar(x float64, ys, rs []float64) []float64 {
-	for i, y := range ys {
-		rs[i] = x - y
-	}
-	return rs
-}
-
-func float64SubScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
-	for i, sel := range sels {
-		rs[i] = x - ys[sel]
-	}
-	return rs
-}
-
-func float64SubByScalar(x float64, ys, rs []float64) []float64 {
-	for i, y := range ys {
-		rs[i] = y - x
-	}
-	return rs
-}
-
-func float64SubByScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
+func subByScalarSelsGeneric[T vectorize.Numeric](x T, ys, rs []T, sels []int64) []T {
 	for i, sel := range sels {
 		rs[i] = ys[sel] - x
 	}

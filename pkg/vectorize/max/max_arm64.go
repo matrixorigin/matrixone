@@ -19,28 +19,28 @@ package max
 
 func init() {
 	BoolMax = boolMax
-	Int8Max = int8Max
-	Int16Max = int16Max
-	Int32Max = int32Max
-	Int64Max = int64Max
-	Uint8Max = uint8Max
-	Uint16Max = uint16Max
-	Uint32Max = uint32Max
-	Uint64Max = uint64Max
-	Float32Max = float32Max
-	Float64Max = float64Max
+	Int8Max = maxGeneric[int8]
+	Int16Max = maxGeneric[int16]
+	Int32Max = maxGeneric[int32]
+	Int64Max = maxGeneric[int64]
+	Uint8Max = maxGeneric[uint8]
+	Uint16Max = maxGeneric[uint16]
+	Uint32Max = maxGeneric[uint32]
+	Uint64Max = maxGeneric[uint64]
+	Float32Max = maxGeneric[float32]
+	Float64Max = maxGeneric[float64]
 	StrMax = strMax
 
 	BoolMaxSels = boolMaxSels
-	Int8MaxSels = int8MaxSels
-	Int16MaxSels = int16MaxSels
-	Int32MaxSels = int32MaxSels
-	Int64MaxSels = int64MaxSels
-	Uint8MaxSels = uint8MaxSels
-	Uint16MaxSels = uint16MaxSels
-	Uint32MaxSels = uint32MaxSels
-	Uint64MaxSels = uint64MaxSels
-	Float32MaxSels = float32MaxSels
-	Float64MaxSels = float64MaxSels
+	Int8MaxSels = maxSelsGeneric[int8]
+	Int16MaxSels = maxSelsGeneric[int16]
+	Int32MaxSels = maxSelsGeneric[int32]
+	Int64MaxSels = maxSelsGeneric[int64]
+	Uint8MaxSels = maxSelsGeneric[uint8]
+	Uint16MaxSels = maxSelsGeneric[uint16]
+	Uint32MaxSels = maxSelsGeneric[uint32]
+	Uint64MaxSels = maxSelsGeneric[uint64]
+	Float32MaxSels = maxSelsGeneric[float32]
+	Float64MaxSels = maxSelsGeneric[float64]
 	StrMaxSels = strMaxSels
 }

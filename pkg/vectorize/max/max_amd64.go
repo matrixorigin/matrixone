@@ -56,40 +56,40 @@ func init() {
 		Int8Max = int8MaxAvx2
 		Int16Max = int16MaxAvx2
 		Int32Max = int32MaxAvx2
-		Int64Max = int64Max
+		Int64Max = maxGeneric[int64]
 		Uint8Max = uint8MaxAvx2
 		Uint16Max = uint16MaxAvx2
 		Uint32Max = uint32MaxAvx2
-		Uint64Max = uint64Max
+		Uint64Max = maxGeneric[uint64]
 		Float32Max = float32MaxAvx2
 		Float64Max = float64MaxAvx2
 	} else {
-		Int8Max = int8Max
-		Int16Max = int16Max
-		Int32Max = int32Max
-		Int64Max = int64Max
-		Uint8Max = uint8Max
-		Uint16Max = uint16Max
-		Uint32Max = uint32Max
-		Uint64Max = uint64Max
-		Float32Max = float32Max
-		Float64Max = float64Max
+		Int8Max = maxGeneric[int8]
+		Int16Max = maxGeneric[int16]
+		Int32Max = maxGeneric[int32]
+		Int64Max = maxGeneric[int64]
+		Uint8Max = maxGeneric[uint8]
+		Uint16Max = maxGeneric[uint16]
+		Uint32Max = maxGeneric[uint32]
+		Uint64Max = maxGeneric[uint64]
+		Float32Max = maxGeneric[float32]
+		Float64Max = maxGeneric[float64]
 	}
 
 	BoolMax = boolMax
 	StrMax = strMax
 
 	BoolMaxSels = boolMaxSels
-	Int8MaxSels = int8MaxSels
-	Int16MaxSels = int16MaxSels
-	Int32MaxSels = int32MaxSels
-	Int64MaxSels = int64MaxSels
-	Uint8MaxSels = uint8MaxSels
-	Uint16MaxSels = uint16MaxSels
-	Uint32MaxSels = uint32MaxSels
-	Uint64MaxSels = uint64MaxSels
-	Float32MaxSels = float32MaxSels
-	Float64MaxSels = float64MaxSels
+	Int8MaxSels = maxSelsGeneric[int8]
+	Int16MaxSels = maxSelsGeneric[int16]
+	Int32MaxSels = maxSelsGeneric[int32]
+	Int64MaxSels = maxSelsGeneric[int64]
+	Uint8MaxSels = maxSelsGeneric[uint8]
+	Uint16MaxSels = maxSelsGeneric[uint16]
+	Uint32MaxSels = maxSelsGeneric[uint32]
+	Uint64MaxSels = maxSelsGeneric[uint64]
+	Float32MaxSels = maxSelsGeneric[float32]
+	Float64MaxSels = maxSelsGeneric[float64]
 	StrMaxSels = strMaxSels
 }
 

@@ -17,6 +17,7 @@ package max
 import (
 	"bytes"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/vectorize"
 )
 
 var (
@@ -64,7 +65,7 @@ func boolMaxSels(xs []bool, sels []int64) bool {
 	return false
 }
 
-func int8Max(xs []int8) int8 {
+func maxGeneric[T vectorize.Numeric](xs []T) T {
 	res := xs[0]
 	for _, x := range xs {
 		if x > res {
@@ -74,196 +75,7 @@ func int8Max(xs []int8) int8 {
 	return res
 }
 
-func int8MaxSels(xs []int8, sels []int64) int8 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int16Max(xs []int16) int16 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int16MaxSels(xs []int16, sels []int64) int16 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int32Max(xs []int32) int32 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int32MaxSels(xs []int32, sels []int64) int32 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int64Max(xs []int64) int64 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func int64MaxSels(xs []int64, sels []int64) int64 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint8Max(xs []uint8) uint8 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint8MaxSels(xs []uint8, sels []int64) uint8 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint16Max(xs []uint16) uint16 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint16MaxSels(xs []uint16, sels []int64) uint16 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint32Max(xs []uint32) uint32 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint32MaxSels(xs []uint32, sels []int64) uint32 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint64Max(xs []uint64) uint64 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func uint64MaxSels(xs []uint64, sels []int64) uint64 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func float32Max(xs []float32) float32 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func float32MaxSels(xs []float32, sels []int64) float32 {
-	res := xs[sels[0]]
-	for _, sel := range sels {
-		x := xs[sel]
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func float64Max(xs []float64) float64 {
-	res := xs[0]
-	for _, x := range xs {
-		if x > res {
-			res = x
-		}
-	}
-	return res
-}
-
-func float64MaxSels(xs []float64, sels []int64) float64 {
+func maxSelsGeneric[T vectorize.Numeric](xs []T, sels []int64) T {
 	res := xs[sels[0]]
 	for _, sel := range sels {
 		x := xs[sel]

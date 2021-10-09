@@ -19,10 +19,10 @@ import (
 	"testing"
 )
 
-func makeIbuffer(l int) []int64 {
-	buf := make([]int64, l)
+func makeIbuffer(l int) []int32 {
+	buf := make([]int32, l)
 	for i := range buf {
-		buf[i] = int64(i)
+		buf[i] = int32(i + 1)
 	}
 	return buf
 }
@@ -35,14 +35,19 @@ func makeFbuffer(l int) []float64 {
 	return buf
 }
 
-func TestF64Sum(t *testing.T) {
-	xs := makeFbuffer(10000)
+func TestF32Sum(t *testing.T) {
+	xs := makeFbuffer(1000000)
 	fmt.Printf("sum: %v\n", Float64Sum(xs))
-	fmt.Printf("pure sum: %v\n", float64Sum(xs))
+	fmt.Printf("pure sum: %v\n", sumFloatGeneric(xs))
 }
 
 func TestI64Sum(t *testing.T) {
-	xs := makeIbuffer(10000)
-	fmt.Printf("sum: %v\n", Int64Sum(xs))
-	fmt.Printf("pure sum: %v\n", int64Sum(xs))
+	xs := makeIbuffer(1000000)
+	avx2Sum := Int32Sum(xs)
+	goSum := sumSignedGeneric(xs)
+	if avx2Sum != goSum {
+		t.Errorf("avx2 sum = %v, go sum = %v", avx2Sum, goSum)
+	}
+	fmt.Printf("sum: %v\n", Int32Sum(xs))
+	fmt.Printf("pure sum: %v\n", sumSignedGeneric(xs))
 }
