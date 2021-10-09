@@ -8,8 +8,8 @@ UNAME_S := $(shell uname -s)
 .PHONY: config
 config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/generate-config/system_vars_def.toml
 	$(info [Create build config])
-	@go mod tidy
-	@go build -gcflags=all=-G=3 -o $(BUILD_CFG) cmd/generate-config/main.go cmd/generate-config/config_template.go
+	@gotip mod tidy
+	@gotip build -o $(BUILD_CFG) cmd/generate-config/main.go cmd/generate-config/config_template.go
 	@./$(BUILD_CFG) cmd/generate-config/system_vars_def.toml
 	@mv -f cmd/generate-config/system_vars_config.toml .
 	@mv -f cmd/generate-config/system_vars.go pkg/config
@@ -19,15 +19,15 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 .PHONY: build
 build: cmd/db-server/main.go
 	$(info [Build binary])
-	@go build -gcflags=all=-G=3 -o $(BIN_NAME) cmd/db-server/main.go
+	@gotip build -o $(BIN_NAME) cmd/db-server/main.go
 
 # Building mo-server binary for debugging, it uses the latest MatrixCube from master.
 .PHONY: debug
 debug: cmd/db-server/main.go
 	$(info [Build binary for debug])
-	go get github.com/matrixorigin/matrixcube
-	go mod tidy
-	go build -gcflags=all=-G=3 -tags debug -o $(BIN_NAME) cmd/db-server/main.go
+	gotip get github.com/matrixorigin/matrixcube
+	gotip mod tidy
+	gotip build -tags debug -o $(BIN_NAME) cmd/db-server/main.go
 
 # Run Static Code Analysis
 .PHONY: sca
@@ -61,7 +61,7 @@ endif
 clean:
 	$(info [Clean up])
 	$(info Clean go test cache)
-	@go clean -testcache
+	@gotip clean -testcache
 ifneq ($(wildcard $(BIN_NAME)),)
 	$(info Remove file $(BIN_NAME))
 	@rm -f $(BIN_NAME)
