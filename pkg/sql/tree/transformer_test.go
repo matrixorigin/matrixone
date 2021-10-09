@@ -36,10 +36,9 @@ https://github.com/pingcap/parser/blob/master/docs/quickstart.md
 func TestParser(t *testing.T) {
 	p := parser.New()
 
-	sql := `
-insert into tbl2 select col_1c,max(col_1b), "K" from tbl1;
-insert into tbl2 values (1,2),(3,4);
-;`
+	//insert into tbl2 select col_1c,max(col_1b), "K" from tbl1;
+	//insert into tbl2 values (1,2),(3,4);
+	sql := "create table table20 (`" + "` int);"
 
 	stmtNodes, _, err := p.Parse(sql, "", "")
 	if err != nil {
