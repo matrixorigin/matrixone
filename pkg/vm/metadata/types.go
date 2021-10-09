@@ -30,9 +30,34 @@ type Attribute struct {
 	Alg int
 	// Name name of attribute
 	Name string
-	// Default expression attributes of attribute
-	DefaultExpr string
-	DefaultIsNull bool
+	// Default contains default expression definition of attribute
+	Default DefaultExpr
 	// type of attribute
 	Type types.Type
+}
+
+type DefaultExpr struct {
+	Exist  bool
+	Expr   string
+	IsNull bool
+}
+
+// MakeDefaultExpr returns a new DefaultExpr
+func MakeDefaultExpr(exist bool, expr string, isNull bool) DefaultExpr {
+	return DefaultExpr{
+		Exist:  exist,
+		Expr:   expr,
+		IsNull: isNull,
+	}
+}
+
+// EmptyDefaultExpr means there is no definition for default expr
+var EmptyDefaultExpr = DefaultExpr{Exist: false}
+
+func (attr Attribute) HasDefaultExpr() bool {
+	return attr.Default.Exist
+}
+
+func (attr Attribute) GetDefaultExpr() (string, bool) {
+	return attr.Default.Expr, attr.Default.IsNull
 }

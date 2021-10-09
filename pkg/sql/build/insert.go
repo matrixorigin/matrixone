@@ -64,6 +64,9 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 		}
 	}
 	rows.Rows, err = rewriteInsertRows(r, stmt.Columns, attrs, rows.Rows)
+	if err != nil {
+		return nil, err
+	}
 	for i, rows := range rows.Rows {
 		if len(attrs) != len(rows) {
 			return nil, sqlerror.New(errno.InvalidColumnReference, fmt.Sprintf("Column count doesn't match value count at row %v", i))
@@ -394,7 +397,10 @@ func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, f
 
 	defaultExprs := make(map[string]tree.Expr)
 	for _, attr := range rel.Attribute() { // init a map from column name to its default expression
-		defaultExprs[attr.Name] = makeExprFromStr(attr.Type, attr.DefaultExpr, attr.DefaultIsNull)
+		if attr.HasDefaultExpr() {
+			str, null := attr.GetDefaultExpr()
+			defaultExprs[attr.Name] = makeExprFromStr(attr.Type, str, null)
+		}
 	}
 
 	for i := range rows {
@@ -417,8 +423,8 @@ func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, f
 				continue
 			}
 			rows[i][j], ok = defaultExprs[finalInsertTargets[j]]
-			if !ok { // unexpected error
-				return nil, sqlerror.New(errno.UndefinedColumn, "error happens when rewrite insert rows due to default expression")
+			if !ok {
+				return nil, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Field '%s' doesn't have a default value", finalInsertTargets[j]))
 			}
 		}
 	}

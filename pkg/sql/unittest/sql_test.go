@@ -147,16 +147,20 @@ func TestInsert(t *testing.T) {
 		{"create database testinsert;", nil, nil},
 		{"CREATE TABLE TBL(A INT DEFAULT NULL, B VARCHAR(10) DEFAULT 'ABC');", nil, nil},
 		{"insert into TBL () values ();", nil, nil},
-		{"insert into TBL values (1, '12345678901');", sqlerror.New(errno.DataException, "Data too long for column 'a' at row 1"), nil},
+		{"insert into TBL values (1, '12345678901');", sqlerror.New(errno.DataException, "Data too long for column 'B' at row 1"), nil},
 		{"insert into TBL values (1, '1234567890');", nil, nil},
 		{"insert into TBL values (2, null);", nil, nil},
 		{"insert into TBL values (default, default);", nil, nil},
 		{"CREATE TABLE CMS(A INT2, B INT4 DEFAULT 1);", nil, nil},
-		{"insert into CMS values (7777777777777777, default);", sqlerror.New(errno.DataException, "Out of range value for column 'a' at row 1"), nil},
+		{"insert into CMS values (7777777777777777, default);", sqlerror.New(errno.DataException, "Out of range value for column 'A' at row 1"), nil},
 		{"insert into CMS () values (), (1, 2);", sqlerror.New(errno.InvalidColumnReference, "Column count doesn't match value count at row 0"), nil},
 		{"insert into CMS () values (), ();", nil, nil},
-		{"CREATE TABLE TBL2 (A INT NOT NULL);", nil, nil},
-		// {"insert into TBL2 () values ();", errMsg1, errMsg2}, // TODO: notNull constraint does not implement.
+		{"CREATE TABLE TBL3 (A INT NOT NULL DEFAULT NULL);", sqlerror.New(errno.InvalidColumnDefinition, "Invalid default value for 'A'"), nil},
+		{"CREATE TABLE TBL4 (A INT NOT NULL);", nil, nil},
+		{"insert into TBL4 values ();", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"insert into TBL4 values (default);", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"CREATE TABLE TBL5 (A INT);", nil, nil},
+		{"insert into TBL5 values (default);", nil, nil},
 		{"drop database testinsert;", nil, nil},
 	}
 
@@ -174,18 +178,17 @@ func TestInsert(t *testing.T) {
 			if expected1 == nil {
 				require.NoError(t, err)
 			} else {
-				require.Error(t, expected1)
+				require.EqualError(t, err, expected1.Error())
 			}
-			if err != nil {
-				continue
+			if expected1 != nil {
+				break
 			}
 			err = e.Run(1)
 			if expected2 == nil {
 				require.NoError(t, err)
 			} else {
-				require.Error(t, expected2)
+				require.EqualError(t, err, expected2.Error())
 			}
-
 		}
 	}
 

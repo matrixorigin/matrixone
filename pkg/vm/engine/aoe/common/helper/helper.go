@@ -134,8 +134,7 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 				Name:     	 v.Attr.Name,
 				Alg:      	 v.Attr.Alg,
 				Type:     	 v.Attr.Type,
-				DefaultExpr: v.Attr.DefaultExpr,
-				DefaultIsNull: v.Attr.DefaultIsNull,
+				Default: 	 v.Attr.Default,
 			})
 			id++
 		}
@@ -166,11 +165,10 @@ func Attribute(tbl aoe.TableInfo) []metadata.Attribute {
 	attrs := make([]metadata.Attribute, len(tbl.Columns))
 	for i, col := range tbl.Columns {
 		attrs[i] = metadata.Attribute{
-			Alg:  col.Alg,
-			Name: col.Name,
-			Type: col.Type,
-			DefaultExpr: col.DefaultExpr,
-			DefaultIsNull: col.DefaultIsNull,
+			Alg:  	 col.Alg,
+			Name: 	 col.Name,
+			Type: 	 col.Type,
+			Default: col.Default,
 		}
 	}
 	return attrs
