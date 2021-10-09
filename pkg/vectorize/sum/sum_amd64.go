@@ -66,27 +66,27 @@ func init() {
 		Float32Sum = float32SumAvx2
 		Float64Sum = float64SumAvx2
 	} else {
-		Int8Sum = int8Sum
-		Int16Sum = int16Sum
-		Int32Sum = int32Sum
-		Int64Sum = int64Sum
-		Uint8Sum = uint8Sum
-		Uint16Sum = uint16Sum
-		Uint32Sum = uint32Sum
-		Uint64Sum = uint64Sum
-		Float32Sum = float32Sum
-		Float64Sum = float64Sum
+		Int8Sum = sumSignedGeneric[int8]
+		Int16Sum = sumSignedGeneric[int16]
+		Int32Sum = sumSignedGeneric[int32]
+		Int64Sum = sumSignedGeneric[int64]
+		Uint8Sum = sumUnsignedGeneric[uint8]
+		Uint16Sum = sumUnsignedGeneric[uint16]
+		Uint32Sum = sumUnsignedGeneric[uint32]
+		Uint64Sum = sumUnsignedGeneric[uint64]
+		Float32Sum = sumFloatGeneric[float32]
+		Float64Sum = sumFloatGeneric[float64]
 	}
-	Int8SumSels = int8SumSels
-	Int16SumSels = int16SumSels
-	Int32SumSels = int32SumSels
-	Int64SumSels = int64SumSels
-	Uint8SumSels = uint8SumSels
-	Uint16SumSels = uint16SumSels
-	Uint32SumSels = uint32SumSels
-	Uint64SumSels = uint64SumSels
-	Float32SumSels = float32SumSels
-	Float64SumSels = float64SumSels
+	Int8SumSels = sumSignedSelsGeneric[int8]
+	Int16SumSels = sumSignedSelsGeneric[int16]
+	Int32SumSels = sumSignedSelsGeneric[int32]
+	Int64SumSels = sumSignedSelsGeneric[int64]
+	Uint8SumSels = sumUnsignedSelsGeneric[uint8]
+	Uint16SumSels = sumUnsignedSelsGeneric[uint16]
+	Uint32SumSels = sumUnsignedSelsGeneric[uint32]
+	Uint64SumSels = sumUnsignedSelsGeneric[uint64]
+	Float32SumSels = sumFloatSelsGeneric[float32]
+	Float64SumSels = sumFloatSelsGeneric[float64]
 }
 
 func int8SumAvx2(xs []int8) int64 {

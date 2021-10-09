@@ -14,6 +14,8 @@
 
 package div
 
+import "matrixone/pkg/vectorize"
+
 var (
 	Int8Div                func([]int8, []int8, []int8) []int8
 	Int8DivSels            func([]int8, []int8, []int8, []int64) []int8
@@ -78,482 +80,104 @@ var (
 )
 
 func init() {
-	Int8Div = int8Div
-	Int8DivSels = int8DivSels
-	Int8DivScalar = int8DivScalar
-	Int8DivScalarSels = int8DivScalarSels
-	Int8DivByScalar = int8DivByScalar
-	Int8DivByScalarSels = int8DivByScalarSels
-	Int16Div = int16Div
-	Int16DivSels = int16DivSels
-	Int16DivScalar = int16DivScalar
-	Int16DivScalarSels = int16DivScalarSels
-	Int16DivByScalar = int16DivByScalar
-	Int16DivByScalarSels = int16DivByScalarSels
-	Int32Div = int32Div
-	Int32DivSels = int32DivSels
-	Int32DivScalar = int32DivScalar
-	Int32DivScalarSels = int32DivScalarSels
-	Int32DivByScalar = int32DivByScalar
-	Int32DivByScalarSels = int32DivByScalarSels
-	Int64Div = int64Div
-	Int64DivSels = int64DivSels
-	Int64DivScalar = int64DivScalar
-	Int64DivScalarSels = int64DivScalarSels
-	Int64DivByScalar = int64DivByScalar
-	Int64DivByScalarSels = int64DivByScalarSels
-	Uint8Div = uint8Div
-	Uint8DivSels = uint8DivSels
-	Uint8DivScalar = uint8DivScalar
-	Uint8DivScalarSels = uint8DivScalarSels
-	Uint8DivByScalar = uint8DivByScalar
-	Uint8DivByScalarSels = uint8DivByScalarSels
-	Uint16Div = uint16Div
-	Uint16DivSels = uint16DivSels
-	Uint16DivScalar = uint16DivScalar
-	Uint16DivScalarSels = uint16DivScalarSels
-	Uint16DivByScalar = uint16DivByScalar
-	Uint16DivByScalarSels = uint16DivByScalarSels
-	Uint32Div = uint32Div
-	Uint32DivSels = uint32DivSels
-	Uint32DivScalar = uint32DivScalar
-	Uint32DivScalarSels = uint32DivScalarSels
-	Uint32DivByScalar = uint32DivByScalar
-	Uint32DivByScalarSels = uint32DivByScalarSels
-	Uint64Div = uint64Div
-	Uint64DivSels = uint64DivSels
-	Uint64DivScalar = uint64DivScalar
-	Uint64DivScalarSels = uint64DivScalarSels
-	Uint64DivByScalar = uint64DivByScalar
-	Uint64DivByScalarSels = uint64DivByScalarSels
-	Float32Div = float32Div
-	Float32DivSels = float32DivSels
-	Float32DivScalar = float32DivScalar
-	Float32DivScalarSels = float32DivScalarSels
-	Float32DivByScalar = float32DivByScalar
-	Float32DivByScalarSels = float32DivByScalarSels
-	Float64Div = float64Div
-	Float64DivSels = float64DivSels
-	Float64DivScalar = float64DivScalar
-	Float64DivScalarSels = float64DivScalarSels
-	Float64DivByScalar = float64DivByScalar
-	Float64DivByScalarSels = float64DivByScalarSels
+	Int8Div = divGeneric[int8]
+	Int8DivSels = divSelsGeneric[int8]
+	Int8DivScalar = divScalarGeneric[int8]
+	Int8DivScalarSels = divScalarSelsGeneric[int8]
+	Int8DivByScalar = divByScalarGeneric[int8]
+	Int8DivByScalarSels = divByScalarSelsGeneric[int8]
+	Int16Div = divGeneric[int16]
+	Int16DivSels = divSelsGeneric[int16]
+	Int16DivScalar = divScalarGeneric[int16]
+	Int16DivScalarSels = divScalarSelsGeneric[int16]
+	Int16DivByScalar = divByScalarGeneric[int16]
+	Int16DivByScalarSels = divByScalarSelsGeneric[int16]
+	Int32Div = divGeneric[int32]
+	Int32DivSels = divSelsGeneric[int32]
+	Int32DivScalar = divScalarGeneric[int32]
+	Int32DivScalarSels = divScalarSelsGeneric[int32]
+	Int32DivByScalar = divByScalarGeneric[int32]
+	Int32DivByScalarSels = divByScalarSelsGeneric[int32]
+	Int64Div = divGeneric[int64]
+	Int64DivSels = divSelsGeneric[int64]
+	Int64DivScalar = divScalarGeneric[int64]
+	Int64DivScalarSels = divScalarSelsGeneric[int64]
+	Int64DivByScalar = divByScalarGeneric[int64]
+	Int64DivByScalarSels = divByScalarSelsGeneric[int64]
+	Uint8Div = divGeneric[uint8]
+	Uint8DivSels = divSelsGeneric[uint8]
+	Uint8DivScalar = divScalarGeneric[uint8]
+	Uint8DivScalarSels = divScalarSelsGeneric[uint8]
+	Uint8DivByScalar = divByScalarGeneric[uint8]
+	Uint8DivByScalarSels = divByScalarSelsGeneric[uint8]
+	Uint16Div = divGeneric[uint16]
+	Uint16DivSels = divSelsGeneric[uint16]
+	Uint16DivScalar = divScalarGeneric[uint16]
+	Uint16DivScalarSels = divScalarSelsGeneric[uint16]
+	Uint16DivByScalar = divByScalarGeneric[uint16]
+	Uint16DivByScalarSels = divByScalarSelsGeneric[uint16]
+	Uint32Div = divGeneric[uint32]
+	Uint32DivSels = divSelsGeneric[uint32]
+	Uint32DivScalar = divScalarGeneric[uint32]
+	Uint32DivScalarSels = divScalarSelsGeneric[uint32]
+	Uint32DivByScalar = divByScalarGeneric[uint32]
+	Uint32DivByScalarSels = divByScalarSelsGeneric[uint32]
+	Uint64Div = divGeneric[uint64]
+	Uint64DivSels = divSelsGeneric[uint64]
+	Uint64DivScalar = divScalarGeneric[uint64]
+	Uint64DivScalarSels = divScalarSelsGeneric[uint64]
+	Uint64DivByScalar = divByScalarGeneric[uint64]
+	Uint64DivByScalarSels = divByScalarSelsGeneric[uint64]
+	Float32Div = divGeneric[float32]
+	Float32DivSels = divSelsGeneric[float32]
+	Float32DivScalar = divScalarGeneric[float32]
+	Float32DivScalarSels = divScalarSelsGeneric[float32]
+	Float32DivByScalar = divByScalarGeneric[float32]
+	Float32DivByScalarSels = divByScalarSelsGeneric[float32]
+	Float64Div = divGeneric[float64]
+	Float64DivSels = divSelsGeneric[float64]
+	Float64DivScalar = divScalarGeneric[float64]
+	Float64DivScalarSels = divScalarSelsGeneric[float64]
+	Float64DivByScalar = divByScalarGeneric[float64]
+	Float64DivByScalarSels = divByScalarSelsGeneric[float64]
 }
 
-func int8Div(xs, ys, rs []int8) []int8 {
+func divGeneric[T vectorize.Numeric](xs, ys, rs []T) []T {
 	for i, x := range xs {
 		rs[i] = x / ys[i]
 	}
 	return rs
 }
 
-func int8DivSels(xs, ys, rs []int8, sels []int64) []int8 {
+func divSelsGeneric[T vectorize.Numeric](xs, ys, rs []T, sels []int64) []T {
 	for _, sel := range sels {
 		rs[sel] = xs[sel] / ys[sel]
 	}
 	return rs
 }
 
-func int8DivScalar(x int8, ys, rs []int8) []int8 {
+func divScalarGeneric[T vectorize.Numeric](x T, ys, rs []T) []T {
 	for i, y := range ys {
 		rs[i] = x / y
 	}
 	return rs
 }
 
-func int8DivScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
+func divScalarSelsGeneric[T vectorize.Numeric](x T, ys, rs []T, sels []int64) []T {
 	for _, sel := range sels {
 		rs[sel] = x / ys[sel]
 	}
 	return rs
 }
 
-func int8DivByScalar(x int8, ys, rs []int8) []int8 {
+func divByScalarGeneric[T vectorize.Numeric](x T, ys, rs []T) []T {
 	for i, y := range ys {
 		rs[i] = y / x
 	}
 	return rs
 }
 
-func int8DivByScalarSels(x int8, ys, rs []int8, sels []int64) []int8 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] / x
-	}
-	return rs
-}
-
-func int16Div(xs, ys, rs []int16) []int16 {
-	for i, x := range xs {
-		rs[i] = x / ys[i]
-	}
-	return rs
-}
-
-func int16DivSels(xs, ys, rs []int16, sels []int64) []int16 {
-	for _, sel := range sels {
-		rs[sel] = xs[sel] / ys[sel]
-	}
-	return rs
-}
-
-func int16DivScalar(x int16, ys, rs []int16) []int16 {
-	for i, y := range ys {
-		rs[i] = x / y
-	}
-	return rs
-}
-
-func int16DivScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
-	for _, sel := range sels {
-		rs[sel] = x / ys[sel]
-	}
-	return rs
-}
-
-func int16DivByScalar(x int16, ys, rs []int16) []int16 {
-	for i, y := range ys {
-		rs[i] = y / x
-	}
-	return rs
-}
-
-func int16DivByScalarSels(x int16, ys, rs []int16, sels []int64) []int16 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] / x
-	}
-	return rs
-}
-
-func int32Div(xs, ys, rs []int32) []int32 {
-	for i, x := range xs {
-		rs[i] = x / ys[i]
-	}
-	return rs
-}
-
-func int32DivSels(xs, ys, rs []int32, sels []int64) []int32 {
-	for _, sel := range sels {
-		rs[sel] = xs[sel] / ys[sel]
-	}
-	return rs
-}
-
-func int32DivScalar(x int32, ys, rs []int32) []int32 {
-	for i, y := range ys {
-		rs[i] = x / y
-	}
-	return rs
-}
-
-func int32DivScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
-	for _, sel := range sels {
-		rs[sel] = x / ys[sel]
-	}
-	return rs
-}
-
-func int32DivByScalar(x int32, ys, rs []int32) []int32 {
-	for i, y := range ys {
-		rs[i] = y / x
-	}
-	return rs
-}
-
-func int32DivByScalarSels(x int32, ys, rs []int32, sels []int64) []int32 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] / x
-	}
-	return rs
-}
-
-func int64Div(xs, ys, rs []int64) []int64 {
-	for i, x := range xs {
-		rs[i] = x / ys[i]
-	}
-	return rs
-}
-
-func int64DivSels(xs, ys, rs []int64, sels []int64) []int64 {
-	for _, sel := range sels {
-		rs[sel] = xs[sel] / ys[sel]
-	}
-	return rs
-}
-
-func int64DivScalar(x int64, ys, rs []int64) []int64 {
-	for i, y := range ys {
-		rs[i] = x / y
-	}
-	return rs
-}
-
-func int64DivScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
-	for _, sel := range sels {
-		rs[sel] = x / ys[sel]
-	}
-	return rs
-}
-
-func int64DivByScalar(x int64, ys, rs []int64) []int64 {
-	for i, y := range ys {
-		rs[i] = y / x
-	}
-	return rs
-}
-
-func int64DivByScalarSels(x int64, ys, rs []int64, sels []int64) []int64 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] / x
-	}
-	return rs
-}
-
-func uint8Div(xs, ys, rs []uint8) []uint8 {
-	for i, x := range xs {
-		rs[i] = x / ys[i]
-	}
-	return rs
-}
-
-func uint8DivSels(xs, ys, rs []uint8, sels []int64) []uint8 {
-	for _, sel := range sels {
-		rs[sel] = xs[sel] / ys[sel]
-	}
-	return rs
-}
-
-func uint8DivScalar(x uint8, ys, rs []uint8) []uint8 {
-	for i, y := range ys {
-		rs[i] = x / y
-	}
-	return rs
-}
-
-func uint8DivScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
-	for _, sel := range sels {
-		rs[sel] = x / ys[sel]
-	}
-	return rs
-}
-
-func uint8DivByScalar(x uint8, ys, rs []uint8) []uint8 {
-	for i, y := range ys {
-		rs[i] = y / x
-	}
-	return rs
-}
-
-func uint8DivByScalarSels(x uint8, ys, rs []uint8, sels []int64) []uint8 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] / x
-	}
-	return rs
-}
-
-func uint16Div(xs, ys, rs []uint16) []uint16 {
-	for i, x := range xs {
-		rs[i] = x / ys[i]
-	}
-	return rs
-}
-
-func uint16DivSels(xs, ys, rs []uint16, sels []int64) []uint16 {
-	for _, sel := range sels {
-		rs[sel] = xs[sel] / ys[sel]
-	}
-	return rs
-}
-
-func uint16DivScalar(x uint16, ys, rs []uint16) []uint16 {
-	for i, y := range ys {
-		rs[i] = x / y
-	}
-	return rs
-}
-
-func uint16DivScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
-	for _, sel := range sels {
-		rs[sel] = x / ys[sel]
-	}
-	return rs
-}
-
-func uint16DivByScalar(x uint16, ys, rs []uint16) []uint16 {
-	for i, y := range ys {
-		rs[i] = y / x
-	}
-	return rs
-}
-
-func uint16DivByScalarSels(x uint16, ys, rs []uint16, sels []int64) []uint16 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] / x
-	}
-	return rs
-}
-
-func uint32Div(xs, ys, rs []uint32) []uint32 {
-	for i, x := range xs {
-		rs[i] = x / ys[i]
-	}
-	return rs
-}
-
-func uint32DivSels(xs, ys, rs []uint32, sels []int64) []uint32 {
-	for _, sel := range sels {
-		rs[sel] = xs[sel] / ys[sel]
-	}
-	return rs
-}
-
-func uint32DivScalar(x uint32, ys, rs []uint32) []uint32 {
-	for i, y := range ys {
-		rs[i] = x / y
-	}
-	return rs
-}
-
-func uint32DivScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
-	for _, sel := range sels {
-		rs[sel] = x / ys[sel]
-	}
-	return rs
-}
-
-func uint32DivByScalar(x uint32, ys, rs []uint32) []uint32 {
-	for i, y := range ys {
-		rs[i] = y / x
-	}
-	return rs
-}
-
-func uint32DivByScalarSels(x uint32, ys, rs []uint32, sels []int64) []uint32 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] / x
-	}
-	return rs
-}
-
-func uint64Div(xs, ys, rs []uint64) []uint64 {
-	for i, x := range xs {
-		rs[i] = x / ys[i]
-	}
-	return rs
-}
-
-func uint64DivSels(xs, ys, rs []uint64, sels []int64) []uint64 {
-	for _, sel := range sels {
-		rs[sel] = xs[sel] / ys[sel]
-	}
-	return rs
-}
-
-func uint64DivScalar(x uint64, ys, rs []uint64) []uint64 {
-	for i, y := range ys {
-		rs[i] = x / y
-	}
-	return rs
-}
-
-func uint64DivScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
-	for _, sel := range sels {
-		rs[sel] = x / ys[sel]
-	}
-	return rs
-}
-
-func uint64DivByScalar(x uint64, ys, rs []uint64) []uint64 {
-	for i, y := range ys {
-		rs[i] = y / x
-	}
-	return rs
-}
-
-func uint64DivByScalarSels(x uint64, ys, rs []uint64, sels []int64) []uint64 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] / x
-	}
-	return rs
-}
-
-func float32Div(xs, ys, rs []float32) []float32 {
-	for i, x := range xs {
-		rs[i] = x / ys[i]
-	}
-	return rs
-}
-
-func float32DivSels(xs, ys, rs []float32, sels []int64) []float32 {
-	for _, sel := range sels {
-		rs[sel] = xs[sel] / ys[sel]
-	}
-	return rs
-}
-
-func float32DivScalar(x float32, ys, rs []float32) []float32 {
-	for i, y := range ys {
-		rs[i] = x / y
-	}
-	return rs
-}
-
-func float32DivScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
-	for _, sel := range sels {
-		rs[sel] = x / ys[sel]
-	}
-	return rs
-}
-
-func float32DivByScalar(x float32, ys, rs []float32) []float32 {
-	for i, y := range ys {
-		rs[i] = y / x
-	}
-	return rs
-}
-
-func float32DivByScalarSels(x float32, ys, rs []float32, sels []int64) []float32 {
-	for _, sel := range sels {
-		rs[sel] = ys[sel] / x
-	}
-	return rs
-}
-
-func float64Div(xs, ys, rs []float64) []float64 {
-	for i, x := range xs {
-		rs[i] = x / ys[i]
-	}
-	return rs
-}
-
-func float64DivSels(xs, ys, rs []float64, sels []int64) []float64 {
-	for _, sel := range sels {
-		rs[sel] = xs[sel] / ys[sel]
-	}
-	return rs
-}
-
-func float64DivScalar(x float64, ys, rs []float64) []float64 {
-	for i, y := range ys {
-		rs[i] = x / y
-	}
-	return rs
-}
-
-func float64DivScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
-	for _, sel := range sels {
-		rs[sel] = x / ys[sel]
-	}
-	return rs
-}
-
-func float64DivByScalar(x float64, ys, rs []float64) []float64 {
-	for i, y := range ys {
-		rs[i] = y / x
-	}
-	return rs
-}
-
-func float64DivByScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
+func divByScalarSelsGeneric[T vectorize.Numeric](x T, ys, rs []T, sels []int64) []T {
 	for _, sel := range sels {
 		rs[sel] = ys[sel] / x
 	}

@@ -56,40 +56,40 @@ func init() {
 		Int8Min = int8MinAvx2
 		Int16Min = int16MinAvx2
 		Int32Min = int32MinAvx2
-		Int64Min = int64Min
+		Int64Min = minGeneric[int64]
 		Uint8Min = uint8MinAvx2
 		Uint16Min = uint16MinAvx2
 		Uint32Min = uint32MinAvx2
-		Uint64Min = uint64Min
+		Uint64Min = minGeneric[uint64]
 		Float32Min = float32MinAvx2
 		Float64Min = float64MinAvx2
 	} else {
-		Int8Min = int8Min
-		Int16Min = int16Min
-		Int32Min = int32Min
-		Int64Min = int64Min
-		Uint8Min = uint8Min
-		Uint16Min = uint16Min
-		Uint32Min = uint32Min
-		Uint64Min = uint64Min
-		Float32Min = float32Min
-		Float64Min = float64Min
+		Int8Min = minGeneric[int8]
+		Int16Min = minGeneric[int16]
+		Int32Min = minGeneric[int32]
+		Int64Min = minGeneric[int64]
+		Uint8Min = minGeneric[uint8]
+		Uint16Min = minGeneric[uint16]
+		Uint32Min = minGeneric[uint32]
+		Uint64Min = minGeneric[uint64]
+		Float32Min = minGeneric[float32]
+		Float64Min = minGeneric[float64]
 	}
 
 	BoolMin = boolMin
 	StrMin = strMin
 
 	BoolMinSels = boolMinSels
-	Int8MinSels = int8MinSels
-	Int16MinSels = int16MinSels
-	Int32MinSels = int32MinSels
-	Int64MinSels = int64MinSels
-	Uint8MinSels = uint8MinSels
-	Uint16MinSels = uint16MinSels
-	Uint32MinSels = uint32MinSels
-	Uint64MinSels = uint64MinSels
-	Float32MinSels = float32MinSels
-	Float64MinSels = float64MinSels
+	Int8MinSels = minSelsGeneric[int8]
+	Int16MinSels = minSelsGeneric[int16]
+	Int32MinSels = minSelsGeneric[int32]
+	Int64MinSels = minSelsGeneric[int64]
+	Uint8MinSels = minSelsGeneric[uint8]
+	Uint16MinSels = minSelsGeneric[uint16]
+	Uint32MinSels = minSelsGeneric[uint32]
+	Uint64MinSels = minSelsGeneric[uint64]
+	Float32MinSels = minSelsGeneric[float32]
+	Float64MinSels = minSelsGeneric[float64]
 	StrMinSels = strMinSels
 }
 

@@ -73,6 +73,8 @@ type Date int32
 type Datetime int64
 
 type Decimal struct {
+	IntPart  int64
+	FracPart int64
 }
 
 var Types map[string]T = map[string]T{
