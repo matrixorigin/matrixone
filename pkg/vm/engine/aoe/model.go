@@ -16,6 +16,7 @@ package aoe
 
 import (
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/vm/metadata"
 )
 
 type SchemaState byte
@@ -71,13 +72,14 @@ type TabletInfo struct {
 
 // ColumnInfo stores the information of a column.
 type ColumnInfo struct {
-	SchemaId uint64     `json:"schema_id"`
-	TableID  uint64     `json:"table_id"`
-	Id       uint64     `json:"column_id"`
-	Name     string     `json:"name"`
-	Type     types.Type `json:"type"`
-	Alg      int        `json:"alg"`
-	Epoch    uint64     `json:"epoch"`
+	SchemaId uint64     		  `json:"schema_id"`
+	TableID  uint64     		  `json:"table_id"`
+	Id       uint64     		  `json:"column_id"`
+	Name     string     		  `json:"name"`
+	Type     types.Type 		  `json:"type"`
+	Default  metadata.DefaultExpr `json:"default"`
+	Alg      int        		  `json:"alg"`
+	Epoch    uint64     		  `json:"epoch"`
 }
 
 type IndexInfo struct {

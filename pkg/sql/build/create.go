@@ -63,7 +63,12 @@ func (b *build) buildCreateDatabase(stmt *tree.CreateDatabase) (op.OP, error) {
 func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
 	switch n := def.(type) {
 	case *tree.ColumnTableDef:
+		var defaultExpr metadata.DefaultExpr
 		typ, err := b.getTableDefType(n.Type)
+		if err != nil {
+			return nil, err
+		}
+		defaultExpr, err = getDefaultExprFromColumnDef(n, typ)
 		if err != nil {
 			return nil, err
 		}
@@ -72,6 +77,7 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
 				Type: *typ,
 				Alg:  compress.Lz4,
 				Name: n.Name.Parts[0],
+				Default: defaultExpr,
 			},
 		}, nil
 	default:
@@ -127,4 +133,54 @@ func (b *build) tableInfo(stmt tree.TableExpr) (string, string, error) {
 		tbl.SchemaName = tree.Identifier(b.db)
 	}
 	return string(tbl.SchemaName), string(tbl.ObjectName), nil
+}
+
+// getDefaultExprFromColumnDef returns
+// has default expr or not / column default expr string / is null expression / error msg
+// from column definition when create table
+// it will check default expression's type and value, if default values does not adapt to column type
+// there will make a simple type conversion for values TODO: not implement
+// likes:
+// 		create table testTb1 (first int default 15.6) ==> create table testTb1 (first int default 16)
+//		create table testTb2 (first int default 'abc') ==> error(Invalid default value for 'first')
+func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (metadata.DefaultExpr, error) {
+	var ret string    // default expression string
+	allowNull := true // be false when column has not null constraint
+
+	{
+		for _, attr := range column.Attributes {
+			if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is == false {
+				allowNull = false
+				break
+			}
+		}
+	}
+
+	for _, attr := range column.Attributes {
+		if defaultExpr, ok := attr.(*tree.AttributeDefault); ok {
+			if isNullExpr(defaultExpr.Expr) {
+				if !allowNull {
+					return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
+				}
+				return metadata.MakeDefaultExpr(true, "", true), nil
+			}
+
+			// check value and its type, only support constant value for default expression now.
+			if _, err := buildConstant(*typ, defaultExpr.Expr); err != nil { // build constant failed
+				return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
+			} else {
+				ret = defaultExpr.Expr.String()
+				if errStr := valueRangeCheck(ret, *typ); len(errStr) != 0 { // value out of range
+					return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
+				}
+			}
+			return metadata.MakeDefaultExpr(true, ret, false), nil
+		}
+	}
+
+	// if no definition and allow null value for this column, default will be null
+	if allowNull {
+		return metadata.MakeDefaultExpr(true, "", true), nil
+	}
+	return metadata.EmptyDefaultExpr, nil
 }

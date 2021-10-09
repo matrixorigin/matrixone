@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"github.com/stretchr/testify/require"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/compile"
 	"matrixone/pkg/sql/testutil"
+	"matrixone/pkg/sqlerror"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -114,6 +116,82 @@ func TestDDLSql(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+}
+
+func TestInsert(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type insertTestCase struct{
+		testSql string
+		expectErr1 error // compile err expected
+		expectErr2 error // run err expected
+	}
+
+	testCases := []insertTestCase{
+		{"create database testinsert;", nil, nil},
+		{"CREATE TABLE TBL(A INT DEFAULT NULL, B VARCHAR(10) DEFAULT 'ABC');", nil, nil},
+		{"insert into TBL () values ();", nil, nil},
+		{"insert into TBL values (1, '12345678901');", sqlerror.New(errno.DataException, "Data too long for column 'B' at row 1"), nil},
+		{"insert into TBL values (1, '1234567890');", nil, nil},
+		{"insert into TBL values (2, null);", nil, nil},
+		{"insert into TBL values (default, default);", nil, nil},
+		{"CREATE TABLE CMS(A INT2, B INT4 DEFAULT 1);", nil, nil},
+		{"insert into CMS values (7777777777777777, default);", sqlerror.New(errno.DataException, "Out of range value for column 'A' at row 1"), nil},
+		{"insert into CMS () values (), (1, 2);", sqlerror.New(errno.InvalidColumnReference, "Column count doesn't match value count at row 0"), nil},
+		{"insert into CMS () values (), ();", nil, nil},
+		{"CREATE TABLE TBL3 (A INT NOT NULL DEFAULT NULL);", sqlerror.New(errno.InvalidColumnDefinition, "Invalid default value for 'A'"), nil},
+		{"CREATE TABLE TBL4 (A INT NOT NULL);", nil, nil},
+		{"insert into TBL4 values ();", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"insert into TBL4 values (default);", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"CREATE TABLE TBL5 (A INT);", nil, nil},
+		{"insert into TBL5 values (default);", nil, nil},
+		{"drop database testinsert;", nil, nil},
+	}
+
+	for i, tc := range testCases {
+		sql := tc.testSql
+		expected1 := tc.expectErr1
+		expected2 := tc.expectErr2
+
+		c := compile.New("testinsert", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		println(i)
+		for _, e := range es {
+			err := e.Compile(nil, Print)
+			if expected1 == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected1.Error())
+			}
+			if expected1 != nil {
+				break
+			}
+			err = e.Run(1)
+			if expected2 == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected2.Error())
+			}
+		}
+	}
+
 }
 
 func TestSql(t *testing.T) {
