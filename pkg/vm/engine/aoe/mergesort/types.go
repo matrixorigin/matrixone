@@ -17,7 +17,7 @@ package mergesort
 import "bytes"
 
 type numeric interface {
-	type int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64
+	~int8 | ~int16 | ~int32 | ~int64 | ~uint8 | ~uint16 | ~uint32 | ~uint64 | ~float32 | ~float64
 }
 
 type sortSlice interface {
@@ -26,51 +26,46 @@ type sortSlice interface {
 	Swap(int, int)
 }
 
-type numericSortElem[T numeric] struct {
-	data T
-	idx  uint32
-}
-
-type numericSortSlice[T numeric] []numericSortElem[T]
-
-func (s numericSortSlice[T]) Len()          int  { return len(s) }
-func (s numericSortSlice[T]) Less(i, j int) bool { return s[i].data < s[j].data }
-func (s numericSortSlice[T]) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-
-type stringSortElem struct {
-	data []byte
-	idx  uint32
-}
-
-type stringSortSlice []stringSortElem
-
-func (s stringSortSlice) Len()          int  { return len(s) }
-func (s stringSortSlice) Less(i, j int) bool { return bytes.Compare(s[i].data, s[j].data) < 0 }
-func (s stringSortSlice) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-
 type heapSlice[T any] interface {
 	sortSlice
 	Push(T)
 	Pop() T
 }
 
-type numericHeapElem[T numeric] struct {
+type sortElem[T any] struct {
+	data T
+	idx  uint32
+}
+
+type numericSortSlice[T numeric] []sortElem[T]
+
+func (s numericSortSlice[T]) Len() int           { return len(s) }
+func (s numericSortSlice[T]) Less(i, j int) bool { return s[i].data < s[j].data }
+func (s numericSortSlice[T]) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type stringSortSlice []sortElem[[]byte]
+
+func (s stringSortSlice) Len() int           { return len(s) }
+func (s stringSortSlice) Less(i, j int) bool { return bytes.Compare(s[i].data, s[j].data) < 0 }
+func (s stringSortSlice) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
+
+type heapElem[T any] struct {
 	data T
 	src  uint16
 	next uint32
 }
 
-type numericHeapSlice[T numeric] []numericHeapElem[T]
+type numericHeapSlice[T numeric] []heapElem[T]
 
-func (h *numericHeapSlice[T]) Len()          int  { return len(*h) }
-func (h *numericHeapSlice[T]) Less(i, j int) bool { return (*h)[i].data < (*h)[j].data }
-func (h *numericHeapSlice[T]) Swap(i, j int)      { (*h)[i], (*h)[j] = (*h)[j], (*h)[i] }
+func (h numericHeapSlice[T]) Len() int           { return len(h) }
+func (h numericHeapSlice[T]) Less(i, j int) bool { return h[i].data < h[j].data }
+func (h numericHeapSlice[T]) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 
-func (h *numericHeapSlice[T]) Push(x numericHeapElem[T]) {
+func (h *numericHeapSlice[T]) Push(x heapElem[T]) {
 	*h = append(*h, x)
 }
 
-func (h *numericHeapSlice[T]) Pop() numericHeapElem[T] {
+func (h *numericHeapSlice[T]) Pop() heapElem[T] {
 	old := *h
 	n := len(old)
 	x := old[n-1]
@@ -78,23 +73,17 @@ func (h *numericHeapSlice[T]) Pop() numericHeapElem[T] {
 	return x
 }
 
-type stringHeapElem struct {
-	data []byte
-	src  uint16
-	next uint32
-}
+type stringHeapSlice []heapElem[[]byte]
 
-type stringHeapSlice []stringHeapElem
+func (h stringHeapSlice) Len() int           { return len(h) }
+func (h stringHeapSlice) Less(i, j int) bool { return bytes.Compare(h[i].data, h[j].data) < 0 }
+func (h stringHeapSlice) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 
-func (h *stringHeapSlice) Len()          int  { return len(*h) }
-func (h *stringHeapSlice) Less(i, j int) bool { return bytes.Compare((*h)[i].data, (*h)[j].data) < 0 }
-func (h *stringHeapSlice) Swap(i, j int)      { (*h)[i], (*h)[j] = (*h)[j], (*h)[i] }
-
-func (h *stringHeapSlice) Push(x stringHeapElem) {
+func (h *stringHeapSlice) Push(x heapElem[[]byte]) {
 	*h = append(*h, x)
 }
 
-func (h *stringHeapSlice) Pop() stringHeapElem {
+func (h *stringHeapSlice) Pop() heapElem[[]byte] {
 	old := *h
 	n := len(old)
 	x := old[n-1]
