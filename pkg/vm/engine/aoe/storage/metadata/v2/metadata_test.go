@@ -262,6 +262,8 @@ func TestBlock(t *testing.T) {
 	os.RemoveAll(dir)
 
 	cfg := new(CatalogCfg)
+	cfg.BlockMaxRows = uint64(10)
+	cfg.SegmentMaxBlocks = uint64(4)
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
 	assert.Nil(t, err)
@@ -299,6 +301,18 @@ func TestBlock(t *testing.T) {
 		pool.Submit(f(i))
 	}
 	wg.Wait()
+
+	schema := MockSchema(2)
+	schema.Name = "mm"
+	t2, err := catalog.SimpleCreateTable(schema, nil)
+	assert.Nil(t, err)
+	var prev *Block
+	for i := 0; i < 2*int(cfg.SegmentMaxBlocks)+int(cfg.SegmentMaxBlocks)/2; i++ {
+		blk := t2.SimpleGetOrCreateNextBlock(prev)
+		assert.NotNil(t, blk)
+		prev = blk
+	}
+	assert.Equal(t, 3, len(t2.SegmentSet))
 }
 
 type mockGetSegmentedHB struct {
@@ -365,8 +379,9 @@ func TestReplay(t *testing.T) {
 		schema.Name = fmt.Sprintf("mock%d", common.NextGlobalSeqNum())
 		tbl, err := catalog.SimpleCreateTable(schema, nil)
 		assert.Nil(t, err)
+		var prev *Block
 		for i := 0; i < int(mockBlocks); i++ {
-			blk, prevSeg := tbl.SimpleCreateBlock(nil)
+			blk := tbl.SimpleGetOrCreateNextBlock(prev)
 			blk.SetCount(tbl.Schema.BlockMaxRows)
 			blk.SetIndex(LogIndex{
 				Id:       SimpleBatchId(common.NextGlobalSeqNum()),
@@ -375,10 +390,11 @@ func TestReplay(t *testing.T) {
 			})
 			err := blk.SimpleUpgrade(nil)
 			assert.Nil(t, err)
-			if prevSeg != nil {
+			if prev != nil && blk.Segment != prev.Segment {
 				wg.Add(1)
-				upgradeSegWorker.Submit(upgradeSegHandle(prevSeg))
+				upgradeSegWorker.Submit(upgradeSegHandle(prev.Segment))
 			}
+			prev = blk
 		}
 	}
 

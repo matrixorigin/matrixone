@@ -84,6 +84,13 @@ func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
 	return e
 }
 
+func (e *Block) Less(o *Block) bool {
+	if e == nil {
+		return true
+	}
+	return e.Id < o.Id
+}
+
 func (e *Block) rebuild(segment *Segment) {
 	e.Segment = segment
 }
@@ -126,6 +133,9 @@ func (e *Block) SetIndex(idx LogIndex) error {
 }
 
 func (e *Block) GetCount() uint64 {
+	if e.IsFull() {
+		return e.Segment.Table.Schema.BlockMaxRows
+	}
 	return atomic.LoadUint64(&e.Count)
 }
 
@@ -193,6 +203,8 @@ func (e *Block) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit boo
 		if len(exIndice) > 1 {
 			cInfo.PrevIndex = exIndice[1]
 		}
+	} else {
+		cInfo.ExternalIndex = e.CommitInfo.ExternalIndex
 		id, ok := e.BaseEntry.GetAppliedIndex()
 		if ok {
 			cInfo.AppliedIndex = &ExternalIndex{

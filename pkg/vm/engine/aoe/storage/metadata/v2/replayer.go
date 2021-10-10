@@ -296,7 +296,7 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		seg.Unmarshal(entry.GetPayload())
 		observer.OnReplayCommit(seg.CommitInfo.CommitId)
 		replayer.cache.Append(&replayEntry{
-			typ:      ETUpgradeBlock,
+			typ:      ETUpgradeSegment,
 			segEntry: seg,
 		})
 	case logstore.ETCheckpoint:

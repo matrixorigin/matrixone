@@ -88,6 +88,13 @@ func newCommittedSegmentEntry(catalog *Catalog, table *Table, base *BaseEntry) *
 	return e
 }
 
+func (e *Segment) LE(o *Segment) bool {
+	if e == nil {
+		return true
+	}
+	return e.Id <= o.Id
+}
+
 func (e *Segment) rebuild(table *Table) {
 	e.Catalog = table.Catalog
 	e.Table = table
@@ -126,7 +133,7 @@ func (e *Segment) CommittedView(id uint64) *Segment {
 		if blkView == nil {
 			continue
 		}
-		view.BlockSet = append(view.BlockSet, blk)
+		view.BlockSet = append(view.BlockSet, blkView)
 	}
 	return view
 }
@@ -147,6 +154,9 @@ func (e *Segment) Unmarshal(buf []byte) error {
 }
 
 func (e *Segment) PString(level PPLevel) string {
+	if e == nil {
+		return "null segment"
+	}
 	s := fmt.Sprintf("<Segment %s", e.BaseEntry.PString(level))
 	cnt := 0
 	if level > PPL0 {
@@ -194,6 +204,15 @@ func (e *Segment) SimpleCreateBlock(exIndex *ExternalIndex) *Block {
 	return e.CreateBlock(e.Table.Catalog.NextUncommitId(), exIndex, true)
 }
 
+func (e *Segment) Appendable() bool {
+	e.RLock()
+	defer e.RUnlock()
+	if e.HasMaxBlocks() {
+		return !e.BlockSet[len(e.BlockSet)-1].IsFull()
+	}
+	return true
+}
+
 func (e *Segment) CreateBlock(tranId uint64, exIndex *ExternalIndex, autoCommit bool) *Block {
 	be := newBlockEntry(e, tranId, exIndex)
 	e.Lock()
@@ -217,6 +236,16 @@ func (e *Segment) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 	return e.calcAppliedIndex()
 }
 
+func (e *Segment) GetReplayIndex() *LogIndex {
+	for i := len(e.BlockSet) - 1; i >= 0; i-- {
+		blk := e.BlockSet[i]
+		if blk.CommitInfo.ExternalIndex != nil && (blk.Count > 0 || blk.IsFull()) {
+			return blk.CommitInfo.ExternalIndex
+		}
+	}
+	return nil
+}
+
 func (e *Segment) calcAppliedIndex() (id uint64, ok bool) {
 	for i := len(e.BlockSet) - 1; i >= 0; i-- {
 		blk := e.BlockSet[i]
@@ -235,6 +264,21 @@ func (e *Segment) onNewBlock(entry *Block) {
 
 func (e *Segment) SimpleUpgrade(exIndice []*ExternalIndex) error {
 	return e.Upgrade(e.Table.Catalog.NextUncommitId(), exIndice, true)
+}
+
+func (e *Segment) FirstInFullBlock() *Block {
+	if len(e.BlockSet) == 0 {
+		return nil
+	}
+	var found *Block
+	for i := len(e.BlockSet) - 1; i >= 0; i-- {
+		if !e.BlockSet[i].IsFull() {
+			found = e.BlockSet[i]
+		} else {
+			break
+		}
+	}
+	return found
 }
 
 func (e *Segment) HasMaxBlocks() bool {
@@ -289,6 +333,26 @@ func (e *Segment) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit b
 	}
 	e.Table.Catalog.Commit(e, ETUpgradeSegment, &e.RWMutex)
 	return nil
+}
+
+// Only one producer
+func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {
+	if len(e.BlockSet) == 0 {
+		return e.SimpleCreateBlock(nil)
+	}
+	var ret *Block
+	for i := len(e.BlockSet) - 1; i >= 0; i-- {
+		blk := e.BlockSet[i]
+		if !blk.IsFull() && from.Less(blk) {
+			ret = blk
+		} else {
+			break
+		}
+	}
+	if ret != nil || e.HasMaxBlocks() {
+		return ret
+	}
+	return e.SimpleCreateBlock(nil)
 }
 
 func (e *Segment) SimpleGetBlock(id uint64) *Block {

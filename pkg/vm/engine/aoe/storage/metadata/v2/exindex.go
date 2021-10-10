@@ -21,6 +21,14 @@ import (
 
 type LogIndex = ExternalIndex
 
+func MockLogBatchId(id uint64) LogBatchId {
+	return LogBatchId{
+		Id:     id,
+		Offset: uint32(0),
+		Size:   uint32(1),
+	}
+}
+
 type LogBatchId struct {
 	Id     uint64
 	Offset uint32
@@ -58,7 +66,10 @@ func (idx *ExternalIndex) IsSameBatch(o *ExternalIndex) bool {
 }
 
 func (idx *ExternalIndex) String() string {
-	return fmt.Sprintf("(%s,%d,%d,%d)", idx.String(), idx.Start, idx.Count, idx.Capacity)
+	if idx == nil {
+		return "null"
+	}
+	return fmt.Sprintf("(%s,%d,%d,%d)", idx.Id.String(), idx.Start, idx.Count, idx.Capacity)
 }
 
 func (idx *ExternalIndex) IsApplied() bool {

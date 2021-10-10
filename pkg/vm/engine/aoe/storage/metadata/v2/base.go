@@ -24,6 +24,7 @@ type PPLevel uint8
 const (
 	PPL0 PPLevel = iota
 	PPL1
+	PPL2
 )
 
 type BaseEntry struct {

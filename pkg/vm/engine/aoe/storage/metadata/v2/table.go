@@ -229,6 +229,17 @@ func (e *Table) SimpleGetCurrSegment() *Segment {
 	return seg
 }
 
+func (e *Table) GetReplayIndex() *LogIndex {
+	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
+		seg := e.SegmentSet[i]
+		idx := seg.GetReplayIndex()
+		if idx != nil {
+			return idx
+		}
+	}
+	return nil
+}
+
 func (e *Table) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 	if rwmtx == nil {
 		e.RLock()
@@ -264,6 +275,43 @@ func (e *Table) SimpleCreateBlock(exIndex *ExternalIndex) (*Block, *Segment) {
 	}
 	blk := currSeg.SimpleCreateBlock(exIndex)
 	return blk, prevSeg
+}
+
+func (e *Table) getFirstInfullSegment(from *Segment) (*Segment, *Segment) {
+	if len(e.SegmentSet) == 0 {
+		return nil, nil
+	}
+	var curr, next *Segment
+	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
+		seg := e.SegmentSet[i]
+		if seg.Appendable() && from.LE(seg) {
+			curr, next = seg, curr
+		} else {
+			break
+		}
+	}
+	return curr, next
+}
+
+// One producer
+func (e *Table) SimpleGetOrCreateNextBlock(from *Block) *Block {
+	var fromSeg *Segment
+	if from != nil {
+		fromSeg = from.Segment
+	}
+	curr, next := e.getFirstInfullSegment(fromSeg)
+	// logutil.Infof("%s, %s", seg.PString(PPL0), fromSeg.PString(PPL1))
+	if curr == nil {
+		curr = e.SimpleCreateSegment(nil)
+	}
+	blk := curr.SimpleGetOrCreateNextBlock(from)
+	if blk != nil {
+		return blk
+	}
+	if next == nil {
+		next = e.SimpleCreateSegment(nil)
+	}
+	return next.SimpleGetOrCreateNextBlock(nil)
 }
 
 func (e *Table) SimpleCreateSegment(exIndex *ExternalIndex) *Segment {
@@ -332,7 +380,7 @@ func (e *Table) GetSegment(id, tranId uint64) *Segment {
 }
 
 func (e *Table) PString(level PPLevel) string {
-	s := fmt.Sprintf("<Table>(%s)(Cnt=%d)", e.BaseEntry.PString(level), len(e.SegmentSet))
+	s := fmt.Sprintf("<Table[%s]>(%s)(Cnt=%d)", e.Schema.Name, e.BaseEntry.PString(level), len(e.SegmentSet))
 	if level > PPL0 && len(e.SegmentSet) > 0 {
 		s = fmt.Sprintf("%s{", s)
 		for _, seg := range e.SegmentSet {
