@@ -93,6 +93,15 @@ func NewEmptyTableEntry(catalog *Catalog) *Table {
 	return e
 }
 
+// Threadsafe
+// It is used to take a snapshot of table base on a commit id. It goes through
+// the version chain to find a "safe" commit version and create a view base on
+// that version.
+// v2(commitId=7) -> v1(commitId=4) -> v0(commitId=2)
+//      |                 |                  |
+//      |                 |                   -------- CommittedView [0,2]
+//      |                  --------------------------- CommittedView [4,6]
+//       --------------------------------------------- CommittedView [7,+oo)
 func (e *Table) CommittedView(id uint64) *Table {
 	// TODO: if baseEntry op is drop, should introduce an index to
 	// indicate weather to return nil
@@ -121,6 +130,8 @@ func (e *Table) CommittedView(id uint64) *Table {
 	return view
 }
 
+// Not threadsafe, and not needed
+// Only used during data replay by the catalog replayer
 func (e *Table) rebuild(catalog *Catalog) {
 	e.Catalog = catalog
 	e.IdIndex = make(map[uint64]int)
@@ -131,6 +142,11 @@ func (e *Table) rebuild(catalog *Catalog) {
 	}
 }
 
+// Threadsafe
+// It should be applied on a table that was previously soft-deleted
+// It is always driven by engine internal scheduler. It means all the
+// table related data resources were deleted. A hard-deleted table will
+// be deleted from catalog later
 func (e *Table) HardDelete() {
 	cInfo := &CommitInfo{
 		CommitId: e.Catalog.NextUncommitId(),
@@ -150,10 +166,14 @@ func (e *Table) HardDelete() {
 	e.Catalog.Commit(e, ETHardDeleteTable, &e.RWMutex)
 }
 
+// Simple* wrappes simple usage of wrapped operation
 func (e *Table) SimpleSoftDelete(exIndex *ExternalIndex) {
 	e.SoftDelete(e.Catalog.NextUncommitId(), exIndex, true)
 }
 
+// Threadsafe
+// It is driven by external command. The engine then schedules a GC task to hard delete
+// related resources.
 func (e *Table) SoftDelete(tranId uint64, exIndex *ExternalIndex, autoCommit bool) {
 	cInfo := &CommitInfo{
 		TranId:        tranId,
@@ -175,19 +195,25 @@ func (e *Table) SoftDelete(tranId uint64, exIndex *ExternalIndex, autoCommit boo
 	e.Catalog.Commit(e, ETSoftDeleteTable, &e.RWMutex)
 }
 
+// Not safe
 func (e *Table) Marshal() ([]byte, error) {
 	return json.Marshal(e)
 }
 
+// Not safe
 func (e *Table) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, e)
 }
 
+// Not safe
 func (e *Table) String() string {
 	buf, _ := e.Marshal()
 	return string(buf)
 }
 
+// Not safe
+// Usually it is used during creating a table. We need to commit the new table entry
+// to the store.
 func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 	var buf []byte
 	switch eType {
@@ -218,6 +244,7 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 	return logEntry
 }
 
+// Safe
 func (e *Table) SimpleGetCurrSegment() *Segment {
 	e.RLock()
 	if len(e.SegmentSet) == 0 {
@@ -229,6 +256,9 @@ func (e *Table) SimpleGetCurrSegment() *Segment {
 	return seg
 }
 
+// Not safe and no need
+// Only used during data replay
+// TODO: Only compatible with v1. Remove later
 func (e *Table) GetReplayIndex() *LogIndex {
 	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
 		seg := e.SegmentSet[i]
@@ -240,6 +270,8 @@ func (e *Table) GetReplayIndex() *LogIndex {
 	return nil
 }
 
+// Safe
+// TODO: Only compatible with v1. Remove later
 func (e *Table) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 	if rwmtx == nil {
 		e.RLock()
@@ -265,7 +297,7 @@ func (e *Table) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 	return id, ok
 }
 
-// Note: Only support one producer
+// Not safe. One writer, multi-readers
 func (e *Table) SimpleCreateBlock(exIndex *ExternalIndex) (*Block, *Segment) {
 	var prevSeg *Segment
 	currSeg := e.SimpleGetCurrSegment()
@@ -293,7 +325,7 @@ func (e *Table) getFirstInfullSegment(from *Segment) (*Segment, *Segment) {
 	return curr, next
 }
 
-// One producer
+// Not safe. One writer, multi-readers
 func (e *Table) SimpleGetOrCreateNextBlock(from *Block) *Block {
 	var fromSeg *Segment
 	if from != nil {
@@ -318,6 +350,7 @@ func (e *Table) SimpleCreateSegment(exIndex *ExternalIndex) *Segment {
 	return e.CreateSegment(e.Catalog.NextUncommitId(), exIndex, true)
 }
 
+// Safe
 func (e *Table) SimpleGetSegmentIds() []uint64 {
 	e.RLock()
 	defer e.RUnlock()
@@ -329,12 +362,14 @@ func (e *Table) SimpleGetSegmentIds() []uint64 {
 	return ret
 }
 
+// Safe
 func (e *Table) SimpleGetSegmentCount() int {
 	e.RLock()
 	defer e.RUnlock()
 	return len(e.SegmentSet)
 }
 
+// Safe
 func (e *Table) CreateSegment(tranId uint64, exIndex *ExternalIndex, autoCommit bool) *Segment {
 	se := newSegmentEntry(e.Catalog, e, tranId, exIndex)
 	e.Lock()
@@ -352,6 +387,7 @@ func (e *Table) onNewSegment(entry *Segment) {
 	e.SegmentSet = append(e.SegmentSet, entry)
 }
 
+// Safe
 func (e *Table) SimpleGetBlock(segId, blkId uint64) (*Block, error) {
 	seg := e.SimpleGetSegment(segId)
 	if seg == nil {
@@ -364,6 +400,7 @@ func (e *Table) SimpleGetBlock(segId, blkId uint64) (*Block, error) {
 	return blk, nil
 }
 
+// Safe
 func (e *Table) SimpleGetSegment(id uint64) *Segment {
 	e.RLock()
 	defer e.RUnlock()
@@ -379,6 +416,7 @@ func (e *Table) GetSegment(id, tranId uint64) *Segment {
 	return entry
 }
 
+// Not safe
 func (e *Table) PString(level PPLevel) string {
 	s := fmt.Sprintf("<Table[%s]>(%s)(Cnt=%d)", e.Schema.Name, e.BaseEntry.PString(level), len(e.SegmentSet))
 	if level > PPL0 && len(e.SegmentSet) > 0 {

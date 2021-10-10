@@ -21,14 +21,6 @@ import (
 
 type LogIndex = ExternalIndex
 
-func MockLogBatchId(id uint64) LogBatchId {
-	return LogBatchId{
-		Id:     id,
-		Offset: uint32(0),
-		Size:   uint32(1),
-	}
-}
-
 type LogBatchId struct {
 	Id     uint64
 	Offset uint32
@@ -46,6 +38,17 @@ func SimpleBatchId(id uint64) LogBatchId {
 	return LogBatchId{
 		Id:   id,
 		Size: 1,
+	}
+}
+
+func CreateBatchId(id uint64, offset, size uint32) LogBatchId {
+	if offset >= size {
+		panic(fmt.Sprintf("bad parameters: offset %d, size %d", offset, size))
+	}
+	return LogBatchId{
+		Id:     id,
+		Offset: offset,
+		Size:   size,
 	}
 }
 

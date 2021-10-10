@@ -84,6 +84,7 @@ func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
 	return e
 }
 
+// Safe
 func (e *Block) Less(o *Block) bool {
 	if e == nil {
 		return true
@@ -95,6 +96,7 @@ func (e *Block) rebuild(segment *Segment) {
 	e.Segment = segment
 }
 
+// Safe
 func (e *Block) AsCommonID() *common.ID {
 	return &common.ID{
 		TableID:   e.Segment.Table.Id,
@@ -103,12 +105,14 @@ func (e *Block) AsCommonID() *common.ID {
 	}
 }
 
-// Note: Here assume only one producer
+// Not safe
+// One writer, multi-readers
 func (e *Block) SetSegmentedId(id uint64) error {
 	atomic.StoreUint64(&e.SegmentedId, id)
 	return nil
 }
 
+// Safe
 func (e *Block) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 	if rwmtx == nil {
 		e.RLock()
@@ -124,14 +128,18 @@ func (e *Block) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 	return e.BaseEntry.GetAppliedIndex()
 }
 
+// Not safe
 func (e *Block) HasMaxRows() bool {
 	return e.Count == e.Segment.Table.Schema.BlockMaxRows
 }
 
+// Not safe
 func (e *Block) SetIndex(idx LogIndex) error {
 	return e.CommitInfo.SetIndex(idx)
 }
 
+// Not safe
+// TODO: should be safe
 func (e *Block) GetCount() uint64 {
 	if e.IsFull() {
 		return e.Segment.Table.Schema.BlockMaxRows
@@ -139,6 +147,8 @@ func (e *Block) GetCount() uint64 {
 	return atomic.LoadUint64(&e.Count)
 }
 
+// Not safe
+// TODO: should be safe
 func (e *Block) AddCount(n uint64) (uint64, error) {
 	curCnt := e.GetCount()
 	if curCnt+n > e.Segment.Table.Schema.BlockMaxRows {
@@ -166,6 +176,7 @@ func (e *Block) SetCount(count uint64) error {
 	return nil
 }
 
+// Safe
 func (e *Block) CommittedView(id uint64) *Block {
 	baseEntry := e.UseCommitted(id)
 	if baseEntry == nil {
@@ -176,6 +187,7 @@ func (e *Block) CommittedView(id uint64) *Block {
 	}
 }
 
+// Safe
 func (e *Block) SimpleUpgrade(exIndice []*ExternalIndex) error {
 	return e.Upgrade(e.Segment.Table.Catalog.NextUncommitId(), exIndice, true)
 }
@@ -237,16 +249,19 @@ func (e *Block) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, e)
 }
 
+// Not safe
 func (e *Block) PString(level PPLevel) string {
 	s := fmt.Sprintf("<Block %s>", e.BaseEntry.PString(level))
 	return s
 }
 
+// Not safe
 func (e *Block) String() string {
 	buf, _ := e.Marshal()
 	return string(buf)
 }
 
+// Not safe
 func (e *Block) ToLogEntry(eType LogEntryType) LogEntry {
 	switch eType {
 	case ETCreateBlock:
