@@ -41,6 +41,17 @@ func SimpleBatchId(id uint64) LogBatchId {
 	}
 }
 
+func CreateBatchId(id uint64, offset, size uint32) LogBatchId {
+	if offset >= size {
+		panic(fmt.Sprintf("bad parameters: offset %d, size %d", offset, size))
+	}
+	return LogBatchId{
+		Id:     id,
+		Offset: offset,
+		Size:   size,
+	}
+}
+
 func (id *LogBatchId) String() string {
 	return fmt.Sprintf("(%d,%d,%d)", id.Id, id.Offset, id.Size)
 }
@@ -58,7 +69,10 @@ func (idx *ExternalIndex) IsSameBatch(o *ExternalIndex) bool {
 }
 
 func (idx *ExternalIndex) String() string {
-	return fmt.Sprintf("(%s,%d,%d,%d)", idx.String(), idx.Start, idx.Count, idx.Capacity)
+	if idx == nil {
+		return "null"
+	}
+	return fmt.Sprintf("(%s,%d,%d,%d)", idx.Id.String(), idx.Start, idx.Count, idx.Capacity)
 }
 
 func (idx *ExternalIndex) IsApplied() bool {

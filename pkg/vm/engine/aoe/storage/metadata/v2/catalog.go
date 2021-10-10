@@ -157,7 +157,7 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalo
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
 		MaxSize: cfg.RotationFileMaxSize,
 	}
-	store, err := logstore.NewSyncAwareStore(cfg.Dir, "store", rotationCfg, syncerCfg)
+	store, err := logstore.NewSyncAwareStore(common.MakeMetaDir(cfg.Dir), "store", rotationCfg, syncerCfg)
 	if err != nil {
 		panic(err)
 	}
@@ -575,7 +575,10 @@ func MockCatalog(dir string, blkRows, segBlks uint64) *Catalog {
 	cfg.Dir = dir
 	cfg.BlockMaxRows = blkRows
 	cfg.SegmentMaxBlocks = segBlks
-	catalog := NewCatalog(new(sync.RWMutex), cfg, nil)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
+	if err != nil {
+		panic(err)
+	}
 	catalog.StartSyncer()
 	return catalog
 }

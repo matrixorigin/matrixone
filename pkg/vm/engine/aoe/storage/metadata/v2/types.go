@@ -96,7 +96,13 @@ func (info *CommitInfo) PString(level PPLevel) string {
 			s = fmt.Sprintf("%s -> ", s)
 		}
 		cInfo := curr.(*CommitInfo)
-		s = fmt.Sprintf("%s(%s,%d)", s, OpName(cInfo.Op), cInfo.CommitId)
+		s = fmt.Sprintf("%s(%s,%d", s, OpName(cInfo.Op), cInfo.CommitId)
+		if level >= PPL1 {
+			id, _ := info.GetAppliedIndex()
+			s = fmt.Sprintf("%s,%d-%s)", s, id, cInfo.ExternalIndex.String())
+		} else {
+			s = fmt.Sprintf("%s)", s)
+		}
 		// s = fmt.Sprintf("%s(%s,%d,%d)", s, OpName(info.Op), info.TranId-MinUncommitId, info.CommitId)
 		prev = curr
 		curr = curr.GetNext()
