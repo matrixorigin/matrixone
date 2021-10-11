@@ -30,8 +30,10 @@ else
     SKIP_TESTS="";
 fi
 
+shopt -s expand_aliases
 source $HOME/.bash_profile
 source ./utilities.sh
+go version
 
 BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 
