@@ -161,6 +161,13 @@ func TestInsert(t *testing.T) {
 		{"insert into TBL4 values (default);", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
 		{"CREATE TABLE TBL5 (A INT);", nil, nil},
 		{"insert into TBL5 values (default);", nil, nil},
+		{"CREATE TABLE TBL6 (A INT DEFAULT 1, B INT);", nil, nil},
+		{"insert into TBL6 (B) values (1);", nil, nil},
+		{"insert into TBL6 (A) values (1);", nil, nil},
+		{"CREATE TABLE TBL7 (A INT NOT NULL, B INT DEFAULT 5);", nil, nil},
+		{"insert into TBL7 (B) values (10);", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"insert into TBL7 () values ();", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
+		{"insert into TBL7 (A) values (1);", nil, nil},
 		{"drop database testinsert;", nil, nil},
 	}
 

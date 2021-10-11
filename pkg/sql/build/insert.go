@@ -63,7 +63,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 			attrs[i] = string(col.Name)
 		}
 	}
-	rows.Rows, err = rewriteInsertRows(r, stmt.Columns, attrs, rows.Rows)
+	rows.Rows, attrs, err = rewriteInsertRows(r, stmt.Columns, attrs, rows.Rows)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +343,7 @@ func (b *build) tableName(tbl *tree.TableName) (string, string, engine.Relation,
 	return string(tbl.SchemaName), string(tbl.ObjectName), r, nil
 }
 
-// insertValuesRangeCheck returns error if final build result out of range.
+// insertValuesRangeCheck returns error if final build result is out of range.
 func insertValuesRangeCheck(vecs []*vector.Vector, columnNames []string, sourceInput []tree.Exprs) error {
 	var sourceValue, errString string
 
@@ -389,11 +389,11 @@ func valueRangeCheck(value string, typ types.Type) string {
 
 // rewriteInsertRows rewrite default expressions in valueClause's Rows
 // and convert them to be column-default-expression.
-func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, finalInsertTargets []string, rows []tree.Exprs) ([]tree.Exprs, error) {
+func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, finalInsertTargets []string, rows []tree.Exprs) ([]tree.Exprs, []string, error) {
 	var ok bool
+	var targetLen int
 	targetsNil := insertTargets == nil
 	allRowsNil := true
-	targetLen  := len(finalInsertTargets)
 
 	defaultExprs := make(map[string]tree.Expr)
 	for _, attr := range rel.Attribute() { // init a map from column name to its default expression
@@ -403,6 +403,26 @@ func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, f
 		}
 	}
 
+	// if length of finalInsertTargets less than relation columns
+	// there should rewrite finalInsertTargets.
+	if len(finalInsertTargets) < len(rel.Attribute()) {
+		sourceLen := len(finalInsertTargets)
+		for _, attr := range rel.Attribute() {
+			found := false
+			column := attr.Name
+			for i := 0; i < sourceLen; i++ {
+				if finalInsertTargets[i] == column {
+					found = true
+					break
+				}
+			}
+			if !found {
+				finalInsertTargets = append(finalInsertTargets, column)
+			}
+		}
+	}
+	targetLen  = len(finalInsertTargets)
+
 	for i := range rows {
 		if rows[i] != nil {
 			allRowsNil = false
@@ -411,24 +431,32 @@ func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, f
 	}
 
 	for i := range rows {
-		// nil expr will convert to defaultExpr when all insertTargets and rows are nil.
-		if targetsNil && allRowsNil {
-			rows[i] = make(tree.Exprs, targetLen)
-			for j := 0; j < targetLen; j++{
-				rows[i][j] = tree.NewDefaultVal()
+		if rows[i] == nil {
+			// nil expr will convert to defaultExpr when insertTargets and rows are both nil.
+			if targetsNil && allRowsNil {
+				rows[i] = make(tree.Exprs, targetLen)
+				for j := 0; j < targetLen; j++{
+					rows[i][j] = tree.NewDefaultVal()
+				}
+			}
+		} else {
+			// some cases need to fill the missing columns with default values
+			for len(rows[i]) < targetLen {
+				rows[i] = append(rows[i], tree.NewDefaultVal())
 			}
 		}
+
 		for j := range rows[i] {
 			if !isDefaultExpr(rows[i][j]) {
 				continue
 			}
 			rows[i][j], ok = defaultExprs[finalInsertTargets[j]]
 			if !ok {
-				return nil, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Field '%s' doesn't have a default value", finalInsertTargets[j]))
+				return nil, nil, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Field '%s' doesn't have a default value", finalInsertTargets[j]))
 			}
 		}
 	}
-	return rows, nil
+	return rows, finalInsertTargets, nil
 }
 
 // makeExprFromStr make an expr from expression string and its type
