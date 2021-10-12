@@ -78,8 +78,8 @@ func TestMysqlCmdExecutor(t *testing.T) {
 	do_query_without_result_set(t,db,false,insertC)
 	do_query_with_null(t,db,false,"select * from C",mrs3)
 
-	_,mrs4 := MakeValues_insert_1_partial_null(1,10)
-	do_query_with_null(t,db,false,"select * from C limit 1,10",mrs4)
+	_,mrs4 := MakeValues_insert_1_partial_null(0,100)
+	do_query_with_null(t,db,false,"select * from C order by f",mrs4)
 
 	defer close_db(t,db)
 }
@@ -222,34 +222,34 @@ func MakeValues_insert_1_all_NULL(cnt int) (string,*MysqlResultSet){
 
 func MakeValues_insert_1_partial_null(start int,cnt int) (string,*MysqlResultSet){
 	mrs := MakeResultSet_SELECT_1()
-	row1 := []interface{}{
-		nil,nil,
-		nil,nil,
-		nil,nil,
-		nil,nil,
-		nil,nil,
-		nil,nil,
-	}
-
-	row2 := []interface{}{
-		int8(-128),uint8(255),
-		int16(-32768),uint16(65535),
-		int32(-2147483648),uint32(4294967295),
-		int64(-9223372036854775808),uint64(18446744073709551615),
-		float32(-3.402823466E+38),float64(1.7976931348623157E+308),
-		"aaaaa","bbbbbbb",
-	}
+	//row1 := []interface{}{
+	//	nil,nil,
+	//	nil,nil,
+	//	nil,nil,
+	//	nil,nil,
+	//	nil,nil,
+	//	nil,nil,
+	//}
+	//
+	//row2 := []interface{}{
+	//	int8(-128),uint8(255),
+	//	int16(-32768),uint16(65535),
+	//	int32(-2147483648),uint32(4294967295),
+	//	int64(-9223372036854775808),uint64(18446744073709551615),
+	//	float32(-3.402823466E+38),float64(1.7976931348623157E+308),
+	//	"aaaaa","bbbbbbb",
+	//}
 
 	s1 := "NULL,NULL," +
 		"NULL,NULL," +
-		"NULL,NULL," +
+		"NULL,%d," +
 		"NULL,NULL," +
 		"NULL,NULL," +
 		"NULL,NULL"
 
 	s2 := "-128,255," +
 		"-32768,65535," +
-		"-2147483648,4294967295," +
+		"-2147483648,%d," +
 		"-9223372036854775808,18446744073709551615," +
 		"-3.402823466E+38,1.7976931348623157E+308," +
 		"\"aaaaa\",\"bbbbbbb\""
@@ -266,17 +266,33 @@ func MakeValues_insert_1_partial_null(start int,cnt int) (string,*MysqlResultSet
 		s += "("
 
 		if i % 2 == 0 {
-			s += s1
+			s += fmt.Sprintf(s1,i)
 		}else{
-			s += s2
+			s += fmt.Sprintf(s2,i)
 		}
 
 		s += ")"
 
 		if i % 2 == 0 {
-			mrs.AddRow(row1)
+			row3 := []interface{}{
+				nil,nil,
+				nil,nil,
+				nil,uint32(i),
+				nil,nil,
+				nil,nil,
+				nil,nil,
+			}
+			mrs.AddRow(row3)
 		}else{
-			mrs.AddRow(row2)
+			row4 := []interface{}{
+				int8(-128),uint8(255),
+				int16(-32768),uint16(65535),
+				int32(-2147483648),uint32(i),
+				int64(-9223372036854775808),uint64(18446744073709551615),
+				float32(-3.402823466E+38),float64(1.7976931348623157E+308),
+				"aaaaa","bbbbbbb",
+			}
+			mrs.AddRow(row4)
 		}
 
 	}
