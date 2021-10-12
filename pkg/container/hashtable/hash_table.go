@@ -69,7 +69,7 @@ func (ht *HashTable) Insert(hashVal uint64, key []byte, proc process.Process) (i
 	}
 
 	if hashVal == 0 {
-		hashVal = Crc32Hash(key)
+		hashVal = BytesHash(key)
 	}
 	inserted, idx := ht.findBucket(hashVal, key)
 	offset := idx * uint64(ht.bucketWidth)
@@ -173,7 +173,7 @@ func (ht *HashTable) reinsert(idx, offset uint64) {
 	var key []byte
 	if ht.inlineKey {
 		key = ht.bucketData[offset : offset+uint64(ht.keySize)]
-		hashVal = Crc32Hash(key)
+		hashVal = BytesHash(key)
 	} else {
 		hashVal = *(*uint64)(unsafe.Pointer(&ht.bucketData[offset]))
 		key = ht.bucketData[offset+8 : offset+uint64(ht.valOffset)]
