@@ -24,9 +24,18 @@ import (
 	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
 	stdLog "log"
+	mo_config "matrixone/pkg/config"
+	"matrixone/pkg/rpcserver"
+	"matrixone/pkg/sql/testutil"
 	"matrixone/pkg/vm/driver"
 	aoe2 "matrixone/pkg/vm/driver/aoe"
 	"matrixone/pkg/vm/driver/config"
+	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/metadata"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/mmu/host"
+	"matrixone/pkg/vm/process"
 	"os"
 	"sync"
 	"testing"
@@ -147,10 +156,105 @@ func recreateTestTempDir() (err error) {
 	if err != nil {
 		return err
 	}
-	err = os.MkdirAll(tmpDir, os.ModeDir)
+	err = os.MkdirAll(tmpDir, 0755)
 	return err
 }
 
 func cleanupTmpDir() error {
 	return os.RemoveAll(tmpDir)
+}
+
+type FrontendStub struct{
+	eng engine.Engine
+	srv rpcserver.Server
+	mo *MOServer
+}
+
+func NewFrontendStub() (*FrontendStub,error) {
+	e, err := testutil.NewTestEngine()
+	if err != nil {
+		return nil, err
+	}
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+
+	srv, err := testutil.NewTestServer(e, proc)
+	if err != nil {
+		return nil, err
+	}
+
+	go srv.Run()
+
+	ppu := NewPDCallbackParameterUnit(1, 1, 1, 1, false, 10000)
+	mo, err := get_server("./test/system_vars_config.toml",
+		6002, NewPDCallbackImpl(ppu), e)
+	if err != nil {
+		return nil, err
+	}
+
+	err = mo.Start()
+	if err != nil {
+		return nil, err
+	}
+
+	return &FrontendStub{
+		eng: e,
+		srv: srv,
+		mo: mo,
+	},nil
+}
+
+func CloseFrontendStub(fs *FrontendStub) error {
+	err := fs.mo.Stop()
+	if err != nil {
+		return err
+	}
+
+	fs.srv.Stop()
+	return nil
+}
+
+var testPorts = []int{6002, 6003, 6004}
+var testConfigFile = "./test/system_vars_config.toml"
+
+func get_server(configFile string, port int, pd *PDCallbackImpl, eng engine.Engine) (*MOServer, error) {
+	sv := &mo_config.SystemVariables{}
+
+	//before anything using the configuration
+	if err := sv.LoadInitialValues(); err != nil {
+		fmt.Printf("error:%v\n", err)
+		return nil, err
+	}
+
+	if err := mo_config.LoadvarsConfigFromFile(configFile, sv); err != nil {
+		fmt.Printf("error:%v\n", err)
+		return nil, err
+	}
+
+	fmt.Println("Shutdown The *MOServer With Ctrl+C | Ctrl+\\.")
+
+	hostMmu := host.New(sv.GetHostMmuLimitation())
+	mempool := mempool.New( /*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/ )
+
+	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
+
+	//test storage engine
+	storageEngine := eng
+
+	//test cluster nodes
+	clusterNodes := metadata.Nodes{}
+
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, storageEngine, clusterNodes, nil)
+
+	address := fmt.Sprintf("%s:%d", sv.GetHost(), port)
+	sver := NewMOServer(address, pu, pd)
+	return sver, nil
 }

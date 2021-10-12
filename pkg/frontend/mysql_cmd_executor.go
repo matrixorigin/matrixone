@@ -1429,6 +1429,14 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 		}
 
 		return resp, nil
+	case COM_PING:
+		resp = NewResponse(
+			OkResponse,
+			0,
+			int(COM_PING),
+			nil,
+		)
+		return resp, nil
 	default:
 		err := fmt.Errorf("unsupported command. 0x%x \n", req.GetCmd())
 		resp = NewResponse(
