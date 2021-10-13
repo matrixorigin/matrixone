@@ -21,15 +21,24 @@ import (
 	"golang.org/x/sys/cpu"
 )
 
-func crc32BytesHashAsm(data []byte) uint64
-func crc32IntHashAsm(data uint64) uint64
+func crc32HashAsm(data []byte, tail uint64) uint64
 
 func init() {
 	if cpu.ARM64.HasCRC32 {
-		BytesHash = crc32BytesHashAsm
-		IntHash = crc32IntHashAsm
+		BytesHash = crc32Hash
 	} else {
 		BytesHash = wyhash
-		IntHash = intHash64
 	}
+}
+
+func crc32Hash(data []byte) uint64 {
+	l := len(data)
+	if l < 8 {
+		return wyhash(data)
+	}
+	var rem uint64
+	if l&7 != 0 {
+		rem = r8(data, l-8)
+	}
+	return crc32HashAsm(data, rem)
 }

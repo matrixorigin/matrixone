@@ -16,11 +16,9 @@ package hashtable
 
 import (
 	"math/bits"
-	"unsafe"
 )
 
 var BytesHash func([]byte) uint64
-var IntHash func(uint64) uint64
 
 const (
 	m1 = 0xa0761d6478bd642f
@@ -33,7 +31,7 @@ const (
 func wyhash(data []byte) uint64 {
 	s := len(data)
 	var a, b uint64
-	seed := uint64(m3 ^ m1)
+	seed := uint64(m5 ^ m1)
 	switch {
 	case s == 0:
 		return seed
@@ -83,19 +81,9 @@ func mix(a, b uint64) uint64 {
 }
 
 func r4(data []byte, p int) uint64 {
-	return uint64(*(*uint32)(unsafe.Pointer(&data[p])))
+	return uint64(data[p]) | uint64(data[p+1])<<8 | uint64(data[p+2])<<16 | uint64(data[p+3])<<24
 }
 
 func r8(data []byte, p int) uint64 {
-	return *(*uint64)(unsafe.Pointer(&data[p]))
-}
-
-func intHash64(x uint64) uint64 {
-	x ^= x >> 33
-	x *= 0xff51afd7ed558ccd
-	x ^= x >> 33
-	x *= 0xc4ceb9fe1a85ec53
-	x ^= x >> 33
-
-	return x
+	return uint64(data[p]) | uint64(data[p+1])<<8 | uint64(data[p+2])<<16 | uint64(data[p+3])<<24 | uint64(data[p+4])<<32 | uint64(data[p+5])<<40 | uint64(data[p+6])<<48 | uint64(data[p+7])<<56
 }
