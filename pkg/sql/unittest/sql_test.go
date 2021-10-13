@@ -1,7 +1,6 @@
 package unittest
 
 import (
-	"errors"
 	"fmt"
 	"github.com/stretchr/testify/require"
 	"matrixone/pkg/container/batch"
@@ -172,21 +171,6 @@ func TestInsert(t *testing.T) {
 		{"drop database testinsert;", nil, nil},
 	}
 
-	type affectRowsCase struct {
-		sql string
-		err1, err2 error
-		affectRows int64 // -1 means there's no need to check this number
-	}
-	affectRowsCases := []affectRowsCase{
-		{"create database testaffect;", nil, nil, -1},
-		{"create table cms (a int, b int);", nil, nil, -1},
-		{"insert into cms values (1, 2), (3, 4);", nil, nil, 2},
-		{"insert into cms values (null, null);", nil, nil, 1},
-		{"insert into cms values (null, default);", nil, nil, 1},
-		{"insert into cms values (), (), ();", nil, nil, 3},
-		{"drop database testaffect", nil, nil, -1},
-	}
-
 	for i, tc := range testCases {
 		sql := tc.testSql
 		expected1 := tc.expectErr1
@@ -211,37 +195,6 @@ func TestInsert(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				require.EqualError(t, err, expected2.Error())
-			}
-		}
-	}
-
-	for i, ac := range affectRowsCases {
-		c := compile.New("testaffect", ac.sql, "admin", e, proc)
-		es, err := c.Build()
-		require.NoError(t, err)
-		println(fmt.Sprintf("actest %d", i))
-		for _, e := range es {
-			err := e.Compile(nil, Print)
-			if ac.err1 == nil {
-				require.NoError(t, err)
-			} else {
-				require.EqualError(t, err, ac.err1.Error())
-			}
-			if ac.err1 != nil {
-				break
-			}
-			err = e.Run(1)
-			if ac.err2 == nil {
-				require.NoError(t, err)
-			} else {
-				require.EqualError(t, err, ac.err2.Error())
-			}
-			if ac.affectRows == -1 {
-				continue
-			}
-			if e.GetAffectedRows() != uint64(ac.affectRows) {
-				err = errors.New("affect rows number error")
-				require.NoError(t, err)
 			}
 		}
 	}

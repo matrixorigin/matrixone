@@ -73,7 +73,6 @@ func (c *compile) Build() ([]*Exec, error) {
 		es[i] = &Exec{
 			c:    c,
 			stmt: stmt,
-			affectRows: 0,
 		}
 	}
 	return es, nil
@@ -148,18 +147,6 @@ func (e *Exec) Columns() []*Col {
 	return e.resultCols
 }
 
-func (e *Exec) IncreaseAffectedRows(n uint64) {
-	e.affectRows += n
-}
-
-func (e *Exec) SetAffectedRows(n uint64) {
-	e.affectRows = n
-}
-
-func (e *Exec) GetAffectedRows() uint64 {
-	return e.affectRows
-}
-
 // Run applies the scopes to the specified data object
 // and run through the instruction in each of the scope.
 func (e *Exec) Run(ts uint64) error {
@@ -192,10 +179,8 @@ func (e *Exec) Run(ts uint64) error {
 		case Insert:
 			wg.Add(1)
 			go func(s *Scope) {
-				if rows, err := s.Insert(ts); err != nil {
+				if err := s.Insert(ts); err != nil {
 					e.err = err
-				} else {
-					e.SetAffectedRows(rows)
 				}
 				wg.Done()
 			}(e.scopes[i])
