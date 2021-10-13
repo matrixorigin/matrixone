@@ -10,6 +10,7 @@ require (
 	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/frankban/quicktest v1.11.3 // indirect
+	github.com/go-sql-driver/mysql v1.5.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1

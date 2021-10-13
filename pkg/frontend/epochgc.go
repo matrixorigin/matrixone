@@ -103,6 +103,11 @@ type PDCallbackImpl struct {
 	close
 	 */
 	closeOnce sync.Once
+
+	/*
+		the limit of cube load
+	*/
+	limitOfCubeLoad int
 }
 
 /*
@@ -126,6 +131,7 @@ func NewPDCallbackImpl(pu *PDCallbackParameterUnit) *PDCallbackImpl {
 		heartbeatTimeout:  NewTimeout(time.Duration(pu.heartbeatTimeout)*time.Second, false),
 		removeEpoch: nil,
 		enableLog: pu.enableLog,
+		limitOfCubeLoad: pu.limitOfCubeLoad,
 	}
 }
 
@@ -155,6 +161,11 @@ type PDCallbackParameterUnit struct {
 	heartbeatTimeout int
 
 	/*
+	the limit of cube load
+	 */
+	limitOfCubeLoad int
+
+	/*
 	enable logging
 	 */
 	enableLog bool
@@ -166,13 +177,14 @@ pp : the period of the persistence. Second
 ddp : 	the period of the ddl delete. Second
 ht : 	the timeout of heartbeat. Second
  */
-func NewPDCallbackParameterUnit(tp, pp, ddp, ht int, enableLog bool) *PDCallbackParameterUnit {
+func NewPDCallbackParameterUnit(tp, pp, ddp, ht int, enableLog bool, lt int) *PDCallbackParameterUnit {
 	return &PDCallbackParameterUnit{
 		timerPeriod:       tp,
 		persistencePeriod: pp,
 		ddlDeletePeriod:   ddp,
 		heartbeatTimeout:  ht,
 		enableLog: enableLog,
+		limitOfCubeLoad: lt,
 	}
 }
 
@@ -256,7 +268,7 @@ func (pci *PDCallbackImpl) Start(kv storage.Storage) error {
 	//load cluster_epoch
 	//load minimumRemovableEpoch
 	//load kv<server,maximumRemovableEpoch>
-	err := kv.LoadCustomData(math.MaxInt64,pci.getCustomData)
+	err := kv.LoadCustomData(int64(pci.limitOfCubeLoad),pci.getCustomData)
 	if err != nil {
 		return err
 	}
