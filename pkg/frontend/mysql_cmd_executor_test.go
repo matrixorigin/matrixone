@@ -24,7 +24,7 @@ func TestMysqlCmdExecutor(t *testing.T) {
 	}(fs)
 
 	db := open_db(t,6002)
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 
 	do_query_resp_resultset(t, db, false, false, "SELECT @@max_allowed_packet", MakeResultSet_select_max_allowed_packet())
 	do_query_resp_resultset(t, db, false, false, "SELECT DATABASE()", MakeResultSet_SELECT_DATABASE("DATABASE()", "NULL"))
@@ -106,22 +106,22 @@ func TestMysqlCmdExecutor(t *testing.T) {
 	do_query_resp_states(t,db,false,loadD)
 
 	//memEngine does ensure sort
-	do_query_resp_resultset(t, db, false, true, "select * from D order by f", mrs5)
+	do_query_resp_resultset(t, db, false, true, "select * from D", mrs5)
 
-	loadFormat2 := "load data " +
-		"infile '%s' " +
-		"ignore " +
-		"INTO TABLE T.%s " +
-		"FIELDS TERMINATED BY '%c' " +
-		"(a,b,c,d,e,f,g,h,i,j,k,l)"
-	do_query_resp_states(t,db,false,"drop table D")
-	do_query_resp_states(t,db,false,tableD)
-
-	loadD2 := fmt.Sprintf(loadFormat2,loadfile1,"D",',')
-	fmt.Println(loadD2)
-	do_query_resp_states(t,db,false,loadD2)
-
-	do_query_resp_resultset(t, db, false, true, "select * from D order by f", mrs5)
+	//loadFormat2 := "load data " +
+	//	"infile '%s' " +
+	//	"ignore " +
+	//	"INTO TABLE T.%s " +
+	//	"FIELDS TERMINATED BY '%c' " +
+	//	"(a,b,c,d,e,f,g,h,i,j,k,l)"
+	//do_query_resp_states(t,db,false,"drop table D")
+	//do_query_resp_states(t,db,false,tableD)
+	//
+	//loadD2 := fmt.Sprintf(loadFormat2,loadfile1,"D",',')
+	//fmt.Println(loadD2)
+	//do_query_resp_states(t,db,false,loadD2)
+	//
+	//do_query_resp_resultset(t, db, false, true, "select * from D", mrs5)
 
 	time.Sleep(100 * time.Millisecond)
 	close_db(t,db)
