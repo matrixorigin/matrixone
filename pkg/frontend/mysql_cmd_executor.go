@@ -1329,8 +1329,10 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			/*
 				Step 2: Echo client
 			*/
-			resp := NewResponse(
-				OkResponse,
+			resp := NewOkResponse(
+				exec.GetAffectedRows(),
+				0,
+				0,
 				0,
 				int(COM_QUERY),
 				nil,
