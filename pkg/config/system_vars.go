@@ -379,8 +379,8 @@ type SystemVariables struct{
 	Scope:	[global]
 	Access:	[file]
 	DataType:	int64
-	DomainType:	set
-	Values:	[40000]
+	DomainType:	range
+	Values:	[40000 10 100000]
 	Comment:	the count of rows in vector of batch in load data
 	UpdateMode:	dynamic
 	*/
@@ -749,8 +749,8 @@ type varsConfig struct{
 	Scope:	[global]
 	Access:	[file]
 	DataType:	int64
-	DomainType:	set
-	Values:	[40000]
+	DomainType:	range
+	Values:	[40000 10 100000]
 	Comment:	the count of rows in vector of batch in load data
 	UpdateMode:	dynamic
 	*/
@@ -863,7 +863,7 @@ func (ap *SystemVariables) PrepareDefinition(){
 	
 	ap.name2definition["lengthOfQueryPrinted"] = "	Name:	lengthOfQueryPrinted	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[50 -1 10000]	Comment:	the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.	UpdateMode:	dynamic	"
 	
-	ap.name2definition["batchSizeInLoadData"] = "	Name:	batchSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	set	Values:	[40000]	Comment:	the count of rows in vector of batch in load data	UpdateMode:	dynamic	"
+	ap.name2definition["batchSizeInLoadData"] = "	Name:	batchSizeInLoadData	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[40000 10 100000]	Comment:	the count of rows in vector of batch in load data	UpdateMode:	dynamic	"
 	
 	ap.name2definition["loadDataConcurrencyCount"] = "	Name:	loadDataConcurrencyCount	Scope:	[global]	Access:	[file]	DataType:	int64	DomainType:	range	Values:	[16 1 16]	Comment:	default is 16. The count of go routine writing batch into the storage.	UpdateMode:	dynamic	"
 	
@@ -1306,7 +1306,7 @@ func (ap *SystemVariables) LoadInitialValues()error{
 	}
 	
 	batchSizeInLoadDatachoices :=[]int64 {
-		40000,
+		40000,10,100000,
 	}
 	if len(batchSizeInLoadDatachoices) != 0 {
 		if err = ap.setBatchSizeInLoadData(batchSizeInLoadDatachoices[0]) ; err != nil {
@@ -2498,13 +2498,11 @@ func (ap * SystemVariables ) setBatchSizeInLoadData(value int64)error {
 	
 	
 		choices :=[]int64 {
-			40000,	
+			40000,10,100000,	
 		}
-		if len( choices ) != 0{
-			if !isInSliceInt64(value, choices){
-				return fmt.Errorf("setBatchSizeInLoadData,the value %d is not in set %v",value,choices)
-			}
-		}//else means any int64
+		if !(value >= choices[1] && value <= choices[2]){
+			return fmt.Errorf("setBatchSizeInLoadData,the value %d is not in the range [%d,%d]",value,choices[1],choices[2])
+		}
 	
 	
 	ap.batchSizeInLoadData = value

@@ -3,6 +3,7 @@ package frontend
 import (
 	"fmt"
 	"github.com/stretchr/testify/require"
+	"io/ioutil"
 	"matrixone/pkg/defines"
 	"testing"
 	"time"
@@ -11,6 +12,10 @@ import (
 func TestMysqlCmdExecutor(t *testing.T) {
 	fs, err := NewFrontendStub()
 	require.NoError(t, err)
+
+	err = StartFrontendStub(fs)
+	require.NoError(t, err)
+
 	defer func(fs *FrontendStub) {
 		err := CloseFrontendStub(fs)
 		if err != nil {
@@ -21,67 +26,105 @@ func TestMysqlCmdExecutor(t *testing.T) {
 	db := open_db(t,6002)
 	time.Sleep(100 * time.Millisecond)
 
-	do_query_with_null(t,db,false,"SELECT @@max_allowed_packet",MakeResultSet_select_max_allowed_packet())
-	do_query_with_null(t,db,false,"SELECT DATABASE()",MakeResultSet_SELECT_DATABASE("DATABASE()","NULL"))
+	do_query_resp_resultset(t, db, false, false, "SELECT @@max_allowed_packet", MakeResultSet_select_max_allowed_packet())
+	do_query_resp_resultset(t, db, false, false, "SELECT DATABASE()", MakeResultSet_SELECT_DATABASE("DATABASE()", "NULL"))
 
-	do_query_with_null(t, db, false, "show databases", MakeResultSet_ShowDatabases("test", "Database", "test"))
-	do_query_with_null(t, db, true, "show databasess", nil)
+	do_query_resp_resultset(t, db, false, false, "show databases", MakeResultSet_ShowDatabases("test", "Database", "test"))
+	do_query_resp_resultset(t, db, true, false, "show databasess", nil)
 
-	do_query_without_result_set(t, db, false, "use test")
-	do_query_without_result_set(t, db, true, "use test2")
+	do_query_resp_states(t, db, false, "use test")
+	do_query_resp_states(t, db, true, "use test2")
 
 	//create database T
-	do_query_without_result_set(t,db,false,"create database T")
-	do_query_without_result_set(t,db,true,"create database T")
+	do_query_resp_states(t,db,false,"create database T")
+	do_query_resp_states(t,db,true,"create database T")
 
 	//use T
-	do_query_without_result_set(t, db, false, "use T")
+	do_query_resp_states(t, db, false, "use T")
 
 	tableFormat := "create table %s (a tinyint,b tinyint unsigned," +
 		"c smallint, d smallint unsigned, " +
 		"e int, f int unsigned," +
 		"g bigint,h bigint unsigned," +
 		"i float, j double ," +
-		"l char(100),m varchar(100)" +
+		"k char(100),l varchar(100)" +
 		")"
 
 	//create table A
 	tableA := fmt.Sprintf(tableFormat,"A")
-	do_query_without_result_set(t,db,false,tableA)
-	do_query_with_null(t,db,false,"select * from A",MakeResultSet_SELECT_1())
+	do_query_resp_states(t,db,false,tableA)
+	do_query_resp_resultset(t, db, false, false, "select * from A", MakeResultSet_SELECT_1())
 
 	//insert into A values ...
 	values1,mrs1 := MakeValues_insert_1(100)
 	insertFormat := "insert into %s values"
 	insertA := fmt.Sprintf(insertFormat,"A") + values1
-	do_query_without_result_set(t,db,false,insertA)
-	do_query_with_null(t,db,false,"select * from A",mrs1)
+	do_query_resp_states(t,db,false,insertA)
+	do_query_resp_resultset(t, db, false, false, "select * from A", mrs1)
 
 	//create table B
 	tableB := fmt.Sprintf(tableFormat,"B")
-	do_query_without_result_set(t,db,false,tableB)
-	do_query_with_null(t,db,false,"select * from B",MakeResultSet_SELECT_1())
+	do_query_resp_states(t,db,false,tableB)
+	do_query_resp_resultset(t, db, false, false, "select * from B", MakeResultSet_SELECT_1())
 
 	//insert into B values ...
 	values2,mrs2 := MakeValues_insert_1_all_NULL(100)
 	insertB := fmt.Sprintf(insertFormat,"B") + values2
-	do_query_without_result_set(t,db,false,insertB)
-	do_query_with_null(t,db,false,"select * from B",mrs2)
+	do_query_resp_states(t,db,false,insertB)
+	do_query_resp_resultset(t, db, false, false, "select * from B", mrs2)
 
 	//create table C
 	tableC := fmt.Sprintf(tableFormat,"C")
-	do_query_without_result_set(t,db,false,tableC)
+	do_query_resp_states(t,db,false,tableC)
 
 	//insert into C values ...
-	values3,mrs3 := MakeValues_insert_1_partial_null(0,100)
+	values3,mrs3,_ := MakeValues_insert_1_partial_null(0,100)
 	insertC := fmt.Sprintf(insertFormat,"C") + values3
-	do_query_without_result_set(t,db,false,insertC)
-	do_query_with_null(t,db,false,"select * from C",mrs3)
+	do_query_resp_states(t,db,false,insertC)
+	do_query_resp_resultset(t, db, false, false, "select * from C", mrs3)
 
-	_,mrs4 := MakeValues_insert_1_partial_null(0,100)
-	do_query_with_null(t,db,false,"select * from C order by f",mrs4)
+	_,mrs4,_ := MakeValues_insert_1_partial_null(0,100)
+	do_query_resp_resultset(t, db, false, false, "select * from C order by f", mrs4)
 
-	defer close_db(t,db)
+	//create table D
+	tableD := fmt.Sprintf(tableFormat,"D")
+	do_query_resp_states(t,db,false,tableD)
+
+	//insert into D values ...
+	_,mrs5,loaddata5 := MakeValues_insert_1_partial_null(0,109)
+	loadfile1 := "test/loadcase2"
+	err = ioutil.WriteFile(loadfile1, []byte(loaddata5),0777)
+	require.NoError(t, err)
+
+	loadFormat := "load data " +
+		"infile '%s' " +
+		"ignore " +
+		"INTO TABLE T.%s " +
+		"FIELDS TERMINATED BY '%c' "
+	loadD := fmt.Sprintf(loadFormat,loadfile1,"D",',')
+	fmt.Println(loadD)
+	do_query_resp_states(t,db,false,loadD)
+
+	//memEngine does ensure sort
+	do_query_resp_resultset(t, db, false, true, "select * from D order by f", mrs5)
+
+	loadFormat2 := "load data " +
+		"infile '%s' " +
+		"ignore " +
+		"INTO TABLE T.%s " +
+		"FIELDS TERMINATED BY '%c' " +
+		"(a,b,c,d,e,f,g,h,i,j,k,l)"
+	do_query_resp_states(t,db,false,"drop table D")
+	do_query_resp_states(t,db,false,tableD)
+
+	loadD2 := fmt.Sprintf(loadFormat2,loadfile1,"D",',')
+	fmt.Println(loadD2)
+	do_query_resp_states(t,db,false,loadD2)
+
+	do_query_resp_resultset(t, db, false, true, "select * from D order by f", mrs5)
+
+	time.Sleep(100 * time.Millisecond)
+	close_db(t,db)
 }
 
 func NewColumnDef_string(name string, colType uint8) *MysqlColumn {
@@ -220,7 +263,7 @@ func MakeValues_insert_1_all_NULL(cnt int) (string,*MysqlResultSet){
 	return s,mrs
 }
 
-func MakeValues_insert_1_partial_null(start int,cnt int) (string,*MysqlResultSet){
+func MakeValues_insert_1_partial_null(start int,cnt int) (string,*MysqlResultSet,string){
 	mrs := MakeResultSet_SELECT_1()
 	//row1 := []interface{}{
 	//	nil,nil,
@@ -254,7 +297,15 @@ func MakeValues_insert_1_partial_null(start int,cnt int) (string,*MysqlResultSet
 		"-3.402823466E+38,1.7976931348623157E+308," +
 		"\"aaaaa\",\"bbbbbbb\""
 
+	loadDataFormat := ",," +
+		",," +
+		",%d," +
+		",," +
+		",," +
+		","
+
 	s := ""
+	loadData := ""
 
 	for i := 0; i < (start + cnt); i++ {
 		if i < start {
@@ -295,8 +346,14 @@ func MakeValues_insert_1_partial_null(start int,cnt int) (string,*MysqlResultSet
 			mrs.AddRow(row4)
 		}
 
+		if i % 2 == 0 {
+			loadData += fmt.Sprintln(fmt.Sprintf(loadDataFormat,uint32(i)))
+		} else{
+			loadData += fmt.Sprintln(fmt.Sprintf(s2,uint32(i)))
+		}
+
 	}
 	s += ";"
 
-	return s,mrs
+	return s,mrs,loadData
 }

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/cockroachdb/pebble"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
+	"github.com/matrixorigin/matrixcube/components/prophet/storage"
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
@@ -168,6 +169,10 @@ type FrontendStub struct{
 	eng engine.Engine
 	srv rpcserver.Server
 	mo *MOServer
+	kvForEpochgc storage.Storage
+	wg sync.WaitGroup
+	cf *CloseFlag
+	pci *PDCallbackImpl
 }
 
 func NewFrontendStub() (*FrontendStub,error) {
@@ -194,8 +199,9 @@ func NewFrontendStub() (*FrontendStub,error) {
 	go srv.Run()
 
 	ppu := NewPDCallbackParameterUnit(1, 1, 1, 1, false, 10000)
+	pci := NewPDCallbackImpl(ppu)
 	mo, err := get_server("./test/system_vars_config.toml",
-		6002, NewPDCallbackImpl(ppu), e)
+		6002, pci , e)
 	if err != nil {
 		return nil, err
 	}
@@ -209,7 +215,14 @@ func NewFrontendStub() (*FrontendStub,error) {
 		eng: e,
 		srv: srv,
 		mo: mo,
+		kvForEpochgc: storage.NewTestStorage(),
+		cf:&CloseFlag{},
+		pci:pci,
 	},nil
+}
+
+func StartFrontendStub(fs *FrontendStub) error {
+	return fs.pci.Start(fs.kvForEpochgc)
 }
 
 func CloseFrontendStub(fs *FrontendStub) error {
@@ -219,7 +232,7 @@ func CloseFrontendStub(fs *FrontendStub) error {
 	}
 
 	fs.srv.Stop()
-	return nil
+	return fs.pci.Stop(fs.kvForEpochgc)
 }
 
 var testPorts = []int{6002, 6003, 6004}

@@ -1113,26 +1113,26 @@ func TestMysqlResultSet(t *testing.T){
 	time.Sleep(time.Millisecond * 10)
 	db := open_db(t, 6001)
 
-	do_query_with_null(t, db, false, "tiny", makeMysqlTinyIntResultSet(false))
-	do_query_with_null(t, db, false, "tinyu", makeMysqlTinyIntResultSet(true))
-	do_query_with_null(t, db, false, "short", makeMysqlShortResultSet(false))
-	do_query_with_null(t, db, false, "shortu", makeMysqlShortResultSet(true))
-	do_query_with_null(t, db, false, "long", makeMysqlLongResultSet(false))
-	do_query_with_null(t, db, false, "longu", makeMysqlLongResultSet(true))
-	do_query_with_null(t, db, false, "longlong", makeMysqlLongLongResultSet(false))
-	do_query_with_null(t, db, false, "longlongu", makeMysqlLongLongResultSet(true))
-	do_query_with_null(t, db, false, "int24", makeMysqlInt24ResultSet(false))
-	do_query_with_null(t, db, false, "int24u", makeMysqlInt24ResultSet(true))
-	do_query_with_null(t, db, false, "year", makeMysqlYearResultSet(false))
-	do_query_with_null(t, db, false, "yearu", makeMysqlYearResultSet(true))
-	do_query_with_null(t, db, false, "varchar", makeMysqlVarcharResultSet())
-	do_query_with_null(t, db, false, "varstring", makeMysqlVarStringResultSet())
-	do_query_with_null(t, db, false, "string", makeMysqlStringResultSet())
-	do_query_with_null(t, db, false, "float", makeMysqlFloatResultSet())
-	do_query_with_null(t, db, false, "double", makeMysqlDoubleResultSet())
-	do_query_with_null(t, db, false, "8columns", make8ColumnsResultSet())
-	do_query_with_null(t, db, false, "16mbrow", make16MBRowResultSet())
-	do_query_with_null(t, db, false, "16mb", makeMoreThan16MBResultSet())
+	do_query_resp_resultset(t, db, false, false, "tiny", makeMysqlTinyIntResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "tinyu", makeMysqlTinyIntResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "short", makeMysqlShortResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "shortu", makeMysqlShortResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "long", makeMysqlLongResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "longu", makeMysqlLongResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "longlong", makeMysqlLongLongResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "longlongu", makeMysqlLongLongResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "int24", makeMysqlInt24ResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "int24u", makeMysqlInt24ResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "year", makeMysqlYearResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "yearu", makeMysqlYearResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "varchar", makeMysqlVarcharResultSet())
+	do_query_resp_resultset(t, db, false, false, "varstring", makeMysqlVarStringResultSet())
+	do_query_resp_resultset(t, db, false, false, "string", makeMysqlStringResultSet())
+	do_query_resp_resultset(t, db, false, false, "float", makeMysqlFloatResultSet())
+	do_query_resp_resultset(t, db, false, false, "double", makeMysqlDoubleResultSet())
+	do_query_resp_resultset(t, db, false, false, "8columns", make8ColumnsResultSet())
+	do_query_resp_resultset(t, db, false, false, "16mbrow", make16MBRowResultSet())
+	do_query_resp_resultset(t, db, false, false, "16mb", makeMoreThan16MBResultSet())
 
 	close_db(t,db)
 
@@ -1318,7 +1318,7 @@ func do_query(t *testing.T, db *sql.DB, wantErr bool, query string, mrs *MysqlRe
 	require.True(t, rowIdx == mrs.GetRowCount())
 }
 
-func do_query_with_null(t *testing.T, db *sql.DB, wantErr bool, query string, mrs *MysqlResultSet) {
+func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResultsetCheck bool, query string, mrs *MysqlResultSet) {
 	rows, err := db.Query(query)
 	if wantErr {
 		require.Error(t, err)
@@ -1332,20 +1332,20 @@ func do_query_with_null(t *testing.T, db *sql.DB, wantErr bool, query string, mr
 	require.NoError(t, err)
 	require.True(t, len(columns) == len(mrs.Columns))
 
-	colType, err := rows.ColumnTypes()
-	require.NoError(t, err)
-	for i, ct := range colType {
-		fmt.Printf("column %d\n",i)
-		fmt.Printf("name %v \n",ct.Name())
-		l,o := ct.Length()
-		fmt.Printf("length %v %v \n",l,o)
-		p,s,o := ct.DecimalSize()
-		fmt.Printf("decimalsize %v %v %v \n",p,s,o)
-		fmt.Printf("scantype %v \n",ct.ScanType())
-		n,o := ct.Nullable()
-		fmt.Printf("nullable %v %v \n",n,o)
-		fmt.Printf("databaseTypeName %s \n",ct.DatabaseTypeName())
-	}
+	//colType, err := rows.ColumnTypes()
+	//require.NoError(t, err)
+	//for i, ct := range colType {
+	//	fmt.Printf("column %d\n",i)
+	//	fmt.Printf("name %v \n",ct.Name())
+	//	l,o := ct.Length()
+	//	fmt.Printf("length %v %v \n",l,o)
+	//	p,s,o := ct.DecimalSize()
+	//	fmt.Printf("decimalsize %v %v %v \n",p,s,o)
+	//	fmt.Printf("scantype %v \n",ct.ScanType())
+	//	n,o := ct.Nullable()
+	//	fmt.Printf("nullable %v %v \n",n,o)
+	//	fmt.Printf("databaseTypeName %s \n",ct.DatabaseTypeName())
+	//}
 
 	values := make([][]byte,len(columns))
 
@@ -1362,65 +1362,80 @@ func do_query_with_null(t *testing.T, db *sql.DB, wantErr bool, query string, mr
 		err = rows.Scan(scanArgs...)
 		require.NoError(t, err)
 
-		for i := uint64(0); i < mrs.GetColumnCount(); i++ {
-			arg := scanArgs[i]
-			val := *(arg.(*[]byte))
+		//fmt.Println(rowIdx)
+		//fmt.Println(mrs.GetRow(rowIdx))
+		//
+		//for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+		//	arg := scanArgs[i]
+		//	val := *(arg.(*[]byte))
+		//	fmt.Printf("%v ",val)
+		//}
+		//fmt.Println()
 
-			column, err := mrs.GetColumn(i)
-			require.NoError(t, err)
+		if !skipResultsetCheck {
+			for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+				arg := scanArgs[i]
+				val := *(arg.(*[]byte))
 
-			col, ok := column.(*MysqlColumn)
-			require.True(t, ok)
+				column, err := mrs.GetColumn(i)
+				require.NoError(t, err)
 
-			isNUll, err := mrs.ColumnIsNull(rowIdx,i)
-			require.NoError(t, err)
+				col, ok := column.(*MysqlColumn)
+				require.True(t, ok)
 
-			if isNUll {
-				require.True(t, val == nil)
-			}else{
-				var data []byte = nil
-				switch col.ColumnType() {
-				case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
-					value, err := mrs.GetInt64(rowIdx, i)
-					require.NoError(t, err)
-					if col.ColumnType() == defines.MYSQL_TYPE_YEAR {
-						if value == 0 {
-							data = append(data, []byte("0000")...)
-						} else {
-							data = strconv.AppendInt(data, value, 10)
-						}
-					} else {
-						data = strconv.AppendInt(data, value,10)
-					}
+				isNUll, err := mrs.ColumnIsNull(rowIdx,i)
+				require.NoError(t, err)
 
-				case defines.MYSQL_TYPE_LONGLONG:
-					if uint32(col.Flag())&defines.UNSIGNED_FLAG != 0 {
-						value, err := mrs.GetUint64(rowIdx, i)
-						require.NoError(t, err)
-						data = strconv.AppendUint(data, value,10)
-					} else {
+				if isNUll {
+					require.True(t, val == nil)
+				}else{
+					var data []byte = nil
+					switch col.ColumnType() {
+					case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
 						value, err := mrs.GetInt64(rowIdx, i)
 						require.NoError(t, err)
-						data = strconv.AppendInt(data, value,10)
+						if col.ColumnType() == defines.MYSQL_TYPE_YEAR {
+							if value == 0 {
+								data = append(data, []byte("0000")...)
+							} else {
+								data = strconv.AppendInt(data, value, 10)
+							}
+						} else {
+							data = strconv.AppendInt(data, value,10)
+						}
+
+					case defines.MYSQL_TYPE_LONGLONG:
+						if uint32(col.Flag())&defines.UNSIGNED_FLAG != 0 {
+							value, err := mrs.GetUint64(rowIdx, i)
+							require.NoError(t, err)
+							data = strconv.AppendUint(data, value,10)
+						} else {
+							value, err := mrs.GetInt64(rowIdx, i)
+							require.NoError(t, err)
+							data = strconv.AppendInt(data, value,10)
+						}
+					case defines.MYSQL_TYPE_VARCHAR,defines.MYSQL_TYPE_VAR_STRING,defines.MYSQL_TYPE_STRING:
+						value, err := mrs.GetString(rowIdx, i)
+						require.NoError(t, err)
+						data = []byte(value)
+					case defines.MYSQL_TYPE_FLOAT:
+						value, err := mrs.GetFloat64(rowIdx, i)
+						require.NoError(t, err)
+						data = strconv.AppendFloat(data, value, 'f', 4, 32)
+					case defines.MYSQL_TYPE_DOUBLE:
+						value, err := mrs.GetFloat64(rowIdx, i)
+						require.NoError(t, err)
+						data = strconv.AppendFloat(data, value, 'f', 4, 64)
+					default:
+						require.NoError(t, fmt.Errorf("unsupported type %v",col.ColumnType()))
 					}
-				case defines.MYSQL_TYPE_VARCHAR,defines.MYSQL_TYPE_VAR_STRING,defines.MYSQL_TYPE_STRING:
-					value, err := mrs.GetString(rowIdx, i)
-					require.NoError(t, err)
-					data = []byte(value)
-				case defines.MYSQL_TYPE_FLOAT:
-					value, err := mrs.GetFloat64(rowIdx, i)
-					require.NoError(t, err)
-					data = strconv.AppendFloat(data, value, 'f', 4, 32)
-				case defines.MYSQL_TYPE_DOUBLE:
-					value, err := mrs.GetFloat64(rowIdx, i)
-					require.NoError(t, err)
-					data = strconv.AppendFloat(data, value, 'f', 4, 64)
-				default:
-					require.NoError(t, fmt.Errorf("unsupported type %v",col.ColumnType()))
+					//check
+					ret := reflect.DeepEqual(data,val)
+					//fmt.Println(i)
+					//fmt.Println(data)
+					//fmt.Println(val)
+					require.True(t, ret)
 				}
-				//check
-				ret := reflect.DeepEqual(data,val)
-				require.True(t, ret)
 			}
 		}
 
@@ -1433,7 +1448,7 @@ func do_query_with_null(t *testing.T, db *sql.DB, wantErr bool, query string, mr
 	require.NoError(t, err)
 }
 
-func do_query_without_result_set(t *testing.T, db *sql.DB, wantErr bool, query string) {
+func do_query_resp_states(t *testing.T, db *sql.DB, wantErr bool, query string) {
 	rows, err := db.Query(query)
 	if wantErr {
 		require.Error(t, err)

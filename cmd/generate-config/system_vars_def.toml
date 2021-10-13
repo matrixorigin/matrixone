@@ -312,8 +312,8 @@ name = "batchSizeInLoadData"
 scope = ["global"]
 access = ["file"]
 type = "int64"
-domain-type = "set"
-values = ["40000"]
+domain-type = "range"
+values = ["40000","10","100000"]
 comment = "the count of rows in vector of batch in load data"
 update-mode = "dynamic"
 
