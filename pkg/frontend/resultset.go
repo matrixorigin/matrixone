@@ -203,7 +203,7 @@ func (mc *MysqlColumn) SetSigned(s bool) {
 }
 
 func (mc *MysqlColumn) IsSigned() bool {
-	return mc.flag&uint16(defines.UNSIGNED_FLAG) != 0
+	return mc.flag&uint16(defines.UNSIGNED_FLAG) == 0
 }
 
 type MysqlResultSet struct {

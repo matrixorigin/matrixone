@@ -18,6 +18,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"matrixone/pkg/catalog"
 	"matrixone/pkg/config"
 	"matrixone/pkg/frontend"
@@ -156,7 +157,7 @@ func main() {
 	NodeId := config.GlobalSystemVariables.GetNodeID()
 	strNodeId := strconv.FormatInt(NodeId, 10)
 
-	ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging())
+	ppu := frontend.NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
 
 	pci = frontend.NewPDCallbackImpl(ppu)
 	pci.Id = int(NodeId)

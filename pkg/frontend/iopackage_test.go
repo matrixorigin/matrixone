@@ -20,6 +20,7 @@ import (
 	"github.com/fagongzi/goetty"
 	"github.com/fagongzi/goetty/codec"
 	"github.com/fagongzi/goetty/codec/simple"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -304,7 +305,14 @@ func echoClient() {
 
 func TestIOPackageImpl_ReadPacket(t *testing.T) {
 	encoder, decoder := simple.NewStringCodec()
-	go echoServer(echoHandler, nil, encoder, decoder)
-	time.Sleep(1 * time.Second)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		echoServer(echoHandler, nil, encoder, decoder)
+	}()
+	time.Sleep(100 * time.Millisecond)
 	echoClient()
+	setServer(1)
+	wg.Wait()
 }

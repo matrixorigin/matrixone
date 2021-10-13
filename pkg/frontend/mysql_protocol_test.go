@@ -17,11 +17,17 @@ package frontend
 import (
 	"errors"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"math"
+	"reflect"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
+	"database/sql"
 	"github.com/fagongzi/goetty"
+	_ "github.com/go-sql-driver/mysql"
 	"matrixone/pkg/config"
 	"matrixone/pkg/defines"
 	"matrixone/pkg/vm/mempool"
@@ -260,13 +266,30 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	config.Mempool = mempool.New(/*int(config.GlobalSystemVariables.GetMempoolMaxSize()), int(config.GlobalSystemVariables.GetMempoolFactor())*/)
 	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes, nil)
 
-	ppu := NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging())
+	ppu := NewPDCallbackParameterUnit(int(config.GlobalSystemVariables.GetPeriodOfEpochTimer()), int(config.GlobalSystemVariables.GetPeriodOfPersistence()), int(config.GlobalSystemVariables.GetPeriodOfDDLDeleteTimer()), int(config.GlobalSystemVariables.GetTimeoutOfHeartbeat()), config.GlobalSystemVariables.GetEnableEpochLogging(), math.MaxInt64)
 	pci := NewPDCallbackImpl(ppu)
 	pci.Id = 0
 	rm := NewRoutineManager(pu, pci)
 
 	encoder, decoder := NewSqlCodec()
-	echoServer(rm.Handler, rm, encoder, decoder)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	//running server
+	go func() {
+		defer wg.Done()
+		echoServer(rm.Handler, rm, encoder, decoder)
+	}()
+
+	time.Sleep(time.Millisecond * 10)
+	db := open_db(t, 6001)
+	close_db(t,db)
+
+	time.Sleep(time.Millisecond * 10)
+	//close server
+	setServer(1)
+	wg.Wait()
 }
 
 func makeMysqlTinyIntResultSet(unsigned bool)*MysqlResultSet {
@@ -701,10 +724,10 @@ func make8ColumnsResultSet()*MysqlResultSet {
 	}
 
 	var cases=[][]interface{}{
-		{-128,-32768,-2147483648,-9223372036854775808,"abc",math.MaxFloat32},
-		{-127,0,    0,0,"abcde",math.SmallestNonzeroFloat32},
-		{127,32767,2147483647,9223372036854775807,"",-math.MaxFloat32},
-		{126,32766,2147483646,9223372036854775806,"x-",-math.SmallestNonzeroFloat32},
+		{int8(-128),int16(-32768),int32(-2147483648),int64(-9223372036854775808),"abc",float32(math.MaxFloat32)},
+		{int8(-127),int16(0),    int32(0),           int64(0),"abcde",float32(math.SmallestNonzeroFloat32)},
+		{int8(127),int16(32767),int32(2147483647),int64(9223372036854775807),"",float32(-math.MaxFloat32)},
+		{int8(126),int16(32766),int32(2147483646),int64(9223372036854775806),"x-",float32(-math.SmallestNonzeroFloat32)},
 	}
 
 	for i,ct := range columnTypes{
@@ -747,7 +770,7 @@ func makeMoreThan16MBResultSet()*MysqlResultSet {
 		"Varchar",
 	}
 
-	var rowCase =[]interface{}{9223372036854775807,math.MaxFloat64,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	var rowCase =[]interface{}{int64(9223372036854775807),math.MaxFloat64,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 
 	for i,ct := range columnTypes{
 		name := names[i]
@@ -1028,6 +1051,17 @@ func (tRM *TestRoutineManager)resultsetHandler(rs goetty.IOSession, msg interfac
 			fmt.Printf("send response failed. error:%v", err)
 			break
 		}
+	case COM_PING:
+		resp = NewResponse(
+			OkResponse,
+			0,
+			int(COM_PING),
+			nil,
+		)
+		if err := pro.SendResponse(resp); err != nil {
+			fmt.Printf("send response failed. error:%v", err)
+			break
+		}
 
 	default:
 		fmt.Printf("unsupported command. 0x%x \n", req.cmd)
@@ -1067,5 +1101,365 @@ func TestMysqlResultSet(t *testing.T){
 
 	encoder, decoder := NewSqlCodec()
 	trm := NewTestRoutineManager(pu)
-	echoServer(trm.resultsetHandler, trm, encoder, decoder)
+
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		echoServer(trm.resultsetHandler, trm, encoder, decoder)
+	}()
+
+	time.Sleep(time.Millisecond * 10)
+	db := open_db(t, 6001)
+
+	do_query_resp_resultset(t, db, false, false, "tiny", makeMysqlTinyIntResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "tinyu", makeMysqlTinyIntResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "short", makeMysqlShortResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "shortu", makeMysqlShortResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "long", makeMysqlLongResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "longu", makeMysqlLongResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "longlong", makeMysqlLongLongResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "longlongu", makeMysqlLongLongResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "int24", makeMysqlInt24ResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "int24u", makeMysqlInt24ResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "year", makeMysqlYearResultSet(false))
+	do_query_resp_resultset(t, db, false, false, "yearu", makeMysqlYearResultSet(true))
+	do_query_resp_resultset(t, db, false, false, "varchar", makeMysqlVarcharResultSet())
+	do_query_resp_resultset(t, db, false, false, "varstring", makeMysqlVarStringResultSet())
+	do_query_resp_resultset(t, db, false, false, "string", makeMysqlStringResultSet())
+	do_query_resp_resultset(t, db, false, false, "float", makeMysqlFloatResultSet())
+	do_query_resp_resultset(t, db, false, false, "double", makeMysqlDoubleResultSet())
+	do_query_resp_resultset(t, db, false, false, "8columns", make8ColumnsResultSet())
+	do_query_resp_resultset(t, db, false, false, "16mbrow", make16MBRowResultSet())
+	do_query_resp_resultset(t, db, false, false, "16mb", makeMoreThan16MBResultSet())
+
+	close_db(t,db)
+
+	time.Sleep(time.Millisecond * 10)
+	//close server
+	setServer(1)
+	wg.Wait()
+}
+
+func open_db(t *testing.T, port int) *sql.DB {
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",port)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		require.NoError(t, err)
+	}else {
+		time.Sleep(time.Millisecond * 100)
+
+		//ping opens the connection
+		err = db.Ping()
+		require.NoError(t, err)
+	}
+	return db
+}
+
+func close_db(t *testing.T,db *sql.DB) {
+	err := db.Close()
+	require.NoError(t, err)
+}
+
+func do_query(t *testing.T, db *sql.DB, wantErr bool, query string, mrs *MysqlResultSet) {
+	rows, err := db.Query(query)
+	if wantErr {
+		require.Error(t, err)
+		require.True(t, rows == nil)
+		return
+	}
+	require.NoError(t, err)
+
+	//column check
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	require.True(t, len(columns) == len(mrs.Columns))
+
+	colType, err := rows.ColumnTypes()
+	require.NoError(t, err)
+	for i, ct := range colType {
+		fmt.Printf("column %d\n",i)
+		fmt.Printf("name %v \n",ct.Name())
+		l,o := ct.Length()
+		fmt.Printf("length %v %v \n",l,o)
+		p,s,o := ct.DecimalSize()
+		fmt.Printf("decimalsize %v %v %v \n",p,s,o)
+		fmt.Printf("scantype %v \n",ct.ScanType())
+		n,o := ct.Nullable()
+		fmt.Printf("nullable %v %v \n",n,o)
+		fmt.Printf("databaseTypeName %s \n",ct.DatabaseTypeName())
+	}
+
+	// rows.Scan wants '[]interface{}' as an argument, so we must copy the
+	// references into such a slice
+	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
+	scanArgs := make([]interface{}, len(columns))
+	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+		col, err := mrs.GetColumn(i)
+		require.NoError(t, err)
+
+		switch col.ColumnType() {
+		case defines.MYSQL_TYPE_TINY:
+			if col.IsSigned() {
+				scanArgs[i] = new(int8)
+			}else{
+				scanArgs[i] = new(uint8)
+			}
+		case defines.MYSQL_TYPE_SHORT,defines.MYSQL_TYPE_YEAR:
+			if col.IsSigned() {
+				scanArgs[i] = new(int16)
+			}else{
+				scanArgs[i] = new(uint16)
+			}
+		case defines.MYSQL_TYPE_LONG,defines.MYSQL_TYPE_INT24:
+			if col.IsSigned() {
+				scanArgs[i] = new(int32)
+			}else{
+				scanArgs[i] = new(uint32)
+			}
+		case defines.MYSQL_TYPE_LONGLONG:
+			if col.IsSigned() {
+				scanArgs[i] = new(int64)
+			}else{
+				scanArgs[i] = new(uint64)
+			}
+		case defines.MYSQL_TYPE_VARCHAR,defines.MYSQL_TYPE_VAR_STRING,defines.MYSQL_TYPE_STRING:
+			scanArgs[i] = new(string)
+		case defines.MYSQL_TYPE_FLOAT:
+			scanArgs[i] = new(float32)
+		case defines.MYSQL_TYPE_DOUBLE:
+			scanArgs[i] = new(float64)
+		default:
+			require.NoError(t, fmt.Errorf("unsupported type %v",col.ColumnType()))
+		}
+	}
+
+	rowIdx := uint64(0)
+	for rows.Next() {
+		err = rows.Scan(scanArgs...)
+		require.NoError(t, err)
+
+		//check data
+		want_data, err := mrs.GetRow(rowIdx)
+		require.NoError(t, err)
+
+		for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+			arg := scanArgs[i]
+			var val interface{}
+
+			col, err := mrs.GetColumn(i)
+			require.NoError(t, err)
+
+			switch col.ColumnType() {
+			case defines.MYSQL_TYPE_TINY:
+				if col.IsSigned() {
+					val = *(arg.(*int8))
+				}else{
+					val = *(arg.(*uint8))
+				}
+			case defines.MYSQL_TYPE_SHORT,defines.MYSQL_TYPE_YEAR:
+				if col.IsSigned() {
+					val = *(arg.(*int16))
+				}else{
+					val = *(arg.(*uint16))
+				}
+			case defines.MYSQL_TYPE_LONG,defines.MYSQL_TYPE_INT24:
+				if col.IsSigned() {
+					val = *(arg.(*int32))
+				}else{
+					val = *(arg.(*uint32))
+				}
+			case defines.MYSQL_TYPE_LONGLONG:
+				if col.IsSigned() {
+					val = *(arg.(*int64))
+				}else{
+					val = *(arg.(*uint64))
+				}
+			case defines.MYSQL_TYPE_VARCHAR,defines.MYSQL_TYPE_VAR_STRING,defines.MYSQL_TYPE_STRING:
+				val = *(arg.(*string))
+			case defines.MYSQL_TYPE_FLOAT:
+				val = *(arg.(*float32))
+			case defines.MYSQL_TYPE_DOUBLE:
+				val = *(arg.(*float64))
+			default:
+				require.NoError(t, fmt.Errorf("unsupported type %v",col.ColumnType()))
+			}
+
+			ret := false
+
+			switch col.ColumnType() {
+			case defines.MYSQL_TYPE_FLOAT:
+				a := val.(float32)
+				b := want_data[i].(float32)
+				c := a - b
+				d := math.Abs(float64(c))
+				ret = d <= math.SmallestNonzeroFloat32
+			case defines.MYSQL_TYPE_DOUBLE:
+				a := val.(float64)
+				b := want_data[i].(float64)
+				c := a - b
+				d := math.Abs(c)
+				ret = d <= math.SmallestNonzeroFloat64
+			default:
+				//check
+				ret = reflect.DeepEqual(val,want_data[i])
+			}
+
+			require.True(t, ret)
+		}
+
+		rowIdx++
+	}
+
+	err = rows.Err()
+	require.NoError(t, err)
+
+	require.True(t, rowIdx == mrs.GetRowCount())
+}
+
+func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResultsetCheck bool, query string, mrs *MysqlResultSet) {
+	rows, err := db.Query(query)
+	if wantErr {
+		require.Error(t, err)
+		require.True(t, rows == nil)
+		return
+	}
+	require.NoError(t, err)
+
+	//column check
+	columns, err := rows.Columns()
+	require.NoError(t, err)
+	require.True(t, len(columns) == len(mrs.Columns))
+
+	//colType, err := rows.ColumnTypes()
+	//require.NoError(t, err)
+	//for i, ct := range colType {
+	//	fmt.Printf("column %d\n",i)
+	//	fmt.Printf("name %v \n",ct.Name())
+	//	l,o := ct.Length()
+	//	fmt.Printf("length %v %v \n",l,o)
+	//	p,s,o := ct.DecimalSize()
+	//	fmt.Printf("decimalsize %v %v %v \n",p,s,o)
+	//	fmt.Printf("scantype %v \n",ct.ScanType())
+	//	n,o := ct.Nullable()
+	//	fmt.Printf("nullable %v %v \n",n,o)
+	//	fmt.Printf("databaseTypeName %s \n",ct.DatabaseTypeName())
+	//}
+
+	values := make([][]byte,len(columns))
+
+	// rows.Scan wants '[]interface{}' as an argument, so we must copy the
+	// references into such a slice
+	// See http://code.google.com/p/go-wiki/wiki/InterfaceSlice for details
+	scanArgs := make([]interface{}, len(columns))
+	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+		scanArgs[i] = &values[i]
+	}
+
+	rowIdx := uint64(0)
+	for rows.Next() {
+		err = rows.Scan(scanArgs...)
+		require.NoError(t, err)
+
+		//fmt.Println(rowIdx)
+		//fmt.Println(mrs.GetRow(rowIdx))
+		//
+		//for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+		//	arg := scanArgs[i]
+		//	val := *(arg.(*[]byte))
+		//	fmt.Printf("%v ",val)
+		//}
+		//fmt.Println()
+
+		if !skipResultsetCheck {
+			for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+				arg := scanArgs[i]
+				val := *(arg.(*[]byte))
+
+				column, err := mrs.GetColumn(i)
+				require.NoError(t, err)
+
+				col, ok := column.(*MysqlColumn)
+				require.True(t, ok)
+
+				isNUll, err := mrs.ColumnIsNull(rowIdx,i)
+				require.NoError(t, err)
+
+				if isNUll {
+					require.True(t, val == nil)
+				}else{
+					var data []byte = nil
+					switch col.ColumnType() {
+					case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
+						value, err := mrs.GetInt64(rowIdx, i)
+						require.NoError(t, err)
+						if col.ColumnType() == defines.MYSQL_TYPE_YEAR {
+							if value == 0 {
+								data = append(data, []byte("0000")...)
+							} else {
+								data = strconv.AppendInt(data, value, 10)
+							}
+						} else {
+							data = strconv.AppendInt(data, value,10)
+						}
+
+					case defines.MYSQL_TYPE_LONGLONG:
+						if uint32(col.Flag())&defines.UNSIGNED_FLAG != 0 {
+							value, err := mrs.GetUint64(rowIdx, i)
+							require.NoError(t, err)
+							data = strconv.AppendUint(data, value,10)
+						} else {
+							value, err := mrs.GetInt64(rowIdx, i)
+							require.NoError(t, err)
+							data = strconv.AppendInt(data, value,10)
+						}
+					case defines.MYSQL_TYPE_VARCHAR,defines.MYSQL_TYPE_VAR_STRING,defines.MYSQL_TYPE_STRING:
+						value, err := mrs.GetString(rowIdx, i)
+						require.NoError(t, err)
+						data = []byte(value)
+					case defines.MYSQL_TYPE_FLOAT:
+						value, err := mrs.GetFloat64(rowIdx, i)
+						require.NoError(t, err)
+						data = strconv.AppendFloat(data, value, 'f', 4, 32)
+					case defines.MYSQL_TYPE_DOUBLE:
+						value, err := mrs.GetFloat64(rowIdx, i)
+						require.NoError(t, err)
+						data = strconv.AppendFloat(data, value, 'f', 4, 64)
+					default:
+						require.NoError(t, fmt.Errorf("unsupported type %v",col.ColumnType()))
+					}
+					//check
+					ret := reflect.DeepEqual(data,val)
+					//fmt.Println(i)
+					//fmt.Println(data)
+					//fmt.Println(val)
+					require.True(t, ret)
+				}
+			}
+		}
+
+		rowIdx++
+	}
+
+	require.True(t, rowIdx == mrs.GetRowCount())
+
+	err = rows.Err()
+	require.NoError(t, err)
+}
+
+func do_query_resp_states(t *testing.T, db *sql.DB, wantErr bool, query string) {
+	rows, err := db.Query(query)
+	if wantErr {
+		require.Error(t, err)
+		require.True(t, rows == nil)
+	}else{
+		require.NoError(t, err)
+		for rows.Next() {
+			//never come here
+			require.True(t, false)
+		}
+		err = rows.Err()
+		require.NoError(t, err)
+	}
 }

@@ -38,7 +38,17 @@ func (d *database) Relation(name string) (engine.Relation, error) {
 
 }
 
-func (d *database) Delete(_ uint64, _ string) error {
+func (d *database) Delete(_ uint64, name string) error {
+	handle := fmt.Sprintf("%s.%s", d.id, name)
+	var remove []string
+	for _, k := range d.db.Keys() {
+		if strings.HasPrefix(k,handle) {
+			remove = append(remove,k)
+		}
+	}
+	for _, r := range remove {
+		d.db.Del(r)
+	}
 	return nil
 }
 
