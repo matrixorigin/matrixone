@@ -17,9 +17,9 @@
 
 #include "textflag.h"
 
-// func crc32HashAsm(data []byte, tail uint64) uint64
+// func crc32BytesHashAsm(data []byte) uint64
 // Requires: SSE4.2
-TEXT ·crc32HashAsm(SB), NOSPLIT, $0-40
+TEXT ·crc32BytesHashAsm(SB), NOSPLIT, $0-32
 	MOVQ data_base+0(FP), AX
 	MOVQ AX, DX
 	ADDQ data_len+8(FP), DX
@@ -27,13 +27,22 @@ TEXT ·crc32HashAsm(SB), NOSPLIT, $0-40
 
 loop:
 	CMPQ   AX, DX
-	JGE    tailLoop
+	JGE    looptail
 	CRC32Q (AX), CX
 	ADDQ   $8, AX
 	JMP    loop
 
-tailLoop:
-	MOVQ   tail+24(FP), AX
-	CRC32Q AX, CX
-	MOVQ   CX, ret+32(FP)
+looptail:
+	JE     done
+	CRC32Q -8(DX), CX
+
+done:
+	MOVQ CX, ret+24(FP)
+	RET
+
+// func crc32IntHashAsm(data uint64) uint64
+// Requires: SSE4.2
+TEXT ·crc32IntHashAsm(SB), NOSPLIT, $0-16
+	CRC32Q data+0(FP), AX
+	MOVQ   AX, ret+8(FP)
 	RET
