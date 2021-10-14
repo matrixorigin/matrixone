@@ -320,6 +320,7 @@ func TestIOPackageImpl_ReadPacket(t *testing.T) {
 		defer wg.Done()
 		echoServer(echoHandler, nil, encoder, decoder)
 	}()
+
 	to := NewTimeout(1 * time.Minute,false)
 	for isClosed() && !to.isTimeout(){}
 	time.Sleep(5 * time.Second)
