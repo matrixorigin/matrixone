@@ -322,7 +322,7 @@ func TestIOPackageImpl_ReadPacket(t *testing.T) {
 	}()
 	to := NewTimeout(1 * time.Minute,false)
 	for isClosed() && !to.isTimeout(){}
-	time.Sleep(15 * time.Second)
+	time.Sleep(5 * time.Second)
 	echoClient()
 	setServer(1)
 	wg.Wait()
