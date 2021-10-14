@@ -284,7 +284,7 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	to := NewTimeout(1 * time.Minute,false)
 	for isClosed() && !to.isTimeout(){}
 
-	time.Sleep(time.Second * 5)
+	time.Sleep(time.Second * 15)
 	db := open_db(t, 6001)
 	close_db(t,db)
 
@@ -1115,7 +1115,7 @@ func TestMysqlResultSet(t *testing.T){
 	to := NewTimeout(1 * time.Minute,false)
 	for isClosed() && !to.isTimeout(){}
 
-	time.Sleep(time.Second * 5)
+	time.Sleep(time.Second * 15)
 	db := open_db(t, 6001)
 
 	do_query_resp_resultset(t, db, false, false, "tiny", makeMysqlTinyIntResultSet(false))
