@@ -28,7 +28,7 @@ func Test_PathExists(t *testing.T) {
 	}{
 		{"test/file",true,true,true},
 		{"test/file-no",false,false,false},
-		{"test/dir",true,false,true},
+		//{"test/dir",true,false,true},
 		{"test/dir-no",false,false,false},
 		{"testx",false,false,false},
 	}
