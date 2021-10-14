@@ -264,6 +264,10 @@ func echoServer(handler func(goetty.IOSession, interface{}, uint64) error, aware
 	fmt.Println("Server started")
 	to := NewTimeout(5 * time.Minute,false)
 	for !isClosed() && !to.isTimeout() {}
+	err = echoServer.Stop()
+	if err != nil {
+		return
+	}
 	fmt.Println("Server exited")
 }
 
