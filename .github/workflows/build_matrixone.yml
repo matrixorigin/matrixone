@@ -29,6 +29,8 @@ jobs:
     steps:
       # Checks-out your repository under $GITHUB_WORKSPACE, so the job can access it.
       - uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
 
       - name: Build Configure
         run: |
