@@ -20,6 +20,7 @@ import (
 	"github.com/fagongzi/goetty"
 	"github.com/fagongzi/goetty/codec"
 	"github.com/fagongzi/goetty/codec/simple"
+	"matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -246,7 +247,10 @@ func echoHandler(session goetty.IOSession, msg interface{}, received uint64) err
 func echoServer(handler func(goetty.IOSession, interface{}, uint64) error, aware goetty.IOSessionAware,
 	encoder codec.Encoder, decoder codec.Decoder) {
 	echoServer, err := goetty.NewTCPApplication("127.0.0.1:6001", handler,
-		goetty.WithAppSessionOptions(goetty.WithCodec(encoder, decoder)),
+		goetty.WithAppSessionOptions(
+			goetty.WithCodec(encoder, decoder),
+			goetty.WithLogger(logutil.GetGlobalLogger()),
+			goetty.WithEnableAsyncWrite(64)),
 		goetty.WithAppSessionAware(aware))
 	if err != nil {
 		panic(err)
@@ -258,7 +262,12 @@ func echoServer(handler func(goetty.IOSession, interface{}, uint64) error, aware
 	setServer(0)
 
 	fmt.Println("Server started")
-	for !isClosed() {}
+	to := NewTimeout(5 * time.Minute,false)
+	for !isClosed() && !to.isTimeout() {}
+	err = echoServer.Stop()
+	if err != nil {
+		return
+	}
 	fmt.Println("Server exited")
 }
 
@@ -311,7 +320,10 @@ func TestIOPackageImpl_ReadPacket(t *testing.T) {
 		defer wg.Done()
 		echoServer(echoHandler, nil, encoder, decoder)
 	}()
-	time.Sleep(100 * time.Millisecond)
+
+	to := NewTimeout(1 * time.Minute,false)
+	for isClosed() && !to.isTimeout(){}
+	time.Sleep(5 * time.Second)
 	echoClient()
 	setServer(1)
 	wg.Wait()
