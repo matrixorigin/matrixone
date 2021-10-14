@@ -248,7 +248,6 @@ func TestReadStringLenEnc(t *testing.T) {
 func TestMysqlClientProtocol_Handshake(t *testing.T) {
 	//client connection method: mysql -h 127.0.0.1 -P 6001 --default-auth=mysql_native_password -uroot -p
 	//client connection method: mysql -h 127.0.0.1 -P 6001 -udump -p
-	//echoServer(handshakeHandler)
 
 	//before anything using the configuration
 	if err := config.GlobalSystemVariables.LoadInitialValues(); err != nil {
@@ -282,7 +281,10 @@ func TestMysqlClientProtocol_Handshake(t *testing.T) {
 		echoServer(rm.Handler, rm, encoder, decoder)
 	}()
 
-	time.Sleep(time.Millisecond * 10)
+	to := NewTimeout(1 * time.Minute,false)
+	for isClosed() && !to.isTimeout(){}
+
+	time.Sleep(time.Second * 15)
 	db := open_db(t, 6001)
 	close_db(t,db)
 
@@ -1110,7 +1112,10 @@ func TestMysqlResultSet(t *testing.T){
 		echoServer(trm.resultsetHandler, trm, encoder, decoder)
 	}()
 
-	time.Sleep(time.Millisecond * 10)
+	to := NewTimeout(1 * time.Minute,false)
+	for isClosed() && !to.isTimeout(){}
+
+	time.Sleep(time.Second * 15)
 	db := open_db(t, 6001)
 
 	do_query_resp_resultset(t, db, false, false, "tiny", makeMysqlTinyIntResultSet(false))
@@ -1143,11 +1148,14 @@ func TestMysqlResultSet(t *testing.T){
 }
 
 func open_db(t *testing.T, port int) *sql.DB {
-	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/",port)
+	dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?readTimeout=10s&timeout=10s&writeTimeout=10s",port)
 	db, err := sql.Open("mysql", dsn)
 	if err != nil {
 		require.NoError(t, err)
 	}else {
+		db.SetConnMaxLifetime(time.Minute * 3)
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
 		time.Sleep(time.Millisecond * 100)
 
 		//ping opens the connection
