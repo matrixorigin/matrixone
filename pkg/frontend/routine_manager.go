@@ -84,7 +84,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		return errors.New("routine does not exist")
 	}
 
-	protocol := routine.protocol
+	protocol := routine.protocol.(*MysqlProtocolImpl)
 
 	packet, ok := msg.(*Packet)
 	protocol.sequenceId = uint8(packet.SequenceID + 1)
@@ -113,11 +113,12 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 
 	// finish handshake process
 	if !routine.established {
-		fmt.Println("HANDLE HANDSHAKE")
-		err := routine.handleHandshake(payload)
+		logutil.Infof("HANDLE HANDSHAKE")
+		err := protocol.handleHandshake(payload)
 		if err != nil {
 			return err
 		}
+		routine.Establish(protocol)
 		return nil
 	}
 

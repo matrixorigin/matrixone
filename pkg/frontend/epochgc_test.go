@@ -194,7 +194,7 @@ mysql> source pathto/xxx.sql
 //		srv.Register(hp.Process)
 //		go srv.Run()
 //
-//		svr, err := get_server(testConfigFile, testPorts[i], pcis[i], eng)
+//		svr, err := getMOserver(testConfigFile, testPorts[i], pcis[i], eng)
 //		if err != nil {
 //			t.Error(err)
 //			return
@@ -244,7 +244,7 @@ func Test_Multi_Server(t *testing.T) {
 	var svs []*MOServer = nil
 	ppu := NewPDCallbackParameterUnit(5, 20, 20, 20, false, 10000)
 	for _, port := range testPorts {
-		sv, err := get_server(testConfigFile, port, NewPDCallbackImpl(ppu), nil)
+		sv, err := getMOserver(testConfigFile, port, NewPDCallbackImpl(ppu), nil)
 		if err != nil {
 			t.Error(err)
 			return
