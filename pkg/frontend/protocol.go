@@ -130,6 +130,9 @@ type Protocol interface {
 
 	// SetRoutine sets RoutineInterface
 	SetRoutine(*Routine)
+
+	// Quit
+	Quit()
 }
 
 type ProtocolImpl struct{
@@ -160,7 +163,7 @@ func (cpi *ProtocolImpl) GetLock() sync.Locker {
 	return &cpi.lock
 }
 
-func (mp *MysqlProtocol) GetRequest(payload []byte) *Request {
+func (mp *MysqlProtocolImpl) GetRequest(payload []byte) *Request {
 	req := &Request{
 		cmd:  int(payload[0]),
 		data: payload[1:],
@@ -169,7 +172,7 @@ func (mp *MysqlProtocol) GetRequest(payload []byte) *Request {
 	return req
 }
 
-func (mp *MysqlProtocol) SendResponse(resp *Response) error {
+func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 	mp.GetLock().Lock()
 	defer mp.GetLock().Unlock()
 

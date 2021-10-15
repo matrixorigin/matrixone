@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"fmt"
 	"github.com/fagongzi/goetty"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"matrixone/pkg/logutil"
@@ -28,7 +27,7 @@ import (
 // use the executor to handle requests, and response them.
 type Routine struct {
 	//protocol layer
-	protocol *MysqlProtocol
+	protocol MysqlProtocol
 
 	//execution layer
 	executor CmdExecutor
@@ -109,7 +108,7 @@ func (routine *Routine) Loop() {
 		}
 
 		if routine.ses.Pu.SV.GetRecordTimeElapsedOfSqlRequest() {
-			logutil.Infof("connection id %d , the time of handling the request %s", routine.io.ID(), time.Since(reqBegin).String())
+			logutil.Infof("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
 		}
 	}
 }
@@ -118,7 +117,9 @@ func (routine *Routine) Loop() {
 When the io is closed, the Quit will be called.
  */
 func (routine *Routine) Quit() {
-	_ = routine.io.Close()
+	if routine.io != nil {
+		_ = routine.io.Close()
+	}
 	close(routine.notifyChan)
 	if routine.executor != nil {
 		routine.executor.Close()
@@ -150,74 +151,15 @@ func (routine *Routine) ChangeDB(db string) error {
 	return nil
 }
 
-func (routine *Routine) handleHandshake(payload []byte) error {
-	if len(payload) < 2 {
-		return fmt.Errorf("received a broken response packet")
-	}
-
-	protocol := routine.protocol
-	var authResponse []byte
-	if capabilities, _, ok := protocol.io.ReadUint16(payload, 0); !ok {
-		return fmt.Errorf("read capabilities from response packet failed")
-	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
-		var resp41 response41
-		var ok bool
-		var err error
-		if ok, resp41, err = protocol.analyseHandshakeResponse41(payload); !ok {
-			return err
-		}
-
-		authResponse = resp41.authResponse
-		protocol.capability = DefaultCapability & resp41.capabilities
-
-		if nameAndCharset, ok := collationID2CharsetAndName[int(resp41.collationID)]; !ok {
-			return fmt.Errorf("get collationName and charset failed")
-		} else {
-			protocol.collationID = int(resp41.collationID)
-			protocol.collationName = nameAndCharset.collationName
-			protocol.charset = nameAndCharset.charset
-		}
-
-		protocol.maxClientPacketSize = resp41.maxPacketSize
-		protocol.username = resp41.username
-		routine.user = resp41.username
-		routine.db = resp41.database
-	} else {
-		var resp320 response320
-		var ok bool
-		var err error
-		if ok, resp320, err = protocol.analyseHandshakeResponse320(payload); !ok {
-			return err
-		}
-
-		authResponse = resp320.authResponse
-		protocol.capability = DefaultCapability & resp320.capabilities
-		protocol.collationID = int(Utf8mb4CollationID)
-		protocol.collationName = "utf8mb4_general_ci"
-		protocol.charset = "utf8mb4"
-
-		protocol.maxClientPacketSize = resp320.maxPacketSize
-		protocol.username = resp320.username
-		routine.user = resp320.username
-		routine.db = resp320.database
-	}
-
-	if err := protocol.authenticateUser(authResponse); err != nil {
-		fail := errorMsgRefer[ER_ACCESS_DENIED_ERROR]
-		_ = protocol.sendErrPacket(fail.errorCode, fail.sqlStates[0], "Access denied for user")
-		return err
-	}
-
-	err := protocol.sendOKPacket(0, 0, 0, 0, "")
-	if err != nil {
-		return err
-	}
+func (routine *Routine) Establish(proto MysqlProtocol) {
+	pro := proto.(*MysqlProtocolImpl)
+	routine.user = pro.username
+	routine.db = pro.database
 	logutil.Infof("SWITCH ESTABLISHED to true")
 	routine.established = true
-	return nil
 }
 
-func NewRoutine(rs goetty.IOSession, protocol *MysqlProtocol, executor CmdExecutor, session *Session) *Routine {
+func NewRoutine(rs goetty.IOSession, protocol MysqlProtocol, executor CmdExecutor, session *Session) *Routine {
 	ri := &Routine{
 		protocol:    protocol,
 		executor:    executor,

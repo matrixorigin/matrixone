@@ -5,6 +5,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"io/ioutil"
 	"matrixone/pkg/defines"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -125,6 +126,101 @@ func TestMysqlCmdExecutor(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 	close_db(t,db)
+}
+
+func TestChannelProtocol(t *testing.T) {
+	cps, err := NewChannelProtocolStub()
+	require.NoError(t, err)
+
+	err = StartChannelProtocolStub(cps)
+	require.NoError(t, err)
+
+	defer func(cps *ChannelProtocolStub) {
+		err := CloseChannelProtocolStub(cps)
+		if err != nil {
+			require.NoError(t,err)
+		}
+	}(cps)
+
+	cpRt := cps.cps.CreateRoutine()
+	cpClient := NewChannelProtocolClient(cpRt)
+
+	cpClient.SendQuery("show databases")
+
+	//resultset
+	mrs := cpClient.GetResultSet()
+	db := string(mrs.Data[0][0].([]byte))
+
+	cpClient.SendQuery(fmt.Sprintf("use %s",db))
+	cpClient.GetStateOK()
+
+	cpClient.SendQuery("show tables")
+	showtable := cpClient.GetResultSet()
+
+	for _, dr := range showtable.Data {
+		tab := string(dr[0].([]byte))
+		//result set is wrong ?
+		fmt.Println(tab)
+	}
+
+	cpClient.SendQuery("create database T")
+	cpClient.GetStateOK()
+
+	cpClient.SendQuery("use T")
+	cpClient.GetStateOK()
+
+	cpClient.SendQuery("SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'")
+	cpClient.GetStateOK()
+
+	cpClient.SendQuery("SET @@session.autocommit = OFF")
+	cpClient.GetStateOK()
+
+	cpClient.SendQuery("create table A(a int)")
+	cpClient.GetStateOK()
+
+	//duplicate create table A
+	cpClient.SendQuery("create table A(a int)")
+	cpClient.GetState(CP_ERR)
+
+	cpClient.SendQuery("insert into A values (1),(1),(1),(1),(1)")
+	cpClient.GetStateOK()
+
+	cpClient.SendQuery("select * from A")
+	tabA := cpClient.GetResultSet()
+	require.True(t, tabA.GetColumnCount() == 1)
+	require.True(t, tabA.GetRowCount() == 5)
+	for _, dr := range tabA.Data {
+		//fmt.Println(dr[0])
+		require.True(t, reflect.DeepEqual(dr[0],int32(1)))
+	}
+
+	tableFormat := "create table %s (a tinyint,b tinyint unsigned," +
+		"c smallint, d smallint unsigned, " +
+		"e int, f int unsigned," +
+		"g bigint,h bigint unsigned," +
+		"i float, j double ," +
+		"k char(100),l varchar(100)" +
+		")"
+
+	//create table B
+	tableB := fmt.Sprintf(tableFormat,"B")
+	cpClient.SendQuery(tableB)
+	cpClient.GetStateOK()
+
+	//insert into B values ...
+	values1,mrs1 := MakeValues_insert_1(100)
+	insertFormat := "insert into %s values"
+	insertB := fmt.Sprintf(insertFormat,"B") + values1
+
+	cpClient.SendQuery(insertB)
+	cpClient.GetStateOK()
+
+	check_resultset(t,cpClient,false,"select * from B",mrs1)
+
+	cpClient.SendRequest(COM_QUIT,nil)
+
+	//close client
+	cps.cps.CloseRoutine(cpRt.getConnID())
 }
 
 func NewColumnDef_string(name string, colType uint8) *MysqlColumn {

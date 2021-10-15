@@ -14,6 +14,7 @@ require (
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.2
 	github.com/google/btree v1.0.1
+	github.com/huandu/go-clone v1.3.0
 	github.com/matrixorigin/matrixcube v0.1.0
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.5

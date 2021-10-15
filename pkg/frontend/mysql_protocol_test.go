@@ -74,7 +74,7 @@ func NewTestRoutineManager(pu *config.ParameterUnit) *TestRoutineManager {
 }
 
 func TestReadIntLenEnc(t *testing.T) {
-	var intEnc MysqlProtocol
+	var intEnc MysqlProtocolImpl
 	var data = make([]byte, 24)
 	var cases = [][]uint64{
 		{0, 123, 250},
@@ -102,7 +102,7 @@ func TestReadIntLenEnc(t *testing.T) {
 }
 
 func TestReadCountOfBytes(t *testing.T) {
-	var client MysqlProtocol
+	var client MysqlProtocolImpl
 	var data = make([]byte, 24)
 	var length = 10
 	for i := 0; i < length; i++ {
@@ -136,7 +136,7 @@ func TestReadCountOfBytes(t *testing.T) {
 }
 
 func TestReadStringFix(t *testing.T) {
-	var client MysqlProtocol
+	var client MysqlProtocolImpl
 	var data = make([]byte, 24)
 	var length = 10
 	var s = "haha, test read string fix function"
@@ -181,7 +181,7 @@ func TestReadStringFix(t *testing.T) {
 }
 
 func TestReadStringNUL(t *testing.T) {
-	var client MysqlProtocol
+	var client MysqlProtocolImpl
 	var data = make([]byte, 24)
 	var length = 10
 	var s = "haha, test read string fix function"
@@ -213,7 +213,7 @@ func TestReadStringNUL(t *testing.T) {
 }
 
 func TestReadStringLenEnc(t *testing.T) {
-	var client MysqlProtocol
+	var client MysqlProtocolImpl
 	var data = make([]byte, 24)
 	var length = 10
 	var s = "haha, test read string fix function"
@@ -864,7 +864,7 @@ func (tRM *TestRoutineManager)resultsetHandler(rs goetty.IOSession, msg interfac
 	routine, ok := tRM.clients[rs]
 	tRM.rwlock.RUnlock()
 
-	pro := routine.protocol
+	pro := routine.protocol.(*MysqlProtocolImpl)
 	if !ok {
 		return errors.New("routine does not exist")
 	}
@@ -895,10 +895,11 @@ func (tRM *TestRoutineManager)resultsetHandler(rs goetty.IOSession, msg interfac
 
 	// finish handshake process
 	if !routine.established {
-		err := routine.handleHandshake(payload)
+		err := pro.handleHandshake(payload)
 		if err != nil {
 			return err
 		}
+		routine.Establish(pro)
 		return nil
 	}
 
@@ -1470,4 +1471,53 @@ func do_query_resp_states(t *testing.T, db *sql.DB, wantErr bool, query string) 
 		err = rows.Err()
 		require.NoError(t, err)
 	}
+}
+
+func check_resultset(t *testing.T,cpc *ChannelProtocolClient,skipResultsetCheck bool, query string, mrs *MysqlResultSet) {
+	cpc.SendQuery("select * from B")
+	mrs_resp := cpc.GetResultSet()
+
+	rowIdx := uint64(0)
+	for _,row := range mrs_resp.Data {
+		//fmt.Println(row)
+		//fmt.Println(mrs.GetRow(rowIdx))
+		if !skipResultsetCheck {
+			for i := uint64(0); i < mrs.GetColumnCount(); i++ {
+				val := row[i]
+
+				column, err := mrs.GetColumn(i)
+				require.NoError(t, err)
+
+				col, ok := column.(*MysqlColumn)
+				require.True(t, ok)
+
+				isNUll, err := mrs.ColumnIsNull(rowIdx,i)
+				require.NoError(t, err)
+
+				if isNUll {
+					require.True(t, val == nil)
+				}else{
+					var value interface{}
+					value, err = mrs.GetValue(rowIdx,i)
+
+					switch col.ColumnType() {
+					case defines.MYSQL_TYPE_VARCHAR,defines.MYSQL_TYPE_VAR_STRING,defines.MYSQL_TYPE_STRING:
+						val, err = mrs_resp.GetString(rowIdx, i)
+						require.NoError(t, err)
+					}
+
+					//check
+					ret := reflect.DeepEqual(value,val)
+					//fmt.Println(i)
+					//fmt.Println(value)
+					//fmt.Println(val)
+					require.True(t, ret)
+				}
+			}
+		}
+
+		rowIdx++
+	}
+
+	require.True(t, rowIdx == mrs.GetRowCount())
 }

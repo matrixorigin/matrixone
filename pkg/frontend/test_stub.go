@@ -176,32 +176,15 @@ type FrontendStub struct{
 }
 
 func NewFrontendStub() (*FrontendStub,error) {
-	e, err := testutil.NewTestEngine()
+	e,srv,err := getMemEngineAndComputationEngine()
 	if err != nil {
-		return nil, err
-	}
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	proc := process.New(gm)
-	{
-		proc.Id = "0"
-		proc.Lim.Size = 10 << 32
-		proc.Lim.BatchRows = 10 << 32
-		proc.Lim.PartitionRows = 10 << 32
-		proc.Refer = make(map[string]uint64)
+		return nil,err
 	}
 
-	srv, err := testutil.NewTestServer(e, proc)
-	if err != nil {
-		return nil, err
-	}
-
-	go srv.Run()
-
-	ppu := NewPDCallbackParameterUnit(1, 1, 1, 1, false, 10000)
-	pci := NewPDCallbackImpl(ppu)
-	mo, err := get_server("./test/system_vars_config.toml",
+	pci := getPCI()
+	mo, err := getMOserver("./test/system_vars_config.toml",
 		6002, pci , e)
+
 	if err != nil {
 		return nil, err
 	}
@@ -238,7 +221,48 @@ func CloseFrontendStub(fs *FrontendStub) error {
 var testPorts = []int{6002, 6003, 6004}
 var testConfigFile = "./test/system_vars_config.toml"
 
-func get_server(configFile string, port int, pd *PDCallbackImpl, eng engine.Engine) (*MOServer, error) {
+func getMemEngineAndComputationEngine()(engine.Engine,rpcserver.Server,error) {
+	e, err := testutil.NewTestEngine()
+	if err != nil {
+		return nil,nil, err
+	}
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+
+	srv, err := testutil.NewTestServer(e, proc)
+	if err != nil {
+		return nil,nil, err
+	}
+
+	go srv.Run()
+	return e,srv,err
+}
+
+func getMOserver(configFile string, port int, pd *PDCallbackImpl, eng engine.Engine) (*MOServer, error) {
+	pu,err := getParameterUnit(configFile,eng)
+	if err != nil {
+		return nil,err
+	}
+
+	address := fmt.Sprintf("%s:%d", pu.SV.GetHost(), port)
+	sver := NewMOServer(address, pu, pd)
+	return sver, nil
+}
+
+func getPCI()(*PDCallbackImpl) {
+	ppu := NewPDCallbackParameterUnit(1, 1, 1, 1, false, 10000)
+	return NewPDCallbackImpl(ppu)
+}
+
+func getParameterUnit(configFile string, eng engine.Engine) (*mo_config.ParameterUnit, error) {
 	sv := &mo_config.SystemVariables{}
 
 	//before anything using the configuration
@@ -252,22 +276,53 @@ func get_server(configFile string, port int, pd *PDCallbackImpl, eng engine.Engi
 		return nil, err
 	}
 
-	fmt.Println("Shutdown The *MOServer With Ctrl+C | Ctrl+\\.")
-
 	hostMmu := host.New(sv.GetHostMmuLimitation())
 	mempool := mempool.New( /*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/ )
 
 	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
 
-	//test storage engine
-	storageEngine := eng
+	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, metadata.Nodes{}, nil)
 
-	//test cluster nodes
-	clusterNodes := metadata.Nodes{}
+	return pu,nil
+}
 
-	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, storageEngine, clusterNodes, nil)
+type ChannelProtocolStub struct {
+	eng engine.Engine
+	srv rpcserver.Server
+	pci *PDCallbackImpl
+	pu *mo_config.ParameterUnit
+	cps *ChannelProtocolServer
+	kvForEpochgc storage.Storage
+}
 
-	address := fmt.Sprintf("%s:%d", sv.GetHost(), port)
-	sver := NewMOServer(address, pu, pd)
-	return sver, nil
+func NewChannelProtocolStub () (*ChannelProtocolStub,error) {
+	e,srv,err := getMemEngineAndComputationEngine()
+	if err != nil {
+		return nil,err
+	}
+
+	pci := getPCI()
+	pu, err := getParameterUnit(testConfigFile,e)
+	if err != nil {
+		return nil,err
+	}
+
+	cps := NewChannelProtocolServer(pu,pci)
+
+	return &ChannelProtocolStub{
+		eng: e,
+		srv: srv,
+		pci: pci,
+		pu:  pu,
+		cps: cps,
+		kvForEpochgc: storage.NewTestStorage(),
+	},nil
+}
+
+func StartChannelProtocolStub(cps *ChannelProtocolStub) error {
+	return cps.pci.Start(cps.kvForEpochgc)
+}
+
+func CloseChannelProtocolStub(cps *ChannelProtocolStub) error {
+	return cps.pci.Stop(cps.kvForEpochgc)
 }

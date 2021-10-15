@@ -86,7 +86,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 
 	begin := time.Now()
 
-	proto := rt.GetClientProtocol().(*MysqlProtocol)
+	proto := rt.GetClientProtocol().(MysqlProtocol)
 
 	//Create a new temporary resultset per pipeline thread.
 	mrs := &MysqlResultSet{}
@@ -459,7 +459,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 func (mce *MysqlCmdExecutor) handleSelectDatabase(sel *tree.Select) error {
 	var err error = nil
 	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
 
 	col := new(MysqlColumn)
 	col.SetName("DATABASE()")
@@ -486,7 +486,7 @@ handle "SELECT @@max_allowed_packet"
 func (mce *MysqlCmdExecutor) handleMaxAllowedPacket() error {
 	var err error = nil
 	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
 
 	col := new(MysqlColumn)
 	col.SetColumnType(defines.MYSQL_TYPE_LONG)
@@ -514,7 +514,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	var err error = nil
 	routine := mce.routine
 	//ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
 
 	logutil.Infof("+++++load data")
 
@@ -593,12 +593,12 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 }
 
 /*
-handler cmd CMD_FIELD_LIST
+handle cmd CMD_FIELD_LIST
  */
 func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	var err error = nil
 	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
 
 	db := mce.routine.db
 	if db == "" {
@@ -661,11 +661,24 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	return err
 }
 
+/*
+handle setvar
+ */
+func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
+	var err error = nil
+	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
+
+	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
+	if err = proto.SendResponse(resp); err != nil {
+		return fmt.Errorf("routine send response failed. error:%v ", err)
+	}
+	return nil
+}
 
 //execute query
 func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	ses := mce.routine.GetSession()
-	proto := mce.routine.GetClientProtocol().(*MysqlProtocol)
+	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
 	pdHook := mce.routine.GetPDCallback().(*PDCallbackImpl)
 	statementCount := uint64(1)
 
@@ -739,7 +752,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			switch stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
-				*tree.Use:
+				*tree.Use,*tree.SetVar:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
@@ -766,6 +779,12 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 		case *tree.Load:
 			selfHandle = true
 			err = mce.handleLoadData(st)
+			if err != nil {
+				return err
+			}
+		case *tree.SetVar:
+			selfHandle = true
+			err = mce.handleSetVar(st)
 			if err != nil {
 				return err
 			}
