@@ -19,33 +19,31 @@
 
 // func crc32BytesHashAsm(data []byte) uint64
 // Requires: CRC32
-TEXT ·crc32HashAsm(SB), NOSPLIT, $0-32
-	MOVD data_base+0(FP), R9
-	MOVD data_len+8(FP), R11
-	MOVD R9, R13
-	ADD  R11, R13
-	MOVD $-1, R11
+TEXT ·crc32BytesHashAsm(SB), NOSPLIT, $0-32
+	MOVD    data_base+0(FP), R0
+	MOVD    data_len+8(FP), R1
+	MOVD    $-1, R2
+	CRC32CX R1, R2
+	ADD     R0, R1
+	SUB     $8, R1
 
 loop:
-	CMPQ    R9, R13
-	BGE     looptail
-	MOVD.P  8(R9), R10
-	CRC32CX R10, R11
+	CMP     R0, R1
+	BLE     done
+	MOVD.P  8(R0), R3
+	CRC32CX R3, R2
 	JMP     loop
 
-looptail:
-	BE      done
-	MOVD    -8(R13), R10
-	CRC32CX R10, R11
-
 done:
-	MOVD    R11, ret+24(FP)
+	MOVD    (R1), R3
+	CRC32CX R3, R2
+	MOVD    R2, ret+24(FP)
 	RET
 
 // func crc32IntHashAsm(data uint64) uint64
-// Requires: SSE4.2
+// Requires: CRC32
 TEXT ·crc32IntHashAsm(SB), NOSPLIT, $0-16
-	MOVD    data_base+0(FP), R9
-	CRC32CX R9, R13
-	MOVD    R13, ret+8(FP)
+	MOVD    data_base+0(FP), R0
+	CRC32CX R0, R1
+	MOVD    R1, ret+8(FP)
 	RET
