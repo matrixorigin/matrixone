@@ -42,6 +42,7 @@ func TestBase1(t *testing.T) {
 	}
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(WORK_DIR)
+	defer opts.Meta.Catalog.Close()
 	schema := metadata.MockSchema(2)
 	createIdx := metadata.LogIndex{Id: metadata.SimpleBatchId(common.NextGlobalSeqNum())}
 	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, segCnt*blkCnt, &createIdx)

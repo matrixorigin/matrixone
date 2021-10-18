@@ -95,6 +95,7 @@ func TestUpgradeBlk(t *testing.T) {
 	t.Log(tableData.String())
 	t.Log(bufMgr.String())
 	opts.Scheduler.Stop()
+	opts.Meta.Catalog.Close()
 }
 
 func TestUpgradeSeg(t *testing.T) {
@@ -151,4 +152,5 @@ func TestUpgradeSeg(t *testing.T) {
 	t.Log(tableData.String())
 	// t.Log(bufMgr.String())
 	opts.Scheduler.Stop()
+	opts.Meta.Catalog.Close()
 }

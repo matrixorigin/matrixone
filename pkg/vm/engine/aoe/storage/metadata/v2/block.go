@@ -84,6 +84,18 @@ func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
 	return e
 }
 
+func (e *Block) View() (view *Block) {
+	e.RLock()
+	view = &Block{
+		BaseEntry:   BaseEntry{Id: e.Id, CommitInfo: e.CommitInfo},
+		Segment:     e.Segment,
+		Count:       e.Count,
+		SegmentedId: e.SegmentedId,
+	}
+	e.RUnlock()
+	return
+}
+
 // Safe
 func (e *Block) Less(o *Block) bool {
 	if e == nil {

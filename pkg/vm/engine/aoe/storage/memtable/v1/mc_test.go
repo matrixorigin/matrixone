@@ -43,7 +43,7 @@ func TestMutCollection(t *testing.T) {
 
 	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt)
 
-	capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
+	capacity := blockRows * 4 * uint64(colcnt) * 1 * 1 * 2
 	// capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
 	manager := NewManager(opts, nil)
 	fsMgr := ldio.NewManager(dir, false)
@@ -133,4 +133,5 @@ func TestMutCollection(t *testing.T) {
 	opts.Scheduler.Schedule(dropTblE)
 	err = dropTblE.WaitDone()
 	assert.Nil(t, err)
+	opts.Meta.Catalog.Close()
 }

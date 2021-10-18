@@ -97,8 +97,8 @@ func (n *MutableBlockNode) Flush() error {
 	if err != nil {
 		return err
 	}
-	meta := n.Meta
 	n.RUnlock()
+	meta := n.Meta.View()
 	if err := n.Flusher(n, data, meta, n.File); err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func (n *MutableBlockNode) Flush() error {
 func (n *MutableBlockNode) updateApplied(meta *metadata.Block) {
 	applied, ok := meta.CommitInfo.GetAppliedIndex()
 	if ok {
-		meta.SetSegmentedId(applied)
+		n.Meta.SetSegmentedId(applied)
 	}
 }
 
@@ -136,7 +136,7 @@ func (n *MutableBlockNode) unload() {
 		return
 	}
 	if ok := n.File.PreSync(uint32(n.Data.Length())); ok {
-		meta := n.Meta
+		meta := n.Meta.View()
 		if err := n.Flusher(n, n.Data, meta, n.File); err != nil {
 			panic(err)
 		}

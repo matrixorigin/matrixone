@@ -36,6 +36,7 @@ import (
 func TestMutableBlockNode(t *testing.T) {
 	dir := "/tmp/mutableblk"
 	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
+	opts.Meta.Catalog.Close()
 	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(30), uint64(4)
 	catalog := metadata.MockCatalog(dir, rowCount, blkCount)

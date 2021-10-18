@@ -67,4 +67,5 @@ func TestSegment(t *testing.T) {
 	assert.NotNil(t, segs[0].NewSummarizer())
 
 	assert.Equal(t, int64(rowCount*blkCnt*typeSize), segs[0].Size("mock_0"))
+	opts.Meta.Catalog.Close()
 }

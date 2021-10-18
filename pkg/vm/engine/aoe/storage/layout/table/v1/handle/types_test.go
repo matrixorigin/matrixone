@@ -50,6 +50,7 @@ func TestSnapshot(t *testing.T) {
 	tables := table.NewTables(new(sync.RWMutex), ldio.NewManager(dir, false), mtBufMgr, sstBufMgr, indexBufMgr)
 
 	catalog := opts.Meta.Catalog
+	defer catalog.Close()
 	tableMeta := metadata.MockTable(catalog, schema, uint64(blk_cnt*seg_cnt), nil)
 
 	tableData, err := tables.RegisterTable(tableMeta)

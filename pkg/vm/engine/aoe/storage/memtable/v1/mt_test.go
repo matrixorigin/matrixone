@@ -40,6 +40,7 @@ func TestManager(t *testing.T) {
 	dir := "/tmp/testmanager"
 	os.RemoveAll(dir)
 	opts := config.NewOptions(dir, config.CST_Customize, config.BST_S, config.SST_S)
+	defer opts.Meta.Catalog.Close()
 	manager := NewManager(opts, nil)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
@@ -85,6 +86,7 @@ func TestCollection(t *testing.T) {
 	capacity := blockRows * 4 * uint64(cols) * 2 * 2 * 4
 	blockCnt := uint64(4)
 	opts := config.NewCustomizedMetaOptions(WORK_DIR, config.CST_Customize, blockRows, blockCnt)
+	defer opts.Meta.Catalog.Close()
 
 	manager := NewManager(opts, nil)
 	fsMgr := ldio.NewManager(WORK_DIR, false)

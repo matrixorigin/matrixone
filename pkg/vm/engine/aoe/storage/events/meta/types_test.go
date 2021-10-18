@@ -32,6 +32,7 @@ var (
 func TestBasicOps(t *testing.T) {
 	os.RemoveAll(workDir)
 	opts := config.NewOptions(workDir, config.CST_Customize, config.BST_S, config.SST_S)
+	defer opts.Meta.Catalog.Close()
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 
 	now := time.Now()
