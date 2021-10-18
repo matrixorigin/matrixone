@@ -20,24 +20,23 @@
 // func crc32BytesHashAsm(data []byte) uint64
 // Requires: SSE4.2
 TEXT ·crc32BytesHashAsm(SB), NOSPLIT, $0-32
-	MOVQ data_base+0(FP), AX
-	MOVQ AX, DX
-	ADDQ data_len+8(FP), DX
-	MOVQ $-1, CX
+	MOVQ   data_base+0(FP), AX
+	MOVQ   data_len+8(FP), CX
+	MOVQ   $-1, DX
+	CRC32Q CX, DX
+	ADDQ   AX, CX
+	SUBQ   $8, CX
 
 loop:
-	CMPQ   AX, DX
-	JGE    looptail
-	CRC32Q (AX), CX
+	CMPQ   AX, CX
+	JGE    done
+	CRC32Q (AX), DX
 	ADDQ   $8, AX
 	JMP    loop
 
-looptail:
-	JE     done
-	CRC32Q -8(DX), CX
-
 done:
-	MOVQ CX, ret+24(FP)
+	CRC32Q (CX), DX
+	MOVQ   DX, ret+24(FP)
 	RET
 
 // func crc32IntHashAsm(data uint64) uint64
