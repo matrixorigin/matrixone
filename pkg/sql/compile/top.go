@@ -32,7 +32,7 @@ func (c *compile) compileTopOutput(o *top.Top, mp map[string]uint64) ([]*Scope, 
 			mp[g.Name]++
 		}
 	}
-	ss, err := c.compile(o.Prev.(*projection.Projection), mp)
+	ss, err := c.compileOutput(o.Prev.(*projection.Projection), mp)
 	if err != nil {
 		return nil, err
 	}
