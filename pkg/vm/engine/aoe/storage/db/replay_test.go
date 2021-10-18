@@ -112,8 +112,8 @@ func TestReplay1(t *testing.T) {
 	t.Log(rel.Rows())
 
 	time.Sleep(time.Duration(10) * time.Millisecond)
-	defer rel.Close()
-	defer inst.Close()
+	rel.Close()
+	inst.Close()
 }
 
 func mockSegFile(id common.ID, dir string, t *testing.T) string {
@@ -783,6 +783,7 @@ func TestReplay10(t *testing.T) {
 		return observer.removed[i] < observer.removed[j]
 	})
 	assert.Equal(t, toRemove, observer.removed)
+	catalog.Close()
 }
 
 func TestReplay11(t *testing.T) {
@@ -853,6 +854,7 @@ func TestReplay11(t *testing.T) {
 		return observer.removed[i] < observer.removed[j]
 	})
 	assert.Equal(t, toRemove, observer.removed)
+	catalog.Close()
 }
 
 func TestReplay12(t *testing.T) {
@@ -969,6 +971,6 @@ func TestReplay12(t *testing.T) {
 	t.Log(rel.Rows())
 
 	time.Sleep(time.Duration(10) * time.Millisecond)
-	defer rel.Close()
-	defer inst.Close()
+	rel.Close()
+	inst.Close()
 }

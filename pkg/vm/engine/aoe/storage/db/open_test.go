@@ -175,6 +175,7 @@ func TestMultiInstance(t *testing.T) {
 		opts := storage.Options{}
 		inst, _ := Open(d, &opts)
 		insts = append(insts, inst)
+		defer inst.Close()
 	}
 
 	info := adaptor.MockTableInfo(2)

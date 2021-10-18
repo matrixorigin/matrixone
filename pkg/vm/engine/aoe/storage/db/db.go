@@ -383,9 +383,9 @@ func (d *DB) Close() error {
 
 	d.Closed.Store(ErrClosed)
 	close(d.ClosedC)
-	d.Opts.Meta.Catalog.Close()
 	d.Scheduler.Stop()
 	d.stopWorkers()
+	d.Opts.Meta.Catalog.Close()
 	err := d.DBLocker.Close()
 	return err
 }
