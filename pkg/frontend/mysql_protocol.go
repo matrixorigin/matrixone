@@ -44,7 +44,7 @@ var DefaultCapability = CLIENT_LONG_PASSWORD |
 var DefaultClientConnStatus = SERVER_STATUS_AUTOCOMMIT
 
 const (
-	serverVersion               = "MatrixOne"
+	serverVersion               = "0.1.0"
 	clientProtocolVersion uint8 = 10
 
 	/**
