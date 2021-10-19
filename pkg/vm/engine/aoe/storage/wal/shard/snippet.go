@@ -51,6 +51,13 @@ func NewSnippet(shardId, id uint64, offset uint32) *snippet {
 	}
 }
 
+func NewSimpleSnippet(index *LogIndex) *snippet {
+	return &snippet{
+		shardId: index.ShardId,
+		indice:  []*LogIndex{index},
+	}
+}
+
 func (s *snippet) GetId() uint64 {
 	return s.id
 }

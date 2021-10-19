@@ -113,7 +113,16 @@ func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
 }
 
 func (mgr *manager) Checkpoint(v interface{}) {
-	mgr.EnqueueSnippet(v.(*snippet))
+	switch vv := v.(type) {
+	case *LogIndex:
+		snip := NewSimpleSnippet(vv)
+		mgr.EnqueueSnippet(snip)
+		return
+	case *snippet:
+		mgr.EnqueueSnippet(vv)
+		return
+	}
+	panic("not supported")
 }
 
 func (mgr *manager) EnqueueEntry(entry *Entry) error {

@@ -22,7 +22,6 @@ import (
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
-	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 type dropTableEvent struct {
@@ -65,9 +64,7 @@ func (e *dropTableEvent) Execute() error {
 	}
 	defer entry.Free()
 	entry.WaitDone()
-	snip := shard.NewSnippet(index.ShardId, uint64(0), uint32(0))
-	snip.Append(index)
-	defer e.Ctx.Opts.Wal.Checkpoint(snip)
+	defer e.Ctx.Opts.Wal.Checkpoint(index)
 	tbl := e.Ctx.Opts.Meta.Catalog.SimpleGetTableByName(e.reqCtx.TableName)
 	if tbl == nil {
 		return metadata.TableNotFoundErr

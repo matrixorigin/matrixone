@@ -75,6 +75,10 @@ func (id *LogBatchId) IsEnd() bool {
 	return id.Offset == id.Size-1
 }
 
+func (id *LogBatchId) IsSingle() bool {
+	return id.Size == 1
+}
+
 func (idx *ExternalIndex) IsSameBatch(o *ExternalIndex) bool {
 	return idx.Id.Id == o.Id.Id
 }

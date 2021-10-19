@@ -36,7 +36,6 @@ import (
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
-	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
 	"sync"
@@ -263,9 +262,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	}
 	defer entry.Free()
 	entry.WaitDone()
-	snip := shard.NewSnippet(index.ShardId, uint64(0), uint32(0))
-	snip.Append(index)
-	defer d.Wal.Checkpoint(snip)
+	defer d.Wal.Checkpoint(index)
 
 	tbl, err := d.Opts.Meta.Catalog.SimpleCreateTable(schema, index)
 	if err != nil {

@@ -79,6 +79,11 @@ func (p *proxy) LogIndex(index *LogIndex) {
 	p.logmu.Unlock()
 }
 
+func (p *proxy) AppendIndex(index *LogIndex) {
+	snip := NewSimpleSnippet(index)
+	p.AppendSnippet(snip)
+}
+
 func (p *proxy) AppendSnippet(snip *snippet) {
 	p.alumu.Lock()
 	defer p.alumu.Unlock()
@@ -127,6 +132,10 @@ func (p *proxy) Checkpoint() {
 	mask := roaring64.NewBitmap()
 	for _, snip := range snips {
 		snip.ForEach(func(id *IndexId) {
+			if id.IsSingle() {
+				mask.Add(id.Id)
+				return
+			}
 			node := p.indice[id.Id]
 			if node == nil {
 				node = newCommitEntry(id)
@@ -142,7 +151,7 @@ func (p *proxy) Checkpoint() {
 	p.logmu.Lock()
 	p.mask.Xor(mask)
 	p.logmu.Unlock()
-	logutil.Infof("Shard-%d: indice: %d %s", p.id, len(p.indice), time.Since(now))
+	logutil.Infof("Shard-%d: indice-%d, safeid-%d %s", p.id, len(p.indice), p.SafeId(), time.Since(now))
 }
 
 func (p *proxy) SafeId() uint64 {
