@@ -28,6 +28,7 @@ type LogBatchId struct {
 }
 
 type ExternalIndex struct {
+	ShardId  uint64
 	Id       LogBatchId
 	Start    uint64
 	Count    uint64
@@ -50,6 +51,16 @@ func CreateBatchId(id uint64, offset, size uint32) LogBatchId {
 		Offset: offset,
 		Size:   size,
 	}
+}
+
+func (id *LogBatchId) LT(o *LogBatchId) bool {
+	if id.Id < o.Id {
+		return true
+	}
+	if id.Id > o.Id {
+		return false
+	}
+	return id.Offset < o.Offset
 }
 
 func (id *LogBatchId) String() string {
@@ -85,6 +96,7 @@ func (idx *ExternalIndex) IsBatchApplied() bool {
 
 func (idx *ExternalIndex) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
+	buf.Write(encoding.EncodeUint64(idx.ShardId))
 	buf.Write(encoding.EncodeUint64(idx.Id.Id))
 	buf.Write(encoding.EncodeUint32(uint32(idx.Id.Offset)))
 	buf.Write(encoding.EncodeUint32(uint32(idx.Id.Size)))
@@ -99,6 +111,8 @@ func (idx *ExternalIndex) UnMarshal(data []byte) error {
 		return nil
 	}
 	buf := data
+	idx.ShardId = encoding.DecodeUint64(buf[:8])
+	buf = buf[8:]
 	idx.Id.Id = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
 	idx.Id.Offset = encoding.DecodeUint32(buf[:4])
