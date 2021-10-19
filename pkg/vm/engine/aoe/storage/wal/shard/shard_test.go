@@ -1,10 +1,14 @@
 package shard
 
 import (
+	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -166,4 +170,43 @@ func TestShardProxy(t *testing.T) {
 	now := time.Now()
 	shardProxy.Checkpoint()
 	t.Logf("safe id: %d, %s", shardProxy.SafeId(), time.Since(now))
+}
+
+func TestShardManager(t *testing.T) {
+	mgr := NewManager()
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(8)
+
+	ff := func(shardId uint64) func() {
+		return func() {
+			defer wg.Done()
+			producer := mockProducer{shardId: shardId}
+			consumer := newMockConsumer(shardId)
+			for k := 0; k < 2; k++ {
+				for i := 0; i < 2000; i++ {
+					bat := producer.nextLogBatch()
+					for _, index := range bat.indice {
+						entry := wal.GetEntry(common.NextGlobalSeqNum())
+						idx := *index
+						idx.ShardId = producer.shardId
+						entry.Payload = &idx
+						err := mgr.EnqueueEntry(entry)
+						assert.Nil(t, err)
+						entry.WaitDone()
+						entry.Free()
+						consumer.consume(index)
+					}
+				}
+				mgr.EnqueueSnippet(consumer.snippet)
+				consumer.reset()
+			}
+		}
+	}
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		pool.Submit(ff(uint64(i)))
+	}
+	wg.Wait()
+	mgr.Close()
 }

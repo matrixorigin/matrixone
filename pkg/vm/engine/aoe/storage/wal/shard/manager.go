@@ -3,6 +3,7 @@ package shard
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 )
@@ -18,7 +19,7 @@ var (
 )
 
 type manager struct {
-	mu            *sync.RWMutex
+	mu            sync.RWMutex
 	shards        map[uint64]*proxy
 	requestQueue  chan *Entry
 	requestCtx    context.Context
@@ -38,11 +39,11 @@ func NewManager() *manager {
 	mgr := &manager{
 		shards:       make(map[uint64]*proxy),
 		requestQueue: make(chan *Entry, QueueSize),
+		ckpQueue:     make(chan *snippet, QueueSize),
 	}
 	mgr.requestCtx, mgr.requestCancel = context.WithCancel(context.Background())
-	mgr.wg.Add(1)
-	mgr.requestWg.Add(1)
-	mgr.ckpWg.Add(1)
+	mgr.ckpCtx, mgr.ckpCancel = context.WithCancel(context.Background())
+	mgr.wg.Add(2)
 	go mgr.requestLoop()
 	go mgr.checkpointLoop()
 	return mgr
@@ -68,6 +69,7 @@ func (mgr *manager) checkpointLoop() {
 			}
 			cnt := len(entries)
 			mgr.onSnippets(entries)
+			entries = entries[:0]
 			mgr.ckpWg.Add(-1 * cnt)
 		}
 	}
@@ -93,9 +95,36 @@ func (mgr *manager) requestLoop() {
 			}
 			cnt := len(entries)
 			mgr.onEntries(entries)
+			entries = entries[:0]
 			mgr.requestWg.Add(-1 * cnt)
 		}
 	}
+}
+
+func (mgr *manager) EnqueueEntry(entry *Entry) error {
+	if atomic.LoadInt32(&mgr.closed) == int32(1) {
+		return errors.New("closed")
+	}
+	mgr.requestWg.Add(1)
+	if atomic.LoadInt32(&mgr.closed) == int32(1) {
+		mgr.requestWg.Done()
+		return errors.New("closed")
+	}
+	mgr.requestQueue <- entry
+	return nil
+}
+
+func (mgr *manager) EnqueueSnippet(snip *snippet) error {
+	if atomic.LoadInt32(&mgr.closed) == int32(1) {
+		return errors.New("closed")
+	}
+	mgr.ckpWg.Add(1)
+	if atomic.LoadInt32(&mgr.closed) == int32(1) {
+		mgr.ckpWg.Done()
+		return errors.New("closed")
+	}
+	mgr.ckpQueue <- snip
+	return nil
 }
 
 func (mgr *manager) GetShard(id uint64) (*proxy, error) {
@@ -134,7 +163,7 @@ func (mgr *manager) getOrAddShard(id uint64) (*proxy, error) {
 func (mgr *manager) onEntries(entries []*Entry) {
 	for _, entry := range entries {
 		mgr.logEntry(entry)
-		entry.Done()
+		entry.SetDone()
 	}
 }
 
@@ -150,7 +179,7 @@ func (mgr *manager) onSnippets(snips []*snippet) {
 		shardId := snip.GetShardId()
 		shard, err := mgr.GetShard(shardId)
 		if err != nil {
-			panic(err)
+			panic(fmt.Sprintf("%d: %s", shardId, err))
 		}
 		shard.AppendSnippet(snip)
 		shards[shardId] = shard
