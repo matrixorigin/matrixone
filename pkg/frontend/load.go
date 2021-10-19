@@ -1472,16 +1472,13 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 	wg.Wait()
 
-	//wait write to quit
-	handler.simdCsvWaitWriteRoutineToQuit.Wait()
-
 	/*
-	drain event channel
-	 */
+		drain event channel
+	*/
 	quit := false
 	for {
 		select {
-			case ne = <- handler.simdCsvNotiyEventChan:
+		case ne = <- handler.simdCsvNotiyEventChan:
 		default:
 			quit = true
 		}
@@ -1497,6 +1494,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 		}
 	}
+
+	//wait write to quit
+	handler.simdCsvWaitWriteRoutineToQuit.Wait()
 
 	//fmt.Printf("-----total row2col %s fillBlank %s toStorage %s\n",
 	//	handler.row2col,handler.fillBlank,handler.toStorage)
