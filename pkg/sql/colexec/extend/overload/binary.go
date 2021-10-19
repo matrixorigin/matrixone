@@ -17,6 +17,7 @@ package overload
 import (
 	"errors"
 	"fmt"
+	"math"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/process"
@@ -46,3 +47,44 @@ func binaryCheck(op int, arg0, arg1 types.T, val0, val1 types.T) bool {
 
 // BinOps contains the binary operations indexed by operation type.
 var BinOps = map[int][]*BinOp{}
+
+// opReturnType contains returnType of a binary expr, likes
+// int + float32, bigint + double, and so on.
+var opReturnType [][][]types.T
+
+// noRt signs no binOp and returnType for this operator.
+const noRt = math.MaxUint8
+
+// GetBinOpReturnType returns returnType from binary op and arg types.
+func GetBinOpReturnType(op int, lt, rt types.T) types.T {
+	t := opReturnType[op-Plus][lt][rt]
+	if t == noRt { // todo: just ignore and return any type to make error message normal.
+		t = lt
+	}
+	return t
+}
+
+// init function to init opReturnType from
+// plus.go / mult.go / minus.go / div.go / mod.go
+func init() {
+	ops := []int{Plus, Minus, Mult, Div, Mod}
+	opReturnType = make([][][]types.T, len(ops))
+	maxt := math.MaxUint8
+
+	for i, op := range ops {
+		opReturnType[i] = make([][]types.T, maxt)
+		for p := range opReturnType[i] {
+			opReturnType[i][p] = make([]types.T, maxt)
+		}
+
+		for l := range opReturnType[i] {
+			for r := range opReturnType[i][l] {
+				opReturnType[i][l][r] = noRt
+			}
+		}
+
+		for _, bo := range BinOps[op] {
+			opReturnType[i][bo.LeftType][bo.RightType] = bo.ReturnType
+		}
+	}
+}

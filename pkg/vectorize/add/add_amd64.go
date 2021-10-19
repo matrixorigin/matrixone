@@ -125,6 +125,24 @@ func init() {
 		Float32AddScalar = addScalarGeneric[float32]
 		Float64Add = addGeneric[float64]
 		Float64AddScalar = addScalarGeneric[float64]
+
+		// dt
+		Int8Int16Add = addDifferentGeneric[int16, int8]
+		Int8Int32Add = addDifferentGeneric[int32, int8]
+		Int8Int64Add = addDifferentGeneric[int64, int8]
+
+		Int16Int32Add = addDifferentGeneric[int32, int16]
+		Int16Int64Add = addDifferentGeneric[int64, int16]
+		Int32Int64Add = addDifferentGeneric[int64, int32]
+
+		Float32Float64Add = addDifferentGeneric[float64, float32]
+
+		Uint8Uint16Add = addDifferentGeneric[uint16, uint8]
+		Uint8Uint32Add = addDifferentGeneric[uint32, uint8]
+		Uint8Uint64Add = addDifferentGeneric[uint64, uint8]
+		Uint16Uint32Add = addDifferentGeneric[uint32, uint16]
+		Uint16Uint64Add = addDifferentGeneric[uint64, uint16]
+		Uint32Uint64Add = addDifferentGeneric[uint64, uint32]
 	}
 
 	Int8AddSels = addSelsGeneric[int8]
@@ -147,6 +165,23 @@ func init() {
 	Float32AddScalarSels = addScalarSelsGeneric[float32]
 	Float64AddSels = addSelsGeneric[float64]
 	Float64AddScalarSels = addScalarSelsGeneric[float64]
+
+	//dt
+	Int8Int16AddSels = addDifferentSelsGeneric[int16, int8]
+	Int8Int32AddSels = addDifferentSelsGeneric[int32, int8]
+	Int8Int64AddSels = addDifferentSelsGeneric[int64, int8]
+	Int16Int32AddSels = addDifferentSelsGeneric[int32, int16]
+	Int16Int64AddSels = addDifferentSelsGeneric[int64, int16]
+	Int32Int64AddSels = addDifferentSelsGeneric[int64, int32]
+
+	Float32Float64AddSels = addDifferentSelsGeneric[float64, float32]
+
+	Uint8Uint16AddSels = addDifferentSelsGeneric[uint16, uint8]
+	Uint8Uint32AddSels = addDifferentSelsGeneric[uint32, uint8]
+	Uint8Uint64AddSels = addDifferentSelsGeneric[uint64, uint8]
+	Uint16Uint32AddSels = addDifferentSelsGeneric[uint32, uint16]
+	Uint16Uint64AddSels = addDifferentSelsGeneric[uint64, uint16]
+	Uint32Uint64AddSels = addDifferentSelsGeneric[uint64, uint32]
 }
 
 func int8AddAvx2(xs, ys, rs []int8) []int8 {

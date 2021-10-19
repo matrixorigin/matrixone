@@ -60,20 +60,20 @@ var BinaryReturnTypes = map[int]func(Extend, Extend) types.T{
 	overload.Typecast: func(_ Extend, r Extend) types.T {
 		return r.ReturnType()
 	},
-	overload.Plus: func(l Extend, _ Extend) types.T {
-		return l.ReturnType()
+	overload.Plus: func(l Extend, r Extend) types.T {
+		return overload.GetBinOpReturnType(overload.Plus, l.ReturnType(), r.ReturnType())
 	},
-	overload.Minus: func(l Extend, _ Extend) types.T {
-		return l.ReturnType()
+	overload.Minus: func(l Extend, r Extend) types.T {
+		return overload.GetBinOpReturnType(overload.Plus, l.ReturnType(), r.ReturnType())
 	},
-	overload.Mult: func(l Extend, _ Extend) types.T {
-		return l.ReturnType()
+	overload.Mult: func(l Extend, r Extend) types.T {
+		return overload.GetBinOpReturnType(overload.Plus, l.ReturnType(), r.ReturnType())
 	},
-	overload.Div: func(l Extend, _ Extend) types.T {
-		return l.ReturnType()
+	overload.Div: func(l Extend, r Extend) types.T {
+		return overload.GetBinOpReturnType(overload.Plus, l.ReturnType(), r.ReturnType())
 	},
-	overload.Mod: func(l Extend, _ Extend) types.T {
-		return l.ReturnType()
+	overload.Mod: func(l Extend, r Extend) types.T {
+		return overload.GetBinOpReturnType(overload.Plus, l.ReturnType(), r.ReturnType())
 	},
 }
 

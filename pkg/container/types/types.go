@@ -14,7 +14,10 @@
 
 package types
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 const (
 	// any family
@@ -187,4 +190,94 @@ func (t T) String() string {
 		return "TUPLE"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
+}
+
+// functions only used to init binop overload
+func (t T) OidString() string {
+	switch t {
+	case T_int64:
+		return "T_int64"
+	case T_int32:
+		return "T_int32"
+	case T_int16:
+		return "T_int16"
+	case T_int8:
+		return "T_int8"
+	case T_float64:
+		return "T_float64"
+	case T_float32:
+		return "T_float32"
+	case T_uint8:
+		return "T_uint8"
+	case T_uint16:
+		return "T_uint16"
+	case T_uint32:
+		return "T_uint32"
+	case T_uint64:
+		return "T_uint64"
+	}
+	return "unknown_type"
+}
+
+func (t T) GoType() string {
+	switch t {
+	case T_int64:
+		return "int64"
+	case T_int32:
+		return "int32"
+	case T_int16:
+		return "int16"
+	case T_int8:
+		return "int8"
+	case T_float64:
+		return "float64"
+	case T_float32:
+		return "float32"
+	case T_uint8:
+		return "uint8"
+	case T_uint16:
+		return "uint16"
+	case T_uint32:
+		return "uint32"
+	case T_uint64:
+		return "uint64"
+	}
+	return "unknown type"
+}
+
+func (t T) GoGoType() string {
+	k := t.GoType()
+	return strings.ToUpper(k[:1]) + k[1:]
+}
+
+func (t T) TypeLen() int {
+	switch t {
+	case T_int8:
+		return 1
+	case T_int16:
+		return 2
+	case T_int32:
+		return 4
+	case T_int64:
+		return 8
+	case T_uint8:
+		return 1
+	case T_uint16:
+		return 2
+	case T_uint32:
+		return 4
+	case T_uint64:
+		return 8
+	case T_float32:
+		return 4
+	case T_float64:
+		return 8
+	case T_char:
+		return 24
+	case T_varchar:
+		return 24
+	case T_sel:
+		return 8
+	}
+	return -1
 }
