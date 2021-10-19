@@ -85,6 +85,8 @@ type Exec struct {
 	resultCols []*Col
 	scopes     []*Scope
 	c          *compile
+	//affectRows stores the number of rows affected while insert / update / delete
+	affectRows uint64
 	//e a dbengine instance
 	e engine.Engine
 	//stmt ast of a single sql
