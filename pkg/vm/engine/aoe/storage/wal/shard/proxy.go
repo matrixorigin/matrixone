@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"fmt"
 	"matrixone/pkg/logutil"
 	"sync"
 	"time"
@@ -50,6 +51,13 @@ func newProxy(id uint64, mgr *manager) *proxy {
 		snippets: make([]*snippets, 0, 10),
 		indice:   make(map[uint64]*commitEntry),
 	}
+}
+
+func (p *proxy) String() string {
+	p.logmu.RLock()
+	defer p.logmu.RUnlock()
+	s := fmt.Sprintf("Shard<%d>[SafeId=%d](%s)", p.id, p.SafeId(), p.mask.String())
+	return s
 }
 
 func (p *proxy) GetId() uint64 {

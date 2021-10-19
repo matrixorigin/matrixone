@@ -204,6 +204,21 @@ func (mgr *manager) onSnippets(snips []*snippet) {
 	}
 }
 
+func (mgr *manager) String() string {
+	mgr.mu.RLock()
+	defer mgr.mu.RUnlock()
+	s := fmt.Sprintf("ShardMgr(Cnt=%d){", len(mgr.shards))
+	for _, shard := range mgr.shards {
+		s = fmt.Sprintf("%s\n%s", s, shard.String())
+	}
+	if len(mgr.shards) > 0 {
+		s = fmt.Sprintf("%s\n}", s)
+	} else {
+		s = fmt.Sprintf("%s}", s)
+	}
+	return s
+}
+
 func (mgr *manager) Close() error {
 	if !atomic.CompareAndSwapInt32(&mgr.closed, int32(0), int32(1)) {
 		return nil

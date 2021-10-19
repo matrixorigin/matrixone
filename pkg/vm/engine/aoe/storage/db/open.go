@@ -77,6 +77,8 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
 
+	db.Wal = db.Opts.Wal
+
 	replayHandle := NewReplayHandle(dirname, opts.Meta.Catalog, db.Store.DataTables, nil)
 	if err = replayHandle.Replay(); err != nil {
 		opts.Meta.Catalog.Close()

@@ -28,6 +28,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -170,6 +171,7 @@ func TestAppend(t *testing.T) {
 	insertCnt := 8
 	appendCtx.TableName = tblMeta.Schema.Name
 	for i := 0; i < insertCnt; i++ {
+		appendCtx.OpIndex = uint64(i)
 		err = inst.Append(appendCtx)
 		assert.Nil(t, err)
 		// tbl, err := inst.Store.DataTables.WeakRefTable(tid)
@@ -212,12 +214,21 @@ func TestAppend(t *testing.T) {
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 	ss.Close()
 
+	snippet := shard.NewSnippet(0, uint64(0), uint32(0))
+	for i := 0; i < 6; i++ {
+		index := &metadata.LogIndex{
+			Id: metadata.SimpleBatchId(uint64(i)),
+		}
+		snippet.Append(index)
+	}
+	inst.Wal.Checkpoint(snippet)
 	time.Sleep(time.Duration(50) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
 	// t.Log(inst.FsMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
+	t.Log(inst.Wal.String())
 	inst.Close()
 }
 
