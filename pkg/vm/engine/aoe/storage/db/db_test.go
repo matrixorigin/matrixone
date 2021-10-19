@@ -22,6 +22,7 @@ import (
 	"math/rand"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -116,7 +117,10 @@ func TestDropTable(t *testing.T) {
 
 	name := "t1"
 	tableInfo := adaptor.MockTableInfo(2)
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: name})
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{
+		OpIndex:   common.NextGlobalSeqNum(),
+		TableName: name,
+	})
 	assert.Nil(t, err)
 
 	ssCtx := &dbi.GetSnapshotCtx{
@@ -129,7 +133,10 @@ func TestDropTable(t *testing.T) {
 	assert.Nil(t, err)
 	ss.Close()
 
-	dropTid, err := inst.DropTable(dbi.DropTableCtx{TableName: name})
+	dropTid, err := inst.DropTable(dbi.DropTableCtx{
+		OpIndex:   common.NextGlobalSeqNum(),
+		TableName: name,
+	})
 	assert.Nil(t, err)
 	assert.Equal(t, tid, dropTid)
 
@@ -137,13 +144,17 @@ func TestDropTable(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, ss)
 
-	tid2, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: name})
+	tid2, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{
+		OpIndex:   common.NextGlobalSeqNum(),
+		TableName: name,
+	})
 	assert.Nil(t, err)
 	assert.NotEqual(t, tid, tid2)
 
 	ss, err = inst.GetSnapshot(ssCtx)
 	assert.Nil(t, err)
 	ss.Close()
+	t.Log(inst.Wal.String())
 }
 
 func TestAppend(t *testing.T) {

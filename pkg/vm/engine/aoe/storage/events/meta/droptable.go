@@ -22,6 +22,7 @@ import (
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 type dropTableEvent struct {
@@ -55,14 +56,24 @@ func NewDropTableEvent(ctx *dbsched.Context, reqCtx dbi.DropTableCtx, mtMgr mtif
 // 2. Modify the metadata file
 // 3. Modify the metadata info in the memeory and release resources
 func (e *dropTableEvent) Execute() error {
+	index := &metadata.LogIndex{
+		Id: metadata.SimpleBatchId(e.reqCtx.OpIndex),
+	}
+	entry, err := e.Ctx.Opts.Wal.Log(index)
+	if err != nil {
+		return err
+	}
+	defer entry.Free()
+	entry.WaitDone()
+	snip := shard.NewSnippet(index.ShardId, uint64(0), uint32(0))
+	snip.Append(index)
+	defer e.Ctx.Opts.Wal.Checkpoint(snip)
 	tbl := e.Ctx.Opts.Meta.Catalog.SimpleGetTableByName(e.reqCtx.TableName)
 	if tbl == nil {
 		return metadata.TableNotFoundErr
 	}
 	e.Id = tbl.Id
-	tbl.SimpleSoftDelete(&metadata.LogIndex{
-		Id: metadata.SimpleBatchId(e.reqCtx.OpIndex),
-	})
+	tbl.SimpleSoftDelete(index)
 	gcReq := gcreqs.NewDropTblRequest(e.Ctx.Opts, tbl.Id, e.Tables, e.MTMgr, e.reqCtx.OnFinishCB)
 	e.Ctx.Opts.GC.Acceptor.Accept(gcReq)
 	return nil

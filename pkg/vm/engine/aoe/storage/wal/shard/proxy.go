@@ -75,6 +75,7 @@ func (p *proxy) LogIndice(indice ...*LogIndex) {
 func (p *proxy) LogIndex(index *LogIndex) {
 	p.logmu.Lock()
 	p.mask.Add(index.Id.Id)
+	p.lastIndex = index.Id.Id
 	p.logmu.Unlock()
 }
 
