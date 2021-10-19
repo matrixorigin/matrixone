@@ -395,17 +395,23 @@ func (v *Vector) Dup(proc *process.Process) (*Vector, error) {
 			Ref:  v.Ref,
 		}, nil
 	case types.T_char, types.T_varchar, types.T_json:
+		var err error
+		var data []byte
+
 		vs := v.Col.(*types.Bytes)
-		data, err := proc.Alloc(int64(len(vs.Data)))
-		if err != nil {
-			return nil, err
-		}
 		ws := &types.Bytes{
-			Data:    data,
 			Offsets: make([]uint32, len(vs.Offsets)),
 			Lengths: make([]uint32, len(vs.Lengths)),
 		}
-		copy(ws.Data, vs.Data)
+		if len(vs.Data) > 0 {
+			if data, err = proc.Alloc(int64(len(vs.Data))); err != nil {
+				return nil, err
+			}
+			ws.Data = data
+			copy(ws.Data, vs.Data)
+		} else {
+			ws.Data = make([]byte, 0)
+		}
 		copy(ws.Offsets, vs.Offsets)
 		copy(ws.Lengths, vs.Lengths)
 		return &Vector{
