@@ -24,18 +24,18 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"os"
 	"path/filepath"
 
 	"github.com/pierrec/lz4"
 )
 
-type vecsSerializer func(*os.File, []*gvector.Vector, *md.Block) error
-type vecsIndexSerializer func(*os.File, []*gvector.Vector, *md.Block) error
-type ivecsSerializer func(*os.File, []vector.IVectorNode, *md.Block) error
+type vecsSerializer func(*os.File, []*gvector.Vector, *metadata.Block) error
+type vecsIndexSerializer func(*os.File, []*gvector.Vector, *metadata.Block) error
+type ivecsSerializer func(*os.File, []vector.IVectorNode, *metadata.Block) error
 
-type blockFileGetter func(string, *md.Block) (*os.File, error)
+type blockFileGetter func(string, *metadata.Block) (*os.File, error)
 
 var (
 	defaultVecsSerializer  = lz4CompressionVecs
@@ -48,7 +48,7 @@ var (
 type BlockWriter struct {
 	data       []*gvector.Vector
 	idata      batch.IBatch
-	meta       *md.Block
+	meta       *metadata.Block
 	dir        string
 	embbed     bool
 	fileHandle *os.File
@@ -62,7 +62,7 @@ type BlockWriter struct {
 	fileCommiter func(string) error
 
 	// preprocessor preprocess data before writing, such as SORT
-	preprocessor func([]*gvector.Vector, *md.Block) error
+	preprocessor func([]*gvector.Vector, *metadata.Block) error
 
 	// indexSerializer flush indices that pre-defined in meta
 	indexSerializer vecsIndexSerializer
@@ -76,7 +76,7 @@ type BlockWriter struct {
 }
 
 // NewBlockWriter make a BlockWriter, which will be used when the memtable is full.
-func NewBlockWriter(data []*gvector.Vector, meta *md.Block, dir string) *BlockWriter {
+func NewBlockWriter(data []*gvector.Vector, meta *metadata.Block, dir string) *BlockWriter {
 	w := &BlockWriter{
 		data: data,
 		meta: meta,
@@ -92,7 +92,7 @@ func NewBlockWriter(data []*gvector.Vector, meta *md.Block, dir string) *BlockWr
 
 // NewIBatchWriter make a BlockWriter, which will be used
 // when the memtable is not full but needs to be flush()
-func NewIBatchWriter(bat batch.IBatch, meta *md.Block, dir string) *BlockWriter {
+func NewIBatchWriter(bat batch.IBatch, meta *metadata.Block, dir string) *BlockWriter {
 	w := &BlockWriter{
 		idata: bat,
 		meta:  meta,
@@ -103,7 +103,7 @@ func NewIBatchWriter(bat batch.IBatch, meta *md.Block, dir string) *BlockWriter 
 	return w
 }
 
-func NewEmbbedBlockWriter(bat *gbatch.Batch, meta *md.Block, getter blockFileGetter) *BlockWriter {
+func NewEmbbedBlockWriter(bat *gbatch.Batch, meta *metadata.Block, getter blockFileGetter) *BlockWriter {
 	w := &BlockWriter{
 		data:         bat.Vecs,
 		meta:         meta,
@@ -125,7 +125,7 @@ func (bw *BlockWriter) SetPostExecutor(f func()) {
 	bw.postExecutor = f
 }
 
-func (bw *BlockWriter) SetFileGetter(f func(string, *md.Block) (*os.File, error)) {
+func (bw *BlockWriter) SetFileGetter(f func(string, *metadata.Block) (*os.File, error)) {
 	bw.fileGetter = f
 }
 
@@ -146,7 +146,7 @@ func (bw *BlockWriter) commitFile(fname string) error {
 	return err
 }
 
-func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, error) {
+func (bw *BlockWriter) createIOWriter(dir string, meta *metadata.Block) (*os.File, error) {
 	id := meta.AsCommonID()
 	filename := common.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, true)
 	fdir := filepath.Dir(filename)
@@ -160,12 +160,12 @@ func (bw *BlockWriter) createIOWriter(dir string, meta *md.Block) (*os.File, err
 	return w, err
 }
 
-func (bw *BlockWriter) defaultPreprocessor(data []*gvector.Vector, meta *md.Block) error {
+func (bw *BlockWriter) defaultPreprocessor(data []*gvector.Vector, meta *metadata.Block) error {
 	err := mergesort.SortBlockColumns(data)
 	return err
 }
 
-func (bw *BlockWriter) flushIndices(w *os.File, data []*gvector.Vector, meta *md.Block) error {
+func (bw *BlockWriter) flushIndices(w *os.File, data []*gvector.Vector, meta *metadata.Block) error {
 	return nil
 }
 
@@ -261,7 +261,7 @@ func (bw *BlockWriter) excuteVecs() error {
 	return bw.fileCommiter(filename)
 }
 
-func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *md.Block) error {
+func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block) error {
 	var (
 		err error
 		buf bytes.Buffer
@@ -279,8 +279,8 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *md.Block) erro
 		return err
 	}
 	var preIdx []byte
-	if meta.PrevIndex != nil {
-		preIdx, err = meta.PrevIndex.Marshal()
+	if meta.CommitInfo.PrevIndex != nil {
+		preIdx, err = meta.CommitInfo.PrevIndex.Marshal()
 		if err != nil {
 			return err
 		}
@@ -292,8 +292,8 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *md.Block) erro
 		return err
 	}
 	var idx []byte
-	if meta.Index != nil {
-		idx, err = meta.Index.Marshal()
+	if meta.CommitInfo.ExternalIndex != nil {
+		idx, err = meta.CommitInfo.ExternalIndex.Marshal()
 		if err != nil {
 			return err
 		}
@@ -334,7 +334,7 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *md.Block) erro
 	return nil
 }
 
-func noCompressionVecs(w *os.File, data []*gvector.Vector, meta *md.Block) error {
+func noCompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block) error {
 	var (
 		err error
 		buf bytes.Buffer
@@ -378,7 +378,7 @@ func noCompressionVecs(w *os.File, data []*gvector.Vector, meta *md.Block) error
 	return nil
 }
 
-func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *md.Block) error {
+func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *metadata.Block) error {
 	var (
 		err error
 		buf bytes.Buffer
@@ -396,8 +396,8 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *md.Block) 
 		return err
 	}
 	var preIdx []byte
-	if meta.PrevIndex != nil {
-		preIdx, err = meta.PrevIndex.Marshal()
+	if meta.CommitInfo.PrevIndex != nil {
+		preIdx, err = meta.CommitInfo.PrevIndex.Marshal()
 		if err != nil {
 			return err
 		}
@@ -409,8 +409,8 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *md.Block) 
 		return err
 	}
 	var idx []byte
-	if meta.Index != nil {
-		idx, err = meta.Index.Marshal()
+	if meta.CommitInfo.ExternalIndex != nil {
+		idx, err = meta.CommitInfo.ExternalIndex.Marshal()
 		if err != nil {
 			return err
 		}

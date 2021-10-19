@@ -22,7 +22,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
@@ -36,18 +36,19 @@ import (
 func TestMutableBlockNode(t *testing.T) {
 	dir := "/tmp/mutableblk"
 	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
-	rowCount, blkCount := uint64(30), uint64(4)
-	info := metadata.MockInfo(&sync.RWMutex{}, rowCount, blkCount)
-	info.Conf.Dir = dir
-	opts.Meta.Info = info
-	opts.Scheduler = sched.NewScheduler(opts, nil)
+	opts.Meta.Catalog.Close()
 	os.RemoveAll(dir)
+	rowCount, blkCount := uint64(30), uint64(4)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	opts.Meta.Catalog = catalog
+	defer catalog.Close()
+	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)
-	tablemeta := metadata.MockTable(info, schema, 2)
+	tablemeta := metadata.MockTable(catalog, schema, 2, nil)
 
-	meta1, err := tablemeta.ReferenceBlock(uint64(1), uint64(1))
+	meta1, err := tablemeta.SimpleGetBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)
-	meta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
+	meta2, err := tablemeta.SimpleGetBlock(uint64(1), uint64(2))
 	assert.Nil(t, err)
 
 	segfile := dataio.NewUnsortedSegmentFile(dir, *meta1.Segment.AsCommonID())
@@ -95,7 +96,7 @@ func TestMutableBlockNode(t *testing.T) {
 	t.Logf("length=%d", node1.Data.Length())
 	assert.Equal(t, rows*factor*2, mgr.Total())
 
-	blkmeta2, err := tablemeta.ReferenceBlock(uint64(1), uint64(2))
+	blkmeta2, err := tablemeta.SimpleGetBlock(uint64(1), uint64(2))
 	assert.Nil(t, err)
 	tblkfile2 := dataio.NewTBlockFile(segfile, *meta2.AsCommonID())
 	node2 := NewMutableBlockNode(mgr, tblkfile2, tabledata, blkmeta2, nil, uint64(0))

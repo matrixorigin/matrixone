@@ -22,9 +22,9 @@ import (
 type upgradeSegEvent struct {
 	BaseEvent
 	// Table data of the upgraded segment
-	TableData  iface.ITableData
+	TableData iface.ITableData
 	// Data of the upgraded segment
-	Segment    iface.ISegment
+	Segment iface.ISegment
 	// Data of the old segment
 	OldSegment iface.ISegment
 }
@@ -42,10 +42,10 @@ func NewUpgradeSegEvent(ctx *Context, old iface.ISegment, td iface.ITableData) *
 
 func (e *upgradeSegEvent) Execute() error {
 	var err error
-	sid := e.OldSegment.GetMeta().ID
+	sid := e.OldSegment.GetMeta().Id
 	e.Segment, err = e.TableData.UpgradeSegment(sid)
 	if err == nil {
-		e.Segment.GetMeta().TrySorted()
+		e.Segment.GetMeta().SimpleUpgrade(nil)
 	}
 	return err
 }

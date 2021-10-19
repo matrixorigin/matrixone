@@ -40,11 +40,11 @@ func (blk *Block) GetID() uint64 {
 func (blk *Block) GetSegmentID() uint64 {
 	realBlk := blk.Host.Data.StrongRefBlock(blk.Id)
 	defer realBlk.Unref()
-	return realBlk.GetMeta().Segment.ID
+	return realBlk.GetMeta().Segment.Id
 }
 
 func (blk *Block) GetTableID() uint64 {
 	realBlk := blk.Host.Data.StrongRefBlock(blk.Id)
 	defer realBlk.Unref()
-	return realBlk.GetMeta().Segment.Table.ID
+	return realBlk.GetMeta().Segment.Table.Id
 }

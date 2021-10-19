@@ -24,7 +24,6 @@ import (
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"sync/atomic"
 )
 
@@ -40,9 +39,6 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 		}
 	}()
 	opts.FillDefaults(dirname)
-	replayHandle := NewReplayHandle(dirname, nil)
-
-	opts.Meta.Info = replayHandle.RebuildInfo(&opts.Mu, opts.Meta.Info.Conf)
 
 	fsMgr := ldio.NewManager(dirname, false)
 	indexBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.IndexCapacity)
@@ -77,15 +73,16 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	db.Store.DataTables = table.NewTables(&opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
 	db.Store.DataTables.MutFactory = factory
 
-	db.Store.MetaInfo = opts.Meta.Info
-	db.Cleaner.MetaFiles = w.NewHeartBeater(db.Opts.MetaCleanerCfg.Interval, NewMetaFileCleaner(db.Opts.Meta.Info))
+	db.Store.Catalog = opts.Meta.Catalog
 	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
 
-	replayHandle.Cleanup()
-	db.replayData()
+	replayHandle := NewReplayHandle(dirname, opts.Meta.Catalog, db.Store.DataTables, nil)
+	if err = replayHandle.Replay(); err != nil {
+		opts.Meta.Catalog.Close()
+		return nil, err
+	}
 
-	db.startCleaner()
 	db.startWorkers()
 	db.DBLocker, dbLocker = dbLocker, nil
 	replayHandle.ScheduleEvents(db.Opts, db.Store.DataTables)

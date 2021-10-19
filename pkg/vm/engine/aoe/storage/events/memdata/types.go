@@ -20,7 +20,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/ops"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 )
@@ -33,7 +33,7 @@ type Context struct {
 	MTMgr                            mtif.IManager
 	IndexBufMgr, MTBufMgr, SSTBufMgr bmgrif.IBufferManager
 	FsMgr                            base.IManager
-	TableMeta                        *md.Table
+	TableMeta                        *metadata.Table
 }
 
 type BaseEvent struct {

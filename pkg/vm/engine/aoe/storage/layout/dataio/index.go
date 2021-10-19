@@ -17,7 +17,6 @@ package dataio
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	// log "github.com/sirupsen/logrus"
 )
 
 type EmbedIndexFile struct {
@@ -36,7 +35,7 @@ func newEmbedIndexFile(host base.ISegmentFile, meta *base.IndexMeta) common.IVFi
 		SegmentFile: host,
 		Meta:        meta,
 		Info: &fileStat{
-			size: int64(meta.Ptr.Len),
+			size:  int64(meta.Ptr.Len),
 			osize: int64(meta.Ptr.Len),
 		},
 	}

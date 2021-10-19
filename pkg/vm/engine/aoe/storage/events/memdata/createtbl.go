@@ -40,14 +40,14 @@ func NewCreateTableEvent(ctx *Context) *createTableEvent {
 // 2. Create and register a TableData
 // 3. Register Collection to the memTable manager
 func (e *createTableEvent) Execute() error {
-	collection := e.Ctx.MTMgr.StrongRefCollection(e.Ctx.TableMeta.ID)
+	collection := e.Ctx.MTMgr.StrongRefCollection(e.Ctx.TableMeta.Id)
 	if collection != nil {
 		e.Collection = collection
 		return nil
 	}
 	meta := e.Ctx.TableMeta
 
-	tableData, err := e.Ctx.Tables.StrongRefTable(meta.ID)
+	tableData, err := e.Ctx.Tables.StrongRefTable(meta.Id)
 	if err != nil {
 		tableData, err = e.Ctx.Tables.RegisterTable(meta)
 		if err != nil {

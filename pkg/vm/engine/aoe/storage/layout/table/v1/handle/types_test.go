@@ -19,7 +19,8 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -28,21 +29,29 @@ import (
 )
 
 func TestSnapshot(t *testing.T) {
-	schema := md.MockSchema(2)
-	opts := new(storage.Options)
-	opts.FillDefaults("/tmp")
-	typeSize := uint64(schema.ColDefs[0].Type.Size)
+	dir := "/tmp/testss"
+	os.RemoveAll(dir)
+	schema := metadata.MockSchema(2)
 	row_count := uint64(64)
 	seg_cnt := 4
 	blk_cnt := 2
+	cfg := storage.MetaCfg{
+		BlockMaxRows:     row_count,
+		SegmentMaxBlocks: uint64(blk_cnt),
+	}
+	opts := new(storage.Options)
+	opts.Meta.Conf = &cfg
+	opts.FillDefaults(dir)
+	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
 	indexBufMgr := bmgr.MockBufMgr(capacity)
 	mtBufMgr := bmgr.MockBufMgr(capacity)
 	sstBufMgr := bmgr.MockBufMgr(capacity)
-	tables := table.NewTables(new(sync.RWMutex), ldio.NewManager("/tmp", false), mtBufMgr, sstBufMgr, indexBufMgr)
+	tables := table.NewTables(new(sync.RWMutex), ldio.NewManager(dir, false), mtBufMgr, sstBufMgr, indexBufMgr)
 
-	info := md.MockInfo(&opts.Mu, row_count, uint64(blk_cnt))
-	tableMeta := md.MockTable(info, schema, uint64(blk_cnt*seg_cnt))
+	catalog := opts.Meta.Catalog
+	defer catalog.Close()
+	tableMeta := metadata.MockTable(catalog, schema, uint64(blk_cnt*seg_cnt), nil)
 
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)

@@ -21,7 +21,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
-	// log "github.com/sirupsen/logrus"
 )
 
 // UnsortedSegmentFile is a logical file containing some block(.blk) files
@@ -181,7 +180,7 @@ func (sf *UnsortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	sf.RLock()
 	blk, ok := sf.Blocks[id.AsBlockID()]
 	if !ok {
-		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found",id.BlockID, colIdx))
+		return errors.New(fmt.Sprintf("column block <blk:%d-col:%d> not found", id.BlockID, colIdx))
 	}
 	sf.RUnlock()
 	return blk.PrefetchPart(colIdx, id)

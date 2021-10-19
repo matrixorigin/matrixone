@@ -19,7 +19,7 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"sync"
 )
 
@@ -44,18 +44,18 @@ type INodeHandle interface {
 
 type IMemTable interface {
 	common.IRef
-	Append(bat *batch.Batch, offset uint64, index *md.LogIndex) (n uint64, err error)
+	Append(bat *batch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error)
 	IsFull() bool
 	Flush() error
 	Unpin()
-	GetMeta() *md.Block
+	GetMeta() *metadata.Block
 	GetID() common.ID
 	String() string
 }
 
 type ICollection interface {
 	common.IRef
-	Append(bat *batch.Batch, index *md.LogIndex) (err error)
+	Append(bat *batch.Batch, index *metadata.LogIndex) (err error)
 	Flush() error
 	FetchImmuTable() IMemTable
 	String() string

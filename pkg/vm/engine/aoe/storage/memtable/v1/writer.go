@@ -39,7 +39,7 @@ func (mw *memTableWriter) Flush() (err error) {
 		}
 		vecs = append(vecs, vc)
 	}
-	bw := dataio.NewBlockWriter(vecs, mw.memTable.meta, mw.memTable.meta.Segment.Table.Conf.Dir)
+	bw := dataio.NewBlockWriter(vecs, mw.memTable.meta, mw.memTable.meta.Segment.Table.Catalog.Cfg.Dir)
 	bw.SetPreExecutor(func() {
 		logutil.Infof(" %s | memTable | Flushing", bw.GetFileName())
 	})

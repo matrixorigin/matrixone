@@ -70,7 +70,7 @@ func (it *SegmentLinkIt) Valid() bool {
 
 func (it *SegmentLinkIt) GetHandle() dbi.ISegment {
 	seg := &Segment{
-		Data: it.Snapshot.TableData.WeakRefSegment(it.Cursor.GetMeta().ID),
+		Data: it.Snapshot.TableData.WeakRefSegment(it.Cursor.GetMeta().Id),
 		Attr: it.Snapshot.Attr,
 	}
 	return seg

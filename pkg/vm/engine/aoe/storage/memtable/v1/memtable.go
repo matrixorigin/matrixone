@@ -22,7 +22,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"sync"
 )
 
@@ -44,11 +44,11 @@ type memTable struct {
 
 	// BlkMeta is the metadata of the Block, which is
 	// created and registered during NewCreateBlkEvent
-	meta *md.Block
+	meta *metadata.Block
 
 	// tableMeta is the metadata of the table, which is
 	// created and registered during NewCreateTableEvent
-	tableMeta *md.Table
+	tableMeta *metadata.Table
 
 	// iblk is an instance registered to segment, which is
 	// created and registered during NewCreateSegBlkEvent
@@ -100,7 +100,7 @@ func (mt *memTable) String() string {
 	return s
 }
 
-func (mt *memTable) Append(bat *gBatch.Batch, offset uint64, index *md.LogIndex) (n uint64, err error) {
+func (mt *memTable) Append(bat *gBatch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error) {
 	mt.Lock()
 	defer mt.Unlock()
 	var na int
@@ -119,7 +119,7 @@ func (mt *memTable) Append(bat *gBatch.Batch, offset uint64, index *md.LogIndex)
 	}
 	n = uint64(na)
 	index.Count = n
-	if err = mt.meta.SetIndex(*index); err != nil {
+	if err = mt.meta.CommitInfo.SetIndex(*index); err != nil {
 		return 0, err
 	}
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.meta.GetCount())
@@ -128,9 +128,8 @@ func (mt *memTable) Append(bat *gBatch.Batch, offset uint64, index *md.LogIndex)
 	}
 	mt.tableData.AddRows(n)
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.meta.GetCount())
-	if uint64(mt.ibat.Length()) == mt.meta.MaxRowCount {
+	if uint64(mt.ibat.Length()) == mt.meta.Segment.Table.Schema.BlockMaxRows {
 		mt.full = true
-		mt.meta.DataState = md.FULL
 	}
 	return n, err
 }
@@ -158,7 +157,7 @@ func (mt *memTable) Flush() error {
 	return err
 }
 
-func (mt *memTable) GetMeta() *md.Block {
+func (mt *memTable) GetMeta() *metadata.Block {
 	return mt.meta
 }
 

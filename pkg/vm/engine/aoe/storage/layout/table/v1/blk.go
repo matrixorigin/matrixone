@@ -27,8 +27,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 )
 
 type block struct {
@@ -98,7 +97,7 @@ func (blk *block) GetSegmentedIndex() (id uint64, ok bool) {
 	if blk.typ == base.TRANSIENT_BLK {
 		return id, ok
 	}
-	return blk.meta.GetAppliedIndex()
+	return blk.meta.CommitInfo.GetAppliedIndex()
 }
 
 func (blk *block) cloneWithUpgradeColumns(upgraded *block) {
@@ -110,7 +109,7 @@ func (blk *block) cloneWithUpgradeColumns(upgraded *block) {
 	}
 }
 
-func (blk *block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.IBlock, error) {
+func (blk *block) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
 	defer host.Unref()
 	newBase, err := blk.upgrade(host, meta)
 	if err != nil {
@@ -140,7 +139,7 @@ func (blk *block) CloneWithUpgrade(host iface.ISegment, meta *md.Block) (iface.I
 }
 
 func (blk *block) String() string {
-	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(RefCount=%d)", blk.meta.ID, len(blk.data.cols), blk.RefCount())
+	s := fmt.Sprintf("<Blk[%d]>(ColBlk=%d)(RefCount=%d)", blk.meta.Id, len(blk.data.cols), blk.RefCount())
 	// for _, colBlk := range blk.data.cols {
 	// 	s = fmt.Sprintf("%s\n\t%s", s, colBlk.String())
 	// }

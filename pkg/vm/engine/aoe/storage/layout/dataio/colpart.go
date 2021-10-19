@@ -17,7 +17,6 @@ package dataio
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	// log "github.com/sirupsen/logrus"
 )
 
 // ColPartFile is a Reader instance of columnData in block,

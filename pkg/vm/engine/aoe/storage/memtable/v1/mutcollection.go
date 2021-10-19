@@ -23,10 +23,9 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"sync"
-	// "matrixone/pkg/logutil"
 )
 
 type mutableCollection struct {
@@ -90,7 +89,11 @@ func (c *mutableCollection) FetchImmuTable() imem.IMemTable {
 
 func (c *mutableCollection) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
 	ctx := &sched.Context{Opts: c.mgr.opts, Waitable: true}
-	e := me.NewCreateBlkEvent(ctx, c.data.GetID(), c.data)
+	var prevMeta *metadata.Block
+	if c.mutBlk != nil {
+		prevMeta = c.mutBlk.GetMeta()
+	}
+	e := me.NewCreateBlkEvent(ctx, c.data.GetID(), prevMeta, c.data)
 	c.mgr.opts.Scheduler.Schedule(e)
 	if err = e.WaitDone(); err != nil {
 		return nil, nil, err
@@ -134,7 +137,7 @@ func (c *mutableCollection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, 
 	}
 	n = uint64(na)
 	index.Count = n
-	if err = meta.SetIndex(*index); err != nil {
+	if err = meta.CommitInfo.SetIndex(*index); err != nil {
 		return 0, err
 	}
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
@@ -143,44 +146,44 @@ func (c *mutableCollection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, 
 	}
 	c.data.AddRows(n)
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
-	if uint64(data.Length()) == meta.MaxRowCount {
-		meta.TryUpgrade()
-	}
+	// if uint64(data.Length()) == meta.Segment.Table.Schema.BlockMaxRows {
+	// 	meta.TryUpgrade()
+	// }
 	return n, nil
 }
 
 func (c *mutableCollection) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
-	tableMeta := c.data.GetMeta()
+	// tableMeta := c.data.GetMeta()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.mutBlk == nil {
 		c.onNoMut()
-	} else if c.mutBlk.GetMeta().IsFull() {
+	} else if c.mutBlk.GetMeta().HasMaxRows() {
 		c.onImmut()
 	}
 
 	offset := uint64(0)
-	replayIndex := tableMeta.GetReplayIndex()
+	replayIndex := c.data.GetReplayIndex()
 	if replayIndex != nil {
-		logutil.Infof("Table %d ReplayIndex %s", tableMeta.ID, replayIndex.String())
+		logutil.Infof("Table %d ReplayIndex %s", c.data.GetID(), replayIndex.String())
 		logutil.Infof("Incoming Index %s", index.String())
 		if !replayIndex.IsApplied() {
-			if (replayIndex.ID.Id != index.ID.Id) ||
-				(replayIndex.ID.Offset < index.ID.Offset) {
-				panic(fmt.Sprintf("should replayIndex: %d, but %d received", replayIndex.ID, index.ID))
+			if (replayIndex.Id.Id != index.Id.Id) ||
+				(replayIndex.Id.Offset < index.Id.Offset) {
+				panic(fmt.Sprintf("should replayIndex: %d, but %d received", replayIndex.Id, index.Id))
 			}
-			if replayIndex.ID.Offset > index.ID.Offset {
+			if replayIndex.Id.Offset > index.Id.Offset {
 				logutil.Infof("Index %s has been applied", index.String())
 				return nil
 			}
 			offset = replayIndex.Count + replayIndex.Start
 			index.Start = offset
 		}
-		tableMeta.ResetReplayIndex()
+		c.data.ResetReplayIndex()
 	}
 	blkHandle := c.mutBlk.MakeHandle()
 	for {
-		if c.mutBlk.GetMeta().IsFull() {
+		if c.mutBlk.GetMeta().HasMaxRows() {
 			c.onImmut()
 			blkHandle.Close()
 			blkHandle = c.mutBlk.MakeHandle()

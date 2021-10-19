@@ -19,7 +19,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/event"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
 	"time"
@@ -90,7 +90,7 @@ type Options struct {
 	Meta struct {
 		CKFactory *checkpointerFactory
 		Conf      *MetaCfg
-		Info      *metadata.MetaInfo
+		Catalog   *metadata.Catalog
 	}
 
 	GC struct {
@@ -131,18 +131,22 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 
-	if o.Meta.Info == nil {
-		metaCfg := &metadata.Configuration{
+	if o.Meta.Catalog == nil {
+		catalogCfg := &metadata.CatalogCfg{
 			Dir: dirname,
 		}
 		if o.Meta.Conf == nil {
-			metaCfg.BlockMaxRows = DefaultBlockMaxRows
-			metaCfg.SegmentMaxBlocks = DefaultBlocksPerSegment
+			catalogCfg.BlockMaxRows = DefaultBlockMaxRows
+			catalogCfg.SegmentMaxBlocks = DefaultBlocksPerSegment
 		} else {
-			metaCfg.BlockMaxRows = o.Meta.Conf.BlockMaxRows
-			metaCfg.SegmentMaxBlocks = o.Meta.Conf.SegmentMaxBlocks
+			catalogCfg.BlockMaxRows = o.Meta.Conf.BlockMaxRows
+			catalogCfg.SegmentMaxBlocks = o.Meta.Conf.SegmentMaxBlocks
 		}
-		o.Meta.Info = metadata.NewMetaInfo(&o.Mu, metaCfg)
+		var err error
+		if o.Meta.Catalog, err = metadata.OpenCatalog(&o.Mu, catalogCfg, nil); err != nil {
+			panic(err)
+		}
+		o.Meta.Catalog.StartSyncer()
 	}
 
 	if o.Meta.CKFactory == nil {

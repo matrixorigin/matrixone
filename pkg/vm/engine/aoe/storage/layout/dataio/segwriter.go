@@ -24,7 +24,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/mergesort"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"os"
 	"path/filepath"
 
@@ -55,20 +55,20 @@ type SegmentWriter struct {
 	// data is the data of the block file,
 	// SegmentWriter does not read from the block file
 	data         []*batch.Batch
-	meta         *md.Segment
+	meta         *metadata.Segment
 	dir          string
 	fileHandle   *os.File
-	preprocessor func([]*batch.Batch, *md.Segment) error
+	preprocessor func([]*batch.Batch, *metadata.Segment) error
 
 	// fileGetter is createFile()，use dir&TableID&SegmentID to
 	// create a tmp file for dataFlusher to flush data
-	fileGetter func(string, *md.Segment) (*os.File, error)
+	fileGetter func(string, *metadata.Segment) (*os.File, error)
 
 	// fileCommiter is commitFile()，rename file name after
 	// dataFlusher is completed
 	fileCommiter func(string) error
-	indexFlusher func(*os.File, []*batch.Batch, *md.Segment) error
-	dataFlusher  func(*os.File, []*batch.Batch, *md.Segment) error
+	indexFlusher func(*os.File, []*batch.Batch, *metadata.Segment) error
+	dataFlusher  func(*os.File, []*batch.Batch, *metadata.Segment) error
 	preExecutor  func()
 	postExecutor func()
 }
@@ -77,7 +77,7 @@ var FlushIndex = false
 
 // NewSegmentWriter make a SegmentWriter, which is
 // used when (block file count) == SegmentMaxBlocks
-func NewSegmentWriter(data []*batch.Batch, meta *md.Segment, dir string) *SegmentWriter {
+func NewSegmentWriter(data []*batch.Batch, meta *metadata.Segment, dir string) *SegmentWriter {
 	w := &SegmentWriter{
 		data: data,
 		meta: meta,
@@ -98,19 +98,19 @@ func (sw *SegmentWriter) SetPostExecutor(f func()) {
 	sw.postExecutor = f
 }
 
-func (sw *SegmentWriter) SetFileGetter(f func(string, *md.Segment) (*os.File, error)) {
+func (sw *SegmentWriter) SetFileGetter(f func(string, *metadata.Segment) (*os.File, error)) {
 	sw.fileGetter = f
 }
 
-func (sw *SegmentWriter) SetIndexFlusher(f func(*os.File, []*batch.Batch, *md.Segment) error) {
+func (sw *SegmentWriter) SetIndexFlusher(f func(*os.File, []*batch.Batch, *metadata.Segment) error) {
 	sw.indexFlusher = f
 }
 
-func (sw *SegmentWriter) SetDataFlusher(f func(*os.File, []*batch.Batch, *md.Segment) error) {
+func (sw *SegmentWriter) SetDataFlusher(f func(*os.File, []*batch.Batch, *metadata.Segment) error) {
 	sw.dataFlusher = f
 }
 
-func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *md.Segment) error {
+func (sw *SegmentWriter) defaultPreprocessor(data []*batch.Batch, meta *metadata.Segment) error {
 	err := mergesort.MergeBlocksToSegment(data)
 	return err
 }
@@ -124,9 +124,9 @@ func (sw *SegmentWriter) commitFile(fname string) error {
 	return err
 }
 
-func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, error) {
+func (sw *SegmentWriter) createFile(dir string, meta *metadata.Segment) (*os.File, error) {
 	id := meta.AsCommonID()
-	filename := common.MakeSegmentFileName(dir, id.ToSegmentFileName(), meta.Table.ID, true)
+	filename := common.MakeSegmentFileName(dir, id.ToSegmentFileName(), meta.Table.Id, true)
 	fdir := filepath.Dir(filename)
 	if _, err := os.Stat(fdir); os.IsNotExist(err) {
 		err = os.MkdirAll(fdir, 0755)
@@ -138,7 +138,7 @@ func (sw *SegmentWriter) createFile(dir string, meta *md.Segment) (*os.File, err
 	return w, err
 }
 
-func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *md.Segment) error {
+func (sw *SegmentWriter) flushIndices(w *os.File, data []*batch.Batch, meta *metadata.Segment) error {
 	if !FlushIndex {
 		buf, err := index.DefaultRWHelper.WriteIndices([]index.Index{})
 		if err != nil {
@@ -778,7 +778,7 @@ func (sw *SegmentWriter) Execute() error {
 
 // flushBlocks does not read the .blk file, and writes the incoming
 // data&meta into the segemnt file.
-func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
+func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error {
 	var metaBuf bytes.Buffer
 	header := make([]byte, 32)
 	copy(header, encoding.EncodeUint64(Version))
@@ -804,16 +804,16 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 	if err = binary.Write(&metaBuf, binary.BigEndian, uint32(colCnt)); err != nil {
 		return err
 	}
-	for _, blk := range meta.Blocks {
-		if err = binary.Write(&metaBuf, binary.BigEndian, blk.ID); err != nil {
+	for _, blk := range meta.BlockSet {
+		if err = binary.Write(&metaBuf, binary.BigEndian, blk.Id); err != nil {
 			return err
 		}
 		if err = binary.Write(&metaBuf, binary.BigEndian, blk.Count); err != nil {
 			return err
 		}
 		var preIdx []byte
-		if blk.PrevIndex != nil {
-			preIdx, err = blk.PrevIndex.Marshal()
+		if blk.CommitInfo.PrevIndex != nil {
+			preIdx, err = blk.CommitInfo.PrevIndex.Marshal()
 			if err != nil {
 				return err
 			}
@@ -824,8 +824,8 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *md.Segment) error {
 			return err
 		}
 		var idx []byte
-		if blk.Index != nil {
-			idx, err = blk.Index.Marshal()
+		if blk.CommitInfo.ExternalIndex != nil {
+			idx, err = blk.CommitInfo.ExternalIndex.Marshal()
 			if err != nil {
 				return err
 			}

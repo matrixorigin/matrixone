@@ -18,12 +18,11 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"sync/atomic"
-	// "matrixone/pkg/logutil"
 )
 
 type blockFlusher struct{}
@@ -34,13 +33,12 @@ func (f blockFlusher) flush(node base.INode, data batch.IBatch, meta *metadata.B
 
 type MutableBlockNode struct {
 	buffer.Node
-	TableData    iface.ITableData
-	Meta         *metadata.Block
-	File         *dataio.TransientBlockFile
-	Data         batch.IBatch
-	Flusher      mb.BlockFlusher
-	AppliedIndex uint64
-	Stale        *atomic.Value
+	TableData iface.ITableData
+	Meta      *metadata.Block
+	File      *dataio.TransientBlockFile
+	Data      batch.IBatch
+	Flusher   mb.BlockFlusher
+	Stale     *atomic.Value
 }
 
 func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
@@ -99,8 +97,8 @@ func (n *MutableBlockNode) Flush() error {
 	if err != nil {
 		return err
 	}
-	meta := n.Meta.Copy()
 	n.RUnlock()
+	meta := n.Meta.View()
 	if err := n.Flusher(n, data, meta, n.File); err != nil {
 		return err
 	}
@@ -109,18 +107,14 @@ func (n *MutableBlockNode) Flush() error {
 }
 
 func (n *MutableBlockNode) updateApplied(meta *metadata.Block) {
-	applied, ok := meta.GetAppliedIndex()
+	applied, ok := meta.CommitInfo.GetAppliedIndex()
 	if ok {
-		atomic.StoreUint64(&n.AppliedIndex, applied)
+		n.Meta.SetSegmentedId(applied)
 	}
 }
 
 func (n *MutableBlockNode) GetSegmentedIndex() (uint64, bool) {
-	idx := atomic.LoadUint64(&n.AppliedIndex)
-	if idx == uint64(0) {
-		return idx, false
-	}
-	return idx, true
+	return n.Meta.GetAppliedIndex(nil)
 }
 
 func (n *MutableBlockNode) load() {
@@ -142,7 +136,7 @@ func (n *MutableBlockNode) unload() {
 		return
 	}
 	if ok := n.File.PreSync(uint32(n.Data.Length())); ok {
-		meta := n.Meta.Copy()
+		meta := n.Meta.View()
 		if err := n.Flusher(n, n.Data, meta, n.File); err != nil {
 			panic(err)
 		}

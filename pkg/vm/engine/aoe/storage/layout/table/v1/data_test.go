@@ -17,8 +17,10 @@ package table
 import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"os"
 	"sync"
 	"testing"
 
@@ -28,15 +30,22 @@ import (
 var WORK_DIR = "/tmp/layout/data_test"
 
 func TestBase1(t *testing.T) {
-	opts := new(storage.Options)
-	opts.FillDefaults(WORK_DIR)
 	segCnt := uint64(4)
 	blkCnt := uint64(4)
 	rowCount := uint64(10)
 	capacity := uint64(200)
-	info := md.MockInfo(&opts.Mu, rowCount, blkCnt)
-	schema := md.MockSchema(2)
-	tableMeta := md.MockTable(info, schema, segCnt*blkCnt)
+	os.RemoveAll(WORK_DIR)
+	opts := new(storage.Options)
+	cfg := &storage.MetaCfg{
+		BlockMaxRows:     rowCount,
+		SegmentMaxBlocks: blkCnt,
+	}
+	opts.Meta.Conf = cfg
+	opts.FillDefaults(WORK_DIR)
+	defer opts.Meta.Catalog.Close()
+	schema := metadata.MockSchema(2)
+	createIdx := metadata.LogIndex{Id: metadata.SimpleBatchId(common.NextGlobalSeqNum())}
+	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, segCnt*blkCnt, &createIdx)
 
 	fsMgr := ldio.NewManager(WORK_DIR, true)
 	indexBufMgr := bmgr.MockBufMgr(capacity)
@@ -47,17 +56,16 @@ func TestBase1(t *testing.T) {
 	assert.Nil(t, err)
 
 	idx := 0
-	segIds := tableMeta.SegmentIDs()
 	ids := make([]uint64, 0)
-	for segId, _ := range segIds {
+	for segId, _ := range tableMeta.IdIndex {
 		delta := 0
 		if idx > 0 {
 			delta = 1
 		}
 		idx++
 		ids = append(ids, segId)
-		segMeta, err := tableMeta.ReferenceSegment(segId)
-		assert.Nil(t, err)
+		segMeta := tableMeta.SimpleGetSegment(segId)
+		assert.NotNil(t, segMeta)
 		seg, err := tblData.RegisterSegment(segMeta)
 		assert.Nil(t, err)
 		seg.Unref()
@@ -69,16 +77,15 @@ func TestBase1(t *testing.T) {
 		refSeg = tblData.WeakRefSegment(segId)
 		assert.Equal(t, int64(1+delta), refSeg.RefCount())
 
-		blkIds := segMeta.BlockIDs()
 		id := 0
-		for blkId, _ := range blkIds {
+		for blkId, _ := range segMeta.IdIndex {
 			idelta := 0
 			if id > 0 {
 				idelta = 1
 			}
 			id++
-			blkMeta, err := segMeta.ReferenceBlock(blkId)
-			assert.Nil(t, err)
+			blkMeta := segMeta.SimpleGetBlock(blkId)
+			assert.NotNil(t, blkMeta)
 			blk, err := tblData.RegisterBlock(blkMeta)
 			assert.Nil(t, err)
 			blk.Unref()
@@ -93,10 +100,10 @@ func TestBase1(t *testing.T) {
 	t.Log(tblData.String())
 	t.Log(fsMgr.String())
 
-	for _, segMeta := range tableMeta.Segments {
-		for _, blkMeta := range segMeta.Blocks {
-			blkMeta.DataState = md.FULL
-			blkMeta.Count = blkMeta.MaxRowCount
+	for _, segMeta := range tableMeta.SegmentSet {
+		for _, blkMeta := range segMeta.BlockSet {
+			blkMeta.Count = blkMeta.Segment.Table.Schema.BlockMaxRows
+			blkMeta.SimpleUpgrade(nil)
 		}
 	}
 
@@ -105,14 +112,13 @@ func TestBase1(t *testing.T) {
 		if id > 0 {
 			delta = 1
 		}
-		segMeta, err := tableMeta.ReferenceSegment(segId)
-		assert.Nil(t, err)
-		blkIds := segMeta.BlockIDs()
+		segMeta := tableMeta.SimpleGetSegment(segId)
+		assert.NotNil(t, segMeta)
 		refSeg := tblData.WeakRefSegment(segId)
 		assert.Equal(t, int64(1+delta), refSeg.RefCount())
-		for blkId, _ := range blkIds {
-			blkMeta, err := segMeta.ReferenceBlock(blkId)
-			assert.Nil(t, err)
+		for blkId, _ := range segMeta.IdIndex {
+			blkMeta := segMeta.SimpleGetBlock(blkId)
+			assert.NotNil(t, blkMeta)
 			upgraded, err := tblData.UpgradeBlock(blkMeta)
 			assert.Nil(t, err)
 			upgraded.Unref()
@@ -135,11 +141,10 @@ func TestBase1(t *testing.T) {
 		assert.Equal(t, int64(1+delta), upgraded.RefCount())
 	}
 
-	for segId, _ := range segIds {
-		segMeta, err := tableMeta.ReferenceSegment(segId)
-		assert.Nil(t, err)
-		blkIds := segMeta.BlockIDs()
-		for blkId, _ := range blkIds {
+	for segId, _ := range tableMeta.IdIndex {
+		segMeta := tableMeta.SimpleGetSegment(segId)
+		assert.NotNil(t, segMeta)
+		for blkId, _ := range segMeta.IdIndex {
 			refBlk := tblData.WeakRefBlock(segId, blkId)
 			assert.NotNil(t, refBlk)
 			srefBlk := tblData.StrongRefBlock(segId, blkId)
@@ -166,5 +171,5 @@ func TestBase1(t *testing.T) {
 	t.Log(tblData.Size(attr))
 	index, ok := tblData.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, tableMeta.CreatedIndex, index)
+	assert.Equal(t, tableMeta.GetFirstCommit().ExternalIndex.Id.Id, index)
 }

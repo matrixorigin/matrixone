@@ -23,7 +23,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
@@ -43,7 +43,7 @@ func TestMutCollection(t *testing.T) {
 
 	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt)
 
-	capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
+	capacity := blockRows * 4 * uint64(colcnt) * 1 * 1 * 2
 	// capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
 	manager := NewManager(opts, nil)
 	fsMgr := ldio.NewManager(dir, false)
@@ -53,14 +53,10 @@ func TestMutCollection(t *testing.T) {
 	tables := table.NewTables(new(sync.RWMutex), fsMgr, mtBufMgr, sstBufMgr, indexBufMgr)
 	opts.Scheduler = sched.NewScheduler(opts, tables)
 
-	tabletInfo := metadata.MockTableInfo(colcnt)
-	ctx := &sched.Context{Opts: opts, Waitable: true}
-	event := meta.NewCreateTableEvent(ctx, dbi.TableOpCtx{TableName: tabletInfo.Name}, tabletInfo)
-	assert.NotNil(t, event)
-	opts.Scheduler.Schedule(event)
-	err := event.WaitDone()
+	schema := metadata.MockSchema(2)
+	tbl, err := opts.Meta.Catalog.SimpleCreateTable(schema, nil)
 	assert.Nil(t, err)
-	tbl := event.GetTable()
+	assert.NotNil(t, tbl)
 
 	maxsize := uint64(capacity)
 	evicter := bm.NewSimpleEvictHolder()
@@ -94,7 +90,7 @@ func TestMutCollection(t *testing.T) {
 			defer wgp.Done()
 			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &metadata.LogIndex{
-				ID:       metadata.MockLogBatchId(id),
+				Id:       metadata.SimpleBatchId(id),
 				Capacity: uint64(insert.Vecs[0].Length()),
 			}
 			err := c0.Append(insert, index)
@@ -112,7 +108,11 @@ func TestMutCollection(t *testing.T) {
 	t.Log(sstBufMgr.String())
 	assert.Equal(t, 0, mgr.Count())
 
-	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{TableName: tabletInfo.Name}, manager, tables)
+	ctx := &sched.Context{
+		Waitable: true,
+		Opts:     opts,
+	}
+	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{TableName: tbl.Schema.Name}, manager, tables)
 	opts.Scheduler.Schedule(dropBlkE)
 	err = dropBlkE.WaitDone()
 	assert.Nil(t, err)
@@ -129,8 +129,9 @@ func TestMutCollection(t *testing.T) {
 	err = createTblE.WaitDone()
 	assert.Nil(t, err)
 
-	dropTblE := memdata.NewDropTableEvent(eCtx, tbl.ID)
+	dropTblE := memdata.NewDropTableEvent(eCtx, tbl.Id)
 	opts.Scheduler.Schedule(dropTblE)
 	err = dropTblE.WaitDone()
 	assert.Nil(t, err)
+	opts.Meta.Catalog.Close()
 }

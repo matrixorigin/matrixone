@@ -210,7 +210,7 @@ func (part *columnPart) GetColIdx() int {
 }
 
 func (part *columnPart) GetID() uint64 {
-	return part.host.GetMeta().ID
+	return part.host.GetMeta().Id
 }
 
 func (part *columnPart) SetNext(next IColumnPart) {
