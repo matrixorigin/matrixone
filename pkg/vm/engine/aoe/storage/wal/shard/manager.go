@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
 	"sync/atomic"
 )
@@ -99,6 +100,20 @@ func (mgr *manager) requestLoop() {
 			mgr.requestWg.Add(-1 * cnt)
 		}
 	}
+}
+
+func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
+	entry := wal.GetEntry(0)
+	entry.Payload = payload
+	if err := mgr.EnqueueEntry(entry); err != nil {
+		entry.Free()
+		return nil, err
+	}
+	return entry, nil
+}
+
+func (mgr *manager) Checkpoint(v interface{}) {
+	mgr.EnqueueSnippet(v.(*snippet))
 }
 
 func (mgr *manager) EnqueueEntry(entry *Entry) error {
