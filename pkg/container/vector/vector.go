@@ -404,8 +404,7 @@ func (v *Vector) Dup(proc *process.Process) (*Vector, error) {
 			Lengths: make([]uint32, len(vs.Lengths)),
 		}
 		if len(vs.Data) > 0 {
-			data, err := proc.Alloc(int64(len(vs.Data)))
-			if err != nil {
+			if data, err = proc.Alloc(int64(len(vs.Data))); err != nil {
 				return nil, err
 			}
 			ws.Data = data
