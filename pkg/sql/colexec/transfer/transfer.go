@@ -69,7 +69,7 @@ func Call(proc *process.Process, arg interface{}) (bool, error) {
 	vecs := n.vecs[:0]
 	for i := range bat.Vecs {
 		if bat.Vecs[i].Or {
-			vec, err := bat.Vecs[i].Dup(n.Proc)
+			vec, err := bat.Vecs[i].Dup(proc)
 			if err != nil {
 				clean(vecs, n.Proc)
 				return false, err

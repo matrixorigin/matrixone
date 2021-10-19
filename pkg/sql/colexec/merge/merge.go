@@ -34,6 +34,9 @@ func Call(proc *process.Process, _ interface{}) (bool, error) {
 	}
 	for i := 0; i < len(proc.Reg.MergeReceivers); i++ {
 		reg := proc.Reg.MergeReceivers[i]
+		if reg.Ch == nil {
+			continue
+		}
 		v := <-reg.Ch
 		if v == nil {
 			reg.Ch = nil
