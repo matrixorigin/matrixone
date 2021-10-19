@@ -1126,8 +1126,10 @@ func EncodeVector(v *vector.Vector, buf *bytes.Buffer) error {
 				size += uint64(v)
 			}
 			buf.Write(encoding.EncodeUint64(size))
-			for i, j := int64(0), int64(cnt); i < j; i++ {
-				buf.Write(vs.Get(i))
+			if size > 0 {
+				for i, j := int64(0), int64(cnt); i < j; i++ {
+					buf.Write(vs.Get(i))
+				}
 			}
 		}
 	case types.T_tuple:
