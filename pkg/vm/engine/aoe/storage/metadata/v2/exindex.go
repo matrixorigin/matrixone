@@ -83,7 +83,7 @@ func (idx *ExternalIndex) String() string {
 	if idx == nil {
 		return "null"
 	}
-	return fmt.Sprintf("(%s,%d,%d,%d)", idx.Id.String(), idx.Start, idx.Count, idx.Capacity)
+	return fmt.Sprintf("S%d(%s,%d,%d,%d)", idx.ShardId, idx.Id.String(), idx.Start, idx.Count, idx.Capacity)
 }
 
 func (idx *ExternalIndex) IsApplied() bool {
