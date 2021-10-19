@@ -128,9 +128,11 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*transfer.Argument)
 	defer func() {
-		arg.Reg.Wg.Add(1)
-		arg.Reg.Ch <- nil
-		arg.Reg.Wg.Wait()
+		if arg.Reg.Ch != nil {
+			arg.Reg.Wg.Add(1)
+			arg.Reg.Ch <- nil
+			arg.Reg.Wg.Wait()
+		}
 	}()
 	encoder, decoder := rpcserver.NewCodec(1 << 30)
 	conn := goetty.NewIOSession(goetty.WithCodec(encoder, decoder))
@@ -160,6 +162,12 @@ func (s *Scope) RemoteRun(e engine.Engine) error {
 		bat, _, err := protocol.DecodeBatch(val.(*message.Message).Data)
 		if err != nil {
 			return err
+		}
+		if arg.Reg.Ch == nil {
+			if bat != nil {
+				bat.Clean(s.Proc)
+			}
+			continue
 		}
 		arg.Reg.Wg.Add(1)
 		arg.Reg.Ch <- bat
