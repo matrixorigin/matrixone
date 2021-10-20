@@ -66,7 +66,7 @@ func (s *Storage) Stats() stats.Stats {
 }
 
 //Append appends batch in the table
-func (s *Storage) Append(tabletName string, bat *batch.Batch, logIdx uint64, logOffset, logSize int) error {
+func (s *Storage) Append(tabletName string, bat *batch.Batch, shardId uint64, logIdx uint64, logOffset, logSize int) error {
 	size := 0
 	for _, vec := range bat.Vecs {
 		size += len(vec.Data)
@@ -74,6 +74,7 @@ func (s *Storage) Append(tabletName string, bat *batch.Batch, logIdx uint64, log
 	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
 	return s.DB.Append(dbi.AppendCtx{
+		ShardId:   shardId,
 		OpIndex:   logIdx,
 		OpOffset:  logOffset,
 		OpSize:    logSize,

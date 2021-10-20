@@ -16,11 +16,6 @@ package driver
 
 import (
 	"encoding/json"
-	"github.com/fagongzi/util/protoc"
-	"github.com/matrixorigin/matrixcube/command"
-	"github.com/matrixorigin/matrixcube/pb"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
-	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/sql/protocol"
 	aoe2 "matrixone/pkg/vm/driver/aoe"
@@ -29,6 +24,12 @@ import (
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"time"
+
+	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixcube/command"
+	"github.com/matrixorigin/matrixcube/pb"
+	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
 )
 
 //createTablet responses the requests whose CustemType is CreateTablet.
@@ -46,6 +47,7 @@ func (h *driver) createTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx 
 	}
 	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe2.Storage)
 	id, err := store.CreateTable(&t, dbi.TableOpCtx{
+		ShardId:   shard.ID,
 		OpIndex:   ctx.LogIndex(),
 		TableName: customReq.Name,
 	})
@@ -70,6 +72,7 @@ func (h *driver) dropTablet(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx co
 
 	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe2.Storage)
 	id, err := store.DropTable(dbi.DropTableCtx{
+		ShardId:   shard.ID,
 		OpIndex:   ctx.LogIndex(),
 		TableName: customReq.Name,
 	})
@@ -101,7 +104,7 @@ func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comman
 		return 0, 0, resp
 	}
 	store := h.store.DataStorageByGroup(shard.Group, shard.ID).(*aoe2.Storage)
-	err = store.Append(customReq.TabletName, bat, ctx.LogIndex(), ctx.Offset(), ctx.BatchSize())
+	err = store.Append(customReq.TabletName, bat, shard.ID, ctx.LogIndex(), ctx.Offset(), ctx.BatchSize())
 	if err != nil {
 		resp.Value = errorResp(err)
 		return 0, 0, resp
