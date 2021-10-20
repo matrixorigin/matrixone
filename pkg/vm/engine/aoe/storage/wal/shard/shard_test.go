@@ -1,6 +1,7 @@
 package shard
 
 import (
+	"math/rand"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
@@ -169,7 +170,7 @@ func TestShardProxy(t *testing.T) {
 	}
 	now := time.Now()
 	shardProxy.Checkpoint()
-	t.Logf("safe id: %d, %s", shardProxy.SafeId(), time.Since(now))
+	t.Logf("safe id: %d, %s", shardProxy.GetSafeId(), time.Since(now))
 }
 
 func TestShardManager(t *testing.T) {
@@ -209,4 +210,85 @@ func TestShardManager(t *testing.T) {
 	}
 	wg.Wait()
 	mgr.Close()
+}
+
+func TestProxy2(t *testing.T) {
+	mgr := NewManager()
+	defer mgr.Close()
+	var indice []*LogIndex
+	for i := 1; i < 20; i += 4 {
+		index := &LogIndex{
+			Id: IndexId{
+				Id:   uint64(i),
+				Size: uint32(1),
+			},
+		}
+		indice = append(indice, index)
+		entry, err := mgr.Log(index)
+		entry.WaitDone()
+		entry.Free()
+		assert.Nil(t, err)
+	}
+	s0, err := mgr.GetShard(0)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(5), s0.mask.GetCardinality())
+	assert.Equal(t, uint64(12), s0.stopmask.GetCardinality())
+	t.Log(s0.mask.String())
+	t.Log(s0.stopmask.String())
+	mgr.Checkpoint(indice[0])
+	mgr.Checkpoint(indice[1])
+	time.Sleep(time.Duration(1) * time.Millisecond)
+	t.Log(s0.mask.String())
+	t.Log(s0.stopmask.String())
+	assert.Equal(t, uint64(5), s0.GetSafeId())
+	mgr.Checkpoint(indice[2])
+	time.Sleep(time.Duration(1) * time.Millisecond)
+	assert.Equal(t, uint64(9), s0.GetSafeId())
+	mgr.Checkpoint(indice[3])
+	time.Sleep(time.Duration(1) * time.Millisecond)
+	assert.Equal(t, uint64(13), s0.GetSafeId())
+	mgr.Checkpoint(indice[4])
+	time.Sleep(time.Duration(1) * time.Millisecond)
+	assert.Equal(t, uint64(17), s0.GetSafeId())
+}
+
+func TestProxy3(t *testing.T) {
+	mgr := NewManager()
+	defer mgr.Close()
+	var indice []*LogIndex
+	rand.Seed(time.Now().UnixNano())
+	produce := func() {
+		cnt := 10000
+		j := 0
+		// for i := 1; j < cnt; i += 1 {
+		for i := 1; j < cnt; i += rand.Intn(100) + 1 {
+			index := &LogIndex{
+				Id: IndexId{
+					Id:   uint64(i),
+					Size: uint32(1),
+				},
+			}
+			indice = append(indice, index)
+			entry, err := mgr.Log(index)
+			entry.WaitDone()
+			entry.Free()
+			assert.Nil(t, err)
+			j++
+		}
+		t.Log(indice[cnt-1].String())
+		// t.Log(mgr.String())
+	}
+
+	consume := func() {
+		for i := len(indice) - 1; i >= 0; i-- {
+			mgr.Checkpoint(indice[i])
+		}
+		time.Sleep(time.Duration(10) * time.Millisecond)
+		s, err := mgr.GetShard(uint64(0))
+		assert.Nil(t, err)
+		assert.Equal(t, indice[len(indice)-1].Id.Id, s.GetSafeId())
+	}
+
+	produce()
+	consume()
 }
