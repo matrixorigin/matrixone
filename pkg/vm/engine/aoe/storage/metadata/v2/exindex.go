@@ -28,6 +28,7 @@ type LogBatchId struct {
 }
 
 type ExternalIndex struct {
+	ShardId  uint64
 	Id       LogBatchId
 	Start    uint64
 	Count    uint64
@@ -52,6 +53,16 @@ func CreateBatchId(id uint64, offset, size uint32) LogBatchId {
 	}
 }
 
+func (id *LogBatchId) LT(o *LogBatchId) bool {
+	if id.Id < o.Id {
+		return true
+	}
+	if id.Id > o.Id {
+		return false
+	}
+	return id.Offset < o.Offset
+}
+
 func (id *LogBatchId) String() string {
 	return fmt.Sprintf("(%d,%d,%d)", id.Id, id.Offset, id.Size)
 }
@@ -64,6 +75,10 @@ func (id *LogBatchId) IsEnd() bool {
 	return id.Offset == id.Size-1
 }
 
+func (id *LogBatchId) IsSingle() bool {
+	return id.Size == 1
+}
+
 func (idx *ExternalIndex) IsSameBatch(o *ExternalIndex) bool {
 	return idx.Id.Id == o.Id.Id
 }
@@ -72,7 +87,7 @@ func (idx *ExternalIndex) String() string {
 	if idx == nil {
 		return "null"
 	}
-	return fmt.Sprintf("(%s,%d,%d,%d)", idx.Id.String(), idx.Start, idx.Count, idx.Capacity)
+	return fmt.Sprintf("S%d(%s,%d,%d,%d)", idx.ShardId, idx.Id.String(), idx.Start, idx.Count, idx.Capacity)
 }
 
 func (idx *ExternalIndex) IsApplied() bool {
@@ -85,6 +100,7 @@ func (idx *ExternalIndex) IsBatchApplied() bool {
 
 func (idx *ExternalIndex) Marshal() ([]byte, error) {
 	var buf bytes.Buffer
+	buf.Write(encoding.EncodeUint64(idx.ShardId))
 	buf.Write(encoding.EncodeUint64(idx.Id.Id))
 	buf.Write(encoding.EncodeUint32(uint32(idx.Id.Offset)))
 	buf.Write(encoding.EncodeUint32(uint32(idx.Id.Size)))
@@ -99,6 +115,8 @@ func (idx *ExternalIndex) UnMarshal(data []byte) error {
 		return nil
 	}
 	buf := data
+	idx.ShardId = encoding.DecodeUint64(buf[:8])
+	buf = buf[8:]
 	idx.Id.Id = encoding.DecodeUint64(buf[:8])
 	buf = buf[8:]
 	idx.Id.Offset = encoding.DecodeUint32(buf[:4])

@@ -21,6 +21,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
 	"time"
 )
@@ -87,6 +89,8 @@ type Options struct {
 	Scheduler    sched.Scheduler
 	SchedulerCfg *SchedulerCfg `toml:"scheduler-cfg"`
 
+	Wal wal.Wal
+
 	Meta struct {
 		CKFactory *checkpointerFactory
 		Conf      *MetaCfg
@@ -108,6 +112,10 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o = &Options{}
 	}
 	o.EventListener.FillDefaults()
+
+	if o.Wal == nil {
+		o.Wal = shard.NewManager()
+	}
 
 	if o.FactoryType == INVALID_FT {
 		o.FactoryType = NORMAL_FT

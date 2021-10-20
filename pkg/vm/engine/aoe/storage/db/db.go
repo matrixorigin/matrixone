@@ -35,6 +35,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"os"
 	"sync"
@@ -65,6 +66,8 @@ type DB struct {
 
 	// MutationBufMgr is a replacement for MTBufMgr
 	MutationBufMgr bb.INodeManager
+
+	Wal wal.Wal
 
 	// Internal data storage of DB.
 	Store struct {
@@ -165,6 +168,12 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 		Capacity: uint64(ctx.Data.Vecs[0].Length()),
 	}
 	defer collection.Unref()
+	if entry, err := d.Wal.Log(index); err != nil {
+		return err
+	} else {
+		entry.WaitDone()
+		entry.Free()
+	}
 	return collection.Append(ctx.Data, index)
 }
 
@@ -244,9 +253,18 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	}
 	info.Name = ctx.TableName
 	schema := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
-	tbl, err := d.Opts.Meta.Catalog.SimpleCreateTable(schema, &metadata.LogIndex{
+	index := &metadata.LogIndex{
 		Id: metadata.SimpleBatchId(ctx.OpIndex),
-	})
+	}
+	entry, err := d.Wal.Log(index)
+	if err != nil {
+		return
+	}
+	defer entry.Free()
+	entry.WaitDone()
+	defer d.Wal.Checkpoint(index)
+
+	tbl, err := d.Opts.Meta.Catalog.SimpleCreateTable(schema, index)
 	if err != nil {
 		return id, err
 	}
@@ -383,6 +401,7 @@ func (d *DB) Close() error {
 
 	d.Closed.Store(ErrClosed)
 	close(d.ClosedC)
+	d.Wal.Close()
 	d.Scheduler.Stop()
 	d.stopWorkers()
 	d.Opts.Meta.Catalog.Close()
