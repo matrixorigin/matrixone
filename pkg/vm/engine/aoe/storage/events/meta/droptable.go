@@ -15,6 +15,8 @@
 package meta
 
 import (
+	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -55,9 +57,8 @@ func NewDropTableEvent(ctx *dbsched.Context, reqCtx dbi.DropTableCtx, mtMgr mtif
 // 2. Modify the metadata file
 // 3. Modify the metadata info in the memeory and release resources
 func (e *dropTableEvent) Execute() error {
-	index := &metadata.LogIndex{
-		Id: metadata.SimpleBatchId(e.reqCtx.OpIndex),
-	}
+	index := adaptor.GetLogIndexFromDropTableCtx(&e.reqCtx)
+	logutil.Infof("DropTable %s", index.String())
 	entry, err := e.Ctx.Opts.Wal.Log(index)
 	if err != nil {
 		return err

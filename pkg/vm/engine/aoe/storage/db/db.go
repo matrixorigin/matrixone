@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/adaptor"
@@ -159,14 +160,7 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 		collection = e.Collection
 	}
 
-	index := &metadata.LogIndex{
-		Id: metadata.LogBatchId{
-			Id:     ctx.OpIndex,
-			Offset: uint32(ctx.OpOffset),
-			Size:   uint32(ctx.OpSize),
-		},
-		Capacity: uint64(ctx.Data.Vecs[0].Length()),
-	}
+	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
 	defer collection.Unref()
 	if entry, err := d.Wal.Log(index); err != nil {
 		return err
@@ -253,9 +247,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	}
 	info.Name = ctx.TableName
 	schema := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
-	index := &metadata.LogIndex{
-		Id: metadata.SimpleBatchId(ctx.OpIndex),
-	}
+	index := adaptor.GetLogIndexFromTableOpCtx(&ctx)
 	entry, err := d.Wal.Log(index)
 	if err != nil {
 		return
@@ -264,6 +256,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	entry.WaitDone()
 	defer d.Wal.Checkpoint(index)
 
+	logutil.Infof("CreateTable %s", index.String())
 	tbl, err := d.Opts.Meta.Catalog.SimpleCreateTable(schema, index)
 	if err != nil {
 		return id, err

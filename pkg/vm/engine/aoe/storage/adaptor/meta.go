@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe"
+	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
 )
 
@@ -60,4 +61,30 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 	}
 
 	return schema
+}
+
+func GetLogIndexFromTableOpCtx(ctx *dbi.TableOpCtx) *metadata.LogIndex {
+	return &metadata.LogIndex{
+		ShardId: ctx.ShardId,
+		Id:      metadata.SimpleBatchId(ctx.OpIndex),
+	}
+}
+
+func GetLogIndexFromDropTableCtx(ctx *dbi.DropTableCtx) *metadata.LogIndex {
+	return &metadata.LogIndex{
+		ShardId: ctx.ShardId,
+		Id:      metadata.SimpleBatchId(ctx.OpIndex),
+	}
+}
+
+func GetLogIndexFromAppendCtx(ctx *dbi.AppendCtx) *metadata.LogIndex {
+	return &metadata.LogIndex{
+		ShardId: ctx.ShardId,
+		Id: metadata.LogBatchId{
+			Id:     ctx.OpIndex,
+			Offset: uint32(ctx.OpOffset),
+			Size:   uint32(ctx.OpSize),
+		},
+		Capacity: uint64(ctx.Data.Vecs[0].Length()),
+	}
 }
