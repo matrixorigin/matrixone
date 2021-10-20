@@ -55,7 +55,7 @@ func (mp *mockProducer) nextLogBatch() *mockLogBatch {
 
 type mockConsumer struct {
 	shardId uint64
-	snippet *snippet
+	snippet *Snippet
 }
 
 func newMockConsumer(shardId uint64) *mockConsumer {

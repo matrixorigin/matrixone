@@ -23,6 +23,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
 )
 
@@ -53,6 +54,8 @@ type memTable struct {
 	// iblk is an instance registered to segment, which is
 	// created and registered during NewCreateSegBlkEvent
 	iblk iface.IBlock
+
+	snippet *shard.Snippet
 }
 
 var (
@@ -60,6 +63,7 @@ var (
 )
 
 func NewMemTable(opts *storage.Options, tableData iface.ITableData, data iface.IBlock) imem.IMemTable {
+
 	mt := &memTable{
 		opts:      opts,
 		tableData: tableData,
@@ -67,6 +71,10 @@ func NewMemTable(opts *storage.Options, tableData iface.ITableData, data iface.I
 		iblk:      data,
 		meta:      data.GetMeta(),
 		tableMeta: tableData.GetMeta(),
+	}
+	if mt.tableMeta.GetCommit().ExternalIndex != nil {
+		shardId := mt.tableMeta.GetCommit().ExternalIndex.ShardId
+		mt.snippet = shard.NewSnippet(shardId, mt.meta.Id, uint32(0))
 	}
 
 	for idx, colIdx := range mt.ibat.GetAttrs() {
@@ -130,6 +138,9 @@ func (mt *memTable) Append(bat *gBatch.Batch, offset uint64, index *metadata.Log
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.meta.GetCount())
 	if uint64(mt.ibat.Length()) == mt.meta.Segment.Table.Schema.BlockMaxRows {
 		mt.full = true
+	}
+	if mt.snippet != nil {
+		mt.snippet.Append(index)
 	}
 	return n, err
 }

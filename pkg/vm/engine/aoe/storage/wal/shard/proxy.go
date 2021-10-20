@@ -84,7 +84,7 @@ func (p *proxy) AppendIndex(index *LogIndex) {
 	p.AppendSnippet(snip)
 }
 
-func (p *proxy) AppendSnippet(snip *snippet) {
+func (p *proxy) AppendSnippet(snip *Snippet) {
 	p.alumu.Lock()
 	defer p.alumu.Unlock()
 	pos, ok := p.snipIdx[snip.GetId()]
@@ -98,11 +98,11 @@ func (p *proxy) AppendSnippet(snip *snippet) {
 	p.snippets = append(p.snippets, group)
 }
 
-func (p *proxy) ExtendSnippets(snips []*snippet) {
+func (p *proxy) ExtendSnippets(snips []*Snippet) {
 	if len(snips) == 0 {
 		return
 	}
-	mapped := make(map[uint64][]*snippet)
+	mapped := make(map[uint64][]*Snippet)
 	for _, snip := range snips {
 		mapped[snip.GetId()] = append(mapped[snip.GetId()], snip)
 	}
