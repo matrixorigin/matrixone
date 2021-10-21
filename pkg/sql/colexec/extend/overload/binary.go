@@ -17,9 +17,17 @@ package overload
 import (
 	"errors"
 	"fmt"
+	"math"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/process"
+)
+
+const (
+	// noRt signs there is no function and returnType for this operator.
+	noRt = math.MaxUint8
+	// maxt is max length of binOpsReturnType and unaryOpsReturnType
+	maxt = math.MaxUint8
 )
 
 var (
@@ -27,6 +35,18 @@ var (
 	ErrDivByZero = errors.New("division by zero")
 	// ErrZeroModulus is reported when computing the rest of a division by zero.
 	ErrModByZero = errors.New("zero modulus")
+
+	// BinOps contains the binary operations indexed by operation type.
+	BinOps = map[int][]*BinOp{}
+
+	// binOpsReturnType contains returnType of a binary expr, likes
+	// int + float32, bigint + double, and so on.
+	binOpsReturnType [][][]types.T
+
+	// variants only used to init and get items from binOpsReturnType
+	// binOperators does not include comparison operators because their returns are always T_sel.
+	binOperators = []int{Or, And, Plus, Minus, Mult, Div, Mod}
+	firstBinaryOp = binOperators[0]
 )
 
 func BinaryEval(op int, ltyp, rtyp types.T, lc, rc bool, lv, rv *vector.Vector, p *process.Process) (*vector.Vector, error) {
@@ -44,5 +64,11 @@ func binaryCheck(op int, arg0, arg1 types.T, val0, val1 types.T) bool {
 	return arg0 == val0 && arg1 == val1
 }
 
-// BinOps contains the binary operations indexed by operation type.
-var BinOps = map[int][]*BinOp{}
+// GetBinOpReturnType returns the returnType of binary op and its arg types.
+func GetBinOpReturnType(op int, lt, rt types.T) types.T {
+	t := binOpsReturnType[op-firstBinaryOp][lt][rt]
+	if t == noRt { // just ignore and return any type to make error message normal.
+		t = lt
+	}
+	return t
+}
