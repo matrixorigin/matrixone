@@ -399,3 +399,87 @@ func TestCreateTable(t *testing.T) {
 
 	}
 }
+
+// TestOperators to test operators (binary operator and unary operator) for each type
+func TestOperators(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type testCase struct {
+		id	int
+		sql string
+		expectedError error
+	}
+
+	testCases := []testCase{
+		{0, "create database testoperators;", nil},
+		{1, "create table iis (i1 tinyint, i2 smallint, i3 int, i4 bigint);", nil},
+		{2, "create table ffs (f1 float, f2 double);", nil},
+		{3, "create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);", nil},
+		{4, "insert into iis values (1, 11, 111, 1111);", nil},
+		{5, "insert into ffs values (22.2, 222.222);", nil},
+		{6, "insert into uus values (3, 33, 333, 3333);", nil},
+		// operator between same types.
+		// test int
+		{7, "select i1 + i1, i1 - i1, i1 / i1, i1 * i1, i2 + i2, i2 - i2, i2 / i2, i2 * i2 from iis;", nil},
+		{8, "select i3 + i3, i3 - i3, i3 / i3, i3 * i3, i4 + i4, i4 - i4, i4 / i4, i4 * i4 from iis;", nil},
+		{9, "select -i1, -i2, -i3, -i4 from iis;", nil},
+		{10, "select * from iis where i1 = i1 and i2 = i2 and i3 = i3 and i4 = i4;", nil},
+		{11, "select CAST(i1 AS FLOAT(1)) ci1f1, CAST(i1 AS DOUBLE) ci1f2, CAST(i1 AS CHAR(2)) ci1c2 from iis;", nil},
+		// test float
+		{12, "select f1 + f1, f1 - f1, f1 * f1, f1 / f1 from ffs;", nil},
+		{13, "select f2 + f2, f2 - f2, f2 * f2, f2 / f2 from ffs;", nil},
+		{14, "select -f1, -f2 from ffs;", nil},
+		{15, "select * from ffs where f1 = f1 or f2 = f2;", nil},
+		{16, "select * from ffs where f1 > f1 and f2 <= f2;", nil},
+		// test uint
+		{17, "select u1 + u1, u1 - u1, u1 * u1, u1 % u1, u1 / u1 from uus;", nil},
+		{18, "select u2 + u2, u2 - u2, u2 * u2, u2 % u2, u2 / u2 from uus;", nil},
+		{19, "select u3 + u3, u3 - u3, u3 * u3, u3 % u3, u3 / u3 from uus;", nil},
+		{20, "select u4 - u4, u4 + u4, u4 / u4, u4 * u4, u4 % u4 from uus;", nil},
+		// test char, varchar // TODO: should add limit for char while cast ?
+		{21, "create table ccs (c1 char(10), c2 varchar(20));", nil},
+		{22, "select cast(c2 AS char) cc2c1 from ccs;", nil},
+	}
+
+	for i, tc := range testCases {
+		sql := tc.sql
+		expected := tc.expectedError
+
+		c := compile.New("testoperators", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		println(i)
+		for _, e := range es {
+			err := e.Compile(nil, Print)
+			if expected == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected.Error())
+				break
+			}
+			err = e.Run(1)
+			if expected == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected.Error())
+				break
+			}
+		}
+	}
+}

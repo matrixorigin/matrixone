@@ -363,7 +363,7 @@ func GenerateUnaryOperators() error {
 			{types.T_int32, types.T_int32},
 			{types.T_int64, types.T_int64},
 			{types.T_float32, types.T_float32},
-			{types.T_int64, types.T_int64},
+			{types.T_float64, types.T_float64},
 		},
 		Not:   nil,
 	}
