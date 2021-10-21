@@ -1,12 +1,11 @@
 package shard
 
 import (
-	"context"
 	"errors"
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
-	"sync/atomic"
 )
 
 var (
@@ -20,135 +19,50 @@ var (
 )
 
 type manager struct {
-	mu            sync.RWMutex
-	shards        map[uint64]*proxy
-	requestQueue  chan *Entry
-	requestCtx    context.Context
-	requestCancel context.CancelFunc
-	requestWg     sync.WaitGroup
-
-	ckpQueue  chan *Snippet
-	ckpCtx    context.Context
-	ckpCancel context.CancelFunc
-	ckpWg     sync.WaitGroup
-
-	wg     sync.WaitGroup
-	closed int32
+	sm.ClosedState
+	sm.StateMachine
+	mu     sync.RWMutex
+	shards map[uint64]*proxy
 }
 
 func NewManager() *manager {
 	mgr := &manager{
-		shards:       make(map[uint64]*proxy),
-		requestQueue: make(chan *Entry, QueueSize),
-		ckpQueue:     make(chan *Snippet, QueueSize),
+		shards: make(map[uint64]*proxy),
 	}
-	mgr.requestCtx, mgr.requestCancel = context.WithCancel(context.Background())
-	mgr.ckpCtx, mgr.ckpCancel = context.WithCancel(context.Background())
-	mgr.wg.Add(2)
-	go mgr.requestLoop()
-	go mgr.checkpointLoop()
+	wg := new(sync.WaitGroup)
+	rQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onReceived)
+	ckpQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onSnippets)
+	mgr.StateMachine = sm.NewStateMachine(wg, mgr, rQueue, ckpQueue)
+	mgr.Start()
 	return mgr
-}
-
-func (mgr *manager) checkpointLoop() {
-	defer mgr.wg.Done()
-	entries := make([]*Snippet, 0, BatchSize)
-	for {
-		select {
-		case <-mgr.ckpCtx.Done():
-			return
-		case entry := <-mgr.ckpQueue:
-			entries = append(entries, entry)
-		Left:
-			for i := 0; i < BatchSize-1; i++ {
-				select {
-				case entry = <-mgr.ckpQueue:
-					entries = append(entries, entry)
-				default:
-					break Left
-				}
-			}
-			cnt := len(entries)
-			mgr.onSnippets(entries)
-			entries = entries[:0]
-			mgr.ckpWg.Add(-1 * cnt)
-		}
-	}
-}
-
-func (mgr *manager) requestLoop() {
-	defer mgr.wg.Done()
-	entries := make([]*Entry, 0, BatchSize)
-	for {
-		select {
-		case <-mgr.requestCtx.Done():
-			return
-		case entry := <-mgr.requestQueue:
-			entries = append(entries, entry)
-		Left:
-			for i := 0; i < BatchSize-1; i++ {
-				select {
-				case entry = <-mgr.requestQueue:
-					entries = append(entries, entry)
-				default:
-					break Left
-				}
-			}
-			cnt := len(entries)
-			mgr.onEntries(entries)
-			entries = entries[:0]
-			mgr.requestWg.Add(-1 * cnt)
-		}
-	}
 }
 
 func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
 	entry := wal.GetEntry(0)
 	entry.Payload = payload
-	if err := mgr.EnqueueEntry(entry); err != nil {
+	if _, err := mgr.EnqueueRecevied(entry); err != nil {
 		entry.Free()
 		return nil, err
 	}
 	return entry, nil
 }
 
+func (mgr *manager) EnqueueEntry(entry *Entry) error {
+	_, err := mgr.EnqueueRecevied(entry)
+	return err
+}
+
 func (mgr *manager) Checkpoint(v interface{}) {
 	switch vv := v.(type) {
 	case *LogIndex:
 		snip := NewSimpleSnippet(vv)
-		mgr.EnqueueSnippet(snip)
+		mgr.EnqueueCheckpoint(snip)
 		return
 	case *Snippet:
-		mgr.EnqueueSnippet(vv)
+		mgr.EnqueueCheckpoint(vv)
 		return
 	}
 	panic("not supported")
-}
-
-func (mgr *manager) EnqueueEntry(entry *Entry) error {
-	if atomic.LoadInt32(&mgr.closed) == int32(1) {
-		return errors.New("closed")
-	}
-	mgr.requestWg.Add(1)
-	if atomic.LoadInt32(&mgr.closed) == int32(1) {
-		mgr.requestWg.Done()
-		return errors.New("closed")
-	}
-	mgr.requestQueue <- entry
-	return nil
-}
-
-func (mgr *manager) EnqueueSnippet(snip *Snippet) error {
-	if atomic.LoadInt32(&mgr.closed) == int32(1) {
-		return errors.New("closed")
-	}
-	mgr.ckpWg.Add(1)
-	if atomic.LoadInt32(&mgr.closed) == int32(1) {
-		mgr.ckpWg.Done()
-		return errors.New("closed")
-	}
-	mgr.ckpQueue <- snip
-	return nil
 }
 
 func (mgr *manager) GetShard(id uint64) (*proxy, error) {
@@ -184,8 +98,9 @@ func (mgr *manager) getOrAddShard(id uint64) (*proxy, error) {
 	return shard, err
 }
 
-func (mgr *manager) onEntries(entries []*Entry) {
-	for _, entry := range entries {
+func (mgr *manager) onReceived(items ...interface{}) {
+	for _, item := range items {
+		entry := item.(*Entry)
 		mgr.logEntry(entry)
 		entry.SetDone()
 	}
@@ -197,9 +112,10 @@ func (mgr *manager) logEntry(entry *Entry) {
 	shard.LogIndex(index)
 }
 
-func (mgr *manager) onSnippets(snips []*Snippet) {
+func (mgr *manager) onSnippets(items ...interface{}) {
 	shards := make(map[uint64]*proxy)
-	for _, snip := range snips {
+	for _, item := range items {
+		snip := item.(*Snippet)
 		shardId := snip.GetShardId()
 		shard, err := mgr.GetShard(shardId)
 		if err != nil {
@@ -229,13 +145,6 @@ func (mgr *manager) String() string {
 }
 
 func (mgr *manager) Close() error {
-	if !atomic.CompareAndSwapInt32(&mgr.closed, int32(0), int32(1)) {
-		return nil
-	}
-	mgr.requestWg.Wait()
-	mgr.requestCancel()
-	mgr.ckpWg.Wait()
-	mgr.ckpCancel()
-	mgr.wg.Wait()
+	mgr.Stop()
 	return nil
 }
