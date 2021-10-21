@@ -176,40 +176,32 @@ func TestStore(t *testing.T) {
 func TestBatchStore(t *testing.T) {
 	dir := "/tmp/testbatchstore"
 	os.RemoveAll(dir)
-	var wg sync.WaitGroup
 	cfg := &RotationCfg{
 		RotateChecker: &MaxSizeRotationChecker{MaxSize: 100 * int(common.M)},
 	}
-	s, err := NewBatchStore(dir, "bstore", cfg)
+	s, err := NewBatchStore(dir, "basestore", cfg)
 	assert.Nil(t, err)
 	s.Start()
+	defer s.Close()
+	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(100)
 
 	f := func(i int) func() {
 		return func() {
 			defer wg.Done()
-			if i%2 == 0 {
-				entry := NewAsyncBaseEntry()
-				entry.GetMeta().SetType(ETFlush)
-				err := s.AppendEntry(entry)
-				assert.Nil(t, err)
-				err = entry.WaitDone()
-				assert.Nil(t, err)
-				entry.Free()
-			} else {
-				entry := GetEmptyEntry()
-				entry.GetMeta().SetType(ETFlush)
-				err := s.AppendEntry(entry)
-				assert.Nil(t, err)
-			}
+			entry := NewAsyncBaseEntry()
+			entry.GetMeta().SetType(ETFlush)
+			err := s.AppendEntry(entry)
+			assert.Nil(t, err)
+			err = entry.WaitDone()
+			assert.Nil(t, err)
+			entry.Free()
 		}
 	}
 
-	for i := 0; i < 1000; i++ {
+	for i := 0; i < 200; i++ {
 		wg.Add(1)
 		pool.Submit(f(i))
 	}
-
 	wg.Wait()
-	s.Close()
 }
