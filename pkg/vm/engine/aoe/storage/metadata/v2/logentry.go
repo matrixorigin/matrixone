@@ -19,7 +19,7 @@ import (
 )
 
 type LogEntryType = logstore.EntryType
-type LogEntry = logstore.Entry
+type LogEntry = logstore.AsyncEntry
 type LogEntryMeta = logstore.EntryMeta
 
 const (

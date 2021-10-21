@@ -20,15 +20,16 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
-	worker "matrixone/pkg/vm/engine/aoe/storage/worker"
-	wb "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"sort"
 	"sync"
 
 	"github.com/google/btree"
 )
 
-type SyncerCfg = logstore.SyncerCfg
+var (
+	DefaultCheckpointDelta = uint64(10000)
+)
 
 var (
 	DuplicateErr       = errors.New("aoe: duplicate")
@@ -82,7 +83,7 @@ func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := e.Marshal()
-	logEntry := logstore.GetEmptyEntry()
+	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	logEntry.SetAuxilaryInfo(&e.Range)
@@ -90,24 +91,25 @@ func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 }
 
 type Catalog struct {
-	*sync.RWMutex `json:"-"`
-	Sequence      `json:"-"`
-	Store         logstore.AwareStore   `json:"-"`
-	Cfg           *CatalogCfg           `json:"-"`
-	NameNodes     map[string]*tableNode `json:"-"`
-	NameIndex     *btree.BTree          `json:"-"`
-	nodesMu       sync.RWMutex          `json:"-"`
-	archiver      wb.IOpWorker          `json:"-"`
+	sm.ClosedState  `json:"-"`
+	sm.StateMachine `json:"-"`
+	*sync.RWMutex   `json:"-"`
+	Sequence        `json:"-"`
+	Store           logstore.AwareStore   `json:"-"`
+	Cfg             *CatalogCfg           `json:"-"`
+	NameNodes       map[string]*tableNode `json:"-"`
+	NameIndex       *btree.BTree          `json:"-"`
+	nodesMu         sync.RWMutex          `json:"-"`
 
 	TableSet map[uint64]*Table
 }
 
-func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) (*Catalog, error) {
+func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
 	replayer := newCatalogReplayer()
-	return replayer.RebuildCatalog(mu, cfg, syncerCfg)
+	return replayer.RebuildCatalog(mu, cfg)
 }
 
-func NewCatalogWithBatchStore(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
+func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
 		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
 		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
@@ -123,53 +125,21 @@ func NewCatalogWithBatchStore(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
 		MaxSize: cfg.RotationFileMaxSize,
 	}
-	store, err := logstore.NewBatchStore(cfg.Dir, "bstore", rotationCfg)
+	store, err := logstore.NewBatchStore(common.MakeMetaDir(cfg.Dir), "store", rotationCfg)
 	if err != nil {
 		panic(err)
 	}
 	catalog.Store = store
-	return catalog
-}
-
-func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalog {
-	if cfg.RotationFileMaxSize <= 0 {
-		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
-		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
-	}
-	catalog := &Catalog{
-		RWMutex:   mu,
-		Cfg:       cfg,
-		TableSet:  make(map[uint64]*Table),
-		NameNodes: make(map[string]*tableNode),
-		NameIndex: btree.New(2),
-	}
-	if syncerCfg == nil {
-		syncerCfg = &SyncerCfg{
-			Interval: logstore.DefaultHBInterval,
-		}
-	} else if syncerCfg.Interval == 0 {
-		syncerCfg.Interval = logstore.DefaultHBInterval
-	}
-	factory := &hbHandleFactory{
-		catalog: catalog,
-	}
-	syncerCfg.Factory = factory.builder
-	rotationCfg := &logstore.RotationCfg{}
-	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
-		MaxSize: cfg.RotationFileMaxSize,
-	}
-	store, err := logstore.NewSyncAwareStore(common.MakeMetaDir(cfg.Dir), "store", rotationCfg, syncerCfg)
-	if err != nil {
-		panic(err)
-	}
-	catalog.Store = store
-	catalog.archiver = worker.NewOpWorker("archiver")
-	catalog.archiver.Start()
+	wg := new(sync.WaitGroup)
+	rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
+	ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
+	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	return catalog
 }
 
 func (catalog *Catalog) StartSyncer() {
 	catalog.Store.Start()
+	catalog.Start()
 }
 
 func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error {
@@ -247,10 +217,8 @@ func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
 }
 
 func (catalog *Catalog) Close() error {
+	catalog.Stop()
 	catalog.Store.Close()
-	if catalog.archiver != nil {
-		catalog.archiver.Stop()
-	}
 	return nil
 }
 
@@ -413,6 +381,7 @@ func (catalog *Catalog) commitLocked(entry IEntry, eType LogEntryType, rwlocker 
 	if err != nil {
 		panic(err)
 	}
+	lentry.WaitDone()
 	lentry.Free()
 }
 
@@ -455,9 +424,33 @@ func (catalog *Catalog) SimpleGetBlock(tableId, segmentId, blockId uint64) (*Blo
 	return block, nil
 }
 
-func (catalog *Catalog) Checkpoint() error {
+func (catalog *Catalog) onCheckpoint(items ...interface{}) {
+	if err := catalog.doCheckPoint(); err != nil {
+		panic(err)
+	}
+	for _, item := range items {
+		item.(logstore.AsyncEntry).DoneWithErr(nil)
+	}
+}
+
+func (catalog *Catalog) Checkpoint() (logstore.AsyncEntry, error) {
+	entry := logstore.NewAsyncBaseEntry()
+	ret, err := catalog.EnqueueCheckpoint(entry)
+	if err != nil {
+		return nil, err
+	}
+	return ret.(logstore.AsyncEntry), nil
+}
+
+func (catalog *Catalog) doCheckPoint() error {
+	var err error
 	view := catalog.LatestView()
-	err := catalog.Store.Checkpoint(view.ToLogEntry(logstore.ETCheckpoint))
+	entry := view.ToLogEntry(logstore.ETCheckpoint)
+	if err = catalog.Store.Checkpoint(entry); err != nil {
+		return err
+	}
+	err = entry.WaitDone()
+	entry.Free()
 	return err
 }
 
@@ -494,7 +487,7 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := catalog.Marshal()
-	logEntry := logstore.GetEmptyEntry()
+	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
@@ -579,7 +572,7 @@ func MockCatalog(dir string, blkRows, segBlks uint64) *Catalog {
 	cfg.Dir = dir
 	cfg.BlockMaxRows = blkRows
 	cfg.SegmentMaxBlocks = segBlks
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	if err != nil {
 		panic(err)
 	}

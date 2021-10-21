@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"os"
 	"sync"
@@ -33,7 +32,7 @@ func TestTable(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = "/tmp/testtable"
 	os.RemoveAll(cfg.Dir)
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	catalog.StartSyncer()
 	defer catalog.Close()
@@ -54,7 +53,7 @@ func TestCreateTable(t *testing.T) {
 	os.RemoveAll(dir)
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	catalog.StartSyncer()
 	defer catalog.Close()
@@ -92,7 +91,7 @@ func TestTables(t *testing.T) {
 	os.RemoveAll(dir)
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	catalog.StartSyncer()
 	defer catalog.Close()
@@ -133,7 +132,7 @@ func TestDropTable(t *testing.T) {
 	os.RemoveAll(dir)
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	catalog.StartSyncer()
 
@@ -199,11 +198,7 @@ func TestDropTable(t *testing.T) {
 	t.Log(tableNode.PString(PPL1))
 	catalog.Close()
 
-	syncerCfg := &SyncerCfg{
-		Interval: time.Duration(10) * time.Nanosecond,
-	}
-	// catalog = NewCatalog(new(sync.RWMutex), cfg, syncerCfg)
-	catalog, err = OpenCatalog(new(sync.RWMutex), cfg, syncerCfg)
+	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	catalog.StartSyncer()
 	// err = replayer.Replay(catalog.Store)
@@ -217,7 +212,7 @@ func TestSegment(t *testing.T) {
 
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	catalog.StartSyncer()
 	defer catalog.Close()
@@ -265,7 +260,7 @@ func TestBlock(t *testing.T) {
 	cfg.BlockMaxRows = uint64(10)
 	cfg.SegmentMaxBlocks = uint64(4)
 	cfg.Dir = dir
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	catalog.StartSyncer()
 	defer catalog.Close()
@@ -348,10 +343,7 @@ func TestReplay(t *testing.T) {
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
 	cfg.RotationFileMaxSize = 100 * int(common.K)
-	syncerCfg := &SyncerCfg{
-		Interval: syncerInterval,
-	}
-	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg, syncerCfg)
+	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.StartSyncer()
 
 	mockTbls := 5
@@ -522,10 +514,7 @@ func TestUpgrade(t *testing.T) {
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(2)
 	cfg.RotationFileMaxSize = 20 * int(common.K)
-	syncerCfg := &SyncerCfg{
-		Interval: time.Duration(1) * time.Millisecond,
-	}
-	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg, syncerCfg)
+	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.StartSyncer()
 	pool1, _ := ants.NewPool(2)
 	pool2, _ := ants.NewPool(2)
@@ -623,14 +612,12 @@ func TestUpgrade(t *testing.T) {
 	assert.Equal(t, segCnt*blockCnt, int(upgradedBlocks))
 	assert.Equal(t, segCnt, int(upgradedSegments))
 
-	catalog.Store.AppendEntry(logstore.FlushEntry)
-
 	catalog.Close()
 	sequence := catalog.Sequence
 
 	t.Log("Start replay")
 	now := time.Now()
-	catalog, err = OpenCatalog(new(sync.RWMutex), cfg, syncerCfg)
+	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	// t.Logf("%d - %d", catalog.Store.GetSyncedId(), catalog.Store.GetCheckpointId())
 	t.Log(time.Since(now))
@@ -664,14 +651,13 @@ func TestUpgrade(t *testing.T) {
 	for _, tbl := range view.Catalog.TableSet {
 		t.Log(len(tbl.SegmentSet))
 	}
-	time.Sleep(syncerCfg.Interval * 2)
 	view = catalog.LatestView()
 	assert.Equal(t, 1, len(view.Catalog.TableSet))
 
 	sequence = catalog.Sequence
 	catalog.Close()
 
-	catalog, err = OpenCatalog(new(sync.RWMutex), cfg, syncerCfg)
+	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
 	catalog.StartSyncer()
 	// t.Logf("%d - %d", catalog.Store.GetSyncedId(), catalog.Store.GetCheckpointId())
@@ -682,8 +668,30 @@ func TestUpgrade(t *testing.T) {
 	catalog.Close()
 }
 
-func TestCatalogWithBatchStore(t *testing.T) {
-	dir := "/tmp/testcatalogwithbatchstore"
+func TestOpen(t *testing.T) {
+	dir := "/tmp/meta/testopen"
+	os.RemoveAll(dir)
+	err := os.MkdirAll(dir, os.FileMode(0755))
+	assert.Nil(t, err)
+	cfg := new(CatalogCfg)
+	cfg.Dir = dir
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(100)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
+	assert.Nil(t, err)
+	catalog.StartSyncer()
+	catalog.Close()
+
+	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
+	assert.Nil(t, err)
+	catalog.StartSyncer()
+
+	schema := MockSchema(2)
+	_, err = catalog.SimpleCreateTable(schema, nil)
+	assert.Nil(t, err)
+	catalog.Close()
+}
+func TestCatalog2(t *testing.T) {
+	dir := "/tmp/testcatalog2"
 	os.RemoveAll(dir)
 	delta := DefaultCheckpointDelta
 	DefaultCheckpointDelta = uint64(400000)
@@ -695,8 +703,7 @@ func TestCatalogWithBatchStore(t *testing.T) {
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(20)
 	cfg.RotationFileMaxSize = 10 * int(common.K)
-	catalog := NewCatalogWithBatchStore(new(sync.RWMutex), cfg)
-	// catalog := NewCatalog(new(sync.RWMutex), cfg, nil)
+	catalog := NewCatalog(new(sync.RWMutex), cfg)
 	catalog.StartSyncer()
 
 	pool, _ := ants.NewPool(10)
@@ -731,28 +738,5 @@ func TestCatalogWithBatchStore(t *testing.T) {
 	}
 	wg.Wait()
 
-	catalog.Close()
-}
-
-func TestOpen(t *testing.T) {
-	dir := "/tmp/meta/testopen"
-	os.RemoveAll(dir)
-	err := os.MkdirAll(dir, os.FileMode(0755))
-	assert.Nil(t, err)
-	cfg := new(CatalogCfg)
-	cfg.Dir = dir
-	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(100)
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
-	assert.Nil(t, err)
-	catalog.StartSyncer()
-	catalog.Close()
-
-	catalog, err = OpenCatalog(new(sync.RWMutex), cfg, nil)
-	assert.Nil(t, err)
-	catalog.StartSyncer()
-
-	schema := MockSchema(2)
-	_, err = catalog.SimpleCreateTable(schema, nil)
-	assert.Nil(t, err)
 	catalog.Close()
 }

@@ -28,12 +28,6 @@ var (
 	}}
 )
 
-func GetEmptyEntry() *BaseEntry {
-	e := _entPool.Get().(*BaseEntry)
-	e.p = &_entPool
-	return e
-}
-
 type Entry interface {
 	IsAsync() bool
 	GetMeta() *EntryMeta

@@ -179,8 +179,8 @@ func newCatalogReplayer() *catalogReplayer {
 	return replayer
 }
 
-func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) (*Catalog, error) {
-	replayer.catalog = NewCatalog(mu, cfg, syncerCfg)
+func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
+	replayer.catalog = NewCatalog(mu, cfg)
 	if err := replayer.Replay(replayer.catalog.Store); err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 }
 
 func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logstore.ReplayObserver) error {
-	entry := logstore.GetEmptyEntry()
+	entry := logstore.NewAsyncBaseEntry()
 	defer entry.Free()
 	meta := entry.GetMeta()
 	_, err := meta.ReadFrom(r)

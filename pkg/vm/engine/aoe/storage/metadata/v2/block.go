@@ -290,7 +290,7 @@ func (e *Block) ToLogEntry(eType LogEntryType) LogEntry {
 	}
 	entry := e.toLogEntry()
 	buf, _ := entry.Marshal()
-	logEntry := logstore.GetEmptyEntry()
+	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
