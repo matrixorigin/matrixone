@@ -22,6 +22,8 @@ func (p *writePipeline) prepare(ctx interface{}) (LogEntry, error) {
 		return p.catalog.prepareCreateTable(v)
 	case *dropTableCtx:
 		return v.table.prepareSoftDelete(v)
+	case *deleteTableCtx:
+		return v.table.prepareDeleteTable(v)
 	}
 	panic("not supported")
 }

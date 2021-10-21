@@ -268,8 +268,8 @@ func (catalog *Catalog) HardDeleteTable(id uint64) error {
 		return TableNotFoundErr
 	}
 	catalog.Unlock()
-	table.HardDelete()
-	return nil
+
+	return table.HardDelete()
 }
 
 func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *ExternalIndex) error {
@@ -296,25 +296,6 @@ func (catalog *Catalog) prepareDropTable(ctx *dropTableCtx) error {
 		return TableNotFoundErr
 	}
 	ctx.table = table
-	return nil
-}
-
-// Guarded by lock
-func (catalog *Catalog) DropTableByName(name string, tranId uint64, autoCommit bool, exIndex *ExternalIndex) error {
-	nn := catalog.NameNodes[name]
-	if nn == nil {
-		return TableNotFoundErr
-	}
-	entry := nn.GetEntry()
-	catalog.Unlock()
-	defer catalog.Lock()
-	entry.RLock()
-	if entry.IsSoftDeletedLocked() {
-		entry.RUnlock()
-		return TableNotFoundErr
-	}
-	entry.RUnlock()
-	entry.SoftDelete(tranId, exIndex, autoCommit)
 	return nil
 }
 

@@ -17,6 +17,11 @@ type dropTableCtx struct {
 	table *Table
 }
 
+type deleteTableCtx struct {
+	writeCtx
+	table *Table
+}
+
 func newCreateTableCtx(schema *Schema, exIndex *LogIndex) *createTableCtx {
 	return &createTableCtx{
 		writeCtx: writeCtx{
@@ -34,5 +39,11 @@ func newDropTableCtx(name string, exIndex *LogIndex) *dropTableCtx {
 			exIndex: exIndex,
 		},
 		name: name,
+	}
+}
+
+func newDeleteTableCtx(table *Table) *deleteTableCtx {
+	return &deleteTableCtx{
+		table: table,
 	}
 }

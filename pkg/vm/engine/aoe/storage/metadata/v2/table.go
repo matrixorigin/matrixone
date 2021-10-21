@@ -147,7 +147,12 @@ func (e *Table) rebuild(catalog *Catalog) {
 // It is always driven by engine internal scheduler. It means all the
 // table related data resources were deleted. A hard-deleted table will
 // be deleted from catalog later
-func (e *Table) HardDelete() {
+func (e *Table) HardDelete() error {
+	ctx := newDeleteTableCtx(e)
+	return e.Catalog.doCommit(ctx)
+}
+
+func (e *Table) prepareDeleteTable(ctx *deleteTableCtx) (LogEntry, error) {
 	cInfo := &CommitInfo{
 		CommitId: e.Catalog.NextUncommitId(),
 		Op:       OpHardDelete,
@@ -157,16 +162,19 @@ func (e *Table) HardDelete() {
 	defer e.Unlock()
 	if e.IsHardDeletedLocked() {
 		logutil.Warnf("HardDelete %d but already hard deleted", e.Id)
-		return
+		return nil, TableNotFoundErr
 	}
 	if !e.IsSoftDeletedLocked() {
 		panic("logic error: Cannot hard delete entry that not soft deleted")
 	}
 	e.onNewCommit(cInfo)
-	e.Catalog.Commit(e, ETHardDeleteTable, &e.RWMutex)
+	logEntry := e.Catalog.commitEntry(e, ETHardDeleteTable, e)
+	return logEntry, nil
 }
 
 // Simple* wrappes simple usage of wrapped operation
+// It is driven by external command. The engine then schedules a GC task to hard delete
+// related resources.
 func (e *Table) SimpleSoftDelete(exIndex *ExternalIndex) error {
 	ctx := newDropTableCtx(e.Schema.Name, exIndex)
 	ctx.table = e
@@ -190,30 +198,6 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 	e.onNewCommit(cInfo)
 	logEntry := e.Catalog.commitEntry(e, ETSoftDeleteTable, e)
 	return logEntry, nil
-}
-
-// Threadsafe
-// It is driven by external command. The engine then schedules a GC task to hard delete
-// related resources.
-func (e *Table) SoftDelete(tranId uint64, exIndex *ExternalIndex, autoCommit bool) {
-	cInfo := &CommitInfo{
-		TranId:        tranId,
-		CommitId:      tranId,
-		ExternalIndex: exIndex,
-		Op:            OpSoftDelete,
-		SSLLNode:      *common.NewSSLLNode(),
-	}
-	e.Lock()
-	defer e.Unlock()
-	if e.IsSoftDeletedLocked() {
-		return
-	}
-	e.onNewCommit(cInfo)
-
-	if !autoCommit {
-		return
-	}
-	e.Catalog.Commit(e, ETSoftDeleteTable, &e.RWMutex)
 }
 
 // Not safe
