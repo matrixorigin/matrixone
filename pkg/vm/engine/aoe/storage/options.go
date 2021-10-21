@@ -151,7 +151,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 			catalogCfg.SegmentMaxBlocks = o.Meta.Conf.SegmentMaxBlocks
 		}
 		var err error
-		if o.Meta.Catalog, err = metadata.OpenCatalog(&o.Mu, catalogCfg, nil); err != nil {
+		if o.Meta.Catalog, err = metadata.OpenCatalog(&o.Mu, catalogCfg); err != nil {
 			panic(err)
 		}
 		o.Meta.Catalog.StartSyncer()

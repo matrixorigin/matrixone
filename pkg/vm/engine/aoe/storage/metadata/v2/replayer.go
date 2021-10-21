@@ -262,6 +262,8 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 	case ETCreateTable:
 		tbl := &Table{}
 		tbl.Unmarshal(entry.GetPayload())
+		commitId := GetCommitIdFromLogEntry(entry)
+		tbl.CommitLocked(commitId)
 		observer.OnReplayCommit(tbl.CommitInfo.CommitId)
 		replayer.cache.Append(&replayEntry{
 			typ: ETCreateTable,

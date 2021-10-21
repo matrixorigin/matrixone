@@ -167,8 +167,29 @@ func (e *Table) HardDelete() {
 }
 
 // Simple* wrappes simple usage of wrapped operation
-func (e *Table) SimpleSoftDelete(exIndex *ExternalIndex) {
-	e.SoftDelete(e.Catalog.NextUncommitId(), exIndex, true)
+func (e *Table) SimpleSoftDelete(exIndex *ExternalIndex) error {
+	ctx := newDropTableCtx(e.Schema.Name, exIndex)
+	ctx.table = e
+	return e.Catalog.doCommit(ctx)
+}
+
+func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
+	commitId := e.Catalog.NextUncommitId()
+	cInfo := &CommitInfo{
+		TranId:        commitId,
+		CommitId:      commitId,
+		ExternalIndex: ctx.exIndex,
+		Op:            OpSoftDelete,
+		SSLLNode:      *common.NewSSLLNode(),
+	}
+	e.Lock()
+	defer e.Unlock()
+	if e.IsSoftDeletedLocked() {
+		return nil, TableNotFoundErr
+	}
+	e.onNewCommit(cInfo)
+	logEntry := e.Catalog.commitEntry(e, ETSoftDeleteTable, e)
+	return logEntry, nil
 }
 
 // Threadsafe
