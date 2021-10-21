@@ -27,7 +27,7 @@ type manager struct {
 	requestCancel context.CancelFunc
 	requestWg     sync.WaitGroup
 
-	ckpQueue  chan *snippet
+	ckpQueue  chan *Snippet
 	ckpCtx    context.Context
 	ckpCancel context.CancelFunc
 	ckpWg     sync.WaitGroup
@@ -40,7 +40,7 @@ func NewManager() *manager {
 	mgr := &manager{
 		shards:       make(map[uint64]*proxy),
 		requestQueue: make(chan *Entry, QueueSize),
-		ckpQueue:     make(chan *snippet, QueueSize),
+		ckpQueue:     make(chan *Snippet, QueueSize),
 	}
 	mgr.requestCtx, mgr.requestCancel = context.WithCancel(context.Background())
 	mgr.ckpCtx, mgr.ckpCancel = context.WithCancel(context.Background())
@@ -52,7 +52,7 @@ func NewManager() *manager {
 
 func (mgr *manager) checkpointLoop() {
 	defer mgr.wg.Done()
-	entries := make([]*snippet, 0, BatchSize)
+	entries := make([]*Snippet, 0, BatchSize)
 	for {
 		select {
 		case <-mgr.ckpCtx.Done():
@@ -118,7 +118,7 @@ func (mgr *manager) Checkpoint(v interface{}) {
 		snip := NewSimpleSnippet(vv)
 		mgr.EnqueueSnippet(snip)
 		return
-	case *snippet:
+	case *Snippet:
 		mgr.EnqueueSnippet(vv)
 		return
 	}
@@ -138,7 +138,7 @@ func (mgr *manager) EnqueueEntry(entry *Entry) error {
 	return nil
 }
 
-func (mgr *manager) EnqueueSnippet(snip *snippet) error {
+func (mgr *manager) EnqueueSnippet(snip *Snippet) error {
 	if atomic.LoadInt32(&mgr.closed) == int32(1) {
 		return errors.New("closed")
 	}
@@ -197,7 +197,7 @@ func (mgr *manager) logEntry(entry *Entry) {
 	shard.LogIndex(index)
 }
 
-func (mgr *manager) onSnippets(snips []*snippet) {
+func (mgr *manager) onSnippets(snips []*Snippet) {
 	shards := make(map[uint64]*proxy)
 	for _, snip := range snips {
 		shardId := snip.GetShardId()

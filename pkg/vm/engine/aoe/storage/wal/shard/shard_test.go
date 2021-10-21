@@ -1,7 +1,9 @@
 package shard
 
 import (
+	"math/rand"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
 	"sync/atomic"
@@ -55,7 +57,7 @@ func (mp *mockProducer) nextLogBatch() *mockLogBatch {
 
 type mockConsumer struct {
 	shardId uint64
-	snippet *snippet
+	snippet *Snippet
 }
 
 func newMockConsumer(shardId uint64) *mockConsumer {
@@ -169,7 +171,7 @@ func TestShardProxy(t *testing.T) {
 	}
 	now := time.Now()
 	shardProxy.Checkpoint()
-	t.Logf("safe id: %d, %s", shardProxy.SafeId(), time.Since(now))
+	t.Logf("safe id: %d, %s", shardProxy.GetSafeId(), time.Since(now))
 }
 
 func TestShardManager(t *testing.T) {
@@ -209,4 +211,99 @@ func TestShardManager(t *testing.T) {
 	}
 	wg.Wait()
 	mgr.Close()
+}
+
+func TestProxy2(t *testing.T) {
+	waitTime := time.Duration(1) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 5
+	}
+	mgr := NewManager()
+	defer mgr.Close()
+	var indice []*LogIndex
+	for i := 1; i < 20; i += 4 {
+		index := &LogIndex{
+			Id: IndexId{
+				Id:   uint64(i),
+				Size: uint32(1),
+			},
+		}
+		indice = append(indice, index)
+		entry, err := mgr.Log(index)
+		entry.WaitDone()
+		entry.Free()
+		assert.Nil(t, err)
+	}
+	s0, err := mgr.GetShard(0)
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(5), s0.mask.GetCardinality())
+	assert.Equal(t, uint64(12), s0.stopmask.GetCardinality())
+	t.Log(s0.mask.String())
+	t.Log(s0.stopmask.String())
+	mgr.Checkpoint(indice[0])
+	mgr.Checkpoint(indice[1])
+	time.Sleep(waitTime)
+	assert.Equal(t, uint64(5), s0.GetSafeId())
+	mgr.Checkpoint(indice[2])
+	time.Sleep(waitTime)
+	assert.Equal(t, uint64(9), s0.GetSafeId())
+	mgr.Checkpoint(indice[3])
+	time.Sleep(waitTime)
+	assert.Equal(t, uint64(13), s0.GetSafeId())
+	mgr.Checkpoint(indice[4])
+	time.Sleep(waitTime)
+	assert.Equal(t, uint64(17), s0.GetSafeId())
+}
+
+func TestProxy3(t *testing.T) {
+	waitTime := time.Duration(10) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 5
+	}
+	mgr := NewManager()
+	defer mgr.Close()
+	var indice []*LogIndex
+	var lastIndex *LogIndex
+	rand.Seed(time.Now().UnixNano())
+	produce := func() {
+		cnt := 5000
+		j := 0
+		for i := 1; j < cnt; i += rand.Intn(10) + 1 {
+			index := &LogIndex{
+				Id: IndexId{
+					Id:   uint64(i),
+					Size: uint32(1),
+				},
+			}
+			indice = append(indice, index)
+			entry, err := mgr.Log(index)
+			entry.WaitDone()
+			entry.Free()
+			assert.Nil(t, err)
+			j++
+		}
+		lastIndex = indice[cnt-1]
+		t.Log(lastIndex.String())
+	}
+
+	consume := func() {
+		for i := 0; i <= len(indice)-1; i++ {
+			mgr.Checkpoint(indice[i])
+		}
+		time.Sleep(waitTime)
+		s, err := mgr.GetShard(uint64(0))
+		assert.Nil(t, err)
+		assert.Equal(t, lastIndex.Id.Id, s.GetSafeId())
+	}
+
+	now := time.Now()
+	produce()
+	t.Logf("produce takes %s", time.Since(now))
+
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(indice), func(i, j int) { indice[i], indice[j] = indice[j], indice[i] })
+
+	now = time.Now()
+	consume()
+	t.Logf("consume takes %s", time.Since(now))
 }

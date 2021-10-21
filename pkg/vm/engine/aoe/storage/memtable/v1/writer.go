@@ -46,5 +46,9 @@ func (mw *memTableWriter) Flush() (err error) {
 	bw.SetPostExecutor(func() {
 		logutil.Infof(" %s | memTable | Flushed", bw.GetFileName())
 	})
-	return bw.Execute()
+	err = bw.Execute()
+	if mw.memTable.snippet != nil {
+		mw.memTable.opts.Wal.Checkpoint(mw.memTable.snippet)
+	}
+	return
 }

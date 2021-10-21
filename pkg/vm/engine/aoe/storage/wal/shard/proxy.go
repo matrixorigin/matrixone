@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"matrixone/pkg/logutil"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -36,9 +37,11 @@ type proxy struct {
 	id        uint64
 	mgr       *manager
 	mask      *roaring64.Bitmap
+	stopmask  *roaring64.Bitmap
 	snippets  []*snippets
 	snipIdx   map[uint64]int
 	lastIndex uint64
+	safeId    uint64
 	indice    map[uint64]*commitEntry
 }
 
@@ -47,6 +50,7 @@ func newProxy(id uint64, mgr *manager) *proxy {
 		id:       id,
 		mgr:      mgr,
 		mask:     roaring64.New(),
+		stopmask: roaring64.New(),
 		snipIdx:  make(map[uint64]int),
 		snippets: make([]*snippets, 0, 10),
 		indice:   make(map[uint64]*commitEntry),
@@ -56,7 +60,7 @@ func newProxy(id uint64, mgr *manager) *proxy {
 func (p *proxy) String() string {
 	p.logmu.RLock()
 	defer p.logmu.RUnlock()
-	s := fmt.Sprintf("Shard<%d>[SafeId=%d](%s)", p.id, p.SafeId(), p.mask.String())
+	s := fmt.Sprintf("Shard<%d>[SafeId=%d](%s)", p.id, p.GetSafeId(), p.mask.String())
 	return s
 }
 
@@ -67,15 +71,22 @@ func (p *proxy) GetId() uint64 {
 func (p *proxy) LogIndice(indice ...*LogIndex) {
 	p.logmu.Lock()
 	for _, index := range indice {
-		p.mask.Add(index.Id.Id)
+		p.logIndexLocked(index)
 	}
 	p.logmu.Unlock()
 }
 
+func (p *proxy) logIndexLocked(index *LogIndex) {
+	p.mask.Add(index.Id.Id)
+	if index.Id.Id > p.lastIndex+uint64(1) {
+		p.stopmask.AddRange(p.lastIndex+uint64(1), index.Id.Id)
+	}
+	p.lastIndex = index.Id.Id
+}
+
 func (p *proxy) LogIndex(index *LogIndex) {
 	p.logmu.Lock()
-	p.mask.Add(index.Id.Id)
-	p.lastIndex = index.Id.Id
+	p.logIndexLocked(index)
 	p.logmu.Unlock()
 }
 
@@ -84,7 +95,7 @@ func (p *proxy) AppendIndex(index *LogIndex) {
 	p.AppendSnippet(snip)
 }
 
-func (p *proxy) AppendSnippet(snip *snippet) {
+func (p *proxy) AppendSnippet(snip *Snippet) {
 	p.alumu.Lock()
 	defer p.alumu.Unlock()
 	pos, ok := p.snipIdx[snip.GetId()]
@@ -98,11 +109,11 @@ func (p *proxy) AppendSnippet(snip *snippet) {
 	p.snippets = append(p.snippets, group)
 }
 
-func (p *proxy) ExtendSnippets(snips []*snippet) {
+func (p *proxy) ExtendSnippets(snips []*Snippet) {
 	if len(snips) == 0 {
 		return
 	}
-	mapped := make(map[uint64][]*snippet)
+	mapped := make(map[uint64][]*Snippet)
 	for _, snip := range snips {
 		mapped[snip.GetId()] = append(mapped[snip.GetId()], snip)
 	}
@@ -150,17 +161,36 @@ func (p *proxy) Checkpoint() {
 	}
 	p.logmu.Lock()
 	p.mask.Xor(mask)
+	maskNum := p.mask.GetCardinality()
+	stopNum := p.stopmask.GetCardinality()
+	if maskNum == 0 {
+		if stopNum != 0 {
+			p.stopmask.Clear()
+		}
+		p.SetSafeId(p.lastIndex)
+	} else if stopNum > 0 {
+		it := p.mask.Iterator()
+		start := it.Next()
+		for pos := start - 1; pos >= uint64(0); pos-- {
+			if !p.stopmask.Contains(pos) {
+				p.SetSafeId(pos)
+				break
+			}
+		}
+		p.stopmask.RemoveRange(uint64(0), start)
+	} else {
+		it := p.mask.Iterator()
+		pos := it.Next()
+		p.SetSafeId(pos - 1)
+	}
 	p.logmu.Unlock()
-	logutil.Infof("Shard-%d: indice-%d, safeid-%d %s", p.id, len(p.indice), p.SafeId(), time.Since(now))
+	logutil.Infof("Shard-%d: pending-%d, safeid-%d %s", p.id, maskNum, p.GetSafeId(), time.Since(now))
 }
 
-func (p *proxy) SafeId() uint64 {
-	p.logmu.RLock()
-	defer p.logmu.RUnlock()
-	if p.mask.GetCardinality() == 0 {
-		return p.lastIndex
-	}
-	it := p.mask.Iterator()
-	pos := it.Next()
-	return pos - 1
+func (p *proxy) SetSafeId(id uint64) {
+	atomic.StoreUint64(&p.safeId, id)
+}
+
+func (p *proxy) GetSafeId() uint64 {
+	return atomic.LoadUint64(&p.safeId)
 }

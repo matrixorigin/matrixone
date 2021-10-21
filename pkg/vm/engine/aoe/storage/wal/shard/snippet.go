@@ -6,12 +6,12 @@ import (
 
 type snippets struct {
 	id    uint64
-	snips []*snippet
+	snips []*Snippet
 }
 
 func newSnippets(id uint64) *snippets {
 	group := &snippets{
-		snips: make([]*snippet, 0),
+		snips: make([]*Snippet, 0),
 		id:    id,
 	}
 	return group
@@ -21,11 +21,11 @@ func (g *snippets) GetId() uint64 {
 	return g.id
 }
 
-func (g *snippets) Append(seq *snippet) {
+func (g *snippets) Append(seq *Snippet) {
 	g.snips = append(g.snips, seq)
 }
 
-func (g *snippets) Extend(snips ...*snippet) {
+func (g *snippets) Extend(snips ...*Snippet) {
 	g.snips = append(g.snips, snips...)
 }
 
@@ -35,15 +35,15 @@ func (g *snippets) ForEach(fn func(*IndexId)) {
 	}
 }
 
-type snippet struct {
+type Snippet struct {
 	shardId uint64
 	id      uint64
 	offset  uint32
 	indice  []*LogIndex
 }
 
-func NewSnippet(shardId, id uint64, offset uint32) *snippet {
-	return &snippet{
+func NewSnippet(shardId, id uint64, offset uint32) *Snippet {
+	return &Snippet{
 		shardId: shardId,
 		id:      id,
 		offset:  offset,
@@ -51,40 +51,41 @@ func NewSnippet(shardId, id uint64, offset uint32) *snippet {
 	}
 }
 
-func NewSimpleSnippet(index *LogIndex) *snippet {
-	return &snippet{
+func NewSimpleSnippet(index *LogIndex) *Snippet {
+	return &Snippet{
 		shardId: index.ShardId,
 		indice:  []*LogIndex{index},
 	}
 }
 
-func (s *snippet) GetId() uint64 {
+func (s *Snippet) GetId() uint64 {
 	return s.id
 }
 
-func (s *snippet) GetShardId() uint64 {
+func (s *Snippet) GetShardId() uint64 {
 	return s.shardId
 }
 
-func (s *snippet) Append(index *LogIndex) {
+func (s *Snippet) Append(index *LogIndex) {
 	copied := *index
 	s.indice = append(s.indice, &copied)
 }
 
-func (s *snippet) LastIndex() *LogIndex {
+func (s *Snippet) LastIndex() *LogIndex {
 	if len(s.indice) == 0 {
 		return nil
 	}
 	return s.indice[len(s.indice)-1]
 }
 
-func (s *snippet) CompletedRange(exclude *common.Range, fn func(*IndexId)) common.Range {
+func (s *Snippet) CompletedRange(exclude *common.Range, fn func(*IndexId)) common.Range {
 	count := uint64(0)
 	if exclude == nil {
 		r := common.Range{}
 		for i := len(s.indice) - 1; i >= 0; i-- {
+			// logutil.Infof("snippet %d-%d %s", s.id, i, s.indice[i].String())
 			if !s.indice[i].IsApplied() {
-				break
+				continue
 			}
 			r.Left = uint64(i)
 			count++
@@ -100,8 +101,9 @@ func (s *snippet) CompletedRange(exclude *common.Range, fn func(*IndexId)) commo
 	r := common.Range{}
 	excludeEnd := int(exclude.Right)
 	for i := len(s.indice) - 1; i >= 0; i-- {
+		// logutil.Infof("snippet %d-%d %s", s.id, i, s.indice[i].String())
 		if !s.indice[i].IsApplied() || i < excludeEnd || i < int(s.offset) {
-			break
+			continue
 		}
 		count++
 		r.Left = uint64(i)

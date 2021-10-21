@@ -43,6 +43,12 @@ func (e *BaseEntry) GetFirstCommit() *CommitInfo {
 	return prev
 }
 
+func (e *BaseEntry) GetCommit() *CommitInfo {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo
+}
+
 // Should be guarded
 func (e *BaseEntry) IsFull() bool {
 	return e.CommitInfo.Op == OpUpgradeFull
