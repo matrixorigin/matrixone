@@ -25,8 +25,8 @@ import (
 	"matrixone/pkg/vm/register"
 )
 
-var UnaryOps = map[int][]*UnaryOp{
-    UnaryMinus: {
+func init() {
+    UnaryOps[UnaryMinus] = []*UnaryOp{
     {{range .Minus}}
         &UnaryOp{
             Typ:        types.LEFT_TYPE_OID,
@@ -53,8 +53,7 @@ var UnaryOps = map[int][]*UnaryOp{
             },
         },
     {{end}}
-    },
-
+    }
 }
 
 // init function to init binOpsReturnType from

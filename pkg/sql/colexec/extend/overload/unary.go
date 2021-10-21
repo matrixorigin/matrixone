@@ -26,6 +26,9 @@ var (
 	// not (1 + 5), not bool, and so on
 	unaryOpsReturnType [][]types.T
 
+	// UnaryOps contains the unary operations indexed by operation type.
+	UnaryOps = map[int][]*UnaryOp{}
+
 	// variants only used to init and get items from unaryOpsReturnType
 	unaryOperators = []int{UnaryMinus, Not}
 	firstUnaryOp = unaryOperators[0]
