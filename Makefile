@@ -18,12 +18,14 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 # Building mo-server binary
 .PHONY: build
 build: cmd/db-server/main.go
+	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Build binary])
 	@go build -o $(BIN_NAME) cmd/db-server/main.go
 
 # Building mo-server binary for debugging, it uses the latest MatrixCube from master.
 .PHONY: debug
 debug: cmd/db-server/main.go
+	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Build binary for debug])
 	go get github.com/matrixorigin/matrixcube
 	go mod tidy
