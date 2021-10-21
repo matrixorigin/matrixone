@@ -475,8 +475,8 @@ func GenerateCast() error {
 			{types.T_varchar, numType, numType},
 		}...)
 		pTs.Specials2 = append(pTs.Specials2, []lrt{
-			{numType, numType, types.T_char},
-			{numType, numType, types.T_varchar},
+			{numType, types.T_char, types.T_char},
+			{numType, types.T_varchar, types.T_varchar},
 		}...)
 	}
 
