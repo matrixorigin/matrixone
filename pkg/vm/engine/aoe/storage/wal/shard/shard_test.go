@@ -3,6 +3,7 @@ package shard
 import (
 	"math/rand"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
 	"sync/atomic"
@@ -213,6 +214,10 @@ func TestShardManager(t *testing.T) {
 }
 
 func TestProxy2(t *testing.T) {
+	waitTime := time.Duration(1) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 5
+	}
 	mgr := NewManager()
 	defer mgr.Close()
 	var indice []*LogIndex
@@ -237,31 +242,33 @@ func TestProxy2(t *testing.T) {
 	t.Log(s0.stopmask.String())
 	mgr.Checkpoint(indice[0])
 	mgr.Checkpoint(indice[1])
-	time.Sleep(time.Duration(1) * time.Millisecond)
-	t.Log(s0.mask.String())
-	t.Log(s0.stopmask.String())
+	time.Sleep(waitTime)
 	assert.Equal(t, uint64(5), s0.GetSafeId())
 	mgr.Checkpoint(indice[2])
-	time.Sleep(time.Duration(1) * time.Millisecond)
+	time.Sleep(waitTime)
 	assert.Equal(t, uint64(9), s0.GetSafeId())
 	mgr.Checkpoint(indice[3])
-	time.Sleep(time.Duration(1) * time.Millisecond)
+	time.Sleep(waitTime)
 	assert.Equal(t, uint64(13), s0.GetSafeId())
 	mgr.Checkpoint(indice[4])
-	time.Sleep(time.Duration(1) * time.Millisecond)
+	time.Sleep(waitTime)
 	assert.Equal(t, uint64(17), s0.GetSafeId())
 }
 
 func TestProxy3(t *testing.T) {
+	waitTime := time.Duration(10) * time.Millisecond
+	if invariants.RaceEnabled {
+		waitTime *= 5
+	}
 	mgr := NewManager()
 	defer mgr.Close()
 	var indice []*LogIndex
+	var lastIndex *LogIndex
 	rand.Seed(time.Now().UnixNano())
 	produce := func() {
-		cnt := 10000
+		cnt := 5000
 		j := 0
-		// for i := 1; j < cnt; i += 1 {
-		for i := 1; j < cnt; i += rand.Intn(100) + 1 {
+		for i := 1; j < cnt; i += rand.Intn(10) + 1 {
 			index := &LogIndex{
 				Id: IndexId{
 					Id:   uint64(i),
@@ -275,20 +282,28 @@ func TestProxy3(t *testing.T) {
 			assert.Nil(t, err)
 			j++
 		}
-		t.Log(indice[cnt-1].String())
-		// t.Log(mgr.String())
+		lastIndex = indice[cnt-1]
+		t.Log(lastIndex.String())
 	}
 
 	consume := func() {
-		for i := len(indice) - 1; i >= 0; i-- {
+		for i := 0; i <= len(indice)-1; i++ {
 			mgr.Checkpoint(indice[i])
 		}
-		time.Sleep(time.Duration(10) * time.Millisecond)
+		time.Sleep(waitTime)
 		s, err := mgr.GetShard(uint64(0))
 		assert.Nil(t, err)
-		assert.Equal(t, indice[len(indice)-1].Id.Id, s.GetSafeId())
+		assert.Equal(t, lastIndex.Id.Id, s.GetSafeId())
 	}
 
+	now := time.Now()
 	produce()
+	t.Logf("produce takes %s", time.Since(now))
+
+	rand.Seed(time.Now().UnixNano())
+	rand.Shuffle(len(indice), func(i, j int) { indice[i], indice[j] = indice[j], indice[i] })
+
+	now = time.Now()
 	consume()
+	t.Logf("consume takes %s", time.Since(now))
 }

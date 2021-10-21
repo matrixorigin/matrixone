@@ -184,7 +184,7 @@ func (p *proxy) Checkpoint() {
 		p.SetSafeId(pos - 1)
 	}
 	p.logmu.Unlock()
-	logutil.Infof("Shard-%d: indice-%d, safeid-%d %s", p.id, len(p.indice), p.GetSafeId(), time.Since(now))
+	logutil.Infof("Shard-%d: pending-%d, safeid-%d %s", p.id, maskNum, p.GetSafeId(), time.Since(now))
 }
 
 func (p *proxy) SetSafeId(id uint64) {
