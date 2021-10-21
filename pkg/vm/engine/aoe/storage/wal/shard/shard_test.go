@@ -199,7 +199,7 @@ func TestShardManager(t *testing.T) {
 						consumer.consume(index)
 					}
 				}
-				mgr.EnqueueSnippet(consumer.snippet)
+				mgr.Checkpoint(consumer.snippet)
 				consumer.reset()
 			}
 		}
