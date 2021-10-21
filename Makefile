@@ -33,7 +33,8 @@ debug: cmd/db-server/main.go
 
 # Run Static Code Analysis
 .PHONY: sca
-sca:
+sca:	
+	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Static code analysis])
 	@cd optools && ./run_ut.sh SCA
 
@@ -41,6 +42,7 @@ sca:
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut 
 ut:
+	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Unit testing])
 ifeq ($(UNAME_S),Darwin)
 	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
