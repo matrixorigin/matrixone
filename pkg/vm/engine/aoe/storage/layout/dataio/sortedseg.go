@@ -26,7 +26,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"path/filepath"
 )

@@ -18,7 +18,7 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"sync"
 )

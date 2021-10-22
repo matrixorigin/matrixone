@@ -19,7 +19,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/event"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"

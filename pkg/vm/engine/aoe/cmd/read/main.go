@@ -25,7 +25,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"matrixone/pkg/vm/mmu/host"

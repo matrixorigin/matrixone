@@ -16,7 +16,7 @@ package meta
 
 import (
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"testing"

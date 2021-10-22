@@ -24,7 +24,7 @@ import (
 	me "matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 )
 

@@ -21,7 +21,7 @@ import (
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"os"
 	"sync"
 	"sync/atomic"

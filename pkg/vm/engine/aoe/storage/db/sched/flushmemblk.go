@@ -18,7 +18,7 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 )
