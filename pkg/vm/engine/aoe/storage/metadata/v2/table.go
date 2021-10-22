@@ -147,52 +147,61 @@ func (e *Table) rebuild(catalog *Catalog) {
 // It is always driven by engine internal scheduler. It means all the
 // table related data resources were deleted. A hard-deleted table will
 // be deleted from catalog later
-func (e *Table) HardDelete() {
+func (e *Table) HardDelete() error {
+	ctx := newDeleteTableCtx(e)
+	return e.Catalog.onCommitRequest(ctx)
+}
+
+func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 	cInfo := &CommitInfo{
 		CommitId: e.Catalog.NextUncommitId(),
 		Op:       OpHardDelete,
 		SSLLNode: *common.NewSSLLNode(),
 	}
+	e.Catalog.commitMu.Lock()
+	defer e.Catalog.commitMu.Unlock()
 	e.Lock()
 	defer e.Unlock()
 	if e.IsHardDeletedLocked() {
 		logutil.Warnf("HardDelete %d but already hard deleted", e.Id)
-		return
+		return nil, TableNotFoundErr
 	}
 	if !e.IsSoftDeletedLocked() {
 		panic("logic error: Cannot hard delete entry that not soft deleted")
 	}
 	e.onNewCommit(cInfo)
-	e.Catalog.Commit(e, ETHardDeleteTable, &e.RWMutex)
+	logEntry := e.Catalog.prepareCommitEntry(e, ETHardDeleteTable, e)
+	return logEntry, nil
 }
 
 // Simple* wrappes simple usage of wrapped operation
-func (e *Table) SimpleSoftDelete(exIndex *ExternalIndex) {
-	e.SoftDelete(e.Catalog.NextUncommitId(), exIndex, true)
-}
-
-// Threadsafe
 // It is driven by external command. The engine then schedules a GC task to hard delete
 // related resources.
-func (e *Table) SoftDelete(tranId uint64, exIndex *ExternalIndex, autoCommit bool) {
+func (e *Table) SimpleSoftDelete(exIndex *ExternalIndex) error {
+	ctx := newDropTableCtx(e.Schema.Name, exIndex)
+	ctx.table = e
+	return e.Catalog.onCommitRequest(ctx)
+}
+
+func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
+	commitId := e.Catalog.NextUncommitId()
 	cInfo := &CommitInfo{
-		TranId:        tranId,
-		CommitId:      tranId,
-		ExternalIndex: exIndex,
+		TranId:        commitId,
+		CommitId:      commitId,
+		ExternalIndex: ctx.exIndex,
 		Op:            OpSoftDelete,
 		SSLLNode:      *common.NewSSLLNode(),
 	}
+	e.Catalog.commitMu.Lock()
+	defer e.Catalog.commitMu.Unlock()
 	e.Lock()
 	defer e.Unlock()
 	if e.IsSoftDeletedLocked() {
-		return
+		return nil, TableNotFoundErr
 	}
 	e.onNewCommit(cInfo)
-
-	if !autoCommit {
-		return
-	}
-	e.Catalog.Commit(e, ETSoftDeleteTable, &e.RWMutex)
+	logEntry := e.Catalog.prepareCommitEntry(e, ETSoftDeleteTable, e)
+	return logEntry, nil
 }
 
 // Not safe
@@ -238,7 +247,7 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 	default:
 		panic("not supported")
 	}
-	logEntry := logstore.GetEmptyEntry()
+	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
@@ -298,14 +307,14 @@ func (e *Table) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 }
 
 // Not safe. One writer, multi-readers
-func (e *Table) SimpleCreateBlock(exIndex *ExternalIndex) (*Block, *Segment) {
+func (e *Table) SimpleCreateBlock() (*Block, *Segment) {
 	var prevSeg *Segment
 	currSeg := e.SimpleGetCurrSegment()
 	if currSeg == nil || currSeg.HasMaxBlocks() {
 		prevSeg = currSeg
-		currSeg = e.SimpleCreateSegment(exIndex)
+		currSeg = e.SimpleCreateSegment()
 	}
-	blk := currSeg.SimpleCreateBlock(exIndex)
+	blk := currSeg.SimpleCreateBlock()
 	return blk, prevSeg
 }
 
@@ -332,22 +341,26 @@ func (e *Table) SimpleGetOrCreateNextBlock(from *Block) *Block {
 		fromSeg = from.Segment
 	}
 	curr, next := e.getFirstInfullSegment(fromSeg)
-	// logutil.Infof("%s, %s", seg.PString(PPL0), fromSeg.PString(PPL1))
+	// logutil.Infof("%s, %s", curr.PString(PPL0), fromSeg.PString(PPL1))
 	if curr == nil {
-		curr = e.SimpleCreateSegment(nil)
+		curr = e.SimpleCreateSegment()
 	}
 	blk := curr.SimpleGetOrCreateNextBlock(from)
 	if blk != nil {
 		return blk
 	}
 	if next == nil {
-		next = e.SimpleCreateSegment(nil)
+		next = e.SimpleCreateSegment()
 	}
 	return next.SimpleGetOrCreateNextBlock(nil)
 }
 
-func (e *Table) SimpleCreateSegment(exIndex *ExternalIndex) *Segment {
-	return e.CreateSegment(e.Catalog.NextUncommitId(), exIndex, true)
+func (e *Table) SimpleCreateSegment() *Segment {
+	ctx := newCreateSegmentCtx(e)
+	if err := e.Catalog.onCommitRequest(ctx); err != nil {
+		return nil
+	}
+	return ctx.segment
 }
 
 // Safe
@@ -369,17 +382,17 @@ func (e *Table) SimpleGetSegmentCount() int {
 	return len(e.SegmentSet)
 }
 
-// Safe
-func (e *Table) CreateSegment(tranId uint64, exIndex *ExternalIndex, autoCommit bool) *Segment {
-	se := newSegmentEntry(e.Catalog, e, tranId, exIndex)
+func (e *Table) prepareCreateSegment(ctx *createSegmentCtx) (LogEntry, error) {
+	se := newSegmentEntry(e.Catalog, e, e.Catalog.NextUncommitId(), ctx.exIndex)
+	logEntry := se.ToLogEntry(ETCreateSegment)
+	e.Catalog.commitMu.Lock()
+	defer e.Catalog.commitMu.Unlock()
 	e.Lock()
 	e.onNewSegment(se)
 	e.Unlock()
-	if !autoCommit {
-		return se
-	}
-	e.Catalog.Commit(se, ETCreateSegment, nil)
-	return se
+	e.Catalog.prepareCommitLog(se, logEntry)
+	ctx.segment = se
+	return logEntry, nil
 }
 
 func (e *Table) onNewSegment(entry *Segment) {
@@ -446,9 +459,9 @@ func MockTable(catalog *Catalog, schema *Schema, blkCnt uint64, idx *LogIndex) *
 	var activeSeg *Segment
 	for i := uint64(0); i < blkCnt; i++ {
 		if activeSeg == nil {
-			activeSeg = tbl.SimpleCreateSegment(nil)
+			activeSeg = tbl.SimpleCreateSegment()
 		}
-		activeSeg.SimpleCreateBlock(nil)
+		activeSeg.SimpleCreateBlock()
 		if len(activeSeg.BlockSet) == int(tbl.Schema.SegmentMaxBlocks) {
 			activeSeg = nil
 		}

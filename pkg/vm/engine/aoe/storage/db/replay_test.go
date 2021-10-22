@@ -171,9 +171,9 @@ func TestReplay2(t *testing.T) {
 		SegmentMaxBlocks: segBlkCount,
 		BlockMaxRows:     blkRowCount,
 	}
-	catalog, err := metadata.OpenCatalog(mu, cfg, nil)
+	catalog, err := metadata.OpenCatalog(mu, cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	schema := metadata.MockSchema(colCnt)
 	totalBlks := segBlkCount
 	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
@@ -193,9 +193,9 @@ func TestReplay2(t *testing.T) {
 	}
 
 	catalog.Close()
-	catalog, err = metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err = metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -247,9 +247,9 @@ func TestReplay3(t *testing.T) {
 	tblkfiles = append(tblkfiles, name)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -295,9 +295,9 @@ func TestReplay4(t *testing.T) {
 	})
 
 	opts.Meta.Catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), opts.Meta.Catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), opts.Meta.Catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -351,9 +351,9 @@ func TestReplay5(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -424,9 +424,9 @@ func TestReplay6(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -495,9 +495,9 @@ func TestReplay7(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -568,9 +568,9 @@ func TestReplay8(t *testing.T) {
 	t.Log(tbl.PString(metadata.PPL1))
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -653,9 +653,9 @@ func TestReplay9(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -761,9 +761,9 @@ func TestReplay10(t *testing.T) {
 	t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),
@@ -832,9 +832,9 @@ func TestReplay11(t *testing.T) {
 	// t.Log(toRemove)
 
 	catalog.Close()
-	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg, nil)
+	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	observer := &replayObserver{
 		removed: make([]string, 0),

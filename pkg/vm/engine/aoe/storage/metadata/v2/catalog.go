@@ -20,15 +20,16 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
-	worker "matrixone/pkg/vm/engine/aoe/storage/worker"
-	wb "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"sort"
 	"sync"
 
 	"github.com/google/btree"
 )
 
-type SyncerCfg = logstore.SyncerCfg
+var (
+	DefaultCheckpointDelta = uint64(10000)
+)
 
 var (
 	DuplicateErr       = errors.New("aoe: duplicate")
@@ -82,7 +83,7 @@ func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := e.Marshal()
-	logEntry := logstore.GetEmptyEntry()
+	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	logEntry.SetAuxilaryInfo(&e.Range)
@@ -90,26 +91,29 @@ func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 }
 
 type Catalog struct {
-	*sync.RWMutex `json:"-"`
-	Sequence      `json:"-"`
-	Store         logstore.AwareStore   `json:"-"`
-	Cfg           *CatalogCfg           `json:"-"`
-	NameNodes     map[string]*tableNode `json:"-"`
-	NameIndex     *btree.BTree          `json:"-"`
-	nodesMu       sync.RWMutex          `json:"-"`
-	archiver      wb.IOpWorker          `json:"-"`
+	sm.ClosedState  `json:"-"`
+	sm.StateMachine `json:"-"`
+	*sync.RWMutex   `json:"-"`
+	Sequence        `json:"-"`
+	pipeline        *commitPipeline       `json:"-"`
+	Store           logstore.AwareStore   `json:"-"`
+	Cfg             *CatalogCfg           `json:"-"`
+	NameNodes       map[string]*tableNode `json:"-"`
+	NameIndex       *btree.BTree          `json:"-"`
+	nodesMu         sync.RWMutex          `json:"-"`
+	commitMu        sync.RWMutex          `json:"-"`
 
 	TableSet map[uint64]*Table
 }
 
-func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) (*Catalog, error) {
+func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
 	replayer := newCatalogReplayer()
-	return replayer.RebuildCatalog(mu, cfg, syncerCfg)
+	return replayer.RebuildCatalog(mu, cfg)
 }
 
-func NewCatalogWithBatchStore(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
+func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
-		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
+		logutil.Warnf("Set rotation max size to default size: %s", common.ToH(uint64(logstore.DefaultVersionFileSize)))
 		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
 	}
 	catalog := &Catalog{
@@ -123,53 +127,22 @@ func NewCatalogWithBatchStore(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
 		MaxSize: cfg.RotationFileMaxSize,
 	}
-	store, err := logstore.NewBatchStore(cfg.Dir, "bstore", rotationCfg)
+	store, err := logstore.NewBatchStore(common.MakeMetaDir(cfg.Dir), "store", rotationCfg)
 	if err != nil {
 		panic(err)
 	}
 	catalog.Store = store
+	wg := new(sync.WaitGroup)
+	rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
+	ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
+	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
+	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog
 }
 
-func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) *Catalog {
-	if cfg.RotationFileMaxSize <= 0 {
-		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
-		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
-	}
-	catalog := &Catalog{
-		RWMutex:   mu,
-		Cfg:       cfg,
-		TableSet:  make(map[uint64]*Table),
-		NameNodes: make(map[string]*tableNode),
-		NameIndex: btree.New(2),
-	}
-	if syncerCfg == nil {
-		syncerCfg = &SyncerCfg{
-			Interval: logstore.DefaultHBInterval,
-		}
-	} else if syncerCfg.Interval == 0 {
-		syncerCfg.Interval = logstore.DefaultHBInterval
-	}
-	factory := &hbHandleFactory{
-		catalog: catalog,
-	}
-	syncerCfg.Factory = factory.builder
-	rotationCfg := &logstore.RotationCfg{}
-	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
-		MaxSize: cfg.RotationFileMaxSize,
-	}
-	store, err := logstore.NewSyncAwareStore(common.MakeMetaDir(cfg.Dir), "store", rotationCfg, syncerCfg)
-	if err != nil {
-		panic(err)
-	}
-	catalog.Store = store
-	catalog.archiver = worker.NewOpWorker("archiver")
-	catalog.archiver.Start()
-	return catalog
-}
-
-func (catalog *Catalog) StartSyncer() {
+func (catalog *Catalog) Start() {
 	catalog.Store.Start()
+	catalog.StateMachine.Start()
 }
 
 func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error {
@@ -247,10 +220,10 @@ func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
 }
 
 func (catalog *Catalog) Close() error {
+	catalog.Stop()
 	catalog.Store.Close()
-	if catalog.archiver != nil {
-		catalog.archiver.Stop()
-	}
+	logutil.Infof("[AOE] Safe synced id %d", catalog.GetSafeCommitId())
+	logutil.Infof("[AOE] Safe checkpointed id %d", catalog.GetCheckpointId())
 	return nil
 }
 
@@ -298,54 +271,104 @@ func (catalog *Catalog) HardDeleteTable(id uint64) error {
 		return TableNotFoundErr
 	}
 	catalog.Unlock()
-	table.HardDelete()
-	return nil
+
+	return table.HardDelete()
 }
 
 func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *ExternalIndex) error {
-	catalog.Lock()
-	defer catalog.Unlock()
-	return catalog.DropTableByName(name, catalog.NextUncommitId(), true, exIndex)
+	ctx := newDropTableCtx(name, exIndex)
+	err := catalog.prepareDropTable(ctx)
+	if err != nil {
+		return err
+	}
+	return catalog.onCommitRequest(ctx)
 }
 
-// Guarded by lock
-func (catalog *Catalog) DropTableByName(name string, tranId uint64, autoCommit bool, exIndex *ExternalIndex) error {
-	nn := catalog.NameNodes[name]
+func (catalog *Catalog) prepareDropTable(ctx *dropTableCtx) error {
+	catalog.Lock()
+	nn := catalog.NameNodes[ctx.name]
 	if nn == nil {
+		catalog.Unlock()
 		return TableNotFoundErr
 	}
-	entry := nn.GetEntry()
+	table := nn.GetEntry()
 	catalog.Unlock()
-	defer catalog.Lock()
-	entry.RLock()
-	if entry.IsSoftDeletedLocked() {
-		entry.RUnlock()
+	table.RLock()
+	defer table.RUnlock()
+	if table.IsDeletedLocked() {
 		return TableNotFoundErr
 	}
-	entry.RUnlock()
-	entry.SoftDelete(tranId, exIndex, autoCommit)
+	ctx.table = table
 	return nil
 }
 
 func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *ExternalIndex) (*Table, error) {
-	catalog.Lock()
-	defer catalog.Unlock()
-	return catalog.CreateTable(schema, catalog.NextUncommitId(), true, exIndex)
-}
-
-func (catalog *Catalog) CreateTable(schema *Schema, tranId uint64, autoCommit bool, exIndex *ExternalIndex) (*Table, error) {
 	if !schema.Valid() {
 		return nil, InvalidSchemaErr
 	}
-	entry := NewTableEntry(catalog, schema, tranId, exIndex)
-	if err := catalog.onNewTable(entry); err != nil {
+	ctx := newCreateTableCtx(schema, exIndex)
+	err := catalog.onCommitRequest(ctx)
+	return ctx.table, err
+}
+
+func (catalog *Catalog) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
+	var err error
+	entry := NewTableEntry(catalog, ctx.schema, catalog.NextUncommitId(), ctx.exIndex)
+	logEntry := entry.ToLogEntry(ETCreateTable)
+	catalog.commitMu.Lock()
+	defer catalog.commitMu.Unlock()
+	catalog.Lock()
+	if err = catalog.onNewTable(entry); err != nil {
+		catalog.Unlock()
 		return nil, err
 	}
-	if !autoCommit {
-		return entry, nil
+	catalog.Unlock()
+	catalog.prepareCommitLog(entry, logEntry)
+	ctx.table = entry
+	return logEntry, err
+}
+
+func (catalog *Catalog) onCommitRequest(ctx interface{}) error {
+	entry, err := catalog.pipeline.prepare(ctx)
+	if err != nil {
+		return err
 	}
-	catalog.commitLocked(entry, ETCreateTable, nil)
-	return entry, nil
+	err = catalog.pipeline.commit(entry)
+	return err
+}
+
+func (catalog *Catalog) prepareCommitLog(entry IEntry, logEntry LogEntry) {
+	commitId := catalog.NextCommitId()
+	entry.Lock()
+	entry.CommitLocked(commitId)
+	entry.Unlock()
+	SetCommitIdToLogEntry(commitId, logEntry)
+	logEntry.SetAuxilaryInfo(commitId)
+	if err := catalog.Store.AppendEntry(logEntry); err != nil {
+		panic(err)
+	}
+}
+
+func (catalog *Catalog) prepareCommitEntry(entry IEntry, eType LogEntryType, locker sync.Locker) LogEntry {
+	commitId := catalog.NextCommitId()
+	var logEntry LogEntry
+	if locker == nil {
+		entry.Lock()
+		entry.CommitLocked(commitId)
+		logEntry = entry.ToLogEntry(eType)
+		entry.Unlock()
+	} else {
+		entry.CommitLocked(commitId)
+		logEntry = entry.ToLogEntry(eType)
+		locker.Unlock()
+		defer locker.Lock()
+	}
+	SetCommitIdToLogEntry(commitId, logEntry)
+	logEntry.SetAuxilaryInfo(commitId)
+	if err := catalog.Store.AppendEntry(logEntry); err != nil {
+		panic(err)
+	}
+	return logEntry
 }
 
 func (catalog *Catalog) GetSafeCommitId() uint64 {
@@ -389,33 +412,6 @@ func (catalog *Catalog) GetTable(id uint64) *Table {
 	return catalog.TableSet[id]
 }
 
-func (catalog *Catalog) Commit(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
-	catalog.Lock()
-	defer catalog.Unlock()
-	catalog.commitLocked(entry, eType, rwlocker)
-}
-
-func (catalog *Catalog) commitLocked(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
-	commitId := catalog.NextCommitId()
-	var lentry LogEntry
-	if rwlocker == nil {
-		entry.Lock()
-		entry.CommitLocked(commitId)
-		lentry = entry.ToLogEntry(eType)
-		entry.Unlock()
-	} else {
-		entry.CommitLocked(commitId)
-		lentry = entry.ToLogEntry(eType)
-		rwlocker.Unlock()
-		defer rwlocker.Lock()
-	}
-	err := catalog.CommitLogEntry(lentry, commitId, IsSyncDDLEntryType(eType))
-	if err != nil {
-		panic(err)
-	}
-	lentry.Free()
-}
-
 func (catalog *Catalog) ForLoopTables(h func(*Table) error) error {
 	tables := make([]*Table, 0, 10)
 	catalog.RLock()
@@ -455,9 +451,33 @@ func (catalog *Catalog) SimpleGetBlock(tableId, segmentId, blockId uint64) (*Blo
 	return block, nil
 }
 
-func (catalog *Catalog) Checkpoint() error {
+func (catalog *Catalog) onCheckpoint(items ...interface{}) {
+	if err := catalog.doCheckPoint(); err != nil {
+		panic(err)
+	}
+	for _, item := range items {
+		item.(logstore.AsyncEntry).DoneWithErr(nil)
+	}
+}
+
+func (catalog *Catalog) Checkpoint() (logstore.AsyncEntry, error) {
+	entry := logstore.NewAsyncBaseEntry()
+	ret, err := catalog.EnqueueCheckpoint(entry)
+	if err != nil {
+		return nil, err
+	}
+	return ret.(logstore.AsyncEntry), nil
+}
+
+func (catalog *Catalog) doCheckPoint() error {
+	var err error
 	view := catalog.LatestView()
-	err := catalog.Store.Checkpoint(view.ToLogEntry(logstore.ETCheckpoint))
+	entry := view.ToLogEntry(logstore.ETCheckpoint)
+	if err = catalog.Store.Checkpoint(entry); err != nil {
+		return err
+	}
+	err = entry.WaitDone()
+	entry.Free()
 	return err
 }
 
@@ -494,7 +514,7 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 		panic("not supported")
 	}
 	buf, _ := catalog.Marshal()
-	logEntry := logstore.GetEmptyEntry()
+	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
@@ -579,10 +599,10 @@ func MockCatalog(dir string, blkRows, segBlks uint64) *Catalog {
 	cfg.Dir = dir
 	cfg.BlockMaxRows = blkRows
 	cfg.SegmentMaxBlocks = segBlks
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg, nil)
+	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	if err != nil {
 		panic(err)
 	}
-	catalog.StartSyncer()
+	catalog.Start()
 	return catalog
 }

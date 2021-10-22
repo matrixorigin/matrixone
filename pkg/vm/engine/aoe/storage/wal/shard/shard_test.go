@@ -216,7 +216,7 @@ func TestShardManager(t *testing.T) {
 func TestProxy2(t *testing.T) {
 	waitTime := time.Duration(1) * time.Millisecond
 	if invariants.RaceEnabled {
-		waitTime *= 5
+		waitTime *= 10
 	}
 	mgr := NewManager()
 	defer mgr.Close()

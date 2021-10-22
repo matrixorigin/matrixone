@@ -14,12 +14,13 @@
 package metadata
 
 import (
+	"encoding/binary"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"sync"
 )
 
 type LogEntryType = logstore.EntryType
-type LogEntry = logstore.Entry
+type LogEntry = logstore.AsyncEntry
 type LogEntryMeta = logstore.EntryMeta
 
 const (
@@ -47,4 +48,14 @@ type IEntry interface {
 	Marshal() ([]byte, error)
 	CommitLocked(uint64)
 	ToLogEntry(LogEntryType) LogEntry
+}
+
+func SetCommitIdToLogEntry(commitId uint64, entry LogEntry) {
+	buf := entry.GetMeta().GetReservedBuf()[logstore.EntryTypeSize+logstore.EntrySizeSize : logstore.EntryTypeSize+logstore.EntrySizeSize+8]
+	binary.BigEndian.PutUint64(buf, commitId)
+}
+
+func GetCommitIdFromLogEntry(entry LogEntry) uint64 {
+	buf := entry.GetMeta().GetReservedBuf()[logstore.EntryTypeSize+logstore.EntrySizeSize : logstore.EntryTypeSize+logstore.EntrySizeSize+8]
+	return binary.BigEndian.Uint64(buf)
 }

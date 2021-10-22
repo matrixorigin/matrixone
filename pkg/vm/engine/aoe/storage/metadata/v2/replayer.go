@@ -179,8 +179,8 @@ func newCatalogReplayer() *catalogReplayer {
 	return replayer
 }
 
-func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCfg, syncerCfg *SyncerCfg) (*Catalog, error) {
-	replayer.catalog = NewCatalog(mu, cfg, syncerCfg)
+func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
+	replayer.catalog = NewCatalog(mu, cfg)
 	if err := replayer.Replay(replayer.catalog.Store); err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 }
 
 func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logstore.ReplayObserver) error {
-	entry := logstore.GetEmptyEntry()
+	entry := logstore.NewAsyncBaseEntry()
 	defer entry.Free()
 	meta := entry.GetMeta()
 	_, err := meta.ReadFrom(r)
@@ -246,6 +246,8 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 	case ETCreateBlock:
 		blk := &blockLogEntry{}
 		blk.Unmarshal(entry.GetPayload())
+		commitId := GetCommitIdFromLogEntry(entry)
+		blk.CommitLocked(commitId)
 		observer.OnReplayCommit(blk.CommitInfo.CommitId)
 		replayer.cache.Append(&replayEntry{
 			typ:      ETCreateBlock,
@@ -262,6 +264,8 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 	case ETCreateTable:
 		tbl := &Table{}
 		tbl.Unmarshal(entry.GetPayload())
+		commitId := GetCommitIdFromLogEntry(entry)
+		tbl.CommitLocked(commitId)
 		observer.OnReplayCommit(tbl.CommitInfo.CommitId)
 		replayer.cache.Append(&replayEntry{
 			typ: ETCreateTable,
@@ -286,6 +290,8 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 	case ETCreateSegment:
 		seg := &segmentLogEntry{}
 		seg.Unmarshal(entry.GetPayload())
+		commitId := GetCommitIdFromLogEntry(entry)
+		seg.CommitLocked(commitId)
 		observer.OnReplayCommit(seg.CommitInfo.CommitId)
 		replayer.cache.Append(&replayEntry{
 			typ:      ETCreateSegment,

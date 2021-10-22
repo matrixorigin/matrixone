@@ -201,13 +201,17 @@ func (e *Block) CommittedView(id uint64) *Block {
 
 // Safe
 func (e *Block) SimpleUpgrade(exIndice []*ExternalIndex) error {
-	return e.Upgrade(e.Segment.Table.Catalog.NextUncommitId(), exIndice, true)
+	ctx := newUpgradeBlockCtx(e, exIndice)
+	return e.Segment.Table.Catalog.onCommitRequest(ctx)
+	// return e.Upgrade(e.Segment.Table.Catalog.NextUncommitId(), exIndice, true)
 }
 
-func (e *Block) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit bool) error {
+// func (e *Block) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit bool) error {
+func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 	if e.GetCount() != e.Segment.Table.Schema.BlockMaxRows {
-		return UpgradeInfullBlockErr
+		return nil, UpgradeInfullBlockErr
 	}
+	tranId := e.Segment.Table.Catalog.NextUncommitId()
 	e.Lock()
 	defer e.Unlock()
 	var newOp OpT
@@ -215,17 +219,17 @@ func (e *Block) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit boo
 	case OpCreate:
 		newOp = OpUpgradeFull
 	default:
-		return UpgradeNotNeededErr
+		return nil, UpgradeNotNeededErr
 	}
 	cInfo := &CommitInfo{
 		TranId:   tranId,
 		CommitId: tranId,
 		Op:       newOp,
 	}
-	if exIndice != nil {
-		cInfo.ExternalIndex = exIndice[0]
-		if len(exIndice) > 1 {
-			cInfo.PrevIndex = exIndice[1]
+	if ctx.exIndice != nil {
+		cInfo.ExternalIndex = ctx.exIndice[0]
+		if len(ctx.exIndice) > 1 {
+			cInfo.PrevIndex = ctx.exIndice[1]
 		}
 	} else {
 		cInfo.ExternalIndex = e.CommitInfo.ExternalIndex
@@ -237,11 +241,8 @@ func (e *Block) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit boo
 		}
 	}
 	e.onNewCommit(cInfo)
-	if !autoCommit {
-		return nil
-	}
-	e.Segment.Catalog.Commit(e, ETUpgradeBlock, &e.RWMutex)
-	return nil
+	logEntry := e.Segment.Catalog.prepareCommitEntry(e, ETUpgradeBlock, e)
+	return logEntry, nil
 }
 
 func (e *Block) toLogEntry() *blockLogEntry {
@@ -290,7 +291,7 @@ func (e *Block) ToLogEntry(eType LogEntryType) LogEntry {
 	}
 	entry := e.toLogEntry()
 	buf, _ := entry.Marshal()
-	logEntry := logstore.GetEmptyEntry()
+	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry

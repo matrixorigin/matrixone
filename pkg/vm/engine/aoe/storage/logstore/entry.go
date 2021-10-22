@@ -17,6 +17,7 @@ package logstore
 import (
 	"fmt"
 	"io"
+	"matrixone/pkg/vm/engine/aoe/common/util"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	"unsafe"
@@ -27,12 +28,6 @@ var (
 		return newBaseEntry()
 	}}
 )
-
-func GetEmptyEntry() *BaseEntry {
-	e := _entPool.Get().(*BaseEntry)
-	e.p = &_entPool
-	return e
-}
 
 type Entry interface {
 	IsAsync() bool
@@ -57,9 +52,10 @@ const (
 )
 
 var (
-	EntryTypeSize = int(unsafe.Sizeof(ETFlush))
-	EntrySizeSize = int(unsafe.Sizeof(uint32(0)))
-	EntryMetaSize = EntryTypeSize + EntrySizeSize
+	EntryTypeSize     = int(unsafe.Sizeof(ETFlush))
+	EntrySizeSize     = int(unsafe.Sizeof(uint32(0)))
+	EntryReservedSize = int(unsafe.Sizeof(uint64(0))) * 8
+	EntryMetaSize     = EntryTypeSize + EntrySizeSize + EntryReservedSize
 
 	FlushEntry *BaseEntry
 )
@@ -88,8 +84,7 @@ func NewEntryMeta() *EntryMeta {
 }
 
 func (meta *EntryMeta) reset() {
-	meta.SetType(ETInvalid)
-	meta.SetPayloadSize(0)
+	util.MemsetRepeatByte(meta.Buf, byte(0))
 }
 
 func (meta *EntryMeta) SetType(typ EntryType) {
@@ -97,7 +92,7 @@ func (meta *EntryMeta) SetType(typ EntryType) {
 }
 
 func (meta *EntryMeta) SetPayloadSize(size uint32) {
-	MarshallEntrySizeWithBuf(meta.Buf[EntryTypeSize:], size)
+	MarshallEntrySizeWithBuf(meta.Buf[EntryTypeSize:EntryTypeSize+EntrySizeSize], size)
 }
 
 func (meta *EntryMeta) GetType() EntryType {
@@ -105,11 +100,15 @@ func (meta *EntryMeta) GetType() EntryType {
 }
 
 func (meta *EntryMeta) PayloadSize() uint32 {
-	return UnmarshallEntrySize(meta.Buf[EntryTypeSize:])
+	return UnmarshallEntrySize(meta.Buf[EntryTypeSize : EntrySizeSize+EntryTypeSize])
 }
 
 func (meta *EntryMeta) Size() uint32 {
 	return uint32(EntryMetaSize)
+}
+
+func (meta *EntryMeta) GetReservedBuf() []byte {
+	return meta.Buf[EntryTypeSize+EntrySizeSize:]
 }
 
 func (meta *EntryMeta) IsFlush() bool {
