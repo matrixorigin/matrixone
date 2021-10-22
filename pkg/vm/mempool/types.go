@@ -22,9 +22,7 @@ const (
 )
 
 type Mempool struct {
-	size    int
 	buckets []bucket
-	buffers [][]byte
 }
 
 type bucket struct {

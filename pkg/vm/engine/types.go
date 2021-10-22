@@ -16,37 +16,26 @@ package engine
 
 import (
 	"bytes"
+	"matrixone/pkg/compress"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/types"
 	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"matrixone/pkg/vm/mheap"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
 
-const (
-	RSE = iota
-	AOE
-	Spill
-)
+type Nodes []Node
 
-const (
-	Sparse = iota
-	Bsi
-	Inverted
-)
-
-type SegmentInfo struct {
-	Version  uint64
-	Id       string
-	GroupId  string
-	TabletId string
-	Node     metadata.Node
+type Node struct {
+	Id   string `json:"id"`
+	Addr string `json:"address"`
 }
 
-type Unit struct {
-	Segs []SegmentInfo
-	N    metadata.Node
+type Attribute struct {
+	Name string     // name of attribute
+	Alg  compress.T // compression algorithm
+	Type types.Type // type of attribute
 }
 
 type NodeInfo struct {
@@ -61,26 +50,20 @@ type Statistics interface {
 type ListPartition struct {
 	Name         string
 	Extends      []extend.Extend
-	Subpartition *PartitionBy
+	Subpartition *PartitionByDef
 }
 
 type RangePartition struct {
 	Name         string
 	From         []extend.Extend
 	To           []extend.Extend
-	Subpartition *PartitionBy
+	Subpartition *PartitionByDef
 }
 
-type PartitionBy struct {
+type PartitionByDef struct {
 	Fields []string
 	List   []ListPartition
 	Range  []RangePartition
-}
-
-type DistributionBy struct {
-	Num    int
-	Group  string
-	Fields []string
 }
 
 type IndexTableDef struct {
@@ -89,15 +72,21 @@ type IndexTableDef struct {
 }
 
 type AttributeDef struct {
-	Attr metadata.Attribute
+	Attr Attribute
+}
+
+type CommentDef struct {
+	Comment string
 }
 
 type TableDef interface {
 	tableDef()
 }
 
-func (*AttributeDef) tableDef()  {}
-func (*IndexTableDef) tableDef() {}
+func (*CommentDef) tableDef()     {}
+func (*AttributeDef) tableDef()   {}
+func (*IndexTableDef) tableDef()  {}
+func (*PartitionByDef) tableDef() {}
 
 type Relation interface {
 	Statistics
@@ -106,17 +95,24 @@ type Relation interface {
 
 	ID() string
 
-	Segments() []SegmentInfo
+	Nodes() Nodes
 
-	Index() []*IndexTableDef
-	Attribute() []metadata.Attribute
-
-	Segment(SegmentInfo, *process.Process) Segment
+	TableDefs() []TableDef
 
 	Write(uint64, *batch.Batch) error
 
-	AddAttribute(uint64, TableDef) error
-	DelAttribute(uint64, TableDef) error
+	AddTableDef(uint64, TableDef) error
+	DelTableDef(uint64, TableDef) error
+
+	NewReader(int, *mheap.Mheap) []Reader // first argument is the number of reader
+}
+
+type Reader interface {
+	NewFilter() Filter
+	NewSummarizer() Summarizer
+	NewSparseFilter() SparseFilter
+
+	Read([]uint64, []string, []*bytes.Buffer) (*batch.Batch, error)
 }
 
 type Filter interface {
@@ -138,54 +134,21 @@ type Summarizer interface {
 }
 
 type SparseFilter interface {
-	Eq(string, interface{}) ([]string, error)
-	Ne(string, interface{}) ([]string, error)
-	Lt(string, interface{}) ([]string, error)
-	Le(string, interface{}) ([]string, error)
-	Gt(string, interface{}) ([]string, error)
-	Ge(string, interface{}) ([]string, error)
-	Btw(string, interface{}, interface{}) ([]string, error)
+	Eq(string, interface{}) (Reader, error)
+	Ne(string, interface{}) (Reader, error)
+	Lt(string, interface{}) (Reader, error)
+	Le(string, interface{}) (Reader, error)
+	Gt(string, interface{}) (Reader, error)
+	Ge(string, interface{}) (Reader, error)
+	Btw(string, interface{}, interface{}) (Reader, error)
 }
 
-type Segment interface {
-	Statistics
-
-	ID() string
-	Blocks() []string
-	Block(string, *process.Process) Block
-
-	NewFilter() Filter
-	NewSummarizer() Summarizer
-	NewSparseFilter() SparseFilter
-}
-
-// A Block represents an implementation of block reader.
-type Block interface {
-	Statistics
-
-	ID() string
-	Prefetch([]string)
-	Read([]uint64, []string, []*bytes.Buffer, []*bytes.Buffer) (*batch.Batch, error) // read only arguments
-}
-
-// Database consists of functions that reference the session database
 type Database interface {
-	// Type returns the engine type of database.
-	// For now, we only support aoe engine.
-	Type() int
-
-	// Relations returns a string array containing all relations
-	// in the given database.
 	Relations() []string
-
-	// Relation looks up the relation with the given name
-	// returns a relation with properties if it exists,
-	// or returns error.
 	Relation(string) (Relation, error)
 
-	// Delete
 	Delete(uint64, string) error
-	Create(uint64, string, []TableDef, *PartitionBy, *DistributionBy, string) error // Create Table - (name, table define, partition define, distribution define, comment)
+	Create(uint64, string, []TableDef) error // Create Table - (name, table define)
 }
 
 type Engine interface {
@@ -196,35 +159,4 @@ type Engine interface {
 	Database(string) (Database, error)
 
 	Node(string) *NodeInfo
-}
-
-type DB interface {
-	Close() error
-	NewBatch() (Batch, error)
-	NewIterator([]byte) (Iterator, error)
-
-	Del([]byte) error
-	Set([]byte, []byte) error
-	Get([]byte) ([]byte, error)
-}
-
-type Batch interface {
-	Cancel() error
-	Commit() error
-	Del([]byte) error
-	Set([]byte, []byte) error
-}
-
-type Iterator interface {
-	Next() error
-	Valid() bool
-	Close() error
-	Seek([]byte) error
-	Key() []byte
-	Value() ([]byte, error)
-}
-
-type SpillEngine interface {
-	DB
-	Database
 }

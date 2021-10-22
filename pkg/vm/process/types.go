@@ -15,20 +15,11 @@
 package process
 
 import (
-	"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/mheap"
 	"sync"
 )
-
-/*
-type Process interface {
-	Size() int64
-	HostSize() int64
-
-	Free([]byte)
-	Alloc(int64) ([]byte, error)
-}
-*/
 
 // WaitRegister channel
 type WaitRegister struct {
@@ -42,10 +33,10 @@ type Register struct {
 	// and it can be reused in the future execution.
 	Ss [][]int64
 	// InputBatch, stores the result of the previous operator.
-	InputBatch interface{}
-	// Ts, temporarily stores the column data in the execution of operators
+	InputBatch *batch.Batch
+	// Vecs, temporarily stores the column data in the execution of operators
 	// and it can be reused in the future execution to avoid mem alloc and type casting overhead.
-	Ts []interface{}
+	Vecs []*vector.Vector
 	// MergeReceivers, receives result of multi previous operators from other pipelines
 	// e.g. merge operator.
 	MergeReceivers []*WaitRegister
@@ -71,10 +62,5 @@ type Process struct {
 	Id  string
 	Reg Register
 	Lim Limitation
-	// Gm, records the resources used in current query.
-	Gm *guest.Mmu
-	// Mp, a pool for fast allocation and deallocation of objects.
-	Mp *mempool.Mempool
-	// Refer, traces the count of the reference of variables.
-	Refer map[string]uint64
+	Mp  *mheap.Mheap
 }

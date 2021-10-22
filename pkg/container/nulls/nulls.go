@@ -47,49 +47,48 @@ func Or(n, m, r *Nulls) {
 	}
 }
 
-
-func (n *Nulls) Reset() {
+func Reset(n *Nulls) {
 	if n.Np != nil {
 		n.Np.Clear()
 	}
 }
 
-func (n *Nulls) Any() bool {
+func Any(n *Nulls) bool {
 	if n.Np == nil {
 		return false
 	}
 	return !n.Np.IsEmpty()
 }
 
-func (n *Nulls) Size() int {
+func Size(n *Nulls) int {
 	if n.Np == nil {
 		return 0
 	}
 	return int(n.Np.GetSizeInBytes())
 }
 
-func (n *Nulls) Length() int {
+func Length(n *Nulls) int {
 	if n.Np == nil {
 		return 0
 	}
 	return int(n.Np.GetCardinality())
 }
 
-func (n *Nulls) String() string {
+func String(n *Nulls) string {
 	if n.Np == nil {
 		return "[]"
 	}
 	return fmt.Sprintf("%v", n.Np.ToArray())
 }
 
-func (n *Nulls) Contains(row uint64) bool {
+func Contains(n *Nulls, row uint64) bool {
 	if n.Np != nil {
 		return n.Np.Contains(row)
 	}
 	return false
 }
 
-func (n *Nulls) Add(rows ...uint64) {
+func Add(n *Nulls, rows ...uint64) {
 	if n.Np == nil {
 		n.Np = roaring.BitmapOf(rows...)
 		return
@@ -97,7 +96,7 @@ func (n *Nulls) Add(rows ...uint64) {
 	n.Np.AddMany(rows)
 }
 
-func (n *Nulls) Del(rows ...uint64) {
+func Del(n *Nulls, rows ...uint64) {
 	if n.Np == nil {
 		return
 	}
@@ -106,7 +105,7 @@ func (n *Nulls) Del(rows ...uint64) {
 	}
 }
 
-func (n *Nulls) Set(m *Nulls) {
+func Set(n, m *Nulls) {
 	if m != nil && m.Np != nil {
 		if n.Np == nil {
 			n.Np = roaring.NewBitmap()
@@ -115,7 +114,7 @@ func (n *Nulls) Set(m *Nulls) {
 	}
 }
 
-func (n *Nulls) FilterCount(sels []int64) int {
+func FilterCount(n *Nulls, sels []int64) int {
 	var cnt int
 
 	if n.Np == nil {
@@ -131,13 +130,13 @@ func (n *Nulls) FilterCount(sels []int64) int {
 	return cnt
 }
 
-func (n *Nulls) RemoveRange(start, end uint64) {
+func RemoveRange(n *Nulls, start, end uint64) {
 	if n.Np != nil {
 		n.Np.RemoveRange(start, end)
 	}
 }
 
-func (n *Nulls) Range(start, end uint64, m *Nulls) *Nulls {
+func Range(n *Nulls, start, end uint64, m *Nulls) *Nulls {
 	switch {
 	case n.Np == nil && m.Np == nil:
 	case n.Np != nil && m.Np == nil:
@@ -158,7 +157,7 @@ func (n *Nulls) Range(start, end uint64, m *Nulls) *Nulls {
 	return m
 }
 
-func (n *Nulls) Filter(sels []int64) *Nulls {
+func Filter(n *Nulls, sels []int64) *Nulls {
 	if n.Np == nil {
 		return n
 	}

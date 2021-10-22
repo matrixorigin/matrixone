@@ -18,32 +18,30 @@ import (
 	"fmt"
 	"log"
 	"matrixone/pkg/container/types"
-	"matrixone/pkg/vm/mempool"
+	"matrixone/pkg/vm/mheap"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
-	"matrixone/pkg/vm/process"
 	"testing"
 )
 
 func TestVector(t *testing.T) {
-    v := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
-    w := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
+	v := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
+	w := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
 	{
 		vs := make([][]byte, 10)
 		for i := 0; i < 10; i++ {
 			vs[i] = []byte(fmt.Sprintf("%v", i*i))
 		}
 		vs[9] = []byte("abcd")
-		if err := v.Append(vs); err != nil {
+		if err := Append(v, vs); err != nil {
 			log.Fatal(err)
 		}
 	}
 	hm := host.New(1 << 20)
 	gm := guest.New(1<<20, hm)
-	proc := process.New(gm)
-	proc.Mp = mempool.New()
+	mp := mheap.New(gm)
 	for i := 0; i < 5; i++ {
-		if err := w.UnionOne(v, int64(i), proc); err != nil {
+		if err := UnionOne(w, v, int64(i), mp); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -52,12 +50,12 @@ func TestVector(t *testing.T) {
 		fmt.Printf("w: %v\n", w)
 	}
 	{
-		if err := w.Copy(v, 1, 9, proc); err != nil {
+		if err := Copy(w, v, 1, 9, mp); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Printf("w[1] = v[9]: %v\n", w)
 	}
 	w.Ref = 1
-	w.Free(proc)
-	fmt.Printf("guest: %v, host: %v\n", proc.Size(), proc.HostSize())
+	Free(w, mp)
+	fmt.Printf("guest: %v, host: %v\n", gm.Size(), gm.HostSize())
 }

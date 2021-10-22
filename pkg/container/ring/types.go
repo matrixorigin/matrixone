@@ -12,21 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package worker
+package ring
 
 import (
-	"matrixone/pkg/vm/process"
-	"matrixone/pkg/vm/routines/task"
+	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
+	"matrixone/pkg/vm/mheap"
 )
 
-type Worker interface {
-	Run()
-	Stop()
-	AddTask(task.Task)
-}
+type Ring interface {
+	Size() int
 
-type worker struct {
-	ch   chan struct{}
-	ts   chan task.Task
-	proc *process.Process
+	Dup() Ring
+	Type() types.Type
+
+	Free(*mheap.Mheap)
+	Grow(*mheap.Mheap) error
+
+	Shuffle([]int64, *mheap.Mheap) error
+
+	Eval([]int64) *vector.Vector
+
+	Fill(int64, []int64, []int64, *vector.Vector)
+
+	Add(interface{}, int64, int64)
+	Mul(interface{}, []int64, int64, int64, int64)
 }

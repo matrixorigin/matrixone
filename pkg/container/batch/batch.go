@@ -18,7 +18,9 @@ import (
 	"bytes"
 	"fmt"
 	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
+	"matrixone/pkg/encoding"
+	"matrixone/pkg/vectorize/shuffle"
+	"matrixone/pkg/vm/mheap"
 )
 
 func New(ro bool, attrs []string) *Batch {
@@ -29,9 +31,9 @@ func New(ro bool, attrs []string) *Batch {
 	}
 }
 
-func (bat *Batch) Reorder(attrs []string) {
+func Reorder(bat *Batch, attrs []string) {
 	if bat.Ro {
-		bat.Cow()
+		Cow(bat)
 	}
 	for i, name := range attrs {
 		for j, attr := range bat.Attrs {
@@ -43,39 +45,43 @@ func (bat *Batch) Reorder(attrs []string) {
 	}
 }
 
-func (bat *Batch) Shuffle(proc *process.Process) error {
+func Shuffle(bat *Batch, m *mheap.Mheap) error {
 	var err error
 
 	if bat.SelsData != nil {
 		for i, vec := range bat.Vecs {
-			if bat.Vecs[i], err = vec.Shuffle(bat.Sels, proc); err != nil {
+			if bat.Vecs[i], err = vector.Shuffle(vec, bat.Sels, m); err != nil {
 				return err
 			}
 		}
-		proc.Free(bat.SelsData)
+		for _, r := range bat.Ring.Rs {
+			r.Shuffle(bat.Sels, m)
+		}
+		data, err := mheap.Alloc(m, int64(len(bat.Ring.Zs))*8)
+		if err != nil {
+			return err
+		}
+		ws := encoding.DecodeInt64Slice(data)
+		bat.Ring.Zs = shuffle.I64Shuffle(bat.Ring.Zs, ws, bat.Sels)
+		mheap.Free(m, data)
+		mheap.Free(m, bat.SelsData)
 		bat.Sels = nil
 		bat.SelsData = nil
 	}
 	return nil
 }
 
-func (bat *Batch) Length() int {
-	return bat.Vecs[0].Length()
+func Length(bat *Batch) int {
+	return len(bat.Ring.Zs)
 }
 
-func (bat *Batch) SetLength(n int) {
-	for _, vec := range bat.Vecs {
-		vec.SetLength(n)
-	}
-}
-
-func (bat *Batch) Prefetch(attrs []string, vecs []*vector.Vector) {
+func Prefetch(bat *Batch, attrs []string, vecs []*vector.Vector) {
 	for i, attr := range attrs {
-		vecs[i] = bat.GetVector(attr)
+		vecs[i] = GetVector(bat, attr)
 	}
 }
 
-func (bat *Batch) GetVector(name string) *vector.Vector {
+func GetVector(bat *Batch, name string) *vector.Vector {
 	for i, attr := range bat.Attrs {
 		if attr != name {
 			continue
@@ -85,22 +91,29 @@ func (bat *Batch) GetVector(name string) *vector.Vector {
 	return nil
 }
 
-func (bat *Batch) Clean(proc *process.Process) {
+func Clean(bat *Batch, m *mheap.Mheap) {
 	if bat.SelsData != nil {
-		proc.Free(bat.SelsData)
+		mheap.Free(m, bat.SelsData)
 		bat.Sels = nil
 		bat.SelsData = nil
 	}
 	for _, vec := range bat.Vecs {
 		if vec != nil {
-			vec.Clean(proc)
+			vector.Clean(vec, m)
 		}
 	}
+	bat.Vecs = nil
+	for _, r := range bat.Ring.Rs {
+		r.Free(m)
+	}
+	bat.Ring.Rs = nil
+	bat.Ring.As = nil
+	bat.Ring.Zs = nil
 }
 
-func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
+func Reduce(bat *Batch, attrs []string, m *mheap.Mheap) {
 	if bat.Ro {
-		bat.Cow()
+		Cow(bat)
 	}
 	for _, attr := range attrs {
 		for i := 0; i < len(bat.Attrs); i++ {
@@ -108,7 +121,7 @@ func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
 				continue
 			}
 			if bat.Vecs[i].Ref != 0 {
-				bat.Vecs[i].Free(proc)
+				vector.Free(bat.Vecs[i], m)
 			}
 			if bat.Vecs[i].Ref == 0 {
 				bat.Vecs = append(bat.Vecs[:i], bat.Vecs[i+1:]...)
@@ -120,7 +133,7 @@ func (bat *Batch) Reduce(attrs []string, proc *process.Process) {
 	}
 }
 
-func (bat *Batch) Cow() {
+func Cow(bat *Batch) {
 	attrs := make([]string, len(bat.Attrs))
 	for i, attr := range bat.Attrs {
 		attrs[i] = attr
@@ -131,10 +144,6 @@ func (bat *Batch) Cow() {
 
 func (bat *Batch) String() string {
 	var buf bytes.Buffer
-
-	if bat == nil {
-		return ""
-	}
 
 	if len(bat.Sels) > 0 {
 		fmt.Printf("%v\n", bat.Sels)
