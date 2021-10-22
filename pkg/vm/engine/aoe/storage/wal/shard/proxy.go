@@ -46,17 +46,18 @@ func newCommitEntry(id *IndexId) *commitEntry {
 }
 
 type proxy struct {
-	logmu     sync.RWMutex
-	alumu     sync.RWMutex
-	id        uint64
-	mgr       *manager
-	mask      *roaring64.Bitmap
-	stopmask  *roaring64.Bitmap
-	snippets  []*snippets
-	snipIdx   map[uint64]int
-	lastIndex uint64
-	safeId    uint64
-	indice    map[uint64]*commitEntry
+	logmu      sync.RWMutex
+	alumu      sync.RWMutex
+	id         uint64
+	mgr        *manager
+	mask       *roaring64.Bitmap
+	stopmask   *roaring64.Bitmap
+	snippets   []*snippets
+	snipIdx    map[uint64]int
+	lastIndex  uint64
+	safeId     uint64
+	lastSafeId uint64
+	indice     map[uint64]*commitEntry
 }
 
 func newProxy(id uint64, mgr *manager) *proxy {
@@ -198,7 +199,25 @@ func (p *proxy) Checkpoint() {
 		p.SetSafeId(pos - 1)
 	}
 	p.logmu.Unlock()
-	logutil.Infof("Shard-%d: pending-%d, safeid-%d %s", p.id, maskNum, p.GetSafeId(), time.Since(now))
+	id := p.GetSafeId()
+	logutil.Infof("Shard-%d: pending-%d, safeid-%d %s", p.id, maskNum, id, time.Since(now))
+	if p.mgr != nil && p.mgr.driver != nil && id != p.lastSafeId {
+		logutil.Infof("Shard-%d: lastsafeid-%d, safeid-%d", p.id, p.lastSafeId, id)
+		if id < p.lastSafeId {
+			panic("logic error")
+		}
+		safeId := SafeId{
+			Id:      id,
+			ShardId: p.id,
+		}
+		logEntry := SafeIdToEntry(safeId)
+		if err := p.mgr.driver.AppendEntry(logEntry); err != nil {
+			panic(err)
+		}
+		logEntry.WaitDone()
+		logEntry.Free()
+		p.lastSafeId = id
+	}
 }
 
 func (p *proxy) SetSafeId(id uint64) {

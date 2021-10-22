@@ -18,7 +18,9 @@ import (
 	"math/rand"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -189,7 +191,11 @@ func TestShardProxy(t *testing.T) {
 }
 
 func TestShardManager(t *testing.T) {
-	mgr := NewManager()
+	dir := "/tmp/testshardmanager"
+	os.RemoveAll(dir)
+	driver, err := logstore.NewBatchStore(dir, "wal", nil)
+	assert.Nil(t, err)
+	mgr := NewManagerWithDriver(driver, true)
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(8)
 

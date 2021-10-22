@@ -77,6 +77,9 @@ func New(dir, name string, cfg *RotationCfg) (*store, error) {
 			return nil, err
 		}
 	}
+	if cfg == nil {
+		cfg = &RotationCfg{}
+	}
 	w, err := OpenRotational(dir, name, DefaultSuffix, cfg.HistoryFactory, cfg.RotateChecker, cfg.Observer)
 	if err != nil {
 		return nil, err

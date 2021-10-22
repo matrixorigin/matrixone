@@ -15,7 +15,57 @@
 package shard
 
 import (
+	"encoding/binary"
+	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
+	"unsafe"
 )
 
 type Entry = wal.Entry
+
+type LogEntryType = logstore.EntryType
+type LogEntry = logstore.AsyncEntry
+type LogEntryMeta = logstore.EntryMeta
+
+const (
+	ETShardWalStart = uint16(30)
+)
+
+const (
+	ETShardWalSafeId LogEntryType = iota + ETShardWalStart
+)
+
+type SafeId struct {
+	ShardId, Id uint64
+}
+
+func (id *SafeId) Marshal() ([]byte, error) {
+	buf := make([]byte, unsafe.Sizeof(id))
+	binary.BigEndian.PutUint64(buf[:unsafe.Sizeof(id.ShardId)], id.ShardId)
+	binary.BigEndian.PutUint64(buf[unsafe.Sizeof(id.ShardId):], id.Id)
+	return buf, nil
+}
+
+func (id *SafeId) Unmarshal(buf []byte) error {
+	id.ShardId = binary.BigEndian.Uint64(buf[:unsafe.Sizeof(id.ShardId)])
+	id.Id = binary.BigEndian.Uint64(buf[unsafe.Sizeof(id.ShardId):])
+	return nil
+}
+
+func SafeIdToEntry(id SafeId) LogEntry {
+	entry := logstore.NewAsyncBaseEntry()
+	entry.Meta.SetType(ETShardWalSafeId)
+	buf := make([]byte, unsafe.Sizeof(id))
+	binary.BigEndian.PutUint64(buf[:unsafe.Sizeof(id.ShardId)], id.ShardId)
+	binary.BigEndian.PutUint64(buf[unsafe.Sizeof(id.ShardId):], id.Id)
+	if err := entry.Unmarshal(buf); err != nil {
+		panic(err)
+	}
+	return entry
+}
+
+func EntryToSafeId(entry LogEntry) (id SafeId, err error) {
+	payload := entry.GetPayload()
+	err = id.Unmarshal(payload)
+	return
+}
