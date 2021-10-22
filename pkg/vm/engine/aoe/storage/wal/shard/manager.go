@@ -17,6 +17,7 @@ package shard
 import (
 	"errors"
 	"fmt"
+	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
@@ -37,16 +38,27 @@ type manager struct {
 	sm.StateMachine
 	mu     sync.RWMutex
 	shards map[uint64]*proxy
+	driver logstore.AwareStore
+	own    bool
 }
 
 func NewManager() *manager {
+	return NewManagerWithDriver(nil, false)
+}
+
+func NewManagerWithDriver(driver logstore.AwareStore, own bool) *manager {
 	mgr := &manager{
+		own:    own,
+		driver: driver,
 		shards: make(map[uint64]*proxy),
 	}
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onReceived)
 	ckpQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onSnippets)
 	mgr.StateMachine = sm.NewStateMachine(wg, mgr, rQueue, ckpQueue)
+	if own && driver != nil {
+		mgr.driver.Start()
+	}
 	mgr.Start()
 	return mgr
 }
@@ -168,5 +180,8 @@ func (mgr *manager) String() string {
 
 func (mgr *manager) Close() error {
 	mgr.Stop()
+	if mgr.own && mgr.driver != nil {
+		mgr.driver.Close()
+	}
 	return nil
 }
