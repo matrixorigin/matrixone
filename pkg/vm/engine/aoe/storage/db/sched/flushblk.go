@@ -17,7 +17,7 @@ package sched
 import (
 	"matrixone/pkg/logutil"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 

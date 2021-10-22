@@ -17,7 +17,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type altBlockFactory struct {

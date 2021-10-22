@@ -19,7 +19,7 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 func MockTableInfo(colCnt int) *aoe.TableInfo {

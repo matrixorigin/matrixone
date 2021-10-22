@@ -33,7 +33,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	tiface "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	bb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"

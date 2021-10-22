@@ -10,216 +10,214 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
-// limitations under the License.
 
 package metadata
 
 import (
-	"io"
+	"errors"
+	"fmt"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"sync"
-
-	"github.com/google/btree"
+	"sync/atomic"
 )
 
 const (
-	MAX_SEGMENTID = common.MAX_UINT64
-	MAX_TABLEID   = common.MAX_UINT64
+	MinUncommitId = ^uint64(0) / 2
 )
 
-// for test use
-const (
-	blockRowCount     = uint64(16)
-	segmentBlockCount = uint64(4)
-)
+var uncommitId = MinUncommitId
 
-// Resource is an abstraction for two key types of resources
-// currently, MetaInfo and Table.
-type Resource interface {
-	GetResourceType() ResourceType
-	GetFileName() string
-	GetLastFileName() string
-	Serialize(io.Writer) error
-	GetTableId() uint64
+func nextUncommitId() uint64 {
+	return atomic.AddUint64(&uncommitId, uint64(1)) - 1
 }
 
-type ResourceType uint8
-
-const (
-	ResInfo ResourceType = iota
-	ResTable
-)
-
-// IndexType tells the type of the index in schema.
-type IndexType uint16
-
-const (
-	ZoneMap IndexType = iota
-	NumBsi
-	FixStrBsi
-)
-
-type LogBatchId struct {
-	Id     uint64
-	Offset uint32
-	Size   uint32
+func IsTransientCommitId(id uint64) bool {
+	return id >= MinUncommitId
 }
 
-// LogIndex records some block related info.
-// Used for replay.
-type LogIndex struct {
-	ID       LogBatchId
-	Start    uint64
-	Count    uint64
-	Capacity uint64
-}
-
-type LogHistory struct {
-	CreatedIndex uint64
-	DeletedIndex uint64
-	AppliedIndex uint64
-}
-
-// TimeStamp contains the C/U/D time of a ts.
-type TimeStamp struct {
-	CreatedOn int64
-	UpdatedOn int64
-	DeletedOn int64
-}
-
-type BoundSate uint8
+type State = uint8
 
 const (
-	Standalone BoundSate = iota
-	Attached
-	Detached
+	STInited State = iota
+	STFull
+	STClosed
+	STSorted
 )
 
-// DataState is the general representation for Block and Segment.
-// On its changing, some operations like flush would be triggered.
-type DataState = uint8
+type OpT uint8
 
 const (
-	EMPTY   DataState = iota
-	PARTIAL           // Block: 0 < Count < MaxRowCount, Segment: 0 < len(Blocks) < MaxBlockCount
-	FULL              // Block: Count == MaxRowCount, Segment: len(Blocks) == MaxBlockCount
-	CLOSED            // Segment only. Already FULL and all blocks are FULL
-	SORTED            // Segment only. Merge sorted
+	OpReserved OpT = iota
+	OpCreate
+	OpUpgradeFull
+	OpUpgradeClose
+	OpUpgradeSorted
+	OpSoftDelete
+	OpHardDelete
 )
 
-// Block contains metadata for block.
-type Block struct {
-	sync.RWMutex
-	BoundSate
-	TimeStamp
-	ID          uint64
-	MaxRowCount uint64
-	Count       uint64
-	Index       *LogIndex
-	PrevIndex   *LogIndex
-	DataState   DataState
-	Segment     *Segment `json:"-"`
+var OpNames = map[OpT]string{
+	OpCreate:        "Create",
+	OpUpgradeFull:   "UpgradeFull",
+	OpUpgradeClose:  "UpgradeClose",
+	OpUpgradeSorted: "UpgradeSorted",
+	OpSoftDelete:    "SoftDelete",
+	OpHardDelete:    "HardDelete",
+}
+
+func OpName(op OpT) string {
+	return OpNames[op]
+}
+
+type CommitInfo struct {
+	common.SSLLNode `json:"-"`
+	CommitId        uint64
+	TranId          uint64
+	Op              OpT
+	ExternalIndex   *ExternalIndex
+	PrevIndex       *ExternalIndex
+	AppliedIndex    *ExternalIndex
+}
+
+func (info *CommitInfo) IsHardDeleted() bool {
+	return info.Op == OpHardDelete
+}
+
+func (info *CommitInfo) IsSoftDeleted() bool {
+	return info.Op == OpSoftDelete
+}
+
+func (info *CommitInfo) PString(level PPLevel) string {
+	s := fmt.Sprintf("CInfo: ")
+	var curr, prev common.ISSLLNode
+	curr = info
+	for curr != nil {
+		if prev != nil {
+			s = fmt.Sprintf("%s -> ", s)
+		}
+		cInfo := curr.(*CommitInfo)
+		s = fmt.Sprintf("%s(%s,%d", s, OpName(cInfo.Op), cInfo.CommitId)
+		if level >= PPL1 {
+			id, _ := info.GetAppliedIndex()
+			s = fmt.Sprintf("%s,%d-%s)", s, id, cInfo.ExternalIndex.String())
+		} else {
+			s = fmt.Sprintf("%s)", s)
+		}
+		// s = fmt.Sprintf("%s(%s,%d,%d)", s, OpName(info.Op), info.TranId-MinUncommitId, info.CommitId)
+		prev = curr
+		curr = curr.GetNext()
+	}
+	return s
+}
+
+// TODO: remove it. Not be used later
+func (info *CommitInfo) GetAppliedIndex() (uint64, bool) {
+	if info.AppliedIndex != nil {
+		return info.AppliedIndex.Id.Id, true
+	}
+	if info.ExternalIndex != nil && info.ExternalIndex.IsBatchApplied() {
+		return info.ExternalIndex.Id.Id, true
+	}
+
+	if info.PrevIndex != nil && info.PrevIndex.IsBatchApplied() {
+		return info.PrevIndex.Id.Id, true
+	}
+	return 0, false
+}
+
+// SetIndex changes the current index to previous index if exists, and
+// sets the current index to idx.
+func (info *CommitInfo) SetIndex(idx LogIndex) error {
+	if info.ExternalIndex != nil {
+		if !info.ExternalIndex.IsApplied() {
+			return errors.New(fmt.Sprintf("already has applied index: %d", info.ExternalIndex.Id))
+		}
+		info.PrevIndex = info.ExternalIndex
+		info.ExternalIndex = &idx
+	} else {
+		if info.PrevIndex != nil {
+			return errors.New(fmt.Sprintf("no index but has prev index: %d", info.PrevIndex.Id))
+		}
+		info.ExternalIndex = &idx
+	}
+	return nil
 }
 
 type Sequence struct {
-	NextBlockID     uint64
-	NextSegmentID   uint64
-	NextPartitionID uint64
-	NextTableID     uint64
-	NextIndexID     uint64
+	nextTableId   uint64
+	nextSegmentId uint64
+	nextBlockId   uint64
+	nextCommitId  uint64
+	nextIndexId   uint64
 }
 
-// Segment contains metadata for segment.
-type Segment struct {
-	BoundSate
-	sync.RWMutex
-	TimeStamp
-	ID            uint64
-	MaxBlockCount uint64
-	Blocks        []*Block
-	ActiveBlk     int
-	IdMap         map[uint64]int
-	DataState     DataState
-	Table         *Table `json:"-"`
+func (s *Sequence) NextTableId() uint64 {
+	return atomic.AddUint64(&s.nextTableId, uint64(1))
 }
 
-// ColDef defines a column in schema.
-type ColDef struct {
-	// Column name
-	Name string
-	// Column index in schema
-	Idx int
-	// Column type
-	Type types.Type
+func (s *Sequence) NextSegmentId() uint64 {
+	return atomic.AddUint64(&s.nextSegmentId, uint64(1))
 }
 
-// Schema is in representation of a table schema.
-type Schema struct {
-	// Table name
-	Name string
-	// Indices' info
-	Indices []*IndexInfo
-	// Column definitions
-	ColDefs []*ColDef
-	// Column name -> column index mapping
-	NameIdMap map[string]int
+func (s *Sequence) NextBlockId() uint64 {
+	return atomic.AddUint64(&s.nextBlockId, uint64(1))
 }
 
-// IndexInfo contains metadata for an index.
-type IndexInfo struct {
-	Type IndexType
-	// Columns that the index works on
-	Columns []uint16
-	ID      uint64
+func (s *Sequence) NextCommitId() uint64 {
+	return atomic.AddUint64(&s.nextCommitId, uint64(1))
 }
 
-type Statistics struct {
-	Rows uint64
-	Size uint64
+func (s *Sequence) NextIndexId() uint64 {
+	return atomic.AddUint64(&s.nextIndexId, uint64(1))
 }
 
-// Table contains metadata for a table.
-type Table struct {
-	BoundSate
-	sync.RWMutex
-	TimeStamp
-	LogHistory
-	ID            uint64
-	Segments      []*Segment
-	SegmentCnt    uint64
-	ActiveSegment int            `json:"-"`
-	IdMap         map[uint64]int `json:"-"`
-	Info          *MetaInfo      `json:"-"`
-	Stat          *Statistics    `json:"-"`
-	ReplayIndex   *LogIndex      `json:"-"`
-	Schema        *Schema
-	Conf          *Configuration
-	CheckPoint    uint64
+func (s *Sequence) NextUncommitId() uint64 {
+	return nextUncommitId()
 }
 
-// Configuration contains some basic configs for global DB.
-type Configuration struct {
-	Dir              string
-	BlockMaxRows     uint64 `toml:"block-max-rows"`
-	SegmentMaxBlocks uint64 `toml:"segment-max-blocks"`
+func (s *Sequence) TryUpdateTableId(id uint64) {
+	if s.nextTableId < id {
+		s.nextTableId = id
+	}
 }
 
-// MetaInfo contains some basic metadata for global DB.
-type MetaInfo struct {
-	*sync.RWMutex
-	Sequence   Sequence       `json:"-"`
-	Conf       *Configuration `json:"-"`
-	CheckPoint uint64
-	Tables     map[uint64]*Table
-	TableIds   map[uint64]bool   `json:"-"`
-	NameMap    map[string]uint64 `json:"-"`
-	NameTree   *btree.BTree      `json:"-"`
-	Tombstone  map[uint64]bool   `json:"-"`
-	CkpTime    int64
+func (s *Sequence) TryUpdateCommitId(id uint64) {
+	if s.nextCommitId < id {
+		s.nextCommitId = id
+	}
 }
 
-type CopyCtx struct {
-	Ts       int64
-	Attached bool
+func (s *Sequence) TryUpdateSegmentId(id uint64) {
+	if s.nextSegmentId < id {
+		s.nextSegmentId = id
+	}
+}
+
+func (s *Sequence) TryUpdateBlockId(id uint64) {
+	if s.nextBlockId < id {
+		s.nextBlockId = id
+	}
+}
+
+func (s *Sequence) TryUpdateIndexId(id uint64) {
+	if s.nextIndexId < id {
+		s.nextIndexId = id
+	}
+}
+
+func EstimateColumnBlockSize(colIdx int, meta *Block) uint64 {
+	switch meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
+	case types.T_json, types.T_char, types.T_varchar:
+		return meta.Segment.Table.Schema.BlockMaxRows * 2 * 4
+	default:
+		return meta.Segment.Table.Schema.BlockMaxRows * uint64(meta.Segment.Table.Schema.ColDefs[colIdx].Type.Size)
+	}
+}
+
+func EstimateBlockSize(meta *Block) uint64 {
+	size := uint64(0)
+	for colIdx, _ := range meta.Segment.Table.Schema.ColDefs {
+		size += EstimateColumnBlockSize(colIdx, meta)
+	}
+	return size
 }

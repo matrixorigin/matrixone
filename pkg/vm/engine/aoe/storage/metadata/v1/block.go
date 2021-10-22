@@ -10,7 +10,6 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
-// limitations under the License.
 
 package metadata
 
@@ -18,218 +17,282 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"runtime"
+	"sync"
 	"sync/atomic"
 )
 
-func EstimateColumnBlockSize(colIdx int, meta *Block) uint64 {
-	switch meta.Segment.Table.Schema.ColDefs[colIdx].Type.Oid {
-	case types.T_json, types.T_char, types.T_varchar:
-		return meta.Segment.Table.Conf.BlockMaxRows * 2 * 4
-	default:
-		return meta.Segment.Table.Conf.BlockMaxRows * uint64(meta.Segment.Table.Schema.ColDefs[colIdx].Type.Size)
-	}
+var (
+	UpgradeInfullBlockErr = errors.New("aoe: upgrade infull block")
+)
+
+type blockLogEntry struct {
+	BaseEntry
+	Catalog   *Catalog `json:"-"`
+	TableId   uint64
+	SegmentId uint64
 }
 
-func EstimateBlockSize(meta *Block) uint64 {
-	size := uint64(0)
-	for colIdx, _ := range meta.Segment.Table.Schema.ColDefs {
-		size += EstimateColumnBlockSize(colIdx, meta)
-	}
-	return size
+func (e *blockLogEntry) Marshal() ([]byte, error) {
+	return json.Marshal(e)
 }
 
-func NewBlock(id uint64, segment *Segment) *Block {
-	blk := &Block{
-		ID:          id,
-		TimeStamp:   *NewTimeStamp(),
-		MaxRowCount: segment.Table.Conf.BlockMaxRows,
-		Segment:     segment,
-	}
-	return blk
+func (e *blockLogEntry) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, e)
 }
 
-// GetReplayIndex returns the clone of replay index for this block if exists.
-func (blk *Block) GetReplayIndex() *LogIndex {
-	if blk.Index == nil {
-		return nil
+func (e *blockLogEntry) ToEntry() *Block {
+	entry := &Block{
+		BaseEntry: e.BaseEntry,
 	}
-	ctx := &LogIndex{
-		ID:       blk.Index.ID,
-		Start:    blk.Index.Start,
-		Count:    blk.Index.Count,
-		Capacity: blk.Index.Capacity,
-	}
-	return ctx
+	table := e.Catalog.TableSet[e.TableId]
+	entry.Segment = table.GetSegment(e.SegmentId, MinUncommitId)
+	return entry
 }
 
-// GetAppliedIndex returns ID of the applied index (previous index or the current
-// index if it's applied) and true if exists, otherwise returns 0 and false.
-func (blk *Block) GetAppliedIndex() (uint64, bool) {
-	blk.RLock()
-	defer blk.RUnlock()
-	if blk.Index != nil && blk.Index.IsBatchApplied() {
-		return blk.Index.ID.Id, true
-	}
-
-	if blk.PrevIndex != nil && blk.PrevIndex.IsBatchApplied() {
-		return blk.PrevIndex.ID.Id, true
-	}
-
-	return 0, false
+type Block struct {
+	BaseEntry
+	Segment     *Segment `json:"-"`
+	Count       uint64
+	SegmentedId uint64
 }
 
-func (blk *Block) GetID() uint64 {
-	return blk.ID
+func newBlockEntry(segment *Segment, tranId uint64, exIndex *ExternalIndex) *Block {
+	e := &Block{
+		Segment: segment,
+		BaseEntry: BaseEntry{
+			Id: segment.Table.Catalog.NextBlockId(),
+			CommitInfo: &CommitInfo{
+				CommitId:      tranId,
+				TranId:        tranId,
+				SSLLNode:      *common.NewSSLLNode(),
+				Op:            OpCreate,
+				ExternalIndex: exIndex,
+			},
+		},
+	}
+	return e
 }
 
-func (blk *Block) TryUpgrade() bool {
-	blk.Lock()
-	defer blk.Unlock()
-	if blk.Count == blk.MaxRowCount {
-		blk.DataState = FULL
+func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
+	e := &Block{
+		Segment:   segment,
+		BaseEntry: *base,
+	}
+	return e
+}
+
+func (e *Block) View() (view *Block) {
+	e.RLock()
+	view = &Block{
+		BaseEntry:   BaseEntry{Id: e.Id, CommitInfo: e.CommitInfo},
+		Segment:     e.Segment,
+		Count:       e.Count,
+		SegmentedId: e.SegmentedId,
+	}
+	e.RUnlock()
+	return
+}
+
+// Safe
+func (e *Block) Less(o *Block) bool {
+	if e == nil {
 		return true
 	}
-	return false
+	return e.Id < o.Id
 }
 
-func (blk *Block) GetSegmentID() uint64 {
-	return blk.Segment.ID
+func (e *Block) rebuild(segment *Segment) {
+	e.Segment = segment
 }
 
-func (blk *Block) GetCount() uint64 {
-	return atomic.LoadUint64(&blk.Count)
-}
-
-func (blk *Block) AddCount(n uint64) (uint64, error) {
-	curCnt := blk.GetCount()
-	if curCnt+n > blk.Segment.Table.Conf.BlockMaxRows {
-		return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, blk.Segment.Table.Conf.BlockMaxRows))
+// Safe
+func (e *Block) AsCommonID() *common.ID {
+	return &common.ID{
+		TableID:   e.Segment.Table.Id,
+		SegmentID: e.Segment.Id,
+		BlockID:   e.Id,
 	}
-	for !atomic.CompareAndSwapUint64(&blk.Count, curCnt, curCnt+n) {
-		curCnt = blk.GetCount()
-		if curCnt+n > blk.Segment.Table.Conf.BlockMaxRows {
-			return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, blk.Segment.Table.Conf.BlockMaxRows))
+}
+
+// Not safe
+// One writer, multi-readers
+func (e *Block) SetSegmentedId(id uint64) error {
+	atomic.StoreUint64(&e.SegmentedId, id)
+	return nil
+}
+
+// Safe
+func (e *Block) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
+	if rwmtx == nil {
+		e.RLock()
+		defer e.RUnlock()
+	}
+	if !e.IsFull() {
+		id := atomic.LoadUint64(&e.SegmentedId)
+		if id == 0 {
+			return id, false
+		}
+		return id, true
+	}
+	return e.BaseEntry.GetAppliedIndex()
+}
+
+// Not safe
+func (e *Block) HasMaxRows() bool {
+	return e.Count == e.Segment.Table.Schema.BlockMaxRows
+}
+
+// Not safe
+func (e *Block) SetIndex(idx LogIndex) error {
+	return e.CommitInfo.SetIndex(idx)
+}
+
+// Not safe
+// TODO: should be safe
+func (e *Block) GetCount() uint64 {
+	if e.IsFull() {
+		return e.Segment.Table.Schema.BlockMaxRows
+	}
+	return atomic.LoadUint64(&e.Count)
+}
+
+// Not safe
+// TODO: should be safe
+func (e *Block) AddCount(n uint64) (uint64, error) {
+	curCnt := e.GetCount()
+	if curCnt+n > e.Segment.Table.Schema.BlockMaxRows {
+		return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, e.Segment.Table.Schema.BlockMaxRows))
+	}
+	for !atomic.CompareAndSwapUint64(&e.Count, curCnt, curCnt+n) {
+		runtime.Gosched()
+		curCnt = e.GetCount()
+		if curCnt+n > e.Segment.Table.Schema.BlockMaxRows {
+			return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, e.Segment.Table.Schema.BlockMaxRows))
 		}
 	}
 	return curCnt + n, nil
 }
 
-// SetIndex changes the current index to previous index if exists, and
-// sets the current index to idx.
-func (blk *Block) SetIndex(idx LogIndex) error {
-	blk.Lock()
-	defer blk.Unlock()
-	if blk.Index != nil {
-		if !blk.Index.IsApplied() {
-			return errors.New(fmt.Sprintf("block already has applied index: %s", blk.Index.ID.String()))
-		}
-		blk.PrevIndex = blk.Index
-		blk.Index = &idx
-	} else {
-		if blk.PrevIndex != nil {
-			return errors.New(fmt.Sprintf("block has no index but has prev index: %s", blk.PrevIndex.ID.String()))
-		}
-		blk.Index = &idx
+// TODO: remove it. Should not needed
+func (e *Block) SetCount(count uint64) error {
+	if count > e.Segment.Table.Schema.BlockMaxRows {
+		return errors.New("SetCount exceeds max limit")
 	}
+	if count < e.Count {
+		return errors.New("SetCount cannot set smaller count")
+	}
+	e.Count = count
 	return nil
 }
 
-func (blk *Block) String() string {
-	s := fmt.Sprintf("Blk(%d-%d-%d)(DataState=%d)", blk.Segment.Table.ID, blk.Segment.ID, blk.ID, blk.DataState)
-	if blk.IsDeleted(NowMicro()) {
-		s += "[D]"
+// Safe
+func (e *Block) CommittedView(id uint64) *Block {
+	baseEntry := e.UseCommitted(id)
+	if baseEntry == nil {
+		return nil
 	}
-	if blk.Count == blk.MaxRowCount {
-		s += "[F]"
+	return &Block{
+		BaseEntry: *baseEntry,
 	}
+}
+
+// Safe
+func (e *Block) SimpleUpgrade(exIndice []*ExternalIndex) error {
+	ctx := newUpgradeBlockCtx(e, exIndice)
+	return e.Segment.Table.Catalog.onCommitRequest(ctx)
+	// return e.Upgrade(e.Segment.Table.Catalog.NextUncommitId(), exIndice, true)
+}
+
+// func (e *Block) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit bool) error {
+func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
+	if e.GetCount() != e.Segment.Table.Schema.BlockMaxRows {
+		return nil, UpgradeInfullBlockErr
+	}
+	tranId := e.Segment.Table.Catalog.NextUncommitId()
+	e.Lock()
+	defer e.Unlock()
+	var newOp OpT
+	switch e.CommitInfo.Op {
+	case OpCreate:
+		newOp = OpUpgradeFull
+	default:
+		return nil, UpgradeNotNeededErr
+	}
+	cInfo := &CommitInfo{
+		TranId:   tranId,
+		CommitId: tranId,
+		Op:       newOp,
+	}
+	if ctx.exIndice != nil {
+		cInfo.ExternalIndex = ctx.exIndice[0]
+		if len(ctx.exIndice) > 1 {
+			cInfo.PrevIndex = ctx.exIndice[1]
+		}
+	} else {
+		cInfo.ExternalIndex = e.CommitInfo.ExternalIndex
+		id, ok := e.BaseEntry.GetAppliedIndex()
+		if ok {
+			cInfo.AppliedIndex = &ExternalIndex{
+				Id: SimpleBatchId(id),
+			}
+		}
+	}
+	e.onNewCommit(cInfo)
+	logEntry := e.Segment.Catalog.prepareCommitEntry(e, ETUpgradeBlock, e)
+	return logEntry, nil
+}
+
+func (e *Block) toLogEntry() *blockLogEntry {
+	return &blockLogEntry{
+		BaseEntry: e.BaseEntry,
+		Catalog:   e.Segment.Catalog,
+		TableId:   e.Segment.Table.Id,
+		SegmentId: e.Segment.Id,
+	}
+}
+
+func (e *Block) Marshal() ([]byte, error) {
+	return json.Marshal(e)
+}
+
+func (e *Block) Unmarshal(buf []byte) error {
+	return json.Unmarshal(buf, e)
+}
+
+// Not safe
+func (e *Block) PString(level PPLevel) string {
+	s := fmt.Sprintf("<Block %s>", e.BaseEntry.PString(level))
 	return s
 }
 
-func (blk *Block) IsFull() bool {
-	return blk.Count == blk.MaxRowCount
+// Not safe
+func (e *Block) String() string {
+	buf, _ := e.Marshal()
+	return string(buf)
 }
 
-// SetCount sets blk row count to count, changing its
-// DataState if needed.
-func (blk *Block) SetCount(count uint64) error {
-	blk.Lock()
-	defer blk.Unlock()
-	if count > blk.MaxRowCount {
-		return errors.New("SetCount exceeds max limit")
+// Not safe
+func (e *Block) ToLogEntry(eType LogEntryType) LogEntry {
+	switch eType {
+	case ETCreateBlock:
+		break
+	case ETUpgradeBlock:
+		break
+	case ETDropBlock:
+		if !e.IsSoftDeletedLocked() {
+			panic("logic error")
+		}
+		break
+	default:
+		panic("not supported")
 	}
-	if count < blk.Count {
-		return errors.New("SetCount cannot set smaller count")
-	}
-	blk.Count = count
-	if count < blk.MaxRowCount {
-		blk.DataState = PARTIAL
-	} else {
-		blk.DataState = FULL
-	}
-	return nil
-}
-
-// Update upgrades the current blk to target block if possible.
-func (blk *Block) Update(target *Block) error {
-	blk.Lock()
-	defer blk.Unlock()
-	if blk.ID != target.ID || blk.Segment.ID != target.Segment.ID || blk.Segment.Table.ID != target.Segment.Table.ID {
-		return errors.New("block, segment, table id not matched")
-	}
-
-	if blk.MaxRowCount != target.MaxRowCount {
-		return errors.New("update block MaxRowCount not matched")
-	}
-
-	if blk.DataState > target.DataState {
-		return errors.New(fmt.Sprintf("Cannot Update block from DataState %d to %d", blk.DataState, target.DataState))
-	}
-
-	if blk.Count > target.Count {
-		return errors.New(fmt.Sprintf("Cannot Update block from Count %d to %d", blk.Count, target.Count))
-	}
-	target.copyNoLock(blk)
-	blk.Segment.Table.UpdateVersion()
-
-	return nil
-}
-
-// AsCommonID generates the unique commonID for the block.
-func (blk *Block) AsCommonID() *common.ID {
-	return &common.ID{
-		TableID:   blk.Segment.Table.ID,
-		SegmentID: blk.Segment.ID,
-		BlockID:   blk.ID,
-	}
-}
-
-func (blk *Block) Marshal() ([]byte, error) {
-	return json.Marshal(blk)
-}
-
-func (blk *Block) Copy() *Block {
-	blk.RLock()
-	defer blk.RUnlock()
-	var newBlk *Block
-	newBlk = blk.copyNoLock(newBlk)
-	return newBlk
-}
-
-func (blk *Block) copyNoLock(newBlk *Block) *Block {
-	if newBlk == nil {
-		newBlk = NewBlock(blk.ID, blk.Segment)
-	}
-	newBlk.Segment = blk.Segment
-	newBlk.ID = blk.ID
-	newBlk.TimeStamp = blk.TimeStamp
-	newBlk.MaxRowCount = blk.MaxRowCount
-	newBlk.BoundSate = blk.BoundSate
-	newBlk.Count = blk.Count
-	newBlk.Index = blk.Index
-	newBlk.PrevIndex = blk.PrevIndex
-	newBlk.DataState = blk.DataState
-
-	return newBlk
+	entry := e.toLogEntry()
+	buf, _ := entry.Marshal()
+	logEntry := logstore.NewAsyncBaseEntry()
+	logEntry.Meta.SetType(eType)
+	logEntry.Unmarshal(buf)
+	return logEntry
 }

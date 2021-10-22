@@ -27,7 +27,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/col"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type block struct {

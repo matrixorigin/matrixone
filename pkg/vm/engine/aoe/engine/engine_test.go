@@ -30,7 +30,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/storage"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"sync"
 
@@ -164,7 +164,7 @@ func TestAOEEngine(t *testing.T) {
 	tbls := db.Relations()
 	require.Equal(t, 0, len(tbls))
 
-	mockTbl := md.MockTableInfo(colCnt)
+	mockTbl := adaptor.MockTableInfo(colCnt)
 	mockTbl.Name = fmt.Sprintf("%s%d", tableName, time.Now().Unix())
 	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
 
@@ -313,7 +313,7 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	require.Nil(t, tbs)
 
 	colCnt := 4
-	t1 := md.MockTableInfo(colCnt)
+	t1 := adaptor.MockTableInfo(colCnt)
 	t1.Name = "t1"
 
 	tid, err := c[0].CreateTable(1, dbid, *t1)
@@ -325,7 +325,7 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	require.NotNil(t, tb)
 	require.Equal(t, aoe.StatePublic, tb.State)
 
-	t2 := md.MockTableInfo(colCnt)
+	t2 := adaptor.MockTableInfo(colCnt)
 	t2.Name = "t2"
 	_, err = c[0].CreateTable(2, dbid, *t2)
 	require.NoError(t, err)

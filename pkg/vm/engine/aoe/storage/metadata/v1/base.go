@@ -10,107 +10,177 @@
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
-// limitations under the License.
 
 package metadata
 
 import (
-	"errors"
 	"fmt"
-	"sync/atomic"
-	"time"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"sync"
 )
 
-func NowMicro() int64 {
-	return time.Now().UnixNano() / 1000
+type PPLevel uint8
+
+const (
+	PPL0 PPLevel = iota
+	PPL1
+	PPL2
+)
+
+type BaseEntry struct {
+	sync.RWMutex
+	Id         uint64
+	CommitInfo *CommitInfo
 }
 
-// NewTimeStamp generates a new timestamp created on current time.
-func NewTimeStamp() *TimeStamp {
-	ts := &TimeStamp{
-		CreatedOn: NowMicro(),
+func (e *BaseEntry) GetFirstCommit() *CommitInfo {
+	prev := e.CommitInfo
+	curr := prev.GetNext()
+	for curr != nil {
+		prev = curr.(*CommitInfo)
+		curr = curr.GetNext()
 	}
-	return ts
+	return prev
 }
 
-// Delete deletes ts and set the deleting time to t.
-func (ts *TimeStamp) Delete(t int64) error {
-	val := atomic.LoadInt64(&(ts.DeletedOn))
-	if val != 0 {
-		return errors.New("already deleted")
-	}
-	ok := atomic.CompareAndSwapInt64(&(ts.DeletedOn), val, t)
-	if !ok {
-		return errors.New("already deleted")
-	}
-	return nil
+func (e *BaseEntry) GetCommit() *CommitInfo {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo
 }
 
-// IsDeleted checks if ts was deleted on t.
-func (ts *TimeStamp) IsDeleted(t int64) bool {
-	delon := atomic.LoadInt64(&(ts.DeletedOn))
-	if delon != 0 {
-		if delon <= t {
-			return true
-		}
-	}
-	return false
+// Should be guarded
+func (e *BaseEntry) IsFull() bool {
+	return e.CommitInfo.Op == OpUpgradeFull
 }
 
-// IsCreated checks if ts was created on t.
-func (ts *TimeStamp) IsCreated(t int64) bool {
-	return ts.CreatedOn < t
+// Should be guarded
+func (e *BaseEntry) IsClose() bool {
+	return e.CommitInfo.Op == OpUpgradeClose
 }
 
-// Select returns true if ts has been created but not deleted on t.
-func (ts *TimeStamp) Select(t int64) bool {
-	if ts.IsDeleted(t) {
-		return false
-	}
-	return ts.IsCreated(t)
+// Should be guarded
+func (e *BaseEntry) IsSorted() bool {
+	return e.CommitInfo.Op == OpUpgradeSorted
 }
 
-func (ts *TimeStamp) String() string {
-	s := fmt.Sprintf("ts(%d,%d,%d)", ts.CreatedOn, ts.UpdatedOn, ts.DeletedOn)
+func (e *BaseEntry) onNewCommit(info *CommitInfo) {
+	info.SetNext(e.CommitInfo)
+	e.CommitInfo = info
+}
+
+func (e *BaseEntry) PString(level PPLevel) string {
+	s := fmt.Sprintf("Id=%d,%s", e.Id, e.CommitInfo.PString(level))
 	return s
 }
 
-func (state *BoundSate) GetBoundState() BoundSate {
-	return *state
+func (e *BaseEntry) GetAppliedIndex() (uint64, bool) {
+	curr := e.CommitInfo
+	id, ok := curr.GetAppliedIndex()
+	if ok {
+		return id, ok
+	}
+	next := curr.GetNext()
+	for next != nil {
+		id, ok = next.(*CommitInfo).GetAppliedIndex()
+		if ok {
+			return id, ok
+		}
+		next = next.GetNext()
+	}
+	return id, ok
 }
 
-func (state *BoundSate) Detach() error {
-	if *state == Detached || *state == Standalone {
-		return errors.New(fmt.Sprintf("detatched or stalone already: %d", *state))
+// Guarded by entry mutex
+func (e *BaseEntry) HasCommittedLocked() bool {
+	return !IsTransientCommitId(e.CommitInfo.CommitId)
+}
+
+func (e *BaseEntry) HasCommitted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return !IsTransientCommitId(e.CommitInfo.CommitId)
+}
+
+func (e *BaseEntry) CanUse(tranId uint64) bool {
+	e.RLock()
+	defer e.RUnlock()
+	if e.HasCommittedLocked() && e.CommitInfo.TranId > tranId {
+		return true
 	}
-	*state = Detached
+	return tranId == e.CommitInfo.TranId
+}
+
+func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
+	if e.CommitInfo.CommitId > id {
+		return nil
+	}
+	be := *e
+	return &be
+}
+
+func (e *BaseEntry) UseCommitted(id uint64) *BaseEntry {
+	e.RLock()
+	defer e.RUnlock()
+	// if e.HasCommittedLocked() {
+	// 	return e.onCommitted(id)
+	// }
+	var curr common.ISSLLNode
+	curr = e.CommitInfo
+	for curr != nil {
+		info := curr.(*CommitInfo)
+		// if info.IsHardDeleted() {
+		// 	return nil
+		// }
+		if !IsTransientCommitId(info.CommitId) && info.CommitId <= id {
+			cInfo := *info
+			return &BaseEntry{
+				Id:         e.Id,
+				CommitInfo: &cInfo,
+			}
+		}
+		curr = curr.GetNext()
+	}
 	return nil
 }
 
-func (state *BoundSate) Attach() error {
-	if *state == Attached {
-		return errors.New("already attached")
+// Guarded by e.Lock()
+func (e *BaseEntry) IsSoftDeletedLocked() bool {
+	return e.CommitInfo.IsSoftDeleted()
+}
+
+func (e *BaseEntry) IsDeletedLocked() bool {
+	return e.IsSoftDeletedLocked() || e.IsHardDeletedLocked()
+}
+
+func (e *BaseEntry) IsDeleted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.IsSoftDeletedLocked() || e.IsHardDeletedLocked()
+}
+
+func (e *BaseEntry) IsSoftDeleted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo.IsSoftDeleted()
+}
+
+func (e *BaseEntry) IsHardDeletedLocked() bool {
+	return e.CommitInfo.IsHardDeleted()
+}
+
+func (e *BaseEntry) IsHardDeleted() bool {
+	e.RLock()
+	defer e.RUnlock()
+	return e.CommitInfo.IsHardDeleted()
+}
+
+func (e *BaseEntry) CommitLocked(id uint64) {
+	if IsTransientCommitId(id) {
+		panic(fmt.Sprintf("Cannot commit transient id %d", id))
 	}
-	*state = Attached
-	return nil
-}
-
-func (seq *Sequence) GetSegmentID() uint64 {
-	return atomic.AddUint64(&(seq.NextSegmentID), uint64(1))
-}
-
-func (seq *Sequence) GetBlockID() uint64 {
-	return atomic.AddUint64(&(seq.NextBlockID), uint64(1))
-}
-
-func (seq *Sequence) GetTableID() uint64 {
-	return atomic.AddUint64(&(seq.NextTableID), uint64(1))
-}
-
-func (seq *Sequence) GetPartitionID() uint64 {
-	return atomic.AddUint64(&(seq.NextPartitionID), uint64(1))
-}
-
-func (seq *Sequence) GetIndexID() uint64 {
-	return atomic.AddUint64(&(seq.NextIndexID), uint64(1))
+	if e.HasCommittedLocked() {
+		panic(fmt.Sprintf("Cannot commit committed entry"))
+	}
+	e.CommitInfo.CommitId = id
 }

@@ -19,7 +19,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/event"
 	"matrixone/pkg/vm/engine/aoe/storage/gc"
 	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
@@ -92,9 +92,8 @@ type Options struct {
 	Wal wal.Wal
 
 	Meta struct {
-		CKFactory *checkpointerFactory
-		Conf      *MetaCfg
-		Catalog   *metadata.Catalog
+		Conf    *MetaCfg
+		Catalog *metadata.Catalog
 	}
 
 	GC struct {
@@ -155,10 +154,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 			panic(err)
 		}
 		o.Meta.Catalog.Start()
-	}
-
-	if o.Meta.CKFactory == nil {
-		o.Meta.CKFactory = NewCheckpointerFactory(dirname)
 	}
 
 	if o.CacheCfg == nil {
