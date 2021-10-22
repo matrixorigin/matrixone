@@ -30,7 +30,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	"matrixone/pkg/vm/engine/aoe/storage"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"sync"
 	"testing"
@@ -55,7 +55,7 @@ const (
 var tableInfo *aoe.TableInfo
 
 func init() {
-	tableInfo = md.MockTableInfo(colCnt)
+	tableInfo = adaptor.MockTableInfo(colCnt)
 	tableInfo.Id = 100
 }
 
