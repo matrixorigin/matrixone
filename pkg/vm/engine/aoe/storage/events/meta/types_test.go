@@ -32,13 +32,14 @@ var (
 func TestBasicOps(t *testing.T) {
 	os.RemoveAll(workDir)
 	opts := config.NewOptions(workDir, config.CST_Customize, config.BST_S, config.SST_S)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(workDir)
+	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 
 	now := time.Now()
 
 	catalog := opts.Meta.Catalog
-	defer catalog.Close()
 	schema := metadata.MockSchema(2)
 	tbl, err := catalog.SimpleCreateTable(schema, nil)
 	assert.Nil(t, err)

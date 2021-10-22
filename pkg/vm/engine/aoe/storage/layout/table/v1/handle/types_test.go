@@ -42,6 +42,9 @@ func TestSnapshot(t *testing.T) {
 	opts := new(storage.Options)
 	opts.Meta.Conf = &cfg
 	opts.FillDefaults(dir)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
+
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * row_count * uint64(seg_cnt) * uint64(blk_cnt) * 2
 	indexBufMgr := bmgr.MockBufMgr(capacity)

@@ -20,6 +20,7 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
 )
 
@@ -243,6 +244,9 @@ func (replayer *catalogReplayer) RegisterEntryHandler(_ LogEntryType, _ logstore
 
 func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore.ReplayObserver) error {
 	switch entry.GetMeta().GetType() {
+	case shard.ETShardWalSafeId:
+		safeId, _ := shard.EntryToSafeId(entry)
+		logutil.Infof("Replay SafeId: %v", safeId)
 	case ETCreateBlock:
 		blk := &blockLogEntry{}
 		blk.Unmarshal(entry.GetPayload())

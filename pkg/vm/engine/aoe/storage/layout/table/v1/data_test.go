@@ -43,6 +43,8 @@ func TestBase1(t *testing.T) {
 	}
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(WORK_DIR)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(WORK_DIR)
+	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	schema := metadata.MockSchema(2)
 	createIdx := shard.Index{Id: shard.SimpleIndexId(common.NextGlobalSeqNum())}

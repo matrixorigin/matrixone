@@ -42,8 +42,13 @@ func TestBlock(t *testing.T) {
 		BlockMaxRows:     rowCount,
 		SegmentMaxBlocks: blkCnt,
 	}
+	var err error
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(dir)
+	opts.Meta.Catalog, err = opts.CreateCatalog(dir)
+	assert.Nil(t, err)
+	opts.Meta.Catalog.Start()
+
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * rowCount * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)

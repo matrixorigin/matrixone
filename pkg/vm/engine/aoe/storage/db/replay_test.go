@@ -209,7 +209,7 @@ func TestReplay2(t *testing.T) {
 	catalog.Close()
 }
 
-func buildOpts(dir string) *storage.Options {
+func buildOpts(dir string, createCatalog bool) *storage.Options {
 	blkRowCount, segBlkCount := uint64(16), uint64(4)
 	cfg := &storage.MetaCfg{
 		BlockMaxRows:     blkRowCount,
@@ -218,6 +218,14 @@ func buildOpts(dir string) *storage.Options {
 	opts := new(storage.Options)
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(dir)
+	if createCatalog {
+		opts.Meta.Catalog, _ = metadata.OpenCatalog(&opts.Mu, &metadata.CatalogCfg{
+			Dir:              dir,
+			BlockMaxRows:     opts.Meta.Conf.BlockMaxRows,
+			SegmentMaxBlocks: opts.Meta.Conf.SegmentMaxBlocks,
+		})
+		opts.Meta.Catalog.Start()
+	}
 	return opts
 }
 
@@ -225,7 +233,7 @@ func TestReplay3(t *testing.T) {
 	dir := "/tmp/testreplay3"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -267,7 +275,7 @@ func TestReplay4(t *testing.T) {
 	dir := "/tmp/testreplay4"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	totalBlks := opts.Meta.Catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
@@ -319,7 +327,7 @@ func TestReplay5(t *testing.T) {
 	dir := "/tmp/testreplay5"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -386,7 +394,7 @@ func TestReplay6(t *testing.T) {
 	dir := "/tmp/testreplay6"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -458,7 +466,7 @@ func TestReplay7(t *testing.T) {
 	dir := "/tmp/testreplay7"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -529,7 +537,7 @@ func TestReplay8(t *testing.T) {
 	dir := "/tmp/testreplay8"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -602,7 +610,7 @@ func TestReplay9(t *testing.T) {
 	dir := "/tmp/testreplay9"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
@@ -721,7 +729,7 @@ func TestReplay10(t *testing.T) {
 	dir := "/tmp/testreplay10"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
@@ -790,7 +798,7 @@ func TestReplay11(t *testing.T) {
 	dir := "/tmp/testreplay11"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 

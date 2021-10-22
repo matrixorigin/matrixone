@@ -23,7 +23,10 @@ import (
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+	"sync"
 	"sync/atomic"
 )
 
@@ -73,10 +76,22 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	db.Store.DataTables = table.NewTables(&opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
 	db.Store.DataTables.MutFactory = factory
 
+	catalogCfg := metadata.CatalogCfg{
+		Dir:              dirname,
+		BlockMaxRows:     opts.Meta.Conf.BlockMaxRows,
+		SegmentMaxBlocks: opts.Meta.Conf.SegmentMaxBlocks,
+	}
+	if opts.Meta.Catalog, err = metadata.OpenCatalog(new(sync.RWMutex), &catalogCfg); err != nil {
+		return
+	}
 	db.Store.Catalog = opts.Meta.Catalog
+	db.Store.Catalog.Start()
+
 	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
-
+	if db.Opts.Wal == nil {
+		db.Opts.Wal = shard.NewManagerWithDriver(db.Store.Catalog.Store, false)
+	}
 	db.Wal = db.Opts.Wal
 
 	replayHandle := NewReplayHandle(dirname, opts.Meta.Catalog, db.Store.DataTables, nil)

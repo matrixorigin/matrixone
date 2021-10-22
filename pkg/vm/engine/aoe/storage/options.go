@@ -138,22 +138,11 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 
-	if o.Meta.Catalog == nil {
-		catalogCfg := &metadata.CatalogCfg{
-			Dir: dirname,
+	if o.Meta.Conf == nil {
+		o.Meta.Conf = &MetaCfg{
+			BlockMaxRows:     DefaultBlockMaxRows,
+			SegmentMaxBlocks: DefaultBlocksPerSegment,
 		}
-		if o.Meta.Conf == nil {
-			catalogCfg.BlockMaxRows = DefaultBlockMaxRows
-			catalogCfg.SegmentMaxBlocks = DefaultBlocksPerSegment
-		} else {
-			catalogCfg.BlockMaxRows = o.Meta.Conf.BlockMaxRows
-			catalogCfg.SegmentMaxBlocks = o.Meta.Conf.SegmentMaxBlocks
-		}
-		var err error
-		if o.Meta.Catalog, err = metadata.OpenCatalog(&o.Mu, catalogCfg); err != nil {
-			panic(err)
-		}
-		o.Meta.Catalog.Start()
 	}
 
 	if o.CacheCfg == nil {
@@ -179,4 +168,13 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 	return o
+}
+
+func (o *Options) CreateCatalog(dirname string) (*metadata.Catalog, error) {
+	catalog, err := metadata.OpenCatalog(&o.Mu, &metadata.CatalogCfg{
+		Dir:              dirname,
+		BlockMaxRows:     o.Meta.Conf.BlockMaxRows,
+		SegmentMaxBlocks: o.Meta.Conf.SegmentMaxBlocks,
+	})
+	return catalog, err
 }
