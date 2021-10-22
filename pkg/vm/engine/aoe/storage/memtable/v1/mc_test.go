@@ -46,6 +46,7 @@ func TestMutCollection(t *testing.T) {
 	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt, nil)
 	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
 	opts.Meta.Catalog.Start()
+	opts.Wal = shard.NewNoopWal()
 
 	capacity := blockRows * 4 * uint64(colcnt) * 1 * 1 * 2
 	// capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4

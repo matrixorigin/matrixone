@@ -26,6 +26,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"os"
 	"sync"
 	"testing"
@@ -41,6 +42,7 @@ func TestMutableBlockNode(t *testing.T) {
 	rowCount, blkCount := uint64(30), uint64(4)
 	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
 	opts.Meta.Catalog = catalog
+	opts.Wal = shard.NewNoopWal()
 	defer catalog.Close()
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)

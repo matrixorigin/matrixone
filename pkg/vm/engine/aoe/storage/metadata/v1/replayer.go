@@ -47,13 +47,19 @@ type replayCache struct {
 	replayer   *catalogReplayer
 	entries    []*replayEntry
 	checkpoint *catalogLogEntry
+	safeIds    map[uint64]uint64
 }
 
 func newReplayCache(replayer *catalogReplayer) *replayCache {
 	return &replayCache{
 		replayer: replayer,
 		entries:  make([]*replayEntry, 0),
+		safeIds:  make(map[uint64]uint64),
 	}
+}
+
+func (cache *replayCache) OnShardSafeId(id shard.SafeId) {
+	cache.safeIds[id.ShardId] = id.Id
 }
 
 func (cache *replayCache) Append(entry *replayEntry) {
@@ -247,6 +253,7 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 	case shard.ETShardWalSafeId:
 		safeId, _ := shard.EntryToSafeId(entry)
 		logutil.Infof("Replay SafeId: %v", safeId)
+		replayer.cache.OnShardSafeId(safeId)
 	case ETCreateBlock:
 		blk := &blockLogEntry{}
 		blk.Unmarshal(entry.GetPayload())

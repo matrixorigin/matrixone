@@ -22,7 +22,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
-	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
 	"time"
 )
@@ -111,10 +110,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o = &Options{}
 	}
 	o.EventListener.FillDefaults()
-
-	if o.Wal == nil {
-		o.Wal = shard.NewManager()
-	}
 
 	if o.FactoryType == INVALID_FT {
 		o.FactoryType = NORMAL_FT

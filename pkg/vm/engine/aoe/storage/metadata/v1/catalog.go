@@ -111,6 +111,23 @@ func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
 	return replayer.RebuildCatalog(mu, cfg)
 }
 
+func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore) *Catalog {
+	catalog := &Catalog{
+		RWMutex:   mu,
+		Cfg:       cfg,
+		TableSet:  make(map[uint64]*Table),
+		NameNodes: make(map[string]*tableNode),
+		NameIndex: btree.New(2),
+		Store:     store,
+	}
+	wg := new(sync.WaitGroup)
+	rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
+	ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
+	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
+	catalog.pipeline = newCommitPipeline(catalog)
+	return catalog
+}
+
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
 		logutil.Warnf("Set rotation max size to default size: %s", common.ToH(uint64(logstore.DefaultVersionFileSize)))
