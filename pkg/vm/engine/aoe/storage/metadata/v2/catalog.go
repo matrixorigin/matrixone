@@ -303,6 +303,9 @@ func (catalog *Catalog) prepareDropTable(ctx *dropTableCtx) error {
 }
 
 func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *ExternalIndex) (*Table, error) {
+	if !schema.Valid() {
+		return nil, InvalidSchemaErr
+	}
 	ctx := newCreateTableCtx(schema, exIndex)
 	err := catalog.onCommitRequest(ctx)
 	return ctx.table, err
