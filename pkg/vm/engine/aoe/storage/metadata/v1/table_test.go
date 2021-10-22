@@ -1,13 +1,28 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/stretchr/testify/assert"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestTable(t *testing.T) {
@@ -29,7 +44,6 @@ func TestTable(t *testing.T) {
 		tbl3.NextActiveSegment()
 	}
 	assert.Equal(t, tbl4.GetTableId(), uint64(3))
-
 
 	assert.Nil(t, tbl1.GetReplayIndex())
 	assert.Panics(t, func() {
@@ -58,7 +72,7 @@ func TestTable(t *testing.T) {
 	seg1, err := tbl2.CreateSegment()
 	assert.Nil(t, err)
 	assert.Nil(t, tbl2.RegisterSegment(seg1))
-	_, err = tbl2.ReferenceSegment(seg1.GetID()+1)
+	_, err = tbl2.ReferenceSegment(seg1.GetID() + 1)
 	assert.NotNil(t, err)
 	_, err = tbl2.CloneSegment(seg1.GetID()+1, CopyCtx{})
 	assert.NotNil(t, err)

@@ -1,10 +1,25 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
-	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestSegment(t *testing.T) {
@@ -76,9 +91,9 @@ func TestSegment(t *testing.T) {
 	assert.NotNil(t, seg2.RegisterBlock(blk3))
 	assert.Nil(t, blk3.Detach())
 	//t.Log(blk3.GetBoundState())
-	blk3.ID = blk3.ID-1
+	blk3.ID = blk3.ID - 1
 	assert.NotNil(t, seg2.RegisterBlock(blk3))
-	blk3.ID = blk3.ID+1
+	blk3.ID = blk3.ID + 1
 	assert.Nil(t, blk3.Detach())
 	assert.Nil(t, blk3.SetCount(blk3.MaxRowCount))
 	blk3.DataState = FULL
@@ -98,7 +113,7 @@ func TestSegment(t *testing.T) {
 	assert.Equal(t, 795, len(m))
 	assert.NotNil(t, seg2.GetActiveBlk())
 	assert.NotNil(t, seg2.NextActiveBlk())
-	seg2.ActiveBlk = int(segmentBlockCount)-1
+	seg2.ActiveBlk = int(segmentBlockCount) - 1
 	assert.Nil(t, seg2.NextActiveBlk())
 	seg2.ActiveBlk = int(segmentBlockCount)
 	assert.Nil(t, seg2.GetActiveBlk())
