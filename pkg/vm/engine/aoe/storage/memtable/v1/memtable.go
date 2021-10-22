@@ -72,8 +72,8 @@ func NewMemTable(opts *storage.Options, tableData iface.ITableData, data iface.I
 		meta:      data.GetMeta(),
 		tableMeta: tableData.GetMeta(),
 	}
-	if mt.tableMeta.GetCommit().ExternalIndex != nil {
-		shardId := mt.tableMeta.GetCommit().ExternalIndex.ShardId
+	if mt.tableMeta.GetCommit().LogIndex != nil {
+		shardId := mt.tableMeta.GetCommit().LogIndex.ShardId
 		mt.snippet = shard.NewSnippet(shardId, mt.meta.Id, uint32(0))
 	}
 

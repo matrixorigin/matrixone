@@ -28,6 +28,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mutation"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"os"
 	"sync"
 	"testing"
@@ -96,7 +97,7 @@ func TestTBlock(t *testing.T) {
 
 	insertBat := mock.MockBatch(schema.Types(), rows)
 
-	insertFn := func(n *mutation.MutableBlockNode, idx *metadata.LogIndex) func() error {
+	insertFn := func(n *mutation.MutableBlockNode, idx *shard.Index) func() error {
 		return func() error {
 			var na int
 			for idx, attr := range n.Data.GetAttrs() {
@@ -115,15 +116,15 @@ func TestTBlock(t *testing.T) {
 		}
 	}
 
-	appendFn := func(idx *metadata.LogIndex) func(mb.IMutableBlock) error {
+	appendFn := func(idx *shard.Index) func(mb.IMutableBlock) error {
 		return func(node mb.IMutableBlock) error {
 			n := node.(*mutation.MutableBlockNode)
 			return n.Expand(rows*factor, insertFn(n, idx))
 		}
 	}
 
-	idx1 := &metadata.LogIndex{
-		Id:       metadata.SimpleBatchId(uint64(1)),
+	idx1 := &shard.Index{
+		Id:       shard.SimpleIndexId(uint64(1)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk1.WithPinedContext(appendFn(idx1))
@@ -132,8 +133,8 @@ func TestTBlock(t *testing.T) {
 	idx, ok := blk1.GetSegmentedIndex()
 	assert.False(t, ok)
 
-	idx2 := &metadata.LogIndex{
-		Id:       metadata.SimpleBatchId(uint64(2)),
+	idx2 := &shard.Index{
+		Id:       shard.SimpleIndexId(uint64(2)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk1.WithPinedContext(appendFn(idx2))
@@ -148,14 +149,14 @@ func TestTBlock(t *testing.T) {
 	assert.NotNil(t, blk2)
 	assert.False(t, blk2.node.IsLoaded())
 
-	idx3 := &metadata.LogIndex{
-		Id:       metadata.SimpleBatchId(uint64(3)),
+	idx3 := &shard.Index{
+		Id:       shard.SimpleIndexId(uint64(3)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk2.WithPinedContext(appendFn(idx3))
 	assert.Nil(t, err)
-	idx4 := &metadata.LogIndex{
-		Id:       metadata.SimpleBatchId(uint64(4)),
+	idx4 := &shard.Index{
+		Id:       shard.SimpleIndexId(uint64(4)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk2.WithPinedContext(appendFn(idx4))
@@ -172,8 +173,8 @@ func TestTBlock(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	idx5 := &metadata.LogIndex{
-		Id:       metadata.SimpleBatchId(uint64(4)),
+	idx5 := &shard.Index{
+		Id:       shard.SimpleIndexId(uint64(4)),
 		Capacity: uint64(insertBat.Vecs[0].Length()),
 	}
 	err = blk1.WithPinedContext(appendFn(idx5))

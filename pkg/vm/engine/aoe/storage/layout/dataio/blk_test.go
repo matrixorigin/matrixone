@@ -30,6 +30,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,8 +77,8 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &count)
 		assert.Nil(t, err)
-		prevIdx := metadata.LogIndex{
-			Id: metadata.SimpleBatchId(uint64(0)),
+		prevIdx := shard.Index{
+			Id: shard.SimpleIndexId(uint64(0)),
 		}
 		buf, err := prevIdx.Marshal()
 		assert.Nil(t, err)
@@ -87,8 +88,8 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &buf)
 		assert.Nil(t, err)
-		idx := metadata.LogIndex{
-			Id: metadata.SimpleBatchId(uint64(0)),
+		idx := shard.Index{
+			Id: shard.SimpleIndexId(uint64(0)),
 		}
 		buf, err = idx.Marshal()
 		assert.Nil(t, err)

@@ -27,6 +27,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"os"
 	"sync"
 	"testing"
@@ -89,8 +90,8 @@ func TestMutCollection(t *testing.T) {
 		go func(id uint64, wgp *sync.WaitGroup) {
 			defer wgp.Done()
 			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
-			index := &metadata.LogIndex{
-				Id:       metadata.SimpleBatchId(id),
+			index := &shard.Index{
+				Id:       shard.SimpleIndexId(id),
 				Capacity: uint64(insert.Vecs[0].Length()),
 			}
 			err := c0.Append(insert, index)

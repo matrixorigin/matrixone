@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"os"
 	"sync"
@@ -376,7 +377,7 @@ func TestReplay(t *testing.T) {
 			blk := tbl.SimpleGetOrCreateNextBlock(prev)
 			blk.SetCount(tbl.Schema.BlockMaxRows)
 			blk.SetIndex(LogIndex{
-				Id:       SimpleBatchId(common.NextGlobalSeqNum()),
+				Id:       shard.SimpleIndexId(common.NextGlobalSeqNum()),
 				Count:    tbl.Schema.BlockMaxRows,
 				Capacity: tbl.Schema.BlockMaxRows,
 			})
@@ -417,7 +418,7 @@ func TestAppliedIndex(t *testing.T) {
 	assert.NotNil(t, blk)
 	opIdx := common.NextGlobalSeqNum()
 	blk.SetIndex(LogIndex{
-		Id:       SimpleBatchId(opIdx),
+		Id:       shard.SimpleIndexId(opIdx),
 		Count:    blkRows,
 		Capacity: blkRows * 3 / 2,
 	})
@@ -439,7 +440,7 @@ func TestAppliedIndex(t *testing.T) {
 	assert.NotNil(t, blk)
 
 	blk.SetIndex(LogIndex{
-		Id:       SimpleBatchId(opIdx),
+		Id:       shard.SimpleIndexId(opIdx),
 		Start:    blkRows,
 		Count:    blkRows / 2,
 		Capacity: blkRows * 3 / 2,
@@ -451,7 +452,7 @@ func TestAppliedIndex(t *testing.T) {
 	blk.SetCount(blkRows)
 	opIdx = common.NextGlobalSeqNum()
 	blk.SetIndex(LogIndex{
-		Id:       SimpleBatchId(opIdx),
+		Id:       shard.SimpleIndexId(opIdx),
 		Start:    0,
 		Count:    blkRows / 2,
 		Capacity: blkRows,
@@ -485,7 +486,7 @@ func TestAppliedIndex(t *testing.T) {
 
 	opIdx = common.NextGlobalSeqNum()
 	tbl.SimpleSoftDelete(&LogIndex{
-		Id: SimpleBatchId(opIdx),
+		Id: shard.SimpleIndexId(opIdx),
 	})
 	id, ok = tbl.GetAppliedIndex(nil)
 	assert.True(t, ok)

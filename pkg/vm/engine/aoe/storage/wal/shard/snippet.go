@@ -53,7 +53,7 @@ type Snippet struct {
 	shardId uint64
 	id      uint64
 	offset  uint32
-	indice  []*LogIndex
+	indice  []*Index
 }
 
 func NewSnippet(shardId, id uint64, offset uint32) *Snippet {
@@ -61,14 +61,14 @@ func NewSnippet(shardId, id uint64, offset uint32) *Snippet {
 		shardId: shardId,
 		id:      id,
 		offset:  offset,
-		indice:  make([]*LogIndex, 0, 10),
+		indice:  make([]*Index, 0, 10),
 	}
 }
 
-func NewSimpleSnippet(index *LogIndex) *Snippet {
+func NewSimpleSnippet(index *Index) *Snippet {
 	return &Snippet{
 		shardId: index.ShardId,
-		indice:  []*LogIndex{index},
+		indice:  []*Index{index},
 	}
 }
 
@@ -80,12 +80,12 @@ func (s *Snippet) GetShardId() uint64 {
 	return s.shardId
 }
 
-func (s *Snippet) Append(index *LogIndex) {
+func (s *Snippet) Append(index *Index) {
 	copied := *index
 	s.indice = append(s.indice, &copied)
 }
 
-func (s *Snippet) LastIndex() *LogIndex {
+func (s *Snippet) LastIndex() *Index {
 	if len(s.indice) == 0 {
 		return nil
 	}

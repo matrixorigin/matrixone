@@ -39,7 +39,7 @@ func nextMockId() uint64 {
 }
 
 type mockLogBatch struct {
-	indice []*LogIndex
+	indice []*Index
 }
 
 type mockProducer struct {
@@ -53,10 +53,10 @@ func (mp *mockProducer) nextLogBatch() *mockLogBatch {
 	logSize := logSizes[int(id)%len(logSizes)]
 	logCap := logCaps[int(id)%len(logCaps)]
 	b := &mockLogBatch{
-		indice: make([]*LogIndex, logSize),
+		indice: make([]*Index, logSize),
 	}
 	for i := 0; i < logSize; i++ {
-		idx := &LogIndex{
+		idx := &Index{
 			Id: IndexId{
 				Id:     mp.id,
 				Offset: uint32(i),
@@ -82,7 +82,7 @@ func newMockConsumer(shardId uint64) *mockConsumer {
 	return c
 }
 
-func (mc *mockConsumer) consume(index *LogIndex) {
+func (mc *mockConsumer) consume(index *Index) {
 	index.Count = index.Capacity
 	mc.snippet.Append(index)
 }
@@ -234,9 +234,9 @@ func TestProxy2(t *testing.T) {
 	}
 	mgr := NewManager()
 	defer mgr.Close()
-	var indice []*LogIndex
+	var indice []*Index
 	for i := 1; i < 20; i += 4 {
-		index := &LogIndex{
+		index := &Index{
 			Id: IndexId{
 				Id:   uint64(i),
 				Size: uint32(1),
@@ -276,14 +276,14 @@ func TestProxy3(t *testing.T) {
 	}
 	mgr := NewManager()
 	defer mgr.Close()
-	var indice []*LogIndex
-	var lastIndex *LogIndex
+	var indice []*Index
+	var lastIndex *Index
 	rand.Seed(time.Now().UnixNano())
 	produce := func() {
 		cnt := 5000
 		j := 0
 		for i := 1; j < cnt; i += rand.Intn(10) + 1 {
-			index := &LogIndex{
+			index := &Index{
 				Id: IndexId{
 					Id:   uint64(i),
 					Size: uint32(1),

@@ -292,8 +292,8 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 		return err
 	}
 	var idx []byte
-	if meta.CommitInfo.ExternalIndex != nil {
-		idx, err = meta.CommitInfo.ExternalIndex.Marshal()
+	if meta.CommitInfo.LogIndex != nil {
+		idx, err = meta.CommitInfo.LogIndex.Marshal()
 		if err != nil {
 			return err
 		}
@@ -409,8 +409,8 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *metadata.B
 		return err
 	}
 	var idx []byte
-	if meta.CommitInfo.ExternalIndex != nil {
-		idx, err = meta.CommitInfo.ExternalIndex.Marshal()
+	if meta.CommitInfo.LogIndex != nil {
+		idx, err = meta.CommitInfo.LogIndex.Marshal()
 		if err != nil {
 			return err
 		}

@@ -20,6 +20,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 func MockTableInfo(colCnt int) *aoe.TableInfo {
@@ -77,24 +78,24 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 	return schema
 }
 
-func GetLogIndexFromTableOpCtx(ctx *dbi.TableOpCtx) *metadata.LogIndex {
-	return &metadata.LogIndex{
+func GetLogIndexFromTableOpCtx(ctx *dbi.TableOpCtx) *shard.Index {
+	return &shard.Index{
 		ShardId: ctx.ShardId,
-		Id:      metadata.SimpleBatchId(ctx.OpIndex),
+		Id:      shard.SimpleIndexId(ctx.OpIndex),
 	}
 }
 
-func GetLogIndexFromDropTableCtx(ctx *dbi.DropTableCtx) *metadata.LogIndex {
-	return &metadata.LogIndex{
+func GetLogIndexFromDropTableCtx(ctx *dbi.DropTableCtx) *shard.Index {
+	return &shard.Index{
 		ShardId: ctx.ShardId,
-		Id:      metadata.SimpleBatchId(ctx.OpIndex),
+		Id:      shard.SimpleIndexId(ctx.OpIndex),
 	}
 }
 
-func GetLogIndexFromAppendCtx(ctx *dbi.AppendCtx) *metadata.LogIndex {
-	return &metadata.LogIndex{
+func GetLogIndexFromAppendCtx(ctx *dbi.AppendCtx) *shard.Index {
+	return &shard.Index{
 		ShardId: ctx.ShardId,
-		Id: metadata.LogBatchId{
+		Id: shard.IndexId{
 			Id:     ctx.OpIndex,
 			Offset: uint32(ctx.OpOffset),
 			Size:   uint32(ctx.OpSize),

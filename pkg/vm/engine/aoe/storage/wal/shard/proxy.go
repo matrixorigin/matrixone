@@ -82,7 +82,7 @@ func (p *proxy) GetId() uint64 {
 	return p.id
 }
 
-func (p *proxy) LogIndice(indice ...*LogIndex) {
+func (p *proxy) LogIndice(indice ...*Index) {
 	p.logmu.Lock()
 	for _, index := range indice {
 		p.logIndexLocked(index)
@@ -90,7 +90,7 @@ func (p *proxy) LogIndice(indice ...*LogIndex) {
 	p.logmu.Unlock()
 }
 
-func (p *proxy) logIndexLocked(index *LogIndex) {
+func (p *proxy) logIndexLocked(index *Index) {
 	p.mask.Add(index.Id.Id)
 	if index.Id.Id > p.lastIndex+uint64(1) {
 		p.stopmask.AddRange(p.lastIndex+uint64(1), index.Id.Id)
@@ -98,13 +98,13 @@ func (p *proxy) logIndexLocked(index *LogIndex) {
 	p.lastIndex = index.Id.Id
 }
 
-func (p *proxy) LogIndex(index *LogIndex) {
+func (p *proxy) LogIndex(index *Index) {
 	p.logmu.Lock()
 	p.logIndexLocked(index)
 	p.logmu.Unlock()
 }
 
-func (p *proxy) AppendIndex(index *LogIndex) {
+func (p *proxy) AppendIndex(index *Index) {
 	snip := NewSimpleSnippet(index)
 	p.AppendSnippet(snip)
 }

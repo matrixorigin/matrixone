@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -59,17 +60,17 @@ type Block struct {
 	SegmentedId uint64
 }
 
-func newBlockEntry(segment *Segment, tranId uint64, exIndex *ExternalIndex) *Block {
+func newBlockEntry(segment *Segment, tranId uint64, exIndex *LogIndex) *Block {
 	e := &Block{
 		Segment: segment,
 		BaseEntry: BaseEntry{
 			Id: segment.Table.Catalog.NextBlockId(),
 			CommitInfo: &CommitInfo{
-				CommitId:      tranId,
-				TranId:        tranId,
-				SSLLNode:      *common.NewSSLLNode(),
-				Op:            OpCreate,
-				ExternalIndex: exIndex,
+				CommitId: tranId,
+				TranId:   tranId,
+				SSLLNode: *common.NewSSLLNode(),
+				Op:       OpCreate,
+				LogIndex: exIndex,
 			},
 		},
 	}
@@ -200,13 +201,13 @@ func (e *Block) CommittedView(id uint64) *Block {
 }
 
 // Safe
-func (e *Block) SimpleUpgrade(exIndice []*ExternalIndex) error {
+func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 	ctx := newUpgradeBlockCtx(e, exIndice)
 	return e.Segment.Table.Catalog.onCommitRequest(ctx)
 	// return e.Upgrade(e.Segment.Table.Catalog.NextUncommitId(), exIndice, true)
 }
 
-// func (e *Block) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit bool) error {
+// func (e *Block) Upgrade(tranId uint64, exIndice []*LogIndex, autoCommit bool) error {
 func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 	if e.GetCount() != e.Segment.Table.Schema.BlockMaxRows {
 		return nil, UpgradeInfullBlockErr
@@ -227,16 +228,16 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 		Op:       newOp,
 	}
 	if ctx.exIndice != nil {
-		cInfo.ExternalIndex = ctx.exIndice[0]
+		cInfo.LogIndex = ctx.exIndice[0]
 		if len(ctx.exIndice) > 1 {
 			cInfo.PrevIndex = ctx.exIndice[1]
 		}
 	} else {
-		cInfo.ExternalIndex = e.CommitInfo.ExternalIndex
+		cInfo.LogIndex = e.CommitInfo.LogIndex
 		id, ok := e.BaseEntry.GetAppliedIndex()
 		if ok {
-			cInfo.AppliedIndex = &ExternalIndex{
-				Id: SimpleBatchId(id),
+			cInfo.AppliedIndex = &LogIndex{
+				Id: shard.SimpleIndexId(id),
 			}
 		}
 	}

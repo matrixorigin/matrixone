@@ -68,7 +68,7 @@ func (mgr *manager) EnqueueEntry(entry *Entry) error {
 
 func (mgr *manager) Checkpoint(v interface{}) {
 	switch vv := v.(type) {
-	case *LogIndex:
+	case *Index:
 		snip := NewSimpleSnippet(vv)
 		mgr.EnqueueCheckpoint(snip)
 		return
@@ -121,7 +121,7 @@ func (mgr *manager) onReceived(items ...interface{}) {
 }
 
 func (mgr *manager) logEntry(entry *Entry) {
-	index := entry.Payload.(*LogIndex)
+	index := entry.Payload.(*Index)
 	shard, _ := mgr.getOrAddShard(index.ShardId)
 	shard.LogIndex(index)
 }

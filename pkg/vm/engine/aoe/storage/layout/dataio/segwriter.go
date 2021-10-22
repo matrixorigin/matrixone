@@ -824,8 +824,8 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 			return err
 		}
 		var idx []byte
-		if blk.CommitInfo.ExternalIndex != nil {
-			idx, err = blk.CommitInfo.ExternalIndex.Marshal()
+		if blk.CommitInfo.LogIndex != nil {
+			idx, err = blk.CommitInfo.LogIndex.Marshal()
 			if err != nil {
 				return err
 			}

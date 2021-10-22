@@ -275,7 +275,7 @@ func (catalog *Catalog) HardDeleteTable(id uint64) error {
 	return table.HardDelete()
 }
 
-func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *ExternalIndex) error {
+func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *LogIndex) error {
 	ctx := newDropTableCtx(name, exIndex)
 	err := catalog.prepareDropTable(ctx)
 	if err != nil {
@@ -302,7 +302,7 @@ func (catalog *Catalog) prepareDropTable(ctx *dropTableCtx) error {
 	return nil
 }
 
-func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *ExternalIndex) (*Table, error) {
+func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *LogIndex) (*Table, error) {
 	if !schema.Valid() {
 		return nil, InvalidSchemaErr
 	}

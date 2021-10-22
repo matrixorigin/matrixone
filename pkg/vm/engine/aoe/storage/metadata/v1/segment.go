@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
 )
 
@@ -49,7 +50,7 @@ type Segment struct {
 	BlockSet []*Block
 }
 
-func newSegmentEntry(catalog *Catalog, table *Table, tranId uint64, exIndex *ExternalIndex) *Segment {
+func newSegmentEntry(catalog *Catalog, table *Table, tranId uint64, exIndex *LogIndex) *Segment {
 	e := &Segment{
 		Catalog:  catalog,
 		Table:    table,
@@ -58,11 +59,11 @@ func newSegmentEntry(catalog *Catalog, table *Table, tranId uint64, exIndex *Ext
 		BaseEntry: BaseEntry{
 			Id: table.Catalog.NextSegmentId(),
 			CommitInfo: &CommitInfo{
-				CommitId:      tranId,
-				TranId:        tranId,
-				SSLLNode:      *common.NewSSLLNode(),
-				Op:            OpCreate,
-				ExternalIndex: exIndex,
+				CommitId: tranId,
+				TranId:   tranId,
+				SSLLNode: *common.NewSSLLNode(),
+				Op:       OpCreate,
+				LogIndex: exIndex,
 			},
 		},
 	}
@@ -246,8 +247,8 @@ func (e *Segment) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 func (e *Segment) GetReplayIndex() *LogIndex {
 	for i := len(e.BlockSet) - 1; i >= 0; i-- {
 		blk := e.BlockSet[i]
-		if blk.CommitInfo.ExternalIndex != nil && (blk.Count > 0 || blk.IsFull()) {
-			return blk.CommitInfo.ExternalIndex
+		if blk.CommitInfo.LogIndex != nil && (blk.Count > 0 || blk.IsFull()) {
+			return blk.CommitInfo.LogIndex
 		}
 	}
 	return nil
@@ -270,7 +271,7 @@ func (e *Segment) onNewBlock(entry *Block) {
 }
 
 // Safe
-func (e *Segment) SimpleUpgrade(exIndice []*ExternalIndex) error {
+func (e *Segment) SimpleUpgrade(exIndice []*LogIndex) error {
 	ctx := newUpgradeSegmentCtx(e, exIndice)
 	return e.Table.Catalog.onCommitRequest(ctx)
 	// return e.Upgrade(e.Table.Catalog.NextUncommitId(), exIndice, true)
@@ -297,7 +298,7 @@ func (e *Segment) HasMaxBlocks() bool {
 	return e.IsSorted() || len(e.BlockSet) == int(e.Table.Schema.SegmentMaxBlocks)
 }
 
-// func (e *Segment) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit bool) error {
+// func (e *Segment) Upgrade(tranId uint64, exIndice []*LogIndex, autoCommit bool) error {
 func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 	tranId := e.Table.Catalog.NextUncommitId()
 	e.RLock()
@@ -331,12 +332,12 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 	if ctx.exIndice == nil {
 		id, ok := e.calcAppliedIndex()
 		if ok {
-			cInfo.AppliedIndex = &ExternalIndex{
-				Id: SimpleBatchId(id),
+			cInfo.AppliedIndex = &LogIndex{
+				Id: shard.SimpleIndexId(id),
 			}
 		}
 	} else {
-		cInfo.ExternalIndex = ctx.exIndice[0]
+		cInfo.LogIndex = ctx.exIndice[0]
 		if len(ctx.exIndice) > 1 {
 			cInfo.PrevIndex = ctx.exIndice[1]
 		}

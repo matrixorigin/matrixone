@@ -20,6 +20,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"os"
 	"sync"
 	"testing"
@@ -44,7 +45,7 @@ func TestBase1(t *testing.T) {
 	opts.FillDefaults(WORK_DIR)
 	defer opts.Meta.Catalog.Close()
 	schema := metadata.MockSchema(2)
-	createIdx := metadata.LogIndex{Id: metadata.SimpleBatchId(common.NextGlobalSeqNum())}
+	createIdx := shard.Index{Id: shard.SimpleIndexId(common.NextGlobalSeqNum())}
 	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, segCnt*blkCnt, &createIdx)
 
 	fsMgr := ldio.NewManager(WORK_DIR, true)
@@ -171,5 +172,5 @@ func TestBase1(t *testing.T) {
 	t.Log(tblData.Size(attr))
 	index, ok := tblData.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, tableMeta.GetFirstCommit().ExternalIndex.Id.Id, index)
+	assert.Equal(t, tableMeta.GetFirstCommit().LogIndex.Id.Id, index)
 }

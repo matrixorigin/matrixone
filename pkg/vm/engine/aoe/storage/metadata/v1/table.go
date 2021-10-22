@@ -19,6 +19,7 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
 )
 
@@ -57,18 +58,18 @@ type Table struct {
 	Catalog    *Catalog       `json:"-"`
 }
 
-func NewTableEntry(catalog *Catalog, schema *Schema, tranId uint64, exIndex *ExternalIndex) *Table {
+func NewTableEntry(catalog *Catalog, schema *Schema, tranId uint64, exIndex *LogIndex) *Table {
 	schema.BlockMaxRows = catalog.Cfg.BlockMaxRows
 	schema.SegmentMaxBlocks = catalog.Cfg.SegmentMaxBlocks
 	e := &Table{
 		BaseEntry: BaseEntry{
 			Id: catalog.NextTableId(),
 			CommitInfo: &CommitInfo{
-				TranId:        tranId,
-				CommitId:      tranId,
-				SSLLNode:      *common.NewSSLLNode(),
-				Op:            OpCreate,
-				ExternalIndex: exIndex,
+				TranId:   tranId,
+				CommitId: tranId,
+				SSLLNode: *common.NewSSLLNode(),
+				Op:       OpCreate,
+				LogIndex: exIndex,
 			},
 		},
 		Schema:     schema,
@@ -177,7 +178,7 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 // Simple* wrappes simple usage of wrapped operation
 // It is driven by external command. The engine then schedules a GC task to hard delete
 // related resources.
-func (e *Table) SimpleSoftDelete(exIndex *ExternalIndex) error {
+func (e *Table) SimpleSoftDelete(exIndex *LogIndex) error {
 	ctx := newDropTableCtx(e.Schema.Name, exIndex)
 	ctx.table = e
 	return e.Catalog.onCommitRequest(ctx)
@@ -186,11 +187,11 @@ func (e *Table) SimpleSoftDelete(exIndex *ExternalIndex) error {
 func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 	commitId := e.Catalog.NextUncommitId()
 	cInfo := &CommitInfo{
-		TranId:        commitId,
-		CommitId:      commitId,
-		ExternalIndex: ctx.exIndex,
-		Op:            OpSoftDelete,
-		SSLLNode:      *common.NewSSLLNode(),
+		TranId:   commitId,
+		CommitId: commitId,
+		LogIndex: ctx.exIndex,
+		Op:       OpSoftDelete,
+		SSLLNode: *common.NewSSLLNode(),
 	}
 	e.Catalog.commitMu.Lock()
 	defer e.Catalog.commitMu.Unlock()
@@ -448,7 +449,7 @@ func MockTable(catalog *Catalog, schema *Schema, blkCnt uint64, idx *LogIndex) *
 	}
 	if idx == nil {
 		idx = &LogIndex{
-			Id: SimpleBatchId(common.NextGlobalSeqNum()),
+			Id: shard.SimpleIndexId(common.NextGlobalSeqNum()),
 		}
 	}
 	tbl, err := catalog.SimpleCreateTable(schema, idx)

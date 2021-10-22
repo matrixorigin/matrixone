@@ -74,9 +74,9 @@ type CommitInfo struct {
 	CommitId        uint64
 	TranId          uint64
 	Op              OpT
-	ExternalIndex   *ExternalIndex
-	PrevIndex       *ExternalIndex
-	AppliedIndex    *ExternalIndex
+	LogIndex        *LogIndex
+	PrevIndex       *LogIndex
+	AppliedIndex    *LogIndex
 }
 
 func (info *CommitInfo) IsHardDeleted() bool {
@@ -99,7 +99,7 @@ func (info *CommitInfo) PString(level PPLevel) string {
 		s = fmt.Sprintf("%s(%s,%d", s, OpName(cInfo.Op), cInfo.CommitId)
 		if level >= PPL1 {
 			id, _ := info.GetAppliedIndex()
-			s = fmt.Sprintf("%s,%d-%s)", s, id, cInfo.ExternalIndex.String())
+			s = fmt.Sprintf("%s,%d-%s)", s, id, cInfo.LogIndex.String())
 		} else {
 			s = fmt.Sprintf("%s)", s)
 		}
@@ -115,8 +115,8 @@ func (info *CommitInfo) GetAppliedIndex() (uint64, bool) {
 	if info.AppliedIndex != nil {
 		return info.AppliedIndex.Id.Id, true
 	}
-	if info.ExternalIndex != nil && info.ExternalIndex.IsBatchApplied() {
-		return info.ExternalIndex.Id.Id, true
+	if info.LogIndex != nil && info.LogIndex.IsBatchApplied() {
+		return info.LogIndex.Id.Id, true
 	}
 
 	if info.PrevIndex != nil && info.PrevIndex.IsBatchApplied() {
@@ -128,17 +128,17 @@ func (info *CommitInfo) GetAppliedIndex() (uint64, bool) {
 // SetIndex changes the current index to previous index if exists, and
 // sets the current index to idx.
 func (info *CommitInfo) SetIndex(idx LogIndex) error {
-	if info.ExternalIndex != nil {
-		if !info.ExternalIndex.IsApplied() {
-			return errors.New(fmt.Sprintf("already has applied index: %d", info.ExternalIndex.Id))
+	if info.LogIndex != nil {
+		if !info.LogIndex.IsApplied() {
+			return errors.New(fmt.Sprintf("already has applied index: %d", info.LogIndex.Id))
 		}
-		info.PrevIndex = info.ExternalIndex
-		info.ExternalIndex = &idx
+		info.PrevIndex = info.LogIndex
+		info.LogIndex = &idx
 	} else {
 		if info.PrevIndex != nil {
 			return errors.New(fmt.Sprintf("no index but has prev index: %d", info.PrevIndex.Id))
 		}
-		info.ExternalIndex = &idx
+		info.LogIndex = &idx
 	}
 	return nil
 }
