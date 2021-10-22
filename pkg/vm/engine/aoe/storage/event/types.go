@@ -17,7 +17,6 @@ package event
 import (
 	"matrixone/pkg/logutil"
 	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type EventListener struct {
@@ -25,8 +24,6 @@ type EventListener struct {
 	MemTableFullCB    func(imem.IMemTable)
 	FlushBlockBeginCB func(imem.IMemTable)
 	FlushBlockEndCB   func(imem.IMemTable)
-	CheckpointStartCB func(*md.MetaInfo)
-	CheckpointEndCB   func(*md.MetaInfo)
 }
 
 func (l *EventListener) FillDefaults() {
@@ -46,13 +43,5 @@ func (l *EventListener) FillDefaults() {
 
 	if l.FlushBlockEndCB == nil {
 		l.FlushBlockEndCB = func(table imem.IMemTable) {}
-	}
-
-	if l.CheckpointStartCB == nil {
-		l.CheckpointStartCB = func(info *md.MetaInfo) {}
-	}
-
-	if l.CheckpointEndCB == nil {
-		l.CheckpointEndCB = func(info *md.MetaInfo) {}
 	}
 }
