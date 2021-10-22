@@ -38,9 +38,9 @@ import (
 
 func TestEngine(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT)
+	inst := initDB(storage.NORMAL_FT, true)
 	tableInfo := adaptor.MockTableInfo(2)
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)
 	tblMeta := inst.Store.Catalog.SimpleGetTable(tid)
 	assert.NotNil(t, tblMeta)
@@ -68,7 +68,10 @@ func TestEngine(t *testing.T) {
 		f := func(idx int) func() {
 			return func() {
 				tInfo := *tableInfo
-				_, err := inst.CreateTable(&tInfo, dbi.TableOpCtx{TableName: fmt.Sprintf("%dxxxxxx%d", idx, idx)})
+				_, err := inst.CreateTable(&tInfo, dbi.TableOpCtx{TableName: fmt.Sprintf("%dxxxxxx%d", idx, idx),
+					OpIndex: common.NextGlobalSeqNum(),
+					ShardId: common.NextGlobalSeqNum(),
+				})
 				assert.Nil(t, err)
 				twg.Done()
 			}
@@ -168,7 +171,7 @@ func TestEngine(t *testing.T) {
 			req := dbi.AppendCtx{
 				TableName: tableInfo.Name,
 				Data:      baseCk,
-				OpIndex:   uint64(i),
+				OpIndex:   common.NextGlobalSeqNum(),
 				OpSize:    1,
 			}
 			insertCh <- req
@@ -218,7 +221,7 @@ func TestEngine(t *testing.T) {
 
 func TestLogIndex(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT)
+	inst := initDB(storage.NORMAL_FT, true)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)

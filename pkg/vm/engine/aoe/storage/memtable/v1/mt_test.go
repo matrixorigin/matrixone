@@ -86,7 +86,7 @@ func TestCollection(t *testing.T) {
 	cols := 2
 	capacity := blockRows * 4 * uint64(cols) * 2 * 2 * 4
 	blockCnt := uint64(4)
-	opts := config.NewCustomizedMetaOptions(WORK_DIR, config.CST_Customize, blockRows, blockCnt)
+	opts := config.NewCustomizedMetaOptions(WORK_DIR, config.CST_Customize, blockRows, blockCnt, nil)
 	defer opts.Meta.Catalog.Close()
 
 	manager := NewManager(opts, nil)

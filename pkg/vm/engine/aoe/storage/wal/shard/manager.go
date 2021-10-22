@@ -33,13 +33,33 @@ var (
 	ShardNotFoundErr  = errors.New("aoe: shard not found")
 )
 
+type noopWal struct{}
+
+func NewNoopWal() *noopWal {
+	return new(noopWal)
+}
+func (noop *noopWal) GetShardId(uint64) (uint64, error) { return uint64(0), nil }
+func (noop *noopWal) String() string                    { return "<noop>" }
+func (noop *noopWal) Checkpoint(interface{})            {}
+func (noop *noopWal) Close() error                      { return nil }
+func (noop *noopWal) Log(wal.Payload) (*wal.Entry, error) {
+	entry := wal.GetEntry(uint64(0))
+	entry.SetDone()
+	return entry, nil
+}
+func (noop *noopWal) GetShardSafeId(shardId uint64) (id uint64, err error) {
+	return
+}
+
 type manager struct {
 	sm.ClosedState
 	sm.StateMachine
-	mu     sync.RWMutex
-	shards map[uint64]*proxy
-	driver logstore.AwareStore
-	own    bool
+	mu      sync.RWMutex
+	shards  map[uint64]*proxy
+	driver  logstore.AwareStore
+	own     bool
+	safemu  sync.RWMutex
+	safeids map[uint64]uint64
 }
 
 func NewManager() *manager {
@@ -48,9 +68,10 @@ func NewManager() *manager {
 
 func NewManagerWithDriver(driver logstore.AwareStore, own bool) *manager {
 	mgr := &manager{
-		own:    own,
-		driver: driver,
-		shards: make(map[uint64]*proxy),
+		own:     own,
+		driver:  driver,
+		shards:  make(map[uint64]*proxy),
+		safeids: make(map[uint64]uint64),
 	}
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onReceived)
@@ -61,6 +82,20 @@ func NewManagerWithDriver(driver logstore.AwareStore, own bool) *manager {
 	}
 	mgr.Start()
 	return mgr
+}
+
+func (mgr *manager) UpdateSafeId(shardId, id uint64) {
+	mgr.safemu.Lock()
+	defer mgr.safemu.Unlock()
+	old, ok := mgr.safeids[shardId]
+	if !ok {
+		mgr.safeids[shardId] = id
+	} else {
+		if old > id {
+			panic(fmt.Sprintf("logic error: %d, %d", old, id))
+		}
+		mgr.safeids[shardId] = id
+	}
 }
 
 func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
@@ -140,9 +175,24 @@ func (mgr *manager) onReceived(items ...interface{}) {
 	}
 }
 
+func (mgr *manager) GetSafeIds() SafeIds {
+	ids := SafeIds{
+		Ids: make([]SafeId, 0, 100),
+	}
+	mgr.safemu.RLock()
+	defer mgr.safemu.RUnlock()
+	for shardId, id := range mgr.safeids {
+		ids.Append(shardId, id)
+	}
+	return ids
+}
+
 func (mgr *manager) logEntry(entry *Entry) {
 	index := entry.Payload.(*Index)
 	shard, _ := mgr.getOrAddShard(index.ShardId)
+	if index.Id.Id == uint64(0) {
+		panic("logic error")
+	}
 	shard.LogIndex(index)
 }
 

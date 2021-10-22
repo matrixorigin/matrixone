@@ -95,6 +95,8 @@ func (p *proxy) logIndexLocked(index *Index) {
 	p.mask.Add(index.Id.Id)
 	if index.Id.Id > p.lastIndex+uint64(1) {
 		p.stopmask.AddRange(p.lastIndex+uint64(1), index.Id.Id)
+	} else if index.Id.Id < p.lastIndex {
+		panic(fmt.Sprintf("logic error: lastIndex-%d, currIndex-%d", p.lastIndex, index.Id.Id))
 	}
 	p.lastIndex = index.Id.Id
 }
@@ -196,7 +198,11 @@ func (p *proxy) Checkpoint() {
 	} else {
 		it := p.mask.Iterator()
 		pos := it.Next()
-		p.SetSafeId(pos - 1)
+		if pos == 0 {
+			p.SetSafeId(pos)
+		} else {
+			p.SetSafeId(pos - 1)
+		}
 	}
 	p.logmu.Unlock()
 	id := p.GetSafeId()
@@ -217,6 +223,9 @@ func (p *proxy) Checkpoint() {
 		logEntry.WaitDone()
 		logEntry.Free()
 		p.lastSafeId = id
+	}
+	if p.mgr != nil {
+		p.mgr.UpdateSafeId(p.id, id)
 	}
 }
 

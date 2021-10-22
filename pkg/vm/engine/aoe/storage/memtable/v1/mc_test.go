@@ -16,6 +16,7 @@ package memtable
 import (
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -42,7 +43,7 @@ func TestMutCollection(t *testing.T) {
 	colcnt := 4
 	blockRows, blockCnt := uint64(64), uint64(4)
 
-	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt)
+	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt, nil)
 
 	capacity := blockRows * 4 * uint64(colcnt) * 1 * 1 * 2
 	// capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
@@ -75,7 +76,6 @@ func TestMutCollection(t *testing.T) {
 	batchSize := uint64(4)
 	step := expectBlks / batchSize
 	var wg sync.WaitGroup
-	seq := uint64(0)
 	for expectBlks > 0 {
 		thisStep := step
 		if expectBlks < step {
@@ -85,8 +85,6 @@ func TestMutCollection(t *testing.T) {
 			expectBlks -= step
 		}
 		wg.Add(1)
-		logId := seq
-		seq++
 		go func(id uint64, wgp *sync.WaitGroup) {
 			defer wgp.Done()
 			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
@@ -96,7 +94,7 @@ func TestMutCollection(t *testing.T) {
 			}
 			err := c0.Append(insert, index)
 			assert.Nil(t, err)
-		}(logId, &wg)
+		}(common.NextGlobalSeqNum(), &wg)
 	}
 	wg.Wait()
 	t.Log(mgr.String())
@@ -113,7 +111,8 @@ func TestMutCollection(t *testing.T) {
 		Waitable: true,
 		Opts:     opts,
 	}
-	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{TableName: tbl.Schema.Name}, manager, tables)
+	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{TableName: tbl.Schema.Name, OpIndex: common.NextGlobalSeqNum()},
+		manager, tables)
 	opts.Scheduler.Schedule(dropBlkE)
 	err = dropBlkE.WaitDone()
 	assert.Nil(t, err)

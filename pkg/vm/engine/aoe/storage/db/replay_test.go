@@ -33,7 +33,7 @@ import (
 func TestReplay1(t *testing.T) {
 	initDBTest()
 	// inst := initDB(storage.NORMAL_FT)
-	inst := initDB(storage.MUTABLE_FT)
+	inst := initDB(storage.MUTABLE_FT, false)
 	tInfo := adaptor.MockTableInfo(2)
 	name := "mockcon"
 	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: common.NextGlobalSeqNum()})
@@ -83,7 +83,7 @@ func TestReplay1(t *testing.T) {
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
 
-	inst = initDB(storage.MUTABLE_FT)
+	inst = initDB(storage.MUTABLE_FT, false)
 	// inst = initDB(storage.NORMAL_FT)
 
 	t.Log(inst.Store.Catalog.PString(metadata.PPL1))
@@ -859,7 +859,7 @@ func TestReplay11(t *testing.T) {
 
 func TestReplay12(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT)
+	inst := initDB(storage.NORMAL_FT, false)
 	//inst := initDB(storage.MUTABLE_FT)
 	tInfo := adaptor.MockTableInfo(2)
 	name := "mockcon"
@@ -926,7 +926,7 @@ func TestReplay12(t *testing.T) {
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
 
-	inst = initDB(storage.NORMAL_FT)
+	inst = initDB(storage.NORMAL_FT, true)
 	// inst = initDB(engine.NORMAL_FT)
 
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
