@@ -68,7 +68,7 @@ type DB struct {
 	// MutationBufMgr is a replacement for MTBufMgr
 	MutationBufMgr bb.INodeManager
 
-	Wal wal.Wal
+	Wal wal.ShardWal
 
 	// Internal data storage of DB.
 	Store struct {

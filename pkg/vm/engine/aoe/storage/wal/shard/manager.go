@@ -61,6 +61,14 @@ func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
 	return entry, nil
 }
 
+func (mgr *manager) GetShardSafeId(shardId uint64) (id uint64, err error) {
+	s, err := mgr.GetShard(shardId)
+	if err != nil {
+		return
+	}
+	return s.GetSafeId(), err
+}
+
 func (mgr *manager) EnqueueEntry(entry *Entry) error {
 	_, err := mgr.EnqueueRecevied(entry)
 	return err

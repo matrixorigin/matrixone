@@ -89,7 +89,7 @@ type Options struct {
 	Scheduler    sched.Scheduler
 	SchedulerCfg *SchedulerCfg `toml:"scheduler-cfg"`
 
-	Wal wal.Wal
+	Wal wal.ShardWal
 
 	Meta struct {
 		Conf    *MetaCfg

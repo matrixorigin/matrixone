@@ -26,3 +26,8 @@ type Wal interface {
 	Checkpoint(interface{})
 	String() string
 }
+
+type ShardWal interface {
+	Wal
+	GetShardSafeId(uint64) (uint64, error)
+}
