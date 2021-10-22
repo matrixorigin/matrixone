@@ -95,12 +95,13 @@ type Catalog struct {
 	sm.StateMachine `json:"-"`
 	*sync.RWMutex   `json:"-"`
 	Sequence        `json:"-"`
-	pipeline        *writePipeline        `json:"-"`
+	pipeline        *commitPipeline       `json:"-"`
 	Store           logstore.AwareStore   `json:"-"`
 	Cfg             *CatalogCfg           `json:"-"`
 	NameNodes       map[string]*tableNode `json:"-"`
 	NameIndex       *btree.BTree          `json:"-"`
 	nodesMu         sync.RWMutex          `json:"-"`
+	commitMu        sync.RWMutex          `json:"-"`
 
 	TableSet map[uint64]*Table
 }
@@ -112,7 +113,7 @@ func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
 
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	if cfg.RotationFileMaxSize <= 0 {
-		logutil.Warnf("Set rotation max size to default size: %d", logstore.DefaultVersionFileSize)
+		logutil.Warnf("Set rotation max size to default size: %s", common.ToH(uint64(logstore.DefaultVersionFileSize)))
 		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
 	}
 	catalog := &Catalog{
@@ -135,13 +136,13 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
 	ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
-	catalog.pipeline = newWritePipeline(catalog)
+	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog
 }
 
-func (catalog *Catalog) StartSyncer() {
+func (catalog *Catalog) Start() {
 	catalog.Store.Start()
-	catalog.Start()
+	catalog.StateMachine.Start()
 }
 
 func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error {
@@ -221,6 +222,8 @@ func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
 func (catalog *Catalog) Close() error {
 	catalog.Stop()
 	catalog.Store.Close()
+	logutil.Infof("[AOE] Safe synced id %d", catalog.GetSafeCommitId())
+	logutil.Infof("[AOE] Safe checkpointed id %d", catalog.GetCheckpointId())
 	return nil
 }
 
@@ -278,7 +281,7 @@ func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *ExternalInde
 	if err != nil {
 		return err
 	}
-	return catalog.doCommit(ctx)
+	return catalog.onCommitRequest(ctx)
 }
 
 func (catalog *Catalog) prepareDropTable(ctx *dropTableCtx) error {
@@ -301,7 +304,7 @@ func (catalog *Catalog) prepareDropTable(ctx *dropTableCtx) error {
 
 func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *ExternalIndex) (*Table, error) {
 	ctx := newCreateTableCtx(schema, exIndex)
-	err := catalog.doCommit(ctx)
+	err := catalog.onCommitRequest(ctx)
 	return ctx.table, err
 }
 
@@ -309,17 +312,20 @@ func (catalog *Catalog) prepareCreateTable(ctx *createTableCtx) (LogEntry, error
 	var err error
 	entry := NewTableEntry(catalog, ctx.schema, catalog.NextUncommitId(), ctx.exIndex)
 	logEntry := entry.ToLogEntry(ETCreateTable)
+	catalog.commitMu.Lock()
+	defer catalog.commitMu.Unlock()
 	catalog.Lock()
-	defer catalog.Unlock()
 	if err = catalog.onNewTable(entry); err != nil {
+		catalog.Unlock()
 		return nil, err
 	}
-	catalog.commitLog(entry, logEntry)
+	catalog.Unlock()
+	catalog.prepareCommitLog(entry, logEntry)
 	ctx.table = entry
 	return logEntry, err
 }
 
-func (catalog *Catalog) doCommit(ctx interface{}) error {
+func (catalog *Catalog) onCommitRequest(ctx interface{}) error {
 	entry, err := catalog.pipeline.prepare(ctx)
 	if err != nil {
 		return err
@@ -328,18 +334,19 @@ func (catalog *Catalog) doCommit(ctx interface{}) error {
 	return err
 }
 
-func (catalog *Catalog) commitLog(entry IEntry, logEntry LogEntry) {
+func (catalog *Catalog) prepareCommitLog(entry IEntry, logEntry LogEntry) {
 	commitId := catalog.NextCommitId()
 	entry.Lock()
 	entry.CommitLocked(commitId)
 	entry.Unlock()
 	SetCommitIdToLogEntry(commitId, logEntry)
+	logEntry.SetAuxilaryInfo(commitId)
 	if err := catalog.Store.AppendEntry(logEntry); err != nil {
 		panic(err)
 	}
 }
 
-func (catalog *Catalog) commitEntry(entry IEntry, eType LogEntryType, locker sync.Locker) LogEntry {
+func (catalog *Catalog) prepareCommitEntry(entry IEntry, eType LogEntryType, locker sync.Locker) LogEntry {
 	commitId := catalog.NextCommitId()
 	var logEntry LogEntry
 	if locker == nil {
@@ -354,6 +361,7 @@ func (catalog *Catalog) commitEntry(entry IEntry, eType LogEntryType, locker syn
 		defer locker.Lock()
 	}
 	SetCommitIdToLogEntry(commitId, logEntry)
+	logEntry.SetAuxilaryInfo(commitId)
 	if err := catalog.Store.AppendEntry(logEntry); err != nil {
 		panic(err)
 	}
@@ -399,34 +407,6 @@ func (catalog *Catalog) SimpleGetTable(id uint64) *Table {
 
 func (catalog *Catalog) GetTable(id uint64) *Table {
 	return catalog.TableSet[id]
-}
-
-func (catalog *Catalog) Commit(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
-	catalog.Lock()
-	defer catalog.Unlock()
-	catalog.commitLocked(entry, eType, rwlocker)
-}
-
-func (catalog *Catalog) commitLocked(entry IEntry, eType LogEntryType, rwlocker *sync.RWMutex) {
-	commitId := catalog.NextCommitId()
-	var logEntry LogEntry
-	if rwlocker == nil {
-		entry.Lock()
-		entry.CommitLocked(commitId)
-		logEntry = entry.ToLogEntry(eType)
-		entry.Unlock()
-	} else {
-		entry.CommitLocked(commitId)
-		logEntry = entry.ToLogEntry(eType)
-		rwlocker.Unlock()
-		defer rwlocker.Lock()
-	}
-	err := catalog.CommitLogEntry(logEntry, commitId, IsSyncDDLEntryType(eType))
-	if err != nil {
-		panic(err)
-	}
-	logEntry.WaitDone()
-	logEntry.Free()
 }
 
 func (catalog *Catalog) ForLoopTables(h func(*Table) error) error {
@@ -620,6 +600,6 @@ func MockCatalog(dir string, blkRows, segBlks uint64) *Catalog {
 	if err != nil {
 		panic(err)
 	}
-	catalog.StartSyncer()
+	catalog.Start()
 	return catalog
 }

@@ -125,7 +125,7 @@ func makeFiles(impl *db.DB) {
 	}
 	ibat := getInsertBatch(meta)
 	for i := uint64(0); i < insertCnt; i++ {
-		if err := impl.Append(dbi.AppendCtx{TableName: tableName, Data: ibat, OpIndex: uint64(i), OpSize: 1}); err != nil {
+		if err := impl.Append(dbi.AppendCtx{TableName: tableName, Data: ibat, OpIndex: uint64(i) + 1, OpSize: 1}); err != nil {
 			panic(err)
 		}
 	}

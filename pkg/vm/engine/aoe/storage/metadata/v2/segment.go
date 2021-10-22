@@ -198,8 +198,12 @@ func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
 }
 
 // Safe
-func (e *Segment) SimpleCreateBlock(exIndex *ExternalIndex) *Block {
-	return e.CreateBlock(e.Table.Catalog.NextUncommitId(), exIndex, true)
+func (e *Segment) SimpleCreateBlock() *Block {
+	ctx := newCreateBlockCtx(e)
+	if err := e.Table.Catalog.onCommitRequest(ctx); err != nil {
+		return nil
+	}
+	return ctx.block
 }
 
 // Safe
@@ -212,16 +216,18 @@ func (e *Segment) Appendable() bool {
 	return true
 }
 
-func (e *Segment) CreateBlock(tranId uint64, exIndex *ExternalIndex, autoCommit bool) *Block {
-	be := newBlockEntry(e, tranId, exIndex)
+func (e *Segment) prepareCreateBlock(ctx *createBlockCtx) (LogEntry, error) {
+	tranId := e.Catalog.NextUncommitId()
+	be := newBlockEntry(e, tranId, ctx.exIndex)
+	logEntry := be.ToLogEntry(ETCreateBlock)
 	e.Lock()
 	e.onNewBlock(be)
 	e.Unlock()
-	if !autoCommit {
-		return be
-	}
-	e.Catalog.Commit(be, ETCreateBlock, nil)
-	return be
+	e.Table.Catalog.commitMu.Lock()
+	defer e.Table.Catalog.commitMu.Unlock()
+	e.Table.Catalog.prepareCommitLog(be, logEntry)
+	ctx.block = be
+	return logEntry, nil
 }
 
 // Safe
@@ -265,7 +271,9 @@ func (e *Segment) onNewBlock(entry *Block) {
 
 // Safe
 func (e *Segment) SimpleUpgrade(exIndice []*ExternalIndex) error {
-	return e.Upgrade(e.Table.Catalog.NextUncommitId(), exIndice, true)
+	ctx := newUpgradeSegmentCtx(e, exIndice)
+	return e.Table.Catalog.onCommitRequest(ctx)
+	// return e.Upgrade(e.Table.Catalog.NextUncommitId(), exIndice, true)
 }
 
 // Not safe
@@ -289,18 +297,20 @@ func (e *Segment) HasMaxBlocks() bool {
 	return e.IsSorted() || len(e.BlockSet) == int(e.Table.Schema.SegmentMaxBlocks)
 }
 
-func (e *Segment) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit bool) error {
+// func (e *Segment) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit bool) error {
+func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
+	tranId := e.Table.Catalog.NextUncommitId()
 	e.RLock()
 	if !e.HasMaxBlocks() {
 		e.RUnlock()
-		return UpgradeInfullSegmentErr
+		return nil, UpgradeInfullSegmentErr
 	}
 	if e.IsSorted() {
-		return UpgradeNotNeededErr
+		return nil, UpgradeNotNeededErr
 	}
 	for _, blk := range e.BlockSet {
 		if !blk.IsFull() {
-			return UpgradeInfullSegmentErr
+			return nil, UpgradeInfullSegmentErr
 		}
 	}
 	e.RUnlock()
@@ -311,14 +321,14 @@ func (e *Segment) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit b
 	case OpCreate:
 		newOp = OpUpgradeSorted
 	default:
-		return UpgradeNotNeededErr
+		return nil, UpgradeNotNeededErr
 	}
 	cInfo := &CommitInfo{
 		TranId:   tranId,
 		CommitId: tranId,
 		Op:       newOp,
 	}
-	if exIndice == nil {
+	if ctx.exIndice == nil {
 		id, ok := e.calcAppliedIndex()
 		if ok {
 			cInfo.AppliedIndex = &ExternalIndex{
@@ -326,24 +336,23 @@ func (e *Segment) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit b
 			}
 		}
 	} else {
-		cInfo.ExternalIndex = exIndice[0]
-		if len(exIndice) > 1 {
-			cInfo.PrevIndex = exIndice[1]
+		cInfo.ExternalIndex = ctx.exIndice[0]
+		if len(ctx.exIndice) > 1 {
+			cInfo.PrevIndex = ctx.exIndice[1]
 		}
 	}
 	e.onNewCommit(cInfo)
-	if !autoCommit {
-		return nil
-	}
-	e.Table.Catalog.Commit(e, ETUpgradeSegment, &e.RWMutex)
-	return nil
+	e.Table.Catalog.commitMu.Lock()
+	defer e.Table.Catalog.commitMu.Unlock()
+	logEntry := e.Table.Catalog.prepareCommitEntry(e, ETUpgradeSegment, e)
+	return logEntry, nil
 }
 
 // Not safe
 // One writer, multi-readers
 func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {
 	if len(e.BlockSet) == 0 {
-		return e.SimpleCreateBlock(nil)
+		return e.SimpleCreateBlock()
 	}
 	var ret *Block
 	for i := len(e.BlockSet) - 1; i >= 0; i-- {
@@ -357,7 +366,7 @@ func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {
 	if ret != nil || e.HasMaxBlocks() {
 		return ret
 	}
-	return e.SimpleCreateBlock(nil)
+	return e.SimpleCreateBlock()
 }
 
 // Safe

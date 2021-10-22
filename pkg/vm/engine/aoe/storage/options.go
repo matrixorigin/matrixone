@@ -154,7 +154,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		if o.Meta.Catalog, err = metadata.OpenCatalog(&o.Mu, catalogCfg); err != nil {
 			panic(err)
 		}
-		o.Meta.Catalog.StartSyncer()
+		o.Meta.Catalog.Start()
 	}
 
 	if o.Meta.CKFactory == nil {

@@ -1,7 +1,6 @@
 package metadata
 
 type writeCtx struct {
-	op      CtxT
 	exIndex *LogIndex
 }
 
@@ -22,10 +21,33 @@ type deleteTableCtx struct {
 	table *Table
 }
 
+type createSegmentCtx struct {
+	writeCtx
+	segment *Segment
+	table   *Table
+}
+
+type upgradeSegmentCtx struct {
+	writeCtx
+	segment  *Segment
+	exIndice []*LogIndex
+}
+
+type createBlockCtx struct {
+	writeCtx
+	segment *Segment
+	block   *Block
+}
+
+type upgradeBlockCtx struct {
+	writeCtx
+	block    *Block
+	exIndice []*LogIndex
+}
+
 func newCreateTableCtx(schema *Schema, exIndex *LogIndex) *createTableCtx {
 	return &createTableCtx{
 		writeCtx: writeCtx{
-			op:      ETCreateTable,
 			exIndex: exIndex,
 		},
 		schema: schema,
@@ -35,7 +57,6 @@ func newCreateTableCtx(schema *Schema, exIndex *LogIndex) *createTableCtx {
 func newDropTableCtx(name string, exIndex *LogIndex) *dropTableCtx {
 	return &dropTableCtx{
 		writeCtx: writeCtx{
-			op:      ETSoftDeleteTable,
 			exIndex: exIndex,
 		},
 		name: name,
@@ -45,5 +66,31 @@ func newDropTableCtx(name string, exIndex *LogIndex) *dropTableCtx {
 func newDeleteTableCtx(table *Table) *deleteTableCtx {
 	return &deleteTableCtx{
 		table: table,
+	}
+}
+
+func newCreateSegmentCtx(table *Table) *createSegmentCtx {
+	return &createSegmentCtx{
+		table: table,
+	}
+}
+
+func newUpgradeSegmentCtx(segment *Segment, exIndice []*LogIndex) *upgradeSegmentCtx {
+	return &upgradeSegmentCtx{
+		segment:  segment,
+		exIndice: exIndice,
+	}
+}
+
+func newCreateBlockCtx(segment *Segment) *createBlockCtx {
+	return &createBlockCtx{
+		segment: segment,
+	}
+}
+
+func newUpgradeBlockCtx(block *Block, exIndice []*LogIndex) *upgradeBlockCtx {
+	return &upgradeBlockCtx{
+		block:    block,
+		exIndice: exIndice,
 	}
 }

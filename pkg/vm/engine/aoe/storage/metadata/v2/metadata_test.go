@@ -34,7 +34,7 @@ func TestTable(t *testing.T) {
 	os.RemoveAll(cfg.Dir)
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	defer catalog.Close()
 	schema := MockSchema(2)
 	e := NewTableEntry(catalog, schema, uint64(0), nil)
@@ -55,7 +55,7 @@ func TestCreateTable(t *testing.T) {
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	defer catalog.Close()
 	tableCnt := 20
 
@@ -93,7 +93,7 @@ func TestTables(t *testing.T) {
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	defer catalog.Close()
 
 	m1Cnt := 10
@@ -134,7 +134,7 @@ func TestDropTable(t *testing.T) {
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	schema1 := MockSchema(2)
 	schema1.Name = "m1"
@@ -200,7 +200,7 @@ func TestDropTable(t *testing.T) {
 
 	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	// err = replayer.Replay(catalog.Store)
 	// t.Log(err)
 	catalog.Close()
@@ -214,7 +214,7 @@ func TestSegment(t *testing.T) {
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	defer catalog.Close()
 
 	pool, _ := ants.NewPool(10)
@@ -230,15 +230,15 @@ func TestSegment(t *testing.T) {
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
-			t1.SimpleCreateSegment(nil)
+			t1.SimpleCreateSegment()
 			// t.Log(segment.String())
-			t1.SimpleCreateSegment(nil)
+			t1.SimpleCreateSegment()
 			// t.Log(segment.String())
 
 			schema2 := MockSchema(2)
 			schema2.Name = fmt.Sprintf("m%d", i+100)
 			t2, err := catalog.SimpleCreateTable(schema2, nil)
-			t2.SimpleCreateSegment(nil)
+			t2.SimpleCreateSegment()
 			// t.Log(segment.String())
 
 			err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
@@ -262,7 +262,7 @@ func TestBlock(t *testing.T) {
 	cfg.Dir = dir
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	defer catalog.Close()
 
 	pool, _ := ants.NewPool(5)
@@ -277,7 +277,7 @@ func TestBlock(t *testing.T) {
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
-			s1 := t1.SimpleCreateSegment(nil)
+			s1 := t1.SimpleCreateSegment()
 			s1.RLock()
 			assert.True(t, s1.HasCommitted())
 			s1.RUnlock()
@@ -285,7 +285,7 @@ func TestBlock(t *testing.T) {
 			rt1 := catalog.SimpleGetTableByName(schema.Name)
 			assert.NotNil(t, rt1)
 
-			b1 := s1.SimpleCreateBlock(nil)
+			b1 := s1.SimpleCreateBlock()
 			b1.RLock()
 			assert.True(t, b1.HasCommitted())
 			b1.RUnlock()
@@ -344,7 +344,7 @@ func TestReplay(t *testing.T) {
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
 	cfg.RotationFileMaxSize = 100 * int(common.K)
 	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	mockTbls := 5
 	createBlkWorker, _ := ants.NewPool(mockTbls)
@@ -412,7 +412,7 @@ func TestAppliedIndex(t *testing.T) {
 	assert.True(t, ok)
 	t.Log(createId)
 
-	blk, prevSeg := tbl.SimpleCreateBlock(nil)
+	blk, prevSeg := tbl.SimpleCreateBlock()
 	assert.Nil(t, prevSeg)
 	assert.NotNil(t, blk)
 	opIdx := common.NextGlobalSeqNum()
@@ -434,7 +434,7 @@ func TestAppliedIndex(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, createId, id)
 
-	blk, prevSeg = tbl.SimpleCreateBlock(nil)
+	blk, prevSeg = tbl.SimpleCreateBlock()
 	assert.Nil(t, prevSeg)
 	assert.NotNil(t, blk)
 
@@ -515,7 +515,7 @@ func TestUpgrade(t *testing.T) {
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(2)
 	cfg.RotationFileMaxSize = 20 * int(common.K)
 	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
-	catalog.StartSyncer()
+	catalog.Start()
 	pool1, _ := ants.NewPool(2)
 	pool2, _ := ants.NewPool(2)
 	pool3, _ := ants.NewPool(2)
@@ -583,7 +583,7 @@ func TestUpgrade(t *testing.T) {
 			defer wg2.Done()
 			segment, err := catalog.SimpleGetSegment(tableId, segmentId)
 			assert.Nil(t, err)
-			block := segment.SimpleCreateBlock(nil)
+			block := segment.SimpleCreateBlock()
 			assert.NotNil(t, block)
 			wg3.Add(1)
 			pool3.Submit(upgradeBlk(block.Segment.Table.Id, block.Segment.Id, block.Id))
@@ -592,7 +592,7 @@ func TestUpgrade(t *testing.T) {
 	createSeg := func(tableId uint64) func() {
 		return func() {
 			defer wg1.Done()
-			s := t1.SimpleCreateSegment(nil)
+			s := t1.SimpleCreateSegment()
 			assert.NotNil(t, s)
 			for i := 0; i < blockCnt; i++ {
 				wg2.Add(1)
@@ -632,7 +632,7 @@ func TestUpgrade(t *testing.T) {
 	// t.Logf("r - %d", catalog.Sequence.nextSegmentId)
 	// t.Logf("r - %d", catalog.Sequence.nextBlockId)
 
-	catalog.StartSyncer()
+	catalog.Start()
 
 	tmp := catalog.SimpleGetTable(t1.Id)
 	assert.NotNil(t, tmp)
@@ -659,7 +659,7 @@ func TestUpgrade(t *testing.T) {
 
 	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	// t.Logf("%d - %d", catalog.Store.GetSyncedId(), catalog.Store.GetCheckpointId())
 	assert.Equal(t, sequence.nextCommitId, catalog.Sequence.nextCommitId)
 	assert.Equal(t, sequence.nextTableId, catalog.Sequence.nextTableId)
@@ -678,12 +678,12 @@ func TestOpen(t *testing.T) {
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(100)
 	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 	catalog.Close()
 
 	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
 	assert.Nil(t, err)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	schema := MockSchema(2)
 	_, err = catalog.SimpleCreateTable(schema, nil)
@@ -704,7 +704,7 @@ func TestCatalog2(t *testing.T) {
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(20)
 	cfg.RotationFileMaxSize = 10 * int(common.K)
 	catalog := NewCatalog(new(sync.RWMutex), cfg)
-	catalog.StartSyncer()
+	catalog.Start()
 
 	pool, _ := ants.NewPool(10)
 	var wg sync.WaitGroup
@@ -718,7 +718,7 @@ func TestCatalog2(t *testing.T) {
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
-			s1 := t1.SimpleCreateSegment(nil)
+			s1 := t1.SimpleCreateSegment()
 			s1.RLock()
 			assert.True(t, s1.HasCommitted())
 			s1.RUnlock()
@@ -726,7 +726,7 @@ func TestCatalog2(t *testing.T) {
 			rt1 := catalog.SimpleGetTableByName(schema.Name)
 			assert.NotNil(t, rt1)
 
-			b1 := s1.SimpleCreateBlock(nil)
+			b1 := s1.SimpleCreateBlock()
 			b1.RLock()
 			assert.True(t, b1.HasCommitted())
 			b1.RUnlock()

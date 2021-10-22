@@ -584,7 +584,7 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 		break
 	}
 	tableData.InitReplay()
-	logutil.Info(tableData.String())
+	// logutil.Info(tableData.String())
 	return nil
 }
 

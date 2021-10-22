@@ -246,6 +246,8 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 	case ETCreateBlock:
 		blk := &blockLogEntry{}
 		blk.Unmarshal(entry.GetPayload())
+		commitId := GetCommitIdFromLogEntry(entry)
+		blk.CommitLocked(commitId)
 		observer.OnReplayCommit(blk.CommitInfo.CommitId)
 		replayer.cache.Append(&replayEntry{
 			typ:      ETCreateBlock,
@@ -288,6 +290,8 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 	case ETCreateSegment:
 		seg := &segmentLogEntry{}
 		seg.Unmarshal(entry.GetPayload())
+		commitId := GetCommitIdFromLogEntry(entry)
+		seg.CommitLocked(commitId)
 		observer.OnReplayCommit(seg.CommitInfo.CommitId)
 		replayer.cache.Append(&replayEntry{
 			typ:      ETCreateSegment,
