@@ -206,9 +206,8 @@ func (p *proxy) Checkpoint() {
 	}
 	p.logmu.Unlock()
 	id := p.GetSafeId()
-	logutil.Infof("Shard-%d: pending-%d, safeid-%d %s", p.id, maskNum, id, time.Since(now))
 	if p.mgr != nil && p.mgr.driver != nil && id != p.lastSafeId {
-		logutil.Infof("Shard-%d: lastsafeid-%d, safeid-%d", p.id, p.lastSafeId, id)
+		logutil.Infof("Shard-%d | pending-%d, safeid-%d, lastsafeid-%d | %s", p.id, maskNum, id, p.lastSafeId, time.Since(now))
 		if id < p.lastSafeId {
 			panic("logic error")
 		}
@@ -223,6 +222,8 @@ func (p *proxy) Checkpoint() {
 		logEntry.WaitDone()
 		logEntry.Free()
 		p.lastSafeId = id
+	} else {
+		logutil.Infof("Shard-%d: pending-%d, safeid-%d %s", p.id, maskNum, id, time.Since(now))
 	}
 	if p.mgr != nil {
 		p.mgr.UpdateSafeId(p.id, id)

@@ -26,3 +26,25 @@ func NextGlobalSeqNum() uint64 {
 func GetGlobalSeqNum() uint64 {
 	return atomic.LoadUint64(&GlobalSeqNum)
 }
+
+type IdAlloctor struct {
+	id uint64
+}
+
+func NewIdAlloctor(from uint64) *IdAlloctor {
+	if from == 0 {
+		panic("should not be 0")
+	}
+
+	return &IdAlloctor{
+		id: from - 1,
+	}
+}
+
+func (alloc *IdAlloctor) Alloc() uint64 {
+	return atomic.AddUint64(&alloc.id, uint64(1))
+}
+
+func (alloc *IdAlloctor) Get() uint64 {
+	return atomic.LoadUint64(&alloc.id)
+}
