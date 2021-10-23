@@ -21,6 +21,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sort"
 	"sync"
 
@@ -97,6 +98,7 @@ type Catalog struct {
 	Sequence        `json:"-"`
 	pipeline        *commitPipeline       `json:"-"`
 	Store           logstore.AwareStore   `json:"-"`
+	IndexWal        wal.ShardWal          `json:"-"`
 	Cfg             *CatalogCfg           `json:"-"`
 	NameNodes       map[string]*tableNode `json:"-"`
 	NameIndex       *btree.BTree          `json:"-"`
@@ -111,7 +113,12 @@ func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
 	return replayer.RebuildCatalog(mu, cfg)
 }
 
-func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore) *Catalog {
+func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) (*Catalog, error) {
+	replayer := newCatalogReplayer()
+	return replayer.RebuildCatalogWithDriver(mu, cfg, store, indexWal)
+}
+
+func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
 	catalog := &Catalog{
 		RWMutex:   mu,
 		Cfg:       cfg,
@@ -119,6 +126,7 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awar
 		NameNodes: make(map[string]*tableNode),
 		NameIndex: btree.New(2),
 		Store:     store,
+		IndexWal:  indexWal,
 	}
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)

@@ -103,6 +103,12 @@ func (n *MutableBlockNode) Flush() error {
 		return err
 	}
 	n.updateApplied(meta)
+	wal := n.Meta.Segment.Table.Catalog.IndexWal
+	if wal != nil {
+		snippet := n.Meta.ConsumeSnippet(false)
+		// logutil.Infof("Mutblock %d Count %d Snippet %s", n.Meta.Id, n.Meta.GetCount(), snippet.String())
+		wal.Checkpoint(snippet)
+	}
 	return nil
 }
 

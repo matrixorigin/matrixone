@@ -15,6 +15,7 @@
 package shard
 
 import (
+	"fmt"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
@@ -83,6 +84,22 @@ func (s *Snippet) GetShardId() uint64 {
 func (s *Snippet) Append(index *Index) {
 	copied := *index
 	s.indice = append(s.indice, &copied)
+}
+
+func (s *Snippet) String() string {
+	if s == nil {
+		return "nil"
+	}
+	str := fmt.Sprintf("<Snippet>(ShardId-%d,Cnt-%d){", s.shardId, len(s.indice))
+	for _, index := range s.indice {
+		str = fmt.Sprintf("%s\n%s", str, index.String())
+	}
+	if len(s.indice) > 0 {
+		str = fmt.Sprintf("%s\n}", str)
+	} else {
+		str = fmt.Sprintf("%s}", str)
+	}
+	return str
 }
 
 func (s *Snippet) LastIndex() *Index {

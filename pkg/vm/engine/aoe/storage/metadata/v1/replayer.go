@@ -20,6 +20,7 @@ import (
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
 )
@@ -184,6 +185,17 @@ func newCatalogReplayer() *catalogReplayer {
 	replayer := &catalogReplayer{}
 	replayer.cache = newReplayCache(replayer)
 	return replayer
+}
+
+func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg,
+	store logstore.AwareStore, indexWal wal.ShardWal) (*Catalog, error) {
+	replayer.catalog = NewCatalogWithDriver(mu, cfg, store, indexWal)
+	if err := replayer.Replay(replayer.catalog.Store); err != nil {
+		return nil, err
+	}
+	replayer.catalog.Store.TryCompact()
+	replayer.cache = nil
+	return replayer.catalog, nil
 }
 
 func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {

@@ -128,6 +128,9 @@ func (mgr *manager) Checkpoint(v interface{}) {
 		mgr.EnqueueCheckpoint(snip)
 		return
 	case *Snippet:
+		if vv == nil {
+			return
+		}
 		mgr.EnqueueCheckpoint(vv)
 		return
 	}

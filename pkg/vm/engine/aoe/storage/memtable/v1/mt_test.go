@@ -92,6 +92,7 @@ func TestCollection(t *testing.T) {
 	opts.Meta.Catalog, _ = opts.CreateCatalog(WORK_DIR)
 	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
+	opts.Wal = shard.NewNoopWal()
 
 	manager := NewManager(opts, nil)
 	fsMgr := ldio.NewManager(WORK_DIR, false)

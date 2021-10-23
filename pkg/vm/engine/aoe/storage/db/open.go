@@ -17,11 +17,13 @@ package db
 import (
 	"matrixone/pkg/vm/engine/aoe/storage"
 	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
@@ -76,12 +78,21 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	db.Store.DataTables = table.NewTables(&opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
 	db.Store.DataTables.MutFactory = factory
 
+	store, err := logstore.NewBatchStore(common.MakeMetaDir(dirname), "store", nil)
+	if err != nil {
+		return
+	}
+	if db.Opts.Wal == nil {
+		db.Opts.Wal = shard.NewManagerWithDriver(store, false)
+	}
+	db.Wal = db.Opts.Wal
+
 	catalogCfg := metadata.CatalogCfg{
 		Dir:              dirname,
 		BlockMaxRows:     opts.Meta.Conf.BlockMaxRows,
 		SegmentMaxBlocks: opts.Meta.Conf.SegmentMaxBlocks,
 	}
-	if opts.Meta.Catalog, err = metadata.OpenCatalog(new(sync.RWMutex), &catalogCfg); err != nil {
+	if opts.Meta.Catalog, err = metadata.OpenCatalogWithDriver(new(sync.RWMutex), &catalogCfg, store, db.Wal); err != nil {
 		return
 	}
 	db.Store.Catalog = opts.Meta.Catalog
@@ -89,10 +100,6 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 
 	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
-	if db.Opts.Wal == nil {
-		db.Opts.Wal = shard.NewManagerWithDriver(db.Store.Catalog.Store, false)
-	}
-	db.Wal = db.Opts.Wal
 
 	replayHandle := NewReplayHandle(dirname, opts.Meta.Catalog, db.Store.DataTables, nil)
 	if err = replayHandle.Replay(); err != nil {
