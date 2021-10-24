@@ -17,6 +17,7 @@ package shard
 import (
 	"errors"
 	"fmt"
+	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"matrixone/pkg/vm/engine/aoe/storage/wal"
@@ -259,6 +260,9 @@ func (mgr *manager) Close() error {
 	mgr.Stop()
 	if mgr.own && mgr.driver != nil {
 		mgr.driver.Close()
+	}
+	for _, s := range mgr.shards {
+		logutil.Infof("[AOE]: Shard-%d SafeId-%d | Closed", s.id, s.GetSafeId())
 	}
 	return nil
 }
