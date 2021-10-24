@@ -16,6 +16,13 @@ package wal
 
 import "io"
 
+type Role uint8
+
+const (
+	HolderRole Role = iota
+	BrokerRole
+)
+
 type Payload interface {
 	Marshal() ([]byte, error)
 }
@@ -25,6 +32,7 @@ type Wal interface {
 	Log(Payload) (*Entry, error)
 	Checkpoint(interface{})
 	String() string
+	GetRole() Role
 }
 
 type ShardWal interface {

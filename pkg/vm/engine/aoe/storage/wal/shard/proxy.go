@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,7 +73,7 @@ func newProxy(id uint64, mgr *manager) *proxy {
 		snippets: make([]*snippets, 0, 10),
 		indice:   make(map[uint64]*commitEntry),
 	}
-	if mgr != nil && mgr.local {
+	if mgr != nil && mgr.GetRole() == wal.HolderRole {
 		p.idAlloctor = new(common.IdAlloctor)
 	}
 	return p

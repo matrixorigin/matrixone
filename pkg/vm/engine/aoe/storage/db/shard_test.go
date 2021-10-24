@@ -11,6 +11,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
 	"testing"
 	"time"
@@ -189,7 +190,7 @@ func TestShard1(t *testing.T) {
 	}
 
 	initDBTest()
-	inst := initDB(storage.MUTABLE_FT, false)
+	inst := initDB(storage.MUTABLE_FT, wal.BrokerRole)
 
 	shardCnt := 8
 	shards := make([]*mockShard, shardCnt)
@@ -239,7 +240,7 @@ func TestShard2(t *testing.T) {
 	}
 
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT, false)
+	inst := initDB(storage.NORMAL_FT, wal.BrokerRole)
 
 	shardCnt := 4
 	shards := make([]*mockShard, shardCnt)

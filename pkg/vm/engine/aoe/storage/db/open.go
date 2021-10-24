@@ -83,7 +83,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 		return
 	}
 	if db.Opts.Wal == nil {
-		db.Opts.Wal = shard.NewManagerWithDriver(store, false, db.Opts.LocalWalIndex)
+		db.Opts.Wal = shard.NewManagerWithDriver(store, false, db.Opts.WalRole)
 	}
 	db.Wal = db.Opts.Wal
 

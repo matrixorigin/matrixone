@@ -195,7 +195,7 @@ func TestShardManager(t *testing.T) {
 	os.RemoveAll(dir)
 	driver, err := logstore.NewBatchStore(dir, "wal", nil)
 	assert.Nil(t, err)
-	mgr := NewManagerWithDriver(driver, true, false)
+	mgr := NewManagerWithDriver(driver, true, wal.BrokerRole)
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(8)
 
@@ -238,7 +238,7 @@ func TestProxy2(t *testing.T) {
 	if invariants.RaceEnabled {
 		waitTime *= 10
 	}
-	mgr := NewManager()
+	mgr := NewManager(wal.BrokerRole)
 	defer mgr.Close()
 	var indice []*Index
 	for i := 1; i < 20; i += 4 {
@@ -280,7 +280,7 @@ func TestProxy3(t *testing.T) {
 	if invariants.RaceEnabled {
 		waitTime *= 5
 	}
-	mgr := NewManager()
+	mgr := NewManager(wal.BrokerRole)
 	defer mgr.Close()
 	var indice []*Index
 	var lastIndex *Index

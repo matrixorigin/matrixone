@@ -23,6 +23,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -38,7 +39,7 @@ import (
 
 func TestEngine(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT, true)
+	inst := initDB(storage.NORMAL_FT, wal.HolderRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)
@@ -221,7 +222,7 @@ func TestEngine(t *testing.T) {
 
 func TestLogIndex(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT, true)
+	inst := initDB(storage.NORMAL_FT, wal.HolderRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)

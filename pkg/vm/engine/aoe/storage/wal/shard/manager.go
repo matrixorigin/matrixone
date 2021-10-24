@@ -38,6 +38,7 @@ type noopWal struct{}
 func NewNoopWal() *noopWal {
 	return new(noopWal)
 }
+func (noop *noopWal) GetRole() wal.Role                 { return wal.HolderRole }
 func (noop *noopWal) GetShardId(uint64) (uint64, error) { return uint64(0), nil }
 func (noop *noopWal) String() string                    { return "<noop>" }
 func (noop *noopWal) Checkpoint(interface{})            {}
@@ -59,17 +60,17 @@ type manager struct {
 	own     bool
 	safemu  sync.RWMutex
 	safeids map[uint64]uint64
-	local   bool
+	role    wal.Role
 }
 
-func NewManager() *manager {
-	return NewManagerWithDriver(nil, false, false)
+func NewManager(role wal.Role) *manager {
+	return NewManagerWithDriver(nil, false, role)
 }
 
-func NewManagerWithDriver(driver logstore.AwareStore, own bool, local bool) *manager {
+func NewManagerWithDriver(driver logstore.AwareStore, own bool, role wal.Role) *manager {
 	mgr := &manager{
 		own:     own,
-		local:   local,
+		role:    role,
 		driver:  driver,
 		shards:  make(map[uint64]*proxy),
 		safeids: make(map[uint64]uint64),
@@ -97,6 +98,10 @@ func (mgr *manager) UpdateSafeId(shardId, id uint64) {
 		}
 		mgr.safeids[shardId] = id
 	}
+}
+
+func (mgr *manager) GetRole() wal.Role {
+	return mgr.role
 }
 
 func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {

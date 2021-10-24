@@ -24,6 +24,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"os"
 	"path"
 	"path/filepath"
@@ -64,7 +65,7 @@ func TestDBReplay(t *testing.T) {
 	initDBTest()
 	// ft := storage.MUTABLE_FT
 	ft := storage.NORMAL_FT
-	inst := initDB(ft, false)
+	inst := initDB(ft, wal.BrokerRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl", OpIndex: uint64(1)})
 	assert.Nil(t, err)
@@ -116,7 +117,7 @@ func TestDBReplay(t *testing.T) {
 	assert.Nil(t, err)
 	f.Close()
 
-	inst = initDB(ft, false)
+	inst = initDB(ft, wal.BrokerRole)
 
 	os.Stat(invalidFileName)
 	_, err = os.Stat(invalidFileName)
