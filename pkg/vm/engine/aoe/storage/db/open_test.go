@@ -23,6 +23,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"os"
 	"path"
 	"path/filepath"
@@ -94,6 +95,10 @@ func TestDBReplay(t *testing.T) {
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
 
+	testutils.WaitExpect(200, func() bool {
+		id, _ := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
+		return id == uint64(insertCnt)
+	})
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
@@ -117,8 +122,8 @@ func TestDBReplay(t *testing.T) {
 	_, err = os.Stat(invalidFileName)
 	assert.True(t, os.IsNotExist(err))
 
-	t.Log(inst.MTBufMgr.String())
-	t.Log(inst.SSTBufMgr.String())
+	// t.Log(inst.MTBufMgr.String())
+	// t.Log(inst.SSTBufMgr.String())
 
 	replaytblMeta := inst.Opts.Meta.Catalog.SimpleGetTableByName(tableInfo.Name)
 	assert.NotNil(t, replaytblMeta)
@@ -145,16 +150,27 @@ func TestDBReplay(t *testing.T) {
 	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name, OpIndex: segmentedIdx + 1 + uint64(insertCnt)})
 	assert.NotNil(t, err)
 
-	time.Sleep(waitTime)
-	if invariants.RaceEnabled {
-		time.Sleep(waitTime)
-	}
-	t.Log(inst.MTBufMgr.String())
-	t.Log(inst.SSTBufMgr.String())
+	// time.Sleep(waitTime)
+	// if invariants.RaceEnabled {
+	// 	time.Sleep(waitTime)
+	// }
+	// t.Log(inst.MTBufMgr.String())
+	// t.Log(inst.SSTBufMgr.String())
+	testutils.WaitExpect(200, func() bool {
+		return 2*rows*uint64(insertCnt)-2*tblMeta.Schema.BlockMaxRows == tbl.GetRowCount()
+		// id, _ := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
+		// return id == uint64(insertCnt)
+	})
 	t.Logf("Row count: %d", tbl.GetRowCount())
 	assert.Equal(t, 2*rows*uint64(insertCnt)-2*tblMeta.Schema.BlockMaxRows, tbl.GetRowCount())
 
 	preSegmentedIdx := segmentedIdx
+
+	testutils.WaitExpect(200, func() bool {
+		id, _ := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
+		return id == preSegmentedIdx+uint64(insertCnt)-1
+	})
+
 	segmentedIdx, err = inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)

@@ -21,6 +21,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"os"
 	"sort"
 	"sync"
@@ -924,15 +925,15 @@ func TestReplay12(t *testing.T) {
 
 	insertFn2()
 	assert.Equal(t, irows*5, uint64(rel.Rows()))
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(40) * time.Millisecond)
-	}
+	t.Log(rel.Rows())
+	testutils.WaitExpect(200, func() bool {
+		safeId, _ := inst.Wal.GetShardSafeId(rel.Meta.GetCommit().LogIndex.ShardId)
+		return common.GetGlobalSeqNum()-1 == safeId
+	})
+	time.Sleep(time.Duration(20) * time.Millisecond)
 
 	rel.Close()
 	inst.Close()
-
-	time.Sleep(time.Duration(20) * time.Millisecond)
 
 	inst = initDB(storage.NORMAL_FT, true)
 	// inst = initDB(engine.NORMAL_FT)
@@ -942,9 +943,9 @@ func TestReplay12(t *testing.T) {
 	assert.Equal(t, common.GetGlobalSeqNum()-1, segmentedIdx)
 
 	rel, err = inst.Relation(meta.Schema.Name)
+	t.Log(rel.Rows())
 	assert.Nil(t, err)
 	assert.Equal(t, irows*4, uint64(rel.Rows()))
-	t.Log(rel.Rows())
 
 	insertFn3 := func() {
 		err = rel.Write(dbi.AppendCtx{

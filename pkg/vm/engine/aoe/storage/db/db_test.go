@@ -28,6 +28,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"os"
@@ -357,12 +358,12 @@ func TestConcurrency(t *testing.T) {
 	searchWg.Wait()
 	cancel()
 	wg.Wait()
-	time.Sleep(time.Duration(100) * time.Millisecond)
-	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(250) * time.Millisecond)
-	}
 	tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
 	root := tbl.WeakRefRoot()
+	testutils.WaitExpect(300, func() bool {
+		return int64(1) == root.RefCount()
+	})
+
 	assert.Equal(t, int64(1), root.RefCount())
 	opts := &dbi.GetSnapshotCtx{
 		TableName: tableInfo.Name,

@@ -217,7 +217,7 @@ func TestShard1(t *testing.T) {
 
 	wg.Wait()
 	for _, shard := range shards {
-		testutils.WaitExpect(20, func() bool {
+		testutils.WaitExpect(100, func() bool {
 			return shard.idAlloc.Get() == shard.getSafeId()
 		})
 		assert.Equal(t, shard.idAlloc.Get(), shard.getSafeId())
