@@ -615,6 +615,7 @@ func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
 	seg := tbl.SegmentSet[segpos]
 	blkpos := seg.IdIndex[entry.Id]
 	blk := seg.BlockSet[blkpos]
+	blk.IndiceMemo = nil
 	blk.onNewCommit(entry.CommitInfo)
 	return nil
 }

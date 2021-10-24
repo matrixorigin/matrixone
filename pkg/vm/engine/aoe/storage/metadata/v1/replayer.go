@@ -60,7 +60,10 @@ func newReplayCache(replayer *catalogReplayer) *replayCache {
 }
 
 func (cache *replayCache) OnShardSafeId(id shard.SafeId) {
-	cache.safeIds[id.ShardId] = id.Id
+	old, ok := cache.safeIds[id.ShardId]
+	if !ok || old < id.Id {
+		cache.safeIds[id.ShardId] = id.Id
+	}
 }
 
 func (cache *replayCache) Append(entry *replayEntry) {
@@ -170,6 +173,13 @@ func (cache *replayCache) Apply() error {
 		}
 		cache.replayer.catalog.Store.SetCheckpointId(cache.checkpoint.Range.Right)
 	}
+	indexWal := cache.replayer.catalog.IndexWal
+	if indexWal != nil {
+		for shardId, safeId := range cache.safeIds {
+			logutil.Infof("[AOE]: Replay Shard-%d SafeId-%d", shardId, safeId)
+			indexWal.InitShard(shardId, safeId)
+		}
+	}
 	cache.replayer.catalog.Store.SetSyncedId(cache.replayer.catalog.Sequence.nextCommitId)
 	return nil
 }
@@ -264,7 +274,6 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 	switch entry.GetMeta().GetType() {
 	case shard.ETShardWalSafeId:
 		safeId, _ := shard.EntryToSafeId(entry)
-		logutil.Infof("Replay SafeId: %v", safeId)
 		replayer.cache.OnShardSafeId(safeId)
 	case ETCreateBlock:
 		blk := &blockLogEntry{}

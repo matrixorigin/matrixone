@@ -50,6 +50,7 @@ func (noop *noopWal) Log(wal.Payload) (*wal.Entry, error) {
 }
 func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64)        { return }
 func (noop *noopWal) GetShardSafeId(shardId uint64) (id uint64, err error) { return }
+func (noop *noopWal) InitShard(shardId, safeId uint64) error               { return nil }
 
 type manager struct {
 	sm.ClosedState
@@ -193,6 +194,15 @@ func (mgr *manager) onReceived(items ...interface{}) {
 		mgr.logEntry(entry)
 		entry.SetDone()
 	}
+}
+
+func (mgr *manager) InitShard(shardId, safeId uint64) error {
+	s, err := mgr.AddShardLocked(shardId)
+	if err != nil {
+		return err
+	}
+	s.InitSafeId(safeId)
+	return nil
 }
 
 func (mgr *manager) GetSafeIds() SafeIds {

@@ -114,6 +114,12 @@ func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
 		Segment:   segment,
 		BaseEntry: *base,
 	}
+	snippet := e.CreateSnippet()
+	if snippet != nil {
+		e.IndiceMemo = new(IndiceMemo)
+		e.IndiceMemo.snippet = snippet
+		e.IndiceMemo.mu = new(sync.Mutex)
+	}
 	return e
 }
 

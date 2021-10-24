@@ -108,6 +108,14 @@ func (p *proxy) logIndexLocked(index *Index) {
 	p.lastIndex = index.Id.Id
 }
 
+func (p *proxy) InitSafeId(id uint64) {
+	if p.idAlloctor != nil {
+		p.idAlloctor.SetStart(id)
+	}
+	p.SetSafeId(id)
+	p.lastIndex = id
+}
+
 func (p *proxy) LogIndex(index *Index) {
 	if p.idAlloctor != nil {
 		index.Id.Id = p.idAlloctor.Alloc()
@@ -126,6 +134,7 @@ func (p *proxy) AppendIndex(index *Index) {
 }
 
 func (p *proxy) AppendSnippet(snip *Snippet) {
+	// logutil.Infof("append snippet: %s", snip.String())
 	p.alumu.Lock()
 	defer p.alumu.Unlock()
 	pos, ok := p.snipIdx[snip.GetId()]
@@ -191,6 +200,8 @@ func (p *proxy) Checkpoint() {
 	}
 	p.logmu.Lock()
 	p.mask.Xor(mask)
+	// logutil.Infof("p.mask is %s", p.mask.String())
+	// logutil.Infof("p.stopmask is %s", p.stopmask.String())
 	maskNum := p.mask.GetCardinality()
 	stopNum := p.stopmask.GetCardinality()
 	if maskNum == 0 {
@@ -207,7 +218,7 @@ func (p *proxy) Checkpoint() {
 				break
 			}
 		}
-		p.stopmask.RemoveRange(uint64(0), start)
+		p.stopmask.RemoveRange(uint64(0), p.GetSafeId())
 	} else {
 		it := p.mask.Iterator()
 		pos := it.Next()

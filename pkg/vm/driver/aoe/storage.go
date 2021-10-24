@@ -51,7 +51,7 @@ func NewStorage(dir string) (*Storage, error) {
 
 // NewStorageWithOptions returns badger kv store
 func NewStorageWithOptions(dir string, opts *store.Options) (*Storage, error) {
-	db, err := adb.Open(dir, opts)
+	db, err := adb.OpenWithWalBroker(dir, opts)
 	if err != nil {
 		return nil, err
 	}

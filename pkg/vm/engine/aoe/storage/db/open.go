@@ -27,10 +27,19 @@ import (
 	mt "matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
 	"sync/atomic"
 )
+
+func OpenWithWalBroker(dirname string, opts *storage.Options) (db *DB, err error) {
+	if opts.Wal != nil && opts.Wal.GetRole() != wal.BrokerRole {
+		return nil, ErrUnexpectedWalRole
+	}
+	opts.WalRole = wal.BrokerRole
+	return Open(dirname, opts)
+}
 
 func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	// opts.FactoryType = e.MUTABLE_FT

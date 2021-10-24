@@ -44,9 +44,10 @@ import (
 )
 
 var (
-	ErrClosed      = errors.New("aoe: closed")
-	ErrUnsupported = errors.New("aoe: unsupported")
-	ErrNotFound    = errors.New("aoe: notfound")
+	ErrClosed            = errors.New("aoe: closed")
+	ErrUnsupported       = errors.New("aoe: unsupported")
+	ErrNotFound          = errors.New("aoe: notfound")
+	ErrUnexpectedWalRole = errors.New("aoe: unexpected wal role setted")
 )
 
 type DB struct {

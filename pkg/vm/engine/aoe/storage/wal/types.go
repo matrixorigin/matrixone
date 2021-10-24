@@ -37,6 +37,7 @@ type Wal interface {
 
 type ShardWal interface {
 	Wal
+	InitShard(uint64, uint64) error
 	GetShardSafeId(uint64) (uint64, error)
 	GetShardCurrSeqNum(uint64) uint64
 }

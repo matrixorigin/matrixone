@@ -48,3 +48,7 @@ func (alloc *IdAlloctor) Alloc() uint64 {
 func (alloc *IdAlloctor) Get() uint64 {
 	return atomic.LoadUint64(&alloc.id)
 }
+
+func (alloc *IdAlloctor) SetStart(start uint64) {
+	alloc.id = start
+}

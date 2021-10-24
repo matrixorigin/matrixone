@@ -38,7 +38,9 @@ func (e *commitBlkEvent) Execute() error {
 		e.Meta.SimpleUpgrade(nil)
 		wal := e.Meta.Segment.Table.Catalog.IndexWal
 		if wal != nil {
-			wal.Checkpoint(e.Meta.ConsumeSnippet(true))
+			snip := e.Meta.ConsumeSnippet(true)
+			// logutil.Infof("commit snip: %s", snip.String())
+			wal.Checkpoint(snip)
 		}
 	}
 	return nil
