@@ -435,7 +435,7 @@ func TestMultiTables(t *testing.T) {
 	initDBTest()
 	inst := initDB(storage.NORMAL_FT, true)
 	prefix := "mtable"
-	tblCnt := 40
+	tblCnt := 8
 	var names []string
 	for i := 0; i < tblCnt; i++ {
 		name := fmt.Sprintf("%s_%d", prefix, i)
@@ -448,8 +448,8 @@ func TestMultiTables(t *testing.T) {
 	assert.NotNil(t, tblMeta)
 	rows := uint64(tblMeta.Catalog.Cfg.BlockMaxRows / 2)
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
-	p1, _ := ants.NewPool(10)
-	p2, _ := ants.NewPool(10)
+	p1, _ := ants.NewPool(4)
+	p2, _ := ants.NewPool(4)
 	attrs := []string{}
 	for _, colDef := range tblMeta.Schema.ColDefs {
 		attrs = append(attrs, colDef.Name)
