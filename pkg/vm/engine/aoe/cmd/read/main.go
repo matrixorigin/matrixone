@@ -27,7 +27,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
-	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	w "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -85,7 +84,7 @@ func init() {
 		Interval: time.Duration(1) * time.Second,
 	}
 	opts.Meta.Conf = mdCfg
-	opts.Wal = shard.NewNoopWal()
+	opts.LocalWalIndex = true
 	info := adaptor.MockTableInfo(colCnt)
 	table = info
 }

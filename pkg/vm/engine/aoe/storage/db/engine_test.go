@@ -21,8 +21,8 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
+	"matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"matrixone/pkg/vm/mmu/guest"
 	"matrixone/pkg/vm/mmu/host"
 	"matrixone/pkg/vm/process"
@@ -244,14 +244,13 @@ func TestLogIndex(t *testing.T) {
 		})
 		assert.Nil(t, err)
 	}
-	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(1000) * time.Millisecond)
-	} else {
-		time.Sleep(time.Duration(300) * time.Millisecond)
-	}
 
 	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Nil(t, err)
+	testutils.WaitExpect(1000, func() bool {
+		_, ok := tbl.GetSegmentedIndex()
+		return ok
+	})
 	logIndex, ok := tbl.GetSegmentedIndex()
 	assert.True(t, ok)
 	// _, ok = tblMeta.SegmentSet[len(tblMeta.SegmentSet)-1].BlockSet[1].CommitInfo.GetAppliedIndex()
@@ -260,14 +259,16 @@ func TestLogIndex(t *testing.T) {
 	assert.True(t, ok)
 	// assert.Equal(t, expectIdx, logIndex)
 
-	dropLogIndex := common.NextGlobalSeqNum()
-	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: dropLogIndex})
+	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name})
 	assert.Nil(t, err)
-	time.Sleep(time.Duration(50) * time.Millisecond)
+	testutils.WaitExpect(20, func() bool {
+		id, _ := tbl.GetSegmentedIndex()
+		return inst.Wal.GetShardCurrSeqNum(uint64(0)) == id
+	})
 	// tbl, err = inst.Store.DataTables.WeakRefTable(tid)
 	logIndex, ok = tbl.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, dropLogIndex, logIndex)
+	assert.Equal(t, inst.Wal.GetShardCurrSeqNum(uint64(0)), logIndex)
 
 	inst.Close()
 }

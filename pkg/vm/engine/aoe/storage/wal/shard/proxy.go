@@ -17,6 +17,7 @@ package shard
 import (
 	"fmt"
 	"matrixone/pkg/logutil"
+	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -58,10 +59,11 @@ type proxy struct {
 	safeId     uint64
 	lastSafeId uint64
 	indice     map[uint64]*commitEntry
+	idAlloctor *common.IdAlloctor
 }
 
 func newProxy(id uint64, mgr *manager) *proxy {
-	return &proxy{
+	p := &proxy{
 		id:       id,
 		mgr:      mgr,
 		mask:     roaring64.New(),
@@ -70,6 +72,10 @@ func newProxy(id uint64, mgr *manager) *proxy {
 		snippets: make([]*snippets, 0, 10),
 		indice:   make(map[uint64]*commitEntry),
 	}
+	if mgr != nil && mgr.local {
+		p.idAlloctor = new(common.IdAlloctor)
+	}
+	return p
 }
 
 func (p *proxy) String() string {
@@ -102,6 +108,12 @@ func (p *proxy) logIndexLocked(index *Index) {
 }
 
 func (p *proxy) LogIndex(index *Index) {
+	if p.idAlloctor != nil {
+		index.Id.Id = p.idAlloctor.Alloc()
+	}
+	if index.Id.Id == uint64(0) {
+		panic("logic error")
+	}
 	p.logmu.Lock()
 	p.logIndexLocked(index)
 	p.logmu.Unlock()

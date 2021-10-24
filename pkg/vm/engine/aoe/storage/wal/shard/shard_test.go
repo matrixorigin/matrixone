@@ -195,7 +195,7 @@ func TestShardManager(t *testing.T) {
 	os.RemoveAll(dir)
 	driver, err := logstore.NewBatchStore(dir, "wal", nil)
 	assert.Nil(t, err)
-	mgr := NewManagerWithDriver(driver, true)
+	mgr := NewManagerWithDriver(driver, true, false)
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(8)
 

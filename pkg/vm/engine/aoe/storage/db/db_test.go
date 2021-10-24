@@ -30,7 +30,6 @@ import (
 	"matrixone/pkg/vm/engine/aoe/storage/mock"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"matrixone/pkg/vm/engine/aoe/storage/testutils/config"
-	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -49,12 +48,10 @@ func initDBTest() {
 	os.RemoveAll(TEST_DB_DIR)
 }
 
-func initDB(ft storage.FactoryType, noopWal bool) *DB {
+func initDB(ft storage.FactoryType, localIndex bool) *DB {
 	rand.Seed(time.Now().UnixNano())
 	opts := new(storage.Options)
-	if noopWal {
-		opts.Wal = shard.NewNoopWal()
-	}
+	opts.LocalWalIndex = localIndex
 	config.NewCustomizedMetaOptions(TEST_DB_DIR, config.CST_Customize, uint64(2000), uint64(2), opts)
 	opts.FactoryType = ft
 	inst, _ := Open(TEST_DB_DIR, opts)
@@ -114,7 +111,6 @@ func TestDropEmptyTable(t *testing.T) {
 	assert.Nil(t, err)
 	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name, OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)
-	time.Sleep(time.Duration(200) * time.Millisecond)
 }
 
 func TestDropTable(t *testing.T) {
@@ -640,12 +636,18 @@ func TestDropTable2(t *testing.T) {
 		doneCh <- expectErr
 	}
 	inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name, OnFinishCB: dropCB, OpIndex: common.NextGlobalSeqNum()})
-	time.Sleep(time.Duration(50) * time.Millisecond)
+
 	if inst.Opts.FactoryType == storage.NORMAL_FT {
+		testutils.WaitExpect(50, func() bool {
+			return int(blkCnt*insertCnt*2) == inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount()
+		})
 		assert.Equal(t, int(blkCnt*insertCnt*2), inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	}
 	ss.Close()
-	time.Sleep(time.Duration(50) * time.Millisecond)
+
+	testutils.WaitExpect(50, func() bool {
+		return inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount() == 0
+	})
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())

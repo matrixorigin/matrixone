@@ -935,7 +935,7 @@ func TestReplay12(t *testing.T) {
 	rel.Close()
 	inst.Close()
 
-	inst = initDB(storage.NORMAL_FT, true)
+	inst = initDB(storage.NORMAL_FT, false)
 	// inst = initDB(engine.NORMAL_FT)
 
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))

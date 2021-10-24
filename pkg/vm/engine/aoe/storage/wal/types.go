@@ -30,4 +30,5 @@ type Wal interface {
 type ShardWal interface {
 	Wal
 	GetShardSafeId(uint64) (uint64, error)
+	GetShardCurrSeqNum(uint64) uint64
 }

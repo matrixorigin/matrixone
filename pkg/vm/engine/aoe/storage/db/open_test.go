@@ -64,7 +64,7 @@ func TestDBReplay(t *testing.T) {
 	initDBTest()
 	// ft := storage.MUTABLE_FT
 	ft := storage.NORMAL_FT
-	inst := initDB(ft, true)
+	inst := initDB(ft, false)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl", OpIndex: uint64(1)})
 	assert.Nil(t, err)
@@ -116,7 +116,7 @@ func TestDBReplay(t *testing.T) {
 	assert.Nil(t, err)
 	f.Close()
 
-	inst = initDB(ft, true)
+	inst = initDB(ft, false)
 
 	os.Stat(invalidFileName)
 	_, err = os.Stat(invalidFileName)

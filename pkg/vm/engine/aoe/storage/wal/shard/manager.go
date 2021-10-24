@@ -47,9 +47,8 @@ func (noop *noopWal) Log(wal.Payload) (*wal.Entry, error) {
 	entry.SetDone()
 	return entry, nil
 }
-func (noop *noopWal) GetShardSafeId(shardId uint64) (id uint64, err error) {
-	return
-}
+func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64)        { return }
+func (noop *noopWal) GetShardSafeId(shardId uint64) (id uint64, err error) { return }
 
 type manager struct {
 	sm.ClosedState
@@ -60,15 +59,17 @@ type manager struct {
 	own     bool
 	safemu  sync.RWMutex
 	safeids map[uint64]uint64
+	local   bool
 }
 
 func NewManager() *manager {
-	return NewManagerWithDriver(nil, false)
+	return NewManagerWithDriver(nil, false, false)
 }
 
-func NewManagerWithDriver(driver logstore.AwareStore, own bool) *manager {
+func NewManagerWithDriver(driver logstore.AwareStore, own bool, local bool) *manager {
 	mgr := &manager{
 		own:     own,
+		local:   local,
 		driver:  driver,
 		shards:  make(map[uint64]*proxy),
 		safeids: make(map[uint64]uint64),
@@ -106,6 +107,17 @@ func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
 		return nil, err
 	}
 	return entry, nil
+}
+
+func (mgr *manager) GetShardCurrSeqNum(shardId uint64) (id uint64) {
+	s, err := mgr.GetShard(shardId)
+	if err != nil {
+		return
+	}
+	if s.idAlloctor != nil {
+		return s.idAlloctor.Get()
+	}
+	return
 }
 
 func (mgr *manager) GetShardSafeId(shardId uint64) (id uint64, err error) {
@@ -193,9 +205,6 @@ func (mgr *manager) GetSafeIds() SafeIds {
 func (mgr *manager) logEntry(entry *Entry) {
 	index := entry.Payload.(*Index)
 	shard, _ := mgr.getOrAddShard(index.ShardId)
-	if index.Id.Id == uint64(0) {
-		panic("logic error")
-	}
 	shard.LogIndex(index)
 }
 
