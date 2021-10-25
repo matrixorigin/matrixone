@@ -16,6 +16,8 @@ package table
 import (
 	"bytes"
 	"fmt"
+	"runtime"
+
 	gvec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
@@ -27,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
-	"runtime"
 )
 
 type tblock struct {
@@ -58,6 +59,10 @@ func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory
 }
 
 func (blk *tblock) close() {
+	if blk.meta.Segment.Table.IsDeleted() {
+		snip := blk.meta.ConsumeSnippet(true)
+		blk.meta.Segment.Table.Catalog.IndexWal.Checkpoint(snip)
+	}
 	blk.baseBlock.release()
 	blk.node.SetStale()
 	blk.node.Close()
