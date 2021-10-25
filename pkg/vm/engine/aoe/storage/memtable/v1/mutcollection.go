@@ -145,6 +145,7 @@ func (c *mutableCollection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, 
 		return 0, err
 	}
 	c.data.AddRows(n)
+	meta.AppendIndex(index)
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
 	// if uint64(data.Length()) == meta.Segment.Table.Schema.BlockMaxRows {
 	// 	meta.TryUpgrade()

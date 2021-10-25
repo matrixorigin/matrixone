@@ -15,6 +15,11 @@
 package memtable
 
 import (
+	"os"
+	"sync"
+	"testing"
+	"time"
+
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -22,10 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
-	"os"
-	"sync"
-	"testing"
-	"time"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -40,6 +42,8 @@ func TestManager(t *testing.T) {
 	dir := "/tmp/testmanager"
 	os.RemoveAll(dir)
 	opts := config.NewOptions(dir, config.CST_Customize, config.BST_S, config.SST_S)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	manager := NewManager(opts, nil)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
@@ -85,8 +89,11 @@ func TestCollection(t *testing.T) {
 	cols := 2
 	capacity := blockRows * 4 * uint64(cols) * 2 * 2 * 4
 	blockCnt := uint64(4)
-	opts := config.NewCustomizedMetaOptions(WORK_DIR, config.CST_Customize, blockRows, blockCnt)
+	opts := config.NewCustomizedMetaOptions(WORK_DIR, config.CST_Customize, blockRows, blockCnt, nil)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(WORK_DIR)
+	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
+	opts.Wal = shard.NewNoopWal()
 
 	manager := NewManager(opts, nil)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
@@ -124,8 +131,8 @@ func TestCollection(t *testing.T) {
 		go func(id uint64, wg *sync.WaitGroup) {
 			defer wg.Done()
 			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
-			index := &metadata.LogIndex{
-				Id:       metadata.SimpleBatchId(id),
+			index := &shard.Index{
+				Id:       shard.SimpleIndexId(id),
 				Capacity: uint64(insert.Vecs[0].Length()),
 			}
 			err := c0.Append(insert, index)

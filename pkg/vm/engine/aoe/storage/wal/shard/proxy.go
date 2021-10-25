@@ -16,10 +16,13 @@ package shard
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -46,21 +49,23 @@ func newCommitEntry(id *IndexId) *commitEntry {
 }
 
 type proxy struct {
-	logmu     sync.RWMutex
-	alumu     sync.RWMutex
-	id        uint64
-	mgr       *manager
-	mask      *roaring64.Bitmap
-	stopmask  *roaring64.Bitmap
-	snippets  []*snippets
-	snipIdx   map[uint64]int
-	lastIndex uint64
-	safeId    uint64
-	indice    map[uint64]*commitEntry
+	logmu      sync.RWMutex
+	alumu      sync.RWMutex
+	id         uint64
+	mgr        *manager
+	mask       *roaring64.Bitmap
+	stopmask   *roaring64.Bitmap
+	snippets   []*snippets
+	snipIdx    map[uint64]int
+	lastIndex  uint64
+	safeId     uint64
+	lastSafeId uint64
+	indice     map[uint64]*commitEntry
+	idAlloctor *common.IdAlloctor
 }
 
 func newProxy(id uint64, mgr *manager) *proxy {
-	return &proxy{
+	p := &proxy{
 		id:       id,
 		mgr:      mgr,
 		mask:     roaring64.New(),
@@ -69,6 +74,10 @@ func newProxy(id uint64, mgr *manager) *proxy {
 		snippets: make([]*snippets, 0, 10),
 		indice:   make(map[uint64]*commitEntry),
 	}
+	if mgr != nil && mgr.GetRole() == wal.HolderRole {
+		p.idAlloctor = new(common.IdAlloctor)
+	}
+	return p
 }
 
 func (p *proxy) String() string {
@@ -82,7 +91,7 @@ func (p *proxy) GetId() uint64 {
 	return p.id
 }
 
-func (p *proxy) LogIndice(indice ...*LogIndex) {
+func (p *proxy) LogIndice(indice ...*Index) {
 	p.logmu.Lock()
 	for _, index := range indice {
 		p.logIndexLocked(index)
@@ -90,26 +99,43 @@ func (p *proxy) LogIndice(indice ...*LogIndex) {
 	p.logmu.Unlock()
 }
 
-func (p *proxy) logIndexLocked(index *LogIndex) {
+func (p *proxy) logIndexLocked(index *Index) {
 	p.mask.Add(index.Id.Id)
 	if index.Id.Id > p.lastIndex+uint64(1) {
 		p.stopmask.AddRange(p.lastIndex+uint64(1), index.Id.Id)
+	} else if index.Id.Id < p.lastIndex {
+		panic(fmt.Sprintf("logic error: lastIndex-%d, currIndex-%d", p.lastIndex, index.Id.Id))
 	}
 	p.lastIndex = index.Id.Id
 }
 
-func (p *proxy) LogIndex(index *LogIndex) {
+func (p *proxy) InitSafeId(id uint64) {
+	if p.idAlloctor != nil {
+		p.idAlloctor.SetStart(id)
+	}
+	p.SetSafeId(id)
+	p.lastIndex = id
+}
+
+func (p *proxy) LogIndex(index *Index) {
+	if p.idAlloctor != nil {
+		index.Id.Id = p.idAlloctor.Alloc()
+	}
+	if index.Id.Id == uint64(0) {
+		panic("logic error")
+	}
 	p.logmu.Lock()
 	p.logIndexLocked(index)
 	p.logmu.Unlock()
 }
 
-func (p *proxy) AppendIndex(index *LogIndex) {
+func (p *proxy) AppendIndex(index *Index) {
 	snip := NewSimpleSnippet(index)
 	p.AppendSnippet(snip)
 }
 
 func (p *proxy) AppendSnippet(snip *Snippet) {
+	// logutil.Infof("append snippet: %s", snip.String())
 	p.alumu.Lock()
 	defer p.alumu.Unlock()
 	pos, ok := p.snipIdx[snip.GetId()]
@@ -175,6 +201,8 @@ func (p *proxy) Checkpoint() {
 	}
 	p.logmu.Lock()
 	p.mask.Xor(mask)
+	// logutil.Infof("p.mask is %s", p.mask.String())
+	// logutil.Infof("p.stopmask is %s", p.stopmask.String())
 	maskNum := p.mask.GetCardinality()
 	stopNum := p.stopmask.GetCardinality()
 	if maskNum == 0 {
@@ -191,14 +219,40 @@ func (p *proxy) Checkpoint() {
 				break
 			}
 		}
-		p.stopmask.RemoveRange(uint64(0), start)
+		p.stopmask.RemoveRange(uint64(0), p.GetSafeId())
 	} else {
 		it := p.mask.Iterator()
 		pos := it.Next()
-		p.SetSafeId(pos - 1)
+		if pos == 0 {
+			p.SetSafeId(pos)
+		} else {
+			p.SetSafeId(pos - 1)
+		}
 	}
 	p.logmu.Unlock()
-	logutil.Infof("Shard-%d: pending-%d, safeid-%d %s", p.id, maskNum, p.GetSafeId(), time.Since(now))
+	id := p.GetSafeId()
+	if p.mgr != nil && p.mgr.driver != nil && id != p.lastSafeId {
+		logutil.Infof("Shard-%d | pending-%d, safeid-%d, lastsafeid-%d | %s", p.id, maskNum, id, p.lastSafeId, time.Since(now))
+		if id < p.lastSafeId {
+			panic("logic error")
+		}
+		safeId := SafeId{
+			Id:      id,
+			ShardId: p.id,
+		}
+		logEntry := SafeIdToEntry(safeId)
+		if err := p.mgr.driver.AppendEntry(logEntry); err != nil {
+			panic(err)
+		}
+		logEntry.WaitDone()
+		logEntry.Free()
+		p.lastSafeId = id
+	} else {
+		logutil.Infof("Shard-%d: pending-%d, safeid-%d %s", p.id, maskNum, id, time.Since(now))
+	}
+	if p.mgr != nil {
+		p.mgr.UpdateSafeId(p.id, id)
+	}
 }
 
 func (p *proxy) SetSafeId(id uint64) {

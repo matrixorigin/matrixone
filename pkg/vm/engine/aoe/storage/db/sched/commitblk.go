@@ -36,6 +36,12 @@ func NewCommitBlkEvent(ctx *Context, meta *metadata.Block) *commitBlkEvent {
 func (e *commitBlkEvent) Execute() error {
 	if e.Meta != nil {
 		e.Meta.SimpleUpgrade(nil)
+		wal := e.Meta.Segment.Table.Catalog.IndexWal
+		if wal != nil {
+			snip := e.Meta.ConsumeSnippet(true)
+			// logutil.Infof("commit snip: %s", snip.String())
+			wal.Checkpoint(snip)
+		}
 	}
 	return nil
 }

@@ -149,9 +149,15 @@ func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err err
 			}
 			if replayIndex.Id.Offset > index.Id.Offset {
 				logutil.Infof("Index %s has been applied", index.String())
+				c.opts.Wal.Checkpoint(index)
 				return nil
 			}
 			offset = replayIndex.Count + replayIndex.Start
+			if offset > 0 {
+				ckpId := *index
+				ckpId.Count = offset
+				c.opts.Wal.Checkpoint(&ckpId)
+			}
 			index.Start = offset
 		}
 		c.tableData.ResetReplayIndex()

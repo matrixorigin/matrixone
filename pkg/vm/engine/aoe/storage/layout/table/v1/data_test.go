@@ -15,14 +15,16 @@
 package table
 
 import (
+	"os"
+	"sync"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"sync"
-	"testing"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -42,9 +44,11 @@ func TestBase1(t *testing.T) {
 	}
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(WORK_DIR)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(WORK_DIR)
+	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	schema := metadata.MockSchema(2)
-	createIdx := metadata.LogIndex{Id: metadata.SimpleBatchId(common.NextGlobalSeqNum())}
+	createIdx := shard.Index{Id: shard.SimpleIndexId(common.NextGlobalSeqNum())}
 	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, segCnt*blkCnt, &createIdx)
 
 	fsMgr := ldio.NewManager(WORK_DIR, true)
@@ -171,5 +175,5 @@ func TestBase1(t *testing.T) {
 	t.Log(tblData.Size(attr))
 	index, ok := tblData.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, tableMeta.GetFirstCommit().ExternalIndex.Id.Id, index)
+	assert.Equal(t, tableMeta.GetFirstCommit().LogIndex.Id.Id, index)
 }

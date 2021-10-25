@@ -14,8 +14,14 @@
 package memtable
 
 import (
+	"os"
+	"sync"
+	"testing"
+	"time"
+
 	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -27,10 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
-	"os"
-	"sync"
-	"testing"
-	"time"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -41,7 +44,10 @@ func TestMutCollection(t *testing.T) {
 	colcnt := 4
 	blockRows, blockCnt := uint64(64), uint64(4)
 
-	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt)
+	opts := config.NewCustomizedMetaOptions(dir, config.CST_Customize, blockRows, blockCnt, nil)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
+	opts.Wal = shard.NewNoopWal()
 
 	capacity := blockRows * 4 * uint64(colcnt) * 1 * 1 * 2
 	// capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
@@ -74,7 +80,6 @@ func TestMutCollection(t *testing.T) {
 	batchSize := uint64(4)
 	step := expectBlks / batchSize
 	var wg sync.WaitGroup
-	seq := uint64(0)
 	for expectBlks > 0 {
 		thisStep := step
 		if expectBlks < step {
@@ -84,18 +89,16 @@ func TestMutCollection(t *testing.T) {
 			expectBlks -= step
 		}
 		wg.Add(1)
-		logId := seq
-		seq++
 		go func(id uint64, wgp *sync.WaitGroup) {
 			defer wgp.Done()
 			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
-			index := &metadata.LogIndex{
-				Id:       metadata.SimpleBatchId(id),
+			index := &shard.Index{
+				Id:       shard.SimpleIndexId(id),
 				Capacity: uint64(insert.Vecs[0].Length()),
 			}
 			err := c0.Append(insert, index)
 			assert.Nil(t, err)
-		}(logId, &wg)
+		}(common.NextGlobalSeqNum(), &wg)
 	}
 	wg.Wait()
 	t.Log(mgr.String())
@@ -112,7 +115,8 @@ func TestMutCollection(t *testing.T) {
 		Waitable: true,
 		Opts:     opts,
 	}
-	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{TableName: tbl.Schema.Name}, manager, tables)
+	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{TableName: tbl.Schema.Name, OpIndex: common.NextGlobalSeqNum()},
+		manager, tables)
 	opts.Scheduler.Schedule(dropBlkE)
 	err = dropBlkE.WaitDone()
 	assert.Nil(t, err)

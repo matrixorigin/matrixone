@@ -16,6 +16,16 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	_ "net/http/pprof"
+	"os"
+	"runtime"
+	"runtime/pprof"
+	"strconv"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
@@ -27,18 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"net/http"
-	_ "net/http/pprof"
-	"os"
-	"runtime"
-	"runtime/pprof"
-	"strconv"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 
@@ -84,6 +86,7 @@ func init() {
 		Interval: time.Duration(1) * time.Second,
 	}
 	opts.Meta.Conf = mdCfg
+	opts.WalRole = wal.HolderRole
 	info := adaptor.MockTableInfo(colCnt)
 	table = info
 }

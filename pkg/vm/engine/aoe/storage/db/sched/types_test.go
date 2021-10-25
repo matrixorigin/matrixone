@@ -42,6 +42,9 @@ func TestUpgradeBlk(t *testing.T) {
 	}
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(dir)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
+
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * row_count * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)
@@ -112,6 +115,9 @@ func TestUpgradeSeg(t *testing.T) {
 	}
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(dir)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
+
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * row_count * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)

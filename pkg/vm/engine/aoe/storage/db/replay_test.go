@@ -14,6 +14,12 @@
 package db
 
 import (
+	"os"
+	"sort"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -21,11 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"os"
-	"sort"
-	"sync"
-	"testing"
-	"time"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -33,7 +36,7 @@ import (
 func TestReplay1(t *testing.T) {
 	initDBTest()
 	// inst := initDB(storage.NORMAL_FT)
-	inst := initDB(storage.MUTABLE_FT)
+	inst := initDB(storage.MUTABLE_FT, wal.BrokerRole)
 	tInfo := adaptor.MockTableInfo(2)
 	name := "mockcon"
 	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: common.NextGlobalSeqNum()})
@@ -83,7 +86,7 @@ func TestReplay1(t *testing.T) {
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
 
-	inst = initDB(storage.MUTABLE_FT)
+	inst = initDB(storage.MUTABLE_FT, wal.BrokerRole)
 	// inst = initDB(storage.NORMAL_FT)
 
 	t.Log(inst.Store.Catalog.PString(metadata.PPL1))
@@ -209,7 +212,7 @@ func TestReplay2(t *testing.T) {
 	catalog.Close()
 }
 
-func buildOpts(dir string) *storage.Options {
+func buildOpts(dir string, createCatalog bool) *storage.Options {
 	blkRowCount, segBlkCount := uint64(16), uint64(4)
 	cfg := &storage.MetaCfg{
 		BlockMaxRows:     blkRowCount,
@@ -218,6 +221,14 @@ func buildOpts(dir string) *storage.Options {
 	opts := new(storage.Options)
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(dir)
+	if createCatalog {
+		opts.Meta.Catalog, _ = metadata.OpenCatalog(&opts.Mu, &metadata.CatalogCfg{
+			Dir:              dir,
+			BlockMaxRows:     opts.Meta.Conf.BlockMaxRows,
+			SegmentMaxBlocks: opts.Meta.Conf.SegmentMaxBlocks,
+		})
+		opts.Meta.Catalog.Start()
+	}
 	return opts
 }
 
@@ -225,7 +236,7 @@ func TestReplay3(t *testing.T) {
 	dir := "/tmp/testreplay3"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -267,7 +278,7 @@ func TestReplay4(t *testing.T) {
 	dir := "/tmp/testreplay4"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	totalBlks := opts.Meta.Catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
@@ -319,7 +330,7 @@ func TestReplay5(t *testing.T) {
 	dir := "/tmp/testreplay5"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -386,7 +397,7 @@ func TestReplay6(t *testing.T) {
 	dir := "/tmp/testreplay6"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -458,7 +469,7 @@ func TestReplay7(t *testing.T) {
 	dir := "/tmp/testreplay7"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -529,7 +540,7 @@ func TestReplay8(t *testing.T) {
 	dir := "/tmp/testreplay8"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
@@ -602,7 +613,7 @@ func TestReplay9(t *testing.T) {
 	dir := "/tmp/testreplay9"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
@@ -721,7 +732,7 @@ func TestReplay10(t *testing.T) {
 	dir := "/tmp/testreplay10"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
@@ -790,7 +801,7 @@ func TestReplay11(t *testing.T) {
 	dir := "/tmp/testreplay11"
 	os.RemoveAll(dir)
 	initDataAndMetaDir(dir)
-	opts := buildOpts(dir)
+	opts := buildOpts(dir, true)
 	catalog := opts.Meta.Catalog
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
@@ -859,7 +870,7 @@ func TestReplay11(t *testing.T) {
 
 func TestReplay12(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT)
+	inst := initDB(storage.NORMAL_FT, wal.BrokerRole)
 	//inst := initDB(storage.MUTABLE_FT)
 	tInfo := adaptor.MockTableInfo(2)
 	name := "mockcon"
@@ -916,17 +927,17 @@ func TestReplay12(t *testing.T) {
 
 	insertFn2()
 	assert.Equal(t, irows*5, uint64(rel.Rows()))
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(40) * time.Millisecond)
-	}
+	t.Log(rel.Rows())
+	testutils.WaitExpect(200, func() bool {
+		safeId, _ := inst.Wal.GetShardSafeId(rel.Meta.GetCommit().LogIndex.ShardId)
+		return common.GetGlobalSeqNum()-1 == safeId
+	})
+	time.Sleep(time.Duration(20) * time.Millisecond)
 
 	rel.Close()
 	inst.Close()
 
-	time.Sleep(time.Duration(20) * time.Millisecond)
-
-	inst = initDB(storage.NORMAL_FT)
+	inst = initDB(storage.NORMAL_FT, wal.BrokerRole)
 	// inst = initDB(engine.NORMAL_FT)
 
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
@@ -934,9 +945,9 @@ func TestReplay12(t *testing.T) {
 	assert.Equal(t, common.GetGlobalSeqNum()-1, segmentedIdx)
 
 	rel, err = inst.Relation(meta.Schema.Name)
+	t.Log(rel.Rows())
 	assert.Nil(t, err)
 	assert.Equal(t, irows*4, uint64(rel.Rows()))
-	t.Log(rel.Rows())
 
 	insertFn3 := func() {
 		err = rel.Write(dbi.AppendCtx{

@@ -17,12 +17,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
-	"sort"
-	"sync"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 
 	"github.com/google/btree"
 )
@@ -97,6 +99,7 @@ type Catalog struct {
 	Sequence        `json:"-"`
 	pipeline        *commitPipeline       `json:"-"`
 	Store           logstore.AwareStore   `json:"-"`
+	IndexWal        wal.ShardWal          `json:"-"`
 	Cfg             *CatalogCfg           `json:"-"`
 	NameNodes       map[string]*tableNode `json:"-"`
 	NameIndex       *btree.BTree          `json:"-"`
@@ -109,6 +112,29 @@ type Catalog struct {
 func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
 	replayer := newCatalogReplayer()
 	return replayer.RebuildCatalog(mu, cfg)
+}
+
+func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) (*Catalog, error) {
+	replayer := newCatalogReplayer()
+	return replayer.RebuildCatalogWithDriver(mu, cfg, store, indexWal)
+}
+
+func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
+	catalog := &Catalog{
+		RWMutex:   mu,
+		Cfg:       cfg,
+		TableSet:  make(map[uint64]*Table),
+		NameNodes: make(map[string]*tableNode),
+		NameIndex: btree.New(2),
+		Store:     store,
+		IndexWal:  indexWal,
+	}
+	wg := new(sync.WaitGroup)
+	rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
+	ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
+	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
+	catalog.pipeline = newCommitPipeline(catalog)
+	return catalog
 }
 
 func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
@@ -275,7 +301,7 @@ func (catalog *Catalog) HardDeleteTable(id uint64) error {
 	return table.HardDelete()
 }
 
-func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *ExternalIndex) error {
+func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *LogIndex) error {
 	ctx := newDropTableCtx(name, exIndex)
 	err := catalog.prepareDropTable(ctx)
 	if err != nil {
@@ -302,7 +328,7 @@ func (catalog *Catalog) prepareDropTable(ctx *dropTableCtx) error {
 	return nil
 }
 
-func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *ExternalIndex) (*Table, error) {
+func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *LogIndex) (*Table, error) {
 	if !schema.Valid() {
 		return nil, InvalidSchemaErr
 	}
@@ -590,6 +616,7 @@ func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
 	seg := tbl.SegmentSet[segpos]
 	blkpos := seg.IdIndex[entry.Id]
 	blk := seg.BlockSet[blkpos]
+	blk.IndiceMemo = nil
 	blk.onNewCommit(entry.CommitInfo)
 	return nil
 }

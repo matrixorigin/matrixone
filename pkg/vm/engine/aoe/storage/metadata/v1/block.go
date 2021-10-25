@@ -17,11 +17,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"runtime"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 var (
@@ -52,26 +54,58 @@ func (e *blockLogEntry) ToEntry() *Block {
 	return entry
 }
 
+type IndiceMemo struct {
+	mu      *sync.Mutex
+	snippet *shard.Snippet
+}
+
+func (memo *IndiceMemo) Append(index *LogIndex) {
+	if memo == nil {
+		return
+	}
+	memo.mu.Lock()
+	memo.snippet.Append(index)
+	memo.mu.Unlock()
+}
+
+func (memo *IndiceMemo) Fetch(block *Block) *shard.Snippet {
+	if memo == nil {
+		return nil
+	}
+	memo.mu.Lock()
+	defer memo.mu.Unlock()
+	snippet := memo.snippet
+	memo.snippet = block.CreateSnippet()
+	return snippet
+}
+
 type Block struct {
 	BaseEntry
-	Segment     *Segment `json:"-"`
+	Segment     *Segment    `json:"-"`
+	IndiceMemo  *IndiceMemo `json:"-"`
 	Count       uint64
 	SegmentedId uint64
 }
 
-func newBlockEntry(segment *Segment, tranId uint64, exIndex *ExternalIndex) *Block {
+func newBlockEntry(segment *Segment, tranId uint64, exIndex *LogIndex) *Block {
 	e := &Block{
 		Segment: segment,
 		BaseEntry: BaseEntry{
 			Id: segment.Table.Catalog.NextBlockId(),
 			CommitInfo: &CommitInfo{
-				CommitId:      tranId,
-				TranId:        tranId,
-				SSLLNode:      *common.NewSSLLNode(),
-				Op:            OpCreate,
-				ExternalIndex: exIndex,
+				CommitId: tranId,
+				TranId:   tranId,
+				SSLLNode: *common.NewSSLLNode(),
+				Op:       OpCreate,
+				LogIndex: exIndex,
 			},
 		},
+	}
+	snippet := e.CreateSnippet()
+	if snippet != nil {
+		e.IndiceMemo = new(IndiceMemo)
+		e.IndiceMemo.snippet = snippet
+		e.IndiceMemo.mu = new(sync.Mutex)
 	}
 	return e
 }
@@ -81,7 +115,35 @@ func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
 		Segment:   segment,
 		BaseEntry: *base,
 	}
+	snippet := e.CreateSnippet()
+	if snippet != nil {
+		e.IndiceMemo = new(IndiceMemo)
+		e.IndiceMemo.snippet = snippet
+		e.IndiceMemo.mu = new(sync.Mutex)
+	}
 	return e
+}
+
+func (e *Block) CreateSnippet() *shard.Snippet {
+	tableLogIndex := e.Segment.Table.GetCommit().LogIndex
+	if tableLogIndex == nil {
+		return nil
+	}
+	return shard.NewSnippet(tableLogIndex.ShardId, e.Id, uint32(0))
+}
+
+func (e *Block) AppendIndex(index *LogIndex) {
+	e.IndiceMemo.Append(index)
+}
+
+func (e *Block) ConsumeSnippet(reset bool) *shard.Snippet {
+	snippet := e.IndiceMemo.Fetch(e)
+	if reset {
+		e.Lock()
+		defer e.Unlock()
+		e.IndiceMemo = nil
+	}
+	return snippet
 }
 
 func (e *Block) View() (view *Block) {
@@ -200,13 +262,13 @@ func (e *Block) CommittedView(id uint64) *Block {
 }
 
 // Safe
-func (e *Block) SimpleUpgrade(exIndice []*ExternalIndex) error {
+func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 	ctx := newUpgradeBlockCtx(e, exIndice)
 	return e.Segment.Table.Catalog.onCommitRequest(ctx)
 	// return e.Upgrade(e.Segment.Table.Catalog.NextUncommitId(), exIndice, true)
 }
 
-// func (e *Block) Upgrade(tranId uint64, exIndice []*ExternalIndex, autoCommit bool) error {
+// func (e *Block) Upgrade(tranId uint64, exIndice []*LogIndex, autoCommit bool) error {
 func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 	if e.GetCount() != e.Segment.Table.Schema.BlockMaxRows {
 		return nil, UpgradeInfullBlockErr
@@ -227,16 +289,16 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 		Op:       newOp,
 	}
 	if ctx.exIndice != nil {
-		cInfo.ExternalIndex = ctx.exIndice[0]
+		cInfo.LogIndex = ctx.exIndice[0]
 		if len(ctx.exIndice) > 1 {
 			cInfo.PrevIndex = ctx.exIndice[1]
 		}
 	} else {
-		cInfo.ExternalIndex = e.CommitInfo.ExternalIndex
+		cInfo.LogIndex = e.CommitInfo.LogIndex
 		id, ok := e.BaseEntry.GetAppliedIndex()
 		if ok {
-			cInfo.AppliedIndex = &ExternalIndex{
-				Id: SimpleBatchId(id),
+			cInfo.AppliedIndex = &LogIndex{
+				Id: shard.SimpleIndexId(id),
 			}
 		}
 	}

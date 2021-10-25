@@ -43,6 +43,8 @@ func TestSegment(t *testing.T) {
 	}
 	opts.Meta.Conf = cfg
 	opts.FillDefaults(dir)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
 	typeSize := uint64(schema.ColDefs[0].Type.Size)
 	capacity := typeSize * rowCount * 10000
 	bufMgr := bmgr.MockBufMgr(capacity)

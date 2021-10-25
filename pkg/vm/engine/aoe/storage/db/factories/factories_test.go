@@ -37,7 +37,9 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	rowCount, blkCount := uint64(30), uint64(4)
 	dir := "/tmp/mublknodefactory"
 	os.RemoveAll(dir)
-	opts := config.NewCustomizedMetaOptions(dir, config.CST_None, rowCount, blkCount)
+	opts := config.NewCustomizedMetaOptions(dir, config.CST_None, rowCount, blkCount, nil)
+	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
+	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)

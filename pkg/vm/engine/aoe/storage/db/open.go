@@ -15,17 +15,32 @@
 package db
 
 import (
+	"sync"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	mt "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
-	"sync/atomic"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
+
+func OpenWithWalBroker(dirname string, opts *storage.Options) (db *DB, err error) {
+	if opts.Wal != nil && opts.Wal.GetRole() != wal.BrokerRole {
+		return nil, ErrUnexpectedWalRole
+	}
+	opts.WalRole = wal.BrokerRole
+	return Open(dirname, opts)
+}
 
 func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	// opts.FactoryType = e.MUTABLE_FT
@@ -73,11 +88,28 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	db.Store.DataTables = table.NewTables(&opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
 	db.Store.DataTables.MutFactory = factory
 
+	store, err := logstore.NewBatchStore(common.MakeMetaDir(dirname), "store", nil)
+	if err != nil {
+		return
+	}
+	if db.Opts.Wal == nil {
+		db.Opts.Wal = shard.NewManagerWithDriver(store, false, db.Opts.WalRole)
+	}
+	db.Wal = db.Opts.Wal
+
+	catalogCfg := metadata.CatalogCfg{
+		Dir:              dirname,
+		BlockMaxRows:     opts.Meta.Conf.BlockMaxRows,
+		SegmentMaxBlocks: opts.Meta.Conf.SegmentMaxBlocks,
+	}
+	if opts.Meta.Catalog, err = metadata.OpenCatalogWithDriver(new(sync.RWMutex), &catalogCfg, store, db.Wal); err != nil {
+		return
+	}
 	db.Store.Catalog = opts.Meta.Catalog
+	db.Store.Catalog.Start()
+
 	db.Opts.Scheduler = dbsched.NewScheduler(opts, db.Store.DataTables)
 	db.Scheduler = db.Opts.Scheduler
-
-	db.Wal = db.Opts.Wal
 
 	replayHandle := NewReplayHandle(dirname, opts.Meta.Catalog, db.Store.DataTables, nil)
 	if err = replayHandle.Replay(); err != nil {

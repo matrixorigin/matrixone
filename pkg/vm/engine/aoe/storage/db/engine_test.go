@@ -17,19 +17,21 @@ package db
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/panjf2000/ants/v2"
 
@@ -38,9 +40,9 @@ import (
 
 func TestEngine(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT)
+	inst := initDB(storage.NORMAL_FT, wal.HolderRole)
 	tableInfo := adaptor.MockTableInfo(2)
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon"})
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)
 	tblMeta := inst.Store.Catalog.SimpleGetTable(tid)
 	assert.NotNil(t, tblMeta)
@@ -68,7 +70,10 @@ func TestEngine(t *testing.T) {
 		f := func(idx int) func() {
 			return func() {
 				tInfo := *tableInfo
-				_, err := inst.CreateTable(&tInfo, dbi.TableOpCtx{TableName: fmt.Sprintf("%dxxxxxx%d", idx, idx)})
+				_, err := inst.CreateTable(&tInfo, dbi.TableOpCtx{TableName: fmt.Sprintf("%dxxxxxx%d", idx, idx),
+					OpIndex: common.NextGlobalSeqNum(),
+					ShardId: common.NextGlobalSeqNum(),
+				})
 				assert.Nil(t, err)
 				twg.Done()
 			}
@@ -168,7 +173,7 @@ func TestEngine(t *testing.T) {
 			req := dbi.AppendCtx{
 				TableName: tableInfo.Name,
 				Data:      baseCk,
-				OpIndex:   uint64(i),
+				OpIndex:   common.NextGlobalSeqNum(),
 				OpSize:    1,
 			}
 			insertCh <- req
@@ -218,7 +223,7 @@ func TestEngine(t *testing.T) {
 
 func TestLogIndex(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT)
+	inst := initDB(storage.NORMAL_FT, wal.HolderRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)
@@ -241,14 +246,13 @@ func TestLogIndex(t *testing.T) {
 		})
 		assert.Nil(t, err)
 	}
-	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(1000) * time.Millisecond)
-	} else {
-		time.Sleep(time.Duration(300) * time.Millisecond)
-	}
 
 	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
 	assert.Nil(t, err)
+	testutils.WaitExpect(1000, func() bool {
+		_, ok := tbl.GetSegmentedIndex()
+		return ok
+	})
 	logIndex, ok := tbl.GetSegmentedIndex()
 	assert.True(t, ok)
 	// _, ok = tblMeta.SegmentSet[len(tblMeta.SegmentSet)-1].BlockSet[1].CommitInfo.GetAppliedIndex()
@@ -257,14 +261,16 @@ func TestLogIndex(t *testing.T) {
 	assert.True(t, ok)
 	// assert.Equal(t, expectIdx, logIndex)
 
-	dropLogIndex := common.NextGlobalSeqNum()
-	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: dropLogIndex})
+	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name})
 	assert.Nil(t, err)
-	time.Sleep(time.Duration(50) * time.Millisecond)
+	testutils.WaitExpect(20, func() bool {
+		id, _ := tbl.GetSegmentedIndex()
+		return inst.Wal.GetShardCurrSeqNum(uint64(0)) == id
+	})
 	// tbl, err = inst.Store.DataTables.WeakRefTable(tid)
 	logIndex, ok = tbl.GetSegmentedIndex()
 	assert.True(t, ok)
-	assert.Equal(t, dropLogIndex, logIndex)
+	assert.Equal(t, inst.Wal.GetShardCurrSeqNum(uint64(0)), logIndex)
 
 	inst.Close()
 }

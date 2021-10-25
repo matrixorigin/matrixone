@@ -16,13 +16,16 @@ package shard
 
 import (
 	"math/rand"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -39,7 +42,7 @@ func nextMockId() uint64 {
 }
 
 type mockLogBatch struct {
-	indice []*LogIndex
+	indice []*Index
 }
 
 type mockProducer struct {
@@ -53,10 +56,10 @@ func (mp *mockProducer) nextLogBatch() *mockLogBatch {
 	logSize := logSizes[int(id)%len(logSizes)]
 	logCap := logCaps[int(id)%len(logCaps)]
 	b := &mockLogBatch{
-		indice: make([]*LogIndex, logSize),
+		indice: make([]*Index, logSize),
 	}
 	for i := 0; i < logSize; i++ {
-		idx := &LogIndex{
+		idx := &Index{
 			Id: IndexId{
 				Id:     mp.id,
 				Offset: uint32(i),
@@ -82,7 +85,7 @@ func newMockConsumer(shardId uint64) *mockConsumer {
 	return c
 }
 
-func (mc *mockConsumer) consume(index *LogIndex) {
+func (mc *mockConsumer) consume(index *Index) {
 	index.Count = index.Capacity
 	mc.snippet.Append(index)
 }
@@ -189,7 +192,11 @@ func TestShardProxy(t *testing.T) {
 }
 
 func TestShardManager(t *testing.T) {
-	mgr := NewManager()
+	dir := "/tmp/testshardmanager"
+	os.RemoveAll(dir)
+	driver, err := logstore.NewBatchStore(dir, "wal", nil)
+	assert.Nil(t, err)
+	mgr := NewManagerWithDriver(driver, true, wal.BrokerRole)
 	var wg sync.WaitGroup
 	pool, _ := ants.NewPool(8)
 
@@ -232,11 +239,11 @@ func TestProxy2(t *testing.T) {
 	if invariants.RaceEnabled {
 		waitTime *= 10
 	}
-	mgr := NewManager()
+	mgr := NewManager(wal.BrokerRole)
 	defer mgr.Close()
-	var indice []*LogIndex
+	var indice []*Index
 	for i := 1; i < 20; i += 4 {
-		index := &LogIndex{
+		index := &Index{
 			Id: IndexId{
 				Id:   uint64(i),
 				Size: uint32(1),
@@ -274,16 +281,16 @@ func TestProxy3(t *testing.T) {
 	if invariants.RaceEnabled {
 		waitTime *= 5
 	}
-	mgr := NewManager()
+	mgr := NewManager(wal.BrokerRole)
 	defer mgr.Close()
-	var indice []*LogIndex
-	var lastIndex *LogIndex
+	var indice []*Index
+	var lastIndex *Index
 	rand.Seed(time.Now().UnixNano())
 	produce := func() {
 		cnt := 5000
 		j := 0
 		for i := 1; j < cnt; i += rand.Intn(10) + 1 {
-			index := &LogIndex{
+			index := &Index{
 				Id: IndexId{
 					Id:   uint64(i),
 					Size: uint32(1),

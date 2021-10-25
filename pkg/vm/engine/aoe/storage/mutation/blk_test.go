@@ -14,6 +14,10 @@
 package mutation
 
 import (
+	"os"
+	"sync"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -26,9 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
-	"os"
-	"sync"
-	"testing"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -37,11 +39,11 @@ func TestMutableBlockNode(t *testing.T) {
 	dir := "/tmp/mutableblk"
 	os.RemoveAll(dir)
 	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
-	opts.Meta.Catalog.Close()
 	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(30), uint64(4)
 	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
 	opts.Meta.Catalog = catalog
+	opts.Wal = shard.NewNoopWal()
 	defer catalog.Close()
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)

@@ -16,6 +16,12 @@ package db
 
 import (
 	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -23,11 +29,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"os"
-	"path"
-	"path/filepath"
-	"testing"
-	"time"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -63,9 +66,9 @@ func TestDBReplay(t *testing.T) {
 	initDBTest()
 	// ft := storage.MUTABLE_FT
 	ft := storage.NORMAL_FT
-	inst := initDB(ft)
+	inst := initDB(ft, wal.BrokerRole)
 	tableInfo := adaptor.MockTableInfo(2)
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl"})
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl", OpIndex: uint64(1)})
 	assert.Nil(t, err)
 	tblMeta := inst.Opts.Meta.Catalog.SimpleGetTable(tid)
 	assert.NotNil(t, tblMeta)
@@ -76,7 +79,7 @@ func TestDBReplay(t *testing.T) {
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(dbi.AppendCtx{
-			OpIndex:   uint64(i + 1),
+			OpIndex:   uint64(i + 2),
 			OpOffset:  0,
 			OpSize:    1,
 			Data:      ck,
@@ -94,10 +97,14 @@ func TestDBReplay(t *testing.T) {
 	tbl, err := inst.Store.DataTables.WeakRefTable(tblMeta.Id)
 	assert.Nil(t, err)
 
+	testutils.WaitExpect(200, func() bool {
+		id, _ := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
+		return id == uint64(insertCnt)
+	})
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
-	assert.Equal(t, uint64(insertCnt)-1, segmentedIdx)
+	assert.Equal(t, uint64(insertCnt), segmentedIdx)
 
 	t.Logf("Row count: %d", tbl.GetRowCount())
 	assert.Equal(t, rows*uint64(insertCnt), tbl.GetRowCount())
@@ -111,14 +118,14 @@ func TestDBReplay(t *testing.T) {
 	assert.Nil(t, err)
 	f.Close()
 
-	inst = initDB(ft)
+	inst = initDB(ft, wal.BrokerRole)
 
 	os.Stat(invalidFileName)
 	_, err = os.Stat(invalidFileName)
 	assert.True(t, os.IsNotExist(err))
 
-	t.Log(inst.MTBufMgr.String())
-	t.Log(inst.SSTBufMgr.String())
+	// t.Log(inst.MTBufMgr.String())
+	// t.Log(inst.SSTBufMgr.String())
 
 	replaytblMeta := inst.Opts.Meta.Catalog.SimpleGetTableByName(tableInfo.Name)
 	assert.NotNil(t, replaytblMeta)
@@ -133,8 +140,6 @@ func TestDBReplay(t *testing.T) {
 	assert.Equal(t, tblMeta.Schema.BlockMaxRows, replayIndex.Count)
 	assert.False(t, replayIndex.IsApplied())
 
-	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name})
-	assert.NotNil(t, err)
 	for i := int(segmentedIdx) + 1; i < int(segmentedIdx)+1+insertCnt; i++ {
 		err = inst.Append(dbi.AppendCtx{
 			TableName: tableInfo.Name,
@@ -144,17 +149,30 @@ func TestDBReplay(t *testing.T) {
 		})
 		assert.Nil(t, err)
 	}
+	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name, OpIndex: segmentedIdx + 1 + uint64(insertCnt)})
+	assert.NotNil(t, err)
 
-	time.Sleep(waitTime)
-	if invariants.RaceEnabled {
-		time.Sleep(waitTime)
-	}
-	t.Log(inst.MTBufMgr.String())
-	t.Log(inst.SSTBufMgr.String())
+	// time.Sleep(waitTime)
+	// if invariants.RaceEnabled {
+	// 	time.Sleep(waitTime)
+	// }
+	// t.Log(inst.MTBufMgr.String())
+	// t.Log(inst.SSTBufMgr.String())
+	testutils.WaitExpect(200, func() bool {
+		return 2*rows*uint64(insertCnt)-2*tblMeta.Schema.BlockMaxRows == tbl.GetRowCount()
+		// id, _ := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
+		// return id == uint64(insertCnt)
+	})
 	t.Logf("Row count: %d", tbl.GetRowCount())
 	assert.Equal(t, 2*rows*uint64(insertCnt)-2*tblMeta.Schema.BlockMaxRows, tbl.GetRowCount())
 
 	preSegmentedIdx := segmentedIdx
+
+	testutils.WaitExpect(200, func() bool {
+		id, _ := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
+		return id == preSegmentedIdx+uint64(insertCnt)-1
+	})
+
 	segmentedIdx, err = inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
@@ -181,7 +199,7 @@ func TestMultiInstance(t *testing.T) {
 	info := adaptor.MockTableInfo(2)
 	for _, inst := range insts {
 		info = adaptor.MockTableInfo(2)
-		_, err := inst.CreateTable(info, dbi.TableOpCtx{TableName: info.Name})
+		_, err := inst.CreateTable(info, dbi.TableOpCtx{TableName: info.Name, OpIndex: common.NextGlobalSeqNum()})
 		assert.Nil(t, err)
 	}
 	meta := insts[0].Store.Catalog.SimpleGetTableByName(info.Name)

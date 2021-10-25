@@ -17,10 +17,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
-	"sync"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 type Store = logstore.Store
@@ -46,12 +49,21 @@ type replayCache struct {
 	replayer   *catalogReplayer
 	entries    []*replayEntry
 	checkpoint *catalogLogEntry
+	safeIds    map[uint64]uint64
 }
 
 func newReplayCache(replayer *catalogReplayer) *replayCache {
 	return &replayCache{
 		replayer: replayer,
 		entries:  make([]*replayEntry, 0),
+		safeIds:  make(map[uint64]uint64),
+	}
+}
+
+func (cache *replayCache) OnShardSafeId(id shard.SafeId) {
+	old, ok := cache.safeIds[id.ShardId]
+	if !ok || old < id.Id {
+		cache.safeIds[id.ShardId] = id.Id
 	}
 }
 
@@ -162,6 +174,13 @@ func (cache *replayCache) Apply() error {
 		}
 		cache.replayer.catalog.Store.SetCheckpointId(cache.checkpoint.Range.Right)
 	}
+	indexWal := cache.replayer.catalog.IndexWal
+	if indexWal != nil {
+		for shardId, safeId := range cache.safeIds {
+			logutil.Infof("[AOE]: Replay Shard-%d SafeId-%d", shardId, safeId)
+			indexWal.InitShard(shardId, safeId)
+		}
+	}
 	cache.replayer.catalog.Store.SetSyncedId(cache.replayer.catalog.Sequence.nextCommitId)
 	return nil
 }
@@ -177,6 +196,17 @@ func newCatalogReplayer() *catalogReplayer {
 	replayer := &catalogReplayer{}
 	replayer.cache = newReplayCache(replayer)
 	return replayer
+}
+
+func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg,
+	store logstore.AwareStore, indexWal wal.ShardWal) (*Catalog, error) {
+	replayer.catalog = NewCatalogWithDriver(mu, cfg, store, indexWal)
+	if err := replayer.Replay(replayer.catalog.Store); err != nil {
+		return nil, err
+	}
+	replayer.catalog.Store.TryCompact()
+	replayer.cache = nil
+	return replayer.catalog, nil
 }
 
 func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
@@ -243,6 +273,9 @@ func (replayer *catalogReplayer) RegisterEntryHandler(_ LogEntryType, _ logstore
 
 func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore.ReplayObserver) error {
 	switch entry.GetMeta().GetType() {
+	case shard.ETShardWalSafeId:
+		safeId, _ := shard.EntryToSafeId(entry)
+		replayer.cache.OnShardSafeId(safeId)
 	case ETCreateBlock:
 		blk := &blockLogEntry{}
 		blk.Unmarshal(entry.GetPayload())

@@ -15,6 +15,9 @@
 package storage
 
 import (
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
@@ -22,9 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
-	"sync"
-	"time"
 )
 
 const (
@@ -89,7 +89,8 @@ type Options struct {
 	Scheduler    sched.Scheduler
 	SchedulerCfg *SchedulerCfg `toml:"scheduler-cfg"`
 
-	Wal wal.Wal
+	WalRole wal.Role
+	Wal     wal.ShardWal
 
 	Meta struct {
 		Conf    *MetaCfg
@@ -111,10 +112,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o = &Options{}
 	}
 	o.EventListener.FillDefaults()
-
-	if o.Wal == nil {
-		o.Wal = shard.NewManager()
-	}
 
 	if o.FactoryType == INVALID_FT {
 		o.FactoryType = NORMAL_FT
@@ -138,22 +135,11 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 
-	if o.Meta.Catalog == nil {
-		catalogCfg := &metadata.CatalogCfg{
-			Dir: dirname,
+	if o.Meta.Conf == nil {
+		o.Meta.Conf = &MetaCfg{
+			BlockMaxRows:     DefaultBlockMaxRows,
+			SegmentMaxBlocks: DefaultBlocksPerSegment,
 		}
-		if o.Meta.Conf == nil {
-			catalogCfg.BlockMaxRows = DefaultBlockMaxRows
-			catalogCfg.SegmentMaxBlocks = DefaultBlocksPerSegment
-		} else {
-			catalogCfg.BlockMaxRows = o.Meta.Conf.BlockMaxRows
-			catalogCfg.SegmentMaxBlocks = o.Meta.Conf.SegmentMaxBlocks
-		}
-		var err error
-		if o.Meta.Catalog, err = metadata.OpenCatalog(&o.Mu, catalogCfg); err != nil {
-			panic(err)
-		}
-		o.Meta.Catalog.Start()
 	}
 
 	if o.CacheCfg == nil {
@@ -179,4 +165,13 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		}
 	}
 	return o
+}
+
+func (o *Options) CreateCatalog(dirname string) (*metadata.Catalog, error) {
+	catalog, err := metadata.OpenCatalog(&o.Mu, &metadata.CatalogCfg{
+		Dir:              dirname,
+		BlockMaxRows:     o.Meta.Conf.BlockMaxRows,
+		SegmentMaxBlocks: o.Meta.Conf.SegmentMaxBlocks,
+	})
+	return catalog, err
 }
