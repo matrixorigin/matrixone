@@ -17,12 +17,12 @@ package build
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/colexec/extend/overload"
-	"matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
 var (

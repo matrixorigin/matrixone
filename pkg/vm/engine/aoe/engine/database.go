@@ -16,13 +16,13 @@ package engine
 
 import (
 	log "github.com/sirupsen/logrus"
-	"matrixone/pkg/catalog"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/common/codec"
-	"matrixone/pkg/vm/engine/aoe/common/helper"
-	adb "matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	"time"
 )
 

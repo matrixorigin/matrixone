@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 type Column interface {

@@ -16,16 +16,16 @@ package build
 
 import (
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/dedup"
-	"matrixone/pkg/sql/op/limit"
-	"matrixone/pkg/sql/op/offset"
-	"matrixone/pkg/sql/op/projection"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/dedup"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildSelectStatement(stmt tree.SelectStatement) (op.OP, error) {

@@ -17,8 +17,8 @@ package dropTable
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func New(flg bool, dbs, ids []string, e engine.Engine) *DropTable {

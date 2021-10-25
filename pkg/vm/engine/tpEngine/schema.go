@@ -17,7 +17,7 @@ package tpEngine
 import (
 	"encoding/gob"
 	"fmt"
-	"matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 )
 
 func init() {

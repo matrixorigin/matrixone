@@ -18,7 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"reflect"
 	"sync"
 	"unsafe"

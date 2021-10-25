@@ -15,13 +15,13 @@
 package compile
 
 import (
-	"matrixone/pkg/sql/colexec/merge"
-	voffset "matrixone/pkg/sql/colexec/offset"
-	"matrixone/pkg/sql/colexec/transfer"
-	"matrixone/pkg/sql/op/offset"
-	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	voffset "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/offset"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 )
 

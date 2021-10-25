@@ -15,9 +15,9 @@
 package sched
 
 import (
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/ops"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	"sync/atomic"
 )
 

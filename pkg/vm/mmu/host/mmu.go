@@ -15,7 +15,7 @@
 package host
 
 import (
-	"matrixone/pkg/vm/mmu"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu"
 	"sync/atomic"
 )
 

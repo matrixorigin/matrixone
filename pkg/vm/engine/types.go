@@ -16,10 +16,10 @@ package engine
 
 import (
 	"bytes"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )

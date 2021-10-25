@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
 )
 
 func TestMock(t *testing.T) {

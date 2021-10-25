@@ -15,9 +15,9 @@
 package segment
 
 import (
-	"matrixone/pkg/vm/engine/spillEngine/kv"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/spillEngine/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Segment struct {

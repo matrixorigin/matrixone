@@ -15,10 +15,10 @@
 package compile
 
 import (
-	"matrixone/pkg/sql/colexec/extend"
-	vprojection "matrixone/pkg/sql/colexec/projection"
-	"matrixone/pkg/sql/op/projection"
-	"matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	vprojection "github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/projection"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
 //mp 引用计数

@@ -17,7 +17,7 @@ package logstore
 import (
 	"encoding/binary"
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"sync"
 	"testing"

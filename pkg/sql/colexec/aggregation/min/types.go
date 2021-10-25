@@ -14,7 +14,7 @@
 
 package min
 
-import "matrixone/pkg/container/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type int8Min struct {
 	v   int8

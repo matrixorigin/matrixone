@@ -18,10 +18,10 @@ import (
 	"bytes"
 	"container/heap"
 	"fmt"
-	"matrixone/pkg/compare"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/compare"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

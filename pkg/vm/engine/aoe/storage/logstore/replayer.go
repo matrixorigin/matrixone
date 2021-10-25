@@ -18,7 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type EntryHandler = func(io.Reader, *EntryMeta) (Entry, int64, error)

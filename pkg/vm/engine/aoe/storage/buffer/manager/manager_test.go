@@ -15,9 +15,9 @@
 package manager
 
 import (
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	nif "matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	nif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"testing"
 
 	"github.com/stretchr/testify/assert"

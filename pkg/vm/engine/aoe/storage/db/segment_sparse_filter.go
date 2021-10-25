@@ -19,9 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 )
 
 // SegmentSparseFilter provides segment-level & sparse interfaces with bitmap

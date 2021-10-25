@@ -15,8 +15,8 @@
 package worker
 
 import (
-	"matrixone/pkg/vm/process"
-	"matrixone/pkg/vm/routines/task"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/routines/task"
 )
 
 func New(proc *process.Process) Worker {

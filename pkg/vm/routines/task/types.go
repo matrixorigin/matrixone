@@ -14,7 +14,7 @@
 
 package task
 
-import "matrixone/pkg/vm/process"
+import "github.com/matrixorigin/matrixone/pkg/vm/process"
 
 type Task interface {
 	Stop(TaskResult)

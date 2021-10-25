@@ -17,8 +17,8 @@ package shard
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
-	"matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
 )
 

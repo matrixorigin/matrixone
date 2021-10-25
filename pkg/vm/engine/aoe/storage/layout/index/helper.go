@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"os"
 
 	"github.com/RoaringBitmap/roaring"

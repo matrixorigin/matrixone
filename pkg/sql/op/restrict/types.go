@@ -15,8 +15,8 @@
 package restrict
 
 import (
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
 )
 
 type Restrict struct {

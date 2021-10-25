@@ -16,13 +16,13 @@ package build
 
 import (
 	"fmt"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/rewrite"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/rewrite"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func New(db string, sql string, e engine.Engine, proc *process.Process) *build {

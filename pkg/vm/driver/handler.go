@@ -19,7 +19,7 @@ import (
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
 	"github.com/matrixorigin/matrixcube/pb/raftcmdpb"
-	"matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 )
 
 //init adds write and read functions to handle pb requests.

@@ -15,10 +15,10 @@
 package group
 
 import (
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/colexec/aggregation"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
 )
 
 type Group struct {

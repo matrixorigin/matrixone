@@ -15,9 +15,9 @@ package metadata
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 	"os"
 	"sync"
 	"sync/atomic"

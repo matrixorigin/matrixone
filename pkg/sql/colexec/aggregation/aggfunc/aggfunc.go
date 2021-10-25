@@ -15,14 +15,14 @@
 package aggfunc
 
 import (
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/colexec/aggregation"
-	"matrixone/pkg/sql/colexec/aggregation/avg"
-	"matrixone/pkg/sql/colexec/aggregation/count"
-	"matrixone/pkg/sql/colexec/aggregation/max"
-	"matrixone/pkg/sql/colexec/aggregation/min"
-	"matrixone/pkg/sql/colexec/aggregation/starcount"
-	"matrixone/pkg/sql/colexec/aggregation/sum"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation/avg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation/count"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation/max"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation/min"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation/starcount"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation/sum"
 )
 
 func NewCount(typ types.Type) aggregation.Aggregation {

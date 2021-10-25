@@ -15,11 +15,11 @@
 package config
 
 import (
-	"matrixone/pkg/catalog"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
 
 var GlobalSystemVariables SystemVariables

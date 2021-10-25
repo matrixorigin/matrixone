@@ -3,9 +3,9 @@ package memEngine
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/memEngine/meta"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/meta"
 	"strings"
 )
 

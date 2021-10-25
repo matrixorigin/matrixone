@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"fmt"
 	"math"
-	"matrixone/pkg/vm/driver"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewTpEngine(eng string, kv driver.CubeDriver, proc *process.Process) *tpEngine {

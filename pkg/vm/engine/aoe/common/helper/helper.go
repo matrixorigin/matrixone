@@ -17,12 +17,12 @@ package helper
 import (
 	"bytes"
 	"encoding/gob"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/sql/protocol"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe"
-	"matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 )
 
 func init() {

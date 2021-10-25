@@ -15,8 +15,8 @@
 package guest
 
 import (
-	"matrixone/pkg/vm/mmu"
-	"matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
 
 func New(limit int64, mmu *host.Mmu) *Mmu {

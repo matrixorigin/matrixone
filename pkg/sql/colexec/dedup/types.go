@@ -15,10 +15,10 @@
 package dedup
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/hash"
-	"matrixone/pkg/intmap/fastmap"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/hash"
+	"github.com/matrixorigin/matrixone/pkg/intmap/fastmap"
 )
 
 const (

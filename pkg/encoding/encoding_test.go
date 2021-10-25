@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"testing"
 )
 
