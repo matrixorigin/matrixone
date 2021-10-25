@@ -15,6 +15,8 @@ package memtable
 
 import (
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -25,7 +27,6 @@ import (
 	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
-	"sync"
 )
 
 type mutableCollection struct {
@@ -155,6 +156,7 @@ func (c *mutableCollection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, 
 
 func (c *mutableCollection) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
 	// tableMeta := c.data.GetMeta()
+	logutil.Infof("Append logindex: %s", index.String())
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.mutBlk == nil {
