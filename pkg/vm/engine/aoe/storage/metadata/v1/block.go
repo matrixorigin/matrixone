@@ -31,7 +31,7 @@ var (
 )
 
 type blockLogEntry struct {
-	BaseEntry
+	*BaseEntry
 	Catalog   *Catalog `json:"-"`
 	TableId   uint64
 	SegmentId uint64
@@ -80,7 +80,7 @@ func (memo *IndiceMemo) Fetch(block *Block) *shard.Snippet {
 }
 
 type Block struct {
-	BaseEntry
+	*BaseEntry
 	Segment     *Segment    `json:"-"`
 	IndiceMemo  *IndiceMemo `json:"-"`
 	Count       uint64
@@ -90,7 +90,7 @@ type Block struct {
 func newBlockEntry(segment *Segment, tranId uint64, exIndex *LogIndex) *Block {
 	e := &Block{
 		Segment: segment,
-		BaseEntry: BaseEntry{
+		BaseEntry: &BaseEntry{
 			Id: segment.Table.Catalog.NextBlockId(),
 			CommitInfo: &CommitInfo{
 				CommitId: tranId,
@@ -113,7 +113,7 @@ func newBlockEntry(segment *Segment, tranId uint64, exIndex *LogIndex) *Block {
 func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
 	e := &Block{
 		Segment:   segment,
-		BaseEntry: *base,
+		BaseEntry: base,
 	}
 	snippet := e.CreateSnippet()
 	if snippet != nil {
@@ -149,7 +149,7 @@ func (e *Block) ConsumeSnippet(reset bool) *shard.Snippet {
 func (e *Block) View() (view *Block) {
 	e.RLock()
 	view = &Block{
-		BaseEntry:   BaseEntry{Id: e.Id, CommitInfo: e.CommitInfo},
+		BaseEntry:   &BaseEntry{Id: e.Id, CommitInfo: e.CommitInfo},
 		Segment:     e.Segment,
 		Count:       e.Count,
 		SegmentedId: e.SegmentedId,
@@ -257,7 +257,7 @@ func (e *Block) CommittedView(id uint64) *Block {
 		return nil
 	}
 	return &Block{
-		BaseEntry: *baseEntry,
+		BaseEntry: baseEntry,
 	}
 }
 

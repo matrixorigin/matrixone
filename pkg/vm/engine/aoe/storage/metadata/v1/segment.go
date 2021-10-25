@@ -44,7 +44,7 @@ func (e *segmentLogEntry) Unmarshal(buf []byte) error {
 }
 
 type Segment struct {
-	BaseEntry
+	*BaseEntry
 	Table    *Table         `json:"-"`
 	Catalog  *Catalog       `json:"-"`
 	IdIndex  map[uint64]int `json:"-"`
@@ -57,7 +57,7 @@ func newSegmentEntry(catalog *Catalog, table *Table, tranId uint64, exIndex *Log
 		Table:    table,
 		BlockSet: make([]*Block, 0),
 		IdIndex:  make(map[uint64]int),
-		BaseEntry: BaseEntry{
+		BaseEntry: &BaseEntry{
 			Id: table.Catalog.NextSegmentId(),
 			CommitInfo: &CommitInfo{
 				CommitId: tranId,
@@ -77,7 +77,7 @@ func newCommittedSegmentEntry(catalog *Catalog, table *Table, base *BaseEntry) *
 		Table:     table,
 		BlockSet:  make([]*Block, 0),
 		IdIndex:   make(map[uint64]int),
-		BaseEntry: *base,
+		BaseEntry: base,
 	}
 	return e
 }
@@ -115,7 +115,7 @@ func (e *Segment) CommittedView(id uint64) *Segment {
 		return nil
 	}
 	view := &Segment{
-		BaseEntry: *baseEntry,
+		BaseEntry: baseEntry,
 		BlockSet:  make([]*Block, 0),
 	}
 	e.RLock()
@@ -140,7 +140,7 @@ func (e *Segment) Marshal() ([]byte, error) {
 
 func (e *Segment) toLogEntry() *segmentLogEntry {
 	return &segmentLogEntry{
-		BaseEntry: &e.BaseEntry,
+		BaseEntry: e.BaseEntry,
 		TableId:   e.Table.Id,
 	}
 }

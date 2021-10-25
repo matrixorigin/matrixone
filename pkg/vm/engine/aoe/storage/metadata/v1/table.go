@@ -25,7 +25,7 @@ import (
 )
 
 type tableLogEntry struct {
-	BaseEntry
+	*BaseEntry
 	Prev    *Table
 	Catalog *Catalog `json:"-"`
 }
@@ -52,7 +52,7 @@ func (e *tableLogEntry) ToEntry() *Table {
 // }
 
 type Table struct {
-	BaseEntry
+	*BaseEntry
 	Schema     *Schema
 	SegmentSet []*Segment
 	IdIndex    map[uint64]int `json:"-"`
@@ -63,7 +63,7 @@ func NewTableEntry(catalog *Catalog, schema *Schema, tranId uint64, exIndex *Log
 	schema.BlockMaxRows = catalog.Cfg.BlockMaxRows
 	schema.SegmentMaxBlocks = catalog.Cfg.SegmentMaxBlocks
 	e := &Table{
-		BaseEntry: BaseEntry{
+		BaseEntry: &BaseEntry{
 			Id: catalog.NextTableId(),
 			CommitInfo: &CommitInfo{
 				TranId:   tranId,
@@ -83,7 +83,7 @@ func NewTableEntry(catalog *Catalog, schema *Schema, tranId uint64, exIndex *Log
 
 func NewEmptyTableEntry(catalog *Catalog) *Table {
 	e := &Table{
-		BaseEntry: BaseEntry{
+		BaseEntry: &BaseEntry{
 			CommitInfo: &CommitInfo{
 				SSLLNode: *common.NewSSLLNode(),
 			},
@@ -113,7 +113,7 @@ func (e *Table) CommittedView(id uint64) *Table {
 	}
 	view := &Table{
 		Schema:     e.Schema,
-		BaseEntry:  *baseEntry,
+		BaseEntry:  baseEntry,
 		SegmentSet: make([]*Segment, 0),
 	}
 	e.RLock()
