@@ -16,9 +16,10 @@ package shard
 
 import (
 	"encoding/binary"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore"
-	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
 type Entry = wal.Entry

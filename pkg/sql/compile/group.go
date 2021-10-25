@@ -15,13 +15,13 @@
 package compile
 
 import (
-	vgroup "matrixone/pkg/sql/colexec/group"
-	"matrixone/pkg/sql/colexec/mergegroup"
-	"matrixone/pkg/sql/colexec/transfer"
-	"matrixone/pkg/sql/op/group"
-	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/process"
+	vgroup "github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/group"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 )
 

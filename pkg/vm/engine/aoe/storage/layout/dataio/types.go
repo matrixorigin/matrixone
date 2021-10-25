@@ -14,7 +14,7 @@
 
 package dataio
 
-import "matrixone/pkg/vm/engine/aoe/storage/common"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 
 type fileStat struct {
 	size  int64

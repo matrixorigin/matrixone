@@ -13,7 +13,7 @@
 
 package metadata
 
-import "matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 type LogIndex = shard.Index
 type IndexId = shard.IndexId

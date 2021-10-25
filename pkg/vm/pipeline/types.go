@@ -16,8 +16,8 @@ package pipeline
 
 import (
 	"bytes"
-	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 const (

@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	pb3 "matrixone/pkg/vm/driver/pb"
-	"matrixone/pkg/vm/engine/aoe/common/codec"
+	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"

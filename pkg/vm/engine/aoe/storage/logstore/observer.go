@@ -14,7 +14,7 @@
 
 package logstore
 
-import "matrixone/pkg/vm/engine/aoe/storage/common"
+import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 
 type Observer interface {
 	OnSynced()

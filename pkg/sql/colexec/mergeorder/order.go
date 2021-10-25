@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/partition"
-	"matrixone/pkg/sort"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/partition"
+	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

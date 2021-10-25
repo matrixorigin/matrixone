@@ -16,17 +16,17 @@ package frontend
 
 import (
 	"fmt"
-	"matrixone/pkg/defines"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/sql/compile"
-	"matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"strings"
 	"time"
 
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 //tableInfos of a database

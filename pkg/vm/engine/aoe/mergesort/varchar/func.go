@@ -15,8 +15,8 @@
 package varchar
 
 import (
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )

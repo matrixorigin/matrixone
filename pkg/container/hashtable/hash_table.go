@@ -17,7 +17,7 @@ package hashtable
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"unsafe"
 )
 

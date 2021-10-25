@@ -15,7 +15,7 @@
 package rpcserver
 
 import (
-	"matrixone/pkg/rpcserver/message"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
 
 	"github.com/fagongzi/goetty/buf"
 	"github.com/fagongzi/goetty/codec"

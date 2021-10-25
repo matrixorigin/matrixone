@@ -15,10 +15,10 @@
 package build
 
 import (
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/colexec/extend/overload"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 )
 
 func RewriteExtend(e extend.Extend) extend.Extend {

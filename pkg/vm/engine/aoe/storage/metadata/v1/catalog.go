@@ -17,13 +17,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
-	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sort"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 
 	"github.com/google/btree"
 )

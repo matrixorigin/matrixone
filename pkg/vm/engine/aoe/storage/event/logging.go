@@ -15,8 +15,8 @@
 package event
 
 import (
-	"matrixone/pkg/logutil"
-	imem "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 )
 
 func NewLoggingEventListener() EventListener {

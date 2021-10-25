@@ -3,7 +3,8 @@ package shard
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/encoding"
+
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 )
 
 type IndexId struct {

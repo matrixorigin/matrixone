@@ -15,7 +15,7 @@
 package float32s
 
 import (
-	"matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )

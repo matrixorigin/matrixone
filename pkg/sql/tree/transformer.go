@@ -23,7 +23,7 @@ import (
 	"github.com/pingcap/parser/test_driver"
 	"github.com/pingcap/parser/types"
 	"go/constant"
-	"matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"strconv"
 )
 

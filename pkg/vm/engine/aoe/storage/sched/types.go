@@ -16,7 +16,7 @@ package sched
 
 import (
 	"io"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
 	// log "github.com/sirupsen/logrus"
 )
 

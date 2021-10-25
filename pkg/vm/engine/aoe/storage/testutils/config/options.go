@@ -15,7 +15,7 @@
 package config
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 )
 
 type CacheSizeType uint8

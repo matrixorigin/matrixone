@@ -15,12 +15,12 @@
 package aoe
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/engine/aoe"
-	store "matrixone/pkg/vm/engine/aoe/storage"
-	adb "matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	store "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"os"
 	"sync/atomic"
 

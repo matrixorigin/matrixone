@@ -15,13 +15,13 @@
 package compile
 
 import (
-	vdedup "matrixone/pkg/sql/colexec/dedup"
-	"matrixone/pkg/sql/colexec/mergededup"
-	"matrixone/pkg/sql/colexec/transfer"
-	"matrixone/pkg/sql/op/dedup"
-	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/process"
+	vdedup "github.com/matrixorigin/matrixone/pkg/sql/colexec/dedup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergededup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/dedup"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 )
 

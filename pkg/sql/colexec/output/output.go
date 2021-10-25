@@ -16,8 +16,8 @@ package output
 
 import (
 	"bytes"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

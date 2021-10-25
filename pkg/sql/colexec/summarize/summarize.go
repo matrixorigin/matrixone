@@ -17,10 +17,10 @@ package summarize
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/sql/colexec/aggregation"
-	"matrixone/pkg/sql/colexec/aggregation/aggfunc"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation/aggfunc"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func String(arg interface{}, buf *bytes.Buffer) {

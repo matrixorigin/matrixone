@@ -16,7 +16,8 @@ package shard
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type snippets struct {

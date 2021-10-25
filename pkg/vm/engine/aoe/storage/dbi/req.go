@@ -15,7 +15,7 @@
 package dbi
 
 import (
-	"matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 type OnTableDroppedCB = func(error)

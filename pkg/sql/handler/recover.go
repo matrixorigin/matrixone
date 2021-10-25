@@ -15,13 +15,13 @@
 package handler
 
 import (
-	"matrixone/pkg/sql/colexec/transfer"
-	"matrixone/pkg/sql/compile"
-	"matrixone/pkg/sql/op/relation"
-	"matrixone/pkg/sql/protocol"
-	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/relation"
+	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 )
 

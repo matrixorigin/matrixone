@@ -16,13 +16,13 @@ package driver
 
 import (
 	"encoding/json"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/sql/protocol"
-	aoe2 "matrixone/pkg/vm/driver/aoe"
-	pb3 "matrixone/pkg/vm/driver/pb"
-	"matrixone/pkg/vm/engine/aoe/common/codec"
-	"matrixone/pkg/vm/engine/aoe/common/helper"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	aoe2 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
+	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"time"
 
 	"github.com/fagongzi/util/protoc"

@@ -15,7 +15,7 @@
 package offset
 
 import (
-	"matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
 )
 
 type Offset struct {

@@ -16,13 +16,13 @@ package build
 
 import (
 	"fmt"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/colexec/aggregation"
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/projection"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"strings"
 )
 

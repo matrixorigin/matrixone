@@ -15,9 +15,9 @@
 package build
 
 import (
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/dedup"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/dedup"
 )
 
 func (b *build) buildDedup(o op.OP) (op.OP, error) {

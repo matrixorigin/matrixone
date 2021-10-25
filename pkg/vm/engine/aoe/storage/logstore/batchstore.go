@@ -15,7 +15,7 @@
 package logstore
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"sync"
 )
 

@@ -15,11 +15,11 @@
 package avg
 
 import (
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/sql/colexec/aggregation"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewSumCount(typ types.Type) *sumCountAvg {

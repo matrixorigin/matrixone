@@ -16,16 +16,16 @@ package col
 
 import (
 	"bytes"
-	"matrixone/pkg/container/types"
-	ro "matrixone/pkg/container/vector"
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	bmgr "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	bmgrif "matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/container/vector"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	ro "github.com/matrixorigin/matrixone/pkg/container/vector"
+	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/wrapper"
 	"sync"
 )
 

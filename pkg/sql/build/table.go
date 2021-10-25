@@ -15,11 +15,11 @@
 package build
 
 import (
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/relation"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/relation"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildTable(stmt *tree.TableName) (op.OP, error) {

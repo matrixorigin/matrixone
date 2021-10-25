@@ -17,10 +17,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore"
-	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 var (

@@ -15,8 +15,8 @@
 package transfer
 
 import (
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Argument struct {

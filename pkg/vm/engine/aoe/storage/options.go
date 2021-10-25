@@ -15,15 +15,16 @@
 package storage
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/event"
-	"matrixone/pkg/vm/engine/aoe/storage/gc"
-	"matrixone/pkg/vm/engine/aoe/storage/gc/gci"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"matrixone/pkg/vm/engine/aoe/storage/sched"
-	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/event"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc/gci"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
 const (

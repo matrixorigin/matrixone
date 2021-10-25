@@ -17,7 +17,7 @@ package base
 import (
 	"fmt"
 	"io"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 
 	"github.com/RoaringBitmap/roaring"
 )

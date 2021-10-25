@@ -15,15 +15,16 @@ package metadata
 
 import (
 	"fmt"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
-	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"

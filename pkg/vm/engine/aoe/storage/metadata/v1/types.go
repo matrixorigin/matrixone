@@ -16,8 +16,8 @@ package metadata
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync/atomic"
 )
 

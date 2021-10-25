@@ -16,11 +16,12 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore"
-	"matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 type tableLogEntry struct {

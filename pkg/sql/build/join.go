@@ -16,13 +16,13 @@ package build
 
 import (
 	"fmt"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/innerJoin"
-	"matrixone/pkg/sql/op/naturalJoin"
-	"matrixone/pkg/sql/op/product"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/innerJoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/naturalJoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildJoin(stmt *tree.JoinTableExpr) (op.OP, error) {

@@ -15,11 +15,11 @@
 package extend
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/sql/colexec/extend/overload"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (e *UnaryExtend) IsLogical() bool {

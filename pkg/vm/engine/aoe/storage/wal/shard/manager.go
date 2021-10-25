@@ -17,11 +17,12 @@ package shard
 import (
 	"errors"
 	"fmt"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
-	"matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
 var (

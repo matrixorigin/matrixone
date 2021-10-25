@@ -15,8 +15,8 @@
 package process
 
 import (
-	"matrixone/pkg/vm/mempool"
-	"matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 // New creates a new Process.

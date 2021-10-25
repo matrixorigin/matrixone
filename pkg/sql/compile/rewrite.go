@@ -15,20 +15,20 @@
 package compile
 
 import (
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/dedup"
-	"matrixone/pkg/sql/op/group"
-	"matrixone/pkg/sql/op/innerJoin"
-	"matrixone/pkg/sql/op/limit"
-	"matrixone/pkg/sql/op/naturalJoin"
-	"matrixone/pkg/sql/op/offset"
-	"matrixone/pkg/sql/op/order"
-	"matrixone/pkg/sql/op/product"
-	"matrixone/pkg/sql/op/projection"
-	"matrixone/pkg/sql/op/relation"
-	"matrixone/pkg/sql/op/restrict"
-	"matrixone/pkg/sql/op/summarize"
-	"matrixone/pkg/sql/op/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/dedup"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/innerJoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/naturalJoin"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/product"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/relation"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/summarize"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/top"
 )
 
 func rewrite(o op.OP, cnt int) op.OP {

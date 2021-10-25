@@ -15,8 +15,8 @@
 package index
 
 import (
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 
 	"github.com/RoaringBitmap/roaring"
 )

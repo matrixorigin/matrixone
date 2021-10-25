@@ -8,7 +8,7 @@ package varchar
 
 import (
 	"bytes"
-	"matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 // Sort sorts data.

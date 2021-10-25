@@ -15,8 +15,8 @@
 package node
 
 import (
-	buf "matrixone/pkg/vm/engine/aoe/storage/buffer"
-	"matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
+	buf "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	// log "github.com/sirupsen/logrus"
 )
 

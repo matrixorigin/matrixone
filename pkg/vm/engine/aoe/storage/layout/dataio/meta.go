@@ -15,7 +15,7 @@
 package dataio
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
 type FileMeta struct {

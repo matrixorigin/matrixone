@@ -1,11 +1,11 @@
 package segment
 
 import (
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/memEngine/block"
-	"matrixone/pkg/vm/engine/memEngine/kv"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/block"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func New(id string, db *kv.KV, attrs []metadata.Attribute) *Segment {
