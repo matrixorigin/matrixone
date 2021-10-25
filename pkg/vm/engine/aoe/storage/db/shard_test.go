@@ -272,10 +272,10 @@ func TestShard2(t *testing.T) {
 					assert.Nil(t, err)
 				}
 			}
-			// for pos := 0; pos < len(cli.infos); pos++ {
-			// 	err := cli.dropTable(pos)
-			// 	assert.Nil(t, err)
-			// }
+			for pos := 0; pos < len(cli.infos); pos++ {
+				err := cli.dropTable(pos)
+				assert.Nil(t, err)
+			}
 		}(clients[i])
 	}
 
