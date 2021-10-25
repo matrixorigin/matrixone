@@ -16,7 +16,7 @@ package logstore
 
 import (
 	"bytes"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"testing"
 

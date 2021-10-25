@@ -15,9 +15,9 @@
 package compile
 
 import (
-	vrestrict "matrixone/pkg/sql/colexec/restrict"
-	"matrixone/pkg/sql/op/restrict"
-	"matrixone/pkg/vm"
+	vrestrict "github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/restrict"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
 func (c *compile) compileRestrict(o *restrict.Restrict, mp map[string]uint64) ([]*Scope, error) {

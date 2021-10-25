@@ -16,13 +16,13 @@ package handler
 
 import (
 	"bytes"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/rpcserver/message"
-	"matrixone/pkg/sql/colexec/output"
-	"matrixone/pkg/sql/protocol"
-	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
+	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/fagongzi/goetty"
 )

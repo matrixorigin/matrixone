@@ -16,11 +16,11 @@ package min
 
 import (
 	"bytes"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/sql/colexec/aggregation"
-	"matrixone/pkg/vectorize/min"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/min"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func NewStr(typ types.Type) *strMin {

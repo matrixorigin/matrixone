@@ -16,11 +16,11 @@ package summarize
 
 import (
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/colexec/aggregation"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
 func New(prev op.OP, es []aggregation.Extend) (*Summarize, error) {

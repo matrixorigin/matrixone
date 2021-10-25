@@ -16,11 +16,11 @@ package build
 
 import (
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
 func (b *build) checkProduct(r, s op.OP) error {

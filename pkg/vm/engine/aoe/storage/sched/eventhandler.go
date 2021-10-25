@@ -16,9 +16,9 @@ package sched
 
 import (
 	"errors"
-	"matrixone/pkg/logutil"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
-	ops "matrixone/pkg/vm/engine/aoe/storage/worker"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 )
 
 var (

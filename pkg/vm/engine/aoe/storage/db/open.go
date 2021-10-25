@@ -15,15 +15,15 @@
 package db
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage"
-	bm "matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"matrixone/pkg/vm/engine/aoe/storage/db/factories"
-	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
-	dbsched "matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	ldio "matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	table "matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mt "matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
-	mb "matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
+	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
+	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	table "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	mt "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1"
+	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"sync/atomic"
 )
 

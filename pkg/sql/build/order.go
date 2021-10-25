@@ -15,12 +15,12 @@
 package build
 
 import (
-	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/order"
-	"matrixone/pkg/sql/op/projection"
-	"matrixone/pkg/sql/op/top"
-	"matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 )
 
 func (b *build) buildTop(o op.OP, ns tree.OrderBy, limit int64) (op.OP, error) {

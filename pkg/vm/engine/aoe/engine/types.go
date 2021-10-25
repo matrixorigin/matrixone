@@ -15,10 +15,10 @@
 package engine
 
 import (
-	catalog3 "matrixone/pkg/catalog"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe"
-	"matrixone/pkg/vm/engine/aoe/storage/db"
+	catalog3 "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 )
 
 // aoe engine

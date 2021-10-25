@@ -15,12 +15,12 @@
 package build
 
 import (
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/showDatabases"
-	"matrixone/pkg/sql/op/showTables"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/showDatabases"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/showTables"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
 func (b *build) buildShowTables(stmt *tree.ShowTables) (op.OP, error) {

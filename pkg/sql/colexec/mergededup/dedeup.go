@@ -18,12 +18,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/hash"
-	"matrixone/pkg/intmap/fastmap"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/hash"
+	"github.com/matrixorigin/matrixone/pkg/intmap/fastmap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func init() {

@@ -17,13 +17,13 @@
 package overload
 
 import (
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vectorize/gt"
-	"matrixone/pkg/vectorize/lt"
-	"matrixone/pkg/vm/process"
-	"matrixone/pkg/vm/register"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/gt"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/lt"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/register"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )

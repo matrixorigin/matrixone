@@ -17,8 +17,8 @@ package batch
 import (
 	"bytes"
 	"fmt"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func New(ro bool, attrs []string) *Batch {

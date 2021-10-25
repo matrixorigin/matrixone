@@ -16,8 +16,8 @@ package extend
 
 import (
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/colexec/extend/overload"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 )
 
 var UnaryReturnTypes = map[int]func(Extend) types.T{

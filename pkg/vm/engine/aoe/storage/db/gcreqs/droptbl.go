@@ -15,13 +15,13 @@
 package gcreqs
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage"
-	"matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"matrixone/pkg/vm/engine/aoe/storage/events/memdata"
-	"matrixone/pkg/vm/engine/aoe/storage/gc"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
-	mtif "matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	"matrixone/pkg/vm/engine/aoe/storage/ops"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
 )
 
 type dropTblRequest struct {

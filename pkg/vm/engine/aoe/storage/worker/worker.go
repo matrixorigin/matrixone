@@ -16,9 +16,9 @@ package ops
 
 import (
 	"fmt"
-	"matrixone/pkg/logutil"
-	iops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
-	iw "matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	"sync/atomic"
 )
 

@@ -15,15 +15,15 @@
 package compile
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/relation"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/relation"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (

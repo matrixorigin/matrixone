@@ -16,8 +16,8 @@ package order
 
 import (
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
 )
 
 func New(prev op.OP, gs []Attribute) *Order {

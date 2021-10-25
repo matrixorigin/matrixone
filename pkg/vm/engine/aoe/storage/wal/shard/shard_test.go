@@ -16,9 +16,9 @@ package shard
 
 import (
 	"math/rand"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
-	"matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"sync"
 	"sync/atomic"
 	"testing"

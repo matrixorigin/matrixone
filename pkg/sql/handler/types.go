@@ -15,8 +15,8 @@
 package handler
 
 import (
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type Handler struct {

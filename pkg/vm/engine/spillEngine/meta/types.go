@@ -14,7 +14,7 @@
 
 package meta
 
-import "matrixone/pkg/vm/metadata"
+import "github.com/matrixorigin/matrixone/pkg/vm/metadata"
 
 type Metadata struct {
 	Rows  int64 // number of rows

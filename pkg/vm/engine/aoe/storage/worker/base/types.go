@@ -15,7 +15,7 @@
 package base
 
 import (
-	ops "matrixone/pkg/vm/engine/aoe/storage/ops/base"
+	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
 )
 
 type IOpWorker interface {

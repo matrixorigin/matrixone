@@ -16,7 +16,7 @@ package mergeorder
 
 import (
 	"fmt"
-	"matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 const (

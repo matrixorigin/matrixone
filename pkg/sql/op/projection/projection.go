@@ -16,10 +16,10 @@ package projection
 
 import (
 	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
 func New(prev op.OP, es []*Extend) (*Projection, error) {

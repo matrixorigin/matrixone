@@ -15,14 +15,14 @@
 package compile
 
 import (
-	"matrixone/pkg/sql/colexec/mergeorder"
-	vorder "matrixone/pkg/sql/colexec/order"
-	"matrixone/pkg/sql/colexec/transfer"
-	"matrixone/pkg/sql/op/order"
-	"matrixone/pkg/sql/op/projection"
-	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	vorder "github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/projection"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 )
 

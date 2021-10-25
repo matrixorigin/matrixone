@@ -15,7 +15,7 @@ package metadata
 
 import (
 	"encoding/binary"
-	"matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"sync"
 )
 

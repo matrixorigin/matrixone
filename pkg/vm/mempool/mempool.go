@@ -15,7 +15,7 @@
 package mempool
 
 import (
-	"matrixone/pkg/vm/malloc"
+	"github.com/matrixorigin/matrixone/pkg/vm/malloc"
 )
 
 func New() *Mempool {

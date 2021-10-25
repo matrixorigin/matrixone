@@ -2,12 +2,12 @@ package block
 
 import (
 	"bytes"
-	"matrixone/pkg/compress"
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/encoding"
-	"matrixone/pkg/vm/engine/memEngine/kv"
-	"matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 )
 
 func New(id string, db *kv.KV, mp map[string]metadata.Attribute) *Block {

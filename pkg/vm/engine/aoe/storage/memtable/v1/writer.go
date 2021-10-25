@@ -15,9 +15,9 @@
 package memtable
 
 import (
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/logutil"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 )
 
 type memTableWriter struct {

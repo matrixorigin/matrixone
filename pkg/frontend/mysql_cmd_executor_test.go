@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/stretchr/testify/require"
 	"io/ioutil"
-	"matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"reflect"
 	"testing"
 	"time"

@@ -17,8 +17,8 @@ package logstore
 import (
 	"fmt"
 	"io"
-	"matrixone/pkg/vm/engine/aoe/common/util"
-	"matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	"unsafe"
 )

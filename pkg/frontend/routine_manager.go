@@ -18,8 +18,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/fagongzi/goetty"
-	"matrixone/pkg/config"
-	"matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 )
 

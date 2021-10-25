@@ -21,9 +21,9 @@ import (
 	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
 	"github.com/matrixorigin/matrixcube/vfs"
 	stdLog "log"
-	"matrixone/pkg/vm/driver"
-	aoe2 "matrixone/pkg/vm/driver/aoe"
-	"matrixone/pkg/vm/driver/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver"
+	aoe2 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
+	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
 	"testing"
 	"time"
 

@@ -15,7 +15,7 @@
 package compile
 
 import (
-	"matrixone/pkg/sql/colexec/extend"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 )
 
 func IncRef(e extend.Extend, mp map[string]uint64) {

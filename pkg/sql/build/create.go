@@ -16,18 +16,18 @@ package build
 
 import (
 	"fmt"
-	"matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
-	"matrixone/pkg/compress"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/createDatabase"
-	"matrixone/pkg/sql/op/createTable"
-	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/metadata"
+	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/createDatabase"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/createTable"
+	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 )
 
 func (b *build) buildCreateTable(stmt *tree.CreateTable) (op.OP, error) {

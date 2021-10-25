@@ -15,8 +15,8 @@
 package local
 
 import (
-	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 )
 
 type localRoEngine struct {

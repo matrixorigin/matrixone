@@ -15,14 +15,14 @@
 package compile
 
 import (
-	"matrixone/pkg/sql/colexec/aggregation"
-	"matrixone/pkg/sql/colexec/mergesum"
-	vsummarize "matrixone/pkg/sql/colexec/summarize"
-	"matrixone/pkg/sql/colexec/transfer"
-	"matrixone/pkg/sql/op/summarize"
-	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/mmu/guest"
-	"matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregation"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergesum"
+	vsummarize "github.com/matrixorigin/matrixone/pkg/sql/colexec/summarize"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/summarize"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"sync"
 )
 

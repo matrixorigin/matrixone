@@ -14,7 +14,7 @@
 
 package max
 
-import "matrixone/pkg/container/types"
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
 type int8Max struct {
 	v   int8

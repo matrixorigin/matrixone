@@ -14,10 +14,10 @@
 package table
 
 import (
-	"matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
-	fb "matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
+	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type altBlockFactory struct {

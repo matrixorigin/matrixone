@@ -14,7 +14,7 @@
 
 package hashtable
 
-import "matrixone/pkg/vm/process"
+import "github.com/matrixorigin/matrixone/pkg/vm/process"
 
 func NewStringHashTable(inlineVal bool, valueSize uint8, proc process.Process) (*StringHashTable, error) {
 	H0, err := NewFixedTable(inlineVal, 65536, valueSize, proc)

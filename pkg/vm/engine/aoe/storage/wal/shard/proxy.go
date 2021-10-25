@@ -16,7 +16,7 @@ package shard
 
 import (
 	"fmt"
-	"matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync"
 	"sync/atomic"
 	"time"

@@ -15,20 +15,20 @@
 package mergesort
 
 import (
-	"matrixone/pkg/container/batch"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/engine/aoe/mergesort/float32s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/float64s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int16s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int32s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int64s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/int8s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint16s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint32s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint64s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/uint8s"
-	"matrixone/pkg/vm/engine/aoe/mergesort/varchar"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/float32s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/float64s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/int16s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/int32s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/int64s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/int8s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/uint16s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/uint32s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/uint64s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/uint8s"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/varchar"
 )
 
 func SortBlockColumns(cols []*vector.Vector) error {
