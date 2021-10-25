@@ -605,7 +605,7 @@ func (catalog *Catalog) onReplayCreateBlock(entry *blockLogEntry) error {
 	tbl := catalog.TableSet[entry.TableId]
 	segpos := tbl.IdIndex[entry.SegmentId]
 	seg := tbl.SegmentSet[segpos]
-	blk := newCommittedBlockEntry(seg, &entry.BaseEntry)
+	blk := newCommittedBlockEntry(seg, entry.BaseEntry)
 	seg.onNewBlock(blk)
 	return nil
 }

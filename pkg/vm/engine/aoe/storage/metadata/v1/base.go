@@ -115,8 +115,10 @@ func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
 	if e.CommitInfo.CommitId > id {
 		return nil
 	}
-	be := *e
-	return &be
+	return &BaseEntry{
+		Id:         e.Id,
+		CommitInfo: e.CommitInfo,
+	}
 }
 
 func (e *BaseEntry) UseCommitted(id uint64) *BaseEntry {
