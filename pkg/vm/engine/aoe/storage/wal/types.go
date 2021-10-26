@@ -34,6 +34,7 @@ type Payload interface {
 type Wal interface {
 	io.Closer
 	Log(Payload) (*Entry, error)
+	SyncLog(Payload) error
 	Checkpoint(interface{})
 	String() string
 	GetRole() Role

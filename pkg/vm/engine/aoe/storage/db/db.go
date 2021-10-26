@@ -168,11 +168,8 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
 	defer collection.Unref()
-	if entry, err := d.Wal.Log(index); err != nil {
+	if err := d.Wal.SyncLog(index); err != nil {
 		return err
-	} else {
-		entry.WaitDone()
-		entry.Free()
 	}
 	return collection.Append(ctx.Data, index)
 }
@@ -254,12 +251,9 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	info.Name = ctx.TableName
 	schema := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
 	index := adaptor.GetLogIndexFromTableOpCtx(&ctx)
-	entry, err := d.Wal.Log(index)
-	if err != nil {
+	if err = d.Wal.SyncLog(index); err != nil {
 		return
 	}
-	defer entry.Free()
-	entry.WaitDone()
 	defer d.Wal.Checkpoint(index)
 
 	logutil.Infof("CreateTable %s", index.String())

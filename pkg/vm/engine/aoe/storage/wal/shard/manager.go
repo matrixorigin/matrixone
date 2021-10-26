@@ -46,6 +46,7 @@ func (noop *noopWal) GetShardId(uint64) (uint64, error) { return uint64(0), nil 
 func (noop *noopWal) String() string                    { return "<noop>" }
 func (noop *noopWal) Checkpoint(interface{})            {}
 func (noop *noopWal) Close() error                      { return nil }
+func (noop *noopWal) SyncLog(wal.Payload) error         { return nil }
 func (noop *noopWal) Log(wal.Payload) (*wal.Entry, error) {
 	entry := wal.GetEntry(uint64(0))
 	entry.SetDone()
@@ -107,6 +108,16 @@ func (mgr *manager) UpdateSafeId(shardId, id uint64) {
 
 func (mgr *manager) GetRole() wal.Role {
 	return mgr.role
+}
+
+func (mgr *manager) SyncLog(payload wal.Payload) error {
+	if entry, err := mgr.Log(payload); err != nil {
+		return err
+	} else {
+		entry.WaitDone()
+		entry.Free()
+		return nil
+	}
 }
 
 func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
