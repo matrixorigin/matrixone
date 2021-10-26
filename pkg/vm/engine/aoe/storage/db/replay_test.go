@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
@@ -73,17 +72,15 @@ func TestReplay1(t *testing.T) {
 	assert.Equal(t, irows*3, uint64(rel.Rows()))
 	err = inst.Flush(name)
 	assert.Nil(t, err)
-	time.Sleep(time.Duration(10) * time.Millisecond)
-	if invariants.RaceEnabled {
-		time.Sleep(time.Duration(40) * time.Millisecond)
-	}
 	err = inst.Flush(name)
 	assert.Nil(t, err)
 
+	testutils.WaitExpect(200, func() bool {
+		return common.GetGlobalSeqNum() == inst.GetShardCheckpointId(0)
+	})
+
 	rel.Close()
 	inst.Close()
-
-	time.Sleep(time.Duration(20) * time.Millisecond)
 
 	inst = initDB(storage.MUTABLE_FT, wal.BrokerRole)
 
@@ -92,6 +89,7 @@ func TestReplay1(t *testing.T) {
 	assert.Nil(t, err)
 	meta = inst.Opts.Meta.Catalog.SimpleGetTable(tid)
 	assert.Equal(t, common.GetGlobalSeqNum(), segmentedIdx)
+	assert.Equal(t, common.GetGlobalSeqNum(), inst.GetShardCheckpointId(0))
 
 	rel, err = inst.Relation(meta.Schema.Name)
 	assert.Nil(t, err)
@@ -112,7 +110,6 @@ func TestReplay1(t *testing.T) {
 	insertFn()
 	t.Log(rel.Rows())
 
-	time.Sleep(time.Duration(10) * time.Millisecond)
 	rel.Close()
 	inst.Close()
 }
@@ -869,7 +866,6 @@ func TestReplay11(t *testing.T) {
 func TestReplay12(t *testing.T) {
 	initDBTest()
 	inst := initDB(storage.MUTABLE_FT, wal.BrokerRole)
-	//inst := initDB(storage.MUTABLE_FT)
 	tInfo := adaptor.MockTableInfo(2)
 	name := "mockcon"
 	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: common.NextGlobalSeqNum()})
@@ -927,10 +923,11 @@ func TestReplay12(t *testing.T) {
 	assert.Equal(t, irows*5, uint64(rel.Rows()))
 	t.Log(rel.Rows())
 	testutils.WaitExpect(200, func() bool {
-		safeId, _ := inst.Wal.GetShardSafeId(rel.Meta.GetCommit().LogIndex.ShardId)
+		safeId := inst.GetShardCheckpointId(rel.Meta.GetCommit().LogIndex.ShardId)
 		return common.GetGlobalSeqNum()-1 == safeId
 	})
-	time.Sleep(time.Duration(20) * time.Millisecond)
+	assert.Equal(t, common.GetGlobalSeqNum()-1, inst.GetShardCheckpointId(rel.Meta.GetCommit().LogIndex.ShardId))
+	time.Sleep(time.Duration(50) * time.Millisecond)
 
 	rel.Close()
 	inst.Close()
@@ -940,11 +937,12 @@ func TestReplay12(t *testing.T) {
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
 	assert.Nil(t, err)
 	assert.Equal(t, common.GetGlobalSeqNum()-1, segmentedIdx)
+	assert.Equal(t, common.GetGlobalSeqNum()-1, inst.GetShardCheckpointId(0))
 
 	rel, err = inst.Relation(meta.Schema.Name)
 	t.Log(rel.Rows())
 	assert.Nil(t, err)
-	assert.Equal(t, irows*4, uint64(rel.Rows()))
+	assert.Equal(t, int64(irows*4), rel.Rows())
 
 	insertFn3 := func() {
 		err = rel.Write(dbi.AppendCtx{
@@ -978,7 +976,6 @@ func TestReplay12(t *testing.T) {
 	insertFn()
 	t.Log(rel.Rows())
 
-	time.Sleep(time.Duration(10) * time.Millisecond)
 	rel.Close()
 	inst.Close()
 }
