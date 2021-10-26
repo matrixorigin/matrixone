@@ -54,6 +54,7 @@ const (
 
 var OpName = map[int]string{
 	UnaryMinus: "-",
+	Not: "!",
 
 	Or:    "or",
 	And:   "and",

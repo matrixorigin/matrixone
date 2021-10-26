@@ -54,7 +54,7 @@ func rewriteNotUnary(e *extend.UnaryExtend) extend.Extend {
 	if e.Op != overload.Not {
 		return e
 	}
-	return negation(e.E, false)
+	return negation(RewriteExtend(e.E), false)
 }
 
 func rewriteNotBinary(e *extend.BinaryExtend) extend.Extend {
@@ -104,7 +104,10 @@ func negation(e extend.Extend, isParen bool) extend.Extend {
 		v.V = vec
 		return v
 	}
-	return e
+	return &extend.UnaryExtend{
+		Op: overload.Not,
+		E:  e,
+	}
 }
 
 func negationBinary(e *extend.BinaryExtend, isParen bool) extend.Extend {
@@ -122,5 +125,8 @@ func negationBinary(e *extend.BinaryExtend, isParen bool) extend.Extend {
 			Right: negation(e.Right, isParen),
 		}
 	}
-	return e
+	return &extend.UnaryExtend{
+		Op: overload.Not,
+		E:  e,
+	}
 }

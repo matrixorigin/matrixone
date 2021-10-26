@@ -367,6 +367,9 @@ func GenerateUnaryOperators() error {
 		},
 		Not:   nil,
 	}
+	for _, num := range numerics{
+		pTs.Not = append(pTs.Not, tr{num, types.T_int8})
+	}
 
 	file, err := os.OpenFile("unaryops.go", os.O_CREATE|os.O_WRONLY, 0755)
 	if err != nil {
@@ -729,6 +732,7 @@ func rewriteTemplateText(tempText string) string {
 	tempText = strings.ReplaceAll(tempText, ".RETURN_TYPE_OID", ".{{.RET.OidString}}")
 	tempText = strings.ReplaceAll(tempText, "L_GO_TYPE", "{{.LTYP.GoType}}")
 	tempText = strings.ReplaceAll(tempText, "R_GO_TYPE", "{{.RTYP.GoType}}")
+	tempText = strings.ReplaceAll(tempText, "RETURN_GO_TYPE", "{{.RET.GoType}}")
 	tempText = strings.ReplaceAll(tempText, "{.LTYP}", "{{.LTYP.GoGoType}}")
 	tempText = strings.ReplaceAll(tempText, "{.RTYP}", "{{.RTYP.GoGoType}}")
 	tempText = strings.ReplaceAll(tempText, "{.RETTYP}", "{{.RET.GoGoType}}")

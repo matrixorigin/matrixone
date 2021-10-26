@@ -105,20 +105,14 @@ func (b *build) pruneNot(e *extend.UnaryExtend) (extend.Extend, error) {
 	if !ok {
 		return e, nil
 	}
-	{
+	ok = false // set Zero
+	switch v.V.Typ.Oid {
+	case types.T_int64:
+		ok = v.V.Col.([]int64)[0] != 0
+	case types.T_float64:
+		ok = v.V.Col.([]float64)[0] != 0
+	default:
 		ok = false
-		switch v.V.Typ.Oid {
-		case types.T_int64:
-			if v.V.Col.([]int64)[0] != 0 {
-				ok = true
-			}
-		case types.T_float64:
-			if v.V.Col.([]float64)[0] != 0 {
-				ok = true
-			}
-		default:
-			ok = false
-		}
 	}
 	vec := vector.New(types.Type{Oid: types.T_int8, Size: 1})
 	if ok {

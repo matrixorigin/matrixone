@@ -16,7 +16,6 @@ package build
 
 import (
 	"fmt"
-	"go/constant"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,9 +25,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op"
 	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
+	"go/constant"
 )
 
 func (b *build) buildExtend(o op.OP, n tree.Expr) (extend.Extend, error) {
+	e, err := b.buildExpr(o, n)
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+func (b *build) buildPrunedExtend(o op.OP, n tree.Expr) (extend.Extend, error) {
 	e, err := b.buildExpr(o, n)
 	if err != nil {
 		return nil, err
