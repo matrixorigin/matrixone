@@ -20,7 +20,7 @@ import (
 	"go/constant"
 )
 
-// AstRewrite do sql rewrite before compile work
+// AstRewrite do sql rewrite before plan build.
 // deal with such case:
 // case 1:  rewrite normal expression in where clause to be logical expression.
 // (1) rewrite `select ... where expr` to `select ... where expr != 0`
