@@ -60,6 +60,7 @@ type proxy struct {
 	lastIndex  uint64
 	safeId     uint64
 	lastSafeId uint64
+	pending    uint64
 	indice     map[uint64]*commitEntry
 	idAlloctor *common.IdAlloctor
 }
@@ -78,6 +79,12 @@ func newProxy(id uint64, mgr *manager) *proxy {
 		p.idAlloctor = new(common.IdAlloctor)
 	}
 	return p
+}
+
+func (p *proxy) GetPendingEntries() uint64 {
+	p.logmu.RLock()
+	defer p.logmu.RUnlock()
+	return p.mask.GetCardinality()
 }
 
 func (p *proxy) String() string {

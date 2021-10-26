@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
@@ -241,6 +242,28 @@ func (mgr *manager) onSnippets(items ...interface{}) {
 	for _, shard := range shards {
 		shard.Checkpoint()
 	}
+}
+
+func (mgr *manager) GetShardPendingEntries(shardId uint64) uint64 {
+	s, err := mgr.GetShard(shardId)
+	if err != nil {
+		return 0
+	}
+	return s.GetPendingEntries()
+}
+
+func (mgr *manager) GetAllPendingEntries() []*shard.ItemsToCheckpointStat {
+	stats := make([]*shard.ItemsToCheckpointStat, 0, 100)
+	mgr.mu.RLock()
+	defer mgr.mu.RUnlock()
+	for _, s := range mgr.shards {
+		stat := &shard.ItemsToCheckpointStat{
+			ShardId: s.id,
+			Count:   int(s.GetPendingEntries()),
+		}
+		stats = append(stats, stat)
+	}
+	return stats
 }
 
 func (mgr *manager) String() string {

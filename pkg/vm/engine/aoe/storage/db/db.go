@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
@@ -322,22 +321,6 @@ func (d *DB) TableNames() []string {
 	return d.Store.Catalog.SimpleGetTableNames()
 }
 
-func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	tbl := d.Store.Catalog.SimpleGetTable(tableID)
-	if tbl == nil {
-		return ids, metadata.TableNotFoundErr
-	}
-	sids := tbl.SimpleGetSegmentIds()
-	// TODO: Refactor metainfo to 1. keep order 2. use common.RelationName
-	for _, sid := range sids {
-		ids = append(ids, common.ID{TableID: tableID, SegmentID: sid})
-	}
-	return ids, err
-}
-
 func (d *DB) GetShardCheckpointId(shardId uint64) uint64 {
 	return d.Wal.GetShardCheckpointId(shardId)
 }
@@ -374,12 +357,6 @@ func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {
 
 func (d *DB) startWorkers() {
 	d.Opts.GC.Acceptor.Start()
-}
-
-func (d *DB) EnsureNotClosed() {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
 }
 
 func (d *DB) IsClosed() bool {

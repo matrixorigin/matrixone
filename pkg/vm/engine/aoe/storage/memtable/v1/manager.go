@@ -17,11 +17,13 @@ package memtable
 import (
 	"errors"
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	"sync"
 )
 
 // manager is the collection manager, it's global,
@@ -47,6 +49,24 @@ var (
 	_ imem.IManager = (*manager)(nil)
 )
 
+type flusherDriver struct {
+	mgr *manager
+	id  uint64
+}
+
+func (driver *flusherDriver) GetId() uint64 {
+	return driver.id
+}
+
+func (driver *flusherDriver) FlushNode(id uint64, force bool) error {
+	c := driver.mgr.StrongRefCollection(id)
+	if c == nil {
+		return nil
+	}
+	defer c.Unref()
+	return c.Flush()
+}
+
 func NewManager(opts *storage.Options, factory fb.MutFactory) *manager {
 	m := &manager{
 		opts:        opts,
@@ -62,6 +82,16 @@ func NewManager(opts *storage.Options, factory fb.MutFactory) *manager {
 		}
 	}
 	return m
+}
+
+func (m *manager) CreateFlusherFactory() flusher.DriverFactory {
+	return func(id uint64) flusher.FlushDriver {
+		driver := &flusherDriver{
+			mgr: m,
+			id:  id,
+		}
+		return driver
+	}
 }
 
 func (m *manager) CollectionIDs() map[uint64]uint64 {
