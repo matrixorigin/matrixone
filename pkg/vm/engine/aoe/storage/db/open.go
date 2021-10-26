@@ -57,7 +57,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	}()
 	opts.FillDefaults(dirname)
 
-	flushDriver := flusher.NewFlusher()
+	flushDriver := flusher.NewDriver()
 
 	fsMgr := ldio.NewManager(dirname, false)
 	indexBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.IndexCapacity)

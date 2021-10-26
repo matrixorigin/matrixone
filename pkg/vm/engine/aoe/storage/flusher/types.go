@@ -2,14 +2,14 @@ package flusher
 
 import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 
-type FlushDriver interface {
+type NodeDriver interface {
 	GetId() uint64
 	FlushNode(id uint64) error
 }
 
-type DriverFactory = func(id uint64) FlushDriver
+type DriverFactory = func(id uint64) NodeDriver
 
-type Flusher interface {
+type Driver interface {
 	shard.NodeAware
 	Start()
 	Stop()

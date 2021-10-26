@@ -39,7 +39,7 @@ func (driver *flusherDriver) FlushNode(id uint64) error {
 }
 
 func createFlusherFactory(mgr imem.IManager) flusher.DriverFactory {
-	return func(id uint64) flusher.FlushDriver {
+	return func(id uint64) flusher.NodeDriver {
 		driver := &flusherDriver{
 			mgr: mgr,
 			id:  id,
@@ -52,7 +52,7 @@ func createFlusherFactory(mgr imem.IManager) flusher.DriverFactory {
 }
 
 type timedFlusherHandle struct {
-	driver   flusher.Flusher
+	driver   flusher.Driver
 	producer wal.ShardWal
 }
 

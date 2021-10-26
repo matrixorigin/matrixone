@@ -73,7 +73,7 @@ type DB struct {
 
 	Wal wal.ShardWal
 
-	FlushDriver  flusher.Flusher
+	FlushDriver  flusher.Driver
 	TimedFlusher wb.IHeartbeater
 
 	// Internal data storage of DB.

@@ -18,11 +18,11 @@ type shardFlusher struct {
 	mu           *sync.RWMutex
 	id           uint64
 	mask         *roaring64.Bitmap
-	driver       FlushDriver
+	driver       NodeDriver
 	pendingItems int
 }
 
-func newShardFlusher(id uint64, driver FlushDriver) *shardFlusher {
+func newShardFlusher(id uint64, driver NodeDriver) *shardFlusher {
 	return &shardFlusher{
 		id:     id,
 		mu:     new(sync.RWMutex),

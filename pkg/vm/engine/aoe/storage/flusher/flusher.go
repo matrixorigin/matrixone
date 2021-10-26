@@ -37,7 +37,7 @@ type driver struct {
 	factory   DriverFactory
 }
 
-func NewFlusher() *driver {
+func NewDriver() *driver {
 	f := &driver{
 		flushmask: roaring64.New(),
 		shards:    make(map[uint64](*shardFlusher)),
