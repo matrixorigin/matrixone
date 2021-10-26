@@ -40,7 +40,7 @@ import (
 
 func TestEngine(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT, wal.HolderRole)
+	inst := initDB(storage.MUTABLE_FT, wal.HolderRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)
@@ -223,7 +223,7 @@ func TestEngine(t *testing.T) {
 
 func TestLogIndex(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT, wal.HolderRole)
+	inst := initDB(storage.MUTABLE_FT, wal.HolderRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)

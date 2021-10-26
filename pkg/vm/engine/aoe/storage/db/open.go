@@ -43,7 +43,7 @@ func OpenWithWalBroker(dirname string, opts *storage.Options) (db *DB, err error
 }
 
 func Open(dirname string, opts *storage.Options) (db *DB, err error) {
-	// opts.FactoryType = e.MUTABLE_FT
+	opts.FactoryType = storage.MUTABLE_FT
 	dbLocker, err := createDBLock(dirname)
 	if err != nil {
 		return nil, err

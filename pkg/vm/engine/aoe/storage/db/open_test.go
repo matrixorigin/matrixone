@@ -65,7 +65,7 @@ func TestDBReplay(t *testing.T) {
 	}
 	initDBTest()
 	// ft := storage.MUTABLE_FT
-	ft := storage.NORMAL_FT
+	ft := storage.MUTABLE_FT
 	inst := initDB(ft, wal.BrokerRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl", OpIndex: uint64(1)})

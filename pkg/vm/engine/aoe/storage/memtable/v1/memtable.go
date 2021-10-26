@@ -175,7 +175,7 @@ func (mt *memTable) close() {
 	if mt.meta.Segment.Table.IsDeleted() {
 		snip := mt.meta.ConsumeSnippet(true)
 		// logutil.Infof("commit snip: %s", snip.String())
-		mt.opts.Wal.Checkpoint(snip)
+		mt.meta.Segment.Table.Catalog.IndexWal.Checkpoint(snip)
 	}
 	if mt.ibat != nil {
 		mt.ibat.Close()

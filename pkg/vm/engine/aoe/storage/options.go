@@ -114,7 +114,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	o.EventListener.FillDefaults()
 
 	if o.FactoryType == INVALID_FT {
-		o.FactoryType = NORMAL_FT
+		o.FactoryType = MUTABLE_FT
 	}
 
 	if o.SchedulerCfg == nil {

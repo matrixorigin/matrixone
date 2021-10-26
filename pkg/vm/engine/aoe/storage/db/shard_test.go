@@ -239,7 +239,7 @@ func TestShard2(t *testing.T) {
 	}
 
 	initDBTest()
-	inst := initDB(storage.NORMAL_FT, wal.BrokerRole)
+	inst := initDB(storage.MUTABLE_FT, wal.BrokerRole)
 
 	shardCnt := 4
 	shards := make([]*mockShard, shardCnt)
