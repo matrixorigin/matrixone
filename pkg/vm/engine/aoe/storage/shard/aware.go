@@ -3,7 +3,7 @@ package shard
 type Aware interface {
 	ShardCreated(id uint64)
 	ShardDeleted(id uint64)
-	OnShardStats(id uint64, stats interface{})
+	OnStats(stats interface{})
 }
 
 type Node interface {

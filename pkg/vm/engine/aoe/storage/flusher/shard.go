@@ -49,14 +49,16 @@ func (sf *shardFlusher) addNode(id uint64) error {
 	return nil
 }
 
-func (sf *shardFlusher) deleteNode(nodeId uint64) error {
+func (sf *shardFlusher) deleteNode(nodeId uint64) (left uint64, err error) {
 	sf.mu.Lock()
 	defer sf.mu.Unlock()
 	if !sf.mask.Contains(nodeId) {
-		return ErrDuplicateNodeFlusher
+		err = ErrNotFoundNodeFlusher
+		return
 	}
 	sf.mask.Remove(nodeId)
-	return nil
+	left = sf.mask.GetCardinality()
+	return
 }
 
 func (sf *shardFlusher) doFlush() {
@@ -64,7 +66,7 @@ func (sf *shardFlusher) doFlush() {
 	it := nodes.Iterator()
 	for it.HasNext() {
 		id := it.Next()
-		if err := sf.driver.FlushNode(id, false); err != nil {
+		if err := sf.driver.FlushNode(id); err != nil {
 			logutil.Warnf("cannot flush shard-%d node-%d", sf.id, id)
 			break
 		}
@@ -84,10 +86,6 @@ func (sf *shardFlusher) String() string {
 	for k, _ := range sf.mask.ToArray() {
 		str = fmt.Sprintf("%s %d", str, k)
 	}
-	if sf.mask.GetCardinality() == 0 {
-		str = fmt.Sprintf("%s}", str)
-	} else {
-		str = fmt.Sprintf("%s\n}", str)
-	}
+	str = fmt.Sprintf("%s}", str)
 	return str
 }

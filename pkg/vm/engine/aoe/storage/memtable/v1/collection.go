@@ -16,6 +16,8 @@ package memtable
 
 import (
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"sync"
 )
 
 // collection is the collection of memTable
@@ -66,6 +67,10 @@ func NewCollection(tableData iface.ITableData, opts *storage.Options) imem.IColl
 	c.OnZeroCB = c.close
 	c.Ref()
 	return c
+}
+
+func (c *collection) GetMeta() *metadata.Table {
+	return c.tableData.GetMeta()
 }
 
 func (c *collection) String() string {

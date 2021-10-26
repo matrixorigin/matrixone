@@ -56,6 +56,10 @@ func newMutableCollection(mgr *manager, data iface.ITableData) *mutableCollectio
 	return c
 }
 
+func (c *mutableCollection) GetMeta() *metadata.Table {
+	return c.data.GetMeta()
+}
+
 func (c *mutableCollection) close() {
 	if c.data != nil {
 		c.data.Unref()

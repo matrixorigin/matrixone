@@ -14,6 +14,8 @@
 package mutation
 
 import (
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -22,7 +24,6 @@ import (
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
-	"sync/atomic"
 )
 
 type blockFlusher struct{}
@@ -102,6 +103,7 @@ func (n *MutableBlockNode) Flush() error {
 	if err := n.Flusher(n, data, meta, n.File); err != nil {
 		return err
 	}
+	meta.Segment.Table.UpdateFlushTS()
 	n.updateApplied(meta)
 	wal := n.Meta.Segment.Table.Catalog.IndexWal
 	if wal != nil {

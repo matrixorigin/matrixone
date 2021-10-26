@@ -21,9 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 )
 
 // manager is the collection manager, it's global,
@@ -43,33 +43,18 @@ type manager struct {
 	// factory is the factory that produces
 	// different types of the collection
 	factory fb.CollectionFactory
+
+	aware shard.NodeAware
 }
 
 var (
 	_ imem.IManager = (*manager)(nil)
 )
 
-type flusherDriver struct {
-	mgr *manager
-	id  uint64
-}
-
-func (driver *flusherDriver) GetId() uint64 {
-	return driver.id
-}
-
-func (driver *flusherDriver) FlushNode(id uint64, force bool) error {
-	c := driver.mgr.StrongRefCollection(id)
-	if c == nil {
-		return nil
-	}
-	defer c.Unref()
-	return c.Flush()
-}
-
-func NewManager(opts *storage.Options, factory fb.MutFactory) *manager {
+func NewManager(opts *storage.Options, aware shard.NodeAware, factory fb.MutFactory) *manager {
 	m := &manager{
 		opts:        opts,
+		aware:       aware,
 		collections: make(map[uint64]imem.ICollection),
 	}
 	if factory == nil {
@@ -82,16 +67,6 @@ func NewManager(opts *storage.Options, factory fb.MutFactory) *manager {
 		}
 	}
 	return m
-}
-
-func (m *manager) CreateFlusherFactory() flusher.DriverFactory {
-	return func(id uint64) flusher.FlushDriver {
-		driver := &flusherDriver{
-			mgr: m,
-			id:  id,
-		}
-		return driver
-	}
 }
 
 func (m *manager) CollectionIDs() map[uint64]uint64 {
@@ -157,6 +132,10 @@ func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err er
 	m.collections[tableData.GetID()] = c
 	m.Unlock()
 	c.Ref()
+	if m.aware != nil {
+		meta := c.GetMeta()
+		m.aware.ShardNodeCreated(meta.GetCommit().LogIndex.ShardId, meta.Id)
+	}
 	return c, err
 }
 
@@ -170,5 +149,9 @@ func (m *manager) UnregisterCollection(id uint64) (c imem.ICollection, err error
 		return nil, errors.New("logic error")
 	}
 	m.Unlock()
+	if m.aware != nil {
+		meta := c.GetMeta()
+		m.aware.ShardNodeDeleted(meta.GetCommit().LogIndex.ShardId, meta.Id)
+	}
 	return c, err
 }

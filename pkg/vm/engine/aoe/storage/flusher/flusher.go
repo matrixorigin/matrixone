@@ -1,6 +1,7 @@
 package flusher
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -27,8 +28,8 @@ type shardNodeDeletedCtx struct {
 	nodeId  uint64
 }
 
-type flusher struct {
-	sm.Closable
+type driver struct {
+	sm.ClosedState
 	sm.StateMachine
 	mu        sync.RWMutex
 	shards    map[uint64]*shardFlusher
@@ -36,21 +37,39 @@ type flusher struct {
 	factory   DriverFactory
 }
 
-func NewFlusher(factory DriverFactory) *flusher {
-	f := &flusher{
-		factory:   factory,
+func NewFlusher() *driver {
+	f := &driver{
 		flushmask: roaring64.New(),
 		shards:    make(map[uint64](*shardFlusher)),
 	}
 	wg := new(sync.WaitGroup)
-	rqueue := sm.NewWaitableQueue(10000, 100, f, nil, nil, nil, f.onMessages)
+	rqueue := sm.NewWaitableQueue(10000, 100, f, wg, nil, nil, f.onMessages)
 	// TODO: flushQueue should be non-blocking
-	wqueue := sm.NewWaitableQueue(20000, 1000, f, nil, nil, nil, f.onFlushes)
+	wqueue := sm.NewWaitableQueue(20000, 1000, f, wg, nil, nil, f.onFlushes)
 	f.StateMachine = sm.NewStateMachine(wg, f, rqueue, wqueue)
 	return f
 }
 
-func (f *flusher) onFlushes(items ...interface{}) {
+func (f *driver) InitFactory(factory DriverFactory) {
+	f.factory = factory
+}
+
+func (f *driver) String() string {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	str := fmt.Sprintf("driver<cnt=%d>{", len(f.shards))
+	for _, sf := range f.shards {
+		str = fmt.Sprintf("%s\n%s", str, sf.String())
+	}
+	if len(f.shards) > 0 {
+		str = fmt.Sprintf("%s\n}", str)
+	} else {
+		str = fmt.Sprintf("%s}", str)
+	}
+	return str
+}
+
+func (f *driver) onFlushes(items ...interface{}) {
 	defer f.flushmask.Clear()
 	for _, item := range items {
 		mask := item.(*roaring64.Bitmap)
@@ -63,10 +82,11 @@ func (f *flusher) onFlushes(items ...interface{}) {
 		if s == nil {
 			continue
 		}
+		s.doFlush()
 	}
 }
 
-func (f *flusher) onMessage(msg interface{}) {
+func (f *driver) onMessage(msg interface{}) {
 	switch ctx := msg.(type) {
 	case *shardCreatedCtx:
 		f.addShard(ctx)
@@ -81,23 +101,27 @@ func (f *flusher) onMessage(msg interface{}) {
 	}
 }
 
-func (f *flusher) onMessages(items ...interface{}) {
+func (f *driver) onMessages(items ...interface{}) {
 	for _, item := range items {
 		f.onMessage(item)
 	}
 }
 
-func (f *flusher) ShardCreated(id uint64) {
+func (f *driver) OnStats(stats interface{}) {
+	f.EnqueueRecevied(stats)
+}
+
+func (f *driver) ShardCreated(id uint64) {
 	ctx := &shardCreatedCtx{id: id}
 	f.EnqueueRecevied(ctx)
 }
 
-func (f *flusher) ShardDeleted(id uint64) {
+func (f *driver) ShardDeleted(id uint64) {
 	ctx := &shardDeletedCtx{id: id}
 	f.EnqueueRecevied(ctx)
 }
 
-func (f *flusher) ShardNodeCreated(shardId, nodeId uint64) {
+func (f *driver) ShardNodeCreated(shardId, nodeId uint64) {
 	ctx := &shardNodeCreatedCtx{
 		shardId: shardId,
 		nodeId:  nodeId,
@@ -105,7 +129,7 @@ func (f *flusher) ShardNodeCreated(shardId, nodeId uint64) {
 	f.EnqueueRecevied(ctx)
 }
 
-func (f *flusher) ShardNodeDeleted(shardId, nodeId uint64) {
+func (f *driver) ShardNodeDeleted(shardId, nodeId uint64) {
 	ctx := &shardNodeDeletedCtx{
 		shardId: shardId,
 		nodeId:  nodeId,
@@ -113,30 +137,33 @@ func (f *flusher) ShardNodeDeleted(shardId, nodeId uint64) {
 	f.EnqueueRecevied(ctx)
 }
 
-func (f *flusher) getShard(id uint64) *shardFlusher {
+func (f *driver) getShard(id uint64) *shardFlusher {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 	sf, _ := f.shards[id]
 	return sf
 }
 
-func (f *flusher) addShard(ctx *shardCreatedCtx) {
+func (f *driver) addShard(ctx *shardCreatedCtx) *shardFlusher {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.shards[ctx.id] = newShardFlusher(ctx.id, f.factory(ctx.id))
+	return f.shards[ctx.id]
 }
 
-func (f *flusher) deleteShard(ctx *shardDeletedCtx) {
+func (f *driver) deleteShard(ctx *shardDeletedCtx) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.shards, ctx.id)
 }
 
-func (f *flusher) addShardNode(ctx *shardNodeCreatedCtx) {
+func (f *driver) addShardNode(ctx *shardNodeCreatedCtx) {
 	s := f.getShard(ctx.shardId)
 	if s == nil {
-		logutil.Warnf("Specified shard %d not found", ctx.shardId)
-		return
+		addCtx := &shardCreatedCtx{
+			id: ctx.shardId,
+		}
+		s = f.addShard(addCtx)
 	}
 	if err := s.addNode(ctx.nodeId); err != nil {
 		logutil.Warn(err.Error())
@@ -144,21 +171,29 @@ func (f *flusher) addShardNode(ctx *shardNodeCreatedCtx) {
 	return
 }
 
-func (f *flusher) deleteShardNode(ctx *shardNodeDeletedCtx) {
+func (f *driver) deleteShardNode(ctx *shardNodeDeletedCtx) {
 	s := f.getShard(ctx.shardId)
 	if s == nil {
 		logutil.Warnf("Specified shard %d not found", ctx.shardId)
 		return
 	}
-	if err := s.deleteNode(ctx.nodeId); err != nil {
+	if left, err := s.deleteNode(ctx.nodeId); err != nil {
 		logutil.Warn(err.Error())
+	} else if left == 0 {
+		deleteCtx := &shardDeletedCtx{
+			id: ctx.shardId,
+		}
+		f.deleteShard(deleteCtx)
 	}
 	return
 }
 
-func (f *flusher) onPengdingItems(items []*shard.ItemsToCheckpointStat) {
+func (f *driver) onPengdingItems(items []*shard.ItemsToCheckpointStat) {
 	toFlush := roaring64.New()
 	for _, stat := range items {
+		if stat.Count == 0 {
+			continue
+		}
 		s := f.getShard(stat.ShardId)
 		if s == nil {
 			logutil.Warnf("Specified shard %d not found", stat.ShardId)

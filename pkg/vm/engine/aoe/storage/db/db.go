@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
@@ -41,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
 var (
@@ -70,6 +72,9 @@ type DB struct {
 	MutationBufMgr bb.INodeManager
 
 	Wal wal.ShardWal
+
+	FlushDriver  flusher.Flusher
+	TimedFlusher wb.IHeartbeater
 
 	// Internal data storage of DB.
 	Store struct {
@@ -357,6 +362,8 @@ func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {
 
 func (d *DB) startWorkers() {
 	d.Opts.GC.Acceptor.Start()
+	d.FlushDriver.Start()
+	d.TimedFlusher.Start()
 }
 
 func (d *DB) IsClosed() bool {
@@ -367,6 +374,8 @@ func (d *DB) IsClosed() bool {
 }
 
 func (d *DB) stopWorkers() {
+	d.TimedFlusher.Stop()
+	d.FlushDriver.Stop()
 	d.Opts.GC.Acceptor.Stop()
 }
 

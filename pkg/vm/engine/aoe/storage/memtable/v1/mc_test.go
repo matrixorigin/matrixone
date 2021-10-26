@@ -51,7 +51,7 @@ func TestMutCollection(t *testing.T) {
 
 	capacity := blockRows * 4 * uint64(colcnt) * 1 * 1 * 2
 	// capacity := blockRows * 4 * uint64(colcnt) * 2 * 2 * 4
-	manager := NewManager(opts, nil)
+	manager := NewManager(opts, nil, nil)
 	fsMgr := ldio.NewManager(dir, false)
 	indexBufMgr := bmgr.NewBufferManager(dir, capacity)
 	mtBufMgr := bmgr.NewBufferManager(dir, capacity)

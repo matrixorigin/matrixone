@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
@@ -61,10 +60,10 @@ type ICollection interface {
 	Flush() error
 	FetchImmuTable() IMemTable
 	String() string
+	GetMeta() *metadata.Table
 }
 
 type IManager interface {
-	CreateFlusherFactory() flusher.DriverFactory
 	WeakRefCollection(id uint64) ICollection
 	StrongRefCollection(id uint64) ICollection
 	RegisterCollection(interface{}) (c ICollection, err error)
