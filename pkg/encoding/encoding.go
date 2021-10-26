@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+//go:build !debug
 // +build !debug
 
 package encoding
@@ -19,9 +20,9 @@ package encoding
 import (
 	"bytes"
 	"encoding/gob"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"reflect"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var TypeSize int
@@ -50,8 +51,7 @@ func Decode(data []byte, v interface{}) error {
 }
 
 func EncodeType(v types.Type) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: TypeSize, Cap: TypeSize}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), TypeSize)
 }
 
 func DecodeType(v []byte) types.Type {
@@ -59,8 +59,7 @@ func DecodeType(v []byte) types.Type {
 }
 
 func EncodeInt8(v int8) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 1, Cap: 1}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 1)
 }
 
 func DecodeInt8(v []byte) int8 {
@@ -68,8 +67,7 @@ func DecodeInt8(v []byte) int8 {
 }
 
 func EncodeUint8(v uint8) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 1, Cap: 1}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 1)
 }
 
 func DecodeUint8(v []byte) uint8 {
@@ -77,8 +75,7 @@ func DecodeUint8(v []byte) uint8 {
 }
 
 func EncodeInt16(v int16) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 2, Cap: 2}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 2)
 }
 
 func DecodeInt16(v []byte) int16 {
@@ -86,8 +83,7 @@ func DecodeInt16(v []byte) int16 {
 }
 
 func EncodeUint16(v uint16) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 2, Cap: 2}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 2)
 }
 
 func DecodeUint16(v []byte) uint16 {
@@ -95,8 +91,7 @@ func DecodeUint16(v []byte) uint16 {
 }
 
 func EncodeInt32(v int32) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 4)
 }
 
 func DecodeInt32(v []byte) int32 {
@@ -104,8 +99,7 @@ func DecodeInt32(v []byte) int32 {
 }
 
 func EncodeUint32(v uint32) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 4)
 }
 
 func DecodeUint32(v []byte) uint32 {
@@ -113,8 +107,7 @@ func DecodeUint32(v []byte) uint32 {
 }
 
 func EncodeInt64(v int64) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
 }
 
 func DecodeInt64(v []byte) int64 {
@@ -122,8 +115,7 @@ func DecodeInt64(v []byte) int64 {
 }
 
 func EncodeUint64(v uint64) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
 }
 
 func DecodeUint64(v []byte) uint64 {
@@ -131,8 +123,7 @@ func DecodeUint64(v []byte) uint64 {
 }
 
 func EncodeFloat32(v float32) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 4)
 }
 
 func DecodeFloat32(v []byte) float32 {
@@ -140,8 +131,7 @@ func DecodeFloat32(v []byte) float32 {
 }
 
 func EncodeFloat64(v float64) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
 }
 
 func DecodeFloat64(v []byte) float64 {
@@ -149,8 +139,7 @@ func DecodeFloat64(v []byte) float64 {
 }
 
 func EncodeDate(v types.Date) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 4, Cap: 4}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 4)
 }
 
 func DecodeDate(v []byte) types.Date {
@@ -158,8 +147,7 @@ func DecodeDate(v []byte) types.Date {
 }
 
 func EncodeDatetime(v types.Datetime) []byte {
-	hp := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(&v)), Len: 8, Cap: 8}
-	return *(*[]byte)(unsafe.Pointer(&hp))
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
 }
 
 func DecodeDatetime(v []byte) types.Datetime {
@@ -182,158 +170,158 @@ func DecodeUint8Slice(v []byte) []uint8 {
 	return v
 }
 
-func EncodeInt16Slice(v []int16) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= 2
-	hp.Cap *= 2
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeInt16Slice(v []int16) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*2)[:len(v)*2]
+	}
+	return
 }
 
-func DecodeInt16Slice(v []byte) []int16 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= 2
-	hp.Cap /= 2
-	return *(*[]int16)(unsafe.Pointer(&hp))
+func DecodeInt16Slice(v []byte) (ret []int16) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*int16)(unsafe.Pointer(&v[0])), cap(v)/2)[:len(v)/2]
+	}
+	return
 }
 
-func EncodeUint16Slice(v []uint16) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= 2
-	hp.Cap *= 2
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeUint16Slice(v []uint16) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*2)[:len(v)*2]
+	}
+	return
 }
 
-func DecodeUint16Slice(v []byte) []uint16 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= 2
-	hp.Cap /= 2
-	return *(*[]uint16)(unsafe.Pointer(&hp))
+func DecodeUint16Slice(v []byte) (ret []uint16) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*uint16)(unsafe.Pointer(&v[0])), cap(v)/2)[:len(v)/2]
+	}
+	return
 }
 
-func EncodeInt32Slice(v []int32) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= 4
-	hp.Cap *= 4
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeInt32Slice(v []int32) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*4)[:len(v)*4]
+	}
+	return
 }
 
-func DecodeInt32Slice(v []byte) []int32 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= 4
-	hp.Cap /= 4
-	return *(*[]int32)(unsafe.Pointer(&hp))
+func DecodeInt32Slice(v []byte) (ret []int32) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*int32)(unsafe.Pointer(&v[0])), cap(v)/4)[:len(v)/4]
+	}
+	return
 }
 
-func EncodeUint32Slice(v []uint32) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= 4
-	hp.Cap *= 4
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeUint32Slice(v []uint32) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*4)[:len(v)*4]
+	}
+	return
 }
 
-func DecodeUint32Slice(v []byte) []uint32 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= 4
-	hp.Cap /= 4
-	return *(*[]uint32)(unsafe.Pointer(&hp))
+func DecodeUint32Slice(v []byte) (ret []uint32) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*uint32)(unsafe.Pointer(&v[0])), cap(v)/4)[:len(v)/4]
+	}
+	return
 }
 
-func EncodeInt64Slice(v []int64) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= 8
-	hp.Cap *= 8
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeInt64Slice(v []int64) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*8)[:len(v)*8]
+	}
+	return
 }
 
-func DecodeInt64Slice(v []byte) []int64 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= 8
-	hp.Cap /= 8
-	return *(*[]int64)(unsafe.Pointer(&hp))
+func DecodeInt64Slice(v []byte) (ret []int64) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*int64)(unsafe.Pointer(&v[0])), cap(v)/8)[:len(v)/8]
+	}
+	return
 }
 
-func EncodeUint64Slice(v []uint64) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= 8
-	hp.Cap *= 8
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeUint64Slice(v []uint64) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*8)[:len(v)*8]
+	}
+	return
 }
 
-func DecodeUint64Slice(v []byte) []uint64 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= 8
-	hp.Cap /= 8
-	return *(*[]uint64)(unsafe.Pointer(&hp))
+func DecodeUint64Slice(v []byte) (ret []uint64) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*uint64)(unsafe.Pointer(&v[0])), cap(v)/8)[:len(v)/8]
+	}
+	return
 }
 
-func EncodeFloat32Slice(v []float32) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= 4
-	hp.Cap *= 4
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeFloat32Slice(v []float32) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*4)[:len(v)*4]
+	}
+	return
 }
 
-func DecodeFloat32Slice(v []byte) []float32 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= 4
-	hp.Cap /= 4
-	return *(*[]float32)(unsafe.Pointer(&hp))
+func DecodeFloat32Slice(v []byte) (ret []float32) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*float32)(unsafe.Pointer(&v[0])), cap(v)/4)[:len(v)/4]
+	}
+	return
 }
 
-func EncodeFloat64Slice(v []float64) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= 8
-	hp.Cap *= 8
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeFloat64Slice(v []float64) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*8)[:len(v)*8]
+	}
+	return
 }
 
-func DecodeFloat64Slice(v []byte) []float64 {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= 8
-	hp.Cap /= 8
-	return *(*[]float64)(unsafe.Pointer(&hp))
+func DecodeFloat64Slice(v []byte) (ret []float64) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*float64)(unsafe.Pointer(&v[0])), cap(v)/8)[:len(v)/8]
+	}
+	return
 }
 
-func EncodeDateSlice(v []types.Date) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= DateSize
-	hp.Cap *= DateSize
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeDateSlice(v []types.Date) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*DateSize)[:len(v)*DateSize]
+	}
+	return
 }
 
-func DecodeDateSlice(v []byte) []types.Date {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= DateSize
-	hp.Cap /= DateSize
-	return *(*[]types.Date)(unsafe.Pointer(&hp))
+func DecodeDateSlice(v []byte) (ret []types.Date) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*types.Date)(unsafe.Pointer(&v[0])), cap(v)/DateSize)[:len(v)/DateSize]
+	}
+	return
 }
 
-func EncodeDatetimeSlice(v []types.Datetime) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= DatetimeSize
-	hp.Cap *= DatetimeSize
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeDatetimeSlice(v []types.Datetime) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*DatetimeSize)[:len(v)*DatetimeSize]
+	}
+	return
 }
 
-func DecodeDatetimeSlice(v []byte) []types.Datetime {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= DatetimeSize
-	hp.Cap /= DatetimeSize
-	return *(*[]types.Datetime)(unsafe.Pointer(&hp))
+func DecodeDatetimeSlice(v []byte) (ret []types.Datetime) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*types.Datetime)(unsafe.Pointer(&v[0])), cap(v)/DatetimeSize)[:len(v)/DatetimeSize]
+	}
+	return
 }
 
-func EncodeDecimalSlice(v []types.Decimal) []byte {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len *= DecimalSize
-	hp.Cap *= DecimalSize
-	return *(*[]byte)(unsafe.Pointer(&hp))
+func EncodeDecimalSlice(v []types.Decimal) (ret []byte) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*DecimalSize)[:len(v)*DecimalSize]
+	}
+	return
 }
 
-func DecodeDecimalSlice(v []byte) []types.Decimal {
-	hp := *(*reflect.SliceHeader)(unsafe.Pointer(&v))
-	hp.Len /= DecimalSize
-	hp.Cap /= DecimalSize
-	return *(*[]types.Decimal)(unsafe.Pointer(&hp))
+func DecodeDecimalSlice(v []byte) (ret []types.Decimal) {
+	if len(v) > 0 {
+		ret = unsafe.Slice((*types.Decimal)(unsafe.Pointer(&v[0])), cap(v)/DecimalSize)[:len(v)/DecimalSize]
+	}
+	return
 }
 
 func EncodeStringSlice(vs []string) []byte {
