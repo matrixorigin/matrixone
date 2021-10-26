@@ -50,9 +50,9 @@ func (noop *noopWal) Log(wal.Payload) (*wal.Entry, error) {
 	entry.SetDone()
 	return entry, nil
 }
-func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64)        { return }
-func (noop *noopWal) GetShardSafeId(shardId uint64) (id uint64, err error) { return }
-func (noop *noopWal) InitShard(shardId, safeId uint64) error               { return nil }
+func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64) { return }
+func (noop *noopWal) GetShardCheckpointId(shardId uint64) uint64    { return 0 }
+func (noop *noopWal) InitShard(shardId, safeId uint64) error        { return nil }
 
 type manager struct {
 	sm.ClosedState
@@ -128,12 +128,13 @@ func (mgr *manager) GetShardCurrSeqNum(shardId uint64) (id uint64) {
 	return
 }
 
-func (mgr *manager) GetShardSafeId(shardId uint64) (id uint64, err error) {
+func (mgr *manager) GetShardCheckpointId(shardId uint64) uint64 {
 	s, err := mgr.GetShard(shardId)
 	if err != nil {
-		return
+		logutil.Warnf("shard %d not found", shardId)
+		return 0
 	}
-	return s.GetSafeId(), err
+	return s.GetSafeId()
 }
 
 func (mgr *manager) EnqueueEntry(entry *Entry) error {

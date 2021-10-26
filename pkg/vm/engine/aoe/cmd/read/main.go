@@ -157,7 +157,8 @@ func readData() {
 		panic(err)
 	}
 	id, _ := impl.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableName))
-	log.Infof("segmented id: %d", id)
+	safeId := impl.GetShardCheckpointId(0)
+	log.Infof("segmented id: %d, SafeId: %d", id, safeId)
 	rel, err := dbase.Relation(tableName)
 	if err != nil {
 		panic(err)

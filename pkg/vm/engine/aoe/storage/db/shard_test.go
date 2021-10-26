@@ -113,8 +113,7 @@ func (s *mockShard) insert(ctx *dbi.AppendCtx) error {
 }
 
 func (s *mockShard) getSafeId() uint64 {
-	id, _ := s.inst.Wal.GetShardSafeId(s.id)
-	return id
+	return s.inst.Wal.GetShardCheckpointId(s.id)
 }
 
 type mockClient struct {

@@ -16,6 +16,8 @@ package driver
 
 import (
 	"encoding/json"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	aoe2 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
@@ -23,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"time"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/command"
@@ -114,7 +115,7 @@ func (h *driver) append(shard bhmetapb.Shard, req *raftcmdpb.Request, ctx comman
 	return writtenBytes, changedBytes, resp
 }
 
-//getSegmentedId responses the requests whose CustemType is GetSegmentedId.
+//getSegmentedId responses the requests whose CustemType is GetShardPersistedId.
 //It returns the id of one of the segments of the table.
 //If fail, it returns the err in resp.Value and returns 500.
 //If success, it returns the id in resp.Value and returns 0.
@@ -122,11 +123,7 @@ func (h *driver) getSegmentedId(shard bhmetapb.Shard, req *raftcmdpb.Request, ct
 	resp := pb.AcquireResponse()
 	customReq := &pb3.GetSegmentedIdRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
-	rsp, err := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*aoe2.Storage).GetSegmentedId(codec.Uint642String(customReq.ShardId))
-	if err != nil {
-		resp.Value = errorResp(err)
-		return resp, 500
-	}
+	rsp := h.store.DataStorageByGroup(shard.Group, req.ToShard).(*aoe2.Storage).GetShardPesistedId(customReq.ShardId)
 	resp.Value = codec.Uint642Bytes(rsp)
 	return resp, 0
 }

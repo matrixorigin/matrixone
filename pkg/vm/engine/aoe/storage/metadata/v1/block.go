@@ -137,7 +137,9 @@ func (e *Block) AppendIndex(index *LogIndex) {
 }
 
 func (e *Block) ConsumeSnippet(reset bool) *shard.Snippet {
+	e.RLock()
 	snippet := e.IndiceMemo.Fetch(e)
+	e.RUnlock()
 	if reset {
 		e.Lock()
 		defer e.Unlock()

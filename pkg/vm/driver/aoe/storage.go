@@ -15,14 +15,15 @@
 package aoe
 
 import (
+	"os"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	store "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
-	"os"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
 	"github.com/matrixorigin/matrixcube/storage/stats"
@@ -99,16 +100,9 @@ func (s *Storage) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
 	return s.DB.GetSegmentIds(ctx)
 }
 
-//GetSegmentedId returns the smallest segmente id among the tables starts with prefix
-func (s *Storage) GetSegmentedId(prefix string) (index uint64, err error) {
-	return s.DB.GetSegmentedId(dbi.GetSegmentedIdCtx{
-		Matchers: []*dbi.StringMatcher{
-			{
-				Type:    dbi.MTPrefix,
-				Pattern: prefix,
-			},
-		},
-	})
+//GetShardPesistedId returns the smallest segmente id among the tables starts with prefix
+func (s *Storage) GetShardPesistedId(shardId uint64) uint64 {
+	return s.DB.GetShardCheckpointId(shardId)
 }
 
 //CreateTable creates a table in the storage.

@@ -18,6 +18,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"sync"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
@@ -38,9 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
-	"os"
-	"sync"
-	"sync/atomic"
 )
 
 var (
@@ -335,6 +336,10 @@ func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
 		ids = append(ids, common.ID{TableID: tableID, SegmentID: sid})
 	}
 	return ids, err
+}
+
+func (d *DB) GetShardCheckpointId(shardId uint64) uint64 {
+	return d.Wal.GetShardCheckpointId(shardId)
 }
 
 func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {

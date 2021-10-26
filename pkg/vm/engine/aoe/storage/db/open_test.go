@@ -98,13 +98,13 @@ func TestDBReplay(t *testing.T) {
 	assert.Nil(t, err)
 
 	testutils.WaitExpect(200, func() bool {
-		id, _ := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
-		return id == uint64(insertCnt)
+		return uint64(insertCnt) == inst.GetShardCheckpointId(0)
 	})
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, uint64(insertCnt), segmentedIdx)
+	assert.Equal(t, uint64(insertCnt), inst.GetShardCheckpointId(0))
 
 	t.Logf("Row count: %d", tbl.GetRowCount())
 	assert.Equal(t, rows*uint64(insertCnt), tbl.GetRowCount())
@@ -160,8 +160,6 @@ func TestDBReplay(t *testing.T) {
 	// t.Log(inst.SSTBufMgr.String())
 	testutils.WaitExpect(200, func() bool {
 		return 2*rows*uint64(insertCnt)-2*tblMeta.Schema.BlockMaxRows == tbl.GetRowCount()
-		// id, _ := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
-		// return id == uint64(insertCnt)
 	})
 	t.Logf("Row count: %d", tbl.GetRowCount())
 	assert.Equal(t, 2*rows*uint64(insertCnt)-2*tblMeta.Schema.BlockMaxRows, tbl.GetRowCount())
@@ -169,14 +167,14 @@ func TestDBReplay(t *testing.T) {
 	preSegmentedIdx := segmentedIdx
 
 	testutils.WaitExpect(200, func() bool {
-		id, _ := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
-		return id == preSegmentedIdx+uint64(insertCnt)-1
+		return preSegmentedIdx+uint64(insertCnt)-1 == inst.GetShardCheckpointId(0)
 	})
 
 	segmentedIdx, err = inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
 	assert.Nil(t, err)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, segmentedIdx)
+	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, inst.GetShardCheckpointId(0))
 
 	inst.Close()
 }
