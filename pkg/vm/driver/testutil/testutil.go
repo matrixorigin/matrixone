@@ -19,11 +19,13 @@ import (
 	"github.com/cockroachdb/pebble"
 	config2 "github.com/matrixorigin/matrixcube/components/prophet/config"
 	"github.com/matrixorigin/matrixcube/components/prophet/pb/metapb"
+	"github.com/matrixorigin/matrixcube/storage/kv"
 	"github.com/matrixorigin/matrixcube/vfs"
-	stdLog "log"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	aoe2 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
+	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
+	stdLog "log"
 	"testing"
 	"time"
 
@@ -31,8 +33,8 @@ import (
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/matrixorigin/matrixcube/storage"
-	"github.com/matrixorigin/matrixcube/storage/mem"
-	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
+	"github.com/matrixorigin/matrixcube/storage/kv/mem"
+	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -106,12 +108,16 @@ func (opts *testAOEClusterOptions) adjust() {
 	if opts.kvDataFactoryFunc == nil {
 		opts.kvDataFactoryFunc = func(path string) (storage.DataStorage, error) {
 			if opts.usePebble {
-				return cPebble.NewStorage(path, &pebble.Options{
+				kvs, err := cPebble.NewStorage(path, &pebble.Options{
 					FS: vfs.NewPebbleFS(vfs.Default),
 				})
+				dataStorage := kv.NewKVDataStorage(kvs, kvDriver.NewkvExecutor(kvs))
+				return dataStorage, err
 			}
 
-			return mem.NewStorage(vfs.Default), nil
+			kvs := mem.NewStorage(vfs.Default)
+			dataStorage := kv.NewKVDataStorage(kvs, kvDriver.NewkvExecutor(kvs))
+			return dataStorage, nil
 		}
 	}
 
@@ -218,7 +224,6 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 				DisableResponse:                 cfg.Prophet.DisableResponse,
 				EnableResponseNotLeader:         cfg.Prophet.EnableResponseNotLeader,
 				TestCtx:                         cfg.Prophet.TestCtx,
-				FS:                              cfg.Prophet.FS,
 			},
 			Storage:            cfg.Storage,
 			Customize:          cfg.Customize,

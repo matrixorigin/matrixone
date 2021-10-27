@@ -18,7 +18,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"math"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -28,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	aoeDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	dConfig "github.com/matrixorigin/matrixone/pkg/vm/driver/config"
+	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	aoeEngine "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/engine"
 	aoeStorage "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 	"os"
 	"os/signal"
 	"strconv"
@@ -44,10 +45,11 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/cockroachdb/pebble"
 	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/components/prophet/util"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	//"github.com/matrixorigin/matrixcube/components/prophet/util"
+	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/server"
-	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
+	"github.com/matrixorigin/matrixcube/storage/kv"
+	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
 )
 
@@ -132,7 +134,7 @@ func main() {
 	//close cube print info
 	log.SetLevelByString("info")
 	log.SetHighlighting(false)
-	util.SetLogger(log.NewLoggerWithPrefix("prophet"))
+	//util.SetLogger(log.NewLoggerWithPrefix("prophet"))
 
 	logutil.SetupMOLogger(os.Args[1])
 
@@ -174,12 +176,14 @@ func main() {
 		MemTableStopWritesThreshold: 4,
 
 	})
-	pebbleDataStorage, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
+	kvs, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
 		FS: vfs.NewPebbleFS(vfs.Default),
 		MemTableSize:                1024 * 1024 * 128,
 		MemTableStopWritesThreshold: 4,
 
 	})
+	pebbleDataStorage := kv.NewKVDataStorage(kvs, kvDriver.NewkvExecutor(kvs))
+
 	var aoeDataStorage *aoeDriver.Storage
 
 	opt := aoeStorage.Options{}
@@ -299,21 +303,21 @@ func waitClusterStartup(driver driver.CubeDriver, timeout time.Duration, maxRepl
 			if router != nil {
 				nodeCnt := maxReplicas
 				shardCnt := 0
-				router.ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
-					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
+				router.ForeachShards(uint64(pb.AOEGroup), func(shard meta.Shard) bool {
+					fmt.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Replicas))
 					shardCnt++
-					if len(shard.Peers) < nodeCnt {
-						nodeCnt = len(shard.Peers)
+					if len(shard.Replicas) < nodeCnt {
+						nodeCnt = len(shard.Replicas)
 					}
 					return true
 				})
 				if nodeCnt >= maxReplicas && shardCnt >= minimalAvailableShard {
 					kvNodeCnt := maxReplicas
 					kvCnt := 0
-					router.ForeachShards(uint64(pb.KVGroup), func(shard *bhmetapb.Shard) bool {
+					router.ForeachShards(uint64(pb.KVGroup), func(shard meta.Shard) bool {
 						kvCnt++
-						if len(shard.Peers) < kvNodeCnt {
-							kvNodeCnt = len(shard.Peers)
+						if len(shard.Replicas) < kvNodeCnt {
+							kvNodeCnt = len(shard.Replicas)
 						}
 						return true
 					})

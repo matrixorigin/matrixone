@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"go.uber.org/zap/zapcore"
 	stdLog "log"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -37,7 +38,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/log"
-	"github.com/matrixorigin/matrixcube/pb/bhmetapb"
+	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,7 +88,7 @@ func TestAOEStorage(t *testing.T) {
 		}),
 		testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
 	c.Start()
@@ -101,8 +102,8 @@ func TestAOEStorage(t *testing.T) {
 
 	driver := c.CubeDrivers[0]
 
-	driver.RaftStore().GetRouter().ForeachShards(uint64(pb.AOEGroup), func(shard *bhmetapb.Shard) bool {
-		stdLog.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Peers))
+	driver.RaftStore().GetRouter().ForeachShards(uint64(pb.AOEGroup), func(shard meta.Shard) bool {
+		stdLog.Printf("shard %d, peer count is %d\n", shard.ID, len(shard.Replicas))
 		return true
 	})
 
@@ -316,7 +317,7 @@ func doRestartStorage(t *testing.T) {
 		}), testutil.WithTestAOEClusterUsePebble(),
 		testutil.WithTestAOEClusterRaftClusterOptions(
 			raftstore.WithTestClusterRecreate(false),
-			raftstore.WithTestClusterLogLevel("error"),
+			raftstore.WithTestClusterLogLevel(zapcore.ErrorLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 	defer func() {
 		logutil.Debug(">>>>>>>>>>>>>>>>> call stop")

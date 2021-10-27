@@ -22,7 +22,8 @@ import (
 	"github.com/matrixorigin/matrixcube/components/prophet/util/typeutil"
 	cConfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixcube/server"
-	cPebble "github.com/matrixorigin/matrixcube/storage/pebble"
+	"github.com/matrixorigin/matrixcube/storage/kv"
+	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
 	stdLog "log"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	aoe2 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
+	kvDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/kv"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
@@ -71,9 +73,10 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		if err != nil {
 			return nil, err
 		}
-		pebbleDataStorage, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), &pebble.Options{
+		kvs, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), &pebble.Options{
 			FS: vfs.NewPebbleFS(vfs.Default),
 		})
+		pebbleDataStorage := kv.NewKVDataStorage(kvs, kvDriver.NewkvExecutor(kvs))
 		var aoeDataStorage *aoe2.Storage
 		if err != nil {
 			return nil, err
