@@ -20,7 +20,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
@@ -40,10 +39,6 @@ type manager struct {
 	// TableData is Table's metadata in memory
 	//tableData   iface.ITableData
 
-	// factory is the factory that produces
-	// different types of the collection
-	factory fb.CollectionFactory
-
 	aware shard.NodeAware
 }
 
@@ -51,20 +46,11 @@ var (
 	_ imem.IManager = (*manager)(nil)
 )
 
-func NewManager(opts *storage.Options, aware shard.NodeAware, factory fb.MutFactory) *manager {
+func NewManager(opts *storage.Options, aware shard.NodeAware) *manager {
 	m := &manager{
 		opts:        opts,
 		aware:       aware,
 		collections: make(map[uint64]imem.ICollection),
-	}
-	if factory == nil {
-		m.factory = m.createCollection
-	} else {
-		if factory.GetType() == fb.MUTABLE {
-			m.factory = m.createMutCollection
-		} else {
-			m.factory = m.createCollection
-		}
 	}
 	return m
 }
@@ -112,14 +98,6 @@ func (m *manager) String() string {
 	return s
 }
 
-func (m *manager) createCollection(td iface.ITableData) imem.ICollection {
-	return NewCollection(td, m.opts)
-}
-
-func (m *manager) createMutCollection(td iface.ITableData) imem.ICollection {
-	return newMutableCollection(m, td)
-}
-
 func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err error) {
 	m.Lock()
 	tableData := td.(iface.ITableData)
@@ -128,7 +106,7 @@ func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err er
 		m.Unlock()
 		return nil, errors.New("logic error")
 	}
-	c = m.factory(tableData)
+	c = newMutableCollection(m, tableData)
 	m.collections[tableData.GetID()] = c
 	m.Unlock()
 	c.Ref()

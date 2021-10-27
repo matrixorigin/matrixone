@@ -15,50 +15,15 @@
 package base
 
 import (
-	"io"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
-
-type INodeHandle interface {
-	sync.Locker
-	io.Closer
-	common.IRef
-	RLock()
-	RUnlock()
-	GetID() common.ID
-	Unload()
-	Unloadable() bool
-	IsLoaded() bool
-	Load()
-	Destroy()
-	Size() uint64
-	Iteration() uint64
-	IncIteration() uint64
-	IsClosed() bool
-	GetState() iface.NodeState
-}
-
-type IMemTable interface {
-	common.IRef
-	Append(bat *batch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error)
-	IsFull() bool
-	Flush() error
-	Unpin()
-	GetMeta() *metadata.Block
-	GetID() common.ID
-	String() string
-}
 
 type ICollection interface {
 	common.IRef
 	Append(bat *batch.Batch, index *metadata.LogIndex) (err error)
 	Flush() error
-	FetchImmuTable() IMemTable
 	String() string
 	GetMeta() *metadata.Table
 }

@@ -15,12 +15,13 @@
 package sched
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
-	"sync"
 )
 
 type metablkCommiter struct {
@@ -128,7 +129,6 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	// Register different events to its belonged handler
 	dispatcher.RegisterHandler(sched.StatelessEvent, statelessHandler)
 	dispatcher.RegisterHandler(sched.FlushSegTask, flushsegHandler)
-	dispatcher.RegisterHandler(sched.FlushMemtableTask, flushblkHandler)
 	dispatcher.RegisterHandler(sched.FlushBlkTask, flushblkHandler)
 	dispatcher.RegisterHandler(sched.CommitBlkTask, metaHandler)
 	dispatcher.RegisterHandler(sched.UpgradeBlkTask, memdataHandler)
@@ -144,7 +144,6 @@ func NewScheduler(opts *storage.Options, tables *table.Tables) *scheduler {
 	// Register dispatcher
 	s.RegisterDispatcher(sched.StatelessEvent, dispatcher)
 	s.RegisterDispatcher(sched.FlushSegTask, dispatcher)
-	s.RegisterDispatcher(sched.FlushMemtableTask, dispatcher)
 	s.RegisterDispatcher(sched.FlushBlkTask, dispatcher)
 	s.RegisterDispatcher(sched.CommitBlkTask, dispatcher)
 	s.RegisterDispatcher(sched.UpgradeBlkTask, dispatcher)
@@ -176,21 +175,6 @@ func (s *scheduler) onPrecommitBlkDone(e sched.Event) {
 
 func (s *scheduler) onFlushBlkDone(e sched.Event) {
 	event := e.(*flushMemblockEvent)
-	s.commiters.mu.RLock()
-	commiter := s.commiters.blkmap[event.Meta.Segment.Table.Id]
-	s.commiters.mu.RUnlock()
-	commiter.Accept(event.Meta)
-	s.commiters.mu.Lock()
-	if commiter.IsEmpty() {
-		delete(s.commiters.blkmap, event.Meta.Segment.Table.Id)
-	}
-	s.commiters.mu.Unlock()
-}
-
-// onFlushMemtableDone handles the finished flush memtable event, and
-// adjusts some metadata if needed.
-func (s *scheduler) onFlushMemtableDone(e sched.Event) {
-	event := e.(*flushMemtableEvent)
 	s.commiters.mu.RLock()
 	commiter := s.commiters.blkmap[event.Meta.Segment.Table.Id]
 	s.commiters.mu.RUnlock()
@@ -290,8 +274,6 @@ func (s *scheduler) onUpgradeSegDone(e sched.Event) {
 func (s *scheduler) OnExecDone(op interface{}) {
 	e := op.(sched.Event)
 	switch e.Type() {
-	case sched.FlushMemtableTask:
-		s.onFlushMemtableDone(e)
 	case sched.FlushBlkTask:
 		s.onFlushBlkDone(e)
 	case sched.CommitBlkTask:

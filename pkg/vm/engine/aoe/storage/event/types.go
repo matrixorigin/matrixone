@@ -16,14 +16,10 @@ package event
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 )
 
 type EventListener struct {
 	BackgroundErrorCB func(error)
-	MemTableFullCB    func(imem.IMemTable)
-	FlushBlockBeginCB func(imem.IMemTable)
-	FlushBlockEndCB   func(imem.IMemTable)
 }
 
 func (l *EventListener) FillDefaults() {
@@ -31,17 +27,5 @@ func (l *EventListener) FillDefaults() {
 		l.BackgroundErrorCB = func(err error) {
 			logutil.Errorf("BackgroundError %v", err)
 		}
-	}
-
-	if l.MemTableFullCB == nil {
-		l.MemTableFullCB = func(table imem.IMemTable) {}
-	}
-
-	if l.FlushBlockBeginCB == nil {
-		l.FlushBlockBeginCB = func(table imem.IMemTable) {}
-	}
-
-	if l.FlushBlockEndCB == nil {
-		l.FlushBlockEndCB = func(table imem.IMemTable) {}
 	}
 }
