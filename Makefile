@@ -20,6 +20,7 @@ config: cmd/generate-config/main.go cmd/generate-config/config_template.go cmd/g
 build: cmd/db-server/main.go
 	@go generate ./pkg/sql/colexec/extend/overload
 	$(info [Build binary])
+	@go mod tidy
 	@go build -o $(BIN_NAME) cmd/db-server/main.go
 
 # Building mo-server binary for debugging, it uses the latest MatrixCube from master.
