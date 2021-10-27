@@ -41,7 +41,7 @@ func newTableData(host *Tables, meta *metadata.Table) *tableData {
 		host:        host,
 		indexHolder: index.NewTableHolder(host.IndexBufMgr, meta.Id),
 	}
-	data.blkFactory = newAltBlockFactory(host.MutFactory, data)
+	data.blkFactory = newBlockFactory(host.MutFactory, data)
 	data.tree.segments = make([]iface.ISegment, 0)
 	data.tree.helper = make(map[uint64]int)
 	data.tree.ids = make([]uint64, 0)

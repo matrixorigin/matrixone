@@ -20,19 +20,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
-type altBlockFactory struct {
+type blockFactory struct {
 	nodeFactory base.NodeFactory
 }
 
-func newAltBlockFactory(mutFactory fb.MutFactory, tabledata iface.ITableData) *altBlockFactory {
-	f := &altBlockFactory{}
+func newBlockFactory(mutFactory fb.MutFactory, tabledata iface.ITableData) *blockFactory {
+	f := &blockFactory{}
 	if mutFactory != nil {
 		f.nodeFactory = mutFactory.GetNodeFactroy(tabledata)
 	}
 	return f
 }
 
-func (af *altBlockFactory) CreateBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
+func (af *blockFactory) CreateBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
 	if af.nodeFactory != nil && meta.CommitInfo.Op < metadata.OpUpgradeFull {
 		return newTBlock(host, meta, af.nodeFactory, nil)
 	}
