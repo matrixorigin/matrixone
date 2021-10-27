@@ -128,7 +128,7 @@ func (b *build) buildProjection(o op.OP, ns tree.SelectExprs) (op.OP, error) {
 	var es []*projection.Extend
 
 	for _, n := range ns {
-		e, err := b.buildExtend(o, n.Expr)
+		e, err := b.buildProjectionExtend(o, n.Expr)
 		if err != nil {
 			return nil, err
 		}
@@ -144,7 +144,7 @@ func (b *build) buildProjectionWithOrder(o op.OP, ns tree.SelectExprs, es []*pro
 	var pes []*projection.Extend
 
 	for _, n := range ns {
-		e, err := b.buildExtend(o, n.Expr)
+		e, err := b.buildProjectionExtend(o, n.Expr)
 		if err != nil {
 			return nil, nil, err
 		}

@@ -85,7 +85,7 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 	}
 	if len(orderBy) > 0 {
 		if fetch != nil && fetch.Offset == nil && fetch.Count != nil {
-			e, err := b.buildExtend(o, fetch.Count)
+			e, err := b.buildProjectionExtend(o, fetch.Count)
 			if err != nil {
 				return nil, err
 			}
@@ -111,7 +111,7 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 	}
 	if fetch != nil {
 		if fetch.Offset != nil {
-			e, err := b.buildExtend(o, fetch.Offset)
+			e, err := b.buildProjectionExtend(o, fetch.Offset)
 			if err != nil {
 				return nil, err
 			}
@@ -125,7 +125,7 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 			o = offset.New(o, v.V.Col.([]int64)[0])
 		}
 		if fetch.Count != nil {
-			e, err := b.buildExtend(o, fetch.Count)
+			e, err := b.buildProjectionExtend(o, fetch.Count)
 			if err != nil {
 				return nil, err
 			}
@@ -241,7 +241,7 @@ func (b *build) buildSelectClauseWithoutSummarize(stmt *tree.SelectClause, order
 			}
 		}
 		for _, g := range stmt.GroupBy {
-			e, err := b.buildExtend(o, g)
+			e, err := b.buildProjectionExtend(o, g)
 			if err != nil {
 				return nil, nil, err
 			}

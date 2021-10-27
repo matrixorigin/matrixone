@@ -36,6 +36,7 @@ var NegOps = map[int]int{
 	LE:   GT,
 	GT:   LE,
 	GE:   LT,
+	NE:	  EQ,
 	Like: NotLike,
 }
 

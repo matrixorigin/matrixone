@@ -32,27 +32,27 @@ var (
 	ErrZeroModulus = errors.New("zero modulus")
 )
 
-func (b *build) pruneExtend(e extend.Extend) (extend.Extend, error) {
+func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, error) {
 	var err error
 
 	switch n := e.(type) {
 	case *extend.UnaryExtend:
-		if n.Op == overload.Not {
+		if isProjection && n.Op == overload.Not {
 			return b.pruneNot(n)
 		}
 		if n.Op == overload.UnaryMinus {
 			return b.pruneUnaryMinus(n)
 		}
 	case *extend.ParenExtend:
-		if n.E, err = b.pruneExtend(n.E); err != nil {
+		if n.E, err = b.pruneExtend(n.E, isProjection); err != nil {
 			return nil, err
 		}
 		return n, nil
 	case *extend.BinaryExtend:
-		if n.Left, err = b.pruneExtend(n.Left); err != nil {
+		if n.Left, err = b.pruneExtend(n.Left, isProjection); err != nil {
 			return nil, err
 		}
-		if n.Right, err = b.pruneExtend(n.Right); err != nil {
+		if n.Right, err = b.pruneExtend(n.Right, isProjection); err != nil {
 			return nil, err
 		}
 		switch n.Op {
@@ -105,20 +105,14 @@ func (b *build) pruneNot(e *extend.UnaryExtend) (extend.Extend, error) {
 	if !ok {
 		return e, nil
 	}
-	{
+	ok = false // set Zero
+	switch v.V.Typ.Oid {
+	case types.T_int64:
+		ok = v.V.Col.([]int64)[0] != 0
+	case types.T_float64:
+		ok = v.V.Col.([]float64)[0] != 0
+	default:
 		ok = false
-		switch v.V.Typ.Oid {
-		case types.T_int64:
-			if v.V.Col.([]int64)[0] != 0 {
-				ok = true
-			}
-		case types.T_float64:
-			if v.V.Col.([]float64)[0] != 0 {
-				ok = true
-			}
-		default:
-			ok = false
-		}
 	}
 	vec := vector.New(types.Type{Oid: types.T_int8, Size: 1})
 	if ok {

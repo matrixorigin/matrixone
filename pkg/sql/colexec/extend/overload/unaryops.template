@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/neg"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/not"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/matrixorigin/matrixone/pkg/vm/register"
 )
@@ -28,7 +29,7 @@ import (
 func init() {
     UnaryOps[UnaryMinus] = []*UnaryOp{
     {{range .Minus}}
-        &UnaryOp{
+        {
             Typ:        types.LEFT_TYPE_OID,
             ReturnType: types.RETURN_TYPE_OID,
             Fn: func(v *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
@@ -54,6 +55,38 @@ func init() {
         },
     {{end}}
     }
+
+    // Unary Not will return int8
+     UnaryOps[Not] = []*UnaryOp{
+     {{range .Not}}
+         {
+             Typ:        types.LEFT_TYPE_OID,
+             ReturnType: types.RETURN_TYPE_OID,
+             Fn: func(v *vector.Vector, proc *process.Process, _ bool) (*vector.Vector, error) {
+                 rtl := {.RETURN_TYPE_LEN}
+                 if v.Typ.Oid == types.RETURN_TYPE_OID && (v.Ref == 1 || v.Ref == 0) {
+                     v.Ref = 0
+                     vs := v.Col.([]RETURN_GO_TYPE)
+                     not.{.RETTYP}Not(vs, vs)
+                     return v, nil
+                 }
+                 vs := v.Col.([]L_GO_TYPE)
+                 vec, err := register.Get(proc, int64(rtl) * int64(len(vs)), types.Type{
+                         Oid:    types.RETURN_TYPE_OID,
+                         Size:   {.RETURN_TYPE_LEN},
+                 })
+                 if err != nil {
+                     return nil, err
+                 }
+                 rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                 rs = rs[:len(vs)]
+                 vec.SetCol(not.{.LTYP}Not(vs, rs))
+                 vec.Nsp.Set(v.Nsp)
+                 return vec, nil
+             },
+         },
+     {{end}}
+     }
 }
 
 // init function to init binOpsReturnType from

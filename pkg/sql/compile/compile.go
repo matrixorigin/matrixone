@@ -44,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op/summarize"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/opt"
+	rw "github.com/matrixorigin/matrixone/pkg/sql/rewrite"
 	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -82,6 +83,8 @@ func (c *compile) Build() ([]*Exec, error) {
 // Compile compiles ast tree to scope list.
 // A scope is an execution unit.
 func (e *Exec) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) error {
+	// AST rewrite
+	e.stmt = rw.AstRewrite(e.stmt)
 	// generates relation algebra operator chain.
 	o, err := build.New(e.c.db, e.c.sql, e.c.e, e.c.proc).BuildStatement(e.stmt)
 	if err != nil {

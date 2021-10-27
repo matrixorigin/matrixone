@@ -16,7 +16,6 @@ package build
 
 import (
 	"fmt"
-	"go/constant"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op"
 	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
+	"go/constant"
 )
 
 func (b *build) buildExtend(o op.OP, n tree.Expr) (extend.Extend, error) {
@@ -34,7 +34,17 @@ func (b *build) buildExtend(o op.OP, n tree.Expr) (extend.Extend, error) {
 		return nil, err
 	}
 	e = RewriteExtend(e)
-	return b.pruneExtend(e)
+	return b.pruneExtend(e, false)
+}
+
+// buildProjectionExtend build extend for select-list and projection
+// do similar work likes buildExtend but without RewriteExtend and some prune work in pruneExtend
+func (b *build) buildProjectionExtend(o op.OP, n tree.Expr) (extend.Extend, error) {
+	e, err := b.buildExpr(o, n)
+	if err != nil {
+		return nil, err
+	}
+	return b.pruneExtend(e, false)
 }
 
 func (b *build) hasAggregate(n tree.Expr) bool {
@@ -205,7 +215,11 @@ func (b *build) buildExprWithoutCheck(o op.OP, n tree.Expr) (extend.Extend, erro
 	case *tree.NumVal:
 		return buildValue(e.Value)
 	case *tree.ParenExpr:
-		return b.buildExprWithoutCheck(o, e.Expr)
+		ext, err := b.buildExprWithoutCheck(o, e.Expr)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.ParenExtend{E: ext}, nil
 	case *tree.OrExpr:
 		left, err := b.buildExprWithoutCheck(o, e.Left)
 		if err != nil {
