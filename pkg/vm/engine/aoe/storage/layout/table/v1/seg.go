@@ -272,13 +272,8 @@ func (seg *segment) StrongRefLastBlock() iface.IBlock {
 
 func (seg *segment) RegisterBlock(blkMeta *metadata.Block) (blk iface.IBlock, err error) {
 	factory := seg.host.GetBlockFactory()
-	if factory == nil {
-		blk, err = newBlock(seg, blkMeta)
-	} else {
-		blk, err = factory.CreateBlock(seg, blkMeta)
-	}
-	if err != nil {
-		return nil, err
+	if blk, err = factory.CreateBlock(seg, blkMeta); err != nil {
+		return
 	}
 	seg.tree.Lock()
 	defer seg.tree.Unlock()
