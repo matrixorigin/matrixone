@@ -36,7 +36,3 @@ func NewMutFactory(mgr bb.INodeManager, flusher mb.BlockFlusher) *mutFactory {
 func (f *mutFactory) GetNodeFactroy(tdata interface{}) base.NodeFactory {
 	return newMutNodeFactory(f, tdata.(iface.ITableData))
 }
-
-func (f *mutFactory) GetType() base.FactoryType {
-	return base.MUTABLE
-}

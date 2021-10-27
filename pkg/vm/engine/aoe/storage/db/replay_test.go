@@ -34,7 +34,7 @@ import (
 
 func TestReplay1(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.MUTABLE_FT, wal.BrokerRole)
+	inst := initDB(wal.BrokerRole)
 	tInfo := adaptor.MockTableInfo(2)
 	name := "mockcon"
 	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: common.NextGlobalSeqNum()})
@@ -82,7 +82,7 @@ func TestReplay1(t *testing.T) {
 	rel.Close()
 	inst.Close()
 
-	inst = initDB(storage.MUTABLE_FT, wal.BrokerRole)
+	inst = initDB(wal.BrokerRole)
 
 	t.Log(inst.Store.Catalog.PString(metadata.PPL1))
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
@@ -865,7 +865,7 @@ func TestReplay11(t *testing.T) {
 
 func TestReplay12(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.MUTABLE_FT, wal.BrokerRole)
+	inst := initDB(wal.BrokerRole)
 	tInfo := adaptor.MockTableInfo(2)
 	name := "mockcon"
 	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: common.NextGlobalSeqNum()})
@@ -932,7 +932,7 @@ func TestReplay12(t *testing.T) {
 	rel.Close()
 	inst.Close()
 
-	inst = initDB(storage.MUTABLE_FT, wal.BrokerRole)
+	inst = initDB(wal.BrokerRole)
 
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
 	assert.Nil(t, err)

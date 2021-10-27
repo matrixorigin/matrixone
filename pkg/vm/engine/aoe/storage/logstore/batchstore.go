@@ -15,8 +15,9 @@
 package logstore
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 )
 
 var (
@@ -41,8 +42,9 @@ func NewBatchStore(dir, name string, rotationCfg *RotationCfg) (*batchStore, err
 		store: *bs,
 		wg:    wg,
 	}
-	s.flushQueue = sm.NewWaitableQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, s, wg,
-		nil, nil, s.onEntries)
+	s.flushQueue = sm.NewSafeQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, s.onEntries)
+	// s.flushQueue = sm.NewWaitableQueue(DefaultMaxBatchSize*100, DefaultMaxBatchSize, s, wg,
+	// 	nil, nil, s.onEntries)
 	return s, nil
 }
 

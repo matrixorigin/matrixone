@@ -9,7 +9,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -188,7 +187,7 @@ func TestShard1(t *testing.T) {
 	}
 
 	initDBTest()
-	inst := initDB(storage.MUTABLE_FT, wal.BrokerRole)
+	inst := initDB(wal.BrokerRole)
 
 	shardCnt := 8
 	shards := make([]*mockShard, shardCnt)
@@ -238,7 +237,7 @@ func TestShard2(t *testing.T) {
 	}
 
 	initDBTest()
-	inst := initDB(storage.MUTABLE_FT, wal.BrokerRole)
+	inst := initDB(wal.BrokerRole)
 
 	shardCnt := 4
 	shards := make([]*mockShard, shardCnt)

@@ -20,17 +20,8 @@ import (
 	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 )
 
-type FactoryType uint16
-
-const (
-	INVALID FactoryType = iota
-	NORMAL
-	MUTABLE
-)
-
 type MutFactory interface {
 	GetNodeFactroy(interface{}) NodeFactory
-	GetType() FactoryType
 }
 
 type NodeFactory interface {

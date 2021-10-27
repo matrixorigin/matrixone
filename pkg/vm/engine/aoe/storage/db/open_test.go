@@ -64,9 +64,7 @@ func TestDBReplay(t *testing.T) {
 		waitTime = time.Duration(100) * time.Millisecond
 	}
 	initDBTest()
-	// ft := storage.MUTABLE_FT
-	ft := storage.MUTABLE_FT
-	inst := initDB(ft, wal.BrokerRole)
+	inst := initDB(wal.BrokerRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl", OpIndex: uint64(1)})
 	assert.Nil(t, err)
@@ -118,7 +116,7 @@ func TestDBReplay(t *testing.T) {
 	assert.Nil(t, err)
 	f.Close()
 
-	inst = initDB(ft, wal.BrokerRole)
+	inst = initDB(wal.BrokerRole)
 
 	os.Stat(invalidFileName)
 	_, err = os.Stat(invalidFileName)

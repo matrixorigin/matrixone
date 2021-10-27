@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -40,7 +39,7 @@ import (
 
 func TestEngine(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.MUTABLE_FT, wal.HolderRole)
+	inst := initDB(wal.HolderRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)
@@ -223,7 +222,7 @@ func TestEngine(t *testing.T) {
 
 func TestLogIndex(t *testing.T) {
 	initDBTest()
-	inst := initDB(storage.MUTABLE_FT, wal.HolderRole)
+	inst := initDB(wal.HolderRole)
 	tableInfo := adaptor.MockTableInfo(2)
 	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
 	assert.Nil(t, err)
@@ -254,10 +253,6 @@ func TestLogIndex(t *testing.T) {
 		return ok
 	})
 	logIndex, ok := tbl.GetSegmentedIndex()
-	assert.True(t, ok)
-	// _, ok = tblMeta.SegmentSet[len(tblMeta.SegmentSet)-1].BlockSet[1].CommitInfo.GetAppliedIndex()
-	// assert.False(t, ok)
-	// expectIdx, ok := tblMeta.SegmentSet[len(tblMeta.SegmentSet)-1].BlockSet[0].CommitInfo.GetAppliedIndex()
 	assert.True(t, ok)
 	// assert.Equal(t, expectIdx, logIndex)
 
