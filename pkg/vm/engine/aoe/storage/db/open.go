@@ -73,7 +73,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	} else {
 		factory = factories.NewNormalFactory()
 	}
-	memtblMgr := mt.NewManager(opts, flushDriver, factory)
+	memtblMgr := mt.NewManager(opts, flushDriver)
 	flushDriver.InitFactory(createFlusherFactory(memtblMgr))
 
 	db = &DB{
