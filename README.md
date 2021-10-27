@@ -51,22 +51,21 @@ MatrixCube is a fundamental library for building distributed systems, which offe
 MatrixOne stores data in shared storage of S3 / HDFS, or the local disk, on-premise server, hybrid and any cloud, or even smart devices.
 ## Quick Start
 Get started with MatrixOne quickly by the following steps.
+### Installation 
 
-### Prerequisites
-Install the following prerequisites as necessary:
-- Go: Version 1.17 is required to build MatrixOne.
-- MySQL client: MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages.
+You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
+#### Building from source
 
-### Building
-
-1. Get the MatrixOne code:
+1. Install Go (version 1.17 is required).
+  
+2. Get the MatrixOne code:
 
 ```
 $ git clone https://github.com/matrixorigin/matrixone.git
 $ cd matrixone
 ```
 
-2. Run make:
+3. Run make:
 
    You can run `make debug`, `make clean`, or anything else our Makefile offers.
 
@@ -75,33 +74,47 @@ $ make config
 $ make build
 ```
 
-### Starting
-
-1. Boot MatrixOne server:
+4. Boot MatrixOne server:
 
 ```
 $ ./mo-server system_vars_config.toml
 ```
+#### Using docker
+
+1. Install Docker, then verify that Docker daemon is running in the background:
+
+```
+docker --version
+```
+1. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not exists.
+   
+```
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```
+### Connecting MatrixOne server
+
+1. Install MySQL client.
+   
+   MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages. Currently, MatrixOne is only compatible with Oracle MySQL client. This means that some features might not work with MariaDB client.
 
 2. Connect MatrixOne server:
 
 ```
 $ mysql -h IP -P PORT -uUsername -p
 ```
-The connection string is the same format as MySQL accepts. You need to provide a user name and a password. 
+   The connection string is the same format as MySQL accepts. You need to provide a user name and a password. 
 
-Use the built-in test account for example:
+   Use the built-in test account for example:
 
-- user: dump
-- password: 111
+   - user: dump
+   - password: 111
 
 ```
 $ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
-Now, MatrixOne only supports the TCP listen. 
-
+Now, MatrixOne only supports the TCP listener. 
 ## Contributing
 See [Contributing Guide](CONTRIBUTING.md) for details on contribution workflows.
 
