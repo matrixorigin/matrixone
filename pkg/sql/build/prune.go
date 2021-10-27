@@ -32,27 +32,27 @@ var (
 	ErrZeroModulus = errors.New("zero modulus")
 )
 
-func (b *build) pruneExtend(e extend.Extend) (extend.Extend, error) {
+func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, error) {
 	var err error
 
 	switch n := e.(type) {
 	case *extend.UnaryExtend:
-		if n.Op == overload.Not {
+		if isProjection && n.Op == overload.Not {
 			return b.pruneNot(n)
 		}
 		if n.Op == overload.UnaryMinus {
 			return b.pruneUnaryMinus(n)
 		}
 	case *extend.ParenExtend:
-		if n.E, err = b.pruneExtend(n.E); err != nil {
+		if n.E, err = b.pruneExtend(n.E, isProjection); err != nil {
 			return nil, err
 		}
 		return n, nil
 	case *extend.BinaryExtend:
-		if n.Left, err = b.pruneExtend(n.Left); err != nil {
+		if n.Left, err = b.pruneExtend(n.Left, isProjection); err != nil {
 			return nil, err
 		}
-		if n.Right, err = b.pruneExtend(n.Right); err != nil {
+		if n.Right, err = b.pruneExtend(n.Right, isProjection); err != nil {
 			return nil, err
 		}
 		switch n.Op {

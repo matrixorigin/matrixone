@@ -23,7 +23,7 @@ import (
 )
 
 func (b *build) buildWhere(o op.OP, stmt *tree.Where) (op.OP, error) {
-	e, err := b.buildPrunedExtend(o, stmt.Expr)
+	e, err := b.buildExtend(o, stmt.Expr)
 	if err != nil {
 		return nil, err
 	}
