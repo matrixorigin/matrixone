@@ -14,7 +14,11 @@
 
 package wal
 
-import "io"
+import (
+	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
+)
 
 type Role uint8
 
@@ -30,6 +34,7 @@ type Payload interface {
 type Wal interface {
 	io.Closer
 	Log(Payload) (*Entry, error)
+	SyncLog(Payload) error
 	Checkpoint(interface{})
 	String() string
 	GetRole() Role
@@ -40,4 +45,5 @@ type ShardWal interface {
 	InitShard(uint64, uint64) error
 	GetShardCheckpointId(uint64) uint64
 	GetShardCurrSeqNum(uint64) uint64
+	GetAllPendingEntries() []*shard.ItemsToCheckpointStat
 }

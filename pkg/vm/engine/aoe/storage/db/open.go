@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	table "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
@@ -32,6 +33,7 @@ import (
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
+	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 )
 
 func OpenWithWalBroker(dirname string, opts *storage.Options) (db *DB, err error) {
@@ -55,6 +57,8 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	}()
 	opts.FillDefaults(dirname)
 
+	flushDriver := flusher.NewDriver()
+
 	fsMgr := ldio.NewManager(dirname, false)
 	indexBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.IndexCapacity)
 	sstBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.DataCapacity)
@@ -69,7 +73,8 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 	} else {
 		factory = factories.NewNormalFactory()
 	}
-	memtblMgr := mt.NewManager(opts, factory)
+	memtblMgr := mt.NewManager(opts, flushDriver, factory)
+	flushDriver.InitFactory(createFlusherFactory(memtblMgr))
 
 	db = &DB{
 		Dir:            dirname,
@@ -80,6 +85,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 		MTBufMgr:       mtBufMgr,
 		SSTBufMgr:      sstBufMgr,
 		MutationBufMgr: mutNodeMgr,
+		FlushDriver:    flushDriver,
 		ClosedC:        make(chan struct{}),
 		Closed:         new(atomic.Value),
 	}
@@ -96,6 +102,11 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 		db.Opts.Wal = shard.NewManagerWithDriver(store, false, db.Opts.WalRole)
 	}
 	db.Wal = db.Opts.Wal
+
+	db.TimedFlusher = w.NewHeartBeater(DefaultFlushInterval, &timedFlusherHandle{
+		driver:   flushDriver,
+		producer: db.Wal,
+	})
 
 	catalogCfg := metadata.CatalogCfg{
 		Dir:              dirname,

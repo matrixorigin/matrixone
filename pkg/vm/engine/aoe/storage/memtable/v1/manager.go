@@ -17,11 +17,13 @@ package memtable
 import (
 	"errors"
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	"sync"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 )
 
 // manager is the collection manager, it's global,
@@ -41,15 +43,18 @@ type manager struct {
 	// factory is the factory that produces
 	// different types of the collection
 	factory fb.CollectionFactory
+
+	aware shard.NodeAware
 }
 
 var (
 	_ imem.IManager = (*manager)(nil)
 )
 
-func NewManager(opts *storage.Options, factory fb.MutFactory) *manager {
+func NewManager(opts *storage.Options, aware shard.NodeAware, factory fb.MutFactory) *manager {
 	m := &manager{
 		opts:        opts,
+		aware:       aware,
 		collections: make(map[uint64]imem.ICollection),
 	}
 	if factory == nil {
@@ -127,6 +132,10 @@ func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err er
 	m.collections[tableData.GetID()] = c
 	m.Unlock()
 	c.Ref()
+	if m.aware != nil {
+		meta := c.GetMeta()
+		m.aware.ShardNodeCreated(meta.GetCommit().LogIndex.ShardId, meta.Id)
+	}
 	return c, err
 }
 
@@ -140,5 +149,9 @@ func (m *manager) UnregisterCollection(id uint64) (c imem.ICollection, err error
 		return nil, errors.New("logic error")
 	}
 	m.Unlock()
+	if m.aware != nil {
+		meta := c.GetMeta()
+		m.aware.ShardNodeDeleted(meta.GetCommit().LogIndex.ShardId, meta.Id)
+	}
 	return c, err
 }

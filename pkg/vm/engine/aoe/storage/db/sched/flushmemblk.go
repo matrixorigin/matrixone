@@ -70,6 +70,8 @@ func (e *flushMemblockEvent) Execute() error {
 		bw.SetPostExecutor(func() {
 			logutil.Infof(" %s | Memtable | Flushed", bw.GetFileName())
 		})
-		return bw.Execute()
+		err := bw.Execute()
+		meta.Segment.Table.UpdateFlushTS()
+		return err
 	})
 }

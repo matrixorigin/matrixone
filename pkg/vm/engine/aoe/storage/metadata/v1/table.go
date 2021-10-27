@@ -17,6 +17,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -57,6 +59,7 @@ type Table struct {
 	SegmentSet []*Segment
 	IdIndex    map[uint64]int `json:"-"`
 	Catalog    *Catalog       `json:"-"`
+	FlushTS    int64          `json:"-"`
 }
 
 func NewTableEntry(catalog *Catalog, schema *Schema, tranId uint64, exIndex *LogIndex) *Table {
@@ -93,6 +96,15 @@ func NewEmptyTableEntry(catalog *Catalog) *Table {
 		Catalog:    catalog,
 	}
 	return e
+}
+
+func (e *Table) UpdateFlushTS() {
+	now := time.Now().UnixMicro()
+	atomic.StoreInt64(&e.FlushTS, now)
+}
+
+func (e *Table) GetFlushTS() int64 {
+	return atomic.LoadInt64(&e.FlushTS)
 }
 
 // Threadsafe

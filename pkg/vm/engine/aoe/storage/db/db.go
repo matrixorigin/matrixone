@@ -27,11 +27,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
 var (
@@ -71,6 +72,9 @@ type DB struct {
 	MutationBufMgr bb.INodeManager
 
 	Wal wal.ShardWal
+
+	FlushDriver  flusher.Driver
+	TimedFlusher wb.IHeartbeater
 
 	// Internal data storage of DB.
 	Store struct {
@@ -164,11 +168,8 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
 	defer collection.Unref()
-	if entry, err := d.Wal.Log(index); err != nil {
+	if err := d.Wal.SyncLog(index); err != nil {
 		return err
-	} else {
-		entry.WaitDone()
-		entry.Free()
 	}
 	return collection.Append(ctx.Data, index)
 }
@@ -250,12 +251,9 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	info.Name = ctx.TableName
 	schema := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
 	index := adaptor.GetLogIndexFromTableOpCtx(&ctx)
-	entry, err := d.Wal.Log(index)
-	if err != nil {
+	if err = d.Wal.SyncLog(index); err != nil {
 		return
 	}
-	defer entry.Free()
-	entry.WaitDone()
 	defer d.Wal.Checkpoint(index)
 
 	logutil.Infof("CreateTable %s", index.String())
@@ -322,22 +320,6 @@ func (d *DB) TableNames() []string {
 	return d.Store.Catalog.SimpleGetTableNames()
 }
 
-func (d *DB) TableSegmentIDs(tableID uint64) (ids []common.ID, err error) {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	tbl := d.Store.Catalog.SimpleGetTable(tableID)
-	if tbl == nil {
-		return ids, metadata.TableNotFoundErr
-	}
-	sids := tbl.SimpleGetSegmentIds()
-	// TODO: Refactor metainfo to 1. keep order 2. use common.RelationName
-	for _, sid := range sids {
-		ids = append(ids, common.ID{TableID: tableID, SegmentID: sid})
-	}
-	return ids, err
-}
-
 func (d *DB) GetShardCheckpointId(shardId uint64) uint64 {
 	return d.Wal.GetShardCheckpointId(shardId)
 }
@@ -374,12 +356,8 @@ func (d *DB) GetSegmentedId(ctx dbi.GetSegmentedIdCtx) (id uint64, err error) {
 
 func (d *DB) startWorkers() {
 	d.Opts.GC.Acceptor.Start()
-}
-
-func (d *DB) EnsureNotClosed() {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
+	d.FlushDriver.Start()
+	d.TimedFlusher.Start()
 }
 
 func (d *DB) IsClosed() bool {
@@ -390,6 +368,8 @@ func (d *DB) IsClosed() bool {
 }
 
 func (d *DB) stopWorkers() {
+	d.TimedFlusher.Stop()
+	d.FlushDriver.Stop()
 	d.Opts.GC.Acceptor.Stop()
 }
 

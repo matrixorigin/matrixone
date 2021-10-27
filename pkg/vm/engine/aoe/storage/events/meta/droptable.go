@@ -59,12 +59,9 @@ func NewDropTableEvent(ctx *dbsched.Context, reqCtx dbi.DropTableCtx, mtMgr mtif
 func (e *dropTableEvent) Execute() error {
 	index := adaptor.GetLogIndexFromDropTableCtx(&e.reqCtx)
 	logutil.Infof("DropTable %s", index.String())
-	entry, err := e.Ctx.Opts.Wal.Log(index)
-	if err != nil {
+	if err := e.Ctx.Opts.Wal.SyncLog(index); err != nil {
 		return err
 	}
-	defer entry.Free()
-	entry.WaitDone()
 	defer e.Ctx.Opts.Wal.Checkpoint(index)
 	tbl := e.Ctx.Opts.Meta.Catalog.SimpleGetTableByName(e.reqCtx.TableName)
 	if tbl == nil {

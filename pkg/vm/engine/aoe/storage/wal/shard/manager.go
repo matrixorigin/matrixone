@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
@@ -45,14 +46,16 @@ func (noop *noopWal) GetShardId(uint64) (uint64, error) { return uint64(0), nil 
 func (noop *noopWal) String() string                    { return "<noop>" }
 func (noop *noopWal) Checkpoint(interface{})            {}
 func (noop *noopWal) Close() error                      { return nil }
+func (noop *noopWal) SyncLog(wal.Payload) error         { return nil }
 func (noop *noopWal) Log(wal.Payload) (*wal.Entry, error) {
 	entry := wal.GetEntry(uint64(0))
 	entry.SetDone()
 	return entry, nil
 }
-func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64) { return }
-func (noop *noopWal) GetShardCheckpointId(shardId uint64) uint64    { return 0 }
-func (noop *noopWal) InitShard(shardId, safeId uint64) error        { return nil }
+func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64)        { return }
+func (noop *noopWal) GetShardCheckpointId(shardId uint64) uint64           { return 0 }
+func (noop *noopWal) InitShard(shardId, safeId uint64) error               { return nil }
+func (noop *noopWal) GetAllPendingEntries() []*shard.ItemsToCheckpointStat { return nil }
 
 type manager struct {
 	sm.ClosedState
@@ -105,6 +108,16 @@ func (mgr *manager) UpdateSafeId(shardId, id uint64) {
 
 func (mgr *manager) GetRole() wal.Role {
 	return mgr.role
+}
+
+func (mgr *manager) SyncLog(payload wal.Payload) error {
+	if entry, err := mgr.Log(payload); err != nil {
+		return err
+	} else {
+		entry.WaitDone()
+		entry.Free()
+		return nil
+	}
 }
 
 func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
@@ -241,6 +254,28 @@ func (mgr *manager) onSnippets(items ...interface{}) {
 	for _, shard := range shards {
 		shard.Checkpoint()
 	}
+}
+
+func (mgr *manager) GetShardPendingEntries(shardId uint64) uint64 {
+	s, err := mgr.GetShard(shardId)
+	if err != nil {
+		return 0
+	}
+	return s.GetPendingEntries()
+}
+
+func (mgr *manager) GetAllPendingEntries() []*shard.ItemsToCheckpointStat {
+	stats := make([]*shard.ItemsToCheckpointStat, 0, 100)
+	mgr.mu.RLock()
+	defer mgr.mu.RUnlock()
+	for _, s := range mgr.shards {
+		stat := &shard.ItemsToCheckpointStat{
+			ShardId: s.id,
+			Count:   int(s.GetPendingEntries()),
+		}
+		stats = append(stats, stat)
+	}
+	return stats
 }
 
 func (mgr *manager) String() string {

@@ -45,7 +45,7 @@ func TestManager(t *testing.T) {
 	opts.Meta.Catalog, _ = opts.CreateCatalog(dir)
 	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
-	manager := NewManager(opts, nil)
+	manager := NewManager(opts, nil, nil)
 	assert.Equal(t, len(manager.CollectionIDs()), 0)
 	capacity := uint64(4096)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
@@ -95,7 +95,7 @@ func TestCollection(t *testing.T) {
 	defer opts.Meta.Catalog.Close()
 	opts.Wal = shard.NewNoopWal()
 
-	manager := NewManager(opts, nil)
+	manager := NewManager(opts, nil, nil)
 	fsMgr := ldio.NewManager(WORK_DIR, false)
 	indexBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
 	mtBufMgr := bmgr.NewBufferManager(WORK_DIR, capacity)
