@@ -15,33 +15,10 @@
 package base
 
 import (
-	"io"
-	"sync"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/node/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
-
-type INodeHandle interface {
-	sync.Locker
-	io.Closer
-	common.IRef
-	RLock()
-	RUnlock()
-	GetID() common.ID
-	Unload()
-	Unloadable() bool
-	IsLoaded() bool
-	Load()
-	Destroy()
-	Size() uint64
-	Iteration() uint64
-	IncIteration() uint64
-	IsClosed() bool
-	GetState() iface.NodeState
-}
 
 type ICollection interface {
 	common.IRef
