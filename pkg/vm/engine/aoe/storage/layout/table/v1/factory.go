@@ -25,14 +25,15 @@ type altBlockFactory struct {
 }
 
 func newAltBlockFactory(mutFactory fb.MutFactory, tabledata iface.ITableData) *altBlockFactory {
-	f := &altBlockFactory{
-		nodeFactory: mutFactory.GetNodeFactroy(tabledata),
+	f := &altBlockFactory{}
+	if mutFactory != nil {
+		f.nodeFactory = mutFactory.GetNodeFactroy(tabledata)
 	}
 	return f
 }
 
 func (af *altBlockFactory) CreateBlock(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
-	if meta.CommitInfo.Op < metadata.OpUpgradeFull {
+	if af.nodeFactory != nil && meta.CommitInfo.Op < metadata.OpUpgradeFull {
 		return newTBlock(host, meta, af.nodeFactory, nil)
 	}
 	return newBlock(host, meta)
