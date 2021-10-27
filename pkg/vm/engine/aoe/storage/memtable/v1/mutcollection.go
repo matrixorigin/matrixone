@@ -24,7 +24,6 @@ import (
 	me "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	imem "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 )
@@ -86,10 +85,6 @@ func (c *mutableCollection) String() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.mutBlk.String()
-}
-
-func (c *mutableCollection) FetchImmuTable() imem.IMemTable {
-	panic("not supported")
 }
 
 func (c *mutableCollection) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {

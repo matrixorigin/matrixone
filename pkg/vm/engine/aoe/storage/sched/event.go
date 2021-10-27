@@ -15,10 +15,11 @@
 package sched
 
 import (
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops/base"
-	"sync/atomic"
 )
 
 var (
@@ -40,7 +41,6 @@ const (
 
 	PrepareCommitBlockTask
 	PrecommitBlkMetaTask
-	FlushMemtableTask
 	FlushBlkTask
 	FlushTBlkTask
 	MetaCreateTableTask

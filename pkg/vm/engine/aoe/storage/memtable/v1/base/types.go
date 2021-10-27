@@ -43,22 +43,10 @@ type INodeHandle interface {
 	GetState() iface.NodeState
 }
 
-type IMemTable interface {
-	common.IRef
-	Append(bat *batch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error)
-	IsFull() bool
-	Flush() error
-	Unpin()
-	GetMeta() *metadata.Block
-	GetID() common.ID
-	String() string
-}
-
 type ICollection interface {
 	common.IRef
 	Append(bat *batch.Batch, index *metadata.LogIndex) (err error)
 	Flush() error
-	FetchImmuTable() IMemTable
 	String() string
 	GetMeta() *metadata.Table
 }
