@@ -84,12 +84,12 @@ $ ./mo-server system_vars_config.toml
 1. Install Docker, then verify that Docker daemon is running in the background:
 
 ```
-docker --version
+$ docker --version
 ```
-1. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not exists.
+2. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not exists.
    
 ```
-docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
 ### Connecting MatrixOne server
 
