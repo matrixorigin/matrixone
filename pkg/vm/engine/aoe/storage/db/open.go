@@ -22,7 +22,6 @@ import (
 	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
-	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
@@ -65,14 +64,6 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 
 	mutNodeMgr := mb.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	mtBufMgr := bm.NewBufferManager(dirname, opts.CacheCfg.InsertCapacity)
-	var (
-		factory fb.MutFactory
-	)
-	if opts.FactoryType == storage.MUTABLE_FT {
-		factory = factories.NewMutFactory(mutNodeMgr, nil)
-	} else {
-		factory = factories.NewNormalFactory()
-	}
 	memtblMgr := mt.NewManager(opts, flushDriver)
 	flushDriver.InitFactory(createFlusherFactory(memtblMgr))
 
@@ -92,6 +83,7 @@ func Open(dirname string, opts *storage.Options) (db *DB, err error) {
 
 	db.Store.Mu = &opts.Mu
 	db.Store.DataTables = table.NewTables(&opts.Mu, db.FsMgr, db.MTBufMgr, db.SSTBufMgr, db.IndexBufMgr)
+	factory := factories.NewMutFactory(mutNodeMgr, nil)
 	db.Store.DataTables.MutFactory = factory
 
 	store, err := logstore.NewBatchStore(common.MakeMetaDir(dirname), "store", nil)
