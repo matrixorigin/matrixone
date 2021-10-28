@@ -30,6 +30,41 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
+	return func() {
+		defer wg.Done()
+		err := seg.SimpleUpgrade(nil)
+		assert.Nil(t, err)
+	}
+}
+
+func createBlock(t *testing.T, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
+	return func() {
+		defer wg.Done()
+		schema := MockSchema(2)
+		schema.Name = fmt.Sprintf("mock%d", common.NextGlobalSeqNum())
+		tbl, err := catalog.SimpleCreateTable(schema, nil)
+		assert.Nil(t, err)
+		var prev *Block
+		for i := 0; i < blocks; i++ {
+			blk := tbl.SimpleGetOrCreateNextBlock(prev)
+			blk.SetCount(tbl.Schema.BlockMaxRows)
+			blk.SetIndex(LogIndex{
+				Id:       shard.SimpleIndexId(common.NextGlobalSeqNum()),
+				Count:    tbl.Schema.BlockMaxRows,
+				Capacity: tbl.Schema.BlockMaxRows,
+			})
+			err := blk.SimpleUpgrade(nil)
+			assert.Nil(t, err)
+			if prev != nil && blk.Segment != prev.Segment {
+				wg.Add(1)
+				nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+			}
+			prev = blk
+		}
+	}
+}
+
 func TestTable(t *testing.T) {
 	cfg := new(CatalogCfg)
 	cfg.Dir = "/tmp/testtable"
@@ -360,42 +395,9 @@ func TestReplay(t *testing.T) {
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
-	upgradeSegHandle := func(seg *Segment) func() {
-		return func() {
-			defer wg.Done()
-			err := seg.SimpleUpgrade(nil)
-			assert.Nil(t, err)
-		}
-	}
-
-	createBlkHandle := func() {
-		defer wg.Done()
-		schema := MockSchema(2)
-		schema.Name = fmt.Sprintf("mock%d", common.NextGlobalSeqNum())
-		tbl, err := catalog.SimpleCreateTable(schema, nil)
-		assert.Nil(t, err)
-		var prev *Block
-		for i := 0; i < int(mockBlocks); i++ {
-			blk := tbl.SimpleGetOrCreateNextBlock(prev)
-			blk.SetCount(tbl.Schema.BlockMaxRows)
-			blk.SetIndex(LogIndex{
-				Id:       shard.SimpleIndexId(common.NextGlobalSeqNum()),
-				Count:    tbl.Schema.BlockMaxRows,
-				Capacity: tbl.Schema.BlockMaxRows,
-			})
-			err := blk.SimpleUpgrade(nil)
-			assert.Nil(t, err)
-			if prev != nil && blk.Segment != prev.Segment {
-				wg.Add(1)
-				upgradeSegWorker.Submit(upgradeSegHandle(prev.Segment))
-			}
-			prev = blk
-		}
-	}
-
 	for i := 0; i < mockTbls; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlkHandle)
+		createBlkWorker.Submit(createBlock(t, catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
