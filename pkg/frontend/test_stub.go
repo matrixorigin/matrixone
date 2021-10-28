@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/kv"
 	cPebble "github.com/matrixorigin/matrixcube/storage/kv/pebble"
 	"github.com/matrixorigin/matrixcube/vfs"
-	stdLog "log"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/rpcserver"
 	"github.com/matrixorigin/matrixone/pkg/sql/testutil"
@@ -39,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	stdLog "log"
 	"os"
 	"sync"
 	"testing"
@@ -67,7 +67,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 	c := &TestCluster{T: t}
 	var wg sync.WaitGroup
 	for i := 0; i < nodeCnt; i++ {
-		kvs, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), &pebble.Options{
+		kvs, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), nil, &pebble.Options{
 			FS: vfs.NewPebbleFS(vfs.Default),
 		})
 		kvBase := kv.NewBaseStorage(kvs,vfs.Default)
@@ -87,7 +87,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		}
 		cfg := config.Config{}
 		cfg.ServerConfig = server.Cfg{
-			Addr: fmt.Sprintf("127.0.0.1:809%d", i),
+			//Addr: fmt.Sprintf("127.0.0.1:809%d", i),
 		}
 		cfg.ClusterConfig = config.ClusterConfig{
 			PreAllocatedGroupNum: 20,

@@ -60,11 +60,11 @@ type CubeDriver interface {
 	// SetWithGroup set key value in specific group.
 	SetWithGroup([]byte, []byte, pb.Group) error
 	// Set async set key value.
-	AsyncSet([]byte, []byte, func(interface{}, []byte, error), interface{})
+	AsyncSet([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
 	// AsyncSetIfNotExist async set key value if key not exists.
-	AsyncSetIfNotExist([]byte, []byte, func(interface{}, []byte, error), interface{})
+	AsyncSetIfNotExist([]byte, []byte, func(server.CustomRequest, []byte, error), interface{})
 	// Set async set key value in specific group.
-	AsyncSetWithGroup([]byte, []byte, pb.Group, func(interface{}, []byte, error), interface{})
+	AsyncSetWithGroup([]byte, []byte, pb.Group, func(server.CustomRequest, []byte, error), interface{})
 	// SetIfNotExist set key value if key not exists.
 	SetIfNotExist([]byte, []byte) error
 	// Get returns the value of key.
@@ -90,7 +90,7 @@ type CubeDriver interface {
 	// AllocID allocs id.
 	AllocID([]byte, uint64) (uint64, error)
 	// AsyncAllocID async alloc id.
-	AsyncAllocID([]byte, uint64, func(interface{}, []byte, error), interface{})
+	AsyncAllocID([]byte, uint64, func(server.CustomRequest, []byte, error), interface{})
 	// Append appends the data in the table
 	Append(string, uint64, []byte) error
 	//GetSnapshot gets the snapshot from the table.
@@ -111,11 +111,11 @@ type CubeDriver interface {
 	// Exec exec command
 	Exec(cmd interface{}) ([]byte, error)
 	// AsyncExec async exec command
-	AsyncExec(interface{}, func(interface{}, []byte, error), interface{})
+	AsyncExec(interface{}, func(server.CustomRequest, []byte, error), interface{})
 	// ExecWithGroup exec command with group
 	ExecWithGroup(interface{}, pb.Group) ([]byte, error)
 	// AsyncExecWithGroup async exec command with group
-	AsyncExecWithGroup(interface{}, pb.Group, func(interface{}, []byte, error), interface{})
+	AsyncExecWithGroup(interface{}, pb.Group, func(server.CustomRequest, []byte, error), interface{})
 	// RaftStore returns the raft store
 	RaftStore() raftstore.Store
 	//AOEStore returns h.aoeDB
@@ -254,14 +254,13 @@ func NewCubeDriverWithFactory(
 	h.store = store
 
 	c.ServerConfig.Store = h.store
-	c.ServerConfig.Handler = h
 	pConfig.DefaultSchedulers = nil
 
-	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req rpc.Request, cmd interface{}, proxy raftstore.ShardsProxy) error {
+	h.app = server.NewApplicationWithDispatcher(c.ServerConfig, func(req rpc.Request, cmd server.CustomRequest, proxy raftstore.ShardsProxy) error {
 		if req.Group == uint64(pb.KVGroup) {
 			return proxy.Dispatch(req)
 		}
-		args := cmd.(pb.Request)
+		args := cmd.Args.(pb.Request)
 		if args.Shard == 0 {
 			return proxy.Dispatch(req)
 		}
@@ -339,12 +338,12 @@ func (h *driver) SetWithGroup(key, value []byte, group pb.Group) error {
 }
 
 //AsyncSet sets key and value in KVGroup asynchronously.
-func (h *driver) AsyncSet(key, value []byte, cb func(interface{}, []byte, error), data interface{}) {
+func (h *driver) AsyncSet(key, value []byte, cb func(server.CustomRequest, []byte, error), data interface{}) {
 	h.AsyncSetWithGroup(key, value, pb.KVGroup, cb, data)
 }
 
 //AsyncSetWithGroup sets key and value in specific group asynchronously by calling h.AsyncExecWithGroup.
-func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(interface{}, []byte, error), data interface{}) {
+func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(server.CustomRequest, []byte, error), data interface{}) {
 	req := pb.Request{
 		Type:  pb.Set,
 		Group: group,
@@ -356,7 +355,7 @@ func (h *driver) AsyncSetWithGroup(key, value []byte, group pb.Group, cb func(in
 	h.AsyncExecWithGroup(req, group, cb, data)
 }
 
-func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(interface{}, []byte, error), data interface{}) {
+func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(server.CustomRequest, []byte, error), data interface{}) {
 	req := pb.Request{
 		Type:  pb.SetIfNotExist,
 		Group: pb.KVGroup,
@@ -365,7 +364,7 @@ func (h *driver) AsyncSetIfNotExist(key, value []byte, cb func(interface{}, []by
 			Value: value,
 		},
 	}
-	h.AsyncExecWithGroup(req, pb.KVGroup, func(i interface{}, bytes []byte, err error) {
+	h.AsyncExecWithGroup(req, pb.KVGroup, func(i server.CustomRequest, bytes []byte, err error) {
 		if bytes != nil || len(bytes) != 0 {
 			err = errors.New(string(bytes))
 		}
@@ -586,7 +585,7 @@ func (h *driver) AllocID(idkey []byte, batch uint64) (uint64, error) {
 	return resp, nil
 }
 
-func (h *driver) AsyncAllocID(idkey []byte, batch uint64, cb func(interface{}, []byte, error), param interface{}) {
+func (h *driver) AsyncAllocID(idkey []byte, batch uint64, cb func(server.CustomRequest, []byte, error), param interface{}) {
 	req := pb.Request{
 		Type:  pb.Incr,
 		Group: pb.KVGroup,
@@ -749,18 +748,24 @@ func (h *driver) TabletNames(toShard uint64) ([]string, error) {
 
 func (h *driver) Exec(cmd interface{}) ([]byte, error) {
 	t0 := time.Now()
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
-	return h.app.Exec(cmd, defaultRPCTimeout)
+	return h.app.Exec(*cr, defaultRPCTimeout)
 }
 
-func (h *driver) AsyncExec(cmd interface{}, cb func(interface{}, []byte, error), arg interface{}) {
-	h.app.AsyncExecWithTimeout(cmd, cb, defaultRPCTimeout, arg)
+func (h *driver) AsyncExec(cmd interface{}, cb func(server.CustomRequest, []byte, error), arg interface{}) {
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
+	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
 }
 
-func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(interface{}, []byte, error), arg interface{}) {
-	h.app.AsyncExecWithGroupAndTimeout(cmd, uint64(group), cb, defaultRPCTimeout, arg)
+func (h *driver) AsyncExecWithGroup(cmd interface{}, group pb.Group, cb func(server.CustomRequest, []byte, error), arg interface{}) {
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
+	h.app.AsyncExec(*cr, cb, defaultRPCTimeout)
 }
 
 func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) {
@@ -768,7 +773,9 @@ func (h *driver) ExecWithGroup(cmd interface{}, group pb.Group) ([]byte, error) 
 	defer func() {
 		logutil.Debugf("Exec of %v cost %d ms", cmd.(pb.Request).Type, time.Since(t0).Milliseconds())
 	}()
-	return h.app.ExecWithGroup(cmd, uint64(group), defaultRPCTimeout)
+	cr := &server.CustomRequest{}
+	h.BuildRequest(cr, cmd)
+	return h.app.Exec(*cr, defaultRPCTimeout)
 }
 
 func (h *driver) RaftStore() raftstore.Store {

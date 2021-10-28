@@ -170,7 +170,7 @@ func main() {
 		os.Exit(RecreateDirExit)
 	}
 
-	kvs, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
+	kvs, err := cPebble.NewStorage(targetDir+"/pebble/data", nil, &pebble.Options{
 		FS:                          vfs.NewPebbleFS(vfs.Default),
 		MemTableSize:                1024 * 1024 * 128,
 		MemTableStopWritesThreshold: 4,
@@ -206,7 +206,7 @@ func main() {
 		os.Exit(DecodeClusterConfigExit)
 	}
 	cfg.ServerConfig = server.Cfg{
-		ExternalServer: true,
+		//ExternalServer: true,
 	}
 
 	cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
