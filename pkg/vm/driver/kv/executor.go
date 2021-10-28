@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 
 	"github.com/fagongzi/util/protoc"
-	"github.com/matrixorigin/matrixcube/keys"
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/storage"
 
@@ -67,8 +66,8 @@ func (ce *kvExecutor) scan(shard meta.Shard, req storage.Request) ([]byte, error
 	customReq := &pb.ScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
-	startKey := keys.EncodeDataKey(shard.Group, customReq.Start, nil)
-	endKey := keys.EncodeDataKey(shard.Group, customReq.End, nil)
+	startKey := customReq.Start
+	endKey := customReq.End
 
 	if customReq.Start == nil {
 		startKey = nil
@@ -81,11 +80,11 @@ func (ce *kvExecutor) scan(shard meta.Shard, req storage.Request) ([]byte, error
 	var rep []byte
 
 	err := ce.kv.Scan(startKey, endKey, func(key, value []byte) (bool, error) {
-		if (shard.Start != nil && bytes.Compare(shard.Start, keys.DecodeDataKey(key)) > 0) ||
-			(shard.End != nil && bytes.Compare(shard.End, keys.DecodeDataKey(key)) <= 0) {
+		if (shard.Start != nil && bytes.Compare(shard.Start, key) > 0) ||
+			(shard.End != nil && bytes.Compare(shard.End, key) <= 0) {
 			return true, nil
 		}
-		data = append(data, keys.DecodeDataKey(key))
+		data = append(data, key)
 		data = append(data, value)
 		return true, nil
 	}, false)
@@ -109,15 +108,15 @@ func (ce *kvExecutor) prefixScan(shard meta.Shard, req storage.Request) ([]byte,
 	customReq := &pb.PrefixScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
-	prefix := keys.EncodeDataKey(shard.Group, customReq.Prefix, nil)
+	prefix := customReq.Prefix
 
 	var data [][]byte
 	err := ce.kv.PrefixScan(prefix, func(key, value []byte) (bool, error) {
-		if (shard.Start != nil && bytes.Compare(shard.Start, keys.DecodeDataKey(key)) > 0) ||
-			(shard.End != nil && bytes.Compare(shard.End, keys.DecodeDataKey(key)) <= 0) {
+		if (shard.Start != nil && bytes.Compare(shard.Start, key) > 0) ||
+			(shard.End != nil && bytes.Compare(shard.End, key) <= 0) {
 			return true, nil
 		}
-		data = append(data, keys.DecodeDataKey(key))
+		data = append(data,key)
 		data = append(data, value)
 		return true, nil
 	}, false)

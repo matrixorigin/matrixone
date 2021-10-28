@@ -170,12 +170,6 @@ func main() {
 		os.Exit(RecreateDirExit)
 	}
 
-	metaStorage, err := cPebble.NewStorage(targetDir+"/pebble/meta", &pebble.Options{
-		FS: vfs.NewPebbleFS(vfs.Default),
-		MemTableSize:                1024 * 1024 * 128,
-		MemTableStopWritesThreshold: 4,
-
-	})
 	kvs, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
 		FS: vfs.NewPebbleFS(vfs.Default),
 		MemTableSize:                1024 * 1024 * 128,
@@ -221,7 +215,7 @@ func main() {
 		cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
 	}
 
-	a, err := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+	a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {
 		logutil.Infof("Create cube driver failed, %v", err)
 		os.Exit(CreateCubeExit)
@@ -285,7 +279,6 @@ func main() {
 	serverShutdown(true)
 	a.Close()
 	aoeDataStorage.Close()
-	metaStorage.Close()
 	pebbleDataStorage.Close()
 
 	cleanup()

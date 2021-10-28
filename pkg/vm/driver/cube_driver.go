@@ -133,20 +133,18 @@ type driver struct {
 
 // NewCubeDriver returns a aoe request handler
 func NewCubeDriver(
-	metadataStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage) (CubeDriver, error) {
-	return NewCubeDriverWithOptions(metadataStorage, kvDataStorage, aoeDataStorage, &config.Config{})
+	return NewCubeDriverWithOptions(kvDataStorage, aoeDataStorage, &config.Config{})
 }
 
 // NewCubeDriverWithOptions returns an aoe request handler
 func NewCubeDriverWithOptions(
-	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,
 	c *config.Config) (CubeDriver, error) {
 
-	return NewCubeDriverWithFactory(metaStorage, kvDataStorage, aoeDataStorage, c, func(cfg *cConfig.Config) (raftstore.Store, error) {
+	return NewCubeDriverWithFactory(kvDataStorage, aoeDataStorage, c, func(cfg *cConfig.Config) (raftstore.Store, error) {
 		return raftstore.NewStore(cfg), nil
 	})
 }
@@ -156,9 +154,9 @@ func ErrorResp1(err error, infos string) (CubeDriver, []byte) {
 	buf.Write(codec.String2Bytes(err.Error()))
 	return nil, buf.Bytes()
 }
+
 // NewCubeDriverWithFactory creates the cube driver with raftstore factory
 func NewCubeDriverWithFactory(
-	metaStorage cstorage.MetadataStorage,
 	kvDataStorage cstorage.DataStorage,
 	aoeDataStorage cstorage.DataStorage,
 	c *config.Config,
@@ -181,7 +179,6 @@ func NewCubeDriverWithFactory(
 			}
 		}
 	}
-	c.CubeConfig.Storage.MetaStorage = metaStorage
 	c.CubeConfig.Storage.DataStorageFactory = func(group uint64) cstorage.DataStorage {
 		switch group {
 		case uint64(pb.KVGroup):

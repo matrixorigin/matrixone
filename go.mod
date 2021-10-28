@@ -60,6 +60,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.0.3 // indirect
 	github.com/kr/pretty v0.2.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
+	github.com/lni/goutils v1.3.0 // indirect
 	github.com/lni/vfs v0.2.1-0.20210810090357-27c7525cf64f // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.1 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
