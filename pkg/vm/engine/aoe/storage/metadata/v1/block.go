@@ -253,8 +253,8 @@ func (e *Block) SetCount(count uint64) error {
 }
 
 // Safe
-func (e *Block) CommittedView(id uint64) *Block {
-	baseEntry := e.UseCommitted(id)
+func (e *Block) CommittedView(filter *Filter) *Block {
+	baseEntry := e.UseCommitted(filter)
 	if baseEntry == nil {
 		return nil
 	}

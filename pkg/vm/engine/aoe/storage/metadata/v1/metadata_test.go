@@ -650,7 +650,9 @@ func TestUpgrade(t *testing.T) {
 	assert.Nil(t, err)
 
 	viewId := uint64(40)
-	view := catalog.CommittedView(viewId)
+	filter := new(Filter)
+	filter.SetCommitFilter(newCommitFilter(viewId))
+	view := catalog.CommittedView(filter)
 	for _, tbl := range view.Catalog.TableSet {
 		t.Log(len(tbl.SegmentSet))
 	}

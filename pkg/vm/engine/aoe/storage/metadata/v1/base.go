@@ -126,20 +126,14 @@ func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
 	}
 }
 
-func (e *BaseEntry) UseCommitted(id uint64) *BaseEntry {
+func (e *BaseEntry) UseCommitted(filter *Filter) *BaseEntry {
 	e.RLock()
 	defer e.RUnlock()
-	// if e.HasCommittedLocked() {
-	// 	return e.onCommitted(id)
-	// }
 	var curr common.ISSLLNode
 	curr = e.CommitInfo
 	for curr != nil {
 		info := curr.(*CommitInfo)
-		// if info.IsHardDeleted() {
-		// 	return nil
-		// }
-		if !IsTransientCommitId(info.CommitId) && info.CommitId <= id {
+		if filter.FilteBaseEntry(e) {
 			cInfo := *info
 			return &BaseEntry{
 				Id:         e.Id,

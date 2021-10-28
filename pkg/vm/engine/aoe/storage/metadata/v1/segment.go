@@ -109,8 +109,8 @@ func (e *Segment) AsCommonID() *common.ID {
 }
 
 // Safe
-func (e *Segment) CommittedView(id uint64) *Segment {
-	baseEntry := e.UseCommitted(id)
+func (e *Segment) CommittedView(filter *Filter) *Segment {
+	baseEntry := e.UseCommitted(filter)
 	if baseEntry == nil {
 		return nil
 	}
@@ -125,7 +125,7 @@ func (e *Segment) CommittedView(id uint64) *Segment {
 	}
 	e.RUnlock()
 	for _, blk := range blks {
-		blkView := blk.CommittedView(id)
+		blkView := blk.CommittedView(filter)
 		if blkView == nil {
 			continue
 		}

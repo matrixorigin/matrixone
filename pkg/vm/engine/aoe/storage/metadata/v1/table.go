@@ -116,10 +116,10 @@ func (e *Table) GetFlushTS() int64 {
 //      |                 |                   -------- CommittedView [0,2]
 //      |                  --------------------------- CommittedView [4,6]
 //       --------------------------------------------- CommittedView [7,+oo)
-func (e *Table) CommittedView(id uint64) *Table {
+func (e *Table) CommittedView(filter *Filter) *Table {
 	// TODO: if baseEntry op is drop, should introduce an index to
 	// indicate weather to return nil
-	baseEntry := e.UseCommitted(id)
+	baseEntry := e.UseCommitted(filter)
 	if baseEntry == nil {
 		return nil
 	}
@@ -135,7 +135,7 @@ func (e *Table) CommittedView(id uint64) *Table {
 	}
 	e.RUnlock()
 	for _, seg := range segs {
-		segView := seg.CommittedView(id)
+		segView := seg.CommittedView(filter)
 		if segView == nil {
 			continue
 		}

@@ -232,11 +232,13 @@ func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
 
 func (catalog *Catalog) LatestView() *catalogLogEntry {
 	commitId := catalog.Store.GetSyncedId()
-	return catalog.CommittedView(commitId)
+	filter := new(Filter)
+	filter.SetCommitFilter(newCommitFilter(commitId))
+	return catalog.CommittedView(filter)
 }
 
-func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
-	ss := newCatalogLogEntry(id)
+func (catalog *Catalog) CommittedView(filter *Filter) *catalogLogEntry {
+	ss := newCatalogLogEntry(filter.commitFilter.LatestId())
 	entries := make(map[uint64]*Table)
 	catalog.RLock()
 	for id, entry := range catalog.TableSet {
@@ -244,7 +246,7 @@ func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
 	}
 	catalog.RUnlock()
 	for eid, entry := range entries {
-		committed := entry.CommittedView(id)
+		committed := entry.CommittedView(filter)
 		if committed != nil {
 			ss.Catalog.TableSet[eid] = committed
 		}

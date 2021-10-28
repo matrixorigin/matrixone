@@ -48,6 +48,10 @@ func (r *Range) GT(id uint64) bool {
 	return r.Left > id
 }
 
+func (r *Range) ClosedIn(id uint64) bool {
+	return r.Left <= id && r.Right >= id
+}
+
 func (r *Range) CanCover(o *Range) bool {
 	if r == nil {
 		return false
