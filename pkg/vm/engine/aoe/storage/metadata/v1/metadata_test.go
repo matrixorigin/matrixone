@@ -651,9 +651,10 @@ func TestUpgrade(t *testing.T) {
 
 	viewId := uint64(40)
 	filter := new(Filter)
-	filter.tableFilter = newCommitFilter(viewId)
-	filter.segmentFilter = newCommitFilter(viewId)
-	filter.blockFilter = newCommitFilter(viewId)
+	filter.tableFilter = newCommitFilter()
+	filter.tableFilter.AddChecker(createCommitIdChecker(viewId))
+	filter.segmentFilter = filter.tableFilter
+	filter.blockFilter = filter.tableFilter
 	view := newCatalogLogEntry(viewId)
 	catalog.fillView(filter, view.Catalog)
 	for _, tbl := range view.Catalog.TableSet {

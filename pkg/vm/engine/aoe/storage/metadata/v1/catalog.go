@@ -249,13 +249,12 @@ func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
 
 func (catalog *Catalog) ShardView(shardId, index uint64) *catalogLogEntry {
 	filter := new(Filter)
-	commitId := catalog.Store.GetSyncedId()
-	subFilter := newCommitFilter(commitId)
+	subFilter := newCommitFilter()
 	subFilter.AddChecker(createShardChecker(shardId))
 	subFilter.AddChecker(createIndexRangeChecker(index))
 	filter.blockFilter = subFilter
 	filter.segmentFilter = subFilter
-	filter.tableFilter = newCommitFilter(commitId)
+	filter.tableFilter = newCommitFilter()
 	filter.tableFilter.AddChecker(createShardChecker(shardId))
 	filter.tableFilter.AddChecker(createIndexChecker(index))
 	view := newShardSnapshotLogEntry(shardId, index)
@@ -266,10 +265,11 @@ func (catalog *Catalog) ShardView(shardId, index uint64) *catalogLogEntry {
 func (catalog *Catalog) LatestView() *catalogLogEntry {
 	commitId := catalog.Store.GetSyncedId()
 	filter := new(Filter)
-	filter.tableFilter = newCommitFilter(commitId)
-	filter.segmentFilter = newCommitFilter(commitId)
-	filter.blockFilter = newCommitFilter(commitId)
-	view := newCatalogLogEntry(filter.tableFilter.LatestId())
+	filter.tableFilter = newCommitFilter()
+	filter.tableFilter.AddChecker(createCommitIdChecker(commitId))
+	filter.segmentFilter = filter.tableFilter
+	filter.blockFilter = filter.tableFilter
+	view := newCatalogLogEntry(commitId)
 	catalog.fillView(filter, view.Catalog)
 	return view
 }
