@@ -181,7 +181,7 @@ func TestDropTable(t *testing.T) {
 	assert.NotNil(t, t3)
 
 	versions := 0
-	node := catalog.NameNodes[t1.Schema.Name].GetNext().(*nameNode)
+	node := catalog.nameNodes[t1.Schema.Name].GetNext().(*nameNode)
 	for node != nil {
 		entry := node.GetEntry()
 		t.Log(entry.PString(PPL0))
@@ -195,9 +195,10 @@ func TestDropTable(t *testing.T) {
 	}
 	assert.Equal(t, 3, versions)
 
-	tableNode := catalog.NameNodes[t1.Schema.Name]
+	tableNode := catalog.nameNodes[t1.Schema.Name]
 	t.Log(tableNode.PString(PPL0))
 	t.Log(tableNode.PString(PPL1))
+	t.Log(catalog.PString(PPL1))
 	catalog.Close()
 
 	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
@@ -649,7 +650,11 @@ func TestUpgrade(t *testing.T) {
 	assert.Nil(t, err)
 
 	viewId := uint64(40)
-	view := catalog.CommittedView(viewId)
+	filter := new(Filter)
+	filter.tableFilter = newCommitFilter(viewId)
+	filter.segmentFilter = newCommitFilter(viewId)
+	filter.blockFilter = newCommitFilter(viewId)
+	view := catalog.CommittedView(filter)
 	for _, tbl := range view.Catalog.TableSet {
 		t.Log(len(tbl.SegmentSet))
 	}
@@ -741,4 +746,26 @@ func TestCatalog2(t *testing.T) {
 	wg.Wait()
 
 	catalog.Close()
+}
+
+func TestShardNode(t *testing.T) {
+	wrapper := newCatalogLogEntry(0)
+	catalog := wrapper.Catalog
+	sidAlloc := common.IdAlloctor{}
+	tidAlloc := common.IdAlloctor{}
+	epochAlloc := common.IdAlloctor{}
+	sn := newShardNode(catalog, sidAlloc.Alloc())
+	gn1 := sn.CreateNode(epochAlloc.Alloc())
+	gn1Cnt := 3
+	for i := 0; i < gn1Cnt; i++ {
+		gn1.Add(tidAlloc.Alloc())
+	}
+	assert.Equal(t, gn1, sn.GetGroup())
+	gn2 := sn.CreateNode(epochAlloc.Alloc())
+	gn2Cnt := 4
+	for i := 0; i < gn2Cnt; i++ {
+		gn2.Add(tidAlloc.Alloc())
+	}
+	assert.Equal(t, gn2, sn.GetGroup())
+	t.Log(sn.PString(PPL0))
 }

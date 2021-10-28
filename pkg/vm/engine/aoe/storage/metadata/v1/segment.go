@@ -109,8 +109,8 @@ func (e *Segment) AsCommonID() *common.ID {
 }
 
 // Safe
-func (e *Segment) CommittedView(id uint64) *Segment {
-	baseEntry := e.UseCommitted(id)
+func (e *Segment) CommittedView(filter *Filter) *Segment {
+	baseEntry := e.UseCommitted(filter.segmentFilter)
 	if baseEntry == nil {
 		return nil
 	}
@@ -125,7 +125,7 @@ func (e *Segment) CommittedView(id uint64) *Segment {
 	}
 	e.RUnlock()
 	for _, blk := range blks {
-		blkView := blk.CommittedView(id)
+		blkView := blk.CommittedView(filter)
 		if blkView == nil {
 			continue
 		}
@@ -275,7 +275,6 @@ func (e *Segment) onNewBlock(entry *Block) {
 func (e *Segment) SimpleUpgrade(exIndice []*LogIndex) error {
 	ctx := newUpgradeSegmentCtx(e, exIndice)
 	return e.Table.Catalog.onCommitRequest(ctx)
-	// return e.Upgrade(e.Table.Catalog.NextUncommitId(), exIndice, true)
 }
 
 // Not safe
@@ -299,7 +298,6 @@ func (e *Segment) HasMaxBlocks() bool {
 	return e.IsSorted() || len(e.BlockSet) == int(e.Table.Schema.SegmentMaxBlocks)
 }
 
-// func (e *Segment) Upgrade(tranId uint64, exIndice []*LogIndex, autoCommit bool) error {
 func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 	tranId := e.Table.Catalog.NextUncommitId()
 	e.RLock()

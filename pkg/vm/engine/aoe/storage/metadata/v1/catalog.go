@@ -101,10 +101,11 @@ type Catalog struct {
 	Store           logstore.AwareStore   `json:"-"`
 	IndexWal        wal.ShardWal          `json:"-"`
 	Cfg             *CatalogCfg           `json:"-"`
-	NameNodes       map[string]*tableNode `json:"-"`
-	NameIndex       *btree.BTree          `json:"-"`
+	nameIndex       *btree.BTree          `json:"-"`
 	nodesMu         sync.RWMutex          `json:"-"`
 	commitMu        sync.RWMutex          `json:"-"`
+	nameNodes       map[string]*tableNode `json:"-"`
+	shardNodes      map[uint64]*shardNode `json:"-"`
 
 	TableSet map[uint64]*Table
 }
@@ -121,13 +122,14 @@ func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awa
 
 func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
 	catalog := &Catalog{
-		RWMutex:   mu,
-		Cfg:       cfg,
-		TableSet:  make(map[uint64]*Table),
-		NameNodes: make(map[string]*tableNode),
-		NameIndex: btree.New(2),
-		Store:     store,
-		IndexWal:  indexWal,
+		RWMutex:    mu,
+		Cfg:        cfg,
+		TableSet:   make(map[uint64]*Table),
+		nameNodes:  make(map[string]*tableNode),
+		shardNodes: make(map[uint64]*shardNode),
+		nameIndex:  btree.New(2),
+		Store:      store,
+		IndexWal:   indexWal,
 	}
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewSafeQueue(100000, 100, nil)
@@ -145,11 +147,12 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
 	}
 	catalog := &Catalog{
-		RWMutex:   mu,
-		Cfg:       cfg,
-		TableSet:  make(map[uint64]*Table),
-		NameNodes: make(map[string]*tableNode),
-		NameIndex: btree.New(2),
+		RWMutex:    mu,
+		Cfg:        cfg,
+		TableSet:   make(map[uint64]*Table),
+		nameNodes:  make(map[string]*tableNode),
+		shardNodes: make(map[uint64]*shardNode),
+		nameIndex:  btree.New(2),
 	}
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
@@ -213,7 +216,7 @@ func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
 	lowerN := newTableNode(catalog, prefix)
 	upperN := newTableNode(catalog, string(upperBound))
 
-	catalog.NameIndex.AscendRange(
+	catalog.nameIndex.AscendRange(
 		lowerN, upperN,
 		func(item btree.Item) bool {
 			t := item.(*tableNode).GetEntry()
@@ -227,13 +230,33 @@ func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
 	return tbls
 }
 
-func (catalog *Catalog) LatestView() *catalogLogEntry {
+func (catalog *Catalog) ShardView(shardId, index uint64) *catalogLogEntry {
+	filter := new(Filter)
 	commitId := catalog.Store.GetSyncedId()
-	return catalog.CommittedView(commitId)
+	subFilter := newCommitFilter(commitId)
+	subFilter.AddChecker(createShardChecker(shardId))
+	subFilter.AddChecker(createIndexRangeChecker(index))
+	filter.blockFilter = subFilter
+	filter.segmentFilter = subFilter
+	filter.tableFilter = newCommitFilter(commitId)
+	filter.tableFilter.AddChecker(createShardChecker(shardId))
+	filter.tableFilter.AddChecker(createIndexChecker(index))
+
+	return catalog.CommittedView(filter)
 }
 
-func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
-	ss := newCatalogLogEntry(id)
+func (catalog *Catalog) LatestView() *catalogLogEntry {
+	commitId := catalog.Store.GetSyncedId()
+	filter := new(Filter)
+	filter.tableFilter = newCommitFilter(commitId)
+	filter.segmentFilter = newCommitFilter(commitId)
+	filter.blockFilter = newCommitFilter(commitId)
+	// filter.SetCommitFilter(newCommitFilter(commitId))
+	return catalog.CommittedView(filter)
+}
+
+func (catalog *Catalog) CommittedView(filter *Filter) *catalogLogEntry {
+	ss := newCatalogLogEntry(filter.tableFilter.LatestId())
 	entries := make(map[uint64]*Table)
 	catalog.RLock()
 	for id, entry := range catalog.TableSet {
@@ -241,7 +264,7 @@ func (catalog *Catalog) CommittedView(id uint64) *catalogLogEntry {
 	}
 	catalog.RUnlock()
 	for eid, entry := range entries {
-		committed := entry.CommittedView(id)
+		committed := entry.CommittedView(filter)
 		if committed != nil {
 			ss.Catalog.TableSet[eid] = committed
 		}
@@ -316,7 +339,7 @@ func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *LogIndex) er
 
 func (catalog *Catalog) prepareDropTable(ctx *dropTableCtx) error {
 	catalog.Lock()
-	nn := catalog.NameNodes[ctx.name]
+	nn := catalog.nameNodes[ctx.name]
 	if nn == nil {
 		catalog.Unlock()
 		return TableNotFoundErr
@@ -416,7 +439,7 @@ func (catalog *Catalog) SimpleGetTableByName(name string) *Table {
 }
 
 func (catalog *Catalog) GetTableByName(name string, tranId uint64) *Table {
-	nn := catalog.NameNodes[name]
+	nn := catalog.nameNodes[name]
 	if nn == nil {
 		return nil
 	}
@@ -522,6 +545,11 @@ func (catalog *Catalog) PString(level PPLevel) string {
 	} else {
 		s = fmt.Sprintf("%s\n}", s)
 	}
+	if level >= PPL1 {
+		for _, node := range catalog.shardNodes {
+			s = fmt.Sprintf("%s\n%s", s, node.PString(level))
+		}
+	}
 	catalog.RUnlock()
 	return s
 }
@@ -550,8 +578,19 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 	return logEntry
 }
 
+func (catalog *Catalog) addIntoShard(table *Table) {
+	shardId := table.GetShardId()
+	n := catalog.shardNodes[shardId]
+	if n == nil {
+		n = newShardNode(catalog, shardId)
+		n.CreateNode(uint64(0))
+		catalog.shardNodes[shardId] = n
+	}
+	n.GetGroup().Add(table.Id)
+}
+
 func (catalog *Catalog) onNewTable(entry *Table) error {
-	nn := catalog.NameNodes[entry.Schema.Name]
+	nn := catalog.nameNodes[entry.Schema.Name]
 	if nn != nil {
 		e := nn.GetEntry()
 		if !e.IsSoftDeletedLocked() {
@@ -559,14 +598,16 @@ func (catalog *Catalog) onNewTable(entry *Table) error {
 		}
 		catalog.TableSet[entry.Id] = entry
 		nn.CreateNode(entry.Id)
+		catalog.addIntoShard(entry)
 	} else {
 		catalog.TableSet[entry.Id] = entry
 
 		nn := newTableNode(catalog, entry.Schema.Name)
-		catalog.NameNodes[entry.Schema.Name] = nn
-		catalog.NameIndex.ReplaceOrInsert(nn)
+		catalog.nameNodes[entry.Schema.Name] = nn
+		catalog.nameIndex.ReplaceOrInsert(nn)
 
 		nn.CreateNode(entry.Id)
+		catalog.addIntoShard(entry)
 	}
 	return nil
 }

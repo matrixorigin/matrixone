@@ -253,8 +253,8 @@ func (e *Block) SetCount(count uint64) error {
 }
 
 // Safe
-func (e *Block) CommittedView(id uint64) *Block {
-	baseEntry := e.UseCommitted(id)
+func (e *Block) CommittedView(filter *Filter) *Block {
+	baseEntry := e.UseCommitted(filter.blockFilter)
 	if baseEntry == nil {
 		return nil
 	}
@@ -267,10 +267,8 @@ func (e *Block) CommittedView(id uint64) *Block {
 func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 	ctx := newUpgradeBlockCtx(e, exIndice)
 	return e.Segment.Table.Catalog.onCommitRequest(ctx)
-	// return e.Upgrade(e.Segment.Table.Catalog.NextUncommitId(), exIndice, true)
 }
 
-// func (e *Block) Upgrade(tranId uint64, exIndice []*LogIndex, autoCommit bool) error {
 func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 	if e.GetCount() != e.Segment.Table.Schema.BlockMaxRows {
 		return nil, UpgradeInfullBlockErr
@@ -296,6 +294,7 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 			cInfo.PrevIndex = ctx.exIndice[1]
 		}
 	} else {
+		cInfo.LogRange = e.CommitInfo.LogRange
 		cInfo.LogIndex = e.CommitInfo.LogIndex
 		id, ok := e.BaseEntry.GetAppliedIndex()
 		if ok {

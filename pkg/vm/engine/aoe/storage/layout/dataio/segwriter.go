@@ -17,6 +17,9 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
+	"path/filepath"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"path/filepath"
 
 	"github.com/pierrec/lz4"
 )
@@ -42,6 +43,7 @@ const (
 	blkIdSize    = 8
 	blkCountSize = 8
 	blkIdxSize   = 48
+	blkRangeSize = 24
 	colSizeSize  = 8
 	colPosSize   = 8
 )
@@ -811,6 +813,12 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 		if err = binary.Write(&metaBuf, binary.BigEndian, blk.Count); err != nil {
 			return err
 		}
+
+		rangeBuf, _ := meta.CommitInfo.LogRange.Marshal()
+		if err = binary.Write(&metaBuf, binary.BigEndian, rangeBuf); err != nil {
+			return err
+		}
+
 		var preIdx []byte
 		if blk.CommitInfo.PrevIndex != nil {
 			preIdx, err = blk.CommitInfo.PrevIndex.Marshal()
@@ -872,7 +880,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 		colCntSize +
 		startPosSize +
 		endPosSize +
-		len(data)*(blkCountSize+blkIdSize+2*blkIdxSize) +
+		len(data)*(blkCountSize+blkIdSize+2*blkIdxSize+blkRangeSize) +
 		len(data)*colCnt*(colSizeSize*2) +
 		colCnt*colPosSize
 

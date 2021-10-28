@@ -15,8 +15,9 @@ package metadata
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type PPLevel uint8
@@ -31,6 +32,10 @@ type BaseEntry struct {
 	sync.RWMutex
 	Id         uint64
 	CommitInfo *CommitInfo
+}
+
+func (e *BaseEntry) GetShardId() uint64 {
+	return e.GetCommit().GetShardId()
 }
 
 func (e *BaseEntry) GetFirstCommit() *CommitInfo {
@@ -121,20 +126,14 @@ func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
 	}
 }
 
-func (e *BaseEntry) UseCommitted(id uint64) *BaseEntry {
+func (e *BaseEntry) UseCommitted(filter *commitFilter) *BaseEntry {
 	e.RLock()
 	defer e.RUnlock()
-	// if e.HasCommittedLocked() {
-	// 	return e.onCommitted(id)
-	// }
 	var curr common.ISSLLNode
 	curr = e.CommitInfo
 	for curr != nil {
 		info := curr.(*CommitInfo)
-		// if info.IsHardDeleted() {
-		// 	return nil
-		// }
-		if !IsTransientCommitId(info.CommitId) && info.CommitId <= id {
+		if filter.Eval(info) {
 			cInfo := *info
 			return &BaseEntry{
 				Id:         e.Id,

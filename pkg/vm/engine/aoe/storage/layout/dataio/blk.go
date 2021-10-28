@@ -19,13 +19,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/prefetch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"path/filepath"
 )
 
 type FileNameFactory = func(string, common.ID) string
@@ -47,6 +48,7 @@ type BlockFile struct {
 	DataAlgo    int
 	Idx         *metadata.LogIndex
 	PrevIdx     *metadata.LogIndex
+	Range       *metadata.LogRange
 	Count       uint64
 }
 
@@ -131,11 +133,21 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	if err = binary.Read(&bf.File, binary.BigEndian, &bf.Count); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
+
+	buf := make([]byte, 24)
+	if err = binary.Read(&bf.File, binary.BigEndian, &buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+	bf.Range = new(metadata.LogRange)
+	if err = bf.Range.Unmarshal(buf); err != nil {
+		panic(fmt.Sprintf("unexpect error: %s", err))
+	}
+
 	var sz int32
 	if err = binary.Read(&bf.File, binary.BigEndian, &sz); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	buf := make([]byte, sz)
+	buf = make([]byte, sz)
 	if err = binary.Read(&bf.File, binary.BigEndian, &buf); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
@@ -155,7 +167,7 @@ func (bf *BlockFile) initPointers(id common.ID) {
 	if err = bf.Idx.UnMarshal(buf); err != nil {
 		panic(fmt.Sprintf("unexpect error: %s", err))
 	}
-	headSize := 8 + int(sz+sz_) + 3 + 8 + 2*8*int(cols)
+	headSize := 8 + int(sz+sz_) + 24 + 3 + 8 + 2*8*int(cols)
 	currOffset := headSize + int(offset)
 	for i := uint16(0); i < cols; i++ {
 		key := base.Key{
@@ -171,8 +183,8 @@ func (bf *BlockFile) initPointers(id common.ID) {
 		if err != nil {
 			panic(fmt.Sprintf("unexpect error: %s", err))
 		}
-		// log.Infof("(Len, OriginLen, Algo)=(%d, %d, %d)", bf.Parts[key].Len, bf.Parts[key].OriginLen, algo)
 		bf.Parts[key].Offset = int64(currOffset)
+		// log.Infof("(Offset, Len, OriginLen, Algo)=(%d %d, %d, %d)", currOffset, bf.Parts[key].Len, bf.Parts[key].OriginLen, algo)
 		currOffset += int(bf.Parts[key].Len)
 	}
 	bf.DataAlgo = int(algo)
@@ -224,7 +236,7 @@ func (bf *BlockFile) ReadPart(colIdx uint64, id common.ID, buf []byte) {
 	if !ok {
 		panic("logic error")
 	}
-
+	// logutil.Infof("%s %d-%d-%d", bf.Name(), pointer.Offset, pointer.Len, pointer.OriginLen)
 	if len(buf) > int(pointer.Len) {
 		panic(fmt.Sprintf("buf len is %d, but pointer len is %d", len(buf), pointer.Len))
 	}
@@ -242,6 +254,5 @@ func (bf *BlockFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	}
 	offset := pointer.Offset
 	sz := pointer.Len
-	// integrate vfs later
 	return prefetch.Prefetch(bf.Fd(), uintptr(offset), uintptr(sz))
 }
