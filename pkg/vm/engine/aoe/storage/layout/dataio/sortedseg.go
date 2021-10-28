@@ -20,6 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/prefetch"
@@ -27,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"path/filepath"
 )
 
 // SortedSegmentFile file structure:
@@ -150,7 +151,7 @@ func (sf *SortedSegmentFile) initPointers() {
 	// read metadata-2
 	sz = startPosSize +
 		endPosSize +
-		int(blkCnt)*(blkCountSize+blkIdSize+2*blkIdxSize) +
+		int(blkCnt)*(blkCountSize+blkIdSize+2*blkIdxSize+blkRangeSize) +
 		int(blkCnt*colCnt)*(colSizeSize*2) +
 		int(colCnt)*colPosSize
 
@@ -165,6 +166,7 @@ func (sf *SortedSegmentFile) initPointers() {
 	idxBuf := make([]byte, blkIdxSize)
 	preIndices := make([]*metadata.LogIndex, blkCnt)
 	indices := make([]*metadata.LogIndex, blkCnt)
+	rangeBuf := make([]byte, blkRangeSize)
 
 	for i := uint32(0); i < blkCnt; i++ {
 		if err = binary.Read(metaBuf, binary.BigEndian, &blkIds[i]); err != nil {
@@ -176,6 +178,11 @@ func (sf *SortedSegmentFile) initPointers() {
 		if err = binary.Read(metaBuf, binary.BigEndian, &idxBuf); err != nil {
 			panic(err)
 		}
+
+		if _, err = metaBuf.Read(rangeBuf); err != nil {
+			panic(fmt.Sprintf("unexpect error: %s", err))
+		}
+
 		if !bytes.Equal(idxBuf, []byte{}) {
 			preIndices[i] = &metadata.LogIndex{}
 			if err = preIndices[i].UnMarshal(idxBuf); err != nil {

@@ -14,11 +14,13 @@
 package metadata
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
@@ -70,6 +72,40 @@ func OpName(op OpT) string {
 	return OpNames[op]
 }
 
+type LogRange struct {
+	ShardId uint64
+	Range   common.Range
+}
+
+func (r *LogRange) String() string {
+	if r == nil {
+		return "nil"
+	}
+	return fmt.Sprintf("LogRange<%d>%s", r.ShardId, r.Range.String())
+}
+
+func (r *LogRange) Marshal() ([]byte, error) {
+	if r == nil {
+		buf := make([]byte, 24)
+		return buf, nil
+	}
+	var buf bytes.Buffer
+	buf.Write(encoding.EncodeUint64(r.ShardId))
+	buf.Write(encoding.EncodeUint64(r.Range.Left))
+	buf.Write(encoding.EncodeUint64(r.Range.Right))
+	return buf.Bytes(), nil
+}
+
+func (r *LogRange) Unmarshal(data []byte) error {
+	buf := data
+	r.ShardId = encoding.DecodeUint64(buf[:8])
+	buf = buf[8:]
+	r.Range.Left = encoding.DecodeUint64(buf[:8])
+	buf = buf[8:]
+	r.Range.Right = encoding.DecodeUint64(buf[:8])
+	return nil
+}
+
 type CommitInfo struct {
 	common.SSLLNode `json:"-"`
 	CommitId        uint64
@@ -78,6 +114,7 @@ type CommitInfo struct {
 	LogIndex        *LogIndex
 	PrevIndex       *LogIndex
 	AppliedIndex    *LogIndex
+	LogRange        *LogRange
 }
 
 func (info *CommitInfo) GetShardId() uint64 {
@@ -99,7 +136,7 @@ func (info *CommitInfo) IsSoftDeleted() bool {
 }
 
 func (info *CommitInfo) PString(level PPLevel) string {
-	s := fmt.Sprintf("CInfo: ")
+	s := fmt.Sprintf("CInfo(%s): ", info.LogRange.String())
 	var curr, prev common.ISSLLNode
 	curr = info
 	for curr != nil {
@@ -151,6 +188,11 @@ func (info *CommitInfo) SetIndex(idx LogIndex) error {
 		}
 		info.LogIndex = &idx
 	}
+	if info.LogRange == nil {
+		info.LogRange = &LogRange{}
+		info.LogRange.ShardId = idx.ShardId
+	}
+	info.LogRange.Range.Append(idx.Id.Id)
 	return nil
 }
 

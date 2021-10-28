@@ -17,6 +17,9 @@ package dataio
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
+	"path/filepath"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"
 	gvector "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"path/filepath"
 
 	"github.com/pierrec/lz4"
 )
@@ -278,6 +279,12 @@ func lz4CompressionVecs(w *os.File, data []*gvector.Vector, meta *metadata.Block
 	if err = binary.Write(&buf, binary.BigEndian, count); err != nil {
 		return err
 	}
+
+	rangeBuf, _ := meta.CommitInfo.LogRange.Marshal()
+	if err = binary.Write(&buf, binary.BigEndian, rangeBuf); err != nil {
+		return err
+	}
+
 	var preIdx []byte
 	if meta.CommitInfo.PrevIndex != nil {
 		preIdx, err = meta.CommitInfo.PrevIndex.Marshal()
@@ -395,6 +402,12 @@ func lz4CompressionIVecs(w *os.File, data []vector.IVectorNode, meta *metadata.B
 	if err = binary.Write(&buf, binary.BigEndian, count); err != nil {
 		return err
 	}
+
+	rangeBuf, _ := meta.CommitInfo.LogRange.Marshal()
+	if _, err = buf.Write(rangeBuf); err != nil {
+		return err
+	}
+
 	var preIdx []byte
 	if meta.CommitInfo.PrevIndex != nil {
 		preIdx, err = meta.CommitInfo.PrevIndex.Marshal()

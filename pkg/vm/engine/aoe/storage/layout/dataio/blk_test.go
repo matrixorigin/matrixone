@@ -72,12 +72,16 @@ func mockUnSortedSegmentFile(t *testing.T, dirname string, id common.ID, indices
 		algo := uint8(0)
 		cols := uint16(0)
 		count := uint64(0)
+		logRange := new(metadata.LogRange)
 		err = binary.Write(w, binary.BigEndian, &algo)
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &cols)
 		assert.Nil(t, err)
 		err = binary.Write(w, binary.BigEndian, &count)
 		assert.Nil(t, err)
+		rangeBuf, err := logRange.Marshal()
+		assert.Nil(t, err)
+		err = binary.Write(w, binary.BigEndian, &rangeBuf)
 		prevIdx := shard.Index{
 			Id: shard.SimpleIndexId(uint64(0)),
 		}
