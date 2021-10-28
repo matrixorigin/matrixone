@@ -218,15 +218,15 @@ func (s *Storage) SplitCheck(start []byte, end []byte, size uint64) (currentSize
 }
 
 //TODO
-func (s *Storage) CreateSnapshot(path string, start, end []byte) error {
+func (s *Storage) CreateSnapshot(shardID uint64, path string) (uint64, error) {
 	if _, err := os.Stat(path); err != nil {
 		os.MkdirAll(path, os.FileMode(0755))
 	}
-	return nil
+	return 0, nil
 }
 
 //TODO
-func (s *Storage) ApplySnapshot(path string) error {
+func (s *Storage) ApplySnapshot(shardID uint64, path string) error {
 	return nil
 }
 
@@ -251,7 +251,6 @@ func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
 		if err != nil {
 			return nil, err
 		}
-		colDeflen := len(rel.Meta.Schema.ColDefs)
 		attrs := make([]string, 0)
 		for _, ColDef := range rel.Meta.Schema.ColDefs {
 			attrs = append(attrs, ColDef.Name)
@@ -423,6 +422,6 @@ func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
 	return nil
 }
 
-func (s *Storage) RemoveShardData(shard meta.Shard, start, end []byte) error {
+func (s *Storage) RemoveShardData(shard meta.Shard) error {
 	return nil
 }

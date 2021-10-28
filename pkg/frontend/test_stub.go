@@ -67,12 +67,6 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 	c := &TestCluster{T: t}
 	var wg sync.WaitGroup
 	for i := 0; i < nodeCnt; i++ {
-		metaStorage, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/meta-%d", tmpDir, i), &pebble.Options{
-			FS: vfs.NewPebbleFS(vfs.Default),
-		})
-		if err != nil {
-			return nil, err
-		}
 		kvs, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), &pebble.Options{
 			FS: vfs.NewPebbleFS(vfs.Default),
 		})
@@ -133,7 +127,7 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			a, err := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
+			a, err := driver.NewCubeDriverWithOptions(pebbleDataStorage, aoeDataStorage, &cfg)
 			if err != nil {
 				fmt.Printf("create failed with %v", err)
 			}
