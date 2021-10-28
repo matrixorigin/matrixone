@@ -17,6 +17,10 @@ package table
 import (
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -25,9 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"sync"
-	"sync/atomic"
-	"unsafe"
 )
 
 var (
@@ -40,9 +41,7 @@ func newTableData(host *Tables, meta *metadata.Table) *tableData {
 		host:        host,
 		indexHolder: index.NewTableHolder(host.IndexBufMgr, meta.Id),
 	}
-	if host.MutFactory != nil && host.MutFactory.GetType() == fb.MUTABLE {
-		data.blkFactory = newAltBlockFactory(host.MutFactory, data)
-	}
+	data.blkFactory = newBlockFactory(host.MutFactory, data)
 	data.tree.segments = make([]iface.ISegment, 0)
 	data.tree.helper = make(map[uint64]int)
 	data.tree.ids = make([]uint64, 0)

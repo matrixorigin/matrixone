@@ -43,9 +43,11 @@ func NewDriver() *driver {
 		shards:    make(map[uint64](*shardFlusher)),
 	}
 	wg := new(sync.WaitGroup)
-	rqueue := sm.NewWaitableQueue(10000, 100, f, wg, nil, nil, f.onMessages)
+	// rqueue := sm.NewWaitableQueue(10000, 100, f, wg, nil, nil, f.onMessages)
+	rqueue := sm.NewSafeQueue(10000, 100, f.onMessages)
 	// TODO: flushQueue should be non-blocking
-	wqueue := sm.NewWaitableQueue(20000, 1000, f, wg, nil, nil, f.onFlushes)
+	// wqueue := sm.NewWaitableQueue(20000, 1000, f, wg, nil, nil, f.onFlushes)
+	wqueue := sm.NewSafeQueue(20000, 1000, f.onFlushes)
 	f.StateMachine = sm.NewStateMachine(wg, f, rqueue, wqueue)
 	return f
 }

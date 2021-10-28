@@ -50,14 +50,6 @@ type IterOptions struct {
 	SegmentIds []uint64
 }
 
-type FactoryType uint16
-
-const (
-	INVALID_FT FactoryType = iota
-	NORMAL_FT
-	MUTABLE_FT
-)
-
 type CacheCfg struct {
 	IndexCapacity  uint64 `toml:"index-cache-size"`
 	InsertCapacity uint64 `toml:"insert-cache-size"`
@@ -81,8 +73,6 @@ type MetaCleanerCfg struct {
 
 type Options struct {
 	EventListener event.EventListener
-
-	FactoryType FactoryType
 
 	Mu sync.RWMutex
 
@@ -112,10 +102,6 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o = &Options{}
 	}
 	o.EventListener.FillDefaults()
-
-	if o.FactoryType == INVALID_FT {
-		o.FactoryType = MUTABLE_FT
-	}
 
 	if o.SchedulerCfg == nil {
 		o.SchedulerCfg = &SchedulerCfg{

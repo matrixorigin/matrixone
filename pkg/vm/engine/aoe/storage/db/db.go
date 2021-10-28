@@ -41,7 +41,6 @@ import (
 	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
-	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
 )
 
@@ -81,10 +80,6 @@ type DB struct {
 		Mu         *sync.RWMutex
 		Catalog    *metadata.Catalog
 		DataTables *table.Tables
-	}
-
-	Cleaner struct {
-		MetaFiles iw.IHeartbeater
 	}
 
 	DataDir  *os.File
@@ -237,10 +232,7 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 		Waitable: true,
 	}
 	e := meta.NewDropTableEvent(eCtx, ctx, d.MemTableMgr, d.Store.DataTables)
-	if err = d.Scheduler.Schedule(e); err != nil {
-		return id, err
-	}
-	err = e.WaitDone()
+	err = e.Execute()
 	return e.Id, err
 }
 

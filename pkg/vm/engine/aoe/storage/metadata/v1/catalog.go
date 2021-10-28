@@ -130,8 +130,10 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awar
 		IndexWal:  indexWal,
 	}
 	wg := new(sync.WaitGroup)
-	rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
-	ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
+	rQueue := sm.NewSafeQueue(100000, 100, nil)
+	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
+	// rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
+	// ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog
@@ -159,8 +161,10 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	}
 	catalog.Store = store
 	wg := new(sync.WaitGroup)
-	rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
-	ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
+	rQueue := sm.NewSafeQueue(100000, 100, nil)
+	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
+	// rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
+	// ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog

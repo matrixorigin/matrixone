@@ -17,6 +17,7 @@ package iface
 import (
 	"bytes"
 	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -125,9 +126,6 @@ type ISegment interface {
 	// in the blocks is PERSISTENT_BLK to return true
 	CanUpgrade() bool
 
-	// GetReplayIndex gets the replay index of the last block in the segment
-	GetReplayIndex() *metadata.LogIndex
-
 	// GetMeta gets the metadata of the segment
 	GetMeta() *metadata.Segment
 
@@ -144,7 +142,6 @@ type ISegment interface {
 	// GetSegmentFile gets the segment file,
 	// the newly created segments are all UNSORTED_SEG
 	GetSegmentFile() base.ISegmentFile
-	GetSegmentedIndex() (uint64, bool)
 
 	// GetType gets the segment type, UNSORTED_SEG or SORTED_SEG
 	GetType() base.SegmentType
@@ -200,10 +197,6 @@ type IBlock interface {
 	// GetFsManager to get the FsMgr(file manager) of the DB
 	GetFsManager() base.IManager
 	GetIndexHolder() *index.BlockHolder
-
-	// GetSegmentedIndex returns ID of the applied index,
-	// if the block type is TRANSIENT_BLK, it returns its ID
-	GetSegmentedIndex() (uint64, bool)
 
 	// GetMeta to get the metadata of the Block, the metadate is
 	// created and registered during NewCreateBlkEvent

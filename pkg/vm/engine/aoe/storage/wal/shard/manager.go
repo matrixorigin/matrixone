@@ -82,8 +82,10 @@ func NewManagerWithDriver(driver logstore.AwareStore, own bool, role wal.Role) *
 		safeids: make(map[uint64]uint64),
 	}
 	wg := new(sync.WaitGroup)
-	rQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onReceived)
-	ckpQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onSnippets)
+	// rQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onReceived)
+	// ckpQueue := sm.NewWaitableQueue(QueueSize, BatchSize, mgr, wg, nil, nil, mgr.onSnippets)
+	rQueue := sm.NewSafeQueue(QueueSize, BatchSize, mgr.onReceived)
+	ckpQueue := sm.NewSafeQueue(QueueSize, BatchSize, mgr.onSnippets)
 	mgr.StateMachine = sm.NewStateMachine(wg, mgr, rQueue, ckpQueue)
 	if own && driver != nil {
 		mgr.driver.Start()
