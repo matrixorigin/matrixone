@@ -16,9 +16,10 @@ package metadata
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"sync/atomic"
 )
 
 const (
@@ -77,6 +78,16 @@ type CommitInfo struct {
 	LogIndex        *LogIndex
 	PrevIndex       *LogIndex
 	AppliedIndex    *LogIndex
+}
+
+func (info *CommitInfo) GetShardId() uint64 {
+	if info == nil {
+		return 0
+	}
+	if info.LogIndex == nil {
+		return 0
+	}
+	return info.LogIndex.ShardId
 }
 
 func (info *CommitInfo) IsHardDeleted() bool {

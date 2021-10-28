@@ -15,8 +15,9 @@ package metadata
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type PPLevel uint8
@@ -31,6 +32,10 @@ type BaseEntry struct {
 	sync.RWMutex
 	Id         uint64
 	CommitInfo *CommitInfo
+}
+
+func (e *BaseEntry) GetShardId() uint64 {
+	return e.GetCommit().GetShardId()
 }
 
 func (e *BaseEntry) GetFirstCommit() *CommitInfo {
