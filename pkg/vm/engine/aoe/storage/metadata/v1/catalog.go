@@ -230,6 +230,8 @@ func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
 	return tbls
 }
 
+// func (catalog *Catalog) ShardView()
+
 func (catalog *Catalog) LatestView() *catalogLogEntry {
 	commitId := catalog.Store.GetSyncedId()
 	filter := new(Filter)
