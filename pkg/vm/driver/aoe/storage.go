@@ -15,27 +15,27 @@
 package aoe
 
 import (
-	"os"
-	"sync/atomic"
 	"bytes"
 	"encoding/json"
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
-	store "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	error2 "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
+	store "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
+	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixcube/pb/meta"
@@ -157,7 +157,7 @@ func (s *Storage) getSegmentedId(cmd []byte) ([]byte) {
 //CreateTable creates a table in the storage.
 //It returns the id of the created table.
 //If the storage is closed, it panics.
-func (s *Storage) createTable(index uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) createTable(index uint64, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	customReq := &pb.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 	t, err := helper.DecodeTable(customReq.TableInfo)
@@ -167,6 +167,7 @@ func (s *Storage) createTable(index uint64, cmd []byte, key []byte) (uint64, int
 		return 0, 0, buf
 	}
 	id, err := s.DB.CreateTable(&t, dbi.TableOpCtx{
+		ShardId:   shardId,
 		OpIndex:   index,
 		TableName: customReq.Name,
 	})
@@ -182,10 +183,11 @@ func (s *Storage) createTable(index uint64, cmd []byte, key []byte) (uint64, int
 
 //DropTable drops the table in the storage.
 //If the storage is closed, it panics.
-func (s *Storage) dropTable(index uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
+func (s *Storage) dropTable(index uint64, shardId uint64, cmd []byte, key []byte) (uint64, int64, []byte) {
 	customReq := &pb.CreateTabletRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 	id, err := s.DB.DropTable(dbi.DropTableCtx{
+		ShardId:   shardId,
 		OpIndex:   index,
 		TableName: customReq.Name,
 	})
@@ -250,7 +252,7 @@ func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
 			return nil, err
 		}
 		colDeflen := len(rel.Meta.Schema.ColDefs)
-		attrs := make([]string, colDeflen)
+		attrs := make([]string, 0)
 		for _, ColDef := range rel.Meta.Schema.ColDefs {
 			attrs = append(attrs, ColDef.Name)
 		}
@@ -273,10 +275,12 @@ func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
 		shardId := bat.GetVector(attrs[0])
 		logIndex := bat.GetVector(attrs[1])
 		metadate := bat.GetVector(attrs[2])
+		logutil.Infof("GetInitialStates Metadata is %v\n",
+			metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]] )
 		values = append(values, storage.ShardMetadata{
 			ShardID:  shardId.Col.([]uint64)[0] ,
 			LogIndex: logIndex.Col.([]uint64)[0],
-			Metadata: metadate.Data,
+			Metadata: metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]],
 		})
 	}
 	return values, nil
@@ -295,9 +299,9 @@ func (s *Storage) Write(ctx storage.WriteContext) error {
 		var changedBytes int64
 		switch CmdType{
 		case uint64(pb.CreateTablet):
-			writtenBytes, changedBytes, rep = s.createTable(batch.Index, cmd, key)
+			writtenBytes, changedBytes, rep = s.createTable(batch.Index, shard.ID, cmd, key)
 		case uint64(pb.DropTablet):
-			writtenBytes, changedBytes, rep = s.dropTable(batch.Index, cmd, key)
+			writtenBytes, changedBytes, rep = s.dropTable(batch.Index, shard.ID, cmd, key)
 		case uint64(pb.Append):
 			writtenBytes, changedBytes, rep = s.Append(batch.Index, idx, batchSize, shard.ID, cmd, key)
 		}
@@ -371,11 +375,12 @@ func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
 			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 128}
 			mateTblInfo.Columns = append(mateTblInfo.Columns, colInfo)
 			_, err := s.DB.CreateTable(&mateTblInfo, dbi.TableOpCtx{
+				ShardId:   metadata.ShardID,
 				OpIndex:   metadata.LogIndex,
 				TableName: tableName,
 			})
-
 			if err != nil {
+				logutil.Infof("err is %d\n", err)
 				return err
 			}
 			tbl = s.DB.Store.Catalog.SimpleGetTableByName(tableName)
@@ -385,8 +390,9 @@ func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
 			attrs = append(attrs, colDef.Name)
 		}
 		bat := batch.New(true, attrs)
-		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 128})
+		vec := vector.New(types.Type{Oid: types.T_varchar, Size: int32(len(metadata.Metadata))})
 		vec.Ref = 1
+		logutil.Infof("SaveShardMetadata Metadata is %v\n", metadata.Metadata)
 		vec.Col = &types.Bytes{
 			Data:    metadata.Metadata,
 			Offsets: []uint32{0},
