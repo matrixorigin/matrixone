@@ -75,6 +75,33 @@ var (
 	Float64SubScalarSels   func(float64, []float64, []float64, []int64) []float64
 	Float64SubByScalar     func(float64, []float64, []float64) []float64
 	Float64SubByScalarSels func(float64, []float64, []float64, []int64) []float64
+
+	Int32Int64Sub func([]int64, []int32, []int64) []int64
+	Int32Int64SubSels func([]int64, []int32, []int64, []int64) []int64
+	Int16Int64Sub func([]int64, []int16, []int64) []int64
+	Int16Int64SubSels func([]int64, []int16, []int64, []int64) []int64
+	Int8Int64Sub func([]int64, []int8, []int64) []int64
+	Int8Int64SubSels func([]int64, []int8, []int64, []int64) []int64
+	Int16Int32Sub func([]int32, []int16, []int32) []int32
+	Int16Int32SubSels func([]int32, []int16, []int32, []int64) []int32
+	Int8Int32Sub func([]int32, []int8, []int32) []int32
+	Int8Int32SubSels func([]int32, []int8, []int32, []int64) []int32
+	Int8Int16Sub func([]int16, []int8, []int16) []int16
+	Int8Int16SubSels func([]int16, []int8, []int16, []int64) []int16
+	Float32Float64Sub func([]float64, []float32, []float64) []float64
+	Float32Float64SubSels func([]float64, []float32, []float64, []int64) []float64
+	Uint32Uint64Sub func([]uint64, []uint32, []uint64) []uint64
+	Uint32Uint64SubSels func([]uint64, []uint32, []uint64, []int64) []uint64
+	Uint16Uint64Sub func([]uint64, []uint16, []uint64) []uint64
+	Uint16Uint64SubSels func([]uint64, []uint16, []uint64, []int64) []uint64
+	Uint8Uint64Sub func([]uint64, []uint8, []uint64) []uint64
+	Uint8Uint64SubSels func([]uint64, []uint8, []uint64, []int64) []uint64
+	Uint16Uint32Sub func([]uint32, []uint16, []uint32) []uint32
+	Uint16Uint32SubSels func([]uint32, []uint16, []uint32, []int64) []uint32
+	Uint8Uint32Sub func([]uint32, []uint8, []uint32) []uint32
+	Uint8Uint32SubSels func([]uint32, []uint8, []uint32, []int64) []uint32
+	Uint8Uint16Sub func([]uint16, []uint8, []uint16) []uint16
+	Uint8Uint16SubSels func([]uint16, []uint8, []uint16, []int64) []uint16
 )
 
 func int8Sub(xs, ys, rs []int8) []int8 {
@@ -493,6 +520,188 @@ func float64SubByScalar(x float64, ys, rs []float64) []float64 {
 func float64SubByScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
 	for i, sel := range sels {
 		rs[i] = ys[sel] - x
+	}
+	return rs
+}
+
+func int32Int64Sub(xs []int64, ys []int32, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = xs[i] - int64(ys[i])
+	}
+	return rs
+}
+
+func int32Int64SubSels(xs []int64, ys []int32, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - int64(ys[sel])
+	}
+	return rs
+}
+
+func int16Int64Sub(xs []int64, ys []int16, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = xs[i] - int64(ys[i])
+	}
+	return rs
+}
+
+func int16Int64SubSels(xs []int64, ys []int16, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - int64(ys[sel])
+	}
+	return rs
+}
+
+func int8Int64Sub(xs []int64, ys []int8, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = xs[i] - int64(ys[i])
+	}
+	return rs
+}
+
+func int8Int64SubSels(xs []int64, ys []int8, rs []int64, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - int64(ys[sel])
+	}
+	return rs
+}
+
+func int16Int32Sub(xs []int32, ys []int16, rs []int32) []int32 {
+	for i := range rs {
+		rs[i] = xs[i] - int32(ys[i])
+	}
+	return rs
+}
+
+func int16Int32SubSels(xs []int32, ys []int16, rs []int32, sels []int64) []int32 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - int32(ys[sel])
+	}
+	return rs
+}
+
+func int8Int32Sub(xs []int32, ys []int8, rs []int32) []int32 {
+	for i := range rs {
+		rs[i] = xs[i] - int32(ys[i])
+	}
+	return rs
+}
+
+func int8Int32SubSels(xs []int32, ys []int8, rs []int32, sels []int64) []int32 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - int32(ys[sel])
+	}
+	return rs
+}
+
+func int8Int16Sub(xs []int16, ys []int8, rs []int16) []int16 {
+	for i := range rs {
+		rs[i] = xs[i] - int16(ys[i])
+	}
+	return rs
+}
+
+func int8Int16SubSels(xs []int16, ys []int8, rs []int16, sels []int64) []int16 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - int16(ys[sel])
+	}
+	return rs
+}
+
+func float32Float64Sub(xs []float64, ys []float32, rs []float64) []float64 {
+	for i := range rs {
+		rs[i] = xs[i] - float64(ys[i])
+	}
+	return rs
+}
+
+func float32Float64SubSels(xs []float64, ys []float32, rs []float64, sels []int64) []float64 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - float64(ys[sel])
+	}
+	return rs
+}
+
+func uint32Uint64Sub(xs []uint64, ys []uint32, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = xs[i] - uint64(ys[i])
+	}
+	return rs
+}
+
+func uint32Uint64SubSels(xs []uint64, ys []uint32, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - uint64(ys[sel])
+	}
+	return rs
+}
+
+func uint16Uint64Sub(xs []uint64, ys []uint16, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = xs[i] - uint64(ys[i])
+	}
+	return rs
+}
+
+func uint16Uint64SubSels(xs []uint64, ys []uint16, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - uint64(ys[sel])
+	}
+	return rs
+}
+
+func uint8Uint64Sub(xs []uint64, ys []uint8, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = xs[i] - uint64(ys[i])
+	}
+	return rs
+}
+
+func uint8Uint64SubSels(xs []uint64, ys []uint8, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - uint64(ys[sel])
+	}
+	return rs
+}
+
+func uint16Uint32Sub(xs []uint32, ys []uint16, rs []uint32) []uint32 {
+	for i := range rs {
+		rs[i] = xs[i] - uint32(ys[i])
+	}
+	return rs
+}
+
+func uint16Uint32SubSels(xs []uint32, ys []uint16, rs []uint32, sels []int64) []uint32 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - uint32(ys[sel])
+	}
+	return rs
+}
+
+func uint8Uint32Sub(xs []uint32, ys []uint8, rs []uint32) []uint32 {
+	for i := range rs {
+		rs[i] = xs[i] - uint32(ys[i])
+	}
+	return rs
+}
+
+func uint8Uint32SubSels(xs []uint32, ys []uint8, rs []uint32, sels []int64) []uint32 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - uint32(ys[sel])
+	}
+	return rs
+}
+
+func uint8Uint16Sub(xs []uint16, ys []uint8, rs []uint16) []uint16 {
+	for i := range rs {
+		rs[i] = xs[i] - uint16(ys[i])
+	}
+	return rs
+}
+
+func uint8Uint16SubSels(xs []uint16, ys []uint8, rs []uint16, sels []int64) []uint16 {
+	for _, sel := range sels {
+		rs[sel] = xs[sel] - uint16(ys[sel])
 	}
 	return rs
 }

@@ -103,6 +103,143 @@ func init() {
             },
         },
     {{end}}
+
+    {{range .Field2}}
+        {
+            LeftType:   types.LEFT_TYPE_OID,
+            RightType:  types.RIGHT_TYPE_OID,
+            ReturnType: types.RETURN_TYPE_OID,
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+                lvs, rvs := lv.Col.([]L_GO_TYPE), rv.Col.([]R_GO_TYPE)
+                rtl := {.RETURN_TYPE_LEN}
+                switch {
+                case lc && !rc:
+                    if rv.Ref == 1 || rv.Ref == 0 {
+                        rv.Ref = 0
+                        add.{.LTYP}{.RTYP}AddScalar(lvs[0], rvs, rvs)
+                        return rv, nil
+                    }
+                    vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), rv.Typ)
+                    if err != nil {
+                        return nil, err
+                    }
+                    rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                    rs = rs[:len(rvs)]
+                    vec.Nsp.Set(rv.Nsp)
+                    vec.SetCol(add.{.LTYP}{.RTYP}AddScalar(lvs[0], rvs, rs))
+                    return vec, nil
+                case !lc && rc:
+                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
+                    if err != nil {
+                        return nil, err
+                    }
+                    rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                    rs = rs[:len(lvs)]
+                    vec.Nsp.Set(lv.Nsp)
+                    for i := range lvs {
+                        rs[i] = R_GO_TYPE(lvs[i])
+                    }
+                    vec.SetCol(add.{.RETTYP}AddScalar(rvs[0], rs, rs))
+                    if lv.Ref == 0 {
+                        register.Put(proc, lv)
+                    }
+                    return vec, nil
+                case rv.Ref == 1 || rv.Ref == 0:
+                    rv.Ref = 0
+                    add.{.LTYP}{.RTYP}Add(lvs, rvs, rvs)
+                    rv.Nsp = rv.Nsp.Or(lv.Nsp)
+                    if lv.Ref == 0 {
+                        register.Put(proc, lv)
+                    }
+                    return rv, nil
+                }
+                vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), rv.Typ)
+                if err != nil {
+                    return nil, err
+                }
+                rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                rs = rs[:len(rvs)]
+                vec.Nsp.Set(rv.Nsp.Or(lv.Nsp))
+                vec.SetCol(add.{.LTYP}{.RTYP}Add(lvs, rvs, rs))
+                if rv.Ref == 0 {
+                    register.Put(proc, rv)
+                }
+                if lv.Ref == 0 {
+                    register.Put(proc, lv)
+                }
+                return vec, nil
+            },
+        },
+    {{end}}
+
+    // same type family, and left one is high precision.
+    {{range .Field3}}
+        {
+            LeftType:   types.LEFT_TYPE_OID,
+            RightType:  types.RIGHT_TYPE_OID,
+            ReturnType: types.RETURN_TYPE_OID,
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+                lvs, rvs := lv.Col.([]L_GO_TYPE), rv.Col.([]R_GO_TYPE)
+                rtl := {.RETURN_TYPE_LEN}
+                switch {
+                case lc && !rc:
+                    vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
+                    if err != nil {
+                        return nil, err
+                    }
+                    rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                    rs = rs[:len(rvs)]
+                    vec.Nsp.Set(rv.Nsp)
+                    for i := range rvs {
+                        rs[i] = L_GO_TYPE(rvs[i])
+                    }
+                    vec.SetCol(add.{.RETTYP}AddScalar(lvs[0], rs, rs))
+                    if rv.Ref == 0 {
+                        register.Put(proc, rv)
+                    }
+                    return vec, nil
+                case !lc && rc:
+                    if lv.Ref == 1 || lv.Ref == 0 {
+                        lv.Ref = 0
+                        add.{.RTYP}{.LTYP}AddScalar(rvs[0], lvs, lvs)
+                        return lv, nil
+                    }
+                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                    if err != nil {
+                        return nil, err
+                    }
+                    rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                    rs = rs[:len(lvs)]
+                    vec.Nsp.Set(lv.Nsp)
+                    vec.SetCol(add.{.RTYP}{.LTYP}AddScalar(rvs[0], lvs, rs))
+                    return vec, nil
+                case lv.Ref == 1 || lv.Ref == 0:
+                    lv.Ref = 0
+                    add.{.RTYP}{.LTYP}Add(rvs, lvs, lvs)
+                    lv.Nsp = rv.Nsp.Or(lv.Nsp)
+                    if rv.Ref == 0 {
+                        register.Put(proc, rv)
+                    }
+                    return lv, nil
+                }
+                vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                if err != nil {
+                    return nil, err
+                }
+                rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                rs = rs[:len(lvs)]
+                vec.Nsp.Set(rv.Nsp.Or(lv.Nsp))
+                vec.SetCol(add.{.RTYP}{.LTYP}Add(rvs, lvs, rs))
+                if rv.Ref == 0 {
+                    register.Put(proc, rv)
+                }
+                if lv.Ref == 0 {
+                    register.Put(proc, lv)
+                }
+                return vec, nil
+            },
+        },
+    {{end}}
     }
 }
 

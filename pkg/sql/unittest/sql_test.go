@@ -3,7 +3,6 @@ package unittest
 import (
 	"errors"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -12,6 +11,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
 
@@ -246,6 +246,82 @@ func TestInsert(t *testing.T) {
 		}
 	}
 
+}
+
+func TestBinaryOperators(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type noErrorCase struct {
+		sql string
+	}
+	type ErrorCase struct {
+		sql string
+		err error
+	}
+
+	// noErrors is Test Cases for binary operators for different types
+	// which sql should keep compile and run success without any error.
+	noErrors := []noErrorCase{
+		{"create database bos;"},
+		{"create table iis(i1 tinyint, i2 smallint, i3 int, i4 bigint);"},
+		{"create table ffs(f1 float, f2 double);"},
+		{"create table uus(u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);"},
+		{"insert into iis values (5, 10, 15, 20);"},
+		{"insert into ffs values (11.11, 333.333);"},
+		{"insert into uus values (10, 200, 3000, 40000);"},
+		// plus operator
+		{"select i1 + i1, i1 + i2, i1 + i3, i1 + i4 from iis;"},
+		{"select i2 + i1, i2 + i2, i2 + i3, i2 + i4 from iis;"},
+		{"select i3 + i1, i3 + i2, i3 + i3, i3 + i4 from iis;"},
+		{"select i4 + i1, i4 + i2, i4 + i3, i4 + i4 from iis;"},
+		{"select f1 + f1, f1 + f2, f2 + f1, f2 + f2 from ffs;"},
+		{"select u1 + u1, u1 + u2, u1 + u3, u1 + u4 from uus;"},
+		{"select u2 + u1, u2 + u2, u2 + u3, u2 + u4 from uus;"},
+		{"select u3 + u1, u3 + u2, u3 + u3, u3 + u4 from uus;"},
+		{"select u4 + u1, u4 + u2, u4 + u3, u4 + u4 from uus;"},
+		// minus operator
+		{"select i1 - i1, i1 - i2, i1 - i3, i1 - i4 from iis;"},
+		{"select i2 - i1, i2 - i2, i2 - i3, i2 - i4 from iis;"},
+		{"select i3 - i1, i3 - i2, i3 - i3, i3 - i4 from iis;"},
+		{"select i4 - i1, i4 - i2, i4 - i3, i4 - i4 from iis;"},
+		{"select f1 - f1, f1 - f2, f2 - f1, f2 - f2 from ffs;"},
+		{"select u1 - u1, u1 - u2, u1 - u3, u1 - u4 from uus;"},
+		{"select u2 - u1, u2 - u2, u2 - u3, u2 - u4 from uus;"},
+		{"select u3 - u1, u3 - u2, u3 - u3, u3 - u4 from uus;"},
+		{"select u4 - u1, u4 - u2, u4 - u3, u4 - u4 from uus;"},
+		{"drop database bos;"},
+	}
+
+	for i, cas := range noErrors {
+		sql := cas.sql
+
+		c := compile.New("bos", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		println(i)
+		for _, e := range es {
+			err := e.Compile(nil, Print)
+			require.NoError(t, err, fmt.Sprintf("the error sql is %s", sql))
+			err = e.Run(1)
+			require.NoError(t, err, fmt.Sprintf("the error sql is %s", sql))
+		}
+	}
 }
 
 func TestSql(t *testing.T) {
