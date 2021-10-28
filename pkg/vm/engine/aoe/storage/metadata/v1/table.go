@@ -119,7 +119,7 @@ func (e *Table) GetFlushTS() int64 {
 func (e *Table) CommittedView(filter *Filter) *Table {
 	// TODO: if baseEntry op is drop, should introduce an index to
 	// indicate weather to return nil
-	baseEntry := e.UseCommitted(filter)
+	baseEntry := e.UseCommitted(filter.tableFilter)
 	if baseEntry == nil {
 		return nil
 	}

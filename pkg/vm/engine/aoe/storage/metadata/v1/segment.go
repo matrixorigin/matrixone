@@ -110,7 +110,7 @@ func (e *Segment) AsCommonID() *common.ID {
 
 // Safe
 func (e *Segment) CommittedView(filter *Filter) *Segment {
-	baseEntry := e.UseCommitted(filter)
+	baseEntry := e.UseCommitted(filter.segmentFilter)
 	if baseEntry == nil {
 		return nil
 	}

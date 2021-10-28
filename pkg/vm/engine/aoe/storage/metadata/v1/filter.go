@@ -1,6 +1,8 @@
 package metadata
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+)
 
 type commitChecker func(info *CommitInfo) bool
 
@@ -13,14 +15,25 @@ func createShardChecker(shardId uint64) commitChecker {
 	}
 }
 
-// func createIndexChecker(id uint64) commitChecker {
-// 	return func(info *CommitInfo) bool {
-// 		if info.LogIndex == nil {
-// 			return true
-// 		}
-// 		return info.LogIndex.ShardId == shardId
-// 	}
-// }
+func createIndexRangeChecker(id uint64) commitChecker {
+	return func(info *CommitInfo) bool {
+		if info.LogRange == nil {
+			return true
+		}
+		ret := info.LogRange.Range.GT(id)
+		// logutil.Infof("%d %s [%v]", id, info.LogRange.Range.String(), !ret)
+		return !ret
+	}
+}
+
+func createIndexChecker(id uint64) commitChecker {
+	return func(info *CommitInfo) bool {
+		if info.LogIndex == nil {
+			return true
+		}
+		return info.LogIndex.Id.Id <= id
+	}
+}
 
 type commitFilter struct {
 	interval *common.Range
@@ -63,23 +76,7 @@ func (f *commitFilter) Eval(info *CommitInfo) bool {
 }
 
 type Filter struct {
-	commitFilter *commitFilter
-}
-
-func (f *Filter) SetCommitFilter(filter *commitFilter) {
-	f.commitFilter = filter
-}
-
-func (f *Filter) FilteBaseEntry(entry *BaseEntry) bool {
-	ret := true
-	if f == nil {
-		return ret
-	}
-	if f.commitFilter != nil {
-		ret = f.commitFilter.Eval(entry.CommitInfo)
-		if !ret {
-			return ret
-		}
-	}
-	return ret
+	tableFilter   *commitFilter
+	segmentFilter *commitFilter
+	blockFilter   *commitFilter
 }

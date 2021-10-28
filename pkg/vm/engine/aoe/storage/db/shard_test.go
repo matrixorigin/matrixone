@@ -285,5 +285,14 @@ func TestShard2(t *testing.T) {
 		t.Logf("shard-%d safeid %d, logid-%d", shard.id, shard.getSafeId(), shard.idAlloc.Get())
 		shard.Stop()
 	}
+
+	total := 0
+	for _, shard := range shards {
+		view := inst.Store.Catalog.ShardView(shard.id, 0)
+		assert.Empty(t, view.Catalog.TableSet)
+		view = inst.Store.Catalog.ShardView(shard.id, shard.getSafeId())
+		total += len(view.Catalog.TableSet)
+	}
+	assert.Equal(t, tableCnt, total)
 	inst.Close()
 }

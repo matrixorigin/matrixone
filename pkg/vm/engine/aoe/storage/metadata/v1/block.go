@@ -254,7 +254,7 @@ func (e *Block) SetCount(count uint64) error {
 
 // Safe
 func (e *Block) CommittedView(filter *Filter) *Block {
-	baseEntry := e.UseCommitted(filter)
+	baseEntry := e.UseCommitted(filter.blockFilter)
 	if baseEntry == nil {
 		return nil
 	}
