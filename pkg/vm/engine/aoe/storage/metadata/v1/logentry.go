@@ -15,8 +15,9 @@ package metadata
 
 import (
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
 type LogEntryType = logstore.EntryType
@@ -33,6 +34,7 @@ const (
 	ETCreateBlock
 	ETUpgradeBlock
 	ETDropBlock
+	ETShardSnapshot
 )
 
 func IsSyncDDLEntryType(et LogEntryType) bool {

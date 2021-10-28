@@ -113,10 +113,10 @@ func (e *Table) GetFlushTS() int64 {
 // that version.
 // v2(commitId=7) -> v1(commitId=4) -> v0(commitId=2)
 //      |                 |                  |
-//      |                 |                   -------- CommittedView [0,2]
-//      |                  --------------------------- CommittedView [4,6]
-//       --------------------------------------------- CommittedView [7,+oo)
-func (e *Table) CommittedView(filter *Filter) *Table {
+//      |                 |                   -------- fillView [0,2]
+//      |                  --------------------------- fillView [4,6]
+//       --------------------------------------------- fillView [7,+oo)
+func (e *Table) fillView(filter *Filter) *Table {
 	// TODO: if baseEntry op is drop, should introduce an index to
 	// indicate weather to return nil
 	baseEntry := e.UseCommitted(filter.tableFilter)
@@ -135,7 +135,7 @@ func (e *Table) CommittedView(filter *Filter) *Table {
 	}
 	e.RUnlock()
 	for _, seg := range segs {
-		segView := seg.CommittedView(filter)
+		segView := seg.fillView(filter)
 		if segView == nil {
 			continue
 		}

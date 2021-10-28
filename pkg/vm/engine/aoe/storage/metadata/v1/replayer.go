@@ -164,11 +164,11 @@ func (cache *replayCache) Apply() error {
 			return err
 		}
 	} else {
-		if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, &cache.checkpoint.Range); err != nil {
+		if err := cache.replayer.catalog.rebuild(cache.checkpoint.Catalog.TableSet, cache.checkpoint.Range); err != nil {
 			return err
 		}
 		for _, entry := range cache.entries {
-			if err := cache.onApply(entry, cache.replayer.catalog, &cache.checkpoint.Range); err != nil {
+			if err := cache.onApply(entry, cache.replayer.catalog, cache.checkpoint.Range); err != nil {
 				return err
 			}
 		}
@@ -341,7 +341,7 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 	case logstore.ETCheckpoint:
 		c := &catalogLogEntry{}
 		c.Unmarshal(entry.GetPayload())
-		observer.OnReplayCheckpoint(c.Range)
+		observer.OnReplayCheckpoint(*c.Range)
 		replayer.cache.Append(&replayEntry{
 			typ:          logstore.ETCheckpoint,
 			catalogEntry: c,

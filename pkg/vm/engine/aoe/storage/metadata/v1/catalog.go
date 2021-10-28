@@ -49,8 +49,9 @@ type CatalogCfg struct {
 }
 
 type catalogLogEntry struct {
-	Range   common.Range
-	Catalog *Catalog
+	Range    *common.Range
+	Catalog  *Catalog
+	LogRange *LogRange
 }
 
 func newCatalogLogEntry(id uint64) *catalogLogEntry {
@@ -59,8 +60,23 @@ func newCatalogLogEntry(id uint64) *catalogLogEntry {
 			RWMutex:  &sync.RWMutex{},
 			TableSet: make(map[uint64]*Table),
 		},
+		Range: new(common.Range),
 	}
 	e.Range.Right = id
+	return e
+}
+
+func newShardSnapshotLogEntry(shardId, index uint64) *catalogLogEntry {
+	logRange := new(LogRange)
+	logRange.ShardId = shardId
+	logRange.Range.Right = index
+	e := &catalogLogEntry{
+		Catalog: &Catalog{
+			RWMutex:  &sync.RWMutex{},
+			TableSet: make(map[uint64]*Table),
+		},
+		LogRange: logRange,
+	}
 	return e
 }
 
@@ -80,6 +96,7 @@ func (e *catalogLogEntry) Unmarshal(buf []byte) error {
 func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 	switch eType {
 	case logstore.ETCheckpoint:
+	case ETShardSnapshot:
 		break
 	default:
 		panic("not supported")
@@ -241,8 +258,9 @@ func (catalog *Catalog) ShardView(shardId, index uint64) *catalogLogEntry {
 	filter.tableFilter = newCommitFilter(commitId)
 	filter.tableFilter.AddChecker(createShardChecker(shardId))
 	filter.tableFilter.AddChecker(createIndexChecker(index))
-
-	return catalog.CommittedView(filter)
+	view := newShardSnapshotLogEntry(shardId, index)
+	catalog.fillView(filter, view.Catalog)
+	return view
 }
 
 func (catalog *Catalog) LatestView() *catalogLogEntry {
@@ -251,12 +269,12 @@ func (catalog *Catalog) LatestView() *catalogLogEntry {
 	filter.tableFilter = newCommitFilter(commitId)
 	filter.segmentFilter = newCommitFilter(commitId)
 	filter.blockFilter = newCommitFilter(commitId)
-	// filter.SetCommitFilter(newCommitFilter(commitId))
-	return catalog.CommittedView(filter)
+	view := newCatalogLogEntry(filter.tableFilter.LatestId())
+	catalog.fillView(filter, view.Catalog)
+	return view
 }
 
-func (catalog *Catalog) CommittedView(filter *Filter) *catalogLogEntry {
-	ss := newCatalogLogEntry(filter.tableFilter.LatestId())
+func (catalog *Catalog) fillView(filter *Filter, view *Catalog) {
 	entries := make(map[uint64]*Table)
 	catalog.RLock()
 	for id, entry := range catalog.TableSet {
@@ -264,12 +282,11 @@ func (catalog *Catalog) CommittedView(filter *Filter) *catalogLogEntry {
 	}
 	catalog.RUnlock()
 	for eid, entry := range entries {
-		committed := entry.CommittedView(filter)
+		committed := entry.fillView(filter)
 		if committed != nil {
-			ss.Catalog.TableSet[eid] = committed
+			view.TableSet[eid] = committed
 		}
 	}
-	return ss
 }
 
 func (catalog *Catalog) Close() error {
