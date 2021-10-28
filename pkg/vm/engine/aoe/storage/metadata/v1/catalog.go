@@ -563,7 +563,7 @@ func (catalog *Catalog) addIntoShard(table *Table) {
 	n := catalog.shardNodes[shardId]
 	if n == nil {
 		n = newShardNode(catalog, shardId)
-		n.CreateNode()
+		n.CreateNode(uint64(0))
 		catalog.shardNodes[shardId] = n
 	}
 	n.GetGroup().Add(table.Id)

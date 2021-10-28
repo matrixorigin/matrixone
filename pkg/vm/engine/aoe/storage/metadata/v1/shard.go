@@ -20,8 +20,8 @@ func newShardNode(catalog *Catalog, shardId uint64) *shardNode {
 	}
 }
 
-func (n *shardNode) CreateNode() *groupNode {
-	nn := newGroupNode(n.id)
+func (n *shardNode) CreateNode(epoch uint64) *groupNode {
+	nn := newGroupNode(n.id, epoch)
 	n.Catalog.nodesMu.Lock()
 	defer n.Catalog.nodesMu.Unlock()
 	n.Insert(nn)
@@ -49,14 +49,15 @@ func (n *shardNode) PString(level PPLevel) string {
 
 type groupNode struct {
 	common.SSLLNode
-	id  uint64
-	ids map[uint64]bool
+	id, epoch uint64
+	ids       map[uint64]bool
 }
 
-func newGroupNode(id uint64) *groupNode {
+func newGroupNode(id, epoch uint64) *groupNode {
 	return &groupNode{
 		SSLLNode: *common.NewSSLLNode(),
 		id:       id,
+		epoch:    epoch,
 		ids:      make(map[uint64]bool),
 	}
 }
@@ -83,7 +84,7 @@ func (n *groupNode) String() string {
 	if n == nil {
 		return "nil"
 	}
-	s := ""
+	s := fmt.Sprintf("Epoch-%d", n.epoch)
 	for id, _ := range n.ids {
 		s = fmt.Sprintf("%s %d", s, id)
 	}

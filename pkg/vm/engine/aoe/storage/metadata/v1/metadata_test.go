@@ -749,14 +749,15 @@ func TestShardNode(t *testing.T) {
 	catalog := wrapper.Catalog
 	sidAlloc := common.IdAlloctor{}
 	tidAlloc := common.IdAlloctor{}
+	epochAlloc := common.IdAlloctor{}
 	sn := newShardNode(catalog, sidAlloc.Alloc())
-	gn1 := sn.CreateNode()
+	gn1 := sn.CreateNode(epochAlloc.Alloc())
 	gn1Cnt := 3
 	for i := 0; i < gn1Cnt; i++ {
 		gn1.Add(tidAlloc.Alloc())
 	}
 	assert.Equal(t, gn1, sn.GetGroup())
-	gn2 := sn.CreateNode()
+	gn2 := sn.CreateNode(epochAlloc.Alloc())
 	gn2Cnt := 4
 	for i := 0; i < gn2Cnt; i++ {
 		gn2.Add(tidAlloc.Alloc())
