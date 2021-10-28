@@ -270,7 +270,7 @@ func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
 			dds[i] = bytes.NewBuffer(make([]byte, 0))
 		}
 		refs := make([]uint64, len(attrs))
-		bat, err := blk.Read(refs, attrs, cds, dds)
+		bat, _ := blk.Read(refs, attrs, cds, dds)
 		shardId := bat.GetVector(attrs[0])
 		logIndex := bat.GetVector(attrs[1])
 		metadate := bat.GetVector(attrs[2])

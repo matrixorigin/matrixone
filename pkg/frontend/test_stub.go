@@ -70,7 +70,8 @@ func NewTestClusterStore(t *testing.T, reCreate bool,
 		kvs, err := cPebble.NewStorage(fmt.Sprintf("%s/pebble/data-%d", tmpDir, i), &pebble.Options{
 			FS: vfs.NewPebbleFS(vfs.Default),
 		})
-		pebbleDataStorage := kv.NewKVDataStorage(kvs, kvDriver.NewkvExecutor(kvs))
+		kvBase := kv.NewBaseStorage(kvs,vfs.Default)
+		pebbleDataStorage := kv.NewKVDataStorage(kvBase, kvDriver.NewkvExecutor(kvs))
 		var aoeDataStorage *aoe2.Storage
 		if err != nil {
 			return nil, err

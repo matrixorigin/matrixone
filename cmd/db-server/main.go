@@ -171,12 +171,12 @@ func main() {
 	}
 
 	kvs, err := cPebble.NewStorage(targetDir+"/pebble/data", &pebble.Options{
-		FS: vfs.NewPebbleFS(vfs.Default),
+		FS:                          vfs.NewPebbleFS(vfs.Default),
 		MemTableSize:                1024 * 1024 * 128,
 		MemTableStopWritesThreshold: 4,
-
 	})
-	pebbleDataStorage := kv.NewKVDataStorage(kvs, kvDriver.NewkvExecutor(kvs))
+	kvBase := kv.NewBaseStorage(kvs,vfs.Default)
+	pebbleDataStorage := kv.NewKVDataStorage(kvBase, kvDriver.NewkvExecutor(kvs))
 
 	var aoeDataStorage *aoeDriver.Storage
 
