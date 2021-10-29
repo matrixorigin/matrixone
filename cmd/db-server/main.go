@@ -214,10 +214,6 @@ func main() {
 
 	cfg.CubeConfig.Customize.CustomStoreHeartbeatDataProcessor = pci
 
-	if cfg.CubeConfig.Prophet.EmbedEtcd.ClientUrls != config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr() {
-		cfg.CubeConfig.Prophet.EmbedEtcd.Join = config.GlobalSystemVariables.GetProphetEmbedEtcdJoinAddr()
-	}
-
 	a, err := driver.NewCubeDriverWithOptions(metaStorage, pebbleDataStorage, aoeDataStorage, &cfg)
 	if err != nil {
 		logutil.Infof("Create cube driver failed, %v", err)
