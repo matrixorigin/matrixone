@@ -15,35 +15,107 @@
 package build
 
 import (
-	"matrixone/pkg/container/types"
+	"fmt"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/restrict"
+	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/tree"
 )
 
-func (b *build) buildWhere(o op.OP, stmt *tree.Where) (op.OP, error) {
-	e, err := b.buildExtend(o, stmt.Expr)
+func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
+	e, err := b.buildWhereExpr(stmt.Expr, qry)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if v, ok := e.(*extend.ValueExtend); ok {
-		switch v.V.Typ.Oid {
-		case types.T_int64:
-			if v.V.Col.([]int64)[0] != 0 {
-				return o, nil
-			} else {
-				return nil, nil
+	if e, err = b.pruneExtend(e); err != nil {
+		return err
+	}
+	if es := extend.AndExtends(e, nil); len(es) > 0 {
+		for i := 0; i < len(es); i++ { // extracting join information
+			if left, right, ok := stripEqual(es[i]); ok {
+				r, rattr, err := qry.getJoinAttribute(qry.Rels, left)
+				if err != nil {
+					return err
+				}
+				s, sattr, err := qry.getJoinAttribute(qry.Rels, right)
+				if err != nil {
+					return err
+				}
+				qry.Conds = append(qry.Conds, &JoinCondition{
+					R:     r,
+					S:     s,
+					Rattr: rattr,
+					Sattr: sattr,
+				})
+				es = append(es[:i], es[i+1:]...)
+				i--
 			}
-		case types.T_float64:
-			if v.V.Col.([]float64)[0] != 0 {
-				return o, nil
-			} else {
-				return nil, nil
+		}
+		for i := 0; i < len(es); i++ { // push down restrict
+			if ok := b.pushDownRestrict(es[i], qry); ok {
+				es = append(es[:i], es[i+1:]...)
+				i--
 			}
-		default:
-			return nil, nil
+		}
+		if len(es) > 0 {
+			qry.RestrictConds = append(qry.RestrictConds, extendsToAndExtend(es))
+		}
+		return nil
+	}
+	qry.RestrictConds = append(qry.RestrictConds, e)
+	return nil
+}
+
+func (b *build) buildWhereExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
+	switch e := n.(type) {
+	case *tree.NumVal:
+		return buildValue(e.Value)
+	case *tree.ParenExpr:
+		return b.buildWhereExpr(e.Expr, qry)
+	case *tree.OrExpr:
+		return b.buildOr(e, qry, b.buildWhereExpr)
+	case *tree.NotExpr:
+		return b.buildNot(e, qry, b.buildWhereExpr)
+	case *tree.AndExpr:
+		return b.buildAnd(e, qry, b.buildWhereExpr)
+	case *tree.UnaryExpr:
+		return b.buildUnary(e, qry, b.buildWhereExpr)
+	case *tree.BinaryExpr:
+		return b.buildBinary(e, qry, b.buildWhereExpr)
+	case *tree.ComparisonExpr:
+		return b.buildComparison(e, qry, b.buildWhereExpr)
+	case *tree.FuncExpr:
+		return b.buildFunc(false, e, qry, b.buildWhereExpr)
+	case *tree.CastExpr:
+		return b.buildCast(e, qry, b.buildWhereExpr)
+	case *tree.RangeCond:
+		return b.buildBetween(e, qry, b.buildWhereExpr)
+	case *tree.UnresolvedName:
+		return b.buildAttribute0(true, e, qry)
+	}
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
+}
+
+func (b *build) pushDownRestrict(e extend.Extend, qry *Query) bool {
+	var name string
+
+	attrs := e.Attributes()
+	mp := make(map[string]int)
+	for _, attr := range attrs {
+		if names, _, err := qry.getAttribute0(false, attr); err != nil {
+			return false
+		} else {
+			for i := 0; i < len(names); i++ {
+				mp[names[i]]++
+				if len(name) == 0 {
+					name = names[i]
+				}
+			}
 		}
 	}
-	return restrict.New(o, e), nil
+	if len(mp) == 1 {
+		qry.RelsMap[name].AddRestrict(e)
+		return true
+	}
+	return false
 }

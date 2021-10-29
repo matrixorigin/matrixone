@@ -12,28 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package overload
+package transform
 
 import (
-	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
+	"matrixone/pkg/sql/tree"
 )
 
-func UnaryEval(op int, typ types.T, c bool, v *vector.Vector, p *process.Process) (*vector.Vector, error) {
-	if os, ok := UnaryOps[op]; ok {
-		for _, o := range os {
-			if unaryCheck(op, o.Typ, typ) {
-				return o.Fn(v, p, c)
-			}
-		}
+// convert tidb's ast tree to a more manageable format
+func Transform(stmt tree.Statement) tree.Statement {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return transformSelect(stmt)
+	case *tree.ParenSelect:
+		stmt.Select = transformSelect(stmt.Select)
+		return stmt
+	case *tree.Insert:
+		return transformInsert(stmt)
 	}
-	return nil, fmt.Errorf("'%s' not yet implemented for %s", OpName[op], typ)
+	return AstRewrite(stmt)
 }
-
-func unaryCheck(op int, arg types.T, val types.T) bool {
-	return arg == val
-}
-
-var UnaryOps = map[int][]*UnaryOp{}

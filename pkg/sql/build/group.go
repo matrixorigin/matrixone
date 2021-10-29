@@ -16,107 +16,94 @@ package build
 
 import (
 	"fmt"
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/group"
-	"matrixone/pkg/sql/op/projection"
+	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
 )
 
-func (b *build) buildGroupBy(o op.OP, ns tree.SelectExprs, grs tree.GroupBy, where *tree.Where) (op.OP, error) {
-	var err error
-	var fs []*tree.FuncExpr
-	var gs []*extend.Attribute
-	var es []aggregation.Extend
-
-	prev := o
-	{
-		var pes []*projection.Extend
-
-		mp, mq := make(map[string]uint8), make(map[string]uint8)
-		if where != nil {
-			if err := b.extractExtend(o, where.Expr, &pes, mp); err != nil {
-				return nil, err
-			}
+func (b *build) buildGroupBy(exprs tree.GroupBy, qry *Query) error {
+	for _, expr := range exprs {
+		e, err := b.buildGroupByExpr(expr, qry)
+		if err != nil {
+			return err
+		}
+		if e, err = b.pruneExtend(e); err != nil {
+			return err
 		}
 		{
-			for _, g := range grs {
-				e, err := b.buildExtend(o, g)
+			var rel string
+
+			attrs := e.Attributes()
+			mp := make(map[string]int) // relations map
+			for _, attr := range attrs {
+				rels, _, err := qry.getAttribute1(false, attr)
 				if err != nil {
-					return nil, err
+					return err
 				}
-				if _, ok := mp[e.String()]; !ok {
-					mp[e.String()] = 0
-					pes = append(pes, &projection.Extend{E: e})
+				for i := range rels {
+					if len(rel) == 0 {
+						rel = rels[i]
+					}
+					mp[rels[i]]++
 				}
-				gs = append(gs, &extend.Attribute{
-					Name: e.String(),
-					Type: e.ReturnType(),
-				})
 			}
-		}
-		for i, n := range ns {
-			if ns[i].Expr, err = b.stripAggregate(o, n.Expr, &fs, &pes, mp, mq); err != nil {
-				return nil, err
+			if len(mp) == 0 {
+				return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("Illegal expression '%s' in group by", e))
 			}
-		}
-		if len(pes) > 0 {
-			if o, err = projection.New(o, pes); err != nil {
-				return nil, err
+			if len(mp) > 1 {
+				return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("attributes involved in the group by must belong to the same relation"))
 			}
-		}
-		if where != nil {
-			if o, err = b.buildWhere(o, where); err != nil {
-				return nil, err
+			if _, ok := e.(*extend.Attribute); !ok {
+				if i := qry.RelsMap[rel].ExistProjection(e.String()); i == -1 {
+					qry.RelsMap[rel].AddProjection(&ProjectionExtend{
+						E:     e,
+						Ref:   1,
+						Alias: e.String(),
+					})
+					{
+						for _, attr := range attrs {
+							qry.getAttribute1(true, attr)
+						}
+					}
+				} else {
+					qry.RelsMap[rel].ProjectionExtends[i].Ref++
+				}
+			} else {
+				qry.getAttribute1(true, e.(*extend.Attribute).Name)
 			}
-		}
-	}
-	for _, f := range fs {
-		name, ok := f.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok {
-			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("illegal expression '%s'", f))
-		}
-		op, ok := AggFuncs[name.Parts[0]]
-		if !ok {
-			return nil, sqlerror.New(errno.UndefinedFunction, fmt.Sprintf("unimplemented aggregated functions '%s'", name.Parts[0]))
-		}
-		switch e := f.Exprs[0].(type) {
-		case *tree.NumVal:
-			alias := "count(*)"
-			agg, err := newAggregate(op, types.Type{Oid: types.T_int64, Size: 8})
-			if err != nil {
-				return nil, err
-			}
-			es = append(es, aggregation.Extend{
-				Agg:   agg,
-				Alias: alias,
-				Name:  prev.ResultColumns()[0],
-				Op:    aggregation.StarCount,
-			})
-		case *tree.UnresolvedName:
-			alias := fmt.Sprintf("%s(%s)", name.Parts[0], e.Parts[0])
-			typ, ok := o.Attribute()[e.Parts[0]]
-			if !ok {
-				return nil, sqlerror.New(errno.UndefinedColumn, fmt.Sprintf("unknown column '%s' in aggregation", e.Parts[0]))
-			}
-			agg, err := newAggregate(op, typ)
-			if err != nil {
-				return nil, err
-			}
-			es = append(es, aggregation.Extend{
-				Op:    op,
-				Agg:   agg,
-				Alias: alias,
-				Name:  e.Parts[0],
-			})
+			qry.FreeAttrs = append(qry.FreeAttrs, e.String())
 		}
 	}
-	if o, err = group.New(o, gs, es); err != nil {
-		return nil, err
+	return nil
+}
+
+func (b *build) buildGroupByExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
+	switch e := n.(type) {
+	case *tree.NumVal:
+		return buildValue(e.Value)
+	case *tree.ParenExpr:
+		return b.buildGroupByExpr(e.Expr, qry)
+	case *tree.OrExpr:
+		return b.buildOr(e, qry, b.buildGroupByExpr)
+	case *tree.NotExpr:
+		return b.buildNot(e, qry, b.buildGroupByExpr)
+	case *tree.AndExpr:
+		return b.buildAnd(e, qry, b.buildGroupByExpr)
+	case *tree.UnaryExpr:
+		return b.buildUnary(e, qry, b.buildGroupByExpr)
+	case *tree.BinaryExpr:
+		return b.buildBinary(e, qry, b.buildGroupByExpr)
+	case *tree.ComparisonExpr:
+		return b.buildComparison(e, qry, b.buildGroupByExpr)
+	case *tree.FuncExpr:
+		return b.buildFunc(false, e, qry, b.buildGroupByExpr)
+	case *tree.CastExpr:
+		return b.buildCast(e, qry, b.buildGroupByExpr)
+	case *tree.RangeCond:
+		return b.buildBetween(e, qry, b.buildGroupByExpr)
+	case *tree.UnresolvedName:
+		return b.buildAttribute1(false, e, qry)
 	}
-	return b.buildProjection(o, ns)
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }

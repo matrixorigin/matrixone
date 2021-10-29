@@ -15,21 +15,20 @@
 package build
 
 import (
-	"errors"
 	"fmt"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/colexec/extend/overload"
-	"matrixone/pkg/sqlerror"
+	"matrixone/pkg/sql/errors"
 )
 
 var (
 	// ErrDivByZero is reported on a division by zero.
-	ErrDivByZero = errors.New("division by zero")
+	ErrDivByZero = errors.New(errno.SyntaxErrororAccessRuleViolation, "division by zero")
 	// ErrZeroModulus is reported when computing the rest of a division by zero.
-	ErrZeroModulus = errors.New("zero modulus")
+	ErrZeroModulus = errors.New(errno.SyntaxErrororAccessRuleViolation, "zero modulus")
 )
 
 func (b *build) pruneExtend(e extend.Extend) (extend.Extend, error) {
@@ -326,7 +325,7 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -377,7 +376,7 @@ func (b *build) pruneDiv(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -434,7 +433,7 @@ func (b *build) pruneMod(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -485,7 +484,7 @@ func (b *build) pruneMod(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -539,7 +538,7 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -587,7 +586,7 @@ func (b *build) pruneMul(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -641,7 +640,7 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -689,7 +688,7 @@ func (b *build) prunePlus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -743,7 +742,7 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -791,7 +790,7 @@ func (b *build) pruneMinus(e *extend.BinaryExtend) (extend.Extend, error) {
 				return nil, err
 			}
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -850,7 +849,7 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -903,7 +902,7 @@ func (b *build) pruneEq(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -962,7 +961,7 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -1015,7 +1014,7 @@ func (b *build) pruneNe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -1074,7 +1073,7 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -1127,7 +1126,7 @@ func (b *build) pruneLt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -1186,7 +1185,7 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -1239,7 +1238,7 @@ func (b *build) pruneLe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -1298,7 +1297,7 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -1351,7 +1350,7 @@ func (b *build) pruneGt(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
@@ -1410,7 +1409,7 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	case lok && rok:
@@ -1463,7 +1462,7 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 			}
 		case types.T_varchar:
 		default:
-			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
+			return nil, errors.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
 	}
