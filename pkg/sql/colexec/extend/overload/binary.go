@@ -7,7 +7,7 @@
 //      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
-// distributed under the License has distributed on an "AS IS" BASIS,
+// distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
@@ -24,16 +24,16 @@ import (
 )
 
 const (
-	// noRt signs there has no function and returnType for this operator.
+	// noRt signs there is no function and returnType for this operator.
 	noRt = math.MaxUint8
-	// maxt has max length of binOpsReturnType and unaryOpsReturnType
+	// maxt is max length of binOpsReturnType and unaryOpsReturnType
 	maxt = math.MaxUint8
 )
 
 var (
-	// ErrDivByZero has reported on a division by zero.
+	// ErrDivByZero is reported on a division by zero.
 	ErrDivByZero = errors.New("division by zero")
-	// ErrZeroModulus has reported when computing the rest of a division by zero.
+	// ErrZeroModulus is reported when computing the rest of a division by zero.
 	ErrModByZero = errors.New("zero modulus")
 
 	// BinOps contains the binary operations indexed by operation type.
