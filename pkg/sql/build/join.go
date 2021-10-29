@@ -17,52 +17,64 @@ package build
 import (
 	"fmt"
 	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/innerJoin"
-	"matrixone/pkg/sql/op/naturalJoin"
-	"matrixone/pkg/sql/op/product"
+	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
 )
 
-func (b *build) buildJoin(stmt *tree.JoinTableExpr) (op.OP, error) {
-	r, err := b.buildFromTable(stmt.Left)
-	if err != nil {
-		return nil, err
-	}
-	s, err := b.buildFromTable(stmt.Right)
-	if err != nil {
-		return nil, err
-	}
-	{
-		switch stmt.JoinType {
-		case tree.JOIN_TYPE_FULL:
-			return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join type '%v'", stmt.JoinType))
-		case tree.JOIN_TYPE_LEFT:
-			return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join type '%v'", stmt.JoinType))
-		case tree.JOIN_TYPE_RIGHT:
-			return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join type '%v'", stmt.JoinType))
+func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error {
+	switch e := expr.(type) {
+	case *tree.AndExpr:
+		if err := b.buildJoinCond(e.Left, rs, ss, qry); err != nil {
+			return err
 		}
-	}
-	if stmt.Cond == nil {
-		if err := b.checkProduct(r, s); err != nil {
-			return nil, err
+		return b.buildJoinCond(e.Right, rs, ss, qry)
+	case *tree.ComparisonExpr:
+		if e.Op != tree.EQUAL {
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition %v", expr))
 		}
-		return product.New(r, s), nil
-	}
-	switch cond := stmt.Cond.(type) {
-	case *tree.NaturalJoinCond:
-		if err := b.checkNaturalJoin(r, s); err != nil {
-			return nil, err
+		left, ok := getColumnName(e.Left)
+		if !ok {
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition %v", expr))
 		}
-		return naturalJoin.New(r, s), nil
-	case *tree.OnJoinCond:
-		rattrs, sattrs, err := b.checkInnerJoin(r, s, nil, nil, cond.Expr)
+		right, ok := getColumnName(e.Right)
+		if !ok {
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition %v", expr))
+		}
+		r, rattr, err := qry.getJoinAttribute(append(rs, ss...), left)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		return innerJoin.New(r, s, rattrs, sattrs), nil
-	default:
-		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport join condition '%v'", cond))
+		s, sattr, err := qry.getJoinAttribute(append(rs, ss...), right)
+		if err != nil {
+			return err
+		}
+		qry.Conds = append(qry.Conds, &JoinCondition{
+			R:     r,
+			S:     s,
+			Rattr: rattr,
+			Sattr: sattr,
+		})
+		return nil
 	}
+	return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition %v", expr))
+}
+
+func (b *build) buildUsingJoinCond(cols tree.IdentifierList, rs, ss []string, qry *Query) error {
+	for _, col := range cols {
+		r, rattr, err := qry.getJoinAttribute(rs, string(col))
+		if err != nil {
+			return err
+		}
+		s, sattr, err := qry.getJoinAttribute(ss, string(col))
+		if err != nil {
+			return err
+		}
+		qry.Conds = append(qry.Conds, &JoinCondition{
+			R:     r,
+			S:     s,
+			Rattr: rattr,
+			Sattr: sattr,
+		})
+	}
+	return nil
 }

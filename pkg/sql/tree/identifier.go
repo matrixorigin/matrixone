@@ -53,60 +53,61 @@ type UnresolvedName struct {
 //the path in an UnresolvedName.
 type NameParts = [4]string
 
-func NewUnresolvedName(parts ...string)(*UnresolvedName,error){
-	l:=len(parts)
-	if l < 1 || l > 4{
+func NewUnresolvedName(parts ...string) (*UnresolvedName, error) {
+	l := len(parts)
+	if l < 1 || l > 4 {
 		panic(fmt.Errorf("the count of name parts among [1,4]"))
-		return nil,nil
+		return nil, nil
 	}
 	beg := 0
 	for i := 0; i < l; i++ {
 		if len(parts[i]) == 0 {
 			beg++
-		}else{
+		} else {
 			break
 		}
 	}
 	//if beg >= l{
 	//	return nil,fmt.Errorf("name parts are all empty string")
 	//}
-	u:= &UnresolvedName{
+	u := &UnresolvedName{
 		NumParts: l - beg,
 		Star:     false,
 	}
-	for i:=beg ; i < len(parts);i++{
-		u.Parts[i - beg] = parts[l - 1 - (i - beg)]
+	for i := beg; i < len(parts); i++ {
+		u.Parts[i-beg] = parts[l-1-(i-beg)]
 	}
-	return u,nil
+	return u, nil
 }
 
-func NewUnresolvedNameWithStar(parts ...string)(*UnresolvedName,error){
-	l:=len(parts)
-	if l < 1 || l > 3{
+func NewUnresolvedNameWithStar(parts ...string) (*UnresolvedName, error) {
+	l := len(parts)
+	if l < 1 || l > 3 {
 		panic(fmt.Errorf("the count of name parts among [1,3]"))
-		return nil,nil
+		return nil, nil
 	}
 	beg := 0
 	for i := 0; i < l; i++ {
 		if len(parts[i]) == 0 {
 			beg++
-		}else{
+		} else {
 			break
 		}
 	}
 	//if beg >= l{
 	//	return nil,fmt.Errorf("name parts are all empty string")
 	//}
-	u:= &UnresolvedName{
-		NumParts: 1+l - beg,
+	u := &UnresolvedName{
+		NumParts: 1 + l - beg,
 		Star:     true,
 	}
 	u.Parts[0] = ""
-	for i:=beg ; i < len(parts);i++{
-		u.Parts[i+1-beg] = parts[l - 1 - (i-beg)]
+	for i := beg; i < len(parts); i++ {
+		u.Parts[i+1-beg] = parts[l-1-(i-beg)]
 	}
-	return u,nil
+	return u, nil
 }
+
 //variable in the scalar expression
 type VarName interface {
 	Expr
@@ -116,12 +117,12 @@ var _ VarName = &UnresolvedName{}
 var _ VarName = UnqualifiedStar{}
 
 //'*' in the scalar expression
-type UnqualifiedStar struct{
+type UnqualifiedStar struct {
 	VarName
 }
 
 var starName VarName = UnqualifiedStar{}
 
-func StarExpr()VarName{
+func StarExpr() VarName {
 	return starName
 }

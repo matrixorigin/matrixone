@@ -15,39 +15,58 @@
 package extend
 
 import (
+	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/process"
 )
 
-func (a *Attribute) IsLogical() bool {
+func (_ *FuncExtend) IsLogical() bool {
 	return false
 }
 
-func (_ *Attribute) IsConstant() bool {
+func (_ *FuncExtend) IsConstant() bool {
 	return false
 }
 
-func (a *Attribute) Attributes() []string {
+func (a *FuncExtend) Attributes() []string {
 	return []string{a.Name}
 }
 
-func (a *Attribute) ReturnType() types.T {
-	return a.Type
+func (a *FuncExtend) ReturnType() types.T {
+	return 0
 }
 
-func (a *Attribute) Eval(bat *batch.Batch, _ *process.Process) (*vector.Vector, types.T, error) {
-	return batch.GetVector(bat, a.Name), a.Type, nil
+func (a *FuncExtend) Eval(_ *batch.Batch, _ *process.Process) (*vector.Vector, types.T, error) {
+	return nil, 0, nil
 }
 
-func (a *Attribute) Eq(e Extend) bool {
-	if b, ok := e.(*Attribute); ok {
-		return a.Name == b.Name && a.Type == b.Type
+func (a *FuncExtend) Eq(e Extend) bool {
+	if b, ok := e.(*FuncExtend); ok {
+		if a.Name != b.Name {
+			return false
+		}
+		for i, arg := range a.Args {
+			if !arg.Eq(b.Args[i]) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }
 
-func (a *Attribute) String() string {
-	return a.Name
+func (a *FuncExtend) String() string {
+	r := fmt.Sprintf("%s(", a.Name)
+	for i, arg := range a.Args {
+		switch i {
+		case 0:
+			r += fmt.Sprintf("%s", arg)
+		default:
+			r += fmt.Sprintf(", %s", arg)
+		}
+	}
+	r += fmt.Sprintf(")")
+	return r
 }

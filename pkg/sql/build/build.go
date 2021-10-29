@@ -17,62 +17,38 @@ package build
 import (
 	"fmt"
 	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/rewrite"
+	"matrixone/pkg/sql/errors"
+	"matrixone/pkg/sql/transform"
 	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/process"
 )
 
-func New(db string, sql string, e engine.Engine, proc *process.Process) *build {
+func New(db string, sql string, e engine.Engine) *build {
 	return &build{
-		e:    e,
-		db:   db,
-		sql:  sql,
-		proc: proc,
+		e:   e,
+		db:  db,
+		sql: sql,
 	}
 }
 
-func (b *build) Build() ([]op.OP, error) {
-	stmts, err := tree.NewParser().Parse(b.sql)
-	if err != nil {
-		return nil, err
+func (b *build) BuildStatement(stmt tree.Statement) (*Query, error) {
+	stmt = transform.Transform(stmt)
+	qry := &Query{
+		Limit:   -1,
+		Offset:  -1,
+		RelsMap: make(map[string]*Relation),
 	}
-	os := make([]op.OP, len(stmts))
-	for i, stmt := range stmts {
-		o, err := b.BuildStatement(rewrite.Rewrite(stmt))
-		if err != nil {
-			return nil, err
-		}
-		os[i] = o
-	}
-	return os, nil
-}
-
-func (b *build) BuildStatement(stmt tree.Statement) (op.OP, error) {
-	stmt = rewrite.Rewrite(stmt)
 	switch stmt := stmt.(type) {
 	case *tree.Select:
-		return b.buildSelect(stmt)
+		if err := b.buildSelect(stmt, qry); err != nil {
+			return nil, err
+		}
+		return qry, nil
 	case *tree.ParenSelect:
-		return b.buildSelect(stmt.Select)
-	case *tree.Insert:
-		return b.buildInsert(stmt)
-	case *tree.DropTable:
-		return b.buildDropTable(stmt)
-	case *tree.DropDatabase:
-		return b.buildDropDatabase(stmt)
-	case *tree.CreateTable:
-		return b.buildCreateTable(stmt)
-	case *tree.CreateDatabase:
-		return b.buildCreateDatabase(stmt)
-	case *tree.ExplainStmt, *tree.ExplainFor, *tree.ExplainAnalyze:
-		return b.buildExplain(stmt)
-	case *tree.ShowTables:
-		return b.buildShowTables(stmt)
-	case *tree.ShowDatabases:
-		return b.buildShowDatabases(stmt)
+		if err := b.buildSelect(stmt.Select, qry); err != nil {
+			return nil, err
+		}
+		return qry, nil
 	}
-	return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", stmt))
+	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", stmt))
 }

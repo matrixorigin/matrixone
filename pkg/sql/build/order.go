@@ -15,74 +15,131 @@
 package build
 
 import (
+	"fmt"
+	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/order"
-	"matrixone/pkg/sql/op/projection"
-	"matrixone/pkg/sql/op/top"
+	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/tree"
 )
 
-func (b *build) buildTop(o op.OP, ns tree.OrderBy, limit int64) (op.OP, error) {
-	o, gs, err := b.stripOrderBy(o, ns)
-	if err != nil {
-		return nil, err
-	}
-	return top.New(o, limit, gs), nil
-}
-
-func (b *build) buildOrderBy(o op.OP, ns tree.OrderBy) (op.OP, error) {
-	o, gs, err := b.stripOrderBy(o, ns)
-	if err != nil {
-		return nil, err
-	}
-	return order.New(o, gs), nil
-}
-
-func (b *build) stripOrderBy(o op.OP, ns tree.OrderBy) (op.OP, []order.Attribute, error) {
-	var es []*projection.Extend
-
-	mp := make(map[string]uint8)
-	rs := make([]order.Attribute, 0, len(ns))
-	for _, n := range ns {
-		e, err := b.buildExtend(o, n.Expr)
+func (b *build) buildOrderBy(orders tree.OrderBy, qry *Query) error {
+	for _, order := range orders {
+		e, err := b.buildOrderByExpr(order.Expr, qry)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
-		if _, ok := mp[e.String()]; !ok {
-			mp[e.String()] = 0
-			es = append(es, &projection.Extend{E: e})
+		if e, err = b.pruneExtend(e); err != nil {
+			return err
 		}
-		rs = append(rs, order.Attribute{
-			Name: e.String(),
-			Type: e.ReturnType(),
-			Dirt: getDirection(n.Direction),
+		{
+			var rel string
+
+			attrs := e.Attributes()
+			mp := make(map[string]int) // relations map
+			for _, attr := range attrs {
+				rels, _, err := qry.getAttribute2(false, attr)
+				if err != nil {
+					return err
+				}
+				for i := range rels {
+					if len(rel) == 0 {
+						rel = rels[i]
+					}
+					mp[rels[i]]++
+				}
+			}
+			if len(mp) == 0 {
+				return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("Illegal expression '%s' in group by", e))
+			}
+			if _, ok := e.(*extend.Attribute); !ok {
+				if len(mp) == 1 {
+					b.stripOrderByRelation(rel, e, qry)
+				} else {
+					b.stripOrderByQuery(e, qry)
+				}
+			} else {
+				qry.getAttribute2(true, e.(*extend.Attribute).Name)
+			}
+		}
+		qry.Fields = append(qry.Fields, &Field{
+			Attr: e.String(),
+			Type: Direction(order.Direction),
 		})
 	}
-	attrs := o.Attribute()
-	for attr, typ := range attrs {
-		if _, ok := mp[attr]; !ok {
-			es = append(es, &projection.Extend{
-				E: &extend.Attribute{
-					Name: attr,
-					Type: typ.Oid,
-				},
-			})
-		}
-	}
-	o, err := projection.New(o, es)
-	if err != nil {
-		return nil, nil, err
-	}
-	return o, rs, nil
+	return nil
 }
 
-func getDirection(d tree.Direction) order.Direction {
-	switch d {
-	case tree.Ascending:
-		return order.Ascending
-	case tree.Descending:
-		return order.Descending
+func (b *build) stripOrderByQuery(e extend.Extend, qry *Query) error {
+	for i := range qry.ProjectionExtends {
+		if qry.ProjectionExtends[i].Alias == e.String() {
+			qry.ProjectionExtends[i].IncRef()
+			return nil
+		}
 	}
-	return order.DefaultDirection
+	attrs := e.Attributes()
+	for _, attr := range attrs {
+		qry.getAttribute2(true, attr)
+	}
+	if _, ok := e.(*extend.Attribute); !ok {
+		qry.ProjectionExtends = append(qry.ProjectionExtends, &ProjectionExtend{
+			Ref:   1,
+			E:     e,
+			Alias: e.String(),
+		})
+	}
+	return nil
+}
+
+func (b *build) stripOrderByRelation(name string, e extend.Extend, qry *Query) error {
+	rel := qry.RelsMap[name]
+	if i := rel.ExistProjection(e.String()); i >= 0 {
+		rel.ProjectionExtends[i].IncRef()
+		return nil
+	}
+	if i := rel.ExistAggregation(e.String()); i >= 0 {
+		rel.Aggregations[i].IncRef()
+		return nil
+	}
+	attrs := e.Attributes()
+	for _, attr := range attrs {
+		qry.getAttribute2(true, attr)
+	}
+	if _, ok := e.(*extend.Attribute); !ok {
+		rel.ProjectionExtends = append(rel.ProjectionExtends, &ProjectionExtend{
+			Ref:   1,
+			E:     e,
+			Alias: e.String(),
+		})
+	}
+	return nil
+}
+
+func (b *build) buildOrderByExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
+	switch e := n.(type) {
+	case *tree.NumVal:
+		return buildValue(e.Value)
+	case *tree.ParenExpr:
+		return b.buildOrderByExpr(e.Expr, qry)
+	case *tree.OrExpr:
+		return b.buildOr(e, qry, b.buildOrderByExpr)
+	case *tree.NotExpr:
+		return b.buildNot(e, qry, b.buildOrderByExpr)
+	case *tree.AndExpr:
+		return b.buildAnd(e, qry, b.buildOrderByExpr)
+	case *tree.UnaryExpr:
+		return b.buildUnary(e, qry, b.buildOrderByExpr)
+	case *tree.BinaryExpr:
+		return b.buildBinary(e, qry, b.buildOrderByExpr)
+	case *tree.ComparisonExpr:
+		return b.buildComparison(e, qry, b.buildOrderByExpr)
+	case *tree.FuncExpr:
+		return b.buildFunc(false, e, qry, b.buildOrderByExpr)
+	case *tree.CastExpr:
+		return b.buildCast(e, qry, b.buildOrderByExpr)
+	case *tree.RangeCond:
+		return b.buildBetween(e, qry, b.buildOrderByExpr)
+	case *tree.UnresolvedName:
+		return b.buildAttribute2(false, e, qry)
+	}
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }

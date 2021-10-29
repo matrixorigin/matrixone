@@ -12,28 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package overload
+package transform
 
-import (
-	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
-)
+import "matrixone/pkg/sql/tree"
 
-func UnaryEval(op int, typ types.T, c bool, v *vector.Vector, p *process.Process) (*vector.Vector, error) {
-	if os, ok := UnaryOps[op]; ok {
-		for _, o := range os {
-			if unaryCheck(op, o.Typ, typ) {
-				return o.Fn(v, p, c)
-			}
-		}
+func transformInsert(stmt *tree.Insert) *tree.Insert {
+	jtbl, ok := stmt.Table.(*tree.JoinTableExpr)
+	if !ok {
+		return stmt
 	}
-	return nil, fmt.Errorf("'%s' not yet implemented for %s", OpName[op], typ)
+	atbl, ok := jtbl.Left.(*tree.AliasedTableExpr)
+	if !ok {
+		return stmt
+	}
+	tbl, ok := atbl.Expr.(*tree.TableName)
+	if !ok {
+		return stmt
+	}
+	stmt.Table = tbl
+	return stmt
 }
-
-func unaryCheck(op int, arg types.T, val types.T) bool {
-	return arg == val
-}
-
-var UnaryOps = map[int][]*UnaryOp{}

@@ -21,48 +21,33 @@ import (
 	"matrixone/pkg/vm/process"
 )
 
-type Extend interface {
-	Eq(Extend) bool
-	String() string
-	IsLogical() bool
-	IsConstant() bool
-	ReturnType() types.T
-	Attributes() []string
-	Eval(*batch.Batch, *process.Process) (*vector.Vector, types.T, error)
+func (_ *StarExtend) IsLogical() bool {
+	return false
 }
 
-type UnaryExtend struct {
-	Op int
-	E  Extend
+func (_ *StarExtend) IsConstant() bool {
+	return false
 }
 
-type BinaryExtend struct {
-	Op          int
-	Left, Right Extend
+func (a *StarExtend) Attributes() []string {
+	return []string{}
 }
 
-type MultiExtend struct {
-	Op   int
-	Args []Extend
+func (a *StarExtend) ReturnType() types.T {
+	return 0
 }
 
-type ParenExtend struct {
-	E Extend
+func (a *StarExtend) Eval(_ *batch.Batch, _ *process.Process) (*vector.Vector, types.T, error) {
+	return nil, 0, nil
 }
 
-type FuncExtend struct {
-	Name string
-	Args []Extend
+func (a *StarExtend) Eq(e Extend) bool {
+	if _, ok := e.(*StarExtend); ok {
+		return true
+	}
+	return false
 }
 
-type StarExtend struct {
-}
-
-type ValueExtend struct {
-	V *vector.Vector
-}
-
-type Attribute struct {
-	Name string  `json:"name"`
-	Type types.T `json:"type"`
+func (a *StarExtend) String() string {
+	return "*"
 }

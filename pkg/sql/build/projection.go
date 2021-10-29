@@ -17,211 +17,100 @@ package build
 import (
 	"fmt"
 	"matrixone/pkg/errno"
-	"matrixone/pkg/sql/colexec/aggregation"
 	"matrixone/pkg/sql/colexec/extend"
-	"matrixone/pkg/sql/op"
-	"matrixone/pkg/sql/op/projection"
+	"matrixone/pkg/sql/errors"
 	"matrixone/pkg/sql/tree"
-	"matrixone/pkg/sqlerror"
-	"strings"
 )
 
-func (b *build) resultColumns(ns tree.SelectExprs) []string {
-	cs := make([]string, len(ns))
-	for i, n := range ns {
-		if len(n.As) > 0 {
-			cs[i] = string(n.As)
-		}
-	}
-	return cs
-}
-
-func (b *build) checkProjection(ns tree.SelectExprs) error {
-	for _, n := range ns {
-		if attrs := b.checkProjectionExpr(n.Expr, []string{}); len(attrs) == 0 {
-			return sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("invalid projection '%v'", n))
-		}
-	}
-	return nil
-}
-
-func (b *build) checkProjectionExpr(n tree.Expr, attrs []string) []string {
-	switch e := n.(type) {
-	case *tree.NumVal:
-		return attrs
-	case tree.UnqualifiedStar:
-		return append(attrs, "*")
-	case *tree.ParenExpr:
-		return b.checkProjectionExpr(e.Expr, attrs)
-	case *tree.OrExpr:
-		attrs = b.checkProjectionExpr(e.Left, attrs)
-		return b.checkProjectionExpr(e.Right, attrs)
-	case *tree.NotExpr:
-		return b.checkProjectionExpr(e.Expr, attrs)
-	case *tree.AndExpr:
-		attrs = b.checkProjectionExpr(e.Left, attrs)
-		return b.checkProjectionExpr(e.Right, attrs)
-	case *tree.UnaryExpr:
-		return b.checkProjectionExpr(e.Expr, attrs)
-	case *tree.BinaryExpr:
-		attrs = b.checkProjectionExpr(e.Left, attrs)
-		return b.checkProjectionExpr(e.Right, attrs)
-	case *tree.ComparisonExpr:
-		attrs = b.checkProjectionExpr(e.Left, attrs)
-		return b.checkProjectionExpr(e.Right, attrs)
-	case *tree.Tuple:
-		return attrs
-	case *tree.FuncExpr:
-		if name, ok := e.Func.FunctionReference.(*tree.UnresolvedName); ok {
-			name.Parts[0] = strings.ToLower(name.Parts[0])
-			if op, ok := AggFuncs[name.Parts[0]]; ok {
-				if op == aggregation.StarCount {
-					attrs = append(attrs, "*")
-				} else {
-					attrs = b.checkProjectionExpr(e.Exprs[0], attrs)
+func (b *build) buildProjection(exprs tree.SelectExprs, qry *Query) error {
+	es := make([]*ProjectionExtend, 0, len(exprs))
+	for _, expr := range exprs {
+		if _, ok := expr.Expr.(tree.UnqualifiedStar); ok {
+			for _, rel := range qry.Rels {
+				attrs := qry.RelsMap[rel].GetAttributes()
+				for _, attr := range attrs {
+					if _, _, err := qry.getAttribute0(false, attr.Name); err != nil {
+						return err
+					}
+					attr.IncRef()
 				}
-			}
-		}
-		return attrs
-	case *tree.CastExpr:
-		return b.checkProjectionExpr(e.Expr, attrs)
-	case *tree.UnresolvedName:
-		if e.NumParts == 1 {
-			attrs = append(attrs, e.Parts[0])
-		} else {
-			attrs = append(attrs, e.Parts[1]+"."+e.Parts[0])
-		}
-		return attrs
-	}
-	return attrs
-}
-
-func (b *build) rewriteProjection(o op.OP, ns tree.SelectExprs) (tree.SelectExprs, error) {
-	var err error
-
-	rs := make([]tree.SelectExpr, 0, len(ns))
-	for i := range ns {
-		if _, ok := ns[i].Expr.(tree.UnqualifiedStar); ok {
-			attrs := o.ResultColumns()
-			for _, attr := range attrs {
-				rs = append(rs, tree.SelectExpr{
-					Expr: &tree.UnresolvedName{
-						NumParts: 1,
-						Parts:    tree.NameParts{attr},
-					},
-					As: tree.UnrestrictedIdentifier(attr),
-				})
 			}
 			continue
 		}
-		if len(ns[i].As) == 0 {
-			if ns[i].As, err = b.exprAlias(o, ns[i].Expr); err != nil {
-				return nil, err
-			}
-		}
-		rs = append(rs, ns[i])
-	}
-	return rs, nil
-}
-
-func (b *build) buildProjection(o op.OP, ns tree.SelectExprs) (op.OP, error) {
-	var es []*projection.Extend
-
-	for _, n := range ns {
-		e, err := b.buildExtend(o, n.Expr)
+		e, err := b.buildProjectionExpr(expr.Expr, qry)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		es = append(es, &projection.Extend{
-			E:     e,
-			Alias: string(n.As),
-		})
-	}
-	return projection.New(o, es)
-}
-
-func (b *build) buildProjectionWithOrder(o op.OP, ns tree.SelectExprs, es []*projection.Extend, mp map[string]uint8) (op.OP, []*projection.Extend, error) {
-	var pes []*projection.Extend
-
-	for _, n := range ns {
-		e, err := b.buildExtend(o, n.Expr)
-		if err != nil {
-			return nil, nil, err
+		if e, err = b.pruneExtend(e); err != nil {
+			return err
 		}
-		alias := string(n.As)
-		if len(alias) == 0 {
-			alias = e.String()
-		}
-		if _, ok := mp[e.String()]; !ok {
-			mp[e.String()] = 0
-			es = append(es, &projection.Extend{
+		if len(expr.As) > 0 {
+			es = append(es, &ProjectionExtend{
+				Ref:   1,
+				E:     e,
+				Alias: string(expr.As),
+			})
+		} else if _, ok := e.(*extend.Attribute); !ok {
+			es = append(es, &ProjectionExtend{
+				Ref:   1,
 				E:     e,
 				Alias: e.String(),
 			})
 		}
-		pes = append(pes, &projection.Extend{
-			E: &extend.Attribute{
-				Name: e.String(),
-				Type: e.ReturnType(),
-			},
-			Alias: alias,
-		})
+		{
+			var rel string
+
+			attrs := e.Attributes()
+			mp := make(map[string]int) // relations map
+			for _, attr := range attrs {
+				rels, _, err := qry.getAttribute2(false, attr)
+				if err != nil {
+					return err
+				}
+				for i := range rels {
+					if len(rel) == 0 {
+						rel = rels[i]
+					}
+					mp[rels[i]]++
+				}
+			}
+			if len(mp) == 1 {
+				if _, ok := e.(*extend.Attribute); !ok || len(expr.As) > 0 {
+					qry.RelsMap[rel].AddProjection(es[len(es)-1])
+				}
+			}
+		}
 	}
-	o, err := projection.New(o, es)
-	if err != nil {
-		return nil, nil, err
-	}
-	return o, pes, nil
+	qry.ProjectionExtends = es
+	return nil
 }
 
-func (b *build) extractExtend(o op.OP, n tree.Expr, es *[]*projection.Extend, mp map[string]uint8) error {
+func (b *build) buildProjectionExpr(n tree.Expr, qry *Query) (extend.Extend, error) {
 	switch e := n.(type) {
+	case *tree.NumVal:
+		return buildValue(e.Value)
 	case *tree.ParenExpr:
-		return b.extractExtend(o, e.Expr, es, mp)
+		return b.buildProjectionExpr(e.Expr, qry)
 	case *tree.OrExpr:
-		if err := b.extractExtend(o, e.Left, es, mp); err != nil {
-			return err
-		}
-		return b.extractExtend(o, e.Right, es, mp)
+		return b.buildOr(e, qry, b.buildProjectionExpr)
 	case *tree.NotExpr:
-		return b.extractExtend(o, e.Expr, es, mp)
+		return b.buildNot(e, qry, b.buildProjectionExpr)
 	case *tree.AndExpr:
-		if err := b.extractExtend(o, e.Left, es, mp); err != nil {
-			return err
-		}
-		return b.extractExtend(o, e.Right, es, mp)
+		return b.buildAnd(e, qry, b.buildProjectionExpr)
 	case *tree.UnaryExpr:
-		return b.extractExtend(o, e.Expr, es, mp)
+		return b.buildUnary(e, qry, b.buildProjectionExpr)
 	case *tree.BinaryExpr:
-		if err := b.extractExtend(o, e.Left, es, mp); err != nil {
-			return err
-		}
-		return b.extractExtend(o, e.Right, es, mp)
+		return b.buildBinary(e, qry, b.buildProjectionExpr)
 	case *tree.ComparisonExpr:
-		if err := b.extractExtend(o, e.Left, es, mp); err != nil {
-			return err
-		}
-		return b.extractExtend(o, e.Right, es, mp)
-	case *tree.RangeCond:
-		if err := b.extractExtend(o, e.To, es, mp); err != nil {
-			return err
-		}
-		if err := b.extractExtend(o, e.From, es, mp); err != nil {
-			return err
-		}
-		return b.extractExtend(o, e.Left, es, mp)
-	case *tree.UnresolvedName:
-		ext, err := b.buildAttribute(o, e)
-		if err != nil {
-			return err
-		}
-		if _, ok := mp[ext.String()]; !ok {
-			mp[ext.String()] = 0
-			(*es) = append((*es), &projection.Extend{E: ext})
-		}
-		return nil
+		return b.buildComparison(e, qry, b.buildProjectionExpr)
+	case *tree.FuncExpr:
+		return b.buildFunc(true, e, qry, b.buildProjectionExpr)
 	case *tree.CastExpr:
-		return b.extractExtend(o, e.Expr, es, mp)
+		return b.buildCast(e, qry, b.buildProjectionExpr)
+	case *tree.RangeCond:
+		return b.buildBetween(e, qry, b.buildProjectionExpr)
+	case *tree.UnresolvedName:
+		return b.buildAttribute0(true, e, qry)
 	}
-	return nil
+	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }

@@ -12,28 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package overload
+package errors
 
-import (
-	"fmt"
-	"matrixone/pkg/container/types"
-	"matrixone/pkg/container/vector"
-	"matrixone/pkg/vm/process"
-)
-
-func UnaryEval(op int, typ types.T, c bool, v *vector.Vector, p *process.Process) (*vector.Vector, error) {
-	if os, ok := UnaryOps[op]; ok {
-		for _, o := range os {
-			if unaryCheck(op, o.Typ, typ) {
-				return o.Fn(v, p, c)
-			}
-		}
-	}
-	return nil, fmt.Errorf("'%s' not yet implemented for %s", OpName[op], typ)
+func New(code string, cause string) error {
+	return &SqlError{code, cause}
 }
-
-func unaryCheck(op int, arg types.T, val types.T) bool {
-	return arg == val
-}
-
-var UnaryOps = map[int][]*UnaryOp{}

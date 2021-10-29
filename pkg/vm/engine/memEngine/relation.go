@@ -6,9 +6,7 @@ import (
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/memEngine/segment"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	"matrixone/pkg/vm/mheap"
 
 	"github.com/pierrec/lz4"
 )
@@ -27,21 +25,24 @@ func (r *relation) Size(_ string) int64 {
 	return 0
 }
 
-func (r *relation) Segments() []engine.SegmentInfo {
-	segs := make([]engine.SegmentInfo, r.md.Segs)
-	for i := range segs {
-		segs[i].Node = r.n
-		segs[i].Id = r.sKey(i)
-	}
-	return segs
+func (r *relation) Nodes() engine.Nodes {
+	return engine.Nodes{r.n}
 }
 
-func (r *relation) Segment(si engine.SegmentInfo, _ *process.Process) engine.Segment {
-	return segment.New(si.Id, r.db, r.md.Attrs)
+func (r *relation) TableDefs() []engine.TableDef {
+	defs := make([]engine.TableDef, len(r.md.Attrs))
+	for i, attr := range r.md.Attrs {
+		defs[i] = &engine.AttributeDef{Attr: attr}
+	}
+	return defs
+}
+
+func (r *relation) NewReader(_ int, _ *mheap.Mheap) []engine.Reader {
+	return nil
 }
 
 func (r *relation) Write(_ uint64, bat *batch.Batch) error {
-	key := r.sKey(int(r.md.Segs))
+	key := sKey(int(r.md.Segs), r.id)
 	for i, attr := range bat.Attrs {
 		v, err := bat.Vecs[i].Show()
 		if err != nil {
@@ -65,37 +66,21 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		if err := r.db.Set(r.key(), data); err != nil {
+		if err := r.db.Set(r.id, data); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (r *relation) sKey(num int) string {
-	return fmt.Sprintf("%v.%v.%v", r.rid, r.id, num)
-}
-
-func (r *relation) key() string {
-	return fmt.Sprintf("%v.%v", r.rid, r.id)
-}
-
-func (r *relation) Index() []*engine.IndexTableDef {
-	panic("implement me")
-}
-
-func (r *relation) Attribute() []metadata.Attribute {
-	defs := make([]metadata.Attribute, len(r.md.Attrs))
-	for i, attr := range r.md.Attrs {
-		defs[i] = attr
-	}
-	return defs
-}
-
-func (r *relation) AddAttribute(u uint64, def engine.TableDef) error {
+func (r *relation) AddTableDef(_ uint64, _ engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) DelAttribute(u uint64, def engine.TableDef) error {
+func (r *relation) DelTableDef(_ uint64, _ engine.TableDef) error {
 	return nil
+}
+
+func sKey(num int, id string) string {
+	return fmt.Sprintf("%v.%v", id, num)
 }
