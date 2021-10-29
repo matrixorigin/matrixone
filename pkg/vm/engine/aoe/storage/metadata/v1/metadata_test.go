@@ -15,7 +15,9 @@ package metadata
 
 import (
 	"fmt"
+	"math"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -388,8 +390,8 @@ func TestReplay(t *testing.T) {
 	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
 
-	mockTbls := 5
-	createBlkWorker, _ := ants.NewPool(mockTbls)
+	mockShards := 5
+	createBlkWorker, _ := ants.NewPool(mockShards)
 	upgradeSegWorker, _ := ants.NewPool(4)
 
 	getSegmentedIdWorker := ops.NewHeartBeater(hbInterval, &mockGetSegmentedHB{catalog: catalog, t: t})
@@ -399,7 +401,7 @@ func TestReplay(t *testing.T) {
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
-	for i := 0; i < mockTbls; i++ {
+	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
 		createBlkWorker.Submit(createBlock(t, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
@@ -778,6 +780,16 @@ func TestShardNode(t *testing.T) {
 	t.Log(sn.PString(PPL0))
 }
 
+func doCompare(t *testing.T, expected, actual *catalogLogEntry) {
+	assert.Equal(t, expected.LogRange, actual.LogRange)
+	assert.Equal(t, len(expected.Catalog.TableSet), len(actual.Catalog.TableSet))
+	for _, expectedTable := range expected.Catalog.TableSet {
+		actualTable := actual.Catalog.TableSet[expectedTable.Id]
+		assert.Equal(t, len(expectedTable.SegmentSet), len(actualTable.SegmentSet))
+	}
+	assert.Equal(t, len(expected.Catalog.TableSet), len(expected.Catalog.TableSet))
+}
+
 func TestShard(t *testing.T) {
 	dir := "/tmp/metadata/testshard"
 	os.RemoveAll(dir)
@@ -789,23 +801,58 @@ func TestShard(t *testing.T) {
 	catalog.Start()
 	defer catalog.Close()
 
-	mockTbls := 10
-	createBlkWorker, _ := ants.NewPool(mockTbls)
+	mockShards := 20
+	createBlkWorker, _ := ants.NewPool(mockShards)
 	upgradeSegWorker, _ := ants.NewPool(40)
 
 	var wg sync.WaitGroup
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
-	shardAlloc := common.IdAlloctor{}
-
-	for i := 0; i < mockTbls; i++ {
+	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, shardAlloc.Alloc(), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
-	t.Log(catalog.PString(PPL1))
-	view := catalog.ShardView(1, 10)
-	// view := catalog.ShardView(2, math.MaxUint64)
-	t.Log(view.Catalog.PString(PPL1))
+	t.Log(catalog.PString(PPL0))
+	now := time.Now()
+	views := make(map[uint64]*catalogLogEntry)
+	for i := 0; i < mockShards; i++ {
+		wg.Add(1)
+		go func(shardId uint64) {
+			defer wg.Done()
+			view := catalog.ShardView(shardId, math.MaxUint64)
+			assert.Equal(t, 1, len(view.Catalog.TableSet))
+			t.Logf("shard-%d: %d", shardId, len(view.Catalog.TableSet))
+			views[shardId] = view
+			name := fmt.Sprintf("ss-%d", shardId)
+			f, err := os.Create(filepath.Join(dir, name))
+			assert.Nil(t, err)
+			defer f.Close()
+			buf, err := view.Marshal()
+			assert.Nil(t, err)
+			_, err = f.Write(buf)
+			assert.Nil(t, err)
+		}(uint64(i))
+	}
+	wg.Wait()
+	for i := 0; i < mockShards; i++ {
+		name := fmt.Sprintf("ss-%d", uint64(i))
+		f, err := os.OpenFile(filepath.Join(dir, name), os.O_RDONLY, 666)
+		assert.Nil(t, err)
+		defer f.Close()
+		info, err := f.Stat()
+		assert.Nil(t, err)
+		size := info.Size()
+		buf := make([]byte, size)
+		_, err = f.Read(buf)
+		assert.Nil(t, err)
+		view := &catalogLogEntry{}
+		err = view.Unmarshal(buf)
+		assert.Nil(t, err)
+		expected := views[uint64(i)]
+		doCompare(t, expected, view)
+		t.Logf("shardId-%d: %s", uint64(i), view.Catalog.PString(PPL0))
+	}
+	t.Logf("takes %s", time.Since(now))
 }

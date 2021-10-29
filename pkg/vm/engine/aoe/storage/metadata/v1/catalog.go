@@ -90,7 +90,11 @@ func (e *catalogLogEntry) Marshal() ([]byte, error) {
 }
 
 func (e *catalogLogEntry) Unmarshal(buf []byte) error {
-	return json.Unmarshal(buf, e)
+	if err := json.Unmarshal(buf, e); err != nil {
+		return err
+	}
+	e.Catalog.RWMutex = new(sync.RWMutex)
+	return nil
 }
 
 func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
