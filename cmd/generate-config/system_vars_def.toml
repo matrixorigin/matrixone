@@ -363,10 +363,10 @@ addr-client = "localhost:20002"
 dir-data = "./cube0/node"
 dir-deploy = ""
 version = ""
-githash = "git hash"
-capacity = "100GB"
+githash = ""
+capacity = 0
 use-memory-as-storage = false
-shard-groups = 1
+shard-groups = 2
 
 [replication]
 max-peer-down-time = "30m"
@@ -468,10 +468,10 @@ enable-placement-rules = true
 isolation-level = "rack"
 
 [metric]
-addr = "127.0.0.1:9093"
+addr = ""
 interval = 0
-job = "cube"
-instance = "node1"
+job = ""
+instance = ""
 
 # Storage Configs
 [meta.conf]
