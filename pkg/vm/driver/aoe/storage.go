@@ -17,6 +17,12 @@ package aoe
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -32,11 +38,6 @@ import (
 	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
-	"os"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixcube/pb/meta"
 	"github.com/matrixorigin/matrixcube/storage"
@@ -48,11 +49,6 @@ type Storage struct {
 	DB    *adb.DB
 	stats stats.Stats
 }
-
-var (
-	// OK response with set
-	OK = []byte("OK")
-)
 
 func (s *Storage) Sync(ids []uint64) error {
 	for _, shardId := range ids {
@@ -116,7 +112,7 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 	}
 	writtenBytes := uint64(len(key) + len(customReq.Data))
 	changedBytes := int64(writtenBytes)
-	return writtenBytes, changedBytes, OK
+	return writtenBytes, changedBytes, nil
 }
 
 //Relation  returns a relation of the db and the table
@@ -131,7 +127,7 @@ func (s *Storage) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error)
 }
 
 //GetSegmentIds returns the ids of segments of the table
-func (s *Storage) getSegmentIds(cmd []byte) ([]byte) {
+func (s *Storage) getSegmentIds(cmd []byte) []byte {
 	customReq := &pb.GetSegmentIdsRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 	rsp := s.DB.GetSegmentIds(dbi.GetSegmentsCtx{
@@ -145,8 +141,9 @@ func (s *Storage) getSegmentIds(cmd []byte) ([]byte) {
 func (s *Storage) GetShardPesistedId(shardId uint64) uint64 {
 	return s.DB.GetShardCheckpointId(shardId)
 }
+
 //GetSegmentedId returns the smallest segmente id among the tables starts with prefix
-func (s *Storage) getSegmentedId(cmd []byte) ([]byte) {
+func (s *Storage) getSegmentedId(cmd []byte) []byte {
 	customReq := &pb.GetSegmentedIdRequest{}
 	protoc.MustUnmarshal(customReq, cmd)
 	rsp := s.GetShardPesistedId(customReq.ShardId)
@@ -244,7 +241,7 @@ func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
 	var values []storage.ShardMetadata
 	logutil.Infof("tblNames len  is %d\n", len(tblNames))
 	for _, tblName := range tblNames {
-		if !strings.Contains(tblName, "matetbl")  {
+		if !strings.Contains(tblName, "matetbl") {
 			continue
 		}
 		rel, err := s.Relation(tblName)
@@ -256,10 +253,10 @@ func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
 			attrs = append(attrs, ColDef.Name)
 		}
 		rel.Data.GetBlockFactory()
-		if len(rel.Meta.SegmentSet)  < 1 {
+		if len(rel.Meta.SegmentSet) < 1 {
 			continue
 		}
-		segment := rel.Meta.SegmentSet[len(rel.Meta.SegmentSet) - 1]
+		segment := rel.Meta.SegmentSet[len(rel.Meta.SegmentSet)-1]
 		seg := rel.Segment(segment.Id, nil)
 		blks := seg.Blocks()
 		blk := seg.Block(blks[len(blks)-1], nil)
@@ -275,9 +272,9 @@ func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
 		logIndex := bat.GetVector(attrs[1])
 		metadate := bat.GetVector(attrs[2])
 		logutil.Infof("GetInitialStates Metadata is %v\n",
-			metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]] )
+			metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
 		values = append(values, storage.ShardMetadata{
-			ShardID:  shardId.Col.([]uint64)[0] ,
+			ShardID:  shardId.Col.([]uint64)[0],
 			LogIndex: logIndex.Col.([]uint64)[0],
 			Metadata: metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]],
 		})
@@ -290,13 +287,13 @@ func (s *Storage) Write(ctx storage.WriteContext) error {
 	batchSize := len(batch.Requests)
 	shard := ctx.Shard()
 	for idx, r := range batch.Requests {
-		cmd :=r.Cmd
+		cmd := r.Cmd
 		CmdType := r.CmdType
 		key := r.Key
 		var rep []byte
 		var writtenBytes uint64
 		var changedBytes int64
-		switch CmdType{
+		switch CmdType {
 		case uint64(pb.CreateTablet):
 			writtenBytes, changedBytes, rep = s.createTable(batch.Index, shard.ID, cmd, key)
 		case uint64(pb.DropTablet):
@@ -385,7 +382,7 @@ func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
 			tbl = s.DB.Store.Catalog.SimpleGetTableByName(tableName)
 		}
 		var attrs []string
-		for _, colDef := range tbl.Schema.ColDefs{
+		for _, colDef := range tbl.Schema.ColDefs {
 			attrs = append(attrs, colDef.Name)
 		}
 		bat := batch.New(true, attrs)
