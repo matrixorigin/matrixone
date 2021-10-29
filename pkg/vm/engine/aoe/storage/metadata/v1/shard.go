@@ -68,12 +68,14 @@ func (ss *ShardSnapshot) PrepareRead() error {
 	if err != nil {
 		return err
 	}
-	buf := make([]byte, int(info.Size()))
+	size := info.Size()
+	mnode := common.GPool.Alloc(uint64(size))
+	defer common.GPool.Free(mnode)
 	ss.View = &catalogLogEntry{}
-	if _, err = f.Read(buf); err != nil {
+	if _, err = f.Read(mnode.Buf[:size]); err != nil {
 		return err
 	}
-	if err = ss.View.Unmarshal(buf); err != nil {
+	if err = ss.View.Unmarshal(mnode.Buf[:size]); err != nil {
 		return err
 	}
 	return nil

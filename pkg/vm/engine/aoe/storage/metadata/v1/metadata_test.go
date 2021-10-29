@@ -850,4 +850,5 @@ func TestShard(t *testing.T) {
 		// t.Logf("shardId-%d: %s", reader.View.LogRange.ShardId, reader.View.Catalog.PString(PPL0))
 	}
 	t.Logf("takes %s", time.Since(now))
+	t.Log(common.GPool.String())
 }
