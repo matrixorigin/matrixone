@@ -73,7 +73,7 @@ scope = ["global"]
 access = ["file"]
 type = "string"
 domain-type = "set"
-values = ["localhost","127.0.0.1","0.0.0.0"]
+values = ["0.0.0.0","localhost","127.0.0.1"]
 comment = "listening ip"
 update-mode = "dynamic"
 
