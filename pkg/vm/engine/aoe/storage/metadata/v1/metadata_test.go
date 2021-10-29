@@ -38,18 +38,24 @@ func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	}
 }
 
-func createBlock(t *testing.T, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
+func createBlock(t *testing.T, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
 	return func() {
 		defer wg.Done()
+		idAlloc := common.IdAlloctor{}
 		schema := MockSchema(2)
-		schema.Name = fmt.Sprintf("mock%d", common.NextGlobalSeqNum())
-		tbl, err := catalog.SimpleCreateTable(schema, nil)
+		schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAlloc.Alloc())
+		index := shard.Index{
+			ShardId: shardId,
+			Id:      shard.SimpleIndexId(idAlloc.Get()),
+		}
+		tbl, err := catalog.SimpleCreateTable(schema, &index)
 		assert.Nil(t, err)
 		var prev *Block
 		for i := 0; i < blocks; i++ {
 			blk := tbl.SimpleGetOrCreateNextBlock(prev)
 			blk.SetCount(tbl.Schema.BlockMaxRows)
 			blk.SetIndex(LogIndex{
+				ShardId:  shardId,
 				Id:       shard.SimpleIndexId(common.NextGlobalSeqNum()),
 				Count:    tbl.Schema.BlockMaxRows,
 				Capacity: tbl.Schema.BlockMaxRows,
@@ -370,11 +376,9 @@ func TestReplay(t *testing.T) {
 	dir := "/tmp/testreplay"
 	os.RemoveAll(dir)
 
-	syncerInterval := time.Duration(2) * time.Millisecond
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
 		hbInterval *= 3
-		syncerInterval *= 3
 	}
 
 	cfg := new(CatalogCfg)
@@ -397,7 +401,7 @@ func TestReplay(t *testing.T) {
 
 	for i := 0; i < mockTbls; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
@@ -772,4 +776,36 @@ func TestShardNode(t *testing.T) {
 	}
 	assert.Equal(t, gn2, sn.GetGroup())
 	t.Log(sn.PString(PPL0))
+}
+
+func TestShard(t *testing.T) {
+	dir := "/tmp/metadata/testshard"
+	os.RemoveAll(dir)
+	cfg := new(CatalogCfg)
+	cfg.Dir = dir
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
+	cfg.RotationFileMaxSize = 100 * int(common.M)
+	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
+	catalog.Start()
+	defer catalog.Close()
+
+	mockTbls := 10
+	createBlkWorker, _ := ants.NewPool(mockTbls)
+	upgradeSegWorker, _ := ants.NewPool(40)
+
+	var wg sync.WaitGroup
+
+	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
+
+	shardAlloc := common.IdAlloctor{}
+
+	for i := 0; i < mockTbls; i++ {
+		wg.Add(1)
+		createBlkWorker.Submit(createBlock(t, shardAlloc.Alloc(), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+	}
+	wg.Wait()
+	t.Log(catalog.PString(PPL1))
+	view := catalog.ShardView(1, 10)
+	// view := catalog.ShardView(2, math.MaxUint64)
+	t.Log(view.Catalog.PString(PPL1))
 }

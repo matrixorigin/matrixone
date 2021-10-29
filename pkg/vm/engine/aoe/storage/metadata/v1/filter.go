@@ -9,7 +9,7 @@ type commitChecker func(info *CommitInfo) bool
 func createShardChecker(shardId uint64) commitChecker {
 	return func(info *CommitInfo) bool {
 		if info.LogIndex == nil {
-			return shardId == uint64(0)
+			return true
 		}
 		return info.LogIndex.ShardId == shardId
 	}
@@ -29,10 +29,12 @@ func createCommitIdChecker(id uint64) commitChecker {
 
 func createIndexRangeChecker(id uint64) commitChecker {
 	return func(info *CommitInfo) bool {
+		var ret bool
 		if info.LogRange == nil {
+			// logutil.Infof("%s-%d %v", info.LogRange.String(), id, ret)
 			return true
 		}
-		ret := info.LogRange.Range.GT(id)
+		ret = info.LogRange.Range.GT(id)
 		return !ret
 	}
 }

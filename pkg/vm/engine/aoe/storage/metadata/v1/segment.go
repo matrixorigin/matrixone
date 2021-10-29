@@ -131,6 +131,9 @@ func (e *Segment) fillView(filter *Filter) *Segment {
 		}
 		view.BlockSet = append(view.BlockSet, blkView)
 	}
+	if len(view.BlockSet) == 0 {
+		return nil
+	}
 	return view
 }
 
