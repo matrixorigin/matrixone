@@ -16,7 +16,6 @@ package metadata
 import (
 	"fmt"
 	"io/ioutil"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +33,38 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type mockIdAllocator struct {
+	sync.RWMutex
+	driver map[uint64]*common.IdAlloctor
+}
+
+func newMockAllocator() *mockIdAllocator {
+	return &mockIdAllocator{
+		driver: make(map[uint64]*common.IdAlloctor),
+	}
+}
+
+func (alloc *mockIdAllocator) get(shardId uint64) uint64 {
+	alloc.RLock()
+	defer alloc.RUnlock()
+	shardAlloc := alloc.driver[shardId]
+	if shardAlloc == nil {
+		return 0
+	}
+	return shardAlloc.Get()
+}
+
+func (alloc *mockIdAllocator) alloc(shardId uint64) uint64 {
+	alloc.Lock()
+	defer alloc.Unlock()
+	shardAlloc := alloc.driver[shardId]
+	if shardAlloc == nil {
+		shardAlloc = new(common.IdAlloctor)
+		alloc.driver[shardId] = shardAlloc
+	}
+	return shardAlloc.Alloc()
+}
+
 func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	return func() {
 		defer wg.Done()
@@ -42,15 +73,14 @@ func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	}
 }
 
-func createBlock(t *testing.T, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
+func createBlock(t *testing.T, idAllocator *mockIdAllocator, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
 	return func() {
 		defer wg.Done()
-		idAlloc := common.IdAlloctor{}
 		schema := MockSchema(2)
-		schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAlloc.Alloc())
+		schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAllocator.alloc(shardId))
 		index := shard.Index{
 			ShardId: shardId,
-			Id:      shard.SimpleIndexId(idAlloc.Get()),
+			Id:      shard.SimpleIndexId(idAllocator.get(shardId)),
 		}
 		tbl, err := catalog.SimpleCreateTable(schema, &index)
 		assert.Nil(t, err)
@@ -73,6 +103,16 @@ func createBlock(t *testing.T, shardId uint64, catalog *Catalog, blocks int, wg 
 			prev = blk
 		}
 	}
+}
+
+func doCompare(t *testing.T, expected, actual *catalogLogEntry) {
+	assert.Equal(t, expected.LogRange, actual.LogRange)
+	assert.Equal(t, len(expected.Catalog.TableSet), len(actual.Catalog.TableSet))
+	for _, expectedTable := range expected.Catalog.TableSet {
+		actualTable := actual.Catalog.TableSet[expectedTable.Id]
+		assert.Equal(t, len(expectedTable.SegmentSet), len(actualTable.SegmentSet))
+	}
+	assert.Equal(t, len(expected.Catalog.TableSet), len(expected.Catalog.TableSet))
 }
 
 func TestTable(t *testing.T) {
@@ -402,10 +442,11 @@ func TestReplay(t *testing.T) {
 	var wg sync.WaitGroup
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
+	idAllocator := newMockAllocator()
 
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
@@ -782,16 +823,6 @@ func TestShardNode(t *testing.T) {
 	t.Log(sn.PString(PPL0))
 }
 
-func doCompare(t *testing.T, expected, actual *catalogLogEntry) {
-	assert.Equal(t, expected.LogRange, actual.LogRange)
-	assert.Equal(t, len(expected.Catalog.TableSet), len(actual.Catalog.TableSet))
-	for _, expectedTable := range expected.Catalog.TableSet {
-		actualTable := actual.Catalog.TableSet[expectedTable.Id]
-		assert.Equal(t, len(expectedTable.SegmentSet), len(actualTable.SegmentSet))
-	}
-	assert.Equal(t, len(expected.Catalog.TableSet), len(expected.Catalog.TableSet))
-}
-
 func TestShard(t *testing.T) {
 	dir := "/tmp/metadata/testshard"
 	os.RemoveAll(dir)
@@ -811,9 +842,10 @@ func TestShard(t *testing.T) {
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
+	idAllocator := newMockAllocator()
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	t.Log(catalog.PString(PPL0))
@@ -824,7 +856,7 @@ func TestShard(t *testing.T) {
 		wg.Add(1)
 		go func(shardId uint64) {
 			defer wg.Done()
-			writer := NewShardSnapshotWriter(catalog, dir, shardId, math.MaxUint32)
+			writer := NewShardSnapshotWriter(catalog, dir, shardId, idAllocator.get(shardId))
 			err := writer.PrepareWrite()
 			assert.Nil(t, err)
 			err = writer.CommitWrite()
