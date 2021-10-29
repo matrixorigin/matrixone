@@ -42,9 +42,9 @@ import (
 type TestAOEClusterOption func(opts *testAOEClusterOptions)
 
 type testAOEClusterOptions struct {
-	raftOptions       []raftstore.TestClusterOption
-	aoeFactoryFunc    func(path string) (*aoe2.Storage, error)
-	metaFactoryFunc   func(path string) (storage.MetadataStorage, error)
+	raftOptions    []raftstore.TestClusterOption
+	aoeFactoryFunc func(path string) (*aoe2.Storage, error)
+	// metaFactoryFunc   func(path string) (storage.MetadataStorage, error)
 	kvDataFactoryFunc func(path string) (storage.DataStorage, error)
 	usePebble         bool
 }
@@ -70,12 +70,12 @@ func WithTestAOEClusterAOEStorageFunc(value func(path string) (*aoe2.Storage, er
 	}
 }
 
-// WithTestAOEClusterMetaStorageFunc set metadata storage func
-func WithTestAOEClusterMetaStorageFunc(value func(path string) (storage.MetadataStorage, error)) TestAOEClusterOption {
-	return func(opts *testAOEClusterOptions) {
-		opts.metaFactoryFunc = value
-	}
-}
+// // WithTestAOEClusterMetaStorageFunc set metadata storage func
+// func WithTestAOEClusterMetaStorageFunc(value func(path string) (storage.MetadataStorage, error)) TestAOEClusterOption {
+// 	return func(opts *testAOEClusterOptions) {
+// 		opts.metaFactoryFunc = value
+// 	}
+// }
 
 // WithTestAOEClusterKVDataStorageFunc set kv data storage func
 func WithTestAOEClusterKVDataStorageFunc(value func(path string) (storage.DataStorage, error)) TestAOEClusterOption {
@@ -93,30 +93,32 @@ func (opts *testAOEClusterOptions) adjust() {
 		opts.aoeFactoryFunc = aoe2.NewStorage
 	}
 
-	if opts.metaFactoryFunc == nil {
-		opts.metaFactoryFunc = func(path string) (storage.MetadataStorage, error) {
-			if opts.usePebble {
-				return cPebble.NewStorage(path, &pebble.Options{
-					FS: vfs.NewPebbleFS(vfs.Default),
-				})
-			}
+	// if opts.metaFactoryFunc == nil {
+	// 	opts.metaFactoryFunc = func(path string) (storage.MetadataStorage, error) {
+	// 		if opts.usePebble {
+	// 			return cPebble.NewStorage(path, &pebble.Options{
+	// 				FS: vfs.NewPebbleFS(vfs.Default),
+	// 			})
+	// 		}
 
-			return mem.NewStorage(vfs.Default), nil
-		}
-	}
+	// 		return mem.NewStorage(vfs.Default), nil
+	// 	}
+	// }
 
 	if opts.kvDataFactoryFunc == nil {
 		opts.kvDataFactoryFunc = func(path string) (storage.DataStorage, error) {
 			if opts.usePebble {
-				kvs, err := cPebble.NewStorage(path, &pebble.Options{
+				kvs, err := cPebble.NewStorage(path, nil, &pebble.Options{
 					FS: vfs.NewPebbleFS(vfs.Default),
 				})
-				dataStorage := kv.NewKVDataStorage(kvs, kvDriver.NewkvExecutor(kvs))
+				kvBase := kv.NewBaseStorage(kvs, vfs.Default)
+				dataStorage := kv.NewKVDataStorage(kvBase, kvDriver.NewkvExecutor(kvs))
 				return dataStorage, err
 			}
 
-			kvs := mem.NewStorage(vfs.Default)
-			dataStorage := kv.NewKVDataStorage(kvs, kvDriver.NewkvExecutor(kvs))
+			kvs := mem.NewStorage()
+			kvBase := kv.NewBaseStorage(kvs, vfs.Default)
+			dataStorage := kv.NewKVDataStorage(kvBase, kvDriver.NewkvExecutor(kvs))
 			return dataStorage, nil
 		}
 	}
@@ -134,12 +136,12 @@ type TestAOECluster struct {
 	initCfgCreator func(node int) *config.Config
 
 	// reset fields
-	opts             *testAOEClusterOptions
-	RaftCluster      raftstore.TestRaftCluster
-	CubeDrivers      []driver.CubeDriver
-	AOEStorages      []*aoe2.Storage
-	MetadataStorages []storage.MetadataStorage
-	DataStorages     []storage.DataStorage
+	opts        *testAOEClusterOptions
+	RaftCluster raftstore.TestRaftCluster
+	CubeDrivers []driver.CubeDriver
+	AOEStorages []*aoe2.Storage
+	// MetadataStorages []storage.MetadataStorage
+	DataStorages []storage.DataStorage
 }
 
 func NewTestAOECluster(t *testing.T, cfgCreator func(node int) *config.Config, opts ...TestAOEClusterOption) *TestAOECluster {
@@ -152,7 +154,7 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 	c.RaftCluster = nil
 	c.CubeDrivers = nil
 	c.AOEStorages = nil
-	c.MetadataStorages = nil
+	// c.MetadataStorages = nil
 	c.DataStorages = nil
 	c.opts = newTestAOEClusterOptions()
 
@@ -163,9 +165,9 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 	c.opts.raftOptions = append(c.opts.raftOptions, opts...)
 
 	c.opts.raftOptions = append(c.opts.raftOptions, raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cConfig.Config) {
-		meta, err := c.opts.metaFactoryFunc(fmt.Sprintf("%s/meta", cfg.DataPath))
-		assert.NoError(c.t, err)
-		c.MetadataStorages = append(c.MetadataStorages, meta)
+		// meta, err := c.opts.metaFactoryFunc(fmt.Sprintf("%s/meta", cfg.DataPath))
+		// assert.NoError(c.t, err)
+		// c.MetadataStorages = append(c.MetadataStorages, meta)
 
 		data, err := c.opts.kvDataFactoryFunc(fmt.Sprintf("%s/data", cfg.DataPath))
 		assert.NoError(c.t, err)
@@ -204,7 +206,7 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 			Snapshot:           cfg.Snapshot,
 			Raft:               cfg.Raft,
 			Worker:             cfg.Worker,
-			Prophet:            config2.Config{
+			Prophet: config2.Config{
 				Name:                            cfg.Prophet.Name,
 				DataDir:                         cfg.Prophet.DataDir,
 				RPCAddr:                         cfg.Prophet.RPCAddr,
@@ -225,11 +227,11 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 				EnableResponseNotLeader:         cfg.Prophet.EnableResponseNotLeader,
 				TestCtx:                         cfg.Prophet.TestCtx,
 			},
-			Storage:            cfg.Storage,
-			Customize:          cfg.Customize,
-			Metric:             cfg.Metric,
-			FS:                 cfg.FS,
-			Test:               cfg.Test,
+			Storage:   cfg.Storage,
+			Customize: cfg.Customize,
+			Metric:    cfg.Metric,
+			FS:        cfg.FS,
+			Test:      cfg.Test,
 		}
 		types := []metapb.JobType{metapb.JobType_RemoveResource, metapb.JobType_CreateResourcePool, metapb.JobType_CustomStartAt}
 		for _, t := range types {
@@ -237,8 +239,8 @@ func (c *TestAOECluster) reset(opts ...raftstore.TestClusterOption) {
 				dCfg.CubeConfig.Prophet.RegisterJobProcessor(t, v)
 			}
 		}
-		dCfg.ServerConfig.ExternalServer = true
-		d, err := driver.NewCubeDriverWithFactory(c.MetadataStorages[node], c.DataStorages[node], c.AOEStorages[node], dCfg, func(c *cConfig.Config) (raftstore.Store, error) {
+		// dCfg.ServerConfig.ExternalServer = true
+		d, err := driver.NewCubeDriverWithFactory(c.DataStorages[node], c.AOEStorages[node], dCfg, func(c *cConfig.Config) (raftstore.Store, error) {
 			return raftstore.NewStore(c), nil
 		})
 		assert.NoError(c.t, err)
@@ -271,9 +273,9 @@ func (c *TestAOECluster) Stop() {
 		d.Close()
 	}
 
-	for _, s := range c.MetadataStorages {
-		assert.NoError(c.t, s.Close())
-	}
+	// for _, s := range c.MetadataStorages {
+	// 	assert.NoError(c.t, s.Close())
+	// }
 
 	for _, s := range c.DataStorages {
 		assert.NoError(c.t, s.Close())

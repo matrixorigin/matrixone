@@ -33,7 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"sync"
+	// "sync"
 	"testing"
 	"time"
 
@@ -59,14 +59,26 @@ func init() {
 	tableInfo = adaptor.MockTableInfo(colCnt)
 	tableInfo.Id = 100
 }
-
+func TestChannel(t *testing.T) {
+	completeC := make(chan interface{}, 1)
+	completeC<-nil
+	value := <-completeC
+	switch value.(type) {
+	case error:
+		fmt.Printf("error\n")
+		// return nil, v
+	default:
+		// return value.([]byte), nil
+		fmt.Printf("default\n")
+	}
+}
 func TestAOEStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = 20
-			c.ServerConfig.ExternalServer = true
+			// c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -109,7 +121,7 @@ func TestAOEStorage(t *testing.T) {
 
 	t0 := time.Now()
 	//Set Test
-	err := driver.Set([]byte("Hello"), []byte("World"))
+	err := driver.Set([]byte("Hello-"), []byte("World-"))
 	require.NoError(t, err, "Set fail")
 	fmt.Printf("time cost for set is %d ms\n", time.Since(t0).Milliseconds())
 
@@ -119,40 +131,40 @@ func TestAOEStorage(t *testing.T) {
 	err = driver.SetIfNotExist([]byte("Hello_IfNotExist"), []byte("World_IfNotExist2"))
 	require.Equal(t, err, errors.New("key is already existed"), "SetIfNotExist wrong")
 
-	wg := sync.WaitGroup{}
-	wg.Add(1)
-	driver.AsyncSet([]byte("Hello_Async"), []byte("World_Async"), func(i interface{}, data []byte, err error) {
-		require.NoError(t, err, "AsyncSet Fail")
-		wg.Done()
-	}, nil)
-	wg.Wait()
-	wg.Add(1)
-	driver.AsyncSetIfNotExist([]byte("Hello_AsyncSetIfNotExist"), []byte("World_AsyncSetIfNotExist1"), func(i interface{}, data []byte, err error) {
-		require.NoError(t, err, "AsyncSetIfNotExist fail")
-		wg.Done()
-	}, nil)
-	wg.Wait()
-	wg.Add(1)
-	driver.AsyncSetIfNotExist([]byte("Hello_AsyncSetIfNotExist"), []byte("World_AsyncSetIfNotExist2"), func(i interface{}, data []byte, err error) {
-		require.Equal(t, err, errors.New("key is already existed"), "AsyncSetIfNotExist wrong")
-		wg.Done()
-	}, nil)
-	wg.Wait()
+	// wg := sync.WaitGroup{}
+	// wg.Add(1)
+	// driver.AsyncSet([]byte("Hello_Async"), []byte("World_Async"), func(i interface{}, data []byte, err error) {
+	// 	require.NoError(t, err, "AsyncSet Fail")
+	// 	wg.Done()
+	// }, nil)
+	// wg.Wait()
+	// wg.Add(1)
+	// driver.AsyncSetIfNotExist([]byte("Hello_AsyncSetIfNotExist"), []byte("World_AsyncSetIfNotExist1"), func(i interface{}, data []byte, err error) {
+	// 	require.NoError(t, err, "AsyncSetIfNotExist fail")
+	// 	wg.Done()
+	// }, nil)
+	// wg.Wait()
+	// wg.Add(1)
+	// driver.AsyncSetIfNotExist([]byte("Hello_AsyncSetIfNotExist"), []byte("World_AsyncSetIfNotExist2"), func(i interface{}, data []byte, err error) {
+	// 	require.Equal(t, err, errors.New("key is already existed"), "AsyncSetIfNotExist wrong")
+	// 	wg.Done()
+	// }, nil)
+	// wg.Wait()
 	//Get Test
 	t0 = time.Now()
-	value, err := driver.Get([]byte("Hello"))
+	value, err := driver.Get([]byte("Hello-"))
 	require.NoError(t, err, "Get Fail")
-	require.Equal(t, []byte("World"), value, "Get wrong")
+	require.Equal(t, []byte("World-"), value, "Get wrong")
 	fmt.Printf("time cost for get is %d ms\n", time.Since(t0).Milliseconds())
 	value, err = driver.Get([]byte("Hello_IfNotExist"))
 	require.NoError(t, err, "Get2 Fail")
 	require.Equal(t, []byte("World_IfNotExist1"), value, "Get2 wrong")
-	value, err = driver.Get([]byte("Hello_Async"))
-	require.NoError(t, err, "Get2 Fail")
-	require.Equal(t, []byte("World_Async"), value, "Get3 wrong")
-	value, err = driver.Get([]byte("Hello_AsyncSetIfNotExist"))
-	require.NoError(t, err, "Get4 Fail")
-	require.Equal(t, []byte("World_AsyncSetIfNotExist1"), value, "Get4 wrong")
+	// value, err = driver.Get([]byte("Hello_Async"))
+	// require.NoError(t, err, "Get2 Fail")
+	// require.Equal(t, []byte("World_Async"), value, "Get3 wrong")
+	// value, err = driver.Get([]byte("Hello_AsyncSetIfNotExist"))
+	// require.NoError(t, err, "Get4 Fail")
+	// require.Equal(t, []byte("World_AsyncSetIfNotExist1"), value, "Get4 wrong")
 	value, err = driver.Get([]byte("NotExist"))
 	require.NoError(t, err, "Get NotExist Fail")
 	require.Equal(t, "", string(value), "Get NotExist wrong")
@@ -232,12 +244,12 @@ func TestAOEStorage(t *testing.T) {
 	require.NoError(t, err)
 	_, err = driver.AllocID([]byte("alloc_id"), 0)
 	require.NoError(t, err, "AllocID fail")
-	wg.Add(1)
-	driver.AsyncAllocID([]byte("async_alloc_id"), 0, func(i interface{}, data []byte, err error) {
-		require.NoError(t, err, "AsyncSet Fail")
-		wg.Done()
-	}, nil)
-	wg.Wait()
+	// wg.Add(1)
+	// driver.AsyncAllocID([]byte("async_alloc_id"), 0, func(i interface{}, data []byte, err error) {
+	// 	require.NoError(t, err, "AsyncSet Fail")
+	// 	wg.Done()
+	// }, nil)
+	// wg.Wait()
 	//CreateTableTest
 	toShard := shard.ShardID
 	stdLog.Printf(">>>toShard %d", toShard)

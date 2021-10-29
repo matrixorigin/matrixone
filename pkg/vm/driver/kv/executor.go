@@ -21,6 +21,7 @@ import (
 	"fmt"
 	error2 "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
+	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/meta"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 
 	"github.com/matrixorigin/matrixcube/util"
+	// "github.com/matrixorigin/matrixcube/pb/rpc"
 )
 
 // Storage memory storage
@@ -46,10 +48,12 @@ func NewkvExecutor(kv storage.KVStorage) storage.Executor {
 	}
 }
 
-func (ce *kvExecutor) set(wb util.WriteBatch, req storage.Request) uint64 {
-	wb.Set(req.Key, req.Cmd)
+func (ce *kvExecutor) set(wb util.WriteBatch, req storage.Request) (uint64, []byte) {
+	customReq := &pb3.SetRequest{}
+	protoc.MustUnmarshal(customReq, req.Cmd)
+	wb.Set(req.Key, customReq.Value)
 	writtenBytes := uint64(len(req.Key) + len(req.Cmd))
-	return writtenBytes
+	return writtenBytes, req.Cmd
 }
 
 func (ce *kvExecutor) get(req storage.Request) ([]byte, error) {
@@ -171,10 +175,10 @@ func (ce *kvExecutor) incr(wb util.WriteBatch, req storage.Request) (uint64, []b
 	return writtenBytes, newV
 }
 
-func (ce *kvExecutor) del(wb util.WriteBatch, req storage.Request) uint64 {
+func (ce *kvExecutor) del(wb util.WriteBatch, req storage.Request) (uint64, []byte) {
 	wb.Delete(req.Key)
 	writtenBytes := uint64(len(req.Key))
-	return writtenBytes
+	return writtenBytes, req.Cmd
 }
 
 func (ce *kvExecutor) setIfNotExist(wb util.WriteBatch, req storage.Request) (uint64, []byte) {
@@ -215,12 +219,17 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 	wb := r.(util.WriteBatch)
 	batch := ctx.Batch()
 	requests := batch.Requests
+	// var rep []byte
 	for j := range requests {
 		switch requests[j].CmdType {
 		case uint64(pb.Set):
-			writtenBytes += ce.set(wb, requests[j])
+			writtenBytes,rep := ce.set(wb, requests[j])
+			ctx.AppendResponse(rep)
+			writtenBytes += writtenBytes
 		case uint64(pb.Del):
-			writtenBytes += ce.del(wb, requests[j])
+			writtenBytes, rep := ce.del(wb, requests[j])
+			ctx.AppendResponse(rep)
+			writtenBytes += writtenBytes
 		case uint64(pb.Incr):
 			writtenByte, rep := ce.incr(wb, requests[j])
 			ctx.AppendResponse(rep)
@@ -234,6 +243,7 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 		}
 	}
 
+	// ctx.AppendResponse(rep)
 	writtenBytes += uint64(16)
 	ctx.SetDiffBytes(int64(writtenBytes))
 	ctx.SetWrittenBytes(writtenBytes)

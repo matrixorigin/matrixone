@@ -128,9 +128,9 @@ func (p *proxy) LogIndex(index *Index) {
 	if p.idAlloctor != nil {
 		index.Id.Id = p.idAlloctor.Alloc()
 	}
-	if index.Id.Id == uint64(0) {
-		panic("logic error")
-	}
+	// if index.Id.Id == uint64(0) {
+	// 	panic("logic error")
+	// }
 	p.logmu.Lock()
 	p.logIndexLocked(index)
 	p.logmu.Unlock()
