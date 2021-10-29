@@ -46,8 +46,12 @@ func (e *aoeEngine) Node(ip string) *engine.NodeInfo {
 		}
 		if strings.HasPrefix(store.ClientAddr, ip) {
 			stats := e.catalog.Driver.RaftStore().GetRouter().GetStoreStats(store.ID)
+			cpuCnt := len(stats.GetCpuUsages())
+			if cpuCnt < 1 {
+				cpuCnt = 1
+			}
 			ni = &engine.NodeInfo{
-				Mcpu: len(stats.GetCpuUsages()),
+				Mcpu: cpuCnt,
 			}
 		}
 	})

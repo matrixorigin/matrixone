@@ -370,8 +370,6 @@ shard-groups = 0
 
 [replication]
     max-peer-down-time = "0s"
-    shard-heartbeat-duration = "100ms"
-    store-heartbeat-duration = "1s"
     shard-split-check-duration = "0s"
     shard-state-check-duration = "0s"
     disable-shard-split = false
