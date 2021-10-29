@@ -104,6 +104,7 @@ func init() {
         },
     {{end}}
 
+    // same type family, and left is low precision.
     {{range .Field2}}
         {
             LeftType:   types.LEFT_TYPE_OID,

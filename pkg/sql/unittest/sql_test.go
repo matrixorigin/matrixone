@@ -305,6 +305,16 @@ func TestBinaryOperators(t *testing.T) {
 		{"select u2 - u1, u2 - u2, u2 - u3, u2 - u4 from uus;"},
 		{"select u3 - u1, u3 - u2, u3 - u3, u3 - u4 from uus;"},
 		{"select u4 - u1, u4 - u2, u4 - u3, u4 - u4 from uus;"},
+		// multiplication operator
+		{"select i1 * i1, i1 * i2, i1 * i3, i1 * i4 from iis;"},
+		{"select i2 * i1, i2 * i2, i2 * i3, i2 * i4 from iis;"},
+		{"select i3 * i1, i3 * i2, i3 * i3, i3 * i4 from iis;"},
+		{"select i4 * i1, i4 * i2, i4 * i3, i4 * i4 from iis;"},
+		{"select f1 * f2, f2 * f1 from ffs;"},
+		{"select u1 * u1, u1 * u2, u1 * u3, u1 * u4 from uus;"},
+		{"select u2 * u1, u2 * u2, u2 * u3, u2 * u4 from uus;"},
+		{"select u3 * u1, u3 * u2, u3 * u3, u3 * u4 from uus;"},
+		{"select u4 * u1, u4 * u2, u4 * u3, u4 * u4 from uus;"},
 		{"drop database bos;"},
 	}
 

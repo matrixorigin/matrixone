@@ -141,6 +141,9 @@ func init(){
                     }
                     vec.Nsp.Set(lv.Nsp)
                     vec.SetCol(sub.{.RTYP}SubByScalar(RETURN_GO_TYPE(lvs[0]), rs, rs))
+                    if lv.Ref == 0 {
+                        register.Put(proc, lv)
+                    }
                     return vec, nil
                 case rv.Ref == 1 || rv.Ref == 0:
                     rv.Ref = 0
@@ -199,6 +202,9 @@ func init(){
                     }
                     vec.Nsp.Set(rv.Nsp)
                     vec.SetCol(sub.{.LTYP}SubScalar(lvs[0], rs, rs))
+                    if rv.Ref == 0 {
+                        register.Put(proc, rv)
+                    }
                     return vec, nil
                 case !lc && rc:
                     if lv.Ref == 1 || lv.Ref == 0 {

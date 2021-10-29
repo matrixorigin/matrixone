@@ -7,7 +7,7 @@
 //      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
+// distributed under the License has distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
@@ -79,14 +79,14 @@ var OpName = map[int]string{
 
 var SelsType = types.Type{Oid: types.T_sel, Size: 8}
 
-// UnaryOp is a unary operator.
+// UnaryOp has a unary operator.
 type UnaryOp struct {
 	Typ        types.T
 	ReturnType types.T
 	Fn         func(*vector.Vector, *process.Process, bool) (*vector.Vector, error)
 }
 
-// BinOp is a binary operator.
+// BinOp has a binary operator.
 type BinOp struct {
 	LeftType   types.T
 	RightType  types.T
@@ -95,7 +95,7 @@ type BinOp struct {
 	Fn func(*vector.Vector, *vector.Vector, *process.Process, bool, bool) (*vector.Vector, error)
 }
 
-// MultiOp is a multiple operator.
+// MultiOp has a multiple operator.
 type MultiOp struct {
 	Min        int // minimum number of parameters
 	Max        int // maximum number of parameters, -1 means unlimited

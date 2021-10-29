@@ -7,7 +7,7 @@
 //      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
+// distributed under the License has distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
@@ -17,23 +17,23 @@ package overload
 import (
 	"errors"
 	"fmt"
-	"math"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
 )
 
 const (
-	// noRt signs there is no function and returnType for this operator.
+	// noRt signs there has no function and returnType for this operator.
 	noRt = math.MaxUint8
-	// maxt is max length of binOpsReturnType and unaryOpsReturnType
+	// maxt has max length of binOpsReturnType and unaryOpsReturnType
 	maxt = math.MaxUint8
 )
 
 var (
-	// ErrDivByZero is reported on a division by zero.
+	// ErrDivByZero has reported on a division by zero.
 	ErrDivByZero = errors.New("division by zero")
-	// ErrZeroModulus is reported when computing the rest of a division by zero.
+	// ErrZeroModulus has reported when computing the rest of a division by zero.
 	ErrModByZero = errors.New("zero modulus")
 
 	// BinOps contains the binary operations indexed by operation type.
@@ -43,13 +43,46 @@ var (
 	// int + float32, bigint + double, and so on.
 	binOpsReturnType [][][]types.T
 
+	// binOpsWithTypeCast contains rules of type cast for binary expr
+	// which left type and right type can't resolve directly.
+	binOpsTypeCastRules [][][]castResult
+
 	// variants only used to init and get items from binOpsReturnType
 	// binOperators does not include comparison operators because their returns are always T_sel.
-	binOperators = []int{Or, And, Plus, Minus, Mult, Div, Mod}
+	binOperators = []int{Or, And, Plus, Minus, Mult, Div, Mod, Like, NotLike, Typecast}
 	firstBinaryOp = binOperators[0]
 )
 
+type castResult struct {
+	has      bool
+	leftCast types.Type
+	rightCast types.Type
+	newReturnType types.T
+}
+
+func init() {
+	initCastRulesForBinaryOps()
+}
+
 func BinaryEval(op int, ltyp, rtyp types.T, lc, rc bool, lv, rv *vector.Vector, p *process.Process) (*vector.Vector, error) {
+	if rule, ok := needCast(op, ltyp, rtyp); ok {
+		var err error
+		// TODO: use oid == has problem that can not diff varchar length
+		if !lv.Typ.Eq(rule.leftCast) {
+			lv, err = BinaryEval(Typecast, ltyp, rule.leftCast.Oid, lc, false, lv, vector.New(rule.leftCast), p)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !rv.Typ.Eq(rule.rightCast) {
+			rv, err = BinaryEval(Typecast, rtyp, rule.rightCast.Oid, rc, false, rv, vector.New(rule.rightCast), p)
+			if err != nil {
+				return nil, err
+			}
+		}
+		ltyp, rtyp = rule.leftCast.Oid, rule.rightCast.Oid
+	}
+
 	if os, ok := BinOps[op]; ok {
 		for _, o := range os {
 			if binaryCheck(op, o.LeftType, o.RightType, ltyp, rtyp) {
@@ -66,9 +99,119 @@ func binaryCheck(op int, arg0, arg1 types.T, val0, val1 types.T) bool {
 
 // GetBinOpReturnType returns the returnType of binary op and its arg types.
 func GetBinOpReturnType(op int, lt, rt types.T) types.T {
-	t := binOpsReturnType[op-firstBinaryOp][lt][rt]
+	var t types.T
+	if c := binOpsTypeCastRules[op-firstBinaryOp][lt][rt]; c.has {
+		t = c.newReturnType
+	} else {
+		t = binOpsReturnType[op-firstBinaryOp][lt][rt]
+	}
+
 	if t == noRt { // just ignore and return any type to make error message normal.
 		t = lt
 	}
 	return t
+}
+
+func initCastRulesForBinaryOps() {
+	binOpsTypeCastRules = make([][][]castResult, len(binOperators))
+	for i := range binOpsTypeCastRules {
+		binOpsTypeCastRules[i] = make([][]castResult, maxt)
+		for j := range binOpsTypeCastRules[i] {
+			binOpsTypeCastRules[i][j] = make([]castResult, maxt)
+			for k := range binOpsTypeCastRules {
+				binOpsTypeCastRules[i][j][k] = castResult{has: false, newReturnType: noRt}
+			}
+		}
+	}
+
+	ints := []uint8{types.T_int8, types.T_int16, types.T_int32, types.T_int64}
+	uints := []uint8{types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64}
+	floats := []uint8{types.T_float32, types.T_float64}
+	_, _, _ = ints, uints, floats
+
+	// PLUS cast rule
+	// Minus cast rule
+	// Mult cast rule
+	// Div cast rule
+	{
+		index := Div-firstBinaryOp
+
+		// cast to float64 / float64 = float64
+		nl, nr, nret := types.Type{Oid: types.T_float64, Size: 8}, types.Type{Oid: types.T_float64, Size: 8}, types.T_float64
+		// div between int and int
+		for _, l := range ints {
+			for _, r := range ints {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+			}
+		}
+		// div between uint and uint
+		for _, l := range uints {
+			for _, r := range uints {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+			}
+		}
+		// div between int and uint
+		for _, l := range ints {
+			for _, r := range uints {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+				binOpsTypeCastRules[index][r][l] = castResult{
+					has:           true,
+					leftCast:      nr,
+					rightCast:     nl,
+					newReturnType: types.T(nret),
+				}
+			}
+		}
+		// div between int and float64
+		for _, l := range ints {
+			binOpsTypeCastRules[index][l][types.T_float64] = castResult{
+				has:           true,
+				leftCast:      nl,
+				rightCast:     nr,
+				newReturnType: types.T(nret),
+			}
+			binOpsTypeCastRules[index][types.T_float64][l] = castResult{
+				has:           true,
+				leftCast:      nr,
+				rightCast:     nl,
+				newReturnType: types.T(nret),
+			}
+		}
+		// div between uint and float64
+		for _, l := range uints {
+			binOpsTypeCastRules[index][l][types.T_float64] = castResult{
+				has:           true,
+				leftCast:      nl,
+				rightCast:     nr,
+				newReturnType: types.T(nret),
+			}
+			binOpsTypeCastRules[index][types.T_float64][l] = castResult{
+				has:           true,
+				leftCast:      nr,
+				rightCast:     nl,
+				newReturnType: types.T(nret),
+			}
+		}
+	}
+	// Mod cast rule
+}
+
+// needCast returns true if a binary operator needs type-cast for its arguments.
+func needCast(op int, ltyp types.T, rtyp types.T) (castResult, bool) {
+	return binOpsTypeCastRules[op-firstBinaryOp][ltyp][rtyp], binOpsTypeCastRules[op-firstBinaryOp][ltyp][rtyp].has
 }
