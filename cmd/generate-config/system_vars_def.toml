@@ -358,120 +358,120 @@ max-days = 0 # maximum log file days kept.
 max-backups = 0 # maximum numbers of old log files to retain.
 
 # Cube Configs
-addr-raft = "localhost:10000"
-addr-client = "localhost:20000"
+addr-raft = "localhost:20001"
+addr-client = "localhost:20002"
 dir-data = "./cube0/node"
 dir-deploy = ""
 version = ""
-githash = ""
-capacity = 0
+githash = "git hash"
+capacity = "100GB"
 use-memory-as-storage = false
-shard-groups = 0
+shard-groups = 1
 
 [replication]
-    max-peer-down-time = "0s"
-    shard-heartbeat-duration = "100ms"
-    store-heartbeat-duration = "1s"
-    shard-split-check-duration = "0s"
-    shard-state-check-duration = "0s"
-    disable-shard-split = false
-    allow-remove-leader = false
-    shard-capacity-bytes = 0
-    shard-split-check-bytes = 0
+max-peer-down-time = "30m"
+shard-heartbeat-duration = "30s"
+store-heartbeat-duration = "1m"
+shard-split-check-duration = "30s"
+shard-state-check-duration = "1m"
+disable-shard-split = false
+allow-remove-leader = false
+shard-capacity-bytes = "96MB"
+shard-split-check-bytes = "64MB"
 
 [snapshot]
-    max-concurrency-snap-chunks = 0
-    snap-chunk-size = 0
+max-concurrency-snap-chunks = 8
+snap-chunk-size = "4MB"
 
 [raft]
-    enable-pre-vote = false
-    tick-interval = "600ms"
-    heartbeat-ticks = 0
-    election-timeout-ticks = 0
-    max-size-per-msg = 0
-    max-inflight-msgs = 0
-    max-entry-bytes = 314572800
-    send-raft-batch-size = 0
-    [raft.raft-log]
-        disable-sync = false
-        compact-duration = "0s"
-        compact-threshold = 0
-        max-allow-transfer-lag = 0
-        ForceCompactCount = 0
-        ForceCompactBytes = 0
-        CompactProtectLag = 0
+enable-pre-vote = true
+tick-interval = "1s"
+heartbeat-ticks = 2
+election-timeout-ticks = 10
+max-size-per-msg = "1MB"
+max-inflight-msgs = 512
+max-entry-bytes = "1MB"
+send-raft-batch-size = 64
+[raft.raft-log]
+disable-sync = false
+compact-duration = "30s"
+compact-threshold = 256
+max-allow-transfer-lag = 2
+ForceCompactCount = 0
+ForceCompactBytes = 0
+CompactProtectLag = 0
 
 [worker]
-    raft-apply-worker = 0
-    raft-msg-worker = 0
-    raft-event-workers = 0
+raft-apply-worker = 32
+raft-msg-worker = 8
+raft-event-worker = 32
 
 [prophet]
-    name = "node0"
-    data-dir = ""
-    rpc-addr = "localhost:30000"
-    rpc-timeout = "0s"
-    storage-node = true
-    external-etcd = [""]
-    lease = 0
+name = "node0"
+data-dir = ""
+rpc-addr = "localhost:10001"
+rpc-timeout = "10s"
+storage-node = true
+external-etcd = ["", "", ""]
+lease = 0
 
-    [prophet.embed-etcd]
-        join = ""
-        client-urls = "http://localhost:40000"
-        peer-urls = "http://localhost:50000"
-        advertise-client-urls = ""
-        advertise-peer-urls = ""
-        initial-cluster = ""
-        initial-cluster-state = ""
-        tick-interval = "0s"
-        election-interval = "0s"
-        enable-prevote = false
-        auto-compaction-mode = ""
-        auto-compaction-retention = ""
-        quota-backend-bytes = 0
+[prophet.embed-etcd]
+join = ""
+client-urls = "http://localhost:2379"
+peer-urls = "http://localhost:2380"
+advertise-client-urls = ""
+advertise-peer-urls = ""
+initial-cluster = ""
+initial-cluster-state = ""
+tick-interval = "500ms"
+election-interval = "3000ms"
+enable-prevote = true
+auto-compaction-mode = "periodic"
+auto-compaction-retention = "1h"
+quota-backend-bytes = "8GB"
 
-    [prophet.schedule]
-        max-snapshot-count = 0
-        max-pending-peer-count = 0
-        max-merge-resource-size = 0
-        max-merge-resource-keys = 0
-        split-merge-interval = "0s"
-        enable-one-way-merge = false
-        enable-cross-table-merge = false
-        patrol-resource-interval = "0s"
-        max-container-down-time = "0s"
-        leader-schedule-limit = 0
-        leader-schedule-policy = ""
-        resource-schedule-limit = 0
-        replica-schedule-limit = 0
-        merge-schedule-limit = 0
-        hot-resource-schedule-limit = 0
-        hot-resource-cache-hits-threshold = 0
-        tolerant-size-ratio = 0.0
-        low-space-ratio = 0.0
-        high-space-ratio = 0.0
-        resource-score-formula-version = ""
-        scheduler-max-waiting-operator = 0
-        enable-remove-down-replica = false
-        enable-replace-offline-replica = false
-        enable-make-up-replica = false
-        enable-remove-extra-replica = false
-        enable-location-replacement = false
-        enable-debug-metrics = false
-        enable-joint-consensus = true
-        container-limit-mode = ""
+[prophet.schedule]
+max-snapshot-count = 3
+max-pending-peer-count = 16
+max-merge-resource-size = 0
+max-merge-resource-keys = 0
+split-merge-interval = "0s"
+enable-one-way-merge = false
+enable-cross-table-merge = false
+patrol-resource-interval = "100ms"
+max-container-down-time = "30m"
+leader-schedule-limit = 4
+leader-schedule-policy = "count"
+resource-schedule-limit = 2048
+replica-schedule-limit = 64
+merge-schedule-limit = 0
+hot-resource-schedule-limit = 4
+hot-resource-cache-hits-threshold = 3
+tolerant-size-ratio = 0.0
+low-space-ratio = 0.8
+high-space-ratio = 0.7
+resource-score-formula-version = ""
+scheduler-max-waiting-operator = 5
+enable-remove-down-replica = true
+enable-replace-offline-replica = true
+enable-make-up-replica = true
+enable-remove-extra-replica = true
+enable-location-replacement = true
+enable-debug-metrics = false
+enable-joint-consensus = true
+container-limit-mode = ""
 
-    [prophet.replication]
-        max-replicas = 1
-        strictly-match-label = false
-        enable-placement-rules = false
-        isolation-level = ""
+[prophet.replication]
+max-replicas = 1
+strictly-match-label = true
+enable-placement-rules = true
+isolation-level = "rack"
 
 [metric]
-    addr = ""
-    interval = 0
-    job = ""
-    instance = ""
+addr = "127.0.0.1:9093"
+interval = 0
+job = "cube"
+instance = "node1"
 
 # Storage Configs
 [meta.conf]
