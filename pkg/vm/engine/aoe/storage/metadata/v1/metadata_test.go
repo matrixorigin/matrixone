@@ -15,9 +15,11 @@ package metadata
 
 import (
 	"fmt"
+	"io/ioutil"
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -795,15 +797,15 @@ func TestShard(t *testing.T) {
 	os.RemoveAll(dir)
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
-	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(4)
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(2)
 	cfg.RotationFileMaxSize = 100 * int(common.M)
 	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
 	defer catalog.Close()
 
-	mockShards := 20
+	mockShards := 10
 	createBlkWorker, _ := ants.NewPool(mockShards)
-	upgradeSegWorker, _ := ants.NewPool(40)
+	upgradeSegWorker, _ := ants.NewPool(20)
 
 	var wg sync.WaitGroup
 
@@ -816,43 +818,36 @@ func TestShard(t *testing.T) {
 	wg.Wait()
 	t.Log(catalog.PString(PPL0))
 	now := time.Now()
+	var viewsMu sync.Mutex
 	views := make(map[uint64]*catalogLogEntry)
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
 		go func(shardId uint64) {
 			defer wg.Done()
-			view := catalog.ShardView(shardId, math.MaxUint64)
-			assert.Equal(t, 1, len(view.Catalog.TableSet))
-			t.Logf("shard-%d: %d", shardId, len(view.Catalog.TableSet))
-			views[shardId] = view
-			name := fmt.Sprintf("ss-%d", shardId)
-			f, err := os.Create(filepath.Join(dir, name))
+			writer := NewShardSnapshotWriter(catalog, dir, shardId, math.MaxUint32)
+			err := writer.PrepareWrite()
 			assert.Nil(t, err)
-			defer f.Close()
-			buf, err := view.Marshal()
+			err = writer.CommitWrite()
 			assert.Nil(t, err)
-			_, err = f.Write(buf)
-			assert.Nil(t, err)
+			viewsMu.Lock()
+			views[shardId] = writer.View
+			viewsMu.Unlock()
 		}(uint64(i))
 	}
 	wg.Wait()
-	for i := 0; i < mockShards; i++ {
-		name := fmt.Sprintf("ss-%d", uint64(i))
-		f, err := os.OpenFile(filepath.Join(dir, name), os.O_RDONLY, 666)
+
+	files, err := ioutil.ReadDir(dir)
+	assert.Nil(t, err)
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".meta") {
+			continue
+		}
+		reader := NewShardSnapshotReader(catalog, filepath.Join(dir, file.Name()))
+		err = reader.PrepareRead()
 		assert.Nil(t, err)
-		defer f.Close()
-		info, err := f.Stat()
-		assert.Nil(t, err)
-		size := info.Size()
-		buf := make([]byte, size)
-		_, err = f.Read(buf)
-		assert.Nil(t, err)
-		view := &catalogLogEntry{}
-		err = view.Unmarshal(buf)
-		assert.Nil(t, err)
-		expected := views[uint64(i)]
-		doCompare(t, expected, view)
-		t.Logf("shardId-%d: %s", uint64(i), view.Catalog.PString(PPL0))
+		expected := views[reader.View.LogRange.ShardId]
+		doCompare(t, expected, reader.View)
+		// t.Logf("shardId-%d: %s", reader.View.LogRange.ShardId, reader.View.Catalog.PString(PPL0))
 	}
 	t.Logf("takes %s", time.Since(now))
 }
