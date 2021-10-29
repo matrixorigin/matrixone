@@ -2,9 +2,87 @@ package metadata
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
+
+type ShardSnapshot struct {
+	Dir            string
+	Name           string
+	View           *catalogLogEntry
+	ShardId, Index uint64
+	Catalog        *Catalog
+}
+
+func NewShardSnapshotWriter(catalog *Catalog, dir string, shardId, index uint64) *ShardSnapshot {
+	ss := &ShardSnapshot{
+		Catalog: catalog,
+		Dir:     dir,
+		ShardId: shardId,
+		Index:   index,
+	}
+	return ss
+}
+
+func NewShardSnapshotReader(catalog *Catalog, name string) *ShardSnapshot {
+	ss := &ShardSnapshot{
+		Catalog: catalog,
+		Name:    name,
+	}
+	return ss
+}
+
+func (ss *ShardSnapshot) PrepareWrite() error {
+	ss.View = ss.Catalog.ShardView(ss.ShardId, ss.Index)
+	return nil
+}
+
+func (ss *ShardSnapshot) makeName() string {
+	return filepath.Join(ss.Dir, fmt.Sprintf("%d-%d-%d.meta", ss.ShardId, ss.Index, time.Now().UnixMicro()))
+}
+
+func (ss *ShardSnapshot) CommitWrite() error {
+	f, err := os.Create(ss.makeName())
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	buf, err := ss.View.Marshal()
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(buf)
+	return err
+}
+
+func (ss *ShardSnapshot) PrepareRead() error {
+	f, err := os.OpenFile(ss.Name, os.O_RDONLY, 666)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	buf := make([]byte, int(info.Size()))
+	ss.View = &catalogLogEntry{}
+	if _, err = f.Read(buf); err != nil {
+		return err
+	}
+	if err = ss.View.Unmarshal(buf); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (ss *ShardSnapshot) ApplyRead() error {
+	// TODO
+	return nil
+}
 
 type shardNode struct {
 	common.SSLLNode

@@ -109,7 +109,7 @@ func (e *Segment) AsCommonID() *common.ID {
 }
 
 // Safe
-func (e *Segment) CommittedView(filter *Filter) *Segment {
+func (e *Segment) fillView(filter *Filter) *Segment {
 	baseEntry := e.UseCommitted(filter.segmentFilter)
 	if baseEntry == nil {
 		return nil
@@ -125,11 +125,14 @@ func (e *Segment) CommittedView(filter *Filter) *Segment {
 	}
 	e.RUnlock()
 	for _, blk := range blks {
-		blkView := blk.CommittedView(filter)
+		blkView := blk.fillView(filter)
 		if blkView == nil {
 			continue
 		}
 		view.BlockSet = append(view.BlockSet, blkView)
+	}
+	if len(view.BlockSet) == 0 {
+		return nil
 	}
 	return view
 }

@@ -49,8 +49,9 @@ type CatalogCfg struct {
 }
 
 type catalogLogEntry struct {
-	Range   common.Range
-	Catalog *Catalog
+	Range    *common.Range
+	Catalog  *Catalog
+	LogRange *LogRange
 }
 
 func newCatalogLogEntry(id uint64) *catalogLogEntry {
@@ -59,8 +60,23 @@ func newCatalogLogEntry(id uint64) *catalogLogEntry {
 			RWMutex:  &sync.RWMutex{},
 			TableSet: make(map[uint64]*Table),
 		},
+		Range: new(common.Range),
 	}
 	e.Range.Right = id
+	return e
+}
+
+func newShardSnapshotLogEntry(shardId, index uint64) *catalogLogEntry {
+	logRange := new(LogRange)
+	logRange.ShardId = shardId
+	logRange.Range.Right = index
+	e := &catalogLogEntry{
+		Catalog: &Catalog{
+			RWMutex:  &sync.RWMutex{},
+			TableSet: make(map[uint64]*Table),
+		},
+		LogRange: logRange,
+	}
 	return e
 }
 
@@ -74,12 +90,17 @@ func (e *catalogLogEntry) Marshal() ([]byte, error) {
 }
 
 func (e *catalogLogEntry) Unmarshal(buf []byte) error {
-	return json.Unmarshal(buf, e)
+	if err := json.Unmarshal(buf, e); err != nil {
+		return err
+	}
+	e.Catalog.RWMutex = new(sync.RWMutex)
+	return nil
 }
 
 func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 	switch eType {
 	case logstore.ETCheckpoint:
+	case ETShardSnapshot:
 		break
 	default:
 		panic("not supported")
@@ -232,31 +253,32 @@ func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
 
 func (catalog *Catalog) ShardView(shardId, index uint64) *catalogLogEntry {
 	filter := new(Filter)
-	commitId := catalog.Store.GetSyncedId()
-	subFilter := newCommitFilter(commitId)
+	subFilter := newCommitFilter()
 	subFilter.AddChecker(createShardChecker(shardId))
 	subFilter.AddChecker(createIndexRangeChecker(index))
 	filter.blockFilter = subFilter
 	filter.segmentFilter = subFilter
-	filter.tableFilter = newCommitFilter(commitId)
+	filter.tableFilter = newCommitFilter()
 	filter.tableFilter.AddChecker(createShardChecker(shardId))
 	filter.tableFilter.AddChecker(createIndexChecker(index))
-
-	return catalog.CommittedView(filter)
+	view := newShardSnapshotLogEntry(shardId, index)
+	catalog.fillView(filter, view.Catalog)
+	return view
 }
 
 func (catalog *Catalog) LatestView() *catalogLogEntry {
 	commitId := catalog.Store.GetSyncedId()
 	filter := new(Filter)
-	filter.tableFilter = newCommitFilter(commitId)
-	filter.segmentFilter = newCommitFilter(commitId)
-	filter.blockFilter = newCommitFilter(commitId)
-	// filter.SetCommitFilter(newCommitFilter(commitId))
-	return catalog.CommittedView(filter)
+	filter.tableFilter = newCommitFilter()
+	filter.tableFilter.AddChecker(createCommitIdChecker(commitId))
+	filter.segmentFilter = filter.tableFilter
+	filter.blockFilter = filter.tableFilter
+	view := newCatalogLogEntry(commitId)
+	catalog.fillView(filter, view.Catalog)
+	return view
 }
 
-func (catalog *Catalog) CommittedView(filter *Filter) *catalogLogEntry {
-	ss := newCatalogLogEntry(filter.tableFilter.LatestId())
+func (catalog *Catalog) fillView(filter *Filter, view *Catalog) {
 	entries := make(map[uint64]*Table)
 	catalog.RLock()
 	for id, entry := range catalog.TableSet {
@@ -264,12 +286,11 @@ func (catalog *Catalog) CommittedView(filter *Filter) *catalogLogEntry {
 	}
 	catalog.RUnlock()
 	for eid, entry := range entries {
-		committed := entry.CommittedView(filter)
+		committed := entry.fillView(filter)
 		if committed != nil {
-			ss.Catalog.TableSet[eid] = committed
+			view.TableSet[eid] = committed
 		}
 	}
-	return ss
 }
 
 func (catalog *Catalog) Close() error {

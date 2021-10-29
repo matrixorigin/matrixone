@@ -15,7 +15,11 @@ package metadata
 
 import (
 	"fmt"
+	"io/ioutil"
+	"math"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,6 +33,47 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
+	return func() {
+		defer wg.Done()
+		err := seg.SimpleUpgrade(nil)
+		assert.Nil(t, err)
+	}
+}
+
+func createBlock(t *testing.T, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
+	return func() {
+		defer wg.Done()
+		idAlloc := common.IdAlloctor{}
+		schema := MockSchema(2)
+		schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAlloc.Alloc())
+		index := shard.Index{
+			ShardId: shardId,
+			Id:      shard.SimpleIndexId(idAlloc.Get()),
+		}
+		tbl, err := catalog.SimpleCreateTable(schema, &index)
+		assert.Nil(t, err)
+		var prev *Block
+		for i := 0; i < blocks; i++ {
+			blk := tbl.SimpleGetOrCreateNextBlock(prev)
+			blk.SetCount(tbl.Schema.BlockMaxRows)
+			blk.SetIndex(LogIndex{
+				ShardId:  shardId,
+				Id:       shard.SimpleIndexId(common.NextGlobalSeqNum()),
+				Count:    tbl.Schema.BlockMaxRows,
+				Capacity: tbl.Schema.BlockMaxRows,
+			})
+			err := blk.SimpleUpgrade(nil)
+			assert.Nil(t, err)
+			if prev != nil && blk.Segment != prev.Segment {
+				wg.Add(1)
+				nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+			}
+			prev = blk
+		}
+	}
+}
 
 func TestTable(t *testing.T) {
 	cfg := new(CatalogCfg)
@@ -335,11 +380,9 @@ func TestReplay(t *testing.T) {
 	dir := "/tmp/testreplay"
 	os.RemoveAll(dir)
 
-	syncerInterval := time.Duration(2) * time.Millisecond
 	hbInterval := time.Duration(4) * time.Millisecond
 	if invariants.RaceEnabled {
 		hbInterval *= 3
-		syncerInterval *= 3
 	}
 
 	cfg := new(CatalogCfg)
@@ -349,8 +392,8 @@ func TestReplay(t *testing.T) {
 	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
 
-	mockTbls := 5
-	createBlkWorker, _ := ants.NewPool(mockTbls)
+	mockShards := 5
+	createBlkWorker, _ := ants.NewPool(mockShards)
 	upgradeSegWorker, _ := ants.NewPool(4)
 
 	getSegmentedIdWorker := ops.NewHeartBeater(hbInterval, &mockGetSegmentedHB{catalog: catalog, t: t})
@@ -360,42 +403,9 @@ func TestReplay(t *testing.T) {
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
-	upgradeSegHandle := func(seg *Segment) func() {
-		return func() {
-			defer wg.Done()
-			err := seg.SimpleUpgrade(nil)
-			assert.Nil(t, err)
-		}
-	}
-
-	createBlkHandle := func() {
-		defer wg.Done()
-		schema := MockSchema(2)
-		schema.Name = fmt.Sprintf("mock%d", common.NextGlobalSeqNum())
-		tbl, err := catalog.SimpleCreateTable(schema, nil)
-		assert.Nil(t, err)
-		var prev *Block
-		for i := 0; i < int(mockBlocks); i++ {
-			blk := tbl.SimpleGetOrCreateNextBlock(prev)
-			blk.SetCount(tbl.Schema.BlockMaxRows)
-			blk.SetIndex(LogIndex{
-				Id:       shard.SimpleIndexId(common.NextGlobalSeqNum()),
-				Count:    tbl.Schema.BlockMaxRows,
-				Capacity: tbl.Schema.BlockMaxRows,
-			})
-			err := blk.SimpleUpgrade(nil)
-			assert.Nil(t, err)
-			if prev != nil && blk.Segment != prev.Segment {
-				wg.Add(1)
-				upgradeSegWorker.Submit(upgradeSegHandle(prev.Segment))
-			}
-			prev = blk
-		}
-	}
-
-	for i := 0; i < mockTbls; i++ {
+	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlkHandle)
+		createBlkWorker.Submit(createBlock(t, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
@@ -651,10 +661,12 @@ func TestUpgrade(t *testing.T) {
 
 	viewId := uint64(40)
 	filter := new(Filter)
-	filter.tableFilter = newCommitFilter(viewId)
-	filter.segmentFilter = newCommitFilter(viewId)
-	filter.blockFilter = newCommitFilter(viewId)
-	view := catalog.CommittedView(filter)
+	filter.tableFilter = newCommitFilter()
+	filter.tableFilter.AddChecker(createCommitIdChecker(viewId))
+	filter.segmentFilter = filter.tableFilter
+	filter.blockFilter = filter.tableFilter
+	view := newCatalogLogEntry(viewId)
+	catalog.fillView(filter, view.Catalog)
 	for _, tbl := range view.Catalog.TableSet {
 		t.Log(len(tbl.SegmentSet))
 	}
@@ -768,4 +780,74 @@ func TestShardNode(t *testing.T) {
 	}
 	assert.Equal(t, gn2, sn.GetGroup())
 	t.Log(sn.PString(PPL0))
+}
+
+func doCompare(t *testing.T, expected, actual *catalogLogEntry) {
+	assert.Equal(t, expected.LogRange, actual.LogRange)
+	assert.Equal(t, len(expected.Catalog.TableSet), len(actual.Catalog.TableSet))
+	for _, expectedTable := range expected.Catalog.TableSet {
+		actualTable := actual.Catalog.TableSet[expectedTable.Id]
+		assert.Equal(t, len(expectedTable.SegmentSet), len(actualTable.SegmentSet))
+	}
+	assert.Equal(t, len(expected.Catalog.TableSet), len(expected.Catalog.TableSet))
+}
+
+func TestShard(t *testing.T) {
+	dir := "/tmp/metadata/testshard"
+	os.RemoveAll(dir)
+	cfg := new(CatalogCfg)
+	cfg.Dir = dir
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(2)
+	cfg.RotationFileMaxSize = 100 * int(common.M)
+	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
+	catalog.Start()
+	defer catalog.Close()
+
+	mockShards := 10
+	createBlkWorker, _ := ants.NewPool(mockShards)
+	upgradeSegWorker, _ := ants.NewPool(20)
+
+	var wg sync.WaitGroup
+
+	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
+
+	for i := 0; i < mockShards; i++ {
+		wg.Add(1)
+		createBlkWorker.Submit(createBlock(t, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+	}
+	wg.Wait()
+	t.Log(catalog.PString(PPL0))
+	now := time.Now()
+	var viewsMu sync.Mutex
+	views := make(map[uint64]*catalogLogEntry)
+	for i := 0; i < mockShards; i++ {
+		wg.Add(1)
+		go func(shardId uint64) {
+			defer wg.Done()
+			writer := NewShardSnapshotWriter(catalog, dir, shardId, math.MaxUint32)
+			err := writer.PrepareWrite()
+			assert.Nil(t, err)
+			err = writer.CommitWrite()
+			assert.Nil(t, err)
+			viewsMu.Lock()
+			views[shardId] = writer.View
+			viewsMu.Unlock()
+		}(uint64(i))
+	}
+	wg.Wait()
+
+	files, err := ioutil.ReadDir(dir)
+	assert.Nil(t, err)
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".meta") {
+			continue
+		}
+		reader := NewShardSnapshotReader(catalog, filepath.Join(dir, file.Name()))
+		err = reader.PrepareRead()
+		assert.Nil(t, err)
+		expected := views[reader.View.LogRange.ShardId]
+		doCompare(t, expected, reader.View)
+		// t.Logf("shardId-%d: %s", reader.View.LogRange.ShardId, reader.View.Catalog.PString(PPL0))
+	}
+	t.Logf("takes %s", time.Since(now))
 }
