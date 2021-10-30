@@ -803,28 +803,6 @@ func TestCatalog2(t *testing.T) {
 	catalog.Close()
 }
 
-func TestShardNode(t *testing.T) {
-	wrapper := newCatalogLogEntry(0)
-	catalog := wrapper.Catalog
-	sidAlloc := common.IdAlloctor{}
-	tidAlloc := common.IdAlloctor{}
-	epochAlloc := common.IdAlloctor{}
-	sn := newShardNode(catalog, sidAlloc.Alloc())
-	gn1 := sn.CreateNode(epochAlloc.Alloc())
-	gn1Cnt := 3
-	for i := 0; i < gn1Cnt; i++ {
-		gn1.Add(tidAlloc.Alloc())
-	}
-	assert.Equal(t, gn1, sn.GetGroup())
-	gn2 := sn.CreateNode(epochAlloc.Alloc())
-	gn2Cnt := 4
-	for i := 0; i < gn2Cnt; i++ {
-		gn2.Add(tidAlloc.Alloc())
-	}
-	assert.Equal(t, gn2, sn.GetGroup())
-	t.Log(sn.PString(PPL0))
-}
-
 func TestShard(t *testing.T) {
 	dir := "/tmp/metadata/testshard"
 	os.RemoveAll(dir)

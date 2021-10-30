@@ -128,7 +128,6 @@ type Catalog struct {
 	commitMu        sync.RWMutex          `json:"-"`
 	visiableMu      sync.RWMutex          `json:"-"`
 	nameNodes       map[string]*tableNode `json:"-"`
-	shardNodes      map[uint64]*shardNode `json:"-"`
 
 	TableSet map[uint64]*Table
 }
@@ -145,14 +144,13 @@ func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awa
 
 func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
 	catalog := &Catalog{
-		RWMutex:    mu,
-		Cfg:        cfg,
-		TableSet:   make(map[uint64]*Table),
-		nameNodes:  make(map[string]*tableNode),
-		shardNodes: make(map[uint64]*shardNode),
-		nameIndex:  btree.New(2),
-		Store:      store,
-		IndexWal:   indexWal,
+		RWMutex:   mu,
+		Cfg:       cfg,
+		TableSet:  make(map[uint64]*Table),
+		nameNodes: make(map[string]*tableNode),
+		nameIndex: btree.New(2),
+		Store:     store,
+		IndexWal:  indexWal,
 	}
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewSafeQueue(100000, 100, nil)
@@ -170,12 +168,11 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
 	}
 	catalog := &Catalog{
-		RWMutex:    mu,
-		Cfg:        cfg,
-		TableSet:   make(map[uint64]*Table),
-		nameNodes:  make(map[string]*tableNode),
-		shardNodes: make(map[uint64]*shardNode),
-		nameIndex:  btree.New(2),
+		RWMutex:   mu,
+		Cfg:       cfg,
+		TableSet:  make(map[uint64]*Table),
+		nameNodes: make(map[string]*tableNode),
+		nameIndex: btree.New(2),
 	}
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
@@ -293,20 +290,6 @@ func (catalog *Catalog) fillView(filter *Filter, view *Catalog) {
 			view.TableSet[eid] = committed
 		}
 	}
-}
-
-func (catalog *Catalog) ReplaceShard(shardId uint64, view *Catalog) error {
-	catalog.Lock()
-	// node := catalog.shardNodes[shardId]
-	// if node == nil {
-	// 	catalog.Unlock()
-	// 	return ShardNotFoundErr
-	// }
-	// for _, table := range view.TableSet {
-	// staleTable := catalog.Ta
-	// }
-	catalog.Unlock()
-	return nil
 }
 
 func (catalog *Catalog) RecurLoop(processor LoopProcessor) error {
@@ -648,11 +631,6 @@ func (catalog *Catalog) PString(level PPLevel) string {
 	} else {
 		s = fmt.Sprintf("%s\n}", s)
 	}
-	if level >= PPL1 {
-		for _, node := range catalog.shardNodes {
-			s = fmt.Sprintf("%s\n%s", s, node.PString(level))
-		}
-	}
 	catalog.RUnlock()
 	return s
 }
@@ -681,17 +659,6 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 	return logEntry
 }
 
-func (catalog *Catalog) addIntoShard(table *Table) {
-	shardId := table.GetShardId()
-	n := catalog.shardNodes[shardId]
-	if n == nil {
-		n = newShardNode(catalog, shardId)
-		n.CreateNode(uint64(0))
-		catalog.shardNodes[shardId] = n
-	}
-	n.GetGroup().Add(table.Id)
-}
-
 func (catalog *Catalog) onNewTable(entry *Table) error {
 	nn := catalog.nameNodes[entry.Schema.Name]
 	if nn != nil {
@@ -701,7 +668,6 @@ func (catalog *Catalog) onNewTable(entry *Table) error {
 		}
 		catalog.TableSet[entry.Id] = entry
 		nn.CreateNode(entry.Id)
-		catalog.addIntoShard(entry)
 	} else {
 		catalog.TableSet[entry.Id] = entry
 
@@ -710,7 +676,6 @@ func (catalog *Catalog) onNewTable(entry *Table) error {
 		catalog.nameIndex.ReplaceOrInsert(nn)
 
 		nn.CreateNode(entry.Id)
-		catalog.addIntoShard(entry)
 	}
 	return nil
 }
