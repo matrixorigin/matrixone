@@ -107,6 +107,27 @@ func (e *Table) GetFlushTS() int64 {
 	return atomic.LoadInt64(&e.FlushTS)
 }
 
+func (e *Table) prepareReplace(ctx *replaceTableCtx) (LogEntry, error) {
+	cInfo := &CommitInfo{
+		CommitId: e.Catalog.NextUncommitId(),
+		Op:       OpReplaced,
+		LogIndex: ctx.exIndex,
+		SSLLNode: *common.NewSSLLNode(),
+	}
+	e.Lock()
+	defer e.Unlock()
+	if e.IsHardDeletedLocked() {
+		ctx.discard = true
+		return nil, nil
+	}
+	e.onNewCommit(cInfo)
+	if ctx.inTran {
+		return nil, nil
+	}
+	logEntry := e.Catalog.prepareCommitEntry(e, ETShardUpgradeReplaced, e)
+	return logEntry, nil
+}
+
 // Threadsafe
 // It is used to take a snapshot of table base on a commit id. It goes through
 // the version chain to find a "safe" commit version and create a view base on
@@ -259,7 +280,7 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 		}
 		buf, _ = entry.Marshal()
 	default:
-		panic("not supported")
+		panic(fmt.Sprintf("not supported: %d", eType))
 	}
 	logEntry := logstore.NewAsyncBaseEntry()
 	logEntry.Meta.SetType(eType)
@@ -291,6 +312,23 @@ func (e *Table) GetReplayIndex() *LogIndex {
 		}
 	}
 	return nil
+}
+
+func (e *Table) RecurLoopLocked(processor LoopProcessor) error {
+	var err error
+	for _, segment := range e.SegmentSet {
+		if err = processor.OnSegment(segment); err != nil {
+			return err
+		}
+		segment.RLock()
+		defer segment.RUnlock()
+		for _, block := range segment.BlockSet {
+			if err = processor.OnBlock(block); err != nil {
+				return err
+			}
+		}
+	}
+	return err
 }
 
 // Safe

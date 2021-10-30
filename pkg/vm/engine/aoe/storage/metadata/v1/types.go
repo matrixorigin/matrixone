@@ -56,6 +56,7 @@ const (
 	OpUpgradeClose
 	OpUpgradeSorted
 	OpSoftDelete
+	OpReplaced
 	OpHardDelete
 )
 
@@ -65,6 +66,7 @@ var OpNames = map[OpT]string{
 	OpUpgradeClose:  "UpgradeClose",
 	OpUpgradeSorted: "UpgradeSorted",
 	OpSoftDelete:    "SoftDelete",
+	OpReplaced:      "Replaced",
 	OpHardDelete:    "HardDelete",
 }
 
@@ -135,8 +137,15 @@ func (info *CommitInfo) IsSoftDeleted() bool {
 	return info.Op == OpSoftDelete
 }
 
+func (info *CommitInfo) IsDeleted() bool {
+	return info.Op >= OpSoftDelete
+}
+
 func (info *CommitInfo) PString(level PPLevel) string {
-	s := fmt.Sprintf("CInfo(%s): ", info.LogRange.String())
+	s := "<CInfo>"
+	if info.LogRange != nil {
+		s = fmt.Sprintf("%s%s: ", s, info.LogRange.String())
+	}
 	var curr, prev common.ISSLLNode
 	curr = info
 	for curr != nil {
@@ -145,11 +154,9 @@ func (info *CommitInfo) PString(level PPLevel) string {
 		}
 		cInfo := curr.(*CommitInfo)
 		s = fmt.Sprintf("%s(%s,cid-%d", s, OpName(cInfo.Op), cInfo.CommitId)
-		if level >= PPL1 {
-			id, _ := info.GetAppliedIndex()
-			s = fmt.Sprintf("%s,%d-%s)", s, id, cInfo.LogIndex.String())
-		} else {
-			s = fmt.Sprintf("%s)", s)
+		id, _ := info.GetAppliedIndex()
+		if cInfo.LogIndex != nil {
+			s = fmt.Sprintf("%s,%d-s%d-%s)", s, id, cInfo.LogIndex.ShardId, cInfo.LogIndex.Id.String())
 		}
 		// s = fmt.Sprintf("%s(%s,%d,%d)", s, OpName(info.Op), info.TranId-MinUncommitId, info.CommitId)
 		prev = curr

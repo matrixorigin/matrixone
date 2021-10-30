@@ -133,12 +133,15 @@ func (e *BaseEntry) UseCommitted(filter *commitFilter) *BaseEntry {
 	curr = e.CommitInfo
 	for curr != nil {
 		info := curr.(*CommitInfo)
-		if filter.Eval(info) {
+		if filter.Eval(info) && !filter.EvalStop(info) {
+			// if filter.Eval(info)  {
 			cInfo := *info
 			return &BaseEntry{
 				Id:         e.Id,
 				CommitInfo: &cInfo,
 			}
+		} else if filter.EvalStop(info) {
+			return nil
 		}
 		curr = curr.GetNext()
 	}
@@ -151,13 +154,13 @@ func (e *BaseEntry) IsSoftDeletedLocked() bool {
 }
 
 func (e *BaseEntry) IsDeletedLocked() bool {
-	return e.IsSoftDeletedLocked() || e.IsHardDeletedLocked()
+	return e.CommitInfo.IsDeleted()
 }
 
 func (e *BaseEntry) IsDeleted() bool {
 	e.RLock()
 	defer e.RUnlock()
-	return e.IsSoftDeletedLocked() || e.IsHardDeletedLocked()
+	return e.IsDeletedLocked()
 }
 
 func (e *BaseEntry) IsSoftDeleted() bool {

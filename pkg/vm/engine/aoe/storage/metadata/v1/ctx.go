@@ -16,6 +16,12 @@ package metadata
 
 type writeCtx struct {
 	exIndex *LogIndex
+	inTran  bool
+}
+
+type addTableCtx struct {
+	writeCtx
+	table *Table
 }
 
 type createTableCtx struct {
@@ -57,6 +63,30 @@ type upgradeBlockCtx struct {
 	writeCtx
 	block    *Block
 	exIndice []*LogIndex
+}
+
+type replaceTableCtx struct {
+	writeCtx
+	table   *Table
+	discard bool
+}
+
+type replaceShardCtx struct {
+	writeCtx
+	view *catalogLogEntry
+	news []*addTableCtx
+	olds []*replaceTableCtx
+	// news map[uint64]*createTableCtx
+	// olds map[uint64]*replaceTableCtx
+}
+
+func newAddTableCtx(table *Table, inTran bool) *addTableCtx {
+	return &addTableCtx{
+		writeCtx: writeCtx{
+			inTran: inTran,
+		},
+		table: table,
+	}
 }
 
 func newCreateTableCtx(schema *Schema, exIndex *LogIndex) *createTableCtx {
@@ -107,4 +137,36 @@ func newUpgradeBlockCtx(block *Block, exIndice []*LogIndex) *upgradeBlockCtx {
 		block:    block,
 		exIndice: exIndice,
 	}
+}
+
+func newReplaceTableCtx(table *Table, exIndex *LogIndex, inTran bool) *replaceTableCtx {
+	return &replaceTableCtx{
+		table: table,
+		writeCtx: writeCtx{
+			inTran:  inTran,
+			exIndex: exIndex,
+		},
+	}
+}
+
+func newReplaceShardCtx(view *catalogLogEntry) *replaceShardCtx {
+	ctx := &replaceShardCtx{
+		writeCtx: writeCtx{
+			inTran: true,
+		},
+		view: view,
+		news: make([]*addTableCtx, 0, 10),
+		olds: make([]*replaceTableCtx, 0, 10),
+		// news: make(map[uint64]*createTableCtx),
+		// olds: make(map[uint64]*replaceTableCtx),
+	}
+	return ctx
+}
+
+func (ctx *replaceShardCtx) addNew(nCtx *addTableCtx) {
+	ctx.news = append(ctx.news, nCtx)
+}
+
+func (ctx *replaceShardCtx) addReplace(oCtx *replaceTableCtx) {
+	ctx.olds = append(ctx.olds, oCtx)
 }

@@ -35,6 +35,8 @@ const (
 	ETUpgradeBlock
 	ETDropBlock
 	ETShardSnapshot
+	ETShardUpgradeReplaced
+	ETShardUpgradeAdd
 )
 
 func IsSyncDDLEntryType(et LogEntryType) bool {

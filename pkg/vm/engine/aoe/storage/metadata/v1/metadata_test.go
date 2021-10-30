@@ -16,7 +16,6 @@ package metadata
 import (
 	"fmt"
 	"io/ioutil"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +33,38 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+type mockIdAllocator struct {
+	sync.RWMutex
+	driver map[uint64]*common.IdAlloctor
+}
+
+func newMockAllocator() *mockIdAllocator {
+	return &mockIdAllocator{
+		driver: make(map[uint64]*common.IdAlloctor),
+	}
+}
+
+func (alloc *mockIdAllocator) get(shardId uint64) uint64 {
+	alloc.RLock()
+	defer alloc.RUnlock()
+	shardAlloc := alloc.driver[shardId]
+	if shardAlloc == nil {
+		return 0
+	}
+	return shardAlloc.Get()
+}
+
+func (alloc *mockIdAllocator) alloc(shardId uint64) uint64 {
+	alloc.Lock()
+	defer alloc.Unlock()
+	shardAlloc := alloc.driver[shardId]
+	if shardAlloc == nil {
+		shardAlloc = new(common.IdAlloctor)
+		alloc.driver[shardId] = shardAlloc
+	}
+	return shardAlloc.Alloc()
+}
+
 func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	return func() {
 		defer wg.Done()
@@ -42,37 +73,48 @@ func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	}
 }
 
-func createBlock(t *testing.T, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
+func createBlock(t *testing.T, tables int, idAllocator *mockIdAllocator, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
 	return func() {
 		defer wg.Done()
-		idAlloc := common.IdAlloctor{}
-		schema := MockSchema(2)
-		schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAlloc.Alloc())
-		index := shard.Index{
-			ShardId: shardId,
-			Id:      shard.SimpleIndexId(idAlloc.Get()),
-		}
-		tbl, err := catalog.SimpleCreateTable(schema, &index)
-		assert.Nil(t, err)
-		var prev *Block
-		for i := 0; i < blocks; i++ {
-			blk := tbl.SimpleGetOrCreateNextBlock(prev)
-			blk.SetCount(tbl.Schema.BlockMaxRows)
-			blk.SetIndex(LogIndex{
-				ShardId:  shardId,
-				Id:       shard.SimpleIndexId(common.NextGlobalSeqNum()),
-				Count:    tbl.Schema.BlockMaxRows,
-				Capacity: tbl.Schema.BlockMaxRows,
-			})
-			err := blk.SimpleUpgrade(nil)
-			assert.Nil(t, err)
-			if prev != nil && blk.Segment != prev.Segment {
-				wg.Add(1)
-				nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+		for k := 0; k < tables; k++ {
+			schema := MockSchema(2)
+			schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAllocator.alloc(shardId))
+			index := shard.Index{
+				ShardId: shardId,
+				Id:      shard.SimpleIndexId(idAllocator.get(shardId)),
 			}
-			prev = blk
+			tbl, err := catalog.SimpleCreateTable(schema, &index)
+			assert.Nil(t, err)
+			var prev *Block
+			for i := 0; i < blocks; i++ {
+				blk := tbl.SimpleGetOrCreateNextBlock(prev)
+				blk.SetCount(tbl.Schema.BlockMaxRows)
+				blk.SetIndex(LogIndex{
+					ShardId:  shardId,
+					Id:       shard.SimpleIndexId(idAllocator.alloc(shardId)),
+					Count:    tbl.Schema.BlockMaxRows,
+					Capacity: tbl.Schema.BlockMaxRows,
+				})
+				err := blk.SimpleUpgrade(nil)
+				assert.Nil(t, err)
+				if prev != nil && blk.Segment != prev.Segment {
+					wg.Add(1)
+					nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+				}
+				prev = blk
+			}
 		}
 	}
+}
+
+func doCompare(t *testing.T, expected, actual *catalogLogEntry) {
+	assert.Equal(t, expected.LogRange, actual.LogRange)
+	assert.Equal(t, len(expected.Catalog.TableSet), len(actual.Catalog.TableSet))
+	for _, expectedTable := range expected.Catalog.TableSet {
+		actualTable := actual.Catalog.TableSet[expectedTable.Id]
+		assert.Equal(t, len(expectedTable.SegmentSet), len(actualTable.SegmentSet))
+	}
+	assert.Equal(t, len(expected.Catalog.TableSet), len(expected.Catalog.TableSet))
 }
 
 func TestTable(t *testing.T) {
@@ -202,6 +244,8 @@ func TestDropTable(t *testing.T) {
 
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.NotNil(t, err)
+
+	catalog.HardDeleteTable(t1.Id)
 
 	schema2 := MockSchema(3)
 	schema2.Name = schema1.Name
@@ -402,10 +446,11 @@ func TestReplay(t *testing.T) {
 	var wg sync.WaitGroup
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
+	idAllocator := newMockAllocator()
 
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, 1, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
@@ -760,38 +805,6 @@ func TestCatalog2(t *testing.T) {
 	catalog.Close()
 }
 
-func TestShardNode(t *testing.T) {
-	wrapper := newCatalogLogEntry(0)
-	catalog := wrapper.Catalog
-	sidAlloc := common.IdAlloctor{}
-	tidAlloc := common.IdAlloctor{}
-	epochAlloc := common.IdAlloctor{}
-	sn := newShardNode(catalog, sidAlloc.Alloc())
-	gn1 := sn.CreateNode(epochAlloc.Alloc())
-	gn1Cnt := 3
-	for i := 0; i < gn1Cnt; i++ {
-		gn1.Add(tidAlloc.Alloc())
-	}
-	assert.Equal(t, gn1, sn.GetGroup())
-	gn2 := sn.CreateNode(epochAlloc.Alloc())
-	gn2Cnt := 4
-	for i := 0; i < gn2Cnt; i++ {
-		gn2.Add(tidAlloc.Alloc())
-	}
-	assert.Equal(t, gn2, sn.GetGroup())
-	t.Log(sn.PString(PPL0))
-}
-
-func doCompare(t *testing.T, expected, actual *catalogLogEntry) {
-	assert.Equal(t, expected.LogRange, actual.LogRange)
-	assert.Equal(t, len(expected.Catalog.TableSet), len(actual.Catalog.TableSet))
-	for _, expectedTable := range expected.Catalog.TableSet {
-		actualTable := actual.Catalog.TableSet[expectedTable.Id]
-		assert.Equal(t, len(expectedTable.SegmentSet), len(actualTable.SegmentSet))
-	}
-	assert.Equal(t, len(expected.Catalog.TableSet), len(expected.Catalog.TableSet))
-}
-
 func TestShard(t *testing.T) {
 	dir := "/tmp/metadata/testshard"
 	os.RemoveAll(dir)
@@ -803,34 +816,38 @@ func TestShard(t *testing.T) {
 	catalog.Start()
 	defer catalog.Close()
 
-	mockShards := 10
+	mockShards := 4
 	createBlkWorker, _ := ants.NewPool(mockShards)
 	upgradeSegWorker, _ := ants.NewPool(20)
 
+	now := time.Now()
 	var wg sync.WaitGroup
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
 
+	idAllocator := newMockAllocator()
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, 2, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
+	t.Logf("mock metadata takes: %s", time.Since(now))
 	t.Log(catalog.PString(PPL0))
-	now := time.Now()
+
+	now = time.Now()
 	var viewsMu sync.Mutex
 	views := make(map[uint64]*catalogLogEntry)
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
 		go func(shardId uint64) {
 			defer wg.Done()
-			writer := NewShardSnapshotWriter(catalog, dir, shardId, math.MaxUint32)
+			writer := NewShardSSWriter(catalog, dir, shardId, idAllocator.get(shardId))
 			err := writer.PrepareWrite()
 			assert.Nil(t, err)
 			err = writer.CommitWrite()
 			assert.Nil(t, err)
 			viewsMu.Lock()
-			views[shardId] = writer.View
+			views[shardId] = writer.view
 			viewsMu.Unlock()
 		}(uint64(i))
 	}
@@ -842,12 +859,38 @@ func TestShard(t *testing.T) {
 		if !strings.HasSuffix(file.Name(), ".meta") {
 			continue
 		}
-		reader := NewShardSnapshotReader(catalog, filepath.Join(dir, file.Name()))
+		reader := NewShardSSReader(catalog, filepath.Join(dir, file.Name()))
 		err = reader.PrepareRead()
 		assert.Nil(t, err)
-		expected := views[reader.View.LogRange.ShardId]
-		doCompare(t, expected, reader.View)
+		expected := views[reader.view.LogRange.ShardId]
+		doCompare(t, expected, reader.view)
+		err = reader.CommitRead()
+		assert.Nil(t, err)
 		// t.Logf("shardId-%d: %s", reader.View.LogRange.ShardId, reader.View.Catalog.PString(PPL0))
 	}
 	t.Logf("takes %s", time.Since(now))
+	t.Log(catalog.PString(PPL0))
+
+	for shardId, allocator := range idAllocator.driver {
+		writer := NewShardSSWriter(catalog, dir, shardId, allocator.Get())
+		err = writer.PrepareWrite()
+		assert.Nil(t, err)
+		checker := func(info *CommitInfo) bool {
+			// logutil.Infof("shardId-%d, %s", shardId, info.PString(PPL0))
+			assert.Equal(t, shardId, info.GetShardId())
+			return true
+		}
+		processor := new(loopProcessor)
+		processor.BlockFn = func(block *Block) error {
+			checker(block.GetCommit())
+			return nil
+		}
+		processor.TableFn = func(table *Table) error {
+			checker(table.GetCommit())
+			return nil
+		}
+		writer.view.Catalog.RecurLoop(processor)
+		t.Log(writer.view.Catalog.PString(PPL0))
+	}
+
 }
