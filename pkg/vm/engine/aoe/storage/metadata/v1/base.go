@@ -151,13 +151,13 @@ func (e *BaseEntry) IsSoftDeletedLocked() bool {
 }
 
 func (e *BaseEntry) IsDeletedLocked() bool {
-	return e.IsSoftDeletedLocked() || e.IsHardDeletedLocked()
+	return e.CommitInfo.IsDeleted()
 }
 
 func (e *BaseEntry) IsDeleted() bool {
 	e.RLock()
 	defer e.RUnlock()
-	return e.IsSoftDeletedLocked() || e.IsHardDeletedLocked()
+	return e.IsDeletedLocked()
 }
 
 func (e *BaseEntry) IsSoftDeleted() bool {

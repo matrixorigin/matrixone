@@ -243,6 +243,8 @@ func TestDropTable(t *testing.T) {
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.NotNil(t, err)
 
+	catalog.HardDeleteTable(t1.Id)
+
 	schema2 := MockSchema(3)
 	schema2.Name = schema1.Name
 	t2, err := catalog.SimpleCreateTable(schema2, nil)
@@ -879,8 +881,13 @@ func TestShard(t *testing.T) {
 		assert.Nil(t, err)
 		expected := views[reader.View.LogRange.ShardId]
 		doCompare(t, expected, reader.View)
+		err = reader.Apply()
+		assert.Nil(t, err)
 		// t.Logf("shardId-%d: %s", reader.View.LogRange.ShardId, reader.View.Catalog.PString(PPL0))
 	}
 	t.Logf("takes %s", time.Since(now))
-	t.Log(common.GPool.String())
+	t.Log(catalog.PString(PPL0))
+	for _, node := range catalog.nameNodes {
+		t.Log(node.PString(PPL1))
+	}
 }

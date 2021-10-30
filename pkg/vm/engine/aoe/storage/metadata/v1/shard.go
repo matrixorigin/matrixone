@@ -1,12 +1,14 @@
 package metadata
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
 type ShardSnapshot struct {
@@ -78,12 +80,13 @@ func (ss *ShardSnapshot) PrepareRead() error {
 	if err = ss.View.Unmarshal(mnode.Buf[:size]); err != nil {
 		return err
 	}
-	return nil
+	processor := newReAllocIdProcessor(&ss.Catalog.Sequence)
+	err = ss.View.Catalog.RecurLoop(processor)
+	return err
 }
 
-func (ss *ShardSnapshot) ApplyRead() error {
-	// TODO
-	return nil
+func (ss *ShardSnapshot) Apply() error {
+	return ss.Catalog.SimpleReplayNewShard(ss.View)
 }
 
 type shardNode struct {
@@ -180,4 +183,89 @@ func (n *groupNode) GetEntry(catalog *Catalog, id uint64) *Table {
 		return nil
 	}
 	return catalog.TableSet[id]
+}
+
+type shardLogEntry struct {
+	loopProcessor `json:"-"`
+	commitId      uint64 `json:"-"`
+	OldShard      []*replaceTableCtx
+	NewShard      []*addTableCtx
+}
+
+func newShardLogEntry(olds []*replaceTableCtx, news []*addTableCtx) *shardLogEntry {
+	e := &shardLogEntry{
+		OldShard: olds,
+		NewShard: news,
+	}
+	e.TableFn = e.onTable
+	e.SegmentFn = e.onSegment
+	e.BlockFn = e.onBlock
+	return e
+}
+
+func (e *shardLogEntry) onTable(table *Table) error {
+	table.Lock()
+	defer table.Unlock()
+	table.CommitLocked(e.commitId)
+	return nil
+}
+
+func (e *shardLogEntry) onSegment(segment *Segment) error {
+	segment.Lock()
+	defer segment.Unlock()
+	segment.CommitLocked(e.commitId)
+	return nil
+}
+
+func (e *shardLogEntry) onBlock(block *Block) error {
+	block.Lock()
+	defer block.Unlock()
+	block.CommitLocked(e.commitId)
+	return nil
+}
+
+func (e *shardLogEntry) Lock()   {}
+func (e *shardLogEntry) Unlock() {}
+
+func (e *shardLogEntry) CommitLocked(commitId uint64) {
+	for _, ctx := range e.OldShard {
+		ctx.table.Lock()
+		ctx.table.CommitLocked(commitId)
+		ctx.table.Unlock()
+	}
+	e.commitId = commitId
+	for _, ctx := range e.NewShard {
+		ctx.table.RLock()
+		ctx.table.RecurLoopLocked(e)
+		ctx.table.RUnlock()
+		ctx.table.Lock()
+		ctx.table.CommitLocked(commitId)
+		ctx.table.Unlock()
+	}
+}
+
+func (e *shardLogEntry) Marshal() ([]byte, error) {
+	buf, err := json.Marshal(e)
+	return buf, err
+}
+
+func (e *shardLogEntry) Unmarshal(buf []byte) error {
+	if err := json.Unmarshal(buf, e); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *shardLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
+	switch eType {
+	case ETShardSnapshot:
+		break
+	default:
+		panic("not supported")
+	}
+	buf, _ := e.Marshal()
+	logEntry := logstore.NewAsyncBaseEntry()
+	logEntry.Meta.SetType(eType)
+	logEntry.Unmarshal(buf)
+	return logEntry
 }

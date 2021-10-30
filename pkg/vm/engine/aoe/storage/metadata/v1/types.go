@@ -56,6 +56,7 @@ const (
 	OpUpgradeClose
 	OpUpgradeSorted
 	OpSoftDelete
+	OpReplaced
 	OpHardDelete
 )
 
@@ -65,6 +66,7 @@ var OpNames = map[OpT]string{
 	OpUpgradeClose:  "UpgradeClose",
 	OpUpgradeSorted: "UpgradeSorted",
 	OpSoftDelete:    "SoftDelete",
+	OpReplaced:      "Replaced",
 	OpHardDelete:    "HardDelete",
 }
 
@@ -133,6 +135,10 @@ func (info *CommitInfo) IsHardDeleted() bool {
 
 func (info *CommitInfo) IsSoftDeleted() bool {
 	return info.Op == OpSoftDelete
+}
+
+func (info *CommitInfo) IsDeleted() bool {
+	return info.Op >= OpSoftDelete
 }
 
 func (info *CommitInfo) PString(level PPLevel) string {

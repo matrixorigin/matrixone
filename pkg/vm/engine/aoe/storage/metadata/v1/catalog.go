@@ -35,6 +35,7 @@ var (
 
 var (
 	DuplicateErr       = errors.New("aoe: duplicate")
+	ShardNotFoundErr   = errors.New("aoe: shard not found")
 	TableNotFoundErr   = errors.New("aoe: table not found")
 	SegmentNotFoundErr = errors.New("aoe: segment not found")
 	BlockNotFoundErr   = errors.New("aoe: block not found")
@@ -125,6 +126,7 @@ type Catalog struct {
 	nameIndex       *btree.BTree          `json:"-"`
 	nodesMu         sync.RWMutex          `json:"-"`
 	commitMu        sync.RWMutex          `json:"-"`
+	visiableMu      sync.RWMutex          `json:"-"`
 	nameNodes       map[string]*tableNode `json:"-"`
 	shardNodes      map[uint64]*shardNode `json:"-"`
 
@@ -293,6 +295,35 @@ func (catalog *Catalog) fillView(filter *Filter, view *Catalog) {
 	}
 }
 
+func (catalog *Catalog) ReplaceShard(shardId uint64, view *Catalog) error {
+	catalog.Lock()
+	// node := catalog.shardNodes[shardId]
+	// if node == nil {
+	// 	catalog.Unlock()
+	// 	return ShardNotFoundErr
+	// }
+	// for _, table := range view.TableSet {
+	// staleTable := catalog.Ta
+	// }
+	catalog.Unlock()
+	return nil
+}
+
+func (catalog *Catalog) RecurLoop(processor LoopProcessor) error {
+	var err error
+	for _, table := range catalog.TableSet {
+		if err = processor.OnTable(table); err != nil {
+			return err
+		}
+		table.RLock()
+		defer table.RUnlock()
+		if err = table.RecurLoopLocked(processor); err != nil {
+			return err
+		}
+	}
+	return err
+}
+
 func (catalog *Catalog) Close() error {
 	catalog.Stop()
 	catalog.Store.Close()
@@ -397,8 +428,59 @@ func (catalog *Catalog) prepareCreateTable(ctx *createTableCtx) (LogEntry, error
 		return nil, err
 	}
 	catalog.Unlock()
-	catalog.prepareCommitLog(entry, logEntry)
 	ctx.table = entry
+	if ctx.inTran {
+		return nil, nil
+	}
+	catalog.prepareCommitLog(entry, logEntry)
+	return logEntry, err
+}
+
+func (catalog *Catalog) prepareAddTable(ctx *addTableCtx) (LogEntry, error) {
+	var err error
+	catalog.Lock()
+	if err = catalog.onNewTable(ctx.table); err != nil {
+		catalog.Unlock()
+		return nil, err
+	}
+	catalog.Unlock()
+	if ctx.inTran {
+		return nil, nil
+	}
+	panic("todo")
+}
+
+func (catalog *Catalog) SimpleReplayNewShard(view *catalogLogEntry) error {
+	ctx := newReplaceShardCtx(view)
+	err := catalog.onCommitRequest(ctx)
+	return err
+}
+
+func (catalog *Catalog) prepareReplaceShard(ctx *replaceShardCtx) (LogEntry, error) {
+	var err error
+	catalog.RLock()
+	for _, table := range catalog.TableSet {
+		if table.GetShardId() != ctx.view.LogRange.ShardId {
+			continue
+		}
+		rCtx := newReplaceTableCtx(table, true)
+		if _, err = table.prepareReplace(rCtx); err != nil {
+			panic(err)
+		}
+		if !rCtx.discard {
+			ctx.addReplace(rCtx)
+		}
+	}
+	catalog.RUnlock()
+	for _, table := range ctx.view.Catalog.TableSet {
+		nCtx := newAddTableCtx(table, true)
+		if _, err = catalog.prepareAddTable(nCtx); err != nil {
+			panic(err)
+		}
+		ctx.addNew(nCtx)
+	}
+	entry := newShardLogEntry(ctx.olds, ctx.news)
+	logEntry := catalog.prepareCommitEntry(entry, ETShardSnapshot, nil)
 	return logEntry, err
 }
 
@@ -614,7 +696,7 @@ func (catalog *Catalog) onNewTable(entry *Table) error {
 	nn := catalog.nameNodes[entry.Schema.Name]
 	if nn != nil {
 		e := nn.GetEntry()
-		if !e.IsSoftDeletedLocked() {
+		if !e.IsDeletedLocked() {
 			return DuplicateErr
 		}
 		catalog.TableSet[entry.Id] = entry

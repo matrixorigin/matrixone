@@ -44,6 +44,8 @@ func (p *commitPipeline) prepare(ctx interface{}) (LogEntry, error) {
 		return v.segment.prepareCreateBlock(v)
 	case *upgradeBlockCtx:
 		return v.block.prepareUpgrade(v)
+	case *replaceShardCtx:
+		return p.catalog.prepareReplaceShard(v)
 	}
 	panic("not supported")
 }
