@@ -127,7 +127,6 @@ type Catalog struct {
 	nameIndex       *btree.BTree          `json:"-"`
 	nodesMu         sync.RWMutex          `json:"-"`
 	commitMu        sync.RWMutex          `json:"-"`
-	visiableMu      sync.RWMutex          `json:"-"`
 	nameNodes       map[string]*tableNode `json:"-"`
 
 	TableSet map[uint64]*Table
@@ -261,7 +260,8 @@ func (catalog *Catalog) ShardView(shardId, index uint64) *catalogLogEntry {
 	filter.tableFilter = newCommitFilter()
 	filter.tableFilter.AddChecker(createShardChecker(shardId))
 	filter.tableFilter.AddChecker(createIndexChecker(index))
-	filter.tableFilter.AddStopper(replacedStopper)
+	stopper := createDeleteAndIndexStopper(index)
+	filter.tableFilter.AddStopper(stopper)
 	view := newShardSnapshotLogEntry(shardId, index)
 	catalog.fillView(filter, view.Catalog)
 	return view
@@ -307,6 +307,51 @@ func (catalog *Catalog) RecurLoop(processor LoopProcessor) error {
 		}
 	}
 	return err
+}
+
+func (catalog *Catalog) Compact() {
+	tables := make([]*Table, 0, 2)
+	nodes := make([]*tableNode, 0, 2)
+	catalog.RLock()
+	for _, table := range catalog.TableSet {
+		if table.IsHardDeleted() {
+			tables = append(tables, table)
+			nodes = append(nodes, catalog.nameNodes[table.Schema.Name])
+		}
+	}
+	catalog.RUnlock()
+	if len(tables) == 0 {
+		return
+	}
+
+	names := make([]string, 0)
+	for i, table := range tables {
+		node := nodes[i]
+		_, empty := node.DeleteNode(table.Id)
+		if empty {
+			names = append(names, node.name)
+		}
+	}
+	if len(names) > 0 {
+		catalog.TryDeleteEmptyNameNodes(names...)
+	}
+}
+
+func (catalog *Catalog) TryDeleteEmptyNameNodes(names ...string) (deleted []*tableNode) {
+	catalog.Lock()
+	defer catalog.Unlock()
+	for _, name := range names {
+		node := catalog.nameNodes[name]
+		if node == nil {
+			continue
+		}
+		if node.Length() != 0 {
+			continue
+		}
+		delete(catalog.nameNodes, name)
+		catalog.nameIndex.Delete(node)
+	}
+	return
 }
 
 func (catalog *Catalog) Close() error {

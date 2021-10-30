@@ -15,6 +15,7 @@ package metadata
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 
 	"github.com/google/btree"
@@ -46,6 +47,47 @@ func (n *tableNode) CreateNode(id uint64) *nameNode {
 	return nn
 }
 
+func (n *tableNode) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
+	n.Catalog.nodesMu.Lock()
+	defer n.Catalog.nodesMu.Unlock()
+	var prev common.ISSLLNode
+	prev = n
+	curr := n.GetNext()
+	depth := 0
+	for curr != nil {
+		tableId := curr.(*nameNode).Id
+		if id == tableId {
+			prev.ReleaseNextNode()
+			deleted = curr.(*nameNode)
+			next := curr.GetNext()
+			if next == nil && depth == 0 {
+				empty = true
+			}
+			break
+		}
+		prev = curr
+		curr = curr.GetNext()
+		depth++
+	}
+	return
+}
+
+func (n *tableNode) LengthLocked() int {
+	curr := n.GetNext()
+	length := 0
+	for curr != nil {
+		curr = curr.GetNext()
+		length++
+	}
+	return length
+}
+
+func (n *tableNode) Length() int {
+	n.Catalog.nodesMu.RLock()
+	defer n.Catalog.nodesMu.RUnlock()
+	return n.LengthLocked()
+}
+
 func (n *tableNode) GetEntry() *Table {
 	n.Catalog.nodesMu.RLock()
 	defer n.Catalog.nodesMu.RUnlock()
@@ -54,8 +96,11 @@ func (n *tableNode) GetEntry() *Table {
 
 func (n *tableNode) PString(level PPLevel) string {
 	curr := n.GetNext()
+	if curr == nil {
+		return fmt.Sprintf("TableNode[\"%s\"](Len=0)", n.name)
+	}
 	entry := curr.(*nameNode).GetEntry()
-	s := fmt.Sprintf("TableNode[\"%s\"]->[%d", entry.Schema.Name, entry.Id)
+	s := fmt.Sprintf("TableNode[\"%s\"](Len=%d)->[%d", entry.Schema.Name, n.Length(), entry.Id)
 	if level == PPL0 {
 		s = fmt.Sprintf("%s]", s)
 		return s

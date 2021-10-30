@@ -65,3 +65,9 @@ func (p *reallocIdProcessor) onBlock(block *Block) error {
 	block.CommitInfo.CommitId = p.allocator.NextUncommitId()
 	return nil
 }
+
+func newBlockProcessor(fn func(block *Block) error) *loopProcessor {
+	return &loopProcessor{
+		BlockFn: fn,
+	}
+}
