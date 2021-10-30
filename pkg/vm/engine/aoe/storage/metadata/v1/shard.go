@@ -27,38 +27,38 @@ type Snapshoter interface {
 }
 
 type shardSnapshoter struct {
-	Dir            string
-	Name           string
-	View           *catalogLogEntry
-	ShardId, Index uint64
-	Catalog        *Catalog
+	dir            string
+	name           string
+	view           *catalogLogEntry
+	shardId, index uint64
+	catalog        *Catalog
 }
 
 func NewShardSSWriter(catalog *Catalog, dir string, shardId, index uint64) *shardSnapshoter {
 	ss := &shardSnapshoter{
-		Catalog: catalog,
-		Dir:     dir,
-		ShardId: shardId,
-		Index:   index,
+		catalog: catalog,
+		dir:     dir,
+		shardId: shardId,
+		index:   index,
 	}
 	return ss
 }
 
 func NewShardSSReader(catalog *Catalog, name string) *shardSnapshoter {
 	ss := &shardSnapshoter{
-		Catalog: catalog,
-		Name:    name,
+		catalog: catalog,
+		name:    name,
 	}
 	return ss
 }
 
 func (ss *shardSnapshoter) PrepareWrite() error {
-	ss.View = ss.Catalog.ShardView(ss.ShardId, ss.Index)
+	ss.view = ss.catalog.ShardView(ss.shardId, ss.index)
 	return nil
 }
 
 func (ss *shardSnapshoter) makeName() string {
-	return filepath.Join(ss.Dir, fmt.Sprintf("%d-%d-%d.meta", ss.ShardId, ss.Index, time.Now().UnixMicro()))
+	return filepath.Join(ss.dir, fmt.Sprintf("%d-%d-%d.meta", ss.shardId, ss.index, time.Now().UnixMicro()))
 }
 
 func (ss *shardSnapshoter) CommitWrite() error {
@@ -67,7 +67,7 @@ func (ss *shardSnapshoter) CommitWrite() error {
 		return err
 	}
 	defer f.Close()
-	buf, err := ss.View.Marshal()
+	buf, err := ss.view.Marshal()
 	if err != nil {
 		return err
 	}
@@ -76,7 +76,7 @@ func (ss *shardSnapshoter) CommitWrite() error {
 }
 
 func (ss *shardSnapshoter) PrepareRead() error {
-	f, err := os.OpenFile(ss.Name, os.O_RDONLY, 666)
+	f, err := os.OpenFile(ss.name, os.O_RDONLY, 666)
 	if err != nil {
 		return err
 	}
@@ -88,20 +88,20 @@ func (ss *shardSnapshoter) PrepareRead() error {
 	size := info.Size()
 	mnode := common.GPool.Alloc(uint64(size))
 	defer common.GPool.Free(mnode)
-	ss.View = &catalogLogEntry{}
+	ss.view = &catalogLogEntry{}
 	if _, err = f.Read(mnode.Buf[:size]); err != nil {
 		return err
 	}
-	if err = ss.View.Unmarshal(mnode.Buf[:size]); err != nil {
+	if err = ss.view.Unmarshal(mnode.Buf[:size]); err != nil {
 		return err
 	}
-	processor := newReAllocIdProcessor(&ss.Catalog.Sequence)
-	err = ss.View.Catalog.RecurLoop(processor)
+	processor := newReAllocIdProcessor(&ss.catalog.Sequence)
+	err = ss.view.Catalog.RecurLoop(processor)
 	return err
 }
 
 func (ss *shardSnapshoter) CommitRead() error {
-	return ss.Catalog.SimpleReplayNewShard(ss.View)
+	return ss.catalog.SimpleReplayNewShard(ss.view)
 }
 
 type shardLogEntry struct {

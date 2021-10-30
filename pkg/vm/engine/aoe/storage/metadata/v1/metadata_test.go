@@ -842,7 +842,7 @@ func TestShard(t *testing.T) {
 			err = writer.CommitWrite()
 			assert.Nil(t, err)
 			viewsMu.Lock()
-			views[shardId] = writer.View
+			views[shardId] = writer.view
 			viewsMu.Unlock()
 		}(uint64(i))
 	}
@@ -857,8 +857,8 @@ func TestShard(t *testing.T) {
 		reader := NewShardSSReader(catalog, filepath.Join(dir, file.Name()))
 		err = reader.PrepareRead()
 		assert.Nil(t, err)
-		expected := views[reader.View.LogRange.ShardId]
-		doCompare(t, expected, reader.View)
+		expected := views[reader.view.LogRange.ShardId]
+		doCompare(t, expected, reader.view)
 		err = reader.CommitRead()
 		assert.Nil(t, err)
 		// t.Logf("shardId-%d: %s", reader.View.LogRange.ShardId, reader.View.Catalog.PString(PPL0))
