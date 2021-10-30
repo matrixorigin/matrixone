@@ -35,7 +35,7 @@ type Unit struct {
 }
 
 type Relation struct {
-	S     bool // 是否带dbname前缀
+	S     bool //with dbname as prefix or not
 	ID    string
 	DB    string
 	Rid   string // renamed id

@@ -46,7 +46,7 @@ func (p *Pipeline) String() string {
 }
 
 func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, error) {
-	var end bool //退出标识
+	var end bool //exit flag
 	var err error
 
 	proc.Mp = mempool.New()
