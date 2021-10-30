@@ -11,7 +11,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
-type ShardSnapshot struct {
+type SSWriter interface {
+	PrepareWrite() error
+	CommitWrite() error
+}
+
+type SSReader interface {
+	PrepareRead() error
+	CommitRead() error
+}
+
+type Snapshoter interface {
+	SSWriter
+	SSReader
+}
+
+type shardSnapshoter struct {
 	Dir            string
 	Name           string
 	View           *catalogLogEntry
@@ -19,8 +34,8 @@ type ShardSnapshot struct {
 	Catalog        *Catalog
 }
 
-func NewShardSnapshotWriter(catalog *Catalog, dir string, shardId, index uint64) *ShardSnapshot {
-	ss := &ShardSnapshot{
+func NewShardSSWriter(catalog *Catalog, dir string, shardId, index uint64) *shardSnapshoter {
+	ss := &shardSnapshoter{
 		Catalog: catalog,
 		Dir:     dir,
 		ShardId: shardId,
@@ -29,24 +44,24 @@ func NewShardSnapshotWriter(catalog *Catalog, dir string, shardId, index uint64)
 	return ss
 }
 
-func NewShardSnapshotReader(catalog *Catalog, name string) *ShardSnapshot {
-	ss := &ShardSnapshot{
+func NewShardSSReader(catalog *Catalog, name string) *shardSnapshoter {
+	ss := &shardSnapshoter{
 		Catalog: catalog,
 		Name:    name,
 	}
 	return ss
 }
 
-func (ss *ShardSnapshot) PrepareWrite() error {
+func (ss *shardSnapshoter) PrepareWrite() error {
 	ss.View = ss.Catalog.ShardView(ss.ShardId, ss.Index)
 	return nil
 }
 
-func (ss *ShardSnapshot) makeName() string {
+func (ss *shardSnapshoter) makeName() string {
 	return filepath.Join(ss.Dir, fmt.Sprintf("%d-%d-%d.meta", ss.ShardId, ss.Index, time.Now().UnixMicro()))
 }
 
-func (ss *ShardSnapshot) CommitWrite() error {
+func (ss *shardSnapshoter) CommitWrite() error {
 	f, err := os.Create(ss.makeName())
 	if err != nil {
 		return err
@@ -60,7 +75,7 @@ func (ss *ShardSnapshot) CommitWrite() error {
 	return err
 }
 
-func (ss *ShardSnapshot) PrepareRead() error {
+func (ss *shardSnapshoter) PrepareRead() error {
 	f, err := os.OpenFile(ss.Name, os.O_RDONLY, 666)
 	if err != nil {
 		return err
@@ -85,7 +100,7 @@ func (ss *ShardSnapshot) PrepareRead() error {
 	return err
 }
 
-func (ss *ShardSnapshot) Apply() error {
+func (ss *shardSnapshoter) CommitRead() error {
 	return ss.Catalog.SimpleReplayNewShard(ss.View)
 }
 

@@ -836,7 +836,7 @@ func TestShard(t *testing.T) {
 		wg.Add(1)
 		go func(shardId uint64) {
 			defer wg.Done()
-			writer := NewShardSnapshotWriter(catalog, dir, shardId, idAllocator.get(shardId))
+			writer := NewShardSSWriter(catalog, dir, shardId, idAllocator.get(shardId))
 			err := writer.PrepareWrite()
 			assert.Nil(t, err)
 			err = writer.CommitWrite()
@@ -854,12 +854,12 @@ func TestShard(t *testing.T) {
 		if !strings.HasSuffix(file.Name(), ".meta") {
 			continue
 		}
-		reader := NewShardSnapshotReader(catalog, filepath.Join(dir, file.Name()))
+		reader := NewShardSSReader(catalog, filepath.Join(dir, file.Name()))
 		err = reader.PrepareRead()
 		assert.Nil(t, err)
 		expected := views[reader.View.LogRange.ShardId]
 		doCompare(t, expected, reader.View)
-		err = reader.Apply()
+		err = reader.CommitRead()
 		assert.Nil(t, err)
 		// t.Logf("shardId-%d: %s", reader.View.LogRange.ShardId, reader.View.Catalog.PString(PPL0))
 	}
