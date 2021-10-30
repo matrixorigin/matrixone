@@ -73,34 +73,36 @@ func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	}
 }
 
-func createBlock(t *testing.T, idAllocator *mockIdAllocator, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
+func createBlock(t *testing.T, tables int, idAllocator *mockIdAllocator, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
 	return func() {
 		defer wg.Done()
-		schema := MockSchema(2)
-		schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAllocator.alloc(shardId))
-		index := shard.Index{
-			ShardId: shardId,
-			Id:      shard.SimpleIndexId(idAllocator.get(shardId)),
-		}
-		tbl, err := catalog.SimpleCreateTable(schema, &index)
-		assert.Nil(t, err)
-		var prev *Block
-		for i := 0; i < blocks; i++ {
-			blk := tbl.SimpleGetOrCreateNextBlock(prev)
-			blk.SetCount(tbl.Schema.BlockMaxRows)
-			blk.SetIndex(LogIndex{
-				ShardId:  shardId,
-				Id:       shard.SimpleIndexId(common.NextGlobalSeqNum()),
-				Count:    tbl.Schema.BlockMaxRows,
-				Capacity: tbl.Schema.BlockMaxRows,
-			})
-			err := blk.SimpleUpgrade(nil)
-			assert.Nil(t, err)
-			if prev != nil && blk.Segment != prev.Segment {
-				wg.Add(1)
-				nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+		for k := 0; k < tables; k++ {
+			schema := MockSchema(2)
+			schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAllocator.alloc(shardId))
+			index := shard.Index{
+				ShardId: shardId,
+				Id:      shard.SimpleIndexId(idAllocator.get(shardId)),
 			}
-			prev = blk
+			tbl, err := catalog.SimpleCreateTable(schema, &index)
+			assert.Nil(t, err)
+			var prev *Block
+			for i := 0; i < blocks; i++ {
+				blk := tbl.SimpleGetOrCreateNextBlock(prev)
+				blk.SetCount(tbl.Schema.BlockMaxRows)
+				blk.SetIndex(LogIndex{
+					ShardId:  shardId,
+					Id:       shard.SimpleIndexId(idAllocator.alloc(shardId)),
+					Count:    tbl.Schema.BlockMaxRows,
+					Capacity: tbl.Schema.BlockMaxRows,
+				})
+				err := blk.SimpleUpgrade(nil)
+				assert.Nil(t, err)
+				if prev != nil && blk.Segment != prev.Segment {
+					wg.Add(1)
+					nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+				}
+				prev = blk
+			}
 		}
 	}
 }
@@ -448,7 +450,7 @@ func TestReplay(t *testing.T) {
 
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, 1, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
@@ -814,10 +816,11 @@ func TestShard(t *testing.T) {
 	catalog.Start()
 	defer catalog.Close()
 
-	mockShards := 10
+	mockShards := 4
 	createBlkWorker, _ := ants.NewPool(mockShards)
 	upgradeSegWorker, _ := ants.NewPool(20)
 
+	now := time.Now()
 	var wg sync.WaitGroup
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
@@ -825,11 +828,13 @@ func TestShard(t *testing.T) {
 	idAllocator := newMockAllocator()
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, 2, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
+	t.Logf("mock metadata takes: %s", time.Since(now))
 	t.Log(catalog.PString(PPL0))
-	now := time.Now()
+
+	now = time.Now()
 	var viewsMu sync.Mutex
 	views := make(map[uint64]*catalogLogEntry)
 	for i := 0; i < mockShards; i++ {
@@ -865,7 +870,27 @@ func TestShard(t *testing.T) {
 	}
 	t.Logf("takes %s", time.Since(now))
 	t.Log(catalog.PString(PPL0))
-	for _, node := range catalog.nameNodes {
-		t.Log(node.PString(PPL1))
+
+	for shardId, allocator := range idAllocator.driver {
+		writer := NewShardSSWriter(catalog, dir, shardId, allocator.Get())
+		err = writer.PrepareWrite()
+		assert.Nil(t, err)
+		checker := func(info *CommitInfo) bool {
+			// logutil.Infof("shardId-%d, %s", shardId, info.PString(PPL0))
+			assert.Equal(t, shardId, info.GetShardId())
+			return true
+		}
+		processor := new(loopProcessor)
+		processor.BlockFn = func(block *Block) error {
+			checker(block.GetCommit())
+			return nil
+		}
+		processor.TableFn = func(table *Table) error {
+			checker(table.GetCommit())
+			return nil
+		}
+		writer.view.Catalog.RecurLoop(processor)
+		t.Log(writer.view.Catalog.PString(PPL0))
 	}
+
 }

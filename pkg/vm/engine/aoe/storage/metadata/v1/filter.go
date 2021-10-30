@@ -6,6 +6,10 @@ import (
 
 type commitChecker func(info *CommitInfo) bool
 
+var replacedStopper = func(info *CommitInfo) bool {
+	return info.Op == OpReplaced
+}
+
 func createShardChecker(shardId uint64) commitChecker {
 	return func(info *CommitInfo) bool {
 		if info.LogIndex == nil {
@@ -50,16 +54,22 @@ func createIndexChecker(id uint64) commitChecker {
 
 type commitFilter struct {
 	checkers []commitChecker
+	stoppers []commitChecker
 }
 
 func newCommitFilter() *commitFilter {
 	return &commitFilter{
 		checkers: make([]commitChecker, 0),
+		stoppers: make([]commitChecker, 0),
 	}
 }
 
 func (f *commitFilter) AddChecker(checker commitChecker) {
 	f.checkers = append(f.checkers, checker)
+}
+
+func (f *commitFilter) AddStopper(stopper commitChecker) {
+	f.stoppers = append(f.stoppers, stopper)
 }
 
 func (f *commitFilter) Eval(info *CommitInfo) bool {
@@ -72,6 +82,18 @@ func (f *commitFilter) Eval(info *CommitInfo) bool {
 		}
 	}
 	return true
+}
+
+func (f *commitFilter) EvalStop(info *CommitInfo) bool {
+	if f == nil {
+		return false
+	}
+	for _, stopper := range f.stoppers {
+		if stopper(info) {
+			return true
+		}
+	}
+	return false
 }
 
 type Filter struct {

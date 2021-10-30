@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/google/btree"
 )
@@ -260,6 +261,7 @@ func (catalog *Catalog) ShardView(shardId, index uint64) *catalogLogEntry {
 	filter.tableFilter = newCommitFilter()
 	filter.tableFilter.AddChecker(createShardChecker(shardId))
 	filter.tableFilter.AddChecker(createIndexChecker(index))
+	filter.tableFilter.AddStopper(replacedStopper)
 	view := newShardSnapshotLogEntry(shardId, index)
 	catalog.fillView(filter, view.Catalog)
 	return view
@@ -442,11 +444,14 @@ func (catalog *Catalog) SimpleReplayNewShard(view *catalogLogEntry) error {
 func (catalog *Catalog) prepareReplaceShard(ctx *replaceShardCtx) (LogEntry, error) {
 	var err error
 	catalog.RLock()
+	logIndex := new(LogIndex)
+	logIndex.Id = shard.SimpleIndexId(ctx.view.LogRange.Range.Right)
+	logIndex.ShardId = ctx.view.LogRange.ShardId
 	for _, table := range catalog.TableSet {
 		if table.GetShardId() != ctx.view.LogRange.ShardId {
 			continue
 		}
-		rCtx := newReplaceTableCtx(table, true)
+		rCtx := newReplaceTableCtx(table, logIndex, true)
 		if _, err = table.prepareReplace(rCtx); err != nil {
 			panic(err)
 		}

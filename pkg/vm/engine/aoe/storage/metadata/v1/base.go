@@ -133,12 +133,15 @@ func (e *BaseEntry) UseCommitted(filter *commitFilter) *BaseEntry {
 	curr = e.CommitInfo
 	for curr != nil {
 		info := curr.(*CommitInfo)
-		if filter.Eval(info) {
+		if filter.Eval(info) && !filter.EvalStop(info) {
+			// if filter.Eval(info)  {
 			cInfo := *info
 			return &BaseEntry{
 				Id:         e.Id,
 				CommitInfo: &cInfo,
 			}
+		} else if filter.EvalStop(info) {
+			return nil
 		}
 		curr = curr.GetNext()
 	}

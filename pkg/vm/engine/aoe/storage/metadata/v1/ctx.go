@@ -139,11 +139,12 @@ func newUpgradeBlockCtx(block *Block, exIndice []*LogIndex) *upgradeBlockCtx {
 	}
 }
 
-func newReplaceTableCtx(table *Table, inTran bool) *replaceTableCtx {
+func newReplaceTableCtx(table *Table, exIndex *LogIndex, inTran bool) *replaceTableCtx {
 	return &replaceTableCtx{
 		table: table,
 		writeCtx: writeCtx{
-			inTran: inTran,
+			inTran:  inTran,
+			exIndex: exIndex,
 		},
 	}
 }
