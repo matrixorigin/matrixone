@@ -21,8 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
 
-//mp 引用计数
-func (c *compile) compileOutput(o *projection.Projection, mp map[string]uint64) ([]*Scope, error) {
+func (c *compile) compileOutput(o *projection.Projection, mp /*Reference Count*/ map[string]uint64) ([]*Scope, error) {
 	refer := make(map[string]uint64)
 	{
 		mq := make(map[string]uint64)

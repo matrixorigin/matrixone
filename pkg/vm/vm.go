@@ -31,7 +31,7 @@ func String(ins Instructions, buf *bytes.Buffer) {
 func Clean(_ Instructions, _ *process.Process) {
 }
 
-// Prepare 初始化
+// Prepare initialization
 func Prepare(ins Instructions, proc *process.Process) error {
 	for _, in := range ins {
 		if err := prepareFunc[in.Code](proc, in.Arg); err != nil {
