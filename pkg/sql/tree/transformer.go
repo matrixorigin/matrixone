@@ -24,6 +24,7 @@ import (
 	"github.com/pingcap/parser/types"
 	"go/constant"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"path/filepath"
 	"strconv"
 )
 
@@ -1934,7 +1935,9 @@ func transformLoadDataStmtToLoad(lds *ast.LoadDataStmt) *Load {
 			ues[i] = transformAssignmentToUpdateExpr(a)
 		}
 	}
-
+	if !filepath.IsAbs(lds.Path) {
+		lds.Path, _ = filepath.Abs(lds.Path)
+	}
 	return NewLoad(lds.IsLocal,lds.Path,dk,tn,fie,li,lds.IgnoreLines,lcs,ues)
 }
 

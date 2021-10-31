@@ -530,7 +530,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 	*/
 	exist, isfile, err := PathExists(load.File)
 	if err != nil || !exist {
-		return fmt.Errorf("file %s does exist. err:%v", load.File, err)
+		return fmt.Errorf("file %s does not exist. err:%v", load.File, err)
 	}
 
 	if !isfile {
