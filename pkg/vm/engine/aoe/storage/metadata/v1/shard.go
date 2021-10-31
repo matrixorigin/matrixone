@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
@@ -16,14 +17,14 @@ type SSWriter interface {
 	CommitWrite() error
 }
 
-type SSReader interface {
-	PrepareRead() error
-	CommitRead() error
+type SSLoader interface {
+	PrepareLoad() error
+	CommitLoad() error
 }
 
 type Snapshoter interface {
 	SSWriter
-	SSReader
+	SSLoader
 }
 
 type shardSnapshoter struct {
@@ -44,7 +45,7 @@ func NewShardSSWriter(catalog *Catalog, dir string, shardId, index uint64) *shar
 	return ss
 }
 
-func NewShardSSReader(catalog *Catalog, name string) *shardSnapshoter {
+func NewShardSSLoader(catalog *Catalog, name string) *shardSnapshoter {
 	ss := &shardSnapshoter{
 		catalog: catalog,
 		name:    name,
@@ -58,11 +59,12 @@ func (ss *shardSnapshoter) PrepareWrite() error {
 }
 
 func (ss *shardSnapshoter) makeName() string {
-	return filepath.Join(ss.dir, fmt.Sprintf("%d-%d-%d.meta", ss.shardId, ss.index, time.Now().UnixMicro()))
+	return filepath.Join(ss.dir, fmt.Sprintf("%d-%d-%d.meta", ss.shardId, ss.index, time.Now().UTC().UnixMicro()))
 }
 
 func (ss *shardSnapshoter) CommitWrite() error {
-	f, err := os.Create(ss.makeName())
+	ss.name = ss.makeName()
+	f, err := os.Create(ss.name)
 	if err != nil {
 		return err
 	}
@@ -72,10 +74,16 @@ func (ss *shardSnapshoter) CommitWrite() error {
 		return err
 	}
 	_, err = f.Write(buf)
+	logutil.Infof("%s | Shard SS | Flushed", f.Name())
 	return err
 }
 
-func (ss *shardSnapshoter) PrepareRead() error {
+func (ss *shardSnapshoter) ReAllocId(alloctor *Sequence, view *Catalog) error {
+	processor := newReAllocIdProcessor(alloctor)
+	return view.RecurLoop(processor)
+}
+
+func (ss *shardSnapshoter) PrepareLoad() error {
 	f, err := os.OpenFile(ss.name, os.O_RDONLY, 666)
 	if err != nil {
 		return err
@@ -95,12 +103,10 @@ func (ss *shardSnapshoter) PrepareRead() error {
 	if err = ss.view.Unmarshal(mnode.Buf[:size]); err != nil {
 		return err
 	}
-	processor := newReAllocIdProcessor(&ss.catalog.Sequence)
-	err = ss.view.Catalog.RecurLoop(processor)
-	return err
+	return ss.ReAllocId(&ss.catalog.Sequence, ss.view.Catalog)
 }
 
-func (ss *shardSnapshoter) CommitRead() error {
+func (ss *shardSnapshoter) CommitLoad() error {
 	return ss.catalog.SimpleReplayNewShard(ss.view)
 }
 

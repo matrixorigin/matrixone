@@ -73,15 +73,15 @@ func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	}
 }
 
-func createBlock(t *testing.T, tables int, idAllocator *mockIdAllocator, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
+func createBlock(t *testing.T, tables int, idAlloc *mockIdAllocator, shardId uint64, catalog *Catalog, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
 	return func() {
 		defer wg.Done()
 		for k := 0; k < tables; k++ {
 			schema := MockSchema(2)
-			schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAllocator.alloc(shardId))
+			schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAlloc.alloc(shardId))
 			index := shard.Index{
 				ShardId: shardId,
-				Id:      shard.SimpleIndexId(idAllocator.get(shardId)),
+				Id:      shard.SimpleIndexId(idAlloc.get(shardId)),
 			}
 			tbl, err := catalog.SimpleCreateTable(schema, &index)
 			assert.Nil(t, err)
@@ -91,7 +91,7 @@ func createBlock(t *testing.T, tables int, idAllocator *mockIdAllocator, shardId
 				blk.SetCount(tbl.Schema.BlockMaxRows)
 				blk.SetIndex(LogIndex{
 					ShardId:  shardId,
-					Id:       shard.SimpleIndexId(idAllocator.alloc(shardId)),
+					Id:       shard.SimpleIndexId(idAlloc.alloc(shardId)),
 					Count:    tbl.Schema.BlockMaxRows,
 					Capacity: tbl.Schema.BlockMaxRows,
 				})
@@ -99,7 +99,11 @@ func createBlock(t *testing.T, tables int, idAllocator *mockIdAllocator, shardId
 				assert.Nil(t, err)
 				if prev != nil && blk.Segment != prev.Segment {
 					wg.Add(1)
-					nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+					if nextNode != nil {
+						nextNode.Submit(upgradeSeg(t, prev.Segment, wg))
+					} else {
+						upgradeSeg(t, prev.Segment, wg)()
+					}
 				}
 				prev = blk
 			}
@@ -245,8 +249,6 @@ func TestDropTable(t *testing.T) {
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.NotNil(t, err)
 
-	catalog.HardDeleteTable(t1.Id)
-
 	schema2 := MockSchema(3)
 	schema2.Name = schema1.Name
 	t2, err := catalog.SimpleCreateTable(schema2, nil)
@@ -264,6 +266,8 @@ func TestDropTable(t *testing.T) {
 
 	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.NotNil(t, err)
+
+	catalog.HardDeleteTable(t2.Id)
 
 	t3, err = catalog.SimpleCreateTable(schema3, nil)
 	assert.Nil(t, err)
@@ -284,17 +288,64 @@ func TestDropTable(t *testing.T) {
 	}
 	assert.Equal(t, 3, versions)
 
-	tableNode := catalog.nameNodes[t1.Schema.Name]
-	t.Log(tableNode.PString(PPL0))
-	t.Log(tableNode.PString(PPL1))
 	t.Log(catalog.PString(PPL1))
-	catalog.Close()
+	tableNode := catalog.nameNodes[t1.Schema.Name]
+	assert.Equal(t, 3, tableNode.Length())
+	t.Log(tableNode.PString(PPL1))
 
-	catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
+	catalog.Compact()
+	assert.Equal(t, 2, tableNode.Length())
+	t.Log(tableNode.PString(PPL1))
+
+	err = catalog.SimpleDropTableByName(t1.Schema.Name, nil)
 	assert.Nil(t, err)
-	catalog.Start()
-	// err = replayer.Replay(catalog.Store)
-	// t.Log(err)
+	err = catalog.HardDeleteTable(t3.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, tableNode.Length())
+	catalog.Compact()
+	t.Log(tableNode.PString(PPL1))
+	assert.Equal(t, 1, tableNode.Length())
+
+	assert.Equal(t, 1, len(catalog.nameNodes))
+	assert.Equal(t, 1, catalog.nameIndex.Len())
+
+	err = catalog.HardDeleteTable(t1.Id)
+	assert.Nil(t, err)
+	catalog.Compact()
+	t.Log(tableNode.PString(PPL1))
+	assert.Equal(t, 0, len(catalog.nameNodes))
+	assert.Equal(t, 0, catalog.nameIndex.Len())
+	assert.Equal(t, 0, len(catalog.TableSet))
+
+	index := new(LogIndex)
+	index.ShardId = uint64(99)
+	index.Id = shard.SimpleIndexId(uint64(1))
+	t4, err := catalog.SimpleCreateTable(schema1, index)
+	assert.Nil(t, err)
+	assert.NotNil(t, t4)
+
+	writer := NewShardSSWriter(catalog, dir, index.ShardId, index.Id.Id)
+	err = writer.PrepareWrite()
+	assert.Nil(t, err)
+
+	err = writer.ReAllocId(&catalog.Sequence, writer.view.Catalog)
+	assert.Nil(t, err)
+
+	err = catalog.SimpleReplayNewShard(writer.view)
+	assert.Nil(t, err)
+
+	tableNode = catalog.nameNodes[schema1.Name]
+	assert.Equal(t, 2, tableNode.Length())
+	err = catalog.HardDeleteTable(t4.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(catalog.TableSet))
+
+	catalog.Compact()
+	assert.Equal(t, 1, len(catalog.TableSet))
+	assert.Equal(t, 1, tableNode.Length())
+	t.Log(tableNode.PString(PPL1))
+
+	t.Log(catalog.PString(PPL1))
 	catalog.Close()
 }
 
@@ -446,11 +497,11 @@ func TestReplay(t *testing.T) {
 	var wg sync.WaitGroup
 
 	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
-	idAllocator := newMockAllocator()
+	idAlloc := newMockAllocator()
 
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, 1, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, 1, idAlloc, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
@@ -807,13 +858,8 @@ func TestCatalog2(t *testing.T) {
 
 func TestShard(t *testing.T) {
 	dir := "/tmp/metadata/testshard"
-	os.RemoveAll(dir)
-	cfg := new(CatalogCfg)
-	cfg.Dir = dir
-	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = uint64(100), uint64(2)
-	cfg.RotationFileMaxSize = 100 * int(common.M)
-	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
-	catalog.Start()
+	blockRows, segmentBlocks := uint64(100), uint64(2)
+	catalog := initTest(dir, blockRows, segmentBlocks)
 	defer catalog.Close()
 
 	mockShards := 4
@@ -823,12 +869,12 @@ func TestShard(t *testing.T) {
 	now := time.Now()
 	var wg sync.WaitGroup
 
-	mockBlocks := cfg.SegmentMaxBlocks*2 + cfg.SegmentMaxBlocks/2
+	mockBlocks := segmentBlocks*2 + segmentBlocks/2
 
-	idAllocator := newMockAllocator()
+	idAlloc := newMockAllocator()
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, 2, idAllocator, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, 2, idAlloc, uint64(i), catalog, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	t.Logf("mock metadata takes: %s", time.Since(now))
@@ -841,7 +887,7 @@ func TestShard(t *testing.T) {
 		wg.Add(1)
 		go func(shardId uint64) {
 			defer wg.Done()
-			writer := NewShardSSWriter(catalog, dir, shardId, idAllocator.get(shardId))
+			writer := NewShardSSWriter(catalog, dir, shardId, idAlloc.get(shardId))
 			err := writer.PrepareWrite()
 			assert.Nil(t, err)
 			err = writer.CommitWrite()
@@ -859,19 +905,19 @@ func TestShard(t *testing.T) {
 		if !strings.HasSuffix(file.Name(), ".meta") {
 			continue
 		}
-		reader := NewShardSSReader(catalog, filepath.Join(dir, file.Name()))
-		err = reader.PrepareRead()
+		loader := NewShardSSLoader(catalog, filepath.Join(dir, file.Name()))
+		err = loader.PrepareLoad()
 		assert.Nil(t, err)
-		expected := views[reader.view.LogRange.ShardId]
-		doCompare(t, expected, reader.view)
-		err = reader.CommitRead()
+		expected := views[loader.view.LogRange.ShardId]
+		doCompare(t, expected, loader.view)
+		err = loader.CommitLoad()
 		assert.Nil(t, err)
-		// t.Logf("shardId-%d: %s", reader.View.LogRange.ShardId, reader.View.Catalog.PString(PPL0))
+		// t.Logf("shardId-%d: %s", loader.View.LogRange.ShardId, loader.View.Catalog.PString(PPL0))
 	}
 	t.Logf("takes %s", time.Since(now))
 	t.Log(catalog.PString(PPL0))
 
-	for shardId, allocator := range idAllocator.driver {
+	for shardId, allocator := range idAlloc.driver {
 		writer := NewShardSSWriter(catalog, dir, shardId, allocator.Get())
 		err = writer.PrepareWrite()
 		assert.Nil(t, err)
@@ -892,5 +938,126 @@ func TestShard(t *testing.T) {
 		writer.view.Catalog.RecurLoop(processor)
 		t.Log(writer.view.Catalog.PString(PPL0))
 	}
+}
 
+func initTest(dir string, blockRows, segmentBlocks uint64) *Catalog {
+	os.RemoveAll(dir)
+	cfg := new(CatalogCfg)
+	cfg.Dir = dir
+	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = blockRows, segmentBlocks
+	cfg.RotationFileMaxSize = 100 * int(common.M)
+	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
+	catalog.Start()
+	return catalog
+}
+
+type testCfg struct {
+	shardId uint64
+	blocks  int
+	tables  int
+}
+
+func TestShard2(t *testing.T) {
+	dir := "/tmp/metadata/testshard2"
+	blockRows, segmentBlocks := uint64(100), uint64(2)
+	catalog := initTest(dir, blockRows, segmentBlocks)
+	defer catalog.Close()
+	idAlloc := newMockAllocator()
+	cfg1 := testCfg{
+		shardId: uint64(77),
+		blocks:  int(segmentBlocks*2 + segmentBlocks/2),
+		tables:  2,
+	}
+	cfg2 := testCfg{
+		shardId: uint64(88),
+		blocks:  int(segmentBlocks) / 2,
+		tables:  3,
+	}
+	wg := new(sync.WaitGroup)
+	wg.Add(2)
+	w1, _ := ants.NewPool(4)
+	w2, _ := ants.NewPool(4)
+	w1.Submit(createBlock(t, cfg1.tables, idAlloc, cfg1.shardId, catalog, cfg1.blocks, wg, w2))
+	w1.Submit(createBlock(t, cfg2.tables, idAlloc, cfg2.shardId, catalog, cfg2.blocks, wg, w2))
+	wg.Wait()
+
+	blockCnt := 0
+	blockCntFn := func(block *Block) error {
+		blockCnt++
+		return nil
+	}
+	blockCntOp := newBlockProcessor(blockCntFn)
+
+	index1_0 := idAlloc.get(cfg1.shardId)
+	view1 := catalog.ShardView(cfg1.shardId, index1_0)
+	assert.Equal(t, cfg1.tables, len(view1.Catalog.TableSet))
+	err := view1.Catalog.RecurLoop(blockCntOp)
+	assert.Nil(t, err)
+	assert.Equal(t, cfg1.blocks*cfg1.tables, blockCnt)
+
+	blockCnt = 0
+	view2 := catalog.ShardView(cfg2.shardId, idAlloc.get(cfg2.shardId))
+	assert.Equal(t, cfg1.tables, len(view1.Catalog.TableSet))
+	err = view2.Catalog.RecurLoop(blockCntOp)
+	assert.Nil(t, err)
+	assert.Equal(t, cfg2.blocks*cfg2.tables, blockCnt)
+
+	cfg1_1 := testCfg{
+		shardId: cfg1.shardId,
+		blocks:  1,
+		tables:  1,
+	}
+	wg.Add(1)
+	w1.Submit(createBlock(t, cfg1_1.tables, idAlloc, cfg1_1.shardId, catalog, cfg1_1.blocks, wg, w2))
+	wg.Wait()
+
+	index1_1 := idAlloc.get(cfg1_1.shardId)
+	view1_0 := catalog.ShardView(cfg1.shardId, index1_0)
+	doCompare(t, view1, view1_0)
+
+	blockCnt = 0
+	view1_1 := catalog.ShardView(cfg1_1.shardId, index1_1)
+	assert.Equal(t, cfg1.tables+cfg1_1.tables, len(view1_1.Catalog.TableSet))
+	err = view1_1.Catalog.RecurLoop(blockCntOp)
+	assert.Nil(t, err)
+	assert.Equal(t, cfg1.blocks*cfg1.tables+cfg1_1.blocks*cfg1_1.tables, blockCnt)
+
+	ids := view1_0.Catalog.SimpleGetTableIds()
+
+	table := catalog.SimpleGetTable(ids[0])
+	deleteIndex := new(LogIndex)
+	deleteIndex.ShardId = cfg1.shardId
+	deleteIndex.Id = shard.SimpleIndexId(idAlloc.alloc(cfg1.shardId))
+	err = table.SimpleSoftDelete(deleteIndex)
+	assert.Nil(t, err)
+
+	view1_0_1 := catalog.ShardView(cfg1.shardId, index1_0)
+	doCompare(t, view1_0, view1_0_1)
+
+	view1_1_1 := catalog.ShardView(cfg1.shardId, index1_1)
+	doCompare(t, view1_1, view1_1_1)
+
+	index1_2 := idAlloc.get(cfg1.shardId)
+	view1_2 := catalog.ShardView(cfg1.shardId, index1_2)
+	assert.Equal(t, len(view1_1_1.Catalog.TableSet)-1, len(view1_2.Catalog.TableSet))
+
+	t.Log(catalog.PString(PPL0))
+
+	writer := NewShardSSWriter(catalog, dir, cfg1.shardId, index1_0)
+	err = writer.PrepareWrite()
+	assert.Nil(t, err)
+	doCompare(t, view1_0, writer.view)
+	err = writer.CommitWrite()
+	assert.Nil(t, err)
+
+	loader := NewShardSSLoader(catalog, writer.name)
+	err = loader.PrepareLoad()
+	assert.Nil(t, err)
+	doCompare(t, view1_0, loader.view)
+	err = loader.CommitLoad()
+	assert.Nil(t, err)
+
+	view := catalog.ShardView(cfg1.shardId, index1_0)
+	assert.Equal(t, view1.LogRange, view.LogRange)
+	assert.Equal(t, len(view1.Catalog.TableSet), len(view.Catalog.TableSet))
 }

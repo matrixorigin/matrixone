@@ -141,6 +141,10 @@ func (info *CommitInfo) IsDeleted() bool {
 	return info.Op >= OpSoftDelete
 }
 
+func (info *CommitInfo) IsReplaced() bool {
+	return info.Op == OpReplaced
+}
+
 func (info *CommitInfo) PString(level PPLevel) string {
 	s := "<CInfo>"
 	if info.LogRange != nil {

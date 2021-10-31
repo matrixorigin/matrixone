@@ -215,7 +215,7 @@ func TestShard1(t *testing.T) {
 
 	wg.Wait()
 	for _, shard := range shards {
-		testutils.WaitExpect(100, func() bool {
+		testutils.WaitExpect(200, func() bool {
 			return shard.idAlloc.Get() == shard.getSafeId()
 		})
 		assert.Equal(t, shard.idAlloc.Get(), shard.getSafeId())
@@ -278,7 +278,7 @@ func TestShard2(t *testing.T) {
 
 	wg.Wait()
 	for _, shard := range shards {
-		testutils.WaitExpect(40, func() bool {
+		testutils.WaitExpect(200, func() bool {
 			return shard.idAlloc.Get() == shard.getSafeId()
 		})
 		// assert.Equal(t, shard.idAlloc.Get(), shard.getSafeId())
@@ -293,6 +293,6 @@ func TestShard2(t *testing.T) {
 		view = inst.Store.Catalog.ShardView(shard.id, shard.getSafeId())
 		total += len(view.Catalog.TableSet)
 	}
-	assert.Equal(t, tableCnt, total)
+	assert.Equal(t, 0, total)
 	inst.Close()
 }

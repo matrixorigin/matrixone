@@ -10,6 +10,22 @@ var replacedStopper = func(info *CommitInfo) bool {
 	return info.Op == OpReplaced
 }
 
+var deleteStopper = func(info *CommitInfo) bool {
+	return info.Op >= OpSoftDelete
+}
+
+func createDeleteAndIndexStopper(index uint64) commitChecker {
+	return func(info *CommitInfo) bool {
+		if info.LogIndex != nil {
+			if info.LogIndex.Id.Id <= index && info.Op >= OpSoftDelete {
+				return true
+			}
+			return false
+		}
+		return info.Op >= OpSoftDelete
+	}
+}
+
 func createShardChecker(shardId uint64) commitChecker {
 	return func(info *CommitInfo) bool {
 		if info.LogIndex == nil {
