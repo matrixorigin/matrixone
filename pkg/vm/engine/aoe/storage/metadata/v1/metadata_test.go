@@ -315,6 +315,35 @@ func TestDropTable(t *testing.T) {
 	t.Log(tableNode.PString(PPL1))
 	assert.Equal(t, 0, len(catalog.nameNodes))
 	assert.Equal(t, 0, catalog.nameIndex.Len())
+	assert.Equal(t, 0, len(catalog.TableSet))
+
+	index := new(LogIndex)
+	index.ShardId = uint64(99)
+	index.Id = shard.SimpleIndexId(uint64(1))
+	t4, err := catalog.SimpleCreateTable(schema1, index)
+	assert.Nil(t, err)
+	assert.NotNil(t, t4)
+
+	writer := NewShardSSWriter(catalog, dir, index.ShardId, index.Id.Id)
+	err = writer.PrepareWrite()
+	assert.Nil(t, err)
+
+	err = writer.ReAllocId(&catalog.Sequence, writer.view.Catalog)
+	assert.Nil(t, err)
+
+	err = catalog.SimpleReplayNewShard(writer.view)
+	assert.Nil(t, err)
+
+	tableNode = catalog.nameNodes[schema1.Name]
+	assert.Equal(t, 2, tableNode.Length())
+	err = catalog.HardDeleteTable(t4.Id)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(catalog.TableSet))
+
+	catalog.Compact()
+	assert.Equal(t, 1, len(catalog.TableSet))
+	assert.Equal(t, 1, tableNode.Length())
+	t.Log(tableNode.PString(PPL1))
 
 	t.Log(catalog.PString(PPL1))
 	catalog.Close()

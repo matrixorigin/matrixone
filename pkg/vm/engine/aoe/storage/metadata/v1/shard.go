@@ -78,6 +78,11 @@ func (ss *shardSnapshoter) CommitWrite() error {
 	return err
 }
 
+func (ss *shardSnapshoter) ReAllocId(alloctor *Sequence, view *Catalog) error {
+	processor := newReAllocIdProcessor(alloctor)
+	return view.RecurLoop(processor)
+}
+
 func (ss *shardSnapshoter) PrepareLoad() error {
 	f, err := os.OpenFile(ss.name, os.O_RDONLY, 666)
 	if err != nil {
@@ -98,9 +103,7 @@ func (ss *shardSnapshoter) PrepareLoad() error {
 	if err = ss.view.Unmarshal(mnode.Buf[:size]); err != nil {
 		return err
 	}
-	processor := newReAllocIdProcessor(&ss.catalog.Sequence)
-	err = ss.view.Catalog.RecurLoop(processor)
-	return err
+	return ss.ReAllocId(&ss.catalog.Sequence, ss.view.Catalog)
 }
 
 func (ss *shardSnapshoter) CommitLoad() error {

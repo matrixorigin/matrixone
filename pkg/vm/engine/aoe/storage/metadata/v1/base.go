@@ -157,6 +157,10 @@ func (e *BaseEntry) IsDeletedLocked() bool {
 	return e.CommitInfo.IsDeleted()
 }
 
+func (e *BaseEntry) IsReplacedLocked() bool {
+	return e.CommitInfo.IsReplaced()
+}
+
 func (e *BaseEntry) IsDeleted() bool {
 	e.RLock()
 	defer e.RUnlock()

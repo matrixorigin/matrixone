@@ -332,6 +332,11 @@ func (catalog *Catalog) Compact() {
 			names = append(names, node.name)
 		}
 	}
+	catalog.Lock()
+	for _, table := range tables {
+		delete(catalog.TableSet, table.Id)
+	}
+	catalog.Unlock()
 	if len(names) > 0 {
 		catalog.TryDeleteEmptyNameNodes(names...)
 	}
