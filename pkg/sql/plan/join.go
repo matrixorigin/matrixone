@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package build
+package plan
 
 import (
 	"fmt"
@@ -30,15 +30,15 @@ func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error
 		return b.buildJoinCond(e.Right, rs, ss, qry)
 	case *tree.ComparisonExpr:
 		if e.Op != tree.EQUAL {
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition %v", expr))
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
 		}
 		left, ok := getColumnName(e.Left)
 		if !ok {
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition %v", expr))
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
 		}
 		right, ok := getColumnName(e.Right)
 		if !ok {
-			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition %v", expr))
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
 		}
 		r, rattr, err := qry.getJoinAttribute(append(rs, ss...), left)
 		if err != nil {
@@ -48,6 +48,9 @@ func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error
 		if err != nil {
 			return err
 		}
+		if qry.RelsMap[r].AttrsMap[rattr].Type.Oid != qry.RelsMap[s].AttrsMap[sattr].Type.Oid {
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
+		}
 		qry.Conds = append(qry.Conds, &JoinCondition{
 			R:     r,
 			S:     s,
@@ -56,7 +59,7 @@ func (b *build) buildJoinCond(expr tree.Expr, rs, ss []string, qry *Query) error
 		})
 		return nil
 	}
-	return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition %v", expr))
+	return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", expr))
 }
 
 func (b *build) buildUsingJoinCond(cols tree.IdentifierList, rs, ss []string, qry *Query) error {
@@ -68,6 +71,9 @@ func (b *build) buildUsingJoinCond(cols tree.IdentifierList, rs, ss []string, qr
 		s, sattr, err := qry.getJoinAttribute(ss, string(col))
 		if err != nil {
 			return err
+		}
+		if qry.RelsMap[r].AttrsMap[rattr].Type.Oid != qry.RelsMap[s].AttrsMap[sattr].Type.Oid {
+			return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition 'using(%v)'", col))
 		}
 		qry.Conds = append(qry.Conds, &JoinCondition{
 			R:     r,

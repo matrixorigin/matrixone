@@ -17,6 +17,13 @@ func NewTestEngine() engine.Engine {
 	CreateR(db)
 	CreateS(db)
 	CreateT1(db)
+	{ // star schema benchmark
+		CreatePart(db)
+		CreateDate(db)
+		CreateSupplier(db)
+		CreateCustomer(db)
+		CreateLineorder(db)
+	}
 	return e
 }
 
@@ -255,7 +262,7 @@ func CreateT1(db engine.Database) {
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
 				Name: "userID",
-				Type: types.Type{types.T(types.T_int32), 8, 0, 0},
+				Type: types.Type{types.T(types.T_int32), 4, 0, 0},
 			}})
 			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
 				Alg:  compress.Lz4,
@@ -264,6 +271,316 @@ func CreateT1(db engine.Database) {
 			}})
 		}
 		if err := db.Create(0, "t1", attrs); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func CreateCustomer(db engine.Database) {
+	{
+		var attrs []engine.TableDef
+
+		{
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "c_custkey",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "c_name",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "c_address",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "c_city",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "c_nation",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "c_region",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "c_phone",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "c_mktsegment",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+		}
+		if err := db.Create(0, "customer", attrs); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func CreateLineorder(db engine.Database) {
+	{
+		var attrs []engine.TableDef
+
+		{
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_orderkey",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_linenumber",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_custkey",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_partkey",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_suppkey",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_orderdate",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_orderpriority",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_shippriority",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_quantity",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_extendedprice",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_ordtotalprice",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_discount",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_revenue",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_supplycost",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_tax",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_commitdate",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "lo_shipmode",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+		}
+		if err := db.Create(0, "lineorder", attrs); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func CreatePart(db engine.Database) {
+	{
+		var attrs []engine.TableDef
+
+		{
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "p_partkey",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "p_name",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "p_mfgr",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "p_category",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "p_brand",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "p_color",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "p_type",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "p_size",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "p_container",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+		}
+		if err := db.Create(0, "part", attrs); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func CreateSupplier(db engine.Database) {
+	{
+		var attrs []engine.TableDef
+
+		{
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "s_suppkey",
+				Type: types.Type{types.T(types.T_int64), 8, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "s_name",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "s_address",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "s_city",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "s_nation",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "s_region",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "s_phone",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+		}
+		if err := db.Create(0, "supplier", attrs); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func CreateDate(db engine.Database) {
+	{
+		var attrs []engine.TableDef
+
+		{
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "d_datekey",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "d_date",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "d_dayofweek",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "d_month",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "d_year",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "d_yearmonthnum",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "d_yearmonth",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "d_daynumnweek",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "d_weeknuminyear",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+		}
+		if err := db.Create(0, "dates", attrs); err != nil {
 			log.Fatal(err)
 		}
 	}

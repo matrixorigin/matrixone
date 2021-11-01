@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package build
+package plan
 
 import (
 	"fmt"
@@ -40,6 +40,9 @@ func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
 				s, sattr, err := qry.getJoinAttribute(qry.Rels, right)
 				if err != nil {
 					return err
+				}
+				if qry.RelsMap[r].AttrsMap[rattr].Type.Oid != qry.RelsMap[s].AttrsMap[sattr].Type.Oid {
+					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join condition '%v'", es[i]))
 				}
 				qry.Conds = append(qry.Conds, &JoinCondition{
 					R:     r,

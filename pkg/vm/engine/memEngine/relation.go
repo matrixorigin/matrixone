@@ -21,8 +21,12 @@ func (r *relation) Rows() int64 {
 	return r.md.Rows
 }
 
-func (r *relation) Size(_ string) int64 {
+func (_ *relation) Size(_ string) int64 {
 	return 0
+}
+
+func (_ *relation) CardinalNumber(_ string) int64 {
+	return 1
 }
 
 func (r *relation) Nodes() engine.Nodes {
