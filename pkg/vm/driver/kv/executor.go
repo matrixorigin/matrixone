@@ -123,7 +123,7 @@ func (ce *kvExecutor) prefixScan(shard meta.Shard, req storage.Request) ([]byte,
 		data = append(data, key)
 		data = append(data, value)
 		return true, nil
-	}, false)
+	}, true)
 	if err != nil {
 		return nil, err
 	}
