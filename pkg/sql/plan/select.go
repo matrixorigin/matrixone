@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package build
+package plan
 
 import (
 	"fmt"
@@ -76,6 +76,7 @@ func (b *build) buildSelectWithoutParens(stmt tree.SelectStatement, orderBy tree
 			return err
 		}
 	}
+	qry.Reduce()
 	return nil
 }
 

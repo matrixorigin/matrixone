@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package build
+package plan
 
 import (
 	"bytes"
@@ -22,6 +22,10 @@ import (
 	"matrixone/pkg/sql/colexec/transformer"
 	"matrixone/pkg/vm/engine"
 )
+
+type Plan interface {
+	fmt.Stringer
+}
 
 // Direction for ordering results.
 type Direction int8
@@ -95,6 +99,20 @@ type build struct {
 	db  string // name of schema
 	sql string
 	e   engine.Engine
+}
+
+func (qry *Query) Reduce() {
+	for i := range qry.Rels {
+		rel := qry.RelsMap[qry.Rels[i]]
+		for j := 0; j < len(rel.Attrs); j++ {
+			attr := rel.Attrs[j]
+			if rel.AttrsMap[attr].Ref == 0 {
+				delete(rel.AttrsMap, attr)
+				rel.Attrs = append(rel.Attrs[:j], rel.Attrs[j+1:]...)
+				j--
+			}
+		}
+	}
 }
 
 func (qry *Query) String() string {
@@ -178,7 +196,7 @@ func (rel *Relation) String() string {
 	}
 	buf.WriteString(fmt.Sprintf("\tattributes: %v\n", rel.Attrs))
 	for _, attr := range rel.Attrs {
-		buf.WriteString(fmt.Sprintf("\t\t%s = %s\n", attr, rel.AttrsMap[attr]))
+		buf.WriteString(fmt.Sprintf("\t\t%s\n", rel.AttrsMap[attr]))
 	}
 	buf.WriteString("\trestrict conditions\n")
 	for _, cond := range rel.RestrictConds {
@@ -215,7 +233,7 @@ func (e *ProjectionExtend) IncRef() {
 	e.Ref++
 }
 
-func (e *ProjectionExtend) DecDef() {
+func (e *ProjectionExtend) DecRef() {
 	e.Ref--
 }
 
@@ -227,7 +245,7 @@ func (agg *Aggregation) IncRef() {
 	agg.Ref++
 }
 
-func (agg *Aggregation) DecDef() {
+func (agg *Aggregation) DecRef() {
 	agg.Ref--
 }
 

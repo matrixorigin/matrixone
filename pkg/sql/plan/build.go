@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package build
+package plan
 
 import (
 	"fmt"
@@ -31,20 +31,25 @@ func New(db string, sql string, e engine.Engine) *build {
 	}
 }
 
-func (b *build) BuildStatement(stmt tree.Statement) (*Query, error) {
+func (b *build) BuildStatement(stmt tree.Statement) (Plan, error) {
 	stmt = transform.Transform(stmt)
-	qry := &Query{
-		Limit:   -1,
-		Offset:  -1,
-		RelsMap: make(map[string]*Relation),
-	}
 	switch stmt := stmt.(type) {
 	case *tree.Select:
+		qry := &Query{
+			Limit:   -1,
+			Offset:  -1,
+			RelsMap: make(map[string]*Relation),
+		}
 		if err := b.buildSelect(stmt, qry); err != nil {
 			return nil, err
 		}
 		return qry, nil
 	case *tree.ParenSelect:
+		qry := &Query{
+			Limit:   -1,
+			Offset:  -1,
+			RelsMap: make(map[string]*Relation),
+		}
 		if err := b.buildSelect(stmt.Select, qry); err != nil {
 			return nil, err
 		}
