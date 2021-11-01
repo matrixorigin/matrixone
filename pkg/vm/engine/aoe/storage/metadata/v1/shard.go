@@ -113,19 +113,27 @@ func (ss *shardSnapshoter) CommitLoad() error {
 type shardLogEntry struct {
 	loopProcessor `json:"-"`
 	commitId      uint64 `json:"-"`
-	OldShard      []*replaceTableCtx
-	NewShard      []*addTableCtx
+	Replaced      []*Table
+	Replacer      []*Table
 }
 
-func newShardLogEntry(olds []*replaceTableCtx, news []*addTableCtx) *shardLogEntry {
+func newShardLogEntry() *shardLogEntry {
 	e := &shardLogEntry{
-		OldShard: olds,
-		NewShard: news,
+		Replaced: make([]*Table, 0),
+		Replacer: make([]*Table, 0),
 	}
 	e.TableFn = e.onTable
 	e.SegmentFn = e.onSegment
 	e.BlockFn = e.onBlock
 	return e
+}
+
+func (e *shardLogEntry) addReplaced(table *Table) {
+	e.Replaced = append(e.Replaced, table)
+}
+
+func (e *shardLogEntry) addReplacer(table *Table) {
+	e.Replacer = append(e.Replacer, table)
 }
 
 func (e *shardLogEntry) onTable(table *Table) error {
@@ -153,19 +161,19 @@ func (e *shardLogEntry) Lock()   {}
 func (e *shardLogEntry) Unlock() {}
 
 func (e *shardLogEntry) CommitLocked(commitId uint64) {
-	for _, ctx := range e.OldShard {
-		ctx.table.Lock()
-		ctx.table.CommitLocked(commitId)
-		ctx.table.Unlock()
+	for _, table := range e.Replaced {
+		table.Lock()
+		table.CommitLocked(commitId)
+		table.Unlock()
 	}
 	e.commitId = commitId
-	for _, ctx := range e.NewShard {
-		ctx.table.RLock()
-		ctx.table.RecurLoopLocked(e)
-		ctx.table.RUnlock()
-		ctx.table.Lock()
-		ctx.table.CommitLocked(commitId)
-		ctx.table.Unlock()
+	for _, table := range e.Replacer {
+		table.RLock()
+		table.RecurLoopLocked(e)
+		table.RUnlock()
+		table.Lock()
+		table.CommitLocked(commitId)
+		table.Unlock()
 	}
 }
 
