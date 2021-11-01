@@ -32,6 +32,14 @@ jobs:
         with:
           fetch-depth: '3'
 
+      - name: Detect non-ascii characters
+        run: |
+          na_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
+          if [[ -n $na_characters ]]; then
+            echo "Detected non-ascii characters in source code"
+            printf '%s\n' "${na_characters[*]}"
+          fi
+
       - name: Build Configure
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
