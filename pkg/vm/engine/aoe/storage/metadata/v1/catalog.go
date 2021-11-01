@@ -789,6 +789,17 @@ func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
 	return nil
 }
 
+func (catalog *Catalog) onReplayShardSnapshot(entry *shardLogEntry) error {
+	for _, replaced := range entry.Replaced {
+		table := catalog.TableSet[replaced.Id]
+		table.onNewCommit(replaced.CommitInfo)
+	}
+	for _, replacer := range entry.Replacer {
+		catalog.onNewTable(replacer)
+	}
+	return nil
+}
+
 func MockCatalog(dir string, blkRows, segBlks uint64) *Catalog {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir

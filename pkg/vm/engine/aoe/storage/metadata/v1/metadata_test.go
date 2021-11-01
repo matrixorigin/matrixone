@@ -111,6 +111,14 @@ func createBlock(t *testing.T, tables int, idAlloc *mockIdAllocator, shardId uin
 	}
 }
 
+func doCompareCatalog(t *testing.T, expected, actual *Catalog) {
+	assert.Equal(t, len(expected.TableSet), len(actual.TableSet))
+	for _, expectedTable := range expected.TableSet {
+		actualTable := actual.TableSet[expectedTable.Id]
+		assert.Equal(t, len(expectedTable.SegmentSet), len(actualTable.SegmentSet))
+	}
+}
+
 func doCompare(t *testing.T, expected, actual *catalogLogEntry) {
 	assert.Equal(t, expected.LogRange, actual.LogRange)
 	assert.Equal(t, len(expected.Catalog.TableSet), len(actual.Catalog.TableSet))
@@ -118,7 +126,6 @@ func doCompare(t *testing.T, expected, actual *catalogLogEntry) {
 		actualTable := actual.Catalog.TableSet[expectedTable.Id]
 		assert.Equal(t, len(expectedTable.SegmentSet), len(actualTable.SegmentSet))
 	}
-	assert.Equal(t, len(expected.Catalog.TableSet), len(expected.Catalog.TableSet))
 }
 
 func TestTable(t *testing.T) {
@@ -859,7 +866,7 @@ func TestCatalog2(t *testing.T) {
 func TestShard(t *testing.T) {
 	dir := "/tmp/metadata/testshard"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
-	catalog := initTest(dir, blockRows, segmentBlocks)
+	catalog := initTest(dir, blockRows, segmentBlocks, true)
 	defer catalog.Close()
 
 	mockShards := 4
@@ -940,8 +947,10 @@ func TestShard(t *testing.T) {
 	}
 }
 
-func initTest(dir string, blockRows, segmentBlocks uint64) *Catalog {
-	os.RemoveAll(dir)
+func initTest(dir string, blockRows, segmentBlocks uint64, cleanup bool) *Catalog {
+	if cleanup {
+		os.RemoveAll(dir)
+	}
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = blockRows, segmentBlocks
@@ -960,8 +969,7 @@ type testCfg struct {
 func TestShard2(t *testing.T) {
 	dir := "/tmp/metadata/testshard2"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
-	catalog := initTest(dir, blockRows, segmentBlocks)
-	defer catalog.Close()
+	catalog := initTest(dir, blockRows, segmentBlocks, true)
 	idAlloc := newMockAllocator()
 	cfg1 := testCfg{
 		shardId: uint64(77),
@@ -1060,4 +1068,12 @@ func TestShard2(t *testing.T) {
 	view := catalog.ShardView(cfg1.shardId, index1_0)
 	assert.Equal(t, view1.LogRange, view.LogRange)
 	assert.Equal(t, len(view1.Catalog.TableSet), len(view.Catalog.TableSet))
+	t.Log(catalog.PString(PPL0))
+	catalog.Close()
+
+	catalog2 := initTest(dir, blockRows, segmentBlocks, false)
+	t.Log(catalog2.PString(PPL0))
+	catalog2.Close()
+
+	doCompareCatalog(t, catalog, catalog2)
 }
