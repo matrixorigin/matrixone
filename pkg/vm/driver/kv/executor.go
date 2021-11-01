@@ -20,8 +20,8 @@ import (
 	"errors"
 	"fmt"
 	error2 "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 
 	"github.com/fagongzi/util/protoc"
 	"github.com/matrixorigin/matrixcube/pb/meta"
@@ -120,7 +120,7 @@ func (ce *kvExecutor) prefixScan(shard meta.Shard, req storage.Request) ([]byte,
 			(shard.End != nil && bytes.Compare(shard.End, key) <= 0) {
 			return true, nil
 		}
-		data = append(data,key)
+		data = append(data, key)
 		data = append(data, value)
 		return true, nil
 	}, false)
@@ -214,6 +214,7 @@ func (ce *kvExecutor) setIfNotExist(wb util.WriteBatch, req storage.Request) (ui
 }
 
 func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
+	ce.attrs = map[string]interface{}{}
 	writtenBytes := uint64(0)
 	r := ctx.WriteBatch()
 	wb := r.(util.WriteBatch)
@@ -223,7 +224,7 @@ func (ce *kvExecutor) UpdateWriteBatch(ctx storage.WriteContext) error {
 	for j := range requests {
 		switch requests[j].CmdType {
 		case uint64(pb.Set):
-			writtenBytes,rep := ce.set(wb, requests[j])
+			writtenBytes, rep := ce.set(wb, requests[j])
 			ctx.AppendResponse(rep)
 			writtenBytes += writtenBytes
 		case uint64(pb.Del):
