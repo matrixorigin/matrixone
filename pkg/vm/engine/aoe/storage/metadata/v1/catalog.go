@@ -493,6 +493,7 @@ func (catalog *Catalog) SimpleReplayNewShard(view *catalogLogEntry) error {
 
 func (catalog *Catalog) prepareReplaceShard(ctx *replaceShardCtx) (LogEntry, error) {
 	var err error
+	entry := newShardLogEntry()
 	catalog.RLock()
 	logIndex := new(LogIndex)
 	logIndex.Id = shard.SimpleIndexId(ctx.view.LogRange.Range.Right)
@@ -506,7 +507,7 @@ func (catalog *Catalog) prepareReplaceShard(ctx *replaceShardCtx) (LogEntry, err
 			panic(err)
 		}
 		if !rCtx.discard {
-			ctx.addReplace(rCtx)
+			entry.addReplaced(table)
 		}
 	}
 	catalog.RUnlock()
@@ -515,9 +516,8 @@ func (catalog *Catalog) prepareReplaceShard(ctx *replaceShardCtx) (LogEntry, err
 		if _, err = catalog.prepareAddTable(nCtx); err != nil {
 			panic(err)
 		}
-		ctx.addNew(nCtx)
+		entry.addReplacer(table)
 	}
-	entry := newShardLogEntry(ctx.olds, ctx.news)
 	logEntry := catalog.prepareCommitEntry(entry, ETShardSnapshot, nil)
 	return logEntry, err
 }
@@ -786,6 +786,17 @@ func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
 	blk := seg.BlockSet[blkpos]
 	blk.IndiceMemo = nil
 	blk.onNewCommit(entry.CommitInfo)
+	return nil
+}
+
+func (catalog *Catalog) onReplayShardSnapshot(entry *shardLogEntry) error {
+	for _, replaced := range entry.Replaced {
+		table := catalog.TableSet[replaced.Id]
+		table.onNewCommit(replaced.CommitInfo)
+	}
+	for _, replacer := range entry.Replacer {
+		catalog.onNewTable(replacer)
+	}
 	return nil
 }
 

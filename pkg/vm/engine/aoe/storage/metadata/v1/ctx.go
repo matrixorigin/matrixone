@@ -74,10 +74,6 @@ type replaceTableCtx struct {
 type replaceShardCtx struct {
 	writeCtx
 	view *catalogLogEntry
-	news []*addTableCtx
-	olds []*replaceTableCtx
-	// news map[uint64]*createTableCtx
-	// olds map[uint64]*replaceTableCtx
 }
 
 func newAddTableCtx(table *Table, inTran bool) *addTableCtx {
@@ -155,18 +151,6 @@ func newReplaceShardCtx(view *catalogLogEntry) *replaceShardCtx {
 			inTran: true,
 		},
 		view: view,
-		news: make([]*addTableCtx, 0, 10),
-		olds: make([]*replaceTableCtx, 0, 10),
-		// news: make(map[uint64]*createTableCtx),
-		// olds: make(map[uint64]*replaceTableCtx),
 	}
 	return ctx
-}
-
-func (ctx *replaceShardCtx) addNew(nCtx *addTableCtx) {
-	ctx.news = append(ctx.news, nCtx)
-}
-
-func (ctx *replaceShardCtx) addReplace(oCtx *replaceTableCtx) {
-	ctx.olds = append(ctx.olds, oCtx)
 }
