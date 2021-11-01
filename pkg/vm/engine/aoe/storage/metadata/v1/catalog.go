@@ -485,7 +485,7 @@ func (catalog *Catalog) prepareAddTable(ctx *addTableCtx) (LogEntry, error) {
 	panic("todo")
 }
 
-func (catalog *Catalog) SimpleReplayNewShard(view *catalogLogEntry) error {
+func (catalog *Catalog) SimpleReplaceShard(view *catalogLogEntry) error {
 	ctx := newReplaceShardCtx(view)
 	err := catalog.onCommitRequest(ctx)
 	return err

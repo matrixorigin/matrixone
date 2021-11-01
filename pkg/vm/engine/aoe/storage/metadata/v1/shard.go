@@ -107,7 +107,7 @@ func (ss *shardSnapshoter) PrepareLoad() error {
 }
 
 func (ss *shardSnapshoter) CommitLoad() error {
-	return ss.catalog.SimpleReplayNewShard(ss.view)
+	return ss.catalog.SimpleReplaceShard(ss.view)
 }
 
 type shardLogEntry struct {
