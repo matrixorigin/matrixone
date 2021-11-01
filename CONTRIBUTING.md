@@ -1,5 +1,8 @@
 # Contributing to MatrixOne
 MatrixOne is an open source project, and you can make contributions in lots of ways. You can help with ideas, code, or documentation, any contributions are welcome.
+
+Thanks for understanding that English is used as a shared language in this repository. Maintainers do not use machine translation to avoid miscommunication due to error in translation. If description of issue / PR are written in non-English languages, those may be closed. If English is not your native language and you aren't sure about any of these, don't hesitate to ask for help in your pull request!
+
 ## What contributions can I make
 Contributions to MatrixOne fall into the following categories.
 * To report a bug or a problem with documentation, please file an [issue](https://github.com/matrixorigin/matrixone/issues/new/choose) providing the details of the problem. Don't forget to add some proper labels, and follow the issue template.
