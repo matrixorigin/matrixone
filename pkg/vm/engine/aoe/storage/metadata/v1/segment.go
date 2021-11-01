@@ -48,7 +48,7 @@ type Segment struct {
 	Table    *Table         `json:"-"`
 	Catalog  *Catalog       `json:"-"`
 	IdIndex  map[uint64]int `json:"-"`
-	BlockSet []*Block
+	BlockSet []*Block       `json:"blocks"`
 }
 
 func newSegmentEntry(catalog *Catalog, table *Table, tranId uint64, exIndex *LogIndex) *Segment {

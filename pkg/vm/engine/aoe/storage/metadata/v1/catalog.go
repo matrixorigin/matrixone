@@ -51,9 +51,9 @@ type CatalogCfg struct {
 }
 
 type catalogLogEntry struct {
-	Range    *common.Range
-	Catalog  *Catalog
-	LogRange *LogRange
+	Range    *common.Range `json:"range"`
+	Catalog  *Catalog      `json:"catalog"`
+	LogRange *LogRange     `json:"logrange"`
 }
 
 func newCatalogLogEntry(id uint64) *catalogLogEntry {
@@ -129,7 +129,7 @@ type Catalog struct {
 	commitMu        sync.RWMutex          `json:"-"`
 	nameNodes       map[string]*tableNode `json:"-"`
 
-	TableSet map[uint64]*Table
+	TableSet map[uint64]*Table `json:"tables"`
 }
 
 func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {

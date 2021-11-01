@@ -55,8 +55,8 @@ func (e *tableLogEntry) ToEntry() *Table {
 
 type Table struct {
 	*BaseEntry
-	Schema     *Schema
-	SegmentSet []*Segment
+	Schema     *Schema        `json:"schema"`
+	SegmentSet []*Segment     `json:"segments"`
 	IdIndex    map[uint64]int `json:"-"`
 	Catalog    *Catalog       `json:"-"`
 	FlushTS    int64          `json:"-"`

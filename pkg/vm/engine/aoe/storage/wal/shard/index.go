@@ -8,17 +8,17 @@ import (
 )
 
 type IndexId struct {
-	Id     uint64
-	Offset uint32
-	Size   uint32
+	Id     uint64 `json:"id"`
+	Offset uint32 `json:"offset"`
+	Size   uint32 `json:"size"`
 }
 
 type Index struct {
-	ShardId  uint64
-	Id       IndexId
-	Start    uint64
-	Count    uint64
-	Capacity uint64
+	ShardId  uint64  `json:"sid"`
+	Id       IndexId `json:"id"`
+	Start    uint64  `json:"start"`
+	Count    uint64  `json:"count"`
+	Capacity uint64  `json:"cap"`
 }
 
 func SimpleIndexId(id uint64) IndexId {

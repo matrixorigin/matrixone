@@ -83,8 +83,8 @@ type Block struct {
 	*BaseEntry
 	Segment     *Segment    `json:"-"`
 	IndiceMemo  *IndiceMemo `json:"-"`
-	Count       uint64
-	SegmentedId uint64
+	Count       uint64      `json:"count"`
+	SegmentedId uint64      `json:"segmentedid"`
 }
 
 func newBlockEntry(segment *Segment, tranId uint64, exIndex *LogIndex) *Block {

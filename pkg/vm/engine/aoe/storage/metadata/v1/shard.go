@@ -112,9 +112,9 @@ func (ss *shardSnapshoter) CommitLoad() error {
 
 type shardLogEntry struct {
 	loopProcessor `json:"-"`
-	commitId      uint64 `json:"-"`
-	Replaced      []*Table
-	Replacer      []*Table
+	commitId      uint64   `json:"-"`
+	Replaced      []*Table `json:"replaced"`
+	Replacer      []*Table `json:"replacer"`
 }
 
 func newShardLogEntry() *shardLogEntry {

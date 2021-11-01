@@ -25,8 +25,8 @@ var (
 )
 
 type Range struct {
-	Left  uint64
-	Right uint64
+	Left  uint64 `json:"l"`
+	Right uint64 `json:"r"`
 }
 
 func (r *Range) String() string {

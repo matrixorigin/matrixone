@@ -1068,11 +1068,10 @@ func TestShard2(t *testing.T) {
 	view := catalog.ShardView(cfg1.shardId, index1_0)
 	assert.Equal(t, view1.LogRange, view.LogRange)
 	assert.Equal(t, len(view1.Catalog.TableSet), len(view.Catalog.TableSet))
-	t.Log(catalog.PString(PPL0))
 	catalog.Close()
 
 	catalog2 := initTest(dir, blockRows, segmentBlocks, false)
-	t.Log(catalog2.PString(PPL0))
+	t.Log(catalog.PString(PPL2))
 	catalog2.Close()
 
 	doCompareCatalog(t, catalog, catalog2)

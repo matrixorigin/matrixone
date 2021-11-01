@@ -30,8 +30,8 @@ const (
 
 type BaseEntry struct {
 	sync.RWMutex
-	Id         uint64
-	CommitInfo *CommitInfo
+	Id         uint64      `json:"id"`
+	CommitInfo *CommitInfo `json:"commit"`
 }
 
 func (e *BaseEntry) GetShardId() uint64 {
