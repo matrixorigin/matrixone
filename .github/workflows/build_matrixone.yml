@@ -32,6 +32,15 @@ jobs:
         with:
           fetch-depth: '3'
 
+      - name: Detect Chinese characters
+        run: |
+          cn_characters=$(find ${{ github.workspace }} -type f -name "*.go" -exec grep -P  '[\xE5-\xE9][\x80-\xBF][\x80-\xBF]|\xE4[\xB8-\xBF][\x80-\xBF]' {} + || true)
+          if [[ -n $cn_characters ]]; then
+            echo "Detected Chinese characters in source code"
+            printf '%s\n' "${cn_characters[*]}"
+            exit 1
+          fi
+
       - name: Build Configure
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
