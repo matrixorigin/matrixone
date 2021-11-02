@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
-	error2 "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
+	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
@@ -282,7 +282,7 @@ func (h *driver) Start() error {
 		select {
 		case <-timeoutC:
 			logutil.Error("wait for available shard timeout")
-			return error2.ErrStartupTimeout
+			return errDriver.ErrStartupTimeout
 		default:
 			err := h.initShardPool()
 			if err == nil {

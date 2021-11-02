@@ -19,7 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	error2 "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
+	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	pb3 "github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 
@@ -59,7 +59,7 @@ func (ce *kvExecutor) set(wb util.WriteBatch, req storage.Request) (uint64, []by
 func (ce *kvExecutor) get(req storage.Request) ([]byte, error) {
 	value, err := ce.kv.Get(req.Key)
 	if err != nil {
-		value := error2.ErrorResp(err)
+		value := errDriver.ErrorResp(err)
 		return value, err
 	}
 	return value, nil
@@ -93,7 +93,7 @@ func (ce *kvExecutor) scan(shard meta.Shard, req storage.Request) ([]byte, error
 		return true, nil
 	}, false)
 	if err != nil {
-		rep = error2.ErrorResp(err)
+		rep = errDriver.ErrorResp(err)
 		return rep, nil
 	}
 	if shard.End != nil && bytes.Compare(shard.End, customReq.End) <= 0 {
@@ -101,7 +101,7 @@ func (ce *kvExecutor) scan(shard meta.Shard, req storage.Request) ([]byte, error
 	}
 	if data != nil {
 		if rep, err = json.Marshal(data); err != nil {
-			rep = error2.ErrorResp(err)
+			rep = errDriver.ErrorResp(err)
 			return rep, err
 		}
 	}
@@ -152,7 +152,7 @@ func (ce *kvExecutor) incr(wb util.WriteBatch, req storage.Request) (uint64, []b
 	} else {
 		value, err := ce.kv.Get(req.Key)
 		if err != nil {
-			rep := error2.ErrorResp(err)
+			rep := errDriver.ErrorResp(err)
 			return 0, rep
 		}
 		if len(value) > 0 {
@@ -189,7 +189,7 @@ func (ce *kvExecutor) setIfNotExist(wb util.WriteBatch, req storage.Request) (ui
 	var rep []byte
 
 	if _, ok := ce.attrs[codec.Bytes2String(req.Key)]; ok {
-		rep = error2.ErrorResp(errors.New("key is already existed"))
+		rep = errDriver.ErrorResp(errors.New("key is already existed"))
 		return 0, rep
 	} else {
 		ce.attrs[codec.Bytes2String(req.Key)] = "1"
@@ -198,12 +198,12 @@ func (ce *kvExecutor) setIfNotExist(wb util.WriteBatch, req storage.Request) (ui
 	value, err := ce.kv.Get(req.Key)
 
 	if err != nil {
-		rep = error2.ErrorResp(err)
+		rep = errDriver.ErrorResp(err)
 		return 0, rep
 	}
 
 	if value != nil {
-		rep = error2.ErrorResp(errors.New("key is already existed"))
+		rep = errDriver.ErrorResp(errors.New("key is already existed"))
 		return 0, rep
 	}
 

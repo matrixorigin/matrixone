@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
-	error2 "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
+	errDriver "github.com/matrixorigin/matrixone/pkg/vm/driver/error"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
@@ -89,7 +89,7 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 	protoc.MustUnmarshal(customReq, cmd)
 	bat, _, err := protocol.DecodeBatch(customReq.Data)
 	if err != nil {
-		resp := error2.ErrorResp(err)
+		resp := errDriver.ErrorResp(err)
 		return 0, 0, resp
 	}
 	size := 0
@@ -107,7 +107,7 @@ func (s *Storage) Append(index uint64, offset int, batchSize int, shardId uint64
 		Data:      bat,
 	})
 	if err != nil {
-		resp := error2.ErrorResp(err)
+		resp := errDriver.ErrorResp(err)
 		return 0, 0, resp
 	}
 	writtenBytes := uint64(len(key) + len(customReq.Data))
@@ -159,7 +159,7 @@ func (s *Storage) createTable(index uint64, shardId uint64, cmd []byte, key []by
 	protoc.MustUnmarshal(customReq, cmd)
 	t, err := helper.DecodeTable(customReq.TableInfo)
 	if err != nil {
-		buf := error2.ErrorResp(err)
+		buf := errDriver.ErrorResp(err)
 
 		return 0, 0, buf
 	}
@@ -169,7 +169,7 @@ func (s *Storage) createTable(index uint64, shardId uint64, cmd []byte, key []by
 		TableName: customReq.Name,
 	})
 	if err != nil {
-		buf := error2.ErrorResp(err, "Call CreateTable Failed")
+		buf := errDriver.ErrorResp(err, "Call CreateTable Failed")
 		return 0, 0, buf
 	}
 	buf := codec.Uint642Bytes(id)
@@ -189,7 +189,7 @@ func (s *Storage) dropTable(index uint64, shardId uint64, cmd []byte, key []byte
 		TableName: customReq.Name,
 	})
 	if err != nil {
-		buf := error2.ErrorResp(err, "Call CreateTable Failed")
+		buf := errDriver.ErrorResp(err, "Call CreateTable Failed")
 		return 0, 0, buf
 	}
 	buf := codec.Uint642Bytes(id)
