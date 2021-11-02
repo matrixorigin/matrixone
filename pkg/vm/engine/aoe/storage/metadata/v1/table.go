@@ -204,7 +204,12 @@ func (e *Table) rebuild(catalog *Catalog) {
 // be deleted from catalog later
 func (e *Table) HardDelete() error {
 	ctx := newDeleteTableCtx(e)
-	return e.Catalog.onCommitRequest(ctx)
+	err := e.Catalog.onCommitRequest(ctx)
+	if err != nil {
+		return err
+	}
+	e.Catalog.tableListener.OnTableHardDeleted(e)
+	return err
 }
 
 func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
