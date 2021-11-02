@@ -34,6 +34,8 @@ type Attribute struct {
 	Default DefaultExpr
 	// type of attribute
 	Type types.Type
+
+	PrimaryKey bool
 }
 
 type DefaultExpr struct {

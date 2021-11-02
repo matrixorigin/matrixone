@@ -17,6 +17,7 @@ package helper
 import (
 	"bytes"
 	"encoding/gob"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
@@ -128,13 +129,14 @@ func ColumnDefs(sid, tid uint64, defs []engine.TableDef) []aoe.ColumnInfo {
 	for _, def := range defs {
 		if v, ok := def.(*engine.AttributeDef); ok {
 			cols = append(cols, aoe.ColumnInfo{
-				SchemaId: 	 sid,
-				TableID:  	 tid,
-				Id:       	 id,
-				Name:     	 v.Attr.Name,
-				Alg:      	 v.Attr.Alg,
-				Type:     	 v.Attr.Type,
-				Default: 	 v.Attr.Default,
+				SchemaId:   sid,
+				TableID:    tid,
+				Id:         id,
+				Name:       v.Attr.Name,
+				Alg:        v.Attr.Alg,
+				Type:       v.Attr.Type,
+				Default:    v.Attr.Default,
+				PrimaryKey: v.Attr.PrimaryKey,
 			})
 			id++
 		}
@@ -165,9 +167,9 @@ func Attribute(tbl aoe.TableInfo) []metadata.Attribute {
 	attrs := make([]metadata.Attribute, len(tbl.Columns))
 	for i, col := range tbl.Columns {
 		attrs[i] = metadata.Attribute{
-			Alg:  	 col.Alg,
-			Name: 	 col.Name,
-			Type: 	 col.Type,
+			Alg:     col.Alg,
+			Name:    col.Name,
+			Type:    col.Type,
 			Default: col.Default,
 		}
 	}
