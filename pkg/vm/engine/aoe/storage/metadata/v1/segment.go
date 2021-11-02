@@ -330,15 +330,25 @@ func (e *Segment) GetCoarseSize() int64 {
 	return e.GetCoarseSizeLocked()
 }
 
-func (e *Segment) GetCoarseSizeLocked() int64 {
-	if e.IsSorted() {
-		return e.CommitInfo.Size
-	}
+func (e *Segment) GetUnsortedSize() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetUnsortedSizeLocked()
+}
+
+func (e *Segment) GetUnsortedSizeLocked() int64 {
 	size := int64(0)
 	for _, block := range e.BlockSet {
 		size += block.GetCoarseSize()
 	}
 	return size
+}
+
+func (e *Segment) GetCoarseSizeLocked() int64 {
+	if e.IsSorted() {
+		return e.CommitInfo.Size
+	}
+	return e.GetUnsortedSizeLocked()
 }
 
 func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {

@@ -254,16 +254,22 @@ func (catalog *Catalog) onBlockUpgraded(block *Block) {
 }
 
 func (catalog *Catalog) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
-	catalog.UpdateShardStats(segment.GetShardId(), segment.GetCoarseSize()-prev.GetSize(), 0)
+	catalog.UpdateShardStats(segment.GetShardId(), segment.GetCoarseSize()-segment.GetUnsortedSize(), 0)
+}
+
+func (catalog *Catalog) GetShardStats(shardId uint64) *shardStats {
+	catalog.shardMu.RLock()
+	defer catalog.shardMu.RUnlock()
+	return catalog.shardsStats[shardId]
 }
 
 func (catalog *Catalog) UpdateShardStats(shardId uint64, size int64, count int64) {
 	catalog.shardMu.RLock()
 	stats := catalog.shardsStats[shardId]
 	catalog.shardMu.RUnlock()
-	stats.addCount(count)
-	stats.addSize(size)
-	// logutil.Infof("%s", stats.String())
+	stats.AddCount(count)
+	stats.AddSize(size)
+	// logutil.Infof("%s, size=%d", stats.String(), size)
 }
 
 func (catalog *Catalog) SimpleGetTableAppliedIdByName(name string) (uint64, bool) {

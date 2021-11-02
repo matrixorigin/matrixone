@@ -216,22 +216,22 @@ func newShardStats(id uint64) *shardStats {
 	}
 }
 
-func (stats *shardStats) addCount(count int64) {
+func (stats *shardStats) AddCount(count int64) {
 	atomic.AddInt64(&stats.coarseCount, count)
 }
 
-func (stats *shardStats) getCount() int64 {
+func (stats *shardStats) GetCount() int64 {
 	return atomic.LoadInt64(&stats.coarseCount)
 }
 
-func (stats *shardStats) addSize(size int64) {
+func (stats *shardStats) AddSize(size int64) {
 	atomic.AddInt64(&stats.coarseSize, size)
 }
 
-func (stats *shardStats) getSize() int64 {
+func (stats *shardStats) GetSize() int64 {
 	return atomic.LoadInt64(&stats.coarseSize)
 }
 
 func (stats *shardStats) String() string {
-	return fmt.Sprintf("Stats<%d>(Size=%d, Count=%d)", stats.id, stats.getSize(), stats.getCount())
+	return fmt.Sprintf("Stats<%d>(Size=%d, Count=%d)", stats.id, stats.GetSize(), stats.GetCount())
 }

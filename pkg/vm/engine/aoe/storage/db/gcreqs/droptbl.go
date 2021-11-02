@@ -78,6 +78,7 @@ func (req *dropTblRequest) Execute() error {
 	if c != nil {
 		c.Unref()
 	}
+	req.Opts.Meta.Catalog.HardDeleteTable(req.TableId)
 	if req.CB != nil {
 		req.CB(nil)
 	}

@@ -589,6 +589,7 @@ func TestDropTable2(t *testing.T) {
 	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
 	tblMeta := inst.Store.Catalog.SimpleGetTable(tid)
+	stats := inst.Store.Catalog.GetShardStats(tblMeta.GetShardId())
 	assert.NotNil(t, tblMeta)
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
@@ -610,9 +611,6 @@ func TestDropTable2(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	// time.Sleep(time.Duration(100) * time.Millisecond)
-	// tbl, _ := inst.Store.DataTables.WeakRefTable(tid)
-	// t.Log(tbl.String())
 	testutils.WaitExpect(100, func() bool {
 		return int(blkCnt*insertCnt) == inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount()
 	})
@@ -637,6 +635,9 @@ func TestDropTable2(t *testing.T) {
 	dropCB := func(err error) {
 		doneCh <- expectErr
 	}
+
+	assert.True(t, stats.GetSize() > 0)
+
 	inst.DropTable(dbi.DropTableCtx{TableName: tableInfo.Name, OnFinishCB: dropCB, OpIndex: common.NextGlobalSeqNum()})
 
 	testutils.WaitExpect(50, func() bool {
@@ -655,6 +656,7 @@ func TestDropTable2(t *testing.T) {
 	assert.Equal(t, 0, inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	err = <-doneCh
 	assert.Equal(t, expectErr, err)
+	assert.Equal(t, int64(0), stats.GetSize())
 	inst.Close()
 }
 
