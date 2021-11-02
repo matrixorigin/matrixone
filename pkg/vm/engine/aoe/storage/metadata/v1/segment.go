@@ -307,6 +307,23 @@ func (e *Segment) HasMaxBlocks() bool {
 	return e.IsSorted() || len(e.BlockSet) == int(e.Table.Schema.SegmentMaxBlocks)
 }
 
+func (e *Segment) GetCoarseCountLocked() int64 {
+	if e.IsSorted() {
+		return int64(e.Table.Schema.SegmentMaxBlocks * e.Table.Schema.BlockMaxRows)
+	}
+	count := int64(0)
+	for _, block := range e.BlockSet {
+		count += block.GetCoarseCount()
+	}
+	return count
+}
+
+func (e *Segment) GetCoarseCount() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetCoarseCountLocked()
+}
+
 func (e *Segment) GetCoarseSize() int64 {
 	e.RLock()
 	defer e.RUnlock()

@@ -207,12 +207,18 @@ func newCatalogReplayer() *catalogReplayer {
 	return replayer
 }
 
+func (replacer *catalogReplayer) rebuildShardStats() {
+	// TODO
+}
+
 func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg,
 	store logstore.AwareStore, indexWal wal.ShardWal) (*Catalog, error) {
 	replayer.catalog = NewCatalogWithDriver(mu, cfg, store, indexWal)
 	if err := replayer.Replay(replayer.catalog.Store); err != nil {
 		return nil, err
 	}
+	replayer.catalog.Compact()
+	replayer.rebuildShardStats()
 	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
 	return replayer.catalog, nil

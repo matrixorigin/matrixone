@@ -223,6 +223,19 @@ func (e *Block) GetCount() uint64 {
 	return atomic.LoadUint64(&e.Count)
 }
 
+func (e *Block) GetCoarseCountLocked() int64 {
+	if e.IsFull() {
+		return int64(e.Segment.Table.Schema.BlockMaxRows)
+	}
+	return 0
+}
+
+func (e *Block) GetCoarseCount() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetCoarseCountLocked()
+}
+
 // Not safe
 // TODO: should be safe
 func (e *Block) AddCount(n uint64) (uint64, error) {

@@ -207,8 +207,7 @@ func (e *shardLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 type shardStats struct {
 	id          uint64
 	coarseSize  int64
-	coarseCount uint64
-	// updated     time.Time
+	coarseCount int64
 }
 
 func newShardStats(id uint64) *shardStats {
@@ -217,12 +216,12 @@ func newShardStats(id uint64) *shardStats {
 	}
 }
 
-func (stats *shardStats) addCount(count uint64) {
-	atomic.AddUint64(&stats.coarseCount, count)
+func (stats *shardStats) addCount(count int64) {
+	atomic.AddInt64(&stats.coarseCount, count)
 }
 
-func (stats *shardStats) getCount() uint64 {
-	return atomic.LoadUint64(&stats.coarseCount)
+func (stats *shardStats) getCount() int64 {
+	return atomic.LoadInt64(&stats.coarseCount)
 }
 
 func (stats *shardStats) addSize(size int64) {

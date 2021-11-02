@@ -163,6 +163,9 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awar
 	blockListener.BlockUpgradedFn = catalog.onBlockUpgraded
 	segmentListener := new(BaseSegmentListener)
 	segmentListener.SegmentUpgradedFn = catalog.onSegmentUpgraded
+	tableListener := new(BaseTableListener)
+	tableListener.HardDeletedFn = catalog.onTableHardDelete
+	catalog.tableListener = tableListener
 	catalog.blockListener = blockListener
 	catalog.segmentListener = segmentListener
 
@@ -191,6 +194,9 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	blockListener.BlockUpgradedFn = catalog.onBlockUpgraded
 	segmentListener := new(BaseSegmentListener)
 	segmentListener.SegmentUpgradedFn = catalog.onSegmentUpgraded
+	tableListener := new(BaseTableListener)
+	tableListener.HardDeletedFn = catalog.onTableHardDelete
+	catalog.tableListener = tableListener
 	catalog.blockListener = blockListener
 	catalog.segmentListener = segmentListener
 
@@ -239,15 +245,19 @@ func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error
 	return nil
 }
 
+func (catalog *Catalog) onTableHardDelete(table *Table) {
+	catalog.UpdateShardStats(table.GetShardId(), -table.GetCoarseSize(), -table.GetCoarseCount())
+}
+
 func (catalog *Catalog) onBlockUpgraded(block *Block) {
-	block.Segment.Table.Catalog.UpdateShardStats(block.GetShardId(), block.GetCoarseSize(), block.GetCount())
+	catalog.UpdateShardStats(block.GetShardId(), block.GetCoarseSize(), block.GetCoarseCount())
 }
 
 func (catalog *Catalog) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
-	segment.Table.Catalog.UpdateShardStats(segment.GetShardId(), segment.GetCoarseSize()-prev.GetSize(), 0)
+	catalog.UpdateShardStats(segment.GetShardId(), segment.GetCoarseSize()-prev.GetSize(), 0)
 }
 
-func (catalog *Catalog) UpdateShardStats(shardId uint64, size int64, count uint64) {
+func (catalog *Catalog) UpdateShardStats(shardId uint64, size int64, count int64) {
 	catalog.shardMu.RLock()
 	stats := catalog.shardsStats[shardId]
 	catalog.shardMu.RUnlock()

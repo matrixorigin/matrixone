@@ -103,6 +103,26 @@ func (e *Table) UpdateFlushTS() {
 	atomic.StoreInt64(&e.FlushTS, now)
 }
 
+func (e *Table) GetCoarseSize() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	size := int64(0)
+	for _, segment := range e.SegmentSet {
+		size += segment.GetCoarseSize()
+	}
+	return size
+}
+
+func (e *Table) GetCoarseCount() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	count := int64(0)
+	for _, segment := range e.SegmentSet {
+		count += segment.GetCoarseCount()
+	}
+	return count
+}
+
 func (e *Table) GetFlushTS() int64 {
 	return atomic.LoadInt64(&e.FlushTS)
 }
