@@ -270,7 +270,7 @@ func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 	if err != nil {
 		return err
 	}
-	e.Segment.Table.Catalog.UpdateShardStats(e.GetShardId(), e.GetCoarseSize(), e.Count)
+	e.Segment.Table.Catalog.blockListener.OnBlockUpgraded(e)
 	return err
 }
 

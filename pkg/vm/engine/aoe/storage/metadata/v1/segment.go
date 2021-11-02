@@ -276,13 +276,13 @@ func (e *Segment) onNewBlock(entry *Block) {
 
 // Safe
 func (e *Segment) SimpleUpgrade(size int64, exIndice []*LogIndex) error {
-	oldSize := e.GetCoarseSizeLocked()
+	stale := e.GetCommit()
 	ctx := newUpgradeSegmentCtx(e, size, exIndice)
 	err := e.Table.Catalog.onCommitRequest(ctx)
 	if err != nil {
 		return err
 	}
-	e.Table.Catalog.UpdateShardStats(e.GetShardId(), e.GetCoarseSize()-oldSize, 0)
+	e.Table.Catalog.segmentListener.OnSegmentUpgraded(e, stale)
 	return err
 }
 

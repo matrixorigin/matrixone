@@ -131,6 +131,10 @@ type Catalog struct {
 	shardMu         sync.RWMutex           `json:"-"`
 	shardsStats     map[uint64]*shardStats `json:"-"`
 
+	tableListener   TableListener   `json:"-"`
+	segmentListener SegmentListener `json:"-"`
+	blockListener   BlockListener   `json:"-"`
+
 	TableSet map[uint64]*Table `json:"tables"`
 }
 
@@ -155,11 +159,16 @@ func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awar
 		IndexWal:    indexWal,
 		shardsStats: make(map[uint64]*shardStats),
 	}
+	blockListener := new(BaseBlockListener)
+	blockListener.BlockUpgradedFn = catalog.onBlockUpgraded
+	segmentListener := new(BaseSegmentListener)
+	segmentListener.SegmentUpgradedFn = catalog.onSegmentUpgraded
+	catalog.blockListener = blockListener
+	catalog.segmentListener = segmentListener
+
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewSafeQueue(100000, 100, nil)
 	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
-	// rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
-	// ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog
@@ -178,6 +187,13 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 		nameIndex:   btree.New(2),
 		shardsStats: make(map[uint64]*shardStats),
 	}
+	blockListener := new(BaseBlockListener)
+	blockListener.BlockUpgradedFn = catalog.onBlockUpgraded
+	segmentListener := new(BaseSegmentListener)
+	segmentListener.SegmentUpgradedFn = catalog.onSegmentUpgraded
+	catalog.blockListener = blockListener
+	catalog.segmentListener = segmentListener
+
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
 		MaxSize: cfg.RotationFileMaxSize,
@@ -190,8 +206,6 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewSafeQueue(100000, 100, nil)
 	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
-	// rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
-	// ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog
@@ -223,6 +237,14 @@ func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error
 		catalog.Sequence.nextTableId = sorted[len(sorted)-1].Id
 	}
 	return nil
+}
+
+func (catalog *Catalog) onBlockUpgraded(block *Block) {
+	block.Segment.Table.Catalog.UpdateShardStats(block.GetShardId(), block.GetCoarseSize(), block.GetCount())
+}
+
+func (catalog *Catalog) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
+	segment.Table.Catalog.UpdateShardStats(segment.GetShardId(), segment.GetCoarseSize()-prev.GetSize(), 0)
 }
 
 func (catalog *Catalog) UpdateShardStats(shardId uint64, size int64, count uint64) {
