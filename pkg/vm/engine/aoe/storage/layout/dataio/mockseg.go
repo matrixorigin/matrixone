@@ -15,10 +15,11 @@
 package dataio
 
 import (
+	"path/filepath"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"path/filepath"
 )
 
 type MockSegmentFile struct {
@@ -69,6 +70,10 @@ func (msf *MockSegmentFile) GetBlockIndicesMeta(id common.ID) *base.IndicesMeta 
 
 func (msf *MockSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	logutil.Debugf("(%s:%s) | ReadPoint (Off: %d, Len: %d) size: %d cap: %d", msf.TypeName, msf.FileName, ptr.Offset, ptr.Len, len(buf), cap(buf))
+}
+
+func (sf *MockSegmentFile) GetBlockSize(_ common.ID) int64 {
+	return 0
 }
 
 func (msf *MockSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {

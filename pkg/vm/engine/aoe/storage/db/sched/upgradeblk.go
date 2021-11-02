@@ -50,6 +50,10 @@ func (e *upgradeBlkEvent) Execute() error {
 	if err != nil {
 		return err
 	}
+	shardId := e.Meta.GetCommit().GetShardId()
+	blockSize := e.Data.GetSegmentFile().GetBlockSize(*e.Meta.AsCommonID())
+	// logutil.Infof("blk %s, size %d", e.Meta.AsCommonID().ToBlockFileName(), blockSize)
+	e.Meta.Segment.Table.Catalog.UpdateShardStats(shardId, blockSize, e.Meta.Count)
 	if e.Data.WeakRefSegment().CanUpgrade() {
 		e.SegmentClosed = true
 	}

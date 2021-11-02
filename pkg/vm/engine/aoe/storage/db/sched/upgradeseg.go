@@ -43,7 +43,13 @@ func NewUpgradeSegEvent(ctx *Context, old iface.ISegment, td iface.ITableData) *
 func (e *upgradeSegEvent) Execute() error {
 	var err error
 	sid := e.OldSegment.GetMeta().Id
+	oldSize := e.OldSegment.GetSegmentFile().Stat().Size()
 	e.Segment, err = e.TableData.UpgradeSegment(sid)
+	shardId := e.OldSegment.GetMeta().GetShardId()
+	newSize := e.Segment.GetSegmentFile().Stat().Size()
+	// logutil.Infof("old=%d, new=%d", oldSize, newSize)
+	e.Segment.GetMeta().Table.Catalog.UpdateShardStats(shardId, newSize-oldSize, 0)
+
 	if err == nil {
 		e.Segment.GetMeta().SimpleUpgrade(nil)
 	}

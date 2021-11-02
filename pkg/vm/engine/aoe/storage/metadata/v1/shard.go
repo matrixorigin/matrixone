@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -201,4 +202,37 @@ func (e *shardLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
+}
+
+type shardStats struct {
+	id          uint64
+	coarseSize  int64
+	coarseCount uint64
+	// updated     time.Time
+}
+
+func newShardStats(id uint64) *shardStats {
+	return &shardStats{
+		id: id,
+	}
+}
+
+func (stats *shardStats) addCount(count uint64) {
+	atomic.AddUint64(&stats.coarseCount, count)
+}
+
+func (stats *shardStats) getCount() uint64 {
+	return atomic.LoadUint64(&stats.coarseCount)
+}
+
+func (stats *shardStats) addSize(size int64) {
+	atomic.AddInt64(&stats.coarseSize, size)
+}
+
+func (stats *shardStats) getSize() int64 {
+	return atomic.LoadInt64(&stats.coarseSize)
+}
+
+func (stats *shardStats) String() string {
+	return fmt.Sprintf("Stats<%d>(Size=%d, Count=%d)", stats.id, stats.getSize(), stats.getCount())
 }

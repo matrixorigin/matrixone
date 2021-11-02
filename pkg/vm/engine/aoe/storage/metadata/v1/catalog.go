@@ -120,14 +120,16 @@ type Catalog struct {
 	sm.StateMachine `json:"-"`
 	*sync.RWMutex   `json:"-"`
 	Sequence        `json:"-"`
-	pipeline        *commitPipeline       `json:"-"`
-	Store           logstore.AwareStore   `json:"-"`
-	IndexWal        wal.ShardWal          `json:"-"`
-	Cfg             *CatalogCfg           `json:"-"`
-	nameIndex       *btree.BTree          `json:"-"`
-	nodesMu         sync.RWMutex          `json:"-"`
-	commitMu        sync.RWMutex          `json:"-"`
-	nameNodes       map[string]*tableNode `json:"-"`
+	pipeline        *commitPipeline        `json:"-"`
+	Store           logstore.AwareStore    `json:"-"`
+	IndexWal        wal.ShardWal           `json:"-"`
+	Cfg             *CatalogCfg            `json:"-"`
+	nameIndex       *btree.BTree           `json:"-"`
+	nodesMu         sync.RWMutex           `json:"-"`
+	commitMu        sync.RWMutex           `json:"-"`
+	nameNodes       map[string]*tableNode  `json:"-"`
+	shardMu         sync.RWMutex           `json:"-"`
+	shardsStats     map[uint64]*shardStats `json:"-"`
 
 	TableSet map[uint64]*Table `json:"tables"`
 }
@@ -144,13 +146,14 @@ func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awa
 
 func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
 	catalog := &Catalog{
-		RWMutex:   mu,
-		Cfg:       cfg,
-		TableSet:  make(map[uint64]*Table),
-		nameNodes: make(map[string]*tableNode),
-		nameIndex: btree.New(2),
-		Store:     store,
-		IndexWal:  indexWal,
+		RWMutex:     mu,
+		Cfg:         cfg,
+		TableSet:    make(map[uint64]*Table),
+		nameNodes:   make(map[string]*tableNode),
+		nameIndex:   btree.New(2),
+		Store:       store,
+		IndexWal:    indexWal,
+		shardsStats: make(map[uint64]*shardStats),
 	}
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewSafeQueue(100000, 100, nil)
@@ -168,11 +171,12 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
 	}
 	catalog := &Catalog{
-		RWMutex:   mu,
-		Cfg:       cfg,
-		TableSet:  make(map[uint64]*Table),
-		nameNodes: make(map[string]*tableNode),
-		nameIndex: btree.New(2),
+		RWMutex:     mu,
+		Cfg:         cfg,
+		TableSet:    make(map[uint64]*Table),
+		nameNodes:   make(map[string]*tableNode),
+		nameIndex:   btree.New(2),
+		shardsStats: make(map[uint64]*shardStats),
 	}
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
@@ -219,6 +223,15 @@ func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error
 		catalog.Sequence.nextTableId = sorted[len(sorted)-1].Id
 	}
 	return nil
+}
+
+func (catalog *Catalog) UpdateShardStats(shardId uint64, size int64, count uint64) {
+	catalog.shardMu.RLock()
+	stats := catalog.shardsStats[shardId]
+	catalog.shardMu.RUnlock()
+	stats.addCount(count)
+	stats.addSize(size)
+	logutil.Info(stats.String())
 }
 
 func (catalog *Catalog) SimpleGetTableAppliedIdByName(name string) (uint64, bool) {
@@ -714,7 +727,32 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 	return logEntry
 }
 
+func (catalog *Catalog) tryCreateShardStats(shardId uint64) {
+	catalog.shardMu.RLock()
+	stats := catalog.shardsStats[shardId]
+	if stats != nil {
+		catalog.shardMu.RUnlock()
+		return
+	}
+	catalog.shardMu.RUnlock()
+	catalog.shardMu.Lock()
+	defer catalog.shardMu.Unlock()
+	stats = catalog.shardsStats[shardId]
+	if stats != nil {
+		return
+	}
+	catalog.shardsStats[shardId] = newShardStats(shardId)
+}
+
+func (catalog *Catalog) CleanupShard(shardId uint64) {
+	catalog.shardMu.Lock()
+	defer catalog.shardMu.Unlock()
+	delete(catalog.shardsStats, shardId)
+}
+
 func (catalog *Catalog) onNewTable(entry *Table) error {
+	shardId := entry.GetShardId()
+	catalog.tryCreateShardStats(shardId)
 	nn := catalog.nameNodes[entry.Schema.Name]
 	if nn != nil {
 		e := nn.GetEntry()
