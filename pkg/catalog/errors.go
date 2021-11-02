@@ -39,4 +39,6 @@ var (
 	ErrTableCreateTimeout = errors.New("create table timeout")
 	//ErrTableCreateFailed is the error for fail in creating tablet.
 	ErrTabletCreateFailed = errors.New("create tablet failed")
+	ErrColumnNotExist = errors.New("column not exist")
+	ErrPrimaryKeyNotExist = errors.New("primary key not exist")
 )

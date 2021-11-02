@@ -46,6 +46,7 @@ type Schema struct {
 	ColDefs          []*ColDef      `json:"cols"`
 	NameIndex        map[string]int `json:"nindex"`
 	BlockMaxRows     uint64         `json:"blkrows"`
+	PrimaryKey       int            `json:"primarykey"`
 	SegmentMaxBlocks uint64         `json:"segblocks"`
 }
 

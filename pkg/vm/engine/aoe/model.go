@@ -52,16 +52,17 @@ type SchemaInfo struct {
 
 // TableInfo stores the information of a table or view.
 type TableInfo struct {
-	SchemaId  uint64       `json:"schema_id"`
-	Id        uint64       `json:"id"`
-	Name      string       `json:"name"`
-	Type      uint64       `json:"type"` // Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
-	Indices   []IndexInfo  `json:"indices"`
-	Columns   []ColumnInfo `json:"columns"` // Column is listed in order in which they appear in schema
-	Comment   []byte       `json:"comment"`
-	State     SchemaState  `json:"state"`
-	Partition []byte       `json:"partition"`
-	Epoch     uint64       `json:"epoch"`
+	SchemaId   uint64       `json:"schema_id"`
+	Id         uint64       `json:"id"`
+	Name       string       `json:"name"`
+	Type       uint64       `json:"type"` // Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
+	Indices    []IndexInfo  `json:"indices"`
+	Columns    []ColumnInfo `json:"columns"`     // Column is listed in order in which they appear in schema
+	PrimaryKey string       `json:"primary_key"` // PrimaryKey is the name of the column of the primary key
+	Comment    []byte       `json:"comment"`
+	State      SchemaState  `json:"state"`
+	Partition  []byte       `json:"partition"`
+	Epoch      uint64       `json:"epoch"`
 }
 
 type TabletInfo struct {
@@ -72,14 +73,14 @@ type TabletInfo struct {
 
 // ColumnInfo stores the information of a column.
 type ColumnInfo struct {
-	SchemaId uint64     		  `json:"schema_id"`
-	TableID  uint64     		  `json:"table_id"`
-	Id       uint64     		  `json:"column_id"`
-	Name     string     		  `json:"name"`
-	Type     types.Type 		  `json:"type"`
+	SchemaId uint64               `json:"schema_id"`
+	TableID  uint64               `json:"table_id"`
+	Id       uint64               `json:"column_id"`
+	Name     string               `json:"name"`
+	Type     types.Type           `json:"type"`
 	Default  metadata.DefaultExpr `json:"default"`
-	Alg      int        		  `json:"alg"`
-	Epoch    uint64     		  `json:"epoch"`
+	Alg      int                  `json:"alg"`
+	Epoch    uint64               `json:"epoch"`
 }
 
 type IndexInfo struct {

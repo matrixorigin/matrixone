@@ -163,6 +163,59 @@ func (c *Catalog) GetDatabase(dbName string) (*aoe.SchemaInfo, error) {
 	}
 	return db, nil
 }
+func (c *Catalog) GetPrimaryKey(dbId uint64, tableName string) (pk *aoe.ColumnInfo, err error) {
+	tbl, err := c.GetTable(dbId, tableName)
+	if err != nil {
+		return
+	}
+
+	if tbl.PrimaryKey == "" {
+		return nil, ErrPrimaryKeyNotExist
+	}
+	for _, col := range tbl.Columns {
+		if col.Name == tbl.PrimaryKey {
+			return &col, nil
+		}
+	}
+
+	return nil, ErrColumnNotExist
+}
+func (c *Catalog) DeletePrimaryKey(epoch, dbId uint64, tableName string) (err error) {
+	tbl, err := c.GetTable(dbId, tableName)
+	if err != nil {
+		return
+	}
+	tbl.PrimaryKey = ""
+	c.updateTableInfo(dbId, tbl)
+	return
+}
+func (c *Catalog) SetPrimaryKey(epoch, dbId uint64, tableName, columnName string) (err error) {
+	tbl, err := c.GetTable(dbId, tableName)
+	if err != nil {
+		return
+	}
+	for _, col := range tbl.Columns {
+		if col.Name == columnName {
+			tbl.PrimaryKey = columnName
+			return
+		}
+	}
+	c.updateTableInfo(dbId, tbl)
+	return ErrColumnNotExist
+}
+func (c *Catalog) updateTableInfo(dbId uint64, tbl *aoe.TableInfo) (err error) {
+	meta, err := helper.EncodeTable(*tbl)
+	c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
+	return err
+}
+
+// func (c *Catalog) UpdatePrimaryKey(epoch, dbId uint64, tableName, columnName string) (err error) {
+// 	return
+// }
+
+// func (c *Catalog) IsPrimaryKey(epoch, dbId uint64, tableName, columnName string) (isPrimaryKey bool, err error) {
+// 	return
+// }
 
 // CreateTable creates a table with tableInfo in database.
 func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64, err error) {
@@ -190,7 +243,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	}
 
 	wg := sync.WaitGroup{}
-
+	tbl.PrimaryKey = ""
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
@@ -261,7 +314,7 @@ func (c *Catalog) DropTable(epoch, dbId uint64, tableName string) (tid uint64, e
 }
 
 // ListTablesByName returns all tables meta in database.
-func (c *Catalog) ListTablesByName(dbName string) ([]aoe.TableInfo, error){
+func (c *Catalog) ListTablesByName(dbName string) ([]aoe.TableInfo, error) {
 	if value, err := c.Driver.Get(c.dbIDKey(dbName)); err != nil || value == nil {
 		return nil, ErrDBNotExists
 	} else {

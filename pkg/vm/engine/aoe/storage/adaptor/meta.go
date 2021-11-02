@@ -61,6 +61,9 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 			Idx:  idx,
 			Type: colInfo.Type,
 		}
+		if colInfo.Name == info.PrimaryKey {
+			schema.PrimaryKey = idx
+		}
 		schema.NameIndex[newInfo.Name] = len(schema.ColDefs)
 		schema.ColDefs = append(schema.ColDefs, newInfo)
 	}
