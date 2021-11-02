@@ -254,7 +254,7 @@ func (catalog *Catalog) onBlockUpgraded(block *Block) {
 }
 
 func (catalog *Catalog) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
-	catalog.UpdateShardStats(segment.GetShardId(), segment.GetCoarseSize()-segment.GetUnsortedSize(), 0)
+	catalog.UpdateShardStats(segment.Table.GetShardId(), segment.GetCoarseSize()-segment.GetUnsortedSize(), 0)
 }
 
 func (catalog *Catalog) GetShardStats(shardId uint64) *shardStats {
@@ -788,18 +788,31 @@ func (catalog *Catalog) CleanupShard(shardId uint64) {
 	delete(catalog.shardsStats, shardId)
 }
 
-// func (catalog *Catalog) SplitCheck(size uint64, shardId uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, specs []byte, err error) {
-// 	catalog.shardMu.RLock()
-// 	stats := catalog.shardsStats[shardId]
-// 	catalog.shardMu.RUnlock()
-// 	coarseSize, coarseCount = uint64(stats.getSize()), stats.getCount()
-// 	if coarseSize < size {
-// 		return
-// 	}
-// 	parts = make([][]byte, coarseSize/size+1)
+func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, specs []byte, err error) {
+	catalog.shardMu.RLock()
+	stats := catalog.shardsStats[shardId]
+	catalog.shardMu.RUnlock()
+	coarseSize, coarseCount = uint64(stats.GetSize()), uint64(stats.GetCount())
+	if coarseSize < size {
+		return
+	}
+	view := catalog.ShardView(shardId, index)
+	totalSize := int64(0)
 
-// 	return
-// }
+	for _, table := range view.Catalog.TableSet {
+		// if table.IsDeletedLocked() {
+		// 	continue
+		// }
+		totalSize += table.GetCoarseSize()
+	}
+	if totalSize < int64(size) {
+		return
+	}
+
+	// parts = make([][]byte, coarseSize/size+1)
+
+	return
+}
 
 func (catalog *Catalog) onNewTable(entry *Table) error {
 	shardId := entry.GetShardId()
