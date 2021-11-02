@@ -12,25 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package ftree
 
 import (
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/plan"
 )
 
-func getColumnName(expr tree.Expr) (string, bool) {
-	e, ok := expr.(*tree.UnresolvedName)
-	if !ok {
-		return "", false
+func New() *build {
+	return &build{}
+}
+
+func (b *build) Build(qry *plan.Query) (*Ftree, error) {
+	if len(qry.Rels) == 1 {
+		return &Ftree{
+			FreeVars: qry.FreeAttrs,
+			Roots:    buildPath(qry.Rels[0], qry, nil),
+		}, nil
 	}
-	switch e.NumParts {
-	case 1:
-		return e.Parts[0], true
-	case 2:
-		return e.Parts[1] + "." + e.Parts[0], true
-	case 3:
-		return e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0], true
-	default: // 4
-		return e.Parts[3] + "." + e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0], true
+	rn, err := selectRoot(qry)
+	if err != nil {
+		return nil, err
 	}
+	roots, err := buildNodes(qry.RelsMap[rn], qry)
+	if err != nil {
+		return nil, err
+	}
+	f := &Ftree{
+		Roots:    roots,
+		FreeVars: qry.FreeAttrs,
+	}
+	return f, f.check(qry)
 }

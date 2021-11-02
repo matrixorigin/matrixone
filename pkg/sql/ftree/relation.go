@@ -12,25 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package ftree
 
-import (
-	"matrixone/pkg/sql/tree"
-)
+import "matrixone/pkg/sql/plan"
 
-func getColumnName(expr tree.Expr) (string, bool) {
-	e, ok := expr.(*tree.UnresolvedName)
-	if !ok {
-		return "", false
+func buildRelation(rel *plan.Relation) *Relation {
+	var vars []string
+
+	varsMap := make(map[string]*Variable)
+	vars = append(vars, rel.Attrs...)
+	for _, v := range vars {
+		attr := rel.AttrsMap[v]
+		varsMap[v] = &Variable{
+			Ref:  attr.Ref,
+			Name: attr.Name,
+			Type: attr.Type.Oid,
+		}
 	}
-	switch e.NumParts {
-	case 1:
-		return e.Parts[0], true
-	case 2:
-		return e.Parts[1] + "." + e.Parts[0], true
-	case 3:
-		return e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0], true
-	default: // 4
-		return e.Parts[3] + "." + e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0], true
+	for _, e := range rel.ProjectionExtends {
+		vars = append(vars, e.Alias)
+		varsMap[e.Alias] = &Variable{
+			Ref:  e.Ref,
+			Name: e.Alias,
+			Type: e.E.ReturnType(),
+		}
+	}
+	return &Relation{
+		Rel:     rel,
+		Vars:    vars,
+		VarsMap: varsMap,
 	}
 }

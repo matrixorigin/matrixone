@@ -19,6 +19,7 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/errors"
+	"matrixone/pkg/sql/util"
 )
 
 // If flg is set, then it will increase the reference count
@@ -27,7 +28,7 @@ func (qry *Query) getAttribute0(flg bool, col string) ([]string, *types.Type, er
 	var typ *types.Type
 	var names []string
 
-	tbl, name := splitTableAndColumn(col)
+	tbl, name := util.SplitTableAndColumn(col)
 	if len(tbl) > 0 {
 		for i := 0; i < len(qry.Rels); i++ {
 			if qry.Rels[i] == tbl {
@@ -67,7 +68,7 @@ func (qry *Query) getAttribute1(flg bool, col string) ([]string, *types.Type, er
 	var typ *types.Type
 	var names []string
 
-	tbl, name := splitTableAndColumn(col)
+	tbl, name := util.SplitTableAndColumn(col)
 	if len(tbl) > 0 {
 		for i := 0; i < len(qry.Rels); i++ {
 			if qry.Rels[i] == tbl {
@@ -125,7 +126,7 @@ func (qry *Query) getAttribute2(flg bool, col string) ([]string, *types.Type, er
 	var typ *types.Type
 	var names []string
 
-	tbl, name := splitTableAndColumn(col)
+	tbl, name := util.SplitTableAndColumn(col)
 	if len(tbl) > 0 {
 		for i := 0; i < len(qry.Rels); i++ {
 			if qry.Rels[i] == tbl {
@@ -194,7 +195,7 @@ func (qry *Query) getAttribute2(flg bool, col string) ([]string, *types.Type, er
 func (qry *Query) getJoinAttribute(tbls []string, col string) (string, string, error) {
 	var names []string
 
-	tbl, name := splitTableAndColumn(col)
+	tbl, name := util.SplitTableAndColumn(col)
 	if len(tbl) > 0 {
 		for i := 0; i < len(tbls); i++ {
 			if tbls[i] == tbl {
