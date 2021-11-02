@@ -270,21 +270,19 @@ func TestBinaryOperators(t *testing.T) {
 	type noErrorCase struct {
 		sql string
 	}
-	type ErrorCase struct {
-		sql string
-		err error
-	}
 
-	// noErrors is Test Cases for binary operators for different types
+	// noErrors is Test Cases for binary operators whose arguments are same type family.
 	// which sql should keep compile and run success without any error.
 	noErrors := []noErrorCase{
 		{"create database bos;"},
 		{"create table iis(i1 tinyint, i2 smallint, i3 int, i4 bigint);"},
 		{"create table ffs(f1 float, f2 double);"},
 		{"create table uus(u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);"},
+		{"create table ccs(c1 char(10), c2 varchar(20));"},
 		{"insert into iis values (5, 10, 15, 20);"},
 		{"insert into ffs values (11.11, 333.333);"},
 		{"insert into uus values (10, 200, 3000, 40000);"},
+		{"insert into ccs values ('0.0', '0.001');"},
 		// plus operator
 		{"select i1 + i1, i1 + i2, i1 + i3, i1 + i4 from iis;"},
 		{"select i2 + i1, i2 + i2, i2 + i3, i2 + i4 from iis;"},
@@ -315,6 +313,36 @@ func TestBinaryOperators(t *testing.T) {
 		{"select u2 * u1, u2 * u2, u2 * u3, u2 * u4 from uus;"},
 		{"select u3 * u1, u3 * u2, u3 * u3, u3 * u4 from uus;"},
 		{"select u4 * u1, u4 * u2, u4 * u3, u4 * u4 from uus;"},
+		// div operator
+		{"select i1 / i1, i1 / i2, i1 / i3, i1 / i4 from iis;"},
+		{"select i2 / i1, i2 / i2, i2 / i3, i2 / i4 from iis;"},
+		{"select i3 / i1, i3 / i2, i3 / i3, i3 / i4 from iis;"},
+		{"select i4 / i1, i4 / i2, i4 / i3, i4 / i4 from iis;"},
+		{"select f1 / f2, f2 / f1 from ffs;"},
+		{"select u1 / u1, u1 / u2, u1 / u3, u1 / u4 from uus;"},
+		{"select u2 / u1, u2 / u2, u2 / u3, u2 / u4 from uus;"},
+		{"select u3 / u1, u3 / u2, u3 / u3, u3 / u4 from uus;"},
+		{"select u4 / u1, u4 / u2, u4 / u3, u4 / u4 from uus;"},
+		// mod operator
+		{"select i1 % i1, i1 % i2, i1 % i3, i1 % i4 from iis;"},
+		{"select i2 % i1, i2 % i2, i2 % i3, i2 % i4 from iis;"},
+		{"select i3 % i1, i3 % i2, i3 % i3, i3 % i4 from iis;"},
+		{"select i4 % i1, i4 % i2, i4 % i3, i4 % i4 from iis;"},
+		{"select f1 % f2, f2 % f1 from ffs;"},
+		{"select u1 % u1, u1 % u2, u1 % u3, u1 % u4 from uus;"},
+		{"select u2 % u1, u2 % u2, u2 % u3, u2 % u4 from uus;"},
+		{"select u3 % u1, u3 % u2, u3 % u3, u3 % u4 from uus;"},
+		{"select u4 % u1, u4 % u2, u4 % u3, u4 % u4 from uus;"},
+		// not operator
+		{"select not i1, not i2, not i3, not i4 from iis where not i1 and not i2 and not i3 and not i4;"},
+		{"select not f1, not f2 from ffs where not f1 or not f2;"},
+		{"select not u1, not u2, not u3, not u4 from uus where not u1 and not u2 or not u3 and not u4;"},
+		{"select not c1, not c2 from ccs where not c1 and not c2;"},
+		{"select not not not i1, not not i2 from iis;"},
+		{"select * from ccs where not not not c1 and not not c2;"},
+		{"select * from iis where not i1 = 1;"},
+		{"select * from iis where not not (i1 = 1);"},
+
 		{"drop database bos;"},
 	}
 

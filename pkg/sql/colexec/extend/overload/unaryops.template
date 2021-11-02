@@ -92,15 +92,7 @@ func init() {
 // init function to init binOpsReturnType from
 // plus.go / mult.go / minus.go / div.go / mod.go
 func init() {
-	unaryOpsReturnType = make([][]types.T, len(unaryOperators))
-
 	for i, op := range unaryOperators {
-		unaryOpsReturnType[i] = make([]types.T, maxt)
-
-		for j := range unaryOpsReturnType[i] {
-			unaryOpsReturnType[i][j] = noRt
-		}
-
 		for _, uo := range UnaryOps[op] {
 			unaryOpsReturnType[i][uo.Typ] = uo.ReturnType
 		}

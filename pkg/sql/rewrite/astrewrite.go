@@ -15,10 +15,28 @@
 package rewrite
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 	"go/constant"
 )
+
+var logicalBinaryOps = map[tree.BinaryOp] struct{} {
+	tree.BIT_OR: {},
+	tree.BIT_AND: {},
+	tree.BIT_XOR: {},
+}
+
+var logicalComparisonOps = map[tree.ComparisonOp] struct{} {
+	tree.EQUAL: {},
+	tree.LESS_THAN: {},
+	tree.LESS_THAN_EQUAL: {},
+	tree.GREAT_THAN: {},
+	tree.GREAT_THAN_EQUAL: {},
+	tree.NOT_EQUAL: {},
+	tree.IN: {},
+	tree.NOT_IN: {},
+	tree.LIKE: {},
+	tree.NOT_LIKE: {},
+}
 
 // AstRewrite do sql rewrite before plan build.
 // deal with such case:
@@ -28,9 +46,6 @@ import (
 // case 2:  normal view sql rewrite work ( not Materialized View)
 // Tips: expr contains castExpr, unresolvedName, constant
 func AstRewrite(stmt tree.Statement) tree.Statement {
-	// TODO: need to support query rewrite for normal view (not materialized view) after days.
-	// but how to know it is a view here ?
-
 	// rewrite all filter condition inside AST.
 	// rewrite select statement.
 	if st, ok := stmt.(*tree.Select); ok {
@@ -71,11 +86,17 @@ func rewriteFilterCondition(expr tree.Expr) tree.Expr {
 		return tree.NewParenExpr(rewriteFilterCondition(t.Expr))
 	// rewrite to = 0
 	case *tree.NotExpr:
-		if binaryExpr, ok := t.Expr.(*tree.BinaryExpr); ok && overload.IsLogical(int(binaryExpr.Op)){
+		if binaryExpr, ok := t.Expr.(*tree.BinaryExpr); ok && isLogicalBinaryOp(binaryExpr.Op){
 			return tree.NewNotExpr(rewriteFilterCondition(binaryExpr))
 		}
-		if comparisonExpr, ok := t.Expr.(*tree.ComparisonExpr); ok && overload.IsLogical(int(comparisonExpr.Op)){
+		if comparisonExpr, ok := t.Expr.(*tree.ComparisonExpr); ok && isLogicalComparisonOp(comparisonExpr.Op){
 			return tree.NewNotExpr(rewriteFilterCondition(comparisonExpr))
+		}
+		if parenExpr, ok := t.Expr.(*tree.ParenExpr); ok {
+			return tree.NewNotExpr(rewriteFilterCondition(parenExpr))
+		}
+		if notExpr, ok := t.Expr.(*tree.NotExpr); ok {
+			return tree.NewNotExpr(rewriteFilterCondition(notExpr))
 		}
 		return tree.NewComparisonExpr(tree.EQUAL, t.Expr, tree.NewNumVal(constant.MakeInt64(0), "0", false))
 	// rewrite to != 0
@@ -83,6 +104,16 @@ func rewriteFilterCondition(expr tree.Expr) tree.Expr {
 		return tree.NewComparisonExpr(tree.NOT_EQUAL, t, tree.NewNumVal(constant.MakeInt64(0), "0", false))
 	}
 	return expr
+}
+
+func isLogicalBinaryOp(op tree.BinaryOp) bool {
+	_, ok := logicalBinaryOps[op]
+	return ok
+}
+
+func isLogicalComparisonOp(op tree.ComparisonOp) bool {
+	_, ok := logicalComparisonOps[op]
+	return ok
 }
 
 func subTableRewrite(t tree.TableExpr) tree.TableExpr {
