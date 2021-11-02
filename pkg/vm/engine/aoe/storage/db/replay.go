@@ -17,15 +17,16 @@ package db
 import (
 	"fmt"
 	"io/ioutil"
+	"os"
+	"path"
+	"sort"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"path"
-	"sort"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 )
@@ -196,6 +197,11 @@ func newUnsortedSegmentFile(id common.ID, h *replayHandle) *unsortedSegmentFile 
 
 func (sf *sortedSegmentFile) clean() {
 	sf.h.doRemove(sf.name)
+}
+
+func (sf *sortedSegmentFile) size() int64 {
+	stat, _ := os.Stat(sf.name)
+	return stat.Size()
 }
 
 func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string, transient bool) {
@@ -492,7 +498,7 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 			// as SORTED. For example, a crash happened after creating a sorted segment file and
 			// before committing the metadata as SORTED. These segments will be committed as SORTED
 			// during replaying.
-			segment.SimpleUpgrade(nil)
+			segment.SimpleUpgrade(file.size(), nil)
 			continue
 		}
 	}

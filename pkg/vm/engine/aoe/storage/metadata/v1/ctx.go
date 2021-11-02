@@ -51,6 +51,7 @@ type upgradeSegmentCtx struct {
 	writeCtx
 	segment  *Segment
 	exIndice []*LogIndex
+	size     int64
 }
 
 type createBlockCtx struct {
@@ -115,10 +116,11 @@ func newCreateSegmentCtx(table *Table) *createSegmentCtx {
 	}
 }
 
-func newUpgradeSegmentCtx(segment *Segment, exIndice []*LogIndex) *upgradeSegmentCtx {
+func newUpgradeSegmentCtx(segment *Segment, size int64, exIndice []*LogIndex) *upgradeSegmentCtx {
 	return &upgradeSegmentCtx{
 		segment:  segment,
 		exIndice: exIndice,
+		size:     size,
 	}
 }
 

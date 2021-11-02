@@ -231,7 +231,7 @@ func (catalog *Catalog) UpdateShardStats(shardId uint64, size int64, count uint6
 	catalog.shardMu.RUnlock()
 	stats.addCount(count)
 	stats.addSize(size)
-	logutil.Info(stats.String())
+	// logutil.Infof("%s", stats.String())
 }
 
 func (catalog *Catalog) SimpleGetTableAppliedIdByName(name string) (uint64, bool) {
@@ -749,6 +749,19 @@ func (catalog *Catalog) CleanupShard(shardId uint64) {
 	defer catalog.shardMu.Unlock()
 	delete(catalog.shardsStats, shardId)
 }
+
+// func (catalog *Catalog) SplitCheck(size uint64, shardId uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, specs []byte, err error) {
+// 	catalog.shardMu.RLock()
+// 	stats := catalog.shardsStats[shardId]
+// 	catalog.shardMu.RUnlock()
+// 	coarseSize, coarseCount = uint64(stats.getSize()), stats.getCount()
+// 	if coarseSize < size {
+// 		return
+// 	}
+// 	parts = make([][]byte, coarseSize/size+1)
+
+// 	return
+// }
 
 func (catalog *Catalog) onNewTable(entry *Table) error {
 	shardId := entry.GetShardId()

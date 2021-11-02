@@ -33,6 +33,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+var (
+	mockBlockSize   int64 = 100
+	mockSegmentSize int64 = 200
+)
+
 type mockIdAllocator struct {
 	sync.RWMutex
 	driver map[uint64]*common.IdAlloctor
@@ -68,7 +73,7 @@ func (alloc *mockIdAllocator) alloc(shardId uint64) uint64 {
 func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	return func() {
 		defer wg.Done()
-		err := seg.SimpleUpgrade(nil)
+		err := seg.SimpleUpgrade(mockSegmentSize, nil)
 		assert.Nil(t, err)
 	}
 }
@@ -586,7 +591,7 @@ func TestAppliedIndex(t *testing.T) {
 	assert.Equal(t, applied, id)
 
 	seg := blk.Segment
-	err = seg.SimpleUpgrade(nil)
+	err = seg.SimpleUpgrade(mockSegmentSize, nil)
 	assert.Nil(t, err)
 
 	id, ok = seg.GetAppliedIndex(nil)
@@ -658,7 +663,7 @@ func TestUpgrade(t *testing.T) {
 			if cnt == blockCnt {
 				segment, err := catalog.SimpleGetSegment(tableId, segmentId)
 				assert.Nil(t, err)
-				segment.SimpleUpgrade(nil)
+				segment.SimpleUpgrade(mockSegmentSize, nil)
 				atomic.AddUint64(&upgradedSegments, uint64(1))
 				// segment.RLock()
 				// t.Log(segment.PString(PPL1))

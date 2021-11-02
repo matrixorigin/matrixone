@@ -166,9 +166,9 @@ func (e *Segment) PString(level PPLevel) string {
 		}
 	}
 	if cnt == 0 {
-		s = fmt.Sprintf("%s>", s)
+		s = fmt.Sprintf("%s[Size=%d]>", s, e.GetCoarseSizeLocked())
 	} else {
-		s = fmt.Sprintf("%s\n>", s)
+		s = fmt.Sprintf("%s\n[Size=%d]\n>", s, e.GetCoarseSizeLocked())
 	}
 	return s
 }
@@ -275,9 +275,15 @@ func (e *Segment) onNewBlock(entry *Block) {
 }
 
 // Safe
-func (e *Segment) SimpleUpgrade(exIndice []*LogIndex) error {
-	ctx := newUpgradeSegmentCtx(e, exIndice)
-	return e.Table.Catalog.onCommitRequest(ctx)
+func (e *Segment) SimpleUpgrade(size int64, exIndice []*LogIndex) error {
+	oldSize := e.GetCoarseSizeLocked()
+	ctx := newUpgradeSegmentCtx(e, size, exIndice)
+	err := e.Table.Catalog.onCommitRequest(ctx)
+	if err != nil {
+		return err
+	}
+	e.Table.Catalog.UpdateShardStats(e.GetShardId(), e.GetCoarseSize()-oldSize, 0)
+	return err
 }
 
 // Not safe
@@ -299,6 +305,23 @@ func (e *Segment) FirstInFullBlock() *Block {
 // Not safe
 func (e *Segment) HasMaxBlocks() bool {
 	return e.IsSorted() || len(e.BlockSet) == int(e.Table.Schema.SegmentMaxBlocks)
+}
+
+func (e *Segment) GetCoarseSize() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetCoarseSizeLocked()
+}
+
+func (e *Segment) GetCoarseSizeLocked() int64 {
+	if e.IsSorted() {
+		return e.CommitInfo.Size
+	}
+	size := int64(0)
+	for _, block := range e.BlockSet {
+		size += block.GetCoarseSize()
+	}
+	return size
 }
 
 func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
@@ -330,6 +353,7 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 		TranId:   tranId,
 		CommitId: tranId,
 		Op:       newOp,
+		Size:     ctx.size,
 	}
 	if ctx.exIndice == nil {
 		id, ok := e.calcAppliedIndex()

@@ -113,6 +113,7 @@ type CommitInfo struct {
 	CommitId        uint64    `json:"cid"`
 	TranId          uint64    `json:"tid"`
 	Op              OpT       `json:"op"`
+	Size            int64     `json:"size"`
 	LogIndex        *LogIndex `json:"idx"`
 	PrevIndex       *LogIndex `json:"pidx"`
 	AppliedIndex    *LogIndex `json:"aidx"`
@@ -143,6 +144,14 @@ func (info *CommitInfo) IsDeleted() bool {
 
 func (info *CommitInfo) IsReplaced() bool {
 	return info.Op == OpReplaced
+}
+
+func (info *CommitInfo) SetSize(size int64) {
+	atomic.AddInt64(&info.Size, size)
+}
+
+func (info *CommitInfo) GetSize() int64 {
+	return atomic.LoadInt64(&info.Size)
 }
 
 func (info *CommitInfo) PString(level PPLevel) string {

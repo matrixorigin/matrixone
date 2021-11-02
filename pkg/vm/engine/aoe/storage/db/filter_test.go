@@ -15,6 +15,11 @@
 package db
 
 import (
+	"os"
+	"strconv"
+	"sync/atomic"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
@@ -25,10 +30,6 @@ import (
 	table2 "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"os"
-	"strconv"
-	"sync/atomic"
-	"testing"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/stretchr/testify/assert"
@@ -61,7 +62,7 @@ func TestAll(t *testing.T) {
 		err := block.SimpleUpgrade(nil)
 		assert.Nil(t, err)
 	}
-	err := segment.SimpleUpgrade(nil)
+	err := segment.SimpleUpgrade(100, nil)
 	assert.Nil(t, err)
 	writer := dataio.NewSegmentWriter(batches, segment, path)
 	err = writer.Execute()
