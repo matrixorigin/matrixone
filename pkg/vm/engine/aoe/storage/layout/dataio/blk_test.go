@@ -171,7 +171,8 @@ func TestAll(t *testing.T) {
 	fsMgr := NewManager(workDir, false)
 	segFile = fsMgr.GetUnsortedFile(id)
 	assert.Nil(t, segFile)
-	segFile, err := fsMgr.RegisterUnsortedFiles(id)
+	//segFile, err := fsMgr.RegisterUnsortedFiles(id)
+	segFile, err := fsMgr.RegisterUnsortedFile(id)
 	assert.Nil(t, err)
 	segFile = fsMgr.GetUnsortedFile(id)
 	assert.NotNil(t, segFile)
@@ -210,7 +211,7 @@ func TestSegmentWriter(t *testing.T) {
 	writer := NewSegmentWriter(batches, segment, dir)
 	err := writer.Execute()
 	assert.Nil(t, err)
-	segFile := NewSortedSegmentFile(dir, *segment.AsCommonID())
+	segFile := NewSortedSegmentFile(dir, segment)
 	assert.NotNil(t, segFile)
 	assert.NotNil(t, segFile.Stat().Name())
 	assert.NotNil(t, segFile.Stat().OriginSize())
@@ -251,14 +252,15 @@ func TestSegmentWriter(t *testing.T) {
 	assert.Equal(t, int64(len), col0Vf.Stat().Size())
 
 	fsMgr := NewManager(dir, false)
-	segFile, err = fsMgr.RegisterUnsortedFiles(*segment.AsCommonID())
+	segFile, err = fsMgr.RegisterUnsortedFile(*segment.AsCommonID())
 	assert.Nil(t, err)
-	segFile = fsMgr.UpgradeFile(*segment.AsCommonID())
+	segFile = fsMgr.UpgradeFile(segment)
 	assert.NotNil(t, segFile)
 	segFile = fsMgr.GetUnsortedFile(*segment.AsCommonID())
 	assert.Nil(t, segFile)
 	fsMgr.UnregisterSortedFile(*segment.AsCommonID())
-	segFile, err = fsMgr.RegisterSortedFiles(*segment.AsCommonID())
+	//segFile, err = fsMgr.RegisterSortedFiles(*segment.AsCommonID())
+	segFile, err = fsMgr.RegisterSortedFile(segment)
 	assert.Nil(t, err)
 	segFile = fsMgr.GetSortedFile(*segment.AsCommonID())
 	fsMgr.UnregisterSortedFile(*segment.AsCommonID())
@@ -268,6 +270,41 @@ func TestSegmentWriter(t *testing.T) {
 	logutil.Infof(fsMgr.String())
 	col0Vf.Unref()
 	col1Vf.Unref()
+
+	// test ingest sorted segment file with different metadata
+	assert.Nil(t, os.Link("/tmp/testsegmentwriter/data/1_5.seg", "/tmp/testsegmentwriter/data/1_6.seg"))
+	segment = table.SimpleCreateSegment()
+	blocks := make([]*metadata.Block, 0)
+	for i := 0; i < int(blkCount); i++ {
+		block := segment.SimpleCreateBlock()
+		//t.Log(block.Id)
+		assert.NotNil(t, block)
+		blocks = append(blocks, block)
+	}
+	segFile, err = fsMgr.RegisterSortedFile(segment)
+	assert.Nil(t, err)
+	//segFile.RefBlock()
+
+	id1 := blocks[0].AsCommonID()
+	id1.Idx = uint16(0)
+	part := segFile.MakeVirtualPartFile(id1)
+	assert.Equal(t, part.Stat().Size(), segFile.PartSize(uint64(0), id1.AsBlockID(), false))
+	assert.NotEqual(t, int64(0), part.Stat().Size())
+
+	//for k, _ := range segFile.(*SortedSegmentFile).Parts {
+	//	t.Log(k.Col, ": ", k.ID.String())
+	//}
+
+	id1.Idx = uint16(1)
+	part = segFile.MakeVirtualPartFile(id1)
+	assert.Equal(t, part.Stat().Size(), segFile.PartSize(uint64(1), *id1, false))
+	assert.NotEqual(t, int64(0), part.Stat().Size())
+
+	id2 := blocks[1].AsCommonID()
+	id2.Idx = uint16(2)
+	part = segFile.MakeVirtualPartFile(id2)
+	assert.Equal(t, part.Stat().Size(), segFile.PartSize(uint64(2), *id2, false))
+	assert.NotEqual(t, int64(0), part.Stat().Size())
 }
 
 func TestIVectorNodeWriter(t *testing.T) {

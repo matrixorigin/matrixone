@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"sync"
 )
 
@@ -63,7 +64,7 @@ func (mgr *Manager) UnregisterSortedFile(id common.ID) {
 	delete(mgr.SortedFiles, id)
 }
 
-func (mgr *Manager) RegisterUnsortedFiles(id common.ID) (base.ISegmentFile, error) {
+func (mgr *Manager) RegisterUnsortedFile(id common.ID) (base.ISegmentFile, error) {
 	var usf base.ISegmentFile
 	if mgr.Mock {
 		usf = NewMockSegmentFile(mgr.Dir, UnsortedSegFile, id)
@@ -81,13 +82,14 @@ func (mgr *Manager) RegisterUnsortedFiles(id common.ID) (base.ISegmentFile, erro
 	return usf, nil
 }
 
-func (mgr *Manager) RegisterSortedFiles(id common.ID) (base.ISegmentFile, error) {
+func (mgr *Manager) RegisterSortedFile(meta *metadata.Segment) (base.ISegmentFile, error) {
 	var sf base.ISegmentFile
 	if mgr.Mock {
-		sf = NewMockSegmentFile(mgr.Dir, UnsortedSegFile, id)
+		sf = NewMockSegmentFile(mgr.Dir, SortedSegFile, meta.AsCommonID().AsSegmentID())
 	} else {
-		sf = NewSortedSegmentFile(mgr.Dir, id)
+		sf = NewSortedSegmentFile(mgr.Dir, meta)
 	}
+	id := meta.AsCommonID().AsSegmentID()
 	mgr.Lock()
 	defer mgr.Unlock()
 	_, ok := mgr.UnsortedFiles[id]
@@ -104,13 +106,14 @@ func (mgr *Manager) RegisterSortedFiles(id common.ID) (base.ISegmentFile, error)
 	return sf, nil
 }
 
-func (mgr *Manager) UpgradeFile(id common.ID) base.ISegmentFile {
+func (mgr *Manager) UpgradeFile(meta *metadata.Segment) base.ISegmentFile {
 	var sf base.ISegmentFile
 	if mgr.Mock {
-		sf = NewMockSegmentFile(mgr.Dir, UnsortedSegFile, id)
+		sf = NewMockSegmentFile(mgr.Dir, SortedSegFile, meta.AsCommonID().AsSegmentID())
 	} else {
-		sf = NewSortedSegmentFile(mgr.Dir, id)
+		sf = NewSortedSegmentFile(mgr.Dir, meta)
 	}
+	id := meta.AsCommonID().AsSegmentID()
 	mgr.Lock()
 	_, ok := mgr.UnsortedFiles[id]
 	if !ok {

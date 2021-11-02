@@ -18,7 +18,10 @@ import (
 	"fmt"
 	"io"
 
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"io"
 
 	"github.com/RoaringBitmap/roaring"
 )
@@ -73,11 +76,14 @@ type Key struct {
 type IManager interface {
 	// RegisterSortedFiles adds physical segment file(SORTED_SEG)
 	// to Manager.SortedFiles[]
-	RegisterSortedFiles(common.ID) (ISegmentFile, error)
+	//RegisterSortedFiles(common.ID) (ISegmentFile, error)
 
 	// RegisterUnsortedFiles adds logical segment file(UNSORTED_SEG)
 	// to Manager.UnsortedFiles[]
-	RegisterUnsortedFiles(common.ID) (ISegmentFile, error)
+	//RegisterUnsortedFiles(common.ID) (ISegmentFile, error)
+
+	RegisterSortedFile(meta *metadata.Segment) (ISegmentFile, error)
+	RegisterUnsortedFile(id common.ID) (ISegmentFile, error)
 
 	// UnregisterUnsortedFile deletes a logical segment file
 	// from Manager.UnsortedFiles[]
@@ -89,7 +95,7 @@ type IManager interface {
 
 	// UpgradeFile creates a physical segment file based on common.ID and
 	// delete it from Manager.UnsortedFiles[] and add it to Manager.SortedFiles[]
-	UpgradeFile(common.ID) ISegmentFile
+	UpgradeFile(meta *metadata.Segment) ISegmentFile
 
 	GetSortedFile(common.ID) ISegmentFile
 	GetUnsortedFile(common.ID) ISegmentFile

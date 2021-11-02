@@ -54,14 +54,16 @@ type SortedSegmentFile struct {
 	DataAlgo   int
 }
 
-func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
+func NewSortedSegmentFile(dirname string, meta *metadata.Segment) base.ISegmentFile {
+	id := meta.AsCommonID().AsSegmentID()
+	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	sf := &SortedSegmentFile{
 		Parts:      make(map[base.Key]*base.Pointer),
 		ID:         id,
 		Meta:       NewFileMeta(),
 		BlocksMeta: make(map[common.ID]*FileMeta),
 		Info: &fileStat{
-			name: id.ToSegmentFilePath(),
+			name: name,
 		},
 	}
 
@@ -78,7 +80,7 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	}
 
 	sf.File = *r
-	sf.initPointers()
+	sf.initPointers(meta)
 	sf.OnZeroCB = sf.close
 	return sf
 }
@@ -116,7 +118,7 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 	sf.Unref()
 }
 
-func (sf *SortedSegmentFile) initPointers() {
+func (sf *SortedSegmentFile) initPointers(meta *metadata.Segment) {
 	// read metadata-1
 	sz := headerSize + reservedSize + algoSize + blkCntSize + colCntSize
 	buf := make([]byte, sz)
@@ -163,7 +165,7 @@ func (sf *SortedSegmentFile) initPointers() {
 		panic(err)
 	}
 
-	blkIds := make([]uint64, blkCnt)
+	blkIds := make([]uint64, blkCnt) // TODO: removed later
 	blkCounts := make([]uint64, blkCnt)
 	idxBuf := make([]byte, blkIdxSize)
 	preIndices := make([]*metadata.LogIndex, blkCnt)
@@ -200,6 +202,11 @@ func (sf *SortedSegmentFile) initPointers() {
 				panic(err)
 			}
 		}
+	}
+
+	blkIds = make([]uint64, 0)
+	for _, blk := range meta.BlockSet {
+		blkIds = append(blkIds, blk.Id)
 	}
 
 	for i := uint32(0); i < colCnt; i++ {
@@ -260,11 +267,11 @@ func (sf *SortedSegmentFile) initPointers() {
 	}
 
 	// read index
-	meta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
+	idxMeta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
 	if err != nil {
 		panic(err)
 	}
-	sf.Meta.Indices = meta
+	sf.Meta.Indices = idxMeta
 
 	// read footer
 	footer := make([]byte, 64)
