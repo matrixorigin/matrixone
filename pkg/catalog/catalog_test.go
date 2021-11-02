@@ -16,15 +16,15 @@ package catalog
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
-	stdLog "log"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
+	stdLog "log"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-	"go.uber.org/zap/zapcore"
 
 	cconfig "github.com/matrixorigin/matrixcube/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -119,6 +119,7 @@ func TestCatalogWithUtil(t *testing.T) {
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
 			}),
+			raftstore.WithTestClusterNodeCount(1),
 			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
