@@ -72,7 +72,7 @@ func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, 
 			return b.pruneGe(n)
 		case overload.NE:
 			return b.pruneNe(n)
-		case overload.Div:
+		case overload.Div, overload.IntegerDiv:
 			return b.pruneDiv(n)
 		case overload.Mod:
 			return b.pruneMod(n)

@@ -49,7 +49,7 @@ var (
 
 	// variants only used to init and get items from binOpsReturnType and binOpsTypeCastRules
 	// binOperators does not include comparison operators because their returns are always T_sel.
-	binOperators = []int{Or, And, Plus, Minus, Mult, Div, Mod, Like, NotLike, Typecast, EQ, LT, LE, GT, GE, NE}
+	binOperators = []int{Or, And, Plus, Minus, Mult, Div, IntegerDiv, Mod, Like, NotLike, Typecast, EQ, LT, LE, GT, GE, NE}
 	firstBinaryOp = binOperators[0]
 )
 
@@ -289,18 +289,120 @@ func initCastRulesForBinaryOps() {
 				}
 			}
 		}
-		// div between float32 and float64
-		binOpsTypeCastRules[index][types.T_float32][types.T_float64] = castResult{
-			has:           true,
-			leftCast:      nl,
-			rightCast:     nr,
-			newReturnType: types.T(nret),
+		// div between float
+		for _, l := range floats {
+			for _, r := range floats {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+				binOpsTypeCastRules[index][r][l] = castResult{
+					has:           true,
+					leftCast:      nr,
+					rightCast:     nl,
+					newReturnType: types.T(nret),
+				}
+			}
 		}
-		binOpsTypeCastRules[index][types.T_float64][types.T_float32] = castResult{
-			has:           true,
-			leftCast:      nr,
-			rightCast:     nl,
-			newReturnType: types.T(nret),
+
+	}
+	// IntegerDiv cast rule
+	{
+		index := IntegerDiv-firstBinaryOp
+
+		// cast to float64 / float64 = int64
+		nl, nr, nret := types.Type{Oid: types.T_float64, Size: 8}, types.Type{Oid: types.T_float64, Size: 8}, types.T_int64
+		// div between int and int
+		for _, l := range ints {
+			for _, r := range ints {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+			}
+		}
+		// div between uint and uint
+		for _, l := range uints {
+			for _, r := range uints {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+			}
+		}
+		// div between int and uint
+		for _, l := range ints {
+			for _, r := range uints {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+				binOpsTypeCastRules[index][r][l] = castResult{
+					has:           true,
+					leftCast:      nr,
+					rightCast:     nl,
+					newReturnType: types.T(nret),
+				}
+			}
+		}
+		// div between int and float
+		for _, l := range ints {
+			for _, r := range floats {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+				binOpsTypeCastRules[index][r][l] = castResult{
+					has:           true,
+					leftCast:      nr,
+					rightCast:     nl,
+					newReturnType: types.T(nret),
+				}
+			}
+		}
+		// div between uint and float
+		for _, l := range uints {
+			for _, r := range floats {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+				binOpsTypeCastRules[index][r][l] = castResult{
+					has:           true,
+					leftCast:      nr,
+					rightCast:     nl,
+					newReturnType: types.T(nret),
+				}
+			}
+		}
+		// div between float
+		for _, l := range floats {
+			for _, r := range floats {
+				binOpsTypeCastRules[index][l][r] = castResult{
+					has:           true,
+					leftCast:      nl,
+					rightCast:     nr,
+					newReturnType: types.T(nret),
+				}
+				binOpsTypeCastRules[index][r][l] = castResult{
+					has:           true,
+					leftCast:      nr,
+					rightCast:     nl,
+					newReturnType: types.T(nret),
+				}
+			}
 		}
 	}
 	// Mod cast rule

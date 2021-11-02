@@ -48,6 +48,7 @@ var OpTypes = map[int]int{
 	Minus:      Binary,
 	Mult:       Binary,
 	Div:        Binary,
+	IntegerDiv: Binary,
 	Mod:        Binary,
 	Like:       Binary,
 	NotLike:    Binary,

@@ -50,7 +50,7 @@ const (
 	MINUS
 	MULTI
 	DIV         // /
-	INTEGER_DIV //
+	INTEGER_DIV // div
 	BIT_OR      // |
 	BIT_AND     // &
 	BIT_XOR     // ^
