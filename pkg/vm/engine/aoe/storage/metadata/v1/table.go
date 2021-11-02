@@ -106,6 +106,9 @@ func (e *Table) UpdateFlushTS() {
 func (e *Table) GetCoarseSize() int64 {
 	e.RLock()
 	defer e.RUnlock()
+	// if e.IsDeletedLocked() {
+	// 	return 0
+	// }
 	size := int64(0)
 	for _, segment := range e.SegmentSet {
 		size += segment.GetCoarseSize()
@@ -116,6 +119,9 @@ func (e *Table) GetCoarseSize() int64 {
 func (e *Table) GetCoarseCount() int64 {
 	e.RLock()
 	defer e.RUnlock()
+	// if e.IsDeletedLocked() {
+	// 	return 0
+	// }
 	count := int64(0)
 	for _, segment := range e.SegmentSet {
 		count += segment.GetCoarseCount()
