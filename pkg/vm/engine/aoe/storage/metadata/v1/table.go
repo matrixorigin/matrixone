@@ -473,6 +473,52 @@ func (e *Table) SimpleGetSegment(id uint64) *Segment {
 	return e.GetSegment(id, MinUncommitId)
 }
 
+func (e *Table) Splite(specs []*TableRangeSpec, nameFactory TableNameFactory, catalog *Catalog) []*Table {
+	tranId := catalog.NextUncommitId()
+	tables := make([]*Table, len(specs))
+	for i, spec := range specs {
+		logIndex := LogIndex{
+			ShardId: spec.ShardId,
+			Id:      shard.SimpleIndexId(uint64(0)),
+		}
+		info := e.CommitInfo
+		info.TranId = tranId
+		info.CommitId = tranId
+		info.LogIndex = &logIndex
+		baseEntry := &BaseEntry{
+			Id:         catalog.NextTableId(),
+			CommitInfo: info,
+		}
+		schema := *e.Schema
+		tables[i] = &Table{
+			Schema:     &schema,
+			BaseEntry:  baseEntry,
+			SegmentSet: make([]*Segment, 0),
+		}
+	}
+	idx := 0
+	spec := specs[idx]
+	for i, segment := range e.SegmentSet {
+		minRow := uint64(i) * e.Schema.BlockMaxRows * e.Schema.SegmentMaxBlocks
+		if spec.Range.LT(minRow) {
+			idx++
+			spec = specs[idx]
+		}
+		table := tables[idx]
+		segment.Id = catalog.NextSegmentId()
+		segment.CommitInfo.TranId = tranId
+		segment.CommitInfo.CommitId = tranId
+		segment.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+		for _, block := range segment.BlockSet {
+			block.Id = catalog.NextBlockId()
+			block.CommitInfo.TranId = tranId
+			block.CommitInfo.CommitId = tranId
+			block.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+		}
+	}
+	return tables
+}
+
 func (e *Table) GetSegment(id, tranId uint64) *Segment {
 	pos, ok := e.IdIndex[id]
 	if !ok {
