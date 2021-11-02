@@ -12,25 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package ftree
 
-import (
-	"matrixone/pkg/sql/tree"
-)
+import "matrixone/pkg/sql/plan"
 
-func getColumnName(expr tree.Expr) (string, bool) {
-	e, ok := expr.(*tree.UnresolvedName)
-	if !ok {
-		return "", false
+// For each relation in Q, its variables lie along the same root-to-leaf path in F
+func buildPath(rn string, qry *plan.Query, conds []*plan.JoinCondition) []*Fnode {
+	rel := qry.RelsMap[rn]
+	frel := buildRelation(rel)
+	reorder(frel, append(getVariables(rn, conds), getFreeVariables(rel, qry.FreeAttrs)...))
+	fs := make([]*Fnode, 0, len(rel.Attrs)+1)
+	for _, v := range frel.Vars {
+		fs = append(fs, &Fnode{Root: frel.VarsMap[v]})
 	}
-	switch e.NumParts {
-	case 1:
-		return e.Parts[0], true
-	case 2:
-		return e.Parts[1] + "." + e.Parts[0], true
-	case 3:
-		return e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0], true
-	default: // 4
-		return e.Parts[3] + "." + e.Parts[2] + "." + e.Parts[1] + "." + e.Parts[0], true
-	}
+	fs = append(fs, &Fnode{Root: frel})
+	return fs
 }
