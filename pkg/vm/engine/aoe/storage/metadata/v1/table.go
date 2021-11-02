@@ -490,6 +490,7 @@ func (e *Table) Splite(specs []*TableRangeSpec, nameFactory TableNameFactory, ca
 			CommitInfo: info,
 		}
 		schema := *e.Schema
+		schema.Name = nameFactory.Rename(schema.Name, spec.ShardId)
 		tables[i] = &Table{
 			Schema:     &schema,
 			BaseEntry:  baseEntry,
