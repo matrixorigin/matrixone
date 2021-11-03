@@ -16,6 +16,7 @@ package metadata
 
 type writeCtx struct {
 	exIndex *LogIndex
+	tranId  uint64
 	inTran  bool
 }
 
@@ -51,6 +52,7 @@ type upgradeSegmentCtx struct {
 	writeCtx
 	segment  *Segment
 	exIndice []*LogIndex
+	size     int64
 }
 
 type createBlockCtx struct {
@@ -74,6 +76,12 @@ type replaceTableCtx struct {
 type replaceShardCtx struct {
 	writeCtx
 	view *catalogLogEntry
+}
+
+type splitShardCtx struct {
+	writeCtx
+	spec        *ShardSplitSpec
+	nameFactory TableNameFactory
 }
 
 func newAddTableCtx(table *Table, inTran bool) *addTableCtx {
@@ -115,10 +123,11 @@ func newCreateSegmentCtx(table *Table) *createSegmentCtx {
 	}
 }
 
-func newUpgradeSegmentCtx(segment *Segment, exIndice []*LogIndex) *upgradeSegmentCtx {
+func newUpgradeSegmentCtx(segment *Segment, size int64, exIndice []*LogIndex) *upgradeSegmentCtx {
 	return &upgradeSegmentCtx{
 		segment:  segment,
 		exIndice: exIndice,
+		size:     size,
 	}
 }
 
@@ -135,11 +144,12 @@ func newUpgradeBlockCtx(block *Block, exIndice []*LogIndex) *upgradeBlockCtx {
 	}
 }
 
-func newReplaceTableCtx(table *Table, exIndex *LogIndex, inTran bool) *replaceTableCtx {
+func newReplaceTableCtx(table *Table, exIndex *LogIndex, tranId uint64, inTran bool) *replaceTableCtx {
 	return &replaceTableCtx{
 		table: table,
 		writeCtx: writeCtx{
 			inTran:  inTran,
+			tranId:  tranId,
 			exIndex: exIndex,
 		},
 	}

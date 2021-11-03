@@ -59,6 +59,7 @@ type SegmentWriter struct {
 	data         []*batch.Batch
 	meta         *metadata.Segment
 	dir          string
+	size         int64
 	fileHandle   *os.File
 	preprocessor func([]*batch.Batch, *metadata.Segment) error
 
@@ -775,7 +776,13 @@ func (sw *SegmentWriter) Execute() error {
 	}
 	filename, _ := filepath.Abs(w.Name())
 	w.Close()
+	stat, _ := os.Stat(filename)
+	sw.size = stat.Size()
 	return sw.fileCommiter(filename)
+}
+
+func (sw *SegmentWriter) GetSize() int64 {
+	return sw.size
 }
 
 // flushBlocks does not read the .blk file, and writes the incoming

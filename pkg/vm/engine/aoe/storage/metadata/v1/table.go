@@ -55,8 +55,8 @@ func (e *tableLogEntry) ToEntry() *Table {
 
 type Table struct {
 	*BaseEntry
-	Schema     *Schema
-	SegmentSet []*Segment
+	Schema     *Schema        `json:"schema"`
+	SegmentSet []*Segment     `json:"segments"`
 	IdIndex    map[uint64]int `json:"-"`
 	Catalog    *Catalog       `json:"-"`
 	FlushTS    int64          `json:"-"`
@@ -103,16 +103,48 @@ func (e *Table) UpdateFlushTS() {
 	atomic.StoreInt64(&e.FlushTS, now)
 }
 
+func (e *Table) GetCoarseSize() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	// if e.IsDeletedLocked() {
+	// 	return 0
+	// }
+	size := int64(0)
+	for _, segment := range e.SegmentSet {
+		size += segment.GetCoarseSize()
+	}
+	return size
+}
+
+func (e *Table) GetCoarseCount() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	// if e.IsDeletedLocked() {
+	// 	return 0
+	// }
+	count := int64(0)
+	for _, segment := range e.SegmentSet {
+		count += segment.GetCoarseCount()
+	}
+	return count
+}
+
 func (e *Table) GetFlushTS() int64 {
 	return atomic.LoadInt64(&e.FlushTS)
 }
 
 func (e *Table) prepareReplace(ctx *replaceTableCtx) (LogEntry, error) {
 	cInfo := &CommitInfo{
-		CommitId: e.Catalog.NextUncommitId(),
 		Op:       OpReplaced,
 		LogIndex: ctx.exIndex,
 		SSLLNode: *common.NewSSLLNode(),
+	}
+	if ctx.inTran {
+		cInfo.CommitId = ctx.tranId
+		cInfo.TranId = ctx.tranId
+	} else {
+		cInfo.TranId = e.Catalog.NextUncommitId()
+		cInfo.CommitId = cInfo.TranId
 	}
 	e.Lock()
 	defer e.Unlock()
@@ -184,7 +216,12 @@ func (e *Table) rebuild(catalog *Catalog) {
 // be deleted from catalog later
 func (e *Table) HardDelete() error {
 	ctx := newDeleteTableCtx(e)
-	return e.Catalog.onCommitRequest(ctx)
+	err := e.Catalog.onCommitRequest(ctx)
+	if err != nil {
+		return err
+	}
+	e.Catalog.tableListener.OnTableHardDeleted(e)
+	return err
 }
 
 func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
@@ -471,6 +508,56 @@ func (e *Table) SimpleGetSegment(id uint64) *Segment {
 	e.RLock()
 	defer e.RUnlock()
 	return e.GetSegment(id, MinUncommitId)
+}
+
+func (e *Table) Splite(splitSpec *TableSplitSpec, nameFactory TableNameFactory, catalog *Catalog) []*Table {
+	specs := splitSpec.Specs
+	tranId := catalog.NextUncommitId()
+	tables := make([]*Table, len(specs))
+	for i, spec := range specs {
+		logIndex := LogIndex{
+			ShardId: spec.ShardId,
+			Id:      shard.SimpleIndexId(uint64(0)),
+		}
+		info := e.CommitInfo.Clone()
+		// info := e.CommitInfo
+		info.TranId = tranId
+		info.CommitId = tranId
+		info.LogIndex = &logIndex
+		baseEntry := &BaseEntry{
+			Id:         catalog.NextTableId(),
+			CommitInfo: info,
+		}
+		schema := *e.Schema
+		schema.Name = nameFactory.Rename(schema.Name, spec.ShardId)
+		tables[i] = &Table{
+			Schema:     &schema,
+			BaseEntry:  baseEntry,
+			SegmentSet: make([]*Segment, 0),
+		}
+	}
+	idx := 0
+	spec := specs[idx]
+	for i, segment := range e.SegmentSet {
+		minRow := uint64(i) * e.Schema.BlockMaxRows * e.Schema.SegmentMaxBlocks
+		if spec.Range.LT(minRow) {
+			idx++
+			spec = specs[idx]
+		}
+		table := tables[idx]
+		segment.Id = catalog.NextSegmentId()
+		segment.CommitInfo.TranId = tranId
+		segment.CommitInfo.CommitId = tranId
+		segment.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+		for _, block := range segment.BlockSet {
+			block.Id = catalog.NextBlockId()
+			block.CommitInfo.TranId = tranId
+			block.CommitInfo.CommitId = tranId
+			block.CommitInfo.LogIndex = table.CommitInfo.LogIndex
+		}
+		table.SegmentSet = append(table.SegmentSet, segment)
+	}
+	return tables
 }
 
 func (e *Table) GetSegment(id, tranId uint64) *Segment {

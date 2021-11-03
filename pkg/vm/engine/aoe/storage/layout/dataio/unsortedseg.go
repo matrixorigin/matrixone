@@ -17,10 +17,11 @@ package dataio
 import (
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 )
 
 // UnsortedSegmentFile is a logical file containing some block(.blk) files
@@ -134,6 +135,16 @@ func (sf *UnsortedSegmentFile) AddBlock(id common.ID, bf base.IBlockFile) {
 
 func (sf *UnsortedSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 	panic("not supported")
+}
+
+func (sf *UnsortedSegmentFile) GetBlockSize(id common.ID) int64 {
+	sf.RLock()
+	defer sf.RUnlock()
+	blk, ok := sf.Blocks[id.AsBlockID()]
+	if !ok {
+		panic("logic error")
+	}
+	return blk.Stat().Size()
 }
 
 func (sf *UnsortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {

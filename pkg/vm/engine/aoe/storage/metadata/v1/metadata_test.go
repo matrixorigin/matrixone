@@ -18,6 +18,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,30 @@ import (
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+var (
+	mockBlockSize   int64 = 100
+	mockSegmentSize int64 = 150
+	mockFactory           = new(mockNameFactory)
+)
+
+type mockNameFactory struct{}
+
+func (factory *mockNameFactory) Encode(shardId uint64, name string) string {
+	return fmt.Sprintf("mock:%s:%d", name, shardId)
+}
+
+func (factory *mockNameFactory) Decode(name string) (shardId uint64, oname string) {
+	arr := strings.Split(name, ":")
+	oname = arr[1]
+	shardId, _ = strconv.ParseUint(arr[2], 10, 64)
+	return
+}
+
+func (factory *mockNameFactory) Rename(name string, shardId uint64) string {
+	_, oname := factory.Decode(name)
+	return factory.Encode(shardId, oname)
+}
 
 type mockIdAllocator struct {
 	sync.RWMutex
@@ -68,7 +93,7 @@ func (alloc *mockIdAllocator) alloc(shardId uint64) uint64 {
 func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	return func() {
 		defer wg.Done()
-		err := seg.SimpleUpgrade(nil)
+		err := seg.SimpleUpgrade(mockSegmentSize, nil)
 		assert.Nil(t, err)
 	}
 }
@@ -78,10 +103,12 @@ func createBlock(t *testing.T, tables int, idAlloc *mockIdAllocator, shardId uin
 		defer wg.Done()
 		for k := 0; k < tables; k++ {
 			schema := MockSchema(2)
-			schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAlloc.alloc(shardId))
+			id := idAlloc.alloc(shardId)
+			name := fmt.Sprintf("t%d", id)
+			schema.Name = mockFactory.Encode(shardId, name)
 			index := shard.Index{
 				ShardId: shardId,
-				Id:      shard.SimpleIndexId(idAlloc.get(shardId)),
+				Id:      shard.SimpleIndexId(id),
 			}
 			tbl, err := catalog.SimpleCreateTable(schema, &index)
 			assert.Nil(t, err)
@@ -95,6 +122,7 @@ func createBlock(t *testing.T, tables int, idAlloc *mockIdAllocator, shardId uin
 					Count:    tbl.Schema.BlockMaxRows,
 					Capacity: tbl.Schema.BlockMaxRows,
 				})
+				blk.GetCommit().SetSize(mockBlockSize)
 				err := blk.SimpleUpgrade(nil)
 				assert.Nil(t, err)
 				if prev != nil && blk.Segment != prev.Segment {
@@ -338,7 +366,7 @@ func TestDropTable(t *testing.T) {
 	err = writer.ReAllocId(&catalog.Sequence, writer.view.Catalog)
 	assert.Nil(t, err)
 
-	err = catalog.SimpleReplayNewShard(writer.view)
+	err = catalog.SimpleReplaceShard(writer.view)
 	assert.Nil(t, err)
 
 	tableNode = catalog.nameNodes[schema1.Name]
@@ -586,7 +614,7 @@ func TestAppliedIndex(t *testing.T) {
 	assert.Equal(t, applied, id)
 
 	seg := blk.Segment
-	err = seg.SimpleUpgrade(nil)
+	err = seg.SimpleUpgrade(mockSegmentSize, nil)
 	assert.Nil(t, err)
 
 	id, ok = seg.GetAppliedIndex(nil)
@@ -658,7 +686,7 @@ func TestUpgrade(t *testing.T) {
 			if cnt == blockCnt {
 				segment, err := catalog.SimpleGetSegment(tableId, segmentId)
 				assert.Nil(t, err)
-				segment.SimpleUpgrade(nil)
+				segment.SimpleUpgrade(mockSegmentSize, nil)
 				atomic.AddUint64(&upgradedSegments, uint64(1))
 				// segment.RLock()
 				// t.Log(segment.PString(PPL1))
@@ -1068,12 +1096,63 @@ func TestShard2(t *testing.T) {
 	view := catalog.ShardView(cfg1.shardId, index1_0)
 	assert.Equal(t, view1.LogRange, view.LogRange)
 	assert.Equal(t, len(view1.Catalog.TableSet), len(view.Catalog.TableSet))
-	t.Log(catalog.PString(PPL0))
 	catalog.Close()
 
 	catalog2 := initTest(dir, blockRows, segmentBlocks, false)
-	t.Log(catalog2.PString(PPL0))
+	t.Log(catalog.PString(PPL2))
 	catalog2.Close()
 
 	doCompareCatalog(t, catalog, catalog2)
+}
+
+func TestSplit(t *testing.T) {
+	dir := "/tmp/metadata/testsplit"
+	catalog := initTest(dir, uint64(100), uint64(2), true)
+
+	idAlloc := newMockAllocator()
+	wg := new(sync.WaitGroup)
+	w1, _ := ants.NewPool(4)
+	w2, _ := ants.NewPool(4)
+
+	shardId := uint64(66)
+	wg.Add(4)
+	w1.Submit(createBlock(t, 1, idAlloc, shardId, catalog, 0, wg, w2))
+	w1.Submit(createBlock(t, 1, idAlloc, shardId, catalog, 1, wg, w2))
+	w1.Submit(createBlock(t, 1, idAlloc, shardId, catalog, 2, wg, w2))
+	w1.Submit(createBlock(t, 1, idAlloc, shardId, catalog, 3, wg, w2))
+
+	wg.Wait()
+
+	index := idAlloc.get(shardId)
+	t.Logf("index=%d", index)
+	stat := catalog.GetShardStats(shardId)
+	assert.Equal(t, int64(550), stat.GetSize())
+	assert.Equal(t, int64(600), stat.GetCount())
+
+	_, _, keys, ctx, err := catalog.SplitCheck(uint64(250), shardId, index)
+	assert.Nil(t, err)
+	// t.Log(len(keys))
+	// assert.Equal(t, 3, len(keys))
+	spec := NewEmptyShardSplitSpec()
+	err = spec.Unmarshal(ctx)
+	assert.Nil(t, err)
+	t.Log(spec.String())
+	assert.Equal(t, spec.ShardId, shardId)
+	assert.Equal(t, spec.Index, index)
+	assert.Equal(t, len(spec.Specs), 4)
+
+	newShards := make([]uint64, len(keys))
+	for i, _ := range newShards {
+		newShards[i] = uint64(100) + uint64(i)
+	}
+
+	splitter := NewShardSplitter(catalog, spec, newShards, mockFactory)
+	err = splitter.Prepare()
+	assert.Nil(t, err)
+	err = splitter.Commit()
+	assert.Nil(t, err)
+	assert.Equal(t, len(catalog.TableSet), 9)
+
+	t.Log(catalog.PString(PPL0))
+	catalog.Close()
 }

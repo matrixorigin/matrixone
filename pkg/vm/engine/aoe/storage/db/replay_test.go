@@ -929,10 +929,16 @@ func TestReplay12(t *testing.T) {
 	assert.Equal(t, common.GetGlobalSeqNum()-1, inst.GetShardCheckpointId(rel.Meta.GetCommit().LogIndex.ShardId))
 	time.Sleep(time.Duration(50) * time.Millisecond)
 
+	shardId := meta.GetShardId()
+	stat1 := inst.Store.Catalog.GetShardStats(shardId)
+
 	rel.Close()
 	inst.Close()
 
 	inst = initDB(wal.BrokerRole)
+	stat2 := inst.Store.Catalog.GetShardStats(shardId)
+	assert.Equal(t, stat1.GetSize(), stat2.GetSize())
+	assert.Equal(t, stat1.GetCount(), stat2.GetCount())
 
 	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
 	assert.Nil(t, err)

@@ -45,7 +45,8 @@ func (e *upgradeSegEvent) Execute() error {
 	sid := e.OldSegment.GetMeta().Id
 	e.Segment, err = e.TableData.UpgradeSegment(sid)
 	if err == nil {
-		e.Segment.GetMeta().SimpleUpgrade(nil)
+		newSize := e.Segment.GetSegmentFile().Stat().Size()
+		e.Segment.GetMeta().SimpleUpgrade(newSize, nil)
 	}
 	return err
 }

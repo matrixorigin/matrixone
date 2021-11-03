@@ -83,8 +83,8 @@ type Block struct {
 	*BaseEntry
 	Segment     *Segment    `json:"-"`
 	IndiceMemo  *IndiceMemo `json:"-"`
-	Count       uint64
-	SegmentedId uint64
+	Count       uint64      `json:"count"`
+	SegmentedId uint64      `json:"segmentedid"`
 }
 
 func newBlockEntry(segment *Segment, tranId uint64, exIndex *LogIndex) *Block {
@@ -223,6 +223,19 @@ func (e *Block) GetCount() uint64 {
 	return atomic.LoadUint64(&e.Count)
 }
 
+func (e *Block) GetCoarseCountLocked() int64 {
+	if e.IsFull() {
+		return int64(e.Segment.Table.Schema.BlockMaxRows)
+	}
+	return 0
+}
+
+func (e *Block) GetCoarseCount() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetCoarseCountLocked()
+}
+
 // Not safe
 // TODO: should be safe
 func (e *Block) AddCount(n uint64) (uint64, error) {
@@ -266,7 +279,12 @@ func (e *Block) fillView(filter *Filter) *Block {
 // Safe
 func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 	ctx := newUpgradeBlockCtx(e, exIndice)
-	return e.Segment.Table.Catalog.onCommitRequest(ctx)
+	err := e.Segment.Table.Catalog.onCommitRequest(ctx)
+	if err != nil {
+		return err
+	}
+	e.Segment.Table.Catalog.blockListener.OnBlockUpgraded(e)
+	return err
 }
 
 func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
@@ -287,6 +305,7 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 		TranId:   tranId,
 		CommitId: tranId,
 		Op:       newOp,
+		Size:     e.CommitInfo.GetSize(),
 	}
 	if ctx.exIndice != nil {
 		cInfo.LogIndex = ctx.exIndice[0]
@@ -325,9 +344,19 @@ func (e *Block) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, e)
 }
 
+func (e *Block) GetCoarseSizeLocked() int64 {
+	return e.CommitInfo.GetSize()
+}
+
+func (e *Block) GetCoarseSize() int64 {
+	e.RLock()
+	defer e.RUnlock()
+	return e.GetCoarseSizeLocked()
+}
+
 // Not safe
 func (e *Block) PString(level PPLevel) string {
-	s := fmt.Sprintf("<Block %s>", e.BaseEntry.PString(level))
+	s := fmt.Sprintf("<Block %s>[Size=%d]", e.BaseEntry.PString(level), e.GetCoarseSizeLocked())
 	return s
 }
 

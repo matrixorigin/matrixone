@@ -50,6 +50,7 @@ type BlockWriter struct {
 	data       []*gvector.Vector
 	idata      batch.IBatch
 	meta       *metadata.Block
+	size       int64
 	dir        string
 	embbed     bool
 	fileHandle *os.File
@@ -138,6 +139,10 @@ func (bw *BlockWriter) SetDataFlusher(f vecsSerializer) {
 	bw.vecsSerializer = f
 }
 
+func (bw *BlockWriter) GetSize() int64 {
+	return bw.size
+}
+
 func (bw *BlockWriter) commitFile(fname string) error {
 	name, err := common.FilenameFromTmpfile(fname)
 	if err != nil {
@@ -217,6 +222,8 @@ func (bw *BlockWriter) executeIVecs() error {
 	}
 	filename, _ := filepath.Abs(w.Name())
 	w.Close()
+	stat, _ := os.Stat(filename)
+	bw.size = stat.Size()
 	return bw.fileCommiter(filename)
 }
 
@@ -259,6 +266,8 @@ func (bw *BlockWriter) excuteVecs() error {
 	}
 	filename, _ := filepath.Abs(w.Name())
 	closeFunc()
+	stat, _ := os.Stat(filename)
+	bw.size = stat.Size()
 	return bw.fileCommiter(filename)
 }
 

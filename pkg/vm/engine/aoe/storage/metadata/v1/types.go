@@ -75,8 +75,8 @@ func OpName(op OpT) string {
 }
 
 type LogRange struct {
-	ShardId uint64
-	Range   common.Range
+	ShardId uint64       `json:"sid"`
+	Range   common.Range `json:"range"`
 }
 
 func (r *LogRange) String() string {
@@ -110,13 +110,31 @@ func (r *LogRange) Unmarshal(data []byte) error {
 
 type CommitInfo struct {
 	common.SSLLNode `json:"-"`
-	CommitId        uint64
-	TranId          uint64
-	Op              OpT
-	LogIndex        *LogIndex
-	PrevIndex       *LogIndex
-	AppliedIndex    *LogIndex
-	LogRange        *LogRange
+	CommitId        uint64    `json:"cid"`
+	TranId          uint64    `json:"tid"`
+	Op              OpT       `json:"op"`
+	Size            int64     `json:"size"`
+	LogIndex        *LogIndex `json:"idx"`
+	PrevIndex       *LogIndex `json:"pidx"`
+	AppliedIndex    *LogIndex `json:"aidx"`
+	LogRange        *LogRange `json:"range"`
+}
+
+func (info *CommitInfo) Clone() *CommitInfo {
+	cloned := *info
+	if cloned.LogIndex != nil {
+		cloned.LogIndex = &(*info.LogIndex)
+	}
+	if cloned.PrevIndex != nil {
+		cloned.PrevIndex = &(*info.PrevIndex)
+	}
+	if cloned.AppliedIndex != nil {
+		cloned.AppliedIndex = &(*info.AppliedIndex)
+	}
+	if cloned.LogRange != nil {
+		cloned.LogRange = &(*info.LogRange)
+	}
+	return &cloned
 }
 
 func (info *CommitInfo) GetShardId() uint64 {
@@ -145,6 +163,14 @@ func (info *CommitInfo) IsReplaced() bool {
 	return info.Op == OpReplaced
 }
 
+func (info *CommitInfo) SetSize(size int64) {
+	atomic.AddInt64(&info.Size, size)
+}
+
+func (info *CommitInfo) GetSize() int64 {
+	return atomic.LoadInt64(&info.Size)
+}
+
 func (info *CommitInfo) PString(level PPLevel) string {
 	s := "<CInfo>"
 	if info.LogRange != nil {
@@ -161,6 +187,8 @@ func (info *CommitInfo) PString(level PPLevel) string {
 		id, _ := info.GetAppliedIndex()
 		if cInfo.LogIndex != nil {
 			s = fmt.Sprintf("%s,%d-s%d-%s)", s, id, cInfo.LogIndex.ShardId, cInfo.LogIndex.Id.String())
+		} else {
+			s = fmt.Sprintf("%s)", s)
 		}
 		// s = fmt.Sprintf("%s(%s,%d,%d)", s, OpName(info.Op), info.TranId-MinUncommitId, info.CommitId)
 		prev = curr

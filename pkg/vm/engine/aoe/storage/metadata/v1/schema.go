@@ -16,6 +16,7 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -28,24 +29,24 @@ const (
 )
 
 type IndexInfo struct {
-	Id      uint64
-	Type    IndexT
-	Columns []uint16
+	Id      uint64   `json:"id"`
+	Type    IndexT   `json:"type"`
+	Columns []uint16 `json:"cols"`
 }
 
 type ColDef struct {
-	Name string
-	Idx  int
-	Type types.Type
+	Name string     `json:"name"`
+	Idx  int        `json:"idx"`
+	Type types.Type `json:"type"`
 }
 
 type Schema struct {
-	Name             string
-	Indices          []*IndexInfo
-	ColDefs          []*ColDef
-	NameIndex        map[string]int
-	BlockMaxRows     uint64
-	SegmentMaxBlocks uint64
+	Name             string         `json:"name"`
+	Indices          []*IndexInfo   `json:"indice"`
+	ColDefs          []*ColDef      `json:"cols"`
+	NameIndex        map[string]int `json:"nindex"`
+	BlockMaxRows     uint64         `json:"blkrows"`
+	SegmentMaxBlocks uint64         `json:"segblocks"`
 }
 
 func (s *Schema) String() string {

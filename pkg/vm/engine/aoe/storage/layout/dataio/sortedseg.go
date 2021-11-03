@@ -67,8 +67,10 @@ func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 
 	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	// log.Infof("SegmentFile name %s", name)
-	if _, err := os.Stat(name); os.IsNotExist(err) {
+	if info, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
+	} else {
+		sf.Info.size = info.Size()
 	}
 	r, err := os.OpenFile(name, os.O_RDONLY, 0666)
 	if err != nil {
@@ -310,6 +312,10 @@ func (sf *SortedSegmentFile) ReadPoint(ptr *base.Pointer, buf []byte) {
 
 func (sf *SortedSegmentFile) ReadBlockPoint(id common.ID, ptr *base.Pointer, buf []byte) {
 	sf.ReadPoint(ptr, buf)
+}
+
+func (sf *SortedSegmentFile) GetBlockSize(_ common.ID) int64 {
+	panic("not supported")
 }
 
 func (sf *SortedSegmentFile) DataCompressAlgo(id common.ID) int {

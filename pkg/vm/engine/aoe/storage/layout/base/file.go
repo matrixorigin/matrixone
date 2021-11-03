@@ -17,6 +17,7 @@ package base
 import (
 	"fmt"
 	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 
 	"github.com/RoaringBitmap/roaring"
@@ -138,6 +139,8 @@ type ISegmentFile interface {
 
 	// UnrefBlock releases the reference to the underlying block
 	UnrefBlock(blkId common.ID)
+
+	GetBlockSize(blkId common.ID) int64
 
 	// ReadBlockPoint reads a Pointer data to buf,
 	// which called by EmbedBlockIndexFile.

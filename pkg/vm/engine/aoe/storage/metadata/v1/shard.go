@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -107,14 +108,14 @@ func (ss *shardSnapshoter) PrepareLoad() error {
 }
 
 func (ss *shardSnapshoter) CommitLoad() error {
-	return ss.catalog.SimpleReplayNewShard(ss.view)
+	return ss.catalog.SimpleReplaceShard(ss.view)
 }
 
 type shardLogEntry struct {
 	loopProcessor `json:"-"`
-	commitId      uint64 `json:"-"`
-	Replaced      []*Table
-	Replacer      []*Table
+	commitId      uint64   `json:"-"`
+	Replaced      []*Table `json:"replaced"`
+	Replacer      []*Table `json:"replacer"`
 }
 
 func newShardLogEntry() *shardLogEntry {
@@ -193,6 +194,7 @@ func (e *shardLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 	switch eType {
 	case ETShardSnapshot:
 		break
+	case ETShardSplit:
 	default:
 		panic("not supported")
 	}
@@ -201,4 +203,36 @@ func (e *shardLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 	logEntry.Meta.SetType(eType)
 	logEntry.Unmarshal(buf)
 	return logEntry
+}
+
+type shardStats struct {
+	id          uint64
+	coarseSize  int64
+	coarseCount int64
+}
+
+func newShardStats(id uint64) *shardStats {
+	return &shardStats{
+		id: id,
+	}
+}
+
+func (stats *shardStats) AddCount(count int64) {
+	atomic.AddInt64(&stats.coarseCount, count)
+}
+
+func (stats *shardStats) GetCount() int64 {
+	return atomic.LoadInt64(&stats.coarseCount)
+}
+
+func (stats *shardStats) AddSize(size int64) {
+	atomic.AddInt64(&stats.coarseSize, size)
+}
+
+func (stats *shardStats) GetSize() int64 {
+	return atomic.LoadInt64(&stats.coarseSize)
+}
+
+func (stats *shardStats) String() string {
+	return fmt.Sprintf("Stats<%d>(Size=%d, Count=%d)", stats.id, stats.GetSize(), stats.GetCount())
 }

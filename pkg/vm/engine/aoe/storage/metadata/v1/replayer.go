@@ -207,12 +207,24 @@ func newCatalogReplayer() *catalogReplayer {
 	return replayer
 }
 
+func (replacer *catalogReplayer) rebuildShardStats() {
+	for _, table := range replacer.catalog.TableSet {
+		if table.IsSoftDeletedLocked() {
+			continue
+		}
+		shardId := table.GetShardId()
+		replacer.catalog.UpdateShardStats(shardId, table.GetCoarseSize(), table.GetCoarseCount())
+	}
+}
+
 func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg,
 	store logstore.AwareStore, indexWal wal.ShardWal) (*Catalog, error) {
 	replayer.catalog = NewCatalogWithDriver(mu, cfg, store, indexWal)
 	if err := replayer.Replay(replayer.catalog.Store); err != nil {
 		return nil, err
 	}
+	// replayer.catalog.Compact()
+	replayer.rebuildShardStats()
 	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
 	return replayer.catalog, nil

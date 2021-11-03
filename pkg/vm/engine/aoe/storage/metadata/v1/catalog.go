@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 
@@ -51,9 +52,9 @@ type CatalogCfg struct {
 }
 
 type catalogLogEntry struct {
-	Range    *common.Range
-	Catalog  *Catalog
-	LogRange *LogRange
+	Range    *common.Range `json:"range"`
+	Catalog  *Catalog      `json:"catalog"`
+	LogRange *LogRange     `json:"logrange"`
 }
 
 func newCatalogLogEntry(id uint64) *catalogLogEntry {
@@ -120,16 +121,22 @@ type Catalog struct {
 	sm.StateMachine `json:"-"`
 	*sync.RWMutex   `json:"-"`
 	Sequence        `json:"-"`
-	pipeline        *commitPipeline       `json:"-"`
-	Store           logstore.AwareStore   `json:"-"`
-	IndexWal        wal.ShardWal          `json:"-"`
-	Cfg             *CatalogCfg           `json:"-"`
-	nameIndex       *btree.BTree          `json:"-"`
-	nodesMu         sync.RWMutex          `json:"-"`
-	commitMu        sync.RWMutex          `json:"-"`
-	nameNodes       map[string]*tableNode `json:"-"`
+	pipeline        *commitPipeline        `json:"-"`
+	Store           logstore.AwareStore    `json:"-"`
+	IndexWal        wal.ShardWal           `json:"-"`
+	Cfg             *CatalogCfg            `json:"-"`
+	nameIndex       *btree.BTree           `json:"-"`
+	nodesMu         sync.RWMutex           `json:"-"`
+	commitMu        sync.RWMutex           `json:"-"`
+	nameNodes       map[string]*tableNode  `json:"-"`
+	shardMu         sync.RWMutex           `json:"-"`
+	shardsStats     map[uint64]*shardStats `json:"-"`
 
-	TableSet map[uint64]*Table
+	tableListener   TableListener   `json:"-"`
+	segmentListener SegmentListener `json:"-"`
+	blockListener   BlockListener   `json:"-"`
+
+	TableSet map[uint64]*Table `json:"tables"`
 }
 
 func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
@@ -144,19 +151,28 @@ func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awa
 
 func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
 	catalog := &Catalog{
-		RWMutex:   mu,
-		Cfg:       cfg,
-		TableSet:  make(map[uint64]*Table),
-		nameNodes: make(map[string]*tableNode),
-		nameIndex: btree.New(2),
-		Store:     store,
-		IndexWal:  indexWal,
+		RWMutex:     mu,
+		Cfg:         cfg,
+		TableSet:    make(map[uint64]*Table),
+		nameNodes:   make(map[string]*tableNode),
+		nameIndex:   btree.New(2),
+		Store:       store,
+		IndexWal:    indexWal,
+		shardsStats: make(map[uint64]*shardStats),
 	}
+	blockListener := new(BaseBlockListener)
+	blockListener.BlockUpgradedFn = catalog.onBlockUpgraded
+	segmentListener := new(BaseSegmentListener)
+	segmentListener.SegmentUpgradedFn = catalog.onSegmentUpgraded
+	tableListener := new(BaseTableListener)
+	tableListener.HardDeletedFn = catalog.onTableHardDelete
+	catalog.tableListener = tableListener
+	catalog.blockListener = blockListener
+	catalog.segmentListener = segmentListener
+
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewSafeQueue(100000, 100, nil)
 	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
-	// rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
-	// ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog
@@ -168,12 +184,23 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
 	}
 	catalog := &Catalog{
-		RWMutex:   mu,
-		Cfg:       cfg,
-		TableSet:  make(map[uint64]*Table),
-		nameNodes: make(map[string]*tableNode),
-		nameIndex: btree.New(2),
+		RWMutex:     mu,
+		Cfg:         cfg,
+		TableSet:    make(map[uint64]*Table),
+		nameNodes:   make(map[string]*tableNode),
+		nameIndex:   btree.New(2),
+		shardsStats: make(map[uint64]*shardStats),
 	}
+	blockListener := new(BaseBlockListener)
+	blockListener.BlockUpgradedFn = catalog.onBlockUpgraded
+	segmentListener := new(BaseSegmentListener)
+	segmentListener.SegmentUpgradedFn = catalog.onSegmentUpgraded
+	tableListener := new(BaseTableListener)
+	tableListener.HardDeletedFn = catalog.onTableHardDelete
+	catalog.tableListener = tableListener
+	catalog.blockListener = blockListener
+	catalog.segmentListener = segmentListener
+
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
 		MaxSize: cfg.RotationFileMaxSize,
@@ -186,8 +213,6 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewSafeQueue(100000, 100, nil)
 	ckpQueue := sm.NewSafeQueue(100000, 10, catalog.onCheckpoint)
-	// rQueue := sm.NewWaitableQueue(100000, 100, catalog, wg, nil, nil, nil)
-	// ckpQueue := sm.NewWaitableQueue(100000, 10, catalog, wg, nil, nil, catalog.onCheckpoint)
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog
@@ -219,6 +244,33 @@ func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error
 		catalog.Sequence.nextTableId = sorted[len(sorted)-1].Id
 	}
 	return nil
+}
+
+func (catalog *Catalog) onTableHardDelete(table *Table) {
+	catalog.UpdateShardStats(table.GetShardId(), -table.GetCoarseSize(), -table.GetCoarseCount())
+}
+
+func (catalog *Catalog) onBlockUpgraded(block *Block) {
+	catalog.UpdateShardStats(block.GetShardId(), block.GetCoarseSize(), block.GetCoarseCount())
+}
+
+func (catalog *Catalog) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
+	catalog.UpdateShardStats(segment.Table.GetShardId(), segment.GetCoarseSize()-segment.GetUnsortedSize(), 0)
+}
+
+func (catalog *Catalog) GetShardStats(shardId uint64) *shardStats {
+	catalog.shardMu.RLock()
+	defer catalog.shardMu.RUnlock()
+	return catalog.shardsStats[shardId]
+}
+
+func (catalog *Catalog) UpdateShardStats(shardId uint64, size int64, count int64) {
+	catalog.shardMu.RLock()
+	stats := catalog.shardsStats[shardId]
+	catalog.shardMu.RUnlock()
+	stats.AddCount(count)
+	stats.AddSize(size)
+	// logutil.Infof("%s, size=%d", stats.String(), size)
 }
 
 func (catalog *Catalog) SimpleGetTableAppliedIdByName(name string) (uint64, bool) {
@@ -485,7 +537,42 @@ func (catalog *Catalog) prepareAddTable(ctx *addTableCtx) (LogEntry, error) {
 	panic("todo")
 }
 
-func (catalog *Catalog) SimpleReplayNewShard(view *catalogLogEntry) error {
+func (catalog *Catalog) doSpliteShard(nameFactory TableNameFactory, spec *ShardSplitSpec) error {
+	ctx := new(splitShardCtx)
+	ctx.spec = spec
+	ctx.nameFactory = nameFactory
+	return catalog.onCommitRequest(ctx)
+}
+
+func (catalog *Catalog) prepareSplitShard(ctx *splitShardCtx) (LogEntry, error) {
+	entry := newShardLogEntry()
+	tranId := catalog.NextUncommitId()
+	for _, spec := range ctx.spec.Specs {
+		table := ctx.spec.splitted[spec.Index]
+		tables := table.Splite(spec, ctx.nameFactory, catalog)
+		for _, t := range tables {
+			nCtx := newAddTableCtx(t, true)
+			if _, err := catalog.prepareAddTable(nCtx); err != nil {
+				panic(err)
+			}
+			entry.addReplacer(t)
+		}
+	}
+	catalog.RLock()
+	for _, view := range ctx.spec.splitted {
+		table := catalog.TableSet[view.Id]
+		rCtx := newReplaceTableCtx(table, ctx.exIndex, tranId, true)
+		if _, err := table.prepareReplace(rCtx); err != nil {
+			panic(err)
+		}
+		entry.addReplaced(table)
+	}
+	catalog.RUnlock()
+	logEntry := catalog.prepareCommitEntry(entry, ETShardSplit, nil)
+	return logEntry, nil
+}
+
+func (catalog *Catalog) SimpleReplaceShard(view *catalogLogEntry) error {
 	ctx := newReplaceShardCtx(view)
 	err := catalog.onCommitRequest(ctx)
 	return err
@@ -498,11 +585,12 @@ func (catalog *Catalog) prepareReplaceShard(ctx *replaceShardCtx) (LogEntry, err
 	logIndex := new(LogIndex)
 	logIndex.Id = shard.SimpleIndexId(ctx.view.LogRange.Range.Right)
 	logIndex.ShardId = ctx.view.LogRange.ShardId
+	tranId := catalog.NextUncommitId()
 	for _, table := range catalog.TableSet {
 		if table.GetShardId() != ctx.view.LogRange.ShardId {
 			continue
 		}
-		rCtx := newReplaceTableCtx(table, logIndex, true)
+		rCtx := newReplaceTableCtx(table, logIndex, tranId, true)
 		if _, err = table.prepareReplace(rCtx); err != nil {
 			panic(err)
 		}
@@ -714,7 +802,103 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 	return logEntry
 }
 
+func (catalog *Catalog) tryCreateShardStats(shardId uint64) {
+	catalog.shardMu.RLock()
+	stats := catalog.shardsStats[shardId]
+	if stats != nil {
+		catalog.shardMu.RUnlock()
+		return
+	}
+	catalog.shardMu.RUnlock()
+	catalog.shardMu.Lock()
+	defer catalog.shardMu.Unlock()
+	stats = catalog.shardsStats[shardId]
+	if stats != nil {
+		return
+	}
+	catalog.shardsStats[shardId] = newShardStats(shardId)
+}
+
+func (catalog *Catalog) CleanupShard(shardId uint64) {
+	catalog.shardMu.Lock()
+	defer catalog.shardMu.Unlock()
+	delete(catalog.shardsStats, shardId)
+}
+
+func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, ctx []byte, err error) {
+	catalog.shardMu.RLock()
+	stats := catalog.shardsStats[shardId]
+	catalog.shardMu.RUnlock()
+	coarseSize, coarseCount = uint64(stats.GetSize()), uint64(stats.GetCount())
+	if coarseSize < size {
+		return
+	}
+
+	partSize := int64(size) / 2
+	if coarseSize/size < 2 {
+		partSize = int64(coarseSize) / 2
+	}
+
+	view := catalog.ShardView(shardId, index)
+	totalSize := int64(0)
+
+	shardSpec := NewShardSplitSpec(shardId, index)
+	activeSize := int64(0)
+	currGroup := uint32(0)
+
+	for _, table := range view.Catalog.TableSet {
+		spec := NewTableSplitSpec(table.GetCommit().LogIndex)
+		rangeSpec := new(TableRangeSpec)
+		rangeSpec.Group = currGroup
+		rangeSpec.Range.Left = uint64(0)
+		tableSize := table.GetCoarseSize()
+		totalSize += tableSize
+		if len(table.SegmentSet) <= 1 {
+			activeSize += tableSize
+			rangeSpec.Range.Right = math.MaxUint64
+			rangeSpec.CoarseSize += tableSize
+			spec.AddSpec(rangeSpec)
+			if activeSize >= partSize {
+				currGroup++
+				activeSize = int64(0)
+			}
+		} else {
+			for i, segment := range table.SegmentSet {
+				activeSize += segment.GetCoarseSize()
+				rangeSpec.CoarseSize += segment.GetCoarseSize()
+				rangeSpec.Range.Right = uint64(i+1)*table.Schema.BlockMaxRows*table.Schema.SegmentMaxBlocks - 1
+				if activeSize >= partSize {
+					currGroup++
+					activeSize = int64(0)
+					spec.AddSpec(rangeSpec)
+					last := rangeSpec
+					rangeSpec = new(TableRangeSpec)
+					rangeSpec.Group = currGroup
+					rangeSpec.Range.Left = last.Range.Right + uint64(1)
+				}
+			}
+			if rangeSpec.Range.Right != uint64(0) {
+				spec.AddSpec(rangeSpec)
+			}
+		}
+		shardSpec.AddSpec(spec)
+	}
+	if totalSize < int64(size) {
+		return
+	}
+
+	keys = make([][]byte, currGroup+1)
+	for i, _ := range keys {
+		keys[i] = []byte("1")
+	}
+	// logutil.Infof(shardSpec.String())
+	ctx, err = shardSpec.Marshal()
+	return
+}
+
 func (catalog *Catalog) onNewTable(entry *Table) error {
+	shardId := entry.GetShardId()
+	catalog.tryCreateShardStats(shardId)
 	nn := catalog.nameNodes[entry.Schema.Name]
 	if nn != nil {
 		e := nn.GetEntry()

@@ -30,8 +30,8 @@ const (
 
 type BaseEntry struct {
 	sync.RWMutex
-	Id         uint64
-	CommitInfo *CommitInfo
+	Id         uint64      `json:"id"`
+	CommitInfo *CommitInfo `json:"commit"`
 }
 
 func (e *BaseEntry) GetShardId() uint64 {
@@ -188,7 +188,7 @@ func (e *BaseEntry) CommitLocked(id uint64) {
 		panic(fmt.Sprintf("Cannot commit transient id %d", id))
 	}
 	if e.HasCommittedLocked() {
-		panic(fmt.Sprintf("Cannot commit committed entry"))
+		panic(fmt.Sprintf("Cannot commit committed entry: %s", e.PString(PPL0)))
 	}
 	e.CommitInfo.CommitId = id
 }
