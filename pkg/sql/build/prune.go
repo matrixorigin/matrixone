@@ -30,6 +30,8 @@ var (
 	ErrDivByZero = errors.New("division by zero")
 	// ErrZeroModulus is reported when computing the rest of a division by zero.
 	ErrZeroModulus = errors.New("zero modulus")
+	// ErrEvalResultOutRange is reported evaluate result is out of range.
+	ErrEvalResultOutRange = errors.New("binary result out of range")
 )
 
 func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, error) {

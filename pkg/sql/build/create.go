@@ -17,6 +17,7 @@ package build
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -166,10 +167,20 @@ func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (
 			}
 
 			// check value and its type, only support constant value for default expression now.
-			if _, err := buildConstant(*typ, defaultExpr.Expr); err != nil { // build constant failed
+			if val, err := buildConstant(*typ, defaultExpr.Expr); err != nil { // build constant failed
 				return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
 			} else {
 				ret = defaultExpr.Expr.String()
+				switch v := val.(type) {
+				case int64:
+					ret = strconv.FormatInt(v, 10)
+				case uint64:
+					ret = strconv.FormatUint(v, 10)
+				case float32:
+					ret = strconv.FormatFloat(float64(v), 'f', -1, 32)
+				case float64:
+					ret = strconv.FormatFloat(v, 'f', -1, 64)
+				}
 				if errStr := valueRangeCheck(ret, *typ); len(errStr) != 0 { // value out of range
 					return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
 				}

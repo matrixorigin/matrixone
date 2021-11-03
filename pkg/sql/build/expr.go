@@ -705,12 +705,85 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 			switch val := v.(type) {
 			case int64:
 				return val * -1, nil
-			case float32:
-				return val * -1, nil
 			case float64:
 				return val * -1, nil
 			}
 			return v, nil
+		}
+	case *tree.BinaryExpr:
+		var floatResult float64
+		left, err := buildConstant(types.Type{Oid: types.T_float64, Size: 8}, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := buildConstant(types.Type{Oid: types.T_float64, Size: 8}, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		lf, rf := left.(float64), right.(float64)
+		switch e.Op {
+		case tree.PLUS:
+			floatResult = lf + rf
+			if lf > 0 && rf > 0 && floatResult < 0 {
+				return nil, ErrEvalResultOutRange
+			}
+			if lf < 0 && rf < 0 && floatResult > 0 {
+				return nil, ErrEvalResultOutRange
+			}
+		case tree.MINUS:
+			floatResult = lf - rf
+			if lf < 0 && rf > 0 && floatResult > 0 {
+				return nil, ErrEvalResultOutRange
+			}
+			if lf > 0 && rf < 0 && floatResult < 0 {
+				return nil, ErrEvalResultOutRange
+			}
+		case tree.MULTI:
+			floatResult = lf * rf
+			if floatResult < 0 {
+				if (lf > 0 && rf > 0) || (lf < 0 && rf < 0) {
+					return nil, ErrEvalResultOutRange
+				}
+			} else if floatResult > 0 {
+				if (lf > 0 && rf < 0) || (lf < 0 && rf > 0) {
+					return nil, ErrEvalResultOutRange
+				}
+			}
+		case tree.DIV:
+			if rf == 0 {
+				return nil, ErrDivByZero
+			}
+			floatResult = lf / rf
+		case tree.INTEGER_DIV:
+			if rf == 0 {
+				return nil, ErrDivByZero
+			}
+			floatResult = float64(int64(lf / rf))
+		case tree.MOD:
+			if rf == 0 {
+				return nil, ErrZeroModulus
+			}
+			floatResult = lf - float64(int64(lf / rf)) * rf
+		}
+
+		switch typ.Oid {
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			if float64(uint64(floatResult)) != floatResult {
+				return nil, ErrEvalResultOutRange
+			}
+			return uint64(floatResult), nil
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			if float64(int64(floatResult)) != floatResult {
+				return nil, ErrEvalResultOutRange
+			}
+			return int64(floatResult), nil
+		case types.T_float32:
+			if float64(float32(floatResult)) != floatResult {
+				return nil, ErrEvalResultOutRange
+			}
+			return float32(floatResult), nil
+		case types.T_float64:
+			return floatResult, nil
 		}
 	}
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))

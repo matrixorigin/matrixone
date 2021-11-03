@@ -16,7 +16,6 @@ package build
 
 import (
 	"fmt"
-	"go/constant"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,12 +25,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go/constant"
 	"strconv"
 )
 
 func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 	var attrs []string
 	var bat *batch.Batch
+	var insertValues [][]insertValue // store insert values string for range check.
 
 	if _, ok := stmt.Table.(*tree.TableName); !ok {
 		return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table: '%v'", stmt.Table))
@@ -84,6 +85,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 	if len(rows.Rows) == 0 || len(rows.Rows[0]) == 0 {
 		return insert.New(id, db, bat, r), nil
 	}
+	insertValues = make([][]insertValue, len(rows.Rows))
+	for i := range insertValues {
+		insertValues[i] = make([]insertValue, len(bat.Vecs))
+	}
 	for i, vec := range bat.Vecs {
 		switch vec.Typ.Oid {
 		case types.T_int8:
@@ -96,8 +101,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = int8(v.(int64))
+						insertValues[j][i].ValStr = strconv.FormatInt(v.(int64), 10)
 					}
 				}
 			}
@@ -114,8 +121,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = int16(v.(int64))
+						insertValues[j][i].ValStr = strconv.FormatInt(v.(int64), 10)
 					}
 				}
 			}
@@ -132,8 +141,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = int32(v.(int64))
+						insertValues[j][i].ValStr = strconv.FormatInt(v.(int64), 10)
 					}
 				}
 			}
@@ -150,8 +161,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = v.(int64)
+						insertValues[j][i].ValStr = strconv.FormatInt(v.(int64), 10)
 					}
 				}
 			}
@@ -168,8 +181,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = uint8(v.(uint64))
+						insertValues[j][i].ValStr = strconv.FormatUint(v.(uint64), 10)
 					}
 				}
 			}
@@ -186,8 +201,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = uint16(v.(uint64))
+						insertValues[j][i].ValStr = strconv.FormatUint(v.(uint64), 10)
 					}
 				}
 			}
@@ -204,8 +221,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = uint32(v.(uint64))
+						insertValues[j][i].ValStr = strconv.FormatUint(v.(uint64), 10)
 					}
 				}
 			}
@@ -222,8 +241,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = v.(uint64)
+						insertValues[j][i].ValStr = strconv.FormatUint(v.(uint64), 10)
 					}
 				}
 			}
@@ -240,8 +261,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = v.(float32)
+						insertValues[j][i].ValStr = strconv.FormatFloat(float64(v.(float32)), 'f', -1, 64)
 					}
 				}
 			}
@@ -258,8 +281,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = v.(float64)
+						insertValues[j][i].ValStr = strconv.FormatFloat(v.(float64), 'f', -1, 64)
 					}
 				}
 			}
@@ -276,8 +301,10 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					}
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
+						insertValues[j][i].IsNull = true
 					} else {
 						vs[j] = []byte(v.(string))
+						insertValues[j][i].ValStr = v.(string)
 					}
 				}
 			}
@@ -286,7 +313,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 			}
 		}
 	}
-	if err = insertValuesRangeCheck(bat.Vecs, bat.Attrs, rows.Rows); err != nil {
+	if err = insertValuesRangeCheck(bat.Vecs, bat.Attrs, insertValues); err != nil {
 		return nil, err
 	}
 	for k, v := range mp {
@@ -343,17 +370,22 @@ func (b *build) tableName(tbl *tree.TableName) (string, string, engine.Relation,
 	return string(tbl.SchemaName), string(tbl.ObjectName), r, nil
 }
 
+type insertValue struct {
+	IsNull bool
+	ValStr string
+}
+
 // insertValuesRangeCheck returns error if final build result is out of range.
-func insertValuesRangeCheck(vecs []*vector.Vector, columnNames []string, sourceInput []tree.Exprs) error {
+func insertValuesRangeCheck(vecs []*vector.Vector, columnNames []string, sourceInput [][]insertValue) error {
 	var sourceValue, errString string
 
 	for colIndex, vec := range vecs {
 		for rowIndex := range sourceInput {
 			// range check should ignore null value
-			if isNullExpr(sourceInput[rowIndex][colIndex]) {
+			if sourceInput[rowIndex][colIndex].IsNull {
 				continue
 			}
-			sourceValue = sourceInput[rowIndex][colIndex].String()
+			sourceValue = sourceInput[rowIndex][colIndex].ValStr
 			errString = valueRangeCheck(sourceValue, vec.Typ)
 
 			if len(errString) != 0 {
