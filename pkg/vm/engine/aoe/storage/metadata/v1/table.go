@@ -215,7 +215,8 @@ func (e *Table) rebuild(catalog *Catalog) {
 // table related data resources were deleted. A hard-deleted table will
 // be deleted from catalog later
 func (e *Table) HardDelete() error {
-	ctx := newDeleteTableCtx(e)
+	tranId := e.Catalog.NextUncommitId()
+	ctx := newDeleteTableCtx(e, tranId)
 	err := e.Catalog.onCommitRequest(ctx)
 	if err != nil {
 		return err
@@ -226,7 +227,8 @@ func (e *Table) HardDelete() error {
 
 func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 	cInfo := &CommitInfo{
-		CommitId: e.Catalog.NextUncommitId(),
+		CommitId: ctx.tranId,
+		TranId:   ctx.tranId,
 		Op:       OpHardDelete,
 		SSLLNode: *common.NewSSLLNode(),
 	}
@@ -251,16 +253,16 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 // It is driven by external command. The engine then schedules a GC task to hard delete
 // related resources.
 func (e *Table) SimpleSoftDelete(exIndex *LogIndex) error {
-	ctx := newDropTableCtx(e.Schema.Name, exIndex)
+	tranId := e.Catalog.NextUncommitId()
+	ctx := newDropTableCtx(e.Schema.Name, exIndex, tranId)
 	ctx.table = e
 	return e.Catalog.onCommitRequest(ctx)
 }
 
 func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
-	commitId := e.Catalog.NextUncommitId()
 	cInfo := &CommitInfo{
-		TranId:   commitId,
-		CommitId: commitId,
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
 		LogIndex: ctx.exIndex,
 		Op:       OpSoftDelete,
 		SSLLNode: *common.NewSSLLNode(),
@@ -446,7 +448,8 @@ func (e *Table) SimpleGetOrCreateNextBlock(from *Block) *Block {
 }
 
 func (e *Table) SimpleCreateSegment() *Segment {
-	ctx := newCreateSegmentCtx(e)
+	tranId := e.Catalog.NextUncommitId()
+	ctx := newCreateSegmentCtx(e, tranId)
 	if err := e.Catalog.onCommitRequest(ctx); err != nil {
 		return nil
 	}
@@ -473,7 +476,7 @@ func (e *Table) SimpleGetSegmentCount() int {
 }
 
 func (e *Table) prepareCreateSegment(ctx *createSegmentCtx) (LogEntry, error) {
-	se := newSegmentEntry(e.Catalog, e, e.Catalog.NextUncommitId(), ctx.exIndex)
+	se := newSegmentEntry(e.Catalog, e, ctx.tranId, ctx.exIndex)
 	logEntry := se.ToLogEntry(ETCreateSegment)
 	e.Catalog.commitMu.Lock()
 	defer e.Catalog.commitMu.Unlock()
@@ -510,9 +513,8 @@ func (e *Table) SimpleGetSegment(id uint64) *Segment {
 	return e.GetSegment(id, MinUncommitId)
 }
 
-func (e *Table) Splite(splitSpec *TableSplitSpec, nameFactory TableNameFactory, catalog *Catalog) []*Table {
+func (e *Table) Splite(tranId uint64, splitSpec *TableSplitSpec, nameFactory TableNameFactory, catalog *Catalog) []*Table {
 	specs := splitSpec.Specs
-	tranId := catalog.NextUncommitId()
 	tables := make([]*Table, len(specs))
 	for i, spec := range specs {
 		logIndex := LogIndex{
@@ -520,7 +522,6 @@ func (e *Table) Splite(splitSpec *TableSplitSpec, nameFactory TableNameFactory, 
 			Id:      shard.SimpleIndexId(uint64(0)),
 		}
 		info := e.CommitInfo.Clone()
-		// info := e.CommitInfo
 		info.TranId = tranId
 		info.CommitId = tranId
 		info.LogIndex = &logIndex

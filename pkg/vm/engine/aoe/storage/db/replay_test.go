@@ -78,6 +78,7 @@ func TestReplay1(t *testing.T) {
 	testutils.WaitExpect(200, func() bool {
 		return common.GetGlobalSeqNum() == inst.GetShardCheckpointId(0)
 	})
+	time.Sleep(time.Duration(10) * time.Millisecond)
 
 	rel.Close()
 	inst.Close()

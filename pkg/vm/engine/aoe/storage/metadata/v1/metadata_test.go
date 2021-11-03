@@ -366,7 +366,7 @@ func TestDropTable(t *testing.T) {
 	err = writer.ReAllocId(&catalog.Sequence, writer.view.Catalog)
 	assert.Nil(t, err)
 
-	err = catalog.SimpleReplaceShard(writer.view)
+	err = catalog.SimpleReplaceShard(writer.view, writer.tranId)
 	assert.Nil(t, err)
 
 	tableNode = catalog.nameNodes[schema1.Name]

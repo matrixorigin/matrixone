@@ -36,11 +36,13 @@ func (p *loopProcessor) OnBlock(block *Block) error {
 type reallocIdProcessor struct {
 	loopProcessor
 	allocator *Sequence
+	tranId    uint64
 }
 
-func newReAllocIdProcessor(allocator *Sequence) *reallocIdProcessor {
+func newReAllocIdProcessor(allocator *Sequence, tranId uint64) *reallocIdProcessor {
 	p := &reallocIdProcessor{
 		allocator: allocator,
+		tranId:    tranId,
 	}
 	p.TableFn = p.onTable
 	p.SegmentFn = p.onSegment
@@ -50,19 +52,22 @@ func newReAllocIdProcessor(allocator *Sequence) *reallocIdProcessor {
 
 func (p *reallocIdProcessor) onTable(table *Table) error {
 	table.Id = p.allocator.NextTableId()
-	table.CommitInfo.CommitId = p.allocator.NextUncommitId()
+	table.CommitInfo.CommitId = p.tranId
+	table.CommitInfo.TranId = p.tranId
 	return nil
 }
 
 func (p *reallocIdProcessor) onSegment(segment *Segment) error {
 	segment.Id = p.allocator.NextSegmentId()
-	segment.CommitInfo.CommitId = p.allocator.NextUncommitId()
+	segment.CommitInfo.CommitId = p.tranId
+	segment.CommitInfo.TranId = p.tranId
 	return nil
 }
 
 func (p *reallocIdProcessor) onBlock(block *Block) error {
 	block.Id = p.allocator.NextBlockId()
-	block.CommitInfo.CommitId = p.allocator.NextUncommitId()
+	block.CommitInfo.CommitId = p.tranId
+	block.CommitInfo.TranId = p.tranId
 	return nil
 }
 

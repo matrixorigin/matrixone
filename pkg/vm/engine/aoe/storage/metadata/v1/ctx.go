@@ -93,52 +93,69 @@ func newAddTableCtx(table *Table, inTran bool) *addTableCtx {
 	}
 }
 
-func newCreateTableCtx(schema *Schema, exIndex *LogIndex) *createTableCtx {
+func newCreateTableCtx(schema *Schema, exIndex *LogIndex, tranId uint64) *createTableCtx {
 	return &createTableCtx{
 		writeCtx: writeCtx{
 			exIndex: exIndex,
+			tranId:  tranId,
 		},
 		schema: schema,
 	}
 }
 
-func newDropTableCtx(name string, exIndex *LogIndex) *dropTableCtx {
+func newDropTableCtx(name string, exIndex *LogIndex, tranId uint64) *dropTableCtx {
 	return &dropTableCtx{
 		writeCtx: writeCtx{
 			exIndex: exIndex,
+			tranId:  tranId,
 		},
 		name: name,
 	}
 }
 
-func newDeleteTableCtx(table *Table) *deleteTableCtx {
+func newDeleteTableCtx(table *Table, tranId uint64) *deleteTableCtx {
 	return &deleteTableCtx{
+		writeCtx: writeCtx{
+			tranId: tranId,
+		},
 		table: table,
 	}
 }
 
-func newCreateSegmentCtx(table *Table) *createSegmentCtx {
+func newCreateSegmentCtx(table *Table, tranId uint64) *createSegmentCtx {
 	return &createSegmentCtx{
+		writeCtx: writeCtx{
+			tranId: tranId,
+		},
 		table: table,
 	}
 }
 
-func newUpgradeSegmentCtx(segment *Segment, size int64, exIndice []*LogIndex) *upgradeSegmentCtx {
+func newUpgradeSegmentCtx(segment *Segment, size int64, exIndice []*LogIndex, tranId uint64) *upgradeSegmentCtx {
 	return &upgradeSegmentCtx{
+		writeCtx: writeCtx{
+			tranId: tranId,
+		},
 		segment:  segment,
 		exIndice: exIndice,
 		size:     size,
 	}
 }
 
-func newCreateBlockCtx(segment *Segment) *createBlockCtx {
+func newCreateBlockCtx(segment *Segment, tranId uint64) *createBlockCtx {
 	return &createBlockCtx{
+		writeCtx: writeCtx{
+			tranId: tranId,
+		},
 		segment: segment,
 	}
 }
 
-func newUpgradeBlockCtx(block *Block, exIndice []*LogIndex) *upgradeBlockCtx {
+func newUpgradeBlockCtx(block *Block, exIndice []*LogIndex, tranId uint64) *upgradeBlockCtx {
 	return &upgradeBlockCtx{
+		writeCtx: writeCtx{
+			tranId: tranId,
+		},
 		block:    block,
 		exIndice: exIndice,
 	}
@@ -155,10 +172,11 @@ func newReplaceTableCtx(table *Table, exIndex *LogIndex, tranId uint64, inTran b
 	}
 }
 
-func newReplaceShardCtx(view *catalogLogEntry) *replaceShardCtx {
+func newReplaceShardCtx(view *catalogLogEntry, tranId uint64) *replaceShardCtx {
 	ctx := &replaceShardCtx{
 		writeCtx: writeCtx{
 			inTran: true,
+			tranId: tranId,
 		},
 		view: view,
 	}
