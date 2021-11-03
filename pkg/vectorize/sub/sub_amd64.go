@@ -207,6 +207,33 @@ func init() {
 	Float64SubSels = float64SubSels
 	Float64SubScalarSels = float64SubScalarSels
 	Float64SubByScalarSels = float64SubByScalarSels
+
+	Int32Int64Sub = int32Int64Sub
+	Int32Int64SubSels = int32Int64SubSels
+	Int16Int64Sub = int16Int64Sub
+	Int16Int64SubSels = int16Int64SubSels
+	Int8Int64Sub = int8Int64Sub
+	Int8Int64SubSels = int8Int64SubSels
+	Int16Int32Sub = int16Int32Sub
+	Int16Int32SubSels = int16Int32SubSels
+	Int8Int32Sub = int8Int32Sub
+	Int8Int32SubSels = int8Int32SubSels
+	Int8Int16Sub = int8Int16Sub
+	Int8Int16SubSels = int8Int16SubSels
+	Float32Float64Sub = float32Float64Sub
+	Float32Float64SubSels = float32Float64SubSels
+	Uint32Uint64Sub = uint32Uint64Sub
+	Uint32Uint64SubSels = uint32Uint64SubSels
+	Uint16Uint64Sub = uint16Uint64Sub
+	Uint16Uint64SubSels = uint16Uint64SubSels
+	Uint8Uint64Sub = uint8Uint64Sub
+	Uint8Uint64SubSels = uint8Uint64SubSels
+	Uint16Uint32Sub = uint16Uint32Sub
+	Uint16Uint32SubSels = uint16Uint32SubSels
+	Uint8Uint32Sub = uint8Uint32Sub
+	Uint8Uint32SubSels = uint8Uint32SubSels
+	Uint8Uint16Sub = uint8Uint16Sub
+	Uint8Uint16SubSels = uint8Uint16SubSels
 }
 
 func int8SubAvx2(xs, ys, rs []int8) []int8 {

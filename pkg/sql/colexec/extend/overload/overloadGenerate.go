@@ -115,9 +115,35 @@ func GeneratePlus() error {
 			{types.T_float32, types.T_float32, types.T_float32},
 			{types.T_float64, types.T_float64, types.T_float64},
 		},
-		[]lrt{ // low - high - high
+		[]lrt{ // same family : low - high - high
+			{types.T_int8, types.T_int64, types.T_int64},
+			{types.T_int16, types.T_int64, types.T_int64},
+			{types.T_int32, types.T_int64, types.T_int64},
+			{types.T_int8, types.T_int32, types.T_int32},
+			{types.T_int16, types.T_int32, types.T_int32},
+			{types.T_int8, types.T_int16, types.T_int16},
+			{types.T_float32, types.T_float64, types.T_float64},
+			{types.T_uint8, types.T_uint64, types.T_uint64},
+			{types.T_uint16, types.T_uint64, types.T_uint64},
+			{types.T_uint32, types.T_uint64, types.T_uint64},
+			{types.T_uint8, types.T_uint32, types.T_uint32},
+			{types.T_uint16, types.T_uint32, types.T_uint32},
+			{types.T_uint8, types.T_uint16, types.T_uint16},
 		},
-		[]lrt{ // high - low - high
+		[]lrt{ // same family : high - low - high
+			{types.T_int64, types.T_int8, types.T_int64},
+			{types.T_int64, types.T_int16, types.T_int64},
+			{types.T_int64, types.T_int32, types.T_int64},
+			{types.T_int32, types.T_int16, types.T_int32},
+			{types.T_int32, types.T_int8, types.T_int32},
+			{types.T_int16, types.T_int8, types.T_int16},
+			{types.T_float64, types.T_float32, types.T_float64},
+			{types.T_uint64, types.T_uint8, types.T_uint64},
+			{types.T_uint64, types.T_uint16, types.T_uint64},
+			{types.T_uint64, types.T_uint32, types.T_uint64},
+			{types.T_uint32, types.T_uint16, types.T_uint32},
+			{types.T_uint32, types.T_uint8, types.T_uint32},
+			{types.T_uint16, types.T_uint8, types.T_uint16},
 		},
 	}
 
@@ -165,8 +191,35 @@ func GenerateMinus() error {
 			{types.T_float64, types.T_float64, types.T_float64},
 		},
 		[]lrt{ // low - high - high
+			{types.T_int32, types.T_int64, types.T_int64},
+			{types.T_int16, types.T_int64, types.T_int64},
+			{types.T_int8, types.T_int64, types.T_int64},
+			{types.T_int16, types.T_int32, types.T_int32},
+			{types.T_int8, types.T_int32, types.T_int32},
+			{types.T_int8, types.T_int16, types.T_int16},
+			{types.T_float32, types.T_float64, types.T_float64},
+			{types.T_uint32, types.T_uint64, types.T_uint64},
+			{types.T_uint16, types.T_uint64, types.T_uint64},
+			{types.T_uint8, types.T_uint64, types.T_uint64},
+			{types.T_uint16, types.T_uint32, types.T_uint32},
+			{types.T_uint8, types.T_uint32, types.T_uint32},
+			{types.T_uint8, types.T_uint16, types.T_uint16},
+
 		},
 		[]lrt{ // high - low - high
+			{types.T_int64, types.T_int32, types.T_int64},
+			{types.T_int64, types.T_int16, types.T_int64},
+			{types.T_int64, types.T_int8, types.T_int64},
+			{types.T_int32, types.T_int16, types.T_int32},
+			{types.T_int32, types.T_int8, types.T_int32},
+			{types.T_int16, types.T_int8, types.T_int16},
+			{types.T_float64, types.T_float32, types.T_float64},
+			{types.T_uint64, types.T_uint32, types.T_uint64},
+			{types.T_uint64, types.T_uint16, types.T_uint64},
+			{types.T_uint64, types.T_uint8, types.T_uint64},
+			{types.T_uint32, types.T_uint16, types.T_uint32},
+			{types.T_uint32, types.T_uint8, types.T_uint32},
+			{types.T_uint16, types.T_uint8, types.T_uint16},
 		},
 	}
 
@@ -214,10 +267,34 @@ func GenerateMult() error {
 			{types.T_float64, types.T_float64, types.T_float64},
 		},
 		[]lrt{ // low - high - high
-
+			{types.T_int32, types.T_int64, types.T_int64},
+			{types.T_int16, types.T_int64, types.T_int64},
+			{types.T_int8, types.T_int64, types.T_int64},
+			{types.T_int16, types.T_int32, types.T_int32},
+			{types.T_int8, types.T_int32, types.T_int32},
+			{types.T_int8, types.T_int16, types.T_int16},
+			{types.T_float32, types.T_float64, types.T_float64},
+			{types.T_uint32, types.T_uint64, types.T_uint64},
+			{types.T_uint16, types.T_uint64, types.T_uint64},
+			{types.T_uint8, types.T_uint64, types.T_uint64},
+			{types.T_uint16, types.T_uint32, types.T_uint32},
+			{types.T_uint8, types.T_uint32, types.T_uint32},
+			{types.T_uint8, types.T_uint16, types.T_uint16},
 		},
 		[]lrt{ // high - low - high
-
+			{types.T_int64, types.T_int32, types.T_int64},
+			{types.T_int64, types.T_int16, types.T_int64},
+			{types.T_int64, types.T_int8, types.T_int64},
+			{types.T_int32, types.T_int16, types.T_int32},
+			{types.T_int32, types.T_int8, types.T_int32},
+			{types.T_int16, types.T_int8, types.T_int16},
+			{types.T_float64, types.T_float32, types.T_float64},
+			{types.T_uint64, types.T_uint32, types.T_uint64},
+			{types.T_uint64, types.T_uint16, types.T_uint64},
+			{types.T_uint64, types.T_uint8, types.T_uint64},
+			{types.T_uint32, types.T_uint16, types.T_uint32},
+			{types.T_uint32, types.T_uint8, types.T_uint32},
+			{types.T_uint16, types.T_uint8, types.T_uint16},
 		},
 	}
 
@@ -232,6 +309,17 @@ func GenerateMult() error {
 
 // GenerateDiv makes div.go
 func GenerateDiv() error {
+	// TODO(m-schen): only support div operator between float family now. Because
+	// `int div int` should return Decimal, And `uint div uint` shoule return Decimal Unsigned.
+	// But we do not support Decimal Type now.
+	// Div between int and int, int and float, int and uint, and so on will do type conversion first.
+	// Rules is that :
+	// 		t / t 			  ==> 	float64 / float64
+	// 		t / float32		  ==>	float32 / float32
+	//		t / float64 	  ==> 	float64 / float64
+	// 		float32 / float64 ==> 	float64 / float64
+	// t contains all int type and uint type.
+
 	// read template file
 	divTemplate, err := os.ReadFile("div.template")
 	if err != nil {
@@ -246,33 +334,16 @@ func GenerateDiv() error {
 	}
 
 	type pts struct {
-		SameType []lrt
-		IntInt   []lrt
-		HighLow  []lrt
-		LowHigh	 []lrt
+		Div []lrt
+		IntegerDiv []lrt
 	}
 
 	var pTs = pts{
-		[]lrt{ // same type
-			{types.T_int8, types.T_int8, types.T_int8},
-			{types.T_int16, types.T_int16, types.T_int16},
-			{types.T_int32, types.T_int32, types.T_int32},
-			{types.T_int64, types.T_int64, types.T_int64},
-			{types.T_uint8, types.T_uint8, types.T_uint8},
-			{types.T_uint16, types.T_uint16, types.T_uint16},
-			{types.T_uint32, types.T_uint32, types.T_uint32},
-			{types.T_uint64, types.T_uint64, types.T_uint64},
-			{types.T_float32, types.T_float32, types.T_float32},
+		[]lrt{
 			{types.T_float64, types.T_float64, types.T_float64},
 		},
 		[]lrt{
-
-		},
-		[]lrt{
-
-		},
-		[]lrt{
-
+			{types.T_float64, types.T_float64, types.T_int64},
 		},
 	}
 

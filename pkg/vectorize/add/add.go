@@ -55,6 +55,59 @@ var (
 	Float64AddSels       func([]float64, []float64, []float64, []int64) []float64
 	Float64AddScalar     func(float64, []float64, []float64) []float64
 	Float64AddScalarSels func(float64, []float64, []float64, []int64) []float64
+
+	Int32Int64Add	func([]int32, []int64, []int64) []int64
+	Int32Int64AddScalar	func(int32, []int64, []int64) []int64
+	Int32Int64AddSels	func([]int32, []int64, []int64, []int64) []int64
+	Int32Int64AddScalarSels	func(int32, []int64, []int64, []int64) []int64
+	Int16Int64Add	func([]int16, []int64, []int64) []int64
+	Int16Int64AddScalar	func(int16, []int64, []int64) []int64
+	Int16Int64AddSels	func([]int16, []int64, []int64, []int64) []int64
+	Int16Int64AddScalarSels	func(int16, []int64, []int64, []int64) []int64
+	Int8Int64Add	func([]int8, []int64, []int64) []int64
+	Int8Int64AddScalar	func(int8, []int64, []int64) []int64
+	Int8Int64AddSels	func([]int8, []int64, []int64, []int64) []int64
+	Int8Int64AddScalarSels	func(int8, []int64, []int64, []int64) []int64
+	Int16Int32Add func([]int16, []int32, []int32) []int32
+	Int16Int32AddScalar func(int16, []int32, []int32) []int32
+	Int16Int32AddSels func([]int16, []int32, []int32, []int64) []int32
+	Int16Int32AddScalarSels func(int16, []int32, []int32, []int64) []int32
+	Int8Int32Add func([]int8, []int32, []int32) []int32
+	Int8Int32AddScalar func(int8, []int32, []int32) []int32
+	Int8Int32AddSels func([]int8, []int32, []int32, []int64) []int32
+	Int8Int32AddScalarSels func(int8, []int32, []int32, []int64) []int32
+	Int8Int16Add func([]int8, []int16, []int16) []int16
+	Int8Int16AddScalar func(int8, []int16, []int16) []int16
+	Int8Int16AddSels func([]int8, []int16, []int16, []int64) []int16
+	Int8Int16AddScalarSels func(int8, []int16, []int16, []int64) []int16
+	Float32Float64Add func([]float32, []float64, []float64) []float64
+	Float32Float64AddScalar func(float32, []float64, []float64) []float64
+	Float32Float64AddSels func([]float32, []float64, []float64, []int64) []float64
+	Float32Float64AddScalarSels func(float32, []float64, []float64, []int64) []float64
+	Uint32Uint64Add	func([]uint32, []uint64, []uint64) []uint64
+	Uint32Uint64AddScalar	func(uint32, []uint64, []uint64) []uint64
+	Uint32Uint64AddSels	func([]uint32, []uint64, []uint64, []int64) []uint64
+	Uint32Uint64AddScalarSels	func(uint32, []uint64, []uint64, []int64) []uint64
+	Uint16Uint64Add	func([]uint16, []uint64, []uint64) []uint64
+	Uint16Uint64AddScalar	func(uint16, []uint64, []uint64) []uint64
+	Uint16Uint64AddSels	func([]uint16, []uint64, []uint64, []int64) []uint64
+	Uint16Uint64AddScalarSels	func(uint16, []uint64, []uint64, []int64) []uint64
+	Uint8Uint64Add	func([]uint8, []uint64, []uint64) []uint64
+	Uint8Uint64AddScalar	func(uint8, []uint64, []uint64) []uint64
+	Uint8Uint64AddSels	func([]uint8, []uint64, []uint64, []int64) []uint64
+	Uint8Uint64AddScalarSels	func(uint8, []uint64, []uint64, []int64) []uint64
+	Uint16Uint32Add	func([]uint16, []uint32, []uint32) []uint32
+	Uint16Uint32AddScalar	func(uint16, []uint32, []uint32) []uint32
+	Uint16Uint32AddSels	func([]uint16, []uint32, []uint32, []int64) []uint32
+	Uint16Uint32AddScalarSels	func(uint16, []uint32, []uint32, []int64) []uint32
+	Uint8Uint32Add	func([]uint8, []uint32, []uint32) []uint32
+	Uint8Uint32AddScalar	func(uint8, []uint32, []uint32) []uint32
+	Uint8Uint32AddSels	func([]uint8, []uint32, []uint32, []int64) []uint32
+	Uint8Uint32AddScalarSels	func(uint8, []uint32, []uint32, []int64) []uint32
+	Uint8Uint16Add	func([]uint8, []uint16, []uint16) []uint16
+	Uint8Uint16AddScalar	func(uint8, []uint16, []uint16) []uint16
+	Uint8Uint16AddSels	func([]uint8, []uint16, []uint16, []int64) []uint16
+	Uint8Uint16AddScalarSels	func(uint8, []uint16, []uint16, []int64) []uint16
 )
 
 func int8Add(xs, ys, rs []int8) []int8 {
@@ -333,6 +386,370 @@ func float64AddScalar(x float64, ys, rs []float64) []float64 {
 func float64AddScalarSels(x float64, ys, rs []float64, sels []int64) []float64 {
 	for i, sel := range sels {
 		rs[i] = x + ys[sel]
+	}
+	return rs
+}
+
+func int32Int64Add(xs []int32, ys, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = int64(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func int32Int64AddScalar(x int32, ys, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = int64(x) + ys[i]
+	}
+	return rs
+}
+
+func int32Int64AddSels(xs []int32, ys, rs, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = int64(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func int32Int64AddScalarSels(x int32, ys, rs, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = int64(x) + ys[sel]
+	}
+	return rs
+}
+
+func int16Int64Add(xs []int16, ys, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = int64(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func int16Int64AddScalar(x int16, ys, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = int64(x) + ys[i]
+	}
+	return rs
+}
+
+func int16Int64AddSels(xs []int16, ys, rs, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = int64(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func int16Int64AddScalarSels(x int16, ys, rs, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = int64(x) + ys[sel]
+	}
+	return rs
+}
+
+func int8Int64Add(xs []int8, ys, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = int64(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func int8Int64AddScalar(x int8, ys, rs []int64) []int64 {
+	for i := range rs {
+		rs[i] = int64(x) + ys[i]
+	}
+	return rs
+}
+
+func int8Int64AddSels(xs []int8, ys, rs, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = int64(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func int8Int64AddScalarSels(x int8, ys, rs, sels []int64) []int64 {
+	for _, sel := range sels {
+		rs[sel] = int64(x) + ys[sel]
+	}
+	return rs
+}
+
+func int16Int32Add(xs []int16, ys, rs []int32) []int32 {
+	for i := range rs {
+		rs[i] = int32(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func int16Int32AddScalar(x int16, ys, rs []int32) []int32 {
+	for i := range rs {
+		rs[i] = int32(x) + ys[i]
+	}
+	return rs
+}
+
+func int16Int32AddSels(xs []int16, ys, rs []int32, sels []int64) []int32 {
+	for _, sel := range sels {
+		rs[sel] = int32(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func int16Int32AddScalarSels(x int16, ys, rs []int32, sels []int64) []int32 {
+	for _, sel := range sels {
+		rs[sel] = int32(x) + ys[sel]
+	}
+	return rs
+}
+
+func int8Int32Add(xs []int8, ys, rs []int32) []int32 {
+	for i := range rs {
+		rs[i] = int32(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func int8Int32AddScalar(x int8, ys, rs []int32) []int32 {
+	for i := range rs {
+		rs[i] = int32(x) + ys[i]
+	}
+	return rs
+}
+
+func int8Int32AddSels(xs []int8, ys, rs []int32, sels []int64) []int32 {
+	for _, sel := range sels {
+		rs[sel] = int32(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func int8Int32AddScalarSels(x int8, ys, rs []int32, sels []int64) []int32 {
+	for _, sel := range sels {
+		rs[sel] = int32(x) + ys[sel]
+	}
+	return rs
+}
+
+func int8Int16Add(xs []int8, ys, rs []int16) []int16 {
+	for i := range rs {
+		rs[i] = int16(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func int8Int16AddScalar(x int8, ys, rs []int16) []int16 {
+	for i := range rs {
+		rs[i] = int16(x) + ys[i]
+	}
+	return rs
+}
+
+func int8Int16AddSels(xs []int8, ys, rs []int16, sels []int64) []int16 {
+	for _, sel := range sels {
+		rs[sel] = int16(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func int8Int16AddScalarSels(x int8, ys, rs []int16, sels []int64) []int16 {
+	for _, sel := range sels {
+		rs[sel] = int16(x) + ys[sel]
+	}
+	return rs
+}
+
+func float32Float64Add(xs []float32, ys, rs []float64) []float64 {
+	for i := range rs {
+		rs[i] = float64(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func float32Float64AddScalar(x float32, ys, rs []float64) []float64 {
+	for i := range rs {
+		rs[i] = float64(x) + ys[i]
+	}
+	return rs
+}
+
+func float32Float64AddSels(xs []float32, ys, rs []float64, sels []int64) []float64 {
+	for _, sel := range sels {
+		rs[sel] = float64(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func float32Float64AddScalarSels(x float32, ys, rs []float64, sels []int64) []float64 {
+	for _, sel := range sels {
+		rs[sel] = float64(x) + ys[sel]
+	}
+	return rs
+}
+
+func uint32Uint64Add(xs []uint32, ys, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = uint64(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func uint32Uint64AddScalar(x uint32, ys, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = uint64(x) + ys[i]
+	}
+	return rs
+}
+
+func uint32Uint64AddSels(xs []uint32, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = uint64(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func uint32Uint64AddScalarSels(x uint32, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = uint64(x) + ys[sel]
+	}
+	return rs
+}
+
+func uint16Uint64Add(xs []uint16, ys, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = uint64(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func uint16Uint64AddScalar(x uint16, ys, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = uint64(x) + ys[i]
+	}
+	return rs
+}
+
+func uint16Uint64AddSels(xs []uint16, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = uint64(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func uint16Uint64AddScalarSels(x uint16, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = uint64(x) + ys[sel]
+	}
+	return rs
+}
+
+func uint8Uint64Add(xs []uint8, ys, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = uint64(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func uint8Uint64AddScalar(x uint8, ys, rs []uint64) []uint64 {
+	for i := range rs {
+		rs[i] = uint64(x) + ys[i]
+	}
+	return rs
+}
+
+func uint8Uint64AddSels(xs []uint8, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = uint64(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func uint8Uint64AddScalarSels(x uint8, ys, rs []uint64, sels []int64) []uint64 {
+	for _, sel := range sels {
+		rs[sel] = uint64(x) + ys[sel]
+	}
+	return rs
+}
+
+func uint16Uint32Add(xs []uint16, ys, rs []uint32) []uint32 {
+	for i := range rs {
+		rs[i] = uint32(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func uint16Uint32AddScalar(x uint16, ys, rs []uint32) []uint32 {
+	for i := range rs {
+		rs[i] = uint32(x) + ys[i]
+	}
+	return rs
+}
+
+func uint16Uint32AddSels(xs []uint16, ys, rs []uint32, sels []int64) []uint32 {
+	for _, sel := range sels {
+		rs[sel] = uint32(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func uint16Uint32AddScalarSels(x uint16, ys, rs []uint32, sels []int64) []uint32 {
+	for _, sel := range sels {
+		rs[sel] = uint32(x) + ys[sel]
+	}
+	return rs
+}
+
+func uint8Uint32Add(xs []uint8, ys, rs []uint32) []uint32 {
+	for i := range rs {
+		rs[i] = uint32(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func uint8Uint32AddScalar(x uint8, ys, rs []uint32) []uint32 {
+	for i := range rs {
+		rs[i] = uint32(x) + ys[i]
+	}
+	return rs
+}
+
+func uint8Uint32AddSels(xs []uint8, ys, rs []uint32, sels []int64) []uint32 {
+	for _, sel := range sels {
+		rs[sel] = uint32(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func uint8Uint32AddScalarSels(x uint8, ys, rs []uint32, sels []int64) []uint32 {
+	for _, sel := range sels {
+		rs[sel] = uint32(x) + ys[sel]
+	}
+	return rs
+}
+
+func uint8Uint16Add(xs []uint8, ys, rs []uint16) []uint16 {
+	for i := range rs {
+		rs[i] = uint16(xs[i]) + ys[i]
+	}
+	return rs
+}
+
+func uint8Uint16AddScalar(x uint8, ys, rs []uint16) []uint16 {
+	for i := range rs {
+		rs[i] = uint16(x) + ys[i]
+	}
+	return rs
+}
+
+func uint8Uint16AddSels(xs []uint8, ys, rs []uint16, sels []int64) []uint16 {
+	for _, sel := range sels {
+		rs[sel] = uint16(xs[sel]) + ys[sel]
+	}
+	return rs
+}
+
+func uint8Uint16AddScalarSels(x uint8, ys, rs []uint16, sels []int64) []uint16 {
+	for _, sel := range sels {
+		rs[sel] = uint16(x) + ys[sel]
 	}
 	return rs
 }

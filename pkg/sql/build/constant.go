@@ -17,12 +17,12 @@ package build
 import (
 	"bytes"
 	"fmt"
-	"math"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
+	"math"
 )
 
 func Neg(x *extend.ValueExtend) (extend.Extend, error) {
@@ -575,6 +575,8 @@ func toChar(e *extend.ValueExtend) error {
 	case types.T_varchar:
 		e.V.Typ.Oid = types.T_char
 		e.V.Ref = 1
+	case types.T_int64, types.T_float64: // just ignore at this stage because binary operator supports it now.
+		return nil
 	default:
 		return sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("cannot convert %s to char", e.V.Typ))
 	}

@@ -417,7 +417,7 @@ func (b *build) buildBinaryWithoutCheck(o op.OP, e *tree.BinaryExpr) (extend.Ext
 			return nil, err
 		}
 		return &extend.BinaryExtend{Op: overload.Mod, Left: left, Right: right}, nil
-	case tree.DIV, tree.INTEGER_DIV:
+	case tree.DIV:
 		left, err := b.buildExprWithoutCheck(o, e.Left)
 		if err != nil {
 			return nil, err
@@ -427,6 +427,16 @@ func (b *build) buildBinaryWithoutCheck(o op.OP, e *tree.BinaryExpr) (extend.Ext
 			return nil, err
 		}
 		return &extend.BinaryExtend{Op: overload.Div, Left: left, Right: right}, nil
+	case tree.INTEGER_DIV:
+		left, err := b.buildExprWithoutCheck(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExprWithoutCheck(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.IntegerDiv, Left: left, Right: right}, nil
 	}
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }
@@ -553,7 +563,7 @@ func (b *build) buildBinary(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) 
 			return nil, err
 		}
 		return &extend.BinaryExtend{Op: overload.Mod, Left: left, Right: right}, nil
-	case tree.DIV, tree.INTEGER_DIV:
+	case tree.DIV:
 		left, err := b.buildExpr(o, e.Left)
 		if err != nil {
 			return nil, err
@@ -563,6 +573,16 @@ func (b *build) buildBinary(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) 
 			return nil, err
 		}
 		return &extend.BinaryExtend{Op: overload.Div, Left: left, Right: right}, nil
+	case tree.INTEGER_DIV:
+		left, err := b.buildExpr(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExpr(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.IntegerDiv, Left: left, Right: right}, nil
 	}
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
 }

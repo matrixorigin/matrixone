@@ -28,8 +28,7 @@ import (
 
 func init() {
     BinOps[Div] = []*BinOp{
-        // same type to div
-        {{range .SameType}}
+        {{range .Div}}
         {
                 LeftType:   types.LEFT_TYPE_OID,
                 RightType:  types.RIGHT_TYPE_OID,
@@ -212,6 +211,108 @@ func init() {
                     }
                     return vec, nil
                 },
+        },
+        {{end}}
+    }
+
+    BinOps[IntegerDiv] = []*BinOp{
+        {{range .IntegerDiv}}
+        {
+            LeftType:   types.LEFT_TYPE_OID,
+            RightType:  types.RIGHT_TYPE_OID,
+            ReturnType: types.RETURN_TYPE_OID,
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+                lvs, rvs := lv.Col.([]L_GO_TYPE), rv.Col.([]R_GO_TYPE)
+                rtl := {.RETURN_TYPE_LEN}
+
+                // there is no need to check if we can reuse vec because return type is diff to left and right types.
+                resultLength := len(lvs)
+                if !rc {
+                    resultLength = len(rvs)
+                }
+                vec, err := register.Get(proc, int64(rtl) * int64(resultLength), types.Type{
+                     Oid:  types.RETURN_TYPE_OID,
+                     Size: {.RETURN_TYPE_LEN},
+                })
+                if err != nil {
+                    return nil, err
+                }
+                rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                rs = rs[:resultLength]
+
+                defer func() {
+                    if lv.Ref == 0 {
+                        register.Put(proc, lv)
+                    }
+                    if rv.Ref == 0 {
+                        register.Put(proc, rv)
+                    }
+                }()
+
+                switch {
+                case lc && !rc:
+                    if !rv.Nsp.Any() {
+                        for _, v := range rvs {
+                            if v == 0 {
+                                return nil, ErrDivByZero
+                            }
+                        }
+                        vec.Nsp.Set(rv.Nsp)
+                        vec.SetCol(div.{.LTYP}IntegerDivScalar(lvs[0], rvs, rs))
+                        return vec, nil
+                    }
+                    sels := register.GetSels(proc)
+                    defer register.PutSels(sels, proc)
+                    for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+                        if rv.Nsp.Contains(i) {
+                            continue
+                        }
+                        if rvs[i] == 0 {
+                            return nil, ErrDivByZero
+                        }
+                        sels = append(sels, int64(i))
+                    }
+                    vec.SetCol(div.{.LTYP}IntegerDivSels(lvs, rvs, rs, sels))
+                    vec.Nsp.Set(lv.Nsp.Or(rv.Nsp))
+                    return vec, nil
+                case !lc && rc:
+                    if rvs[0] == 0 {
+                        return nil, ErrDivByZero
+                    }
+                    vec.SetCol(div.{.LTYP}IntegerDivByScalar(rvs[0], lvs, rs))
+                    vec.Nsp.Set(lv.Nsp)
+                    return vec, nil
+                }
+                nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+                if !rv.Nsp.Any() {
+                    for _, v := range rvs {
+                        if v == 0 {
+                            return nil, ErrDivByZero
+                        }
+                    }
+                    vec.SetCol(div.{.LTYP}IntegerDiv(lvs, rvs, rs))
+                    if lv.Ref == 0 {
+                        register.Put(proc, lv)
+                    }
+                    if rv.Ref == 0 {
+                        register.Put(proc, rv)
+                    }
+                    return vec, nil
+                }
+                sels := register.GetSels(proc)
+                defer register.PutSels(sels, proc)
+                for i, j := uint64(0), uint64(len(rvs)); i < j; i++ {
+                    if rv.Nsp.Contains(i) {
+                        continue
+                    }
+                    if rvs[i] == 0 {
+                        return nil, ErrDivByZero
+                    }
+                    sels = append(sels, int64(i))
+                }
+                vec.SetCol(div.{.LTYP}IntegerDivSels(lvs, rvs, rs, sels))
+                return vec, nil
+            },
         },
         {{end}}
     }

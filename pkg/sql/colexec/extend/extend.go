@@ -75,6 +75,9 @@ var BinaryReturnTypes = map[int]func(Extend, Extend) types.T{
 	overload.Div: func(l Extend, r Extend) types.T {
 		return overload.GetBinOpReturnType(overload.Div, l.ReturnType(), r.ReturnType())
 	},
+	overload.IntegerDiv: func(l Extend, r Extend) types.T {
+		return overload.GetBinOpReturnType(overload.IntegerDiv, l.ReturnType(), r.ReturnType())
+	},
 	overload.Mod: func(l Extend, r Extend) types.T {
 		return overload.GetBinOpReturnType(overload.Mod, l.ReturnType(), r.ReturnType())
 	},
@@ -124,6 +127,9 @@ var BinaryStrings = map[int]func(Extend, Extend) string{
 	},
 	overload.Div: func(l Extend, r Extend) string {
 		return fmt.Sprintf("%s / %s", l.String(), r.String())
+	},
+	overload.IntegerDiv: func(l Extend, r Extend) string {
+		return fmt.Sprintf("%s div %s", l.String(), r.String())
 	},
 	overload.Mod: func(l Extend, r Extend) string {
 		return fmt.Sprintf("%s %% %s", l.String(), r.String())

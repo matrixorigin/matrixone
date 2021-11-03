@@ -103,5 +103,153 @@ func init(){
             },
         },
         {{end}}
+
+        // same type family, and left is low precision.
+        {{range .Field2}}
+        {
+            LeftType:   types.LEFT_TYPE_OID,
+            RightType:  types.RIGHT_TYPE_OID,
+            ReturnType: types.RETURN_TYPE_OID,
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+                lvs, rvs := lv.Col.([]L_GO_TYPE), rv.Col.([]R_GO_TYPE)
+                rtl := {.RETURN_TYPE_LEN}
+                switch {
+                case lc && !rc:
+                    if rv.Ref == 1 || rv.Ref == 0 {
+                        rv.Ref = 0
+                        sub.{.RETTYP}SubScalar(RETURN_GO_TYPE(lvs[0]), rvs, rvs)
+                        return rv, nil
+                    }
+                    vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), rv.Typ)
+                    if err != nil {
+                        return nil, err
+                    }
+                    rs := encoding.Decode{.RTYP}Slice(vec.Data)
+                    rs = rs[:len(rvs)]
+                    vec.Nsp.Set(rv.Nsp)
+                    vec.SetCol(sub.{.RTYP}SubScalar(RETURN_GO_TYPE(lvs[0]), rvs, rs))
+                    return vec, nil
+                case !lc && rc:
+                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), rv.Typ)
+                    if err != nil {
+                        return nil, err
+                    }
+                    rs := encoding.Decode{.RTYP}Slice(vec.Data)
+                    rs = rs[:len(lvs)]
+                    for i := range rs {
+                        rs[i] = RETURN_GO_TYPE(lvs[i])
+                    }
+                    vec.Nsp.Set(lv.Nsp)
+                    vec.SetCol(sub.{.RTYP}SubByScalar(RETURN_GO_TYPE(lvs[0]), rs, rs))
+                    if lv.Ref == 0 {
+                        register.Put(proc, lv)
+                    }
+                    return vec, nil
+                case rv.Ref == 1 || rv.Ref == 0:
+                    rv.Ref = 0
+                    // used rvs to sub lvs, and get neg then.
+                    sub.{.LTYP}{.RTYP}Sub(rvs, lvs, rvs)
+                    rv.Nsp = rv.Nsp.Or(lv.Nsp)
+                    for i, r := range rvs {
+                        rvs[i] = -r
+                    }
+                    if lv.Ref == 0 {
+                        register.Put(proc, lv)
+                    }
+                    return rv, nil
+                }
+                vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), rv.Typ)
+                if err != nil {
+                    return nil, err
+                }
+                rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                rs = rs[:len(rvs)]
+                for i := range rs {
+                    rs[i] = RETURN_GO_TYPE(lvs[i])
+                }
+                nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+                vec.SetCol(sub.{.RETTYP}Sub(rs, rvs, rs))
+                if lv.Ref == 0 {
+                    register.Put(proc, lv)
+                }
+                if rv.Ref == 0 {
+                    register.Put(proc, rv)
+                }
+                return vec, nil
+            },
+        },
+        {{end}}
+
+        // same type family, and left is high precision.
+        {{range .Field3}}
+        {
+            LeftType:   types.LEFT_TYPE_OID,
+            RightType:  types.RIGHT_TYPE_OID,
+            ReturnType: types.RETURN_TYPE_OID,
+            Fn: func(lv, rv *vector.Vector, proc *process.Process, lc, rc bool) (*vector.Vector, error) {
+                lvs, rvs := lv.Col.([]L_GO_TYPE), rv.Col.([]R_GO_TYPE)
+                rtl := {.RETURN_TYPE_LEN}
+                switch {
+                case lc && !rc:
+                    vec, err := register.Get(proc, int64(rtl) * int64(len(rvs)), lv.Typ)
+                    if err != nil {
+                        return nil, err
+                    }
+                    rs := encoding.Decode{.LTYP}Slice(vec.Data)
+                    rs = rs[:len(rvs)]
+                    for i := range rs {
+                        rs[i] = RETURN_GO_TYPE(rvs[i])
+                    }
+                    vec.Nsp.Set(rv.Nsp)
+                    vec.SetCol(sub.{.LTYP}SubScalar(lvs[0], rs, rs))
+                    if rv.Ref == 0 {
+                        register.Put(proc, rv)
+                    }
+                    return vec, nil
+                case !lc && rc:
+                    if lv.Ref == 1 || lv.Ref == 0 {
+                        lv.Ref = 0
+                        sub.{.LTYP}SubByScalar(RETURN_GO_TYPE(rvs[0]), lvs, lvs)
+                        return lv, nil
+                    }
+                    vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                    if err != nil {
+                        return nil, err
+                    }
+                    rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                    rs = rs[:len(lvs)]
+                    vec.Nsp.Set(lv.Nsp)
+                    vec.SetCol(sub.{.LTYP}SubByScalar(RETURN_GO_TYPE(rvs[0]), lvs, rs))
+                    return vec, nil
+                case lv.Ref == 1 || lv.Ref == 0:
+                    lv.Ref = 0
+                    sub.{.RTYP}{.LTYP}Sub(lvs, rvs, lvs)
+                    lv.Nsp = lv.Nsp.Or(rv.Nsp)
+                    if rv.Ref == 0 {
+                        register.Put(proc, rv)
+                    }
+                    return lv, nil
+                }
+                vec, err := register.Get(proc, int64(rtl) * int64(len(lvs)), lv.Typ)
+                if err != nil {
+                    return nil, err
+                }
+                rs := encoding.Decode{.RETTYP}Slice(vec.Data)
+                rs = rs[:len(lvs)]
+                for i := range rs {
+                    rs[i] = RETURN_GO_TYPE(rvs[i])
+                }
+                nulls.Or(lv.Nsp, rv.Nsp, vec.Nsp)
+                vec.SetCol(sub.{.RETTYP}Sub(lvs, rs, rs))
+                if lv.Ref == 0 {
+                    register.Put(proc, lv)
+                }
+                if rv.Ref == 0 {
+                    register.Put(proc, rv)
+                }
+                return vec, nil
+            },
+        },
+        {{end}}
     }
 }

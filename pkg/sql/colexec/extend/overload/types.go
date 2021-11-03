@@ -38,6 +38,7 @@ const (
 	Minus
 	Mult
 	Div
+	IntegerDiv
 	Mod
 	Like
 	NotLike
@@ -56,13 +57,14 @@ var OpName = map[int]string{
 	UnaryMinus: "-",
 	Not: "!",
 
-	Or:    "or",
-	And:   "and",
-	Plus:  "+",
-	Minus: "-",
-	Mult:  "*",
-	Div:   "/",
-	Mod:   "%",
+	Or:    		"or",
+	And:   		"and",
+	Plus:  		"+",
+	Minus: 		"-",
+	Mult:  		"*",
+	Div:   		"/",
+	IntegerDiv:	"div",
+	Mod:   		"%",
 
 	Like:    "like",
 	NotLike: "notLike",
