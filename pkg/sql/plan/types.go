@@ -65,7 +65,7 @@ type Relation struct {
 	Attrs             []string
 	AttrsMap          map[string]*Attribute
 	Aggregations      []*Aggregation
-	RestrictConds     []extend.Extend
+	RestrictConds     []extend.Extend // filter conditions
 	ProjectionExtends []*ProjectionExtend
 }
 

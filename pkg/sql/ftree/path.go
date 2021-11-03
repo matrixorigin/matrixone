@@ -17,14 +17,14 @@ package ftree
 import "matrixone/pkg/sql/plan"
 
 // For each relation in Q, its variables lie along the same root-to-leaf path in F
-func buildPath(rn string, qry *plan.Query, conds []*plan.JoinCondition) []*Fnode {
+func buildPath(rn string, qry *plan.Query, conds []*plan.JoinCondition) []*FNode {
 	rel := qry.RelsMap[rn]
 	frel := buildRelation(rel)
 	reorder(frel, append(getVariables(rn, conds), getFreeVariables(rel, qry.FreeAttrs)...))
-	fs := make([]*Fnode, 0, len(rel.Attrs)+1)
+	fs := make([]*FNode, 0, len(rel.Attrs)+1)
 	for _, v := range frel.Vars {
-		fs = append(fs, &Fnode{Root: frel.VarsMap[v]})
+		fs = append(fs, &FNode{Root: frel.VarsMap[v]})
 	}
-	fs = append(fs, &Fnode{Root: frel})
+	fs = append(fs, &FNode{Root: frel})
 	return fs
 }

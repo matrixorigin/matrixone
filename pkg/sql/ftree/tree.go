@@ -21,7 +21,7 @@ import (
 )
 
 // exclude some queries that are not currently supported
-func (f *Ftree) check(qry *plan.Query) error {
+func (f *FTree) check(qry *plan.Query) error {
 	mp := make(map[string]uint8)
 	{
 		for _, rel := range qry.Rels {
@@ -42,7 +42,7 @@ func (f *Ftree) check(qry *plan.Query) error {
 	return nil
 }
 
-func (n *Fnode) check(mp map[string]uint8) {
+func (n *FNode) check(mp map[string]uint8) {
 	if rn, ok := n.Root.(*Relation); ok {
 		mp[rn.Rel.Alias]++
 	}

@@ -46,7 +46,7 @@ func selectRoot(qry *plan.Query) (string, error) {
 	return rel, nil
 }
 
-func buildNodes(rel *plan.Relation, qry *plan.Query) ([]*Fnode, error) {
+func buildNodes(rel *plan.Relation, qry *plan.Query) ([]*FNode, error) {
 	conds, err := getConditions(rel.Alias, qry)
 	if err != nil {
 		return nil, err
@@ -62,7 +62,7 @@ func buildNodes(rel *plan.Relation, qry *plan.Query) ([]*Fnode, error) {
 	return fs, nil
 }
 
-func (n *Fnode) AddChildren(conds []*plan.JoinCondition, qry *plan.Query) error {
+func (n *FNode) AddChildren(conds []*plan.JoinCondition, qry *plan.Query) error {
 	rns := getRelationFromConditions(n.Root, conds)
 	if len(rns) == 0 {
 		return nil

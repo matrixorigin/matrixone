@@ -22,9 +22,9 @@ func New() *build {
 	return &build{}
 }
 
-func (b *build) Build(qry *plan.Query) (*Ftree, error) {
+func (b *build) Build(qry *plan.Query) (*FTree, error) {
 	if len(qry.Rels) == 1 {
-		return &Ftree{
+		return &FTree{
 			FreeVars: qry.FreeAttrs,
 			Roots:    buildPath(qry.Rels[0], qry, nil),
 		}, nil
@@ -37,7 +37,7 @@ func (b *build) Build(qry *plan.Query) (*Ftree, error) {
 	if err != nil {
 		return nil, err
 	}
-	f := &Ftree{
+	f := &FTree{
 		Roots:    roots,
 		FreeVars: qry.FreeAttrs,
 	}

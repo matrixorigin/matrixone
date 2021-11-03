@@ -21,10 +21,14 @@ import (
 	"matrixone/pkg/sql/plan"
 )
 
+// Node there are two types of Node:
+//1: variable
+//2: relation
 type Node interface {
 	fmt.Stringer
 }
 
+// Variable represents an attribute of a relation
 type Variable struct {
 	Ref  int     // reference count
 	Name string  // name of attribute
@@ -32,20 +36,20 @@ type Variable struct {
 }
 
 type Relation struct {
-	Vars    []string
-	Rel     *plan.Relation
+	Vars    []string       //names of all attributes
+	Rel     *plan.Relation //relation information
 	VarsMap map[string]*Variable
 }
 
-type Fnode struct {
+type FNode struct {
 	Root     Node
-	Children []*Fnode
+	Children []*FNode
 }
 
-type Ftree struct {
-	Roots    []*Fnode
-	FreeVars []string
-	Qry      *plan.Query
+type FTree struct {
+	Roots    []*FNode    //for left f-tree, roots represents the leftmost path
+	FreeVars []string    //free variables:refer to group by attributes
+	Qry      *plan.Query //stage 2, process the result of f-tree
 }
 
 type build struct {
@@ -59,7 +63,7 @@ func (r *Relation) String() string {
 	return r.Rel.Alias
 }
 
-func (f *Ftree) String() string {
+func (f *FTree) String() string {
 	var buf bytes.Buffer
 
 	buf.WriteString(fmt.Sprintf("free variables: %v\n", f.FreeVars))
@@ -69,7 +73,7 @@ func (f *Ftree) String() string {
 	return buf.String()
 }
 
-func (n *Fnode) Format(prefix string) string {
+func (n *FNode) Format(prefix string) string {
 	var buf bytes.Buffer
 
 	buf.WriteString(fmt.Sprintf("%s%s\n", prefix, n.Root))
