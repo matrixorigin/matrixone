@@ -53,7 +53,7 @@ MatrixOne stores data in shared storage of S3 / HDFS, or the local disk, on-prem
 Get started with MatrixOne quickly by the following steps.
 ### Installation 
 
-You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
+MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
 #### Building from source
 
 1. Install Go (version 1.17 is required).
@@ -91,13 +91,13 @@ $ docker --version
 ```
 $ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
 ```
-### Connecting MatrixOne server
+### Connecting to MatrixOne server
 
 1. Install MySQL client.
    
    MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages. Currently, MatrixOne is only compatible with Oracle MySQL client. This means that some features might not work with MariaDB client.
 
-2. Connect MatrixOne server:
+2. Connect to MatrixOne server:
 
 ```
 $ mysql -h IP -P PORT -uUsername -p
