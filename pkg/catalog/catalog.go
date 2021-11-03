@@ -244,7 +244,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 				pk = col.Name
 			}
 		}
-		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, primary key is %v, cost %d ms", tbl.Name, tid, pk, time.Since(t0).Milliseconds())
+		logutil.Infof("CreateTable finished, table name is %v, table id is %d, primary key is %v, cost %d ms", tbl.Name, tid, pk, time.Since(t0).Milliseconds())
 	}()
 	_, err = c.checkDBExists(dbId)
 	if err != nil {
