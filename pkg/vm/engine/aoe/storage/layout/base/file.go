@@ -90,7 +90,7 @@ type IManager interface {
 
 	// UpgradeFile creates a physical segment file based on common.ID and
 	// delete it from Manager.UnsortedFiles[] and add it to Manager.SortedFiles[]
-	UpgradeFile(id common.ID) ISegmentFile
+	UpgradeFile(common.ID) ISegmentFile
 
 	GetSortedFile(common.ID) ISegmentFile
 	GetUnsortedFile(common.ID) ISegmentFile

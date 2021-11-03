@@ -344,10 +344,6 @@ func (sf *SortedSegmentFile) PartSize(colIdx uint64, id common.ID, isOrigin bool
 		Col: colIdx,
 		ID:  id,
 	}
-	for k, _ := range sf.Parts {
-		logutil.Infof("%d:%s", k.Col, k.ID.String())
-	}
-	logutil.Infof("%d:%s", colIdx, key.ID.String())
 	pointer, ok := sf.Parts[key]
 	if !ok {
 		panic("logic error")
