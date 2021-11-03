@@ -3,6 +3,7 @@ package metadata
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
@@ -14,9 +15,10 @@ type TableNameFactory interface {
 }
 
 type TableRangeSpec struct {
-	ShardId uint64       `json:"-"`
-	Group   uint32       `json:"group"`
-	Range   common.Range `json:"range"`
+	ShardId    uint64       `json:"-"`
+	CoarseSize int64        `json:"size"`
+	Group      uint32       `json:"group"`
+	Range      common.Range `json:"range"`
 }
 
 type TableSplitSpec struct {
@@ -31,15 +33,27 @@ func NewTableSplitSpec(index *LogIndex) *TableSplitSpec {
 	}
 }
 
+func (spec *TableRangeSpec) String() string {
+	return fmt.Sprintf("(sid-%d|grp-%d|size-%d|%s)", spec.ShardId, spec.Group, spec.CoarseSize, spec.Range.String())
+}
+
 func (split *TableSplitSpec) AddSpec(spec *TableRangeSpec) {
 	split.Specs = append(split.Specs, spec)
 }
 
+func (split *TableSplitSpec) String() string {
+	s := fmt.Sprintf("TableSpec<%s>{", split.Index.String())
+	for _, spec := range split.Specs {
+		s = fmt.Sprintf("%s\n%s", s, spec.String())
+	}
+	return fmt.Sprintf("%s\n}", s)
+}
+
 type ShardSplitSpec struct {
-	Index       uint64                       `json:"idx"`
-	ShardId     uint64                       `json:"id"`
-	Specs       map[LogIndex]*TableSplitSpec `json:"specs"`
-	NameFactory TableNameFactory             `json:"-"`
+	Index       uint64            `json:"idx"`
+	ShardId     uint64            `json:"id"`
+	Specs       []*TableSplitSpec `json:"specs"`
+	NameFactory TableNameFactory  `json:"-"`
 	view        *catalogLogEntry
 }
 
@@ -47,9 +61,17 @@ func NewShardSplitSpec(shardId, index uint64) *ShardSplitSpec {
 	return &ShardSplitSpec{
 		ShardId: shardId,
 		Index:   index,
-		Specs:   make(map[LogIndex]*TableSplitSpec),
+		Specs:   make([]*TableSplitSpec, 0),
 		// NameFactory: nameFactory,
 	}
+}
+
+func (split *ShardSplitSpec) String() string {
+	s := fmt.Sprintf("ShardSplit<%d-%d>{", split.ShardId, split.Index)
+	for _, spec := range split.Specs {
+		s = fmt.Sprintf("%s\n%s", s, spec.String())
+	}
+	return fmt.Sprintf("%s\n}", s)
 }
 
 func (split *ShardSplitSpec) Prepare(catalog *Catalog) error {
@@ -78,7 +100,7 @@ func (split *ShardSplitSpec) Prepare(catalog *Catalog) error {
 }
 
 func (split *ShardSplitSpec) AddSpec(spec *TableSplitSpec) {
-	split.Specs[spec.Index] = spec
+	split.Specs = append(split.Specs, spec)
 }
 
 func (split *ShardSplitSpec) Marshal() ([]byte, error) {

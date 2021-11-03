@@ -797,12 +797,18 @@ func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint
 	if coarseSize < size {
 		return
 	}
+
+	partSize := int64(size) / 2
+	if coarseSize/size < 2 {
+		partSize = int64(coarseSize) / 2
+	}
+
 	view := catalog.ShardView(shardId, index)
 	totalSize := int64(0)
 
 	shardSpec := NewShardSplitSpec(shardId, index)
 	activeSize := int64(0)
-	currGroup := uint32(0)
+	currGroup := uint32(1)
 
 	for _, table := range view.Catalog.TableSet {
 		spec := NewTableSplitSpec(table.GetCommit().LogIndex)
@@ -814,16 +820,18 @@ func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint
 		if len(table.SegmentSet) <= 1 {
 			activeSize += tableSize
 			rangeSpec.Range.Right = math.MaxUint64
+			rangeSpec.CoarseSize += tableSize
 			spec.AddSpec(rangeSpec)
-			if activeSize >= int64(size) {
+			if activeSize >= partSize {
 				currGroup++
 				activeSize = int64(0)
 			}
 		} else {
 			for i, segment := range table.SegmentSet {
 				activeSize += segment.GetCoarseSize()
-				rangeSpec.Range.Right = uint64(i+1)*segment.Table.Schema.BlockMaxRows*segment.Table.Schema.SegmentMaxBlocks - 1
-				if activeSize >= int64(size) {
+				rangeSpec.CoarseSize += segment.GetCoarseSize()
+				rangeSpec.Range.Right = uint64(i+1)*table.Schema.BlockMaxRows*table.Schema.SegmentMaxBlocks - 1
+				if activeSize >= partSize {
 					currGroup++
 					activeSize = int64(0)
 					spec.AddSpec(rangeSpec)
@@ -847,6 +855,7 @@ func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint
 	for i, _ := range keys {
 		keys[i] = []byte("1")
 	}
+	// logutil.Infof(shardSpec.String())
 	ctx, err = shardSpec.Marshal()
 	return
 }

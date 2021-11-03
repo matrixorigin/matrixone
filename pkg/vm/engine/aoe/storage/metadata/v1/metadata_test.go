@@ -35,7 +35,7 @@ import (
 
 var (
 	mockBlockSize   int64 = 100
-	mockSegmentSize int64 = 200
+	mockSegmentSize int64 = 150
 )
 
 type mockIdAllocator struct {
@@ -83,10 +83,11 @@ func createBlock(t *testing.T, tables int, idAlloc *mockIdAllocator, shardId uin
 		defer wg.Done()
 		for k := 0; k < tables; k++ {
 			schema := MockSchema(2)
-			schema.Name = fmt.Sprintf("mock-%d-%d", shardId, idAlloc.alloc(shardId))
+			id := idAlloc.alloc(shardId)
+			schema.Name = fmt.Sprintf("mock-%d-%d", shardId, id)
 			index := shard.Index{
 				ShardId: shardId,
-				Id:      shard.SimpleIndexId(idAlloc.get(shardId)),
+				Id:      shard.SimpleIndexId(id),
 			}
 			tbl, err := catalog.SimpleCreateTable(schema, &index)
 			assert.Nil(t, err)
@@ -100,6 +101,7 @@ func createBlock(t *testing.T, tables int, idAlloc *mockIdAllocator, shardId uin
 					Count:    tbl.Schema.BlockMaxRows,
 					Capacity: tbl.Schema.BlockMaxRows,
 				})
+				blk.GetCommit().SetSize(mockBlockSize)
 				err := blk.SimpleUpgrade(nil)
 				assert.Nil(t, err)
 				if prev != nil && blk.Segment != prev.Segment {
@@ -1080,4 +1082,44 @@ func TestShard2(t *testing.T) {
 	catalog2.Close()
 
 	doCompareCatalog(t, catalog, catalog2)
+}
+
+func TestSplit(t *testing.T) {
+	dir := "/tmp/metadata/testsplit"
+	catalog := initTest(dir, uint64(100), uint64(2), true)
+
+	idAlloc := newMockAllocator()
+	wg := new(sync.WaitGroup)
+	w1, _ := ants.NewPool(4)
+	w2, _ := ants.NewPool(4)
+
+	shardId := uint64(66)
+	wg.Add(4)
+	w1.Submit(createBlock(t, 1, idAlloc, shardId, catalog, 0, wg, w2))
+	w1.Submit(createBlock(t, 1, idAlloc, shardId, catalog, 1, wg, w2))
+	w1.Submit(createBlock(t, 1, idAlloc, shardId, catalog, 2, wg, w2))
+	w1.Submit(createBlock(t, 1, idAlloc, shardId, catalog, 3, wg, w2))
+
+	wg.Wait()
+
+	index := idAlloc.get(shardId)
+	t.Logf("index=%d", index)
+	stat := catalog.GetShardStats(shardId)
+	assert.Equal(t, int64(550), stat.GetSize())
+	assert.Equal(t, int64(600), stat.GetCount())
+
+	_, _, keys, ctx, err := catalog.SplitCheck(uint64(400), shardId, index)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(keys))
+	spec := new(ShardSplitSpec)
+	err = spec.Unmarshal(ctx)
+	assert.Nil(t, err)
+	t.Log(spec.String())
+	assert.Equal(t, spec.ShardId, shardId)
+	assert.Equal(t, spec.Index, index)
+	assert.Equal(t, len(spec.Specs), 4)
+
+	t.Log(catalog.PString(PPL0))
+
+	catalog.Close()
 }
