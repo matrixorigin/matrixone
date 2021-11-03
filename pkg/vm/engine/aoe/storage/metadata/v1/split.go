@@ -14,13 +14,14 @@ type TableNameFactory interface {
 }
 
 type TableRangeSpec struct {
-	ShardId uint64       `json:"sid"`
+	ShardId uint64       `json:"-"`
+	Group   uint32       `json:"group"`
 	Range   common.Range `json:"range"`
 }
 
 type TableSplitSpec struct {
 	Index LogIndex          `json:"idx"`
-	Specs []*TableRangeSpec `json:"specs"`
+	Specs []*TableRangeSpec `json:"spec"`
 }
 
 func NewTableSplitSpec(index *LogIndex) *TableSplitSpec {
@@ -42,12 +43,12 @@ type ShardSplitSpec struct {
 	view        *catalogLogEntry
 }
 
-func NewShardSplitSpec(shardId, index uint64, nameFactory TableNameFactory) *ShardSplitSpec {
+func NewShardSplitSpec(shardId, index uint64) *ShardSplitSpec {
 	return &ShardSplitSpec{
-		ShardId:     shardId,
-		Index:       index,
-		Specs:       make(map[LogIndex]*TableSplitSpec),
-		NameFactory: nameFactory,
+		ShardId: shardId,
+		Index:   index,
+		Specs:   make(map[LogIndex]*TableSplitSpec),
+		// NameFactory: nameFactory,
 	}
 }
 

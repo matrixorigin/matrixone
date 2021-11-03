@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 
@@ -788,7 +789,7 @@ func (catalog *Catalog) CleanupShard(shardId uint64) {
 	delete(catalog.shardsStats, shardId)
 }
 
-func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, specs []byte, err error) {
+func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, ctx []byte, err error) {
 	catalog.shardMu.RLock()
 	stats := catalog.shardsStats[shardId]
 	catalog.shardMu.RUnlock()
@@ -799,18 +800,54 @@ func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint
 	view := catalog.ShardView(shardId, index)
 	totalSize := int64(0)
 
+	shardSpec := NewShardSplitSpec(shardId, index)
+	activeSize := int64(0)
+	currGroup := uint32(0)
+
 	for _, table := range view.Catalog.TableSet {
-		// if table.IsDeletedLocked() {
-		// 	continue
-		// }
-		totalSize += table.GetCoarseSize()
+		spec := NewTableSplitSpec(table.GetCommit().LogIndex)
+		rangeSpec := new(TableRangeSpec)
+		rangeSpec.Group = currGroup
+		rangeSpec.Range.Left = uint64(0)
+		tableSize := table.GetCoarseSize()
+		totalSize += tableSize
+		if len(table.SegmentSet) <= 1 {
+			activeSize += tableSize
+			rangeSpec.Range.Right = math.MaxUint64
+			spec.AddSpec(rangeSpec)
+			if activeSize >= int64(size) {
+				currGroup++
+				activeSize = int64(0)
+			}
+		} else {
+			for i, segment := range table.SegmentSet {
+				activeSize += segment.GetCoarseSize()
+				rangeSpec.Range.Right = uint64(i+1)*segment.Table.Schema.BlockMaxRows*segment.Table.Schema.SegmentMaxBlocks - 1
+				if activeSize >= int64(size) {
+					currGroup++
+					activeSize = int64(0)
+					spec.AddSpec(rangeSpec)
+					last := rangeSpec
+					rangeSpec = new(TableRangeSpec)
+					rangeSpec.Group = currGroup
+					rangeSpec.Range.Left = last.Range.Right + uint64(1)
+				}
+			}
+			if rangeSpec.Range.Right != uint64(0) {
+				spec.AddSpec(rangeSpec)
+			}
+		}
+		shardSpec.AddSpec(spec)
 	}
 	if totalSize < int64(size) {
 		return
 	}
 
-	// parts = make([][]byte, coarseSize/size+1)
-
+	keys = make([][]byte, currGroup)
+	for i, _ := range keys {
+		keys[i] = []byte("1")
+	}
+	ctx, err = shardSpec.Marshal()
 	return
 }
 
