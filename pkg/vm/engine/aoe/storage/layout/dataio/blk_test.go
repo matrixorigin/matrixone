@@ -211,7 +211,7 @@ func TestSegmentWriter(t *testing.T) {
 	writer := NewSegmentWriter(batches, segment, dir)
 	err := writer.Execute()
 	assert.Nil(t, err)
-	segFile := NewSortedSegmentFile(dir, segment)
+	segFile := NewSortedSegmentFile(dir, *segment.AsCommonID())
 	assert.NotNil(t, segFile)
 	assert.NotNil(t, segFile.Stat().Name())
 	assert.NotNil(t, segFile.Stat().OriginSize())
@@ -254,13 +254,13 @@ func TestSegmentWriter(t *testing.T) {
 	fsMgr := NewManager(dir, false)
 	segFile, err = fsMgr.RegisterUnsortedFile(*segment.AsCommonID())
 	assert.Nil(t, err)
-	segFile = fsMgr.UpgradeFile(segment)
+	segFile = fsMgr.UpgradeFile(*segment.AsCommonID())
 	assert.NotNil(t, segFile)
 	segFile = fsMgr.GetUnsortedFile(*segment.AsCommonID())
 	assert.Nil(t, segFile)
 	fsMgr.UnregisterSortedFile(*segment.AsCommonID())
 	//segFile, err = fsMgr.RegisterSortedFiles(*segment.AsCommonID())
-	segFile, err = fsMgr.RegisterSortedFile(segment)
+	segFile, err = fsMgr.RegisterSortedFile(*segment.AsCommonID())
 	assert.Nil(t, err)
 	segFile = fsMgr.GetSortedFile(*segment.AsCommonID())
 	fsMgr.UnregisterSortedFile(*segment.AsCommonID())
@@ -281,7 +281,10 @@ func TestSegmentWriter(t *testing.T) {
 		assert.NotNil(t, block)
 		blocks = append(blocks, block)
 	}
-	segFile, err = fsMgr.RegisterSortedFile(segment)
+	//for _, blk := range segment.BlockSet {
+	//	t.Log(blk.Id)
+	//}
+	segFile, err = fsMgr.RegisterSortedFile(*segment.AsCommonID())
 	assert.Nil(t, err)
 	//segFile.RefBlock()
 

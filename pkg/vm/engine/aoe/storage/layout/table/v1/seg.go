@@ -74,11 +74,11 @@ func newSegment(host iface.ITableData, meta *metadata.Segment) (iface.ISegment, 
 		seg.indexHolder.Init(segFile)
 	} else {
 		if segFile != nil {
-			fsMgr.UpgradeFile(meta)
+			fsMgr.UpgradeFile(segId)
 		} else {
 			segFile = fsMgr.GetSortedFile(segId)
 			if segFile == nil {
-				segFile, err = fsMgr.RegisterSortedFile(meta)
+				segFile, err = fsMgr.RegisterSortedFile(segId)
 				if err != nil {
 					panic(err)
 				}
@@ -332,8 +332,8 @@ func (seg *segment) CloneWithUpgrade(td iface.ITableData, meta *metadata.Segment
 		panic("logic error")
 	}
 
-	//id := seg.meta.AsCommonID().AsSegmentID()
-	segFile := seg.host.GetFsManager().UpgradeFile(seg.meta)
+	id := seg.meta.AsCommonID().AsSegmentID()
+	segFile := seg.host.GetFsManager().UpgradeFile(id)
 	if segFile == nil {
 		panic("logic error")
 	}

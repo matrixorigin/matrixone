@@ -22,6 +22,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -54,8 +56,7 @@ type SortedSegmentFile struct {
 	DataAlgo   int
 }
 
-func NewSortedSegmentFile(dirname string, meta *metadata.Segment) base.ISegmentFile {
-	id := meta.AsCommonID().AsSegmentID()
+func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	sf := &SortedSegmentFile{
 		Parts:      make(map[base.Key]*base.Pointer),
@@ -67,8 +68,6 @@ func NewSortedSegmentFile(dirname string, meta *metadata.Segment) base.ISegmentF
 		},
 	}
 
-	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
-	// log.Infof("SegmentFile name %s", name)
 	if info, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
 	} else {
@@ -80,7 +79,7 @@ func NewSortedSegmentFile(dirname string, meta *metadata.Segment) base.ISegmentF
 	}
 
 	sf.File = *r
-	sf.initPointers(meta)
+	sf.initPointers()
 	sf.OnZeroCB = sf.close
 	return sf
 }
@@ -118,7 +117,7 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 	sf.Unref()
 }
 
-func (sf *SortedSegmentFile) initPointers(meta *metadata.Segment) {
+func (sf *SortedSegmentFile) initPointers() {
 	// read metadata-1
 	sz := headerSize + reservedSize + algoSize + blkCntSize + colCntSize
 	buf := make([]byte, sz)
@@ -160,12 +159,12 @@ func (sf *SortedSegmentFile) initPointers(meta *metadata.Segment) {
 		int(colCnt)*colPosSize
 
 	buf = make([]byte, sz)
+	trash := make([]uint64, blkCnt)
 	metaBuf = bytes.NewBuffer(buf)
 	if err = binary.Read(&sf.File, binary.BigEndian, metaBuf.Bytes()); err != nil {
 		panic(err)
 	}
 
-	blkIds := make([]uint64, blkCnt) // TODO: removed later
 	blkCounts := make([]uint64, blkCnt)
 	idxBuf := make([]byte, blkIdxSize)
 	preIndices := make([]*metadata.LogIndex, blkCnt)
@@ -173,7 +172,7 @@ func (sf *SortedSegmentFile) initPointers(meta *metadata.Segment) {
 	rangeBuf := make([]byte, blkRangeSize)
 
 	for i := uint32(0); i < blkCnt; i++ {
-		if err = binary.Read(metaBuf, binary.BigEndian, &blkIds[i]); err != nil {
+		if err = binary.Read(metaBuf, binary.BigEndian, &trash[i]); err != nil {
 			panic(err)
 		}
 		if err = binary.Read(metaBuf, binary.BigEndian, &blkCounts[i]); err != nil {
@@ -204,10 +203,21 @@ func (sf *SortedSegmentFile) initPointers(meta *metadata.Segment) {
 		}
 	}
 
-	blkIds = make([]uint64, 0)
-	for _, blk := range meta.BlockSet {
-		blkIds = append(blkIds, blk.Id)
+	// calculate block ids
+	name := sf.Info.name
+	name = strings.TrimSuffix(name, ".seg")
+	arr := strings.Split(filepath.Base(name), "_")
+	blkIds := make([]uint64, 0)
+	segId, err := strconv.Atoi(arr[1])
+	if err != nil {
+		panic(err)
 	}
+	startBlkId := uint64((segId - 1) * int(blkCnt) + 1)
+	for i := 0; i < int(blkCnt); i++ {
+		blkIds = append(blkIds, startBlkId)
+		startBlkId++
+	}
+
 
 	for i := uint32(0); i < colCnt; i++ {
 		for j := uint32(0); j < blkCnt; j++ {
@@ -334,6 +344,10 @@ func (sf *SortedSegmentFile) PartSize(colIdx uint64, id common.ID, isOrigin bool
 		Col: colIdx,
 		ID:  id,
 	}
+	for k, _ := range sf.Parts {
+		logutil.Infof("%d:%s", k.Col, k.ID.String())
+	}
+	logutil.Infof("%d:%s", colIdx, key.ID.String())
 	pointer, ok := sf.Parts[key]
 	if !ok {
 		panic("logic error")
