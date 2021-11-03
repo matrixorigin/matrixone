@@ -1146,7 +1146,11 @@ func TestSplit(t *testing.T) {
 		newShards[i] = uint64(100) + uint64(i)
 	}
 
-	splitter := NewShardSplitter(catalog, spec, newShards, mockFactory)
+	splitIndex := &LogIndex{
+		ShardId: shardId,
+		Id:      shard.SimpleIndexId(idAlloc.alloc(shardId)),
+	}
+	splitter := NewShardSplitter(catalog, spec, newShards, splitIndex, mockFactory)
 	err = splitter.Prepare()
 	assert.Nil(t, err)
 	err = splitter.Commit()
@@ -1155,4 +1159,9 @@ func TestSplit(t *testing.T) {
 
 	t.Log(catalog.PString(PPL0))
 	catalog.Close()
+
+	t.Log("--------------------------------------")
+	catalog2 := initTest(dir, uint64(100), uint64(2), false)
+	t.Log(catalog2.PString(PPL0))
+	catalog2.Close()
 }

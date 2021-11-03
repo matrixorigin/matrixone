@@ -539,11 +539,12 @@ func (catalog *Catalog) prepareAddTable(ctx *addTableCtx) (LogEntry, error) {
 	panic("todo")
 }
 
-func (catalog *Catalog) doSpliteShard(nameFactory TableNameFactory, spec *ShardSplitSpec, tranId uint64) error {
+func (catalog *Catalog) doSpliteShard(nameFactory TableNameFactory, spec *ShardSplitSpec, tranId uint64, index *LogIndex) error {
 	ctx := new(splitShardCtx)
 	ctx.spec = spec
 	ctx.nameFactory = nameFactory
 	ctx.tranId = tranId
+	ctx.exIndex = index
 	return catalog.onCommitRequest(ctx)
 }
 
@@ -974,7 +975,7 @@ func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) onReplayShardSnapshot(entry *shardLogEntry) error {
+func (catalog *Catalog) onReplayShardLogEntry(entry *shardLogEntry) error {
 	for _, replaced := range entry.Replaced {
 		table := catalog.TableSet[replaced.Id]
 		table.onNewCommit(replaced.CommitInfo)

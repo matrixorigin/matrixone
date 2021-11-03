@@ -43,7 +43,7 @@ type replayEntry struct {
 	tblEntry     *tableLogEntry
 	segEntry     *segmentLogEntry
 	catalogEntry *catalogLogEntry
-	sssEntry     *shardLogEntry
+	shardEntry   *shardLogEntry
 }
 
 type replayCache struct {
@@ -145,12 +145,20 @@ func (cache *replayCache) onApply(entry *replayEntry, catalog *Catalog, r *commo
 		catalog.onReplayUpgradeSegment(entry.segEntry)
 	case ETShardSnapshot:
 		if r != nil {
-			if !r.LT(entry.sssEntry.commitId) {
+			if !r.LT(entry.shardEntry.commitId) {
 				return nil
 			}
 		}
-		catalog.Sequence.TryUpdateCommitId(entry.sssEntry.commitId)
-		catalog.onReplayShardSnapshot(entry.sssEntry)
+		catalog.Sequence.TryUpdateCommitId(entry.shardEntry.commitId)
+		catalog.onReplayShardLogEntry(entry.shardEntry)
+	case ETShardSplit:
+		if r != nil {
+			if !r.LT(entry.shardEntry.commitId) {
+				return nil
+			}
+		}
+		catalog.Sequence.TryUpdateCommitId(entry.shardEntry.commitId)
+		catalog.onReplayShardLogEntry(entry.shardEntry)
 	case logstore.ETCheckpoint:
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.typ))
@@ -365,8 +373,17 @@ func (replayer *catalogReplayer) onReplayEntry(entry LogEntry, observer logstore
 		shardSS.commitId = GetCommitIdFromLogEntry(entry)
 		observer.OnReplayCommit(shardSS.commitId)
 		replayer.cache.Append(&replayEntry{
-			typ:      ETShardSnapshot,
-			sssEntry: shardSS,
+			typ:        ETShardSnapshot,
+			shardEntry: shardSS,
+		})
+	case ETShardSplit:
+		split := new(shardLogEntry)
+		split.Unmarshal(entry.GetPayload())
+		split.commitId = GetCommitIdFromLogEntry(entry)
+		observer.OnReplayCommit(split.commitId)
+		replayer.cache.Append(&replayEntry{
+			typ:        ETShardSplit,
+			shardEntry: split,
 		})
 	case logstore.ETCheckpoint:
 		c := &catalogLogEntry{}
