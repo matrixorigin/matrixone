@@ -93,10 +93,11 @@ func newAddTableCtx(table *Table, inTran bool) *addTableCtx {
 	}
 }
 
-func newCreateTableCtx(schema *Schema, exIndex *LogIndex) *createTableCtx {
+func newCreateTableCtx(schema *Schema, exIndex *LogIndex, tranId uint64) *createTableCtx {
 	return &createTableCtx{
 		writeCtx: writeCtx{
 			exIndex: exIndex,
+			tranId:  tranId,
 		},
 		schema: schema,
 	}

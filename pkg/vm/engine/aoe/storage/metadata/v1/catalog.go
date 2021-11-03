@@ -498,14 +498,15 @@ func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *LogIndex) (*T
 	if !schema.Valid() {
 		return nil, InvalidSchemaErr
 	}
-	ctx := newCreateTableCtx(schema, exIndex)
+	tranId := catalog.NextUncommitId()
+	ctx := newCreateTableCtx(schema, exIndex, tranId)
 	err := catalog.onCommitRequest(ctx)
 	return ctx.table, err
 }
 
 func (catalog *Catalog) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	var err error
-	entry := NewTableEntry(catalog, ctx.schema, catalog.NextUncommitId(), ctx.exIndex)
+	entry := NewTableEntry(catalog, ctx.schema, ctx.tranId, ctx.exIndex)
 	logEntry := entry.ToLogEntry(ETCreateTable)
 	catalog.commitMu.Lock()
 	defer catalog.commitMu.Unlock()
