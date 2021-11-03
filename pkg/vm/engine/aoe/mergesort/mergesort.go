@@ -31,35 +31,38 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/mergesort/varchar"
 )
 
-func SortBlockColumns(cols []*vector.Vector) error {
-	sortedIdx := make([]uint32, cols[0].Length())
+func SortBlockColumns(cols []*vector.Vector,pk int) error {
+	sortedIdx := make([]uint32, cols[pk].Length())
 
-	switch cols[0].Typ.Oid {
+	switch cols[pk].Typ.Oid {
 	case types.T_int8:
-		int8s.Sort(cols[0], sortedIdx)
+		int8s.Sort(cols[pk], sortedIdx)
 	case types.T_int16:
-		int16s.Sort(cols[0], sortedIdx)
+		int16s.Sort(cols[pk], sortedIdx)
 	case types.T_int32:
-		int32s.Sort(cols[0], sortedIdx)
+		int32s.Sort(cols[pk], sortedIdx)
 	case types.T_int64:
-		int64s.Sort(cols[0], sortedIdx)
+		int64s.Sort(cols[pk], sortedIdx)
 	case types.T_uint8:
-		uint8s.Sort(cols[0], sortedIdx)
+		uint8s.Sort(cols[pk], sortedIdx)
 	case types.T_uint16:
-		uint16s.Sort(cols[0], sortedIdx)
+		uint16s.Sort(cols[pk], sortedIdx)
 	case types.T_uint32:
-		uint32s.Sort(cols[0], sortedIdx)
+		uint32s.Sort(cols[pk], sortedIdx)
 	case types.T_uint64:
-		uint64s.Sort(cols[0], sortedIdx)
+		uint64s.Sort(cols[pk], sortedIdx)
 	case types.T_float32:
-		float32s.Sort(cols[0], sortedIdx)
+		float32s.Sort(cols[pk], sortedIdx)
 	case types.T_float64:
-		float64s.Sort(cols[0], sortedIdx)
+		float64s.Sort(cols[pk], sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar:
-		varchar.Sort(cols[0], sortedIdx)
+		varchar.Sort(cols[pk], sortedIdx)
 	}
 
-	for i := 1; i < len(cols); i++ {
+	for i := 0; i < len(cols); i++ {
+		if i==pk {
+			continue
+		}
 		switch cols[i].Typ.Oid {
 		case types.T_int8:
 			int8s.Shuffle(cols[i], sortedIdx)

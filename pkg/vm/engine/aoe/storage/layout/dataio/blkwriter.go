@@ -167,7 +167,7 @@ func (bw *BlockWriter) createIOWriter(dir string, meta *metadata.Block) (*os.Fil
 }
 
 func (bw *BlockWriter) defaultPreprocessor(data []*gvector.Vector, meta *metadata.Block) error {
-	err := mergesort.SortBlockColumns(data)
+	err := mergesort.SortBlockColumns(data,meta.Segment.Table.Schema.PrimaryKey)
 	return err
 }
 
