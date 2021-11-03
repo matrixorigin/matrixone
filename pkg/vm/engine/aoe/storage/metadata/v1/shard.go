@@ -194,6 +194,7 @@ func (e *shardLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 	switch eType {
 	case ETShardSnapshot:
 		break
+	case ETShardSplit:
 	default:
 		panic("not supported")
 	}

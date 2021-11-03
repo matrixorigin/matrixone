@@ -9,8 +9,8 @@ import (
 )
 
 type TableNameFactory interface {
-	Encoder(shardId uint64, name string) string
-	Decoder(name string) (uint64, string)
+	Encode(shardId uint64, name string) string
+	Decode(name string) (uint64, string)
 	Rename(name string, shardId uint64) string
 }
 
@@ -37,6 +37,12 @@ func (spec *TableRangeSpec) String() string {
 	return fmt.Sprintf("(sid-%d|grp-%d|size-%d|%s)", spec.ShardId, spec.Group, spec.CoarseSize, spec.Range.String())
 }
 
+func (split *TableSplitSpec) Rewrite(newShards []uint64) {
+	for _, spec := range split.Specs {
+		spec.ShardId = newShards[int(spec.Group)]
+	}
+}
+
 func (split *TableSplitSpec) AddSpec(spec *TableRangeSpec) {
 	split.Specs = append(split.Specs, spec)
 }
@@ -50,19 +56,26 @@ func (split *TableSplitSpec) String() string {
 }
 
 type ShardSplitSpec struct {
-	Index       uint64            `json:"idx"`
-	ShardId     uint64            `json:"id"`
-	Specs       []*TableSplitSpec `json:"specs"`
-	NameFactory TableNameFactory  `json:"-"`
-	view        *catalogLogEntry
+	Index    uint64            `json:"idx"`
+	ShardId  uint64            `json:"id"`
+	Specs    []*TableSplitSpec `json:"specs"`
+	view     *catalogLogEntry
+	splitted map[LogIndex]*Table
 }
 
 func NewShardSplitSpec(shardId, index uint64) *ShardSplitSpec {
 	return &ShardSplitSpec{
-		ShardId: shardId,
-		Index:   index,
-		Specs:   make([]*TableSplitSpec, 0),
-		// NameFactory: nameFactory,
+		ShardId:  shardId,
+		Index:    index,
+		Specs:    make([]*TableSplitSpec, 0),
+		splitted: make(map[LogIndex]*Table),
+	}
+}
+
+func NewEmptyShardSplitSpec() *ShardSplitSpec {
+	return &ShardSplitSpec{
+		Specs:    make([]*TableSplitSpec, 0),
+		splitted: make(map[LogIndex]*Table),
 	}
 }
 
@@ -74,14 +87,20 @@ func (split *ShardSplitSpec) String() string {
 	return fmt.Sprintf("%s\n}", s)
 }
 
-func (split *ShardSplitSpec) Prepare(catalog *Catalog) error {
+func (split *ShardSplitSpec) Rewrite(newShards []uint64) {
+	for _, spec := range split.Specs {
+		spec.Rewrite(newShards)
+	}
+}
+
+func (split *ShardSplitSpec) Prepare(catalog *Catalog, nameFactory TableNameFactory, newShards []uint64) error {
+	split.Rewrite(newShards)
 	split.view = catalog.ShardView(split.ShardId, split.Index)
-	inverted := make(map[LogIndex]*Table)
 	onTable := func(table *Table) error {
 		if table.CommitInfo.LogIndex == nil {
 			return errors.New("log index should not be nil")
 		}
-		inverted[*table.CommitInfo.LogIndex] = table
+		split.splitted[*table.CommitInfo.LogIndex] = table
 		return nil
 	}
 	processor := new(loopProcessor)
@@ -90,12 +109,10 @@ func (split *ShardSplitSpec) Prepare(catalog *Catalog) error {
 	if err != nil {
 		return err
 	}
-	if len(split.Specs) != len(inverted) {
+	if len(split.Specs) != len(split.splitted) {
 		return errors.New("inconsistent")
 	}
-	// for index, spec := range split.Specs {
-	// 	table := inverted[index]
-	// }
+	// TODO: more checks
 	return nil
 }
 
@@ -112,27 +129,25 @@ func (split *ShardSplitSpec) Unmarshal(buf []byte) error {
 }
 
 type ShardSplitter struct {
-	Spec    *ShardSplitSpec
-	Catalog *Catalog
+	Spec        *ShardSplitSpec
+	Catalog     *Catalog
+	NameFactory TableNameFactory
+	NewShards   []uint64
 }
 
-func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec) *ShardSplitter {
+func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, newShards []uint64, nameFactory TableNameFactory) *ShardSplitter {
 	return &ShardSplitter{
-		Spec:    spec,
-		Catalog: catalog,
+		Spec:        spec,
+		Catalog:     catalog,
+		NameFactory: nameFactory,
+		NewShards:   newShards,
 	}
 }
 
 func (splitter *ShardSplitter) Prepare() error {
-	// err := splitter.Spec.Prepare(splitter.Catalog)
-	// if err != nil {
-	// 	return err
-	// }
-	// for _, spec := range splitter.Spec.Specs {
-	// }
-	return nil
+	return splitter.Spec.Prepare(splitter.Catalog, splitter.NameFactory, splitter.NewShards)
 }
 
 func (splitter *ShardSplitter) Commit() error {
-	return nil
+	return splitter.Catalog.doSpliteShard(splitter.NameFactory, splitter.Spec)
 }

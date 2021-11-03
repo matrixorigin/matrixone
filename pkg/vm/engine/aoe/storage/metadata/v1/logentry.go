@@ -37,6 +37,7 @@ const (
 	ETShardSnapshot
 	ETShardUpgradeReplaced
 	ETShardUpgradeAdd
+	ETShardSplit
 )
 
 func IsSyncDDLEntryType(et LogEntryType) bool {

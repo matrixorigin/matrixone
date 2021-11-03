@@ -120,6 +120,23 @@ type CommitInfo struct {
 	LogRange        *LogRange `json:"range"`
 }
 
+func (info *CommitInfo) Clone() *CommitInfo {
+	cloned := *info
+	if cloned.LogIndex != nil {
+		cloned.LogIndex = &(*info.LogIndex)
+	}
+	if cloned.PrevIndex != nil {
+		cloned.PrevIndex = &(*info.PrevIndex)
+	}
+	if cloned.AppliedIndex != nil {
+		cloned.AppliedIndex = &(*info.AppliedIndex)
+	}
+	if cloned.LogRange != nil {
+		cloned.LogRange = &(*info.LogRange)
+	}
+	return &cloned
+}
+
 func (info *CommitInfo) GetShardId() uint64 {
 	if info == nil {
 		return 0

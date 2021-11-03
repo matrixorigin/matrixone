@@ -537,6 +537,41 @@ func (catalog *Catalog) prepareAddTable(ctx *addTableCtx) (LogEntry, error) {
 	panic("todo")
 }
 
+func (catalog *Catalog) doSpliteShard(nameFactory TableNameFactory, spec *ShardSplitSpec) error {
+	ctx := new(splitShardCtx)
+	ctx.spec = spec
+	ctx.nameFactory = nameFactory
+	return catalog.onCommitRequest(ctx)
+}
+
+func (catalog *Catalog) prepareSplitShard(ctx *splitShardCtx) (LogEntry, error) {
+	entry := newShardLogEntry()
+	tranId := catalog.NextUncommitId()
+	for _, spec := range ctx.spec.Specs {
+		table := ctx.spec.splitted[spec.Index]
+		tables := table.Splite(spec, ctx.nameFactory, catalog)
+		for _, t := range tables {
+			nCtx := newAddTableCtx(t, true)
+			if _, err := catalog.prepareAddTable(nCtx); err != nil {
+				panic(err)
+			}
+			entry.addReplacer(t)
+		}
+	}
+	catalog.RLock()
+	for _, view := range ctx.spec.splitted {
+		table := catalog.TableSet[view.Id]
+		rCtx := newReplaceTableCtx(table, ctx.exIndex, tranId, true)
+		if _, err := table.prepareReplace(rCtx); err != nil {
+			panic(err)
+		}
+		entry.addReplaced(table)
+	}
+	catalog.RUnlock()
+	logEntry := catalog.prepareCommitEntry(entry, ETShardSplit, nil)
+	return logEntry, nil
+}
+
 func (catalog *Catalog) SimpleReplaceShard(view *catalogLogEntry) error {
 	ctx := newReplaceShardCtx(view)
 	err := catalog.onCommitRequest(ctx)
@@ -550,11 +585,12 @@ func (catalog *Catalog) prepareReplaceShard(ctx *replaceShardCtx) (LogEntry, err
 	logIndex := new(LogIndex)
 	logIndex.Id = shard.SimpleIndexId(ctx.view.LogRange.Range.Right)
 	logIndex.ShardId = ctx.view.LogRange.ShardId
+	tranId := catalog.NextUncommitId()
 	for _, table := range catalog.TableSet {
 		if table.GetShardId() != ctx.view.LogRange.ShardId {
 			continue
 		}
-		rCtx := newReplaceTableCtx(table, logIndex, true)
+		rCtx := newReplaceTableCtx(table, logIndex, tranId, true)
 		if _, err = table.prepareReplace(rCtx); err != nil {
 			panic(err)
 		}
@@ -808,7 +844,7 @@ func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint
 
 	shardSpec := NewShardSplitSpec(shardId, index)
 	activeSize := int64(0)
-	currGroup := uint32(1)
+	currGroup := uint32(0)
 
 	for _, table := range view.Catalog.TableSet {
 		spec := NewTableSplitSpec(table.GetCommit().LogIndex)
@@ -851,7 +887,7 @@ func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint
 		return
 	}
 
-	keys = make([][]byte, currGroup)
+	keys = make([][]byte, currGroup+1)
 	for i, _ := range keys {
 		keys[i] = []byte("1")
 	}

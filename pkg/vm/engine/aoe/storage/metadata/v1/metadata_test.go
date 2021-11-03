@@ -18,6 +18,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -36,7 +37,26 @@ import (
 var (
 	mockBlockSize   int64 = 100
 	mockSegmentSize int64 = 150
+	mockFactory           = new(mockNameFactory)
 )
+
+type mockNameFactory struct{}
+
+func (factory *mockNameFactory) Encode(shardId uint64, name string) string {
+	return fmt.Sprintf("mock:%s:%d", name, shardId)
+}
+
+func (factory *mockNameFactory) Decode(name string) (shardId uint64, oname string) {
+	arr := strings.Split(name, ":")
+	oname = arr[1]
+	shardId, _ = strconv.ParseUint(arr[2], 10, 64)
+	return
+}
+
+func (factory *mockNameFactory) Rename(name string, shardId uint64) string {
+	_, oname := factory.Decode(name)
+	return factory.Encode(shardId, oname)
+}
 
 type mockIdAllocator struct {
 	sync.RWMutex
@@ -84,7 +104,8 @@ func createBlock(t *testing.T, tables int, idAlloc *mockIdAllocator, shardId uin
 		for k := 0; k < tables; k++ {
 			schema := MockSchema(2)
 			id := idAlloc.alloc(shardId)
-			schema.Name = fmt.Sprintf("mock-%d-%d", shardId, id)
+			name := fmt.Sprintf("t%d", id)
+			schema.Name = mockFactory.Encode(shardId, name)
 			index := shard.Index{
 				ShardId: shardId,
 				Id:      shard.SimpleIndexId(id),
@@ -1108,10 +1129,11 @@ func TestSplit(t *testing.T) {
 	assert.Equal(t, int64(550), stat.GetSize())
 	assert.Equal(t, int64(600), stat.GetCount())
 
-	_, _, keys, ctx, err := catalog.SplitCheck(uint64(400), shardId, index)
+	_, _, keys, ctx, err := catalog.SplitCheck(uint64(250), shardId, index)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(keys))
-	spec := new(ShardSplitSpec)
+	// t.Log(len(keys))
+	// assert.Equal(t, 3, len(keys))
+	spec := NewEmptyShardSplitSpec()
 	err = spec.Unmarshal(ctx)
 	assert.Nil(t, err)
 	t.Log(spec.String())
@@ -1119,7 +1141,18 @@ func TestSplit(t *testing.T) {
 	assert.Equal(t, spec.Index, index)
 	assert.Equal(t, len(spec.Specs), 4)
 
-	t.Log(catalog.PString(PPL0))
+	newShards := make([]uint64, len(keys))
+	for i, _ := range newShards {
+		newShards[i] = uint64(100) + uint64(i)
+	}
 
+	splitter := NewShardSplitter(catalog, spec, newShards, mockFactory)
+	err = splitter.Prepare()
+	assert.Nil(t, err)
+	err = splitter.Commit()
+	assert.Nil(t, err)
+	assert.Equal(t, len(catalog.TableSet), 9)
+
+	t.Log(catalog.PString(PPL0))
 	catalog.Close()
 }

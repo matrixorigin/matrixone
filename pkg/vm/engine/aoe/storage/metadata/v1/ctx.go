@@ -16,6 +16,7 @@ package metadata
 
 type writeCtx struct {
 	exIndex *LogIndex
+	tranId  uint64
 	inTran  bool
 }
 
@@ -75,6 +76,12 @@ type replaceTableCtx struct {
 type replaceShardCtx struct {
 	writeCtx
 	view *catalogLogEntry
+}
+
+type splitShardCtx struct {
+	writeCtx
+	spec        *ShardSplitSpec
+	nameFactory TableNameFactory
 }
 
 func newAddTableCtx(table *Table, inTran bool) *addTableCtx {
@@ -137,11 +144,12 @@ func newUpgradeBlockCtx(block *Block, exIndice []*LogIndex) *upgradeBlockCtx {
 	}
 }
 
-func newReplaceTableCtx(table *Table, exIndex *LogIndex, inTran bool) *replaceTableCtx {
+func newReplaceTableCtx(table *Table, exIndex *LogIndex, tranId uint64, inTran bool) *replaceTableCtx {
 	return &replaceTableCtx{
 		table: table,
 		writeCtx: writeCtx{
 			inTran:  inTran,
+			tranId:  tranId,
 			exIndex: exIndex,
 		},
 	}

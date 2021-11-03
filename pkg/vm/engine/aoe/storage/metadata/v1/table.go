@@ -135,10 +135,16 @@ func (e *Table) GetFlushTS() int64 {
 
 func (e *Table) prepareReplace(ctx *replaceTableCtx) (LogEntry, error) {
 	cInfo := &CommitInfo{
-		CommitId: e.Catalog.NextUncommitId(),
 		Op:       OpReplaced,
 		LogIndex: ctx.exIndex,
 		SSLLNode: *common.NewSSLLNode(),
+	}
+	if ctx.inTran {
+		cInfo.CommitId = ctx.tranId
+		cInfo.TranId = ctx.tranId
+	} else {
+		cInfo.TranId = e.Catalog.NextUncommitId()
+		cInfo.CommitId = cInfo.TranId
 	}
 	e.Lock()
 	defer e.Unlock()
@@ -504,7 +510,8 @@ func (e *Table) SimpleGetSegment(id uint64) *Segment {
 	return e.GetSegment(id, MinUncommitId)
 }
 
-func (e *Table) Splite(specs []*TableRangeSpec, nameFactory TableNameFactory, catalog *Catalog) []*Table {
+func (e *Table) Splite(splitSpec *TableSplitSpec, nameFactory TableNameFactory, catalog *Catalog) []*Table {
+	specs := splitSpec.Specs
 	tranId := catalog.NextUncommitId()
 	tables := make([]*Table, len(specs))
 	for i, spec := range specs {
@@ -512,7 +519,8 @@ func (e *Table) Splite(specs []*TableRangeSpec, nameFactory TableNameFactory, ca
 			ShardId: spec.ShardId,
 			Id:      shard.SimpleIndexId(uint64(0)),
 		}
-		info := e.CommitInfo
+		info := e.CommitInfo.Clone()
+		// info := e.CommitInfo
 		info.TranId = tranId
 		info.CommitId = tranId
 		info.LogIndex = &logIndex
@@ -547,6 +555,7 @@ func (e *Table) Splite(specs []*TableRangeSpec, nameFactory TableNameFactory, ca
 			block.CommitInfo.CommitId = tranId
 			block.CommitInfo.LogIndex = table.CommitInfo.LogIndex
 		}
+		table.SegmentSet = append(table.SegmentSet, segment)
 	}
 	return tables
 }
