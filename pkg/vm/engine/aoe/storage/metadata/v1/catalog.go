@@ -537,19 +537,19 @@ func (catalog *Catalog) prepareAddTable(ctx *addTableCtx) (LogEntry, error) {
 	panic("todo")
 }
 
-func (catalog *Catalog) doSpliteShard(nameFactory TableNameFactory, spec *ShardSplitSpec) error {
+func (catalog *Catalog) doSpliteShard(nameFactory TableNameFactory, spec *ShardSplitSpec, tranId uint64) error {
 	ctx := new(splitShardCtx)
 	ctx.spec = spec
 	ctx.nameFactory = nameFactory
+	ctx.tranId = tranId
 	return catalog.onCommitRequest(ctx)
 }
 
 func (catalog *Catalog) prepareSplitShard(ctx *splitShardCtx) (LogEntry, error) {
 	entry := newShardLogEntry()
-	tranId := catalog.NextUncommitId()
 	for _, spec := range ctx.spec.Specs {
 		table := ctx.spec.splitted[spec.Index]
-		tables := table.Splite(spec, ctx.nameFactory, catalog)
+		tables := table.Splite(ctx.tranId, spec, ctx.nameFactory, catalog)
 		for _, t := range tables {
 			nCtx := newAddTableCtx(t, true)
 			if _, err := catalog.prepareAddTable(nCtx); err != nil {
@@ -561,7 +561,7 @@ func (catalog *Catalog) prepareSplitShard(ctx *splitShardCtx) (LogEntry, error) 
 	catalog.RLock()
 	for _, view := range ctx.spec.splitted {
 		table := catalog.TableSet[view.Id]
-		rCtx := newReplaceTableCtx(table, ctx.exIndex, tranId, true)
+		rCtx := newReplaceTableCtx(table, ctx.exIndex, ctx.tranId, true)
 		if _, err := table.prepareReplace(rCtx); err != nil {
 			panic(err)
 		}
@@ -572,8 +572,8 @@ func (catalog *Catalog) prepareSplitShard(ctx *splitShardCtx) (LogEntry, error) 
 	return logEntry, nil
 }
 
-func (catalog *Catalog) SimpleReplaceShard(view *catalogLogEntry) error {
-	ctx := newReplaceShardCtx(view)
+func (catalog *Catalog) SimpleReplaceShard(view *catalogLogEntry, tranId uint64) error {
+	ctx := newReplaceShardCtx(view, tranId)
 	err := catalog.onCommitRequest(ctx)
 	return err
 }
@@ -585,12 +585,11 @@ func (catalog *Catalog) prepareReplaceShard(ctx *replaceShardCtx) (LogEntry, err
 	logIndex := new(LogIndex)
 	logIndex.Id = shard.SimpleIndexId(ctx.view.LogRange.Range.Right)
 	logIndex.ShardId = ctx.view.LogRange.ShardId
-	tranId := catalog.NextUncommitId()
 	for _, table := range catalog.TableSet {
 		if table.GetShardId() != ctx.view.LogRange.ShardId {
 			continue
 		}
-		rCtx := newReplaceTableCtx(table, logIndex, tranId, true)
+		rCtx := newReplaceTableCtx(table, logIndex, ctx.tranId, true)
 		if _, err = table.prepareReplace(rCtx); err != nil {
 			panic(err)
 		}

@@ -155,10 +155,11 @@ func newReplaceTableCtx(table *Table, exIndex *LogIndex, tranId uint64, inTran b
 	}
 }
 
-func newReplaceShardCtx(view *catalogLogEntry) *replaceShardCtx {
+func newReplaceShardCtx(view *catalogLogEntry, tranId uint64) *replaceShardCtx {
 	ctx := &replaceShardCtx{
 		writeCtx: writeCtx{
 			inTran: true,
+			tranId: tranId,
 		},
 		view: view,
 	}

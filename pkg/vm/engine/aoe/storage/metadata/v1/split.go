@@ -133,6 +133,7 @@ type ShardSplitter struct {
 	Catalog     *Catalog
 	NameFactory TableNameFactory
 	NewShards   []uint64
+	TranId      uint64
 }
 
 func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, newShards []uint64, nameFactory TableNameFactory) *ShardSplitter {
@@ -145,9 +146,10 @@ func NewShardSplitter(catalog *Catalog, spec *ShardSplitSpec, newShards []uint64
 }
 
 func (splitter *ShardSplitter) Prepare() error {
+	splitter.TranId = splitter.Catalog.NextUncommitId()
 	return splitter.Spec.Prepare(splitter.Catalog, splitter.NameFactory, splitter.NewShards)
 }
 
 func (splitter *ShardSplitter) Commit() error {
-	return splitter.Catalog.doSpliteShard(splitter.NameFactory, splitter.Spec)
+	return splitter.Catalog.doSpliteShard(splitter.NameFactory, splitter.Spec, splitter.TranId)
 }
