@@ -468,7 +468,8 @@ func (catalog *Catalog) HardDeleteTable(id uint64) error {
 }
 
 func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *LogIndex) error {
-	ctx := newDropTableCtx(name, exIndex)
+	tranId := catalog.NextUncommitId()
+	ctx := newDropTableCtx(name, exIndex, tranId)
 	err := catalog.prepareDropTable(ctx)
 	if err != nil {
 		return err

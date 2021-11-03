@@ -278,7 +278,8 @@ func (e *Block) fillView(filter *Filter) *Block {
 
 // Safe
 func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
-	ctx := newUpgradeBlockCtx(e, exIndice)
+	tranId := e.Segment.Table.Catalog.NextUncommitId()
+	ctx := newUpgradeBlockCtx(e, exIndice, tranId)
 	err := e.Segment.Table.Catalog.onCommitRequest(ctx)
 	if err != nil {
 		return err
@@ -291,7 +292,6 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 	if e.GetCount() != e.Segment.Table.Schema.BlockMaxRows {
 		return nil, UpgradeInfullBlockErr
 	}
-	tranId := e.Segment.Table.Catalog.NextUncommitId()
 	e.Lock()
 	defer e.Unlock()
 	var newOp OpT
@@ -302,8 +302,8 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 		return nil, UpgradeNotNeededErr
 	}
 	cInfo := &CommitInfo{
-		TranId:   tranId,
-		CommitId: tranId,
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
 		Op:       newOp,
 		Size:     e.CommitInfo.GetSize(),
 	}

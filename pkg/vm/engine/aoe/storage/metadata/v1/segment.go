@@ -204,7 +204,8 @@ func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
 
 // Safe
 func (e *Segment) SimpleCreateBlock() *Block {
-	ctx := newCreateBlockCtx(e)
+	tranId := e.Table.Catalog.NextUncommitId()
+	ctx := newCreateBlockCtx(e, tranId)
 	if err := e.Table.Catalog.onCommitRequest(ctx); err != nil {
 		return nil
 	}
@@ -222,8 +223,7 @@ func (e *Segment) Appendable() bool {
 }
 
 func (e *Segment) prepareCreateBlock(ctx *createBlockCtx) (LogEntry, error) {
-	tranId := e.Catalog.NextUncommitId()
-	be := newBlockEntry(e, tranId, ctx.exIndex)
+	be := newBlockEntry(e, ctx.tranId, ctx.exIndex)
 	logEntry := be.ToLogEntry(ETCreateBlock)
 	e.Lock()
 	e.onNewBlock(be)
@@ -277,7 +277,8 @@ func (e *Segment) onNewBlock(entry *Block) {
 // Safe
 func (e *Segment) SimpleUpgrade(size int64, exIndice []*LogIndex) error {
 	stale := e.GetCommit()
-	ctx := newUpgradeSegmentCtx(e, size, exIndice)
+	tranId := e.Table.Catalog.NextUncommitId()
+	ctx := newUpgradeSegmentCtx(e, size, exIndice, tranId)
 	err := e.Table.Catalog.onCommitRequest(ctx)
 	if err != nil {
 		return err
@@ -352,7 +353,6 @@ func (e *Segment) GetCoarseSizeLocked() int64 {
 }
 
 func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
-	tranId := e.Table.Catalog.NextUncommitId()
 	e.RLock()
 	if !e.HasMaxBlocks() {
 		e.RUnlock()
@@ -377,8 +377,8 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 		return nil, UpgradeNotNeededErr
 	}
 	cInfo := &CommitInfo{
-		TranId:   tranId,
-		CommitId: tranId,
+		TranId:   ctx.tranId,
+		CommitId: ctx.tranId,
 		Op:       newOp,
 		Size:     ctx.size,
 	}
