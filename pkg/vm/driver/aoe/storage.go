@@ -44,6 +44,13 @@ import (
 	"github.com/matrixorigin/matrixcube/storage/stats"
 )
 
+const (
+	sPrefix             = "MateTbl"
+	sShardId           	= "ShardId"
+	sLogIndex         	= "LogIndex"
+	sMetadata        	= "Metadata"
+)
+
 // Storage memory storage
 type Storage struct {
 	DB    *adb.DB
@@ -52,7 +59,7 @@ type Storage struct {
 
 func (s *Storage) Sync(ids []uint64) error {
 	for _, shardId := range ids {
-		s.DB.Flush("matetbl" + strconv.Itoa(int(shardId)))
+		s.DB.Flush(sPrefix + strconv.Itoa(int(shardId)))
 	}
 	//TODO: implement me
 	return nil
@@ -241,7 +248,8 @@ func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
 	var values []storage.ShardMetadata
 	logutil.Infof("tblNames len  is %d\n", len(tblNames))
 	for _, tblName := range tblNames {
-		if !strings.Contains(tblName, "matetbl") {
+		//TODO:Strictly judge whether it is a "shard metadata table"
+		if !strings.Contains(tblName, sPrefix) {
 			continue
 		}
 		rel, err := s.Relation(tblName)
@@ -346,9 +354,8 @@ func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 }
 
 func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
-	logutil.Infof("SaveShardMetadata is start, metadatas len is %d\n", len(metadatas))
 	for _, metadata := range metadatas {
-		tableName := "matetbl" + strconv.Itoa(int(metadata.ShardID))
+		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
 		tbl := s.DB.Store.Catalog.SimpleGetTableByName(tableName)
 		if tbl == nil {
 			mateTblInfo := aoe.TableInfo{
@@ -356,17 +363,17 @@ func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
 				Indices: make([]aoe.IndexInfo, 0),
 			}
 			ShardId := aoe.ColumnInfo{
-				Name: "ShardId",
+				Name: sShardId,
 			}
 			ShardId.Type = types.Type{Oid: types.T_uint64, Size: 8}
 			mateTblInfo.Columns = append(mateTblInfo.Columns, ShardId)
 			LogIndex := aoe.ColumnInfo{
-				Name: "LogIndex",
+				Name: sLogIndex,
 			}
 			LogIndex.Type = types.Type{Oid: types.T_uint64, Size: 8}
 			mateTblInfo.Columns = append(mateTblInfo.Columns, LogIndex)
 			colInfo := aoe.ColumnInfo{
-				Name: "Metadata",
+				Name: sMetadata,
 			}
 			colInfo.Type = types.Type{Oid: types.T(types.T_varchar), Size: 128}
 			mateTblInfo.Columns = append(mateTblInfo.Columns, colInfo)
@@ -376,7 +383,7 @@ func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
 				TableName: tableName,
 			})
 			if err != nil {
-				logutil.Infof("err is %d\n", err)
+				logutil.Errorf("CreateTable is failed: %v\n", err.Error())
 				return err
 			}
 			tbl = s.DB.Store.Catalog.SimpleGetTableByName(tableName)
@@ -386,36 +393,36 @@ func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
 			attrs = append(attrs, colDef.Name)
 		}
 		bat := batch.New(true, attrs)
-		vec := vector.New(types.Type{Oid: types.T_varchar, Size: int32(len(metadata.Metadata))})
-		vec.Ref = 1
+		vMetadata := vector.New(types.Type{Oid: types.T_varchar, Size: int32(len(metadata.Metadata))})
+		vMetadata.Ref = 1
 		logutil.Infof("SaveShardMetadata Metadata is %v\n", metadata.Metadata)
-		vec.Col = &types.Bytes{
+		vMetadata.Col = &types.Bytes{
 			Data:    metadata.Metadata,
 			Offsets: []uint32{0},
 			Lengths: []uint32{uint32(len(metadata.Metadata))},
 		}
-		bat.Vecs[2] = vec
-		vec1 := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
-		vec1.Ref = 1
-		vec1.Col = []uint64{metadata.ShardID}
-		bat.Vecs[0] = vec1
-		vec2 := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
-		vec2.Ref = 1
-		vec2.Col = []uint64{metadata.LogIndex}
-		bat.Vecs[1] = vec2
+		bat.Vecs[2] = vMetadata
+		vShardID := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
+		vShardID.Ref = 1
+		vShardID.Col = []uint64{metadata.ShardID}
+		bat.Vecs[0] = vShardID
+		vLogIndex := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
+		vLogIndex.Ref = 1
+		vLogIndex.Col = []uint64{metadata.LogIndex}
+		bat.Vecs[1] = vLogIndex
 		err := s.DB.Append(dbi.AppendCtx{
 			ShardId:   metadata.ShardID,
 			OpIndex:   metadata.LogIndex,
 			OpOffset:  0,
 			OpSize:    1,
-			TableName: "matetbl" + strconv.Itoa(int(metadata.ShardID)),
+			TableName: sPrefix + strconv.Itoa(int(metadata.ShardID)),
 			Data:      bat,
 		})
 		if err != nil {
+			logutil.Errorf("SaveShardMetadata is failed: %v\n", err.Error())
 			return err
 		}
 	}
-	logutil.Infof("SaveShardMetadata is end\n")
 	return nil
 }
 
