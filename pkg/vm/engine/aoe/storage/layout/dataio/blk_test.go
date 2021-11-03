@@ -17,6 +17,7 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"os"
 	"path/filepath"
 	"testing"
