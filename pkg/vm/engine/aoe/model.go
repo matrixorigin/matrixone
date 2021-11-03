@@ -58,7 +58,6 @@ type TableInfo struct {
 	Type       uint64       `json:"type"` // Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
 	Indices    []IndexInfo  `json:"indices"`
 	Columns    []ColumnInfo `json:"columns"`     // Column is listed in order in which they appear in schema
-	PrimaryKey string       `json:"primary_key"` // PrimaryKey is the name of the column of the primary key
 	Comment    []byte       `json:"comment"`
 	State      SchemaState  `json:"state"`
 	Partition  []byte       `json:"partition"`

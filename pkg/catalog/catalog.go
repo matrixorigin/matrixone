@@ -169,24 +169,26 @@ func (c *Catalog) GetPrimaryKey(dbId uint64, tableName string) (pk *aoe.ColumnIn
 		return
 	}
 
-	if tbl.PrimaryKey == "" {
-		return nil, ErrPrimaryKeyNotExist
-	}
 	for _, col := range tbl.Columns {
-		if col.Name == tbl.PrimaryKey {
+		if col.PrimaryKey {
 			return &col, nil
 		}
 	}
 
-	return nil, ErrColumnNotExist
+	return nil, ErrPrimaryKeyNotExist
 }
 func (c *Catalog) DeletePrimaryKey(epoch, dbId uint64, tableName string) (err error) {
 	tbl, err := c.GetTable(dbId, tableName)
 	if err != nil {
 		return
 	}
-	tbl.PrimaryKey = ""
-	c.updateTableInfo(dbId, tbl)
+	for _, col := range tbl.Columns {
+		if col.PrimaryKey {
+			col.PrimaryKey = false
+			c.updateTableInfo(dbId, tbl)
+			return
+		}
+	}
 	return
 }
 func (c *Catalog) SetPrimaryKey(epoch, dbId uint64, tableName, columnName string) (err error) {
@@ -194,13 +196,22 @@ func (c *Catalog) SetPrimaryKey(epoch, dbId uint64, tableName, columnName string
 	if err != nil {
 		return
 	}
+	columnExist := false
 	for _, col := range tbl.Columns {
+		if col.PrimaryKey {
+			if col.Name == columnName {
+				return nil
+			}
+			col.PrimaryKey = false
+		}
 		if col.Name == columnName {
-			tbl.PrimaryKey = columnName
-			return
+			col.PrimaryKey = true
 		}
 	}
 	c.updateTableInfo(dbId, tbl)
+	if columnExist {
+		return nil
+	}
 	return ErrColumnNotExist
 }
 func (c *Catalog) updateTableInfo(dbId uint64, tbl *aoe.TableInfo) (err error) {
@@ -243,7 +254,6 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	}
 
 	wg := sync.WaitGroup{}
-	tbl.PrimaryKey = ""
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
