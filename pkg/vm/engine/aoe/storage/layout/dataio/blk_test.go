@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"
