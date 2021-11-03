@@ -62,7 +62,7 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 			Idx:  idx,
 			Type: colInfo.Type,
 		}
-		if colInfo.PrimaryKey{
+		if colInfo.PrimaryKey {
 			schema.PrimaryKey = idx
 			logutil.Debugf("Table to schema, schema.PrimaryKey is %d, its name is %v.", schema.PrimaryKey, colInfo.Name)
 		}
