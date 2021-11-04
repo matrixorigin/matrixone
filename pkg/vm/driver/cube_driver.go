@@ -223,6 +223,9 @@ func NewCubeDriverWithFactory(
 				newCompactIdx = compactIndex
 			} else {
 				newCompactIdx = h.aoeDB.GetShardCheckpointId(shard.ID)
+				if newCompactIdx == 0 {
+					newCompactIdx = compactIndex
+				}
 			}
 			return newCompactIdx, nil
 		}
@@ -237,6 +240,9 @@ func NewCubeDriverWithFactory(
 				adjustAppliedIndex = initAppliedIndex
 			} else {
 				adjustAppliedIndex = h.aoeDB.GetShardCheckpointId(shard.ID)
+				if adjustAppliedIndex == 0 {
+					adjustAppliedIndex = initAppliedIndex
+				}
 			}
 
 			return adjustAppliedIndex
