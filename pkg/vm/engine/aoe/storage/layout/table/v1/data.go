@@ -246,10 +246,6 @@ func (td *tableData) Size(attr string) uint64 {
 	return size
 }
 
-func (td *tableData) GetSegmentedIndex() (id uint64, ok bool) {
-	return td.meta.GetAppliedIndex(nil)
-}
-
 func (td *tableData) SegmentIds() []uint64 {
 	ids := make([]uint64, 0, atomic.LoadUint32(&td.tree.segmentCnt))
 	td.tree.RLock()

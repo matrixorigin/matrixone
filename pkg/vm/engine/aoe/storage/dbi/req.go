@@ -68,20 +68,6 @@ type StringMatcher struct {
 	Pattern string
 }
 
-type GetSegmentedIdCtx struct {
-	Matchers []*StringMatcher
-}
-
-func NewTabletSegmentedIdCtx(tablet string) *GetSegmentedIdCtx {
-	ctx := &GetSegmentedIdCtx{
-		Matchers: make([]*StringMatcher, 1),
-	}
-	ctx.Matchers[0] = &StringMatcher{
-		Pattern: tablet,
-	}
-	return ctx
-}
-
 type IDS struct {
 	Version uint64
 	Ids     []uint64

@@ -39,7 +39,6 @@ type IMutableBlock interface {
 	base.INode
 	GetData() batch.IBatch
 	GetFile() *dataio.TransientBlockFile
-	GetSegmentedIndex() (uint64, bool)
 	GetMeta() *metadata.Block
 	SetStale()
 	Flush() error

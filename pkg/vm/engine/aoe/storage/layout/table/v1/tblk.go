@@ -101,10 +101,6 @@ func (blk *tblock) Size(attr string) uint64 {
 	return blk.coarseSize[attr]
 }
 
-func (blk *tblock) GetSegmentedIndex() (id uint64, ok bool) {
-	return blk.node.GetSegmentedIndex()
-}
-
 func (blk *tblock) CloneWithUpgrade(host iface.ISegment, meta *metadata.Block) (iface.IBlock, error) {
 	defer host.Unref()
 	return newBlock(host, meta)

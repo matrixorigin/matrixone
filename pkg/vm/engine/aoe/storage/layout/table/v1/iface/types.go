@@ -56,9 +56,6 @@ type ITableData interface {
 	// GetSegmentCount to get the segment count of the table
 	GetSegmentCount() uint32
 
-	// GetSegmentedIndex to get the last
-	// segment(written to disk) id of the table
-	GetSegmentedIndex() (uint64, bool)
 	GetIndexHolder() *index.TableHolder
 
 	// init ReplayIndex and rowCount
