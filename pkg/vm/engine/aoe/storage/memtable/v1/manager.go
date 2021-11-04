@@ -106,7 +106,7 @@ func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err er
 		m.Unlock()
 		return nil, errors.New("logic error")
 	}
-	c = newMutableCollection(m, tableData)
+	c = newCollection(m, tableData)
 	m.collections[tableData.GetID()] = c
 	m.Unlock()
 	c.Ref()
