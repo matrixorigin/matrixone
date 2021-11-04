@@ -337,6 +337,16 @@ values = ["error","info","debug","warning","warn","fatal"]
 comment = "default is error. The log level for cube."
 update-mode = "dynamic"
 
+[[parameter]]
+name = "cubeMaxEntriesBytes"
+scope = ["global"]
+access = ["file"]
+type = "int64"
+domain-type = "set"
+values = ["314572800"]
+comment = "default is 300MB. The max entries bytes for the write batch in the cube."
+update-mode = "dynamic"
+
 # Cluster Configs
 pre-allocated-group-num = 20
 max-group-num           = 0
@@ -386,9 +396,9 @@ enable-pre-vote = true
 tick-interval = "1s"
 heartbeat-ticks = 2
 election-timeout-ticks = 10
-max-size-per-msg = "1MB"
+max-size-per-msg = 0
 max-inflight-msgs = 512
-max-entry-bytes = "1MB"
+max-entry-bytes = 314572800
 send-raft-batch-size = 64
 [raft.raft-log]
 disable-sync = false
