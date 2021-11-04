@@ -152,7 +152,7 @@ func (sf *SortedSegmentFile) initPointers() {
 	// read metadata-2
 	sz = startPosSize +
 		endPosSize +
-		int(blkCnt)*(blkCountSize+blkIdSize+2*blkIdxSize+blkRangeSize) +
+		int(blkCnt)*(blkCountSize+2*blkIdxSize+blkRangeSize) +
 		int(blkCnt*colCnt)*(colSizeSize*2) +
 		int(colCnt)*colPosSize
 
@@ -162,7 +162,6 @@ func (sf *SortedSegmentFile) initPointers() {
 		panic(err)
 	}
 
-	trash := make([]uint64, blkCnt)
 	blkCounts := make([]uint64, blkCnt)
 	idxBuf := make([]byte, blkIdxSize)
 	preIndices := make([]*metadata.LogIndex, blkCnt)
@@ -170,9 +169,6 @@ func (sf *SortedSegmentFile) initPointers() {
 	rangeBuf := make([]byte, blkRangeSize)
 
 	for i := uint32(0); i < blkCnt; i++ {
-		if err = binary.Read(metaBuf, binary.BigEndian, &trash[i]); err != nil {
-			panic(err)
-		}
 		if err = binary.Read(metaBuf, binary.BigEndian, &blkCounts[i]); err != nil {
 			panic(err)
 		}
@@ -260,11 +256,11 @@ func (sf *SortedSegmentFile) initPointers() {
 	}
 
 	// read index
-	meta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
+	idxMeta, err := index.DefaultRWHelper.ReadIndicesMeta(sf.File)
 	if err != nil {
 		panic(err)
 	}
-	sf.Meta.Indices = meta
+	sf.Meta.Indices = idxMeta
 
 	// read footer
 	footer := make([]byte, 64)
