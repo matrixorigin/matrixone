@@ -17,6 +17,8 @@ package driver
 import (
 	"encoding/json"
 	"errors"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	aoe3 "github.com/matrixorigin/matrixone/pkg/vm/driver/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/config"
@@ -27,7 +29,6 @@ import (
 	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
-	"time"
 
 	"github.com/matrixorigin/matrixcube/aware"
 	pConfig "github.com/matrixorigin/matrixcube/components/prophet/config"
@@ -221,23 +222,7 @@ func NewCubeDriverWithFactory(
 			if group != uint64(pb.AOEGroup) {
 				newCompactIdx = compactIndex
 			} else {
-				newCompactIdx, err = h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
-					Matchers: []*dbi.StringMatcher{
-						{
-							Type:    dbi.MTPrefix,
-							Pattern: codec.Uint642String(shard.ID),
-						},
-					},
-				})
-				if err != nil {
-					if err == adb.ErrNotFound {
-						logutil.Debugf("shard not found, %d, %d", group, shard.ID)
-						newCompactIdx = compactIndex
-					} else {
-						// TODO: Need panic here or not?
-						panic(err)
-					}
-				}
+				newCompactIdx = h.aoeDB.GetShardCheckpointId(shard.ID)
 			}
 			return newCompactIdx, nil
 		}
@@ -251,23 +236,7 @@ func NewCubeDriverWithFactory(
 			if group != uint64(pb.AOEGroup) {
 				adjustAppliedIndex = initAppliedIndex
 			} else {
-				var err error
-				adjustAppliedIndex, err = h.aoeDB.GetSegmentedId(dbi.GetSegmentedIdCtx{
-					Matchers: []*dbi.StringMatcher{
-						{
-							Type:    dbi.MTPrefix,
-							Pattern: codec.Uint642String(shard.ID),
-						},
-					},
-				})
-				if err != nil {
-					if err == adb.ErrNotFound {
-						logutil.Debugf("shard not found, %d, %d", group, shard.ID)
-						adjustAppliedIndex = initAppliedIndex
-					} else {
-						panic(err)
-					}
-				}
+				adjustAppliedIndex = h.aoeDB.GetShardCheckpointId(shard.ID)
 			}
 
 			return adjustAppliedIndex
