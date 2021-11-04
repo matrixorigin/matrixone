@@ -329,7 +329,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 
 	catalog := metadata.MockCatalog(dir, capacity, uint64(10))
 	schema := metadata.MockSchema(2)
-	schema.PrimaryKey=1
+	schema.PrimaryKey = 1
 	tblMeta := metadata.MockTable(catalog, schema, 1, nil)
 	segMeta := tblMeta.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, segMeta)
@@ -405,6 +405,19 @@ func TestIVectorNodeWriter(t *testing.T) {
 		v := gvector.New(t1)
 		err = v.Read(data)
 		logutil.Infof("nb.v is %v.\n", v)
+		switch i {
+		case 0:
+			assert.Equal(t, int32(1), v.Col.([]int32)[0])
+			assert.Equal(t, int32(3), v.Col.([]int32)[1])
+			assert.Equal(t, int32(2), v.Col.([]int32)[2])
+			assert.Equal(t, int32(0), v.Col.([]int32)[3])
+			break
+		case 1:
+			assert.Equal(t, []byte("str0"), v.Col.(*types.Bytes).Data[0:4])
+			assert.Equal(t, []byte("str1"), v.Col.(*types.Bytes).Data[4:8])
+			assert.Equal(t, []byte("str2"), v.Col.(*types.Bytes).Data[8:12])
+			assert.Equal(t, []byte("str3"), v.Col.(*types.Bytes).Data[12:16])
+		}
 	}
 
 	col0Vf := segFile.MakeVirtualPartFile(&id)
