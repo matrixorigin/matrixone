@@ -636,6 +636,8 @@ func (d *DB) ApplySnapshot(shardID uint64, path string) error {
 		}
 	}
 
+	// TODO: fill the logic
+
 	if err = ssReader.CommitLoad(); err != nil {
 		return err
 	}
