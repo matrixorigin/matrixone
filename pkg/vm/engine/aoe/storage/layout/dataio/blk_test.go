@@ -230,7 +230,7 @@ func TestSegmentWriter(t *testing.T) {
 	t.Log(segHolder.CollectMinMax(0))
 	t.Log(segHolder.CollectMinMax(1))
 	t.Log(segHolder.GetBlockCount())
-	col0Blk := segment.BlockSet[0].AsCommonID().AsBlockID()
+	col0Blk := segment.BlockSet[0].DescId()
 	col1Blk := col0Blk
 	col1Blk.Idx = uint16(1)
 	col0Vf := segFile.MakeVirtualPartFile(&col0Blk)
@@ -268,6 +268,44 @@ func TestSegmentWriter(t *testing.T) {
 	logutil.Infof(fsMgr.String())
 	col0Vf.Unref()
 	col1Vf.Unref()
+
+	// test ingest sorted segment file with different metadata
+	assert.Nil(t, os.Link("/tmp/testsegmentwriter/data/1_5.seg", "/tmp/testsegmentwriter/data/1_6.seg"))
+	segment = table.SimpleCreateSegment()
+	blocks := make([]*metadata.Block, 0)
+	for i := 0; i < int(blkCount); i++ {
+		block := segment.SimpleCreateBlock()
+		//t.Log(block.Id)
+		assert.NotNil(t, block)
+		blocks = append(blocks, block)
+	}
+	//for _, blk := range segment.BlockSet {
+	//	t.Log(blk.Id)
+	//}
+	segFile, err = fsMgr.RegisterSortedFiles(*segment.AsCommonID())
+	assert.Nil(t, err)
+	//segFile.RefBlock()
+
+	idx1 := blocks[0].DescId()
+	idx1.Idx = uint16(0)
+	part := segFile.MakeVirtualPartFile(&idx1)
+	assert.Equal(t, part.Stat().Size(), segFile.PartSize(uint64(0), idx1, false))
+	assert.NotEqual(t, int64(0), part.Stat().Size())
+
+	//for k, _ := range segFile.(*SortedSegmentFile).Parts {
+	//	t.Log(k.Col, ": ", k.ID.String())
+	//}
+
+	idx1.Idx = uint16(1)
+	part = segFile.MakeVirtualPartFile(&idx1)
+	assert.Equal(t, part.Stat().Size(), segFile.PartSize(uint64(1), idx1, false))
+	assert.NotEqual(t, int64(0), part.Stat().Size())
+
+	idx2 := blocks[1].DescId()
+	idx2.Idx = uint16(2)
+	part = segFile.MakeVirtualPartFile(&idx2)
+	assert.Equal(t, part.Stat().Size(), segFile.PartSize(uint64(2), idx2, false))
+	assert.NotEqual(t, int64(0), part.Stat().Size())
 }
 
 func TestIVectorNodeWriter(t *testing.T) {

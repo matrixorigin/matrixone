@@ -814,9 +814,6 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 		return err
 	}
 	for _, blk := range meta.BlockSet {
-		if err = binary.Write(&metaBuf, binary.BigEndian, blk.Id); err != nil {
-			return err
-		}
 		if err = binary.Write(&metaBuf, binary.BigEndian, blk.Count); err != nil {
 			return err
 		}
@@ -887,7 +884,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 		colCntSize +
 		startPosSize +
 		endPosSize +
-		len(data)*(blkCountSize+blkIdSize+2*blkIdxSize+blkRangeSize) +
+		len(data)*(blkCountSize+2*blkIdxSize+blkRangeSize) +
 		len(data)*colCnt*(colSizeSize*2) +
 		colCnt*colPosSize
 
