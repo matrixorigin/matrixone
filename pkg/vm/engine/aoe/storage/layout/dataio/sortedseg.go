@@ -55,18 +55,17 @@ type SortedSegmentFile struct {
 }
 
 func NewSortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
+	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	sf := &SortedSegmentFile{
 		Parts:      make(map[base.Key]*base.Pointer),
 		ID:         id,
 		Meta:       NewFileMeta(),
 		BlocksMeta: make(map[common.ID]*FileMeta),
 		Info: &fileStat{
-			name: id.ToSegmentFilePath(),
+			name: name,
 		},
 	}
 
-	name := common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
-	// log.Infof("SegmentFile name %s", name)
 	if info, err := os.Stat(name); os.IsNotExist(err) {
 		panic(fmt.Sprintf("Specified file %s not existed", name))
 	} else {
@@ -163,7 +162,7 @@ func (sf *SortedSegmentFile) initPointers() {
 		panic(err)
 	}
 
-	blkIds := make([]uint64, blkCnt)
+	trash := make([]uint64, blkCnt)
 	blkCounts := make([]uint64, blkCnt)
 	idxBuf := make([]byte, blkIdxSize)
 	preIndices := make([]*metadata.LogIndex, blkCnt)
@@ -171,7 +170,7 @@ func (sf *SortedSegmentFile) initPointers() {
 	rangeBuf := make([]byte, blkRangeSize)
 
 	for i := uint32(0); i < blkCnt; i++ {
-		if err = binary.Read(metaBuf, binary.BigEndian, &blkIds[i]); err != nil {
+		if err = binary.Read(metaBuf, binary.BigEndian, &trash[i]); err != nil {
 			panic(err)
 		}
 		if err = binary.Read(metaBuf, binary.BigEndian, &blkCounts[i]); err != nil {
@@ -204,9 +203,10 @@ func (sf *SortedSegmentFile) initPointers() {
 
 	for i := uint32(0); i < colCnt; i++ {
 		for j := uint32(0); j < blkCnt; j++ {
-			blkId := blkIds[j]
+			blkIdx := j
 			id := sf.ID.AsBlockID()
-			id.BlockID = blkId
+			// In fact `BlockID` means block idx here
+			id.BlockID = uint64(blkIdx)
 			key := base.Key{
 				Col: uint64(i),
 				ID:  id,
@@ -241,9 +241,9 @@ func (sf *SortedSegmentFile) initPointers() {
 	curOffset := startPos
 	for i := 0; i < int(colCnt); i++ {
 		for j := 0; j < int(blkCnt); j++ {
-			blkId := blkIds[j]
+			blkIdx := j
 			id := sf.ID.AsBlockID()
-			id.BlockID = blkId
+			id.BlockID = uint64(blkIdx)
 			key := base.Key{
 				Col: uint64(i),
 				ID:  id,

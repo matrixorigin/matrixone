@@ -814,6 +814,7 @@ func flushBlocks(w *os.File, data []*batch.Batch, meta *metadata.Segment) error 
 		return err
 	}
 	for _, blk := range meta.BlockSet {
+		// TODO: remove block id when refactor format
 		if err = binary.Write(&metaBuf, binary.BigEndian, blk.Id); err != nil {
 			return err
 		}

@@ -44,7 +44,7 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegment
 		panic("unspported")
 	}
 	msf.Info = &fileStat{
-		name: id.ToSegmentFilePath(),
+		name: id.ToSegmentFileName(),
 	}
 	msf.FileName = common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	logutil.Debugf("%s:%s | Created", msf.TypeName, msf.FileName)
