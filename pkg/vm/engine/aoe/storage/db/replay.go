@@ -247,7 +247,7 @@ func (usf *unsortedSegmentFile) isfull(maxcnt int) bool {
 		if meta == nil {
 			panic(metadata.BlockNotFoundErr)
 		}
-		if !meta.IsFull() {
+		if !meta.IsFullLocked() {
 			return false
 		}
 	}
@@ -549,7 +549,7 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 		return err
 	}
 	for _, segMeta := range meta.SegmentSet {
-		if segMeta.IsSorted() || !segMeta.Appendable() {
+		if segMeta.IsSortedLocked() || !segMeta.Appendable() {
 			segData, err := tableData.RegisterSegment(segMeta)
 			if err != nil {
 				return err
@@ -633,7 +633,7 @@ func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile,
 			break
 		}
 		seg := meta.SegmentSet[i]
-		if seg.IsSorted() || (seg.HasMaxBlocks() && seg.BlockSet[len(seg.BlockSet)-1].IsFull()) {
+		if seg.IsSortedLocked() || (seg.HasMaxBlocks() && seg.BlockSet[len(seg.BlockSet)-1].IsFullLocked()) {
 			file := files[0]
 			if file.meta == seg {
 				files = files[1:]

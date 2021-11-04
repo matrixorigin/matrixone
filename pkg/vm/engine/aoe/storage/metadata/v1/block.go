@@ -210,7 +210,7 @@ func (e *Block) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 		e.RLock()
 		defer e.RUnlock()
 	}
-	if !e.IsFull() {
+	if !e.IsFullLocked() {
 		id := atomic.LoadUint64(&e.SegmentedId)
 		if id == 0 {
 			return id, false
@@ -233,14 +233,14 @@ func (e *Block) SetIndex(idx LogIndex) error {
 // Not safe
 // TODO: should be safe
 func (e *Block) GetCount() uint64 {
-	if e.IsFull() {
+	if e.IsFullLocked() {
 		return e.Segment.Table.Schema.BlockMaxRows
 	}
 	return atomic.LoadUint64(&e.Count)
 }
 
 func (e *Block) GetCoarseCountLocked() int64 {
-	if e.IsFull() {
+	if e.IsFullLocked() {
 		return int64(e.Segment.Table.Schema.BlockMaxRows)
 	}
 	return 0

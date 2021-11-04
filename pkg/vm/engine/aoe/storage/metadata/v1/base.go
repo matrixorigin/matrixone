@@ -64,18 +64,15 @@ func (e *BaseEntry) GetCommit() *CommitInfo {
 	return e.CommitInfo
 }
 
-// Should be guarded
-func (e *BaseEntry) IsFull() bool {
+func (e *BaseEntry) IsFullLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeFull
 }
 
-// Should be guarded
-func (e *BaseEntry) IsClose() bool {
+func (e *BaseEntry) IsCloseLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeClose
 }
 
-// Should be guarded
-func (e *BaseEntry) IsSorted() bool {
+func (e *BaseEntry) IsSortedLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeSorted
 }
 
