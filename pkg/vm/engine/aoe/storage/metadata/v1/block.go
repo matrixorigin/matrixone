@@ -140,10 +140,6 @@ func (e *Block) CreateSnippet() *shard.Snippet {
 	return shard.NewSnippet(tableLogIndex.ShardId, e.Id, uint32(0))
 }
 
-func (e *Block) AppendIndex(index *LogIndex) {
-	e.IndiceMemo.Append(index)
-}
-
 func (e *Block) ConsumeSnippet(reset bool) *shard.Snippet {
 	e.RLock()
 	snippet := e.IndiceMemo.Fetch(e)
@@ -227,7 +223,12 @@ func (e *Block) HasMaxRows() bool {
 
 // Not safe
 func (e *Block) SetIndex(idx LogIndex) error {
-	return e.CommitInfo.SetIndex(idx)
+	err := e.CommitInfo.SetIndex(idx)
+	if err != nil {
+		return err
+	}
+	e.IndiceMemo.Append(&idx)
+	return err
 }
 
 // Not safe
