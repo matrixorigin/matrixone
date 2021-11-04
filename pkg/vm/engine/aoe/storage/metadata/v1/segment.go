@@ -228,8 +228,6 @@ func (e *Segment) prepareCreateBlock(ctx *createBlockCtx) (LogEntry, error) {
 	e.Lock()
 	e.onNewBlock(be)
 	e.Unlock()
-	e.Table.Catalog.commitMu.Lock()
-	defer e.Table.Catalog.commitMu.Unlock()
 	e.Table.Catalog.prepareCommitLog(be, logEntry)
 	ctx.block = be
 	return logEntry, nil
@@ -396,8 +394,6 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 		}
 	}
 	e.onNewCommit(cInfo)
-	e.Table.Catalog.commitMu.Lock()
-	defer e.Table.Catalog.commitMu.Unlock()
 	logEntry := e.Table.Catalog.prepareCommitEntry(e, ETUpgradeSegment, e)
 	return logEntry, nil
 }

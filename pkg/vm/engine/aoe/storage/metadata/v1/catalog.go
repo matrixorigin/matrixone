@@ -509,8 +509,6 @@ func (catalog *Catalog) prepareCreateTable(ctx *createTableCtx) (LogEntry, error
 	var err error
 	entry := NewTableEntry(catalog, ctx.schema, ctx.tranId, ctx.exIndex)
 	logEntry := entry.ToLogEntry(ETCreateTable)
-	catalog.commitMu.Lock()
-	defer catalog.commitMu.Unlock()
 	catalog.Lock()
 	if err = catalog.onNewTable(entry); err != nil {
 		catalog.Unlock()
@@ -622,6 +620,8 @@ func (catalog *Catalog) onCommitRequest(ctx interface{}) error {
 }
 
 func (catalog *Catalog) prepareCommitLog(entry IEntry, logEntry LogEntry) {
+	catalog.commitMu.Lock()
+	defer catalog.commitMu.Unlock()
 	commitId := catalog.NextCommitId()
 	entry.Lock()
 	entry.CommitLocked(commitId)
@@ -634,6 +634,8 @@ func (catalog *Catalog) prepareCommitLog(entry IEntry, logEntry LogEntry) {
 }
 
 func (catalog *Catalog) prepareCommitEntry(entry IEntry, eType LogEntryType, locker sync.Locker) LogEntry {
+	catalog.commitMu.Lock()
+	defer catalog.commitMu.Unlock()
 	commitId := catalog.NextCommitId()
 	var logEntry LogEntry
 	if locker == nil {

@@ -232,8 +232,6 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 		Op:       OpHardDelete,
 		SSLLNode: *common.NewSSLLNode(),
 	}
-	e.Catalog.commitMu.Lock()
-	defer e.Catalog.commitMu.Unlock()
 	e.Lock()
 	defer e.Unlock()
 	if e.IsHardDeletedLocked() {
@@ -267,8 +265,6 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 		Op:       OpSoftDelete,
 		SSLLNode: *common.NewSSLLNode(),
 	}
-	e.Catalog.commitMu.Lock()
-	defer e.Catalog.commitMu.Unlock()
 	e.Lock()
 	defer e.Unlock()
 	if e.IsSoftDeletedLocked() {
@@ -478,8 +474,6 @@ func (e *Table) SimpleGetSegmentCount() int {
 func (e *Table) prepareCreateSegment(ctx *createSegmentCtx) (LogEntry, error) {
 	se := newSegmentEntry(e.Catalog, e, ctx.tranId, ctx.exIndex)
 	logEntry := se.ToLogEntry(ETCreateSegment)
-	e.Catalog.commitMu.Lock()
-	defer e.Catalog.commitMu.Unlock()
 	e.Lock()
 	e.onNewSegment(se)
 	e.Unlock()
