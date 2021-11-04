@@ -245,17 +245,6 @@ func (e *Segment) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 	return e.calcAppliedIndex()
 }
 
-// Not safe
-func (e *Segment) GetReplayIndex() *LogIndex {
-	for i := len(e.BlockSet) - 1; i >= 0; i-- {
-		blk := e.BlockSet[i]
-		if blk.CommitInfo.LogIndex != nil && (blk.Count > 0 || blk.IsFullLocked()) {
-			return blk.CommitInfo.LogIndex
-		}
-	}
-	return nil
-}
-
 func (e *Segment) calcAppliedIndex() (id uint64, ok bool) {
 	for i := len(e.BlockSet) - 1; i >= 0; i-- {
 		blk := e.BlockSet[i]

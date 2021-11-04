@@ -285,7 +285,7 @@ func (td *tableData) ResetReplayIndex() {
 }
 
 func (td *tableData) initReplayCtx() {
-	td.replayIndex = td.meta.GetReplayIndex()
+	td.replayIndex = td.meta.MaxLogIndex()
 }
 
 func (td *tableData) InitReplay() {

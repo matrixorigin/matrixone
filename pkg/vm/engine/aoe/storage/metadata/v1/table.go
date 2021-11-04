@@ -343,20 +343,6 @@ func (e *Table) SimpleGetCurrSegment() *Segment {
 	return seg
 }
 
-// Not safe and no need
-// Only used during data replay
-// TODO: Only compatible with v1. Remove later
-func (e *Table) GetReplayIndex() *LogIndex {
-	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
-		seg := e.SegmentSet[i]
-		idx := seg.GetReplayIndex()
-		if idx != nil {
-			return idx
-		}
-	}
-	return nil
-}
-
 func (e *Table) RecurLoopLocked(processor LoopProcessor) error {
 	var err error
 	for _, segment := range e.SegmentSet {
