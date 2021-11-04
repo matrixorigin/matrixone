@@ -86,11 +86,10 @@ func TestReplay1(t *testing.T) {
 	inst = initDB(wal.BrokerRole)
 
 	t.Log(inst.Store.Catalog.PString(metadata.PPL1))
-	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
-	assert.Nil(t, err)
-	meta = inst.Opts.Meta.Catalog.SimpleGetTable(tid)
+	segmentedIdx := inst.GetShardCheckpointId(0)
 	assert.Equal(t, common.GetGlobalSeqNum(), segmentedIdx)
-	assert.Equal(t, common.GetGlobalSeqNum(), inst.GetShardCheckpointId(0))
+
+	meta = inst.Opts.Meta.Catalog.SimpleGetTable(tid)
 
 	rel, err = inst.Relation(meta.Schema.Name)
 	assert.Nil(t, err)
@@ -941,10 +940,8 @@ func TestReplay12(t *testing.T) {
 	assert.Equal(t, stat1.GetSize(), stat2.GetSize())
 	assert.Equal(t, stat1.GetCount(), stat2.GetCount())
 
-	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(meta.Schema.Name))
-	assert.Nil(t, err)
+	segmentedIdx := inst.GetShardCheckpointId(0)
 	assert.Equal(t, common.GetGlobalSeqNum()-1, segmentedIdx)
-	assert.Equal(t, common.GetGlobalSeqNum()-1, inst.GetShardCheckpointId(0))
 
 	rel, err = inst.Relation(meta.Schema.Name)
 	t.Log(rel.Rows())

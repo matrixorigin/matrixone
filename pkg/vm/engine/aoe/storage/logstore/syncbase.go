@@ -15,8 +15,9 @@
 package logstore
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 type syncBase struct {

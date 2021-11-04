@@ -19,8 +19,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"os"
 	"path"
 	"sort"
@@ -28,6 +26,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 var (

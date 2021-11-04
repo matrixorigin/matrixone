@@ -98,11 +98,9 @@ func TestDBReplay(t *testing.T) {
 	testutils.WaitExpect(200, func() bool {
 		return uint64(insertCnt) == inst.GetShardCheckpointId(0)
 	})
-	segmentedIdx, err := inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
-	assert.Nil(t, err)
+	segmentedIdx := inst.GetShardCheckpointId(0)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, uint64(insertCnt), segmentedIdx)
-	assert.Equal(t, uint64(insertCnt), inst.GetShardCheckpointId(0))
 
 	t.Logf("Row count: %d", tbl.GetRowCount())
 	assert.Equal(t, rows*uint64(insertCnt), tbl.GetRowCount())
@@ -168,11 +166,9 @@ func TestDBReplay(t *testing.T) {
 		return preSegmentedIdx+uint64(insertCnt)-1 == inst.GetShardCheckpointId(0)
 	})
 
-	segmentedIdx, err = inst.GetSegmentedId(*dbi.NewTabletSegmentedIdCtx(tableInfo.Name))
-	assert.Nil(t, err)
+	segmentedIdx = inst.GetShardCheckpointId(0)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, segmentedIdx)
-	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, inst.GetShardCheckpointId(0))
 
 	inst.Close()
 }
