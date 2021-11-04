@@ -191,7 +191,7 @@ func TestSegmentWriter(t *testing.T) {
 	dir := "/tmp/testsegmentwriter"
 	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(10), uint64(4)
-	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	defer catalog.Close()
 
 	schema := metadata.MockSchemaAll(14)
@@ -326,7 +326,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 	strs := [][]byte{[]byte(str0), []byte(str1), []byte(str2), []byte(str3)}
 	err = vec1.Append(len(strs), strs)
 
-	catalog := metadata.MockCatalog(dir, capacity, uint64(10))
+	catalog := metadata.MockCatalog(dir, capacity, uint64(10), nil, nil)
 	schema := metadata.MockSchema(2)
 	tblMeta := metadata.MockTable(catalog, schema, 1, nil)
 	segMeta := tblMeta.SimpleGetSegment(uint64(1))
@@ -400,7 +400,7 @@ func TestTransientBlock(t *testing.T) {
 	dir := "/tmp/tblktest"
 	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(10), uint64(4)
-	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	schema := metadata.MockSchema(2)
 	tbl := metadata.MockTable(catalog, schema, 1, nil)
 

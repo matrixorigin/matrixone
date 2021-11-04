@@ -137,11 +137,11 @@ func (c *collection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset 
 	}
 	n = uint64(na)
 	index.Count = n
-	if err = meta.SetIndex(*index); err != nil {
+	if err = meta.SetIndexLocked(*index); err != nil {
 		return 0, err
 	}
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
-	if _, err = meta.AddCount(n); err != nil {
+	if _, err = meta.AddCountLocked(n); err != nil {
 		return 0, err
 	}
 	c.data.AddRows(n)
@@ -159,7 +159,7 @@ func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err err
 	defer c.mu.Unlock()
 	if c.mutBlk == nil {
 		c.onNoMut()
-	} else if c.mutBlk.GetMeta().HasMaxRows() {
+	} else if c.mutBlk.GetMeta().HasMaxRowsLocked() {
 		c.onImmut()
 	}
 
@@ -184,7 +184,7 @@ func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err err
 	}
 	blkHandle := c.mutBlk.MakeHandle()
 	for {
-		if c.mutBlk.GetMeta().HasMaxRows() {
+		if c.mutBlk.GetMeta().HasMaxRowsLocked() {
 			c.onImmut()
 			blkHandle.Close()
 			blkHandle = c.mutBlk.MakeHandle()

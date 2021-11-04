@@ -27,6 +27,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 
@@ -116,7 +119,7 @@ func createBlock(t *testing.T, tables int, idAlloc *mockIdAllocator, shardId uin
 			for i := 0; i < blocks; i++ {
 				blk := tbl.SimpleGetOrCreateNextBlock(prev)
 				blk.SetCount(tbl.Schema.BlockMaxRows)
-				blk.SetIndex(LogIndex{
+				blk.SetIndexLocked(LogIndex{
 					ShardId:  shardId,
 					Id:       shard.SimpleIndexId(idAlloc.alloc(shardId)),
 					Count:    tbl.Schema.BlockMaxRows,
@@ -549,100 +552,104 @@ func TestAppliedIndex(t *testing.T) {
 	dir := "/tmp/testappliedindex"
 	os.RemoveAll(dir)
 	blkRows, segBlks := uint64(10), uint64(2)
-	catalog := MockCatalog(dir, blkRows, segBlks)
+	driver, err := logstore.NewBatchStore(dir, "driver", nil)
+	assert.Nil(t, err)
+	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
+	defer indexWal.Close()
+	catalog := MockCatalog(dir, blkRows, segBlks, driver, indexWal)
+	defer catalog.Close()
+
+	idAlloc := common.IdAlloctor{}
+	index := new(LogIndex)
+	index.Id = shard.SimpleIndexId(idAlloc.Alloc())
+
 	// blkCnt := segBlks*2 + segBlks/2
-	tbl := MockTable(catalog, nil, 0, nil)
-	createId, ok := tbl.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	t.Log(createId)
+	indexWal.SyncLog(index)
+	tbl := MockTable(catalog, nil, 0, index)
+	indexWal.Checkpoint(index)
+	testutils.WaitExpect(10, func() bool {
+		return indexWal.GetShardCheckpointId(0) == index.Id.Id
+	})
+	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
 
 	blk, prevSeg := tbl.SimpleCreateBlock()
 	assert.Nil(t, prevSeg)
 	assert.NotNil(t, blk)
-	opIdx := common.NextGlobalSeqNum()
-	blk.SetIndex(LogIndex{
+	opIdx := idAlloc.Alloc()
+	index = &LogIndex{
 		Id:       shard.SimpleIndexId(opIdx),
 		Count:    blkRows,
 		Capacity: blkRows * 3 / 2,
-	})
-
+	}
+	blk.SetIndexLocked(*index)
 	blk.SetCount(blkRows)
-	err := blk.SimpleUpgrade(nil)
+	err = blk.SimpleUpgrade(nil)
 	assert.Nil(t, err)
-
-	id, ok := blk.GetAppliedIndex(nil)
-	assert.False(t, ok)
-	id, ok = blk.Segment.GetAppliedIndex(nil)
-	assert.False(t, ok)
-	id, ok = tbl.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, createId, id)
+	snip := blk.ConsumeSnippet(false)
+	t.Log(snip.String())
+	indexWal.Checkpoint(snip)
 
 	blk, prevSeg = tbl.SimpleCreateBlock()
 	assert.Nil(t, prevSeg)
 	assert.NotNil(t, blk)
 
-	blk.SetIndex(LogIndex{
+	index = &LogIndex{
 		Id:       shard.SimpleIndexId(opIdx),
 		Start:    blkRows,
 		Count:    blkRows / 2,
 		Capacity: blkRows * 3 / 2,
-	})
-	id, ok = blk.GetAppliedIndex(nil)
-	assert.False(t, ok)
+	}
 
-	applied := opIdx
+	indexWal.SyncLog(index)
+	blk.SetIndexLocked(*index)
+	snip = blk.ConsumeSnippet(false)
+	t.Log(snip.String())
+	indexWal.Checkpoint(snip)
+	testutils.WaitExpect(20, func() bool {
+		return indexWal.GetShardCheckpointId(0) == index.Id.Id
+	})
+	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
+
 	blk.SetCount(blkRows)
-	opIdx = common.NextGlobalSeqNum()
-	blk.SetIndex(LogIndex{
+	opIdx = idAlloc.Alloc()
+	index = &LogIndex{
 		Id:       shard.SimpleIndexId(opIdx),
 		Start:    0,
 		Count:    blkRows / 2,
-		Capacity: blkRows,
-	})
+		Capacity: blkRows / 2,
+	}
+	indexWal.SyncLog(index)
+	blk.SetIndexLocked(*index)
 	err = blk.SimpleUpgrade(nil)
 	assert.Nil(t, err)
+	snip = blk.ConsumeSnippet(false)
+	indexWal.Checkpoint(snip)
 
-	id, ok = blk.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, applied, id)
-	id, ok = blk.Segment.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, applied, id)
-	id, ok = tbl.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, applied, id)
+	testutils.WaitExpect(20, func() bool {
+		return index.Id.Id == indexWal.GetShardCheckpointId(0)
+	})
+	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
 
 	seg := blk.Segment
 	err = seg.SimpleUpgrade(mockSegmentSize, nil)
 	assert.Nil(t, err)
 
-	id, ok = seg.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, applied, id)
-	id, ok = tbl.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, applied, id)
-	id, ok = catalog.SimpleGetTableAppliedIdByName(tbl.Schema.Name)
-	assert.True(t, ok)
-	assert.Equal(t, applied, id)
-
-	opIdx = common.NextGlobalSeqNum()
-	tbl.SimpleSoftDelete(&LogIndex{
+	opIdx = idAlloc.Alloc()
+	index = &LogIndex{
 		Id: shard.SimpleIndexId(opIdx),
+	}
+	indexWal.SyncLog(index)
+	tbl.SimpleSoftDelete(index)
+	snip = blk.ConsumeSnippet(false)
+	indexWal.Checkpoint(index)
+
+	testutils.WaitExpect(20, func() bool {
+		return index.Id.Id == indexWal.GetShardCheckpointId(0)
 	})
-	id, ok = tbl.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, opIdx, id)
+	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
 
 	tbl.HardDelete()
-	id, ok = tbl.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, opIdx, id)
-
-	t.Logf("id, ok = %d, %v", id, ok)
-
-	defer catalog.Close()
+	assert.Equal(t, index.Id.Id, tbl.LatestLogIndex().Id.Id)
 }
 
 func TestUpgrade(t *testing.T) {
