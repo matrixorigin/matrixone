@@ -131,7 +131,7 @@ func TestTBlock(t *testing.T) {
 	err = blk1.WithPinedContext(appendFn(idx1))
 	assert.Nil(t, err)
 
-	idx, ok := blk1.GetSegmentedIndex()
+	idx, ok := meta1.GetAppliedIndex(nil)
 	assert.False(t, ok)
 
 	idx2 := &shard.Index{
@@ -142,7 +142,7 @@ func TestTBlock(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, rows*factor*2, mgr.Total())
 
-	idx, ok = blk1.GetSegmentedIndex()
+	idx, ok = meta1.GetAppliedIndex(nil)
 	assert.False(t, ok)
 
 	blk2, err := newTBlock(segdata, meta2, nodeFactory, mockSize)
@@ -163,7 +163,7 @@ func TestTBlock(t *testing.T) {
 	err = blk2.WithPinedContext(appendFn(idx4))
 	assert.Nil(t, err)
 
-	idx, ok = blk1.GetSegmentedIndex()
+	idx, ok = meta1.GetAppliedIndex(nil)
 	assert.True(t, ok)
 	assert.Equal(t, idx2.Id.Id, idx)
 
@@ -190,10 +190,10 @@ func TestTBlock(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Log(common.GPool.String())
-	idx, ok = blk1.GetSegmentedIndex()
+	idx, ok = meta1.GetAppliedIndex(nil)
 	assert.True(t, ok)
 	assert.Equal(t, idx5.Id.Id, idx)
-	idx, ok = blk2.GetSegmentedIndex()
+	idx, ok = meta2.GetAppliedIndex(nil)
 	assert.True(t, ok)
 	assert.Equal(t, idx4.Id.Id, idx)
 
