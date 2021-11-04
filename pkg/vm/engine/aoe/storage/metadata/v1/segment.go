@@ -268,7 +268,9 @@ func (e *Segment) calcAppliedIndex() (id uint64, ok bool) {
 }
 
 func (e *Segment) onNewBlock(entry *Block) {
-	e.IdIndex[entry.Id] = len(e.BlockSet)
+	idx := len(e.BlockSet)
+	e.IdIndex[entry.Id] = idx
+	entry.Idx = uint32(idx)
 	e.BlockSet = append(e.BlockSet, entry)
 }
 

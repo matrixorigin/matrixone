@@ -83,6 +83,7 @@ type Block struct {
 	*BaseEntry
 	Segment     *Segment    `json:"-"`
 	IndiceMemo  *IndiceMemo `json:"-"`
+	Idx         uint32      `json:"idx"`
 	Count       uint64      `json:"count"`
 	SegmentedId uint64      `json:"segmentedid"`
 }
@@ -170,6 +171,14 @@ func (e *Block) Less(o *Block) bool {
 
 func (e *Block) rebuild(segment *Segment) {
 	e.Segment = segment
+}
+
+func (e *Block) DescId() common.ID {
+	return common.ID{
+		TableID:   e.Segment.Table.Id,
+		SegmentID: e.Segment.Id,
+		BlockID:   uint64(e.Idx),
+	}
 }
 
 // Safe
@@ -271,9 +280,9 @@ func (e *Block) fillView(filter *Filter) *Block {
 	if baseEntry == nil {
 		return nil
 	}
-	return &Block{
-		BaseEntry: baseEntry,
-	}
+	view := *e
+	e.BaseEntry = baseEntry
+	return &view
 }
 
 // Safe
@@ -356,7 +365,7 @@ func (e *Block) GetCoarseSize() int64 {
 
 // Not safe
 func (e *Block) PString(level PPLevel) string {
-	s := fmt.Sprintf("<Block %s>[Size=%d]", e.BaseEntry.PString(level), e.GetCoarseSizeLocked())
+	s := fmt.Sprintf("<%d. Block %s>[Size=%d]", e.Idx, e.BaseEntry.PString(level), e.GetCoarseSizeLocked())
 	return s
 }
 

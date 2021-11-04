@@ -1136,7 +1136,7 @@ func TestSplit(t *testing.T) {
 	spec := NewEmptyShardSplitSpec()
 	err = spec.Unmarshal(ctx)
 	assert.Nil(t, err)
-	t.Log(spec.String())
+	// t.Log(spec.String())
 	assert.Equal(t, spec.ShardId, shardId)
 	assert.Equal(t, spec.Index, index)
 	assert.Equal(t, len(spec.Specs), 4)
@@ -1156,12 +1156,13 @@ func TestSplit(t *testing.T) {
 	err = splitter.Commit()
 	assert.Nil(t, err)
 	assert.Equal(t, len(catalog.TableSet), 9)
-
-	t.Log(catalog.PString(PPL0))
+	t.Log(catalog.PString(PPL1))
 	catalog.Close()
 
 	t.Log("--------------------------------------")
 	catalog2 := initTest(dir, uint64(100), uint64(2), false)
-	t.Log(catalog2.PString(PPL0))
+
+	doCompareCatalog(t, catalog, catalog2)
+
 	catalog2.Close()
 }
