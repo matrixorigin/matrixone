@@ -45,7 +45,7 @@ func NewMockSegmentFile(dirname string, ft FileType, id common.ID) base.ISegment
 	}
 	msf.FileName = common.MakeSegmentFileName(dirname, id.ToSegmentFileName(), id.TableID, false)
 	msf.Info = &fileStat{
-		name: msf.FileName,
+		name: id.ToSegmentFileName(),
 	}
 	logutil.Debugf("%s:%s | Created", msf.TypeName, msf.FileName)
 	msf.OnZeroCB = msf.close

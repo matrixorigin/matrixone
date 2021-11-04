@@ -77,7 +77,7 @@ func NewBlockFile(segFile base.ISegmentFile, id common.ID, nameFactory FileNameF
 	}
 	bf.Info = &fileStat{
 		size: info.Size(),
-		name: name,
+		name: id.ToBlockFilePath(),
 	}
 	r, err := os.OpenFile(name, os.O_RDONLY, 0666)
 	if err != nil {
