@@ -224,7 +224,8 @@ func TestLogIndex(t *testing.T) {
 	initDBTest()
 	inst := initDB(wal.HolderRole)
 	tableInfo := adaptor.MockTableInfo(2)
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
+	idAlloc := common.IdAlloctor{}
+	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: idAlloc.Alloc()})
 	assert.Nil(t, err)
 	tblMeta := inst.Store.Catalog.SimpleGetTable(tid)
 	assert.NotNil(t, tblMeta)
@@ -237,35 +238,23 @@ func TestLogIndex(t *testing.T) {
 		rel, err := inst.Relation(tblMeta.Schema.Name)
 		assert.Nil(t, err)
 		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   common.NextGlobalSeqNum(),
+			OpIndex:   idAlloc.Alloc(),
 			OpOffset:  0,
 			OpSize:    1,
 			Data:      baseCk,
 			TableName: tblMeta.Schema.Name,
 		})
 		assert.Nil(t, err)
+		rel.Close()
 	}
 
-	tbl, err := inst.Store.DataTables.WeakRefTable(tid)
+	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: idAlloc.Alloc()})
 	assert.Nil(t, err)
-	testutils.WaitExpect(1000, func() bool {
-		_, ok := tbl.GetSegmentedIndex()
-		return ok
+	testutils.WaitExpect(100, func() bool {
+		return inst.GetShardCheckpointId(0) == inst.Wal.GetShardCurrSeqNum(0)
 	})
-	logIndex, ok := tbl.GetSegmentedIndex()
-	assert.True(t, ok)
-	// assert.Equal(t, expectIdx, logIndex)
-
-	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name})
-	assert.Nil(t, err)
-	testutils.WaitExpect(20, func() bool {
-		id, _ := tbl.GetSegmentedIndex()
-		return inst.Wal.GetShardCurrSeqNum(uint64(0)) == id
-	})
-	// tbl, err = inst.Store.DataTables.WeakRefTable(tid)
-	logIndex, ok = tbl.GetSegmentedIndex()
-	assert.True(t, ok)
-	assert.Equal(t, inst.Wal.GetShardCurrSeqNum(uint64(0)), logIndex)
+	assert.Equal(t, idAlloc.Get(), inst.Wal.GetShardCurrSeqNum(0))
+	assert.Equal(t, inst.Wal.GetShardCurrSeqNum(0), inst.GetShardCheckpointId(0))
 
 	inst.Close()
 }
