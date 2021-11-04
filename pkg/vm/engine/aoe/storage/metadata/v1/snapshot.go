@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,6 +27,47 @@ type Snapshoter interface {
 	SSLoader
 }
 
+type mapping struct {
+	Table map[uint64]uint64
+	Segment map[uint64]uint64
+	Block map[uint64]uint64
+}
+
+func (m *mapping) RewriteSegmentFile(filename string) (string, error) {
+	arr := strings.Split(strings.TrimSuffix(filename, ".seg"), "_")
+	tableId, err := strconv.Atoi(arr[0])
+	if err != nil {
+		return "", err
+	}
+	arr[0] = strconv.Itoa(int(m.Table[uint64(tableId)]))
+	segId, err := strconv.Atoi(arr[1])
+	if err != nil {
+		return "", err
+	}
+	arr[1] = strconv.Itoa(int(m.Segment[uint64(segId)]))
+	return arr[0] + "_" + arr[1] + ".seg", nil
+}
+
+func (m *mapping) RewriteBlockFile(filename string) (string, error) {
+	arr := strings.Split(strings.TrimSuffix(filename, ".blk"), "_")
+	tableId, err := strconv.Atoi(arr[0])
+	if err != nil {
+		return "", err
+	}
+	arr[0] = strconv.Itoa(int(m.Table[uint64(tableId)]))
+	segId, err := strconv.Atoi(arr[1])
+	if err != nil {
+		return "", err
+	}
+	arr[1] = strconv.Itoa(int(m.Segment[uint64(segId)]))
+	blkId, err := strconv.Atoi(arr[2])
+	if err != nil {
+		return "", err
+	}
+	arr[2] = strconv.Itoa(int(m.Block[uint64(blkId)]))
+	return arr[0] + "_" + arr[1] + "_" + arr[2] + ".blk", nil
+}
+
 type shardSnapshoter struct {
 	dir            string
 	name           string
@@ -32,6 +75,7 @@ type shardSnapshoter struct {
 	shardId, index uint64
 	tranId         uint64
 	catalog        *Catalog
+	mapping        *mapping
 }
 
 func NewShardSSWriter(catalog *Catalog, dir string, shardId, index uint64) *shardSnapshoter {
@@ -80,6 +124,7 @@ func (ss *shardSnapshoter) CommitWrite() error {
 func (ss *shardSnapshoter) ReAllocId(allocator *Sequence, view *Catalog) error {
 	ss.tranId = allocator.NextUncommitId()
 	processor := newReAllocIdProcessor(allocator, ss.tranId)
+	ss.mapping = processor.trace
 	return view.RecurLoop(processor)
 }
 
@@ -108,4 +153,12 @@ func (ss *shardSnapshoter) PrepareLoad() error {
 
 func (ss *shardSnapshoter) CommitLoad() error {
 	return ss.catalog.SimpleReplaceShard(ss.view, ss.tranId)
+}
+
+func (ss *shardSnapshoter) View() *catalogLogEntry {
+	return ss.view
+}
+
+func (ss *shardSnapshoter) Mapping() *mapping {
+	return ss.mapping
 }
