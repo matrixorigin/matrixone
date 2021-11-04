@@ -46,13 +46,6 @@ func (e *tableLogEntry) ToEntry() *Table {
 	return e.Prev
 }
 
-// func createTableHandle(r io.Reader, meta *LogEntryMeta) (LogEntry, int64, error) {
-// 	entry := Table{}
-// 	logEntry
-// 	// entry.Unmarshal()
-
-// }
-
 type Table struct {
 	*BaseEntry
 	Schema     *Schema        `json:"schema"`
@@ -98,6 +91,26 @@ func NewEmptyTableEntry(catalog *Catalog) *Table {
 	return e
 }
 
+func (e *Table) MaxLogIndex() *LogIndex {
+	e.RLock()
+	defer e.RUnlock()
+	if e.IsDeletedLocked() || len(e.SegmentSet) == 0 {
+		return e.LatestLogIndexLocked()
+	}
+	var index *LogIndex
+	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
+		segment := e.SegmentSet[i]
+		index = segment.MaxLogIndex()
+		if index != nil {
+			break
+		}
+	}
+	if index == nil {
+		index = e.LatestLogIndexLocked()
+	}
+	return index
+}
+
 func (e *Table) UpdateFlushTS() {
 	now := time.Now().UnixMicro()
 	atomic.StoreInt64(&e.FlushTS, now)
@@ -106,9 +119,6 @@ func (e *Table) UpdateFlushTS() {
 func (e *Table) GetCoarseSize() int64 {
 	e.RLock()
 	defer e.RUnlock()
-	// if e.IsDeletedLocked() {
-	// 	return 0
-	// }
 	size := int64(0)
 	for _, segment := range e.SegmentSet {
 		size += segment.GetCoarseSize()
@@ -119,9 +129,6 @@ func (e *Table) GetCoarseSize() int64 {
 func (e *Table) GetCoarseCount() int64 {
 	e.RLock()
 	defer e.RUnlock()
-	// if e.IsDeletedLocked() {
-	// 	return 0
-	// }
 	count := int64(0)
 	for _, segment := range e.SegmentSet {
 		count += segment.GetCoarseCount()

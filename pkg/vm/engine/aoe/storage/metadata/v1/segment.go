@@ -267,6 +267,19 @@ func (e *Segment) calcAppliedIndex() (id uint64, ok bool) {
 	return id, ok
 }
 
+func (e *Segment) MaxLogIndex() *LogIndex {
+	e.RLock()
+	defer e.RUnlock()
+	var index *LogIndex
+	for i := len(e.BlockSet) - 1; i >= 0; i-- {
+		index = e.BlockSet[i].LatestLogIndexLocked()
+		if index != nil {
+			break
+		}
+	}
+	return index
+}
+
 func (e *Segment) onNewBlock(entry *Block) {
 	idx := len(e.BlockSet)
 	e.IdIndex[entry.Id] = idx

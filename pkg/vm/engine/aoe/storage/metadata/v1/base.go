@@ -103,7 +103,6 @@ func (e *BaseEntry) GetAppliedIndex() (uint64, bool) {
 	return id, ok
 }
 
-// Guarded by entry mutex
 func (e *BaseEntry) HasCommittedLocked() bool {
 	return !IsTransientCommitId(e.CommitInfo.CommitId)
 }
@@ -141,7 +140,6 @@ func (e *BaseEntry) UseCommitted(filter *commitFilter) *BaseEntry {
 	for curr != nil {
 		info := curr.(*CommitInfo)
 		if filter.Eval(info) && !filter.EvalStop(info) {
-			// if filter.Eval(info)  {
 			cInfo := *info
 			return &BaseEntry{
 				Id:         e.Id,
