@@ -121,10 +121,6 @@ func (n *MutableBlockNode) updateApplied(meta *metadata.Block) {
 	}
 }
 
-func (n *MutableBlockNode) GetSegmentedIndex() (uint64, bool) {
-	return n.Meta.GetAppliedIndex(nil)
-}
-
 func (n *MutableBlockNode) load() {
 	n.Data = n.File.LoadBatch(n.Meta)
 	// logutil.Infof("%s loaded %d", n.Meta.AsCommonID().BlockString(), n.Data.Length())
