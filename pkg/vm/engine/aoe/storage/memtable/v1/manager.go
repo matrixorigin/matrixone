@@ -36,9 +36,6 @@ type manager struct {
 	// collections are containers of managed collection
 	collections map[uint64]imem.ICollection
 
-	// TableData is Table's metadata in memory
-	//tableData   iface.ITableData
-
 	aware shard.NodeAware
 }
 

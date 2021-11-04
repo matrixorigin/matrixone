@@ -38,7 +38,17 @@ func (e *BaseEntry) GetShardId() uint64 {
 	return e.GetCommit().GetShardId()
 }
 
-func (e *BaseEntry) GetFirstCommit() *CommitInfo {
+func (e *BaseEntry) LatestLogIndexLocked() *LogIndex {
+	return e.CommitInfo.LogIndex
+}
+
+func (e *BaseEntry) LatestLogIndex() *LogIndex {
+	e.RLock()
+	defer e.RUnlock()
+	return e.LatestLogIndexLocked()
+}
+
+func (e *BaseEntry) FirstCommitLocked() *CommitInfo {
 	prev := e.CommitInfo
 	curr := prev.GetNext()
 	for curr != nil {

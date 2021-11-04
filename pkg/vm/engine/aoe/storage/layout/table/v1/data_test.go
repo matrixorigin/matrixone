@@ -175,5 +175,5 @@ func TestBase1(t *testing.T) {
 	t.Log(tblData.Size(attr))
 	index, ok := tblData.GetMeta().GetAppliedIndex(nil)
 	assert.True(t, ok)
-	assert.Equal(t, tableMeta.GetFirstCommit().LogIndex.Id.Id, index)
+	assert.Equal(t, tableMeta.FirstCommitLocked().LogIndex.Id.Id, index)
 }
