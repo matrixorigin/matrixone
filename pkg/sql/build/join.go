@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op/innerJoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/naturalJoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/product"
-	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
