@@ -447,6 +447,17 @@ func (d *DB) CreateSnapshot(shardID uint64, path string) (uint64, error) {
 	//	file.Unref()
 	//}
 
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	if err = f.Sync(); err != nil {
+		return 0, err
+	}
+	if err = f.Close(); err != nil {
+		return 0, err
+	}
+
 	return retId, nil
 }
 
