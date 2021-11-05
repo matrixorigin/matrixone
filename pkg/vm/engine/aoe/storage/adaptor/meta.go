@@ -64,7 +64,7 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 		}
 		if colInfo.PrimaryKey {
 			schema.PrimaryKey = idx
-			logutil.Infof("Table to schema, schema.PrimaryKey is %d, its name is %v.", schema.PrimaryKey, colInfo.Name)
+			logutil.Debugf("Table to schema, schema.PrimaryKey is %d, its name is %v.", schema.PrimaryKey, colInfo.Name)
 		}
 		schema.NameIndex[newInfo.Name] = len(schema.ColDefs)
 		schema.ColDefs = append(schema.ColDefs, newInfo)
