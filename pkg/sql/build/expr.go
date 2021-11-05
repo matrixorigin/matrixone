@@ -887,10 +887,7 @@ func buildConstantValue(typ types.Type, n *tree.NumVal) (interface{}, error) {
 			}
 			return v, nil
 		case types.T_float32:
-			v, ok := constant.Float32Val(val)
-			if !ok {
-				return nil, ErrValueOutRange
-			}
+			v, _ := constant.Float32Val(val)
 			return float32(v), nil
 		case types.T_float64:
 			v, ok := constant.Float64Val(val)

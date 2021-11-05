@@ -609,16 +609,16 @@ func TestOperators(t *testing.T) {
 		for _, e := range es {
 			err := e.Compile(nil, Print)
 			if expected == nil {
-				require.NoError(t, err)
+				require.NoError(t, err, sql)
 			} else {
-				require.EqualError(t, err, expected.Error())
+				require.EqualError(t, err, expected.Error(), sql)
 				break
 			}
 			err = e.Run(1)
 			if expected == nil {
-				require.NoError(t, err)
+				require.NoError(t, err, sql)
 			} else {
-				require.EqualError(t, err, expected.Error())
+				require.EqualError(t, err, expected.Error(), sql)
 				break
 			}
 		}
