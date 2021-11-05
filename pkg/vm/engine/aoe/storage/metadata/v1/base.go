@@ -144,10 +144,10 @@ func (e *BaseEntry) UseCommittedLocked(filter *commitFilter) *BaseEntry {
 	for curr != nil {
 		info := curr.(*CommitInfo)
 		if filter.Eval(info) && !filter.EvalStop(info) {
-			cInfo := *info
+			cInfo := info.Clone()
 			return &BaseEntry{
 				Id:         e.Id,
-				CommitInfo: &cInfo,
+				CommitInfo: cInfo,
 			}
 		} else if filter.EvalStop(info) {
 			return nil

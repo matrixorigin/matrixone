@@ -72,7 +72,7 @@ func (e *flushMemblockEvent) Execute() error {
 		})
 		err := bw.Execute()
 		meta.Segment.Table.UpdateFlushTS()
-		meta.GetCommit().SetSize(bw.GetSize())
+		meta.SetSize(bw.GetSize())
 		return err
 	})
 }
