@@ -25,6 +25,7 @@ func New() *build {
 func (b *build) Build(qry *plan.Query) (*FTree, error) {
 	if len(qry.Rels) == 1 {
 		return &FTree{
+			Qry:      qry,
 			FreeVars: qry.FreeAttrs,
 			Roots:    buildPath(qry.Rels[0], qry, nil),
 		}, nil
@@ -38,6 +39,7 @@ func (b *build) Build(qry *plan.Query) (*FTree, error) {
 		return nil, err
 	}
 	f := &FTree{
+		Qry:      qry,
 		Roots:    roots,
 		FreeVars: qry.FreeAttrs,
 	}

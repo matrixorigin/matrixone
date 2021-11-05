@@ -63,7 +63,7 @@ func buildNodes(rel *plan.Relation, qry *plan.Query) ([]*FNode, error) {
 }
 
 func (n *FNode) AddChildren(conds []*plan.JoinCondition, qry *plan.Query) error {
-	rns := getRelationFromConditions(n.Root, conds)
+	rns, attrs := getRelationFromConditions(n.Root, conds)
 	if len(rns) == 0 {
 		return nil
 	}
@@ -74,6 +74,17 @@ func (n *FNode) AddChildren(conds []*plan.JoinCondition, qry *plan.Query) error 
 	if err != nil {
 		return err
 	}
-	n.Children = chd
+	n.Children = reorderChildren(chd, attrs)
 	return nil
+}
+
+func reorderChildren(ns []*FNode, attrs []string) []*FNode {
+	for i, attr := range attrs {
+		for j := 0; j < len(ns)-1; j++ {
+			if attr == ns[j].Root.(*Variable).Name {
+				ns[i], ns[j] = ns[j], ns[i]
+			}
+		}
+	}
+	return ns
 }

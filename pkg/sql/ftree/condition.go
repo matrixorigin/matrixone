@@ -57,17 +57,19 @@ func fusionJoinConditions(conds []*plan.JoinCondition) ([]*plan.JoinCondition, e
 	return conds, nil
 }
 
-func getRelationFromConditions(root Node, conds []*plan.JoinCondition) []string {
+func getRelationFromConditions(root Node, conds []*plan.JoinCondition) ([]string, []string) {
 	var rns []string
+	var attrs []string
 
 	v, ok := root.(*Variable)
 	if !ok {
-		return rns
+		return rns, attrs
 	}
 	for _, cond := range conds {
 		if cond.Rattr == v.Name {
 			rns = append(rns, cond.S)
+			attrs = append(attrs, cond.Sattr)
 		}
 	}
-	return rns
+	return rns, attrs
 }
