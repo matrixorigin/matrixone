@@ -59,6 +59,13 @@ type IndiceMemo struct {
 	snippet *shard.Snippet
 }
 
+func NewIndiceMemo(e *Block) *IndiceMemo {
+	i := new(IndiceMemo)
+	i.mu = new(sync.Mutex)
+	i.snippet = e.CreateSnippet()
+	return i
+}
+
 func (memo *IndiceMemo) Append(index *LogIndex) {
 	if memo == nil {
 		return

@@ -19,8 +19,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"math/rand"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -739,4 +742,205 @@ func TestE2E(t *testing.T) {
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
 	inst.Close()
+}
+
+func TestCreateSnapshot(t *testing.T) {
+	initDBTest()
+	inst := initDB(wal.BrokerRole)
+	tblinfo1 := adaptor.MockTableInfo(20)
+	tblinfo2 := adaptor.MockTableInfo(10)
+	tid1, err := inst.CreateTable(tblinfo1, dbi.TableOpCtx{ShardId: uint64(0), TableName: "tbl_1", OpIndex: 1})
+	assert.Nil(t, err)
+	tid2, err := inst.CreateTable(tblinfo2, dbi.TableOpCtx{ShardId: uint64(1), TableName: "tbl_2", OpIndex: 1})
+	assert.Nil(t, err)
+	tbl1 := inst.Store.Catalog.GetTable(tid1)
+	if tbl1 == nil {
+		t.Error("table not found")
+	}
+	tbl2 := inst.Store.Catalog.GetTable(tid2)
+	if tbl2 == nil {
+		t.Error("table not found")
+	}
+	insertCnt := uint64(20)
+	tableName1 := tbl1.Schema.Name
+	tableName2 := tbl2.Schema.Name
+	rowCnt := uint64(2000)
+	bat1 := mock.MockBatch(tbl1.Schema.Types(), rowCnt)
+	bat2 := mock.MockBatch(tbl2.Schema.Types(), rowCnt)
+
+	assert.Nil(t, os.RemoveAll("/tmp/test_ss/s0"))
+	assert.Nil(t, os.RemoveAll("/tmp/test_ss/s1"))
+
+	for i := uint64(0); i < insertCnt; i++ {
+		if err := inst.Append(dbi.AppendCtx{ShardId: uint64(0), TableName: tableName1, Data: bat1, OpIndex: uint64(i) + 1, OpSize: 1}); err != nil {
+			t.Error(err)
+		}
+		pid, err := inst.CreateSnapshot(0, fmt.Sprintf("/tmp/test_ss/s0/ss-%d", i))
+		if err != nil {
+			t.Error(err)
+		}
+		t.Logf("Shard[%d] PersistentLogIndex: %d", 0, pid)
+
+		if err := inst.Append(dbi.AppendCtx{ShardId: uint64(1), TableName: tableName2, Data: bat2, OpIndex: uint64(i) + 1, OpSize: 1}); err != nil {
+			t.Error(err)
+		}
+		pid, err = inst.CreateSnapshot(1, fmt.Sprintf("/tmp/test_ss/s1/ss-%d", i))
+		if err != nil {
+			t.Error(err)
+		}
+		t.Logf("Shard[%d] PersistentLogIndex: %d", 1, pid)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	st := time.Now()
+	pid, err := inst.CreateSnapshot(0, fmt.Sprintf("/tmp/test_ss/s0/ss-final"))
+	assert.Nil(t, err)
+	t.Log(time.Since(st).Milliseconds(), " ms")
+	assert.Equal(t, pid, inst.GetShardCheckpointId(0))
+
+	files, err := ioutil.ReadDir("/tmp/test_ss/s0/ss-final")
+	assert.Nil(t, err)
+	for _, file := range files {
+		if !strings.HasSuffix(file.Name(), ".meta") {
+			continue
+		}
+		reader := metadata.NewShardSSLoader(inst.Store.Catalog, filepath.Join("/tmp/test_ss/s0/ss-final", file.Name()))
+		assert.Nil(t, reader.PrepareLoad())
+		//t.Log(reader.View().Range)
+		//t.Log(reader.View().LogRange)
+		//t.Log(reader.View().Catalog.PString(2))
+		assert.Equal(t, uint64(19), reader.View().LogRange.Range.Right)
+		assert.Equal(t, uint64(0), reader.View().LogRange.Range.Left)
+		tbl1 := reader.View().Catalog.TableSet[uint64(1)]
+		assert.Equal(t, uint64(3), tbl1.Id)
+		for i, seg := range tbl1.SegmentSet {
+			assert.Equal(t, uint64(i + 21), seg.Id)
+		}
+	}
+
+	assert.Nil(t, inst.ApplySnapshot(uint64(0), "/tmp/test_ss/s0/ss-18"))
+	t.Log(inst.GetShardCheckpointId(uint64(0)))
+
+	data, err := inst.getTableData(inst.Store.Catalog.TableSet[uint64(4)])
+	assert.Nil(t, err)
+	t.Log(data.GetSegmentCount())
+
+	//for _, seg := range data.GetMeta().SegmentSet {
+	//	t.Log("Seg ", seg.Id, "\n")
+	//	for _, blk := range seg.BlockSet {
+	//		t.Log(" Blk ", blk.Id)
+	//	}
+	//}
+
+	seg31 := data.StrongRefSegment(uint64(31))
+	assert.NotNil(t, seg31)
+	blk60 := seg31.WeakRefBlock(uint64(60))
+	assert.NotNil(t, blk60)
+	t.Log(blk60.Size("mock_9"))
+	t.Log(blk60.GetRowCount())
+
+	t.Log(inst.Store.Catalog.TableSet[uint64(4)].PString(2))
+
+	assert.Nil(t, inst.Close())
+
+	//seg13 := data.StrongRefSegment(uint64(13))
+	//assert.NotNil(t, seg13)
+	//t.Log(seg13.Size("mock_9"))
+	//t.Log(seg13.BlockIds())
+	//assert.NotNil(t, seg13.WeakRefBlock(uint64(0)))
+
+	//inst.Close()
+	//
+	//inst = initDB(wal.BrokerRole)
+	//t.Log(inst.GetShardCheckpointId(uint64(0)))
+
+
+	//t.Log(inst.Wal.String())
+	//t.Log(inst.Store.Catalog.PString(2))
+	//t.Log(inst.GetShardCheckpointId(uint64(0)))
+	//
+	//for i, tbl := range inst.Store.DataTables.Data {
+	//	t.Log(i, ": ", tbl.String())
+	//}
+	//for i, tbl := range inst.Store.Catalog.TableSet {
+	//	t.Log(i, "  ", tbl.PString(2))
+	//}
+	//tids, err := inst.TableIDs()
+	//assert.Nil(t, err)
+	//tnames := inst.TableNames()
+	//t.Log(tids)
+	//t.Log(tnames)
+	//tbl1 = inst.Store.Catalog.SimpleGetTableByName("tbl_1")
+	//t.Log(tbl1.PString(2))
+	//t.Log(tbl1.GetReplayIndex().String())
+}
+
+// Snapshot View: SortedSeg_1<[Block_1][Block_2]>,UnsortedSeg_2<[Block_3]>
+//                1_1.seg  1_2_1.blk
+// Crete View: SortedSeg_1<[Block_1][Block_2]>,SortedSeg_2<[Block_3][Block_4]>
+//                1_1.seg  1_2.seg
+// May triggers this case and aoe would retry automatically
+func TestCreateSnapshotCase1(t *testing.T) {
+	initDBTest()
+	inst := initDB(wal.BrokerRole)
+	tblinfo1 := adaptor.MockTableInfo(20)
+	tid1, err := inst.CreateTable(tblinfo1, dbi.TableOpCtx{ShardId: uint64(0), TableName: "tbl_1", OpIndex: 1})
+	assert.Nil(t, err)
+	tbl1 := inst.Store.Catalog.GetTable(tid1)
+	if tbl1 == nil {
+		t.Error("table not found")
+	}
+	insertCnt := uint64(20)
+	tableName1 := tbl1.Schema.Name
+	rowCnt := uint64(2000)
+	bat1 := mock.MockBatch(tbl1.Schema.Types(), rowCnt)
+	assert.Nil(t, os.RemoveAll("/tmp/test_ss/case_1/ss-1"))
+
+	for i := 0; i < int(insertCnt)/2; i++ {
+		if err := inst.Append(dbi.AppendCtx{ShardId: uint64(0), TableName: tableName1, Data: bat1, OpIndex: uint64(i) + 1, OpSize: 1}); err != nil {
+			t.Error(err)
+		}
+	}
+
+	var newId uint64
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		newId, err = inst.CreateSnapshot(0, "/tmp/test_ss/case_1/ss-1")
+		if err != nil {
+			t.Error(err)
+		}
+		t.Logf("Snapshot created at %d", newId)
+		wg.Done()
+	}()
+
+	for i := int(insertCnt)/2; i < int(insertCnt); i++ {
+		if err := inst.Append(dbi.AppendCtx{ShardId: uint64(0), TableName: tableName1, Data: bat1, OpIndex: uint64(i) + 1, OpSize: 1}); err != nil {
+			t.Error(err)
+		}
+	}
+	wg.Wait()
+	assert.Nil(t, inst.Close())
+
+	initDBTest()
+	inst = initDB(wal.BrokerRole)
+	assert.Nil(t, inst.ApplySnapshot(uint64(0), "/tmp/test_ss/case_1/ss-1"))
+
+	t.Log(inst.Store.Catalog.PString(2))
+	t.Log(inst.Store.DataTables.String())
+
+	inst.Wal.InitShard(uint64(0), newId)
+	t.Log(inst.GetShardCheckpointId(uint64(0)))
+
+	for i := int(newId); i < int(insertCnt); i++ {
+		if err := inst.Append(dbi.AppendCtx{ShardId: uint64(0), TableName: tableName1, Data: bat1, OpIndex: uint64(i) + 1, OpSize: 1}); err != nil {
+			t.Error(err)
+		}
+	}
+
+	t.Log(inst.Store.Catalog.PString(2))
+	t.Log(inst.Store.DataTables.String())
+
+	assert.Nil(t, inst.Close())
 }

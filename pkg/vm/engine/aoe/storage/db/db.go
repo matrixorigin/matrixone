@@ -17,11 +17,6 @@ package db
 import (
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"sync"
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
@@ -42,6 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
+	"io"
+	"os"
+	"sync"
+	"sync/atomic"
 )
 
 var (
@@ -50,6 +49,8 @@ var (
 	ErrNotFound          = errors.New("aoe: notfound")
 	ErrUnexpectedWalRole = errors.New("aoe: unexpected wal role setted")
 )
+
+const MaxRetryCreateSnapshot = 10
 
 type DB struct {
 	// Working directory of DB
@@ -348,4 +349,14 @@ func (d *DB) Close() error {
 	d.Opts.Meta.Catalog.Close()
 	err := d.DBLocker.Close()
 	return err
+}
+
+// CreateSnapshot creates a snapshot of the specified shard and stores it to `path`.
+func (d *DB) CreateSnapshot(shardID uint64, path string) (uint64, error) {
+	return d.createSnapshot(shardID, path)
+}
+
+// ApplySnapshot applies a snapshot of the shard stored in `path` to engine atomically.
+func (d *DB) ApplySnapshot(shardID uint64, path string) error {
+	return d.applySnapshot(shardID, path)
 }
