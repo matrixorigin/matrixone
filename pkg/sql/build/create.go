@@ -140,7 +140,7 @@ func (b *build) tableInfo(stmt tree.TableExpr) (string, string, error) {
 // has default expr or not / column default expr string / is null expression / error msg
 // from column definition when create table
 // it will check default expression's type and value, if default values does not adapt to column type
-// there will make a simple type conversion for values TODO: not implement
+// there will make a simple type conversion for values
 // likes:
 // 		create table testTb1 (first int default 15.6) ==> create table testTb1 (first int default 16)
 //		create table testTb2 (first int default 'abc') ==> error(Invalid default value for 'first')
@@ -170,7 +170,6 @@ func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (
 			if val, err := buildConstant(*typ, defaultExpr.Expr); err != nil { // build constant failed
 				return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
 			} else {
-				ret = defaultExpr.Expr.String()
 				switch v := val.(type) {
 				case int64:
 					ret = strconv.FormatInt(v, 10)

@@ -41,6 +41,10 @@ func (n *NumVal) String() string {
 	return n.origString
 }
 
+func (n *NumVal) IsNegative() bool {
+	return n.negative
+}
+
 func NewNumVal(value constant.Value, origString string, negative bool) *NumVal {
 	return &NumVal{Value: value, origString: origString, negative: negative}
 }

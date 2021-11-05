@@ -26,6 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"go/constant"
+	"math"
+	"strconv"
+	"strings"
 )
 
 func (b *build) buildExtend(o op.OP, n tree.Expr) (extend.Extend, error) {
@@ -692,7 +695,7 @@ func stripParens(expr tree.Expr) tree.Expr {
 func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 	switch e := n.(type) {
 	case *tree.NumVal:
-		return buildConstantValue(typ, e.Value)
+		return buildConstantValue(typ, e)
 	case *tree.UnaryExpr:
 		if e.Op == tree.UNARY_PLUS {
 			return buildConstant(typ, e.Expr)
@@ -703,6 +706,10 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 				return nil, err
 			}
 			switch val := v.(type) {
+			case uint64:
+				if val > 0 { //todo: these codes should delete after new parser achieved. now AST `NumVal`'s negative doesn't work.
+					return nil, ErrValueOutRange
+				}
 			case int64:
 				return val * -1, nil
 			case float64:
@@ -712,7 +719,15 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 		}
 	case *tree.BinaryExpr:
 		var floatResult float64
-		left, err := buildConstant(types.Type{Oid: types.T_float64, Size: 8}, e.Left)
+		// binary operator does not support for char Constant
+		if l, ok := e.Left.(*tree.NumVal); ok && l.Value.Kind() == constant.String {
+			return nil, ErrBinaryNotSupportString
+		}
+		if r, ok := e.Right.(*tree.NumVal); ok && r.Value.Kind() == constant.String {
+			return nil, ErrBinaryNotSupportString
+		}
+
+		left, err := buildConstant(types.Type{Oid: types.T_float64, Size: 8}, e.Left) // todo: should use decimal to calculate after support Decimal.
 		if err != nil {
 			return nil, err
 		}
@@ -764,21 +779,32 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 				return nil, ErrZeroModulus
 			}
 			floatResult = lf - float64(int64(lf / rf)) * rf
+		default:
+			return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op))
 		}
 
 		switch typ.Oid {
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-			if float64(uint64(floatResult)) != floatResult {
+			if floatResult + 0.5 > math.MaxUint64 || floatResult < 0 {
 				return nil, ErrEvalResultOutRange
 			}
-			return uint64(floatResult), nil
+			return uint64(floatResult + 0.5), nil
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-			if float64(int64(floatResult)) != floatResult {
-				return nil, ErrEvalResultOutRange
+			if floatResult > 0 {
+				if floatResult + 0.5 > math.MaxInt64 {
+					return nil, ErrEvalResultOutRange
+				}
+				return int64(floatResult + 0.5), nil
+			}
+			if floatResult < 0 {
+				if floatResult - 0.5 < math.MinInt64 {
+					return nil, ErrEvalResultOutRange
+				}
+				return int64(floatResult - 0.5), nil
 			}
 			return int64(floatResult), nil
 		case types.T_float32:
-			if float64(float32(floatResult)) != floatResult {
+			if floatResult > math.MaxFloat32 || floatResult < math.SmallestNonzeroFloat32 {
 				return nil, ErrEvalResultOutRange
 			}
 			return float32(floatResult), nil
@@ -789,32 +815,88 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", n))
 }
 
-func buildConstantValue(typ types.Type, val constant.Value) (interface{}, error) {
+func buildConstantValue(typ types.Type, n *tree.NumVal) (interface{}, error) {
+	val := n.Value
+	str := n.String()
+
 	switch val.Kind() {
 	case constant.Unknown:
 		return nil, nil
 	case constant.Int:
 		switch typ.Oid {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-			v, _ := constant.Int64Val(val)
+			v, ok := constant.Int64Val(val)
+			if !ok {
+				return nil, ErrValueOutRange
+			}
 			return int64(v), nil
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-			v, _ := constant.Uint64Val(val)
+			if n.IsNegative() {
+				return nil, ErrValueOutRange
+			}
+			v, ok := constant.Uint64Val(val)
+			if !ok {
+				return nil, ErrValueOutRange
+			}
 			return uint64(v), nil
 		case types.T_float32:
-			v, _ := constant.Float32Val(val)
+			v, ok := constant.Float32Val(val)
+			if !ok {
+				return nil, ErrValueOutRange
+			}
 			return float32(v), nil
 		case types.T_float64:
-			v, _ := constant.Float64Val(val)
+			v, ok := constant.Float64Val(val)
+			if !ok {
+				return nil, ErrValueOutRange
+			}
 			return float64(v), nil
 		}
 	case constant.Float:
 		switch typ.Oid {
+		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
+			ss := strings.Split(str, ".")
+			if len(ss) <= 1 {
+				return nil, ErrValueOutRange
+			}
+			v, err := strconv.ParseInt(str, 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			if ss[1][0] >= '5' {
+				if v + 1 < v {
+					return nil, ErrValueOutRange
+				}
+				v++
+			}
+			return v, nil
+		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+			ss := strings.Split(str, ".")
+			if len(ss) <= 1 {
+				return nil, ErrValueOutRange
+			}
+			v, err := strconv.ParseUint(ss[0], 10, 64)
+			if err != nil {
+				return nil, err
+			}
+			if ss[1][0] >= '5' {
+				if v + 1 < v {
+					return nil, ErrValueOutRange
+				}
+				v++
+			}
+			return v, nil
 		case types.T_float32:
-			v, _ := constant.Float32Val(val)
+			v, ok := constant.Float32Val(val)
+			if !ok {
+				return nil, ErrValueOutRange
+			}
 			return float32(v), nil
 		case types.T_float64:
-			v, _ := constant.Float64Val(val)
+			v, ok := constant.Float64Val(val)
+			if !ok {
+				return nil, ErrValueOutRange
+			}
 			return float64(v), nil
 		}
 	case constant.String:

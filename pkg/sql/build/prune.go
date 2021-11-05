@@ -31,7 +31,11 @@ var (
 	// ErrZeroModulus is reported when computing the rest of a division by zero.
 	ErrZeroModulus = errors.New("zero modulus")
 	// ErrEvalResultOutRange is reported evaluate result is out of range.
-	ErrEvalResultOutRange = errors.New("binary result out of range")
+	ErrEvalResultOutRange = errors.New("binary operator result out of range")
+	// ErrValueOutRange is reported if a value is out of range.
+	ErrValueOutRange = errors.New("value is out of range")
+	// ErrBinaryNotSupportString is reported if binary operator's arguments are string.
+	ErrBinaryNotSupportString = errors.New("binary operators does not support for constant string")
 )
 
 func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, error) {

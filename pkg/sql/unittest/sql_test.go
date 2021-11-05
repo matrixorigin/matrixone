@@ -169,6 +169,34 @@ func TestInsert(t *testing.T) {
 		{"insert into TBL7 (B) values (10);", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
 		{"insert into TBL7 () values ();", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
 		{"insert into TBL7 (A) values (1);", nil, nil},
+		// range check test
+		{"create table iis(i1 tinyint, i2 smallint, i3 int, i4 bigint);", nil, nil},
+		{"create table ffs(f1 float, f2 double);", nil, nil},
+		{"create table uus(u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);", nil, nil},
+		{"create table ccs(c1 char(10), c2 varchar(20));", nil, nil},
+
+		{"insert into iis values (128, 32768, 2147483647, 9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i1' at row 1"), nil},
+		{"insert into iis values (127, 32768, 2147483647, 9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i2' at row 1"), nil},
+		{"insert into iis values (127, 32767, 2147483648, 9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i3' at row 1"), nil},
+		{"insert into iis values (127, 32767, 2147483647, 9223372036854775808);", errors.New("value is out of range"), nil},
+		// todo: parser -1 will parse to unaryExpr(minus, 1), it's wrong. should trans -9223372036854775807 to -9223372036854775808 to check after new parser achieved.
+		{"insert into iis values (-129, -32768, -2147483648, -9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i1' at row 1"), nil},
+		{"insert into iis values (-128, -32769, -2147483648, -9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i2' at row 1"), nil},
+		{"insert into iis values (-128, -32768, -2147483649, -9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i3' at row 1"), nil},
+		{"insert into iis values (-128, -32768, -2147483648, -9223372036854775809);", errors.New("value is out of range"), nil},
+		//
+		{"insert into uus values (256, 65535, 4294967295, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u1' at row 1"), nil},
+		{"insert into uus values (255, 65536, 4294967295, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u2' at row 1"), nil},
+		{"insert into uus values (255, 65535, 4294967296, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u3' at row 1"), nil},
+		{"insert into uus values (255, 65535, 4294967295, 18446744073709551616);", errors.New("value is out of range"), nil},
+		//
+		{"insert into uus values (-1, 0, 0, 0);", errors.New("value is out of range"), nil},
+		// insert with operator test
+		{"insert into iis values (1+1, 2*2, 3/3, 4-4);", nil, nil},
+		{"insert into iis values (1+1+1, 2*2+1, 3/3+1, 4-4+1);", nil, nil},
+		{"insert into iis values (1+1+1-2, 2*2+1-2, 3/3+1-2, 4-4+1-2);", nil, nil},
+		{"insert into iis values (1+1+1-2*3, 2*2+1-2*3, 3/3+1-2*3, 4-4+1-2*3);", nil, nil},
+		{"insert into iis values (1+1+1-2*3/4, 2*2+1-2*3/4, 3/3+1-2*3/4, 4-4+1-2*3/4);", nil, nil},
 		{"drop database testinsert;", nil, nil},
 	}
 
@@ -187,7 +215,7 @@ func TestInsert(t *testing.T) {
 		{"drop database testaffect", nil, nil, -1},
 	}
 
-	for i, tc := range testCases {
+	for _, tc := range testCases {
 		sql := tc.testSql
 		expected1 := tc.expectErr1
 		expected2 := tc.expectErr2
@@ -195,22 +223,21 @@ func TestInsert(t *testing.T) {
 		c := compile.New("testinsert", sql, "admin", e, proc)
 		es, err := c.Build()
 		require.NoError(t, err)
-		println(i)
 		for _, e := range es {
 			err := e.Compile(nil, Print)
 			if expected1 == nil {
-				require.NoError(t, err)
+				require.NoError(t, err, sql)
 			} else {
-				require.EqualError(t, err, expected1.Error())
+				require.EqualError(t, err, expected1.Error(), sql)
 			}
 			if expected1 != nil {
 				break
 			}
 			err = e.Run(1)
 			if expected2 == nil {
-				require.NoError(t, err)
+				require.NoError(t, err, sql)
 			} else {
-				require.EqualError(t, err, expected2.Error())
+				require.EqualError(t, err, expected2.Error(), sql)
 			}
 		}
 	}
@@ -248,7 +275,7 @@ func TestInsert(t *testing.T) {
 
 }
 
-func TestBinaryOperators(t *testing.T) {
+func TestUnaryBinaryOperators(t *testing.T) {
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
 	proc := process.New(gm)
