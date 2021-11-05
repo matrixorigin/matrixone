@@ -656,6 +656,40 @@ func stripEqual(e extend.Extend) (string, string, bool) {
 	return "", "", false
 }
 
+func andExtends(qry *Query, e extend.Extend, es []extend.Extend) []extend.Extend {
+	if extendRelations(qry, e) == 1 {
+		return append(es, e)
+	}
+	switch v := e.(type) {
+	case *extend.UnaryExtend:
+		return nil
+	case *extend.ParenExtend:
+		return andExtends(qry, v.E, es)
+	case *extend.Attribute:
+		return es
+	case *extend.ValueExtend:
+		return es
+	case *extend.BinaryExtend:
+		switch v.Op {
+		case overload.EQ:
+			return append(es, v)
+		case overload.NE:
+			return append(es, v)
+		case overload.LT:
+			return append(es, v)
+		case overload.LE:
+			return append(es, v)
+		case overload.GT:
+			return append(es, v)
+		case overload.GE:
+			return append(es, v)
+		case overload.And:
+			return append(andExtends(qry, v.Left, es), andExtends(qry, v.Right, es)...)
+		}
+	}
+	return nil
+}
+
 func extendsToAndExtend(es []extend.Extend) extend.Extend {
 	if len(es) == 1 {
 		return es[0]
@@ -665,4 +699,16 @@ func extendsToAndExtend(es []extend.Extend) extend.Extend {
 		Left:  es[0],
 		Right: extendsToAndExtend(es[1:]),
 	}
+}
+
+func extendRelations(qry *Query, e extend.Extend) int {
+	attrs := e.Attributes()
+	mp := make(map[string]uint8)
+	for _, attr := range attrs {
+		rns, _, _ := qry.getAttribute0(false, attr)
+		for _, rn := range rns {
+			mp[rn]++
+		}
+	}
+	return len(mp)
 }

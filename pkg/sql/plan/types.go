@@ -65,7 +65,7 @@ type Relation struct {
 	Attrs             []string
 	AttrsMap          map[string]*Attribute
 	Aggregations      []*Aggregation
-	RestrictConds     []extend.Extend // filter conditions
+	RestrictConds     []extend.Extend
 	ProjectionExtends []*ProjectionExtend
 }
 
@@ -115,6 +115,18 @@ func (qry *Query) Reduce() {
 	}
 }
 
+func (qry *Query) Name() string {
+	var buf bytes.Buffer
+
+	for i, rel := range qry.Rels {
+		if i > 0 {
+			buf.WriteString("_")
+		}
+		buf.WriteString(rel)
+	}
+	return buf.String()
+}
+
 func (qry *Query) String() string {
 	var buf bytes.Buffer
 
@@ -133,17 +145,17 @@ func (qry *Query) String() string {
 	for _, cond := range qry.Conds {
 		buf.WriteString(fmt.Sprintf("\t%s\n", cond))
 	}
-	buf.WriteString(fmt.Sprintf("\trestrict conditions\n"))
+	buf.WriteString(fmt.Sprintf("restrict conditions\n"))
 	for _, cond := range qry.RestrictConds {
-		buf.WriteString(fmt.Sprintf("\t\t%s\n", cond))
+		buf.WriteString(fmt.Sprintf("\t%s\n", cond))
 	}
-	buf.WriteString("\textend projection\n")
+	buf.WriteString("extend projection\n")
 	for _, e := range qry.ProjectionExtends {
-		buf.WriteString(fmt.Sprintf("\t\t%s\n", e))
+		buf.WriteString(fmt.Sprintf("\t%s\n", e))
 	}
-	buf.WriteString("\torder by\n")
+	buf.WriteString("order by\n")
 	for _, f := range qry.Fields {
-		buf.WriteString(fmt.Sprintf("\t\t%s\n", f))
+		buf.WriteString(fmt.Sprintf("\t%s\n", f))
 	}
 	return buf.String()
 }
@@ -164,6 +176,15 @@ func (rel *Relation) ExistAggregation(name string) int {
 		}
 	}
 	return -1
+}
+
+func (rel *Relation) ExistAggregations(names []string) bool {
+	for _, name := range names {
+		if rel.ExistAggregation(name) >= 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (rel *Relation) AddRestrict(e extend.Extend) {
@@ -238,7 +259,7 @@ func (e *ProjectionExtend) DecRef() {
 }
 
 func (e *ProjectionExtend) String() string {
-	return fmt.Sprintf("'%s as %s' = %v", e.E, e.Alias, e.Ref)
+	return fmt.Sprintf("'%s[%T] as %s' = %v", e.E, e.E, e.Alias, e.Ref)
 }
 
 func (agg *Aggregation) IncRef() {

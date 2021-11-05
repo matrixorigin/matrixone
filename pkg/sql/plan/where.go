@@ -30,7 +30,7 @@ func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
 	if e, err = b.pruneExtend(e); err != nil {
 		return err
 	}
-	if es := extend.AndExtends(e, nil); len(es) > 0 {
+	if es := extend.AndExtends(e, nil); len(es) > 0 { // push down join condition
 		for i := 0; i < len(es); i++ { // extracting join information
 			if left, right, ok := stripEqual(es[i]); ok {
 				r, rattr, err := qry.getJoinAttribute(qry.Rels, left)
@@ -54,7 +54,13 @@ func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {
 				i--
 			}
 		}
-		for i := 0; i < len(es); i++ { // push down restrict
+		if len(es) == 0 {
+			return nil
+		}
+		e = extendsToAndExtend(es)
+	}
+	if es := andExtends(qry, e, nil); len(es) > 0 { // push down restrict
+		for i := 0; i < len(es); i++ {
 			if ok := b.pushDownRestrict(es[i], qry); ok {
 				es = append(es[:i], es[i+1:]...)
 				i--

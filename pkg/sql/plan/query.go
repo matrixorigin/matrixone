@@ -127,7 +127,7 @@ func (qry *Query) getAttribute2(flg bool, col string) ([]string, *types.Type, er
 	var names []string
 
 	tbl, name := util.SplitTableAndColumn(col)
-	if len(tbl) > 0 {
+	if len(tbl) > 0 { // scope of relation
 		for i := 0; i < len(qry.Rels); i++ {
 			if qry.Rels[i] == tbl {
 				rel := qry.RelsMap[tbl]
@@ -186,6 +186,21 @@ func (qry *Query) getAttribute2(flg bool, col string) ([]string, *types.Type, er
 					typ = &attr.Type
 				}
 				names = append(names, qry.Rels[i])
+			}
+		}
+	}
+	if len(names) == 0 { // scope of query
+		for i, e := range qry.ProjectionExtends {
+			if e.Alias == name {
+				if flg {
+					qry.ProjectionExtends[i].IncRef()
+				}
+				if typ == nil {
+					typ = &types.Type{Oid: e.E.ReturnType()}
+				}
+				if e.Alias == col {
+					names = append(names, qry.Name())
+				}
 			}
 		}
 	}

@@ -193,10 +193,12 @@ func processQuery(query string, e engine.Engine) {
 	}
 	b := New("test", query, e)
 	for _, stmt := range stmts {
+		fmt.Printf("%s\n", query)
 		qry, err := b.BuildStatement(stmt)
 		if err != nil {
 			log.Fatal(err)
 		}
+		fmt.Printf("+++++++++++\n")
 		fmt.Printf("%s\n", qry)
 	}
 

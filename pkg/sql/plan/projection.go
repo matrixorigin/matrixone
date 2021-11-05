@@ -57,26 +57,31 @@ func (b *build) buildProjection(exprs tree.SelectExprs, qry *Query) error {
 				Alias: e.String(),
 			})
 		}
+	}
+	for i := 0; i < len(es); i++ {
 		{
-			var rel string
+			var rn string
 
-			attrs := e.Attributes()
+			attrs := es[i].E.Attributes()
 			mp := make(map[string]int) // relations map
 			for _, attr := range attrs {
-				rels, _, err := qry.getAttribute2(false, attr)
+				rns, _, err := qry.getAttribute2(false, attr)
 				if err != nil {
 					return err
 				}
-				for i := range rels {
-					if len(rel) == 0 {
-						rel = rels[i]
+				for i := range rns {
+					if len(rn) == 0 {
+						rn = rns[i]
 					}
-					mp[rels[i]]++
+					mp[rns[i]]++
 				}
 			}
 			if len(mp) == 1 {
-				if _, ok := e.(*extend.Attribute); !ok || len(expr.As) > 0 {
-					qry.RelsMap[rel].AddProjection(es[len(es)-1])
+				rel := qry.RelsMap[rn]
+				if ok := rel.ExistAggregations(attrs); !ok {
+					rel.AddProjection(es[i])
+					es = append(es[:i], es[i+1:]...)
+					i--
 				}
 			}
 		}

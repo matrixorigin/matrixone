@@ -14,7 +14,9 @@
 
 package ftree
 
-import "matrixone/pkg/sql/plan"
+import (
+	"matrixone/pkg/sql/plan"
+)
 
 func buildRelation(rel *plan.Relation) *Relation {
 	var vars []string

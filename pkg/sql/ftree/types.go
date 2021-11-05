@@ -60,7 +60,7 @@ func (v *Variable) String() string {
 }
 
 func (r *Relation) String() string {
-	return r.Rel.Alias
+	return fmt.Sprintf("%s - %s", r.Rel.Alias, r.Vars)
 }
 
 func (f *FTree) String() string {
