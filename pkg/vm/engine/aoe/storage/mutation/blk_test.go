@@ -41,7 +41,7 @@ func TestMutableBlockNode(t *testing.T) {
 	opts := config.NewOptions(dir, config.CST_None, config.BST_S, config.SST_S)
 	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(30), uint64(4)
-	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	opts.Meta.Catalog = catalog
 	opts.Wal = shard.NewNoopWal()
 	defer catalog.Close()

@@ -50,7 +50,7 @@ func TestTBlock(t *testing.T) {
 	dir := "/tmp/table/tblk"
 	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(30), uint64(4)
-	catalog := metadata.MockCatalog(dir, rowCount, blkCount)
+	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	defer catalog.Close()
 	schema := metadata.MockSchema(2)
 	tablemeta := metadata.MockTable(catalog, schema, 2, nil)
@@ -111,7 +111,7 @@ func TestTBlock(t *testing.T) {
 			num := uint64(na)
 			idx.Count = num
 			assert.Nil(t, n.Meta.CommitInfo.SetIndex(*idx))
-			_, err = n.Meta.AddCount(num)
+			_, err = n.Meta.AddCountLocked(num)
 			assert.Nil(t, err)
 			return nil
 		}

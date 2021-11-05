@@ -140,10 +140,6 @@ func (e *Block) CreateSnippet() *shard.Snippet {
 	return shard.NewSnippet(tableLogIndex.ShardId, e.Id, uint32(0))
 }
 
-func (e *Block) AppendIndex(index *LogIndex) {
-	e.IndiceMemo.Append(index)
-}
-
 func (e *Block) ConsumeSnippet(reset bool) *shard.Snippet {
 	e.RLock()
 	snippet := e.IndiceMemo.Fetch(e)
@@ -210,7 +206,7 @@ func (e *Block) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 		e.RLock()
 		defer e.RUnlock()
 	}
-	if !e.IsFull() {
+	if !e.IsFullLocked() {
 		id := atomic.LoadUint64(&e.SegmentedId)
 		if id == 0 {
 			return id, false
@@ -221,26 +217,29 @@ func (e *Block) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 }
 
 // Not safe
-func (e *Block) HasMaxRows() bool {
+func (e *Block) HasMaxRowsLocked() bool {
 	return e.Count == e.Segment.Table.Schema.BlockMaxRows
 }
 
 // Not safe
-func (e *Block) SetIndex(idx LogIndex) error {
-	return e.CommitInfo.SetIndex(idx)
+func (e *Block) SetIndexLocked(idx LogIndex) error {
+	err := e.CommitInfo.SetIndex(idx)
+	if err != nil {
+		return err
+	}
+	e.IndiceMemo.Append(&idx)
+	return err
 }
 
-// Not safe
-// TODO: should be safe
-func (e *Block) GetCount() uint64 {
-	if e.IsFull() {
+func (e *Block) GetCountLocked() uint64 {
+	if e.IsFullLocked() {
 		return e.Segment.Table.Schema.BlockMaxRows
 	}
 	return atomic.LoadUint64(&e.Count)
 }
 
 func (e *Block) GetCoarseCountLocked() int64 {
-	if e.IsFull() {
+	if e.IsFullLocked() {
 		return int64(e.Segment.Table.Schema.BlockMaxRows)
 	}
 	return 0
@@ -252,16 +251,14 @@ func (e *Block) GetCoarseCount() int64 {
 	return e.GetCoarseCountLocked()
 }
 
-// Not safe
-// TODO: should be safe
-func (e *Block) AddCount(n uint64) (uint64, error) {
-	curCnt := e.GetCount()
+func (e *Block) AddCountLocked(n uint64) (uint64, error) {
+	curCnt := e.GetCountLocked()
 	if curCnt+n > e.Segment.Table.Schema.BlockMaxRows {
 		return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, e.Segment.Table.Schema.BlockMaxRows))
 	}
 	for !atomic.CompareAndSwapUint64(&e.Count, curCnt, curCnt+n) {
 		runtime.Gosched()
-		curCnt = e.GetCount()
+		curCnt = e.GetCountLocked()
 		if curCnt+n > e.Segment.Table.Schema.BlockMaxRows {
 			return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, e.Segment.Table.Schema.BlockMaxRows))
 		}
@@ -283,12 +280,14 @@ func (e *Block) SetCount(count uint64) error {
 
 // Safe
 func (e *Block) fillView(filter *Filter) *Block {
-	baseEntry := e.UseCommitted(filter.blockFilter)
+	e.RLock()
+	defer e.RUnlock()
+	baseEntry := e.UseCommittedLocked(filter.blockFilter)
 	if baseEntry == nil {
 		return nil
 	}
 	view := *e
-	e.BaseEntry = baseEntry
+	view.BaseEntry = baseEntry
 	return &view
 }
 
@@ -305,11 +304,11 @@ func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 }
 
 func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
-	if e.GetCount() != e.Segment.Table.Schema.BlockMaxRows {
-		return nil, UpgradeInfullBlockErr
-	}
 	e.Lock()
 	defer e.Unlock()
+	if e.GetCountLocked() != e.Segment.Table.Schema.BlockMaxRows {
+		return nil, UpgradeInfullBlockErr
+	}
 	var newOp OpT
 	switch e.CommitInfo.Op {
 	case OpCreate:
@@ -372,6 +371,8 @@ func (e *Block) GetCoarseSize() int64 {
 
 // Not safe
 func (e *Block) PString(level PPLevel) string {
+	e.RLock()
+	defer e.RUnlock()
 	s := fmt.Sprintf("<%d. Block %s>[Size=%d]", e.Idx, e.BaseEntry.PString(level), e.GetCoarseSizeLocked())
 	return s
 }

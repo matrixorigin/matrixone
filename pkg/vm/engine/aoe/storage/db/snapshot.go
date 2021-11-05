@@ -17,15 +17,16 @@ package db
 import (
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 // createSnapshot creates a snapshot of the specified shard, and stores it at
@@ -157,7 +158,7 @@ func (d *DB) checkAndPin(path string, tables map[uint64]*metadata.Table) ([]base
 			sf := s.GetSegmentFile()
 
 			if segFile, ok := sf.(*dataio.SortedSegmentFile); ok {
-				if !seg.IsSorted() {
+				if !seg.IsSortedLocked() {
 					for _, file := range files {
 						file.Unref()
 					}
@@ -211,7 +212,6 @@ func (d *DB) checkAndPin(path string, tables map[uint64]*metadata.Table) ([]base
 	}
 	return files, nil
 }
-
 
 func (d *DB) applySnapshot(shardID uint64, path string) error {
 	if err := d.Closed.Load(); err != nil {
@@ -311,7 +311,7 @@ func (d *DB) applySnapshot(shardID uint64, path string) error {
 	unsortedSegs := make([]*metadata.Segment, 0)
 	for _, tbl := range tbls {
 		for _, seg := range tbl.SegmentSet {
-			if seg.IsSorted() {
+			if seg.IsSortedLocked() {
 				continue
 			}
 			unsortedSegs = append(unsortedSegs, seg)

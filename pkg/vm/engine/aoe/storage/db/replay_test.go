@@ -371,8 +371,8 @@ func TestReplay5(t *testing.T) {
 	replayHandle.Cleanup()
 	tbl2 := catalog.SimpleGetTable(tbl.Id)
 	assert.NotNil(t, tbl2)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFull())
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFullLocked())
 
 	assert.Equal(t, 3, len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -444,8 +444,8 @@ func TestReplay6(t *testing.T) {
 	replayHandle.Cleanup()
 	tbl2 := catalog.SimpleGetTable(tbl.Id)
 	assert.NotNil(t, tbl2)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFull())
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFullLocked())
 
 	assert.Equal(t, 4, len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -515,8 +515,8 @@ func TestReplay7(t *testing.T) {
 	replayHandle.Cleanup()
 	tbl2 := catalog.SimpleGetTable(tbl.Id)
 	assert.NotNil(t, tbl2)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 
 	assert.Equal(t, 4, len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -588,8 +588,8 @@ func TestReplay8(t *testing.T) {
 	tbl2 := catalog.SimpleGetTable(tbl.Id)
 	assert.NotNil(t, tbl2)
 	t.Log(tbl2.PString(metadata.PPL1))
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 
 	assert.Equal(t, 4, len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -672,8 +672,8 @@ func TestReplay9(t *testing.T) {
 	replayHandle.Cleanup()
 	tbl2 := catalog.SimpleGetTable(tbl.Id)
 	assert.Nil(t, err)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFull())
-	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFull())
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 
 	assert.Equal(t, len(toRemove), len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -780,8 +780,8 @@ func TestReplay10(t *testing.T) {
 	replayHandle.Cleanup()
 	tbl2 := catalog.SimpleGetTable(tbl.Id)
 	assert.Nil(t, err)
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFull())
-	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFull())
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFullLocked())
 	t.Log(tbl2.PString(metadata.PPL1))
 
 	assert.Equal(t, len(toRemove), len(observer.removed))
@@ -852,8 +852,8 @@ func TestReplay11(t *testing.T) {
 	tbl2 := catalog.SimpleGetTable(tbl.Id)
 	assert.NotNil(t, tbl2)
 	t.Log(tbl2.PString(metadata.PPL1))
-	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFull())
-	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFull())
+	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFullLocked())
+	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFullLocked())
 
 	assert.Equal(t, len(toRemove), len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {

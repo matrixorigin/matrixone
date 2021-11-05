@@ -38,7 +38,17 @@ func (e *BaseEntry) GetShardId() uint64 {
 	return e.GetCommit().GetShardId()
 }
 
-func (e *BaseEntry) GetFirstCommit() *CommitInfo {
+func (e *BaseEntry) LatestLogIndexLocked() *LogIndex {
+	return e.CommitInfo.LogIndex
+}
+
+func (e *BaseEntry) LatestLogIndex() *LogIndex {
+	e.RLock()
+	defer e.RUnlock()
+	return e.LatestLogIndexLocked()
+}
+
+func (e *BaseEntry) FirstCommitLocked() *CommitInfo {
 	prev := e.CommitInfo
 	curr := prev.GetNext()
 	for curr != nil {
@@ -54,18 +64,15 @@ func (e *BaseEntry) GetCommit() *CommitInfo {
 	return e.CommitInfo
 }
 
-// Should be guarded
-func (e *BaseEntry) IsFull() bool {
+func (e *BaseEntry) IsFullLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeFull
 }
 
-// Should be guarded
-func (e *BaseEntry) IsClose() bool {
+func (e *BaseEntry) IsCloseLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeClose
 }
 
-// Should be guarded
-func (e *BaseEntry) IsSorted() bool {
+func (e *BaseEntry) IsSortedLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeSorted
 }
 
@@ -96,7 +103,6 @@ func (e *BaseEntry) GetAppliedIndex() (uint64, bool) {
 	return id, ok
 }
 
-// Guarded by entry mutex
 func (e *BaseEntry) HasCommittedLocked() bool {
 	return !IsTransientCommitId(e.CommitInfo.CommitId)
 }
@@ -129,12 +135,15 @@ func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
 func (e *BaseEntry) UseCommitted(filter *commitFilter) *BaseEntry {
 	e.RLock()
 	defer e.RUnlock()
+	return e.UseCommittedLocked(filter)
+}
+
+func (e *BaseEntry) UseCommittedLocked(filter *commitFilter) *BaseEntry {
 	var curr common.ISSLLNode
 	curr = e.CommitInfo
 	for curr != nil {
 		info := curr.(*CommitInfo)
 		if filter.Eval(info) && !filter.EvalStop(info) {
-			// if filter.Eval(info)  {
 			cInfo := *info
 			return &BaseEntry{
 				Id:         e.Id,

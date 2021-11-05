@@ -157,6 +157,8 @@ func (e *Segment) PString(level PPLevel) string {
 	if e == nil {
 		return "null segment"
 	}
+	e.RLock()
+	defer e.RUnlock()
 	s := fmt.Sprintf("<Segment %s", e.BaseEntry.PString(level))
 	cnt := 0
 	if level > PPL0 {
@@ -217,7 +219,7 @@ func (e *Segment) Appendable() bool {
 	e.RLock()
 	defer e.RUnlock()
 	if e.HasMaxBlocks() {
-		return !e.BlockSet[len(e.BlockSet)-1].IsFull()
+		return !e.BlockSet[len(e.BlockSet)-1].IsFullLocked()
 	}
 	return true
 }
@@ -239,21 +241,10 @@ func (e *Segment) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
 		e.RLock()
 		defer e.RUnlock()
 	}
-	if e.IsSorted() {
+	if e.IsSortedLocked() {
 		return e.BaseEntry.GetAppliedIndex()
 	}
 	return e.calcAppliedIndex()
-}
-
-// Not safe
-func (e *Segment) GetReplayIndex() *LogIndex {
-	for i := len(e.BlockSet) - 1; i >= 0; i-- {
-		blk := e.BlockSet[i]
-		if blk.CommitInfo.LogIndex != nil && (blk.Count > 0 || blk.IsFull()) {
-			return blk.CommitInfo.LogIndex
-		}
-	}
-	return nil
 }
 
 func (e *Segment) calcAppliedIndex() (id uint64, ok bool) {
@@ -265,6 +256,19 @@ func (e *Segment) calcAppliedIndex() (id uint64, ok bool) {
 		}
 	}
 	return id, ok
+}
+
+func (e *Segment) MaxLogIndex() *LogIndex {
+	e.RLock()
+	defer e.RUnlock()
+	var index *LogIndex
+	for i := len(e.BlockSet) - 1; i >= 0; i-- {
+		index = e.BlockSet[i].LatestLogIndexLocked()
+		if index != nil {
+			break
+		}
+	}
+	return index
 }
 
 func (e *Segment) onNewBlock(entry *Block) {
@@ -294,7 +298,7 @@ func (e *Segment) FirstInFullBlock() *Block {
 	}
 	var found *Block
 	for i := len(e.BlockSet) - 1; i >= 0; i-- {
-		if !e.BlockSet[i].IsFull() {
+		if !e.BlockSet[i].IsFullLocked() {
 			found = e.BlockSet[i]
 		} else {
 			break
@@ -305,11 +309,11 @@ func (e *Segment) FirstInFullBlock() *Block {
 
 // Not safe
 func (e *Segment) HasMaxBlocks() bool {
-	return e.IsSorted() || len(e.BlockSet) == int(e.Table.Schema.SegmentMaxBlocks)
+	return e.IsSortedLocked() || len(e.BlockSet) == int(e.Table.Schema.SegmentMaxBlocks)
 }
 
 func (e *Segment) GetCoarseCountLocked() int64 {
-	if e.IsSorted() {
+	if e.IsSortedLocked() {
 		return int64(e.Table.Schema.SegmentMaxBlocks * e.Table.Schema.BlockMaxRows)
 	}
 	count := int64(0)
@@ -346,7 +350,7 @@ func (e *Segment) GetUnsortedSizeLocked() int64 {
 }
 
 func (e *Segment) GetCoarseSizeLocked() int64 {
-	if e.IsSorted() {
+	if e.IsSortedLocked() {
 		return e.CommitInfo.Size
 	}
 	return e.GetUnsortedSizeLocked()
@@ -358,11 +362,11 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 		e.RUnlock()
 		return nil, UpgradeInfullSegmentErr
 	}
-	if e.IsSorted() {
+	if e.IsSortedLocked() {
 		return nil, UpgradeNotNeededErr
 	}
 	for _, blk := range e.BlockSet {
-		if !blk.IsFull() {
+		if !blk.IsFullLocked() {
 			return nil, UpgradeInfullSegmentErr
 		}
 	}
@@ -409,7 +413,7 @@ func (e *Segment) SimpleGetOrCreateNextBlock(from *Block) *Block {
 	var ret *Block
 	for i := len(e.BlockSet) - 1; i >= 0; i-- {
 		blk := e.BlockSet[i]
-		if !blk.IsFull() && from.Less(blk) {
+		if !blk.IsFullLocked() && from.Less(blk) {
 			ret = blk
 		} else {
 			break

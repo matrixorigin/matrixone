@@ -36,9 +36,6 @@ type manager struct {
 	// collections are containers of managed collection
 	collections map[uint64]imem.ICollection
 
-	// TableData is Table's metadata in memory
-	//tableData   iface.ITableData
-
 	aware shard.NodeAware
 }
 
@@ -106,7 +103,7 @@ func (m *manager) RegisterCollection(td interface{}) (c imem.ICollection, err er
 		m.Unlock()
 		return nil, errors.New("logic error")
 	}
-	c = newMutableCollection(m, tableData)
+	c = newCollection(m, tableData)
 	m.collections[tableData.GetID()] = c
 	m.Unlock()
 	c.Ref()

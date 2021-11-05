@@ -15,12 +15,13 @@
 package meta
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -61,7 +62,7 @@ func TestBasicOps(t *testing.T) {
 	blk1.SetCount(blk1.Segment.Table.Schema.BlockMaxRows)
 	err = blk1.SimpleUpgrade(nil)
 	assert.Nil(t, err)
-	assert.True(t, blk1.IsFull())
+	assert.True(t, blk1.IsFullLocked())
 
 	schedCtx := &sched.Context{
 		Opts:     opts,
@@ -76,7 +77,7 @@ func TestBasicOps(t *testing.T) {
 
 	blk2, err := tbl.SimpleGetBlock(blk1.Segment.Id, blk1.Id)
 	assert.Nil(t, err)
-	assert.True(t, blk2.IsFull())
+	assert.True(t, blk2.IsFullLocked())
 
 	for i := 0; i < 100; i++ {
 		createBlkE = NewCreateBlkEvent(schedCtx, blk1.Segment.Table.Id, nil, nil)

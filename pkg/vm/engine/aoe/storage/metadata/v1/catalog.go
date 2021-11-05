@@ -273,14 +273,6 @@ func (catalog *Catalog) UpdateShardStats(shardId uint64, size int64, count int64
 	// logutil.Infof("%s, size=%d", stats.String(), size)
 }
 
-func (catalog *Catalog) SimpleGetTableAppliedIdByName(name string) (uint64, bool) {
-	table := catalog.SimpleGetTableByName(name)
-	if table == nil {
-		return uint64(0), false
-	}
-	return table.GetAppliedIndex(nil)
-}
-
 func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
 	catalog.RLock()
 	upperBound := []byte(prefix)
@@ -988,12 +980,20 @@ func (catalog *Catalog) onReplayShardLogEntry(entry *shardLogEntry) error {
 	return nil
 }
 
-func MockCatalog(dir string, blkRows, segBlks uint64) *Catalog {
+func MockCatalog(dir string, blkRows, segBlks uint64, driver logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows = blkRows
 	cfg.SegmentMaxBlocks = segBlks
-	catalog, err := OpenCatalog(new(sync.RWMutex), cfg)
+	var (
+		catalog *Catalog
+		err     error
+	)
+	if driver != nil {
+		catalog, err = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
+	} else {
+		catalog, err = OpenCatalog(new(sync.RWMutex), cfg)
+	}
 	if err != nil {
 		panic(err)
 	}

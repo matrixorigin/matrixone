@@ -28,7 +28,7 @@ import (
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 )
 
-type mutableCollection struct {
+type collection struct {
 	common.RefHelper
 	mgr    *manager
 	data   iface.ITableData
@@ -36,8 +36,8 @@ type mutableCollection struct {
 	mutBlk iface.IMutBlock
 }
 
-func newMutableCollection(mgr *manager, data iface.ITableData) *mutableCollection {
-	c := &mutableCollection{
+func newCollection(mgr *manager, data iface.ITableData) *collection {
+	c := &collection{
 		mgr:  mgr,
 		data: data,
 		mu:   &sync.RWMutex{},
@@ -55,11 +55,11 @@ func newMutableCollection(mgr *manager, data iface.ITableData) *mutableCollectio
 	return c
 }
 
-func (c *mutableCollection) GetMeta() *metadata.Table {
+func (c *collection) GetMeta() *metadata.Table {
 	return c.data.GetMeta()
 }
 
-func (c *mutableCollection) close() {
+func (c *collection) close() {
 	if c.data != nil {
 		c.data.Unref()
 	}
@@ -68,7 +68,7 @@ func (c *mutableCollection) close() {
 	}
 }
 
-func (c *mutableCollection) Flush() error {
+func (c *collection) Flush() error {
 	c.mu.RLock()
 	if c.mutBlk == nil {
 		c.mu.RUnlock()
@@ -81,13 +81,13 @@ func (c *mutableCollection) Flush() error {
 	return blk.Flush()
 }
 
-func (c *mutableCollection) String() string {
+func (c *collection) String() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.mutBlk.String()
 }
 
-func (c *mutableCollection) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
+func (c *collection) onNoBlock() (meta *metadata.Block, data iface.IBlock, err error) {
 	ctx := &sched.Context{Opts: c.mgr.opts, Waitable: true}
 	var prevMeta *metadata.Block
 	if c.mutBlk != nil {
@@ -102,7 +102,7 @@ func (c *mutableCollection) onNoBlock() (meta *metadata.Block, data iface.IBlock
 	return meta, e.Block, nil
 }
 
-func (c *mutableCollection) onNoMut() error {
+func (c *collection) onNoMut() error {
 	_, data, err := c.onNoBlock()
 	if err != nil {
 		return err
@@ -111,14 +111,14 @@ func (c *mutableCollection) onNoMut() error {
 	return nil
 }
 
-func (c *mutableCollection) onImmut() {
+func (c *collection) onImmut() {
 	ctx := &sched.Context{Opts: c.mgr.opts}
 	e := sched.NewFlushMemBlockEvent(ctx, c.mutBlk)
 	c.mgr.opts.Scheduler.Schedule(e)
 	c.onNoMut()
 }
 
-func (c *mutableCollection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error) {
+func (c *collection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset uint64, index *metadata.LogIndex) (n uint64, err error) {
 	var na int
 	meta := mutblk.GetMeta()
 	data := mutblk.GetData()
@@ -137,15 +137,14 @@ func (c *mutableCollection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, 
 	}
 	n = uint64(na)
 	index.Count = n
-	if err = meta.CommitInfo.SetIndex(*index); err != nil {
+	if err = meta.SetIndexLocked(*index); err != nil {
 		return 0, err
 	}
 	// log.Infof("1. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
-	if _, err = meta.AddCount(n); err != nil {
+	if _, err = meta.AddCountLocked(n); err != nil {
 		return 0, err
 	}
 	c.data.AddRows(n)
-	meta.AppendIndex(index)
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
 	// if uint64(data.Length()) == meta.Segment.Table.Schema.BlockMaxRows {
 	// 	meta.TryUpgrade()
@@ -153,14 +152,14 @@ func (c *mutableCollection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, 
 	return n, nil
 }
 
-func (c *mutableCollection) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
+func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err error) {
 	// tableMeta := c.data.GetMeta()
 	logutil.Infof("Append logindex: %s", index.String())
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.mutBlk == nil {
 		c.onNoMut()
-	} else if c.mutBlk.GetMeta().HasMaxRows() {
+	} else if c.mutBlk.GetMeta().HasMaxRowsLocked() {
 		c.onImmut()
 	}
 
@@ -185,7 +184,7 @@ func (c *mutableCollection) Append(bat *batch.Batch, index *metadata.LogIndex) (
 	}
 	blkHandle := c.mutBlk.MakeHandle()
 	for {
-		if c.mutBlk.GetMeta().HasMaxRows() {
+		if c.mutBlk.GetMeta().HasMaxRowsLocked() {
 			c.onImmut()
 			blkHandle.Close()
 			blkHandle = c.mutBlk.MakeHandle()

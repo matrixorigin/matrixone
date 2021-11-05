@@ -46,13 +46,6 @@ func (e *tableLogEntry) ToEntry() *Table {
 	return e.Prev
 }
 
-// func createTableHandle(r io.Reader, meta *LogEntryMeta) (LogEntry, int64, error) {
-// 	entry := Table{}
-// 	logEntry
-// 	// entry.Unmarshal()
-
-// }
-
 type Table struct {
 	*BaseEntry
 	Schema     *Schema        `json:"schema"`
@@ -98,6 +91,26 @@ func NewEmptyTableEntry(catalog *Catalog) *Table {
 	return e
 }
 
+func (e *Table) MaxLogIndex() *LogIndex {
+	e.RLock()
+	defer e.RUnlock()
+	if e.IsDeletedLocked() || len(e.SegmentSet) == 0 {
+		return e.LatestLogIndexLocked()
+	}
+	var index *LogIndex
+	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
+		segment := e.SegmentSet[i]
+		index = segment.MaxLogIndex()
+		if index != nil {
+			break
+		}
+	}
+	if index == nil {
+		index = e.LatestLogIndexLocked()
+	}
+	return index
+}
+
 func (e *Table) UpdateFlushTS() {
 	now := time.Now().UnixMicro()
 	atomic.StoreInt64(&e.FlushTS, now)
@@ -106,9 +119,6 @@ func (e *Table) UpdateFlushTS() {
 func (e *Table) GetCoarseSize() int64 {
 	e.RLock()
 	defer e.RUnlock()
-	// if e.IsDeletedLocked() {
-	// 	return 0
-	// }
 	size := int64(0)
 	for _, segment := range e.SegmentSet {
 		size += segment.GetCoarseSize()
@@ -119,9 +129,6 @@ func (e *Table) GetCoarseSize() int64 {
 func (e *Table) GetCoarseCount() int64 {
 	e.RLock()
 	defer e.RUnlock()
-	// if e.IsDeletedLocked() {
-	// 	return 0
-	// }
 	count := int64(0)
 	for _, segment := range e.SegmentSet {
 		count += segment.GetCoarseCount()
@@ -334,20 +341,6 @@ func (e *Table) SimpleGetCurrSegment() *Segment {
 	seg := e.SegmentSet[len(e.SegmentSet)-1]
 	e.RUnlock()
 	return seg
-}
-
-// Not safe and no need
-// Only used during data replay
-// TODO: Only compatible with v1. Remove later
-func (e *Table) GetReplayIndex() *LogIndex {
-	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
-		seg := e.SegmentSet[i]
-		idx := seg.GetReplayIndex()
-		if idx != nil {
-			return idx
-		}
-	}
-	return nil
 }
 
 func (e *Table) RecurLoopLocked(processor LoopProcessor) error {
@@ -566,6 +559,8 @@ func (e *Table) GetSegment(id, tranId uint64) *Segment {
 
 // Not safe
 func (e *Table) PString(level PPLevel) string {
+	e.RLock()
+	defer e.RUnlock()
 	s := fmt.Sprintf("<Table[%s]>(%s)(Cnt=%d)", e.Schema.Name, e.BaseEntry.PString(level), len(e.SegmentSet))
 	if level > PPL0 && len(e.SegmentSet) > 0 {
 		s = fmt.Sprintf("%s{", s)

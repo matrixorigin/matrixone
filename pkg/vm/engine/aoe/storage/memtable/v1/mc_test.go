@@ -74,7 +74,7 @@ func TestMutCollection(t *testing.T) {
 	assert.Nil(t, err)
 
 	t0.Ref()
-	c0 := newMutableCollection(manager, t0)
+	c0 := newCollection(manager, t0)
 	blks := uint64(20)
 	expectBlks := blks
 	batchSize := uint64(4)

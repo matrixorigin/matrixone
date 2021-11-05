@@ -132,7 +132,7 @@ func TestDBReplay(t *testing.T) {
 	t.Logf("Row count: %d, %d", tbl.GetRowCount(), rows*uint64(insertCnt))
 	assert.Equal(t, rows*uint64(insertCnt)-tblMeta.Schema.BlockMaxRows, tbl.GetRowCount())
 
-	replayIndex := tbl.GetMeta().GetReplayIndex()
+	replayIndex := tbl.GetMeta().MaxLogIndex()
 	assert.Equal(t, tblMeta.Schema.BlockMaxRows, replayIndex.Count)
 	assert.False(t, replayIndex.IsApplied())
 

@@ -45,7 +45,7 @@ func TestAll(t *testing.T) {
 	path := "/tmp/testfilter"
 	os.RemoveAll(path)
 	rowCount, blkCount := uint64(10), uint64(4)
-	catalog := metadata.MockCatalog(path, rowCount, blkCount)
+	catalog := metadata.MockCatalog(path, rowCount, blkCount, nil, nil)
 	schema := metadata.MockSchemaAll(14)
 	segCnt, blkCnt := uint64(4), uint64(4)
 	table := metadata.MockTable(catalog, schema, segCnt*blkCnt, nil)
@@ -1333,7 +1333,7 @@ func TestNotBuild(t *testing.T) {
 	os.RemoveAll(path)
 	rowCount, blkCount := uint64(10), uint64(4)
 
-	catalog := metadata.MockCatalog(path, rowCount, blkCount)
+	catalog := metadata.MockCatalog(path, rowCount, blkCount, nil, nil)
 	schema := metadata.MockSchemaAll(14)
 	segCnt, blkCnt := uint64(4), uint64(4)
 	table := metadata.MockTable(catalog, schema, segCnt*blkCnt, nil)
