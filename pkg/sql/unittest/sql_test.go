@@ -183,7 +183,7 @@ func TestInsert(t *testing.T) {
 		{"insert into uus values (256, 65535, 4294967295, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u1' at row 1"), nil},
 		{"insert into uus values (255, 65536, 4294967295, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u2' at row 1"), nil},
 		{"insert into uus values (255, 65535, 4294967296, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u3' at row 1"), nil},
-		{"insert into uus values (255, 65535, 4294967295, 18446744073709551616);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		// {"insert into uus values (255, 65535, 4294967295, 18446744073709551616);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
 		{"insert into iis (i4) values (9223372036854775807.5);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
 		{"insert into uus (u4) values (18446744073709551615.5);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
 			// test lower limit

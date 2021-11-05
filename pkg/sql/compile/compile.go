@@ -16,6 +16,8 @@ package compile
 
 import (
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -44,12 +46,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op/summarize"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/opt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	rw "github.com/matrixorigin/matrixone/pkg/sql/rewrite"
-	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync"
 )
 
 func New(db string, sql string, uid string,
@@ -65,15 +68,16 @@ func New(db string, sql string, uid string,
 
 // Build generates query execution list based on the result of sql parser.
 func (c *compile) Build() ([]*Exec, error) {
-	stmts, err := tree.NewParser().Parse(c.sql)
+	// stmts, err := tree.NewParser().Parse(c.sql)
+	stmts, err := parsers.Parse(dialect.MYSQL, c.sql)
 	if err != nil {
 		return nil, err
 	}
 	es := make([]*Exec, len(stmts))
 	for i, stmt := range stmts {
 		es[i] = &Exec{
-			c:    c,
-			stmt: stmt,
+			c:          c,
+			stmt:       stmt,
 			affectRows: 0,
 		}
 	}

@@ -16,10 +16,13 @@ package build
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/op"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/rewrite"
-	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -35,7 +38,8 @@ func New(db string, sql string, e engine.Engine, proc *process.Process) *build {
 }
 
 func (b *build) Build() ([]op.OP, error) {
-	stmts, err := tree.NewParser().Parse(b.sql)
+	// stmts, err := tree.NewParser().Parse(b.sql)
+	stmts, err := parsers.Parse(dialect.MYSQL, b.sql)
 	if err != nil {
 		return nil, err
 	}

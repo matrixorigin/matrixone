@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op/limit"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/projection"
-	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 )
 
