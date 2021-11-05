@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/op"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/insert"
-	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"strconv"
@@ -436,13 +436,13 @@ func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, f
 			if targetsNil && allRowsNil {
 				rows[i] = make(tree.Exprs, targetLen)
 				for j := 0; j < targetLen; j++{
-					rows[i][j] = tree.NewDefaultVal()
+					rows[i][j] = tree.NewDefaultVal(nil)
 				}
 			}
 		} else {
 			// some cases need to fill the missing columns with default values
 			for len(rows[i]) < targetLen {
-				rows[i] = append(rows[i], tree.NewDefaultVal())
+				rows[i] = append(rows[i], tree.NewDefaultVal(nil))
 			}
 		}
 

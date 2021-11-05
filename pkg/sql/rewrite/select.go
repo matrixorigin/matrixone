@@ -15,7 +15,7 @@
 package rewrite
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func rewriteSelect(stmt *tree.Select) *tree.Select {
