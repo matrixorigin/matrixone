@@ -285,7 +285,7 @@ func (e *Block) fillView(filter *Filter) *Block {
 		return nil
 	}
 	view := *e
-	e.BaseEntry = baseEntry
+	view.BaseEntry = baseEntry
 	return &view
 }
 
