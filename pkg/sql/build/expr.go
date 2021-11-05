@@ -712,6 +712,8 @@ func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 				}
 			case int64:
 				return val * -1, nil
+			case float32:
+				return val * -1, nil
 			case float64:
 				return val * -1, nil
 			}

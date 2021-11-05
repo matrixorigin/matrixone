@@ -38,7 +38,7 @@ func TestParser(t *testing.T) {
 
 	//insert into tbl2 select col_1c,max(col_1b), "K" from tbl1;
 	//insert into tbl2 values (1,2),(3,4);
-	sql := "insert into iis values (-1);"
+	sql := "create table table20 (`\" + \"` int);"
 
 	stmtNodes, _, err := p.Parse(sql, "", "")
 	if err != nil {
