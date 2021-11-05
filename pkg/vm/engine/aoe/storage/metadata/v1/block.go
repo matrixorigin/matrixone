@@ -280,7 +280,9 @@ func (e *Block) SetCount(count uint64) error {
 
 // Safe
 func (e *Block) fillView(filter *Filter) *Block {
-	baseEntry := e.UseCommitted(filter.blockFilter)
+	e.RLock()
+	defer e.RUnlock()
+	baseEntry := e.UseCommittedLocked(filter.blockFilter)
 	if baseEntry == nil {
 		return nil
 	}
@@ -369,6 +371,8 @@ func (e *Block) GetCoarseSize() int64 {
 
 // Not safe
 func (e *Block) PString(level PPLevel) string {
+	e.RLock()
+	defer e.RUnlock()
 	s := fmt.Sprintf("<%d. Block %s>[Size=%d]", e.Idx, e.BaseEntry.PString(level), e.GetCoarseSizeLocked())
 	return s
 }

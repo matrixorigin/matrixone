@@ -157,6 +157,8 @@ func (e *Segment) PString(level PPLevel) string {
 	if e == nil {
 		return "null segment"
 	}
+	e.RLock()
+	defer e.RUnlock()
 	s := fmt.Sprintf("<Segment %s", e.BaseEntry.PString(level))
 	cnt := 0
 	if level > PPL0 {

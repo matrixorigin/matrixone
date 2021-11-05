@@ -135,6 +135,10 @@ func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
 func (e *BaseEntry) UseCommitted(filter *commitFilter) *BaseEntry {
 	e.RLock()
 	defer e.RUnlock()
+	return e.UseCommittedLocked(filter)
+}
+
+func (e *BaseEntry) UseCommittedLocked(filter *commitFilter) *BaseEntry {
 	var curr common.ISSLLNode
 	curr = e.CommitInfo
 	for curr != nil {

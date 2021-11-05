@@ -559,6 +559,8 @@ func (e *Table) GetSegment(id, tranId uint64) *Segment {
 
 // Not safe
 func (e *Table) PString(level PPLevel) string {
+	e.RLock()
+	defer e.RUnlock()
 	s := fmt.Sprintf("<Table[%s]>(%s)(Cnt=%d)", e.Schema.Name, e.BaseEntry.PString(level), len(e.SegmentSet))
 	if level > PPL0 && len(e.SegmentSet) > 0 {
 		s = fmt.Sprintf("%s{", s)
