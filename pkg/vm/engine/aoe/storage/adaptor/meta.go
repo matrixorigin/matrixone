@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -60,6 +61,10 @@ func TableInfoToSchema(catalog *metadata.Catalog, info *aoe.TableInfo) *metadata
 			Name: colInfo.Name,
 			Idx:  idx,
 			Type: colInfo.Type,
+		}
+		if colInfo.PrimaryKey {
+			schema.PrimaryKey = idx
+			logutil.Debugf("Table to schema, schema.PrimaryKey is %d, its name is %v.", schema.PrimaryKey, colInfo.Name)
 		}
 		schema.NameIndex[newInfo.Name] = len(schema.ColDefs)
 		schema.ColDefs = append(schema.ColDefs, newInfo)

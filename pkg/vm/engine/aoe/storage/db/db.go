@@ -243,6 +243,7 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	}
 	info.Name = ctx.TableName
 	schema := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
+	logutil.Debugf("Create table, schema.Primarykey is %d", schema.PrimaryKey)
 	index := adaptor.GetLogIndexFromTableOpCtx(&ctx)
 	if err = d.Wal.SyncLog(index); err != nil {
 		return

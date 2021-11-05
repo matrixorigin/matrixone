@@ -17,6 +17,7 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"os"
 	"path/filepath"
 	"testing"
@@ -317,10 +318,10 @@ func TestIVectorNodeWriter(t *testing.T) {
 	defer vec0.Close()
 	vec1 := vector.NewStrVector(types.Type{types.T(types.T_varchar), 24, 0, 0}, 4)
 	defer vec1.Close()
-	err := vec0.Append(4, []int32{int32(0), int32(1), int32(2), int32(3)})
+	err := vec0.Append(4, []int32{int32(3), int32(1), int32(2), int32(0)})
 	assert.Nil(t, err)
-	str0 := "str0"
-	str1 := "str1"
+	str0 := "str1"
+	str1 := "str0"
 	str2 := "str2"
 	str3 := "str3"
 	strs := [][]byte{[]byte(str0), []byte(str1), []byte(str2), []byte(str3)}
@@ -328,6 +329,7 @@ func TestIVectorNodeWriter(t *testing.T) {
 
 	catalog := metadata.MockCatalog(dir, capacity, uint64(10))
 	schema := metadata.MockSchema(2)
+	schema.PrimaryKey = 1
 	tblMeta := metadata.MockTable(catalog, schema, 1, nil)
 	segMeta := tblMeta.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, segMeta)
@@ -378,12 +380,45 @@ func TestIVectorNodeWriter(t *testing.T) {
 	assert.Nil(t, err)
 	v1c, err := vec1.CopyToVector()
 	assert.Nil(t, err)
+	logutil.Infof("v0c is %v, v1c is %v\n", v0c, v1c)
 	vecs = append(vecs, v0c)
 	vecs = append(vecs, v1c)
 	bw := NewBlockWriter(vecs, meta, dir)
 	err = bw.Execute()
 	assert.Nil(t, err)
 	logutil.Infof(" %s | Memtable | Flushing", bw.GetFileName())
+
+	segFile1 := NewUnsortedSegmentFile(dir, *meta.Segment.AsCommonID())
+	nb := NewBlockFile(segFile1, id, nil)
+	bufs = make([][]byte, 2)
+	for i, _ := range bufs {
+		sz := nb.PartSize(uint64(i), id, false)
+		osz := nb.PartSize(uint64(i), id, true)
+		buf := make([]byte, sz)
+		nb.ReadPart(uint64(i), id, buf)
+		originSize := uint64(osz)
+		node1 := common.GPool.Alloc(originSize)
+		defer common.GPool.Free(node1)
+		_, err = compress.Decompress(buf, node1.Buf[:originSize], compress.Lz4)
+		data := node1.Buf[:originSize]
+		t1 := encoding.DecodeType(data[:encoding.TypeSize])
+		v := gvector.New(t1)
+		err = v.Read(data)
+		logutil.Infof("nb.v is %v.\n", v)
+		switch i {
+		case 0:
+			assert.Equal(t, int32(1), v.Col.([]int32)[0])
+			assert.Equal(t, int32(3), v.Col.([]int32)[1])
+			assert.Equal(t, int32(2), v.Col.([]int32)[2])
+			assert.Equal(t, int32(0), v.Col.([]int32)[3])
+			break
+		case 1:
+			assert.Equal(t, []byte("str0"), v.Col.(*types.Bytes).Data[0:4])
+			assert.Equal(t, []byte("str1"), v.Col.(*types.Bytes).Data[4:8])
+			assert.Equal(t, []byte("str2"), v.Col.(*types.Bytes).Data[8:12])
+			assert.Equal(t, []byte("str3"), v.Col.(*types.Bytes).Data[12:16])
+		}
+	}
 
 	col0Vf := segFile.MakeVirtualPartFile(&id)
 	assert.NotNil(t, col0Vf)

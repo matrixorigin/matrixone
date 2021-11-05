@@ -16,6 +16,7 @@ package build
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -72,12 +73,19 @@ func (b *build) getTableDef(def tree.TableDef) (engine.TableDef, error) {
 		if err != nil {
 			return nil, err
 		}
+		primaryKey := false
+		for _, attr := range n.Attributes {
+			if _, ok := attr.(*tree.AttributePrimaryKey); ok {
+				primaryKey = true
+			}
+		}
 		return &engine.AttributeDef{
 			Attr: metadata.Attribute{
-				Type: *typ,
-				Alg:  compress.Lz4,
-				Name: n.Name.Parts[0],
-				Default: defaultExpr,
+				Type:       *typ,
+				Alg:        compress.Lz4,
+				Name:       n.Name.Parts[0],
+				Default:    defaultExpr,
+				PrimaryKey: primaryKey,
 			},
 		}, nil
 	default:

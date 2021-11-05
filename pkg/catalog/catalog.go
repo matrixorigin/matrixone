@@ -163,6 +163,70 @@ func (c *Catalog) GetDatabase(dbName string) (*aoe.SchemaInfo, error) {
 	}
 	return db, nil
 }
+func (c *Catalog) GetPrimaryKey(dbId uint64, tableName string) (pk *aoe.ColumnInfo, err error) {
+	tbl, err := c.GetTable(dbId, tableName)
+	if err != nil {
+		return
+	}
+
+	for _, col := range tbl.Columns {
+		if col.PrimaryKey {
+			return &col, nil
+		}
+	}
+
+	return nil, ErrPrimaryKeyNotExist
+}
+func (c *Catalog) DeletePrimaryKey(epoch, dbId uint64, tableName string) (err error) {
+	tbl, err := c.GetTable(dbId, tableName)
+	if err != nil {
+		return
+	}
+	for _, col := range tbl.Columns {
+		if col.PrimaryKey {
+			col.PrimaryKey = false
+			c.updateTableInfo(dbId, tbl)
+			return
+		}
+	}
+	return
+}
+func (c *Catalog) SetPrimaryKey(epoch, dbId uint64, tableName, columnName string) (err error) {
+	tbl, err := c.GetTable(dbId, tableName)
+	if err != nil {
+		return
+	}
+	columnExist := false
+	for _, col := range tbl.Columns {
+		if col.PrimaryKey {
+			if col.Name == columnName {
+				return nil
+			}
+			col.PrimaryKey = false
+		}
+		if col.Name == columnName {
+			col.PrimaryKey = true
+		}
+	}
+	c.updateTableInfo(dbId, tbl)
+	if columnExist {
+		return nil
+	}
+	return ErrColumnNotExist
+}
+func (c *Catalog) updateTableInfo(dbId uint64, tbl *aoe.TableInfo) (err error) {
+	meta, err := helper.EncodeTable(*tbl)
+	c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
+	return err
+}
+
+// func (c *Catalog) UpdatePrimaryKey(epoch, dbId uint64, tableName, columnName string) (err error) {
+// 	return
+// }
+
+// func (c *Catalog) IsPrimaryKey(epoch, dbId uint64, tableName, columnName string) (isPrimaryKey bool, err error) {
+// 	return
+// }
 
 // CreateTable creates a table with tableInfo in database.
 func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64, err error) {
@@ -174,7 +238,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 				logutil.Errorf("delete meta for uncreated table, %v, %v, %v", dbId, tbl, serr)
 			}
 		}
-		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, sid is %d, cost %d ms", tbl.Name, tid, time.Since(t0).Milliseconds())
+		logutil.Debugf("CreateTable finished, table name is %v, table id is %d, cost %d ms", tbl.Name, tid, time.Since(t0).Milliseconds())
 	}()
 	_, err = c.checkDBExists(dbId)
 	if err != nil {
@@ -190,7 +254,6 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 	}
 
 	wg := sync.WaitGroup{}
-
 	tbl.Epoch = epoch
 	tbl.SchemaId = dbId
 	if shardId, err := c.getAvailableShard(tbl.Id); err == nil {
@@ -261,7 +324,7 @@ func (c *Catalog) DropTable(epoch, dbId uint64, tableName string) (tid uint64, e
 }
 
 // ListTablesByName returns all tables meta in database.
-func (c *Catalog) ListTablesByName(dbName string) ([]aoe.TableInfo, error){
+func (c *Catalog) ListTablesByName(dbName string) ([]aoe.TableInfo, error) {
 	if value, err := c.Driver.Get(c.dbIDKey(dbName)); err != nil || value == nil {
 		return nil, ErrDBNotExists
 	} else {
