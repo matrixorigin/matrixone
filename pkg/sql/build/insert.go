@@ -15,8 +15,8 @@
 package build
 
 import (
+	"errors"
 	"fmt"
-	"go/constant"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/tree"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"go/constant"
+	"math"
 	"strconv"
 )
 
@@ -97,7 +99,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = int8(v.(int64))
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(int8)
+						}
 					}
 				}
 			}
@@ -115,7 +121,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = int16(v.(int64))
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(int16)
+						}
 					}
 				}
 			}
@@ -133,7 +143,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = int32(v.(int64))
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(int32)
+						}
 					}
 				}
 			}
@@ -151,7 +165,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = v.(int64)
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(int64)
+						}
 					}
 				}
 			}
@@ -169,7 +187,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = uint8(v.(uint64))
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(uint8)
+						}
 					}
 				}
 			}
@@ -187,7 +209,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = uint16(v.(uint64))
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(uint16)
+						}
 					}
 				}
 			}
@@ -205,7 +231,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = uint32(v.(uint64))
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(uint32)
+						}
 					}
 				}
 			}
@@ -223,7 +253,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = v.(uint64)
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(uint64)
+						}
 					}
 				}
 			}
@@ -241,7 +275,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = v.(float32)
+						if vv, err := rangeCheck(v.(float32), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(float32)
+						}
 					}
 				}
 			}
@@ -259,7 +297,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = v.(float64)
+						if vv, err := rangeCheck(v.(float64), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = vv.(float64)
+						}
 					}
 				}
 			}
@@ -277,7 +319,11 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						vs[j] = []byte(v.(string))
+						if vv, err := rangeCheck(v.(string), vec.Typ, bat.Attrs[j], i); err != nil {
+							return nil, err
+						} else {
+							vs[j] = []byte(vv.(string))
+						}
 					}
 				}
 			}
@@ -285,9 +331,6 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 				return nil, err
 			}
 		}
-	}
-	if err = insertValuesRangeCheck(bat.Vecs, bat.Attrs, rows.Rows); err != nil {
-		return nil, err
 	}
 	for k, v := range mp {
 		bat.Attrs = append(bat.Attrs, k)
@@ -343,48 +386,81 @@ func (b *build) tableName(tbl *tree.TableName) (string, string, engine.Relation,
 	return string(tbl.SchemaName), string(tbl.ObjectName), r, nil
 }
 
-// insertValuesRangeCheck returns error if final build result is out of range.
-func insertValuesRangeCheck(vecs []*vector.Vector, columnNames []string, sourceInput []tree.Exprs) error {
-	var sourceValue, errString string
+// rangeCheck do range check for value, and do type conversion.
+func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber int) (interface{}, error) {
+	errString := "Out of range value for column '%s' at row %d"
 
-	for colIndex, vec := range vecs {
-		for rowIndex := range sourceInput {
-			// range check should ignore null value
-			if isNullExpr(sourceInput[rowIndex][colIndex]) {
-				continue
+	switch v := value.(type) {
+	case int64:
+		switch typ.Oid {
+		case types.T_int8:
+			if v <= math.MaxInt8 && v >= math.MinInt8 {
+				return int8(v), nil
 			}
-			sourceValue = sourceInput[rowIndex][colIndex].String()
-			errString = valueRangeCheck(sourceValue, vec.Typ)
-
-			if len(errString) != 0 {
-				return sqlerror.New(errno.DataException, fmt.Sprintf(errString, columnNames[colIndex], rowIndex + 1))
+		case types.T_int16:
+			if v <= math.MaxInt16 && v >= math.MinInt16 {
+				return int16(v), nil
 			}
+		case types.T_int32:
+			if v <= math.MaxInt32 && v >= math.MinInt32 {
+				return int32(v), nil
+			}
+		case types.T_int64:
+			return v, nil
+		default:
+			return nil, errors.New("unexpected type and value")
 		}
+		return nil, errors.New(fmt.Sprintf(errString, columnName, rowNumber))
+	case uint64:
+		switch typ.Oid {
+		case types.T_uint8:
+			if v <= math.MaxUint8 && v >= 0 {
+				return uint8(v), nil
+			}
+		case types.T_uint16:
+			if v <= math.MaxUint16 && v >= 0 {
+				return uint16(v), nil
+			}
+		case types.T_uint32:
+			if v <= math.MaxUint32 && v >= 0 {
+				return uint32(v), nil
+			}
+		case types.T_uint64:
+			return v, nil
+		default:
+			return nil, errors.New("unexpected type and value")
+		}
+		return nil, errors.New(fmt.Sprintf(errString, columnName, rowNumber))
+	case float32:
+		if typ.Oid == types.T_float32 {
+			return v, nil
+		}
+		return nil, errors.New("unexpected type and value")
+	case float64:
+		switch typ.Oid {
+		case types.T_float32:
+			if v <= math.MaxFloat32 && v >= math.SmallestNonzeroFloat32 {
+				return float32(v), nil
+			}
+		case types.T_float64:
+			return v, nil
+		default:
+			return nil, errors.New("unexpected type and value")
+		}
+		return nil, errors.New(fmt.Sprintf(errString, columnName, rowNumber))
+	case string:
+		switch typ.Oid {
+		case types.T_char, types.T_varchar: // string family should compare the length but not value
+			if len(v) <= int(typ.Width) {
+				return v, nil
+			}
+		default:
+			return nil, errors.New("unexpected type and value")
+		}
+		return nil, errors.New(fmt.Sprintf(errString, columnName, rowNumber))
+	default:
+		return nil, errors.New("unexpected type and value")
 	}
-	return nil
-}
-
-// valueRangeCheck returns error string if value is out of range of typ
-func valueRangeCheck(value string, typ types.Type) string {
-	switch typ.Oid {
-	case types.T_int64, types.T_int32, types.T_int16, types.T_int8:
-		if _, err := strconv.ParseInt(value, 10, int(typ.Width)); err != nil {
-			return "Out of range value for column '%s' at row %d"
-		}
-	case types.T_uint64, types.T_uint32, types.T_uint16, types.T_uint8:
-		if _, err := strconv.ParseUint(value, 10, int(typ.Width)); err != nil {
-			return "Out of range value for column '%s' at row %d"
-		}
-	case types.T_float32, types.T_float64:
-		if _, err := strconv.ParseFloat(value, int(typ.Width)); err != nil {
-			return "Out of range value for column '%s' at row %d"
-		}
-	case types.T_char, types.T_varchar: // string family should compare the length but not value
-		if len(value) > int(typ.Width) {
-			return "Data too long for column '%s' at row %d"
-		}
-	}
-	return ""
 }
 
 // rewriteInsertRows rewrite default expressions in valueClause's Rows
