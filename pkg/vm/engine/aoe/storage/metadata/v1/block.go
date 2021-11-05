@@ -291,6 +291,12 @@ func (e *Block) fillView(filter *Filter) *Block {
 	return &view
 }
 
+func (e *Block) SetSize(size int64) {
+	e.Lock()
+	defer e.Unlock()
+	e.CommitInfo.SetSize(size)
+}
+
 // Safe
 func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 	tranId := e.Segment.Table.Catalog.NextUncommitId()

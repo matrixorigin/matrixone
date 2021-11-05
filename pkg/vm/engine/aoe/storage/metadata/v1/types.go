@@ -164,11 +164,11 @@ func (info *CommitInfo) IsReplaced() bool {
 }
 
 func (info *CommitInfo) SetSize(size int64) {
-	atomic.AddInt64(&info.Size, size)
+	info.Size = size
 }
 
 func (info *CommitInfo) GetSize() int64 {
-	return atomic.LoadInt64(&info.Size)
+	return info.Size
 }
 
 func (info *CommitInfo) PString(level PPLevel) string {
