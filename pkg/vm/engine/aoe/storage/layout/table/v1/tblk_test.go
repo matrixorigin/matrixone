@@ -53,7 +53,8 @@ func TestTBlock(t *testing.T) {
 	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	defer catalog.Close()
 	schema := metadata.MockSchema(2)
-	tablemeta := metadata.MockTable(catalog, schema, 2, nil)
+	gen := shard.NewMockIndexAllocator()
+	tablemeta := metadata.MockDBTable(catalog, "db1", schema, 2, gen.Shard(100))
 
 	seg1 := tablemeta.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, seg1)
@@ -213,7 +214,7 @@ func TestTBlock(t *testing.T) {
 			vecs = append(vecs, vc)
 		}
 
-		bw := dataio.NewBlockWriter(vecs, n.Meta, n.Meta.Segment.Table.Catalog.Cfg.Dir)
+		bw := dataio.NewBlockWriter(vecs, n.Meta, n.Meta.Segment.Table.Database.Catalog.Cfg.Dir)
 		bw.SetPreExecutor(func() {
 			logutil.Infof(" %s | Memtable | Flushing", bw.GetFileName())
 		})

@@ -27,9 +27,9 @@ import (
 )
 
 type tableLogEntry struct {
+	Table      *Table
+	DatabaseId uint64
 	*BaseEntry
-	Prev    *Table
-	Catalog *Catalog `json:"-"`
 }
 
 func (e *tableLogEntry) Marshal() ([]byte, error) {
@@ -40,27 +40,21 @@ func (e *tableLogEntry) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, e)
 }
 
-func (e *tableLogEntry) ToEntry() *Table {
-	e.BaseEntry.CommitInfo.SetNext(e.Prev.CommitInfo)
-	e.Prev.BaseEntry = e.BaseEntry
-	return e.Prev
-}
-
 type Table struct {
 	*BaseEntry
 	Schema     *Schema        `json:"schema"`
 	SegmentSet []*Segment     `json:"segments"`
 	IdIndex    map[uint64]int `json:"-"`
-	Catalog    *Catalog       `json:"-"`
+	Database   *Database      `json:"-"`
 	FlushTS    int64          `json:"-"`
 }
 
-func NewTableEntry(catalog *Catalog, schema *Schema, tranId uint64, exIndex *LogIndex) *Table {
-	schema.BlockMaxRows = catalog.Cfg.BlockMaxRows
-	schema.SegmentMaxBlocks = catalog.Cfg.SegmentMaxBlocks
+func NewTableEntry(db *Database, schema *Schema, tranId uint64, exIndex *LogIndex) *Table {
+	schema.BlockMaxRows = db.Catalog.Cfg.BlockMaxRows
+	schema.SegmentMaxBlocks = db.Catalog.Cfg.SegmentMaxBlocks
 	e := &Table{
 		BaseEntry: &BaseEntry{
-			Id: catalog.NextTableId(),
+			Id: db.Catalog.NextTableId(),
 			CommitInfo: &CommitInfo{
 				TranId:   tranId,
 				CommitId: tranId,
@@ -70,14 +64,14 @@ func NewTableEntry(catalog *Catalog, schema *Schema, tranId uint64, exIndex *Log
 			},
 		},
 		Schema:     schema,
-		Catalog:    catalog,
+		Database:   db,
 		SegmentSet: make([]*Segment, 0),
 		IdIndex:    make(map[uint64]int),
 	}
 	return e
 }
 
-func NewEmptyTableEntry(catalog *Catalog) *Table {
+func NewEmptyTableEntry(db *Database) *Table {
 	e := &Table{
 		BaseEntry: &BaseEntry{
 			CommitInfo: &CommitInfo{
@@ -86,7 +80,7 @@ func NewEmptyTableEntry(catalog *Catalog) *Table {
 		},
 		SegmentSet: make([]*Segment, 0),
 		IdIndex:    make(map[uint64]int),
-		Catalog:    catalog,
+		Database:   db,
 	}
 	return e
 }
@@ -140,33 +134,6 @@ func (e *Table) GetFlushTS() int64 {
 	return atomic.LoadInt64(&e.FlushTS)
 }
 
-func (e *Table) prepareReplace(ctx *replaceTableCtx) (LogEntry, error) {
-	cInfo := &CommitInfo{
-		Op:       OpReplaced,
-		LogIndex: ctx.exIndex,
-		SSLLNode: *common.NewSSLLNode(),
-	}
-	if ctx.inTran {
-		cInfo.CommitId = ctx.tranId
-		cInfo.TranId = ctx.tranId
-	} else {
-		cInfo.TranId = e.Catalog.NextUncommitId()
-		cInfo.CommitId = cInfo.TranId
-	}
-	e.Lock()
-	defer e.Unlock()
-	if e.IsHardDeletedLocked() {
-		ctx.discard = true
-		return nil, nil
-	}
-	e.onNewCommit(cInfo)
-	if ctx.inTran {
-		return nil, nil
-	}
-	logEntry := e.Catalog.prepareCommitEntry(e, ETShardUpgradeReplaced, e)
-	return logEntry, nil
-}
-
 // Threadsafe
 // It is used to take a snapshot of table base on a commit id. It goes through
 // the version chain to find a "safe" commit version and create a view base on
@@ -205,13 +172,14 @@ func (e *Table) fillView(filter *Filter) *Table {
 }
 
 // Not threadsafe, and not needed
-// Only used during data replay by the catalog replayer
-func (e *Table) rebuild(catalog *Catalog) {
-	e.Catalog = catalog
+func (e *Table) rebuild(db *Database, replay bool) {
+	e.Database = db
 	e.IdIndex = make(map[uint64]int)
 	for i, seg := range e.SegmentSet {
-		catalog.Sequence.TryUpdateSegmentId(seg.Id)
-		seg.rebuild(e)
+		if replay {
+			db.Catalog.Sequence.TryUpdateSegmentId(seg.Id)
+		}
+		seg.rebuild(e, replay)
 		e.IdIndex[seg.Id] = i
 	}
 }
@@ -222,13 +190,13 @@ func (e *Table) rebuild(catalog *Catalog) {
 // table related data resources were deleted. A hard-deleted table will
 // be deleted from catalog later
 func (e *Table) HardDelete() error {
-	tranId := e.Catalog.NextUncommitId()
+	tranId := e.Database.Catalog.NextUncommitId()
 	ctx := newDeleteTableCtx(e, tranId)
-	err := e.Catalog.onCommitRequest(ctx)
+	err := e.Database.Catalog.onCommitRequest(ctx)
 	if err != nil {
 		return err
 	}
-	e.Catalog.tableListener.OnTableHardDeleted(e)
+	e.Database.tableListener.OnTableHardDeleted(e)
 	return err
 }
 
@@ -250,7 +218,7 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 	}
 	cInfo.LogIndex = e.CommitInfo.LogIndex
 	e.onNewCommit(cInfo)
-	logEntry := e.Catalog.prepareCommitEntry(e, ETHardDeleteTable, e)
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETHardDeleteTable, e)
 	return logEntry, nil
 }
 
@@ -258,10 +226,15 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 // It is driven by external command. The engine then schedules a GC task to hard delete
 // related resources.
 func (e *Table) SimpleSoftDelete(exIndex *LogIndex) error {
-	tranId := e.Catalog.NextUncommitId()
-	ctx := newDropTableCtx(e.Schema.Name, exIndex, tranId)
+	if exIndex != nil && exIndex.ShardId != e.GetShardId() {
+		return InconsistentShardIdErr
+	}
+	tranId := e.Database.Catalog.NextUncommitId()
+	ctx := new(dropTableCtx)
 	ctx.table = e
-	return e.Catalog.onCommitRequest(ctx)
+	ctx.exIndex = exIndex
+	ctx.tranId = tranId
+	return e.Database.Catalog.onCommitRequest(ctx)
 }
 
 func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
@@ -278,7 +251,7 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 		return nil, TableNotFoundErr
 	}
 	e.onNewCommit(cInfo)
-	logEntry := e.Catalog.prepareCommitEntry(e, ETSoftDeleteTable, e)
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETSoftDeleteTable, e)
 	return logEntry, nil
 }
 
@@ -305,13 +278,18 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 	var buf []byte
 	switch eType {
 	case ETCreateTable:
-		buf, _ = e.Marshal()
+		entry := tableLogEntry{
+			Table:      e,
+			DatabaseId: e.Database.Id,
+		}
+		buf, _ = entry.Marshal()
 	case ETSoftDeleteTable:
 		if !e.IsSoftDeletedLocked() {
 			panic("logic error")
 		}
 		entry := tableLogEntry{
-			BaseEntry: e.BaseEntry,
+			BaseEntry:  e.BaseEntry,
+			DatabaseId: e.Database.Id,
 		}
 		buf, _ = entry.Marshal()
 	case ETHardDeleteTable:
@@ -319,7 +297,8 @@ func (e *Table) ToLogEntry(eType LogEntryType) LogEntry {
 			panic("logic error")
 		}
 		entry := tableLogEntry{
-			BaseEntry: e.BaseEntry,
+			BaseEntry:  e.BaseEntry,
+			DatabaseId: e.Database.Id,
 		}
 		buf, _ = entry.Marshal()
 	default:
@@ -437,9 +416,9 @@ func (e *Table) SimpleGetOrCreateNextBlock(from *Block) *Block {
 }
 
 func (e *Table) SimpleCreateSegment() *Segment {
-	tranId := e.Catalog.NextUncommitId()
+	tranId := e.Database.Catalog.NextUncommitId()
 	ctx := newCreateSegmentCtx(e, tranId)
-	if err := e.Catalog.onCommitRequest(ctx); err != nil {
+	if err := e.Database.Catalog.onCommitRequest(ctx); err != nil {
 		return nil
 	}
 	return ctx.segment
@@ -465,12 +444,12 @@ func (e *Table) SimpleGetSegmentCount() int {
 }
 
 func (e *Table) prepareCreateSegment(ctx *createSegmentCtx) (LogEntry, error) {
-	se := newSegmentEntry(e.Catalog, e, ctx.tranId, ctx.exIndex)
+	se := newSegmentEntry(e, ctx.tranId, ctx.exIndex)
 	logEntry := se.ToLogEntry(ETCreateSegment)
 	e.Lock()
 	e.onNewSegment(se)
 	e.Unlock()
-	e.Catalog.prepareCommitLog(se, logEntry)
+	e.Database.Catalog.prepareCommitLog(se, logEntry)
 	ctx.segment = se
 	return logEntry, nil
 }
@@ -500,29 +479,33 @@ func (e *Table) SimpleGetSegment(id uint64) *Segment {
 	return e.GetSegment(id, MinUncommitId)
 }
 
-func (e *Table) Splite(tranId uint64, splitSpec *TableSplitSpec, nameFactory TableNameFactory, catalog *Catalog) []*Table {
+func (e *Table) Splite(catalog *Catalog, tranId uint64, splitSpec *TableSplitSpec, nameFactory TableNameFactory, dbs map[uint64]*Database) {
 	specs := splitSpec.Specs
 	tables := make([]*Table, len(specs))
 	for i, spec := range specs {
-		logIndex := LogIndex{
-			ShardId: spec.ShardId,
-			Id:      shard.SimpleIndexId(uint64(0)),
-		}
+		// logIndex := LogIndex{
+		// 	ShardId: spec.DBSpec.ShardId,
+		// 	Id:      shard.SimpleIndexId(uint64(0)),
+		// }
+		db := dbs[spec.DBSpec.ShardId]
 		info := e.CommitInfo.Clone()
 		info.TranId = tranId
 		info.CommitId = tranId
-		info.LogIndex = &logIndex
+		info.LogIndex = db.CommitInfo.LogIndex
 		baseEntry := &BaseEntry{
 			Id:         catalog.NextTableId(),
 			CommitInfo: info,
 		}
 		schema := *e.Schema
-		schema.Name = nameFactory.Rename(schema.Name, spec.ShardId)
-		tables[i] = &Table{
+		schema.Name = nameFactory.Rename(schema.Name, spec.DBSpec.ShardId)
+		table := &Table{
 			Schema:     &schema,
 			BaseEntry:  baseEntry,
 			SegmentSet: make([]*Segment, 0),
+			Database:   db,
 		}
+		db.onNewTable(table)
+		tables[i] = table
 	}
 	idx := 0
 	spec := specs[idx]
@@ -545,7 +528,6 @@ func (e *Table) Splite(tranId uint64, splitSpec *TableSplitSpec, nameFactory Tab
 		}
 		table.SegmentSet = append(table.SegmentSet, segment)
 	}
-	return tables
 }
 
 func (e *Table) GetSegment(id, tranId uint64) *Segment {
@@ -572,7 +554,16 @@ func (e *Table) PString(level PPLevel) string {
 	return s
 }
 
-func MockTable(catalog *Catalog, schema *Schema, blkCnt uint64, idx *LogIndex) *Table {
+func MockDBTable(catalog *Catalog, dbName string, schema *Schema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
+
+	db, err := catalog.SimpleCreateDatabase(dbName, idxGen.First())
+	if err != nil {
+		return nil
+	}
+	return MockTable(db, schema, blkCnt, idxGen.Next())
+}
+
+func MockTable(db *Database, schema *Schema, blkCnt uint64, idx *LogIndex) *Table {
 	if schema == nil {
 		schema = MockSchema(2)
 	}
@@ -581,7 +572,7 @@ func MockTable(catalog *Catalog, schema *Schema, blkCnt uint64, idx *LogIndex) *
 			Id: shard.SimpleIndexId(common.NextGlobalSeqNum()),
 		}
 	}
-	tbl, err := catalog.SimpleCreateTable(schema, idx)
+	tbl, err := db.SimpleCreateTable(schema, idx)
 	if err != nil {
 		panic(err)
 	}

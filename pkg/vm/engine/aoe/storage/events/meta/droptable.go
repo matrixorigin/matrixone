@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
@@ -63,13 +62,14 @@ func (e *dropTableEvent) Execute() error {
 		return err
 	}
 	defer e.Ctx.Opts.Wal.Checkpoint(index)
-	tbl := e.Ctx.Opts.Meta.Catalog.SimpleGetTableByName(e.reqCtx.TableName)
-	if tbl == nil {
-		return metadata.TableNotFoundErr
+	tbl, err := e.Ctx.Opts.Meta.Catalog.SimpleGetTableByName(e.reqCtx.DBName,
+		e.reqCtx.TableName)
+	if err != nil {
+		return err
 	}
 	e.Id = tbl.Id
-	tbl.SimpleSoftDelete(index)
-	gcReq := gcreqs.NewDropTblRequest(e.Ctx.Opts, tbl.Id, e.Tables, e.MTMgr, e.reqCtx.OnFinishCB)
+	err = tbl.SimpleSoftDelete(index)
+	gcReq := gcreqs.NewDropTblRequest(e.Ctx.Opts, tbl, e.Tables, e.MTMgr, e.reqCtx.OnFinishCB)
 	e.Ctx.Opts.GC.Acceptor.Accept(gcReq)
 	return nil
 }

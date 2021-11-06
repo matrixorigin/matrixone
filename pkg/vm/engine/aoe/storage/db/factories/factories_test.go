@@ -14,6 +14,11 @@
 package factories
 
 import (
+	"os"
+	"strconv"
+	"sync"
+	"testing"
+
 	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
@@ -26,12 +31,14 @@ import (
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
-	"os"
-	"sync"
-	"testing"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
+
+func shardIdToName(id uint64) string {
+	return strconv.FormatUint(id, 10)
+}
 
 func TestMutBlockNodeFactory(t *testing.T) {
 	rowCount, blkCount := uint64(30), uint64(4)
@@ -43,7 +50,11 @@ func TestMutBlockNodeFactory(t *testing.T) {
 	defer opts.Meta.Catalog.Close()
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)
-	tablemeta := metadata.MockTable(opts.Meta.Catalog, schema, 2, nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(99)
+	dbName := shardIdToName(shardId)
+	idxGen := gen.Shard(shardId)
+	tablemeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, 2, idxGen)
 
 	meta1, err := tablemeta.SimpleGetBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)

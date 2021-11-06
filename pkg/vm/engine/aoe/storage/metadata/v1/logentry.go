@@ -25,7 +25,12 @@ type LogEntry = logstore.AsyncEntry
 type LogEntryMeta = logstore.EntryMeta
 
 const (
-	ETCreateTable LogEntryType = iota + logstore.ETCustomizeStart
+	ETCreateDatabase LogEntryType = iota + logstore.ETCustomizeStart
+	ETSoftDeleteDatabase
+	ETHardDeleteDatabase
+	ETReplaceDatabase
+	ETSplitDatabase
+	ETCreateTable
 	ETSoftDeleteTable
 	ETHardDeleteTable
 	ETCreateSegment
@@ -34,18 +39,9 @@ const (
 	ETCreateBlock
 	ETUpgradeBlock
 	ETDropBlock
-	ETShardSnapshot
-	ETShardUpgradeReplaced
-	ETShardUpgradeAdd
-	ETShardSplit
+	ETDatabaseSnapshot
+	ETDatabaseReplaced
 )
-
-func IsSyncDDLEntryType(et LogEntryType) bool {
-	if et == ETCreateTable || et == ETSoftDeleteTable {
-		return true
-	}
-	return false
-}
 
 type IEntry interface {
 	sync.Locker

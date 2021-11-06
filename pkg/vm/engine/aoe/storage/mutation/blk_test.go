@@ -47,7 +47,9 @@ func TestMutableBlockNode(t *testing.T) {
 	defer catalog.Close()
 	opts.Scheduler = sched.NewScheduler(opts, nil)
 	schema := metadata.MockSchema(2)
-	tablemeta := metadata.MockTable(catalog, schema, 2, nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	tablemeta := metadata.MockDBTable(catalog, "db1", schema, 2, gen.Shard(shardId))
 
 	meta1, err := tablemeta.SimpleGetBlock(uint64(1), uint64(1))
 	assert.Nil(t, err)

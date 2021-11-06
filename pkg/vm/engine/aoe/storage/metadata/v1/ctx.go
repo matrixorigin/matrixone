@@ -20,6 +20,27 @@ type writeCtx struct {
 	inTran  bool
 }
 
+type createDatabaseCtx struct {
+	writeCtx
+	database *Database
+	name     string
+}
+
+type dropDatabaseCtx struct {
+	writeCtx
+	database *Database
+}
+
+type deleteDatabaseCtx struct {
+	writeCtx
+	database *Database
+}
+
+type addDatabaseCtx struct {
+	writeCtx
+	database *Database
+}
+
 type addTableCtx struct {
 	writeCtx
 	table *Table
@@ -27,13 +48,13 @@ type addTableCtx struct {
 
 type createTableCtx struct {
 	writeCtx
-	schema *Schema
-	table  *Table
+	schema   *Schema
+	table    *Table
+	database *Database
 }
 
 type dropTableCtx struct {
 	writeCtx
-	name  string
 	table *Table
 }
 
@@ -73,44 +94,22 @@ type replaceTableCtx struct {
 	discard bool
 }
 
-type replaceShardCtx struct {
+type replaceDatabaseCtx struct {
 	writeCtx
-	view *catalogLogEntry
+	view *databaseLogEntry
 }
 
-type splitShardCtx struct {
+type addReplaceCommitCtx struct {
+	writeCtx
+	database *Database
+	discard  bool
+}
+
+type splitDBCtx struct {
 	writeCtx
 	spec        *ShardSplitSpec
 	nameFactory TableNameFactory
-}
-
-func newAddTableCtx(table *Table, inTran bool) *addTableCtx {
-	return &addTableCtx{
-		writeCtx: writeCtx{
-			inTran: inTran,
-		},
-		table: table,
-	}
-}
-
-func newCreateTableCtx(schema *Schema, exIndex *LogIndex, tranId uint64) *createTableCtx {
-	return &createTableCtx{
-		writeCtx: writeCtx{
-			exIndex: exIndex,
-			tranId:  tranId,
-		},
-		schema: schema,
-	}
-}
-
-func newDropTableCtx(name string, exIndex *LogIndex, tranId uint64) *dropTableCtx {
-	return &dropTableCtx{
-		writeCtx: writeCtx{
-			exIndex: exIndex,
-			tranId:  tranId,
-		},
-		name: name,
-	}
+	dbSpecs     []DBSpec
 }
 
 func newDeleteTableCtx(table *Table, tranId uint64) *deleteTableCtx {
@@ -159,26 +158,4 @@ func newUpgradeBlockCtx(block *Block, exIndice []*LogIndex, tranId uint64) *upgr
 		block:    block,
 		exIndice: exIndice,
 	}
-}
-
-func newReplaceTableCtx(table *Table, exIndex *LogIndex, tranId uint64, inTran bool) *replaceTableCtx {
-	return &replaceTableCtx{
-		table: table,
-		writeCtx: writeCtx{
-			inTran:  inTran,
-			tranId:  tranId,
-			exIndex: exIndex,
-		},
-	}
-}
-
-func newReplaceShardCtx(view *catalogLogEntry, tranId uint64) *replaceShardCtx {
-	ctx := &replaceShardCtx{
-		writeCtx: writeCtx{
-			inTran: true,
-			tranId: tranId,
-		},
-		view: view,
-	}
-	return ctx
 }

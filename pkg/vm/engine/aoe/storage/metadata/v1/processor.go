@@ -1,15 +1,24 @@
 package metadata
 
 type LoopProcessor interface {
+	OnDatabase(database *Database) error
 	OnTable(table *Table) error
 	OnSegment(segment *Segment) error
 	OnBlock(block *Block) error
 }
 
 type loopProcessor struct {
-	TableFn   func(*Table) error
-	SegmentFn func(*Segment) error
-	BlockFn   func(*Block) error
+	DatabaseFn func(*Database) error
+	TableFn    func(*Table) error
+	SegmentFn  func(*Segment) error
+	BlockFn    func(*Block) error
+}
+
+func (p *loopProcessor) OnDatabase(database *Database) error {
+	if p.DatabaseFn != nil {
+		return p.DatabaseFn(database)
+	}
+	return nil
 }
 
 func (p *loopProcessor) OnTable(table *Table) error {
@@ -45,14 +54,26 @@ func newReAllocIdProcessor(allocator *Sequence, tranId uint64) *reallocIdProcess
 		allocator: allocator,
 		tranId:    tranId,
 	}
+	p.DatabaseFn = p.onDatabase
 	p.TableFn = p.onTable
 	p.SegmentFn = p.onSegment
 	p.BlockFn = p.onBlock
 	p.trace = new(mapping)
+	p.trace.Database = make(map[uint64]uint64)
 	p.trace.Table = make(map[uint64]uint64)
 	p.trace.Segment = make(map[uint64]uint64)
 	p.trace.Block = make(map[uint64]uint64)
 	return p
+}
+
+func (p *reallocIdProcessor) onDatabase(db *Database) error {
+	old := db.Id
+	db.Id = p.allocator.NextDatabaseId()
+	p.trace.Database[old] = db.Id
+
+	db.CommitInfo.CommitId = p.tranId
+	db.CommitInfo.TranId = p.tranId
+	return nil
 }
 
 func (p *reallocIdProcessor) onTable(table *Table) error {

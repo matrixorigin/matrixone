@@ -32,9 +32,10 @@ var (
 
 type blockLogEntry struct {
 	*BaseEntry
-	Catalog   *Catalog `json:"-"`
-	TableId   uint64
-	SegmentId uint64
+	Catalog    *Catalog `json:"-"`
+	DatabaseId uint64
+	TableId    uint64
+	SegmentId  uint64
 }
 
 func (e *blockLogEntry) Marshal() ([]byte, error) {
@@ -45,14 +46,14 @@ func (e *blockLogEntry) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, e)
 }
 
-func (e *blockLogEntry) ToEntry() *Block {
-	entry := &Block{
-		BaseEntry: e.BaseEntry,
-	}
-	table := e.Catalog.TableSet[e.TableId]
-	entry.Segment = table.GetSegment(e.SegmentId, MinUncommitId)
-	return entry
-}
+// func (e *blockLogEntry) ToEntry() *Block {
+// 	entry := &Block{
+// 		BaseEntry: e.BaseEntry,
+// 	}
+// 	table := e.Catalog.TableSet[e.TableId]
+// 	entry.Segment = table.GetSegment(e.SegmentId, MinUncommitId)
+// 	return entry
+// }
 
 type IndiceMemo struct {
 	mu      *sync.Mutex
@@ -99,7 +100,7 @@ func newBlockEntry(segment *Segment, tranId uint64, exIndex *LogIndex) *Block {
 	e := &Block{
 		Segment: segment,
 		BaseEntry: &BaseEntry{
-			Id: segment.Table.Catalog.NextBlockId(),
+			Id: segment.Table.Database.Catalog.NextBlockId(),
 			CommitInfo: &CommitInfo{
 				CommitId: tranId,
 				TranId:   tranId,
@@ -299,13 +300,13 @@ func (e *Block) SetSize(size int64) {
 
 // Safe
 func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
-	tranId := e.Segment.Table.Catalog.NextUncommitId()
+	tranId := e.Segment.Table.Database.Catalog.NextUncommitId()
 	ctx := newUpgradeBlockCtx(e, exIndice, tranId)
-	err := e.Segment.Table.Catalog.onCommitRequest(ctx)
+	err := e.Segment.Table.Database.Catalog.onCommitRequest(ctx)
 	if err != nil {
 		return err
 	}
-	e.Segment.Table.Catalog.blockListener.OnBlockUpgraded(e)
+	e.Segment.Table.Database.blockListener.OnBlockUpgraded(e)
 	return err
 }
 
@@ -344,16 +345,17 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 		}
 	}
 	e.onNewCommit(cInfo)
-	logEntry := e.Segment.Catalog.prepareCommitEntry(e, ETUpgradeBlock, e)
+	logEntry := e.Segment.Table.Database.Catalog.prepareCommitEntry(e, ETUpgradeBlock, e)
 	return logEntry, nil
 }
 
 func (e *Block) toLogEntry() *blockLogEntry {
 	return &blockLogEntry{
-		BaseEntry: e.BaseEntry,
-		Catalog:   e.Segment.Catalog,
-		TableId:   e.Segment.Table.Id,
-		SegmentId: e.Segment.Id,
+		BaseEntry:  e.BaseEntry,
+		Catalog:    e.Segment.Table.Database.Catalog,
+		DatabaseId: e.Segment.Table.Database.Id,
+		TableId:    e.Segment.Table.Id,
+		SegmentId:  e.Segment.Id,
 	}
 }
 

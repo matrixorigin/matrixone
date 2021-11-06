@@ -125,6 +125,12 @@ func (mgr *manager) SyncLog(payload wal.Payload) error {
 func (mgr *manager) Log(payload wal.Payload) (*Entry, error) {
 	entry := wal.GetEntry(0)
 	entry.Payload = payload
+	{
+		// index := entry.Payload.(*Index)
+		// if index.ShardId == 0 {
+		// 	panic("")
+		// }
+	}
 	if _, err := mgr.EnqueueRecevied(entry); err != nil {
 		entry.Free()
 		return nil, err

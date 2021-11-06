@@ -61,7 +61,7 @@ func newTBlock(host iface.ISegment, meta *metadata.Block, factory fb.NodeFactory
 func (blk *tblock) close() {
 	if blk.meta.Segment.Table.IsDeleted() {
 		snip := blk.meta.ConsumeSnippet(true)
-		blk.meta.Segment.Table.Catalog.IndexWal.Checkpoint(snip)
+		blk.meta.Segment.Table.Database.Catalog.IndexWal.Checkpoint(snip)
 	}
 	blk.baseBlock.release()
 	blk.node.SetStale()

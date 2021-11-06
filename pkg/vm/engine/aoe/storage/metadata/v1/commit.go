@@ -14,7 +14,10 @@
 
 package metadata
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+)
 
 type commitPipeline struct {
 	mu      *sync.RWMutex
@@ -30,8 +33,18 @@ func newCommitPipeline(catalog *Catalog) *commitPipeline {
 
 func (p *commitPipeline) prepare(ctx interface{}) (LogEntry, error) {
 	switch v := ctx.(type) {
+	case *createDatabaseCtx:
+		return p.catalog.prepareCreateDatabase(v)
+	case *dropDatabaseCtx:
+		return v.database.prepareSoftDelete(v)
+	case *deleteDatabaseCtx:
+		return v.database.prepareHardDelete(v)
+	case *replaceDatabaseCtx:
+		return p.catalog.prepareReplaceDatabase(v)
+	case *splitDBCtx:
+		return p.catalog.prepareSplit(v)
 	case *createTableCtx:
-		return p.catalog.prepareCreateTable(v)
+		return v.database.prepareCreateTable(v)
 	case *dropTableCtx:
 		return v.table.prepareSoftDelete(v)
 	case *deleteTableCtx:
@@ -44,12 +57,9 @@ func (p *commitPipeline) prepare(ctx interface{}) (LogEntry, error) {
 		return v.segment.prepareCreateBlock(v)
 	case *upgradeBlockCtx:
 		return v.block.prepareUpgrade(v)
-	case *replaceShardCtx:
-		return p.catalog.prepareReplaceShard(v)
-	case *splitShardCtx:
-		return p.catalog.prepareSplitShard(v)
+	default:
+		panic(fmt.Sprintf("not supported: %v", v))
 	}
-	panic("not supported")
 }
 
 func (p *commitPipeline) commit(entry LogEntry) error {

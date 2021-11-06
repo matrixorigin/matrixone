@@ -30,6 +30,7 @@ import (
 	table2 "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/stretchr/testify/assert"
@@ -48,7 +49,8 @@ func TestAll(t *testing.T) {
 	catalog := metadata.MockCatalog(path, rowCount, blkCount, nil, nil)
 	schema := metadata.MockSchemaAll(14)
 	segCnt, blkCnt := uint64(4), uint64(4)
-	table := metadata.MockTable(catalog, schema, segCnt*blkCnt, nil)
+	gen := shard.NewMockIndexAllocator()
+	table := metadata.MockDBTable(catalog, "db1", schema, segCnt*blkCnt, gen.Shard(0))
 	segment := table.SimpleCreateSegment()
 	assert.NotNil(t, segment)
 	batches := make([]*batch.Batch, 0)
@@ -1336,7 +1338,8 @@ func TestNotBuild(t *testing.T) {
 	catalog := metadata.MockCatalog(path, rowCount, blkCount, nil, nil)
 	schema := metadata.MockSchemaAll(14)
 	segCnt, blkCnt := uint64(4), uint64(4)
-	table := metadata.MockTable(catalog, schema, segCnt*blkCnt, nil)
+	gen := shard.NewMockIndexAllocator()
+	table := metadata.MockDBTable(catalog, "db1", schema, segCnt*blkCnt, gen.Shard(0))
 	segment := table.SimpleCreateSegment()
 	assert.NotNil(t, segment)
 	batches := make([]*batch.Batch, 0)

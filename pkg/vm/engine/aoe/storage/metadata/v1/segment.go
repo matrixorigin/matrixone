@@ -31,8 +31,9 @@ var (
 
 type segmentLogEntry struct {
 	*BaseEntry
-	TableId uint64
-	Catalog *Catalog `json:"-"`
+	DatabaseId uint64
+	TableId    uint64
+	Catalog    *Catalog `json:"-"`
 }
 
 func (e *segmentLogEntry) Marshal() ([]byte, error) {
@@ -46,19 +47,17 @@ func (e *segmentLogEntry) Unmarshal(buf []byte) error {
 type Segment struct {
 	*BaseEntry
 	Table    *Table         `json:"-"`
-	Catalog  *Catalog       `json:"-"`
 	IdIndex  map[uint64]int `json:"-"`
 	BlockSet []*Block       `json:"blocks"`
 }
 
-func newSegmentEntry(catalog *Catalog, table *Table, tranId uint64, exIndex *LogIndex) *Segment {
+func newSegmentEntry(table *Table, tranId uint64, exIndex *LogIndex) *Segment {
 	e := &Segment{
-		Catalog:  catalog,
 		Table:    table,
 		BlockSet: make([]*Block, 0),
 		IdIndex:  make(map[uint64]int),
 		BaseEntry: &BaseEntry{
-			Id: table.Catalog.NextSegmentId(),
+			Id: table.Database.Catalog.NextSegmentId(),
 			CommitInfo: &CommitInfo{
 				CommitId: tranId,
 				TranId:   tranId,
@@ -71,9 +70,8 @@ func newSegmentEntry(catalog *Catalog, table *Table, tranId uint64, exIndex *Log
 	return e
 }
 
-func newCommittedSegmentEntry(catalog *Catalog, table *Table, base *BaseEntry) *Segment {
+func newCommittedSegmentEntry(table *Table, base *BaseEntry) *Segment {
 	e := &Segment{
-		Catalog:   catalog,
 		Table:     table,
 		BlockSet:  make([]*Block, 0),
 		IdIndex:   make(map[uint64]int),
@@ -89,12 +87,13 @@ func (e *Segment) LE(o *Segment) bool {
 	return e.Id <= o.Id
 }
 
-func (e *Segment) rebuild(table *Table) {
-	e.Catalog = table.Catalog
+func (e *Segment) rebuild(table *Table, replay bool) {
 	e.Table = table
 	e.IdIndex = make(map[uint64]int)
 	for i, blk := range e.BlockSet {
-		e.Catalog.Sequence.TryUpdateBlockId(blk.Id)
+		if replay {
+			e.Table.Database.Catalog.Sequence.TryUpdateBlockId(blk.Id)
+		}
 		blk.rebuild(e)
 		e.IdIndex[blk.Id] = i
 	}
@@ -143,8 +142,9 @@ func (e *Segment) Marshal() ([]byte, error) {
 
 func (e *Segment) toLogEntry() *segmentLogEntry {
 	return &segmentLogEntry{
-		BaseEntry: e.BaseEntry,
-		TableId:   e.Table.Id,
+		BaseEntry:  e.BaseEntry,
+		TableId:    e.Table.Id,
+		DatabaseId: e.Table.Database.Id,
 	}
 }
 
@@ -206,9 +206,9 @@ func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
 
 // Safe
 func (e *Segment) SimpleCreateBlock() *Block {
-	tranId := e.Table.Catalog.NextUncommitId()
+	tranId := e.Table.Database.Catalog.NextUncommitId()
 	ctx := newCreateBlockCtx(e, tranId)
-	if err := e.Table.Catalog.onCommitRequest(ctx); err != nil {
+	if err := e.Table.Database.Catalog.onCommitRequest(ctx); err != nil {
 		return nil
 	}
 	return ctx.block
@@ -230,7 +230,7 @@ func (e *Segment) prepareCreateBlock(ctx *createBlockCtx) (LogEntry, error) {
 	e.Lock()
 	e.onNewBlock(be)
 	e.Unlock()
-	e.Table.Catalog.prepareCommitLog(be, logEntry)
+	e.Table.Database.Catalog.prepareCommitLog(be, logEntry)
 	ctx.block = be
 	return logEntry, nil
 }
@@ -281,13 +281,13 @@ func (e *Segment) onNewBlock(entry *Block) {
 // Safe
 func (e *Segment) SimpleUpgrade(size int64, exIndice []*LogIndex) error {
 	stale := e.GetCommit()
-	tranId := e.Table.Catalog.NextUncommitId()
+	tranId := e.Table.Database.Catalog.NextUncommitId()
 	ctx := newUpgradeSegmentCtx(e, size, exIndice, tranId)
-	err := e.Table.Catalog.onCommitRequest(ctx)
+	err := e.Table.Database.Catalog.onCommitRequest(ctx)
 	if err != nil {
 		return err
 	}
-	e.Table.Catalog.segmentListener.OnSegmentUpgraded(e, stale)
+	e.Table.Database.segmentListener.OnSegmentUpgraded(e, stale)
 	return err
 }
 
@@ -400,7 +400,7 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 		}
 	}
 	e.onNewCommit(cInfo)
-	logEntry := e.Table.Catalog.prepareCommitEntry(e, ETUpgradeSegment, e)
+	logEntry := e.Table.Database.Catalog.prepareCommitEntry(e, ETUpgradeSegment, e)
 	return logEntry, nil
 }
 

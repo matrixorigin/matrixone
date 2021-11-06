@@ -113,6 +113,7 @@ func (f *commitFilter) EvalStop(info *CommitInfo) bool {
 }
 
 type Filter struct {
+	dbFilter      *commitFilter
 	tableFilter   *commitFilter
 	segmentFilter *commitFilter
 	blockFilter   *commitFilter

@@ -15,15 +15,17 @@
 package handle
 
 import (
+	"os"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"sync"
-	"testing"
-	"time"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -54,7 +56,9 @@ func TestSnapshot(t *testing.T) {
 
 	catalog := opts.Meta.Catalog
 	defer catalog.Close()
-	tableMeta := metadata.MockTable(catalog, schema, uint64(blk_cnt*seg_cnt), nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	tableMeta := metadata.MockDBTable(catalog, "db1", schema, uint64(blk_cnt*seg_cnt), gen.Shard(shardId))
 
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)

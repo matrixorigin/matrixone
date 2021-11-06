@@ -15,48 +15,51 @@ package metadata
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 
 	"github.com/google/btree"
 )
 
-type tableNode struct {
+type nodeList struct {
 	common.SSLLNode
-	Catalog *Catalog
-	name    string
+	host     interface{}
+	rwlocker *sync.RWMutex
+	name     string
 }
 
-func newTableNode(catalog *Catalog, name string) *tableNode {
-	return &tableNode{
+func newNodeList(host interface{}, rwlocker *sync.RWMutex, name string) *nodeList {
+	return &nodeList{
 		SSLLNode: *common.NewSSLLNode(),
-		Catalog:  catalog,
+		host:     host,
+		rwlocker: rwlocker,
 		name:     name,
 	}
 }
 
-func (n *tableNode) Less(item btree.Item) bool {
-	return n.name < item.(*tableNode).name
+func (n *nodeList) Less(item btree.Item) bool {
+	return n.name < item.(*nodeList).name
 }
 
-func (n *tableNode) CreateNode(id uint64) *nameNode {
-	nn := newNameNode(n.Catalog, id)
-	n.Catalog.nodesMu.Lock()
-	defer n.Catalog.nodesMu.Unlock()
+func (n *nodeList) CreateNode(id uint64) *nameNode {
+	nn := newNameNode(n.host, id)
+	n.rwlocker.Lock()
+	defer n.rwlocker.Unlock()
 	n.Insert(nn)
 	return nn
 }
 
-func (n *tableNode) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
-	n.Catalog.nodesMu.Lock()
-	defer n.Catalog.nodesMu.Unlock()
+func (n *nodeList) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
+	n.rwlocker.Lock()
+	defer n.rwlocker.Unlock()
 	var prev common.ISSLLNode
 	prev = n
 	curr := n.GetNext()
 	depth := 0
 	for curr != nil {
-		tableId := curr.(*nameNode).Id
-		if id == tableId {
+		nid := curr.(*nameNode).Id
+		if id == nid {
 			prev.ReleaseNextNode()
 			deleted = curr.(*nameNode)
 			next := curr.GetNext()
@@ -72,7 +75,7 @@ func (n *tableNode) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
 	return
 }
 
-func (n *tableNode) LengthLocked() int {
+func (n *nodeList) LengthLocked() int {
 	curr := n.GetNext()
 	length := 0
 	for curr != nil {
@@ -82,33 +85,39 @@ func (n *tableNode) LengthLocked() int {
 	return length
 }
 
-func (n *tableNode) Length() int {
-	n.Catalog.nodesMu.RLock()
-	defer n.Catalog.nodesMu.RUnlock()
+func (n *nodeList) Length() int {
+	n.rwlocker.RLock()
+	defer n.rwlocker.RUnlock()
 	return n.LengthLocked()
 }
 
-func (n *tableNode) GetEntry() *Table {
-	n.Catalog.nodesMu.RLock()
-	defer n.Catalog.nodesMu.RUnlock()
-	return n.GetNext().(*nameNode).GetEntry()
+func (n *nodeList) GetTable() *Table {
+	n.rwlocker.RLock()
+	defer n.rwlocker.RUnlock()
+	return n.GetNext().(*nameNode).GetTable()
 }
 
-func (n *tableNode) PString(level PPLevel) string {
+func (n *nodeList) GetDatabase() *Database {
+	n.rwlocker.RLock()
+	defer n.rwlocker.RUnlock()
+	return n.GetNext().(*nameNode).GetDatabase()
+}
+
+func (n *nodeList) PString(level PPLevel) string {
 	curr := n.GetNext()
 	if curr == nil {
 		return fmt.Sprintf("TableNode[\"%s\"](Len=0)", n.name)
 	}
-	entry := curr.(*nameNode).GetEntry()
-	s := fmt.Sprintf("TableNode[\"%s\"](Len=%d)->[%d", entry.Schema.Name, n.Length(), entry.Id)
+	node := curr.(*nameNode)
+	s := fmt.Sprintf("TableNode[\"%s\"](Len=%d)->[%d", n.name, n.Length(), node.Id)
 	if level == PPL0 {
 		s = fmt.Sprintf("%s]", s)
 		return s
 	}
 	curr = curr.GetNext()
 	for curr != nil {
-		entry := curr.(*nameNode).GetEntry()
-		s = fmt.Sprintf("%s->%d", s, entry.Id)
+		node := curr.(*nameNode)
+		s = fmt.Sprintf("%s->%d", s, node.Id)
 		curr = curr.GetNext()
 	}
 	s = fmt.Sprintf("%s]", s)
@@ -117,21 +126,28 @@ func (n *tableNode) PString(level PPLevel) string {
 
 type nameNode struct {
 	common.SSLLNode
-	Id      uint64
-	Catalog *Catalog
+	Id   uint64
+	host interface{}
 }
 
-func newNameNode(catalog *Catalog, id uint64) *nameNode {
+func newNameNode(host interface{}, id uint64) *nameNode {
 	return &nameNode{
 		Id:       id,
 		SSLLNode: *common.NewSSLLNode(),
-		Catalog:  catalog,
+		host:     host,
 	}
 }
 
-func (n *nameNode) GetEntry() *Table {
+func (n *nameNode) GetDatabase() *Database {
 	if n == nil {
 		return nil
 	}
-	return n.Catalog.TableSet[n.Id]
+	return n.host.(*Catalog).Databases[n.Id]
+}
+
+func (n *nameNode) GetTable() *Table {
+	if n == nil {
+		return nil
+	}
+	return n.host.(*Database).TableSet[n.Id]
 }

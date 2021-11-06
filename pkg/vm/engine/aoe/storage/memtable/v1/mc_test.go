@@ -21,7 +21,6 @@ import (
 
 	bm "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
@@ -60,7 +59,11 @@ func TestMutCollection(t *testing.T) {
 	opts.Scheduler = sched.NewScheduler(opts, tables)
 
 	schema := metadata.MockSchema(2)
-	tbl, err := opts.Meta.Catalog.SimpleCreateTable(schema, nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	database, err := opts.Meta.Catalog.SimpleCreateDatabase("db1", gen.Shard(shardId).First())
+	assert.Nil(t, err)
+	tbl, err := database.SimpleCreateTable(schema, gen.Next(shardId))
 	assert.Nil(t, err)
 	assert.NotNil(t, tbl)
 
@@ -89,16 +92,16 @@ func TestMutCollection(t *testing.T) {
 			expectBlks -= step
 		}
 		wg.Add(1)
-		go func(id uint64, wgp *sync.WaitGroup) {
+		go func(wgp *sync.WaitGroup) {
 			defer wgp.Done()
 			insert := mock.MockBatch(tbl.Schema.Types(), thisStep*opts.Meta.Conf.BlockMaxRows)
 			index := &shard.Index{
-				Id:       shard.SimpleIndexId(id),
+				Id:       gen.Next(shardId).Id,
 				Capacity: uint64(insert.Vecs[0].Length()),
 			}
 			err := c0.Append(insert, index)
 			assert.Nil(t, err)
-		}(common.NextGlobalSeqNum(), &wg)
+		}(&wg)
 	}
 	wg.Wait()
 	t.Log(mgr.String())
@@ -115,8 +118,8 @@ func TestMutCollection(t *testing.T) {
 		Waitable: true,
 		Opts:     opts,
 	}
-	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{TableName: tbl.Schema.Name, OpIndex: common.NextGlobalSeqNum()},
-		manager, tables)
+	dropBlkE := meta.NewDropTableEvent(ctx, dbi.DropTableCtx{ShardId: shardId, DBName: database.Name, TableName: tbl.Schema.Name,
+		OpIndex: gen.Alloc(shardId)}, manager, tables)
 	opts.Scheduler.Schedule(dropBlkE)
 	err = dropBlkE.WaitDone()
 	assert.Nil(t, err)

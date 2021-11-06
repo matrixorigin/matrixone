@@ -190,7 +190,7 @@ func (info *CommitInfo) PString(level PPLevel) string {
 		} else {
 			s = fmt.Sprintf("%s)", s)
 		}
-		// s = fmt.Sprintf("%s(%s,%d,%d)", s, OpName(info.Op), info.TranId-MinUncommitId, info.CommitId)
+		s = fmt.Sprintf("%s(%s,%d,%d)", s, OpName(info.Op), info.TranId-MinUncommitId, info.CommitId)
 		prev = curr
 		curr = curr.GetNext()
 	}
@@ -236,11 +236,16 @@ func (info *CommitInfo) SetIndex(idx LogIndex) error {
 }
 
 type Sequence struct {
-	nextTableId   uint64
-	nextSegmentId uint64
-	nextBlockId   uint64
-	nextCommitId  uint64
-	nextIndexId   uint64
+	nextDatabaseId uint64
+	nextTableId    uint64
+	nextSegmentId  uint64
+	nextBlockId    uint64
+	nextCommitId   uint64
+	nextIndexId    uint64
+}
+
+func (s *Sequence) NextDatabaseId() uint64 {
+	return atomic.AddUint64(&s.nextDatabaseId, uint64(1))
 }
 
 func (s *Sequence) NextTableId() uint64 {

@@ -54,10 +54,14 @@ import (
 // 5. Hard-link all files to the given path
 //	 5.1. Use `Link` syscall to create the link
 //   5.2. Remember to Unref the files
-func (d *DB) createSnapshot(shardID uint64, path string) (uint64, error) {
+func (d *DB) createSnapshot(dbName string, path string) (idx uint64, err error) {
 	// Preparations for snapshotting
 	if err := d.Closed.Load(); err != nil {
 		return 0, errors.New("aoe already closed")
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return
 	}
 	if _, err := os.Stat(path); err != nil {
 		if err = os.MkdirAll(path, os.FileMode(0755)); err != nil {
@@ -65,17 +69,18 @@ func (d *DB) createSnapshot(shardID uint64, path string) (uint64, error) {
 		}
 	}
 
+	shardId := database.GetShardId()
+
 	// Get the PersistentLogIndex for the shard
-	retId := d.GetShardCheckpointId(shardID)
+	retId := d.GetShardCheckpointId(shardId)
 	// Get the view for shard on PersistentLogIndex
-	catalog := d.Store.Catalog
-	ssWriter := metadata.NewShardSSWriter(catalog, path, shardID, retId)
+	ssWriter := metadata.NewDBSSWriter(database, path, retId)
 	if err := ssWriter.PrepareWrite(); err != nil {
 		return 0, err
 	}
 
 	// Collect related files on disk, and pin them from being deleted
-	files, err := d.checkAndPin(path, ssWriter.View().Catalog.TableSet)
+	files, err := d.checkAndPin(path, ssWriter.View().Database.TableSet)
 	if err != nil {
 		return 0, err
 	}
@@ -85,14 +90,14 @@ func (d *DB) createSnapshot(shardID uint64, path string) (uint64, error) {
 		if retry == MaxRetryCreateSnapshot {
 			return 0, errors.New("failed to create snapshot, retry later")
 		}
-		retId = d.GetShardCheckpointId(shardID)
+		retId = d.GetShardCheckpointId(shardId)
 		logutil.Infof("retry create snapshot on log index: %d", retId)
-		ssWriter = metadata.NewShardSSWriter(catalog, path, shardID, retId)
+		ssWriter = metadata.NewDBSSWriter(database, path, retId)
 		if err = ssWriter.PrepareWrite(); err != nil {
 			return 0, err
 		}
 
-		files, err = d.checkAndPin(path, ssWriter.View().Catalog.TableSet)
+		files, err = d.checkAndPin(path, ssWriter.View().Database.TableSet)
 		if err != nil {
 			return 0, err
 		}
@@ -213,16 +218,23 @@ func (d *DB) checkAndPin(path string, tables map[uint64]*metadata.Table) ([]base
 	return files, nil
 }
 
-func (d *DB) applySnapshot(shardID uint64, path string) error {
+func (d *DB) applySnapshot(dbName string, path string) error {
 	if err := d.Closed.Load(); err != nil {
 		return errors.New("aoe already closed")
 	}
+
 	catalog := d.Store.Catalog
-	files, err := ioutil.ReadDir(path)
+
+	database, err := catalog.SimpleGetDatabaseByName(dbName)
 	if err != nil {
 		return err
 	}
 
+	files, err := ioutil.ReadDir(path)
+	if err != nil {
+		return err
+	}
+	shardId := database.GetShardId()
 	var ssmeta string
 	var segfiles []string
 	var blkfiles []string
@@ -242,11 +254,11 @@ func (d *DB) applySnapshot(shardID uint64, path string) error {
 	if len(arr) != 3 {
 		return errors.New("invalid metadata file name")
 	}
-	if shard, err := strconv.Atoi(arr[0]); err != nil || uint64(shard) != shardID {
-		return errors.New("shardID mismatch with the local snapshot meta")
+	if shard, err := strconv.Atoi(arr[0]); err != nil || uint64(shard) != shardId {
+		return errors.New("shardId mismatch with the local snapshot meta")
 	}
 
-	ssReader := metadata.NewShardSSLoader(catalog, ssmeta)
+	ssReader := metadata.NewDBSSLoader(catalog, ssmeta)
 	if err = ssReader.PrepareLoad(); err != nil {
 		return err
 	}
@@ -278,28 +290,28 @@ func (d *DB) applySnapshot(shardID uint64, path string) error {
 		//logutil.Infof("old: %s => new: %s", oldName, newName)
 	}
 
-	tbls := ssReader.View().Catalog.TableSet
+	tbls := ssReader.View().Database.TableSet
 	data := d.Store.DataTables
 	for _, tbl := range tbls {
-		tbl.Catalog = d.Store.Catalog
-		tbl.IdIndex = make(map[uint64]int)
+		// tbl.Catalog = d.Store.Catalog
+		// tbl.IdIndex = make(map[uint64]int)
 		tb, err := data.RegisterTable(tbl)
 		if err != nil {
 			return err
 		}
-		for i, seg := range tbl.SegmentSet {
-			tbl.IdIndex[seg.Id] = i
-			seg.Table = tbl
-			seg.Catalog = d.Store.Catalog
-			seg.IdIndex = make(map[uint64]int)
+		for _, seg := range tbl.SegmentSet {
+			// tbl.IdIndex[seg.Id] = i
+			// seg.Table = tbl
+			// seg.Catalog = d.Store.Catalog
+			// seg.IdIndex = make(map[uint64]int)
 			sg, err := tb.RegisterSegment(seg)
 			if err != nil {
 				return err
 			}
-			for i, blk := range seg.BlockSet {
-				seg.IdIndex[blk.Id] = i
-				blk.Segment = seg
-				blk.IndiceMemo = metadata.NewIndiceMemo(blk)
+			for _, blk := range seg.BlockSet {
+				// seg.IdIndex[blk.Id] = i
+				// blk.Segment = seg
+				// blk.IndiceMemo = metadata.NewIndiceMemo(blk)
 				if _, err = sg.RegisterBlock(blk); err != nil {
 					return err
 				}

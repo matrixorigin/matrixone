@@ -653,9 +653,11 @@ func (h *replayHandle) processUnclosedSegmentFiles(files []*unsortedSegmentFile,
 }
 
 func (h *replayHandle) Replay() error {
-	for _, tbl := range h.catalog.TableSet {
-		if err := h.rebuildTable(tbl); err != nil {
-			return err
+	for _, database := range h.catalog.Databases {
+		for _, tbl := range database.TableSet {
+			if err := h.rebuildTable(tbl); err != nil {
+				return err
+			}
 		}
 	}
 	h.Cleanup()

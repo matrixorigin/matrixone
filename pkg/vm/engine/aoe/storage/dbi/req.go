@@ -27,8 +27,10 @@ type TableOpCtx struct {
 }
 
 type GetSnapshotCtx struct {
+	ShardId    uint64
 	OpIndex    uint64
 	TableName  string
+	DBName     string
 	SegmentIds []uint64
 	ScanAll    bool
 	Cols       []int
@@ -37,11 +39,13 @@ type GetSnapshotCtx struct {
 type DropTableCtx struct {
 	ShardId    uint64
 	OpIndex    uint64
+	DBName     string
 	TableName  string
 	OnFinishCB OnTableDroppedCB
 }
 
 type GetSegmentsCtx struct {
+	ShardId   uint64
 	OpIndex   uint64
 	TableName string
 }
@@ -51,6 +55,7 @@ type AppendCtx struct {
 	OpIndex   uint64
 	OpOffset  int
 	OpSize    int
+	DBName    string
 	TableName string
 	Data      *batch.Batch
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/gc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
 )
 
@@ -29,15 +30,15 @@ type dropTblRequest struct {
 	// Tables' meta
 	Tables *table.Tables
 	// Table id of the dropped table
-	TableId     uint64
+	Meta        *metadata.Table
 	MemTableMgr mtif.IManager
 	Opts        *storage.Options
 	CB          dbi.OnTableDroppedCB
 }
 
-func NewDropTblRequest(opts *storage.Options, id uint64, tables *table.Tables, mtMgr mtif.IManager, cb dbi.OnTableDroppedCB) *dropTblRequest {
+func NewDropTblRequest(opts *storage.Options, meta *metadata.Table, tables *table.Tables, mtMgr mtif.IManager, cb dbi.OnTableDroppedCB) *dropTblRequest {
 	req := new(dropTblRequest)
-	req.TableId = id
+	req.Meta = meta
 	req.Tables = tables
 	req.MemTableMgr = mtMgr
 	req.Opts = opts
@@ -55,7 +56,7 @@ func (req *dropTblRequest) Execute() error {
 		Tables:   req.Tables,
 		Waitable: true,
 	}
-	e := memdata.NewDropTableEvent(ctx, req.TableId)
+	e := memdata.NewDropTableEvent(ctx, req.Meta.Id)
 	err := req.Opts.Scheduler.Schedule(e)
 	if err != nil {
 		return err
@@ -68,7 +69,7 @@ func (req *dropTblRequest) Execute() error {
 	} else {
 		e.Data.Unref()
 	}
-	c, err := req.MemTableMgr.UnregisterCollection(req.TableId)
+	c, err := req.MemTableMgr.UnregisterCollection(req.Meta.Id)
 	if err != nil {
 		if req.Iteration < 3 {
 			return err
@@ -78,7 +79,9 @@ func (req *dropTblRequest) Execute() error {
 	if c != nil {
 		c.Unref()
 	}
-	req.Opts.Meta.Catalog.HardDeleteTable(req.TableId)
+	if err = req.Meta.Database.SimpleHardDeleteTable(req.Meta.Id); err != nil {
+		panic(err)
+	}
 	if req.CB != nil {
 		req.CB(nil)
 	}

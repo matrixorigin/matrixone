@@ -17,8 +17,12 @@ package db
 import (
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"sync"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
@@ -36,11 +40,8 @@ import (
 	bb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	wb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker/base"
-	"io"
-	"os"
-	"sync"
-	"sync/atomic"
 )
 
 var (
@@ -93,13 +94,13 @@ type DB struct {
 	ClosedC chan struct{}
 }
 
-func (d *DB) Flush(name string) error {
+func (d *DB) Flush(dbName, tableName string) error {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tbl := d.Store.Catalog.SimpleGetTableByName(name)
-	if tbl == nil {
-		return metadata.TableNotFoundErr
+	tbl, err := d.Store.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil {
+		return err
 	}
 	collection := d.MemTableMgr.StrongRefCollection(tbl.Id)
 	if collection == nil {
@@ -134,9 +135,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if ctx.OpOffset >= ctx.OpSize {
 		panic(fmt.Sprintf("bad index %d: offset %d, size %d", ctx.OpIndex, ctx.OpOffset, ctx.OpSize))
 	}
-	tbl := d.Store.Catalog.SimpleGetTableByName(ctx.TableName)
-	if tbl == nil {
-		return metadata.TableNotFoundErr
+	tbl, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
+	if err != nil {
+		return err
 	}
 
 	collection := d.MemTableMgr.StrongRefCollection(tbl.Id)
@@ -163,6 +164,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	}
 
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
+	if index.ShardId != tbl.Database.GetShardId() {
+		panic(fmt.Sprintf("logic error: %d, %d", index.ShardId, tbl.Database.GetShardId()))
+	}
 	defer collection.Unref()
 	if err := d.Wal.SyncLog(index); err != nil {
 		return err
@@ -201,27 +205,19 @@ func (d *DB) getTableData(meta *metadata.Table) (tiface.ITableData, error) {
 	return data, nil
 }
 
-func (d *DB) Relation(name string) (*Relation, error) {
+func (d *DB) Relation(dbName, tableName string) (*Relation, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	meta := d.Store.Catalog.SimpleGetTableByName(name)
-	if meta == nil {
-		return nil, metadata.TableNotFoundErr
+	meta, err := d.Store.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil {
+		return nil, err
 	}
 	data, err := d.getTableData(meta)
 	if err != nil {
 		return nil, err
 	}
 	return NewRelation(d, data, meta), nil
-}
-
-func (d *DB) HasTable(name string) bool {
-	if err := d.Closed.Load(); err != nil {
-		panic(err)
-	}
-	meta := d.Store.Catalog.SimpleGetTableByName(name)
-	return meta != nil
 }
 
 func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
@@ -237,51 +233,81 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	return e.Id, err
 }
 
-func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
+func (d *DB) CreateDatabase(name string, shardId uint64) (*metadata.Database, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	info.Name = ctx.TableName
-	schema := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
-	logutil.Debugf("Create table, schema.Primarykey is %d", schema.PrimaryKey)
-	index := adaptor.GetLogIndexFromTableOpCtx(&ctx)
+	return d.Store.Catalog.SimpleCreateDatabase(name, &metadata.LogIndex{
+		ShardId: shardId,
+		Id:      shard.SimpleIndexId(0),
+	})
+}
+
+func (d *DB) DropDatabase(name string, index uint64) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(name)
+	if err != nil {
+		return err
+	}
+	return database.SimpleSoftDelete(&metadata.LogIndex{
+		Id: shard.SimpleIndexId(index),
+	})
+}
+
+func (d *DB) CreateTable(dbName string, schema *metadata.Schema, index *metadata.LogIndex) (id uint64, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
 	if err = d.Wal.SyncLog(index); err != nil {
 		return
 	}
 	defer d.Wal.Checkpoint(index)
-
 	logutil.Infof("CreateTable %s", index.String())
-	tbl, err := d.Opts.Meta.Catalog.SimpleCreateTable(schema, index)
+
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	if err != nil {
-		return id, err
+		return
 	}
-	return tbl.Id, nil
+
+	tbl, err := database.SimpleCreateTable(schema, index)
+	if err != nil {
+		return
+	}
+	id = tbl.Id
+	return
 }
 
-func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
+func (d *DB) GetSegmentIds(dbName string, tableName string) (ids dbi.IDS) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	meta := d.Store.Catalog.SimpleGetTableByName(ctx.TableName)
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return
+	}
+	meta := database.SimpleGetTableByName(tableName)
 	if meta == nil {
-		return ids
+		return
 	}
 	data, err := d.getTableData(meta)
 	if err != nil {
-		return ids
+		return
 	}
 	ids.Ids = data.SegmentIds()
 	data.Unref()
-	return ids
+	return
 }
 
 func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tableMeta := d.Store.Catalog.SimpleGetTableByName(ctx.TableName)
-	if tableMeta == nil {
-		return nil, metadata.TableNotFoundErr
+
+	tableMeta, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
+	if err != nil {
+		return nil, err
 	}
 	if tableMeta.SimpleGetSegmentCount() == 0 {
 		return handle.NewEmptySnapshot(), nil
@@ -299,19 +325,28 @@ func (d *DB) GetSnapshot(ctx *dbi.GetSnapshotCtx) (*handle.Snapshot, error) {
 	return ss, nil
 }
 
-func (d *DB) TableIDs() (ids []uint64, err error) {
+func (d *DB) TableIDs(dbName string) (ids []uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	ids = d.Store.Catalog.SimpleGetTableIds()
-	return ids, err
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return
+	}
+	ids = database.SimpleGetTableIds()
+	return
 }
 
-func (d *DB) TableNames() []string {
+func (d *DB) TableNames(dbName string) (names []string) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	return d.Store.Catalog.SimpleGetTableNames()
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return
+	}
+	names = database.SimpleGetTableNames()
+	return
 }
 
 func (d *DB) GetShardCheckpointId(shardId uint64) uint64 {
@@ -353,11 +388,11 @@ func (d *DB) Close() error {
 }
 
 // CreateSnapshot creates a snapshot of the specified shard and stores it to `path`.
-func (d *DB) CreateSnapshot(shardID uint64, path string) (uint64, error) {
-	return d.createSnapshot(shardID, path)
+func (d *DB) CreateSnapshot(dbName string, path string) (uint64, error) {
+	return d.createSnapshot(dbName, path)
 }
 
 // ApplySnapshot applies a snapshot of the shard stored in `path` to engine atomically.
-func (d *DB) ApplySnapshot(shardID uint64, path string) error {
-	return d.applySnapshot(shardID, path)
+func (d *DB) ApplySnapshot(dbName string, path string) error {
+	return d.applySnapshot(dbName, path)
 }

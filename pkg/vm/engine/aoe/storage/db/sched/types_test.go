@@ -15,15 +15,17 @@
 package sched
 
 import (
+	"os"
+	"sync"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"sync"
-	"testing"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -51,7 +53,12 @@ func TestUpgradeBlk(t *testing.T) {
 	fsMgr := ldio.NewManager(dir, true)
 
 	tables := table.NewTables(new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
-	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, seg_cnt*blk_cnt, nil)
+
+	dbName := "db1"
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(99)
+	idxGen := gen.Shard(shardId)
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, seg_cnt*blk_cnt, idxGen)
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)
@@ -124,7 +131,12 @@ func TestUpgradeSeg(t *testing.T) {
 	fsMgr := ldio.NewManager(dir, true)
 
 	tables := table.NewTables(new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
-	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, seg_cnt*blk_cnt, nil)
+
+	dbName := "db1"
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(0)
+
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, seg_cnt*blk_cnt, gen.Shard(shardId))
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)

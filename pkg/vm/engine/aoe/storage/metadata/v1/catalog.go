@@ -17,8 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
-	"sort"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -27,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
-
-	"github.com/google/btree"
 )
 
 var (
@@ -36,12 +32,13 @@ var (
 )
 
 var (
-	DuplicateErr       = errors.New("aoe: duplicate")
-	ShardNotFoundErr   = errors.New("aoe: shard not found")
-	TableNotFoundErr   = errors.New("aoe: table not found")
-	SegmentNotFoundErr = errors.New("aoe: segment not found")
-	BlockNotFoundErr   = errors.New("aoe: block not found")
-	InvalidSchemaErr   = errors.New("aoe: invalid schema")
+	DuplicateErr           = errors.New("aoe: duplicate")
+	DatabaseNotFoundErr    = errors.New("aoe: db not found")
+	TableNotFoundErr       = errors.New("aoe: table not found")
+	SegmentNotFoundErr     = errors.New("aoe: segment not found")
+	BlockNotFoundErr       = errors.New("aoe: block not found")
+	InvalidSchemaErr       = errors.New("aoe: invalid schema")
+	InconsistentShardIdErr = errors.New("aoe: InconsistentShardIdErr")
 )
 
 type CatalogCfg struct {
@@ -51,92 +48,20 @@ type CatalogCfg struct {
 	RotationFileMaxSize int    `toml:"rotation-file-max-size"`
 }
 
-type catalogLogEntry struct {
-	Range    *common.Range `json:"range"`
-	Catalog  *Catalog      `json:"catalog"`
-	LogRange *LogRange     `json:"logrange"`
-}
-
-func newCatalogLogEntry(id uint64) *catalogLogEntry {
-	e := &catalogLogEntry{
-		Catalog: &Catalog{
-			RWMutex:  &sync.RWMutex{},
-			TableSet: make(map[uint64]*Table),
-		},
-		Range: new(common.Range),
-	}
-	e.Range.Right = id
-	return e
-}
-
-func newShardSnapshotLogEntry(shardId, index uint64) *catalogLogEntry {
-	logRange := new(LogRange)
-	logRange.ShardId = shardId
-	logRange.Range.Right = index
-	e := &catalogLogEntry{
-		Catalog: &Catalog{
-			RWMutex:  &sync.RWMutex{},
-			TableSet: make(map[uint64]*Table),
-		},
-		LogRange: logRange,
-	}
-	return e
-}
-
-func (e *catalogLogEntry) CheckpointId() uint64 {
-	return e.Range.Right
-}
-
-func (e *catalogLogEntry) Marshal() ([]byte, error) {
-	buf, err := json.Marshal(e)
-	return buf, err
-}
-
-func (e *catalogLogEntry) Unmarshal(buf []byte) error {
-	if err := json.Unmarshal(buf, e); err != nil {
-		return err
-	}
-	e.Catalog.RWMutex = new(sync.RWMutex)
-	return nil
-}
-
-func (e *catalogLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
-	switch eType {
-	case logstore.ETCheckpoint:
-	case ETShardSnapshot:
-		break
-	default:
-		panic("not supported")
-	}
-	buf, _ := e.Marshal()
-	logEntry := logstore.NewAsyncBaseEntry()
-	logEntry.Meta.SetType(eType)
-	logEntry.Unmarshal(buf)
-	logEntry.SetAuxilaryInfo(&e.Range)
-	return logEntry
-}
-
 type Catalog struct {
 	sm.ClosedState  `json:"-"`
 	sm.StateMachine `json:"-"`
 	*sync.RWMutex   `json:"-"`
 	Sequence        `json:"-"`
-	pipeline        *commitPipeline        `json:"-"`
-	Store           logstore.AwareStore    `json:"-"`
-	IndexWal        wal.ShardWal           `json:"-"`
-	Cfg             *CatalogCfg            `json:"-"`
-	nameIndex       *btree.BTree           `json:"-"`
-	nodesMu         sync.RWMutex           `json:"-"`
-	commitMu        sync.RWMutex           `json:"-"`
-	nameNodes       map[string]*tableNode  `json:"-"`
-	shardMu         sync.RWMutex           `json:"-"`
-	shardsStats     map[uint64]*shardStats `json:"-"`
+	pipeline        *commitPipeline      `json:"-"`
+	Store           logstore.AwareStore  `json:"-"`
+	IndexWal        wal.ShardWal         `json:"-"`
+	Cfg             *CatalogCfg          `json:"-"`
+	nodesMu         sync.RWMutex         `json:"-"`
+	commitMu        sync.RWMutex         `json:"-"`
+	nameNodes       map[string]*nodeList `json:"-"`
 
-	tableListener   TableListener   `json:"-"`
-	segmentListener SegmentListener `json:"-"`
-	blockListener   BlockListener   `json:"-"`
-
-	TableSet map[uint64]*Table `json:"tables"`
+	Databases map[uint64]*Database `json:"dbs"`
 }
 
 func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
@@ -151,24 +76,13 @@ func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.Awa
 
 func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
 	catalog := &Catalog{
-		RWMutex:     mu,
-		Cfg:         cfg,
-		TableSet:    make(map[uint64]*Table),
-		nameNodes:   make(map[string]*tableNode),
-		nameIndex:   btree.New(2),
-		Store:       store,
-		IndexWal:    indexWal,
-		shardsStats: make(map[uint64]*shardStats),
+		RWMutex:   mu,
+		Cfg:       cfg,
+		Databases: make(map[uint64]*Database),
+		nameNodes: make(map[string]*nodeList),
+		Store:     store,
+		IndexWal:  indexWal,
 	}
-	blockListener := new(BaseBlockListener)
-	blockListener.BlockUpgradedFn = catalog.onBlockUpgraded
-	segmentListener := new(BaseSegmentListener)
-	segmentListener.SegmentUpgradedFn = catalog.onSegmentUpgraded
-	tableListener := new(BaseTableListener)
-	tableListener.HardDeletedFn = catalog.onTableHardDelete
-	catalog.tableListener = tableListener
-	catalog.blockListener = blockListener
-	catalog.segmentListener = segmentListener
 
 	wg := new(sync.WaitGroup)
 	rQueue := sm.NewSafeQueue(100000, 100, nil)
@@ -184,22 +98,11 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 		cfg.RotationFileMaxSize = logstore.DefaultVersionFileSize
 	}
 	catalog := &Catalog{
-		RWMutex:     mu,
-		Cfg:         cfg,
-		TableSet:    make(map[uint64]*Table),
-		nameNodes:   make(map[string]*tableNode),
-		nameIndex:   btree.New(2),
-		shardsStats: make(map[uint64]*shardStats),
+		RWMutex:   mu,
+		Cfg:       cfg,
+		Databases: make(map[uint64]*Database),
+		nameNodes: make(map[string]*nodeList),
 	}
-	blockListener := new(BaseBlockListener)
-	blockListener.BlockUpgradedFn = catalog.onBlockUpgraded
-	segmentListener := new(BaseSegmentListener)
-	segmentListener.SegmentUpgradedFn = catalog.onSegmentUpgraded
-	tableListener := new(BaseTableListener)
-	tableListener.HardDeletedFn = catalog.onTableHardDelete
-	catalog.tableListener = tableListener
-	catalog.blockListener = blockListener
-	catalog.segmentListener = segmentListener
 
 	rotationCfg := &logstore.RotationCfg{}
 	rotationCfg.RotateChecker = &logstore.MaxSizeRotationChecker{
@@ -223,192 +126,100 @@ func (catalog *Catalog) Start() {
 	catalog.StateMachine.Start()
 }
 
-func (catalog *Catalog) rebuild(tables map[uint64]*Table, r *common.Range) error {
-	catalog.Sequence.nextCommitId = r.Right
-	sorted := make([]*Table, len(tables))
-	idx := 0
-	for _, table := range tables {
-		sorted[idx] = table
-		idx++
-	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Id < sorted[j].Id
-	})
-	for _, table := range sorted {
-		table.rebuild(catalog)
-		if err := catalog.onNewTable(table); err != nil {
-			return err
-		}
-	}
-	if len(sorted) > 0 {
-		catalog.Sequence.nextTableId = sorted[len(sorted)-1].Id
-	}
-	return nil
-}
-
-func (catalog *Catalog) onTableHardDelete(table *Table) {
-	catalog.UpdateShardStats(table.GetShardId(), -table.GetCoarseSize(), -table.GetCoarseCount())
-}
-
-func (catalog *Catalog) onBlockUpgraded(block *Block) {
-	catalog.UpdateShardStats(block.GetShardId(), block.GetCoarseSize(), block.GetCoarseCount())
-}
-
-func (catalog *Catalog) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
-	catalog.UpdateShardStats(segment.Table.GetShardId(), segment.GetCoarseSize()-segment.GetUnsortedSize(), 0)
-}
-
-func (catalog *Catalog) GetShardStats(shardId uint64) *shardStats {
-	catalog.shardMu.RLock()
-	defer catalog.shardMu.RUnlock()
-	return catalog.shardsStats[shardId]
-}
-
-func (catalog *Catalog) UpdateShardStats(shardId uint64, size int64, count int64) {
-	catalog.shardMu.RLock()
-	stats := catalog.shardsStats[shardId]
-	catalog.shardMu.RUnlock()
-	stats.AddCount(count)
-	stats.AddSize(size)
-	// logutil.Infof("%s, size=%d", stats.String(), size)
-}
-
-func (catalog *Catalog) SimpleGetTablesByPrefix(prefix string) (tbls []*Table) {
-	catalog.RLock()
-	upperBound := []byte(prefix)
-	upperBound = append(upperBound, byte(255))
-	lowerN := newTableNode(catalog, prefix)
-	upperN := newTableNode(catalog, string(upperBound))
-
-	catalog.nameIndex.AscendRange(
-		lowerN, upperN,
-		func(item btree.Item) bool {
-			t := item.(*tableNode).GetEntry()
-			if t.IsDeleted() {
-				return false
-			}
-			tbls = append(tbls, t)
-			return true
-		})
-	catalog.RUnlock()
-	return tbls
-}
-
-func (catalog *Catalog) ShardView(shardId, index uint64) *catalogLogEntry {
-	filter := new(Filter)
-	subFilter := newCommitFilter()
-	subFilter.AddChecker(createShardChecker(shardId))
-	subFilter.AddChecker(createIndexRangeChecker(index))
-	filter.blockFilter = subFilter
-	filter.segmentFilter = subFilter
-	filter.tableFilter = newCommitFilter()
-	filter.tableFilter.AddChecker(createShardChecker(shardId))
-	filter.tableFilter.AddChecker(createIndexChecker(index))
-	stopper := createDeleteAndIndexStopper(index)
-	filter.tableFilter.AddStopper(stopper)
-	view := newShardSnapshotLogEntry(shardId, index)
-	catalog.fillView(filter, view.Catalog)
-	return view
-}
-
-func (catalog *Catalog) LatestView() *catalogLogEntry {
-	commitId := catalog.Store.GetSyncedId()
-	filter := new(Filter)
-	filter.tableFilter = newCommitFilter()
-	filter.tableFilter.AddChecker(createCommitIdChecker(commitId))
-	filter.segmentFilter = filter.tableFilter
-	filter.blockFilter = filter.tableFilter
-	view := newCatalogLogEntry(commitId)
-	catalog.fillView(filter, view.Catalog)
-	return view
-}
-
-func (catalog *Catalog) fillView(filter *Filter, view *Catalog) {
-	entries := make(map[uint64]*Table)
-	catalog.RLock()
-	for id, entry := range catalog.TableSet {
-		entries[id] = entry
-	}
-	catalog.RUnlock()
-	for eid, entry := range entries {
-		committed := entry.fillView(filter)
-		if committed != nil {
-			view.TableSet[eid] = committed
-		}
-	}
-}
-
-func (catalog *Catalog) RecurLoop(processor LoopProcessor) error {
-	var err error
-	for _, table := range catalog.TableSet {
-		if err = processor.OnTable(table); err != nil {
-			return err
-		}
-		table.RLock()
-		defer table.RUnlock()
-		if err = table.RecurLoopLocked(processor); err != nil {
-			return err
-		}
-	}
-	return err
-}
-
-func (catalog *Catalog) Compact() {
-	tables := make([]*Table, 0, 2)
-	nodes := make([]*tableNode, 0, 2)
-	catalog.RLock()
-	for _, table := range catalog.TableSet {
-		if table.IsHardDeleted() {
-			tables = append(tables, table)
-			nodes = append(nodes, catalog.nameNodes[table.Schema.Name])
-		}
-	}
-	catalog.RUnlock()
-	if len(tables) == 0 {
-		return
-	}
-
-	names := make([]string, 0)
-	for i, table := range tables {
-		node := nodes[i]
-		_, empty := node.DeleteNode(table.Id)
-		if empty {
-			names = append(names, node.name)
-		}
-	}
-	catalog.Lock()
-	for _, table := range tables {
-		delete(catalog.TableSet, table.Id)
-	}
-	catalog.Unlock()
-	if len(names) > 0 {
-		catalog.TryDeleteEmptyNameNodes(names...)
-	}
-}
-
-func (catalog *Catalog) TryDeleteEmptyNameNodes(names ...string) (deleted []*tableNode) {
-	catalog.Lock()
-	defer catalog.Unlock()
-	for _, name := range names {
-		node := catalog.nameNodes[name]
-		if node == nil {
-			continue
-		}
-		if node.Length() != 0 {
-			continue
-		}
-		delete(catalog.nameNodes, name)
-		catalog.nameIndex.Delete(node)
-	}
-	return
-}
-
 func (catalog *Catalog) Close() error {
 	catalog.Stop()
 	catalog.Store.Close()
 	logutil.Infof("[AOE] Safe synced id %d", catalog.GetSafeCommitId())
 	logutil.Infof("[AOE] Safe checkpointed id %d", catalog.GetCheckpointId())
 	return nil
+}
+
+func (catalog *Catalog) SimpleGetTableByName(dbName, tableName string) (*Table, error) {
+	database, err := catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return nil, err
+	}
+	table := database.SimpleGetTableByName(tableName)
+	if table == nil {
+		return nil, TableNotFoundErr
+	}
+	return table, nil
+}
+
+func (catalog *Catalog) SimpleReplaceDatabase(view *databaseLogEntry, tranId uint64) error {
+	ctx := new(replaceDatabaseCtx)
+	ctx.tranId = tranId
+	ctx.inTran = true
+	ctx.view = view
+	return catalog.onCommitRequest(ctx)
+}
+
+func (catalog *Catalog) prepareReplaceDatabase(ctx *replaceDatabaseCtx) (LogEntry, error) {
+	var err error
+	entry := newDbReplaceLogEntry()
+	catalog.RLock()
+	logIndex := new(LogIndex)
+	logIndex.Id = shard.SimpleIndexId(ctx.view.LogRange.Range.Right)
+	logIndex.ShardId = ctx.view.LogRange.ShardId
+	db := catalog.Databases[ctx.view.Id]
+	rCtx := new(addReplaceCommitCtx)
+	rCtx.tranId = ctx.tranId
+	rCtx.inTran = true
+	rCtx.database = db
+	rCtx.exIndex = logIndex
+	if _, err = db.prepareReplace(rCtx); err != nil {
+		panic(err)
+	}
+	if !rCtx.discard {
+		entry.Replaced = &databaseLogEntry{
+			BaseEntry: db.BaseEntry,
+			Id:        db.Id,
+		}
+	}
+	catalog.RUnlock()
+
+	ctx.view.Database.Catalog = catalog
+	ctx.view.Database.rebuild(true, false)
+	nCtx := new(addDatabaseCtx)
+	nCtx.tranId = ctx.tranId
+	nCtx.inTran = true
+	nCtx.database = ctx.view.Database
+	if _, err = catalog.prepareAddDatabase(nCtx); err != nil {
+		panic(err)
+	}
+
+	entry.AddReplacer(ctx.view.Database)
+	logEntry := catalog.prepareCommitEntry(entry, ETReplaceDatabase, nil)
+	return logEntry, err
+}
+
+func (catalog *Catalog) prepareAddDatabase(ctx *addDatabaseCtx) (LogEntry, error) {
+	var err error
+	catalog.Lock()
+	if err = catalog.onNewDatabase(ctx.database); err != nil {
+		catalog.Unlock()
+		return nil, err
+	}
+	catalog.Unlock()
+	if ctx.inTran {
+		return nil, nil
+	}
+	panic("todo")
+}
+
+func (catalog *Catalog) RecurLoopLocked(processor LoopProcessor) error {
+	var err error
+	for _, database := range catalog.Databases {
+		if err = processor.OnDatabase(database); err != nil {
+			return err
+		}
+		database.RLock()
+		defer database.RUnlock()
+		if err = database.RecurLoopLocked(processor); err != nil {
+			return err
+		}
+	}
+	return err
 }
 
 func (catalog *Catalog) CommitLogEntry(entry logstore.Entry, commitId uint64, sync bool) error {
@@ -421,185 +232,6 @@ func (catalog *Catalog) CommitLogEntry(entry logstore.Entry, commitId uint64, sy
 		err = catalog.Store.Sync()
 	}
 	return err
-}
-
-func (catalog *Catalog) SimpleGetTableIds() []uint64 {
-	catalog.RLock()
-	defer catalog.RUnlock()
-	ids := make([]uint64, len(catalog.TableSet))
-	pos := 0
-	for _, tbl := range catalog.TableSet {
-		ids[pos] = tbl.Id
-		pos++
-	}
-	return ids
-}
-
-func (catalog *Catalog) SimpleGetTableNames() []string {
-	catalog.RLock()
-	defer catalog.RUnlock()
-	names := make([]string, len(catalog.TableSet))
-	pos := 0
-	for _, tbl := range catalog.TableSet {
-		names[pos] = tbl.Schema.Name
-		pos++
-	}
-	return names
-}
-
-func (catalog *Catalog) HardDeleteTable(id uint64) error {
-	catalog.Lock()
-	table := catalog.TableSet[id]
-	if table == nil {
-		catalog.Unlock()
-		return TableNotFoundErr
-	}
-	catalog.Unlock()
-
-	return table.HardDelete()
-}
-
-func (catalog *Catalog) SimpleDropTableByName(name string, exIndex *LogIndex) error {
-	tranId := catalog.NextUncommitId()
-	ctx := newDropTableCtx(name, exIndex, tranId)
-	err := catalog.prepareDropTable(ctx)
-	if err != nil {
-		return err
-	}
-	return catalog.onCommitRequest(ctx)
-}
-
-func (catalog *Catalog) prepareDropTable(ctx *dropTableCtx) error {
-	catalog.Lock()
-	nn := catalog.nameNodes[ctx.name]
-	if nn == nil {
-		catalog.Unlock()
-		return TableNotFoundErr
-	}
-	table := nn.GetEntry()
-	catalog.Unlock()
-	table.RLock()
-	defer table.RUnlock()
-	if table.IsDeletedLocked() {
-		return TableNotFoundErr
-	}
-	ctx.table = table
-	return nil
-}
-
-func (catalog *Catalog) SimpleCreateTable(schema *Schema, exIndex *LogIndex) (*Table, error) {
-	if !schema.Valid() {
-		return nil, InvalidSchemaErr
-	}
-	tranId := catalog.NextUncommitId()
-	ctx := newCreateTableCtx(schema, exIndex, tranId)
-	err := catalog.onCommitRequest(ctx)
-	return ctx.table, err
-}
-
-func (catalog *Catalog) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
-	var err error
-	entry := NewTableEntry(catalog, ctx.schema, ctx.tranId, ctx.exIndex)
-	logEntry := entry.ToLogEntry(ETCreateTable)
-	catalog.Lock()
-	if err = catalog.onNewTable(entry); err != nil {
-		catalog.Unlock()
-		return nil, err
-	}
-	catalog.Unlock()
-	ctx.table = entry
-	if ctx.inTran {
-		return nil, nil
-	}
-	catalog.prepareCommitLog(entry, logEntry)
-	return logEntry, err
-}
-
-func (catalog *Catalog) prepareAddTable(ctx *addTableCtx) (LogEntry, error) {
-	var err error
-	catalog.Lock()
-	if err = catalog.onNewTable(ctx.table); err != nil {
-		catalog.Unlock()
-		return nil, err
-	}
-	catalog.Unlock()
-	if ctx.inTran {
-		return nil, nil
-	}
-	panic("todo")
-}
-
-func (catalog *Catalog) doSpliteShard(nameFactory TableNameFactory, spec *ShardSplitSpec, tranId uint64, index *LogIndex) error {
-	ctx := new(splitShardCtx)
-	ctx.spec = spec
-	ctx.nameFactory = nameFactory
-	ctx.tranId = tranId
-	ctx.exIndex = index
-	return catalog.onCommitRequest(ctx)
-}
-
-func (catalog *Catalog) prepareSplitShard(ctx *splitShardCtx) (LogEntry, error) {
-	entry := newShardLogEntry()
-	for _, spec := range ctx.spec.Specs {
-		table := ctx.spec.splitted[spec.Index]
-		tables := table.Splite(ctx.tranId, spec, ctx.nameFactory, catalog)
-		for _, t := range tables {
-			nCtx := newAddTableCtx(t, true)
-			if _, err := catalog.prepareAddTable(nCtx); err != nil {
-				panic(err)
-			}
-			entry.addReplacer(t)
-		}
-	}
-	catalog.RLock()
-	for _, view := range ctx.spec.splitted {
-		table := catalog.TableSet[view.Id]
-		rCtx := newReplaceTableCtx(table, ctx.exIndex, ctx.tranId, true)
-		if _, err := table.prepareReplace(rCtx); err != nil {
-			panic(err)
-		}
-		entry.addReplaced(table)
-	}
-	catalog.RUnlock()
-	logEntry := catalog.prepareCommitEntry(entry, ETShardSplit, nil)
-	return logEntry, nil
-}
-
-func (catalog *Catalog) SimpleReplaceShard(view *catalogLogEntry, tranId uint64) error {
-	ctx := newReplaceShardCtx(view, tranId)
-	err := catalog.onCommitRequest(ctx)
-	return err
-}
-
-func (catalog *Catalog) prepareReplaceShard(ctx *replaceShardCtx) (LogEntry, error) {
-	var err error
-	entry := newShardLogEntry()
-	catalog.RLock()
-	logIndex := new(LogIndex)
-	logIndex.Id = shard.SimpleIndexId(ctx.view.LogRange.Range.Right)
-	logIndex.ShardId = ctx.view.LogRange.ShardId
-	for _, table := range catalog.TableSet {
-		if table.GetShardId() != ctx.view.LogRange.ShardId {
-			continue
-		}
-		rCtx := newReplaceTableCtx(table, logIndex, ctx.tranId, true)
-		if _, err = table.prepareReplace(rCtx); err != nil {
-			panic(err)
-		}
-		if !rCtx.discard {
-			entry.addReplaced(table)
-		}
-	}
-	catalog.RUnlock()
-	for _, table := range ctx.view.Catalog.TableSet {
-		nCtx := newAddTableCtx(table, true)
-		if _, err = catalog.prepareAddTable(nCtx); err != nil {
-			panic(err)
-		}
-		entry.addReplacer(table)
-	}
-	logEntry := catalog.prepareCommitEntry(entry, ETShardSnapshot, nil)
-	return logEntry, err
 }
 
 func (catalog *Catalog) onCommitRequest(ctx interface{}) error {
@@ -657,85 +289,8 @@ func (catalog *Catalog) GetCheckpointId() uint64 {
 	return catalog.Store.GetCheckpointId()
 }
 
-func (catalog *Catalog) SimpleGetTableByName(name string) *Table {
-	catalog.RLock()
-	defer catalog.RUnlock()
-	return catalog.GetTableByName(name, MinUncommitId)
-}
-
-func (catalog *Catalog) GetTableByName(name string, tranId uint64) *Table {
-	nn := catalog.nameNodes[name]
-	if nn == nil {
-		return nil
-	}
-
-	next := nn.GetNext()
-	for next != nil {
-		entry := next.(*nameNode).GetEntry()
-		if entry.CanUse(tranId) && !entry.IsDeleted() {
-			return entry
-		}
-		next = next.GetNext()
-	}
-	return nil
-}
-
-func (catalog *Catalog) SimpleGetTable(id uint64) *Table {
-	catalog.RLock()
-	defer catalog.RUnlock()
-	return catalog.GetTable(id)
-}
-
-func (catalog *Catalog) GetTable(id uint64) *Table {
-	return catalog.TableSet[id]
-}
-
-func (catalog *Catalog) ForLoopTables(h func(*Table) error) error {
-	tables := make([]*Table, 0, 10)
-	catalog.RLock()
-	for _, tbl := range catalog.TableSet {
-		tables = append(tables, tbl)
-	}
-	catalog.RUnlock()
-	for _, tbl := range tables {
-		if err := h(tbl); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (catalog *Catalog) SimpleGetSegment(tableId, segmentId uint64) (*Segment, error) {
-	table := catalog.SimpleGetTable(tableId)
-	if table == nil {
-		return nil, TableNotFoundErr
-	}
-	segment := table.SimpleGetSegment(segmentId)
-	if segment == nil {
-		return nil, SegmentNotFoundErr
-	}
-	return segment, nil
-}
-
-func (catalog *Catalog) SimpleGetBlock(tableId, segmentId, blockId uint64) (*Block, error) {
-	segment, err := catalog.SimpleGetSegment(tableId, segmentId)
-	if err != nil {
-		return nil, err
-	}
-	block := segment.SimpleGetBlock(blockId)
-	if block == nil {
-		return nil, BlockNotFoundErr
-	}
-	return block, nil
-}
-
 func (catalog *Catalog) onCheckpoint(items ...interface{}) {
-	if err := catalog.doCheckPoint(); err != nil {
-		panic(err)
-	}
-	for _, item := range items {
-		item.(logstore.AsyncEntry).DoneWithErr(nil)
-	}
+	// TODO
 }
 
 func (catalog *Catalog) Checkpoint() (logstore.AsyncEntry, error) {
@@ -747,30 +302,18 @@ func (catalog *Catalog) Checkpoint() (logstore.AsyncEntry, error) {
 	return ret.(logstore.AsyncEntry), nil
 }
 
-func (catalog *Catalog) doCheckPoint() error {
-	var err error
-	view := catalog.LatestView()
-	entry := view.ToLogEntry(logstore.ETCheckpoint)
-	if err = catalog.Store.Checkpoint(entry); err != nil {
-		return err
-	}
-	err = entry.WaitDone()
-	entry.Free()
-	return err
-}
-
 func (catalog *Catalog) PString(level PPLevel) string {
 	catalog.RLock()
-	s := fmt.Sprintf("<Catalog>(Cnt=%d){", len(catalog.TableSet))
-	for _, table := range catalog.TableSet {
-		s = fmt.Sprintf("%s\n%s", s, table.PString(level))
+	defer catalog.RUnlock()
+	s := fmt.Sprintf("<Catalog>(Cnt=%d){", len(catalog.Databases))
+	for _, db := range catalog.Databases {
+		s = fmt.Sprintf("%s\n%s", s, db.PString(level))
 	}
-	if len(catalog.TableSet) == 0 {
+	if len(catalog.Databases) == 0 {
 		s = fmt.Sprintf("%s}", s)
 	} else {
 		s = fmt.Sprintf("%s\n}", s)
 	}
-	catalog.RUnlock()
 	return s
 }
 
@@ -798,151 +341,200 @@ func (catalog *Catalog) ToLogEntry(eType LogEntryType) LogEntry {
 	return logEntry
 }
 
-func (catalog *Catalog) tryCreateShardStats(shardId uint64) {
-	catalog.shardMu.RLock()
-	stats := catalog.shardsStats[shardId]
-	if stats != nil {
-		catalog.shardMu.RUnlock()
-		return
-	}
-	catalog.shardMu.RUnlock()
-	catalog.shardMu.Lock()
-	defer catalog.shardMu.Unlock()
-	stats = catalog.shardsStats[shardId]
-	if stats != nil {
-		return
-	}
-	catalog.shardsStats[shardId] = newShardStats(shardId)
-}
-
-func (catalog *Catalog) CleanupShard(shardId uint64) {
-	catalog.shardMu.Lock()
-	defer catalog.shardMu.Unlock()
-	delete(catalog.shardsStats, shardId)
-}
-
-func (catalog *Catalog) SplitCheck(size, shardId, index uint64) (coarseSize uint64, coarseCount uint64, keys [][]byte, ctx []byte, err error) {
-	catalog.shardMu.RLock()
-	stats := catalog.shardsStats[shardId]
-	catalog.shardMu.RUnlock()
-	coarseSize, coarseCount = uint64(stats.GetSize()), uint64(stats.GetCount())
-	if coarseSize < size {
-		return
-	}
-
-	partSize := int64(size) / 2
-	if coarseSize/size < 2 {
-		partSize = int64(coarseSize) / 2
-	}
-
-	view := catalog.ShardView(shardId, index)
-	totalSize := int64(0)
-
-	shardSpec := NewShardSplitSpec(shardId, index)
-	activeSize := int64(0)
-	currGroup := uint32(0)
-
-	for _, table := range view.Catalog.TableSet {
-		spec := NewTableSplitSpec(table.GetCommit().LogIndex)
-		rangeSpec := new(TableRangeSpec)
-		rangeSpec.Group = currGroup
-		rangeSpec.Range.Left = uint64(0)
-		tableSize := table.GetCoarseSize()
-		totalSize += tableSize
-		if len(table.SegmentSet) <= 1 {
-			activeSize += tableSize
-			rangeSpec.Range.Right = math.MaxUint64
-			rangeSpec.CoarseSize += tableSize
-			spec.AddSpec(rangeSpec)
-			if activeSize >= partSize {
-				currGroup++
-				activeSize = int64(0)
-			}
-		} else {
-			for i, segment := range table.SegmentSet {
-				activeSize += segment.GetCoarseSize()
-				rangeSpec.CoarseSize += segment.GetCoarseSize()
-				rangeSpec.Range.Right = uint64(i+1)*table.Schema.BlockMaxRows*table.Schema.SegmentMaxBlocks - 1
-				if activeSize >= partSize {
-					currGroup++
-					activeSize = int64(0)
-					spec.AddSpec(rangeSpec)
-					last := rangeSpec
-					rangeSpec = new(TableRangeSpec)
-					rangeSpec.Group = currGroup
-					rangeSpec.Range.Left = last.Range.Right + uint64(1)
-				}
-			}
-			if rangeSpec.Range.Right != uint64(0) {
-				spec.AddSpec(rangeSpec)
-			}
+func (catalog *Catalog) SimpleGetDatabaseNames() (names []string) {
+	catalog.RLock()
+	defer catalog.RUnlock()
+	for _, db := range catalog.Databases {
+		if db.IsDeleted() {
+			continue
 		}
-		shardSpec.AddSpec(spec)
+		names = append(names, db.Name)
 	}
-	if totalSize < int64(size) {
-		return
-	}
-
-	keys = make([][]byte, currGroup+1)
-	for i, _ := range keys {
-		keys[i] = []byte("1")
-	}
-	// logutil.Infof(shardSpec.String())
-	ctx, err = shardSpec.Marshal()
 	return
 }
 
-func (catalog *Catalog) onNewTable(entry *Table) error {
-	shardId := entry.GetShardId()
-	catalog.tryCreateShardStats(shardId)
-	nn := catalog.nameNodes[entry.Schema.Name]
+func (catalog *Catalog) SimpleCreateDatabase(name string, index *LogIndex) (*Database, error) {
+	tranId := catalog.NextUncommitId()
+	ctx := new(createDatabaseCtx)
+	ctx.tranId = tranId
+	ctx.name = name
+	ctx.exIndex = index
+	err := catalog.onCommitRequest(ctx)
+	return ctx.database, err
+}
+
+func (catalog *Catalog) prepareCreateDatabase(ctx *createDatabaseCtx) (LogEntry, error) {
+	var err error
+	db := NewDatabase(catalog, ctx.name, ctx.tranId, ctx.exIndex)
+	entry := db.ToLogEntry(ETCreateDatabase)
+	catalog.Lock()
+	if err = catalog.onNewDatabase(db); err != nil {
+		catalog.Unlock()
+		return nil, err
+	}
+	catalog.Unlock()
+	ctx.database = db
+	if ctx.inTran {
+		return nil, nil
+	}
+	catalog.prepareCommitLog(db, entry)
+	return entry, err
+}
+
+func (catalog *Catalog) SimpleDropDatabaseByName(name string, index *LogIndex) error {
+	db, err := catalog.SimpleGetDatabaseByName(name)
+	if err != nil {
+		return err
+	}
+	tranId := catalog.NextUncommitId()
+	ctx := new(dropDatabaseCtx)
+	ctx.tranId = tranId
+	ctx.exIndex = index
+	ctx.database = db
+	return catalog.onCommitRequest(ctx)
+}
+
+func (catalog *Catalog) SimpleGetDatabaseByName(name string) (*Database, error) {
+	catalog.RLock()
+	defer catalog.RUnlock()
+	nn := catalog.nameNodes[name]
+	if nn == nil {
+		return nil, DatabaseNotFoundErr
+	}
+	db := nn.GetDatabase()
+	if db.IsDeletedLocked() {
+		return nil, DatabaseNotFoundErr
+	}
+	return db, nil
+}
+
+func (catalog *Catalog) SimpleHardDeleteDatabase(id uint64) error {
+	catalog.Lock()
+	db := catalog.Databases[id]
+	if db == nil {
+		catalog.Unlock()
+		return DatabaseNotFoundErr
+	}
+	catalog.Unlock()
+	return db.SimpleHardDelete()
+}
+
+func (catalog *Catalog) SplitCheck(size, index uint64, dbName string) (coarseSize uint64, coarseCount uint64, keys [][]byte, ctx []byte, err error) {
+	var db *Database
+	db, err = catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return
+	}
+	return db.SplitCheck(size, index)
+}
+
+func (catalog *Catalog) execSplit(nameFactory TableNameFactory, spec *ShardSplitSpec, tranId uint64, index *LogIndex, dbSpecs []DBSpec) error {
+	ctx := new(splitDBCtx)
+	ctx.spec = spec
+	ctx.nameFactory = nameFactory
+	ctx.tranId = tranId
+	ctx.exIndex = index
+	ctx.dbSpecs = dbSpecs
+	return catalog.onCommitRequest(ctx)
+}
+
+func (catalog *Catalog) prepareSplit(ctx *splitDBCtx) (LogEntry, error) {
+	entry := newDbReplaceLogEntry()
+	db := ctx.spec.db
+	dbs := make(map[uint64]*Database)
+	for _, spec := range ctx.dbSpecs {
+		index := &LogIndex{
+			ShardId: spec.ShardId,
+			Id:      shard.SimpleIndexId(uint64(0)),
+		}
+		nDB := NewDatabase(catalog, spec.Name, ctx.tranId, index)
+		dbs[spec.ShardId] = nDB
+		entry.AddReplacer(nDB)
+	}
+	for _, spec := range ctx.spec.Specs {
+		table := ctx.spec.splitted[spec.Index]
+		table.Splite(catalog, ctx.tranId, spec, ctx.nameFactory, dbs)
+	}
+	rCtx := new(addReplaceCommitCtx)
+	rCtx.tranId = ctx.tranId
+	rCtx.inTran = true
+	rCtx.database = db
+	rCtx.exIndex = ctx.exIndex
+	if _, err := db.prepareReplace(rCtx); err != nil {
+		panic(err)
+	}
+	entry.Replaced = &databaseLogEntry{
+		BaseEntry: db.BaseEntry,
+		Id:        db.Id,
+	}
+
+	for _, nDB := range dbs {
+		nCtx := new(addDatabaseCtx)
+		nCtx.tranId = ctx.tranId
+		nCtx.inTran = true
+		nCtx.database = nDB
+		if _, err := catalog.prepareAddDatabase(nCtx); err != nil {
+			panic(err)
+		}
+	}
+
+	logEntry := db.Catalog.prepareCommitEntry(entry, ETSplitDatabase, nil)
+	return logEntry, nil
+}
+
+func (catalog *Catalog) onNewDatabase(db *Database) error {
+	nn := catalog.nameNodes[db.Name]
 	if nn != nil {
-		e := nn.GetEntry()
+		e := nn.GetDatabase()
 		if !e.IsDeletedLocked() {
 			return DuplicateErr
 		}
-		catalog.TableSet[entry.Id] = entry
-		nn.CreateNode(entry.Id)
+		catalog.Databases[db.Id] = db
+		nn.CreateNode(db.Id)
 	} else {
-		catalog.TableSet[entry.Id] = entry
+		catalog.Databases[db.Id] = db
 
-		nn := newTableNode(catalog, entry.Schema.Name)
-		catalog.nameNodes[entry.Schema.Name] = nn
-		catalog.nameIndex.ReplaceOrInsert(nn)
+		nn := newNodeList(catalog, &catalog.nodesMu, db.Name)
+		catalog.nameNodes[db.Name] = nn
 
-		nn.CreateNode(entry.Id)
+		nn.CreateNode(db.Id)
 	}
 	return nil
 }
 
-func (catalog *Catalog) onReplayCreateTable(entry *Table) error {
-	tbl := NewEmptyTableEntry(catalog)
-	tbl.BaseEntry = entry.BaseEntry
-	tbl.Schema = entry.Schema
-	return catalog.onNewTable(tbl)
+func (catalog *Catalog) onReplayCreateTable(entry *tableLogEntry) error {
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := NewEmptyTableEntry(db)
+	tbl.BaseEntry = entry.Table.BaseEntry
+	tbl.Schema = entry.Table.Schema
+	return db.onNewTable(tbl)
 }
 
 func (catalog *Catalog) onReplaySoftDeleteTable(entry *tableLogEntry) error {
-	tbl := catalog.TableSet[entry.Id]
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := db.TableSet[entry.Id]
 	tbl.onNewCommit(entry.CommitInfo)
 	return nil
 }
 
 func (catalog *Catalog) onReplayHardDeleteTable(entry *tableLogEntry) error {
-	tbl := catalog.TableSet[entry.Id]
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := db.TableSet[entry.Id]
 	tbl.onNewCommit(entry.CommitInfo)
 	return nil
 }
 
 func (catalog *Catalog) onReplayCreateSegment(entry *segmentLogEntry) error {
-	tbl := catalog.TableSet[entry.TableId]
-	seg := newCommittedSegmentEntry(catalog, tbl, entry.BaseEntry)
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := db.TableSet[entry.TableId]
+	seg := newCommittedSegmentEntry(tbl, entry.BaseEntry)
 	tbl.onNewSegment(seg)
 	return nil
 }
 
 func (catalog *Catalog) onReplayUpgradeSegment(entry *segmentLogEntry) error {
-	tbl := catalog.TableSet[entry.TableId]
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := db.TableSet[entry.TableId]
 	pos := tbl.IdIndex[entry.Id]
 	seg := tbl.SegmentSet[pos]
 	seg.onNewCommit(entry.CommitInfo)
@@ -950,7 +542,8 @@ func (catalog *Catalog) onReplayUpgradeSegment(entry *segmentLogEntry) error {
 }
 
 func (catalog *Catalog) onReplayCreateBlock(entry *blockLogEntry) error {
-	tbl := catalog.TableSet[entry.TableId]
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := db.TableSet[entry.TableId]
 	segpos := tbl.IdIndex[entry.SegmentId]
 	seg := tbl.SegmentSet[segpos]
 	blk := newCommittedBlockEntry(seg, entry.BaseEntry)
@@ -959,7 +552,8 @@ func (catalog *Catalog) onReplayCreateBlock(entry *blockLogEntry) error {
 }
 
 func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
-	tbl := catalog.TableSet[entry.TableId]
+	db := catalog.Databases[entry.DatabaseId]
+	tbl := db.TableSet[entry.TableId]
 	segpos := tbl.IdIndex[entry.SegmentId]
 	seg := tbl.SegmentSet[segpos]
 	blkpos := seg.IdIndex[entry.Id]
@@ -969,15 +563,33 @@ func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) onReplayShardLogEntry(entry *shardLogEntry) error {
-	for _, replaced := range entry.Replaced {
-		table := catalog.TableSet[replaced.Id]
-		table.onNewCommit(replaced.CommitInfo)
-	}
-	for _, replacer := range entry.Replacer {
-		catalog.onNewTable(replacer)
-	}
+func (catalog *Catalog) onReplayCreateDatabase(entry *Database) error {
+	db := NewEmptyDatabase(catalog)
+	db.BaseEntry = entry.BaseEntry
+	db.Name = entry.Name
+	return catalog.onNewDatabase(db)
+}
+
+func (catalog *Catalog) onReplaySoftDeleteDatabase(entry *databaseLogEntry) error {
+	db := catalog.Databases[entry.BaseEntry.Id]
+	db.onNewCommit(entry.CommitInfo)
 	return nil
+}
+
+func (catalog *Catalog) onReplayHardDeleteDatabase(entry *databaseLogEntry) error {
+	db := catalog.Databases[entry.BaseEntry.Id]
+	db.onNewCommit(entry.CommitInfo)
+	return nil
+}
+
+func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry) {
+	replaced := catalog.Databases[entry.Replaced.Id]
+	replaced.onNewCommit(entry.Replaced.CommitInfo)
+	for _, replacer := range entry.Replacer {
+		catalog.onNewDatabase(replacer)
+		replacer.Catalog = catalog
+		replacer.rebuild(false, true)
+	}
 }
 
 func MockCatalog(dir string, blkRows, segBlks uint64, driver logstore.AwareStore, indexWal wal.ShardWal) *Catalog {

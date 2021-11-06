@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
@@ -48,8 +47,9 @@ func TestBase1(t *testing.T) {
 	opts.Meta.Catalog.Start()
 	defer opts.Meta.Catalog.Close()
 	schema := metadata.MockSchema(2)
-	createIdx := shard.Index{Id: shard.SimpleIndexId(common.NextGlobalSeqNum())}
-	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, segCnt*blkCnt, &createIdx)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, segCnt*blkCnt, gen.Shard(shardId))
 
 	fsMgr := ldio.NewManager(WORK_DIR, true)
 	indexBufMgr := bmgr.MockBufMgr(capacity)

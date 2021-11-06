@@ -25,8 +25,7 @@ import (
 type createBlkEvent struct {
 	dbsched.BaseEvent
 
-	// TableID is Table's id, aoe is generated when the table is created
-	TableID uint64
+	TableMeta *metadata.Table
 
 	// TableData is Table's metadata in memory
 	TableData iface.ITableData
@@ -38,10 +37,10 @@ type createBlkEvent struct {
 }
 
 // NewCreateBlkEvent creates a logical Block event
-func NewCreateBlkEvent(ctx *dbsched.Context, tid uint64, prevBlock *metadata.Block, tableData iface.ITableData) *createBlkEvent {
+func NewCreateBlkEvent(ctx *dbsched.Context, tableMeta *metadata.Table, prevBlock *metadata.Block, tableData iface.ITableData) *createBlkEvent {
 	e := &createBlkEvent{
 		TableData: tableData,
-		TableID:   tid,
+		TableMeta: tableMeta,
 		PrevMeta:  prevBlock,
 	}
 	e.BaseEvent = dbsched.BaseEvent{
@@ -60,12 +59,7 @@ func (e *createBlkEvent) GetBlock() *metadata.Block {
 }
 
 func (e *createBlkEvent) Execute() error {
-	table := e.Ctx.Opts.Meta.Catalog.SimpleGetTable(e.TableID)
-	if table == nil {
-		return metadata.TableNotFoundErr
-	}
-
-	blk := table.SimpleGetOrCreateNextBlock(e.PrevMeta)
+	blk := e.TableMeta.SimpleGetOrCreateNextBlock(e.PrevMeta)
 	e.Result = blk
 
 	if e.TableData != nil {
