@@ -134,6 +134,24 @@ func (catalog *Catalog) Close() error {
 	return nil
 }
 
+func (catalog *Catalog) StartTxn(index *LogIndex) *TxnCtx {
+	return NewTxn(catalog, index)
+}
+
+func (catalog *Catalog) CommitTxn(txn *TxnCtx) error {
+	return catalog.onCommitRequest(txn)
+}
+
+func (catalog *Catalog) prepareCommitTxn(txn *TxnCtx) (LogEntry, error) {
+	logEntry := catalog.prepareCommitEntry(txn.store, ETTransaction, nil)
+	return logEntry, nil
+}
+
+func (catalog *Catalog) AbortTxn(txn *TxnCtx) error {
+	// TODO
+	return nil
+}
+
 func (catalog *Catalog) SimpleGetTableByName(dbName, tableName string) (*Table, error) {
 	database, err := catalog.SimpleGetDatabaseByName(dbName)
 	if err != nil {
@@ -363,6 +381,17 @@ func (catalog *Catalog) SimpleCreateDatabase(name string, index *LogIndex) (*Dat
 	return ctx.database, err
 }
 
+func (catalog *Catalog) CreateDatabaseInTxn(txn *TxnCtx, name string) (*Database, error) {
+	ctx := new(createDatabaseCtx)
+	ctx.tranId = txn.tranId
+	ctx.name = name
+	ctx.exIndex = txn.index
+	ctx.inTran = true
+	ctx.txn = txn
+	err := catalog.onCommitRequest(ctx)
+	return ctx.database, err
+}
+
 func (catalog *Catalog) prepareCreateDatabase(ctx *createDatabaseCtx) (LogEntry, error) {
 	var err error
 	db := NewDatabase(catalog, ctx.name, ctx.tranId, ctx.exIndex)
@@ -375,6 +404,7 @@ func (catalog *Catalog) prepareCreateDatabase(ctx *createDatabaseCtx) (LogEntry,
 	catalog.Unlock()
 	ctx.database = db
 	if ctx.inTran {
+		ctx.txn.AddEntry(db, ETCreateDatabase)
 		return nil, nil
 	}
 	catalog.prepareCommitLog(db, entry)

@@ -41,6 +41,7 @@ const (
 	ETDropBlock
 	ETDatabaseSnapshot
 	ETDatabaseReplaced
+	ETTransaction
 )
 
 type IEntry interface {

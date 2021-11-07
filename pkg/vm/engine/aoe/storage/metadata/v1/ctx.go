@@ -18,6 +18,7 @@ type writeCtx struct {
 	exIndex *LogIndex
 	tranId  uint64
 	inTran  bool
+	txn     *TxnCtx
 }
 
 type createDatabaseCtx struct {

@@ -57,6 +57,8 @@ func (p *commitPipeline) prepare(ctx interface{}) (LogEntry, error) {
 		return v.segment.prepareCreateBlock(v)
 	case *upgradeBlockCtx:
 		return v.block.prepareUpgrade(v)
+	case *TxnCtx:
+		return p.catalog.prepareCommitTxn(v)
 	default:
 		panic(fmt.Sprintf("not supported: %v", v))
 	}

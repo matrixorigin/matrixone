@@ -398,6 +398,20 @@ func (db *Database) SimpleCreateTable(schema *Schema, exIndex *LogIndex) (*Table
 	return ctx.table, err
 }
 
+func (db *Database) CreateTableInTxn(txn *TxnCtx, schema *Schema) (*Table, error) {
+	if !schema.Valid() {
+		return nil, InvalidSchemaErr
+	}
+	ctx := new(createTableCtx)
+	ctx.tranId = txn.tranId
+	ctx.exIndex = txn.index
+	ctx.schema = schema
+	ctx.database = db
+	ctx.txn = txn
+	err := db.Catalog.onCommitRequest(ctx)
+	return ctx.table, err
+}
+
 func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	var err error
 	entry := NewTableEntry(db, ctx.schema, ctx.tranId, ctx.exIndex)
@@ -410,6 +424,7 @@ func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	db.Unlock()
 	ctx.table = entry
 	if ctx.inTran {
+		ctx.txn.AddEntry(entry, ETCreateTable)
 		return nil, nil
 	}
 	db.Catalog.prepareCommitLog(entry, logEntry)
