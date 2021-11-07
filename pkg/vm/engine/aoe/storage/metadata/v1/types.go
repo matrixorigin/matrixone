@@ -137,6 +137,17 @@ func (info *CommitInfo) Clone() *CommitInfo {
 	return &cloned
 }
 
+func (info *CommitInfo) HasCommitted() bool {
+	return !IsTransientCommitId(info.CommitId)
+}
+
+func (info *CommitInfo) CanUseTxn(tranId uint64) bool {
+	if info.HasCommitted() {
+		return true
+	}
+	return tranId == info.TranId
+}
+
 func (info *CommitInfo) GetShardId() uint64 {
 	if info == nil {
 		return 0

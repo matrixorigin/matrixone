@@ -192,7 +192,7 @@ func (e *Table) rebuild(db *Database, replay bool) {
 func (e *Table) HardDelete() error {
 	tranId := e.Database.Catalog.NextUncommitId()
 	ctx := newDeleteTableCtx(e, tranId)
-	err := e.Database.Catalog.onCommitRequest(ctx)
+	err := e.Database.Catalog.onCommitRequest(ctx, true)
 	if err != nil {
 		return err
 	}
@@ -234,7 +234,7 @@ func (e *Table) SimpleSoftDelete(exIndex *LogIndex) error {
 	ctx.table = e
 	ctx.exIndex = exIndex
 	ctx.tranId = tranId
-	return e.Database.Catalog.onCommitRequest(ctx)
+	return e.Database.Catalog.onCommitRequest(ctx, true)
 }
 
 func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
@@ -418,7 +418,7 @@ func (e *Table) SimpleGetOrCreateNextBlock(from *Block) *Block {
 func (e *Table) SimpleCreateSegment() *Segment {
 	tranId := e.Database.Catalog.NextUncommitId()
 	ctx := newCreateSegmentCtx(e, tranId)
-	if err := e.Database.Catalog.onCommitRequest(ctx); err != nil {
+	if err := e.Database.Catalog.onCommitRequest(ctx, true); err != nil {
 		return nil
 	}
 	return ctx.segment

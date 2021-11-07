@@ -22,7 +22,21 @@ func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, er
 	index := adaptor.GetLogIndexFromTableOpCtx(&ctx)
 
 	dbName := ShardIdToName(ctx.ShardId)
-	return d.Impl.CreateTable(dbName, schema, index)
+
+	txn := d.Impl.StartTxn(index)
+	if _, err = d.Impl.CreateDatabaseInTxn(txn, dbName); err != nil {
+		return
+	}
+	table, err := d.Impl.CreateTableInTxn(txn, dbName, schema)
+	if err != nil {
+		return
+	}
+	if err = d.Impl.CommitTxn(txn); err != nil {
+		return
+	}
+	id = table.Id
+	// TODO: rollback
+	return
 }
 
 func (d *DB) GetSegmentIds(ctx dbi.GetSegmentsCtx) (ids dbi.IDS) {
@@ -50,7 +64,7 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	ctx.DBName = ShardIdToName(ctx.ShardId)
-	return d.Append(ctx)
+	return d.Impl.Append(ctx)
 }
 
 func (d *DB) CreateSnapshot(shardId uint64, path string) (uint64, error) {

@@ -51,6 +51,8 @@ var (
 	ErrUnexpectedWalRole = errors.New("aoe: unexpected wal role setted")
 )
 
+type TxnCtx = metadata.TxnCtx
+
 const MaxRetryCreateSnapshot = 10
 
 type DB struct {
@@ -92,6 +94,32 @@ type DB struct {
 
 	Closed  *atomic.Value
 	ClosedC chan struct{}
+}
+
+func (d *DB) StartTxn(index *metadata.LogIndex) *TxnCtx {
+	return d.Store.Catalog.StartTxn(index)
+}
+
+func (d *DB) CommitTxn(txn *TxnCtx) error {
+	return txn.Commit()
+}
+
+func (d *DB) CreateDatabaseInTxn(txn *TxnCtx, name string) (*metadata.Database, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	return d.Store.Catalog.CreateDatabaseInTxn(txn, name)
+}
+
+func (d *DB) CreateTableInTxn(txn *TxnCtx, dbName string, schema *metadata.Schema) (*metadata.Table, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.GetDatabaseByNameInTxn(txn, dbName)
+	if err != nil {
+		return nil, err
+	}
+	return database.CreateTableInTxn(txn, schema)
 }
 
 func (d *DB) Flush(dbName, tableName string) error {

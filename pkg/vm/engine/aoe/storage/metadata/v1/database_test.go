@@ -87,3 +87,37 @@ func TestDatabase1(t *testing.T) {
 
 	t.Log(catalog2.PString(PPL0))
 }
+
+func TestTxn(t *testing.T) {
+	dir := "/tmp/metadata/testtxn"
+	blockRows, segmentBlocks := uint64(100), uint64(2)
+	catalog := initTest(dir, blockRows, segmentBlocks, true)
+	defer catalog.Close()
+	gen := shard.NewMockIndexAllocator()
+
+	shardId := uint64(100)
+
+	txn := catalog.StartTxn(gen.Next(shardId))
+	assert.NotNil(t, txn)
+	db1, err := catalog.CreateDatabaseInTxn(txn, "db1")
+	assert.Nil(t, err)
+	assert.False(t, db1.HasCommitted())
+	schema := MockSchema(2)
+	schema.Name = "t1"
+	_, err = db1.CreateTableInTxn(txn, schema)
+	assert.Nil(t, err)
+	t.Log(db1.PString(PPL0))
+
+	_, err = catalog.SimpleGetDatabaseByName(db1.Name)
+	assert.NotNil(t, err)
+	_, err = catalog.GetDatabaseByNameInTxn(txn, db1.Name)
+	assert.Nil(t, err)
+
+	err = txn.Commit()
+	assert.Nil(t, err)
+	assert.True(t, db1.HasCommitted())
+	t.Log(db1.PString(PPL0))
+
+	_, err = catalog.SimpleGetDatabaseByName(db1.Name)
+	assert.Nil(t, err)
+}

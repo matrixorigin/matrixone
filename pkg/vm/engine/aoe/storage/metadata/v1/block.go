@@ -302,7 +302,7 @@ func (e *Block) SetSize(size int64) {
 func (e *Block) SimpleUpgrade(exIndice []*LogIndex) error {
 	tranId := e.Segment.Table.Database.Catalog.NextUncommitId()
 	ctx := newUpgradeBlockCtx(e, exIndice, tranId)
-	err := e.Segment.Table.Database.Catalog.onCommitRequest(ctx)
+	err := e.Segment.Table.Database.Catalog.onCommitRequest(ctx, true)
 	if err != nil {
 		return err
 	}

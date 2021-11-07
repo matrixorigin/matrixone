@@ -7,17 +7,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 )
 
-type TxnEntry struct {
-	typ     LogEntryType
-	payload IEntry
-}
+type TxnEntry LogEntry
 
 type TxnStore struct {
 	sync.Mutex `json:"-"`
-	Entries    []*TxnEntry `json:"entries"`
+	Logs       []TxnEntry `json:"logs"`
+	entries    []IEntry
+	eTypes     []LogEntryType
 }
 
 func (store *TxnStore) Marshal() ([]byte, error) {
+	store.Logs = make([]TxnEntry, len(store.entries))
+	for i, entry := range store.entries {
+		store.Logs[i] = entry.ToLogEntry(store.eTypes[i])
+	}
 	return json.Marshal(store)
 }
 
@@ -26,10 +29,10 @@ func (store *TxnStore) Unmarshal(buf []byte) error {
 }
 
 func (store *TxnStore) CommitLocked(commitId uint64) {
-	for _, entry := range store.Entries {
-		entry.payload.Lock()
-		entry.payload.CommitLocked(commitId)
-		entry.payload.Unlock()
+	for _, entry := range store.entries {
+		entry.Lock()
+		entry.CommitLocked(commitId)
+		entry.Unlock()
 	}
 }
 
@@ -48,16 +51,16 @@ func (store *TxnStore) ToLogEntry(eType LogEntryType) LogEntry {
 }
 
 func (store *TxnStore) AddEntry(entry IEntry, eType LogEntryType) {
-	txnEntry := &TxnEntry{
-		payload: entry,
-		typ:     eType,
-	}
-	store.Entries = append(store.Entries, txnEntry)
+	store.Lock()
+	defer store.Unlock()
+	store.entries = append(store.entries, entry)
+	store.eTypes = append(store.eTypes, eType)
 }
 
 func NewTxnStore() *TxnStore {
 	return &TxnStore{
-		Entries: make([]*TxnEntry, 0),
+		entries: make([]IEntry, 0),
+		eTypes:  make([]LogEntryType, 0),
 	}
 }
 

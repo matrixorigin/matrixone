@@ -246,7 +246,7 @@ func (db *Database) SimpleHardDelete() error {
 	ctx := new(deleteDatabaseCtx)
 	ctx.tranId = tranId
 	ctx.database = db
-	err := db.Catalog.onCommitRequest(ctx)
+	err := db.Catalog.onCommitRequest(ctx, true)
 	return err
 }
 
@@ -278,7 +278,7 @@ func (db *Database) SimpleSoftDelete(index *LogIndex) error {
 	ctx.tranId = tranId
 	ctx.database = db
 	ctx.exIndex = index
-	return db.Catalog.onCommitRequest(ctx)
+	return db.Catalog.onCommitRequest(ctx, true)
 }
 
 func (db *Database) prepareSoftDelete(ctx *dropDatabaseCtx) (LogEntry, error) {
@@ -309,16 +309,39 @@ func (db *Database) SimpleDropTableByName(name string, exIndex *LogIndex) error 
 	ctx.tranId = tranId
 	ctx.exIndex = exIndex
 	ctx.table = table
-	return db.Catalog.onCommitRequest(ctx)
+	return db.Catalog.onCommitRequest(ctx, true)
+}
+
+func (db *Database) DropTableByNameInTxn(txn *TxnCtx, name string) error {
+	table := db.GetTableByNameInTxn(txn, name)
+	if table == nil {
+		return TableNotFoundErr
+	}
+	ctx := new(dropTableCtx)
+	ctx.tranId = txn.tranId
+	ctx.exIndex = txn.index
+	ctx.table = table
+	ctx.txn = txn
+	ctx.inTran = true
+	return db.Catalog.onCommitRequest(ctx, true)
+}
+
+func (db *Database) GetTableByNameInTxn(txn *TxnCtx, name string) *Table {
+	db.RLock()
+	defer db.RUnlock()
+	return db.GetTableByNameLocked(name, txn.tranId)
 }
 
 func (db *Database) SimpleGetTableByName(name string) *Table {
 	db.RLock()
 	defer db.RUnlock()
-	return db.GetTableByName(name, MinUncommitId)
+	if db.IsDeletedLocked() {
+		return nil
+	}
+	return db.GetTableByNameLocked(name, MinUncommitId)
 }
 
-func (db *Database) GetTableByName(name string, tranId uint64) *Table {
+func (db *Database) GetTableByNameLocked(name string, tranId uint64) *Table {
 	nn := db.nameNodes[name]
 	if nn == nil {
 		return nil
@@ -327,7 +350,7 @@ func (db *Database) GetTableByName(name string, tranId uint64) *Table {
 	next := nn.GetNext()
 	for next != nil {
 		entry := next.(*nameNode).GetTable()
-		if entry.CanUse(tranId) && !entry.IsDeleted() {
+		if entry.CanUseTxn(tranId) && !entry.IsDeleted() {
 			return entry
 		}
 		next = next.GetNext()
@@ -394,7 +417,7 @@ func (db *Database) SimpleCreateTable(schema *Schema, exIndex *LogIndex) (*Table
 	ctx.exIndex = exIndex
 	ctx.schema = schema
 	ctx.database = db
-	err := db.Catalog.onCommitRequest(ctx)
+	err := db.Catalog.onCommitRequest(ctx, true)
 	return ctx.table, err
 }
 
@@ -408,14 +431,14 @@ func (db *Database) CreateTableInTxn(txn *TxnCtx, schema *Schema) (*Table, error
 	ctx.schema = schema
 	ctx.database = db
 	ctx.txn = txn
-	err := db.Catalog.onCommitRequest(ctx)
+	ctx.inTran = true
+	err := db.Catalog.onCommitRequest(ctx, false)
 	return ctx.table, err
 }
 
 func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	var err error
 	entry := NewTableEntry(db, ctx.schema, ctx.tranId, ctx.exIndex)
-	logEntry := entry.ToLogEntry(ETCreateTable)
 	db.Lock()
 	if err = db.onNewTable(entry); err != nil {
 		db.Unlock()
@@ -427,6 +450,7 @@ func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 		ctx.txn.AddEntry(entry, ETCreateTable)
 		return nil, nil
 	}
+	logEntry := entry.ToLogEntry(ETCreateTable)
 	db.Catalog.prepareCommitLog(entry, logEntry)
 	return logEntry, err
 }

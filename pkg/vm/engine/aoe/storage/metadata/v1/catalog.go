@@ -32,6 +32,7 @@ var (
 )
 
 var (
+	ResourceStaleErr       = errors.New("aoe: resource is stale")
 	DuplicateErr           = errors.New("aoe: duplicate")
 	DatabaseNotFoundErr    = errors.New("aoe: db not found")
 	TableNotFoundErr       = errors.New("aoe: table not found")
@@ -139,7 +140,7 @@ func (catalog *Catalog) StartTxn(index *LogIndex) *TxnCtx {
 }
 
 func (catalog *Catalog) CommitTxn(txn *TxnCtx) error {
-	return catalog.onCommitRequest(txn)
+	return catalog.onCommitRequest(txn, true)
 }
 
 func (catalog *Catalog) prepareCommitTxn(txn *TxnCtx) (LogEntry, error) {
@@ -169,7 +170,7 @@ func (catalog *Catalog) SimpleReplaceDatabase(view *databaseLogEntry, tranId uin
 	ctx.tranId = tranId
 	ctx.inTran = true
 	ctx.view = view
-	return catalog.onCommitRequest(ctx)
+	return catalog.onCommitRequest(ctx, true)
 }
 
 func (catalog *Catalog) prepareReplaceDatabase(ctx *replaceDatabaseCtx) (LogEntry, error) {
@@ -252,10 +253,13 @@ func (catalog *Catalog) CommitLogEntry(entry logstore.Entry, commitId uint64, sy
 	return err
 }
 
-func (catalog *Catalog) onCommitRequest(ctx interface{}) error {
+func (catalog *Catalog) onCommitRequest(ctx interface{}, doCommit bool) error {
 	entry, err := catalog.pipeline.prepare(ctx)
 	if err != nil {
 		return err
+	}
+	if !doCommit {
+		return nil
 	}
 	err = catalog.pipeline.commit(entry)
 	return err
@@ -377,7 +381,7 @@ func (catalog *Catalog) SimpleCreateDatabase(name string, index *LogIndex) (*Dat
 	ctx.tranId = tranId
 	ctx.name = name
 	ctx.exIndex = index
-	err := catalog.onCommitRequest(ctx)
+	err := catalog.onCommitRequest(ctx, true)
 	return ctx.database, err
 }
 
@@ -388,14 +392,13 @@ func (catalog *Catalog) CreateDatabaseInTxn(txn *TxnCtx, name string) (*Database
 	ctx.exIndex = txn.index
 	ctx.inTran = true
 	ctx.txn = txn
-	err := catalog.onCommitRequest(ctx)
+	err := catalog.onCommitRequest(ctx, false)
 	return ctx.database, err
 }
 
 func (catalog *Catalog) prepareCreateDatabase(ctx *createDatabaseCtx) (LogEntry, error) {
 	var err error
 	db := NewDatabase(catalog, ctx.name, ctx.tranId, ctx.exIndex)
-	entry := db.ToLogEntry(ETCreateDatabase)
 	catalog.Lock()
 	if err = catalog.onNewDatabase(db); err != nil {
 		catalog.Unlock()
@@ -407,6 +410,7 @@ func (catalog *Catalog) prepareCreateDatabase(ctx *createDatabaseCtx) (LogEntry,
 		ctx.txn.AddEntry(db, ETCreateDatabase)
 		return nil, nil
 	}
+	entry := db.ToLogEntry(ETCreateDatabase)
 	catalog.prepareCommitLog(db, entry)
 	return entry, err
 }
@@ -421,7 +425,21 @@ func (catalog *Catalog) SimpleDropDatabaseByName(name string, index *LogIndex) e
 	ctx.tranId = tranId
 	ctx.exIndex = index
 	ctx.database = db
-	return catalog.onCommitRequest(ctx)
+	return catalog.onCommitRequest(ctx, true)
+}
+
+func (catalog *Catalog) GetDatabaseByNameInTxn(txn *TxnCtx, name string) (*Database, error) {
+	catalog.RLock()
+	defer catalog.RUnlock()
+	nn := catalog.nameNodes[name]
+	if nn == nil {
+		return nil, DatabaseNotFoundErr
+	}
+	db := nn.GetDatabase()
+	if db.IsDeletedInTxnLocked(txn) {
+		return nil, DatabaseNotFoundErr
+	}
+	return db, nil
 }
 
 func (catalog *Catalog) SimpleGetDatabaseByName(name string) (*Database, error) {
@@ -432,7 +450,7 @@ func (catalog *Catalog) SimpleGetDatabaseByName(name string) (*Database, error) 
 		return nil, DatabaseNotFoundErr
 	}
 	db := nn.GetDatabase()
-	if db.IsDeletedLocked() {
+	if db.IsDeletedLocked() || !db.HasCommittedLocked() {
 		return nil, DatabaseNotFoundErr
 	}
 	return db, nil
@@ -465,7 +483,7 @@ func (catalog *Catalog) execSplit(nameFactory TableNameFactory, spec *ShardSplit
 	ctx.tranId = tranId
 	ctx.exIndex = index
 	ctx.dbSpecs = dbSpecs
-	return catalog.onCommitRequest(ctx)
+	return catalog.onCommitRequest(ctx, true)
 }
 
 func (catalog *Catalog) prepareSplit(ctx *splitDBCtx) (LogEntry, error) {

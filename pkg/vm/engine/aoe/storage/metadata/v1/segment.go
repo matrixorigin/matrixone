@@ -208,7 +208,7 @@ func (e *Segment) ToLogEntry(eType LogEntryType) LogEntry {
 func (e *Segment) SimpleCreateBlock() *Block {
 	tranId := e.Table.Database.Catalog.NextUncommitId()
 	ctx := newCreateBlockCtx(e, tranId)
-	if err := e.Table.Database.Catalog.onCommitRequest(ctx); err != nil {
+	if err := e.Table.Database.Catalog.onCommitRequest(ctx, true); err != nil {
 		return nil
 	}
 	return ctx.block
@@ -283,7 +283,7 @@ func (e *Segment) SimpleUpgrade(size int64, exIndice []*LogIndex) error {
 	stale := e.GetCommit()
 	tranId := e.Table.Database.Catalog.NextUncommitId()
 	ctx := newUpgradeSegmentCtx(e, size, exIndice, tranId)
-	err := e.Table.Database.Catalog.onCommitRequest(ctx)
+	err := e.Table.Database.Catalog.onCommitRequest(ctx, true)
 	if err != nil {
 		return err
 	}
