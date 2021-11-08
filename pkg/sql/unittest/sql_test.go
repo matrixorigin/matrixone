@@ -199,18 +199,18 @@ func TestInsert(t *testing.T) {
 		for _, e := range es {
 			err := e.Compile(nil, Print)
 			if expected1 == nil {
-				require.NoError(t, err)
+				require.NoError(t, err, sql)
 			} else {
-				require.EqualError(t, err, expected1.Error())
+				require.EqualError(t, err, expected1.Error(), sql)
 			}
 			if expected1 != nil {
 				break
 			}
 			err = e.Run(1)
 			if expected2 == nil {
-				require.NoError(t, err)
+				require.NoError(t, err, sql)
 			} else {
-				require.EqualError(t, err, expected2.Error())
+				require.EqualError(t, err, expected2.Error(), sql)
 			}
 		}
 	}
