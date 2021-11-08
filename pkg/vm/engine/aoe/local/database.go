@@ -41,7 +41,7 @@ func (d *localRoDatabase) Relations() []string {
 }
 
 func (d *localRoDatabase) Relation(name string) (engine.Relation, error) {
-	impl, err := d.dbimpl.Relation(d.database.Name, name)
+	impl, err := d.dbimpl.Relation(d.database.GetShardId(), name)
 	if err != nil {
 		return nil, err
 	}

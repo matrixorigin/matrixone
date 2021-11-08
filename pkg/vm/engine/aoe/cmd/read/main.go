@@ -180,7 +180,7 @@ func readData() {
 	refs := make([]uint64, len(attrs))
 	var segIds dbi.IDS
 	{
-		dbrel, _ := impl.Relation(dbName, tableName)
+		dbrel, _ := impl.Relation(0, tableName)
 		segIds = dbrel.SegmentIds()
 		dbrel.Close()
 	}
