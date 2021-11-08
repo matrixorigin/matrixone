@@ -149,5 +149,8 @@ func TestTxn(t *testing.T) {
 	assert.NotNil(t, err)
 	t.Log(err)
 
+	err = txn.Commit()
+	assert.Nil(t, err)
+
 	t.Log(db1.PString(PPL0))
 }
