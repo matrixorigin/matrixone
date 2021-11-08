@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	store "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 
@@ -31,7 +31,7 @@ import (
 
 // Storage memory storage
 type Storage struct {
-	DB    *adb.DB
+	DB    *aoedb.DB
 	stats stats.Stats
 }
 
@@ -52,7 +52,7 @@ func NewStorage(dir string) (*Storage, error) {
 
 // NewStorageWithOptions returns badger kv store
 func NewStorageWithOptions(dir string, opts *store.Options) (*Storage, error) {
-	db, err := adb.OpenWithWalBroker(dir, opts)
+	db, err := aoedb.OpenWithWalBroker(dir, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (s *Storage) Append(tabletName string, bat *batch.Batch, shardId uint64, lo
 	}
 	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
-	return s.DB.Append(dbi.AppendCtx{
+	err := s.DB.Append(dbi.AppendCtx{
 		ShardId:   shardId,
 		OpIndex:   logIdx,
 		OpOffset:  logOffset,
@@ -82,11 +82,12 @@ func (s *Storage) Append(tabletName string, bat *batch.Batch, shardId uint64, lo
 		TableName: tabletName,
 		Data:      bat,
 	})
+	return err
 }
 
 //Relation  returns a relation of the db and the table
-func (s *Storage) Relation(tabletName string) (*adb.Relation, error) {
-	return s.DB.Relation(tabletName)
+func (s *Storage) Relation(shardId uint64, tabletName string) (*aoedb.Relation, error) {
+	return s.DB.Relation(shardId, tabletName)
 }
 
 //GetSnapshot gets the snapshot from the table.
@@ -119,13 +120,13 @@ func (s *Storage) DropTable(ctx dbi.DropTableCtx) (uint64, error) {
 }
 
 //TableIDs returns the ids of all the tables in the storage.
-func (s *Storage) TableIDs() (ids []uint64, err error) {
-	return s.DB.TableIDs()
+func (s *Storage) TableIDs(shardId uint64) (ids []uint64, err error) {
+	return s.DB.TableIDs(shardId)
 }
 
 //TableIDs returns the names of all the tables in the storage.
-func (s *Storage) TableNames() (ids []string) {
-	return s.DB.TableNames()
+func (s *Storage) TableNames(shardId uint64) (ids []string) {
+	return s.DB.TableNames(shardId)
 }
 
 //TODO

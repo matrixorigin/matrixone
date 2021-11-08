@@ -15,7 +15,8 @@
 package engine
 
 import (
-	log "github.com/sirupsen/logrus"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -23,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
 	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
-	"time"
+	log "github.com/sirupsen/logrus"
 )
 
 //Type return the type of the database
@@ -102,7 +103,7 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 				continue
 			}
 			addr := db.catalog.Driver.RaftStore().GetRouter().LeaderPeerStore(tbl.ShardId).ClientAddr
-			if lRelation, err := ldb.Relation(tbl.Name); err == nil {
+			if lRelation, err := ldb.Relation(tbl.ShardId, tbl.Name); err == nil {
 				r.mp[tbl.Name] = lRelation
 			}
 			for _, id := range ids.Ids {

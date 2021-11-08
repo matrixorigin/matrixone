@@ -11,10 +11,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
+type Relation = db.Relation
 type Impl = db.DB
 
 type DB struct {
 	Impl
+}
+
+func (d *DB) Relation(shardId uint64, tableName string) (*Relation, error) {
+	dbName := ShardIdToName(shardId)
+	return d.Impl.Relation(dbName, tableName)
 }
 
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
