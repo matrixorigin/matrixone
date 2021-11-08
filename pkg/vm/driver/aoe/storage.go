@@ -337,22 +337,7 @@ func (s *Storage) Read(ctx storage.ReadContext) ([]byte, error) {
 }
 
 func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
-	rsp, err := s.DB.GetSegmentedId(dbi.GetSegmentedIdCtx{
-		Matchers: []*dbi.StringMatcher{
-			{
-				Type:    dbi.MTPrefix,
-				Pattern: codec.Uint642String(shardID),
-			},
-		},
-	})
-	if err != nil {
-		if err == adb.ErrNotFound {
-			rsp = 0
-		} else {
-			panic(err)
-		}
-		return rsp, nil
-	}
+	rsp := s.DB.GetShardCheckpointId(shardID)
 	return rsp, nil
 }
 
