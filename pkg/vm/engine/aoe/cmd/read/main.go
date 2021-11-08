@@ -32,12 +32,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/local"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	w "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -69,6 +70,8 @@ var (
 	readPool *ants.Pool
 	proc     *process.Process
 	hm       *host.Mmu
+	gen      *shard.MockIndexAllocator
+	dbName   string
 )
 
 func init() {
@@ -89,6 +92,8 @@ func init() {
 	opts.WalRole = wal.HolderRole
 	info := adaptor.MockTableInfo(colCnt)
 	table = info
+	gen = shard.NewMockIndexAllocator()
+	dbName = aoedb.ShardIdToName(uint64(0))
 }
 
 func getInsertBatch(meta *metadata.Table) *batch.Batch {
@@ -105,12 +110,12 @@ func stopProfile() {
 	pprof.StopCPUProfile()
 }
 
-func makeDB() *db.DB {
-	impl, _ := db.Open(workDir, opts)
+func makeDB() *aoedb.DB {
+	impl, _ := aoedb.Open(workDir, opts)
 	return impl
 }
 
-func creatTable(impl *db.DB) {
+func creatTable(impl *aoedb.DB) {
 	_, err := impl.CreateTable(table, dbi.TableOpCtx{TableName: table.Name})
 	if err != nil {
 		panic(err)
@@ -121,10 +126,10 @@ func doRemove() {
 	os.RemoveAll(workDir)
 }
 
-func makeFiles(impl *db.DB) {
-	meta := impl.Opts.Meta.Catalog.SimpleGetTableByName(tableName)
-	if meta == nil {
-		panic(metadata.TableNotFoundErr)
+func makeFiles(impl *aoedb.DB) {
+	meta, err := impl.Opts.Meta.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil {
+		panic(err)
 	}
 	ibat := getInsertBatch(meta)
 	for i := uint64(0); i < insertCnt; i++ {
@@ -152,7 +157,7 @@ func mockData() {
 func readData() {
 	impl := makeDB()
 	localEngine := local.NewLocalRoEngine(impl)
-	dbase, err := localEngine.Database("")
+	dbase, err := localEngine.Database(dbName)
 	if err != nil {
 		panic(err)
 	}
@@ -162,7 +167,10 @@ func readData() {
 	if err != nil {
 		panic(err)
 	}
-	tblMeta := impl.Opts.Meta.Catalog.SimpleGetTableByName(tableName)
+	tblMeta, err := impl.Opts.Meta.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil {
+		panic(err)
+	}
 	var attrs []string
 	cols := make([]int, 0)
 	for i, colDef := range tblMeta.Schema.ColDefs {
@@ -172,7 +180,7 @@ func readData() {
 	refs := make([]uint64, len(attrs))
 	var segIds dbi.IDS
 	{
-		dbrel, _ := impl.Relation(tableName)
+		dbrel, _ := impl.Relation(dbName, tableName)
 		segIds = dbrel.SegmentIds()
 		dbrel.Close()
 	}
