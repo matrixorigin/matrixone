@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package driver
+package error
 
 import (
 	"bytes"
@@ -30,8 +30,8 @@ var (
 	ErrStartupTimeout  = errors.New("driver startup timeout")
 )
 
-//errorResp transforms the error into []byte fomat
-func errorResp(err error, infos ...string) []byte {
+//ErrorResp transforms the error into []byte fomat
+func ErrorResp(err error, infos ...string) []byte {
 	buf := bytes.Buffer{}
 	for _, info := range infos {
 		buf.WriteString(info)

@@ -16,9 +16,10 @@ package catalog
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
-	stdLog "log"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap/zapcore"
+	stdLog "log"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -93,7 +94,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		func(node int) *config.Config {
 			c := &config.Config{}
 			c.ClusterConfig.PreAllocatedGroupNum = preAllocShardNum
-			c.ServerConfig.ExternalServer = true
+			// c.ServerConfig.ExternalServer = true
 			return c
 		},
 		testutil.WithTestAOEClusterAOEStorageFunc(func(path string) (*aoe3.Storage, error) {
@@ -118,7 +119,8 @@ func TestCatalogWithUtil(t *testing.T) {
 			raftstore.WithAppendTestClusterAdjustConfigFunc(func(node int, cfg *cconfig.Config) {
 				cfg.Worker.RaftEventWorkers = 8
 			}),
-			raftstore.WithTestClusterLogLevel("info"),
+			raftstore.WithTestClusterNodeCount(1),
+			raftstore.WithTestClusterLogLevel(zapcore.InfoLevel),
 			raftstore.WithTestClusterDataPath("./test")))
 
 	c.Start()
@@ -127,7 +129,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		c.Stop()
 	}()
 
-	c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*30)
+	// c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*30)
 
 	stdLog.Printf("driver all started.")
 

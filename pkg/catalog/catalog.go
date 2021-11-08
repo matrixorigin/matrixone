@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixcube/server"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver"
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/pb"
@@ -270,7 +271,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			return tid, err
 		}
 		wg.Add(1)
-		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i interface{}, bytes []byte, rerr error) {
+		c.Driver.AsyncSet(rkey, []byte(tbl.Name), func(i server.CustomRequest, bytes []byte, rerr error) {
 			defer wg.Done()
 			if rerr != nil {
 				err = rerr
@@ -278,7 +279,7 @@ func (c *Catalog) CreateTable(epoch, dbId uint64, tbl aoe.TableInfo) (tid uint64
 			}
 		}, nil)
 		wg.Add(1)
-		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i interface{}, bytes []byte, rerr error) {
+		c.Driver.AsyncSet(c.tableKey(dbId, tbl.Id), meta, func(i server.CustomRequest, bytes []byte, rerr error) {
 			defer wg.Done()
 			if rerr != nil {
 				err = rerr
@@ -731,7 +732,7 @@ func (c *Catalog) refreshTableIDCache() {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	c.Driver.AsyncAllocID(codec.String2Bytes(cTableIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
+	c.Driver.AsyncAllocID(codec.String2Bytes(cTableIDPrefix), idPoolSize, func(i server.CustomRequest, data []byte, err error) {
 		defer wg.Done()
 		if err != nil {
 			logutil.Errorf("refresh table id failed, checkpoint is %d, %d", c.tidStart, c.tidEnd)
@@ -767,7 +768,7 @@ func (c *Catalog) refreshDBIDCache() {
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	c.Driver.AsyncAllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize, func(i interface{}, data []byte, err error) {
+	c.Driver.AsyncAllocID(codec.String2Bytes(cDBIDPrefix), idPoolSize, func(i server.CustomRequest, data []byte, err error) {
 		defer wg.Done()
 		if err != nil {
 			logutil.Errorf("refresh db id failed, checkpoint is %d, %d", c.dbIdStart, c.dbIdEnd)
