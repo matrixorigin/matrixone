@@ -136,7 +136,7 @@ func TestTxn(t *testing.T) {
 	foundT = db1.SimpleGetTableByName(schema2.Name)
 	assert.Nil(t, foundT)
 
-	err = db1.DropTableByNameInTxn(txn, schema.Name)
+	_, err = db1.DropTableByNameInTxn(txn, schema.Name)
 	assert.Nil(t, err)
 
 	err = db1.SimpleDropTableByName(schema.Name, gen.Next(shardId))

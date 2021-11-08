@@ -104,6 +104,10 @@ func (d *DB) CommitTxn(txn *TxnCtx) error {
 	return txn.Commit()
 }
 
+func (d *DB) AbortTxn(txn *TxnCtx) error {
+	return txn.Abort()
+}
+
 func (d *DB) CreateDatabaseInTxn(txn *TxnCtx, name string) (*metadata.Database, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)

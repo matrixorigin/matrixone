@@ -327,10 +327,10 @@ func (db *Database) SimpleDropTableByName(name string, exIndex *LogIndex) error 
 	return db.Catalog.onCommitRequest(ctx, true)
 }
 
-func (db *Database) DropTableByNameInTxn(txn *TxnCtx, name string) error {
+func (db *Database) DropTableByNameInTxn(txn *TxnCtx, name string) (*Table, error) {
 	table := db.GetTableByNameInTxn(txn, name)
 	if table == nil {
-		return TableNotFoundErr
+		return nil, TableNotFoundErr
 	}
 	ctx := new(dropTableCtx)
 	ctx.tranId = txn.tranId
@@ -338,7 +338,7 @@ func (db *Database) DropTableByNameInTxn(txn *TxnCtx, name string) error {
 	ctx.table = table
 	ctx.txn = txn
 	ctx.inTran = true
-	return db.Catalog.onCommitRequest(ctx, false)
+	return table, db.Catalog.onCommitRequest(ctx, false)
 }
 
 func (db *Database) GetTableByNameInTxn(txn *TxnCtx, name string) *Table {

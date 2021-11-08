@@ -5,8 +5,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type Impl = db.DB
@@ -16,26 +18,35 @@ type DB struct {
 }
 
 func (d *DB) CreateTable(info *aoe.TableInfo, ctx dbi.TableOpCtx) (id uint64, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
 	info.Name = ctx.TableName
 	schema := adaptor.TableInfoToSchema(d.Opts.Meta.Catalog, info)
 	logutil.Debugf("Create table, schema.Primarykey is %d", schema.PrimaryKey)
 	index := adaptor.GetLogIndexFromTableOpCtx(&ctx)
-
+	if err = d.Wal.SyncLog(index); err != nil {
+		return
+	}
+	defer d.Wal.Checkpoint(index)
 	dbName := ShardIdToName(ctx.ShardId)
 
-	txn := d.Impl.StartTxn(index)
-	if _, err = d.Impl.CreateDatabaseInTxn(txn, dbName); err != nil {
-		return
-	}
-	table, err := d.Impl.CreateTableInTxn(txn, dbName, schema)
+	txn := d.StartTxn(index)
+	database, err := d.Store.Catalog.CreateDatabaseInTxn(txn, dbName)
 	if err != nil {
+		d.AbortTxn(txn)
 		return
 	}
-	if err = d.Impl.CommitTxn(txn); err != nil {
+	table, err := database.CreateTableInTxn(txn, schema)
+	if err != nil {
+		d.AbortTxn(txn)
+		return
+	}
+	if err = d.CommitTxn(txn); err != nil {
+		d.AbortTxn(txn)
 		return
 	}
 	id = table.Id
-	// TODO: rollback
 	return
 }
 
@@ -58,8 +69,40 @@ func (d *DB) TableNames(shardId uint64) []string {
 }
 
 func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	index := adaptor.GetLogIndexFromDropTableCtx(&ctx)
+	logutil.Infof("DropTable %s", index.String())
+	if err = d.Wal.SyncLog(index); err != nil {
+		return
+	}
+	defer d.Wal.Checkpoint(index)
 	ctx.DBName = ShardIdToName(ctx.ShardId)
-	return d.DropTable(ctx)
+	txn := d.StartTxn(index)
+	database, err := d.Store.Catalog.GetDatabaseByNameInTxn(txn, ctx.DBName)
+	if err != nil {
+		d.AbortTxn(txn)
+		return
+	}
+	if err = database.SoftDeleteInTxn(txn); err != nil {
+		d.AbortTxn(txn)
+		return
+	}
+	var table *metadata.Table
+	if table, err = database.DropTableByNameInTxn(txn, ctx.TableName); err != nil {
+		d.AbortTxn(txn)
+		return
+	} else {
+		id = table.Id
+	}
+	if err = d.CommitTxn(txn); err != nil {
+		d.AbortTxn(txn)
+		return
+	}
+	gcReq := gcreqs.NewDropTblRequest(d.Opts, table, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
+	d.Opts.GC.Acceptor.Accept(gcReq)
+	return
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
