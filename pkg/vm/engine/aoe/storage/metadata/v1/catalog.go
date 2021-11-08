@@ -428,6 +428,20 @@ func (catalog *Catalog) SimpleDropDatabaseByName(name string, index *LogIndex) e
 	return catalog.onCommitRequest(ctx, true)
 }
 
+func (catalog *Catalog) DropDatabaseByNameInTxn(txn *TxnCtx, name string) error {
+	database, err := catalog.GetDatabaseByNameInTxn(txn, name)
+	if err != nil {
+		return err
+	}
+	ctx := new(dropDatabaseCtx)
+	ctx.tranId = txn.tranId
+	ctx.exIndex = txn.index
+	ctx.database = database
+	ctx.inTran = true
+	ctx.txn = txn
+	return catalog.onCommitRequest(ctx, false)
+}
+
 func (catalog *Catalog) GetDatabaseByNameInTxn(txn *TxnCtx, name string) (*Database, error) {
 	catalog.RLock()
 	defer catalog.RUnlock()

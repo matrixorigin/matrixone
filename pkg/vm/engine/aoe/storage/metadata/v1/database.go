@@ -281,6 +281,16 @@ func (db *Database) SimpleSoftDelete(index *LogIndex) error {
 	return db.Catalog.onCommitRequest(ctx, true)
 }
 
+func (db *Database) SoftDeleteInTxn(txn *TxnCtx) error {
+	ctx := new(dropDatabaseCtx)
+	ctx.tranId = txn.tranId
+	ctx.exIndex = txn.index
+	ctx.database = db
+	ctx.inTran = true
+	ctx.txn = txn
+	return db.Catalog.onCommitRequest(ctx, false)
+}
+
 func (db *Database) prepareSoftDelete(ctx *dropDatabaseCtx) (LogEntry, error) {
 	cInfo := &CommitInfo{
 		TranId:   ctx.tranId,
@@ -290,12 +300,17 @@ func (db *Database) prepareSoftDelete(ctx *dropDatabaseCtx) (LogEntry, error) {
 		SSLLNode: *common.NewSSLLNode(),
 	}
 	db.Lock()
-	defer db.Unlock()
-	if db.IsSoftDeletedLocked() {
+	if db.IsDeletedLocked() {
+		db.Unlock()
 		return nil, TableNotFoundErr
 	}
 	db.onNewCommit(cInfo)
-	logEntry := db.Catalog.prepareCommitEntry(db, ETSoftDeleteDatabase, db)
+	db.Unlock()
+	if ctx.inTran {
+		ctx.txn.AddEntry(db, ETSoftDeleteDatabase)
+		return nil, nil
+	}
+	logEntry := db.Catalog.prepareCommitEntry(db, ETSoftDeleteDatabase, nil)
 	return logEntry, nil
 }
 

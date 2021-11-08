@@ -142,15 +142,21 @@ func TestTxn(t *testing.T) {
 	err = db1.SimpleDropTableByName(schema.Name, gen.Next(shardId))
 	assert.NotNil(t, err)
 	err = db1.SimpleDropTableByName(schema2.Name, gen.Next(shardId))
-	t.Log(err)
 	assert.NotNil(t, err)
 
 	_, err = db1.SimpleCreateTable(schema2, gen.Next(shardId))
 	assert.NotNil(t, err)
-	t.Log(err)
 
+	err = db1.SoftDeleteInTxn(txn)
+	assert.Nil(t, err)
+	err = db1.SoftDeleteInTxn(txn)
+	assert.NotNil(t, err)
+
+	assert.False(t, db1.HasCommitted())
 	err = txn.Commit()
 	assert.Nil(t, err)
+	assert.True(t, db1.IsDeleted())
+	assert.True(t, db1.HasCommitted())
 
 	t.Log(db1.PString(PPL0))
 }
