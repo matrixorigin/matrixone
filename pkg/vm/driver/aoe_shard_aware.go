@@ -30,7 +30,7 @@ func (h *driver) Splited(shard meta.Shard) {
 
 }
 
-func (h *driver) Destory(shard meta.Shard) {
+func (h *driver) Destroyed(shard meta.Shard) {
 }
 
 func (h *driver) BecomeLeader(shard meta.Shard) {

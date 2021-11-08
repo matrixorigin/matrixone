@@ -216,17 +216,18 @@ func (s *Storage) tableNames() (ids []string) {
 }
 
 //TODO
-func (s *Storage) SplitCheck(start []byte, end []byte, size uint64) (currentSize uint64, currentKeys uint64, splitKeys [][]byte, err error) {
-	return 0, 0, nil, err
+func (s *Storage) SplitCheck(shard meta.Shard, size uint64) (currentApproximateSize uint64,
+	currentApproximateKeys uint64, splitKeys [][]byte, ctx []byte, err error) {
+	return 0, 0, nil, nil, err
 
 }
 
 //TODO
-func (s *Storage) CreateSnapshot(shardID uint64, path string) (uint64, error) {
+func (s *Storage) CreateSnapshot(shardID uint64, path string) (uint64, uint64, error) {
 	if _, err := os.Stat(path); err != nil {
 		os.MkdirAll(path, os.FileMode(0755))
 	}
-	return 0, nil
+	return 0, 0, nil
 }
 
 //TODO
@@ -243,9 +244,9 @@ func (s *Storage) NewWriteBatch() storage.Resetable {
 	return nil
 }
 
-func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
+func (s *Storage) GetInitialStates() ([]meta.ShardMetadata, error) {
 	tblNames := s.tableNames()
-	var values []storage.ShardMetadata
+	var values []meta.ShardMetadata
 	logutil.Infof("tblNames len  is %d\n", len(tblNames))
 	for _, tblName := range tblNames {
 		//TODO:Strictly judge whether it is a "shard metadata table"
@@ -281,10 +282,12 @@ func (s *Storage) GetInitialStates() ([]storage.ShardMetadata, error) {
 		metadate := bat.GetVector(attrs[2])
 		logutil.Infof("GetInitialStates Metadata is %v\n",
 			metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
-		values = append(values, storage.ShardMetadata{
+		customReq := &meta.ShardLocalState{}
+		protoc.MustUnmarshal(customReq, metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]])
+		values = append(values, meta.ShardMetadata{
 			ShardID:  shardId.Col.([]uint64)[0],
 			LogIndex: logIndex.Col.([]uint64)[0],
-			Metadata: metadate.Col.(*types.Bytes).Data[:metadate.Col.(*types.Bytes).Lengths[0]],
+			Metadata: *customReq,
 		})
 	}
 	return values, nil
@@ -353,7 +356,7 @@ func (s *Storage) GetPersistentLogIndex(shardID uint64) (uint64, error) {
 	return rsp, nil
 }
 
-func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
+func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
 		tbl := s.DB.Store.Catalog.SimpleGetTableByName(tableName)
@@ -393,13 +396,13 @@ func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
 			attrs = append(attrs, colDef.Name)
 		}
 		bat := batch.New(true, attrs)
-		vMetadata := vector.New(types.Type{Oid: types.T_varchar, Size: int32(len(metadata.Metadata))})
+		vMetadata := vector.New(types.Type{Oid: types.T_varchar, Size: int32(len(protoc.MustMarshal(&metadata.Metadata)))})
 		vMetadata.Ref = 1
 		logutil.Infof("SaveShardMetadata Metadata is %v\n", metadata.Metadata)
 		vMetadata.Col = &types.Bytes{
-			Data:    metadata.Metadata,
+			Data:    protoc.MustMarshal(&metadata.Metadata),
 			Offsets: []uint32{0},
-			Lengths: []uint32{uint32(len(metadata.Metadata))},
+			Lengths: []uint32{uint32(len(protoc.MustMarshal(&metadata.Metadata)))},
 		}
 		bat.Vecs[2] = vMetadata
 		vShardID := vector.New(types.Type{Oid: types.T_uint64, Size: 8})
@@ -426,6 +429,10 @@ func (s *Storage) SaveShardMetadata(metadatas []storage.ShardMetadata) error {
 	return nil
 }
 
-func (s *Storage) RemoveShardData(shard meta.Shard) error {
+func (s *Storage) RemoveShard(shard meta.Shard, removeData bool) error {
+	return nil
+}
+
+func (s *Storage) Split(old meta.ShardMetadata, news []meta.ShardMetadata, ctx []byte) error {
 	return nil
 }
