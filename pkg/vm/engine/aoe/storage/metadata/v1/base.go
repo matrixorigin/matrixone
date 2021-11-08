@@ -159,6 +159,9 @@ func (e *BaseEntry) UseCommittedLocked(filter *commitFilter) *BaseEntry {
 }
 
 func (e *BaseEntry) IsDeletedInTxnLocked(txn *TxnCtx) bool {
+	if txn == nil {
+		return e.IsDeletedLocked()
+	}
 	if e.CanUseTxnLocked(txn.tranId) {
 		return e.IsDeletedLocked()
 	}

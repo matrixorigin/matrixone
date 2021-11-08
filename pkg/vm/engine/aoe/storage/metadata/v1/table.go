@@ -246,12 +246,21 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 		SSLLNode: *common.NewSSLLNode(),
 	}
 	e.Lock()
-	defer e.Unlock()
-	if e.IsSoftDeletedLocked() {
+	// Here we can see any uncommitted and committed changes. When it detects any write-write conflicts,
+	// it will proactively abort current transaction
+	if e.IsDeletedLocked() {
+		// if e.IsDeletedInTxnLocked(ctx.txn) {
+		e.Unlock()
 		return nil, TableNotFoundErr
 	}
 	e.onNewCommit(cInfo)
-	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETSoftDeleteTable, e)
+	e.Unlock()
+	if ctx.inTran {
+		ctx.txn.AddEntry(e, ETSoftDeleteTable)
+		return nil, nil
+	}
+	// PXU TODO: ToLogEntry should work on specified tranId node in the chain
+	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETSoftDeleteTable, nil)
 	return logEntry, nil
 }
 

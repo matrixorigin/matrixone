@@ -120,4 +120,34 @@ func TestTxn(t *testing.T) {
 
 	_, err = catalog.SimpleGetDatabaseByName(db1.Name)
 	assert.Nil(t, err)
+
+	txn = catalog.StartTxn(gen.Next(shardId))
+	assert.NotNil(t, txn)
+	db1, err = catalog.GetDatabaseByNameInTxn(txn, db1.Name)
+	assert.Nil(t, err)
+	assert.True(t, db1.HasCommitted())
+	schema2 := MockSchema(3)
+	schema2.Name = "t2"
+	t2, err := db1.CreateTableInTxn(txn, schema2)
+	assert.Nil(t, err)
+	assert.False(t, t2.HasCommitted())
+	foundT := db1.GetTableByNameInTxn(txn, schema2.Name)
+	assert.NotNil(t, foundT)
+	foundT = db1.SimpleGetTableByName(schema2.Name)
+	assert.Nil(t, foundT)
+
+	err = db1.DropTableByNameInTxn(txn, schema.Name)
+	assert.Nil(t, err)
+
+	err = db1.SimpleDropTableByName(schema.Name, gen.Next(shardId))
+	assert.NotNil(t, err)
+	err = db1.SimpleDropTableByName(schema2.Name, gen.Next(shardId))
+	t.Log(err)
+	assert.NotNil(t, err)
+
+	_, err = db1.SimpleCreateTable(schema2, gen.Next(shardId))
+	assert.NotNil(t, err)
+	t.Log(err)
+
+	t.Log(db1.PString(PPL0))
 }

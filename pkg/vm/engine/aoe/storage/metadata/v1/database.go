@@ -323,7 +323,7 @@ func (db *Database) DropTableByNameInTxn(txn *TxnCtx, name string) error {
 	ctx.table = table
 	ctx.txn = txn
 	ctx.inTran = true
-	return db.Catalog.onCommitRequest(ctx, true)
+	return db.Catalog.onCommitRequest(ctx, false)
 }
 
 func (db *Database) GetTableByNameInTxn(txn *TxnCtx, name string) *Table {
@@ -659,6 +659,7 @@ func (db *Database) onNewTable(entry *Table) error {
 	nn := db.nameNodes[entry.Schema.Name]
 	if nn != nil {
 		e := nn.GetTable()
+		// Conflict checks all committed and uncommitted entries.
 		if !e.IsDeletedLocked() {
 			return DuplicateErr
 		}
