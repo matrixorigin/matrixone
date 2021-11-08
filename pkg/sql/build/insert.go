@@ -62,7 +62,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 		cols := r.Attribute()
 		attrs = make([]string, len(r.Attribute()))
 		for i, col := range cols {
-			attrs[i] = string(col.Name)
+			attrs[i] = col.Name
 		}
 	}
 	rows.Rows, attrs, err = rewriteInsertRows(r, stmt.Columns, attrs, rows.Rows)
@@ -99,7 +99,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(int8)
@@ -121,7 +121,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(int16)
@@ -143,7 +143,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(int32)
@@ -165,7 +165,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(int64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(int64)
@@ -187,7 +187,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(uint8)
@@ -209,7 +209,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(uint16)
@@ -231,7 +231,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(uint32)
@@ -253,7 +253,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(uint64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(uint64)
@@ -275,7 +275,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(float32), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(float32), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(float32)
@@ -297,7 +297,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(float64), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(float64), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = vv.(float64)
@@ -319,7 +319,7 @@ func (b *build) buildInsert(stmt *tree.Insert) (op.OP, error) {
 					if v == nil {
 						vec.Nsp.Add(uint64(j))
 					} else {
-						if vv, err := rangeCheck(v.(string), vec.Typ, bat.Attrs[j], i); err != nil {
+						if vv, err := rangeCheck(v.(string), vec.Typ, bat.Attrs[i], j + 1); err != nil {
 							return nil, err
 						} else {
 							vs[j] = []byte(vv.(string))
@@ -410,7 +410,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		default:
 			return nil, errors.New("unexpected type and value")
 		}
-		return nil, errors.New(fmt.Sprintf(errString, columnName, rowNumber))
+		return nil, sqlerror.New(errno.DataException , fmt.Sprintf(errString, columnName, rowNumber))
 	case uint64:
 		switch typ.Oid {
 		case types.T_uint8:
@@ -430,7 +430,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		default:
 			return nil, errors.New("unexpected type and value")
 		}
-		return nil, errors.New(fmt.Sprintf(errString, columnName, rowNumber))
+		return nil, sqlerror.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
 	case float32:
 		if typ.Oid == types.T_float32 {
 			return v, nil
@@ -447,7 +447,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		default:
 			return nil, errors.New("unexpected type and value")
 		}
-		return nil, errors.New(fmt.Sprintf(errString, columnName, rowNumber))
+		return nil, sqlerror.New(errno.DataException, fmt.Sprintf(errString, columnName, rowNumber))
 	case string:
 		switch typ.Oid {
 		case types.T_char, types.T_varchar: // string family should compare the length but not value
@@ -457,7 +457,7 @@ func rangeCheck(value interface{}, typ types.Type, columnName string, rowNumber 
 		default:
 			return nil, errors.New("unexpected type and value")
 		}
-		return nil, errors.New(fmt.Sprintf(errString, columnName, rowNumber))
+		return nil, sqlerror.New(errno.DataException, fmt.Sprintf("Data too long for column '%s' at row %d", columnName, rowNumber))
 	default:
 		return nil, errors.New("unexpected type and value")
 	}
