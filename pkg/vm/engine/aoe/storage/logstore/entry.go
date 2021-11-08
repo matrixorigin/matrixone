@@ -15,12 +15,14 @@
 package logstore
 
 import (
+	"bytes"
 	"fmt"
 	"io"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/util"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"sync"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/util"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
 var (
@@ -35,6 +37,7 @@ type Entry interface {
 	SetMeta(*EntryMeta)
 	GetPayload() []byte
 	Unmarshal([]byte) error
+	Marshal() ([]byte, error)
 	ReadFrom(io.Reader) (int, error)
 	WriteTo(StoreFileWriter, sync.Locker) (int, error)
 	GetAuxilaryInfo() interface{}
@@ -195,6 +198,12 @@ func (e *BaseEntry) Unmarshal(buf []byte) error {
 	e.Payload = buf
 	e.Meta.SetPayloadSize(uint32(len(buf)))
 	return nil
+}
+func (e *BaseEntry) Marshal() ([]byte, error) {
+	buf := bytes.Buffer{}
+	buf.Write(e.Meta.Buf)
+	buf.Write(e.Payload)
+	return buf.Bytes(), nil
 }
 
 func (e *BaseEntry) ReadFrom(r io.Reader) (int, error) {

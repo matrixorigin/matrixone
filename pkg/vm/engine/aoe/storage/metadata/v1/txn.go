@@ -11,15 +11,16 @@ type TxnEntry LogEntry
 
 type TxnStore struct {
 	sync.Mutex `json:"-"`
-	Logs       []TxnEntry `json:"logs"`
+	Logs       [][]byte `json:"logs"`
 	entries    []IEntry
 	eTypes     []LogEntryType
 }
 
 func (store *TxnStore) Marshal() ([]byte, error) {
-	store.Logs = make([]TxnEntry, len(store.entries))
+	store.Logs = make([][]byte, len(store.entries))
 	for i, entry := range store.entries {
-		store.Logs[i] = entry.ToLogEntry(store.eTypes[i])
+		logEntry := entry.ToLogEntry(store.eTypes[i])
+		store.Logs[i], _ = logEntry.Marshal()
 	}
 	return json.Marshal(store)
 }

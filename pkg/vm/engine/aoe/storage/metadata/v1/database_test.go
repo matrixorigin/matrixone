@@ -92,7 +92,6 @@ func TestTxn(t *testing.T) {
 	dir := "/tmp/metadata/testtxn"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
 	catalog := initTest(dir, blockRows, segmentBlocks, true)
-	defer catalog.Close()
 	gen := shard.NewMockIndexAllocator()
 
 	shardId := uint64(100)
@@ -159,4 +158,9 @@ func TestTxn(t *testing.T) {
 	assert.True(t, db1.HasCommitted())
 
 	t.Log(db1.PString(PPL0))
+	catalog.Close()
+
+	catalog2 := initTest(dir, blockRows, segmentBlocks, false)
+	defer catalog2.Close()
+	t.Log(catalog2.PString(PPL1))
 }
