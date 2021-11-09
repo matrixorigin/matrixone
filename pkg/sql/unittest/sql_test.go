@@ -118,7 +118,67 @@ func TestDDLSql(t *testing.T) {
 		}
 	}
 }
+func TestCreateDropIndex(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
 
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type insertTestCase struct {
+		testSql    string
+		expectErr1 error // compile err expected
+		expectErr2 error // run err expected
+	}
+
+	testCases := []insertTestCase{
+		{"create database testinsert;", nil, nil},
+		{"CREATE TABLE TBL(A INT, B VARCHAR(10));", nil, nil},
+		{"CREATE INDEX index_name ON TBL (A);", nil, nil},
+		{"DROP INDEX index_name ON TBL;", nil, nil},
+		{"drop database testinsert;", nil, nil},
+	}
+
+	for i, tc := range testCases {
+		sql := tc.testSql
+		expected1 := tc.expectErr1
+		expected2 := tc.expectErr2
+
+		c := compile.New("testinsert", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		println(i)
+		for _, e := range es {
+			err := e.Compile(nil, Print)
+			if expected1 == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected1.Error())
+			}
+			if expected1 != nil {
+				break
+			}
+			err = e.Run(1)
+			if expected2 == nil {
+				require.NoError(t, err)
+			} else {
+				require.EqualError(t, err, expected2.Error())
+			}
+		}
+	}
+}
 func TestInsert(t *testing.T) {
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)
@@ -138,8 +198,8 @@ func TestInsert(t *testing.T) {
 	go srv.Run()
 	defer srv.Stop()
 
-	type insertTestCase struct{
-		testSql string
+	type insertTestCase struct {
+		testSql    string
 		expectErr1 error // compile err expected
 		expectErr2 error // run err expected
 	}
@@ -203,7 +263,7 @@ func TestInsert(t *testing.T) {
 	}
 
 	type affectRowsCase struct {
-		sql string
+		sql        string
 		err1, err2 error
 		affectRows int64 // -1 means there's no need to check this number
 	}
@@ -565,8 +625,8 @@ func TestOperators(t *testing.T) {
 	defer srv.Stop()
 
 	type testCase struct {
-		id	int
-		sql string
+		id            int
+		sql           string
 		expectedError error
 	}
 

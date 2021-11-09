@@ -24,16 +24,7 @@ import (
 
 func (b *build) buildCreateIndex(stmt *tree.CreateIndex) (op.OP, error) {
 	var defs []engine.TableDef
-
-	dbName, tblName, err := b.tableInfo(stmt.Table)
-	if err != nil {
-		return nil, err
-	}
-	db, err := b.e.Database(dbName)
-	if err != nil {
-		return nil, err
-	}
-	r, err := db.Relation(tblName)
+	_, _, r, err := b.tableName(&stmt.Table)
 	if err != nil {
 		return nil, err
 	}
@@ -44,15 +35,7 @@ func (b *build) buildCreateIndex(stmt *tree.CreateIndex) (op.OP, error) {
 }
 
 func (b *build) buildDropIndex(stmt *tree.DropIndex) (op.OP, error) {
-	dbName, tblName, err := b.tableInfo(stmt.TableName)
-	if err != nil {
-		return nil, err
-	}
-	db, err := b.e.Database(dbName)
-	if err != nil {
-		return nil, err
-	}
-	r, err := db.Relation(tblName)
+	_, _, r, err := b.tableName(&stmt.TableName)
 	if err != nil {
 		return nil, err
 	}
