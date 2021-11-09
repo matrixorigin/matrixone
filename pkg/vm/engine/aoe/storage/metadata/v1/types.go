@@ -201,7 +201,7 @@ func (info *CommitInfo) GetSize() int64 {
 }
 
 func (info *CommitInfo) PString(level PPLevel) string {
-	s := "<CInfo>"
+	s := ""
 	if info.LogRange != nil {
 		s = fmt.Sprintf("%s%s: ", s, info.LogRange.String())
 	}
@@ -209,17 +209,13 @@ func (info *CommitInfo) PString(level PPLevel) string {
 	curr = info
 	for curr != nil {
 		if prev != nil {
-			s = fmt.Sprintf("%s -> ", s)
+			s = fmt.Sprintf("%s => ", s)
 		}
 		cInfo := curr.(*CommitInfo)
-		s = fmt.Sprintf("%s(%s,cid-%d", s, OpName(cInfo.Op), cInfo.CommitId)
-		id, _ := info.GetAppliedIndex()
 		if cInfo.LogIndex != nil {
-			s = fmt.Sprintf("%s,%d-s%d-%s)", s, id, cInfo.LogIndex.ShardId, cInfo.LogIndex.Id.String())
-		} else {
-			s = fmt.Sprintf("%s)", s)
+			s = fmt.Sprintf("%s[%s]", s, cInfo.LogIndex.String())
 		}
-		s = fmt.Sprintf("%s(%s,%d,%d)", s, OpName(info.Op), info.TranId-MinUncommitId, info.CommitId)
+		s = fmt.Sprintf("%s<%s,T-%d,C-%d>", s, OpName(cInfo.Op), cInfo.TranId-MinUncommitId, cInfo.CommitId)
 		prev = curr
 		curr = curr.GetNext()
 	}

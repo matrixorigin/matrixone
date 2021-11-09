@@ -253,6 +253,7 @@ func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg 
 	replayer.catalog.Compact()
 	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
+	logutil.Infof(replayer.catalog.PString(PPL0))
 	return replayer.catalog, nil
 }
 
@@ -267,6 +268,7 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 	replayer.catalog.Compact()
 	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
+	logutil.Infof(replayer.catalog.PString(PPL0))
 	return replayer.catalog, nil
 }
 

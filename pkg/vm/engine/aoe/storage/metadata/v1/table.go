@@ -85,8 +85,12 @@ func NewEmptyTableEntry(db *Database) *Table {
 	return e
 }
 
-func (e *Table) Repr() string {
-	return fmt.Sprintf("TBL[\"%s\",%d]-%s", e.Schema.Name, e.Id, e.Database.Repr())
+func (e *Table) Repr(short bool) string {
+	s := fmt.Sprintf("TBL-%d:\"%s\"", e.Id, e.Schema.Name)
+	if !short {
+		s = fmt.Sprintf("%s-%s", s, e.Database.Repr())
+	}
+	return s
 }
 
 func (e *Table) DebugCheckReplayedState() {
@@ -586,13 +590,16 @@ func (e *Table) GetSegment(id, tranId uint64) *Segment {
 func (e *Table) PString(level PPLevel) string {
 	e.RLock()
 	defer e.RUnlock()
-	s := fmt.Sprintf("<Table[%s]>(%s)(Cnt=%d)", e.Schema.Name, e.BaseEntry.PString(level), len(e.SegmentSet))
+	s := fmt.Sprintf("%s | %s | Cnt=%d ", e.Repr(true), e.BaseEntry.PString(level), len(e.SegmentSet))
+	// s := fmt.Sprintf("<Table[%s]>(%s)(Cnt=%d)", e.Schema.Name, e.BaseEntry.PString(level), len(e.SegmentSet))
 	if level > PPL0 && len(e.SegmentSet) > 0 {
 		s = fmt.Sprintf("%s{", s)
 		for _, seg := range e.SegmentSet {
 			s = fmt.Sprintf("%s\n%s", s, seg.PString(level))
 		}
 		s = fmt.Sprintf("%s\n}", s)
+	} else {
+		s = fmt.Sprintf("%s {...}", s)
 	}
 	return s
 }

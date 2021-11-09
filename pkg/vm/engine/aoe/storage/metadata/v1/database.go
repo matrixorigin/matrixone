@@ -88,7 +88,7 @@ func NewEmptyDatabase(catalog *Catalog) *Database {
 }
 
 func (db *Database) Repr() string {
-	return fmt.Sprintf("DB[\"%s\",%d]", db.Name, db.Id)
+	return fmt.Sprintf("DB-%d<\"%s\",S-%d>", db.Id, db.Name, db.CommitInfo.GetShardId())
 }
 
 func (db *Database) DebugCheckReplayedState() {
@@ -671,7 +671,7 @@ func (db *Database) ToLogEntry(eType LogEntryType) LogEntry {
 func (db *Database) PString(level PPLevel) string {
 	db.RLock()
 	defer db.RUnlock()
-	s := fmt.Sprintf("<Database[%d][%s]>(Cnt=%d)(%s){", db.Id, db.Name, len(db.TableSet), db.BaseEntry.PString(level))
+	s := fmt.Sprintf("%s | %s | Cnt=%d {", db.Repr(), db.BaseEntry.PString(level), len(db.TableSet))
 	for _, table := range db.TableSet {
 		s = fmt.Sprintf("%s\n%s", s, table.PString(level))
 	}
@@ -716,7 +716,7 @@ func (db *Database) Compact() {
 	}
 	db.Lock()
 	for _, table := range tables {
-		logutil.Infof("%s | Compacted", table.Repr())
+		logutil.Infof("%s | Compacted", table.Repr(false))
 		delete(db.TableSet, table.Id)
 	}
 	db.Unlock()

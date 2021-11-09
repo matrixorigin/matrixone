@@ -104,8 +104,7 @@ func (e *BaseEntry) onCommit(info *CommitInfo) error {
 }
 
 func (e *BaseEntry) PString(level PPLevel) string {
-	s := fmt.Sprintf("Id=%d,%s", e.Id, e.CommitInfo.PString(level))
-	return s
+	return e.CommitInfo.PString(level)
 }
 
 func (e *BaseEntry) GetAppliedIndex() (uint64, bool) {
