@@ -73,7 +73,7 @@ type DB struct {
 	// MutationBufMgr is a replacement for MTBufMgr
 	MutationBufMgr bb.INodeManager
 
-	Wal wal.ShardWal
+	Wal wal.ShardAwareWal
 
 	FlushDriver  flusher.Driver
 	TimedFlusher wb.IHeartbeater

@@ -40,7 +40,7 @@ type Wal interface {
 	GetRole() Role
 }
 
-type ShardWal interface {
+type ShardAwareWal interface {
 	Wal
 	InitShard(uint64, uint64) error
 	GetShardCheckpointId(uint64) uint64

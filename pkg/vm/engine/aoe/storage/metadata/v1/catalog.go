@@ -56,7 +56,7 @@ type Catalog struct {
 	Sequence        `json:"-"`
 	pipeline        *commitPipeline      `json:"-"`
 	Store           logstore.AwareStore  `json:"-"`
-	IndexWal        wal.ShardWal         `json:"-"`
+	IndexWal        wal.ShardAwareWal    `json:"-"`
 	Cfg             *CatalogCfg          `json:"-"`
 	nodesMu         sync.RWMutex         `json:"-"`
 	commitMu        sync.RWMutex         `json:"-"`
@@ -70,12 +70,12 @@ func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
 	return replayer.RebuildCatalog(mu, cfg)
 }
 
-func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) (*Catalog, error) {
+func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardAwareWal) (*Catalog, error) {
 	replayer := newCatalogReplayer()
 	return replayer.RebuildCatalogWithDriver(mu, cfg, store, indexWal)
 }
 
-func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
+func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardAwareWal) *Catalog {
 	catalog := &Catalog{
 		RWMutex:   mu,
 		Cfg:       cfg,
@@ -654,7 +654,7 @@ func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry) {
 	}
 }
 
-func MockCatalog(dir string, blkRows, segBlks uint64, driver logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
+func MockCatalog(dir string, blkRows, segBlks uint64, driver logstore.AwareStore, indexWal wal.ShardAwareWal) *Catalog {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows = blkRows
