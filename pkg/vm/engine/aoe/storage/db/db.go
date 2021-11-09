@@ -26,10 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	bmgrif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager/iface"
-	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/memdata"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/events/meta"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/flusher"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
@@ -171,6 +170,10 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err != nil {
 		return err
 	}
+	if ctx.ShardId != tbl.Database.GetShardId() {
+		err = metadata.InconsistentShardIdErr
+		return
+	}
 
 	collection := d.MemTableMgr.StrongRefCollection(tbl.Id)
 	if collection == nil {
@@ -256,13 +259,30 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	eCtx := &dbsched.Context{
-		Opts:     d.Opts,
-		Waitable: true,
+	table, err := d.Store.Catalog.SimpleGetTableByName(ctx.DBName, ctx.TableName)
+	if err != nil {
+		return
 	}
-	e := meta.NewDropTableEvent(eCtx, ctx, d.MemTableMgr, d.Store.DataTables)
-	err = e.Execute()
-	return e.Id, err
+	if table.Database.GetShardId() != ctx.ShardId {
+		err = metadata.InconsistentShardIdErr
+		return
+	}
+	id = table.Id
+
+	index := adaptor.GetLogIndexFromDropTableCtx(&ctx)
+	if err = table.SimpleSoftDelete(index); err != nil {
+		return
+	}
+
+	logutil.Infof("DropTable %s", index.String())
+	if err = d.Wal.SyncLog(index); err != nil {
+		return
+	}
+	defer d.Wal.Checkpoint(index)
+
+	gcReq := gcreqs.NewDropTblRequest(d.Opts, table, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
+	d.Opts.GC.Acceptor.Accept(gcReq)
+	return
 }
 
 func (d *DB) CreateDatabase(name string, shardId uint64) (*metadata.Database, error) {
