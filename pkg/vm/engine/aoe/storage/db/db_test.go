@@ -999,6 +999,13 @@ func TestCreateSnapshotCase1(t *testing.T) {
 	assert.Nil(t, inst.Close())
 }
 
+// Notice that the background upgrades are triggered asynchronous, and
+// the upgrade sequence is: segment closed -> tableData.UpgradeSegment
+// -> upgrade segment metadata, so there could probably be such a
+// scenario: the segment is closed, but not upgrading tableData on time.
+// So we should trigger this upgrading manually, but other cases, like
+// the tableData is upgraded and metadata is not will never happen, cause
+// we discard the snapshotting if meta & tableData are inconsistent.
 func TestCreateSnapshotCase2(t *testing.T) {
 	sched.DisableFlushSegment = true
 	initDBTest()
