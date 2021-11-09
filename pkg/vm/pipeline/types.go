@@ -17,13 +17,6 @@ package pipeline
 import (
 	"bytes"
 	"matrixone/pkg/vm"
-	"matrixone/pkg/vm/engine"
-)
-
-const (
-	PrefetchNum           = 4
-	CompressedBlockSize   = 1024
-	UncompressedBlockSize = 4096
 )
 
 // Pipeline contains the information associated with a pipeline in a query execution plan.
@@ -85,26 +78,12 @@ const (
 //  -> τ(o.year asc, revenue desc)
 //  -> π(c.city, s.city, revenue)
 type Pipeline struct {
-	// refCount, reference count for attribute.
-	refCount []uint64
 	// attrs, column list.
 	attrs []string
-	// compressedBytes, buffers for compressed data.
-	compressedBytes []*bytes.Buffer
-	// decompressedBytes, buffers for decompressed data.
-	decompressedBytes []*bytes.Buffer
+	// refCnts, reference count for attribute.
+	refCnts []uint64
+	// buffers, buffers for decompressed data.
+	buffers []*bytes.Buffer
 	// instructions, stores ordered instruction list that to be executed.
 	instructions vm.Instructions // orders to be executed.
-}
-
-type block struct {
-	blk engine.Block
-}
-
-//queue contains prefetched blocks and the information of current prefetch index.
-type queue struct {
-	prefetchIndex int
-	// size, is not used now
-	siz    int64
-	blocks []block
 }

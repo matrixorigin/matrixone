@@ -9,7 +9,6 @@ require (
 	github.com/fagongzi/goetty v1.11.1
 	github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
-	github.com/frankban/quicktest v1.11.3 // indirect
 	github.com/go-sql-driver/mysql v1.5.0
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/protobuf v1.5.2
@@ -24,11 +23,20 @@ require (
 	github.com/stretchr/testify v1.7.0
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
 	go.uber.org/zap v1.18.1
-	golang.org/x/net v0.0.0-20210813160813-60bc85c4be6d // indirect
 	golang.org/x/sys v0.0.0-20210816071009-649d0fc2fce7
+	gopkg.in/natefinch/lumberjack.v2 v2.0.0
+)
+
+require (
+	github.com/frankban/quicktest v1.11.3 // indirect
+	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7 // indirect
+	github.com/pingcap/log v0.0.0-20200511115504-543df19646ad // indirect
+	go.uber.org/atomic v1.7.0 // indirect
+	go.uber.org/multierr v1.6.0 // indirect
+	golang.org/x/net v0.0.0-20210813160813-60bc85c4be6d // indirect
+	golang.org/x/text v0.3.6 // indirect
 	golang.org/x/tools v0.1.5 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
-	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
 replace go.etcd.io/etcd/raft/v3 => github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2
