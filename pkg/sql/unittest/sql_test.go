@@ -169,6 +169,36 @@ func TestInsert(t *testing.T) {
 		{"insert into TBL7 (B) values (10);", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
 		{"insert into TBL7 () values ();", sqlerror.New(errno.InvalidColumnDefinition, "Field 'A' doesn't have a default value"), nil},
 		{"insert into TBL7 (A) values (1);", nil, nil},
+		// range check
+		{"create table iis (i1 tinyint, i2 smallint, i3 int, i4 bigint);", nil, nil},
+		{"create table uus (u1 tinyint unsigned, u2 smallint unsigned, u3 int unsigned, u4 bigint unsigned);", nil, nil},
+		{"create table ffs (f1 float, f2 double);", nil, nil},
+			// test upper limit
+		{"insert into iis values (127, 32767, 2147483647, 9223372036854775807);", nil, nil},
+		{"insert into iis values (128, 32767, 2147483647, 9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i1' at row 1"), nil},
+		{"insert into iis values (127, 32768, 2147483647, 9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i2' at row 1"), nil},
+		{"insert into iis values (127, 32767, 2147483648, 9223372036854775807);", sqlerror.New(errno.DataException, "Out of range value for column 'i3' at row 1"), nil},
+		{"insert into iis values (127, 32767, 2147483647, 9223372036854775808);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (255, 65535, 4294967295, 18446744073709551615);", nil, nil},
+		{"insert into uus values (256, 65535, 4294967295, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u1' at row 1"), nil},
+		{"insert into uus values (255, 65536, 4294967295, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u2' at row 1"), nil},
+		{"insert into uus values (255, 65535, 4294967296, 18446744073709551615);", sqlerror.New(errno.DataException, "Out of range value for column 'u3' at row 1"), nil},
+		{"insert into uus values (255, 65535, 4294967295, 18446744073709551616);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into iis (i4) values (9223372036854775807.5);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus (u4) values (18446744073709551615.5);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+			// test lower limit
+		{"insert into iis values (-128, -32768, -2147483648, -9223372036854775808);", nil, nil},
+		{"insert into iis values (-129, -32768, -2147483648, -9223372036854775808);", sqlerror.New(errno.DataException, "Out of range value for column 'i1' at row 1"), nil},
+		{"insert into iis values (-128, -32769, -2147483648, -9223372036854775808);", sqlerror.New(errno.DataException, "Out of range value for column 'i2' at row 1"), nil},
+		{"insert into iis values (-128, -32768, -2147483649, -9223372036854775808);", sqlerror.New(errno.DataException, "Out of range value for column 'i3' at row 1"), nil},
+		{"insert into iis values (-128, -32768, -2147483648, -9223372036854775809);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into iis (i4) values (-9223372036854775808.5);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (0, 0, 0, 0);", nil, nil},
+		{"insert into uus values (-1, 0, 0, 0);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (0, -1, 0, 0);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (0, 0, -1, 0);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+		{"insert into uus values (0, 0, 0, -1);", sqlerror.New(errno.DataException, "constant value out of range"), nil},
+
 		{"drop database testinsert;", nil, nil},
 	}
 
