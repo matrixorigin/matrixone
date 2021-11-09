@@ -110,6 +110,13 @@ func (e *Table) DebugCheckReplayedState() {
 func (e *Table) MaxLogIndex() *LogIndex {
 	e.RLock()
 	defer e.RUnlock()
+	return e.MaxLogIndexLocked()
+}
+
+func (e *Table) MaxLogIndexLocked() *LogIndex {
+	if e.CommitInfo.LogIndex == nil {
+		return nil
+	}
 	if e.IsDeletedLocked() || len(e.SegmentSet) == 0 {
 		return e.LatestLogIndexLocked()
 	}
