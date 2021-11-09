@@ -87,6 +87,10 @@ func NewEmptyDatabase(catalog *Catalog) *Database {
 	return db
 }
 
+func (db *Database) Repr() string {
+	return fmt.Sprintf("DB[\"%s\",%d]", db.Name, db.Id)
+}
+
 func (db *Database) DebugCheckReplayedState() {
 	if db.Catalog == nil {
 		panic("catalog is missing")
@@ -141,7 +145,7 @@ func (db *Database) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
 }
 
 func (db *Database) Release() {
-	logutil.Infof("Database (\"%s\", %d) | Compacted", db.Name, db.Id)
+	logutil.Infof("%s | Compacted", db.Repr())
 	// PXU TODO
 }
 
@@ -700,7 +704,7 @@ func (db *Database) Compact() {
 	}
 	db.Lock()
 	for _, table := range tables {
-		logutil.Infof("Table (\"%s\", %d, \"%s\", %d) | Compacted", table.Database.Name, table.Database.Id, table.Schema.Name, table.Id)
+		logutil.Infof("%s | Compacted", table.Repr())
 		delete(db.TableSet, table.Id)
 	}
 	db.Unlock()

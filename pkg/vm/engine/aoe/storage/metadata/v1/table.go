@@ -85,6 +85,10 @@ func NewEmptyTableEntry(db *Database) *Table {
 	return e
 }
 
+func (e *Table) Repr() string {
+	return fmt.Sprintf("TBL[\"%s\",%d]-%s", e.Schema.Name, e.Id, e.Database.Repr())
+}
+
 func (e *Table) DebugCheckReplayedState() {
 	if e.Database == nil {
 		panic("database is missing")
