@@ -87,6 +87,10 @@ func NewEmptyDatabase(catalog *Catalog) *Database {
 	return db
 }
 
+func (db *Database) Repr() string {
+	return fmt.Sprintf("DB[\"%s\",%d]", db.Name, db.Id)
+}
+
 func (db *Database) DebugCheckReplayedState() {
 	if db.Catalog == nil {
 		panic("catalog is missing")
@@ -138,6 +142,21 @@ func (db *Database) onBlockUpgraded(block *Block) {
 
 func (db *Database) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
 	db.AddSize(segment.GetCoarseSize() - segment.GetUnsortedSize())
+}
+
+func (db *Database) Release() {
+	logutil.Infof("%s | Compacted", db.Repr())
+	// PXU TODO
+}
+
+func (db *Database) CanHardDeleteLocked() bool {
+	if !db.HasCommittedLocked() || !db.IsDeletedLocked() || db.IsHardDeletedLocked() {
+		return false
+	}
+	if db.Catalog.IndexWal == nil {
+		return true
+	}
+	return db.GetCheckpointId() == db.CommitInfo.GetIndex()
 }
 
 func (db *Database) GetShardId() uint64 {
@@ -218,7 +237,9 @@ func (db *Database) prepareReplace(ctx *addReplaceCommitCtx) (LogEntry, error) {
 		ctx.discard = true
 		return nil, nil
 	}
-	db.onNewCommit(cInfo)
+	if err := db.onCommit(cInfo); err != nil {
+		return nil, err
+	}
 	if ctx.inTran {
 		return nil, nil
 	}
@@ -295,16 +316,14 @@ func (db *Database) prepareHardDelete(ctx *deleteDatabaseCtx) (LogEntry, error) 
 	}
 	db.Lock()
 	defer db.Unlock()
-	if db.IsHardDeletedLocked() {
-		logutil.Warnf("HardDelete %d but already hard deleted", db.Id)
-		return nil, TableNotFoundErr
-	}
-	if !db.IsSoftDeletedLocked() && !db.IsReplacedLocked() {
-		panic("logic error: Cannot hard delete entry that not soft deleted or replaced")
+	if !db.CanHardDeleteLocked() {
+		return nil, CannotHardDeleteErr
 	}
 	cInfo.LogIndex = db.CommitInfo.LogIndex
-	db.onNewCommit(cInfo)
-	logEntry := db.Catalog.prepareCommitEntry(db, ETHardDeleteTable, db)
+	if err := db.onCommit(cInfo); err != nil {
+		return nil, err
+	}
+	logEntry := db.Catalog.prepareCommitEntry(db, ETHardDeleteDatabase, db)
 	return logEntry, nil
 }
 
@@ -340,8 +359,11 @@ func (db *Database) prepareSoftDelete(ctx *dropDatabaseCtx) (LogEntry, error) {
 		db.Unlock()
 		return nil, TableNotFoundErr
 	}
-	db.onNewCommit(cInfo)
+	err := db.onCommit(cInfo)
 	db.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	if ctx.inTran {
 		ctx.txn.AddEntry(db, ETSoftDeleteDatabase)
 		return nil, nil
@@ -491,6 +513,10 @@ func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	var err error
 	entry := NewTableEntry(db, ctx.schema, ctx.tranId, ctx.exIndex)
 	db.Lock()
+	if db.IsSoftDeletedLocked() {
+		db.Unlock()
+		return nil, DatabaseNotFoundErr
+	}
 	if err = db.onNewTable(entry); err != nil {
 		db.Unlock()
 		return nil, err
@@ -661,11 +687,18 @@ func (db *Database) Compact() {
 	tables := make([]*Table, 0, 2)
 	nodes := make([]*nodeList, 0, 2)
 	db.RLock()
+	// If database is hard delete, it will be handled during catalog compact cycle
+	if db.IsHardDeletedLocked() {
+		db.RUnlock()
+		return
+	}
 	for _, table := range db.TableSet {
-		if table.IsHardDeleted() {
+		table.RLock()
+		if table.IsHardDeletedLocked() && table.HasCommittedLocked() {
 			tables = append(tables, table)
 			nodes = append(nodes, db.nameNodes[table.Schema.Name])
 		}
+		table.RUnlock()
 	}
 	db.RUnlock()
 	if len(tables) == 0 {
@@ -682,6 +715,7 @@ func (db *Database) Compact() {
 	}
 	db.Lock()
 	for _, table := range tables {
+		logutil.Infof("%s | Compacted", table.Repr())
 		delete(db.TableSet, table.Id)
 	}
 	db.Unlock()

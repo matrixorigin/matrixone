@@ -76,9 +76,31 @@ func (e *BaseEntry) IsSortedLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeSorted
 }
 
-func (e *BaseEntry) onNewCommit(info *CommitInfo) {
+// func (e *BaseEntry) ForLoopCommitsLocked(filter *commitFilter) *CommitInfo {
+// 	var curr common.ISSLLNode
+// 	curr = e.CommitInfo
+// 	for curr != nil {
+// 		info := curr.(*CommitInfo)
+// 		if info.HasCommitted() {
+// 			return info
+// 		}
+// 	}
+// 	return nil
+// }
+
+func (e *BaseEntry) onCommit(info *CommitInfo) error {
+	// PXU TODO: Scan all commits
+	if e.CommitInfo != nil && e.CommitInfo.LogIndex != nil {
+		comp := e.CommitInfo.LogIndex.Compare(info.LogIndex)
+		if comp > 0 {
+			return CommitStaleErr
+		} else if comp == 0 && !e.CommitInfo.SameTran(info) {
+			panic("logic error")
+		}
+	}
 	info.SetNext(e.CommitInfo)
 	e.CommitInfo = info
+	return nil
 }
 
 func (e *BaseEntry) PString(level PPLevel) string {

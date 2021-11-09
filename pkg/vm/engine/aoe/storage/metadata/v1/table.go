@@ -85,6 +85,10 @@ func NewEmptyTableEntry(db *Database) *Table {
 	return e
 }
 
+func (e *Table) Repr() string {
+	return fmt.Sprintf("TBL[\"%s\",%d]-%s", e.Schema.Name, e.Id, e.Database.Repr())
+}
+
 func (e *Table) DebugCheckReplayedState() {
 	if e.Database == nil {
 		panic("database is missing")
@@ -106,6 +110,13 @@ func (e *Table) DebugCheckReplayedState() {
 func (e *Table) MaxLogIndex() *LogIndex {
 	e.RLock()
 	defer e.RUnlock()
+	return e.MaxLogIndexLocked()
+}
+
+func (e *Table) MaxLogIndexLocked() *LogIndex {
+	if e.CommitInfo.LogIndex == nil {
+		return nil
+	}
 	if e.IsDeletedLocked() || len(e.SegmentSet) == 0 {
 		return e.LatestLogIndexLocked()
 	}
@@ -235,7 +246,9 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 		panic("logic error: Cannot hard delete entry that not soft deleted or replaced")
 	}
 	cInfo.LogIndex = e.CommitInfo.LogIndex
-	e.onNewCommit(cInfo)
+	if err := e.onCommit(cInfo); err != nil {
+		return nil, err
+	}
 	logEntry := e.Database.Catalog.prepareCommitEntry(e, ETHardDeleteTable, e)
 	return logEntry, nil
 }
@@ -271,8 +284,11 @@ func (e *Table) prepareSoftDelete(ctx *dropTableCtx) (LogEntry, error) {
 		e.Unlock()
 		return nil, TableNotFoundErr
 	}
-	e.onNewCommit(cInfo)
+	err := e.onCommit(cInfo)
 	e.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	if ctx.inTran {
 		ctx.txn.AddEntry(e, ETSoftDeleteTable)
 		return nil, nil

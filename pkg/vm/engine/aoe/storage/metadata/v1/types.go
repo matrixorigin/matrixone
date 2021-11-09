@@ -152,6 +152,10 @@ func (info *CommitInfo) CanUseTxn(tranId uint64) bool {
 	return tranId == info.TranId
 }
 
+func (info *CommitInfo) SameTran(o *CommitInfo) bool {
+	return info.TranId == o.TranId
+}
+
 func (info *CommitInfo) GetShardId() uint64 {
 	if info == nil {
 		return 0
@@ -160,6 +164,16 @@ func (info *CommitInfo) GetShardId() uint64 {
 		return 0
 	}
 	return info.LogIndex.ShardId
+}
+
+func (info *CommitInfo) GetIndex() uint64 {
+	if info == nil {
+		return 0
+	}
+	if info.LogIndex == nil {
+		return 0
+	}
+	return info.LogIndex.Id.Id
 }
 
 func (info *CommitInfo) IsHardDeleted() bool {

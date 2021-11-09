@@ -106,7 +106,7 @@ func (cache *replayCache) onReplayTxnEntry(entry LogEntry) error {
 	return nil
 }
 
-func (cache *replayCache) onReplayTxn(store *TxnStore) {
+func (cache *replayCache) onReplayTxn(store *TxnStore) error {
 	for _, buf := range store.Logs {
 		entry := logstore.NewAsyncBaseEntry()
 		defer entry.Free()
@@ -114,18 +114,20 @@ func (cache *replayCache) onReplayTxn(store *TxnStore) {
 		meta := entry.GetMeta()
 		_, err := meta.ReadFrom(r)
 		if err != nil {
-			panic(err)
+			return err
 		}
-
 		if entry, n, err := defaultHandler(r, entry); err != nil {
-			panic(err)
+			return err
 		} else {
 			if n != int64(meta.PayloadSize()) {
-				panic(errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize())))
+				return errors.New(fmt.Sprintf("payload mismatch: %d != %d", n, meta.PayloadSize()))
 			}
-			cache.onReplayTxnEntry(entry)
+			if err = cache.onReplayTxnEntry(entry); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog, r *common.Range) error {
@@ -134,43 +136,44 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 			return nil
 		}
 	}
+	var err error
 	catalog.Sequence.TryUpdateCommitId(entry.commitId)
 	switch entry.typ {
 	case ETCreateDatabase:
 		catalog.Sequence.TryUpdateTableId(entry.db.Id)
-		catalog.onReplayCreateDatabase(entry.db)
+		err = catalog.onReplayCreateDatabase(entry.db)
 	case ETSoftDeleteDatabase:
-		catalog.onReplaySoftDeleteDatabase(entry.dbEntry)
+		err = catalog.onReplaySoftDeleteDatabase(entry.dbEntry)
 	case ETHardDeleteDatabase:
-		catalog.onReplayHardDeleteDatabase(entry.dbEntry)
+		err = catalog.onReplayHardDeleteDatabase(entry.dbEntry)
 	case ETSplitDatabase:
-		catalog.onReplayReplaceDatabase(entry.replaceEntry)
+		err = catalog.onReplayReplaceDatabase(entry.replaceEntry)
 	case ETReplaceDatabase:
-		catalog.onReplayReplaceDatabase(entry.replaceEntry)
+		err = catalog.onReplayReplaceDatabase(entry.replaceEntry)
 	case ETCreateBlock:
 		catalog.Sequence.TryUpdateBlockId(entry.blkEntry.Id)
-		catalog.onReplayCreateBlock(entry.blkEntry)
+		err = catalog.onReplayCreateBlock(entry.blkEntry)
 	case ETUpgradeBlock:
-		catalog.onReplayUpgradeBlock(entry.blkEntry)
+		err = catalog.onReplayUpgradeBlock(entry.blkEntry)
 	case ETCreateTable:
 		catalog.Sequence.TryUpdateTableId(entry.tblEntry.Table.Id)
-		catalog.onReplayCreateTable(entry.tblEntry)
+		err = catalog.onReplayCreateTable(entry.tblEntry)
 	case ETSoftDeleteTable:
-		catalog.onReplaySoftDeleteTable(entry.tblEntry)
+		err = catalog.onReplaySoftDeleteTable(entry.tblEntry)
 	case ETHardDeleteTable:
-		catalog.onReplayHardDeleteTable(entry.tblEntry)
+		err = catalog.onReplayHardDeleteTable(entry.tblEntry)
 	case ETCreateSegment:
 		catalog.Sequence.TryUpdateSegmentId(entry.segEntry.Id)
-		catalog.onReplayCreateSegment(entry.segEntry)
+		err = catalog.onReplayCreateSegment(entry.segEntry)
 	case ETUpgradeSegment:
-		catalog.onReplayUpgradeSegment(entry.segEntry)
+		err = catalog.onReplayUpgradeSegment(entry.segEntry)
 	case ETTransaction:
-		cache.onReplayTxn(entry.txnStore)
+		err = cache.onReplayTxn(entry.txnStore)
 	case logstore.ETCheckpoint:
 	default:
 		panic(fmt.Sprintf("unkown entry type: %d", entry.typ))
 	}
-	return nil
+	return err
 }
 
 func (cache *replayCache) applyNoCheckpoint() error {
@@ -199,13 +202,6 @@ func (cache *replayCache) Apply() error {
 		}
 		cache.replayer.catalog.Store.SetCheckpointId(cache.checkpoint.Range.Right)
 	}
-	// indexWal := cache.replayer.catalog.IndexWal
-	// if indexWal != nil {
-	// 	for shardId, safeId := range cache.safeIds {
-	// 		logutil.Infof("[AOE]: Replay Shard-%d SafeId-%d", shardId, safeId)
-	// 		indexWal.InitShard(shardId, safeId)
-	// 	}
-	// }
 	cache.replayer.catalog.Store.SetSyncedId(cache.replayer.catalog.Sequence.nextCommitId)
 	return nil
 }
@@ -234,7 +230,7 @@ func (replayer *catalogReplayer) restoreWal() {
 		return
 	}
 	for _, database := range replayer.catalog.Databases {
-		if database.IsDeletedLocked() {
+		if database.IsHardDeletedLocked() {
 			continue
 		}
 		safeId, ok := replayer.cache.safeIds[database.GetShardId()]
@@ -251,10 +247,10 @@ func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg 
 	if err := replayer.Replay(replayer.catalog.Store); err != nil {
 		return nil, err
 	}
-	// replayer.catalog.Compact()
 	replayer.restoreWal()
 	replayer.rebuildStats()
 	replayer.catalog.DebugCheckReplayedState()
+	replayer.catalog.Compact()
 	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
 	return replayer.catalog, nil
@@ -268,6 +264,7 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 	replayer.restoreWal()
 	replayer.rebuildStats()
 	replayer.catalog.DebugCheckReplayedState()
+	replayer.catalog.Compact()
 	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
 	return replayer.catalog, nil
@@ -299,9 +296,11 @@ func (replayer *catalogReplayer) doReplay(r *logstore.VersionFile, observer logs
 
 func (replayer *catalogReplayer) Replay(s Store) error {
 	err := s.ReplayVersions(replayer.doReplay)
+	if err != nil {
+		return err
+	}
 	logutil.Infof("Total %d entries replayed", replayer.replayed)
-	replayer.cache.Apply()
-	return err
+	return replayer.cache.Apply()
 }
 
 func (replayer *catalogReplayer) GetOffset() int64 {
