@@ -87,6 +87,12 @@ func (e *Segment) DebugCheckReplayedState() {
 	if e.IdIndex == nil {
 		panic("id index is missing")
 	}
+	if e.Table.Database.Catalog.TryUpdateCommitId(e.GetCommit().CommitId) {
+		panic("sequence error")
+	}
+	if e.Table.Database.Catalog.TryUpdateSegmentId(e.Id) {
+		panic("sequence error")
+	}
 	for _, blk := range e.BlockSet {
 		blk.DebugCheckReplayedState()
 	}

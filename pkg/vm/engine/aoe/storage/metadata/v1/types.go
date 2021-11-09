@@ -287,34 +287,52 @@ func (s *Sequence) NextUncommitId() uint64 {
 	return nextUncommitId()
 }
 
-func (s *Sequence) TryUpdateTableId(id uint64) {
+func (s *Sequence) TryUpdateDatabaseId(id uint64) bool {
+	if s.nextDatabaseId < id {
+		s.nextDatabaseId = id
+		return true
+	}
+	return false
+}
+
+func (s *Sequence) TryUpdateTableId(id uint64) bool {
 	if s.nextTableId < id {
 		s.nextTableId = id
+		return true
 	}
+	return false
 }
 
-func (s *Sequence) TryUpdateCommitId(id uint64) {
+func (s *Sequence) TryUpdateCommitId(id uint64) bool {
 	if s.nextCommitId < id {
 		s.nextCommitId = id
+		return true
 	}
+	return false
 }
 
-func (s *Sequence) TryUpdateSegmentId(id uint64) {
+func (s *Sequence) TryUpdateSegmentId(id uint64) bool {
 	if s.nextSegmentId < id {
 		s.nextSegmentId = id
+		return true
 	}
+	return false
 }
 
-func (s *Sequence) TryUpdateBlockId(id uint64) {
+func (s *Sequence) TryUpdateBlockId(id uint64) bool {
 	if s.nextBlockId < id {
 		s.nextBlockId = id
+		return true
 	}
+	return false
 }
 
-func (s *Sequence) TryUpdateIndexId(id uint64) {
+func (s *Sequence) TryUpdateIndexId(id uint64) bool {
 	if s.nextIndexId < id {
 		s.nextIndexId = id
+		return true
 	}
+	return false
 }
 
 func EstimateColumnBlockSize(colIdx int, meta *Block) uint64 {

@@ -103,6 +103,12 @@ func (db *Database) DebugCheckReplayedState() {
 	if db.blockListener == nil || db.segmentListener == nil || db.tableListener == nil {
 		panic("listener is missing")
 	}
+	if db.Catalog.TryUpdateCommitId(db.GetCommit().CommitId) {
+		panic("sequence error")
+	}
+	if db.Catalog.TryUpdateDatabaseId(db.Id) {
+		panic("sequence error")
+	}
 	for _, table := range db.TableSet {
 		table.DebugCheckReplayedState()
 	}

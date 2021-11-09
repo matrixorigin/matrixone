@@ -64,7 +64,7 @@ func (wal *ShardWal) GetShardId() uint64 {
 	return wal.ShardId
 }
 
-func (wal *ShardWal) Init(index uint64) error {
+func (wal *ShardWal) InitWal(index uint64) error {
 	return wal.Wal.InitShard(wal.ShardId, index)
 }
 

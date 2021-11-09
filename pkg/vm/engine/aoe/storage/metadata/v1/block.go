@@ -137,6 +137,12 @@ func (e *Block) DebugCheckReplayedState() {
 	if e.Segment == nil {
 		panic("segment is missing")
 	}
+	if e.Segment.Table.Database.Catalog.TryUpdateCommitId(e.GetCommit().CommitId) {
+		panic("sequence error")
+	}
+	if e.Segment.Table.Database.Catalog.TryUpdateBlockId(e.Id) {
+		panic("sequence error")
+	}
 }
 
 func (e *Block) CreateSnippet() *shard.Snippet {

@@ -642,6 +642,7 @@ func (catalog *Catalog) onReplayCreateDatabase(entry *Database) error {
 	db.BaseEntry = entry.BaseEntry
 	db.Name = entry.Name
 	db.ShardWal = wal.NewWalShard(db.BaseEntry.GetShardId(), catalog.IndexWal)
+	catalog.TryUpdateDatabaseId(db.Id)
 	return catalog.onNewDatabase(db)
 }
 
@@ -661,6 +662,7 @@ func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry) {
 	replaced := catalog.Databases[entry.Replaced.Id]
 	replaced.onNewCommit(entry.Replaced.CommitInfo)
 	for _, replacer := range entry.Replacer {
+		catalog.TryUpdateDatabaseId(replacer.Id)
 		catalog.onNewDatabase(replacer)
 		replacer.Catalog = catalog
 		replacer.rebuild(false, true)
