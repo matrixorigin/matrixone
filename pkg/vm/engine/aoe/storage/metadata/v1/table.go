@@ -591,12 +591,13 @@ func (e *Table) GetSegment(id, tranId uint64) *Segment {
 func (e *Table) PString(level PPLevel, depth int) string {
 	e.RLock()
 	defer e.RUnlock()
-	ident := strings.Repeat(" ", depth)
+	ident := strings.Repeat("  ", depth)
+	ident2 := " " + ident
 	s := fmt.Sprintf("%s | %s | Cnt=%d ", e.Repr(true), e.BaseEntry.PString(level), len(e.SegmentSet))
 	if level > PPL0 && len(e.SegmentSet) > 0 {
 		s = fmt.Sprintf("%s{", s)
 		for _, seg := range e.SegmentSet {
-			s = fmt.Sprintf("%s\n%s%s", s, ident, seg.PString(level, depth+1))
+			s = fmt.Sprintf("%s\n%s%s", s, ident2, seg.PString(level, depth+1))
 		}
 		s = fmt.Sprintf("%s\n%s}", s, ident)
 	} else {

@@ -384,10 +384,11 @@ func (catalog *Catalog) Checkpoint() (logstore.AsyncEntry, error) {
 func (catalog *Catalog) PString(level PPLevel, depth int) string {
 	catalog.RLock()
 	defer catalog.RUnlock()
-	ident := strings.Repeat(" ", depth)
+	ident := strings.Repeat("  ", depth)
+	ident2 := " " + ident
 	s := fmt.Sprintf("Catalog | Cnt=%d {", len(catalog.Databases))
 	for _, db := range catalog.Databases {
-		s = fmt.Sprintf("%s\n%s%s", s, ident, db.PString(level, depth+1))
+		s = fmt.Sprintf("%s\n%s%s", s, ident2, db.PString(level, depth+1))
 	}
 	if len(catalog.Databases) == 0 {
 		s = fmt.Sprintf("%s}", s)

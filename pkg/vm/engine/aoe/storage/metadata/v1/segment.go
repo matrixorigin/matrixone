@@ -176,7 +176,8 @@ func (e *Segment) PString(level PPLevel, depth int) string {
 	if e == nil {
 		return "null segment"
 	}
-	ident := strings.Repeat(" ", depth)
+	ident := strings.Repeat("  ", depth)
+	ident2 := " " + ident
 	e.RLock()
 	defer e.RUnlock()
 	s := fmt.Sprintf("<Segment %s", e.BaseEntry.PString(level))
@@ -184,7 +185,7 @@ func (e *Segment) PString(level PPLevel, depth int) string {
 	if level > PPL0 {
 		for _, blk := range e.BlockSet {
 			cnt++
-			s = fmt.Sprintf("%s\n%s%s", s, ident, blk.PString(level))
+			s = fmt.Sprintf("%s\n%s%s", s, ident2, blk.PString(level))
 		}
 	}
 	if cnt == 0 {

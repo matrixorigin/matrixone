@@ -672,10 +672,11 @@ func (db *Database) ToLogEntry(eType LogEntryType) LogEntry {
 func (db *Database) PString(level PPLevel, depth int) string {
 	db.RLock()
 	defer db.RUnlock()
-	ident := strings.Repeat(" ", depth)
+	ident := strings.Repeat("  ", depth)
+	ident2 := " " + ident
 	s := fmt.Sprintf("%s | %s | Cnt=%d {", db.Repr(), db.BaseEntry.PString(level), len(db.TableSet))
 	for _, table := range db.TableSet {
-		s = fmt.Sprintf("%s\n%s%s", s, ident, table.PString(level, depth+1))
+		s = fmt.Sprintf("%s\n%s%s", s, ident2, table.PString(level, depth+1))
 	}
 	if len(db.TableSet) == 0 {
 		s = fmt.Sprintf("%s}", s)
