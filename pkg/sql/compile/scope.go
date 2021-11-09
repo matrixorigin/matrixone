@@ -33,8 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op/createIndex"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/createTable"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropDatabase"
-	"github.com/matrixorigin/matrixone/pkg/sql/op/dropTable"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropIndex"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/dropTable"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/showDatabases"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/showTables"
@@ -295,11 +295,23 @@ func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch
 func (s *Scope) CreateIndex(ts uint64) error {
 	o, _ := s.Operator.(*createIndex.CreateIndex)
 	defer o.R.Close()
-	return o.R.CreateIndex(ts,o.Defs)
+	err := o.R.CreateIndex(ts, o.Defs)
+	if o.IfNotExists {
+		if err == errors.New("index already exist") {
+			return nil
+		}
+	}
+	return err
 }
 
 func (s *Scope) DropIndex(ts uint64) error {
 	o, _ := s.Operator.(*dropIndex.DropIndex)
 	defer o.R.Close()
-	return o.R.DropIndex(ts,o.IndexName)
+	err := o.R.DropIndex(ts, o.IndexName)
+	if o.IfNotExists {
+		if err == errors.New("index not exist") {
+			return nil
+		}
+	}
+	return err
 }
