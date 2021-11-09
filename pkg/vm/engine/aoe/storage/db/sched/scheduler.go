@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 )
 
+var DisableFlushSegment = false
+
 type metablkCommiter struct {
 	sync.RWMutex
 	opts       *storage.Options
@@ -223,6 +225,10 @@ func (s *scheduler) onUpgradeBlkDone(e sched.Event) {
 	}
 	defer event.Data.Unref()
 	if !event.SegmentClosed {
+		return
+	}
+	// TODO: remove later
+	if DisableFlushSegment {
 		return
 	}
 	segment := event.TableData.StrongRefSegment(event.Meta.Segment.Id)

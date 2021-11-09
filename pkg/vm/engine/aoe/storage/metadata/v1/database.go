@@ -161,6 +161,7 @@ func (db *Database) View(index uint64) *databaseLogEntry {
 	filter.dbFilter = filter.tableFilter
 	view := newDatabaseLogEntry(shardId, index)
 	view.Database.Name = db.Name
+	view.Id = shardId
 	db.fillView(filter, view.Database)
 	return view
 }

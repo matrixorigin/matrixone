@@ -17,6 +17,8 @@ package db
 import (
 	"errors"
 	"fmt"
+	sched2 "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -218,23 +220,26 @@ func (d *DB) checkAndPin(path string, tables map[uint64]*metadata.Table) ([]base
 	return files, nil
 }
 
-func (d *DB) applySnapshot(dbName string, path string) error {
+func (d *DB) applySnapshot(dbName string, path string) (err error) {
 	if err := d.Closed.Load(); err != nil {
 		return errors.New("aoe already closed")
 	}
 
 	catalog := d.Store.Catalog
 
-	database, err := catalog.SimpleGetDatabaseByName(dbName)
+	//database, err := catalog.SimpleGetDatabaseByName(dbName)
+	database := metadata.NewEmptyDatabase(catalog)
+	id, err := strconv.ParseUint(dbName, 10, 64)
 	if err != nil {
-		return err
+		return
 	}
 
 	files, err := ioutil.ReadDir(path)
 	if err != nil {
 		return err
 	}
-	shardId := database.GetShardId()
+	shardId := id
+	//shardId := database.GetShardId()
 	var ssmeta string
 	var segfiles []string
 	var blkfiles []string
@@ -293,25 +298,24 @@ func (d *DB) applySnapshot(dbName string, path string) error {
 	tbls := ssReader.View().Database.TableSet
 	data := d.Store.DataTables
 	for _, tbl := range tbls {
-		// tbl.Catalog = d.Store.Catalog
-		// tbl.IdIndex = make(map[uint64]int)
+		tbl.Database = database
+		tbl.IdIndex = make(map[uint64]int)
 		tb, err := data.RegisterTable(tbl)
 		if err != nil {
 			return err
 		}
-		for _, seg := range tbl.SegmentSet {
-			// tbl.IdIndex[seg.Id] = i
-			// seg.Table = tbl
-			// seg.Catalog = d.Store.Catalog
-			// seg.IdIndex = make(map[uint64]int)
+		for i, seg := range tbl.SegmentSet {
+			tbl.IdIndex[seg.Id] = i
+			seg.Table = tbl
+			seg.IdIndex = make(map[uint64]int)
 			sg, err := tb.RegisterSegment(seg)
 			if err != nil {
 				return err
 			}
-			for _, blk := range seg.BlockSet {
-				// seg.IdIndex[blk.Id] = i
-				// blk.Segment = seg
-				// blk.IndiceMemo = metadata.NewIndiceMemo(blk)
+			for i, blk := range seg.BlockSet {
+				seg.IdIndex[blk.Id] = i
+				blk.Segment = seg
+				blk.IndiceMemo = metadata.NewIndiceMemo(blk)
 				if _, err = sg.RegisterBlock(blk); err != nil {
 					return err
 				}
@@ -326,7 +330,21 @@ func (d *DB) applySnapshot(dbName string, path string) error {
 			if seg.IsSortedLocked() {
 				continue
 			}
+			if seg.Appendable() {
+				continue
+			}
 			unsortedSegs = append(unsortedSegs, seg)
+		}
+	}
+
+	for _, seg := range unsortedSegs {
+		segment := data.Data[seg.Table.Id].StrongRefSegment(seg.Id)
+		if segment == nil {
+			return errors.New("segment not found")
+		}
+		logutil.Infof(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, seg.Id)
+		if err = d.Scheduler.Schedule(sched2.NewFlushSegEvent(&sched2.Context{}, segment)); err != nil {
+			return
 		}
 	}
 
