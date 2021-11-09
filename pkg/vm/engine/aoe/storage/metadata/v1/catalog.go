@@ -712,6 +712,12 @@ func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry) {
 	}
 }
 
+func MockCatalogAndWal(dir string, blkRows, segBlks uint64) (*Catalog, Wal) {
+	driver, _ := logstore.NewBatchStore(dir, "driver", nil)
+	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
+	return MockCatalog(dir, blkRows, segBlks, driver, indexWal), indexWal
+}
+
 func MockCatalog(dir string, blkRows, segBlks uint64, driver logstore.AwareStore, indexWal wal.ShardAwareWal) *Catalog {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir

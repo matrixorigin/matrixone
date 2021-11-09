@@ -27,9 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 	"github.com/panjf2000/ants/v2"
@@ -560,11 +558,8 @@ func TestAppliedIndex(t *testing.T) {
 	dir := "/tmp/testappliedindex"
 	os.RemoveAll(dir)
 	blkRows, segBlks := uint64(10), uint64(2)
-	driver, err := logstore.NewBatchStore(dir, "driver", nil)
-	assert.Nil(t, err)
-	indexWal := shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
+	catalog, indexWal := MockCatalogAndWal(dir, blkRows, segBlks)
 	defer indexWal.Close()
-	catalog := MockCatalog(dir, blkRows, segBlks, driver, indexWal)
 	defer catalog.Close()
 
 	idAlloc := shard.NewMockIndexAllocator()
