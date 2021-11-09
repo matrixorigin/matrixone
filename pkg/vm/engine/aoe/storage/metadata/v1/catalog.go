@@ -56,7 +56,7 @@ type Catalog struct {
 	Sequence        `json:"-"`
 	pipeline        *commitPipeline      `json:"-"`
 	Store           logstore.AwareStore  `json:"-"`
-	IndexWal        wal.ShardAwareWal    `json:"-"`
+	IndexWal        Wal                  `json:"-"`
 	Cfg             *CatalogCfg          `json:"-"`
 	nodesMu         sync.RWMutex         `json:"-"`
 	commitMu        sync.RWMutex         `json:"-"`
@@ -120,6 +120,18 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog
+}
+
+func (catalog *Catalog) DebugCheckReplayedState() {
+	if catalog.pipeline == nil {
+		panic("pipeline is missing")
+	}
+	if catalog.nameNodes == nil {
+		panic("nameNodes is missing")
+	}
+	for _, db := range catalog.Databases {
+		db.DebugCheckReplayedState()
+	}
 }
 
 func (catalog *Catalog) Start() {
@@ -629,6 +641,7 @@ func (catalog *Catalog) onReplayCreateDatabase(entry *Database) error {
 	db := NewEmptyDatabase(catalog)
 	db.BaseEntry = entry.BaseEntry
 	db.Name = entry.Name
+	db.ShardWal = wal.NewWalShard(db.BaseEntry.GetShardId(), catalog.IndexWal)
 	return catalog.onNewDatabase(db)
 }
 

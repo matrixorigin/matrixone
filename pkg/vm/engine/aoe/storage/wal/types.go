@@ -49,31 +49,31 @@ type ShardAwareWal interface {
 }
 
 type ShardWal struct {
-	Wal ShardAwareWal
-	Id  uint64
+	Wal     ShardAwareWal
+	ShardId uint64
 }
 
 func NewWalShard(shardId uint64, wal ShardAwareWal) *ShardWal {
 	return &ShardWal{
-		Wal: wal,
-		Id:  shardId,
+		Wal:     wal,
+		ShardId: shardId,
 	}
 }
 
 func (wal *ShardWal) GetShardId() uint64 {
-	return wal.Id
+	return wal.ShardId
 }
 
 func (wal *ShardWal) Init(index uint64) error {
-	return wal.Wal.InitShard(wal.Id, index)
+	return wal.Wal.InitShard(wal.ShardId, index)
 }
 
 func (wal *ShardWal) GetCheckpointId() uint64 {
-	return wal.Wal.GetShardCheckpointId(wal.Id)
+	return wal.Wal.GetShardCheckpointId(wal.ShardId)
 }
 
 func (wal *ShardWal) GetCurrSeqNum() uint64 {
-	return wal.Wal.GetShardCurrSeqNum(wal.Id)
+	return wal.Wal.GetShardCurrSeqNum(wal.ShardId)
 }
 
 func (wal *ShardWal) Log(payload Payload) (*Entry, error) {

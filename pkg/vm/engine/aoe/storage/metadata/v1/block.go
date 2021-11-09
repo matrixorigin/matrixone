@@ -133,6 +133,12 @@ func newCommittedBlockEntry(segment *Segment, base *BaseEntry) *Block {
 	return e
 }
 
+func (e *Block) DebugCheckReplayedState() {
+	if e.Segment == nil {
+		panic("segment is missing")
+	}
+}
+
 func (e *Block) CreateSnippet() *shard.Snippet {
 	tableLogIndex := e.Segment.Table.GetCommit().LogIndex
 	if tableLogIndex == nil {

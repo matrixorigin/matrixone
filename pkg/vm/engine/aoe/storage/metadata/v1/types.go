@@ -26,6 +26,7 @@ import (
 )
 
 type Wal = wal.ShardAwareWal
+type ShardWal = wal.ShardWal
 
 const (
 	MinUncommitId = ^uint64(0) / 2

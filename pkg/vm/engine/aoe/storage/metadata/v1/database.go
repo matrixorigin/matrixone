@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 )
 
 type coarseStats struct {
@@ -34,9 +34,9 @@ func (stats *coarseStats) GetSize() int64 {
 }
 
 type Database struct {
+	*ShardWal    `json:"-"`
 	*coarseStats `json:"-"`
 	*BaseEntry
-	nodesMu   sync.RWMutex         `json:"-"`
 	nameNodes map[string]*nodeList `json:"-"`
 	Catalog   *Catalog             `json:"-"`
 	Name      string               `json:"name"`
@@ -50,6 +50,7 @@ type Database struct {
 
 func NewDatabase(catalog *Catalog, name string, tranId uint64, exIndex *LogIndex) *Database {
 	db := &Database{
+		ShardWal:    wal.NewWalShard(exIndex.ShardId, catalog.IndexWal),
 		coarseStats: new(coarseStats),
 		BaseEntry: &BaseEntry{
 			Id: catalog.NextDatabaseId(),
@@ -86,6 +87,27 @@ func NewEmptyDatabase(catalog *Catalog) *Database {
 	return db
 }
 
+func (db *Database) DebugCheckReplayedState() {
+	if db.Catalog == nil {
+		panic("catalog is missing")
+	}
+	if db.ShardWal == nil {
+		panic("wal is missing")
+	}
+	if db.coarseStats == nil {
+		panic("stats is missing")
+	}
+	if db.nameNodes == nil {
+		panic("name nodes are missing")
+	}
+	if db.blockListener == nil || db.segmentListener == nil || db.tableListener == nil {
+		panic("listener is missing")
+	}
+	for _, table := range db.TableSet {
+		table.DebugCheckReplayedState()
+	}
+}
+
 func (db *Database) initListeners() {
 	blockListener := new(BaseBlockListener)
 	blockListener.BlockUpgradedFn = db.onBlockUpgraded
@@ -110,6 +132,13 @@ func (db *Database) onBlockUpgraded(block *Block) {
 
 func (db *Database) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
 	db.AddSize(segment.GetCoarseSize() - segment.GetUnsortedSize())
+}
+
+func (db *Database) GetShardId() uint64 {
+	if db.ShardWal == nil {
+		return db.BaseEntry.GetShardId()
+	}
+	return db.ShardWal.GetShardId()
 }
 
 func (db *Database) View(index uint64) *databaseLogEntry {
@@ -699,6 +728,8 @@ func (db *Database) rebuildStats() {
 }
 
 func (db *Database) rebuild(stats, replay bool) error {
+	db.initListeners()
+	db.ShardWal = wal.NewWalShard(db.BaseEntry.GetShardId(), db.Catalog.IndexWal)
 	db.coarseStats = new(coarseStats)
 	sorted := make([]*Table, len(db.TableSet))
 	idx := 0
