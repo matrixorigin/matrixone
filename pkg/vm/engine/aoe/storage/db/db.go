@@ -314,16 +314,21 @@ func (d *DB) CreateTable(dbName string, schema *metadata.Schema, index *metadata
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	if err = d.Wal.SyncLog(index); err != nil {
-		return
-	}
-	defer d.Wal.Checkpoint(index)
 	logutil.Infof("CreateTable %s", index.String())
 
 	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	if err != nil {
 		return
 	}
+	if index.ShardId != database.GetShardId() {
+		err = metadata.InconsistentShardIdErr
+		return
+	}
+
+	if err = d.Wal.SyncLog(index); err != nil {
+		return
+	}
+	defer d.Wal.Checkpoint(index)
 
 	tbl, err := database.SimpleCreateTable(schema, index)
 	if err != nil {
