@@ -141,7 +141,18 @@ func (db *Database) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
 }
 
 func (db *Database) Release() {
+	logutil.Infof("Database (\"%s\", %d) | Compacted", db.Name, db.Id)
 	// PXU TODO
+}
+
+func (db *Database) CanHardDeleteLocked() bool {
+	if !db.HasCommittedLocked() || !db.IsDeletedLocked() || db.IsHardDeletedLocked() {
+		return false
+	}
+	if db.Catalog.IndexWal == nil {
+		return true
+	}
+	return db.GetCheckpointId() == db.GetCommit().GetIndex()
 }
 
 func (db *Database) GetShardId() uint64 {
@@ -299,16 +310,12 @@ func (db *Database) prepareHardDelete(ctx *deleteDatabaseCtx) (LogEntry, error) 
 	}
 	db.Lock()
 	defer db.Unlock()
-	if db.IsHardDeletedLocked() {
-		logutil.Warnf("HardDelete %d but already hard deleted", db.Id)
-		return nil, TableNotFoundErr
-	}
-	if !db.IsSoftDeletedLocked() && !db.IsReplacedLocked() {
-		panic("logic error: Cannot hard delete entry that not soft deleted or replaced")
+	if !db.CanHardDeleteLocked() {
+		return nil, CannotHardDeleteErr
 	}
 	cInfo.LogIndex = db.CommitInfo.LogIndex
 	db.onNewCommit(cInfo)
-	logEntry := db.Catalog.prepareCommitEntry(db, ETHardDeleteTable, db)
+	logEntry := db.Catalog.prepareCommitEntry(db, ETHardDeleteDatabase, db)
 	return logEntry, nil
 }
 
@@ -693,6 +700,7 @@ func (db *Database) Compact() {
 	}
 	db.Lock()
 	for _, table := range tables {
+		logutil.Infof("Table (\"%s\", %d, \"%s\", %d) | Compacted", table.Database.Name, table.Database.Id, table.Schema.Name, table.Id)
 		delete(db.TableSet, table.Id)
 	}
 	db.Unlock()

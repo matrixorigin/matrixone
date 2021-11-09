@@ -25,9 +25,8 @@ func TestDatabase1(t *testing.T) {
 	_, err = catalog.SimpleCreateDatabase(dbName, index)
 	assert.NotNil(t, err)
 
-	assert.Panics(t, func() {
-		catalog.SimpleHardDeleteDatabase(db.Id)
-	})
+	err = catalog.SimpleHardDeleteDatabase(db.Id)
+	assert.NotNil(t, err)
 
 	dropIdx := &LogIndex{
 		Id: shard.SimpleIndexId(idAlloc.Alloc()),
@@ -76,7 +75,41 @@ func TestDatabase1(t *testing.T) {
 	idx1 = nextId()
 	_, err = db2.SimpleCreateTable(schema, idx1)
 	assert.Nil(t, err)
+
+	db3, err := catalog.SimpleCreateDatabase("db3", nextId())
+	assert.Nil(t, err)
+	err = db3.SimpleSoftDelete(nextId())
+	assert.Nil(t, err)
+	err = db3.SimpleHardDelete()
+	assert.Nil(t, err)
+
 	// t.Log(db2.PString(PPL1))
+	dbDeleted := 0
+	tableDeleted := 0
+	dbCnt := 0
+	tblCnt := 0
+	processor := new(loopProcessor)
+	processor.DatabaseFn = func(db *Database) error {
+		if db.IsHardDeleted() && db.HasCommitted() {
+			dbDeleted++
+		} else {
+			dbCnt++
+		}
+		return nil
+	}
+	processor.TableFn = func(table *Table) error {
+		if table.IsHardDeleted() && table.HasCommitted() {
+			tableDeleted++
+		} else {
+			tblCnt++
+		}
+		return nil
+	}
+	catalog.RecurLoopLocked(processor)
+	assert.Equal(t, 1, dbDeleted)
+	assert.Equal(t, 1, tableDeleted)
+	assert.Equal(t, 2, dbCnt)
+	assert.Equal(t, 1, tblCnt)
 
 	t.Log(catalog.PString(PPL0))
 	catalog.Close()
@@ -84,7 +117,14 @@ func TestDatabase1(t *testing.T) {
 
 	catalog2 := initTest(dir, blockRows, segmentBlocks, false)
 	defer catalog2.Close()
-
+	dbDeleted = 0
+	tableDeleted = 0
+	dbCnt, tblCnt = 0, 0
+	catalog2.RecurLoopLocked(processor)
+	assert.Equal(t, 0, dbDeleted)
+	assert.Equal(t, 0, tableDeleted)
+	assert.Equal(t, 2, dbCnt)
+	assert.Equal(t, 1, tblCnt)
 	t.Log(catalog2.PString(PPL0))
 }
 

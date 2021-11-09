@@ -162,6 +162,16 @@ func (info *CommitInfo) GetShardId() uint64 {
 	return info.LogIndex.ShardId
 }
 
+func (info *CommitInfo) GetIndex() uint64 {
+	if info == nil {
+		return 0
+	}
+	if info.LogIndex == nil {
+		return 0
+	}
+	return info.LogIndex.Id.Id
+}
+
 func (info *CommitInfo) IsHardDeleted() bool {
 	return info.Op == OpHardDelete
 }

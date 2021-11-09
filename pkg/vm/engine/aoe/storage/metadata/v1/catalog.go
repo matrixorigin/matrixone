@@ -40,6 +40,7 @@ var (
 	BlockNotFoundErr       = errors.New("aoe: block not found")
 	InvalidSchemaErr       = errors.New("aoe: invalid schema")
 	InconsistentShardIdErr = errors.New("aoe: InconsistentShardIdErr")
+	CannotHardDeleteErr    = errors.New("aoe: cannot hard delete now")
 )
 
 type CatalogCfg struct {
