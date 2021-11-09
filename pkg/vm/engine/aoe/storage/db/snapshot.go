@@ -17,13 +17,14 @@ package db
 import (
 	"errors"
 	"fmt"
-	sched2 "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	sched2 "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
@@ -228,7 +229,6 @@ func (d *DB) applySnapshot(dbName string, path string) (err error) {
 	catalog := d.Store.Catalog
 
 	//database, err := catalog.SimpleGetDatabaseByName(dbName)
-	database := metadata.NewEmptyDatabase(catalog)
 	id, err := strconv.ParseUint(dbName, 10, 64)
 	if err != nil {
 		return
@@ -298,24 +298,16 @@ func (d *DB) applySnapshot(dbName string, path string) (err error) {
 	tbls := ssReader.View().Database.TableSet
 	data := d.Store.DataTables
 	for _, tbl := range tbls {
-		tbl.Database = database
-		tbl.IdIndex = make(map[uint64]int)
 		tb, err := data.RegisterTable(tbl)
 		if err != nil {
 			return err
 		}
-		for i, seg := range tbl.SegmentSet {
-			tbl.IdIndex[seg.Id] = i
-			seg.Table = tbl
-			seg.IdIndex = make(map[uint64]int)
+		for _, seg := range tbl.SegmentSet {
 			sg, err := tb.RegisterSegment(seg)
 			if err != nil {
 				return err
 			}
-			for i, blk := range seg.BlockSet {
-				seg.IdIndex[blk.Id] = i
-				blk.Segment = seg
-				blk.IndiceMemo = metadata.NewIndiceMemo(blk)
+			for _, blk := range seg.BlockSet {
 				if _, err = sg.RegisterBlock(blk); err != nil {
 					return err
 				}
