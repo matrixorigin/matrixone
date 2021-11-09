@@ -140,6 +140,10 @@ func (db *Database) onSegmentUpgraded(segment *Segment, prev *CommitInfo) {
 	db.AddSize(segment.GetCoarseSize() - segment.GetUnsortedSize())
 }
 
+func (db *Database) Release() {
+	// PXU TODO
+}
+
 func (db *Database) GetShardId() uint64 {
 	if db.ShardWal == nil {
 		return db.BaseEntry.GetShardId()
@@ -661,11 +665,18 @@ func (db *Database) Compact() {
 	tables := make([]*Table, 0, 2)
 	nodes := make([]*nodeList, 0, 2)
 	db.RLock()
+	// If database is hard delete, it will be handled during catalog compact cycle
+	if db.IsHardDeletedLocked() {
+		db.RUnlock()
+		return
+	}
 	for _, table := range db.TableSet {
-		if table.IsHardDeleted() {
+		table.RLock()
+		if table.IsHardDeletedLocked() && table.HasCommittedLocked() {
 			tables = append(tables, table)
 			nodes = append(nodes, db.nameNodes[table.Schema.Name])
 		}
+		table.RUnlock()
 	}
 	db.RUnlock()
 	if len(tables) == 0 {

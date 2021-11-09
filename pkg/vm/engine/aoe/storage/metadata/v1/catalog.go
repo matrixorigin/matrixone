@@ -122,6 +122,50 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	return catalog
 }
 
+func (catalog *Catalog) unregisterDatabaseLocked(db *Database) error {
+	node := catalog.nameNodes[db.Name]
+	if node == nil {
+		return DatabaseNotFoundErr
+	}
+	_, empty := node.DeleteNode(db.Id)
+	if empty {
+		delete(catalog.nameNodes, db.Name)
+	}
+	delete(catalog.Databases, db.Id)
+	return nil
+}
+
+func (catalog *Catalog) Compact() {
+	dbs := make([]*Database, 0, 4)
+	deletes := make([]*Database, 0, 4)
+	catalog.RLock()
+	for _, db := range catalog.Databases {
+		db.RLock()
+		if db.IsHardDeletedLocked() && db.HasCommittedLocked() {
+			deletes = append(deletes, db)
+		} else {
+			dbs = append(dbs, db)
+		}
+		db.RUnlock()
+	}
+	catalog.RUnlock()
+	if len(deletes) > 0 {
+		catalog.Lock()
+		for _, db := range deletes {
+			if err := catalog.unregisterDatabaseLocked(db); err != nil {
+				panic(err)
+			}
+		}
+		catalog.Unlock()
+	}
+	for _, db := range deletes {
+		db.Release()
+	}
+	for _, db := range dbs {
+		db.Compact()
+	}
+}
+
 func (catalog *Catalog) DebugCheckReplayedState() {
 	if catalog.pipeline == nil {
 		panic("pipeline is missing")
