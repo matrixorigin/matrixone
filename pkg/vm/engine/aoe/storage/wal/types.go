@@ -47,3 +47,43 @@ type ShardAwareWal interface {
 	GetShardCurrSeqNum(uint64) uint64
 	GetAllPendingEntries() []*shard.ItemsToCheckpointStat
 }
+
+type ShardWal struct {
+	Wal ShardAwareWal
+	Id  uint64
+}
+
+func NewWalShard(shardId uint64, wal ShardAwareWal) *ShardWal {
+	return &ShardWal{
+		Wal: wal,
+		Id:  shardId,
+	}
+}
+
+func (wal *ShardWal) GetShardId() uint64 {
+	return wal.Id
+}
+
+func (wal *ShardWal) Init(index uint64) error {
+	return wal.Wal.InitShard(wal.Id, index)
+}
+
+func (wal *ShardWal) GetCheckpointId() uint64 {
+	return wal.Wal.GetShardCheckpointId(wal.Id)
+}
+
+func (wal *ShardWal) GetCurrSeqNum() uint64 {
+	return wal.Wal.GetShardCurrSeqNum(wal.Id)
+}
+
+func (wal *ShardWal) Log(payload Payload) (*Entry, error) {
+	return wal.Wal.Log(payload)
+}
+
+func (wal *ShardWal) SyncLog(payload Payload) error {
+	return wal.Wal.SyncLog(payload)
+}
+
+func (wal *ShardWal) Checkpoint(v interface{}) {
+	wal.Wal.Checkpoint(v)
+}
