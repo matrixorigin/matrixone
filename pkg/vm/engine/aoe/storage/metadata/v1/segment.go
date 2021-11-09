@@ -417,7 +417,9 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 			cInfo.PrevIndex = ctx.exIndice[1]
 		}
 	}
-	e.onNewCommit(cInfo)
+	if err := e.onCommit(cInfo); err != nil {
+		return nil, err
+	}
 	logEntry := e.Table.Database.Catalog.prepareCommitEntry(e, ETUpgradeSegment, e)
 	return logEntry, nil
 }

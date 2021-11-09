@@ -41,6 +41,7 @@ var (
 	InvalidSchemaErr       = errors.New("aoe: invalid schema")
 	InconsistentShardIdErr = errors.New("aoe: InconsistentShardIdErr")
 	CannotHardDeleteErr    = errors.New("aoe: cannot hard delete now")
+	CommitStaleErr         = errors.New("aoe: commit stale info")
 )
 
 type CatalogCfg struct {
@@ -630,15 +631,13 @@ func (catalog *Catalog) onReplayCreateTable(entry *tableLogEntry) error {
 func (catalog *Catalog) onReplaySoftDeleteTable(entry *tableLogEntry) error {
 	db := catalog.Databases[entry.DatabaseId]
 	tbl := db.TableSet[entry.Id]
-	tbl.onNewCommit(entry.CommitInfo)
-	return nil
+	return tbl.onCommit(entry.CommitInfo)
 }
 
 func (catalog *Catalog) onReplayHardDeleteTable(entry *tableLogEntry) error {
 	db := catalog.Databases[entry.DatabaseId]
 	tbl := db.TableSet[entry.Id]
-	tbl.onNewCommit(entry.CommitInfo)
-	return nil
+	return tbl.onCommit(entry.CommitInfo)
 }
 
 func (catalog *Catalog) onReplayCreateSegment(entry *segmentLogEntry) error {
@@ -654,8 +653,7 @@ func (catalog *Catalog) onReplayUpgradeSegment(entry *segmentLogEntry) error {
 	tbl := db.TableSet[entry.TableId]
 	pos := tbl.IdIndex[entry.Id]
 	seg := tbl.SegmentSet[pos]
-	seg.onNewCommit(entry.CommitInfo)
-	return nil
+	return seg.onCommit(entry.CommitInfo)
 }
 
 func (catalog *Catalog) onReplayCreateBlock(entry *blockLogEntry) error {
@@ -676,8 +674,7 @@ func (catalog *Catalog) onReplayUpgradeBlock(entry *blockLogEntry) error {
 	blkpos := seg.IdIndex[entry.Id]
 	blk := seg.BlockSet[blkpos]
 	blk.IndiceMemo = nil
-	blk.onNewCommit(entry.CommitInfo)
-	return nil
+	return blk.onCommit(entry.CommitInfo)
 }
 
 func (catalog *Catalog) onReplayCreateDatabase(entry *Database) error {
@@ -691,25 +688,31 @@ func (catalog *Catalog) onReplayCreateDatabase(entry *Database) error {
 
 func (catalog *Catalog) onReplaySoftDeleteDatabase(entry *databaseLogEntry) error {
 	db := catalog.Databases[entry.BaseEntry.Id]
-	db.onNewCommit(entry.CommitInfo)
-	return nil
+	return db.onCommit(entry.CommitInfo)
 }
 
 func (catalog *Catalog) onReplayHardDeleteDatabase(entry *databaseLogEntry) error {
 	db := catalog.Databases[entry.BaseEntry.Id]
-	db.onNewCommit(entry.CommitInfo)
-	return nil
+	return db.onCommit(entry.CommitInfo)
 }
 
-func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry) {
+func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry) error {
 	replaced := catalog.Databases[entry.Replaced.Id]
-	replaced.onNewCommit(entry.Replaced.CommitInfo)
+	err := replaced.onCommit(entry.Replaced.CommitInfo)
+	if err != nil {
+		return err
+	}
 	for _, replacer := range entry.Replacer {
 		catalog.TryUpdateDatabaseId(replacer.Id)
-		catalog.onNewDatabase(replacer)
+		if err = catalog.onNewDatabase(replacer); err != nil {
+			break
+		}
 		replacer.Catalog = catalog
-		replacer.rebuild(false, true)
+		if err = replacer.rebuild(false, true); err != nil {
+			break
+		}
 	}
+	return err
 }
 
 func MockCatalogAndWal(dir string, blkRows, segBlks uint64) (*Catalog, Wal) {

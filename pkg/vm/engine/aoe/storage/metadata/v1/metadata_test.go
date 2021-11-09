@@ -53,10 +53,14 @@ func initTest(dir string, blockRows, segmentBlocks uint64, hasWal bool, cleanup 
 
 	var catalog *Catalog
 	var indexWal Wal
+	var err error
 	if hasWal {
 		driver, _ := logstore.NewBatchStore(dir, "driver", nil)
 		indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
-		catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
+		catalog, err = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
+		if err != nil {
+			panic(err)
+		}
 	} else {
 		catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
 	}
@@ -90,12 +94,12 @@ func upgradeSeg(t *testing.T, seg *Segment, wg *sync.WaitGroup) func() {
 	}
 }
 
-func createBlock(t *testing.T, tables int, idAlloc *shard.MockIndexAllocator, shardId uint64, db *Database, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
+func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardId uint64, db *Database, blocks int, wg *sync.WaitGroup, nextNode *ants.Pool) func() {
 	return func() {
 		defer wg.Done()
 		for k := 0; k < tables; k++ {
 			schema := MockSchema(2)
-			index := idAlloc.Next(shardId)
+			index := gen.Next(shardId)
 			name := fmt.Sprintf("t%d", index.Id.Id)
 			schema.Name = mockFactory.Encode(shardId, name)
 			tbl, err := db.SimpleCreateTable(schema, index)
@@ -106,7 +110,7 @@ func createBlock(t *testing.T, tables int, idAlloc *shard.MockIndexAllocator, sh
 				blk.SetCount(tbl.Schema.BlockMaxRows)
 				blk.SetIndexLocked(LogIndex{
 					ShardId:  shardId,
-					Id:       shard.SimpleIndexId(idAlloc.Alloc(shardId)),
+					Id:       shard.SimpleIndexId(gen.Alloc(shardId)),
 					Count:    tbl.Schema.BlockMaxRows,
 					Capacity: tbl.Schema.BlockMaxRows,
 				})
@@ -158,8 +162,8 @@ func TestTable(t *testing.T) {
 	catalog.Start()
 	defer catalog.Close()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 
 	dbName := "db1"
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
@@ -188,8 +192,8 @@ func TestCreateTable(t *testing.T) {
 	defer catalog.Close()
 	tableCnt := 20
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 	dbName := "db1"
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
 
@@ -200,7 +204,7 @@ func TestCreateTable(t *testing.T) {
 			defer wg.Done()
 			schema := MockSchema(2)
 			schema.Name = fmt.Sprintf("m%d", i)
-			t1, err := db.SimpleCreateTable(schema, idAlloc.Next(0))
+			t1, err := db.SimpleCreateTable(schema, gen.Next(0))
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
@@ -230,8 +234,8 @@ func TestTables(t *testing.T) {
 	catalog.Start()
 	defer catalog.Close()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 	dbName := "db1"
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
 
@@ -242,7 +246,7 @@ func TestTables(t *testing.T) {
 		name := fmt.Sprintf("m1_%d", i)
 		schema := MockSchema(2)
 		schema.Name = name
-		_, err := db.SimpleCreateTable(schema, idAlloc.Next(0))
+		_, err := db.SimpleCreateTable(schema, gen.Next(0))
 		assert.Nil(t, err)
 	}
 
@@ -250,7 +254,7 @@ func TestTables(t *testing.T) {
 		name := fmt.Sprintf("m2_%d", i)
 		schema := MockSchema(2)
 		schema.Name = name
-		_, err := db.SimpleCreateTable(schema, idAlloc.Next(0))
+		_, err := db.SimpleCreateTable(schema, gen.Next(0))
 		assert.Nil(t, err)
 	}
 }
@@ -264,52 +268,52 @@ func TestDropTable(t *testing.T) {
 	assert.Nil(t, err)
 	catalog.Start()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 	dbName := "db1"
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
 
 	schema1 := MockSchema(2)
 	schema1.Name = "m1"
 
-	t1, err := db.SimpleCreateTable(schema1, idAlloc.Next(0))
+	t1, err := db.SimpleCreateTable(schema1, gen.Next(0))
 	assert.Nil(t, err)
 	assert.NotNil(t, t1)
 
 	assert.False(t, t1.IsSoftDeleted())
 	assert.True(t, t1.HasCommitted())
 
-	t1_1, err := db.SimpleCreateTable(schema1, idAlloc.Next(0))
+	t1_1, err := db.SimpleCreateTable(schema1, gen.Next(0))
 	assert.NotNil(t, err)
 	assert.Nil(t, t1_1)
 
-	err = db.SimpleDropTableByName(t1.Schema.Name, idAlloc.Next(0))
+	err = db.SimpleDropTableByName(t1.Schema.Name, gen.Next(0))
 	assert.Nil(t, err)
 
-	err = db.SimpleDropTableByName(t1.Schema.Name, idAlloc.Next(0))
+	err = db.SimpleDropTableByName(t1.Schema.Name, gen.Next(0))
 	assert.NotNil(t, err)
 
 	schema2 := MockSchema(3)
 	schema2.Name = schema1.Name
-	t2, err := db.SimpleCreateTable(schema2, idAlloc.Next(0))
+	t2, err := db.SimpleCreateTable(schema2, gen.Next(0))
 	assert.Nil(t, err)
 	assert.NotNil(t, t2)
 
 	schema3 := MockSchema(4)
 	schema3.Name = schema1.Name
-	t3, err := db.SimpleCreateTable(schema3, idAlloc.Next(0))
+	t3, err := db.SimpleCreateTable(schema3, gen.Next(0))
 	assert.NotNil(t, err)
 	assert.Nil(t, t3)
 
-	err = db.SimpleDropTableByName(t1.Schema.Name, idAlloc.Next(0))
+	err = db.SimpleDropTableByName(t1.Schema.Name, gen.Next(0))
 	assert.Nil(t, err)
 
-	err = db.SimpleDropTableByName(t1.Schema.Name, idAlloc.Next(0))
+	err = db.SimpleDropTableByName(t1.Schema.Name, gen.Next(0))
 	assert.NotNil(t, err)
 
 	db.SimpleHardDeleteTable(t2.Id)
 
-	t3, err = db.SimpleCreateTable(schema3, idAlloc.Next(0))
+	t3, err = db.SimpleCreateTable(schema3, gen.Next(0))
 	assert.Nil(t, err)
 	assert.NotNil(t, t3)
 
@@ -337,7 +341,7 @@ func TestDropTable(t *testing.T) {
 	assert.Equal(t, 2, nodes.Length())
 	t.Log(nodes.PString(PPL1))
 
-	err = db.SimpleDropTableByName(t1.Schema.Name, idAlloc.Next(0))
+	err = db.SimpleDropTableByName(t1.Schema.Name, gen.Next(0))
 	assert.Nil(t, err)
 	err = db.SimpleHardDeleteTable(t3.Id)
 	assert.Nil(t, err)
@@ -401,8 +405,8 @@ func TestSegment(t *testing.T) {
 	catalog.Start()
 	defer catalog.Close()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 	dbName := "db1"
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
 
@@ -415,7 +419,7 @@ func TestSegment(t *testing.T) {
 			schema := MockSchema(2)
 			schema.Name = fmt.Sprintf("m%d", i)
 
-			t1, err := db.SimpleCreateTable(schema, idAlloc.Next(0))
+			t1, err := db.SimpleCreateTable(schema, gen.Next(0))
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
@@ -426,11 +430,11 @@ func TestSegment(t *testing.T) {
 
 			schema2 := MockSchema(2)
 			schema2.Name = fmt.Sprintf("m%d", i+100)
-			t2, err := db.SimpleCreateTable(schema2, idAlloc.Next(0))
+			t2, err := db.SimpleCreateTable(schema2, gen.Next(0))
 			t2.SimpleCreateSegment()
 			// t.Log(segment.String())
 
-			err = db.SimpleDropTableByName(t1.Schema.Name, idAlloc.Next(0))
+			err = db.SimpleDropTableByName(t1.Schema.Name, gen.Next(0))
 			assert.Nil(t, err)
 		}
 	}
@@ -454,8 +458,8 @@ func TestBlock(t *testing.T) {
 	catalog.Start()
 	defer catalog.Close()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 	dbName := "db1"
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
 
@@ -467,7 +471,7 @@ func TestBlock(t *testing.T) {
 			schema := MockSchema(2)
 			schema.Name = fmt.Sprintf("m%d", i)
 
-			t1, err := db.SimpleCreateTable(schema, idAlloc.Next(0))
+			t1, err := db.SimpleCreateTable(schema, gen.Next(0))
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
@@ -493,7 +497,7 @@ func TestBlock(t *testing.T) {
 
 	schema := MockSchema(2)
 	schema.Name = "mm"
-	t2, err := db.SimpleCreateTable(schema, idAlloc.Next(0))
+	t2, err := db.SimpleCreateTable(schema, gen.Next(0))
 	assert.Nil(t, err)
 	var prev *Block
 	for i := 0; i < 2*int(cfg.SegmentMaxBlocks)+int(cfg.SegmentMaxBlocks)/2; i++ {
@@ -538,8 +542,8 @@ func TestReplay(t *testing.T) {
 	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 	dbName := "db1"
 	db, _ := catalog.SimpleCreateDatabase(dbName, idx)
 
@@ -556,7 +560,7 @@ func TestReplay(t *testing.T) {
 
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, 1, idAlloc, uint64(i), db, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, 1, gen, uint64(i), db, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
@@ -573,12 +577,12 @@ func TestAppliedIndex(t *testing.T) {
 	defer indexWal.Close()
 	defer catalog.Close()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 	dbName := "db1"
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
 
-	index := idAlloc.Next(0)
+	index := gen.Next(0)
 	indexWal.SyncLog(index)
 	tbl := MockTable(db, nil, 0, index)
 	assert.NotNil(t, tbl)
@@ -591,7 +595,7 @@ func TestAppliedIndex(t *testing.T) {
 	blk, prevSeg := tbl.SimpleCreateBlock()
 	assert.Nil(t, prevSeg)
 	assert.NotNil(t, blk)
-	opIdx := idAlloc.Alloc(0)
+	opIdx := gen.Alloc(0)
 	index = &LogIndex{
 		Id:       shard.SimpleIndexId(opIdx),
 		Count:    blkRows,
@@ -627,7 +631,7 @@ func TestAppliedIndex(t *testing.T) {
 	assert.Equal(t, index.Id.Id, indexWal.GetShardCheckpointId(0))
 
 	blk.SetCount(blkRows)
-	opIdx = idAlloc.Alloc(0)
+	opIdx = gen.Alloc(0)
 	index = &LogIndex{
 		Id:       shard.SimpleIndexId(opIdx),
 		Start:    0,
@@ -650,7 +654,7 @@ func TestAppliedIndex(t *testing.T) {
 	err = seg.SimpleUpgrade(mockSegmentSize, nil)
 	assert.Nil(t, err)
 
-	opIdx = idAlloc.Alloc(0)
+	opIdx = gen.Alloc(0)
 	index = &LogIndex{
 		Id: shard.SimpleIndexId(opIdx),
 	}
@@ -684,8 +688,8 @@ func TestUpgrade(t *testing.T) {
 	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 	dbName := "db1"
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
 
@@ -747,7 +751,7 @@ func TestUpgrade(t *testing.T) {
 	schema := MockSchema(2)
 	schema.Name = "mock"
 
-	t1, err := db.SimpleCreateTable(schema, idAlloc.Next(0))
+	t1, err := db.SimpleCreateTable(schema, gen.Next(0))
 	assert.Nil(t, err)
 	assert.NotNil(t, t1)
 
@@ -808,9 +812,9 @@ func TestUpgrade(t *testing.T) {
 	tmp = db.SimpleGetTableByName(t1.Schema.Name)
 	assert.NotNil(t, tmp)
 
-	err = db.SimpleDropTableByName(t1.Schema.Name, nil)
+	err = db.SimpleDropTableByName(t1.Schema.Name, gen.Next(0))
 	assert.Nil(t, err)
-	err = db.SimpleDropTableByName(t1.Schema.Name, nil)
+	err = db.SimpleDropTableByName(t1.Schema.Name, gen.Next(0))
 	assert.NotNil(t, err)
 	err = db.SimpleHardDeleteTable(t1.Id)
 	assert.Nil(t, err)
@@ -861,8 +865,8 @@ func TestOpen(t *testing.T) {
 	assert.Nil(t, err)
 	catalog.Start()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
+	idx := gen.Next(0)
 	dbName := "db1"
 	db, err := catalog.SimpleCreateDatabase(dbName, idx)
 
@@ -888,10 +892,9 @@ func TestCatalog2(t *testing.T) {
 	catalog := NewCatalog(new(sync.RWMutex), cfg)
 	catalog.Start()
 
-	idAlloc := shard.NewMockIndexAllocator()
-	idx := idAlloc.Next(0)
+	gen := shard.NewMockIndexAllocator()
 	dbName := "db1"
-	db, err := catalog.SimpleCreateDatabase(dbName, idx)
+	db, err := catalog.SimpleCreateDatabase(dbName, gen.Next(0))
 	assert.Nil(t, err)
 
 	pool, _ := ants.NewPool(10)
@@ -902,7 +905,7 @@ func TestCatalog2(t *testing.T) {
 			schema := MockSchema(2)
 			schema.Name = fmt.Sprintf("m%d", i)
 
-			t1, err := db.SimpleCreateTable(schema, idAlloc.Next(0))
+			t1, err := db.SimpleCreateTable(schema, gen.Next(0))
 			assert.Nil(t, err)
 			assert.NotNil(t, t1)
 
@@ -944,15 +947,15 @@ func TestDatabases1(t *testing.T) {
 
 	mockBlocks := segmentBlocks*2 + segmentBlocks/2
 
-	idAlloc := shard.NewMockIndexAllocator()
+	gen := shard.NewMockIndexAllocator()
 	for i := 0; i < mockShards; i++ {
 		shardId := uint64(i)
-		idx := idAlloc.Next(shardId)
+		idx := gen.Next(shardId)
 		dbName := fmt.Sprintf("db%d", shardId)
 		db, err := catalog.SimpleCreateDatabase(dbName, idx)
 		assert.Nil(t, err)
 		wg.Add(1)
-		createBlkWorker.Submit(createBlock(t, 2, idAlloc, shardId, db, int(mockBlocks), &wg, upgradeSegWorker))
+		createBlkWorker.Submit(createBlock(t, 2, gen, shardId, db, int(mockBlocks), &wg, upgradeSegWorker))
 	}
 	wg.Wait()
 	t.Logf("mock metadata takes: %s", time.Since(now))
@@ -968,7 +971,7 @@ func TestDatabases1(t *testing.T) {
 			dbName := fmt.Sprintf("db%d", shardId)
 			db, err := catalog.SimpleGetDatabaseByName(dbName)
 			assert.Nil(t, err)
-			writer := NewDBSSWriter(db, dir, idAlloc.Get(shardId))
+			writer := NewDBSSWriter(db, dir, gen.Get(shardId))
 			err = writer.PrepareWrite()
 			assert.Nil(t, err)
 			err = writer.CommitWrite()
@@ -993,14 +996,14 @@ func TestDatabases1(t *testing.T) {
 		assert.Nil(t, err)
 		db, err := catalog.SimpleGetDatabaseByName(loader.view.Database.Name)
 		assert.Nil(t, err)
-		expected := db.View(idAlloc.Get(db.GetShardId()))
+		expected := db.View(gen.Get(db.GetShardId()))
 		doCompare(t, expected, loader.view)
 		// t.Logf("shardId-%d: %s", loader.View.LogRange.ShardId, loader.View.Catalog.PString(PPL0))
 	}
 	t.Logf("takes %s", time.Since(now))
 	t.Log(catalog.PString(PPL0))
 
-	for shardId, allocator := range idAlloc.Shards {
+	for shardId, allocator := range gen.Shards {
 		dbName := fmt.Sprintf("db%d", shardId)
 		db, err := catalog.SimpleGetDatabaseByName(dbName)
 		assert.Nil(t, err)
@@ -1036,7 +1039,7 @@ func TestDatabases2(t *testing.T) {
 	dir := "/tmp/metadata/testdbs2"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
 	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
-	idAlloc := shard.NewMockIndexAllocator()
+	gen := shard.NewMockIndexAllocator()
 	cfg1 := testCfg{
 		shardId: uint64(77),
 		blocks:  int(segmentBlocks*2 + segmentBlocks/2),
@@ -1047,17 +1050,17 @@ func TestDatabases2(t *testing.T) {
 		blocks:  int(segmentBlocks) / 2,
 		tables:  3,
 	}
-	db1, err := catalog.SimpleCreateDatabase("db1", idAlloc.Next(cfg1.shardId))
+	db1, err := catalog.SimpleCreateDatabase("db1", gen.Next(cfg1.shardId))
 	assert.Nil(t, err)
-	db2, err := catalog.SimpleCreateDatabase("db2", idAlloc.Next(cfg2.shardId))
+	db2, err := catalog.SimpleCreateDatabase("db2", gen.Next(cfg2.shardId))
 	assert.Nil(t, err)
 
 	wg := new(sync.WaitGroup)
 	wg.Add(2)
 	w1, _ := ants.NewPool(4)
 	w2, _ := ants.NewPool(4)
-	w1.Submit(createBlock(t, cfg1.tables, idAlloc, cfg1.shardId, db1, cfg1.blocks, wg, w2))
-	w1.Submit(createBlock(t, cfg2.tables, idAlloc, cfg2.shardId, db2, cfg2.blocks, wg, w2))
+	w1.Submit(createBlock(t, cfg1.tables, gen, cfg1.shardId, db1, cfg1.blocks, wg, w2))
+	w1.Submit(createBlock(t, cfg2.tables, gen, cfg2.shardId, db2, cfg2.blocks, wg, w2))
 	wg.Wait()
 
 	blockCnt := 0
@@ -1067,7 +1070,7 @@ func TestDatabases2(t *testing.T) {
 	}
 	blockCntOp := newBlockProcessor(blockCntFn)
 
-	index1_0 := idAlloc.Get(cfg1.shardId)
+	index1_0 := gen.Get(cfg1.shardId)
 	view1 := db1.View(index1_0)
 	assert.Equal(t, cfg1.tables, len(view1.Database.TableSet))
 	err = view1.Database.RecurLoopLocked(blockCntOp)
@@ -1075,7 +1078,7 @@ func TestDatabases2(t *testing.T) {
 	assert.Equal(t, cfg1.blocks*cfg1.tables, blockCnt)
 
 	blockCnt = 0
-	view2 := db2.View(idAlloc.Get(cfg2.shardId))
+	view2 := db2.View(gen.Get(cfg2.shardId))
 	assert.Equal(t, cfg2.tables, len(view2.Database.TableSet))
 	err = view2.Database.RecurLoopLocked(blockCntOp)
 	assert.Nil(t, err)
@@ -1087,10 +1090,10 @@ func TestDatabases2(t *testing.T) {
 		tables:  1,
 	}
 	wg.Add(1)
-	w1.Submit(createBlock(t, cfg1_1.tables, idAlloc, cfg1_1.shardId, db1, cfg1_1.blocks, wg, w2))
+	w1.Submit(createBlock(t, cfg1_1.tables, gen, cfg1_1.shardId, db1, cfg1_1.blocks, wg, w2))
 	wg.Wait()
 
-	index1_1 := idAlloc.Get(cfg1_1.shardId)
+	index1_1 := gen.Get(cfg1_1.shardId)
 	view1_0 := db1.View(index1_0)
 	doCompare(t, view1, view1_0)
 
@@ -1106,7 +1109,7 @@ func TestDatabases2(t *testing.T) {
 	table := db1.SimpleGetTable(ids[0])
 	deleteIndex := new(LogIndex)
 	deleteIndex.ShardId = cfg1.shardId
-	deleteIndex.Id = shard.SimpleIndexId(idAlloc.Alloc(cfg1.shardId))
+	deleteIndex.Id = shard.SimpleIndexId(gen.Alloc(cfg1.shardId))
 	err = table.SimpleSoftDelete(deleteIndex)
 	assert.Nil(t, err)
 
@@ -1116,7 +1119,7 @@ func TestDatabases2(t *testing.T) {
 	view1_1_1 := db1.View(index1_1)
 	doCompare(t, view1_1, view1_1_1)
 
-	index1_2 := idAlloc.Get(cfg1.shardId)
+	index1_2 := gen.Get(cfg1.shardId)
 	view1_2 := db1.View(index1_2)
 	assert.Equal(t, len(view1_1_1.Database.TableSet)-1, len(view1_2.Database.TableSet))
 
@@ -1163,23 +1166,23 @@ func TestSplit(t *testing.T) {
 	dir := "/tmp/metadata/testsplit"
 	catalog, _ := initTest(dir, uint64(100), uint64(2), false, true)
 
-	idAlloc := shard.NewMockIndexAllocator()
+	gen := shard.NewMockIndexAllocator()
 	wg := new(sync.WaitGroup)
 	w1, _ := ants.NewPool(4)
 	w2, _ := ants.NewPool(4)
 
 	shardId := uint64(66)
-	db, err := catalog.SimpleCreateDatabase("db1", idAlloc.Next(shardId))
+	db, err := catalog.SimpleCreateDatabase("db1", gen.Next(shardId))
 	assert.Nil(t, err)
 	wg.Add(4)
-	w1.Submit(createBlock(t, 1, idAlloc, shardId, db, 0, wg, w2))
-	w1.Submit(createBlock(t, 1, idAlloc, shardId, db, 1, wg, w2))
-	w1.Submit(createBlock(t, 1, idAlloc, shardId, db, 2, wg, w2))
-	w1.Submit(createBlock(t, 1, idAlloc, shardId, db, 3, wg, w2))
+	w1.Submit(createBlock(t, 1, gen, shardId, db, 0, wg, w2))
+	w1.Submit(createBlock(t, 1, gen, shardId, db, 1, wg, w2))
+	w1.Submit(createBlock(t, 1, gen, shardId, db, 2, wg, w2))
+	w1.Submit(createBlock(t, 1, gen, shardId, db, 3, wg, w2))
 
 	wg.Wait()
 
-	index := idAlloc.Get(shardId)
+	index := gen.Get(shardId)
 	t.Logf("index=%d", index)
 	assert.Equal(t, int64(550), db.GetSize())
 	assert.Equal(t, int64(600), db.GetCount())
@@ -1203,7 +1206,7 @@ func TestSplit(t *testing.T) {
 		dbSpec.Name = fmt.Sprintf("db-%d", dbSpec.ShardId)
 		dbSpecs[i] = dbSpec
 	}
-	splitIndex := idAlloc.Next(shardId)
+	splitIndex := gen.Next(shardId)
 
 	splitter := NewShardSplitter(catalog, spec, dbSpecs, splitIndex, mockFactory)
 	err = splitter.Prepare()

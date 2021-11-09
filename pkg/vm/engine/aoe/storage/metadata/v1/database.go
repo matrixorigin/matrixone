@@ -237,7 +237,9 @@ func (db *Database) prepareReplace(ctx *addReplaceCommitCtx) (LogEntry, error) {
 		ctx.discard = true
 		return nil, nil
 	}
-	db.onNewCommit(cInfo)
+	if err := db.onCommit(cInfo); err != nil {
+		return nil, err
+	}
 	if ctx.inTran {
 		return nil, nil
 	}
@@ -318,7 +320,9 @@ func (db *Database) prepareHardDelete(ctx *deleteDatabaseCtx) (LogEntry, error) 
 		return nil, CannotHardDeleteErr
 	}
 	cInfo.LogIndex = db.CommitInfo.LogIndex
-	db.onNewCommit(cInfo)
+	if err := db.onCommit(cInfo); err != nil {
+		return nil, err
+	}
 	logEntry := db.Catalog.prepareCommitEntry(db, ETHardDeleteDatabase, db)
 	return logEntry, nil
 }
@@ -355,8 +359,11 @@ func (db *Database) prepareSoftDelete(ctx *dropDatabaseCtx) (LogEntry, error) {
 		db.Unlock()
 		return nil, TableNotFoundErr
 	}
-	db.onNewCommit(cInfo)
+	err := db.onCommit(cInfo)
 	db.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	if ctx.inTran {
 		ctx.txn.AddEntry(db, ETSoftDeleteDatabase)
 		return nil, nil

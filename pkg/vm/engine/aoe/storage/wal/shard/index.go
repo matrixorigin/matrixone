@@ -39,14 +39,18 @@ func CreateIndexId(id uint64, offset, size uint32) IndexId {
 	}
 }
 
-func (id *IndexId) LT(o *IndexId) bool {
-	if id.Id < o.Id {
-		return true
-	}
+func (id *IndexId) Compare(o *IndexId) int {
 	if id.Id > o.Id {
-		return false
+		return 1
+	} else if id.Id < o.Id {
+		return -1
 	}
-	return id.Offset < o.Offset
+	if id.Offset > o.Offset {
+		return 1
+	} else {
+		return -1
+	}
+	return 0
 }
 
 func (id *IndexId) String() string {
@@ -63,6 +67,26 @@ func (id *IndexId) IsEnd() bool {
 
 func (id *IndexId) IsSingle() bool {
 	return id.Size == 1
+}
+
+func (idx *Index) Compare(o *Index) int {
+	if idx.ShardId != o.ShardId {
+		panic("cannot compare index with diff shard id")
+	}
+
+	ret := idx.Id.Compare(&o.Id)
+	if ret != 0 {
+		return ret
+	}
+
+	if idx.Start == o.Start {
+		ret = 0
+	} else if idx.Start > o.Start {
+		ret = 1
+	} else {
+		ret = -1
+	}
+	return ret
 }
 
 func (idx *Index) IsSameBatch(o *Index) bool {

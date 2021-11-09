@@ -152,6 +152,10 @@ func (info *CommitInfo) CanUseTxn(tranId uint64) bool {
 	return tranId == info.TranId
 }
 
+func (info *CommitInfo) SameTran(o *CommitInfo) bool {
+	return info.TranId == o.TranId
+}
+
 func (info *CommitInfo) GetShardId() uint64 {
 	if info == nil {
 		return 0

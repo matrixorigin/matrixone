@@ -356,7 +356,9 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 			}
 		}
 	}
-	e.onNewCommit(cInfo)
+	if err := e.onCommit(cInfo); err != nil {
+		return nil, err
+	}
 	logEntry := e.Segment.Table.Database.Catalog.prepareCommitEntry(e, ETUpgradeBlock, e)
 	return logEntry, nil
 }
