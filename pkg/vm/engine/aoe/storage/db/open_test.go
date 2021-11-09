@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
@@ -31,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -64,11 +64,13 @@ func TestDBReplay(t *testing.T) {
 		waitTime = time.Duration(100) * time.Millisecond
 	}
 	initDBTest()
-	inst := initDB(wal.BrokerRole)
-	tableInfo := adaptor.MockTableInfo(2)
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mocktbl", OpIndex: uint64(1)})
+	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	schema := metadata.MockSchema(2)
+	schema.Name = "mocktbl"
+	shardId := database.GetShardId()
+	tid, err := inst.CreateTable(database.Name, schema, gen.Next(shardId))
 	assert.Nil(t, err)
-	tblMeta := inst.Opts.Meta.Catalog.SimpleGetTable(tid)
+	tblMeta := database.SimpleGetTable(tid)
 	assert.NotNil(t, tblMeta)
 	blkCnt := 2
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * uint64(blkCnt)
@@ -77,11 +79,13 @@ func TestDBReplay(t *testing.T) {
 	insertCnt := 4
 	for i := 0; i < insertCnt; i++ {
 		err = inst.Append(dbi.AppendCtx{
+			ShardId:   shardId,
 			OpIndex:   uint64(i + 2),
 			OpOffset:  0,
 			OpSize:    1,
 			Data:      ck,
-			TableName: tableInfo.Name,
+			TableName: schema.Name,
+			DBName:    database.Name,
 		})
 		assert.Nil(t, err)
 	}
@@ -96,9 +100,9 @@ func TestDBReplay(t *testing.T) {
 	assert.Nil(t, err)
 
 	testutils.WaitExpect(200, func() bool {
-		return uint64(insertCnt) == inst.GetShardCheckpointId(0)
+		return uint64(insertCnt) == inst.GetShardCheckpointId(shardId)
 	})
-	segmentedIdx := inst.GetShardCheckpointId(0)
+	segmentedIdx := inst.GetShardCheckpointId(shardId)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, uint64(insertCnt), segmentedIdx)
 
@@ -114,7 +118,7 @@ func TestDBReplay(t *testing.T) {
 	assert.Nil(t, err)
 	f.Close()
 
-	inst = initDB(wal.BrokerRole)
+	inst, _ = initDB(wal.BrokerRole)
 
 	os.Stat(invalidFileName)
 	_, err = os.Stat(invalidFileName)
@@ -123,8 +127,8 @@ func TestDBReplay(t *testing.T) {
 	// t.Log(inst.MTBufMgr.String())
 	// t.Log(inst.SSTBufMgr.String())
 
-	replaytblMeta := inst.Opts.Meta.Catalog.SimpleGetTableByName(tableInfo.Name)
-	assert.NotNil(t, replaytblMeta)
+	replaytblMeta, err := inst.Opts.Meta.Catalog.SimpleGetTableByName(database.Name, schema.Name)
+	assert.Nil(t, err)
 	assert.Equal(t, tblMeta.Schema.Name, replaytblMeta.Schema.Name)
 
 	tbl, err = inst.Store.DataTables.WeakRefTable(replaytblMeta.Id)
@@ -138,22 +142,20 @@ func TestDBReplay(t *testing.T) {
 
 	for i := int(segmentedIdx) + 1; i < int(segmentedIdx)+1+insertCnt; i++ {
 		err = inst.Append(dbi.AppendCtx{
-			TableName: tableInfo.Name,
+			ShardId:   shardId,
+			DBName:    database.Name,
+			TableName: schema.Name,
 			Data:      ck,
 			OpIndex:   uint64(i),
 			OpSize:    1,
 		})
 		assert.Nil(t, err)
 	}
-	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tableInfo.Name, OpIndex: segmentedIdx + 1 + uint64(insertCnt)})
+	_, err = inst.CreateTable(database.Name, schema, &metadata.LogIndex{
+		Id: shard.SimpleIndexId(segmentedIdx + 1 + uint64(insertCnt)),
+	})
 	assert.NotNil(t, err)
 
-	// time.Sleep(waitTime)
-	// if invariants.RaceEnabled {
-	// 	time.Sleep(waitTime)
-	// }
-	// t.Log(inst.MTBufMgr.String())
-	// t.Log(inst.SSTBufMgr.String())
 	testutils.WaitExpect(200, func() bool {
 		return 2*rows*uint64(insertCnt)-2*tblMeta.Schema.BlockMaxRows == tbl.GetRowCount()
 	})
@@ -163,10 +165,10 @@ func TestDBReplay(t *testing.T) {
 	preSegmentedIdx := segmentedIdx
 
 	testutils.WaitExpect(200, func() bool {
-		return preSegmentedIdx+uint64(insertCnt)-1 == inst.GetShardCheckpointId(0)
+		return preSegmentedIdx+uint64(insertCnt)-1 == inst.GetShardCheckpointId(shardId)
 	})
 
-	segmentedIdx = inst.GetShardCheckpointId(0)
+	segmentedIdx = inst.GetShardCheckpointId(shardId)
 	t.Logf("SegmentedIdx: %d", segmentedIdx)
 	assert.Equal(t, preSegmentedIdx+uint64(insertCnt)-1, segmentedIdx)
 
@@ -188,16 +190,23 @@ func TestMultiInstance(t *testing.T) {
 		defer inst.Close()
 	}
 
-	info := adaptor.MockTableInfo(2)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+
+	var schema *metadata.Schema
 	for _, inst := range insts {
-		info = adaptor.MockTableInfo(2)
-		_, err := inst.CreateTable(info, dbi.TableOpCtx{TableName: info.Name, OpIndex: common.NextGlobalSeqNum()})
+		db, err := inst.Store.Catalog.SimpleCreateDatabase("db1", gen.Next(shardId))
+		assert.Nil(t, err)
+		schema = metadata.MockSchema(2)
+		schema.Name = "xxx"
+		_, err = inst.CreateTable(db.Name, schema, gen.Next(shardId))
 		assert.Nil(t, err)
 	}
-	meta := insts[0].Store.Catalog.SimpleGetTableByName(info.Name)
+	meta, err := insts[0].Store.Catalog.SimpleGetTableByName("db1", schema.Name)
+	assert.Nil(t, err)
 	bat := mock.MockBatch(meta.Schema.Types(), 100)
 	for _, inst := range insts {
-		err := inst.Append(dbi.AppendCtx{TableName: info.Name, Data: bat, OpIndex: common.NextGlobalSeqNum(), OpSize: 1})
+		err := inst.Append(dbi.AppendCtx{ShardId: shardId, DBName: "db1", TableName: schema.Name, Data: bat, OpIndex: gen.Alloc(shardId), OpSize: 1})
 		assert.Nil(t, err)
 	}
 

@@ -17,10 +17,11 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -197,7 +198,9 @@ func TestSegmentWriter(t *testing.T) {
 
 	schema := metadata.MockSchemaAll(14)
 	segCnt, blkCnt := uint64(4), uint64(4)
-	table := metadata.MockTable(catalog, schema, segCnt*blkCnt, nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	table := metadata.MockDBTable(catalog, "db1", schema, segCnt*blkCnt, gen.Shard(shardId))
 	segment := table.SimpleCreateSegment()
 	assert.NotNil(t, segment)
 	batches := make([]*gbatch.Batch, 0)
@@ -330,7 +333,9 @@ func TestIVectorNodeWriter(t *testing.T) {
 	catalog := metadata.MockCatalog(dir, capacity, uint64(10), nil, nil)
 	schema := metadata.MockSchema(2)
 	schema.PrimaryKey = 1
-	tblMeta := metadata.MockTable(catalog, schema, 1, nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	tblMeta := metadata.MockDBTable(catalog, "db1", schema, 1, gen.Shard(shardId))
 	segMeta := tblMeta.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, segMeta)
 	meta := segMeta.SimpleGetBlock(uint64(1))
@@ -437,7 +442,9 @@ func TestTransientBlock(t *testing.T) {
 	rowCount, blkCount := uint64(10), uint64(4)
 	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, 1, nil)
+	gen := shard.NewMockIndexAllocator()
+	shardId := uint64(100)
+	tbl := metadata.MockDBTable(catalog, "db1", schema, 1, gen.Shard(shardId))
 
 	segMeta := tbl.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, segMeta)

@@ -22,9 +22,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
@@ -39,11 +39,13 @@ import (
 
 func TestEngine(t *testing.T) {
 	initDBTest()
-	inst := initDB(wal.HolderRole)
-	tableInfo := adaptor.MockTableInfo(2)
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: common.NextGlobalSeqNum()})
+	inst, gen, database := initDB2(wal.HolderRole, "db1", uint64(100))
+	schema := metadata.MockSchema(2)
+	schema.Name = "mockcon"
+	shardId := database.GetShardId()
+	tid, err := inst.CreateTable(database.Name, schema, gen.Next(shardId))
 	assert.Nil(t, err)
-	tblMeta := inst.Store.Catalog.SimpleGetTable(tid)
+	tblMeta := database.SimpleGetTable(tid)
 	assert.NotNil(t, tblMeta)
 	blkCnt := inst.Store.Catalog.Cfg.SegmentMaxBlocks
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * blkCnt
@@ -62,17 +64,15 @@ func TestEngine(t *testing.T) {
 	gm := guest.New(1<<40, hm)
 	proc := process.New(gm)
 
-	tableCnt := 100
+	tableCnt := 20
 	var twg sync.WaitGroup
 	for i := 0; i < tableCnt; i++ {
 		twg.Add(1)
 		f := func(idx int) func() {
 			return func() {
-				tInfo := *tableInfo
-				_, err := inst.CreateTable(&tInfo, dbi.TableOpCtx{TableName: fmt.Sprintf("%dxxxxxx%d", idx, idx),
-					OpIndex: common.NextGlobalSeqNum(),
-					ShardId: common.NextGlobalSeqNum(),
-				})
+				schema := metadata.MockSchema(2)
+				schema.Name = fmt.Sprintf("%dxxxxxx%d", idx, idx)
+				_, err := inst.CreateTable(database.Name, schema, gen.Next(shardId))
 				assert.Nil(t, err)
 				twg.Done()
 			}
@@ -90,7 +90,7 @@ func TestEngine(t *testing.T) {
 	task := func(ctx *dbi.GetSnapshotCtx) func() {
 		return func() {
 			defer searchWg.Done()
-			rel, err := inst.Relation(tblMeta.Schema.Name)
+			rel, err := inst.Relation(database.Name, tblMeta.Schema.Name)
 			assert.Nil(t, err)
 			for _, segId := range rel.SegmentIds().Ids {
 				seg := rel.Segment(segId, proc)
@@ -151,8 +151,9 @@ func TestEngine(t *testing.T) {
 			case req := <-insertCh:
 				loopWg.Add(1)
 				t := func() {
-					rel, err := inst.Relation(req.TableName)
+					rel, err := inst.Relation(database.Name, req.TableName)
 					assert.Nil(t, err)
+					assert.NotNil(t, rel)
 					err = rel.Write(req)
 					assert.Nil(t, err)
 					loopWg.Done()
@@ -170,7 +171,9 @@ func TestEngine(t *testing.T) {
 		defer driverWg.Done()
 		for i := 0; i < insertCnt; i++ {
 			req := dbi.AppendCtx{
-				TableName: tableInfo.Name,
+				DBName:    database.Name,
+				ShardId:   shardId,
+				TableName: schema.Name,
 				Data:      baseCk,
 				OpIndex:   common.NextGlobalSeqNum(),
 				OpSize:    1,
@@ -186,7 +189,9 @@ func TestEngine(t *testing.T) {
 		defer driverWg.Done()
 		for i := 0; i < searchCnt; i++ {
 			req := &dbi.GetSnapshotCtx{
-				TableName: tableInfo.Name,
+				ShardId:   shardId,
+				DBName:    database.Name,
+				TableName: schema.Name,
 				ScanAll:   true,
 				Cols:      cols,
 			}
@@ -212,49 +217,50 @@ func TestEngine(t *testing.T) {
 	attr = tblMeta.Schema.ColDefs[1].Name
 	t.Log(tbl.Size(attr))
 	t.Log(tbl.String())
-	rel, err := inst.Relation(tblMeta.Schema.Name)
+	rel, err := inst.Relation(database.Name, tblMeta.Schema.Name)
 	assert.Nil(t, err)
 	t.Logf("Rows: %d, Size: %d", rel.Rows(), rel.Size(tblMeta.Schema.ColDefs[0].Name))
-	t.Log(inst.GetSegmentIds(dbi.GetSegmentsCtx{TableName: tblMeta.Schema.Name}))
+	t.Log(inst.GetSegmentIds(database.Name, tblMeta.Schema.Name))
 	t.Log(common.GPool.String())
 	inst.Close()
 }
 
 func TestLogIndex(t *testing.T) {
 	initDBTest()
-	inst := initDB(wal.HolderRole)
-	tableInfo := adaptor.MockTableInfo(2)
-	idAlloc := common.IdAlloctor{}
-	tid, err := inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: "mockcon", OpIndex: idAlloc.Alloc()})
+	inst, gen, database := initDB2(wal.HolderRole, "db1", uint64(100))
+	schema := metadata.MockSchema(2)
+	schema.Name = "t1"
+	shardId := database.GetShardId()
+	tid, err := inst.CreateTable(database.Name, schema, gen.Next(shardId))
 	assert.Nil(t, err)
-	tblMeta := inst.Store.Catalog.SimpleGetTable(tid)
+	tblMeta := database.SimpleGetTable(tid)
 	assert.NotNil(t, tblMeta)
 	rows := inst.Store.Catalog.Cfg.BlockMaxRows * 2 / 5
 	baseCk := mock.MockBatch(tblMeta.Schema.Types(), rows)
 
-	// p, _ := ants.NewPool(40)
-
 	for i := 0; i < 50; i++ {
-		rel, err := inst.Relation(tblMeta.Schema.Name)
+		rel, err := inst.Relation(database.Name, tblMeta.Schema.Name)
 		assert.Nil(t, err)
 		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   idAlloc.Alloc(),
+			ShardId:   database.GetShardId(),
+			OpIndex:   gen.Alloc(shardId),
 			OpOffset:  0,
 			OpSize:    1,
 			Data:      baseCk,
 			TableName: tblMeta.Schema.Name,
+			DBName:    database.Name,
 		})
 		assert.Nil(t, err)
 		rel.Close()
 	}
 
-	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tblMeta.Schema.Name, OpIndex: idAlloc.Alloc()})
+	_, err = inst.DropTable(dbi.DropTableCtx{ShardId: shardId, DBName: database.Name, TableName: tblMeta.Schema.Name, OpIndex: gen.Alloc(shardId)})
 	assert.Nil(t, err)
 	testutils.WaitExpect(100, func() bool {
-		return inst.GetShardCheckpointId(0) == inst.Wal.GetShardCurrSeqNum(0)
+		return inst.GetShardCheckpointId(shardId) == inst.Wal.GetShardCurrSeqNum(shardId)
 	})
-	assert.Equal(t, idAlloc.Get(), inst.Wal.GetShardCurrSeqNum(0))
-	assert.Equal(t, inst.Wal.GetShardCurrSeqNum(0), inst.GetShardCheckpointId(0))
+	assert.Equal(t, gen.Get(shardId), inst.Wal.GetShardCurrSeqNum(shardId))
+	assert.Equal(t, inst.Wal.GetShardCurrSeqNum(shardId), inst.GetShardCheckpointId(shardId))
 
 	inst.Close()
 }

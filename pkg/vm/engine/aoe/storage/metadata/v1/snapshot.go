@@ -28,9 +28,10 @@ type Snapshoter interface {
 }
 
 type mapping struct {
-	Table map[uint64]uint64
-	Segment map[uint64]uint64
-	Block map[uint64]uint64
+	Database map[uint64]uint64
+	Table    map[uint64]uint64
+	Segment  map[uint64]uint64
+	Block    map[uint64]uint64
 }
 
 func (m *mapping) RewriteSegmentFile(filename string) (string, error) {
@@ -68,44 +69,45 @@ func (m *mapping) RewriteBlockFile(filename string) (string, error) {
 	return arr[0] + "_" + arr[1] + "_" + arr[2] + ".blk", nil
 }
 
-type shardSnapshoter struct {
-	dir            string
-	name           string
-	view           *catalogLogEntry
-	shardId, index uint64
-	tranId         uint64
-	catalog        *Catalog
-	mapping        *mapping
+type dbSnapshoter struct {
+	dir     string
+	name    string
+	view    *databaseLogEntry
+	index   uint64
+	tranId  uint64
+	db      *Database
+	catalog *Catalog
+	mapping *mapping
 }
 
-func NewShardSSWriter(catalog *Catalog, dir string, shardId, index uint64) *shardSnapshoter {
-	ss := &shardSnapshoter{
-		catalog: catalog,
-		dir:     dir,
-		shardId: shardId,
-		index:   index,
+func NewDBSSWriter(db *Database, dir string, index uint64) *dbSnapshoter {
+	ss := &dbSnapshoter{
+		db:    db,
+		dir:   dir,
+		index: index,
 	}
 	return ss
 }
 
-func NewShardSSLoader(catalog *Catalog, name string) *shardSnapshoter {
-	ss := &shardSnapshoter{
+func NewDBSSLoader(catalog *Catalog, name string) *dbSnapshoter {
+	ss := &dbSnapshoter{
 		catalog: catalog,
 		name:    name,
 	}
 	return ss
 }
 
-func (ss *shardSnapshoter) PrepareWrite() error {
-	ss.view = ss.catalog.ShardView(ss.shardId, ss.index)
+func (ss *dbSnapshoter) PrepareWrite() error {
+	ss.view = ss.db.View(ss.index)
+	ss.view.Id = ss.db.Id
 	return nil
 }
 
-func (ss *shardSnapshoter) makeName() string {
-	return filepath.Join(ss.dir, fmt.Sprintf("%d-%d-%d.meta", ss.shardId, ss.index, time.Now().UTC().UnixMicro()))
+func (ss *dbSnapshoter) makeName() string {
+	return filepath.Join(ss.dir, fmt.Sprintf("%d-%d-%d.meta", ss.db.GetShardId(), ss.index, time.Now().UTC().UnixMicro()))
 }
 
-func (ss *shardSnapshoter) CommitWrite() error {
+func (ss *dbSnapshoter) CommitWrite() error {
 	ss.name = ss.makeName()
 	f, err := os.Create(ss.name)
 	if err != nil {
@@ -121,14 +123,24 @@ func (ss *shardSnapshoter) CommitWrite() error {
 	return err
 }
 
-func (ss *shardSnapshoter) ReAllocId(allocator *Sequence, view *Catalog) error {
+func (ss *dbSnapshoter) ReAllocId(allocator *Sequence, view *Database) error {
 	ss.tranId = allocator.NextUncommitId()
 	processor := newReAllocIdProcessor(allocator, ss.tranId)
 	ss.mapping = processor.trace
-	return view.RecurLoop(processor)
+	processor.OnDatabase(view)
+	err := view.RecurLoopLocked(processor)
+	if err != nil {
+		return err
+	}
+	tableSet := make(map[uint64]*Table)
+	for _, table := range ss.view.Database.TableSet {
+		tableSet[table.Id] = table
+	}
+	ss.view.Database.TableSet = tableSet
+	return err
 }
 
-func (ss *shardSnapshoter) PrepareLoad() error {
+func (ss *dbSnapshoter) PrepareLoad() error {
 	f, err := os.OpenFile(ss.name, os.O_RDONLY, 666)
 	if err != nil {
 		return err
@@ -141,24 +153,24 @@ func (ss *shardSnapshoter) PrepareLoad() error {
 	size := info.Size()
 	mnode := common.GPool.Alloc(uint64(size))
 	defer common.GPool.Free(mnode)
-	ss.view = &catalogLogEntry{}
+	ss.view = &databaseLogEntry{}
 	if _, err = f.Read(mnode.Buf[:size]); err != nil {
 		return err
 	}
 	if err = ss.view.Unmarshal(mnode.Buf[:size]); err != nil {
 		return err
 	}
-	return ss.ReAllocId(&ss.catalog.Sequence, ss.view.Catalog)
+	return ss.ReAllocId(&ss.catalog.Sequence, ss.view.Database)
 }
 
-func (ss *shardSnapshoter) CommitLoad() error {
-	return ss.catalog.SimpleReplaceShard(ss.view, ss.tranId)
+func (ss *dbSnapshoter) CommitLoad() error {
+	return ss.catalog.SimpleReplaceDatabase(ss.view, ss.tranId)
 }
 
-func (ss *shardSnapshoter) View() *catalogLogEntry {
+func (ss *dbSnapshoter) View() *databaseLogEntry {
 	return ss.view
 }
 
-func (ss *shardSnapshoter) Mapping() *mapping {
+func (ss *dbSnapshoter) Mapping() *mapping {
 	return ss.mapping
 }

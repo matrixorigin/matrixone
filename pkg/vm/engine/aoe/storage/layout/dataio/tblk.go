@@ -15,6 +15,11 @@ package dataio
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -23,10 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"path/filepath"
-	"sync"
-	"sync/atomic"
 )
 
 type versionBlockFile struct {
@@ -220,7 +221,7 @@ func (f *TransientBlockFile) LoadBatch(meta *metadata.Block) batch.IBatch {
 }
 
 func (f *TransientBlockFile) Sync(data batch.IBatch, meta *metadata.Block) error {
-	writer := NewIBatchWriter(data, meta, meta.Segment.Table.Catalog.Cfg.Dir)
+	writer := NewIBatchWriter(data, meta, meta.Segment.Table.Database.Catalog.Cfg.Dir)
 	version := f.nextVersion()
 	getter := tblkFileGetter{version: version}
 	writer.SetFileGetter(getter.Getter)

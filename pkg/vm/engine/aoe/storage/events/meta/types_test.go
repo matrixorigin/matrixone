@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -42,12 +43,15 @@ func TestBasicOps(t *testing.T) {
 
 	catalog := opts.Meta.Catalog
 	schema := metadata.MockSchema(2)
-	tbl, err := catalog.SimpleCreateTable(schema, nil)
+	gen := shard.NewMockIndexAllocator()
+	database, err := catalog.SimpleCreateDatabase("db1", gen.Shard(100).First())
+	assert.Nil(t, err)
+	tbl, err := database.SimpleCreateTable(schema, gen.Next(100))
 	assert.Nil(t, err)
 	assert.NotNil(t, tbl)
 
 	eCtx := &sched.Context{Opts: opts, Waitable: true}
-	createBlkE := NewCreateBlkEvent(eCtx, tbl.Id, nil, nil)
+	createBlkE := NewCreateBlkEvent(eCtx, tbl, nil, nil)
 	opts.Scheduler.Schedule(createBlkE)
 	err = createBlkE.WaitDone()
 	assert.Nil(t, err)
@@ -80,7 +84,7 @@ func TestBasicOps(t *testing.T) {
 	assert.True(t, blk2.IsFullLocked())
 
 	for i := 0; i < 100; i++ {
-		createBlkE = NewCreateBlkEvent(schedCtx, blk1.Segment.Table.Id, nil, nil)
+		createBlkE = NewCreateBlkEvent(schedCtx, blk1.Segment.Table, nil, nil)
 		opts.Scheduler.Schedule(createBlkE)
 		err = createBlkE.WaitDone()
 		assert.Nil(t, err)

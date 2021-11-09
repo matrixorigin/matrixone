@@ -16,14 +16,14 @@ package local
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
 )
 
 type localRoEngine struct {
-	dbimpl *db.DB
+	dbimpl *aoedb.DB
 }
 
-func NewLocalRoEngine(dbimpl *db.DB) *localRoEngine {
+func NewLocalRoEngine(dbimpl *aoedb.DB) *localRoEngine {
 	return &localRoEngine{
 		dbimpl: dbimpl,
 	}
@@ -45,6 +45,10 @@ func (e *localRoEngine) Databases() []string {
 	panic("not supported")
 }
 
-func (e *localRoEngine) Database(_ string) (engine.Database, error) {
-	return NewLocalRoDatabase(e.dbimpl), nil
+func (e *localRoEngine) Database(dbName string) (engine.Database, error) {
+	database, err := e.dbimpl.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return nil, err
+	}
+	return NewLocalRoDatabase(database, e.dbimpl), nil
 }

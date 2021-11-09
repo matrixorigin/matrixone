@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/codec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/common/helper"
-	adb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/handle"
 
@@ -118,7 +118,7 @@ type CubeDriver interface {
 	// RaftStore returns the raft store
 	RaftStore() raftstore.Store
 	//AOEStore returns h.aoeDB
-	AOEStore() *adb.DB
+	AOEStore() *aoedb.DB
 }
 
 type driver struct {
@@ -126,7 +126,7 @@ type driver struct {
 	app   *server.Application
 	store raftstore.Store
 	spool raftstore.ShardsPool
-	aoeDB *adb.DB
+	aoeDB *aoedb.DB
 	cmds  map[uint64]raftcmdpb.CMDType
 }
 
@@ -312,7 +312,7 @@ func (h *driver) Close() {
 }
 
 //AOEStore returns h.aoeDB
-func (h *driver) AOEStore() *adb.DB {
+func (h *driver) AOEStore() *aoedb.DB {
 	return h.aoeDB
 }
 

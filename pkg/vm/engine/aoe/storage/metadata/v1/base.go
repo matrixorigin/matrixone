@@ -104,22 +104,23 @@ func (e *BaseEntry) GetAppliedIndex() (uint64, bool) {
 }
 
 func (e *BaseEntry) HasCommittedLocked() bool {
-	return !IsTransientCommitId(e.CommitInfo.CommitId)
+	return e.CommitInfo.HasCommitted()
 }
 
 func (e *BaseEntry) HasCommitted() bool {
 	e.RLock()
 	defer e.RUnlock()
-	return !IsTransientCommitId(e.CommitInfo.CommitId)
+	return e.HasCommittedLocked()
 }
 
-func (e *BaseEntry) CanUse(tranId uint64) bool {
+func (e *BaseEntry) CanUseTxn(tranId uint64) bool {
 	e.RLock()
 	defer e.RUnlock()
-	if e.HasCommittedLocked() && e.CommitInfo.TranId > tranId {
-		return true
-	}
-	return tranId == e.CommitInfo.TranId
+	return e.CanUseTxnLocked(tranId)
+}
+
+func (e *BaseEntry) CanUseTxnLocked(tranId uint64) bool {
+	return e.CommitInfo.CanUseTxn(tranId)
 }
 
 func (e *BaseEntry) onCommitted(id uint64) *BaseEntry {
@@ -155,6 +156,24 @@ func (e *BaseEntry) UseCommittedLocked(filter *commitFilter) *BaseEntry {
 		curr = curr.GetNext()
 	}
 	return nil
+}
+
+func (e *BaseEntry) IsDeletedInTxnLocked(txn *TxnCtx) bool {
+	if txn == nil {
+		return e.IsDeletedLocked()
+	}
+	if e.CanUseTxnLocked(txn.tranId) {
+		return e.IsDeletedLocked()
+	}
+	next := e.CommitInfo.GetNext()
+	for next != nil {
+		info := next.(*CommitInfo)
+		if info.CanUseTxn(txn.tranId) {
+			return info.IsDeleted()
+		}
+		next = next.GetNext()
+	}
+	return false
 }
 
 // Guarded by e.Lock()

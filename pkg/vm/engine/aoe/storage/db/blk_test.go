@@ -16,16 +16,18 @@ package db
 
 import (
 	"bytes"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	bmgr "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/buffer/manager"
 	ldio "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
-	"os"
-	"sync"
-	"sync/atomic"
-	"testing"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -55,7 +57,12 @@ func TestBlock(t *testing.T) {
 	fsMgr := ldio.NewManager("/tmp", true)
 
 	tables := table.NewTables(new(sync.RWMutex), fsMgr, bufMgr, bufMgr, bufMgr)
-	tableMeta := metadata.MockTable(opts.Meta.Catalog, schema, segCnt*blkCnt, nil)
+
+	dbName := "db1"
+	shardId := uint64(0)
+	gen := shard.NewMockIndexAllocator()
+
+	tableMeta := metadata.MockDBTable(opts.Meta.Catalog, dbName, schema, segCnt*blkCnt, gen.Shard(shardId))
 	tableData, err := tables.RegisterTable(tableMeta)
 	assert.Nil(t, err)
 	segIds := table.MockSegments(tableMeta, tableData)

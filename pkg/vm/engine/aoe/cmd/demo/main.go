@@ -15,14 +15,16 @@
 package main
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -37,19 +39,29 @@ func main() {
 	}
 	opts := storage.Options{}
 	opts.Meta.Conf = metaConf
-	inst, err := db.Open(workDir, &opts)
+	inst, err := aoedb.Open(workDir, &opts)
 	if err != nil {
 		panic(err)
 	}
 
+	gen := shard.NewMockIndexAllocator()
 	tableInfo := adaptor.MockTableInfo(colCnt)
 	tName := tableInfo.Name
-	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{TableName: tName})
+	shardId := uint64(100)
+	dbName := aoedb.ShardIdToName(shardId)
+	_, err = inst.CreateTable(tableInfo, dbi.TableOpCtx{
+		ShardId:   shardId,
+		OpIndex:   gen.Alloc(shardId),
+		TableName: tName,
+	})
 	if err != nil {
 		panic(err)
 	}
 	rows := metaConf.BlockMaxRows / 8
-	tblMeta := inst.Opts.Meta.Catalog.SimpleGetTableByName(tName)
+	tblMeta, err := inst.Opts.Meta.Catalog.SimpleGetTableByName(dbName, tName)
+	if err != nil {
+		panic(err)
+	}
 	ck := mock.MockBatch(tblMeta.Schema.Types(), rows)
 	cols := make([]int, 0)
 	for i := 0; i < len(tblMeta.Schema.ColDefs); i++ {
@@ -64,14 +76,14 @@ func main() {
 	insertWg.Add(1)
 	go func() {
 		for i := 0; i < insertCnt; i++ {
-			err = inst.Append(dbi.AppendCtx{TableName: tName, Data: ck, OpIndex: uint64(i), OpSize: 1})
+			err = inst.Append(dbi.AppendCtx{ShardId: shardId, TableName: tName, Data: ck, OpIndex: gen.Alloc(shardId), OpSize: 1})
 			if err != nil {
 				log.Warn(err)
 			}
 		}
 		insertWg.Done()
 	}()
-	ctx := dbi.GetSnapshotCtx{ScanAll: true, TableName: tName, Cols: cols}
+	ctx := dbi.GetSnapshotCtx{ShardId: shardId, ScanAll: true, TableName: tName, Cols: cols}
 
 	doScan := func() {
 		ss, err := inst.GetSnapshot(&ctx)
@@ -118,7 +130,7 @@ func main() {
 	insertWg.Wait()
 
 	time.Sleep(time.Duration(20) * time.Millisecond)
-	_, err = inst.DropTable(dbi.DropTableCtx{TableName: tName})
+	_, err = inst.DropTable(dbi.DropTableCtx{ShardId: shardId, TableName: tName})
 	log.Infof("drop err: %v", err)
 	searchWg.Wait()
 	// time.Sleep(time.Duration(100) * time.Millisecond)

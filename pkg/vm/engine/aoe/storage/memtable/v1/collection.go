@@ -93,7 +93,7 @@ func (c *collection) onNoBlock() (meta *metadata.Block, data iface.IBlock, err e
 	if c.mutBlk != nil {
 		prevMeta = c.mutBlk.GetMeta()
 	}
-	e := me.NewCreateBlkEvent(ctx, c.data.GetID(), prevMeta, c.data)
+	e := me.NewCreateBlkEvent(ctx, c.data.GetMeta(), prevMeta, c.data)
 	c.mgr.opts.Scheduler.Schedule(e)
 	if err = e.WaitDone(); err != nil {
 		return nil, nil, err

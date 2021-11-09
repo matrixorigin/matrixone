@@ -21,28 +21,29 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func TestReplay1(t *testing.T) {
 	initDBTest()
-	inst := initDB(wal.BrokerRole)
-	tInfo := adaptor.MockTableInfo(2)
-	name := "mockcon"
-	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: common.NextGlobalSeqNum()})
+	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	schema := metadata.MockSchema(2)
+	schema.Name = "mockcon"
+	shardId := database.GetShardId()
+	tid, err := inst.CreateTable(database.Name, schema, gen.Next(shardId))
 	assert.Nil(t, err)
 
-	meta := inst.Opts.Meta.Catalog.SimpleGetTable(tid)
+	meta := database.SimpleGetTable(tid)
 	assert.NotNil(t, meta)
-	rel, err := inst.Relation(meta.Schema.Name)
+	rel, err := inst.Relation(database.Name, meta.Schema.Name)
 	assert.Nil(t, err)
 
 	irows := inst.Store.Catalog.Cfg.BlockMaxRows / 2
@@ -50,48 +51,51 @@ func TestReplay1(t *testing.T) {
 
 	insertFn := func() {
 		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   common.NextGlobalSeqNum(),
+			ShardId:   database.GetShardId(),
+			OpIndex:   gen.Alloc(shardId),
 			OpSize:    1,
 			Data:      ibat,
 			TableName: meta.Schema.Name,
+			DBName:    database.Name,
 		})
 		assert.Nil(t, err)
 	}
 
 	insertFn()
 	assert.Equal(t, irows, uint64(rel.Rows()))
-	err = inst.Flush(name)
+	err = inst.Flush(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	insertFn()
 	assert.Equal(t, irows*2, uint64(rel.Rows()))
-	err = inst.Flush(name)
+	err = inst.Flush(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	insertFn()
 	assert.Equal(t, irows*3, uint64(rel.Rows()))
-	err = inst.Flush(name)
+	err = inst.Flush(database.Name, schema.Name)
 	assert.Nil(t, err)
-	err = inst.Flush(name)
+	err = inst.Flush(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	testutils.WaitExpect(200, func() bool {
-		return common.GetGlobalSeqNum() == inst.GetShardCheckpointId(0)
+		return gen.Get(shardId) == inst.GetShardCheckpointId(shardId)
 	})
 	time.Sleep(time.Duration(10) * time.Millisecond)
 
 	rel.Close()
 	inst.Close()
 
-	inst = initDB(wal.BrokerRole)
+	inst, _ = initDB(wal.BrokerRole)
 
 	t.Log(inst.Store.Catalog.PString(metadata.PPL1))
-	segmentedIdx := inst.GetShardCheckpointId(0)
-	assert.Equal(t, common.GetGlobalSeqNum(), segmentedIdx)
+	segmentedIdx := inst.GetShardCheckpointId(shardId)
+	assert.Equal(t, gen.Get(shardId), segmentedIdx)
 
-	meta = inst.Opts.Meta.Catalog.SimpleGetTable(tid)
+	meta, err = inst.Opts.Meta.Catalog.SimpleGetTableByName(database.Name, schema.Name)
+	assert.Nil(t, err)
 
-	rel, err = inst.Relation(meta.Schema.Name)
+	rel, err = inst.Relation(database.Name, meta.Schema.Name)
 	assert.Nil(t, err)
 	assert.Equal(t, irows*3, uint64(rel.Rows()))
 	t.Log(rel.Rows())
@@ -103,7 +107,7 @@ func TestReplay1(t *testing.T) {
 	t.Log(rel.Rows())
 	t.Log(inst.MutationBufMgr.String())
 
-	err = inst.Flush(meta.Schema.Name)
+	err = inst.Flush(database.Name, meta.Schema.Name)
 	assert.Nil(t, err)
 	insertFn()
 	t.Log(rel.Rows())
@@ -174,7 +178,9 @@ func TestReplay2(t *testing.T) {
 	catalog.Start()
 	schema := metadata.MockSchema(colCnt)
 	totalBlks := segBlkCount
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
 	opts := new(storage.Options)
 	opts.Meta.Catalog = catalog
 	opts.FillDefaults(dir)
@@ -236,7 +242,8 @@ func TestReplay3(t *testing.T) {
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	tblkfiles := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -277,7 +284,8 @@ func TestReplay4(t *testing.T) {
 	totalBlks := opts.Meta.Catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(opts.Meta.Catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(opts.Meta.Catalog, "db1", schema, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -330,7 +338,8 @@ func TestReplay5(t *testing.T) {
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -369,8 +378,8 @@ func TestReplay5(t *testing.T) {
 	err = replayHandle.Replay()
 	assert.Nil(t, err)
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFullLocked())
 
@@ -397,7 +406,8 @@ func TestReplay6(t *testing.T) {
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	tblkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
@@ -442,8 +452,8 @@ func TestReplay6(t *testing.T) {
 	err = replayHandle.Replay()
 	assert.Nil(t, err)
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[0].BlockSet[2].IsFullLocked())
 
@@ -469,7 +479,8 @@ func TestReplay7(t *testing.T) {
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -513,8 +524,8 @@ func TestReplay7(t *testing.T) {
 	err = replayHandle.Replay()
 	assert.Nil(t, err)
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 
@@ -540,7 +551,8 @@ func TestReplay8(t *testing.T) {
 	totalBlks := catalog.Cfg.SegmentMaxBlocks
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -585,8 +597,8 @@ func TestReplay8(t *testing.T) {
 	assert.NotNil(t, replayHandle)
 	replayHandle.Replay()
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
 	t.Log(tbl2.PString(metadata.PPL1))
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
@@ -613,7 +625,8 @@ func TestReplay9(t *testing.T) {
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -670,7 +683,7 @@ func TestReplay9(t *testing.T) {
 	assert.NotNil(t, replayHandle)
 	replayHandle.Replay()
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
@@ -732,7 +745,8 @@ func TestReplay10(t *testing.T) {
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
 	blkfiles := make([]string, 0)
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
@@ -778,7 +792,7 @@ func TestReplay10(t *testing.T) {
 	assert.NotNil(t, replayHandle)
 	replayHandle.Replay()
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFullLocked())
@@ -801,7 +815,8 @@ func TestReplay11(t *testing.T) {
 	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
 
 	schema := metadata.MockSchema(2)
-	tbl := metadata.MockTable(catalog, schema, totalBlks, nil)
+	gen := shard.NewMockIndexAllocator()
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(0))
 	toRemove := make([]string, 0)
 	seg := tbl.SegmentSet[0]
 	for i := 0; i < len(seg.BlockSet); i++ {
@@ -849,8 +864,8 @@ func TestReplay11(t *testing.T) {
 	assert.NotNil(t, replayHandle)
 	replayHandle.Replay()
 	replayHandle.Cleanup()
-	tbl2 := catalog.SimpleGetTable(tbl.Id)
-	assert.NotNil(t, tbl2)
+	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
+	assert.Nil(t, err)
 	t.Log(tbl2.PString(metadata.PPL1))
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFullLocked())
@@ -865,15 +880,16 @@ func TestReplay11(t *testing.T) {
 
 func TestReplay12(t *testing.T) {
 	initDBTest()
-	inst := initDB(wal.BrokerRole)
-	tInfo := adaptor.MockTableInfo(2)
-	name := "mockcon"
-	tid, err := inst.CreateTable(tInfo, dbi.TableOpCtx{TableName: name, OpIndex: common.NextGlobalSeqNum()})
+	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	schema := metadata.MockSchema(2)
+	schema.Name = "mockcon"
+	shardId := database.GetShardId()
+	tid, err := inst.CreateTable(database.Name, schema, gen.Next(shardId))
 	assert.Nil(t, err)
 
-	meta := inst.Opts.Meta.Catalog.SimpleGetTable(tid)
+	meta := database.SimpleGetTable(tid)
 	assert.NotNil(t, meta)
-	rel, err := inst.Relation(meta.Schema.Name)
+	rel, err := inst.Relation(database.Name, meta.Schema.Name)
 	assert.Nil(t, err)
 
 	irows := inst.Store.Catalog.Cfg.BlockMaxRows / 2
@@ -881,40 +897,45 @@ func TestReplay12(t *testing.T) {
 
 	insertFn := func() {
 		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   common.NextGlobalSeqNum(),
+			ShardId:   database.GetShardId(),
+			OpIndex:   gen.Alloc(shardId),
 			OpSize:    1,
 			Data:      ibat,
 			TableName: meta.Schema.Name,
+			DBName:    database.Name,
 		})
 		assert.Nil(t, err)
 	}
 
 	insertFn()
 	assert.Equal(t, irows, uint64(rel.Rows()))
-	err = inst.Flush(name)
+	err = inst.Flush(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	insertFn()
 	assert.Equal(t, irows*2, uint64(rel.Rows()))
-	err = inst.Flush(name)
+	err = inst.Flush(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	ibat2 := mock.MockBatch(meta.Schema.Types(), inst.Store.Catalog.Cfg.BlockMaxRows)
 	insertFn2 := func() {
-		index := common.NextGlobalSeqNum()
 		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   index,
+			OpIndex:   gen.Alloc(shardId),
 			OpOffset:  0,
 			OpSize:    2,
 			Data:      ibat,
 			TableName: meta.Schema.Name,
+			DBName:    database.Name,
+			ShardId:   shardId,
 		})
 		err = rel.Write(dbi.AppendCtx{
-			OpIndex:   index,
+			OpIndex:   gen.Get(shardId),
 			OpOffset:  1,
 			OpSize:    2,
 			Data:      ibat2,
 			TableName: meta.Schema.Name,
+			DBName:    database.Name,
+			ShardId:   shardId,
 		})
 		assert.Nil(t, err)
 	}
@@ -923,38 +944,39 @@ func TestReplay12(t *testing.T) {
 	assert.Equal(t, irows*5, uint64(rel.Rows()))
 	t.Log(rel.Rows())
 	testutils.WaitExpect(200, func() bool {
-		safeId := inst.GetShardCheckpointId(rel.Meta.GetCommit().LogIndex.ShardId)
-		return common.GetGlobalSeqNum()-1 == safeId
+		safeId := inst.GetShardCheckpointId(shardId)
+		return gen.Get(shardId)-1 == safeId
 	})
-	assert.Equal(t, common.GetGlobalSeqNum()-1, inst.GetShardCheckpointId(rel.Meta.GetCommit().LogIndex.ShardId))
+	assert.Equal(t, gen.Get(shardId)-1, inst.GetShardCheckpointId(shardId))
 	time.Sleep(time.Duration(50) * time.Millisecond)
-
-	shardId := meta.GetShardId()
-	stat1 := inst.Store.Catalog.GetShardStats(shardId)
 
 	rel.Close()
 	inst.Close()
 
-	inst = initDB(wal.BrokerRole)
-	stat2 := inst.Store.Catalog.GetShardStats(shardId)
-	assert.Equal(t, stat1.GetSize(), stat2.GetSize())
-	assert.Equal(t, stat1.GetCount(), stat2.GetCount())
+	inst, _ = initDB(wal.BrokerRole)
+	replayDatabase, err := inst.Store.Catalog.SimpleGetDatabaseByName(database.Name)
+	assert.Nil(t, err)
 
-	segmentedIdx := inst.GetShardCheckpointId(0)
-	assert.Equal(t, common.GetGlobalSeqNum()-1, segmentedIdx)
+	assert.Equal(t, database.GetSize(), replayDatabase.GetSize())
+	assert.Equal(t, database.GetCount(), replayDatabase.GetCount())
 
-	rel, err = inst.Relation(meta.Schema.Name)
+	segmentedIdx := inst.GetShardCheckpointId(shardId)
+	assert.Equal(t, gen.Get(shardId)-1, segmentedIdx)
+
+	rel, err = inst.Relation(database.Name, meta.Schema.Name)
 	t.Log(rel.Rows())
 	assert.Nil(t, err)
 	assert.Equal(t, int64(irows*4), rel.Rows())
 
 	insertFn3 := func() {
 		err = rel.Write(dbi.AppendCtx{
+			ShardId:   shardId,
 			OpIndex:   segmentedIdx + 1,
 			OpOffset:  0,
 			OpSize:    2,
 			Data:      ibat,
 			TableName: meta.Schema.Name,
+			DBName:    database.Name,
 		})
 		err = rel.Write(dbi.AppendCtx{
 			OpIndex:   segmentedIdx + 1,
@@ -962,6 +984,8 @@ func TestReplay12(t *testing.T) {
 			OpSize:    2,
 			Data:      ibat2,
 			TableName: meta.Schema.Name,
+			DBName:    database.Name,
+			ShardId:   shardId,
 		})
 		assert.Nil(t, err)
 	}
@@ -973,7 +997,7 @@ func TestReplay12(t *testing.T) {
 	t.Log(rel.Rows())
 	t.Log(inst.MutationBufMgr.String())
 
-	err = inst.Flush(meta.Schema.Name)
+	err = inst.Flush(meta.Database.Name, meta.Schema.Name)
 	assert.Nil(t, err)
 	insertFn()
 	t.Log(rel.Rows())

@@ -19,6 +19,10 @@ import (
 	"errors"
 	"fmt"
 	stdLog "log"
+	"sync"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
@@ -32,9 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"sync"
-	"testing"
-	"time"
 
 	"github.com/fagongzi/log"
 	"github.com/matrixorigin/matrixcube/pb/bhmetapb"

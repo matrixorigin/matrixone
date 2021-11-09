@@ -63,7 +63,7 @@ func (e *flushMemblockEvent) Execute() error {
 			vecs = append(vecs, ro)
 		}
 
-		bw := dataio.NewBlockWriter(vecs, meta, meta.Segment.Table.Catalog.Cfg.Dir)
+		bw := dataio.NewBlockWriter(vecs, meta, meta.Segment.Table.Database.Catalog.Cfg.Dir)
 		bw.SetPreExecutor(func() {
 			logutil.Infof(" %s | Memtable | Flushing", bw.GetFileName())
 		})

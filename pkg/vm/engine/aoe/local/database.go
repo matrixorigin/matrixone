@@ -16,16 +16,19 @@ package local
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/aoedb"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
 type localRoDatabase struct {
-	dbimpl *db.DB
+	database *metadata.Database
+	dbimpl   *aoedb.DB
 }
 
-func NewLocalRoDatabase(dbimpl *db.DB) *localRoDatabase {
+func NewLocalRoDatabase(database *metadata.Database, dbimpl *aoedb.DB) *localRoDatabase {
 	return &localRoDatabase{
-		dbimpl: dbimpl,
+		database: database,
+		dbimpl:   dbimpl,
 	}
 }
 
@@ -34,11 +37,11 @@ func (d *localRoDatabase) Type() int {
 }
 
 func (d *localRoDatabase) Relations() []string {
-	return d.dbimpl.TableNames()
+	return d.database.SimpleGetTableNames()
 }
 
 func (d *localRoDatabase) Relation(name string) (engine.Relation, error) {
-	impl, err := d.dbimpl.Relation(name)
+	impl, err := d.dbimpl.Relation(d.database.GetShardId(), name)
 	if err != nil {
 		return nil, err
 	}

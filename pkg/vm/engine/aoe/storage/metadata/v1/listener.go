@@ -1,5 +1,13 @@
 package metadata
 
+type DatabaseListener interface {
+	OnDatabaseCreated(created *Database)
+	OnDatabaseSoftDeleted(deleted *Database)
+	OnDatabaseHardDeleted(deleted *Database)
+	OnDatabaseSplitted(stale *Database, created []*Database)
+	OnDatabaseReplaced(stale *Database, created *Database)
+}
+
 type TableListener interface {
 	OnTableCreated(created *Table)
 	OnTableSoftDeleted(deleted *Table)
