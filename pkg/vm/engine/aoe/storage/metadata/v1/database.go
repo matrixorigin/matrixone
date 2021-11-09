@@ -506,6 +506,10 @@ func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 	var err error
 	entry := NewTableEntry(db, ctx.schema, ctx.tranId, ctx.exIndex)
 	db.Lock()
+	if db.IsSoftDeletedLocked() {
+		db.Unlock()
+		return nil, DatabaseNotFoundErr
+	}
 	if err = db.onNewTable(entry); err != nil {
 		db.Unlock()
 		return nil, err

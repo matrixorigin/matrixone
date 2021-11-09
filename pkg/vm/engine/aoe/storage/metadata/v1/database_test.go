@@ -3,7 +3,6 @@ package metadata
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	"github.com/stretchr/testify/assert"
 )
@@ -14,50 +13,41 @@ func TestDatabase1(t *testing.T) {
 	catalog := initTest(dir, blockRows, segmentBlocks, true)
 
 	dbName := "db1"
-	idAlloc := common.IdAlloctor{}
+	shardId := uint64(100)
+	gen := shard.NewMockIndexAllocator().Shard(shardId)
 
-	index := &LogIndex{
-		Id: shard.SimpleIndexId(idAlloc.Alloc()),
-	}
-	db, err := catalog.SimpleCreateDatabase(dbName, index)
+	db, err := catalog.SimpleCreateDatabase(dbName, gen.Next())
 	assert.Nil(t, err)
 	assert.Equal(t, dbName, db.Name)
-	_, err = catalog.SimpleCreateDatabase(dbName, index)
+	_, err = catalog.SimpleCreateDatabase(dbName, gen.Next())
 	assert.NotNil(t, err)
 
 	err = catalog.SimpleHardDeleteDatabase(db.Id)
 	assert.NotNil(t, err)
 
-	dropIdx := &LogIndex{
-		Id: shard.SimpleIndexId(idAlloc.Alloc()),
-	}
-	err = catalog.SimpleDropDatabaseByName(dbName, dropIdx)
+	err = catalog.SimpleDropDatabaseByName(dbName, gen.Next())
 	assert.Nil(t, err)
 
 	assert.True(t, db.IsSoftDeleted())
 
+	shardId = uint64(101)
+	gen = shard.NewMockIndexAllocator().Shard(shardId)
 	_, err = catalog.SimpleGetDatabaseByName(dbName)
 	assert.NotNil(t, err)
 
 	t.Log(db.PString(PPL1))
-	db2, err := catalog.SimpleCreateDatabase(dbName, index)
+	db2, err := catalog.SimpleCreateDatabase(dbName, gen.Next())
 	assert.Nil(t, err)
 
 	schema := MockSchema(2)
 	schema.Name = "t1"
-	idx1 := &LogIndex{
-		Id: shard.SimpleIndexId(idAlloc.Alloc()),
-	}
-	t1, err := db2.SimpleCreateTable(schema, idx1)
+	t1, err := db2.SimpleCreateTable(schema, gen.Next())
 	assert.Nil(t, err)
 	assert.Equal(t, schema.Name, t1.Schema.Name)
 	found := db2.SimpleGetTableByName(t1.Schema.Name)
 	assert.Equal(t, t1, found)
 
-	idx2 := &LogIndex{
-		Id: shard.SimpleIndexId(idAlloc.Alloc()),
-	}
-	err = db2.SimpleDropTableByName(t1.Schema.Name, idx2)
+	err = db2.SimpleDropTableByName(t1.Schema.Name, gen.Next())
 	assert.Nil(t, err)
 
 	found = db2.SimpleGetTableByName(t1.Schema.Name)
@@ -67,18 +57,14 @@ func TestDatabase1(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, t1.IsHardDeleted())
 
-	nextId := func() *LogIndex {
-		return &LogIndex{
-			Id: shard.SimpleIndexId(idAlloc.Alloc()),
-		}
-	}
-	idx1 = nextId()
-	_, err = db2.SimpleCreateTable(schema, idx1)
+	_, err = db2.SimpleCreateTable(schema, gen.Next())
 	assert.Nil(t, err)
 
-	db3, err := catalog.SimpleCreateDatabase("db3", nextId())
+	shardId = uint64(102)
+	gen = shard.NewMockIndexAllocator().Shard(shardId)
+	db3, err := catalog.SimpleCreateDatabase("db3", gen.Next())
 	assert.Nil(t, err)
-	err = db3.SimpleSoftDelete(nextId())
+	err = db3.SimpleSoftDelete(gen.Next())
 	assert.Nil(t, err)
 	err = db3.SimpleHardDelete()
 	assert.Nil(t, err)
