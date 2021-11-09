@@ -24,7 +24,7 @@ func New(ifNotExists bool, r engine.Relation, name string) *DropIndex {
 }
 
 func (n *DropIndex) String() string {
-	return "SHOW DATABASES"
+	return "DROP INDEX"
 }
 
 func (n *DropIndex) Name() string                     { return "" }

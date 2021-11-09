@@ -24,7 +24,7 @@ func New(ifNotExists bool, r engine.Relation, defs []engine.TableDef) *CreateInd
 }
 
 func (n *CreateIndex) String() string {
-	return "SHOW DATABASES"
+	return "CREATE INDEX"
 }
 
 func (n *CreateIndex) Name() string                     { return "" }
