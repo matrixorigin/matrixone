@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -380,17 +381,18 @@ func (catalog *Catalog) Checkpoint() (logstore.AsyncEntry, error) {
 	return ret.(logstore.AsyncEntry), nil
 }
 
-func (catalog *Catalog) PString(level PPLevel) string {
+func (catalog *Catalog) PString(level PPLevel, depth int) string {
 	catalog.RLock()
 	defer catalog.RUnlock()
+	ident := strings.Repeat(" ", depth)
 	s := fmt.Sprintf("Catalog | Cnt=%d {", len(catalog.Databases))
 	for _, db := range catalog.Databases {
-		s = fmt.Sprintf("%s\n%s", s, db.PString(level))
+		s = fmt.Sprintf("%s\n%s%s", s, ident, db.PString(level, depth+1))
 	}
 	if len(catalog.Databases) == 0 {
 		s = fmt.Sprintf("%s}", s)
 	} else {
-		s = fmt.Sprintf("%s\n}", s)
+		s = fmt.Sprintf("%s\n%s}", s, ident)
 	}
 	return s
 }

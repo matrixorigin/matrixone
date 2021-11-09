@@ -46,7 +46,7 @@ func TestDatabase1(t *testing.T) {
 	_, err = catalog.SimpleGetDatabaseByName(dbName)
 	assert.NotNil(t, err)
 
-	t.Log(db.PString(PPL1))
+	t.Log(db.PString(PPL1, 0))
 
 	err = indexWal.SyncLog(gen.Next())
 	assert.Nil(t, err)
@@ -149,7 +149,7 @@ func TestDatabase1(t *testing.T) {
 	assert.Equal(t, 3, dbCnt)
 	assert.Equal(t, 2, tblCnt)
 
-	t.Log(catalog.PString(PPL0))
+	t.Log(catalog.PString(PPL0, 0))
 	indexWal.Close()
 	catalog.Close()
 	t.Log("----------")
@@ -170,7 +170,7 @@ func TestDatabase1(t *testing.T) {
 	assert.Equal(t, indexWal.GetShardCheckpointId(103), indexWal2.GetShardCheckpointId(103))
 	t.Log(indexWal.String())
 	t.Log(indexWal2.String())
-	t.Log(catalog2.PString(PPL0))
+	t.Log(catalog2.PString(PPL0, 0))
 }
 
 func TestTxn(t *testing.T) {
@@ -190,7 +190,7 @@ func TestTxn(t *testing.T) {
 	schema.Name = "t1"
 	_, err = db1.CreateTableInTxn(txn, schema)
 	assert.Nil(t, err)
-	t.Log(db1.PString(PPL0))
+	t.Log(db1.PString(PPL0, 0))
 
 	_, err = catalog.SimpleGetDatabaseByName(db1.Name)
 	assert.NotNil(t, err)
@@ -200,7 +200,7 @@ func TestTxn(t *testing.T) {
 	err = txn.Commit()
 	assert.Nil(t, err)
 	assert.True(t, db1.HasCommitted())
-	t.Log(db1.PString(PPL0))
+	t.Log(db1.PString(PPL0, 0))
 
 	_, err = catalog.SimpleGetDatabaseByName(db1.Name)
 	assert.Nil(t, err)
@@ -242,10 +242,10 @@ func TestTxn(t *testing.T) {
 	assert.True(t, db1.IsDeleted())
 	assert.True(t, db1.HasCommitted())
 
-	t.Log(db1.PString(PPL0))
+	t.Log(db1.PString(PPL0, 0))
 	catalog.Close()
 
 	catalog2, _ := initTest(dir, blockRows, segmentBlocks, false, false)
 	defer catalog2.Close()
-	t.Log(catalog2.PString(PPL1))
+	t.Log(catalog2.PString(PPL1, 0))
 }

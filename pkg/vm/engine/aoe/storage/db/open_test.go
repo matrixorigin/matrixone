@@ -109,7 +109,7 @@ func TestDBReplay(t *testing.T) {
 	t.Logf("Row count: %d", tbl.GetRowCount())
 	assert.Equal(t, rows*uint64(insertCnt), tbl.GetRowCount())
 
-	t.Log(tbl.GetMeta().PString(metadata.PPL2))
+	t.Log(tbl.GetMeta().PString(metadata.PPL2, 0))
 	inst.Close()
 
 	dataDir := common.MakeDataDir(inst.Dir)

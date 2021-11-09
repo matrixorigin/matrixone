@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -171,10 +172,11 @@ func (e *Segment) Unmarshal(buf []byte) error {
 }
 
 // Not safe
-func (e *Segment) PString(level PPLevel) string {
+func (e *Segment) PString(level PPLevel, depth int) string {
 	if e == nil {
 		return "null segment"
 	}
+	ident := strings.Repeat(" ", depth)
 	e.RLock()
 	defer e.RUnlock()
 	s := fmt.Sprintf("<Segment %s", e.BaseEntry.PString(level))
@@ -182,13 +184,13 @@ func (e *Segment) PString(level PPLevel) string {
 	if level > PPL0 {
 		for _, blk := range e.BlockSet {
 			cnt++
-			s = fmt.Sprintf("%s\n%s", s, blk.PString(level))
+			s = fmt.Sprintf("%s\n%s%s", s, ident, blk.PString(level))
 		}
 	}
 	if cnt == 0 {
 		s = fmt.Sprintf("%s[Size=%d]>", s, e.GetCoarseSizeLocked())
 	} else {
-		s = fmt.Sprintf("%s\n[Size=%d]\n>", s, e.GetCoarseSizeLocked())
+		s = fmt.Sprintf("%s\n%s[Size=%d]\n>", s, ident, e.GetCoarseSizeLocked())
 	}
 	return s
 }

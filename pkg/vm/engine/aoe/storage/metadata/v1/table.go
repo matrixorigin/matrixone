@@ -16,6 +16,7 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -587,17 +588,17 @@ func (e *Table) GetSegment(id, tranId uint64) *Segment {
 }
 
 // Not safe
-func (e *Table) PString(level PPLevel) string {
+func (e *Table) PString(level PPLevel, depth int) string {
 	e.RLock()
 	defer e.RUnlock()
+	ident := strings.Repeat(" ", depth)
 	s := fmt.Sprintf("%s | %s | Cnt=%d ", e.Repr(true), e.BaseEntry.PString(level), len(e.SegmentSet))
-	// s := fmt.Sprintf("<Table[%s]>(%s)(Cnt=%d)", e.Schema.Name, e.BaseEntry.PString(level), len(e.SegmentSet))
 	if level > PPL0 && len(e.SegmentSet) > 0 {
 		s = fmt.Sprintf("%s{", s)
 		for _, seg := range e.SegmentSet {
-			s = fmt.Sprintf("%s\n%s", s, seg.PString(level))
+			s = fmt.Sprintf("%s\n%s%s", s, ident, seg.PString(level, depth+1))
 		}
-		s = fmt.Sprintf("%s\n}", s)
+		s = fmt.Sprintf("%s\n%s}", s, ident)
 	} else {
 		s = fmt.Sprintf("%s {...}", s)
 	}
