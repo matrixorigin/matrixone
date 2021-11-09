@@ -121,3 +121,12 @@ func (r *relation) clean(seg string, attrs []string) {
 func key(num int, id string) string {
 	return fmt.Sprintf("%v/%v", id, num)
 }
+
+
+func (r *relation) CreateIndex(_ uint64, _ []engine.TableDef) error{
+	return nil
+}
+
+func (r *relation) DropIndex(epoch uint64, name string) error{
+	return nil
+}

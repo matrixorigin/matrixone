@@ -41,4 +41,6 @@ var (
 	ErrTabletCreateFailed = errors.New("create tablet failed")
 	ErrColumnNotExist = errors.New("column not exist")
 	ErrPrimaryKeyNotExist = errors.New("primary key not exist")
+	ErrIndexExist = errors.New("index already exist")
+	ErrIndexNotExist = errors.New("index not exist")
 )

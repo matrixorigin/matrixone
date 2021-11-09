@@ -60,7 +60,7 @@ func NewTableDefs() []engine.TableDef {
 
 	defs = append(defs, &engine.IndexTableDef{
 		Typ:   0,
-		Names: []string{"a", "b"},
+		ColNames: []string{"a", "b"},
 	})
 	defs = append(defs, &engine.AttributeDef{
 		Attr: metadata.Attribute{

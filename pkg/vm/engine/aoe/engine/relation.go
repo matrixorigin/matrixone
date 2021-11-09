@@ -84,7 +84,13 @@ func (r *relation) Write(_ uint64, bat *batch.Batch) error {
 	}
 	return r.catalog.Driver.Append(targetTbl.Name, targetTbl.ShardId, buf.Bytes())
 }
-
+func (r *relation) CreateIndex(epoch uint64, defs []engine.TableDef) error{
+	idxInfo:= helper.IndexDefs(r.pid,r.tbl.Id,nil,defs)
+	return r.catalog.CreateIndex(epoch,idxInfo[0])
+}
+func (r *relation) DropIndex(epoch uint64, name string) error{
+	return r.catalog.DropIndex(epoch,r.tbl.SchemaId,r.tbl.Id,name)
+}
 func (r *relation) AddAttribute(_ uint64, _ engine.TableDef) error {
 	return nil
 }

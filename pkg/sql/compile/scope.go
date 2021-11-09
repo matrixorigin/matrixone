@@ -18,6 +18,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -26,9 +30,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/rpcserver/message"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/transfer"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/createDatabase"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/createIndex"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/createTable"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropDatabase"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropTable"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/dropIndex"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/showDatabases"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/showTables"
@@ -36,9 +42,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
-	"net"
-	"sync"
-	"time"
 
 	"github.com/fagongzi/goetty"
 )
@@ -287,4 +290,16 @@ func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch
 		bat.Vecs[0] = vec
 	}
 	return fill(u, bat)
+}
+
+func (s *Scope) CreateIndex(ts uint64) error {
+	o, _ := s.Operator.(*createIndex.CreateIndex)
+	defer o.R.Close()
+	return o.R.CreateIndex(ts,o.Defs)
+}
+
+func (s *Scope) DropIndex(ts uint64) error {
+	o, _ := s.Operator.(*dropIndex.DropIndex)
+	defer o.R.Close()
+	return o.R.DropIndex(ts,o.IndexName)
 }

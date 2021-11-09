@@ -38,6 +38,8 @@ const (
 	CreateDatabase
 	ShowTables
 	ShowDatabases
+	CreateIndex
+	DropIndex
 )
 
 // Source contains information of a relation which will be used in execution,

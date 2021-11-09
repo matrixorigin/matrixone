@@ -216,7 +216,10 @@ func (c *Catalog) SetPrimaryKey(epoch, dbId uint64, tableName, columnName string
 }
 func (c *Catalog) updateTableInfo(dbId uint64, tbl *aoe.TableInfo) (err error) {
 	meta, err := helper.EncodeTable(*tbl)
-	c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
+	if err != nil {
+		return err
+	}
+	err = c.Driver.Set(c.tableKey(dbId, tbl.Id), meta)
 	return err
 }
 
@@ -331,6 +334,54 @@ func (c *Catalog) ListTablesByName(dbName string) ([]aoe.TableInfo, error) {
 		id, _ := codec.Bytes2Uint64(value)
 		return c.ListTables(id)
 	}
+}
+
+func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
+	_, err := c.checkDBExists(idxInfo.SchemaId)
+	if err != nil {
+		return err
+	}
+	tbl, err := c.checkTableExists(idxInfo.SchemaId, idxInfo.TableId)
+	if err != nil {
+		return err
+	}
+	for _, idx := range idxInfo.ColumnNames {
+		for _, col := range tbl.Columns {
+			if idx == col.Name {
+				idxInfo.Columns = append(idxInfo.Columns, col.Id)
+			}
+		}
+	}
+	for _, indice := range tbl.Indices {
+		if indice.Name == idxInfo.Name {
+			return ErrIndexExist
+		}
+	}
+	tbl.Epoch = epoch
+	tbl.Indices = append(tbl.Indices, idxInfo)
+	// logutil.Infof("misuxi CreateIndex: indexInfo is %v", idxInfo)
+	err = c.updateTableInfo(idxInfo.SchemaId, tbl)
+	return err
+}
+func (c *Catalog) DropIndex(epoch, tid, dbid uint64, idxName string) error {
+	_, err := c.checkDBExists(dbid)
+	if err != nil {
+		return err
+	}
+	tbl, err := c.checkTableExists(dbid, tid)
+	if err != nil {
+		return err
+	}
+	for i, indice := range tbl.Indices {
+		if indice.Name == idxName {
+			tbl.Epoch = epoch
+			tbl.Indices = append(tbl.Indices[:i], tbl.Indices[i+1:]...)
+			logutil.Infof("misuxi DropIndex: indexName is %v, indices is %v", idxName, tbl.Indices)
+			err = c.updateTableInfo(dbid, tbl)
+			return err
+		}
+	}
+	return ErrIndexNotExist
 }
 
 // ListTables returns all tables meta in database.

@@ -85,7 +85,8 @@ type DistributionBy struct {
 
 type IndexTableDef struct {
 	Typ   int
-	Names []string
+	ColNames []string
+	Name string
 }
 
 type AttributeDef struct {
@@ -117,6 +118,8 @@ type Relation interface {
 
 	AddAttribute(uint64, TableDef) error
 	DelAttribute(uint64, TableDef) error
+	CreateIndex(epoch uint64, defs []TableDef) error
+	DropIndex(epoch uint64, name string) error
 }
 
 type Filter interface {
