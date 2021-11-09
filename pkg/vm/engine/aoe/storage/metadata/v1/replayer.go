@@ -199,13 +199,6 @@ func (cache *replayCache) Apply() error {
 		}
 		cache.replayer.catalog.Store.SetCheckpointId(cache.checkpoint.Range.Right)
 	}
-	// indexWal := cache.replayer.catalog.IndexWal
-	// if indexWal != nil {
-	// 	for shardId, safeId := range cache.safeIds {
-	// 		logutil.Infof("[AOE]: Replay Shard-%d SafeId-%d", shardId, safeId)
-	// 		indexWal.InitShard(shardId, safeId)
-	// 	}
-	// }
 	cache.replayer.catalog.Store.SetSyncedId(cache.replayer.catalog.Sequence.nextCommitId)
 	return nil
 }
@@ -234,7 +227,7 @@ func (replayer *catalogReplayer) restoreWal() {
 		return
 	}
 	for _, database := range replayer.catalog.Databases {
-		if database.IsDeletedLocked() {
+		if database.IsHardDeletedLocked() {
 			continue
 		}
 		safeId, ok := replayer.cache.safeIds[database.GetShardId()]

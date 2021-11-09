@@ -156,7 +156,7 @@ func (db *Database) CanHardDeleteLocked() bool {
 	if db.Catalog.IndexWal == nil {
 		return true
 	}
-	return db.GetCheckpointId() == db.GetCommit().GetIndex()
+	return db.GetCheckpointId() == db.CommitInfo.GetIndex()
 }
 
 func (db *Database) GetShardId() uint64 {

@@ -30,6 +30,10 @@ func (alloc *MockShardIndexGenerator) Next() *Index {
 	return alloc.Host.Next(alloc.ShardId)
 }
 
+func (alloc *MockShardIndexGenerator) Curr() *Index {
+	return alloc.Host.Curr(alloc.ShardId)
+}
+
 type MockIndexAllocator struct {
 	sync.RWMutex
 	Shards map[uint64]*common.IdAlloctor
@@ -60,6 +64,14 @@ func (alloc *MockIndexAllocator) Alloc(shardId uint64) uint64 {
 	}
 	alloc.Unlock()
 	return shardAlloc.Alloc()
+}
+
+func (alloc *MockIndexAllocator) Curr(shardId uint64) *Index {
+	id := alloc.Get(shardId)
+	return &Index{
+		ShardId: shardId,
+		Id:      SimpleIndexId(id),
+	}
 }
 
 func (alloc *MockIndexAllocator) Next(shardId uint64) *Index {
