@@ -686,6 +686,7 @@ func (db *Database) PString(level PPLevel) string {
 func (db *Database) Compact() {
 	tables := make([]*Table, 0, 2)
 	nodes := make([]*nodeList, 0, 2)
+	safeId := db.GetShardId()
 	db.RLock()
 	// If database is hard delete, it will be handled during catalog compact cycle
 	if db.IsHardDeletedLocked() {
@@ -694,7 +695,7 @@ func (db *Database) Compact() {
 	}
 	for _, table := range db.TableSet {
 		table.RLock()
-		if table.IsHardDeletedLocked() && table.HasCommittedLocked() {
+		if table.IsHardDeletedLocked() && table.HasCommittedLocked() && (!db.WalEnabled() || table.CommitInfo.GetIndex() <= safeId) {
 			tables = append(tables, table)
 			nodes = append(nodes, db.nameNodes[table.Schema.Name])
 		}
