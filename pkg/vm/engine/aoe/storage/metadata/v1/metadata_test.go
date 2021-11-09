@@ -27,7 +27,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/internal/invariants"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/worker"
 	"github.com/panjf2000/ants/v2"
@@ -40,7 +42,7 @@ var (
 	mockFactory           = new(mockNameFactory)
 )
 
-func initTest(dir string, blockRows, segmentBlocks uint64, cleanup bool) *Catalog {
+func initTest(dir string, blockRows, segmentBlocks uint64, hasWal bool, cleanup bool) (*Catalog, Wal) {
 	if cleanup {
 		os.RemoveAll(dir)
 	}
@@ -48,9 +50,18 @@ func initTest(dir string, blockRows, segmentBlocks uint64, cleanup bool) *Catalo
 	cfg.Dir = dir
 	cfg.BlockMaxRows, cfg.SegmentMaxBlocks = blockRows, segmentBlocks
 	cfg.RotationFileMaxSize = 100 * int(common.M)
-	catalog, _ := OpenCatalog(new(sync.RWMutex), cfg)
+
+	var catalog *Catalog
+	var indexWal Wal
+	if hasWal {
+		driver, _ := logstore.NewBatchStore(dir, "driver", nil)
+		indexWal = shard.NewManagerWithDriver(driver, false, wal.BrokerRole)
+		catalog, _ = OpenCatalogWithDriver(new(sync.RWMutex), cfg, driver, indexWal)
+	} else {
+		catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
+	}
 	catalog.Start()
-	return catalog
+	return catalog, indexWal
 }
 
 type mockNameFactory struct{}
@@ -921,7 +932,7 @@ func TestCatalog2(t *testing.T) {
 func TestDatabases1(t *testing.T) {
 	dir := "/tmp/metadata/testdbs1"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
-	catalog := initTest(dir, blockRows, segmentBlocks, true)
+	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
 	defer catalog.Close()
 
 	mockShards := 4
@@ -1024,7 +1035,7 @@ type testCfg struct {
 func TestDatabases2(t *testing.T) {
 	dir := "/tmp/metadata/testdbs2"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
-	catalog := initTest(dir, blockRows, segmentBlocks, true)
+	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
 	idAlloc := shard.NewMockIndexAllocator()
 	cfg1 := testCfg{
 		shardId: uint64(77),
@@ -1139,7 +1150,7 @@ func TestDatabases2(t *testing.T) {
 	t.Log(db1.GetCount())
 	catalog.Close()
 
-	catalog2 := initTest(dir, blockRows, segmentBlocks, false)
+	catalog2, _ := initTest(dir, blockRows, segmentBlocks, false, false)
 	db1, err = catalog2.SimpleGetDatabaseByName("db1")
 	assert.Nil(t, err)
 	t.Log(db1.GetCount())
@@ -1150,7 +1161,7 @@ func TestDatabases2(t *testing.T) {
 
 func TestSplit(t *testing.T) {
 	dir := "/tmp/metadata/testsplit"
-	catalog := initTest(dir, uint64(100), uint64(2), true)
+	catalog, _ := initTest(dir, uint64(100), uint64(2), false, true)
 
 	idAlloc := shard.NewMockIndexAllocator()
 	wg := new(sync.WaitGroup)
@@ -1212,7 +1223,7 @@ func TestSplit(t *testing.T) {
 	catalog.Close()
 
 	t.Log("--------------------------------------")
-	catalog2 := initTest(dir, uint64(100), uint64(2), false)
+	catalog2, _ := initTest(dir, uint64(100), uint64(2), false, false)
 	tables = 0
 	err = catalog2.RecurLoopLocked(processor)
 	assert.Nil(t, err)

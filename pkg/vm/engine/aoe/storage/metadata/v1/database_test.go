@@ -10,7 +10,7 @@ import (
 func TestDatabase1(t *testing.T) {
 	dir := "/tmp/metadata/testdatabase"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
-	catalog := initTest(dir, blockRows, segmentBlocks, true)
+	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
 
 	dbName := "db1"
 	shardId := uint64(100)
@@ -101,7 +101,7 @@ func TestDatabase1(t *testing.T) {
 	catalog.Close()
 	t.Log("----------")
 
-	catalog2 := initTest(dir, blockRows, segmentBlocks, false)
+	catalog2, _ := initTest(dir, blockRows, segmentBlocks, false, false)
 	defer catalog2.Close()
 	dbDeleted = 0
 	tableDeleted = 0
@@ -117,7 +117,7 @@ func TestDatabase1(t *testing.T) {
 func TestTxn(t *testing.T) {
 	dir := "/tmp/metadata/testtxn"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
-	catalog := initTest(dir, blockRows, segmentBlocks, true)
+	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
 	gen := shard.NewMockIndexAllocator()
 
 	shardId := uint64(100)
@@ -186,7 +186,7 @@ func TestTxn(t *testing.T) {
 	t.Log(db1.PString(PPL0))
 	catalog.Close()
 
-	catalog2 := initTest(dir, blockRows, segmentBlocks, false)
+	catalog2, _ := initTest(dir, blockRows, segmentBlocks, false, false)
 	defer catalog2.Close()
 	t.Log(catalog2.PString(PPL1))
 }
