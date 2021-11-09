@@ -199,12 +199,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	}
 
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
-	if index.ShardId != tbl.Database.GetShardId() {
-		panic(fmt.Sprintf("logic error: %d, %d", index.ShardId, tbl.Database.GetShardId()))
-	}
 	defer collection.Unref()
-	if err := d.Wal.SyncLog(index); err != nil {
-		return err
+	if err = d.Wal.SyncLog(index); err != nil {
+		return
 	}
 	return collection.Append(ctx.Data, index)
 }
