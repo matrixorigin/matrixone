@@ -160,6 +160,8 @@ func (ss *dbSnapshoter) PrepareLoad() error {
 	if err = ss.view.Unmarshal(mnode.Buf[:size]); err != nil {
 		return err
 	}
+	ss.view.Database.Catalog = ss.catalog
+	ss.view.Database.rebuild(true, false)
 	return ss.ReAllocId(&ss.catalog.Sequence, ss.view.Database)
 }
 

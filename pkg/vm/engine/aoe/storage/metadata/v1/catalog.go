@@ -209,8 +209,6 @@ func (catalog *Catalog) prepareReplaceDatabase(ctx *replaceDatabaseCtx) (LogEntr
 	}
 	catalog.RUnlock()
 
-	ctx.view.Database.Catalog = catalog
-	ctx.view.Database.rebuild(true, false)
 	nCtx := new(addDatabaseCtx)
 	nCtx.tranId = ctx.tranId
 	nCtx.inTran = true
