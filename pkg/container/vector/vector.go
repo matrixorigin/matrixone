@@ -142,7 +142,7 @@ func Reset(v *Vector) {
 func Free(v *Vector, m *mheap.Mheap) {
 	v.Ref--
 	if !v.Or && v.Data != nil {
-		if v.Ref == 0 {
+		if v.Ref == 0 && v.Link == 0 {
 			mheap.Free(m, v.Data)
 			v.Data = nil
 		}

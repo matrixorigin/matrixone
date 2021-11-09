@@ -45,7 +45,6 @@ type NodeInfo struct {
 type Statistics interface {
 	Rows() int64
 	Size(string) int64
-	CardinalNumber(string) int64
 }
 
 type ListPartition struct {

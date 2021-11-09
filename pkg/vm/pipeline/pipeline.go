@@ -16,17 +16,15 @@ package pipeline
 
 import (
 	"bytes"
-	"fmt"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/mempool"
 	"matrixone/pkg/vm/process"
 )
 
 func New(cs []uint64, attrs []string, ins vm.Instructions) *Pipeline {
 	return &Pipeline{
-		refCount:     cs,
+		refCnts:      cs,
 		instructions: ins,
 		attrs:        attrs,
 	}
@@ -45,35 +43,26 @@ func (p *Pipeline) String() string {
 	return buf.String()
 }
 
-func (p *Pipeline) Run(segs []engine.Segment, proc *process.Process) (bool, error) {
-	var end bool //退出标识
+func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
+	var end bool // exist flag
 	var err error
+	var bat *batch.Batch
 
-	proc.Mp = mempool.New()
 	defer func() {
 		proc.Reg.InputBatch = nil
 		vm.Run(p.instructions, proc)
-		proc.Mp = nil
 	}()
 	if err = vm.Prepare(p.instructions, proc); err != nil {
 		return false, err
 	}
-	q := p.prefetch(segs, proc)
-	p.compressedBytes, p.decompressedBytes = make([]*bytes.Buffer, len(p.refCount)), make([]*bytes.Buffer, len(p.refCount))
+	p.buffers = make([]*bytes.Buffer, len(p.refCnts))
 	{
-		for i := range p.refCount {
-			p.compressedBytes[i] = bytes.NewBuffer(make([]byte, 0, 8))
-		}
-		for i := range p.refCount {
-			p.decompressedBytes[i] = bytes.NewBuffer(make([]byte, 0, 8))
+		for i := range p.refCnts {
+			p.buffers[i] = bytes.NewBuffer(make([]byte, 0, 8))
 		}
 	}
-	for i, j := 0, len(q.blocks); i < j; i++ {
-		if err := q.prefetch(p.attrs); err != nil {
-			return false, err
-		}
-		bat, err := q.blocks[i].blk.Read(p.refCount, p.attrs, p.compressedBytes, p.decompressedBytes)
-		if err != nil {
+	for {
+		if bat, err = r.Read(p.refCnts, p.attrs, p.buffers); err != nil {
 			return false, err
 		}
 		proc.Reg.InputBatch = bat
@@ -91,79 +80,27 @@ func (p *Pipeline) RunMerge(proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
-	proc.Mp = mempool.New()
-	defer func() {
-		proc.Reg.InputBatch = nil
-		vm.Run(p.instructions, proc)
-		proc.Mp = nil
-	}()
 	if err := vm.Prepare(p.instructions, proc); err != nil {
-		vm.Clean(p.instructions, proc)
 		return false, err
 	}
 	for {
 		proc.Reg.InputBatch = nil
 		if end, err = vm.Run(p.instructions, proc); err != nil || end {
-			{
-				fmt.Printf("+++%p begin clean\n", p)
-			}
 			p.clean(proc)
 			return end, err
 		}
 	}
 }
 
-// prefetch generates a prefetch queue
-func (p *Pipeline) prefetch(segs []engine.Segment, proc *process.Process) *queue {
-	q := new(queue)
-	q.blocks = make([]block, 0, 8) // prefetch block list
-	{
-		for _, seg := range segs {
-			ids := seg.Blocks()
-			for _, id := range ids {
-				q.blocks = append(q.blocks, block{blk: seg.Block(id, proc)})
-			}
-		}
-	}
-	return q
-}
-
 func (p *Pipeline) clean(proc *process.Process) {
 	for _, reg := range proc.Reg.MergeReceivers {
 		if reg.Ch != nil {
-			v := <-reg.Ch
-			switch {
-			case v == nil:
-				reg.Ch = nil
-				reg.Wg.Done()
-			default:
-				bat := v.(*batch.Batch)
-				if bat == nil || bat.Attrs == nil {
-					reg.Ch = nil
-					reg.Wg.Done()
-				} else {
-					bat.Clean(proc)
-					reg.Ch = nil
-					reg.Wg.Done()
-				}
+			if bat := <-reg.Ch; bat != nil {
+				batch.Clean(bat, proc.Mp)
 			}
+			reg.Ch = nil
+			reg.Wg.Done()
 		}
 	}
 
-}
-
-// prefetch
-func (q *queue) prefetch(attrs []string) error {
-	if q.prefetchIndex == len(q.blocks) {
-		return nil
-	}
-	start := q.prefetchIndex
-	for i, j := q.prefetchIndex, len(q.blocks); i < j; i++ {
-		if i > PrefetchNum+start {
-			break
-		}
-		q.blocks[i].blk.Prefetch(attrs)
-		q.prefetchIndex = i + 1
-	}
-	return nil
 }

@@ -166,7 +166,11 @@ func AndExtends(e Extend, es []Extend) []Extend {
 		case overload.GE:
 			return append(es, v)
 		case overload.And:
-			return append(AndExtends(v.Left, es), AndExtends(v.Right, es)...)
+			left, right := AndExtends(v.Left, es), AndExtends(v.Right, es)
+			if left == nil || right == nil {
+				return nil
+			}
+			return append(left, right...)
 		}
 	}
 	return nil

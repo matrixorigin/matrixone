@@ -24,7 +24,7 @@ import (
 // WaitRegister channel
 type WaitRegister struct {
 	Wg *sync.WaitGroup
-	Ch chan interface{}
+	Ch chan *batch.Batch
 }
 
 // Register used in execution pipeline and shared with all operators of the same pipeline.

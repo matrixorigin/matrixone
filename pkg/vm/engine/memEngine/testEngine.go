@@ -16,6 +16,7 @@ func NewTestEngine() engine.Engine {
 	db, _ := e.Database("test")
 	CreateR(db)
 	CreateS(db)
+	CreateT(db)
 	CreateT1(db)
 	{ // star schema benchmark
 		CreatePart(db)
@@ -244,6 +245,33 @@ func CreateS(db engine.Database) {
 			bat.Vecs[2] = vec
 		}
 		if err := r.Write(0, bat); err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
+func CreateT(db engine.Database) {
+	{
+		var attrs []engine.TableDef
+
+		{
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "orderId",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "uid",
+				Type: types.Type{types.T(types.T_varchar), 24, 0, 0},
+			}})
+			attrs = append(attrs, &engine.AttributeDef{engine.Attribute{
+				Alg:  compress.Lz4,
+				Name: "price",
+				Type: types.Type{types.T(types.T_float64), 8, 8, 0},
+			}})
+		}
+		if err := db.Create(0, "T", attrs); err != nil {
 			log.Fatal(err)
 		}
 	}
