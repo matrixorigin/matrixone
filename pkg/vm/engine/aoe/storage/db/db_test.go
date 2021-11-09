@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -775,22 +776,26 @@ func TestE2E(t *testing.T) {
 }
 
 func TestCreateSnapshot(t *testing.T) {
-	return
 	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(0))
+	inst, gen := initDB(wal.BrokerRole)
+	//inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(0))
 	schema1 := metadata.MockSchema(20)
 	schema1.Name = "t1"
 	schema2 := metadata.MockSchema(10)
 	schema2.Name = "t2"
-	tid1, err := inst.CreateTable(database.Name, schema1, gen.Next(database.GetShardId()))
+	db1, err := inst.CreateDatabase("0", uint64(0))
 	assert.Nil(t, err)
-	tid2, err := inst.CreateTable(database.Name, schema2, gen.Next(database.GetShardId()))
+	db2, err := inst.CreateDatabase("1", uint64(1))
 	assert.Nil(t, err)
-	tbl1 := database.SimpleGetTable(tid1)
+	tid1, err := inst.CreateTable(db1.Name, schema1, gen.Next(db1.GetShardId()))
+	assert.Nil(t, err)
+	tid2, err := inst.CreateTable(db2.Name, schema2, gen.Next(db2.GetShardId()))
+	assert.Nil(t, err)
+	tbl1 := db1.SimpleGetTable(tid1)
 	if tbl1 == nil {
 		t.Error("table not found")
 	}
-	tbl2 := database.SimpleGetTable(tid2)
+	tbl2 := db2.SimpleGetTable(tid2)
 	if tbl2 == nil {
 		t.Error("table not found")
 	}
@@ -804,21 +809,20 @@ func TestCreateSnapshot(t *testing.T) {
 	assert.Nil(t, os.RemoveAll("/tmp/test_ss/s0"))
 	assert.Nil(t, os.RemoveAll("/tmp/test_ss/s1"))
 
-	shardId := database.GetShardId()
 	for i := uint64(0); i < insertCnt; i++ {
-		if err := inst.Append(dbi.AppendCtx{ShardId: shardId, TableName: tableName1, DBName: database.Name, Data: bat1, OpIndex: gen.Alloc(shardId), OpSize: 1}); err != nil {
+		if err := inst.Append(dbi.AppendCtx{ShardId: db1.GetShardId(), TableName: tableName1, DBName: db1.Name, Data: bat1, OpIndex: gen.Alloc(db1.GetShardId()), OpSize: 1}); err != nil {
 			t.Error(err)
 		}
-		pid, err := inst.CreateSnapshot(database.Name, fmt.Sprintf("/tmp/test_ss/s0/ss-%d", i))
+		pid, err := inst.CreateSnapshot(db1.Name, fmt.Sprintf("/tmp/test_ss/s0/ss-%d", i))
 		if err != nil {
 			t.Error(err)
 		}
 		t.Logf("Shard[%d] PersistentLogIndex: %d", 0, pid)
 
-		if err := inst.Append(dbi.AppendCtx{DBName: database.Name, ShardId: shardId, TableName: tableName2, Data: bat2, OpIndex: gen.Alloc(shardId), OpSize: 1}); err != nil {
+		if err := inst.Append(dbi.AppendCtx{DBName: db2.Name, ShardId: db2.GetShardId(), TableName: tableName2, Data: bat2, OpIndex: gen.Alloc(db2.GetShardId()), OpSize: 1}); err != nil {
 			t.Error(err)
 		}
-		pid, err = inst.CreateSnapshot(database.Name, fmt.Sprintf("/tmp/test_ss/s1/ss-%d", i))
+		pid, err = inst.CreateSnapshot(db2.Name, fmt.Sprintf("/tmp/test_ss/s1/ss-%d", i))
 		if err != nil {
 			t.Error(err)
 		}
@@ -828,10 +832,10 @@ func TestCreateSnapshot(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	st := time.Now()
-	pid, err := inst.CreateSnapshot(database.Name, fmt.Sprintf("/tmp/test_ss/s0/ss-final"))
+	pid, err := inst.CreateSnapshot(db1.Name, fmt.Sprintf("/tmp/test_ss/s0/ss-final"))
 	assert.Nil(t, err)
 	t.Log(time.Since(st).Milliseconds(), " ms")
-	assert.Equal(t, pid, inst.GetShardCheckpointId(shardId))
+	assert.Equal(t, pid, inst.GetShardCheckpointId(db1.GetShardId()))
 
 	files, err := ioutil.ReadDir("/tmp/test_ss/s0/ss-final")
 	assert.Nil(t, err)
@@ -855,12 +859,12 @@ func TestCreateSnapshot(t *testing.T) {
 		// }
 	}
 
-	assert.Nil(t, inst.ApplySnapshot(database.Name, "/tmp/test_ss/s0/ss-18"))
-	t.Log(inst.GetShardCheckpointId(shardId))
-	database, err = inst.Store.Catalog.SimpleGetDatabaseByName(database.Name)
+	assert.Nil(t, inst.ApplySnapshot(db1.Name, "/tmp/test_ss/s0/ss-15"))
+	t.Log(inst.GetShardCheckpointId(db1.GetShardId())) // TODO: should be reset automatically
+	db1, err = inst.Store.Catalog.SimpleGetDatabaseByName(db1.Name)
 	assert.Nil(t, err)
 
-	data, err := inst.getTableData(database.TableSet[uint64(4)])
+	data, err := inst.getTableData(db1.TableSet[uint64(4)])
 	assert.Nil(t, err)
 	t.Log(data.GetSegmentCount())
 
@@ -878,7 +882,7 @@ func TestCreateSnapshot(t *testing.T) {
 	t.Log(blk60.Size("mock_9"))
 	t.Log(blk60.GetRowCount())
 
-	t.Log(database.TableSet[uint64(4)].PString(2))
+	t.Log(db1.TableSet[uint64(4)].PString(2))
 
 	assert.Nil(t, inst.Close())
 
@@ -919,9 +923,8 @@ func TestCreateSnapshot(t *testing.T) {
 //                1_1.seg  1_2.seg
 // May triggers this case and aoe would retry automatically
 func TestCreateSnapshotCase1(t *testing.T) {
-	return
 	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(0))
+	inst, gen, database := initDB2(wal.BrokerRole, "0", uint64(0))
 	schema1 := metadata.MockSchema(20)
 	schema1.Name = "tbl_1"
 	shardId := database.GetShardId()
@@ -965,10 +968,106 @@ func TestCreateSnapshotCase1(t *testing.T) {
 
 	initDBTest()
 	inst, _ = initDB(wal.BrokerRole)
+
+	// TODO: now onCreateTable is not implemented yet, remove later
+	inst.CreateDatabase("0", uint64(0))
+
 	assert.Nil(t, inst.ApplySnapshot(database.Name, "/tmp/test_ss/case_1/ss-1"))
 
 	t.Log(inst.Store.Catalog.PString(2))
 	t.Log(inst.Store.DataTables.String())
+	//for sid, db := range inst.Store.Catalog.Databases {
+	//	t.Logf("Shard[%d] => DB[%s]", sid, db.Name)
+	//}
+	t.Log(inst.Store.Catalog.SimpleGetDatabaseNames())
+	db, err := inst.Store.Catalog.SimpleGetDatabaseByName("0")
+	assert.Nil(t, err)
+	t.Log(db.Id)
+
+	inst.Wal.InitShard(uint64(0), newId)
+	t.Log(inst.GetShardCheckpointId(uint64(0)))
+
+	for i := int(newId); i < int(insertCnt); i++ {
+		if err := inst.Append(dbi.AppendCtx{ShardId: shardId, TableName: tableName1, DBName: database.Name, Data: bat1, OpIndex: gen.Alloc(shardId), OpSize: 1}); err != nil {
+			t.Error(err)
+		}
+	}
+
+	t.Log(inst.Store.Catalog.PString(2))
+	t.Log(inst.Store.DataTables.String())
+
+	assert.Nil(t, inst.Close())
+}
+
+func TestCreateSnapshotCase2(t *testing.T) {
+	sched.DisableFlushSegment = true
+	initDBTest()
+	inst, gen, database := initDB2(wal.BrokerRole, "0", uint64(0))
+	//inst.Opts.Meta.Conf.BlockMaxRows = 1
+	//inst.Opts.Meta.Conf.SegmentMaxBlocks = 1
+	schema1 := metadata.MockSchema(20)
+	schema1.Name = "tbl_1"
+	shardId := database.GetShardId()
+	tid1, err := inst.CreateTable(database.Name, schema1, gen.Next(shardId))
+	assert.Nil(t, err)
+	tbl1 := database.SimpleGetTable(tid1)
+	if tbl1 == nil {
+		t.Error("table not found")
+	}
+	insertCnt := uint64(20)
+	tableName1 := tbl1.Schema.Name
+	rowCnt := uint64(2000)
+	bat1 := mock.MockBatch(tbl1.Schema.Types(), rowCnt)
+	assert.Nil(t, os.RemoveAll("/tmp/test_ss/case_2/ss-1"))
+
+	for i := 0; i < int(insertCnt)/2; i++ {
+		if err := inst.Append(dbi.AppendCtx{ShardId: shardId, TableName: tableName1, DBName: database.Name, Data: bat1, OpIndex: gen.Alloc(shardId), OpSize: 1}); err != nil {
+			t.Error(err)
+		}
+	}
+
+	var newId uint64
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		newId, err = inst.CreateSnapshot(database.Name, "/tmp/test_ss/case_2/ss-1")
+		if err != nil {
+			t.Error(err)
+		}
+		t.Logf("Snapshot created at %d", newId)
+		wg.Done()
+	}()
+
+	for i := int(insertCnt) / 2; i < int(insertCnt); i++ {
+		if err := inst.Append(dbi.AppendCtx{ShardId: shardId, DBName: database.Name, TableName: tableName1, Data: bat1, OpIndex: gen.Alloc(shardId), OpSize: 1}); err != nil {
+			t.Error(err)
+		}
+	}
+	wg.Wait()
+	t.Log(inst.Store.Catalog.PString(1))
+	assert.Nil(t, inst.Close())
+
+	initDBTest()
+	inst, _ = initDB(wal.BrokerRole)
+
+	sched.DisableFlushSegment = false
+
+	// TODO: now onCreateTable is not implemented yet, remove later
+	inst.CreateDatabase("0", uint64(0))
+
+	assert.Nil(t, inst.ApplySnapshot(database.Name, "/tmp/test_ss/case_2/ss-1"))
+
+	time.Sleep(100*time.Millisecond)
+
+	t.Log(inst.Store.Catalog.PString(2))
+	t.Log(inst.Store.DataTables.String())
+	//for sid, db := range inst.Store.Catalog.Databases {
+	//	t.Logf("Shard[%d] => DB[%s]", sid, db.Name)
+	//}
+	t.Log(inst.Store.Catalog.SimpleGetDatabaseNames())
+	db, err := inst.Store.Catalog.SimpleGetDatabaseByName("0")
+	assert.Nil(t, err)
+	t.Log(db.Id)
 
 	inst.Wal.InitShard(uint64(0), newId)
 	t.Log(inst.GetShardCheckpointId(uint64(0)))
