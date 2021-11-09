@@ -40,10 +40,50 @@ type Wal interface {
 	GetRole() Role
 }
 
-type ShardWal interface {
+type ShardAwareWal interface {
 	Wal
 	InitShard(uint64, uint64) error
 	GetShardCheckpointId(uint64) uint64
 	GetShardCurrSeqNum(uint64) uint64
 	GetAllPendingEntries() []*shard.ItemsToCheckpointStat
+}
+
+type ShardWal struct {
+	Wal     ShardAwareWal
+	ShardId uint64
+}
+
+func NewWalShard(shardId uint64, wal ShardAwareWal) *ShardWal {
+	return &ShardWal{
+		Wal:     wal,
+		ShardId: shardId,
+	}
+}
+
+func (wal *ShardWal) GetShardId() uint64 {
+	return wal.ShardId
+}
+
+func (wal *ShardWal) InitWal(index uint64) error {
+	return wal.Wal.InitShard(wal.ShardId, index)
+}
+
+func (wal *ShardWal) GetCheckpointId() uint64 {
+	return wal.Wal.GetShardCheckpointId(wal.ShardId)
+}
+
+func (wal *ShardWal) GetCurrSeqNum() uint64 {
+	return wal.Wal.GetShardCurrSeqNum(wal.ShardId)
+}
+
+func (wal *ShardWal) Log(payload Payload) (*Entry, error) {
+	return wal.Wal.Log(payload)
+}
+
+func (wal *ShardWal) SyncLog(payload Payload) error {
+	return wal.Wal.SyncLog(payload)
+}
+
+func (wal *ShardWal) Checkpoint(v interface{}) {
+	wal.Wal.Checkpoint(v)
 }

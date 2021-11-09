@@ -80,6 +80,24 @@ func newCommittedSegmentEntry(table *Table, base *BaseEntry) *Segment {
 	return e
 }
 
+func (e *Segment) DebugCheckReplayedState() {
+	if e.Table == nil {
+		panic("table is missing")
+	}
+	if e.IdIndex == nil {
+		panic("id index is missing")
+	}
+	if e.Table.Database.Catalog.TryUpdateCommitId(e.GetCommit().CommitId) {
+		panic("sequence error")
+	}
+	if e.Table.Database.Catalog.TryUpdateSegmentId(e.Id) {
+		panic("sequence error")
+	}
+	for _, blk := range e.BlockSet {
+		blk.DebugCheckReplayedState()
+	}
+}
+
 func (e *Segment) LE(o *Segment) bool {
 	if e == nil {
 		return true

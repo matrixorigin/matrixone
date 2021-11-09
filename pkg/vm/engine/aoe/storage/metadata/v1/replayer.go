@@ -199,13 +199,13 @@ func (cache *replayCache) Apply() error {
 		}
 		cache.replayer.catalog.Store.SetCheckpointId(cache.checkpoint.Range.Right)
 	}
-	indexWal := cache.replayer.catalog.IndexWal
-	if indexWal != nil {
-		for shardId, safeId := range cache.safeIds {
-			logutil.Infof("[AOE]: Replay Shard-%d SafeId-%d", shardId, safeId)
-			indexWal.InitShard(shardId, safeId)
-		}
-	}
+	// indexWal := cache.replayer.catalog.IndexWal
+	// if indexWal != nil {
+	// 	for shardId, safeId := range cache.safeIds {
+	// 		logutil.Infof("[AOE]: Replay Shard-%d SafeId-%d", shardId, safeId)
+	// 		indexWal.InitShard(shardId, safeId)
+	// 	}
+	// }
 	cache.replayer.catalog.Store.SetSyncedId(cache.replayer.catalog.Sequence.nextCommitId)
 	return nil
 }
@@ -223,20 +223,38 @@ func newCatalogReplayer() *catalogReplayer {
 	return replayer
 }
 
-func (replacer *catalogReplayer) rebuildStats() {
-	for _, db := range replacer.catalog.Databases {
+func (replayer *catalogReplayer) rebuildStats() {
+	for _, db := range replayer.catalog.Databases {
 		db.rebuildStats()
 	}
 }
 
+func (replayer *catalogReplayer) restoreWal() {
+	if replayer.catalog.IndexWal == nil {
+		return
+	}
+	for _, database := range replayer.catalog.Databases {
+		if database.IsDeletedLocked() {
+			continue
+		}
+		safeId, ok := replayer.cache.safeIds[database.GetShardId()]
+		if !ok {
+			panic(fmt.Sprintf("cannot get safeid of shardId %d", database.GetShardId()))
+		}
+		database.InitWal(safeId)
+	}
+}
+
 func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg,
-	store logstore.AwareStore, indexWal wal.ShardWal) (*Catalog, error) {
+	store logstore.AwareStore, indexWal wal.ShardAwareWal) (*Catalog, error) {
 	replayer.catalog = NewCatalogWithDriver(mu, cfg, store, indexWal)
 	if err := replayer.Replay(replayer.catalog.Store); err != nil {
 		return nil, err
 	}
 	// replayer.catalog.Compact()
+	replayer.restoreWal()
 	replayer.rebuildStats()
+	replayer.catalog.DebugCheckReplayedState()
 	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
 	return replayer.catalog, nil
@@ -247,6 +265,9 @@ func (replayer *catalogReplayer) RebuildCatalog(mu *sync.RWMutex, cfg *CatalogCf
 	if err := replayer.Replay(replayer.catalog.Store); err != nil {
 		return nil, err
 	}
+	replayer.restoreWal()
+	replayer.rebuildStats()
+	replayer.catalog.DebugCheckReplayedState()
 	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
 	return replayer.catalog, nil

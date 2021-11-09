@@ -85,6 +85,24 @@ func NewEmptyTableEntry(db *Database) *Table {
 	return e
 }
 
+func (e *Table) DebugCheckReplayedState() {
+	if e.Database == nil {
+		panic("database is missing")
+	}
+	if e.IdIndex == nil {
+		panic("id index is missing")
+	}
+	if e.Database.Catalog.TryUpdateCommitId(e.GetCommit().CommitId) {
+		panic("sequence error")
+	}
+	if e.Database.Catalog.TryUpdateTableId(e.Id) {
+		panic("sequence error")
+	}
+	for _, seg := range e.SegmentSet {
+		seg.DebugCheckReplayedState()
+	}
+}
+
 func (e *Table) MaxLogIndex() *LogIndex {
 	e.RLock()
 	defer e.RUnlock()

@@ -56,7 +56,7 @@ type Catalog struct {
 	Sequence        `json:"-"`
 	pipeline        *commitPipeline      `json:"-"`
 	Store           logstore.AwareStore  `json:"-"`
-	IndexWal        wal.ShardWal         `json:"-"`
+	IndexWal        Wal                  `json:"-"`
 	Cfg             *CatalogCfg          `json:"-"`
 	nodesMu         sync.RWMutex         `json:"-"`
 	commitMu        sync.RWMutex         `json:"-"`
@@ -70,12 +70,12 @@ func OpenCatalog(mu *sync.RWMutex, cfg *CatalogCfg) (*Catalog, error) {
 	return replayer.RebuildCatalog(mu, cfg)
 }
 
-func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) (*Catalog, error) {
+func OpenCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardAwareWal) (*Catalog, error) {
 	replayer := newCatalogReplayer()
 	return replayer.RebuildCatalogWithDriver(mu, cfg, store, indexWal)
 }
 
-func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
+func NewCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg, store logstore.AwareStore, indexWal wal.ShardAwareWal) *Catalog {
 	catalog := &Catalog{
 		RWMutex:   mu,
 		Cfg:       cfg,
@@ -120,6 +120,18 @@ func NewCatalog(mu *sync.RWMutex, cfg *CatalogCfg) *Catalog {
 	catalog.StateMachine = sm.NewStateMachine(wg, catalog, rQueue, ckpQueue)
 	catalog.pipeline = newCommitPipeline(catalog)
 	return catalog
+}
+
+func (catalog *Catalog) DebugCheckReplayedState() {
+	if catalog.pipeline == nil {
+		panic("pipeline is missing")
+	}
+	if catalog.nameNodes == nil {
+		panic("nameNodes is missing")
+	}
+	for _, db := range catalog.Databases {
+		db.DebugCheckReplayedState()
+	}
 }
 
 func (catalog *Catalog) Start() {
@@ -629,6 +641,8 @@ func (catalog *Catalog) onReplayCreateDatabase(entry *Database) error {
 	db := NewEmptyDatabase(catalog)
 	db.BaseEntry = entry.BaseEntry
 	db.Name = entry.Name
+	db.ShardWal = wal.NewWalShard(db.BaseEntry.GetShardId(), catalog.IndexWal)
+	catalog.TryUpdateDatabaseId(db.Id)
 	return catalog.onNewDatabase(db)
 }
 
@@ -648,13 +662,14 @@ func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry) {
 	replaced := catalog.Databases[entry.Replaced.Id]
 	replaced.onNewCommit(entry.Replaced.CommitInfo)
 	for _, replacer := range entry.Replacer {
+		catalog.TryUpdateDatabaseId(replacer.Id)
 		catalog.onNewDatabase(replacer)
 		replacer.Catalog = catalog
 		replacer.rebuild(false, true)
 	}
 }
 
-func MockCatalog(dir string, blkRows, segBlks uint64, driver logstore.AwareStore, indexWal wal.ShardWal) *Catalog {
+func MockCatalog(dir string, blkRows, segBlks uint64, driver logstore.AwareStore, indexWal wal.ShardAwareWal) *Catalog {
 	cfg := new(CatalogCfg)
 	cfg.Dir = dir
 	cfg.BlockMaxRows = blkRows

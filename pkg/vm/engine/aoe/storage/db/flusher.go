@@ -53,7 +53,7 @@ func createFlusherFactory(mgr imem.IManager) flusher.DriverFactory {
 
 type timedFlusherHandle struct {
 	driver   flusher.Driver
-	producer wal.ShardWal
+	producer wal.ShardAwareWal
 }
 
 func (h *timedFlusherHandle) OnStopped() {

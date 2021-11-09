@@ -80,7 +80,7 @@ type Options struct {
 	SchedulerCfg *SchedulerCfg `toml:"scheduler-cfg"`
 
 	WalRole wal.Role
-	Wal     wal.ShardWal
+	Wal     wal.ShardAwareWal
 
 	Meta struct {
 		Conf    *MetaCfg
