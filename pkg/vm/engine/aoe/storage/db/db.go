@@ -300,9 +300,14 @@ func (d *DB) DropDatabase(name string, index uint64) error {
 	if err != nil {
 		return err
 	}
-	return database.SimpleSoftDelete(&metadata.LogIndex{
+	logIndex := &metadata.LogIndex{
 		Id: shard.SimpleIndexId(index),
-	})
+	}
+	if err := d.Wal.SyncLog(logIndex); err != nil {
+		return err
+	}
+	defer d.Wal.Checkpoint(logIndex)
+	return database.SimpleSoftDelete(logIndex)
 }
 
 func (d *DB) CreateTable(dbName string, schema *metadata.Schema, index *metadata.LogIndex) (id uint64, err error) {
