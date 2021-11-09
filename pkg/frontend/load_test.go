@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"github.com/stretchr/testify/require"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"os"
 	"testing"
 )

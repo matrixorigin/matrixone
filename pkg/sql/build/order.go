@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func (b *build) buildTop(o op.OP, ns tree.OrderBy, limit int64) (op.OP, error) {
