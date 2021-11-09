@@ -14,116 +14,174 @@
 
 package like
 
-/*
-var (
-	sLike func(*vector.Bytes, []byte, []int64) ([]int64, error)
+import (
+	"bytes"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"regexp"
+	"strings"
+	"unicode/utf8"
+	"unsafe"
 )
 
-func sLikePure(s *vector.Bytes, expr []byte) ([]int64, error) {
+var (
+	SliceLikePure  func(*types.Bytes, []byte, []int64) ([]int64, error)
+	SliceLikeSlice func(*types.Bytes, *types.Bytes, []int64) ([]int64, error)
+	PureLikeSlice  func([]byte, *types.Bytes, []int64) ([]int64, error)
+	PureLikePure   func([]byte, []byte, []int64) ([]int64, error)
+)
+
+var _ = SliceLikePure
+var _ = SliceLikeSlice
+var _ = PureLikeSlice
+var _ = PureLikePure
+
+func init() {
+	SliceLikePure = sliceLikePure
+	SliceLikeSlice = sliceLikeSlice
+	PureLikeSlice = pureLikeSlice
+	PureLikePure = pureLikePure
+}
+
+func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 	n := uint32(len(expr))
-	rs := sel.Pool.Get().([]int64)
-	rs = rs[:0]
 	if n == 0 {
-		for i, m := range s.Ns {
+		count := 0
+		for i, m := range s.Lengths {
 			if m == 0 {
-				rs = append(rs, int64(i))
+				rs[count] = int64(i)
+				count++
 			}
 		}
-		return rs, nil
+		return rs[:count], nil
 	}
 	if n == 1 && expr[0] == '%' {
-		for i := range s.Ns {
-			rs = append(rs, int64(i))
+		count := 0
+		for i := range s.Lengths {
+			rs[count] = int64(i)
+			count++
 		}
-		return rs, nil
+		return rs[:count], nil
 	}
 	if n == 1 && expr[0] == '_' {
-		for i, m := range s.Ns {
+		count := 0
+		for i, m := range s.Lengths {
 			if m == 1 {
-				rs = append(rs, int64(i))
+				rs[count] = int64(i)
+				count++
 			}
 		}
-		return rs, nil
+		return rs[:count], nil
 	}
 	if n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
 		c0 := expr[0]   // first character
 		c1 := expr[n-1] // last character
 		switch {
 		case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
-			for i, o := range s.Os {
-				if s.Ns[i] == n && bytes.Compare(expr, s.DataSource[o:o+s.Ns[i]]) == 0 {
-					rs = append(rs, int64(i))
+			count := 0
+			for i, o := range s.Offsets {
+				if s.Lengths[i] == n && bytes.Compare(expr, s.Data[o:o+s.Lengths[i]]) == 0 {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '_' && !(c1 == '%' || c1 == '_'):
 			suffix := expr[1:]
-			for i, o := range s.Os {
-				if s.Ns[i] == n && bytes.Compare(suffix, s.DataSource[o+1:o+s.Ns[i]]) == 0 {
-					rs = append(rs, int64(i))
+			count := 0
+			for i, o := range s.Offsets {
+				if s.Lengths[i] == n && bytes.Compare(suffix, s.Data[o+1:o+s.Lengths[i]]) == 0 {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '%' && !(c1 == '%' || c1 == '_'):
 			suffix := expr[1:]
-			for i, o := range s.Os {
-				if bytes.HasSuffix(s.DataSource[o:o+s.Ns[i]], suffix) {
-					rs = append(rs, int64(i))
+			count := 0
+			for i, o := range s.Offsets {
+				if bytes.HasSuffix(s.Data[o:o+s.Lengths[i]], suffix) {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c1 == '_' && !(c0 == '%' || c0 == '_'):
 			prefix := expr[:n-1]
-			for i, o := range s.Os {
-				if s.Ns[i] == n && bytes.Compare(prefix, s.DataSource[o:o+s.Ns[i]-1]) == 0 {
-					rs = append(rs, int64(i))
+			count := 0
+			for i, o := range s.Offsets {
+				if s.Lengths[i] == n && bytes.Compare(prefix, s.Data[o:o+s.Lengths[i]-1]) == 0 {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c1 == '%' && !(c0 == '%' || c0 == '_'):
 			prefix := expr[:n-1]
-			for i, o := range s.Os {
-				if s.Ns[i] >= n && bytes.Compare(s.DataSource[o:o+uint32(n-1)], prefix) == 0 {
-					rs = append(rs, int64(i))
+			count := 0
+			for i, o := range s.Offsets {
+				if s.Lengths[i] >= n && bytes.Compare(s.Data[o:o+uint32(n-1)], prefix) == 0 {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '%' && c1 == '%':
 			substr := expr[1 : n-1]
-			for i, o := range s.Os {
-				if bytes.Contains(s.DataSource[o:o+s.Ns[i]], substr) {
-					rs = append(rs, int64(i))
+			count := 0
+			for i, o := range s.Offsets {
+				if bytes.Contains(s.Data[o:o+s.Lengths[i]], substr) {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '%' && c1 == '_':
 			suffix := expr[1 : n-1]
-			for i, o := range s.Os {
-				if s.Ns[i] > 0 && bytes.HasSuffix(s.DataSource[o:o+s.Ns[i]-1], suffix) {
-					rs = append(rs, int64(i))
+			count := 0
+			for i, o := range s.Offsets {
+				if s.Lengths[i] > 0 && bytes.HasSuffix(s.Data[o:o+s.Lengths[i]-1], suffix) {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '_' && c1 == '%':
 			prefix := expr[1 : n-1]
-			for i, o := range s.Os {
-				if s.Ns[i] > 0 && bytes.HasPrefix(s.DataSource[o+1:o+s.Ns[i]], prefix) {
-					rs = append(rs, int64(i))
+			count := 0
+			for i, o := range s.Offsets {
+				if s.Lengths[i] > 0 && bytes.HasPrefix(s.Data[o+1:o+s.Lengths[i]], prefix) {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		}
 	}
-	reg, err := regexp.Build(convert(expr))
+	reg, err := regexp.Compile(convert(expr))
 	if err != nil {
 		return nil, err
 	}
-	for i, o := range s.Os {
-		if reg.Match(s.DataSource[o : o+s.Ns[i]]) {
-			rs = append(rs, int64(i))
+	count := 0
+	for i, o := range s.Offsets {
+		if reg.Match(s.Data[o : o+s.Lengths[i]]) {
+			rs[count] = int64(i)
+			count++
 		}
 	}
-	return rs, nil
+	return rs[:count], nil
+}
+
+func sliceLikeSlice(s *types.Bytes, exprs *types.Bytes, rs []int64) ([]int64, error) {
+	return nil, nil
+}
+
+func pureLikeSlice(p []byte, exprs *types.Bytes, rs []int64) ([]int64, error) {
+	return nil, nil
+}
+
+func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
+	return nil, nil
 }
 
 func convert(expr []byte) string {
@@ -162,4 +220,3 @@ func replace(s string) string {
 func isWildcard(c byte) bool {
 	return c == '%' || c == '_'
 }
-*/
