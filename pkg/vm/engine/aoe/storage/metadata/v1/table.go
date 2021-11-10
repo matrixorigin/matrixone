@@ -607,10 +607,17 @@ func (e *Table) PString(level PPLevel, depth int) string {
 }
 
 func MockDBTable(catalog *Catalog, dbName string, schema *Schema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
-
-	db, err := catalog.SimpleCreateDatabase(dbName, idxGen.First())
+	var index *LogIndex
+	index = idxGen.Next()
+	if catalog.IndexWal != nil {
+		catalog.IndexWal.SyncLog(index)
+	}
+	db, err := catalog.SimpleCreateDatabase(dbName, index)
 	if err != nil {
 		return nil
+	}
+	if catalog.IndexWal != nil {
+		catalog.IndexWal.Checkpoint(index)
 	}
 	return MockTable(db, schema, blkCnt, idxGen.Next())
 }
@@ -624,10 +631,22 @@ func MockTable(db *Database, schema *Schema, blkCnt uint64, idx *LogIndex) *Tabl
 			Id: shard.SimpleIndexId(common.NextGlobalSeqNum()),
 		}
 	}
+	logFn := func(index *LogIndex) {
+		if db.Catalog.IndexWal != nil {
+			db.Catalog.IndexWal.SyncLog(index)
+		}
+	}
+	ckFn := func(index *LogIndex) {
+		if db.Catalog.IndexWal != nil {
+			db.Catalog.IndexWal.Checkpoint(index)
+		}
+	}
+	logFn(idx)
 	tbl, err := db.SimpleCreateTable(schema, idx)
 	if err != nil {
 		panic(err)
 	}
+	ckFn(idx)
 
 	var activeSeg *Segment
 	for i := uint64(0); i < blkCnt; i++ {

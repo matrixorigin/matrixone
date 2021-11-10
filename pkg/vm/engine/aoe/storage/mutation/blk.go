@@ -56,7 +56,6 @@ func NewMutableBlockNode(mgr base.INodeManager, file *dataio.TransientBlockFile,
 		Stale:     new(atomic.Value),
 	}
 	n.File.InitMeta(meta)
-	n.updateApplied(meta)
 	n.Node = *buffer.NewNode(n, mgr, *meta.AsCommonID(), initSize)
 	n.UnloadFunc = n.unload
 	n.LoadFunc = n.load
@@ -103,21 +102,17 @@ func (n *MutableBlockNode) Flush() error {
 	if err := n.Flusher(n, data, meta, n.File); err != nil {
 		return err
 	}
-	meta.Segment.Table.UpdateFlushTS()
-	n.updateApplied(meta)
-	wal := n.Meta.Segment.Table.Database.Catalog.IndexWal
-	if wal != nil {
-		snippet := n.Meta.ConsumeSnippet(false)
-		// logutil.Infof("Mutblock %d Count %d Snippet %s", n.Meta.Id, n.Meta.GetCount(), snippet.String())
-		wal.Checkpoint(snippet)
-	}
+	n.postFlush()
 	return nil
 }
 
-func (n *MutableBlockNode) updateApplied(meta *metadata.Block) {
-	applied, ok := meta.CommitInfo.GetAppliedIndex()
-	if ok {
-		n.Meta.SetSegmentedId(applied)
+func (n *MutableBlockNode) postFlush() {
+	n.Meta.Segment.Table.UpdateFlushTS()
+	wal := n.Meta.Segment.Table.Database.Catalog.IndexWal
+	if wal != nil {
+		snippet := n.Meta.ConsumeSnippet(false)
+		// logutil.Infof("Mutblock %d Count %d Snippet %s", n.Meta.Id, n.Meta.GetCoarseCount(), snippet.String())
+		wal.Checkpoint(snippet)
 	}
 }
 
@@ -144,7 +139,7 @@ func (n *MutableBlockNode) unload() {
 		if err := n.Flusher(n, n.Data, meta, n.File); err != nil {
 			panic(err)
 		}
-		n.updateApplied(meta)
+		n.postFlush()
 	}
 }
 
