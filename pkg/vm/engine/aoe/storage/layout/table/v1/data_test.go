@@ -173,7 +173,4 @@ func TestBase1(t *testing.T) {
 	sroot.Unref()
 	attr := schema.ColDefs[0].Name
 	t.Log(tblData.Size(attr))
-	index, ok := tblData.GetMeta().GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, tableMeta.FirstCommitLocked().LogIndex.Id.Id, index)
 }

@@ -144,7 +144,6 @@ func (f *TransientBlockFile) PreSync(pos uint32) bool {
 func (f *TransientBlockFile) InitMeta(meta *metadata.Block) {
 	if len(f.files) > 0 {
 		meta.Count = f.files[0].Count
-		meta.CommitInfo.PrevIndex = f.files[0].PrevIdx
 		meta.CommitInfo.LogIndex = f.files[0].Idx
 	}
 }

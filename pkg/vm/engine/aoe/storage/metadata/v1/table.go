@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -385,33 +384,6 @@ func (e *Table) RecurLoopLocked(processor LoopProcessor) error {
 		}
 	}
 	return err
-}
-
-// Safe
-// TODO: Only compatible with v1. Remove later
-func (e *Table) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
-	if rwmtx == nil {
-		e.RLock()
-		defer e.RUnlock()
-	}
-	if e.IsDeletedLocked() {
-		return e.BaseEntry.GetAppliedIndex()
-	}
-	var (
-		id uint64
-		ok bool
-	)
-	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
-		seg := e.SegmentSet[i]
-		id, ok = seg.GetAppliedIndex(nil)
-		if ok {
-			break
-		}
-	}
-	if !ok {
-		return e.BaseEntry.GetAppliedIndex()
-	}
-	return id, ok
 }
 
 // Not safe. One writer, multi-readers

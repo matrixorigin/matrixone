@@ -114,23 +114,6 @@ func (e *BaseEntry) PString(level PPLevel) string {
 	return e.CommitInfo.PString(level)
 }
 
-func (e *BaseEntry) GetAppliedIndex() (uint64, bool) {
-	curr := e.CommitInfo
-	id, ok := curr.GetAppliedIndex()
-	if ok {
-		return id, ok
-	}
-	next := curr.GetNext()
-	for next != nil {
-		id, ok = next.(*CommitInfo).GetAppliedIndex()
-		if ok {
-			return id, ok
-		}
-		next = next.GetNext()
-	}
-	return id, ok
-}
-
 func (e *BaseEntry) HasCommittedLocked() bool {
 	return e.CommitInfo.HasCommitted()
 }

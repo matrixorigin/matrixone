@@ -239,6 +239,7 @@ func (replayer *catalogReplayer) restoreWal() {
 		}
 		database.InitWal(safeId)
 	}
+	logutil.Info(replayer.catalog.IndexWal.String())
 }
 
 func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg *CatalogCfg,

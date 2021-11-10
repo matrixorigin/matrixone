@@ -46,15 +46,6 @@ func (e *blockLogEntry) Unmarshal(buf []byte) error {
 	return json.Unmarshal(buf, e)
 }
 
-// func (e *blockLogEntry) ToEntry() *Block {
-// 	entry := &Block{
-// 		BaseEntry: e.BaseEntry,
-// 	}
-// 	table := e.Catalog.TableSet[e.TableId]
-// 	entry.Segment = table.GetSegment(e.SegmentId, MinUncommitId)
-// 	return entry
-// }
-
 type IndiceMemo struct {
 	mu      *sync.Mutex
 	snippet *shard.Snippet
@@ -207,29 +198,6 @@ func (e *Block) AsCommonID() *common.ID {
 }
 
 // Not safe
-// One writer, multi-readers
-func (e *Block) SetSegmentedId(id uint64) error {
-	atomic.StoreUint64(&e.SegmentedId, id)
-	return nil
-}
-
-// Safe
-func (e *Block) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
-	if rwmtx == nil {
-		e.RLock()
-		defer e.RUnlock()
-	}
-	if !e.IsFullLocked() {
-		id := atomic.LoadUint64(&e.SegmentedId)
-		if id == 0 {
-			return id, false
-		}
-		return id, true
-	}
-	return e.BaseEntry.GetAppliedIndex()
-}
-
-// Not safe
 func (e *Block) HasMaxRowsLocked() bool {
 	return e.Count == e.Segment.Table.Schema.BlockMaxRows
 }
@@ -343,18 +311,9 @@ func (e *Block) prepareUpgrade(ctx *upgradeBlockCtx) (LogEntry, error) {
 	}
 	if ctx.exIndice != nil {
 		cInfo.LogIndex = ctx.exIndice[0]
-		if len(ctx.exIndice) > 1 {
-			cInfo.PrevIndex = ctx.exIndice[1]
-		}
 	} else {
 		cInfo.LogRange = e.CommitInfo.LogRange
 		cInfo.LogIndex = e.CommitInfo.LogIndex
-		id, ok := e.BaseEntry.GetAppliedIndex()
-		if ok {
-			cInfo.AppliedIndex = &LogIndex{
-				Id: shard.SimpleIndexId(id),
-			}
-		}
 	}
 	if err := e.onCommit(cInfo); err != nil {
 		return nil, err

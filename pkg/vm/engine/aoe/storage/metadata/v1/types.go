@@ -15,7 +15,6 @@ package metadata
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"sync/atomic"
 
@@ -120,7 +119,6 @@ type CommitInfo struct {
 	Size            int64     `json:"size"`
 	LogIndex        *LogIndex `json:"idx"`
 	PrevIndex       *LogIndex `json:"pidx"`
-	AppliedIndex    *LogIndex `json:"aidx"`
 	LogRange        *LogRange `json:"range"`
 }
 
@@ -128,12 +126,6 @@ func (info *CommitInfo) Clone() *CommitInfo {
 	cloned := *info
 	if cloned.LogIndex != nil {
 		cloned.LogIndex = &(*info.LogIndex)
-	}
-	if cloned.PrevIndex != nil {
-		cloned.PrevIndex = &(*info.PrevIndex)
-	}
-	if cloned.AppliedIndex != nil {
-		cloned.AppliedIndex = &(*info.AppliedIndex)
 	}
 	if cloned.LogRange != nil {
 		cloned.LogRange = &(*info.LogRange)
@@ -222,36 +214,8 @@ func (info *CommitInfo) PString(level PPLevel) string {
 	return s
 }
 
-// TODO: remove it. Not be used later
-func (info *CommitInfo) GetAppliedIndex() (uint64, bool) {
-	if info.AppliedIndex != nil {
-		return info.AppliedIndex.Id.Id, true
-	}
-	if info.LogIndex != nil && info.LogIndex.IsBatchApplied() {
-		return info.LogIndex.Id.Id, true
-	}
-
-	if info.PrevIndex != nil && info.PrevIndex.IsBatchApplied() {
-		return info.PrevIndex.Id.Id, true
-	}
-	return 0, false
-}
-
-// SetIndex changes the current index to previous index if exists, and
-// sets the current index to idx.
 func (info *CommitInfo) SetIndex(idx LogIndex) error {
-	if info.LogIndex != nil {
-		if !info.LogIndex.IsApplied() {
-			return errors.New(fmt.Sprintf("already has applied index: %d", info.LogIndex.Id))
-		}
-		info.PrevIndex = info.LogIndex
-		info.LogIndex = &idx
-	} else {
-		if info.PrevIndex != nil {
-			return errors.New(fmt.Sprintf("no index but has prev index: %d", info.PrevIndex.Id))
-		}
-		info.LogIndex = &idx
-	}
+	info.LogIndex = &idx
 	if info.LogRange == nil {
 		info.LogRange = &LogRange{}
 		info.LogRange.ShardId = idx.ShardId

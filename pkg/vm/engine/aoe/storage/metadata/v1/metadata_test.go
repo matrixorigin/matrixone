@@ -518,8 +518,6 @@ func (hb *mockGetSegmentedHB) OnExec() {
 func (hb *mockGetSegmentedHB) processTable(tbl *Table) error {
 	// tbl.RLock()
 	// defer tbl.RUnlock()
-	id, _ := tbl.GetAppliedIndex(nil)
-	hb.t.Logf("table %d segmented id: %d", tbl.Id, id)
 	// hb.t.Log(tbl.PString(PPL0))
 	return nil
 }

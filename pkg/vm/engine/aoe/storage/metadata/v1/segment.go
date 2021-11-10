@@ -18,11 +18,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 var (
@@ -256,29 +254,6 @@ func (e *Segment) prepareCreateBlock(ctx *createBlockCtx) (LogEntry, error) {
 	return logEntry, nil
 }
 
-// Safe
-func (e *Segment) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
-	if rwmtx == nil {
-		e.RLock()
-		defer e.RUnlock()
-	}
-	if e.IsSortedLocked() {
-		return e.BaseEntry.GetAppliedIndex()
-	}
-	return e.calcAppliedIndex()
-}
-
-func (e *Segment) calcAppliedIndex() (id uint64, ok bool) {
-	for i := len(e.BlockSet) - 1; i >= 0; i-- {
-		blk := e.BlockSet[i]
-		id, ok = blk.GetAppliedIndex(nil)
-		if ok {
-			break
-		}
-	}
-	return id, ok
-}
-
 func (e *Segment) MaxLogIndex() *LogIndex {
 	e.RLock()
 	defer e.RUnlock()
@@ -407,18 +382,8 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 		Op:       newOp,
 		Size:     ctx.size,
 	}
-	if ctx.exIndice == nil {
-		id, ok := e.calcAppliedIndex()
-		if ok {
-			cInfo.AppliedIndex = &LogIndex{
-				Id: shard.SimpleIndexId(id),
-			}
-		}
-	} else {
+	if ctx.exIndice != nil {
 		cInfo.LogIndex = ctx.exIndice[0]
-		if len(ctx.exIndice) > 1 {
-			cInfo.PrevIndex = ctx.exIndice[1]
-		}
 	}
 	if err := e.onCommit(cInfo); err != nil {
 		return nil, err
