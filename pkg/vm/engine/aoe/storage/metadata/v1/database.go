@@ -272,7 +272,17 @@ func (db *Database) prepareReplace(ctx *addReplaceCommitCtx) (LogEntry, error) {
 	return logEntry, nil
 }
 
-func (db *Database) RecurLoopLocked(processor LoopProcessor) error {
+func (db *Database) LoopLocked(processor Processor) error {
+	var err error
+	for _, table := range db.TableSet {
+		if err = processor.OnTable(table); err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+func (db *Database) RecurLoopLocked(processor Processor) error {
 	var err error
 	for _, table := range db.TableSet {
 		if err = processor.OnTable(table); err != nil {

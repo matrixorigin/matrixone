@@ -286,7 +286,7 @@ func (catalog *Catalog) prepareAddDatabase(ctx *addDatabaseCtx) (LogEntry, error
 	panic("todo")
 }
 
-func (catalog *Catalog) RecurLoopLocked(processor LoopProcessor) error {
+func (catalog *Catalog) RecurLoopLocked(processor Processor) error {
 	var err error
 	for _, database := range catalog.Databases {
 		if err = processor.OnDatabase(database); err != nil {

@@ -140,7 +140,7 @@ func TestDatabase1(t *testing.T) {
 	tableDeleted := 0
 	dbCnt := 0
 	tblCnt := 0
-	processor := new(loopProcessor)
+	processor := new(LoopProcessor)
 	processor.DatabaseFn = func(db *Database) error {
 		if db.IsHardDeleted() && db.HasCommitted() {
 			dbDeleted++

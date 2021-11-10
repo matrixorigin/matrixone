@@ -1012,7 +1012,7 @@ func TestDatabases1(t *testing.T) {
 			assert.Equal(t, shardId, info.GetShardId())
 			return true
 		}
-		processor := new(loopProcessor)
+		processor := new(LoopProcessor)
 		processor.BlockFn = func(block *Block) error {
 			checker(block.GetCommit())
 			return nil
@@ -1211,7 +1211,7 @@ func TestSplit(t *testing.T) {
 	assert.Nil(t, err)
 	err = splitter.Commit()
 	assert.Nil(t, err)
-	processor := new(loopProcessor)
+	processor := new(LoopProcessor)
 	tables := 0
 	processor.TableFn = func(table *Table) error {
 		tables++

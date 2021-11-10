@@ -15,7 +15,7 @@ type databaseLogEntry struct {
 }
 
 type dbReplaceLogEntry struct {
-	loopProcessor `json:"-"`
+	LoopProcessor `json:"-"`
 	commitId      uint64            `json:"-"`
 	Replaced      *databaseLogEntry `json:"replaced"`
 	Replacer      []*Database       `json:"replacer"`

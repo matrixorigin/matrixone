@@ -369,7 +369,7 @@ func (e *Table) SimpleGetCurrSegment() *Segment {
 	return seg
 }
 
-func (e *Table) RecurLoopLocked(processor LoopProcessor) error {
+func (e *Table) RecurLoopLocked(processor Processor) error {
 	var err error
 	for _, segment := range e.SegmentSet {
 		if err = processor.OnSegment(segment); err != nil {
