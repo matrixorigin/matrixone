@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -88,7 +89,31 @@ func NewEmptyDatabase(catalog *Catalog) *Database {
 }
 
 func (db *Database) Repr() string {
-	return fmt.Sprintf("DB[\"%s\",%d]", db.Name, db.Id)
+	return fmt.Sprintf("DB-%d<\"%s\",S-%d>", db.Id, db.Name, db.CommitInfo.GetShardId())
+}
+
+func (db *Database) FindTableCommitByIndex(name string, index *LogIndex) *CommitInfo {
+	db.RLock()
+	defer db.RUnlock()
+	return db.FindTableCommitByIndexLocked(name, index)
+}
+
+func (db *Database) FindTableCommitByIndexLocked(name string, index *LogIndex) *CommitInfo {
+	node := db.nameNodes[name]
+	if node == nil {
+		return nil
+	}
+	var found *CommitInfo
+	fn := func(nn *nameNode) bool {
+		table := nn.GetTable()
+		found = table.FindCommitByIndexLocked(index)
+		if found != nil {
+			return false
+		}
+		return true
+	}
+	node.ForEachNodes(fn)
+	return found
 }
 
 func (db *Database) DebugCheckReplayedState() {
@@ -517,6 +542,12 @@ func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 		db.Unlock()
 		return nil, DatabaseNotFoundErr
 	}
+	// if ctx.exIndex != nil {
+	// 	if found := db.FindTableLogIndexLocked(ctx.schema.Name, ctx.exIndex); found {
+	// 		db.Unlock()
+	// 		return nil, CommitStaleErr
+	// 	}
+	// }
 	if err = db.onNewTable(entry); err != nil {
 		db.Unlock()
 		return nil, err
@@ -668,17 +699,19 @@ func (db *Database) ToLogEntry(eType LogEntryType) LogEntry {
 	return logEntry
 }
 
-func (db *Database) PString(level PPLevel) string {
+func (db *Database) PString(level PPLevel, depth int) string {
 	db.RLock()
 	defer db.RUnlock()
-	s := fmt.Sprintf("<Database[%d][%s]>(Cnt=%d)(%s){", db.Id, db.Name, len(db.TableSet), db.BaseEntry.PString(level))
+	ident := strings.Repeat("  ", depth)
+	ident2 := " " + ident
+	s := fmt.Sprintf("%s | %s | Cnt=%d {", db.Repr(), db.BaseEntry.PString(level), len(db.TableSet))
 	for _, table := range db.TableSet {
-		s = fmt.Sprintf("%s\n%s", s, table.PString(level))
+		s = fmt.Sprintf("%s\n%s%s", s, ident2, table.PString(level, depth+1))
 	}
 	if len(db.TableSet) == 0 {
 		s = fmt.Sprintf("%s}", s)
 	} else {
-		s = fmt.Sprintf("%s\n}", s)
+		s = fmt.Sprintf("%s\n%s}", s, ident)
 	}
 	return s
 }
@@ -686,6 +719,7 @@ func (db *Database) PString(level PPLevel) string {
 func (db *Database) Compact() {
 	tables := make([]*Table, 0, 2)
 	nodes := make([]*nodeList, 0, 2)
+	safeId := db.GetShardId()
 	db.RLock()
 	// If database is hard delete, it will be handled during catalog compact cycle
 	if db.IsHardDeletedLocked() {
@@ -694,7 +728,7 @@ func (db *Database) Compact() {
 	}
 	for _, table := range db.TableSet {
 		table.RLock()
-		if table.IsHardDeletedLocked() && table.HasCommittedLocked() {
+		if table.IsHardDeletedLocked() && table.HasCommittedLocked() && (!db.WalEnabled() || table.CommitInfo.GetIndex() <= safeId) {
 			tables = append(tables, table)
 			nodes = append(nodes, db.nameNodes[table.Schema.Name])
 		}
@@ -715,7 +749,7 @@ func (db *Database) Compact() {
 	}
 	db.Lock()
 	for _, table := range tables {
-		logutil.Infof("%s | Compacted", table.Repr())
+		logutil.Infof("%s | Compacted", table.Repr(false))
 		delete(db.TableSet, table.Id)
 	}
 	db.Unlock()

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
@@ -49,13 +50,13 @@ func (e *BaseEntry) LatestLogIndex() *LogIndex {
 }
 
 func (e *BaseEntry) FirstCommitLocked() *CommitInfo {
-	prev := e.CommitInfo
-	curr := prev.GetNext()
-	for curr != nil {
-		prev = curr.(*CommitInfo)
-		curr = curr.GetNext()
+	var ret *CommitInfo
+	fn := func(info *CommitInfo) bool {
+		ret = info
+		return true
 	}
-	return prev
+	e.ForEachCommitLocked(fn)
+	return ret
 }
 
 func (e *BaseEntry) GetCommit() *CommitInfo {
@@ -76,27 +77,33 @@ func (e *BaseEntry) IsSortedLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeSorted
 }
 
-// func (e *BaseEntry) ForLoopCommitsLocked(filter *commitFilter) *CommitInfo {
-// 	var curr common.ISSLLNode
-// 	curr = e.CommitInfo
-// 	for curr != nil {
-// 		info := curr.(*CommitInfo)
-// 		if info.HasCommitted() {
-// 			return info
-// 		}
-// 	}
-// 	return nil
-// }
+func (e *BaseEntry) checkStale1(info *CommitInfo) error {
+	if e.CommitInfo == nil || e.CommitInfo.LogIndex == nil {
+		return nil
+	}
+	switch info.Op {
+	case OpHardDelete:
+		return nil
+	case OpReplaced:
+		return nil
+	case OpUpgradeFull:
+		return nil
+	}
+	comp := e.CommitInfo.LogIndex.Compare(info.LogIndex)
+	if comp > 0 {
+		return CommitStaleErr
+	} else if comp == 0 && !e.CommitInfo.SameTran(info) {
+		logutil.Error(e.PString(PPL1))
+		logutil.Error(info.PString(PPL1))
+		return CommitStaleErr
+	}
+	return nil
+}
 
 func (e *BaseEntry) onCommit(info *CommitInfo) error {
-	// PXU TODO: Scan all commits
-	if e.CommitInfo != nil && e.CommitInfo.LogIndex != nil {
-		comp := e.CommitInfo.LogIndex.Compare(info.LogIndex)
-		if comp > 0 {
-			return CommitStaleErr
-		} else if comp == 0 && !e.CommitInfo.SameTran(info) {
-			panic("logic error")
-		}
+	err := e.checkStale1(info)
+	if err != nil {
+		return err
 	}
 	info.SetNext(e.CommitInfo)
 	e.CommitInfo = info
@@ -104,25 +111,7 @@ func (e *BaseEntry) onCommit(info *CommitInfo) error {
 }
 
 func (e *BaseEntry) PString(level PPLevel) string {
-	s := fmt.Sprintf("Id=%d,%s", e.Id, e.CommitInfo.PString(level))
-	return s
-}
-
-func (e *BaseEntry) GetAppliedIndex() (uint64, bool) {
-	curr := e.CommitInfo
-	id, ok := curr.GetAppliedIndex()
-	if ok {
-		return id, ok
-	}
-	next := curr.GetNext()
-	for next != nil {
-		id, ok = next.(*CommitInfo).GetAppliedIndex()
-		if ok {
-			return id, ok
-		}
-		next = next.GetNext()
-	}
-	return id, ok
+	return e.CommitInfo.PString(level)
 }
 
 func (e *BaseEntry) HasCommittedLocked() bool {
@@ -180,6 +169,36 @@ func (e *BaseEntry) UseCommittedLocked(filter *commitFilter) *BaseEntry {
 	return nil
 }
 
+func (e *BaseEntry) ForEachCommitLocked(fn func(*CommitInfo) bool) {
+	var curr common.ISSLLNode
+	curr = e.CommitInfo
+	for curr != nil {
+		info := curr.(*CommitInfo)
+		if ok := fn(info); !ok {
+			break
+		}
+		curr = curr.GetNext()
+	}
+	return
+}
+
+func (e *BaseEntry) FindCommitByIndexLocked(index *LogIndex) *CommitInfo {
+	var found *CommitInfo
+	fn := func(info *CommitInfo) bool {
+		comp := info.LogIndex.Compare(index)
+		if comp == 0 {
+			found = info
+			return false
+		}
+		if comp < 0 && info.IsDeleted() {
+			return false
+		}
+		return true
+	}
+	e.ForEachCommitLocked(fn)
+	return found
+}
+
 func (e *BaseEntry) IsDeletedInTxnLocked(txn *TxnCtx) bool {
 	if txn == nil {
 		return e.IsDeletedLocked()
@@ -187,15 +206,17 @@ func (e *BaseEntry) IsDeletedInTxnLocked(txn *TxnCtx) bool {
 	if e.CanUseTxnLocked(txn.tranId) {
 		return e.IsDeletedLocked()
 	}
-	next := e.CommitInfo.GetNext()
-	for next != nil {
-		info := next.(*CommitInfo)
+
+	var isDeleted bool
+	fn := func(info *CommitInfo) bool {
 		if info.CanUseTxn(txn.tranId) {
-			return info.IsDeleted()
+			isDeleted = info.IsDeleted()
+			return false
 		}
-		next = next.GetNext()
+		return true
 	}
-	return false
+	e.ForEachCommitLocked(fn)
+	return isDeleted
 }
 
 // Guarded by e.Lock()

@@ -321,7 +321,7 @@ func TestDropTable(t *testing.T) {
 	node := db.nameNodes[t1.Schema.Name].GetNext().(*nameNode)
 	for node != nil {
 		entry := node.GetTable()
-		t.Log(entry.PString(PPL0))
+		t.Log(entry.PString(PPL0, 0))
 		snode := node.GetNext()
 		if snode == nil {
 			node = nil
@@ -332,7 +332,7 @@ func TestDropTable(t *testing.T) {
 	}
 	assert.Equal(t, 3, versions)
 
-	t.Log(catalog.PString(PPL1))
+	t.Log(catalog.PString(PPL1, 0))
 	nodes := db.nameNodes[t1.Schema.Name]
 	assert.Equal(t, 3, nodes.Length())
 	t.Log(nodes.PString(PPL1))
@@ -358,9 +358,7 @@ func TestDropTable(t *testing.T) {
 	assert.Equal(t, 0, len(db.nameNodes))
 	assert.Equal(t, 0, len(db.TableSet))
 
-	index := new(LogIndex)
-	index.ShardId = uint64(99)
-	index.Id = shard.SimpleIndexId(uint64(1))
+	index := gen.Next(99)
 	t4, err := db.SimpleCreateTable(schema1, index)
 	assert.Nil(t, err)
 	assert.NotNil(t, t4)
@@ -390,7 +388,7 @@ func TestDropTable(t *testing.T) {
 	// assert.Equal(t, 1, nodes.Length())
 	// t.Log(nodes.PString(PPL1))
 
-	t.Log(catalog.PString(PPL1))
+	t.Log(catalog.PString(PPL1, 0))
 	catalog.Close()
 }
 
@@ -520,8 +518,6 @@ func (hb *mockGetSegmentedHB) OnExec() {
 func (hb *mockGetSegmentedHB) processTable(tbl *Table) error {
 	// tbl.RLock()
 	// defer tbl.RUnlock()
-	id, _ := tbl.GetAppliedIndex(nil)
-	hb.t.Logf("table %d segmented id: %d", tbl.Id, id)
 	// hb.t.Log(tbl.PString(PPL0))
 	return nil
 }
@@ -564,7 +560,7 @@ func TestReplay(t *testing.T) {
 	}
 	wg.Wait()
 	getSegmentedIdWorker.Stop()
-	t.Log(catalog.PString(PPL0))
+	t.Log(catalog.PString(PPL0, 0))
 
 	catalog.Close()
 }
@@ -959,7 +955,7 @@ func TestDatabases1(t *testing.T) {
 	}
 	wg.Wait()
 	t.Logf("mock metadata takes: %s", time.Since(now))
-	t.Log(catalog.PString(PPL0))
+	t.Log(catalog.PString(PPL0, 0))
 
 	now = time.Now()
 	var viewsMu sync.Mutex
@@ -1001,7 +997,7 @@ func TestDatabases1(t *testing.T) {
 		// t.Logf("shardId-%d: %s", loader.View.LogRange.ShardId, loader.View.Catalog.PString(PPL0))
 	}
 	t.Logf("takes %s", time.Since(now))
-	t.Log(catalog.PString(PPL0))
+	t.Log(catalog.PString(PPL0, 0))
 
 	for shardId, allocator := range gen.Shards {
 		dbName := fmt.Sprintf("db%d", shardId)
@@ -1025,7 +1021,7 @@ func TestDatabases1(t *testing.T) {
 			return nil
 		}
 		writer.view.Database.RecurLoopLocked(processor)
-		t.Log(writer.view.Database.PString(PPL0))
+		t.Log(writer.view.Database.PString(PPL0, 0))
 	}
 }
 
@@ -1123,7 +1119,7 @@ func TestDatabases2(t *testing.T) {
 	view1_2 := db1.View(index1_2)
 	assert.Equal(t, len(view1_1_1.Database.TableSet)-1, len(view1_2.Database.TableSet))
 
-	t.Log(catalog.PString(PPL0))
+	t.Log(catalog.PString(PPL0, 0))
 
 	writer := NewDBSSWriter(db1, dir, index1_0)
 	err = writer.PrepareWrite()
@@ -1222,7 +1218,7 @@ func TestSplit(t *testing.T) {
 	err = catalog.RecurLoopLocked(processor)
 	assert.Nil(t, err)
 	assert.Equal(t, tables, 9)
-	t.Log(catalog.PString(PPL0))
+	t.Log(catalog.PString(PPL0, 0))
 	catalog.Close()
 
 	t.Log("--------------------------------------")

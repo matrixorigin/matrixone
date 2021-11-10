@@ -75,13 +75,30 @@ func (n *nodeList) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
 	return
 }
 
-func (n *nodeList) LengthLocked() int {
+func (n *nodeList) ForEachNodes(fn func(*nameNode) bool) {
+	n.rwlocker.RLock()
+	defer n.rwlocker.RUnlock()
+	n.ForEachNodesLocked(fn)
+}
+
+func (n *nodeList) ForEachNodesLocked(fn func(*nameNode) bool) {
 	curr := n.GetNext()
-	length := 0
 	for curr != nil {
+		nn := curr.(*nameNode)
+		if ok := fn(nn); !ok {
+			break
+		}
 		curr = curr.GetNext()
-		length++
 	}
+}
+
+func (n *nodeList) LengthLocked() int {
+	length := 0
+	fn := func(*nameNode) bool {
+		length++
+		return true
+	}
+	n.ForEachNodesLocked(fn)
 	return length
 }
 

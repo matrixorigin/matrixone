@@ -17,11 +17,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 var (
@@ -171,10 +170,12 @@ func (e *Segment) Unmarshal(buf []byte) error {
 }
 
 // Not safe
-func (e *Segment) PString(level PPLevel) string {
+func (e *Segment) PString(level PPLevel, depth int) string {
 	if e == nil {
 		return "null segment"
 	}
+	ident := strings.Repeat("  ", depth)
+	ident2 := " " + ident
 	e.RLock()
 	defer e.RUnlock()
 	s := fmt.Sprintf("<Segment %s", e.BaseEntry.PString(level))
@@ -182,13 +183,13 @@ func (e *Segment) PString(level PPLevel) string {
 	if level > PPL0 {
 		for _, blk := range e.BlockSet {
 			cnt++
-			s = fmt.Sprintf("%s\n%s", s, blk.PString(level))
+			s = fmt.Sprintf("%s\n%s%s", s, ident2, blk.PString(level))
 		}
 	}
 	if cnt == 0 {
 		s = fmt.Sprintf("%s[Size=%d]>", s, e.GetCoarseSizeLocked())
 	} else {
-		s = fmt.Sprintf("%s\n[Size=%d]\n>", s, e.GetCoarseSizeLocked())
+		s = fmt.Sprintf("%s\n%s[Size=%d]\n>", s, ident, e.GetCoarseSizeLocked())
 	}
 	return s
 }
@@ -251,29 +252,6 @@ func (e *Segment) prepareCreateBlock(ctx *createBlockCtx) (LogEntry, error) {
 	e.Table.Database.Catalog.prepareCommitLog(be, logEntry)
 	ctx.block = be
 	return logEntry, nil
-}
-
-// Safe
-func (e *Segment) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
-	if rwmtx == nil {
-		e.RLock()
-		defer e.RUnlock()
-	}
-	if e.IsSortedLocked() {
-		return e.BaseEntry.GetAppliedIndex()
-	}
-	return e.calcAppliedIndex()
-}
-
-func (e *Segment) calcAppliedIndex() (id uint64, ok bool) {
-	for i := len(e.BlockSet) - 1; i >= 0; i-- {
-		blk := e.BlockSet[i]
-		id, ok = blk.GetAppliedIndex(nil)
-		if ok {
-			break
-		}
-	}
-	return id, ok
 }
 
 func (e *Segment) MaxLogIndex() *LogIndex {
@@ -404,18 +382,8 @@ func (e *Segment) prepareUpgrade(ctx *upgradeSegmentCtx) (LogEntry, error) {
 		Op:       newOp,
 		Size:     ctx.size,
 	}
-	if ctx.exIndice == nil {
-		id, ok := e.calcAppliedIndex()
-		if ok {
-			cInfo.AppliedIndex = &LogIndex{
-				Id: shard.SimpleIndexId(id),
-			}
-		}
-	} else {
+	if ctx.exIndice != nil {
 		cInfo.LogIndex = ctx.exIndice[0]
-		if len(ctx.exIndice) > 1 {
-			cInfo.PrevIndex = ctx.exIndice[1]
-		}
 	}
 	if err := e.onCommit(cInfo); err != nil {
 		return nil, err

@@ -16,7 +16,7 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
-	"sync"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -85,8 +85,12 @@ func NewEmptyTableEntry(db *Database) *Table {
 	return e
 }
 
-func (e *Table) Repr() string {
-	return fmt.Sprintf("TBL[\"%s\",%d]-%s", e.Schema.Name, e.Id, e.Database.Repr())
+func (e *Table) Repr(short bool) string {
+	s := fmt.Sprintf("TBL-%d:\"%s\"", e.Id, e.Schema.Name)
+	if !short {
+		s = fmt.Sprintf("%s-%s", s, e.Database.Repr())
+	}
+	return s
 }
 
 func (e *Table) DebugCheckReplayedState() {
@@ -382,33 +386,6 @@ func (e *Table) RecurLoopLocked(processor LoopProcessor) error {
 	return err
 }
 
-// Safe
-// TODO: Only compatible with v1. Remove later
-func (e *Table) GetAppliedIndex(rwmtx *sync.RWMutex) (uint64, bool) {
-	if rwmtx == nil {
-		e.RLock()
-		defer e.RUnlock()
-	}
-	if e.IsDeletedLocked() {
-		return e.BaseEntry.GetAppliedIndex()
-	}
-	var (
-		id uint64
-		ok bool
-	)
-	for i := len(e.SegmentSet) - 1; i >= 0; i-- {
-		seg := e.SegmentSet[i]
-		id, ok = seg.GetAppliedIndex(nil)
-		if ok {
-			break
-		}
-	}
-	if !ok {
-		return e.BaseEntry.GetAppliedIndex()
-	}
-	return id, ok
-}
-
 // Not safe. One writer, multi-readers
 func (e *Table) SimpleCreateBlock() (*Block, *Segment) {
 	var prevSeg *Segment
@@ -583,25 +560,36 @@ func (e *Table) GetSegment(id, tranId uint64) *Segment {
 }
 
 // Not safe
-func (e *Table) PString(level PPLevel) string {
+func (e *Table) PString(level PPLevel, depth int) string {
 	e.RLock()
 	defer e.RUnlock()
-	s := fmt.Sprintf("<Table[%s]>(%s)(Cnt=%d)", e.Schema.Name, e.BaseEntry.PString(level), len(e.SegmentSet))
+	ident := strings.Repeat("  ", depth)
+	ident2 := " " + ident
+	s := fmt.Sprintf("%s | %s | Cnt=%d ", e.Repr(true), e.BaseEntry.PString(level), len(e.SegmentSet))
 	if level > PPL0 && len(e.SegmentSet) > 0 {
 		s = fmt.Sprintf("%s{", s)
 		for _, seg := range e.SegmentSet {
-			s = fmt.Sprintf("%s\n%s", s, seg.PString(level))
+			s = fmt.Sprintf("%s\n%s%s", s, ident2, seg.PString(level, depth+1))
 		}
-		s = fmt.Sprintf("%s\n}", s)
+		s = fmt.Sprintf("%s\n%s}", s, ident)
+	} else {
+		s = fmt.Sprintf("%s {...}", s)
 	}
 	return s
 }
 
 func MockDBTable(catalog *Catalog, dbName string, schema *Schema, blkCnt uint64, idxGen *shard.MockShardIndexGenerator) *Table {
-
-	db, err := catalog.SimpleCreateDatabase(dbName, idxGen.First())
+	var index *LogIndex
+	index = idxGen.Next()
+	if catalog.IndexWal != nil {
+		catalog.IndexWal.SyncLog(index)
+	}
+	db, err := catalog.SimpleCreateDatabase(dbName, index)
 	if err != nil {
 		return nil
+	}
+	if catalog.IndexWal != nil {
+		catalog.IndexWal.Checkpoint(index)
 	}
 	return MockTable(db, schema, blkCnt, idxGen.Next())
 }
@@ -615,10 +603,22 @@ func MockTable(db *Database, schema *Schema, blkCnt uint64, idx *LogIndex) *Tabl
 			Id: shard.SimpleIndexId(common.NextGlobalSeqNum()),
 		}
 	}
+	logFn := func(index *LogIndex) {
+		if db.Catalog.IndexWal != nil {
+			db.Catalog.IndexWal.SyncLog(index)
+		}
+	}
+	ckFn := func(index *LogIndex) {
+		if db.Catalog.IndexWal != nil {
+			db.Catalog.IndexWal.Checkpoint(index)
+		}
+	}
+	logFn(idx)
 	tbl, err := db.SimpleCreateTable(schema, idx)
 	if err != nil {
 		panic(err)
 	}
+	ckFn(idx)
 
 	var activeSeg *Segment
 	for i := uint64(0); i < blkCnt; i++ {

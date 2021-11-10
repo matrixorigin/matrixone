@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation"
 	mb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mutation/buffer"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 
 	"github.com/stretchr/testify/assert"
@@ -50,12 +51,13 @@ func TestTBlock(t *testing.T) {
 	dir := "/tmp/table/tblk"
 	os.RemoveAll(dir)
 	rowCount, blkCount := uint64(30), uint64(4)
-	catalog := metadata.MockCatalog(dir, rowCount, blkCount, nil, nil)
+	catalog, indexWal := metadata.MockCatalogAndWal(dir, rowCount, blkCount)
+	defer indexWal.Close()
 	defer catalog.Close()
 	schema := metadata.MockSchema(2)
 	gen := shard.NewMockIndexAllocator()
-	tablemeta := metadata.MockDBTable(catalog, "db1", schema, 2, gen.Shard(100))
-
+	shardId := uint64(100)
+	tablemeta := metadata.MockDBTable(catalog, "db1", schema, 2, gen.Shard(shardId))
 	seg1 := tablemeta.SimpleGetSegment(uint64(1))
 	assert.NotNil(t, seg1)
 	meta1 := seg1.SimpleGetBlock(uint64(1))
@@ -114,6 +116,7 @@ func TestTBlock(t *testing.T) {
 			assert.Nil(t, n.Meta.CommitInfo.SetIndex(*idx))
 			_, err = n.Meta.AddCountLocked(num)
 			assert.Nil(t, err)
+			n.Meta.SetIndexLocked(*idx)
 			return nil
 		}
 	}
@@ -125,48 +128,45 @@ func TestTBlock(t *testing.T) {
 		}
 	}
 
-	idx1 := &shard.Index{
-		Id:       shard.SimpleIndexId(uint64(1)),
-		Capacity: uint64(insertBat.Vecs[0].Length()),
-	}
+	idx1 := gen.Next(shardId)
+	idx1.Capacity = uint64(insertBat.Vecs[0].Length())
+	indexWal.SyncLog(idx1)
 	err = blk1.WithPinedContext(appendFn(idx1))
 	assert.Nil(t, err)
 
-	idx, ok := meta1.GetAppliedIndex(nil)
-	assert.False(t, ok)
+	testutils.WaitExpect(100, func() bool {
+		return blk1.GetMeta().Segment.Table.Database.GetCheckpointId() == blk1.GetMeta().Segment.Table.GetCommit().GetIndex()
+	})
+	assert.Equal(t, blk1.GetMeta().Segment.Table.Database.GetCheckpointId(), blk1.GetMeta().Segment.Table.GetCommit().GetIndex())
 
-	idx2 := &shard.Index{
-		Id:       shard.SimpleIndexId(uint64(2)),
-		Capacity: uint64(insertBat.Vecs[0].Length()),
-	}
+	idx2 := gen.Next(shardId)
+	idx2.Capacity = uint64(insertBat.Vecs[0].Length())
+	indexWal.SyncLog(idx2)
 	err = blk1.WithPinedContext(appendFn(idx2))
 	assert.Nil(t, err)
 	assert.Equal(t, rows*factor*2, mgr.Total())
-
-	idx, ok = meta1.GetAppliedIndex(nil)
-	assert.False(t, ok)
 
 	blk2, err := newTBlock(segdata, meta2, nodeFactory, mockSize)
 	assert.Nil(t, err)
 	assert.NotNil(t, blk2)
 	assert.False(t, blk2.node.IsLoaded())
 
-	idx3 := &shard.Index{
-		Id:       shard.SimpleIndexId(uint64(3)),
-		Capacity: uint64(insertBat.Vecs[0].Length()),
-	}
+	idx3 := gen.Next(shardId)
+	idx3.Capacity = uint64(insertBat.Vecs[0].Length())
+	indexWal.SyncLog(idx3)
 	err = blk2.WithPinedContext(appendFn(idx3))
 	assert.Nil(t, err)
-	idx4 := &shard.Index{
-		Id:       shard.SimpleIndexId(uint64(4)),
-		Capacity: uint64(insertBat.Vecs[0].Length()),
-	}
+
+	idx4 := gen.Next(shardId)
+	idx4.Capacity = uint64(insertBat.Vecs[0].Length())
+	indexWal.SyncLog(idx4)
 	err = blk2.WithPinedContext(appendFn(idx4))
 	assert.Nil(t, err)
 
-	idx, ok = meta1.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, idx2.Id.Id, idx)
+	testutils.WaitExpect(100, func() bool {
+		return idx2.Id.Id == blk1.GetMeta().Segment.Table.Database.GetCheckpointId()
+	})
+	assert.Equal(t, idx2.Id.Id, blk1.GetMeta().Segment.Table.Database.GetCheckpointId())
 
 	err = blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)
@@ -175,10 +175,9 @@ func TestTBlock(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	idx5 := &shard.Index{
-		Id:       shard.SimpleIndexId(uint64(4)),
-		Capacity: uint64(insertBat.Vecs[0].Length()),
-	}
+	idx5 := gen.Next(shardId)
+	idx5.Capacity = uint64(insertBat.Vecs[0].Length())
+	indexWal.SyncLog(idx5)
 	err = blk1.WithPinedContext(appendFn(idx5))
 	assert.Nil(t, err)
 
@@ -191,12 +190,11 @@ func TestTBlock(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Log(common.GPool.String())
-	idx, ok = meta1.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, idx5.Id.Id, idx)
-	idx, ok = meta2.GetAppliedIndex(nil)
-	assert.True(t, ok)
-	assert.Equal(t, idx4.Id.Id, idx)
+
+	testutils.WaitExpect(100, func() bool {
+		return idx5.Id.Id == blk1.GetMeta().Segment.Table.Database.GetCheckpointId()
+	})
+	assert.Equal(t, idx5.Id.Id, blk1.GetMeta().Segment.Table.Database.GetCheckpointId())
 
 	blk1.WithPinedContext(func(node mb.IMutableBlock) error {
 		n := node.(*mutation.MutableBlockNode)
@@ -229,7 +227,6 @@ func TestTBlock(t *testing.T) {
 	assert.Nil(t, err)
 	t.Logf("Reference count %d", nblk1.RefCount())
 
-	t.Logf(blk1.meta.Segment.String())
 	t.Logf(mtBufMgr.String())
 	t.Logf(sstBufMgr.String())
 	for _, colDef := range blk1.meta.Segment.Table.Schema.ColDefs {
@@ -252,4 +249,5 @@ func TestTBlock(t *testing.T) {
 	t.Logf(blk1.String())
 	blk1.Unref()
 	blk2.Unref()
+	t.Log(indexWal.String())
 }

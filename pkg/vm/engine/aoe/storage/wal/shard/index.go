@@ -47,14 +47,17 @@ func (id *IndexId) Compare(o *IndexId) int {
 	}
 	if id.Offset > o.Offset {
 		return 1
-	} else {
+	} else if id.Offset < o.Offset {
 		return -1
 	}
 	return 0
 }
 
 func (id *IndexId) String() string {
-	return fmt.Sprintf("(%d,%d,%d)", id.Id, id.Offset, id.Size)
+	if id.Size == uint32(1) {
+		return fmt.Sprintf("%d", id.Id)
+	}
+	return fmt.Sprintf("%d[%d/%d]", id.Id, id.Offset, id.Size)
 }
 
 func (id *IndexId) Valid() bool {
@@ -97,7 +100,10 @@ func (idx *Index) String() string {
 	if idx == nil {
 		return "null"
 	}
-	return fmt.Sprintf("S%d(%s,%d,%d,%d)", idx.ShardId, idx.Id.String(), idx.Start, idx.Count, idx.Capacity)
+	if idx.Capacity == 0 {
+		return fmt.Sprintf("S-%d:<%s>", idx.ShardId, idx.Id.String())
+	}
+	return fmt.Sprintf("S-%d:%s:<%d+%d/%d>", idx.ShardId, idx.Id.String(), idx.Start, idx.Count, idx.Capacity)
 }
 
 func (idx *Index) IsApplied() bool {

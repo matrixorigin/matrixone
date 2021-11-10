@@ -19,7 +19,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"io/ioutil"
 	"math/rand"
 	"os"
@@ -30,6 +29,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
@@ -100,7 +101,7 @@ func TestCreateTable(t *testing.T) {
 	wg.Wait()
 	dbNames := inst.Store.Catalog.SimpleGetDatabaseNames()
 	assert.Equal(t, tblCnt, len(dbNames))
-	t.Log(inst.Store.Catalog.PString(metadata.PPL0))
+	t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
 }
 
 func TestCreateDuplicateTable(t *testing.T) {
@@ -882,7 +883,7 @@ func TestCreateSnapshot(t *testing.T) {
 	t.Log(blk60.Size("mock_9"))
 	t.Log(blk60.GetRowCount())
 
-	t.Log(db1.TableSet[uint64(4)].PString(2))
+	t.Log(db1.TableSet[uint64(4)].PString(2, 0))
 
 	assert.Nil(t, inst.Close())
 
@@ -974,7 +975,7 @@ func TestCreateSnapshotCase1(t *testing.T) {
 
 	assert.Nil(t, inst.ApplySnapshot(database.Name, "/tmp/test_ss/case_1/ss-1"))
 
-	t.Log(inst.Store.Catalog.PString(2))
+	t.Log(inst.Store.Catalog.PString(2, 0))
 	t.Log(inst.Store.DataTables.String())
 	//for sid, db := range inst.Store.Catalog.Databases {
 	//	t.Logf("Shard[%d] => DB[%s]", sid, db.Name)
@@ -993,7 +994,7 @@ func TestCreateSnapshotCase1(t *testing.T) {
 		}
 	}
 
-	t.Log(inst.Store.Catalog.PString(2))
+	t.Log(inst.Store.Catalog.PString(2, 0))
 	t.Log(inst.Store.DataTables.String())
 
 	assert.Nil(t, inst.Close())
@@ -1051,7 +1052,7 @@ func TestCreateSnapshotCase2(t *testing.T) {
 		}
 	}
 	wg.Wait()
-	t.Log(inst.Store.Catalog.PString(1))
+	t.Log(inst.Store.Catalog.PString(1, 0))
 	assert.Nil(t, inst.Close())
 
 	initDBTest()
@@ -1064,9 +1065,9 @@ func TestCreateSnapshotCase2(t *testing.T) {
 
 	assert.Nil(t, inst.ApplySnapshot(database.Name, "/tmp/test_ss/case_2/ss-1"))
 
-	time.Sleep(100*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
-	t.Log(inst.Store.Catalog.PString(2))
+	t.Log(inst.Store.Catalog.PString(2, 0))
 	t.Log(inst.Store.DataTables.String())
 	//for sid, db := range inst.Store.Catalog.Databases {
 	//	t.Logf("Shard[%d] => DB[%s]", sid, db.Name)
@@ -1085,7 +1086,7 @@ func TestCreateSnapshotCase2(t *testing.T) {
 		}
 	}
 
-	t.Log(inst.Store.Catalog.PString(2))
+	t.Log(inst.Store.Catalog.PString(2, 0))
 	t.Log(inst.Store.DataTables.String())
 
 	assert.Nil(t, inst.Close())

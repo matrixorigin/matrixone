@@ -68,6 +68,10 @@ func (wal *ShardWal) InitWal(index uint64) error {
 	return wal.Wal.InitShard(wal.ShardId, index)
 }
 
+func (wal *ShardWal) WalEnabled() bool {
+	return wal.Wal != nil
+}
+
 func (wal *ShardWal) GetCheckpointId() uint64 {
 	return wal.Wal.GetShardCheckpointId(wal.ShardId)
 }

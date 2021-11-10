@@ -88,7 +88,7 @@ func TestReplay1(t *testing.T) {
 
 	inst, _ = initDB(wal.BrokerRole)
 
-	t.Log(inst.Store.Catalog.PString(metadata.PPL1))
+	t.Log(inst.Store.Catalog.PString(metadata.PPL1, 0))
 	segmentedIdx := inst.GetShardCheckpointId(shardId)
 	assert.Equal(t, gen.Get(shardId), segmentedIdx)
 
@@ -391,7 +391,7 @@ func TestReplay5(t *testing.T) {
 
 	blk := tbl2.SimpleGetOrCreateNextBlock(nil)
 	t.Log(blk.PString(metadata.PPL0))
-	t.Log(tbl2.PString(metadata.PPL1))
+	t.Log(tbl2.PString(metadata.PPL1, 0))
 	assert.Equal(t, tbl2.SegmentSet[0].BlockSet[2], blk)
 
 	catalog.Close()
@@ -583,7 +583,7 @@ func TestReplay8(t *testing.T) {
 		return toRemove[i] < toRemove[j]
 	})
 	t.Log(toRemove)
-	t.Log(tbl.PString(metadata.PPL1))
+	t.Log(tbl.PString(metadata.PPL1, 0))
 
 	catalog.Close()
 	catalog, err := metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
@@ -599,7 +599,7 @@ func TestReplay8(t *testing.T) {
 	replayHandle.Cleanup()
 	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
-	t.Log(tbl2.PString(metadata.PPL1))
+	t.Log(tbl2.PString(metadata.PPL1, 0))
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[0].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[0].BlockSet[1].IsFullLocked())
 
@@ -694,7 +694,7 @@ func TestReplay9(t *testing.T) {
 	})
 	assert.Equal(t, toRemove, observer.removed)
 
-	t.Log(tbl2.PString(metadata.PPL1))
+	t.Log(tbl2.PString(metadata.PPL1, 0))
 	blk = tbl2.SimpleGetOrCreateNextBlock(nil)
 	t.Log(blk.PString(metadata.PPL0))
 	assert.Equal(t, tbl2.SegmentSet[0].BlockSet[1], blk)
@@ -796,7 +796,7 @@ func TestReplay10(t *testing.T) {
 	assert.Nil(t, err)
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFullLocked())
-	t.Log(tbl2.PString(metadata.PPL1))
+	t.Log(tbl2.PString(metadata.PPL1, 0))
 
 	assert.Equal(t, len(toRemove), len(observer.removed))
 	sort.Slice(observer.removed, func(i, j int) bool {
@@ -866,7 +866,7 @@ func TestReplay11(t *testing.T) {
 	replayHandle.Cleanup()
 	tbl2, err := catalog.SimpleGetTableByName(tbl.Database.Name, tbl.Schema.Name)
 	assert.Nil(t, err)
-	t.Log(tbl2.PString(metadata.PPL1))
+	t.Log(tbl2.PString(metadata.PPL1, 0))
 	assert.True(t, tbl2.SegmentSet[0].BlockSet[3].IsFullLocked())
 	assert.False(t, tbl2.SegmentSet[1].BlockSet[1].IsFullLocked())
 
