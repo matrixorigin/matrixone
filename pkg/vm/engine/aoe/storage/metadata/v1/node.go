@@ -75,12 +75,15 @@ func (n *nodeList) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
 	return
 }
 
-func (n *nodeList) FindTableLogIndex(index *LogIndex) bool {
-	found := false
+func (n *nodeList) FindTableCommitByIndex(index *LogIndex) *CommitInfo {
+	var found *CommitInfo
 	fn := func(nn *nameNode) bool {
 		table := nn.GetTable()
-		found = table.FindLogIndexLocked(index)
-		return !found
+		found = table.FindCommitByIndexLocked(index)
+		if found != nil {
+			return false
+		}
+		return true
 	}
 	n.ForEachNodes(fn)
 	return found

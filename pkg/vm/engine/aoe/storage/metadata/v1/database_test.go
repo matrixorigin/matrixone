@@ -189,15 +189,15 @@ func TestDatabase1(t *testing.T) {
 	db4Replayed, err := catalog2.SimpleGetDatabaseByName(db4.Name)
 	assert.Nil(t, err)
 
-	f := db4Replayed.FindTableLogIndex(schema2.Name, createIdx)
-	assert.True(t, f)
-	f = db4Replayed.FindTableLogIndex(schema2.Name, dropIdx)
-	assert.True(t, f)
+	f := db4Replayed.FindTableCommitByIndex(schema2.Name, createIdx)
+	assert.NotNil(t, f)
+	f = db4Replayed.FindTableCommitByIndex(schema2.Name, dropIdx)
+	assert.NotNil(t, f)
 
-	f = db4Replayed.FindLogIndexLocked(db4Replayed.FirstCommitLocked().LogIndex)
-	assert.True(t, f)
-	f = db4Replayed.FindLogIndexLocked(db4Replayed.CommitInfo.LogIndex)
-	assert.True(t, f)
+	f = db4Replayed.FindCommitByIndexLocked(db4Replayed.FirstCommitLocked().LogIndex)
+	assert.NotNil(t, f)
+	f = db4Replayed.FindCommitByIndexLocked(db4Replayed.CommitInfo.LogIndex)
+	assert.NotNil(t, f)
 
 	// t.Log(catalog2.PString(PPL0, 0))
 }

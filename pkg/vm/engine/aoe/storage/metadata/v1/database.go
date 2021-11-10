@@ -92,18 +92,18 @@ func (db *Database) Repr() string {
 	return fmt.Sprintf("DB-%d<\"%s\",S-%d>", db.Id, db.Name, db.CommitInfo.GetShardId())
 }
 
-func (db *Database) FindTableLogIndex(name string, index *LogIndex) bool {
+func (db *Database) FindTableCommitByIndex(name string, index *LogIndex) *CommitInfo {
 	db.RLock()
 	defer db.RUnlock()
-	return db.FindTableLogIndexLocked(name, index)
+	return db.FindTableCommitByIndexLocked(name, index)
 }
 
-func (db *Database) FindTableLogIndexLocked(name string, index *LogIndex) bool {
+func (db *Database) FindTableCommitByIndexLocked(name string, index *LogIndex) *CommitInfo {
 	node := db.nameNodes[name]
 	if node == nil {
-		return false
+		return nil
 	}
-	return node.FindTableLogIndex(index)
+	return node.FindTableCommitByIndex(index)
 }
 
 func (db *Database) DebugCheckReplayedState() {

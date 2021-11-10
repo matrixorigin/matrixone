@@ -50,13 +50,13 @@ func (e *BaseEntry) LatestLogIndex() *LogIndex {
 }
 
 func (e *BaseEntry) FirstCommitLocked() *CommitInfo {
-	prev := e.CommitInfo
-	curr := prev.GetNext()
-	for curr != nil {
-		prev = curr.(*CommitInfo)
-		curr = curr.GetNext()
+	var ret *CommitInfo
+	fn := func(info *CommitInfo) bool {
+		ret = info
+		return true
 	}
-	return prev
+	e.ForEachCommitLocked(fn)
+	return ret
 }
 
 func (e *BaseEntry) GetCommit() *CommitInfo {
@@ -199,12 +199,12 @@ func (e *BaseEntry) ForEachCommitLocked(fn func(*CommitInfo) bool) {
 	return
 }
 
-func (e *BaseEntry) FindLogIndexLocked(index *LogIndex) bool {
-	found := false
+func (e *BaseEntry) FindCommitByIndexLocked(index *LogIndex) *CommitInfo {
+	var found *CommitInfo
 	fn := func(info *CommitInfo) bool {
 		comp := info.LogIndex.Compare(index)
 		if comp == 0 {
-			found = true
+			found = info
 			return false
 		}
 		if comp < 0 && info.IsDeleted() {
