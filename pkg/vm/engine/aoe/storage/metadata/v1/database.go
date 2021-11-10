@@ -722,17 +722,21 @@ func (db *Database) Compact(dbListener DatabaseListener, tblListener TableListen
 	safeId := db.GetCheckpointId()
 	db.RLock()
 	// If database is hard delete, it will be handled during catalog compact cycle
-	if db.IsDeletedLocked() {
-		hardDeleted := db.IsHardDeletedLocked()
-		canHardDelete := db.CanHardDeleteLocked()
+	// if db.IsDeletedLocked() {
+	// 	hardDeleted := db.IsHardDeletedLocked()
+	// 	canHardDelete := db.CanHardDeleteLocked()
+	// 	db.RUnlock()
+	// 	if hardDeleted || !canHardDelete {
+	// 		return
+	// 	}
+	// 	if err := db.SimpleHardDelete(); err != nil {
+	// 		panic(err)
+	// 	}
+	// 	logutil.Infof("%s | HardDeleted", db.Repr())
+	// 	return
+	// }
+	if db.IsHardDeletedLocked() && db.HasCommittedLocked() {
 		db.RUnlock()
-		if hardDeleted || !canHardDelete {
-			return
-		}
-		if err := db.SimpleHardDelete(); err != nil {
-			panic(err)
-		}
-		logutil.Infof("%s | HardDeleted", db.Repr())
 		return
 	}
 	for _, table := range db.TableSet {

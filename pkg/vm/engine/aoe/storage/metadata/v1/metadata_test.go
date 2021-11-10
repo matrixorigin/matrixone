@@ -1223,7 +1223,7 @@ func TestSplit(t *testing.T) {
 	catalog.Compact(nil, nil)
 	tables = 0
 	err = catalog.RecurLoopLocked(processor)
-	assert.Equal(t, tables, 5)
+	assert.Equal(t, tables, 9)
 	t.Log(catalog.PString(PPL0, 0))
 	catalog.Close()
 	return
@@ -1234,7 +1234,7 @@ func TestSplit(t *testing.T) {
 	err = catalog2.RecurLoopLocked(processor)
 	assert.Nil(t, err)
 	t.Log(catalog2.PString(PPL0, 0))
-	assert.Equal(t, tables, 5)
+	assert.Equal(t, tables, 9)
 	doCompareCatalog(t, catalog, catalog2)
 	catalog2.Close()
 }
