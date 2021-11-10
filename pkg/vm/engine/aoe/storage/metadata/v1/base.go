@@ -77,16 +77,33 @@ func (e *BaseEntry) IsSortedLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeSorted
 }
 
+func (e *BaseEntry) checkStale1(info *CommitInfo) error {
+	if e.CommitInfo == nil || e.CommitInfo.LogIndex == nil {
+		return nil
+	}
+	switch info.Op {
+	case OpHardDelete:
+		return nil
+	case OpReplaced:
+		return nil
+	case OpUpgradeFull:
+		return nil
+	}
+	comp := e.CommitInfo.LogIndex.Compare(info.LogIndex)
+	if comp > 0 {
+		return CommitStaleErr
+	} else if comp == 0 && !e.CommitInfo.SameTran(info) {
+		logutil.Error(e.PString(PPL1))
+		logutil.Error(info.PString(PPL1))
+		return CommitStaleErr
+	}
+	return nil
+}
+
 func (e *BaseEntry) onCommit(info *CommitInfo) error {
-	// PXU TODO: Scan all commits
-	// FIXME: Why skip hard delete: hard delete log index is same with the last one
-	if !info.IsHardDeleted() && e.CommitInfo != nil && e.CommitInfo.LogIndex != nil {
-		comp := e.CommitInfo.LogIndex.Compare(info.LogIndex)
-		if comp > 0 {
-			return CommitStaleErr
-		} else if comp == 0 && !e.CommitInfo.SameTran(info) {
-			panic(fmt.Sprintf("logic error: %s, %s", e.CommitInfo.LogIndex.String(), info.LogIndex.String()))
-		}
+	err := e.checkStale1(info)
+	if err != nil {
+		return err
 	}
 	info.SetNext(e.CommitInfo)
 	e.CommitInfo = info

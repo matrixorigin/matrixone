@@ -358,9 +358,7 @@ func TestDropTable(t *testing.T) {
 	assert.Equal(t, 0, len(db.nameNodes))
 	assert.Equal(t, 0, len(db.TableSet))
 
-	index := new(LogIndex)
-	index.ShardId = uint64(99)
-	index.Id = shard.SimpleIndexId(uint64(1))
+	index := gen.Next(99)
 	t4, err := db.SimpleCreateTable(schema1, index)
 	assert.Nil(t, err)
 	assert.NotNil(t, t4)
