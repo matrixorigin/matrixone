@@ -163,6 +163,16 @@ func TestDatabase1(t *testing.T) {
 	assert.Equal(t, 3, dbCnt)
 	assert.Equal(t, 3, tblCnt)
 
+	catalog.Compact(nil, nil)
+	dbDeleted = 0
+	tableDeleted = 0
+	dbCnt, tblCnt = 0, 0
+	catalog.RecurLoopLocked(processor)
+	assert.Equal(t, 0, dbDeleted)
+	assert.Equal(t, 0, tableDeleted)
+	assert.Equal(t, 2, dbCnt)
+	assert.Equal(t, 3, tblCnt)
+
 	t.Log(catalog.PString(PPL0, 0))
 	indexWal.Close()
 	catalog.Close()
@@ -178,10 +188,9 @@ func TestDatabase1(t *testing.T) {
 	t.Log(indexWal2.String())
 	assert.Equal(t, 0, dbDeleted)
 	assert.Equal(t, 0, tableDeleted)
-	assert.Equal(t, 3, dbCnt)
+	assert.Equal(t, 2, dbCnt)
 	assert.Equal(t, 3, tblCnt)
 
-	assert.Equal(t, indexWal.GetShardCheckpointId(100), indexWal2.GetShardCheckpointId(100))
 	assert.Equal(t, indexWal.GetShardCheckpointId(101), indexWal2.GetShardCheckpointId(101))
 	assert.Equal(t, indexWal.GetShardCheckpointId(103), indexWal2.GetShardCheckpointId(103))
 	assert.Equal(t, indexWal2.GetShardCheckpointId(103), gen.Curr().Id.Id-3)
@@ -199,7 +208,7 @@ func TestDatabase1(t *testing.T) {
 	f = db4Replayed.FindCommitByIndexLocked(db4Replayed.CommitInfo.LogIndex)
 	assert.NotNil(t, f)
 
-	// t.Log(catalog2.PString(PPL0, 0))
+	t.Log(catalog2.PString(PPL0, 0))
 }
 
 func TestTxn(t *testing.T) {

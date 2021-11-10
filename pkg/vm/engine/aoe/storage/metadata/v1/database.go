@@ -719,11 +719,20 @@ func (db *Database) PString(level PPLevel, depth int) string {
 func (db *Database) Compact(dbListener DatabaseListener, tblListener TableListener) {
 	tables := make([]*Table, 0, 2)
 	nodes := make([]*nodeList, 0, 2)
-	safeId := db.GetShardId()
+	safeId := db.GetCheckpointId()
 	db.RLock()
 	// If database is hard delete, it will be handled during catalog compact cycle
-	if db.IsHardDeletedLocked() {
+	if db.IsDeletedLocked() {
+		hardDeleted := db.IsHardDeletedLocked()
+		canHardDelete := db.CanHardDeleteLocked()
 		db.RUnlock()
+		if hardDeleted || !canHardDelete {
+			return
+		}
+		if err := db.SimpleHardDelete(); err != nil {
+			panic(err)
+		}
+		logutil.Infof("%s | HardDeleted", db.Repr())
 		return
 	}
 	for _, table := range db.TableSet {

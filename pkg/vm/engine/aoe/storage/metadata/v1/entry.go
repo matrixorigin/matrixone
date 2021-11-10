@@ -132,7 +132,9 @@ func (e *dbReplaceLogEntry) ToLogEntry(eType LogEntryType) LogEntry {
 }
 
 func (e *dbReplaceLogEntry) CommitLocked(commitId uint64) {
+	e.Replaced.Lock()
 	e.Replaced.CommitLocked(commitId)
+	e.Replaced.Unlock()
 	e.commitId = commitId
 	for _, db := range e.Replacer {
 		db.RLock()

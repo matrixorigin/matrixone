@@ -140,35 +140,35 @@ func (catalog *Catalog) unregisterDatabaseLocked(db *Database) error {
 
 func (catalog *Catalog) Compact(dbListener DatabaseListener, tblListener TableListener) {
 	dbs := make([]*Database, 0, 4)
-	deletes := make([]*Database, 0, 4)
+	hardDeletes := make([]*Database, 0, 4)
+
 	catalog.RLock()
 	for _, db := range catalog.Databases {
+		dbs = append(dbs, db)
+	}
+	catalog.RUnlock()
+	for _, db := range dbs {
+		db.Compact(dbListener, tblListener)
 		db.RLock()
 		if db.IsHardDeletedLocked() && db.HasCommittedLocked() {
-			deletes = append(deletes, db)
-		} else {
-			dbs = append(dbs, db)
+			hardDeletes = append(hardDeletes, db)
 		}
 		db.RUnlock()
 	}
-	catalog.RUnlock()
-	if len(deletes) > 0 {
+	if len(hardDeletes) > 0 {
 		catalog.Lock()
-		for _, db := range deletes {
+		for _, db := range hardDeletes {
 			if err := catalog.unregisterDatabaseLocked(db); err != nil {
 				panic(err)
 			}
 		}
 		catalog.Unlock()
 	}
-	for _, db := range deletes {
+	for _, db := range hardDeletes {
 		db.Release()
 		if dbListener != nil {
 			dbListener.OnDatabaseCompacted(db)
 		}
-	}
-	for _, db := range dbs {
-		db.Compact(dbListener, tblListener)
 	}
 }
 
@@ -745,5 +745,6 @@ func MockCatalog(dir string, blkRows, segBlks uint64, driver logstore.AwareStore
 		panic(err)
 	}
 	catalog.Start()
+	catalog.Compact(nil, nil)
 	return catalog
 }

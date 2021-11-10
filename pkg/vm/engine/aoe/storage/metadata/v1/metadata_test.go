@@ -65,6 +65,7 @@ func initTest(dir string, blockRows, segmentBlocks uint64, hasWal bool, cleanup 
 		catalog, _ = OpenCatalog(new(sync.RWMutex), cfg)
 	}
 	catalog.Start()
+	catalog.Compact(nil, nil)
 	return catalog, indexWal
 }
 
@@ -1147,6 +1148,7 @@ func TestDatabases2(t *testing.T) {
 	db1, err = catalog.SimpleGetDatabaseByName("db1")
 	assert.Nil(t, err)
 	t.Log(db1.GetCount())
+	catalog.Compact(nil, nil)
 	catalog.Close()
 
 	catalog2, _ := initTest(dir, blockRows, segmentBlocks, false, false)
@@ -1218,15 +1220,21 @@ func TestSplit(t *testing.T) {
 	err = catalog.RecurLoopLocked(processor)
 	assert.Nil(t, err)
 	assert.Equal(t, tables, 9)
+	catalog.Compact(nil, nil)
+	tables = 0
+	err = catalog.RecurLoopLocked(processor)
+	assert.Equal(t, tables, 5)
 	t.Log(catalog.PString(PPL0, 0))
 	catalog.Close()
+	return
 
 	t.Log("--------------------------------------")
 	catalog2, _ := initTest(dir, uint64(100), uint64(2), false, false)
 	tables = 0
 	err = catalog2.RecurLoopLocked(processor)
 	assert.Nil(t, err)
-	assert.Equal(t, tables, 9)
+	t.Log(catalog2.PString(PPL0, 0))
+	assert.Equal(t, tables, 5)
 	doCompareCatalog(t, catalog, catalog2)
 	catalog2.Close()
 }
