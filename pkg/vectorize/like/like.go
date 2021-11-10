@@ -186,7 +186,7 @@ func sliceLikeSlice(s *types.Bytes, exprs *types.Bytes, rs []int64) ([]int64, er
 			return nil, err
 		}
 		if k != nil {
-			rs[count] = i
+			rs[count] = int64(i)
 			count++
 		}
 	}
@@ -201,7 +201,7 @@ func pureLikeSlice(p []byte, exprs *types.Bytes, rs []int64) ([]int64, error) {
 			return nil, err
 		}
 		if k != nil {
-			rs[count] = i
+			rs[count] = int64(i)
 			count++
 		}
 	}
@@ -211,104 +211,93 @@ func pureLikeSlice(p []byte, exprs *types.Bytes, rs []int64) ([]int64, error) {
 func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
 	n := len(expr)
 	if n == 0 {
-		count := 0
 		if len(p) == 0 {
 			rs[0] = int64(0)
-			count++
+			return rs[:1], nil
 		}
-		return rs[:count], nil
+		return nil, nil
 	}
 	if n == 1 && expr[0] == '%' {
 		rs[0] = int64(0)
 		return rs[:1], nil
 	}
 	if n == 1 && expr[0] == '_' {
-		count := 0
 		if len(p) == 1 {
 			rs[0] = int64(0)
-			count++
+			return rs[:1], nil
 		}
-		return rs[:1], nil
+		return nil, nil
 	}
 	if n > 1 && !bytes.ContainsAny(expr[1:n-1], "_%") {
 		c0 := expr[0]   // first character
 		c1 := expr[n-1] // last character
 		switch {
 		case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
-			count := 0
 			if len(p) == n && bytes.Compare(expr, p) == 0 {
-				rs[count] = int64(0)
-				count++
+				rs[0] = int64(0)
+				return rs[:1], nil
 			}
-			return rs[:count], nil
+			return nil, nil
 		case c0 == '_' && !(c1 == '%' || c1 == '_'):
 			suffix := expr[1:]
-			count := 0
 			if len(p) == n && bytes.Compare(suffix, p[1:]) == 0 {
-				rs[count] = int64(0)
-				count++
+				rs[0] = int64(0)
+				return rs[:1], nil
 			}
-			return rs[:count], nil
+			return nil, nil
 		case c0 == '%' && !(c1 == '%' || c1 == '_'):
 			suffix := expr[1:]
-			count := 0
 			if bytes.HasSuffix(p, suffix) {
-				rs[count] = int64(0)
-				count++
+				rs[0] = int64(0)
+				return rs[:1], nil
 			}
-			return rs[:count], nil
+			return nil, nil
 		case c1 == '_' && !(c0 == '%' || c0 == '_'):
 			prefix := expr[:n-1]
-			count := 0
 			if len(p) == n && bytes.Compare(prefix, p[:n-1]) == 0 {
-				rs[count] = int64(0)
-				count++
+				rs[0] = int64(0)
+				return rs[:1], nil
 			}
-			return rs[:count], nil
+			return nil, nil
 		case c1 == '%' && !(c0 == '%' || c0 == '_'):
 			prefix := expr[:n-1]
-			count := 0
 			if len(p) >= n && bytes.Compare(p[:n-1], prefix) == 0 {
-				rs[count] = int64(0)
-				count++
+				rs[0] = int64(0)
+				return rs[:1], nil
 			}
-			return rs[:count], nil
+			return nil, nil
 		case c0 == '%' && c1 == '%':
 			substr := expr[1 : n-1]
-			count := 0
 			if bytes.Contains(p, substr) {
-				rs[count] = int64(0)
-				count++
+				rs[0] = int64(0)
+				return rs[:1], nil
 			}
-			return rs[:count], nil
+			return nil, nil
 		case c0 == '%' && c1 == '_':
 			suffix := expr[1 : n-1]
-			count := 0
 			if len(p) > 0 && bytes.HasSuffix(p[:len(p)-1], suffix) {
-				rs[count] = int64(0)
-				count++
+				rs[0] = int64(0)
+				return rs[:1], nil
 			}
-			return rs[:count], nil
+			return nil, nil
 		case c0 == '_' && c1 == '%':
 			prefix := expr[1 : n-1]
-			count := 0
 			if len(p) > 0 && bytes.HasPrefix(p[1:], prefix) {
-				rs[count] = int64(0)
-				count++
+				rs[0] = int64(0)
+				return rs[:1], nil
 			}
-			return rs[:count], nil
+			return nil, nil
 		}
 	}
 	reg, err := regexp.Compile(convert(expr))
 	if err != nil {
 		return nil, err
 	}
-	count := 0
 	if reg.Match(p) {
-		rs[count] = int64(0)
-		count++
+		rs[0] = int64(0)
+		return rs[:1], nil
 	}
-	return rs[:count], nil
+	return nil, nil
 }
 
 func convert(expr []byte) string {

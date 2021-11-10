@@ -383,7 +383,7 @@ func (b *build) buildUnaryWithoutCheck(o op.OP, e *tree.UnaryExpr) (extend.Exten
 	case tree.UNARY_PLUS:
 		return b.buildExprWithoutCheck(o, e.Expr)
 	}
-	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op))
 }
 
 func (b *build) buildBinaryWithoutCheck(o op.OP, e *tree.BinaryExpr) (extend.Extend, error) {
@@ -449,7 +449,7 @@ func (b *build) buildBinaryWithoutCheck(o op.OP, e *tree.BinaryExpr) (extend.Ext
 		}
 		return &extend.BinaryExtend{Op: overload.IntegerDiv, Left: left, Right: right}, nil
 	}
-	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op))
 }
 
 func (b *build) buildComparisonWithoutCheck(o op.OP, e *tree.ComparisonExpr) (extend.Extend, error) {
@@ -515,7 +515,7 @@ func (b *build) buildComparisonWithoutCheck(o op.OP, e *tree.ComparisonExpr) (ex
 		}
 		return &extend.BinaryExtend{Op: overload.NE, Left: left, Right: right}, nil
 	}
-	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op))
 }
 
 func (b *build) buildUnary(o op.OP, e *tree.UnaryExpr) (extend.Extend, error) {
@@ -660,8 +660,18 @@ func (b *build) buildComparison(o op.OP, e *tree.ComparisonExpr) (extend.Extend,
 			return nil, err
 		}
 		return &extend.BinaryExtend{Op: overload.NE, Left: left, Right: right}, nil
+	case tree.LIKE:
+		left, err := b.buildExpr(o, e.Left)
+		if err != nil {
+			return nil, err
+		}
+		right, err := b.buildExpr(o, e.Right)
+		if err != nil {
+			return nil, err
+		}
+		return &extend.BinaryExtend{Op: overload.Like, Left: left, Right: right}, nil
 	}
-	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e))
+	return nil, sqlerror.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("'%v' is not support now", e.Op.ToString()))
 }
 
 func (b *build) buildAttribute(o op.OP, e *tree.UnresolvedName) (extend.Extend, error) {
