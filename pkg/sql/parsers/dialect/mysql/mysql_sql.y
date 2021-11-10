@@ -20,7 +20,7 @@ import (
     "go/constant"
 
     "github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-    "github.com/matrixorigin/matrixone/pkg/sql/parsers/defines"
+    "github.com/matrixorigin/matrixone/pkg/defines"
 )
 %}
 
