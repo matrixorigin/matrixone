@@ -75,20 +75,6 @@ func (n *nodeList) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
 	return
 }
 
-func (n *nodeList) FindTableCommitByIndex(index *LogIndex) *CommitInfo {
-	var found *CommitInfo
-	fn := func(nn *nameNode) bool {
-		table := nn.GetTable()
-		found = table.FindCommitByIndexLocked(index)
-		if found != nil {
-			return false
-		}
-		return true
-	}
-	n.ForEachNodes(fn)
-	return found
-}
-
 func (n *nodeList) ForEachNodes(fn func(*nameNode) bool) {
 	n.rwlocker.RLock()
 	defer n.rwlocker.RUnlock()

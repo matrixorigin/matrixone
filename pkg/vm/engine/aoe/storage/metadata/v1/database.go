@@ -103,7 +103,17 @@ func (db *Database) FindTableCommitByIndexLocked(name string, index *LogIndex) *
 	if node == nil {
 		return nil
 	}
-	return node.FindTableCommitByIndex(index)
+	var found *CommitInfo
+	fn := func(nn *nameNode) bool {
+		table := nn.GetTable()
+		found = table.FindCommitByIndexLocked(index)
+		if found != nil {
+			return false
+		}
+		return true
+	}
+	node.ForEachNodes(fn)
+	return found
 }
 
 func (db *Database) DebugCheckReplayedState() {

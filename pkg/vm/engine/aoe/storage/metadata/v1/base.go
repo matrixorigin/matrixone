@@ -223,15 +223,17 @@ func (e *BaseEntry) IsDeletedInTxnLocked(txn *TxnCtx) bool {
 	if e.CanUseTxnLocked(txn.tranId) {
 		return e.IsDeletedLocked()
 	}
-	next := e.CommitInfo.GetNext()
-	for next != nil {
-		info := next.(*CommitInfo)
+
+	var isDeleted bool
+	fn := func(info *CommitInfo) bool {
 		if info.CanUseTxn(txn.tranId) {
-			return info.IsDeleted()
+			isDeleted = info.IsDeleted()
+			return false
 		}
-		next = next.GetNext()
+		return true
 	}
-	return false
+	e.ForEachCommitLocked(fn)
+	return isDeleted
 }
 
 // Guarded by e.Lock()
