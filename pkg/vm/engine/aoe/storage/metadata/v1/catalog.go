@@ -138,7 +138,7 @@ func (catalog *Catalog) unregisterDatabaseLocked(db *Database) error {
 	return nil
 }
 
-func (catalog *Catalog) Compact() {
+func (catalog *Catalog) Compact(dbListener DatabaseListener, tblListener TableListener) {
 	dbs := make([]*Database, 0, 4)
 	deletes := make([]*Database, 0, 4)
 	catalog.RLock()
@@ -163,9 +163,12 @@ func (catalog *Catalog) Compact() {
 	}
 	for _, db := range deletes {
 		db.Release()
+		if dbListener != nil {
+			dbListener.OnDatabaseCompacted(db)
+		}
 	}
 	for _, db := range dbs {
-		db.Compact()
+		db.Compact(dbListener, tblListener)
 	}
 }
 

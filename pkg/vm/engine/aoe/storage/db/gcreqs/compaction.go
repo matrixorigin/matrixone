@@ -39,7 +39,7 @@ func (req *catalogCompactionRequest) Execute() error {
 	if !req.checkInterval() {
 		return nil
 	}
-	req.catalog.Compact()
+	req.catalog.Compact(nil, nil)
 	req.updateExecTS()
 	return nil
 }

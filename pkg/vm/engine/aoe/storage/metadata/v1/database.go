@@ -716,7 +716,7 @@ func (db *Database) PString(level PPLevel, depth int) string {
 	return s
 }
 
-func (db *Database) Compact() {
+func (db *Database) Compact(dbListener DatabaseListener, tblListener TableListener) {
 	tables := make([]*Table, 0, 2)
 	nodes := make([]*nodeList, 0, 2)
 	safeId := db.GetShardId()
@@ -751,6 +751,9 @@ func (db *Database) Compact() {
 	for _, table := range tables {
 		logutil.Infof("%s | Compacted", table.Repr(false))
 		delete(db.TableSet, table.Id)
+		if tblListener != nil {
+			tblListener.OnTableCompacted(table)
+		}
 	}
 	db.Unlock()
 	if len(names) > 0 {

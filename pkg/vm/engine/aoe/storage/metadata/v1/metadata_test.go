@@ -337,7 +337,7 @@ func TestDropTable(t *testing.T) {
 	assert.Equal(t, 3, nodes.Length())
 	t.Log(nodes.PString(PPL1))
 
-	db.Compact()
+	db.Compact(nil, nil)
 	assert.Equal(t, 2, nodes.Length())
 	t.Log(nodes.PString(PPL1))
 
@@ -346,14 +346,14 @@ func TestDropTable(t *testing.T) {
 	err = db.SimpleHardDeleteTable(t3.Id)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, nodes.Length())
-	db.Compact()
+	db.Compact(nil, nil)
 	t.Log(nodes.PString(PPL1))
 	assert.Equal(t, 1, nodes.Length())
 	assert.Equal(t, 1, len(db.nameNodes))
 
 	err = db.SimpleHardDeleteTable(t1.Id)
 	assert.Nil(t, err)
-	db.Compact()
+	db.Compact(nil, nil)
 	t.Log(nodes.PString(PPL1))
 	assert.Equal(t, 0, len(db.nameNodes))
 	assert.Equal(t, 0, len(db.TableSet))
