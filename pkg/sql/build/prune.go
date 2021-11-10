@@ -1470,6 +1470,9 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 func (b *build) pruneLike(e *extend.BinaryExtend) (extend.Extend, error) {
 	le, lok := e.Left.(*extend.ValueExtend)
 	re, rok := e.Right.(*extend.ValueExtend)
+	if !lok || !rok {
+		return e, nil
+	}
 
 	vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
 	vec.Ref = 1

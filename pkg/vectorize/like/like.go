@@ -74,7 +74,7 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 		}
 		return rs[:count], nil
 	}
-	if n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
+	if n >= 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
 		c0 := expr[0]   // first character
 		c1 := expr[n-1] // last character
 		switch {
@@ -175,8 +175,8 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 
 func sliceLikeSlice(s *types.Bytes, exprs *types.Bytes, rs []int64) ([]int64, error) {
 	count := 0
-	n := len(s.Data)
-	if n != len(exprs.Data) {
+	n := len(s.Lengths)
+	if n != len(exprs.Lengths) {
 		return nil, errors.New("unexpected error when LIKE operator")
 	}
 	for i, o1 := range s.Offsets {
@@ -228,7 +228,7 @@ func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
 		}
 		return nil, nil
 	}
-	if n > 1 && !bytes.ContainsAny(expr[1:n-1], "_%") {
+	if n >= 1 && !bytes.ContainsAny(expr[1:n-1], "_%") {
 		c0 := expr[0]   // first character
 		c1 := expr[n-1] // last character
 		switch {
