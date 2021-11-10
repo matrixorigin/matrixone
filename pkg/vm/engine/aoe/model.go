@@ -87,11 +87,11 @@ type IndexInfo struct {
 	SchemaId    uint64   `json:"schema_id"`
 	TableId     uint64   `json:"table_id"`
 	Columns     []uint64 `json:"columns"`
-	Id          uint64   `json:"id"`
+	// Id          uint64   `json:"id"`
 	Name        string   `json:"index_names"`
 	ColumnNames []string `json:"column_names"`
 	Type        uint64   `json:"type"`
-	Epoch       uint64   `json:"epoch"`
+	// Epoch       uint64   `json:"epoch"`
 }
 
 type SegmentInfo struct {

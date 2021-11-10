@@ -18,7 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/createIndex"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropIndex"
-	"github.com/matrixorigin/matrixone/pkg/sql/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -28,7 +28,12 @@ func (b *build) buildCreateIndex(stmt *tree.CreateIndex) (op.OP, error) {
 	if err != nil {
 		return nil, err
 	}
-	typ := stmt.IndexOption.IType
+	var typ tree.IndexType
+	if stmt.IndexOption != nil {
+		typ = stmt.IndexOption.IType
+	} else {
+		typ = 1
+	}
 	def := engine.IndexTableDef{Typ: int(typ), ColNames: stmt.KeyParts[0].ColName.Parts[:1], Name: string(stmt.Name)}
 	defs = append(defs, &def)
 	return createIndex.New(stmt.IfNotExists, r, defs), nil

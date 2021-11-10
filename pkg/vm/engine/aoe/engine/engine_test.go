@@ -16,8 +16,11 @@ package engine
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	stdLog "log"
+	"sync"
+
 	catalog2 "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,7 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/adaptor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
-	"sync"
 
 	"github.com/fagongzi/log"
 	putil "github.com/matrixorigin/matrixcube/components/prophet/util"
@@ -40,9 +42,10 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/metadata"
 )
 
 const (
@@ -211,6 +214,19 @@ func TestAOEEngine(t *testing.T) {
 	tb, err = db.Relation(mockTbl.Name)
 	require.NoError(t, err)
 	require.Equal(t, tb.ID(), mockTbl.Name)
+
+	idxDef := vengine.IndexTableDef{Typ: 0, ColNames: []string{"mock_0"}, Name: "mock_idx"}
+	err = tb.CreateIndex(0, []vengine.TableDef{&idxDef})
+	require.NoError(t, err)
+
+	err = tb.CreateIndex(0, []vengine.TableDef{&idxDef})
+	require.Equal(t, errors.New("index already exist"), err)
+
+	err = tb.DropIndex(0, idxDef.Name)
+	require.NoError(t, err)
+
+	err = tb.DropIndex(0, idxDef.Name)
+	require.Equal(t, errors.New("index not exist"), err)
 
 	relationAttrs := tb.Attribute()
 	require.Equal(t, len(attrs), len(relationAttrs), "Attribute: wrong length")

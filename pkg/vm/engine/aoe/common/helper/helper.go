@@ -109,7 +109,7 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 			idx := aoe.IndexInfo{
 				SchemaId: sid,
 				TableId:  tid,
-				Id:       id,
+				// Id:       id,
 				Type:     uint64(v.Typ),
 				Name:     v.Name,
 			}

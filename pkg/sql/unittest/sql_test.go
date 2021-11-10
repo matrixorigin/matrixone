@@ -147,6 +147,9 @@ func TestCreateDropIndex(t *testing.T) {
 		{"create database testinsert;", nil, nil},
 		{"CREATE TABLE TBL(A INT, B VARCHAR(10));", nil, nil},
 		{"CREATE INDEX index_name ON TBL (A);", nil, nil},
+		{"CREATE INDEX index_nameb using btree ON TBL (A);", nil, nil},
+		{"CREATE INDEX index_nameh using hash ON TBL (A);", nil, nil},
+		{"CREATE INDEX index_namer using rtree ON TBL (A);", nil, nil},
 		{"DROP INDEX index_name ON TBL;", nil, nil},
 		{"drop database testinsert;", nil, nil},
 	}
