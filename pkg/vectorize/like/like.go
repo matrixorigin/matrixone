@@ -16,6 +16,7 @@ package like
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"regexp"
@@ -173,15 +174,141 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 }
 
 func sliceLikeSlice(s *types.Bytes, exprs *types.Bytes, rs []int64) ([]int64, error) {
-	return nil, nil
+	count := 0
+	n := len(s.Data)
+	if n != len(exprs.Data) {
+		return nil, errors.New("unexpected error when LIKE operator")
+	}
+	for i, o1 := range s.Offsets {
+		o2 := exprs.Offsets[i]
+		k, err := pureLikePure(s.Data[o1 : o1 + s.Lengths[i]], exprs.Data[o2 : o2 + exprs.Lengths[i]], make([]int64, 1))
+		if err != nil {
+			return nil, err
+		}
+		if k != nil {
+			rs[count] = i
+			count++
+		}
+	}
+	return rs[:count], nil
 }
 
 func pureLikeSlice(p []byte, exprs *types.Bytes, rs []int64) ([]int64, error) {
-	return nil, nil
+	count := 0
+	for i, o := range exprs.Offsets {
+		k, err := pureLikePure(p, exprs.Data[o : o + exprs.Lengths[i]], make([]int64, 1))
+		if err != nil {
+			return nil, err
+		}
+		if k != nil {
+			rs[count] = i
+			count++
+		}
+	}
+	return rs[:count], nil
 }
 
 func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
-	return nil, nil
+	n := len(expr)
+	if n == 0 {
+		count := 0
+		if len(p) == 0 {
+			rs[0] = int64(0)
+			count++
+		}
+		return rs[:count], nil
+	}
+	if n == 1 && expr[0] == '%' {
+		rs[0] = int64(0)
+		return rs[:1], nil
+	}
+	if n == 1 && expr[0] == '_' {
+		count := 0
+		if len(p) == 1 {
+			rs[0] = int64(0)
+			count++
+		}
+		return rs[:1], nil
+	}
+	if n > 1 && !bytes.ContainsAny(expr[1:n-1], "_%") {
+		c0 := expr[0]   // first character
+		c1 := expr[n-1] // last character
+		switch {
+		case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
+			count := 0
+			if len(p) == n && bytes.Compare(expr, p) == 0 {
+				rs[count] = int64(0)
+				count++
+			}
+			return rs[:count], nil
+		case c0 == '_' && !(c1 == '%' || c1 == '_'):
+			suffix := expr[1:]
+			count := 0
+			if len(p) == n && bytes.Compare(suffix, p[1:]) == 0 {
+				rs[count] = int64(0)
+				count++
+			}
+			return rs[:count], nil
+		case c0 == '%' && !(c1 == '%' || c1 == '_'):
+			suffix := expr[1:]
+			count := 0
+			if bytes.HasSuffix(p, suffix) {
+				rs[count] = int64(0)
+				count++
+			}
+			return rs[:count], nil
+		case c1 == '_' && !(c0 == '%' || c0 == '_'):
+			prefix := expr[:n-1]
+			count := 0
+			if len(p) == n && bytes.Compare(prefix, p[:n-1]) == 0 {
+				rs[count] = int64(0)
+				count++
+			}
+			return rs[:count], nil
+		case c1 == '%' && !(c0 == '%' || c0 == '_'):
+			prefix := expr[:n-1]
+			count := 0
+			if len(p) >= n && bytes.Compare(p[:n-1], prefix) == 0 {
+				rs[count] = int64(0)
+				count++
+			}
+			return rs[:count], nil
+		case c0 == '%' && c1 == '%':
+			substr := expr[1 : n-1]
+			count := 0
+			if bytes.Contains(p, substr) {
+				rs[count] = int64(0)
+				count++
+			}
+			return rs[:count], nil
+		case c0 == '%' && c1 == '_':
+			suffix := expr[1 : n-1]
+			count := 0
+			if len(p) > 0 && bytes.HasSuffix(p[:len(p)-1], suffix) {
+				rs[count] = int64(0)
+				count++
+			}
+			return rs[:count], nil
+		case c0 == '_' && c1 == '%':
+			prefix := expr[1 : n-1]
+			count := 0
+			if len(p) > 0 && bytes.HasPrefix(p[1:], prefix) {
+				rs[count] = int64(0)
+				count++
+			}
+			return rs[:count], nil
+		}
+	}
+	reg, err := regexp.Compile(convert(expr))
+	if err != nil {
+		return nil, err
+	}
+	count := 0
+	if reg.Match(p) {
+		rs[count] = int64(0)
+		count++
+	}
+	return rs[:count], nil
 }
 
 func convert(expr []byte) string {
@@ -217,6 +344,3 @@ func replace(s string) string {
 	return string(r)
 }
 
-func isWildcard(c byte) bool {
-	return c == '%' || c == '_'
-}
