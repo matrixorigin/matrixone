@@ -16,9 +16,9 @@ package catalog
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -127,7 +127,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		c.Stop()
 	}()
 
-	c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(preAllocShardNum+1, time.Second*30)
 
 	stdLog.Printf("driver all started.")
 
@@ -171,6 +171,17 @@ func TestCatalogWithUtil(t *testing.T) {
 		createIds = append(createIds, createId)
 	}
 
+	//Test CreateIndex
+	col := testTables[0].Columns[0]
+	idxTableInfo, _ := catalog.GetTable(dbids[0], testTables[0].Name)
+	err = catalog.CreateIndex(0, aoe.IndexInfo{SchemaId: dbids[0], TableId: idxTableInfo.Id, Name: "mock_idx", ColumnNames: []string{col.Name}, Type: 0})
+	require.NoError(t, err)
+	idxs:=idxTableInfo.Indices
+	require.Equal(t,1,len(idxs))
+	idx:=idxs[0]
+	require.Equal(t,1,len(idx.Columns))
+	require.Equal(t,col.Id,idx.Columns[0])
+
 	//Test CreateTableExists
 	_, err = catalog.CreateTable(0, dbids[0], *testTables[0])
 	require.Equal(t, ErrTableCreateExists, err, "CreateTable: wrong err")
@@ -181,7 +192,7 @@ func TestCatalogWithUtil(t *testing.T) {
 	require.Equal(t, len(tables), tableCount, "ListTables: Wrong len")
 
 	//test ListTablesByName
-	tables, err = catalog.ListTablesByName(testDatabaceName+strconv.Itoa(0))
+	tables, err = catalog.ListTablesByName(testDatabaceName + strconv.Itoa(0))
 	require.NoError(t, err, "ListTablesByName Fail")
 	require.Equal(t, len(tables), tableCount, "ListTablesByName: Wrong len")
 
@@ -239,7 +250,7 @@ func TestCatalogWithUtil(t *testing.T) {
 	_, err = catalog.ListTables(dbids[0])
 	require.Equal(t, ErrDBNotExists, err, "DropDatabase: ListTables wrong err")
 
-	_, err = catalog.ListTablesByName(testDatabaceName+strconv.Itoa(0))
+	_, err = catalog.ListTablesByName(testDatabaceName + strconv.Itoa(0))
 	require.Equal(t, ErrDBNotExists, err, "DropDatabase: ListTablesByName wrong err")
 
 	_, err = catalog.GetTable(dbids[0], testTables[0].Name)
