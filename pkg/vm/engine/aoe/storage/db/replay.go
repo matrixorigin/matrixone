@@ -341,6 +341,7 @@ type replayHandle struct {
 	files      map[uint64]*tableDataFiles
 	flushsegs  []flushsegCtx
 	observer   IReplayObserver
+	cbs        []func() error
 }
 
 func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Tables, observer IReplayObserver) *replayHandle {
@@ -354,6 +355,7 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 		cleanables: make([]cleanable, 0),
 		flushsegs:  make([]flushsegCtx, 0),
 		observer:   observer,
+		cbs:        make([]func() error, 0),
 	}
 	empty := false
 	var err error
@@ -480,10 +482,12 @@ func (h *replayHandle) rebuildTable(meta *metadata.Table) error {
 		return err
 	}
 	if meta.IsDeleted() {
-		// TODO: If all resources are deleted, it should be marked as hard deleted and then
-		// removed from metadata
 		h.addCleanable(tablesFiles)
-		return nil
+		if meta.IsHardDeleted() {
+			return nil
+		}
+		err = meta.HardDelete()
+		return err
 	}
 
 	for i := len(meta.SegmentSet) - 1; i >= 0; i-- {
