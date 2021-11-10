@@ -35,7 +35,7 @@ const (
 	DefaultBlockMaxRows     = uint64(40000)
 	DefaultBlocksPerSegment = uint64(40)
 
-	DefaultCleanInterval = 5
+	DefaultCleanInterval = 600
 
 	DefaultBlockWriters     = uint16(8)
 	DefaultSegmentWriters   = uint16(4)
