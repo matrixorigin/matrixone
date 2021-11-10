@@ -92,6 +92,20 @@ func (db *Database) Repr() string {
 	return fmt.Sprintf("DB-%d<\"%s\",S-%d>", db.Id, db.Name, db.CommitInfo.GetShardId())
 }
 
+func (db *Database) FindTableLogIndex(name string, index *LogIndex) bool {
+	db.RLock()
+	defer db.RUnlock()
+	return db.FindTableLogIndexLocked(name, index)
+}
+
+func (db *Database) FindTableLogIndexLocked(name string, index *LogIndex) bool {
+	node := db.nameNodes[name]
+	if node == nil {
+		return false
+	}
+	return node.FindTableLogIndex(index)
+}
+
 func (db *Database) DebugCheckReplayedState() {
 	if db.Catalog == nil {
 		panic("catalog is missing")
@@ -518,6 +532,12 @@ func (db *Database) prepareCreateTable(ctx *createTableCtx) (LogEntry, error) {
 		db.Unlock()
 		return nil, DatabaseNotFoundErr
 	}
+	// if ctx.exIndex != nil {
+	// 	if found := db.FindTableLogIndexLocked(ctx.schema.Name, ctx.exIndex); found {
+	// 		db.Unlock()
+	// 		return nil, CommitStaleErr
+	// 	}
+	// }
 	if err = db.onNewTable(entry); err != nil {
 		db.Unlock()
 		return nil, err

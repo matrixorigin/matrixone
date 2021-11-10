@@ -203,7 +203,6 @@ func (e *BaseEntry) FindLogIndexLocked(index *LogIndex) bool {
 	found := false
 	fn := func(info *CommitInfo) bool {
 		comp := info.LogIndex.Compare(index)
-		logutil.Infof("kkkkkk %s-%s, %d", info.LogIndex.String(), index.String(), comp)
 		if comp == 0 {
 			found = true
 			return false

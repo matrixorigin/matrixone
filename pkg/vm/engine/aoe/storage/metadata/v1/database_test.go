@@ -172,17 +172,17 @@ func TestDatabase1(t *testing.T) {
 
 	db4Replayed, err := catalog2.SimpleGetDatabaseByName(db4.Name)
 	assert.Nil(t, err)
-	_, err = db4Replayed.SimpleCreateTable(schema, gen.Curr())
-	assert.NotNil(t, err)
 
-	f := db4Replayed.FindLogIndexLocked(db4Replayed.FirstCommitLocked().LogIndex)
+	f := db4Replayed.FindTableLogIndex(schema.Name, gen.Curr())
+	assert.True(t, f)
+
+	f = db4Replayed.FindLogIndexLocked(db4Replayed.FirstCommitLocked().LogIndex)
 	assert.True(t, f)
 	f = db4Replayed.FindLogIndexLocked(db4Replayed.CommitInfo.LogIndex)
 	assert.True(t, f)
-
-	t.Log(indexWal.String())
-	t.Log(indexWal2.String())
-	t.Log(catalog2.PString(PPL0, 0))
+	// t.Log(indexWal.String())
+	// t.Log(indexWal2.String())
+	// t.Log(catalog2.PString(PPL0, 0))
 }
 
 func TestTxn(t *testing.T) {
