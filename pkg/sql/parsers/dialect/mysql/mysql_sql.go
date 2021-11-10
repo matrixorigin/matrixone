@@ -14,7 +14,7 @@ import (
 	"go/constant"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/defines"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 

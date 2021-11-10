@@ -18,7 +18,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/defines"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 type Family int32

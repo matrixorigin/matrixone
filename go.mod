@@ -19,7 +19,6 @@ require (
 	github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770
 	github.com/panjf2000/ants/v2 v2.4.5
 	github.com/pierrec/lz4 v2.6.0+incompatible
-	github.com/pingcap/parser v0.0.0-20210310110710-c7333a4927e6
 	github.com/sirupsen/logrus v1.7.0
 	github.com/stretchr/testify v1.7.0
 	github.com/yireyun/go-queue v0.0.0-20210520035143-72b190eafcba
@@ -68,7 +67,6 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/phf/go-queue v0.0.0-20170504031614-9abe38d0371d // indirect
 	github.com/pingcap/errors v0.11.5-0.20201029093017-5a7df2af2ac7 // indirect
-	github.com/pingcap/log v0.0.0-20200511115504-543df19646ad // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_golang v1.11.0 // indirect
