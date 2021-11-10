@@ -47,7 +47,7 @@ func (id *IndexId) Compare(o *IndexId) int {
 	}
 	if id.Offset > o.Offset {
 		return 1
-	} else {
+	} else if id.Offset < o.Offset {
 		return -1
 	}
 	return 0

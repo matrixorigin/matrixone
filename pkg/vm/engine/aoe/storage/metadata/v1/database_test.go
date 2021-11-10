@@ -168,6 +168,13 @@ func TestDatabase1(t *testing.T) {
 	assert.Equal(t, indexWal.GetShardCheckpointId(100), indexWal2.GetShardCheckpointId(100))
 	assert.Equal(t, indexWal.GetShardCheckpointId(101), indexWal2.GetShardCheckpointId(101))
 	assert.Equal(t, indexWal.GetShardCheckpointId(103), indexWal2.GetShardCheckpointId(103))
+	assert.Equal(t, indexWal2.GetShardCheckpointId(103), gen.Curr().Id.Id-1)
+
+	db4Replayed, err := catalog2.SimpleGetDatabaseByName(db4.Name)
+	assert.Nil(t, err)
+	_, err = db4Replayed.SimpleCreateTable(schema, gen.Curr())
+	assert.NotNil(t, err)
+
 	t.Log(indexWal.String())
 	t.Log(indexWal2.String())
 	t.Log(catalog2.PString(PPL0, 0))

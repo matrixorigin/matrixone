@@ -75,13 +75,41 @@ func (n *nodeList) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
 	return
 }
 
-func (n *nodeList) LengthLocked() int {
-	curr := n.GetNext()
-	length := 0
-	for curr != nil {
-		curr = curr.GetNext()
-		length++
+func (n *nodeList) FindTableLogIndex(index *LogIndex) bool {
+	found := false
+	fn := func(nn *nameNode) bool {
+		table := nn.GetTable()
+		found = table.FindLogIndexLocked(index)
+		return !found
 	}
+	n.ForEachNodes(fn)
+	return found
+}
+
+func (n *nodeList) ForEachNodes(fn func(*nameNode) bool) {
+	n.rwlocker.RLock()
+	defer n.rwlocker.RUnlock()
+	n.ForEachNodesLocked(fn)
+}
+
+func (n *nodeList) ForEachNodesLocked(fn func(*nameNode) bool) {
+	curr := n.GetNext()
+	for curr != nil {
+		nn := curr.(*nameNode)
+		if ok := fn(nn); !ok {
+			break
+		}
+		curr = curr.GetNext()
+	}
+}
+
+func (n *nodeList) LengthLocked() int {
+	length := 0
+	fn := func(*nameNode) bool {
+		length++
+		return true
+	}
+	n.ForEachNodesLocked(fn)
 	return length
 }
 

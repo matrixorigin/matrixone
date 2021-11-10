@@ -60,13 +60,7 @@ func TestBasicOps(t *testing.T) {
 	assert.NotNil(t, blk1)
 	assert.Equal(t, metadata.OpCreate, blk1.CommitInfo.Op)
 
-	err = blk1.SimpleUpgrade(nil)
-	assert.NotNil(t, err)
-
 	blk1.SetCount(blk1.Segment.Table.Schema.BlockMaxRows)
-	err = blk1.SimpleUpgrade(nil)
-	assert.Nil(t, err)
-	assert.True(t, blk1.IsFullLocked())
 
 	schedCtx := &sched.Context{
 		Opts:     opts,

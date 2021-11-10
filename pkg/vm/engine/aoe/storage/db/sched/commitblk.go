@@ -35,7 +35,9 @@ func NewCommitBlkEvent(ctx *Context, meta *metadata.Block) *commitBlkEvent {
 
 func (e *commitBlkEvent) Execute() error {
 	if e.Meta != nil {
-		e.Meta.SimpleUpgrade(nil)
+		if err := e.Meta.SimpleUpgrade(nil); err != nil {
+			return err
+		}
 		wal := e.Meta.Segment.Table.Database.Catalog.IndexWal
 		if wal != nil {
 			snip := e.Meta.ConsumeSnippet(true)

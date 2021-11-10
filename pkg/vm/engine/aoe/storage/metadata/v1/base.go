@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
@@ -76,26 +77,15 @@ func (e *BaseEntry) IsSortedLocked() bool {
 	return e.CommitInfo.Op == OpUpgradeSorted
 }
 
-// func (e *BaseEntry) ForLoopCommitsLocked(filter *commitFilter) *CommitInfo {
-// 	var curr common.ISSLLNode
-// 	curr = e.CommitInfo
-// 	for curr != nil {
-// 		info := curr.(*CommitInfo)
-// 		if info.HasCommitted() {
-// 			return info
-// 		}
-// 	}
-// 	return nil
-// }
-
 func (e *BaseEntry) onCommit(info *CommitInfo) error {
 	// PXU TODO: Scan all commits
-	if e.CommitInfo != nil && e.CommitInfo.LogIndex != nil {
+	// FIXME: Why skip hard delete: hard delete log index is same with the last one
+	if !info.IsHardDeleted() && e.CommitInfo != nil && e.CommitInfo.LogIndex != nil {
 		comp := e.CommitInfo.LogIndex.Compare(info.LogIndex)
 		if comp > 0 {
 			return CommitStaleErr
 		} else if comp == 0 && !e.CommitInfo.SameTran(info) {
-			panic("logic error")
+			panic(fmt.Sprintf("logic error: %s, %s", e.CommitInfo.LogIndex.String(), info.LogIndex.String()))
 		}
 	}
 	info.SetNext(e.CommitInfo)
@@ -177,6 +167,37 @@ func (e *BaseEntry) UseCommittedLocked(filter *commitFilter) *BaseEntry {
 		curr = curr.GetNext()
 	}
 	return nil
+}
+
+func (e *BaseEntry) ForEachCommitLocked(fn func(*CommitInfo) bool) {
+	var curr common.ISSLLNode
+	curr = e.CommitInfo
+	for curr != nil {
+		info := curr.(*CommitInfo)
+		if ok := fn(info); !ok {
+			break
+		}
+		curr = curr.GetNext()
+	}
+	return
+}
+
+func (e *BaseEntry) FindLogIndexLocked(index *LogIndex) bool {
+	found := false
+	fn := func(info *CommitInfo) bool {
+		comp := info.LogIndex.Compare(index)
+		logutil.Infof("kkkkkk %s-%s, %d", info.LogIndex.String(), index.String(), comp)
+		if comp == 0 {
+			found = true
+			return false
+		}
+		if comp < 0 && info.IsDeleted() {
+			return false
+		}
+		return true
+	}
+	e.ForEachCommitLocked(fn)
+	return found
 }
 
 func (e *BaseEntry) IsDeletedInTxnLocked(txn *TxnCtx) bool {
