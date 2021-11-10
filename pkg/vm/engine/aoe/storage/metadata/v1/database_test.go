@@ -122,6 +122,20 @@ func TestDatabase1(t *testing.T) {
 	_, err = db4.SimpleCreateTable(schema, gen.Curr())
 	assert.Nil(t, err)
 
+	schema2 := MockSchema(3)
+	schema2.Name = "t2"
+	err = indexWal.SyncLog(gen.Next())
+	assert.Nil(t, err)
+	t2, err := db4.SimpleCreateTable(schema2, gen.Curr())
+	assert.Nil(t, err)
+	createIdx := gen.Curr()
+
+	err = indexWal.SyncLog(gen.Next())
+	assert.Nil(t, err)
+	err = t2.SimpleSoftDelete(gen.Curr())
+	assert.Nil(t, err)
+	dropIdx := gen.Curr()
+
 	dbDeleted := 0
 	tableDeleted := 0
 	dbCnt := 0
@@ -147,7 +161,7 @@ func TestDatabase1(t *testing.T) {
 	assert.Equal(t, 1, dbDeleted)
 	assert.Equal(t, 1, tableDeleted)
 	assert.Equal(t, 3, dbCnt)
-	assert.Equal(t, 2, tblCnt)
+	assert.Equal(t, 3, tblCnt)
 
 	t.Log(catalog.PString(PPL0, 0))
 	indexWal.Close()
@@ -160,28 +174,31 @@ func TestDatabase1(t *testing.T) {
 	tableDeleted = 0
 	dbCnt, tblCnt = 0, 0
 	catalog2.RecurLoopLocked(processor)
+	t.Log(indexWal.String())
+	t.Log(indexWal2.String())
 	assert.Equal(t, 0, dbDeleted)
 	assert.Equal(t, 0, tableDeleted)
 	assert.Equal(t, 3, dbCnt)
-	assert.Equal(t, 2, tblCnt)
+	assert.Equal(t, 3, tblCnt)
 
 	assert.Equal(t, indexWal.GetShardCheckpointId(100), indexWal2.GetShardCheckpointId(100))
 	assert.Equal(t, indexWal.GetShardCheckpointId(101), indexWal2.GetShardCheckpointId(101))
 	assert.Equal(t, indexWal.GetShardCheckpointId(103), indexWal2.GetShardCheckpointId(103))
-	assert.Equal(t, indexWal2.GetShardCheckpointId(103), gen.Curr().Id.Id-1)
+	assert.Equal(t, indexWal2.GetShardCheckpointId(103), gen.Curr().Id.Id-3)
 
 	db4Replayed, err := catalog2.SimpleGetDatabaseByName(db4.Name)
 	assert.Nil(t, err)
 
-	f := db4Replayed.FindTableLogIndex(schema.Name, gen.Curr())
+	f := db4Replayed.FindTableLogIndex(schema2.Name, createIdx)
+	assert.True(t, f)
+	f = db4Replayed.FindTableLogIndex(schema2.Name, dropIdx)
 	assert.True(t, f)
 
 	f = db4Replayed.FindLogIndexLocked(db4Replayed.FirstCommitLocked().LogIndex)
 	assert.True(t, f)
 	f = db4Replayed.FindLogIndexLocked(db4Replayed.CommitInfo.LogIndex)
 	assert.True(t, f)
-	// t.Log(indexWal.String())
-	// t.Log(indexWal2.String())
+
 	// t.Log(catalog2.PString(PPL0, 0))
 }
 
