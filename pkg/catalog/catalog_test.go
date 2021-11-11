@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	// md "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 
@@ -81,9 +80,7 @@ func MockTableInfo(colCnt int, i int) *aoe.TableInfo {
 		} else {
 			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 		}
-		// indexInfo := aoe.IndexInfo{Type: uint64(md.ZoneMap), Columns: []uint64{uint64(i)}}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)
-		// tblInfo.Indices = append(tblInfo.Indices, indexInfo)
 	}
 	return tblInfo
 }

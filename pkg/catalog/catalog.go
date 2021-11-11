@@ -359,7 +359,6 @@ func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
 	}
 	tbl.Epoch = epoch
 	tbl.Indices = append(tbl.Indices, idxInfo)
-	// logutil.Infof("misuxi CreateIndex: indexInfo is %v", idxInfo)
 	err = c.updateTableInfo(idxInfo.SchemaId, tbl)
 	return err
 }
@@ -376,7 +375,6 @@ func (c *Catalog) DropIndex(epoch, tid, dbid uint64, idxName string) error {
 		if indice.Name == idxName {
 			tbl.Epoch = epoch
 			tbl.Indices = append(tbl.Indices[:i], tbl.Indices[i+1:]...)
-			logutil.Infof("misuxi DropIndex: indexName is %v, indices is %v", idxName, tbl.Indices)
 			err = c.updateTableInfo(dbid, tbl)
 			return err
 		}
