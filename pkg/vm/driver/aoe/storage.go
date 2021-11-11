@@ -345,6 +345,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 	for _, metadata := range metadatas {
 		tableName := sPrefix + strconv.Itoa(int(metadata.ShardID))
 		tbl := s.DB.Store.Catalog.SimpleGetTableByName(tableName)
+		createTable := false;
 		if tbl == nil {
 			mateTblInfo := aoe.TableInfo{
 				Name:    tableName,
@@ -368,6 +369,8 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 			_, err := s.DB.CreateTable(&mateTblInfo, dbi.TableOpCtx{
 				ShardId:   metadata.ShardID,
 				OpIndex:   metadata.LogIndex,
+				OpOffset:  0,
+				OpSize:    2,
 				TableName: tableName,
 			})
 			if err != nil {
@@ -375,6 +378,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 				return err
 			}
 			tbl = s.DB.Store.Catalog.SimpleGetTableByName(tableName)
+			createTable = true;
 		}
 		var attrs []string
 		for _, colDef := range tbl.Schema.ColDefs {
@@ -383,7 +387,7 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		bat := batch.New(true, attrs)
 		vMetadata := vector.New(types.Type{Oid: types.T_varchar, Size: int32(len(protoc.MustMarshal(&metadata.Metadata)))})
 		vMetadata.Ref = 1
-		logutil.Infof("SaveShardMetadata Metadata is %v\n", metadata.Metadata)
+		logutil.Infof("SaveShardMetadata Metadata is %v, LogIndex is %d\n", metadata.Metadata, metadata.LogIndex)
 		vMetadata.Col = &types.Bytes{
 			Data:    protoc.MustMarshal(&metadata.Metadata),
 			Offsets: []uint32{0},
@@ -398,11 +402,17 @@ func (s *Storage) SaveShardMetadata(metadatas []meta.ShardMetadata) error {
 		vLogIndex.Ref = 1
 		vLogIndex.Col = []uint64{metadata.LogIndex}
 		bat.Vecs[1] = vLogIndex
+		offset := 0
+		size := 1
+		if createTable {
+			offset = 1
+			size = 2
+		}
 		err := s.DB.Append(dbi.AppendCtx{
 			ShardId:   metadata.ShardID,
 			OpIndex:   metadata.LogIndex,
-			OpOffset:  0,
-			OpSize:    1,
+			OpOffset:  offset,
+			OpSize:    size,
 			TableName: sPrefix + strconv.Itoa(int(metadata.ShardID)),
 			Data:      bat,
 		})
