@@ -235,7 +235,8 @@ func (replayer *catalogReplayer) restoreWal() {
 		}
 		safeId, ok := replayer.cache.safeIds[database.GetShardId()]
 		if !ok {
-			panic(fmt.Sprintf("cannot get safeid of shardId %d", database.GetShardId()))
+			logutil.Warnf("Cannot get safeid of shardId %d", database.GetShardId())
+			safeId = 0
 		}
 		database.InitWal(safeId)
 	}

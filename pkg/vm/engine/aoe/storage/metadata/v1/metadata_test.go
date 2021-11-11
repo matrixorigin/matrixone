@@ -1258,12 +1258,17 @@ func TestSplit2(t *testing.T) {
 	db, err := catalog.SimpleCreateDatabase("db1", gen.Curr(shardId))
 	assert.Nil(t, err)
 	indexWal.Checkpoint(gen.Curr(shardId))
-	wg.Add(4)
+	wg.Add(1)
 	w1.Submit(createBlock(t, 1, gen, shardId, db, 0, wg, w2))
+	wg.Wait()
+	wg.Add(1)
 	w1.Submit(createBlock(t, 1, gen, shardId, db, 1, wg, w2))
+	wg.Wait()
+	wg.Add(1)
 	w1.Submit(createBlock(t, 1, gen, shardId, db, 2, wg, w2))
+	wg.Wait()
+	wg.Add(1)
 	w1.Submit(createBlock(t, 1, gen, shardId, db, 3, wg, w2))
-
 	wg.Wait()
 	testutils.WaitExpect(100, func() bool {
 		return db.GetCheckpointId() == gen.Get(shardId)
@@ -1335,15 +1340,17 @@ func TestSplit2(t *testing.T) {
 	t.Log(catalog.PString(PPL0, 0))
 	t.Log(indexWal.String())
 	catalog.Close()
-	return
+	indexWal.Close()
 
 	t.Log("--------------------------------------")
-	catalog2, _ := initTest(dir, uint64(100), uint64(2), false, false)
+	catalog2, indexWal2 := initTest(dir, uint64(100), uint64(2), true, false)
 	tables = 0
 	err = catalog2.RecurLoopLocked(processor)
 	assert.Nil(t, err)
 	t.Log(catalog2.PString(PPL0, 0))
+	t.Log(indexWal2.String())
 	assert.Equal(t, tables, 5)
 	doCompareCatalog(t, catalog, catalog2)
 	catalog2.Close()
+	indexWal2.Close()
 }
