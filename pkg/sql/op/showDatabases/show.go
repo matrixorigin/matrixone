@@ -16,11 +16,16 @@ package showDatabases
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func New(e engine.Engine) *ShowDatabases {
-	return &ShowDatabases{e}
+func New(e engine.Engine, like *tree.ComparisonExpr) *ShowDatabases {
+	var l []byte = nil
+	if like != nil {
+		l = []byte(like.Right.String())
+	}
+	return &ShowDatabases{e, l}
 }
 
 func (n *ShowDatabases) String() string {

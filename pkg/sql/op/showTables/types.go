@@ -14,8 +14,11 @@
 
 package showTables
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine"
+import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+)
 
 type ShowTables struct {
 	Db engine.Database
+	Like []byte
 }

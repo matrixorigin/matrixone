@@ -81,7 +81,7 @@ func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 		}
 		return rs[:count], nil
 	}
-	if n >= 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
+	if n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
 		c0 := expr[0]   // first character
 		c1 := expr[n-1] // last character
 		switch {
@@ -236,7 +236,7 @@ func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
 		}
 		return nil, nil
 	}
-	if n >= 1 && !bytes.ContainsAny(expr[1:n-1], "_%") {
+	if n > 1 && !bytes.ContainsAny(expr[1:n-1], "_%") {
 		c0 := expr[0]   // first character
 		c1 := expr[n-1] // last character
 		switch {
@@ -330,7 +330,7 @@ func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []
 		cFlag = 2
 	case n == 1 && expr[0] == '_':
 		cFlag = 3
-	case n >= 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%"):
+	case n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%"):
 		cFlag = 4
 	default:
 		cFlag = 5
@@ -518,7 +518,7 @@ func replace(s string) string {
 		}
 		switch c {
 		case '_':
-			w += copy(r[w:], []byte{'*'})
+			w += copy(r[w:], []byte{'.'})
 		case '%':
 			w += copy(r[w:], []byte{'.', '*'})
 		case '\\':

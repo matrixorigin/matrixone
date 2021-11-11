@@ -16,11 +16,16 @@ package showTables
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func New(db engine.Database) *ShowTables {
-	return &ShowTables{db}
+func New(db engine.Database, like *tree.ComparisonExpr) *ShowTables {
+	var l []byte = nil
+	if like != nil {
+		l = []byte(like.Right.String())
+	}
+	return &ShowTables{db, l}
 }
 
 func (n *ShowTables) String() string {

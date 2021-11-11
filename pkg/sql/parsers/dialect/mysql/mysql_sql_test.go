@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "insert into uus values (255, 65535, 4294967295, 18446744073709551615)",
+		input: "select '123' like '\\%'",
 	}
 )
 

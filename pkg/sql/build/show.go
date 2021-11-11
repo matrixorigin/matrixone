@@ -31,9 +31,9 @@ func (b *build) buildShowTables(stmt *tree.ShowTables) (op.OP, error) {
 	if err != nil {
 		return nil, sqlerror.New(errno.InvalidSchemaName, err.Error())
 	}
-	return showTables.New(db), nil
+	return showTables.New(db, stmt.Like), nil
 }
 
 func (b *build) buildShowDatabases(stmt *tree.ShowDatabases) (op.OP, error) {
-	return showDatabases.New(b.e), nil
+	return showDatabases.New(b.e, stmt.Like), nil
 }
