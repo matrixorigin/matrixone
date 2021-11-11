@@ -1,6 +1,9 @@
 package metadata
 
-import "github.com/matrixorigin/matrixone/pkg/logutil"
+import (
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/pkg/errors"
+)
 
 type Cleaner struct {
 	Catalog *Catalog
@@ -13,6 +16,9 @@ func NewCleaner(catalog *Catalog) *Cleaner {
 }
 
 func (cleaner *Cleaner) TryCompactDB(db *Database, dropTableFn func(*Table) error) error {
+	if !db.IsDeleted() {
+		return errors.New("Cannot compact active database")
+	}
 	tables := make([]*Table, 0)
 	processor := new(LoopProcessor)
 	processor.TableFn = func(t *Table) error {

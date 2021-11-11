@@ -1231,7 +1231,6 @@ func TestSplit1(t *testing.T) {
 	assert.Equal(t, tables, 9)
 	t.Log(catalog.PString(PPL0, 0))
 	catalog.Close()
-	return
 
 	t.Log("--------------------------------------")
 	catalog2, _ := initTest(dir, uint64(100), uint64(2), false, false)

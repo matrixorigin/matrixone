@@ -12,11 +12,12 @@ import (
 
 type dropDBRequest struct {
 	gc.BaseRequest
-	Tables      *table.Tables
-	DB          *metadata.Database
-	MemTableMgr mtif.IManager
-	Opts        *storage.Options
-	Cleaner     *metadata.Cleaner
+	Tables         *table.Tables
+	DB             *metadata.Database
+	MemTableMgr    mtif.IManager
+	Opts           *storage.Options
+	Cleaner        *metadata.Cleaner
+	needReschedule bool
 }
 
 func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *table.Tables, mtMgr mtif.IManager) *dropDBRequest {
@@ -38,14 +39,17 @@ func (req *dropDBRequest) dropTable(meta *metadata.Table) error {
 	task := NewDropTblRequest(req.Opts, meta, req.Tables, req.MemTableMgr, nil)
 	if err := task.Execute(); err != nil {
 		logutil.Warn(err.Error())
+		req.needReschedule = true
 	}
 	return nil
 }
 
 func (req *dropDBRequest) Execute() error {
 	err := req.Cleaner.TryCompactDB(req.DB, req.dropTable)
-	if err != nil {
+	if err != nil && req.needReschedule {
+		req.needReschedule = false
 		req.Next = req
+		err = nil
 	}
-	return nil
+	return err
 }

@@ -292,23 +292,28 @@ func (d *DB) CreateDatabase(name string, shardId uint64) (*metadata.Database, er
 	})
 }
 
-func (d *DB) DropDatabase(name string, index uint64) error {
+func (d *DB) DropDatabase(name string, index uint64) (err error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
 	database, err := d.Store.Catalog.SimpleGetDatabaseByName(name)
 	if err != nil {
-		return err
+		return
 	}
 	logIndex := &metadata.LogIndex{
 		ShardId: database.GetShardId(),
 		Id:      shard.SimpleIndexId(index),
 	}
-	if err := d.Wal.SyncLog(logIndex); err != nil {
-		return err
+	if err = d.Wal.SyncLog(logIndex); err != nil {
+		return
 	}
 	defer d.Wal.Checkpoint(logIndex)
-	return database.SimpleSoftDelete(logIndex)
+	if err = database.SimpleSoftDelete(logIndex); err != nil {
+		return
+	}
+	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
+	d.Opts.GC.Acceptor.Accept(gcReq)
+	return
 }
 
 func (d *DB) CreateTable(dbName string, schema *metadata.Schema, index *metadata.LogIndex) (id uint64, err error) {
