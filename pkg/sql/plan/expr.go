@@ -24,7 +24,7 @@ import (
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/colexec/extend/overload"
 	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers/tree"
 	"matrixone/pkg/sql/viewexec/transformer"
 	"strings"
 )

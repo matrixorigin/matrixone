@@ -17,7 +17,8 @@ package plan
 import (
 	"fmt"
 	"log"
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers"
+	"matrixone/pkg/sql/parsers/dialect"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/memEngine"
 	"testing"
@@ -187,7 +188,8 @@ func TestBuild(t *testing.T) {
 }
 
 func processQuery(query string, e engine.Engine) {
-	stmts, err := tree.NewParser().Parse(query)
+	// stmts, err := tree.NewParser().Parse(query)
+	stmts, err := parsers.Parse(dialect.MYSQL, query)
 	if err != nil {
 		log.Fatal(err)
 	}

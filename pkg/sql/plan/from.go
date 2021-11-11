@@ -18,7 +18,7 @@ import (
 	"fmt"
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers/tree"
 	"matrixone/pkg/vm/engine"
 )
 

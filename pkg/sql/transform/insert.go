@@ -14,7 +14,7 @@
 
 package transform
 
-import "matrixone/pkg/sql/tree"
+import "matrixone/pkg/sql/parsers/tree"
 
 func transformInsert(stmt *tree.Insert) *tree.Insert {
 	jtbl, ok := stmt.Table.(*tree.JoinTableExpr)

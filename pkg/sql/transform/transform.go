@@ -15,7 +15,7 @@
 package transform
 
 import (
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers/tree"
 )
 
 // convert tidb's ast tree to a more manageable format

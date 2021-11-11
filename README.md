@@ -1,6 +1,6 @@
 [![LICENSE](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Language](https://img.shields.io/badge/Language-Go-blue.svg)](https://golang.org/)
-[![CodeFactor](https://www.codefactor.io/repository/github/matrixorigin/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0)](https://www.codefactor.io/repository/github/matrixorigin/matrixone)
+[![CodeFactor](https://www.codefactor.io/repository/github/matrixone/badge?s=7280f4312fca2f2e6938fb8de5b726c5252541f0)](https://www.codefactor.io/repository/github/matrixone)
 
 ## What is MatrixOne?
 MatrixOne is a planet scale, cloud-edge native big data engine crafted for heterogeneous workloads. It provides an end-to-end data processing platform that is highly autonomous and easy to use, to empower users to store, manipulate, and analyze data across devices, edges, and clouds, with minimal operational overheads.
@@ -62,7 +62,7 @@ Install the following prerequisites as necessary:
 1. Get the MatrixOne code:
 
 ```
-$ git clone https://github.com/matrixorigin/matrixone.git
+$ git clone https://matrixone.git
 $ cd matrixone
 ```
 
@@ -106,7 +106,7 @@ Now, MatrixOne only supports the TCP listen.
 See [Contributing Guide](CONTRIBUTING.md) for details on contribution workflows.
 
 ## Roadmap
-Check out [Roadmap](https://github.com/matrixorigin/matrixone/issues/613) for MatrixOne development plan.
+Check out [Roadmap](https://matrixone/issues/613) for MatrixOne development plan.
 
 ## Community
 You can join [MatrixOne community](https://join.slack.com/t/matrixoneworkspace/shared_invite/zt-voce6d82-C8vdyHNcv11l430D0QKZlw) on Slack to discuss and ask questions.

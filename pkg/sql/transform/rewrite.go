@@ -17,7 +17,7 @@ package transform
 import (
 	"go/constant"
 	"matrixone/pkg/sql/colexec/extend/overload"
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers/tree"
 )
 
 // AstRewrite do sql rewrite before plan build.

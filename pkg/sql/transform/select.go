@@ -15,7 +15,7 @@
 package transform
 
 import (
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers/tree"
 )
 
 func transformSelect(stmt *tree.Select) *tree.Select {
