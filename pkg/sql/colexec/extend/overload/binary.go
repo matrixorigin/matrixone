@@ -510,6 +510,27 @@ func initCastRulesForBinaryOps() {
 		}
 		binOpsReturnType[index][types.T_float64][types.T_float32] = types.T(nret)
 	}
+	// LIKE cast rule
+	{
+		index := Like - firstBinaryOp
+		// cast to varchar like varchar
+		nl, nr, nret := types.Type{Oid: types.T_varchar, Size: 24}, types.Type{Oid: types.T_varchar, Size: 24}, types.T_sel
+		// like between char and varchar
+		binOpsTypeCastRules[index][types.T_char][types.T_varchar] = castResult{
+			has:           true,
+			leftCast:      nl,
+			rightCast:     nr,
+			newReturnType: types.T(nret),
+		}
+		binOpsReturnType[index][types.T_char][types.T_varchar] = types.T(nret)
+		binOpsTypeCastRules[index][types.T_varchar][types.T_char] = castResult{
+			has:           true,
+			leftCast:      nr,
+			rightCast:     nl,
+			newReturnType: types.T(nret),
+		}
+		binOpsReturnType[index][types.T_varchar][types.T_char] = types.T(nret)
+	}
 
 	// EQ / NE / GE / GT / LE / LT
 	{
