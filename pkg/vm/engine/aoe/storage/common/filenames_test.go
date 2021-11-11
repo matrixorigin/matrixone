@@ -15,7 +15,6 @@
 package common
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -47,11 +46,6 @@ func TestFilenames(t *testing.T) {
 	tblk1 := MakeTBlockFileName(workDir, "tblk-1", false)
 	assert.Equal(t, "/work/data/tblk-1.tblk", tblk1)
 
-	ckp1 := MakeInfoCkpFileName(workDir, "1", false)
-	assert.Equal(t, "/work/meta/1.ckp", ckp1)
-	tckp1 := MakeTableCkpFileName(workDir, "1", 0, false)
-	assert.Equal(t, "/work/meta/1.tckp", tckp1)
-
 	res, ok := ParseSegmentfileName(seg1)
 	assert.True(t, ok)
 	res, ok = ParseSegmentfileName(res)
@@ -63,17 +57,6 @@ func TestFilenames(t *testing.T) {
 	res, ok = ParseTBlockfileName(tblk1)
 	assert.True(t, ok)
 	res, ok = ParseTBlockfileName(res)
-	assert.False(t, ok)
-	_, ok = ParseInfoMetaName(strings.TrimPrefix(ckp1, "/work/meta/"))
-	assert.True(t, ok)
-	_, ok = ParseInfoMetaName("xxx.ckpp")
-	assert.False(t, ok)
-	assert.Panics(t, func() {
-		_, ok = ParseInfoMetaName("xxx.ckp")
-	})
-	_, ok = ParseTableMetaName(strings.TrimPrefix(tckp1, "/work/meta/"))
-	assert.True(t, ok)
-	_, ok = ParseTableMetaName("xxx.tckpp")
 	assert.False(t, ok)
 
 	n := MakeFilename(workDir, FTTransientNode, "node", false)

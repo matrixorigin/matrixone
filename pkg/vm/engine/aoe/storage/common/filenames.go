@@ -18,20 +18,26 @@ import (
 	"errors"
 	"fmt"
 	"path"
-	"strconv"
 	"strings"
 )
 
 type FileT int
 
 const (
-	FTInfoCkp FileT = iota
-	FTTableCkp
-	FTLock
+	FTLock FileT = iota
 	FTTBlock
 	FTBlock
 	FTSegment
 	FTTransientNode
+)
+
+const (
+	TmpSuffix  = ".tmp"
+	TblkSuffix = ".tblk"
+	BlkSuffix  = ".blk"
+	SegSuffix  = ".seg"
+	LockSuffix = ".lock"
+	NodeSuffix = ".nod"
 )
 
 func MakeSpillDir(dirname string) string {
@@ -61,17 +67,8 @@ func MakeBlockFileName(dirname, name string, tableId uint64, isTmp bool) string 
 }
 
 func MakeSegmentFileName(dirname, name string, tableId uint64, isTmp bool) string {
-	// dir := MakeTableDir(dirname, id)
 	dir := dirname
 	return MakeFilename(dir, FTSegment, name, isTmp)
-}
-
-func MakeTableCkpFileName(dirname, name string, tableId uint64, isTmp bool) string {
-	return MakeFilename(dirname, FTTableCkp, name, isTmp)
-}
-
-func MakeInfoCkpFileName(dirname, name string, isTmp bool) string {
-	return MakeFilename(dirname, FTInfoCkp, name, isTmp)
 }
 
 func MakeLockFileName(dirname, name string) string {
@@ -102,35 +99,11 @@ func ParseBlockfileName(filename string) (name string, ok bool) {
 	return name, true
 }
 
-func ParseInfoMetaName(filename string) (version int, ok bool) {
-	name := strings.TrimSuffix(filename, ".ckp")
-	if len(name) == len(filename) {
-		return version, false
-	}
-	version, err := strconv.Atoi(name)
-	if err != nil {
-		panic(err)
-	}
-	return version, true
-}
-
-func ParseTableMetaName(filename string) (name string, ok bool) {
-	name = strings.TrimSuffix(filename, ".tckp")
-	if len(name) == len(filename) {
-		return name, false
-	}
-	return name, true
-}
-
 func MakeFilename(dirname string, ft FileT, name string, isTmp bool) string {
 	var s string
 	switch ft {
 	case FTLock:
 		s = path.Join(dirname, fmt.Sprintf("%s.lock", name))
-	case FTInfoCkp:
-		s = path.Join(MakeMetaDir(dirname), fmt.Sprintf("%s.ckp", name))
-	case FTTableCkp:
-		s = path.Join(MakeMetaDir(dirname), fmt.Sprintf("%s.tckp", name))
 	case FTTransientNode:
 		s = path.Join(MakeSpillDir(dirname), fmt.Sprintf("%s.nod", name))
 		isTmp = false
