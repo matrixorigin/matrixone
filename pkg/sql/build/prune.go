@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/extend/overload"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/like"
 )
 
 var (
@@ -82,6 +83,8 @@ func (b *build) pruneExtend(e extend.Extend, isProjection bool) (extend.Extend, 
 			return b.prunePlus(n)
 		case overload.Minus:
 			return b.pruneMinus(n)
+		case overload.Like:
+			return b.pruneLike(n)
 		}
 	}
 	return e, nil
@@ -1460,6 +1463,35 @@ func (b *build) pruneGe(e *extend.BinaryExtend) (extend.Extend, error) {
 			return nil, sqlerror.New(errno.DatatypeMismatch, fmt.Sprintf("illegal expression '%s'", e))
 		}
 		return e, nil
+	}
+	return e, nil
+}
+
+func (b *build) pruneLike(e *extend.BinaryExtend) (extend.Extend, error) {
+	le, lok := e.Left.(*extend.ValueExtend)
+	re, rok := e.Right.(*extend.ValueExtend)
+	if !lok || !rok {
+		return e, nil
+	}
+
+	vec := vector.New(types.Type{Oid: types.T_int64, Size: 8})
+	vec.Ref = 1
+
+	if !le.V.Typ.Eq(re.V.Typ) || (le.V.Typ.Oid != types.T_char && le.V.Typ.Oid != types.T_varchar) {
+		return nil, errors.New("operator LIKE only support for varchar and char")
+	}
+	switch {
+	case lok && rok:
+		k, err := like.PureLikePure(le.V.Col.(*types.Bytes).Data, re.V.Col.(*types.Bytes).Data, make([]int64, 1))
+		if err != nil {
+			return nil, err
+		}
+		if k != nil {
+			vec.SetCol([]int64{1})
+		} else {
+			vec.SetCol([]int64{0})
+		}
+		return &extend.ValueExtend{V: vec}, nil
 	}
 	return e, nil
 }

@@ -14,116 +14,488 @@
 
 package like
 
-/*
-var (
-	sLike func(*vector.Bytes, []byte, []int64) ([]int64, error)
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	roaring "github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"regexp"
+	"strings"
+	"unicode/utf8"
+	"unsafe"
 )
 
-func sLikePure(s *vector.Bytes, expr []byte) ([]int64, error) {
+var (
+	SliceLikePure  func(*types.Bytes, []byte, []int64) ([]int64, error)
+	SliceLikeSlice func(*types.Bytes, *types.Bytes, []int64) ([]int64, error)
+	PureLikeSlice  func([]byte, *types.Bytes, []int64) ([]int64, error)
+	PureLikePure   func([]byte, []byte, []int64) ([]int64, error)
+	SliceNullLikePure func(*types.Bytes, []byte, *roaring.Bitmap, []int64) ([]int64, error)
+	SliceNullLikeSliceNull func(*types.Bytes, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
+	PureLikeSliceNull func([]byte, *types.Bytes, *roaring.Bitmap, []int64) ([]int64, error)
+)
+
+var _ = SliceLikePure
+var _ = SliceLikeSlice
+var _ = PureLikeSlice
+var _ = PureLikePure
+
+func init() {
+	SliceLikePure = sliceLikePure
+	SliceLikeSlice = sliceLikeSlice
+	PureLikeSlice = pureLikeSlice
+	PureLikePure = pureLikePure
+	SliceNullLikePure = sliceNullLikePure
+	SliceNullLikeSliceNull = sliceNullLikeSliceNull
+	PureLikeSliceNull = pureLikeSliceNull
+}
+
+func sliceLikePure(s *types.Bytes, expr []byte, rs []int64) ([]int64, error) {
 	n := uint32(len(expr))
-	rs := sel.Pool.Get().([]int64)
-	rs = rs[:0]
 	if n == 0 {
-		for i, m := range s.Ns {
+		count := 0
+		for i, m := range s.Lengths {
 			if m == 0 {
-				rs = append(rs, int64(i))
+				rs[count] = int64(i)
+				count++
 			}
 		}
-		return rs, nil
+		return rs[:count], nil
 	}
 	if n == 1 && expr[0] == '%' {
-		for i := range s.Ns {
-			rs = append(rs, int64(i))
+		count := 0
+		for i := range s.Lengths {
+			rs[count] = int64(i)
+			count++
 		}
-		return rs, nil
+		return rs[:count], nil
 	}
 	if n == 1 && expr[0] == '_' {
-		for i, m := range s.Ns {
+		count := 0
+		for i, m := range s.Lengths {
 			if m == 1 {
-				rs = append(rs, int64(i))
+				rs[count] = int64(i)
+				count++
 			}
 		}
-		return rs, nil
+		return rs[:count], nil
 	}
 	if n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%") {
 		c0 := expr[0]   // first character
 		c1 := expr[n-1] // last character
 		switch {
 		case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
-			for i, o := range s.Os {
-				if s.Ns[i] == n && bytes.Compare(expr, s.DataSource[o:o+s.Ns[i]]) == 0 {
-					rs = append(rs, int64(i))
+			count := 0
+			for i := range s.Offsets {
+				if s.Lengths[i] == n && bytes.Compare(expr, s.Get(int64(i))) == 0 {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '_' && !(c1 == '%' || c1 == '_'):
 			suffix := expr[1:]
-			for i, o := range s.Os {
-				if s.Ns[i] == n && bytes.Compare(suffix, s.DataSource[o+1:o+s.Ns[i]]) == 0 {
-					rs = append(rs, int64(i))
+			count := 0
+			for i := range s.Offsets {
+				if s.Lengths[i] == n && bytes.Compare(suffix, s.Get(int64(i))) == 0 {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '%' && !(c1 == '%' || c1 == '_'):
 			suffix := expr[1:]
-			for i, o := range s.Os {
-				if bytes.HasSuffix(s.DataSource[o:o+s.Ns[i]], suffix) {
-					rs = append(rs, int64(i))
+			count := 0
+			for i := range s.Offsets {
+				if bytes.HasSuffix(s.Get(int64(i)), suffix) {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c1 == '_' && !(c0 == '%' || c0 == '_'):
 			prefix := expr[:n-1]
-			for i, o := range s.Os {
-				if s.Ns[i] == n && bytes.Compare(prefix, s.DataSource[o:o+s.Ns[i]-1]) == 0 {
-					rs = append(rs, int64(i))
+			count := 0
+			for i := range s.Offsets {
+				if s.Lengths[i] == n && bytes.Compare(prefix, s.Get(int64(i))) == 0 {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c1 == '%' && !(c0 == '%' || c0 == '_'):
 			prefix := expr[:n-1]
-			for i, o := range s.Os {
-				if s.Ns[i] >= n && bytes.Compare(s.DataSource[o:o+uint32(n-1)], prefix) == 0 {
-					rs = append(rs, int64(i))
+			count := 0
+			for i := range s.Offsets {
+				if s.Lengths[i] >= n && bytes.Compare(s.Get(int64(i)), prefix) == 0 {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '%' && c1 == '%':
 			substr := expr[1 : n-1]
-			for i, o := range s.Os {
-				if bytes.Contains(s.DataSource[o:o+s.Ns[i]], substr) {
-					rs = append(rs, int64(i))
+			count := 0
+			for i := range s.Offsets {
+				if bytes.Contains(s.Get(int64(i)), substr) {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '%' && c1 == '_':
 			suffix := expr[1 : n-1]
-			for i, o := range s.Os {
-				if s.Ns[i] > 0 && bytes.HasSuffix(s.DataSource[o:o+s.Ns[i]-1], suffix) {
-					rs = append(rs, int64(i))
+			count := 0
+			for i := range s.Offsets {
+				if s.Lengths[i] > 0 && bytes.HasSuffix(s.Get(int64(i)), suffix) {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		case c0 == '_' && c1 == '%':
 			prefix := expr[1 : n-1]
-			for i, o := range s.Os {
-				if s.Ns[i] > 0 && bytes.HasPrefix(s.DataSource[o+1:o+s.Ns[i]], prefix) {
-					rs = append(rs, int64(i))
+			count := 0
+			for i := range s.Offsets {
+				if s.Lengths[i] > 0 && bytes.HasPrefix(s.Get(int64(i)), prefix) {
+					rs[count] = int64(i)
+					count++
 				}
 			}
-			return rs, nil
+			return rs[:count], nil
 		}
 	}
-	reg, err := regexp.Build(convert(expr))
+	reg, err := regexp.Compile(convert(expr))
 	if err != nil {
 		return nil, err
 	}
-	for i, o := range s.Os {
-		if reg.Match(s.DataSource[o : o+s.Ns[i]]) {
-			rs = append(rs, int64(i))
+	count := 0
+	for i := range s.Offsets {
+		if reg.Match(s.Get(int64(i))) {
+			rs[count] = int64(i)
+			count++
 		}
 	}
-	return rs, nil
+	return rs[:count], nil
+}
+
+func sliceLikeSlice(s *types.Bytes, exprs *types.Bytes, rs []int64) ([]int64, error) {
+	count := 0
+	tempSlice := make([]int64, 1)
+	n := len(s.Lengths)
+	if n != len(exprs.Lengths) {
+		return nil, errors.New("unexpected error when LIKE operator")
+	}
+	for i := range s.Offsets {
+		k, err := pureLikePure(s.Get(int64(i)), exprs.Get(int64(i)), tempSlice)
+		if err != nil {
+			return nil, err
+		}
+		if k != nil {
+			rs[count] = int64(i)
+			count++
+		}
+	}
+	return rs[:count], nil
+}
+
+func pureLikeSlice(p []byte, exprs *types.Bytes, rs []int64) ([]int64, error) {
+	count := 0
+	tempSlice := make([]int64, 1)
+	for i := range exprs.Offsets {
+		k, err := pureLikePure(p, exprs.Get(int64(i)), tempSlice)
+		if err != nil {
+			return nil, err
+		}
+		if k != nil {
+			rs[count] = int64(i)
+			count++
+		}
+	}
+	return rs[:count], nil
+}
+
+func pureLikePure(p []byte, expr []byte, rs []int64) ([]int64, error) {
+	n := len(expr)
+	if n == 0 {
+		if len(p) == 0 {
+			rs[0] = int64(0)
+			return rs[:1], nil
+		}
+		return nil, nil
+	}
+	if n == 1 && expr[0] == '%' {
+		rs[0] = int64(0)
+		return rs[:1], nil
+	}
+	if n == 1 && expr[0] == '_' {
+		if len(p) == 1 {
+			rs[0] = int64(0)
+			return rs[:1], nil
+		}
+		return nil, nil
+	}
+	if n > 1 && !bytes.ContainsAny(expr[1:n-1], "_%") {
+		c0 := expr[0]   // first character
+		c1 := expr[n-1] // last character
+		switch {
+		case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
+			if len(p) == n && bytes.Compare(expr, p) == 0 {
+				rs[0] = int64(0)
+				return rs[:1], nil
+			}
+			return nil, nil
+		case c0 == '_' && !(c1 == '%' || c1 == '_'):
+			suffix := expr[1:]
+			if len(p) == n && bytes.Compare(suffix, p[1:]) == 0 {
+				rs[0] = int64(0)
+				return rs[:1], nil
+			}
+			return nil, nil
+		case c0 == '%' && !(c1 == '%' || c1 == '_'):
+			suffix := expr[1:]
+			if bytes.HasSuffix(p, suffix) {
+				rs[0] = int64(0)
+				return rs[:1], nil
+			}
+			return nil, nil
+		case c1 == '_' && !(c0 == '%' || c0 == '_'):
+			prefix := expr[:n-1]
+			if len(p) == n && bytes.Compare(prefix, p[:n-1]) == 0 {
+				rs[0] = int64(0)
+				return rs[:1], nil
+			}
+			return nil, nil
+		case c1 == '%' && !(c0 == '%' || c0 == '_'):
+			prefix := expr[:n-1]
+			if len(p) >= n && bytes.Compare(p[:n-1], prefix) == 0 {
+				rs[0] = int64(0)
+				return rs[:1], nil
+			}
+			return nil, nil
+		case c0 == '%' && c1 == '%':
+			substr := expr[1 : n-1]
+			if bytes.Contains(p, substr) {
+				rs[0] = int64(0)
+				return rs[:1], nil
+			}
+			return nil, nil
+		case c0 == '%' && c1 == '_':
+			suffix := expr[1 : n-1]
+			if len(p) > 0 && bytes.HasSuffix(p[:len(p)-1], suffix) {
+				rs[0] = int64(0)
+				return rs[:1], nil
+			}
+			return nil, nil
+		case c0 == '_' && c1 == '%':
+			prefix := expr[1 : n-1]
+			if len(p) > 0 && bytes.HasPrefix(p[1:], prefix) {
+				rs[0] = int64(0)
+				return rs[:1], nil
+			}
+			return nil, nil
+		}
+	}
+	reg, err := regexp.Compile(convert(expr))
+	if err != nil {
+		return nil, err
+	}
+	if reg.Match(p) {
+		rs[0] = int64(0)
+		return rs[:1], nil
+	}
+	return nil, nil
+}
+
+func sliceNullLikePure(s *types.Bytes, expr []byte, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
+	var cFlag int8 // case flag for like
+	var reg *regexp.Regexp
+	var err error
+	n := len(expr) // expr length
+	count := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	switch {
+	case n == 0:
+		cFlag = 1
+	case n == 1 && expr[0] == '%':
+		cFlag = 2
+	case n == 1 && expr[0] == '_':
+		cFlag = 3
+	case n > 1 && !bytes.ContainsAny(expr[1:len(expr)-1], "_%"):
+		cFlag = 4
+	default:
+		cFlag = 5
+		reg, err = regexp.Compile(convert(expr))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	for i, j := 0, len(s.Offsets); i < j; i++ {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else {
+			p := s.Get(int64(i))
+			switch cFlag {
+			case 1:
+				if len(p) == 0 {
+					rs[count] = int64(i)
+					count++
+				}
+			case 2:
+				rs[count] = int64(i)
+				count++
+			case 3:
+				if len(p) == 1 {
+					rs[count] = int64(i)
+					count++
+				}
+			case 4:
+				c0, c1 := expr[0], expr[n-1] // first and last
+				switch {
+				case !(c0 == '%' || c0 == '_') && !(c1 == '%' || c1 == '_'):
+					if len(p) == n && bytes.Compare(expr, p) == 0 {
+						rs[count] = int64(i)
+						count++
+					}
+				case c0 == '_' && !(c1 == '%' || c1 == '_'):
+					suffix := expr[1:]
+					if len(p) == n && bytes.Compare(suffix, p[1:]) == 0 {
+						rs[count] = int64(i)
+						count++
+					}
+				case c0 == '%' && !(c1 == '%' || c1 == '_'):
+					suffix := expr[1:]
+					if bytes.HasSuffix(p, suffix) {
+						rs[count] = int64(i)
+						count++
+					}
+				case c1 == '_' && !(c0 == '%' || c0 == '_'):
+					prefix := expr[:n-1]
+					if len(p) == n && bytes.Compare(prefix, p[:n-1]) == 0 {
+						rs[count] = int64(i)
+						count++
+					}
+				case c1 == '%' && !(c0 == '%' || c0 == '_'):
+					prefix := expr[:n-1]
+					if len(p) >= n && bytes.Compare(p[:n-1], prefix) == 0 {
+						rs[count] = int64(i)
+						count++
+					}
+				case c0 == '%' && c1 == '%':
+					substr := expr[1 : n-1]
+					if bytes.Contains(p, substr) {
+						rs[count] = int64(i)
+						count++
+					}
+				case c0 == '%' && c1 == '_':
+					suffix := expr[1 : n-1]
+					if len(p) > 0 && bytes.HasSuffix(p[:len(p)-1], suffix) {
+						rs[count] = int64(i)
+						count++
+					}
+				case c0 == '_' && c1 == '%':
+					prefix := expr[1 : n-1]
+					if len(p) > 0 && bytes.HasPrefix(p[1:], prefix) {
+						rs[count] = int64(i)
+						count++
+					}
+				default:
+					if reg.Match(p) {
+						rs[count] = int64(i)
+						count++
+					}
+				}
+			case 5:
+				if reg.Match(p) {
+					rs[count] = int64(i)
+					count++
+				}
+			default:
+				return nil, errors.New("unexpected match rule of LIKE operator")
+			}
+		}
+	}
+	return rs[:count], nil
+}
+
+func sliceNullLikeSliceNull(s *types.Bytes, exprs *types.Bytes, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
+	count := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+	tempSlice := make([]int64, 1)
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, n := 0, len(s.Offsets); i < n; i++ {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else {
+			k, err := pureLikePure(s.Get(int64(i)), exprs.Get(int64(i)), tempSlice)
+			if err != nil {
+				return nil, err
+			}
+			if k != nil {
+				rs[count] = int64(i)
+				count++
+			}
+		}
+	}
+	return rs[:count], nil
+}
+
+func pureLikeSliceNull(p []byte, exprs *types.Bytes, nulls *roaring.Bitmap, rs []int64) ([]int64, error) {
+	count := 0
+	nullsIter := nulls.Iterator()
+	nextNull := 0
+	tempSlice := make([]int64, 1)
+
+	if nullsIter.HasNext() {
+		nextNull = int(nullsIter.Next())
+	} else {
+		nextNull = -1
+	}
+
+	for i, n := 0, len(exprs.Offsets); i < n; i++ {
+		if i == nextNull {
+			if nullsIter.HasNext() {
+				nextNull = int(nullsIter.Next())
+			} else {
+				nextNull = -1
+			}
+		} else {
+			k, err := pureLikePure(p, exprs.Get(int64(i)), tempSlice)
+			if err != nil {
+				return nil, err
+			}
+			if k != nil {
+				rs[count] = int64(i)
+				count++
+			}
+		}
+	}
+	return rs[:count], nil
 }
 
 func convert(expr []byte) string {
@@ -146,7 +518,7 @@ func replace(s string) string {
 		}
 		switch c {
 		case '_':
-			w += copy(r[w:], []byte{'*'})
+			w += copy(r[w:], []byte{'.'})
 		case '%':
 			w += copy(r[w:], []byte{'.', '*'})
 		case '\\':
@@ -159,7 +531,3 @@ func replace(s string) string {
 	return string(r)
 }
 
-func isWildcard(c byte) bool {
-	return c == '%' || c == '_'
-}
-*/
