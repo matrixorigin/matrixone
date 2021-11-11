@@ -350,6 +350,7 @@ func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
 	if err != nil {
 		return err
 	}
+	//TODO
 	for _, idx := range idxInfo.ColumnNames {
 		for _, col := range tbl.Columns {
 			if idx == col.Name {

@@ -115,6 +115,7 @@ func IndexDefs(sid, tid uint64, mp map[string]uint64, defs []engine.TableDef) []
 			}
 			for _, name := range v.ColNames {
 				idx.ColumnNames = append(idx.ColumnNames, name)
+				//TODO
 				if mp != nil {
 					idx.Columns = append(idx.Columns, mp[name])
 				}
