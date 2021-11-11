@@ -1,8 +1,9 @@
 package metadata
 
 import (
+	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/pkg/errors"
 )
 
 type Cleaner struct {
