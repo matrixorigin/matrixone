@@ -365,6 +365,12 @@ func (sf *SortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 }
 
 func (sf *SortedSegmentFile) Copy(dir string, id common.ID) error {
+	path := common.MakeDataDir(dir)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err = os.MkdirAll(path, os.FileMode(0755)); err != nil {
+			return err
+		}
+	}
 	dest := common.MakeSegmentFileName(dir, id.ToSegmentFileName(), id.TableID, false)
 	return sf.CopyTo(dest)
 }

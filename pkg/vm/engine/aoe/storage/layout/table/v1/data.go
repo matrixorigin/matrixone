@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	fb "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/factories/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -254,6 +255,33 @@ func (td *tableData) SegmentIds() []uint64 {
 	}
 	td.tree.RUnlock()
 	return ids
+}
+
+func (td *tableData) CopyTo(dir string) error {
+	segs := make([]iface.ISegment, 0, 8)
+	td.tree.RLock()
+	for _, seg := range td.tree.segments {
+		seg.Ref()
+		segs = append(segs, seg)
+	}
+	td.tree.RUnlock()
+
+	doneFn := func() {
+		for _, seg := range segs {
+			seg.Unref()
+		}
+	}
+	defer doneFn()
+	var err error
+	for _, seg := range segs {
+		file := seg.GetSegmentFile()
+		if err = file.Copy(dir, *seg.GetMeta().AsCommonID()); err != nil {
+			if err == dataio.FileNotExistErr {
+				err = nil
+			}
+		}
+	}
+	return err
 }
 
 func (td *tableData) GetRowCount() uint64 {
