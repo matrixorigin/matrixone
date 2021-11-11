@@ -40,7 +40,6 @@ type Scanner struct {
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
 	initTokens(dialectType)
-	initSlashRef()
 	return &Scanner{
 		buf: sql,
 	}
@@ -234,110 +233,13 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 	for {
 		switch s.cur() {
 		case delim:
-			if s.peek(1) != delim {
-				s.skip(1)
-				return typ, s.buf[start : s.Pos-1]
-			}
-			fallthrough
-
-		case '\\':
-			var buffer strings.Builder
-			buffer.WriteString(s.buf[start:s.Pos])
-			return s.scanStringSlow(&buffer, delim, typ)
-
+			s.skip(1)
+			return typ, s.buf[start : s.Pos-1]
 		case eofChar:
 			return LEX_ERROR, s.buf[start:s.Pos]
 		}
 
 		s.skip(1)
-	}
-}
-
-// scanString scans a string surrounded by the given `delim` and containing escape
-// sequencse. The given `buffer` contains the contents of the string that have
-// been scanned so far.
-func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int) (int, string) {
-	for {
-		ch := s.cur()
-		if ch == eofChar {
-			// Unterminated string.
-			return LEX_ERROR, buffer.String()
-		}
-
-		if ch != delim && ch != '\\' {
-			// Scan ahead to the next interesting character.
-			start := s.Pos
-			for ; s.Pos < len(s.buf); s.Pos++ {
-				ch = uint16(s.buf[s.Pos])
-				if ch == delim || ch == '\\' {
-					break
-				}
-			}
-
-			buffer.WriteString(s.buf[start:s.Pos])
-			if s.Pos >= len(s.buf) {
-				// Reached the end of the buffer without finding a delim or
-				// escape character.
-				s.skip(1)
-				continue
-			}
-		}
-		s.skip(1) // Read one past the delim or escape character.
-
-		if ch == '\\' {
-			if s.cur() == eofChar {
-				// String terminates mid escape character.
-				return LEX_ERROR, buffer.String()
-			}
-			if decodedChar := SQLDecodeMap[byte(s.cur())]; decodedChar == DontEscape {
-				ch = s.cur()
-			} else {
-				ch = uint16(decodedChar)
-			}
-		} else if ch == delim && s.cur() != delim {
-			// Correctly terminated string, which is not a double delim.
-			break
-		}
-
-		buffer.WriteByte(byte(ch))
-		s.skip(1)
-	}
-
-	return typ, buffer.String()
-}
-
-// SQLEncodeMap specifies how to escape binary data with '\'.
-// Complies to http://dev.mysql.com/doc/refman/5.1/en/string-syntax.html
-var SQLEncodeMap [256]byte
-
-// SQLDecodeMap is the reverse of SQLEncodeMap
-var SQLDecodeMap [256]byte
-
-// DontEscape tells you if a character should not be escaped.
-var DontEscape = byte(255)
-
-var encodeRef = map[byte]byte{
-	'\x00': '0',
-	'\'':   '\'',
-	'"':    '"',
-	'\b':   'b',
-	'\n':   'n',
-	'\r':   'r',
-	'\t':   't',
-	26:     'Z', // ctl-Z
-	'\\':   '\\',
-}
-
-func initSlashRef() {
-	for i := range SQLEncodeMap {
-		SQLEncodeMap[i] = DontEscape
-		SQLDecodeMap[i] = DontEscape
-	}
-	for i := range SQLEncodeMap {
-		if to, ok := encodeRef[byte(i)]; ok {
-			SQLEncodeMap[byte(i)] = to
-			SQLDecodeMap[to] = byte(i)
-		}
 	}
 }
 
