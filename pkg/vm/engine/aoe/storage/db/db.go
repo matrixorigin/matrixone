@@ -301,7 +301,8 @@ func (d *DB) DropDatabase(name string, index uint64) error {
 		return err
 	}
 	logIndex := &metadata.LogIndex{
-		Id: shard.SimpleIndexId(index),
+		ShardId: database.GetShardId(),
+		Id:      shard.SimpleIndexId(index),
 	}
 	if err := d.Wal.SyncLog(logIndex); err != nil {
 		return err

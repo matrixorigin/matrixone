@@ -247,7 +247,7 @@ func TestAppend(t *testing.T) {
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 	ss.Close()
 
-	time.Sleep(time.Duration(50) * time.Millisecond)
+	// time.Sleep(time.Duration(50) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())
@@ -671,6 +671,8 @@ func TestDropTable2(t *testing.T) {
 
 	inst.DropTable(dbi.DropTableCtx{ShardId: database.GetShardId(), DBName: database.Name, TableName: schema.Name,
 		OnFinishCB: dropCB, OpIndex: gen.Alloc(database.GetShardId())})
+	err = inst.DropDatabase(database.Name, gen.Alloc(database.GetShardId()))
+	assert.Nil(t, err)
 
 	testutils.WaitExpect(50, func() bool {
 		return int(blkCnt*insertCnt) == inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount()
@@ -683,10 +685,14 @@ func TestDropTable2(t *testing.T) {
 	})
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
-	t.Log(inst.IndexBufMgr.String())
-	t.Log(inst.MemTableMgr.String())
+	t.Log(inst.MutationBufMgr.String())
+	// t.Log(inst.IndexBufMgr.String())
+	// t.Log(inst.MemTableMgr.String())
 	assert.Equal(t, 0, inst.SSTBufMgr.NodeCount()+inst.MTBufMgr.NodeCount())
 	err = <-doneCh
+	testutils.WaitExpect(100, func() bool {
+		return database.GetSize() == int64(0)
+	})
 	assert.Equal(t, expectErr, err)
 	assert.Equal(t, int64(0), database.GetSize())
 	inst.Close()

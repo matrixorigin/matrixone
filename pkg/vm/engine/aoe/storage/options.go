@@ -35,7 +35,7 @@ const (
 	DefaultBlockMaxRows     = uint64(40000)
 	DefaultBlocksPerSegment = uint64(40)
 
-	DefaultCleanInterval = 600
+	DefaultCleanInterval = 5
 
 	DefaultBlockWriters     = uint16(8)
 	DefaultSegmentWriters   = uint16(4)
@@ -148,6 +148,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.MetaCleanerCfg == nil {
 		o.MetaCleanerCfg = &MetaCleanerCfg{
 			Interval: time.Duration(DefaultCleanInterval) * time.Second,
+			// Interval: time.Duration(200) * time.Millisecond,
 		}
 	}
 	return o

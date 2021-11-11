@@ -1074,6 +1074,12 @@ func TestReplay13(t *testing.T) {
 	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
 	assert.NotNil(t, replayHandle)
 	replayHandle.Replay()
+	sort.Slice(toRemove, func(i, j int) bool {
+		return toRemove[i] < toRemove[j]
+	})
+	sort.Slice(observer.removed, func(i, j int) bool {
+		return observer.removed[i] < observer.removed[j]
+	})
 	assert.Equal(t, toRemove, observer.removed)
 
 	db1 := catalog.Databases[tbl.Database.Id]
