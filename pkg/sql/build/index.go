@@ -28,12 +28,7 @@ func (b *build) buildCreateIndex(stmt *tree.CreateIndex) (op.OP, error) {
 	if err != nil {
 		return nil, err
 	}
-	var typ tree.IndexType
-	if stmt.IndexOption != nil {
-		typ = stmt.IndexOption.IType
-	} else {
-		typ = 1
-	}
+	typ := 1
 	def := engine.IndexTableDef{Typ: int(typ), ColNames: stmt.KeyParts[0].ColName.Parts[:1], Name: string(stmt.Name)}
 	defs = append(defs, &def)
 	return createIndex.New(stmt.IfNotExists, r, defs), nil

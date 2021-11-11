@@ -296,10 +296,8 @@ func (s *Scope) CreateIndex(ts uint64) error {
 	o, _ := s.Operator.(*createIndex.CreateIndex)
 	defer o.R.Close()
 	err := o.R.CreateIndex(ts, o.Defs)
-	if o.IfNotExists {
-		if err == errors.New("index already exist") {
-			return nil
-		}
+	if o.IfNotExists && err == errors.New("index already exist") {
+		return nil
 	}
 	return err
 }
@@ -308,10 +306,8 @@ func (s *Scope) DropIndex(ts uint64) error {
 	o, _ := s.Operator.(*dropIndex.DropIndex)
 	defer o.R.Close()
 	err := o.R.DropIndex(ts, o.IndexName)
-	if o.IfNotExists {
-		if err == errors.New("index not exist") {
-			return nil
-		}
+	if o.IfNotExists && err == errors.New("index not exist") {
+		return nil
 	}
 	return err
 }
