@@ -17,11 +17,11 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"

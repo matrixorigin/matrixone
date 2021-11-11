@@ -16,9 +16,9 @@ package catalog
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/require"
 	stdLog "log"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/driver/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
-	md "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	"github.com/matrixorigin/matrixcube/raftstore"
 
@@ -81,9 +80,7 @@ func MockTableInfo(colCnt int, i int) *aoe.TableInfo {
 		} else {
 			colInfo.Type = types.Type{Oid: types.T_int32, Size: 4, Width: 4}
 		}
-		indexInfo := aoe.IndexInfo{Type: uint64(md.ZoneMap), Columns: []uint64{uint64(i)}}
 		tblInfo.Columns = append(tblInfo.Columns, colInfo)
-		tblInfo.Indices = append(tblInfo.Indices, indexInfo)
 	}
 	return tblInfo
 }
@@ -127,7 +124,7 @@ func TestCatalogWithUtil(t *testing.T) {
 		c.Stop()
 	}()
 
-	c.RaftCluster.WaitLeadersByCount(preAllocShardNum + 1, time.Second*30)
+	c.RaftCluster.WaitLeadersByCount(preAllocShardNum+1, time.Second*30)
 
 	stdLog.Printf("driver all started.")
 
@@ -171,6 +168,34 @@ func TestCatalogWithUtil(t *testing.T) {
 		createIds = append(createIds, createId)
 	}
 
+	//Test CreateIndex
+	col := testTables[0].Columns[0]
+	idxTableInfo, _ := catalog.GetTable(dbids[0], testTables[0].Name)
+	err = catalog.CreateIndex(0, aoe.IndexInfo{SchemaId: dbids[0], TableId: idxTableInfo.Id, Name: "mock_idx", ColumnNames: []string{col.Name}, Type: 1})
+	require.NoError(t, err)
+	idxTableInfo, _ = catalog.GetTable(dbids[0], testTables[0].Name)
+	idxs := idxTableInfo.Indices
+	require.Equal(t, 1, len(idxs))
+	idx := idxs[0]
+	require.Equal(t, "mock_idx", idx.Name)
+	require.Equal(t, uint64(1), idx.Type)
+	require.Equal(t, 1, len(idx.Columns))
+	require.Equal(t, col.Id, idx.Columns[0])
+	require.Equal(t, col.Name, idx.ColumnNames[0])
+
+	err = catalog.CreateIndex(0, aoe.IndexInfo{SchemaId: dbids[0], TableId: idxTableInfo.Id, Name: "mock_idx", ColumnNames: []string{col.Name}, Type: 1})
+	require.Equal(t, ErrIndexExist, err)
+
+	//Test DropIndex
+	err = catalog.DropIndex(0, idxTableInfo.Id, idxTableInfo.SchemaId, "mock_idx")
+	require.NoError(t, err)
+	idxTableInfo, _ = catalog.GetTable(dbids[0], testTables[0].Name)
+	idxs = idxTableInfo.Indices
+	require.Equal(t, 0, len(idxs))
+	
+	err = catalog.DropIndex(0, idxTableInfo.Id, idxTableInfo.SchemaId, "mock_idx")
+	require.Equal(t, ErrIndexNotExist, err)
+
 	//Test CreateTableExists
 	_, err = catalog.CreateTable(0, dbids[0], *testTables[0])
 	require.Equal(t, ErrTableCreateExists, err, "CreateTable: wrong err")
@@ -181,7 +206,7 @@ func TestCatalogWithUtil(t *testing.T) {
 	require.Equal(t, len(tables), tableCount, "ListTables: Wrong len")
 
 	//test ListTablesByName
-	tables, err = catalog.ListTablesByName(testDatabaceName+strconv.Itoa(0))
+	tables, err = catalog.ListTablesByName(testDatabaceName + strconv.Itoa(0))
 	require.NoError(t, err, "ListTablesByName Fail")
 	require.Equal(t, len(tables), tableCount, "ListTablesByName: Wrong len")
 
@@ -239,7 +264,7 @@ func TestCatalogWithUtil(t *testing.T) {
 	_, err = catalog.ListTables(dbids[0])
 	require.Equal(t, ErrDBNotExists, err, "DropDatabase: ListTables wrong err")
 
-	_, err = catalog.ListTablesByName(testDatabaceName+strconv.Itoa(0))
+	_, err = catalog.ListTablesByName(testDatabaceName + strconv.Itoa(0))
 	require.Equal(t, ErrDBNotExists, err, "DropDatabase: ListTablesByName wrong err")
 
 	_, err = catalog.GetTable(dbids[0], testTables[0].Name)

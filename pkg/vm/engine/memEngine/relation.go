@@ -99,3 +99,11 @@ func (r *relation) AddAttribute(u uint64, def engine.TableDef) error {
 func (r *relation) DelAttribute(u uint64, def engine.TableDef) error {
 	return nil
 }
+
+func (r *relation) CreateIndex(_ uint64, _ []engine.TableDef) error{
+	return nil
+}
+
+func (r *relation) DropIndex(epoch uint64, name string) error{
+	return nil
+}

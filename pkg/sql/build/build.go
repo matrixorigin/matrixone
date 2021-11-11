@@ -77,6 +77,10 @@ func (b *build) BuildStatement(stmt tree.Statement) (op.OP, error) {
 		return b.buildShowTables(stmt)
 	case *tree.ShowDatabases:
 		return b.buildShowDatabases(stmt)
+	case *tree.CreateIndex:
+		return b.buildCreateIndex(stmt)
+	case *tree.DropIndex:
+		return b.buildDropIndex(stmt)
 	}
 	return nil, sqlerror.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", stmt))
 }

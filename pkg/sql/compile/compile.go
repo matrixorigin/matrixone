@@ -25,9 +25,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/op"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/createDatabase"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/createIndex"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/createTable"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dedup"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropDatabase"
+	"github.com/matrixorigin/matrixone/pkg/sql/op/dropIndex"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/dropTable"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/explain"
 	"github.com/matrixorigin/matrixone/pkg/sql/op/group"
@@ -262,6 +264,22 @@ func (e *Exec) Run(ts uint64) error {
 				}
 				wg.Done()
 			}(e.scopes[i])
+		case CreateIndex:
+			wg.Add(1)
+			go func(s *Scope) {
+				if err := s.CreateIndex(ts); err != nil {
+					e.err = err
+				}
+				wg.Done()
+			}(e.scopes[i])
+		case DropIndex:
+			wg.Add(1)
+			go func(s *Scope) {
+				if err := s.DropIndex(ts); err != nil {
+					e.err = err
+				}
+				wg.Done()
+			}(e.scopes[i])
 		}
 	}
 
@@ -288,6 +306,10 @@ func (c *compile) compileAlgebra(o op.OP) ([]*Scope, error) {
 		return []*Scope{{Magic: ShowTables, Operator: o}}, nil
 	case *showDatabases.ShowDatabases:
 		return []*Scope{{Magic: ShowDatabases, Operator: o}}, nil
+	case *createIndex.CreateIndex:
+		return []*Scope{{Magic: CreateIndex, Operator: o}}, nil
+	case *dropIndex.DropIndex:
+		return []*Scope{{Magic: DropIndex, Operator: o}}, nil
 	case *projection.Projection:
 		return c.compileOutput(n, make(map[string]uint64))
 	case *top.Top:

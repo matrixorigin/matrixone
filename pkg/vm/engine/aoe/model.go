@@ -52,16 +52,16 @@ type SchemaInfo struct {
 
 // TableInfo stores the information of a table or view.
 type TableInfo struct {
-	SchemaId   uint64       `json:"schema_id"`
-	Id         uint64       `json:"id"`
-	Name       string       `json:"name"`
-	Type       uint64       `json:"type"` // Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
-	Indices    []IndexInfo  `json:"indices"`
-	Columns    []ColumnInfo `json:"columns"`     // Column is listed in order in which they appear in schema
-	Comment    []byte       `json:"comment"`
-	State      SchemaState  `json:"state"`
-	Partition  []byte       `json:"partition"`
-	Epoch      uint64       `json:"epoch"`
+	SchemaId  uint64       `json:"schema_id"`
+	Id        uint64       `json:"id"`
+	Name      string       `json:"name"`
+	Type      uint64       `json:"type"` // Type of the table: BASE TABLE for a normal table, VIEW for a view, etc.
+	Indices   []IndexInfo  `json:"indices"`
+	Columns   []ColumnInfo `json:"columns"` // Column is listed in order in which they appear in schema
+	Comment   []byte       `json:"comment"`
+	State     SchemaState  `json:"state"`
+	Partition []byte       `json:"partition"`
+	Epoch     uint64       `json:"epoch"`
 }
 
 type TabletInfo struct {
@@ -84,13 +84,14 @@ type ColumnInfo struct {
 }
 
 type IndexInfo struct {
-	SchemaId uint64   `json:"schema_id"`
-	TableId  uint64   `json:"table_id"`
-	Columns  []uint64 `json:"columns"`
-	Id       uint64   `json:"id"`
-	Names    []string `json:"column_names"`
-	Type     uint64   `json:"type"`
-	Epoch    uint64   `json:"epoch"`
+	SchemaId    uint64   `json:"schema_id"`
+	TableId     uint64   `json:"table_id"`
+	Columns     []uint64 `json:"columns"`
+	// Id          uint64   `json:"id"`
+	Name        string   `json:"index_names"`
+	ColumnNames []string `json:"column_names"`
+	Type        uint64   `json:"type"`
+	// Epoch       uint64   `json:"epoch"`
 }
 
 type SegmentInfo struct {

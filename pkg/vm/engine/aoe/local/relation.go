@@ -80,3 +80,10 @@ func (r *localRoRelation) AddAttribute(_ uint64, _ engine.TableDef) error {
 func (r *localRoRelation) DelAttribute(_ uint64, _ engine.TableDef) error {
 	panic("not supported")
 }
+
+func (r *localRoRelation) CreateIndex(_ uint64, _ []engine.TableDef) error{
+	panic("not supported")
+}
+func (r *localRoRelation) DropIndex(epoch uint64, name string) error{
+	panic("not supported")
+}
