@@ -26,7 +26,10 @@ var (
 		input  string
 		output string
 	}{
-		input: "insert into uus values (255, 65535, 4294967295, 18446744073709551615)",
+		input: `revoke super(a, b, c) 
+				on procedure db.func 
+				from 'h1'@'h3'`,
+		output: "revoke super(a, b, c) on procedure db.func from h1@h3",
 	}
 )
 
@@ -55,6 +58,14 @@ var (
 		input  string
 		output string
 	}{{
+		input: `revoke super(a, b, c) 
+				on procedure db.func 
+				from 'h1'@'h3'`,
+		output: "revoke super(a, b, c) on procedure db.func from h1@h3",
+	}, {
+		input: "select * from t where a like '\\%'",
+		output: "select * from t where a like \\%",
+	}, {
 		input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 		output: "set NAMES = utf8mb4 utf8mb4_general_ci",
 	}, {

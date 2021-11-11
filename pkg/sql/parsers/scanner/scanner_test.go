@@ -21,6 +21,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
+func TestDebug(t *testing.T) {
+	initTokens(dialect.MYSQL)
+	tcase := struct {
+		in   string
+		id   int
+		want string
+	}{
+		in:   "'\\%'",
+		id:   STRING,
+		want: "\\%",
+	}
+
+	id, got := NewScanner(dialect.MYSQL, tcase.in).Scan()
+	if tcase.id != id || string(got) != tcase.want {
+		t.Errorf("Scan(%q) = (%s, %q), want (%s, %q)", tcase.in, tokenName(id), got, tokenName(tcase.id), tcase.want)
+	}
+}
+
+
 func TestLiteralID(t *testing.T) {
 	initTokens(dialect.MYSQL)
 	testcases := []struct {
@@ -86,41 +105,29 @@ func TestString(t *testing.T) {
 		id:   STRING,
 		want: "",
 	}, {
-		in:   "''''",
-		id:   STRING,
-		want: "'",
-	}, {
 		in:   "'hello'",
 		id:   STRING,
 		want: "hello",
 	}, {
 		in:   "'\\n'",
 		id:   STRING,
-		want: "\n",
+		want: "\\n",
 	}, {
 		in:   "'\\nhello\\n'",
 		id:   STRING,
-		want: "\nhello\n",
-	}, {
-		in:   "'a''b'",
-		id:   STRING,
-		want: "a'b",
-	}, {
-		in:   "'a\\'b'",
-		id:   STRING,
-		want: "a'b",
+		want: "\\nhello\\n",
 	}, {
 		in:   "'\\'",
-		id:   LEX_ERROR,
-		want: "'",
+		id:   STRING,
+		want: "\\",
 	}, {
 		in:   "'",
 		id:   LEX_ERROR,
 		want: "",
 	}, {
 		in:   "'hello\\'",
-		id:   LEX_ERROR,
-		want: "hello'",
+		id:   STRING,
+		want: "hello\\",
 	}, {
 		in:   "'hello",
 		id:   LEX_ERROR,
@@ -128,7 +135,7 @@ func TestString(t *testing.T) {
 	}, {
 		in:   "'hello\\",
 		id:   LEX_ERROR,
-		want: "hello",
+		want: "hello\\",
 	}}
 
 	for _, tcase := range testcases {
@@ -146,7 +153,7 @@ func TestBuffer(t *testing.T) {
 		id   int
 		want string
 	}{{
-		in:   "'webapp'@'localhost'",
+		in:   "'webapp''@''localhost'",
 		id:   STRING,
 		want: "webapp",
 	}}
