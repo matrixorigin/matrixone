@@ -7,54 +7,49 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/ops"
 )
 
 type dropDBRequest struct {
 	gc.BaseRequest
-	Tables      *table.Tables
-	DB          *metadata.Database
-	MemTableMgr mtif.IManager
-	Opts        *storage.Options
+	Tables         *table.Tables
+	DB             *metadata.Database
+	MemTableMgr    mtif.IManager
+	Opts           *storage.Options
+	Cleaner        *metadata.Cleaner
+	needReschedule bool
+}
+
+func NewDropDBRequest(opts *storage.Options, meta *metadata.Database, tables *table.Tables, mtMgr mtif.IManager) *dropDBRequest {
+	req := new(dropDBRequest)
+	req.DB = meta
+	req.Tables = tables
+	req.Opts = opts
+	req.Cleaner = metadata.NewCleaner(opts.Meta.Catalog)
+	req.Op = ops.Op{
+		Impl:   req,
+		ErrorC: make(chan error),
+	}
+	return req
 }
 
 func (req *dropDBRequest) IncIteration() {}
 
 func (req *dropDBRequest) dropTable(meta *metadata.Table) error {
 	task := NewDropTblRequest(req.Opts, meta, req.Tables, req.MemTableMgr, nil)
-	return task.Execute()
+	if err := task.Execute(); err != nil {
+		logutil.Warn(err.Error())
+		req.needReschedule = true
+	}
+	return nil
 }
 
 func (req *dropDBRequest) Execute() error {
-	tables := make([]*metadata.Table, 0)
-	processor := new(metadata.LoopProcessor)
-	processor.TableFn = func(t *metadata.Table) error {
-		var err error
-		if t.IsHardDeleted() {
-			return err
-		}
-		tables = append(tables, t)
-		return err
+	err := req.Cleaner.TryCompactDB(req.DB, req.dropTable)
+	if err != nil && req.needReschedule {
+		req.needReschedule = false
+		req.Next = req
+		err = nil
 	}
-
-	req.DB.RLock()
-	req.DB.LoopLocked(processor)
-	req.DB.RUnlock()
-
-	if len(tables) == 0 {
-		if err := req.DB.SimpleHardDelete(); err != nil {
-			panic(err)
-		}
-		req.Next = nil
-		return nil
-	}
-	for _, t := range tables {
-		if t.IsDeleted() {
-			continue
-		}
-		if err := req.dropTable(t); err != nil {
-			logutil.Warn(err.Error())
-		}
-	}
-	req.Next = req
-	return nil
+	return err
 }

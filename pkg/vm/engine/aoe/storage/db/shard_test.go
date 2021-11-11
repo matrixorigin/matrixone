@@ -301,5 +301,42 @@ func TestShard2(t *testing.T) {
 		total += len(view.Database.TableSet)
 	}
 	assert.Equal(t, 0, total)
+	for _, shard := range shards {
+		testutils.WaitExpect(400, func() bool {
+			return shard.gen.Get() == shard.getSafeId()
+		})
+	}
+	dbCompacts := 0
+	tblCompacts := 0
+	dbListener := new(metadata.BaseDatabaseListener)
+	dbListener.DatabaseCompactedFn = func(database *metadata.Database) {
+		dbCompacts++
+	}
+	tblListener := new(metadata.BaseTableListener)
+	tblListener.TableCompactedFn = func(t *metadata.Table) {
+		tblCompacts++
+	}
+	inst.Store.Catalog.Compact(dbListener, tblListener)
+	assert.Equal(t, 0, dbCompacts)
+	assert.Equal(t, tableCnt, tblCompacts)
+
+	for _, shard := range shards {
+		err := inst.DropDatabase(shard.database.Name, shard.gen.Alloc())
+		assert.Nil(t, err)
+	}
+	for _, shard := range shards {
+		testutils.WaitExpect(400, func() bool {
+			return (shard.gen.Get() == shard.getSafeId()) && (shard.database.IsHardDeleted())
+		})
+		assert.Equal(t, shard.gen.Get(), shard.getSafeId())
+	}
+	dbCompacts = 0
+	tblCompacts = 0
+	inst.Store.Catalog.Compact(dbListener, tblListener)
+	assert.Equal(t, len(shards), dbCompacts)
+	assert.Equal(t, 0, tblCompacts)
+
+	t.Log(inst.Store.Catalog.IndexWal.String())
+
 	inst.Close()
 }

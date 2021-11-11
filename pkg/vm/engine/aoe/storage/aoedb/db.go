@@ -106,8 +106,10 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 		d.AbortTxn(txn)
 		return
 	}
-	gcReq := gcreqs.NewDropTblRequest(d.Opts, table, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
-	d.Opts.GC.Acceptor.Accept(gcReq)
+	gcTable := gcreqs.NewDropTblRequest(d.Opts, table, d.Store.DataTables, d.MemTableMgr, ctx.OnFinishCB)
+	d.Opts.GC.Acceptor.Accept(gcTable)
+	gcDB := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
+	d.Opts.GC.Acceptor.Accept(gcDB)
 	return
 }
 

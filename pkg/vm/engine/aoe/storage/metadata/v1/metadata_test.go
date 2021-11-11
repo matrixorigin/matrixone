@@ -103,20 +103,25 @@ func createBlock(t *testing.T, tables int, gen *shard.MockIndexAllocator, shardI
 			index := gen.Next(shardId)
 			name := fmt.Sprintf("t%d", index.Id.Id)
 			schema.Name = mockFactory.Encode(shardId, name)
+			db.SyncLog(index)
 			tbl, err := db.SimpleCreateTable(schema, index)
 			assert.Nil(t, err)
+			db.Checkpoint(index)
 			var prev *Block
 			for i := 0; i < blocks; i++ {
 				blk := tbl.SimpleGetOrCreateNextBlock(prev)
 				blk.SetCount(tbl.Schema.BlockMaxRows)
-				blk.SetIndexLocked(LogIndex{
+				index = &LogIndex{
 					ShardId:  shardId,
 					Id:       shard.SimpleIndexId(gen.Alloc(shardId)),
 					Count:    tbl.Schema.BlockMaxRows,
 					Capacity: tbl.Schema.BlockMaxRows,
-				})
+				}
+				db.SyncLog(index)
+				blk.SetIndexLocked(*index)
 				blk.GetCommit().SetSize(mockBlockSize)
 				err := blk.SimpleUpgrade(nil)
+				db.Checkpoint(index)
 				assert.Nil(t, err)
 				if prev != nil && blk.Segment != prev.Segment {
 					wg.Add(1)
@@ -929,7 +934,7 @@ func TestCatalog2(t *testing.T) {
 	catalog.Close()
 }
 
-func TestDatabases1(t *testing.T) {
+func TestDatabase1(t *testing.T) {
 	dir := "/tmp/metadata/testdbs1"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
 	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
@@ -1032,7 +1037,7 @@ type testCfg struct {
 	tables  int
 }
 
-func TestDatabases2(t *testing.T) {
+func TestDatabase2(t *testing.T) {
 	dir := "/tmp/metadata/testdbs2"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
 	catalog, _ := initTest(dir, blockRows, segmentBlocks, false, true)
@@ -1160,7 +1165,7 @@ func TestDatabases2(t *testing.T) {
 	doCompareCatalog(t, catalog, catalog2)
 }
 
-func TestSplit(t *testing.T) {
+func TestSplit1(t *testing.T) {
 	dir := "/tmp/metadata/testsplit"
 	catalog, _ := initTest(dir, uint64(100), uint64(2), false, true)
 
@@ -1226,7 +1231,6 @@ func TestSplit(t *testing.T) {
 	assert.Equal(t, tables, 9)
 	t.Log(catalog.PString(PPL0, 0))
 	catalog.Close()
-	return
 
 	t.Log("--------------------------------------")
 	catalog2, _ := initTest(dir, uint64(100), uint64(2), false, false)
@@ -1237,4 +1241,115 @@ func TestSplit(t *testing.T) {
 	assert.Equal(t, tables, 9)
 	doCompareCatalog(t, catalog, catalog2)
 	catalog2.Close()
+}
+
+func TestSplit2(t *testing.T) {
+	dir := "/tmp/metadata/testsplit2"
+	catalog, indexWal := initTest(dir, uint64(100), uint64(2), true, true)
+
+	gen := shard.NewMockIndexAllocator()
+	wg := new(sync.WaitGroup)
+	w1, _ := ants.NewPool(4)
+	w2, _ := ants.NewPool(4)
+
+	shardId := uint64(66)
+	indexWal.SyncLog(gen.Next(shardId))
+	db, err := catalog.SimpleCreateDatabase("db1", gen.Curr(shardId))
+	assert.Nil(t, err)
+	indexWal.Checkpoint(gen.Curr(shardId))
+	wg.Add(1)
+	w1.Submit(createBlock(t, 1, gen, shardId, db, 0, wg, w2))
+	wg.Wait()
+	wg.Add(1)
+	w1.Submit(createBlock(t, 1, gen, shardId, db, 1, wg, w2))
+	wg.Wait()
+	wg.Add(1)
+	w1.Submit(createBlock(t, 1, gen, shardId, db, 2, wg, w2))
+	wg.Wait()
+	wg.Add(1)
+	w1.Submit(createBlock(t, 1, gen, shardId, db, 3, wg, w2))
+	wg.Wait()
+	testutils.WaitExpect(100, func() bool {
+		return db.GetCheckpointId() == gen.Get(shardId)
+	})
+	assert.Equal(t, db.GetCheckpointId(), gen.Get(shardId))
+	index := db.GetCheckpointId()
+	t.Logf("index=%d,%s", index, indexWal.String())
+	assert.Equal(t, int64(550), db.GetSize())
+	assert.Equal(t, int64(600), db.GetCount())
+
+	_, _, keys, ctx, err := catalog.SplitCheck(uint64(250), index, db.Name)
+	assert.Nil(t, err)
+	t.Log(len(keys))
+	// assert.Equal(t, 3, len(keys))
+	spec := NewEmptyShardSplitSpec()
+	err = spec.Unmarshal(ctx)
+	assert.Nil(t, err)
+	t.Log(spec.String())
+	assert.Equal(t, spec.Name, db.Name)
+	assert.Equal(t, spec.Index, index)
+	assert.Equal(t, len(spec.Specs), 4)
+
+	dbSpecs := make([]DBSpec, len(keys))
+	for i, _ := range dbSpecs {
+		dbSpec := DBSpec{}
+		dbSpec.ShardId = uint64(100) + uint64(i)
+		dbSpec.Name = fmt.Sprintf("db-%d", dbSpec.ShardId)
+		dbSpecs[i] = dbSpec
+	}
+	splitIndex := gen.Next(shardId)
+
+	indexWal.SyncLog(splitIndex)
+	splitter := NewShardSplitter(catalog, spec, dbSpecs, splitIndex, mockFactory)
+	err = splitter.Prepare()
+	assert.Nil(t, err)
+	err = splitter.Commit()
+	assert.Nil(t, err)
+
+	catalog.Compact(nil, nil)
+
+	indexWal.Checkpoint(splitIndex)
+	testutils.WaitExpect(100, func() bool {
+		return db.GetCheckpointId() == gen.Get(shardId)
+	})
+	assert.Equal(t, db.GetCheckpointId(), gen.Get(shardId))
+	cleaner := NewCleaner(catalog)
+	err = cleaner.TryCompactDB(db, func(table *Table) error {
+		if err := table.HardDelete(); err != nil {
+			return err
+		}
+		t.Logf("%s | HardDeleted", table.Repr(false))
+		return nil
+	})
+	assert.Nil(t, err)
+
+	processor := new(LoopProcessor)
+	tables := 0
+	processor.TableFn = func(table *Table) error {
+		tables++
+		return nil
+	}
+	err = catalog.RecurLoopLocked(processor)
+	assert.Nil(t, err)
+	assert.Equal(t, tables, 9)
+	catalog.Compact(nil, nil)
+	tables = 0
+	err = catalog.RecurLoopLocked(processor)
+	assert.Equal(t, tables, 5)
+	t.Log(catalog.PString(PPL0, 0))
+	t.Log(indexWal.String())
+	catalog.Close()
+	indexWal.Close()
+
+	t.Log("--------------------------------------")
+	catalog2, indexWal2 := initTest(dir, uint64(100), uint64(2), true, false)
+	tables = 0
+	err = catalog2.RecurLoopLocked(processor)
+	assert.Nil(t, err)
+	t.Log(catalog2.PString(PPL0, 0))
+	t.Log(indexWal2.String())
+	assert.Equal(t, tables, 5)
+	doCompareCatalog(t, catalog, catalog2)
+	catalog2.Close()
+	indexWal2.Close()
 }
