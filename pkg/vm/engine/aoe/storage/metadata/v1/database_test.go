@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestDatabase1(t *testing.T) {
+func TestDatabase3(t *testing.T) {
 	dir := "/tmp/metadata/testdatabase"
 	blockRows, segmentBlocks := uint64(100), uint64(2)
 	catalog, indexWal := initTest(dir, blockRows, segmentBlocks, true, true)

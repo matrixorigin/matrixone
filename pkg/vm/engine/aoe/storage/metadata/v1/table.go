@@ -246,7 +246,7 @@ func (e *Table) prepareHardDelete(ctx *deleteTableCtx) (LogEntry, error) {
 		logutil.Warnf("HardDelete %d but already hard deleted", e.Id)
 		return nil, TableNotFoundErr
 	}
-	if !e.IsSoftDeletedLocked() && !e.IsReplacedLocked() {
+	if !e.IsSoftDeletedLocked() && !e.IsReplacedLocked() && !e.Database.IsDeleted() {
 		panic("logic error: Cannot hard delete entry that not soft deleted or replaced")
 	}
 	cInfo.LogIndex = e.CommitInfo.LogIndex
