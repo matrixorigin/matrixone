@@ -17,11 +17,11 @@ package dataio
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/encoding"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	gbatch "github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -455,7 +455,6 @@ func TestTransientBlock(t *testing.T) {
 
 	tblk := NewTBlockFile(segFile, *blkMeta.AsCommonID())
 	defer tblk.Unref()
-	t.Log(tblk.nextVersion())
 
 	// rows := uint64(2)
 	// bat1 := mock.MockBatch(schema.Types(), rows)

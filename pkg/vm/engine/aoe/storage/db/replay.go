@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
@@ -146,13 +147,14 @@ type blockfile struct {
 	next      *blockfile
 	commited  bool
 	meta      *metadata.Block
+	ver       uint64
 }
 
-func (bf *blockfile) version() uint32 {
+func (bf *blockfile) version() uint64 {
 	if bf.transient {
-		return bf.id.PartID
+		return bf.ver
 	} else {
-		return ^uint32(0)
+		return ^uint64(0)
 	}
 }
 
@@ -204,9 +206,9 @@ func (sf *sortedSegmentFile) size() int64 {
 	return stat.Size()
 }
 
-func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string, transient bool) {
+func (usf *unsortedSegmentFile) addBlock(bid common.ID, name string, ver uint64, transient bool) {
 	id := bid.AsBlockID()
-	bf := &blockfile{id: bid, name: name, transient: transient, h: usf.h}
+	bf := &blockfile{id: bid, name: name, transient: transient, h: usf.h, ver: ver}
 	head := usf.files[id]
 	if head == nil {
 		usf.files[id] = bf
@@ -402,7 +404,7 @@ func (h *replayHandle) addCleanable(f cleanable) {
 	h.cleanables = append(h.cleanables, f)
 }
 
-func (h *replayHandle) addBlock(id common.ID, name string, transient bool) {
+func (h *replayHandle) addBlock(id common.ID, name string, ver uint64, transient bool) {
 	tbl, ok := h.files[id.TableID]
 	if !ok {
 		tbl = &tableDataFiles{
@@ -417,7 +419,7 @@ func (h *replayHandle) addBlock(id common.ID, name string, transient bool) {
 		tbl.unsortedfiles[segId] = newUnsortedSegmentFile(segId, h)
 		file = tbl.unsortedfiles[segId]
 	}
-	file.addBlock(id, name, transient)
+	file.addBlock(id, name, ver, transient)
 }
 
 func (h *replayHandle) addSegment(id common.ID, name string) {
@@ -442,12 +444,12 @@ func (h *replayHandle) addSegment(id common.ID, name string) {
 
 func (h *replayHandle) addDataFile(fname string) {
 	if name, ok := common.ParseTBlockfileName(fname); ok {
-		id, err := common.ParseTBlkNameToID(name)
+		count, _, id, err := dataio.ParseTBlockfileName(name)
 		if err != nil {
 			panic(err)
 		}
 		fullname := path.Join(h.dataDir, fname)
-		h.addBlock(id, fullname, true)
+		h.addBlock(id, fullname, count, true)
 		return
 	}
 	if name, ok := common.ParseBlockfileName(fname); ok {
@@ -456,7 +458,7 @@ func (h *replayHandle) addDataFile(fname string) {
 			panic(err)
 		}
 		fullname := path.Join(h.dataDir, fname)
-		h.addBlock(id, fullname, false)
+		h.addBlock(id, fullname, 0, false)
 		return
 	}
 	if name, ok := common.ParseSegmentfileName(fname); ok {

@@ -157,7 +157,7 @@ func (e *Block) ConsumeSnippet(reset bool) *shard.Snippet {
 func (e *Block) View() (view *Block) {
 	e.RLock()
 	view = &Block{
-		BaseEntry:   &BaseEntry{Id: e.Id, CommitInfo: e.CommitInfo},
+		BaseEntry:   &BaseEntry{Id: e.Id, CommitInfo: e.CommitInfo.Clone()},
 		Segment:     e.Segment,
 		Count:       e.Count,
 		SegmentedId: e.SegmentedId,

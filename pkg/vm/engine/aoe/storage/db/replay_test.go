@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/testutils"
@@ -97,7 +98,7 @@ func TestReplay1(t *testing.T) {
 
 	rel, err = inst.Relation(database.Name, meta.Schema.Name)
 	assert.Nil(t, err)
-	assert.Equal(t, irows*3, uint64(rel.Rows()))
+	assert.Equal(t, int(irows*3), int(rel.Rows()))
 	t.Log(rel.Rows())
 
 	insertFn()
@@ -138,8 +139,7 @@ func mockBlkFile(id common.ID, dir string, t *testing.T) string {
 }
 
 func mockTBlkFile(id common.ID, version uint32, dir string, t *testing.T) string {
-	name := id.ToTBlockFileName(version)
-	fname := common.MakeTBlockFileName(dir, name, false)
+	fname := dataio.MakeTblockFileName(dir, "xx", uint64(version), id, false)
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()

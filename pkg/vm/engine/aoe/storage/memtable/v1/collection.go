@@ -137,6 +137,8 @@ func (c *collection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset 
 	}
 	n = uint64(na)
 	index.Count = n
+	meta.Lock()
+	defer meta.Unlock()
 	if err = meta.SetIndexLocked(*index); err != nil {
 		return 0, err
 	}
