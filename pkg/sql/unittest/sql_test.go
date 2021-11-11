@@ -363,6 +363,14 @@ func TestBinaryOperators(t *testing.T) {
 		{"select u2 % u1, u2 % u2, u2 % u3, u2 % u4 from uus;"},
 		{"select u3 % u1, u3 % u2, u3 % u3, u3 % u4 from uus;"},
 		{"select u4 % u1, u4 % u2, u4 % u3, u4 % u4 from uus;"},
+		// like operator
+		{"select * from ccs where c1 like c2;"},
+		{"select * from ccs where c1 like '123';"},
+		{"select * from ccs where c2 like '234';"},
+		{"select * from ccs where c2 like c1;"},
+		{"select * from ccs where '123' like c1;"},
+		{"select * from ccs where '123' like c2;"},
+		{"select c1, c2 from ccs where 'abc' like 'bca';"},
 		// not operator
 		{"select not i1, not i2, not i3, not i4 from iis where not i1 and not i2 and not i3 and not i4;"},
 		{"select not f1, not f2 from ffs where not f1 or not f2;"},
