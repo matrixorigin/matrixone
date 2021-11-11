@@ -19,7 +19,7 @@ import (
 	"matrixone/pkg/errno"
 	"matrixone/pkg/sql/colexec/extend"
 	"matrixone/pkg/sql/errors"
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers/tree"
 )
 
 func (b *build) buildWhere(stmt *tree.Where, qry *Query) error {

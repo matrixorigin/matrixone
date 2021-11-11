@@ -25,13 +25,13 @@ import (
 
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/types"
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers/tree"
 	"matrixone/pkg/vm/process"
 )
 
 //tableInfos of a database
-type TableInfoCache struct{
-	db string
+type TableInfoCache struct {
+	db         string
 	tableInfos map[string]aoe.TableInfo
 }
 
@@ -594,7 +594,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(load *tree.Load) error {
 
 /*
 handle cmd CMD_FIELD_LIST
- */
+*/
 func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 	var err error = nil
 	ses := mce.routine.GetSession()
@@ -618,24 +618,24 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 		mce.tableInfos = make(map[string]aoe.TableInfo)
 
 		//cache these info in the executor
-		for _,table := range tableInfos{
+		for _, table := range tableInfos {
 			mce.tableInfos[table.Name] = table
 		}
 	}
 
 	var attrs []aoe.ColumnInfo
-	table,ok := mce.tableInfos[tableName]
+	table, ok := mce.tableInfos[tableName]
 	if !ok {
 		//just give the empty info when there is no such table.
-		attrs = make([]aoe.ColumnInfo,0)
-	}else{
+		attrs = make([]aoe.ColumnInfo, 0)
+	} else {
 		attrs = table.Columns
 	}
 
 	for _, c := range attrs {
 		col := new(MysqlColumn)
 		col.SetName(c.Name)
-		err = convertEngineTypeToMysqlType(uint8(c.Type.Oid),col)
+		err = convertEngineTypeToMysqlType(uint8(c.Type.Oid), col)
 		if err != nil {
 			return err
 		}
@@ -663,7 +663,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(tableName string) error {
 
 /*
 handle setvar
- */
+*/
 func (mce *MysqlCmdExecutor) handleSetVar(_ *tree.SetVar) error {
 	var err error = nil
 	proto := mce.routine.GetClientProtocol().(MysqlProtocol)
@@ -699,7 +699,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 	execs, err := comp.Build()
 	if err != nil {
 		return NewMysqlError(ER_PARSE_ERROR,
-			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use",err)
+			"You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use", err)
 	}
 
 	ses.Mrs = &MysqlResultSet{}
@@ -752,7 +752,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			switch stmt.(type) {
 			case *tree.ShowDatabases, *tree.CreateDatabase, *tree.ShowWarnings, *tree.ShowErrors,
 				*tree.ShowStatus, *tree.DropDatabase, *tree.Load,
-				*tree.Use,*tree.SetVar:
+				*tree.Use, *tree.SetVar:
 			default:
 				return NewMysqlError(ER_NO_DB_ERROR)
 			}
@@ -830,7 +830,7 @@ func (mce *MysqlCmdExecutor) doComQuery(sql string) error {
 			for _, c := range columns {
 				col := new(MysqlColumn)
 				col.SetName(c.Name)
-				err = convertEngineTypeToMysqlType(uint8(c.Typ),col)
+				err = convertEngineTypeToMysqlType(uint8(c.Typ), col)
 				if err != nil {
 					return err
 				}
@@ -984,7 +984,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 	case COM_FIELD_LIST:
 		var payload = string(req.GetData().([]byte))
 		//find null
-		nullIdx := strings.IndexRune(payload,rune(0))
+		nullIdx := strings.IndexRune(payload, rune(0))
 		var tableName string
 		if nullIdx < len(payload) {
 
@@ -1000,7 +1000,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(req *Request) (*Response, error) {
 					err,
 				)
 			}
-		}else{
+		} else {
 			resp = NewResponse(ErrorResponse,
 				0,
 				int(COM_FIELD_LIST),
@@ -1042,7 +1042,7 @@ func NewMysqlCmdExecutor() *MysqlCmdExecutor {
 
 /*
 convert the type in computation engine to the type in mysql.
- */
+*/
 func convertEngineTypeToMysqlType(engineType uint8, col *MysqlColumn) error {
 	switch engineType {
 	case types.T_int8:

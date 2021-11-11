@@ -17,8 +17,8 @@ package ftree
 import (
 	"fmt"
 	"log"
+	"matrixone/pkg/sql/parsers/tree"
 	"matrixone/pkg/sql/plan"
-	"matrixone/pkg/sql/tree"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/memEngine"
 	"testing"

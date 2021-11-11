@@ -54,7 +54,7 @@ ONE_REPO="$G_STAGE/matrixone"
 ONE_COMMIT_ID=""
 
 URL_TESTER_REPO="https://${REPO_TOKEN}@github.com/matrixorigin/mysql-tester.git"
-URL_ONE_REPO="https://${REPO_TOKEN}@github.com/matrixorigin/matrixone.git"
+URL_ONE_REPO="https://${REPO_TOKEN}@matrixone.git"
 
 BIN_NAME="mo-server"
 CONFIG_NAME="system_vars_config.toml"

@@ -17,13 +17,12 @@ package frontend
 import (
 	"encoding/csv"
 	"fmt"
-	"github.com/matrixorigin/simdcsv"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/logutil"
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers/tree"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/metadata"
 	"os"
@@ -31,6 +30,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/simdcsv"
 )
 
 type LoadResult struct {
@@ -38,36 +39,35 @@ type LoadResult struct {
 }
 
 type DebugTime struct {
-	row2col time.Duration
-	fillBlank  time.Duration
+	row2col   time.Duration
+	fillBlank time.Duration
 	toStorage time.Duration
 
 	writeBatch time.Duration
 	resetBatch time.Duration
 
-	prefix time.Duration
+	prefix     time.Duration
 	skip_bytes time.Duration
 
-
-	process_field time.Duration
-	split_field time.Duration
+	process_field     time.Duration
+	split_field       time.Duration
 	split_before_loop time.Duration
-	wait_loop time.Duration
-	handler_get time.Duration
-	wait_switch time.Duration
-	field_first_byte time.Duration
-	field_enclosed time.Duration
-	field_without time.Duration
-	field_skip_bytes time.Duration
+	wait_loop         time.Duration
+	handler_get       time.Duration
+	wait_switch       time.Duration
+	field_first_byte  time.Duration
+	field_enclosed    time.Duration
+	field_without     time.Duration
+	field_skip_bytes  time.Duration
 
-	callback  time.Duration
-	asyncChan time.Duration
-	csvLineArray1 time.Duration
-	csvLineArray2 time.Duration
-	asyncChanLoop time.Duration
+	callback       time.Duration
+	asyncChan      time.Duration
+	csvLineArray1  time.Duration
+	csvLineArray2  time.Duration
+	asyncChanLoop  time.Duration
 	saveParsedLine time.Duration
-	choose_true time.Duration
-	choose_false time.Duration
+	choose_true    time.Duration
+	choose_false   time.Duration
 }
 
 type SharePart struct {
@@ -77,9 +77,9 @@ type SharePart struct {
 	ignoreFieldError bool
 
 	//index of line in line array
-	lineIdx int
+	lineIdx     int
 	maxFieldCnt int
-	bytes uint64
+	bytes       uint64
 
 	lineCount uint64
 
@@ -89,15 +89,15 @@ type SharePart struct {
 	//map column id in from data to column id in table
 	dataColumnId2TableColumnId []int
 
-	cols []metadata.Attribute
-	attrName []string
+	cols      []metadata.Attribute
+	attrName  []string
 	timestamp uint64
 
 	//simd csv
 	simdCsvLineArray [][]string
 
 	//storage
-	dbHandler engine.Database
+	dbHandler    engine.Database
 	tableHandler engine.Relation
 
 	//result of load
@@ -106,7 +106,7 @@ type SharePart struct {
 
 type notifyEventType int
 
-const(
+const (
 	NOTIFY_EVENT_WRITE_BATCH_ERROR notifyEventType = iota
 	NOTIFY_EVENT_WRITE_BATCH_RESULT
 	NOTIFY_EVENT_READ_SIMDCSV_ERROR
@@ -116,20 +116,20 @@ const(
 
 type notifyEvent struct {
 	neType notifyEventType
-	err error
-	wbh *WriteBatchHandler
+	err    error
+	wbh    *WriteBatchHandler
 }
 
-func newNotifyEvent(t notifyEventType,e error,w *WriteBatchHandler)*notifyEvent  {
+func newNotifyEvent(t notifyEventType, e error, w *WriteBatchHandler) *notifyEvent {
 	return &notifyEvent{
 		neType: t,
-		err: e,
-		wbh: w,
+		err:    e,
+		wbh:    w,
 	}
 }
 
 type PoolElement struct {
-	bat *batch.Batch
+	bat       *batch.Batch
 	lineArray [][]string
 }
 
@@ -137,17 +137,17 @@ type ParseLineHandler struct {
 	SharePart
 	DebugTime
 
-	simdCsvReader                    *simdcsv.Reader
+	simdCsvReader               *simdcsv.Reader
 	closeOnceGetParsedLinesChan sync.Once
 	//csv read put lines into the channel
-	simdCsvGetParsedLinesChan                    chan simdcsv.LineOut
+	simdCsvGetParsedLinesChan chan simdcsv.LineOut
 	//the count of writing routine
-	simdCsvConcurrencyCountOfWriteBatch          int
+	simdCsvConcurrencyCountOfWriteBatch int
 	//wait write routines to quit
 	simdCsvWaitWriteRoutineToQuit *sync.WaitGroup
-	simdCsvBatchPool chan *PoolElement
-	simdCsvNotiyEventChan chan *notifyEvent
-	closeOnce sync.Once
+	simdCsvBatchPool              chan *PoolElement
+	simdCsvNotiyEventChan         chan *notifyEvent
+	closeOnce                     sync.Once
 
 	closeRef *CloseLoadData
 }
@@ -156,17 +156,17 @@ type WriteBatchHandler struct {
 	SharePart
 	DebugTime
 
-	batchData *batch.Batch
-	pl *PoolElement
+	batchData   *batch.Batch
+	pl          *PoolElement
 	batchFilled int
-	simdCsvErr error
+	simdCsvErr  error
 
 	closeRef *CloseLoadData
 }
 
 type CloseLoadData struct {
 	stopLoadData chan interface{}
-	onceClose sync.Once
+	onceClose    sync.Once
 }
 
 func NewCloseLoadData() *CloseLoadData {
@@ -194,10 +194,10 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 	for {
 		quit := false
 		select {
-		case <- plh.closeRef.stopLoadData:
+		case <-plh.closeRef.stopLoadData:
 			//fmt.Printf("----- get stop in getLineOutFromSimdCsvRoutine\n")
 			quit = true
-		case lineOut = <- plh.simdCsvGetParsedLinesChan:
+		case lineOut = <-plh.simdCsvGetParsedLinesChan:
 		}
 
 		if quit {
@@ -205,7 +205,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 		}
 
 		wait_d := time.Now()
-		if lineOut.Line == nil  && lineOut.Lines == nil {
+		if lineOut.Line == nil && lineOut.Lines == nil {
 			break
 		}
 		if lineOut.Line != nil {
@@ -220,7 +220,7 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 			plh.simdCsvLineArray[plh.lineIdx] = lineOut.Line
 			plh.lineIdx++
 			plh.lineCount++
-			plh.maxFieldCnt = Max(plh.maxFieldCnt,len(lineOut.Line))
+			plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Line))
 			//for _, ll := range lineOut.Line {
 			//	plh.bytes += uint64(utf8.RuneCount([]byte(ll)))
 			//}
@@ -239,25 +239,25 @@ func (plh *ParseLineHandler) getLineOutFromSimdCsvRoutine() error {
 				//plh.bytes = 0
 			}
 
-		}else if lineOut.Lines != nil {
+		} else if lineOut.Lines != nil {
 			from := 0
 			countOfLines := len(lineOut.Lines)
 			//step 1 : skip dropped lines
 			if plh.lineCount < plh.load.IgnoredLines {
-				skipped := MinUint64(uint64(countOfLines), plh.load.IgnoredLines - plh.lineCount)
+				skipped := MinUint64(uint64(countOfLines), plh.load.IgnoredLines-plh.lineCount)
 				plh.lineCount += skipped
 				from += int(skipped)
 			}
 
 			fill := 0
 			//step 2 : append lines into line array
-			for i := from; i < countOfLines;  i += fill {
-				fill = Min(countOfLines - i, plh.batchSize - plh.lineIdx)
+			for i := from; i < countOfLines; i += fill {
+				fill = Min(countOfLines-i, plh.batchSize-plh.lineIdx)
 				wait_c := time.Now()
 				for j := 0; j < fill; j++ {
-					plh.simdCsvLineArray[plh.lineIdx] = lineOut.Lines[i + j]
+					plh.simdCsvLineArray[plh.lineIdx] = lineOut.Lines[i+j]
 					plh.lineIdx++
-					plh.maxFieldCnt = Max(plh.maxFieldCnt,len(lineOut.Lines[i + j]))
+					plh.maxFieldCnt = Max(plh.maxFieldCnt, len(lineOut.Lines[i+j]))
 				}
 				plh.csvLineArray2 += time.Since(wait_c)
 
@@ -298,9 +298,9 @@ func (plh *ParseLineHandler) close() {
 
 /*
 alloc space for the batch
- */
-func makeBatch(handler *ParseLineHandler) *PoolElement  {
-	batchData := batch.New(true,handler.attrName)
+*/
+func makeBatch(handler *ParseLineHandler) *PoolElement {
+	batchData := batch.New(true, handler.attrName)
 
 	//fmt.Printf("----- batchSize %d attrName %v \n",batchSize,handler.attrName)
 
@@ -332,9 +332,9 @@ func makeBatch(handler *ParseLineHandler) *PoolElement  {
 			vec.Col = make([]float64, batchSize)
 		case types.T_char, types.T_varchar:
 			vBytes := &types.Bytes{
-				Offsets: make([]uint32,batchSize),
-				Lengths: make([]uint32,batchSize),
-				Data: nil,
+				Offsets: make([]uint32, batchSize),
+				Lengths: make([]uint32, batchSize),
+				Data:    nil,
 			}
 			vec.Col = vBytes
 		default:
@@ -344,20 +344,20 @@ func makeBatch(handler *ParseLineHandler) *PoolElement  {
 	}
 
 	return &PoolElement{
-		bat : batchData,
-		lineArray: make([][]string,handler.batchSize),
+		bat:       batchData,
+		lineArray: make([][]string, handler.batchSize),
 	}
 }
 
 /*
 Init ParseLineHandler
- */
+*/
 func initParseLineHandler(handler *ParseLineHandler) error {
 	relation := handler.tableHandler
 	load := handler.load
 
 	cols := relation.Attribute()
-	attrName := make([]string,len(cols))
+	attrName := make([]string, len(cols))
 	tableName2ColumnId := make(map[string]int)
 	for i, col := range cols {
 		attrName[i] = col.Name
@@ -369,17 +369,17 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 
 	//define the peer column for LOAD DATA's column list.
 	var dataColumnId2TableColumnId []int = nil
-	if len(load.ColumnList) == 0{
-		dataColumnId2TableColumnId = make([]int,len(cols))
+	if len(load.ColumnList) == 0 {
+		dataColumnId2TableColumnId = make([]int, len(cols))
 		for i := 0; i < len(cols); i++ {
 			dataColumnId2TableColumnId[i] = i
 		}
-	}else{
-		dataColumnId2TableColumnId = make([]int,len(load.ColumnList))
+	} else {
+		dataColumnId2TableColumnId = make([]int, len(load.ColumnList))
 		for i, col := range load.ColumnList {
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
-				tid,ok := tableName2ColumnId[realCol.Parts[0]]
+				tid, ok := tableName2ColumnId[realCol.Parts[0]]
 				if !ok {
 					return fmt.Errorf("no such column %s", realCol.Parts[0])
 				}
@@ -388,12 +388,11 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 				//NOTE:variable like '@abc' will be passed by.
 				dataColumnId2TableColumnId[i] = -1
 			default:
-				return fmt.Errorf("unsupported column type %v",realCol)
+				return fmt.Errorf("unsupported column type %v", realCol)
 			}
 		}
 	}
 	handler.dataColumnId2TableColumnId = dataColumnId2TableColumnId
-
 
 	//allocate batch
 	for j := 0; j < cap(handler.simdCsvBatchPool); j++ {
@@ -406,16 +405,16 @@ func initParseLineHandler(handler *ParseLineHandler) error {
 /*
 alloc a batch from the pool.
 if the pool does not have batch anymore, the caller routine will be suspended.
- */
-func allocBatch(handler *ParseLineHandler ) *PoolElement{
-	batchData := <- handler.simdCsvBatchPool
+*/
+func allocBatch(handler *ParseLineHandler) *PoolElement {
+	batchData := <-handler.simdCsvBatchPool
 	return batchData
 }
 
 /*
 return a batch into the pool
- */
-func releaseBatch(handler *ParseLineHandler,pl *PoolElement) {
+*/
+func releaseBatch(handler *ParseLineHandler, pl *PoolElement) {
 	//clear batch
 	//clear vector.nulls.Nulls
 	for _, vec := range pl.bat.Vecs {
@@ -431,8 +430,8 @@ func releaseBatch(handler *ParseLineHandler,pl *PoolElement) {
 
 /**
 it may be suspended, when the pool does not have enough batch
- */
-func initWriteBatchHandler(handler *ParseLineHandler,wHandler *WriteBatchHandler) error {
+*/
+func initWriteBatchHandler(handler *ParseLineHandler, wHandler *WriteBatchHandler) error {
 	wHandler.ignoreFieldError = handler.ignoreFieldError
 	wHandler.cols = handler.cols
 	wHandler.dataColumnId2TableColumnId = handler.dataColumnId2TableColumnId
@@ -455,7 +454,7 @@ func initWriteBatchHandler(handler *ParseLineHandler,wHandler *WriteBatchHandler
 	return nil
 }
 
-func collectWriteBatchResult(handler *ParseLineHandler,wh *WriteBatchHandler) {
+func collectWriteBatchResult(handler *ParseLineHandler, wh *WriteBatchHandler) {
 	//fmt.Printf("++++> %d %d %d %d \n",
 	//	wh.result.Skipped,
 	//	wh.result.Deleted,
@@ -490,17 +489,17 @@ func collectWriteBatchResult(handler *ParseLineHandler,wh *WriteBatchHandler) {
 	wh.simdCsvErr = nil
 }
 
-func makeParsedFailedError(tp,field,column string,line uint64,offset int) *MysqlError {
+func makeParsedFailedError(tp, field, column string, line uint64, offset int) *MysqlError {
 	return NewMysqlError(ER_TRUNCATED_WRONG_VALUE_FOR_FIELD,
 		tp,
 		field,
 		column,
-		line + uint64(offset))
+		line+uint64(offset))
 }
 
 func errorCanBeIgnored(err error) bool {
 	switch err.(type) {
-	case *MysqlError,*csv.ParseError:
+	case *MysqlError, *csv.ParseError:
 		return false
 	default:
 		return true
@@ -517,13 +516,13 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 	countOfLineArray := handler.lineIdx
 	if !forceConvert {
 		if countOfLineArray != handler.batchSize {
-			fmt.Printf("---->countOfLineArray %d batchSize %d \n",countOfLineArray,handler.batchSize)
+			fmt.Printf("---->countOfLineArray %d batchSize %d \n", countOfLineArray, handler.batchSize)
 			panic("-----write a batch")
 		}
 	}
 
 	batchData := handler.batchData
-	columnFLags := make([]byte,len(batchData.Vecs))
+	columnFLags := make([]byte, len(batchData.Vecs))
 	fetchCnt := 0
 	var err error
 	allFetchCnt := 0
@@ -602,7 +601,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							//mysql warning ER_TRUNCATED_WRONG_VALUE_FOR_FIELD
 							result.Warnings++
@@ -620,7 +619,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -637,7 +636,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -654,7 +653,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -671,7 +670,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -688,7 +687,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -705,7 +704,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -722,7 +721,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -739,7 +738,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -758,7 +757,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							if !ignoreFieldError {
-								return makeParsedFailedError(vec.Typ.String(),field,vecAttr,base,offset)
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 							}
 							result.Warnings++
 							d = 0
@@ -803,7 +802,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 			//fillBlank += time.Since(wait_b)
 		}
 		handler.choose_true += time.Since(wait_d)
-	} else{
+	} else {
 		wait_d := time.Now()
 		//record missing column
 		for k := 0; k < len(columnFLags); k++ {
@@ -1074,7 +1073,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 
 		wait_b := time.Now()
 		//the row does not have field
-		for k := 0; k < len(columnFLags	); k++ {
+		for k := 0; k < len(columnFLags); k++ {
 			if 0 == columnFLags[k] {
 				vec := batchData.Vecs[k]
 				//row
@@ -1115,9 +1114,9 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 		write batch into the engine
 	*/
 	//the second parameter must be FALSE here
-	err = writeBatchToStorage(handler,forceConvert)
+	err = writeBatchToStorage(handler, forceConvert)
 	if err != nil {
-		logutil.Errorf("saveBatchToStorage failed. err:%v",err)
+		logutil.Errorf("saveBatchToStorage failed. err:%v", err)
 		return err
 	}
 	toStorage += time.Since(wait_c)
@@ -1133,7 +1132,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 	//	row2col,fillBlank,toStorage)
 
 	if allFetchCnt != countOfLineArray {
-		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ",allFetchCnt,countOfLineArray)
+		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ", allFetchCnt, countOfLineArray)
 	}
 
 	return nil
@@ -1143,8 +1142,8 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool) 
 save batch to storage.
 when force is true, batchsize will be changed.
 */
-func writeBatchToStorage(handler *WriteBatchHandler,force bool) error {
-	if handler.batchFilled == handler.batchSize{
+func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
+	if handler.batchFilled == handler.batchSize {
 		//batchBytes := 0
 		//for _, vec := range handler.batchData.Vecs {
 		//	//fmt.Printf("len %d type %d %s \n",vec.Length(),vec.Typ.Oid,vec.Typ.String())
@@ -1160,9 +1159,9 @@ func writeBatchToStorage(handler *WriteBatchHandler,force bool) error {
 		//fmt.Printf("----batchBytes %v B %v MB\n",batchBytes,batchBytes / 1024.0 / 1024.0)
 		//
 		wait_a := time.Now()
-		err := handler.tableHandler.Write(handler.timestamp,handler.batchData)
+		err := handler.tableHandler.Write(handler.timestamp, handler.batchData)
 		if err != nil {
-			logutil.Errorf("write failed. err: %v",err)
+			logutil.Errorf("write failed. err: %v", err)
 			return err
 		}
 
@@ -1184,11 +1183,11 @@ func writeBatchToStorage(handler *WriteBatchHandler,force bool) error {
 		handler.batchFilled = 0
 
 		handler.resetBatch += time.Since(wait_b)
-	}else{
+	} else {
 		if force {
 			//first, remove redundant rows at last
 			needLen := handler.batchFilled
-			if needLen > 0{
+			if needLen > 0 {
 				//logutil.Infof("needLen: %d batchSize %d", needLen, handler.batchSize)
 				for _, vec := range handler.batchData.Vecs {
 					//fmt.Printf("needLen %d %d type %d %s \n",needLen,i,vec.Typ.Oid,vec.Typ.String())
@@ -1228,10 +1227,10 @@ func writeBatchToStorage(handler *WriteBatchHandler,force bool) error {
 					case types.T_float64:
 						cols := vec.Col.([]float64)
 						vec.Col = cols[:needLen]
-					case types.T_char, types.T_varchar://bytes is different
+					case types.T_char, types.T_varchar: //bytes is different
 						vBytes := vec.Col.(*types.Bytes)
 						//fmt.Printf("saveBatchToStorage before data %s \n",vBytes.String())
-						if len(vBytes.Offsets) > needLen{
+						if len(vBytes.Offsets) > needLen {
 							vec.Col = vBytes.Window(0, needLen)
 						}
 
@@ -1258,14 +1257,14 @@ func writeBatchToStorage(handler *WriteBatchHandler,force bool) error {
 
 func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
 	writeHandler := &WriteBatchHandler{
-		SharePart:SharePart{
-			lineIdx: handler.lineIdx,
+		SharePart: SharePart{
+			lineIdx:     handler.lineIdx,
 			maxFieldCnt: handler.maxFieldCnt,
 		},
 	}
-	err := initWriteBatchHandler(handler,writeHandler)
+	err := initWriteBatchHandler(handler, writeHandler)
 	if err != nil {
-		writeHandler.simdCsvErr =err
+		writeHandler.simdCsvErr = err
 		return err
 	}
 
@@ -1274,7 +1273,7 @@ func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
 		defer handler.simdCsvWaitWriteRoutineToQuit.Done()
 
 		//step 3 : save into storage
-		err = rowToColumnAndSaveToStorage(writeHandler,force)
+		err = rowToColumnAndSaveToStorage(writeHandler, force)
 		writeHandler.simdCsvErr = err
 
 		releaseBatch(handler, writeHandler.pl)
@@ -1282,14 +1281,14 @@ func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
 		writeHandler.simdCsvLineArray = nil
 
 		if err != nil {
-			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_WRITE_BATCH_ERROR,err,writeHandler)
-		}else{
-			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_WRITE_BATCH_RESULT,nil,writeHandler)
+			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_WRITE_BATCH_ERROR, err, writeHandler)
+		} else {
+			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_WRITE_BATCH_RESULT, nil, writeHandler)
 		}
 
 		//this is the last one
 		if force {
-			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_END,nil,nil)
+			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_END, nil, nil)
 		}
 	}()
 	return nil
@@ -1297,10 +1296,10 @@ func saveLinesToStorage(handler *ParseLineHandler, force bool) error {
 
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
- */
+*/
 func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation) (*LoadResult, error) {
 	defer func() {
-		if er := recover(); er != nil{
+		if er := recover(); er != nil {
 			logutil.Errorf("loadLoop panic")
 		}
 	}()
@@ -1314,17 +1313,17 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	result := &LoadResult{}
 
 	/*
-	step1 : read block from file
-	 */
-	dataFile,err := os.Open(load.File)
+		step1 : read block from file
+	*/
+	dataFile, err := os.Open(load.File)
 	if err != nil {
-		logutil.Errorf("open file failed. err:%v",err)
+		logutil.Errorf("open file failed. err:%v", err)
 		return nil, err
 	}
 	defer func() {
 		err := dataFile.Close()
-		if err != nil{
-			logutil.Errorf("close file failed. err:%v",err)
+		if err != nil {
+			logutil.Errorf("close file failed. err:%v", err)
 		}
 	}()
 
@@ -1335,22 +1334,22 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	channelSize := 100
 	//simdcsv
 	handler := &ParseLineHandler{
-		SharePart:SharePart{
-			load: load,
-			lineIdx: 0,
+		SharePart: SharePart{
+			load:             load,
+			lineIdx:          0,
 			simdCsvLineArray: make([][]string, curBatchSize),
-			dbHandler: dbHandler,
-			tableHandler: tableHandler,
-			lineCount: 0,
-			batchSize: curBatchSize,
-			result: result,
+			dbHandler:        dbHandler,
+			tableHandler:     tableHandler,
+			lineCount:        0,
+			batchSize:        curBatchSize,
+			result:           result,
 		},
-		simdCsvGetParsedLinesChan:           make(chan simdcsv.LineOut,channelSize),
-		simdCsvWaitWriteRoutineToQuit:       &sync.WaitGroup{},
+		simdCsvGetParsedLinesChan:     make(chan simdcsv.LineOut, channelSize),
+		simdCsvWaitWriteRoutineToQuit: &sync.WaitGroup{},
 	}
 
-	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.GetLoadDataConcurrencyCount()),runtime.NumCPU())
-	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1,handler.simdCsvConcurrencyCountOfWriteBatch)
+	handler.simdCsvConcurrencyCountOfWriteBatch = Min(int(ses.Pu.SV.GetLoadDataConcurrencyCount()), runtime.NumCPU())
+	handler.simdCsvConcurrencyCountOfWriteBatch = Max(1, handler.simdCsvConcurrencyCountOfWriteBatch)
 	handler.simdCsvBatchPool = make(chan *PoolElement, handler.simdCsvConcurrencyCountOfWriteBatch)
 
 	//fmt.Printf("-----write concurrent count %d \n",handler.simdCsvConcurrencyCountOfWriteBatch)
@@ -1367,11 +1366,11 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	}
 
 	notifyChanSize := handler.simdCsvConcurrencyCountOfWriteBatch * 2
-	notifyChanSize = Max(100,notifyChanSize)
+	notifyChanSize = Max(100, notifyChanSize)
 
 	/*
-	make close reference
-	 */
+		make close reference
+	*/
 	handler.closeRef = NewCloseLoadData()
 
 	//put closeRef into the executor
@@ -1384,9 +1383,9 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 		false)
 
 	/*
-	error channel
-	 */
-	handler.simdCsvNotiyEventChan = make(chan *notifyEvent,notifyChanSize)
+		error channel
+	*/
+	handler.simdCsvNotiyEventChan = make(chan *notifyEvent, notifyChanSize)
 
 	//release resources of handler
 	defer handler.close()
@@ -1399,16 +1398,16 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	wg := sync.WaitGroup{}
 
 	/*
-	read from the output channel of the simdcsv parser, make a batch,
-	deliver it to async routine writing batch
-	 */
+		read from the output channel of the simdcsv parser, make a batch,
+		deliver it to async routine writing batch
+	*/
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		err := handler.getLineOutFromSimdCsvRoutine()
 		if err != nil {
-			logutil.Errorf("get line from simdcsv failed. err:%v",err)
-			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR,err,nil)
+			logutil.Errorf("get line from simdcsv failed. err:%v", err)
+			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_OUTPUT_SIMDCSV_ERROR, err, nil)
 		}
 	}()
 
@@ -1422,7 +1421,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 		err := handler.simdCsvReader.ReadLoop(handler.simdCsvGetParsedLinesChan)
 		if err != nil {
-			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR,err,nil)
+			handler.simdCsvNotiyEventChan <- newNotifyEvent(NOTIFY_EVENT_READ_SIMDCSV_ERROR, err, nil)
 		}
 		process_block += time.Since(wait_b)
 	}()
@@ -1434,15 +1433,15 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	for {
 		quit := false
 		select {
-		case <- handler.closeRef.stopLoadData:
+		case <-handler.closeRef.stopLoadData:
 			//get obvious cancel
 			quit = true
 			//fmt.Printf("----- get stop in load \n")
 
-		case ne = <- handler.simdCsvNotiyEventChan:
+		case ne = <-handler.simdCsvNotiyEventChan:
 			switch ne.neType {
 			case NOTIFY_EVENT_WRITE_BATCH_RESULT:
-				collectWriteBatchResult(handler,ne.wbh)
+				collectWriteBatchResult(handler, ne.wbh)
 			case NOTIFY_EVENT_END:
 				err = nil
 				quit = true
@@ -1454,7 +1453,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 					quit = true
 				}
 			default:
-				logutil.Errorf("get unsupported notify event %d",ne.neType)
+				logutil.Errorf("get unsupported notify event %d", ne.neType)
 				quit = true
 			}
 		}
@@ -1478,7 +1477,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 	quit := false
 	for {
 		select {
-		case ne = <- handler.simdCsvNotiyEventChan:
+		case ne = <-handler.simdCsvNotiyEventChan:
 		default:
 			quit = true
 		}
@@ -1489,7 +1488,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(load *tree.Load, dbHandler engine.Database
 
 		switch ne.neType {
 		case NOTIFY_EVENT_WRITE_BATCH_RESULT:
-			collectWriteBatchResult(handler,ne.wbh)
+			collectWriteBatchResult(handler, ne.wbh)
 		default:
 
 		}

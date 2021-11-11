@@ -18,36 +18,36 @@ import (
 	"fmt"
 	"github.com/stretchr/testify/require"
 	"matrixone/pkg/logutil"
-	"matrixone/pkg/sql/tree"
+	"matrixone/pkg/sql/parsers/tree"
 	"os"
 	"testing"
 )
 
 func Test_readTextFile(t *testing.T) {
-	data,err := os.ReadFile("test/loadfile.csv")
+	data, err := os.ReadFile("test/loadfile.csv")
 	require.NoError(t, err)
-	fmt.Printf("%v\n",data)
+	fmt.Printf("%v\n", data)
 }
 
-func loadDataFromFile(t *testing.T,f string)[]byte{
-	data,err := os.ReadFile(f)
+func loadDataFromFile(t *testing.T, f string) []byte {
+	data, err := os.ReadFile(f)
 	require.NoError(t, err)
 	return data
 }
 
-func loadAndProcess(t *testing.T,load *tree.Load,packline func([][][]byte)) {
+func loadAndProcess(t *testing.T, load *tree.Load, packline func([][][]byte)) {
 	/*
 		step1 : read block from file
 	*/
-	dataFile,err := os.Open(load.File)
+	dataFile, err := os.Open(load.File)
 	if err != nil {
-		logutil.Errorf("open file failed. err:%v",err)
+		logutil.Errorf("open file failed. err:%v", err)
 		return
 	}
 	defer func() {
 		err := dataFile.Close()
-		if err != nil{
-			logutil.Errorf("close file failed. err:%v",err)
+		if err != nil {
+			logutil.Errorf("close file failed. err:%v", err)
 		}
 	}()
 }
