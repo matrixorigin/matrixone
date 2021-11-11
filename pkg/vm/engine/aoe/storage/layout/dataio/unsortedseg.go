@@ -196,3 +196,50 @@ func (sf *UnsortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	sf.RUnlock()
 	return blk.PrefetchPart(colIdx, id)
 }
+
+func (sf *UnsortedSegmentFile) Copy(dir string, id common.ID) error {
+	blks := make([]base.IBaseFile, 0, 4)
+	sf.RLock()
+	for _, blk := range sf.Blocks {
+		blks = append(blks, blk)
+	}
+	sf.RUnlock()
+	if len(blks) == 0 {
+		return FileNotExistErr
+	}
+	var err error
+	for _, blk := range blks {
+		if err = blk.Copy(dir, id); err != nil {
+			if err == FileNotExistErr {
+				err = nil
+			} else {
+				break
+			}
+		}
+	}
+	return err
+}
+
+func (sf *UnsortedSegmentFile) CopyTo(dest string) error {
+	blks := make(map[*common.ID]base.IBaseFile)
+	sf.RLock()
+	for id, blk := range sf.Blocks {
+		blks[&id] = blk
+	}
+	sf.RUnlock()
+	if len(blks) == 0 {
+		return FileNotExistErr
+	}
+	var err error
+	for id, blk := range blks {
+		name := fmt.Sprintf("%s-%d", dest, id.BlockID)
+		if err = blk.CopyTo(name); err != nil {
+			if err == FileNotExistErr {
+				err = nil
+			} else {
+				break
+			}
+		}
+	}
+	return err
+}

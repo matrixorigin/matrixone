@@ -14,6 +14,7 @@
 package dataio
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,16 +32,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
+var (
+	FileNotExistErr = errors.New("file not exist")
+)
+
 type versionBlockFile struct {
 	common.RefHelper
 	*BlockFile
 	count uint64
+	tag   string
 }
 
 func newVersionBlockFile(count uint64, tag string, host base.ISegmentFile, id common.ID) *versionBlockFile {
 	getter := tblkFileGetter{count: count, tag: tag}
 	vbf := &versionBlockFile{
 		count:     count,
+		tag:       tag,
 		BlockFile: NewBlockFile(host, id, getter.NameFactory),
 	}
 	vbf.OnZeroCB = vbf.close
@@ -347,4 +354,39 @@ func (f *TransientBlockFile) MakeVirtualIndexFile(*base.IndexMeta) common.IVFile
 
 func (f *TransientBlockFile) GetDir() string {
 	return f.host.GetDir()
+}
+
+func (f *TransientBlockFile) refLatestFile() *versionBlockFile {
+	f.mu.RLock()
+	if len(f.files) == 0 {
+		f.mu.RUnlock()
+		return nil
+	}
+	file := f.files[len(f.files)-1]
+	file.Ref()
+	f.mu.RUnlock()
+	return file
+}
+
+func (f *TransientBlockFile) CopyTo(name string) (err error) {
+	file := f.refLatestFile()
+	if file == nil {
+		err = FileNotExistErr
+		return
+	}
+	defer file.Unref()
+	err = file.CopyTo(name)
+	return
+}
+
+func (f *TransientBlockFile) Copy(dir string, id common.ID) (err error) {
+	file := f.refLatestFile()
+	if file == nil {
+		err = FileNotExistErr
+		return
+	}
+	defer file.Unref()
+	name := MakeTblockFileName(dir, file.tag, file.count, id, false)
+	err = file.CopyTo(name)
+	return
 }

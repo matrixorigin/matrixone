@@ -256,3 +256,13 @@ func (bf *BlockFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	sz := pointer.Len
 	return prefetch.Prefetch(bf.Fd(), uintptr(offset), uintptr(sz))
 }
+
+func (bf *BlockFile) Copy(dir string, id common.ID) error {
+	dest := common.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, false)
+	return bf.CopyTo(dest)
+}
+
+func (bf *BlockFile) CopyTo(dest string) error {
+	_, err := CopyFile(bf.Name(), dest)
+	return err
+}

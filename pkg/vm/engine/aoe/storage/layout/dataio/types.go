@@ -14,7 +14,13 @@
 
 package dataio
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+import (
+	"errors"
+	"io"
+	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+)
 
 type fileStat struct {
 	size  int64
@@ -46,4 +52,29 @@ type colPartFileStat struct {
 
 func (info *colPartFileStat) Name() string {
 	return info.id.ToPartFilePath()
+}
+
+func CopyFile(src, dest string) (int64, error) {
+	stat, err := os.Stat(src)
+	if err != nil {
+		return 0, err
+	}
+	if !stat.Mode().IsRegular() {
+		return 0, errors.New("not a regular file")
+	}
+	r, err := os.Open(src)
+	if err != nil {
+		return 0, err
+	}
+	defer r.Close()
+	return CopyFromReader(r, dest)
+}
+
+func CopyFromReader(r io.Reader, dest string) (int64, error) {
+	w, err := os.Create(dest)
+	if err != nil {
+		return 0, err
+	}
+	defer w.Close()
+	return io.Copy(w, r)
 }
