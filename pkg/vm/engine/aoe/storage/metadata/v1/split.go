@@ -121,7 +121,7 @@ func (split *ShardSplitSpec) Prepare(catalog *Catalog, nameFactory TableNameFact
 		split.splitted[*table.CommitInfo.LogIndex] = table
 		return nil
 	}
-	processor := new(loopProcessor)
+	processor := new(LoopProcessor)
 	processor.TableFn = onTable
 	if err = split.view.Database.RecurLoopLocked(processor); err != nil {
 		return err

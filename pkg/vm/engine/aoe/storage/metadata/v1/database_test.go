@@ -140,7 +140,7 @@ func TestDatabase1(t *testing.T) {
 	tableDeleted := 0
 	dbCnt := 0
 	tblCnt := 0
-	processor := new(loopProcessor)
+	processor := new(LoopProcessor)
 	processor.DatabaseFn = func(db *Database) error {
 		if db.IsHardDeleted() && db.HasCommitted() {
 			dbDeleted++
@@ -160,6 +160,16 @@ func TestDatabase1(t *testing.T) {
 	catalog.RecurLoopLocked(processor)
 	assert.Equal(t, 1, dbDeleted)
 	assert.Equal(t, 1, tableDeleted)
+	assert.Equal(t, 3, dbCnt)
+	assert.Equal(t, 3, tblCnt)
+
+	catalog.Compact(nil, nil)
+	dbDeleted = 0
+	tableDeleted = 0
+	dbCnt, tblCnt = 0, 0
+	catalog.RecurLoopLocked(processor)
+	assert.Equal(t, 0, dbDeleted)
+	assert.Equal(t, 0, tableDeleted)
 	assert.Equal(t, 3, dbCnt)
 	assert.Equal(t, 3, tblCnt)
 
@@ -199,7 +209,7 @@ func TestDatabase1(t *testing.T) {
 	f = db4Replayed.FindCommitByIndexLocked(db4Replayed.CommitInfo.LogIndex)
 	assert.NotNil(t, f)
 
-	// t.Log(catalog2.PString(PPL0, 0))
+	t.Log(catalog2.PString(PPL0, 0))
 }
 
 func TestTxn(t *testing.T) {

@@ -1,41 +1,41 @@
 package metadata
 
-type LoopProcessor interface {
+type Processor interface {
 	OnDatabase(database *Database) error
 	OnTable(table *Table) error
 	OnSegment(segment *Segment) error
 	OnBlock(block *Block) error
 }
 
-type loopProcessor struct {
+type LoopProcessor struct {
 	DatabaseFn func(*Database) error
 	TableFn    func(*Table) error
 	SegmentFn  func(*Segment) error
 	BlockFn    func(*Block) error
 }
 
-func (p *loopProcessor) OnDatabase(database *Database) error {
+func (p *LoopProcessor) OnDatabase(database *Database) error {
 	if p.DatabaseFn != nil {
 		return p.DatabaseFn(database)
 	}
 	return nil
 }
 
-func (p *loopProcessor) OnTable(table *Table) error {
+func (p *LoopProcessor) OnTable(table *Table) error {
 	if p.TableFn != nil {
 		return p.TableFn(table)
 	}
 	return nil
 }
 
-func (p *loopProcessor) OnSegment(segment *Segment) error {
+func (p *LoopProcessor) OnSegment(segment *Segment) error {
 	if p.SegmentFn != nil {
 		return p.SegmentFn(segment)
 	}
 	return nil
 }
 
-func (p *loopProcessor) OnBlock(block *Block) error {
+func (p *LoopProcessor) OnBlock(block *Block) error {
 	if p.BlockFn != nil {
 		return p.BlockFn(block)
 	}
@@ -43,7 +43,7 @@ func (p *loopProcessor) OnBlock(block *Block) error {
 }
 
 type reallocIdProcessor struct {
-	loopProcessor
+	LoopProcessor
 	allocator *Sequence
 	tranId    uint64
 	trace     *mapping
@@ -103,8 +103,8 @@ func (p *reallocIdProcessor) onBlock(block *Block) error {
 	return nil
 }
 
-func newBlockProcessor(fn func(block *Block) error) *loopProcessor {
-	return &loopProcessor{
+func newBlockProcessor(fn func(block *Block) error) *LoopProcessor {
+	return &LoopProcessor{
 		BlockFn: fn,
 	}
 }

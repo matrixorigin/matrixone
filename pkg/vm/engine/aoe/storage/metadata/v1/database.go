@@ -272,7 +272,17 @@ func (db *Database) prepareReplace(ctx *addReplaceCommitCtx) (LogEntry, error) {
 	return logEntry, nil
 }
 
-func (db *Database) RecurLoopLocked(processor LoopProcessor) error {
+func (db *Database) LoopLocked(processor Processor) error {
+	var err error
+	for _, table := range db.TableSet {
+		if err = processor.OnTable(table); err != nil {
+			return err
+		}
+	}
+	return err
+}
+
+func (db *Database) RecurLoopLocked(processor Processor) error {
 	var err error
 	for _, table := range db.TableSet {
 		if err = processor.OnTable(table); err != nil {
@@ -716,13 +726,26 @@ func (db *Database) PString(level PPLevel, depth int) string {
 	return s
 }
 
-func (db *Database) Compact() {
+func (db *Database) Compact(dbListener DatabaseListener, tblListener TableListener) {
 	tables := make([]*Table, 0, 2)
 	nodes := make([]*nodeList, 0, 2)
-	safeId := db.GetShardId()
+	safeId := db.GetCheckpointId()
 	db.RLock()
 	// If database is hard delete, it will be handled during catalog compact cycle
-	if db.IsHardDeletedLocked() {
+	// if db.IsDeletedLocked() {
+	// 	hardDeleted := db.IsHardDeletedLocked()
+	// 	canHardDelete := db.CanHardDeleteLocked()
+	// 	db.RUnlock()
+	// 	if hardDeleted || !canHardDelete {
+	// 		return
+	// 	}
+	// 	if err := db.SimpleHardDelete(); err != nil {
+	// 		panic(err)
+	// 	}
+	// 	logutil.Infof("%s | HardDeleted", db.Repr())
+	// 	return
+	// }
+	if db.IsHardDeletedLocked() && db.HasCommittedLocked() {
 		db.RUnlock()
 		return
 	}
@@ -751,6 +774,9 @@ func (db *Database) Compact() {
 	for _, table := range tables {
 		logutil.Infof("%s | Compacted", table.Repr(false))
 		delete(db.TableSet, table.Id)
+		if tblListener != nil {
+			tblListener.OnTableCompacted(table)
+		}
 	}
 	db.Unlock()
 	if len(names) > 0 {

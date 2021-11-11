@@ -6,6 +6,7 @@ type DatabaseListener interface {
 	OnDatabaseHardDeleted(deleted *Database)
 	OnDatabaseSplitted(stale *Database, created []*Database)
 	OnDatabaseReplaced(stale *Database, created *Database)
+	OnDatabaseCompacted(stale *Database)
 }
 
 type TableListener interface {
@@ -14,6 +15,7 @@ type TableListener interface {
 	OnTableHardDeleted(deleted *Table)
 	OnTableSplitted(stale *Table, created []*Table)
 	OnTableReplaced(stale *Table, created *Table)
+	OnTableCompacted(stale *Table)
 }
 
 type SegmentListener interface {
@@ -26,10 +28,20 @@ type BlockListener interface {
 	OnBlockUpgraded(upgraded *Block)
 }
 
+type BaseDatabaseListener struct {
+	DatabaseCreatedFn     func(*Database)
+	DatabaseSoftDeletedFn func(*Database)
+	DatabaseHardDeletedFn func(*Database)
+	DatabaseCompactedFn   func(*Database)
+	DatabaseSplittedFn    func(*Database, []*Database)
+	DatabaseReplacedFn    func(*Database, *Database)
+}
+
 type BaseTableListener struct {
 	SplittedFn                                   func(*Table, []*Table)
 	ReplacedFn                                   func(*Table, *Table)
 	TableCreatedFn, SoftDeletedFn, HardDeletedFn func(*Table)
+	TableCompactedFn                             func(*Table)
 }
 
 type BaseSegmentListener struct {
@@ -39,6 +51,55 @@ type BaseSegmentListener struct {
 
 type BaseBlockListener struct {
 	BlockCreatedFn, BlockUpgradedFn func(*Block)
+}
+
+func (l *BaseDatabaseListener) OnDatabaseCreated(database *Database) {
+	if l == nil || l.DatabaseCreatedFn == nil {
+		return
+	}
+	l.DatabaseCreatedFn(database)
+}
+
+func (l *BaseDatabaseListener) OnDatabaseSoftDeleted(database *Database) {
+	if l == nil || l.DatabaseSoftDeletedFn == nil {
+		return
+	}
+	l.DatabaseSoftDeletedFn(database)
+}
+
+func (l *BaseDatabaseListener) OnDatabaseHardDeleted(database *Database) {
+	if l == nil || l.DatabaseHardDeletedFn == nil {
+		return
+	}
+	l.DatabaseHardDeletedFn(database)
+}
+
+func (l *BaseDatabaseListener) OnDatabaseSplitted(stale *Database, created []*Database) {
+	if l == nil || l.DatabaseSplittedFn == nil {
+		return
+	}
+	l.DatabaseSplittedFn(stale, created)
+}
+
+func (l *BaseDatabaseListener) OnDatabaseReplaced(stale *Database, created *Database) {
+	if l == nil || l.DatabaseReplacedFn == nil {
+		return
+	}
+	l.DatabaseReplacedFn(stale, created)
+}
+
+func (l *BaseDatabaseListener) OnDatabaseCompacted(stale *Database) {
+	if l == nil || l.DatabaseCompactedFn == nil {
+		return
+	}
+	l.DatabaseCompactedFn(stale)
+}
+
+func (l *BaseTableListener) OnTableCompacted(table *Table) {
+	if l == nil || l.TableCompactedFn == nil {
+		return
+	}
+	l.TableCompactedFn(table)
 }
 
 func (l *BaseTableListener) OnTableCreated(table *Table) {

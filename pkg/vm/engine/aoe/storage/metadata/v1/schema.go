@@ -16,6 +16,8 @@ package metadata
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -96,10 +98,12 @@ func (s *Schema) GetColIdx(attr string) int {
 }
 
 func MockSchema(colCnt int) *Schema {
+	rand.Seed(time.Now().UnixNano())
 	schema := &Schema{
 		ColDefs:   make([]*ColDef, colCnt),
 		Indices:   make([]*IndexInfo, 0),
 		NameIndex: make(map[string]int),
+		Name:      fmt.Sprintf("%d", rand.Intn(1000000)),
 	}
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {

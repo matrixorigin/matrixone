@@ -65,6 +65,9 @@ func (wal *ShardWal) GetShardId() uint64 {
 }
 
 func (wal *ShardWal) InitWal(index uint64) error {
+	if wal.Wal == nil {
+		return nil
+	}
 	return wal.Wal.InitShard(wal.ShardId, index)
 }
 
@@ -73,21 +76,38 @@ func (wal *ShardWal) WalEnabled() bool {
 }
 
 func (wal *ShardWal) GetCheckpointId() uint64 {
+	if wal.Wal == nil {
+		return 0
+	}
 	return wal.Wal.GetShardCheckpointId(wal.ShardId)
 }
 
 func (wal *ShardWal) GetCurrSeqNum() uint64 {
+	if wal.Wal == nil {
+		return 0
+	}
 	return wal.Wal.GetShardCurrSeqNum(wal.ShardId)
 }
 
 func (wal *ShardWal) Log(payload Payload) (*Entry, error) {
+	if wal.Wal == nil {
+		entry := GetEntry(uint64(0))
+		entry.SetDone()
+		return entry, nil
+	}
 	return wal.Wal.Log(payload)
 }
 
 func (wal *ShardWal) SyncLog(payload Payload) error {
+	if wal.Wal == nil {
+		return nil
+	}
 	return wal.Wal.SyncLog(payload)
 }
 
 func (wal *ShardWal) Checkpoint(v interface{}) {
+	if wal.Wal == nil {
+		return
+	}
 	wal.Wal.Checkpoint(v)
 }

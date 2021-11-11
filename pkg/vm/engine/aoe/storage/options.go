@@ -148,6 +148,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 	if o.MetaCleanerCfg == nil {
 		o.MetaCleanerCfg = &MetaCleanerCfg{
 			Interval: time.Duration(DefaultCleanInterval) * time.Second,
+			// Interval: time.Duration(200) * time.Millisecond,
 		}
 	}
 	return o

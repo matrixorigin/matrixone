@@ -221,7 +221,9 @@ func (mgr *manager) onReceived(items ...interface{}) {
 }
 
 func (mgr *manager) InitShard(shardId, safeId uint64) error {
+	mgr.mu.Lock()
 	s, err := mgr.AddShardLocked(shardId)
+	mgr.mu.Unlock()
 	if err != nil {
 		return err
 	}

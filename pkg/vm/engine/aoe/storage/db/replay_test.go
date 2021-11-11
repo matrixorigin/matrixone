@@ -124,6 +124,7 @@ func mockSegFile(id common.ID, dir string, t *testing.T) string {
 	f, err := os.Create(fname)
 	assert.Nil(t, err)
 	defer f.Close()
+	t.Log(fname)
 	return fname
 }
 
@@ -1006,4 +1007,86 @@ func TestReplay12(t *testing.T) {
 
 	rel.Close()
 	inst.Close()
+}
+
+func TestReplay13(t *testing.T) {
+	// dir := "/tmp/replay/test13"
+	// os.RemoveAll(dir)
+	dir := TEST_DB_DIR
+	initDBTest()
+	initDataAndMetaDir(dir)
+	inst, gen := initDB(wal.BrokerRole)
+	shardId := uint64(100)
+	catalog := inst.Store.Catalog
+	totalBlks := catalog.Cfg.SegmentMaxBlocks * 2
+	schema := metadata.MockSchema(2)
+	tbl := metadata.MockDBTable(catalog, "db1", schema, totalBlks, gen.Shard(shardId))
+	toRemove := make([]string, 0)
+	seg := tbl.SegmentSet[0]
+	for i := 0; i < len(seg.BlockSet); i++ {
+		blk := seg.BlockSet[i]
+		blk.SetCount(catalog.Cfg.BlockMaxRows)
+		err := blk.SimpleUpgrade(nil)
+		assert.Nil(t, err)
+	}
+	name := mockSegFile(*seg.AsCommonID(), dir, t)
+	toRemove = append(toRemove, name)
+	indice := make([]*metadata.LogIndex, 1)
+	indice[0] = gen.Next(shardId)
+	err := seg.SimpleUpgrade(100, indice)
+	assert.Nil(t, err)
+
+	catalog.IndexWal.SyncLog(gen.Next(shardId))
+	err = tbl.SimpleSoftDelete(gen.Curr(shardId))
+	assert.Nil(t, err)
+	assert.True(t, tbl.IsSoftDeleted())
+	catalog.IndexWal.Checkpoint(gen.Curr(shardId))
+
+	testutils.WaitExpect(100, func() bool {
+		return tbl.GetCommit().GetIndex() == tbl.Database.GetCheckpointId()
+	})
+	assert.Equal(t, tbl.GetCommit().GetIndex(), tbl.Database.GetCheckpointId())
+
+	schema = metadata.MockSchema(3)
+	tbl2 := metadata.MockTable(tbl.Database, schema, 1, gen.Next(shardId))
+	blk := tbl2.SegmentSet[0].BlockSet[0]
+	blk.SetCount(catalog.Cfg.BlockMaxRows)
+	indice[0] = gen.Next(shardId)
+	catalog.IndexWal.SyncLog(gen.Curr(shardId))
+	err = blk.SimpleUpgrade(indice)
+	assert.Nil(t, err)
+	catalog.IndexWal.Checkpoint(gen.Curr(shardId))
+	name = mockBlkFile(*blk.AsCommonID(), dir, t)
+	toRemove = append(toRemove, name)
+	catalog.IndexWal.SyncLog(gen.Next(shardId))
+	err = tbl2.SimpleSoftDelete(gen.Curr(shardId))
+	assert.Nil(t, err)
+
+	inst.Close()
+
+	catalog, err = metadata.OpenCatalog(new(sync.RWMutex), catalog.Cfg)
+	assert.Nil(t, err)
+	catalog.Start()
+
+	observer := &replayObserver{
+		removed: make([]string, 0),
+	}
+	replayHandle := NewReplayHandle(dir, catalog, nil, observer)
+	assert.NotNil(t, replayHandle)
+	replayHandle.Replay()
+	sort.Slice(toRemove, func(i, j int) bool {
+		return toRemove[i] < toRemove[j]
+	})
+	sort.Slice(observer.removed, func(i, j int) bool {
+		return observer.removed[i] < observer.removed[j]
+	})
+	assert.Equal(t, toRemove, observer.removed)
+
+	db1 := catalog.Databases[tbl.Database.Id]
+	assert.True(t, db1.TableSet[tbl.Id].IsHardDeleted())
+	assert.True(t, db1.TableSet[tbl2.Id].IsHardDeleted())
+	catalog.Compact(nil, nil)
+	t.Log(catalog.PString(metadata.PPL0, 0))
+
+	catalog.Close()
 }
