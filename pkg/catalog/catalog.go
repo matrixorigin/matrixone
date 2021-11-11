@@ -336,7 +336,12 @@ func (c *Catalog) ListTablesByName(dbName string) ([]aoe.TableInfo, error) {
 	}
 }
 
+//CreateIndex create an index
 func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("CreateIndex cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	_, err := c.checkDBExists(idxInfo.SchemaId)
 	if err != nil {
 		return err
@@ -362,7 +367,13 @@ func (c *Catalog) CreateIndex(epoch uint64, idxInfo aoe.IndexInfo) error {
 	err = c.updateTableInfo(idxInfo.SchemaId, tbl)
 	return err
 }
+
+//DropIndex drops an index
 func (c *Catalog) DropIndex(epoch, tid, dbid uint64, idxName string) error {
+	t0 := time.Now()
+	defer func() {
+		logutil.Debugf("DropIndex cost %d ms", time.Since(t0).Milliseconds())
+	}()
 	_, err := c.checkDBExists(dbid)
 	if err != nil {
 		return err
