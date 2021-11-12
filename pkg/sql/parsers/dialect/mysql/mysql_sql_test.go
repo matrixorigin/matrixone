@@ -26,10 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: `revoke super(a, b, c) 
-				on procedure db.func 
-				from 'h1'@'h3'`,
-		output: "revoke super(a, b, c) on procedure db.func from h1@h3",
+		input: "create table td2 (a int default (((1 + 2 * 3 / 2 + (123)))), b int)",
 	}
 )
 
@@ -58,6 +55,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "create table td2 (a int default (((1 + 2 * 3 / 2 + (123)))), b int)",
+	}, {
 		input: `revoke super(a, b, c) 
 				on procedure db.func 
 				from 'h1'@'h3'`,

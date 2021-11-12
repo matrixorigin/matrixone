@@ -474,8 +474,8 @@ func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, f
 	defaultExprs := make(map[string]tree.Expr)
 	for _, attr := range rel.Attribute() { // init a map from column name to its default expression
 		if attr.HasDefaultExpr() {
-			str, null := attr.GetDefaultExpr()
-			defaultExprs[attr.Name] = makeExprFromStr(attr.Type, str, null)
+			value, null := attr.GetDefaultExpr()
+			defaultExprs[attr.Name] = makeExprFromVal(attr.Type, value, null)
 		}
 	}
 
@@ -535,23 +535,27 @@ func rewriteInsertRows(rel engine.Relation, insertTargets tree.IdentifierList, f
 	return rows, finalInsertTargets, nil
 }
 
-// makeExprFromStr make an expr from expression string and its type
-func makeExprFromStr(typ types.Type, str string, isNull bool) tree.Expr {
+// makeExprFromVal make an expr from value
+func makeExprFromVal(typ types.Type, value interface{}, isNull bool) tree.Expr {
 	if isNull {
 		return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
 	}
 	switch typ.Oid {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
-			value, _ := strconv.ParseInt(str, 10, 64)
-			return tree.NewNumVal(constant.MakeInt64(value), str, value < 0)
+			res := value.(int64)
+			str := strconv.FormatInt(res, 10)
+			return tree.NewNumVal(constant.MakeInt64(res), str, res < 0)
 		case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-			value, _ := strconv.ParseUint(str, 10, 64)
-			return tree.NewNumVal(constant.MakeUint64(value), str, false)
+			res := value.(uint64)
+			str := strconv.FormatUint(res, 10)
+			return tree.NewNumVal(constant.MakeUint64(res), str, false)
 		case types.T_float32, types.T_float64:
-			value, _ := strconv.ParseFloat(str, 64)
-			return tree.NewNumVal(constant.MakeFloat64(value), str, value < 0)
+			res := value.(float64)
+			str := strconv.FormatFloat(res, 'f', 10, 64)
+			return tree.NewNumVal(constant.MakeFloat64(res), str, res < 0)
 		case types.T_char, types.T_varchar:
-			return tree.NewNumVal(constant.MakeString(str), str, false)
+			res := value.(string)
+			return tree.NewNumVal(constant.MakeString(res), res, false)
 	}
 	return tree.NewNumVal(constant.MakeUnknown(), "NULL", false)
 }
@@ -566,4 +570,9 @@ func isDefaultExpr(expr tree.Expr) bool {
 func isNullExpr(expr tree.Expr) bool {
 	v, ok := expr.(*tree.NumVal)
 	return ok && v.Value.Kind() == constant.Unknown
+}
+
+func isParenExpr(expr tree.Expr) bool {
+	_, ok := expr.(*tree.ParenExpr)
+	return ok
 }

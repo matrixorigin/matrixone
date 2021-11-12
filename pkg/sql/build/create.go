@@ -152,7 +152,6 @@ func (b *build) tableInfo(stmt tree.TableExpr) (string, string, error) {
 // 		create table testTb1 (first int default 15.6) ==> create table testTb1 (first int default 16)
 //		create table testTb2 (first int default 'abc') ==> error(Invalid default value for 'first')
 func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (metadata.DefaultExpr, error) {
-	var ret string    // default expression string
 	allowNull := true // be false when column has not null constraint
 
 	{
@@ -165,23 +164,25 @@ func getDefaultExprFromColumnDef(column *tree.ColumnTableDef, typ *types.Type) (
 	}
 
 	for _, attr := range column.Attributes {
-		if defaultExpr, ok := attr.(*tree.AttributeDefault); ok {
-			if isNullExpr(defaultExpr.Expr) {
+		if d, ok := attr.(*tree.AttributeDefault); ok {
+			defaultExpr := d.Expr
+			if isNullExpr(defaultExpr) {
 				if !allowNull {
 					return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
 				}
-				return metadata.MakeDefaultExpr(true, "", true), nil
+				return metadata.MakeDefaultExpr(true, nil, true), nil
 			}
 
 			// check value and its type, only support constant value for default expression now.
-			if v, err := buildConstant(*typ, defaultExpr.Expr); err != nil { // build constant failed
+			var value interface{}
+			var err error
+			if value, err = buildConstant(*typ, defaultExpr); err != nil { // build constant failed
 				return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
-			} else {
-				if _ ,errStr := rangeCheck(v, *typ, "", 0); errStr != nil { // value out of range
-					return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
-				}
 			}
-			return metadata.MakeDefaultExpr(true, ret, false), nil
+			if _ ,err = rangeCheck(value, *typ, "", 0); err != nil { // value out of range
+				return metadata.EmptyDefaultExpr, sqlerror.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", column.Name.Parts[0]))
+			}
+			return metadata.MakeDefaultExpr(true, value, false), nil
 		}
 	}
 

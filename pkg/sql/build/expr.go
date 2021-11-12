@@ -712,6 +712,8 @@ func stripParens(expr tree.Expr) tree.Expr {
 
 func buildConstant(typ types.Type, n tree.Expr) (interface{}, error) {
 	switch e := n.(type) {
+	case *tree.ParenExpr:
+		return buildConstant(typ, e.Expr)
 	case *tree.NumVal:
 		return buildConstantValue(typ, e)
 	case *tree.UnaryExpr:
