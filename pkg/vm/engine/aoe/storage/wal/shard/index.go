@@ -2,9 +2,16 @@ package shard
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/encoding"
+)
+
+var (
+	ParseReprErr = errors.New("parse repr error")
 )
 
 type IndexId struct {
@@ -70,6 +77,52 @@ func (id *IndexId) IsEnd() bool {
 
 func (id *IndexId) IsSingle() bool {
 	return id.Size == 1
+}
+
+func (idx *Index) Repr() string {
+	if idx == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d:%d:%d:%d:%d:%d", idx.ShardId, idx.Id.Id, idx.Id.Offset, idx.Id.Size, idx.Start, idx.Count, idx.Capacity)
+}
+
+func (idx *Index) ParseRepr(repr string) (err error) {
+	if repr == "" {
+		err = ParseReprErr
+		return
+	}
+	strs := strings.Split(repr, "_")
+	if len(strs) != 7 {
+		err = ParseReprErr
+		return
+	}
+	if idx.ShardId, err = strconv.ParseUint(strs[0], 10, 64); err != nil {
+		return
+	}
+	if idx.Id.Id, err = strconv.ParseUint(strs[1], 10, 64); err != nil {
+		return
+	}
+	var tmp uint64
+	if tmp, err = strconv.ParseUint(strs[2], 10, 32); err != nil {
+		return
+	} else {
+		idx.Id.Offset = uint32(tmp)
+	}
+	if tmp, err = strconv.ParseUint(strs[3], 10, 32); err != nil {
+		return
+	} else {
+		idx.Id.Size = uint32(tmp)
+	}
+	if idx.Start, err = strconv.ParseUint(strs[4], 10, 64); err != nil {
+		return
+	}
+	if idx.Count, err = strconv.ParseUint(strs[5], 10, 64); err != nil {
+		return
+	}
+	if idx.Capacity, err = strconv.ParseUint(strs[6], 10, 64); err != nil {
+		return
+	}
+	return
 }
 
 func (idx *Index) Compare(o *Index) int {

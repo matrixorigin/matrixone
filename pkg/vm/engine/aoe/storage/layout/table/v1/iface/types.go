@@ -113,6 +113,8 @@ type ITableData interface {
 	StrongRefLastBlock() IBlock
 	GetReplayIndex() *metadata.LogIndex
 	ResetReplayIndex()
+
+	CopyTo(dir string) error
 }
 
 type ISegment interface {

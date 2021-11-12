@@ -27,6 +27,10 @@ type Snapshoter interface {
 	SSLoader
 }
 
+func MakeMetaSnapshotName(shardId, index uint64) string {
+	return fmt.Sprintf("%d-%d-%d.meta", shardId, index, time.Now().UTC().UnixMicro())
+}
+
 type mapping struct {
 	Database map[uint64]uint64
 	Table    map[uint64]uint64
@@ -103,12 +107,8 @@ func (ss *dbSnapshoter) PrepareWrite() error {
 	return nil
 }
 
-func (ss *dbSnapshoter) makeName() string {
-	return filepath.Join(ss.dir, fmt.Sprintf("%d-%d-%d.meta", ss.db.GetShardId(), ss.index, time.Now().UTC().UnixMicro()))
-}
-
 func (ss *dbSnapshoter) CommitWrite() error {
-	ss.name = ss.makeName()
+	ss.name = filepath.Join(ss.dir, MakeMetaSnapshotName(ss.db.GetShardId(), ss.index))
 	f, err := os.Create(ss.name)
 	if err != nil {
 		return err

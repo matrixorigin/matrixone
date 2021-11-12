@@ -17,9 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
@@ -159,7 +157,7 @@ func (e *Block) ConsumeSnippet(reset bool) *shard.Snippet {
 func (e *Block) View() (view *Block) {
 	e.RLock()
 	view = &Block{
-		BaseEntry:   &BaseEntry{Id: e.Id, CommitInfo: e.CommitInfo},
+		BaseEntry:   &BaseEntry{Id: e.Id, CommitInfo: e.CommitInfo.Clone()},
 		Segment:     e.Segment,
 		Count:       e.Count,
 		SegmentedId: e.SegmentedId,
@@ -216,7 +214,7 @@ func (e *Block) GetCountLocked() uint64 {
 	if e.IsFullLocked() {
 		return e.Segment.Table.Schema.BlockMaxRows
 	}
-	return atomic.LoadUint64(&e.Count)
+	return e.Count
 }
 
 func (e *Block) GetCoarseCountLocked() int64 {
@@ -233,18 +231,11 @@ func (e *Block) GetCoarseCount() int64 {
 }
 
 func (e *Block) AddCountLocked(n uint64) (uint64, error) {
-	curCnt := e.GetCountLocked()
-	if curCnt+n > e.Segment.Table.Schema.BlockMaxRows {
-		return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, e.Segment.Table.Schema.BlockMaxRows))
+	if e.Count+n > e.Segment.Table.Schema.BlockMaxRows {
+		return 0, errors.New("overflow")
 	}
-	for !atomic.CompareAndSwapUint64(&e.Count, curCnt, curCnt+n) {
-		runtime.Gosched()
-		curCnt = e.GetCountLocked()
-		if curCnt+n > e.Segment.Table.Schema.BlockMaxRows {
-			return 0, errors.New(fmt.Sprintf("block row count %d > block max rows %d", curCnt+n, e.Segment.Table.Schema.BlockMaxRows))
-		}
-	}
-	return curCnt + n, nil
+	e.Count += n
+	return e.Count, nil
 }
 
 // TODO: remove it. Should not needed

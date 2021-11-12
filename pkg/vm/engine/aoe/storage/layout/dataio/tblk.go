@@ -14,11 +14,13 @@
 package dataio
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,16 +32,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
+var (
+	FileNotExistErr = errors.New("file not exist")
+)
+
 type versionBlockFile struct {
 	common.RefHelper
 	*BlockFile
-	version uint32
+	count uint64
+	tag   string
 }
 
-func newVersionBlockFile(version uint32, host base.ISegmentFile, id common.ID) *versionBlockFile {
-	getter := tblkFileGetter{version: version}
+func newVersionBlockFile(count uint64, tag string, host base.ISegmentFile, id common.ID) *versionBlockFile {
+	getter := tblkFileGetter{count: count, tag: tag}
 	vbf := &versionBlockFile{
-		version:   version,
+		count:     count,
+		tag:       tag,
 		BlockFile: NewBlockFile(host, id, getter.NameFactory),
 	}
 	vbf.OnZeroCB = vbf.close
@@ -52,17 +60,54 @@ func (f *versionBlockFile) close() {
 	f.Destory()
 }
 
+func MakeTblockFileName(dir, tag string, count uint64, id common.ID, tmp bool) string {
+	var name string
+	if tag == "" {
+		name = fmt.Sprintf("%d", count)
+	} else {
+		name = fmt.Sprintf("%d-%s", count, tag)
+	}
+	return common.MakeTBlockFileName(dir, id.ToTBlockFileName(name), tmp)
+}
+
+func ParseTBlockfileName(name string) (count uint64, tag string, id common.ID, err error) {
+	var pname string
+	if id, pname, err = common.ParseTBlkName(name); err != nil {
+		return
+	}
+	strs := strings.Split(pname, "-")
+	if len(strs) == 0 || len(strs) > 2 {
+		err = common.ErrParseTBlockFileName
+		return
+	} else if len(strs) == 2 {
+		tag = strs[1]
+	}
+	if count, err = strconv.ParseUint(strs[0], 10, 64); err != nil {
+		return
+	}
+	return
+}
+
+func ParseLogIndex(str string) (index *metadata.LogIndex) {
+	index = new(metadata.LogIndex)
+	if err := index.ParseRepr(str); err != nil {
+		index = nil
+	}
+	return index
+}
+
 type tblkFileGetter struct {
-	version uint32
+	count uint64
+	tag   string
 }
 
 func (getter *tblkFileGetter) NameFactory(dir string, id common.ID) string {
-	return common.MakeTBlockFileName(dir, id.ToTBlockFileName(getter.version), false)
+	return MakeTblockFileName(dir, getter.tag, getter.count, id, false)
 }
 
 func (getter *tblkFileGetter) Getter(dir string, meta *metadata.Block) (*os.File, error) {
 	id := meta.AsCommonID()
-	filename := common.MakeTBlockFileName(dir, id.ToTBlockFileName(getter.version), true)
+	filename := MakeTblockFileName(dir, getter.tag, getter.count, *id, true)
 	fdir := filepath.Dir(filename)
 	if _, err := os.Stat(fdir); os.IsNotExist(err) {
 		err = os.MkdirAll(fdir, 0755)
@@ -113,22 +158,19 @@ func (f *TransientBlockFile) init() {
 	}
 	name := filepath.Base(files[0])
 	name, _ = common.ParseTBlockfileName(name)
-	if idv, err := common.ParseTBlkNameToID(name); err != nil {
+
+	count, tag, _, err := ParseTBlockfileName(name)
+	if err != nil {
 		panic(err)
-	} else {
-		f.maxver = idv.PartID + 1
 	}
-	bf := newVersionBlockFile(f.maxver-1, f.host, f.id)
+
+	bf := newVersionBlockFile(count, tag, f.host, f.id)
 	f.commit(bf, uint32(bf.Count))
 }
 
 func (f *TransientBlockFile) close() {
 	f.Close()
 	f.Destory()
-}
-
-func (f *TransientBlockFile) nextVersion() uint32 {
-	return atomic.AddUint32(&f.maxver, uint32(1)) - 1
 }
 
 func (f *TransientBlockFile) PreSync(pos uint32) bool {
@@ -143,6 +185,8 @@ func (f *TransientBlockFile) PreSync(pos uint32) bool {
 
 func (f *TransientBlockFile) InitMeta(meta *metadata.Block) {
 	if len(f.files) > 0 {
+		meta.Lock()
+		defer meta.Unlock()
 		meta.Count = f.files[0].Count
 		meta.CommitInfo.LogIndex = f.files[0].Idx
 	}
@@ -221,8 +265,8 @@ func (f *TransientBlockFile) LoadBatch(meta *metadata.Block) batch.IBatch {
 
 func (f *TransientBlockFile) Sync(data batch.IBatch, meta *metadata.Block) error {
 	writer := NewIBatchWriter(data, meta, meta.Segment.Table.Database.Catalog.Cfg.Dir)
-	version := f.nextVersion()
-	getter := tblkFileGetter{version: version}
+	tag := meta.CommitInfo.LogIndex.Repr()
+	getter := tblkFileGetter{count: uint64(data.Length()), tag: tag}
 	writer.SetFileGetter(getter.Getter)
 	writer.SetPreExecutor(func() {
 		logutil.Infof(" %s | TransientBlock | Flushing", writer.GetFileName())
@@ -233,7 +277,7 @@ func (f *TransientBlockFile) Sync(data batch.IBatch, meta *metadata.Block) error
 	if err := writer.Execute(); err != nil {
 		return err
 	}
-	bf := newVersionBlockFile(version, f.host, f.id)
+	bf := newVersionBlockFile(uint64(data.Length()), tag, f.host, f.id)
 	f.commit(bf, uint32(data.Length()))
 	return nil
 }
@@ -310,4 +354,39 @@ func (f *TransientBlockFile) MakeVirtualIndexFile(*base.IndexMeta) common.IVFile
 
 func (f *TransientBlockFile) GetDir() string {
 	return f.host.GetDir()
+}
+
+func (f *TransientBlockFile) refLatestFile() *versionBlockFile {
+	f.mu.RLock()
+	if len(f.files) == 0 {
+		f.mu.RUnlock()
+		return nil
+	}
+	file := f.files[len(f.files)-1]
+	file.Ref()
+	f.mu.RUnlock()
+	return file
+}
+
+func (f *TransientBlockFile) CopyTo(name string) (err error) {
+	file := f.refLatestFile()
+	if file == nil {
+		err = FileNotExistErr
+		return
+	}
+	defer file.Unref()
+	err = file.CopyTo(name)
+	return
+}
+
+func (f *TransientBlockFile) Copy(dir string, id common.ID) (err error) {
+	file := f.refLatestFile()
+	if file == nil {
+		err = FileNotExistErr
+		return
+	}
+	defer file.Unref()
+	name := MakeTblockFileName(dir, file.tag, file.count, id, false)
+	err = file.CopyTo(name)
+	return
 }

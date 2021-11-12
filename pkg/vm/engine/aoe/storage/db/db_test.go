@@ -177,6 +177,40 @@ func TestDropTable(t *testing.T) {
 	t.Log(inst.Wal.String())
 }
 
+func TestSSOnMutation(t *testing.T) {
+	initDBTest()
+	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	defer inst.Close()
+	schema := metadata.MockSchema(2)
+	_, err := inst.CreateTable(database.Name, schema, gen.Next(database.GetShardId()))
+	assert.Nil(t, err)
+	rows := inst.Store.Catalog.Cfg.BlockMaxRows / 10
+	ck := mock.MockBatch(schema.Types(), rows)
+	appendCtx := dbi.AppendCtx{
+		OpIndex:   gen.Alloc(database.GetShardId()),
+		OpSize:    1,
+		TableName: schema.Name,
+		DBName:    database.Name,
+		Data:      ck,
+		ShardId:   database.GetShardId(),
+	}
+	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
+	err = inst.Flush(database.Name, schema.Name)
+	assert.Nil(t, err)
+	testutils.WaitExpect(200, func() bool {
+		return database.GetCheckpointId() == gen.Get(database.GetShardId())
+	})
+	assert.Equal(t, database.GetCheckpointId(), gen.Get(database.GetShardId()))
+
+	idx := database.GetCheckpointId()
+	appendCtx.OpIndex = gen.Alloc(database.GetShardId())
+	err = inst.Append(appendCtx)
+
+	view := database.View(idx)
+	t.Log(view.Database.PString(metadata.PPL1, 0))
+}
+
 func TestAppend(t *testing.T) {
 	initDBTest()
 	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
@@ -246,6 +280,26 @@ func TestAppend(t *testing.T) {
 	assert.Equal(t, insertCnt, segCount)
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 	ss.Close()
+
+	copied := filepath.Join(TEST_DB_DIR, "copied")
+	err = os.MkdirAll(copied, os.FileMode(0755))
+	assert.Nil(t, err)
+	dbss := NewDBSSWriter(database, copied, inst.Store.DataTables)
+	defer dbss.Close()
+	err = dbss.PrepareWrite()
+	assert.Nil(t, err)
+	err = dbss.CommitWrite()
+	assert.Nil(t, err)
+
+	// data, _ := inst.Store.DataTables.StrongRefTable(tid)
+	// defer data.Unref()
+	// copied := filepath.Join(TEST_DB_DIR, "copied")
+	// err = os.MkdirAll(copied, os.FileMode(0755))
+	// assert.Nil(t, err)
+	// now := time.Now()
+	// err = data.CopyTo(copied)
+	// assert.Nil(t, err)
+	// t.Log(time.Since(now))
 
 	// time.Sleep(time.Duration(50) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())

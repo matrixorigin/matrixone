@@ -137,6 +137,8 @@ func (c *collection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset 
 	}
 	n = uint64(na)
 	index.Count = n
+	meta.Lock()
+	defer meta.Unlock()
 	if err = meta.SetIndexLocked(*index); err != nil {
 		return 0, err
 	}
@@ -146,9 +148,6 @@ func (c *collection) doAppend(mutblk mb.IMutableBlock, bat *batch.Batch, offset 
 	}
 	c.data.AddRows(n)
 	// log.Infof("2. offset=%d, n=%d, cap=%d, index=%s, blkcnt=%d", offset, n, bat.Vecs[0].Length(), index.String(), mt.Meta.GetCount())
-	// if uint64(data.Length()) == meta.Segment.Table.Schema.BlockMaxRows {
-	// 	meta.TryUpgrade()
-	// }
 	return n, nil
 }
 
