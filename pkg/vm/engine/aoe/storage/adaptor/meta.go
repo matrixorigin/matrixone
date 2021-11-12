@@ -3,6 +3,7 @@ package adaptor
 import (
 	"fmt"
 	"matrixone/pkg/container/types"
+	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
@@ -85,6 +86,6 @@ func GetLogIndexFromAppendCtx(ctx *dbi.AppendCtx) *metadata.LogIndex {
 			Offset: uint32(ctx.OpOffset),
 			Size:   uint32(ctx.OpSize),
 		},
-		Capacity: uint64(ctx.Data.Vecs[0].Length()),
+		Capacity: uint64(vector.Length(ctx.Data.Vecs[0])),
 	}
 }

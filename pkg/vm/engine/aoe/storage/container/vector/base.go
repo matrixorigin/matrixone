@@ -16,6 +16,7 @@ package vector
 
 import (
 	"fmt"
+	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine/aoe/storage/container"
 	"sync/atomic"
@@ -36,7 +37,7 @@ func (v *BaseVector) NullCnt() int {
 		defer v.RUnlock()
 	}
 
-	return v.VMask.Length()
+	return nulls.Length(v.VMask)
 }
 
 func (v *BaseVector) ResetReadonly() {
@@ -61,7 +62,7 @@ func (v *BaseVector) IsNull(idx int) (bool, error) {
 		v.RLock()
 		defer v.RUnlock()
 	}
-	return v.VMask.Contains(uint64(idx)), nil
+	return nulls.Contains(v.VMask, uint64(idx)), nil
 }
 
 func MockVector(t types.Type, rows uint64) IVector {

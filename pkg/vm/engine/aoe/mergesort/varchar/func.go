@@ -15,6 +15,7 @@
 package varchar
 
 import (
+	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/container/vector"
 
@@ -53,7 +54,7 @@ func Sort(col *vector.Vector, idx []uint32) {
 }
 
 func Shuffle(col *vector.Vector, idx []uint32) {
-	if !col.Nsp.Any() {
+	if !nulls.Any(col.Nsp) {
 		shuffleBlock(col, idx)
 	} else {
 		shuffleNullableBlock(col, idx)

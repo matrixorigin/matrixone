@@ -16,6 +16,7 @@ package sched
 
 import (
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
@@ -52,7 +53,7 @@ func (e *flushSegEvent) Execute() error {
 				panic(err)
 			}
 			bat.Vecs = append(bat.Vecs, &vec.Vector)
-			if vec.Vector.Length() == 0 {
+			if vector.Length(&vec.Vector) == 0 {
 				panic("")
 			}
 			nodes = append(nodes, vec.MNode)

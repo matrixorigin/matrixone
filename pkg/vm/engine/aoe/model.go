@@ -16,7 +16,7 @@ package aoe
 
 import (
 	"matrixone/pkg/container/types"
-	"matrixone/pkg/vm/metadata"
+	//"matrixone/pkg/vm/metadata"
 )
 
 type SchemaState byte
@@ -77,7 +77,7 @@ type ColumnInfo struct {
 	Id       uint64     		  `json:"column_id"`
 	Name     string     		  `json:"name"`
 	Type     types.Type 		  `json:"type"`
-	Default  metadata.DefaultExpr `json:"default"`
+	//Default  metadata.DefaultExpr `json:"default"`
 	Alg      int        		  `json:"alg"`
 	Epoch    uint64     		  `json:"epoch"`
 }

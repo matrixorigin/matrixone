@@ -17,11 +17,12 @@ package driver
 import (
 	"encoding/json"
 	"matrixone/pkg/logutil"
-	"matrixone/pkg/sql/protocol"
 	aoe2 "matrixone/pkg/vm/driver/aoe"
 	pb3 "matrixone/pkg/vm/driver/pb"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	//"matrixone/pkg/sql/protocol"
+	"matrixone/pkg/vm/engine/aoe/protocol"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"time"
 

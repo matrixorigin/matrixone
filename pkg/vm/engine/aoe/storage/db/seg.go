@@ -18,8 +18,8 @@ import (
 	"matrixone/pkg/encoding"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine"
+	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
-	"matrixone/pkg/vm/process"
 	"sync/atomic"
 )
 
@@ -51,7 +51,7 @@ func (seg *Segment) Blocks() []string {
 }
 
 // Block returns a block with the given block id.
-func (seg *Segment) Block(id string, proc *process.Process) engine.Block {
+func (seg *Segment) Block(id string) aoe.Block {
 	iid := encoding.DecodeUint64(([]byte)(id))
 	data := seg.Data.WeakRefBlock(iid)
 	if data == nil {

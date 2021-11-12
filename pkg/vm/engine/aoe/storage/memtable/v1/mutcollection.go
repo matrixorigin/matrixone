@@ -16,6 +16,7 @@ package memtable
 import (
 	"fmt"
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/vector"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/storage/common"
 	"matrixone/pkg/vm/engine/aoe/storage/db/sched"
@@ -195,7 +196,7 @@ func (c *mutableCollection) Append(bat *batch.Batch, index *metadata.LogIndex) (
 			return err
 		}
 		offset += n
-		if offset == uint64(bat.Vecs[0].Length()) {
+		if offset == uint64(vector.Length(bat.Vecs[0])) {
 			break
 		}
 		index.Start += n

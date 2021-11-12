@@ -21,10 +21,12 @@ import (
 	catalog2 "matrixone/pkg/catalog"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/logutil"
-	"matrixone/pkg/sql/protocol"
+	"matrixone/pkg/vm/engine/aoe/protocol"
+
 	aoe3 "matrixone/pkg/vm/driver/aoe"
 	"matrixone/pkg/vm/driver/config"
 	"matrixone/pkg/vm/driver/testutil"
+	//"matrixone/pkg/sql/protocol"
 	vengine "matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/common/codec"
@@ -40,7 +42,6 @@ import (
 	"github.com/matrixorigin/matrixcube/raftstore"
 	"github.com/stretchr/testify/require"
 
-	"matrixone/pkg/vm/metadata"
 	"testing"
 	"time"
 )
@@ -62,14 +63,14 @@ var (
 	tableName = "test_tb"
 	cols      = []vengine.TableDef{
 		&vengine.AttributeDef{
-			Attr: metadata.Attribute{
+			Attr: vengine.Attribute{
 				Name: "col1",
 				Type: types.Type{},
 				Alg:  0,
 			},
 		},
 		&vengine.AttributeDef{
-			Attr: metadata.Attribute{
+			Attr: vengine.Attribute{
 				Name: "col2",
 				Type: types.Type{},
 				Alg:  0,
@@ -166,11 +167,11 @@ func TestAOEEngine(t *testing.T) {
 
 	mockTbl := md.MockTableInfo(colCnt)
 	mockTbl.Name = fmt.Sprintf("%s%d", tableName, time.Now().Unix())
-	_, _, _, _, comment, defs, pdef, _ := helper.UnTransfer(*mockTbl)
+	_, _, _, _, defs , _ := helper.UnTransfer(*mockTbl)
 
 	time.Sleep(10 * time.Second)
 
-	err = db.Create(3, mockTbl.Name, defs, pdef, nil, comment)
+	err = db.Create(3, mockTbl.Name, defs)
 	if err != nil {
 		stdLog.Printf("create table %v failed, %v", mockTbl.Name, err)
 	} else {
@@ -192,6 +193,7 @@ func TestAOEEngine(t *testing.T) {
 	}
 	ibat := mock.MockBatch(typs, blockRows)
 	var buf bytes.Buffer
+	//err = protocol.EncodeBatch(ibat, &buf)
 	err = protocol.EncodeBatch(ibat, &buf)
 	require.NoError(t, err)
 	stdLog.Printf("size of batch is  %d", buf.Len())
@@ -212,17 +214,25 @@ func TestAOEEngine(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tb.ID(), mockTbl.Name)
 
-	relationAttrs := tb.Attribute()
-	require.Equal(t, len(attrs), len(relationAttrs), "Attribute: wrong length")
-
-	index := tb.Index()
-	require.Equal(t, len(attrs), len(index), "Index: wrong len")
-
-	segments := tb.Segments()
-	for i := range segments {
-		segInfo := segments[i]
-		tb.Segment(segInfo, nil)
+	var vattrs []vengine.Attribute
+	tdefs := tb.TableDefs()
+	for _, def := range tdefs {
+		if v, ok := def.(*vengine.AttributeDef); ok {
+			vattrs = append(vattrs, v.Attr)
+		}
 	}
+	require.Equal(t, len(attrs), len(vattrs), "Attribute: wrong length")
+
+	var index []vengine.IndexTableDef
+	for _, def := range tdefs {
+		if i, ok := def.(*vengine.IndexTableDef); ok {
+			index = append(index, vengine.IndexTableDef{
+				Typ:   int(i.Typ),
+				Names: i.Names,
+			})
+		}
+	}
+	require.Equal(t, len(attrs), len(index), "Index: wrong len")
 
 	tb.Close()
 
@@ -290,10 +300,10 @@ func doRestartEngine(t *testing.T) {
 	require.Equal(t, 9, len(tbls))
 
 	for _, tName := range tbls {
-		tb, err := db.Relation(tName)
+		_, err := db.Relation(tName)
 		require.NoError(t, err)
-		require.Equal(t, segmentCnt, len(tb.Segments()))
-		logutil.Infof("table name is %s, segment size is %d, segments is %v\n", tName, len(tb.Segments()), tb.Segments())
+		//require.Equal(t, segmentCnt, len(tb.Segments()))
+		//logutil.Infof("table name is %s, segment size is %d, segments is %v\n", tName, len(tb.Segments()), tb.Segments())
 	}
 }
 
@@ -304,7 +314,7 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	tbs, err := c[0].ListTables(99)
 	require.Error(t, catalog2.ErrDBNotExists, err)
 
-	dbid, err := c[0].CreateDatabase(0, dbName, vengine.AOE)
+	dbid, err := c[0].CreateDatabase(0, dbName, 1)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
@@ -358,7 +368,7 @@ func testTableDDL(t *testing.T, c []*catalog2.Catalog) {
 	require.NoError(t, err)
 	require.Equal(t, 0, cnt)
 
-	dbid, err = c[0].CreateDatabase(5, dbName, vengine.AOE)
+	dbid, err = c[0].CreateDatabase(5, dbName, 1)
 	require.NoError(t, err)
 	require.Less(t, uint64(0), dbid)
 
