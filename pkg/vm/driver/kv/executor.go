@@ -69,9 +69,10 @@ func (ce *kvExecutor) scan(shard meta.Shard, req storage.Request) ([]byte, error
 
 	customReq := &pb.ScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
+	diff := len(req.Key) - len(customReq.Start)
 
-	startKey := customReq.Start
-	endKey := customReq.End
+	startKey := req.Key
+	endKey := append(req.Key[:diff], customReq.End...)
 
 	if customReq.Start == nil {
 		startKey = nil
@@ -112,7 +113,8 @@ func (ce *kvExecutor) prefixScan(shard meta.Shard, req storage.Request) ([]byte,
 	customReq := &pb.PrefixScanRequest{}
 	protoc.MustUnmarshal(customReq, req.Cmd)
 
-	prefix := customReq.Prefix
+	prefix := req.Key
+	diff := len(req.Key) - len(customReq.Prefix)
 
 	var data [][]byte
 	err := ce.kv.PrefixScan(prefix, func(key, value []byte) (bool, error) {
@@ -120,7 +122,7 @@ func (ce *kvExecutor) prefixScan(shard meta.Shard, req storage.Request) ([]byte,
 			(shard.End != nil && bytes.Compare(shard.End, key) <= 0) {
 			return true, nil
 		}
-		data = append(data, key)
+		data = append(data, key[diff:])
 		data = append(data, value)
 		return true, nil
 	}, true)

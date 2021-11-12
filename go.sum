@@ -124,9 +124,8 @@ github.com/envoyproxy/go-control-plane v0.9.9-0.20201210154907-fd9021fe5dad/go.m
 github.com/envoyproxy/go-control-plane v0.9.9-0.20210217033140-668b12f5399d/go.mod h1:cXg6YxExXjJnVBQHBLXeUAgxn2UodCpnH306RInaBQk=
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
 github.com/etcd-io/bbolt v1.3.3/go.mod h1:ZF2nL25h33cCyBtcyWeZ2/I3HQOfTP+0PIEvHjkjCrw=
-github.com/fagongzi/goetty v1.11.1 h1:Y2jnmkpTXdBmpQ7dchfUgPLcZOdQHvfVhOjNapuYNFA=
-github.com/fagongzi/goetty v1.11.1/go.mod h1:42WH1Shi0NYzyop19JaY5oabuk1OzB9AWNDqbF/NdP4=
-github.com/fagongzi/log v0.0.0-20191122063922-293b75312445/go.mod h1:1aUifpZCjAdZK7L3vRRl2cpSktbKasAU5vOSyLSCODs=
+github.com/fagongzi/goetty v1.11.2 h1:VPx+l1ToiPmnvdU5Kl53DN9kQeV7eZGsxD0mdd61BvM=
+github.com/fagongzi/goetty v1.11.2/go.mod h1:J5KOKdUzqQWinZWqULUPmr1l1bv27DxKKSlNc6jwSVg=
 github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287 h1:bWwBFLJ0q1EqWktUu9LExKDt7PtZPSp0D9k3lg6u+Fo=
 github.com/fagongzi/log v0.0.0-20201106014031-b41ebf3bd287/go.mod h1:1aUifpZCjAdZK7L3vRRl2cpSktbKasAU5vOSyLSCODs=
 github.com/fagongzi/util v0.0.0-20201116094402-221cc40c4593/go.mod h1:jYDIbpaqHXCCQ7QIDXRVfsQYAGKSNNb6N8BPTgdpcdE=
@@ -182,6 +181,7 @@ github.com/golang/groupcache v0.0.0-20190129154638-5b532d6fd5ef/go.mod h1:cIg4er
 github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da/go.mod h1:cIg4eruTrX1D+g88fzRXU5OdNfaM+9IcxsU14FzY7Hc=
 github.com/golang/mock v1.1.1/go.mod h1:oTYuIxOrZwtPieC+H1uAHpcLFnEyAGVDL/k47Jfbm0A=
 github.com/golang/mock v1.2.0/go.mod h1:oTYuIxOrZwtPieC+H1uAHpcLFnEyAGVDL/k47Jfbm0A=
+github.com/golang/mock v1.3.1 h1:qGJ6qTW+x6xX/my+8YUVl4WNpX9B7+/l2tRsHGZ7f2s=
 github.com/golang/mock v1.3.1/go.mod h1:sBzyDLLjw3U8JLTeZvSv8jJB+tU5PVekmnlKIyFUx0Y=
 github.com/golang/protobuf v1.2.0/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
 github.com/golang/protobuf v1.3.1/go.mod h1:6lQm79b+lXiMfvg/cZm0SGofjICqVBUtrP5yJMmIC1U=
@@ -325,8 +325,8 @@ github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czP
 github.com/magiconair/properties v1.8.1/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2 h1:s7CQEsRxL8+/sAPW23uIqpwR+M8Aje81AH6w3/ZkxQw=
 github.com/matrixorigin/etcd/raft/v3 v3.5.1-0.20210824022435-0203115049c2/go.mod h1:UFOHSIvO/nKwd4lhkwabrTD3cqW5yVyYYf/KlD00Szc=
-github.com/matrixorigin/matrixcube v0.1.0 h1:fG2wamvz7R5Hc741J09QkS/+a7sjAqdpvO37jr6wcpE=
-github.com/matrixorigin/matrixcube v0.1.0/go.mod h1:6F4jtJ3j7XG8Go6Tbug5BIuDRRWXk2rYW+xhuxP/Bc8=
+github.com/matrixorigin/matrixcube v0.0.0-20211111095753-57bfe3eb5240 h1:Nrvg4pkGFWxw22gQautAQ5zft1AjVxsb+hSxh80CWug=
+github.com/matrixorigin/matrixcube v0.0.0-20211111095753-57bfe3eb5240/go.mod h1:eVKnL0irGqpIK6HnLdiPs6SK8Q9/L+xezS/AXFWkv08=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770 h1:apc228jeCtUvvfkaydzJygk1jdH8y+THma2o73Yv4Vg=
 github.com/matrixorigin/simdcsv v0.0.0-20210926114300-591bf748a770/go.mod h1:A7O+LRuZcr/BbOLsMzM/q69ZmoLENUMpptYG0pPzTFQ=
 github.com/mattn/go-colorable v0.0.9/go.mod h1:9vuHe8Xs5qXnSaW/c/ABM9alt+Vo+STaOChaDxuIBZU=

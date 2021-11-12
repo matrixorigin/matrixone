@@ -62,19 +62,7 @@ func init() {
 	tableInfo = adaptor.MockTableInfo(colCnt)
 	tableInfo.Id = 100
 }
-func TestChannel(t *testing.T) {
-	completeC := make(chan interface{}, 1)
-	completeC<-nil
-	value := <-completeC
-	switch value.(type) {
-	case error:
-		fmt.Printf("error\n")
-		// return nil, v
-	default:
-		// return value.([]byte), nil
-		fmt.Printf("default\n")
-	}
-}
+
 func TestAOEStorage(t *testing.T) {
 	stdLog.SetFlags(log.Lshortfile | log.LstdFlags)
 	c := testutil.NewTestAOECluster(t,
