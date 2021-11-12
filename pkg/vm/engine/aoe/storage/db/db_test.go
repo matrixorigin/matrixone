@@ -290,6 +290,7 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	err = dbss.CommitWrite()
 	assert.Nil(t, err)
+	assert.Equal(t, database.GetCheckpointId(), dbss.GetIndex())
 
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
