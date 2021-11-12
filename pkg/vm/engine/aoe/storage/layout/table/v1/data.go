@@ -410,7 +410,7 @@ func MockSegments(meta *metadata.Table, tblData iface.ITableData) []uint64 {
 }
 
 type Tables struct {
-	Mu        *sync.RWMutex
+	*sync.RWMutex
 	Data      map[uint64]iface.ITableData
 	ids       map[uint64]bool
 	Tombstone map[uint64]iface.ITableData
@@ -423,7 +423,7 @@ type Tables struct {
 
 func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, indexBufMgr bmgrif.IBufferManager) *Tables {
 	return &Tables{
-		Mu:          mu,
+		RWMutex:     mu,
 		Data:        make(map[uint64]iface.ITableData),
 		ids:         make(map[uint64]bool),
 		Tombstone:   make(map[uint64]iface.ITableData),
@@ -435,8 +435,8 @@ func NewTables(mu *sync.RWMutex, fsMgr base.IManager, mtBufMgr, sstBufMgr, index
 }
 
 func (ts *Tables) String() string {
-	ts.Mu.RLock()
-	defer ts.Mu.RUnlock()
+	ts.RLock()
+	defer ts.RUnlock()
 	s := fmt.Sprintf("<Tables>[Cnt=%d]", len(ts.Data))
 	for _, td := range ts.Data {
 		s = fmt.Sprintf("%s\n%s", s, td.String())
@@ -449,9 +449,9 @@ func (ts *Tables) TableIds() (ids map[uint64]bool) {
 }
 
 func (ts *Tables) DropTable(tid uint64) (tbl iface.ITableData, err error) {
-	ts.Mu.Lock()
+	ts.Lock()
 	tbl, err = ts.DropTableNoLock(tid)
-	ts.Mu.Unlock()
+	ts.Unlock()
 	return tbl, err
 }
 
@@ -476,31 +476,47 @@ func (ts *Tables) GetTableNoLock(tid uint64) (tbl iface.ITableData, err error) {
 }
 
 func (ts *Tables) WeakRefTable(tid uint64) (tbl iface.ITableData, err error) {
-	ts.Mu.RLock()
+	ts.RLock()
 	tbl, err = ts.GetTableNoLock(tid)
-	ts.Mu.RUnlock()
+	ts.RUnlock()
 	return tbl, err
 }
 
 func (ts *Tables) StrongRefTable(tid uint64) (tbl iface.ITableData, err error) {
-	ts.Mu.RLock()
+	ts.RLock()
 	tbl, err = ts.GetTableNoLock(tid)
 	if tbl != nil {
 		tbl.Ref()
 	}
-	ts.Mu.RUnlock()
+	ts.RUnlock()
 	return tbl, err
 }
 
 func (ts *Tables) RegisterTable(meta *metadata.Table) (iface.ITableData, error) {
 	tbl := newTableData(ts, meta)
-	ts.Mu.Lock()
-	defer ts.Mu.Unlock()
+	ts.Lock()
+	defer ts.Unlock()
 	if err := ts.CreateTableNoLock(tbl); err != nil {
 		tbl.Unref()
 		return nil, err
 	}
 	return tbl, nil
+}
+
+func (ts *Tables) ForTables(fn func(iface.ITableData) error) error {
+	ts.RLock()
+	defer ts.RUnlock()
+	return ts.ForTablesLocked(fn)
+}
+
+func (ts *Tables) ForTablesLocked(fn func(iface.ITableData) error) error {
+	var err error
+	for _, t := range ts.Data {
+		if err = fn(t); err != nil {
+			break
+		}
+	}
+	return err
 }
 
 func (ts *Tables) CreateTableNoLock(tbl iface.ITableData) (err error) {
