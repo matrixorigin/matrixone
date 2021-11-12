@@ -364,18 +364,15 @@ func (sf *SortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	return prefetch.Prefetch(sf.Fd(), uintptr(offset), uintptr(sz))
 }
 
-func (sf *SortedSegmentFile) Copy(dir string, id common.ID) error {
-	path := common.MakeDataDir(dir)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err = os.MkdirAll(path, os.FileMode(0755)); err != nil {
-			return err
-		}
-	}
-	dest := common.MakeSegmentFileName(dir, id.ToSegmentFileName(), id.TableID, false)
-	return sf.CopyTo(dest)
-}
-
-func (sf *SortedSegmentFile) CopyTo(dest string) error {
+func (sf *SortedSegmentFile) CopyTo(dir string) error {
+	name := filepath.Base(sf.Name())
+	dest := filepath.Join(dir, name)
 	_, err := CopyFile(sf.Name(), dest)
 	return err
+}
+
+func (sf *SortedSegmentFile) LinkTo(dir string) error {
+	name := filepath.Base(sf.Name())
+	dest := filepath.Join(dir, name)
+	return os.Link(sf.Name(), dest)
 }

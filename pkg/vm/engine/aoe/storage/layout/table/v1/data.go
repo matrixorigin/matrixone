@@ -257,6 +257,33 @@ func (td *tableData) SegmentIds() []uint64 {
 	return ids
 }
 
+func (td *tableData) LinkTo(dir string) error {
+	segs := make([]iface.ISegment, 0, 8)
+	td.tree.RLock()
+	for _, seg := range td.tree.segments {
+		seg.Ref()
+		segs = append(segs, seg)
+	}
+	td.tree.RUnlock()
+
+	doneFn := func() {
+		for _, seg := range segs {
+			seg.Unref()
+		}
+	}
+	defer doneFn()
+	var err error
+	for _, seg := range segs {
+		file := seg.GetSegmentFile()
+		if err = file.LinkTo(dir); err != nil {
+			if err == dataio.FileNotExistErr {
+				err = nil
+			}
+		}
+	}
+	return err
+}
+
 func (td *tableData) CopyTo(dir string) error {
 	segs := make([]iface.ISegment, 0, 8)
 	td.tree.RLock()
@@ -275,7 +302,7 @@ func (td *tableData) CopyTo(dir string) error {
 	var err error
 	for _, seg := range segs {
 		file := seg.GetSegmentFile()
-		if err = file.Copy(dir, *seg.GetMeta().AsCommonID()); err != nil {
+		if err = file.CopyTo(dir); err != nil {
 			if err == dataio.FileNotExistErr {
 				err = nil
 			}

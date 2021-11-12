@@ -418,6 +418,44 @@ func (d *DB) GetShardCheckpointId(shardId uint64) uint64 {
 	return d.Wal.GetShardCheckpointId(shardId)
 }
 
+// CreateSnapshot creates a snapshot of the specified shard and stores it to `path`.
+func (d *DB) CreateSnapshot(dbName string, path string) (uint64, error) {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return 0, err
+	}
+	writer := NewDBSSWriter(database, path, d.Store.DataTables)
+	if err = writer.PrepareWrite(); err != nil {
+		return 0, err
+	}
+	defer writer.Close()
+	if err = writer.CommitWrite(); err != nil {
+		return 0, err
+	}
+
+	return writer.GetIndex(), nil
+}
+
+// ApplySnapshot applies a snapshot of the shard stored in `path` to engine atomically.
+func (d *DB) ApplySnapshot(dbName string, path string) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
+	}
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
+	if err != nil {
+		return err
+	}
+	loader := NewDBSSLoader(database, d.Store.DataTables, path)
+	if err = loader.PrepareLoad(); err != nil {
+		return err
+	}
+	err = loader.CommitLoad()
+	return err
+}
+
 func (d *DB) startWorkers() {
 	d.Opts.GC.Acceptor.Start()
 	d.FlushDriver.Start()
@@ -450,14 +488,4 @@ func (d *DB) Close() error {
 	d.Opts.Meta.Catalog.Close()
 	err := d.DBLocker.Close()
 	return err
-}
-
-// CreateSnapshot creates a snapshot of the specified shard and stores it to `path`.
-func (d *DB) CreateSnapshot(dbName string, path string) (uint64, error) {
-	return d.createSnapshot(dbName, path)
-}
-
-// ApplySnapshot applies a snapshot of the shard stored in `path` to engine atomically.
-func (d *DB) ApplySnapshot(dbName string, path string) error {
-	return d.applySnapshot(dbName, path)
 }

@@ -1,6 +1,21 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package metadata
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 )
 
+var (
+	AddressNotFoundErr = errors.New("address not found")
+)
+
 type SSWriter interface {
 	PrepareWrite() error
 	CommitWrite() error
@@ -20,6 +39,9 @@ type SSWriter interface {
 type SSLoader interface {
 	PrepareLoad() error
 	CommitLoad() error
+	GetIndex() uint64
+	GetShardId() uint64
+	Addresses() *Addresses
 }
 
 type Snapshoter interface {
@@ -31,14 +53,62 @@ func MakeMetaSnapshotName(shardId, index uint64) string {
 	return fmt.Sprintf("%d-%d-%d.meta", shardId, index, time.Now().UTC().UnixMicro())
 }
 
-type mapping struct {
+type Addresses struct {
 	Database map[uint64]uint64
 	Table    map[uint64]uint64
 	Segment  map[uint64]uint64
 	Block    map[uint64]uint64
 }
 
-func (m *mapping) RewriteSegmentFile(filename string) (string, error) {
+func (m *Addresses) GetBlkAddr(addr *common.ID) (*common.ID, error) {
+	var ok bool
+	naddr := new(common.ID)
+	naddr.TableID, ok = m.Table[addr.TableID]
+	if !ok {
+		return nil, AddressNotFoundErr
+	}
+	naddr.SegmentID, ok = m.Segment[addr.SegmentID]
+	if !ok {
+		return nil, AddressNotFoundErr
+	}
+	naddr.BlockID, ok = m.Segment[addr.BlockID]
+	if !ok {
+		return nil, AddressNotFoundErr
+	}
+	return naddr, nil
+}
+
+func (m *Addresses) GetSegAddr(addr *common.ID) (*common.ID, error) {
+	var ok bool
+	naddr := new(common.ID)
+	naddr.TableID, ok = m.Table[addr.TableID]
+	if !ok {
+		return nil, AddressNotFoundErr
+	}
+	naddr.SegmentID, ok = m.Segment[addr.SegmentID]
+	if !ok {
+		return nil, AddressNotFoundErr
+	}
+	return naddr, nil
+}
+
+func (m *Addresses) GetTableAddr(addr uint64) (uint64, error) {
+	tid, ok := m.Table[addr]
+	if !ok {
+		return 0, AddressNotFoundErr
+	}
+	return tid, nil
+}
+
+func (m *Addresses) GetDBAddr(addr uint64) (uint64, error) {
+	id, ok := m.Table[addr]
+	if !ok {
+		return 0, AddressNotFoundErr
+	}
+	return id, nil
+}
+
+func (m *Addresses) RewriteSegmentFile(filename string) (string, error) {
 	arr := strings.Split(strings.TrimSuffix(filename, ".seg"), "_")
 	tableId, err := strconv.Atoi(arr[0])
 	if err != nil {
@@ -53,7 +123,7 @@ func (m *mapping) RewriteSegmentFile(filename string) (string, error) {
 	return arr[0] + "_" + arr[1] + ".seg", nil
 }
 
-func (m *mapping) RewriteBlockFile(filename string) (string, error) {
+func (m *Addresses) RewriteBlockFile(filename string) (string, error) {
 	arr := strings.Split(strings.TrimSuffix(filename, ".blk"), "_")
 	tableId, err := strconv.Atoi(arr[0])
 	if err != nil {
@@ -74,14 +144,14 @@ func (m *mapping) RewriteBlockFile(filename string) (string, error) {
 }
 
 type dbSnapshoter struct {
-	dir     string
-	name    string
-	view    *databaseLogEntry
-	index   uint64
-	tranId  uint64
-	db      *Database
-	catalog *Catalog
-	mapping *mapping
+	dir       string
+	name      string
+	view      *databaseLogEntry
+	index     uint64
+	tranId    uint64
+	db        *Database
+	catalog   *Catalog
+	addresses *Addresses
 }
 
 func NewDBSSWriter(db *Database, dir string, index uint64) *dbSnapshoter {
@@ -126,7 +196,7 @@ func (ss *dbSnapshoter) CommitWrite() error {
 func (ss *dbSnapshoter) ReAllocId(allocator *Sequence, view *Database) error {
 	ss.tranId = allocator.NextUncommitId()
 	processor := newReAllocIdProcessor(allocator, ss.tranId)
-	ss.mapping = processor.trace
+	ss.addresses = processor.trace
 	processor.OnDatabase(view)
 	err := view.RecurLoopLocked(processor)
 	if err != nil {
@@ -161,8 +231,18 @@ func (ss *dbSnapshoter) PrepareLoad() error {
 		return err
 	}
 	ss.view.Database.Catalog = ss.catalog
-	ss.view.Database.rebuild(true, false)
-	return ss.ReAllocId(&ss.catalog.Sequence, ss.view.Database)
+	if err = ss.ReAllocId(&ss.catalog.Sequence, ss.view.Database); err != nil {
+		return err
+	}
+	return ss.view.Database.rebuild(true, false)
+}
+
+func (ss *dbSnapshoter) GetIndex() uint64 {
+	return ss.view.LogRange.Range.Right
+}
+
+func (ss *dbSnapshoter) GetShardId() uint64 {
+	return ss.view.LogRange.ShardId
 }
 
 func (ss *dbSnapshoter) CommitLoad() error {
@@ -173,6 +253,6 @@ func (ss *dbSnapshoter) View() *databaseLogEntry {
 	return ss.view
 }
 
-func (ss *dbSnapshoter) Mapping() *mapping {
-	return ss.mapping
+func (ss *dbSnapshoter) Addresses() *Addresses {
+	return ss.addresses
 }

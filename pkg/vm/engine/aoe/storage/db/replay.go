@@ -461,8 +461,8 @@ func (h *replayHandle) addDataFile(fname string) {
 		h.addBlock(id, fullname, 0, false)
 		return
 	}
-	if name, ok := common.ParseSegmentfileName(fname); ok {
-		id, err := common.ParseSegmentFileName(name)
+	if name, ok := common.ParseSegmentFileName(fname); ok {
+		id, err := common.ParseSegmentNameToID(name)
 		if err != nil {
 			panic(err)
 		}

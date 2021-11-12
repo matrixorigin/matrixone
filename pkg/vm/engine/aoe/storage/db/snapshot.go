@@ -17,332 +17,262 @@ package db
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
-	sched2 "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/sched"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
-// createSnapshot creates a snapshot of the specified shard, and stores it at
-// the given path. It returns the raft log index of the snapshot and any error
-// if exists. The detailed procedure is as follows:
-//
-// 1. Get a persisted view of shard
-//	 1.1. Use `GetShardCheckpointId` to get the persistent raft log index
-//	 1.2. Get the persisted view of shard using `SSWriter.PrepareWrite`
-// 2. Collect related segment / block files, and pin them from being removed
-//   2.1. Call `checkAndPin` with the view above, if nothing wrong comes up, go
-//        to the next stage.
-//   2.2. If returned `files` is nil, that means some inconsistency between
-//        our previous view and the current underlying files has been there.
-//        But that's not a frequent event, so we just retry for a maximum
-//        times(10 by default), if failed still, report that to upper level.
-//        Each time we fetch a newer raft log index to increase our success
-//        rate.
-// 3. Write metadata of snapshot to the given path
-//	 3.1. Call `SSWriter.CommitWrite` to commit and persist metadata
-// **In fact, the next 2 steps are done earlier due to the wrong behaviour of Ref**
-// 4. Pin and collect related files
-//	 4.1. For all the table entries, get the `TableData`
-//	 4.2. Collect all segment/block files within those tables via FsManager and ref them
-// 5. Hard-link all files to the given path
-//	 5.1. Use `Link` syscall to create the link
-//   5.2. Remember to Unref the files
-func (d *DB) createSnapshot(dbName string, path string) (idx uint64, err error) {
-	// Preparations for snapshotting
-	if err := d.Closed.Load(); err != nil {
-		return 0, errors.New("aoe already closed")
-	}
-	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
-	if err != nil {
-		return
-	}
-	if _, err := os.Stat(path); err != nil {
-		if err = os.MkdirAll(path, os.FileMode(0755)); err != nil {
-			return 0, err
-		}
-	}
-
-	shardId := database.GetShardId()
-
-	// Get the PersistentLogIndex for the shard
-	retId := d.GetShardCheckpointId(shardId)
-	// Get the view for shard on PersistentLogIndex
-	ssWriter := metadata.NewDBSSWriter(database, path, retId)
-	if err := ssWriter.PrepareWrite(); err != nil {
-		return 0, err
-	}
-
-	// Collect related files on disk, and pin them from being deleted
-	files, err := d.checkAndPin(path, ssWriter.View().Database.TableSet)
-	if err != nil {
-		return 0, err
-	}
-	retry := 0
-	for files == nil {
-		retry++
-		if retry == MaxRetryCreateSnapshot {
-			return 0, errors.New("failed to create snapshot, retry later")
-		}
-		retId = d.GetShardCheckpointId(shardId)
-		logutil.Infof("retry create snapshot on log index: %d", retId)
-		ssWriter = metadata.NewDBSSWriter(database, path, retId)
-		if err = ssWriter.PrepareWrite(); err != nil {
-			return 0, err
-		}
-
-		files, err = d.checkAndPin(path, ssWriter.View().Database.TableSet)
-		if err != nil {
-			return 0, err
-		}
-	}
-
-	// Write the view (shard metadata) to the given path
-	if err = ssWriter.CommitWrite(); err != nil {
-		return 0, err
-	}
-
-	// Currently, the reference of segment/block files doesn't work
-	// as we expected, we would refactor here to hard-link all files
-	// together after ref them later. But now we simply hard-link them
-	// one by one in a for-loop instead of referencing.
-
-	// Hard-link all files to the given path
-
-	//for _, file := range files {
-	//	oldName := file.Stat().Name()
-	//	newName := filepath.Join(path, filepath.Base(oldName))
-	//	if err := os.Link(oldName, newName); err != nil {
-	//		return 0, err
-	//	}
-	//	file.Unref()
-	//}
-
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	if err = f.Sync(); err != nil {
-		return 0, err
-	}
-	if err = f.Close(); err != nil {
-		return 0, err
-	}
-
-	return retId, nil
+type SSWriter interface {
+	io.Closer
+	metadata.SSWriter
+	GetIndex() uint64
 }
 
-func (d *DB) checkAndPin(path string, tables map[uint64]*metadata.Table) ([]base.IBaseFile, error) {
-	files := make([]base.IBaseFile, 0)
-	for _, tbl := range tables {
-		data, err := d.Store.DataTables.WeakRefTable(tbl.Id)
-		if err != nil {
-			return nil, err
-		}
+type SSLoader = metadata.SSLoader
 
-		// Notice: there could probably be such a scenario: in snapshot metadata, we got an
-		// unsorted segment a.k.a. several blocks, but the underlying file has been already
-		// upgraded to a sorted segment file. Only when segment upgrade happens between the
-		// snapshot's view and the current view could this case comes up. We resolve the case
-		// by simply checking the consistency of metadata and data files before pinning files,
-		// and if check fails, just retry. It should work because: 1) upgrading is a really
-		// low-frequency operation compared to others like append. 2) each time we get a new
-		// persistent log index for snapshotting, and the time spent on pinning is little.
-		// 3) snapshotting is also a low-frequency operation, sometimes never happens.
-		for _, seg := range tbl.SegmentSet {
-			s := data.StrongRefSegment(seg.Id)
-			if s == nil {
-				return nil, errors.New(fmt.Sprintf("segment %d not exists", seg.Id))
-			}
-			sf := s.GetSegmentFile()
-
-			if segFile, ok := sf.(*dataio.SortedSegmentFile); ok {
-				if !seg.IsSortedLocked() {
-					for _, file := range files {
-						file.Unref()
-					}
-					s.Unref()
-					infos, err := ioutil.ReadDir(path)
-					if err != nil {
-						return nil, err
-					}
-					for _, info := range infos {
-						if err = os.Remove(filepath.Join(path, info.Name())); err != nil {
-							return nil, err
-						}
-					}
-					return nil, nil
-				}
-				segFile.Ref()
-				oldName := segFile.Stat().Name()
-				newName := filepath.Join(path, filepath.Base(oldName))
-				if err = os.Link(oldName, newName); err != nil {
-					return nil, err
-				}
-				files = append(files, segFile)
-			} else if segFile, ok := sf.(*dataio.UnsortedSegmentFile); ok {
-				segFile.RLock()
-				for _, file := range segFile.Blocks {
-					bid := file.(*dataio.BlockFile).ID.BlockID
-					flag := false
-					for _, blk := range seg.BlockSet {
-						if blk.Id == bid {
-							flag = true
-							break
-						}
-					}
-					if !flag {
-						continue
-					}
-					file.Ref()
-					oldName := file.Stat().Name()
-					newName := filepath.Join(path, filepath.Base(oldName))
-					if err := os.Link(oldName, newName); err != nil {
-						return nil, err
-					}
-					files = append(files, file)
-				}
-				segFile.RUnlock()
-			} else {
-				return nil, errors.New("unexpected error: not a segment file")
-			}
-			s.Unref()
-		}
-	}
-	return files, nil
+type Snapshoter interface {
+	SSWriter
+	SSLoader
 }
 
-func (d *DB) applySnapshot(dbName string, path string) (err error) {
-	if err := d.Closed.Load(); err != nil {
-		return errors.New("aoe already closed")
-	}
+var (
+	CopyTableFn func(t iface.ITableData, destDir string) error
+	CopyFileFn  func(src, dest string) error
+)
 
-	catalog := d.Store.Catalog
+func init() {
+	CopyTableFn = func(t iface.ITableData, destDir string) error {
+		return t.LinkTo(destDir)
+	}
+	// CopyTableFn = func(t iface.ITableData, destDir string) error {
+	// 	return t.CopyTo(destDir)
+	// }
+	CopyFileFn = os.Link
+	// CopyFileFn = func(src, dest string) error {
+	// 	_, err := dataio.CopyFile(src, dest)
+	// 	return err
+	// }
+}
 
-	//database, err := catalog.SimpleGetDatabaseByName(dbName)
-	id, err := strconv.ParseUint(dbName, 10, 64)
-	if err != nil {
-		return
-	}
+type ssWriter struct {
+	mwriter metadata.SSWriter
+	meta    *metadata.Database
+	data    map[uint64]iface.ITableData
+	tables  *table.Tables
+	dir     string
+	index   uint64
+}
 
-	files, err := ioutil.ReadDir(path)
-	if err != nil {
-		return err
-	}
-	shardId := id
-	//shardId := database.GetShardId()
-	var ssmeta string
-	var segfiles []string
-	var blkfiles []string
-	for _, file := range files {
-		if strings.HasSuffix(file.Name(), ".meta") {
-			ssmeta = filepath.Join(path, file.Name())
-		} else if strings.HasSuffix(file.Name(), ".seg") {
-			segfiles = append(segfiles, filepath.Join(path, file.Name()))
-		} else if strings.HasSuffix(file.Name(), ".blk") {
-			blkfiles = append(blkfiles, filepath.Join(path, file.Name()))
-		}
-	}
-	if len(ssmeta) == 0 {
-		return errors.New("metadata of snapshot not found")
-	}
-	arr := strings.Split(filepath.Base(ssmeta), "-")
-	if len(arr) != 3 {
-		return errors.New("invalid metadata file name")
-	}
-	if shard, err := strconv.Atoi(arr[0]); err != nil || uint64(shard) != shardId {
-		return errors.New("shardId mismatch with the local snapshot meta")
-	}
+type ssLoader struct {
+	mloader  metadata.SSLoader
+	src      string
+	database *metadata.Database
+	tables   *table.Tables
+	index    uint64
+}
 
-	ssReader := metadata.NewDBSSLoader(catalog, ssmeta)
-	if err = ssReader.PrepareLoad(); err != nil {
-		return err
+func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables) *ssWriter {
+	w := &ssWriter{
+		data:   make(map[uint64]iface.ITableData),
+		tables: tables,
+		dir:    dir,
+		meta:   database,
 	}
+	return w
+}
 
-	// Link files
-	mapping := ssReader.Mapping()
-	for _, segFile := range segfiles {
-		oldName := segFile
-		rewritten, err := mapping.RewriteSegmentFile(filepath.Base(oldName))
-		if err != nil {
-			return err
-		}
-		newName := filepath.Join(filepath.Join(d.Dir, "data"), rewritten)
-		if err = os.Link(oldName, newName); err != nil {
-			return err
-		}
-		//logutil.Infof("old: %s => new: %s", oldName, newName)
+func NewDBSSLoader(database *metadata.Database, tables *table.Tables, src string) *ssLoader {
+	ss := &ssLoader{
+		database: database,
+		src:      src,
+		tables:   tables,
 	}
-	for _, blkFile := range blkfiles {
-		oldName := blkFile
-		rewritten, err := mapping.RewriteBlockFile(filepath.Base(oldName))
-		if err != nil {
-			return err
-		}
-		newName := filepath.Join(filepath.Join(d.Dir, "data"), rewritten)
-		if err = os.Link(oldName, newName); err != nil {
-			return err
-		}
-		//logutil.Infof("old: %s => new: %s", oldName, newName)
-	}
+	return ss
+}
 
-	tbls := ssReader.View().Database.TableSet
-	data := d.Store.DataTables
-	for _, tbl := range tbls {
-		tb, err := data.RegisterTable(tbl)
-		if err != nil {
-			return err
-		}
-		for _, seg := range tbl.SegmentSet {
-			sg, err := tb.RegisterSegment(seg)
-			if err != nil {
-				return err
-			}
-			for _, blk := range seg.BlockSet {
-				if _, err = sg.RegisterBlock(blk); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	// check if there are segments which could be upgraded
-	unsortedSegs := make([]*metadata.Segment, 0)
-	for _, tbl := range tbls {
-		for _, seg := range tbl.SegmentSet {
-			if seg.IsSortedLocked() {
-				continue
-			}
-			if seg.Appendable() {
-				continue
-			}
-			unsortedSegs = append(unsortedSegs, seg)
-		}
-	}
-
-	for _, seg := range unsortedSegs {
-		segment := data.Data[seg.Table.Id].StrongRefSegment(seg.Id)
-		if segment == nil {
-			return errors.New("segment not found")
-		}
-		logutil.Infof(" %s | Segment %d | FlushSegEvent | Started", sched.EventPrefix, seg.Id)
-		if err = d.Scheduler.Schedule(sched2.NewFlushSegEvent(&sched2.Context{}, segment)); err != nil {
-			return
-		}
-	}
-
-	// TODO: fill the logic
-	if err = ssReader.CommitLoad(); err != nil {
-		return err
+func (ss *ssWriter) Close() error {
+	for _, t := range ss.data {
+		t.Unref()
 	}
 	return nil
+}
+
+func (ss *ssWriter) onTableData(data iface.ITableData) error {
+	meta := data.GetMeta()
+	if meta.Database == ss.meta {
+		data.Ref()
+		ss.data[data.GetID()] = data
+	}
+	return nil
+}
+
+func (ss *ssWriter) validatePrepare() error {
+	// TODO
+	return nil
+}
+
+func (ss *ssWriter) GetIndex() uint64 {
+	return ss.index
+}
+
+func (ss *ssWriter) PrepareWrite() error {
+	ss.tables.RLock()
+	ss.index = ss.meta.GetCheckpointId()
+	err := ss.tables.ForTablesLocked(ss.onTableData)
+	ss.tables.RUnlock()
+	if err != nil {
+		return err
+	}
+	ss.mwriter = metadata.NewDBSSWriter(ss.meta, ss.dir, ss.index)
+	if err = ss.mwriter.PrepareWrite(); err != nil {
+		return err
+	}
+	return ss.validatePrepare()
+}
+
+func (ss *ssWriter) CommitWrite() error {
+	err := ss.mwriter.CommitWrite()
+	if err != nil {
+		return err
+	}
+	for _, t := range ss.data {
+		if err = CopyTableFn(t, ss.dir); err != nil {
+			break
+		}
+	}
+	return err
+}
+
+func (ss *ssLoader) validateMetaLoader() error {
+	// if ss.index != ss.mloader.GetIndex() {
+	// 	return errors.New(fmt.Sprintf("index mismatch: %d, %d", ss.index, ss.mloader.GetIndex()))
+	// }
+	if ss.database.GetShardId() != ss.mloader.GetShardId() {
+		return errors.New(fmt.Sprintf("shard id mismatch: %d, %d", ss.database.ShardId, ss.mloader.GetShardId()))
+	}
+	return nil
+}
+
+func (ss *ssLoader) execCopyTBlk(dir, file string) error {
+	name, _ := common.ParseTBlockfileName(file)
+	count, tag, id, err := dataio.ParseTBlockfileName(name)
+	if err != nil {
+		return err
+	}
+	nid, err := ss.mloader.Addresses().GetBlkAddr(&id)
+	if err != nil {
+		return err
+	}
+	src := filepath.Join(dir, file)
+	dest := dataio.MakeTblockFileName(ss.database.Catalog.Cfg.Dir, tag, count, *nid, false)
+	err = CopyFileFn(src, dest)
+	return err
+}
+
+func (ss *ssLoader) execCopyBlk(dir, file string) error {
+	name, _ := common.ParseBlockfileName(file)
+	id, err := common.ParseBlkNameToID(name)
+	if err != nil {
+		return err
+	}
+	nid, err := ss.mloader.Addresses().GetBlkAddr(&id)
+	if err != nil {
+		return err
+	}
+	src := filepath.Join(dir, file)
+	dest := common.MakeBlockFileName(ss.database.Catalog.Cfg.Dir, nid.ToBlockFileName(), nid.TableID, false)
+	err = CopyFileFn(src, dest)
+	return err
+}
+
+func (ss *ssLoader) execCopySeg(dir, file string) error {
+	name, _ := common.ParseSegmentFileName(file)
+	id, err := common.ParseSegmentNameToID(name)
+	if err != nil {
+		return err
+	}
+	nid, err := ss.mloader.Addresses().GetSegAddr(&id)
+	if err != nil {
+		return err
+	}
+	src := filepath.Join(dir, file)
+	dest := common.MakeSegmentFileName(ss.database.Catalog.Cfg.Dir, nid.ToSegmentFileName(), nid.TableID, false)
+	logutil.Infof("Copy \"%s\" to \"%s\"", src, dest)
+	err = CopyFileFn(src, dest)
+	return err
+}
+
+func (ss *ssLoader) prepareData(tblks, blks, segs []string) error {
+	var err error
+	for _, tblk := range tblks {
+		if ss.execCopyTBlk(ss.src, tblk); err != nil {
+			return err
+		}
+	}
+	for _, blk := range blks {
+		if ss.execCopyBlk(ss.src, blk); err != nil {
+			return err
+		}
+	}
+	for _, seg := range segs {
+		if ss.execCopySeg(ss.src, seg); err != nil {
+			return err
+		}
+	}
+
+	return err
+}
+
+func (ss *ssLoader) PrepareLoad() error {
+	files, err := ioutil.ReadDir(ss.src)
+	if err != nil {
+		return err
+	}
+	var (
+		metas, blks, tblks, segs []string
+	)
+	for _, file := range files {
+		name := file.Name()
+		if common.IsSegmentFile(name) {
+			segs = append(segs, name)
+		} else if common.IsBlockFile(name) {
+			blks = append(blks, name)
+		} else if common.IsTBlockFile(name) {
+			tblks = append(tblks, name)
+		} else if strings.HasSuffix(name, ".meta") {
+			metas = append(metas, name)
+		}
+	}
+
+	if len(metas) != 1 {
+		return errors.New("invalid meta data to apply")
+	}
+
+	ss.mloader = metadata.NewDBSSLoader(ss.database.Catalog, filepath.Join(ss.src, metas[0]))
+	err = ss.mloader.PrepareLoad()
+	if err != nil {
+		return err
+	}
+	if err = ss.validateMetaLoader(); err != nil {
+		return err
+	}
+
+	if err = ss.prepareData(tblks, blks, segs); err != nil {
+		return err
+	}
+
+	return err
+}
+
+func (ss *ssLoader) CommitLoad() error {
+	return ss.mloader.CommitLoad()
 }
