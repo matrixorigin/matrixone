@@ -21,11 +21,11 @@ import (
 	"math/rand"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/logutil"
-	"matrixone/pkg/sql/protocol"
+	//"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	"matrixone/pkg/vm/metadata"
-	"matrixone/pkg/vm/process"
+	//"matrixone/pkg/vm/metadata"
+	"matrixone/pkg/vm/mheap"
 	"time"
 )
 
@@ -42,16 +42,16 @@ func (r *relation) ID() string {
 }
 
 //Segment returns the segment according to the segmentInfo.
-func (r *relation) Segment(si engine.SegmentInfo, proc *process.Process) engine.Segment {
+func (r *relation) Segment(si SegmentInfo) Segment {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0))
 	}()
-	return r.mp[si.TabletId].Segment(binary.BigEndian.Uint64([]byte(si.Id)), proc)
+	return r.mp[si.TabletId].Segment(binary.BigEndian.Uint64([]byte(si.Id)))
 }
 
 //Segments returns all the SegmentIfo in the relation.
-func (r *relation) Segments() []engine.SegmentInfo {
+func (r *relation) Segments() []SegmentInfo {
 	return r.segments
 }
 
@@ -61,7 +61,7 @@ func (r *relation) Index() []*engine.IndexTableDef {
 }
 
 //Attribute returns all the attributes of the table.
-func (r *relation) Attribute() []metadata.Attribute {
+func (r *relation) Attribute() []engine.Attribute {
 	return helper.Attribute(*r.tbl)
 }
 
@@ -99,4 +99,62 @@ func (r *relation) Rows() int64 {
 
 func (r *relation) Size(_ string) int64 {
 	return 0
+}
+
+
+func (r *relation) Nodes() engine.Nodes {
+	return r.nodes
+}
+
+func (r *relation) TableDefs() []engine.TableDef {
+	defs := make([]engine.TableDef, len(r.md.Attrs))
+	for i, attr := range r.md.Attrs {
+		defs[i] = &engine.AttributeDef{Attr: attr}
+	}
+	return defs
+}
+
+func (r *relation) AddTableDef(u uint64, def engine.TableDef) error {
+	return nil
+}
+
+func (r *relation) DelTableDef(u uint64, def engine.TableDef) error {
+	return nil
+}
+
+func (r *relation) NewReader(num int, mheap *mheap.Mheap) []engine.Reader {
+	if len(r.segments) == 0{
+		return nil
+	}
+	blockNum := 0
+	blocks := make([]Block, 0)
+	for _, sid := range r.segments{
+		segment := r.Segment(sid)
+		ids := segment.Blocks()
+		blockNum += len(ids)
+		for _, id := range ids {
+			blocks = append(blocks, segment.Block(id))
+		}
+	}
+	readers := make([]engine.Reader, 0)
+	mod := blockNum / num
+	if mod == 0 {
+		mod = 1
+	}
+	for i := 0; i < num; i++ {
+		if i == num-1 || i == blockNum-1 {
+			reader := aoeReader {
+				mp: mheap,
+				blocks: blocks[i*mod:],
+			}
+			readers = append(readers, reader)
+			break
+		}
+		reader := aoeReader {
+			mp: mheap,
+			blocks: blocks[i*mod : (i+1)*mod]),
+		}
+		readers = append(readers, reader)
+	}
+	return readers
 }

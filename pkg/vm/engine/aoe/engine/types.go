@@ -15,15 +15,47 @@
 package engine
 
 import (
+	"bytes"
 	catalog3 "matrixone/pkg/catalog"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
+	"matrixone/pkg/container/batch"
+	"matrixone/pkg/vm/mheap"
 )
 
 // aoe engine
 type aoeEngine struct {
 	catalog *catalog3.Catalog
+}
+
+type SegmentInfo struct {
+	Version  uint64
+	Id       string
+	GroupId  string
+	TabletId string
+	Node     engine.Node
+}
+
+type Segment interface {
+	engine.Statistics
+
+	ID() string
+	Blocks() []string
+	Block(string) Block
+}
+
+type Block interface {
+	engine.Statistics
+
+	ID() string
+	Prefetch([]string)
+	Read([]uint64, []string, []*bytes.Buffer, []*bytes.Buffer) (*batch.Batch, error) // read only arguments
+}
+
+type aoeReader struct {
+	mp *mheap.Mheap
+	blocks []Block
 }
 
 type database struct {
@@ -36,7 +68,9 @@ type relation struct {
 	pid      uint64                  //database id
 	tbl      *aoe.TableInfo          //table of the tablets
 	catalog  *catalog3.Catalog       //the catalog
-	segments []engine.SegmentInfo    //segments of the table
+	nodes	 engine.Nodes
+	segments []SegmentInfo    //segments of the table
 	tablets  []aoe.TabletInfo        //tablets of the table
 	mp       map[string]*db.Relation //a map of each tablet and its relation
 }
+

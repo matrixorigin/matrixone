@@ -22,7 +22,7 @@ import (
 	"matrixone/pkg/vm/engine/aoe/common/codec"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/vm/metadata"
+	//"matrixone/pkg/vm/metadata"
 	"time"
 )
 
@@ -105,13 +105,17 @@ func (db *database) Relation(name string) (engine.Relation, error) {
 			if lRelation, err := ldb.Relation(tbl.Name); err == nil {
 				r.mp[tbl.Name] = lRelation
 			}
+			r.nodes = append(r.nodes, engine.Node{
+				Id:   addr,
+				Addr: addr,
+			})
 			for _, id := range ids.Ids {
-				r.segments = append(r.segments, engine.SegmentInfo{
+				r.segments = append(r.segments, SegmentInfo{
 					Version:  ids.Version,
 					Id:       string(codec.Uint642Bytes(id)),
 					GroupId:  string(codec.Uint642Bytes(tbl.ShardId)),
 					TabletId: tbl.Name,
-					Node: metadata.Node{
+					Node: engine.Node{
 						Id:   addr,
 						Addr: addr,
 					},
