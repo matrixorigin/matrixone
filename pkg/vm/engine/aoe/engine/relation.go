@@ -24,7 +24,6 @@ import (
 	//"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
-	//"matrixone/pkg/vm/metadata"
 	"matrixone/pkg/vm/mheap"
 	"time"
 )
@@ -101,16 +100,12 @@ func (r *relation) Size(_ string) int64 {
 	return 0
 }
 
-
 func (r *relation) Nodes() engine.Nodes {
 	return r.nodes
 }
 
 func (r *relation) TableDefs() []engine.TableDef {
-	defs := make([]engine.TableDef, len(r.md.Attrs))
-	for i, attr := range r.md.Attrs {
-		defs[i] = &engine.AttributeDef{Attr: attr}
-	}
+	_, _, _, _, defs, _ := helper.UnTransfer(*r.tbl)
 	return defs
 }
 
@@ -152,7 +147,7 @@ func (r *relation) NewReader(num int, mheap *mheap.Mheap) []engine.Reader {
 		}
 		reader := aoeReader {
 			mp: mheap,
-			blocks: blocks[i*mod : (i+1)*mod]),
+			blocks: blocks[i*mod : (i+1)*mod],
 		}
 		readers = append(readers, reader)
 	}

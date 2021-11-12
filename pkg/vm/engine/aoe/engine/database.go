@@ -42,12 +42,12 @@ func (db *database) Delete(epoch uint64, name string) error {
 }
 
 //Create creates the table
-func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, pdef *engine.PartitionBy, _ *engine.DistributionBy, comment string) error {
+func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, comment string) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())
 	}()
-	tbl, err := helper.Transfer(db.id, 0, 0, name, comment, defs, pdef)
+	tbl, err := helper.Transfer(db.id, 0, 0, name, defs)
 	if err != nil {
 		return err
 	}
