@@ -52,6 +52,10 @@ func TestSnapshot1(t *testing.T) {
 		return idxGen.Get() == database.GetCheckpointId()
 	})
 	assert.Equal(t, idxGen.Get(), database.GetCheckpointId())
+
+	names := inst.TableNames(database.Name)
+	assert.Equal(t, len(schemas), len(names))
+
 	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
 	assert.Nil(t, err)
 	assert.Equal(t, idxGen.Get(), idx)
@@ -65,9 +69,11 @@ func TestSnapshot1(t *testing.T) {
 
 	inst2, _, _ := initTestDB3(t)
 	defer inst2.Close()
-
 	idx3 := inst2.GetDBCheckpointId(database.Name)
 	assert.Equal(t, idx, idx3)
+
+	names = inst2.TableNames(database.Name)
+	assert.Equal(t, len(schemas), len(names))
 
 	// t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
 	t.Log(inst2.Store.Catalog.IndexWal.String())
