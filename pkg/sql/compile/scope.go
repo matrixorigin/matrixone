@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/op/showTables"
 	"github.com/matrixorigin/matrixone/pkg/sql/protocol"
 	"github.com/matrixorigin/matrixone/pkg/sqlerror"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/like"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 
@@ -262,9 +263,26 @@ func (s *Scope) ShowTables(u interface{}, fill func(interface{}, *batch.Batch) e
 	{
 		rs := o.Db.Relations()
 		vs := make([][]byte, len(rs))
-		for i, r := range rs {
-			vs[i] = []byte(r)
+
+		// like
+		count := 0
+		if o.Like == nil {
+			for _, r := range rs {
+				vs[count] = []byte(r)
+				count++
+			}
+		} else {
+			tempSlice := make([]int64, 1)
+			for _, r := range rs {
+				str := []byte(r)
+				if k, _ := like.PureLikePure(str, o.Like, tempSlice); k != nil {
+					vs[count] = str
+					count++
+				}
+			}
 		}
+		vs = vs[:count]
+
 		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
 		if err := vec.Append(vs); err != nil {
 			return err
@@ -280,9 +298,26 @@ func (s *Scope) ShowDatabases(u interface{}, fill func(interface{}, *batch.Batch
 	{
 		rs := o.E.Databases()
 		vs := make([][]byte, len(rs))
-		for i, r := range rs {
-			vs[i] = []byte(r)
+
+		// like
+		count := 0
+		if o.Like == nil {
+			for _, r := range rs {
+				vs[count] = []byte(r)
+				count++
+			}
+		} else {
+			tempSlice := make([]int64, 1)
+			for _, r := range rs {
+				str := []byte(r)
+				if k, _ := like.PureLikePure(str, o.Like, tempSlice); k != nil {
+					vs[count] = str
+					count++
+				}
+			}
 		}
+		vs = vs[:count]
+
 		vec := vector.New(types.Type{Oid: types.T_varchar, Size: 24})
 		if err := vec.Append(vs); err != nil {
 			return err

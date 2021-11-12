@@ -24,6 +24,7 @@ import (
 )
 
 func (b *build) buildShowTables(stmt *tree.ShowTables) (op.OP, error) {
+	var likeStr []byte
 	if len(stmt.DBName) == 0 {
 		stmt.DBName = b.db
 	}
@@ -31,9 +32,24 @@ func (b *build) buildShowTables(stmt *tree.ShowTables) (op.OP, error) {
 	if err != nil {
 		return nil, sqlerror.New(errno.InvalidSchemaName, err.Error())
 	}
-	return showTables.New(db), nil
+	if stmt.Where != nil {
+
+	}
+	if stmt.Like != nil {
+		likeStr = []byte(stmt.Like.Right.String())
+	}
+	return showTables.New(db, likeStr), nil
 }
 
 func (b *build) buildShowDatabases(stmt *tree.ShowDatabases) (op.OP, error) {
-	return showDatabases.New(b.e), nil
+	var likeStr []byte
+	// semantic analysis
+	if stmt.Where != nil {
+
+	}
+	if stmt.Like != nil {
+		likeStr = []byte(stmt.Like.Right.String())
+	}
+
+	return showDatabases.New(b.e, likeStr), nil
 }

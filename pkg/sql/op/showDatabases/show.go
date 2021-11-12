@@ -19,8 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func New(e engine.Engine) *ShowDatabases {
-	return &ShowDatabases{e}
+func New(e engine.Engine, like []byte) *ShowDatabases {
+	return &ShowDatabases{e, like}
 }
 
 func (n *ShowDatabases) String() string {

@@ -19,8 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func New(db engine.Database) *ShowTables {
-	return &ShowTables{db}
+func New(db engine.Database, like []byte) *ShowTables {
+	return &ShowTables{db, like}
 }
 
 func (n *ShowTables) String() string {
