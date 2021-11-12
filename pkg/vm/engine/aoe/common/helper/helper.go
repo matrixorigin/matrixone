@@ -87,9 +87,10 @@ func UnTransfer(tbl aoe.TableInfo) (uint64, uint64, uint64, string, []engine.Tab
 			Names: idx.Names,
 		})
 	}
-
-	comment.Comment = string(tbl.Comment)
-	defs = append(defs, comment)
+	if tbl.Comment != nil {
+		comment.Comment = string(tbl.Comment)
+		defs = append(defs, comment)
+	}
 	return tbl.SchemaId, tbl.Id, tbl.Type, tbl.Name, defs, nil
 }
 
