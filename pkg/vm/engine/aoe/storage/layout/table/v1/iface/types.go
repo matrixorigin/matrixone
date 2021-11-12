@@ -115,6 +115,7 @@ type ITableData interface {
 	ResetReplayIndex()
 
 	CopyTo(dir string) error
+	LinkTo(dir string) error
 }
 
 type ISegment interface {

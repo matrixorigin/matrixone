@@ -10,6 +10,19 @@ type SSWriter = metadata.SSWriter
 type SSLoader = metadata.SSLoader
 type Snapshoter = metadata.Snapshoter
 
+var (
+	CopyTableFn func(t iface.ITableData, destDir string) error
+)
+
+func init() {
+	CopyTableFn = func(t iface.ITableData, destDir string) error {
+		return t.LinkTo(destDir)
+	}
+	// CopyTableFn = func(t iface.ITableData, destDir string) error {
+	// 	return t.CopyTo(destDir)
+	// }
+}
+
 type dbSnapshoter struct {
 	metaw  metadata.SSWriter
 	metar  metadata.SSLoader
@@ -71,7 +84,7 @@ func (ss *dbSnapshoter) CommitWrite() error {
 		return err
 	}
 	for _, t := range ss.data {
-		if err = t.CopyTo(ss.dir); err != nil {
+		if err = CopyTableFn(t, ss.dir); err != nil {
 			break
 		}
 	}

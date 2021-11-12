@@ -370,3 +370,9 @@ func (sf *SortedSegmentFile) CopyTo(dir string) error {
 	_, err := CopyFile(sf.Name(), dest)
 	return err
 }
+
+func (sf *SortedSegmentFile) LinkTo(dir string) error {
+	name := filepath.Base(sf.Name())
+	dest := filepath.Join(dir, name)
+	return os.Link(sf.Name(), dest)
+}

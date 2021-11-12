@@ -131,8 +131,7 @@ type IBaseFile interface {
 	GetDir() string
 
 	CopyTo(dir string) error
-	// Link(dir string, id common.ID) error
-	// LinkTo(name string) error
+	LinkTo(dir string) error
 }
 
 type ISegmentFile interface {

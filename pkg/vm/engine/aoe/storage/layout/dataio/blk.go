@@ -275,6 +275,8 @@ func (bf *BlockFile) CopyTo(dir string) error {
 // 	return bf.LinkTo(dest)
 // }
 
-// func (bf *BlockFile) LinkTo(dest string) error {
-// 	return os.Link(bf.Name(), dest)
-// }
+func (bf *BlockFile) LinkTo(dir string) error {
+	name := filepath.Base(bf.Name())
+	dest := filepath.Join(dir, name)
+	return os.Link(bf.Name(), dest)
+}

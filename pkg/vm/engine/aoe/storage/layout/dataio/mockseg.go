@@ -155,3 +155,7 @@ func (msf *MockSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
 func (msf *MockSegmentFile) CopyTo(dir string) error {
 	return nil
 }
+
+func (msf *MockSegmentFile) LinkTo(dir string) error {
+	return nil
+}
