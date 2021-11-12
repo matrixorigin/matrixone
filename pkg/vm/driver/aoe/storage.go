@@ -16,6 +16,7 @@ package aoe
 
 import (
 	"matrixone/pkg/container/batch"
+	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine/aoe"
 	store "matrixone/pkg/vm/engine/aoe/storage"
 	adb "matrixone/pkg/vm/engine/aoe/storage/db"
@@ -71,7 +72,7 @@ func (s *Storage) Append(tabletName string, bat *batch.Batch, shardId uint64, lo
 	for _, vec := range bat.Vecs {
 		size += len(vec.Data)
 	}
-	atomic.AddUint64(&s.stats.WrittenKeys, uint64(bat.Vecs[0].Length()))
+	atomic.AddUint64(&s.stats.WrittenKeys, uint64(vector.Length(bat.Vecs[0])))
 	atomic.AddUint64(&s.stats.WrittenBytes, uint64(size))
 	return s.DB.Append(dbi.AppendCtx{
 		ShardId:   shardId,

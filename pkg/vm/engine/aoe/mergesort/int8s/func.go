@@ -15,6 +15,7 @@
 package int8s
 
 import (
+	"matrixone/pkg/container/nulls"
 	"matrixone/pkg/container/vector"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
@@ -37,7 +38,7 @@ func Sort(col *vector.Vector, idx []uint32) {
 }
 
 func Shuffle(col *vector.Vector, idx []uint32) {
-	if !col.Nsp.Any() {
+	if !nulls.Any(col.Nsp) {
 		shuffleBlock(col, idx)
 	} else {
 		shuffleNullableBlock(col, idx)

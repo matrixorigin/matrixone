@@ -21,9 +21,12 @@ import (
 	"math/rand"
 	"matrixone/pkg/container/batch"
 	"matrixone/pkg/logutil"
-	//"matrixone/pkg/sql/protocol"
+	"matrixone/pkg/vm/engine/aoe"
+
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe/common/helper"
+	//"matrixone/pkg/sql/protocol"
+	"matrixone/pkg/vm/engine/aoe/protocol"
 	"matrixone/pkg/vm/mheap"
 	"time"
 )
@@ -41,7 +44,7 @@ func (r *relation) ID() string {
 }
 
 //Segment returns the segment according to the segmentInfo.
-func (r *relation) Segment(si SegmentInfo) Segment {
+func (r *relation) Segment(si SegmentInfo) aoe.Segment {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0))
@@ -122,7 +125,7 @@ func (r *relation) NewReader(num int, mheap *mheap.Mheap) []engine.Reader {
 		return nil
 	}
 	blockNum := 0
-	blocks := make([]Block, 0)
+	blocks := make([]aoe.Block, 0)
 	for _, sid := range r.segments{
 		segment := r.Segment(sid)
 		ids := segment.Blocks()

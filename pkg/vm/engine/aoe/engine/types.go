@@ -15,12 +15,10 @@
 package engine
 
 import (
-	"bytes"
 	catalog3 "matrixone/pkg/catalog"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/db"
-	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/mheap"
 )
 
@@ -37,25 +35,9 @@ type SegmentInfo struct {
 	Node     engine.Node
 }
 
-type Segment interface {
-	engine.Statistics
-
-	ID() string
-	Blocks() []string
-	Block(string) Block
-}
-
-type Block interface {
-	engine.Statistics
-
-	ID() string
-	Prefetch([]string)
-	Read([]uint64, []string, []*bytes.Buffer, []*bytes.Buffer) (*batch.Batch, error) // read only arguments
-}
-
 type aoeReader struct {
 	mp *mheap.Mheap
-	blocks []Block
+	blocks []aoe.Block
 }
 
 type database struct {

@@ -18,7 +18,7 @@ import (
 )
 
 func SortBlockColumns(cols []*vector.Vector) error {
-	sortedIdx := make([]uint32, cols[0].Length())
+	sortedIdx := make([]uint32, vector.Length(cols[0]))
 
 	switch cols[0].Typ.Oid {
 	case types.T_int8:
@@ -76,7 +76,7 @@ func SortBlockColumns(cols []*vector.Vector) error {
 }
 
 func MergeBlocksToSegment(blks []*batch.Batch) error {
-	n := len(blks) * blks[0].Vecs[0].Length()
+	n := len(blks) * vector.Length(blks[0].Vecs[0])
 	mergedSrc := make([]uint16, n)
 
 	col := make([]*vector.Vector, len(blks))

@@ -16,7 +16,7 @@ package db
 
 import (
 	"matrixone/pkg/vm/engine"
-	aoeEngine "matrixone/pkg/vm/engine/aoe/engine"
+	"matrixone/pkg/vm/engine/aoe"
 	"matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	md "matrixone/pkg/vm/engine/aoe/storage/metadata/v2"
@@ -89,7 +89,7 @@ func (r *Relation) Attribute() []engine.Attribute {
 	return attrs
 }
 
-func (r *Relation) Segment(id uint64) aoeEngine.Segment {
+func (r *Relation) Segment(id uint64) aoe.Segment {
 	r.tree.RLock()
 	seg := r.tree.Segments[id]
 	if seg != nil {

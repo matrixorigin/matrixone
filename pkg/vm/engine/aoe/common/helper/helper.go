@@ -20,9 +20,10 @@ import (
 	"matrixone/pkg/compress"
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/encoding"
-	"matrixone/pkg/sql/protocol"
 	"matrixone/pkg/vm/engine"
 	"matrixone/pkg/vm/engine/aoe"
+	//"matrixone/pkg/sql/protocol"
+	"matrixone/pkg/vm/engine/aoe/protocol"
 )
 
 func init() {
@@ -32,7 +33,7 @@ func init() {
 	gob.Register(aoe.ColumnInfo{})
 }
 
-func Transfer(sid, tid, typ uint64, name, comment string,
+func Transfer(sid, tid, typ uint64, name string,
 	defs []engine.TableDef) (aoe.TableInfo, error) {
 	var tbl aoe.TableInfo
 

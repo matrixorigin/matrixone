@@ -15,13 +15,7 @@
 package db
 
 import (
-	"bytes"
-	"errors"
-	"fmt"
-	"github.com/RoaringBitmap/roaring"
-	"matrixone/pkg/container/types"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/vm/engine/aoe/storage/layout/index"
 )
 
 // SegmentSparseFilter provides segment-level & sparse interfaces with bitmap
@@ -32,11 +26,39 @@ type SegmentSparseFilter struct {
 	segment *Segment
 }
 
+func (s2 SegmentSparseFilter) Eq(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (s2 SegmentSparseFilter) Ne(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (s2 SegmentSparseFilter) Lt(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (s2 SegmentSparseFilter) Le(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (s2 SegmentSparseFilter) Gt(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (s2 SegmentSparseFilter) Ge(s string, i interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
+func (s2 SegmentSparseFilter) Btw(s string, i interface{}, i2 interface{}) (engine.Reader, error) {
+	panic("implement me")
+}
+
 func NewSegmentSparseFilter(s *Segment) engine.SparseFilter {
 	return &SegmentSparseFilter{segment: s}
 }
 
-func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error) {
+/*func (f *SegmentSparseFilter) Eq(attr string, val interface{}) ([]string, error) {
 	colIdx := f.segment.Data.GetMeta().Table.Schema.GetColIdx(attr)
 	if colIdx == -1 {
 		return nil, errors.New(fmt.Sprintf("column %s not found", attr))
@@ -301,6 +323,6 @@ func compare(val1, val2 interface{}, typ types.Type) int {
 		return int(val1.(types.Date) - val2.(types.Date))
 	}
 	panic("unsupported")
-}
+}*/
 
 

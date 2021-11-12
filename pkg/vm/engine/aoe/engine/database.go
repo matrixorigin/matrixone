@@ -42,7 +42,7 @@ func (db *database) Delete(epoch uint64, name string) error {
 }
 
 //Create creates the table
-func (db *database) Create(epoch uint64, name string, defs []engine.TableDef, comment string) error {
+func (db *database) Create(epoch uint64, name string, defs []engine.TableDef) error {
 	t0 := time.Now()
 	defer func() {
 		logutil.Debugf("time cost %d ms", time.Since(t0).Milliseconds())

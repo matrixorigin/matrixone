@@ -198,7 +198,7 @@ func (v *StrVector) appendWithOffset(offset, n int, vals interface{}) error {
 }
 
 func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) {
-	if offset < 0 || offset >= vec.Length() {
+	if offset < 0 || offset >= ro.Length(vec) {
 		return n, VecInvalidOffsetErr
 	}
 	if v.IsReadonly() {
@@ -207,8 +207,8 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	v.Lock()
 	defer v.Unlock()
 	n = v.Capacity() - v.Length()
-	if n > vec.Length()-offset {
-		n = vec.Length() - offset
+	if n > ro.Length(vec)-offset {
+		n = ro.Length(vec) - offset
 	}
 	startRow := v.Length()
 
@@ -225,9 +225,9 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 		return n, err
 	}
 	if vec.Nsp.Np != nil {
-		for row := startRow; row < startRow+vec.Length(); row++ {
-			if vec.Nsp.Contains(uint64(offset + row - startRow)) {
-				v.VMask.Add(uint64(row))
+		for row := startRow; row < startRow+ro.Length(vec); row++ {
+			if nulls.Contains(vec.Nsp, uint64(offset + row - startRow)) {
+				nulls.Contains(v.VMask, uint64(row))
 			}
 		}
 	}
@@ -237,7 +237,7 @@ func (v *StrVector) AppendVector(vec *ro.Vector, offset int) (n int, err error) 
 	if len(v.Data.Lengths) == cap(v.Data.Lengths) {
 		mask = mask | container.ReadonlyMask
 	}
-	if v.VMask.Any() {
+	if nulls.Any(v.VMask) {
 		mask = mask | container.HasNullMask
 	}
 	atomic.StoreUint64(&v.StatMask, mask)
@@ -257,9 +257,9 @@ func (v *StrVector) SliceReference(start, end int) (dbi.IVectorReader, error) {
 		Data: v.Data.Window(start, end),
 	}
 	if v.VMask.Np != nil {
-		vmask := v.VMask.Range(uint64(start), uint64(end), &nulls.Nulls{})
+		vmask := nulls.Range(v.VMask, uint64(start), uint64(end), &nulls.Nulls{})
 		vec.VMask = vmask
-		if vmask.Any() {
+		if nulls.Any(v.VMask) {
 			mask = mask | container.HasNullMask
 		}
 	} else {
@@ -287,9 +287,9 @@ func (v *StrVector) GetLatestView() IVector {
 	}
 	if mask&container.HasNullMask != 0 {
 		if mask&container.ReadonlyMask == 0 {
-			vec.VMask = v.VMask.Range(0, uint64(endPos), &nulls.Nulls{})
+			vec.VMask = nulls.Range(v.VMask, 0, uint64(endPos), &nulls.Nulls{})
 		} else {
-			vec.VMask = v.VMask.Range(0, uint64(endPos), &nulls.Nulls{})
+			vec.VMask = nulls.Range(v.VMask, 0, uint64(endPos), &nulls.Nulls{})
 		}
 	} else {
 		vec.VMask = &nulls.Nulls{}
@@ -304,7 +304,7 @@ func (v *StrVector) CopyToVectorWithBuffer(compressed *bytes.Buffer, deCompresse
 	nullSize := 0
 	var nullbuf []byte
 	var err error
-	if v.VMask.Any() {
+	if nulls.Any(v.VMask) {
 		if nullbuf, err = v.VMask.Show(); err != nil {
 			return nil, err
 		}
@@ -363,7 +363,7 @@ func (v *StrVector) CopyToVector() (*ro.Vector, error) {
 		copy(col.Data[0:], v.Data.Data)
 		copy(col.Lengths[0:], v.Data.Lengths)
 		copy(col.Offsets[0:], v.Data.Offsets)
-		vec.Nsp = v.VMask.Range(uint64(0), uint64(v.Length()), &nulls.Nulls{})
+		vec.Nsp = nulls.Range(v.VMask, uint64(0), uint64(v.Length()), &nulls.Nulls{})
 	default:
 		return nil, VecTypeNotSupportErr
 	}
