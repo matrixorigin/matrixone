@@ -15,6 +15,9 @@
 package testutils
 
 import (
+	"os"
+	"path/filepath"
+	"testing"
 	"time"
 )
 
@@ -24,4 +27,19 @@ func WaitExpect(timeout int, expect func() bool) {
 	for time.Now().Before(end) && !expect() {
 		time.Sleep(interval)
 	}
+}
+
+func GetDefaultTestPath(module string, t *testing.T) string {
+	return filepath.Join("/tmp", module, t.Name())
+}
+
+func MakeDefaultTestPath(module string, t *testing.T) string {
+	path := GetDefaultTestPath(module, t)
+	os.MkdirAll(path, os.FileMode(0755))
+	return path
+}
+
+func RemoveDefaultTestPath(module string, t *testing.T) {
+	path := GetDefaultTestPath(module, t)
+	os.RemoveAll(path)
 }
