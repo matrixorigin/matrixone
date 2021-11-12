@@ -1,9 +1,10 @@
 package engine
+
 import (
 	"bytes"
+	"matrixone/pkg/container/batch"
 	"matrixone/pkg/container/vector"
 	"matrixone/pkg/vm/engine"
-	"matrixone/pkg/container/batch"
 	"matrixone/pkg/vm/mheap"
 	"unsafe"
 )
@@ -44,6 +45,8 @@ func (a aoeReader) Read(refCount []uint64, attrs []string, buffers []*bytes.Buff
 	for i := 0; i < len(bat.Ring.Zs); i++ {
 		bat.Ring.Zs[i] = 1
 	}
-	a.blocks = append(a.blocks[:1], a.blocks[2:]...)
+	if len(a.blocks) > 1 {
+		a.blocks = append(a.blocks[:1], a.blocks[2:]...)
+	}
 	return bat, nil
 }

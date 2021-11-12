@@ -22,6 +22,9 @@ import (
 	"matrixone/pkg/container/types"
 	"matrixone/pkg/logutil"
 	"matrixone/pkg/vm/engine/aoe/protocol"
+	"matrixone/pkg/vm/mheap"
+	"matrixone/pkg/vm/mmu/guest"
+	"matrixone/pkg/vm/mmu/host"
 
 	aoe3 "matrixone/pkg/vm/driver/aoe"
 	"matrixone/pkg/vm/driver/config"
@@ -234,6 +237,18 @@ func TestAOEEngine(t *testing.T) {
 	}
 	require.Equal(t, len(attrs), len(index), "Index: wrong len")
 
+	hm := host.New(1 << 20)
+	gm := guest.New(1<<20, hm)
+	mp := mheap.New(gm)
+	readers := tb.NewReader(6, mp)
+	for _, reader := range readers {
+		_, err = reader.Read([]uint64{uint64(1)}, []string{"mock_0"}, []*bytes.Buffer{bytes.NewBuffer(nil)})
+		require.NoError(t, err)
+		_, err := reader.Read([]uint64{uint64(1)}, []string{"mock_1"}, []*bytes.Buffer{bytes.NewBuffer(nil)})
+		require.NoError(t, err)
+	}
+	num := tb.NewReader(15, mp)
+	require.Equal(t, 10, len(num))
 	tb.Close()
 
 	err = db.Delete(5, mockTbl.Name)
