@@ -74,7 +74,7 @@ func MakeLockFileName(dirname, name string) string {
 	return MakeFilename(dirname, FTLock, name, false)
 }
 
-func ParseSegmentfileName(filename string) (name string, ok bool) {
+func ParseSegmentFileName(filename string) (name string, ok bool) {
 	name = strings.TrimSuffix(filename, SegSuffix)
 	if len(name) == len(filename) {
 		return name, false

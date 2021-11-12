@@ -46,9 +46,9 @@ func TestFilenames(t *testing.T) {
 	tblk1 := MakeTBlockFileName(workDir, "tblk-1", false)
 	assert.Equal(t, "/work/data/tblk-1.tblk", tblk1)
 
-	res, ok := ParseSegmentfileName(seg1)
+	res, ok := ParseSegmentFileName(seg1)
 	assert.True(t, ok)
-	res, ok = ParseSegmentfileName(res)
+	res, ok = ParseSegmentFileName(res)
 	assert.False(t, ok)
 	res, ok = ParseBlockfileName(blk1)
 	assert.True(t, ok)

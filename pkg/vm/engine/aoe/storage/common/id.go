@@ -222,7 +222,7 @@ func ParseBlkNameToID(name string) (ID, error) {
 	return id, nil
 }
 
-func ParseSegmentFileName(name string) (ID, error) {
+func ParseSegmentNameToID(name string) (ID, error) {
 	var (
 		id  ID
 		err error

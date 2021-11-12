@@ -182,8 +182,8 @@ func (ss *ssLoader) execCopyBlk(dir, file string) error {
 }
 
 func (ss *ssLoader) execCopySeg(dir, file string) error {
-	name, _ := common.ParseSegmentfileName(file)
-	id, err := common.ParseSegmentFileName(name)
+	name, _ := common.ParseSegmentFileName(file)
+	id, err := common.ParseSegmentNameToID(name)
 	if err != nil {
 		return err
 	}
