@@ -291,17 +291,6 @@ func TestAppend(t *testing.T) {
 	err = dbss.CommitWrite()
 	assert.Nil(t, err)
 
-	// data, _ := inst.Store.DataTables.StrongRefTable(tid)
-	// defer data.Unref()
-	// copied := filepath.Join(TEST_DB_DIR, "copied")
-	// err = os.MkdirAll(copied, os.FileMode(0755))
-	// assert.Nil(t, err)
-	// now := time.Now()
-	// err = data.CopyTo(copied)
-	// assert.Nil(t, err)
-	// t.Log(time.Since(now))
-
-	// time.Sleep(time.Duration(50) * time.Millisecond)
 	t.Log(inst.MTBufMgr.String())
 	t.Log(inst.SSTBufMgr.String())
 	t.Log(inst.IndexBufMgr.String())

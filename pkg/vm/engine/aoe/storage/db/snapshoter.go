@@ -1,14 +1,25 @@
 package db
 
 import (
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1/iface"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 )
 
-type SSWriter = metadata.SSWriter
+type SSWriter interface {
+	io.Closer
+	metadata.SSWriter
+	GetIndex() uint64
+}
+
 type SSLoader = metadata.SSLoader
-type Snapshoter = metadata.Snapshoter
+
+type Snapshoter interface {
+	SSWriter
+	SSLoader
+}
 
 var (
 	CopyTableFn func(t iface.ITableData, destDir string) error
@@ -30,6 +41,7 @@ type dbSnapshoter struct {
 	data   map[uint64]iface.ITableData
 	tables *table.Tables
 	dir    string
+	index  uint64
 }
 
 func NewDBSSWriter(database *metadata.Database, dir string, tables *table.Tables) *dbSnapshoter {
@@ -63,15 +75,19 @@ func (ss *dbSnapshoter) validatePrepare() error {
 	return nil
 }
 
+func (ss *dbSnapshoter) GetIndex() uint64 {
+	return ss.index
+}
+
 func (ss *dbSnapshoter) PrepareWrite() error {
 	ss.tables.RLock()
-	index := ss.meta.GetCheckpointId()
+	ss.index = ss.meta.GetCheckpointId()
 	err := ss.tables.ForTablesLocked(ss.onTableData)
 	ss.tables.RUnlock()
 	if err != nil {
 		return err
 	}
-	ss.metaw = metadata.NewDBSSWriter(ss.meta, ss.dir, index)
+	ss.metaw = metadata.NewDBSSWriter(ss.meta, ss.dir, ss.index)
 	if err = ss.metaw.PrepareWrite(); err != nil {
 		return err
 	}
