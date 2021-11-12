@@ -152,10 +152,6 @@ func (msf *MockSegmentFile) MakeVirtualPartFile(id *common.ID) common.IVFile {
 	return newPartFile(id, msf, true)
 }
 
-func (msf *MockSegmentFile) Copy(dir string, id common.ID) error {
-	return nil
-}
-
-func (msf *MockSegmentFile) CopyTo(dest string) error {
+func (msf *MockSegmentFile) CopyTo(dir string) error {
 	return nil
 }

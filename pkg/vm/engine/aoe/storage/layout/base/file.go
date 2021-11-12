@@ -130,8 +130,7 @@ type IBaseFile interface {
 	MakeVirtualIndexFile(*IndexMeta) common.IVFile
 	GetDir() string
 
-	Copy(dir string, id common.ID) error
-	CopyTo(name string) error
+	CopyTo(dir string) error
 	// Link(dir string, id common.ID) error
 	// LinkTo(name string) error
 }

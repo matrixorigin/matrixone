@@ -257,18 +257,24 @@ func (bf *BlockFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	return prefetch.Prefetch(bf.Fd(), uintptr(offset), uintptr(sz))
 }
 
-func (bf *BlockFile) Copy(dir string, id common.ID) error {
-	path := common.MakeDataDir(dir)
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		if err = os.MkdirAll(path, os.FileMode(0755)); err != nil {
-			return err
-		}
-	}
-	dest := common.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, false)
-	return bf.CopyTo(dest)
-}
-
-func (bf *BlockFile) CopyTo(dest string) error {
+func (bf *BlockFile) CopyTo(dir string) error {
+	name := filepath.Base(bf.Name())
+	dest := filepath.Join(dir, name)
 	_, err := CopyFile(bf.Name(), dest)
 	return err
 }
+
+// func (bf *BlockFile) Link(dir string, id common.ID) error {
+// 	path := common.MakeDataDir(dir)
+// 	if _, err := os.Stat(path); os.IsNotExist(err) {
+// 		if err = os.MkdirAll(path, os.FileMode(0755)); err != nil {
+// 			return err
+// 		}
+// 	}
+// 	dest := common.MakeBlockFileName(dir, id.ToBlockFileName(), id.TableID, false)
+// 	return bf.LinkTo(dest)
+// }
+
+// func (bf *BlockFile) LinkTo(dest string) error {
+// 	return os.Link(bf.Name(), dest)
+// }

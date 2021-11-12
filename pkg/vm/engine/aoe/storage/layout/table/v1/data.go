@@ -275,7 +275,7 @@ func (td *tableData) CopyTo(dir string) error {
 	var err error
 	for _, seg := range segs {
 		file := seg.GetSegmentFile()
-		if err = file.Copy(dir, *seg.GetMeta().AsCommonID()); err != nil {
+		if err = file.CopyTo(dir); err != nil {
 			if err == dataio.FileNotExistErr {
 				err = nil
 			}
