@@ -33,7 +33,7 @@ const (
 
 const (
 	TmpSuffix  = ".tmp"
-	TblkSuffix = ".tblk"
+	TBlkSuffix = ".tblk"
 	BlkSuffix  = ".blk"
 	SegSuffix  = ".seg"
 	LockSuffix = ".lock"
@@ -83,7 +83,7 @@ func ParseSegmentfileName(filename string) (name string, ok bool) {
 }
 
 func ParseTBlockfileName(filename string) (name string, ok bool) {
-	name = strings.TrimSuffix(filename, TblkSuffix)
+	name = strings.TrimSuffix(filename, TBlkSuffix)
 	if len(name) == len(filename) {
 		return name, false
 	}
@@ -107,7 +107,7 @@ func MakeFilename(dirname string, ft FileT, name string, isTmp bool) string {
 		s = path.Join(MakeSpillDir(dirname), fmt.Sprintf("%s%s", name, NodeSuffix))
 		isTmp = false
 	case FTTBlock:
-		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s%s", name, TblkSuffix))
+		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s%s", name, TBlkSuffix))
 	case FTBlock:
 		s = path.Join(MakeDataDir(dirname), fmt.Sprintf("%s%s", name, BlkSuffix))
 	case FTSegment:
@@ -123,6 +123,18 @@ func MakeFilename(dirname string, ft FileT, name string, isTmp bool) string {
 
 func IsTempFile(name string) bool {
 	return strings.HasSuffix(name, TmpSuffix)
+}
+
+func IsTBlockFile(name string) bool {
+	return strings.HasSuffix(name, TBlkSuffix)
+}
+
+func IsBlockFile(name string) bool {
+	return strings.HasSuffix(name, BlkSuffix)
+}
+
+func IsSegmentFile(name string) bool {
+	return strings.HasSuffix(name, SegSuffix)
 }
 
 func FilenameFromTmpfile(tmpFile string) (fname string, err error) {

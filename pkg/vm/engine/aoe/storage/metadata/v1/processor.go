@@ -46,7 +46,7 @@ type reallocIdProcessor struct {
 	LoopProcessor
 	allocator *Sequence
 	tranId    uint64
-	trace     *mapping
+	trace     *Addresses
 }
 
 func newReAllocIdProcessor(allocator *Sequence, tranId uint64) *reallocIdProcessor {
@@ -58,7 +58,7 @@ func newReAllocIdProcessor(allocator *Sequence, tranId uint64) *reallocIdProcess
 	p.TableFn = p.onTable
 	p.SegmentFn = p.onSegment
 	p.BlockFn = p.onBlock
-	p.trace = new(mapping)
+	p.trace = new(Addresses)
 	p.trace.Database = make(map[uint64]uint64)
 	p.trace.Table = make(map[uint64]uint64)
 	p.trace.Segment = make(map[uint64]uint64)

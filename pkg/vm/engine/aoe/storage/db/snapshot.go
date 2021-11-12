@@ -269,7 +269,7 @@ func (d *DB) applySnapshot(dbName string, path string) (err error) {
 	}
 
 	// Link files
-	mapping := ssReader.Mapping()
+	mapping := ssReader.Addresses()
 	for _, segFile := range segfiles {
 		oldName := segFile
 		rewritten, err := mapping.RewriteSegmentFile(filepath.Base(oldName))

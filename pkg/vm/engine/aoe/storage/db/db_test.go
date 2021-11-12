@@ -292,9 +292,37 @@ func TestAppend(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, database.GetCheckpointId(), dbss.GetIndex())
 
-	t.Log(inst.MTBufMgr.String())
-	t.Log(inst.SSTBufMgr.String())
-	t.Log(inst.IndexBufMgr.String())
+	t.Log(inst.Wal.String())
+	loader := NewDBSSLoader(database, inst.Store.DataTables, dbss.GetIndex(), copied)
+	err = loader.PrepareLoad()
+	assert.Nil(t, err)
+	err = loader.CommitLoad()
+	assert.Nil(t, err)
+
+	assert.True(t, database.IsDeleted())
+
+	database2, err := database.Catalog.SimpleGetDatabaseByName(database.Name)
+	assert.Nil(t, err)
+
+	tMeta, err := inst.Store.Catalog.SimpleGetTableByName(database.Name, schema.Name)
+	assert.Nil(t, err)
+	t.Log(tMeta.PString(metadata.PPL0, 0))
+
+	err = inst.Append(appendCtx)
+	err = inst.Flush(database2.Name, schema.Name)
+
+	schema2 := metadata.MockSchema(3)
+	_, err = inst.CreateTable(database2.Name, schema2, gen.Next(database2.GetShardId()))
+	assert.Nil(t, err)
+	testutils.WaitExpect(200, func() bool {
+		return database2.GetCheckpointId() == gen.Get(database2.GetShardId())
+	})
+	assert.Equal(t, database2.GetCheckpointId(), gen.Get(database2.GetShardId()))
+	inst.Store.Catalog.Compact(nil, nil)
+
+	// t.Log(inst.MTBufMgr.String())
+	// t.Log(inst.SSTBufMgr.String())
+	// t.Log(inst.IndexBufMgr.String())
 	// t.Log(inst.FsMgr.String())
 	// t.Log(tbl.GetIndexHolder().String())
 	t.Log(inst.Wal.String())

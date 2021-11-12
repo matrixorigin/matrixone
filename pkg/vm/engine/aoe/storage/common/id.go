@@ -23,8 +23,9 @@ import (
 )
 
 var (
-	ErrParseBlockFileName  = errors.New("aoe: parse block file name")
-	ErrParseTBlockFileName = errors.New("aoe: parse tblock file name")
+	ErrParseBlockFileName   = errors.New("aoe: parse block file name")
+	ErrParseTBlockFileName  = errors.New("aoe: parse tblock file name")
+	ErrParseSegmentFileName = errors.New("aoe: parse segment file name")
 )
 
 // ID is the general identifier type shared by different types like
@@ -228,7 +229,7 @@ func ParseSegmentFileName(name string) (ID, error) {
 	)
 	strs := strings.Split(name, "_")
 	if len(strs) != 2 {
-		return id, ErrParseBlockFileName
+		return id, ErrParseSegmentFileName
 	}
 	tid, err := strconv.ParseUint(strs[0], 10, 64)
 	if err != nil {
