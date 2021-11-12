@@ -319,16 +319,14 @@ func TestAppend(t *testing.T) {
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 	ss.Close()
 
-	copied := filepath.Join(TEST_DB_DIR, "copied")
-	err = os.MkdirAll(copied, os.FileMode(0755))
-	assert.Nil(t, err)
+	ssPath := prepareSnapshotPath(defaultSnapshotPath, t)
 
-	idx, err := inst.CreateSnapshot(database.Name, copied)
+	idx, err := inst.CreateSnapshot(database.Name, ssPath)
 	assert.Nil(t, err)
 	assert.Equal(t, database.GetCheckpointId(), idx)
-	t.Log(inst.Wal.String())
 
-	err = inst.ApplySnapshot(database.Name, copied)
+	err = inst.ApplySnapshot(database.Name, ssPath)
+	assert.Nil(t, err)
 	assert.True(t, database.IsDeleted())
 
 	database2, err := database.Catalog.SimpleGetDatabaseByName(database.Name)
@@ -339,7 +337,10 @@ func TestAppend(t *testing.T) {
 	t.Log(tMeta.PString(metadata.PPL0, 0))
 
 	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
 	err = inst.Flush(database2.Name, schema.Name)
+	t.Log(inst.Wal.String())
+	gen.Reset(database2.GetShardId(), appendCtx.OpIndex)
 
 	schema2 := metadata.MockSchema(3)
 	_, err = inst.CreateTable(database2.Name, schema2, gen.Next(database2.GetShardId()))

@@ -234,7 +234,11 @@ func (ss *dbSnapshoter) PrepareLoad() error {
 	if err = ss.ReAllocId(&ss.catalog.Sequence, ss.view.Database); err != nil {
 		return err
 	}
-	return ss.view.Database.rebuild(true, false)
+	if err = ss.view.Database.rebuild(true, false); err != nil {
+		return err
+	}
+	ss.view.Database.InitWal(ss.view.LogRange.Range.Right)
+	return nil
 }
 
 func (ss *dbSnapshoter) GetIndex() uint64 {

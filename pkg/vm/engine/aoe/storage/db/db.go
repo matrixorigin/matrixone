@@ -170,10 +170,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err != nil {
 		return err
 	}
-	if ctx.ShardId != tbl.Database.GetShardId() {
-		err = metadata.InconsistentShardIdErr
-		return
-	}
+	// if ctx.ShardId != tbl.Database.GetShardId() {
+	// 	logutil.Warnf(metadata.InconsistentShardIdErr.Error())
+	// }
 
 	collection := d.MemTableMgr.StrongRefCollection(tbl.Id)
 	if collection == nil {
@@ -260,12 +259,13 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err != nil {
 		return
 	}
-	if table.Database.GetShardId() != ctx.ShardId {
-		err = metadata.InconsistentShardIdErr
-		return
-	}
+	// if table.Database.GetShardId() != ctx.ShardId {
+	// 	err = metadata.InconsistentShardIdErr
+	// 	return
+	// }
 	id = table.Id
 
+	ctx.ShardId = table.Database.GetShardId()
 	index := adaptor.GetLogIndexFromDropTableCtx(&ctx)
 	if err = table.SimpleSoftDelete(index); err != nil {
 		return
