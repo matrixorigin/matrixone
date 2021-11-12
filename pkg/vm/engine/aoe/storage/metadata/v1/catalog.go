@@ -482,6 +482,12 @@ func (catalog *Catalog) prepareCreateDatabase(ctx *createDatabaseCtx) (LogEntry,
 		ctx.txn.AddEntry(db, ETCreateDatabase)
 		return nil, nil
 	}
+	if ctx.exIndex == nil {
+		ctx.exIndex = &LogIndex{
+			ShardId: db.Id,
+			Id:      shard.SimpleIndexId(0),
+		}
+	}
 	entry := db.ToLogEntry(ETCreateDatabase)
 	catalog.prepareCommitLog(db, entry)
 	return entry, err

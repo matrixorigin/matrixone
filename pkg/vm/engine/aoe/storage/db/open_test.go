@@ -64,7 +64,7 @@ func TestDBReplay(t *testing.T) {
 		waitTime = time.Duration(100) * time.Millisecond
 	}
 	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	inst, gen, database := initDB2(wal.BrokerRole, "db1")
 	schema := metadata.MockSchema(2)
 	schema.Name = "mocktbl"
 	shardId := database.GetShardId()

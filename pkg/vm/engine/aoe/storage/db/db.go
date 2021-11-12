@@ -197,7 +197,7 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 		}
 		collection = e.Collection
 	}
-
+	ctx.ShardId = tbl.Database.GetShardId()
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
 	defer collection.Unref()
 	if err = d.Wal.SyncLog(index); err != nil {
@@ -282,14 +282,11 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	return
 }
 
-func (d *DB) CreateDatabase(name string, shardId uint64) (*metadata.Database, error) {
+func (d *DB) CreateDatabase(name string) (*metadata.Database, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	return d.Store.Catalog.SimpleCreateDatabase(name, &metadata.LogIndex{
-		ShardId: shardId,
-		Id:      shard.SimpleIndexId(0),
-	})
+	return d.Store.Catalog.SimpleCreateDatabase(name, nil)
 }
 
 func (d *DB) DropDatabase(name string, index uint64) (err error) {

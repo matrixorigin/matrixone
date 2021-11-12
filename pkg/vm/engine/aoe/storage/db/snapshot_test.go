@@ -59,4 +59,7 @@ func TestSnapshot1(t *testing.T) {
 
 	err = inst.ApplySnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
 	assert.Nil(t, err)
+
+	t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
+	t.Log(inst.Store.Catalog.IndexWal.String())
 }
