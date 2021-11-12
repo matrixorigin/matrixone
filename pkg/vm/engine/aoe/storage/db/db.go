@@ -415,6 +415,14 @@ func (d *DB) GetShardCheckpointId(shardId uint64) uint64 {
 	return d.Wal.GetShardCheckpointId(shardId)
 }
 
+func (d *DB) GetDBCheckpointId(dbName string) uint64 {
+	database, err := d.Store.Catalog.GetDatabaseByName(dbName)
+	if err != nil {
+		return 0
+	}
+	return database.GetCheckpointId()
+}
+
 // CreateSnapshot creates a snapshot of the specified shard and stores it to `path`.
 func (d *DB) CreateSnapshot(dbName string, path string) (uint64, error) {
 	if err := d.Closed.Load(); err != nil {

@@ -38,7 +38,6 @@ func TestSnapshot1(t *testing.T) {
 	initTestEnv(t)
 	prepareSnapshotPath(defaultSnapshotPath, t)
 	inst, gen, database := initTestDB1(t)
-	defer inst.Close()
 	shardId := database.GetShardId()
 	idxGen := gen.Shard(shardId)
 	schemas := make([]*metadata.Schema, 10)
@@ -60,6 +59,16 @@ func TestSnapshot1(t *testing.T) {
 	err = inst.ApplySnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
 	assert.Nil(t, err)
 
-	t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
-	t.Log(inst.Store.Catalog.IndexWal.String())
+	idx2 := inst.GetDBCheckpointId(database.Name)
+	assert.Equal(t, idx, idx2)
+	inst.Close()
+
+	inst2, _, _ := initTestDB3(t)
+	defer inst2.Close()
+
+	idx3 := inst2.GetDBCheckpointId(database.Name)
+	assert.Equal(t, idx, idx3)
+
+	// t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
+	t.Log(inst2.Store.Catalog.IndexWal.String())
 }

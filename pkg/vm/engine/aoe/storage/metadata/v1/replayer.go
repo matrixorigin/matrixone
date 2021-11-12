@@ -147,9 +147,9 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 	case ETHardDeleteDatabase:
 		err = catalog.onReplayHardDeleteDatabase(entry.dbEntry)
 	case ETSplitDatabase:
-		err = catalog.onReplayReplaceDatabase(entry.replaceEntry)
+		err = catalog.onReplayReplaceDatabase(entry.replaceEntry, true)
 	case ETReplaceDatabase:
-		err = catalog.onReplayReplaceDatabase(entry.replaceEntry)
+		err = catalog.onReplayReplaceDatabase(entry.replaceEntry, false)
 	case ETCreateBlock:
 		catalog.Sequence.TryUpdateBlockId(entry.blkEntry.Id)
 		err = catalog.onReplayCreateBlock(entry.blkEntry)
@@ -254,7 +254,7 @@ func (replayer *catalogReplayer) RebuildCatalogWithDriver(mu *sync.RWMutex, cfg 
 	replayer.catalog.DebugCheckReplayedState()
 	replayer.catalog.Store.TryCompact()
 	replayer.cache = nil
-	logutil.Infof(replayer.catalog.PString(PPL0, 0))
+	logutil.Infof(replayer.catalog.PString(PPL1, 0))
 	return replayer.catalog, nil
 }
 

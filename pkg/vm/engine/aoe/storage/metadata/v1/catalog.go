@@ -534,6 +534,17 @@ func (catalog *Catalog) GetDatabaseByNameInTxn(txn *TxnCtx, name string) (*Datab
 	return db, nil
 }
 
+func (catalog *Catalog) GetDatabaseByName(name string) (*Database, error) {
+	catalog.RLock()
+	defer catalog.RUnlock()
+	nn := catalog.nameNodes[name]
+	if nn == nil {
+		return nil, DatabaseNotFoundErr
+	}
+	db := nn.GetDatabase()
+	return db, nil
+}
+
 func (catalog *Catalog) SimpleGetDatabaseByName(name string) (*Database, error) {
 	catalog.RLock()
 	defer catalog.RUnlock()
@@ -718,12 +729,13 @@ func (catalog *Catalog) onReplayHardDeleteDatabase(entry *databaseLogEntry) erro
 	return db.onCommit(entry.CommitInfo)
 }
 
-func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry) error {
+func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry, isSplit bool) error {
 	replaced := catalog.Databases[entry.Replaced.Id]
 	err := replaced.onCommit(entry.Replaced.CommitInfo)
 	if err != nil {
 		return err
 	}
+	idx := entry.Replaced.CommitInfo.GetIndex()
 	for _, replacer := range entry.Replacer {
 		catalog.TryUpdateDatabaseId(replacer.Id)
 		if err = catalog.onNewDatabase(replacer); err != nil {
@@ -732,6 +744,9 @@ func (catalog *Catalog) onReplayReplaceDatabase(entry *dbReplaceLogEntry) error 
 		replacer.Catalog = catalog
 		if err = replacer.rebuild(false, true); err != nil {
 			break
+		}
+		if !isSplit {
+			replacer.InitWal(idx)
 		}
 	}
 	return err
