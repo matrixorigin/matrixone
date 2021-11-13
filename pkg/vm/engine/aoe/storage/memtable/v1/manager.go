@@ -25,6 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/shard"
 )
 
+var (
+	CollectionNotFoundErr = errors.New("collection not found")
+)
+
 // manager is the collection manager, it's global,
 // created when open db
 type manager struct {
@@ -121,7 +125,7 @@ func (m *manager) UnregisterCollection(id uint64) (c imem.ICollection, err error
 		delete(m.collections, id)
 	} else {
 		m.Unlock()
-		return nil, errors.New("logic error")
+		return nil, CollectionNotFoundErr
 	}
 	m.Unlock()
 	if m.aware != nil {

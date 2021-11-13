@@ -457,7 +457,11 @@ func (d *DB) ApplySnapshot(dbName string, path string) error {
 	if err = loader.PrepareLoad(); err != nil {
 		return err
 	}
-	err = loader.CommitLoad()
+	if err = loader.CommitLoad(); err != nil {
+		return err
+	}
+	gcReq := gcreqs.NewDropDBRequest(d.Opts, database, d.Store.DataTables, d.MemTableMgr)
+	d.Opts.GC.Acceptor.Accept(gcReq)
 	return err
 }
 

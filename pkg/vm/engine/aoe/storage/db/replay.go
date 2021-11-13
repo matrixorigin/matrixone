@@ -24,9 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	dbsched "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/sched"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/dataio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/table/v1"
+	mtif "github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/memtable/v1/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 
 	roaring "github.com/RoaringBitmap/roaring/roaring64"
@@ -342,6 +344,7 @@ type replayHandle struct {
 	cleanables []cleanable
 	files      map[uint64]*tableDataFiles
 	flushsegs  []flushsegCtx
+	compactdbs []*metadata.Database
 	observer   IReplayObserver
 	cbs        []func() error
 }
@@ -356,6 +359,7 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 		files:      make(map[uint64]*tableDataFiles),
 		cleanables: make([]cleanable, 0),
 		flushsegs:  make([]flushsegCtx, 0),
+		compactdbs: make([]*metadata.Database, 0),
 		observer:   observer,
 		cbs:        make([]func() error, 0),
 	}
@@ -386,7 +390,7 @@ func NewReplayHandle(workDir string, catalog *metadata.Catalog, tables *table.Ta
 	return fs
 }
 
-func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Tables) {
+func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Tables, mtMgr mtif.IManager) {
 	for _, ctx := range h.flushsegs {
 		t, _ := tables.WeakRefTable(ctx.id.TableID)
 		segment := t.StrongRefSegment(ctx.id.SegmentID)
@@ -398,6 +402,11 @@ func (h *replayHandle) ScheduleEvents(opts *storage.Options, tables *table.Table
 		opts.Scheduler.Schedule(flushEvent)
 	}
 	h.flushsegs = h.flushsegs[:0]
+	for _, database := range h.compactdbs {
+		gcReq := gcreqs.NewDropDBRequest(opts, database, tables, mtMgr)
+		opts.GC.Acceptor.Accept(gcReq)
+	}
+	h.compactdbs = h.compactdbs[:0]
 }
 
 func (h *replayHandle) addCleanable(f cleanable) {
@@ -664,6 +673,9 @@ func (h *replayHandle) Replay() error {
 			if err := h.rebuildTable(tbl); err != nil {
 				return err
 			}
+		}
+		if database.IsDeleted() && !database.IsHardDeleted() {
+			h.compactdbs = append(h.compactdbs, database)
 		}
 	}
 	h.Cleanup()

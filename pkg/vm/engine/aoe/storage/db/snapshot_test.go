@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
@@ -345,6 +346,7 @@ func TestSnapshot5(t *testing.T) {
 	ckId := inst.GetDBCheckpointId(database.Name)
 	assert.Equal(t, uint64(4), ckId)
 
+	t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
 	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
@@ -354,8 +356,10 @@ func TestSnapshot5(t *testing.T) {
 
 	idx2 := inst.GetDBCheckpointId(database.Name)
 	assert.Equal(t, idx, idx2)
+	time.Sleep(time.Duration(500) * time.Millisecond)
+	t.Log(inst.Store.Catalog.IndexWal.String())
+	t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
 	inst.Close()
-
 	inst2, _, _ := initTestDB3(t)
 	defer inst2.Close()
 	idx3 := inst2.GetDBCheckpointId(database.Name)
@@ -364,6 +368,6 @@ func TestSnapshot5(t *testing.T) {
 	names = inst2.TableNames(database.Name)
 	assert.Equal(t, len(schemas), len(names))
 
-	// t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
+	t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
 	t.Log(inst2.Store.Catalog.IndexWal.String())
 }

@@ -71,10 +71,15 @@ func (req *dropTblRequest) Execute() error {
 	}
 	c, err := req.MemTableMgr.UnregisterCollection(req.Meta.Id)
 	if err != nil {
-		if req.Iteration < 3 {
-			return err
+		segIds := req.Meta.SimpleGetSegmentIds()
+		if len(segIds) == 0 {
+			err = nil
+		} else {
+			if req.Iteration < 3 {
+				return err
+			}
+			err = nil
 		}
-		err = nil
 	}
 	if c != nil {
 		c.Unref()
