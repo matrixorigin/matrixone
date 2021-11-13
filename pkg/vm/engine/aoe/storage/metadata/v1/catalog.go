@@ -215,6 +215,16 @@ func (catalog *Catalog) AbortTxn(txn *TxnCtx) error {
 	return nil
 }
 
+func (catalog *Catalog) SimpleGetDatabase(id uint64) (*Database, error) {
+	catalog.RLock()
+	defer catalog.RUnlock()
+	db := catalog.Databases[id]
+	if db == nil {
+		return nil, DatabaseNotFoundErr
+	}
+	return db, nil
+}
+
 func (catalog *Catalog) SimpleGetTableByName(dbName, tableName string) (*Table, error) {
 	database, err := catalog.SimpleGetDatabaseByName(dbName)
 	if err != nil {

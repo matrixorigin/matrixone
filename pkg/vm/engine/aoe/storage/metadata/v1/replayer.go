@@ -233,6 +233,9 @@ func (replayer *catalogReplayer) restoreWal() {
 		if database.IsHardDeletedLocked() {
 			continue
 		}
+		if database.IsDeleted() {
+			database.InitWal(database.CommitInfo.GetIndex())
+		}
 		safeId, ok := replayer.cache.safeIds[database.GetShardId()]
 		if !ok {
 			logutil.Warnf("Cannot get safeid of shardId %d", database.GetShardId())

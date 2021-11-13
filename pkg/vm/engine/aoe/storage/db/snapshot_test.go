@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/db/gcreqs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/dbi"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/metadata/v1"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/mock"
@@ -357,11 +358,30 @@ func TestSnapshot5(t *testing.T) {
 	idx2 := inst.GetDBCheckpointId(database.Name)
 	assert.Equal(t, idx, idx2)
 	time.Sleep(time.Duration(500) * time.Millisecond)
-	t.Log(inst.Store.Catalog.IndexWal.String())
-	t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
+	testutils.WaitExpect(200, func() bool {
+		return database.GetCheckpointId() == gen.Get(database.GetShardId())
+	})
+	assert.Equal(t, database.GetCheckpointId(), gen.Get(database.GetShardId()))
+
 	inst.Close()
 	inst2, _, _ := initTestDB3(t)
 	defer inst2.Close()
+
+	dbReplayed, err := inst2.Store.Catalog.SimpleGetDatabase(database.Id)
+	assert.Nil(t, err)
+	assert.True(t, dbReplayed.IsReplaced())
+	assert.Equal(t, dbReplayed.GetCheckpointId(), dbReplayed.GetCommit().GetIndex())
+
+	gcreq := gcreqs.NewCatalogCompactionRequest(inst.Store.Catalog, time.Duration(1)*time.Millisecond)
+	err = gcreq.Execute()
+	assert.Nil(t, err)
+	testutils.WaitExpect(500, func() bool {
+		_, err := inst2.Store.Catalog.SimpleGetDatabase(database.Id)
+		return err != nil
+	})
+	_, err = inst2.Store.Catalog.SimpleGetDatabase(database.Id)
+	assert.NotNil(t, err)
+
 	idx3 := inst2.GetDBCheckpointId(database.Name)
 	assert.Equal(t, idx, idx3)
 
