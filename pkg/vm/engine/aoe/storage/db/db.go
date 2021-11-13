@@ -95,6 +95,8 @@ type DB struct {
 	ClosedC chan struct{}
 }
 
+// func (d *DB) checkIdempotence(database *Database, uint64 )
+
 func (d *DB) StartTxn(index *metadata.LogIndex) *TxnCtx {
 	return d.Store.Catalog.StartTxn(index)
 }

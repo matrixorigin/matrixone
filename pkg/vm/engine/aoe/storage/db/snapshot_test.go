@@ -555,6 +555,17 @@ func TestSnapshot6(t *testing.T) {
 
 	names = aoedb2.TableNames(database.Name)
 	assert.Equal(t, len(schemas), len(names))
+	dbReplayed, err = aoedb2.Store.Catalog.SimpleGetDatabaseByName(database.Name)
+	assert.Nil(t, err)
+	t1 := dbReplayed.SimpleGetTableByName(schemas[0].Name)
+	assert.NotNil(t, t1)
+	t1Idx := t1.MaxLogIndex().Id.Id
+	assert.Equal(t, uint64(4), t1Idx)
 
-	t.Log(aoedb2.Store.Catalog.IndexWal.String())
+	t2 := dbReplayed.SimpleGetTableByName(schemas[1].Name)
+	assert.NotNil(t, t2)
+	t2Idx := t2.MaxLogIndex().Id.Id
+	assert.Equal(t, gen.Get(database.GetShardId()), t2Idx)
+
+	// t.Log(aoedb2.Store.Catalog.PString(metadata.PPL0, 0))
 }
