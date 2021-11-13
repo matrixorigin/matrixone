@@ -64,19 +64,19 @@ func TestReplay1(t *testing.T) {
 
 	insertFn()
 	assert.Equal(t, irows, uint64(rel.Rows()))
-	err = inst.Flush(database.Name, schema.Name)
+	err = inst.FlushTable(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	insertFn()
 	assert.Equal(t, irows*2, uint64(rel.Rows()))
-	err = inst.Flush(database.Name, schema.Name)
+	err = inst.FlushTable(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	insertFn()
 	assert.Equal(t, irows*3, uint64(rel.Rows()))
-	err = inst.Flush(database.Name, schema.Name)
+	err = inst.FlushTable(database.Name, schema.Name)
 	assert.Nil(t, err)
-	err = inst.Flush(database.Name, schema.Name)
+	err = inst.FlushTable(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	testutils.WaitExpect(200, func() bool {
@@ -108,7 +108,7 @@ func TestReplay1(t *testing.T) {
 	t.Log(rel.Rows())
 	t.Log(inst.MutationBufMgr.String())
 
-	err = inst.Flush(database.Name, meta.Schema.Name)
+	err = inst.FlushTable(database.Name, meta.Schema.Name)
 	assert.Nil(t, err)
 	insertFn()
 	t.Log(rel.Rows())
@@ -910,12 +910,12 @@ func TestReplay12(t *testing.T) {
 
 	insertFn()
 	assert.Equal(t, irows, uint64(rel.Rows()))
-	err = inst.Flush(database.Name, schema.Name)
+	err = inst.FlushTable(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	insertFn()
 	assert.Equal(t, irows*2, uint64(rel.Rows()))
-	err = inst.Flush(database.Name, schema.Name)
+	err = inst.FlushTable(database.Name, schema.Name)
 	assert.Nil(t, err)
 
 	ibat2 := mock.MockBatch(meta.Schema.Types(), inst.Store.Catalog.Cfg.BlockMaxRows)
@@ -998,7 +998,7 @@ func TestReplay12(t *testing.T) {
 	t.Log(rel.Rows())
 	t.Log(inst.MutationBufMgr.String())
 
-	err = inst.Flush(meta.Database.Name, meta.Schema.Name)
+	err = inst.FlushTable(meta.Database.Name, meta.Schema.Name)
 	assert.Nil(t, err)
 	insertFn()
 	t.Log(rel.Rows())

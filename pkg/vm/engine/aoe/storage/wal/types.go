@@ -45,6 +45,7 @@ type ShardAwareWal interface {
 	InitShard(uint64, uint64) error
 	GetShardCheckpointId(uint64) uint64
 	GetShardCurrSeqNum(uint64) uint64
+	GetShardPendingCnt(uint64) int
 	GetAllPendingEntries() []*shard.ItemsToCheckpointStat
 }
 
@@ -58,6 +59,13 @@ func NewWalShard(shardId uint64, wal ShardAwareWal) *ShardWal {
 		Wal:     wal,
 		ShardId: shardId,
 	}
+}
+
+func (wal *ShardWal) GetPendingCnt() int {
+	if wal.Wal == nil {
+		return 0
+	}
+	return wal.Wal.GetShardPendingCnt(wal.ShardId)
 }
 
 func (wal *ShardWal) GetShardId() uint64 {

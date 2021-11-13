@@ -56,6 +56,7 @@ func (noop *noopWal) GetShardCurrSeqNum(shardId uint64) (id uint64)        { ret
 func (noop *noopWal) GetShardCheckpointId(shardId uint64) uint64           { return 0 }
 func (noop *noopWal) InitShard(shardId, safeId uint64) error               { return nil }
 func (noop *noopWal) GetAllPendingEntries() []*shard.ItemsToCheckpointStat { return nil }
+func (noop *noopWal) GetShardPendingCnt(shardId uint64) int                { return 0 }
 
 type manager struct {
 	sm.ClosedState
@@ -266,12 +267,12 @@ func (mgr *manager) onSnippets(items ...interface{}) {
 	}
 }
 
-func (mgr *manager) GetShardPendingEntries(shardId uint64) uint64 {
+func (mgr *manager) GetShardPendingCnt(shardId uint64) int {
 	s, err := mgr.GetShard(shardId)
 	if err != nil {
 		return 0
 	}
-	return s.GetPendingEntries()
+	return int(s.GetPendingEntries())
 }
 
 func (mgr *manager) GetAllPendingEntries() []*shard.ItemsToCheckpointStat {

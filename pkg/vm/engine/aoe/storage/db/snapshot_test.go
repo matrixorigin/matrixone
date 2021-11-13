@@ -60,7 +60,7 @@ func TestSnapshot1(t *testing.T) {
 	names := inst.TableNames(database.Name)
 	assert.Equal(t, len(schemas), len(names))
 
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
 	assert.Nil(t, err)
 	assert.Equal(t, idxGen.Get(), idx)
 
@@ -121,7 +121,7 @@ func TestSnapshot2(t *testing.T) {
 	schema := metadata.MockSchema(2)
 	_, err = inst.CreateTable(database.Name, schema, idxGen.Next())
 
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
@@ -189,7 +189,7 @@ func TestSnapshot3(t *testing.T) {
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
-	err = inst.Flush(database.Name, schemas[1].Name)
+	err = inst.FlushTable(database.Name, schemas[1].Name)
 	assert.Nil(t, err)
 	testutils.WaitExpect(200, func() bool {
 		stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
@@ -198,7 +198,7 @@ func TestSnapshot3(t *testing.T) {
 	stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
 	assert.Equal(t, 1, stats[0].Count)
 
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
@@ -263,7 +263,7 @@ func TestSnapshot4(t *testing.T) {
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
-	err = inst.Flush(database.Name, schemas[1].Name)
+	err = inst.FlushTable(database.Name, schemas[1].Name)
 	assert.Nil(t, err)
 	testutils.WaitExpect(200, func() bool {
 		stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
@@ -272,7 +272,7 @@ func TestSnapshot4(t *testing.T) {
 	stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
 	assert.Equal(t, 1, stats[0].Count)
 
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
@@ -336,7 +336,7 @@ func TestSnapshot5(t *testing.T) {
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
-	err = inst.Flush(database.Name, schemas[0].Name)
+	err = inst.FlushTable(database.Name, schemas[0].Name)
 	assert.Nil(t, err)
 	testutils.WaitExpect(200, func() bool {
 		stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
@@ -348,7 +348,7 @@ func TestSnapshot5(t *testing.T) {
 	assert.Equal(t, uint64(4), ckId)
 
 	t.Log(inst.Store.Catalog.PString(metadata.PPL0, 0))
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
@@ -398,11 +398,11 @@ func TestSnapshot5(t *testing.T) {
 // 3.  Wait and assert checkpoint                         [   -,        3     ]
 // 4.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   4,        3     ]
 // 5.  Append 1/10 (MaxBlockRows) rows into (1-2)         [   5,        3     ]
-// 6.  Flush (1-1), (1-2)                                 [   -,        ?     ]
+// 6.  FlushTable (1-1), (1-2)                            [   -,        ?     ]
 // 7.  Wait and assert checkpoint                         [   -,        5     ]
 // 8.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   6,        5     ]
 // 9.  Append 1/10 (MaxBlockRows) rows into (1-2)         [   7,        5     ]
-// 10. Flush (1-2) and wait [7] committed                 [   -,        5     ]
+// 10. FlushTable (1-2) and wait [7] committed            [   -,        5     ]
 // 11. Create snapshot, the snapshot index should be [5]  [   -,        5     ]
 // 12. Create another db instance
 // 13. Apply previous created snapshot
@@ -459,10 +459,10 @@ func TestSnapshot6(t *testing.T) {
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
-	// 6. Flush tables
-	err = inst.Flush(database.Name, schemas[0].Name)
+	// 6. FlushTable tables
+	err = inst.FlushTable(database.Name, schemas[0].Name)
 	assert.Nil(t, err)
-	err = inst.Flush(database.Name, schemas[1].Name)
+	err = inst.FlushTable(database.Name, schemas[1].Name)
 
 	// 7. Wait checkpointed
 	testutils.WaitExpect(200, func() bool {
@@ -488,8 +488,8 @@ func TestSnapshot6(t *testing.T) {
 	err = inst.Append(appendCtx)
 	assert.Nil(t, err)
 
-	// 10. Flush and wait all table 1-2 data checkpointed
-	err = inst.Flush(database.Name, schemas[1].Name)
+	// 10. FlushTable and wait all table 1-2 data checkpointed
+	err = inst.FlushTable(database.Name, schemas[1].Name)
 	assert.Nil(t, err)
 	testutils.WaitExpect(200, func() bool {
 		stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
@@ -500,7 +500,7 @@ func TestSnapshot6(t *testing.T) {
 	assert.Equal(t, ckId, database.GetCheckpointId())
 
 	// 11. Create snapshot
-	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
+	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t), false)
 	assert.Nil(t, err)
 	assert.Equal(t, ckId, idx)
 
@@ -576,7 +576,7 @@ func TestSnapshot6(t *testing.T) {
 // 3.  Wait and assert checkpoint                         [   -,        3     ]
 // 4.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   4,        3     ]
 // 5.  Append 1/10 (MaxBlockRows) rows into (1-2)         [   5,        3     ]
-// 6.  Flush (1-1) (1-2)                                  [   -,        ?     ]
+// 6.  FlushTable (1-1) (1-2)                             [   -,        ?     ]
 // 7.  Wait and assert checkpoint                         [   -,        5     ]
 // 8.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   6,        5     ]
 // 9.  Drop (1-2)                                         [   7,        5     ]

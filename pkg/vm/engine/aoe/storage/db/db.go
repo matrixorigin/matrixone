@@ -21,6 +21,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage"
@@ -48,11 +49,11 @@ var (
 	ErrUnsupported       = errors.New("aoe: unsupported")
 	ErrNotFound          = errors.New("aoe: notfound")
 	ErrUnexpectedWalRole = errors.New("aoe: unexpected wal role setted")
+	ErrTimeout           = errors.New("aoe: timeout")
+	ErrStaleErr          = errors.New("aoe: stale")
 )
 
 type TxnCtx = metadata.TxnCtx
-
-const MaxRetryCreateSnapshot = 10
 
 type DB struct {
 	// Working directory of DB
@@ -127,38 +128,26 @@ func (d *DB) CreateTableInTxn(txn *TxnCtx, dbName string, schema *metadata.Schem
 	return database.CreateTableInTxn(txn, schema)
 }
 
-func (d *DB) Flush(dbName, tableName string) error {
+func (d *DB) FlushDatabase(dbName string) error {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	tbl, err := d.Store.Catalog.SimpleGetTableByName(dbName, tableName)
+	database, err := d.Store.Catalog.SimpleGetDatabaseByName(dbName)
 	if err != nil {
 		return err
 	}
-	collection := d.MemTableMgr.StrongRefCollection(tbl.Id)
-	if collection == nil {
-		eCtx := &memdata.Context{
-			Opts:        d.Opts,
-			MTMgr:       d.MemTableMgr,
-			TableMeta:   tbl,
-			IndexBufMgr: d.IndexBufMgr,
-			MTBufMgr:    d.MTBufMgr,
-			SSTBufMgr:   d.SSTBufMgr,
-			FsMgr:       d.FsMgr,
-			Tables:      d.Store.DataTables,
-			Waitable:    true,
-		}
-		e := memdata.NewCreateTableEvent(eCtx)
-		if err := d.Scheduler.Schedule(e); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		if err := e.WaitDone(); err != nil {
-			panic(fmt.Sprintf("logic error: %s", err))
-		}
-		collection = e.Collection
+	return d.doFlushDatabase(database)
+}
+
+func (d *DB) FlushTable(dbName, tableName string) error {
+	if err := d.Closed.Load(); err != nil {
+		panic(err)
 	}
-	defer collection.Unref()
-	return collection.Flush()
+	meta, err := d.Store.Catalog.SimpleGetTableByName(dbName, tableName)
+	if err != nil {
+		return err
+	}
+	return d.doFlushTable(meta)
 }
 
 func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
@@ -425,8 +414,9 @@ func (d *DB) GetDBCheckpointId(dbName string) uint64 {
 	return database.GetCheckpointId()
 }
 
-// CreateSnapshot creates a snapshot of the specified shard and stores it to `path`.
-func (d *DB) CreateSnapshot(dbName string, path string) (uint64, error) {
+// There is a premise here, that is, all mutation requests of a database are
+// single-threaded
+func (d *DB) CreateSnapshot(dbName string, path string, forcesync bool) (uint64, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
@@ -434,16 +424,17 @@ func (d *DB) CreateSnapshot(dbName string, path string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	writer := NewDBSSWriter(database, path, d.Store.DataTables)
-	if err = writer.PrepareWrite(); err != nil {
-		return 0, err
+	var index uint64
+	now := time.Now()
+	maxTillTime := now.Add(time.Duration(1) * time.Second)
+	for time.Now().Before(maxTillTime) {
+		index, err = d.doCreateSnapshot(database, path, forcesync)
+		if err != ErrStaleErr && err != ErrTimeout {
+			break
+		}
 	}
-	defer writer.Close()
-	if err = writer.CommitWrite(); err != nil {
-		return 0, err
-	}
-
-	return writer.GetIndex(), nil
+	logutil.Infof("CreateSnapshot %s takes %s", database.Repr(), time.Since(now))
+	return index, err
 }
 
 // ApplySnapshot applies a snapshot of the shard stored in `path` to engine atomically.

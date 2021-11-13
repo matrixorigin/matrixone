@@ -47,6 +47,7 @@ func (e *createTableEvent) Execute() error {
 	}
 	meta := e.Ctx.TableMeta
 
+	// FIXME: table is dropped by another thread
 	tableData, err := e.Ctx.Tables.StrongRefTable(meta.Id)
 	if err != nil {
 		tableData, err = e.Ctx.Tables.RegisterTable(meta)
