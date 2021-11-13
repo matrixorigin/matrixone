@@ -569,3 +569,24 @@ func TestSnapshot6(t *testing.T) {
 
 	// t.Log(aoedb2.Store.Catalog.PString(metadata.PPL0, 0))
 }
+
+// -------- Test Description ---------------------------- [LogIndex,Checkpoint]
+// 1.  Create db isntance and create a database           [   0,        ?     ]
+// 2.  Create 3 tables: 1-1 [1,?], 1-2 [2,?], 1-3 [3,?]   [   3,        ?     ]
+// 3.  Wait and assert checkpoint                         [   -,        3     ]
+// 4.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   4,        3     ]
+// 5.  Append 1/10 (MaxBlockRows) rows into (1-2)         [   5,        3     ]
+// 6.  Flush (1-1) (1-2)                                  [   -,        ?     ]
+// 7.  Wait and assert checkpoint                         [   -,        5     ]
+// 8.  Append 1/10 (MaxBlockRows) rows into (1-1)         [   6,        5     ]
+// 9.  Drop (1-2)                                         [   7,        5     ]
+// 10. Wait [7] committed                                 [   -,        5     ]
+// 11. Create snapshot, the snapshot index should be [5]  [   -,        5     ]
+// 12. Create another db instance
+// 13. Apply previous created snapshot
+// 14. Check:
+//     1) database exists 2) database checkpoint id is [5]
+//     3) total 3 tables with 2 table of one segment and one block
+//     4) replay [6] and [7] operation
+//     5) check new applied database is same as origin database
+// 15. Restart new db instance and check again
