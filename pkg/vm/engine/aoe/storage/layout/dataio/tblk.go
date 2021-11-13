@@ -302,7 +302,7 @@ func (f *TransientBlockFile) Close() error {
 	return nil
 }
 
-func (f *TransientBlockFile) GetIndicesMeta() *base.IndexMeta {
+func (f *TransientBlockFile) GetIndicesMeta() *base.IndicesMeta {
 	return nil
 }
 
@@ -368,25 +368,28 @@ func (f *TransientBlockFile) refLatestFile() *versionBlockFile {
 	return file
 }
 
-func (f *TransientBlockFile) CopyTo(name string) (err error) {
+func (f *TransientBlockFile) CopyTo(path string) (err error) {
 	file := f.refLatestFile()
 	if file == nil {
 		err = FileNotExistErr
 		return
 	}
 	defer file.Unref()
-	err = file.CopyTo(name)
+	err = file.CopyTo(path)
 	return
 }
 
-func (f *TransientBlockFile) Copy(dir string, id common.ID) (err error) {
+func (f *TransientBlockFile) LinkTo(path string) (err error) {
 	file := f.refLatestFile()
 	if file == nil {
 		err = FileNotExistErr
 		return
 	}
 	defer file.Unref()
-	name := MakeTblockFileName(dir, file.tag, file.count, id, false)
-	err = file.CopyTo(name)
+	err = file.LinkTo(path)
 	return
+}
+
+func (f *TransientBlockFile) PrefetchPart(colIdx uint64, id common.ID) error {
+	return nil
 }

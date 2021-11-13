@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/logstore"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/wal/shard"
 )
 
 type coarseStats struct {
@@ -64,11 +65,18 @@ type Database struct {
 }
 
 func NewDatabase(catalog *Catalog, name string, tranId uint64, exIndex *LogIndex) *Database {
+	id := catalog.NextDatabaseId()
+	if exIndex == nil {
+		exIndex = &LogIndex{
+			ShardId: id,
+			Id:      shard.SimpleIndexId(0),
+		}
+	}
 	db := &Database{
-		ShardWal:    wal.NewWalShard(exIndex.ShardId, catalog.IndexWal),
 		coarseStats: new(coarseStats),
+		ShardWal:    wal.NewWalShard(exIndex.ShardId, catalog.IndexWal),
 		BaseEntry: &BaseEntry{
-			Id: catalog.NextDatabaseId(),
+			Id: id,
 			CommitInfo: &CommitInfo{
 				TranId:   tranId,
 				CommitId: tranId,

@@ -147,9 +147,9 @@ func (cache *replayCache) applyReplayEntry(entry *replayEntry, catalog *Catalog,
 	case ETHardDeleteDatabase:
 		err = catalog.onReplayHardDeleteDatabase(entry.dbEntry)
 	case ETSplitDatabase:
-		err = catalog.onReplayReplaceDatabase(entry.replaceEntry)
+		err = catalog.onReplayReplaceDatabase(entry.replaceEntry, true)
 	case ETReplaceDatabase:
-		err = catalog.onReplayReplaceDatabase(entry.replaceEntry)
+		err = catalog.onReplayReplaceDatabase(entry.replaceEntry, false)
 	case ETCreateBlock:
 		catalog.Sequence.TryUpdateBlockId(entry.blkEntry.Id)
 		err = catalog.onReplayCreateBlock(entry.blkEntry)

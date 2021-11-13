@@ -150,7 +150,7 @@ func doCompareCatalog(t *testing.T, expected, actual *Catalog) {
 }
 
 func doCompare(t *testing.T, expected, actual *databaseLogEntry) {
-	assert.Equal(t, expected.LogRange, actual.LogRange)
+	assert.Equal(t, expected.LogRange.Range, actual.LogRange.Range)
 	assert.Equal(t, len(expected.Database.TableSet), len(actual.Database.TableSet))
 
 	for _, expectedTable := range expected.Database.TableSet {
@@ -965,7 +965,7 @@ func TestDatabase1(t *testing.T) {
 
 	now = time.Now()
 	var viewsMu sync.Mutex
-	views := make(map[uint64]*databaseLogEntry)
+	views := make(map[string]*databaseLogEntry)
 	for i := 0; i < mockShards; i++ {
 		wg.Add(1)
 		go func(shardId uint64) {
@@ -979,7 +979,7 @@ func TestDatabase1(t *testing.T) {
 			err = writer.CommitWrite()
 			assert.Nil(t, err)
 			viewsMu.Lock()
-			views[shardId] = writer.view
+			views[db.Name] = writer.view
 			viewsMu.Unlock()
 		}(uint64(i))
 	}
@@ -998,7 +998,7 @@ func TestDatabase1(t *testing.T) {
 		assert.Nil(t, err)
 		db, err := catalog.SimpleGetDatabaseByName(loader.view.Database.Name)
 		assert.Nil(t, err)
-		expected := db.View(gen.Get(db.GetShardId()))
+		expected := db.View(views[db.Name].LogRange.Range.Right)
 		doCompare(t, expected, loader.view)
 		// t.Logf("shardId-%d: %s", loader.View.LogRange.ShardId, loader.View.Catalog.PString(PPL0))
 	}
@@ -1014,7 +1014,7 @@ func TestDatabase1(t *testing.T) {
 		assert.Nil(t, err)
 		checker := func(info *CommitInfo) bool {
 			// logutil.Infof("shardId-%d, %s", shardId, info.PString(PPL0))
-			assert.Equal(t, shardId, info.GetShardId())
+			// assert.Equal(t, shardId, info.GetShardId())
 			return true
 		}
 		processor := new(LoopProcessor)
@@ -1148,7 +1148,7 @@ func TestDatabase2(t *testing.T) {
 	db1, err = catalog.SimpleGetDatabaseByName("db1")
 	assert.Nil(t, err)
 	view := db1.View(index1_0)
-	assert.Equal(t, view1.LogRange, view.LogRange)
+	assert.Equal(t, view1.LogRange.Range, view.LogRange.Range)
 	assert.Equal(t, len(view1.Database.TableSet), len(view.Database.TableSet))
 	db1, err = catalog.SimpleGetDatabaseByName("db1")
 	assert.Nil(t, err)

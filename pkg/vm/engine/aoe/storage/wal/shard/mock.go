@@ -59,6 +59,17 @@ func NewMockIndexAllocator() *MockIndexAllocator {
 	}
 }
 
+func (alloc *MockIndexAllocator) Reset(shardId, start uint64) {
+	alloc.Lock()
+	defer alloc.Unlock()
+	shardAlloc := alloc.Shards[shardId]
+	if shardAlloc == nil {
+		shardAlloc = new(common.IdAlloctor)
+		alloc.Shards[shardId] = shardAlloc
+	}
+	shardAlloc.SetStart(start)
+}
+
 func (alloc *MockIndexAllocator) Get(shardId uint64) uint64 {
 	alloc.RLock()
 	defer alloc.RUnlock()

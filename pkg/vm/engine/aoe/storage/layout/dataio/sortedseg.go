@@ -115,6 +115,14 @@ func (sf *SortedSegmentFile) UnrefBlock(id common.ID) {
 	sf.Unref()
 }
 
+func (msf *SortedSegmentFile) RefTBlock(id common.ID) base.IBlockFile {
+	panic("not supported")
+}
+
+func (msf *SortedSegmentFile) RegisterTBlock(id common.ID) (base.IBlockFile, error) {
+	panic("not supported")
+}
+
 func (sf *SortedSegmentFile) initPointers() {
 	// read metadata-1
 	sz := headerSize + reservedSize + algoSize + blkCntSize + colCntSize

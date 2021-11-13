@@ -39,7 +39,7 @@ import (
 
 func TestEngine(t *testing.T) {
 	initDBTest()
-	inst, gen, database := initDB2(wal.HolderRole, "db1", uint64(100))
+	inst, gen, database := initDB2(wal.HolderRole, "db1")
 	schema := metadata.MockSchema(2)
 	schema.Name = "mockcon"
 	shardId := database.GetShardId()
@@ -227,7 +227,7 @@ func TestEngine(t *testing.T) {
 
 func TestLogIndex(t *testing.T) {
 	initDBTest()
-	inst, gen, database := initDB2(wal.HolderRole, "db1", uint64(100))
+	inst, gen, database := initDB2(wal.HolderRole, "db1")
 	schema := metadata.MockSchema(2)
 	schema.Name = "t1"
 	shardId := database.GetShardId()

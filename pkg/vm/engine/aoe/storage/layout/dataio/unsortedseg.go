@@ -28,17 +28,19 @@ import (
 type UnsortedSegmentFile struct {
 	sync.RWMutex
 	common.RefHelper
-	ID     common.ID
-	Blocks map[common.ID]base.IBlockFile
-	Dir    string
-	Info   *fileStat
+	ID      common.ID
+	Blocks  map[common.ID]base.IBlockFile
+	TBlocks map[common.ID]base.IBaseFile
+	Dir     string
+	Info    *fileStat
 }
 
 func NewUnsortedSegmentFile(dirname string, id common.ID) base.ISegmentFile {
 	usf := &UnsortedSegmentFile{
-		ID:     id,
-		Dir:    dirname,
-		Blocks: make(map[common.ID]base.IBlockFile),
+		ID:      id,
+		Dir:     dirname,
+		Blocks:  make(map[common.ID]base.IBlockFile),
+		TBlocks: make(map[common.ID]base.IBaseFile),
 		Info: &fileStat{
 			name: id.ToSegmentFilePath(),
 		},
@@ -59,10 +61,28 @@ func (sf *UnsortedSegmentFile) GetDir() string {
 	return sf.Dir
 }
 
+func (sf *UnsortedSegmentFile) RegisterTBlock(id common.ID) (base.IBlockFile, error) {
+	sf.Lock()
+	defer sf.Unlock()
+	_, ok := sf.TBlocks[id]
+	if ok {
+		return nil, DupBlkError
+	}
+	bf := NewTBlockFile(sf, id)
+	sf.TBlocks[id] = bf
+	bf.Ref()
+	return bf, nil
+}
+
 func (sf *UnsortedSegmentFile) RefBlock(id common.ID) {
 	sf.Lock()
 	defer sf.Unlock()
-	_, ok := sf.Blocks[id]
+	bf, ok := sf.TBlocks[id]
+	if ok {
+		delete(sf.TBlocks, id)
+		bf.Unref()
+	}
+	_, ok = sf.Blocks[id]
 	if !ok {
 		bf := NewBlockFile(sf, id, nil)
 		sf.AddBlock(id, bf)
@@ -111,10 +131,24 @@ func (sf *UnsortedSegmentFile) Close() error {
 }
 
 func (sf *UnsortedSegmentFile) Destory() {
-	for _, blkFile := range sf.Blocks {
-		blkFile.Unref()
+	for _, blk := range sf.Blocks {
+		blk.Unref()
+	}
+	for _, blk := range sf.TBlocks {
+		blk.Unref()
 	}
 	sf.Blocks = nil
+	sf.TBlocks = nil
+}
+
+func (sf *UnsortedSegmentFile) RefTBlock(id common.ID) base.IBlockFile {
+	sf.RLock()
+	defer sf.RUnlock()
+	blk := sf.TBlocks[id]
+	if blk != nil {
+		blk.Ref()
+	}
+	return blk
 }
 
 func (sf *UnsortedSegmentFile) GetBlock(id common.ID) base.IBlockFile {
@@ -197,19 +231,29 @@ func (sf *UnsortedSegmentFile) PrefetchPart(colIdx uint64, id common.ID) error {
 	return blk.PrefetchPart(colIdx, id)
 }
 
-func (sf *UnsortedSegmentFile) snapBlocks() []base.IBaseFile {
+func (sf *UnsortedSegmentFile) snapBlocks() ([]base.IBaseFile, []base.IBaseFile) {
 	blks := make([]base.IBaseFile, 0, 4)
+	tblks := make([]base.IBaseFile, 0, 2)
 	sf.RLock()
 	for _, blk := range sf.Blocks {
 		blks = append(blks, blk)
 	}
+	for _, tblk := range sf.TBlocks {
+		tblk.Ref()
+		tblks = append(tblks, tblk)
+	}
 	sf.RUnlock()
-	return blks
+	return blks, tblks
 }
 
 func (sf *UnsortedSegmentFile) CopyTo(dir string) error {
-	blks := sf.snapBlocks()
-	if len(blks) == 0 {
+	blks, tblks := sf.snapBlocks()
+	defer func() {
+		for _, tblk := range tblks {
+			tblk.Unref()
+		}
+	}()
+	if len(blks)+len(tblks) == 0 {
 		return FileNotExistErr
 	}
 	var err error
@@ -218,7 +262,16 @@ func (sf *UnsortedSegmentFile) CopyTo(dir string) error {
 			if err == FileNotExistErr {
 				err = nil
 			} else {
-				break
+				return err
+			}
+		}
+	}
+	for _, tblk := range tblks {
+		if err = tblk.CopyTo(dir); err != nil {
+			if err == FileNotExistErr {
+				err = nil
+			} else {
+				return err
 			}
 		}
 	}
@@ -226,8 +279,13 @@ func (sf *UnsortedSegmentFile) CopyTo(dir string) error {
 }
 
 func (sf *UnsortedSegmentFile) LinkTo(dir string) error {
-	blks := sf.snapBlocks()
-	if len(blks) == 0 {
+	blks, tblks := sf.snapBlocks()
+	defer func() {
+		for _, tblk := range tblks {
+			tblk.Unref()
+		}
+	}()
+	if len(blks)+len(tblks) == 0 {
 		return FileNotExistErr
 	}
 	var err error
@@ -236,7 +294,16 @@ func (sf *UnsortedSegmentFile) LinkTo(dir string) error {
 			if err == FileNotExistErr {
 				err = nil
 			} else {
-				break
+				return err
+			}
+		}
+	}
+	for _, tblk := range tblks {
+		if err = tblk.LinkTo(dir); err != nil {
+			if err == FileNotExistErr {
+				err = nil
+			} else {
+				return err
 			}
 		}
 	}

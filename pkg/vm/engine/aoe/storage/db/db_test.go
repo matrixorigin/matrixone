@@ -49,7 +49,10 @@ import (
 )
 
 var (
-	TEST_DB_DIR = "/tmp/db_test"
+	TEST_DB_DIR   = "/tmp/db_test"
+	defaultDBPath = "aoedb"
+	defaultDBName = "default"
+	emptyDBName   = ""
 )
 
 func initDBTest() {
@@ -66,15 +69,50 @@ func initDB(walRole wal.Role) (*DB, *shard.MockIndexAllocator) {
 	return inst, gen
 }
 
-func initDB2(walRole wal.Role, dbName string, shardId uint64) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
+func initDB2(walRole wal.Role, dbName string) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
 	inst, gen := initDB(walRole)
-	database, _ := inst.CreateDatabase(dbName, shardId)
+	database, _ := inst.CreateDatabase(dbName)
+	return inst, gen, database
+}
+
+func initTestDB1(t *testing.T) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
+	return initTestBrokerDB(t, defaultDBPath, defaultDBName, nil)
+}
+
+func initTestDB2(t *testing.T) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
+	return initTestHolderDB(t, defaultDBPath, defaultDBName, nil)
+}
+
+func initTestDB3(t *testing.T) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
+	return initTestBrokerDB(t, defaultDBPath, emptyDBName, nil)
+}
+
+func initTestBrokerDB(t *testing.T, dir, dbName string, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
+	return initTestDBWithOptions(t, wal.BrokerRole, dir, dbName, cleanCfg)
+}
+
+func initTestHolderDB(t *testing.T, dir, dbName string, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
+	return initTestDBWithOptions(t, wal.HolderRole, dir, dbName, cleanCfg)
+}
+
+func initTestDBWithOptions(t *testing.T, walRole wal.Role, dir, dbName string, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
+	opts := new(storage.Options)
+	opts.WalRole = walRole
+	opts.MetaCleanerCfg = cleanCfg
+	path := filepath.Join(getTestPath(t), dir)
+	config.NewCustomizedMetaOptions(path, config.CST_Customize, uint64(2000), uint64(2), opts)
+	inst, _ := Open(path, opts)
+	gen := shard.NewMockIndexAllocator()
+	var database *metadata.Database
+	if dbName != "" {
+		database, _ = inst.CreateDatabase(dbName)
+	}
 	return inst, gen, database
 }
 
 func TestCreateTable(t *testing.T) {
-	initDBTest()
-	inst, gen := initDB(wal.HolderRole)
+	initTestEnv(t)
+	inst, gen, _ := initTestHolderDB(t, defaultDBPath, emptyDBName, nil)
 	assert.NotNil(t, inst)
 	defer inst.Close()
 	tblCnt := rand.Intn(5) + 3
@@ -88,12 +126,12 @@ func TestCreateTable(t *testing.T) {
 		schema.Name = name
 		names = append(names, name)
 		wg.Add(1)
-		go func(w *sync.WaitGroup, shardId uint64) {
-			dbName := strconv.FormatUint(shardId, 10)
-			_, err := inst.CreateDatabase(dbName, shardId)
+		go func(w *sync.WaitGroup, id uint64) {
+			dbName := strconv.FormatUint(id, 10)
+			database, err := inst.CreateDatabase(dbName)
 			assert.Nil(t, err)
 
-			_, err = inst.CreateTable(dbName, schema, gen.Next(shardId))
+			_, err = inst.CreateTable(dbName, schema, gen.Next(database.GetShardId()))
 			assert.Nil(t, err)
 			w.Done()
 		}(&wg, uint64(i)+1)
@@ -105,8 +143,8 @@ func TestCreateTable(t *testing.T) {
 }
 
 func TestCreateDuplicateTable(t *testing.T) {
-	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	initTestEnv(t)
+	inst, gen, database := initTestDB1(t)
 	defer inst.Close()
 
 	schema := metadata.MockSchema(2)
@@ -117,8 +155,8 @@ func TestCreateDuplicateTable(t *testing.T) {
 }
 
 func TestDropEmptyTable(t *testing.T) {
-	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	initTestEnv(t)
+	inst, gen, database := initTestDB1(t)
 	defer inst.Close()
 
 	schema := metadata.MockSchema(2)
@@ -132,8 +170,8 @@ func TestDropEmptyTable(t *testing.T) {
 }
 
 func TestDropTable(t *testing.T) {
-	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	initTestEnv(t)
+	inst, gen, database := initTestDB1(t)
 	defer inst.Close()
 
 	name := "t1"
@@ -178,8 +216,8 @@ func TestDropTable(t *testing.T) {
 }
 
 func TestSSOnMutation(t *testing.T) {
-	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	initTestEnv(t)
+	inst, gen, database := initTestDB1(t)
 	defer inst.Close()
 	schema := metadata.MockSchema(2)
 	_, err := inst.CreateTable(database.Name, schema, gen.Next(database.GetShardId()))
@@ -212,8 +250,8 @@ func TestSSOnMutation(t *testing.T) {
 }
 
 func TestAppend(t *testing.T) {
-	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	initTestEnv(t)
+	inst, gen, database := initTestDB1(t)
 
 	schema := metadata.MockSchema(2)
 	schema.Name = "mocktbl"
@@ -281,16 +319,14 @@ func TestAppend(t *testing.T) {
 	assert.Equal(t, blkCnt*insertCnt, blkCount)
 	ss.Close()
 
-	copied := filepath.Join(TEST_DB_DIR, "copied")
-	err = os.MkdirAll(copied, os.FileMode(0755))
-	assert.Nil(t, err)
+	ssPath := prepareSnapshotPath(defaultSnapshotPath, t)
 
-	idx, err := inst.CreateSnapshot(database.Name, copied)
+	idx, err := inst.CreateSnapshot(database.Name, ssPath)
 	assert.Nil(t, err)
 	assert.Equal(t, database.GetCheckpointId(), idx)
-	t.Log(inst.Wal.String())
 
-	err = inst.ApplySnapshot(database.Name, copied)
+	err = inst.ApplySnapshot(database.Name, ssPath)
+	assert.Nil(t, err)
 	assert.True(t, database.IsDeleted())
 
 	database2, err := database.Catalog.SimpleGetDatabaseByName(database.Name)
@@ -301,7 +337,10 @@ func TestAppend(t *testing.T) {
 	t.Log(tMeta.PString(metadata.PPL0, 0))
 
 	err = inst.Append(appendCtx)
+	assert.Nil(t, err)
 	err = inst.Flush(database2.Name, schema.Name)
+	t.Log(inst.Wal.String())
+	gen.Reset(database2.GetShardId(), appendCtx.OpIndex)
 
 	schema2 := metadata.MockSchema(3)
 	_, err = inst.CreateTable(database2.Name, schema2, gen.Next(database2.GetShardId()))
@@ -322,8 +361,8 @@ func TestAppend(t *testing.T) {
 }
 
 func TestConcurrency(t *testing.T) {
-	initDBTest()
-	inst, gen, database := initDB2(wal.HolderRole, "db1", uint64(100))
+	initTestEnv(t)
+	inst, gen, database := initTestDB2(t)
 	schema := metadata.MockSchema(2)
 	schema.Name = "mockcon"
 
@@ -525,7 +564,7 @@ func TestConcurrency(t *testing.T) {
 
 func TestMultiTables(t *testing.T) {
 	initDBTest()
-	inst, gen, database := initDB2(wal.HolderRole, "db1", uint64(100))
+	inst, gen, database := initDB2(wal.HolderRole, "db1")
 	prefix := "mtable"
 	tblCnt := 8
 	var names []string
@@ -673,8 +712,8 @@ func TestMultiTables(t *testing.T) {
 }
 
 func TestDropTable2(t *testing.T) {
-	initDBTest()
-	inst, gen, database := initDB2(wal.HolderRole, "db1", uint64(100))
+	initTestEnv(t)
+	inst, gen, database := initTestDB2(t)
 	schema := metadata.MockSchema(2)
 	schema.Name = "mockt"
 	tid, err := inst.CreateTable(database.Name, schema, gen.Next(database.GetShardId()))
@@ -773,8 +812,8 @@ func TestE2E(t *testing.T) {
 	if invariants.RaceEnabled {
 		waitTime *= 2
 	}
-	initDBTest()
-	inst, gen, database := initDB2(wal.HolderRole, "db1", uint64(100))
+	initTestEnv(t)
+	inst, gen, database := initTestDB2(t)
 	schema := metadata.MockSchema(2)
 	schema.Name = "mockcon"
 	tid, err := inst.CreateTable(database.Name, schema, gen.Next(database.GetShardId()))
@@ -850,14 +889,13 @@ func TestCreateSnapshot(t *testing.T) {
 	return
 	initDBTest()
 	inst, gen := initDB(wal.BrokerRole)
-	//inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(0))
 	schema1 := metadata.MockSchema(20)
 	schema1.Name = "t1"
 	schema2 := metadata.MockSchema(10)
 	schema2.Name = "t2"
-	db1, err := inst.CreateDatabase("0", uint64(0))
+	db1, err := inst.CreateDatabase("0")
 	assert.Nil(t, err)
-	db2, err := inst.CreateDatabase("1", uint64(1))
+	db2, err := inst.CreateDatabase("1")
 	assert.Nil(t, err)
 	tid1, err := inst.CreateTable(db1.Name, schema1, gen.Next(db1.GetShardId()))
 	assert.Nil(t, err)
@@ -997,7 +1035,7 @@ func TestCreateSnapshot(t *testing.T) {
 func TestCreateSnapshotCase1(t *testing.T) {
 	return
 	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "0", uint64(0))
+	inst, gen, database := initDB2(wal.BrokerRole, "0")
 	schema1 := metadata.MockSchema(20)
 	schema1.Name = "tbl_1"
 	shardId := database.GetShardId()
@@ -1043,7 +1081,7 @@ func TestCreateSnapshotCase1(t *testing.T) {
 	inst, _ = initDB(wal.BrokerRole)
 
 	// TODO: now onCreateTable is not implemented yet, remove later
-	inst.CreateDatabase("0", uint64(0))
+	inst.CreateDatabase("0")
 
 	assert.Nil(t, inst.ApplySnapshot(database.Name, "/tmp/test_ss/case_1/ss-1"))
 
@@ -1083,7 +1121,7 @@ func TestCreateSnapshotCase2(t *testing.T) {
 	return
 	sched.DisableFlushSegment = true
 	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "0", uint64(0))
+	inst, gen, database := initDB2(wal.BrokerRole, "0")
 	//inst.Opts.Meta.Conf.BlockMaxRows = 1
 	//inst.Opts.Meta.Conf.SegmentMaxBlocks = 1
 	schema1 := metadata.MockSchema(20)
@@ -1134,7 +1172,7 @@ func TestCreateSnapshotCase2(t *testing.T) {
 	sched.DisableFlushSegment = false
 
 	// TODO: now onCreateTable is not implemented yet, remove later
-	inst.CreateDatabase("0", uint64(0))
+	inst.CreateDatabase("0")
 
 	assert.Nil(t, inst.ApplySnapshot(database.Name, "/tmp/test_ss/case_2/ss-1"))
 

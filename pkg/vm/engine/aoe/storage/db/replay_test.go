@@ -35,7 +35,7 @@ import (
 
 func TestReplay1(t *testing.T) {
 	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	inst, gen, database := initDB2(wal.BrokerRole, "db1")
 	schema := metadata.MockSchema(2)
 	schema.Name = "mockcon"
 	shardId := database.GetShardId()
@@ -881,7 +881,7 @@ func TestReplay11(t *testing.T) {
 
 func TestReplay12(t *testing.T) {
 	initDBTest()
-	inst, gen, database := initDB2(wal.BrokerRole, "db1", uint64(100))
+	inst, gen, database := initDB2(wal.BrokerRole, "db1")
 	schema := metadata.MockSchema(2)
 	schema.Name = "mockcon"
 	shardId := database.GetShardId()

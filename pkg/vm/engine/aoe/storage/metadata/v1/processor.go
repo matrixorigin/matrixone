@@ -87,6 +87,9 @@ func (p *reallocIdProcessor) onDatabase(db *Database) error {
 
 	db.CommitInfo.CommitId = p.tranId
 	db.CommitInfo.TranId = p.tranId
+	if db.CommitInfo.LogIndex != nil {
+		db.CommitInfo.LogIndex.ShardId = db.Id
+	}
 	return nil
 }
 
@@ -96,6 +99,9 @@ func (p *reallocIdProcessor) onTable(table *Table) error {
 	p.trace.Table[old] = table.Id
 	table.CommitInfo.CommitId = p.tranId
 	table.CommitInfo.TranId = p.tranId
+	if table.CommitInfo.LogIndex != nil {
+		table.CommitInfo.LogIndex.ShardId = table.Id
+	}
 	return nil
 }
 
@@ -105,6 +111,9 @@ func (p *reallocIdProcessor) onSegment(segment *Segment) error {
 	p.trace.Segment[old] = segment.Id
 	segment.CommitInfo.CommitId = p.tranId
 	segment.CommitInfo.TranId = p.tranId
+	if segment.CommitInfo.LogIndex != nil {
+		segment.CommitInfo.LogIndex.ShardId = segment.Id
+	}
 	return nil
 }
 
@@ -114,6 +123,9 @@ func (p *reallocIdProcessor) onBlock(block *Block) error {
 	p.trace.Block[old] = block.Id
 	block.CommitInfo.CommitId = p.tranId
 	block.CommitInfo.TranId = p.tranId
+	if block.CommitInfo.LogIndex != nil {
+		block.CommitInfo.LogIndex.ShardId = block.Id
+	}
 	return nil
 }
 

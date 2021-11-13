@@ -41,7 +41,11 @@ func (f *mutNodeFactory) GetManager() bb.INodeManager {
 }
 
 func (f *mutNodeFactory) CreateNode(segfile base.ISegmentFile, meta *metadata.Block, mockSize *mb.MockSize) bb.INode {
-	blkfile := dataio.NewTBlockFile(segfile, *meta.AsCommonID())
+	bf, err := segfile.RegisterTBlock(*meta.AsCommonID())
+	if err != nil {
+		panic(err)
+	}
+	blkfile := bf.(*dataio.TransientBlockFile)
 	nodeSize := uint64(0)
 	if mockSize != nil {
 		nodeSize = mockSize.Size()

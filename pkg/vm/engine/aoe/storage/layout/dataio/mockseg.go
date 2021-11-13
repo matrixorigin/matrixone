@@ -120,6 +120,14 @@ func (msf *MockSegmentFile) Unref() {
 	msf.RefHelper.Unref()
 }
 
+func (msf *MockSegmentFile) RefTBlock(id common.ID) base.IBlockFile {
+	return nil
+}
+
+func (msf *MockSegmentFile) RegisterTBlock(id common.ID) (base.IBlockFile, error) {
+	return nil, nil
+}
+
 func (msf *MockSegmentFile) RefBlock(id common.ID) {
 	if !id.IsSameSegment(msf.ID) {
 		panic("logic error")

@@ -61,17 +61,17 @@ func (ctx *requestCtx) setDone(err error, result interface{}) {
 	ctx.Done()
 }
 
-func newMockShard(inst *DB, gen *shard.MockShardIndexGenerator) *mockShard {
+func newMockShard(inst *DB, gen *shard.MockIndexAllocator) *mockShard {
 	s := &mockShard{
 		inst: inst,
-		gen:  gen,
 	}
 	var err error
-	dbName := strconv.FormatUint(s.gen.ShardId, 10)
-	s.database, err = inst.CreateDatabase(dbName, s.gen.ShardId)
+	dbName := strconv.FormatUint(uint64(time.Now().UnixNano()), 10)
+	s.database, err = inst.CreateDatabase(dbName)
 	if err != nil {
 		panic(err)
 	}
+	s.gen = gen.Shard(s.database.GetShardId())
 	wg := new(sync.WaitGroup)
 	s.queue = sm.NewWaitableQueue(1000, 1, s, wg, nil, nil, s.onItems)
 	s.queue.Start()
@@ -210,8 +210,7 @@ func TestShard1(t *testing.T) {
 	shardCnt := 8
 	shards := make([]*mockShard, shardCnt)
 	for i := 0; i < shardCnt; i++ {
-		idxGen := gen.Shard(uint64(i + 1))
-		shards[i] = newMockShard(inst, idxGen)
+		shards[i] = newMockShard(inst, gen)
 	}
 
 	var wg sync.WaitGroup
@@ -263,7 +262,7 @@ func TestShard2(t *testing.T) {
 	shardCnt := 4
 	shards := make([]*mockShard, shardCnt)
 	for i := 0; i < shardCnt; i++ {
-		shards[i] = newMockShard(inst, gen.Shard(uint64(i)+1))
+		shards[i] = newMockShard(inst, gen)
 	}
 
 	batches := make([]*batch.Batch, 10)

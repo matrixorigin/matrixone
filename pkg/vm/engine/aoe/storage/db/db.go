@@ -170,10 +170,9 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 	if err != nil {
 		return err
 	}
-	if ctx.ShardId != tbl.Database.GetShardId() {
-		err = metadata.InconsistentShardIdErr
-		return
-	}
+	// if ctx.ShardId != tbl.Database.GetShardId() {
+	// 	logutil.Warnf(metadata.InconsistentShardIdErr.Error())
+	// }
 
 	collection := d.MemTableMgr.StrongRefCollection(tbl.Id)
 	if collection == nil {
@@ -197,7 +196,7 @@ func (d *DB) Append(ctx dbi.AppendCtx) (err error) {
 		}
 		collection = e.Collection
 	}
-
+	ctx.ShardId = tbl.Database.GetShardId()
 	index := adaptor.GetLogIndexFromAppendCtx(&ctx)
 	defer collection.Unref()
 	if err = d.Wal.SyncLog(index); err != nil {
@@ -260,12 +259,13 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	if err != nil {
 		return
 	}
-	if table.Database.GetShardId() != ctx.ShardId {
-		err = metadata.InconsistentShardIdErr
-		return
-	}
+	// if table.Database.GetShardId() != ctx.ShardId {
+	// 	err = metadata.InconsistentShardIdErr
+	// 	return
+	// }
 	id = table.Id
 
+	ctx.ShardId = table.Database.GetShardId()
 	index := adaptor.GetLogIndexFromDropTableCtx(&ctx)
 	if err = table.SimpleSoftDelete(index); err != nil {
 		return
@@ -282,14 +282,11 @@ func (d *DB) DropTable(ctx dbi.DropTableCtx) (id uint64, err error) {
 	return
 }
 
-func (d *DB) CreateDatabase(name string, shardId uint64) (*metadata.Database, error) {
+func (d *DB) CreateDatabase(name string) (*metadata.Database, error) {
 	if err := d.Closed.Load(); err != nil {
 		panic(err)
 	}
-	return d.Store.Catalog.SimpleCreateDatabase(name, &metadata.LogIndex{
-		ShardId: shardId,
-		Id:      shard.SimpleIndexId(0),
-	})
+	return d.Store.Catalog.SimpleCreateDatabase(name, nil)
 }
 
 func (d *DB) DropDatabase(name string, index uint64) (err error) {
@@ -416,6 +413,14 @@ func (d *DB) TableNames(dbName string) (names []string) {
 
 func (d *DB) GetShardCheckpointId(shardId uint64) uint64 {
 	return d.Wal.GetShardCheckpointId(shardId)
+}
+
+func (d *DB) GetDBCheckpointId(dbName string) uint64 {
+	database, err := d.Store.Catalog.GetDatabaseByName(dbName)
+	if err != nil {
+		return 0
+	}
+	return database.GetCheckpointId()
 }
 
 // CreateSnapshot creates a snapshot of the specified shard and stores it to `path`.
