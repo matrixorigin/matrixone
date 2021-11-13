@@ -189,12 +189,12 @@ func TestSnapshot3(t *testing.T) {
 
 	err = inst.Flush(database.Name, schemas[1].Name)
 	assert.Nil(t, err)
-	stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
-	t.Log(stats[0].Count)
 	testutils.WaitExpect(200, func() bool {
-		return stats[0].Count == 2
+		stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
+		return stats[0].Count == 1
 	})
-	assert.Equal(t, 2, stats[0].Count)
+	stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
+	assert.Equal(t, 1, stats[0].Count)
 
 	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
 	assert.Nil(t, err)
@@ -263,12 +263,12 @@ func TestSnapshot4(t *testing.T) {
 
 	err = inst.Flush(database.Name, schemas[1].Name)
 	assert.Nil(t, err)
-	stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
-	t.Log(stats[0].Count)
 	testutils.WaitExpect(200, func() bool {
-		return stats[0].Count == 2
+		stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
+		return stats[0].Count == 1
 	})
-	assert.Equal(t, 2, stats[0].Count)
+	stats := inst.Store.Catalog.IndexWal.GetAllPendingEntries()
+	assert.Equal(t, 1, stats[0].Count)
 
 	idx, err := inst.CreateSnapshot(database.Name, getSnapshotPath(defaultSnapshotPath, t))
 	assert.Nil(t, err)

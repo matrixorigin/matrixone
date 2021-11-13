@@ -17,13 +17,15 @@ package dataio
 import (
 	"errors"
 	"fmt"
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/aoe/storage/layout/base"
-	"sync"
 )
 
 var (
+	DupBlkError = errors.New("duplicate blk")
 	DupSegError = errors.New("duplicate seg")
 )
 

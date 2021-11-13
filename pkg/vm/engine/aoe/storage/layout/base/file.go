@@ -143,6 +143,9 @@ type ISegmentFile interface {
 	// UnrefBlock releases the reference to the underlying block
 	UnrefBlock(blkId common.ID)
 
+	RegisterTBlock(blkId common.ID) (IBlockFile, error)
+	RefTBlock(blkId common.ID) IBlockFile
+
 	GetBlockSize(blkId common.ID) int64
 
 	// ReadBlockPoint reads a Pointer data to buf,
