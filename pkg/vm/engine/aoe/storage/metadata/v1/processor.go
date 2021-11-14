@@ -77,6 +77,7 @@ func newReAllocIdProcessor(allocator *Sequence, tranId uint64) *reallocIdProcess
 	p.trace.Table = make(map[uint64]uint64)
 	p.trace.Segment = make(map[uint64]uint64)
 	p.trace.Block = make(map[uint64]uint64)
+	p.trace.ShardId = make(map[uint64]uint64)
 	return p
 }
 
@@ -88,6 +89,7 @@ func (p *reallocIdProcessor) onDatabase(db *Database) error {
 	db.CommitInfo.CommitId = p.tranId
 	db.CommitInfo.TranId = p.tranId
 	if db.CommitInfo.LogIndex != nil {
+		p.trace.ShardId[db.CommitInfo.LogIndex.ShardId] = db.Id
 		db.CommitInfo.LogIndex.ShardId = db.Id
 	}
 	return nil
@@ -100,7 +102,7 @@ func (p *reallocIdProcessor) onTable(table *Table) error {
 	table.CommitInfo.CommitId = p.tranId
 	table.CommitInfo.TranId = p.tranId
 	if table.CommitInfo.LogIndex != nil {
-		table.CommitInfo.LogIndex.ShardId = table.Id
+		table.CommitInfo.LogIndex.ShardId = p.trace.ShardId[table.CommitInfo.LogIndex.ShardId]
 	}
 	return nil
 }
@@ -112,7 +114,7 @@ func (p *reallocIdProcessor) onSegment(segment *Segment) error {
 	segment.CommitInfo.CommitId = p.tranId
 	segment.CommitInfo.TranId = p.tranId
 	if segment.CommitInfo.LogIndex != nil {
-		segment.CommitInfo.LogIndex.ShardId = segment.Id
+		segment.CommitInfo.LogIndex.ShardId = p.trace.ShardId[segment.CommitInfo.LogIndex.ShardId]
 	}
 	return nil
 }
@@ -124,7 +126,7 @@ func (p *reallocIdProcessor) onBlock(block *Block) error {
 	block.CommitInfo.CommitId = p.tranId
 	block.CommitInfo.TranId = p.tranId
 	if block.CommitInfo.LogIndex != nil {
-		block.CommitInfo.LogIndex.ShardId = block.Id
+		block.CommitInfo.LogIndex.ShardId = p.trace.ShardId[block.CommitInfo.LogIndex.ShardId]
 	}
 	return nil
 }

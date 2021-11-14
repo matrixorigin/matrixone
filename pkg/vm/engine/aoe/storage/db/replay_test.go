@@ -1129,6 +1129,7 @@ func TestReplay14(t *testing.T) {
 		DBName:    database.Name,
 		TableName: schema1.Name,
 	})
+	lastIdx := gen.Get(database.GetShardId())
 
 	testutils.WaitExpect(200, func() bool {
 		return database.UncheckpointedCnt() == 1 && t1.IsHardDeleted()
@@ -1153,4 +1154,6 @@ func TestReplay14(t *testing.T) {
 	assert.Equal(t, ckId, db2.GetCheckpointId())
 	t2Replayed := db2.GetTable(t1.Id)
 	assert.True(t, t2Replayed.IsHardDeleted())
+	t.Log(db2.GetIdempotentIndex().String())
+	assert.Equal(t, lastIdx, db2.GetIdempotentIndex().Id.Id)
 }

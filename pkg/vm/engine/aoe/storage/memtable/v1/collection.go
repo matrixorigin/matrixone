@@ -163,23 +163,23 @@ func (c *collection) Append(bat *batch.Batch, index *metadata.LogIndex) (err err
 	}
 
 	offset := uint64(0)
-	replayIndex := c.data.GetReplayIndex()
-	if replayIndex != nil {
-		logutil.Infof("Table %d ReplayIndex %s", c.data.GetID(), replayIndex.String())
+	idempotentIdx := c.data.GetIdempotentIndex()
+	if idempotentIdx != nil {
+		logutil.Infof("Table %d ReplayIndex %s", c.data.GetID(), idempotentIdx.String())
 		logutil.Infof("Incoming Index %s", index.String())
-		if !replayIndex.IsApplied() {
-			if (replayIndex.Id.Id != index.Id.Id) ||
-				(replayIndex.Id.Offset < index.Id.Offset) {
-				panic(fmt.Sprintf("should replayIndex: %d, but %d received", replayIndex.Id, index.Id))
+		if !idempotentIdx.IsApplied() {
+			if (idempotentIdx.Id.Id != index.Id.Id) ||
+				(idempotentIdx.Id.Offset < index.Id.Offset) {
+				panic(fmt.Sprintf("should idempotentIdx: %d, but %d received", idempotentIdx.Id, index.Id))
 			}
-			if replayIndex.Id.Offset > index.Id.Offset {
+			if idempotentIdx.Id.Offset > index.Id.Offset {
 				logutil.Infof("Index %s has been applied", index.String())
 				return nil
 			}
-			offset = replayIndex.Count + replayIndex.Start
+			offset = idempotentIdx.Count + idempotentIdx.Start
 			index.Start = offset
 		}
-		c.data.ResetReplayIndex()
+		c.data.ResetIdempotentIndex()
 	}
 	blkHandle := c.mutBlk.MakeHandle()
 	for {

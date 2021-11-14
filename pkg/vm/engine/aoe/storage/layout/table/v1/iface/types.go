@@ -111,8 +111,8 @@ type ITableData interface {
 
 	// StrongRefLastBlock Ref to the last Block in TableData
 	StrongRefLastBlock() IBlock
-	GetReplayIndex() *metadata.LogIndex
-	ResetReplayIndex()
+	GetIdempotentIndex() *metadata.LogIndex
+	ResetIdempotentIndex()
 
 	CopyTo(dir string) error
 	LinkTo(dir string) error

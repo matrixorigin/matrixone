@@ -50,8 +50,9 @@ func (stats *coarseStats) GetSize() int64 {
 }
 
 type Database struct {
-	*ShardWal    `json:"-"`
-	*coarseStats `json:"-"`
+	IdempotentChecker `json:"-"`
+	*ShardWal         `json:"-"`
+	*coarseStats      `json:"-"`
 	*BaseEntry
 	nameNodes map[string]*nodeList `json:"-"`
 	Catalog   *Catalog             `json:"-"`
@@ -160,9 +161,16 @@ func (db *Database) DebugCheckReplayedState() {
 	if db.Catalog.TryUpdateDatabaseId(db.Id) {
 		panic("sequence error")
 	}
+	var maxDDLIndex *LogIndex
 	for _, table := range db.TableSet {
 		table.DebugCheckReplayedState()
+		if maxDDLIndex == nil {
+			maxDDLIndex = table.CommitInfo.LogIndex
+		} else if maxDDLIndex.Compare(table.CommitInfo.LogIndex) < 0 {
+			maxDDLIndex = table.CommitInfo.LogIndex
+		}
 	}
+	db.InitIdempotentIndex(maxDDLIndex)
 }
 
 func (db *Database) initListeners() {

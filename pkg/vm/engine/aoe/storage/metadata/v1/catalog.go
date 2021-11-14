@@ -43,6 +43,7 @@ var (
 	InconsistentShardIdErr = errors.New("aoe: InconsistentShardIdErr")
 	CannotHardDeleteErr    = errors.New("aoe: cannot hard delete now")
 	CommitStaleErr         = errors.New("aoe: commit stale info")
+	IdempotenceErr         = errors.New("aoe: idempotence error")
 )
 
 type CatalogCfg struct {
