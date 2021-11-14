@@ -61,7 +61,7 @@ func NewWalShard(shardId uint64, wal ShardAwareWal) *ShardWal {
 	}
 }
 
-func (wal *ShardWal) GetPendingCnt() int {
+func (wal *ShardWal) UncheckpointedCnt() int {
 	if wal.Wal == nil {
 		return 0
 	}

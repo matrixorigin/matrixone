@@ -82,7 +82,7 @@ func (d *DB) doCreateSnapshot(database *metadata.Database, path string, forcesyn
 		interval := time.Duration(1) * time.Millisecond
 		waitAllCheckpointed := func() bool {
 			for time.Now().Before(endTime) {
-				if database.GetPendingCnt() == 0 {
+				if database.UncheckpointedCnt() == 0 {
 					return true
 				}
 				time.Sleep(interval)
