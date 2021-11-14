@@ -426,7 +426,7 @@ func (d *DB) CreateSnapshot(dbName string, path string, forcesync bool) (uint64,
 	}
 	var index uint64
 	now := time.Now()
-	maxTillTime := now.Add(time.Duration(1) * time.Second)
+	maxTillTime := now.Add(time.Duration(4) * time.Second)
 	for time.Now().Before(maxTillTime) {
 		index, err = d.doCreateSnapshot(database, path, forcesync)
 		if err != ErrStaleErr && err != ErrTimeout {

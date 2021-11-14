@@ -353,3 +353,65 @@ func TestShard2(t *testing.T) {
 
 	inst.Close()
 }
+
+func TestShard3(t *testing.T) {
+	initTestEnv(t)
+	inst, gen, _ := initTestDBWithOptions(t, wal.BrokerRole, defaultDBPath, "", uint64(40000), uint64(8), nil)
+	defer inst.Close()
+	t.Log(inst.Opts.CacheCfg.InsertCapacity / 1024 / 1024)
+	tableCnt := 10
+	schemas := make([]*metadata.Schema, tableCnt)
+	for i := 0; i < tableCnt; i++ {
+		schemas[i] = metadata.MockSchema(10)
+	}
+
+	shardCnt := 4
+	shards := make([]*mockShard, shardCnt)
+	for i := 0; i < shardCnt; i++ {
+		shards[i] = newMockShard(inst, gen)
+	}
+
+	batches := make([]*batch.Batch, 10)
+	for i, _ := range batches {
+		step := inst.Store.Catalog.Cfg.BlockMaxRows / 4
+		rows := (uint64(i) + 1) * step
+		batches[i] = mock.MockBatch(schemas[0].Types(), rows)
+	}
+
+	var wg sync.WaitGroup
+	clients := make([]*mockClient, 2)
+	for i, _ := range clients {
+		clients[i] = newClient(t, shards, schemas[i*tableCnt/2:(i+1)*tableCnt/2], batches)
+		wg.Add(1)
+		go func(cli *mockClient) {
+			defer wg.Done()
+			for pos := 0; pos < len(cli.schemas); pos++ {
+				err := cli.createTable(pos)
+				assert.Nil(t, err)
+			}
+			for n := 0; n < 2; n++ {
+				for pos := 0; pos < len(cli.schemas); pos++ {
+					err := cli.insert(pos)
+					assert.Nil(t, err)
+				}
+			}
+			// for pos := 0; pos < len(cli.schemas); pos++ {
+			// 	err := cli.dropTable(pos)
+			// 	assert.Nil(t, err)
+			// }
+		}(clients[i])
+	}
+	wg.Wait()
+	prepareSnapshotPath(defaultSnapshotPath, t)
+	costs := make(map[uint64]time.Duration)
+	for _, shard := range shards {
+		now := time.Now()
+		idx, err := inst.CreateSnapshot(shard.database.Name, getSnapshotPath(defaultSnapshotPath, t), true)
+		assert.Nil(t, err)
+		assert.Equal(t, shard.getSafeId(), idx)
+		costs[shard.database.Id] = time.Since(now)
+	}
+	for id, cost := range costs {
+		t.Logf("Create snapshot %d takes: %s", id, cost)
+	}
+}

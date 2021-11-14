@@ -49,10 +49,12 @@ import (
 )
 
 var (
-	TEST_DB_DIR   = "/tmp/db_test"
-	defaultDBPath = "aoedb"
-	defaultDBName = "default"
-	emptyDBName   = ""
+	TEST_DB_DIR              = "/tmp/db_test"
+	defaultDBPath            = "aoedb"
+	defaultDBName            = "default"
+	emptyDBName              = ""
+	defaultTestBlockRows     = uint64(2000)
+	defaultTestSegmentBlocks = uint64(2)
 )
 
 func initDBTest() {
@@ -88,19 +90,19 @@ func initTestDB3(t *testing.T) (*DB, *shard.MockIndexAllocator, *metadata.Databa
 }
 
 func initTestBrokerDB(t *testing.T, dir, dbName string, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
-	return initTestDBWithOptions(t, wal.BrokerRole, dir, dbName, cleanCfg)
+	return initTestDBWithOptions(t, wal.BrokerRole, dir, dbName, defaultTestBlockRows, defaultTestSegmentBlocks, cleanCfg)
 }
 
 func initTestHolderDB(t *testing.T, dir, dbName string, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
-	return initTestDBWithOptions(t, wal.HolderRole, dir, dbName, cleanCfg)
+	return initTestDBWithOptions(t, wal.HolderRole, dir, dbName, defaultTestBlockRows, defaultTestSegmentBlocks, cleanCfg)
 }
 
-func initTestDBWithOptions(t *testing.T, walRole wal.Role, dir, dbName string, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
+func initTestDBWithOptions(t *testing.T, walRole wal.Role, dir, dbName string, blockRows, segBlocks uint64, cleanCfg *storage.MetaCleanerCfg) (*DB, *shard.MockIndexAllocator, *metadata.Database) {
 	opts := new(storage.Options)
 	opts.WalRole = walRole
 	opts.MetaCleanerCfg = cleanCfg
 	path := filepath.Join(getTestPath(t), dir)
-	config.NewCustomizedMetaOptions(path, config.CST_Customize, uint64(2000), uint64(2), opts)
+	config.NewCustomizedMetaOptions(path, config.CST_Customize, blockRows, segBlocks, opts)
 	inst, _ := Open(path, opts)
 	gen := shard.NewMockIndexAllocator()
 	var database *metadata.Database

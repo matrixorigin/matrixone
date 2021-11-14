@@ -590,3 +590,6 @@ func TestSnapshot6(t *testing.T) {
 //     4) replay [6] and [7] operation
 //     5) check new applied database is same as origin database
 // 15. Restart new db instance and check again
+func TestSnapshot7(t *testing.T) {
+	// TODO
+}
