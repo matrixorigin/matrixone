@@ -341,6 +341,54 @@ func TestInsert(t *testing.T) {
 
 }
 
+func TestDefaultExpr(t *testing.T) {
+	hm := host.New(1 << 40)
+	gm := guest.New(1<<40, hm)
+	proc := process.New(gm)
+	{
+		proc.Id = "0"
+		proc.Lim.Size = 10 << 32
+		proc.Lim.BatchRows = 10 << 32
+		proc.Lim.PartitionRows = 10 << 32
+		proc.Refer = make(map[string]uint64)
+	}
+	e, err := testutil.NewTestEngine()
+	require.NoError(t, err)
+
+	srv, err := testutil.NewTestServer(e, proc)
+	require.NoError(t, err)
+	go srv.Run()
+	defer srv.Stop()
+
+	type defaultTestCase struct {
+		testSql    string
+	}
+
+	testCases := []defaultTestCase{
+		{"create database db1;"},
+		{"create table td (a int default (1+3+4), b int);"},
+		{"create table td2 (c int default (((1+2*3+(123)))), b int);"},
+		{"insert into td (b) values (11);"},
+		{"drop database db1;"},
+	}
+
+	for _, tc := range testCases {
+		sql := tc.testSql
+
+		c := compile.New("db1", sql, "admin", e, proc)
+		es, err := c.Build()
+		require.NoError(t, err)
+		for _, e := range es {
+			if err := e.Compile(nil, Print); err != nil {
+				require.NoError(t, err)
+			}
+			if err := e.Run(1); err != nil {
+				require.NoError(t, err)
+			}
+		}
+	}
+}
+
 func TestBinaryOperators(t *testing.T) {
 	hm := host.New(1 << 40)
 	gm := guest.New(1<<40, hm)

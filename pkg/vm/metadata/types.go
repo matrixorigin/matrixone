@@ -40,15 +40,15 @@ type Attribute struct {
 
 type DefaultExpr struct {
 	Exist  bool
-	Expr   string
+	Value  interface{}
 	IsNull bool
 }
 
 // MakeDefaultExpr returns a new DefaultExpr
-func MakeDefaultExpr(exist bool, expr string, isNull bool) DefaultExpr {
+func MakeDefaultExpr(exist bool, value interface{}, isNull bool) DefaultExpr {
 	return DefaultExpr{
 		Exist:  exist,
-		Expr:   expr,
+		Value:  value,
 		IsNull: isNull,
 	}
 }
@@ -60,6 +60,6 @@ func (attr Attribute) HasDefaultExpr() bool {
 	return attr.Default.Exist
 }
 
-func (attr Attribute) GetDefaultExpr() (string, bool) {
-	return attr.Default.Expr, attr.Default.IsNull
+func (attr Attribute) GetDefaultExpr() (interface{}, bool) {
+	return attr.Default.Value, attr.Default.IsNull
 }
